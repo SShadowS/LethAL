@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { tier1Operators } from "@lethal/builtin-tier1";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import { explainFromCli, helpText, parseCliConfig } from "../src/cli";
+import { MARK_REASON_PLACEHOLDER } from "../src/equivalence-marks";
 import {
   ADMISSIBLE_INTERPRETATIONS,
   ARTIFACT_ID_ABSENCES,
@@ -17,6 +18,7 @@ import {
   TOOL_CONDITIONS,
   assertExplainableReport,
   explain,
+  gapVerifyCommand,
   rankSurvivors,
   survivorActionabilityRank,
 } from "../src/explain";
@@ -33,10 +35,11 @@ import {
   REPORT_SCHEMA_VERSION,
   STRANDED_SKIP_INTERPRETATION,
   markIdentityOf,
+  markTupleOfRow,
   mutantRef,
 } from "../src/report";
 import type { Caveat, MutantErrorCause, MutantOutcome, SessionReport } from "../src/report";
-import { ATTRIBUTION_INTERPRETATIONS, serializeKey } from "../src/selection";
+import { ATTRIBUTION_INTERPRETATIONS, serializeKey, twinSiteOf } from "../src/selection";
 import type { CoverageAttribution } from "../src/selection";
 import type { MutantVerdict } from "../src/store";
 import { scratchDirs } from "./helpers/scratch";
@@ -322,6 +325,9 @@ const PROJECTION_AUTHORED_STRINGS: readonly string[] = [
   // ArtifactIdAbsence, C02-01. Authored tokens, like TOOL_CONDITIONS: why a survivor has no
   // artifactId, which the report states only by the absence of a field.
   ...ARTIFACT_ID_ABSENCES,
+  // R443: a mark's `reason`, a fixed placeholder the marks parser refuses unchanged, so it can
+  // never ride into a marks file as a ruling.
+  MARK_REASON_PLACEHOLDER,
 ];
 
 // ————————————————————————————————————————————————————————————————————————————————————————
@@ -511,10 +517,27 @@ function fullCoverageReport(): SessionReport {
       barBlock(plainMutant("M0015", "known-survivor")),
       barBlock(plainMutant("M0016", "known-survivor")),
     ],
+    // R272: reaches `gaps[].coveringTests[]` (all but `lineAmbiguous`, reached in
+    // r272-covering-tests.test.ts) and `gaps[].reachMeasuredMembers`.
+    testMethods: [
+      {
+        name: "Foo Tests.ComputesTotal",
+        file: "test/Foo.Test.al",
+        line: 12,
+        baselineDurationMs: 340,
+      },
+    ],
     testsOnly: ["test/Posting/**"],
     // R265: a report from the previous identity scheme, which an older build writes, so
     // `markKeysStale` is reached.
     identityScheme: IDENTITY_SCHEME - 1,
+    // R443: the numbering facts each survivor's `mark` is made from. M0002's (file, tuple) is a
+    // recorded twin site, so its `fileSingleton` is false and the others' true. `buildSymbols`
+    // reaches `mark.preprocessorSymbols[]`.
+    numberingDigest: "9".repeat(64),
+    twinSites: [twinSiteOf(survivorWithRisk.file, markTupleOfRow(survivorWithRisk))],
+    carryHidden: { tuples: [], files: [] },
+    buildSymbols: ["LETHALA"],
     quarantined: { reason: "test in-flight-unknown running Foo Tests.PostsBatch (mutant M0004)" },
     resumedFrom: { runId: 7, carriedMutants: 1, skippedStranded: 2 },
     // C02-01: batch 1 published (M0001's); batch 4 (M0002) did not, and batch 6's survivor is
@@ -650,6 +673,12 @@ const EXPLAIN_LEAF_PATHS: readonly string[] = [
   "$.survivors[].artifactIdAbsent", // [enum] ArtifactIdAbsence
   "$.survivors[].gapId", // [verbatim] (C02-09)
   "$.survivors[].markKey", // [derived] report.ts's markIdentityOf(row), R265
+  "$.survivors[].mark.key", // [derived] markKey, restated (R443)
+  "$.survivors[].mark.reason", // [enum] MARK_REASON_PLACEHOLDER, the one value the parser refuses
+  "$.survivors[].mark.file", // [verbatim] the row's file, `/` separators
+  "$.survivors[].mark.numberingDigest", // [verbatim] report.numberingDigest
+  "$.survivors[].mark.fileSingleton", // [derived] report.twinSites and report.carryHidden
+  "$.survivors[].mark.preprocessorSymbols[]", // [verbatim] report.buildSymbols
   "$.markIdentityScheme", // [verbatim] report.identityScheme, or 1 when absent (R325), R265
   "$.markKeysStale.reportScheme", // [derived] markIdentityScheme, restated
   "$.markKeysStale.buildScheme", // [enum] this build's IDENTITY_SCHEME
@@ -673,6 +702,22 @@ const EXPLAIN_LEAF_PATHS: readonly string[] = [
   "$.gaps[].unobservedBlock", // [derived] every recorded row survived; withheld when narrowed
   "$.gaps[].artifactId", // [verbatim] artifacts[].artifactId whose batchIndex equals the gap's
   "$.gaps[].artifactIdAbsent", // [enum] ArtifactIdAbsence
+  "$.gaps[].verifyCommand", // [derived] R275: gapVerifyCommand(artifactId, gapId)
+  "$.gaps[].coveringTests[].name", // [verbatim] R272: report.testMethods[].name
+  "$.gaps[].coveringTests[].file", // [verbatim] report.testMethods[].file
+  "$.gaps[].coveringTests[].line", // [verbatim] report.testMethods[].line
+  "$.gaps[].coveringTests[].lineAmbiguous", // [verbatim] report.testMethods[].lineAmbiguous
+  "$.gaps[].coveringTests[].baselineDurationMs", // [verbatim] report.testMethods[]
+  "$.gaps[].coveringTests[].reachedMembers", // [derived] count of the gap's survivors' reachedBy
+  "$.gaps[].reachMeasuredMembers", // [derived] count of the gap's survivors with reachedBy
+  // R274, only under `--project`: read from the project after it hashed to report.sourceSha256.
+  "$.gaps[].source.startLine", // [verbatim] the gap's blockStartLine
+  "$.gaps[].source.lines[]", // [source] the block's lines from the verified project
+  "$.gaps[].source.marks[].mutantCode", // [verbatim] the member's mutantCode
+  "$.gaps[].source.marks[].startLine", // [derived] the row's startIndex in the verified file
+  "$.gaps[].source.marks[].startColumn", // [derived]
+  "$.gaps[].source.marks[].endLine", // [derived] the row's endIndex in the verified file
+  "$.gaps[].source.marks[].endColumn", // [derived]
   "$.noCoverageBlocks[].batchIndex", // [verbatim] (C02-09)
   "$.noCoverageBlocks[].file", // [verbatim]
   "$.noCoverageBlocks[].blockStartLine", // [verbatim]
@@ -850,9 +895,20 @@ describe("explain — the admissibility rule, made executable", () => {
     // quarantined, so that ONE leaf is the only pinned path the original fixture may miss. Every
     // other path must still come from the original fixture alone; the next test reaches the
     // conditional leaf.
+    // R274: `gaps[].source` exists only under `--project`, which needs a real project on disk;
+    // r274-explain-project.test.ts reaches exactly these paths from a real run.
     const produced = new Set(leafPathsIn(explain(fullCoverageReport())));
+    // R272: `lineAmbiguous` needs two `#if` arms of one test; r272-covering-tests.test.ts.
     expect(EXPLAIN_LEAF_PATHS.filter((p) => !produced.has(p))).toEqual([
       "$.gaps[].unobservedBlock",
+      "$.gaps[].coveringTests[].lineAmbiguous",
+      "$.gaps[].source.startLine",
+      "$.gaps[].source.lines[]",
+      "$.gaps[].source.marks[].mutantCode",
+      "$.gaps[].source.marks[].startLine",
+      "$.gaps[].source.marks[].startColumn",
+      "$.gaps[].source.marks[].endLine",
+      "$.gaps[].source.marks[].endColumn",
     ]);
   });
 
@@ -986,6 +1042,18 @@ describe("explain — the admissibility rule, made executable", () => {
       gapId: m.gapId,
     });
     expect(out.survivors.map(survivorVerbatim)).toEqual(survivorSources.map(survivorVerbatim));
+    // R443: each survivor's mark, from the report's RECORDED numbering facts. M0002 is the fixture's
+    // one recorded twin site, so only its mark is not a singleton.
+    expect(out.survivors.map((s) => s.mark)).toEqual(
+      survivorSources.map((m) => ({
+        key: markIdentityOf(m),
+        reason: MARK_REASON_PLACEHOLDER,
+        file: m.file,
+        numberingDigest: report.numberingDigest ?? "",
+        fileSingleton: m.mutantCode !== "M0002",
+        preprocessorSymbols: report.buildSymbols ?? [],
+      })),
+    );
     const errorSources = report.mutants.filter((m) => m.verdict === "error");
     const notMeasuredVerbatim = (m: {
       mutantCode: string;
@@ -1158,6 +1226,12 @@ describe("explain — the admissibility rule, made executable", () => {
     const allowed = new Set<string>([
       ...stringsIn(report), // [verbatim]
       ...report.mutants.map(markIdentityOf), // [derived] R265: survivors[].markKey
+      // [derived] R275: gaps[].verifyCommand, from the report's own gap and artifact ids.
+      ...report.mutants.flatMap((m) =>
+        m.gapId === undefined
+          ? []
+          : (report.artifacts ?? []).map((a) => gapVerifyCommand(a.artifactId, m.gapId ?? "")),
+      ),
       ...ADMISSIBLE_INTERPRETATIONS.flatMap((i) => [i.meaning, i.basis, i.entailedNegative ?? ""]),
       ...PROJECTION_AUTHORED_STRINGS,
     ]);
@@ -2618,6 +2692,7 @@ describe("explain: gaps (C02-09)", () => {
         other: 0,
         unobservedBlock: true,
         artifactId: artifactA,
+        verifyCommand: `lethal verify --db <project>/lethal.sqlite --artifact ${artifactA} --survivors G0000000000a1 --tests <tests-dir>`,
       },
       {
         gapId: "G0000000000b2",
@@ -2634,6 +2709,7 @@ describe("explain: gaps (C02-09)", () => {
         other: 3,
         unobservedBlock: false,
         artifactId: artifactB,
+        verifyCommand: `lethal verify --db <project>/lethal.sqlite --artifact ${artifactB} --survivors G0000000000b2 --tests <tests-dir>`,
       },
     ]);
   });
@@ -2695,11 +2771,14 @@ describe("explain: gaps (C02-09)", () => {
         artifactId: g.artifactId,
         artifactIdAbsent: g.artifactIdAbsent,
         exactlyOne: "artifactId" in g !== "artifactIdAbsent" in g,
+        // R275: the verify line exists exactly when there is an artifact to verify against.
+        commandWithArtifact: "verifyCommand" in g === "artifactId" in g,
       }));
     const one = (artifactId?: string, artifactIdAbsent?: ArtifactIdAbsence) => ({
       artifactId,
       artifactIdAbsent,
       exactlyOne: true,
+      commandWithArtifact: true,
     });
     // (i) the batch's artifacts[] entry.
     expect(
@@ -2754,6 +2833,115 @@ describe("explain: gaps (C02-09)", () => {
       reportFixture({ mutants: twoGapRows(), quarantined: { reason: "test in-flight-unknown" } }),
     );
     expect((quarantined.gaps ?? []).map((g) => "unobservedBlock" in g)).toEqual([false, false]);
+  });
+
+  test("R277: a line-narrowed run keeps unobservedBlock for a gap whose WHOLE block its line filter covers", () => {
+    // Gap A is src/A.Codeunit.al lines 10..20, gap B src/B.Codeunit.al lines 30..37.
+    const presence = (
+      ranges: { file: string; start: number; end: number }[],
+      over: { caveats?: Caveat[]; quarantined?: boolean } = {},
+    ) => {
+      const base = reportFixture({
+        mutants: twoGapRows(),
+        lines: { ranges, excludedSiteCount: 3 },
+        ...(over.quarantined === true ? { quarantined: { reason: "test in-flight-unknown" } } : {}),
+      });
+      const out = explain({
+        ...base,
+        validity: { ...base.validity, caveats: over.caveats ?? ["line-narrowed"] },
+      });
+      return (out.gaps ?? []).map((g) => "unobservedBlock" in g);
+    };
+    // A covered whole (file matched case-insensitively, as the filter matches it); B only in part.
+    expect(
+      presence([
+        { file: "src/a.codeunit.al", start: 1, end: 25 },
+        { file: "src/B.Codeunit.al", start: 30, end: 35 },
+      ]),
+    ).toEqual([true, false]);
+    // B covered by two adjacent ranges counts as whole; a one-line hole does not.
+    expect(
+      presence([
+        { file: "src/B.Codeunit.al", start: 30, end: 33 },
+        { file: "src/B.Codeunit.al", start: 34, end: 37 },
+      ]),
+    ).toEqual([false, true]);
+    expect(
+      presence([
+        { file: "src/B.Codeunit.al", start: 30, end: 32 },
+        { file: "src/B.Codeunit.al", start: 34, end: 37 },
+      ]),
+    ).toEqual([false, false]);
+    // Whole coverage never overrides an operator narrowing or a quarantine.
+    const all = [
+      { file: "src/A.Codeunit.al", start: 1, end: 99 },
+      { file: "src/B.Codeunit.al", start: 1, end: 99 },
+    ];
+    expect(presence(all)).toEqual([true, true]);
+    expect(presence(all, { caveats: ["line-narrowed", "operator-narrowed"] })).toEqual([
+      false,
+      false,
+    ]);
+    expect(presence(all, { quarantined: true })).toEqual([false, false]);
+    // A line-narrowed run that recorded no ranges keeps withholding.
+    const bare = reportFixture({ mutants: twoGapRows() });
+    expect(
+      (
+        explain({ ...bare, validity: { ...bare.validity, caveats: ["line-narrowed"] } }).gaps ?? []
+      ).map((g) => "unobservedBlock" in g),
+    ).toEqual([false, false]);
+    // A malformed range is refused, never read as covering or not covering a block.
+    expect(() =>
+      assertExplainableReport({
+        ...bare,
+        lines: {
+          ranges: [{ file: "src/A.Codeunit.al", start: 20, end: 10 }],
+          excludedSiteCount: 0,
+        },
+      }),
+    ).toThrow(/lines\.ranges/);
+  });
+
+  test("R447: unobservedBlock is withheld per FILE where a hang-refused row has sites", () => {
+    const presence = (sites?: number) =>
+      (
+        explain(
+          reportFixture({
+            mutants: twoGapRows(),
+            ...(sites !== undefined
+              ? {
+                  excludedSites: {
+                    totalFiles: 2,
+                    siteCount: sites,
+                    fileCount: 1,
+                    files: [
+                      {
+                        file: blockA.file,
+                        kinds: "codeunit_declaration",
+                        sites,
+                        reason: "hang-refused" as const,
+                      },
+                    ],
+                  },
+                }
+              : {}),
+          }),
+        ).gaps ?? []
+      ).map((g) => [g.file, "unobservedBlock" in g]);
+    // File A's refused loop step has no row, so "every recorded row survived" is not a block fact.
+    expect(presence(2)).toEqual([
+      [blockA.file, false],
+      [blockB.file, true],
+    ]);
+    // Controls: no excludedSites (an old report), and a zero-site row.
+    expect(presence()).toEqual([
+      [blockA.file, true],
+      [blockB.file, true],
+    ]);
+    expect(presence(0)).toEqual([
+      [blockA.file, true],
+      [blockB.file, true],
+    ]);
   });
 
   test("an archived report has no gaps field, never an empty one", () => {

@@ -1,8 +1,11 @@
-import type { BackendCapabilities } from "./backend";
+import { compareCodeUnits } from "@lethal/schemata";
+import type { BackendCapabilities, TestMethodRef } from "./backend";
+import type { DependencyReportSourceRecord } from "./dependency-report-source";
 import type { EquivalenceMark } from "./equivalence-marks";
 import type { RunEvent } from "./events";
 import {
   type ExcludedSites,
+  type HangRefusedFile,
   type PreprocExcludedFile,
   type RefusedExcludedFile,
   buildExcludedSites,
@@ -14,9 +17,17 @@ import {
   type ExcludedTestRecord,
   type NotInstrumentedFile,
   type SessionOutcome,
+  type TestMethodRecord,
   mutantRef,
 } from "./report";
-import type { BatchArtifact } from "./store";
+import type { BatchArtifact, CarryHidden } from "./store";
+
+/** R443: this run's numbering facts, from `mutation-set-generated`. All three or none. */
+export interface FoldedNumbering {
+  readonly numberingDigest: string;
+  readonly twinSites: readonly string[];
+  readonly carryHidden: CarryHidden;
+}
 
 /**
  * Folds the run's events into the facts `buildReport` (report.ts) renders (spec 2026-08-05 §A,
@@ -103,6 +114,9 @@ export interface FoldStatics {
    * an unset one. See `SessionReport.preprocessorSymbols`.
    */
   readonly preprocessorSymbols?: readonly string[];
+  /** R586: the al-runner-v3 build that ran (`--version` line, binary sha256). Given only on v3;
+   *  lands on `executionContexts[]` of directly measured entries. */
+  readonly runnerBuild?: { readonly version: string; readonly binarySha256: string };
 }
 
 /**
@@ -161,6 +175,7 @@ export interface FoldedReport {
     readonly runId: number;
     readonly carriedMutants: number;
     readonly skippedStranded: number;
+    readonly carryRefused?: string;
   };
   readonly timings: {
     readonly totalMs: number;
@@ -169,9 +184,19 @@ export interface FoldedReport {
     readonly baselineMs: number;
   };
   readonly baselineTests: readonly { readonly codeunitName: string; readonly file?: string }[];
+  /** R272 — see `SessionReport.testMethods`. Absent without a `tests-discovered` event. */
+  readonly testMethods?: readonly TestMethodRecord[];
   readonly untargetedTriggerCount: number;
   /** R198 — see `SessionReport.groupedCalls`. */
   readonly groupedCalls: number;
+  /** R443: absent for a stream written before R443. */
+  readonly numbering?: FoldedNumbering;
+  /** R274 — see `SessionReport.sourceSha256`. Absent for an older stream. */
+  readonly sourceSha256?: string;
+  /** R565 — see `SessionReport.dependencyReportSources`. Absent for an older stream. */
+  readonly dependencyReportSources?: readonly DependencyReportSourceRecord[];
+  /** R565 — see `SessionReport.dependencySourceSha256`. Absent for an older stream. */
+  readonly dependencySourceSha256?: string;
   /** R206 — see `SessionReport.warmKills`. */
   readonly warmKills: number;
   /** R175 — see `SessionReport.unplaceableCount`. */
@@ -192,6 +217,12 @@ export interface FoldedReport {
    *  every other backend, and absent on an al-runner session that declined to pin (which emits a
    *  named `al-runner-platform-apps-unpinned` warning carrying the reason instead). */
   readonly alRunnerPlatformAppsDir?: string;
+  /** R558 — the test selector R551's probe chose for this session's one-shot al-runner runs. Absent
+   *  on every other backend and on `--server`, where the probe is not-applicable. */
+  readonly alRunnerTestSelector?: {
+    readonly selector: "exact" | "substring-with-excludes";
+    readonly reason?: string;
+  };
 }
 
 interface BatchInvalidation {
@@ -228,6 +259,48 @@ export function applyBatchInvalidations(
   }
 }
 
+/**
+ * R272: one record per qualified name (`Codeunit.method`, the shape `qualifiedTestName` and
+ * `coveringTests` use), sorted by `compareCodeUnits`. Two `#if` arms can declare one name (R403):
+ * then a location is given only where every ref agrees, and `lineAmbiguous` says why it is not.
+ * Agreement is decided over the test's IDENTITY (`codeunitId::method`, case-insensitive like AL),
+ * so arms spelling one method `Foo` and `FOO` are one test at two places; each spelling keeps its
+ * own row, since that is the name `coveringTests` uses.
+ */
+export function testMethodsOf(
+  refs: readonly TestMethodRef[],
+  durations: ReadonlyMap<string, readonly number[]>,
+): TestMethodRecord[] {
+  const identityOf = (r: TestMethodRef) => `${r.codeunitId}::${r.method.toLowerCase()}`;
+  const byName = new Map<string, TestMethodRef[]>();
+  const byIdentity = new Map<string, TestMethodRef[]>();
+  for (const r of refs) {
+    const name = `${r.codeunitName}.${r.method}`;
+    byName.set(name, [...(byName.get(name) ?? []), r]);
+    byIdentity.set(identityOf(r), [...(byIdentity.get(identityOf(r)) ?? []), r]);
+  }
+  return [...byName]
+    .sort(([a], [b]) => compareCodeUnits(a, b))
+    .map(([name, own]) => {
+      const same = [...new Set(own.flatMap((r) => byIdentity.get(identityOf(r)) ?? []))];
+      const files = new Set(same.map((r) => r.file));
+      const places = new Set(same.map((r) => `${r.file ?? ""}\0${r.line ?? ""}`));
+      const [first] = same;
+      const file = files.size === 1 ? first?.file : undefined;
+      const line = places.size === 1 ? first?.line : undefined;
+      // The smallest of this session's measurements (one per batch): the least warm-up noise.
+      const measured = durations.get(name) ?? [];
+      const ms = measured.length > 0 ? Math.min(...measured) : undefined;
+      return {
+        name,
+        ...(file !== undefined ? { file } : {}),
+        ...(line !== undefined ? { line } : {}),
+        ...(places.size > 1 ? { lineAmbiguous: true as const } : {}),
+        ...(ms !== undefined ? { baselineDurationMs: ms } : {}),
+      };
+    });
+}
+
 export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): FoldedReport {
   let sawMutationSetGenerated = false;
   let sawBaselineBatchFinished = false;
@@ -237,12 +310,17 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   let totalFiles = 0;
   let notInstrumentedFiles: readonly NotInstrumentedFile[] = [];
   let refusedFiles: readonly RefusedExcludedFile[] = [];
+  let hangRefusedFiles: readonly HangRefusedFile[] = [];
   let declarativeSiteFiles: readonly DeclarativeSiteFile[] = [];
   let preprocExcludedFiles: readonly PreprocExcludedFile[] = [];
   let excludedByOnly = 0;
   let excludedByExclude = 0;
   let excludedByOperator = 0;
   let excludedByLines = 0;
+  let numbering: FoldedNumbering | undefined;
+  let sourceSha256: string | undefined;
+  let dependencyReportSources: readonly DependencyReportSourceRecord[] | undefined;
+  let dependencySourceSha256: string | undefined;
 
   // AND across every baseline verdict across every `baseline-batch-finished` event — mirrors
   // `orchestrator.ts`'s `baselineGreenOverall`, which starts true and is never reset once false.
@@ -258,6 +336,9 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   let unverifiedTestFiles: readonly string[] = [];
 
   let baselineTests: readonly { readonly codeunitName: string; readonly file?: string }[] = [];
+  // R272: the discovered refs, and each test's measured baseline durations this session.
+  let discoveredTests: readonly TestMethodRef[] | undefined;
+  const baselineDurations = new Map<string, number[]>();
 
   // How many times this run entered the deploy phase — one per batch loop iteration, emitted
   // unconditionally before that batch's deploy attempt (including a failed one), so it counts
@@ -314,7 +395,11 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   let permissionCanary: PermissionCanaryResult | undefined;
   let alRunnerBcBuild: { build: string; announcement: string } | undefined;
   let alRunnerPlatformAppsDir: string | undefined;
+  let alRunnerTestSelector:
+    | { selector: "exact" | "substring-with-excludes"; reason?: string }
+    | undefined;
   let resumeFromRunId: number | undefined;
+  let resumeCarryRefused: string | undefined;
 
   const outcomes: SessionOutcome[] = [];
   const invalidations: BatchInvalidation[] = [];
@@ -328,12 +413,40 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         totalFiles = e.totalFiles;
         notInstrumentedFiles = e.notInstrumentedFiles;
         refusedFiles = e.refusedFiles ?? [];
+        hangRefusedFiles = e.hangRefusedFiles ?? [];
         declarativeSiteFiles = e.declarativeSiteFiles;
         preprocExcludedFiles = e.preprocExcludedFiles ?? [];
         excludedByOnly = e.excludedByOnly;
         excludedByExclude = e.excludedByExclude;
         excludedByOperator = e.excludedByOperator;
         excludedByLines = e.excludedByLines ?? 0;
+        sourceSha256 = e.sourceSha256;
+        // R565: written together by the producer, so a stream with only one is corrupt.
+        if ((e.dependencyReportSources === undefined) !== (e.dependencySourceSha256 === undefined))
+          throw new Error(
+            "foldEvents: mutation-set-generated carries only one of dependencyReportSources and dependencySourceSha256 (R565). The producer writes both or neither.",
+          );
+        dependencyReportSources = e.dependencyReportSources;
+        dependencySourceSha256 = e.dependencySourceSha256;
+        {
+          // R443: written together by the producer, so a stream with only some is corrupt.
+          const { numberingDigest, twinSites, carryHidden } = e;
+          if (
+            numberingDigest !== undefined &&
+            twinSites !== undefined &&
+            carryHidden !== undefined
+          ) {
+            numbering = { numberingDigest, twinSites, carryHidden };
+          } else if (
+            numberingDigest !== undefined ||
+            twinSites !== undefined ||
+            carryHidden !== undefined
+          ) {
+            throw new Error(
+              "foldEvents: mutation-set-generated carries only some of numberingDigest, twinSites and carryHidden (R443). The producer writes all three or none.",
+            );
+          }
+        }
         break;
       case "baseline-batch-finished":
         sawBaselineBatchFinished = true;
@@ -360,6 +473,9 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
           if (v.classification.includes("tests-testpage-refused")) {
             testPageRefusedTests.add(v.name);
           }
+          if (v.durationMs !== undefined) {
+            baselineDurations.set(v.name, [...(baselineDurations.get(v.name) ?? []), v.durationMs]);
+          }
         }
         break;
       case "quarantined":
@@ -379,6 +495,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         if (e.tests.length > 0) baselineGreen = false;
         break;
       case "tests-discovered":
+        discoveredTests = e.tests;
         baselineTests = e.tests.map((t) => ({
           codeunitName: t.codeunitName,
           ...(t.file !== undefined ? { file: t.file } : {}),
@@ -448,8 +565,15 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
       case "al-runner-platform-apps":
         alRunnerPlatformAppsDir = e.dir;
         break;
+      case "al-runner-test-selector":
+        alRunnerTestSelector = {
+          selector: e.selector,
+          ...(e.reason !== undefined ? { reason: e.reason } : {}),
+        };
+        break;
       case "resume-resolved":
         resumeFromRunId = e.fromRunId;
+        resumeCarryRefused = e.carryRefused;
         break;
       case "mutant-scored":
         outcomes.push({
@@ -470,6 +594,8 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
             ? { killingTestFailure: e.killingTestFailure }
             : {}),
           ...(e.killPosition !== undefined ? { killPosition: e.killPosition } : {}),
+          ...(e.killReproduced === true ? { killReproduced: true as const } : {}),
+          ...(e.reproducedFailure !== undefined ? { reproducedFailure: e.reproducedFailure } : {}),
           ...(e.cause !== undefined ? { cause: e.cause } : {}),
           ...(e.runner !== undefined ? { runner: e.runner } : {}),
         });
@@ -507,6 +633,8 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
             ? { killingTestFailure: e.killingTestFailure }
             : {}),
           ...(e.killPosition !== undefined ? { killPosition: e.killPosition } : {}),
+          ...(e.killReproduced === true ? { killReproduced: true as const } : {}),
+          ...(e.reproducedFailure !== undefined ? { reproducedFailure: e.reproducedFailure } : {}),
           ...(e.runner !== undefined ? { runner: e.runner } : {}),
         });
         if (isKill(e.verdict) && e.killPosition !== undefined && e.killPosition > 1) warmKills += 1;
@@ -612,6 +740,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
       declarative: declarativeSiteFiles,
       preproc: preprocExcludedFiles,
       refused: refusedFiles,
+      hangRefused: hangRefusedFiles,
       totalFiles,
     }),
     // R41: reunite the GIVEN patterns (statics) with the LEARNED exclusion count
@@ -673,11 +802,15 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
             runId: resumeFromRunId,
             carriedMutants: carriedCount,
             skippedStranded: strandedSkipCount,
+            ...(resumeCarryRefused !== undefined ? { carryRefused: resumeCarryRefused } : {}),
           },
         }
       : {}),
     timings: { totalMs, generateMutationSetMs, deployMs, baselineMs },
     baselineTests,
+    ...(discoveredTests !== undefined
+      ? { testMethods: testMethodsOf(discoveredTests, baselineDurations) }
+      : {}),
     untargetedTriggerCount,
     groupedCalls,
     warmKills,
@@ -690,6 +823,11 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
     ...(permissionCanary !== undefined ? { permissionCanary } : {}),
     ...(alRunnerBcBuild !== undefined ? { alRunnerBcBuild } : {}),
     ...(alRunnerPlatformAppsDir !== undefined ? { alRunnerPlatformAppsDir } : {}),
+    ...(alRunnerTestSelector !== undefined ? { alRunnerTestSelector } : {}),
+    ...(numbering !== undefined ? { numbering } : {}),
+    ...(sourceSha256 !== undefined ? { sourceSha256 } : {}),
+    ...(dependencyReportSources !== undefined ? { dependencyReportSources } : {}),
+    ...(dependencySourceSha256 !== undefined ? { dependencySourceSha256 } : {}),
   };
 }
 

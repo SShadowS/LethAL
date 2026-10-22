@@ -32,6 +32,7 @@ import { join } from "node:path";
 import { assertMatchesBaseline, isCoverageMode } from "../itest/baseline-guard";
 import { assertCardinality } from "./campaign-anchors";
 import { type CampaignManifest, resolveRecordsDir } from "./campaign-manifest";
+import { REDACTION_MARKER } from "./explain";
 import type { SessionReport } from "./report";
 
 // `findRepoRoot`'s public surface (used by nothing outside this module today, per a repo-wide
@@ -76,6 +77,13 @@ export async function freezeStageTo(
   recordsDir: string,
 ): Promise<void> {
   const report = JSON.parse(await readFile(reportPath, "utf8")) as SessionReport;
+  // R586 (I4): a stage baseline records no backend, so a frozen v3 stage could later "match" a v2
+  // or bcdev run. Refused by name in v1; `campaign compare` of a v3 report stays allowed.
+  if (report.backend === "al-runner-v3") {
+    throw new Error(
+      `al-runner-v3-campaign-freeze-refused: ${stage} freeze: ${reportPath} ran on al-runner-v3, and a frozen stage records no backend, so it could later match a run of another backend (R586). Freeze a bcdev or al-runner report instead.`,
+    );
+  }
   // R355: every stage frozen from now on records the coverage mode it was measured under, so
   // `campaign compare` can refuse a report from another mode. A report without one (written before
   // R252) would freeze a stage whose mode is unknown, which is the gap this closes. Refused before
@@ -84,6 +92,14 @@ export async function freezeStageTo(
   if (!isCoverageMode(coverageMode)) {
     throw new Error(
       `${stage} freeze: ${reportPath} records no coverageMode (got ${JSON.stringify(coverageMode)}). A stage frozen now must record the mode it was measured under, so compare can refuse a run under another mode (R355). Re-run with a build that writes coverageMode (R252 and later), then freeze that report.`,
+    );
+  }
+  // R556: the stage records a hash of each mutant's text. A redacted report carries the marker in
+  // place of the text, so its hashes would be wrong forever after: freeze the unredacted `--out`.
+  const redacted = report.mutants.filter((m) => m.mutatedText === REDACTION_MARKER).length;
+  if (redacted > 0) {
+    throw new Error(
+      `${stage} freeze: ${reportPath} is a redacted report (${redacted} mutant(s) carry the redaction marker in place of their mutatedText). A stage records a hash of each mutant's text (R556), and a hash of the marker would be wrong for every later compare. Freeze the run's unredacted --out report, and redact only the archived copy.`,
     );
   }
   // Cardinality FIRST — see module doc comment. No directory is created and no file is read or

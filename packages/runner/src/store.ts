@@ -1,14 +1,20 @@
 import { Database } from "bun:sqlite";
 import { statSync } from "node:fs";
-import { IDENTITY_SCHEME } from "@lethal/schemata";
+import { IDENTITY_SCHEME, coarseIdentityTupleOf } from "@lethal/schemata";
 import type { CoverageMode, TestMethodRef, TestOutcome } from "./backend";
 import type { BaselineObservation, BaselineSnapshot } from "./baseline-snapshot";
 import type { PublishOutcome } from "./deployment-verifier";
 import type { InstalledBundleRows, InstalledBundleWrite } from "./installed-bundle";
 import { normalizeRelPath } from "./line-filter";
 import { sameBuildSymbols } from "./preprocessor-symbols";
-import type { CoverageAttribution } from "./selection";
-import { type IdentityKey, serializeKey } from "./selection";
+import type { CoverageAttribution, PriorSurvivors } from "./selection";
+import {
+  type IdentityKey,
+  NO_PRIOR_SURVIVORS,
+  memberSiteOf,
+  serializeKey,
+  twinSiteOf,
+} from "./selection";
 
 /** C02-06: `artifactRecordById` found one artifact id on more than one batch row, a corrupt store.
  *  Typed so `lethal verify` can refuse it without matching message text. */
@@ -115,6 +121,11 @@ export interface MutantRow {
    * recorded before the field existed and on every non-kill verdict.
    */
   readonly killPosition?: number;
+  /** R577 — see `MutantOutcome.killReproduced` (report.ts). Absent on every non-kill, on a kill
+   *  scored with the rule off, and on a row recorded before the column existed. */
+  readonly killReproduced?: true;
+  /** R577 — see `MutantOutcome.reproducedFailure` (report.ts). */
+  readonly reproducedFailure?: string;
   readonly durationMs: number;
   /**
    * Which batch produced this verdict. Added by R47 so `invalidateBatch` can reach exactly the rows
@@ -146,6 +157,8 @@ export interface MutantRow {
    * refuses, never as "not carried".
    */
   readonly carried?: boolean;
+  /** R474: `MutantManifestEntry.memberHash`. Absent writes NULL: no rule-2 carry from the row. */
+  readonly memberHash?: string;
 }
 
 /**
@@ -169,6 +182,8 @@ export interface MutantVerdictRow {
   readonly procedureName: string | null;
   readonly operatorName: string;
   readonly operatorMajor: number;
+  /** R391: the row's file, which rule 2 matches on together with the tuple. */
+  readonly file: string;
   /** R193 — see `MutantRow.identityOrdinal`. A pre-R193 row reads back 0: its twins, if it had
    *  any, then still collide on resume and are re-run, which is the cheap direction. */
   readonly identityOrdinal: number;
@@ -180,6 +195,10 @@ export interface MutantVerdictRow {
   readonly killingTestFailure?: string;
   /** R206 — see `MutantRow.killPosition`. Threaded through for the same reason. */
   readonly killPosition?: number;
+  /** R577 — see `MutantRow.killReproduced`. Read by `--resume` (B1) as well as carried. */
+  readonly killReproduced?: true;
+  /** R577 — see `MutantRow.reproducedFailure`. Threaded through for the same reason. */
+  readonly reproducedFailure?: string;
   readonly durationMs: number;
   /**
    * R69 Phase 2 Task 5 — see `RunnerKind`. Threaded through so `--resume` can carry it: without
@@ -192,6 +211,8 @@ export interface MutantVerdictRow {
   readonly coveringTests?: readonly string[];
   readonly coverageAttribution?: CoverageAttribution;
   readonly unplaceable?: boolean;
+  /** R474: `MutantRow.memberHash`; `null` on a row from before R474, which is no rule-2 site. */
+  readonly memberHash: string | null;
 }
 
 /**
@@ -211,6 +232,14 @@ export interface PublishOutcomeRow {
   /** SQLite's `datetime('now')` stamp (UTC, `YYYY-MM-DD HH:MM:SS`). A refusal dates its evidence
    *  from this. */
   readonly recordedAt: string;
+}
+
+/** R496: a session's PROVEN test-app identity: the test app's hash (R247) and its dependency
+ *  fingerprint (R-371's `dependencyFingerprint`, taken under the lease). Both must equal a run's
+ *  for that run to lend anything. */
+export interface TestAppIdentity {
+  readonly hash: string;
+  readonly deps: string;
 }
 
 /** A run row, as `--resume` reads it back to check the candidate is actually resumable. */
@@ -233,6 +262,166 @@ export interface RunRow {
    *  `source:<hash>`). `null` when unknown, including every row recorded before the column: never
    *  equal to anything, NULL included. */
   readonly testAppHash: string | null;
+  /** R495: the recorded `testAppHash` was PROVEN to be the test app the run measured (the hook's
+   *  read-back proof, the installed check of the served package, or al-runner compiling its own
+   *  test source). Every consumer (resume, history, the R192 snapshot) requires it. `false` on every
+   *  row recorded before the column. */
+  readonly testAppProven: boolean;
+  /** R496: the dependency fingerprint (R-371's `dependencyFingerprint`) of the test app the run
+   *  measured, taken under the lease with every extension in it proven installed. `testAppProven`
+   *  implies it is set. `null` on every row recorded before the column, and on an unproven run:
+   *  never equal to anything. */
+  readonly testAppDeps: string | null;
+  /** R442: what the run numbered no ordinal for. `null` on a row recorded before the column, or a
+   *  run that died before generation: untrusted, so no history or resume carries from it. */
+  readonly carryHidden: CarryHidden | null;
+  /** R391: the source hash taken at generation (`sourceHashAtGeneration`), written by
+   *  `createRun`. `null` when not recorded (before R391): no rule-1 carry from that run. */
+  readonly generationSourceSha256: string | null;
+  /** R391: sorted `twinSiteOf` pairs with a twin in their file. `null` is "not measured" (before
+   *  R391, or the run died before generation): no rule-2 carry. `[]` is "measured, no twins". */
+  readonly twinTuples: readonly string[] | null;
+  /** R443: the run's `numberingDigestOf` (selection.ts), written beside `twin_tuples`. `null` when
+   *  not recorded (before R443, or the run died before generation). */
+  readonly numberingDigest: string | null;
+  /** R565: the run's `dependencySourceSha256`, written after generation (`setDependencySourceSha256`).
+   *  `null` when not recorded (before R565, or the run died before generation): no rule-1 carry. */
+  readonly dependencySourceSha256: string | null;
+  /** R557 (I1): the run carries the R557 test-name mark (`runs.al_runner_names`). `false` on a row
+   *  recorded before the column, and on every run that is not an R557+ al-runner session. */
+  readonly alRunnerNames: boolean;
+  /** R586: `runs.runner_build` (an al-runner-v3 run's build), `null` on every other run. */
+  readonly runnerBuild: string | null;
+}
+
+/** R586: the session side of `runMayLend` step 1: its backend and, on v3, its build. */
+export interface LendingSession {
+  readonly backend: string;
+  readonly runnerBuild: string | undefined;
+}
+
+/**
+ * R586 `runMayLend` step 1 (plan r2 §10, run FIRST so the reason it names is the real one): when
+ * EITHER side is `al-runner-v3`, both must be, and the run's recorded build must equal the
+ * session's. A v3 verdict carries v3's known differences (#5603's false survivors, #5605), so it
+ * is evidence only for that build. Any other backend pair lends here (their behaviour is
+ * unchanged; R592 files the gap between bcdev and v2). Remove-only. `undefined` = lends.
+ */
+export function backendBuildRefusal(
+  run: { readonly id: number; readonly backend: string; readonly runnerBuild: string | null },
+  session: LendingSession | undefined,
+): string | undefined {
+  const v3 = "al-runner-v3";
+  if (run.backend !== v3 && session?.backend !== v3) return undefined;
+  if (session === undefined) {
+    return `run ${run.id} ran on al-runner-v3 and this caller named no session backend, so nothing of it is lent (R586)`;
+  }
+  if (run.backend !== session.backend) {
+    return `run ${run.id} ran on ${run.backend} and this session runs ${session.backend}; a verdict is lent only within al-runner-v3 (R586)`;
+  }
+  if (run.runnerBuild === null || run.runnerBuild !== session.runnerBuild) {
+    return `run ${run.id} ran on al-runner-v3 build ${run.runnerBuild ?? "<unrecorded>"}, and this session runs ${session.runnerBuild ?? "<unknown>"}; a v3 verdict is lent only to the same build (R586)`;
+  }
+  return undefined;
+}
+
+/**
+ * R586 (plan r2 §10): the one run-level trust check, remove-only, in a fixed order; the first step
+ * that refuses names the reason. 1: backend and build (`backendBuildRefusal`). 2: R557's mark
+ * (`runLendsAlRunnerNames`). 3: R557 C1, a v2 run's renamed baseline errors (`renamed` over
+ * `baselineErrorMethods`, the caller's OWN inputs: a snapshot passes its own error rows).
+ */
+export function runMayLend(
+  run: {
+    readonly id: number;
+    readonly backend: string;
+    readonly runnerBuild: string | null;
+    readonly alRunnerNames: boolean;
+  },
+  session: LendingSession | undefined,
+  ctx: {
+    readonly baselineErrorMethods: () => readonly string[];
+    readonly renamed?: (methods: readonly string[]) => readonly string[];
+  },
+):
+  | { readonly step: "backend-build"; readonly why: string }
+  | { readonly step: "al-runner-unmarked" }
+  | { readonly step: "al-runner-renamed"; readonly tests: readonly string[] }
+  | undefined {
+  const why = backendBuildRefusal(run, session);
+  if (why !== undefined) return { step: "backend-build", why };
+  if (!runLendsAlRunnerNames(run)) return { step: "al-runner-unmarked" };
+  if (run.backend === "al-runner" && ctx.renamed !== undefined) {
+    const tests = ctx.renamed(ctx.baselineErrorMethods());
+    if (tests.length > 0) return { step: "al-runner-renamed", tests };
+  }
+  return undefined;
+}
+
+/**
+ * R557 (I1): whether a run may lend history, carry or a baseline snapshot, as far as al-runner test
+ * names go. An al-runner run lends only with the R557 mark, which an R557+ session stamps at run
+ * creation: before R557 a renamed test was sent under its AL name and never ran, so its only-kills
+ * read survived, and a run that CARRIED such verdicts (a resume, `known-survivor` rows) holds no
+ * baseline row that shows it. Any other backend lends. A separate predicate that only REMOVES: each
+ * caller ANDs it with its own checks, and it never re-admits a run another check refused.
+ */
+export function runLendsAlRunnerNames(run: {
+  readonly backend: string;
+  readonly alRunnerNames: boolean;
+}): boolean {
+  return run.backend !== "al-runner" || run.alRunnerNames;
+}
+
+/** R391: a stored `twin_tuples`, checked. NULL stays `null`; anything but a JSON string array
+ *  is a corrupt row and throws. */
+function parseTwinTuples(value: string | null, runId: number): readonly string[] | null {
+  if (value === null) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    parsed = undefined;
+  }
+  if (Array.isArray(parsed) && parsed.every((t) => typeof t === "string")) return parsed;
+  throw new Error(
+    `store.ts: run ${runId} has a corrupt "twin_tuples" column value ${JSON.stringify(value.slice(0, 200))} — expected a JSON array of strings or NULL`,
+  );
+}
+
+/**
+ * R442: what one run numbered no identity ordinal for, so a twin's ordinal there may differ from a
+ * run that did number it. `tuples`: sorted `coarseIdentityTupleOf` strings of sites the run
+ * generated but did not number. `files`: sorted paths of files hidden whole (their sites cannot be
+ * listed). A file hidden in both runs moves no ordinal, so carry needs equal `files` lists.
+ */
+export interface CarryHidden {
+  readonly tuples: readonly string[];
+  readonly files: readonly string[];
+}
+
+/** R442: two `files` lists are equal (both sorted by their writer). */
+export function sameHiddenFiles(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((f, i) => f === b[i]);
+}
+
+/** R442: a stored `carry_hidden`, checked. NULL stays `null`; anything that is not
+ *  `{"tuples": string[], "files": string[]}` is a corrupt row and throws. */
+function parseCarryHidden(value: string | null, runId: number): CarryHidden | null {
+  if (value === null) return null;
+  const parsed: unknown = JSON.parse(value);
+  const strings = (v: unknown): v is string[] =>
+    Array.isArray(v) && v.every((s) => typeof s === "string");
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    !strings((parsed as { tuples?: unknown }).tuples) ||
+    !strings((parsed as { files?: unknown }).files)
+  ) {
+    throw new Error(`store.ts: run ${runId} has a corrupt "carry_hidden" column value`);
+  }
+  const { tuples, files } = parsed as CarryHidden;
+  return { tuples, files };
 }
 
 /**
@@ -277,6 +466,12 @@ function parseBuildSymbols(value: string | null): readonly string[] | null {
   return parsed as string[];
 }
 
+/** Verdicts `invalidateBatch` leaves as they are (and so does the R513 read-time rewrite). */
+const INVALIDATION_KEEPS_SQL = "('error', 'known-survivor')";
+/** R513: a row of a lost batch reads as `invalidateBatch` would have rewritten it. `m` is the
+ *  mutants alias. */
+const EFFECTIVE_VERDICT_SQL = `CASE WHEN m.verdict NOT IN ${INVALIDATION_KEEPS_SQL} AND EXISTS (SELECT 1 FROM lost_batches l WHERE l.run_id = m.run_id AND l.batch_index = m.batch_index) THEN 'error' ELSE m.verdict END`;
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -295,6 +490,8 @@ CREATE TABLE IF NOT EXISTS runs (
   identity_scheme INTEGER,
   coverage_mode TEXT,
   test_app_hash TEXT,
+  test_app_proven INTEGER,
+  test_app_deps TEXT,
   test_digests TEXT,
   test_digest_parts TEXT
 );
@@ -314,6 +511,8 @@ CREATE TABLE IF NOT EXISTS mutants (
   failure_note TEXT,
   killing_test_failure TEXT,
   kill_position INTEGER,
+  kill_reproduced INTEGER,
+  reproduced_failure TEXT,
   duration_ms INTEGER NOT NULL,
   batch_index INTEGER,
   runner TEXT,
@@ -363,6 +562,27 @@ CREATE TABLE IF NOT EXISTS baseline_snapshots (
   payload TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_baseline_snapshots_key ON baseline_snapshots(batch_hash, test_app_hash);
+-- R512: a baseline snapshot a run answered unattested against (observedAny false, no clean
+-- attestation yet in that batch). findBaselineSnapshot never lends one. Keyed like
+-- baseline_snapshots' (run_id, batch_index); only the run that set a mark (marked_by_run) clears
+-- it, on its batch's first clean attestation. A whole new TABLE needs no migrate() step.
+CREATE TABLE IF NOT EXISTS suspect_snapshots (
+  run_id INTEGER NOT NULL,
+  batch_index INTEGER NOT NULL,
+  marked_by_run INTEGER NOT NULL,
+  recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (run_id, batch_index)
+);
+-- R513: a batch whose lease was lost. Written at the loss (onLost), before anything else, so a
+-- verdict recorded after the loss note and never corrected (a crash skips the session's finally) is
+-- still refused by every resume reader. A whole new TABLE needs no migrate() step.
+CREATE TABLE IF NOT EXISTS lost_batches (
+  run_id INTEGER NOT NULL REFERENCES runs(id),
+  batch_index INTEGER NOT NULL,
+  note TEXT NOT NULL,
+  recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (run_id, batch_index)
+);
 -- C02-02: one row per PUBLISHED batch, alongside the runs columns above which stay last-batch-wins
 -- (unchanged, for every existing reader). A whole new TABLE needs no migrate() step: see the R90
 -- publish_outcomes comment below.
@@ -420,6 +640,13 @@ export class ResultsStore {
     this.db = new Database(dbPath, { create: true });
     this.db.exec(`PRAGMA busy_timeout = ${STORE_BUSY_TIMEOUT_MS};`);
     this.db.exec("PRAGMA journal_mode = WAL;");
+    // R449: SQLite's default (FULL) fsyncs the WAL on EVERY commit, and opening a new store alone
+    // is about 16 commits (90 ms on Linux ext4). An fsync waits on the whole machine's disk, so
+    // under other load one store-backed unit test took 3 s here and 6.7 to 8.3 s on GitHub's
+    // Windows runner. NORMAL, the setting SQLite recommends for WAL, fsyncs at checkpoints only:
+    // a crashed or killed process loses nothing, and an OS crash or power cut can lose the last
+    // commits but never corrupts the file. A lost verdict row is a mutant resume runs again.
+    this.db.exec("PRAGMA synchronous = NORMAL;");
     this.db.exec(SCHEMA);
     this.migrate();
   }
@@ -510,6 +737,15 @@ export class ResultsStore {
     if (!cols.some((c) => c.name === "kill_position")) {
       this.db.exec("ALTER TABLE mutants ADD COLUMN kill_position INTEGER");
     }
+    // R577: `kill_reproduced` (1 on a reproduced kill) and `reproduced_failure`. Same hazard (the
+    // INSERT names them). Pre-R577 rows keep NULL: a kill recorded before the rule, which `--resume`
+    // refuses to carry on a backend with the rule on (resume.ts).
+    if (!cols.some((c) => c.name === "kill_reproduced")) {
+      this.db.exec("ALTER TABLE mutants ADD COLUMN kill_reproduced INTEGER");
+    }
+    if (!cols.some((c) => c.name === "reproduced_failure")) {
+      this.db.exec("ALTER TABLE mutants ADD COLUMN reproduced_failure TEXT");
+    }
     if (!trCols.some((c) => c.name === "session_id")) {
       this.db.exec("ALTER TABLE test_results ADD COLUMN session_id INTEGER");
     }
@@ -539,6 +775,8 @@ export class ResultsStore {
       ["batch_artifacts", "app_path TEXT", baCols],
       ["batch_artifacts", "instrumented_dir TEXT", baCols],
       ["mutants", "carried INTEGER", cols],
+      // R474: the enclosing member's hash. NULL on an older row: rule 2 carries nothing from it.
+      ["mutants", "member_hash TEXT", cols],
       ["runs", "source_sha256 TEXT", runCols],
       // R325: NULL on an older row, and read as scheme 1, the only scheme there was.
       ["runs", "identity_scheme INTEGER", runCols],
@@ -548,6 +786,10 @@ export class ResultsStore {
       ["runs", "coverage_mode TEXT", runCols],
       // R247: NULL on an older row, read as "test app unknown", which never matches.
       ["runs", "test_app_hash TEXT", runCols],
+      // R495: NULL on an older row, read as "not proven": it lends nothing to any session.
+      ["runs", "test_app_proven INTEGER", runCols],
+      // R496: NULL on an older row, read as "no dependency fingerprint": it lends nothing.
+      ["runs", "test_app_deps TEXT", runCols],
       // R-278: NULL on an older row; verify refuses it as source-predates-verify.
       ["runs", "test_digests TEXT", runCols],
       // R-371: NULL on an older row; verify's too-many-new-tests refusal then names no cause.
@@ -560,6 +802,22 @@ export class ResultsStore {
       // R360: the quarantine resource key of the run's server; NULL for al-runner and for a
       // backend with no server. `finishRun` prunes within (app_id, resource_key).
       ["runs", "resource_key TEXT", runCols],
+      // R442: NULL on an older row, read as untrusted: no history or resume carries from it.
+      ["runs", "carry_hidden TEXT", runCols],
+      // R391: NULL on an older row, read as "not recorded": no rule-1 carry from it.
+      ["runs", "generation_source_sha256 TEXT", runCols],
+      // R391: NULL on an older row, read as "not measured": no rule-2 carry from it.
+      ["runs", "twin_tuples TEXT", runCols],
+      // R443: NULL on an older row, read as "not recorded".
+      ["runs", "numbering_digest TEXT", runCols],
+      // R565: NULL on an older row, read as "not recorded": no rule-1 carry from it.
+      ["runs", "dependency_source_sha256 TEXT", runCols],
+      // R557 (I1): NULL on an older row, read as untrusted: an al-runner run without it lends no
+      // history, carry or baseline snapshot (`runLendsAlRunnerNames`).
+      ["runs", "al_runner_names INTEGER", runCols],
+      // R586: `<--version line> <binary sha256>` of an al-runner-v3 run; NULL on every other run
+      // and on older rows. `runMayLend` step 1 lends a v3 run only to a v3 session of that build.
+      ["runs", "runner_build TEXT", runCols],
     ] as const) {
       const name = col.split(" ")[0] ?? "";
       if (!known.some((c) => c.name === name)) {
@@ -596,18 +854,48 @@ export class ResultsStore {
     /** R247: the test app this run measures against. Absent is recorded NULL, "unknown", which
      *  no resume or history read ever matches. */
     testAppHash?: string;
+    /** R495: `testAppHash` is proven to be the test app this run measures. Recorded as the run's
+     *  `test_app_proven` (only together with a hash); absent is "not proven". */
+    testAppProven?: boolean;
+    /** R496: the test app's dependency fingerprint. A run is recorded proven only with a hash AND
+     *  this (`test_app_proven = 1` implies `test_app_deps IS NOT NULL`). */
+    testAppDeps?: string;
     /** R-278: every discovered test's source digest, by `testDigestKey`. Absent is recorded NULL,
      *  which `lethal verify` refuses as a run that predates it. */
     testDigests?: Readonly<Record<string, string>>;
     /** R-371: the parts those digests are made of (`TestDigestParts`), recorded with them. */
     testDigestParts?: unknown;
+    /** R442: what the run's keys numbered no ordinal for. Absent or `null` writes NULL (untrusted).
+     *  `runSession` writes it after generation (`setCarryHidden`); verify copies its source's here. */
+    carryHidden?: CarryHidden | null;
+    /** R391: the source hash taken at generation. Absent or `null` writes NULL (no rule-1 carry). */
+    generationSourceSha256?: string | null;
+    /** R391: the run's `twin_tuples`. Absent or `null` writes NULL ("not measured"). `runSession`
+     *  writes it after generation (`setTwinTuples`); verify copies its source's here. */
+    twinTuples?: readonly string[] | null;
+    /** R443: the run's numbering digest. Absent or `null` writes NULL. `runSession` writes it
+     *  after generation (`setNumberingDigest`); verify copies its source's here. */
+    numberingDigest?: string | null;
+    /** R565: the run's dependency source digest. Absent or `null` writes NULL. `runSession` writes
+     *  it after generation (`setDependencySourceSha256`); verify copies its source's here. */
+    dependencySourceSha256?: string | null;
+    /** R557 (I1): the run sends al-runner tests under `alRunnerMethodName`. `true` writes 1;
+     *  absent or `false` writes NULL, which an al-runner run reads as untrusted. */
+    alRunnerNames?: boolean;
+    /** R586: the al-runner-v3 build (`runnerBuildOf`); absent writes NULL (every other backend). */
+    runnerBuild?: string;
   }): number {
     // R325: every run records the identity scheme its keys are made under, so no later session
     // can read them as keys of another scheme.
+    // R496: proven only with a hash AND a dependency fingerprint, and the fingerprint only with it.
+    const proven =
+      info.testAppHash !== undefined &&
+      info.testAppProven === true &&
+      info.testAppDeps !== undefined;
     const r = this.db
       .query(
-        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, resource_key, test_app_hash, test_digests, test_digest_parts) " +
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, resource_key, test_app_hash, test_app_proven, test_app_deps, test_digests, test_digest_parts, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, al_runner_names, runner_build) " +
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
       )
       .get(
         info.projectPath,
@@ -619,12 +907,168 @@ export class ResultsStore {
         info.coverageMode,
         info.resourceKey ?? null,
         info.testAppHash ?? null,
+        proven ? 1 : null,
+        proven ? (info.testAppDeps ?? null) : null,
         info.testDigests !== undefined ? JSON.stringify(info.testDigests) : null,
         info.testDigestParts !== undefined ? JSON.stringify(info.testDigestParts) : null,
+        info.carryHidden != null ? JSON.stringify(info.carryHidden) : null,
+        info.generationSourceSha256 ?? null,
+        info.twinTuples != null ? JSON.stringify(info.twinTuples) : null,
+        info.numberingDigest ?? null,
+        info.dependencySourceSha256 ?? null,
+        info.alRunnerNames === true ? 1 : null,
+        info.runnerBuild ?? null,
       ) as {
       id: number;
     };
     return r.id;
+  }
+
+  /** R389: replaces the run's open-world test digests with the closed-world ones, for a run that
+   *  recorded no test-app identity (nothing to make reusable). */
+  setTestDigests(runId: number, digests: Readonly<Record<string, string>>, parts: unknown): void {
+    const changed = this.db
+      .query("UPDATE runs SET test_digests = ?, test_digest_parts = ? WHERE id = ?")
+      .run(JSON.stringify(digests), JSON.stringify(parts), runId).changes;
+    if (changed !== 1) throw new Error(`store.ts: setTestDigests: no run ${runId}`);
+  }
+
+  /**
+   * R389: the guard gave the same closed answer after execution as before it. In ONE transaction:
+   * the closed-world digests replace the open-world ones, and the run's test-app identity and its
+   * baseline snapshots lose `pending` (`PENDING_SUFFIX`), which makes them reusable. Until then
+   * no key a session computes can match them, so a run killed before this never supplies a
+   * verdict or a baseline.
+   */
+  confirmClosedWorld(
+    runId: number,
+    pending: string,
+    digests: Readonly<Record<string, string>>,
+    parts: unknown,
+  ): void {
+    const strip = "substr(test_app_hash, 1, length(test_app_hash) - length(?1))";
+    this.db.transaction(() => {
+      const changed = this.db
+        .query(
+          `UPDATE runs SET test_digests = ?2, test_digest_parts = ?3, test_app_hash = ${strip}
+           WHERE id = ?4 AND substr(test_app_hash, -length(?1)) = ?1`,
+        )
+        .run(pending, JSON.stringify(digests), JSON.stringify(parts), runId).changes;
+      if (changed !== 1)
+        throw new Error(`store.ts: confirmClosedWorld: run ${runId} holds no pending identity`);
+      this.db
+        .query(
+          `UPDATE baseline_snapshots SET test_app_hash = ${strip}
+           WHERE run_id = ?2 AND substr(test_app_hash, -length(?1)) = ?1`,
+        )
+        .run(pending, runId);
+    })();
+  }
+
+  /** R389: the guard's answer changed during the run. In ONE transaction, the run's test-app
+   *  identity and every baseline snapshot it recorded get `suffix`, so no later session carries or
+   *  reuses from it. A revoked owner whose snapshot somehow kept the old key is excluded by
+   *  `findBaselineSnapshot`'s R496 condition that the run's hash equals the snapshot's. */
+  revokeTestAppHash(runId: number, suffix: string): void {
+    this.db.transaction(() => {
+      const changed = this.db
+        .query(
+          "UPDATE runs SET test_app_hash = test_app_hash || ? WHERE id = ? AND test_app_hash IS NOT NULL",
+        )
+        .run(suffix, runId).changes;
+      if (changed !== 1)
+        throw new Error(`store.ts: revokeTestAppHash: run ${runId} has no test app hash`);
+      this.db
+        .query("UPDATE baseline_snapshots SET test_app_hash = test_app_hash || ? WHERE run_id = ?")
+        .run(suffix, runId);
+    })();
+  }
+
+  /** R391: records the run's `twin_tuples` once generation has numbered its sites. Called before
+   *  any mutant row is written, so a run that dies before it holds no verdict and stays NULL. */
+  setTwinTuples(runId: number, twinTuples: readonly string[]): void {
+    const changed = this.db
+      .query("UPDATE runs SET twin_tuples = ? WHERE id = ?")
+      .run(JSON.stringify(twinTuples), runId).changes;
+    if (changed !== 1) throw new Error(`store.ts: setTwinTuples: no run ${runId}`);
+  }
+
+  /** R443: records the run's numbering digest, beside `setTwinTuples` and at the same moment. */
+  setNumberingDigest(runId: number, digest: string): void {
+    const changed = this.db
+      .query("UPDATE runs SET numbering_digest = ? WHERE id = ?")
+      .run(digest, runId).changes;
+    if (changed !== 1) throw new Error(`store.ts: setNumberingDigest: no run ${runId}`);
+  }
+
+  /**
+   * R373: records an env-tool run's test digests, taken after its lease-held hook published the
+   * test app. Writes only a row that holds none yet: zero rows changed (no such run, or digests
+   * already recorded) is a caller-contract violation and throws, never an overwrite.
+   */
+  setRunTestDigests(
+    runId: number,
+    digests: Readonly<Record<string, string>>,
+    parts: unknown,
+  ): void {
+    const changed = this.db
+      .query(
+        "UPDATE runs SET test_digests = ?, test_digest_parts = ? WHERE id = ? AND test_digests IS NULL",
+      )
+      .run(JSON.stringify(digests), JSON.stringify(parts), runId).changes;
+    if (changed !== 1) {
+      throw new Error(
+        `store.ts: setRunTestDigests: run ${runId} does not exist or already records test digests`,
+      );
+    }
+  }
+
+  /** R486, R495, R496: the run's test-app identity, whether it is proven, and its dependency
+   *  fingerprint, written TOGETHER in one UPDATE so a hash never stands without its flag and a flag
+   *  never without its fingerprint. `null` records "unknown", which no resume, history or snapshot
+   *  matches; `proven` is stored only with a hash and a fingerprint, and the fingerprint only with
+   *  the flag. */
+  setRunTestAppHash(
+    runId: number,
+    testAppHash: string | null,
+    proven: boolean,
+    deps: string | null,
+  ): void {
+    const flag = testAppHash !== null && deps !== null && proven;
+    const changed = this.db
+      .query(
+        "UPDATE runs SET test_app_hash = ?, test_app_proven = ?, test_app_deps = ? WHERE id = ?",
+      )
+      .run(testAppHash, flag ? 1 : null, flag ? deps : null, runId).changes;
+    if (changed !== 1) throw new Error(`store.ts: setRunTestAppHash: no run ${runId}`);
+  }
+
+  /** R496: withdraws a run's test digests and their parts (F9: a dependency changed while the
+   *  session waited for the lease, so the pre-lease digests no longer describe what runs). Zero
+   *  rows changed (no such run) is a caller-contract violation and throws. */
+  clearRunTestDigests(runId: number): void {
+    const changed = this.db
+      .query("UPDATE runs SET test_digests = NULL, test_digest_parts = NULL WHERE id = ?")
+      .run(runId).changes;
+    if (changed !== 1) throw new Error(`store.ts: clearRunTestDigests: no run ${runId}`);
+  }
+
+  /** R442: records what the run numbered no ordinal for, once generation knows it. Called before
+   *  any mutant row is written, so a run that dies before it holds no verdict and stays NULL. */
+  setCarryHidden(runId: number, hidden: CarryHidden): void {
+    const changed = this.db
+      .query("UPDATE runs SET carry_hidden = ? WHERE id = ?")
+      .run(JSON.stringify({ tuples: hidden.tuples, files: hidden.files }), runId).changes;
+    if (changed !== 1) throw new Error(`store.ts: setCarryHidden: no run ${runId}`);
+  }
+
+  /** R565: records the run's dependency source digest once generation knows it, before any mutant
+   *  row, like `setCarryHidden`. A run that dies earlier keeps NULL and carries nothing by rule 1. */
+  setDependencySourceSha256(runId: number, digest: string): void {
+    const changed = this.db
+      .query("UPDATE runs SET dependency_source_sha256 = ? WHERE id = ?")
+      .run(digest, runId).changes;
+    if (changed !== 1) throw new Error(`store.ts: setDependencySourceSha256: no run ${runId}`);
   }
 
   /**
@@ -647,23 +1091,36 @@ export class ResultsStore {
     /** Verdicts a resume may reuse — `CARRYABLE_VERDICTS` (resume.ts), passed in so the SQL and the
      *  carry rule cannot drift apart. */
     carryableVerdicts: readonly string[];
+    /** R586: on `al-runner-v3`, only a run of this build is resumable (`runMayLend` step 1). */
+    runnerBuild?: string | undefined;
   }): number | null {
+    // R586: a v3 session resumes only its own build; NULL (an unrecorded build) never matches.
+    const v3 = q.backend === "al-runner-v3";
+    if (v3 && q.runnerBuild === undefined) {
+      throw new Error(
+        "findResumableRun: an al-runner-v3 session must name its runner build (R586)",
+      );
+    }
     // R52: "most recent unfinished" is NOT sufficient — it must also HAVE something to carry.
     // Measured 2026-07-27: an attempted resume aborted at lease acquisition before scoring a single
     // mutant, and the next `--resume` dutifully selected that empty run over the one holding 12 real
     // verdicts, reporting "0 verdict(s) carried". Not silently wrong (the report says so), but
     // useless exactly when recovery matters — and an aborted run is precisely the kind most likely
     // to have recorded nothing.
+    // R513: a row of a lost batch counts as the `error` `invalidateBatch` would have made it (the
+    // same expression in the three siblings below and in `mutantVerdicts`), so a run whose only
+    // carryable rows are in a lost batch has nothing to carry.
     const placeholders = q.carryableVerdicts.map(() => "?").join(", ");
     const row = this.db
       .query(
-        `SELECT id FROM runs WHERE project_path = ? AND backend = ? AND config_fingerprint = ? AND COALESCE(identity_scheme, 1) = ? AND finished_at IS NULL AND EXISTS (SELECT 1 FROM mutants m WHERE m.run_id = runs.id AND m.verdict IN (${placeholders})) ORDER BY id DESC LIMIT 1`,
+        `SELECT id FROM runs WHERE project_path = ? AND backend = ? AND config_fingerprint = ? AND COALESCE(identity_scheme, 1) = ? AND finished_at IS NULL${v3 ? " AND runner_build = ?" : ""} AND EXISTS (SELECT 1 FROM mutants m WHERE m.run_id = runs.id AND (${EFFECTIVE_VERDICT_SQL}) IN (${placeholders})) ORDER BY id DESC LIMIT 1`,
       )
       .get(
         q.projectPath,
         q.backend,
         q.configFingerprint,
         IDENTITY_SCHEME,
+        ...(v3 ? [q.runnerBuild ?? ""] : []),
         ...q.carryableVerdicts,
       ) as {
       id: number;
@@ -684,7 +1141,7 @@ export class ResultsStore {
     const placeholders = q.carryableVerdicts.map(() => "?").join(", ");
     const row = this.db
       .query(
-        `SELECT id, COALESCE(identity_scheme, 1) AS scheme FROM runs WHERE project_path = ? AND backend = ? AND COALESCE(identity_scheme, 1) <> ? AND finished_at IS NULL AND EXISTS (SELECT 1 FROM mutants m WHERE m.run_id = runs.id AND m.verdict IN (${placeholders})) ORDER BY id DESC LIMIT 1`,
+        `SELECT id, COALESCE(identity_scheme, 1) AS scheme FROM runs WHERE project_path = ? AND backend = ? AND COALESCE(identity_scheme, 1) <> ? AND finished_at IS NULL AND EXISTS (SELECT 1 FROM mutants m WHERE m.run_id = runs.id AND (${EFFECTIVE_VERDICT_SQL}) IN (${placeholders})) ORDER BY id DESC LIMIT 1`,
       )
       .get(q.projectPath, q.backend, IDENTITY_SCHEME, ...q.carryableVerdicts) as {
       id: number;
@@ -705,7 +1162,7 @@ export class ResultsStore {
     const placeholders = q.carryableVerdicts.map(() => "?").join(", ");
     const row = this.db
       .query(
-        `SELECT id, build_symbols FROM runs WHERE project_path = ? AND backend = ? AND COALESCE(identity_scheme, 1) = ? AND (build_symbols IS NULL OR build_symbols <> ?) AND finished_at IS NULL AND EXISTS (SELECT 1 FROM mutants m WHERE m.run_id = runs.id AND m.verdict IN (${placeholders})) ORDER BY id DESC LIMIT 1`,
+        `SELECT id, build_symbols FROM runs WHERE project_path = ? AND backend = ? AND COALESCE(identity_scheme, 1) = ? AND (build_symbols IS NULL OR build_symbols <> ?) AND finished_at IS NULL AND EXISTS (SELECT 1 FROM mutants m WHERE m.run_id = runs.id AND (${EFFECTIVE_VERDICT_SQL}) IN (${placeholders})) ORDER BY id DESC LIMIT 1`,
       )
       .get(
         q.projectPath,
@@ -734,7 +1191,7 @@ export class ResultsStore {
     const placeholders = q.carryableVerdicts.map(() => "?").join(", ");
     const row = this.db
       .query(
-        `SELECT id, coverage_mode FROM runs WHERE project_path = ? AND backend = ? AND COALESCE(identity_scheme, 1) = ? AND coverage_mode IS NOT ? AND finished_at IS NULL AND EXISTS (SELECT 1 FROM mutants m WHERE m.run_id = runs.id AND m.verdict IN (${placeholders})) ORDER BY id DESC LIMIT 1`,
+        `SELECT id, coverage_mode FROM runs WHERE project_path = ? AND backend = ? AND COALESCE(identity_scheme, 1) = ? AND coverage_mode IS NOT ? AND finished_at IS NULL AND EXISTS (SELECT 1 FROM mutants m WHERE m.run_id = runs.id AND (${EFFECTIVE_VERDICT_SQL}) IN (${placeholders})) ORDER BY id DESC LIMIT 1`,
       )
       .get(q.projectPath, q.backend, IDENTITY_SCHEME, q.coverageMode, ...q.carryableVerdicts) as {
       id: number;
@@ -781,9 +1238,18 @@ export class ResultsStore {
   getRun(runId: number): RunRow | null {
     const row = this.db
       .query(
-        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, build_symbols, coverage_mode, test_app_hash FROM runs WHERE id = ?",
+        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, al_runner_names, runner_build FROM runs WHERE id = ?",
       )
       .get(runId) as {
+      dependency_source_sha256: string | null;
+      al_runner_names: number | null;
+      runner_build: string | null;
+      test_app_proven: number | null;
+      test_app_deps: string | null;
+      carry_hidden: string | null;
+      generation_source_sha256: string | null;
+      twin_tuples: string | null;
+      numbering_digest: string | null;
       id: number;
       project_path: string;
       backend: string;
@@ -805,6 +1271,15 @@ export class ResultsStore {
       buildSymbols: parseBuildSymbols(row.build_symbols),
       coverageMode: parseCoverageMode(row.coverage_mode, row.id),
       testAppHash: row.test_app_hash,
+      testAppProven: row.test_app_proven === 1,
+      testAppDeps: row.test_app_deps,
+      carryHidden: parseCarryHidden(row.carry_hidden, row.id),
+      generationSourceSha256: row.generation_source_sha256,
+      twinTuples: parseTwinTuples(row.twin_tuples, row.id),
+      numberingDigest: row.numbering_digest,
+      dependencySourceSha256: row.dependency_source_sha256,
+      alRunnerNames: row.al_runner_names === 1,
+      runnerBuild: row.runner_build,
     };
   }
 
@@ -862,16 +1337,25 @@ export class ResultsStore {
   }
 
   /** R47: every mutant verdict a prior run recorded, keyed by identity rather than mutant code —
-   *  see `MutantVerdictRow`. */
+   *  see `MutantVerdictRow`.
+   *  R513: a row of a batch in `lost_batches` reads as `invalidateBatch` would have left it:
+   *  `error`, the loss note, no killing fields. Read as error rather than dropped, so a stranded
+   *  row there still reaches `strandedKeys`, and a colliding identity key stays ambiguous. */
   mutantVerdicts(runId: number): MutantVerdictRow[] {
     const rows = this.db
       .query(
-        "SELECT ast_hash, codeunit_name, procedure_name, operator_name, operator_major, verdict, " +
-          "killing_test, failure_note, killing_test_failure, kill_position, duration_ms, runner, " +
-          "covering_tests, coverage_attribution, unplaceable, identity_ordinal " +
-          "FROM mutants WHERE run_id = ?",
+        `SELECT ast_hash, codeunit_name, procedure_name, operator_name, operator_major,
+           ${EFFECTIVE_VERDICT_SQL} AS verdict, m.verdict AS stored_verdict,
+           (SELECT l.note FROM lost_batches l WHERE l.run_id = m.run_id AND l.batch_index = m.batch_index) AS lost_note,
+           killing_test, failure_note, killing_test_failure, kill_position, kill_reproduced,
+           reproduced_failure, duration_ms, runner, covering_tests, coverage_attribution, unplaceable, identity_ordinal, file, member_hash
+         FROM mutants m WHERE m.run_id = ?`,
       )
       .all(runId) as Array<{
+      stored_verdict: string;
+      lost_note: string | null;
+      file: string;
+      member_hash: string | null;
       ast_hash: string;
       codeunit_name: string;
       procedure_name: string | null;
@@ -882,6 +1366,8 @@ export class ResultsStore {
       failure_note: string | null;
       killing_test_failure: string | null;
       kill_position: number | null;
+      kill_reproduced: number | null;
+      reproduced_failure: string | null;
       duration_ms: number;
       runner: string | null;
       covering_tests: string | null;
@@ -889,37 +1375,55 @@ export class ResultsStore {
       unplaceable: number | null;
       identity_ordinal: number | null;
     }>;
-    return rows.map((r) => ({
-      identityOrdinal: r.identity_ordinal ?? 0,
-      ...(r.covering_tests !== null
-        ? { coveringTests: this.parseCoveringTests(r.covering_tests, r) }
-        : {}),
-      ...(r.coverage_attribution !== null
-        ? { coverageAttribution: this.parseAttribution(r.coverage_attribution, r) }
-        : {}),
-      ...(r.unplaceable !== null ? { unplaceable: r.unplaceable !== 0 } : {}),
-      astHash: r.ast_hash,
-      codeunitName: r.codeunit_name,
-      procedureName: r.procedure_name,
-      operatorName: r.operator_name,
-      operatorMajor: r.operator_major,
-      verdict: r.verdict as MutantVerdict,
-      durationMs: r.duration_ms,
-      ...(r.killing_test !== null ? { killingTest: r.killing_test } : {}),
-      ...(r.failure_note !== null ? { failureNote: r.failure_note } : {}),
-      ...(r.killing_test_failure !== null ? { killingTestFailure: r.killing_test_failure } : {}),
-      ...(r.kill_position !== null ? { killPosition: r.kill_position } : {}),
-      ...(r.runner !== null
-        ? {
-            runner: this.parseRunnerKind(r.runner, {
-              astHash: r.ast_hash,
-              codeunitName: r.codeunit_name,
-              operatorName: r.operator_name,
-              operatorMajor: r.operator_major,
-            }),
-          }
-        : {}),
-    }));
+    return rows.map((stored) => {
+      const r =
+        stored.verdict === stored.stored_verdict
+          ? stored
+          : {
+              ...stored,
+              failure_note: stored.lost_note,
+              killing_test: null,
+              killing_test_failure: null,
+              kill_position: null,
+              kill_reproduced: null,
+              reproduced_failure: null,
+            };
+      return {
+        identityOrdinal: r.identity_ordinal ?? 0,
+        file: r.file,
+        memberHash: r.member_hash,
+        ...(r.covering_tests !== null
+          ? { coveringTests: this.parseCoveringTests(r.covering_tests, r) }
+          : {}),
+        ...(r.coverage_attribution !== null
+          ? { coverageAttribution: this.parseAttribution(r.coverage_attribution, r) }
+          : {}),
+        ...(r.unplaceable !== null ? { unplaceable: r.unplaceable !== 0 } : {}),
+        astHash: r.ast_hash,
+        codeunitName: r.codeunit_name,
+        procedureName: r.procedure_name,
+        operatorName: r.operator_name,
+        operatorMajor: r.operator_major,
+        verdict: r.verdict as MutantVerdict,
+        durationMs: r.duration_ms,
+        ...(r.killing_test !== null ? { killingTest: r.killing_test } : {}),
+        ...(r.failure_note !== null ? { failureNote: r.failure_note } : {}),
+        ...(r.killing_test_failure !== null ? { killingTestFailure: r.killing_test_failure } : {}),
+        ...(r.kill_position !== null ? { killPosition: r.kill_position } : {}),
+        ...(r.kill_reproduced === 1 ? { killReproduced: true as const } : {}),
+        ...(r.reproduced_failure !== null ? { reproducedFailure: r.reproduced_failure } : {}),
+        ...(r.runner !== null
+          ? {
+              runner: this.parseRunnerKind(r.runner, {
+                astHash: r.ast_hash,
+                codeunitName: r.codeunit_name,
+                operatorName: r.operator_name,
+                operatorMajor: r.operator_major,
+              }),
+            }
+          : {}),
+      };
+    });
   }
 
   /**
@@ -1370,6 +1874,20 @@ export class ResultsStore {
   }
 
   /**
+   * R508: delete one batch's baseline snapshot, so a later `--resume` re-runs that batch's
+   * baseline instead of reusing one measured under a lease this session could no longer prove it
+   * held. Called only on the lease-lost path; `invalidateBatch` (the attestation gate's path too)
+   * leaves snapshots alone. Returns the number of rows deleted.
+   */
+  dropBaselineSnapshot(runId: number, batchIndex: number): number {
+    this.db
+      .query("DELETE FROM baseline_snapshots WHERE run_id = ? AND batch_index = ?")
+      .run(runId, batchIndex);
+    const r = this.db.query("SELECT changes() AS n").get() as { n: number };
+    return r.n;
+  }
+
+  /**
    * R192 (second half): the most recent snapshot for these hashes from any run of the CURRENT
    * identity scheme, or null. R318: a scheme bump can leave the emitted AL byte-identical while
    * changing how coverage is attributed, so an older scheme's snapshot matches both hashes but
@@ -1377,20 +1895,40 @@ export class ResultsStore {
    * R354: and only from a run of the SAME coverage mode. A snapshot holds the green tests and the
    * coverage the batch's mutants are selected by, measured under its run's mode; another mode's
    * (or a pre-R354 run's, NULL) would select them by another rule. `=` never matches NULL.
+   * R492: and only from a run whose own recorded `test_app_hash` equals the key. An env-tool run
+   * served P2 while P1 was installed keyed its snapshot under P2 with P1's baseline; reused for a
+   * P2 run, a test green under P1 and red under P2 would be sent as covering and score a false
+   * kill. Such a run now records NULL (its read-back was not proven installed), so it lends none.
+   * R495: and the run must have PROVEN that hash (`test_app_proven = 1`), for every session kind.
+   * A run without that proof lends no snapshot: the batch re-runs its baseline.
+   * R496: and the run's dependency fingerprint must equal `testAppDeps`, this session's: the same
+   * test app against a rebuilt dependency is not the same test app. `=` never matches NULL, so a
+   * row recorded before R496 lends none.
+   * R512: and never a snapshot in `suspect_snapshots`: a run answered unattested against it, so it
+   * may have measured a wrong or stale binary, and a test green there but red on the real one
+   * would be sent as covering and could score a false timeout kill.
+   * R513: and never a snapshot of a batch in `lost_batches`, even when `onLost`'s drop failed.
    */
   findBaselineSnapshot(
     batchHash: string,
     testAppHash: string,
+    testAppDeps: string,
     coverageMode: CoverageMode,
   ): BaselineSnapshot | null {
     const row = this.db
       .query(
         `SELECT run_id, batch_index, batch_hash, test_app_hash, payload FROM baseline_snapshots
          WHERE batch_hash = ? AND test_app_hash = ?
-           AND run_id IN (SELECT id FROM runs WHERE COALESCE(identity_scheme, 1) = ? AND coverage_mode = ?)
+           AND run_id IN (SELECT id FROM runs WHERE COALESCE(identity_scheme, 1) = ? AND coverage_mode = ?
+             AND test_app_hash = baseline_snapshots.test_app_hash
+             AND test_app_proven = 1
+             AND test_app_deps = ?
+             AND COALESCE(test_app_hash, '') NOT LIKE '%|pending')
+           AND NOT EXISTS (SELECT 1 FROM suspect_snapshots s WHERE s.run_id = baseline_snapshots.run_id AND s.batch_index = baseline_snapshots.batch_index)
+           AND NOT EXISTS (SELECT 1 FROM lost_batches l WHERE l.run_id = baseline_snapshots.run_id AND l.batch_index = baseline_snapshots.batch_index)
          ORDER BY id DESC LIMIT 1`,
       )
-      .get(batchHash, testAppHash, IDENTITY_SCHEME, coverageMode) as {
+      .get(batchHash, testAppHash, IDENTITY_SCHEME, coverageMode, testAppDeps) as {
       run_id: number;
       batch_index: number;
       batch_hash: string;
@@ -1426,9 +1964,10 @@ export class ResultsStore {
       .query(
         `INSERT INTO mutants (run_id, mutant_code, ast_hash, codeunit_name, procedure_name,
          operator_name, operator_major, file, line, verdict, killing_test, failure_note,
-         killing_test_failure, kill_position, duration_ms, batch_index, runner,
-         covering_tests, coverage_attribution, unplaceable, identity_ordinal, carried)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+         killing_test_failure, kill_position, kill_reproduced, reproduced_failure, duration_ms,
+         batch_index, runner, covering_tests, coverage_attribution, unplaceable, identity_ordinal,
+         carried, member_hash)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
       )
       .get(
         runId,
@@ -1445,6 +1984,8 @@ export class ResultsStore {
         row.failureNote ?? null,
         row.killingTestFailure ?? null,
         row.killPosition ?? null,
+        row.killReproduced === true ? 1 : null,
+        row.reproducedFailure ?? null,
         row.durationMs,
         row.batchIndex,
         row.runner ?? null,
@@ -1453,6 +1994,7 @@ export class ResultsStore {
         row.unplaceable === undefined ? null : row.unplaceable ? 1 : 0,
         row.identityOrdinal ?? 0,
         row.carried === undefined ? null : row.carried ? 1 : 0,
+        row.memberHash ?? null,
       ) as { id: number };
     return r.id;
   }
@@ -1478,6 +2020,10 @@ export class ResultsStore {
    * was never run against this binary at all, so its attestation says nothing about it.
    *
    * Returns the number of rows changed, so a caller can state what it corrected.
+   *
+   * It leaves the batch's baseline snapshot alone. R512: a snapshot an unattested answer was
+   * measured against is refused through `suspect_snapshots` (`markSnapshotSuspect`), written at
+   * that answer, not here.
    */
   invalidateBatch(runId: number, batchIndex: number, note: string): number {
     this.db
@@ -1485,13 +2031,52 @@ export class ResultsStore {
         // R86: `killing_test_failure` is cleared alongside `killing_test` for the same reason —
         // this row is no longer a kill, so a leftover account of "why the test went red" would
         // describe a verdict that has just been withdrawn.
-        "UPDATE mutants SET verdict = 'error', failure_note = ?, killing_test = NULL, " +
-          "killing_test_failure = NULL, kill_position = NULL " +
-          "WHERE run_id = ? AND batch_index = ? AND verdict NOT IN ('error', 'known-survivor')",
+        `UPDATE mutants SET verdict = 'error', failure_note = ?, killing_test = NULL,
+           killing_test_failure = NULL, kill_position = NULL, kill_reproduced = NULL,
+           reproduced_failure = NULL
+         WHERE run_id = ? AND batch_index = ? AND verdict NOT IN ${INVALIDATION_KEEPS_SQL}`,
       )
       .run(note, runId, batchIndex);
     const r = this.db.query("SELECT changes() AS n").get() as { n: number };
     return r.n;
+  }
+
+  /**
+   * R513: record that a batch's lease was lost, so every resume reader reads that batch's rows as
+   * `invalidateBatch` would have rewritten them (`EFFECTIVE_VERDICT_SQL`), even a row recorded
+   * after the loss and never corrected because a crash skipped the session's `finally`. The first
+   * note wins, like `noteLeaseLost`'s first loss.
+   */
+  markBatchLost(runId: number, batchIndex: number, note: string): void {
+    this.db
+      .query("INSERT OR IGNORE INTO lost_batches (run_id, batch_index, note) VALUES (?, ?, ?)")
+      .run(runId, batchIndex, note);
+  }
+
+  /**
+   * R512: mark the baseline snapshot `key` suspect: run `markedByRun` answered unattested against
+   * it (`observedAny: false`, no clean attestation yet in that batch). `findBaselineSnapshot` never
+   * lends a marked snapshot. Returns true only when THIS call inserted the mark, so only its
+   * owner may clear it (`clearSnapshotSuspect`); another run's existing mark is left as it is.
+   */
+  markSnapshotSuspect(key: { runId: number; batchIndex: number }, markedByRun: number): boolean {
+    this.db
+      .query(
+        "INSERT OR IGNORE INTO suspect_snapshots (run_id, batch_index, marked_by_run) VALUES (?, ?, ?)",
+      )
+      .run(key.runId, key.batchIndex, markedByRun);
+    const r = this.db.query("SELECT changes() AS n").get() as { n: number };
+    return r.n > 0;
+  }
+
+  /** R512: remove the mark `markedByRun` set on `key`, on its batch's first clean attestation. A
+   *  mark another run set is never removed here. */
+  clearSnapshotSuspect(key: { runId: number; batchIndex: number }, markedByRun: number): void {
+    this.db
+      .query(
+        "DELETE FROM suspect_snapshots WHERE run_id = ? AND batch_index = ? AND marked_by_run = ?",
+      )
+      .run(key.runId, key.batchIndex, markedByRun);
   }
 
   recordTestResult(
@@ -1574,9 +2159,25 @@ export class ResultsStore {
     return r;
   }
 
+  /**
+   * R557 C1: the distinct `method` of `runId`'s BASELINE rows (`mutant_row_id IS NULL`) whose
+   * outcome is `error`. Read-only, existing columns. The caller decides which of them a pre-R557
+   * al-runner run sent under a name al-runner never had (`alRunnerRenamed`).
+   */
+  baselineErrorMethods(runId: number): string[] {
+    const rows = this.db
+      .query(
+        "SELECT DISTINCT method FROM test_results WHERE run_id = ? AND mutant_row_id IS NULL AND outcome = 'error' ORDER BY method",
+      )
+      .all(runId) as Array<{ method: string }>;
+    return rows.map((r) => r.method);
+  }
+
   /** A prior "known-survivor" verdict counts exactly like "survived" here (I4) — it means the
    *  identity key was skipped rather than re-tested, so it must remain skippable/filterable in
-   *  the run after that, not silently fall out of history after one `--skip-known-survivors` pass. */
+   *  the run after that, not silently fall out of history after one `--skip-known-survivors` pass.
+   *  R391: returns the survivors' keys AND their (file, tuple) sites, plus the run's generation
+   *  hash and `twin_tuples`; `filterHistory` decides which of them carries (`carryRecord`). */
   priorSurvivorKeys(
     projectPath: string,
     /** R354: the coverage mode THIS session measures under. A survivor recorded under another
@@ -1584,12 +2185,25 @@ export class ResultsStore {
     coverageMode: CoverageMode,
     /** R247: the test app THIS session measures against. A survivor measured against another test
      *  app, or an unknown one (`undefined` here, NULL on the run), is not evidence: a new test is
-     *  exactly what might kill it. No key is returned then. */
-    testAppHash: string | undefined,
+     *  exactly what might kill it. No key is returned then. R496: the identity is the hash AND the
+     *  dependency fingerprint; a run with other or NULL deps yields no keys. */
+    testApp: TestAppIdentity | undefined,
     /** R214: this build's effective symbols. A latest run built under another set, or an
      *  unrecorded one, yields no keys. */
     buildSymbols: readonly string[],
+    /** R442: THIS run's `carryHidden.files`. A latest run that hid other files whole numbered its
+     *  twins differently, so it yields no keys. */
+    hiddenFiles: readonly string[],
     on: {
+      /** R442: the latest finished run recorded no `carry_hidden` (before R442, or it died before
+       *  generation): untrusted, no keys. Checked after the symbols. */
+      readonly carryUntrusted?: (info: { runId: number }) => void;
+      /** R442: the latest finished run hid other files whole than this run does. */
+      readonly hiddenFilesChanged?: (info: {
+        runId: number;
+        before: readonly string[];
+        now: readonly string[];
+      }) => void;
       /**
        * R325: the latest finished run was keyed under another identity scheme. Its keys then name
        * nothing reliable in this build (a renumbering can hand one to a different mutant), so NO
@@ -1608,46 +2222,135 @@ export class ResultsStore {
         runId: number;
         coverageMode: CoverageMode | null;
       }) => void;
-      /** R247: the test app differs, or is unknown. Checked after the coverage mode. */
-      readonly testAppChanged?: (info: { runId: number; testAppHash: string | null }) => void;
+      /** R247: the test app differs, or is unknown; R495: or was not proven installed (`proven`
+       *  false); R496: or its dependency fingerprint differs or is NULL (`deps`). Checked after the
+       *  coverage mode. */
+      readonly testAppChanged?: (info: {
+        runId: number;
+        testAppHash: string | null;
+        proven: boolean;
+        deps: string | null;
+      }) => void;
+      /**
+       * R557 C1: the latest finished run ran on al-runner and recorded, as baseline errors, tests
+       * whose al-runner name differs from the AL name (`renamed` picks them from the run's
+       * baseline error methods). Before R557 such a test was never run, so its only-kills read
+       * survived: no key is returned. Checked last. Absent: no check.
+       */
+      readonly alRunnerTestNames?: {
+        readonly renamed: (methods: readonly string[]) => readonly string[];
+        readonly refused: (info: { runId: number; tests: readonly string[] }) => void;
+      };
+      /** R557 (I1): the latest finished run is an al-runner run without the R557 test-name mark
+       *  (`runLendsAlRunnerNames`): no key. Checked always, before `alRunnerTestNames`. */
+      readonly alRunnerUnmarked?: (info: { runId: number }) => void;
+      /** R586: this session's backend and build, for `runMayLend` step 1, checked FIRST. Absent: a
+       *  v3 run lends nothing (the safe direction); every other pair is unchanged. */
+      readonly session?: LendingSession;
+      /** R586: step 1 refused the latest finished run (another backend or v3 build): no key. */
+      readonly backendBuildRefused?: (info: { runId: number; why: string }) => void;
     } = {},
-  ): Set<string> {
+  ): PriorSurvivors {
+    const none = NO_PRIOR_SURVIVORS;
     const run = this.db
       .query(
-        "SELECT id, COALESCE(identity_scheme, 1) AS scheme, build_symbols, coverage_mode, test_app_hash FROM runs WHERE project_path = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1",
+        "SELECT id, backend, COALESCE(identity_scheme, 1) AS scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, dependency_source_sha256, al_runner_names, runner_build FROM runs WHERE project_path = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1",
       )
       .get(projectPath) as {
+      backend: string;
+      al_runner_names: number | null;
+      runner_build: string | null;
+      dependency_source_sha256: string | null;
+      test_app_proven: number | null;
+      test_app_deps: string | null;
+      carry_hidden: string | null;
+      generation_source_sha256: string | null;
+      twin_tuples: string | null;
       id: number;
       scheme: number;
       build_symbols: string | null;
       coverage_mode: string | null;
       test_app_hash: string | null;
     } | null;
-    if (!run) return new Set();
+    if (!run) return none;
+    // R586: `runMayLend` step 1 before any other reason, so the reason named is the real one.
+    const lendRefused = backendBuildRefusal(
+      { id: run.id, backend: run.backend, runnerBuild: run.runner_build },
+      on.session,
+    );
+    if (lendRefused !== undefined) {
+      on.backendBuildRefused?.({ runId: run.id, why: lendRefused });
+      return none;
+    }
     if (run.scheme !== IDENTITY_SCHEME) {
       on.schemeChanged?.({ runId: run.id, identityScheme: run.scheme });
-      return new Set();
+      return none;
     }
     const recorded = parseCoverageMode(run.coverage_mode, run.id);
     if (recorded !== coverageMode) {
       on.coverageModeChanged?.({ runId: run.id, coverageMode: recorded });
-      return new Set();
+      return none;
     }
-    if (run.test_app_hash === null || run.test_app_hash !== testAppHash) {
-      on.testAppChanged?.({ runId: run.id, testAppHash: run.test_app_hash });
-      return new Set();
+    // R495: only a run that PROVED its test app was the one it measured, for every session kind: a
+    // run served P2 while P1 was installed recorded P2 and measured P1.
+    // R496: and against the same dependency closure; NULL deps never match.
+    if (
+      run.test_app_hash === null ||
+      run.test_app_hash !== testApp?.hash ||
+      run.test_app_proven !== 1 ||
+      run.test_app_deps === null ||
+      run.test_app_deps !== testApp.deps
+    ) {
+      on.testAppChanged?.({
+        runId: run.id,
+        testAppHash: run.test_app_hash,
+        proven: run.test_app_proven === 1,
+        deps: run.test_app_deps,
+      });
+      return none;
     }
     const recordedSymbols = parseBuildSymbols(run.build_symbols);
     if (recordedSymbols === null || !sameBuildSymbols(recordedSymbols, buildSymbols)) {
       on.symbolsChanged?.({ runId: run.id, buildSymbols: recordedSymbols });
-      return new Set();
+      return none;
     }
+    // R442: a key of that run may name another mutant here when it hid a site this run numbers
+    // (or the other way round). NULL is untrusted; other hidden FILES refuse every key; a hidden
+    // TUPLE drops only the rows sharing it (`coarseIdentityTupleOf`, a superset of every twin).
+    const hidden = parseCarryHidden(run.carry_hidden, run.id);
+    if (hidden === null) {
+      on.carryUntrusted?.({ runId: run.id });
+      return none;
+    }
+    if (!sameHiddenFiles(hidden.files, hiddenFiles)) {
+      on.hiddenFilesChanged?.({ runId: run.id, before: hidden.files, now: hiddenFiles });
+      return none;
+    }
+    // R557 (I1): an al-runner run without the R557 mark lends nothing, whatever its own rows hold.
+    if (
+      !runLendsAlRunnerNames({ backend: run.backend, alRunnerNames: run.al_runner_names === 1 })
+    ) {
+      on.alRunnerUnmarked?.({ runId: run.id });
+      return none;
+    }
+    // R557 C1: a pre-fix al-runner run never ran a renamed test; its only-kills read survived.
+    const names = on.alRunnerTestNames;
+    if (names !== undefined && run.backend === "al-runner") {
+      const tests = names.renamed(this.baselineErrorMethods(run.id));
+      if (tests.length > 0) {
+        names.refused({ runId: run.id, tests });
+        return none;
+      }
+    }
+    const hiddenTuples = new Set(hidden.tuples);
     const rows = this.db
       .query(
-        "SELECT ast_hash, codeunit_name, procedure_name, operator_name, operator_major, identity_ordinal FROM mutants " +
+        "SELECT ast_hash, codeunit_name, procedure_name, operator_name, operator_major, identity_ordinal, file, member_hash FROM mutants " +
           "WHERE run_id = ? AND verdict IN ('survived', 'known-survivor')",
       )
       .all(run.id) as Array<{
+      file: string;
+      member_hash: string | null;
       ast_hash: string;
       codeunit_name: string;
       procedure_name: string | null;
@@ -1659,20 +2362,51 @@ export class ResultsStore {
     // than keyed with an empty procedure: an empty name is a real value (object-level mutants use
     // it), so treating null as empty would let a pre-R166 row match a genuine object-level mutant
     // and skip it as a known survivor. Dropping costs one re-run; matching wrongly costs a verdict.
-    return new Set(
-      rows
-        .filter((r) => r.procedure_name !== null)
-        .map((r) =>
-          serializeKey({
-            astHash: r.ast_hash,
-            codeunitName: r.codeunit_name,
-            procedureName: r.procedure_name ?? "",
-            operatorName: r.operator_name,
-            operatorMajor: r.operator_major,
-            ordinal: r.identity_ordinal ?? 0,
-          } satisfies IdentityKey),
+    const kept = rows
+      .filter((r) => r.procedure_name !== null)
+      .filter(
+        (r) =>
+          !hiddenTuples.has(
+            coarseIdentityTupleOf({
+              astHash: r.ast_hash,
+              operatorName: r.operator_name,
+              operatorVersion: `${r.operator_major}`,
+            }),
+          ),
+      )
+      .map((r) => {
+        const key: IdentityKey = {
+          astHash: r.ast_hash,
+          codeunitName: r.codeunit_name,
+          procedureName: r.procedure_name ?? "",
+          operatorName: r.operator_name,
+          operatorMajor: r.operator_major,
+          ordinal: r.identity_ordinal ?? 0,
+        };
+        // The tuple is the key without its ordinal (`serializeKey` adds it only above 0).
+        return {
+          key: serializeKey(key),
+          tuple: serializeKey({ ...key, ordinal: 0 }),
+          file: r.file,
+          memberHash: r.member_hash,
+        };
+      });
+    // R391: rule 2 (`carryRecord`) needs the survivors' (file, tuple) and the run's own twin facts.
+    const twins = parseTwinTuples(run.twin_tuples, run.id);
+    return {
+      keys: new Set(kept.map((k) => k.key)),
+      // R474: a rule-2 site also names the member's hash; a NULL one (an older row) names none.
+      sites: new Set(
+        kept.flatMap((k) =>
+          k.memberHash === null ? [] : [memberSiteOf(twinSiteOf(k.file, k.tuple), k.memberHash)],
         ),
-    );
+      ),
+      recorded: {
+        hash: run.generation_source_sha256,
+        twins: twins === null ? null : new Set(twins),
+        dependencyHash: run.dependency_source_sha256,
+      },
+    };
   }
 
   /**

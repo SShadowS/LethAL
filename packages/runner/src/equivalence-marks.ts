@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { sameBuildSymbols, validateSymbolList } from "./preprocessor-symbols";
+import { twinSiteOf } from "./selection";
 
 /**
  * R172 proposal 3 — let a reader record that a particular survivor is an EQUIVALENT MUTANT, and
@@ -32,6 +33,11 @@ import { sameBuildSymbols, validateSymbolList } from "./preprocessor-symbols";
  *   scheme ([[R325]]). An earlier version of this comment said a mark "can never drift onto a
  *   different mutant". It could: an engine change that renumbers ordinals (R193) hands an old key
  *   to a different mutant with the source unchanged. The scheme check is what closes that.
+ * - **refused** (R443) — the mark cannot show that its key still names the mutant it was written
+ *   for. A key holds no file, and twins are told apart by a run-wide ordinal, so an edit anywhere,
+ *   `--only`, `--lines` or a repaired header can hand the key to another twin. A mark carries its
+ *   proof (`numberingDigest`, `file`, `fileSingleton`, printed by `lethal explain`) and is matched
+ *   only under rule 1 or rule 2 (`applyEquivalenceMarks`); anything else stays a survivor.
  * - **contradicted** — the mark names a mutant that this run KILLED. Someone stated that no test
  *   could distinguish this mutant, and a test just did. **That is a decidable check on a human
  *   claim, and it is the only part of this feature that can prove anything.** It is reported
@@ -70,6 +76,21 @@ export interface EquivalenceMark {
    * set. ABSENT means `[]`: the mark applies only to a build with no symbols.
    */
   readonly preprocessorSymbols?: readonly string[];
+  /**
+   * R443: the marked mutant's file (`/` separators), as `lethal explain` printed it. Rule 2 matches
+   * on (tuple, file).
+   */
+  readonly file?: string;
+  /**
+   * R443: the marked run's `numberingDigest` (`numberingDigestOf`, selection.ts). Rule 1 matches by
+   * key only when this run's digest is equal, since equal digests mean equal ordinals.
+   */
+  readonly numberingDigest?: string;
+  /**
+   * R443: true when the marked run proved the mutant's (file, tuple) a singleton: outside the run's
+   * twin sites, and neither its coarse tuple nor its file hidden from numbering (`carryHidden`).
+   */
+  readonly fileSingleton?: boolean;
 }
 
 /** The minimum a caller must know about a mutant to match marks against it. Deliberately
@@ -80,10 +101,46 @@ export interface MarkableMutant {
   readonly mutantCode: string;
   /** `serializeKey(identityKeyOf(...))` for this mutant. */
   readonly identity: string;
+  /** R443: the mutant's file and `identityTupleOf` tuple, for rule 2. */
+  readonly file: string;
+  readonly tuple: string;
   readonly verdict: string;
 }
 
+/**
+ * R443: this run's numbering facts, recorded at generation: the digest of its numbering output and
+ * its twin sites (`twinSitesOf`). Absent: every mark is refused (fail closed).
+ */
+export interface RunNumberingFacts {
+  readonly numberingDigest: string;
+  readonly twinSites: ReadonlySet<string>;
+}
+
+/**
+ * R443: why a mark was refused.
+ * - `no-proof`: the mark has none of `numberingDigest`, `file`, `fileSingleton` (written before R443).
+ * - `no-run-facts`: this run recorded no numbering facts to check a proof against.
+ * - `renumbered`: the numbering changed since the mark was made, and the mark does not prove its
+ *   mutant a singleton in its file.
+ * - `twin-in-file`: the mark proved a singleton, but this run has a twin of it in that file.
+ */
+export const MARK_REFUSAL_REASONS = [
+  "no-proof",
+  "no-run-facts",
+  "renumbered",
+  "twin-in-file",
+] as const;
+export type MarkRefusalReason = (typeof MARK_REFUSAL_REASONS)[number];
+
+export interface RefusedMark {
+  readonly key: string;
+  readonly reason: MarkRefusalReason;
+  /** The mark's file, when it named one, so a reader can find the mutant to re-mark. */
+  readonly file?: string;
+}
+
 export interface MatchedMark {
+  /** R443: the matched row's CURRENT key, which differs from the mark's under rule 2. */
   readonly key: string;
   readonly reason: string;
   readonly batchIndex: number;
@@ -103,6 +160,8 @@ export interface EquivalenceMarkReport {
   readonly matched: readonly MatchedMark[];
   readonly stale: readonly EquivalenceMark[];
   readonly contradicted: readonly ContradictedMark[];
+  /** R443: marks that could not prove they name the mutant they were written for. */
+  readonly refused: readonly RefusedMark[];
 }
 
 /** Verdicts that are consistent with a mutant nothing can kill. `known-survivor` counts: it is a
@@ -110,6 +169,12 @@ export interface EquivalenceMarkReport {
 export const SURVIVING_VERDICTS: ReadonlySet<string> = new Set(["survived", "known-survivor"]);
 
 export class EquivalenceMarksError extends Error {}
+
+/**
+ * R443: the `reason` `lethal explain` prints in a ready-to-paste mark. The parser refuses it
+ * unchanged, so pasting a mark without writing its reason fails loudly.
+ */
+export const MARK_REASON_PLACEHOLDER = "TODO: write why no test can kill this mutant";
 
 /**
  * Parse a marks file. Throws `EquivalenceMarksError` on anything malformed rather than skipping the
@@ -159,9 +224,13 @@ export function parseEquivalenceMarks(text: string, sourceName: string): Equival
     if (keyShapeError !== undefined) {
       throw new EquivalenceMarksError(`${at}: "key" ${keyShapeError}. Got: ${key}`);
     }
-    if (typeof reason !== "string" || reason.trim() === "") {
+    if (
+      typeof reason !== "string" ||
+      reason.trim() === "" ||
+      reason.trim() === MARK_REASON_PLACEHOLDER
+    ) {
       throw new EquivalenceMarksError(
-        `${at}: "reason" is required and must be non-empty. A mark without a stated reason is an unexplained subtraction from the survivor list, and nobody can review it later.`,
+        `${at}: "reason" is required and must be non-empty, and not \`lethal explain\`'s placeholder. A mark without a stated reason is an unexplained subtraction from the survivor list, and nobody can review it later.`,
       );
     }
     const markedBy = e.markedBy;
@@ -174,13 +243,44 @@ export function parseEquivalenceMarks(text: string, sourceName: string): Equival
         throw new EquivalenceMarksError(err instanceof Error ? err.message : String(err));
       }
     }
+    // R443: the proof fields, each optional and type-checked. A `fileSingleton: true` without a
+    // `file` could never apply rule 2, so it is refused here rather than silently never matching.
+    const file = e.file;
+    if (file !== undefined && (typeof file !== "string" || file.trim() === "")) {
+      throw new EquivalenceMarksError(`${at}: "file" must be a non-empty string when present`);
+    }
+    const numberingDigest = e.numberingDigest;
+    if (
+      numberingDigest !== undefined &&
+      (typeof numberingDigest !== "string" || !/^[0-9a-f]{64}$/.test(numberingDigest))
+    ) {
+      throw new EquivalenceMarksError(
+        `${at}: "numberingDigest" must be 64 lowercase hex characters (a sha256, as \`lethal explain\` prints it) when present. Got: ${JSON.stringify(numberingDigest)}`,
+      );
+    }
+    const fileSingleton = e.fileSingleton;
+    if (fileSingleton !== undefined && typeof fileSingleton !== "boolean") {
+      throw new EquivalenceMarksError(`${at}: "fileSingleton" must be true or false when present`);
+    }
+    if (fileSingleton === true && file === undefined) {
+      throw new EquivalenceMarksError(
+        `${at}: "fileSingleton" is true but the mark names no "file", so it cannot be matched on its file. Copy the whole mark \`lethal explain\` prints.`,
+      );
+    }
+    const normalFile = typeof file === "string" ? file.replaceAll("\\", "/") : undefined;
     // R214: one key can name different mutants in different builds, so a duplicate is the same key
-    // under the same canonical symbol set (absent reads as []).
+    // under the same canonical symbol set (absent reads as []). R443: and the same file and digest,
+    // since one key names different mutants under different numberings.
     const setLabel = (symbols ?? []).join(", ");
-    const identity = JSON.stringify([key, symbols ?? []]);
+    const identity = JSON.stringify([
+      key,
+      symbols ?? [],
+      normalFile ?? null,
+      numberingDigest ?? null,
+    ]);
     if (seen.has(identity)) {
       throw new EquivalenceMarksError(
-        `${at}: duplicate key under preprocessor symbols [${setLabel}], already marked earlier in this file (key ${key}). Two rulings about one mutant cannot both be applied, and picking one silently is the guess this project refuses.`,
+        `${at}: duplicate key under preprocessor symbols [${setLabel}], file ${normalFile ?? "(none)"} and numbering digest ${numberingDigest ?? "(none)"}, already marked earlier in this file (key ${key}). Two rulings about one mutant cannot both be applied, and picking one silently is the guess this project refuses.`,
       );
     }
     seen.add(identity);
@@ -189,6 +289,9 @@ export function parseEquivalenceMarks(text: string, sourceName: string): Equival
       reason: reason.trim(),
       identityScheme,
       ...(symbols !== undefined ? { preprocessorSymbols: symbols } : {}),
+      ...(normalFile !== undefined ? { file: normalFile } : {}),
+      ...(typeof numberingDigest === "string" ? { numberingDigest } : {}),
+      ...(typeof fileSingleton === "boolean" ? { fileSingleton } : {}),
       ...(typeof markedBy === "string" && markedBy.trim() !== "" ? { markedBy } : {}),
       ...(typeof markedOn === "string" && markedOn.trim() !== "" ? { markedOn } : {}),
     };
@@ -254,7 +357,27 @@ export function marksSymbolsWarning(
   return `[lethal] ${stale.length} equivalence mark(s) were made under other preprocessor symbols than this build's (${symbols}). An identity key names a site within one build, so each is reported stale and none is matched or contradicted. Re-check each mark against this run's report, then set its "preprocessorSymbols" in ${EQUIVALENCE_MARKS_FILENAME} (R214).`;
 }
 
-/** Match a set of marks against this run's mutants. Pure; the caller decides what to print. */
+/**
+ * R443: the identity tuple a mark key names: the key without its twin ordinal. A key is the
+ * five-field tuple, plus `|<ordinal>` for a twin after the first (`identityKeyShapeError`).
+ */
+export function markTupleOf(key: string): string {
+  const fields = key.split("|");
+  return fields.length === 6 ? fields.slice(0, 5).join("|") : key;
+}
+
+/**
+ * Match a set of marks against this run's mutants. Pure; the caller decides what to print.
+ *
+ * R443: R-391's carry rule (`carryRecord`, selection.ts) applied to marks. A key holds no file and
+ * twins are told apart by a run-wide ordinal, so a key alone cannot show which mutant it names.
+ * - Rule 1: the mark's `numberingDigest` equals this run's. Equal digests mean the same numbered
+ *   sites with the same ordinals, so the key names the same mutant: look it up by key.
+ * - Rule 2: otherwise, the mark says `fileSingleton` and its (tuple, file) is not a twin site in
+ *   this run: look it up by (tuple, file). No renumbering can move it onto another mutant.
+ * - Otherwise the mark is REFUSED: the mutant stays a survivor, the safe direction for a reader.
+ * A mark with no proof fields, and every mark when this run's facts are absent, is refused.
+ */
 export function applyEquivalenceMarks(
   marks: readonly EquivalenceMark[],
   mutants: readonly MarkableMutant[],
@@ -263,13 +386,27 @@ export function applyEquivalenceMarks(
   /** R214: the effective build symbols `mutants` come from. A mark made under another set is
    *  stale; an absent mark set is `[]`. */
   buildSymbols: readonly string[],
+  /** R443: this run's numbering facts. Absent: every mark is refused (`no-run-facts`). */
+  facts: RunNumberingFacts | undefined,
 ): EquivalenceMarkReport {
   const byIdentity = new Map<string, MarkableMutant>();
-  for (const m of mutants) byIdentity.set(m.identity, m);
+  const bySite = new Map<string, MarkableMutant>();
+  for (const m of mutants) {
+    byIdentity.set(m.identity, m);
+    bySite.set(twinSiteOf(m.file, m.tuple), m);
+  }
 
   const matched: MatchedMark[] = [];
   const stale: EquivalenceMark[] = [];
   const contradicted: ContradictedMark[] = [];
+  const refused: RefusedMark[] = [];
+  const refuse = (mark: EquivalenceMark, reason: MarkRefusalReason): void => {
+    refused.push({
+      key: mark.key,
+      reason,
+      ...(mark.file !== undefined ? { file: mark.file } : {}),
+    });
+  };
 
   for (const mark of marks) {
     if (
@@ -279,14 +416,39 @@ export function applyEquivalenceMarks(
       stale.push(mark);
       continue;
     }
-    const hit = byIdentity.get(mark.key);
+    if (
+      mark.numberingDigest === undefined &&
+      mark.file === undefined &&
+      mark.fileSingleton === undefined
+    ) {
+      refuse(mark, "no-proof");
+      continue;
+    }
+    if (facts === undefined) {
+      refuse(mark, "no-run-facts");
+      continue;
+    }
+    let hit: MarkableMutant | undefined;
+    if (mark.numberingDigest === facts.numberingDigest) {
+      hit = byIdentity.get(mark.key);
+    } else if (mark.fileSingleton === true && mark.file !== undefined) {
+      const site = twinSiteOf(mark.file, markTupleOf(mark.key));
+      if (facts.twinSites.has(site)) {
+        refuse(mark, "twin-in-file");
+        continue;
+      }
+      hit = bySite.get(site);
+    } else {
+      refuse(mark, "renumbered");
+      continue;
+    }
     if (hit === undefined) {
       stale.push(mark);
       continue;
     }
     if (SURVIVING_VERDICTS.has(hit.verdict)) {
       matched.push({
-        key: mark.key,
+        key: hit.identity,
         reason: mark.reason,
         batchIndex: hit.batchIndex,
         mutantCode: hit.mutantCode,
@@ -294,14 +456,14 @@ export function applyEquivalenceMarks(
       continue;
     }
     contradicted.push({
-      key: mark.key,
+      key: hit.identity,
       reason: mark.reason,
       batchIndex: hit.batchIndex,
       mutantCode: hit.mutantCode,
       verdict: hit.verdict,
     });
   }
-  return { matched, stale, contradicted };
+  return { matched, stale, contradicted, refused };
 }
 
 /** The console lines for a marks result. Empty when there is nothing to say. */
@@ -316,9 +478,15 @@ export function equivalenceMarkWarnings(report: EquivalenceMarkReport): string[]
       lines.push(`  ${c.batchIndex}/${c.mutantCode} is ${c.verdict} — marked "${c.reason}"`);
     }
   }
+  if (report.refused.length > 0) {
+    lines.push(
+      `EQUIVALENCE MARKS REFUSED: ${report.refused.length} mark(s) cannot show that their key still names the mutant they were written for, so each mutant stays a plain survivor (R443). A key holds no file, and an edit, --only, --lines or a repaired header can hand it to another twin. Re-mark each from a fresh report: \`lethal explain <report.json>\` prints every survivor's mark, with its proof fields, ready to paste:`,
+    );
+    for (const r of report.refused) lines.push(`  ${refusedMarkLine(r)}`);
+  }
   if (report.stale.length > 0) {
     lines.push(
-      `EQUIVALENCE MARKS STALE: ${report.stale.length} mark(s) matched no mutant in this run. The identity includes the mutated subtree's hash, so editing that code retires its mark, which is the safe direction, but the ruling is now lost unless someone re-makes it:`,
+      `EQUIVALENCE MARKS STALE: ${report.stale.length} mark(s) matched no mutant in this run. Editing the marked code changes its identity, so its mark names nothing any more. The ruling is lost unless someone re-makes it:`,
     );
     for (const s of report.stale) lines.push(`  ${s.key}`);
   }
@@ -328,6 +496,19 @@ export function equivalenceMarkWarnings(report: EquivalenceMarkReport): string[]
     );
   }
   return lines;
+}
+
+/** R443: why each refusal reason refused, in words. */
+const MARK_REFUSAL_WHY: Readonly<Record<MarkRefusalReason, string>> = {
+  "no-proof": "no proof fields (written before R443)",
+  "no-run-facts": "this run recorded no numbering facts to check it against",
+  renumbered: "the numbering changed since it was made, and it does not prove a singleton",
+  "twin-in-file": "this run has a twin of it in that file",
+};
+
+/** R443: one refused mark, as the run warnings and the report banner print it. */
+export function refusedMarkLine(r: RefusedMark): string {
+  return `${r.key}${r.file !== undefined ? ` (${r.file})` : ""}: ${r.reason}, ${MARK_REFUSAL_WHY[r.reason]}`;
 }
 
 /**

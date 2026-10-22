@@ -20,12 +20,18 @@ import { REACH_LATCH } from "./reach-latch";
  * block replacement. `original` is the root's text: the caller slices it from the file's source
  * by the component's span, once.
  */
-export function emitDispatch(original: string, component: PlannedComponent, latch: string): string {
+export function emitDispatch(
+  original: string,
+  component: PlannedComponent,
+  latch: string,
+  /** R470: the selector variable PLAN named for the component's object. */
+  selector = "MutationSelector",
+): string {
   const parts: string[] = [];
   for (const [i, m] of component.members.entries()) {
     const lead = i === 0 ? "if" : "end else if";
-    const text = branchText(original, m, latch);
-    parts.push(`${lead} MutationSelector.Active('${m.mutantId}') then begin\n  ${text}\n`);
+    const text = branchText(original, m, latch, selector);
+    parts.push(`${lead} ${selector}.Active('${m.mutantId}') then begin\n  ${text}\n`);
   }
   // The chain replaces exactly the root's span, so it must end with a `;` if
   // and only if that span consumed one — the same consumed-terminator rule as
@@ -48,18 +54,22 @@ export function endsInTerminator(text: string): boolean {
  * GH-24. The call a statement-grain mutant's branch makes at its OWN statement, so the control app
  * can say that statement began executing. No newline, anywhere: line numbers must not move.
  */
-export const REACH_MARKER = (mutantId: string, latch: string = REACH_LATCH): string =>
-  `if not ${latch} then begin MutationSelector.Reached('${mutantId}'); ${latch} := true; end;`;
+export const REACH_MARKER = (
+  mutantId: string,
+  latch: string = REACH_LATCH,
+  selector = "MutationSelector",
+): string =>
+  `if not ${latch} then begin ${selector}.Reached('${mutantId}'); ${latch} := true; end;`;
 
 /**
  * The member's branch text, with the marker where PLAN placed it (GH-24 plan, Decisions 4 and 5).
  * The root's text with the member's splice applied, built from `SpliceParts` only.
  */
-function branchText(original: string, m: PlannedMember, latch: string): string {
+function branchText(original: string, m: PlannedMember, latch: string, selector: string): string {
   const { splice, place } = m;
   const text = original.slice(0, splice.relStart) + splice.insert + original.slice(splice.relEnd);
   if (place.kind === "none") return text;
-  const marker = REACH_MARKER(m.mutantId, latch);
+  const marker = REACH_MARKER(m.mutantId, latch, selector);
   if (place.kind === "root") return `${marker} ${text}`;
   // `S`'s span in the spliced text: the member's edit sits inside `S`, so only its end moves.
   const start = m.statementStart;

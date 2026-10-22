@@ -1,3 +1,4 @@
+import { readdirSync } from "node:fs";
 import { appendFile, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { MutantManifest } from "@lethal/schemata";
@@ -8,7 +9,14 @@ import {
 } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { AppMethodIndex, objectTypeName } from "./app-package";
-import { ArtifactPrepareError, DeploymentError, InstalledArtifactError } from "./artifact";
+import {
+  ArtifactPrepareError,
+  DeploymentError,
+  InstalledArtifactError,
+  buildPackageCacheCopy,
+  isControlSymbolName,
+  removePackageCacheCopy,
+} from "./artifact";
 import type { ArtifactCompiler, CompileInput, CompiledArtifact } from "./artifact";
 import type {
   BackendCapabilities,
@@ -25,12 +33,12 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "./backend";
-import { bcFetch } from "./bc-fetch";
+import { BcAnswerUnreadError, bcFetch, withDeadline } from "./bc-fetch";
 import { decidePublishOutcome } from "./deployment-verifier";
 import type { DeploymentVerifier } from "./deployment-verifier";
 import { describeThrown } from "./describe-error";
 import { DependencyUnreadableError, type MicrosoftMode } from "./digest-inputs";
-import { injectControlDependency } from "./harness";
+import { UnfilteredExtensionsQueryError, injectControlDependency } from "./harness";
 import type { HarnessVerifier } from "./harness";
 import type { Lease } from "./lease";
 import {
@@ -47,7 +55,9 @@ import {
 import type { LeaseFence } from "./orchestrator";
 import type { AppPublisher } from "./publisher";
 import { quarantineResourceKey } from "./resource-key";
+import { drainPending, newControlState, takeLateRefusal } from "./run-mutant-transport";
 import type {
+  ControlState,
   FencedCoverageRow,
   FencedCoverageStats,
   RunMutantTransport,
@@ -58,6 +68,25 @@ import {
   publishTestApp as publishTestAppOf,
 } from "./test-app-publish";
 import type { CompiledTestApp, PublishedTestApp } from "./test-app-publish";
+
+/**
+ * R552: the warning for a `lethal-control.app` an older LethAL left in the user's package cache, or
+ * `undefined` when there is none. Matched by `isControlSymbolName` (any case, any depth), the same
+ * test `buildPackageCacheCopy` leaves it out by. The file is never deleted or overwritten: it may be
+ * the user's own copy, and a cache shared by two sessions would race.
+ */
+export function controlLeftoverWarning(packageCachePath: string): string | undefined {
+  let names: string[];
+  try {
+    names = readdirSync(packageCachePath, { recursive: true }).map(String);
+  } catch {
+    return undefined; // no cache folder: nothing left over in it
+  }
+  const found = names.filter(isControlSymbolName).map((n) => join(packageCachePath, n));
+  if (found.length === 0) return undefined;
+  const leftover = found.join(", ");
+  return `[lethal] ${leftover} is a leftover from an older LethAL, which copied the LethAL Control symbol into your package cache (R552). LethAL now compiles against its own copy of this cache, which leaves this file out, and never writes this cache; the file is unused and safe to delete.`;
+}
 
 export interface BcDevConfig {
   readonly mcpCommand: readonly string[]; // e.g. ["bun", "x", "bc-dev-mcp"] — argv to spawn
@@ -72,9 +101,10 @@ export interface BcDevConfig {
   // StdioClientTransport's underlying spawn only inherits a fixed OS-level allowlist
   // (getDefaultEnvironment()) — anything else, including these, must be passed explicitly.
   readonly env?: Record<string, string>;
-  // Absolute path to the compiled `lethal-control.app` — staged into `packageCachePath` by
-  // `stageForCompile` (Task 8) so a private compile copy of the target can resolve its
-  // delegating selector's `Codeunit "LC Control State"` reference (schemata/selector.ts).
+  // Absolute path to the compiled `lethal-control.app` — linked into the backend's own
+  // package-cache copy (R552, `buildPackageCacheCopy`; never into `packageCachePath`) so the
+  // staged compile copy can resolve its delegating selector's `Codeunit "LC Control State"` reference
+  // (schemata/selector.ts).
   readonly controlSymbolPath: string;
   /**
    * R53 (`--stop-hung-sessions`), opt-in. When set, a RunMutant that exceeds its budget is HELD
@@ -84,9 +114,10 @@ export interface BcDevConfig {
    */
   readonly stopHungSessions?: boolean;
   // The `ArtifactCompiler`'s own package-cache directory (mirrors
-  // `ArtifactCompilerConfig.packageCachePath`, fixed at compiler construction) — `deploy()`/
-  // `compileCheck()` need this SEPARATELY so `stageForCompile` can stage the control symbol
-  // into the exact cache alc reads from via `/packagecachepath:`.
+  // `ArtifactCompilerConfig.packageCachePath`, fixed at compiler construction). The USER's cache:
+  // only read, never written by LethAL (R552). Its packages are linked into the backend's own
+  // copy, which is what alc gets for an instrumented compile; `stageForCompile` warns once about a
+  // `lethal-control.app` an older LethAL left there; `compilePlainCheck` passes it to alc.
   readonly packageCachePath: string;
   /**
    * Coverage the backend claims. **Default `"fenced"` (R58 rollout, spec step 5):** per-procedure
@@ -318,9 +349,17 @@ export class BcDevMcpBackend implements ExecutionBackend {
   // R298: `type:id` keys whose coverage refusal this backend already named, so the warning is
   // printed once per object per session, at index time (`nameRefusals`), rows or not.
   private readonly refusalsWarned = new Set<string>();
+  /** R552: the leftover `lethal-control.app` warning is printed once per backend. */
+  private leftoverWarned = false;
+  /** R552: this backend's package-cache copy, built on the first compile and removed by `close()`. */
+  private packageCacheCopy: Promise<string> | undefined;
   // R298 (`coverageMode: "procedure"`, the hub): refused declared objects, `type:id` -> reason, by
   // the line map's rule. `buildCoverageMap` drops every method id of one, named or not.
   private hubRefused: ReadonlyMap<string, string> = new Map();
+  // R497: the session's effective build symbols (`useBuildSymbols`). With them the line map and the
+  // hub refusals admit the measured `#if`-wrapped shapes; without them every wrapped file stays
+  // refused, as before. R536: `runNamedMutants` (so `lethal verify`) hands over the source run's set.
+  private buildSymbols: readonly string[] | undefined;
   // R58 (`coverageMode: "fenced"` only): the `SetFilter` expression over `Code Coverage."Object ID"`
   // this batch's artifact declares — see `coverageObjectIdFilterOf`.
   private coverageObjectIdFilter: string | undefined;
@@ -329,6 +368,9 @@ export class BcDevMcpBackend implements ExecutionBackend {
   // server-side. The transport is built at deploy() once the target's identity is known.
   private pendingMutantId: string | null = null;
   private runMutantTransport: RunMutantTransport | undefined;
+  // R499: the one control state every transport this backend binds shares (in-flight orphans and a
+  // late refusal), so a re-deploy/attach never strands a refusal on a replaced transport.
+  private readonly controlState: ControlState = newControlState();
   // Monotonic per-backend attempt id, echoed by RunMutant and validated by the transport (§I5).
   private attemptSeq = 0;
   // Layer 5C-B1: the machine-global lease this session holds, bound by the orchestrator (Task 8)
@@ -349,11 +391,17 @@ export class BcDevMcpBackend implements ExecutionBackend {
     private readonly runMutantTransportFactory?: (
       targetAppId: string,
       artifactId: string,
+      controlState: ControlState,
     ) => RunMutantTransport,
   ) {}
 
+  /** R516 I1: the control app stops a run at the budget it was sent. */
+  readonly inRunStopIsBudget = true;
+
   capabilities(): BackendCapabilities {
     return {
+      // R586 (C1) and R553: identity, not inferred from `authoritative`.
+      kind: "bcdev",
       coverage: this.cfg.coverageMode ?? DEFAULT_COVERAGE_MODE,
       deploy: "publish",
       isolation: "session",
@@ -371,7 +419,8 @@ export class BcDevMcpBackend implements ExecutionBackend {
    * version), and no second credential source. `versionText` is left empty, which asks for whatever
    * the server has.
    *
-   * NEVER throws. Every reachable failure — no server configured, no credentials, a 404 on an
+   * NEVER throws, except `UnfilteredExtensionsQueryError` (R-496: the default fetch refused a
+   * redirect to an unfiltered extensions list). Every other reachable failure — no server configured, no credentials, a 404 on an
    * environment whose dev endpoint does not serve packages, a refused connection, a timeout — is a
    * `null`, because a proactive check that cannot read must not be able to stop a run that check 1
    * would otherwise complete or refuse on the authoritative signal.
@@ -379,35 +428,44 @@ export class BcDevMcpBackend implements ExecutionBackend {
   async fetchPublishedAppPackage(
     app: { readonly publisher: string; readonly name: string },
     fetchFn: FetchLike = bcFetch,
+    timeoutMs: number = PUBLISHED_PACKAGE_TIMEOUT_MS,
   ): Promise<Uint8Array | null | undefined> {
-    // `undefined`, not `null`: this configuration cannot form the request at all, so there is
-    // nothing for the caller to report. The env-tool path is the real instance — it reaches BC
-    // through a tool-supplied base URL and names no dev server of its own, and it publishes the
-    // test app itself, so a warning on every one of its runs would be noise about a check that was
-    // never applicable.
+    // `undefined`, not `null`: this configuration cannot form the request at all (no dev server or
+    // no dev-endpoint credentials configured), so there is nothing for the caller to report. An
+    // env-tool session is NOT this case: `startEnvToolSession` (env-tool-session.ts) sets `server`,
+    // `serverInstance`, `BC_DEV_USER` and `BC_DEV_PASSWORD`, and R373 reads its test app back
+    // through here after the lease-held publish.
     const url = devPackagesUrl(this.cfg, app);
     if (url === null) return undefined;
     const username = this.cfg.env?.BC_DEV_USER;
     const password = this.cfg.env?.BC_DEV_PASSWORD;
     if (username === undefined || password === undefined) return undefined;
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), PUBLISHED_PACKAGE_TIMEOUT_MS);
     try {
-      const res = await fetchFn(url, {
-        method: "GET",
-        headers: { authorization: `Basic ${btoa(`${username}:${password}`)}` },
-        signal: controller.signal,
-      });
-      if (!res.ok) return null;
-      return new Uint8Array(await res.arrayBuffer());
-    } catch {
+      // R506: one deadline over the headers AND the body, held even for a body that ignores
+      // its abort. A timeout is still a `null` below.
+      return await withDeadline(
+        timeoutMs,
+        "dev/packages",
+        async (signal) => {
+          const res = await fetchFn(url, {
+            method: "GET",
+            headers: { authorization: `Basic ${btoa(`${username}:${password}`)}` },
+            signal,
+          });
+          if (!res.ok) return null;
+          return new Uint8Array(await res.arrayBuffer());
+        },
+        (m, k) => new BcAnswerUnreadError(m, k),
+      );
+    } catch (err) {
+      // R-496: the one exception. A redirect to an unfiltered extensions list is a refused
+      // request (R433), not an unreadable package, and must stop the run.
+      if (err instanceof UnfilteredExtensionsQueryError) throw err;
       // Deliberately swallowed, and deliberately not narrowed: network stacks report a refused
       // connection, a DNS failure and an abort as three unrelated error shapes, and every one of
       // them means the same thing here — this check has nothing to say.
       return null;
-    } finally {
-      clearTimeout(timer);
     }
   }
 
@@ -433,6 +491,15 @@ export class BcDevMcpBackend implements ExecutionBackend {
       controlVersion: () => verifier.fetchControlVersion(),
       installed: (appId) => verifier.fetchInstalledVersions(appId),
     };
+  }
+
+  /** R389: `ExecutionBackend.dependentCount`, through the deployment's harness verifier. */
+  async dependentCount(appId: string): Promise<number> {
+    const verifier = this.deployment?.harnessVerifier;
+    if (verifier === undefined) {
+      throw new Error("this bcdev backend has no harness verifier (no BcDevDeployment)");
+    }
+    return verifier.fetchDependentCount(appId);
   }
 
   private async connect(): Promise<Client> {
@@ -465,12 +532,22 @@ export class BcDevMcpBackend implements ExecutionBackend {
    * it calls `process.exit()`, which masks the leak rather than fixing it.
    *
    * Safe to call more than once, and safe to call when never connected.
+   *
+   * R552: also removes the package-cache copy, even when the client's close throws. The callers
+   * that own a session (`cli.ts`) call this in a `finally`, so a failed session removes it too.
    */
   async close(): Promise<void> {
     const client = this.client;
-    if (!client) return;
     this.client = undefined;
-    await client.close();
+    const copy = this.packageCacheCopy;
+    this.packageCacheCopy = undefined;
+    try {
+      await client?.close();
+    } finally {
+      // A rejected build already removed its partial copy.
+      const path = await copy?.catch(() => undefined);
+      if (path !== undefined) await removePackageCacheCopy(path);
+    }
   }
 
   private connectionParams(): Record<string, unknown> {
@@ -589,34 +666,72 @@ export class BcDevMcpBackend implements ExecutionBackend {
 
   /**
    * Builds a private, compile-only staging copy of `instrumentedDir` with the LethAL Control
-   * dependency injected into its `app.json` and `lethal-control.app` staged into the compiler's
-   * package cache. The instrumented target's delegating selector always references `Codeunit
-   * "LC Control State"` (schemata/selector.ts) and cannot compile without both — bcdev-ONLY:
-   * `instrumentedDir` itself is NEVER touched. AlRunnerBackend reads that same shared dir
-   * directly (it strips the control-registration codeunits instead) and must stay
+   * dependency injected into its `app.json`; `compileStaged` compiles it against the backend's
+   * package-cache copy, which holds `lethal-control.app`. The instrumented target's delegating
+   * selector always references `Codeunit "LC Control State"` (schemata/selector.ts) and cannot
+   * compile without both —
+   * bcdev-ONLY: `instrumentedDir` itself is NEVER touched. AlRunnerBackend reads that same shared
+   * dir directly (it strips the control-registration codeunits instead) and must stay
    * dependency-free, so the injection must land only on this throwaway sibling copy.
+   *
+   * R552: the user's `packageCachePath` is never written. The symbol used to be copied there, so
+   * it outlived the run and a stale one in a shared cache could resolve a later compile. A leftover
+   * from an older LethAL is warned about ONCE per backend and never deleted or overwritten.
    *
    * Idempotent: re-staging the same `instrumentedDir` wipes and rebuilds the sibling (Windows
    * retry knobs mirror AlRunnerBackend's own `rm` of `activeDir` — a stale copy can be locked by
-   * an indexer/AV a moment after the previous compile).
+   * an indexer/AV a moment after the previous compile). A throw after the copy exists removes it,
+   * since the callers' cleanup `finally` only covers the compile.
    */
   private async stageForCompile(instrumentedDir: string): Promise<string> {
     const staging = `${instrumentedDir}-staged`;
     await rm(staging, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     await cp(instrumentedDir, staging, { recursive: true });
-    // Inject the dependency into the STAGED app.json only (never the shared instrumented dir).
-    const appJsonPath = join(staging, "app.json");
-    const app = JSON.parse(await readFile(appJsonPath, "utf8")) as Record<string, unknown>;
-    await writeFile(
-      appJsonPath,
-      `${JSON.stringify(injectControlDependency(app), null, 2)}\n`,
-      "utf8",
-    );
-    // Stage the control symbol into the compiler's package cache (safe to share: al-runner's
-    // compiled source carries no LC Control State reference, so an unused symbol is harmless).
-    await mkdir(this.cfg.packageCachePath, { recursive: true });
-    await cp(this.cfg.controlSymbolPath, join(this.cfg.packageCachePath, "lethal-control.app"));
+    try {
+      // Inject the dependency into the STAGED app.json only (never the shared instrumented dir).
+      const appJsonPath = join(staging, "app.json");
+      const app = JSON.parse(await readFile(appJsonPath, "utf8")) as Record<string, unknown>;
+      await writeFile(
+        appJsonPath,
+        `${JSON.stringify(injectControlDependency(app), null, 2)}\n`,
+        "utf8",
+      );
+      await mkdir(this.cfg.packageCachePath, { recursive: true });
+      const leftover = controlLeftoverWarning(this.cfg.packageCachePath);
+      if (leftover !== undefined && !this.leftoverWarned) {
+        this.leftoverWarned = true;
+        console.warn(leftover);
+      }
+    } catch (e) {
+      await rm(staging, { recursive: true, force: true }).catch(() => {});
+      throw e;
+    }
     return staging;
+  }
+
+  /** R552: compile a `stageForCompile` copy against this backend's package-cache copy, the ONE
+   *  `/packagecachepath:` alc gets. */
+  private async compileStaged(
+    compiler: ArtifactCompiler,
+    staged: string,
+  ): Promise<CompiledArtifact> {
+    return compiler.compile({
+      ...(await this.prepareCompileInput(staged)),
+      packageCacheCopyPath: await this.cacheCopy(),
+    });
+  }
+
+  /** R552: the package-cache copy, built once per backend and reused; a failed build is retried
+   *  by the next compile. */
+  private cacheCopy(): Promise<string> {
+    if (this.packageCacheCopy === undefined) {
+      const built = buildPackageCacheCopy(this.cfg.packageCachePath, this.cfg.controlSymbolPath);
+      this.packageCacheCopy = built;
+      built.catch(() => {
+        if (this.packageCacheCopy === built) this.packageCacheCopy = undefined;
+      });
+    }
+    return this.packageCacheCopy;
   }
 
   // Must happen before publish(): resolves this batch's coverage methodIds ahead of any run()
@@ -639,7 +754,11 @@ export class BcDevMcpBackend implements ExecutionBackend {
     this.methodIndex = await AppMethodIndex.fromAppFile(appPath);
     const keys = manifestObjectKeys(manifest.mutants);
     if ((this.cfg.coverageMode ?? DEFAULT_COVERAGE_MODE) === "fenced") {
-      this.lineMap = await buildLineMap(instrumentedDir, this.methodIndex.declaredObjects());
+      this.lineMap = await buildLineMap(
+        instrumentedDir,
+        this.methodIndex.declaredObjects(),
+        this.buildSymbols,
+      );
       this.checkFencedManifest(keys, this.lineMap);
       this.nameRefusals(this.lineMap.refusedByKey());
       this.coverageObjectIdFilter = await coverageObjectIdFilterOf(instrumentedDir);
@@ -661,6 +780,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
         artifact.alSources,
         this.methodIndex.declaredObjects(),
         artifact.renamedMemberNames,
+        this.buildSymbols,
       );
       this.checkFencedManifest(artifact.manifestObjectKeys, this.lineMap);
       this.nameRefusals(this.lineMap.refusedByKey());
@@ -708,10 +828,24 @@ export class BcDevMcpBackend implements ExecutionBackend {
       );
     }
     const declared = methodIndex.declaredObjects();
-    const all = await coverageRefusedFromSources(sources);
+    const all = await coverageRefusedFromSources(sources, this.buildSymbols);
     assertManifestObjectsDeclared(manifestKeys, declared, undefined, new Set(all.keys()));
     this.hubRefused = new Map([...all].filter(([key]) => declared.has(key)));
     this.nameRefusals(this.hubRefused);
+  }
+
+  /** R497: the session's effective build symbols, handed over by `runSession` before any deploy. */
+  useBuildSymbols(symbols: readonly string[]): void {
+    this.buildSymbols = [...symbols];
+  }
+
+  /**
+   * R497 A2: every object this batch's coverage index refuses, whatever the reason, so selection
+   * refuses it too: one the source admits but the INSTRUMENTED parse refuses would otherwise send
+   * its table-trigger mutants to the all-green fallback. Read by `runSession` after each deploy.
+   */
+  async coverageRefusals(): Promise<ReadonlyMap<string, string>> {
+    return this.lineMap?.refusedByKey() ?? this.hubRefused;
   }
 
   /**
@@ -739,7 +873,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
     const staged = await this.stageForCompile(instrumentedDir);
     let artifact: CompiledArtifact;
     try {
-      artifact = await deployment.compiler.compile(await this.prepareCompileInput(staged));
+      artifact = await this.compileStaged(deployment.compiler, staged);
     } finally {
       // Reclaim the staged copy — each batch has a distinct batchDir, so `${batchDir}-staged`
       // would otherwise accumulate one full instrumented-project copy per batch (the `rm` at
@@ -790,8 +924,37 @@ export class BcDevMcpBackend implements ExecutionBackend {
     // The deployment is confirmed — bind a RunMutant transport to THIS artifact's identity so
     // run() (coverage: "none") executes each mutant against the exact target/artifact just
     // published. The transport echoes and validates this identity tuple on every call (§I5).
-    this.runMutantTransport = this.runMutantTransportFactory?.(artifact.appId, artifact.artifactId);
+    this.bindTransport(
+      this.runMutantTransportFactory?.(artifact.appId, artifact.artifactId, this.controlState),
+    );
     return artifact;
+  }
+
+  /**
+   * Swap the bound transport. R499: it must share this backend's control state: a factory that
+   * ignored the `controlState` argument would build a transport whose refusals no teardown sees.
+   */
+  private bindTransport(next: RunMutantTransport | undefined): void {
+    if (next !== undefined && next.controlState !== this.controlState) {
+      this.runMutantTransport = undefined; // bind nothing, not the previous artifact's transport
+      throw new Error(
+        "BcDevMcpBackend: the RunMutant transport factory ignored the controlState argument; pass it to the transport (R499), or a refusal on that transport would be lost",
+      );
+    }
+    this.runMutantTransport = next;
+  }
+
+  /**
+   * R-496: a refusal no call has thrown yet, for the session teardown to surface. R499: every
+   * transport shares one state, which keeps the first refusal and warns about each later one.
+   */
+  takeLateRefusal(): UnfilteredExtensionsQueryError | undefined {
+    return takeLateRefusal(this.controlState);
+  }
+
+  /** R499: wait up to `ms` for control requests still in flight; never throws (a refusal is kept). */
+  async drainControlRequests(ms: number): Promise<void> {
+    await drainPending([this.controlState.orphans], ms);
   }
 
   /**
@@ -802,7 +965,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
    */
   async attach(artifact: BoundArtifact): Promise<void> {
     // Unbind first, so a refused attach leaves NO transport, not the previous artifact's.
-    this.runMutantTransport = undefined;
+    this.bindTransport(undefined);
     const deployment = this.deployment;
     if (deployment === undefined) {
       throw new InstalledArtifactError(
@@ -833,7 +996,9 @@ export class BcDevMcpBackend implements ExecutionBackend {
         `indexing ${artifact.appPath}: ${describeThrown(err)}`,
       );
     }
-    this.runMutantTransport = this.runMutantTransportFactory?.(artifact.appId, artifact.artifactId);
+    this.bindTransport(
+      this.runMutantTransportFactory?.(artifact.appId, artifact.artifactId, this.controlState),
+    );
   }
 
   /**
@@ -867,11 +1032,28 @@ export class BcDevMcpBackend implements ExecutionBackend {
     if (!deployment) throw new Error("BcDevMcpBackend: no compiler/deployer/verifier configured");
     const staged = await this.stageForCompile(instrumentedDir);
     try {
-      const artifact = await deployment.compiler.compile(await this.prepareCompileInput(staged));
+      const artifact = await this.compileStaged(deployment.compiler, staged);
       await rm(artifact.appPath, { force: true }).catch(() => {});
     } finally {
       await rm(staged, { recursive: true, force: true }).catch(() => {});
     }
+  }
+
+  /**
+   * R461: compile the caller's staged copy of the UNMUTATED target as it stands: no
+   * `stageForCompile` (it has no selector, so no Control dependency), no publish. Same compiler,
+   * package cache and /define as `compile`. The output .app is deleted, best-effort, so a cleanup
+   * failure never masks the compile's own answer.
+   */
+  async compilePlainCheck(dir: string): Promise<void> {
+    const deployment = this.deployment;
+    if (!deployment) throw new Error("BcDevMcpBackend: no compiler/deployer/verifier configured");
+    const { appPath } = await deployment.compiler.compileProject({
+      projectDir: dir,
+      packageCachePath: this.cfg.packageCachePath,
+      name: "plain-check",
+    });
+    await rm(appPath, { force: true }).catch(() => {});
   }
 
   /**
@@ -946,8 +1128,16 @@ export class BcDevMcpBackend implements ExecutionBackend {
    * session it exists to stop using, and every gate would still have passed.
    */
   async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
-    if (opts.coverage === "procedure" || opts.coverage === "line") return this.runOnHub(ref, opts);
-    return this.runViaTransport(ref, opts);
+    const v =
+      opts.coverage === "procedure" || opts.coverage === "line"
+        ? await this.runOnHub(ref, opts)
+        : await this.runViaTransport(ref, opts);
+    // R272: one call per test on both paths, so `durationMs` is this test's own wall clock. Not a
+    // recovered reply (R236b), whose duration is the time until the reply was declared lost. Not a
+    // negative one: a `Date.now()` delta goes below 0 when the clock steps back.
+    return v.outcome === "pass" && v.replyRecovered === undefined && v.durationMs >= 0
+      ? { ...v, measuredDurationMs: v.durationMs }
+      : v;
   }
 
   /**
@@ -1057,8 +1247,11 @@ export class BcDevMcpBackend implements ExecutionBackend {
       // a healthy run and score nothing. The hook's absence keeps that path byte-for-byte as it was.
       ...(this.cfg.stopHungSessions === true && (this.pendingMutantId ?? "") !== ""
         ? {
-            onBudgetExceeded: async (): Promise<void> => {
-              const stop = await transport.stopHungRun({
+            // A REFUSAL IS AN ANSWER, and since R-204b it RESOLVES as one (`stopped: false` with its
+            // reason) instead of being thrown: a thrown hook now means the stop's outcome is
+            // unknown (its reply was lost), which is not retry-safe, while a refusal is.
+            onBudgetExceeded: (boundMs: number) =>
+              transport.stopHungRun({
                 // Captured at request-build time, not re-read here: `attemptSeq` advances per
                 // call and this closure fires on a TIMER, after the request was built. Equal
                 // today under sequential execution, but a late read could name a different
@@ -1070,18 +1263,8 @@ export class BcDevMcpBackend implements ExecutionBackend {
                   serverGeneration: lease.serverGeneration,
                   opSeq,
                 },
-              });
-              // A REFUSAL IS AN ANSWER. Discarding it produced a wrong diagnosis: the quarantine
-              // note read "BC never answered this request with its stop confirmation" when BC had
-              // answered and named the reason (`no-session-id` for a marker written before the
-              // field existed, `already-completed` for a lost-ack-after-success). Throwing carries
-              // it through `stopHookError` into the "stop was attempted and FAILED (…)" message.
-              if (!stop.stopped) {
-                throw new Error(
-                  `StopHungRun refused: ${stop.reason ?? "no reason given"} (attempt ${attemptId}, opSeq ${opSeq})`,
-                );
-              }
-            },
+                timeoutMs: boundMs,
+              }),
           }
         : {}),
     } as const;

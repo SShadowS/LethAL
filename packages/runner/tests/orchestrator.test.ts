@@ -1,13 +1,15 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
+import { swapAdditive } from "@lethal/builtin-tier1";
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
 import { IDENTITY_SCHEME, type InstrumentedFile, type MutantManifestEntry } from "@lethal/schemata";
-import { withRunIdentityOrdinals, writeInstrumentedProject } from "@lethal/schemata";
+import { flatNamesFor, withRunIdentityOrdinals, writeInstrumentedProject } from "@lethal/schemata";
+import { buildAlRunnerCoverageIndex } from "../src/al-runner-coverage";
 import {
   AlcCompileError,
   ArtifactPrepareError,
@@ -20,16 +22,27 @@ import type {
   BackendStatus,
   BoundArtifact,
   ExecutionBackend,
+  RunManyCause,
   RunManyOpts,
   RunManyResult,
   RunOpts,
+  StopState,
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
-import { hashPackage, hashTargetSource, testAppHashFor } from "../src/baseline-snapshot";
+// R205: namespace import so a test can fail one source read through `readTargetSource`'s seam.
+import * as baselineSnapshotModule from "../src/baseline-snapshot";
+import {
+  SourceSnapshotUnreadableError,
+  hashPackage,
+  hashTargetSource,
+  testAppHashFor,
+} from "../src/baseline-snapshot";
 import { PublishFailedError } from "../src/bcdev-backend";
-import { afterLeaseAcquiredFor, withEnvTeardown } from "../src/cli";
+import { type RunCliConfig, afterLeaseAcquiredFor, runFromCli, withEnvTeardown } from "../src/cli";
 import { DeploymentVerifier, decidePublishOutcome } from "../src/deployment-verifier";
+// R-496 review: namespace import so T7f can craft two fingerprints that share a 16-hex prefix.
+import * as digestInputsModule from "../src/digest-inputs";
 import { EnvToolClient, EnvToolError, EnvToolNotStartedError } from "../src/env-tool";
 import type { EnvToolConfigSection } from "../src/env-tool";
 import { EnvToolPublisher } from "../src/env-tool-publisher";
@@ -39,8 +52,9 @@ import { createEmitter } from "../src/events";
 import type { RunEvent } from "../src/events";
 import { MalformedReportError, assertExplainableReport, explain } from "../src/explain";
 import { ActivationFailure } from "../src/failure-classes";
+import { UnfilteredExtensionsQueryError } from "../src/harness";
 import { InstalledBundleError, openInstalledBundle } from "../src/installed-bundle";
-import { LeaseUnavailableError } from "../src/lease";
+import { LeaseClient, LeaseUnavailableError } from "../src/lease";
 import type {
   AcquireOutcome,
   BeginPublishOutcome,
@@ -58,6 +72,8 @@ import { loadInstalledArtifact } from "../src/named-mutants";
 import { NamedMutantError } from "../src/named-mutants";
 import { measuredV2_12 } from "./helpers/al-runner-predefined";
 import { bundleFor, tinyBundle } from "./helpers/bundle";
+import { IDLE_STATUS, leaseRouter } from "./helpers/lease-wire";
+import type { WireAnswer } from "./helpers/lease-wire";
 import { scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
@@ -66,6 +82,7 @@ import {
   type MicrosoftMode,
   appInputsOfPackage,
   dependencyFingerprint,
+  publishedPackageReader,
   readAppJsonInputs,
   targetOf,
 } from "../src/digest-inputs";
@@ -75,6 +92,7 @@ import { discoverTests } from "../src/discovery";
 // to drive more than one batch while `planArtifacts` still collapses everything into one artifact.
 import * as orchestratorModule from "../src/orchestrator";
 import {
+  LostBatchNotStoredError,
   MIN_MUTANT_BUDGET_MS,
   NO_GREEN_BASELINE,
   activateOnce,
@@ -103,7 +121,13 @@ import { quarantineResourceKey } from "../src/resource-key";
 import { isStrandedNote } from "../src/resume";
 import { identityKeyOf, serializeKey } from "../src/selection";
 import { SessionSafety, SessionUnsafeError } from "../src/session-safety";
-import { StaleTestAppError, runMutantLineCountMessage } from "../src/stale-test-app";
+import {
+  STALE_TEST_APP_REMEDY,
+  StaleTestAppError,
+  TestAppChangedError,
+  runMutantLineCountMessage,
+  testAppRefusal,
+} from "../src/stale-test-app";
 import { ResultsStore } from "../src/store";
 import {
   type CompiledTestApp,
@@ -112,7 +136,12 @@ import {
   publishTestApp,
 } from "../src/test-app-publish";
 import { testDigestsOfModel, testDigestsOfSources } from "../src/test-digest";
-import { PublishAppUnreadableError, TestAppDiffersError } from "../src/test-membership";
+import {
+  PublishAppUnreadableError,
+  TestAppDiffersError,
+  TestAppDriftedError,
+  TestAppRepublishedError,
+} from "../src/test-membership";
 import { TestPageScanError, buildTestAppModel, readTestAppSources } from "../src/testpage-scan";
 import { testPageNotRunMessage } from "../src/testpage-unsupported";
 import {
@@ -128,6 +157,13 @@ import type { Trace } from "./helpers/characterize";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
 import { legacyBuildReport } from "./helpers/legacy-report";
 import { fakeMicrosoftMode } from "./helpers/microsoft-mode";
+import {
+  servedIsInstalled,
+  servedTestAppDeps,
+  servesTestApp,
+  testAppJson,
+  testAppPackage,
+} from "./helpers/proven-test-app";
 
 const TARGET_AL = `codeunit 79000 "Sandbox Logic"
 {
@@ -450,6 +486,7 @@ const CAPS_NST: BackendCapabilities = {
   coverage: "procedure",
   deploy: "publish",
   isolation: "session",
+  kind: "bcdev",
   authoritative: true,
 };
 
@@ -465,6 +502,7 @@ const CAPS_NST_WORKERS: BackendCapabilities = {
   coverage: "procedure",
   deploy: "publish",
   isolation: "session",
+  kind: "al-runner",
   authoritative: false,
 };
 
@@ -503,7 +541,13 @@ describe("runSession", () => {
     const dirs = await makeProject();
     await rm(join(dirs.testDir, "app.json"));
     const backend = new StubBackend(
-      { coverage: "none", deploy: "none", isolation: "full-reset", authoritative: false },
+      {
+        coverage: "none",
+        deploy: "none",
+        isolation: "full-reset",
+        kind: "al-runner",
+        authoritative: false,
+      },
       (mutant) => (mutant === null ? "pass" : "fail"),
     );
     const store = new ResultsStore(":memory:");
@@ -532,7 +576,13 @@ describe("runSession", () => {
       'codeunit 50190 "Broken Tests"\n{\n    Subtype = Test;\n    [Test]\n    procedure A(\n    begin\n    end;\n}\n',
     );
     const backend = new StubBackend(
-      { coverage: "none", deploy: "none", isolation: "full-reset", authoritative: false },
+      {
+        coverage: "none",
+        deploy: "none",
+        isolation: "full-reset",
+        kind: "al-runner",
+        authoritative: false,
+      },
       (mutant) => (mutant === null ? "pass" : "fail"),
     );
     const store = new ResultsStore(":memory:");
@@ -569,6 +619,16 @@ describe("runSession", () => {
         ...entries,
       });
     const OLD_PKG = pkg({ "src/SandboxTests.Codeunit.al": TEST_AL });
+    /** R495: `fakeMicrosoftMode` with OLD_PKG installed at its own version, so the run's
+     *  test-app identity is proven and recorded (R389's guard is bound into it). */
+    const provenMode = (): MicrosoftMode => {
+      const base = fakeMicrosoftMode();
+      if (base.kind !== "bytes") throw new Error("fakeMicrosoftMode is not bytes mode");
+      return {
+        ...base,
+        installed: async (id) => (id === APP_ID ? ["1.0.0.2"] : base.installed(id)),
+      };
+    };
     /** R-371: the inputs the run digests with: the package's manifest, or the disk's app.json.
      *  R-385: the published path reads Microsoft apps by bytes, al-runner's by declared version. */
     const inputsFor = async (dirs: { projectDir: string; testDir: string }, from?: Uint8Array) => {
@@ -595,9 +655,12 @@ describe("runSession", () => {
       fetch = true,
       /** `null`: a backend with no microsoftMode. */
       microsoft: MicrosoftMode | null = fakeMicrosoftMode(),
+      /** R389: the test app.json written, and the backend's `dependentCount`, if any. */
+      testApp: Record<string, unknown> = TESTS_APP,
+      dependentCount?: (appId: string) => Promise<number>,
     ) {
       const dirs = await makeProject(NEW_AL);
-      await Bun.write(join(dirs.testDir, "app.json"), JSON.stringify(TESTS_APP));
+      await Bun.write(join(dirs.testDir, "app.json"), JSON.stringify(testApp));
       const stub = new StubBackend(CAPS_NST, (m) => (m === null ? "pass" : "fail"), [
         "IsOverBudget",
       ]);
@@ -605,9 +668,10 @@ describe("runSession", () => {
         ? Object.assign(stub, {
             fetchPublishedAppPackage: typeof read === "function" ? read : async () => read,
             ...(microsoft !== null ? { microsoftMode: () => microsoft } : {}),
+            ...(dependentCount !== undefined ? { dependentCount } : {}),
           })
         : stub;
-      const store = new ResultsStore(":memory:");
+      const store = extra.store ?? new ResultsStore(":memory:");
       const events: RunEvent[] = [];
       await runSession({
         backend,
@@ -621,8 +685,227 @@ describe("runSession", () => {
       const digestWarning = events.flatMap((e) =>
         e.type === "warning" && e.code === "test-digests-unavailable" ? [e.message] : [],
       );
-      return { dirs, store, runId, digestWarning };
+      const guardWarning = events.flatMap((e) =>
+        e.type === "warning" &&
+        (e.code === "closed-world-unmeasured" || e.code === "closed-world-changed")
+          ? [`${e.code}: ${e.message}`]
+          : [],
+      );
+      const recordedHash = (
+        store.db.query("SELECT test_app_hash AS h FROM runs WHERE id = ?").get(runId) as {
+          h: string | null;
+        }
+      ).h;
+      const snapshotHashes = (
+        store.db
+          .query("SELECT test_app_hash AS h FROM baseline_snapshots WHERE run_id = ?")
+          .all(runId) as { h: string }[]
+      ).map((r) => r.h);
+      return { dirs, store, runId, digestWarning, guardWarning, recordedHash, snapshotHashes };
     }
+
+    // R389 guard: the run asks the backend by the PUBLISHED package's id (APP_ID in OLD_PKG's
+    // manifest), before execution and again after it, and records the answer in every digest, in
+    // the parts and in the run's test-app identity; a failing ask falls back with a warning.
+    test("R389: the run records the closed-world guard; an erroring ask falls back with a warning", async () => {
+      const asked: string[] = [];
+      const closed = await r372Run(
+        OLD_PKG,
+        {},
+        true,
+        provenMode(),
+        { ...TESTS_APP, id: APP_ID },
+        async (id) => {
+          asked.push(id);
+          return 0;
+        },
+      );
+      expect(asked).toEqual([APP_ID, APP_ID]); // before and after execution
+      const inputs = await inputsFor(closed.dirs, OLD_PKG);
+      // OLD_PKG's manifest carries no InternalsVisibleTo element at all: unknown, so internal
+      // procedures stay open and only public ones are closed-world.
+      expect(closed.store.testDigests(closed.runId)).toEqual(
+        testDigestsOfSources([{ path: "old.al", text: TEST_AL }], [K], {
+          ...inputs,
+          closedWorld: { public: true, internal: false },
+        }),
+      );
+      expect(
+        (closed.store.testDigestParts(closed.runId) as { closedWorld?: unknown }).closedWorld,
+      ).toBe("public");
+      expect(closed.guardWarning).toEqual([]);
+      // Sol's review, critical 2: the answer is bound into the identity resume, survivor skips and
+      // baseline reuse compare.
+      expect(closed.recordedHash).toMatch(/\|closed-world:public$/);
+      expect(closed.snapshotHashes.length).toBeGreaterThan(0);
+      for (const h of closed.snapshotHashes) expect(h).toMatch(/\|closed-world:public$/);
+      closed.store.close();
+
+      const failed = await r372Run(
+        OLD_PKG,
+        {},
+        true,
+        provenMode(),
+        { ...TESTS_APP, id: APP_ID },
+        async () => {
+          throw new Error("boom");
+        },
+      );
+      expect(failed.recordedHash).not.toContain("closed-world");
+      expect(failed.store.testDigests(failed.runId)).toEqual(
+        testDigestsOfSources([{ path: "old.al", text: TEST_AL }], [K], inputs),
+      );
+      expect(
+        (failed.store.testDigestParts(failed.runId) as { closedWorld?: unknown }).closedWorld,
+      ).toBe("none");
+      expect(failed.guardWarning).toHaveLength(1);
+      expect(failed.guardWarning[0]).toContain("boom");
+      failed.store.close();
+    });
+
+    // Merge review I2: a closed-world run whose test app is NOT proven installed (R495) records no
+    // identity at all. The same closed answer after execution upgrades only its digests; a changed
+    // answer warns and keeps the open digests, and there is no identity to revoke.
+    test("R389: an unproven closed-world run upgrades only its digests on the same answer", async () => {
+      const r = await r372Run(
+        OLD_PKG,
+        {},
+        true,
+        fakeMicrosoftMode(),
+        { ...TESTS_APP, id: APP_ID },
+        async () => 0,
+      );
+      expect(r.recordedHash).toBeNull();
+      expect(r.store.testDigests(r.runId)).toEqual(
+        testDigestsOfSources([{ path: "old.al", text: TEST_AL }], [K], {
+          ...(await inputsFor(r.dirs, OLD_PKG)),
+          closedWorld: { public: true, internal: false },
+        }),
+      );
+      expect((r.store.testDigestParts(r.runId) as { closedWorld?: unknown }).closedWorld).toBe(
+        "public",
+      );
+      expect(r.guardWarning).toEqual([]);
+      r.store.close();
+    });
+
+    test("R389: an unproven closed-world run whose answer changes warns, keeps open digests and revokes nothing", async () => {
+      let n = 0;
+      const revoked: number[] = [];
+      const store = new (class extends ResultsStore {
+        override revokeTestAppHash(runId: number, suffix: string): void {
+          revoked.push(runId);
+          super.revokeTestAppHash(runId, suffix);
+        }
+      })(":memory:");
+      const r = await r372Run(
+        OLD_PKG,
+        { store },
+        true,
+        fakeMicrosoftMode(),
+        { ...TESTS_APP, id: APP_ID },
+        async () => (n++ === 0 ? 0 : 1),
+      );
+      expect(n).toBe(2);
+      expect(revoked).toEqual([]);
+      expect(r.recordedHash).toBeNull();
+      expect(r.store.testDigests(r.runId)).toEqual(
+        testDigestsOfSources(
+          [{ path: "old.al", text: TEST_AL }],
+          [K],
+          await inputsFor(r.dirs, OLD_PKG),
+        ),
+      );
+      expect(r.guardWarning.some((w) => w.startsWith("closed-world-changed"))).toBe(true);
+      r.store.close();
+    });
+
+    // Sol's review, critical 1: the server runs (and the run digests) the published package, whose
+    // manifest names APP_ID; the disk app.json names another app with no dependents.
+    test("R389: a disk app.json naming another app than the published package stays open-world and asks nothing", async () => {
+      const asked: string[] = [];
+      const r = await r372Run(
+        OLD_PKG,
+        {},
+        true,
+        provenMode(),
+        { ...TESTS_APP, id: "22222222-2222-2222-2222-222222222222" },
+        async (id) => {
+          asked.push(id);
+          return 0;
+        },
+      );
+      expect(asked).toEqual([]);
+      expect(r.store.testDigests(r.runId)).toEqual(
+        testDigestsOfSources(
+          [{ path: "old.al", text: TEST_AL }],
+          [K],
+          await inputsFor(r.dirs, OLD_PKG),
+        ),
+      );
+      expect(r.recordedHash).not.toContain("closed-world");
+      expect(r.guardWarning.join()).toContain("22222222-2222-2222-2222-222222222222");
+      r.store.close();
+    });
+
+    // Sol's review, critical 3: 0 before execution, 1 after (a dependent published mid-run).
+    test("R389: a guard answer that changes during the run keeps open-world digests and revokes the run's identity", async () => {
+      let n = 0;
+      const r = await r372Run(
+        OLD_PKG,
+        {},
+        true,
+        provenMode(),
+        { ...TESTS_APP, id: APP_ID },
+        async () => (n++ === 0 ? 0 : 1),
+      );
+      expect(n).toBe(2);
+      expect(r.store.testDigests(r.runId)).toEqual(
+        testDigestsOfSources(
+          [{ path: "old.al", text: TEST_AL }],
+          [K],
+          await inputsFor(r.dirs, OLD_PKG),
+        ),
+      );
+      expect(r.recordedHash).toMatch(/\|closed-world:revoked$/);
+      expect(r.snapshotHashes.length).toBeGreaterThan(0);
+      for (const h of r.snapshotHashes) expect(h).toMatch(/\|closed-world:revoked$/);
+      expect(r.guardWarning.some((w) => w.startsWith("closed-world-changed"))).toBe(true);
+      r.store.close();
+    });
+
+    // Sol's review, critical 2: a dependent published between a run and its resume. The package
+    // bytes are unchanged, so only the guard's answer differs; the resume must carry nothing.
+    test("R389: --resume-run across a guard flip is refused (R247's refusal); the same answer resumes", async () => {
+      for (const later of [1, 0]) {
+        const first = await r372Run(
+          OLD_PKG,
+          {},
+          true,
+          provenMode(),
+          { ...TESTS_APP, id: APP_ID },
+          async () => 0,
+        );
+        const backend = Object.assign(
+          new StubBackend(CAPS_NST, (m) => (m === null ? "pass" : "fail"), ["IsOverBudget"]),
+          {
+            fetchPublishedAppPackage: async () => OLD_PKG,
+            microsoftMode: () => provenMode(),
+            dependentCount: async () => later,
+          },
+        );
+        const resumed = runSession({
+          backend,
+          store: first.store,
+          ...first.dirs,
+          selectorIds,
+          resume: first.runId,
+        });
+        if (later === 1) await expect(resumed).rejects.toThrow(/closed-world:public.*R247/s);
+        else expect((await resumed).resumedFrom?.runId).toBe(first.runId);
+        first.store.close();
+      }
+    });
 
     test("the recorded digest is the published OLD body's, and verify then reads K as new", async () => {
       const { dirs, store, runId, digestWarning } = await r372Run(OLD_PKG);
@@ -649,7 +932,13 @@ describe("runSession", () => {
           identityScheme: IDENTITY_SCHEME,
           buildSymbols: [],
           coverageMode: "procedure",
+          carryHidden: null,
+          generationSourceSha256: null,
+          twinTuples: null,
+          numberingDigest: null,
+          dependencySourceSha256: null,
           targets: [{ batchIndex: 0, mutantCode: "M0001", coveringTests: [] }],
+          rows: [],
         },
         manifest: {
           selectorIds,
@@ -722,12 +1011,26 @@ describe("runSession", () => {
 
     // envTool.publishApps are prebuilt .app files published under the lease, AFTER the read.
     test("an env-tool session (afterLeaseAcquired) records NULL even when the read has source", async () => {
-      const { store, runId, digestWarning } = await r372Run(OLD_PKG, {
-        afterLeaseAcquired: async () => {},
-      });
+      // R389 (merge review M1): the session stays open-world, so the guard is never asked, even
+      // on a backend that answers 0 dependents for the test app the app.json names.
+      const asked: string[] = [];
+      const { store, runId, digestWarning, recordedHash, snapshotHashes } = await r372Run(
+        OLD_PKG,
+        { afterLeaseAcquired: async () => {} },
+        true,
+        fakeMicrosoftMode(),
+        { ...TESTS_APP, id: APP_ID },
+        async (id) => {
+          asked.push(id);
+          return 0;
+        },
+      );
       expect(store.testDigests(runId)).toBeNull();
       expect(digestWarning).toHaveLength(1);
       expect(digestWarning[0]).toContain("envTool.publishApps");
+      expect(asked).toEqual([]);
+      for (const h of [recordedHash ?? "", ...snapshotHashes])
+        expect(h).not.toContain("closed-world");
       store.close();
     });
 
@@ -803,6 +1106,11 @@ describe("runSession", () => {
             identityScheme: IDENTITY_SCHEME,
             buildSymbols: [],
             coverageMode: "procedure",
+            carryHidden: null,
+            generationSourceSha256: null,
+            twinTuples: null,
+            numberingDigest: null,
+            dependencySourceSha256: null,
             targets: [
               {
                 batchIndex: 0,
@@ -810,6 +1118,7 @@ describe("runSession", () => {
                 coveringTests: [`${K.codeunitName}.${K.method}`],
               },
             ],
+            rows: [],
           },
           manifest: {
             selectorIds,
@@ -961,7 +1270,13 @@ describe("runSession", () => {
   test("coverage:fenced capability selects per mutant, exactly like procedure", async () => {
     const dirs = await makeProject();
     const covering = new StubBackend(
-      { coverage: "fenced", deploy: "publish", isolation: "session", authoritative: false },
+      {
+        coverage: "fenced",
+        deploy: "publish",
+        isolation: "session",
+        kind: "al-runner",
+        authoritative: false,
+      },
       () => "pass",
       ["IsOverBudget"],
     );
@@ -976,7 +1291,13 @@ describe("runSession", () => {
     // Same backend, same script, covering NOTHING: under a filtering mode the uncovered mutants
     // must be reported `no-coverage` rather than run against all green tests.
     const nothing = new StubBackend(
-      { coverage: "fenced", deploy: "publish", isolation: "session", authoritative: false },
+      {
+        coverage: "fenced",
+        deploy: "publish",
+        isolation: "session",
+        kind: "al-runner",
+        authoritative: false,
+      },
       () => "pass",
       [],
     );
@@ -993,7 +1314,13 @@ describe("runSession", () => {
   test("coverage:none capability runs all tests per mutant", async () => {
     const dirs = await makeProject();
     const backend = new StubBackend(
-      { coverage: "none", deploy: "none", isolation: "full-reset", authoritative: false },
+      {
+        coverage: "none",
+        deploy: "none",
+        isolation: "full-reset",
+        kind: "al-runner",
+        authoritative: false,
+      },
       (mutant) => (mutant === null ? "pass" : "fail"),
     );
     const store = new ResultsStore(":memory:");
@@ -1078,8 +1405,10 @@ interface "I Probe"
         expect(report.untargetedTriggerCount).toBe(0);
         for (const m of tableMutants) {
           expect(m.verdict).toBe("no-coverage");
+          // R497: on bcdev the BC shape rule names why: the wrapped interface has no coverage
+          // identity, an unmeasured shape, so the whole file's compiled objects stay refused.
           expect(m.failureNote).toContain(
-            "coverage refused for Table:79001 (SandboxTable.Table.al): its file also holds",
+            "coverage refused for Table:79001 (SandboxTable.Table.al): its file holds a #if object wrapper of a shape not measured on BC (an object with no coverage identity",
           );
         }
       } finally {
@@ -1088,12 +1417,293 @@ interface "I Probe"
       }
     });
 
+    // R-300b (c): the SAME wrapped codeunit, one session per backend kind. The kind comes from
+    // `authoritative` (bcdev true, al-runner false). Only the al-runner session scores it.
+    describe("R-300b: a #if-wrapped codeunit alone in its file, per backend", () => {
+      async function wrappedRun(caps: BackendCapabilities) {
+        const dirs = await makeProject();
+        await Bun.write(
+          join(dirs.projectDir, "SandboxLogic.Codeunit.al"),
+          `#if not NEVERDEFINED\n${TARGET_AL}#endif\n`,
+        );
+        const backend = new StubBackend(caps, () => "pass", ["IsOverBudget"]);
+        const store = new ResultsStore(":memory:");
+        const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+        try {
+          return await runSession({ backend, store, ...dirs, selectorIds });
+        } finally {
+          warnSpy.mockRestore();
+          store.close();
+        }
+      }
+
+      // R497: one arm, alone in its file, is the W1 shape BC was measured on: scored on bcdev too.
+      test("bcdev (R497): the mutants are covered and run (survived), with no refusal", async () => {
+        const report = await wrappedRun(CAPS_NST);
+        expect(report.mutants.length).toBeGreaterThan(0);
+        for (const m of report.mutants) {
+          expect(m.verdict).toBe("survived");
+          expect(m.failureNote ?? "").not.toContain("coverage refused");
+        }
+      });
+
+      test("al-runner: the mutants are covered and run (survived), with no refusal", async () => {
+        const report = await wrappedRun(CAPS_NST_WORKERS);
+        expect(report.mutants.length).toBeGreaterThan(0);
+        for (const m of report.mutants) {
+          expect(m.verdict).toBe("survived");
+          expect(m.failureNote ?? "").not.toContain("coverage refused");
+        }
+      });
+
+      test("the session's build symbols reach the session backend AND every worker backend", async () => {
+        const dirs = await makeProject();
+        // Sol run 001 (minor): DISTINCT app and config symbols, so an empty or partial handoff
+        // cannot match the expected set the way three equal empty sets matched each other.
+        await Bun.write(
+          join(dirs.projectDir, "app.json"),
+          JSON.stringify({ ...JSON.parse(APP_JSON), preprocessorSymbols: ["APPSYM"] }),
+        );
+        const got: (readonly string[])[] = [];
+        class Taking extends StubBackend {
+          useBuildSymbols(s: readonly string[]): void {
+            got.push(s);
+          }
+        }
+        const make = () => new Taking(CAPS_NST_WORKERS, () => "pass", ["IsOverBudget"]);
+        const store = new ResultsStore(":memory:");
+        try {
+          await runSession({
+            backend: make(),
+            backendFactory: make,
+            workers: 2,
+            store,
+            ...dirs,
+            selectorIds,
+            preprocessorSymbols: ["CFGSYM"],
+          });
+        } finally {
+          store.close();
+        }
+        // app.json's, the config's and al-runner's predefined set (R392), sorted and unique.
+        const { symbols: predefined } = await measuredV2_12();
+        const expected = [...new Set(["APPSYM", "CFGSYM", ...predefined])].sort();
+        // One session backend plus two workers, each given exactly that set.
+        expect(got).toEqual([expected, expected, expected]);
+      });
+
+      // Sol run 001 (I): an admitted wrapped file whose INSTRUMENTED text re-parses with undecided
+      // arms is dropped by the al-runner index, which refuses its objects. Selection read the
+      // ORIGINAL source, which decides, so it held no refusal: a reached procedure read plain
+      // no-coverage and a table trigger took the all-green fallback and was SCORED. The fake
+      // builds the real index over the deployed batch, as AlRunnerBackend does.
+      describe("an index-only refusal (instrumented text undecided)", () => {
+        async function undecidedProject() {
+          const dirs = await makeProject();
+          // R318's seed: `Other`'s nested `#if` in a conditional var section parses in the original
+          // but not once instrumented. Wrapped, so the file is an admitted wrapped file.
+          const otherProc = `    procedure Other(X: Integer);
+#if not CLEAN27
+    var
+        K: Integer;
+#if A
+        N: Integer;
+#endif
+#endif
+    begin
+        Glob := X + 1;
+    end;
+
+    var
+        Glob: Integer;
+`;
+          await Bun.write(
+            join(dirs.projectDir, "Repro.Codeunit.al"),
+            `#if not NEVERDEFINED
+codeunit 50100 "Repro R"
+{
+    procedure Pick(X: Integer): Integer
+    var
+        K: Integer;
+    begin
+        K := X + 1;
+        exit(K);
+    end;
+
+${otherProc}}
+#endif
+`,
+          );
+          await Bun.write(
+            join(dirs.projectDir, "SandboxTable.Table.al"),
+            `#if not NEVERDEFINED
+table 79001 "Sandbox Table"
+{
+    fields
+    {
+        field(1; "No."; Code[20])
+        {
+            trigger OnValidate()
+            begin
+                if "No." = '' then
+                    Error('blank');
+            end;
+        }
+    }
+
+${otherProc}}
+#endif
+`,
+          );
+          return dirs;
+        }
+        class Indexing extends StubBackend {
+          symbols: readonly string[] = [];
+          useBuildSymbols(s: readonly string[]): void {
+            this.symbols = s;
+          }
+          async coverageRefusals(): Promise<ReadonlyMap<string, string>> {
+            const dir = this.deploys.at(-1);
+            if (dir === undefined) throw new Error("coverageRefusals before deploy");
+            return (await buildAlRunnerCoverageIndex(dir, { symbols: this.symbols })).refusals;
+          }
+        }
+        // Coverage names the reached procedures of BOTH wrapped objects, as al-runner would have
+        // reported them had the index not dropped the files. `Plain` has no `coverageRefusals`, so
+        // it records what a run before sol run 001's fix recorded: the wrapped mutants `survived`.
+        function covering<T extends StubBackend>(backend: T): T {
+          backend.coverageEntriesFor = () => [
+            { objectType: "Codeunit", objectId: 79000, procedure: "IsOverBudget" },
+            { objectType: "Codeunit", objectId: 50100, procedure: "Pick" },
+            { objectType: "Codeunit", objectId: 50100, procedure: "Other" },
+          ];
+          return backend;
+        }
+        const indexing = () => covering(new Indexing(CAPS_NST_WORKERS, () => "pass"));
+        const plain = () => covering(new StubBackend(CAPS_NST_WORKERS, () => "pass"));
+        function expectRefused(report: SessionReport): void {
+          for (const [file, key] of [
+            ["Repro", "Codeunit:50100"],
+            ["SandboxTable", "Table:79001"],
+          ] as const) {
+            const ms = report.mutants.filter((m) => m.file.includes(file));
+            expect([file, ms.length > 0]).toEqual([file, true]);
+            for (const m of ms) {
+              expect([m.mutantCode, m.verdict]).toEqual([m.mutantCode, "no-coverage"]);
+              expect(m.failureNote).toContain(`coverage refused for ${key} (${file}.`);
+              expect(m.failureNote).toContain("its #if arms could not be evaluated as alc does");
+            }
+          }
+          // No trigger took the all-green fallback; the plain codeunit still runs.
+          expect(report.untargetedTriggerCount).toBe(0);
+        }
+        async function quietly<T>(f: () => Promise<T>): Promise<T> {
+          const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+          try {
+            return await f();
+          } finally {
+            warnSpy.mockRestore();
+          }
+        }
+
+        test("reaches fresh scoring by name", async () => {
+          const dirs = await undecidedProject();
+          const store = new ResultsStore(":memory:");
+          try {
+            const report = await quietly(() =>
+              runSession({ backend: indexing(), store, ...dirs, selectorIds }),
+            );
+            expectRefused(report);
+            expect(report.counts.survived).toBeGreaterThan(0);
+          } finally {
+            store.close();
+          }
+        });
+
+        // Sol run 002: a stored `survived` from a run before the fix (same identity scheme) must
+        // not be carried past the current index's refusal, by either carry path.
+        test("a stored survived is not skipped as a known survivor", async () => {
+          const dirs = await undecidedProject();
+          const store = new ResultsStore(":memory:");
+          try {
+            const first = await quietly(() =>
+              runSession({ backend: plain(), store, ...dirs, selectorIds }),
+            );
+            expect(first.mutants.filter((m) => m.file.includes("Repro"))[0]?.verdict).toBe(
+              "survived",
+            );
+            const report = await quietly(() =>
+              runSession({
+                backend: indexing(),
+                store,
+                ...dirs,
+                selectorIds,
+                skipKnownSurvivors: true,
+              }),
+            );
+            expectRefused(report);
+            // The plain codeunit's survivors ARE skipped: the gate is not blanket.
+            expect(report.mutants.some((m) => m.verdict === "known-survivor")).toBe(true);
+          } finally {
+            store.close();
+          }
+        });
+
+        test("a stored survived is not carried by a full-batch --resume", async () => {
+          const dirs = await undecidedProject();
+          const store = new ResultsStore(":memory:");
+          try {
+            const first = await quietly(() =>
+              runSession({ backend: plain(), store, ...dirs, selectorIds }),
+            );
+            expect(first.mutants.filter((m) => m.file.includes("Repro"))[0]?.verdict).toBe(
+              "survived",
+            );
+            store.db.run("UPDATE runs SET finished_at = NULL");
+            const report = await quietly(() =>
+              runSession({ backend: indexing(), store, ...dirs, selectorIds, resume: 1 }),
+            );
+            expectRefused(report);
+            // The plain codeunit's verdicts still carry.
+            expect(report.mutants.some((m) => m.carried === true)).toBe(true);
+          } finally {
+            store.close();
+          }
+        });
+      });
+
+      test("al-runner (C1): a key two active files declare is refused in selection by name", async () => {
+        const dirs = await makeProject();
+        await Bun.write(join(dirs.projectDir, "Twin.Codeunit.al"), TARGET_AL);
+        const backend = new StubBackend(CAPS_NST_WORKERS, () => "pass", ["IsOverBudget"]);
+        const store = new ResultsStore(":memory:");
+        const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+        try {
+          const report = await runSession({ backend, store, ...dirs, selectorIds });
+          expect(report.mutants.length).toBeGreaterThan(0);
+          for (const m of report.mutants) {
+            expect(m.verdict).toBe("no-coverage");
+            expect(m.failureNote).toContain(
+              "coverage refused for codeunit:79000: it is declared in SandboxLogic.Codeunit.al and Twin.Codeunit.al",
+            );
+          }
+        } finally {
+          warnSpy.mockRestore();
+          store.close();
+        }
+      });
+    });
+
+    // R497: a NESTED wrapper, a shape BC was not measured on (a one-arm wrapper is now scored on
+    // bcdev, so it no longer exercises the refusal this test pins).
     test("a #if-wrapped table's trigger mutants read no-coverage, named, not all-green (R298)", async () => {
       const dirs = await makeProject();
       await Bun.write(
         join(dirs.projectDir, "SandboxTable.Table.al"),
         `#if not CLEAN27
+#if not CLEAN28
 ${TRIGGER_TABLE_AL}#endif
+#endif
 `,
       );
       const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
@@ -1491,7 +2101,9 @@ ${TRIGGER_TABLE_AL}#endif
     }
   });
 
-  test("timeout under mutant = timeout-killed, no confirmation re-run", async () => {
+  // R516: since then a position-1 timeout earns one unmutated confirmation re-run on every batch;
+  // here it passes in well under half the budget, so the kill stands.
+  test("timeout under mutant = timeout-killed, after its unmutated confirmation re-run passes", async () => {
     const dirs = await makeProject();
     const backend = new StubBackend(CAPS_NST, (mutant) => (mutant === null ? "pass" : "timeout"), [
       "IsOverBudget",
@@ -1550,8 +2162,9 @@ ${TRIGGER_TABLE_AL}#endif
   });
 
   /**
-   * R86, the timeout arm. `timeout-killed` sets `killingTest` at its own call site and never runs a
-   * confirmation, so it needs its own wiring and its own pin — and it is exactly the verdict most
+   * R86, the timeout arm. `timeout-killed` once set `killingTest` at its own call site with no
+   * confirmation (since R516 a position-1 timeout is confirmed unmutated, and that confirm PASSES,
+   * so its text must still not be the source), so it needs its own pin — and it is exactly the verdict most
    * likely to be a kill the assertions did not earn (R94 files the same shape for al-runner v2).
    * The runner's own timeout detail is what the reader needs in order to see that. Both real
    * producers of `outcome: "timeout"` do attach text — `RunMutantTransport`'s server-side-stop 408
@@ -2169,6 +2782,182 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
       for (const m of report.mutants.filter((m) => m.verdict === "error"))
         expect(m.failureNote).not.toContain("TestPermissions = Disabled");
     });
+
+    // R462: the published test app is hashed before the baseline (R192's snapshot key) and again at
+    // the refusal. `before` answers every read until the baseline ran; `after` answers from then on.
+    describe("R462: the test app's identity before the baseline and at the refusal", () => {
+      type Read = Uint8Array | null | undefined | "throw";
+      async function refuse(before: Read, after: Read): Promise<unknown> {
+        const dirs = await qualProject();
+        const backend = new QualificationBackend(missingFor);
+        const run = backend.run.bind(backend);
+        let baselineRan = false;
+        const reader = async () => {
+          const r = baselineRan ? after : before;
+          if (r === "throw") throw new Error("read failed");
+          return r;
+        };
+        const store = new ResultsStore(":memory:");
+        return runSession({
+          backend: Object.assign(backend, {
+            fetchPublishedAppPackage: reader,
+            run: (ref: TestMethodRef, opts: RunOpts) => {
+              baselineRan = true;
+              return run(ref, opts);
+            },
+          }),
+          store,
+          ...dirs,
+          selectorIds,
+        }).then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+      }
+      const A = new Uint8Array([1]);
+      const B = new Uint8Array([2]);
+
+      test("11: A -> B is TestAppChangedError, naming both packages", async () => {
+        const err = await refuse(A, B);
+        expect(err).toBeInstanceOf(TestAppChangedError);
+        expect((err as Error).message).toContain(`package:${hashPackage(A)}`);
+        expect((err as Error).message).toContain(`package:${hashPackage(B)}`);
+        expect((err as TestAppChangedError).missingTests).toEqual([
+          "Sandbox Tests.UnsupportedTest",
+        ]);
+      });
+
+      // R495 (sol, final review): a session that PROVED its test app and sees another one at the
+      // refusal's re-read withdraws the run's proof: the snapshot it just recorded under the first
+      // app, and its verdicts, must lend nothing later. Revert: drop the clear before
+      // `testAppRefusal` in `scoreBatch`.
+      test("R495: a proven session's A -> B refusal withdraws its run's proof; A -> A keeps it", async () => {
+        const PA = testAppPackage("1.0.0.0");
+        const PB = testAppPackage("1.0.0.1");
+        const proven = async (after: Uint8Array) => {
+          const dirs = await qualProject();
+          await Bun.write(join(dirs.testDir, "app.json"), testAppJson());
+          const backend = new QualificationBackend(missingFor);
+          const run = backend.run.bind(backend);
+          let baselineRan = false;
+          const served = () => (baselineRan ? after : PA);
+          const store = new ResultsStore(":memory:");
+          const err = await runSession({
+            backend: Object.assign(backend, {
+              fetchPublishedAppPackage: async () => served(),
+              microsoftMode: () => servedIsInstalled(served),
+              run: (ref: TestMethodRef, opts: RunOpts) => {
+                baselineRan = true;
+                return run(ref, opts);
+              },
+            }),
+            store,
+            ...dirs,
+            selectorIds,
+          }).then(
+            () => undefined,
+            (e: unknown) => e,
+          );
+          return { err, row: store.getRun(1) };
+        };
+        const changed = await proven(PB);
+        expect(changed.err).toBeInstanceOf(TestAppChangedError);
+        expect([changed.row?.testAppHash, changed.row?.testAppProven]).toEqual([null, false]);
+        const same = await proven(PA);
+        expect(same.err).toBeInstanceOf(StaleTestAppError);
+        expect([same.row?.testAppHash, same.row?.testAppProven]).toEqual([
+          `package:${hashPackage(PA)}`,
+          true,
+        ]);
+      });
+
+      test("12: A -> A is StaleTestAppError, cause unchanged-endpoints", async () => {
+        const err = await refuse(A, A);
+        expect(err).toBeInstanceOf(StaleTestAppError);
+        expect((err as StaleTestAppError).cause).toBe("unchanged-endpoints");
+        expect((err as Error).message).toContain("replace-and-restore");
+        expect((err as Error).message).toContain("If no other session publishes");
+      });
+
+      test("13: a failed or missing read is identity-unverified, never unchanged or changed", async () => {
+        for (const after of [null, "throw", undefined] as const) {
+          const err = await refuse(A, after);
+          expect(err).toBeInstanceOf(StaleTestAppError);
+          expect((err as StaleTestAppError).cause).toBe("identity-unverified");
+        }
+        // No package reader at all: the `source:` hash of the test tree, the same both times.
+        const dirs = await qualProject();
+        const err = await runSession({
+          backend: new QualificationBackend(missingFor),
+          store: new ResultsStore(":memory:"),
+          ...dirs,
+          selectorIds,
+        }).then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+        expect((err as StaleTestAppError).cause).toBe("identity-unverified");
+        // No first read (the verify path passes no snapshot).
+        const missing = [{ name: "T.A", description: "d" }];
+        const pkg = `package:${hashPackage(A)}`;
+        expect((testAppRefusal(missing, undefined, pkg) as StaleTestAppError).cause).toBe(
+          "identity-unverified",
+        );
+        expect((testAppRefusal(missing, pkg, undefined) as StaleTestAppError).cause).toBe(
+          "identity-unverified",
+        );
+      });
+
+      test("the re-read asks for the SAME app even if the local app.json changed during the baseline", async () => {
+        // The server holds two different apps and neither changes. Only the local manifest's name
+        // moves, after the first read; an unpinned re-read would compare app "Tests" with "Other".
+        const dirs = await qualProject();
+        const backend = new QualificationBackend(missingFor);
+        const run = backend.run.bind(backend);
+        let renamed = false;
+        const err = await runSession({
+          backend: Object.assign(backend, {
+            fetchPublishedAppPackage: async (app: { readonly name: string }) =>
+              app.name === "Tests" ? A : B,
+            run: async (ref: TestMethodRef, opts: RunOpts) => {
+              if (!renamed) {
+                renamed = true;
+                await Bun.write(
+                  join(dirs.testDir, "app.json"),
+                  '{"name":"Other","publisher":"P","version":"1.0.0.0"}',
+                );
+              }
+              return run(ref, opts);
+            },
+          }),
+          store: new ResultsStore(":memory:"),
+          ...dirs,
+          selectorIds,
+        }).then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+        expect(err).toBeInstanceOf(StaleTestAppError);
+        expect((err as StaleTestAppError).cause).toBe("unchanged-endpoints");
+      });
+
+      test("each refusal's full message: the observed interval, no inferred age, a conditional remedy", () => {
+        const missing = [{ name: "T.A", description: "d" }];
+        const head =
+          "the published test app is missing 1 test(s) this project's source declares:\n  T.A: d\n" +
+          "Refusing to measure: every mutant covered only by these would be recorded no-coverage and " +
+          "the run would report a plausible score for a suite that never ran.";
+        expect(testAppRefusal(missing, "package:a", "package:a").message).toBe(
+          `${head} The published test app's package was the same at the start of this batch's baseline and at this refusal; a replace-and-restore between the two reads cannot be ruled out. If no other session publishes to this server: ${STALE_TEST_APP_REMEDY}`,
+        );
+        expect(testAppRefusal(missing, "package:a", undefined).message).toBe(
+          `${head} LethAL could not compare the published test app's package at the start of this batch's baseline with the one at this refusal, so the app may be older than the source OR may have been replaced between the two. If no other session publishes to this server: ${STALE_TEST_APP_REMEDY}`,
+        );
+        expect(testAppRefusal(missing, "package:a", "package:b").message).toBe(
+          `${head} The published test app's package CHANGED between the start of this batch's baseline and this refusal (package:a at the start, package:b at the refusal): something published to this server in that interval. Re-run when no other session publishes to it.`,
+        );
+      });
+    });
   });
 });
 
@@ -2212,6 +3001,9 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
             }
           : { outcome: "pass" as const, procedure: "IsOverBudget" },
       );
+      // R495: as bcdev, a served test app, installed, so a run's identity is proven and the
+      // resume cases below can resume (as a real bcdev's is). As al-runner, no package read.
+      if (caps.authoritative) Object.assign(this, servesTestApp());
     }
     override capabilities() {
       return this.caps;
@@ -2227,6 +3019,7 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
   async function project(testAl = PAGE_TEST_AL) {
     const dirs = await makeProject(testAl);
     await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+    await Bun.write(join(dirs.testDir, "app.json"), testAppJson());
     return dirs;
   }
   const FENCED = { ...CAPS_NST, coverage: "fenced" as const };
@@ -2274,7 +3067,7 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
 
   test("a non-authoritative backend is unchanged: no scan, the test is sent", async () => {
     const dirs = await project();
-    const backend = new RecordingBackend({ ...FENCED, authoritative: false });
+    const backend = new RecordingBackend({ ...FENCED, kind: "al-runner", authoritative: false });
     const store = new ResultsStore(":memory:");
     const report = await runSession({ backend, store, ...dirs, selectorIds });
     expect(backend.baselineSent).toContain("UnsupportedTest");
@@ -2461,10 +3254,13 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
     const store = new ResultsStore(":memory:");
     // Run 1: the test opens no TestPage yet, passes, covers IsUnderBudget and kills its 3 mutants.
     const first = await runSession({
-      backend: new QualificationBackend((method: string) =>
-        method === "UnsupportedTest"
-          ? { outcome: "pass" as const, procedure: "IsUnderBudget" }
-          : { outcome: "pass" as const, procedure: "IsOverBudget" },
+      backend: Object.assign(
+        new QualificationBackend((method: string) =>
+          method === "UnsupportedTest"
+            ? { outcome: "pass" as const, procedure: "IsUnderBudget" }
+            : { outcome: "pass" as const, procedure: "IsOverBudget" },
+        ),
+        servesTestApp(),
       ),
       store,
       ...dirs,
@@ -2477,12 +3273,10 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
 
     // Run 2: the test now has a reachable call that may open a TestPage.
     await Bun.write(join(dirs.testDir, "SandboxTests.Codeunit.al"), PAGE_TEST_AL);
-    // R247: this backend's test-app identity is the source tree, which the edit above moved, so a
-    // resume would be refused. R-236c's case is the published app unchanged while the source
-    // scan refuses a test, so run 1 is recorded under the identity run 2 computes.
-    store.db.run("UPDATE runs SET test_app_hash = ?", [
-      (await testAppHashFor(undefined, dirs.testDir)) ?? null,
-    ]);
+    // R-236c's case is the published app unchanged while the source scan refuses a test. R495:
+    // both runs' backends serve the same package, installed, which is that case as it happens: the
+    // identity is the package, which the source edit above does not move. (Before R495 this test
+    // rewrote run 1's hash to the edited source tree's.)
     const backend = new RecordingBackend(CAPS_NST);
     const events: RunEvent[] = [];
     const report = await runSession({
@@ -2572,7 +3366,10 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
       "supported. at Microsoft.Dynamics.Nav.Runtime.NavSession.CreateNavTestService()";
     const classify = async (failureMessage: string) => {
       const dirs = await project();
-      const backend = new RecordingBackend({ ...FENCED, authoritative: false }, failureMessage);
+      const backend = new RecordingBackend(
+        { ...FENCED, kind: "al-runner", authoritative: false },
+        failureMessage,
+      );
       const store = new ResultsStore(":memory:");
       const events: RunEvent[] = [];
       await runSession({
@@ -2724,24 +3521,30 @@ codeunit 79312 "Mixed Code"
     expect(report.mutants.some((m) => m.file.includes("Bad.Mixed"))).toBe(false);
   });
 
-  test("R307: a refused file and a good file sharing a basename still abort with the duplicate-basename message", async () => {
+  // R219 replaced this test's refusal ("two source files share the basename ... Rename one of
+  // them."): a shared basename now gets two distinct flat names, so the refused file and the good
+  // one BOTH reach the deployed batch, neither replacing the other.
+  test("R307, R219: a refused file and a good file sharing a basename both reach the batch, under distinct names", async () => {
     const dirs = await makeProject();
     await Bun.write(join(dirs.projectDir, "a", "Dup.Codeunit.al"), R307_BAD_AL);
-    await Bun.write(
-      join(dirs.projectDir, "b", "Dup.Codeunit.al"),
-      TARGET_AL.replace("79000", "79003").replace("Sandbox Logic", "Dup Logic"),
-    );
-    // The message below is thrown for ANY two files sharing a basename, so prove a/Dup is refused.
+    const good = TARGET_AL.replace("79000", "79003").replace("Sandbox Logic", "Dup Logic");
+    await Bun.write(join(dirs.projectDir, "b", "Dup.Codeunit.al"), good);
     const set = await generateMutationSet(dirs.projectDir);
     expect(set.refusedFiles.map((r) => [r.file, r.shape])).toEqual([
-      [join("a", "Dup.Codeunit.al"), "object-mix"],
+      ["a/Dup.Codeunit.al", "object-mix"],
     ]);
     const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
     const store = new ResultsStore(":memory:");
-    await expect(runSession({ backend, store, ...dirs, selectorIds })).rejects.toThrow(
-      /cannot build the batch project: two source files share the basename "Dup\.Codeunit\.al" \(.*Dup\.Codeunit\.al and .*Dup\.Codeunit\.al\)\. Instrumented files are written flat, so one would silently replace the other and its AL objects would be missing from the published app\. Rename one of them\./,
+    await runSession({ backend, store, ...dirs, selectorIds });
+    const [batch] = backend.deploys;
+    if (batch === undefined) throw new Error("nothing was deployed");
+    const names = flatNamesFor(["a/Dup.Codeunit.al", "b/Dup.Codeunit.al"]);
+    // The refused file verbatim, the good one instrumented (its own object, under its own name).
+    expect(readFileSync(join(batch, names.flatOf("a/Dup.Codeunit.al")), "utf8")).toBe(R307_BAD_AL);
+    expect(readFileSync(join(batch, names.flatOf("b/Dup.Codeunit.al")), "utf8")).toContain(
+      "Dup Logic",
     );
-    expect(backend.deploys.length).toBe(0);
+    expect(await Bun.file(join(batch, "Dup.Codeunit.al")).exists()).toBe(false);
   });
 
   test("missing app.json aborts with a clear error before deploy", async () => {
@@ -2864,7 +3667,13 @@ describe("runSession — per-mutant budget floor (Tier 6B Phase 0 Task 6)", () =
     readonly runs: Array<{ active: string | null; timeoutMs: number }> = [];
     constructor(private readonly baselineDurationMs: number) {}
     capabilities(): BackendCapabilities {
-      return { coverage: "none", deploy: "none", isolation: "full-reset", authoritative: false };
+      return {
+        coverage: "none",
+        deploy: "none",
+        isolation: "full-reset",
+        kind: "al-runner",
+        authoritative: false,
+      };
     }
     async status(): Promise<BackendStatus> {
       return { ok: true, details: "budget-probe" };
@@ -2968,7 +3777,9 @@ describe("runSession — I7 second consecutive transport error aborts the sessio
     raw.close();
     expect(rows.length).toBeGreaterThan(0);
     expect(rows.some((r) => r.verdict === "error")).toBe(true);
-  });
+    // R439: 30 s, not bun's 5 s default. About 0.16 s inside this file normally, but measured at
+    // 6.04 s in a full verify under load on the kraken container.
+  }, 30_000);
 });
 
 describe("runSession — parallel workers", () => {
@@ -3032,6 +3843,7 @@ describe("runSession — parallel workers", () => {
       coverage: "none",
       deploy: "none",
       isolation: "full-reset",
+      kind: "al-runner",
       authoritative: false,
     };
 
@@ -3094,7 +3906,13 @@ describe("runSession — parallel workers", () => {
     let peak = 0;
     const make = () =>
       new StubBackend(
-        { coverage: "none", deploy: "none", isolation: "full-reset", authoritative: false },
+        {
+          coverage: "none",
+          deploy: "none",
+          isolation: "full-reset",
+          kind: "al-runner",
+          authoritative: false,
+        },
         (mutant) => (mutant === null ? "pass" : "fail"),
         [],
         undefined,
@@ -3125,6 +3943,7 @@ describe("runSession — parallel workers", () => {
       coverage: "none",
       deploy: "none",
       isolation: "full-reset",
+      kind: "al-runner",
       authoritative: false,
     };
     // Layer 4.3 collapsed overlap batching to a single artifact, so
@@ -3164,6 +3983,249 @@ describe("runSession — parallel workers", () => {
     expect(report.counts.killed).toBe(3);
     expect(report.counts.survived).toBe(0);
     store.close();
+  });
+
+  // R488: each worker builds its own backend with an empty sibling cache, so without the list its
+  // FIRST al-runner call for `OverBudgetDetected` would also run the look-alike
+  // `OverBudgetDetectedTwin` and merge their coverage.
+  test("the session backend and every worker get the discovered tests, look-alikes included (R488)", async () => {
+    const dirs = await makeProject(`codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure OverBudgetDetected()
+    begin
+    end;
+
+    [Test]
+    procedure OverBudgetDetectedTwin()
+    begin
+    end;
+
+#if LETHAL_R491_NEVER_DEFINED
+    [Test]
+    procedure OverBudgetDetectedGone()
+    begin
+    end;
+#endif
+}
+`);
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+    const store = new ResultsStore(":memory:");
+    const caps: BackendCapabilities = {
+      coverage: "none",
+      deploy: "none",
+      isolation: "full-reset",
+      kind: "al-runner",
+      authoritative: false,
+    };
+    // R491: one shared event log across every backend, so ORDER is read from call counters, never
+    // from a clock: each backend's seed must come before its own first run().
+    // Each entry is pushed synchronously at the call's entry, so workers' runs never interleave
+    // into one another's entries.
+    const log: { backend: number; what: "seed" | "run"; method?: string }[] = [];
+    const given: string[][] = [];
+    let made = 0;
+    const make = () => {
+      const id = made++;
+      const b = new StubBackend(caps, (mutant) => (mutant === null ? "pass" : "fail"), []);
+      const run = b.run.bind(b);
+      return Object.assign(b, {
+        run: (ref: TestMethodRef, opts: RunOpts) => {
+          log.push({ backend: id, what: "run", method: ref.method });
+          return run(ref, opts);
+        },
+        useDiscoveredTests: (tests: readonly TestMethodRef[]) => {
+          log.push({ backend: id, what: "seed" });
+          given.push(tests.map((t) => t.method).sort());
+        },
+      });
+    };
+    await runSession({
+      backend: make(),
+      backendFactory: make,
+      store,
+      ...dirs,
+      selectorIds,
+      workers: 2,
+    });
+    // The UNFILTERED list: the compiled-out `OverBudgetDetectedGone` is in it, though it never runs.
+    const all = ["OverBudgetDetected", "OverBudgetDetectedGone", "OverBudgetDetectedTwin"];
+    expect(given).toEqual([all, all, all]);
+    const ranMethods = new Set(log.filter((e) => e.what === "run").map((e) => e.method));
+    expect(ranMethods.has("OverBudgetDetected")).toBe(true);
+    expect(ranMethods.has("OverBudgetDetectedGone")).toBe(false);
+    // Every backend (the session's and both workers') is seeded, and before its first run().
+    for (let id = 0; id < made; id++) {
+      const seed = log.findIndex((e) => e.backend === id && e.what === "seed");
+      const firstRun = log.findIndex((e) => e.backend === id && e.what === "run");
+      expect(seed).toBeGreaterThanOrEqual(0);
+      expect(firstRun).toBeGreaterThan(seed);
+    }
+    expect(made).toBe(3);
+    store.close();
+  });
+
+  // R551: the session backend's `--test-exact` probe, and the boolean it hands every worker.
+  describe("the --test-exact probe (R551)", () => {
+    const caps: BackendCapabilities = {
+      coverage: "none",
+      deploy: "none",
+      isolation: "full-reset",
+      kind: "al-runner",
+      authoritative: false,
+    };
+    type Probe =
+      | { kind: "not-applicable" }
+      | { kind: "exact"; elapsedMs: number }
+      | { kind: "substring"; elapsedMs: number; reason: string };
+    type Entry = { backend: number; what: "probe" | "selector" | "run"; on?: boolean };
+
+    /** Backend 0 is the session's. `withSetter: false` leaves the WORKERS without the setter. */
+    async function session(probe: Probe, o: { workers?: number; withSetter?: boolean } = {}) {
+      const dirs = await makeProject();
+      await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+      const store = new ResultsStore(":memory:");
+      const log: Entry[] = [];
+      const events: RunEvent[] = [];
+      let made = 0;
+      const make = () => {
+        const id = made++;
+        const b = new StubBackend(caps, (mutant) => (mutant === null ? "pass" : "fail"), []);
+        const run = b.run.bind(b);
+        const extra: Record<string, unknown> = {
+          run: (ref: TestMethodRef, opts: RunOpts) => {
+            log.push({ backend: id, what: "run" });
+            return run(ref, opts);
+          },
+        };
+        if (id === 0) {
+          extra.probeExactTestSelector = async () => {
+            log.push({ backend: id, what: "probe" });
+            return probe;
+          };
+        }
+        if (id === 0 || o.withSetter !== false) {
+          extra.useExactTestSelector = (on: boolean) => {
+            log.push({ backend: id, what: "selector", on });
+          };
+        }
+        return Object.assign(b, extra);
+      };
+      let report: Awaited<ReturnType<typeof runSession>>;
+      try {
+        report = await runSession({
+          backend: make(),
+          backendFactory: make,
+          store,
+          ...dirs,
+          selectorIds,
+          workers: o.workers ?? 2,
+          emit: [(e) => events.push(e)],
+        });
+      } finally {
+        store.close();
+      }
+      const selectorLines = events.flatMap((e) =>
+        e.type === "warning" && e.code === "al-runner-test-selector" ? [e.message] : [],
+      );
+      const selectorEvents = events.filter((e) => e.type === "al-runner-test-selector");
+      const contexts = report.validity.executionContexts.filter((c) => c.verdictCount > 0);
+      return { log, made, selectorLines, events, selectorEvents, contexts };
+    }
+
+    test("O1: the probe runs once, before the session's first run(); every worker gets the boolean before its own", async () => {
+      const { log, made } = await session({ kind: "exact", elapsedMs: 5 });
+      expect(made).toBe(3);
+      const probes = log.filter((e) => e.what === "probe");
+      expect(probes).toEqual([{ backend: 0, what: "probe" }]);
+      const firstRun0 = log.findIndex((e) => e.backend === 0 && e.what === "run");
+      expect(firstRun0).toBeGreaterThan(log.indexOf(probes[0] as Entry));
+      for (const id of [1, 2]) {
+        const sel = log.filter((e) => e.backend === id && e.what === "selector");
+        expect(sel).toEqual([{ backend: id, what: "selector", on: true }]);
+        const at = log.findIndex((e) => e.backend === id && e.what === "selector");
+        const firstRun = log.findIndex((e) => e.backend === id && e.what === "run");
+        expect(firstRun).toBeGreaterThan(at);
+      }
+    });
+
+    test("O2: a rejecting probe hands every worker false", async () => {
+      const { log } = await session({ kind: "substring", elapsedMs: 5, reason: "exit 2" });
+      for (const id of [1, 2]) {
+        expect(log.filter((e) => e.backend === id && e.what === "selector")).toEqual([
+          { backend: id, what: "selector", on: false },
+        ]);
+      }
+    });
+
+    test("O3: a worker without useExactTestSelector makes runSession throw, naming the worker", async () => {
+      await expect(session({ kind: "exact", elapsedMs: 5 }, { withSetter: false })).rejects.toThrow(
+        /worker backend 0.*useExactTestSelector|useExactTestSelector.*worker backend 0/,
+      );
+    });
+
+    test("O4: exactly one al-runner-test-selector warning per probed session; none when not-applicable", async () => {
+      expect(
+        (await session({ kind: "exact", elapsedMs: 7 }, { workers: 1 })).selectorLines,
+      ).toEqual([
+        "al-runner test selector: exact (--test-exact accepted by a one-call probe in 7 ms; R551)",
+      ]);
+      expect(
+        (
+          await session(
+            { kind: "substring", elapsedMs: 9, reason: "exit 2; stderr: Unknown option" },
+            { workers: 1 },
+          )
+        ).selectorLines,
+      ).toEqual([
+        "al-runner test selector: substring with R488 excludes (--test-exact not accepted: exit 2; stderr: Unknown option; probe 9 ms; R551)",
+      ]);
+      const na = await session({ kind: "not-applicable" }, { workers: 1 });
+      expect(na.selectorLines).toEqual([]);
+      // Non-vacuous: the hook did receive the session's other events.
+      expect(na.events.length).toBeGreaterThan(0);
+    });
+
+    // R558: the choice reaches the report through a structured event, not the warning text.
+    test("R558 exact: one structured event, and every measured context records exact with no reason", async () => {
+      const s = await session({ kind: "exact", elapsedMs: 7 }, { workers: 1 });
+      expect(s.selectorEvents).toHaveLength(1);
+      const [ev] = s.selectorEvents;
+      expect(ev).toMatchObject({ type: "al-runner-test-selector", selector: "exact" });
+      expect(ev !== undefined && "reason" in ev).toBe(false);
+      expect(s.contexts.length).toBeGreaterThan(0);
+      for (const c of s.contexts) {
+        expect(c.testSelector).toBe("exact");
+        expect(c.testSelectorReason).toBeUndefined();
+      }
+    });
+
+    test("R558 substring: the event and every measured context carry substring-with-excludes and the probe's reason", async () => {
+      const s = await session(
+        { kind: "substring", elapsedMs: 9, reason: "exit 2; stderr: Unknown option" },
+        { workers: 1 },
+      );
+      expect(s.selectorEvents).toHaveLength(1);
+      expect(s.selectorEvents[0]).toMatchObject({
+        type: "al-runner-test-selector",
+        selector: "substring-with-excludes",
+        reason: "exit 2; stderr: Unknown option",
+      });
+      expect(s.contexts.length).toBeGreaterThan(0);
+      for (const c of s.contexts) {
+        expect(c.testSelector).toBe("substring-with-excludes");
+        expect(c.testSelectorReason).toBe("exit 2; stderr: Unknown option");
+      }
+    });
+
+    test("R558 not-applicable (--server): no event, and no measured context records a selector", async () => {
+      const s = await session({ kind: "not-applicable" }, { workers: 1 });
+      expect(s.selectorEvents).toEqual([]);
+      expect(s.contexts.length).toBeGreaterThan(0);
+      for (const c of s.contexts) expect(c.testSelector).toBeUndefined();
+    });
   });
 
   test("a worker deploy failure does not double-record a mutant step 5 already marked no-coverage", async () => {
@@ -3238,6 +4300,7 @@ describe("runSession — parallel workers", () => {
       coverage: "none",
       deploy: "none",
       isolation: "full-reset",
+      kind: "al-runner",
       authoritative: false,
     };
     // Worker 0 is slow — 30ms per run(). Worker 1 errors on every
@@ -3294,6 +4357,7 @@ describe("runSession — parallel workers", () => {
       coverage: "none",
       deploy: "none",
       isolation: "full-reset",
+      kind: "al-runner",
       authoritative: false,
     };
     let factoryCalls = 0;
@@ -3347,6 +4411,7 @@ describe("runSession — parallel workers", () => {
       coverage: "none",
       deploy: "none",
       isolation: "full-reset",
+      kind: "al-runner",
       authoritative: false,
     };
     const make = () => new StubBackend(caps, (mutant) => (mutant === null ? "pass" : "fail"), []);
@@ -3380,6 +4445,7 @@ describe("runSession — M4 outcome ordering", () => {
       coverage: "none",
       deploy: "none",
       isolation: "full-reset",
+      kind: "al-runner",
       authoritative: false,
     };
     const backend = new StubBackend(caps, (mutant) => (mutant === null ? "pass" : "fail"), []);
@@ -3407,7 +4473,13 @@ describe("mutation score — timeout-killed contribution", () => {
     // Create a scenario: some mutants killed, some timeout-killed, some survived
     // We'll use a fixture where 2 out of 3 mutants are tested, but with different outcomes
     const backend = new StubBackend(
-      { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true },
+      {
+        coverage: "procedure",
+        deploy: "publish",
+        isolation: "session",
+        kind: "bcdev",
+        authoritative: true,
+      },
       (mutant) => {
         // First test run is baseline (green)
         // Mutant activation determines outcome per test run
@@ -3427,7 +4499,13 @@ describe("mutation score — timeout-killed contribution", () => {
 
   test("buildReport: only timeout-killed and survived produces non-null score", async () => {
     const report = legacyBuildReport({
-      caps: { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true },
+      caps: {
+        coverage: "procedure",
+        deploy: "publish",
+        isolation: "session",
+        kind: "bcdev",
+        authoritative: true,
+      },
       baselineGreen: true,
       batches: 1,
       unsupportedTests: [],
@@ -3489,7 +4567,13 @@ describe("mutation score — timeout-killed contribution", () => {
 
   test("buildReport: killed and timeout-killed contribute equally", async () => {
     const report = legacyBuildReport({
-      caps: { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true },
+      caps: {
+        coverage: "procedure",
+        deploy: "publish",
+        isolation: "session",
+        kind: "bcdev",
+        authoritative: true,
+      },
       baselineGreen: true,
       batches: 1,
       unsupportedTests: [],
@@ -3593,7 +4677,13 @@ describe("mutation score — timeout-killed contribution", () => {
 
   test("buildReport: null score when no killable mutants", async () => {
     const report = legacyBuildReport({
-      caps: { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true },
+      caps: {
+        coverage: "procedure",
+        deploy: "publish",
+        isolation: "session",
+        kind: "bcdev",
+        authoritative: true,
+      },
       baselineGreen: true,
       batches: 1,
       unsupportedTests: [],
@@ -3693,34 +4783,24 @@ describe("runSession — single artifact", () => {
 // those would let the number silently shrink, and a warning emitted at the end would satisfy a
 // mere presence check while being useless to the person reading it live.
 //
-// Fixture shape measured, not guessed: `packages/builtin-tier1/tests/swap-additive.test.ts`'s own
-// "tags an in-loop additive expression that advances the condition" case, a `while` loop whose
-// condition reads a counter that an additive expression in its body advances. Scoped to
-// `lethal.swap-additive` alone (`operators: ["swap-additive"]`) so this project deploys exactly
-// ONE hang-capable mutant. There are FOUR callers of `hangCapableForMutatedNode`: `remove-assignment`,
-// `shift-integer`, `swap-additive` and `flip-boolean-literal`. Left unscoped, TWO of the other three
-// also tag this fixture, not three, each at its own different-span site (see the unscoped test
-// below for the full derivation):
-//   - `remove-assignment` claims the whole loop-body statement `Remaining := Remaining - 1;` and
-//     tags it: that node IS the assignment `hangCapableForMutatedNode` classifies directly.
-//   - `shift-integer` claims NOTHING here. The only literal in the loop body, the `1` inside
-//     `Remaining - 1`, has an `additive_expression` for a parent rather than an
-//     `assignment_statement`, and `shifted()` (shift-integer.ts) refuses any literal whose parent
-//     is neither. (This is why that operator's OWN conformance fixture for the tag uses
-//     `Remaining := 0`, a direct literal assignment, rather than this shape.)
-//   - `flip-boolean-literal` claims nothing, because this fixture's loop body has no boolean
-//     literal for it to target, not because it is a third operator rather than a fourth.
-// So this test scopes to `swap-additive` alone to hold the count at exactly 1; the unscoped test
-// below deploys the default operator set on the same fixture and expects 2 (`remove-assignment`
-// plus `swap-additive`), derived by this same reading before it was ever run.
+// Since R196's refusal no BUILT-IN operator tags a site: the four that called
+// `hangCapableForMutatedNode` (`remove-assignment`, `shift-integer`, `swap-additive`,
+// `flip-boolean-literal`) now refuse it, so `hangCapableCount` reads 0 for them (the unscoped test
+// below pins that end to end on a loop whose body advances its condition). The channel stays for a
+// plug-in operator, so the count and the warning are exercised through a STAND-IN for one:
+// `swap-additive`'s `generate` wrapped to tag every spec it returns, scoped to that operator, on a
+// project whose one emitted additive (`Remaining + 1`, before the loop) gives exactly ONE tagged
+// mutant.
 describe("runSession, R196: hang-capable sites announced before deployment", () => {
   const HANG_CAPABLE_AL = `codeunit 79000 "Sandbox Logic"
 {
     procedure Go()
     var
         Remaining: Integer;
+        Total: Integer;
     begin
         Remaining := 10;
+        Total := Remaining + 1;
         while Remaining > 0 do
             Remaining := Remaining - 1;
     end;
@@ -3744,14 +4824,25 @@ describe("runSession, R196: hang-capable sites announced before deployment", () 
     const store = new ResultsStore(":memory:");
     const events: RunEvent[] = [];
     const emit = createEmitter([(e) => events.push(e)]);
-    await runSession({
-      backend,
-      store,
-      ...dirs,
-      selectorIds,
-      operators: ["swap-additive"],
-      emit: [emit],
-    });
+    // The plug-in stand-in: tag whatever swap-additive emits (here only the preheader additive).
+    const original = swapAdditive.generate;
+    const spy = spyOn(swapAdditive, "generate").mockImplementation((node, ctx) =>
+      original
+        .call(swapAdditive, node, ctx)
+        .map((s): MutationSpec => ({ ...s, hangCapable: "loop-condition-target" })),
+    );
+    try {
+      await runSession({
+        backend,
+        store,
+        ...dirs,
+        selectorIds,
+        operators: ["swap-additive"],
+        emit: [emit],
+      });
+    } finally {
+      spy.mockRestore();
+    }
     store.close();
     return events;
   }
@@ -3766,15 +4857,9 @@ describe("runSession, R196: hang-capable sites announced before deployment", () 
     expect(generated.hangCapableCount).toBe(1);
   });
 
-  test("counts DISTINCT tagged mutants when several operators tag the same statement, unscoped (R196)", async () => {
-    // Same fixture as `collectFromHangCapableRun`, but with the DEFAULT operator set rather than
-    // scoped to `swap-additive` alone. Expected count derived by reading the four operators
-    // against this fixture BEFORE running it (full trace in the comment above this `describe`):
-    // `remove-assignment` tags the whole statement `Remaining := Remaining - 1;`, `swap-additive`
-    // tags the `Remaining - 1` additive expression nested inside it, a DIFFERENT span, and
-    // `shift-integer` and `flip-boolean-literal` tag nothing here. `dedupeSpecs`'s identity is
-    // (node kind, span, replacement text), and `assignment_statement` and `additive_expression`
-    // share neither kind nor span, so dedup does not collapse the two. Derived total: 2.
+  test("built-in operators REFUSE the loop's step, so nothing is tagged or announced, unscoped (R196)", async () => {
+    // Same fixture, DEFAULT operator set, no stand-in. Before R196's refusal `remove-assignment`
+    // and `swap-additive` both tagged `Remaining := Remaining - 1` (count 2); now neither emits it.
     const dirs = await makeHangCapableProject(HANG_CAPABLE_AL);
     const backend = new StubBackend(CAPS_NST, () => "pass", ["Go"]);
     const store = new ResultsStore(":memory:");
@@ -3787,7 +4872,18 @@ describe("runSession, R196: hang-capable sites announced before deployment", () 
         e.type === "mutation-set-generated",
     );
     if (generated === undefined) throw new Error("no mutation-set-generated event");
-    expect(generated.hangCapableCount).toBe(2);
+    expect(generated.hangCapableCount).toBe(0);
+    expect(
+      events.some((e) => e.type === "warning" && e.code === "hang-capable-sites-deployed"),
+    ).toBe(false);
+    // Count 0 also holds if the step is emitted UNTAGGED (the unsafe direction): it must not exist.
+    const { files } = await generateMutationSet(dirs.projectDir);
+    const texts = files.flatMap((f) => f.specs.map((s) => s.before.text.replace(/\s+/g, " ")));
+    expect(texts).not.toContain("Remaining := Remaining - 1");
+    // swap-additive's `before` is the EXPRESSION, so the statement check alone misses it (R454).
+    expect(texts).not.toContain("Remaining - 1");
+    // Control: the preheader `Remaining + 1` is still emitted by the same operator.
+    expect(texts).toContain("Remaining + 1");
   });
 
   test("reports zero rather than nothing on a project with no hang-capable site", async () => {
@@ -4224,6 +5320,7 @@ const PHASE_CAPS: BackendCapabilities = {
   coverage: "none",
   deploy: "publish",
   isolation: "session",
+  kind: "bcdev",
   authoritative: true,
 };
 
@@ -4831,6 +5928,190 @@ describe("runSession — Layer 5A deployment identity", () => {
     store.close();
   });
 
+  // R205 pin-and-warn: `runFromCli` reads the source once, before anything else does, and the
+  // session builds THAT snapshot. An edit landing after it (here inside selector-id validation,
+  // which runs between the snapshot and `runSession`) is never built, and the last-batch re-read
+  // warns naming every changed path. Real `runFromCli` and real `runSession`; the wrapper only adds
+  // an event sink and reads the store before `runFromCli` closes it.
+  async function runCliOn(dirs: { projectDir: string; testDir: string; instrumentedDir: string }) {
+    const root = join(dirs.projectDir, "..");
+    const configPath = join(root, "lethal.config.json");
+    writeFileSync(configPath, "{}");
+    const parsed: RunCliConfig = {
+      mode: "run",
+      projectDir: dirs.projectDir,
+      testDir: dirs.testDir,
+      backendKind: "al-runner",
+      dbPath: ":memory:",
+      configPath,
+      skipKnownSurvivors: false,
+      workers: 1,
+      keepEnv: false,
+      allowExpiringEnv: false,
+    };
+    const events: RunEvent[] = [];
+    let sourceSha: string | null | undefined;
+    return {
+      events,
+      sourceSha: () => sourceSha,
+      run: (edit: () => void) =>
+        runFromCli(parsed, {
+          validateSelectorIdsForProject: async () => edit(),
+          buildBackend: async () => new PhaseBackend(),
+          runSession: async (cfg) => {
+            const report = await runSession({
+              ...cfg,
+              instrumentedDir: dirs.instrumentedDir,
+              emit: [...(cfg.emit ?? []), (e) => events.push(e)],
+            });
+            sourceSha = (
+              cfg.store.db.query("SELECT source_sha256 FROM runs LIMIT 1").get() as {
+                source_sha256: string | null;
+              }
+            ).source_sha256;
+            return report;
+          },
+        }),
+    };
+  }
+  const sourceWarnings = (events: readonly RunEvent[]) =>
+    events.flatMap((e) =>
+      e.type === "warning" && e.code === "source-changed-during-run" ? [e.message] : [],
+    );
+
+  test("R205: an edit after runFromCli's snapshot is not built, and the warning names every changed path", async () => {
+    const dirs = await makeProject();
+    const p = dirs.projectDir;
+    writeFileSync(join(p, "SandboxNoOp.Codeunit.al"), NO_MUTANTS_AL);
+    const pinnedAppJson = JSON.stringify({
+      ...JSON.parse(APP_JSON),
+      preprocessorSymbols: ["PINNED"],
+    });
+    writeFileSync(join(p, "app.json"), pinnedAppJson);
+    const cli = await runCliOn(dirs);
+    const report = await cli.run(() => {
+      writeFileSync(join(p, "Added.Codeunit.al"), NO_MUTANTS_AL.replace("79002", "79004"));
+      unlinkSync(join(p, "SandboxNoOp.Codeunit.al"));
+      writeFileSync(
+        join(p, "SandboxLogic.Codeunit.al"),
+        TARGET_AL.replace("    begin\n", "    begin\n        // EDITED-AFTER-SNAPSHOT\n"),
+      );
+      writeFileSync(
+        join(p, "app.json"),
+        JSON.stringify({
+          ...JSON.parse(pinnedAppJson),
+          name: "EDITED",
+          preprocessorSymbols: ["EDITED"],
+        }),
+      );
+    });
+    const built = (await readdir(dirs.instrumentedDir, { recursive: true }))
+      .map(String)
+      .filter((f) => f.endsWith("SandboxLogic.Codeunit.al"));
+    expect(built.length).toBeGreaterThan(0);
+    for (const f of built) {
+      const dir = join(dirs.instrumentedDir, f, "..");
+      expect(readFileSync(join(dirs.instrumentedDir, f), "utf8")).not.toContain(
+        "EDITED-AFTER-SNAPSHOT",
+      );
+      expect(readFileSync(join(dir, "SandboxNoOp.Codeunit.al"), "utf8")).toBe(NO_MUTANTS_AL);
+      expect((await readdir(dir)).includes("Added.Codeunit.al")).toBe(false);
+      expect(JSON.parse(readFileSync(join(dir, "app.json"), "utf8")).name).toBe(
+        "Sandbox Orchestrator Fixture",
+      );
+    }
+    expect(report.buildSymbols).toContain("PINNED");
+    expect(report.buildSymbols).not.toContain("EDITED");
+    const warned = sourceWarnings(cli.events);
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain(
+      "(added: Added.Codeunit.al; removed: SandboxNoOp.Codeunit.al; changed: SandboxLogic.Codeunit.al, app.json;",
+    );
+    expect(cli.sourceSha()).toBeNull();
+  });
+
+  test("R205: an untouched tree through runFromCli does not warn and records the source hash", async () => {
+    const dirs = await makeProject();
+    const cli = await runCliOn(dirs);
+    await cli.run(() => {});
+    expect(sourceWarnings(cli.events)).toEqual([]);
+    expect(cli.sourceSha()).toBe(await hashTargetSource(dirs.projectDir, []));
+  });
+
+  /**
+   * R205: the `failOnCall`-th source snapshot read (1-based) fails to read `file` with EACCES,
+   * through `readTargetSource`'s read seam, ONCE; every other read is real. Deterministic on every
+   * platform and user (chmod denies nothing on Windows or to root).
+   */
+  function failSourceRead(file: string, failOnCall: number) {
+    const real = baselineSnapshotModule.readTargetSource;
+    let calls = 0;
+    return spyOn(baselineSnapshotModule, "readTargetSource").mockImplementation(async (dir) => {
+      calls += 1;
+      if (calls !== failOnCall) return real(dir);
+      return real(dir, async (p) => {
+        if (p === file) {
+          throw Object.assign(new Error(`EACCES: permission denied, open '${p}'`), {
+            code: "EACCES",
+          });
+        }
+        return readFileSync(p);
+      });
+    });
+  }
+
+  test("R205: an unreadable source file refuses the session by name before anything is built", async () => {
+    const dirs = await makeProject();
+    const file = join(dirs.projectDir, "SandboxLogic.Codeunit.al");
+    const backend = new PhaseBackend();
+    const store = new ResultsStore(":memory:");
+    const spy = failSourceRead(file, 1);
+    try {
+      const err = await runSession({ backend, store, ...dirs, selectorIds }).catch((e) => e);
+      expect(err).toBeInstanceOf(SourceSnapshotUnreadableError);
+      expect(String(err)).toContain(file);
+      expect(String(err)).toContain("EACCES");
+      expect(backend.calls).toEqual([]);
+      // The readable control: the one-shot failure is spent, so the same project now runs.
+      const again = new PhaseBackend();
+      await runSession({ backend: again, store, ...dirs, selectorIds });
+      expect(again.returned).toHaveLength(1);
+    } finally {
+      spy.mockRestore();
+      store.close();
+    }
+  });
+
+  test("R205: a last-batch re-read that fails warns and withholds the hash, never aborts", async () => {
+    const dirs = await makeProject();
+    const file = join(dirs.projectDir, "SandboxLogic.Codeunit.al");
+    const backend = new PhaseBackend();
+    const store = new ResultsStore(":memory:");
+    const events: RunEvent[] = [];
+    // Read 1 is the session's snapshot, read 2 the last batch's re-read.
+    const spy = failSourceRead(file, 2);
+    try {
+      await runSession({
+        backend,
+        store,
+        ...dirs,
+        selectorIds,
+        emit: [(e) => events.push(e)],
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(backend.returned).toHaveLength(1);
+    const warned = sourceWarnings(events);
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain("could not be read after the last batch was prepared");
+    const run = store.db.query("SELECT source_sha256 FROM runs LIMIT 1").get() as {
+      source_sha256: string | null;
+    };
+    expect(run.source_sha256).toBeNull();
+    store.close();
+  });
+
   test("an edit between generation and the last batch's preparation records NULL and warns", async () => {
     const dirs = await makeProject();
     // A second carrier file so maxGuardsPerBatch: 1 gives two batches; the edit lands while the
@@ -4990,9 +6271,12 @@ describe("runSession — Layer 5A deployment identity", () => {
   // R192's baseline key hashes AL bytes only and would reuse measurements made under old symbols.
   test("a resume under other preprocessor symbols is refused; the same symbols in another order resume", async () => {
     const dirs = await makeProject();
+    // R495: a served test app, installed, so run 1's identity is proven and resumable.
+    await Bun.write(join(dirs.testDir, "app.json"), testAppJson());
+    const backend = () => Object.assign(new PhaseBackend(), servesTestApp());
     const store = new ResultsStore(":memory:");
     await runSession({
-      backend: new PhaseBackend(),
+      backend: backend(),
       store,
       ...dirs,
       selectorIds,
@@ -5000,7 +6284,7 @@ describe("runSession — Layer 5A deployment identity", () => {
     });
     const run = store.db.query("SELECT id FROM runs LIMIT 1").get() as { id: number };
     const resumed = await runSession({
-      backend: new PhaseBackend(),
+      backend: backend(),
       store,
       ...dirs,
       selectorIds,
@@ -5010,7 +6294,7 @@ describe("runSession — Layer 5A deployment identity", () => {
     expect(resumed.validity.caveats).toContain("resumed");
     await expect(
       runSession({
-        backend: new PhaseBackend(),
+        backend: backend(),
         store,
         ...dirs,
         selectorIds,
@@ -5038,6 +6322,7 @@ describe("runSession — deploy:none (al-runner) app_version", () => {
     coverage: "none",
     deploy: "none",
     isolation: "full-reset",
+    kind: "al-runner",
     authoritative: false,
   };
 
@@ -5061,6 +6346,25 @@ describe("runSession — deploy:none (al-runner) app_version", () => {
     // C02-02 Task 3: a deploy:"none" backend never publishes an artifact, so `artifacts` is `[]`,
     // not `undefined`: the field is always written.
     expect(report.artifacts).toEqual([]);
+    store.close();
+  });
+
+  test("R205: records the snapshot's app.json version, not a version-only edit made after it", async () => {
+    const dirs = await makeProject();
+    const manifest = JSON.parse(APP_JSON) as Record<string, unknown>;
+    const appJson = join(dirs.projectDir, "app.json");
+    await Bun.write(appJson, JSON.stringify({ ...manifest, version: "1.2.3.4" }));
+    const source = await baselineSnapshotModule.readTargetSource(dirs.projectDir);
+    await Bun.write(appJson, JSON.stringify({ ...manifest, version: "5.6.7.8" }));
+    const backend = new StubBackend(AL_RUNNER_CAPS, (mutant) =>
+      mutant === null ? "pass" : "fail",
+    );
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend, store, ...dirs, source, selectorIds });
+    const row = store.db.query("SELECT app_version FROM runs LIMIT 1").get() as {
+      app_version: string;
+    };
+    expect(row.app_version).toBe("1.2.3.4");
     store.close();
   });
 
@@ -5369,6 +6673,7 @@ describe("runSession — bisection on compile failure", () => {
       coverage: "none",
       deploy: "none",
       isolation: "full-reset",
+      kind: "al-runner",
       authoritative: false,
     };
     const make = (workerIndex: number) =>
@@ -5431,6 +6736,7 @@ describe("runSession — bisection on compile failure", () => {
       coverage: "none",
       deploy: "none",
       isolation: "full-reset",
+      kind: "al-runner",
       authoritative: false,
     };
     // The exact object worker 0's deploy() throws — asserted below by reference (`.toBe`),
@@ -5528,13 +6834,22 @@ async function seedPriorSurvivor(
 ): Promise<void> {
   const runId = store.createRun({
     coverageMode: "procedure",
-    // R247: measured against the same test app, or no survivor from it is ever skipped.
-    testAppHash: (await testAppHashFor(undefined, dirs.testDir)) ?? "",
+    // R247: measured against the same test app, or no survivor from it is ever skipped. R495: and
+    // proven: the package the session's backend serves installed (`servesTestApp`).
+    testAppHash: `package:${hashPackage(testAppPackage())}`,
+    testAppProven: true,
+    // R496: and against the same dependency closure the session fingerprints under its lease.
+    testAppDeps: await servedTestAppDeps(dirs.projectDir),
     projectPath: dirs.projectDir,
     identityScheme: IDENTITY_SCHEME,
     buildSymbols: [],
     backend: "bcdev",
     appVersion: "0.0.0.1",
+    // R442: a run that hid nothing from numbering; a NULL list is untrusted and skips nothing.
+    carryHidden: { tuples: [], files: [] },
+    // R391: a run that measured its twins and found none, so the seed (a singleton) carries under
+    // rule 2. A NULL record is "not measured" and carries nothing.
+    twinTuples: [],
   });
   store.recordMutant(runId, {
     mutantCode: "SEED",
@@ -5550,6 +6865,8 @@ async function seedPriorSurvivor(
     verdict: "survived",
     durationMs: 0,
     batchIndex: 0,
+    // R474: rule 2 also matches the enclosing member's hash, from the target like the rest.
+    ...(target.memberHash !== undefined ? { memberHash: target.memberHash } : {}),
   });
   store.finishRun(runId, { batchCount: 1, baselineGreen: true });
 }
@@ -5572,6 +6889,8 @@ describe("runSession — Task 7: bisects the full manifest, not the history-filt
 
     const store = new ResultsStore(":memory:");
     await seedPriorSurvivor(store, dirs, boundary);
+    // R495: the backend serves the seeded run's test app, installed, so history may skip from it.
+    await Bun.write(join(dirs.testDir, "app.json"), testAppJson());
 
     // The whole-artifact deploy fails as long as the conditional-boundary spec is present.
     // `execute` (skipKnownSurvivors: true) excludes it, but the compiled artifact — what this
@@ -5596,7 +6915,7 @@ describe("runSession — Task 7: bisects the full manifest, not the history-filt
       },
     );
     const report = await runSession({
-      backend,
+      backend: Object.assign(backend, servesTestApp()),
       store,
       ...dirs,
       selectorIds,
@@ -5630,6 +6949,7 @@ describe("runSession — Task 7: bisects the full manifest, not the history-filt
       coverage: "none",
       deploy: "none",
       isolation: "full-reset",
+      kind: "al-runner",
       authoritative: false,
     };
     // Scoped to one specific mutant (operatorName AND procedureName) so there is exactly one
@@ -5759,6 +7079,7 @@ describe("runSession — Task 7: only a typed AlcCompileError may be bisected", 
       coverage: "none",
       deploy: "none",
       isolation: "full-reset",
+      kind: "al-runner",
       authoritative: false,
     };
     const deployErr = new ArtifactPrepareError("boom: worker 0 disk full");
@@ -5875,7 +7196,11 @@ class CompilePublishVerifyBackend implements ExecutionBackend {
   ) {}
 
   capabilities(): BackendCapabilities {
-    return { ...PHASE_CAPS, authoritative: this.authoritative };
+    return {
+      ...PHASE_CAPS,
+      kind: this.authoritative ? "bcdev" : "al-runner",
+      authoritative: this.authoritative,
+    };
   }
   async status(): Promise<BackendStatus> {
     return { ok: true, details: "counting-phase" };
@@ -6232,6 +7557,7 @@ function strandsOnBackend(strandMutantId: string): ExecutionBackend {
       coverage: "none",
       deploy: "publish",
       isolation: "session",
+      kind: "bcdev",
       authoritative: true,
     }),
     activate: async (id) => {
@@ -6419,6 +7745,7 @@ describe("runSession — Task 11 quarantine consult + latch-gated finally", () =
         coverage: "none",
         deploy: "publish",
         isolation: "session",
+        kind: "bcdev",
         authoritative: true,
       }),
       status: async () => {
@@ -6446,6 +7773,7 @@ describe("runSession — Task 11 quarantine consult + latch-gated finally", () =
         coverage: "none",
         deploy: "publish",
         isolation: "session",
+        kind: "bcdev",
         authoritative: true,
       }),
       activate: async (id) => {
@@ -6471,6 +7799,7 @@ describe("runSession — Task 11 quarantine consult + latch-gated finally", () =
         coverage: "none",
         deploy: "publish",
         isolation: "session",
+        kind: "bcdev",
         authoritative: true,
       }),
       activate: async (id) => {
@@ -6502,6 +7831,7 @@ describe("runSession — Task 13 folded fix: warn when authoritative but no tier
         coverage: "none",
         deploy: "publish",
         isolation: "session",
+        kind: "bcdev",
         authoritative: true,
       }),
     });
@@ -6586,6 +7916,7 @@ describe("runSession — Task 13 folded fix: warn when authoritative but no tier
         coverage: "none",
         deploy: "none",
         isolation: "full-reset",
+        kind: "al-runner",
         authoritative: false,
       }),
     });
@@ -6614,6 +7945,7 @@ describe("runSession — fix round 1: stream-started carries the run's own id", 
         coverage: "none",
         deploy: "none",
         isolation: "full-reset",
+        kind: "al-runner",
         authoritative: false,
       }),
     });
@@ -6673,6 +8005,7 @@ describe("runSession — Task 12 quarantine on in-flight-unknown deadline", () =
         coverage: "none", // every mutant covered by baseline's one passing test — no coverage index needed
         deploy: "publish",
         isolation: "session",
+        kind: "bcdev",
         authoritative: true, // required for the Task 11 quarantine consult/record path to engage
       }),
       activate: async (id) => {
@@ -6709,6 +8042,7 @@ describe("runSession — Task 12 quarantine on in-flight-unknown deadline", () =
         coverage: "none",
         deploy: "publish",
         isolation: "session",
+        kind: "al-runner",
         authoritative: false, // al-runner shape: no shared tier, mirrors the brief's "no shared tier" case
       }),
       activate: async (id) => {
@@ -6751,6 +8085,7 @@ describe("runSession — latch+quarantine on in-flight-unknown at baseline and k
         coverage: "none",
         deploy: "publish",
         isolation: "session",
+        kind: "bcdev",
         authoritative: true, // required for the Task 11 quarantine consult/record path to engage
       }),
       run: async (ref) => ({
@@ -6798,6 +8133,7 @@ describe("runSession — latch+quarantine on in-flight-unknown at baseline and k
         coverage: "none", // every mutant covered by baseline's one passing test — no coverage index needed
         deploy: "publish",
         isolation: "session",
+        kind: "bcdev",
         authoritative: true,
       }),
       activate: async (id) => {
@@ -6853,6 +8189,7 @@ describe("runSession: R236b, a verdict read back after a lost reply", () => {
         coverage: "none",
         deploy: "publish",
         isolation: "session",
+        kind: "bcdev",
         authoritative: true,
       }),
       run: async (ref) => ({
@@ -7073,13 +8410,19 @@ describe("runSession — Task 10 fix: a quarantined run never seeds a future ski
     expect(rawVerdicts.every((r) => r.verdict === "error")).toBe(true);
     // The original guard still holds independently: an unfinished run is invisible to
     // priorSurvivorKeys, so this does not rely on the correction alone.
+    // R496: the identity is the hash and the dependency fingerprint the run itself recorded.
+    const sourceHash = await testAppHashFor(undefined, dirs.testDir);
+    const recordedDeps = (
+      store.db.query("SELECT MAX(test_app_deps) AS d FROM runs").get() as { d: string | null }
+    ).d;
     const keys = store.priorSurvivorKeys(
       dirs.projectDir,
       backend.capabilities().coverage,
-      await testAppHashFor(undefined, dirs.testDir),
+      sourceHash === undefined ? undefined : { hash: sourceHash, deps: recordedDeps ?? "" },
+      [],
       [],
     );
-    expect(keys.size).toBe(0);
+    expect(keys.keys.size).toBe(0);
     store.close();
   });
 });
@@ -7309,6 +8652,7 @@ function leaseBackend(overrides: Partial<ExecutionBackend> = {}): ExecutionBacke
         coverage: "none",
         deploy: "publish",
         isolation: "session",
+        kind: "bcdev",
         authoritative: true,
       }),
       ...overrides,
@@ -7723,6 +9067,1903 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         expect(log).not.toContain("hook");
       });
     }
+  });
+
+  // R373/R486: an env-tool session's test digests and test-app identity come from the published
+  // test app read back AFTER the lease-held hook, never from the pre-lease read, which can hold the
+  // OUTGOING package. The fake server serves P1 for the test app until the hook runs, then what the
+  // test says; the installed versions are a map by app id.
+  describe("R373/R486: env-tool digests and test-app identity from the read-back after the hook", () => {
+    const K = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "OverBudgetDetected" };
+    const NS = 'xmlns="http://schemas.microsoft.com/navx/2015/manifest"';
+    const DEP = {
+      id: "55555555-5555-5555-5555-555555555555",
+      name: "Dep Lib",
+      publisher: "Partner",
+      version: "1.0.0.0",
+    };
+    const BODY_A = TEST_AL;
+    const BODY_B = TEST_AL.replace("begin\n", "begin\n        Error('B asserts');\n");
+    const testPkg = (o: {
+      version: string;
+      body: string;
+      dep?: boolean;
+      /** R496: false builds a package without `.al` source (its manifest still declares `dep`). */
+      source?: boolean;
+      /** R498: more entries, none of them `.al`, so the bytes differ and the source set does not. */
+      extra?: Readonly<Record<string, string>>;
+    }) =>
+      new Uint8Array(
+        buildFakeAppWithEntries({
+          "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${APP_ID}" Name="Sandbox Tests" Publisher="LethAL" Version="${o.version}" />${
+            o.dep === true
+              ? `<Dependencies><Dependency Id="${DEP.id}" Name="${DEP.name}" Publisher="${DEP.publisher}" MinVersion="1.0.0.0" /></Dependencies>`
+              : ""
+          }</Package>`,
+          "SymbolReference.json": JSON.stringify({
+            Codeunits: [
+              {
+                Id: 79100,
+                Name: "Sandbox Tests",
+                Properties: [{ Name: "Subtype", Value: "Test" }],
+                Methods: [{ Id: 1, Name: K.method, Attributes: [{ Name: "Test" }] }],
+              },
+            ],
+          }),
+          ...(o.source === false ? {} : { "src/SandboxTests.Codeunit.al": o.body }),
+          ...o.extra,
+        }),
+      );
+    const depPkg = (build: string) =>
+      new Uint8Array(
+        buildFakeAppWithEntries({
+          "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${DEP.id}" Name="${DEP.name}" Publisher="${DEP.publisher}" Version="1.0.0.0" /></Package>`,
+          "src/Dep.al": `// build ${build}`,
+        }),
+      );
+    /** The outgoing test app (the server's before the hook) and the one the hook publishes. */
+    const P1 = testPkg({ version: "1.0.0.1", body: BODY_A });
+    const P2 = testPkg({ version: "1.0.0.2", body: BODY_B });
+
+    const mode = (
+      installed: Record<string, readonly string[]>,
+      calls: string[],
+      /** R496: app ids whose installed read throws. */
+      throwsFor: readonly string[] = [],
+    ): MicrosoftMode => {
+      const base = fakeMicrosoftMode();
+      if (base.kind !== "bytes") throw new Error("fakeMicrosoftMode is not bytes mode");
+      return {
+        ...base,
+        installed: async (id: string) => {
+          calls.push(id);
+          if (throwsFor.includes(id)) throw new Error(`the extensions read for ${id} failed`);
+          return installed[id] ?? ["1.0.0.0"];
+        },
+      };
+    };
+
+    interface EnvRun {
+      /** The test app the server serves after the hook (`null`: the read fails). */
+      readonly post: Uint8Array | null;
+      /** The publishApps test-app file the hook publishes; default `post`, else P2. */
+      readonly file?: Uint8Array;
+      /** Installed versions by app id; default the test app at 1.0.0.2, others 1.0.0.0. */
+      readonly installed?: Record<string, readonly string[]>;
+      /** The dependency's package before and after the hook; publishes it too when set. */
+      readonly dep?: { readonly pre: Uint8Array; readonly post: Uint8Array };
+      readonly hookThrows?: boolean;
+      /** false: publishApps holds only the dependency, so no file cross-check applies. */
+      readonly testAppInPublishApps?: boolean;
+      readonly extra?: Partial<SessionConfig>;
+      readonly dirs?: { projectDir: string; testDir: string; instrumentedDir: string };
+      readonly store?: ResultsStore;
+      /** The test app the server serves before the hook; default P1 (`null`: the read fails). */
+      readonly pre?: Uint8Array | null;
+      /** The backend's `microsoftMode` throws, as bcdev's does with no harness verifier. */
+      readonly microsoftModeThrows?: boolean;
+      /** R492 item 3: the hook awaits this before it publishes, so a caller that did not await
+       *  the hook would read back (and record) while it is still running. */
+      readonly gate?: Promise<void>;
+      /** R495: a plain bcdev session, no env-tool hook: the server serves `pre` throughout. */
+      readonly noHook?: boolean;
+      /** R492 (sol run 001): called when the hook is entered, with a live count of the test-app
+       *  reads made while it runs, so a test can assert while the hook is still parked. */
+      readonly onHookEntered?: (readsSoFar: () => number) => void;
+      /** R492 (sol run 001): the test app served after the hook, one per read in order (the last
+       *  repeats), instead of `post` for every read. */
+      readonly postSequence?: readonly Uint8Array[];
+      /** R495: the test app served BEFORE the hook (every read on a `noHook` session), one per read
+       *  in order (the last repeats), instead of `pre`. */
+      readonly preSequence?: readonly (Uint8Array | null)[];
+      /** R495 (B1): the backend cannot form the test-app request (bcdev with no dev-endpoint
+       *  credentials): every test-app read answers `undefined`. */
+      readonly notRequested?: boolean;
+      /** R495: the backend has no `microsoftMode`, so it cannot read installed versions. */
+      readonly noMicrosoftMode?: boolean;
+      /** R496: the dependency the server serves once the lease is ACQUIRED (another lease holder
+       *  published it while this session waited), instead of `dep`'s. */
+      readonly depAfterAcquire?: Uint8Array;
+      /** R496: further packages the server serves, by app name (a transitive dependency). */
+      readonly served?: Readonly<Record<string, Uint8Array>>;
+      /** R496: app ids whose installed read throws. */
+      readonly installedThrows?: readonly string[];
+      /** R389: the backend's `dependentCount`, and the test app.json then names the package's id
+       *  (APP_ID), so the closed-world guard is asked for real. */
+      readonly dependentCount?: (appId: string) => Promise<number>;
+    }
+
+    async function envRun(o: EnvRun) {
+      const dirs = o.dirs ?? (await makeProject(BODY_B));
+      await Bun.write(
+        join(dirs.testDir, "app.json"),
+        JSON.stringify(o.dependentCount !== undefined ? { ...TESTS_APP, id: APP_ID } : TESTS_APP),
+      );
+      const testAppFile = join(dirs.testDir, "..", "Tests.app");
+      const depFile = join(dirs.testDir, "..", "Dep.app");
+      writeFileSync(testAppFile, P1);
+      if (o.dep !== undefined) writeFileSync(depFile, o.dep.pre);
+      let hooked = false;
+      let inHook = false;
+      let fetchesAfterHook = 0;
+      let readsDuringHook = 0;
+      const installedCalls: string[] = [];
+      let postReads = 0;
+      let preReads = 0;
+      let acquired = false;
+      const fetch = async (app: { readonly name: string }) => {
+        if (hooked) fetchesAfterHook++;
+        if (inHook) readsDuringHook++;
+        if (app.name === DEP.name) {
+          if (acquired && o.depAfterAcquire !== undefined) return o.depAfterAcquire;
+          if (o.dep === undefined) return null;
+          return hooked ? o.dep.post : o.dep.pre;
+        }
+        const extra = o.served?.[app.name];
+        if (extra !== undefined) return extra;
+        if (o.notRequested === true) return undefined;
+        if (!hooked && o.preSequence !== undefined) {
+          const served = o.preSequence[Math.min(preReads, o.preSequence.length - 1)];
+          preReads++;
+          return served ?? null;
+        }
+        if (hooked && o.postSequence !== undefined) {
+          const served = o.postSequence[Math.min(postReads, o.postSequence.length - 1)];
+          postReads++;
+          return served ?? null;
+        }
+        return hooked ? o.post : o.pre === undefined ? P1 : o.pre;
+      };
+      const client = new FakeLeaseClient();
+      // R496: a lease client that marks the moment the lease is granted, so the server can change
+      // a dependency between this session's pre-lease walk and its walk under the lease.
+      const acquire = client.acquire.bind(client);
+      client.acquire = async (...args: Parameters<typeof acquire>) => {
+        const got = await acquire(...args);
+        acquired = true;
+        return got;
+      };
+      const { lease } = leaseCfg(client);
+      const backend = leaseBackend({
+        fetchPublishedAppPackage: fetch,
+        ...(o.dependentCount !== undefined ? { dependentCount: o.dependentCount } : {}),
+        ...(o.noMicrosoftMode === true
+          ? {}
+          : {
+              microsoftMode: () => {
+                if (o.microsoftModeThrows === true) {
+                  throw new DependencyUnreadableError("this bcdev backend has no harness verifier");
+                }
+                return mode(
+                  o.installed ?? { [APP_ID]: ["1.0.0.2"] },
+                  installedCalls,
+                  o.installedThrows,
+                );
+              },
+            }),
+      });
+      const store = o.store ?? new ResultsStore(":memory:");
+      const events: RunEvent[] = [];
+      const outcome = await runSession({
+        backend,
+        store,
+        ...dirs,
+        selectorIds,
+        resourceServer: "http://cronus281",
+        resourceServerInstance: "BC",
+        quarantineDir: freshTmpDir(),
+        lease,
+        emit: [createEmitter([(e) => events.push(e)])],
+        ...(o.noHook === true
+          ? {}
+          : {
+              afterLeaseAcquired: async () => {
+                if (o.hookThrows === true) throw new Error("the env tool died mid-publish");
+                inHook = true;
+                o.onHookEntered?.(() => readsDuringHook);
+                if (o.gate !== undefined) await o.gate;
+                writeFileSync(testAppFile, o.file ?? o.post ?? P2);
+                if (o.dep !== undefined) writeFileSync(depFile, o.dep.post);
+                hooked = true;
+                inHook = false;
+              },
+              afterLeaseAcquiredPublishes: [
+                ...(o.dep !== undefined ? [depFile] : []),
+                ...(o.testAppInPublishApps === false ? [] : [testAppFile]),
+              ],
+            }),
+        ...o.extra,
+      }).catch((e: unknown) => e);
+      const runId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+      const warningsOf = (code: string) =>
+        events.flatMap((e) => (e.type === "warning" && e.code === code ? [e.message] : []));
+      return {
+        outcome,
+        dirs,
+        store,
+        runId,
+        digestWarning: warningsOf("test-digests-unavailable"),
+        mismatchWarning: warningsOf("published-test-app-mismatch"),
+        unreadableWarning: warningsOf("published-test-app-unreadable"),
+        historyWarning: warningsOf("history-test-app-changed"),
+        reuseWarning: warningsOf("resume-baseline-reused"),
+        depsWarning: warningsOf("test-app-dependencies-unproven"),
+        knownSurvivors: (
+          store.db
+            .query(
+              "SELECT COUNT(*) AS n FROM mutants WHERE run_id = ? AND verdict = 'known-survivor'",
+            )
+            .get(runId) as { n: number }
+        ).n,
+        fetchesAfterHook: () => fetchesAfterHook,
+        readsDuringHook: () => readsDuringHook,
+        installedCalls,
+      };
+    }
+
+    /** R-372's digests of `pkg`'s body, its dependencies read from `server`. */
+    const digestsOfPkg = async (
+      dirs: { projectDir: string },
+      pkg: Uint8Array,
+      body: string,
+      server: (app: { readonly name: string }) => Promise<Uint8Array | null>,
+    ) => {
+      const app = appInputsOfPackage(pkg);
+      return testDigestsOfSources([{ path: "x.al", text: body }], [K], {
+        dependencies: await dependencyFingerprint(
+          app,
+          publishedPackageReader(server),
+          fakeMicrosoftMode(),
+          await targetOf(dirs.projectDir),
+        ),
+        buildInputs: app.buildInputs,
+      });
+    };
+    const onlyP = (pkg: Uint8Array) => async () => pkg;
+
+    test("the recorded digests are the post-hook package's, never the pre-lease one's", async () => {
+      const r = await envRun({ post: P2 });
+      expect(r.outcome).not.toBeInstanceOf(Error);
+      expect(r.digestWarning).toEqual([]);
+      const recorded = r.store.testDigests(r.runId);
+      expect(recorded).toEqual(await digestsOfPkg(r.dirs, P2, BODY_B, onlyP(P2)));
+      expect(recorded).not.toEqual(await digestsOfPkg(r.dirs, P1, BODY_A, onlyP(P1)));
+      expect(r.store.testDigestParts(r.runId)).not.toBeNull();
+      r.store.close();
+    });
+
+    for (const [installed, recorded, inPublishApps] of [
+      [["1.0.0.1"], false, true],
+      [["1.0.0.2"], true, true],
+      [["1.0.0.1", "1.0.0.2"], false, true],
+      // No publishApps file is the test app: the read-back's own installed check is all there is.
+      [["1.0.0.1"], false, false],
+      [["1.0.0.2"], true, false],
+      [["1.0.0.1", "1.0.0.2"], false, false],
+    ] as const) {
+      test(`installed [${installed.join(", ")}] for the read-back at 1.0.0.2${inPublishApps ? "" : ", no publishApps test-app file,"} ${recorded ? "records" : "records NULL with one named warning"}`, async () => {
+        const r = await envRun({
+          post: P2,
+          installed: { [APP_ID]: installed },
+          testAppInPublishApps: inPublishApps,
+        });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        if (recorded) {
+          expect(r.store.testDigests(r.runId)).not.toBeNull();
+          expect(r.digestWarning).toEqual([]);
+        } else {
+          expect(r.store.testDigests(r.runId)).toBeNull();
+          expect(r.digestWarning).toHaveLength(1);
+          expect(r.digestWarning[0]).toContain("not proven installed");
+          expect(r.digestWarning[0]).toContain(APP_ID);
+        }
+        r.store.close();
+      });
+    }
+
+    test("a dependency the hook republishes is fingerprinted from its post-hook package", async () => {
+      const pre = depPkg("one");
+      const post = depPkg("two");
+      const P2D = testPkg({ version: "1.0.0.2", body: BODY_B, dep: true });
+      const r = await envRun({
+        post: P2D,
+        dep: { pre, post },
+        installed: { [APP_ID]: ["1.0.0.2"], [DEP.id]: ["1.0.0.0"] },
+      });
+      expect(r.digestWarning).toEqual([]);
+      const server = (dep: Uint8Array) => async (app: { readonly name: string }) =>
+        app.name === DEP.name ? dep : P2D;
+      const recorded = r.store.testDigests(r.runId);
+      expect(recorded).toEqual(await digestsOfPkg(r.dirs, P2D, BODY_B, server(post)));
+      expect(recorded).not.toEqual(await digestsOfPkg(r.dirs, P2D, BODY_B, server(pre)));
+      r.store.close();
+    });
+
+    test("an app the hook published that is not installed at its served version records NULL", async () => {
+      // The test app does not depend on it, so only the publishApps installed check reads it.
+      const r = await envRun({
+        post: P2,
+        dep: { pre: depPkg("one"), post: depPkg("two") },
+        installed: { [APP_ID]: ["1.0.0.2"], [DEP.id]: ["0.9.0.0"] },
+      });
+      expect(r.outcome).not.toBeInstanceOf(Error);
+      expect(r.store.testDigests(r.runId)).toBeNull();
+      expect(r.digestWarning).toHaveLength(1);
+      expect(r.digestWarning[0]).toContain(DEP.id);
+      expect(r.installedCalls).toContain(DEP.id);
+      r.store.close();
+    });
+
+    test("a read-back at another version than the publishApps file records NULL and names both", async () => {
+      const r = await envRun({ post: P2, file: testPkg({ version: "1.0.0.3", body: BODY_B }) });
+      expect(r.outcome).not.toBeInstanceOf(Error);
+      expect(r.store.testDigests(r.runId)).toBeNull();
+      expect(r.digestWarning).toHaveLength(1);
+      expect(r.digestWarning[0]).toContain("version 1.0.0.2");
+      expect(r.digestWarning[0]).toContain("version 1.0.0.3");
+      r.store.close();
+    });
+
+    test("a read-back whose .al sources differ from the publishApps file records NULL", async () => {
+      const r = await envRun({ post: P2, file: testPkg({ version: "1.0.0.2", body: BODY_A }) });
+      expect(r.outcome).not.toBeInstanceOf(Error);
+      expect(r.store.testDigests(r.runId)).toBeNull();
+      expect(r.digestWarning).toHaveLength(1);
+      expect(r.digestWarning[0]).toContain("other .al sources");
+      r.store.close();
+    });
+
+    test("an unreadable read-back records NULL digests, one warning, and a NULL test_app_hash", async () => {
+      const r = await envRun({ post: null, file: P2 });
+      expect(r.outcome).not.toBeInstanceOf(Error);
+      expect(r.store.testDigests(r.runId)).toBeNull();
+      expect(r.digestWarning).toHaveLength(1);
+      expect(r.digestWarning[0]).toContain("after the hook published envTool.publishApps");
+      expect(r.store.getRun(r.runId)?.testAppHash).toBeNull();
+      r.store.close();
+    });
+
+    // R492 corrects R486's expectation: a served package that is not proven installed is NOT this
+    // run's test app (here P1 is installed, so the run measures P1 while P2 is served).
+    test("test_app_hash is the post-hook package's only when proven installed, else NULL", async () => {
+      const recorded = await envRun({ post: P2 });
+      expect(recorded.store.getRun(recorded.runId)?.testAppHash).toBe(`package:${hashPackage(P2)}`);
+      recorded.store.close();
+      const unproven = await envRun({ post: P2, installed: { [APP_ID]: ["1.0.0.1"] } });
+      expect(unproven.store.testDigests(unproven.runId)).toBeNull();
+      expect(unproven.store.getRun(unproven.runId)?.testAppHash).toBeNull();
+      unproven.store.close();
+    });
+
+    // R492 item 3: the hook is AWAITED. It parks on a gate; nothing is read back while it runs.
+    // Sol, run 001: released only after an explicit hook-entered handshake, and checked WHILE the
+    // hook is parked, so a fire-and-forget hook call cannot pass by the gate opening early.
+    test("nothing is read back or recorded until the hook returns", async () => {
+      let open = (): void => {};
+      const gate = new Promise<void>((resolve) => {
+        open = resolve;
+      });
+      const store = new ResultsStore(":memory:");
+      const whileParked: { reads?: number; hash?: string | null; digests?: unknown } = {};
+      const r = await envRun({
+        post: P2,
+        gate,
+        store,
+        onHookEntered: (readsSoFar) => {
+          // Give a caller that did not await the hook every chance to run on first.
+          setTimeout(() => {
+            const runId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number })
+              .id;
+            whileParked.reads = readsSoFar();
+            whileParked.hash = store.getRun(runId)?.testAppHash ?? null;
+            whileParked.digests = store.testDigests(runId);
+            open();
+          }, 30);
+        },
+      });
+      expect(r.outcome).not.toBeInstanceOf(Error);
+      expect(whileParked).toEqual({ reads: 0, hash: null, digests: null });
+      expect(r.fetchesAfterHook()).toBeGreaterThan(0);
+      expect(r.store.testDigests(r.runId)).not.toBeNull();
+      r.store.close();
+    });
+
+    test("a hook that throws leaves the row NULL and never reads the test app back", async () => {
+      const r = await envRun({ post: P2, hookThrows: true });
+      expect((r.outcome as Error).message).toContain("died mid-publish");
+      expect(r.fetchesAfterHook()).toBe(0);
+      expect(r.installedCalls).toEqual([]);
+      expect(r.store.testDigests(r.runId)).toBeNull();
+      expect(r.digestWarning).toEqual([]);
+      r.store.close();
+    });
+
+    test("published-test-app-mismatch is judged on the read-back, not the outgoing package", async () => {
+      // P1 (1.0.0.1) disagrees with the test app.json (1.0.0.2); the read-back P2 agrees.
+      const fine = await envRun({ post: P2 });
+      expect(fine.mismatchWarning).toEqual([]);
+      fine.store.close();
+      // And the other way: a read-back at another version than app.json is named.
+      const off = testPkg({ version: "1.0.0.3", body: BODY_B });
+      const named = await envRun({ post: off, file: off });
+      expect(named.mismatchWarning).toHaveLength(1);
+      expect(named.mismatchWarning[0]).toContain("1.0.0.3");
+      named.store.close();
+    });
+
+    /** A first, finished run that measured P1 both before and after its hook. */
+    async function priorRun(extra: Partial<SessionConfig>) {
+      const first = await envRun({
+        post: P1,
+        file: P1,
+        installed: { [APP_ID]: ["1.0.0.1"] },
+        extra,
+      });
+      expect(first.outcome).not.toBeInstanceOf(Error);
+      expect(first.store.getRun(first.runId)?.testAppHash).toBe(`package:${hashPackage(P1)}`);
+      return first;
+    }
+
+    describe("R486: a --resume-run resolved before the lease is refused unless the read-back equals it", () => {
+      test("a changed read-back refuses before the first baseline", async () => {
+        const first = await priorRun({});
+        const r = await envRun({
+          post: P2,
+          dirs: first.dirs,
+          store: first.store,
+          extra: { resume: first.runId },
+        });
+        expect(r.outcome).toBeInstanceOf(TestAppRepublishedError);
+        expect((r.outcome as TestAppRepublishedError).flag).toBe(`--resume-run ${first.runId}`);
+        expect(r.store.baselineTests(r.runId)).toEqual([]);
+        r.store.close();
+      });
+      test("an unreadable read-back refuses (fail closed)", async () => {
+        const first = await priorRun({});
+        const r = await envRun({
+          post: null,
+          file: P1,
+          dirs: first.dirs,
+          store: first.store,
+          extra: { resume: first.runId },
+        });
+        expect(r.outcome).toBeInstanceOf(TestAppRepublishedError);
+        expect((r.outcome as Error).message).toContain("could not be read back");
+        r.store.close();
+      });
+      test("an unchanged read-back proceeds", async () => {
+        const first = await priorRun({});
+        const r = await envRun({
+          post: P1,
+          file: P1,
+          installed: { [APP_ID]: ["1.0.0.1"] },
+          dirs: first.dirs,
+          store: first.store,
+          extra: { resume: first.runId },
+        });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        r.store.close();
+      });
+      test("with no flag, a changed read-back is not refused", async () => {
+        const first = await priorRun({});
+        const r = await envRun({ post: P2, dirs: first.dirs, store: first.store });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        r.store.close();
+      });
+    });
+
+    // R492 item 1: the server serves P2 while P1 is still installed, so run 1 MEASURES P1. Later P2
+    // is installed. A run whose recorded identity was never proven installed must not lend its
+    // verdicts to a P2 run: not through --resume, not through --skip-known-survivors.
+    describe("R492: an unproven served hash is never a test-app identity", () => {
+      const measuredP1ServedP2 = (extra: Partial<SessionConfig>) =>
+        envRun({ post: P2, installed: { [APP_ID]: ["1.0.0.1"] }, extra });
+      const provenP2 = { pre: P2, post: P2, installed: { [APP_ID]: ["1.0.0.2"] } } as const;
+      const P3 = testPkg({ version: "1.0.0.3", body: BODY_B });
+      const refusal = (
+        r: { outcome: unknown; store: ResultsStore; runId: number },
+        flag: string,
+      ) => {
+        expect(r.outcome).toBeInstanceOf(TestAppRepublishedError);
+        expect((r.outcome as TestAppRepublishedError).flag).toBe(flag);
+        expect(r.store.baselineTests(r.runId)).toEqual([]);
+        return (r.outcome as Error).message;
+      };
+      test("--resume-run of it into a proven P2 run is refused", async () => {
+        const first = await measuredP1ServedP2({});
+        expect(first.outcome).not.toBeInstanceOf(Error);
+        expect(first.store.getRun(first.runId)?.testAppHash).toBeNull();
+        const r = await envRun({
+          ...provenP2,
+          dirs: first.dirs,
+          store: first.store,
+          extra: { resume: first.runId },
+        });
+        expect(refusal(r, `--resume-run ${first.runId}`)).toContain("not proven installed");
+        r.store.close();
+      });
+      // The proof half: the resumed run proved P2, this one is served P2 with P1 installed.
+      test("a proven P2 run resumed by a session whose P2 is not proven installed is refused", async () => {
+        const first = await envRun({ post: P2 });
+        expect(first.store.getRun(first.runId)?.testAppHash).toBe(`package:${hashPackage(P2)}`);
+        const r = await envRun({
+          pre: P2,
+          post: P2,
+          installed: { [APP_ID]: ["1.0.0.1"] },
+          dirs: first.dirs,
+          store: first.store,
+          extra: { resume: first.runId },
+        });
+        expect(refusal(r, `--resume-run ${first.runId}`)).toContain("not proven to be what runs");
+        r.store.close();
+      });
+      // The history direction: the prior run proved P2, this one is served P2 with P1 installed.
+      test("--skip-known-survivors in an unproven session takes nothing from a proven run", async () => {
+        const skip: Partial<SessionConfig> = { skipKnownSurvivors: true };
+        const first = await envRun({ post: P2, extra: skip });
+        expect(first.outcome).not.toBeInstanceOf(Error);
+        const r = await envRun({
+          pre: P2,
+          post: P2,
+          installed: { [APP_ID]: ["1.0.0.1"] },
+          dirs: first.dirs,
+          store: first.store,
+          extra: skip,
+        });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(r.knownSurvivors).toBe(0);
+        r.store.close();
+      });
+      // B1': an older row (hash recorded, no proof) lends no R192 baseline snapshot to an env-tool
+      // session. Run A records a snapshot; run B, the one resumed, is made unfinished with work left
+      // and loses its own snapshot, so the only candidate is A's. R495: the proof is the row's
+      // `test_app_proven` flag (it replaced R492's digests marker), so an older row is made by
+      // clearing it, with its digests, as a row recorded before either has neither. Revert: drop
+      // `test_app_proven = 1` from `findBaselineSnapshot`.
+      for (const aProven of [false, true]) {
+        test(`resume: a snapshot from a run ${aProven ? "with" : "without"} its proof is ${aProven ? "reused (control)" : "not reused"}`, async () => {
+          const a = await envRun({ post: P2 });
+          expect(a.outcome).not.toBeInstanceOf(Error);
+          if (!aProven) {
+            a.store.db.run(
+              "UPDATE runs SET test_app_proven = NULL, test_digests = NULL, test_digest_parts = NULL WHERE id = ?",
+              [a.runId],
+            );
+          }
+          const b = await envRun({ post: P2, dirs: a.dirs, store: a.store });
+          expect(b.outcome).not.toBeInstanceOf(Error);
+          a.store.db.run("DELETE FROM baseline_snapshots WHERE run_id = ?", [b.runId]);
+          a.store.db.run("UPDATE runs SET finished_at = NULL WHERE id = ?", [b.runId]);
+          const victim = a.store.db
+            .query("SELECT MIN(id) AS id FROM mutants WHERE run_id = ?")
+            .get(b.runId) as { id: number };
+          a.store.db.run("DELETE FROM mutants WHERE id = ?", [victim.id]);
+          const r = await envRun({
+            ...provenP2,
+            dirs: a.dirs,
+            store: a.store,
+            extra: { resume: b.runId },
+          });
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          expect(r.reuseWarning).toHaveLength(aProven ? 1 : 0);
+          r.store.close();
+        });
+      }
+      // Sol, run 001: donor A PROVED P1 and recorded a P1 snapshot; this session proves P2, then a
+      // later unpinned read serves P1 (published but not installed). A's proof is real, but it is not
+      // the test app that runs here. R495 (I1): the session now REFUSES at that batch, clearing its
+      // run's identity, before anything is reused or recorded. Revert: drop `assertNoTestAppDrift`
+      // from `scoreBatch` (then this reuses nothing only through `runsWhatWasRead`, and proceeds).
+      test("a later read that differs from this session's proven test app refuses and reuses nothing", async () => {
+        const a = await envRun({ post: P1, file: P1, installed: { [APP_ID]: ["1.0.0.1"] } });
+        expect(a.outcome).not.toBeInstanceOf(Error);
+        expect(a.store.getRun(a.runId)?.testAppHash).toBe(`package:${hashPackage(P1)}`);
+        const b = await envRun({ post: P2, dirs: a.dirs, store: a.store });
+        expect(b.outcome).not.toBeInstanceOf(Error);
+        a.store.db.run("DELETE FROM baseline_snapshots WHERE run_id = ?", [b.runId]);
+        a.store.db.run("UPDATE runs SET finished_at = NULL WHERE id = ?", [b.runId]);
+        const victim = a.store.db
+          .query("SELECT MIN(id) AS id FROM mutants WHERE run_id = ?")
+          .get(b.runId) as { id: number };
+        a.store.db.run("DELETE FROM mutants WHERE id = ?", [victim.id]);
+        const r = await envRun({
+          pre: P2,
+          post: P2,
+          // The read-back and the proof see P2; the batch's own read then sees P1.
+          postSequence: [P2, P2, P1],
+          installed: { [APP_ID]: ["1.0.0.2"] },
+          dirs: a.dirs,
+          store: a.store,
+          extra: { resume: b.runId },
+        });
+        expect(r.outcome).toBeInstanceOf(TestAppDriftedError);
+        expect((r.outcome as TestAppDriftedError).proven).toBe(`package:${hashPackage(P2)}`);
+        expect((r.outcome as TestAppDriftedError).now).toBe(`package:${hashPackage(P1)}`);
+        expect(r.store.getRun(r.runId)?.testAppHash).toBeNull();
+        expect(r.store.getRun(r.runId)?.testAppProven).toBe(false);
+        expect(r.reuseWarning).toEqual([]);
+        expect(r.store.baselineTests(r.runId)).toEqual([]);
+        r.store.close();
+      });
+      // The same older row lends no known survivors to a proven env-tool session either.
+      test("--skip-known-survivors takes nothing from an older row (hash, no proof)", async () => {
+        const skip: Partial<SessionConfig> = { skipKnownSurvivors: true };
+        const first = await envRun({ post: P2, extra: skip });
+        first.store.db.run(
+          "UPDATE runs SET test_app_proven = NULL, test_digests = NULL, test_digest_parts = NULL WHERE id = ?",
+          [first.runId],
+        );
+        const r = await envRun({ ...provenP2, dirs: first.dirs, store: first.store, extra: skip });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(r.knownSurvivors).toBe(0);
+        r.store.close();
+        // Control: with its proof, the same row's survivors are skipped.
+        const second = await envRun({ post: P2, extra: skip });
+        const again = await envRun({
+          ...provenP2,
+          dirs: second.dirs,
+          store: second.store,
+          extra: skip,
+        });
+        expect(again.knownSurvivors).toBeGreaterThan(0);
+        again.store.close();
+      });
+      // A row recorded before R492 holds a hash with no digests: its identity was never proven.
+      // R495: and no proven flag (the marker that replaced digests); a row with digests but no
+      // flag is the next test's case.
+      test("an older row (hash recorded, no proof) is refused even when the hashes are equal", async () => {
+        const first = await envRun({ post: P2 });
+        first.store.db.run(
+          "UPDATE runs SET test_app_proven = NULL, test_digests = NULL, test_digest_parts = NULL WHERE id = ?",
+          [first.runId],
+        );
+        const r = await envRun({
+          ...provenP2,
+          dirs: first.dirs,
+          store: first.store,
+          extra: { resume: first.runId },
+        });
+        expect(refusal(r, `--resume-run ${first.runId}`)).toContain("not proven installed");
+        r.store.close();
+      });
+      // Item 2: another session installed P3; this session's hook restores the P2 the resumed run
+      // proved. The pre-lease read (P3) no longer decides.
+      test("a hook that restores the resumed run's proven test app proceeds", async () => {
+        const first = await envRun({ post: P2 });
+        const r = await envRun({
+          pre: P3,
+          post: P2,
+          installed: { [APP_ID]: ["1.0.0.2"] },
+          dirs: first.dirs,
+          store: first.store,
+          extra: { resume: first.runId },
+        });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        r.store.close();
+      });
+      test("a hook that publishes a different, proven test app is refused", async () => {
+        const first = await envRun({ post: P2 });
+        const r = await envRun({
+          pre: P2,
+          post: P3,
+          installed: { [APP_ID]: ["1.0.0.3"] },
+          dirs: first.dirs,
+          store: first.store,
+          extra: { resume: first.runId },
+        });
+        expect(refusal(r, `--resume-run ${first.runId}`)).toContain("a different one");
+        r.store.close();
+      });
+      // Q1: a hook-published dependency not proven installed withholds the identity too.
+      test("a dependency not proven installed records a NULL test_app_hash", async () => {
+        const r = await envRun({
+          post: P2,
+          dep: { pre: depPkg("one"), post: depPkg("two") },
+          installed: { [APP_ID]: ["1.0.0.2"], [DEP.id]: ["0.9.0.0"] },
+        });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(r.store.getRun(r.runId)?.testAppHash).toBeNull();
+        r.store.close();
+      });
+      test("--skip-known-survivors takes nothing from it in a proven P2 run", async () => {
+        const skip: Partial<SessionConfig> = { skipKnownSurvivors: true };
+        const first = await measuredP1ServedP2(skip);
+        expect(first.outcome).not.toBeInstanceOf(Error);
+        const r = await envRun({ ...provenP2, dirs: first.dirs, store: first.store, extra: skip });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(r.knownSurvivors).toBe(0);
+        r.store.close();
+      });
+    });
+
+    // R495: the same false carry where a session has NO hook, and across hook and non-hook
+    // sessions (they share the backend name and fingerprint). Run 1 is served P2 while P1 is
+    // installed, so it MEASURES P1; the later session has P2 served and installed.
+    describe("R495: no unproven test-app identity crosses sessions, hook or not", () => {
+      const skip: Partial<SessionConfig> = { skipKnownSurvivors: true };
+      /** P2 served and installed: a session that proves P2, with or without a hook. */
+      const provenP2 = { pre: P2, post: P2, installed: { [APP_ID]: ["1.0.0.2"] } } as const;
+      const count = (s: ResultsStore, sql: string, ...args: number[]) =>
+        (s.db.query(sql).get(...args) as { n: number }).n;
+      const carriedAfter = (s: ResultsStore, runId: number) =>
+        count(s, "SELECT COUNT(*) AS n FROM mutants WHERE run_id > ? AND carried = 1", runId);
+      /** `first`'s run lends nothing to a proven `later` session: its resume is refused by name
+       *  before anything is carried, and the history filter skips nothing and says why. */
+      const resumeAndSkip = async (
+        first: (extra: Partial<SessionConfig>) => ReturnType<typeof envRun>,
+        later: { noHook?: boolean },
+      ) => {
+        const r1 = await first({});
+        expect(r1.outcome).not.toBeInstanceOf(Error);
+        const resumed = await envRun({
+          ...provenP2,
+          ...later,
+          dirs: r1.dirs,
+          store: r1.store,
+          extra: { resume: r1.runId },
+        });
+        // A hook session resolves the resume after its hook (R492); one without, before its run row.
+        expect(resumed.outcome).toBeInstanceOf(
+          later.noHook === true ? Error : TestAppRepublishedError,
+        );
+        expect((resumed.outcome as Error).message).toContain("not proven installed");
+        expect(carriedAfter(resumed.store, r1.runId)).toBe(0);
+        resumed.store.close();
+        const s1 = await first(skip);
+        const skipped = await envRun({
+          ...provenP2,
+          ...later,
+          dirs: s1.dirs,
+          store: s1.store,
+          extra: skip,
+        });
+        expect(skipped.outcome).not.toBeInstanceOf(Error);
+        expect(skipped.knownSurvivors).toBe(0);
+        expect(skipped.historyWarning).toHaveLength(1);
+        expect(skipped.historyWarning[0]).toContain("not proven installed");
+        skipped.store.close();
+      };
+      /** `first`'s run lends to a proven `later` session: its resume carries, its R192 snapshot is
+       *  reused, and the history filter skips its survivors. */
+      const lends = async (
+        first: (extra: Partial<SessionConfig>) => ReturnType<typeof envRun>,
+        later: { noHook?: boolean },
+      ) => {
+        const r1 = await first({});
+        expect(r1.outcome).not.toBeInstanceOf(Error);
+        expect(r1.store.getRun(r1.runId)?.testAppProven).toBe(true);
+        // Unfinished with work left, so the resumed batch is deployed and consults the snapshot.
+        r1.store.db.run("UPDATE runs SET finished_at = NULL WHERE id = ?", [r1.runId]);
+        const victim = r1.store.db
+          .query("SELECT MIN(id) AS id FROM mutants WHERE run_id = ?")
+          .get(r1.runId) as { id: number };
+        r1.store.db.run("DELETE FROM mutants WHERE id = ?", [victim.id]);
+        const resumed = await envRun({
+          ...provenP2,
+          ...later,
+          dirs: r1.dirs,
+          store: r1.store,
+          extra: { resume: r1.runId },
+        });
+        expect(resumed.outcome).not.toBeInstanceOf(Error);
+        expect(carriedAfter(resumed.store, r1.runId)).toBeGreaterThan(0);
+        expect(resumed.reuseWarning).toHaveLength(1);
+        resumed.store.close();
+        const s1 = await first(skip);
+        const skipped = await envRun({
+          ...provenP2,
+          ...later,
+          dirs: s1.dirs,
+          store: s1.store,
+          extra: skip,
+        });
+        expect(skipped.outcome).not.toBeInstanceOf(Error);
+        expect(skipped.knownSurvivors).toBeGreaterThan(0);
+        expect(skipped.historyWarning).toEqual([]);
+        skipped.store.close();
+      };
+      const noHookProvenP2 = (extra: Partial<SessionConfig>) =>
+        envRun({ noHook: true, ...provenP2, extra });
+      const hookProvenP2 = (extra: Partial<SessionConfig>) => envRun({ ...provenP2, extra });
+      for (const [from, to] of [
+        ["no hook", "no hook"],
+        ["a hook", "no hook"],
+        ["no hook", "a hook"],
+        ["a hook", "a hook"],
+      ] as const) {
+        test(`control: a proven run with ${from} lends to a proven session with ${to}`, async () => {
+          await lends(from === "no hook" ? noHookProvenP2 : hookProvenP2, {
+            noHook: to === "no hook",
+          });
+        });
+      }
+      // A run recorded before R495 under R492's proof (hash and digests) has no flag: the one-time
+      // cost. It lends nothing to either kind, though its hash is the very one proven now.
+      const oldProvenRow = async (extra: Partial<SessionConfig>) => {
+        const r = await hookProvenP2(extra);
+        expect(r.store.testDigests(r.runId)).not.toBeNull();
+        r.store.db.run("UPDATE runs SET test_app_proven = NULL WHERE id = ?", [r.runId]);
+        return r;
+      };
+      for (const to of ["no hook", "a hook"] as const) {
+        test(`a row from before R495 (hash and digests, no flag) lends nothing to a session with ${to}`, async () => {
+          await resumeAndSkip(oldProvenRow, { noHook: to === "no hook" });
+        });
+      }
+      // B1: a bcdev session that cannot form the request identifies its test app by the SOURCE
+      // tree, but BC runs the published app: not proven. Revert: prove by the `source:` prefix.
+      test("B1: a bcdev session whose read is not-requested records no identity and lends nothing", async () => {
+        const first = (extra: Partial<SessionConfig>) =>
+          envRun({ noHook: true, ...provenP2, notRequested: true, extra });
+        const r = await first({});
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(r.store.getRun(r.runId)?.testAppHash).toBeNull();
+        expect(r.store.getRun(r.runId)?.testAppProven).toBe(false);
+        r.store.close();
+        await resumeAndSkip(first, { noHook: true });
+      });
+      // B2: the proof reads the PACKAGE's version, never the local app.json's. The local app.json
+      // says 1.0.0.2, which is installed; the served package is 1.0.0.1, which is not. Revert:
+      // prove with the local app.json's version.
+      test("B2: a served package not installed at its own version is unproven, whatever app.json says", async () => {
+        const r = await envRun({
+          noHook: true,
+          pre: P1,
+          post: P1,
+          installed: { [APP_ID]: ["1.0.0.2"] },
+        });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(TESTS_APP.version).toBe("1.0.0.2");
+        expect(r.store.getRun(r.runId)?.testAppHash).toBeNull();
+        expect(r.installedCalls).toContain(APP_ID);
+        r.store.close();
+        // Control: the same package installed at its own version is proven.
+        const c = await envRun({
+          noHook: true,
+          pre: P1,
+          post: P1,
+          installed: { [APP_ID]: ["1.0.0.1"] },
+        });
+        expect(c.store.getRun(c.runId)?.testAppHash).toBe(`package:${hashPackage(P1)}`);
+        expect(c.store.getRun(c.runId)?.testAppProven).toBe(true);
+        c.store.close();
+      });
+      test("a backend that cannot read installed versions records no identity", async () => {
+        const r = await envRun({ noHook: true, ...provenP2, noMicrosoftMode: true });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(r.store.getRun(r.runId)?.testAppHash).toBeNull();
+        expect(r.store.getRun(r.runId)?.testAppProven).toBe(false);
+        r.store.close();
+      });
+      // I1: a session that proved P2 reads P1 at batch 1. Two files, one batch each.
+      const twoBatches = async () => {
+        const dirs = await makeProject(BODY_B);
+        await Bun.write(
+          join(dirs.projectDir, "SandboxExtra.Codeunit.al"),
+          'codeunit 79002 "Sandbox Extra"\n{\n    procedure UnderLimit(Amount: Decimal; Limit: Decimal): Boolean\n    begin\n        exit(Amount < Limit);\n    end;\n}\n',
+        );
+        return dirs;
+      };
+      const drifted = (
+        r: { outcome: unknown; store: ResultsStore; runId: number },
+        /** What the drifted read returned; `null` stands for a failed read (`undefined`). */
+        nowOrFailed: string | null = `package:${hashPackage(P1)}`,
+      ) => {
+        const now = nowOrFailed ?? undefined;
+        expect(r.outcome).toBeInstanceOf(TestAppDriftedError);
+        const e = r.outcome as TestAppDriftedError;
+        expect([e.proven, e.now, e.batchIndex]).toEqual([`package:${hashPackage(P2)}`, now, 1]);
+        expect(r.store.getRun(r.runId)?.testAppHash).toBeNull();
+        expect(r.store.getRun(r.runId)?.testAppProven).toBe(false);
+        // Batch 1 recorded nothing; batch 0 did.
+        const rows = (min: number) =>
+          count(
+            r.store,
+            "SELECT COUNT(*) AS n FROM mutants WHERE run_id = ? AND batch_index >= ?",
+            r.runId,
+            min,
+          );
+        expect(rows(1)).toBe(0);
+        expect(rows(0)).toBeGreaterThan(0);
+      };
+      // A proven session reads its test app at the top of each batch and again in `scoreBatch`
+      // before the baseline. Reads: 1 the session's, 2 and 3 batch 0's, 4 and 5 batch 1's.
+      // The top-of-batch read. Revert: drop `assertNoTestAppDrift` at the top of the batch loop.
+      test("I1: a session whose batch read differs from its proven test app refuses there", async () => {
+        const r = await envRun({
+          noHook: true,
+          ...provenP2,
+          preSequence: [P2, P2, P2, P1],
+          dirs: await twoBatches(),
+          extra: { maxGuardsPerBatch: 1 },
+        });
+        drifted(r);
+        r.store.close();
+      });
+      // The read in `scoreBatch`: the top of batch 1 still saw P2. Revert: drop it there.
+      test("I1: a change between the top of a batch and its baseline refuses too", async () => {
+        const r = await envRun({
+          noHook: true,
+          ...provenP2,
+          preSequence: [P2, P2, P2, P2, P1],
+          dirs: await twoBatches(),
+          extra: { maxGuardsPerBatch: 1 },
+        });
+        drifted(r);
+        r.store.close();
+      });
+      // Sol, final review: a failed read cannot show the proven app still runs. Revert: let
+      // `assertNoTestAppDrift` pass an `undefined` read.
+      test("I1: an unreadable test app at a batch refuses as well, and withdraws the proof", async () => {
+        const r = await envRun({
+          noHook: true,
+          ...provenP2,
+          preSequence: [P2, P2, P2, null],
+          dirs: await twoBatches(),
+          extra: { maxGuardsPerBatch: 1 },
+        });
+        drifted(r, null);
+        r.store.close();
+      });
+      // Sol, final review: `--skip-known-survivors` records a batch's known survivors before its
+      // baseline, so the check must come first. Control: without the change, batch 1 skips some.
+      test("I1: a drifted batch records no known survivor", async () => {
+        const dirs = await twoBatches();
+        const first = await envRun({
+          noHook: true,
+          ...provenP2,
+          dirs,
+          extra: { ...skip, maxGuardsPerBatch: 1 },
+        });
+        expect(first.outcome).not.toBeInstanceOf(Error);
+        const control = await envRun({
+          noHook: true,
+          ...provenP2,
+          dirs,
+          store: first.store,
+          extra: { ...skip, maxGuardsPerBatch: 1 },
+        });
+        expect(
+          count(
+            control.store,
+            "SELECT COUNT(*) AS n FROM mutants WHERE run_id = ? AND batch_index = 1 AND verdict = 'known-survivor'",
+            control.runId,
+          ),
+        ).toBeGreaterThan(0);
+        const r = await envRun({
+          noHook: true,
+          ...provenP2,
+          preSequence: [P2, P2, P2, P1],
+          dirs,
+          store: first.store,
+          extra: { ...skip, maxGuardsPerBatch: 1 },
+        });
+        drifted(r);
+        r.store.close();
+      });
+      // The read before a batch carried whole (R192), which never reaches `scoreBatch`: the
+      // top-of-batch read. Reads: 1 the session's, 2 batch 0's (carried), 3 batch 1's.
+      test("I1: a resumed session refuses at a carried batch whose read differs, carrying nothing from it", async () => {
+        const dirs = await twoBatches();
+        const r1 = await envRun({
+          noHook: true,
+          ...provenP2,
+          dirs,
+          extra: { maxGuardsPerBatch: 1 },
+        });
+        expect(r1.outcome).not.toBeInstanceOf(Error);
+        r1.store.db.run("UPDATE runs SET finished_at = NULL WHERE id = ?", [r1.runId]);
+        const r = await envRun({
+          noHook: true,
+          ...provenP2,
+          preSequence: [P2, P2, P1],
+          dirs,
+          store: r1.store,
+          extra: { maxGuardsPerBatch: 1, resume: r1.runId },
+        });
+        drifted(r);
+        expect(carriedAfter(r.store, r1.runId)).toBeGreaterThan(0);
+        r.store.close();
+      });
+      // A plain bcdev run served P2 with P1 installed.
+      const noHookMeasuringP1 = (extra: Partial<SessionConfig>) =>
+        envRun({ noHook: true, pre: P2, post: P2, installed: { [APP_ID]: ["1.0.0.1"] }, extra });
+      // A hook run recorded before R492: served P2, P1 installed, the served hash written.
+      const oldHookRowMeasuringP1 = async (extra: Partial<SessionConfig>) => {
+        const r = await envRun({ post: P2, installed: { [APP_ID]: ["1.0.0.1"] }, extra });
+        r.store.db.run("UPDATE runs SET test_app_hash = ? WHERE id = ?", [
+          `package:${hashPackage(P2)}`,
+          r.runId,
+        ]);
+        return r;
+      };
+      test("a session without a hook: an unproven served hash lends nothing", async () => {
+        await resumeAndSkip(noHookMeasuringP1, { noHook: true });
+      });
+      test("a non-hook session lends nothing from an old hook row", async () => {
+        await resumeAndSkip(oldHookRowMeasuringP1, { noHook: true });
+      });
+      test("a hook session lends nothing from a non-hook row (its digests prove nothing)", async () => {
+        await resumeAndSkip(noHookMeasuringP1, {});
+      });
+    });
+
+    // R496: the proven test-app identity is the hash AND the dependency fingerprint (R-371), taken
+    // under the lease with every extension in the closure proven installed. "Changed" is the same
+    // test-app bytes against a rebuilt dependency (same id and version, other bytes). Kinds: N is a
+    // non-hook bcdev session, H a hook session whose publishApps holds the dependency only.
+    describe("R496: the dependency fingerprint is part of the proven test-app identity", () => {
+      const skip: Partial<SessionConfig> = { skipKnownSurvivors: true };
+      const P2D = testPkg({ version: "1.0.0.2", body: BODY_B, dep: true });
+      /** The same test app without `.al` source: no digests, so no pre-lease `D` part. */
+      const P2DS = testPkg({ version: "1.0.0.2", body: BODY_B, dep: true, source: false });
+      const INSTALLED = { [APP_ID]: ["1.0.0.2"], [DEP.id]: ["1.0.0.0"] };
+      const count = (s: ResultsStore, sql: string, ...args: number[]) =>
+        (s.db.query(sql).get(...args) as { n: number }).n;
+      const carriedAfter = (s: ResultsStore, runId: number) =>
+        count(s, "SELECT COUNT(*) AS n FROM mutants WHERE run_id > ? AND carried = 1", runId);
+      interface Base {
+        readonly dirs: { projectDir: string; testDir: string; instrumentedDir: string };
+        readonly store: ResultsStore;
+      }
+      type Session = (extra: Partial<SessionConfig>, base?: Base) => ReturnType<typeof envRun>;
+      /** A proven session of `kind` against dependency build `build`, served and installed. */
+      const session =
+        (kind: "N" | "H", build: string, more: Partial<EnvRun> = {}): Session =>
+        (extra, base) =>
+          envRun({
+            pre: P2D,
+            post: P2D,
+            installed: INSTALLED,
+            dep: { pre: depPkg(build), post: depPkg(build) },
+            ...(kind === "H" ? { testAppInPublishApps: false } : { noHook: true }),
+            ...(base !== undefined ? { dirs: base.dirs, store: base.store } : {}),
+            ...more,
+            extra,
+          });
+      /** Unfinished with work left, so a resume deploys the batch and consults the snapshot. */
+      const makeResumable = (r: { store: ResultsStore; runId: number }) => {
+        r.store.db.run("UPDATE runs SET finished_at = NULL WHERE id = ?", [r.runId]);
+        const victim = r.store.db
+          .query("SELECT MIN(id) AS id FROM mutants WHERE run_id = ?")
+          .get(r.runId) as { id: number };
+        r.store.db.run("DELETE FROM mutants WHERE id = ?", [victim.id]);
+      };
+      /**
+       * What `donor`'s runs lend `later`, per consumer. Resume: a donor run made unfinished with
+       * work left. History: a finished donor run, then `--skip-known-survivors`. The R192 snapshot:
+       * A (donor) records a snapshot; B (later) is made unfinished and loses its own; C (later)
+       * resumes B, so A's snapshot is the only candidate.
+       */
+      const consumers = async (donor: Session, later: Session) => {
+        const r1 = await donor({});
+        expect(r1.outcome).not.toBeInstanceOf(Error);
+        makeResumable(r1);
+        const resumed = await later({ resume: r1.runId }, r1);
+        const resume = {
+          outcome: resumed.outcome,
+          carried: carriedAfter(resumed.store, r1.runId),
+          reused: resumed.reuseWarning.length,
+        };
+        resumed.store.close();
+        const s1 = await donor(skip);
+        const s2 = await later(skip, s1);
+        expect(s2.outcome).not.toBeInstanceOf(Error);
+        const history = { skipped: s2.knownSurvivors, warning: s2.historyWarning };
+        s2.store.close();
+        const a = await donor({});
+        const b = await later({}, a);
+        expect(b.outcome).not.toBeInstanceOf(Error);
+        a.store.db.run("DELETE FROM baseline_snapshots WHERE run_id = ?", [b.runId]);
+        makeResumable(b);
+        const c = await later({ resume: b.runId }, a);
+        const snapshot = { outcome: c.outcome, reused: c.reuseWarning.length };
+        c.store.close();
+        return { resume, history, snapshot };
+      };
+      type Lent = Awaited<ReturnType<typeof consumers>>;
+      const lendsAll = (got: Lent) => {
+        expect(got.resume.outcome).not.toBeInstanceOf(Error);
+        expect(got.resume.carried).toBeGreaterThan(0);
+        expect(got.resume.reused).toBe(1);
+        expect(got.history.skipped).toBeGreaterThan(0);
+        expect(got.history.warning).toEqual([]);
+        expect(got.snapshot.outcome).not.toBeInstanceOf(Error);
+        expect(got.snapshot.reused).toBe(1);
+      };
+      const lendsNothing = (got: Lent) => {
+        expect(got.resume.outcome).toBeInstanceOf(Error);
+        expect(got.resume.carried).toBe(0);
+        expect(got.history.skipped).toBe(0);
+        expect(got.history.warning).toHaveLength(1);
+        expect(got.snapshot.reused).toBe(0);
+      };
+      const unproven = (r: { store: ResultsStore; runId: number }) => {
+        expect(r.store.getRun(r.runId)).toMatchObject({
+          testAppHash: null,
+          testAppProven: false,
+          testAppDeps: null,
+        });
+      };
+      const PAIRS = [
+        ["N", "N"],
+        ["N", "H"],
+        ["H", "N"],
+        ["H", "H"],
+      ] as const;
+
+      for (const [from, to] of PAIRS) {
+        // T1 (F1), T2 (F2), T3 (F3): A (dep one) records batch 0; C (dep two) resumes B (dep two).
+        test(`T1-T3 ${from}->${to}: a changed dependency lends nothing to resume, history or the snapshot`, async () => {
+          const got = await consumers(session(from, "one"), session(to, "two"));
+          expect(got.resume.outcome).toBeInstanceOf(TestAppRepublishedError);
+          expect((got.resume.outcome as Error).message).toMatch(
+            /the test app's dependencies changed \([0-9a-f]{64}, now [0-9a-f]{64}\)/,
+          );
+          expect(got.resume.carried).toBe(0);
+          expect(got.history.skipped).toBe(0);
+          expect(got.history.warning).toHaveLength(1);
+          expect(got.history.warning[0]).toMatch(
+            /with dependencies [0-9a-f]{64}, and this session's test app is .* with dependencies [0-9a-f]{64}/,
+          );
+          expect(got.snapshot.outcome).not.toBeInstanceOf(Error);
+          expect(got.snapshot.reused).toBe(0);
+        });
+        // C1, C2: R495's cross-kind controls, now with a declared dependency.
+        test(`C1 ${from}->${to}: an unchanged dependency lends to every consumer`, async () => {
+          lendsAll(await consumers(session(from, "one"), session(to, "one")));
+        });
+      }
+
+      // T4 (F4): a run recorded by an R495-only build is proven with NULL deps. It lends nothing.
+      for (const to of ["N", "H"] as const) {
+        test(`T4: a proven donor with NULL deps (an R495-era row) lends nothing to ${to}`, async () => {
+          const r495Era: Session = async (extra, base) => {
+            const r = await session("N", "one")(extra, base);
+            expect(r.store.getRun(r.runId)?.testAppProven).toBe(true);
+            r.store.db.run("UPDATE runs SET test_app_deps = NULL WHERE id = ?", [r.runId]);
+            return r;
+          };
+          const got = await consumers(r495Era, session(to, "one"));
+          lendsNothing(got);
+          expect((got.resume.outcome as Error).message).toContain(
+            "it recorded no dependency fingerprint",
+          );
+        });
+      }
+
+      // T5 (F5): a partner dependency served at 1.0.0.0 while 0.9.0.0 is installed.
+      test("T5: a staged direct partner dependency leaves the run unproven, and it lends nothing", async () => {
+        const staged = session("N", "one", {
+          installed: { [APP_ID]: ["1.0.0.2"], [DEP.id]: ["0.9.0.0"] },
+        });
+        const r = await staged({});
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        unproven(r);
+        expect(r.installedCalls).toContain(DEP.id);
+        expect([...r.digestWarning, ...r.depsWarning].join("\n")).toContain(DEP.id);
+        r.store.close();
+        lendsNothing(await consumers(staged, session("N", "one")));
+      });
+
+      // T6 (F5): test app -> A -> B, B served at 1.0.0.0 while 0.9.0.0 is installed.
+      test("T6: a staged TRANSITIVE partner dependency leaves the run unproven, named", async () => {
+        const B = {
+          id: "66666666-6666-6666-6666-666666666666",
+          name: "Dep Base",
+          publisher: "Partner",
+        };
+        const bPkg = new Uint8Array(
+          buildFakeAppWithEntries({
+            "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${B.id}" Name="${B.name}" Publisher="${B.publisher}" Version="1.0.0.0" /></Package>`,
+            "src/Base.al": "// base",
+          }),
+        );
+        const aPkg = new Uint8Array(
+          buildFakeAppWithEntries({
+            "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${DEP.id}" Name="${DEP.name}" Publisher="${DEP.publisher}" Version="1.0.0.0" /><Dependencies><Dependency Id="${B.id}" Name="${B.name}" Publisher="${B.publisher}" MinVersion="1.0.0.0" /></Dependencies></Package>`,
+            "src/Dep.al": "// A",
+          }),
+        );
+        const withB = (installedB: string): Session =>
+          session("N", "one", {
+            dep: { pre: aPkg, post: aPkg },
+            served: { [B.name]: bPkg },
+            installed: { [APP_ID]: ["1.0.0.2"], [DEP.id]: ["1.0.0.0"], [B.id]: [installedB] },
+          });
+        const r = await withB("0.9.0.0")({});
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        unproven(r);
+        expect(r.installedCalls).toContain(B.id);
+        // The pre-lease digests fail on B, and so does the identity's walk under the lease.
+        expect(r.digestWarning).toHaveLength(1);
+        expect(r.digestWarning[0]).toContain(B.id);
+        expect(r.depsWarning).toHaveLength(1);
+        expect(r.depsWarning[0]).toContain(B.id);
+        r.store.close();
+        lendsNothing(await consumers(withB("0.9.0.0"), withB("1.0.0.0")));
+        // Control: B installed at the served version, the same closure is proven.
+        const ok = await withB("1.0.0.0")({});
+        expect(ok.store.getRun(ok.runId)?.testAppProven).toBe(true);
+        ok.store.close();
+      });
+
+      // T6b (F5): the partner's per-id read fails, or answers two rows.
+      for (const [label, more] of [
+        ["throws", { installedThrows: [DEP.id] }],
+        [
+          "returns two rows",
+          { installed: { [APP_ID]: ["1.0.0.2"], [DEP.id]: ["1.0.0.0", "1.0.0.0"] } },
+        ],
+      ] as const) {
+        test(`T6b: a partner per-id installed read that ${label} leaves the run unproven, named`, async () => {
+          const bad = session("N", "one", more);
+          const r = await bad({});
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          unproven(r);
+          expect([...r.digestWarning, ...r.depsWarning].join("\n")).toContain(DEP.id);
+          r.store.close();
+          lendsNothing(await consumers(bad, session("N", "one")));
+        });
+      }
+
+      // T7 (over-strict on F6): source-less, so no digests and no `D` part. The server serves
+      // dependency "one" before the lease and "two" once it is granted.
+      const race = (more: Partial<EnvRun> = {}) =>
+        session("N", "one", { depAfterAcquire: depPkg("two"), ...more });
+      test("T7: a source-less race takes its identity under the lease, so a donor proven with that value lends", async () => {
+        const sourceLess = { pre: P2DS, post: P2DS };
+        const r = await race(sourceLess)({});
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        const donor = await session("N", "two", sourceLess)({});
+        expect(r.store.getRun(r.runId)?.testAppProven).toBe(true);
+        expect(r.store.getRun(r.runId)?.testAppDeps).toBe(
+          donor.store.getRun(donor.runId)?.testAppDeps ?? "missing",
+        );
+        r.store.close();
+        donor.store.close();
+        lendsAll(await consumers(session("N", "two", sourceLess), race(sourceLess)));
+      });
+      // T7b (F6): the same race, the donor proven with "one" (the pre-lease value).
+      test("T7b: a source-less race borrows nothing from a donor proven with the pre-lease value", async () => {
+        const sourceLess = { pre: P2DS, post: P2DS };
+        lendsNothing(await consumers(session("N", "one", sourceLess), race(sourceLess)));
+      });
+      // T7c (F9): the race WITH digests (pre-lease `D` = "one"); the donor matches the under-lease
+      // value "two", but the run's digests no longer describe what runs: it borrows nothing.
+      test("T7c: a race with digests withdraws the proof and the digests, and borrows nothing", async () => {
+        const r = await race()({});
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        unproven(r);
+        expect(r.store.testDigests(r.runId)).toBeNull();
+        expect(r.store.testDigestParts(r.runId)).toBeNull();
+        expect(r.digestWarning).toHaveLength(1);
+        expect(r.digestWarning[0]).toContain(
+          "a dependency changed while this session waited for the lease",
+        );
+        r.store.close();
+        const got = await consumers(session("N", "two"), race());
+        expect(got.resume.outcome).toBeInstanceOf(TestAppRepublishedError);
+        expect((got.resume.outcome as Error).message).toContain(
+          "this session's test app is not proven",
+        );
+        expect(got.resume.carried).toBe(0);
+        expect(got.history.skipped).toBe(0);
+        expect(got.snapshot.reused).toBe(0);
+      });
+      // T7c-R389 (merge review I1): the same race on a server that answers 0 dependents, before
+      // and after execution. The closed-world digests were taken over the PRE-lease dependency, so
+      // the confirmation step must not write them back once F9 withdrew the digests.
+      test("T7c-R389: a closed-world run whose digests F9 withdrew gets none back at confirmation", async () => {
+        const asked: string[] = [];
+        const r = await race({
+          dependentCount: async (id) => {
+            asked.push(id);
+            return 0;
+          },
+        })({});
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(asked).toEqual([APP_ID, APP_ID]); // the guard was asked, before and after
+        unproven(r);
+        expect(r.store.testDigests(r.runId)).toBeNull();
+        expect(r.store.testDigestParts(r.runId)).toBeNull();
+        expect(r.digestWarning).toHaveLength(1);
+        expect(r.digestWarning[0]).toContain(
+          "a dependency changed while this session waited for the lease",
+        );
+        r.store.close();
+      });
+      // T7f (F9, full precision, R-496 review): the pre-lease and under-lease fingerprints agree on
+      // their first 16 hex digits (all the stored parts keep) and differ after. Still a mismatch.
+      test("T7f: fingerprints equal in their first 16 hex digits but not after still invalidate", async () => {
+        const real = digestInputsModule.dependencyFingerprint;
+        const seen: string[] = [];
+        const spy = spyOn(digestInputsModule, "dependencyFingerprint").mockImplementation(
+          async (...args) => {
+            await real(...args);
+            seen.push(`${"a".repeat(16)}${(seen.length === 0 ? "b" : "c").repeat(48)}`);
+            return seen[seen.length - 1] ?? "";
+          },
+        );
+        try {
+          const r = await session("N", "one")({});
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          // The pre-lease digests' walk, then the identity's under the lease.
+          expect(seen).toHaveLength(2);
+          unproven(r);
+          expect(r.store.testDigests(r.runId)).toBeNull();
+          expect(r.digestWarning).toHaveLength(1);
+          expect(r.digestWarning[0]).toContain(
+            "a dependency changed while this session waited for the lease",
+          );
+          r.store.close();
+        } finally {
+          spy.mockRestore();
+        }
+      });
+      // T7d (over-strict: throw on a fresh run): the same race without a resume flag runs.
+      test("T7d: a fresh run that loses the race runs unproven and records nothing usable", async () => {
+        const r = await race()({});
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        // It ran: its verdicts are recorded, under no identity.
+        expect(
+          count(r.store, "SELECT COUNT(*) AS n FROM mutants WHERE run_id = ?", r.runId),
+        ).toBeGreaterThan(0);
+        unproven(r);
+        expect(r.store.testDigests(r.runId)).toBeNull();
+        r.store.close();
+      });
+      // T7e (order, F9 before the deps write): no proven write for the run, and no identity at
+      // batch 0's history filter.
+      test("T7e: on an F9 mismatch the proof is never written and history sees no identity", async () => {
+        const store = new ResultsStore(":memory:");
+        const setHash = spyOn(store, "setRunTestAppHash");
+        const history = spyOn(store, "priorSurvivorKeys");
+        const r = await race()(skip, { dirs: await makeProject(BODY_B), store });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(setHash.mock.calls.filter((c) => c[0] === r.runId && c[2] === true)).toEqual([]);
+        expect(history.mock.calls.length).toBeGreaterThan(0);
+        expect(history.mock.calls[0]?.[2]).toBeUndefined();
+        store.close();
+      });
+
+      // T8: a hook session's fingerprint is taken after the hook it awaited.
+      test("T8: a hook that republishes the dependency records the post-hook fingerprint", async () => {
+        const r = await envRun({
+          pre: P2D,
+          post: P2D,
+          installed: INSTALLED,
+          dep: { pre: depPkg("one"), post: depPkg("two") },
+          testAppInPublishApps: false,
+        });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        const walk = async (dep: Uint8Array) =>
+          dependencyFingerprint(
+            appInputsOfPackage(P2D),
+            publishedPackageReader(async (app: { readonly name: string }) =>
+              app.name === DEP.name ? dep : P2D,
+            ),
+            fakeMicrosoftMode(),
+            await targetOf(r.dirs.projectDir),
+          );
+        const row = r.store.getRun(r.runId);
+        expect(row?.testAppProven).toBe(true);
+        expect(row?.testAppDeps).toBe(await walk(depPkg("two")));
+        expect(row?.testAppDeps).not.toBe(await walk(depPkg("one")));
+        r.store.close();
+      });
+
+      // T9 (F7): the dependency is not served at all.
+      test("T9: a fingerprint that cannot be taken leaves the run unproven, and it lends nothing", async () => {
+        const noDep: Session = (extra, base) =>
+          envRun({
+            noHook: true,
+            pre: P2D,
+            post: P2D,
+            installed: INSTALLED,
+            ...(base !== undefined ? { dirs: base.dirs, store: base.store } : {}),
+            extra,
+          });
+        const r = await noDep({});
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        unproven(r);
+        r.store.close();
+        lendsNothing(await consumers(noDep, session("N", "one")));
+      });
+
+      // T10 (F8): a test app without `.al` source fingerprints from its manifest.
+      test("T10: a source-less test app with an unchanged dependency is proven and lends", async () => {
+        const sourceLess = { pre: P2DS, post: P2DS };
+        const r = await session("N", "one", sourceLess)({});
+        expect(r.store.getRun(r.runId)?.testAppProven).toBe(true);
+        expect(r.store.getRun(r.runId)?.testAppDeps).toMatch(/^[0-9a-f]{64}$/);
+        expect(r.store.testDigests(r.runId)).toBeNull();
+        r.store.close();
+        lendsAll(await consumers(session("N", "one", sourceLess), session("N", "one", sourceLess)));
+      });
+      // T10b (F1 only): the same, changed: refused for the DEPENDENCY, both rows proven.
+      test("T10b: a source-less test app with a changed dependency is refused for its dependencies", async () => {
+        const sourceLess = { pre: P2DS, post: P2DS };
+        const r1 = await session("N", "one", sourceLess)({});
+        makeResumable(r1);
+        const r2 = await session("N", "two", sourceLess)({ resume: r1.runId }, r1);
+        expect(r2.outcome).toBeInstanceOf(TestAppRepublishedError);
+        expect((r2.outcome as Error).message).toMatch(
+          /the test app's dependencies changed \([0-9a-f]{64}, now [0-9a-f]{64}\)/,
+        );
+        expect(carriedAfter(r2.store, r1.runId)).toBe(0);
+        for (const id of [r1.runId, r2.runId]) {
+          expect(r2.store.getRun(id)?.testAppProven).toBe(true);
+          expect(r2.store.getRun(id)?.testAppDeps).toMatch(/^[0-9a-f]{64}$/);
+        }
+        r2.store.close();
+      });
+
+      // R498: a HOOK session whose test app carries no `.al` is proven when the served package's
+      // bytes equal the publishApps file's (measured: the dev endpoint serves back the bytes it was
+      // given, with or without `.al`).
+      describe("R498: a source-less read-back after the hook is proven by byte equality", () => {
+        /** The same identity and version as P2DS, other bytes (one more non-`.al` entry). */
+        const P2DSX = testPkg({
+          version: "1.0.0.2",
+          body: BODY_B,
+          dep: true,
+          source: false,
+          extra: { "Translations/x.xlf": "<xliff/>" },
+        });
+        /** A hook session that serves P2DS and publishes it as the publishApps test-app file. */
+        const hookSL = (more: Partial<EnvRun> = {}) =>
+          session("H", "one", { pre: P2DS, post: P2DS, testAppInPublishApps: true, ...more });
+
+        test("H1: served bytes equal the publishApps file: proven, deps recorded, and it lends", async () => {
+          const r = await hookSL()({});
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          const row = r.store.getRun(r.runId);
+          expect(row?.testAppProven).toBe(true);
+          expect(row?.testAppHash).toBe(`package:${hashPackage(P2DS)}`);
+          expect(row?.testAppDeps).toMatch(/^[0-9a-f]{64}$/);
+          r.store.close();
+          lendsAll(await consumers(hookSL(), hookSL()));
+        });
+
+        test("H2: same identity and version, other bytes: unproven, named, and it lends nothing", async () => {
+          const r = await hookSL({ file: P2DSX })({});
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          unproven(r);
+          expect(r.digestWarning).toHaveLength(1);
+          expect(r.digestWarning[0]).toContain("bytes differ from the publishApps file");
+          r.store.close();
+          lendsNothing(await consumers(hookSL({ file: P2DSX }), hookSL()));
+        });
+
+        test("H3: an identity or version that differs from the file is named as such", async () => {
+          const r = await hookSL({
+            file: testPkg({ version: "1.0.0.3", body: BODY_B, dep: true, source: false }),
+          })({});
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          unproven(r);
+          expect(r.digestWarning).toHaveLength(1);
+          expect(r.digestWarning[0]).toContain("version 1.0.0.2");
+          expect(r.digestWarning[0]).toContain("version 1.0.0.3");
+          r.store.close();
+        });
+
+        test("H4: the served version not installed: unproven", async () => {
+          const r = await hookSL({ installed: { [APP_ID]: ["1.0.0.1"], [DEP.id]: ["1.0.0.0"] } })(
+            {},
+          );
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          unproven(r);
+          expect(r.digestWarning).toHaveLength(1);
+          expect(r.digestWarning[0]).toContain("not proven installed");
+          expect(r.digestWarning[0]).toContain(APP_ID);
+          r.store.close();
+        });
+
+        test("H5: no publishApps file is the test app: proven by the installed checks alone", async () => {
+          const r = await hookSL({ testAppInPublishApps: false })({});
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          expect(r.store.getRun(r.runId)?.testAppProven).toBe(true);
+          r.store.close();
+        });
+
+        test("H6: a proven source-less hook run records no digests and one named warning", async () => {
+          const r = await hookSL()({});
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          expect(r.store.getRun(r.runId)?.testAppProven).toBe(true);
+          expect(r.store.testDigests(r.runId)).toBeNull();
+          expect(r.store.testDigestParts(r.runId)).toBeNull();
+          expect(r.digestWarning).toHaveLength(1);
+          expect(r.digestWarning[0]).toContain("carries no AL source");
+          r.store.close();
+        });
+
+        test("H7: a read-back WITH source, other bytes but the same .al set, stays proven", async () => {
+          const P2DX = testPkg({
+            version: "1.0.0.2",
+            body: BODY_B,
+            dep: true,
+            extra: { "Translations/x.xlf": "<xliff/>" },
+          });
+          const r = await session("H", "one", {
+            pre: P2D,
+            post: P2D,
+            file: P2DX,
+            testAppInPublishApps: true,
+          })({});
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          expect(r.store.getRun(r.runId)?.testAppProven).toBe(true);
+          expect(r.store.testDigests(r.runId)).not.toBeNull();
+          expect(r.digestWarning).toEqual([]);
+          r.store.close();
+        });
+
+        test("H8: proven, but the dependencies are unreadable: the dependency reason is named", async () => {
+          // No dependency is served, so its fingerprint cannot be taken.
+          const r = await envRun({
+            pre: P2DS,
+            post: P2DS,
+            installed: INSTALLED,
+            testAppInPublishApps: true,
+          });
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          expect(r.store.getRun(r.runId)?.testAppProven).toBe(false);
+          expect(r.digestWarning).toHaveLength(1);
+          expect(r.digestWarning[0]).toContain("dependencies could not be fingerprinted");
+          expect(r.digestWarning[0]).not.toContain("carries no AL source");
+          r.store.close();
+        });
+
+        test("H9: served WITH source against a source-less publishApps file stays unproven", async () => {
+          const r = await session("H", "one", {
+            pre: P2D,
+            post: P2D,
+            file: P2DS,
+            testAppInPublishApps: true,
+          })({});
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          unproven(r);
+          expect(r.digestWarning).toHaveLength(1);
+          expect(r.digestWarning[0]).toContain("other .al sources");
+          r.store.close();
+        });
+      });
+    });
+
+    // R496 T11: al-runner fingerprints its test project's app.json and the `.app` files in its
+    // package folders, before its run row (no lease, no server).
+    describe("R496 T11: al-runner's identity includes its package folders", () => {
+      const alRun = async (o: {
+        dirs: { projectDir: string; testDir: string; instrumentedDir: string };
+        pkgDir: string;
+        store: ResultsStore;
+        extra?: Partial<SessionConfig>;
+      }) => {
+        const backend = Object.assign(
+          new StubBackend(
+            {
+              coverage: "none",
+              deploy: "none",
+              isolation: "full-reset",
+              kind: "al-runner",
+              authoritative: false,
+            },
+            (mutant) => (mutant === null ? "pass" : "fail"),
+          ),
+          { dependencyPackageDirs: () => [o.pkgDir] },
+        );
+        return runSession({
+          backend,
+          store: o.store,
+          ...o.dirs,
+          selectorIds,
+          ...o.extra,
+        }).catch((e: unknown) => e);
+      };
+      const world = async () => {
+        const dirs = await makeProject(BODY_B);
+        await Bun.write(
+          join(dirs.testDir, "app.json"),
+          JSON.stringify({
+            name: "Tests",
+            publisher: "P",
+            version: "1.0.0.0",
+            dependencies: [
+              { id: DEP.id, name: DEP.name, publisher: DEP.publisher, version: "1.0.0.0" },
+            ],
+          }),
+        );
+        const pkgDir = join(dirs.testDir, "..", "packages");
+        mkdirSync(pkgDir, { recursive: true });
+        writeFileSync(join(pkgDir, "Dep.app"), depPkg("one"));
+        return { dirs, pkgDir, store: new ResultsStore(":memory:") };
+      };
+      const firstRun = async (w: Awaited<ReturnType<typeof world>>) => {
+        const first = await alRun(w);
+        expect(first).not.toBeInstanceOf(Error);
+        const runId = (w.store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number })
+          .id;
+        expect(w.store.getRun(runId)?.testAppProven).toBe(true);
+        expect(w.store.getRun(runId)?.testAppDeps).toMatch(/^[0-9a-f]{64}$/);
+        w.store.db.run("UPDATE runs SET finished_at = NULL WHERE id = ?", [runId]);
+        const victim = w.store.db
+          .query("SELECT MIN(id) AS id FROM mutants WHERE run_id = ?")
+          .get(runId) as { id: number };
+        w.store.db.run("DELETE FROM mutants WHERE id = ?", [victim.id]);
+        return runId;
+      };
+      test("a changed .app in its package folder is refused on resume", async () => {
+        const w = await world();
+        const runId = await firstRun(w);
+        writeFileSync(join(w.pkgDir, "Dep.app"), depPkg("two"));
+        const out = await alRun({ ...w, extra: { resume: runId } });
+        expect(out).toBeInstanceOf(TestAppRepublishedError);
+        expect((out as Error).message).toContain("the test app's dependencies changed");
+        w.store.close();
+      });
+      test("an unchanged .app, rewritten later with the same bytes, carries", async () => {
+        const w = await world();
+        const runId = await firstRun(w);
+        const path = join(w.pkgDir, "Dep.app");
+        writeFileSync(path, depPkg("one"));
+        utimesSync(path, new Date(Date.now() + 60_000), new Date(Date.now() + 60_000));
+        const out = await alRun({ ...w, extra: { resume: runId } });
+        expect(out).not.toBeInstanceOf(Error);
+        expect(
+          (
+            w.store.db
+              .query("SELECT COUNT(*) AS n FROM mutants WHERE run_id > ? AND carried = 1")
+              .get(runId) as { n: number }
+          ).n,
+        ).toBeGreaterThan(0);
+        w.store.close();
+      });
+    });
+
+    // R486 (review M2): the history filter runs per batch, after the hook, so it compares the
+    // READ-BACK. A finished run measured under P1 is no evidence once the hook published P2.
+    describe("R486: --skip-known-survivors compares the read-back, not the pre-lease test app", () => {
+      const skip: Partial<SessionConfig> = { skipKnownSurvivors: true };
+      test("the hook publishes a new test app: the session proceeds, skips nothing, and says why", async () => {
+        const first = await priorRun(skip);
+        const r = await envRun({ post: P2, dirs: first.dirs, store: first.store, extra: skip });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(r.knownSurvivors).toBe(0);
+        expect(r.historyWarning).toHaveLength(1);
+        expect(r.historyWarning[0]).toContain(hashPackage(P2));
+        r.store.close();
+      });
+      test("an unchanged read-back skips the known survivors (control)", async () => {
+        const first = await priorRun(skip);
+        const r = await envRun({
+          post: P1,
+          file: P1,
+          installed: { [APP_ID]: ["1.0.0.1"] },
+          dirs: first.dirs,
+          store: first.store,
+          extra: skip,
+        });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(r.knownSurvivors).toBeGreaterThan(0);
+        expect(r.historyWarning).toEqual([]);
+        r.store.close();
+      });
+      test("an unreadable read-back skips nothing (fail closed)", async () => {
+        const first = await priorRun(skip);
+        const r = await envRun({
+          post: null,
+          file: P1,
+          dirs: first.dirs,
+          store: first.store,
+          extra: skip,
+        });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(r.knownSurvivors).toBe(0);
+        expect(r.historyWarning).toHaveLength(1);
+        r.store.close();
+      });
+    });
+
+    test("a microsoftMode that throws records NULL with one warning, never aborting the session", async () => {
+      const r = await envRun({ post: P2, microsoftModeThrows: true });
+      expect(r.outcome).not.toBeInstanceOf(Error);
+      expect(r.store.testDigests(r.runId)).toBeNull();
+      expect(r.digestWarning).toHaveLength(1);
+      expect(r.digestWarning[0]).toContain("no harness verifier");
+      r.store.close();
+    });
+
+    test("an unreadable pre-lease read says nothing when the read-back is fine", async () => {
+      const r = await envRun({ pre: null, post: P2 });
+      expect(r.outcome).not.toBeInstanceOf(Error);
+      expect(r.unreadableWarning).toEqual([]);
+      expect(r.store.testDigests(r.runId)).not.toBeNull();
+      r.store.close();
+      // Control: the read-back's own failure is still named.
+      const failed = await envRun({ post: null, file: P2 });
+      expect(failed.unreadableWarning).toHaveLength(1);
+      failed.store.close();
+    });
+
+    test("a read-back with the publishApps file's version but another app id records NULL", async () => {
+      const otherId = new Uint8Array(
+        buildFakeAppWithEntries({
+          "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="22222222-2222-2222-2222-222222222222" Name="Sandbox Tests" Publisher="LethAL" Version="1.0.0.2" /></Package>`,
+          "SymbolReference.json": JSON.stringify({
+            Codeunits: [
+              {
+                Id: 79100,
+                Name: "Sandbox Tests",
+                Properties: [{ Name: "Subtype", Value: "Test" }],
+                Methods: [{ Id: 1, Name: K.method, Attributes: [{ Name: "Test" }] }],
+              },
+            ],
+          }),
+          "src/SandboxTests.Codeunit.al": BODY_B,
+        }),
+      );
+      const r = await envRun({ post: P2, file: otherId });
+      expect(r.outcome).not.toBeInstanceOf(Error);
+      expect(r.store.testDigests(r.runId)).toBeNull();
+      expect(r.digestWarning).toHaveLength(1);
+      expect(r.digestWarning[0]).toContain("22222222-2222-2222-2222-222222222222");
+      r.store.close();
+    });
+
+    test("a plain bcdev run (no hook) never reads back or defers digests, and records its identity once, under the lease", async () => {
+      const dirs = await makeProject(BODY_B);
+      await Bun.write(join(dirs.testDir, "app.json"), JSON.stringify(TESTS_APP));
+      const store = new ResultsStore(":memory:");
+      const setHash = spyOn(store, "setRunTestAppHash");
+      const setDigests = spyOn(store, "setRunTestDigests");
+      const outcome = await runSession({
+        backend: leaseBackend({
+          fetchPublishedAppPackage: async () => P2,
+          microsoftMode: () => mode({ [APP_ID]: ["1.0.0.2"] }, []),
+        }),
+        store,
+        ...dirs,
+        selectorIds,
+        resourceServer: "http://cronus281",
+        resourceServerInstance: "BC",
+        quarantineDir: freshTmpDir(),
+        lease: leaseCfg(new FakeLeaseClient()).lease,
+      }).catch((e: unknown) => e);
+      expect(outcome).not.toBeInstanceOf(Error);
+      expect(setDigests).not.toHaveBeenCalled();
+      const runId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+      // R496: the identity (hash, flag and dependency fingerprint) is written ONCE, under the lease,
+      // after the fingerprint is taken there; the pre-lease read's hash with it.
+      const row = store.getRun(runId);
+      expect(row?.testAppDeps).toMatch(/^[0-9a-f]{64}$/);
+      expect(setHash.mock.calls).toEqual([
+        [runId, `package:${hashPackage(P2)}`, true, row?.testAppDeps ?? "missing"],
+      ]);
+      // The digests are recorded at createRun from the one pre-lease read, as before R373.
+      expect(store.testDigests(runId)).not.toBeNull();
+      expect(row?.testAppHash).toBe(`package:${hashPackage(P2)}`);
+      store.close();
+    });
+
+    test("verify accepts the env-tool run, and reads a test edited on disk afterwards as new", async () => {
+      const r = await envRun({ post: P2 });
+      const recorded = r.store.testDigests(r.runId);
+      expect(recorded).not.toBeNull();
+      const plan = () =>
+        verifyDependencyFingerprint(
+          { fetchPublishedAppPackage: onlyP(P2), microsoftMode: () => fakeMicrosoftMode() },
+          r.dirs.testDir,
+          r.dirs.projectDir,
+        ).then((dependencies) =>
+          planVerify({
+            sourceTestDigestParts: r.store.testDigestParts(r.runId),
+            coverage: "procedure",
+            source: {
+              runId: r.runId,
+              projectPath: r.dirs.projectDir,
+              artifactSha256: "0".repeat(64),
+              sourceSha256: "5".repeat(64),
+              installed: {
+                fromRunId: r.runId,
+                batchIndex: 0,
+                appPath: "x.app",
+                instrumentedDir: "d",
+              },
+              identityScheme: IDENTITY_SCHEME,
+              buildSymbols: [],
+              coverageMode: "procedure",
+              carryHidden: null,
+              generationSourceSha256: null,
+              twinTuples: null,
+              numberingDigest: null,
+              dependencySourceSha256: null,
+              targets: [
+                {
+                  batchIndex: 0,
+                  mutantCode: "M0001",
+                  coveringTests: [`${K.codeunitName}.${K.method}`],
+                },
+              ],
+              rows: [],
+            },
+            manifest: {
+              selectorIds,
+              artifactId: "a".repeat(32),
+              mutants: [
+                {
+                  mutantId: "M0001",
+                  file: "SandboxLogic.Codeunit.al",
+                  startIndex: 10,
+                  endIndex: 20,
+                  startLine: 3,
+                  operatorName: "lethal.negate-conditional",
+                  operatorVersion: "1.0.0",
+                  astHash: "hash-M0001",
+                  objectType: "codeunit",
+                  codeunitId: 79000,
+                  codeunitName: "Sandbox Logic",
+                  procedureName: "IsOverBudget",
+                  originalText: "a",
+                  mutatedText: "b",
+                },
+              ],
+            },
+            sourceBaseline: r.store.baselineTests(r.runId),
+            sourceTestDigests: recorded,
+            testDir: r.dirs.testDir,
+            dependencies,
+          }),
+        );
+      expect((await plan()).newTests.map((t) => t.method)).toEqual([]);
+      await Bun.write(
+        join(r.dirs.testDir, "SandboxTests.Codeunit.al"),
+        BODY_B.replace("B asserts", "B asserts more"),
+      );
+      expect((await plan()).newTests.map((t) => t.method)).toEqual([K.method]);
+      r.store.close();
+    });
+  });
+
+  test("R373: setRunTestDigests never overwrites a recorded row and throws on a missing run", () => {
+    const store = new ResultsStore(":memory:");
+    const runId = store.createRun({
+      projectPath: "/p",
+      backend: "bcdev",
+      appVersion: "1.0.0.0",
+      identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
+      coverageMode: "procedure",
+    });
+    store.setRunTestDigests(runId, { a: "1" }, { p: 1 });
+    expect(store.testDigests(runId)).toEqual({ a: "1" });
+    expect(() => store.setRunTestDigests(runId, { a: "2" }, { p: 2 })).toThrow(
+      "already records test digests",
+    );
+    expect(store.testDigests(runId)).toEqual({ a: "1" });
+    expect(store.testDigestParts(runId)).toEqual({ p: 1 });
+    expect(() => store.setRunTestDigests(runId + 1, { a: "1" }, {})).toThrow("does not exist");
+    expect(() => store.setRunTestAppHash(runId + 1, null, false, null)).toThrow("no run");
+    store.close();
   });
 
   // R232: `afterLeaseAcquired` used to run BEFORE the try/finally that releases the lease, so a
@@ -8551,6 +11792,631 @@ describe("runSession — Layer 5C-B1 Task 8: renew heartbeat (design §6 step 3)
   });
 });
 
+// R504: every caller of a lease action, through a REAL `LeaseClient` on a router fetch that
+// stalls one action's body. A missing bound goes red by the test timing out, never by a clock.
+describe("R504: a lease answer whose body never finishes, through a real LeaseClient", () => {
+  const TIER = "http://cronus281|BC";
+  const MARKER = {
+    opKind: "run",
+    opAttemptId: "a9",
+    opSeq: 9,
+    lastCompletedOpSeq: 8,
+    completed: false,
+  } as const;
+  const WIRE_CFG = {
+    baseUrl: "http://bc:7048/BC",
+    company: "CRONUS Danmark A/S",
+    username: "u",
+    password: "p",
+  } as const;
+
+  function wired(
+    answers: Parameters<typeof leaseRouter>[0],
+    timeoutMs = 20,
+  ): { calls: Record<string, number>; client: LeaseClient } {
+    const router = leaseRouter(answers);
+    return {
+      calls: router.calls,
+      client: new LeaseClient({ ...WIRE_CFG, timeoutMs }, router.fetchFn),
+    };
+  }
+  function warnings(events: readonly RunEvent[], code: string): string[] {
+    return events.flatMap((e) => (e.type === "warning" && e.code === code ? [e.message] : []));
+  }
+  const TIMED_OUT = /(body not read|gave no answer) within 20 ms/;
+  const pass = (ref: TestMethodRef, opts: { coverage?: string }) => ({
+    ref,
+    outcome: "pass" as const,
+    durationMs: 1,
+    ...(opts.coverage === "none"
+      ? { attestation: { observedAny: true, identityMismatch: false } }
+      : {}),
+  });
+
+  test("C1: a stalled ReleaseLease at finish warns lease-release-failed and is never a release", async () => {
+    const { calls, client } = wired({ ReleaseLease: () => "stall" });
+    const events: RunEvent[] = [];
+    const { lease } = leaseCfg(client);
+    await runSessionForTest(leaseBackend(), {
+      quarantineDir: freshTmpDir(),
+      lease,
+      emit: [(e) => events.push(e)],
+    });
+    expect(calls.ReleaseLease).toBe(1);
+    const failed = warnings(events, "lease-release-failed");
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toMatch(TIMED_OUT);
+    expect(warnings(events, "lease-release-refused")).toHaveLength(0);
+  });
+
+  test("C2: a stalled marker read at finish warns lease-marker-read-failed and never releases", async () => {
+    const { calls, client } = wired({
+      GetOperationStatus: (n) => (n >= 2 ? "stall" : IDLE_STATUS),
+    });
+    const events: RunEvent[] = [];
+    const { lease } = leaseCfg(client);
+    await runSessionForTest(leaseBackend(), {
+      quarantineDir: freshTmpDir(),
+      lease,
+      emit: [(e) => events.push(e)],
+    });
+    expect(calls.GetOperationStatus).toBe(2);
+    const failed = warnings(events, "lease-marker-read-failed");
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toMatch(TIMED_OUT);
+    expect(calls.ReleaseLease ?? 0).toBe(0);
+  });
+
+  test("C3: a stalled ownership renew under a set marker records the recycle and never releases", async () => {
+    const dir = freshTmpDir();
+    const { calls, client } = wired({
+      GetOperationStatus: (n) => (n >= 2 ? MARKER : IDLE_STATUS),
+      RenewLease: () => "stall",
+    });
+    const events: RunEvent[] = [];
+    const { lease } = leaseCfg(client);
+    await runSessionForTest(leaseBackend(), {
+      quarantineDir: dir,
+      lease,
+      emit: [(e) => events.push(e)],
+    });
+    const unconfirmed = warnings(events, "lease-ownership-unconfirmed");
+    expect(unconfirmed).toHaveLength(1);
+    expect(unconfirmed[0]).toMatch(TIMED_OUT);
+    expect((await new QuarantineStore(dir).read(TIER))?.opKind).toBe("container-needs-recycle");
+    expect(calls.ReleaseLease ?? 0).toBe(0);
+    expect(warnings(events, "lease-marker-foreign")).toHaveLength(0);
+  });
+
+  test("C4: R249 keep-lease, then every later action stalls: the lease is kept, never released", async () => {
+    const { calls, client } = wired({
+      BeginPublish: () => ({ begun: false }),
+      RenewLease: (n) =>
+        n === 1 ? { renewed: true, expiresAt: "2026-07-24T12:05:00.000Z" } : "stall",
+      GetOperationStatus: (n) => (n === 1 ? IDLE_STATUS : n === 2 ? MARKER : "stall"),
+    });
+    const events: RunEvent[] = [];
+    const { lease } = leaseCfg(client);
+    const err = await runSessionForTest(leaseBackend(), {
+      quarantineDir: freshTmpDir(),
+      lease,
+      emit: [(e) => events.push(e)],
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(LeaseUnavailableError);
+    expect(warnings(events, "lease-kept-under-marker")).toHaveLength(1);
+    expect(calls.ReleaseLease ?? 0).toBe(0);
+  });
+
+  test("C5: a stalled heartbeat renew warns, never latches, and the next tick renews again", async () => {
+    const { calls, client } = wired({ RenewLease: () => "stall" });
+    const events: RunEvent[] = [];
+    const timers = new FakeTimers();
+    const { lease } = leaseCfg(client, { timers });
+    let fired = false;
+    const backend = leaseBackend({
+      run: async (ref, opts) => {
+        if (!fired) {
+          fired = true;
+          await timers.fire();
+          await timers.fire(); // the NEXT tick: a stalled renew must not hold `#ticking` forever
+        }
+        return pass(ref, opts);
+      },
+    });
+    const report = await runSessionForTest(backend, {
+      quarantineDir: freshTmpDir(),
+      lease,
+      emit: [(e) => events.push(e)],
+    });
+    const unanswered = warnings(events, "lease-renew-unanswered");
+    expect(unanswered).toHaveLength(2);
+    expect(unanswered[0]).toMatch(TIMED_OUT);
+    expect(calls.RenewLease).toBe(4); // two ticks, each one renew and one retry
+    expect(report.quarantined).toBeUndefined();
+    expect(events.some((e) => e.type === "batch-invalidated")).toBe(false);
+  });
+
+  /**
+   * C5b: a heartbeat renew is still open when `finish()` stops the session and releases. The first
+   * renew's response is held by the test and settled from inside ReleaseLease, so the order is
+   * fixed by the fake, not by a clock: `finish()` has already called `stop()` when it settles.
+   */
+  async function renewOpenAcrossFinish(
+    settleFirst: (c: ReadableStreamDefaultController<Uint8Array>) => void,
+  ) {
+    let first: ReadableStreamDefaultController<Uint8Array> | undefined;
+    let tick: Promise<unknown> | undefined;
+    const { calls, client } = wired(
+      {
+        RenewLease: (n): WireAnswer =>
+          n === 1
+            ? new Response(
+                new ReadableStream<Uint8Array>({
+                  start(c) {
+                    first = c;
+                    c.enqueue(new TextEncoder().encode('{"value":'));
+                  },
+                }),
+                { status: 200 },
+              )
+            : { renewed: false },
+        ReleaseLease: async () => {
+          if (first === undefined) throw new Error("C5b: the heartbeat renew was never opened");
+          settleFirst(first);
+          await tick; // the pulse finishes before finish() returns
+          return { released: true };
+        },
+      },
+      4000,
+    );
+    const events: RunEvent[] = [];
+    const timers = new FakeTimers();
+    const { lease } = leaseCfg(client, { timers });
+    const backend = leaseBackend({
+      run: async (ref, opts) => {
+        if (tick === undefined) tick = Promise.resolve(timers.fn?.());
+        return pass(ref, opts);
+      },
+    });
+    const report = await runSessionForTest(backend, {
+      quarantineDir: freshTmpDir(),
+      lease,
+      emit: [(e) => events.push(e)],
+    });
+    return { calls, events, report };
+  }
+
+  function expectNoLatch(r: Awaited<ReturnType<typeof renewOpenAcrossFinish>>): void {
+    expect(r.report.quarantined).toBeUndefined();
+    expect(r.events.some((e) => e.type === "batch-invalidated")).toBe(false);
+    expect(JSON.stringify(r.events)).not.toContain("lease-lost");
+    expect(r.calls.ReleaseLease).toBe(1);
+  }
+
+  test("C5b guard 1: a renew that fails after finish() stopped the session is not retried", async () => {
+    const r = await renewOpenAcrossFinish((c) => c.error(new Error("connection reset")));
+    expect(r.calls.RenewLease).toBe(1);
+    expectNoLatch(r);
+  });
+
+  test("C5b guard 2: a renewed:false answered after finish() stopped the session is not a loss", async () => {
+    const r = await renewOpenAcrossFinish((c) => {
+      c.enqueue(new TextEncoder().encode(`${JSON.stringify(JSON.stringify({ renewed: false }))}}`));
+      c.close();
+    });
+    expect(r.calls.RenewLease).toBe(1);
+    expectNoLatch(r);
+  });
+
+  test("C6: a stalled AcquireLease rejects once and records nothing", async () => {
+    const dir = freshTmpDir();
+    const { calls, client } = wired({ AcquireLease: () => "stall" });
+    const { lease } = leaseCfg(client);
+    const err = await runSessionForTest(leaseBackend(), { quarantineDir: dir, lease }).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(LeaseUnavailableError);
+    expect(String(err)).toMatch(TIMED_OUT);
+    expect(calls.AcquireLease).toBe(1);
+    expect(await new QuarantineStore(dir).read(TIER)).toBeNull();
+  });
+
+  test("C7: a stalled hook BeginPublish is uncertain, never a refusal, and latches", async () => {
+    const { calls, client } = wired({ BeginPublish: () => "stall" });
+    const events: RunEvent[] = [];
+    const { lease } = leaseCfg(client);
+    const err = await runSessionForTest(leaseBackend(), {
+      quarantineDir: freshTmpDir(),
+      lease,
+      emit: [(e) => events.push(e)],
+      afterLeaseAcquired: async () => {},
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(LeaseUnavailableError);
+    expect(err instanceof LeaseUnavailableError ? err.beginPublishRefusal : "x").toBeUndefined();
+    expect(warnings(events, "after-lease-acquired-uncertain")).toHaveLength(1);
+    expect(warnings(events, "after-lease-acquired-refused")).toHaveLength(0);
+    expect(calls.BeginPublish).toBe(1);
+    expect(calls.ReleaseLease).toBe(1); // the later marker read is idle
+  });
+
+  test("C7b: a stalled batch BeginPublish fails the session with no R90 row and no retry", async () => {
+    const { calls, client } = wired({ BeginPublish: () => "stall" });
+    const store = new ResultsStore(":memory:");
+    const { lease } = leaseCfg(client);
+    const err = await runSessionForTest(leaseBackend(), {
+      quarantineDir: freshTmpDir(),
+      lease,
+      store,
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(LeaseUnavailableError);
+    expect(String(err)).toMatch(TIMED_OUT);
+    expect(store.publishOutcomes(TIER)).toEqual([]);
+    expect(calls.BeginPublish).toBe(1);
+    expect(calls.ReleaseLease).toBe(1);
+  });
+
+  test("C8: a stalled reconciling status read leaves a lost ack unresolved, never recovered or killed", async () => {
+    const { calls, client } = wired({
+      GetOperationStatus: (_n, body) => (body.attemptId === "a10" ? "stall" : IDLE_STATUS),
+    });
+    const events: RunEvent[] = [];
+    let active: string | null = null;
+    const backend = leaseBackend({
+      activate: async (id) => {
+        active = id;
+      },
+      run: async (ref, opts) =>
+        active === "M0002"
+          ? {
+              ref,
+              outcome: "error" as const,
+              durationMs: 1,
+              failureMessage: 'RunMutant returned no string `value` (HTTP 200), body: ""',
+              operation: "in-flight-unknown" as const,
+              fencedOp: { attemptId: "a10", opSeq: 304 },
+            }
+          : pass(ref, opts),
+    });
+    const { lease } = leaseCfg(client);
+    const report = await runSessionForTest(backend, {
+      quarantineDir: freshTmpDir(),
+      lease,
+      emit: [(e) => events.push(e)],
+    });
+    const failed = warnings(events, "lease-reconcile-failed");
+    expect(failed.length).toBeGreaterThan(0);
+    expect(failed[0]).toMatch(TIMED_OUT);
+    expect(calls.RecoverOp ?? 0).toBe(0);
+    expect(report.mutants.find((m) => m.mutantCode === "M0002")?.verdict).toBe("error");
+    expect(report.mutants.some((m) => m.verdict === "killed")).toBe(false);
+  });
+
+  test("C9: a stalled EndPublish whose reconciling read also stalls latches and records the recycle", async () => {
+    const dir = freshTmpDir();
+    const { calls, client } = wired({
+      EndPublish: () => "stall",
+      GetOperationStatus: (_n, body) => (body.attemptId !== "" ? "stall" : IDLE_STATUS),
+    });
+    const { lease } = leaseCfg(client);
+    const report = await runSessionForTest(leaseBackend(), { quarantineDir: dir, lease });
+    expect(report.quarantined).toBeDefined();
+    expect((await new QuarantineStore(dir).read(TIER))?.opKind).toBe("container-needs-recycle");
+    expect(calls.RecoverOp ?? 0).toBe(0);
+  });
+});
+
+// R507: R-496's refusal on the lease path, through a REAL `LeaseClient` on a router fetch. Every
+// lease caller that swallows a lease error still does its fail-closed thing, AND the session ends
+// with the refusal itself (or warns it, when another error is already ending the session).
+/** Captures `console.warn` lines for the duration of `body`. */
+async function capturingWarn<T>(body: () => Promise<T>): Promise<{ out: T; warned: string[] }> {
+  const spy = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const out = await body();
+    return { out, warned: spy.mock.calls.map((c) => String(c[0])) };
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+describe("R507: a refused unfiltered extensions query on the lease path ends the session as itself", () => {
+  const TIER = "http://cronus281|BC";
+  const WIRE_CFG = {
+    baseUrl: "http://bc:7048/BC",
+    company: "CRONUS Danmark A/S",
+    username: "u",
+    password: "p",
+  } as const;
+  const REFUSAL_TEXT = "refused: unfiltered extensions query R433";
+
+  function wired(
+    answers: Parameters<typeof leaseRouter>[0],
+    timeoutMs = 2000,
+  ): { calls: Record<string, number>; client: LeaseClient } {
+    const router = leaseRouter(answers);
+    return {
+      calls: router.calls,
+      client: new LeaseClient({ ...WIRE_CFG, timeoutMs }, router.fetchFn),
+    };
+  }
+  const refuse = (): never => {
+    throw new UnfilteredExtensionsQueryError(REFUSAL_TEXT);
+  };
+  function warnings(events: readonly RunEvent[], code: string): string[] {
+    return events.flatMap((e) => (e.type === "warning" && e.code === code ? [e.message] : []));
+  }
+  const pass = (ref: TestMethodRef, opts: { coverage?: string }) => ({
+    ref,
+    outcome: "pass" as const,
+    durationMs: 1,
+    ...(opts.coverage === "none"
+      ? { attestation: { observedAny: true, identityMismatch: false } }
+      : {}),
+  });
+  /** A backend whose `run` fires one heartbeat tick, awaited, on its second call. */
+  function tickingBackend(timers: FakeTimers): {
+    backend: ReturnType<typeof leaseBackend>;
+    runs: () => number;
+  } {
+    let runs = 0;
+    const backend = leaseBackend({
+      run: async (ref, opts) => {
+        runs++;
+        if (runs === 2) await timers.fire();
+        return pass(ref, opts);
+      },
+    });
+    return { backend, runs: () => runs };
+  }
+
+  test("R3: a refusal on the heartbeat renew is never swallowed: latched, finish ran, the session ends with it", async () => {
+    const { calls, client } = wired({ RenewLease: refuse });
+    const events: RunEvent[] = [];
+    const timers = new FakeTimers();
+    const { lease } = leaseCfg(client, { timers });
+    const { backend, runs } = tickingBackend(timers);
+    const { out: err } = await capturingWarn(() =>
+      runSessionForTest(backend, {
+        quarantineDir: freshTmpDir(),
+        lease,
+        emit: [(e) => events.push(e)],
+      }).catch((e: unknown) => e),
+    );
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(String(err)).toContain(REFUSAL_TEXT);
+    // Latched: THREE_PROC_AL has 9 mutants; scheduling stopped right after the tick.
+    expect(runs()).toBeLessThan(9);
+    // Not lease loss: no lost batch is invalidated.
+    expect(events.some((e) => e.type === "batch-invalidated")).toBe(false);
+    // finish ran op-gated: a marker read at teardown, then the release over an idle marker.
+    expect(calls.GetOperationStatus ?? 0).toBeGreaterThanOrEqual(2);
+    expect(calls.ReleaseLease).toBe(1);
+  });
+
+  test("R4: a refusal on the marker read in finish is never a release, and ends the session", async () => {
+    const { calls, client } = wired({
+      GetOperationStatus: (n) => (n >= 2 ? refuse() : IDLE_STATUS),
+    });
+    const events: RunEvent[] = [];
+    const { lease } = leaseCfg(client);
+    const { out: err } = await capturingWarn(() =>
+      runSessionForTest(leaseBackend(), {
+        quarantineDir: freshTmpDir(),
+        lease,
+        emit: [(e) => events.push(e)],
+      }).catch((e: unknown) => e),
+    );
+    expect(calls.ReleaseLease ?? 0).toBe(0);
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(warnings(events, "lease-marker-read-failed")).toHaveLength(1);
+  });
+
+  test("R5: a refusal on the reconciling status read leaves a lost ack unresolved, never recovered or killed", async () => {
+    const { calls, client } = wired({
+      GetOperationStatus: (_n, body) => (body.attemptId === "a10" ? refuse() : IDLE_STATUS),
+    });
+    const events: RunEvent[] = [];
+    let active: string | null = null;
+    const backend = leaseBackend({
+      activate: async (id) => {
+        active = id;
+      },
+      run: async (ref, opts) =>
+        active === "M0002"
+          ? {
+              ref,
+              outcome: "error" as const,
+              durationMs: 1,
+              failureMessage: 'RunMutant returned no string `value` (HTTP 200), body: ""',
+              operation: "in-flight-unknown" as const,
+              fencedOp: { attemptId: "a10", opSeq: 304 },
+            }
+          : pass(ref, opts),
+    });
+    const { lease } = leaseCfg(client);
+    const { out: err } = await capturingWarn(() =>
+      runSessionForTest(backend, {
+        quarantineDir: freshTmpDir(),
+        lease,
+        emit: [(e) => events.push(e)],
+      }).catch((e: unknown) => e),
+    );
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(warnings(events, "lease-reconcile-failed").length).toBeGreaterThan(0);
+    expect(calls.RecoverOp ?? 0).toBe(0);
+    // Non-vacuous: mutants WERE scored, and none of them as killed.
+    expect(events.some((e) => e.type === "mutant-scored")).toBe(true);
+    const killed = events.filter((e) => e.type === "mutant-scored" && e.verdict === "killed");
+    expect(killed).toHaveLength(0);
+  });
+
+  test("R6: a refusal on AcquireLease rejects with the refusal and records nothing", async () => {
+    const dir = freshTmpDir();
+    const { calls, client } = wired({ AcquireLease: refuse });
+    const { lease } = leaseCfg(client);
+    const err = await runSessionForTest(leaseBackend(), { quarantineDir: dir, lease }).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(err).not.toBeInstanceOf(LeaseUnavailableError);
+    expect(calls.AcquireLease).toBe(1);
+    expect(await new QuarantineStore(dir).read(TIER)).toBeNull();
+  });
+
+  test("R7: a refusal on the hook BeginPublish is uncertain, never a refusal, latches, and rejects with it", async () => {
+    const { client } = wired({ BeginPublish: refuse });
+    const events: RunEvent[] = [];
+    const { lease } = leaseCfg(client);
+    const { out: err } = await capturingWarn(() =>
+      runSessionForTest(leaseBackend(), {
+        quarantineDir: freshTmpDir(),
+        lease,
+        emit: [(e) => events.push(e)],
+        afterLeaseAcquired: async () => {},
+      }).catch((e: unknown) => e),
+    );
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(warnings(events, "after-lease-acquired-uncertain")).toHaveLength(1);
+    expect(warnings(events, "after-lease-acquired-refused")).toHaveLength(0);
+  });
+
+  test("R9: an earlier error stays; a lease-path refusal recorded by the heartbeat is warned", async () => {
+    const { client } = wired({ RenewLease: refuse });
+    const timers = new FakeTimers();
+    const { lease } = leaseCfg(client, { timers });
+    const backend = leaseBackend({
+      deploy: async () => {
+        await timers.fire();
+        throw new Error("deploy boom");
+      },
+    });
+    const { out: err, warned } = await capturingWarn(() =>
+      runSessionForTest(backend, { quarantineDir: freshTmpDir(), lease }).catch((e: unknown) => e),
+    );
+    expect(err).not.toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(String(err)).toContain("deploy boom");
+    expect(
+      warned.some(
+        (w) => w.includes("while the session was already failing") && w.includes(REFUSAL_TEXT),
+      ),
+    ).toBe(true);
+  });
+
+  test("R10: a refusal noted after teardown took the refusals is warned, never dropped", async () => {
+    let openGate: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      openGate = resolve;
+    });
+    let tick: Promise<unknown> | undefined;
+    const { client } = wired({
+      RenewLease: async () => {
+        await gate;
+        return refuse();
+      },
+    });
+    const timers = new FakeTimers();
+    const { lease } = leaseCfg(client, { timers });
+    const backend = leaseBackend({
+      run: async (ref, opts) => {
+        if (tick === undefined) tick = Promise.resolve(timers.fn?.());
+        return pass(ref, opts);
+      },
+    });
+    const { warned } = await capturingWarn(async () => {
+      // The renew is still open, so the session ends normally and teardown takes nothing.
+      await runSessionForTest(backend, { quarantineDir: freshTmpDir(), lease });
+      openGate(); // the renew is answered with the refusal only now, after takeRefusal()
+      await tick;
+    });
+    expect(warned.some((w) => w.includes(REFUSAL_TEXT))).toBe(true);
+  });
+
+  test("R11: a lease refusal and a backend late refusal: the lease one is thrown, the other warned", async () => {
+    const { client } = wired({ RenewLease: refuse });
+    const timers = new FakeTimers();
+    const { lease } = leaseCfg(client, { timers });
+    const { backend } = tickingBackend(timers);
+    const late = new UnfilteredExtensionsQueryError("backend late refusal R499");
+    Object.assign(backend, { takeLateRefusal: () => late });
+    const { out: err, warned } = await capturingWarn(() =>
+      runSessionForTest(backend, { quarantineDir: freshTmpDir(), lease }).catch((e: unknown) => e),
+    );
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(String(err)).toContain(REFUSAL_TEXT);
+    expect(warned.some((w) => w.includes("backend late refusal R499"))).toBe(true);
+  });
+
+  test("R12: a session latched for another reason that then meets a refusal throws it, after warning the latch reason", async () => {
+    const dir = freshTmpDir();
+    let endPublishSent = false;
+    const { client } = wired(
+      {
+        EndPublish: () => {
+          endPublishSent = true;
+          return "stall";
+        },
+        GetOperationStatus: (_n, body) => {
+          if (body.attemptId !== "") return "stall";
+          return endPublishSent ? refuse() : IDLE_STATUS;
+        },
+      },
+      20,
+    );
+    const { lease } = leaseCfg(client);
+    const { out: err, warned } = await capturingWarn(() =>
+      runSessionForTest(leaseBackend(), { quarantineDir: dir, lease }).catch((e: unknown) => e),
+    );
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect((await new QuarantineStore(dir).read(TIER))?.opKind).toBe("container-needs-recycle");
+    const latched = warned.filter((w) => w.includes("the session was latched:"));
+    expect(latched).toHaveLength(1);
+    expect(latched[0]).not.toContain("refused unfiltered extensions query on the lease path");
+  });
+
+  test("R508: a lease lost mid-batch, then a teardown that throws a lease-path refusal, still invalidates the batch in the store and the events", async () => {
+    // The first renew is refused (recorded, latched), its one retry answers renewed:false (the
+    // loss). Teardown then hands the refusal back and `surfaceLateRefusal` throws it.
+    const { client } = wired({
+      RenewLease: (n) => (n === 1 ? refuse() : { renewed: false }),
+    });
+    const timers = new FakeTimers();
+    const { lease } = leaseCfg(client, { timers });
+    let active: string | null = null;
+    let fired = false;
+    const backend = leaseBackend({
+      activate: async (id) => {
+        active = id;
+      },
+      run: async (ref, opts) => {
+        if (active === "M0002" && !fired) {
+          fired = true;
+          await timers.fire();
+        }
+        return pass(ref, opts);
+      },
+    });
+    const store = new ResultsStore(":memory:");
+    const events: RunEvent[] = [];
+    const { out: err } = await capturingWarn(() =>
+      runSessionForTest(backend, {
+        quarantineDir: freshTmpDir(),
+        lease,
+        store,
+        emit: [(e) => events.push(e)],
+      }).catch((e: unknown) => e),
+    );
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(fired).toBe(true);
+    expect(events.some((e) => e.type === "batch-invalidated" && e.batchIndex === 0)).toBe(true);
+    const rows = store.db
+      .query("SELECT mutant_code AS code, verdict FROM mutants ORDER BY mutant_code")
+      .all() as Array<{ code: string; verdict: string }>;
+    // Non-vacuous: M0001 was scored before the loss.
+    expect(rows.map((r) => r.code)).toContain("M0001");
+    expect(rows.filter((r) => r.verdict !== "error")).toEqual([]);
+  });
+});
+
 describe("runSession — Layer 5C-B1 Task 8: lease-lost invalidation + dispatch guards (design §6)", () => {
   /** M0001 runs clean and attests cleanly (so design §G's fail-closed attestation gate is NOT
    *  what invalidates it); M0002's covering run returns the caller-supplied lease verdict. */
@@ -8799,6 +12665,7 @@ describe("runSession — Layer 5C-B1 fix round 1: no lease is a caller-contract 
         coverage: "none",
         deploy: "publish",
         isolation: "session",
+        kind: "bcdev",
         authoritative: true,
       }),
       activate: async (id) => {
@@ -8823,6 +12690,686 @@ describe("runSession — Layer 5C-B1 fix round 1: no lease is a caller-contract 
     await expect(runSessionForTest(backend, { quarantineDir: freshTmpDir() })).rejects.toThrow(
       /holds no lease/,
     );
+  });
+});
+
+/**
+ * R508 repro. A lease lost mid-batch latches the session, so the run is never finished and stays
+ * resumable. The lost batch is corrected only in the folded report (the `batch-invalidated`
+ * event); its stored rows keep the verdicts recorded before the loss. Two batches, one file each:
+ * batch 0 (SandboxExtra) completes, batch 1 (SandboxLogic) records a kill (M0001) and a survivor
+ * (M0002), then M0003's run answers lease-lost.
+ */
+describe("R508: a lease lost mid-batch, then --resume", () => {
+  const SECOND = `codeunit 79002 "Sandbox Extra"
+{
+    procedure UnderLimit(Amount: Decimal; Limit: Decimal): Boolean
+    begin
+        exit(Amount < Limit);
+    end;
+}
+`;
+  async function twoBatchDirs() {
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), THREE_PROC_AL);
+    await Bun.write(join(dirs.projectDir, "SandboxExtra.Codeunit.al"), SECOND);
+    await Bun.write(join(dirs.testDir, "app.json"), testAppJson());
+    return dirs;
+  }
+  /** R512: "unattested" passes but observes no guard, the wrong-binary answer. */
+  type Answer = "pass" | "fail" | "timeout" | "lease-lost" | "transport-error" | "unattested";
+  /**
+   * `verdictOf(batch, mutantId)` answers a mutated run; the baseline always passes. `before` runs
+   * inside a mutated run before it answers; `beforeUnmutated` inside an unmutated run of the batch
+   * AFTER a mutant was active (a confirm), given that last mutant (R516 M6); `close` becomes the
+   * backend's `close()`.
+   */
+  function batchBackend(
+    verdictOf: (batch: number, mutant: string) => Answer,
+    hooks: {
+      before?: (batch: number, mutant: string) => Promise<void>;
+      beforeUnmutated?: (batch: number, lastMutant: string) => Promise<void>;
+      close?: () => Promise<void>;
+    } = {},
+  ) {
+    let deploys = 0;
+    let active: string | null = null;
+    let lastMutant: string | null = null;
+    return Object.assign(
+      leaseBackend({
+        deploy: async () => {
+          deploys++;
+          lastMutant = null;
+          return null;
+        },
+        activate: async (id) => {
+          active = id;
+          if (id !== null) lastMutant = id;
+        },
+        run: async (ref) => {
+          if (active !== null) await hooks.before?.(deploys - 1, active);
+          else if (lastMutant !== null) await hooks.beforeUnmutated?.(deploys - 1, lastMutant);
+          const v = active === null ? "pass" : verdictOf(deploys - 1, active);
+          if (v === "lease-lost") {
+            return {
+              ref,
+              outcome: "error" as const,
+              durationMs: 1,
+              operation: "lease-lost" as const,
+              leaseInvalidReason: "lease-invalid" as const,
+            };
+          }
+          if (v === "transport-error") {
+            return { ref, outcome: "error" as const, durationMs: 1, failureMessage: "wire down" };
+          }
+          if (v === "unattested") {
+            return {
+              ref,
+              outcome: "pass" as const,
+              durationMs: 1,
+              attestation: { observedAny: false, identityMismatch: false },
+            };
+          }
+          return {
+            ref,
+            outcome: v,
+            durationMs: 1,
+            attestation: { observedAny: true, identityMismatch: false },
+          };
+        },
+      }),
+      servesTestApp(),
+      hooks.close !== undefined ? { close: hooks.close } : {},
+    );
+  }
+  /**
+   * R516 (M6): fire the lease heartbeat INSIDE batch 1's unmutated confirm of M0002's timeout, the
+   * only place a position-1 timeout is scored since R516, so the kill row lands after the loss
+   * note. `confirms` counts the confirms of M0002 that ran (proof the confirm was dispatched).
+   */
+  function heartbeatInConfirm(timers: FakeTimers) {
+    const state = { fired: false, confirms: 0 };
+    const hooks = {
+      beforeUnmutated: async (b: number, lastMutant: string) => {
+        if (b !== 1 || lastMutant !== "M0002") return;
+        state.confirms += 1;
+        if (!state.fired) {
+          state.fired = true;
+          await timers.fire();
+        }
+      },
+    };
+    return { hooks, state };
+  }
+  /** The pre-R516 shape: the heartbeat fires inside M0002's MUTATED run, before its confirm. */
+  function heartbeatInMutatedRun(timers: FakeTimers) {
+    const state = { fired: false, confirms: 0 };
+    const hooks = {
+      before: async (b: number, m: string) => {
+        if (b === 1 && m === "M0002" && !state.fired) {
+          state.fired = true;
+          await timers.fire();
+        }
+      },
+      beforeUnmutated: async (b: number, lastMutant: string) => {
+        if (b === 1 && lastMutant === "M0002") state.confirms += 1;
+      },
+    };
+    return { hooks, state };
+  }
+  /** Batch 0 completes (M0001 survives); batch 1 kills M0001, M0002 survives, M0003 loses the lease. */
+  const LOSE = (batch: number, m: string): Answer =>
+    batch === 0
+      ? m === "M0001"
+        ? "pass"
+        : "fail"
+      : m === "M0001"
+        ? "fail"
+        : m === "M0002"
+          ? "pass"
+          : "lease-lost";
+  const rowsOf = (store: ResultsStore, runId: number) =>
+    store.db
+      .query(
+        "SELECT batch_index AS b, mutant_code AS code, verdict, carried, failure_note AS note FROM mutants WHERE run_id = ? ORDER BY batch_index, mutant_code",
+      )
+      .all(runId) as Array<{
+      b: number;
+      code: string;
+      verdict: string;
+      carried: number | null;
+      note: string | null;
+    }>;
+  const snapsOf = (store: ResultsStore, runId: number) =>
+    store.db
+      .query("SELECT batch_index AS b FROM baseline_snapshots WHERE run_id = ? ORDER BY b")
+      .all(runId) as Array<{ b: number }>;
+  const lastRunId = (store: ResultsStore) =>
+    (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+  const reusedWarnings = (events: readonly RunEvent[]) =>
+    events.flatMap((e) =>
+      e.type === "warning" && e.code === "resume-baseline-reused" ? [e.message] : [],
+    );
+  const FIXED = new Error("disk full R508");
+  /** `store.invalidateBatch` throws FIXED between `fail()` and `heal()`. */
+  function breakableInvalidate(store: ResultsStore): { fail: () => void; heal: () => void } {
+    const real = store.invalidateBatch.bind(store);
+    let broken = false;
+    store.invalidateBatch = (runId, batchIndex, note) => {
+      if (broken) throw FIXED;
+      return real(runId, batchIndex, note);
+    };
+    return {
+      fail: () => {
+        broken = true;
+      },
+      heal: () => {
+        broken = false;
+      },
+    };
+  }
+
+  async function setup() {
+    const dirs = await twoBatchDirs();
+    const store = new ResultsStore(":memory:");
+    const common = {
+      store,
+      ...dirs,
+      selectorIds,
+      resourceServer: "http://cronus281",
+      resourceServerInstance: "BC",
+      quarantineDir: freshTmpDir(),
+      maxGuardsPerBatch: 1,
+    };
+    return { dirs, store, common };
+  }
+  type Common = Awaited<ReturnType<typeof setup>>["common"];
+  async function resume(common: Common) {
+    const events: RunEvent[] = [];
+    const second = await runSession({
+      ...common,
+      // Kills everything it runs, so a re-measured batch-1 mutant can never read as a survivor.
+      backend: batchBackend(() => "fail"),
+      lease: leaseCfg(new FakeLeaseClient()).lease,
+      resume: "last",
+      emit: [
+        (e: RunEvent) => {
+          events.push(e);
+        },
+      ],
+    });
+    return { second, events, run2: lastRunId(common.store) };
+  }
+
+  async function loseThenResume() {
+    const { dirs, store, common } = await setup();
+    const first = await runSession({
+      ...common,
+      backend: batchBackend(LOSE),
+      lease: leaseCfg(new FakeLeaseClient()).lease,
+    });
+    const run1 = lastRunId(store);
+    const { second, events, run2 } = await resume(common);
+    return { dirs, store, first, second, run1, run2, events };
+  }
+
+  test("the lost batch's stored rows are not carried; the completed batch's are", async () => {
+    const { store, first, second, run1, run2 } = await loseThenResume();
+    expect(first.batches).toBe(2);
+    expect(first.quarantined?.reason).toContain("lease-lost");
+    // The folded report already discards batch 1 (the in-memory half).
+    expect(first.mutants.filter((m) => m.batchIndex === 1).map((m) => m.verdict)).not.toContain(
+      "killed",
+    );
+    const r1 = rowsOf(store, run1);
+    const r2 = rowsOf(store, run2);
+    expect(second.quarantined).toBeUndefined();
+    // Control: batch 0 completed under a held lease, so every one of its rows carries, with run
+    // 1's verdict, mutant by mutant.
+    const b0 = r2.filter((r) => r.b === 0);
+    expect(b0.length).toBe(3);
+    expect(b0.every((r) => r.carried === 1)).toBe(true);
+    expect(b0.map((r) => [r.code, r.verdict])).toEqual(
+      r1.filter((r) => r.b === 0).map((r) => [r.code, r.verdict]),
+    );
+    // Lost: batch 1's kill and survivor, measured under the lost lease, are `error` in the store,
+    // carried by nothing, and re-measured (the resume's backend kills everything).
+    const b1 = r1.filter((r) => r.b === 1);
+    expect(b1.length).toBe(3);
+    expect(b1.filter((r) => r.verdict !== "error")).toEqual([]);
+    expect(r2.filter((r) => r.b === 1 && r.carried === 1)).toEqual([]);
+    expect(
+      r2
+        .filter((r) => r.b === 1 && ["M0001", "M0002"].includes(r.code))
+        .map((r) => [r.code, r.verdict, r.carried]),
+    ).toEqual([
+      ["M0001", "killed", 0],
+      ["M0002", "killed", 0],
+    ]);
+    store.close();
+  });
+
+  test("--skip-known-survivors on a later run does not read the lost batch's survivor", async () => {
+    const { dirs, store, run2 } = await loseThenResume();
+    const row = store.getRun(run2);
+    expect(row?.finished).toBe(true);
+    const keys = store.priorSurvivorKeys(
+      dirs.projectDir,
+      "none",
+      row?.testAppHash === null || row?.testAppHash === undefined
+        ? undefined
+        : { hash: row.testAppHash, deps: row.testAppDeps ?? "" },
+      [],
+      row?.carryHidden?.files ?? [],
+    );
+    // Exactly batch 0's survivor (M0001, carried into the finished run 2), and not batch 1's
+    // survivor (`IsOverBudget`'s return-value), measured under the lost lease.
+    expect([...keys.keys].map((k) => k.split("|").slice(-4).join("|"))).toEqual([
+      "Sandbox Extra|UnderLimit|lethal.empty-block|1",
+    ]);
+    store.close();
+  });
+
+  test("the lost batch's baseline snapshot is not reused by the resume", async () => {
+    const { store, run1, events } = await loseThenResume();
+    expect(snapsOf(store, run1)).toEqual([{ b: 0 }]);
+    expect(reusedWarnings(events).filter((m) => m.includes(`run ${run1}'s batch 1`))).toEqual([]);
+    store.close();
+  });
+
+  test("control: a resume whose batch 0 has work left reuses run 1's batch 0 snapshot", async () => {
+    const { store, common } = await setup();
+    // Run 1 aborts on a transport error in batch 0 (spec §11): no latch, no lease loss.
+    const err = await runSession({
+      ...common,
+      backend: batchBackend((b, m) => (b === 0 && m === "M0002" ? "transport-error" : "pass")),
+      lease: leaseCfg(new FakeLeaseClient()).lease,
+    }).catch((e: unknown) => e);
+    expect(String(err)).toContain("backend transport error");
+    const run1 = lastRunId(store);
+    expect(
+      rowsOf(store, run1)
+        .filter((r) => r.code === "M0002")
+        .map((r) => [r.b, r.verdict]),
+    ).toEqual([[0, "error"]]);
+    const { second, events } = await resume(common);
+    expect(reusedWarnings(events).filter((m) => m.includes(`run ${run1}'s batch 0`))).toHaveLength(
+      1,
+    );
+    // R512/R513 (plan item 15): a crash with no lease loss and no unattested answer leaves no
+    // negative record, and run 1 is the run resumed.
+    expect(store.db.query("SELECT * FROM lost_batches").all()).toEqual([]);
+    expect(store.db.query("SELECT * FROM suspect_snapshots").all()).toEqual([]);
+    expect(second.resumedFrom?.runId).toBe(run1);
+    store.close();
+  });
+
+  /**
+   * R512 (review C2): a throw before the gate. Batch 1's M0001 answers unattested, then M0002's
+   * run fails twice on the wire, so the session throws "backend transport error" and the gate
+   * never runs. The mark was written at M0001's answer, so the resume does not lend the snapshot.
+   * `onMark` (test 5) reads the store inside M0002's run, before teardown, the gate or any
+   * `finally`.
+   */
+  async function unattestedThenThrow(onMark?: (marked: boolean) => void) {
+    const { store, common } = await setup();
+    const events: RunEvent[] = [];
+    const err = await runSession({
+      ...common,
+      backend: batchBackend(
+        (b, m) =>
+          b === 1 && m === "M0001"
+            ? "unattested"
+            : b === 1 && m === "M0002"
+              ? "transport-error"
+              : "pass",
+        {
+          before: async (b, m) => {
+            if (b !== 1 || m !== "M0002") return;
+            const run = lastRunId(store);
+            onMark?.(
+              store.db
+                .query("SELECT 1 FROM suspect_snapshots WHERE run_id = ? AND batch_index = 1")
+                .get(run) !== null,
+            );
+          },
+        },
+      ),
+      lease: leaseCfg(new FakeLeaseClient()).lease,
+      emit: [(e: RunEvent) => events.push(e)],
+    }).catch((e: unknown) => e);
+    return { store, common, err, events, run1: lastRunId(store) };
+  }
+
+  test("R512 C2: a throw before the gate still leaves the snapshot marked, so the resume does not reuse it", async () => {
+    const { store, common, err, events, run1 } = await unattestedThenThrow();
+    expect(String(err)).toContain("backend transport error");
+    // The gate never ran for batch 1...
+    expect(events.some((e) => e.type === "batch-invalidated" && e.batchIndex === 1)).toBe(false);
+    // ...but the snapshot it would have measured against is marked, by run 1.
+    expect(snapsOf(store, run1)).toEqual([{ b: 0 }, { b: 1 }]);
+    expect(
+      store.db
+        .query("SELECT run_id AS run, batch_index AS b, marked_by_run AS by FROM suspect_snapshots")
+        .all(),
+    ).toEqual([{ run: run1, b: 1, by: run1 }]);
+    const { events: resumed } = await resume(common);
+    expect(reusedWarnings(resumed).filter((m) => m.includes(`run ${run1}'s batch 1`))).toEqual([]);
+    store.close();
+  });
+
+  test("R512 crash stand-in: the mark is in the store before the next run starts, ahead of any gate, finally or teardown", async () => {
+    const seen: boolean[] = [];
+    const { store, err } = await unattestedThenThrow((marked) => seen.push(marked));
+    expect(String(err)).toContain("backend transport error");
+    // Every call of M0002's run (the one after the unattested answer) saw the mark.
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((m) => m)).toBe(true);
+    store.close();
+  });
+
+  test("R513: a lost batch's snapshot is not lent even when every drop of it fails", async () => {
+    const { store, common } = await setup();
+    const drop = store.dropBaselineSnapshot.bind(store);
+    store.dropBaselineSnapshot = () => {
+      throw FIXED;
+    };
+    const { out: err } = await capturingWarn(() =>
+      runSession({
+        ...common,
+        backend: batchBackend(LOSE),
+        lease: leaseCfg(new FakeLeaseClient()).lease,
+      }).catch((e: unknown) => e),
+    );
+    expect(err).toBeInstanceOf(LostBatchNotStoredError);
+    const run1 = lastRunId(store);
+    // Precondition: the snapshot is still there, and the batch is recorded lost.
+    expect(snapsOf(store, run1)).toEqual([{ b: 0 }, { b: 1 }]);
+    expect(
+      store.db.query("SELECT run_id AS run, batch_index AS b FROM lost_batches").all(),
+    ).toEqual([{ run: run1, b: 1 }]);
+    store.dropBaselineSnapshot = drop;
+    const { events } = await resume(common);
+    expect(reusedWarnings(events).filter((m) => m.includes(`run ${run1}'s batch 1`))).toEqual([]);
+    store.close();
+  });
+
+  test("a failed store write throws LostBatchNotStoredError after the event, and warns", async () => {
+    const { store, common } = await setup();
+    breakableInvalidate(store).fail();
+    const events: RunEvent[] = [];
+    const { out: err, warned } = await capturingWarn(() =>
+      runSession({
+        ...common,
+        backend: batchBackend(LOSE),
+        lease: leaseCfg(new FakeLeaseClient()).lease,
+        emit: [(e) => events.push(e)],
+      }).catch((e: unknown) => e),
+    );
+    const run1 = lastRunId(store);
+    expect(err).toBeInstanceOf(LostBatchNotStoredError);
+    expect(String(err)).toContain(`run ${run1} batch 1:`);
+    expect(String(err)).toContain(`do not --resume run ${run1}`);
+    expect((err as Error).cause).toBe(FIXED);
+    expect(events.some((e) => e.type === "batch-invalidated" && e.batchIndex === 1)).toBe(true);
+    expect(
+      warned.some((w) => w.includes(`could not correct run ${run1} batch 1 at the lease loss`)),
+    ).toBe(true);
+  });
+
+  test("a failed store write after a late refusal warns the refusal, then throws LostBatchNotStoredError", async () => {
+    const { store, common } = await setup();
+    breakableInvalidate(store).fail();
+    const backend = batchBackend(LOSE);
+    const late = new UnfilteredExtensionsQueryError("backend late refusal R508");
+    Object.assign(backend, { takeLateRefusal: () => late });
+    const { out: err, warned } = await capturingWarn(() =>
+      runSession({
+        ...common,
+        backend,
+        lease: leaseCfg(new FakeLeaseClient()).lease,
+      }).catch((e: unknown) => e),
+    );
+    expect(err).toBeInstanceOf(LostBatchNotStoredError);
+    expect(warned.some((w) => w.includes("backend late refusal R508"))).toBe(true);
+  });
+
+  test("a failed store write while the session is already failing warns that error, then throws LostBatchNotStoredError", async () => {
+    const { store, common } = await setup();
+    breakableInvalidate(store).fail();
+    // The lease-lost mutant's own row is recorded after the loss note: that write fails.
+    const realRecord = store.recordMutant.bind(store);
+    store.recordMutant = (runId, row) => {
+      if (row.batchIndex === 1 && row.verdict === "error") throw new Error("record boom R508");
+      return realRecord(runId, row);
+    };
+    const { out: err, warned } = await capturingWarn(() =>
+      runSession({
+        ...common,
+        backend: batchBackend(LOSE),
+        lease: leaseCfg(new FakeLeaseClient()).lease,
+      }).catch((e: unknown) => e),
+    );
+    expect(err).toBeInstanceOf(LostBatchNotStoredError);
+    expect(warned.some((w) => w.includes("record boom R508"))).toBe(true);
+  });
+
+  test("crash stand-in: only onLost's write lands, and the resume still carries nothing of the lost batch", async () => {
+    const { store, common } = await setup();
+    // onLost's write (at the loss) succeeds; the store breaks when teardown reaches `close()`, so
+    // the finally's write fails. That stands in for a process that dies before its `finally`
+    // could correct anything.
+    const broken = breakableInvalidate(store);
+    const err = await capturingWarn(() =>
+      runSession({
+        ...common,
+        backend: batchBackend(LOSE, {
+          close: async () => {
+            broken.fail();
+          },
+        }),
+        lease: leaseCfg(new FakeLeaseClient()).lease,
+      }).catch((e: unknown) => e),
+    );
+    // Conservative on purpose: the message says "NOT corrected" although onLost wrote, because
+    // the failing write cannot prove that it did.
+    expect(err.out).toBeInstanceOf(LostBatchNotStoredError);
+    expect(String(err.out)).toContain("NOT corrected");
+    const run1 = lastRunId(store);
+    broken.heal();
+    const { events, run2 } = await resume(common);
+    const r2 = rowsOf(store, run2);
+    expect(r2.filter((r) => r.b === 1 && r.carried === 1)).toEqual([]);
+    expect(reusedWarnings(events).filter((m) => m.includes(`run ${run1}'s batch 1`))).toEqual([]);
+    // Control: batch 0 still carries.
+    const b0 = r2.filter((r) => r.b === 0);
+    expect(b0.length).toBe(3);
+    expect(b0.every((r) => r.carried === 1)).toBe(true);
+  });
+
+  test("onLost corrects the store before teardown: rows and snapshot already fixed when close() runs", async () => {
+    const { store, common } = await setup();
+    const seen: Array<{ rows: ReturnType<typeof rowsOf>; snaps: ReturnType<typeof snapsOf> }> = [];
+    const backend = batchBackend(LOSE, {
+      // After the loss the session is unsafe, so teardown calls only `close()`, before the
+      // `finally`'s own write.
+      close: async () => {
+        const id = lastRunId(store);
+        seen.push({ rows: rowsOf(store, id), snaps: snapsOf(store, id) });
+      },
+    });
+    await runSession({ ...common, backend, lease: leaseCfg(new FakeLeaseClient()).lease });
+    const atClose = seen.at(-1);
+    expect(atClose).toBeDefined();
+    const b1 = atClose?.rows.filter((r) => r.b === 1) ?? [];
+    expect(b1.map((r) => r.code)).toEqual(["M0001", "M0002", "M0003"]);
+    expect(b1.filter((r) => r.verdict !== "error")).toEqual([]);
+    // Rewritten by onLost AFTER the latch: the note names the latch reason, never "(unknown)".
+    // (M0003, the lease-lost run itself, is recorded after the note with its own.)
+    const rewritten = b1.filter((r) => r.code !== "M0003");
+    expect(rewritten.filter((r) => !(r.note ?? "").includes("held (lease-lost: "))).toEqual([]);
+    expect(atClose?.snaps).toEqual([{ b: 0 }]);
+  });
+
+  test("a verdict recorded after the loss note is corrected by the session's finally", async () => {
+    const { store, common } = await setup();
+    const client = new FakeLeaseClient();
+    client.renewQueue = [{ renewed: false }];
+    const timers = new FakeTimers();
+    // R516 (M6): M0002's run answers a `timeout`, which since R516 is confirmed by one unmutated
+    // run before it is scored. The heartbeat notes the loss (and onLost writes) INSIDE that
+    // confirm, which then passes, so the `timeout-killed` is recorded after the note.
+    const { hooks, state } = heartbeatInConfirm(timers);
+    const backend = batchBackend(
+      (b, m) => (b === 0 ? (m === "M0001" ? "pass" : "fail") : m === "M0002" ? "timeout" : "pass"),
+      hooks,
+    );
+    const report = await runSession({
+      ...common,
+      backend,
+      lease: leaseCfg(client, { timers }).lease,
+    });
+    expect(state.fired).toBe(true);
+    // The confirm was dispatched (the heartbeat fired inside it), once.
+    expect(state.confirms).toBe(1);
+    expect(report.quarantined?.reason).toContain("lease-lost");
+    const rows = rowsOf(store, lastRunId(store));
+    expect(rows.filter((r) => r.b === 1 && r.code === "M0002").map((r) => r.verdict)).toEqual([
+      "error",
+    ]);
+    // Control: batch 0 stands.
+    expect(rows.filter((r) => r.b === 0).map((r) => r.verdict)).toEqual([
+      "survived",
+      "killed",
+      "killed",
+    ]);
+  });
+
+  /**
+   * R513: the crash stand-in for the lost-batch readers. Like `breakableInvalidate`, but all three
+   * of the loss's writes (`markBatchLost`, `invalidateBatch`, `dropBaselineSnapshot`) throw FIXED
+   * between `fail()` and `heal()`, so a test cannot tell the `finally`'s writes from `onLost`'s:
+   * only `onLost`'s land.
+   */
+  function breakableStore(store: ResultsStore): { fail: () => void; heal: () => void } {
+    const invalidate = breakableInvalidate(store);
+    const markLost = store.markBatchLost.bind(store);
+    const drop = store.dropBaselineSnapshot.bind(store);
+    let broken = false;
+    store.markBatchLost = (runId, batchIndex, note) => {
+      if (broken) throw FIXED;
+      markLost(runId, batchIndex, note);
+    };
+    store.dropBaselineSnapshot = (runId, batchIndex) => {
+      if (broken) throw FIXED;
+      return drop(runId, batchIndex);
+    };
+    return {
+      fail: () => {
+        broken = true;
+        invalidate.fail();
+      },
+      heal: () => {
+        broken = false;
+        invalidate.heal();
+      },
+    };
+  }
+
+  /**
+   * R513. The crash stand-in (the store breaks when teardown starts, so the `finally`'s writes
+   * fail) combined with a verdict recorded AFTER the loss note (the heartbeat notes the loss inside
+   * M0002's run, which then answers). Only `onLost` wrote, and it wrote before M0002's row
+   * existed, so that row keeps its stored verdict. `onLost`'s `lost_batches` row makes every resume
+   * reader read it as `error`, so the resume carries nothing of the batch.
+   */
+  async function lateVerdictThenCrash(
+    late: Answer,
+    stopHungSessions: boolean,
+    // R516 (M6): where the heartbeat fires. A `timeout` is scored only after its unmutated
+    // confirm, so its late row needs the heartbeat inside that confirm; a `pass` has no confirm.
+    fireIn: "mutated-run" | "confirm",
+  ) {
+    const { store, common } = await setup();
+    const broken = breakableStore(store);
+    const client = new FakeLeaseClient();
+    client.renewQueue = [{ renewed: false }];
+    const timers = new FakeTimers();
+    const { hooks, state } =
+      fireIn === "confirm" ? heartbeatInConfirm(timers) : heartbeatInMutatedRun(timers);
+    const backend = batchBackend(
+      (b, m) => (b === 0 ? (m === "M0001" ? "pass" : "fail") : m === "M0002" ? late : "pass"),
+      {
+        ...hooks,
+        close: async () => {
+          broken.fail();
+        },
+      },
+    );
+    const err = await capturingWarn(() =>
+      runSession({ ...common, backend, lease: leaseCfg(client, { timers }).lease }).catch(
+        (e: unknown) => e,
+      ),
+    );
+    expect(state.fired).toBe(true);
+    expect(err.out).toBeInstanceOf(LostBatchNotStoredError);
+    const run1 = lastRunId(store);
+    const r1 = rowsOf(store, run1);
+    broken.heal();
+    const events: RunEvent[] = [];
+    await runSession({
+      ...common,
+      backend: batchBackend(() => "fail"),
+      lease: leaseCfg(new FakeLeaseClient()).lease,
+      resume: "last",
+      ...(stopHungSessions ? { stopHungSessions: true } : {}),
+      emit: [(e: RunEvent) => events.push(e)],
+    });
+    const run2 = lastRunId(store);
+    return { store, run1, run2, r1, r2: rowsOf(store, run2), confirms: state.confirms };
+  }
+
+  /** Control (plan item 14): every batch-0 row is carried, with run 1's verdict. */
+  const batch0Carried = (r1: ReturnType<typeof rowsOf>, r2: ReturnType<typeof rowsOf>) => {
+    const b0 = r2.filter((r) => r.b === 0);
+    expect(b0.length).toBe(3);
+    expect(b0.every((r) => r.carried === 1)).toBe(true);
+    expect(b0.map((r) => [r.code, r.verdict])).toEqual(
+      r1.filter((r) => r.b === 0).map((r) => [r.code, r.verdict]),
+    );
+  };
+
+  test("R513: a timeout-killed recorded after the loss note is not carried by --resume --stop-hung-sessions after a crash", async () => {
+    const { r1, r2, confirms } = await lateVerdictThenCrash("timeout", true, "confirm");
+    // R516 (M6): the late row exists because M0002's confirm was dispatched and answered.
+    expect(confirms).toBe(1);
+    // Precondition (the residue): the row recorded after the note keeps its kill, since onLost
+    // wrote before it existed and the finally's write failed. The fix is in the readers.
+    expect(r1.filter((r) => r.b === 1).map((r) => [r.code, r.verdict])).toEqual([
+      ["M0001", "error"],
+      ["M0002", "timeout-killed"],
+    ]);
+    // Fixed: the resume carries nothing of the lost batch.
+    expect(r2.filter((r) => r.b === 1 && r.carried === 1)).toEqual([]);
+    batch0Carried(r1, r2);
+  });
+
+  test("R516 (M6) pin: with the heartbeat in M0002's mutated run, before its confirm, no kill row is recorded", async () => {
+    // The pre-R516 fixture shape. Since R516 the timeout's confirm meets the lost lease, so this
+    // shape no longer produces a late kill row, which is why the two tests above fire inside the
+    // confirm: this pin fails if the fixture's old shape ever starts exercising the late row again.
+    const { r1 } = await lateVerdictThenCrash("timeout", true, "mutated-run");
+    expect(r1.filter((r) => r.b === 1 && r.verdict === "timeout-killed")).toEqual([]);
+  });
+
+  test("R513: a survived recorded after the loss note is not carried by --resume after a crash", async () => {
+    const { r1, r2 } = await lateVerdictThenCrash("pass", false, "mutated-run");
+    expect(r1.filter((r) => r.b === 1).map((r) => [r.code, r.verdict])).toEqual([
+      ["M0001", "error"],
+      ["M0002", "survived"],
+    ]);
+    expect(r2.filter((r) => r.b === 1 && r.carried === 1)).toEqual([]);
+    batch0Carried(r1, r2);
   });
 });
 
@@ -9773,6 +14320,290 @@ describe("runSession — Layer 5C-B2: a proven-complete lost ack earns one fresh
     expect(codes).not.toContain("lost-reply-recovered");
     expect(report.mutants.find((m) => m.mutantCode === "M0002")?.verdict).toBe("survived");
   });
+
+  // ——— R-204b Part A: the single path's refusal is lifted into the step's cause ———
+  test("R-204b 5. a single-path stopped-after-completion refusal is recorded as error, never timeout-killed or survived", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = tombstoned;
+    const { lease } = leaseCfg(client);
+    const dispatches = { count: 0 };
+    const report = await runSessionForTest(
+      m2Answers(
+        [
+          {
+            outcome: "error",
+            failureMessage: "RunMutant: the stop was confirmed after completion (R204)",
+            stopRefusal: "stopped-after-completion",
+            stopState: "confirmed",
+          },
+        ],
+        dispatches,
+      ),
+      { quarantineDir: dir, lease },
+    );
+    const m2 = report.mutants.find((m) => m.mutantCode === "M0002");
+    expect(m2?.verdict).toBe("error");
+    expect(m2?.cause).toBe("stopped-after-completion");
+    expect(dispatches.count).toBe(1);
+    expect(report.quarantined).toBeUndefined();
+    // The session ran on: a per-mutant error, not a transport abort.
+    expect(report.mutants.find((m) => m.mutantCode === "M0003")).toBeDefined();
+  });
+
+  // ——— R-204b Part R: a lost answer after a stop that may have been accepted is never retried ———
+  const lostAfter = (stopState?: StopState): Partial<TestVerdict> => ({
+    ...LOST_ANSWER,
+    failureMessage: "RunMutant failed: HTTP 400",
+    ...(stopState !== undefined ? { stopState } : {}),
+  });
+  const passAllMany = (opts: RunManyOpts, fencedOp: RunManyResult["fencedOp"]): RunManyResult => ({
+    kind: "verdicts",
+    endedBy: "complete",
+    ranCount: opts.methods.length,
+    verdicts: opts.methods.map((m) => ({
+      ref: m.ref,
+      outcome: "pass" as const,
+      durationMs: 1,
+      attestation: ATTESTED,
+    })),
+    durationMs: 1,
+    fencedOp,
+  });
+  const callAfter =
+    (stopState: StopState | undefined, extra: { cause?: RunManyCause; lost?: boolean } = {}) =>
+    (opts: RunManyOpts, fencedOp: RunManyResult["fencedOp"]): RunManyResult => {
+      const [m] = opts.methods;
+      if (m === undefined) throw new Error("a chunk with no methods");
+      return {
+        kind: "call",
+        verdict: {
+          ref: m.ref,
+          outcome: "error",
+          durationMs: 1,
+          failureMessage:
+            extra.lost === false
+              ? "RunMutantMany answer malformed: x"
+              : "RunMutantMany failed: HTTP 400",
+          ...(extra.lost === false ? {} : { operation: "in-flight-unknown" as const, fencedOp }),
+          ...(stopState !== undefined ? { stopState } : {}),
+        },
+        methodIndex: 1,
+        ...(extra.cause !== undefined ? { cause: extra.cause } : {}),
+        fencedOp,
+      };
+    };
+
+  for (const state of ["confirmed", "unknown", "pending", "issued"] as const) {
+    test(`R-204b 6/7. single path, stop ${state} + 400 + reconcile completed: NO retry, error / stop-outcome-unconfirmed`, async () => {
+      const dir = freshTmpDir();
+      const client = new FakeLeaseClient();
+      client.reconcileStatus = tombstoned;
+      const { lease } = leaseCfg(client);
+      const dispatches = { count: 0 };
+      // A retry would pass: the guard is what keeps this from scoring survived.
+      const report = await runSessionForTest(
+        m2Answers([lostAfter(state), { outcome: "pass", attestation: ATTESTED }], dispatches),
+        { quarantineDir: dir, lease },
+      );
+      const m2 = report.mutants.find((m) => m.mutantCode === "M0002");
+      expect(dispatches.count).toBe(1);
+      expect(m2?.verdict).toBe("error");
+      expect(m2?.cause).toBe("stop-outcome-unconfirmed");
+      expect(await new QuarantineStore(dir).read(TIER)).toBeNull();
+      expect(report.mutants.find((m) => m.mutantCode === "M0003")).toBeDefined();
+    });
+
+    test(`R-204b 6/7. grouped, stop ${state} + 400 + reconcile completed: NO retry, error / stop-outcome-unconfirmed`, async () => {
+      const dir = freshTmpDir();
+      const client = new FakeLeaseClient();
+      client.reconcileStatus = tombstoned;
+      const { lease } = leaseCfg(client);
+      const dispatches = { count: 0 };
+      const report = await runSessionForTest(
+        m2ManyAnswers([callAfter(state), passAllMany], dispatches),
+        { quarantineDir: dir, lease },
+      );
+      const m2 = report.mutants.find((m) => m.mutantCode === "M0002");
+      expect(dispatches.count).toBe(1);
+      expect(m2?.verdict).toBe("error");
+      expect(m2?.cause).toBe("stop-outcome-unconfirmed");
+      expect(await new QuarantineStore(dir).read(TIER)).toBeNull();
+    });
+  }
+
+  test("R-204b 8. single path, stop REFUSED + 400 + reconcile completed: exactly one retry, and its pass stands", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = tombstoned;
+    const { lease } = leaseCfg(client);
+    const dispatches = { count: 0 };
+    const report = await runSessionForTest(
+      m2Answers([lostAfter("refused"), { outcome: "pass", attestation: ATTESTED }], dispatches),
+      { quarantineDir: dir, lease },
+    );
+    expect(dispatches.count).toBe(2);
+    expect(report.mutants.find((m) => m.mutantCode === "M0002")?.verdict).toBe("survived");
+  });
+
+  test("R-204b 8. grouped, stop REFUSED + 400 + reconcile completed: exactly one retry, and its pass stands", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = tombstoned;
+    const { lease } = leaseCfg(client);
+    const dispatches = { count: 0 };
+    const report = await runSessionForTest(
+      m2ManyAnswers([callAfter("refused"), passAllMany], dispatches),
+      { quarantineDir: dir, lease },
+    );
+    expect(dispatches.count).toBe(2);
+    expect(report.mutants.find((m) => m.mutantCode === "M0002")?.verdict).toBe("survived");
+  });
+
+  test("R-204b 9. single path, NO stop + lost ack: exactly one retry, and its pass stands", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = tombstoned;
+    const { lease } = leaseCfg(client);
+    const dispatches = { count: 0 };
+    const report = await runSessionForTest(
+      m2Answers([lostAfter(undefined), { outcome: "pass", attestation: ATTESTED }], dispatches),
+      { quarantineDir: dir, lease },
+    );
+    expect(dispatches.count).toBe(2);
+    expect(report.mutants.find((m) => m.mutantCode === "M0002")?.verdict).toBe("survived");
+  });
+
+  test("R-204b 9. grouped, NO stop + lost ack: exactly one retry, and its pass stands", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = tombstoned;
+    const { lease } = leaseCfg(client);
+    const dispatches = { count: 0 };
+    const report = await runSessionForTest(
+      m2ManyAnswers([callAfter(undefined), passAllMany], dispatches),
+      { quarantineDir: dir, lease },
+    );
+    expect(dispatches.count).toBe(2);
+    expect(report.mutants.find((m) => m.mutantCode === "M0002")?.verdict).toBe("survived");
+  });
+
+  test("R-204b: an UNRESOLVED reconcile after a confirmed stop keeps today's quarantine", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = () => {
+      throw new LeaseUnavailableError("GetOperationStatus unreachable");
+    };
+    const { lease } = leaseCfg(client);
+    const dispatches = { count: 0 };
+    const report = await runSessionForTest(m2Answers([lostAfter("confirmed")], dispatches), {
+      quarantineDir: dir,
+      lease,
+    });
+    expect(dispatches.count).toBe(1);
+    expect((await new QuarantineStore(dir).read(TIER))?.opKind).toBe("test-run");
+    expect(report.quarantined).toBeDefined();
+  });
+
+  for (const [state, want] of [
+    ["confirmed", "stop-outcome-unconfirmed"],
+    [undefined, "group-answer-malformed"],
+    ["refused", "group-answer-malformed"],
+  ] as const) {
+    test(`R-204b 12. a malformed 2xx with stop ${state ?? "none"} is recorded as ${want}`, async () => {
+      const dispatches = { count: 0 };
+      const report = await runSessionForTest(
+        m2ManyAnswers(
+          [callAfter(state, { cause: "group-answer-malformed", lost: false }), passAllMany],
+          dispatches,
+        ),
+        { quarantineDir: freshTmpDir(), lease: leaseCfg(new FakeLeaseClient()).lease },
+      );
+      const m2 = report.mutants.find((m) => m.mutantCode === "M0002");
+      expect(dispatches.count).toBe(1);
+      expect(m2?.verdict).toBe("error");
+      expect(m2?.cause).toBe(want);
+    });
+  }
+
+  test("R-204b 12. a group-run-error with stop unknown is recorded as stop-outcome-unconfirmed", async () => {
+    const dispatches = { count: 0 };
+    const report = await runSessionForTest(
+      m2ManyAnswers([callAfter("unknown", { cause: "group-run-error", lost: false })], dispatches),
+      { quarantineDir: freshTmpDir(), lease: leaseCfg(new FakeLeaseClient()).lease },
+    );
+    expect(report.mutants.find((m) => m.mutantCode === "M0002")?.cause).toBe(
+      "stop-outcome-unconfirmed",
+    );
+  });
+
+  // ——— R-204b final review: the RETRY's own ending is normalized too ———
+  test("R-204b retry, single path: a permitted retry that sends an unrefused stop and loses its answer is stop-outcome-unconfirmed, not result-lost", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = tombstoned;
+    const { lease } = leaseCfg(client);
+    const dispatches = { count: 0 };
+    const report = await runSessionForTest(
+      m2Answers([lostAfter(undefined), lostAfter("confirmed")], dispatches),
+      { quarantineDir: dir, lease },
+    );
+    const m2 = report.mutants.find((m) => m.mutantCode === "M0002");
+    expect(dispatches.count).toBe(2);
+    expect(m2?.verdict).toBe("error");
+    expect(m2?.cause).toBe("stop-outcome-unconfirmed");
+    expect(await new QuarantineStore(dir).read(TIER)).toBeNull();
+  });
+
+  test("R-204b retry, single path control: a retry with NO stop that loses its answer stays result-lost", async () => {
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = tombstoned;
+    const report = await runSessionForTest(
+      m2Answers([lostAfter(undefined), lostAfter(undefined)], { count: 0 }),
+      { quarantineDir: freshTmpDir(), lease: leaseCfg(client).lease },
+    );
+    expect(report.mutants.find((m) => m.mutantCode === "M0002")?.cause).toBe("result-lost");
+  });
+
+  test("R-204b retry, grouped: a permitted retry with an unknown stop and a lost answer is stop-outcome-unconfirmed", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = tombstoned;
+    const { lease } = leaseCfg(client);
+    const dispatches = { count: 0 };
+    const report = await runSessionForTest(
+      m2ManyAnswers([callAfter(undefined), callAfter("unknown")], dispatches),
+      { quarantineDir: dir, lease },
+    );
+    const m2 = report.mutants.find((m) => m.mutantCode === "M0002");
+    expect(dispatches.count).toBe(2);
+    expect(m2?.verdict).toBe("error");
+    expect(m2?.cause).toBe("stop-outcome-unconfirmed");
+    expect(await new QuarantineStore(dir).read(TIER)).toBeNull();
+  });
+
+  test("R-204b retry, grouped: a malformed retry answer after a confirmed stop is stop-outcome-unconfirmed; with no stop it keeps group-answer-malformed", async () => {
+    for (const [state, want] of [
+      ["confirmed", "stop-outcome-unconfirmed"],
+      [undefined, "group-answer-malformed"],
+    ] as const) {
+      const client = new FakeLeaseClient();
+      client.reconcileStatus = tombstoned;
+      const dispatches = { count: 0 };
+      const report = await runSessionForTest(
+        m2ManyAnswers(
+          [
+            callAfter(undefined),
+            callAfter(state, { cause: "group-answer-malformed", lost: false }),
+          ],
+          dispatches,
+        ),
+        { quarantineDir: freshTmpDir(), lease: leaseCfg(client).lease },
+      );
+      expect(dispatches.count).toBe(2);
+      expect(report.mutants.find((m) => m.mutantCode === "M0002")?.cause).toBe(want);
+    }
+  });
 });
 
 // ————————————————————————————————————————————————————————————————————————
@@ -10272,6 +15103,7 @@ describe("runSession — Layer 5C-B1 fix round 1: deploy latch guard + earlier-b
         coverage: "none",
         deploy: "publish",
         isolation: "session",
+        kind: "al-runner",
         authoritative: false,
       }) as const;
     const workerDeploys = [0, 0];
@@ -10516,6 +15348,7 @@ describe("runSession — R108: a batch whose TOTAL crosses the bracket warns bef
         coverage: "none",
         deploy: "publish",
         isolation: "session",
+        kind: "bcdev",
         authoritative: true,
       }),
     });
@@ -10647,6 +15480,7 @@ describe("runSession propagates al-runner's pinned platform-app directory (R147)
     coverage: "none",
     deploy: "none",
     isolation: "full-reset",
+    kind: "al-runner",
     authoritative: false,
   };
 
@@ -10857,6 +15691,7 @@ describe("runSession surfaces al-runner's NO IMPLEMENTATION warning (R148)", () 
     coverage: "none",
     deploy: "none",
     isolation: "full-reset",
+    kind: "al-runner",
     authoritative: false,
   };
 
@@ -10962,6 +15797,7 @@ describe("runSession re-measures the al-runner contract under its pin (R149)", (
     coverage: "none",
     deploy: "none",
     isolation: "full-reset",
+    kind: "al-runner",
     authoritative: false,
   };
   const PIN = "C:/cache/28.0.46665.53671/platform-apps";
@@ -11830,16 +16666,107 @@ describe("R206: the warm confirmation and the session guard", () => {
         fencedOp: composed.fencedOp,
       };
     };
-    const a = await session(first, { store });
+    // R495: both sessions serve the same test app, installed, so run 1's identity is proven and
+    // resumable (as a real bcdev's is).
+    const dirs = await makeProject(FIVE_TESTS_AL);
+    await Bun.write(join(dirs.testDir, "app.json"), testAppJson());
+    const a = await session(Object.assign(first, servesTestApp()), { store, dirs });
     expect(m1(a)?.killPosition).toBe(2);
     expect(a.report.quarantined).toBeDefined();
-    const second = await session(makeBackend(), { store, resume: true, dirs: a.dirs });
+    const second = await session(Object.assign(makeBackend(), servesTestApp()), {
+      store,
+      resume: true,
+      dirs: a.dirs,
+    });
     const carried = m1(second);
     expect(carried?.verdict).toBe("killed");
     expect(carried?.killPosition).toBe(2);
     expect(second.report.warmKills).toBe(1);
     expect(second.report.validity.caveats).toContain("resumed");
     store.close();
+  });
+});
+
+/**
+ * R512 (review I3): the warm replay is the batch's FIRST answer. M0001's covering call is a 408 at
+ * position 2 (no attestation), so `confirmWarm` replays [T1, T2] unmutated, and the replay answers
+ * `observedAny: false`. Every other answer in the session carries no attestation, so nothing else
+ * can mark the snapshot or clear the mark. Two variants, one per `confirmWarm` site: the replay
+ * completes (`verdicts`, the `rv` site) or answers at call level (`call`, the `verdict` site).
+ * The `call` variant's shape (a call-level `fail` carrying an attestation) is never sent in
+ * production today: every call-level result is built without one. It pins the wiring of the
+ * `verdict` site only, not a live evidence path.
+ */
+describe("R512: a warm replay's unattested answer marks the snapshot in use", () => {
+  const strip = (v: TestVerdict): TestVerdict => {
+    const { attestation: _, ...rest } = v;
+    return rest;
+  };
+  const wrong = (v: TestVerdict): TestVerdict => ({
+    ...v,
+    attestation: { observedAny: false, identityMismatch: false },
+  });
+  async function replayFirst(site: "rv" | "verdict") {
+    const backend = new WarmStubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
+    backend.timeoutFor = (mutant, ref) =>
+      mutant === "M0001" && ref.method === "T2" ? 30_000 : undefined;
+    const single = backend.run.bind(backend);
+    backend.run = async (ref, opts) => strip(await single(ref, opts));
+    let replays = 0;
+    backend.manyOverride = (call, _opts, composed) => {
+      if (call !== 0) {
+        return composed.kind === "verdicts"
+          ? { ...composed, verdicts: composed.verdicts.map(strip) }
+          : { ...composed, verdict: strip(composed.verdict) };
+      }
+      replays += 1;
+      if (composed.kind !== "verdicts") return composed;
+      if (site === "rv") return { ...composed, verdicts: composed.verdicts.map(wrong) };
+      const t2 = composed.verdicts[1];
+      if (t2 === undefined) return composed;
+      return {
+        kind: "call",
+        methodIndex: 2,
+        verdict: wrong({ ...t2, outcome: "fail", failureMessage: "R512 replay call-level" }),
+        fencedOp: composed.fencedOp,
+      };
+    };
+    const dirs = await makeProject(FIVE_TESTS_AL);
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      stopHungSessions: true,
+    });
+    const runId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+    const marks = store.db
+      .query("SELECT run_id AS run, batch_index AS b, marked_by_run AS by FROM suspect_snapshots")
+      .all();
+    store.close();
+    const replayed = backend.manyCalls
+      .filter((c) => c.confirmation === true)
+      .map((c) => c.methods.map((x) => x.ref.method));
+    return { report, runId, marks, replays, replayed };
+  }
+
+  test("the replay completes: its `rv` answers mark the snapshot", async () => {
+    const { runId, marks, replays, replayed } = await replayFirst("rv");
+    // Precondition: exactly one replay, of M0001's warm timeout at position 2.
+    expect(replays).toBe(1);
+    expect(replayed).toEqual([["T1", "T2"]]);
+    expect(marks).toEqual([{ run: runId, b: 0, by: runId }]);
+  });
+
+  test("the replay answers at call level: its `verdict` answer marks the snapshot", async () => {
+    const { report, runId, marks, replays, replayed } = await replayFirst("verdict");
+    expect(replays).toBe(1);
+    expect(replayed).toEqual([["T1", "T2"]]);
+    expect(report.mutants.find((m) => m.mutantCode === "M0001")?.cause).toBe(
+      "warm-confirmation-incomplete",
+    );
+    expect(marks).toEqual([{ run: runId, b: 0, by: runId }]);
   });
 });
 
@@ -12273,6 +17200,7 @@ describe("C02-04 characterization", () => {
         coverage: "none",
         deploy: "publish",
         isolation: "session",
+        kind: "bcdev",
         authoritative: true,
       }),
       run: async (ref) => ({
@@ -12634,6 +17562,15 @@ class NamedFake implements ExecutionBackend {
         readonly ref: TestMethodRef;
         readonly nth: number;
       }) => TestVerdict | undefined;
+      /** R259: a mutated run's answer for (mutant, method), ahead of `killer`: an outcome for that
+       *  method, or a whole group-call answer when the method opens the call. */
+      readonly answer?: (c: {
+        readonly mutant: string;
+        readonly ref: TestMethodRef;
+      }) =>
+        | { readonly outcome: "pass" | "fail"; readonly reachedActive?: boolean }
+        | RunManyResult
+        | undefined;
     },
   ) {}
   private readonly kindSeq = new Map<string, number>();
@@ -12692,6 +17629,17 @@ class NamedFake implements ExecutionBackend {
       return { ref, outcome: "deadline-exceeded", durationMs: 1, operation: "in-flight-unknown" };
     }
     const attestation = { observedAny: this.o.observedAny ?? true, identityMismatch: false };
+    const scripted = this.o.answer?.({ mutant: m, ref });
+    if (scripted !== undefined && !("kind" in scripted)) {
+      return {
+        ref,
+        outcome: scripted.outcome,
+        durationMs: 5,
+        attestation,
+        ...(scripted.outcome === "fail" ? { failureMessage: `killed by ${m}` } : {}),
+        ...(scripted.reachedActive !== undefined ? { reachedActive: scripted.reachedActive } : {}),
+      };
+    }
     const killerRef = this.o.killerRef;
     const isKillingRun =
       m === (this.o.killer ?? "M0001") &&
@@ -12706,6 +17654,11 @@ class NamedFake implements ExecutionBackend {
     const fencedOp = { attemptId: `n${this.manySeq}`, opSeq: 100 + this.manySeq };
     const verdicts: TestVerdict[] = [];
     const [first] = opts.methods;
+    const whole =
+      first !== undefined && this.active !== null
+        ? this.o.answer?.({ mutant: this.active, ref: first.ref })
+        : undefined;
+    if (whole !== undefined && "kind" in whole) return whole;
     const keys =
       first === undefined
         ? {}
@@ -12766,6 +17719,7 @@ async function installedFixture(
     readonly observedAny?: boolean;
     readonly session?: NonNullable<ConstructorParameters<typeof NamedFake>[0]["session"]>;
     readonly unmutated?: NonNullable<ConstructorParameters<typeof NamedFake>[0]["unmutated"]>;
+    readonly answer?: NonNullable<ConstructorParameters<typeof NamedFake>[0]["answer"]>;
     /** Default true: a lease-bindable fake under a `FakeLeaseClient` lease. */
     readonly lease?: boolean;
   } = {},
@@ -12809,6 +17763,70 @@ async function installedFixture(
   };
   return { cfg, trace, store, client, installed, inner, dirs, compiled };
 }
+
+// R536 part 2: every runNamedMutants caller (lethal verify, its itests) hands the backend the build
+// symbols the SOURCE run recorded, before the first attach, so the installed artifact's line map
+// reads #if arms as the run did; and `narrow` gets the backend's whole refused set with them.
+describe("R536: runNamedMutants reads the installed artifact under the source run's build symbols", () => {
+  function withSymbolsTaker(fx: Awaited<ReturnType<typeof installedFixture>>, log: string[]) {
+    const base = fx.cfg.backend;
+    return {
+      ...base,
+      attach: async (a: BoundArtifact) => {
+        log.push("attach");
+        return base.attach?.(a);
+      },
+      useBuildSymbols: (s: readonly string[]) => {
+        log.push(`symbols ${JSON.stringify(s)}`);
+      },
+      coverageRefusals: async () => new Map([["codeunit:79199", "refused by the line map"]]),
+    } as ExecutionBackend;
+  }
+  function setSourceSymbols(fx: Awaited<ReturnType<typeof installedFixture>>, json: string | null) {
+    fx.store.db
+      .query("UPDATE runs SET build_symbols = ? WHERE id = ?")
+      .run(json, fx.installed.fromRunId);
+  }
+
+  test("the source run's recorded symbols reach the backend before the first attach", async () => {
+    const fx = await installedFixture();
+    setSourceSymbols(fx, JSON.stringify(["LETHALQ"]));
+    const log: string[] = [];
+    await runNamedMutants({ ...fx.cfg, backend: withSymbolsTaker(fx, log) });
+    expect(log.slice(0, 2)).toEqual(['symbols ["LETHALQ"]', "attach"]);
+    expect(log.filter((l) => l.startsWith("symbols"))).toHaveLength(1);
+  });
+
+  test("a source run that recorded no build symbols is refused before any backend call, never read as []", async () => {
+    const fx = await installedFixture();
+    setSourceSymbols(fx, null);
+    const log: string[] = [];
+    const err = await runNamedMutants({ ...fx.cfg, backend: withSymbolsTaker(fx, log) }).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(NamedMutantError);
+    expect((err as Error).message).toMatch(/recorded no build symbols/);
+    expect(log).toEqual([]);
+  });
+
+  test("narrow is handed the source run's symbols and the backend's refused set", async () => {
+    const fx = await installedFixture();
+    setSourceSymbols(fx, JSON.stringify(["LETHALQ"]));
+    const seen: Array<{ buildSymbols: readonly string[]; backendRefused: string[] }> = [];
+    await runNamedMutants({
+      ...fx.cfg,
+      backend: withSymbolsTaker(fx, []),
+      narrow: (_baseline, ctx) => {
+        seen.push({
+          buildSymbols: ctx.buildSymbols,
+          backendRefused: [...ctx.backendRefused.keys()],
+        });
+        return { methods: new Map([["M0001", [OVER]]]), unreached: new Set() };
+      },
+    });
+    expect(seen).toEqual([{ buildSymbols: ["LETHALQ"], backendRefused: ["codeunit:79199"] }]);
+  });
+});
 
 async function rewriteManifestKeepingId(
   dir: string,
@@ -13750,7 +18768,13 @@ describe("C02-06 Task 5.2: killingTestRef (decision 14)", () => {
       killingTestRef: OVER,
     };
     const report = legacyBuildReport({
-      caps: { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true },
+      caps: {
+        coverage: "procedure",
+        deploy: "publish",
+        isolation: "session",
+        kind: "bcdev",
+        authoritative: true,
+      },
       baselineGreen: true,
       batches: 1,
       unsupportedTests: [],
@@ -13763,6 +18787,183 @@ describe("C02-06 Task 5.2: killingTestRef (decision 14)", () => {
     expect(JSON.stringify(report)).not.toContain("killingTestRef");
     const row = report.mutants.find((m) => m.mutantCode === "M1");
     expect(row?.killingTest).toBe("OverBudgetDetected");
+  });
+});
+
+// R259: M0001, M0002 and M0003 are IsOverBudget's three mutants.
+describe("R259: runNamedMutants' probes", () => {
+  test("probes run after the targets, one method each, and never enter outcomes", async () => {
+    const fx = await installedFixture({
+      session: freshSessions(),
+      answer: ({ mutant, ref }) =>
+        mutant === "M0002" && ref.codeunitId === OVER2.codeunitId ? { outcome: "fail" } : undefined,
+    });
+    const handed: string[][] = [];
+    const scored: string[] = [];
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      emit: [
+        ...(fx.cfg.emit ?? []),
+        (e) => {
+          if (e.type === "mutant-scored") scored.push(e.mutant.mutantId);
+        },
+      ],
+      // A probe's method must have run at the baseline: OVER2 does through M0001's request.
+      requests: [
+        { mutantId: "M0001", methods: [OVER, OVER2] },
+        { mutantId: "M0002", methods: [OVER] },
+      ],
+      probe: (outcomes) => {
+        handed.push(outcomes.map((o) => `${o.mutant.mutantId} ${o.verdict}`));
+        return [
+          { mutantId: "M0002", methods: [OVER2] },
+          { mutantId: "M0003", methods: [OVER2] },
+        ];
+      },
+    });
+    expect(handed).toEqual([["M0001 killed", "M0002 survived"]]);
+    expect(res.outcomes.map((o) => [o.mutant.mutantId, o.verdict])).toEqual([
+      ["M0001", "killed"],
+      ["M0002", "survived"],
+    ]);
+    expect(
+      res.probes?.map((p) => [p.request.mutantId, p.outcome.verdict, p.outcome.killPosition]),
+    ).toEqual([
+      ["M0002", "killed", 1],
+      ["M0003", "survived", undefined],
+    ]);
+    expect(res.probes?.[0]?.outcome.killingTestRef).toEqual(OVER2);
+    // A progress reader counts mutant-scored events: only the two requested mutants emit one.
+    expect(scored).toEqual(["M0001", "M0002"]);
+  });
+
+  test("a rerun in a session a probe used is not fresh: probe rows stay in the run's store", async () => {
+    // Every group call gets a new session id; OVER2's rerun (its 2nd unmutated run) is handed the
+    // session of the last group call, which is the probe's.
+    let lastMany = 0;
+    let over2Unmutated = 0;
+    const fx = await installedFixture({
+      session: ({ kind, n, ref }) => {
+        if (kind === "many" || kind === "replay") {
+          lastMany = 1000 + n + (kind === "replay" ? 500 : 0);
+          return { sessionId: lastMany, testRunsBefore: 0 };
+        }
+        if (kind === "unmutated" && ref.codeunitId === OVER2.codeunitId) {
+          over2Unmutated += 1;
+          if (over2Unmutated === 2) return { sessionId: lastMany, testRunsBefore: 0 };
+        }
+        return { sessionId: 100 + n, testRunsBefore: 0 };
+      },
+    });
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      requests: [
+        { mutantId: "M0001", methods: [OVER] },
+        { mutantId: "M0002", methods: [OVER2] },
+      ],
+      rerunOnUnmutated: [OVER2],
+      probe: () => [{ mutantId: "M0003", methods: [OVER2] }],
+    });
+    expect(res.probes?.map((p) => p.outcome.verdict)).toEqual(["survived"]);
+    expect(res.rerun.map((r) => [r.outcome, r.sessionId, r.fresh])).toEqual([
+      ["pass", lastMany, false],
+    ]);
+  });
+
+  test("a probe that no run attested is error, never a verdict", async () => {
+    let op = 0;
+    const fx = await installedFixture({
+      session: freshSessions(),
+      answer: ({ mutant, ref }) =>
+        mutant === "M0003"
+          ? {
+              kind: "verdicts",
+              endedBy: "complete",
+              ranCount: 1,
+              verdicts: [{ ref, outcome: "pass", durationMs: 5 }],
+              durationMs: 5,
+              fencedOp: { attemptId: `unattested-${++op}`, opSeq: 800 + op },
+            }
+          : undefined,
+    });
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      requests: [{ mutantId: "M0001", methods: [OVER] }],
+      probe: () => [{ mutantId: "M0003", methods: [OVER] }],
+    });
+    expect(res.outcomes.map((o) => o.verdict)).toEqual(["killed"]);
+    expect(
+      res.probes?.map((p) => [p.outcome.verdict, p.outcome.failureNote?.slice(0, 18)]),
+    ).toEqual([["error", "unattested probe: "]]);
+  });
+
+  test("a lease lost during the reruns discards the probes' verdicts too", async () => {
+    const fx = await installedFixture({
+      session: freshSessions(),
+      unmutated: ({ ref, nth }) =>
+        ref.codeunitId === OVER2.codeunitId && nth === 2
+          ? { ref, outcome: "error", durationMs: 1, operation: "lease-lost" }
+          : undefined,
+    });
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      // OVER2's unmutated runs: its baseline (1), then its rerun (2), which loses the lease.
+      requests: [
+        { mutantId: "M0001", methods: [OVER] },
+        { mutantId: "M0002", methods: [OVER2] },
+      ],
+      rerunOnUnmutated: [OVER2],
+      probe: () => [{ mutantId: "M0003", methods: [OVER2] }],
+    });
+    expect(res.quarantined).toMatch(/lease/);
+    expect(
+      res.probes?.map((p) => [p.outcome.verdict, p.outcome.failureNote?.slice(0, 11)]),
+    ).toEqual([["error", "lease-lost:"]]);
+  });
+
+  test("R508 repro: a lease lost during the reruns leaves no kill in the store", async () => {
+    const fx = await installedFixture({
+      session: freshSessions(),
+      unmutated: ({ ref, nth }) =>
+        ref.codeunitId === OVER2.codeunitId && nth === 2
+          ? { ref, outcome: "error", durationMs: 1, operation: "lease-lost" }
+          : undefined,
+    });
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      requests: [
+        { mutantId: "M0001", methods: [OVER] },
+        { mutantId: "M0002", methods: [OVER2] },
+      ],
+      rerunOnUnmutated: [OVER2],
+    });
+    expect(res.quarantined).toMatch(/lease/);
+    // The returned outcomes are corrected in memory.
+    expect(res.outcomes.map((o) => o.verdict)).not.toContain("killed");
+    const stored = fx.store.db
+      .query(
+        "SELECT mutant_code AS code, verdict, failure_note AS note FROM mutants WHERE run_id = ? ORDER BY code",
+      )
+      .all(fx.cfg.runId) as Array<{ code: string; verdict: string; note: string | null }>;
+    expect(stored.map((r) => r.code)).toEqual(["M0001", "M0002"]);
+    expect(stored.filter((r) => r.verdict !== "error")).toEqual([]);
+    expect(stored.filter((r) => !(r.note ?? "").startsWith("lease-lost:"))).toEqual([]);
+  });
+
+  test("R508 control: with no lease loss during the reruns, the store keeps M0001's kill", async () => {
+    const fx = await installedFixture({ session: freshSessions() });
+    await runNamedMutants({
+      ...fx.cfg,
+      requests: [
+        { mutantId: "M0001", methods: [OVER] },
+        { mutantId: "M0002", methods: [OVER2] },
+      ],
+      rerunOnUnmutated: [OVER2],
+    });
+    const stored = fx.store.db
+      .query("SELECT verdict FROM mutants WHERE run_id = ? AND mutant_code = 'M0001'")
+      .all(fx.cfg.runId) as Array<{ verdict: string }>;
+    expect(stored).toEqual([{ verdict: "killed" }]);
   });
 });
 
@@ -14383,6 +19584,51 @@ describe("C02-06 Task 5.4: runVerify", () => {
     expect(fx.store.getRun(verifyRunId)?.testAppHash).toBe(`package:${COMPILED.sha256}`);
   });
 
+  // R474: verify records through the shared `record` path from the installed manifest's entries, so
+  // its rows carry the manifest's member hash (a later history or resume reads them under rule 2).
+  const memberHashRow = (s: ResultsStore, runId: number) =>
+    (
+      s.db
+        .query("SELECT member_hash FROM mutants WHERE run_id = ? AND mutant_code = 'M0001'")
+        .get(runId) as { member_hash: string | null } | null
+    )?.member_hash;
+  test("R474: verify writes the installed manifest's memberHash through to its own row", async () => {
+    const fx = await verifyFixture();
+    const manifest = JSON.parse(
+      await readFile(join(fx.installed.instrumentedDir, "mutant-manifest.json"), "utf8"),
+    ) as { mutants: MutantManifestEntry[] };
+    const hash = manifest.mutants.find((m) => m.mutantId === "M0001")?.memberHash;
+    expect(hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(memberHashRow(fx.store, fx.installed.fromRunId)).toBe(hash);
+    const out = await fx.verify(["0/M0001"]);
+    expect(out.exitCode).toBe(0);
+    const verifyRunId = out.verifyRunId;
+    if (verifyRunId === undefined) throw new Error("verify recorded no run");
+    expect(memberHashRow(fx.store, verifyRunId)).toBe(hash);
+  });
+
+  test("R474: an installed manifest without memberHash makes verify record NULL, never a hash", async () => {
+    const fx = await verifyFixture();
+    let rewritten = "";
+    await rewriteManifestKeepingId(fx.installed.instrumentedDir, (m) => {
+      const next = {
+        ...m,
+        mutants: (m.mutants as MutantManifestEntry[]).map(({ memberHash: _, ...rest }) => rest),
+      };
+      rewritten = JSON.stringify(next);
+      return next;
+    });
+    fx.store.db
+      .query("UPDATE batch_artifacts SET manifest_sha256 = ? WHERE run_id = ? AND batch_index = 0")
+      .run(Bun.SHA256.hash(rewritten, "hex"), fx.installed.fromRunId);
+    await restoreBundleFromDisk(fx.store, fx.installed);
+    const out = await fx.verify(["0/M0001"]);
+    expect(out.refused).toBeUndefined();
+    const verifyRunId = out.verifyRunId;
+    if (verifyRunId === undefined) throw new Error("verify recorded no run");
+    expect(memberHashRow(fx.store, verifyRunId)).toBeNull();
+  });
+
   test("verify reports the server's read-back identity, not the local compile's", async () => {
     const fx = await verifyFixture({
       compile: async () => ({ ...COMPILED, version: "1.0.0.2", sha256: "d".repeat(64) }),
@@ -14407,13 +19653,16 @@ describe("C02-06 Task 5.4: runVerify", () => {
       if (e === undefined) throw new Error(`no ${code}`);
       return serializeKey(identityKeyOf(e));
     };
+    // R443: a mark proves its mutant by the source run's numbering digest (rule 1).
+    const numberingDigest = fx.store.getRun(fx.installed.fromRunId)?.numberingDigest;
+    if (numberingDigest == null) throw new Error("the source run recorded no numbering digest");
     await Bun.write(
       join(fx.dirs.projectDir, "lethal.equivalent.json"),
       JSON.stringify({
         identityScheme: IDENTITY_SCHEME,
         marks: [
-          { key: keyOf("M0001"), reason: "same either way" },
-          { key: keyOf("M0002"), reason: "also equivalent" },
+          { key: keyOf("M0001"), reason: "same either way", numberingDigest },
+          { key: keyOf("M0002"), reason: "also equivalent", numberingDigest },
         ],
       }),
     );
@@ -14892,6 +20141,154 @@ describe("C02-06 Task 5.4: runVerify", () => {
     expect(fx.trace).toEqual([]);
     expect(fx.log).toEqual([]);
   });
+
+  // R259: M0001 is killed by the new test; M0002 and M0003, IsOverBudget's other two source
+  // survivors, are probed with it through the real covering loop.
+  describe("R259: sameProcedure probes through the covering loop", () => {
+    const isNew = (ref: TestMethodRef) => ref.codeunitId === NEWT.codeunitId;
+    let op = 0;
+    const fencedOp = () => {
+      op += 1;
+      return { attemptId: `r259-${op}`, opSeq: 900 + op };
+    };
+    /** M0002's probe answers `m0002`; M0003's passes without reaching the active statement. */
+    const probing = async (
+      m0002: NonNullable<Parameters<typeof installedFixture>[0]>["answer"],
+      o: Parameters<typeof verifyFixture>[0] = {},
+    ) => {
+      const fx = await verifyFixture({
+        withNewTest: true,
+        killerRef: NEWT,
+        answer: (c) =>
+          !isNew(c.ref)
+            ? undefined
+            : c.mutant === "M0002"
+              ? m0002?.(c)
+              : c.mutant === "M0003"
+                ? { outcome: "pass", reachedActive: false }
+                : undefined,
+        ...o,
+      });
+      return fx.verify(["0/M0001"]);
+    };
+
+    test("a probe that fails is alsoKills; one that passes without reaching the statement is notKilled", async () => {
+      const out = await probing(() => ({ outcome: "fail" }));
+      expect(out.results.map((r) => [r.verdict, r.killedByNewTest])).toEqual([["killed", true]]);
+      expect(out.results[0]?.sameProcedure).toEqual({
+        test: NEWT,
+        alsoKills: ["0/M0002"],
+        notKilled: ["0/M0003"],
+        unknown: [],
+        overCap: 0,
+      });
+      expect(out.counts).toEqual({ killed: 1, survived: 0, error: 0, skipped: 0 });
+      expect(out.exitCode).toBe(0);
+    });
+
+    const unknownM0002 = {
+      test: NEWT,
+      alsoKills: [],
+      notKilled: ["0/M0003"],
+      unknown: ["0/M0002"],
+      overCap: 0,
+    };
+    // Post-merge weak test (b), R-452: the group's attestation must be clean, or `runProbes`' own
+    // unattested-probe gate answers `unknown` and the attempted-set guard is never what decides.
+    // It is: M0003's run in the same group attests (NamedFake's default), and the skip verdict
+    // below now carries a clean attestation of its own. Revert: delete the R198 attempted-set guard
+    // in `runMutantsOnBackend`; all three cases go red (measured).
+    const clean = { observedAny: true, identityMismatch: false } as const;
+    const endings: ReadonlyArray<readonly [string, (ref: TestMethodRef) => RunManyResult]> = [
+      [
+        "a skip",
+        (ref) => ({
+          kind: "verdicts",
+          endedBy: "failure",
+          ranCount: 1,
+          verdicts: [{ ref, outcome: "skip", durationMs: 1, attestation: clean }],
+          durationMs: 1,
+          fencedOp: fencedOp(),
+        }),
+      ],
+      [
+        "a suite-unresolved group error",
+        (ref) => ({
+          kind: "call",
+          verdict: { ref, outcome: "error", durationMs: 1, failureMessage: "suite-unresolved" },
+          methodIndex: 1,
+          cause: "group-run-error",
+          fencedOp: fencedOp(),
+        }),
+      ],
+      [
+        "a complete answer with no entry",
+        () => ({
+          kind: "verdicts",
+          endedBy: "complete",
+          ranCount: 1,
+          verdicts: [],
+          durationMs: 1,
+          fencedOp: fencedOp(),
+        }),
+      ],
+      [
+        "a cap whose count outran its entries",
+        () => ({
+          kind: "verdicts",
+          endedBy: "cap",
+          ranCount: 1,
+          verdicts: [],
+          durationMs: 1,
+          fencedOp: fencedOp(),
+        }),
+      ],
+    ];
+    for (const [what, answer] of endings) {
+      test(`a probe that ends in ${what} is unknown, never notKilled`, async () => {
+        const out = await probing(({ ref }) => answer(ref));
+        expect(out.results[0]?.sameProcedure).toEqual(unknownM0002);
+        expect(out.exitCode).toBe(0);
+      });
+    }
+
+    for (const confirmation of ["fail", "error"] as const) {
+      test(`a probe kill whose unmutated confirmation ends in ${confirmation} is unknown`, async () => {
+        let probed = false;
+        let failed = false;
+        const out = await probing(
+          () => {
+            probed = true;
+            return { outcome: "fail" };
+          },
+          {
+            unmutated: ({ ref }) => {
+              if (isNew(ref) && probed && !failed) {
+                failed = true;
+                return { ref, outcome: confirmation, durationMs: 5, failureMessage: "unmutated" };
+              }
+              return { ref, outcome: "pass", durationMs: 5 };
+            },
+          },
+        );
+        expect(failed).toBe(true);
+        expect(out.results[0]?.sameProcedure).toEqual(unknownM0002);
+      });
+    }
+
+    test("a session that latches mid-probe leaves every sibling unknown", async () => {
+      const out = await probing(() => ({ outcome: "fail" }), { strand: "M0003" });
+      expect(out.quarantined).toBeDefined();
+      expect(out.results[0]?.sameProcedure).toEqual({
+        test: NEWT,
+        alsoKills: [],
+        notKilled: [],
+        unknown: ["0/M0002", "0/M0003"],
+        overCap: 0,
+      });
+      expect(out.exitCode).toBe(3);
+    });
+  });
 });
 
 // R252 (GitHub issue #9, side report 1): `lethal explain` refused a coverage-off report LethAL itself
@@ -14902,7 +20299,13 @@ describe("R252: coverageMode on the report, and explain on a coverage-off report
   async function coverageOffReport(): Promise<Record<string, unknown>> {
     const dirs = await makeProject();
     const backend = new StubBackend(
-      { coverage: "none", deploy: "none", isolation: "full-reset", authoritative: false },
+      {
+        coverage: "none",
+        deploy: "none",
+        isolation: "full-reset",
+        kind: "al-runner",
+        authoritative: false,
+      },
       () => "pass",
     );
     const report = await runSession({
@@ -14926,7 +20329,13 @@ describe("R252: coverageMode on the report, and explain on a coverage-off report
     const dirs = await makeProject();
     const fenced = await runSession({
       backend: new StubBackend(
-        { coverage: "fenced", deploy: "publish", isolation: "session", authoritative: false },
+        {
+          coverage: "fenced",
+          deploy: "publish",
+          isolation: "session",
+          kind: "al-runner",
+          authoritative: false,
+        },
         () => "pass",
         ["IsOverBudget"],
       ),
@@ -14989,6 +20398,681 @@ describe("R252: coverageMode on the report, and explain on a coverage-off report
     expect(() => assertExplainableReport(report)).toThrow(
       "`coverageMode` is a value this build cannot interpret",
     );
+  });
+});
+
+/**
+ * R577: "a kill must reproduce". A stub with the rule ON (`killsMustReproduce`), which counts the
+ * mutated runs per mutant (`nth`, read by the script), logs every activation and run in one shared
+ * `trace` (so order is asserted by sequence, never by clock), and records what each run was SENT.
+ * `answer` replaces a run's verdict outright (a lost or stranded reproduction).
+ */
+class ReproStub extends StubBackend {
+  readonly killsMustReproduce = true;
+  readonly nth = new Map<string, number>();
+  readonly trace: string[] = [];
+  readonly sent: Array<{ mutant: string | null; method: string; timeoutMs: number }> = [];
+  answer?: (mutant: string | null, n: number, v: TestVerdict) => TestVerdict | undefined;
+  override async activate(id: string | null) {
+    this.trace.push(`activate ${id ?? "null"}`);
+    await super.activate(id);
+  }
+  override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+    const active = this.activations.at(-1) ?? null;
+    const n = active === null ? 0 : (this.nth.get(active) ?? 0) + 1;
+    if (active !== null) this.nth.set(active, n);
+    this.sent.push({ mutant: active, method: ref.method, timeoutMs: opts.timeoutMs });
+    const base = await super.run(ref, opts);
+    const v = this.answer?.(active, n, base) ?? base;
+    this.trace.push(`run ${active ?? "null"} ${ref.method} ${v.outcome}`);
+    return v;
+  }
+}
+
+/** R577: the group path's stub (R206's) with the rule on. */
+class ReproWarmStub extends WarmStubBackend {
+  readonly killsMustReproduce = true;
+  /** Every non-confirmation `runMany` under `mutant`, as its method names, in order. */
+  callsUnder(mutant: string): string[][] {
+    return this.callLog.filter((c) => c.mutant === mutant).map((c) => c.methods);
+  }
+  private readonly callLog: Array<{ mutant: string | null; methods: string[] }> = [];
+  override async runMany(opts: RunManyOpts): Promise<RunManyResult> {
+    if (opts.confirmation !== true) {
+      this.callLog.push({
+        mutant: this.activations.at(-1) ?? null,
+        methods: opts.methods.map((x) => x.ref.method),
+      });
+    }
+    return super.runMany(opts);
+  }
+}
+
+describe("R577: a kill must reproduce under the mutant", () => {
+  const rowOf = (r: SessionReport, id: string) => r.mutants.find((m) => m.mutantCode === id);
+  const run = async (
+    backend: ExecutionBackend,
+    extra: { testAl?: string; mutantTimeoutMs?: number; onEvent?: (e: RunEvent) => void } = {},
+  ) => {
+    const dirs = await makeProject(extra.testAl);
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      ...(extra.mutantTimeoutMs !== undefined ? { mutantTimeoutMs: extra.mutantTimeoutMs } : {}),
+      ...(extra.onEvent !== undefined ? { emit: [createEmitter([extra.onEvent])] } : {}),
+    });
+    return { report, store };
+  };
+  /** Fails under a mutant on its FIRST mutated run only: the measured flaky shape (R577). */
+  const flaky = () => {
+    const backend: ReproStub = new ReproStub(
+      CAPS_NST,
+      (mutant) => (mutant === null ? "pass" : backend.nth.get(mutant) === 1 ? "fail" : "pass"),
+      ["IsOverBudget"],
+    );
+    backend.failureMessageFor = (mutant) =>
+      mutant === null ? undefined : `text ${backend.nth.get(mutant)}`;
+    return backend;
+  };
+  /** Fails under every mutant on every run: a deterministic kill. */
+  const deterministic = () => {
+    const backend = new ReproStub(CAPS_NST, (mutant) => (mutant === null ? "pass" : "fail"), [
+      "IsOverBudget",
+    ]);
+    backend.failureMessageFor = (mutant) => (mutant === null ? undefined : "Assert failed");
+    return backend;
+  };
+  /** The activations from mutant `id`'s first one, `len` long. */
+  const activationsOf = (b: StubBackend, id: string, len: number) => {
+    const at = b.activations.indexOf(id);
+    return b.activations.slice(at, at + len);
+  };
+
+  test("T1: fail under m, pass with no mutant, pass under m again is error kill-not-reproduced, never killed, and the banner names it", async () => {
+    const backend = flaky();
+    const { report, store } = await run(backend);
+    expect(report.mutants.length).toBeGreaterThan(0);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("error");
+      expect(m.cause).toBe("kill-not-reproduced");
+      expect(m.killingTest).toBeUndefined();
+      expect(m.killingTestFailure).toBeUndefined();
+      expect(m.killReproduced).toBeUndefined();
+      expect(m.failureNote).toContain(
+        "kill-not-reproduced OverBudgetDetected: failed under the mutant (text 1), passed with no mutant active, then passed when LethAL re-ran it under the mutant;",
+      );
+      expect(m.failureNote).toContain("Re-run with --resume");
+    }
+    expect(activationsOf(backend, "M0001", 4)).toEqual(["M0001", null, "M0001", "M0002"]);
+    expect(report.counts.killed).toBe(0);
+    expect(report.counts.unstable).toBe(0);
+    expect(renderConsole(report)).toContain(`, kill-not-reproduced ${report.mutants.length}`);
+    store.close();
+  });
+
+  test("T1b: an unreproduced kill never feeds R197's ledger, a reproduced one does (the next mutant's first test says which)", async () => {
+    // T3 is the killer; on a cold ledger the order is by name (T1 first), and a recorded kill in
+    // the procedure moves T3 to the front for the next mutant.
+    const firstFor = async (repeats: boolean) => {
+      const backend: ReproStub = new ReproStub(
+        CAPS_NST,
+        (mutant, ref) => {
+          if (mutant !== "M0001" || ref.method !== "T3") return "pass";
+          const t3Runs = backend.sent.filter((s) => s.mutant === "M0001" && s.method === "T3");
+          return repeats || t3Runs.length === 1 ? "fail" : "pass";
+        },
+        ["IsOverBudget"],
+      );
+      const { report, store } = await run(backend, { testAl: FIVE_TESTS_AL });
+      store.close();
+      return {
+        m1: rowOf(report, "M0001"),
+        first: backend.sent.find((s) => s.mutant === "M0002")?.method,
+      };
+    };
+    const flakyRun = await firstFor(false);
+    expect(flakyRun.m1?.cause).toBe("kill-not-reproduced");
+    expect(flakyRun.first).toBe("T1");
+    const realRun = await firstFor(true);
+    expect(realRun.m1?.verdict).toBe("killed");
+    expect(realRun.first).toBe("T3");
+  });
+
+  test("T2: fail, pass, fail with the same text is killed, with killReproduced and reproducedFailure taken from the reproduction", async () => {
+    const backend = deterministic();
+    const { report, store } = await run(backend);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("killed");
+      expect(m.killReproduced).toBe(true);
+      expect(m.killingTestFailure).toBe("Assert failed");
+      expect(m.reproducedFailure).toBe("Assert failed");
+      expect(m.killPosition).toBe(1);
+    }
+    // The marker reaches the store, where --resume reads it (B1).
+    const rows = store.mutantVerdicts(1);
+    expect(rows.length).toBe(report.mutants.length);
+    expect(rows.every((r) => r.killReproduced === true)).toBe(true);
+    store.close();
+  });
+
+  test("T3: a second failure with a DIFFERENT text still reproduces; both texts are kept", async () => {
+    // Every mutated run fails, with its own text: "text 1", then "text 2".
+    const always = new ReproStub(CAPS_NST, (mutant) => (mutant === null ? "pass" : "fail"), [
+      "IsOverBudget",
+    ]);
+    always.failureMessageFor = (mutant) =>
+      mutant === null ? undefined : `text ${always.nth.get(mutant)}`;
+    const { report, store } = await run(always);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("killed");
+      expect(m.killingTestFailure).toBe("text 1");
+      expect(m.reproducedFailure).toBe("text 2");
+    }
+    store.close();
+  });
+
+  test("T4: with the flag unset, T1's script is a kill exactly as before: [m, null], no third run, no marker", async () => {
+    // The flaky script per mutant: fail on the first mutated run, pass after.
+    const seen = new Map<string, number>();
+    const offBackend = new StubBackend(
+      CAPS_NST,
+      (mutant) => {
+        if (mutant === null) return "pass";
+        const k = (seen.get(mutant) ?? 0) + 1;
+        seen.set(mutant, k);
+        return k === 1 ? "fail" : "pass";
+      },
+      ["IsOverBudget"],
+    );
+    expect("killsMustReproduce" in offBackend).toBe(false);
+    const { report, store } = await run(offBackend);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("killed");
+      expect("killReproduced" in m).toBe(false);
+      expect("reproducedFailure" in m).toBe(false);
+    }
+    expect(activationsOf(offBackend, "M0001", 3)).toEqual(["M0001", null, "M0002"]);
+    // No third run: one mutated run per mutant.
+    expect([...seen.values()].every((k) => k === 1)).toBe(true);
+    store.close();
+  });
+
+  test("T5: a warm kill at k = 2 is reproduced by replaying [T1, T2] under the mutant, with no confirmation flag; two mutated `many` rows for the killer", async () => {
+    const backend: ReproWarmStub = new ReproWarmStub(
+      CAPS_NST,
+      (mutant, ref) => {
+        if (ref.method === "T1") backend.session.set("cache", "populated-by-T1");
+        if (mutant === "M0002" && ref.method === "T2" && backend.session.get("cache") !== undefined)
+          return "fail";
+        if (mutant === "M0001" && ref.method === "T1") return "fail";
+        return "pass";
+      },
+      ["IsOverBudget"],
+    );
+    backend.failureMessageFor = (mutant, ref) => `stale cache in ${ref.method} under ${mutant}`;
+    const { report, store } = await run(backend, { testAl: FIVE_TESTS_AL });
+    const k = rowOf(report, "M0002");
+    expect(k?.verdict).toBe("killed");
+    expect(k?.killPosition).toBe(2);
+    expect(k?.killReproduced).toBe(true);
+    expect(k?.reproducedFailure).toBe("stale cache in T2 under M0002");
+    expect(report.warmKills).toBe(1);
+    const pairs = backend.manyCalls
+      .filter((c) => c.methods.map((x) => x.ref.method).join(",") === "T1,T2")
+      .map((c) => c.confirmation === true);
+    expect(pairs).toEqual([true, false]);
+    const killerRows = store.db
+      .query(
+        "SELECT op_kind FROM test_results WHERE mutant_code = 'M0002' AND method = 'T2' ORDER BY id",
+      )
+      .all() as Array<{ op_kind: string | null }>;
+    expect(killerRows.map((r) => r.op_kind)).toEqual(["many", "many"]);
+    store.close();
+  });
+
+  /** T5's backend, with M0002's warm failure on its first warm T2 only. */
+  const warmFlaky = () => {
+    let warmT2 = 0;
+    const backend: ReproWarmStub = new ReproWarmStub(
+      CAPS_NST,
+      (mutant, ref) => {
+        if (ref.method === "T1") backend.session.set("cache", "populated-by-T1");
+        if (
+          mutant === "M0002" &&
+          ref.method === "T2" &&
+          backend.session.get("cache") !== undefined
+        ) {
+          warmT2 += 1;
+          return warmT2 === 1 ? "fail" : "pass";
+        }
+        if (mutant === "M0001" && ref.method === "T1") return "fail";
+        return "pass";
+      },
+      ["IsOverBudget"],
+    );
+    return backend;
+  };
+
+  test("T5b: a replay under the mutant that passes all k is kill-not-reproduced, with the replay clause", async () => {
+    const backend = warmFlaky();
+    const { report, store } = await run(backend, { testAl: FIVE_TESTS_AL });
+    const k = rowOf(report, "M0002");
+    expect(k?.verdict).toBe("error");
+    expect(k?.cause).toBe("kill-not-reproduced");
+    expect(k?.failureNote).toContain(
+      "then passed when LethAL re-ran it under the mutant by replaying the same 2 method(s) of its call;",
+    );
+    store.close();
+  });
+
+  test("T5c: a prefix method failing first in the replay under the mutant is kill-not-reproduced naming it", async () => {
+    const backend = warmFlaky();
+    backend.manyOverride = (_call, opts, composed) => {
+      const names = opts.methods.map((x) => x.ref.method).join(",");
+      if (opts.confirmation === true || names !== "T1,T2" || composed.kind !== "verdicts")
+        return composed;
+      const first = composed.verdicts[0];
+      if (first === undefined) return composed;
+      return {
+        ...composed,
+        endedBy: "failure",
+        ranCount: 1,
+        verdicts: [{ ...first, outcome: "fail", failureMessage: "T1 is order-sensitive" }],
+      };
+    };
+    const { report, store } = await run(backend, { testAl: FIVE_TESTS_AL });
+    const k = rowOf(report, "M0002");
+    expect(k?.cause).toBe("kill-not-reproduced");
+    expect(k?.failureNote).toContain(
+      "then 1. T1 failed first when LethAL replayed the same 2 method(s) of its call under the mutant;",
+    );
+    store.close();
+  });
+
+  test("T5d: a replay under the mutant that stops at the server's cap is warm-confirmation-incomplete (I5), never a kill", async () => {
+    const backend = warmFlaky();
+    backend.manyOverride = (_call, opts, composed) => {
+      const names = opts.methods.map((x) => x.ref.method).join(",");
+      if (opts.confirmation === true || names !== "T1,T2" || composed.kind !== "verdicts")
+        return composed;
+      const first = composed.verdicts[0];
+      if (first === undefined) return composed;
+      return { ...composed, endedBy: "cap", ranCount: 1, verdicts: [first] };
+    };
+    const { report, store } = await run(backend, { testAl: FIVE_TESTS_AL });
+    const k = rowOf(report, "M0002");
+    expect(k?.verdict).toBe("error");
+    expect(k?.cause).toBe("warm-confirmation-incomplete");
+    expect(k?.failureNote).toContain("stopped at the server's cap after 1 of 2 method(s)");
+    store.close();
+  });
+
+  test("T5e: at k = 2, a reproduction of the OTHER kind is kill-not-reproduced, both ways (I1)", async () => {
+    // A fail kill at T2 (warm) whose replay under the mutant times out at T2.
+    const failKill: ReproWarmStub = new ReproWarmStub(
+      CAPS_NST,
+      (mutant, ref) => {
+        if (ref.method === "T1") failKill.session.set("cache", "populated-by-T1");
+        return mutant === "M0002" && ref.method === "T2" && failKill.session.has("cache")
+          ? "fail"
+          : "pass";
+      },
+      ["IsOverBudget"],
+    );
+    let asked = 0;
+    failKill.timeoutFor = (mutant, ref) => {
+      if (mutant !== "M0002" || ref.method !== "T2") return undefined;
+      asked += 1;
+      return asked === 2 ? 999_999 : undefined;
+    };
+    const a = await run(failKill, { testAl: FIVE_TESTS_AL });
+    const ka = rowOf(a.report, "M0002");
+    expect(ka?.cause).toBe("kill-not-reproduced");
+    expect(ka?.failureNote).toContain(
+      "then timed out instead of failing when LethAL re-ran it under the mutant by replaying the same 2 method(s) of its call;",
+    );
+    a.store.close();
+
+    // A timeout kill at T2 (warm) whose replay under the mutant fails at T2.
+    const timeoutKill = new ReproWarmStub(
+      CAPS_NST,
+      (mutant, ref) => (mutant === "M0001" && ref.method === "T2" ? "fail" : "pass"),
+      ["IsOverBudget"],
+    );
+    let stopped = 0;
+    timeoutKill.timeoutFor = (mutant, ref) => {
+      if (mutant !== "M0001" || ref.method !== "T2") return undefined;
+      stopped += 1;
+      return stopped === 1 ? 999_999 : undefined;
+    };
+    const b = await run(timeoutKill, { testAl: FIVE_TESTS_AL });
+    const kb = rowOf(b.report, "M0001");
+    expect(kb?.cause).toBe("kill-not-reproduced");
+    expect(kb?.failureNote).toContain(
+      "then failed instead of timing out when LethAL re-ran it under the mutant at the same budget by replaying the same 2 method(s) of its call;",
+    );
+    b.store.close();
+  });
+
+  test("T6: the order is activate(m), fail, activate(null), pass, activate(m), fail, and only then is the mutant scored", async () => {
+    const backend = deterministic();
+    const { store } = await run(backend, {
+      onEvent: (e) => {
+        if (e.type === "mutant-scored")
+          backend.trace.push(`scored ${e.mutant.mutantId} ${e.verdict}`);
+      },
+    });
+    const at = backend.trace.indexOf("activate M0001");
+    expect(backend.trace.slice(at, at + 7)).toEqual([
+      "activate M0001",
+      "run M0001 OverBudgetDetected fail",
+      "activate null",
+      "run null OverBudgetDetected pass",
+      "activate M0001",
+      "run M0001 OverBudgetDetected fail",
+      "scored M0001 killed",
+    ]);
+    store.close();
+  });
+
+  test("T7: a backend that caches its suite per activation (al-runner --server) still reproduces a deterministic kill, because the mutant is re-activated", async () => {
+    // `activate` drops the cached answer; `run` answers from the cache while it holds one.
+    class CachingStub extends ReproStub {
+      cached: TestVerdict | undefined;
+      override async activate(id: string | null) {
+        this.cached = undefined;
+        await super.activate(id);
+      }
+      override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+        if (this.cached !== undefined) return this.cached;
+        const v = await super.run(ref, opts);
+        this.cached = v;
+        return v;
+      }
+    }
+    const backend = new CachingStub(CAPS_NST, (mutant) => (mutant === null ? "pass" : "fail"), [
+      "IsOverBudget",
+    ]);
+    const { report, store } = await run(backend);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("killed");
+      expect(m.killReproduced).toBe(true);
+    }
+    store.close();
+  });
+
+  test("T8a: a reproduction our own deadline cut keeps deadline-exceeded, never a kill", async () => {
+    const backend = deterministic();
+    backend.answer = (mutant, n, v) =>
+      mutant !== null && n === 2 ? { ...v, outcome: "deadline-exceeded" } : undefined;
+    const { report, store } = await run(backend);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("error");
+      expect(m.cause).toBe("deadline-exceeded");
+      expect(m.failureNote).toContain("reproducing OverBudgetDetected under the mutant");
+    }
+    store.close();
+  });
+
+  test("T8b: a reproduction whose answer is unreadable and unresolved is stranded, quarantined, never a kill", async () => {
+    const backend = deterministic();
+    backend.answer = (mutant, n, v) =>
+      mutant !== null && n === 2
+        ? {
+            ref: v.ref,
+            outcome: "deadline-exceeded",
+            durationMs: 1,
+            operation: "in-flight-unknown",
+          }
+        : undefined;
+    const { report, store } = await run(backend);
+    const m1 = rowOf(report, "M0001");
+    expect(m1?.verdict).toBe("error");
+    expect(m1?.cause).toBe("stranded");
+    expect(isStrandedNote(m1?.failureNote)).toBe(true);
+    expect(report.counts.killed).toBe(0);
+    store.close();
+  });
+
+  test("T8c: a reproduction that ran in a reused session is session-reused, never a kill", async () => {
+    const backend: ReproWarmStub = new ReproWarmStub(
+      CAPS_NST,
+      (mutant, ref) => (mutant === "M0001" && ref.method === "T1" ? "fail" : "pass"),
+      ["IsOverBudget"],
+    );
+    // Only single-method calls under a mutant report a used session: here, the reproduction.
+    backend.singleTestRunsBefore = (mutant) => (mutant !== null ? 3 : 0);
+    const { report, store } = await run(backend, { testAl: FIVE_TESTS_AL });
+    const m1 = rowOf(report, "M0001");
+    expect(m1?.verdict).toBe("error");
+    expect(m1?.cause).toBe("session-reused");
+    expect(m1?.failureNote).toContain("reproducing T1 under the mutant");
+    store.close();
+  });
+
+  test("T8d: an al-runner row the reproduction answered keeps its cause, and its note says it came from the reproduction (I5)", async () => {
+    const backend = deterministic();
+    backend.answer = (mutant, n, v) =>
+      mutant !== null && n === 2
+        ? {
+            ref: v.ref,
+            outcome: "error",
+            durationMs: 1,
+            runnerRow: "runner-test-error",
+            failureMessage: "handler not executed",
+          }
+        : undefined;
+    const { report, store } = await run(backend);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("error");
+      expect(m.cause).toBe("runner-test-error");
+      expect(m.failureNote).toBe(
+        "reproducing OverBudgetDetected under the mutant (first run failed: Assert failed): handler not executed",
+      );
+    }
+    store.close();
+  });
+
+  test("T9: timeout, a fast confirm, timeout again is timeout-killed with the marker", async () => {
+    const backend = new ReproStub(CAPS_NST, (mutant) => (mutant === null ? "pass" : "timeout"), [
+      "IsOverBudget",
+    ]);
+    const { report, store } = await run(backend);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("timeout-killed");
+      expect(m.killReproduced).toBe(true);
+    }
+    expect(activationsOf(backend, "M0001", 3)).toEqual(["M0001", null, "M0001"]);
+    store.close();
+  });
+
+  test("T9b: timeout, a fast confirm, then a pass under the mutant is kill-not-reproduced, saying it passed", async () => {
+    const backend: ReproStub = new ReproStub(
+      CAPS_NST,
+      (mutant) => (mutant === null ? "pass" : backend.nth.get(mutant) === 1 ? "timeout" : "pass"),
+      ["IsOverBudget"],
+    );
+    const { report, store } = await run(backend);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("error");
+      expect(m.cause).toBe("kill-not-reproduced");
+      expect(m.failureNote).toContain("timed out under the mutant at its");
+      expect(m.failureNote).toContain("then passed when LethAL re-ran it under the mutant;");
+      expect(m.failureNote).toContain("the timeout did not repeat");
+    }
+    store.close();
+  });
+
+  test("T9d: at k = 1, a reproduction of the OTHER kind is kill-not-reproduced, both ways (I1)", async () => {
+    // A fail kill whose reproduction times out.
+    const failKill: ReproStub = new ReproStub(
+      CAPS_NST,
+      (mutant) => (mutant === null ? "pass" : failKill.nth.get(mutant) === 1 ? "fail" : "timeout"),
+      ["IsOverBudget"],
+    );
+    const a = await run(failKill);
+    expect(a.report.mutants.length).toBeGreaterThan(0);
+    for (const m of a.report.mutants) {
+      expect(m.cause).toBe("kill-not-reproduced");
+      expect(m.failureNote).toContain(
+        "then timed out instead of failing when LethAL re-ran it under the mutant;",
+      );
+    }
+    a.store.close();
+    // A timeout kill whose reproduction fails.
+    const timeoutKill: ReproStub = new ReproStub(
+      CAPS_NST,
+      (mutant) =>
+        mutant === null ? "pass" : timeoutKill.nth.get(mutant) === 1 ? "timeout" : "fail",
+      ["IsOverBudget"],
+    );
+    const b = await run(timeoutKill);
+    expect(b.report.mutants.length).toBeGreaterThan(0);
+    for (const m of b.report.mutants) {
+      expect(m.cause).toBe("kill-not-reproduced");
+      expect(m.failureNote).toContain(
+        "then failed instead of timing out when LethAL re-ran it under the mutant at the same budget;",
+      );
+    }
+    b.store.close();
+  });
+
+  test("T9c: the reproduction is sent the budget the timed-out run was sent, not the confirm's longer deadline", async () => {
+    const backend = new ReproStub(CAPS_NST, (mutant) => (mutant === null ? "pass" : "timeout"), [
+      "IsOverBudget",
+    ]);
+    const { store } = await run(backend, { mutantTimeoutMs: 1000 });
+    const at = backend.sent.findIndex((s) => s.mutant === "M0001");
+    expect(backend.sent.slice(at, at + 3).map((s) => [s.mutant, s.timeoutMs])).toEqual([
+      ["M0001", 1000],
+      [null, 120_000],
+      ["M0001", 1000],
+    ]);
+    store.close();
+  });
+
+  test("T10: a flaky test ordered before a deterministic killer does not lose the kill: the loop goes on and the later test kills, reproduced", async () => {
+    const t1Runs = new Map<string, number>();
+    const backend = new ReproStub(
+      CAPS_NST,
+      (mutant, ref) => {
+        if (mutant !== "M0001") return "pass";
+        if (ref.method === "T3") return "fail";
+        if (ref.method !== "T1") return "pass";
+        const k = (t1Runs.get(mutant) ?? 0) + 1;
+        t1Runs.set(mutant, k);
+        return k === 1 ? "fail" : "pass";
+      },
+      ["IsOverBudget"],
+    );
+    const { report, store } = await run(backend, { testAl: FIVE_TESTS_AL });
+    const m1 = rowOf(report, "M0001");
+    expect(m1?.verdict).toBe("killed");
+    expect(m1?.killingTest).toBe("T3");
+    expect(m1?.killReproduced).toBe(true);
+    expect(m1?.cause).toBeUndefined();
+    store.close();
+  });
+
+  test("T10b: on the group path too, a flaky failure at position 1 does not end the walk: the call after it runs and its kill stands", async () => {
+    let t1 = 0;
+    const backend = new ReproWarmStub(
+      CAPS_NST,
+      (mutant, ref) => {
+        if (mutant !== "M0001") return "pass";
+        if (ref.method === "T4") return "fail";
+        if (ref.method !== "T1") return "pass";
+        t1 += 1;
+        return t1 === 1 ? "fail" : "pass";
+      },
+      ["IsOverBudget"],
+    );
+    const { report, store } = await run(backend, { testAl: FIVE_TESTS_AL });
+    const m1 = rowOf(report, "M0001");
+    expect(m1?.verdict).toBe("killed");
+    expect(m1?.killingTest).toBe("T4");
+    expect(m1?.killReproduced).toBe(true);
+    // I2: the walk resumes at the method right AFTER the flaky one, skipping none.
+    expect(backend.callsUnder("M0001")).toEqual([
+      ["T1", "T2", "T3", "T4", "T5"],
+      ["T2", "T3", "T4", "T5"],
+      ["T2", "T3", "T4"],
+    ]);
+    store.close();
+  });
+
+  test("T10c: on the group path, a warm timeout that does not reproduce does not end the walk either: the next call's kill stands", async () => {
+    let stopped = 0;
+    const backend = new ReproWarmStub(
+      CAPS_NST,
+      (mutant, ref) => (mutant === "M0001" && ref.method === "T4" ? "fail" : "pass"),
+      ["IsOverBudget"],
+    );
+    // T2 is stopped under M0001 the first time only: a chance overrun at k = 2.
+    backend.timeoutFor = (mutant, ref) => {
+      if (mutant !== "M0001" || ref.method !== "T2") return undefined;
+      stopped += 1;
+      return stopped === 1 ? 999_999 : undefined;
+    };
+    const { report, store } = await run(backend, { testAl: FIVE_TESTS_AL });
+    const m1 = rowOf(report, "M0001");
+    expect(m1?.verdict).toBe("killed");
+    expect(m1?.killingTest).toBe("T4");
+    expect(m1?.killReproduced).toBe(true);
+    // I2: after the call-level timeout at position 2 the walk resumes at T3, skipping none.
+    expect(backend.callsUnder("M0001")).toEqual([
+      ["T1", "T2", "T3", "T4", "T5"],
+      ["T1", "T2"],
+      ["T3", "T4", "T5"],
+      ["T3", "T4"],
+    ]);
+    store.close();
+  });
+
+  /** M0001's T1 fails on its first run only (flaky X); `later` answers M0001's T2 (Y). */
+  const flakyThen = (later: (v: TestVerdict) => TestVerdict) => {
+    let t1 = 0;
+    const backend = new ReproStub(
+      CAPS_NST,
+      (mutant, ref) => {
+        if (mutant !== "M0001" || ref.method !== "T1") return "pass";
+        t1 += 1;
+        return t1 === 1 ? "fail" : "pass";
+      },
+      ["IsOverBudget"],
+    );
+    backend.answer = (mutant, _n, v) =>
+      mutant === "M0001" && v.ref.method === "T2" ? later(v) : undefined;
+    return backend;
+  };
+
+  test("T11a: X not reproduced, then Y strands: the strand wins, its prefix and quarantine kept (I3)", async () => {
+    const backend = flakyThen((v) => ({
+      ref: v.ref,
+      outcome: "deadline-exceeded",
+      durationMs: 1,
+      operation: "in-flight-unknown",
+    }));
+    const { report, store } = await run(backend, { testAl: FIVE_TESTS_AL });
+    const m1 = rowOf(report, "M0001");
+    expect(m1?.verdict).toBe("error");
+    expect(m1?.cause).toBe("stranded");
+    expect(isStrandedNote(m1?.failureNote)).toBe(true);
+    expect(report.quarantined).toBeDefined();
+    store.close();
+  });
+
+  test("T11b: X not reproduced, then Y hits our deadline: deadline-exceeded wins (I3)", async () => {
+    const backend = flakyThen((v) => ({ ...v, outcome: "deadline-exceeded" }));
+    const { report, store } = await run(backend, { testAl: FIVE_TESTS_AL });
+    const m1 = rowOf(report, "M0001");
+    expect(m1?.verdict).toBe("error");
+    expect(m1?.cause).toBe("deadline-exceeded");
+    expect(m1?.failureNote).toBe("deadline exceeded running T2 (infrastructure, not a kill)");
+    store.close();
   });
 });
 

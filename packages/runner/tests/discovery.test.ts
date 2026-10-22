@@ -1,11 +1,12 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { initParser } from "@lethal/engine";
 import { discoverTests, testsInAlSource } from "../src/discovery";
 import { DiscoveredPathError } from "../src/line-filter";
 import { effectiveBuildSymbols } from "../src/preprocessor-symbols";
+import { removeScratchDirs } from "./helpers/scratch";
 
 // Get the fixtures path (account for running from dist/tests vs source tests)
 const fixturesDir = import.meta.dir.includes("dist")
@@ -24,24 +25,28 @@ describe("discoverTests", () => {
         codeunitName: "First Suite",
         method: "FirstTest",
         file: "MultipleCodeunits.Codeunit.al",
+        line: 6,
       },
       {
         codeunitId: 79211,
         codeunitName: "Second Suite",
         method: "SecondTest",
         file: "MultipleCodeunits.Codeunit.al",
+        line: 16,
       },
       {
         codeunitId: 79100,
         codeunitName: "Sandbox Tests",
         method: "PostingUpdatesTotal",
         file: "SampleTests.Codeunit.al",
+        line: 6,
       },
       {
         codeunitId: 79100,
         codeunitName: "Sandbox Tests",
         method: "DiscountCapped",
         file: "SampleTests.Codeunit.al",
+        line: 12,
       },
     ]);
   });
@@ -56,6 +61,7 @@ describe("discoverTests", () => {
         codeunitName: "First Suite",
         method: "FirstTest",
         file: "MultipleCodeunits.Codeunit.al",
+        line: 6,
       },
     ]);
     // Verify that SecondTest is attributed to 79211
@@ -66,6 +72,7 @@ describe("discoverTests", () => {
         codeunitName: "Second Suite",
         method: "SecondTest",
         file: "MultipleCodeunits.Codeunit.al",
+        line: 16,
       },
     ]);
     // Verify that ThirdTest (without Subtype=Test) is not included
@@ -136,8 +143,8 @@ async function discoverSource(name: string, source: string) {
   return discoverTests(root);
 }
 
-afterAll(async () => {
-  await Promise.all(tempRoots.map((root) => rm(root, { recursive: true, force: true })));
+afterAll(() => {
+  removeScratchDirs(tempRoots);
 });
 
 describe("discoverTests — a codeunit header shape in prose (R79)", () => {
@@ -301,6 +308,7 @@ describe("discoverTests — the test app's #if arms (R403)", () => {
           codeunitName: "R403 Tests",
           method: "OnlyUnderX",
           file: "R403.Codeunit.al",
+          line: 7,
         },
         file: "R403.Codeunit.al",
         reason: "compiled-out",
@@ -499,7 +507,13 @@ describe("testsInAlSource — a non-BMP character before a header (R418)", () =>
     const src =
       '// 😀😀\n/* a */ codeunit 79400 "Emoji Suite"\n{\n    Subtype = Test;\n\n    [Test]\n    procedure Runs()\n    begin\n    end;\n}\n';
     expect(testsInAlSource("Emoji.Codeunit.al", src)).toEqual([
-      { codeunitId: 79400, codeunitName: "Emoji Suite", method: "Runs", file: "Emoji.Codeunit.al" },
+      {
+        codeunitId: 79400,
+        codeunitName: "Emoji Suite",
+        method: "Runs",
+        file: "Emoji.Codeunit.al",
+        line: 7,
+      },
     ]);
   });
 
@@ -533,12 +547,14 @@ describe("testsInAlSource — a non-BMP character before a header (R418)", () =>
         codeunitName: "First Suite",
         method: "InFirst",
         file: "Two.Codeunit.al",
+        line: 6,
       },
       {
         codeunitId: 79402,
         codeunitName: "Second Suite",
         method: "InSecond",
         file: "Two.Codeunit.al",
+        line: 17,
       },
     ]);
   });
@@ -572,7 +588,13 @@ describe("discoverTests — discovered paths use `/` (R421)", () => {
     async () => {
       const dir = await r421TestDir("Sub\\T.Codeunit.al");
       const expected = [
-        { codeunitId: 79410, codeunitName: "Sub Suite", method: "T", file: "Sub/T.Codeunit.al" },
+        {
+          codeunitId: 79410,
+          codeunitName: "Sub Suite",
+          method: "T",
+          file: "Sub/T.Codeunit.al",
+          line: 6,
+        },
       ];
       expect(await discoverTests(dir, { platform: "win32" })).toEqual(expected);
       expect(await discoverTests(dir, { platform: "win32", only: ["Sub/**"] })).toEqual(expected);
@@ -601,7 +623,13 @@ describe("discoverTests — discovered paths use `/` (R421)", () => {
   test("12. CONTROL on POSIX (green before and after; the red case on Windows): a real subfolder gives `Sub/T.Codeunit.al`", async () => {
     const dir = await r421TestDir("Sub/T.Codeunit.al");
     expect(await discoverTests(dir)).toEqual([
-      { codeunitId: 79410, codeunitName: "Sub Suite", method: "T", file: "Sub/T.Codeunit.al" },
+      {
+        codeunitId: 79410,
+        codeunitName: "Sub Suite",
+        method: "T",
+        file: "Sub/T.Codeunit.al",
+        line: 6,
+      },
     ]);
   });
 });

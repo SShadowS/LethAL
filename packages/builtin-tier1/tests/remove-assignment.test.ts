@@ -14,7 +14,8 @@ describe("removeAssignment", () => {
     await initParser();
   });
 
-  it("tags an in-loop assignment that advances the condition (R196), and does NOT tag the preheader one", () => {
+  // Same-loop controls and the targets()/generate() agreement check: loop-exit-refusal.test.ts.
+  it("REFUSES an in-loop assignment that advances the condition (R196), and claims the preheader one", () => {
     const src = `codeunit 50000 P
 {
     procedure Go()
@@ -32,12 +33,7 @@ describe("removeAssignment", () => {
       .filter((n) => removeAssignment.targets(n, ctx))
       .flatMap((n) => removeAssignment.generate(n, ctx));
 
-    const inLoop = specs.filter((s) => s.before.text === "Remaining := Remaining - 1");
-    expect(inLoop.length).toBeGreaterThan(0);
-    for (const s of inLoop) expect(s.hangCapable).toBe("loop-condition-target");
-
-    const preheader = specs.filter((s) => s.before.text === "Remaining := 3");
-    expect(preheader.length).toBeGreaterThan(0);
-    for (const s of preheader) expect(s.hangCapable).toBeUndefined();
+    expect(specs.map((s) => s.before.text)).toEqual(["Remaining := 3"]);
+    for (const s of specs) expect(s.hangCapable).toBeUndefined();
   });
 });

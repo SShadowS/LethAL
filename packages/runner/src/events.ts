@@ -21,8 +21,9 @@
  * counts) is learned, not configured.
  */
 import type { MutantManifestEntry } from "@lethal/schemata";
-import type { BackendCapabilities, TestMethodRef, TestOutcome } from "./backend";
-import type { PreprocExcludedFile, RefusedExcludedFile } from "./excluded-sites";
+import type { BackendCapabilities, BackendKind, TestMethodRef, TestOutcome } from "./backend";
+import type { DependencyReportSourceRecord } from "./dependency-report-source";
+import type { HangRefusedFile, PreprocExcludedFile, RefusedExcludedFile } from "./excluded-sites";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
 import type { PermissionCanaryResult } from "./permission-canary";
 import type {
@@ -33,10 +34,26 @@ import type {
   NotInstrumentedFile,
 } from "./report";
 import type { CoverageAttribution } from "./selection";
-import type { MutantVerdict, RunnerKind } from "./store";
+import type { CarryHidden, MutantVerdict, RunnerKind } from "./store";
 
 /** Bumped independently of `REPORT_SCHEMA_VERSION`. Consumers ignore unknown event types. */
 export const STREAM_SCHEMA_VERSION = 1;
+
+/**
+ * R586: `BackendCapabilities` as `run-configured` carries it, with `kind` OPTIONAL here only so a
+ * stream recorded before R586 still validates. Every session since emits it. Spelled out because
+ * the schema generator reads plain interfaces; `_streamCapsCover` keeps it assignable.
+ */
+export interface StreamCapabilities {
+  /** Named directly (not `BackendCapabilities["kind"]`) so the schema generator emits its enum. */
+  readonly kind?: BackendKind;
+  readonly coverage: BackendCapabilities["coverage"];
+  readonly deploy: BackendCapabilities["deploy"];
+  readonly isolation: BackendCapabilities["isolation"];
+  readonly authoritative: boolean;
+}
+const _streamCapsCover = (c: BackendCapabilities): StreamCapabilities => c;
+void _streamCapsCover;
 
 export type RunPhase = "generate" | "deploy" | "baseline" | "mutants" | "teardown";
 
@@ -96,7 +113,9 @@ export type RunEventInput =
        * two.
        */
       readonly type: "run-configured";
-      readonly caps: BackendCapabilities;
+      /** R586: `kind` is optional HERE only, so a stream recorded before it still validates; every
+       *  session since R586 emits it (`runSession` passes its `BackendCapabilities`). */
+      readonly caps: StreamCapabilities;
       readonly only?: { readonly patterns: readonly string[] };
       /** R221: the `--exclude` narrowing this run was GIVEN, split the same way `only` is. */
       readonly exclude?: { readonly patterns: readonly string[] };
@@ -130,6 +149,9 @@ export type RunEventInput =
       readonly carryableCount: number;
       readonly strandedKeyCount: number;
       readonly retryStranded: boolean;
+      /** R557: why NOTHING of the run is carried (an al-runner run without the R557 test-name
+       *  mark, or one whose baseline holds renamed errors). Absent when its verdicts may carry. */
+      readonly carryRefused?: string;
     }
   | {
       readonly type: "phase-entered";
@@ -176,6 +198,25 @@ export type RunEventInput =
       /** R307: files the instrumentation trial refused whole. Present only when non-empty, so a
        *  stream from before R307 stays valid and folds to the same report bytes. */
       readonly refusedFiles?: readonly RefusedExcludedFile[];
+      /** R447: files where a hang check refused sites (R196's loop-condition write, or R501's open
+       *  report data item or only bound). Present only when non-empty, so a
+       *  stream from before R447 stays valid and folds to the same report bytes. */
+      readonly hangRefusedFiles?: readonly HangRefusedFile[];
+      /** R274: `hashSourceSnapshot` over the snapshot generation parsed. Optional on the wire so
+       *  an older stream still folds; the producer always writes it. */
+      readonly sourceSha256?: string;
+      /** R443: `numberingDigestOf` over this run's numbered entries. Optional on the wire so a
+       *  stream from before R443 still folds; the producer always writes it, with the next two. */
+      readonly numberingDigest?: string;
+      /** R443: this run's `twinSitesOf` pairs, the ones `runs.twin_tuples` records. */
+      readonly twinSites?: readonly string[];
+      /** R443: what this run numbered no ordinal for, as `runs.carry_hidden` records it. */
+      readonly carryHidden?: CarryHidden;
+      /** R565: see `SessionReport.dependencyReportSources`. Optional on the wire so a stream from
+       *  before R565 still folds; the producer always writes it, with the next one. */
+      readonly dependencyReportSources?: readonly DependencyReportSourceRecord[];
+      /** R565: see `SessionReport.dependencySourceSha256`. */
+      readonly dependencySourceSha256?: string;
     }
   | {
       /** Discovery returns the whole list in one parse — 1,000+ per-item events at one instant
@@ -280,6 +321,9 @@ export type RunEventInput =
          */
         readonly classification: readonly BaselineClassification[];
         readonly failureMessage?: string;
+        /** R272: this test's own measured duration (`TestVerdict.measuredDurationMs`), on a `pass`
+         *  run in THIS session only (never a resume-reused baseline). Optional on the wire. */
+        readonly durationMs?: number;
       }[];
     }
   | {
@@ -349,6 +393,20 @@ export type RunEventInput =
       readonly dir: string;
     }
   | {
+      /**
+       * R558: the test selector R551's one-call probe chose for this session's one-shot al-runner
+       * runs: `exact` (`--test X --test-exact X`) or `substring-with-excludes` (R488's `--test X
+       * --exclude-test <sibling>...`), with the probe's `reason` on the latter.
+       *
+       * Emitted once, beside the `al-runner-test-selector` WARNING (kept for the console line), and
+       * only when the probe applied: never on `--server`, where it answers `not-applicable`, and never
+       * on bcdev, which has no probe. Folded into `ExecutionContext.testSelector`.
+       */
+      readonly type: "al-runner-test-selector";
+      readonly selector: "exact" | "substring-with-excludes";
+      readonly reason?: string;
+    }
+  | {
       readonly type: "mutant-scored";
       /**
        * The full manifest entry, not `mutantCode` plus a join. In-process it travels by
@@ -385,6 +443,10 @@ export type RunEventInput =
       readonly killingTestFailure?: string;
       /** R206 — see `MutantRow.killPosition` (store.ts). Set on `killed`/`timeout-killed` only. */
       readonly killPosition?: number;
+      /** R577 — see `MutantOutcome.killReproduced` (report.ts). Set on a reproduced kill only. */
+      readonly killReproduced?: true;
+      /** R577 — see `MutantOutcome.reproducedFailure` (report.ts). */
+      readonly reproducedFailure?: string;
       readonly coveringTests: readonly string[];
       readonly coverageAttribution?: CoverageAttribution;
       readonly guardObserved?: boolean;
@@ -454,6 +516,10 @@ export type RunEventInput =
       readonly killingTestFailure?: string;
       /** R206 — see `MutantRow.killPosition`. Carried for the same reason. */
       readonly killPosition?: number;
+      /** R577 — see `MutantRow.killReproduced`. Carried for the same reason. */
+      readonly killReproduced?: true;
+      /** R577 — see `MutantRow.reproducedFailure`. Carried for the same reason. */
+      readonly reproducedFailure?: string;
       readonly coveringTests: readonly string[];
       readonly coverageAttribution?: CoverageAttribution;
       readonly runner?: RunnerKind;

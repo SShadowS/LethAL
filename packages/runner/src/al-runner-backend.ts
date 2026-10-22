@@ -11,6 +11,7 @@ import {
   emitStaticSelector,
 } from "@lethal/schemata";
 import {
+  AlRunnerCoverageFrameError,
   type AlRunnerCoverageIndex,
   alRunnerCoverageFrom,
   alRunnerCoverageFromServer,
@@ -28,14 +29,19 @@ import {
   OneShotTransport,
   alRunnerEnv,
   buildAlRunnerArgv,
+  compileFindingsOf,
+  compileScopeOf,
   isChildChosenExit,
+  noneSelectedRefusal,
   parseAlRunnerBcBuild,
   parseAlRunnerPlatformAppsDir,
   qualifiedTestName,
+  targetCompileMessage,
 } from "./al-runner-transport";
 import type {
   AlRunnerBcBuild,
   AlRunnerMissingImplementation,
+  AlRunnerRawTest,
   AlRunnerTransport,
 } from "./al-runner-transport";
 import type { CompiledArtifact } from "./artifact";
@@ -46,7 +52,6 @@ import type {
   ExecutionBackend,
   RunOpts,
   TestMethodRef,
-  TestOutcome,
   TestVerdict,
 } from "./backend";
 import { assertManifestObjectsDeclared, readManifestObjectKeys } from "./line-map";
@@ -69,8 +74,170 @@ import type { SpawnFn } from "./publisher";
  * on purpose and checks the wording it gets back against THIS regex rather than against a copy of
  * it. A probe with its own spelling could pass while the decode below failed — the two would be
  * measuring different things, which is the one outcome that makes the probe worse than nothing.
+ *
+ * R534 (M1): ANCHORED to the whole message. `TestExecutor.RaiseAfterTestMethodRun` (43f7617) builds
+ * `... (test result before it: <msg>)`, so an unanchored match could read user text that merely
+ * contains "Test exceeded 5s timeout" as a timeout.
  */
-export const RUNNER_TIMEOUT_MESSAGE = /TIMEOUT after \d+s|Test exceeded \d+s timeout/;
+export const RUNNER_TIMEOUT_MESSAGE = /^(?:Test exceeded \d+s timeout\.|TIMEOUT after \d+s\.?)$/;
+
+/**
+ * R534: al-runner's timeout of the test codeunit's OnRun trigger, measured on 2.12.0-main.43f76177
+ * on both transports. The OnRun runs under the SAME `TestTimeout()` as a test body, so N is the
+ * same stop. Anchored, so user text cannot match it.
+ */
+export const RUNNER_ONRUN_TIMEOUT_MESSAGE =
+  /^The test codeunit's OnRun trigger exceeded the (\d+)s timeout, so none of its test methods ran\.$/;
+
+/**
+ * R534 (D3): al-runner REFUSED a surface it does not support. It writes `{Type.Name}: {Message}`
+ * and every refusal message starts `out-of-scope: ` (`OutOfScopeMessage.Prefix`), whatever the
+ * exception type (`RunnerOutOfScopeException`, and the Cecil-injected `NavNCLDialogException` and
+ * `InvalidOperationException` throws); in an OnRun it arrives inside the OnRun-failure sentence.
+ * Matched at the TYPE position only: a user `Error('out-of-scope: ...')` would match and lose a
+ * kill (the safe direction); a message that merely contains the phrase does not match.
+ */
+export const RUNNER_REFUSAL =
+  /^(?:The test codeunit's OnRun trigger failed, so none of its test methods ran \(as in BC\): )?[A-Za-z_][\w.]*: out-of-scope: /;
+
+/**
+ * R517: the stop al-runner says it ENFORCED, from a timeout row's whole message
+ * (`Test exceeded {N}s timeout.`, built in `TestExecutor.RunOne` from the timeout it used, or
+ * R534's OnRun-trigger wording, built from the same timeout), in ms.
+ * Anchored and N > 0, so a wording that moved gives `undefined`, never a guessed figure: on
+ * `--server` that leaves the timeout unconfirmed (a lost kill, never a false one).
+ */
+export function parseReportedStopMs(message: string | undefined): number | undefined {
+  const m =
+    message === undefined
+      ? null
+      : (/^Test exceeded (\d+)s timeout\.$/.exec(message) ??
+        RUNNER_ONRUN_TIMEOUT_MESSAGE.exec(message));
+  const n = m?.[1] === undefined ? 0 : Number(m[1]);
+  return n > 0 ? n * 1000 : undefined;
+}
+
+/** R534: where a timeout row's stop fired, or `undefined` when the row is not a timeout. */
+function timeoutLocation(t: {
+  readonly status: string;
+  readonly message?: string;
+}): "body" | "onrun" | undefined {
+  if (t.status === "pass" || t.status === "fail" || t.message === undefined) return undefined;
+  if (RUNNER_TIMEOUT_MESSAGE.test(t.message)) return "body";
+  if (RUNNER_ONRUN_TIMEOUT_MESSAGE.test(t.message)) return "onrun";
+  return undefined;
+}
+
+/** A row al-runner reported as a timeout: the `timeout` case of `verdictFromRunnerTest`. Exported
+ *  for the R123 contract probe's `timeout-exit-readable` fact (R518), so the rule is spelled once. */
+export function isTimeoutRow(t: { readonly status: string; readonly message?: string }): boolean {
+  return timeoutLocation(t) !== undefined;
+}
+
+/**
+ * R517: `--server` was asked to start its daemon before `useMutantBudgetFloor` gave it a stop.
+ * Started bare, the daemon stops every test at al-runner's own 60 s, which LethAL never set and
+ * the confirm cannot see. Rethrown out of `run()` so it stops the session.
+ */
+export class AlRunnerServerStopUnsetError extends Error {
+  constructor() {
+    super(
+      "AlRunnerBackend: al-runner --server needs the session's --mutant-timeout-ms floor and baseline timeout (useMutantBudgetFloor) before its daemon starts, so it can send --test-timeout; refusing to start it with al-runner's own 60 s stop (R517).",
+    );
+  }
+}
+
+/**
+ * R583: the BASELINE (`activate(null)`) ran on a target bundle al-runner did not fully compile.
+ * Rethrown out of `run()`, so the session stops by name: a project al-runner did not compile
+ * cannot be measured. A mutant run gets per-test `error` instead.
+ */
+export class AlRunnerTargetCompileError extends Error {
+  constructor(detail: string) {
+    super(`AlRunnerBackend: baseline refused: ${detail}`);
+    this.name = "AlRunnerTargetCompileError";
+  }
+}
+
+/** R583: the target's `app.json` `runtime` cannot carry the resource selector (below 14.0). */
+export class ResourceSelectorRuntimeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ResourceSelectorRuntimeError";
+  }
+}
+
+/**
+ * R557: al-runner has no row for a session-suite test under the name LethAL sent it
+ * (`alRunnerMethodName`). Thrown out of `run()`, so the session stops before any mutant is scored,
+ * as `AlRunnerServerStopUnsetError` does. Before R557 such a test read as a baseline `error`, left
+ * every covering set, and each mutant only it would kill read `survived` or `no-coverage`.
+ *
+ * Thrown only where a missing row can mean nothing else: a one-shot "selected no test" (exit 6) or
+ * a result with no row equal to the name sent, and a `--server` suite answer that is otherwise clean
+ * (I1) or in which the missing test's own codeunit ran at least one test (I2: an emit-excluded
+ * codeunit elsewhere makes every answer unclean). A test kept in an `#if` arm discovery could not
+ * decide keeps its per-test `error` (I3, `AL_RUNNER_UNDECIDED_ARM_MISSING`).
+ */
+export class AlRunnerTestNameError extends Error {
+  constructor(
+    /** Each missing test: its AL name `<Codeunit Name>.<method>`, and the name al-runner was sent. */
+    readonly missing: ReadonlyArray<{ readonly alName: string; readonly sent: string }>,
+    /** The BC build al-runner announced, when known. */
+    readonly build?: string,
+    /** The rows al-runner did return, when it returned any. */
+    readonly returned?: readonly string[],
+  ) {
+    super(
+      `al-runner has no row for ${missing.length === 1 ? "the test" : `${missing.length} tests`} ${missing
+        .map((m) => `${m.alName} (sent as ${m.sent})`)
+        .join(", ")}${build !== undefined ? ` on al-runner's BC ${build}` : ""}${
+        returned !== undefined
+          ? ` (it returned: ${returned.length > 0 ? returned.slice(0, 20).join(", ") : "<no tests>"}${returned.length > 20 ? `, and ${returned.length - 20} more` : ""})`
+          : ""
+      }. LethAL sends a test under BC's C# name for the AL method (alRunnerMethodName); al-runner's naming rule moved, or this build does not compile that test (for example an \`#if\` arm LethAL decided compiled-in that al-runner compiled out, R392). A test LethAL cannot run cannot kill a mutant, so the session stops rather than scoring its only-kills as survivors (R557).`,
+    );
+    this.name = "AlRunnerTestNameError";
+  }
+}
+
+/**
+ * R583: `true` when `runtime` is a readable major.minor below 14.0, or unreadable; `false` at 14.0
+ * or above, and when absent (al-runner then compiles at its newest runtime, measured on 069cbf32
+ * only). Compared as numbers: as strings "9.0" sorts above "14.0".
+ */
+export function runtimeBelow14(runtime: unknown): boolean {
+  if (runtime === undefined) return false;
+  const m = typeof runtime === "string" ? /^(\d+)\.(\d+)$/.exec(runtime.trim()) : null;
+  if (m === null) return true;
+  return Number(m[1]) < 14;
+}
+
+/**
+ * R583: refuses the resource selector on a target whose `runtime` is below 14.0. Its selector
+ * calls `NavApp.GetResourceAsText`, which alc refuses there (AL0666), and so does al-runner from
+ * f23b9b5f on, which compiles at the app's own runtime. No fallback before LethAL's release (R584).
+ * Called by the CLI before anything is instrumented, and by `deploy()` on `active/app.json`.
+ */
+export function assertResourceSelectorRuntime(
+  appJson: Readonly<Record<string, unknown>>,
+  selectorMode: "static" | "resource",
+): void {
+  if (selectorMode !== "resource" || !runtimeBelow14(appJson.runtime)) return;
+  const shown =
+    typeof appJson.runtime === "string" ? appJson.runtime : JSON.stringify(appJson.runtime);
+  throw new ResourceSelectorRuntimeError(
+    `runtime ${shown} is below 14.0, which the resource selector needs (NavApp.GetResourceAsText, AL0666); set app.json runtime ≥ 17.0 or alRunner.selectorMode static`,
+  );
+}
+
+/**
+ * R557 (I3): prefix on the `error` of a test kept in an `#if` arm LethAL could not decide (R403,
+ * `preproc-undecided-kept`) when al-runner has no row for it: al-runner may simply have compiled it
+ * out, so it is not a stop. The orchestrator names every such test in one warning per batch.
+ */
+export const AL_RUNNER_UNDECIDED_ARM_MISSING =
+  "al-runner has no row for this test, which sits in an #if arm LethAL could not decide (R403, R557)";
 
 /**
  * Prefix on the `failureMessage` of an al-runner `status: "error"` this build could not classify.
@@ -118,6 +285,30 @@ const PROVISION_TEST_TIMEOUT_SECONDS = 600;
  * failure mode than the one being fixed.
  */
 const PROVISION_DEADLINE_MS = 30 * 60 * 1000;
+
+/** R551: the `--test-exact` probe's bound. Measured at 1.3 s on c5bbaf89 and 0.15 s on 43f76177. */
+const TEST_EXACT_PROBE_DEADLINE_MS = 30_000;
+
+/** R551: the probe's test name. Codeunit 0 does not exist, so it can never select a test. */
+export const TEST_EXACT_PROBE_NAME = "Codeunit0.LethalR551NoSuchTest";
+
+/**
+ * R516: the two limits a ONE-SHOT covering or confirm run is sent, from the budget the orchestrator
+ * judges it by. The in-run limit (`AL_RUNNER_TEST_TIMEOUT_SEC`, timed on the test BODY inside
+ * al-runner) IS the budget, as bcdev's stop fires at the budget; it used to be half of it, rounded
+ * down, which on a budget of `2 x wall` left a test about its own wall clock and timed it out under
+ * every mutant. The client deadline (the whole invocation, compile included) is twice the budget, so
+ * it stays well above the in-run limit and al-runner's own `timeout` fires first: were the two equal,
+ * our AbortController would win the race and a genuine hang would read `deadline-exceeded`. Used by
+ * `sendOneShot` only; the canary, the contract and symbol probes and provisioning keep their own
+ * fixed timeouts.
+ */
+export function oneShotLimits(budgetMs: number): {
+  readonly testTimeoutSeconds: number;
+  readonly deadlineMs: number;
+} {
+  return { testTimeoutSeconds: Math.max(1, Math.ceil(budgetMs / 1000)), deadlineMs: 2 * budgetMs };
+}
 
 /** What `AlRunnerBackend.provisionOnce` observed. Best-effort throughout — see that method. */
 export interface AlRunnerProvisionResult {
@@ -210,6 +401,47 @@ interface ServerSuiteResults {
   readonly coverageByName: ReadonlyMap<string, CoverageMap>;
   /** Wall time of the suite call, reported as every test's duration. See `runViaServer`. */
   readonly wallMs: number;
+  /** R517 (M3): the test whose timeout row ended the run; tests after it have no row. */
+  readonly hungTest?: string;
+  /** R583: set when the summary says the target bundle did not fully compile; no row is scored. */
+  readonly targetCompile?: string;
+  /** R557 (I1): `runTests`' own `exitCode` (-1 when the summary carried none). */
+  readonly exitCode: number;
+}
+
+/** R557 (I1): an al-runner run row name, `Codeunit<id>.<CLR method>`. An emit-excluded row is
+ *  `<AL object>.<AL method>` instead, and a constructor failure is `Codeunit<id>.<ctor>`. */
+const RUN_ROW_NAME = /^Codeunit\d+\./;
+
+/**
+ * R557 (I1): the rows that make a `--server` answer unclean: a status other than `pass`/`fail`, or
+ * a name that is not a run row's. An answer is CLEAN when its exit code is 0 or 1 and this is empty.
+ */
+function uncleanRows(suite: ServerSuiteResults): string[] {
+  return [...suite.byName.values()]
+    .filter(
+      (t) =>
+        (t.status !== "pass" && t.status !== "fail") ||
+        !RUN_ROW_NAME.test(t.name) ||
+        t.name.endsWith(".<ctor>"),
+    )
+    .map((t) => `${t.name} (${t.status})`);
+}
+
+/** R557 (I2): own-codeunit rows that are not a test method's run. */
+const NOT_A_TEST_RUN = new Set(["<ctor>", "OnRun", "<event>"]);
+
+/**
+ * R557 (I2): al-runner ran at least one test of codeunit `codeunitId`: a row
+ * `Codeunit<id>.<method>` whose method is not `<ctor>`, `OnRun` or `<event>`. Then that codeunit
+ * compiled and ran, so a missing test in it is a naming miss even when another codeunit's
+ * emit-excluded row makes the whole answer unclean.
+ */
+function codeunitRan(suite: ServerSuiteResults, codeunitId: number): boolean {
+  const prefix = `Codeunit${codeunitId}.`;
+  return [...suite.byName.keys()].some(
+    (n) => n.startsWith(prefix) && !NOT_A_TEST_RUN.has(n.slice(prefix.length)),
+  );
 }
 
 /**
@@ -227,8 +459,13 @@ const SERVER_SUITE_MIN_DEADLINE_MS = 10 * 60 * 1000;
 
 /** The real daemon, adapted to the handle `AlRunnerServer` consumes. Exported for R387's gate leg,
  *  which wraps it to record the argv. */
-export const defaultServerSpawn: ServerSpawnFn = (argv) => {
-  const proc = Bun.spawn([...argv], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+export const defaultServerSpawn: ServerSpawnFn = (argv, opts) => {
+  const proc = Bun.spawn([...argv], {
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+    ...(opts?.cwd !== undefined ? { cwd: opts.cwd } : {}),
+  });
   const handle: ServerProcessHandle = {
     write: (line) => {
       proc.stdin.write(line);
@@ -245,6 +482,20 @@ export interface AlRunnerConfig {
   readonly alRunnerPath: string; // path to the al-runner executable
   readonly instrumentedDir: string; // schemata output (LethAL-owned scratch)
   readonly testDir: string;
+  /**
+   * R219 run 003: the target project. al-runner can label coverage with its source paths (it
+   * discovers the project beside the test app), and the coverage index resolves a path whose file
+   * name two files share against this directory exactly.
+   */
+  readonly sourceProjectDir?: string;
+  /**
+   * R505: checked before and after every coverage-producing al-runner call. al-runner c39ad5de
+   * labels coverage with the LIVE project's files, so coverage is read only while the project's
+   * build inputs still equal the run's snapshot; a change throws and stops the session, never a
+   * verdict (`watchProjectInputs`, source-drift.ts). Absent: no check (the itests, whose fixtures
+   * do not change).
+   */
+  readonly projectWatch?: { check(): Promise<void> };
   readonly packagesDir?: string; // --package-cache symbol resolution
   readonly selectorObjectId: number; // id used when rewriting MutationSelector.Codeunit.al
   /**
@@ -285,15 +536,24 @@ export interface AlRunnerConfig {
    * every mutant runs every green test and an unreached one is reported `survived`, which
    * over-reports. With coverage wrongly enabled it would be reported `no-coverage`, which HIDES
    * it. So the caller has to opt in, and must first ask `alRunnerCoverageSupport(projectDir)`
-   * whether al-runner's coverage can be trusted for this project at all -- it cannot for a file
-   * declaring more than one object (al-runner reports every object after the first in the wrong
-   * frame, measured on v2.12.0-main.c39ad5de, R383; see `al-runner-coverage.ts`), and the CLI also
+   * whether al-runner's coverage can be trusted for this project at all -- for a file declaring
+   * more than one object only when R407's frame probe admits the build (c39ad5de reported every
+   * object after the first in the wrong frame, R383; see `al-runner-coverage.ts`), and the CLI also
    * refuses a file holding a `#if`-wrapped object (R298, pending R300).
    *
    * Decided by the caller rather than here because `capabilities()` is synchronous and is read at
    * the top of `runSession`, before an instrumented bundle exists to inspect.
    */
   readonly coverage?: "al-runner" | "none";
+  /**
+   * R407 — multi-object files are indexed for coverage. Set ONLY from the CLI coverage guard's
+   * frame-probe admission (`buildBackend`, for the main backend and every worker; the gate's own
+   * legs from the same guard). Never a config-file key: `AL_RUNNER_KEYS` refuses it. With coverage
+   * on, an index holding a multi-object file throws `AlRunnerCoverageFrameError` unless this is
+   * true, so a construction path that drops it fails loudly instead of reading every reached mutant
+   * `no-coverage`.
+   */
+  readonly admitMultiObjectFiles?: boolean;
   /**
    * R222 — how the active mutant reaches the compiled AL.
    *
@@ -329,11 +589,109 @@ export function provisionArgv(
   });
 }
 
+/** R551 — what `AlRunnerBackend.probeExactTestSelector` found. */
+export type TestSelectorProbe =
+  | { readonly kind: "not-applicable" }
+  | { readonly kind: "exact"; readonly elapsedMs: number }
+  | { readonly kind: "substring"; readonly elapsedMs: number; readonly reason: string };
+
+/** R551 — the raw outcome of the probe's one al-runner call. */
+export type TestExactProbeRaw =
+  | {
+      readonly kind: "exited";
+      readonly exitCode: number;
+      readonly stdout: string;
+      readonly stderr: string;
+    }
+  | { readonly kind: "deadline" }
+  | { readonly kind: "spawn-failed"; readonly message: string };
+
+/**
+ * R551 — the probe's decision, pure. Accepted only on the process's OWN exit 6 with an
+ * `--output-json` envelope whose `tests` is an empty array and whose `exitCode` is 6. The decision
+ * reads the exit code and the envelope only; stderr's first non-blank line (trimmed, at most 200
+ * chars) is appended to `reason` for the reader and never decides anything.
+ *
+ * Exit 6 with an empty envelope shows that this build PARSES `--test-exact` and counts it in its
+ * selection audit. It does not show that the flag selects, or that it matches whole names: on an
+ * empty bundle al-runner never reaches the executor. A build without the flag exits 2 before doing
+ * anything. The whole-name guarantee is NOT this probe: it is `--test <name>` kept in the argv (so a
+ * build that ignored `--test-exact` still selects no more than today's substring match) plus the
+ * exact-path refusal of any result naming another test (`run()`).
+ */
+export function classifyTestExactProbe(
+  raw: TestExactProbeRaw,
+): { readonly kind: "exact" } | { readonly kind: "substring"; readonly reason: string } {
+  if (raw.kind === "deadline") return { kind: "substring", reason: "deadline" };
+  if (raw.kind === "spawn-failed") {
+    return { kind: "substring", reason: `spawn failed: ${raw.message}` };
+  }
+  // R557: the same predicate the transport reads a "selected no test" answer with.
+  const code = noneSelectedRefusal(raw.exitCode, raw.stdout);
+  if (code === undefined) return { kind: "exact" };
+  const line = raw.stderr
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => l !== "");
+  return {
+    kind: "substring",
+    reason: line === undefined ? code : `${code}; stderr: ${line.slice(0, 200)}`,
+  };
+}
+
 export class AlRunnerBackend implements ExecutionBackend {
+  /** R577: a kill must reproduce under the mutant (measured: a ~1% flaky Microsoft test became a
+   *  false kill on every transport). bcdev's switch is R582. */
+  readonly killsMustReproduce = true;
+  /** R516 I1: one-shot's in-run limit is the budget (`oneShotLimits`); the daemon's is the one stop
+   *  it was started with (R517: `inRunStopMs`), never the budget. */
+  get inRunStopIsBudget(): boolean {
+    return this.cfg.serverMode !== true;
+  }
+  /** R517: see `useMutantBudgetFloor`. */
+  private budgetFloor: { readonly floorMs: number; readonly baselineTimeoutMs: number } | undefined;
+
+  /**
+   * R517: the session's floor and baseline timeout. Under `serverMode` the daemon is started with
+   * `--test-timeout S`, `S = max(1, ceil(max(floor, baseline) / 1000))`: the larger of the two, so
+   * the baseline's slow tests are not stopped before the baseline timeout they were sent. One-shot
+   * keeps `oneShotLimits` per call and ignores it. A second call with other values throws.
+   */
+  useMutantBudgetFloor(floorMs: number, baselineTimeoutMs: number): void {
+    const prev = this.budgetFloor;
+    if (
+      prev !== undefined &&
+      (prev.floorMs !== floorMs || prev.baselineTimeoutMs !== baselineTimeoutMs)
+    ) {
+      throw new Error(
+        `AlRunnerBackend.useMutantBudgetFloor: already set to (${prev.floorMs}, ${prev.baselineTimeoutMs}), now (${floorMs}, ${baselineTimeoutMs}); the daemon has one stop for its life (R517)`,
+      );
+    }
+    this.budgetFloor = { floorMs, baselineTimeoutMs };
+  }
+
+  /** R517: the daemon's `--test-timeout`, in seconds; `undefined` before `useMutantBudgetFloor`. */
+  private serverStopSeconds(): number | undefined {
+    const f = this.budgetFloor;
+    return f === undefined
+      ? undefined
+      : Math.max(1, Math.ceil(Math.max(f.floorMs, f.baselineTimeoutMs) / 1000));
+  }
+
+  /** R517: the stop the daemon is started with, under `serverMode` only. */
+  get inRunStopMs(): number | undefined {
+    const s = this.serverStopSeconds();
+    return this.server !== undefined && s !== undefined ? s * 1000 : undefined;
+  }
   // Set by deploy(); until then (or if deploy() is never called — existing
   // callers may drive activate()/run() directly against cfg.instrumentedDir)
   // activeDir() falls back to the statically configured instrumented dir.
   private deployedDir: string | undefined;
+  /** R583: the selector mode `deploy()` decided for this bundle; `activate()` reads it, never the
+   *  config again. Undefined on the no-deploy path, which falls back to the config. */
+  private deployedSelectorMode: "static" | "resource" | undefined;
+  /** R583: the last `activate()` argument; `null` is the baseline. Undefined before any. */
+  private activeMutant: string | null | undefined;
   /** R220 — coverage scratch, created on first use so a `coverage: "none"` session makes none. */
   private coverageScratch: string | undefined;
   private coverageSeq = 0;
@@ -346,6 +704,8 @@ export class AlRunnerBackend implements ExecutionBackend {
   /** R147 — see `usePlatformAppsDir`. Undefined until this session's provisioning run has reported a
    *  directory that passed every check, and then for the rest of the session. */
   private platformAppsDir: string | undefined;
+  /** R-300b — see `useBuildSymbols`. A session fact, so `resetLayoutState` keeps it. */
+  private buildSymbols: readonly string[] | undefined;
   private readonly transport: AlRunnerTransport;
   /** R220 — present only under `serverMode`, and the sole owner of the daemon's lifetime. */
   private server: AlRunnerServer | undefined;
@@ -360,6 +720,143 @@ export class AlRunnerBackend implements ExecutionBackend {
    * single worst thing this cache could do.
    */
   private serverSuite: ServerSuiteResults | undefined;
+  /**
+   * R488 — per requested test, the OTHER tests al-runner's substring `--test` was seen to select
+   * with it, sent back as `--exclude-test` on every later one-shot call. Kept for the session: the
+   * names come from the test project, which no mutant changes.
+   */
+  private readonly oneShotSiblings = new Map<string, readonly string[]>();
+  /** R488 — the session's discovered test names, see `useDiscoveredTests`. */
+  private discoveredTests: readonly string[] = [];
+
+  /**
+   * R488 — seeds each requested test's excludes from the discovered list, so even the FIRST
+   * one-shot call never runs a look-alike: every name that contains the requested one, ignoring
+   * case as al-runner does, except a name equal to it ignoring case (excluding that would empty the
+   * run, and al-runner then exits 0 with no tests). The learn-and-refuse path in `run()` stays as
+   * the defence for a test discovery did not see.
+   */
+  useDiscoveredTests(tests: readonly TestMethodRef[]): void {
+    this.discoveredTests = tests.map((t) => qualifiedTestName(t.codeunitId, t.method));
+  }
+
+  /** R557 (I3): the session suite, by al-runner name, with each test's ref. */
+  private sessionSuite: ReadonlyArray<{ readonly ref: TestMethodRef; readonly sent: string }> = [];
+  /** R557 (I3): the `preproc-undecided-kept` tests, by al-runner name. */
+  private undecidedKept: ReadonlySet<string> = new Set();
+
+  /** R557 (I3): see `ExecutionBackend.useSessionTests`. */
+  useSessionTests(suite: readonly TestMethodRef[], undecidedKept: readonly TestMethodRef[]): void {
+    this.sessionSuite = suite.map((ref) => ({
+      ref,
+      sent: qualifiedTestName(ref.codeunitId, ref.method),
+    }));
+    this.undecidedKept = new Set(
+      undecidedKept.map((r) => qualifiedTestName(r.codeunitId, r.method)),
+    );
+  }
+
+  /**
+   * R557: a row missing for `wanted`. An undecided-kept test keeps a per-test `error` (I3) and the
+   * caller returns it; any other test stops the session. `missing` lists every test to name.
+   */
+  private undecidedOrStop(
+    ref: TestMethodRef,
+    wanted: string,
+    detail: string,
+    durationMs: number,
+    missing: ReadonlyArray<{ readonly ref: TestMethodRef; readonly sent: string }>,
+    returned: readonly string[] | undefined,
+  ): TestVerdict {
+    if (this.undecidedKept.has(wanted)) {
+      return {
+        ref,
+        outcome: "error",
+        durationMs,
+        failureMessage: `${AL_RUNNER_UNDECIDED_ARM_MISSING}: ${detail}`,
+        operation: "pre-dispatch-rejected",
+      };
+    }
+    throw new AlRunnerTestNameError(
+      missing.map((m) => ({ alName: `${m.ref.codeunitName}.${m.ref.method}`, sent: m.sent })),
+      this.observedBcBuild()?.build,
+      returned,
+    );
+  }
+
+  /**
+   * R551 — whether one-shot calls send `--test X --test-exact X` (and no excludes) instead of R488's
+   * `--test X --exclude-test <sibling>...`. FALSE until an accepting probe on this backend, or
+   * `useExactTestSelector(true)` from `runSession` after the session backend's probe accepted. A
+   * backend nobody probed is an R488 backend.
+   */
+  private exactTestSelector = false;
+
+  /**
+   * R551 — one al-runner call, once per session, one-shot transport only, through this backend's
+   * injected spawn: `<path> --output-json --test-exact Codeunit0.LethalR551NoSuchTest <empty dir>`.
+   * Bounded by `deadlineMs`. Sets this backend's selector from the answer, in BOTH directions. See
+   * `classifyTestExactProbe` for what an acceptance does and does not show. Never throws: anything
+   * but an acceptance keeps R488's path, which is correct on every build measured.
+   *
+   * Under `serverMode` it spawns nothing and returns `not-applicable`: the daemon path has no
+   * per-test selector (it runs the whole suite per activation), and `--server --test-exact` is
+   * refused at startup.
+   */
+  async probeExactTestSelector(
+    deadlineMs = TEST_EXACT_PROBE_DEADLINE_MS,
+  ): Promise<TestSelectorProbe> {
+    if (this.server !== undefined) return { kind: "not-applicable" };
+    const started = Date.now();
+    const dir = await mkdtemp(join(tmpdir(), "lethal-r551-probe-"));
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let raw: TestExactProbeRaw;
+    try {
+      raw = await Promise.race([
+        this.spawn(
+          [this.cfg.alRunnerPath, "--output-json", "--test-exact", TEST_EXACT_PROBE_NAME, dir],
+          { signal: controller.signal },
+        ).then(
+          (r): TestExactProbeRaw => ({ kind: "exited", ...r }),
+          (e): TestExactProbeRaw => ({
+            kind: "spawn-failed",
+            message: e instanceof Error ? e.message : String(e),
+          }),
+        ),
+        new Promise<TestExactProbeRaw>((resolve) => {
+          timer = setTimeout(() => {
+            controller.abort();
+            resolve({ kind: "deadline" });
+          }, deadlineMs);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+    const decided = classifyTestExactProbe(raw);
+    const elapsedMs = Date.now() - started;
+    this.exactTestSelector = decided.kind === "exact";
+    return decided.kind === "exact"
+      ? { kind: "exact", elapsedMs }
+      : { kind: "substring", elapsedMs, reason: decided.reason };
+  }
+
+  /** R551 — set by `runSession` on every worker from the session backend's probe, true or false. */
+  useExactTestSelector(on: boolean): void {
+    this.exactTestSelector = on;
+  }
+
+  private siblingsOf(wanted: string): readonly string[] {
+    const w = wanted.toLowerCase();
+    const seeded = this.discoveredTests.filter((n) => {
+      const l = n.toLowerCase();
+      return l !== w && l.includes(w);
+    });
+    const learned = this.oneShotSiblings.get(wanted) ?? [];
+    return [...seeded, ...learned.filter((n) => !seeded.includes(n))];
+  }
 
   constructor(
     private readonly cfg: AlRunnerConfig,
@@ -413,6 +910,19 @@ export class AlRunnerBackend implements ExecutionBackend {
 
   observedMissingImplementation(): AlRunnerMissingImplementation | undefined {
     return this.transport.observedMissingImplementation();
+  }
+
+  /** R583: dependency `--server` summary entries; the daemon's stderr is never read per request. */
+  private readonly serverDependencyDrops = new Set<string>();
+
+  /** R583: every distinct dependency drop either transport saw; the session warns once for each. */
+  observedDependencyDrops(): readonly string[] {
+    return [
+      ...new Set([
+        ...(this.transport.observedDependencyDrops?.() ?? []),
+        ...this.serverDependencyDrops,
+      ]),
+    ];
   }
 
   observedBcBuild(): AlRunnerBcBuild | undefined {
@@ -632,6 +1142,63 @@ export class AlRunnerBackend implements ExecutionBackend {
   }
 
   /**
+   * R-300b: the session's EFFECTIVE build symbols (app.json, config and al-runner's predefined
+   * ones), handed over by `runSession` before the first deploy. The coverage index evaluates each
+   * file's `#if` arms under them, as generation did. Not a layout field: one set per session.
+   */
+  useBuildSymbols(symbols: readonly string[]): void {
+    this.buildSymbols = [...symbols];
+  }
+
+  /**
+   * The index, under the session's symbols; with coverage on, a deploy without them refuses.
+   *
+   * R407 backstops, for a bundle holding a multi-object file: it throws unless the guard's
+   * admission reached this backend (`cfg.admitMultiObjectFiles`), and unless `deploy()` ran first.
+   * Without a deploy the index would be built from `cfg.instrumentedDir`, the PARENT of the batch
+   * folders, and the label check would then let a batch label through.
+   */
+  private async coverageIndexOf(dir: string): Promise<AlRunnerCoverageIndex> {
+    const symbols = this.buildSymbols;
+    if (symbols === undefined) {
+      throw new Error(
+        "AlRunnerBackend: coverage is on but the session's build symbols were never handed over (useBuildSymbols), so the #if arms of the bundle are unknown; refusing rather than guessing them (R-300b).",
+      );
+    }
+    const admit = this.cfg.admitMultiObjectFiles === true;
+    const index = await buildAlRunnerCoverageIndex(dir, {
+      symbols,
+      ...(admit ? { admitMultiObjectFiles: true } : {}),
+      ...(this.cfg.sourceProjectDir !== undefined
+        ? { sourceProjectDir: this.cfg.sourceProjectDir }
+        : {}),
+    });
+    const multi = index.multiObjectFiles;
+    if (multi.length > 0 && !admit) {
+      throw new AlRunnerCoverageFrameError(
+        `AlRunnerBackend: coverage is on and the bundle holds multi-object file(s) ${multi.join(", ")}, but no frame-probe admission reached this backend. Their objects would read no-coverage while tests reach them`,
+      );
+    }
+    if (multi.length > 0 && this.deployedDir === undefined) {
+      throw new AlRunnerCoverageFrameError(
+        `AlRunnerBackend: a coverage index for the multi-object file(s) ${multi.join(", ")} was asked for before any deploy(), so it would be built from ${dir} rather than the deployed bundle`,
+      );
+    }
+    return index;
+  }
+
+  /**
+   * Sol run 001 (I): the objects the deployed bundle's index refuses by name, read by `runSession`
+   * after each deploy and merged into selection's refusal map, so an index-only refusal (an
+   * instrumented text whose arms are undecided) is never scored or read as plain no-coverage.
+   */
+  async coverageRefusals(): Promise<ReadonlyMap<string, string>> {
+    if ((this.cfg.coverage ?? "none") === "none") return new Map();
+    this.coverageIndex ??= await this.coverageIndexOf(this.activeDir());
+    return this.coverageIndex.refusals;
+  }
+
+  /**
    * `isolation: "full-reset"` is honest only because the transport actually sends
    * `--isolation test` (see OneShotTransport.send) — v2's mode that gives every [Test] fresh
    * state. Do not claim it back if that flag ever changes.
@@ -652,9 +1219,11 @@ export class AlRunnerBackend implements ExecutionBackend {
    * - `coverage: "none"` — NO LONGER TRUE since R220 (2026-09-09): `cfg.coverage: "al-runner"`
    *   reads al-runner's own per-test `--coverage`. What keeps `authoritative` false on this point
    *   is that the coverage is CONDITIONAL: a file declaring more than one object disables it for
-   *   the whole run, so it is a property of the project's layout, not a capability of the backend.
-   *   The reason moved in R383: upstream #3713 (objects after the first lost) is fixed, but on
-   *   v2.12.0-main.c39ad5de those objects' lines come back in a frame LethAL cannot undo.
+   *   the whole run unless R407's frame probe admits the al-runner build, so it is a property of the
+   *   project's layout AND the build, not a capability of the backend. The reason moved in R383:
+   *   upstream #3713 (objects after the first lost) is fixed, but on v2.12.0-main.c39ad5de those
+   *   objects' lines come back in a frame LethAL cannot undo; 43f76177 reports them correctly.
+   *   A `#if`-wrapped object of an unmeasured shape still disables it (R298).
    * - **`Codeunit.Run` does not scope a write transaction.** `remove-commit` at
    *   `Data Commit Ops.CommitThenRunValueForm` is killed on bcdev and survives here, and a direct
    *   probe confirms the mechanism: a row inserted inside `Codeunit.Run` survives the error that
@@ -688,6 +1257,9 @@ export class AlRunnerBackend implements ExecutionBackend {
    */
   capabilities(): BackendCapabilities {
     return {
+      // R586 (C1) and R553: identity, not inferred from `authoritative`. The assertion screen reads
+      // past al-runner's `{Type}Exception: ` prefix on this kind only.
+      kind: "al-runner",
       // R220: `"al-runner"` sits on the `fenced` side of `CoverageMode`'s routing axis -- ONE
       // runner produces the green set and every verdict -- so it carries no runner-disagreement
       // note and R175's unnamed-member widening stays off, both via `isHubCoverageMode`.
@@ -798,7 +1370,18 @@ export class AlRunnerBackend implements ExecutionBackend {
     // The selector AL written here never changes again; `activate()` only rewrites the text file.
     // AFTER the manifest validation above, so a corrupt manifest still fails with that message
     // rather than with whatever this helper would say about the same broken file.
-    if (this.selectorMode() === "resource") {
+    // R583: decided ONCE here and stored; `activate()` reads the stored mode. Refused below 14.0 on
+    // the manifest al-runner will actually compile.
+    const mode = this.selectorMode();
+    if (mode === "resource") {
+      const manifest = JSON.parse(await readFile(join(activeDir, "app.json"), "utf8")) as Record<
+        string,
+        unknown
+      >;
+      assertResourceSelectorRuntime(manifest, mode);
+    }
+    this.deployedSelectorMode = mode;
+    if (mode === "resource") {
       await this.installResourceSelector(activeDir, artifactId);
     }
     // R-307 section 4: with coverage on, the index is built HERE, before any baseline, rather than
@@ -806,7 +1389,7 @@ export class AlRunnerBackend implements ExecutionBackend {
     // declarations first. A holds by construction (map and `declared` come from one parse) and is
     // checked anyway; B is exempt only for the index's own refused and multi-object files.
     if ((this.cfg.coverage ?? "none") !== "none") {
-      const index = await buildAlRunnerCoverageIndex(activeDir);
+      const index = await this.coverageIndexOf(activeDir);
       this.coverageIndex = index;
       assertManifestObjectsDeclared(
         await readManifestObjectKeys(activeDir),
@@ -845,6 +1428,7 @@ export class AlRunnerBackend implements ExecutionBackend {
   private resetLayoutState(): void {
     this.coverageIndex = undefined;
     this.serverSuite = undefined;
+    this.deployedSelectorMode = undefined;
   }
 
   private activeDir(): string {
@@ -932,7 +1516,7 @@ export class AlRunnerBackend implements ExecutionBackend {
     }
     const lines = parseCobertura(xml);
     if (lines.length === 0) return undefined;
-    this.coverageIndex ??= await buildAlRunnerCoverageIndex(this.activeDir());
+    this.coverageIndex ??= await this.coverageIndexOf(this.activeDir());
     return alRunnerCoverageFrom(lines, this.coverageIndex);
   }
 
@@ -941,6 +1525,7 @@ export class AlRunnerBackend implements ExecutionBackend {
     // they are dropped BEFORE the change rather than after: a throw in between would otherwise
     // leave the previous mutant's verdicts cached against the next mutant's source.
     this.serverSuite = undefined;
+    this.activeMutant = mutantId;
     const dir = this.activeDir();
     // Belt-and-suspenders for the documented no-deploy path (deploy() never called, dir ===
     // cfg.instrumentedDir): deploy() already strips these when it runs, but a caller driving
@@ -950,7 +1535,7 @@ export class AlRunnerBackend implements ExecutionBackend {
     for (const f of [CONTROL_REGISTER_FILENAME, CONTROL_UPGRADE_FILENAME]) {
       await rm(join(dir, f), { force: true });
     }
-    if (this.selectorMode() === "resource") {
+    if ((this.deployedSelectorMode ?? this.selectorMode()) === "resource") {
       // R222: the whole point. One small text file, no AL rewritten, so al-runner's output cache
       // still HITS and the already-compiled bundle reads the new id at runtime.
       await writeFile(
@@ -994,14 +1579,145 @@ export class AlRunnerBackend implements ExecutionBackend {
 
   async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
     if (this.server !== undefined) return this.runViaServer(ref, opts);
-    const started = Date.now();
     // ONE name for both the `--test` filter and the lookup below — see qualifiedTestName.
     const wanted = qualifiedTestName(ref.codeunitId, ref.method);
+    let started = Date.now();
+    let sent = await this.sendOneShot(wanted, opts);
+    // R488. `--test` is a substring match, so a result can carry tests we did not ask for, and its
+    // ONE Cobertura file and ONE deadline are shared with them. Such a result is never credited.
+    // Each sibling is learned once, by name, and excluded from then on (`--exclude-test` matches a
+    // whole name only), so the requested test re-runs alone. A result that still lists another
+    // test after that is refused by name.
+    // Siblings in the discovered list (`useDiscoveredTests`) are excluded from the first call on;
+    // this loop is the defence for one discovery did not see.
+    // A refusal here is `completed-accepted`, not `pre-dispatch-rejected`: the test WAS dispatched
+    // and ran, so re-sending it is no retry-safe recovery (R491).
+    for (;;) {
+      if (sent.res.kind !== "tests") break;
+      const names = sent.res.tests.map((x) => x.name);
+      // R491: two rows for the requested name (exactly, or ignoring case as al-runner matches) leave
+      // no way to tell which row is ours; `.find()` would credit the first and the call's coverage.
+      const same = names.filter((n) => n.toLowerCase() === wanted.toLowerCase());
+      if (same.length > 1) {
+        return {
+          ref,
+          outcome: "error",
+          durationMs: Date.now() - started,
+          failureMessage: `al-runner returned ${same.length} rows for the requested "${wanted}" (${same.join(", ")}); a duplicate is never credited to one test (R491)`,
+          operation: "completed-accepted",
+        };
+      }
+      const extras = names.filter((n) => n !== wanted);
+      if (extras.length === 0) break;
+      // R551: on the exact path there is nothing to learn. A build that accepted `--test-exact`
+      // and still returned another test is refused at once, never re-run and never credited.
+      if (this.exactTestSelector) {
+        return {
+          ref,
+          outcome: "error",
+          durationMs: Date.now() - started,
+          failureMessage: `al-runner ran tests other than the requested "${wanted}" (${extras.join(", ")}) despite --test-exact; a result naming another test is never credited (R488, R551)`,
+          operation: "completed-accepted",
+        };
+      }
+      const known = this.siblingsOf(wanted);
+      const fresh = extras.filter(
+        (n) => !known.includes(n) && n.toLowerCase() !== wanted.toLowerCase(),
+      );
+      if (fresh.length === 0) {
+        return {
+          ref,
+          outcome: "error",
+          durationMs: Date.now() - started,
+          failureMessage: `al-runner ran tests other than the requested "${wanted}" (${extras.join(", ")}) despite --exclude-test for each; a merged run is never credited to one test (R488)`,
+          operation: "completed-accepted",
+        };
+      }
+      this.oneShotSiblings.set(wanted, [...(this.oneShotSiblings.get(wanted) ?? []), ...fresh]);
+      started = Date.now();
+      sent = await this.sendOneShot(wanted, opts);
+    }
+    const { res, coverageOut } = sent;
+    const durationMs = Date.now() - started;
+    if (res.kind === "deadline") return { ref, outcome: "deadline-exceeded", durationMs };
+    if (res.kind === "error" && res.targetCompile === true)
+      return this.targetCompileVerdict(ref, res.detail, durationMs);
+    // R557: the name sent selected nothing: a stop, or an undecided-kept test's `error` (I3).
+    if (res.kind === "none-selected") {
+      return this.undecidedOrStop(
+        ref,
+        wanted,
+        res.detail,
+        durationMs,
+        [{ ref, sent: wanted }],
+        undefined,
+      );
+    }
+    if (res.kind === "error")
+      return {
+        ref,
+        outcome: "error",
+        durationMs,
+        failureMessage: res.detail,
+        operation: "pre-dispatch-rejected",
+      };
+    const found = res.tests.find((x) => x.name === wanted);
+    // R534 (D1b): whether al-runner proved it stopped this row at its timeout (exit 3).
+    const t =
+      found !== undefined && res.abortProven?.includes(found.name) === true
+        ? { ...found, abortProven: true }
+        : found;
+    // R557: rows came back and none is the name sent (43f76177's exit 0 with zero rows included):
+    // a stop, or an undecided-kept test's `error` (I3). Naming both sides: a mismatch here means
+    // the runner ran something other than what we asked for.
+    if (!t) {
+      return this.undecidedOrStop(
+        ref,
+        wanted,
+        `al-runner output has no test named "${wanted}" (it returned: ${
+          res.tests.map((x) => x.name).join(", ") || "<no tests>"
+        })`,
+        durationMs,
+        [{ ref, sent: wanted }],
+        res.tests.map((x) => x.name),
+      );
+    }
+    return this.oneShotVerdict(ref, wanted, t, durationMs, coverageOut);
+  }
+
+  /**
+   * R583: a run on a target bundle al-runner did not fully compile. On the baseline the session
+   * stops by name; on a mutant every row is `error` with the message, never killed or survived.
+   * `completed-accepted`: al-runner answered, so re-sending is no recovery.
+   */
+  private targetCompileVerdict(
+    ref: TestMethodRef,
+    detail: string,
+    durationMs: number,
+  ): TestVerdict {
+    if (this.activeMutant === null) throw new AlRunnerTargetCompileError(detail);
+    return {
+      ref,
+      outcome: "error",
+      durationMs,
+      failureMessage: detail,
+      operation: "completed-accepted",
+    };
+  }
+
+  /** One one-shot invocation for `wanted`, excluding every sibling R488 knows for it. */
+  private async sendOneShot(wanted: string, opts: RunOpts) {
     // R220. A file PER INVOCATION, never a shared path: al-runner writes the whole Cobertura
     // document on exit, so two invocations sharing one path would race and a test could be handed
     // another test's coverage — a wrong covering-test set, which is a wrong verdict rather than a
     // slow one.
     const coverageOut = await this.coverageOutPath();
+    // R551: the exact path sends `--test-exact` and no excludes; otherwise R488's path, unchanged.
+    const exact = this.exactTestSelector;
+    const siblings = exact ? [] : this.siblingsOf(wanted);
+    const excludeTests = siblings.length > 0 ? siblings : undefined;
+    // R505: bracket the call that will label coverage from the live project.
+    if (coverageOut !== undefined) await this.cfg.projectWatch?.check();
     const res = await this.transport.send({
       sourceDir: this.activeDir(),
       testDir: this.cfg.testDir,
@@ -1013,43 +1729,23 @@ export class AlRunnerBackend implements ExecutionBackend {
       // R147 — present only after `usePlatformAppsDir`, and its presence is what suppresses
       // `--auto-provision` (see `buildAlRunnerArgv`). Before the pin this is exactly today's argv.
       ...(this.platformAppsDir !== undefined ? { platformAppsDir: this.platformAppsDir } : {}),
-      // Deliberately well below `deadlineMs`, never equal. The runner's own per-test budget
-      // (v2: the AL_RUNNER_TEST_TIMEOUT_SEC env var the transport sets; v1: a `--test-timeout`
-      // flag) bounds only the test body inside al-runner, while `deadlineMs` bounds the WHOLE
-      // invocation (al-runner recompiles the project from scratch every call, which alone can
-      // take several seconds). If the two were equal or close, our client AbortController
-      // would always win the race, the runner-confirmed `outcome: "timeout"` path would be
-      // unreachable, and every genuine hang would be misclassified as infrastructure noise
-      // (`deadline-exceeded`) instead of a real mutant-induced timeout. Halving the budget
-      // (min 1s) gives the runner's own timer real margin to fire first. The v2 move from a
-      // flag to an env var changed how this value is delivered, not why it is halved.
-      testTimeoutSeconds: Math.max(1, Math.floor(opts.timeoutMs / 2000)),
-      deadlineMs: opts.timeoutMs,
+      // R516: see `oneShotLimits` for the two limits and why they differ.
+      ...oneShotLimits(opts.timeoutMs),
       ...(coverageOut !== undefined ? { coverageOut } : {}),
+      ...(excludeTests !== undefined ? { excludeTests } : {}),
+      ...(exact ? { testExact: true as const } : {}),
     });
-    const durationMs = Date.now() - started;
-    if (res.kind === "deadline") return { ref, outcome: "deadline-exceeded", durationMs };
-    if (res.kind === "error")
-      return {
-        ref,
-        outcome: "error",
-        durationMs,
-        failureMessage: res.detail,
-        operation: "pre-dispatch-rejected",
-      };
-    const t = res.tests.find((x) => x.name === wanted);
-    if (!t)
-      return {
-        ref,
-        outcome: "error",
-        durationMs,
-        // Naming both sides: a mismatch here means the runner ran something other than what
-        // we asked for, and "missing the requested test" alone left nobody able to see which.
-        failureMessage: `al-runner output has no test named "${wanted}" (it returned: ${
-          res.tests.map((x) => x.name).join(", ") || "<no tests>"
-        })`,
-        operation: "pre-dispatch-rejected",
-      };
+    if (coverageOut !== undefined) await this.cfg.projectWatch?.check();
+    return { res, coverageOut };
+  }
+
+  private async oneShotVerdict(
+    ref: TestMethodRef,
+    wanted: string,
+    t: AlRunnerRawTest & { readonly abortProven?: boolean },
+    durationMs: number,
+    coverageOut: string | undefined,
+  ): Promise<TestVerdict> {
     // How a non-pass becomes a verdict, and the rule is FAIL-CLOSED on purpose.
     //
     // `fail` is al-runner's word for "the test's own assertion went red", so it is a kill.
@@ -1107,6 +1803,10 @@ export class AlRunnerBackend implements ExecutionBackend {
     try {
       suite = await this.ensureServerSuite(opts);
     } catch (e) {
+      // R-219c (M2): a coverage-index refusal is about the bundle, not this test. It stops the
+      // session, as it does on the one-shot path, instead of reading as one `error` per test.
+      if (e instanceof ServerCoverageRefusal) throw e.cause;
+      if (e instanceof AlRunnerServerStopUnsetError) throw e;
       return {
         ref,
         outcome: "error",
@@ -1116,18 +1816,65 @@ export class AlRunnerBackend implements ExecutionBackend {
         operation: "pre-dispatch-rejected",
       };
     }
+    if (suite.targetCompile !== undefined) {
+      return this.targetCompileVerdict(ref, suite.targetCompile, Date.now() - started);
+    }
     const t = suite.byName.get(wanted);
     if (t === undefined) {
+      // Naming both sides, as the one-shot path does: a mismatch means the runner ran something
+      // other than what was asked for, and "missing the requested test" alone leaves nobody able
+      // to see which.
+      const missing = `al-runner --server ran the suite but reported no test named "${wanted}" (it returned: ${
+        [...suite.byName.keys()].join(", ") || "<no tests>"
+      })`;
+      // R517 (M3): a timeout ends al-runner's run, so a test after the hung one has no row.
+      // R534 (D4): al-runner answered (it stopped at the hang), so this is a per-mutant
+      // `runner-test-error`, never re-sent and never a §11 abort. That this test came after the
+      // hung one is presumed, not measured. With no hung test the branch is unchanged.
+      if (suite.hungTest !== undefined) {
+        return {
+          ref,
+          outcome: "error",
+          durationMs: Date.now() - started,
+          failureMessage: `al-runner --server stopped the run at "${suite.hungTest}" (timeout); tests after it have no row, and this test has none, presumably because it came after "${suite.hungTest}"; not measured, never a kill (R534). ${missing}`,
+          operation: "completed-accepted",
+          runnerRow: "runner-test-error",
+        };
+      }
+      // R557 (I3): an undecided-kept test may simply be compiled out: today's `error`, prefixed.
+      // (I1): a CLEAN answer stops (exit 0 or 1, every row a pass or fail run row). An unclean one
+      // whose test's own codeunit ran nothing is a compile or runner failure, not a naming one, so
+      // today's `error`, naming the rows that made it unclean.
+      // (I2): an unclean answer still stops when the test's own codeunit ran a test: one
+      // emit-excluded codeunit elsewhere must not turn the stop off for every missing test.
+      const unclean = uncleanRows(suite);
+      const clean = (suite.exitCode === 0 || suite.exitCode === 1) && unclean.length === 0;
+      if (this.undecidedKept.has(wanted) || clean || codeunitRan(suite, ref.codeunitId)) {
+        // The stop lists every SESSION-SUITE test with no row, never the unfiltered discovery,
+        // which holds tests a decided `#if` arm compiled out; on an unclean answer, only tests of
+        // a codeunit that ran.
+        const absent = this.sessionSuite.filter(
+          (s) =>
+            !suite.byName.has(s.sent) &&
+            !this.undecidedKept.has(s.sent) &&
+            (clean || codeunitRan(suite, s.ref.codeunitId)),
+        );
+        return this.undecidedOrStop(
+          ref,
+          wanted,
+          missing,
+          Date.now() - started,
+          absent.some((s) => s.sent === wanted) ? absent : [{ ref, sent: wanted }, ...absent],
+          [...suite.byName.keys()],
+        );
+      }
       return {
         ref,
         outcome: "error",
         durationMs: Date.now() - started,
-        // Naming both sides, as the one-shot path does: a mismatch means the runner ran something
-        // other than what was asked for, and "missing the requested test" alone leaves nobody able
-        // to see which.
-        failureMessage: `al-runner --server ran the suite but reported no test named "${wanted}" (it returned: ${
-          [...suite.byName.keys()].join(", ") || "<no tests>"
-        })`,
+        failureMessage: `${missing}; al-runner's answer is not a clean run (exit ${suite.exitCode}${
+          unclean.length > 0 ? `, rows ${unclean.join(", ")}` : ""
+        }), so this is read as a compile or runner failure, not a naming one (R557)`,
         operation: "pre-dispatch-rejected",
       };
     }
@@ -1137,6 +1884,10 @@ export class AlRunnerBackend implements ExecutionBackend {
     // test. The orchestrator derives each mutant's timeout budget from this figure, and of the two
     // ways to be wrong, over-reporting buys a budget that is too generous while under-reporting
     // manufactures spurious timeouts. Only one of those invents a verdict.
+    // R517: a position-1 timeout confirm is judged on the row's own figure (`measuredDurationMs`)
+    // against the stop al-runner reports it enforced (`reportedStopMs`), never on this one.
+    // R534: except an OnRun-trigger timeout, which no pass row's figure covers: it is judged on
+    // this suite wall time, which over-states it (the safe direction).
     return verdictFromRunnerTest(ref, wanted, t, suite.wallMs, coverage);
   }
 
@@ -1145,38 +1896,104 @@ export class AlRunnerBackend implements ExecutionBackend {
     if (cached !== undefined) return cached;
     const server = this.server;
     if (server === undefined) throw new Error("serverMode is not enabled on this backend");
+    const stopSeconds = this.serverStopSeconds();
+    if (stopSeconds === undefined) throw new AlRunnerServerStopUnsetError();
+    // Every (re)start, including after the two closes below, gets the same stop.
     await server.start(
       SERVER_READY_DEADLINE_MS,
       this.cfg.packagesDir !== undefined ? [this.cfg.packagesDir] : [],
+      stopSeconds,
     );
     const wantCoverage = (this.cfg.coverage ?? "none") !== "none";
+    // R505: the daemon re-reads the live project at every `runTests` (measured), so the suite run
+    // is bracketed too. A change stops the session, like a coverage-index refusal (R-219c M2).
+    const watch = async (): Promise<void> => {
+      if (!wantCoverage) return;
+      try {
+        await this.cfg.projectWatch?.check();
+      } catch (e) {
+        throw new ServerCoverageRefusal(e);
+      }
+    };
+    await watch();
     const t0 = Date.now();
-    const res = await server.runTests(
-      {
-        sourcePaths: [this.activeDir(), this.cfg.testDir],
-        ...(this.cfg.packagesDir !== undefined ? { packagePaths: [this.cfg.packagesDir] } : {}),
-        // Matching the one-shot path's `--isolation test` exactly. The server's own default is
-        // `codeunit`, the weaker isolation R96 records the v1 argv as having bought silently, and
-        // `capabilities().isolation` claims `full-reset` on the strength of the stronger one.
-        testIsolation: "test",
-        ...(wantCoverage ? { coverage: true, perTestCoverage: true } : {}),
-      },
-      // One suite run replaces every per-test invocation, so it is budgeted as such rather than
-      // against one test's timeout.
-      Math.max(opts.timeoutMs, SERVER_SUITE_MIN_DEADLINE_MS),
+    let res: Awaited<ReturnType<AlRunnerServer["runTests"]>>;
+    try {
+      res = await server.runTests(
+        {
+          sourcePaths: [this.activeDir(), this.cfg.testDir],
+          ...(this.cfg.packagesDir !== undefined ? { packagePaths: [this.cfg.packagesDir] } : {}),
+          // Matching the one-shot path's `--isolation test` exactly. The server's own default is
+          // `codeunit`, the weaker isolation R96 records the v1 argv as having bought silently, and
+          // `capabilities().isolation` claims `full-reset` on the strength of the stronger one.
+          testIsolation: "test",
+          ...(wantCoverage ? { coverage: true, perTestCoverage: true } : {}),
+        },
+        // One suite run replaces every per-test invocation, so it is budgeted as such rather than
+        // against one test's timeout.
+        Math.max(opts.timeoutMs, SERVER_SUITE_MIN_DEADLINE_MS),
+      );
+    } catch (e) {
+      // R517 (C1): the daemon may still answer this request later, and the next request would
+      // read that late answer as its own: a mutant scored on the previous activation's results.
+      // End it; the retry starts a fresh one. `serverSuite` stays unset.
+      await server.close();
+      throw e;
+    }
+    // R517 (I2): a timed-out test's thread is abandoned, not stopped, and keeps writing to the
+    // daemon's row store into later requests, the unmutated confirm included. This suite's results
+    // stand; the daemon does not serve another one. The trigger is STRUCTURAL, any row neither
+    // `pass` nor `fail`, never the timeout wording, which has moved before (R94). `error` is rare
+    // there (setup, unsupported signature, timeout). `hungTest` (M3's note) and the verdict still
+    // read the wording, which since R534 includes the OnRun-trigger timeout
+    // (RUNNER_ONRUN_TIMEOUT_MESSAGE).
+    // R583: until now `--server` read neither `exitCode` nor `compilationErrors`, so on 069cbf32 at
+    // runtime 13 the resource leg scored rows from a bundle al-runner had refused (false SURVIVES:
+    // baseline and every mutant behaved alike). Only the summary is read: the daemon's stderr spans
+    // its whole life, so a marker there could belong to any earlier request.
+    const compileFound = compileFindingsOf(
+      res.compilationErrors,
+      undefined,
+      compileScopeOf(this.activeDir(), this.cfg.testDir),
     );
+    for (const d of compileFound.dependency) this.serverDependencyDrops.add(d);
+    const hungTest = res.tests.find(isTimeoutRow)?.name;
+    if (res.tests.some((t) => t.status !== "pass" && t.status !== "fail")) await server.close();
+    await watch();
     const byName = new Map<string, ServerTestLine>();
     for (const t of res.tests) byName.set(t.name, t);
     const coverageByName = new Map<string, CoverageMap>();
     if (wantCoverage && res.perTestCoverage.length > 0) {
-      this.coverageIndex ??= await buildAlRunnerCoverageIndex(this.activeDir());
-      for (const entry of res.perTestCoverage) {
-        coverageByName.set(entry.test, alRunnerCoverageFromServer(entry, this.coverageIndex));
+      try {
+        this.coverageIndex ??= await this.coverageIndexOf(this.activeDir());
+        for (const entry of res.perTestCoverage) {
+          coverageByName.set(entry.test, alRunnerCoverageFromServer(entry, this.coverageIndex));
+        }
+      } catch (e) {
+        throw new ServerCoverageRefusal(e);
       }
     }
-    const suite: ServerSuiteResults = { byName, coverageByName, wallMs: Date.now() - t0 };
+    const suite: ServerSuiteResults = {
+      byName,
+      coverageByName,
+      // Measured where it always was; on a suite with a timeout row it also holds the close above,
+      // which only over-states (the safe direction, see `runViaServer`).
+      wallMs: Date.now() - t0,
+      ...(hungTest !== undefined ? { hungTest } : {}),
+      ...(compileFound.refuse.length > 0
+        ? { targetCompile: targetCompileMessage(compileFound.refuse, res.exitCode) }
+        : {}),
+      exitCode: res.exitCode,
+    };
     this.serverSuite = suite;
     return suite;
+  }
+}
+
+/** R-219c (M2): carries a coverage-index error out of `ensureServerSuite` past `runViaServer`. */
+class ServerCoverageRefusal extends Error {
+  constructor(override readonly cause: unknown) {
+    super("al-runner --server: the coverage index refused");
   }
 }
 
@@ -1205,40 +2022,93 @@ export class AlRunnerBackend implements ExecutionBackend {
  * hung mutant into a KILL. Under this one the same change costs a mutant its verdict and says so
  * out loud, which is the direction this project is willing to be wrong in. R93's argument that a
  * measured contract beats a version-branched decode matrix.
+ *
+ * R534: a row is an ANSWER (al-runner ran the test, reported and exited), so an `error` from here
+ * is `completed-accepted` with a `runnerRow` cause: never re-sent, never a spec §11 abort. A
+ * timeout records where it fired (`timeoutIn`); a refusal (`RUNNER_REFUSAL`, `fail` or `error`) is
+ * `runner-refused`; any other non-verdict row, `skipped` included, is `runner-test-error`.
  */
 export function verdictFromRunnerTest(
   ref: TestMethodRef,
   wanted: string,
-  t: { readonly status: string; readonly message?: string },
+  t: {
+    readonly status: string;
+    readonly message?: string;
+    readonly durationMs?: number;
+    /** R534 (D1b): an exit-3 TEST-TIMEOUT-ABORT line names this row (one-shot only). */
+    readonly abortProven?: boolean;
+  },
   durationMs: number,
   coverage: CoverageMap | undefined,
 ): TestVerdict {
   if (t.status === "pass") {
-    return { ref, outcome: "pass", durationMs, ...(coverage !== undefined ? { coverage } : {}) };
+    // R272: the runner's OWN per-test figure, for the report and (R517) the figure a position-1
+    // timeout confirm is judged on, being timed on the same clock as the in-run stop. `durationMs`
+    // stays wall clock for the timeout budget; under `--server` it is the whole suite's.
+    const own = t.durationMs;
+    return {
+      ref,
+      outcome: "pass",
+      durationMs,
+      ...(typeof own === "number" && Number.isFinite(own) && own >= 0
+        ? { measuredDurationMs: own }
+        : {}),
+      ...(coverage !== undefined ? { coverage } : {}),
+    };
   }
-  const outcome: TestOutcome =
-    t.status === "fail"
-      ? "fail"
-      : t.message !== undefined && RUNNER_TIMEOUT_MESSAGE.test(t.message)
-        ? "timeout"
-        : "error";
+  // Wall-clock `durationMs`, NOT the runner's in-VM figure: the orchestrator derives each mutant's
+  // timeout budget from it and must include round-trip cost.
+  const timeoutIn = timeoutLocation(t);
+  if (timeoutIn !== undefined) {
+    // R517: the stop al-runner says it enforced. Absent when the wording does not parse.
+    const reportedStopMs = parseReportedStopMs(t.message);
+    return {
+      ref,
+      outcome: "timeout",
+      durationMs,
+      ...(reportedStopMs !== undefined ? { reportedStopMs } : {}),
+      timeoutIn,
+      ...(t.message !== undefined ? { failureMessage: t.message } : {}),
+    };
+  }
+  // R534 (D1b): al-runner proved it stopped this row at its timeout, in wording neither regex
+  // knows. Still never a kill; the flag makes the orchestrator say so once per session.
+  const unknownTimeout = t.status !== "pass" && t.status !== "fail" && t.abortProven === true;
+  // R534 (D3): a refusal, in a test body (`fail`) or an OnRun (`error`), is not a kill.
+  if (
+    !unknownTimeout &&
+    (t.status === "fail" || t.status === "error") &&
+    t.message !== undefined &&
+    RUNNER_REFUSAL.test(t.message)
+  ) {
+    return {
+      ref,
+      outcome: "error",
+      durationMs,
+      failureMessage: `${t.message} [al-runner refused this surface (out-of-scope), so whether the mutant changes this test's outcome on BC is unknown: NOT scored as a kill; measure this test on bcdev (R534)]`,
+      operation: "completed-accepted",
+      runnerRow: "runner-refused",
+    };
+  }
+  if (t.status === "fail") {
+    return {
+      ref,
+      outcome: "fail",
+      durationMs,
+      ...(t.message !== undefined ? { failureMessage: t.message } : {}),
+    };
+  }
   return {
     ref,
-    outcome,
-    // Wall-clock, NOT the runner's in-VM figure: the orchestrator derives each mutant's timeout
-    // budget from this and must include round-trip cost.
+    outcome: "error",
     durationMs,
-    ...(outcome === "error"
-      ? {
-          failureMessage: `${AL_RUNNER_UNCLASSIFIED_ERROR}: al-runner reported status ${JSON.stringify(
-            t.status,
-          )} for ${wanted} with message ${JSON.stringify(t.message ?? "<none>")}. That is not an assertion failure, so it is NOT scored as a kill; if this is a timeout whose wording changed again, add it to RUNNER_TIMEOUT_MESSAGE.`,
-          // Nothing ran that could leave state behind — al-runner is a fresh process per call and
-          // touches no live container — so this is retry-safe rather than a tier hazard.
-          operation: "pre-dispatch-rejected" as const,
-        }
-      : t.message !== undefined
-        ? { failureMessage: t.message }
-        : {}),
+    failureMessage: `${AL_RUNNER_UNCLASSIFIED_ERROR}: al-runner reported status ${JSON.stringify(
+      t.status,
+    )} for ${wanted} with message ${JSON.stringify(t.message ?? "<none>")}. That is not an assertion failure, so it is NOT scored as a kill. al-runner answered, so it is not re-sent and does not stop the session (R534); if this is a timeout whose wording changed again, add it to RUNNER_TIMEOUT_MESSAGE.`,
+    // R534: the test RAN and al-runner answered, so this is not pre-dispatch: re-sending it is
+    // no recovery (option (c)), and a §11 abort would throw away an answer (option (b)).
+    operation: "completed-accepted",
+    runnerRow: "runner-test-error",
+    ...(unknownTimeout ? { timeoutWordingUnknown: true } : {}),
   };
 }

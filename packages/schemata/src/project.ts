@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import {
   ALNodeKind,
   type ALSyntaxNode,
@@ -8,12 +8,14 @@ import {
   astSubtreeHash,
   gapBlockOf,
   isProcedureLike,
+  memberSpanText,
   procedureLikeNameNode,
   renamedMemberCoverageNames,
 } from "@lethal/engine";
 import { type TierResolver, dedupeSpecs } from "./dedup";
 import type { ReachGrain } from "./dispatch-plan";
-import { type IdedSpec, assignMutantIds } from "./ids";
+import { type FlatNames, flatNamesFor } from "./flat-names";
+import { type IdedSpec, assignMutantIds, compareCodeUnits } from "./ids";
 import { emitOneFile } from "./project-emit";
 import { type PlannedMutant, attributeHeader, objectHeadersOf, planOneFile } from "./project-plan";
 import {
@@ -57,17 +59,27 @@ export interface WriteInput {
    * is refused, never defaulted to 0.
    */
   readonly identityOrdinals: ReadonlyMap<string, number>;
+  /**
+   * R219: the flat name of each written file, built over the WHOLE project's `.al` list so a
+   * duplicate basename is named as every other writer and reader names it (`flatNamesFor`).
+   * Absent: built over `files` alone, which is only right when no unwritten project file shares a
+   * basename with one of them (tests and scripts writing a hand-built set). A real run passes it.
+   */
+  readonly flatNames?: FlatNames;
 }
 
-/** C02-09: a gap's id. Reads the file (separators normalised), the block's offsets and its raw
- *  source text (owner, Q1), so any edit to the block, or a move, gives a new id. */
+/** C02-09: a gap's id. Reads the file (separators normalised), the block's position and its source
+ *  text (owner, Q1), so any edit to the block, or a move, gives a new id. R276: the position is the
+ *  block's LINE span and the text has its line endings normalised, so a CRLF and an LF checkout of
+ *  one commit give one id (byte offsets and raw text differed between them). */
 export function gapIdOf(
   file: string,
-  startIndex: number,
-  endIndex: number,
+  startLine: number,
+  endLine: number,
   blockText: string,
 ): string {
-  const text = `${file.replaceAll("\\", "/")}\n${startIndex}\n${endIndex}\n${blockText}`;
+  const lf = blockText.replaceAll("\r\n", "\n");
+  const text = `${file.replaceAll("\\", "/")}\n${startLine}\n${endLine}\n${lf}`;
   return `G${createHash("sha256").update(text).digest("hex").slice(0, 12)}`;
 }
 
@@ -93,19 +105,24 @@ export function identityTupleOf(
 }
 
 /**
- * R307: the LOOSE identity tuple: `identityTupleOf` without the object name. A file refused by the
- * header rule (`no-header`, `site-before-header`) has no object name to give, so the run records
- * these instead of reserving exact entries (fail closed, I3).
+ * R442: the COARSE identity tuple, `astHash|operatorName|major`: `identityTupleOf` without the
+ * object name and the scope. A site a run numbered no ordinal for (a header-rule refusal, a site
+ * a line filter dropped) records this, and every mutant sharing it carries no verdict across that
+ * run (fail closed, R307 I3).
+ *
+ * Why it covers every ordinal twin even though names and scopes may hold `|`: the exact tuple is
+ * `hash|name|scope|op|major` and a key adds `|ordinal` only above 0. The hash is hex, operator
+ * names come from the built-in registry (no `|`, never all digits) and the major is an integer.
+ * So two equal tuple or key strings share the first field and, read from the right, the operator
+ * and major (an ordinal tail cannot pose as a major: the field before it would then be an
+ * all-digit operator name). R307's loose tuple kept the scope, and so missed object `"A|B"` with
+ * procedure `C` against object `A` with procedure `"B|C"`.
  */
-export function looseIdentityTupleOf(
-  m: Pick<
-    MutantManifestEntry,
-    "astHash" | "procedureName" | "triggerName" | "operatorName" | "operatorVersion"
-  >,
+export function coarseIdentityTupleOf(
+  m: Pick<MutantManifestEntry, "astHash" | "operatorName" | "operatorVersion">,
 ): string {
-  const scope = m.procedureName || m.triggerName || "";
   const major = Number(m.operatorVersion.split(".")[0] ?? "0");
-  return `${m.astHash}|${scope}|${m.operatorName}|${major}`;
+  return `${m.astHash}|${m.operatorName}|${major}`;
 }
 
 /**
@@ -140,9 +157,83 @@ export function looseIdentityTupleOf(
  * same tuple as an existing one earlier in a member takes ordinal 0 and moves that one's key. 9:
  * R307 (R374), identity ordinals are numbered once over the whole run instead of per batch, so
  * keys move only where batching split twins (two twins in two batches both held ordinal 0
- * before).
+ * before). 10: R196 and R239, the built-in value operators refuse a site that writes a loop
+ * condition's variable, and `flip-boolean-literal` refuses a literal that reaches a loop's exit, so
+ * a later same-tuple twin of a refused mutant takes its ordinal and its old key. 11: R295 and
+ * R294, every name of `A, B: T` is declared and a member-expression receiver resolves again (and
+ * a name inside a `with` body types as nothing), so sites are added and removed and same-tuple
+ * ordinals move. 12 was reserved for R254 and is unused. 13: R455, a field-designator argument of a record
+ * builtin is never swapped, an unqualified call in a record scope types as nothing, and a
+ * case-only pair is not swapped, so swaps and additive flips are removed and a later same-tuple
+ * twin takes the removed one's ordinal. 14: R454, the built-in value operators also refuse a
+ * literal in a loop condition's `#if` tail (`shift-integer`), a literal inside a comparison in a
+ * loop's exit test (`flip-boolean-literal`) and a write to `R.Field` that an enclosing loop's
+ * condition reads, so a later same-tuple twin of a refused mutant takes its ordinal and its old
+ * key. 15 was reserved for R-254 and is unused. 16: R-364, inside an object wrapped whole in `#if`
+ * (not indexed) the same refusal matches an unresolved target by name, so hang-capable writes
+ * there are removed and a later same-tuple twin takes the removed one's ordinal. 17: R254, a
+ * reportextension is instrumented; its mutants take ordinals, so a same-named twin elsewhere can
+ * move. 18: R-458, the same refusal also matches by name through every `with` subject and implicit
+ * record (`Rec`, report dataitems, reportextension `modify`) a target's name can bind to, so those
+ * hang-capable writes are removed and a later same-tuple twin takes the removed one's ordinal. 19:
+ * R468, every direct object-level var section is the object's globals (only the first was), so a
+ * later section's record receivers move call deletions from `void-method-call` to Tier 2, `true`
+ * RunTrigger flips cede to `swap-modify-flag`, new hang refusals remove writes, and swaps choose a
+ * different typed pair under an unchanged key. 20 was held for R-464 and is unused. 21: R459, a
+ * two-argument `Insert`'s Booleans are flipped (no longer ceded to `swap-modify-flag`, which never
+ * claimed them), so a later same-tuple `true` twin in the procedure moves ordinal (BC.History: 9
+ * keys). 22: R-464, one implicit-record resolver: a qualified `Rec` in a page or a TableNo `OnRun`,
+ * a report dataitem and a `with` subject now resolve, so Tier 2 claims sites there (and the `true`
+ * RunTrigger flips they held cede to `swap-modify-flag`), `validate-to-assign`'s bare form writes
+ * the record the call binds to or is refused, and a later same-tuple twin of a removed mutant takes
+ * its ordinal. 23 was held for R-446 and is unused. 24: R475, twins are numbered in code-unit file
+ * order (was the host's default collation), so a cross-file twin pair whose paths order
+ * differently under the two can swap ordinals (fixtures, CDO and BaseApp measured: 0 keys move).
+ * 25: R446, in a loop whose condition reads no name and calls nothing (`while true`), a write a
+ * body-exit guard reads is hang-refused, so a later same-tuple twin of a refused mutant takes its
+ * ordinal (BC.History: 16 keys). 26: R477, `validate-to-assign` emits the bare `F := V` where
+ * R-464 refused a bare `Validate(F, V)` and nothing at the call declares F, so a new mutant earlier
+ * in a procedure with the same tuple as an existing one takes ordinal 0 and moves that one's key
+ * (corpora: 47 sites added, 0 keys moved; the move is pinned on a constructed table). 27: R480, a
+ * body-exit guard's write is hang-refused under any `while`/`repeat` condition that names no
+ * cursor method, a write feeding a guard of a `while true` loop is too, and so is a write to an
+ * enclosing `for`'s control variable, so a later same-tuple twin of a refused mutant takes its
+ * ordinal (prototype: 52 keys, DC 12, BC.History 40). 28: R484, an open `Integer` report data item
+ * is a loop, so a write its exit guards or its own range bounds read is hang-refused and a later
+ * same-tuple twin of a refused mutant takes its ordinal (BC.History: 216 keys; fixtures, CDO, DC
+ * and DO: none). 29: R-300b, no key tuple moves and the emitted AL is byte-identical, but on
+ * al-runner a `#if`-wrapped object alone in its file is now scored, so a key whose verdict was a
+ * refusal's `no-coverage` can now be scored (R318's scheme-4 reason). The bump is global: history,
+ * `--resume` and marks recorded under 28 are not carried, bcdev's included. 30: R487, every site
+ * the four hang-capable operators mutate in an open `Integer` report data item's code (its
+ * triggers, its child items, a reportextension dataset block anchored on it, and the same-object
+ * procedures that code reaches) is hang-refused, so a later same-tuple twin of a refused mutant
+ * takes its ordinal (BC.History: 5,010 sites refused, 203 keys; fixtures, CDO, DC and DO: none).
+ * 32: R509, the type table reads a `Record "X" temporary` as table X, so `swap-additive` gains
+ * mutants on a temporary record's fields, and a new mutant earlier in a procedure with an existing
+ * one's tuple takes its ordinal (keys moved: CDO 1, DO 2, BC.History 3; fixtures and DC: none). 31
+ * was held for R-501 and is unused: R509 landed first, so R-501 takes the next number above it.
+ * 33: R501, the same scope is hang-refused for EVERY operator at dispatch (`openItemHangRefuses`,
+ * no exemption), and so is a site that deletes or alters a bounded item's only `SetRange` bound,
+ * so a later same-tuple twin of a refused mutant takes its ordinal (BC.History: 13,435 mutants
+ * refused, 378 keys; fixtures, CDO, DC and DO: none).
+ * 34: R343, an object wrapped whole in `#if` is indexed when the build compiles its arm, so typed
+ * operators gain its sites and Tier 1 cedes the ones Tier 2 claims, and a new or ceded mutant
+ * earlier in a procedure moves a same-tuple twin's ordinal (BC.History: 4 keys; fixtures, CDO, DC
+ * and DO: none).
+ * 35: R500, the dispatch check also refuses `Date` items, one-hop callees of open-item code in other
+ * objects (codeunits, records, interface implementers, event subscribers), outside filter calls on
+ * an open item, and two stated limits (a preset exit name's writes, a self-inserting item's own
+ * filter), so a later same-tuple twin of a refused mutant takes its ordinal (measured against master
+ * 15c3a620, BC.History: 23,944 deployed mutants removed, 165 keys; CDO and DO 2 removed, 0 keys;
+ * fixtures and DC: none).
+ * 36: R497, the BC paths score #if-wrapped objects of the measured shapes; no key moves, but a key whose verdict was a refusal's no-coverage on bcdev can now be scored, so history, --resume and marks recorded under 35 are not carried (the R-300b precedent, scheme 29).
+ * 37: R340, a trigger's header names (parameters, plain var locals, the named return) are typed, so typed operators gain sites in triggers and swap-call-arguments can choose a different pair under an unchanged identity key (measured: DC +59, DO +5, CDO +5 sites, 0 keys moved, but a pair change is invisible to keys); history, --resume and marks recorded under 36 are not carried.
+ * 38: R555, a call to a procedure that writes a preset exit name (in the report, its extension's base, or through a typed `Report X` receiver in any object) is hang-refused like the write itself; a refused site renumbers its same-tuple twins (measured on BaseApp at 48d5534f: 483 deployed mutants removed, 0 tuples moved, five ordinals moved; every other corpus: none).
+ * 39 R-531: 47 ordinals renumber (43 BaseApp, 4 System Application); no tuple moves. A loop whose cursor condition (`Find*`, `IsEmpty`, `Count`, never `Next`) ends only because its body consumes the record set is hang-refused (the consumers, their guards and feeds, a one-hop same-object callee's consumers, the pre-loop filters the ending depends on, and every operator in the condition but swap-find-direction), so a refused site renumbers its same-tuple twins.
+ * 40: R565, a call through `Report X` to a preset writer of a report OUTSIDE the project is hang-refused when X's source can be read from the dependency packages, so the refused set depends on dependency bytes and a refused site renumbers its same-tuple twins (measured with al-runner's 28.5 platform apps: Quality Management 7 removed, Application Test Library 15 removed and 2 ordinals moved, 0 tuples moved; ten other projects none).
  */
-export const IDENTITY_SCHEME = 9;
+export const IDENTITY_SCHEME = 40;
 
 /**
  * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,
@@ -162,9 +253,9 @@ function identityOrdinalsOf(
 ): Map<MutantManifestEntry, number> {
   const order = [...entries].sort(
     (a, b) =>
-      a.file.localeCompare(b.file) ||
+      compareCodeUnits(a.file, b.file) ||
       a.startIndex - b.startIndex ||
-      a.mutantId.localeCompare(b.mutantId),
+      compareCodeUnits(a.mutantId, b.mutantId),
   );
   const next = new Map<string, number>();
   const ordinalOf = new Map<MutantManifestEntry, number>();
@@ -244,16 +335,19 @@ export function identityEntriesOf(
 
 /**
  * R374: number identity twins ONCE over every entry of the run, in source order: file, start,
- * then operator name, the order `assignMutantIds` gives the same specs (the sort is stable, so
- * two entries equal on all three keep their input order, as `assignMutantIds` keeps them).
+ * then operator name, the order `assignMutantIds` gives the same specs. Strings compare by code
+ * unit (R475), the order discovery and the generation hash use, never by the host's collation:
+ * otherwise a resume on another host could swap two twins' ordinals under an equal hash. The sort
+ * is stable, so two entries equal on all three keep their input order, as `assignMutantIds` keeps
+ * them.
  * Reserved entries (R-307) take a number like any other. Two entries on one key are refused.
  */
 export function numberIdentityOrdinals(entries: readonly IdentityEntry[]): Map<string, number> {
   const order = [...entries].sort(
     (a, b) =>
-      a.file.localeCompare(b.file) ||
+      compareCodeUnits(a.file, b.file) ||
       a.startIndex - b.startIndex ||
-      a.operatorName.localeCompare(b.operatorName),
+      compareCodeUnits(a.operatorName, b.operatorName),
   );
   const next = new Map<string, number>();
   const out = new Map<string, number>();
@@ -279,11 +373,21 @@ export function runIdentityOrdinals(
   operatorTiers: ReadonlyMap<string, 1 | 2 | 3 | "custom">,
   reserved: readonly IdentityEntry[] = [],
 ): Map<string, number> {
+  return numberIdentityOrdinals(runIdentityEntries(files, operatorTiers, reserved));
+}
+
+/** R391: the entries `runIdentityOrdinals` numbers, so a run can also record which tuples are
+ *  twins within one file from exactly the set its ordinals were numbered over. */
+export function runIdentityEntries(
+  files: readonly InstrumentedFile[],
+  operatorTiers: ReadonlyMap<string, 1 | 2 | 3 | "custom">,
+  reserved: readonly IdentityEntry[] = [],
+): IdentityEntry[] {
   const tierOf: TierResolver = (name) => operatorTiers.get(name);
-  return numberIdentityOrdinals([
+  return [
     ...files.flatMap((f) => identityEntriesOf(f.path, f.source, dedupeSpecs(f.specs, tierOf))),
     ...reserved,
-  ]);
+  ];
 }
 
 export interface MutantManifestEntry {
@@ -385,6 +489,14 @@ export interface MutantManifestEntry {
    * R193, which readers treat as 0.
    */
   readonly identityOrdinal?: number;
+  /**
+   * R474: SHA-256 of the enclosing member's RAW source (`memberSpanText`: from its first
+   * attribute, attribute-only `#if` wrappers included, to its end); `""` at object level. NOT part
+   * of the identity key: rule 2 of `carryRecord` also requires it equal, so a verdict carries across
+   * an edit only into an unchanged member. Absent on a manifest written before R474, which carries
+   * nothing under rule 2 and is never given an invented hash.
+   */
+  readonly memberHash?: string;
   /**
    * The source text this mutant REPLACED, and what it replaced it with — the mutation itself,
    * stated rather than implied.
@@ -601,6 +713,7 @@ export function instrumentOneFile(
 
 export async function writeInstrumentedProject(input: WriteInput): Promise<void> {
   await mkdir(input.targetDir, { recursive: true });
+  const flatNames = input.flatNames ?? flatNamesFor(input.files.map((f) => f.path));
 
   // Dedup runs BEFORE ids are assigned and BEFORE compilation: dropping a mutant only while
   // building the manifest would leave it compiled into the emitted dispatch chain holding an
@@ -631,7 +744,7 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
         `writeInstrumentedProject: ${f.path}: the plan holds ${mutants.length} mutant(s) for ${ided.length} ided spec(s); first unmatched: ${unmatched}`,
       );
     }
-    await writeFile(join(input.targetDir, basename(f.path)), compiled, "utf8");
+    await writeFile(join(input.targetDir, flatNames.flatOf(f.path)), compiled, "utf8");
     // RUST-03 S4.2a: per file, not per mutant: the line index, and each gap block's id and lines.
     const starts = lineStartsOf(f.source);
     const gapOf = new Map<
@@ -639,6 +752,17 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
       { gapId: string; blockStartLine: number; blockEndLine: number }
     >();
     const armNamesCache = new Map<number, string[]>();
+    // R474: one hash per member (keyed by its start), not per mutant.
+    const memberHashes = new Map<number, string>();
+    const memberHashOf = (member: ALSyntaxNode | null): string => {
+      if (member === null) return "";
+      let hash = memberHashes.get(member.startIndex);
+      if (hash === undefined) {
+        hash = createHash("sha256").update(memberSpanText(f.source, member)).digest("hex");
+        memberHashes.set(member.startIndex, hash);
+      }
+      return hash;
+    };
     let at = 0;
     for (const { mutantId, spec } of ided) {
       const planned = mutants[at];
@@ -675,8 +799,8 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
       if (gap === undefined) {
         const gapId = idOf(
           f.path,
-          block.startIndex,
-          block.endIndex,
+          lineOfIndex(starts, block.startIndex),
+          lineOfIndex(starts, block.endIndex),
           f.source.slice(block.startIndex, block.endIndex),
         );
         const blockKey = `${f.path}\n${inFile}`;
@@ -726,6 +850,7 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
           ? { platformKillMechanism: spec.platformKillMechanism }
           : {}),
         ...(spec.hangCapable !== undefined ? { hangCapable: spec.hangCapable } : {}),
+        memberHash: memberHashOf(member),
         // Last, where `assignIdentityOrdinals`' spread puts it, so the manifest's key order holds.
         identityOrdinal,
       });

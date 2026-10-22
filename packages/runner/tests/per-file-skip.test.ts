@@ -82,8 +82,9 @@ ${BODY}`,
   },
 };
 
-const GOOD = join("src", "Good.Codeunit.al");
-const BADFILE = join("src", "Bad.al");
+// Report paths are always "/"-separated (targetAlFiles normalises them), so never `join` these (R448).
+const GOOD = "src/Good.Codeunit.al";
+const BADFILE = "src/Bad.al";
 
 beforeAll(async () => {
   await initParser();

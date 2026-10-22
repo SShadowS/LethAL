@@ -379,8 +379,10 @@ describe("R378: tags read only the arms the build compiles", () => {
     expect(site("on", "KTab.Insert(true)", SWAP_FLAG).plat).toBe("-");
   });
 
-  test("A3: a raise only in an inactive arm of OnModify does not tag the forced mutant", () => {
-    expect(site("off", "RTab.Modify()", SWAP_FLAG).plat).toBe("-");
+  // R-457: the forced tag reads no trigger body, so an OnModify present in both builds keeps it in
+  // both, whatever its inactive arm holds.
+  test("A3: the forced mutant keeps its tag in both builds (R-457: no trigger body is read)", () => {
+    expect(site("off", "RTab.Modify()", SWAP_FLAG).plat).toBe("run-trigger-forced");
     expect(site("on", "RTab.Modify()", SWAP_FLAG).plat).toBe("run-trigger-forced");
   });
 
@@ -420,7 +422,8 @@ describe("R378: tags read only the arms the build compiles", () => {
   });
 });
 
-// Every Ops row except the D Tab forward mutant, as master f396e037 produced them (R405 a).
+// Every Ops row except the D Tab forward mutant, as master f396e037 produced them (R405 a), except
+// that R-457 tags the forward mutants at lines 25 (both builds) and 60 `run-trigger-forced`.
 const TAIL_ROWS: string[] = [
   "38 lethal.empty-block -",
   "39 lethal.void-method-call -",
@@ -433,7 +436,7 @@ const TAIL_ROWS: string[] = [
   "53 lethal.swap-modify-flag -",
   "59 lethal.empty-block -",
   "60 lethal.void-method-call -",
-  "60 lethal.swap-modify-flag -",
+  "60 lethal.swap-modify-flag run-trigger-forced",
   "66 lethal.empty-block -",
   "67 lethal.void-method-call -",
   "67 lethal.swap-modify-flag run-trigger-skipped-insert",
@@ -459,7 +462,7 @@ const OTHER_ROWS_OFF: string[] = [
   "18 lethal.swap-modify-flag -",
   "24 lethal.empty-block -",
   "25 lethal.void-method-call -",
-  "25 lethal.swap-modify-flag -",
+  "25 lethal.swap-modify-flag run-trigger-forced",
   "31 lethal.empty-block -",
   "32 lethal.void-method-call -",
   "32 lethal.swap-modify-flag run-trigger-skipped-insert",
@@ -502,10 +505,11 @@ describe("R378: an undecided receiver file keeps the tag (A2 and A3)", () => {
     }
   });
 
-  test("the same table without the bad directive gives neither tag", () => {
+  // R-457: the forced tag is kept wherever OnModify exists, so only the skip tag is a control here.
+  test("the same table without the bad directive gives no skipped-insert tag; the forced tag stays", () => {
     for (const build of ["off", "on"] as const) {
       expect(site(build, "CTab.Insert(true)", SWAP_FLAG).plat).toBe("-");
-      expect(site(build, "CTab.Modify()", SWAP_FLAG).plat).toBe("-");
+      expect(site(build, "CTab.Modify()", SWAP_FLAG).plat).toBe("run-trigger-forced");
     }
   });
 

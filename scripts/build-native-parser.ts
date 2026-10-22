@@ -13,11 +13,17 @@
  *   bun scripts/build-native-parser.ts [--test] [--target <key>]
  *   bun scripts/build-native-parser.ts --provenance
  */
+import { readFileSync } from "node:fs";
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { EXPECTED_TARGET } from "../packages/engine/src/ast/native-parser";
 import { CRATE, grammarInputs } from "./check-native-grammar";
+import {
+  OUT as STATEMENT_CONTAINERS_OUT,
+  currentStatementContainers,
+  serialize as serializeStatementContainers,
+} from "./statement-containers";
 
 const LIB: Readonly<Record<string, string>> = {
   "win32-x64": "lethal_parser.dll",
@@ -183,9 +189,21 @@ export function buildArgs(argv: readonly string[]): BuildArgs {
   return { test, target: values.target, provenance };
 }
 
+/** R217: refuse when the committed statement-container list is stale or hand-edited. Compares the
+ *  crate's node-types.json hash AND the candidate list regenerated in memory, so a deleted
+ *  candidate is caught even though the hash still matches. Throws, naming the regeneration command. */
+export function checkStatementContainers(): void {
+  const committed = readFileSync(STATEMENT_CONTAINERS_OUT, "utf8");
+  if (committed !== serializeStatementContainers(currentStatementContainers()))
+    throw new Error(
+      "build-native-parser: packages/engine/src/ast/statement-containers.json is stale (grammar node-types.json or the candidate list differs). Run `bun scripts/statement-containers.ts`, classify any new container in tree-walks.ts NOT_A_SLOT, and commit.",
+    );
+}
+
 async function main(): Promise<void> {
   const host = `${process.platform}-${process.arch}`;
   const values = buildArgs(process.argv.slice(2));
+  checkStatementContainers();
   if (values.provenance) {
     await writeProvenance(host);
     return;

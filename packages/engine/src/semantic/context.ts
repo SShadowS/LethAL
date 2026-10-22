@@ -28,6 +28,9 @@ import { buildTypeTable } from "./types";
 
 export interface SemanticContext {
   readonly symbols: SymbolTable;
+  /** R487: the project's files, for project-wide questions the symbol table does not index (which
+   *  reportextensions extend a report). Absent on a hand-built context: callers answer conservatively. */
+  readonly files?: readonly SourceFile[];
   readonly types: TypeTable;
   readonly callers: CallerIndex;
   cfgFor(procedure: ProcedureSymbol): CFG;
@@ -39,6 +42,26 @@ export interface SemanticContext {
    * "active". Throws when the map has no entry for the node's tree: a caller-contract violation.
    */
   armOf?(node: ALSyntaxNode): NodeArm;
+  /**
+   * R565: a report OUTSIDE the project, read from the dependency packages: called with the
+   * normalized name or id a `Report X` type spells, it answers that report's source and its
+   * selected dependency reportextensions, parsed into a context of their own, or null when there is
+   * none to read (the reader records why). Absent: no dependency report is read.
+   */
+  readonly dependencyReport?: (nameOrId: string) => DependencyReport | null;
+  /**
+   * R565: set on a dependency report's own context. Every report there counts as extended (R487),
+   * because the project or any app installed on the server may extend it, which the packages cannot
+   * say.
+   */
+  readonly allReportsExtended?: boolean;
+}
+
+/** R565: see `SemanticContext.dependencyReport`. `name` is the report's own normalized name. */
+export interface DependencyReport {
+  readonly name: string;
+  readonly roots: readonly ALSyntaxNode[];
+  readonly ctx: SemanticContext;
 }
 
 /** R378: see `SemanticContext.armOf`. */
@@ -88,6 +111,7 @@ export function buildSemanticContext(
   const cfgCache = new WeakMap<object, CFG>();
   return {
     symbols,
+    files,
     types,
     callers,
     ...(armOf !== undefined ? { armOf } : {}),

@@ -16,7 +16,7 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
-import { hashTargetSource } from "../src/baseline-snapshot";
+import { hashTargetSource, readTargetSource } from "../src/baseline-snapshot";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
 import type { BcDevConfigSection, LethalConfigFile, RunCliConfig } from "../src/cli";
 import { runFromCli } from "../src/cli";
@@ -58,9 +58,13 @@ import {
 import { EnvToolClient } from "../src/env-tool";
 import type { EnvToolConfigSection } from "../src/env-tool";
 import type { RunEvent } from "../src/events";
-import { CONTROL_APP_ID, MIN_CONTROL_VERSION } from "../src/harness";
+import {
+  CONTROL_APP_ID,
+  MIN_CONTROL_VERSION,
+  UnfilteredExtensionsQueryError,
+} from "../src/harness";
 import { InstalledBundleError, bundleOfParts, openInstalledBundle } from "../src/installed-bundle";
-import { LeaseClient } from "../src/lease";
+import { LeaseClient, LeaseUnavailableError } from "../src/lease";
 import { generateMutationSet } from "../src/orchestrator";
 import { QuarantineStore } from "../src/quarantine-store";
 import { quarantineResourceKey } from "../src/resource-key";
@@ -74,6 +78,7 @@ import {
 } from "../src/verify";
 import { measuredV2_12 } from "./helpers/al-runner-predefined";
 import { tinyBundle } from "./helpers/bundle";
+import { stalledResponse } from "./helpers/lease-wire";
 import { fakeMicrosoftMode } from "./helpers/microsoft-mode";
 import { removeRunScratchAfterAll, scratchDirs } from "./helpers/scratch";
 
@@ -1275,6 +1280,26 @@ describe("performForceResetLease (5C-B2)", () => {
       reason: "generation-changed",
     });
   });
+
+  // R504 C10: a ForceResetLease whose body never finishes rejects within the bound, never as a
+  // reset. Without the bound this test times out.
+  test("C10: a stalled ForceResetLease body rejects LeaseUnavailableError, never a reset", async () => {
+    const harness = routerFetch({
+      serverGeneration: "a".repeat(32),
+      resetBody: { reset: true, serverGeneration: "b".repeat(32), epoch: 9 },
+    });
+    const fetchFn = (async (url: unknown, init?: RequestInit) =>
+      String(url).includes("LethALControl_ForceResetLease")
+        ? stalledResponse(init?.signal, true)
+        : harness(url as string, init)) as typeof fetch;
+    const err = await performForceResetLease({ ...CFG, timeoutMs: 20 }, fetchFn).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(LeaseUnavailableError);
+    expect(String(err)).toMatch(
+      /LethALControl_ForceResetLease (body not read|gave no answer) within 20 ms/,
+    );
+  });
 });
 
 // ————————————————————————————————————————————————————————————————————————
@@ -1638,6 +1663,206 @@ describe("forceResetLeaseFromCli — the wiring (R51 follow-on)", () => {
     );
     expect(exitCode).toBe(0);
   });
+
+  // R504 C10 (M3): the reset was sent and only its answer was lost, so it may have landed. The
+  // CLI's own timeout is the 30 s default, so this body fails at once after the headers instead
+  // of stalling: the same lost-answer fact, through the same LeaseUnavailableError.
+  test("C10: a lost ForceResetLease answer says the reset may have been applied", async () => {
+    const dir = scratch("lethal-force-reset-lost-");
+    const configPath = join(dir, "lethal.config.json");
+    const configFile: LethalConfigFile = {
+      bcdev: {
+        mcpCommand: ["bun", "mcp"],
+        company: "CRONUS",
+        controlSymbolPath: "C:/lethal-control.app",
+      },
+      envTool: {
+        toolPath: "tool.exe",
+        envId: "env-4711",
+        resolve: [
+          { command: ["env", "get", "{envId}", "--json"], reads: { baseUrl: "url" } },
+          {
+            command: ["env", "users", "{envId}", "--json"],
+            reads: { username: "u", password: "p" },
+          },
+        ],
+        publish: { command: ["publish", "{envId}", "{appFile}"] },
+        downloadSymbols: { command: ["env", "download-symbols", "{envId}"] },
+      },
+    };
+    await writeFile(configPath, JSON.stringify(configFile), "utf8");
+    const spawn = async (argv: readonly string[]) => {
+      const line = argv.join(" ");
+      if (line.includes("env get")) {
+        return { exitCode: 0, stdout: '{"url":"https://host/env-4711"}', stderr: "" };
+      }
+      if (line.includes("env users")) {
+        return { exitCode: 0, stdout: '{"u":"admin","p":"hunter2"}', stderr: "" };
+      }
+      return { exitCode: 0, stdout: "{}", stderr: "" };
+    };
+    const fetchFn = (async (url: unknown) => {
+      const u = String(url);
+      if (u.includes("LethALControl_HarnessInfo")) {
+        return new Response(
+          JSON.stringify({
+            value: JSON.stringify({
+              appId: CONTROL_APP_ID,
+              semver: MIN_CONTROL_VERSION,
+              protocolVersion: 2,
+              serverGeneration: "d".repeat(32),
+              tenantCountReachable: false,
+              isolationModes: ["Codeunit"],
+              testTypes: ["codeunit"],
+            }),
+          }),
+          { status: 200 },
+        );
+      }
+      if (u.includes("LethALControl_ForceResetLease")) {
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(c) {
+              c.error(new Error("socket closed mid-body"));
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      throw new Error(`C10: unexpected URL ${u}`);
+    }) as typeof fetch;
+    const err = await forceResetLeaseFromCli(
+      { mode: "force-reset-lease", server: "https://host", serverInstance: "env-4711", configPath },
+      { makeEnvToolClient: (c) => new EnvToolClient(c, { spawn }), fetchFn },
+    ).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(String(err)).toContain("ForceResetLease may have been applied");
+    expect(String(err)).toContain("socket closed mid-body");
+  });
+
+  /**
+   * R506/R507: `forceResetLeaseFromCli` over an env-tool config (as C10), with HarnessInfo and
+   * ForceResetLease answered by the given functions. Returns what it rejected with.
+   */
+  async function cliRejection(answers: {
+    readonly harnessInfo?: () => Promise<Response>;
+    readonly forceReset: () => Promise<Response>;
+  }): Promise<unknown> {
+    const dir = scratch("lethal-force-reset-r506-");
+    const configPath = join(dir, "lethal.config.json");
+    const configFile: LethalConfigFile = {
+      bcdev: {
+        mcpCommand: ["bun", "mcp"],
+        company: "CRONUS",
+        controlSymbolPath: "C:/lethal-control.app",
+      },
+      envTool: {
+        toolPath: "tool.exe",
+        envId: "env-4711",
+        resolve: [
+          { command: ["env", "get", "{envId}", "--json"], reads: { baseUrl: "url" } },
+          {
+            command: ["env", "users", "{envId}", "--json"],
+            reads: { username: "u", password: "p" },
+          },
+        ],
+        publish: { command: ["publish", "{envId}", "{appFile}"] },
+        downloadSymbols: { command: ["env", "download-symbols", "{envId}"] },
+      },
+    };
+    await writeFile(configPath, JSON.stringify(configFile), "utf8");
+    const spawn = async (argv: readonly string[]) => {
+      const line = argv.join(" ");
+      if (line.includes("env get")) {
+        return { exitCode: 0, stdout: '{"url":"https://host/env-4711"}', stderr: "" };
+      }
+      if (line.includes("env users")) {
+        return { exitCode: 0, stdout: '{"u":"admin","p":"hunter2"}', stderr: "" };
+      }
+      return { exitCode: 0, stdout: "{}", stderr: "" };
+    };
+    const harnessInfo =
+      answers.harnessInfo ??
+      (async () =>
+        new Response(
+          JSON.stringify({
+            value: JSON.stringify({
+              appId: CONTROL_APP_ID,
+              semver: MIN_CONTROL_VERSION,
+              protocolVersion: 2,
+              serverGeneration: "d".repeat(32),
+              tenantCountReachable: false,
+              isolationModes: ["Codeunit"],
+              testTypes: ["codeunit"],
+            }),
+          }),
+          { status: 200 },
+        ));
+    const fetchFn = (async (url: unknown) => {
+      const u = String(url);
+      if (u.includes("LethALControl_HarnessInfo")) return harnessInfo();
+      if (u.includes("LethALControl_ForceResetLease")) return answers.forceReset();
+      throw new Error(`cliRejection: unexpected URL ${u}`);
+    }) as typeof fetch;
+    return forceResetLeaseFromCli(
+      { mode: "force-reset-lease", server: "https://host", serverInstance: "env-4711", configPath },
+      { makeEnvToolClient: (c) => new EnvToolClient(c, { spawn }), fetchFn },
+    ).catch((e: unknown) => e);
+  }
+
+  // R506 C10c (R-504 minor 3): only an error status proves the reset was not applied.
+  test("C10c: an HTTP 500 from ForceResetLease says 'could not complete', never 'may have been applied'", async () => {
+    const err = await cliRejection({
+      forceReset: async () => new Response("boom", { status: 500 }),
+    });
+    expect(String(err)).toContain("could not complete the reset");
+    expect(String(err)).not.toContain("may have been applied");
+  });
+
+  test("C10d: a non-abort connect error on ForceResetLease says it may have been applied", async () => {
+    const err = await cliRejection({
+      forceReset: async () => {
+        throw new TypeError("connect ECONNRESET");
+      },
+    });
+    expect(String(err)).toContain("ForceResetLease may have been applied");
+    expect(String(err)).toContain("ECONNRESET");
+  });
+
+  test("C10e: a 2xx ForceResetLease answer with no reset boolean says it may have been applied", async () => {
+    const err = await cliRejection({
+      forceReset: async () =>
+        new Response(JSON.stringify({ value: JSON.stringify({}) }), { status: 200 }),
+    });
+    expect(String(err)).toContain("ForceResetLease may have been applied");
+  });
+
+  // R507 R8: a refused redirect on ForceResetLease stays the refusal itself, with the warning that
+  // it was sent; a refusal on the HarnessInfo read before it passes through untouched.
+  test("R8: a refusal on ForceResetLease is the refusal itself and says the reset may have been applied", async () => {
+    const err = await cliRejection({
+      forceReset: async () => {
+        throw new UnfilteredExtensionsQueryError("refused: unfiltered extensions query R433");
+      },
+    });
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(String(err)).toContain("may have been applied");
+    expect(String(err)).toContain("refused: unfiltered extensions query R433");
+  });
+
+  test("R8: a refusal on the HarnessInfo read before it passes through without 'may have been applied'", async () => {
+    const err = await cliRejection({
+      harnessInfo: async () => {
+        throw new UnfilteredExtensionsQueryError("refused: unfiltered extensions query R433");
+      },
+      forceReset: async () => {
+        throw new Error("ForceResetLease must not be sent");
+      },
+    });
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(String(err)).not.toContain("may have been applied");
+    expect(String(err)).toContain("refused: unfiltered extensions query R433");
+  });
 });
 
 // ————————————————————————————————————————————————————————————————————————
@@ -1713,6 +1938,10 @@ describe("announceAlRunnerCanary (R7/R8)", () => {
     expect(calls).toEqual([]);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("al-runner is NOT authoritative");
+    // R255: the reason given is the CURRENT one. The asserterror defect (R7) is fixed in v2 and the
+    // canary reports it `defect-not-reproduced`, so the fallback must not name it.
+    expect(warnings[0]).not.toContain("asserterror");
+    expect(warnings[0]).toContain("coverage");
     expect(result).toBeUndefined();
   });
 });
@@ -2017,7 +2246,13 @@ describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
   class PassingBackend implements ExecutionBackend {
     readonly measurePredefinedSymbols = measuredV2_12; // R392
     capabilities(): BackendCapabilities {
-      return { coverage: "none", deploy: "none", isolation: "session", authoritative: false };
+      return {
+        coverage: "none",
+        deploy: "none",
+        isolation: "session",
+        kind: "al-runner",
+        authoritative: false,
+      };
     }
     async status(): Promise<BackendStatus> {
       return { ok: true, details: "fake" };
@@ -2206,7 +2441,70 @@ describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
     expect(lines.has(8)).toBe(false);
   });
 
-  // The test above calls printDryRun directly, so it cannot see main() drop the config's symbols on
+  test("R205: --dry-run lists the source snapshot, not an edit made after it", async () => {
+    const { root, projectDir } = await r214Project();
+    const snapshot = await readTargetSource(projectDir);
+    const logic = join(projectDir, "Logic.Codeunit.al");
+    await writeFile(logic, `\n\n\n${await readFile(logic, "utf8")}`);
+    const listingOf = async (source?: ReadonlyMap<string, Buffer>) => {
+      const outPath = join(root, `dry-run-${source === undefined ? "disk" : "snap"}.json`);
+      const log = spyOn(console, "log").mockImplementation(() => {});
+      try {
+        await printDryRun(projectDir, undefined, {
+          dbPath: join(root, "lethal.sqlite"),
+          configPath: join(root, "none.json"),
+          outPath,
+          preprocessorSymbols: ["X"],
+          ...(source !== undefined ? { source } : {}),
+        });
+      } finally {
+        log.mockRestore();
+      }
+      const listing = JSON.parse(await readFile(outPath, "utf8")) as {
+        batches: { sites: { line: number }[] }[];
+      };
+      return new Set(listing.batches.flatMap((b) => b.sites.map((x) => x.line)));
+    };
+    const pinned = await listingOf(snapshot);
+    expect(pinned.has(6)).toBe(true);
+    expect(pinned.has(9)).toBe(false);
+    expect((await listingOf()).has(9)).toBe(true); // the disk really moved
+  });
+
+  // R205: `main`'s dry-run branch must hand its snapshot to the listing. A FOLDER named `*.al` is
+  // not in the snapshot (it holds files only), but a disk enumeration lists it and then fails to
+  // read it, so the real CLI succeeds only when the snapshot reaches `printDryRun`.
+  test("R205: `lethal run --dry-run` lists from its snapshot, not a fresh disk walk", async () => {
+    const { root, projectDir } = await r214Project();
+    await mkdir(join(projectDir, "Folder.al"));
+    const configPath = join(root, "lethal.config.json");
+    await writeFile(configPath, "{}");
+    const outPath = join(root, "dry-run.json");
+    const cli = join(import.meta.dir, "..", "src", "cli.ts");
+    const proc = Bun.spawn(
+      [
+        "bun",
+        cli,
+        "run",
+        "--project",
+        projectDir,
+        "--dry-run",
+        "--config",
+        configPath,
+        "--db",
+        join(root, "lethal.sqlite"),
+        "--out",
+        outPath,
+      ],
+      { stdout: "pipe", stderr: "pipe", env: process.env },
+    );
+    const stderr = await new Response(proc.stderr).text();
+    expect(`${await proc.exited} ${stderr}`).toStartWith("0 ");
+    const listing = JSON.parse(await readFile(outPath, "utf8")) as { files: number };
+    expect(listing.files).toBe(1);
+  }, 60_000);
+
+  // The R214 dry-run test calls printDryRun directly, so it cannot see main() drop the config's symbols on
   // the way. This one runs the real CLI as a subprocess, which is the only way to reach main().
   test("R214: `lethal run --dry-run --config` lists the arm the config's symbols build", async () => {
     const { root, projectDir } = await r214Project();
@@ -2252,7 +2550,13 @@ describe("lethal run then lethal verify on one store (R358)", () => {
   class DeployingBackend implements ExecutionBackend {
     readonly measurePredefinedSymbols = measuredV2_12; // R392
     capabilities(): BackendCapabilities {
-      return { coverage: "none", deploy: "publish", isolation: "session", authoritative: false };
+      return {
+        coverage: "none",
+        deploy: "publish",
+        isolation: "session",
+        kind: "al-runner",
+        authoritative: false,
+      };
     }
     async status(): Promise<BackendStatus> {
       return { ok: true, details: "fake" };
@@ -2380,6 +2684,7 @@ describe("lethal run then lethal verify on one store (R358)", () => {
         coverage: "none",
         deploy: "publish",
         isolation: "session",
+        kind: "bcdev",
         authoritative: true,
       }),
       compileTestApp: async (_dir: string, target: { artifactId: string }) => {
@@ -2493,6 +2798,48 @@ describe("lethal run then lethal verify on one store (R358)", () => {
     expect(out.refused.reason).toBe("artifact-files-unusable");
     expect(out.refused.detail).toContain("selector ids");
     expect(out.exitCode).toBe(VERIFY_REFUSED_EXIT_CODE);
+  });
+
+  // R-260: on a fully valid source run (recorded source hash, installed bundle, selector ids), a
+  // nested --tests is refused by name before the config is read and before any backend is built.
+  // Without the CLI guard the valid-config call reaches buildBackend, and the tripwire call reads
+  // its (missing) config file.
+  test("R-260: verify refuses a nested test project before the config read and the backend build", async () => {
+    const ctx = await runThenArtifact();
+    const nested = join(ctx.projectDir, "test");
+    await mkdir(nested);
+    let built = 0;
+    const attempt = async (configPath: string) => {
+      let printed = "";
+      const outcome = await verifyFromCli(
+        {
+          mode: "verify",
+          dbPath: ctx.dbPath,
+          artifact: ctx.artifactId,
+          testDir: nested,
+          survivors: [`${ctx.survivor.batchIndex}/${ctx.survivor.mutantCode}`],
+          configPath,
+        },
+        {
+          write: (s) => {
+            printed += s;
+          },
+          buildBackend: async () => {
+            built++;
+            throw new Error("R-260 tripwire: verify reached buildBackend");
+          },
+        },
+      ).catch((err: unknown) => (err instanceof Error ? err.message : String(err)));
+      return { outcome, printed };
+    };
+    for (const configPath of [ctx.configPath, join(ctx.root, "tripwire-no-such-config.json")]) {
+      const { outcome, printed } = await attempt(configPath);
+      expect(outcome).toBe(VERIFY_REFUSED_EXIT_CODE);
+      const out = JSON.parse(printed);
+      expect(out.refused.reason).toBe("test-project-nested");
+      expect(out.refused.detail).toContain("--tests");
+    }
+    expect(built).toBe(0);
   });
 
   test("R-384: verifyFromCli hands --no-reach-filter and its stderr writer to runVerify", async () => {
@@ -2697,6 +3044,8 @@ describe("C02-06: lethal verify (Task 7)", () => {
     const root = scratch("lethal-verify-cli-");
     const project = join(root, "proj");
     await mkdir(project);
+    // R-260: the test project must exist beside the target, or verify refuses it first.
+    await mkdir(join(root, "t"));
     await writeFile(
       join(project, "lethal.config.json"),
       JSON.stringify({ bcdev: { server: "http://x", serverInstance: "BC" }, envTool: {} }),

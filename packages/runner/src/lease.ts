@@ -1,13 +1,13 @@
 import type { ActivationConfig, FetchFn } from "./activation";
-import { bcFetch } from "./bc-fetch";
+import { BcRedirectRefusedError, bcFetch, readJsonBody, withDeadline } from "./bc-fetch";
+import { UnfilteredExtensionsQueryError } from "./harness";
 
 /**
  * OData client for the Layer 5C-B1 machine-global lease + operation-marker surface
  * (design §4/§6; `extensions/lethal-control/src/ControlApi.Codeunit.al`). Request-shaping
- * (Basic auth, `company`/`tenant` query params, manual AbortController timeout, single
- * double-parsed OData scalar `value`) mirrors `RunMutantTransport`/`HarnessVerifier` — it does
- * NOT reuse `postOData` (activation.ts) for the same reason `RunMutantTransport` doesn't: that
- * helper's non-2xx classification is `MutationControl`-specific.
+ * (Basic auth, `company`/`tenant` query params, a manual AbortController timeout as every BC
+ * client here uses, single double-parsed OData scalar `value`) mirrors
+ * `RunMutantTransport`/`HarnessVerifier`.
  *
  * Scope (Task 6 of 10): this module shapes ONE call each — acquire/renew/release/beginPublish/
  * endPublish/getOperationStatus/recoverOp — and maps each response to a typed outcome. It does
@@ -44,7 +44,8 @@ const DEFAULT_TIMEOUT_MS = 30_000;
  * outcome, never thrown — the caller (Task 8) branches on `reason` for that. Task 8 also throws
  * THIS SAME class itself, separately, once its bounded backoff-with-jitter is exhausted (design
  * §8: "`LeaseUnavailableError` — acquire `held`/backoff-exhausted. Aborts.") — this module only
- * throws it for the transport/shape failures listed above.
+ * throws it for the transport/shape failures listed above. R504: an answer not read within the
+ * client's timeout (headers AND body) is one of them.
  */
 export class LeaseUnavailableError extends Error {
   /**
@@ -53,10 +54,23 @@ export class LeaseUnavailableError extends Error {
    * and kept under an operation marker, or lost (or unprovable).
    */
   readonly beginPublishRefusal?: BeginPublishRefusal;
-  constructor(message: string, beginPublishRefusal?: BeginPublishRefusal) {
+  /**
+   * R506 (R-504 minor 3): set ONLY when BC answered the action with an error status, the one
+   * failure that proves the action was not applied. Every other failure (a timeout, a connect
+   * error, a refused redirect, an unreadable or malformed body) leaves it unset, so a caller that
+   * must say "may have been applied" says it unless this proves otherwise.
+   */
+  readonly rejectedStatus?: number;
+  constructor(
+    message: string,
+    options?: { beginPublishRefusal?: BeginPublishRefusal; rejectedStatus?: number },
+  ) {
     super(message);
     this.name = "LeaseUnavailableError";
-    if (beginPublishRefusal !== undefined) this.beginPublishRefusal = beginPublishRefusal;
+    if (options?.beginPublishRefusal !== undefined) {
+      this.beginPublishRefusal = options.beginPublishRefusal;
+    }
+    if (options?.rejectedStatus !== undefined) this.rejectedStatus = options.rejectedStatus;
   }
 }
 
@@ -328,21 +342,35 @@ function assertTtlBound(ttlSeconds: number): void {
  * doc comment). Throws `LeaseUnavailableError` for any failure that means the client cannot
  * even learn the lease's state: unreachable, non-2xx, or a malformed body. A well-formed
  * REFUSAL (e.g. `{granted:false, reason:"held"}`) is a normal 2xx JSON object and is returned
- * here like any other result — callers map it to a typed outcome, never treat it as failure. */
-async function postLeaseAction(
+ * here like any other result — callers map it to a typed outcome, never treat it as failure.
+ * R504: the timeout spans the headers AND the body, and holds for a fetch that ignores its abort.
+ * R506: one shared deadline (`withDeadline`); a timeout is told apart by identity, never by text. */
+function postLeaseAction(
   cfg: ActivationConfig,
   fetchFn: FetchFn,
   action: string,
   body: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
+  const ms = cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  return withDeadline(
+    ms,
+    `LethALControl_${action}`,
+    (signal) => readLeaseAnswer(cfg, fetchFn, action, body, signal, ms),
+    (m) => new LeaseUnavailableError(m),
+  );
+}
+
+async function readLeaseAnswer(
+  cfg: ActivationConfig,
+  fetchFn: FetchFn,
+  action: string,
+  body: Record<string, unknown>,
+  signal: AbortSignal,
+  ms: number,
+): Promise<Record<string, unknown>> {
   const params = new URLSearchParams({ company: cfg.company });
   if (cfg.tenant !== undefined) params.set("tenant", cfg.tenant);
   const url = `${cfg.baseUrl}/ODataV4/LethALControl_${action}?${params.toString()}`;
-
-  // AbortSignal.timeout() is unreliable in this Bun/Windows env (see activation.ts) — manual
-  // AbortController + setTimeout instead.
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   let res: Response;
   try {
     res = await fetchFn(url, {
@@ -352,22 +380,36 @@ async function postLeaseAction(
         "content-type": "application/json",
       },
       body: JSON.stringify(body),
-      signal: controller.signal,
+      signal,
     });
   } catch (err) {
+    // R507: R-496's refusal ends the run everywhere else, so it leaves here as ITSELF, naming
+    // the request (the original names only the redirect's destination).
+    if (err instanceof UnfilteredExtensionsQueryError) {
+      throw new UnfilteredExtensionsQueryError(
+        `LethALControl_${action} answered with a redirect that was not followed: ${err.message}`,
+      );
+    }
+    // Any other refused redirect was dispatched AND answered: never "unreachable".
+    if (err instanceof BcRedirectRefusedError) {
+      throw new LeaseUnavailableError(
+        `LethALControl_${action} answered with a redirect that was not followed: ${String(err)}`,
+      );
+    }
     throw new LeaseUnavailableError(`LethALControl_${action} unreachable: ${String(err)}`);
-  } finally {
-    clearTimeout(timer);
   }
   if (!res.ok) {
-    throw new LeaseUnavailableError(`LethALControl_${action} failed: HTTP ${res.status}`);
+    throw new LeaseUnavailableError(`LethALControl_${action} failed: HTTP ${res.status}`, {
+      rejectedStatus: res.status,
+    });
   }
-  let envelope: unknown;
-  try {
-    envelope = await res.json();
-  } catch {
-    throw new LeaseUnavailableError(`LethALControl_${action} 2xx body is not JSON`);
-  }
+  const envelope = await readJsonBody(
+    res,
+    signal,
+    `LethALControl_${action}`,
+    ms,
+    (m) => new LeaseUnavailableError(m),
+  );
   const value = isRecord(envelope) ? envelope.value : undefined;
   if (typeof value !== "string") {
     throw new LeaseUnavailableError(`LethALControl_${action} returned no string "value"`);

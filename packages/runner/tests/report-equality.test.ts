@@ -67,7 +67,13 @@ function mutant(mutantId: string): MutantManifestEntry {
  */
 function buildScenarioReport(): SessionReport {
   const statics: FoldStatics = {
-    caps: { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true },
+    caps: {
+      coverage: "procedure",
+      deploy: "publish",
+      isolation: "session",
+      kind: "bcdev",
+      authoritative: true,
+    },
     buildSymbols: [],
     only: {
       patterns: [
@@ -245,6 +251,9 @@ function buildScenarioReport(): SessionReport {
       coveringTests: ["Sales Helper Tests.ComputeTotalMultipliesQtyByPrice"],
       coverageAttribution: "exact",
       guardObserved: true,
+      // R577: a reproduced kill, with the reproduction's own text.
+      killReproduced: true,
+      reproducedFailure: "Assert.AreEqual failed. Expected:<10> Actual:<0>",
     },
     {
       type: "mutant-scored",
@@ -341,6 +350,8 @@ function buildScenarioReport(): SessionReport {
       coveringTests: ["Sales Approval Tests.ApproveBatchSendsRequest"],
       coverageAttribution: "exact",
       runner: "client-services",
+      // R577: a carried reproduced kill keeps its marker; this one had no text.
+      killReproduced: true,
     },
     {
       type: "mutant-scored",
@@ -363,6 +374,19 @@ function buildScenarioReport(): SessionReport {
       coverageAttribution: "object",
       guardObserved: true,
       runner: "fenced",
+    },
+    {
+      // R577: a kill that did not reproduce. Zero duration, so R54's `mutantsMs` oracle is unmoved.
+      type: "mutant-scored",
+      // The golden input has no M0014; M0011's site under a new id and hash.
+      mutant: { ...mutant("M0011"), mutantId: "M0014", astHash: "r577-m0014" },
+      verdict: "error",
+      batchIndex: 2,
+      durationMs: 0,
+      coveringTests: ["Sales Approval Tests.LogInsertsOnApproval"],
+      cause: "kill-not-reproduced",
+      failureNote:
+        "kill-not-reproduced LogInsertsOnApproval: failed under the mutant (Assert.IsTrue failed.), passed with no mutant active, then passed when LethAL re-ran it under the mutant; the failure did not repeat, so it is not attributed to the mutant (R577). Re-run with --resume to measure it again.",
     },
     // R53: two mutants a prior run stranded the tier on, skipped rather than retried —
     // `mutant-skipped-stranded`, never `mutant-scored`: the event's own type already implies

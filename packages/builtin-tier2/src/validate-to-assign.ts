@@ -1,4 +1,9 @@
-import { calleeNameNode, claimsRecordMethod } from "@lethal/engine";
+import {
+  bareFieldAssignable,
+  bareReceiverText,
+  calleeNameNode,
+  claimsRecordMethod,
+} from "@lethal/engine";
 import {
   ALNodeKind,
   type ALSyntaxNode,
@@ -14,8 +19,10 @@ import { exactArguments, synthesizeAfter } from "./mutate-helpers";
  * branch or loop) and changed nothing about the mutants it already emitted, so every existing
  * mutant keeps its identity and its history. `design.md` §5.1 resets history on a MAJOR bump only,
  * which is exactly what a widening must not do. `swap-modify-flag`'s 1.1.0 is the precedent.
+ * R477 bumped it to 1.2.0 for the same reason: the bare fallback adds sites and changes no
+ * existing mutant's text (a same-tuple twin's ORDINAL can move, which is the identity scheme's job).
  */
-const OPERATOR_VERSION = "1.1.0";
+const OPERATOR_VERSION = "1.2.0";
 const METHOD_NAME = "Validate";
 const VALUE_ARGUMENT_COUNT = 2;
 
@@ -79,6 +86,9 @@ const QUOTED_IDENTIFIER = "quoted_identifier";
  * ambiguity at no cost: `Rec.<field> := <value>` was measured to compile clean in all four contexts
  * that carry an implicit `Rec` in this product's rules (a table's own procedure, a field
  * `OnValidate`, a `tableextension` procedure, a `page` procedure with a `SourceTable`).
+ * R477 is the one measured exception: where no receiver spelling can be proven (R-464), the bare
+ * form IS emitted, but only where nothing at the call declares the field's name, which is exactly
+ * the capture this amendment describes (`bareFieldAssignable`, `./receiver.ts`).
  *
  * **Amendment 2: the receiver prefix comes from the shared `calleeNameNode` accessor
  * (`./receiver.ts`), not a separately derived "text up to the method name".** The same node
@@ -104,8 +114,9 @@ const QUOTED_IDENTIFIER = "quoted_identifier";
  * Documented limits:
  *   - the single-argument `Validate(F)` form and a call outside statement position are refused, both
  *     recorded above as guards rather than omissions.
- *   - a `pageextension`'s implicit `Rec` is refused, inherited from `claimsRecordMethod`; see
- *     `OBJECT_KINDS` in `./receiver.ts`.
+ *   - a `pageextension`'s implicit `Rec` and a `reportextension`'s `modify(X)` record (R-463) are
+ *     refused, inherited from `claimsRecordMethod`; see `OBJECT_KINDS` in the engine's
+ *     `semantic/receiver.ts`.
  *   - the parenthesis-less call form never reaches this operator: it parses as a `member_expression`
  *     rather than a `call_expression`, the same grammar gap `void-method-call` and every other
  *     Tier-2 operator in this file share.
@@ -124,17 +135,21 @@ export const validateToAssign: MutationOperator = {
     if (!claimsRecordMethod(node, ctx, METHOD_NAME)) return false;
     const args = validateArguments(node);
     if (args === null) return false;
-    return isFieldIdentifier(args.fieldArg);
+    if (!isFieldIdentifier(args.fieldArg)) return false;
+    // R-464: the bare form claims only where its receiver prefix is PROVEN, so a refused site is
+    // never a claimed site with no spec.
+    const nameNode = calleeNameNode(node);
+    return nameNode === null || receiverPrefix(node, nameNode, args.fieldArg, ctx) !== null;
   },
 
-  generate(node: ALSyntaxNode, _ctx: SemanticContext): readonly MutationSpec[] {
+  generate(node: ALSyntaxNode, ctx: SemanticContext): readonly MutationSpec[] {
     const args = validateArguments(node);
     if (args === null) return [];
     if (!isFieldIdentifier(args.fieldArg)) return [];
 
     const nameNode = calleeNameNode(node);
     if (nameNode === null) return [];
-    const prefix = receiverPrefix(node, nameNode);
+    const prefix = receiverPrefix(node, nameNode, args.fieldArg, ctx);
     if (prefix === null) return [];
 
     const mutatedText = `${prefix}${args.fieldArg.text} := ${args.valueArg.text}`;
@@ -231,18 +246,33 @@ function isFieldIdentifier(node: ALSyntaxNode): boolean {
  * as written, whatever casing or spelling it used.
  *
  * For the implicit-receiver form, `nameNode` IS the callee itself, so its start coincides with the
- * call node's own start. There is no receiver text to slice out, and per amendment 1 above, none is
- * substituted: the literal `Rec.` is SYNTHESISED instead of leaving the assignment bare, because
- * `Validate`'s first argument resolves in the record's field scope while a bare assignment target
- * does not, and the qualification is correct under either binding rule for a hypothetically shadowed
- * name.
+ * call node's own start. There is no receiver text to slice out, and per amendment 1 above, the
+ * receiver is SYNTHESISED instead of leaving the assignment bare, because `Validate`'s first argument
+ * resolves in the record's field scope while a bare assignment target does not.
+ *
+ * R-464: the synthesized receiver is the record the bare call BINDS to (`bareReceiverText`): `Rec`,
+ * a report dataitem's name, or a `with` subject. It was a literal `Rec.`, which inside
+ * `with R do begin Validate(Amount, 1) end` wrote `Rec.Amount := 1`, a mutant of a different record.
+ *
+ * R477: where that spelling cannot be proven, the prefix is EMPTY (the bare `F := V`) when
+ * `bareFieldAssignable` proves the bare field name binds the call's field (nothing at the call
+ * declares it; alc-measured), and `null` (refuse) otherwise. A proven spelling always wins.
  *
  * `null` when `nameNode`'s span does not fall inside `node`'s own text, which should be impossible
  * for a genuine descendant; guarded rather than assumed, mirroring `swap-find-direction.ts`'s
  * `replaceNameSpan`.
  */
-function receiverPrefix(node: ALSyntaxNode, nameNode: ALSyntaxNode): string | null {
-  if (nameNode.startIndex === node.startIndex) return "Rec.";
+function receiverPrefix(
+  node: ALSyntaxNode,
+  nameNode: ALSyntaxNode,
+  fieldArg: ALSyntaxNode,
+  ctx: SemanticContext,
+): string | null {
+  if (nameNode.startIndex === node.startIndex) {
+    const receiver = bareReceiverText(node, ctx);
+    if (receiver !== null) return `${receiver}.`;
+    return bareFieldAssignable(node, fieldArg.text, ctx) ? "" : null;
+  }
   const offset = nameNode.startIndex - node.startIndex;
   if (offset < 0 || offset > node.text.length) return null;
   return node.text.slice(0, offset);

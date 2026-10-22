@@ -17,11 +17,13 @@ backend not ready: The deployed LethAL Control app reports version 1.0.0.9, olde
 1.0.0.10 this client requires — your control app predates this client.
 ```
 
-## Before building: the lockstep
+## Before building: the version rule
 
-`MIN_CONTROL_VERSION` in `packages/runner/src/harness.ts` must **equal** `app.json`'s `version`. A
-test pins it (R28). If you bumped one, bump the other before compiling — a control app built ahead
-of the minimum passes; a minimum ahead of the app makes a freshly built app fail its own gate.
+`MIN_CONTROL_VERSION` in `packages/runner/src/harness.ts` must **never be ahead of** `app.json`'s
+`version`. A test pins that (R28): a minimum ahead of the app makes a freshly built app fail its own
+gate. It may lag behind only for an action the client treats as optional (R389's `DependentCount`:
+an older control app answers 404 and the client falls back). **Raise the minimum to app.json's
+version whenever a client path requires the new action and has no fallback.**
 
 Bump the version at all only when the wire surface changed in a way a client can depend on (a new
 action, a new field on the marker). It is `MIN_CONTROL_VERSION` that gates, deliberately, rather
@@ -61,8 +63,10 @@ fixtures target *different* containers, and a gate against the one you forgot wi
 grep -h '"server"' fixtures/*/lethal.config.local.json
 ```
 
-Today that is `Cronus28` (sandbox-app: `itest:bcdev`) and `Cronus284` (sandbox-data:
-`itest:tables`). Publish to each.
+Today that is `Cronus28` (every fixture). Publish to it. The BC on Linux servers `bc1`, `bc2` and
+`bc3` (R589) get the control app from `bun scripts/bc-linux-setup.ts --server <name>`, not from
+this procedure: they have no BcContainerHelper, and the script publishes over the dev endpoint.
+**Cronus284 is CentralGauge's, not LethAL's**: never publish to it.
 
 **Inside the kraken container:** the compile steps above work there (Linux `alc` through
 `LETHAL_ALC_DIR`). The Global publish with sync/upgrade (`Publish-BcContainerApp`) needs
@@ -142,11 +146,11 @@ If the apps were already published globally, unpublish DEPENDENTS FIRST and then
 (`UnPublish-BcContainerApp -unInstall -force`), then republish both through the dev endpoint.
 
 **3. Which apps, and where.** Read the containers from the configs, never from memory. As of
-2026-08-19 (container names updated 2026-10-03 to Cronus28 and Cronus284):
+2026-08-19 (container names updated 2026-10-03; Cronus284 left LethAL 2026-10-21 and is
+CentralGauge's; `bc1`-`bc3` are set up by `scripts/bc-linux-setup.ts`):
 
 | container | apps |
 | --- | --- |
-| Cronus284 | `sandbox-data`, `sandbox-data-tests` |
 | Cronus28 | `sandbox-app`, `sandbox-tests`, `gift-card`, `gift-card-tests`, `sandbox-probes`, `sandbox-hang`, `sandbox-hang-tests` |
 
 `sandbox-probes` and the `sandbox-hang` pair are the two easy to forget, and each fails a DIFFERENT

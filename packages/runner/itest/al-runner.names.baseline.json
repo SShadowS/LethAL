@@ -1,0 +1,293 @@
+{
+  "identityScheme": 40,
+  "entries": [
+    {
+      "key": "3209ff2420d664b83adc79e8caf929c74d89b31fb3e9168da5862ad160574384|Names Calc|AmpStep|lethal.empty-block|1",
+      "verdict": "killed",
+      "killingTest": "Amp&Step",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "3209ff2420d664b83adc79e8caf929c74d89b31fb3e9168da5862ad160574384|Names Calc|DanishStep|lethal.empty-block|1",
+      "verdict": "killed",
+      "killingTest": "Blåbær Step",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "3209ff2420d664b83adc79e8caf929c74d89b31fb3e9168da5862ad160574384|Names Calc|DashStep|lethal.empty-block|1",
+      "verdict": "killed",
+      "killingTest": "Dash-Step",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "3209ff2420d664b83adc79e8caf929c74d89b31fb3e9168da5862ad160574384|Names Calc|DigitStep|lethal.empty-block|1",
+      "verdict": "killed",
+      "killingTest": "7Digit Step",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "3209ff2420d664b83adc79e8caf929c74d89b31fb3e9168da5862ad160574384|Names Calc|DotStep|lethal.empty-block|1",
+      "verdict": "killed",
+      "killingTest": "Dot.Step",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "3209ff2420d664b83adc79e8caf929c74d89b31fb3e9168da5862ad160574384|Names Calc|KeywordStep|lethal.empty-block|1",
+      "verdict": "killed",
+      "killingTest": "Default",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "3209ff2420d664b83adc79e8caf929c74d89b31fb3e9168da5862ad160574384|Names Calc|ParenStep|lethal.empty-block|1",
+      "verdict": "killed",
+      "killingTest": "Paren(Step)",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "3209ff2420d664b83adc79e8caf929c74d89b31fb3e9168da5862ad160574384|Names Calc|PlainStep|lethal.empty-block|1",
+      "verdict": "killed",
+      "killingTest": "PlainControl",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "3209ff2420d664b83adc79e8caf929c74d89b31fb3e9168da5862ad160574384|Names Calc|SlashStep|lethal.empty-block|1",
+      "verdict": "killed",
+      "killingTest": "Slash/Step",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "3209ff2420d664b83adc79e8caf929c74d89b31fb3e9168da5862ad160574384|Names Calc|SpaceStep|lethal.empty-block|1",
+      "verdict": "killed",
+      "killingTest": "Space Step",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "3209ff2420d664b83adc79e8caf929c74d89b31fb3e9168da5862ad160574384|Names Calc|TwinLongStep|lethal.empty-block|1",
+      "verdict": "killed",
+      "killingTest": "Twin_PairLong",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "3209ff2420d664b83adc79e8caf929c74d89b31fb3e9168da5862ad160574384|Names Calc|TwinStep|lethal.empty-block|1",
+      "verdict": "killed",
+      "killingTest": "Twin Pair",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "7aa903a4ee5fd79e4e3ac2502a1c2246f91a8aaf5fa7bb2b6d11ee326b8586e6|Names Calc|AmpStep|lethal.return-value|1",
+      "verdict": "killed",
+      "killingTest": "Amp&Step",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "513f58774a41965262e45053648c2e188744d13f4cc62a5ba918e95be6d410b8"
+    },
+    {
+      "key": "7aa903a4ee5fd79e4e3ac2502a1c2246f91a8aaf5fa7bb2b6d11ee326b8586e6|Names Calc|DanishStep|lethal.return-value|1",
+      "verdict": "killed",
+      "killingTest": "Blåbær Step",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "513f58774a41965262e45053648c2e188744d13f4cc62a5ba918e95be6d410b8"
+    },
+    {
+      "key": "7aa903a4ee5fd79e4e3ac2502a1c2246f91a8aaf5fa7bb2b6d11ee326b8586e6|Names Calc|DashStep|lethal.return-value|1",
+      "verdict": "killed",
+      "killingTest": "Dash-Step",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "513f58774a41965262e45053648c2e188744d13f4cc62a5ba918e95be6d410b8"
+    },
+    {
+      "key": "7aa903a4ee5fd79e4e3ac2502a1c2246f91a8aaf5fa7bb2b6d11ee326b8586e6|Names Calc|DigitStep|lethal.return-value|1",
+      "verdict": "killed",
+      "killingTest": "7Digit Step",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "513f58774a41965262e45053648c2e188744d13f4cc62a5ba918e95be6d410b8"
+    },
+    {
+      "key": "7aa903a4ee5fd79e4e3ac2502a1c2246f91a8aaf5fa7bb2b6d11ee326b8586e6|Names Calc|DotStep|lethal.return-value|1",
+      "verdict": "killed",
+      "killingTest": "Dot.Step",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "513f58774a41965262e45053648c2e188744d13f4cc62a5ba918e95be6d410b8"
+    },
+    {
+      "key": "7aa903a4ee5fd79e4e3ac2502a1c2246f91a8aaf5fa7bb2b6d11ee326b8586e6|Names Calc|KeywordStep|lethal.return-value|1",
+      "verdict": "killed",
+      "killingTest": "Default",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "513f58774a41965262e45053648c2e188744d13f4cc62a5ba918e95be6d410b8"
+    },
+    {
+      "key": "7aa903a4ee5fd79e4e3ac2502a1c2246f91a8aaf5fa7bb2b6d11ee326b8586e6|Names Calc|ParenStep|lethal.return-value|1",
+      "verdict": "killed",
+      "killingTest": "Paren(Step)",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "513f58774a41965262e45053648c2e188744d13f4cc62a5ba918e95be6d410b8"
+    },
+    {
+      "key": "7aa903a4ee5fd79e4e3ac2502a1c2246f91a8aaf5fa7bb2b6d11ee326b8586e6|Names Calc|PlainStep|lethal.return-value|1",
+      "verdict": "killed",
+      "killingTest": "PlainControl",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "513f58774a41965262e45053648c2e188744d13f4cc62a5ba918e95be6d410b8"
+    },
+    {
+      "key": "7aa903a4ee5fd79e4e3ac2502a1c2246f91a8aaf5fa7bb2b6d11ee326b8586e6|Names Calc|SlashStep|lethal.return-value|1",
+      "verdict": "killed",
+      "killingTest": "Slash/Step",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "513f58774a41965262e45053648c2e188744d13f4cc62a5ba918e95be6d410b8"
+    },
+    {
+      "key": "7aa903a4ee5fd79e4e3ac2502a1c2246f91a8aaf5fa7bb2b6d11ee326b8586e6|Names Calc|SpaceStep|lethal.return-value|1",
+      "verdict": "killed",
+      "killingTest": "Space Step",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "513f58774a41965262e45053648c2e188744d13f4cc62a5ba918e95be6d410b8"
+    },
+    {
+      "key": "7aa903a4ee5fd79e4e3ac2502a1c2246f91a8aaf5fa7bb2b6d11ee326b8586e6|Names Calc|TwinLongStep|lethal.return-value|1",
+      "verdict": "killed",
+      "killingTest": "Twin_PairLong",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "513f58774a41965262e45053648c2e188744d13f4cc62a5ba918e95be6d410b8"
+    },
+    {
+      "key": "7aa903a4ee5fd79e4e3ac2502a1c2246f91a8aaf5fa7bb2b6d11ee326b8586e6|Names Calc|TwinStep|lethal.return-value|1",
+      "verdict": "killed",
+      "killingTest": "Twin Pair",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "513f58774a41965262e45053648c2e188744d13f4cc62a5ba918e95be6d410b8"
+    },
+    {
+      "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Names Calc|AmpStep|lethal.swap-additive|1",
+      "verdict": "killed",
+      "killingTest": "Amp&Step",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "a64e3dd3e639c95a6be6d3a4e88eb0655940e123264bb9298f008ac6f1d38d53"
+    },
+    {
+      "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Names Calc|DanishStep|lethal.swap-additive|1",
+      "verdict": "killed",
+      "killingTest": "Blåbær Step",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "a64e3dd3e639c95a6be6d3a4e88eb0655940e123264bb9298f008ac6f1d38d53"
+    },
+    {
+      "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Names Calc|DashStep|lethal.swap-additive|1",
+      "verdict": "killed",
+      "killingTest": "Dash-Step",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "a64e3dd3e639c95a6be6d3a4e88eb0655940e123264bb9298f008ac6f1d38d53"
+    },
+    {
+      "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Names Calc|DigitStep|lethal.swap-additive|1",
+      "verdict": "killed",
+      "killingTest": "7Digit Step",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "a64e3dd3e639c95a6be6d3a4e88eb0655940e123264bb9298f008ac6f1d38d53"
+    },
+    {
+      "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Names Calc|DotStep|lethal.swap-additive|1",
+      "verdict": "killed",
+      "killingTest": "Dot.Step",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "a64e3dd3e639c95a6be6d3a4e88eb0655940e123264bb9298f008ac6f1d38d53"
+    },
+    {
+      "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Names Calc|KeywordStep|lethal.swap-additive|1",
+      "verdict": "killed",
+      "killingTest": "Default",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "a64e3dd3e639c95a6be6d3a4e88eb0655940e123264bb9298f008ac6f1d38d53"
+    },
+    {
+      "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Names Calc|ParenStep|lethal.swap-additive|1",
+      "verdict": "killed",
+      "killingTest": "Paren(Step)",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "a64e3dd3e639c95a6be6d3a4e88eb0655940e123264bb9298f008ac6f1d38d53"
+    },
+    {
+      "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Names Calc|PlainStep|lethal.swap-additive|1",
+      "verdict": "killed",
+      "killingTest": "PlainControl",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "a64e3dd3e639c95a6be6d3a4e88eb0655940e123264bb9298f008ac6f1d38d53"
+    },
+    {
+      "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Names Calc|SlashStep|lethal.swap-additive|1",
+      "verdict": "killed",
+      "killingTest": "Slash/Step",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "a64e3dd3e639c95a6be6d3a4e88eb0655940e123264bb9298f008ac6f1d38d53"
+    },
+    {
+      "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Names Calc|SpaceStep|lethal.swap-additive|1",
+      "verdict": "killed",
+      "killingTest": "Space Step",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "a64e3dd3e639c95a6be6d3a4e88eb0655940e123264bb9298f008ac6f1d38d53"
+    },
+    {
+      "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Names Calc|TwinLongStep|lethal.swap-additive|1",
+      "verdict": "killed",
+      "killingTest": "Twin_PairLong",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "a64e3dd3e639c95a6be6d3a4e88eb0655940e123264bb9298f008ac6f1d38d53"
+    },
+    {
+      "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Names Calc|TwinStep|lethal.swap-additive|1",
+      "verdict": "killed",
+      "killingTest": "Twin Pair",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "a64e3dd3e639c95a6be6d3a4e88eb0655940e123264bb9298f008ac6f1d38d53"
+    }
+  ]
+}

@@ -43,6 +43,33 @@ test("unit tests run with the real home directory hidden (R264)", () => {
   );
 });
 
+test("R359: a child process sees the fake home and the private temp folder, whichever spawn form", async () => {
+  const want = {
+    home: process.env.HOME,
+    profile: process.env.USERPROFILE,
+    tmp: process.env.TMPDIR,
+    temp: process.env.TEMP,
+  };
+  expect(want.home).toBe(process.env.LETHAL_TEST_FAKE_HOME);
+  const script =
+    "console.log(JSON.stringify({home: process.env.HOME, profile: process.env.USERPROFILE, tmp: process.env.TMPDIR, temp: process.env.TEMP}))";
+  const argv = [process.execPath, "-e", script];
+  const read = (out: string) => JSON.parse(out.trim()) as typeof want;
+  expect(read(Bun.spawnSync(argv).stdout.toString()), "Bun.spawnSync(argv)").toEqual(want);
+  expect(read(Bun.spawnSync({ cmd: argv }).stdout.toString()), "Bun.spawnSync({cmd})").toEqual(
+    want,
+  );
+  const p = Bun.spawn(argv, { stdout: "pipe" });
+  expect(read(await new Response(p.stdout).text()), "Bun.spawn(argv)").toEqual(want);
+  const q = Bun.spawn({ cmd: argv, stdout: "pipe" });
+  expect(read(await new Response(q.stdout).text()), "Bun.spawn({cmd})").toEqual(want);
+  // An explicit env still wins.
+  const own = read(
+    Bun.spawnSync(argv, { env: { ...process.env, HOME: "explicit" } }).stdout.toString(),
+  );
+  expect(own.home).toBe("explicit");
+});
+
 test("R409: no product source calls os.homedir() directly; home.ts is the one reader", () => {
   const packagesDir = join(import.meta.dir, "..", "..");
   const callers: string[] = [];

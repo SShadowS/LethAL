@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser } from "@lethal/engine";
@@ -20,6 +20,7 @@ import type {
 import { generateMutationSet, operatorTiers, runSession } from "../src/orchestrator";
 import type { SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
+import { removeScratchDir } from "./helpers/scratch";
 
 /**
  * R400: identity ordinals are numbered where they are consumed (`runSession`, through
@@ -92,7 +93,13 @@ const selectorIds = { selectorId: 50290, controlId: 50291, tableId: 50292 };
 /** Every test passes and covers nothing, so every mutant is reported, unexecuted. */
 class NoCoverageBackend implements ExecutionBackend {
   capabilities(): BackendCapabilities {
-    return { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true };
+    return {
+      coverage: "procedure",
+      deploy: "publish",
+      isolation: "session",
+      kind: "bcdev",
+      authoritative: true,
+    };
   }
   async status(): Promise<BackendStatus> {
     return { ok: true, details: "stub" };
@@ -113,8 +120,8 @@ class NoCoverageBackend implements ExecutionBackend {
 }
 
 const roots: string[] = [];
-afterAll(async () => {
-  for (const r of roots) await rm(r, { recursive: true, force: true });
+afterAll(() => {
+  for (const r of roots) removeScratchDir(r);
 });
 beforeAll(async () => {
   await initParser();

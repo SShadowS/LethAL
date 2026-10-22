@@ -159,6 +159,22 @@
               },
               "platformAppsDir": {
                 "type": "string"
+              },
+              "testSelector": {
+                "type": "string",
+                "enum": [
+                  "exact",
+                  "substring-with-excludes"
+                ]
+              },
+              "testSelectorReason": {
+                "type": "string"
+              },
+              "runnerBuild": {
+                "type": "string"
+              },
+              "binarySha256": {
+                "type": "string"
               }
             }
           }
@@ -217,6 +233,33 @@
       "type": "object",
       "additionalProperties": {
         "type": "string"
+      }
+    },
+    "testMethods": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "line": {
+            "type": "number"
+          },
+          "lineAmbiguous": {
+            "const": true
+          },
+          "baselineDurationMs": {
+            "type": "number"
+          }
+        }
       }
     },
     "backend": {
@@ -350,6 +393,12 @@
           "killPosition": {
             "type": "number"
           },
+          "killReproduced": {
+            "const": true
+          },
+          "reproducedFailure": {
+            "type": "string"
+          },
           "cause": {
             "type": "string",
             "enum": [
@@ -362,10 +411,16 @@
               "group-coverage-incomplete",
               "op-stopped",
               "stopped-after-completion",
+              "stop-outcome-unconfirmed",
               "session-reused",
               "warm-prefix-unstable",
               "warm-timeout-unconfirmed",
-              "warm-confirmation-incomplete"
+              "warm-confirmation-incomplete",
+              "reused-budget-stale",
+              "timeout-unconfirmed",
+              "runner-test-error",
+              "runner-refused",
+              "kill-not-reproduced"
             ]
           },
           "platformKillMechanism": {
@@ -631,7 +686,8 @@
                   "declarative",
                   "compiled-out",
                   "preproc-undecided",
-                  "instrumentation-refused"
+                  "instrumentation-refused",
+                  "hang-refused"
                 ]
               },
               "detail": {
@@ -975,6 +1031,9 @@
         },
         "skippedStranded": {
           "type": "number"
+        },
+        "carryRefused": {
+          "type": "string"
         }
       }
     },
@@ -1049,6 +1108,99 @@
     },
     "identityScheme": {
       "type": "number"
+    },
+    "sourceSha256": {
+      "type": "string"
+    },
+    "dependencyReportSources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "outcome"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "report",
+              "extension",
+              "package"
+            ]
+          },
+          "report": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "parse-damaged",
+              "not-found",
+              "ambiguous",
+              "no-source",
+              "unwrap-failed",
+              "no-symbols",
+              "unreadable",
+              "base-not-found"
+            ]
+          },
+          "package": {
+            "type": "string"
+          },
+          "appId": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "entry": {
+            "type": "string"
+          },
+          "entrySha256": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "dependencySourceSha256": {
+      "type": "string"
+    },
+    "numberingDigest": {
+      "type": "string"
+    },
+    "twinSites": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "carryHidden": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tuples",
+        "files"
+      ],
+      "properties": {
+        "tuples": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
     },
     "testBuildSymbols": {
       "type": "array",
@@ -1213,6 +1365,34 @@
           "type": "array",
           "items": {
             "type": "string"
+          }
+        },
+        "refused": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "key",
+              "reason"
+            ],
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "no-proof",
+                  "no-run-facts",
+                  "renumbered",
+                  "twin-in-file"
+                ]
+              },
+              "file": {
+                "type": "string"
+              }
+            }
           }
         },
         "contradicted": {

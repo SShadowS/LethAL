@@ -85,6 +85,11 @@ export interface LegacyBuildReportInput {
   readonly permissionCanary?: PermissionCanaryResult;
   /** R129 — what `runSession` emits when the al-runner path announced a BC build. */
   readonly alRunnerBcBuild?: { readonly build: string; readonly announcement: string };
+  /** R558 — what `runSession` emits when R551's probe applied (one-shot al-runner). */
+  readonly alRunnerTestSelector?: {
+    readonly selector: "exact" | "substring-with-excludes";
+    readonly reason?: string;
+  };
 }
 
 function syntheticMutant(id: string): MutantManifestEntry {
@@ -157,6 +162,9 @@ export function legacyBuildReport(input: LegacyBuildReportInput): SessionReport 
       build: input.alRunnerBcBuild.build,
       announcement: input.alRunnerBcBuild.announcement,
     });
+  }
+  if (input.alRunnerTestSelector !== undefined) {
+    push({ type: "al-runner-test-selector", ...input.alRunnerTestSelector });
   }
 
   push({
@@ -251,6 +259,9 @@ export function legacyBuildReport(input: LegacyBuildReportInput): SessionReport 
         // through unchanged. The shim used to drop it, which made every fixture built here invisible
         // to anything reading a kill's own words — R121's screen, for one.
         ...(o.killingTestFailure !== undefined ? { killingTestFailure: o.killingTestFailure } : {}),
+        // R577: carried unchanged by the same call site, like the kill text above.
+        ...(o.killReproduced === true ? { killReproduced: true as const } : {}),
+        ...(o.reproducedFailure !== undefined ? { reproducedFailure: o.reproducedFailure } : {}),
         coveringTests: o.coveringTests ?? [],
         ...(o.coverageAttribution !== undefined
           ? { coverageAttribution: o.coverageAttribution }
@@ -274,6 +285,9 @@ export function legacyBuildReport(input: LegacyBuildReportInput): SessionReport 
         ...(o.failureNote !== undefined ? { failureNote: o.failureNote } : {}),
         // R86 — see the `mutant-carried` push above.
         ...(o.killingTestFailure !== undefined ? { killingTestFailure: o.killingTestFailure } : {}),
+        // R577 — see the `mutant-carried` push above.
+        ...(o.killReproduced === true ? { killReproduced: true as const } : {}),
+        ...(o.reproducedFailure !== undefined ? { reproducedFailure: o.reproducedFailure } : {}),
         ...(o.cause !== undefined ? { cause: o.cause } : {}),
         coveringTests: o.coveringTests ?? [],
         ...(o.coverageAttribution !== undefined

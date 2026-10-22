@@ -3,6 +3,8 @@ import { join } from "node:path";
 import {
   ALNodeKind,
   type ALSyntaxNode,
+  type ArmEvaluation,
+  evaluateArms,
   initParser,
   isProcedureLike,
   objectDeclarationsOf,
@@ -10,8 +12,11 @@ import {
   procedureLikeArmNames,
   procedureLikeNameNode,
   renamedMemberCoverageNames,
+  startsInInactiveArm,
   wrapRoot,
 } from "@lethal/engine";
+import { FLAT_NAMES_FILENAME, displayPathsOf } from "@lethal/schemata";
+import type { BuildBackend } from "./preprocessor-symbols";
 
 /**
  * R58: maps a BC `Code Coverage` row's `(objectType, objectId, lineNo)` to the procedure that owns
@@ -142,6 +147,35 @@ export function refusedWholeFileReason(objectType: string, objectId: number, fil
   return `coverage refused for ${objectType}:${objectId} (${file}): its file also holds a #if ... #endif object wrapper, and al-runner refuses such a file whole (R298, R300). Its mutants read no-coverage.`;
 }
 
+/** R497: the sentence for an object in a `#if`-wrapped file the BC paths do not admit. */
+export function refusedBcShapeReason(
+  objectType: string,
+  objectId: number,
+  file: string,
+  shape: string,
+): string {
+  return `coverage refused for ${objectType}:${objectId} (${file}): its file holds a #if object wrapper of a shape not measured on BC (${shape}; R497). Its mutants read no-coverage.`;
+}
+
+/** R497 A3: two compiled declarations of one object: a line could belong to either. */
+export function duplicateEntryReason(key: string): string {
+  return `coverage refused for ${key}: the compiled source holds more than one declaration of it, so a covered line cannot be placed (R497). Its mutants read no-coverage.`;
+}
+
+/** R-300b: the sentence for an object in a `#if`-wrapped file al-runner does not admit. */
+export function refusedUnmeasuredShapeReason(
+  objectType: string,
+  objectId: number,
+  file: string,
+): string {
+  return `coverage refused for ${objectType}:${objectId} (${file}): its file holds a #if object wrapper of a shape not measured on al-runner (R300). Its mutants read no-coverage.`;
+}
+
+/** R-300b (C1): the sentence for an object key two files declare. */
+export function duplicateObjectReason(key: string, fileA: string, fileB: string): string {
+  return `coverage refused for ${key}: it is declared in ${fileA} and ${fileB}; coverage cannot tell them apart (R300). Its mutants read no-coverage.`;
+}
+
 /**
  * R-307 section 4: the sentence for a DECLARED object the source yields no declaration for (R305's
  * split header is the measured shape). Only an object with no mutant keeps this refusal: one with
@@ -258,6 +292,14 @@ export class LineMap {
         this.refused.set(key, e.refused);
         continue;
       }
+      // R497 A3: a second compiled entry for one key would overwrite the first (last wins, e.g. an
+      // inactive arm's copy). No legitimate shape gives two, so the key is refused by name.
+      if (this.byObject.has(key)) {
+        this.byObject.delete(key);
+        this.refused.set(key, duplicateEntryReason(key));
+        continue;
+      }
+      if (this.refused.has(key)) continue;
       this.byObject.set(key, spansOf(e.root, e.baseLine, renamedNames.get(key) ?? []));
     }
     // R-307 section 4: a declared object with no entry (R305's split header) is refused by name,
@@ -857,10 +899,12 @@ export function fileLineMapEntries(
  * R383: a FILE-relative line of the INSTRUMENTED text to the object whose declaration holds it and
  * the OBJECT-relative line the line map is keyed on.
  *
- * Infrastructure only for now. al-runner v2.12.0-main.c39ad5de reports a multi-object file's
- * first object in this frame but every later object in a mixed source/instrumented frame
- * (`al-runner-coverage.ts` header), so the index does not admit such files and this function sees
- * files whose only object with code is the first (`refusedAsMultiObject`), so its base is 1.
+ * al-runner v2.12.0-main.c39ad5de reported a multi-object file's first object in this frame but
+ * every later object in a mixed source/instrumented frame (`al-runner-coverage.ts` header). Such
+ * files reach this function only on builds R407's frame probe admits (43f76177 and c5bbaf89, measured,
+ * report every object in the instrumented frame); on builds it refuses, the index does not admit them and
+ * this function sees files whose only object with code is the first (`refusedAsMultiObject`), so
+ * its base is 1.
  *
  * Selects by the declaration node's own FILE span and converts with the same `baseLine` `spansOf`
  * used, so the two cannot disagree. `undefined` for a line in no indexed object (a blank or comment
@@ -895,8 +939,196 @@ export function fileHoldsWrappedObject(root: ALSyntaxNode): boolean {
 }
 
 /**
+ * R-300b: does al-runner score this `#if`-wrapped file? True only for the shapes measured on both
+ * al-runner legs (H1: the original file's line numbers, `alrunner-results.md`) and pinned live by
+ * `fixtures/sandbox-wrapped`: exactly ONE top-level wrapper holding an object, with no `#else` or
+ * `#elif` at its top level, no nested object wrapper, exactly one object inside it (one with a
+ * coverage identity), and no object of any kind before or after it. Namespace, using and comment
+ * lines may sit before the `#if` or inside it, and a statement-level `#if` inside the object is
+ * allowed. Such a file has one object, so `refusedAsMultiObject` is false for it by construction.
+ * The index, the CLI guard and selection all read this one predicate (R387's precedent).
+ */
+export function alRunnerAdmitsWrappedFile(root: ALSyntaxNode): boolean {
+  if (root.namedChildren.some(isTopLevelObject)) return false;
+  const wrappers = root.namedChildren.filter(
+    (c) => c.rawKind === "preproc_conditional_object" && wrapperHoldsObject(c),
+  );
+  const [wrapper] = wrappers;
+  if (wrappers.length !== 1 || wrapper === undefined) return false;
+  const nested = wrapper.namedChildren.some(
+    (c) =>
+      c.rawKind === "preproc_else" ||
+      c.rawKind === "preproc_elif" ||
+      c.rawKind === "preproc_conditional_object",
+  );
+  if (nested) return false;
+  const objects = containerNodesOf(wrapper).filter(isTopLevelObject);
+  const [only] = objects;
+  return objects.length === 1 && only !== undefined && objectIdentityOf(only) !== null;
+}
+
+/**
+ * R497: does a BC path (fenced, hub) score this `#if`-wrapped file? `undefined` when it does, else
+ * the shape that refuses it, for `refusedBcShapeReason`. Admitted: the shapes R-300b measured on
+ * Cronus28, two rounds (`/coord/handoff/R-300b/bc-results.md`; fenced H1a, hub HUB-A): exactly one
+ * top-level object wrapper, no `#elif`, no nested object wrapper, at most two arms (`#if`, `#else`),
+ * each holding exactly ONE object with a coverage identity, all the same key, exactly one of them
+ * compiled; at most one bare object before the wrapper (P) and at most one after it (R). Namespace,
+ * using and comment lines anywhere, and statement-level `#if`s inside the object (E1), are allowed.
+ * Arms are split at the wrapper's own `#else` children (`containerNodesOf` would flatten them).
+ */
+export function bcWrappedShapeRefusal(root: ALSyntaxNode, arms: ArmEvaluation): string | undefined {
+  if (arms.kind === "undecided") return `its #if arms could not be evaluated (${arms.reason})`;
+  const top = root.namedChildren;
+  const wrappers = top.filter(
+    (c) => c.rawKind === "preproc_conditional_object" && wrapperHoldsObject(c),
+  );
+  const [wrapper] = wrappers;
+  if (wrapper === undefined) return undefined;
+  if (wrappers.length > 1) return "more than one #if object wrapper";
+  const armNodes: ALSyntaxNode[][] = [[]];
+  for (const c of wrapper.namedChildren) {
+    if (c.rawKind === "preproc_elif") return "an #elif arm";
+    if (c.rawKind === "preproc_conditional_object") return "a nested #if object wrapper";
+    if (c.rawKind === "preproc_else") armNodes.push([]);
+    else if (c.rawKind !== "preproc_if" && c.rawKind !== "preproc_endif")
+      armNodes[armNodes.length - 1]?.push(c);
+  }
+  const objects = armNodes.map((a) => a.filter(isTopLevelObject));
+  if (objects.some((o) => o.length > 1)) return "an arm with more than one object";
+  if (objects.some((o) => o.length === 0)) return "an arm without an object";
+  const declared = objects.flat();
+  const ids = declared.map(objectIdentityOf);
+  if (ids.some((i) => i === null)) return "an object with no coverage identity";
+  if (new Set(ids.map((i) => (i === null ? "" : keyOf(i.objectType, i.objectId)))).size > 1)
+    return "arms declaring different objects";
+  if (declared.every((d) => startsInInactiveArm(arms.inactive, d.startIndex)))
+    return "a wrapper whose object is compiled out";
+  const at = top.indexOf(wrapper);
+  if (top.slice(0, at).filter(isTopLevelObject).length > 1)
+    return "more than one object before the wrapper";
+  if (top.slice(at + 1).filter(isTopLevelObject).length > 1)
+    return "more than one object after the wrapper";
+  return undefined;
+}
+
+/**
+ * R497: one file's entries for the BC paths under the build's arms. A file without an object
+ * wrapper: `fileLineMapEntries`, unchanged. Undecided arms: every object refused by name. A
+ * wrapped shape BC does not admit: its COMPILED objects refused by name; a declaration in an
+ * inactive arm gives no entry and so no refusal key (A1: keyed by object alone, it would refuse
+ * the compiled twin in another file). An admitted file: compiled declarations only, none refused,
+ * numbered by H1a, measured: an object's base is one past the last line of the previous COMPILED
+ * object, so a wrapper's directive and inactive-arm lines belong to the object after them (BC put
+ * R at 18/22/26, where H1b's `#endif` + 1 said 7/11/15).
+ */
+function bcFileEntries(
+  root: ALSyntaxNode,
+  identity: (node: ALSyntaxNode) => { objectType: string; objectId: number } | null,
+  file: string,
+  arms: ArmEvaluation,
+): LineMapEntry[] {
+  if (!fileHoldsWrappedObject(root)) return fileLineMapEntries(root, identity, file);
+  if (arms.kind === "undecided") {
+    return fileLineMapEntries(root, identity, file).map((e) => ({
+      ...e,
+      refused: undecidedArmsReason(e.objectType, e.objectId, file, arms.reason),
+    }));
+  }
+  const shape = bcWrappedShapeRefusal(root, arms);
+  if (shape !== undefined) {
+    return activeEntries(fileLineMapEntries(root, identity, file), arms).map((e) => ({
+      ...e,
+      refused: refusedBcShapeReason(e.objectType, e.objectId, file, shape),
+    }));
+  }
+  const entries: LineMapEntry[] = [];
+  let previousEndLine = 0;
+  const push = (node: ALSyntaxNode): void => {
+    const id = identity(node);
+    if (id !== null) entries.push({ ...id, root: node, baseLine: previousEndLine + 1 });
+  };
+  for (const node of root.namedChildren) {
+    if (node.rawKind === "preproc_conditional_object") {
+      for (const decl of objectDeclarationsOf(node)) {
+        // A namespace line inside the arm (W1) is not an object and moves no base.
+        if (startsInInactiveArm(arms.inactive, decl.startIndex) || !isTopLevelObject(decl))
+          continue;
+        push(decl);
+        previousEndLine = decl.endPosition.row + 1;
+      }
+      continue;
+    }
+    push(node);
+    if (isTopLevelObject(node)) previousEndLine = node.endPosition.row + 1;
+  }
+  return entries;
+}
+
+/**
+ * R-300b (C1): the entries of a file whose declarations this build compiles. One starting in an
+ * inactive arm is dropped; an `undecided` file gives none (it has no mutant either).
+ */
+export function activeEntries(
+  entries: readonly LineMapEntry[],
+  arms: ArmEvaluation,
+): LineMapEntry[] {
+  if (arms.kind === "undecided") return [];
+  return entries.filter((e) => !startsInInactiveArm(arms.inactive, e.root.startIndex));
+}
+
+/**
+ * R-300b (C1): every object key declared in more than one file -> `duplicateObjectReason`, naming
+ * the first two files. The ONE function the al-runner index and selection share. A key repeated
+ * inside one file (two arms of one wrapper) is not a duplicate.
+ */
+export function duplicateObjectRefusals(
+  files: readonly { readonly path: string; readonly keys: Iterable<string> }[],
+): Map<string, string> {
+  const firstFile = new Map<string, string>();
+  const out = new Map<string, string>();
+  for (const f of files) {
+    for (const key of new Set(f.keys)) {
+      const seen = firstFile.get(key);
+      if (seen === undefined) firstFile.set(key, f.path);
+      else if (!out.has(key)) out.set(key, duplicateObjectReason(key, seen, f.path));
+    }
+  }
+  return out;
+}
+
+/**
+ * R-300b (C1): the keys of a file's compiled declarations, as `duplicateObjectRefusals` reads
+ * them. Only a file holding an object wrapper can have a declaration in an inactive arm, so arms
+ * are applied only there; a plain file's keys never depend on them (an `undecided` plain file
+ * keeps its keys, as the index keeps its entries).
+ */
+export function activeObjectKeys(root: ALSyntaxNode, arms: ArmEvaluation): string[] {
+  const entries = fileLineMapEntries(root, objectIdentityOf);
+  return (fileHoldsWrappedObject(root) ? activeEntries(entries, arms) : entries).map((e) =>
+    keyOf(e.objectType, e.objectId),
+  );
+}
+
+/** R-300b: the sentence for an admitted wrapped file whose arms `evaluateArms` cannot decide. */
+export function undecidedArmsReason(
+  objectType: string,
+  objectId: number,
+  file: string,
+  reason: string,
+): string {
+  return `coverage refused for ${objectType}:${objectId} (${file}): its #if arms could not be evaluated as alc does (${reason}), so which declaration is compiled is unknown (R300). Its mutants read no-coverage.`;
+}
+
+/**
  * R298: the refused objects of the project's parsed files, `type:id` (lower-cased, the same key
  * `selection.ts`'s `objectKeyOf` builds) -> the refusal sentence.
+ *
+ * R-300b: per coverage path. `backendKind` is REQUIRED, so no caller can forget which path it asks
+ * for. Under `"bcdev"` the result is exactly the pre-R-300b one. Under `"al-runner"` a file
+ * `alRunnerAdmitsWrappedFile` admits adds no refusal, and every other wrapped file's objects are
+ * refused with `refusedUnmeasuredShapeReason`. Duplicate keys (C1) are refused by the caller from
+ * `duplicateObjectRefusals`, which needs the build's arms.
  *
  * The UNION of two rules, so selection refuses at least what any coverage path refuses: the line
  * map's per-object rule (`fileLineMapEntries`: inside a wrapper, or after the first wrapper that
@@ -908,13 +1140,25 @@ export function fileHoldsWrappedObject(root: ALSyntaxNode): boolean {
  * file's hits, and without the
  * union the bare table's trigger mutants would reach the all-green fallback. Over-refusing is the
  * safe direction.
+ *
+ * R497: `armsOf`, given on bcdev, applies the BC shape rule (`bcFileEntries`) per file; without
+ * it every wrapped file is refused as before.
  */
-export function coverageRefusedObjects(
-  files: readonly { readonly path: string; readonly root: ALSyntaxNode }[],
+export function coverageRefusedObjects<
+  F extends { readonly path: string; readonly root: ALSyntaxNode },
+>(
+  files: readonly F[],
+  backendKind: BuildBackend["kind"],
+  armsOf?: (file: F) => ArmEvaluation,
 ): ReadonlyMap<string, string> {
   const out = new Map<string, string>();
   for (const f of files) {
-    for (const [key, reason] of refusedObjectsOfFile(f.root, normalizeSlashes(f.path))) {
+    for (const [key, reason] of refusedObjectsOfFile(
+      f.root,
+      normalizeSlashes(f.path),
+      backendKind,
+      armsOf?.(f),
+    )) {
       out.set(key, reason);
     }
   }
@@ -924,14 +1168,35 @@ export function coverageRefusedObjects(
 /**
  * R298: one file's refused objects, by the union rule `coverageRefusedObjects` documents. A bare
  * object BEFORE the wrapper gets its own sentence (`refusedWholeFileReason`), since "inside, or
- * after" would be false for it. al-runner's index prints exactly these sentences.
+ * after" would be false for it. R-300b: under `"al-runner"` an admitted file refuses nothing and
+ * every other wrapped file's objects get `refusedUnmeasuredShapeReason`. al-runner's index prints
+ * exactly these sentences.
+ *
+ * R497: on bcdev WITH the build's arms, the BC paths' own entries decide (`bcFileEntries`): an
+ * admitted file refuses nothing, any other wrapped file refuses its compiled objects by shape.
  */
-export function refusedObjectsOfFile(root: ALSyntaxNode, file: string): Map<string, string> {
+export function refusedObjectsOfFile(
+  root: ALSyntaxNode,
+  file: string,
+  backendKind: BuildBackend["kind"],
+  arms?: ArmEvaluation,
+): Map<string, string> {
   const out = new Map<string, string>();
+  if (backendKind === "bcdev" && arms !== undefined) {
+    if (!fileHoldsWrappedObject(root)) return out;
+    for (const e of bcFileEntries(root, objectIdentityOf, file, arms))
+      if (e.refused !== undefined) out.set(keyOf(e.objectType, e.objectId), e.refused);
+    return out;
+  }
   const wholeFile = fileHoldsWrappedObject(root);
+  const alRunner = backendKind === "al-runner";
+  if (alRunner && alRunnerAdmitsWrappedFile(root)) return out;
   for (const e of fileLineMapEntries(root, objectIdentityOf, file)) {
     const reason =
-      e.refused ?? (wholeFile ? refusedWholeFileReason(e.objectType, e.objectId, file) : undefined);
+      alRunner && wholeFile
+        ? refusedUnmeasuredShapeReason(e.objectType, e.objectId, file)
+        : (e.refused ??
+          (wholeFile ? refusedWholeFileReason(e.objectType, e.objectId, file) : undefined));
     if (reason !== undefined) out.set(keyOf(e.objectType, e.objectId), reason);
   }
   return out;
@@ -960,6 +1225,7 @@ const OBJECT_KIND_TO_TYPE_NAME: Readonly<Record<string, string>> = {
   query_declaration: "Query",
   [ALNodeKind.pageextension]: "PageExtension",
   [ALNodeKind.tableextension]: "TableExtension",
+  [ALNodeKind.reportextension]: "ReportExtension",
 };
 
 /** The `(objectType, objectId)` of an object declaration node, or null for anything else. */
@@ -995,11 +1261,13 @@ export function objectIdentityOf(
 export async function buildLineMap(
   projectDir: string,
   declared: ReadonlySet<string>,
+  symbols?: readonly string[],
 ): Promise<LineMap> {
   return lineMapFromSources(
     await readAlSources(projectDir),
     declared,
     await readRenamedMemberNames(projectDir),
+    symbols,
   );
 }
 
@@ -1015,11 +1283,29 @@ export async function readAlSources(projectDir: string): Promise<AlSource[]> {
     .map((e) => e.toString())
     .filter((e) => e.toLowerCase().endsWith(".al"))
     .sort();
+  // R219: a batch file given a disambiguated flat name is named by its project path, since the
+  // path is only ever quoted (refusals), never read again.
+  const display = await batchDisplayPaths(projectDir);
   const out: AlSource[] = [];
   for (const path of files) {
-    out.push({ path, text: await readFile(join(projectDir, path), "utf8") });
+    out.push({ path: display(path), text: await readFile(join(projectDir, path), "utf8") });
   }
   return out;
+}
+
+/**
+ * R219: how to quote a file of batch directory `dir` to a user: its project path when the batch
+ * wrote it under a disambiguated flat name (`FLAT_NAMES_FILENAME`), else unchanged. A directory
+ * without the record (every batch with unique basenames, any non-batch directory) changes nothing.
+ */
+export async function batchDisplayPaths(dir: string): Promise<(path: string) => string> {
+  let sidecar: string | undefined;
+  try {
+    sidecar = await readFile(join(dir, FLAT_NAMES_FILENAME), "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+  return displayPathsOf(sidecar);
 }
 
 /** `buildLineMap` over sources already read (C02-04b: the preflight's in-memory copy). */
@@ -1027,12 +1313,18 @@ export async function lineMapFromSources(
   sources: readonly AlSource[],
   declared: ReadonlySet<string>,
   renamedNames: RenamedMemberNames = NO_RENAMED_NAMES,
+  symbols?: readonly string[],
 ): Promise<LineMap> {
   await initParser();
   const entries: LineMapEntry[] = [];
   for (const { path, text } of sources) {
+    const root = wrapRoot(parseAL(text));
+    const file = normalizeSlashes(path);
+    // R497: with the build's symbols, the BC shape rule and H1a; without them, refused as before.
     entries.push(
-      ...fileLineMapEntries(wrapRoot(parseAL(text)), objectIdentityOf, normalizeSlashes(path)),
+      ...(symbols === undefined
+        ? fileLineMapEntries(root, objectIdentityOf, file)
+        : bcFileEntries(root, objectIdentityOf, file, evaluateArms(root, text, symbols))),
     );
   }
   return new LineMap(entries, declared, renamedNames);
@@ -1045,10 +1337,13 @@ export async function lineMapFromSources(
  */
 export async function coverageRefusedFromSources(
   sources: readonly AlSource[],
+  symbols?: readonly string[],
 ): Promise<ReadonlyMap<string, string>> {
   await initParser();
   return coverageRefusedObjects(
-    sources.map((s) => ({ path: s.path, root: wrapRoot(parseAL(s.text)) })),
+    sources.map((s) => ({ path: s.path, text: s.text, root: wrapRoot(parseAL(s.text)) })),
+    "bcdev",
+    symbols === undefined ? undefined : (f) => evaluateArms(f.root, f.text, symbols),
   );
 }
 

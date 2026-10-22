@@ -21,6 +21,8 @@ import { generateMutationSet, operatorTiers, runSession } from "../src/orchestra
 import { sessionFingerprint } from "../src/resume";
 import { identityKeyOf, serializeKey } from "../src/selection";
 import { ResultsStore } from "../src/store";
+import { servesTestApp, testAppJson } from "./helpers/proven-test-app";
+import { removeScratchDir } from "./helpers/scratch";
 
 // R323: a named return value (`procedure P() Result: Integer`) is a local of its member. These pin
 // the engine's rule through the real pipeline, on the hand-written repros (invented names, no corpus
@@ -418,13 +420,14 @@ describe("R323: named return values through the real pipeline", () => {
     expect(at(manifest, "Repro.Codeunit.al", 7, "swap-call-arguments")).toHaveLength(1);
   });
 
-  test("n11: the loop's counter is the named return, so L7's assignment mutants are hang-tagged", async () => {
+  test("n11: the loop's counter is the named return, so L7's assignment mutants are refused (R196)", async () => {
+    // The refusal needs `Result` resolved as the named return: an unresolved target is never
+    // refused, so L7 would be emitted. L5's preheader assignment is the control.
     const manifest = await instrument(repro("n11"));
     for (const op of ["remove-assignment", "swap-additive"]) {
-      const hits = at(manifest, "Repro.Codeunit.al", 7, op);
-      expect(hits).toHaveLength(1);
-      expect(hits.map((m) => m.hangCapable)).toEqual(["loop-condition-target"]);
+      expect(at(manifest, "Repro.Codeunit.al", 7, op)).toEqual([]);
     }
+    expect(at(manifest, "Repro.Codeunit.al", 5, "remove-assignment")).toHaveLength(1);
   });
 
   test("n12: a codeunit-typed named return is not a record: no validate-to-assign at L8", async () => {
@@ -474,6 +477,7 @@ const CAPS: BackendCapabilities = {
   coverage: "procedure",
   deploy: "publish",
   isolation: "session",
+  kind: "bcdev",
   authoritative: true,
 };
 
@@ -482,6 +486,10 @@ const selectorIds = { selectorId: 50147, controlId: 50148, tableId: 50149 };
 /** Every test passes, so every covered mutant survives; the baseline covers both `Pick`s. */
 class SurvivingBackend implements ExecutionBackend {
   private active: string | null = null;
+  // R495: a served test app, installed, so the run's identity is proven (as a real bcdev's is).
+  private readonly testApp = servesTestApp();
+  fetchPublishedAppPackage = this.testApp.fetchPublishedAppPackage;
+  microsoftMode = this.testApp.microsoftMode;
   capabilities(): BackendCapabilities {
     return CAPS;
   }
@@ -514,8 +522,8 @@ class SurvivingBackend implements ExecutionBackend {
 
 // Every project root this file makes, removed once all its tests are done.
 const runRoots: string[] = [];
-afterAll(async () => {
-  for (const root of runRoots) await rm(root, { recursive: true, force: true });
+afterAll(() => {
+  for (const root of runRoots) removeScratchDir(root);
 });
 
 async function makeN14Project() {
@@ -527,6 +535,7 @@ async function makeN14Project() {
   await Bun.write(join(projectDir, "Repro.Codeunit.al"), repro("n14")["Repro.Codeunit.al"] ?? "");
   await Bun.write(join(projectDir, "app.json"), JSON.stringify(APP_JSON));
   await Bun.write(join(testDir, "ReproTests.Codeunit.al"), TEST_AL);
+  await Bun.write(join(testDir, "app.json"), testAppJson());
   return { projectDir, testDir, instrumentedDir };
 }
 
@@ -677,12 +686,24 @@ describe("R323: a scheme-2 record never reaches a current-scheme mutant with the
     // current scheme.
     expect(IDENTITY_SCHEME).toBeGreaterThanOrEqual(3);
     const dirs = await makeN14Project();
+    // R443: the mark carries this project's numbering digest, read from a real run, so only its
+    // scheme decides.
+    const plain = await runSession({
+      backend: new SurvivingBackend(),
+      store: new ResultsStore(":memory:"),
+      ...dirs,
+      selectorIds,
+    });
+    const numberingDigest = plain.numberingDigest;
+    if (numberingDigest === undefined) throw new Error("the report records no numbering digest");
     return runSession({
       backend: new SurvivingBackend(),
       store: new ResultsStore(":memory:"),
       ...dirs,
       selectorIds,
-      equivalenceMarks: [{ key: N14_KEY, reason: "same either way", identityScheme }],
+      equivalenceMarks: [
+        { key: N14_KEY, reason: "same either way", identityScheme, numberingDigest },
+      ],
     });
   }
 

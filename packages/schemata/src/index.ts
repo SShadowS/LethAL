@@ -1,4 +1,4 @@
-export { assignMutantIds } from "./ids";
+export { assignMutantIds, compareCodeUnits } from "./ids";
 export type { IdedSpec } from "./ids";
 export {
   emitMutationSelector,
@@ -11,6 +11,13 @@ export {
   SELECTOR_RESOURCE_NONE,
 } from "./selector";
 export type { SelectorConfig } from "./selector";
+export {
+  FLAT_NAMES_FILENAME,
+  displayPathsOf,
+  flatNamesFor,
+  flatNamesSidecar,
+} from "./flat-names";
+export type { FlatNames } from "./flat-names";
 export { wrapStatement } from "./wrap";
 export type { WrapInput } from "./wrap";
 export { liftExpression } from "./lift";
@@ -33,13 +40,14 @@ export {
   clipMutationText,
   identityTupleOf,
   instrumentOneFile,
-  looseIdentityTupleOf,
+  coarseIdentityTupleOf,
   assignIdentityOrdinals,
   identitySiteKey,
   identityFieldsOf,
   identityEntriesOf,
   numberIdentityOrdinals,
   runIdentityOrdinals,
+  runIdentityEntries,
   withRunIdentityOrdinals,
   IDENTITY_SCHEME,
   gapIdOf,

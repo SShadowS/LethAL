@@ -280,6 +280,26 @@ describe("R184: refusals are carried as Ignored rather than dropped silently", (
     expect(x?.mutants.map((m) => m.status).sort()).toEqual(["Ignored", "Survived"]);
   });
 
+  test("R447: a hang-refused file is unmeasured, not 'not untested code'", async () => {
+    const hang = {
+      ...excluded,
+      files: [
+        { file: "src/X.Codeunit.al", kinds: "codeunit", sites: 2, reason: "hang-refused" as const },
+      ],
+    };
+    const { report: out } = await toMutationElements(
+      report([], { excludedSites: hang } as Partial<SessionReport>),
+      OPTS,
+    );
+    expect(violations(SCHEMA as Node, out)).toEqual([]);
+    const files = out.files as Record<string, { mutants: Record<string, unknown>[] }>;
+    const entry = files["src/X.Codeunit.al"]?.mutants[0];
+    expect(entry?.mutatorName).toBe("hang-refused");
+    expect(entry?.description).toBe(
+      "2 mutation site(s) in this codeunit could hang the run if mutated: each writes a variable an enclosing loop's condition reads (R196), or is code of an unbounded report data item or a bounded item's only bound (R487/R501). LethAL made no mutant there (hang-refused). They are unmeasured, not tested.",
+    );
+  });
+
   test("the lossy HALF is declared: one entry per file, not per site", () => {
     const losses = lossesFor(
       report([mutant()], { excludedSites: excluded } as Partial<SessionReport>),

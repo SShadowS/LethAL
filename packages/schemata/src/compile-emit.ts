@@ -33,7 +33,7 @@ function payloadText(source: string, start: number, end: number, p: PlannedPaylo
   if (p.kind === "text") return p.text;
   // The chain replaces exactly the root's span, which is this edit's span.
   const original = source.slice(start, end);
-  const chain = emitDispatch(original, p.component, p.latch);
+  const chain = emitDispatch(original, p.component, p.latch, p.selector);
   if (!p.wrap) return chain;
   // The `begin ... end` wrap (PLAN decided it; see `needsWrap`). Its closing `;` is reproduced if
   // and only if the consumed root text ended in one.

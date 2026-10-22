@@ -7,6 +7,7 @@ import { initParser } from "@lethal/engine";
 import * as schemata from "@lethal/schemata";
 import { writeInstrumentedProject } from "@lethal/schemata";
 import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/orchestrator";
+import { removeScratchDir } from "./helpers/scratch";
 
 /**
  * R307 Task 3: `generateMutationSet` runs the writer's own per-file steps (`instrumentOneFile`) as
@@ -99,10 +100,11 @@ async function withProject(
   }
 }
 
-const GOOD = join("src", "Good.Codeunit.al");
-const MIXED = join("src", "Mixed.al");
-const NO_HEADER = join("src", "Odd.al");
-const XMLPORT = join("src", "Only.XmlPort.al");
+// Report paths are always "/"-separated (targetAlFiles normalises them), so never `join` these (R448).
+const GOOD = "src/Good.Codeunit.al";
+const MIXED = "src/Mixed.al";
+const NO_HEADER = "src/Odd.al";
+const XMLPORT = "src/Only.XmlPort.al";
 
 beforeAll(async () => {
   await initParser();
@@ -124,12 +126,13 @@ describe("R307: the per-file trial", () => {
           { type: "codeunit", id: 79302, name: "Mixed" },
           { type: "page", id: 79303, name: "Mixed Page" },
         ]);
-        // Exact refusal: its sites are RESERVED in the run-wide numbering, so no loose tuples.
-        expect(mixed?.looseTuples).toBeUndefined();
-        // Header refusal: no object name to reserve under, so loose tuples instead (fail closed).
-        expect(noHeader?.looseTuples).toHaveLength(3);
-        for (const t of noHeader?.looseTuples ?? [])
-          expect(t).toMatch(/^[0-9a-f]{64}\|R\|lethal\.[a-z-]+\|1$/);
+        // Exact refusal: its sites are RESERVED in the run-wide numbering, so no coarse tuples.
+        expect(mixed?.coarseTuples).toBeUndefined();
+        // Header refusal: no object name to reserve under, so coarse tuples (R442) instead (fail
+        // closed): hash, operator and major, no name and no scope.
+        expect(noHeader?.coarseTuples).toHaveLength(3);
+        for (const t of noHeader?.coarseTuples ?? [])
+          expect(t).toMatch(/^[0-9a-f]{64}\|lethal\.[a-z-]+\|1$/);
         // 3 deployed + 3 reserved; the no-header file takes no number.
         expect(identityOrdinalsOf(set).size).toBe(6);
         const reserved = [...identityOrdinalsOf(set).keys()].filter((k) =>
@@ -216,15 +219,21 @@ describe("R307: the per-file trial", () => {
  * value valid on Windows and Linux alike. It was the Windows capture before (manifest b03f52f2...,
  * all files e889a463...), which no Linux run ever matched; the values below are the ones Linux
  * gave all along, re-recorded deliberately. The identity scheme is not written into these files,
- * so the scheme 9 bump does not move them.
+ * so the scheme 14, 16, 17 and 18 bumps do not move them. R281 re-pinned both (manifest was b754095f...588e, all
+ * files 9abd8f06...73c6): `DeleteWithTrigger`'s mutant gained `run-trigger-skipped-delete`.
+ * R-457 re-pinned both (manifest was 5e997a85...5e4e, all files da7243c9...bd74): seven mutants
+ * gained `run-trigger-forced`, the manifest's only change.
+ * R254 re-pinned both (manifest was db3667dd...a82f, all files daa98b9f...7a07): the
+ * reportextension arm (`DataBandExt.ReportExt.al`, 15 mutants) is instrumented, and every later
+ * mutant id moves by 15.
  */
 describe("R307: sandbox-data is byte-identical with the trial in place", () => {
   let dir = "";
   beforeAll(async () => {
     dir = await mkdtemp(join(tmpdir(), "lethal-r307-pin-"));
   });
-  afterAll(async () => {
-    await rm(dir, { recursive: true, force: true });
+  afterAll(() => {
+    removeScratchDir(dir);
   });
   test("manifest and instrumented files", async () => {
     const REPO = join(import.meta.dir, "../../..");
@@ -241,15 +250,33 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
     });
     const manifest = await readFile(join(dir, "mutant-manifest.json"));
     expect(createHash("sha256").update(manifest).digest("hex")).toBe(
-      "b754095f8aebddf35074c5d032bdac8692076e3e9c1b015d6810bc0ec0ff588e",
+      // R459: flip-boolean-literal's operatorVersion 1.1.0 is the only change (was b1d589cd...5e21).
+      // R474: every entry gains `memberHash`, the only change (was 105d129b...b83f).
+      // R477: validate-to-assign's operatorVersion 1.2.0 is the only change (was db5aef54...b4e7).
+      // R276: `gapId` values only, the gap partition unchanged (was 59942c7a...4e81).
+      // R-463: re-recorded for R-463's DataBandExt arm, ruling orchestrator 2026-10-09 (was
+      // c83bdd08...23eb); 4 new arm entries, ids +4 after DataBandExt, proven in id-shift-proof.txt.
+      "dc2c1f197b0932e58f3d1cc1fde4f4c6a80a11f9a66d221c3090af766986da48",
     );
     const all = createHash("sha256");
     for (const f of (await readdir(dir)).sort()) {
       all.update(f);
       all.update(await readFile(join(dir, f)));
     }
+    // R470: re-pinned (was dec43213...a617) for DataBandExt's selector var `MutationSelector79341`;
+    // the manifest pin above is unchanged by R470. R459 (merged over R470): the manifest's 13 flip
+    // entries carry operatorVersion 1.1.0, so this moved again (R470 alone gave 4dfb9b56...a329).
+    // R474: the manifest's `memberHash` alone moved it (was 4fb14bca...b9e6; the same files with
+    // that key removed from the manifest give 4fb14bca...b9e6 again).
+    // R477: only the manifest moved it, by validate-to-assign's operatorVersion 1.2.0 (was
+    // e166345f...1358, which the same tree at 1.1.0 still gives).
+    // R276: only the manifest moved it, by its `gapId` values (was 3e3a8ec9...f6ae); gap ids are not
+    // in the instrumented AL.
+    // R-463: re-recorded for R-463's DataBandExt arm, ruling orchestrator 2026-10-09 (was
+    // d77b17a3...49ea); DataBandExt gains 4 mutants, ids +4 after DataBandExt, proven in
+    // id-shift-proof.txt (/coord/handoff/R-463/).
     expect(all.digest("hex")).toBe(
-      "9abd8f06e020d8f0fa0113b1534f70927664f1c0383540fd958dec19b7fa73c6",
+      "0e1a6cbb7b0cd434b8e7de141ccf567a2d483a112f21611429daf22027c82166",
     );
   }, 60_000);
 });

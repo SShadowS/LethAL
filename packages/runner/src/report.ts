@@ -1,21 +1,28 @@
 import { tier1Operators } from "@lethal/builtin-tier1";
 import { tier2Operators } from "@lethal/builtin-tier2";
-import { IDENTITY_SCHEME } from "@lethal/schemata";
+import { CARRIER_KINDS, IDENTITY_SCHEME } from "@lethal/schemata";
 import type { MutantManifestEntry, ReachGrain } from "@lethal/schemata";
 import { type AlRunnerCanaryResult, alRunnerCanaryWarnings } from "./al-runner-canary";
 import {
+  AL_RUNNER_EXCEPTION_PREFIX,
   ASSERTION_SCREEN_DIAGNOSIS,
   ASSERTION_SCREEN_DISCRIMINATION_NOTES,
+  ASSERTION_SCREEN_VACUOUS_AL_RUNNER_NOTE,
   type AssertionScreenDiscrimination,
   killMessageOf,
   looksLikeAssertionFailure,
   looksLikeRunnerRefusal,
+  screenMessageOf,
 } from "./assertion-screen";
 import type { BackendCapabilities, CoverageMode, TestMethodRef } from "./backend";
+import { isAlRunnerV2, isBcdev } from "./backend";
+import type { DependencyReportSourceRecord } from "./dependency-report-source";
 import {
+  EQUIVALENCE_MARKS_FILENAME,
   type EquivalenceMarkReport,
   SURVIVING_VERDICTS,
   applyEquivalenceMarks,
+  refusedMarkLine,
 } from "./equivalence-marks";
 import type { RunEvent } from "./events";
 import { type ExcludedSites, declarativeSitesView, notInstrumentedView } from "./excluded-sites";
@@ -63,6 +70,10 @@ export interface SessionOutcome {
   readonly killingTestFailure?: string;
   /** R206 — see `MutantOutcome.killPosition`. */
   readonly killPosition?: number;
+  /** R577 — see `MutantOutcome.killReproduced`. */
+  readonly killReproduced?: true;
+  /** R577 — see `MutantOutcome.reproducedFailure`. */
+  readonly reproducedFailure?: string;
   /**
    * Structural reason for an "error" verdict, set only at the two call
    * sites in orchestrator.ts that actually know it — see
@@ -128,8 +139,8 @@ export interface SessionOutcome {
 
 /**
  * A file `generateMutationSet` (orchestrator.ts) dropped because no object it declares can carry
- * the injected `var MutationSelector: Codeunit "Mutation Selector";` guard — only a codeunit or
- * a table can (page/report/query/xmlport cannot). See `SessionReport.notInstrumented`.
+ * the injected `var MutationSelector: Codeunit "Mutation Selector";` guard (`CARRIER_KINDS` in
+ * @lethal/schemata lists the kinds that can; query and xmlport cannot). See `SessionReport.notInstrumented`.
  */
 export interface NotInstrumentedFile {
   readonly file: string;
@@ -333,7 +344,9 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
   "uninstrumentable-files": {
     meaning:
       "Some files were never instrumented because no object they declare can carry the " +
-      "selector-var guard (R5). `mutationScore` is computed ONLY over instrumented sites.",
+      "selector-var guard (R5; `CARRIER_KINDS` lists the kinds that can, so a query or xmlport " +
+      "cannot). `mutationScore` is computed ONLY over instrumented sites, so `reliability` is " +
+      "`narrowed` when such a file holds sites (R399).",
     entailedNegative:
       "A project whose skipped files hold a large share of its code can otherwise read as a " +
       "confident, near-complete score while most of the project was never measured at all.",
@@ -527,7 +540,8 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "At least one file holds a preprocessor directive LethAL cannot evaluate exactly as alc " +
       "does, so NO mutant was generated anywhere in that file. It is still compiled and " +
       "published unchanged. `excludedSites.files` names each such file with the reason " +
-      "`preproc-undecided` and a reason code; `mutationScore` is computed only over the other files.",
+      "`preproc-undecided` and a reason code; `mutationScore` is computed only over the other files, " +
+      "so `reliability` is `narrowed` when such a file holds sites (R399).",
     entailedNegative:
       "Not a gap in the target's tests and not a failed run: the refused files were never " +
       "measured, in either direction. A refused file can have 0 sites, so count its rows, not " +
@@ -578,11 +592,25 @@ export type MutantErrorCause =
   | "group-coverage-incomplete"
   | "op-stopped"
   | "stopped-after-completion"
+  // R-204b (R202): a stop was sent, not refused, and the run's answer could not be read.
+  | "stop-outcome-unconfirmed"
   // R206: the session guard and the warm confirmation's own endings.
   | "session-reused"
   | "warm-prefix-unstable"
   | "warm-timeout-unconfirmed"
-  | "warm-confirmation-incomplete";
+  | "warm-confirmation-incomplete"
+  // R514: a timeout on a reused baseline whose unmutated confirm took more than half the budget.
+  | "reused-budget-stale"
+  // R516: a position-1 timeout whose unmutated confirm took more than half the budget it was
+  // sent, where that budget was not a reused snapshot's (this run's baseline, or R515's confirm).
+  | "timeout-unconfirmed"
+  // R534: al-runner ANSWERED with a row that is not a verdict about the mutant, or refused a
+  // surface it does not support. Never re-sent, never a session abort, never a kill.
+  | "runner-test-error"
+  | "runner-refused"
+  // R577: the killer failed (or timed out) under the mutant and passed with no mutant, but the
+  // reproduction under the mutant did not end with it failing (or timing out) again.
+  | "kill-not-reproduced";
 
 /**
  * What each `MutantErrorCause` MEANS for a reader, and — because both are facts about LethAL's OWN
@@ -724,6 +752,18 @@ export const ERROR_CAUSE_INTERPRETATIONS: Record<MutantErrorCause, Interpretatio
       "narrowing, not a proof: a session killed inside that write rolls it back and still scores.",
     basis: "R204",
   },
+  "stop-outcome-unconfirmed": {
+    meaning:
+      "LethAL sent a stop for this run because it exceeded its budget, and the run's answer could " +
+      "not be read. The stop was not refused, so whether it ended the run or the test finished " +
+      "first is not established, and the run is not retried: a hang need not recur, so a passing " +
+      "retry would prove nothing. No verdict. Re-run with `--resume` (R202).",
+    entailedNegative:
+      "Not `survived`: a retry that passed after a stop that may have ended the run is exactly how " +
+      "a real timeout became a survivor before R-204b. Not `timeout-killed` either: no stop 408 " +
+      "proved the stop ended the run. Not `stranded`: the operation reconciled clean.",
+    basis: "R202",
+  },
   "session-reused": {
     meaning:
       "The server reported that the session this call ran in had already run test methods before " +
@@ -756,9 +796,9 @@ export const ERROR_CAUSE_INTERPRETATIONS: Record<MutantErrorCause, Interpretatio
     meaning:
       "This mutant's killer exceeded its budget at position k > 1 of its group call and was " +
       "stopped; the confirmation replayed methods 1..k unmutated, and method k either completed " +
-      "OUTSIDE the budget that was measured for it cold, or was stopped again. The warm session, " +
-      "not the mutant, made it slow, so the timeout is not attributed. No verdict. Raise " +
-      "`--mutant-timeout-ms`, or re-run with `--no-group-runs` (R206).",
+      "in more than half the budget that was measured for it cold (R53's 2x margin, R516), or " +
+      "was stopped again. The warm session, not the mutant, made it slow, so the timeout is not " +
+      "attributed. No verdict. Raise `--mutant-timeout-ms`, or re-run with `--no-group-runs` (R206).",
     entailedNegative:
       "Not `timeout-killed`: that verdict rests on the mutant being what exceeded the budget, and " +
       "the replay showed the unmutated method exceeds it in the same position too. Also a " +
@@ -777,6 +817,72 @@ export const ERROR_CAUSE_INTERPRETATIONS: Record<MutantErrorCause, Interpretatio
       "Not a malformed answer and not a server fault: the cap is a clean, expected ending. Not a " +
       "kill: nothing established that the prefix passes unmutated.",
     basis: "R206",
+  },
+  "reused-budget-stale": {
+    meaning:
+      "This batch reused a stored baseline (`--resume`, R192), so the test's time budget came " +
+      "from an earlier run. The test timed out under the mutant; re-run once with no mutant it " +
+      "passed, but took more than half that budget, so it is slower today than the stored " +
+      "baseline says. No verdict. Re-run without `--resume` to measure the baseline again (R514).",
+    entailedNegative:
+      "Not `timeout-killed`: a baseline measured today would have given the test a larger " +
+      "budget, so the timeout is not the mutant's. Not `unstable`: the test passed with no " +
+      "mutant; only its stored duration is out of date. Not `survived`: the mutated run never " +
+      "finished.",
+    basis: "R514",
+  },
+  "timeout-unconfirmed": {
+    meaning:
+      "On bcdev and al-runner one-shot: the test timed out at position 1 under the mutant, then " +
+      "passed unmutated in more than half its budget, so the timeout is not attributed (R53's 2x " +
+      "margin). Either the test is slower now than when its budget was set, or (workers > 1) this " +
+      "worker's tier is slower, or the run is in the boundary band: a test whose budget is twice " +
+      "its measured duration, or on al-runner one-shot a test whose compile plus body takes more " +
+      "than half the budget. No verdict. Raise `--mutant-timeout-ms` to re-score it (R516). On " +
+      "al-runner `--server` see R517.",
+    entailedNegative:
+      "Not `timeout-killed`: the unmutated run did not finish clearly inside the budget, so the " +
+      "mutant is not shown to be what ran past it; a genuine hang can land here in the boundary " +
+      "band (a lost kill, never a false one). Not `unstable`: the test passed with no mutant. Not " +
+      "`survived`: the mutated run never finished.",
+    basis: "R516",
+  },
+  "runner-test-error": {
+    meaning:
+      "al-runner ran the test and answered with a row that is not a verdict about the mutant: an " +
+      "OnRun-trigger failure, an unexecuted UI handler, an unsupported test signature, a " +
+      "`skipped` row, a timeout in wording this build does not know, or no row because the run " +
+      "stopped at an earlier test's timeout. Not measured; never a kill. On bcdev, BC's test " +
+      "runner reports most of these as a failed test. Read the note: it carries al-runner's own " +
+      "message (R534).",
+    entailedNegative:
+      "Not `killed`: al-runner did not report that the test's assertion failed. Not a transport " +
+      "failure: al-runner answered, so the row was not re-sent and the session went on. Not " +
+      "`unstable`: that means the test also fails with no mutant.",
+    basis: "R534",
+  },
+  "runner-refused": {
+    meaning:
+      "The test reached a surface al-runner refuses (`out-of-scope: ...`), so whether the mutant " +
+      "changes its outcome on BC is unknown. Not measured; never a kill. Such a test cannot be " +
+      "measured under al-runner; run it on bcdev (R534).",
+    entailedNegative:
+      "Not `killed`: the failure is al-runner's refusal, not the test's assertion. Not " +
+      "`survived`: the test did not run to its end.",
+    basis: "R534",
+  },
+  "kill-not-reproduced": {
+    meaning:
+      "The test failed under the mutant (or timed out) and passed with no mutant active, so it " +
+      "looked like a kill. LethAL then re-ran it under the mutant, in the same context as the " +
+      "kill, and the reproduction under the mutant did not end with this test failing (or, for " +
+      "a timeout, timing out at the same budget) again. The note says how the reproduction " +
+      "ended. A failure that does not repeat is not attributed to the mutant. No verdict. Re-run " +
+      "with `--resume` to measure it again (R577).",
+    entailedNegative:
+      "Not `survived`: the test failed once under the mutant. Not `killed`: the failure did not " +
+      "repeat. Not `unstable`: the test passed with no mutant.",
+    basis: "R577",
   },
 };
 
@@ -922,6 +1028,52 @@ export interface ExecutionContext {
    * name a directory the run never searched.
    */
   readonly platformAppsDir?: string;
+  /**
+   * R558: the al-runner test selector THIS session's one-shot runs used, chosen once by R551's
+   * probe: `"exact"` (`--test X --test-exact X`) or `"substring-with-excludes"` (R488's `--test X
+   * --exclude-test <sibling>...`). Every worker is forced onto the same one, or the session refuses,
+   * so one value describes every directly-measured verdict of the session.
+   *
+   * Present on the same terms as `platformAppsDir`: the al-runner path only, directly-measured
+   * entries only, never a carried verdict (whose selector belongs to the run it came from). Absent
+   * on `--server`, where the probe is not-applicable (a one-shot run with `selectorMode: "resource"`
+   * DOES probe, and records it), on bcdev, and on the zero-count entry of a run that scored nothing.
+   *
+   * On `--resume`, a batch whose baseline was reused (`resume-baseline-reused`, R192) took its
+   * baseline verdicts and coverage from the earlier run that warning names, which may have used the
+   * other selector. Like `platformAppsDir`, this field states this session's own runs only.
+   */
+  readonly testSelector?: "exact" | "substring-with-excludes";
+  /** R558: the probe's reason, verbatim, when `testSelector` is `"substring-with-excludes"`. Absent
+   *  with `"exact"`, which has no reason to give. */
+  readonly testSelectorReason?: string;
+  /**
+   * R586: the al-runner-v3 build THIS session's directly measured verdicts ran on, its `--version`
+   * line (`alrunner 3.0.0-alpha.2 (91253f2d6)`). Absent on every other backend and on carried
+   * entries, whose build belongs to the run they came from.
+   */
+  readonly runnerBuild?: string;
+  /** R586: the sha256 of that v3 binary, on the same terms as `runnerBuild`. */
+  readonly binarySha256?: string;
+}
+
+/** R272: one discovered test method — see `SessionReport.testMethods`. */
+export interface TestMethodRecord {
+  /** Qualified `Codeunit.method`, the name `coveringTests` and `reachedBy` use. */
+  readonly name: string;
+  /** Project-relative file, present when every discovered ref of this name agrees on it. */
+  readonly file?: string;
+  /** 1-based line of the method's name, present when every ref of this name agrees on the file
+   *  and the line. */
+  readonly line?: number;
+  /** The name was discovered more than once (two `#if` arms, R403) at different places, so no
+   *  single location is given: one of them is not in the build. */
+  readonly lineAmbiguous?: true;
+  /** The smallest per-test baseline duration from THIS session's COMPLETED baseline batches
+   *  (`TestVerdict.measuredDurationMs`); a batch whose baseline aborted (quarantine) contributes
+   *  nothing. Absent: not measured per test in a completed batch (a resume-reused baseline, a
+   *  failing test, a backend that reports none). Displayed, never a ranking key (R272). */
+  readonly baselineDurationMs?: number;
 }
 
 /** Per-procedure survivor rollup — see `SessionReport.survivorsByProcedure`. */
@@ -969,6 +1121,12 @@ export interface SessionReport {
    * Indexed once at session level rather than repeated on every mutant.
    */
   readonly testFiles: Readonly<Record<string, string>>;
+  /**
+   * R272: every discovered test method, one per qualified `Codeunit.method` name, sorted by
+   * `compareCodeUnits(name)`: where it is, and how long its baseline took. Absent on a report from
+   * before R272. `lethal explain` lists a gap's covering tests from it (`gaps[].coveringTests`).
+   */
+  readonly testMethods?: readonly TestMethodRecord[];
   readonly backend: string;
   readonly authoritative: boolean;
   /**
@@ -1295,6 +1453,10 @@ export interface SessionReport {
      * `STRANDED_SKIP_INTERPRETATION` for what a non-zero value means to a reader.
      */
     readonly skippedStranded: number;
+    /** R557: why nothing of the run was carried, when that is a refusal rather than a run with no
+     *  reusable verdict (an al-runner run without the R557 test-name mark, or one whose baseline
+     *  holds renamed errors). Absent otherwise. */
+    readonly carryRefused?: string;
   };
   /**
    * Wall-clock cost of this run, split into the phases that scale differently — the whole point
@@ -1379,6 +1541,54 @@ export interface SessionReport {
    * reads as scheme 1.
    */
   readonly identityScheme?: number;
+  /**
+   * R274: sha256 of the source the report's positions refer to: `hashSourceSnapshot` over the
+   * snapshot generation parsed, with the config's `preprocessorSymbols` (baseline-snapshot.ts). A
+   * hash, never source. `lethal explain --project <dir>` recomputes it over `<dir>` and refuses to
+   * render source on any difference. Absent on a report from before R274.
+   */
+  readonly sourceSha256?: string;
+  /**
+   * R565: every report the project calls through `Report X` but does not declare, as looked up in
+   * the dependency packages for R555's preset-writer rule (`kind` "report"), each reportextension of
+   * it read beside it ("extension"), and each package that could not be used ("package"). An
+   * outcome other than `ok` was also named in a `dependency-report-source-unavailable` warning, and
+   * such a report is checked against what was read, as before R565. Names, paths and hashes, never
+   * source. Always written (`[]` when the project calls no outside report); absent on a report from
+   * before R565.
+   */
+  readonly dependencyReportSources?: readonly DependencyReportSourceRecord[];
+  /**
+   * R565: sha256 over `dependencyReportSources` (`dependencySourceDigest`). History and resume carry
+   * a verdict by identity key only when it equals the recorded run's (rule 1 of `carryRecord`).
+   * Absent on a report from before R565.
+   */
+  readonly dependencySourceSha256?: string;
+  /**
+   * R443: sha256 of this run's identity numbering OUTPUT (`numberingDigestOf`, selection.ts): every
+   * numbered site with its ordinal. Two runs with equal digests give every key to the same mutant.
+   * An equivalence mark copies it (`lethal explain` prints the mark), and a later run matches the
+   * mark by key only when its own digest is equal. Written together with `twinSites` and
+   * `carryHidden`; absent on a report from before R443.
+   */
+  readonly numberingDigest?: string;
+  /**
+   * R443: R-391's twin sites (`twinSitesOf`, the value `runs.twin_tuples` records): each
+   * `<file>\u0000<tuple>` pair whose tuple occurs more than once in that file, over every numbered
+   * site, reserved ones included. Recorded at generation, never recounted from `mutants`, which a
+   * line filter or an interrupted run leaves short.
+   */
+  readonly twinSites?: readonly string[];
+  /**
+   * R443: R442's record of what this run numbered no ordinal for (`runs.carry_hidden`): coarse
+   * tuples of sites it generated but did not number (a line filter, a header refusal) and files it
+   * hid whole (`--only`, `--exclude`, a refusal). A mutant matching either may have a twin the
+   * numbering never saw, so `lethal explain` does not call it a singleton.
+   */
+  readonly carryHidden?: {
+    readonly tuples: readonly string[];
+    readonly files: readonly string[];
+  };
   /**
    * R403 phase C: the TEST app's preprocessor symbols as LethAL DERIVED them (the config's, the
    * test `app.json`'s, and on al-runner its predefined ones). DERIVED, NOT OBSERVED: on bcdev only
@@ -1518,13 +1728,25 @@ export interface SessionReport {
        *  `(batchIndex, mutantCode)`. */
       readonly batchIndex: number;
       readonly mutantCode: string;
+      /** R443: the matched row's CURRENT key. A mark matched on its file (rule 2) may hold an
+       *  older one. */
       readonly key: string;
       readonly reason: string;
     }>;
-    /** Marks that matched NO mutant here. Editing the mutated code changes its `astHash`, so a mark
-     *  retires itself rather than drifting onto a different mutant — safe, but the ruling is lost
-     *  and saying so is the point. */
+    /** Marks that matched NO mutant here: editing the marked code changes its identity, so the
+     *  mark names nothing any more. Safe, but the ruling is lost and saying so is the point. */
     readonly stale: readonly string[];
+    /**
+     * R443: marks that could not prove their key still names the mutant they were written for, by
+     * the mark's key, with why. A key holds no file, and an edit, `--only`, `--lines` or a repaired
+     * header can hand it to another twin, so such a mark is never applied. Optional only because a
+     * report from before R443 has none.
+     */
+    readonly refused?: ReadonlyArray<{
+      readonly key: string;
+      readonly reason: "no-proof" | "no-run-facts" | "renumbered" | "twin-in-file";
+      readonly file?: string;
+    }>;
     /** Marks this run REFUTED: the mutant did not survive. */
     readonly contradicted: ReadonlyArray<{
       /** R231: as in `matched`. */
@@ -1671,6 +1893,22 @@ export interface MutantOutcome {
    * Absent on a kill recorded before the field existed (a resumed run can carry one).
    */
   readonly killPosition?: number;
+  /**
+   * R577: on a `killed`/`timeout-killed`, `true` when the kill REPRODUCED: after the unmutated
+   * confirmation passed, LethAL re-ran the killer under the mutant, in the same context (the same
+   * prefix replay when `killPosition` > 1), and it failed again (any text), or timed out again at
+   * the same budget for a timeout kill. A marker rather than text, so a reproduced kill whose run
+   * carried no message still says so. Set only on a backend with the rule on
+   * (`ExecutionBackend.killsMustReproduce`, al-runner today); absent elsewhere and on a kill
+   * recorded before the rule existed.
+   */
+  readonly killReproduced?: true;
+  /**
+   * R577: the reproduction's own failure text, beside `killingTestFailure` (the FIRST run's). Taken
+   * from the reproduction's verdict, never from the confirm (R86's hazard). Absent when the
+   * reproduction reported no text; `killReproduced` is the proof that it ran.
+   */
+  readonly reproducedFailure?: string;
   /**
    * Structural reason for an "error" verdict — mirrors `SessionOutcome.cause`, and see
    * `ERROR_CAUSE_INTERPRETATIONS` for what each value means to a reader. Present only for the two
@@ -2084,7 +2322,16 @@ function measuredExecutionContext(
   // R57 measured the fenced `RunMutant` path directly (`GuiAllowed=No`, `ClientType=ODataV4`).
   // al-runner is a headless CLI, which is not the same evidence, and saying "measured" of both
   // would be the kind of static claim R7/R8 exist to stop.
-  return caps.authoritative
+  if (caps.kind === "al-runner-v3") {
+    return {
+      guiAllowed: false,
+      clientType: "al-runner v3 CLI",
+      basis:
+        "al-runner v3 (Rust) executes headlessly by construction, one process per test codeunit; " +
+        "not separately measured by LethAL the way the fenced path was under R57 (R586)",
+    };
+  }
+  return isBcdev(caps.kind)
     ? {
         guiAllowed: false,
         clientType: "ODataV4",
@@ -2125,6 +2372,12 @@ function buildExecutionContexts(
   alRunnerBcBuild: { readonly build: string; readonly announcement: string } | undefined,
   // R147 — see `ExecutionContext.platformAppsDir`. Gated exactly as `alRunnerBcBuild` is.
   alRunnerPlatformAppsDir: string | undefined,
+  // R558 — see `ExecutionContext.testSelector`. Gated exactly as the two above.
+  alRunnerTestSelector:
+    | { readonly selector: "exact" | "substring-with-excludes"; readonly reason?: string }
+    | undefined,
+  // R586 — see `ExecutionContext.runnerBuild`. On a v3 backend only, directly measured entries.
+  runnerBuild?: { readonly version: string; readonly binarySha256: string },
 ): ExecutionContext[] {
   const groups = new Map<string, { runner: RunnerKind; carried: boolean; verdictCount: number }>();
   for (const o of outcomes) {
@@ -2142,13 +2395,26 @@ function buildExecutionContexts(
   // was produced by a DIFFERENT run against whatever that run selected, and stamping this run's
   // observation onto it would be a provenance claim about a session this one never made.
   const bcFields = {
-    ...(alRunnerBcBuild !== undefined && !caps.authoritative
+    ...(runnerBuild !== undefined && caps.kind === "al-runner-v3"
+      ? { runnerBuild: runnerBuild.version, binarySha256: runnerBuild.binarySha256 }
+      : {}),
+    // R586: the three are v2 observations (its `[bc]` line, R147 pin, R551 probe).
+    ...(alRunnerBcBuild !== undefined && isAlRunnerV2(caps.kind)
       ? { bcBuild: alRunnerBcBuild.build, bcBuildAnnouncement: alRunnerBcBuild.announcement }
       : {}),
     // R147, same two gates and for the same reason: a carried verdict's platform apps belong to the
     // run it came from, and bcdev has no such concept at all.
-    ...(alRunnerPlatformAppsDir !== undefined && !caps.authoritative
+    ...(alRunnerPlatformAppsDir !== undefined && isAlRunnerV2(caps.kind)
       ? { platformAppsDir: alRunnerPlatformAppsDir }
+      : {}),
+    // R558, same two gates: a carried verdict's selector belongs to the run it came from.
+    ...(alRunnerTestSelector !== undefined && isAlRunnerV2(caps.kind)
+      ? {
+          testSelector: alRunnerTestSelector.selector,
+          ...(alRunnerTestSelector.reason !== undefined
+            ? { testSelectorReason: alRunnerTestSelector.reason }
+            : {}),
+        }
       : {}),
   };
   return [...groups.values()].map((g) => {
@@ -2222,6 +2488,11 @@ export function markIdentityOf(m: MutantOutcome): string {
     operatorMajor: m.operatorMajor,
     ordinal: m.identityOrdinal ?? 0,
   });
+}
+
+/** R443: a row's identity tuple (`identityTupleOf`): `markIdentityOf` without the twin ordinal. */
+export function markTupleOfRow(m: MutantOutcome): string {
+  return markIdentityOf({ ...m, identityOrdinal: 0 });
 }
 
 /**
@@ -2343,6 +2614,8 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
       ...(o.failureNote !== undefined ? { failureNote: o.failureNote } : {}),
       ...(o.killingTestFailure !== undefined ? { killingTestFailure: o.killingTestFailure } : {}),
       ...(o.killPosition !== undefined ? { killPosition: o.killPosition } : {}),
+      ...(o.killReproduced === true ? { killReproduced: true as const } : {}),
+      ...(o.reproducedFailure !== undefined ? { reproducedFailure: o.reproducedFailure } : {}),
       ...(o.cause !== undefined ? { cause: o.cause } : {}),
       // R72: a SITE property, so it comes off the manifest entry and never off the outcome — it is
       // true of this mutant whatever happened when it ran.
@@ -2378,7 +2651,18 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   const marks = statics.equivalenceMarks;
   let readerMarkedEquivalent: SessionReport["readerMarkedEquivalent"];
   if (marks !== undefined && marks.length > 0) {
-    const carryOff = input.outcomes.map((o) => isCarryDisabled(o.mutant, statics.carryDisabled));
+    // sol's final review (P1): the stream's OWN recorded `carryHidden` withholds a mutant too, not
+    // only the caller's optional `carryDisabled`. A replay that omits `carryDisabled` must not let
+    // rule 2 land a singleton's mark on a twin a line filter or a refusal hid from the numbering.
+    const recordedHidden = input.numbering?.carryHidden;
+    const hiddenTuples = new Set(recordedHidden?.tuples ?? []);
+    const hiddenFiles = new Set((recordedHidden?.files ?? []).map((f) => f.replaceAll("\\", "/")));
+    const carryOff = input.outcomes.map(
+      (o) =>
+        isCarryDisabled(o.mutant, statics.carryDisabled) ||
+        isCarryDisabled(o.mutant, hiddenTuples) ||
+        hiddenFiles.has(o.mutant.file.replaceAll("\\", "/")),
+    );
     const marked: EquivalenceMarkReport = applyEquivalenceMarks(
       marks,
       // R307 section 3: a mutant whose carry is disabled is not offered to any mark, so a mark on
@@ -2389,12 +2673,21 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
           batchIndex: m.batchIndex,
           mutantCode: m.mutantCode,
           identity: markIdentityOf(m),
+          file: m.file,
+          tuple: markTupleOfRow(m),
           verdict: m.verdict,
         })),
       // R325: this report's keys are made by this build.
       IDENTITY_SCHEME,
       // R214: and under this build's effective symbols.
       statics.buildSymbols,
+      // R443: this run's RECORDED numbering facts. Absent (an older stream): every mark refused.
+      input.numbering !== undefined
+        ? {
+            numberingDigest: input.numbering.numberingDigest,
+            twinSites: new Set(input.numbering.twinSites),
+          }
+        : undefined,
     );
     readerMarkedEquivalent = {
       matched: [...marked.matched].sort(byBatchThenCode).map((m) => ({
@@ -2411,16 +2704,27 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
         reason: c.reason,
         verdict: c.verdict,
       })),
+      refused: [...marked.refused]
+        .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+        .map((r) => ({
+          key: r.key,
+          reason: r.reason,
+          ...(r.file !== undefined ? { file: r.file } : {}),
+        })),
     };
   }
   // C02-01: ONE source of truth for a row's `readerMark`: the run-level classification above. A row
   // carries the mark only when that mark is `matched`, and only on a surviving verdict. A per-row
   // lookup disagreed with the list when two rows share one identity (the matcher keeps the last
-  // row, so a survivor could carry a mark the list calls `contradicted`).
-  const matchedMarks = new Map((readerMarkedEquivalent?.matched ?? []).map((m) => [m.key, m]));
+  // row, so a survivor could carry a mark the list calls `contradicted`). R443: joined by the
+  // matched ROW (batchIndex, mutantCode), never by key: under rule 2 a mark's own key may now
+  // belong to another row.
+  const matchedMarks = new Map(
+    (readerMarkedEquivalent?.matched ?? []).map((m) => [mutantRef(m.batchIndex, m.mutantCode), m]),
+  );
   for (const [i, m] of mutants.entries()) {
     const mark = SURVIVING_VERDICTS.has(m.verdict)
-      ? matchedMarks.get(markIdentityOf(m))
+      ? matchedMarks.get(mutantRef(m.batchIndex, m.mutantCode))
       : undefined;
     if (mark !== undefined) {
       mutants[i] = { ...m, readerMark: { key: mark.key, reason: mark.reason } };
@@ -2516,6 +2820,18 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     (f) => f.reason === "instrumentation-refused",
   );
   if (refusedRows.length > 0) caveats.push("files-refused");
+  // R399: undecided-#if and not-instrumentable rows that hold sites, which narrow `reliability`.
+  const undecidedRows = input.excludedSites.files.filter(
+    (f) => f.reason === "preproc-undecided" && f.sites > 0,
+  );
+  const notInstrumentableRows = input.excludedSites.files.filter(
+    (f) => f.reason === "not-instrumentable" && f.sites > 0,
+  );
+  const leftOutRows = [...undecidedRows, ...notInstrumentableRows];
+  // R447: sites the hang checks refused (R196, R487/R501). Only rows WITH sites narrow, like R399's.
+  const hangRows = input.excludedSites.files.filter(
+    (f) => f.reason === "hang-refused" && f.sites > 0,
+  );
   // R144 — see CAVEAT_INTERPRETATIONS["declarative-sites-dropped"]. Pushed on the SITE count, not
   // the file count, for the same reason the caveat exists at all: a run that declined one site and
   // a run that declined 154 must not read alike.
@@ -2630,12 +2946,23 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     (m) => m.verdict === "killed" || m.verdict === "timeout-killed",
   );
   const killsWithText = screenedKills.filter((m) => m.killingTestFailure !== undefined);
+  // R553: keyed on the backend's declared identity, never on `authoritative`: only a backend that
+  // says it is al-runner has its `{Type}Exception: ` prefix read past.
+  const screenBackend = input.caps.kind === "al-runner" ? "al-runner" : "bcdev";
   const flaggedKills = killsWithText.filter(
-    (m) => !looksLikeAssertionFailure(killMessageOf(m.killingTestFailure)),
+    (m) => !looksLikeAssertionFailure(screenMessageOf(m.killingTestFailure, screenBackend)),
   );
   const runnerRefusals = flaggedKills.filter((m) =>
-    looksLikeRunnerRefusal(killMessageOf(m.killingTestFailure)),
+    looksLikeRunnerRefusal(screenMessageOf(m.killingTestFailure, screenBackend)),
   );
+  // R553 (I3): over `killed` only, so a timeout kill's own text cannot pick the backend note.
+  const unprefixed =
+    screenBackend === "al-runner" &&
+    killsWithText.some(
+      (m) =>
+        m.verdict === "killed" &&
+        !AL_RUNNER_EXCEPTION_PREFIX.test(killMessageOf(m.killingTestFailure)),
+    );
   if (flaggedKills.length > 0) caveats.push("kills-without-assertion");
   const discrimination: AssertionScreenDiscrimination =
     killsWithText.length === 0
@@ -2655,7 +2982,10 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
           flagged: flaggedKills.length,
           flaggedMutants: refsOf(flaggedKills),
           discrimination,
-          discriminationNote: ASSERTION_SCREEN_DISCRIMINATION_NOTES[discrimination],
+          discriminationNote:
+            discrimination === "vacuous" && unprefixed
+              ? ASSERTION_SCREEN_VACUOUS_AL_RUNNER_NOTE
+              : ASSERTION_SCREEN_DISCRIMINATION_NOTES[discrimination],
           runnerRefusals: runnerRefusals.length,
           runnerRefusalMutants: refsOf(runnerRefusals),
           diagnosis: ASSERTION_SCREEN_DIAGNOSIS,
@@ -2670,7 +3000,14 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     input.lines !== undefined ||
     (input.testsOnly !== undefined && input.testsOnly.length > 0) ||
     // R307: a refused file's sites were never mutated, so the score is not a whole-project score.
-    refusedRows.length > 0;
+    refusedRows.length > 0 ||
+    // R399: the same holds for a file left out because its `#if` is undecided (R214) or its
+    // object kind cannot carry the selector var. Only rows WITH sites: an undecided file can hold
+    // none, and then nothing is missing from the score. Compiled-out and declarative rows are not
+    // measurable sites, so they stay out of this.
+    leftOutRows.length > 0 ||
+    // R447: a site the hang checks refused (R196, R487/R501) was never mutated either.
+    hangRows.length > 0;
   // R190: a run that measured nothing is degraded whatever its baseline said.
   const degraded = !input.baselineGreen || allErrors;
   const reliability =
@@ -2713,6 +3050,19 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     refusedRows.length > 0
       ? `; ${refusedRows.length} file(s) refused, ${refusedRows.reduce((n, f) => n + f.sites, 0)} site(s) not mutated`
       : "";
+  // R399: said the same way as the refused files, because they narrow the score the same way.
+  const sitesOf = (rows: readonly { readonly sites: number }[]) =>
+    rows.reduce((n, f) => n + f.sites, 0);
+  const leftOutText =
+    (undecidedRows.length > 0
+      ? `; ${undecidedRows.length} file(s) with undecided #if, ${sitesOf(undecidedRows)} site(s) not mutated`
+      : "") +
+    (notInstrumentableRows.length > 0
+      ? `; ${notInstrumentableRows.length} file(s) not instrumentable, ${sitesOf(notInstrumentableRows)} site(s) not mutated`
+      : "") +
+    (hangRows.length > 0
+      ? `; ${sitesOf(hangRows)} hang-refused site(s) in ${hangRows.length} file(s) not mutated`
+      : "");
   const refusedText =
     testPageRefusedTests.length > 0
       ? ` and ${testPageRefusedTests.length} refused before sending (TestPage), not run`
@@ -2730,6 +3080,8 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     input.resumedFrom !== undefined ? { runId: input.resumedFrom.runId } : undefined,
     input.alRunnerBcBuild,
     input.alRunnerPlatformAppsDir,
+    input.alRunnerTestSelector,
+    statics.runnerBuild,
   );
 
   return {
@@ -2737,7 +3089,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     validity: {
       reliability,
       caveats,
-      scoreDescribes: `${scored} scored mutant(s) in ${scopeText}${refusedFilesText}${baselineText}`,
+      scoreDescribes: `${scored} scored mutant(s) in ${scopeText}${refusedFilesText}${leftOutText}${baselineText}`,
       baselineTests: { total: input.baselineTests.length, failing: input.unsupportedTests.length },
       scoredMutants: { scored, recorded: input.outcomes.length },
       executionContexts,
@@ -2794,7 +3146,10 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
       : {}),
     survivorsByProcedure,
     testFiles,
-    backend: input.caps.authoritative ? "bcdev" : "al-runner",
+    ...(input.testMethods !== undefined ? { testMethods: input.testMethods } : {}),
+    // R586 (C1) and R553: the backend's own declared kind, never derived from `authoritative`.
+    // `kind` is required on `BackendCapabilities` (R586), so no inference is needed here.
+    backend: input.caps.kind,
     authoritative: input.caps.authoritative,
     coverageMode: input.caps.coverage,
     baselineGreen: input.baselineGreen,
@@ -2811,6 +3166,24 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     // `runSession` made this value and asserted generation used the same one.
     buildSymbols: [...statics.buildSymbols],
     identityScheme: IDENTITY_SCHEME,
+    ...(input.sourceSha256 !== undefined ? { sourceSha256: input.sourceSha256 } : {}),
+    ...(input.dependencyReportSources !== undefined
+      ? { dependencyReportSources: input.dependencyReportSources }
+      : {}),
+    ...(input.dependencySourceSha256 !== undefined
+      ? { dependencySourceSha256: input.dependencySourceSha256 }
+      : {}),
+    // R443: the recorded numbering facts a mark's proof is made from (`lethal explain`).
+    ...(input.numbering !== undefined
+      ? {
+          numberingDigest: input.numbering.numberingDigest,
+          twinSites: [...input.numbering.twinSites],
+          carryHidden: {
+            tuples: [...input.numbering.carryHidden.tuples],
+            files: [...input.numbering.carryHidden.files],
+          },
+        }
+      : {}),
     ...(testBuildSymbols.length > 0 ? { testBuildSymbols: [...testBuildSymbols] } : {}),
     ...(excludedTests.length > 0 ? { excludedTests: [...excludedTests] } : {}),
     ...(testSymbolsUnverifiedFiles.length > 0
@@ -2891,7 +3264,9 @@ function summarizeRunnerContexts(
 /**
  * R206: the banner's error breakdown. `counts.unstable` keeps counting `unstable` alone; the four
  * R206 causes are listed beside it when non-zero, so a run full of them does not read
- * `error N [unstable 0]`.
+ * `error N [unstable 0]`. R-204b adds `stop-outcome-unconfirmed`, the error a stop leaves behind
+ * when its run's answer was lost. R514 adds `reused-budget-stale`, R516 `timeout-unconfirmed`,
+ * R534 `runner-test-error` and `runner-refused`, R577 `kill-not-reproduced`.
  */
 function errorBreakdown(r: SessionReport): string {
   const named: MutantErrorCause[] = [
@@ -2899,6 +3274,12 @@ function errorBreakdown(r: SessionReport): string {
     "warm-prefix-unstable",
     "warm-timeout-unconfirmed",
     "warm-confirmation-incomplete",
+    "stop-outcome-unconfirmed",
+    "reused-budget-stale",
+    "timeout-unconfirmed",
+    "runner-test-error",
+    "runner-refused",
+    "kill-not-reproduced",
   ];
   const parts: string[] = [];
   for (const cause of named) {
@@ -3005,7 +3386,7 @@ export function renderConsole(r: SessionReport): string {
         ? `${((r.notInstrumented.fileCount / r.notInstrumented.totalFiles) * 100).toFixed(1)}%`
         : "?";
     lines.push(
-      `NOT INSTRUMENTED: ${r.notInstrumented.fileCount}/${r.notInstrumented.totalFiles} .al file(s) (${pct}), ${r.notInstrumented.siteCount} mutation site(s) never measured — the score above excludes them entirely, it is not a full-project score. Only a codeunit or a table can carry the injected selector var; page/report/query/xmlport objects are published unchanged.`,
+      `NOT INSTRUMENTED: ${r.notInstrumented.fileCount}/${r.notInstrumented.totalFiles} .al file(s) (${pct}), ${r.notInstrumented.siteCount} mutation site(s) never measured — the score above excludes them entirely, it is not a full-project score. Only ${CARRIER_KINDS.map((k) => k.replace(/_declaration$/, "")).join(", ")} objects can carry the injected selector var; objects of any other kind (query, xmlport) are published unchanged.`,
     );
     for (const f of r.notInstrumented.files) {
       lines.push(`  ${f.file} (${f.kinds}, ${f.sites} site(s))`);
@@ -3036,6 +3417,21 @@ export function renderConsole(r: SessionReport): string {
       `PREPROCESSOR DIRECTIVES REFUSED: ${undecided.length} file(s) hold a directive LethAL cannot evaluate exactly as alc does, so none of their ${undecided.reduce((n, f) => n + f.sites, 0)} site(s) was mutated (R214):`,
     );
     for (const f of undecided) lines.push(`  ${f.file} (${f.detail})`);
+  }
+  const hangRefused = byReason("hang-refused").filter((f) => f.sites > 0);
+  if (hangRefused.length > 0) {
+    lines.push(
+      `HANG-REFUSED SITES: ${hangRefused.reduce((n, f) => n + f.sites, 0)} site(s) in ${hangRefused.length} file(s) could hang the run if mutated: each writes a variable an enclosing loop's condition reads (R196), or is code of an unbounded report data item or a bounded item's only bound (R487/R501). No mutant was made there. They are absent from every count above.`,
+    );
+  }
+  // R565: every dependency report (or package) the hang refusal could not read in full.
+  const depUnread = (r.dependencyReportSources ?? []).filter((d) => d.outcome !== "ok");
+  if (depUnread.length > 0) {
+    lines.push(
+      `DEPENDENCY REPORT SOURCE UNAVAILABLE: ${depUnread.length} lookup(s) in the dependency packages did not read in full, so a call to such a report is checked against what was read (R565):`,
+    );
+    for (const d of depUnread)
+      lines.push(`  ${d.kind} ${d.report ?? d.package ?? ""}: ${d.outcome}`);
   }
   // R381: the build's symbols beyond the config's (app.json's, on al-runner its predefined ones).
   // The report cannot tell those two sources apart, so none is named. Not printed where they agree.
@@ -3130,9 +3526,16 @@ export function renderConsole(r: SessionReport): string {
         );
       }
     }
+    const refused = e.refused ?? [];
+    if (refused.length > 0) {
+      lines.push(
+        `EQUIVALENCE MARKS REFUSED: ${refused.length} mark(s) cannot show that their key still names the mutant they were written for, so each mutant stays a plain survivor (R443). A key holds no file, and an edit, --only, --lines or a repaired header can hand it to another twin. Re-mark each: \`lethal explain <this report>\` prints every survivor's mark, with its proof fields, ready to paste into ${EQUIVALENCE_MARKS_FILENAME}:`,
+      );
+      for (const x of refused) lines.push(`  ${refusedMarkLine(x)}`);
+    }
     if (e.stale.length > 0) {
       lines.push(
-        `EQUIVALENCE MARKS STALE: ${e.stale.length} mark(s) matched no mutant here. The identity includes the mutated subtree's hash, so editing that code retires its mark rather than letting it drift onto a different mutant. Safe, but the ruling is gone unless someone makes it again (R172):`,
+        `EQUIVALENCE MARKS STALE: ${e.stale.length} mark(s) matched no mutant here. Editing the marked code changes its identity, so its mark names nothing any more. Safe, but the ruling is gone unless someone makes it again (R172):`,
       );
       for (const k of e.stale) lines.push(`  ${k}`);
     }
@@ -3198,9 +3601,11 @@ export function renderConsole(r: SessionReport): string {
   if (r.resumedFrom !== undefined) {
     lines.push(
       `RESUMED: ${r.resumedFrom.carriedMutants} verdict(s) carried from run ${r.resumedFrom.runId} without re-executing. They were measured over the same source (identity-matched) and the same scope, but by a different published artifact in an earlier session.${
-        r.resumedFrom.carriedMutants === 0
-          ? " Nothing was actually carried — the prior run had no reusable verdict, so this run measured everything itself."
-          : ""
+        r.resumedFrom.carryRefused !== undefined
+          ? ` Nothing was carried: ${r.resumedFrom.carryRefused}. This run measured everything itself.`
+          : r.resumedFrom.carriedMutants === 0
+            ? " Nothing was actually carried — the prior run had no reusable verdict, so this run measured everything itself."
+            : ""
       }${
         // R53: stated separately from the carried count, because it is the opposite kind of fact —
         // these mutants have NO verdict from either run and must not be read as covered.
@@ -3351,7 +3756,8 @@ export function renderConsole(r: SessionReport): string {
   // single mutant has run, which is exactly the "warning that scrolls past on a long run" pattern
   // that let the original static claim go unnoticed for a session's whole duration. The end of a
   // long run — right after the score — is where a reader actually is.
-  if (!r.authoritative && r.alRunnerCanary !== undefined) {
+  // R586: the canary is the v2 al-runner's (absent on v3 anyway).
+  if (r.backend === "al-runner" && r.alRunnerCanary !== undefined) {
     lines.push("");
     lines.push(...alRunnerCanaryWarnings(r.alRunnerCanary));
   }

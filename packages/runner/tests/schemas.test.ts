@@ -26,6 +26,7 @@ import {
   TOOL_CONDITIONS,
 } from "../src/explain";
 import { assertExplainableReport, explain } from "../src/explain";
+import { SUGGESTION_KINDS, SUGGESTION_TEXTS, suggest } from "../src/explain-suggest";
 import {
   CAVEAT_INTERPRETATIONS,
   ERROR_CAUSE_INTERPRETATIONS,
@@ -49,6 +50,7 @@ import {
 import { REACH_FILTER_OFF_REASONS, REACH_FILTER_STATES } from "../src/verify-reach";
 import { bundleFor } from "./helpers/bundle";
 import { makeGitRepo } from "./helpers/git-repo";
+import { removeScratchDir } from "./helpers/scratch";
 import { typeLeafPaths } from "./helpers/type-leaf-paths";
 
 /**
@@ -239,6 +241,9 @@ describe("published JSON Schemas (R152)", () => {
   const doctorSchema = loadSchema("doctor-v1.schema.json");
 
   test("the explain schema describes exactly the leaves ExplainOutput declares", () => {
+    // R273: the optional root `suggestions` (`--suggest`) is NOT part of `ExplainOutput`; the CLI
+    // composes it. Its leaves are checked against their own type in the next test, and every
+    // OTHER schema leaf must still equal `ExplainOutput`'s, exactly as before.
     const fromType = typeLeafPaths({
       files: [join(SRC, "explain.ts"), join(SRC, "interpretation.ts")],
       root: "ExplainOutput",
@@ -255,7 +260,25 @@ describe("published JSON Schemas (R152)", () => {
         'ReportValidity["reliability"]',
       ],
     });
-    expect([...schemaLeafPaths(explainSchema)].sort()).toEqual([...fromType].sort());
+    const outsideSuggestions = schemaLeafPaths(explainSchema).filter(
+      (p) => !p.startsWith("$.suggestions."),
+    );
+    expect(outsideSuggestions.sort()).toEqual([...fromType].sort());
+  });
+
+  test("the explain schema's `suggestions` describes exactly the leaves ExplainSuggestions declares", () => {
+    const fromType = typeLeafPaths({
+      files: [join(SRC, "explain-suggest.ts")],
+      root: "ExplainSuggestions",
+      expectedLeafTypeNames: [
+        "SuggestionKind",
+        "GapSuggestionKind",
+        "SurvivorReach",
+        "ExplainAttribution",
+      ],
+    }).map((p) => p.replace(/^\$/, "$.suggestions"));
+    const inSchema = schemaLeafPaths(explainSchema).filter((p) => p.startsWith("$.suggestions."));
+    expect(inSchema.sort()).toEqual([...fromType].sort());
   });
 
   test("the doctor schema describes exactly the leaves DoctorJsonOutput declares", () => {
@@ -292,6 +315,27 @@ describe("published JSON Schemas (R152)", () => {
     expect(enumAt(explainSchema, "$.survivors[].artifactIdAbsent")).toEqual([
       ...ARTIFACT_ID_ABSENCES,
     ]);
+    // R273: the suggestions section's kind domain and the facts it copies.
+    expect(enumAt(explainSchema, "$.suggestions.gaps[].kind")).toEqual([...SUGGESTION_KINDS]);
+    expect(enumAt(explainSchema, "$.suggestions.gaps[].members[].kind")).toEqual(
+      SUGGESTION_KINDS.filter((k) => k !== "mixed"),
+    );
+    expect(enumAt(explainSchema, "$.suggestions.gaps[].members[].reach")).toEqual(
+      Object.keys(REACH_INTERPRETATIONS),
+    );
+    expect(enumAt(explainSchema, "$.suggestions.gaps[].members[].attribution")).toEqual(
+      Object.keys(EXPLAIN_ATTRIBUTION_INTERPRETATIONS),
+    );
+    expect(Object.keys(SUGGESTION_TEXTS)).toEqual(
+      Object.keys(
+        ((
+          (explainSchema.properties as Record<string, Schema>).suggestions?.properties as Record<
+            string,
+            Schema
+          >
+        ).kinds?.properties as Record<string, Schema>) ?? {},
+      ),
+    );
     expect(enumAt(doctorSchema, "$.notChecked")).toEqual([...DOCTOR_NOT_CHECKED_TOKENS]);
     expect(enumAt(doctorSchema, "$.caveat.kind")).toEqual([...DOCTOR_CAVEAT_KINDS]);
   });
@@ -359,6 +403,26 @@ describe("published JSON Schemas (R152)", () => {
     expect(
       conformsTo(explainSchema, explain(assertExplainableReport(raw), { topSurvivors: 3 })),
     ).toEqual([]);
+    // R273: the same projection with `--suggest`'s section, as the CLI composes it. The report
+    // predates `guardReached`, so one survivor is given a measured reach to reach `kinds` too.
+    const reached = raw.mutants.find((m) => m.verdict === "survived");
+    if (reached === undefined) throw new Error("no survivor");
+    reached.reachGrain = "statement";
+    reached.guardReached = true;
+    reached.reachedBy = reached.coveringTests;
+    const report = assertExplainableReport(raw);
+    const suggestions = suggest(report, explain(report));
+    expect(suggestions.gaps.length).toBe(gaps.length);
+    expect(Object.keys(suggestions.kinds).length).toBeGreaterThan(0);
+    expect(conformsTo(explainSchema, { ...projection, suggestions })).toEqual([]);
+    // And the validator really reads the section: a foreign member field is rejected.
+    const [first] = suggestions.gaps;
+    if (first === undefined) throw new Error("no suggestion gaps");
+    const tampered = {
+      ...suggestions,
+      gaps: [{ ...first, members: first.members.map((m) => ({ ...m, extra: 1 })) }],
+    };
+    expect(conformsTo(explainSchema, { ...projection, suggestions: tampered })).not.toEqual([]);
   });
 
   test("R351: coverageArmNames is additive under explain v7: output without it validates, and with it", () => {
@@ -473,6 +537,7 @@ function neverCalledBackend(): VerifyDeps["backend"] {
       coverage: "procedure",
       deploy: "publish",
       isolation: "session",
+      kind: "bcdev",
       authoritative: true,
     }),
     status: async () => boom(),
@@ -532,6 +597,8 @@ function verifySchemaFixtureEntry(): MutantManifestEntry {
 async function buildVerifyHappyPathOutput() {
   const projectDir = mkdtempSync(join(tmpdir(), "lethal-verify-schema-proj-"));
   const instrumentedDir = mkdtempSync(join(tmpdir(), "lethal-verify-schema-instr-"));
+  // R-260: the test project sits beside the target; a nested one is refused.
+  const testsDir = mkdtempSync(join(tmpdir(), "lethal-verify-schema-tests-"));
   try {
     writeFileSync(join(projectDir, "app.json"), '{"id":"x"}');
     mkdirSync(join(projectDir, "src"));
@@ -554,7 +621,14 @@ async function buildVerifyHappyPathOutput() {
       join(projectDir, "lethal.equivalent.json"),
       JSON.stringify({
         identityScheme: IDENTITY_SCHEME,
-        marks: [{ key: serializeKey(identityKeyOf(entry)), reason: "same either way" }],
+        // R443: proved by the source run's numbering digest (rule 1).
+        marks: [
+          {
+            key: serializeKey(identityKeyOf(entry)),
+            reason: "same either way",
+            numberingDigest: "d".repeat(64),
+          },
+        ],
       }),
     );
 
@@ -567,6 +641,9 @@ async function buildVerifyHappyPathOutput() {
       projectPath: projectDir,
       backend: "bcdev",
       appVersion: "0.0.0.0",
+      carryHidden: { tuples: [], files: [] },
+      twinTuples: [],
+      numberingDigest: "d".repeat(64),
     });
     store.recordArtifact(runId, {
       batchIndex: 0,
@@ -597,7 +674,7 @@ async function buildVerifyHappyPathOutput() {
     });
 
     const out = await runVerify(
-      { artifact: manifest.artifactId, survivors: ["0/M0001"], testDir: join(projectDir, "tests") },
+      { artifact: manifest.artifactId, survivors: ["0/M0001"], testDir: testsDir },
       {
         store,
         backend: neverCalledBackend(),
@@ -612,6 +689,7 @@ async function buildVerifyHappyPathOutput() {
   } finally {
     rmSync(projectDir, { recursive: true, force: true });
     rmSync(instrumentedDir, { recursive: true, force: true });
+    rmSync(testsDir, { recursive: true, force: true });
   }
 }
 
@@ -690,6 +768,34 @@ describe("published JSON Schema - verify (C02-06 Task 6)", () => {
       "flaky-unknown",
       "infra-error",
     ]);
+  });
+
+  // R-260: v7 added the refusal reason `test-project-nested`. v6 stays as it was published.
+  test("verify-v6.schema.json is kept as published", () => {
+    const v6 = loadSchema("verify-v6.schema.json");
+    expect((v6.properties as Record<string, Schema>).verifySchemaVersion?.const).toBe(6);
+    expect(enumAt(v6, "$.newTests[].state")).toContain("not-rerun");
+    expect(enumAt(v6, "$.refused.reason")).not.toContain("test-project-nested");
+  });
+
+  // R259: v8 added `results[].sameProcedure`. v7 stays as it was published.
+  test("verify-v7.schema.json is kept as published", () => {
+    const v7 = loadSchema("verify-v7.schema.json");
+    expect((v7.properties as Record<string, Schema>).verifySchemaVersion?.const).toBe(7);
+    expect(enumAt(v7, "$.refused.reason")).toContain("test-project-nested");
+    expect([...schemaLeafPaths(v7)].some((p) => p.startsWith("$.results[].sameProcedure"))).toBe(
+      false,
+    );
+  });
+
+  // R259: a real v8 output, printed by orchestrator.test.ts's "a probe that fails is alsoKills"
+  // (runVerify through runNamedMutants and the covering loop), validates against v8 and not v7.
+  test("a real v8 output with sameProcedure validates", () => {
+    const real = JSON.parse(
+      readFileSync(join(import.meta.dir, "fixtures", "verify-v8-r259-probe.json"), "utf8"),
+    ) as unknown;
+    expect(conformsTo(verifySchema, real)).toEqual([]);
+    expect(conformsTo(loadSchema("verify-v7.schema.json"), real)).not.toEqual([]);
   });
 
   test("results[].gapId is a declared leaf of the current verify schema", () => {
@@ -848,8 +954,34 @@ describe("published JSON Schema - verify (C02-06 Task 6)", () => {
           verdict: "survived",
           testsRun: ["Sandbox Tests.OverBudgetDetected"],
         },
+        // R259: a row killed by a new test, with what that test alone does to its siblings.
+        {
+          id: "0/M0003",
+          batchIndex: 0,
+          mutantCode: "M0003",
+          file: "Logic.Codeunit.al",
+          line: 10,
+          operatorName: "lethal.negate-conditional",
+          procedureName: "Post",
+          verdict: "killed",
+          testsRun: ["New Tests.OverBudgetDetected"],
+          killingTest: {
+            codeunitId: 79102,
+            codeunitName: "New Tests",
+            method: "OverBudgetDetected",
+          },
+          killedByNewTest: true,
+          killedBy: "other",
+          sameProcedure: {
+            test: { codeunitId: 79102, codeunitName: "New Tests", method: "OverBudgetDetected" },
+            alsoKills: ["0/M0004"],
+            notKilled: ["0/M0002"],
+            unknown: ["0/M0005"],
+            overCap: 1,
+          },
+        },
       ],
-      counts: { killed: 1, survived: 1, error: 0, skipped: 0 },
+      counts: { killed: 2, survived: 1, error: 0, skipped: 0 },
       timings: { totalMs: 1234, compileMs: 200, publishMs: 50 },
     };
     expect(conformsTo(verifySchema, measured)).toEqual([]);
@@ -858,7 +990,7 @@ describe("published JSON Schema - verify (C02-06 Task 6)", () => {
 
 /**
  * The two BIG surfaces are GENERATED (`scripts/generate-schemas.ts`) rather than hand-written:
- * `SessionReport` has 130 leaves and the stream is a union of 22 event shapes, and at that size a
+ * `SessionReport` has 130 leaves and the stream is a union of 23 event shapes, and at that size a
  * hand-written file is a second copy of the type rather than a guarantee. So the tests differ too —
  * freshness against the generator replaces the leaf-path pin, and both are checked against real
  * committed data.
@@ -901,13 +1033,14 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
   });
 
   test("R214: the report schema names the two preprocessor exclusion reasons", () => {
-    // R307's `instrumentation-refused` follows them.
+    // R307's `instrumentation-refused` follows them, then R447's `hang-refused`.
     expect(enumAt(reportSchema, "$.excludedSites.files[].reason")).toEqual([
       "not-instrumentable",
       "declarative",
       "compiled-out",
       "preproc-undecided",
       "instrumentation-refused",
+      "hang-refused",
     ]);
   });
 
@@ -959,6 +1092,58 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
       expect(conformsTo(reportSchema, { ...without, coverageMode: mode })).toEqual([]);
     }
     expect(conformsTo(reportSchema, { ...without, coverageMode: "None" })).not.toEqual([]);
+  });
+
+  test("R558: executionContexts[].testSelector is additive under v3: without it, with either value, and nothing else", () => {
+    // Optional and nested, so R157's rule keeps v3: the committed reports were deliberately NOT
+    // regenerated (they are bcdev reports, where the field can never appear).
+    const raw = readFileSync(
+      join(REPO_ROOT, "docs/campaign/2026-08-16-gift-card/rehearsal.report.json"),
+      "utf8",
+    );
+    expect(raw).not.toContain("testSelector");
+    const without = JSON.parse(raw) as {
+      validity: { executionContexts: Record<string, unknown>[] };
+    };
+    expect(without.validity.executionContexts.length).toBeGreaterThan(0);
+    expect(conformsTo(reportSchema, without)).toEqual([]);
+    const withSelector = (selector: string, reason?: string) => {
+      const doc = JSON.parse(raw) as typeof without;
+      for (const c of doc.validity.executionContexts) {
+        c.testSelector = selector;
+        if (reason !== undefined) c.testSelectorReason = reason;
+      }
+      return doc;
+    };
+    expect(conformsTo(reportSchema, withSelector("exact"))).toEqual([]);
+    expect(conformsTo(reportSchema, withSelector("substring-with-excludes", "exit 2"))).toEqual([]);
+    expect(conformsTo(reportSchema, withSelector("substring"))).not.toEqual([]);
+  });
+
+  test("R577: killReproduced and reproducedFailure are additive under v3: without them, with them, and killReproduced only as true", () => {
+    // Optional, so R157's rule keeps v3 and the committed reports (bcdev, where the rule is off)
+    // are not regenerated.
+    const raw = readFileSync(
+      join(REPO_ROOT, "docs/campaign/2026-08-16-gift-card/rehearsal.report.json"),
+      "utf8",
+    );
+    expect(raw).not.toContain("killReproduced");
+    expect(raw).not.toContain("reproducedFailure");
+    const without = JSON.parse(raw) as { mutants: Record<string, unknown>[] };
+    const kills = without.mutants.filter((m) => m.verdict === "killed");
+    expect(kills.length).toBeGreaterThan(0);
+    expect(conformsTo(reportSchema, without)).toEqual([]);
+    const withMarker = (value: unknown) => {
+      const doc = JSON.parse(raw) as typeof without;
+      for (const m of doc.mutants) {
+        if (m.verdict !== "killed") continue;
+        m.killReproduced = value;
+        m.reproducedFailure = "Assert.AreEqual failed.";
+      }
+      return doc;
+    };
+    expect(conformsTo(reportSchema, withMarker(true))).toEqual([]);
+    expect(conformsTo(reportSchema, withMarker(false))).not.toEqual([]);
   });
 
   test("R381: buildSymbols is additive under v3: optional, a report without it validates, and with it, [] included", () => {
@@ -1041,6 +1226,17 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "coverage",
         "differences",
         "identical",
+        "mutantCount",
+        "stage",
+      ],
+      // R556: v2 added the REQUIRED `identity` and widened `identical` to the mutated text.
+      "campaign-compare-v2.schema.json": [
+        "baselinePath",
+        "campaignCompareSchemaVersion",
+        "coverage",
+        "differences",
+        "identical",
+        "identity",
         "mutantCount",
         "stage",
       ],
@@ -1127,6 +1323,78 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "toolConditions",
       ],
       "explain-v11.schema.json": [
+        "caveats",
+        "contract",
+        "derivedFromReportSchemaVersion",
+        "explainSchemaVersion",
+        "markIdentityScheme",
+        "notMeasured",
+        "score",
+        "survivorSelection",
+        "survivors",
+        "toolConditions",
+      ],
+      "explain-v12.schema.json": [
+        "caveats",
+        "contract",
+        "derivedFromReportSchemaVersion",
+        "explainSchemaVersion",
+        "markIdentityScheme",
+        "notMeasured",
+        "score",
+        "survivorSelection",
+        "survivors",
+        "toolConditions",
+      ],
+      "explain-v13.schema.json": [
+        "caveats",
+        "contract",
+        "derivedFromReportSchemaVersion",
+        "explainSchemaVersion",
+        "markIdentityScheme",
+        "notMeasured",
+        "score",
+        "survivorSelection",
+        "survivors",
+        "toolConditions",
+      ],
+      "explain-v14.schema.json": [
+        "caveats",
+        "contract",
+        "derivedFromReportSchemaVersion",
+        "explainSchemaVersion",
+        "markIdentityScheme",
+        "notMeasured",
+        "score",
+        "survivorSelection",
+        "survivors",
+        "toolConditions",
+      ],
+      "explain-v15.schema.json": [
+        "caveats",
+        "contract",
+        "derivedFromReportSchemaVersion",
+        "explainSchemaVersion",
+        "markIdentityScheme",
+        "notMeasured",
+        "score",
+        "survivorSelection",
+        "survivors",
+        "toolConditions",
+      ],
+      "explain-v16.schema.json": [
+        "caveats",
+        "contract",
+        "derivedFromReportSchemaVersion",
+        "explainSchemaVersion",
+        "markIdentityScheme",
+        "notMeasured",
+        "score",
+        "survivorSelection",
+        "survivors",
+        "toolConditions",
+      ],
+      "explain-v17.schema.json": [
         "caveats",
         "contract",
         "derivedFromReportSchemaVersion",
@@ -1231,6 +1499,26 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
       ],
       // R-427: the same seven; v6 only grew newTests[].state.
       "verify-v6.schema.json": [
+        "counts",
+        "exitCode",
+        "newTests",
+        "ok",
+        "results",
+        "timings",
+        "verifySchemaVersion",
+      ],
+      // R-260: the same seven; v7 only grew refused.reason.
+      "verify-v7.schema.json": [
+        "counts",
+        "exitCode",
+        "newTests",
+        "ok",
+        "results",
+        "timings",
+        "verifySchemaVersion",
+      ],
+      // R259: the same seven; v8 only grew results[].sameProcedure.
+      "verify-v8.schema.json": [
         "counts",
         "exitCode",
         "newTests",
@@ -1344,12 +1632,43 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "group-coverage-incomplete",
         "op-stopped",
         "stopped-after-completion",
+        "stop-outcome-unconfirmed",
         "session-reused",
         "warm-prefix-unstable",
         "warm-timeout-unconfirmed",
         "warm-confirmation-incomplete",
+        "reused-budget-stale",
+        "timeout-unconfirmed",
+        "runner-test-error",
+        "runner-refused",
+        "kill-not-reproduced",
       ],
       "#/properties/toolConditions/items/properties/condition": ["quarantined", "stranded-skips"],
+      // R273: new domains on the new optional `suggestions` (an optional additive field, so no
+      // bump, orchestrator ruling 2026-10-06). From here on a value added to them bumps (R233).
+      "#/properties/suggestions/properties/gaps/items/properties/kind": [
+        "check-the-result",
+        "cover-the-branch",
+        "cover-the-statement",
+        "undecided",
+        "reader-marked",
+        "mixed",
+      ],
+      "#/properties/suggestions/properties/gaps/items/properties/members/items/properties/kind": [
+        "check-the-result",
+        "cover-the-branch",
+        "cover-the-statement",
+        "undecided",
+        "reader-marked",
+      ],
+      "#/properties/suggestions/properties/gaps/items/properties/members/items/properties/reach": [
+        "reached-unnoticed",
+        "covered-but-unreached",
+        "unreached-and-uncovered",
+        "not-decided",
+      ],
+      "#/properties/suggestions/properties/gaps/items/properties/members/items/properties/attribution":
+        ["exact", "object", "all-green", "not-measured"],
     });
     // C02-09: the one new enum path reuses the survivor's domain exactly, which is why it did not
     // bump the version.
@@ -1379,6 +1698,16 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     expect(required("explain-v10.schema.json")).toEqual(required("explain-v9.schema.json"));
     // R307's v11 added a caveat value, not a required field.
     expect(required("explain-v11.schema.json")).toEqual(required("explain-v10.schema.json"));
+    // R-204b's v13 added a cause value, not a required field.
+    expect(required("explain-v13.schema.json")).toEqual(required("explain-v12.schema.json"));
+    // R514's v14 added a cause value, not a required field.
+    expect(required("explain-v14.schema.json")).toEqual(required("explain-v13.schema.json"));
+    // R516's v15 added a cause value, not a required field.
+    expect(required("explain-v15.schema.json")).toEqual(required("explain-v14.schema.json"));
+    // R534's v16 added two cause values, not a required field.
+    expect(required("explain-v16.schema.json")).toEqual(required("explain-v15.schema.json"));
+    // R577's v17 added a cause value, not a required field.
+    expect(required("explain-v17.schema.json")).toEqual(required("explain-v16.schema.json"));
     expect(v6).toEqual([
       "attribution",
       "codeunitName",
@@ -1500,8 +1829,8 @@ describe("published JSON Schema - campaign compare (R357)", () => {
   }, 60_000);
 
   afterAll(() => {
-    rmSync(repo, { recursive: true, force: true });
-    rmSync(out, { recursive: true, force: true });
+    removeScratchDir(repo);
+    removeScratchDir(out);
   });
 
   test("a matching stage validates, and an UNVERIFIED old stage validates with its statement", async () => {
@@ -1516,6 +1845,15 @@ describe("published JSON Schema - campaign compare (R357)", () => {
     // The validator must be able to say no: an unverified result WITHOUT its statement.
     const { statement: _dropped, ...bare } = legacy.coverage as Record<string, unknown>;
     expect(conformsTo(compareSchema, { ...legacy, coverage: bare }).length).toBeGreaterThan(0);
+
+    // R556: the identity block, both variants; an unverified one without its statement fails.
+    expect(legacy.identity.verified).toBe(false);
+    const { statement: _noStatement, ...bareIdentity } = legacy.identity as Record<string, unknown>;
+    expect(conformsTo(compareSchema, { ...legacy, identity: bareIdentity }).length).toBeGreaterThan(
+      0,
+    );
+    const ok = { ...verified, identity: { verified: true, identityScheme: 37 } };
+    expect(conformsTo(compareSchema, ok)).toEqual([]);
   }, 60_000);
 
   test("a coverage-mode mismatch is a refusal: it throws, so there is no document to validate", async () => {
@@ -1527,4 +1865,15 @@ describe("published JSON Schema - campaign compare (R357)", () => {
     expect(props.campaignCompareSchemaVersion?.const).toBe(CAMPAIGN_COMPARE_SCHEMA_VERSION);
     expect(compareSchema.$id).toContain(`campaign-compare-v${CAMPAIGN_COMPARE_SCHEMA_VERSION}`);
   });
+
+  // R556: v2 added the REQUIRED `identity` and widened `identical`. v1 stays as it was published.
+  test("the build emits v2, and campaign-compare-v1.schema.json is kept as published", async () => {
+    expect(CAMPAIGN_COMPARE_SCHEMA_VERSION).toBe(2);
+    const v1 = loadSchema("campaign-compare-v1.schema.json");
+    expect((v1.properties as Record<string, Schema>).campaignCompareSchemaVersion?.const).toBe(1);
+    expect([...schemaLeafPaths(v1)].some((p) => p.startsWith("$.identity"))).toBe(false);
+    // A v2 document is not a v1 document.
+    const v2doc = await compareCampaignStage(args("verified"));
+    expect(conformsTo(v1, v2doc)).not.toEqual([]);
+  }, 60_000);
 });

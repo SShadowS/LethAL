@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { ALRUNNER_LEG_IDS } from "../../packages/runner/itest/alrunner-legs.ts";
 import { EffectRefusedError, EffectRunner } from "./effects.ts";
 import { type FakeWorld, emptyWorld, fakePorts } from "./fakes.ts";
 import type { MutantDiff } from "./gate-outcome.ts";
 import { HaltError } from "./halt.ts";
 import { ReceiptError } from "./receipt.ts";
-import { type TickInput, runTick } from "./tick.ts";
+import { type TickInput, expectedSublegsFor, runTick } from "./tick.ts";
 
 const HEAD = "1111111111111111111111111111111111111111";
 
@@ -214,6 +215,38 @@ describe("receipts, not exit codes", () => {
     });
     const r = new EffectRunner({ dryRun: false, isHalted: () => false });
     await expect(runTick(fakePorts(w), r, input())).rejects.toThrow(ReceiptError);
+  });
+});
+
+describe("R-587 M1: alrunner's receipt is checked against its exact leg ids", () => {
+  test("alrunner gets the 23 ids; a leg with no list keeps the count, default 1", () => {
+    expect(expectedSublegsFor("alrunner")).toEqual(ALRUNNER_LEG_IDS);
+    expect(expectedSublegsFor("tables")).toBe(1);
+    expect(expectedSublegsFor("tables", { tables: 2 })).toBe(2);
+  });
+
+  test("a count for alrunner is refused rather than replacing the list", () => {
+    // Before R-587, `?? 1` accepted a one-leg alrunner receipt and rejected the full one.
+    expect(() => expectedSublegsFor("alrunner", { alrunner: 1 })).toThrow(/never by a count/);
+  });
+
+  test("a tick that runs alrunner challenges it with the 23 ids", async () => {
+    const w = world({ changedPaths: ["fixtures/sandbox-app/src/Sandbox.Codeunit.al"] });
+    const ports = fakePorts(w);
+    const seen: unknown[] = [];
+    const patched = {
+      ...ports,
+      gates: {
+        ...ports.gates,
+        runLeg: (...a: Parameters<typeof ports.gates.runLeg>) => {
+          if (a[0] === "alrunner") seen.push(a[1].expectedSublegs);
+          return ports.gates.runLeg(...a);
+        },
+      },
+    };
+    const r = new EffectRunner({ dryRun: false, isHalted: () => false });
+    await runTick(patched, r, input());
+    expect(seen).toEqual([ALRUNNER_LEG_IDS]);
   });
 });
 

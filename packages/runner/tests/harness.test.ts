@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import type { ActivationConfig } from "../src/activation";
 import { compareAppVersions } from "../src/app-version";
+import { BcAnswerUnreadError } from "../src/bc-fetch";
 import {
   CONTROL_APP_ID,
   HarnessAuthError,
@@ -14,6 +15,14 @@ import {
   parseLeaseSnapshot,
   resetSingleTenantWarningForTests,
 } from "../src/harness";
+import {
+  abortableHang,
+  deafBody,
+  deafFetch,
+  emptyBody,
+  notJsonBody,
+  stalledBody,
+} from "./helpers/lease-wire";
 
 // R2: the "unenforced" warning is now a once-per-PROCESS latch (module-scope), not once per
 // `HarnessVerifier` instance — reset it before every test so tests don't leak state into each
@@ -298,7 +307,7 @@ describe("HarnessVerifier control-app version gate (R28)", () => {
   test("GH-24: refuses 1.0.0.18", async () => {
     const message = await messageFrom(info({ semver: "1.0.0.18" }));
     expect(message).toContain("1.0.0.18");
-    expect(message).toContain("1.0.0.20");
+    expect(message).toContain("1.0.0.22");
   });
 
   test("refuses a payload with no semver at all rather than assuming it is current", async () => {
@@ -378,13 +387,21 @@ describe("HarnessVerifier control-app version gate (R28)", () => {
    * `app.json` would make a FRESHLY BUILT control app fail its own gate — an unfixable error
    * telling the operator to rebuild something they just rebuilt — and nothing else in this repo
    * connects the two files.
+   *
+   * R389: app.json MAY be ahead of the minimum. 1.0.0.23 adds `DependentCount`, an action the
+   * client treats as optional (an older control app means "fall back"), so the minimum stays at
+   * 1.0.0.22 and no gate waits for the republish. The hazard is only the other direction. The
+   * minimum MUST be raised when a client path requires a new control action and has no fallback.
    */
-  test("MIN_CONTROL_VERSION equals extensions/lethal-control/app.json's version", async () => {
+  test("MIN_CONTROL_VERSION is not ahead of extensions/lethal-control/app.json's version", async () => {
     const appJsonPath = fileURLToPath(
       new URL("../../../extensions/lethal-control/app.json", import.meta.url),
     );
     const appJson = JSON.parse(await readFile(appJsonPath, "utf8")) as { version?: unknown };
-    expect(appJson.version).toBe(MIN_CONTROL_VERSION);
+    expect(typeof appJson.version).toBe("string");
+    expect(compareAppVersions(String(appJson.version), MIN_CONTROL_VERSION)).toBeGreaterThanOrEqual(
+      0,
+    );
   });
 });
 
@@ -536,7 +553,7 @@ describe("parseLeaseSnapshot (R110)", () => {
     // The failure that matters: this is what an un-republished container answers, and defaulting
     // here would report it as "no lease held".
     expect(() => parseLeaseSnapshot({})).toThrow(HarnessVerificationError);
-    expect(() => parseLeaseSnapshot({})).toThrow(/1\.0\.0\.20/);
+    expect(() => parseLeaseSnapshot({})).toThrow(/1\.0\.0\.22/);
     expect(() => parseLeaseSnapshot({})).toThrow(/republish/);
   });
 
@@ -631,5 +648,102 @@ describe("HarnessVerifier.fetchCompanies (R195)", () => {
     await expect(new HarnessVerifier(CFG, badRow.fetchFn).fetchCompanies()).rejects.toThrow(
       /without a string `name`/,
     );
+  });
+});
+
+// R506: HarnessInfo and the BC API lists are bounded through the body, and an answer that was
+// not read is a BcAnswerUnreadError, never a HarnessVerificationError (which an env-tool session
+// reads as "the control app is missing" and republishes). No wall-clock asserts: a missing bound
+// goes red by bun's 5 s test timeout.
+describe("R506: HarnessVerifier bounds every body read", () => {
+  const FAST: ActivationConfig = { ...CFG, timeoutMs: 20 };
+  const APP = "11111111-2222-3333-4444-555555555555";
+
+  async function unread(p: Promise<unknown>): Promise<BcAnswerUnreadError> {
+    const err = await p.then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(err).not.toBeInstanceOf(HarnessVerificationError);
+    if (!(err instanceof BcAnswerUnreadError)) {
+      throw new Error(`expected a BcAnswerUnreadError, got ${String(err)}`);
+    }
+    return err;
+  }
+
+  /** The companies list answers normally; the extensions list goes through `ext`. */
+  function extensionsThrough(ext: typeof fetch): typeof fetch {
+    return (async (url: unknown, init?: RequestInit) => {
+      if (String(url).includes("/extensions")) return ext(String(url), init);
+      return new Response(JSON.stringify({ value: [{ id: "c1", name: CFG.company }] }), {
+        status: 200,
+      });
+    }) as typeof fetch;
+  }
+
+  const TIMEOUT_CASES = [
+    ["H1 stalled body", () => stalledBody().fetchFn],
+    ["H2 deaf body", deafBody],
+    ["H2 deaf fetch", deafFetch],
+    ["H8 an abort-honouring fetch that never answers", abortableHang],
+  ] as const;
+
+  for (const [name, make] of TIMEOUT_CASES) {
+    test(`${name}: HarnessInfo via verify() and checkReachable() times out as BcAnswerUnreadError`, async () => {
+      expect((await unread(new HarnessVerifier(FAST, make()).verify())).kind).toBe("timeout");
+      expect((await unread(new HarnessVerifier(FAST, make()).checkReachable())).kind).toBe(
+        "timeout",
+      );
+    });
+
+    test(`${name}: the extensions list times out as BcAnswerUnreadError, never [] or not-installed`, async () => {
+      const versions = new HarnessVerifier(FAST, extensionsThrough(make())).fetchInstalledVersions(
+        APP,
+      );
+      expect((await unread(versions)).kind).toBe("timeout");
+      const installed = new HarnessVerifier(
+        FAST,
+        extensionsThrough(make()),
+      ).fetchExtensionInstalled(APP);
+      expect((await unread(installed)).kind).toBe("timeout");
+    });
+  }
+
+  for (const [name, make] of [
+    ["not JSON", notJsonBody],
+    ["empty", emptyBody],
+  ] as const) {
+    test(`H3: a ${name} 2xx HarnessInfo body is unreadable, not a HarnessVerificationError`, async () => {
+      const err = await unread(new HarnessVerifier(FAST, make()).verify());
+      expect(err.kind).toBe("unreadable");
+      expect(err.message).toContain("HarnessInfo 2xx body could not be read or parsed");
+    });
+
+    test(`H5-H7: a ${name} 2xx extensions body is unreadable, never [] or not-installed`, async () => {
+      const v = new HarnessVerifier(FAST, extensionsThrough(make()));
+      expect((await unread(v.fetchInstalledVersions(APP))).kind).toBe("unreadable");
+      expect((await unread(v.fetchExtensionInstalled(APP))).kind).toBe("unreadable");
+    });
+  }
+
+  // H9, over-strict control for H8: the new line keys on OUR abort, not on every fetch error.
+  test("H9: a non-abort fetch error is still HarnessVerificationError 'unreachable'", async () => {
+    const refused = (async () => {
+      throw new TypeError("connect ECONNREFUSED");
+    }) as unknown as typeof fetch;
+    const info = await new HarnessVerifier(FAST, refused).verify().catch((e: unknown) => e);
+    expect(info).toBeInstanceOf(HarnessVerificationError);
+    expect((info as Error).message).toContain("HarnessInfo unreachable");
+    const rows = await new HarnessVerifier(FAST, refused).fetchCompanies().catch((e: unknown) => e);
+    expect(rows).toBeInstanceOf(HarnessVerificationError);
+    expect((rows as Error).message).toContain("companies list unreachable");
+  });
+
+  // Control: a PARSED body with no string `value` is still the wrong-build shape.
+  test("a parsed HarnessInfo body with no string value stays HarnessVerificationError", async () => {
+    const noValue = (async () =>
+      new Response(JSON.stringify({}), { status: 200 })) as unknown as typeof fetch;
+    const err = await new HarnessVerifier(FAST, noValue).verify().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(HarnessVerificationError);
   });
 });

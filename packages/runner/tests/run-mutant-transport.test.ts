@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { ActivationConfig } from "../src/activation";
 import type { TestMethodRef } from "../src/backend";
+import { UnfilteredExtensionsQueryError } from "../src/harness";
 import { MAX_ATTEMPT_ID_LENGTH } from "../src/lease";
 import {
+  ControlDrainTimeoutError,
   FencedCoverageError,
   KEPT_ANSWER_READ_MS,
   RunMutantTransport,
@@ -697,8 +699,14 @@ describe("RunMutantTransport.run — R53 server-side stop", () => {
    */
   function heldFetch(): { fetchFn: typeof fetch; answer: (r: Response) => void } {
     let resolveWith: ((r: Response) => void) | undefined;
-    const fetchFn = ((_url: unknown, init?: RequestInit) =>
+    const fetchFn = ((url: unknown, init?: RequestInit) =>
       new Promise<Response>((resolve, reject) => {
+        // Only RunMutant is held. R-204b's status read after a stop 408 (and R236b's readback)
+        // find no server here: unavailable evidence, which keeps today's answers.
+        if (!String(url).includes("_RunMutant?")) {
+          reject(new Error(`no ${String(url)} in this test`));
+          return;
+        }
         resolveWith = resolve;
         init?.signal?.addEventListener(
           "abort",
@@ -718,6 +726,7 @@ describe("RunMutantTransport.run — R53 server-side stop", () => {
       onBudgetExceeded: async () => {
         stopCalls += 1;
         answer(new Response(AL_STOP_BODY, { status: 408 }));
+        return { stopped: true };
       },
     });
     expect(stopCalls).toBe(1);
@@ -743,6 +752,7 @@ describe("RunMutantTransport.run — R53 server-side stop", () => {
             { status: 408 },
           ),
         );
+        return { stopped: true };
       },
     });
     expect(v.outcome).not.toBe("timeout");
@@ -756,6 +766,7 @@ describe("RunMutantTransport.run — R53 server-side stop", () => {
       timeoutMs: 20,
       onBudgetExceeded: async () => {
         answer(new Response("<html>Gateway Timeout</html>", { status: 408 }));
+        return { stopped: true };
       },
     });
     expect(v.outcome).not.toBe("timeout");
@@ -792,6 +803,7 @@ describe("RunMutantTransport.run — R53 server-side stop", () => {
         // answer arrives too late to be seen.
         await new Promise((r) => setTimeout(r, 20));
         answer(new Response(AL_STOP_BODY, { status: 408 }));
+        return { stopped: true };
       },
     });
     expect(v.outcome).toBe("timeout");
@@ -803,6 +815,56 @@ describe("RunMutantTransport.run — R53 server-side stop", () => {
     const v = await transport(fetchFn).run({ ...REQ, timeoutMs: 20 });
     expect(v.outcome).toBe("deadline-exceeded");
     expect(v.operation).toBe("in-flight-unknown");
+  });
+
+  test("R-496 T-b: a status read refused after a confirmed stop and an AL-stop 408 rejects run", async () => {
+    const held = heldFetch();
+    const fetchFn = ((url: unknown, init?: RequestInit) =>
+      String(url).includes("_GetOperationStatus")
+        ? Promise.reject(new UnfilteredExtensionsQueryError("refused status"))
+        : held.fetchFn(url as string, init)) as typeof fetch;
+    const err = await transport(fetchFn)
+      .run({
+        ...REQ,
+        timeoutMs: 20,
+        onBudgetExceeded: async () => {
+          held.answer(new Response(AL_STOP_BODY, { status: 408 }));
+          return { stopped: true };
+        },
+      })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+  });
+
+  test("R-496 T-c: a refused StopHungRun rejects run even when the held request returns a valid failure", async () => {
+    const held = heldFetch();
+    const fetchFn = ((url: unknown, init?: RequestInit) =>
+      String(url).includes("_StopHungRun?")
+        ? Promise.reject(new UnfilteredExtensionsQueryError("refused stop"))
+        : held.fetchFn(url as string, init)) as typeof fetch;
+    const t = transport(fetchFn);
+    const failed = echo({
+      codeunitResults: JSON.stringify({
+        testResults: [{ method: "OverBudgetDetected", result: 1, message: "boom" }],
+      }),
+    });
+    const err = await t
+      .run({
+        ...REQ,
+        timeoutMs: 20,
+        stopGraceMs: 500,
+        onBudgetExceeded: async () => {
+          try {
+            await t.stopHungRun({ attemptId: "a1", lease: LEASE, timeoutMs: 1000 });
+          } catch {
+            // the hook swallows it, as a careless caller would
+          }
+          held.answer(new Response(JSON.stringify({ value: JSON.stringify(failed) })));
+          return { stopped: false };
+        },
+      })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
   });
 
   test("names a FAILED stop in the quarantine message", async () => {
@@ -828,6 +890,7 @@ describe("RunMutantTransport.run — R53 server-side stop", () => {
       timeoutMs: 20,
       onBudgetExceeded: async () => {
         answer(new Response(JSON.stringify({ value: JSON.stringify(echo()) }), { status: 200 }));
+        return { stopped: false, reason: "already-completed" };
       },
     });
     // The echoed result is scored, NOT a manufactured timeout — scoring `timeout` here would be a
@@ -916,6 +979,7 @@ describe("RunMutantTransport.run — the budget covers the BODY phase too (R191)
       stopGraceMs: 30,
       onBudgetExceeded: async () => {
         stopCalls += 1;
+        return { stopped: true };
       },
     });
     expect(stopCalls).toBe(1);
@@ -948,7 +1012,12 @@ describe("RunMutantTransport: a lost reply is read back from the committed answe
   /** The live shape: everything but the envelope's final `}`. */
   const TRUNCATED = wrap(FAILED).slice(0, -1);
   const KEY = { attemptId: "a1", opSeq: 7, epoch: 3, generation: "gen-1" };
-  type Kept = { readonly status: number; readonly body: string } | "throw" | "hang" | "deaf";
+  type Kept =
+    | { readonly status: number; readonly body: string }
+    | "throw"
+    | "refused"
+    | "hang"
+    | "deaf";
   /** A readback that never answers ends here, so a broken bound FAILS the test instead of hanging the run. */
   const UNBOUNDED_MS = 3000;
   const found = (answer: string, key: Record<string, unknown> = KEY): Kept => ({
@@ -968,6 +1037,7 @@ describe("RunMutantTransport: a lost reply is read back from the committed answe
       if (action === "GetOpAnswer") {
         bodies.push(JSON.parse(String(init?.body)));
         if (kept === "throw") throw new Error("ECONNRESET");
+        if (kept === "refused") throw new UnfilteredExtensionsQueryError("refused readback");
         if (kept === "hang" || kept === "deaf") {
           return new Promise<Response>((_resolve, reject) => {
             setTimeout(() => reject(new Error("readback not bounded")), UNBOUNDED_MS);
@@ -1013,6 +1083,46 @@ describe("RunMutantTransport: a lost reply is read back from the committed answe
     expect(v.fencedOp).toEqual(FENCE);
     expect(v.replyRecovered).toBeUndefined();
   };
+
+  test("R-496: a readback refused as an unfiltered extensions query rejects run", async () => {
+    const calls: string[] = [];
+    const err = await transport(routed("truncated", "refused", calls))
+      .run(REQ)
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(calls).toEqual(["RunMutant", "GetOpAnswer"]);
+  });
+
+  test("R-496 T-a: a refused main request rejects run even though a kept failure is on file", async () => {
+    const calls: string[] = [];
+    const inner = routed("ok", found(JSON.stringify(FAILED)), calls);
+    const fetchFn = ((url: unknown, init?: RequestInit) =>
+      String(url).includes("_RunMutant?")
+        ? Promise.reject(new UnfilteredExtensionsQueryError("refused main"))
+        : inner(url as string, init)) as typeof fetch;
+    const err = await transport(fetchFn)
+      .run(REQ)
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(calls).toEqual(["GetOpAnswer"]);
+  });
+
+  test("R-496 review 5: a refused main coverage request rejects runWithCoverage though a kept pass with coverage is on file", async () => {
+    const calls: string[] = [];
+    const kept = found(
+      JSON.stringify(echo({ coverage: [{ objectType: 5, objectId: 79100, lineNo: 12, hits: 3 }] })),
+    );
+    const inner = routed("ok", kept, calls);
+    const fetchFn = ((url: unknown, init?: RequestInit) =>
+      String(url).includes("_RunMutantWithCoverage?")
+        ? Promise.reject(new UnfilteredExtensionsQueryError("refused main coverage"))
+        : inner(url as string, init)) as typeof fetch;
+    const err = await transport(fetchFn)
+      .runWithCoverage(REQ)
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(calls).toEqual(["GetOpAnswer"]);
+  });
 
   test("1. body lost, kept answer is a completed fail: it is the verdict, no second RunMutant is sent", async () => {
     const calls: string[] = [];
@@ -1208,5 +1318,205 @@ describe("RunMutantTransport: a lost reply is read back from the committed answe
       "RunMutant status=ran but no codeunitResults; answer readback: the server holds no committed answer",
     );
     expect(r.coverageRows).toEqual([{ objectType: 5, objectId: 79300, lineNo: 10, hits: 1 }]);
+  });
+});
+
+describe("R499: a scored result waits for control requests still in flight", () => {
+  const AL_STOP_BODY = JSON.stringify({
+    error: {
+      message:
+        "The server stopped the session (ID: 2683) because of a stop session request.  " +
+        "The session was stopped by an AL StopSession call.",
+    },
+  });
+  const wrap = (inner: Record<string, unknown>) => JSON.stringify({ value: JSON.stringify(inner) });
+  const FAILED = echo({
+    codeunitResults: JSON.stringify({
+      testResults: [{ method: "OverBudgetDetected", result: 1, message: "boom" }],
+    }),
+  });
+  /** Far above the test timeout: a wait that should not happen times the test out. */
+  const LONG_DRAIN_MS = 60_000;
+
+  /**
+   * One scripted server. `mode.run` decides how RunMutant(WithCoverage) answers: "pass", "fail",
+   * "truncated" (a body cut short, so the call reads the answer back), or "held" (open until the
+   * test answers it; honours the abort). Every OTHER action is DEAF: it ignores its abort signal
+   * and settles only when the test calls `answer` or `refuse`, except the `unavailable` ones,
+   * which fail at once (no server for them: unavailable evidence).
+   */
+  function server(run: "pass" | "fail" | "truncated" | "held", unavailable = new Set<string>()) {
+    const mode = { run };
+    const sent: string[] = [];
+    const open = new Map<
+      string,
+      { resolve: (r: Response) => void; reject: (e: unknown) => void }
+    >();
+    const fetchFn = (async (url: unknown, init?: RequestInit) => {
+      const action = /LethALControl_(\w+)/.exec(String(url))?.[1] ?? String(url);
+      sent.push(action);
+      if (action === "RunMutant" || action === "RunMutantWithCoverage") {
+        if (mode.run === "pass") return new Response(wrap(echo({ coverage: [] })));
+        if (mode.run === "fail") return new Response(wrap(FAILED));
+        if (mode.run === "truncated") {
+          const stream = new ReadableStream<Uint8Array>({
+            start(c) {
+              c.enqueue(new TextEncoder().encode(wrap(FAILED).slice(0, -1)));
+              c.error(new Error("The socket connection was closed unexpectedly."));
+            },
+          });
+          return new Response(stream, { status: 200 });
+        }
+        return new Promise<Response>((resolve, reject) => {
+          open.set(action, { resolve, reject });
+          init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
+            once: true,
+          });
+        });
+      }
+      if (unavailable.has(action)) throw new Error(`no ${action} in this test`);
+      return new Promise<Response>((resolve, reject) => open.set(action, { resolve, reject }));
+    }) as typeof fetch;
+    const slot = (action: string) => {
+      const s = open.get(action);
+      if (s === undefined) throw new Error(`no ${action} in flight`);
+      open.delete(action);
+      return s;
+    };
+    return {
+      mode,
+      sent,
+      fetchFn,
+      answer: (action: string, r: Response) => slot(action).resolve(r),
+      refuse: (action: string, message: string) =>
+        slot(action).reject(new UnfilteredExtensionsQueryError(message)),
+      count: (action: string) => sent.filter((a) => a === action).length,
+    };
+  }
+
+  const tick = (ms = 5) => new Promise((r) => setTimeout(r, ms));
+  const settle = <T>(p: Promise<T>): Promise<T | unknown> =>
+    p.then(
+      (v) => v,
+      (e: unknown) => e,
+    );
+
+  /** A stop hook that sends StopHungRun (left deaf) and lets the held request answer `answer`. */
+  function stopThenAnswer(
+    t: RunMutantTransport,
+    s: ReturnType<typeof server>,
+    answer: () => Response,
+  ) {
+    return async () => {
+      t.stopHungRun({ attemptId: "a1", lease: LEASE, timeoutMs: 1000 }).catch(() => {});
+      s.answer("RunMutant", answer());
+      return { stopped: false };
+    };
+  }
+
+  test("S1 (a): a StopHungRun outliving settleStop and refused inside the drain rejects run", async () => {
+    const s = server("held");
+    const t = new RunMutantTransport(CFG, TA, AR, s.fetchFn, { drainMs: LONG_DRAIN_MS });
+    const call = settle(
+      t.run({
+        ...REQ,
+        timeoutMs: 20,
+        stopGraceMs: 60,
+        onBudgetExceeded: stopThenAnswer(t, s, () => new Response(wrap(FAILED))),
+      }),
+    );
+    await tick(150); // past the grace: settleStop has given up on the stop
+    s.refuse("StopHungRun", "refused stop");
+    const got = await call;
+    expect(got).toBeInstanceOf(UnfilteredExtensionsQueryError);
+  });
+
+  test("S2 (b): an earlier call's orphan refused while the next call's request is open rejects that call", async () => {
+    const s = server("truncated");
+    const t = new RunMutantTransport(CFG, TA, AR, s.fetchFn, { drainMs: LONG_DRAIN_MS });
+    const first = await t.run({ ...REQ, timeoutMs: 30 });
+    expect(first.operation).toBe("in-flight-unknown"); // not scored; the readback is left in flight
+    expect([...t.controlState.orphans.values()]).toEqual(["GetOpAnswer"]);
+    s.mode.run = "held";
+    const call = settle(t.run(REQ));
+    while (s.count("RunMutant") < 2) await tick();
+    s.refuse("GetOpAnswer", "late refused readback");
+    await tick();
+    s.answer("RunMutant", new Response(wrap(echo())));
+    expect(await call).toBeInstanceOf(UnfilteredExtensionsQueryError);
+  });
+
+  test("S2b (b, later): an orphan refused only during the next call's exit drain rejects that call", async () => {
+    const s = server("truncated");
+    const t = new RunMutantTransport(CFG, TA, AR, s.fetchFn, { drainMs: LONG_DRAIN_MS });
+    expect((await t.run({ ...REQ, timeoutMs: 30 })).operation).toBe("in-flight-unknown");
+    s.mode.run = "pass";
+    const call = settle(t.run(REQ));
+    setTimeout(() => s.refuse("GetOpAnswer", "late refused readback"), 50);
+    expect(await call).toBeInstanceOf(UnfilteredExtensionsQueryError);
+  });
+
+  test("S2c: an orphan refused after its call returned is thrown by the NEXT call, before it sends anything", async () => {
+    const s = server("truncated");
+    const t = new RunMutantTransport(CFG, TA, AR, s.fetchFn, { drainMs: LONG_DRAIN_MS });
+    expect((await t.run({ ...REQ, timeoutMs: 30 })).operation).toBe("in-flight-unknown");
+    s.refuse("GetOpAnswer", "late refused readback");
+    await tick();
+    const before = s.sent.length;
+    s.mode.run = "pass";
+    const err = await settle(t.run(REQ));
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(s.sent.length).toBe(before);
+  });
+
+  test("S3: a stop still in flight when the drain bound expires rejects run with ControlDrainTimeoutError, never `fail`", async () => {
+    const s = server("held");
+    const t = new RunMutantTransport(CFG, TA, AR, s.fetchFn, { drainMs: 50 });
+    const got = await settle(
+      t.run({
+        ...REQ,
+        timeoutMs: 20,
+        stopGraceMs: 60,
+        onBudgetExceeded: stopThenAnswer(t, s, () => new Response(wrap(FAILED))),
+      }),
+    );
+    expect(got).toBeInstanceOf(ControlDrainTimeoutError);
+    expect((got as Error).message).toContain("R499");
+    expect((got as Error).message).toContain("StopHungRun");
+    expect((got as Error).message).toContain("50 ms");
+    // It stays an orphan for the teardown drain.
+    expect([...t.controlState.orphans.values()]).toEqual(["StopHungRun"]);
+  });
+
+  test("S4 control: a stop answered in time and an AL-stop 408 score `timeout`, confirmed, with nothing left in flight", async () => {
+    const s = server("held", new Set(["GetOperationStatus"]));
+    const t = new RunMutantTransport(CFG, TA, AR, s.fetchFn, { drainMs: LONG_DRAIN_MS });
+    const v = await t.run({
+      ...REQ,
+      timeoutMs: 20,
+      onBudgetExceeded: async (bound) => {
+        const stop = t.stopHungRun({ attemptId: "a1", lease: LEASE, timeoutMs: bound });
+        s.answer("StopHungRun", new Response(wrap({ stopped: true })));
+        await stop;
+        s.answer("RunMutant", new Response(AL_STOP_BODY, { status: 408 }));
+        return { stopped: true };
+      },
+    });
+    expect(v.outcome).toBe("timeout");
+    expect(v.operation).toBeUndefined();
+    expect(v.stopState).toBe("confirmed");
+    expect(t.controlState.orphans.size).toBe(0);
+    expect(t.controlState.lateRefusal).toBeUndefined();
+  });
+
+  test("C1: runWithCoverage with an orphan still in flight at the bound rejects with ControlDrainTimeoutError", async () => {
+    const s = server("truncated");
+    const t = new RunMutantTransport(CFG, TA, AR, s.fetchFn, { drainMs: 50 });
+    // The orphan, made explicitly: a call that ends unscored with its readback deaf.
+    expect((await t.run({ ...REQ, timeoutMs: 30 })).operation).toBe("in-flight-unknown");
+    s.mode.run = "pass";
+    const got = await settle(t.runWithCoverage(REQ));
+    expect(got).toBeInstanceOf(ControlDrainTimeoutError);
+    expect((got as Error).message).toContain("GetOpAnswer");
   });
 });

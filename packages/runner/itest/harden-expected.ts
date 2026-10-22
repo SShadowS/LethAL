@@ -342,7 +342,7 @@ export function assertHardenVerdicts(report: SessionReport, expected = EXPECTED)
   }
 }
 
-/** Both legs: the mark matched S5 only; stale and contradicted are empty. */
+/** Both legs: the mark matched S5 only; stale, contradicted and refused are empty. */
 export function assertHardenMarks(report: SessionReport, expected = EXPECTED): void {
   const paired = pairRows(report, expected);
   const s5 = mutantFor(paired, plantedRow(expected, "S5"));
@@ -360,9 +360,12 @@ export function assertHardenMarks(report: SessionReport, expected = EXPECTED): v
       `readerMarkedEquivalent.matched is [${matched.join(", ")}], expected [${s5Ref}] (S5)`,
     );
   }
-  if (rme.stale.length !== 0 || rme.contradicted.length !== 0) {
+  // R443: a refused mark leaves S5 a plain survivor, which `matched` above already catches; the
+  // list is checked too so the failure names the refusal reason.
+  const refused = rme.refused ?? [];
+  if (rme.stale.length !== 0 || rme.contradicted.length !== 0 || refused.length !== 0) {
     throw new HardenGateError(
-      `readerMarkedEquivalent must have no stale or contradicted mark, got stale ${JSON.stringify(rme.stale)}, contradicted ${JSON.stringify(rme.contradicted)}`,
+      `readerMarkedEquivalent must have no stale, contradicted or refused mark, got stale ${JSON.stringify(rme.stale)}, contradicted ${JSON.stringify(rme.contradicted)}, refused ${JSON.stringify(refused)}`,
     );
   }
 }

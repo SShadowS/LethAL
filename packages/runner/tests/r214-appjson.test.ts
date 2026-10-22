@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
@@ -14,6 +14,7 @@ import type { EquivalenceMark } from "../src/equivalence-marks";
 import type { RunEvent } from "../src/events";
 import { runSession } from "../src/orchestrator";
 import { ResultsStore } from "../src/store";
+import { removeScratchDir } from "./helpers/scratch";
 
 // R214, the DC case: the build's symbols come from app.json ONLY, and no config symbol is set.
 // Every runSession site that records or compares the build's symbols must see the EFFECTIVE set
@@ -26,7 +27,13 @@ const norm = (p: string): string => p.replaceAll("\\", "/");
 class SurvivingBackend implements ExecutionBackend {
   private active: string | null = null;
   capabilities(): BackendCapabilities {
-    return { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true };
+    return {
+      coverage: "procedure",
+      deploy: "publish",
+      isolation: "session",
+      kind: "bcdev",
+      authoritative: true,
+    };
   }
   async status(): Promise<BackendStatus> {
     return { ok: true, details: "stub" };
@@ -67,8 +74,8 @@ const TEST_AL = `codeunit 50140 "P7 Tests"
 `;
 
 const roots: string[] = [];
-afterAll(async () => {
-  for (const r of roots) await rm(r, { recursive: true, force: true });
+afterAll(() => {
+  for (const r of roots) removeScratchDir(r);
 });
 
 /** A private copy of p7-appjson (app.json `"preprocessorSymbols": ["APPSYM"]`) and a test app. */
@@ -140,7 +147,16 @@ describe("R214: symbols from app.json only (no config symbols)", () => {
 
   test("a mark under ['APPSYM'] is applied; a mark with no field is stale and the warning says why", async () => {
     const key = await armKey();
-    const mark = { key, reason: "same either way", identityScheme: IDENTITY_SCHEME };
+    // R443: the mark carries this project's numbering digest, read from a real run.
+    const plain = await run(await makeProject(), new ResultsStore(":memory:"));
+    const numberingDigest = plain.report.numberingDigest;
+    if (numberingDigest === undefined) throw new Error("the report records no numbering digest");
+    const mark = {
+      key,
+      reason: "same either way",
+      identityScheme: IDENTITY_SCHEME,
+      numberingDigest,
+    };
     const applied = await run(await makeProject(), new ResultsStore(":memory:"), [
       { ...mark, preprocessorSymbols: ["APPSYM"] },
     ]);

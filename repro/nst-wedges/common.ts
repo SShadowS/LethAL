@@ -10,7 +10,7 @@
 //   BC_TENANT        default "default"
 
 export interface Settings {
-  /** Server tier base URL, no trailing slash, e.g. http://Cronus284:7048/BC */
+  /** Server tier base URL, no trailing slash, e.g. http://Cronus28:7048/BC */
   baseUrl: string;
   /** The `authorization` header value. */
   auth: string;

@@ -40,6 +40,8 @@ export type PlannedPayload =
       readonly component: PlannedComponent;
       /** The latch name the chain's markers use: the owner's, else `REACH_LATCH` (no marker). */
       readonly latch: string;
+      /** R470: the selector variable the chain's guards and markers call (`selectorVarName`). */
+      readonly selector: string;
       /** The chain needs a `begin ... end` around it (`needsWrap`). */
       readonly wrap: boolean;
     };
@@ -104,6 +106,9 @@ export function planFile(
         members: planned,
       },
       latch: latches.get(component) ?? REACH_LATCH,
+      // A root outside any object, or a reportextension with no numeric id, keeps the bare name
+      // here; `injectMutationSelectorVar` below refuses that file anyway.
+      selector: selectorVarName(enclosingObjectDeclaration(component.root)) ?? SELECTOR_VAR,
       wrap: needsWrap(component.root),
     });
   }
@@ -373,7 +378,16 @@ export function canCarryMutationSelectorVar(root: ALSyntaxNode): boolean {
  * comment used to defer on was measured — the tables gate covers both (a `tableextension`'s five
  * mutants are all killed; a `pageextension`'s are `no-coverage`). Enums stay out for a simpler
  * reason: they hold no code, so they can hold no var. `xmlport` and `query` are the kinds that
- * still hold code and still cannot carry it.
+ * still hold code and still cannot carry it. Adding `xmlport` here wakes R500's dormant XMLport
+ * hang refusal (`openItemHangRefuses` is asked only in a carrier file); `r500-dispatch.test.ts`
+ * pins that dormancy and goes red, as a reminder to measure it, when the kind is added. It also
+ * admits `#if`-wrapped xmlports on BC (R497's shape rule is kind-blind) with no gate measuring them:
+ * R545's census found 4 wrapped BaseApp xmlports (about 350 sites each, skipped today), so add a
+ * pre-committed wrapped xmlport arm to `sandbox-wrapped` first, as R536 and R545 did for their kinds.
+ *
+ * `reportextension` was added by R254 once its coverage was measured: BC reports it as object
+ * type 22 under the extension's own id, al-runner as its own Cobertura class
+ * (scripts/r254-probe/README.md); the tables gate's `DataBandExt` arm executes it.
  *
  * Exported (R127) so the ONE user-facing message that names these kinds — `generateMutationSet`'s
  * skipped-file warning in @lethal/runner — derives the list instead of restating it. It restated
@@ -386,6 +400,7 @@ export const CARRIER_KINDS: readonly ALNodeKind[] = [
   ALNodeKind.report,
   ALNodeKind.pageextension,
   ALNodeKind.tableextension,
+  ALNodeKind.reportextension,
 ];
 
 /**
@@ -504,6 +519,13 @@ function injectSelectorVarIntoObject(
   rewrites: Map<ALSyntaxNode, PlannedPayload>,
   filePath: string,
 ): void {
+  const name = selectorVarName(object);
+  if (name === null) {
+    throw new FileRefusedError(
+      `compileSchemataForFile: cannot instrument ${filePath} — its reportextension has no numeric object id to name the selector var after (R470).`,
+      { site: "compile.selector-name", ...refusal(filePath, "no-header", object, object) },
+    );
+  }
   const isTable = object.kind === ALNodeKind.table;
   // R40: a page/report carries structural sections (`layout`, `actions`, `dataset`,
   // `requestpage`) that a `var` may not precede, and unlike a table there is no member the var is
@@ -514,7 +536,8 @@ function injectSelectorVarIntoObject(
     object.kind === ALNodeKind.page ||
     object.kind === ALNodeKind.report ||
     object.kind === ALNodeKind.pageextension ||
-    object.kind === ALNodeKind.tableextension;
+    object.kind === ALNodeKind.tableextension ||
+    object.kind === ALNodeKind.reportextension;
   const headerKinds = isTable ? TABLE_HEADER_KINDS : CODEUNIT_HEADER_KINDS;
   // Under the current v3 grammar `declarationMembers` already strips the
   // `declaration_body` container, so header tokens never actually reach
@@ -543,7 +566,7 @@ function injectSelectorVarIntoObject(
     }
     rewrites.set(
       insertionNodeAt(anchor, anchor.endIndex),
-      text(`\n        MutationSelector: Codeunit "Mutation Selector";`),
+      text(`\n        ${name}: Codeunit "Mutation Selector";`),
     );
     return;
   }
@@ -572,7 +595,7 @@ function injectSelectorVarIntoObject(
   if (anchor !== undefined) {
     rewrites.set(
       insertionNodeAt(anchor, anchor.startIndex),
-      text(`    var\n        MutationSelector: Codeunit "Mutation Selector";\n\n`),
+      text(`    var\n        ${name}: Codeunit "Mutation Selector";\n\n`),
     );
     return;
   }
@@ -595,7 +618,7 @@ function injectSelectorVarIntoObject(
   }
   rewrites.set(
     insertionNodeAt(lastMember, lastMember.endIndex),
-    text(`\n\n    var\n        MutationSelector: Codeunit "Mutation Selector";`),
+    text(`\n\n    var\n        ${name}: Codeunit "Mutation Selector";`),
   );
 }
 
@@ -626,6 +649,32 @@ function enclosingObjectDeclaration(node: ALSyntaxNode): ALSyntaxNode | null {
     current = current.parent;
   }
   return null;
+}
+
+/** The selector variable every carrier kind but a reportextension declares and calls. */
+const SELECTOR_VAR = "MutationSelector";
+
+/**
+ * R470: the selector variable `object` declares and its guards call. A report's globals and its
+ * reportextensions' globals are ONE namespace (alc 18.0.43, AL0155 "already defined in Report"),
+ * so a report and its extension, or two extensions of one report, each declaring `MutationSelector`
+ * do not compile. A reportextension's selector is therefore `MutationSelector<its object id>`: unique
+ * among the report's extensions by construction, and stateless, since it never depends on whether
+ * the base report or a sibling also got one. If that identifier already occurs in the extension's
+ * own text, `_1`, `_2`, ... is appended until it does not (a same-named global in ANOTHER file of
+ * the namespace is not checked, the exposure `MutationSelector` itself has for every kind). Other
+ * kinds keep `MutationSelector`: an extension's own declaration shadows a table's or page's
+ * (probed, R469). `null` for a reportextension with no numeric id, which the caller refuses.
+ */
+function selectorVarName(object: ALSyntaxNode | null): string | null {
+  if (object?.kind !== ALNodeKind.reportextension) return SELECTOR_VAR;
+  const id = object.childForFieldName("object_id")?.text ?? "";
+  if (!/^\d+$/.test(id)) return null;
+  const taken = (name: string) => new RegExp(`\\b${name}\\b`, "i").test(object.text);
+  const base = `${SELECTOR_VAR}${id}`;
+  let name = base;
+  for (let n = 1; taken(name); n++) name = `${base}_${n}`;
+  return name;
 }
 
 /** R307: the structured fields of a per-file refusal: `at`'s 1-based lines and the object it sits

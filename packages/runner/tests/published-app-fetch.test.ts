@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { BcDevMcpBackend, devPackagesUrl } from "../src/bcdev-backend";
+import { deafBody, deafFetch } from "./helpers/lease-wire";
 
 /**
  * R139 check 2's server READ: the dev endpoint's own `dev/packages`, which hands back the package
@@ -92,6 +93,19 @@ describe("BcDevMcpBackend.fetchPublishedAppPackage", () => {
     expect(bytes).toBeUndefined();
     expect(called).toBe(false);
   });
+
+  // R506 K1-K2: the read is bounded through the body even when the body ignores its abort, and a
+  // timeout is still the documented "could not read" `null`. No wall-clock asserts: a missing
+  // bound goes red by bun's 5 s test timeout.
+  for (const [name, make] of [
+    ["K1 a body that ignores its abort", deafBody],
+    ["K2 a fetch that never answers", deafFetch],
+  ] as const) {
+    it(`${name} resolves null within the bound`, async () => {
+      const backend = new BcDevMcpBackend(BASE_CFG);
+      expect(await backend.fetchPublishedAppPackage(APP, make(), 20)).toBeNull();
+    });
+  }
 });
 
 describe("fetchPublishedAppPackage's not-applicable answer", () => {

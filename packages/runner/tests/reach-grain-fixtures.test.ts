@@ -4,7 +4,7 @@ import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { MutantManifest } from "@lethal/schemata";
-import { REACH_MARKER, writeInstrumentedProject } from "@lethal/schemata";
+import { writeInstrumentedProject } from "@lethal/schemata";
 import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/orchestrator";
 
 /**
@@ -84,10 +84,13 @@ describe("GH-24: reach grain over every fixture", () => {
           for (const name of await readdir(dir)) {
             if (name.endsWith(".al")) text += await readFile(join(dir, name), "utf8");
           }
-          const markers = text.match(/MutationSelector\.Reached\('M\d+'\);/g) ?? [];
+          // R470: a reportextension's selector is `MutationSelector<id>` (suffixed if taken).
+          const markers =
+            text.match(/MutationSelector(?:\d+(?:_\d+)?)?\.Reached\('M\d+'\);/g) ?? [];
           expect(markers.length).toBe(counts.statement);
           for (const m of manifest.mutants) {
-            const n = text.split(REACH_MARKER(m.mutantId)).length - 1;
+            // R470: by the mutant's own `Reached` call, whatever its object's selector is named.
+            const n = text.split(`.Reached('${m.mutantId}');`).length - 1;
             expect(`${m.mutantId}:${n}`).toBe(
               `${m.mutantId}:${m.reachGrain === "statement" ? 1 : 0}`,
             );

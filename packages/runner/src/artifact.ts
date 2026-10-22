@@ -1,10 +1,38 @@
-import { readFile, rename } from "node:fs/promises";
-import { join } from "node:path";
-import type { MutantManifest } from "@lethal/schemata";
+import {
+  copyFile,
+  link,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  stat,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { basename, dirname, join } from "node:path";
+import { FLAT_NAMES_FILENAME, type MutantManifest } from "@lethal/schemata";
 import type { DeploymentVerification, PublishOutcome } from "./deployment-verifier";
 import { describeThrown } from "./describe-error";
 import { defaultSpawn } from "./publisher";
 import type { SpawnFn } from "./publisher";
+
+/**
+ * R219: one line naming each file the batch wrote under a disambiguated flat name, or `undefined`
+ * when it renamed none (no `FLAT_NAMES_FILENAME`).
+ */
+async function flatNamesNote(projectDir: string): Promise<string | undefined> {
+  let sidecar: string;
+  try {
+    sidecar = await readFile(join(projectDir, FLAT_NAMES_FILENAME), "utf8");
+  } catch {
+    return undefined;
+  }
+  const pairs = Object.entries(JSON.parse(sidecar) as Record<string, string>)
+    .map(([flat, project]) => `${flat} is ${project}`)
+    .join("; ");
+  return `files this batch wrote under a disambiguated flat name (R219): ${pairs}`;
+}
 
 /**
  * A deterministic compiler rejection: alc ran and said no. This is the ONLY error the bisection
@@ -14,6 +42,22 @@ export class AlcCompileError extends Error {}
 
 /** Any failure that is not a compiler verdict: spawn, I/O, manifest inconsistency. */
 export class ArtifactPrepareError extends Error {}
+
+/**
+ * R461: alc rejected the batch's instrumented build, and then rejected LethAL's staged copy of the
+ * UNMUTATED target too. States that observation and alc's own output, nothing more: staging stamps
+ * `app.json`, flattens paths and rebases resources, so this claims neither broken source nor an
+ * environment fault. Extends `Error` DIRECTLY: bisection reads only `AlcCompileError` as "this
+ * subset does not compile", and this is not a subset answer.
+ */
+export class UnmutatedBuildFailedError extends Error {
+  constructor(alcError: AlcCompileError) {
+    super(
+      `alc rejected LethAL's staged copy of the unmutated target, using this compiler and package cache. No mutant was in that build, so no mutant is blamed and the run stops here. alc's output:\n${alcError.message}`,
+    );
+    this.name = "UnmutatedBuildFailedError";
+  }
+}
 
 /**
  * A deployment whose outcome is not `accepted`: the publish failed, or identity verification
@@ -93,6 +137,103 @@ export interface CompileInput {
   readonly appVersion: string;
   readonly mutantManifest: MutantManifest;
   readonly appManifest: Readonly<Record<string, unknown>>;
+  /**
+   * R552: a LethAL-owned copy of the package cache (`buildPackageCacheCopy`), sent to alc INSTEAD
+   * of the configured cache, as the one `/packagecachepath:`. It holds every package of the
+   * user's cache plus LethAL's own `lethal-control.app`. Absent: the argv is unchanged.
+   */
+  readonly packageCacheCopyPath?: string;
+}
+
+/**
+ * R552: the `/packagecachepath:` value for `compile`: the copy when there is one, else the
+ * configured cache. A `;` or `,` in the copy's path is refused before any spawn: alc would split
+ * it silently and resolve symbols from a directory nobody named. `ArtifactPrepareError`, never
+ * `AlcCompileError`: alc never ran.
+ */
+function packageCacheListOf(cache: string, copy: string | undefined): string {
+  if (copy === undefined) return cache;
+  if (/[;,]/.test(copy)) {
+    throw new ArtifactPrepareError(
+      `package cache path ${copy} contains ';' or ',', which alc reads as a list separator; LethAL refuses to pass it rather than let alc split it silently. Point the temp directory at a path without them.`,
+    );
+  }
+  return copy;
+}
+
+/** R552: the file name LethAL's control symbol takes in a package-cache copy. */
+export const CONTROL_SYMBOL_FILE = "lethal-control.app";
+
+/** R552: whether a file is a `lethal-control.app` (by base name, any case), as an older LethAL
+ *  left in a user's cache. The copy leaves it out and the leftover warning names it. */
+export function isControlSymbolName(path: string): boolean {
+  return basename(path).toLowerCase() === CONTROL_SYMBOL_FILE;
+}
+
+/** R552: the two file operations `buildPackageCacheCopy` uses; a seam for the EXDEV/EPERM test. */
+export interface PackageCacheCopyFs {
+  readonly link: (from: string, to: string) => Promise<void>;
+  readonly copyFile: (from: string, to: string) => Promise<void>;
+}
+
+/**
+ * R552 (owner ruling 2026-10-21: one path, no two-path form): build a LethAL-owned package cache
+ * under `root`, `lethal-pkgcache-<random>`. It holds every `*.app` in `userCache`, subfolders
+ * included at the same relative path (alc searches them; measured on Linux alc), plus
+ * `controlSymbolPath` as `lethal-control.app` at the top. A leftover `lethal-control.app` (any
+ * case, any depth) is left out; a control package under another file name is not recognised.
+ * Each file goes in by hard link (one inode, never written), or by copy where linking fails with
+ * EXDEV (another volume) or EPERM (no hard links there); any other failure is an
+ * `ArtifactPrepareError` naming the file. `userCache` is only read. A throw removes the partial
+ * copy. The caller owns the result and removes it.
+ */
+export async function buildPackageCacheCopy(
+  userCache: string,
+  controlSymbolPath: string,
+  root: string = tmpdir(),
+  fs: PackageCacheCopyFs = { link, copyFile },
+): Promise<string> {
+  const copy = await mkdtemp(join(root, "lethal-pkgcache-"));
+  try {
+    for (const rel of await readdir(userCache, { recursive: true })) {
+      if (!rel.toLowerCase().endsWith(".app") || isControlSymbolName(rel)) continue;
+      const from = join(userCache, rel);
+      if (!(await stat(from)).isFile()) continue;
+      await mkdir(dirname(join(copy, rel)), { recursive: true });
+      await linkOrCopy(fs, from, join(copy, rel));
+    }
+    await linkOrCopy(fs, controlSymbolPath, join(copy, CONTROL_SYMBOL_FILE));
+  } catch (e) {
+    await removePackageCacheCopy(copy).catch(() => {});
+    throw e;
+  }
+  return copy;
+}
+
+/** R552: remove a `buildPackageCacheCopy` directory (Windows retry knobs, as elsewhere). */
+export async function removePackageCacheCopy(copy: string): Promise<void> {
+  await rm(copy, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+}
+
+async function linkOrCopy(fs: PackageCacheCopyFs, from: string, to: string): Promise<void> {
+  try {
+    await fs.link(from, to);
+    return;
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code !== "EXDEV" && code !== "EPERM") {
+      throw new ArtifactPrepareError(
+        `could not hard-link ${from} into LethAL's package-cache copy ${to}: ${describeThrown(e)}. Only EXDEV and EPERM fall back to a copy (R552).`,
+      );
+    }
+  }
+  try {
+    await fs.copyFile(from, to);
+  } catch (e) {
+    throw new ArtifactPrepareError(
+      `could not copy ${from} into LethAL's package-cache copy ${to}: ${describeThrown(e)} (R552).`,
+    );
+  }
 }
 
 export interface ArtifactCompilerConfig {
@@ -164,7 +305,7 @@ export class ArtifactCompiler {
     }
     const { appPath, sha256 } = await this.alcToContentAddressed(
       input.projectDir,
-      this.cfg.packageCachePath,
+      packageCacheListOf(this.cfg.packageCachePath, input.packageCacheCopyPath),
       input.artifactId,
     );
     return {
@@ -197,7 +338,11 @@ export class ArtifactCompiler {
     packageCachePath: string,
     name: string,
   ): Promise<{ readonly appPath: string; readonly sha256: string }> {
-    const scratch = toForwardSlashes(join(this.cfg.outputDir, `${name}.app`));
+    // R461: a scratch path this call alone owns, so the failure cleanup below can never delete a
+    // concurrent same-name call's output or an earlier artifact whose file name is `${name}.app`.
+    const scratch = toForwardSlashes(
+      join(this.cfg.outputDir, `${name}.${crypto.randomUUID()}.partial.app`),
+    );
     let res: { exitCode: number; stdout: string; stderr: string };
     try {
       const symbols = this.cfg.preprocessorSymbols ?? [];
@@ -215,9 +360,30 @@ export class ArtifactCompiler {
         `could not run alc (${this.cfg.alcPath}): ${describeThrown(err)}`,
       );
     }
+    try {
+      return await this.placeOutput(res, scratch, name);
+    } catch (err) {
+      // R461: a failed compile or placement can leave alc's partial output; removed best-effort,
+      // never masking the original error.
+      await rm(scratch, { force: true }).catch(() => {});
+      // R219: alc names a file by its flat name in the batch; one the batch renamed is named back.
+      if (err instanceof AlcCompileError) {
+        const note = await flatNamesNote(projectDir);
+        if (note !== undefined) throw new AlcCompileError(`${err.message}\n${note}`);
+      }
+      throw err;
+    }
+  }
+
+  private async placeOutput(
+    res: { exitCode: number; stdout: string; stderr: string },
+    scratch: string,
+    name: string,
+  ): Promise<{ readonly appPath: string; readonly sha256: string }> {
     if (res.exitCode !== 0) {
+      // R461: BOTH streams, labelled. `stderr || stdout` let a stderr warning hide a stdout error.
       throw new AlcCompileError(
-        `alc compile failed (exit ${res.exitCode}):\n${res.stderr || res.stdout}`,
+        `alc compile failed (exit ${res.exitCode}):\nstdout:\n${res.stdout}\nstderr:\n${res.stderr}`,
       );
     }
 

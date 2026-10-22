@@ -1,0 +1,18 @@
+{
+  "id": "7a1c0e52-5b8e-4d3a-9f60-2c7b8e1d0a02",
+  "name": "R586 Probe Tests",
+  "publisher": "LethAL R586",
+  "version": "1.0.0.0",
+  "brief": "R586 measurement probe tests (invented). Not a fixture.",
+  "dependencies": [
+    {
+      "id": "7a1c0e52-5b8e-4d3a-9f60-2c7b8e1d0a01",
+      "name": "R586 Probe App",
+      "publisher": "LethAL R586",
+      "version": "1.0.0.0"
+    }
+  ],
+  "idRanges": [{ "from": 50650, "to": 50699 }],
+  "runtime": "16.0",
+  "features": []
+}

@@ -22,7 +22,7 @@ exports[`buildReport output is stable across the event-stream refactor an event 
   "buildSymbols": [],
   "counts": {
     "deadlineExceeded": 1,
-    "errors": 4,
+    "errors": 5,
     "killed": 2,
     "knownSurvivors": 1,
     "noCoverage": 1,
@@ -56,7 +56,7 @@ exports[`buildReport output is stable across the event-stream refactor an event 
     "totalFiles": 13,
   },
   "groupedCalls": 0,
-  "identityScheme": 9,
+  "identityScheme": 40,
   "mutants": [
     {
       "astHash": "hashA1",
@@ -70,6 +70,7 @@ exports[`buildReport output is stable across the event-stream refactor an event 
       "endIndex": 1240,
       "file": "Al/Codeunit/Codeunit 50100 Sales Helper.al",
       "guardObserved": true,
+      "killReproduced": true,
       "killingTest": "Sales Helper Tests.ComputeTotalMultipliesQtyByPrice",
       "line": 45,
       "mutantCode": "M0001",
@@ -78,6 +79,7 @@ exports[`buildReport output is stable across the event-stream refactor an event 
       "operatorName": "lethal.void-method-call",
       "originalText": "TotalAmount := Quantity * UnitPrice;",
       "procedureName": "ComputeTotal",
+      "reproducedFailure": "Assert.AreEqual failed. Expected:<10> Actual:<0>",
       "runner": "fenced",
       "startIndex": 1200,
       "verdict": "killed",
@@ -244,6 +246,7 @@ exports[`buildReport output is stable across the event-stream refactor an event 
       "durationMs": 91234,
       "endIndex": 240,
       "file": "Al/Codeunit/Codeunit 50102 Sales Approval Mgt.al",
+      "killReproduced": true,
       "killingTest": "Sales Approval Tests.ApproveBatchSendsRequest",
       "line": 15,
       "mutantCode": "M0009",
@@ -342,6 +345,30 @@ exports[`buildReport output is stable across the event-stream refactor an event 
       "startIndex": 50,
       "triggerName": "OnInsert",
       "verdict": "survived",
+    },
+    {
+      "astHash": "r577-m0014",
+      "batchIndex": 2,
+      "cause": "kill-not-reproduced",
+      "codeunitName": "Sales Approval Log",
+      "coveringTests": [
+        "Sales Approval Tests.LogInsertsOnApproval",
+      ],
+      "durationMs": 0,
+      "endIndex": 90,
+      "failureNote": "kill-not-reproduced LogInsertsOnApproval: failed under the mutant (Assert.IsTrue failed.), passed with no mutant active, then passed when LethAL re-ran it under the mutant; the failure did not repeat, so it is not attributed to the mutant (R577). Re-run with --resume to measure it again.",
+      "file": "Al/Table/Table 50103 Sales Approval Log.al",
+      "line": 5,
+      "mutantCode": "M0014",
+      "mutatedText": "if not (Rec.Status = Rec.Status::New) then",
+      "operatorMajor": 1,
+      "operatorName": "lethal.negate-condition",
+      "originalText": "if Rec.Status = Rec.Status::New then",
+      "procedureName": "",
+      "runner": "fenced",
+      "startIndex": 50,
+      "triggerName": "OnInsert",
+      "verdict": "error",
     },
   ],
   "mutationScore": 0.42857142857142855,
@@ -456,6 +483,55 @@ exports[`buildReport output is stable across the event-stream refactor an event 
     "Sales Permission Tests": "Al/Codeunit/Codeunit 50113 Sales Permission Tests.al",
     "Sales Post Tests": "Al/Codeunit/Codeunit 50111 Sales Post Tests.al",
   },
+  "testMethods": [
+    {
+      "file": "Al/Codeunit/Codeunit 50112 Sales Approval Tests.al",
+      "name": "Sales Approval Tests.T1",
+    },
+    {
+      "file": "Al/Codeunit/Codeunit 50112 Sales Approval Tests.al",
+      "name": "Sales Approval Tests.T2",
+    },
+    {
+      "file": "Al/Codeunit/Codeunit 50112 Sales Approval Tests.al",
+      "name": "Sales Approval Tests.T3",
+    },
+    {
+      "file": "Al/Codeunit/Codeunit 50110 Sales Helper Tests.al",
+      "name": "Sales Helper Tests.T1",
+    },
+    {
+      "file": "Al/Codeunit/Codeunit 50110 Sales Helper Tests.al",
+      "name": "Sales Helper Tests.T2",
+    },
+    {
+      "file": "Al/Codeunit/Codeunit 50110 Sales Helper Tests.al",
+      "name": "Sales Helper Tests.T3",
+    },
+    {
+      "file": "Al/Codeunit/Codeunit 50113 Sales Permission Tests.al",
+      "name": "Sales Permission Tests.WritesToAppTable",
+    },
+    {
+      "file": "Al/Codeunit/Codeunit 50111 Sales Post Tests.al",
+      "name": "Sales Post Tests.T1",
+    },
+    {
+      "file": "Al/Codeunit/Codeunit 50111 Sales Post Tests.al",
+      "name": "Sales Post Tests.T2",
+    },
+    {
+      "file": "Al/Codeunit/Codeunit 50111 Sales Post Tests.al",
+      "name": "Sales Post Tests.T3",
+    },
+    {
+      "file": "Al/Codeunit/Codeunit 50111 Sales Post Tests.al",
+      "name": "Sales Post Tests.T4",
+    },
+    {
+      "name": "Sales UI Tests.OpensApprovalCard",
+    },
+  ],
   "testPageUnsupported": {
     "diagnosis": "this test opens a TestPage, which the fenced session cannot run: LethAL executes tests in a GuiAllowed=No, ClientType=ODataV4 session (R57/R58) and BC refuses to create a test service there, immediately (measured at 87 ms — a refusal, not a hang). This is a property of the EXECUTION PATH, not of your test: no change to the test or its declarations makes it run here. The affected tests are dropped from the green set, so mutants covered only by them are excluded from the score rather than scored against tests that never ran.",
     "tests": [
@@ -513,7 +589,7 @@ exports[`buildReport output is stable across the event-stream refactor an event 
         "clientType": "ODataV4",
         "guiAllowed": false,
         "runner": "fenced",
-        "verdictCount": 11,
+        "verdictCount": 12,
       },
       {
         "basis": "carried from run 41 by --resume: not measured in this run — the prior run's own report is the authority on how it was produced",
@@ -531,9 +607,9 @@ exports[`buildReport output is stable across the event-stream refactor an event 
       },
     ],
     "reliability": "narrowed-degraded",
-    "scoreDescribes": "7 scored mutant(s) in Al/Codeunit/Codeunit 50100 Sales Helper.al, Al/Codeunit/Codeunit 50101 Sales Post Mgt.al, Al/Codeunit/Codeunit 50102 Sales Approval Mgt.al, Al/Table/Table 50103 Sales Approval Log.al (4 of 13 .al files), with 3 of 12 baseline tests failing",
+    "scoreDescribes": "7 scored mutant(s) in Al/Codeunit/Codeunit 50100 Sales Helper.al, Al/Codeunit/Codeunit 50101 Sales Post Mgt.al, Al/Codeunit/Codeunit 50102 Sales Approval Mgt.al, Al/Table/Table 50103 Sales Approval Log.al (4 of 13 .al files); 2 file(s) not instrumentable, 9 site(s) not mutated, with 3 of 12 baseline tests failing",
     "scoredMutants": {
-      "recorded": 13,
+      "recorded": 14,
       "scored": 7,
     },
   },

@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import ts from "typescript";
+import ts from "@typescript/typescript6";
 
 /**
- * R-307 O2, source scan part 1. Every `FileRefusedError` is built at one of twelve named sites, and
+ * R-307 O2, source scan part 1. Every `FileRefusedError` is built at one of thirteen named sites
+ * (R470 added `compile.selector-name`), and
  * each construction says which one in a literal `site:` property, so a refusal can be traced to
  * the code that raised it and the PLAN/EMIT split can show no site moved or vanished. Parsed with
  * the TypeScript compiler, so a comment or a string cannot hit.
@@ -12,13 +13,14 @@ import ts from "typescript";
 
 const REPO = resolve(import.meta.dir, "../../..");
 
-/** The twelve sites, in the order the scan meets them (file path, then source order). */
+/** The thirteen sites, in the order the scan meets them (file path, then source order). */
 const PINNED_SITES = [
   "rewrite.overlap",
   "compile.latch-owner",
   "compile.latch-preamble-anchor",
   "compile.latch-split-var-anchor",
   "compile.latch-var-anchor",
+  "compile.selector-name",
   "compile.selector-var-keyword",
   "compile.selector-no-members",
   "compile.selector-no-last-member",
@@ -102,7 +104,7 @@ describe("R-307 O2: every FileRefusedError names its site", () => {
     expect(missing).toEqual([]);
   });
 
-  test("the site ids are exactly the twelve pinned ones, each once", () => {
+  test("the site ids are exactly the thirteen pinned ones, each once", () => {
     expect(result.constructions.map((c) => c.site)).toEqual(PINNED_SITES);
   });
 
@@ -152,7 +154,7 @@ const COMPOSITION_MODULES: Readonly<Record<string, readonly string[]>> = {
   "packages/schemata/src/project.ts": [
     "gapIdOf",
     "identityTupleOf",
-    "looseIdentityTupleOf",
+    "coarseIdentityTupleOf",
     "assignIdentityOrdinals",
     "identityOrdinalsOf",
     "identitySiteKey",
@@ -160,6 +162,7 @@ const COMPOSITION_MODULES: Readonly<Record<string, readonly string[]>> = {
     "identityEntriesOf",
     "numberIdentityOrdinals",
     "runIdentityOrdinals",
+    "runIdentityEntries",
     "clipMutationText",
     "lineStartsOf",
     "lineOfIndex",
@@ -180,6 +183,10 @@ const COMPOSITION_MODULES: Readonly<Record<string, readonly string[]>> = {
 
 /** Neither PLAN nor EMIT: parsing, tree walks, ids, selectors, barrels and shared constants. */
 const NEITHER_MODULES = [
+  /** Argument-list readers shared by the operators (R-452). */
+  "packages/engine/src/ast/arguments.ts",
+  /** A member's attribute run (R474: the member hash; runner's testpage-scan and test digest). */
+  "packages/engine/src/ast/attribute-run.ts",
   "packages/engine/src/ast/canonicalization.ts",
   "packages/engine/src/ast/hash.ts",
   "packages/engine/src/ast/mask.ts",
@@ -188,12 +195,16 @@ const NEITHER_MODULES = [
   "packages/engine/src/ast/parser-wasm.ts",
   "packages/engine/src/ast/parser.ts",
   "packages/engine/src/ast/preproc-arms.ts",
+  /** R502: the segments of a namespace-qualified name. */
+  "packages/engine/src/ast/qualified-name.ts",
   "packages/engine/src/ast/syntax-node.ts",
   "packages/engine/src/ast/tree-walks.ts",
   "packages/schemata/src/dedup.ts",
   /** The re-export barrel. No PLAN, EMIT or composition module may import it. */
   "packages/schemata/src/dispatch.ts",
   "packages/schemata/src/duplicate.ts",
+  /** R219: a batch file's flat name and the way back; refuses nothing per file. */
+  "packages/schemata/src/flat-names.ts",
   "packages/schemata/src/id-ranges.ts",
   "packages/schemata/src/ids.ts",
   "packages/schemata/src/index.ts",
@@ -281,9 +292,13 @@ interface ImportEdge {
   readonly typeOnly: boolean;
 }
 
-/** Every import and re-export of `file` that resolves inside the repo, one edge per name. */
-function importsOf(file: string): ImportEdge[] {
-  const sf = parse(file);
+/**
+ * Every import and re-export of `file`, one edge per name. A package outside the scan (`node:fs`)
+ * gives an edge whose `origin` is `external:<specifier>` (R442), so the EMIT allow-list judges it
+ * like any other module. A dynamic `import(...)` whose target is not a string literal or a
+ * no-substitution template gives an edge with origin `unclassified-dynamic-import`.
+ */
+function importsOf(file: string, sf: ts.SourceFile = parse(file)): ImportEdge[] {
   const edges: ImportEdge[] = [];
   const at = (n: ts.Node): string =>
     `${file}:${sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1}`;
@@ -293,46 +308,47 @@ function importsOf(file: string): ImportEdge[] {
       n.moduleSpecifier !== undefined &&
       ts.isStringLiteral(n.moduleSpecifier)
     ) {
-      const direct = resolveSpecifier(file, n.moduleSpecifier.text);
-      if (direct !== undefined) {
-        const wholeType = ts.isImportDeclaration(n)
-          ? n.importClause?.isTypeOnly === true
-          : n.isTypeOnly;
-        const named = ts.isImportDeclaration(n) ? n.importClause?.namedBindings : n.exportClause;
-        const names: { name: string; typeOnly: boolean }[] = [];
-        let whole = false;
-        if (ts.isImportDeclaration(n)) {
-          if (n.importClause === undefined)
-            whole = true; // a side-effect import runs the module
-          else if (n.importClause.name !== undefined) whole = true; // a default import
-        }
-        if (named !== undefined && (ts.isNamedImports(named) || ts.isNamedExports(named))) {
-          for (const el of named.elements)
-            names.push({
-              name: el.propertyName?.text ?? el.name.text,
-              typeOnly: wholeType || el.isTypeOnly,
-            });
-        } else if (named !== undefined || ts.isExportDeclaration(n)) {
-          whole = true; // `* as ns` or `export *`
-        }
-        if (whole) edges.push({ where: at(n), direct, origin: direct, typeOnly: wholeType });
-        for (const x of names)
-          edges.push({
-            where: at(n),
-            direct,
-            origin: originOf(direct, x.name),
-            typeOnly: x.typeOnly,
-          });
+      const spec = n.moduleSpecifier.text;
+      const resolved = resolveSpecifier(file, spec);
+      const direct = resolved ?? `external:${spec}`;
+      const wholeType = ts.isImportDeclaration(n)
+        ? n.importClause?.isTypeOnly === true
+        : n.isTypeOnly;
+      const named = ts.isImportDeclaration(n) ? n.importClause?.namedBindings : n.exportClause;
+      const names: { name: string; typeOnly: boolean }[] = [];
+      let whole = false;
+      if (ts.isImportDeclaration(n)) {
+        if (n.importClause === undefined)
+          whole = true; // a side-effect import runs the module
+        else if (n.importClause.name !== undefined) whole = true; // a default import
       }
-    } else if (
-      ts.isCallExpression(n) &&
-      n.expression.kind === ts.SyntaxKind.ImportKeyword &&
-      n.arguments[0] !== undefined &&
-      ts.isStringLiteral(n.arguments[0])
-    ) {
-      const direct = resolveSpecifier(file, n.arguments[0].text);
-      if (direct !== undefined)
-        edges.push({ where: at(n), direct, origin: direct, typeOnly: false });
+      if (named !== undefined && (ts.isNamedImports(named) || ts.isNamedExports(named))) {
+        // `import {} from "x"` / `export {} from "x"` still load the module: a whole-module edge.
+        if (named.elements.length === 0) whole = true;
+        // `import {} from "x"` / `export {} from "x"` still load the module: a whole-module edge.
+        for (const el of named.elements)
+          names.push({
+            name: el.propertyName?.text ?? el.name.text,
+            typeOnly: wholeType || el.isTypeOnly,
+          });
+      } else if (named !== undefined || ts.isExportDeclaration(n)) {
+        whole = true; // `* as ns` or `export *`
+      }
+      if (whole) edges.push({ where: at(n), direct, origin: direct, typeOnly: wholeType });
+      for (const x of names)
+        edges.push({
+          where: at(n),
+          direct,
+          origin: resolved === undefined ? direct : originOf(resolved, x.name),
+          typeOnly: x.typeOnly,
+        });
+    } else if (ts.isCallExpression(n) && n.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      const arg = n.arguments[0];
+      const direct =
+        arg !== undefined && ts.isStringLiteralLike(arg)
+          ? (resolveSpecifier(file, arg.text) ?? `external:${arg.text}`)
+          : "unclassified-dynamic-import";
+      edges.push({ where: at(n), direct, origin: direct, typeOnly: false });
     }
     ts.forEachChild(n, visit);
   };
@@ -417,17 +433,36 @@ describe("R-307 O7: the PLAN/EMIT boundary", () => {
     expect(bad).toEqual([]);
   });
 
+  // Allowed: other EMIT modules (they cannot refuse, by the rules above) and reach-latch.ts
+  // (one pure constant, REACH_LATCH, read by both halves). Nothing else is needed: a composition
+  // such as printWithRewrites runs planEdits and can refuse, and a "neither" module may throw.
+  const allowed = new Set([...EMIT_MODULES, "packages/schemata/src/reach-latch.ts"]);
+  const allowListViolations = (file: string, sf?: ts.SourceFile): string[] =>
+    importsOf(file, sf)
+      .filter((e) => !e.typeOnly && !allowed.has(e.origin))
+      .map((e) => `${e.where} EMIT value import of ${e.origin} is not on the allow-list`);
+
   test("EMIT value imports come only from the allow-list; everything else is import type", () => {
-    // Allowed: other EMIT modules (they cannot refuse, by the rules above) and reach-latch.ts
-    // (one pure constant, REACH_LATCH, read by both halves). Nothing else is needed: a composition
-    // such as printWithRewrites runs planEdits and can refuse, and a "neither" module may throw.
-    const allowed = new Set([...EMIT_MODULES, "packages/schemata/src/reach-latch.ts"]);
-    const bad: string[] = [];
-    for (const f of EMIT_MODULES)
-      for (const e of importsOf(f))
-        if (!e.typeOnly && !allowed.has(e.origin))
-          bad.push(`${e.where} EMIT value import of ${e.origin} is not on the allow-list`);
-    expect(bad).toEqual([]);
+    expect(EMIT_MODULES.flatMap((f) => allowListViolations(f))).toEqual([]);
+  });
+
+  describe("the allow-list check rejects synthetic EMIT sources (R-442 regression plants)", () => {
+    const host = EMIT_MODULES[0] ?? "";
+    const run = (text: string): string[] =>
+      allowListViolations(host, ts.createSourceFile(host, text, ts.ScriptTarget.Latest, true));
+    test.each([
+      ["static value import", 'import { readFileSync } from "node:fs";'],
+      ["empty named import", 'import {} from "node:fs";'],
+      ["empty named re-export", 'export {} from "node:fs";'],
+      ["template-literal dynamic import", "const m = import(`node:fs`);"],
+      ["concatenated dynamic import", 'const m = import("node:" + "fs");'],
+    ])("rejects %s", (_name, text) => {
+      expect(run(text)).toHaveLength(1);
+    });
+    test("accepts import type", () => {
+      expect(run('import type { X } from "node:fs";')).toEqual([]);
+      expect(run('import type {} from "node:fs";')).toEqual([]);
+    });
   });
 
   test("EMIT modules use no ??, no ||, no .get( and no .find( (total lookups, no fallback)", () => {

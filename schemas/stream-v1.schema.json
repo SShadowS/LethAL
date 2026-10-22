@@ -50,6 +50,14 @@
             "authoritative"
           ],
           "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "bcdev",
+                "al-runner",
+                "al-runner-v3"
+              ]
+            },
             "coverage": {
               "type": "string",
               "enum": [
@@ -230,6 +238,9 @@
         },
         "retryStranded": {
           "type": "boolean"
+        },
+        "carryRefused": {
+          "type": "string"
         },
         "seq": {
           "type": "number"
@@ -500,6 +511,122 @@
             }
           }
         },
+        "hangRefusedFiles": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "file",
+              "kinds",
+              "sites"
+            ],
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "kinds": {
+                "type": "string"
+              },
+              "sites": {
+                "type": "number"
+              }
+            }
+          }
+        },
+        "sourceSha256": {
+          "type": "string"
+        },
+        "numberingDigest": {
+          "type": "string"
+        },
+        "twinSites": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "carryHidden": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tuples",
+            "files"
+          ],
+          "properties": {
+            "tuples": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "files": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "dependencyReportSources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "outcome"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "report",
+                  "extension",
+                  "package"
+                ]
+              },
+              "report": {
+                "type": "string"
+              },
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "parse-damaged",
+                  "not-found",
+                  "ambiguous",
+                  "no-source",
+                  "unwrap-failed",
+                  "no-symbols",
+                  "unreadable",
+                  "base-not-found"
+                ]
+              },
+              "package": {
+                "type": "string"
+              },
+              "appId": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              },
+              "entry": {
+                "type": "string"
+              },
+              "entrySha256": {
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "dependencySourceSha256": {
+          "type": "string"
+        },
         "seq": {
           "type": "number"
         }
@@ -539,6 +666,9 @@
               },
               "file": {
                 "type": "string"
+              },
+              "line": {
+                "type": "number"
               }
             }
           }
@@ -726,6 +856,9 @@
               },
               "failureMessage": {
                 "type": "string"
+              },
+              "durationMs": {
+                "type": "number"
               }
             }
           }
@@ -882,6 +1015,33 @@
       "additionalProperties": false,
       "required": [
         "type",
+        "selector",
+        "seq"
+      ],
+      "properties": {
+        "type": {
+          "const": "al-runner-test-selector"
+        },
+        "selector": {
+          "type": "string",
+          "enum": [
+            "exact",
+            "substring-with-excludes"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "seq": {
+          "type": "number"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
         "mutant",
         "verdict",
         "batchIndex",
@@ -991,6 +1151,9 @@
             "identityOrdinal": {
               "type": "number"
             },
+            "memberHash": {
+              "type": "string"
+            },
             "originalText": {
               "type": "string"
             },
@@ -1040,10 +1203,16 @@
             "group-coverage-incomplete",
             "op-stopped",
             "stopped-after-completion",
+            "stop-outcome-unconfirmed",
             "session-reused",
             "warm-prefix-unstable",
             "warm-timeout-unconfirmed",
-            "warm-confirmation-incomplete"
+            "warm-confirmation-incomplete",
+            "reused-budget-stale",
+            "timeout-unconfirmed",
+            "runner-test-error",
+            "runner-refused",
+            "kill-not-reproduced"
           ]
         },
         "killingTestFailure": {
@@ -1051,6 +1220,12 @@
         },
         "killPosition": {
           "type": "number"
+        },
+        "killReproduced": {
+          "const": true
+        },
+        "reproducedFailure": {
+          "type": "string"
         },
         "coveringTests": {
           "type": "array",
@@ -1214,6 +1389,9 @@
             "identityOrdinal": {
               "type": "number"
             },
+            "memberHash": {
+              "type": "string"
+            },
             "originalText": {
               "type": "string"
             },
@@ -1259,6 +1437,12 @@
         },
         "killPosition": {
           "type": "number"
+        },
+        "killReproduced": {
+          "const": true
+        },
+        "reproducedFailure": {
+          "type": "string"
         },
         "coveringTests": {
           "type": "array",
@@ -1397,6 +1581,9 @@
             },
             "identityOrdinal": {
               "type": "number"
+            },
+            "memberHash": {
+              "type": "string"
             },
             "originalText": {
               "type": "string"

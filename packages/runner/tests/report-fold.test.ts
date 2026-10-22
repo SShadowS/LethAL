@@ -18,7 +18,13 @@ import { TESTPAGE_REFUSED_DIAGNOSIS, testPageNotRunMessage } from "../src/testpa
  */
 
 const STATICS: FoldStatics = {
-  caps: { authoritative: true, coverage: "procedure", deploy: "publish", isolation: "session" },
+  caps: {
+    kind: "bcdev",
+    authoritative: true,
+    coverage: "procedure",
+    deploy: "publish",
+    isolation: "session",
+  },
   buildSymbols: [],
 };
 
@@ -1128,5 +1134,20 @@ describe("foldEvents — a stream written before R307", () => {
     expect(report.validity.caveats).toContain("files-refused");
     expect(report.validity.reliability).toMatch(/^narrowed/);
     expect(report.validity.scoreDescribes).toContain("; 1 file(s) refused, 3 site(s) not mutated");
+  });
+
+  test("R447: a hangRefusedFiles entry folds to its row; an absent list folds like an empty one", () => {
+    expect(JSON.stringify(buildReport(STATICS, generated({})))).toBe(
+      JSON.stringify(buildReport(STATICS, generated({ hangRefusedFiles: [] }))),
+    );
+    const report = buildReport(
+      STATICS,
+      generated({
+        hangRefusedFiles: [{ file: "src/Hang.al", kinds: "codeunit_declaration", sites: 2 }],
+      }),
+    );
+    expect(report.excludedSites?.files).toEqual([
+      { file: "src/Hang.al", kinds: "codeunit_declaration", sites: 2, reason: "hang-refused" },
+    ]);
   });
 });

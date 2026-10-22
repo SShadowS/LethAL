@@ -11,7 +11,7 @@
       "to": 79909
     }
   ],
-  "runtime": "13.0",
+  "runtime": "17.0",
   "dependencies": [],
   "features": [],
   "resourceExposurePolicy": {
