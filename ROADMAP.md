@@ -274,7 +274,7 @@ that ordering is the priority.
 - **R575** · R531 misses two ways the loop's set can be consumed: `this.P(R)` in the same object, and a second variable of the same SingleInstance codeunit · [R575.md](docs/roadmap/R575.md) · open, filed 2026-10-10
 - **R576** · R571's cross-object hop limits: a helper's body is not followed, and the codeunit's set is matched by global name only · [R576.md](docs/roadmap/R576.md) · open, filed 2026-10-10
 - **R582** · Switch R577's kill-reproduction rule on for the BC backend (bcdev): a flaky test is a false kill there too, and the switch moves every BC gate's pinned call counters · [R582.md](docs/roadmap/R582.md) · done (7a8ff82c)
-- **R585** · --skip-known-survivors reads a --tests-only run's survivors as survivors under the full suite · [R585.md](docs/roadmap/R585.md) · done (91683742)
+- **R585** · --skip-known-survivors reads a --tests-only run's survivors as survivors under the full suite · [R585.md](docs/roadmap/R585.md) · done (db38591b)
 - **R592** · History has no backend check: a bcdev run and an al-runner run that both ran coverage `none` are kept apart only incidentally · [R592.md](docs/roadmap/R592.md) · open
 - **R604** · Iterator hangs master already deploys: a split real-table queue, a cursor reset through a wrapper, writers past 4 calls, and aliased state (Copy, RecordRef, var-callee and with aliases) · [R604.md](docs/roadmap/R604.md) · open, filed 2026-10-21
 - **R618** · No BC gate exercises the lend order with an actual lend: every BC itest starts from an empty store, and none uses --resume, --resume-run or --skip-known-survivors · [R618.md](docs/roadmap/R618.md) · done (7084eece)
