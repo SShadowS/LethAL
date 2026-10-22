@@ -5,7 +5,7 @@ import { listPackageEntries, readPackageEntry } from "./app-package";
 import { compareAppVersions, confirmedDowngradeRefusal } from "./app-version";
 import type { PublishIdentity } from "./app-version";
 import { AlcCompileError, type ArtifactCompiler } from "./artifact";
-import type { BoundArtifact } from "./backend";
+import { type BoundArtifact, type PublishedPackageRead, isUnread } from "./backend";
 import { hashPackage } from "./baseline-snapshot";
 import {
   type DeploymentVerification,
@@ -254,13 +254,13 @@ export interface PublishedTestApp {
 }
 
 /**
- * The server's package for this app: bytes, `null` when the read did not answer (never published,
- * timeout, refused), `undefined` when this configuration cannot form the request at all.
+ * The server's package for this app: bytes, `{ unread }` naming why the read did not answer (never
+ * published, timeout, refused; R630), `undefined` when this configuration cannot form the request.
  */
 export type ReadPublished = (app: {
   readonly publisher: string;
   readonly name: string;
-}) => Promise<Uint8Array | null | undefined>;
+}) => Promise<PublishedPackageRead>;
 
 function versionOf(bytes: Uint8Array): string {
   try {
@@ -317,14 +317,19 @@ export async function publishTestApp(
     );
   }
   // R248: a caller of publishTestApp always has a resident test app already (verify's baseline
-  // just ran it; itest:testapp publishes over one too), so a pre-fence `null` almost always means
-  // the dev-endpoint read credentials are wrong, not "never published". Refuse before the fence
-  // (no marker claimed) rather than let the publish go ahead and land on publish-indeterminate,
-  // which would strand the container needing a recycle over a config mistake.
-  if (before === null) {
+  // just ran it; itest:testapp publishes over one too). Refuse before the fence (no marker
+  // claimed) rather than let the publish go ahead and land on publish-indeterminate, which would
+  // strand the container needing a recycle over a config mistake. R630: the cause is named, and
+  // the credentials hint follows only a refused login, the never-published one only a 404.
+  if (isUnread(before)) {
+    const hint = /^HTTP 40[13]\b/.test(before.unread)
+      ? ": check the dev-endpoint read credentials (BC_DEV_USER / BC_DEV_PASSWORD)"
+      : /^HTTP 404\b/.test(before.unread)
+        ? ": check that the app has ever been published, and the dev-endpoint path"
+        : "";
     throw new TestAppError(
       "resident-unreadable",
-      `the resident ${app.name} package could not be read before publishing: check the dev-endpoint read credentials (BC_DEV_USER / BC_DEV_PASSWORD), or that the app has ever been published`,
+      `the resident ${app.name} package could not be read before publishing (${before.unread})${hint}`,
     );
   }
   const resident = versionOf(before);
@@ -349,7 +354,7 @@ export async function publishTestApp(
       afterBytes === undefined
         ? {
             status: "unavailable",
-            detail: "the server's package could not be read back after the publish",
+            detail: `the server's package could not be read back after the publish${isUnread(after) ? ` (${after.unread})` : ""}`,
           }
         : hashPackage(afterBytes) === app.sha256
           ? { status: "accepted" }
@@ -388,8 +393,8 @@ export async function publishTestApp(
 /**
  * The target's rule (decidePublishOutcome), with two stricter cases for a FAILED exit (ruling 1,
  * review r1). `publishError` is altool's failure text, `undefined` on exit 0.
- * - An UNAVAILABLE read-back is unknown, never failed: `null` from fetchPublishedAppPackage is a
- *   timeout or a refused connection, which cannot show the publish did not land.
+ * - An UNAVAILABLE read-back is unknown, never failed: an `{ unread }` from fetchPublishedAppPackage
+ *   is a timeout or a refused connection, which cannot show the publish did not land.
  * - A READABLE read-back that is not our bytes is `failed` only when the failure text itself
  *   proves BC refused THIS publish (BC's downgrade sentence naming this app, publisher and
  *   version, read by `confirmedDowngradeRefusal`, R250).

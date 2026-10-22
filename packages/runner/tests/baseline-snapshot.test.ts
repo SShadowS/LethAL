@@ -14,6 +14,7 @@ import {
 import type { BaselineSnapshot } from "../src/baseline-snapshot";
 import { ResultsStore } from "../src/store";
 import { scratchDirs } from "./helpers/scratch";
+import { HTTP_500 } from "./helpers/unread";
 
 const scratch = scratchDirs();
 
@@ -144,11 +145,12 @@ describe("testAppHashFor (R192)", () => {
     expect(h).toBe(`package:${hashPackage(bytes)}`);
   });
 
-  test("a failed package read (null) means NO hash, never a fall-back to the source", async () => {
+  test("a failed package read means NO hash, never a fall-back to the source, and keeps its cause", async () => {
     // A read that failed says nothing about the server's app; hashing the source instead would let
-    // a resume reuse a baseline measured against a package this run cannot see.
+    // a resume reuse a baseline measured against a package this run cannot see. R630 (review I1):
+    // the failed read comes back as itself, so a refusal can name why.
     const dir = tree({ "T.Codeunit.al": "codeunit 9 T { }" });
-    expect(await testAppHashFor(async () => null, dir)).toBeUndefined();
+    expect(await testAppHashFor(async () => HTTP_500, dir)).toEqual(HTTP_500);
   });
 
   test("a backend with no package concept (undefined) falls back to the test source tree", async () => {

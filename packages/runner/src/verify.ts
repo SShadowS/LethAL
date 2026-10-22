@@ -1261,7 +1261,9 @@ export async function verifyDependencyFingerprint(
   const microsoft = backend.microsoftMode();
   return dependencyFingerprint(
     await readAppJsonInputs(testDir),
-    fetchPackage === undefined ? async () => null : publishedPackageReader(fetchPackage),
+    fetchPackage === undefined
+      ? async () => ({ unread: "this backend cannot read published packages" })
+      : publishedPackageReader(fetchPackage),
     microsoft,
     await targetOf(projectPath),
   );
