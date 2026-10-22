@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { buildFakeAppWithEntries } from "../packages/runner/tests/helpers/fake-app.ts";
 import {
   type AppItem,
@@ -259,13 +259,17 @@ describe("R663: bc-demo-setup", () => {
 });
 
 describe("R663b: kraken mode is unchanged", () => {
-  // Captured from master de7999fc's bc-demo-setup.ts with these same fakes (only the checkout
-  // path, `<REPO>`, differs between checkouts).
+  // Captured on Linux from master de7999fc's bc-demo-setup.ts with these same fakes. Only the two
+  // `join`-built paths differ between checkouts and platforms (backslashes on Windows), so each is
+  // substituted JSON-escaped, from the same `join` the script uses.
+  const esc = (s: string) => JSON.stringify(s).slice(1, -1);
   const pin = JSON.parse(
-    readFileSync(join(import.meta.dir, "testdata", "bc-demo-kraken-pin.json"), "utf8").replaceAll(
-      "<REPO>",
-      REPO,
-    ),
+    readFileSync(join(import.meta.dir, "testdata", "bc-demo-kraken-pin.json"), "utf8")
+      .replaceAll("<REPO>/examples/gift-card/lethal.config.demo.json", esc(DEMO_CONFIG))
+      .replaceAll(
+        "/coord/cache/bc-symbols/bc-demo/<build>-<hash8>",
+        esc(join(SYMBOL_CACHE_ROOT, "bc-demo", "<build>-<hash8>")),
+      ),
   ) as Record<string, unknown>;
   const cases: [string, string[], Partial<DemoDeps>][] = [
     ["ok", [], {}],
@@ -299,11 +303,19 @@ describe("R663b: kraken mode is unchanged", () => {
 
 const FORBIDDEN = ["/coord", "/home/dev", "/work/tools"];
 const guard = (p: string) => {
-  if (FORBIDDEN.some((f) => p === f || p.startsWith(`${f}/`)))
+  // `join` gives backslashes on Windows: compare in POSIX form so the guard fires there too.
+  const q = p.replaceAll("\\", "/");
+  if (FORBIDDEN.some((f) => q === f || q.startsWith(`${f}/`)))
     throw new Error(`laptop mode touched ${p}`);
 };
-const HOME = "/home/laptop";
-const EXT_ALC = `${HOME}/.vscode/extensions/ms-dynamics-smb.al-18.0.1/bin/linux/alc`;
+// Every fake path is built with the same `join` the code uses, so the keys match on Windows too.
+const EXE = process.platform === "win32" ? ".exe" : "";
+const HOME = join("/home", "laptop");
+const EXT_DIR = join(HOME, ".vscode", "extensions");
+const EXT_BIN = join(EXT_DIR, "ms-dynamics-smb.al-18.0.1", "bin", "linux");
+const EXT_ALC = join(EXT_BIN, `alc${EXE}`);
+const OPT_AL = join("/opt", "al");
+const OPT_MCP = join("/opt", "mcp");
 const CONTROL_BYTES = Buffer.from("pinned control");
 const LOGIN_FILE = "BC_DEV_USER=BCRUNNER\nBC_DEV_PASSWORD=from-the-file!\n";
 
@@ -356,16 +368,16 @@ function fakeIo(over: IoOver = {}) {
     home: HOME,
     alTools: async (dir) => {
       guard(dir);
-      return over.noExtension === true || dir !== `${HOME}/.vscode/extensions`
+      return over.noExtension === true || dir !== EXT_DIR
         ? undefined
-        : { alcPath: EXT_ALC, altoolPath: `${EXT_ALC.slice(0, -3)}altool` };
+        : { alcPath: EXT_ALC, altoolPath: join(EXT_BIN, `altool${EXE}`) };
     },
   };
   return { io, read };
 }
 
 const SHA = sha256Of(CONTROL_BYTES);
-const inCheckout = (p: string) => p.startsWith(`${REPO}/`);
+const inCheckout = (p: string) => p.startsWith(`${REPO}${sep}`);
 
 describe("R663b laptop mode: paths", () => {
   test("every default resolves inside the checkout or the laptop user's home, never /coord", async () => {
@@ -378,7 +390,7 @@ describe("R663b laptop mode: paths", () => {
     expect(t.alcPath).toBe(EXT_ALC);
     for (const p of [t.symbolRoot, t.controlPath, LAPTOP_BC_DEV_MCP, NATIVE_PARSER, LOCAL_LOGIN])
       expect({ p, inside: inCheckout(p) }).toEqual({ p, inside: true });
-    expect(LAPTOP_SYMBOLS.startsWith(`${LOCAL_CACHE}/`)).toBe(true);
+    expect(LAPTOP_SYMBOLS.startsWith(`${LOCAL_CACHE}${sep}`)).toBe(true);
   });
 
   test("the login file and the cache are git-ignored in this repository", () => {
@@ -400,17 +412,20 @@ describe("R663b laptop mode: paths", () => {
 
   test("LETHAL_ALC_DIR and LETHAL_BC_DEV_MCP override the defaults", async () => {
     const { io } = fakeIo({
-      env: { LETHAL_ALC_DIR: "/opt/al", LETHAL_BC_DEV_MCP: "/opt/mcp" },
+      env: { LETHAL_ALC_DIR: OPT_AL, LETHAL_BC_DEV_MCP: OPT_MCP },
       files: {
-        "/opt/al/alc": "",
-        "/opt/al/altool": "",
-        "/opt/mcp/package.json": '{"bin":{"bc-dev-mcp":"dist/index.js"}}',
-        "/opt/mcp/dist/index.js": "",
+        [join(OPT_AL, `alc${EXE}`)]: "",
+        [join(OPT_AL, `altool${EXE}`)]: "",
+        [join(OPT_MCP, "package.json")]: '{"bin":{"bc-dev-mcp":"dist/index.js"}}',
+        [join(OPT_MCP, "dist", "index.js")]: "",
       },
     });
     const t = await laptopTools(io, SHA);
-    expect([t.alcPath, t.altoolPath]).toEqual(["/opt/al/alc", "/opt/al/altool"]);
-    expect(t.mcpCommand).toEqual(["node", "/opt/mcp/dist/index.js"]);
+    expect([t.alcPath, t.altoolPath]).toEqual([
+      join(OPT_AL, `alc${EXE}`),
+      join(OPT_AL, `altool${EXE}`),
+    ]);
+    expect(t.mcpCommand).toEqual(["node", join(OPT_MCP, "dist", "index.js")]);
   });
 });
 
