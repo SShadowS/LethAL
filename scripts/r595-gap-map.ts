@@ -37,9 +37,9 @@ try {
     targetAppId: "00000000-0000-0000-0000-000000000000",
     operatorTiers,
   });
-  const manifest = JSON.parse(await readFile(join(targetDir, "mutant-manifest.json"), "utf8")) as {
-    mutants?: Entry[];
-  } & Entry[];
+  const manifest = JSON.parse(await readFile(join(targetDir, "mutant-manifest.json"), "utf8")) as
+    | { mutants?: Entry[] }
+    | Entry[];
   const entries: Entry[] = Array.isArray(manifest) ? manifest : (manifest.mutants ?? []);
   if (entries.length === 0) throw new Error(`${fixture}: the manifest has no mutants`);
   const gaps = new Map<string, string[]>();
