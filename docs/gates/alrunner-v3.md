@@ -83,8 +83,9 @@ The legs:
     soon as it is known.
   - X (d), since r11 ([[R649]]): `Probe Sleeper` sleeps 5 s, not 600 s. BC waits out a Sleep (bc2, R649 case 2: a
     5 s Sleep is green in 5095 ms), and a 600 s one never finishes under the 120 s baseline budget on BC or on a
-    v3 build that counts Sleep. r5's table is the one pass on alpha.2 and on edge; on edge the leg reads `held`
-    only through X (b). The three 600 s sibling tests stay; on edge they are baseline `timeout` rows, not refusals.
+    v3 build that counts Sleep. r5's table is the one pass on alpha.2 and on edge (edge: predicted by r11 (d3));
+    on edge the leg reads `held` only through X (b). The three 600 s sibling tests stay; on edge they are
+    baseline `timeout` rows, not refusals.
 
 ## The pin and the update gate
 

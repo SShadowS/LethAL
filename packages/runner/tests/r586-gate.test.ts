@@ -445,9 +445,10 @@ describe("R649 r11 (e): X (d)'s Sleeper sleeps 5 s and moves no line", () => {
     const src = await readFile(SLEEPER, "utf8");
     expect(sleepCallLines(src)).toEqual([12]);
     const ms = Number(/^\s*Sleep\((\d+)\);$/.exec(src.split("\n")[11]?.trimEnd() ?? "")?.[1]);
-    expect(ms).toBe(5000);
+    // The budgets first, so a revert to 600000 reaches them too.
     expect(ms).toBeLessThan(BASELINE_TIMEOUT_DEFAULT);
     expect(ms).toBeLessThan(MIN_MUTANT_BUDGET_MS);
+    expect(ms).toBe(5000);
   });
 
   test("X-r11c: legXSleep's scratch dirs instrument to arms 25/31/37/43 and an index of 4 + 5", async () => {
@@ -500,7 +501,11 @@ describe("R649 r11 (e): X (d)'s Sleeper sleeps 5 s and moves no line", () => {
     const armOf = (line: number) =>
       /Active\('(M\d{4})'\)/.exec(inst[line - 3] ?? "")?.[1] ?? "else";
     expect(sleeps.map(armOf)).toEqual(["M0003", "M0005", "M0004", "else"]);
-    // The very check the leg makes through `sleepIndexSize()`.
+    // The leg's check through `sleepIndexSize()`. Its target side, `active/`, also holds probe-app's
+    // uninstrumented files; none has a Sleep, so `out` alone gives the same count.
+    for (const f of await readdir(join(app, "src")))
+      if (f !== "ProbeSleeper.Codeunit.al")
+        expect(sleepCallLines(await readFile(join(app, "src", f), "utf8")), f).toEqual([]);
     expect((await buildSleepIndex(out, tests)).sizes).toEqual({ target: 4, test: 5 });
   }, 60_000);
 });

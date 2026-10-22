@@ -1,7 +1,7 @@
 # R649: BC's own Sleep under LethAL's baseline call
 
-Not run yet. The driver is `scripts/r649-bc-probe/drive.ts`. It writes `<server>-probe.json` here.
-The pre-commitment is `/coord/handoff/R-649/precommitment-draft.md` until it is committed.
+Run on bc2 on 2026-10-22 (results below). The driver is `scripts/r649-bc-probe/drive.ts`. It writes
+`<server>-probe.json` here. The pre-commitment is `2026-10-22-r649-bc-sleep-probe-precommitment.md` (fcb16407).
 
 ## Run
 
