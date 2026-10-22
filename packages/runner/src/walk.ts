@@ -145,8 +145,9 @@ export const reachLimits = { maxFolders: 50_000 };
 export const reachStats = { foldersScanned: 0 };
 
 const REACHES_AL = ", and it reaches a .al file, which alc compiles even there";
+// R640: the budget is the walk's, shared by every link, so the text never says this link holds it.
 const tooMany = (cap: number): string =>
-  `, and LethAL could not prove it reaches no .al file (it holds more than ${cap} folders)`;
+  `, and LethAL could not prove it reaches no .al file (the links in this walk hold more than ${cap} folders in all; the limit was reached while scanning this one)`;
 
 /**
  * M1 (and review r2 N1/N2 for cache links): why a link (by its own path) must refuse: it is a `.al`
