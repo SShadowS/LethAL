@@ -1,4 +1,4 @@
-import { readFile, readdir } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   ALNodeKind,
@@ -17,6 +17,7 @@ import {
 } from "@lethal/engine";
 import { FLAT_NAMES_FILENAME, displayPathsOf } from "@lethal/schemata";
 import type { BuildBackend } from "./preprocessor-symbols";
+import { walkFiles } from "./walk";
 
 /**
  * R58: maps a BC `Code Coverage` row's `(objectType, objectId, lineNo)` to the procedure that owns
@@ -1279,10 +1280,11 @@ export interface AlSource {
 
 /** Every `.al` under `projectDir`, recursively, sorted by relative path: what `buildLineMap` parses. */
 export async function readAlSources(projectDir: string): Promise<AlSource[]> {
-  const files = (await readdir(projectDir, { recursive: true }))
-    .map((e) => e.toString())
-    .filter((e) => e.toLowerCase().endsWith(".al"))
-    .sort();
+  // R631: only ever the LethAL-built instrumented dir, which holds no link; one would be skipped
+  // and announced (`onSkippedLinks`), never followed.
+  const files = (await walkFiles(projectDir, { links: "skip" })).files.filter((e) =>
+    e.toLowerCase().endsWith(".al"),
+  );
   // R219: a batch file given a disambiguated flat name is named by its project path, since the
   // path is only ever quoted (refusals), never read again.
   const display = await batchDisplayPaths(projectDir);

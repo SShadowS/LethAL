@@ -25,9 +25,10 @@
  * ago is not seen (git's racy-clean assumption), and "settled" assumes the filesystem's timestamps
  * follow this machine's clock (a share whose clock runs behind can settle a file too early).
  */
-import { readFile, readdir, stat } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { readFile, stat } from "node:fs/promises";
+import { basename, join, relative } from "node:path";
 import { isProjectResource, outputPathKey } from "./orchestrator";
+import { ProjectSymlinkRefusedError, walkFiles } from "./walk";
 
 /** Thrown, never turned into a verdict: the session stops, and `--resume` continues it. */
 export class ProjectChangedDuringRunError extends Error {
@@ -92,16 +93,25 @@ export function watchProjectInputs(
   /** The stat at which an input was last seen equal to `expected`. */
   const seen = new Map<string, Seen>();
 
+  /**
+   * R631 review r2 N1/N2: the SAME `"refuse"` walk the run's snapshot came from, so a layout that
+   * passed at the start lists the same files here (no phantom `removed`), and any link it would
+   * now refuse (a new link, or an excused or cache link that now reaches a `.al`) is drift (r3 B),
+   * not a new error. A refuse walk never calls `onSkippedLinks`, so drift is never the tripwire (L2).
+   */
   const inputs = async (): Promise<string[]> => {
-    const entries = await readdir(projectDir, { recursive: true, withFileTypes: true });
+    const walk = await walkFiles(projectDir, { links: "refuse" }).catch((err: unknown) => {
+      if (!(err instanceof ProjectSymlinkRefusedError)) throw err;
+      throw new ProjectChangedDuringRunError(projectDir, [
+        `added link ${relative(projectDir, err.linkPath)}`,
+      ]);
+    });
     const out: string[] = [];
-    for (const e of entries) {
-      if (!e.isFile()) continue;
-      const rel = relative(projectDir, join(e.parentPath, e.name));
+    for (const rel of walk.files) {
       const isAl = rel.toLowerCase().endsWith(".al");
       const isManifest = rel === "app.json";
       if (!isAl && !isManifest && !isProjectResource(rel)) continue;
-      if (!isAl && !isManifest && NEVER_AN_INPUT.test(e.name)) continue;
+      if (!isAl && !isManifest && NEVER_AN_INPUT.test(basename(rel))) continue;
       if (excluded.has(outputPathKey(join(projectDir, rel)))) continue;
       out.push(rel);
     }

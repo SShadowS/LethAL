@@ -1,5 +1,13 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -785,5 +793,13 @@ describe("B7 the dumper on a real fixture", () => {
     write(d, "a/.alpackages/x/app.json", "{}");
     write(d, "a/nested/app.json", "{}");
     expect(findProjects(d)).toEqual([join(d, "a"), join(d, "a", "nested"), join(d, "b")]);
+  });
+  test("R631: findProjects never descends a linked folder (a cycle terminates, a link out is not walked)", () => {
+    const d = fresh("projects-links");
+    write(d, "root/a/app.json", "{}");
+    write(d, "foreign/app.json", "{}");
+    symlinkSync(join(d, "root"), join(d, "root", "a", "loop"), "junction");
+    symlinkSync(join(d, "foreign"), join(d, "root", "out"), "junction");
+    expect(findProjects(join(d, "root"))).toEqual([join(d, "root", "a")]);
   });
 });

@@ -252,7 +252,8 @@ export type Caveat =
   | "session-warm"
   | "preproc-files-refused"
   | "tests-compiled-out"
-  | "test-symbols-unverified";
+  | "test-symbols-unverified"
+  | "project-symlink-skipped";
 
 /**
  * R403 phase C: one test the arm filter dealt with, as `SessionReport.excludedTests` lists it.
@@ -569,6 +570,17 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "Does not mean any test was dropped, and does not mean the symbols are wrong: they were " +
       "simply not verified against the built app.",
     basis: "R403",
+  },
+  "project-symlink-skipped": {
+    meaning:
+      "A walk of a folder LethAL built or reads as a cache found a link (symlink or junction) and " +
+      "skipped it rather than following it. The target and test folders refuse links before the " +
+      "run starts, so this is a tripwire that should never fire: the `project-symlink-skipped` " +
+      "warning names the folder and the links. A skipped `.al` file there was not hashed, indexed " +
+      "or read, while alc and al-runner may have compiled it.",
+    entailedNegative:
+      "Does not mean the target or test project holds a link: those refuse by name instead.",
+    basis: "R631",
   },
 };
 
@@ -2856,6 +2868,9 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   const testSymbolsUnverifiedFiles = input.testSymbolsUnverifiedFiles ?? [];
   if (excludedTests.some((t) => t.reason === "compiled-out")) caveats.push("tests-compiled-out");
   if (testSymbolsUnverifiedFiles.length > 0) caveats.push("test-symbols-unverified");
+  // R631 - see CAVEAT_INTERPRETATIONS["project-symlink-skipped"]. From the warning itself: no field.
+  if (events.some((e) => e.type === "warning" && e.code === "project-symlink-skipped"))
+    caveats.push("project-symlink-skipped");
   // See CAVEAT_INTERPRETATIONS["runner-disagreement"] for what this caveat means to a reader.
   const runnerDisagreementTests = input.runnerDisagreementTests ?? [];
   if (runnerDisagreementTests.length > 0) caveats.push("runner-disagreement");

@@ -10,7 +10,7 @@
  * `--coverage-json` lines: never through the line map, the coverage index or its multi-object and
  * wrapped refusals (those are the safe direction for selection and the unsafe one here).
  */
-import { readFile, readdir, realpath } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import {
   type ALSyntaxNode,
@@ -21,6 +21,7 @@ import {
   wrapRoot,
 } from "@lethal/engine";
 import type { ServerCoverageFile } from "./al-runner-server";
+import { type LinkPolicy, walkFiles } from "./walk";
 
 /** One indexed Sleep call: the absolute `/`-separated path v3 reports, and its 1-based line. */
 export interface SleepSite {
@@ -127,11 +128,9 @@ export function sleepCallLines(source: string): number[] {
   return [...lines].sort((a, b) => a - b);
 }
 
-async function alFilesUnder(dir: string): Promise<string[]> {
-  return (await readdir(dir, { recursive: true }))
-    .map((e) => e.toString())
-    .filter((e) => e.toLowerCase().endsWith(".al"))
-    .sort();
+/** R631: the deployed batch (LethAL-built) skips links; the user's test dir refuses one. */
+async function alFilesUnder(dir: string, links: LinkPolicy): Promise<string[]> {
+  return (await walkFiles(dir, { links })).files.filter((e) => e.toLowerCase().endsWith(".al"));
 }
 
 /**
@@ -151,7 +150,7 @@ export async function buildSleepIndex(targetDirIn: string, testDirIn: string): P
     [targetDir, "target"],
     [testDir, "test"],
   ] as const) {
-    for (const rel of await alFilesUnder(root)) {
+    for (const rel of await alFilesUnder(root, which === "test" ? "refuse" : "skip")) {
       const abs = resolve(join(root, rel)).replaceAll("\\", "/");
       const lines = sleepCallLines(await readFile(join(root, rel), "utf8"));
       if (lines.length === 0) continue;

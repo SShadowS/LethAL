@@ -1,4 +1,4 @@
-import { access, copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { openItemHangRefuses, tier1Operators } from "@lethal/builtin-tier1";
@@ -205,6 +205,7 @@ import {
 import { QuarantineStore } from "./quarantine-store";
 import { buildReport } from "./report";
 import type {
+  Caveat,
   DeclarativeSiteFile,
   MutantErrorCause,
   NotInstrumentedFile,
@@ -280,6 +281,7 @@ import {
   isTestPageNotRunMessage,
   testPageNotRunMessage,
 } from "./testpage-unsupported";
+import { onSkippedLinks, refuseProjectLinks, walkFiles } from "./walk";
 
 // C02-04b: named-mutants.ts is not part of the package's `export *` barrel (index.ts), so its
 // public types are re-exported one by one from here, the module the barrel does list.
@@ -871,7 +873,9 @@ export async function generateMutationSet(
   // order, mutant ids, batches and every written `file` are the same on every platform. Reads go
   // through the RAW name (`readKeyOf`): a snapshot taken on Windows is keyed with `\`.
   const listed =
-    snapshot !== undefined ? [...snapshot.keys()] : await readdir(projectDir, { recursive: true });
+    snapshot !== undefined
+      ? [...snapshot.keys()]
+      : (await walkFiles(projectDir, { links: "refuse" })).files;
   // The `.al` / generated-file filter reads each name the way its platform does: only win32 treats
   // `\` as a separator. Off win32 `x\MutationFoo.al` is ONE name, not a generated `MutationFoo.al`,
   // so it reaches `discoveredRelPaths` and is refused by name instead of skipped without a word.
@@ -5409,6 +5413,21 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
 }
 
 export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
+  // R631: a link in the target or test root refuses BY NAME before anything compiles. alc and
+  // al-runner follow links, so measuring around one would measure a different build.
+  await refuseProjectLinks([cfg.projectDir, cfg.testDir]);
+  const cleanups: Array<() => void> = [];
+  try {
+    return await runSessionBody(cfg, cleanups);
+  } finally {
+    for (const c of cleanups) c();
+  }
+}
+
+async function runSessionBody(
+  cfg: SessionConfig,
+  cleanups: Array<() => void>,
+): Promise<SessionReport> {
   // Constructed once for the whole session and threaded to every activateOnce call site
   // (baseline activation below, and the per-mutant loop in runMutantsOnBackend) — the latch is
   // per-SESSION (spec §8), not per-call, so every activation attempt must consult and be able
@@ -5430,6 +5449,18 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // several subscribers through a single-subscriber `cfg.emit` that this line then unwrapped again.
   const collectedEvents: RunEvent[] = [];
   const emit: RunEmitter = createEmitter([(e) => collectedEvents.push(e), ...(cfg.emit ?? [])]);
+  // R631: a tripwire. LethAL-built trees hold no links (the roots refused above), so this never
+  // fires unless something LethAL builds starts carrying one; then the report says so.
+  cleanups.push(
+    onSkippedLinks((root, links) =>
+      emit({
+        type: "warning",
+        // The warning code is the caveat `buildReport` raises from it.
+        code: "project-symlink-skipped" satisfies Caveat,
+        message: `[lethal] ${links.length} link(s) under ${root} were skipped, not followed (R631): ${links.slice(0, 10).join(", ")}`,
+      }),
+    ),
+  );
   // run-configured (spec 2026-08-05 §A, AMENDED): the closed statics set `{ caps, only, testsOnly,
   // stopHungSessions }`, echoed once from the same `cfg` values the `statics` object built at the
   // end of this function (and passed to `buildReport`) also reads — one source, two carriages. No
@@ -11329,7 +11360,8 @@ export async function prepareBatchProject(
   // is copied like any resource, and nothing is guessed from an extension.
   const excluded = new Set(excludeOutputs.map(outputPathKey));
 
-  const entries = await readdir(projectDir, { recursive: true, withFileTypes: true });
+  // R631: a link refuses here too, so a batch never copies a tree alc would compile differently.
+  const entries = (await walkFiles(projectDir, { links: "refuse" })).files;
 
   // writeInstrumentedProject only wrote files with >=1 mutant spec in this
   // batch; copy every other project source file verbatim (files whose sites
@@ -11387,9 +11419,7 @@ export async function prepareBatchProject(
   // the same bundle, measured with a three-file probe. `alc` compiles that tree fine. When the
   // upstream limitation goes, the flattening and this second copy go with it.
   const rebased = new Map<string, { readonly tail: string; readonly owners: string[] }>();
-  for (const entry of entries) {
-    if (!entry.isFile()) continue;
-    const rel = relative(projectDir, join(entry.parentPath, entry.name));
+  for (const rel of entries) {
     const lower = rel.toLowerCase();
     if (!isProjectResource(rel)) continue;
     if (excluded.has(outputPathKey(join(projectDir, rel)))) continue;

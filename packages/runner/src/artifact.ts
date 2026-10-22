@@ -1,14 +1,4 @@
-import {
-  copyFile,
-  link,
-  mkdir,
-  mkdtemp,
-  readFile,
-  readdir,
-  rename,
-  rm,
-  stat,
-} from "node:fs/promises";
+import { copyFile, link, mkdir, mkdtemp, readFile, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { FLAT_NAMES_FILENAME, type MutantManifest } from "@lethal/schemata";
@@ -16,6 +6,7 @@ import type { DeploymentVerification, PublishOutcome } from "./deployment-verifi
 import { describeThrown } from "./describe-error";
 import { defaultSpawn } from "./publisher";
 import type { SpawnFn } from "./publisher";
+import { walkFiles } from "./walk";
 
 /**
  * R219: one line naming each file the batch wrote under a disambiguated flat name, or `undefined`
@@ -195,10 +186,12 @@ export async function buildPackageCacheCopy(
 ): Promise<string> {
   const copy = await mkdtemp(join(root, "lethal-pkgcache-"));
   try {
-    for (const rel of await readdir(userCache, { recursive: true })) {
+    // R631: a linked `.app` is taken from its REAL path (hard-linking the link itself copied a
+    // relative symlink that dangles in the copy); a linked folder refuses by name.
+    const walk = await walkFiles(userCache, { links: "yield-files" });
+    for (const rel of walk.files) {
       if (!rel.toLowerCase().endsWith(".app") || isControlSymbolName(rel)) continue;
-      const from = join(userCache, rel);
-      if (!(await stat(from)).isFile()) continue;
+      const from = walk.resolved.get(rel) ?? join(userCache, rel);
       await mkdir(dirname(join(copy, rel)), { recursive: true });
       await linkOrCopy(fs, from, join(copy, rel));
     }

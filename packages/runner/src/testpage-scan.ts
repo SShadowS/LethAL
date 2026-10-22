@@ -26,7 +26,7 @@
  * first name of `A, B: TestPage X`, and `resolveVarRef` never resolves a member receiver. Either
  * would read as "not a TestPage" and send the test (see the roadmap items filed by R-236c).
  */
-import { readFile, readdir } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   type ALSyntaxNode,
@@ -44,6 +44,7 @@ import {
 import type { TestMethodRef } from "./backend";
 import { discoveredRelPaths } from "./line-filter";
 import { testKeyOf } from "./selection";
+import { walkFiles } from "./walk";
 
 /** Checked against Microsoft Learn's TestPage/TestRequestPage method lists (Task 1 Step 0). */
 const OPENING_METHODS = new Set(["openview", "openedit", "opennew", "trap"]);
@@ -2823,7 +2824,8 @@ export async function readTestAppSources(
   testDir: string,
   platform: NodeJS.Platform = process.platform,
 ): Promise<Array<{ path: string; text: string }>> {
-  const entries = await readdir(testDir, { recursive: true });
+  // R631: a link in the test project refuses (alc and al-runner would follow it).
+  const entries = (await walkFiles(testDir, { links: "refuse" })).files;
   const alFiles = discoveredRelPaths(
     entries.filter((e) => e.toLowerCase().endsWith(".al")),
     platform,
