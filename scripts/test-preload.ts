@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -67,6 +67,23 @@ function withPreloadEnv<F extends (...a: never[]) => unknown>(spawn: F): F {
 Bun.spawn = withPreloadEnv(Bun.spawn);
 Bun.spawnSync = withPreloadEnv(Bun.spawnSync);
 
+/**
+ * R622: verify.ts's per-file watchdog (see `Heartbeat` in scripts/verify.ts). Under its variable,
+ * this process writes `<dir>/<pid>` = `<start ms>\t<parent pid>\t<test file>` when a file starts and
+ * removes it at the end. Under `--parallel` the preload loads once per file and `Bun.main` already
+ * names it, so a file stuck while loading is named too; serial, it loads once, and `beforeEach`
+ * names each later file. Without the variable (a plain `bun test`) nothing is written.
+ */
+const beatDir = process.env.LETHAL_VERIFY_HEARTBEAT_DIR;
+const beatPath = beatDir !== undefined && beatDir !== "" ? join(beatDir, String(process.pid)) : "";
+let beatFile = "";
+function heartbeat(): void {
+  if (beatPath === "" || Bun.main === beatFile) return;
+  beatFile = Bun.main;
+  writeFileSync(beatPath, `${Date.now()}\t${process.ppid}\t${Bun.main}`);
+}
+heartbeat();
+
 const lethalEntries = (): string[] => readdirSync(tmp).filter((e) => e.startsWith("lethal-"));
 const leaks: string[] = [];
 let file = "";
@@ -78,6 +95,7 @@ function judgeFile(): void {
   made = [];
 }
 beforeEach(() => {
+  heartbeat();
   if (Bun.main !== file) {
     judgeFile();
     file = Bun.main;
@@ -88,6 +106,7 @@ afterEach(() => {
   for (const e of lethalEntries()) if (!before.has(e)) made.push(e);
 });
 afterAll(() => {
+  if (beatPath !== "") rmSync(beatPath, { force: true });
   judgeFile();
   const stray = lethalEntries();
   // Built BEFORE the removal, and a failed removal is appended rather than thrown: a leaked file

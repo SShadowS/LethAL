@@ -4,12 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   type Env,
+  type Heartbeat,
   type SnapState,
   type TestStepIo,
   VerifyArgsError,
   type VerifyIo,
   completeness,
   discoverTestFiles,
+  execWatched,
+  isChildOf,
   parallelism,
   parseArgs,
   parseJunit,
@@ -18,6 +21,7 @@ import {
   runVerify,
   sentinelEnv,
   snapChanges,
+  stuckWorkers,
   testChildEnv,
   testCommand,
   testStep,
@@ -88,8 +92,9 @@ describe("A4 P and the test command", () => {
   });
   test("full: --parallel=P, no path, no --changed; P=1 is a plain serial run", () => {
     const full = testCommand({ kind: "full" }, 8, undefined, "/j.xml");
-    expect(full.slice(0, 3)).toEqual(["bun", "test", "--parallel=8"]);
-    expect(full.filter((a) => !a.startsWith("--"))).toEqual(["bun", "test"]);
+    // R622 review I3: the running bun itself, never a `bun` shim whose pid the watchdog cannot match.
+    expect(full.slice(0, 3)).toEqual([process.execPath, "test", "--parallel=8"]);
+    expect(full.filter((a) => !a.startsWith("--"))).toEqual([process.execPath, "test"]);
     expect(full).toContain("--reporter-outfile=/j.xml");
     const serial = testCommand({ kind: "full" }, 1, undefined, "/j.xml");
     expect(serial.some((a) => a.startsWith("--parallel"))).toBe(false);
@@ -129,8 +134,8 @@ describe("A2 a partial run never reads as full, over EVERY line it prints", () =
     };
   }
   for (const argv of [["--changed"], ["--changed=abc"], ["runner"], ["runner", "engine"]]) {
-    test(`partial: ${argv.join(" ")}`, () => {
-      const r = runVerify(argv, io());
+    test(`partial: ${argv.join(" ")}`, async () => {
+      const r = await runVerify(argv, io());
       const all = r.lines.join("\n");
       expect(all).not.toContain("test (all)");
       expect(all).not.toContain("VERIFY FULL");
@@ -141,25 +146,25 @@ describe("A2 a partial run never reads as full, over EVERY line it prints", () =
     });
   }
   // Orchestrator amendment: `verify && git push` must not push on a subset.
-  test("exit codes: an all-pass PARTIAL run exits 4, a failing one 1, an all-pass FULL run 0", () => {
+  test("exit codes: an all-pass PARTIAL run exits 4, a failing one 1, an all-pass FULL run 0", async () => {
     for (const argv of [["--changed"], ["--changed=abc"], ["runner"], ["runner", "engine"]]) {
-      expect(runVerify(argv, io()).code, argv.join(" ")).toBe(4);
+      expect((await runVerify(argv, io())).code, argv.join(" ")).toBe(4);
       const failing = {
         ...io(),
         exec: (cmd: string[]) =>
           cmd[1] === "test" ? { code: 1, output: " 2 pass\n 1 fail\n" } : { code: 0, output: "" },
       };
-      expect(runVerify(argv, failing).code, `${argv.join(" ")} failing`).toBe(1);
+      expect((await runVerify(argv, failing)).code, `${argv.join(" ")} failing`).toBe(1);
     }
-    expect(runVerify([], io()).code).toBe(0);
+    expect((await runVerify([], io())).code).toBe(0);
   });
-  test("--changed names the resolved sha and the blind spot", () => {
-    const all = runVerify(["--changed"], io()).lines.join("\n");
+  test("--changed names the resolved sha and the blind spot", async () => {
+    const all = (await runVerify(["--changed"], io())).lines.join("\n");
     expect(all).toContain("test (changed since sha456)");
     expect(all).toContain("blind spot");
   });
-  test("full: test (all) and VERIFY FULL, the file-set check, and the P used", () => {
-    const r = runVerify([], io());
+  test("full: test (all) and VERIFY FULL, the file-set check, and the P used", async () => {
+    const r = await runVerify([], io());
     const all = r.lines.join("\n");
     expect(all).toContain("test (all)");
     expect(r.lines[0]).toContain("FULL");
@@ -167,14 +172,14 @@ describe("A2 a partial run never reads as full, over EVERY line it prints", () =
     expect(all).toContain("file-set check: ok");
     expect(r.lines.at(-1)).toMatch(/^VERIFY FULL: PASS \(3 pass \/ 0 skip \/ 0 fail\)/);
   });
-  test("full with the snapshot opt-out says so in the receipt", () => {
-    const r = runVerify([], io({ LETHAL_TEST_ALLOW_SNAPSHOT_CREATE: "1" }));
+  test("full with the snapshot opt-out says so in the receipt", async () => {
+    const r = await runVerify([], io({ LETHAL_TEST_ALLOW_SNAPSHOT_CREATE: "1" }));
     expect(r.lines.at(-1)).toContain("VERIFY FULL: PASS");
     expect(r.lines.at(-1)).toContain("(snapshot guard OFF)");
   });
-  test("full fails when bun ran fewer files than discovery finds, naming the missing one", () => {
+  test("full fails when bun ran fewer files than discovery finds, naming the missing one", async () => {
     const base = io();
-    const r = runVerify([], {
+    const r = await runVerify([], {
       ...base,
       expectedTestFiles: () => ["x.test.ts", "y.test.ts", "z.test.ts"],
     });
@@ -217,7 +222,7 @@ describe("parseTestSummary", () => {
     expect(parseTestSummary("error: Cannot find module './nope'\n")).toBeNull();
     expect(parseTestSummary("")).toBeNull();
   });
-  test("A6 a crashed worker is named, though its passes are lost from the count", () => {
+  test("A6 a crashed worker is named, though its passes are lost from the count", async () => {
     // bun 1.4.2's real output: c.test.ts had passed k1 before its worker was SIGKILLed.
     const out = [
       "bun test v1.4.2 (744846f84) 2x PARALLEL",
@@ -235,7 +240,7 @@ describe("parseTestSummary", () => {
     const s = parseTestSummary(out);
     expect(s?.failing).toEqual(["c.test.ts (worker crashed: SIGKILL)"]);
     expect(s?.files).toBe(2);
-    const step = testStep(FULL, {
+    const step = await testStep(FULL, {
       exec: () => ({ code: 0, output: out }),
       snapState: () => new Map(),
       env: {},
@@ -247,8 +252,8 @@ describe("parseTestSummary", () => {
     expect(step.code).toBe(1);
     expect(step.lines).toContain("  (fail) c.test.ts (worker crashed: SIGKILL)");
   });
-  test("bun exiting non-zero with `0 fail` and no crash line still fails (the exit-code backstop)", () => {
-    const step = testStep(FULL, {
+  test("bun exiting non-zero with `0 fail` and no crash line still fails (the exit-code backstop)", async () => {
+    const step = await testStep(FULL, {
       exec: () => ({ code: 1, output: " 3 pass\n 0 fail\nRan 3 tests across 2 files. [1.00s]\n" }),
       snapState: () => new Map(),
       env: {},
@@ -313,32 +318,32 @@ describe("R393 snapshot guards", () => {
   }
   const PART = { mode: { kind: "packages", paths: ["packages/runner"] }, p: 1 } as const;
 
-  test("(i) the test child gets CI=true, and not when the opt-out is set", () => {
+  test("(i) the test child gets CI=true, and not when the opt-out is set", async () => {
     const seen: Array<Record<string, string | undefined>> = [];
-    const on = testStep(PART, io({ seen, env: { PATH: "p" } }));
+    const on = await testStep(PART, io({ seen, env: { PATH: "p" } }));
     expect(seen[0]?.CI).toBe("true");
     expect(seen[0]?.PATH).toBe("p");
     expect(on.code).toBe(0);
     expect(on.lines[0]).toContain("CI=true");
 
-    const off = testStep(PART, io({ seen, env: { LETHAL_TEST_ALLOW_SNAPSHOT_CREATE: "1" } }));
+    const off = await testStep(PART, io({ seen, env: { LETHAL_TEST_ALLOW_SNAPSHOT_CREATE: "1" } }));
     expect(seen[1]?.CI).toBeUndefined();
     expect(off.lines[0]).toContain("OFF");
 
     // An inherited CI must not survive the opt-out, or "OFF" would be a lie (review r1 nit).
-    testStep(PART, io({ seen, env: { CI: "true", LETHAL_TEST_ALLOW_SNAPSHOT_CREATE: "1" } }));
+    await testStep(PART, io({ seen, env: { CI: "true", LETHAL_TEST_ALLOW_SNAPSHOT_CREATE: "1" } }));
     expect(seen[2]?.CI).toBeUndefined();
   });
 
-  test("(ii) the belt fails for a staged, an unstaged and a new .snap changed during the run", () => {
+  test("(ii) the belt fails for a staged, an unstaged and a new .snap changed during the run", async () => {
     const before = parseSnapState(" M a.snap\n", () => "h1");
     const staged = parseSnapState(" M a.snap\nM  b.snap\n", () => "h2");
-    const r = testStep(PART, io({ states: [new Map(), staged] }));
+    const r = await testStep(PART, io({ states: [new Map(), staged] }));
     expect(r.code).toBe(1);
     expect(r.lines.join("\n")).toContain("b.snap");
     for (const status of ["M  ", " M ", "?? "]) {
       const after = parseSnapState(`${status}x.snap\n`, () => "h");
-      const res = testStep(PART, io({ states: [new Map(), after] }));
+      const res = await testStep(PART, io({ states: [new Map(), after] }));
       expect(res.code).toBe(1);
       expect(res.lines.join("\n")).toContain("x.snap");
       expect(res.lines.join("\n")).toContain("--update-snapshots");
@@ -346,11 +351,11 @@ describe("R393 snapshot guards", () => {
     expect(snapChanges(before, before)).toEqual([]);
   });
 
-  test("(ii) a .snap already dirty before the run is not blamed, unless the run changed it", () => {
+  test("(ii) a .snap already dirty before the run is not blamed, unless the run changed it", async () => {
     const dirty = parseSnapState(" M a.snap\n", () => "h1");
-    expect(testStep(PART, io({ states: [dirty, dirty] })).code).toBe(0);
+    expect((await testStep(PART, io({ states: [dirty, dirty] }))).code).toBe(0);
     const edited = parseSnapState(" M a.snap\n", () => "h2");
-    const r = testStep(PART, io({ states: [dirty, edited] }));
+    const r = await testStep(PART, io({ states: [dirty, edited] }));
     expect(r.code).toBe(1);
     expect(r.lines.join("\n")).toContain("a.snap");
   });
@@ -478,4 +483,125 @@ describe("spawned bun test (the guards hold inside --parallel workers)", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+});
+
+describe("R622 the per-file watchdog", () => {
+  const beat = (pid: number, ppid: number, start: number): Heartbeat => ({
+    pid,
+    ppid,
+    start,
+    file: `/p/f${pid}.test.ts`,
+  });
+  // The bun test child is pid 10, verify itself pid 1; the limit is 2 s and "now" is 5 s.
+  test("stuckWorkers: an old heartbeat of a worker of the bun test child is stuck", () => {
+    expect(stuckWorkers([beat(11, 10, 0)], 5000, 2000, 10, 1)).toEqual([beat(11, 10, 0)]);
+  });
+  test("stuckWorkers: a fresh heartbeat is not", () => {
+    expect(stuckWorkers([beat(11, 10, 4000)], 5000, 2000, 10, 1)).toEqual([]);
+  });
+  test("stuckWorkers: a heartbeat whose parent is another process is not", () => {
+    expect(stuckWorkers([beat(11, 99, 0)], 5000, 2000, 10, 1)).toEqual([]);
+  });
+  test("stuckWorkers: serial, the child's own heartbeat is stuck, and only with verify as its parent", () => {
+    expect(stuckWorkers([beat(10, 1, 0)], 5000, 2000, 10, 1)).toEqual([beat(10, 1, 0)]);
+    expect(stuckWorkers([beat(10, 99, 0)], 5000, 2000, 10, 1)).toEqual([]);
+  });
+
+  test("isChildOf: a live child of this process is one; this process and a dead child are not", async () => {
+    const child = Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 30000)"], {
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    try {
+      expect(isChildOf(child.pid, process.pid)).toBe(true);
+      // The direction that keeps the kill off a process verify did not start (a reused pid).
+      expect(isChildOf(process.pid, process.pid)).toBe(false);
+      expect(isChildOf(child.pid, child.pid)).toBe(false);
+    } finally {
+      child.kill();
+      await child.exited;
+    }
+    expect(isChildOf(child.pid, process.pid)).toBe(false);
+  }, 20_000);
+
+  const OK = 'import { test } from "bun:test";\ntest("ok", () => {});\n';
+  // Synchronous, so bun's per-test timeout cannot fire; it ends ITSELF after 25 s, so a broken
+  // watchdog costs 25 s, never a hang.
+  const SPIN =
+    'import { test } from "bun:test";\ntest("spins", () => {\n  const end = Date.now() + 25_000;\n  while (Date.now() < end) {}\n}, 60_000);\n';
+  // About 20 MB on stdout, far more than an OS pipe holds. On Bun 1.4.2 this cannot go red for
+  // review I1's reason (reading only after exit): bun buffers an unread pipe itself (measured, see
+  // execWatched). It still pins that a big run is captured whole, and not killed.
+  const LOUD =
+    'import { test } from "bun:test";\ntest("loud", () => {\n  const line = "x".repeat(1023);\n  for (let i = 0; i < 20_000; i++) console.log(line);\n});\n';
+
+  /**
+   * The verify test step, watched, on a scratch project that preloads the repo's preload (which
+   * writes the heartbeats). Review I2: the inner run gets its own home and temp folder, removed
+   * after, so a killed worker's `lethal-unit-run-*` folder cannot land in this run's temp folder.
+   */
+  async function watched(
+    files: Record<string, string>,
+    p: number,
+    limitS: number,
+  ): Promise<{ code: number; text: string; seconds: number; output: string; junit: string }> {
+    const root = tempDir("r622");
+    try {
+      const proj = join(root, "proj");
+      const home = join(root, "home");
+      const tmp = join(root, "tmp");
+      for (const d of [proj, home, tmp]) mkdirSync(d);
+      const preload = JSON.stringify(join(REPO_ROOT, "scripts", "test-preload.ts"));
+      writeFileSync(join(proj, "bunfig.toml"), `[test]\npreload = [${preload}]\n`);
+      for (const [name, body] of Object.entries(files)) writeFileSync(join(proj, name), body);
+      const junitPath = join(root, "junit.xml");
+      let output = "";
+      const t0 = Date.now();
+      const step = await testStep(
+        { mode: { kind: "packages", paths: [] }, p },
+        {
+          exec: async (cmd, env) => {
+            const r = await execWatched(cmd, env, proj, limitS);
+            output = r.output;
+            return r;
+          },
+          snapState: () => new Map(),
+          env: sentinelEnv(process.env, home, tmp),
+          log: () => "log",
+          junitPath: () => junitPath,
+          readJunit: () => "",
+          expectedTestFiles: () => [],
+        },
+      );
+      const seconds = (Date.now() - t0) / 1000;
+      const junit = existsSync(junitPath) ? readFileSync(junitPath, "utf8") : "";
+      return { code: step.code, text: step.lines.join("\n"), seconds, output, junit };
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  test("--parallel=2: a file that spins past the limit fails the run in seconds, named; the other file passes", async () => {
+    const r = await watched({ "ok.test.ts": OK, "spin.test.ts": SPIN }, 2, 2);
+    expect(r.code, r.text).toBe(1);
+    expect(r.text).toContain("watchdog: FAIL, spin.test.ts ran over 2 s");
+    expect(r.text).not.toContain("ok.test.ts ran over");
+    expect(r.seconds, r.text).toBeLessThan(15);
+    const ok = parseJunit(r.junit).find((c) => c.file.endsWith("ok.test.ts"));
+    expect(ok?.status, r.output).toBe("pass");
+  }, 40_000);
+
+  test("serial: a file that spins past the limit stops the run in seconds, named", async () => {
+    const r = await watched({ "ok.test.ts": OK, "spin.test.ts": SPIN }, 1, 2);
+    expect(r.code, r.text).toBe(1);
+    expect(r.text).toContain("watchdog: FAIL, spin.test.ts ran over 2 s");
+    expect(r.seconds, r.text).toBeLessThan(15);
+  }, 40_000);
+
+  test("review I1: a file that prints 20 MB is drained while it runs, so it is neither killed nor hung", async () => {
+    const r = await watched({ "loud.test.ts": LOUD }, 1, 3);
+    expect(r.code, r.text).toBe(0);
+    expect(r.text).toContain("watchdog: ok");
+    expect(r.output.length).toBeGreaterThan(20_000_000);
+  }, 40_000);
 });

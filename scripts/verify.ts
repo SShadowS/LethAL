@@ -34,12 +34,16 @@
  *   2. The belt: `git status --porcelain -- '*.snap'` (staged, unstaged and untracked) plus a hash of
  *      each listed file, taken before and after the test step. Any `.snap` that changed DURING the run
  *      fails verify.ts and is named. A `.snap` that was already dirty before is not blamed.
+ *
+ * R622 (a stuck file). A test file that runs over FILE_LIMIT_S (180 s) of wall clock is killed and
+ * fails the run on a `watchdog: FAIL, <file> ran over 180 s ...` line, so a worker spinning without
+ * yielding costs 3 minutes instead of a silent hang. See `Heartbeat`.
  */
 
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { availableParallelism, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 
@@ -137,8 +141,10 @@ export function testCommand(
   changedSha: string | undefined,
   junitPath: string,
 ): string[] {
+  // R622 review I3: the running bun itself. A `bun` found on PATH may be a shim (Windows), whose
+  // pid is not the test process's, and then the watchdog would never match a heartbeat to it.
   return [
-    "bun",
+    process.execPath,
     "test",
     ...(p > 1 ? [`--parallel=${p}`] : []),
     ...(mode.kind === "changed" ? [`--changed=${changedSha}`] : []),
@@ -339,8 +345,168 @@ function readSnapState(): SnapState {
   });
 }
 
+/** The R622 per-file limit for a full verify, in seconds. Why 180: see the watchdog section. */
+export const FILE_LIMIT_S = 180;
+
+/** The variable that tells the preload where to write its heartbeat. */
+export const HEARTBEAT_DIR = "LETHAL_VERIFY_HEARTBEAT_DIR";
+
+/**
+ * R622 watchdog. One test file once ran for 10 minutes at 100% CPU and never failed: bun's
+ * per-test timeout cannot fire in code that does not yield. So the preload writes a heartbeat,
+ * `<dir>/<pid>` holding `<start ms>\t<parent pid>\t<test file>`, when each file starts, and
+ * removes it when the file ends. verify reads them every second. A heartbeat older than the limit
+ * is a file that ran over it, and verify kills that one process and fails the run, naming the file.
+ *
+ * The limit is 180 s per file. The slowest file on the Windows CI job (serial) took 20 to 29 s in
+ * three green master runs, and the slowest on Linux at P=8 under load 44 took 17.6 s, so 180 s is
+ * at least 6 times the slowest seen (`/coord/handoff/R-622/windows-times.md`). It is a wall-clock
+ * limit on a whole file; no test timeout changes.
+ *
+ * Serial runs load the preload once, so a file stuck before its first test is named as the file
+ * before it. A hang in bun's coordinator itself, after the files ran, is not covered.
+ */
+export interface Heartbeat {
+  readonly pid: number;
+  readonly start: number;
+  readonly ppid: number;
+  readonly file: string;
+}
+
+/** Every complete heartbeat in `dir`. A file caught half-written is skipped: it is read again in 1 s. */
+export function readHeartbeats(dir: string): Heartbeat[] {
+  const out: Heartbeat[] = [];
+  for (const name of readdirSync(dir)) {
+    let text: string;
+    try {
+      text = readFileSync(join(dir, name), "utf8");
+    } catch {
+      continue; // removed between the listing and the read: the file ended
+    }
+    const [start, ppid, file] = text.split("\t");
+    if (start === undefined || ppid === undefined || file === undefined || file === "") continue;
+    out.push({ pid: Number(name), start: Number(start), ppid: Number(ppid), file });
+  }
+  return out;
+}
+
+/**
+ * The heartbeats over the limit that belong to this run: a worker of the `bun test` child
+ * (`--parallel`), or the child itself with verify as its parent (serial).
+ */
+export function stuckWorkers(
+  beats: readonly Heartbeat[],
+  now: number,
+  limitMs: number,
+  childPid: number,
+  selfPid: number,
+): Heartbeat[] {
+  return beats.filter(
+    (b) =>
+      now - b.start > limitMs &&
+      (b.ppid === childPid || (b.pid === childPid && b.ppid === selfPid)),
+  );
+}
+
+/**
+ * Whether `pid` is alive now with `parent` as its parent, asked of the OS just before a kill, so a
+ * pid reused by another process is never hit. Linux reads `/proc`; Windows asks CIM through
+ * PowerShell (about a second, and only when a file ran over the limit). Any other OS, or any
+ * failure to ask, answers false: the run still fails, but nothing is killed.
+ */
+export function isChildOf(pid: number, parent: number): boolean {
+  try {
+    if (process.platform === "linux") {
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      // `pid (comm) state ppid ...`; comm may hold spaces and parentheses, so split after the LAST ")".
+      return Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]) === parent;
+    }
+    if (process.platform === "win32") {
+      const r = Bun.spawnSync(
+        [
+          "powershell",
+          "-NoProfile",
+          "-Command",
+          `(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').ParentProcessId`,
+        ],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const out = r.stdout.toString().trim();
+      return r.exitCode === 0 && out !== "" && Number(out) === parent;
+    }
+  } catch {
+    // no such process
+  }
+  return false;
+}
+
+export interface ExecResult {
+  readonly code: number;
+  readonly output: string;
+  /** Set by `execWatched`: the limit it used, and one FAIL line per file that ran over it. */
+  readonly watchdog?: { readonly limitS: number; readonly fails: readonly string[] };
+}
+
+/**
+ * Runs `cmd` (a `bun` first argument means the running bun, review I3) with the R622 watchdog. Its
+ * stdout and stderr are read WHILE it runs (review I1): with a plain OS pipe, read only after exit,
+ * a big run fills the pipe, the writer blocks, and the watchdog would kill an innocent file. Bun
+ * 1.4.2 buffers an unread pipe itself (measured: 500 MB, read after exit, no block; probe in
+ * `/coord/handoff/R-622/redcheck/pipe-probe/`), so reading while it runs is the safe order should
+ * that ever change.
+ */
+export async function execWatched(
+  cmd: readonly string[],
+  env: Env,
+  cwd: string,
+  limitS: number,
+): Promise<ExecResult> {
+  const beats = mkdtempSync(join(tmpdir(), "verify-heartbeat-"));
+  const argv = cmd[0] === "bun" ? [process.execPath, ...cmd.slice(1)] : [...cmd];
+  const proc = Bun.spawn(argv, {
+    cwd,
+    env: { ...env, [HEARTBEAT_DIR]: beats },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const stdout = new Response(proc.stdout).text();
+  const stderr = new Response(proc.stderr).text();
+  const fails: string[] = [];
+  const timer = setInterval(() => {
+    for (const b of stuckWorkers(
+      readHeartbeats(beats),
+      Date.now(),
+      limitS * 1000,
+      proc.pid,
+      process.pid,
+    )) {
+      rmSync(join(beats, String(b.pid)), { force: true }); // report each file once
+      const file = relative(cwd, b.file).replaceAll("\\", "/");
+      const serial = b.pid === proc.pid;
+      const who = serial ? `the bun test process ${b.pid} (serial)` : `worker ${b.pid}`;
+      if (!isChildOf(b.pid, b.ppid)) {
+        fails.push(
+          `watchdog: FAIL, ${file} ran over ${limitS} s in ${who}, which is gone or no longer bun's, so nothing was killed. R622.`,
+        );
+        continue;
+      }
+      process.kill(b.pid, "SIGTERM");
+      fails.push(
+        `watchdog: FAIL, ${file} ran over ${limitS} s in ${who}; killed it${serial ? ", which stopped the whole run (a file stuck before its first test is named as the file before it)" : ""}. R622.`,
+      );
+    }
+  }, 1000);
+  try {
+    const [code, out, err] = await Promise.all([proc.exited, stdout, stderr]);
+    return { code, output: `${out}${err}`, watchdog: { limitS, fails } };
+  } finally {
+    clearInterval(timer);
+    rmSync(beats, { recursive: true, force: true });
+  }
+}
+
 export interface TestStepIo {
-  exec(cmd: string[], env: Env): { code: number; output: string };
+  exec(cmd: string[], env: Env): ExecResult | Promise<ExecResult>;
   snapState(): SnapState;
   env: Env;
   log(output: string): string;
@@ -372,10 +538,10 @@ function scopeOf(plan: TestStepPlan): string {
 }
 
 /** The `bun test` step with both R393 guards. Returns the lines to print and the exit code. */
-export function testStep(
+export async function testStep(
   plan: TestStepPlan,
   io: TestStepIo,
-): { code: number; lines: string[]; summary: TestSummary | null } {
+): Promise<{ code: number; lines: string[]; summary: TestSummary | null }> {
   const lines: string[] = [];
   const optOut = io.env[ALLOW_SNAPSHOT_CREATE] === "1";
   lines.push(
@@ -385,7 +551,10 @@ export function testStep(
   );
   const junit = io.junitPath();
   const before = io.snapState();
-  const t = io.exec(testCommand(plan.mode, plan.p, plan.changedSha, junit), testChildEnv(io.env));
+  const t = await io.exec(
+    testCommand(plan.mode, plan.p, plan.changedSha, junit),
+    testChildEnv(io.env),
+  );
   const after = io.snapState();
   const summary = parseTestSummary(t.output);
   const scope = scopeOf(plan);
@@ -416,6 +585,15 @@ export function testStep(
       lines.push(
         `bun ran ${summary.files ?? "?"} test files (partial run: the file set is not checked)`,
       );
+    }
+  }
+  if (t.watchdog !== undefined) {
+    // R622: fails on its own line, even when bun's own `worker crashed` line is missing.
+    if (t.watchdog.fails.length > 0) {
+      lines.push(...t.watchdog.fails);
+      code = 1;
+    } else {
+      lines.push(`watchdog: ok, no test file ran over ${t.watchdog.limitS} s`);
     }
   }
   const changed = snapChanges(before, after);
@@ -478,10 +656,10 @@ export interface VerifyIo extends TestStepIo {
 }
 
 /** The whole run. Prints each line as it goes and returns them all, plus the exit code. */
-export function runVerify(
+export async function runVerify(
   argv: readonly string[],
   io: VerifyIo,
-): { code: number; lines: string[] } {
+): Promise<{ code: number; lines: string[] }> {
   const lines: string[] = [];
   const say = (l: string): void => {
     lines.push(l);
@@ -508,7 +686,7 @@ export function runVerify(
     return { code: exitCode(mode, code), lines };
   };
 
-  const tc = io.exec(["bun", "run", "typecheck"], io.env);
+  const tc = await io.exec(["bun", "run", "typecheck"], io.env);
   if (tc.code !== 0) {
     say(`typecheck: FAIL (exit ${tc.code}), log ${io.log(tc.output)}`);
     for (const l of tc.output
@@ -521,7 +699,7 @@ export function runVerify(
   say("typecheck: ok");
   const removed = io.cleanDist();
   say(`clean dist: removed ${removed.length} (${removed.join(", ") || "none present"})`);
-  const step = testStep(plan, io);
+  const step = await testStep(plan, io);
   for (const l of step.lines) say(l);
   return done(step.code, step.summary);
 }
@@ -544,18 +722,15 @@ export function cleanDist(root: string): string[] {
   return removed;
 }
 
-function main(argv: readonly string[]): number {
+async function main(argv: readonly string[]): Promise<number> {
   const junitDir = mkdtempSync(join(tmpdir(), "verify-junit-"));
   let n = 0;
   try {
-    return runVerify(argv, {
+    const r = await runVerify(argv, {
       packages: readdirSync(join(REPO_ROOT, "packages")),
       cores: availableParallelism(),
       env: process.env,
-      exec: (cmd, env) => {
-        const r = Bun.spawnSync(cmd, { cwd: REPO_ROOT, env, stdout: "pipe", stderr: "pipe" });
-        return { code: r.exitCode ?? 1, output: `${r.stdout.toString()}${r.stderr.toString()}` };
-      },
+      exec: (cmd, env) => execWatched(cmd, env, REPO_ROOT, FILE_LIMIT_S),
       git: (args) => {
         const r = Bun.spawnSync(["git", ...args], {
           cwd: REPO_ROOT,
@@ -575,7 +750,8 @@ function main(argv: readonly string[]): number {
       cleanDist: () => cleanDist(REPO_ROOT),
       now: () => Date.now(),
       print: (l) => console.log(l),
-    }).code;
+    });
+    return r.code;
   } finally {
     rmSync(junitDir, { recursive: true, force: true });
   }
@@ -583,7 +759,7 @@ function main(argv: readonly string[]): number {
 
 if (import.meta.main) {
   try {
-    process.exit(main(process.argv.slice(2)));
+    process.exit(await main(process.argv.slice(2)));
   } catch (e) {
     console.error(e instanceof Error ? e.message : String(e));
     process.exit(2);
