@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**96 of 632 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**95 of 632 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -284,7 +284,7 @@ that ordering is the priority.
 - **R631** · Bun's recursive readdir follows directory symlinks (Node does not): a link cycle in a walked tree hangs or throws ELOOP, and a link out walks a foreign tree; product code walks user projects this way · [R631.md](docs/roadmap/R631.md) · done (cd0bef35)
 - **R632** · probe: can a session tell that a BC server restarted (or had apps published) between a crashed run and its resume? R601's same-server rule cannot · [R632.md](docs/roadmap/R632.md) · open, filed 2026-10-22
 - **R633** · al-runner v3 update gate: two wrong-reason verdicts on 2026-10-22 (alpha.3 infra-fail with no D legs run; alpha.4 and edge-7739d8132 gate-fail on #5613's fix read as a contract break), and every receipt deleted · [R633.md](docs/roadmap/R633.md) · done (abac8803)
-- **R634** · When the target app has installed dependents, their hang-capable loops are not in the hang context: a dependent's loop that calls a mutated target procedure can hang a scored run · [R634.md](docs/roadmap/R634.md) · open, filed 2026-10-22
+- **R634** · When the target app has installed dependents, their hang-capable loops are not in the hang context: a dependent's loop that calls a mutated target procedure can hang a scored run · [R634.md](docs/roadmap/R634.md) · closed 2026-10-22 — measured price 0: adding each same-corpus dependent's source to the target's hang context…
 
 ## Product gaps a real project hits
 

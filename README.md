@@ -749,6 +749,10 @@ a LethAL feature or a mode.
   so LethAL sees only its own abort and cannot tell it from "the server is still working". Such a
   mutant is recorded as an unmeasured error; `--resume` skips it so the run completes rather than
   dying on it forever.
+- **Loops in installed dependent apps are not analysed.** LethAL refuses a mutant that a loop in your
+  project could make never-ending. A loop in ANOTHER installed app that depends on yours, and calls into it,
+  is not seen. Measured on three ISV corpora (R-634): adding each dependent's source to the analysis
+  refused 0 more mutants on all 25 pairs.
 - **The advanced operator set is not built.** Twelve operators today, in two groups: six generic
   ones (Tier-1: comparisons, return values, empty blocks) and six AL-specific ones (Tier-2:
   `TestField`, `SetRange`, `CalcFields`, `Commit` and friends). A third, more aggressive group is
