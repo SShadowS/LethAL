@@ -164,4 +164,8 @@ afterAll(() => {
     }
   }
   if (lines.length > 0) throw new Error(lines.join("\n"));
-});
+  // R648: this hook deletes the temp folders on disk, so the disk sets its time: 0 to 1 ms beside a
+  // second full verify, up to 2.45 s with 3 disk writers added (measured, R-648). bun reports a
+  // timeout here as "(unnamed)", the shape R648 saw in two files. Its own 30 s timeout is over 10x
+  // that and well under verify's 180 s per-file watchdog.
+}, 30_000);

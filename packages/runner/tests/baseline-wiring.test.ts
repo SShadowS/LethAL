@@ -134,7 +134,9 @@ function writeViolations(
     (ts.isStringLiteralLike(n) && FS_MODULES.has(n.text)) ||
     (ts.forEachChild(n, (c) => namesFsModule(c) || undefined) ?? false);
   const tracesToBaseline = (e: ts.Node): boolean =>
-    LOOKS_LIKE_BASELINE.test(e.getText(sf)) || mentions(e, (id) => baselineVars.has(key(id)));
+    LOOKS_LIKE_BASELINE.test(e.getText(sf)) ||
+    // R648: while no baseline variable is known, no identifier can match: skip the checker lookups.
+    (baselineVars.size > 0 && mentions(e, (id) => baselineVars.has(key(id))));
   const collect = (n: ts.Node): void => {
     if (ts.isImportDeclaration(n) && ts.isStringLiteral(n.moduleSpecifier)) {
       const bindings = n.importClause?.namedBindings;
@@ -528,7 +530,12 @@ describe("R332 wiring: real call sites, not text", () => {
       ),
     );
     expect(found).toEqual([]);
-  });
+    // R648: it parses and checks ALL of the repo's source, so it grows with the repo. Measured
+    // (R-648): 2.2 s alone on Linux, 3.6 to 5.4 s beside a second full verify (it failed once at
+    // 5.4 s), and 6.66 s on master CI's Windows `check` (run 39778141456). A text pre-filter would
+    // halve that but could let the guard stop guarding, so the scan stays whole (orchestrator
+    // ruling) and gets 30 s: about 4.5x the Windows time, well under verify's 180 s watchdog.
+  }, 30_000);
 });
 
 describe("R332 wiring: the checker catches alternate writers (negative tests)", () => {
