@@ -54,6 +54,13 @@ describe("R625: every tracked script is type-checked or excluded by name", () =>
     expect(missing).toEqual([]);
   });
 
+  test("the root tsconfig.json still references ./scripts (else typecheck skips all of it)", () => {
+    const root = Bun.JSONC.parse(readFileSync(join(REPO_ROOT, "tsconfig.json"), "utf8")) as {
+      references: { path: string }[];
+    };
+    expect(root.references.map((r) => r.path)).toContain("./scripts");
+  });
+
   test("every excluded entry has a non-empty reason", () => {
     const empty = Object.entries(excludedMap)
       .filter(([, reason]) => typeof reason !== "string" || reason.trim().length === 0)

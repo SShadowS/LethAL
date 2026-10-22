@@ -199,6 +199,9 @@
     "statement-containers.ts",
     "test-preload.ts",
     "verify-equivalence.test.ts",
-    "verify-equivalence.ts"
+    "verify-equivalence.ts",
+    "probe-alrunner-canary.ts",
+    "census-hang-capable.ts",
+    "sample-declined-hang-capable.ts"
   ]
 }
