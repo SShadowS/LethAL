@@ -214,7 +214,8 @@ export class LineReader {
       if (remaining <= 0) return { kind: "timeout" };
       let timer: ReturnType<typeof setTimeout> | undefined;
       // The read stays pending across a capped timer, so no chunk is ever dropped.
-      const read = (this.pending ??= this.it.next());
+      if (this.pending === undefined) this.pending = this.it.next();
+      const read = this.pending;
       const chunk = await Promise.race([
         read,
         new Promise<typeof TIMER_FIRED>((resolve) => {
