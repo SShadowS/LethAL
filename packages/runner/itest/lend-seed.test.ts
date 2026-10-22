@@ -181,8 +181,9 @@ describe("R618 seedRunFrom: each override changes only its own field", () => {
     expect(REVOKED_SUFFIX).toBe("|closed-world:revoked");
     // R601: RN1d's seed, the tag swapped and still pending.
     expect(
-      store.getRun(seedRunFrom(store, a, { testAppHash: `${H}+internal`, hashSuffix: PENDING_SUFFIX }))
-        ?.testAppHash,
+      store.getRun(
+        seedRunFrom(store, a, { testAppHash: `${H}+internal`, hashSuffix: PENDING_SUFFIX }),
+      )?.testAppHash,
     ).toBe(`${H}+internal|pending`);
     // R601: the clone runs on its source's server.
     expect(store.getRun(seedRunFrom(store, a))?.resourceKey).toBe("http://bc1|BC");

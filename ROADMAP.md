@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**98 of 627 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**97 of 628 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -282,6 +282,7 @@ that ordering is the priority.
 - **R628** · R572's value path cannot tell a deep global that only addresses a request from one that feeds the loop's exit: Shopify's paging loops are over-refused (87 keys) · [R628.md](docs/roadmap/R628.md) · closed 2026-10-22 — ruling: the deep carry over-refuses 87 keys in one file (Shopify, bch), 0 in dc/do/cdo; a…
 - **R629** · A hang loop in one project calls a procedure whose copy in a nested project is refused nowhere · [R629.md](docs/roadmap/R629.md) · open, filed 2026-10-22
 - **R631** · Bun's recursive readdir follows directory symlinks (Node does not): a link cycle in a walked tree hangs or throws ELOOP, and a link out walks a foreign tree; product code walks user projects this way · [R631.md](docs/roadmap/R631.md) · open, filed 2026-10-22
+- **R632** · probe: can a session tell that a BC server restarted (or had apps published) between a crashed run and its resume? R601's same-server rule cannot · [R632.md](docs/roadmap/R632.md) · open, filed 2026-10-22
 
 ## Product gaps a real project hits
 
@@ -427,8 +428,8 @@ that ordering is the priority.
 - **R498** · A hook session whose test app carries no `.al` never proves its identity, so it never resumes, skips or reuses · [R498.md](docs/roadmap/R498.md) · done (e4907b30)
 - **R535** · A nested `#if` object wrapper is refused by name on every coverage path: BaseApp has 2 such files (70 sites), unmeasured · [R535.md](docs/roadmap/R535.md) · closed 2026-10-09 — 2 BaseApp files, 70 sites, refused by name on every coverage path; not worth an R-300b…
 - **R600** · lethal verify digests under the server's closed-world answer now, so an open-world source run on a closed server re-runs every test · [R600.md](docs/roadmap/R600.md) · open
-- **R601** · a closed-world run that ends before its post-execution re-ask stays pending forever, so --resume after a crash is off on a closed server · [R601.md](docs/roadmap/R601.md) · open
-- **R620** · A crashed or interrupted closed-world run is never resumable: its test-app identity stays |pending, so --resume refuses the very run it exists for · [R620.md](docs/roadmap/R620.md) · open
+- **R601** · a closed-world run that ends before its post-execution re-ask stays pending forever, so --resume after a crash is off on a closed server · [R601.md](docs/roadmap/R601.md) · done (92d23854)
+- **R620** · A crashed or interrupted closed-world run is never resumable: its test-app identity stays |pending, so --resume refuses the very run it exists for · [R620.md](docs/roadmap/R620.md) · closed 2026-10-22 — a duplicate of R601 (orchestrator ruling Q2); closed with R601 (92d23854)
 
 ## Backends and tooling
 

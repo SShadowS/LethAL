@@ -203,6 +203,15 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **`--resume` and `--resume-run` now resume a closed-world run that ended before its
+  post-execution check** (R601, R620). Before, such a run (a crash, Ctrl-C, any exception after the
+  lease) kept its `|pending` test-app identity and was always refused. Now it resumes when it ran
+  on the same server and the closed-world guard gives the same answer now. The resumed run's own
+  check after execution confirms it, or revokes it together with the pending run it resumed. Every
+  other case is refused in words that name the cause (the guard is open now, quoting why, or the
+  answer, the test app or the server differs). **Open limits:** a server restart, or a dependent
+  published and removed again, inside the gap between the crash and the resume is not seen (a
+  probe is filed as R632); the server key omits the tenant.
 - **A loop fed by another object's stateful procedure is hang-refused; identity scheme 41, the number
   confirmed at merge** (R572). A loop whose exit reads a flag, a `var` argument or a call fed by a stateful
   procedure in another project object refuses that procedure's chain, the writers of its value path, and the
