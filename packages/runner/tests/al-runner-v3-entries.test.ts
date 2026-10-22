@@ -1000,6 +1000,18 @@ describe("8, 14 (backend half): the baseline flag, never lastActivated, decides 
   });
 });
 
+describe("8 (other direction): a refusal inside the bracket IS a baseline refusal", () => {
+  test("a test v3 refused at the one-shot baseline gives a survivor its [v3-refused-test-nearby] note", async () => {
+    const refusesB: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        x.method === "B" ? { ...x, status: "error" as const, notRun: true, message: COMMIT } : x,
+      );
+    const r = await rig({ serve: { rows: refusesB } });
+    await baseline(r.b, SUITE1);
+    expect(r.b.survivorNote([ref("A")])).toContain("[v3-refused-test-nearby]");
+  });
+});
+
 describe("9: a prefetched answer is consumed once", () => {
   test("the first activation uses the prefetched rows; the re-activation (R577) sends one live request", async () => {
     const r = await readyRig({ serve: { rows: killsM1 }, mutants: ["M0001"] });
