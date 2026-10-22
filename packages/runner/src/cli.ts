@@ -2736,7 +2736,7 @@ export function validateAlRunnerConfig(
   return raw as AlRunnerConfigSection;
 }
 
-async function loadLethalConfigFile(path: string): Promise<LethalConfigFile> {
+export async function loadLethalConfigFile(path: string): Promise<LethalConfigFile> {
   let text: string;
   try {
     text = await readFile(path, "utf8");

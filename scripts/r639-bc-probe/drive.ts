@@ -35,9 +35,32 @@ import { errText, readSecretFile } from "../bc-linux-setup.ts";
 
 const REPO = join(import.meta.dir, "..", "..");
 const BUILD = join(import.meta.dir, "build");
-const EVIDENCE = "/coord/handoff/R-639/probe";
-const LOG = join(EVIDENCE, "drive.log");
 const OUT = join(REPO, "docs", "measurements", "r639", "bc1-probe.json");
+
+/** The ODataV4 side of a probe connection (what `postAction` and `HarnessVerifier` read). */
+export interface ProbeOdata {
+  baseUrl: string;
+  apiBaseUrl?: string;
+  company: string;
+  username: string;
+  password: string;
+  tenant: string;
+}
+
+/** Where one probe run goes: bc1 (below) or a lethal config's server (`drive-config.ts`). */
+export interface Target {
+  /** The coord lease name, and the `server` field of the output. */
+  readonly label: string;
+  readonly evidence: string;
+  readonly out: string;
+  readonly cases: readonly { codeunit: number; methods: string[]; measured: boolean }[];
+  /** Run 2 (bc1 only): merge into `out`. */
+  readonly run: 1 | 2;
+  /** Read the login in-process; never log it. */
+  readonly connect: () => { c: Conn; odata: ProbeOdata; extra?: Record<string, unknown> };
+  /** Files whose uncommitted edits stop the run. */
+  readonly sources: readonly string[];
+}
 
 const TARGET = {
   id: "d371a89d-d1c8-4c83-aca5-49261b816c3b",
@@ -56,7 +79,7 @@ const SYSTEM_APP = "63ca2fa4-4f03-4f2b-a480-172fef340d3f";
 const CALL_TIMEOUT_MS = 120_000;
 
 /** One control-app call per codeunit. 92912 has two tests, so its one call is RunMutantMany. */
-const ALL_CASES: { codeunit: number; methods: string[]; measured: boolean }[] = [
+export const ALL_CASES: { codeunit: number; methods: string[]; measured: boolean }[] = [
   { codeunit: 92910, methods: ["HttpGet"], measured: false },
   { codeunit: 92911, methods: ["HttpGetRaw"], measured: true },
   { codeunit: 92912, methods: ["DuplicateNamedKey", "AfterDupSentinel"], measured: false },
@@ -98,11 +121,34 @@ export function merge(
   };
 }
 
-mkdirSync(EVIDENCE, { recursive: true });
-const log = (s: string) => {
-  const line = `${new Date().toISOString()} ${s}`;
-  console.log(line);
-  appendFileSync(LOG, `${line}\n`);
+const BC1: Target = {
+  label: "bc1",
+  evidence: "/coord/handoff/R-639/probe",
+  out: OUT,
+  cases: CASES,
+  run: RUN,
+  connect: () => {
+    const login = readSecretFile();
+    return {
+      c: {
+        server: "bc1",
+        authorization: `Basic ${Buffer.from(`${login.user}:${login.password}`).toString("base64")}`,
+      },
+      odata: {
+        baseUrl: `${HOST}:${SERVERS.bc1.odata}/BC`,
+        apiBaseUrl: `${HOST}:${SERVERS.bc1.api}/BC`,
+        company: COMPANY,
+        username: login.user,
+        password: login.password,
+        tenant: "default",
+      },
+    };
+  },
+  sources: [
+    "scripts/r639-bc-probe/target",
+    "scripts/r639-bc-probe/tests",
+    "scripts/r639-bc-probe/drive.ts",
+  ],
 };
 
 /** M-b: `raw`/`rawCode` from the FULL failure text, anchored at `MEASURED [` and the LAST `] [`. */
@@ -119,12 +165,12 @@ export function parseMeasured(text: string): { raw: string; rawCode: string } {
   return { raw: text.slice(s + 10, e), rawCode: text.slice(e + 3, z) };
 }
 
-async function holderIsBugs(): Promise<string> {
-  const p = Bun.spawnSync(["kraken", "coord", "holder", "bc1"]);
+async function holderIsBugs(label: string): Promise<string> {
+  const p = Bun.spawnSync(["kraken", "coord", "holder", label]);
   const out = p.stdout.toString().trim();
-  if (p.exitCode !== 0) throw new Error(`kraken coord holder bc1 exited ${p.exitCode}`);
+  if (p.exitCode !== 0) throw new Error(`kraken coord holder ${label} exited ${p.exitCode}`);
   const h = JSON.parse(out) as { lane?: unknown } | null;
-  if (h === null || h.lane !== "bugs") throw new Error(`bc1 is not held by lane bugs: ${out}`);
+  if (h === null || h.lane !== "bugs") throw new Error(`${label} is not held by lane bugs: ${out}`);
   return out;
 }
 
@@ -187,26 +233,26 @@ function record(line: TestLine, measured: boolean): Record<string, unknown> {
   return out;
 }
 
-async function main(): Promise<number> {
+export async function main(t: Target = BC1): Promise<number> {
+  const { label, cases: CASES, run: RUN } = t;
+  mkdirSync(t.evidence, { recursive: true });
+  const LOG = join(t.evidence, "drive.log");
+  const OUT = t.out;
+  const log = (s: string) => {
+    const line = `${new Date().toISOString()} ${s}`;
+    console.log(line);
+    appendFileSync(LOG, `${line}\n`);
+  };
   let holder: string;
   try {
-    holder = await holderIsBugs();
+    holder = await holderIsBugs(label);
   } catch (err) {
     console.error(`REFUSED: ${errText(err)}`);
     return 2;
   }
   log(`lease guard: ${holder}`);
   const harnessCommit = git(["rev-parse", "HEAD"]);
-  if (
-    git([
-      "status",
-      "--porcelain",
-      "--",
-      "scripts/r639-bc-probe/target",
-      "scripts/r639-bc-probe/tests",
-      "scripts/r639-bc-probe/drive.ts",
-    ]) !== ""
-  )
+  if (git(["status", "--porcelain", "--", ...t.sources]) !== "")
     throw new Error("the probe sources are not committed; commit them first");
   const probeSourceSha = git(["rev-parse", "HEAD:scripts/r639-bc-probe"]);
   const appSha: Record<string, string> = {};
@@ -218,21 +264,10 @@ async function main(): Promise<number> {
     `harness ${harnessCommit}, probe source tree ${probeSourceSha}, apps ${JSON.stringify(appSha)}`,
   );
 
-  const login = readSecretFile();
-  const c: Conn = {
-    server: "bc1",
-    authorization: `Basic ${Buffer.from(`${login.user}:${login.password}`).toString("base64")}`,
-  };
-  const odata = {
-    baseUrl: `${HOST}:${SERVERS.bc1.odata}/BC`,
-    apiBaseUrl: `${HOST}:${SERVERS.bc1.api}/BC`,
-    company: COMPANY,
-    username: login.user,
-    password: login.password,
-    tenant: "default",
-  };
+  const { c, odata, extra } = t.connect();
   const doc: Record<string, unknown> = {
-    server: "bc1",
+    server: label,
+    ...extra,
     date: new Date().toISOString().slice(0, 10),
     harness: `scripts/r639-bc-probe/drive.ts@${harnessCommit}`,
     probeSourceSha,
@@ -281,7 +316,7 @@ async function main(): Promise<number> {
       const rs = await rows(c, ext, a.id);
       log(`before: ${await describe(a)}`);
       if (rs.length > 0) {
-        doc.stop = `${a.name} already on bc1 before the probe; nothing removed (not ours)`;
+        doc.stop = `${a.name} already on ${label} before the probe; nothing removed (not ours)`;
         throw new Error(`STOP: ${doc.stop}`);
       }
     }

@@ -48,8 +48,19 @@ export const SERVERS = {
 } as const;
 export type ServerName = keyof typeof SERVERS;
 
+/** A server that is not one of `SERVERS` (a Windows container named by a lethal config): its own URLs. */
+export interface ConnUrls {
+  /** `<proto>://<host>:<devPort>/<instance>`; `/dev/apps` is appended. */
+  readonly dev: string;
+  /** The API root, `.../api` included. */
+  readonly api: string;
+  readonly company: string;
+}
+
 export interface Conn {
-  readonly server: ServerName;
+  /** A `SERVERS` key, or any label when `urls` is set. */
+  readonly server: string;
+  readonly urls?: ConnUrls;
   /** `Basic ...`, built in memory from the secret file. */
   readonly authorization: string;
   /** Tests only: answers every request made through this Conn. Production never sets it. */
@@ -61,8 +72,16 @@ function send(c: Conn): FetchFn {
   return c.fetch ?? bcFetch;
 }
 
+/** `urls` when set, else the `SERVERS` entry named by `c.server` (throws on an unknown name). */
+function urlsOf(c: Conn): ConnUrls {
+  if (c.urls !== undefined) return c.urls;
+  const s = (SERVERS as Record<string, (typeof SERVERS)[ServerName] | undefined>)[c.server];
+  if (s === undefined) throw new Error(`unknown server ${c.server}: not in SERVERS and no urls`);
+  return { dev: `${HOST}:${s.dev}/BC`, api: `${HOST}:${s.api}/BC/api`, company: COMPANY };
+}
+
 function devBase(c: Conn): string {
-  return `${HOST}:${SERVERS[c.server].dev}/BC`;
+  return urlsOf(c).dev;
 }
 
 export async function publishBytes(c: Conn, fileName: string, bytes: Uint8Array): Promise<void> {
@@ -180,7 +199,12 @@ export async function residentPackage(
   name: string,
 ): Promise<Buffer | null> {
   const url = devPackagesUrl(
-    { server: HOST, serverInstance: "BC", tenant: "default", port: SERVERS[c.server].dev },
+    {
+      server: HOST,
+      serverInstance: "BC",
+      tenant: "default",
+      port: SERVERS[c.server as ServerName].dev,
+    },
     { publisher, name },
   );
   if (url === null) throw new Error("unreachable: devPackagesUrl refused a fixed URL");
@@ -232,11 +256,11 @@ export const rowVersion = (r: ExtensionRow) =>
   `${r.versionMajor}.${r.versionMinor}.${r.versionBuild}.${r.versionRevision}`;
 
 export async function extensionsApi(c: Conn): Promise<string> {
-  const api = `${HOST}:${SERVERS[c.server].api}/BC/api`;
+  const { api, company: name } = urlsOf(c);
   const cs = await apiJson(c, `${api}/v2.0/companies?tenant=default`);
   if (!cs.ok) throw new Error(`${c.server}: companies: HTTP ${cs.status}`);
-  const company = (cs.body.value as { id: string; name: string }[]).find((x) => x.name === COMPANY);
-  if (company === undefined) throw new Error(`${c.server}: company ${COMPANY} not found`);
+  const company = (cs.body.value as { id: string; name: string }[]).find((x) => x.name === name);
+  if (company === undefined) throw new Error(`${c.server}: company ${name} not found`);
   return `${api}/microsoft/automation/v2.0/companies(${company.id})/extensions`;
 }
 
