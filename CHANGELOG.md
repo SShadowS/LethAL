@@ -850,6 +850,18 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **`--skip-known-survivors` no longer lends a narrower run's survivors** (R585). A run now records
+  its test scope (the tests its baseline is given, as `runs.test_scope`). History lends only when
+  every test this session sends is in the source run's scope: an equal or wider run lends, a
+  `--tests-only` run does not lend to a session over more tests (a survivor there may be killed by a
+  test it never ran). A refusal warns `history-test-scope-changed`. Runs recorded before R585 have no
+  scope and lend no history: the first `--skip-known-survivors` run after the upgrade executes every
+  mutant. `--resume` already refused a scope change (the session fingerprint) and is unchanged.
+- **`--resume` never carries a stored `no-coverage`** (R621). It is re-derived from this session's
+  coverage: a mutant uncovered now reads `no-coverage` again, one covered now (say, after a target
+  edit added a call to it) is run. So a fully scored batch that holds a `no-coverage` row is no
+  longer carried whole: it is deployed, and its baseline comes from the saved snapshot when one
+  matches (R192). This costs one deploy per such batch per resume; R643 files a cheaper variant.
 - **LethAL no longer follows links (symlinks, junctions) when it walks a folder** (R631). Bun's
   recursive `readdir` follows them, so a link cycle hung or crashed with `ELOOP`, and a link out
   pulled a foreign tree into the run. Every walk now goes through one walker that never descends a

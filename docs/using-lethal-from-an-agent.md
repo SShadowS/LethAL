@@ -887,6 +887,17 @@ repackages the file, the bytes differ and the run stays unproven (safe, but no r
 fingerprint, so the first run after this upgrade carries nothing on `--resume`, skips nothing on
 `--skip-known-survivors` and re-runs every baseline.
 
+**`--skip-known-survivors` checks the test scope (R585).** A run records the tests its baseline was
+given. History skips a survivor only when every test this session sends was in that run's set, so a
+`--tests-only` run lends to a session with the same or a narrower scope, never to a wider one. Other
+than that it skips nothing and warns `history-test-scope-changed`, naming the missing tests or that
+the run recorded no scope (every run before R585: a third one-time cost on upgrade).
+
+**`--resume` re-derives no-coverage (R621).** A stored `no-coverage` is never carried. A mutant this
+session's coverage leaves uncovered reads `no-coverage` again; one it covers is run. A fully scored
+batch holding a `no-coverage` row is therefore deployed on resume (its baseline is reused from the
+saved snapshot when one matches) instead of being carried whole.
+
 ### After verify (guidance)
 
 A verify `killed` proves the test kills that mutant in the installed build. Make it the record

@@ -450,6 +450,7 @@ describe("buildResumeIndex — a pre-R582 bcdev run under BcDevMcpBackend's flag
   test("its unmarked kills are re-executed, a marked kill and a survivor carry", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      testScope: [],
       coverageMode: "fenced",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -752,6 +753,7 @@ describe("ResultsStore resume queries (R47)", () => {
   test("findResumableRun matches an unfinished run with the same fingerprint", () => {
     const store = new ResultsStore(":memory:");
     const id = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -788,6 +790,7 @@ describe("ResultsStore resume queries (R47)", () => {
   test("a FINISHED run is not resumable — there is nothing left to score", () => {
     const store = new ResultsStore(":memory:");
     const id = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -810,6 +813,7 @@ describe("ResultsStore resume queries (R47)", () => {
   test("a different fingerprint does not match — scopes are not interchangeable", () => {
     const store = new ResultsStore(":memory:");
     store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -832,6 +836,7 @@ describe("ResultsStore resume queries (R47)", () => {
     // A pre-R47 lethal.sqlite row cannot prove how it was scoped, so it must not be resumable.
     const store = new ResultsStore(":memory:");
     store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -856,6 +861,7 @@ describe("ResultsStore resume queries (R47)", () => {
     // have recorded nothing, so "most recent unfinished" alone is the wrong rule.
     const store = new ResultsStore(":memory:");
     const withVerdicts = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -879,6 +885,7 @@ describe("ResultsStore resume queries (R47)", () => {
     });
     // Newer, but died before recording anything.
     store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -902,6 +909,7 @@ describe("ResultsStore resume queries (R47)", () => {
     // one — the SQL filter and CARRYABLE_VERDICTS must agree on that.
     const store = new ResultsStore(":memory:");
     const good = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -924,6 +932,7 @@ describe("ResultsStore resume queries (R47)", () => {
       batchIndex: 0,
     });
     const allErrors = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -958,6 +967,7 @@ describe("ResultsStore resume queries (R47)", () => {
   test("mutantVerdicts reads back identity, verdict, killing test and duration", () => {
     const store = new ResultsStore(":memory:");
     const id = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -1001,6 +1011,7 @@ describe("ResultsStore resume queries (R47)", () => {
   test("R192: mutantVerdicts reads back the coverage facts, and their absence stays an absence", () => {
     const store = new ResultsStore(":memory:");
     const id = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -1107,6 +1118,7 @@ describe("ResultsStore resume queries (R47)", () => {
   test("R86: mutantVerdicts reads back the killing run's failure text, so --resume can carry it", () => {
     const store = new ResultsStore(":memory:");
     const id = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -1164,6 +1176,7 @@ describe("ResultsStore.invalidateBatch (R47)", () => {
   test("rewrites the named batch's verdicts to error and drops the killing test", () => {
     const store = new ResultsStore(":memory:");
     const id = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -1189,6 +1202,7 @@ describe("ResultsStore.invalidateBatch (R47)", () => {
   test("R86: invalidateBatch drops the killing run's failure text along with the killing test", () => {
     const store = new ResultsStore(":memory:");
     const id = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -1211,6 +1225,7 @@ describe("ResultsStore.invalidateBatch (R47)", () => {
     // One artifact's attestation says nothing about a different artifact's verdicts.
     const store = new ResultsStore(":memory:");
     const id = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -1230,6 +1245,7 @@ describe("ResultsStore.invalidateBatch (R47)", () => {
     // specific diagnosis than this generic note.
     const store = new ResultsStore(":memory:");
     const id = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -1250,6 +1266,7 @@ describe("ResultsStore.dropBaselineSnapshot (R508)", () => {
   function twoSnapshots(): { store: ResultsStore; id: number } {
     const store = new ResultsStore(":memory:");
     const id = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -2009,6 +2026,7 @@ describe("runSession --resume (R47)", () => {
     const dirs = await makeProject();
     const store = new ResultsStore(":memory:");
     const foreign = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -2970,9 +2988,10 @@ describe("R318: a resume across R318 re-scores a renamed member instead of keepi
     expect(
       carriedVerdictFor(index, { ...base, coverageArmNames: ["Pick", "Choose"] }),
     ).toBeUndefined();
-    // Controls: the same row onto an entry without the field still carries, and a kill on a
-    // renamed member still carries (a kill is a measurement whatever attributed it).
-    expect(carriedVerdictFor(index, base)?.verdict).toBe("no-coverage");
+    // R621: since then a stored no-coverage never carries onto ANY mutant (it is re-derived), so
+    // the entry without the field gets none either. Control: a kill on a renamed member still
+    // carries (a kill is a measurement whatever attributed it).
+    expect(carriedVerdictFor(index, base)).toBeUndefined();
     const killed = sameSource(
       buildResumeIndex([row({ astHash: "h-k", procedureName: "", verdict: "killed" })], false),
     );
@@ -3004,6 +3023,7 @@ describe("R318: a resume across R318 re-scores a renamed member instead of keepi
     // abortAfter 2, run 2 replays the WHOLE batch from the store (batchCarriesEntirely), the 10
     // member mutants carried as no-coverage, 0 baseline runs, 0 mutant runs. So this one shape
     // exercises both guards: guard 1 stops the replay, and guard 2 then stops the snapshot reuse.
+    // (Since R621 guard 1 is the general rule: no stored no-coverage carries at all.)
     const first = new R318Backend("pre", 2);
     const firstReport = await runSession({ backend: first, store, ...dirs, selectorIds });
     expect(firstReport.quarantined).toBeDefined();
@@ -4356,6 +4376,7 @@ describe("R512/R513: the store's negative records", () => {
     over: Partial<Parameters<ResultsStore["createRun"]>[0]> = {},
   ): number {
     return store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -6462,6 +6483,7 @@ describe("R557: a pre-fix al-runner run's false misses never come back (C1)", ()
       throw new Error("run 1 recorded no proven test app");
     }
     const other = store.createRun({
+      testScope: [],
       coverageMode: row.coverageMode ?? "none",
       identityScheme: row.identityScheme,
       buildSymbols: [],
