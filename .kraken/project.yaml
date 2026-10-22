@@ -62,5 +62,6 @@ reaper:
     - exe: al-runner
       args_contain: --server
 needs:
-  bc_containers: 2
+  # bc1, bc2, bc3 (BC 28.4 on Linux, server1) are the BC gate servers; Cronus28 is parked (owner, 2026-10-21).
+  bc_containers: 4
 permissions: requested

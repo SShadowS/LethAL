@@ -656,15 +656,22 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         JSON.stringify(e ?? null),
       ),
     );
-    // none-selected-exit (#5613)
-    const none = await call(["--codeunit", "0"]);
+    // none-selected-exit (#5613), a DEFECT fact since pre-commitment r7: upstream #5622 fixed it, and
+    // a fix LethAL asked for must read `gone` (held), never `diverged` (gate-fail).
+    const none = await call(["--codeunit", "0"], { codeunit: 0 });
     facts.push(
       fact(
         "none-selected-exit",
-        "contract",
-        none.exitCode === 6 && none.stdout.trim() === "" ? "matches" : "diverged",
-        "--codeunit 0: exit 6, no document",
-        `exit ${none.exitCode}, stdout ${none.stdout.trim() === "" ? "empty" : "non-empty"}`,
+        "defect",
+        none.exitCode !== 6
+          ? "diverged"
+          : none.stdout.trim() === ""
+            ? "defect-present"
+            : none.rows?.length === 0
+              ? "gone"
+              : "diverged",
+        "--codeunit 0: exit 6, no document (#5613; its fix: exit 6, a document with 0 rows)",
+        `exit ${none.exitCode}, stdout ${none.stdout.trim() === "" ? "empty" : `${none.rows === undefined ? "not a v3 document" : `${none.rows.length} rows`}`}`,
       ),
     );
     // quoted-name-unselectable (#5572)
