@@ -833,9 +833,15 @@ linuxOnly("R639 --edge-rejudge (R1-R9)", () => {
       for (const heldBefore of [false, true]) {
         await setupKept();
         if (heldBefore) {
+          // A real earlier held copy (the same bytes, with its receipt), so a rewrite would show.
           const h = join(root, "held", TAG);
           await mkdir(h, { recursive: true });
           await writeFile(join(h, "note.txt"), "an earlier held");
+          await writeFile(join(h, "al-runner"), "edge57");
+          await writeFile(
+            join(h, "receipt.json"),
+            JSON.stringify({ binarySha256: sha("edge57"), outcome: "held", lethalCommit: OLD }),
+          );
         }
         const before = await tree();
         expect(await edgeRejudge(rj({ outcome }).deps, EDGE)).toBe(outcome);
