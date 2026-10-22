@@ -31,12 +31,50 @@ server it:
    (below), then writes one gitignored `fixtures/<fixture>/lethal.config.<server>.json` per gate
    fixture, whose `packageCachePath` names that cache, and the paired
    `fixtures/<fixture>/.vscode/launch.<server>.json`;
-4. publishes its pinned LethAL Control build (`CONTROL_APP`, checked against `CONTROL_SHA256`;
-   after a control-app bump, update both first), then every app a BC gate needs (`PUBLISH_PLAN`:
-   `sandbox-probes`, each gate's fixture pair with the target before its tests, and
-   `sandbox-harden-answers`), in Dev scope over the dev endpoint, skipping an app the server already
-   holds at the same or a higher version;
+4. decides every app by its CONTENT, then acts (R599). It compiles every app a BC gate needs
+   (`PUBLISH_PLAN`: `sandbox-probes`, each gate's fixture pair, and `sandbox-harden-answers`; a test
+   app against the LOCAL build of its target), reads what the server holds for each (the
+   `dev/packages` download and the automation API's extension rows) and prints one decision per app,
+   with the rows it saw. Only if NOTHING was refused does it publish, in Dev scope over the dev
+   endpoint: its pinned LethAL Control build first (`CONTROL_APP`, checked against
+   `CONTROL_SHA256`; after a control-app bump, update both first), then each target before its
+   dependents, each read back by version, raw sha256 and content digest, with exactly one installed
+   row. One refusal anywhere means nothing is published;
 5. runs `lethal doctor` on every config it wrote.
+
+`--predict` runs the decide half only: it takes the lease, fills the shared symbol cache if it is
+empty (a read from the server into the write-once cache), compiles and prints every decision, and
+writes no config or launch file, publishes nothing and runs no doctor. `--with-continia` splits the
+same way: its reads (P1 and each Continia app's resident version) are in the decide half, its
+publishes in the act half.
+
+**How an app is compared.** alc builds are NOT byte-reproducible: two compiles of one source differ
+in a random per-compile id in the package header (it is the automation API's `packageId`) and in the
+build timestamp in `NavxManifest.xml` (`/coord/handoff/R-599/measure.md`, F2). So the raw sha256 of a
+fresh build never equals the server's, and the setup compares a NORMALISED content digest instead:
+sha256 over every zip entry, sorted by name, with that timestamp removed (`contentDigest` in
+`scripts/bc-app-content.ts`). It refuses, rather than guesses, a package with no or two timestamps,
+no manifest, no entries or a duplicate entry. The decision, in order:
+
+| what the server holds | decision |
+|---|---|
+| nothing, and no extension row | `publish new` |
+| anything but exactly one installed row at the downloaded package's version, or a package that cannot be digested | `refuse content-unknown` (the owner) |
+| the same digest | `skip` |
+| a lower version | `publish upgrade` (nothing removed) |
+| the same version, other content, a target with an installed fixture dependent | `refuse same-version-target` (not measured; R623) |
+| the same version, other content, otherwise | `publish in place` |
+| a higher version, a target a gate deploys itself (`gateDeploys`) whose resident build is instrumented | `kept` (setup only; R605 ruling (a)) |
+| a higher version, anything else | `refuse above-build` |
+
+A `publish in place` line names the zip entries that differ and both compiler versions, so a stale
+SOURCE (`src/...` differs) is told apart from another compiler (only `NavxManifest.xml`,
+`SymbolReference.json` or `DocComments.xml` differ). LethAL Control goes through the row check and
+then `controlAction` on raw sha256: a higher or a same-version other-bytes control is now refused by
+name (setup used to skip it). Two act-half failures print their remedy: BC's 422 "newer version ...
+was already installed" (R605's installed-version record: `bc-republish.ts republish --mint
+<fixture>`), and a test app refused after its target was kept as a minted build (run the target's
+gate or `--mint` it, then re-run setup).
 
 **A worktree that only needs the configs** runs `bun scripts/bc-linux-setup.ts --write-config-only --server
 bc1|bc2|bc3|all`. It reads the secret file and writes the same configs and launch files, with NO server
@@ -80,16 +118,19 @@ cache (dir 0555, files 0444) with no error (`/coord/handoff/R-599/symcache/alc-r
 The databases are in memory. A container restart or a server1 reboot resets each server to a fresh
 CRONUS with no LethAL app on it. The script is idempotent, so re-running it is the fix.
 
-The setup compares versions, not contents (R599). `scripts/bc-republish.ts` fixes that, and every
-one of its modes works only under a coord lease in your own lane (`--lane <lane> --token-dir <dir>`,
-both required):
-- `republish --server bcN [--mint <target>]... <fixture>...` replaces a stale build. It compiles
-  first, then REFUSES before removing anything if the server holds a planned app above the version
-  it would publish (R605: BC refuses the lower publish after an unpublish, which would leave the
-  app off the server). Otherwise it uninstalls and unpublishes (dependents first, adding any fixture
-  that depends on a named app), publishes (targets first) and reads back each app's version and
-  sha256, stopping at the first failure and naming every app left off. A target that a gate left at
-  a minted version can only go back at a newer minted version (`--mint`).
+`scripts/bc-republish.ts` publishes named fixtures on their own. Every one of its modes works only
+under a coord lease in your own lane (`--lane <lane> --token-dir <dir>`, both required):
+- `republish --server bcN [--predict] [--mint <target>]... <fixture>...` compiles the named apps,
+  then decides each by the same table as the setup (in `republish` mode, so nothing is ever
+  `kept`: a target above its build is refused with the remedy `--mint <fixture>`), and publishes
+  only if nothing was refused, reading each back by version, raw sha256 and digest. Installed
+  dependents are looked up over EVERY fixture, named or not, so a same-version target under an
+  installed test app is refused here too. It prints each app's rows before and after. `--predict`
+  stops after the decisions. Three changes from before R599: (1) an app with unchanged content is
+  SKIPPED (it was always removed and published again); (2) `--mint` is an upgrade with nothing
+  removed (it removed first, and a dependent was added and cycled); (3) the refusal before
+  publishing is the decision table, not a version check over a removal plan. Nothing is ever
+  uninstalled or unpublished; R-604's logs stay the evidence for the old removal path.
 - `control --server bcN` moves LethAL Control up to the pinned build (`CONTROL_APP`,
   `CONTROL_SHA256`) as an upgrade over the dev endpoint, never removing it, and reads it back.
 - `alpackages --server bcN <tests fixture>...` fills a tests fixture's gitignored `.alpackages`

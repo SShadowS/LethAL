@@ -2,15 +2,20 @@
  * R589: bring one or more of the BC on Linux servers on server1 (bc1, bc2, bc3) to the state the
  * LethAL BC gates need, and check it with `lethal doctor`.
  *
- *   bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all [--lane <lane>] [--dry-run]
+ *   bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all [--lane <lane>] [--dry-run | --predict]
  *                                 [--with-continia] [--accept-build <v>] [--held-lease <token>]
  *   bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all --write-config-only
+ *
+ * `--predict` (R599) runs (a) to (d) under the lease and stops: it may fill the shared symbol cache
+ * (a read from the server into the write-once cache, ruling (b)), and it writes no config or launch
+ * file, publishes nothing (Continia included) and runs no doctor.
  *
  * The coord lease is taken in the caller's lane (R598): `--lane`, else the kraken agent identity
  * (`KRAKEN_AGENT`: `lane-<x>` is lane `<x>`, `orchestrator` is `orchestrator`). With neither, the run
  * refuses by name before anything else, so a lease is never held in another lane's name.
  *
- * `--with-continia` (R594) adds step (d2) after LethAL Control: check that the server's Microsoft
+ * `--with-continia` (R594) adds step (d2), its reads in the decide pass and its publishes in the act
+ * pass (R599 F5): check that the server's Microsoft
  * apps are the R546 packagesDir's 28.4.53241.53758, then publish the 5 sha256-pinned Continia
  * apps (Dev scope) that Continia Document Output depends on, after checking each one's declared
  * dependencies against the server. `--accept-build <v>` makes P1 accept that Microsoft build
@@ -27,9 +32,14 @@
  *       `/coord/cache/bc-symbols/<server>/<build>-<hash8>/` (`bc-symbol-cache.ts`: Microsoft packages
  *       only), then write one gitignored `lethal.config.<server>.json` per gate fixture, with its
  *       launch file, whose `packageCachePath` names that dir;
- *   (d) publish, in Dev scope over the dev endpoint (`dev/apps`), LethAL Control (`CONTROL_APP`) and then
- *       each gate's fixture pair, target before tests, skipping an app the server already holds at
- *       the same or a higher version;
+ *   (d) R599, DECIDE every app by content (`bc-app-content.ts`): compile each `PUBLISH_PLAN` app
+ *       (a test app against its target's LOCAL build), read what the server holds (the
+ *       `dev/packages` download and the extension rows), and print one decision per app with its
+ *       rows: skip (same normalised digest), publish new / upgrade / in place, kept (a gate's
+ *       instrumented minted target), or a refusal by name;
+ *   (d') only if NOTHING was refused, ACT: publish, in Dev scope over the dev endpoint (`dev/apps`),
+ *       LethAL Control (`CONTROL_APP`), the Continia apps (d2), then each step's target before its
+ *       dependents, each read back by version, raw sha256 and digest, with one installed row;
  *   (e) run `lethal doctor` on every written config;
  *   (f) print a summary.
  *
