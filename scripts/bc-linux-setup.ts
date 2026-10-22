@@ -4,6 +4,7 @@
  *
  *   bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all [--lane <lane>] [--dry-run]
  *                                 [--with-continia] [--accept-build <v>] [--held-lease <token>]
+ *   bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all --write-config-only
  *
  * The coord lease is taken in the caller's lane (R598): `--lane`, else the kraken agent identity
  * (`KRAKEN_AGENT`: `lane-<x>` is lane `<x>`, `orchestrator` is `orchestrator`). With neither, the run
@@ -19,15 +20,23 @@
  *
  * In order, per server:
  *   (a) read /coord/secrets/bc-linux.env in this process (exactly BC_DEV_USER and BC_DEV_PASSWORD);
- *   (b) write one gitignored `lethal.config.<server>.json` per gate fixture, refusing a path git
- *       does not ignore;
+ *   (b) check that git ignores every config and launch path it will write;
  *   (c) take the coord lease for the server, record its token at once, heartbeat, release in a
  *       `finally`;
+ *   (c2) fill, or reuse when it is complete, the SHARED write-once Microsoft symbol cache
+ *       `/coord/cache/bc-symbols/<server>/<build>/` (`bc-symbol-cache.ts`: Microsoft packages
+ *       only), then write one gitignored `lethal.config.<server>.json` per gate fixture, with its
+ *       launch file, whose `packageCachePath` names that dir;
  *   (d) publish, in Dev scope over the dev endpoint (`dev/apps`), LethAL Control (`CONTROL_APP`) and then
  *       each gate's fixture pair, target before tests, skipping an app the server already holds at
  *       the same or a higher version;
  *   (e) run `lethal doctor` on every written config;
  *   (f) print a summary.
+ *
+ * `--write-config-only` does (a), (b) and the config writes alone: NO server call and NO lease.
+ * The configs name the newest verified build dir of the shared cache for that server, read from
+ * its own marker; with none, it names `<server>/unfilled-run-setup-first`, prints "symbol cache
+ * empty for <server>: run setup --server <server> once" and fails, so it never claims gate-ready.
  *
  * The databases are in memory: a container restart or a server1 reboot resets a server to a fresh
  * CRONUS, and re-running this script is the fix. It is idempotent for that reason.
@@ -49,6 +58,12 @@ import { devPackagesUrl } from "../packages/runner/src/bcdev-backend.ts";
 import { appInputsOfPackage } from "../packages/runner/src/digest-inputs.ts";
 import { readAppIdentity } from "../packages/runner/src/published-test-app.ts";
 import { defaultAlToolPaths } from "../packages/runner/src/publisher.ts";
+import {
+  SYMBOL_CACHE_ROOT,
+  UNFILLED,
+  fillSymbolCache,
+  lookupSymbolCache,
+} from "./bc-symbol-cache.ts";
 
 const REPO = join(import.meta.dir, "..");
 export const SECRET_PATH = "/coord/secrets/bc-linux.env";
@@ -130,6 +145,21 @@ export const PUBLISH_PLAN: readonly PublishStep[] = [
   { target: "sandbox-wrapped", defines: ["WRAPDEF"], dependents: ["sandbox-wrapped-tests"] },
   { target: "sandbox-names", dependents: ["sandbox-names-tests"] },
 ];
+
+/**
+ * The Microsoft packages the shared symbol cache holds: `System` plus every Microsoft dependency of
+ * a `PUBLISH_PLAN` target, which is what a gate's instrumented compile reads from
+ * `packageCachePath`. A dependent's symbols (its target, Library Assert) are never put there: the
+ * dependent's compile builds its own private cache.
+ */
+export function symbolNames(fixtures: string = join(REPO, "fixtures")): string[] {
+  const deps = PUBLISH_PLAN.flatMap((s) =>
+    (manifest(join(fixtures, s.target)).dependencies ?? [])
+      .filter((d) => d.publisher === "Microsoft")
+      .map((d) => d.name),
+  );
+  return [...new Set(["System", ...deps])];
+}
 
 // ---------------------------------------------------------------------------------------------
 // (a) the secret file
@@ -595,7 +625,11 @@ function skipNote(resident: string, local: string): string {
   return `the server holds ${resident} (app.json ${local}): same or higher version, contents not compared`;
 }
 
-/** Target first, then each dependent compiled against the target package the SERVER now holds. */
+/**
+ * Target first, then each dependent compiled against the target package the SERVER now holds.
+ * `symbols` is the shared, read-only build dir (`bc-symbol-cache.ts`): the target compiles against
+ * it as it is, and nothing is written into it.
+ */
 async function ensureStep(
   c: Conn,
   alc: string,
@@ -607,7 +641,6 @@ async function ensureStep(
   const build = join(STATE_ROOT, c.server, "build", step.target);
   rmSync(build, { recursive: true, force: true });
   mkdirSync(build, { recursive: true });
-  await downloadSymbols(c, targetDir, symbols);
 
   const t = manifest(targetDir);
   const tBefore = await residentVersion(c, t.publisher, t.name);
@@ -692,10 +725,13 @@ export interface SetupArgs {
   readonly heldLease?: string;
   /** `--with-continia` only: the Microsoft build P1 accepts instead of the pinned one. */
   readonly acceptBuild?: string;
+  /** Only write the configs and launch files: no server call, no lease. */
+  readonly writeConfigOnly?: boolean;
 }
 
 const USAGE =
-  "usage: bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all [--lane <lane>] [--dry-run] [--with-continia [--accept-build <version>]] [--held-lease <token>]";
+  "usage: bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all [--lane <lane>] [--dry-run] [--with-continia [--accept-build <version>]] [--held-lease <token>]\n" +
+  "       bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all --write-config-only";
 
 export function parseArgs(argv: readonly string[]): SetupArgs {
   let server: string | undefined;
@@ -704,9 +740,11 @@ export function parseArgs(argv: readonly string[]): SetupArgs {
   let withContinia = false;
   let heldLease: string | undefined;
   let acceptBuild: string | undefined;
+  let writeConfigOnly = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--dry-run") dryRun = true;
+    else if (a === "--write-config-only") writeConfigOnly = true;
     else if (a === "--with-continia") withContinia = true;
     else if (a === "--server") server = argv[++i];
     else if (a === "--lane") {
@@ -723,6 +761,19 @@ export function parseArgs(argv: readonly string[]): SetupArgs {
     } else throw new Error(`unknown argument ${JSON.stringify(a)}`);
   }
   if (acceptBuild !== undefined && !withContinia) throw new Error(USAGE);
+  // The config-only mode reaches no server, so a flag about the server run is a mistake.
+  if (writeConfigOnly && (dryRun || withContinia || heldLease !== undefined || lane !== undefined))
+    throw new Error(`--write-config-only takes only --server\n${USAGE}`);
+  if (
+    writeConfigOnly &&
+    (server === "bc1" || server === "bc2" || server === "bc3" || server === "all")
+  )
+    return {
+      servers: server === "all" ? ["bc1", "bc2", "bc3"] : [server],
+      dryRun,
+      withContinia,
+      writeConfigOnly,
+    };
   const rest = {
     dryRun,
     ...(lane !== undefined ? { lane } : {}),
@@ -910,48 +961,129 @@ async function ensureContinia(
   return true;
 }
 
+/**
+ * Everything the driver reaches outside this process, so a test can count it. Every server call
+ * in this script goes through a `Conn`, and the only way to get one is `connect`.
+ */
+export interface RunDeps {
+  readonly readSecret: () => BcLogin;
+  readonly connect: (server: ServerName, login: BcLogin) => Conn;
+  readonly lease: (lane: string, heldLease: string | undefined) => LeaseDeps;
+  readonly isIgnored: (path: string) => boolean;
+  /** The repo root the `fixtures/<dir>/` config paths are under. */
+  readonly repo: string;
+  readonly cacheRoot: string;
+  readonly mcpCommand: () => string[];
+  readonly env: Record<string, string | undefined>;
+}
+
+export const REAL_DEPS: RunDeps = {
+  readSecret: () => readSecretFile(),
+  connect: (server, login) => ({
+    server,
+    authorization: `Basic ${Buffer.from(`${login.user}:${login.password}`).toString("base64")}`,
+  }),
+  // R594's held lease, else R598's lease in the caller's lane.
+  lease: (lane, held) => (held !== undefined ? heldLeaseDeps(held) : krakenLeaseFor(lane)),
+  isIgnored: gitIgnores,
+  repo: REPO,
+  cacheRoot: SYMBOL_CACHE_ROOT,
+  mcpCommand: bcDevMcpCommand,
+  env: process.env,
+};
+
+function configTargets(repo: string, server: ServerName) {
+  return GATE_FIXTURES.map((f) => ({
+    fixture: f,
+    path: join(repo, "fixtures", f.configDir, configFileName(server)),
+    launch: join(repo, "fixtures", f.configDir, ".vscode", launchFileName(server)),
+  }));
+}
+
+/** (b) Every path is checked before any is written, so a refusal leaves nothing half-written. */
+function checkIgnored(deps: RunDeps, server: ServerName): void {
+  for (const { path, launch } of configTargets(deps.repo, server)) {
+    for (const p of [path, launch]) {
+      if (!deps.isIgnored(p)) throw new NotIgnoredError(`${p} is not ignored by .gitignore`);
+    }
+  }
+}
+
+function writeServerConfigs(
+  deps: RunDeps,
+  server: ServerName,
+  login: BcLogin,
+  packageCachePath: string,
+  summary: string[],
+): void {
+  const paths: ConfigPaths = {
+    mcpCommand: deps.mcpCommand(),
+    controlSymbolPath: CONTROL_APP,
+    packageCachePath,
+  };
+  for (const { fixture, path, launch } of configTargets(deps.repo, server)) {
+    writeConfig(path, buildConfig(server, login, paths, fixture.configDir), deps.isIgnored);
+    mkdirSync(dirname(launch), { recursive: true });
+    writeConfig(launch, buildLaunch(server), deps.isIgnored);
+    summary.push(`  wrote     ${path}`);
+    summary.push(`  wrote     ${launch}`);
+  }
+}
+
+/**
+ * `--write-config-only`: the configs and launch files for each server, pointing at the shared
+ * symbol cache, with NO server call and NO lease. Whether the cache is filled is read from its own
+ * marker; an empty or unverified cache is named, and the run then fails: never "gate-ready".
+ */
+export function writeConfigOnly(args: SetupArgs, deps: RunDeps, summary: string[]): boolean {
+  const login = deps.readSecret();
+  summary.push(`login: ${describeLogin(login)}`);
+  for (const server of args.servers) checkIgnored(deps, server);
+  let ready = true;
+  for (const server of args.servers) {
+    summary.push(`${server} (config only: no server call, no lease)`);
+    const found = lookupSymbolCache(deps.cacheRoot, server, symbolNames());
+    for (const u of found.unverified) summary.push(`  unverified ${u}`);
+    const cache = found.chosen?.dir ?? join(deps.cacheRoot, server, UNFILLED);
+    writeServerConfigs(deps, server, login, cache, summary);
+    if (found.chosen === undefined) {
+      ready = false;
+      summary.push(`  symbol cache empty for ${server}: run setup --server ${server} once`);
+      summary.push(`  NOT gate-ready: ${server}'s configs name ${cache}, which holds no symbols`);
+    } else {
+      const m = found.chosen.marker;
+      summary.push(
+        `  symbol cache for ${server}: ${found.chosen.dir} (build ${m.build}, ${m.fileCount} files: ${m.packages.map((p) => p.name).join(", ")}; verified; written ${m.writtenAt})`,
+      );
+      if (found.verified.length > 1)
+        summary.push(
+          `  note: ${found.verified.length} verified builds for ${server}; the newest is used, and the server's current build is not checked here`,
+        );
+    }
+  }
+  return ready;
+}
+
 async function setupServer(
   server: ServerName,
   login: BcLogin,
   args: SetupArgs,
   summary: string[],
   lane: string,
+  deps: RunDeps,
 ): Promise<boolean> {
   const { dryRun } = args;
-  const symbols = join(STATE_ROOT, server, "symbols");
-  const paths: ConfigPaths = {
-    mcpCommand: bcDevMcpCommand(),
-    controlSymbolPath: CONTROL_APP,
-    packageCachePath: symbols,
-  };
-  const configs = GATE_FIXTURES.map((f) => ({
-    fixture: f,
-    path: join(REPO, "fixtures", f.configDir, configFileName(server)),
-    launch: join(REPO, "fixtures", f.configDir, ".vscode", launchFileName(server)),
-  }));
-
-  // (b) Check every path before writing any, so a refusal leaves nothing half-written.
-  for (const { path, launch } of configs) {
-    for (const p of [path, launch]) {
-      if (!gitIgnores(p)) throw new NotIgnoredError(`${p} is not ignored by .gitignore`);
-    }
-  }
+  const configs = configTargets(deps.repo, server);
+  checkIgnored(deps, server);
   summary.push(
     `${server} (OData ${SERVERS[server].odata}, dev ${SERVERS[server].dev}, API ${SERVERS[server].api})`,
   );
   if (dryRun) {
     for (const { path, launch } of configs) summary.push(`  would write ${path}, ${launch}`);
     summary.push(
-      `  would ${args.heldLease !== undefined ? "use the held lease on" : "lease"} ${server}${args.heldLease !== undefined ? "" : ` in lane ${lane}`}, publish LethAL Control,${args.withContinia ? " check P1 and publish the 5 Continia apps," : ""} then ${PUBLISH_PLAN.map((s) => s.target).join(", ")} with their dependents, run doctor`,
+      `  would ${args.heldLease !== undefined ? "use the held lease on" : "lease"} ${server}${args.heldLease !== undefined ? "" : ` in lane ${lane}`}, fill or reuse ${join(deps.cacheRoot, server, "<build>")}, publish LethAL Control,${args.withContinia ? " check P1 and publish the 5 Continia apps," : ""} then ${PUBLISH_PLAN.map((s) => s.target).join(", ")} with their dependents, run doctor`,
     );
     return true;
-  }
-  for (const { fixture, path, launch } of configs) {
-    writeConfig(path, buildConfig(server, login, paths, fixture.configDir));
-    mkdirSync(dirname(launch), { recursive: true });
-    writeConfig(launch, buildLaunch(server));
-    summary.push(`  wrote     ${path}`);
-    summary.push(`  wrote     ${launch}`);
   }
 
   const control = readFileSync(CONTROL_APP);
@@ -964,13 +1096,20 @@ async function setupServer(
   const tools = await defaultAlToolPaths();
   if (tools === undefined) throw new Error("no alc found under the AL Language extension");
 
-  const conn: Conn = {
-    server,
-    authorization: `Basic ${Buffer.from(`${login.user}:${login.password}`).toString("base64")}`,
-  };
-  // R594's held lease, else R598's lease in the caller's lane.
-  const lease = args.heldLease !== undefined ? heldLeaseDeps(args.heldLease) : krakenLeaseFor(lane);
-  return await withLease(server, lease, async () => {
+  const conn = deps.connect(server, login);
+  return await withLease(server, deps.lease(lane, args.heldLease), async () => {
+    // The shared Microsoft symbol cache first, so the configs can name it.
+    const cache = await fillSymbolCache({
+      root: deps.cacheRoot,
+      server,
+      names: symbolNames(),
+      download: (name) => residentPackage(conn, "Microsoft", name),
+    });
+    summary.push(
+      `  symbols   ${cache.dir} (${cache.outcome === "filled" ? "downloaded and sealed" : "already complete, verified"}; ${cache.downloads} download${cache.downloads === 1 ? "" : "s"})`,
+    );
+    const symbols = cache.dir;
+    writeServerConfigs(deps, server, login, symbols, summary);
     // (d)
     const c = await ensureApp(conn, control, "LethAL Control");
     summary.push(
@@ -980,8 +1119,6 @@ async function setupServer(
     );
     // (d2) before the fixtures, so a P1 stop leaves the fixtures as they were.
     if (args.withContinia && !(await ensureContinia(conn, summary, args.acceptBuild))) return false;
-    rmSync(symbols, { recursive: true, force: true });
-    mkdirSync(symbols, { recursive: true });
     let ok = true;
     for (const step of PUBLISH_PLAN) {
       try {
@@ -1005,25 +1142,42 @@ async function setupServer(
   });
 }
 
-async function main(): Promise<number> {
-  const args = parseArgs(process.argv.slice(2));
+export async function run(
+  argv: readonly string[],
+  deps: RunDeps,
+  print: (s: string) => void = console.log,
+): Promise<number> {
+  const args = parseArgs(argv);
+  if (args.writeConfigOnly === true) {
+    const summary: string[] = [];
+    let ok: boolean;
+    try {
+      ok = writeConfigOnly(args, deps, summary);
+    } catch (err) {
+      ok = false;
+      summary.push(`  FAILED    ${errText(err)}`);
+    }
+    print(`\nbc-linux-setup (write config only):\n${summary.join("\n")}`);
+    print(ok ? "\nok: configs written, symbol cache verified" : "\nFAILED");
+    return ok ? 0 : 1;
+  }
   const { servers, dryRun, lane: cliLane } = args;
   // R598: decided before the secret is read or anything is written, so a refusal changes nothing.
-  const lane = resolveLane(cliLane, process.env);
-  const login = readSecretFile();
+  const lane = resolveLane(cliLane, deps.env);
+  const login = deps.readSecret();
   const summary = [`login: ${describeLogin(login)}`, `lane: ${lane}`];
   let ok = true;
   for (const server of servers) {
     try {
-      ok = (await setupServer(server, login, args, summary, lane)) && ok;
+      ok = (await setupServer(server, login, args, summary, lane, deps)) && ok;
     } catch (err) {
       ok = false;
       summary.push(`  FAILED    ${server}: ${errText(err)}`);
     }
   }
-  console.log(`\nbc-linux-setup${dryRun ? " (dry run)" : ""}:\n${summary.join("\n")}`);
-  console.log(ok ? "\nok" : "\nFAILED");
+  print(`\nbc-linux-setup${dryRun ? " (dry run)" : ""}:\n${summary.join("\n")}`);
+  print(ok ? "\nok" : "\nFAILED");
   return ok ? 0 : 1;
 }
 
-if (import.meta.main) process.exit(await main());
+if (import.meta.main) process.exit(await run(process.argv.slice(2), REAL_DEPS));
