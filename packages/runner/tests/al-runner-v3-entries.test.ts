@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser } from "@lethal/engine";
 import { emitResourceSelector, emitStaticSelector } from "@lethal/schemata";
-import { v3ItestTransport } from "../itest/al-runner-v3-gate";
+import { v3ItestTransport, v3SplitLine } from "../itest/al-runner-v3-gate";
 import { installResourceSelector } from "../src/al-runner-backend";
 import {
   AlRunnerServer,
@@ -443,6 +443,8 @@ interface RigOpts {
   targetAl?: string;
   suite?: readonly TestMethodRef[];
   floor?: readonly [number, number] | false;
+  /** R651: the phase timers' clock. */
+  now?: () => number;
 }
 
 async function rig(opts: RigOpts = {}): Promise<Rig> {
@@ -466,6 +468,7 @@ async function rig(opts: RigOpts = {}): Promise<Rig> {
     one.spawn,
     fakeAlc(),
     serve.spawn,
+    opts.now,
   );
   b.useBuildSymbols([]);
   b.useDiscoveredTests(suite);
@@ -1825,5 +1828,125 @@ describe("the gate's transport flags (itest:alrunner-v3 harness)", () => {
     expect(() => v3ItestTransport({ LETHAL_ITEST_V3_SECOND_ECHO: "0" })).toThrow(
       /SECOND_ECHO is set without/,
     );
+  });
+});
+
+describe("R651: per-phase wall timers, timing only", () => {
+  /**
+   * A fake clock the fake server moves: each request adds its own amount, so a timer's total
+   * names exactly the requests it saw. A daemon's first request (the warm-up) adds 1, a later
+   * entries request `tick` (10 while prefetching, 100 for live), a plain echo 1000 and a plain
+   * coverage request 10000.
+   */
+  const clockedRig = async (now?: () => number) => {
+    const clock = { t: 0, tick: 0 };
+    const warm = new Set<number>();
+    const r = await rig({
+      targetAl: SLEEPER_AL,
+      now: now ?? (() => clock.t),
+      serve: {
+        rows: killsM1,
+        coverage: sleepCoverage(),
+        answer: (q) => {
+          if (q.ids[0] === plainEcho) clock.t += 1000;
+          else if (q.ids[0] === plainCu) clock.t += 10_000;
+          else if (!warm.has(q.daemon)) {
+            warm.add(q.daemon);
+            clock.t += 1;
+          } else clock.t += clock.tick;
+          return undefined;
+        },
+      },
+    });
+    return { r, clock };
+  };
+  /** Prefetch M0001 and M0002, then a kill, a pass with its §5 window, and a live NONE run. */
+  const scenario = async (r: Rig, clock: { tick: number }) => {
+    await baseline(r.b, SUITE1);
+    clock.tick = 10;
+    await r.b.prefetchMutants(plans(["M0001", "M0002"]));
+    clock.tick = 100;
+    const out: TestVerdict[] = [];
+    await r.b.activate("M0001");
+    out.push(await r.b.run(ref("A"), OPTS));
+    await r.b.activate("M0002");
+    out.push(await r.b.run(ref("A"), OPTS), await r.b.run(ref("B"), OPTS));
+    await r.b.activate(null);
+    out.push(await r.b.run(ref("A"), OPTS));
+    return out;
+  };
+
+  test("each timer holds only its own phase's requests", async () => {
+    const { r, clock } = await clockedRig();
+    await scenario(r, clock);
+    const s = r.b.entriesStats();
+    expect([
+      s.warmups,
+      s.prefetchRequests,
+      s.liveRequests,
+      s.coverageRequests,
+      s.echoRequests,
+    ]).toEqual([1, 1, 1, 1, 2]);
+    expect({
+      warmupMs: s.warmupMs,
+      prefetchMs: s.prefetchMs,
+      liveMs: s.liveMs,
+      windowMs: s.windowMs,
+      coverageMs: s.coverageMs,
+      echoMs: s.echoMs,
+      boundMs: s.boundMs,
+      boundChecks: s.boundChecks,
+    }).toEqual({
+      warmupMs: 1,
+      prefetchMs: 10,
+      liveMs: 100,
+      windowMs: 12_000,
+      coverageMs: 10_000,
+      echoMs: 2000,
+      // No request runs inside a bound check; the baseline's two runs are not counted.
+      boundMs: 0,
+      boundChecks: 4,
+    });
+  });
+
+  test("boundMs counts only the check: under a clock that moves 1 per read, 1 per check", async () => {
+    let n = 0;
+    const { r, clock } = await clockedRig(() => n++);
+    await scenario(r, clock);
+    const s = r.b.entriesStats();
+    expect([s.boundChecks, s.boundMs]).toEqual([4, 4]);
+  });
+
+  test("no verdict reads the timers: the same verdicts under a still clock and a wild one", async () => {
+    const still = await clockedRig(() => 0);
+    let n = 0;
+    const wild = await clockedRig(() => 1e9 * n++);
+    const strip = (vs: TestVerdict[]) => vs.map(({ durationMs: _d, ...v }) => v);
+    const a = strip(await scenario(still.r, still.clock));
+    const b = strip(await scenario(wild.r, wild.clock));
+    expect(a.map((v) => v.outcome)).toEqual(["fail", "pass", "pass", "pass"]);
+    expect(b).toEqual(a);
+    expect(still.r.b.entriesStats().windowMs).toBe(0);
+    expect(wild.r.b.entriesStats().coverageMs).toBeGreaterThan(1e8);
+  });
+
+  test("the itest's split line prints every phase, and `-` for one that never ran", async () => {
+    const stats = {
+      ...(await rig()).b.entriesStats(),
+      warmupMs: 1,
+      prefetchMs: 2,
+      liveMs: 3,
+      windowMs: 9,
+      coverageMs: 4,
+      echoMs: 5,
+      boundMs: 20,
+      boundChecks: 7,
+    };
+    // other = 100 - (1 + 2 + 3 + 9 + 20); coverage and echo sit inside windows.
+    expect(v3SplitLine({ deploy: 7, baseline: 8, mutants: 100 }, stats)).toBe(
+      "split ms: deploy 7, baseline 8, mutant loop 100 (warm-up 1, prefetch 2, live 3, windows 9 of which coverage 4 and echo 5, bound 20 over 7 checks, other 65)",
+    );
+    expect(v3SplitLine({ baseline: 8 }, stats)).toContain("deploy -, baseline 8, mutant loop - (");
+    expect(v3SplitLine({ baseline: 8 }, stats)).toContain("other -)");
   });
 });
