@@ -13,6 +13,21 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **`al-runner-v3` can run mutants on a warm `serve` daemon** (R635). Opt in with
+  `"alRunnerV3": { "transport": "serve-entries" }`; the default stays `"one-shot"`, unchanged.
+  - **How it works:**
+    - The baseline still runs one-shot.
+    - Every covered mutant is then sent as entries of one `runTests` request on one compile. Each
+      entry carries the mutant id as a resource override, and each mutant's group starts with an echo
+      test that must report exactly that id.
+    - The kill confirm and the reproduction run as small live requests on the same daemon.
+  - **Refused by name, never scored:** a warm-up that disagrees with the one-shot baseline, a
+    warm-up row R612's rule does not keep, a whole batch refused for one reason, and an answer the
+    decoder cannot attribute.
+  - **Measured on the CDO slice:** 164-200 s, against 495 s one-shot on the same edge build and
+    53-80 s on bcdev. Every mutant's verdict equals one-shot's and BC's.
+  - **`alRunnerV3.secondEcho`** (default on) adds an echo before each Sleep coverage window.
+
 - **A new backend, `al-runner-v3`, for the Rust al-runner** (R586). It sits beside the .NET
   al-runner (`--backend al-runner`), which does not change. Select it with `--backend al-runner-v3`
   and an `alRunnerV3` section in `lethal.config.json` (`packagesDir` and a four-number `bcVersion` are

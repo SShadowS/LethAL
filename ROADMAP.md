@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**94 of 646 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**94 of 647 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -681,7 +681,7 @@ that ordering is the priority.
 - **R626** · corpus-snapshot's heavy-job guard counts a parallel itest:alrunner's al-runner children as separate jobs · [R626.md](docs/roadmap/R626.md) · done (bb55c64c)
 - **R627** · contentDigest decodes NavxManifest.xml and navigation.xml as UTF-8 and re-encodes them, so two byte strings that differ only in invalid UTF-8 get one digest · [R627.md](docs/roadmap/R627.md) · open
 - **R630** · bcdev's fetchPublishedAppPackage reads a 5xx, a 404 and a timeout alike as null, so a server error is reported under the wrong cause (every consumer fails closed) · [R630.md](docs/roadmap/R630.md) · done (ee9f0a3b)
-- **R635** · al-runner v3 backend: use serve's multi-entry runTests (one compile, a resources override per mutant) for bcdev-like speed · [R635.md](docs/roadmap/R635.md) · open, filed 2026-10-22
+- **R635** · al-runner v3 backend: use serve's multi-entry runTests (one compile, a resources override per mutant) for bcdev-like speed · [R635.md](docs/roadmap/R635.md) · done (5159e50e)
 - **R636** · R631's link scan caps depth through links, not real depth: a long pnpm link chain with no .al refuses falsely · [R636.md](docs/roadmap/R636.md) · done (ee9f0a3b)
 - **R638** · al-runner v3: a test codeunit's OnRun trigger is not under the per-test CPU limit, so a hang there holds the call until LethAL's own deadline (upstream #5698) · [R638.md](docs/roadmap/R638.md) · open, filed 2026-10-22
 - **R639** · al-runner v3: when LethAL's first covering test is a not-trusted row after a timeout, the mutant ends as error and never reaches the hanging sibling's timeout kill · [R639.md](docs/roadmap/R639.md) · open, filed 2026-10-22
@@ -691,6 +691,7 @@ that ordering is the priority.
 - **R645** · The al-runner v3 backend leaves coverage.cobertura.xml in the caller's working directory · [R645.md](docs/roadmap/R645.md) · open, filed 2026-10-22
 - **R648** · two unit test files fail as "(unnamed)" just over 5 s when another verify overlaps: the default hook/test timeout under parallel load · [R648.md](docs/roadmap/R648.md) · done (9a372f98)
 - **R649** · measure BC's real Sleep behaviour (does Sleep(600000) wait, and hit the test timeout?), then re-cast the v3 gate's X (d) from it · [R649.md](docs/roadmap/R649.md) · open, filed 2026-10-22
+- **R651** · al-runner v3 serve-entries: the itest has no per-phase timers (warm-up, prefetch, coverage pass, §5 windows), so the next CDO speed step cannot target a phase · [R651.md](docs/roadmap/R651.md) · open, filed 2026-10-22
 
 ---
 
