@@ -505,6 +505,9 @@ export function resolveLane(
   );
 }
 
+/** R617: a unit test reached a real writer under /coord without stubbing it. */
+export class UnitTestCoordWriteError extends Error {}
+
 /** The coord lease in `lane`'s name. `run` is the kraken-call seam (`kraken` in a real run). */
 export function krakenLeaseFor(
   lane: string,
@@ -520,6 +523,13 @@ export function krakenLeaseFor(
       return token;
     },
     recordToken(server, token) {
+      // R617: the test preload sets LETHAL_TEST_FAKE_HOME. A unit test that reaches this writer
+      // would overwrite a real token file wherever /coord exists, and fail only on CI.
+      if (process.env.LETHAL_TEST_FAKE_HOME !== undefined) {
+        throw new UnitTestCoordWriteError(
+          `a unit test reached the real recordToken for ${server}; stub recordToken (it writes ${TOKEN_DIR})`,
+        );
+      }
       writeFileSync(join(TOKEN_DIR, `lease-${server}.txt`), `${token}\n`, "utf8");
     },
     async heartbeat(server, token) {

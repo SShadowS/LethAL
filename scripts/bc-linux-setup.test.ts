@@ -27,6 +27,7 @@ import {
   REAL_DEPS,
   type RunDeps,
   SecretFileError,
+  UnitTestCoordWriteError,
   buildConfig,
   buildLaunch,
   configFileName,
@@ -518,6 +519,20 @@ describe("R617: --held-lease never takes or releases a lease", () => {
     ).rejects.toThrow(HeldLeaseUnknownError);
     expect(ran).toBe(false);
     expect(verbs(k.calls)).toEqual(["heartbeat"]);
+  });
+
+  test("under the unit-test preload, the real recordToken refuses by name and writes no /coord file", () => {
+    expect(process.env.LETHAL_TEST_FAKE_HOME).toBeDefined();
+    const before = existsSync("/coord/handoff/R-589/lease-bc3.txt")
+      ? readFileSync("/coord/handoff/R-589/lease-bc3.txt", "utf8")
+      : undefined;
+    expect(() => krakenLeaseFor("preproc", fakeKraken().run).recordToken("bc3", "t-unit")).toThrow(
+      UnitTestCoordWriteError,
+    );
+    const after = existsSync("/coord/handoff/R-589/lease-bc3.txt")
+      ? readFileSync("/coord/handoff/R-589/lease-bc3.txt", "utf8")
+      : undefined;
+    expect(after).toBe(before);
   });
 
   test("parseArgs: one held token leases one server", () => {
