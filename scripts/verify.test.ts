@@ -5,20 +5,28 @@ import { join } from "node:path";
 import {
   type Env,
   type Heartbeat,
+  LEDGER_LINE_MAX,
+  LEDGER_STALE_MS,
+  type LedgerIo,
   type SnapState,
   type TestStepIo,
   VerifyArgsError,
   type VerifyIo,
   type WatchOptions,
   completeness,
+  countOverlaps,
   discoverTestFiles,
   execWatched,
   isChildOf,
+  ledgerAppend,
+  ledgerLine,
   parallelism,
   parseArgs,
   parseJunit,
+  parseLedger,
   parseSnapState,
   parseTestSummary,
+  pidAlive,
   runVerify,
   sentinelEnv,
   snapChanges,
@@ -686,4 +694,202 @@ describe("R622 the per-file watchdog", () => {
     expect(r.text).toContain("watchdog: ok");
     expect(r.output.length).toBeGreaterThan(20_000_000);
   }, 40_000);
+});
+
+describe("R622 the verify ledger", () => {
+  const ME = 100;
+  const DEAD = 200;
+  const alive = (pid: number): boolean => pid !== DEAD;
+  // Our run started at T and "now" is T + 60 s.
+  const T = Date.parse("2026-10-22T05:33:00.000Z");
+  const NOW = T + 60_000;
+  const line = (event: "START" | "END", pid: number, start: number, end?: number): string =>
+    ledgerLine(
+      event,
+      { pid, start, p: 8, scope: "full", worktree: `/work/w${pid}` },
+      end !== undefined ? { end, ok: true, failed: 0 } : undefined,
+    );
+  const count = (text: string, until: number): number =>
+    countOverlaps(parseLedger(text), { pid: ME, start: T }, until, NOW, alive);
+
+  test("none: only our own START (our pid is never an other)", () => {
+    const text = line("START", ME, T);
+    expect(count(text, T)).toBe(0);
+    expect(count(text, NOW)).toBe(0);
+  });
+  test("one running at start: a live pid's open START from before ours counts at START and by END", () => {
+    const text = [line("START", 7, T - 5000), line("START", ME, T)].join("");
+    expect(count(text, T)).toBe(1);
+    expect(count(text, NOW)).toBe(1);
+  });
+  test("one that started and ended during our run counts by END only; one that ended before ours never", () => {
+    const text = [
+      line("START", ME, T),
+      line("START", 8, T + 10_000),
+      line("END", 8, T + 10_000, T + 20_000),
+      line("START", 9, T - 30_000),
+      line("END", 9, T - 30_000, T - 1000),
+    ].join("");
+    expect(count(text, T)).toBe(0);
+    expect(count(text, NOW)).toBe(1);
+  });
+  test("a dead pid's open START is not counted, though recent", () => {
+    const text = [line("START", DEAD, T - 1000), line("START", ME, T)].join("");
+    expect(count(text, T)).toBe(0);
+    expect(count(text, NOW)).toBe(0);
+  });
+  test("a live pid's open START past the stale bound is not counted (a reused pid)", () => {
+    const text = line("START", 7, NOW - LEDGER_STALE_MS - 1);
+    expect(count(text, T)).toBe(0);
+    expect(count(text, NOW)).toBe(0);
+  });
+  test("corrupt lines are skipped and the good ones still read", () => {
+    const text = [
+      "garbage\n",
+      "START\tnot-a-date\t-\t7\t8\t-\t-\tfull\t/w\n",
+      "START\t2026-10-22T05:32:00.000Z\t-\tx\t8\t-\t-\tfull\t/w\n",
+      "START\t2026-10-22T05:32:00.000Z\t-\t7\n",
+      "\n",
+      line("START", 7, T - 5000),
+      "START\t2026-10-22T05:3", // a line cut short at the end of the file
+    ].join("");
+    expect(parseLedger(text)).toEqual([{ pid: 7, start: T - 5000, end: undefined }]);
+    expect(count(text, T)).toBe(1);
+  });
+  test("pidAlive: this process is alive, a child that exited is not", async () => {
+    expect(pidAlive(process.pid)).toBe(true);
+    const child = Bun.spawn([process.execPath, "-e", "0"], { stdout: "ignore", stderr: "ignore" });
+    await child.exited;
+    expect(pidAlive(child.pid)).toBe(false);
+  });
+
+  test("an over-long worktree path is cut so the line stays one line, under LEDGER_LINE_MAX < PIPE_BUF", () => {
+    expect(LEDGER_LINE_MAX).toBeLessThan(4096);
+    for (const worktree of ["/w/".repeat(5000), "é".repeat(5000), "😀".repeat(3000), "/a\tb\nc"]) {
+      const l = ledgerLine(
+        "END",
+        { pid: 7, start: T, p: 8, scope: "full", worktree },
+        { end: NOW, ok: false, failed: 9 },
+      );
+      expect(Buffer.byteLength(l)).toBeLessThanOrEqual(LEDGER_LINE_MAX);
+      expect(l.endsWith("\n")).toBe(true);
+      expect(l.slice(0, -1)).not.toContain("\n");
+      expect(l.split("\t")).toHaveLength(9);
+      expect(parseLedger(l)).toEqual([{ pid: 7, start: T, end: NOW }]);
+    }
+  });
+
+  function io(
+    ledger: LedgerIo,
+    testOut = " 3 pass\n 0 fail\nRan 3 tests across 2 files.\n",
+  ): VerifyIo {
+    let t = T;
+    return {
+      packages: KNOWN,
+      cores: 32,
+      env: {},
+      exec: (cmd) =>
+        cmd[1] === "test"
+          ? { code: testOut.includes(" 0 fail") ? 0 : 1, output: testOut }
+          : { code: 0, output: "" },
+      git: () => "",
+      snapState: () => new Map(),
+      log: () => "log",
+      junitPath: () => "/j.xml",
+      readJunit: () =>
+        '<testcase name="a" classname="" file="x.test.ts" /><testcase name="b" classname="" file="y.test.ts" />',
+      expectedTestFiles: () => ["x.test.ts", "y.test.ts"],
+      cleanDist: () => [],
+      now: () => {
+        t += 1000;
+        return t;
+      },
+      print: () => {},
+      ledger,
+    };
+  }
+
+  test("a verify appends a START line and an END line, with the columns in order", async () => {
+    const dir = tempDir("ledger");
+    try {
+      const path = join(dir, "ledger.tsv");
+      // Another verify, still running, was in the ledger before us.
+      writeFileSync(path, line("START", 7, T - 5000));
+      const ledger = { path, worktree: "/work/me", pid: ME, alive };
+      const r = await runVerify([], io(ledger));
+      expect(r.code).toBe(0);
+      const rows = readFileSync(path, "utf8")
+        .split("\n")
+        .slice(1, -1)
+        .map((l) => l.split("\t"));
+      const start = new Date(T + 1000).toISOString();
+      expect(rows[0]).toEqual(["START", start, "-", "100", "8", "-", "-", "full", "/work/me"]);
+      const end = rows[1];
+      expect(end?.slice(0, 2)).toEqual(["END", start]);
+      expect(Date.parse(end?.[2] ?? "")).toBeGreaterThan(T + 1000);
+      expect(end?.slice(3)).toEqual(["100", "8", "pass", "0", "full", "/work/me"]);
+      expect(r.lines).toContain(`ledger: 1 other verify running at start (${path})`);
+      expect(r.lines.at(-2)).toBe(
+        `ledger: 1 other verify running at start, 1 overlapped by end (${path})`,
+      );
+      expect(r.lines.at(-1)).toContain("VERIFY FULL: PASS");
+
+      // A failing package run: scope `packages`, result fail, and the failed count.
+      const f = await runVerify(["runner"], io(ledger, " 2 pass\n 3 fail\n"));
+      expect(f.code).toBe(1);
+      const last = readFileSync(path, "utf8").split("\n").at(-2)?.split("\t");
+      expect([last?.[0], ...(last?.slice(5, 8) ?? [])]).toEqual(["END", "fail", "3", "packages"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a missing directory or an unwritable ledger never fails a verify: one warning, then the run passes", async () => {
+    const dir = tempDir("ledger");
+    try {
+      // A directory as the path is unwritable for every user, root included.
+      for (const path of [join(dir, "no-such-dir", "ledger.tsv"), dir]) {
+        const r = await runVerify([], io({ path, worktree: "/work/me", pid: ME, alive }));
+        expect(r.code, path).toBe(0);
+        const warns = r.lines.filter((l) => l.startsWith("ledger:"));
+        expect(warns, path).toHaveLength(1);
+        expect(warns[0]).toMatch(/^ledger: unavailable \(.+\); overlap not recorded$/);
+        expect(r.lines.at(-1)).toContain("VERIFY FULL: PASS");
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("atomicity: 20 processes appending at once write 20 x 50 whole lines, none interleaved", async () => {
+    const dir = tempDir("ledger");
+    try {
+      const path = join(dir, "ledger.tsv");
+      const verifyTs = JSON.stringify(join(REPO_ROOT, "scripts", "verify.ts"));
+      const go = Date.now() + 1500; // every child waits for the same moment, then writes
+      const script = (n: number): string =>
+        [
+          `const { ledgerAppend } = await import(${verifyTs});`,
+          `while (Date.now() < ${go}) {}`,
+          `for (let i = 0; i < 50; i++) ledgerAppend(${JSON.stringify(path)}, \`${n}\\t\${i}\\t\${"x".repeat(3000)}\\n\`);`,
+        ].join("\n");
+      const kids = Array.from({ length: 20 }, (_, n) =>
+        Bun.spawn([process.execPath, "-e", script(n)], { stdout: "ignore", stderr: "pipe" }),
+      );
+      const codes = await Promise.all(kids.map((k) => k.exited));
+      expect(codes.every((c) => c === 0)).toBe(true);
+      const lines = readFileSync(path, "utf8").split("\n");
+      expect(lines.pop()).toBe("");
+      expect(lines).toHaveLength(1000);
+      const bad = lines.filter((l) => !/^\d+\t\d+\tx{3000}$/.test(l));
+      expect(bad.length, `${bad.length} lines not whole`).toBe(0);
+      expect(new Set(lines.map((l) => l.split("\t").slice(0, 2).join(" "))).size).toBe(1000);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("ledgerAppend throws on a bad path (the caller turns it into the warning)", () => {
+    expect(() => ledgerAppend(join(tmpdir(), "no-such-dir-r622", "x.tsv"), "a\n")).toThrow();
+  });
 });

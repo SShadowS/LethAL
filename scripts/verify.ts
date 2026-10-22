@@ -38,10 +38,24 @@
  * R622 (a stuck file). A test file that runs over FILE_LIMIT_S (180 s) of wall clock is killed and
  * fails the run on a `watchdog: FAIL, <file> ran over 180 s ...` line, so a worker spinning without
  * yielding costs 3 minutes instead of a silent hang. See `Heartbeat`.
+ *
+ * R622 (the ledger). Every verify appends a START and an END line to one shared file,
+ * /coord/locks/verify-ledger.tsv, or the file LETHAL_VERIFY_LEDGER names (tests use a temp file),
+ * and prints how many OTHER verifies overlapped it. See `ledgerLine` for the columns.
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+  writeSync,
+} from "node:fs";
 import { availableParallelism, tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
@@ -577,6 +591,162 @@ export async function execWatched(
   }
 }
 
+/** The shared ledger, unless LETHAL_VERIFY_LEDGER names another file. */
+export const LEDGER_PATH = "/coord/locks/verify-ledger.tsv";
+export const LEDGER_ENV = "LETHAL_VERIFY_LEDGER";
+
+/** A line's byte limit: well under PIPE_BUF (4096), the size a single O_APPEND write keeps whole. */
+export const LEDGER_LINE_MAX = 1024;
+/** The worktree column keeps at most this many characters (its tail): 4 bytes each at most. */
+const LEDGER_WORKTREE_MAX = 200;
+
+/**
+ * An open START older than this is not running, even if its pid is alive: that pid was reused. 15
+ * minutes is about 36 times the slowest full verify seen on Linux (24.9 s at P=8, load 49,
+ * `/coord/handoff/R-622/repro.md`), and a run the watchdog stops ends long before it.
+ */
+export const LEDGER_STALE_MS = 15 * 60 * 1000;
+
+export interface LedgerSelf {
+  readonly pid: number;
+  readonly start: number;
+  readonly p: number;
+  readonly scope: VerifyMode["kind"];
+  readonly worktree: string;
+}
+
+/**
+ * R622 the verify ledger. Why: a full verify at 05:33Z on 2026-10-22 failed with 9 SQLite timeouts
+ * at load 6, and whether other full verifies ran at the same time could not be checked (R616).
+ *
+ * One line per event, tab-separated, in this fixed order:
+ *   event   START or END
+ *   start   the run's start, UTC ISO (on both lines: pid + start is the run's key)
+ *   end     the run's end, UTC ISO; `-` on START
+ *   pid     verify's pid
+ *   p       the P it ran with
+ *   result  pass or fail; `-` on START
+ *   failed  the failed-test count, `?` when no summary was read; `-` on START
+ *   scope   full, changed or packages
+ *   worktree the repo root; tabs and newlines become spaces, and a long one keeps only its tail
+ * A run that died leaves a START with no END, and any line that does not parse is skipped.
+ */
+export function ledgerLine(
+  event: "START" | "END",
+  self: LedgerSelf,
+  finish?: { readonly end: number; readonly ok: boolean; readonly failed: number | undefined },
+): string {
+  const clean = self.worktree.replace(/[\t\r\n]/g, " ");
+  const worktree =
+    clean.length > LEDGER_WORKTREE_MAX ? `...${clean.slice(-LEDGER_WORKTREE_MAX)}` : clean;
+  const iso = (ms: number): string => new Date(ms).toISOString();
+  return `${[
+    event,
+    iso(self.start),
+    finish === undefined ? "-" : iso(finish.end),
+    self.pid,
+    self.p,
+    finish === undefined ? "-" : finish.ok ? "pass" : "fail",
+    finish === undefined ? "-" : (finish.failed ?? "?"),
+    self.scope,
+    worktree,
+  ].join("\t")}\n`;
+}
+
+export interface LedgerRun {
+  readonly pid: number;
+  readonly start: number;
+  /** Undefined while only its START is in the ledger. */
+  readonly end: number | undefined;
+}
+
+/** Every run in the ledger's text, keyed by pid + start. A line that does not parse is skipped. */
+export function parseLedger(text: string): LedgerRun[] {
+  const runs = new Map<string, LedgerRun>();
+  for (const line of text.split("\n")) {
+    const f = line.split("\t");
+    if (f.length !== 9) continue;
+    const [event, startText, endText, pidText] = f;
+    const pid = Number(pidText);
+    const start = Date.parse(startText ?? "");
+    if (!Number.isInteger(pid) || pid <= 0 || Number.isNaN(start)) continue;
+    const key = `${pid}\t${start}`;
+    if (event === "START") {
+      if (!runs.has(key)) runs.set(key, { pid, start, end: undefined });
+    } else if (event === "END") {
+      const end = Date.parse(endText ?? "");
+      if (!Number.isNaN(end)) runs.set(key, { pid, start, end });
+    }
+  }
+  return [...runs.values()];
+}
+
+/**
+ * How many runs of OTHER pids overlap ours, `self.start` to `until` (our start for the START count,
+ * now for the END count). A run with no END is taken as running now only while its pid is alive
+ * AND its start is under LEDGER_STALE_MS old: a dead pid crashed, and an old live one was reused.
+ */
+export function countOverlaps(
+  runs: readonly LedgerRun[],
+  self: { readonly pid: number; readonly start: number },
+  until: number,
+  now: number,
+  alive: (pid: number) => boolean,
+): number {
+  return runs.filter((r) => {
+    if (r.pid === self.pid) return false;
+    const end = r.end ?? (now - r.start < LEDGER_STALE_MS && alive(r.pid) ? now : undefined);
+    return end !== undefined && r.start <= until && end >= self.start;
+  }).length;
+}
+
+/** Whether a process with this pid exists (EPERM: it does, owned by another user). */
+export function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/** ONE write() of the whole line on an O_APPEND descriptor, so concurrent lines never interleave. */
+export function ledgerAppend(path: string, line: string): void {
+  const fd = openSync(path, "a");
+  try {
+    const n = writeSync(fd, line);
+    if (n !== Buffer.byteLength(line)) throw new Error(`short write (${n} bytes)`);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+export interface LedgerIo {
+  readonly path: string;
+  readonly worktree: string;
+  readonly pid: number;
+  readonly alive: (pid: number) => boolean;
+}
+
+/** Appends `line`, then counts the overlaps up to `until`. Never throws: an error is returned. */
+function ledgerEvent(
+  l: LedgerIo,
+  line: string,
+  self: LedgerSelf,
+  until: number,
+  now: number,
+): { count: number } | { error: string } {
+  try {
+    ledgerAppend(l.path, line);
+    const runs = parseLedger(readFileSync(l.path, "utf8"));
+    return { count: countOverlaps(runs, self, until, now, l.alive) };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+const others = (n: number): string => `${n} other ${n === 1 ? "verify" : "verifies"}`;
+
 export interface TestStepIo {
   exec(cmd: string[], env: Env): ExecResult | Promise<ExecResult>;
   snapState(): SnapState;
@@ -725,6 +895,8 @@ export interface VerifyIo extends TestStepIo {
   cleanDist(): string[];
   now(): number;
   print(line: string): void;
+  /** The R622 ledger; none, no ledger lines. */
+  readonly ledger?: LedgerIo;
 }
 
 /** The whole run. Prints each line as it goes and returns them all, plus the exit code. */
@@ -753,7 +925,41 @@ export async function runVerify(
     );
   }
   const guardOff = io.env[ALLOW_SNAPSHOT_CREATE] === "1";
+  // R622: the ledger's START. A failure is warned about once, at the end, and never fails the run.
+  const ledger = io.ledger;
+  const self: LedgerSelf = {
+    pid: ledger?.pid ?? 0,
+    start: t0,
+    p,
+    scope: mode.kind,
+    worktree: ledger?.worktree ?? "",
+  };
+  const atStart =
+    ledger === undefined ? undefined : ledgerEvent(ledger, ledgerLine("START", self), self, t0, t0);
+  if (ledger !== undefined && atStart !== undefined && "count" in atStart) {
+    say(`ledger: ${others(atStart.count)} running at start (${ledger.path})`);
+  }
+  const ledgerEnd = (ok: boolean, summary: TestSummary | null): void => {
+    if (ledger === undefined || atStart === undefined) return;
+    const now = io.now();
+    const atEnd =
+      "count" in atStart
+        ? ledgerEvent(
+            ledger,
+            ledgerLine("END", self, { end: now, ok, failed: summary?.fail }),
+            self,
+            now,
+            now,
+          )
+        : atStart;
+    say(
+      "count" in atStart && "count" in atEnd
+        ? `ledger: ${others(atStart.count)} running at start, ${atEnd.count} overlapped by end (${ledger.path})`
+        : `ledger: unavailable (${"error" in atEnd ? atEnd.error : ""}); overlap not recorded`,
+    );
+  };
   const done = (code: number, summary: TestSummary | null): { code: number; lines: string[] } => {
+    ledgerEnd(code === 0, summary);
     say(receipt(mode, code === 0, summary, guardOff, (io.now() - t0) / 1000));
     return { code: exitCode(mode, code), lines };
   };
@@ -822,6 +1028,12 @@ async function main(argv: readonly string[]): Promise<number> {
       cleanDist: () => cleanDist(REPO_ROOT),
       now: () => Date.now(),
       print: (l) => console.log(l),
+      ledger: {
+        path: process.env[LEDGER_ENV] || LEDGER_PATH,
+        worktree: REPO_ROOT,
+        pid: process.pid,
+        alive: pidAlive,
+      },
     });
     return r.code;
   } finally {
