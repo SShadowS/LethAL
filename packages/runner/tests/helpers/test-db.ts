@@ -76,8 +76,12 @@ export function probeRoot(root: string): RootFacts {
   } catch {
     writable = false;
   }
-  const s = statfsSync(root);
-  return { isDir: true, writable, freeMb: Math.floor((s.bavail * s.bsize) / (1024 * 1024)) };
+  try {
+    const s = statfsSync(root);
+    return { isDir: true, writable, freeMb: Math.floor((s.bavail * s.bsize) / (1024 * 1024)) };
+  } catch {
+    return { isDir: true, writable, freeMb: 0 };
+  }
 }
 
 const PREFIX = "lethal-unit-db-";
@@ -91,6 +95,9 @@ export function dbDirPrefix(root: string, pid: number): string {
  * Removes the DB folders of processes that are gone. A worker killed by verify's watchdog skips
  * its `afterAll`, and the tmpfs is shared by every lane in the container. A live pid's folder is
  * kept. Returns the names removed.
+ * ponytail: assumes every process that shares the tmpfs shares one pid namespace (true in the kraken
+ * container). A sandbox with its own pids on the same tmpfs would see a live folder's pid as dead;
+ * add the pid-namespace id to the prefix if that ever runs.
  */
 export function sweepDeadDbDirs(root: string, alive: (pid: number) => boolean): string[] {
   const removed: string[] = [];
