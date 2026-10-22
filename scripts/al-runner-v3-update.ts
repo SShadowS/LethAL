@@ -81,8 +81,15 @@ export interface UpdateDeps {
   /** Extracts `tarball` into the empty `dir`; returns the binary's path. */
   extract(tarball: string, dir: string): Promise<string>;
   versionOf(binary: string): Promise<string>;
-  /** Checks out `commit` detached in the gate worktree and runs the gate with `env`. */
-  runGate(commit: string, env: Readonly<Record<string, string>>): Promise<void>;
+  /**
+   * Checks out `commit` detached in the gate worktree and runs the gate with `env`. `log` takes a
+   * preparation line (R614 I2: how the fixture `.alpackages` were prepared) into the update log.
+   */
+  runGate(
+    commit: string,
+    env: Readonly<Record<string, string>>,
+    log: (line: string) => Promise<void>,
+  ): Promise<void>;
   /** A running process whose executable resolves under `root`. */
   inUse(): Promise<boolean>;
   log(line: string): Promise<void>;
@@ -310,15 +317,19 @@ export async function gateOne(
     const receipt = join(work, "receipt.json");
     await rm(receipt, { force: true });
     try {
-      await deps.runGate(commit, {
-        LETHAL_ITEST_ALRUNNER_V3: "1",
-        LETHAL_ALRUNNER_V3_PATH: binary,
-        ...(opts.regateAt === undefined ? { LETHAL_ALRUNNER_V3_CANDIDATE: "1" } : {}),
-        LETHAL_ITEST_V3_TABLES: "1",
-        LETHAL_ITEST_V3_CDO: process.env.LETHAL_ITEST_V3_CDO ?? V3_CDO_DEFAULT,
-        LETHAL_V3_GATE_NONCE: nonce,
-        LETHAL_V3_GATE_RECEIPT: receipt,
-      });
+      await deps.runGate(
+        commit,
+        {
+          LETHAL_ITEST_ALRUNNER_V3: "1",
+          LETHAL_ALRUNNER_V3_PATH: binary,
+          ...(opts.regateAt === undefined ? { LETHAL_ALRUNNER_V3_CANDIDATE: "1" } : {}),
+          LETHAL_ITEST_V3_TABLES: "1",
+          LETHAL_ITEST_V3_CDO: process.env.LETHAL_ITEST_V3_CDO ?? V3_CDO_DEFAULT,
+          LETHAL_V3_GATE_NONCE: nonce,
+          LETHAL_V3_GATE_RECEIPT: receipt,
+        },
+        (line) => deps.log(`${deps.now()} ${tag}: ${line}`),
+      );
     } catch (err) {
       // A failing gate still writes its receipt; the receipt decides. R633 I1: the error is logged.
       await deps.log(
@@ -789,7 +800,7 @@ export function realDeps(root = ROOT): UpdateDeps {
       throw new Error(`no al-runner binary in ${tarball}`);
     },
     versionOf: async (b) => (await run([b, "--version"])).trim(),
-    runGate: async (commit, env) => {
+    runGate: async (commit, env, log) => {
       if (!existsSync(GATE_WORKTREE))
         await run([
           "git",
@@ -806,7 +817,9 @@ export function realDeps(root = ROOT): UpdateDeps {
       // no receipt is written).
       for (const step of GATE_STEPS) await run([...step], {}, GATE_WORKTREE);
       // R614: extracted from the pinned tar, verified against it, or refused by name.
-      await prepareFixtureSymbols({ worktree: GATE_WORKTREE });
+      // I2: logged at once, so the first run's `marked` (or an `extracted`) shows in the update log.
+      const prepared = await prepareFixtureSymbols({ worktree: GATE_WORKTREE });
+      await log(`fixture .alpackages: ${prepared}`);
       // R633 I1: the itest's own output goes to `gate.log` beside the receipt; `gateOne` keeps it.
       const receipt = env.LETHAL_V3_GATE_RECEIPT;
       await runToLog(

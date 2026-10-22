@@ -86,6 +86,8 @@ function fake(o: {
   version?: string;
   /** R639 L6: runs inside the gate, before the receipt is written. */
   onGate?: () => Promise<void>;
+  /** R614 I2: the gate's preparation line, sent through runGate's `log`. */
+  prepLine?: string;
 }) {
   const seen = {
     gates: [] as string[],
@@ -117,9 +119,10 @@ function fake(o: {
       return join(dir, "al-runner");
     },
     versionOf: async () => o.version ?? "al-runner 3.0.0-alpha.3 (c893e3633)",
-    runGate: async (commit, env) => {
+    runGate: async (commit, env, log) => {
       seen.gates.push(commit);
       seen.envs.push(env);
+      if (o.prepLine !== undefined) await log(o.prepLine);
       await o.onGate?.();
       const receiptPath = env.LETHAL_V3_GATE_RECEIPT ?? "";
       if (o.gateLog !== undefined)
@@ -191,6 +194,17 @@ linuxOnly("T19: the v3 update gate", () => {
     expect(await updateOnce(fake({ outcome: "pass" }).deps)).toEqual(["pass"]);
     const g2 = JSON.parse(await readFile(join(await current(), ".gated"), "utf8"));
     expect("warnFacts" in g2).toBe(false);
+  });
+
+  test("R614 I2: the gate's preparation line reaches the update log, tagged, on a pass and on a gate-fail", async () => {
+    for (const outcome of ["pass", "gate-fail"] as const) {
+      await setup();
+      const { deps, seen } = fake({ outcome, prepLine: "fixture .alpackages: marked" });
+      await updateOnce(deps);
+      expect(seen.logs).toContain(
+        "2026-10-21T00:00:00Z v3.0.0-alpha.3: fixture .alpackages: marked",
+      );
+    }
   });
 
   test("pass while a v3 process runs: installed, current NOT moved (deferred: in use)", async () => {

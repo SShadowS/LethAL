@@ -4,14 +4,20 @@
  * its `runGate`) and the itest's own startup, so a manual run in a fresh worktree extracts the
  * folders itself, sha-checked (R-637 run 1 and lethal-code's R-612 leg C hit that gap).
  *
- * - Folders absent: the tar's sha256 must equal the pin; then every member is extracted and the
- *   pin written to `SYMBOLS_MARKER` at the worktree root (untracked, outside fixtures/ and
- *   packages/, so the receipt's dirty check ignores it).
+ * - Folders absent: the tar's sha256 must equal the pin; then ONLY the members under `folders`
+ *   are extracted (no other fixture folder is written) and the pin is written to `SYMBOLS_MARKER`
+ *   at the worktree root (gitignored, outside fixtures/ and packages/, so the receipt's dirty
+ *   check ignores it). The marker means "these folders equal the tar's", whichever way it was
+ *   written.
  * - All folders present and the marker equals the pin: used as they are.
  * - All folders present and NO marker (folders placed before R614): re-verified against the tar,
  *   file set and every file's sha256. Equal: the marker is written. Any difference: refused.
  * - Anything else (a wrong marker, only some folders): refused by name. Nothing is ever deleted:
  *   the refusal names the one-time fix.
+ *
+ * The reader takes plain ustar only: regular files and directories, octal sizes, names of up to
+ * 255 bytes (POSIX prefix). GNU long names, pax headers and links are refused; re-pack such a tar
+ * with `tar --format=ustar`.
  */
 import { createHash } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
@@ -23,7 +29,10 @@ export const FIXTURE_SYMBOLS_TAR = "/work/lethal/.kraken-local/fixture-symbols.t
 
 /**
  * F5: the tar, pinned by sha256 (measured 2026-10-21, 1,705,707,520 bytes). A different tar is
- * refused by name; changing it is a deliberate edit here, then a `--regate`.
+ * refused by name; changing it is a deliberate edit here, then a `--regate`. A re-pin refuses
+ * the gate worktree once (its marker names the old pin, `al-runner-v3-gate-symbols-unverified`):
+ * before that `--regate`, delete the gate worktree's two folders and its `SYMBOLS_MARKER`, so the
+ * run extracts them from the new tar.
  */
 export const FIXTURE_SYMBOLS_TAR_SHA256 =
   "bdf460e292f005f1c02cc7b45e83ede1d5c5df280070dc97231f9b314d4f175e";
@@ -54,9 +63,12 @@ export async function prepareFixtureSymbols(s: {
   const markerFile = join(s.worktree, SYMBOLS_MARKER);
   const found = existsSync(markerFile) ? (await readFile(markerFile, "utf8")).trim() : undefined;
   const present = folders.filter((f) => existsSync(join(s.worktree, f)));
-  const unverified = (why: string) =>
+  const unverified = (
+    why: string,
+    fix = `remove ${folders.map((f) => join(s.worktree, f)).join(" and ")} and ${markerFile}, then run again to extract them from ${tar}`,
+  ) =>
     new FixtureSymbolsRefusedError(
-      `al-runner-v3-gate-symbols-unverified: ${s.worktree}: ${why}; its ${SYMBOLS_MARKER} reads ${found ?? "(no marker)"}, expected ${pinned}; one-time fix: remove ${folders.map((f) => join(s.worktree, f)).join(" and ")} and ${markerFile}, then run again to extract them from ${tar}`,
+      `al-runner-v3-gate-symbols-unverified: ${s.worktree}: ${why}; its ${SYMBOLS_MARKER} reads ${found ?? "(no marker)"}, expected ${pinned}; one-time fix: ${fix}`,
     );
 
   if (present.length === folders.length && found === pinned) return "verified";
@@ -68,7 +80,10 @@ export async function prepareFixtureSymbols(s: {
       ? new FixtureSymbolsRefusedError(
           `al-runner-v3-gate-worktree-unprepared: ${s.worktree} has no fixture .alpackages (${folders.join(", ")}) and there is no ${tar} to extract them from`,
         )
-      : unverified(`no ${tar} to verify the folders against`);
+      : unverified(
+          `no ${tar} to verify the folders against`,
+          `copy the pinned tar (sha256 ${pinned}) to ${tar}, or, only after checking the folders against that tar yourself, write ${pinned} to ${markerFile}`,
+        );
   const tarSha = await sha256OfStream(tar);
   if (tarSha !== pinned)
     throw new FixtureSymbolsRefusedError(
@@ -76,7 +91,7 @@ export async function prepareFixtureSymbols(s: {
     );
 
   if (present.length === 0) {
-    await extractTar(tar, s.worktree);
+    await extractTar(tar, s.worktree, folders);
     await writeFile(markerFile, `${pinned}\n`);
     return "extracted";
   }
@@ -96,6 +111,9 @@ async function sha256OfStream(p: string): Promise<string> {
   return h.digest("hex");
 }
 
+/** A tar member path is one of the checked folders' (the same test for extract and compare). */
+const under = (folders: readonly string[], p: string) => folders.some((f) => p.startsWith(`${f}/`));
+
 interface TarMember {
   readonly name: string;
   readonly kind: "file" | "dir";
@@ -104,11 +122,12 @@ interface TarMember {
 }
 
 /**
- * The members of a plain ustar archive, in order. Only regular files and directories are
- * accepted (the pinned tar holds nothing else); any other type, a non-octal size, or a member
- * whose path is absolute or climbs with `..` throws.
+ * The members of a plain ustar archive, in order, all parsed before anything is written. Only
+ * regular files and directories are accepted (the pinned tar holds nothing else); any other type,
+ * a non-octal size, or a member whose path is absolute or lands outside `into` once joined (a
+ * backslash counts as a separator, as on Windows) throws.
  */
-async function tarMembers(fh: FileHandle, tar: string): Promise<TarMember[]> {
+async function tarMembers(fh: FileHandle, tar: string, into: string): Promise<TarMember[]> {
   const members: TarMember[] = [];
   const h = Buffer.alloc(512);
   for (let pos = 0; ; ) {
@@ -121,15 +140,27 @@ async function tarMembers(fh: FileHandle, tar: string): Promise<TarMember[]> {
     if (!/^[0-7]+$/.test(sizeText)) throw new Error(`${tar}: unreadable tar size at byte ${pos}`);
     const size = Number.parseInt(sizeText, 8);
     const type = field(156, 1);
-    const prefix = h.toString("latin1", 257, 262) === "ustar" ? field(345, 155) : "";
+    // M3: the prefix field exists only in POSIX ustar (`ustar\0` + `00`); GNU keeps times there.
+    const prefix = h.toString("latin1", 257, 265) === "ustar\u000000" ? field(345, 155) : "";
     const raw = prefix !== "" ? `${prefix}/${field(0, 100)}` : field(0, 100);
     const name = raw.replace(/^\.\//, "").replace(/\/$/, "");
     if (type !== "0" && type !== "" && type !== "5")
-      throw new Error(`${tar}: unsupported tar member type '${type}' for ${raw}`);
-    if (isAbsolute(name) || name.split("/").includes(".."))
-      throw new Error(`${tar}: unsafe tar member path ${raw}`);
-    if (name !== "")
+      throw new Error(
+        `${tar}: unsupported tar member type '${type}' for ${raw}; re-pack the tar with \`tar --format=ustar\` (regular files and directories only)`,
+      );
+    if (name !== "") {
+      const rel = relative(into, join(into, name.replaceAll("\\", "/")));
+      if (
+        isAbsolute(name) ||
+        /^[A-Za-z]:/.test(name) ||
+        rel === "" ||
+        rel === ".." ||
+        rel.startsWith(`..${sep}`) ||
+        isAbsolute(rel)
+      )
+        throw new Error(`${tar}: unsafe tar member path ${raw}`);
       members.push({ name, kind: type === "5" ? "dir" : "file", size, offset: pos + 512 });
+    }
     pos += 512 + Math.ceil(size / 512) * 512;
   }
 }
@@ -154,10 +185,12 @@ async function readMember(
   }
 }
 
-async function extractTar(tar: string, into: string): Promise<void> {
+/** I1: only the members under `folders`; every other member is skipped, never written. */
+async function extractTar(tar: string, into: string, folders: readonly string[]): Promise<void> {
   const fh = await open(tar, "r");
   try {
-    for (const m of await tarMembers(fh, tar)) {
+    for (const m of await tarMembers(fh, tar, into)) {
+      if (!under(folders, m.name)) continue;
       const target = join(into, m.name);
       if (m.kind === "dir") {
         await mkdir(target, { recursive: true });
@@ -184,12 +217,11 @@ async function differencesFromTar(
   worktree: string,
   folders: readonly string[],
 ): Promise<string[]> {
-  const under = (p: string) => folders.some((f) => p.startsWith(`${f}/`));
   const want = new Map<string, string>();
   const fh = await open(tar, "r");
   try {
-    for (const m of await tarMembers(fh, tar)) {
-      if (m.kind !== "file" || !under(m.name)) continue;
+    for (const m of await tarMembers(fh, tar, worktree)) {
+      if (m.kind !== "file" || !under(folders, m.name)) continue;
       const h = createHash("sha256");
       await readMember(fh, m, (c) => {
         h.update(c);

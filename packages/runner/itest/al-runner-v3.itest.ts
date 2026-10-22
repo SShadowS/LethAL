@@ -960,9 +960,9 @@ async function legT(scratch: string): Promise<SessionReport> {
 async function main(): Promise<void> {
   if (LEGS.includes("T")) preflightGateBaseline(TABLES_BASELINE_PATH, "al-runner-v3 itest leg T");
   // R614: the fixture .alpackages, from the pinned tar (a fresh worktree extracts them itself).
-  console.log(
-    `al-runner-v3 itest: fixture .alpackages ${await prepareFixtureSymbols({ worktree: REPO })}`,
-  );
+  // M9: every leg selection needs them, CDO-only legs included (or the tar to extract them from).
+  const prepared = await prepareFixtureSymbols({ worktree: REPO });
+  console.log(`al-runner-v3 itest: fixture .alpackages ${prepared}`);
   const sha = await sha256OfFile(BIN);
   const version = (execFileSync(BIN, ["--version"], { encoding: "utf8" }) as string).trim();
   const lethalHead = execFileSync("git", ["-C", REPO, "rev-parse", "HEAD"], {

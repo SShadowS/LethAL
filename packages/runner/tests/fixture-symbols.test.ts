@@ -4,7 +4,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -22,35 +22,43 @@ const FOLDERS = [A, B] as const;
 const FILES: Record<string, string> = {
   [`${A}/One.app`]: "one",
   [`${A}/Two.app`]: "two two",
+  // A nested subfolder: exercises the walk's parent paths.
+  [`${A}/sub/Deep.app`]: "deep",
   [`${B}/Three.app`]: "x".repeat(1500),
-  // Outside the checked folders: extracted, never compared.
+  // Outside the checked folders: never extracted, never compared (I1).
   "other/.alpackages/Four.app": "four",
 };
+const inFolders = (name: string) => FOLDERS.some((f) => name.startsWith(`${f}/`));
 
-/** A minimal ustar archive: a directory entry per folder, then each file. */
-function ustar(files: Record<string, string>): Buffer {
-  const header = (name: string, size: number, type: "0" | "5"): Buffer => {
-    const h = Buffer.alloc(512);
-    h.write(name, 0, 100, "utf8");
-    h.write(`${size.toString(8).padStart(11, "0")}\0`, 124, "latin1");
-    h.write(type, 156, "latin1");
-    h.write("ustar\0", 257, "latin1");
-    return h;
-  };
-  const parts: Buffer[] = [];
-  for (const dir of new Set(Object.keys(files).map((f) => dirname(f))))
-    parts.push(header(`${dir}/`, 0, "5"));
-  for (const [name, text] of Object.entries(files)) {
-    const data = Buffer.from(text, "utf8");
-    parts.push(
-      header(name, data.length, "0"),
-      data,
-      Buffer.alloc((512 - (data.length % 512)) % 512),
-    );
-  }
-  parts.push(Buffer.alloc(1024));
-  return Buffer.concat(parts);
+interface Entry {
+  readonly name: string;
+  readonly text?: string;
+  readonly type?: string;
+  readonly prefix?: string;
+  /** Bytes 257..265; default the POSIX `ustar\0` + `00`. */
+  readonly magic?: string;
 }
+function entry(e: Entry): Buffer[] {
+  const data = Buffer.from(e.text ?? "", "utf8");
+  const h = Buffer.alloc(512);
+  h.write(e.name, 0, 100, "utf8");
+  h.write(`${data.length.toString(8).padStart(11, "0")}\0`, 124, "latin1");
+  h.write(e.type ?? "0", 156, "latin1");
+  h.write(e.magic ?? "ustar\u000000", 257, "latin1");
+  if (e.prefix !== undefined) h.write(e.prefix, 345, 155, "utf8");
+  return [h, data, Buffer.alloc((512 - (data.length % 512)) % 512)];
+}
+const archive = (entries: readonly Entry[]): Buffer =>
+  Buffer.concat([...entries.flatMap(entry), Buffer.alloc(1024)]);
+/** A directory entry per folder, then each file. */
+const ustar = (files: Record<string, string>): Buffer =>
+  archive([
+    ...[...new Set(Object.keys(files).map((f) => dirname(f)))].map((d) => ({
+      name: `${d}/`,
+      type: "5",
+    })),
+    ...Object.entries(files).map(([name, text]) => ({ name, text })),
+  ]);
 
 let root = "";
 let worktree = "";
@@ -60,12 +68,11 @@ afterEach(async () => {
   if (root !== "") await rm(root, { recursive: true, force: true });
   root = "";
 });
-async function setup(files = FILES): Promise<void> {
+async function setup(bytes = ustar(FILES)): Promise<void> {
   root = await mkdtemp(join(tmpdir(), "lethal-r614-"));
   worktree = join(root, "wt");
   await mkdir(worktree);
   tar = join(root, "symbols.tar");
-  const bytes = ustar(files);
   await writeFile(tar, bytes);
   pinned = createHash("sha256").update(bytes).digest("hex");
 }
@@ -74,7 +81,7 @@ const prepare = (over: { pinnedSha256?: string; tar?: string } = {}) =>
 const marker = () => join(worktree, SYMBOLS_MARKER);
 async function placeFolders(files = FILES): Promise<void> {
   for (const [name, text] of Object.entries(files)) {
-    if (!FOLDERS.some((f) => name.startsWith(`${f}/`))) continue;
+    if (!inFolders(name)) continue;
     await mkdir(dirname(join(worktree, name)), { recursive: true });
     await writeFile(join(worktree, name), text);
   }
@@ -87,6 +94,10 @@ async function refusal(p: Promise<unknown>): Promise<FixtureSymbolsRefusedError>
   expect(err).toBeInstanceOf(FixtureSymbolsRefusedError);
   return err as FixtureSymbolsRefusedError;
 }
+async function fresh(): Promise<void> {
+  await rm(root, { recursive: true, force: true });
+  root = "";
+}
 
 describe("R614: prepareFixtureSymbols", () => {
   test("the real defaults: the gate's two folders and the pinned tar", () => {
@@ -98,11 +109,13 @@ describe("R614: prepareFixtureSymbols", () => {
     expect(FIXTURE_SYMBOLS_TAR_SHA256).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  test("folders absent: the tar is sha-checked, extracted, and the marker written", async () => {
+  test("folders absent: the tar is sha-checked, ONLY the two folders extracted, and the marker written", async () => {
     await setup();
     expect(await prepare()).toBe("extracted");
     for (const [name, text] of Object.entries(FILES))
-      expect(await readFile(join(worktree, name), "utf8")).toBe(text);
+      if (inFolders(name)) expect(await readFile(join(worktree, name), "utf8")).toBe(text);
+    // I1: a member in a third folder is skipped, never written.
+    expect(existsSync(join(worktree, "other"))).toBe(false);
     expect((await readFile(marker(), "utf8")).trim()).toBe(pinned);
   });
 
@@ -121,12 +134,11 @@ describe("R614: prepareFixtureSymbols", () => {
     expect(await prepare({ tar: join(root, "absent.tar") })).toBe("verified");
   });
 
-  test("folders present, no marker, contents equal the tar's: the marker is written, then go ahead", async () => {
+  test("folders present, no marker, contents equal the tar's (nested subfolder included): marked, go ahead", async () => {
     await setup();
     await placeFolders();
     expect(await prepare()).toBe("marked");
     expect((await readFile(marker(), "utf8")).trim()).toBe(pinned);
-    // Nothing outside the checked folders was extracted on this path.
     expect(existsSync(join(worktree, "other"))).toBe(false);
   });
 
@@ -139,6 +151,11 @@ describe("R614: prepareFixtureSymbols", () => {
         /Extra\.app is not in the tar/,
       ],
       ["a missing file", (w) => rm(join(w, A, "Two.app")), /Two\.app is missing/],
+      [
+        "a changed file in a nested subfolder",
+        (w) => writeFile(join(w, A, "sub", "Deep.app"), "DEEP"),
+        /sub\/Deep\.app differs/,
+      ],
     ];
     for (const [, change, why] of cases) {
       await setup();
@@ -152,10 +169,24 @@ describe("R614: prepareFixtureSymbols", () => {
       expect(err.message).toContain("one-time fix");
       expect(existsSync(join(worktree, A))).toBe(true);
       expect(existsSync(marker())).toBe(false);
-      await rm(root, { recursive: true, force: true });
-      root = "";
+      await fresh();
     }
   });
+
+  // A symlink needs a privilege on Windows; the walk's rule is the same there.
+  test.skipIf(process.platform === "win32")(
+    "a symlink inside a folder is a difference, even to a file with the right bytes: refused",
+    async () => {
+      await setup();
+      await placeFolders();
+      await writeFile(join(root, "same-bytes.app"), "one");
+      await rm(join(worktree, A, "One.app"));
+      await symlink(join(root, "same-bytes.app"), join(worktree, A, "One.app"));
+      const err = await refusal(prepare());
+      expect(err.message).toMatch(/One\.app is not a regular file/);
+      expect(existsSync(marker())).toBe(false);
+    },
+  );
 
   test("folders present and a wrong marker: refused by name, naming the marker found and the sha expected", async () => {
     await setup();
@@ -177,8 +208,7 @@ describe("R614: prepareFixtureSymbols", () => {
       if (m !== undefined) await writeFile(marker(), `${pinned}\n`);
       const err = await refusal(prepare());
       expect(err.message).toMatch(/^al-runner-v3-gate-symbols-unverified: .*only /);
-      await rm(root, { recursive: true, force: true });
-      root = "";
+      await fresh();
     }
   });
 
@@ -192,48 +222,88 @@ describe("R614: prepareFixtureSymbols", () => {
       expect(err.message).toContain("1".repeat(64));
       expect(existsSync(join(worktree, A))).toBe(present);
       expect(existsSync(marker())).toBe(false);
-      await rm(root, { recursive: true, force: true });
-      root = "";
+      await fresh();
     }
   });
 
-  test("no tar: refused by name (unprepared when absent, unverified when present without a marker)", async () => {
+  test("no tar: unprepared when absent; when present, the fix is the tar or a hand-written marker, never a delete", async () => {
     await setup();
     const absent = join(root, "absent.tar");
     expect((await refusal(prepare({ tar: absent }))).message).toMatch(
       /^al-runner-v3-gate-worktree-unprepared: /,
     );
     await placeFolders();
-    expect((await refusal(prepare({ tar: absent }))).message).toMatch(
-      /^al-runner-v3-gate-symbols-unverified: /,
-    );
+    const msg = (await refusal(prepare({ tar: absent }))).message;
+    expect(msg).toMatch(/^al-runner-v3-gate-symbols-unverified: /);
+    expect(msg).toContain(`copy the pinned tar (sha256 ${pinned}) to ${absent}`);
+    expect(msg).toContain(`write ${pinned} to ${marker()}`);
+    expect(msg).not.toContain("remove");
   });
 
   test("a tar member that escapes the worktree is refused, never written", async () => {
     // Four levels up from `wt/fx/a/.alpackages` is `root`, outside the worktree.
-    await setup({ [`${A}/../../../../escape.app`]: "x" });
+    await setup(ustar({ [`${A}/../../../../escape.app`]: "x" }));
     await expect(prepare()).rejects.toThrow(/unsafe tar member/);
     expect(existsSync(join(root, "escape.app"))).toBe(false);
+  });
+
+  test("M4: a member that climbs with backslashes is refused too, never written", async () => {
+    await setup(archive([{ name: `${A}\\..\\..\\..\\..\\escape.app`, text: "x" }]));
+    await expect(prepare()).rejects.toThrow(/unsafe tar member/);
+    expect(existsSync(join(root, "escape.app"))).toBe(false);
+  });
+
+  test("an absolute member path is refused", async () => {
+    await setup(archive([{ name: "/abs.app", text: "x" }]));
+    await expect(prepare()).rejects.toThrow(/unsafe tar member/);
+  });
+
+  test("an unsupported member type (a symlink entry) is refused, naming the re-pack", async () => {
+    await setup(archive([{ name: `${A}/Link.app`, type: "2" }]));
+    await expect(prepare()).rejects.toThrow(/unsupported tar member type '2'.*--format=ustar/);
+  });
+
+  test("M3: the prefix is read on the POSIX ustar magic only, never on GNU's", async () => {
+    await setup(archive([{ name: "Pre.app", prefix: A, text: "p" }, { name: `${B}/B.app` }]));
+    expect(await prepare()).toBe("extracted");
+    expect(await readFile(join(worktree, A, "Pre.app"), "utf8")).toBe("p");
+    await fresh();
+    // GNU's `ustar  \0` keeps other fields at 345: never a prefix.
+    await setup(
+      archive([
+        { name: `${A}/Gnu.app`, prefix: "zzz", magic: "ustar  \0", text: "g" },
+        { name: `${B}/B.app` },
+      ]),
+    );
+    expect(await prepare()).toBe("extracted");
+    expect(await readFile(join(worktree, A, "Gnu.app"), "utf8")).toBe("g");
   });
 });
 
 // R614: both callers route through the one function (the itest runs at import, the update gate's
-// runGate spawns git, so each is pinned by its source).
+// runGate spawns git, so each is pinned by its source). M7: anchored at a line start, so a
+// commented-out call does not match.
 describe("R614: both callers use prepareFixtureSymbols", () => {
   const src = (p: string) => readFile(join(import.meta.dir, "..", "..", "..", p), "utf8");
   test("itest:alrunner-v3 prepares its own worktree before any leg", async () => {
     const s = await src("packages/runner/itest/al-runner-v3.itest.ts");
     const main = s.slice(s.indexOf("async function main()"));
-    const call = main.indexOf("await prepareFixtureSymbols({ worktree: REPO })");
+    const call = main.search(
+      /^\s*const prepared = await prepareFixtureSymbols\(\{ worktree: REPO \}\);$/m,
+    );
     expect(call).toBeGreaterThan(0);
     expect(call).toBeLessThan(main.indexOf("for (const leg of LEGS)"));
   });
-  test("the update gate's runGate prepares the gate worktree before the itest", async () => {
+  test("the update gate's runGate prepares the gate worktree, and logs how, before the itest", async () => {
     const s = await src("scripts/al-runner-v3-update.ts");
     const gate = s.slice(s.indexOf("runGate: async"));
-    const call = gate.indexOf("await prepareFixtureSymbols({ worktree: GATE_WORKTREE })");
+    const call = gate.search(
+      /^\s*const prepared = await prepareFixtureSymbols\(\{ worktree: GATE_WORKTREE \}\);$/m,
+    );
+    const logged = gate.search(/^\s*await log\(`fixture \.alpackages: \$\{prepared\}`\);$/m);
     expect(call).toBeGreaterThan(0);
-    expect(call).toBeLessThan(gate.indexOf('"itest:alrunner-v3"'));
+    expect(logged).toBeGreaterThan(call);
+    expect(logged).toBeLessThan(gate.indexOf('"itest:alrunner-v3"'));
     expect(s).not.toContain('"tar", "-xf"');
   });
 });
