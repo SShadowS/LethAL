@@ -50,6 +50,18 @@ const row = (
   ...(o.notRun === true ? { notRun: true } : {}),
 });
 const doc = (tests: unknown[]) => JSON.stringify({ tests });
+const NOT_TRUSTED_MESSAGE =
+  "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (HangsDirty: did not run (the test used more than the time limit of 3 s of CPU time and was stopped (--test-timeout-secs)): it can change the global variable Probe Cut.Dirty that this test reads, so the state it would have left is not BC's; this failure is not trusted: dirty";
+const CUT_TIMEOUT = row(50652, "HangsDirty", "error", {
+  notRun: true,
+  message: "Test exceeded 3s timeout.",
+  durationMs: 3007,
+});
+const CUT_NOT_TRUSTED = row(50652, "ChecksClean", "error", {
+  notRun: true,
+  message: NOT_TRUSTED_MESSAGE,
+});
+const cutRows = [CUT_TIMEOUT, CUT_NOT_TRUSTED];
 
 /** A fake alpha.2 that answers every probe call as measured; `over` replaces one answer by key. */
 function fakeV3(over: Over = {}): SpawnFn {
@@ -198,6 +210,8 @@ function fakeV3(over: Over = {}): SpawnFn {
           }),
         ]),
       },
+      // r8 (R-637), as measured on alpha.2 (/coord/handoff/R-637/r8-measure/out/cut.stdout).
+      "cu50652-n3": { exitCode: 7, stdout: doc(cutRows) },
       cu50655: { exitCode: 0, stdout: doc([row(50655, "DuplicateNamedKey", "pass")]) },
       "cu50660-n3": { exitCode: 1, stdout: doc(sleepRows) },
       cu50660: { exitCode: 1, stdout: doc(sleepRows) },
@@ -349,7 +363,7 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     const run = s.requests.filter((q) => q.command === "runTests");
     expect(run.length).toBe(1);
     expect(run[0]?.testIsolation).toBe("test");
-    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 24)).toEqual({ outcome: "pass", lines: [] });
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 25)).toEqual({ outcome: "pass", lines: [] });
   });
 
   for (const [entry, name] of [
@@ -370,7 +384,7 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
       expect(f?.measured).toContain(`${entry}: MOVED`);
       expect(f?.measured).toContain("reworded");
       expect(v3ContractRefusals(r)).toEqual([]);
-      const c = classifyLegC(r.facts, V3_DEFECT_FACTS, 24);
+      const c = classifyLegC(r.facts, V3_DEFECT_FACTS, 25);
       expect(c.outcome).toBe("pass");
       expect(c.lines.join("\n")).toMatch(
         new RegExp(
@@ -400,7 +414,7 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     const r = await probe({}, fakeServe(SERVE_ROWS, { ready: false }).spawn);
     expect(r.facts.find((x) => x.fact === "serve-keep-reasons")?.verdict).toBe("unmeasurable");
     expect(v3ContractRefusals(r)).toEqual([]);
-    const c = classifyLegC(r.facts, V3_DEFECT_FACTS, 24);
+    const c = classifyLegC(r.facts, V3_DEFECT_FACTS, 25);
     expect(c.outcome).toBe("pass");
     expect(c.lines.join("\n")).toMatch(
       /al-runner-v3-serve-keep-reason-moved: serve-keep-reasons: unmeasurable/,
@@ -414,7 +428,7 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
       "Codeunit50671.CommitCall": { ...SERVE_ROWS["Codeunit50671.CommitCall"], message: "x" },
     } as typeof SERVE_ROWS;
     const r = await probe({}, fakeServe(rows).spawn);
-    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 24, []).outcome).toBe("gate-fail");
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 25, []).outcome).toBe("gate-fail");
   });
 
   const session = (s: ReturnType<typeof fakeServe>, gated?: Record<string, string>) =>
@@ -490,6 +504,7 @@ describe("§8 the contract probe", () => {
         "upstream-compile-errors",
         "positional-target-wins",
         "serve-keep-reasons",
+        "dependent-fail-after-timeout-is-notrun",
       ].sort(),
     );
   });
@@ -592,13 +607,13 @@ describe("§8 the contract probe", () => {
     const before = await probe();
     const f0 = before.facts.find((f) => f.fact === "none-selected-exit");
     expect(f0).toMatchObject({ kind: "defect", verdict: "defect-present" });
-    expect(classifyLegC(before.facts, V3_DEFECT_FACTS, 24).outcome).toBe("pass");
+    expect(classifyLegC(before.facts, V3_DEFECT_FACTS, 25).outcome).toBe("pass");
     // alpha.4 (#5622): exit 6 with a document of 0 rows.
     const r = await probe({ cu0: () => ({ exitCode: 6, stdout: doc([]) }) });
     expect(r.facts.find((f) => f.fact === "none-selected-exit")?.verdict).toBe("gone");
     expect(v3ContractRefusals(r)).toEqual([]);
     expect(v3DefectsGone(r).join("\n")).toMatch(/defect-gone: none-selected-exit/);
-    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 24).outcome).toBe("held");
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 25).outcome).toBe("held");
   });
 
   test("R632 B (r7): none-selected-exit diverges (refuses, gate-fail) on unparseable output, rows, or another exit", async () => {
@@ -611,8 +626,85 @@ describe("§8 the contract probe", () => {
       const r = await probe({ cu0: () => answer });
       expect(r.facts.find((f) => f.fact === "none-selected-exit")?.verdict).toBe("diverged");
       expect(v3ContractRefusals(r).join("\n")).toMatch(/DIVERGED — none-selected-exit/);
-      expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 24).outcome).toBe("gate-fail");
+      expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 25).outcome).toBe("gate-fail");
     }
+  });
+
+  const DEP = "dependent-fail-after-timeout-is-notrun";
+  test("R637 r8 (a): dependent-fail-after-timeout-is-notrun matches v3's measured not-trusted row", async () => {
+    const r = await probe();
+    expect(r.facts.find((f) => f.fact === DEP)).toMatchObject({
+      kind: "contract",
+      verdict: "matches",
+    });
+    expect(r.facts.length).toBe(25);
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 25).outcome).toBe("pass");
+  });
+
+  test("R637 r8 (b): a plain fail after the timeout (the guard dropped) diverges, refuses and is gate-fail", async () => {
+    // Exit 1 is the likely shape; exit 7 isolates the row check from the exit-code check.
+    for (const exitCode of [1, 7]) {
+      const r = await probe({
+        "cu50652-n3": () => ({
+          exitCode,
+          stdout: doc([CUT_TIMEOUT, row(50652, "ChecksClean", "fail", { message: "dirty" })]),
+        }),
+      });
+      expect(r.facts.find((f) => f.fact === DEP)?.verdict).toBe("diverged");
+      expect(v3ContractRefusals(r).join("\n")).toMatch(/DIVERGED — dependent-fail-after-timeout/);
+      expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 25).outcome).toBe("gate-fail");
+    }
+  });
+
+  test("R637 r8 (c): the not-trusted row missing diverges", async () => {
+    const r = await probe({
+      "cu50652-n3": () => ({ exitCode: 7, stdout: doc([CUT_TIMEOUT]) }),
+    });
+    expect(r.facts.find((f) => f.fact === DEP)?.verdict).toBe("diverged");
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 25).outcome).toBe("gate-fail");
+  });
+
+  // Review I1: each condition of the fact has its own red-going test.
+  const depOf = async (exitCode: number, rows: unknown[]) =>
+    (await probe({ "cu50652-n3": () => ({ exitCode, stdout: doc(rows) }) })).facts.find(
+      (f) => f.fact === DEP,
+    )?.verdict;
+
+  test("R637 r8 (d): the measured rows at exit 1 or exit 0 diverge", async () => {
+    expect(await depOf(1, cutRows)).toBe("diverged");
+    expect(await depOf(0, cutRows)).toBe("diverged");
+  });
+
+  test("R637 r8 (e1): a HangsDirty row without notRun diverges", async () => {
+    const { notRun: _, ...plain } = CUT_TIMEOUT;
+    expect(await depOf(7, [plain, CUT_NOT_TRUSTED])).toBe("diverged");
+  });
+
+  test("R637 r8 (e2): a HangsDirty row with another timeout text diverges", async () => {
+    const two = { ...CUT_TIMEOUT, message: "Test exceeded 2s timeout." };
+    expect(await depOf(7, [two, CUT_NOT_TRUSTED])).toBe("diverged");
+  });
+
+  test("R637 r8 (f1): a ChecksClean row with the right suffix but another prefix diverges", async () => {
+    const m = NOT_TRUSTED_MESSAGE.replace("refused while it ran (HangsDirty: ", "x (");
+    expect(await depOf(7, [CUT_TIMEOUT, { ...CUT_NOT_TRUSTED, message: m }])).toBe("diverged");
+  });
+
+  test("R637 r8 (f2): a ChecksClean row with the right prefix but another suffix diverges", async () => {
+    const m = `${NOT_TRUSTED_MESSAGE.slice(0, -"dirty".length)}clean`;
+    expect(await depOf(7, [CUT_TIMEOUT, { ...CUT_NOT_TRUSTED, message: m }])).toBe("diverged");
+  });
+
+  test("R637 r8 (g, review M3): a duplicate ChecksClean row diverges", async () => {
+    const plainFail = row(50652, "ChecksClean", "fail", { message: "dirty" });
+    expect(await depOf(7, [CUT_TIMEOUT, CUT_NOT_TRUSTED, plainFail])).toBe("diverged");
+  });
+
+  test("R637 r8 (review M2): the measured text shows HangsDirty first, then ChecksClean", async () => {
+    const m = (await probe()).facts.find((f) => f.fact === DEP)?.measured ?? "";
+    expect(m.indexOf("HangsDirty=")).toBeGreaterThan(-1);
+    expect(m.indexOf("HangsDirty=")).toBeLessThan(m.indexOf("ChecksClean="));
+    expect(m).toContain('"Test exceeded 3s timeout."');
   });
 
   test("an unmeasurable defect fact does not refuse but is warned BY NAME (r6)", async () => {
