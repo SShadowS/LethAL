@@ -54,10 +54,8 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
       "coverage-mode",
     'coverage: (r.coverage as "al-runner" | "none" | undefined) ?? "al-runner",': "coverage-mode",
   },
-  // The v2 coverage index's own refusal sentences; v3 reuses the index (plan M1, the safe direction).
-  "al-runner-coverage.ts": {
-    'for (const [key, reason] of refusedObjectsOfFile(root, file, "al-runner")) {': "v2",
-  },
+  // R654 S1: the coverage index passes its own `WrappedRule` ("al-runner-index"), not a backend
+  // name, so it is no longer a backend-identity read.
   // A directory name, not a backend.
   "al-runner-cache.ts": {
     'return join(homeDir(), ".local", "share", "al-runner", "artifacts");': "path",
@@ -72,9 +70,10 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     'if (run.backend === "al-runner" && ctx.renamed !== undefined) {': "v2",
   },
   // R-300b: bcdev's shape rule with arms; v2's measured admission; v3 takes neither (refused).
+  // R654 S1 (plan r2 D-I2): read once, in `wrappedRuleFor`'s switch; the rule itself keys on the
+  // `WrappedRule`, and `carryBarredFiles` (orchestrator.ts) on the same rule.
   "line-map.ts": {
-    'const alRunner = backendKind === "al-runner";': "v2",
-    'if (backendKind === "bcdev" && arms !== undefined) {': "bcdev",
+    'case "al-runner":': "v2",
   },
   "preprocessor-symbols.ts": {
     'const predefined = backend.kind === "al-runner" ? backend.predefined.symbols : [];': "v2",
@@ -94,7 +93,6 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   },
   "orchestrator.ts": {
     '...(backendName === "al-runner" ? { alRunnerNames: true } : {}),': "v2",
-    'backendName === "al-runner" ? alRunnerAdmitsWrappedFile(f.root) : admittedOnBc(f),': "v2",
   },
   "cli.ts": {
     'if (raw !== "bcdev" && raw !== "al-runner" && raw !== "al-runner-v3") {': "config",

@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { type AlRunnerCompileEntry, compileEntriesOf } from "./al-runner-server";
 import { type SpawnFn, defaultSpawn } from "./publisher";
 
 export interface AlRunnerRequest {
@@ -685,24 +686,6 @@ function alRunnerMarkerOf(line: string): string | undefined {
 /** Absent, `null`, or an empty array. */
 function absentOrEmpty(v: unknown): boolean {
   return v === undefined || v === null || (Array.isArray(v) && v.length === 0);
-}
-
-/** One `compilationErrors` entry, from the one-shot envelope or the `--server` summary. */
-export interface AlRunnerCompileEntry {
-  readonly file: string;
-  readonly errors: readonly string[];
-}
-
-/** `compilationErrors` as entries. A malformed entry is kept with no `file`, so it counts. */
-export function compileEntriesOf(raw: unknown): readonly AlRunnerCompileEntry[] {
-  if (!Array.isArray(raw)) return [];
-  return raw.map((e) => {
-    const o = typeof e === "object" && e !== null ? (e as Record<string, unknown>) : {};
-    return {
-      file: typeof o.file === "string" ? o.file : "",
-      errors: Array.isArray(o.errors) ? o.errors.map(String) : [JSON.stringify(e)],
-    };
-  });
 }
 
 /** An app as al-runner names its module: `<Publisher>_<Name>` (then ` v<version>`). */
