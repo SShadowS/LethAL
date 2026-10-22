@@ -1535,8 +1535,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
     }
     if (cut < sent.length || daemon.dirty) await this.closeDaemon();
-    const cutEntry = sent[cut];
-    const standing = sent.slice(0, cutEntry?.echo === true ? cut : cut + 1);
+    // An unkept ECHO stands like any entry, but its group's codeunit entries come after it, so the
+    // whole group is re-sent (§7).
+    const standing = sent.slice(0, cut + 1);
     const results = new Map<string, Map<number, CallRows>>();
     let echoWhy: string | undefined;
     for (const e of standing) {
