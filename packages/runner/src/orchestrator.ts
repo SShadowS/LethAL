@@ -7636,7 +7636,7 @@ async function runSessionBody(
               toExecute.push(m);
               continue;
             }
-            record(
+            const carriedRowId = record(
               cfg.store,
               runId,
               m,
@@ -7671,6 +7671,13 @@ async function runSessionBody(
               undefined, // killingTestRef
               carriedReproduction(carried),
             );
+            // R644 (build review I2): a carried survivor was not run here, so its STORE row keeps
+            // the tests it faced where it was scored, never the tests covering it now; a later
+            // history session reads that list as "faced". The report row above is unchanged.
+            // Whether this resume should carry it at all is R646.
+            if (carried.verdict === "survived" || carried.verdict === "known-survivor") {
+              cfg.store.keepCarriedFacedTests(carriedRowId, carried.coveringTests ?? []);
+            }
           }
         }
         return {

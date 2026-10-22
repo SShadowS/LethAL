@@ -2154,6 +2154,25 @@ export class ResultsStore {
     }
   }
 
+  /**
+   * R644 (build review I2): a survivor CARRIED by `--resume` was not run in this session, so its
+   * store row keeps the tests it faced in the run that scored it (`tests`, its stored list), never
+   * the tests covering it now. An empty list stays empty: "no record", which history never lends.
+   */
+  keepCarriedFacedTests(mutantRowId: number, tests: readonly string[]): void {
+    this.db
+      .query(
+        "UPDATE mutants SET covering_tests = ? WHERE id = ? AND carried = 1 AND verdict IN ('survived', 'known-survivor')",
+      )
+      .run(JSON.stringify(tests), mutantRowId);
+    const r = this.db.query("SELECT changes() AS n").get() as { n: number };
+    if (r.n !== 1) {
+      throw new Error(
+        `store.ts: keepCarriedFacedTests: row ${mutantRowId} is not one carried survivor row (R644)`,
+      );
+    }
+  }
+
   recordTestResult(
     runId: number,
     mutantRowId: number | null,
