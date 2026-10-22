@@ -6187,10 +6187,14 @@ describe("R557: a pre-fix al-runner run's false misses never come back (C1)", ()
     recordedBackend: "al-runner" | "bcdev",
     method: string,
     outcome: string,
+    /** R592: the history session's backend; bcdev lends only from a bcdev run. */
+    sessionBackend: "al-runner" | "bcdev" = "al-runner",
   ): Promise<{ survived: number; report: SessionReport; events: RunEvent[]; runId: number }> {
     const dirs = await project();
     const store = new ResultsStore(":memory:");
-    const r1 = await runSession({ ...base(store, dirs), backend: alRunner() });
+    const session = () => (sessionBackend === "bcdev" ? new ClockBackend(100) : alRunner());
+    // A bcdev session's run 1 is a real bcdev run, so its test-app identity is bcdev's own.
+    const r1 = await runSession({ ...base(store, dirs), backend: session() });
     const runId = lastRun(store);
     markBaseline(store, runId, method, outcome);
     // A bcdev run, as the store records one; everything else (test app, symbols) stays equal, so
@@ -6201,7 +6205,7 @@ describe("R557: a pre-fix al-runner run's false misses never come back (C1)", ()
     const events: RunEvent[] = [];
     const report = await runSession({
       ...base(store, dirs),
-      backend: alRunner(),
+      backend: session(),
       skipKnownSurvivors: true,
       emit: [(e) => events.push(e)],
     });
@@ -6228,7 +6232,13 @@ describe("R557: a pre-fix al-runner run's false misses never come back (C1)", ()
       expect(known(h.report).length, `${method} ${outcome}`).toBe(h.survived);
       expect(warned(h.events, "history-al-runner-test-names")).toEqual([]);
     }
-    // R592: a bcdev run lends nothing to this al-runner session, refused at step 1 (another
+    // A bcdev run with `Space Step` as a baseline error lends to a bcdev session: R557's
+    // renamed-test rule reads al-runner runs only (`runMayLend` step 3's backend condition).
+    const same = await history("bcdev", "Space Step", "error", "bcdev");
+    expect(same.survived).toBeGreaterThan(0);
+    expect(known(same.report).length).toBe(same.survived);
+    expect(warned(same.events, "history-al-runner-test-names")).toEqual([]);
+    // R592: the same bcdev run lends nothing to an al-runner session, refused at step 1 (another
     // backend), never by R557's test-name rule.
     const bc = await history("bcdev", "Space Step", "error");
     expect(known(bc.report)).toEqual([]);
