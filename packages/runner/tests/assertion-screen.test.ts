@@ -341,17 +341,56 @@ describe("R553: the screen reads past al-runner's exception-type prefix", () => 
     );
   });
 
-  test("R586: al-runner-v3 is on the bcdev branch: no al-runner note on a plain kill, and `XException: ` is NOT stripped", () => {
-    const V3_CAPS: BackendCapabilities = { ...CAPS, kind: "al-runner-v3" };
-    // Same texts as 5a: v3 gets the standard note, never the al-runner "no prefix" one.
+  const V3_CAPS: BackendCapabilities = { ...CAPS, kind: "al-runner-v3" };
+
+  test("R586/R657: al-runner-v3 is on the bcdev branch: no al-runner note on a plain kill, and `XException: ` is NOT stripped", () => {
+    // Same texts as 5a: v3 gets the standard note, never the al-runner "no prefix" one. R657
+    // measured v3 writing no prefix at all, so the al-runner note would blame v3 on every such run.
     const plain = build([kill("M0001", BARE), kill("M0002", OVERFLOW)], V3_CAPS);
     expect(plain.backend).toBe("al-runner-v3");
+    expect(plain.assertionScreen?.discrimination).toBe("vacuous");
     expect(plain.assertionScreen?.discriminationNote).toBe(
       ASSERTION_SCREEN_DISCRIMINATION_NOTES.vacuous,
     );
     // A prefixed assertion is read WITHOUT stripping, so it is flagged (on al-runner it is not, test 1).
     const prefixed = build([kill("M0001", P_ASSERT), kill("M0002", ASSERTION)], V3_CAPS);
     expect(prefixed.assertionScreen?.flaggedMutants).toEqual(["0/M0001"]);
+  });
+
+  /**
+   * R657: the seven failure messages al-runner v3 wrote for an invented probe, byte-equal on alpha.2
+   * and edge 57f1e4f98, one-shot and serve (`/coord/handoff/R-657/measure.md` §3). v3 stores the
+   * message alone, with no callstack and no `<Type>: ` prefix.
+   */
+  test("R657: v3's measured message shapes, read with bcdev's rule", () => {
+    const shapes = [
+      kill("M0001", "R657 plain error text"),
+      kill(
+        "M0002",
+        "Assert.AreEqual failed. Expected:<1> (Integer). Actual:<2> (Integer). R657 values differ.",
+      ),
+      kill("M0003", "Assert.IsTrue failed. R657 should be true"),
+      kill(
+        "M0004",
+        "Description must have a value in R657 Widget: No.=W1. It cannot be zero or empty.",
+      ),
+      kill(
+        "M0005",
+        "Assert.ExpectedError failed. Expected: R657 other text. Actual: R657 actual text.",
+      ),
+      kill("M0006", "An error was expected inside an ASSERTERROR statement."),
+      kill("M0007", "Attempted to divide by zero."),
+    ];
+    const flagged = ["0/M0001", "0/M0004", "0/M0006", "0/M0007"];
+    for (const caps of [V3_CAPS, BCDEV_CAPS]) {
+      const r = build(shapes, caps);
+      expect(r.assertionScreen?.flaggedMutants).toEqual(flagged);
+      expect(r.assertionScreen?.discrimination).toBe("partial");
+      expect(r.assertionScreen?.discriminationNote).toBe(
+        ASSERTION_SCREEN_DISCRIMINATION_NOTES.partial,
+      );
+      expect(r.assertionScreen?.runnerRefusals).toBe(0);
+    }
   });
 
   test("5d. a timeout kill's unprefixed text does not pick the backend note (I3)", () => {

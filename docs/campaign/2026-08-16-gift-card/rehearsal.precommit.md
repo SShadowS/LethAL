@@ -143,3 +143,25 @@ blank customer; that test drives the guard through `Issue` and names neither the
 the field, so a grep for either found nothing.
 
 Totals 59 -> 60, killed 33 -> 34; survivors and no-coverage unchanged. Score 68.8% -> **69.4%**.
+
+## Amended 2026-10-22 by R664: re-frozen in place at identity scheme 41, on bc-demo
+
+The frozen report records identity scheme 3 and the build records 41, so `campaign compare` against
+it reads UNVERIFIED. `scripts/gift-card-refreeze.ts` re-freezes this stage IN PLACE: three runs on
+bc-demo that must agree mutant for mutant, then `campaign freeze` of run 1 after deleting
+`rehearsal.baseline.json`. It is written before any of those runs.
+
+Pre-committed:
+
+- **60 deployed mutants** (`EXPECTED_DEPLOYED` in the script; `freeze`'s cardinality check). It is
+  the count of the current frozen report, and the dry-run expectation of R664.
+- every report at identity scheme 41, and runs 2 and 3 equal to run 1 per mutant;
+- verdicts are NOT predicted anew. The re-freeze re-keys the stage. If the printed counts differ
+  from the frozen 34 killed / 15 survived / 11 no-coverage, the moved mutants are found in the two
+  reports and explained in this file before the commit, not absorbed.
+
+**The three rows that carry the demo must not move**: the planted `remove-setrange` in `GetBalance`
+survives, the `conditional-boundary` in `Redeem` survives, and `BlockExpiredCards` is uncovered. If
+any moves, the re-freeze is not committed. `Redeem` has TWO `conditional-boundary` mutants, at the
+remaining-amount guard and at the expiry boundary; both survive in the frozen report, and the script
+refuses unless both still do.

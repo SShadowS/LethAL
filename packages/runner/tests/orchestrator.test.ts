@@ -21441,3 +21441,201 @@ async function restoreBundleFromDisk(
       .run(...key, f.path, f.textGz);
   }
 }
+
+/** R653: a ReproStub that logs `sendKillPair` into the same trace. */
+class PairStub extends ReproStub {
+  readonly pairs: string[] = [];
+  async sendKillPair(mutantId: string, ref: TestMethodRef): Promise<void> {
+    this.pairs.push(`${mutantId} ${ref.method}`);
+    this.trace.push(`pair ${mutantId} ${ref.method}`);
+  }
+}
+
+describe("R653: the orchestrator asks for the kill pair only before a cold fail kill's confirm", () => {
+  const session = async (backend: ExecutionBackend, testAl?: string) => {
+    const dirs = await makeProject(testAl);
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    return { report, store };
+  };
+  const rowOf = (r: SessionReport, id: string) => r.mutants.find((m) => m.mutantCode === id);
+  const traceOf = (b: ReproStub, id: string, len: number) => {
+    const at = b.trace.indexOf(`activate ${id}`);
+    return b.trace.slice(at, at + len);
+  };
+  const KILLER = "OverBudgetDetected";
+
+  test("O1: a cold fail kill: sendKillPair(M, killer), activate(null), confirm, activate(M), reproduction; killed and reproduced", async () => {
+    const b = new PairStub(CAPS_NST, (m) => (m === null ? "pass" : "fail"), ["IsOverBudget"]);
+    const { report, store } = await session(b);
+    expect(traceOf(b, "M0001", 7)).toEqual([
+      "activate M0001",
+      `run M0001 ${KILLER} fail`,
+      `pair M0001 ${KILLER}`,
+      "activate null",
+      `run null ${KILLER} pass`,
+      "activate M0001",
+      `run M0001 ${KILLER} fail`,
+    ]);
+    expect(rowOf(report, "M0001")?.verdict).toBe("killed");
+    expect(rowOf(report, "M0001")?.killReproduced).toBe(true);
+    expect(b.pairs.length).toBe(report.mutants.length);
+    store.close();
+  });
+
+  test("O2: a timeout kill never pairs", async () => {
+    const b = new PairStub(CAPS_NST, (m) => (m === null ? "pass" : "timeout"), ["IsOverBudget"]);
+    const { report, store } = await session(b);
+    expect(rowOf(report, "M0001")?.verdict).toBe("timeout-killed");
+    expect(traceOf(b, "M0001", 4)).toEqual([
+      "activate M0001",
+      `run M0001 ${KILLER} timeout`,
+      "activate null",
+      `run null ${KILLER} pass`,
+    ]);
+    expect(b.pairs).toEqual([]);
+    store.close();
+  });
+
+  test("O3: a backend with the method but without killsMustReproduce never pairs", async () => {
+    class NoRepro extends StubBackend {
+      readonly pairs: string[] = [];
+      async sendKillPair(mutantId: string, ref: TestMethodRef): Promise<void> {
+        this.pairs.push(`${mutantId} ${ref.method}`);
+      }
+    }
+    const b = new NoRepro(CAPS_NST, (m) => (m === null ? "pass" : "fail"), ["IsOverBudget"]);
+    const { report, store } = await session(b);
+    expect(rowOf(report, "M0001")?.verdict).toBe("killed");
+    expect(b.pairs).toEqual([]);
+    store.close();
+  });
+
+  test("O4: a warm kill (k = 2, confirmWarm) never pairs; the cold kill at position 1 does", async () => {
+    class WarmPair extends ReproWarmStub {
+      readonly pairs: string[] = [];
+      async sendKillPair(mutantId: string, ref: TestMethodRef): Promise<void> {
+        this.pairs.push(`${mutantId} ${ref.method}`);
+      }
+    }
+    const b: WarmPair = new WarmPair(
+      CAPS_NST,
+      (mutant, ref) => {
+        if (ref.method === "T1") b.session.set("cache", "populated-by-T1");
+        if (mutant === "M0002" && ref.method === "T2" && b.session.get("cache") !== undefined)
+          return "fail";
+        if (mutant === "M0001" && ref.method === "T1") return "fail";
+        return "pass";
+      },
+      ["IsOverBudget"],
+    );
+    const { report, store } = await session(b, FIVE_TESTS_AL);
+    expect(rowOf(report, "M0002")?.killPosition).toBe(2);
+    expect(rowOf(report, "M0002")?.verdict).toBe("killed");
+    expect(rowOf(report, "M0001")?.killPosition).toBe(1);
+    expect(b.pairs).toEqual(["M0001 T1"]);
+    store.close();
+  });
+
+  test("O4: Decision 11's rerun on the unmutated build never pairs", async () => {
+    const fx = await installedFixture({ session: freshSessions() });
+    const pairs: string[] = [];
+    const backend = {
+      ...fx.cfg.backend,
+      killsMustReproduce: true,
+      sendKillPair: async (mutantId: string, ref: TestMethodRef) => {
+        pairs.push(`${mutantId} ${ref.method}`);
+        fx.trace.push({ call: "pair", id: mutantId });
+      },
+    } as ExecutionBackend;
+    await runNamedMutants({
+      ...fx.cfg,
+      backend,
+      requests: [{ mutantId: "M0001", methods: [OVER] }],
+      rerunOnUnmutated: [OVER],
+    });
+    const calls = fx.trace.flatMap((x) => {
+      if (typeof x !== "object" || x === null || !("call" in x)) return [];
+      const c = x as { call: string; id?: string | null };
+      return c.call === "activate" || c.call === "pair" ? [`${c.call} ${String(c.id)}`] : [];
+    });
+    expect(pairs).toEqual(["M0001 OverBudgetDetected"]);
+    // The pair sits before the kill's confirm; the rerun's activate(null) comes later, with none.
+    const pairAt = calls.indexOf("pair M0001");
+    expect(calls[pairAt + 1]).toBe("activate null");
+    expect(calls.slice(pairAt + 1).filter((c) => c.startsWith("pair"))).toEqual([]);
+    expect(calls.slice(pairAt + 1).filter((c) => c === "activate null").length).toBeGreaterThan(1);
+  });
+
+  test("O5: a backend without the method is unchanged (bcdev): [M, null, M], killed, reproduced", async () => {
+    const b = new ReproStub(CAPS_NST, (m) => (m === null ? "pass" : "fail"), ["IsOverBudget"]);
+    expect("sendKillPair" in b).toBe(false);
+    const { report, store } = await session(b);
+    expect(traceOf(b, "M0001", 6)).toEqual([
+      "activate M0001",
+      `run M0001 ${KILLER} fail`,
+      "activate null",
+      `run null ${KILLER} pass`,
+      "activate M0001",
+      `run M0001 ${KILLER} fail`,
+    ]);
+    expect(rowOf(report, "M0001")?.killReproduced).toBe(true);
+    store.close();
+  });
+
+  test("O6: a session latched unsafe after the kill never sends the pair", async () => {
+    let safety: SessionSafety | undefined;
+    const orig = SessionSafety.prototype.assertSafe;
+    const spy = spyOn(SessionSafety.prototype, "assertSafe").mockImplementation(function (
+      this: SessionSafety,
+      op: string,
+    ) {
+      safety = this;
+      return orig.call(this, op);
+    });
+    try {
+      const b = new PairStub(CAPS_NST, (m) => (m === null ? "pass" : "fail"), ["IsOverBudget"]);
+      b.answer = (mutant, _n, v) => {
+        if (mutant !== null) safety?.latchUnsafe("lease-lost: latched by the test after the kill");
+        return v;
+      };
+      const out = await session(b).catch((e: unknown) => e);
+      expect(b.trace).toContain(`run M0001 ${KILLER} fail`);
+      expect(b.pairs).toEqual([]);
+      if (typeof out === "object" && out !== null && "store" in out) {
+        (out as { store: ResultsStore }).store.close();
+      }
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test("O7: a confirm that fails after the pair is error unstable, with no reproduction and no second mutated row", async () => {
+    let nullRuns = 0;
+    const b = new PairStub(
+      CAPS_NST,
+      (m) => {
+        if (m !== null) return "fail";
+        nullRuns += 1;
+        return nullRuns === 1 ? "pass" : "fail";
+      },
+      ["IsOverBudget"],
+    );
+    const { report, store } = await session(b);
+    expect(rowOf(report, "M0001")?.verdict).toBe("error");
+    expect(rowOf(report, "M0001")?.cause).toBe("unstable");
+    expect(traceOf(b, "M0001", 5)).toEqual([
+      "activate M0001",
+      `run M0001 ${KILLER} fail`,
+      `pair M0001 ${KILLER}`,
+      "activate null",
+      `run null ${KILLER} fail`,
+    ]);
+    expect(b.trace.filter((x) => x === "activate M0001")).toHaveLength(1);
+    const rows = store.db
+      .query("SELECT COUNT(*) AS n FROM test_results WHERE mutant_code = 'M0001'")
+      .get() as { n: number };
+    expect(rows.n).toBe(1);
+    store.close();
+  });
+});

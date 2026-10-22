@@ -115,6 +115,11 @@ describe("parseSecretEnv", () => {
     expect(parseSecretEnv(GOOD)).toEqual({ user: "BCRUNNER", password: SECRET });
     expect(parseSecretEnv(GOOD.replace(/\n/g, "\r\n")).password).toBe(SECRET);
   });
+  test("a refusal names the file it read (R663: bc-demo.env, not bc-linux.env)", () => {
+    const demo = "/coord/secrets/bc-demo.env";
+    expect(() => parseSecretEnv("BC_DEV_USER=x\n", demo)).toThrow(`${demo}: BC_DEV_PASSWORD is missing`);
+    expect(() => parseSecretEnv("nope\n", demo)).toThrow(`${demo}: line 1`);
+  });
 
   test("a missing file is refused by name", () => {
     const path = join(mkdtempSync(join(tmpdir(), "bc-linux-")), "bc-linux.env");
