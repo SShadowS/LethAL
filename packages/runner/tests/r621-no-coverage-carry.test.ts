@@ -211,8 +211,8 @@ describe("R621: a stored no-coverage carries only when this session leaves the m
 
   test("(1) a batch whose every mutant was scored, one stored no-coverage, covered now: not carried whole, re-run", async () => {
     const { r1, r2, events } = await scenario("whole", [LOGIC, EXTRA], false, true);
-    // Precondition: Extra's batch was fully scored in run 1 (all no-coverage), so on master it is
-    // the whole-batch path (`replayCarriedBatch`) that carries it.
+    // Precondition: Extra's batch was fully scored in run 1 (all no-coverage). Before R-646c a
+    // whole-batch replay carried such a batch; now it takes the ordinary path.
     const extraBatch = inExtra(r1)[0]?.batchIndex;
     expect(
       r1.mutants

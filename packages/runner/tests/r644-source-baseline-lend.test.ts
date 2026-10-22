@@ -602,7 +602,7 @@ describe("R646: --resume carries a survivor only against tests it faced", () => 
     expect(faceCodes(h.events)).toEqual(["resume-survivor-no-record"]);
   });
 
-  /** A finished all-green run made unfinished, so `--resume` replays its one batch whole (R192). */
+  /** A finished all-green run made unfinished, so `--resume` meets its one batch fully scored. */
   async function replayable(
     emptyRecord: boolean,
     verdict: "survived" | "known-survivor" = "survived",
@@ -630,7 +630,7 @@ describe("R646: --resume carries a survivor only against tests it faced", () => 
     return { target, report, events, backend };
   }
 
-  test("whole-batch replay: a survivor with an empty record forces the ordinary path; it re-runs", async () => {
+  test("fully scored batch: a survivor with an empty record re-runs", async () => {
     const h = await replayable(true);
     expect(batchCarried(h.events)).toBe(false);
     expect(h.backend.activated).toEqual([h.target]);
@@ -638,7 +638,7 @@ describe("R646: --resume carries a survivor only against tests it faced", () => 
     expect(faceCodes(h.events)).toEqual(["resume-survivor-no-record"]);
   });
 
-  test("whole-batch replay: a pre-R644 lent row (known-survivor, []) forces the ordinary path; it re-runs", async () => {
+  test("fully scored batch: a pre-R644 lent row (known-survivor, []) re-runs", async () => {
     const h = await replayable(true, "known-survivor");
     expect(batchCarried(h.events)).toBe(false);
     expect(h.backend.activated).toEqual([h.target]);
