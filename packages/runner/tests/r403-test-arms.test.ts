@@ -9,6 +9,7 @@ import type {
   BackendCapabilities,
   BackendStatus,
   ExecutionBackend,
+  PackageUnread,
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
@@ -30,6 +31,7 @@ import {
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
 import { servesTestApp } from "./helpers/proven-test-app";
 import { removeScratchDirs } from "./helpers/scratch";
+import { UNREAD } from "./helpers/unread";
 
 /**
  * R403 phase A, through `runSession`: discovery evaluates the TEST app's `#if` arms under the test
@@ -373,14 +375,16 @@ const R403_CU = (tests: readonly string[]): CompiledCodeunit => ({
 const BUILT_NONE = [R403_CU(["PlainDoubles"])];
 const BUILT_X = [R403_CU(["PlainDoubles", "OnlyUnderX"])];
 
-/** A bcdev-shaped stub whose server holds `pkg` (`null`: the read failed). */
+/** A bcdev-shaped stub whose server holds `pkg` (`{ unread }`: the read failed). */
 class PkgBackend extends StubBackend {
   /** Every app the session asked the server for (the test app, then R-371's dependency reads). */
   readonly fetched: string[] = [];
-  constructor(private readonly pkg: Uint8Array | null) {
+  constructor(private readonly pkg: Uint8Array | PackageUnread) {
     super(true);
   }
-  async fetchPublishedAppPackage(app: { readonly name: string }): Promise<Uint8Array | null> {
+  async fetchPublishedAppPackage(app: {
+    readonly name: string;
+  }): Promise<Uint8Array | PackageUnread> {
     this.fetched.push(app.name);
     return this.pkg;
   }
@@ -618,7 +622,7 @@ describe("R403 phase B: no compiled evidence keeps the UNFILTERED suite (plan §
   for (const [what, pkg] of [
     ["a package with no SymbolReference.json", compiledPkg(BUILT_NONE, "absent")],
     ["a package whose SymbolReference.json is not JSON", compiledPkg(BUILT_NONE, "corrupt")],
-    ["a failed read", null],
+    ["a failed read", UNREAD],
   ] as const) {
     test(`${what}: both tests run, as before R403`, async () => {
       const root = await project({});

@@ -1,3 +1,4 @@
+import type { PackageUnread } from "../../src/backend";
 import {
   type MicrosoftMode,
   appInputsOfPackage,
@@ -39,8 +40,8 @@ export function testAppPackage(version = "1.0.0.0", tag = ""): Uint8Array {
 
 /** The two members a fake bcdev backend needs for a proven identity: it serves `pkg`, installed
  *  at its own version. Spread into a fake (`Object.assign`) or delegated to by its class. */
-export function servesTestApp(pkg: Uint8Array | null = testAppPackage()): {
-  fetchPublishedAppPackage: () => Promise<Uint8Array | null>;
+export function servesTestApp(pkg: Uint8Array | PackageUnread = testAppPackage()): {
+  fetchPublishedAppPackage: () => Promise<Uint8Array | PackageUnread>;
   microsoftMode: () => MicrosoftMode;
 } {
   return {
@@ -64,8 +65,8 @@ export async function servedTestAppDeps(
 }
 
 /** A server whose one installed row of the test app is at the version of the package it serves
- *  now (`served()`), as after an ordinary publish. A failed read (`null`) installs nothing. */
-export function servedIsInstalled(served: () => Uint8Array | null): MicrosoftMode {
+ *  now (`served()`), as after an ordinary publish. A failed read (`{ unread }`) installs nothing. */
+export function servedIsInstalled(served: () => Uint8Array | PackageUnread): MicrosoftMode {
   const base = fakeMicrosoftMode();
   if (base.kind !== "bytes") throw new Error("fakeMicrosoftMode is not bytes mode");
   return {
@@ -73,7 +74,7 @@ export function servedIsInstalled(served: () => Uint8Array | null): MicrosoftMod
     installed: async (id) => {
       if (id !== TEST_APP.id) return base.installed(id);
       const pkg = served();
-      return pkg === null ? [] : [readAppIdentity(Buffer.from(pkg)).version];
+      return pkg instanceof Uint8Array ? [readAppIdentity(Buffer.from(pkg)).version] : [];
     },
   };
 }
