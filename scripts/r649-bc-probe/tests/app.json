@@ -1,0 +1,20 @@
+{
+  "id": "44c7bc28-455d-4ac9-bb27-3c20754c9c23",
+  "name": "LethAL R649 BC Sleep Probe Tests",
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "brief": "R649 throwaway probe tests: how long BC's Sleep really waits under LethAL's baseline call, one case per codeunit.",
+  "platform": "28.0.0.0",
+  "runtime": "17.0",
+  "target": "OnPrem",
+  "idRanges": [{ "from": 92930, "to": 92939 }],
+  "dependencies": [
+    {
+      "id": "7937c2a9-5c42-4e98-bd9b-9de8151b55fe",
+      "name": "LethAL R649 BC Sleep Probe",
+      "publisher": "LethAL",
+      "version": "1.0.0.0"
+    }
+  ],
+  "features": ["NoImplicitWith"]
+}
