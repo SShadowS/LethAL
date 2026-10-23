@@ -17,9 +17,12 @@ import {
   BC_END_OF_TEST_TEXT,
   BC_HTTP_INTERNAL_TEXT,
   BURN_BUSY_LOOPS,
+  BURN_GUARD_MS,
   BURN_HUGE,
+  BURN_RELATIVE_FACTOR,
   MESSAGE_PREFIX_REASON,
   type V3ContractResult,
+  burnerArgv,
   classifySleep,
   runV3ContractProbe,
   v3ContractRefusals,
@@ -744,6 +747,22 @@ describe("R693 r14b: timeout-is-cpu runs one huge burn alone, then beside busy l
     });
     expect(seen).toHaveLength(2);
     for (const s of seen) expect(s).toBeDefined();
+    expect(BURN_GUARD_MS).toBe(60_000);
+  });
+
+  test("a busy loop is `taskset -c 0 timeout -s KILL 150 sh -c ...` so a killed bun cannot orphan it", () => {
+    expect(burnerArgv("/usr/bin/taskset")).toEqual([
+      "/usr/bin/taskset",
+      "-c",
+      "0",
+      "timeout",
+      "-s",
+      "KILL",
+      "150",
+      "sh",
+      "-c",
+      "while :; do :; done",
+    ]);
   });
 
   test("diverged: A is not stopped (it passed: no limit at all), and B never runs", async () => {
@@ -764,9 +783,19 @@ describe("R693 r14b: timeout-is-cpu runs one huge burn alone, then beside busy l
     expect(f?.verdict).toBe("diverged");
   });
 
-  test("the 3000 ms line: 3000 diverges, 3001 matches", async () => {
-    expect((await run(stopped(2010), stopped(3000))).f?.verdict).toBe("diverged");
-    expect((await run(stopped(2010), stopped(3001))).f?.verdict).toBe("matches");
+  test("the 3000 ms line: 3000 diverges, 3001 matches (A short, so the relative rule is not the binding one)", async () => {
+    expect((await run(stopped(1000), stopped(3000))).f?.verdict).toBe("diverged");
+    expect((await run(stopped(1000), stopped(3001))).f?.verdict).toBe("matches");
+  });
+
+  test("diverged: a wall-time limit with slack stops both calls late (A 4000, B 4100)", async () => {
+    expect((await run(stopped(4000), stopped(4100))).f?.verdict).toBe("diverged");
+  });
+
+  test("the relative line: B exactly 2x A diverges, just over matches", async () => {
+    expect(BURN_RELATIVE_FACTOR).toBe(2);
+    expect((await run(stopped(4000), stopped(8000))).f?.verdict).toBe("diverged");
+    expect((await run(stopped(4000), stopped(8001))).f?.verdict).toBe("matches");
   });
 
   test("diverged: B passes (not stopped) although A was: the limit contract is broken", async () => {

@@ -158,14 +158,33 @@ export function classifySleep(cl: {
  * budget here. Call A, pinned and alone, must be stopped at the limit. Call B, the same burn pinned
  * beside BURN_BUSY_LOOPS busy loops (the burn gets about 1/8 of the core), must ALSO be stopped, but
  * late in wall time: a CPU-time stop comes after the limit in CPU (about 8x that in wall), a
- * wall-time stop at the limit. B's durationMs must exceed BURN_WALL_FACTOR x the limit.
+ * wall-time stop at the limit. B's durationMs must exceed BURN_WALL_FACTOR x the limit AND
+ * BURN_RELATIVE_FACTOR x A's durationMs (a wall-time limit with slack stops both at the same time;
+ * healthy runs give B about 8x A).
  */
 export const BURN_HUGE = 2_000_000_000;
 export const BURN_LIMIT_SECS = 2;
 export const BURN_BUSY_LOOPS = 7;
 export const BURN_WALL_FACTOR = 1.5;
+export const BURN_RELATIVE_FACTOR = 2;
 /** A hard process timeout per call, so a build with no limit cannot hang leg C. */
-const BURN_GUARD_MS = 60_000;
+export const BURN_GUARD_MS = 60_000;
+/**
+ * A busy loop on core 0. `timeout -s KILL` (coreutils) ends it on its own after 150 s, so a killed bun
+ * cannot leave it spinning for good.
+ */
+export const burnerArgv = (taskset: string): string[] => [
+  taskset,
+  "-c",
+  "0",
+  "timeout",
+  "-s",
+  "KILL",
+  "150",
+  "sh",
+  "-c",
+  "while :; do :; done",
+];
 
 /** Probe First: its lines are what `per-test-coverage` checks (5 `if`, 6 `exit(1)`, 7 `exit(0)`). */
 const FIRST_AL = `codeunit 50601 "Probe First"
@@ -703,7 +722,10 @@ export interface V3ProbeEnv {
   readonly alcIo?: ArtifactIo;
   /** `taskset` for `timeout-is-cpu`; absent: that fact is unmeasurable. */
   readonly tasksetPath?: string;
-  /** Test hook: the competing busy loop on core 0 (default: `taskset -c 0 sh -c 'while :; do :; done'`). */
+  /**
+   * Test hook: starts ONE of the competing busy loops on core 0; `timeout-is-cpu` calls it
+   * `BURN_BUSY_LOOPS` times (default: `burnerArgv`, `taskset -c 0 timeout -s KILL 150 sh -c ...`).
+   */
   readonly startBurner?: () => { kill(): void };
   /** Test hook: `timeout-is-cpu`'s per-call hard process timeout (default 60 s). */
   readonly burnGuardMs?: number;
@@ -1110,10 +1132,20 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
       facts.push(
         fact("timeout-is-cpu", "contract", "unmeasurable", "taskset available", "no taskset"),
       );
+    } else if (env.startBurner === undefined && Bun.which("timeout") === null) {
+      facts.push(
+        fact(
+          "timeout-is-cpu",
+          "contract",
+          "unmeasurable",
+          "timeout (coreutils) available for the busy loops",
+          "no timeout",
+        ),
+      );
     } else {
       const pin = [env.tasksetPath, "-c", "0"];
       const lateMs = BURN_LIMIT_SECS * 1000 * BURN_WALL_FACTOR;
-      const expected = `at N=${BURN_LIMIT_SECS}: a huge burn on core 0 alone is a timeout row (A); the same burn beside ${BURN_BUSY_LOOPS} busy loops on core 0 is ALSO a timeout row, with durationMs over ${lateMs} (B: a CPU-time stop is late in wall time)`;
+      const expected = `at N=${BURN_LIMIT_SECS}: a huge burn on core 0 alone is a timeout row (A); the same burn beside ${BURN_BUSY_LOOPS} busy loops on core 0 is ALSO a timeout row, with durationMs over ${lateMs} AND over ${BURN_RELATIVE_FACTOR}x A's (B: a CPU-time stop is late in wall time; a wall-time limit stops both at the same time)`;
       const guardMs = env.burnGuardMs ?? BURN_GUARD_MS;
       const burnArgs = ["--test-timeout-secs", String(BURN_LIMIT_SECS), "--codeunit", "50656"];
       const stopped = (r: V3Row | undefined) =>
@@ -1140,7 +1172,7 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
           for (let i = 0; i < BURN_BUSY_LOOPS; i++)
             burners.push(
               env.startBurner?.() ??
-                Bun.spawn([...pin, "sh", "-c", "while :; do :; done"], {
+                Bun.spawn(burnerArgv(env.tasksetPath), {
                   stdout: "ignore",
                   stderr: "ignore",
                 }),
@@ -1156,7 +1188,9 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         verdict =
           shared.timedOut || s === undefined
             ? "unmeasurable"
-            : !stopped(s) || (s.durationMs ?? 0) <= lateMs
+            : !stopped(s) ||
+                (s.durationMs ?? 0) <= lateMs ||
+                (s.durationMs ?? 0) <= BURN_RELATIVE_FACTOR * (a.durationMs ?? 0)
               ? "diverged"
               : "matches";
       }

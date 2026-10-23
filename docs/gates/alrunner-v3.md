@@ -225,7 +225,8 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
   a leg); other untracked files are the gate's own outputs. `.gated`'s `lethalCommit` is also the full sha.
 - `timeout-is-cpu` is GATE-ONLY: since r14b it runs one huge burn (2,000,000,000 steps) at the 2 s limit, pinned to
   core 0: alone it must be stopped, and beside seven busy loops it must ALSO be stopped, with a durationMs over
-  3000 ms (a CPU-time stop is late in wall time), so only leg C measures it, and a session trusts the gated build's record instead of re-burning (M1). That trust is per v3
+  3000 ms AND over twice A's (a CPU-time stop is late in wall time; a wall-time limit with slack stops both calls
+  together). It takes about 20 s and loads a core, so only leg C measures it, and a session trusts the gated build's record instead of re-burning (M1). That trust is per v3
   BUILD: a later LethAL change to how a call's timeout is sent (`v3CallArgv`, `stopSecondsOf`) is not covered by
   the old record and needs `bun scripts/al-runner-v3-update.ts --regate <commit>`.
 - `.gated` names a commit on `lethal/r586`. The orchestrator merges with `--no-ff`, so that commit stays reachable
@@ -334,6 +335,8 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
   (beside seven busy loops, killed in a `finally`) must be that row too, with durationMs over 3000 ms (1.5 times
   the limit; the burn gets about 1/8 of the core, so a CPU-time stop is late, a wall-time stop is at about 2000).
   Each call has a 60 s process timeout: a killed A reads `diverged` (no limit), a killed B `unmeasurable`. A
-  missing row is `unmeasurable`; B not stopped, or stopped at 3000 ms or less, is `diverged`. Measured offline on
-  alpha.2 in three back-to-back leg C runs: A 2.0-2.05 s, B 16.0-16.1 s, all `matches`. Fact count unchanged (28).
+  missing row is `unmeasurable`; B not stopped, stopped at 3000 ms or less, or stopped at no more than twice A's
+  durationMs (build review B1: a wall-time limit with slack, A and B both near 4000 ms), is `diverged`. Each busy
+  loop is `taskset -c 0 timeout -s KILL 150 sh -c ...`, so a killed bun cannot orphan it. Measured offline on
+  alpha.2 in five back-to-back leg C runs: A 2.0-2.05 s, B 16.0-16.1 s (about 8x A), all `matches`. Fact count unchanged (28).
   Predicted `matches` on alpha.2 and edge.
