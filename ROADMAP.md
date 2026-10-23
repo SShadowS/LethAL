@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**86 of 675 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**85 of 675 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -240,7 +240,7 @@ that ordering is the priority.
 - **R534** · al-runner: an unclassified `error` row (an OnRun-trigger hang, a RunnerOutOfScopeException) aborts the whole session under spec §11. Should it? · [R534.md](docs/roadmap/R534.md) · done (2629351e)
 - **R521** · Report-loop hang refusal cannot type RecordRef, Variant, parameter, array-element, Report/Page or namespaced-interface receivers, so their callees are not refused · [R521.md](docs/roadmap/R521.md) · done (bda93923): every name of a multi-name declaration is read…
 - **R522** · Report-loop hang refusal does not see callee objects wrapped in `#if` (they are not object declarations to it) · [R522.md](docs/roadmap/R522.md) · open, filed 2026-10-08
-- **R523** · Report-loop hang refusal does not follow table triggers that open-item code fires (`Insert(true)`, `Modify(true)`, `Validate`, `Rename`) · [R523.md](docs/roadmap/R523.md) · open, filed 2026-10-08
+- **R523** · Report-loop hang refusal does not follow table triggers that open-item code fires (`Insert(true)`, `Modify(true)`, `Validate`, `Rename`) · [R523.md](docs/roadmap/R523.md) · closed 2026-10-23 — no fired trigger consumes or re-orders the report loop's set (37 measured by parse); a…
 - **R524** · Report-loop hang refusal follows events raised by open-item code and by one-hop callees only, not events raised deeper · [R524.md](docs/roadmap/R524.md) · open, filed 2026-10-08
 - **R540** · al-runner refusals R534 does not match (`BcShapeGapException`, `BcAppSymbolReadException`, a refusal trapped by a `[TryFunction]`) can still score a kill or a pass · [R540.md](docs/roadmap/R540.md) · open, filed 2026-10-09
 - **R525** · Report-loop hang refusal does not cross apps: interface implementers and event subscribers in another app are not refused · [R525.md](docs/roadmap/R525.md) · open, filed 2026-10-08
