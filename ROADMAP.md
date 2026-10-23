@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**69 of 690 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**68 of 690 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -276,7 +276,7 @@ that ordering is the priority.
 - **R582** · Switch R577's kill-reproduction rule on for the BC backend (bcdev): a flaky test is a false kill there too, and the switch moves every BC gate's pinned call counters · [R582.md](docs/roadmap/R582.md) · done (7a8ff82c)
 - **R585** · --skip-known-survivors reads a --tests-only run's survivors as survivors under the full suite · [R585.md](docs/roadmap/R585.md) · done (db38591b)
 - **R592** · History has no backend check: a bcdev run and an al-runner run that both ran coverage `none` are kept apart only incidentally · [R592.md](docs/roadmap/R592.md) · done (5ef916ec)
-- **R604** · Iterator hangs master already deploys: a split real-table queue, a cursor reset through a wrapper, writers past 4 calls, and aliased state (Copy, RecordRef, var-callee and with aliases) · [R604.md](docs/roadmap/R604.md) · open, filed 2026-10-21
+- **R604** · Iterator hangs master already deploys: a split real-table queue, a cursor reset through a wrapper, writers past 4 calls, and aliased state (Copy, RecordRef, var-callee and with aliases) · [R604.md](docs/roadmap/R604.md) · done (fa864d57) — M1 built by R-604b; H2, M3a, M3b, S3 and S4 closed by ruling 2026-10-23; M2 closed as a…
 - **R618** · No BC gate exercises the lend order with an actual lend: every BC itest starts from an empty store, and none uses --resume, --resume-run or --skip-known-survivors · [R618.md](docs/roadmap/R618.md) · done (7084eece)
 - **R619** · HIGH: runMayLend governs nothing in production: four inline copies of the lend order, already in different orders, while R586's tests pin the unused function (a test passing for the wrong reason) · [R619.md](docs/roadmap/R619.md) · done (ebd96cc7)
 - **R628** · R572's value path cannot tell a deep global that only addresses a request from one that feeds the loop's exit: Shopify's paging loops are over-refused (87 keys) · [R628.md](docs/roadmap/R628.md) · closed 2026-10-22 — ruling: the deep carry over-refuses 87 keys in one file (Shopify, bch), 0 in dc/do/cdo; a…
@@ -302,7 +302,7 @@ that ordering is the priority.
 - **R682** · after every identity-scheme bump, a gate baseline's byte-identical twins are text-UNVERIFIED until it is re-recorded, and nothing schedules that re-record · [R682.md](docs/roadmap/R682.md) · done (7c0337c7) — the rule is on docs/gates/README.md and checked by gate-pages.test.ts; today's lagging…
 - **R684** · lethal verify misses a test-app report, page, xmlport or query that another app runs by its id: the codeunit-id fold and fallback see codeunits only · [R684.md](docs/roadmap/R684.md) · done (ac8a7b02)
 - **R687** · After the release: fold the server's installed-app list (minus LethAL's own instrumented targets) into every verify digest, through a new LethAL Control procedure · [R687.md](docs/roadmap/R687.md) · open, filed 2026-10-23 — after the first release (orchestrator ruling)
-- **R690** · Re-record the seven gate baselines that lag IDENTITY_SCHEME (six BC gates and al-runner-v3's leg T), once, after R-604b decides whether the scheme moves to 42 · [R690.md](docs/roadmap/R690.md) · open, filed 2026-10-23 — waits on R-604b's scheme decision
+- **R690** · Re-record the ten gate baselines that lag IDENTITY_SCHEME 42 (six BC gates and four al-runner-v3 legs), once, on master · [R690.md](docs/roadmap/R690.md) · open, filed 2026-10-23 — R-604b bumped the scheme to 42 and did not re-record
 - **R692** · bcdev: RunMutant answered HTTP 500 while reproducing a kill (tables gate on bc1, M0232); the op could not be confirmed, so the session quarantined the tier and stopped · [R692.md](docs/roadmap/R692.md) · open, filed 2026-10-23
 - **R695** · `Fixed Asset - Projected Value`'s `GetNextDate` advances a loop's exit date but is not hang-refused: unverified by a read of the loop · [R695.md](docs/roadmap/R695.md) · open, filed 2026-10-23
 
