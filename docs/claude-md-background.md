@@ -22,6 +22,15 @@ not about one gate (gate history is under `docs/gates/`). Moved here by R-592.
   unit test.
 - **Snapshots (R393).** A plain `bun test` lets a timed-out test write its snapshot under the NEXT
   test's name; `scripts/verify.ts` runs bun with `CI=true`, so new snapshots are refused.
+- **One verify at a time (R616b).** The test step of `scripts/verify.ts` takes a slot lock,
+  `verify-slot.lock`, in the ledger's folder (`/coord/locks/` by default; `LETHAL_VERIFY_LEDGER` moves
+  both). Another live verify holds it: yours waits (polls every 2 s, fails by name after 10 min, never
+  runs anyway). A lock is stale only when its pid is dead, never by age; verify then takes it over and
+  says so. It is released on every exit path (`finally`, SIGINT, SIGTERM, SIGHUP); after SIGKILL or a
+  crash the dead pid is the recovery. If the 10 min wait fails and the holder is gone, delete the file.
+  Skipped under CI. The receipt prints the `verify slot:` and `per-test timeout:` lines: the timeout is
+  raised to 15000 ms only when the io stall was >= 5% at the start. A run over 900 s is killed and
+  named. Unit tests give the lock a temp folder and never touch `/coord`.
 - **compile:fixtures (R56).** A docs-only commit deleted a procedure's body in a fixture, and
   `itest:tables` stayed green for days, because the gate kept measuring the previously published
   test app.

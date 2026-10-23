@@ -16,12 +16,16 @@ import {
   LEDGER_LINE_MAX,
   LEDGER_STALE_MS,
   type LedgerIo,
+  type SlotIo,
+  type SlotSignal,
+  SlotTimeoutError,
   type SnapState,
   type TestDbReport,
   type TestStepIo,
   VerifyArgsError,
   type VerifyIo,
   type WatchOptions,
+  acquireSlot,
   completeness,
   countOverlaps,
   discoverTestFiles,
@@ -40,12 +44,14 @@ import {
   readTestDbReports,
   runVerify,
   sentinelEnv,
+  slotPath,
   snapChanges,
   stuckWorkers,
   testChildEnv,
   testCommand,
   testDbsLine,
   testStep,
+  testTimeout,
 } from "./verify.ts";
 
 const KNOWN = ["engine", "runner", "schemata"];
@@ -1041,5 +1047,394 @@ describe("R622 the verify ledger", () => {
 
   test("ledgerAppend throws on a bad path (the caller turns it into the warning)", () => {
     expect(() => ledgerAppend(join(tmpdir(), "no-such-dir-r622", "x.tsv"), "a\n")).toThrow();
+  });
+});
+
+describe("R616b one full verify at a time (the slot lock)", () => {
+  const ME = 100;
+  const HOLDER = 7;
+  type FakeProc = {
+    on(sig: SlotSignal, fn: () => void): void;
+    off(sig: SlotSignal, fn: () => void): void;
+    exit(code: number): void;
+    handlers: Map<SlotSignal, () => void>;
+    exits: number[];
+  };
+  function fakeProc(): FakeProc {
+    const handlers = new Map<SlotSignal, () => void>();
+    const exits: number[] = [];
+    return {
+      handlers,
+      exits,
+      on: (sig, fn) => void handlers.set(sig, fn),
+      off: (sig) => void handlers.delete(sig),
+      exit: (code) => void exits.push(code),
+    };
+  }
+  /** A fake clock: `sleep` moves it, and runs `onSleep(n)` (the nth poll) so a holder can leave. */
+  function slotIo(
+    dir: string,
+    over: { alive?: (pid: number) => boolean; onSleep?: (n: number) => void; waitLimitS?: number },
+  ): { io: SlotIo; printed: string[]; sleeps: number[]; proc: FakeProc } {
+    const printed: string[] = [];
+    const sleeps: number[] = [];
+    const proc = fakeProc();
+    let t = 0;
+    const io: SlotIo = {
+      path: join(dir, "verify-slot.lock"),
+      pid: ME,
+      worktree: "/work/me",
+      alive: over.alive ?? (() => true),
+      now: () => t,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        t += ms;
+        over.onSleep?.(sleeps.length);
+      },
+      print: (l) => void printed.push(l),
+      proc,
+      ...(over.waitLimitS !== undefined ? { waitLimitS: over.waitLimitS } : {}),
+    };
+    return { io, printed, sleeps, proc };
+  }
+  const holderText = (pid: number): string => `${pid}\t/work/other\t2026-10-23T00:00:00.000Z`;
+  const lockPid = (path: string): string | undefined =>
+    existsSync(path) ? readFileSync(path, "utf8").split("\t")[0] : undefined;
+
+  test("the lock lives beside the ledger, never at a fixed /coord path", () => {
+    expect(slotPath("/x/y/ledger.tsv")).toBe(join("/x/y", "verify-slot.lock"));
+  });
+
+  test("a free slot is taken at once, holds our pid, and is gone after release", async () => {
+    const dir = tempDir("slot");
+    try {
+      const { io } = slotIo(dir, {});
+      const slot = await acquireSlot(io);
+      expect(slot.line).toBe("took");
+      expect(lockPid(io.path)).toBe(String(ME));
+      slot.release();
+      expect(existsSync(io.path)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a second verify waits while a live holder exists, says so once, and goes when it releases", async () => {
+    const dir = tempDir("slot");
+    try {
+      const path = join(dir, "verify-slot.lock");
+      writeFileSync(path, holderText(HOLDER));
+      const { io, printed, sleeps } = slotIo(dir, {
+        onSleep: (n) => {
+          if (n === 3) rmSync(path);
+        },
+      });
+      const slot = await acquireSlot(io);
+      expect(sleeps).toEqual([2000, 2000, 2000]);
+      expect(printed).toEqual([`verify slot: waiting for pid ${HOLDER} (/work/other)`]);
+      expect(slot.line).toBe("waited 6 s");
+      expect(lockPid(path)).toBe(String(ME));
+      slot.release();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a dead holder's lock is taken over at once and named", async () => {
+    const dir = tempDir("slot");
+    try {
+      writeFileSync(join(dir, "verify-slot.lock"), holderText(HOLDER));
+      const { io, sleeps } = slotIo(dir, { alive: (pid) => pid !== HOLDER });
+      const slot = await acquireSlot(io);
+      expect(sleeps).toEqual([]);
+      expect(slot.line).toBe(`took a stale lock from pid ${HOLDER}`);
+      expect(lockPid(io.path)).toBe(String(ME));
+      slot.release();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("no age-based takeover: a live holder from long ago is still waited for", async () => {
+    const dir = tempDir("slot");
+    try {
+      writeFileSync(
+        join(dir, "verify-slot.lock"),
+        `${HOLDER}\t/work/other\t2020-01-01T00:00:00.000Z`,
+      );
+      const { io } = slotIo(dir, { waitLimitS: 10 });
+      await expect(acquireSlot(io)).rejects.toThrow(SlotTimeoutError);
+      expect(lockPid(io.path)).toBe(String(HOLDER));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the wait limit fails by name and leaves the holder's lock alone", async () => {
+    const dir = tempDir("slot");
+    try {
+      writeFileSync(join(dir, "verify-slot.lock"), holderText(HOLDER));
+      const { io, sleeps } = slotIo(dir, { waitLimitS: 10 });
+      const err = await acquireSlot(io).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(SlotTimeoutError);
+      expect((err as Error).message).toContain(`pid ${HOLDER}`);
+      expect((err as Error).message).toContain("10 s");
+      expect(sleeps.reduce((a, b) => a + b, 0)).toBeGreaterThanOrEqual(10_000);
+      expect(lockPid(io.path)).toBe(String(HOLDER));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a signal releases the lock and exits with the signal's code; another pid's lock is left", async () => {
+    for (const [sig, code] of [
+      ["SIGINT", 130],
+      ["SIGTERM", 143],
+      ["SIGHUP", 129],
+    ] as const) {
+      const dir = tempDir("slot");
+      try {
+        const { io, proc } = slotIo(dir, {});
+        await acquireSlot(io);
+        expect([...proc.handlers.keys()].sort()).toEqual(["SIGHUP", "SIGINT", "SIGTERM"]);
+        proc.handlers.get(sig)?.();
+        expect(existsSync(io.path), sig).toBe(false);
+        expect(proc.exits, sig).toEqual([code]);
+        expect(proc.handlers.size, "handlers removed").toBe(0);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+    const dir = tempDir("slot");
+    try {
+      const { io, proc } = slotIo(dir, {});
+      await acquireSlot(io);
+      writeFileSync(io.path, holderText(HOLDER)); // someone took over after we were presumed dead
+      proc.handlers.get("SIGINT")?.();
+      expect(lockPid(io.path)).toBe(String(HOLDER));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  function verifyIo(
+    over: Partial<VerifyIo>,
+    testResult = { code: 0, output: " 3 pass\n 0 fail\n" },
+  ) {
+    let t = 0;
+    const execs: string[][] = [];
+    const io: VerifyIo = {
+      packages: KNOWN,
+      cores: 32,
+      env: {},
+      exec: (cmd) => {
+        execs.push(cmd);
+        return cmd[1] === "test" ? testResult : { code: 0, output: "" };
+      },
+      git: () => "",
+      snapState: () => new Map(),
+      log: () => "log",
+      junitPath: () => "/j.xml",
+      readJunit: () => "",
+      expectedTestFiles: () => [],
+      cleanDist: () => [],
+      now: () => {
+        t += 1000;
+        return t;
+      },
+      print: () => {},
+      ...over,
+    };
+    return { io, execs };
+  }
+
+  test("runVerify: the slot is released after a failing test step and after a throwing one", async () => {
+    const dir = tempDir("slot");
+    try {
+      const { io: slot } = slotIo(dir, {});
+      const failing = verifyIo({ slot }, { code: 1, output: " 2 pass\n 1 fail\n" });
+      const r = await runVerify(["runner"], failing.io);
+      expect(r.code).toBe(1);
+      expect(r.lines).toContain("verify slot: took");
+      expect(existsSync(slot.path)).toBe(false);
+
+      const throwing = verifyIo({
+        slot,
+        exec: (cmd) => {
+          if (cmd[1] === "test") throw new Error("boom");
+          return { code: 0, output: "" };
+        },
+      });
+      await expect(runVerify(["runner"], throwing.io)).rejects.toThrow("boom");
+      expect(existsSync(slot.path)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("runVerify: a slot wait that hits the limit fails by name and never runs the tests", async () => {
+    const dir = tempDir("slot");
+    try {
+      writeFileSync(join(dir, "verify-slot.lock"), holderText(HOLDER));
+      const { io: slot } = slotIo(dir, { waitLimitS: 4 });
+      const { io, execs } = verifyIo({ slot });
+      const r = await runVerify(["runner"], io);
+      expect(r.code).toBe(1);
+      expect(r.lines.join("\n")).toContain("verify slot: FAIL");
+      expect(execs.some((c) => c[1] === "test")).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("runVerify: under CI the slot is skipped and named, even with a live holder", async () => {
+    const dir = tempDir("slot");
+    try {
+      writeFileSync(join(dir, "verify-slot.lock"), holderText(HOLDER));
+      const { io: slot, sleeps } = slotIo(dir, {});
+      const { io } = verifyIo({ slot, env: { CI: "true" } });
+      const r = await runVerify([], io);
+      expect(r.lines).toContain("verify slot: skipped (CI)");
+      expect(sleeps).toEqual([]);
+      expect(lockPid(slot.path)).toBe(String(HOLDER));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("runVerify: a slot folder that cannot be written is named and the run goes on", async () => {
+    const dir = tempDir("slot");
+    try {
+      const { io: slot } = slotIo(join(dir, "no-such-dir"), {});
+      const { io, execs } = verifyIo({ slot });
+      const r = await runVerify(["runner"], io);
+      expect(r.lines.join("\n")).toMatch(/verify slot: unavailable \(.+\); running without it/);
+      expect(execs.some((c) => c[1] === "test")).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("R616b a longer per-test timeout only under measured io pressure", () => {
+  const press = (full: string): string =>
+    `io some 9.00/2.00/3.00 full ${full}/0.20/0.30; cpu some 0.25/0.50/0.75`;
+  test("io full avg10 12.0 raises the timeout to 15000 and says why", () => {
+    const t = testTimeout(press("12.00"));
+    expect(t.ms).toBe(15000);
+    expect(t.line).toBe("per-test timeout: 15000 ms (io full avg10 12.00 >= 5)");
+  });
+  test("io full avg10 1.0 keeps the default (the some figure does not count)", () => {
+    const t = testTimeout(press("1.00"));
+    expect(t.ms).toBe(5000);
+    expect(t.line).toBe("per-test timeout: 5000 ms (default)");
+    expect(testTimeout(press("5.00")).ms).toBe(15000); // the edge is inclusive
+  });
+  test("unreadable pressure keeps the default and says so", () => {
+    for (const p of [
+      undefined,
+      "io skipped (cannot read /proc/pressure/io: ENOENT); cpu skipped (x)",
+    ]) {
+      const t = testTimeout(p);
+      expect(t.ms).toBe(5000);
+      expect(t.line).toBe("per-test timeout: 5000 ms (default; io pressure unreadable)");
+    }
+  });
+  test("testCommand passes --timeout only when raised", () => {
+    const base = testCommand({ kind: "full" }, 8, undefined, "/j.xml");
+    expect(base.some((a) => a.startsWith("--timeout"))).toBe(false);
+    expect(testCommand({ kind: "full" }, 8, undefined, "/j.xml", 15000)).toContain(
+      "--timeout=15000",
+    );
+  });
+  test("testStep runs the child with the raised timeout and prints the line", async () => {
+    const seen: string[][] = [];
+    const step = await testStep(
+      { ...FULL, timeoutMs: 15000 },
+      {
+        exec: (cmd) => {
+          seen.push(cmd);
+          return { code: 0, output: " 1 pass\n 0 fail\nRan 1 test across 1 file.\n" };
+        },
+        snapState: () => new Map(),
+        env: {},
+        log: () => "log",
+        junitPath: () => "/j.xml",
+        readJunit: () => '<testcase name="a" classname="" file="x.test.ts" />',
+        expectedTestFiles: () => ["x.test.ts"],
+      },
+    );
+    expect(step.code).toBe(0);
+    expect(seen[0]).toContain("--timeout=15000");
+  });
+  test("runVerify prints the timeout line before the test step", async () => {
+    let t = 0;
+    const r = await runVerify(["runner"], {
+      packages: KNOWN,
+      cores: 32,
+      env: {},
+      exec: () => ({ code: 0, output: " 1 pass\n 0 fail\n" }),
+      git: () => "",
+      snapState: () => new Map(),
+      log: () => "log",
+      junitPath: () => "/j.xml",
+      readJunit: () => "",
+      expectedTestFiles: () => [],
+      cleanDist: () => [],
+      now: () => {
+        t += 1000;
+        return t;
+      },
+      print: () => {},
+      pressure: () => press("12.00"),
+    });
+    expect(r.lines).toContain("per-test timeout: 15000 ms (io full avg10 12.00 >= 5)");
+  });
+  test("a test that never yields still fails under the raised timeout (it is a longer limit, not none)", () => {
+    const dir = tempDir("r616b-timeout");
+    try {
+      writeFileSync(
+        join(dir, "hang.test.ts"),
+        'import { test } from "bun:test";\ntest("hangs", async () => { await Bun.sleep(25_000); });\n',
+      );
+      const cmd = testCommand({ kind: "full" }, 1, undefined, join(dir, "j.xml"), 15000);
+      const r = bunTest(
+        dir,
+        cmd.slice(2).filter((a) => !a.startsWith("--reporter")),
+        process.env,
+      );
+      expect(r.code, r.out).not.toBe(0);
+      expect(r.out).toContain("timed out after 15000ms");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+});
+
+describe("R616b the whole-run limit", () => {
+  const HANG = [process.execPath, "-e", "setTimeout(() => {}, 30000)"];
+  test("a child that never exits is killed at the run limit and fails by name", async () => {
+    const printed: string[] = [];
+    const t0 = Date.now();
+    const r = await execWatched(HANG, process.env, tmpdir(), 180, {
+      runLimitS: 2,
+      print: (l) => void printed.push(l),
+    });
+    expect(Date.now() - t0).toBeLessThan(15_000);
+    expect(r.watchdog?.fails.join("\n")).toContain(
+      "watchdog: FAIL, the bun test run went over 2 s (no file was over its limit)",
+    );
+    expect(printed.join("\n")).toContain("the bun test run went over 2 s");
+    expect(r.code).not.toBe(0);
+  }, 40_000);
+  test("a normal run prints no run-limit line", async () => {
+    const printed: string[] = [];
+    const r = await execWatched([process.execPath, "-e", "0"], process.env, tmpdir(), 180, {
+      runLimitS: 2,
+      print: (l) => void printed.push(l),
+    });
+    expect(r.code).toBe(0);
+    expect(r.watchdog?.fails).toEqual([]);
+    expect(printed).toEqual([]);
   });
 });

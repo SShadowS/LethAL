@@ -13,6 +13,9 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **`scripts/verify.ts` runs one full verify at a time and survives a stalled disk** (R616, R622). The test
+  step takes a slot lock beside the ledger (a dead pid frees it, never age), the per-test timeout rises to
+  15000 ms only when the io stall is >= 5% at the start, and a `bun test` run over 900 s is killed and named.
 - **`al-runner-v3` can run mutants on a warm `serve` daemon** (R635). Opt in with
   `"alRunnerV3": { "transport": "serve-entries" }`; the default stays `"one-shot"`, unchanged.
   - **How it works:**
