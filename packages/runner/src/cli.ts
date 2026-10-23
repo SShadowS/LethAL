@@ -4132,10 +4132,11 @@ async function removeScratchQuietly(dir: string): Promise<void> {
 /**
  * R363: the files this run writes that can sit inside the project, so `prepareBatchProject` never
  * copies them into a batch dir: the results database and its SQLite sidecars, `--out`, and
- * `--progress-out`.
+ * `--progress-out`. R668: plus the `--config` file, so editing it (rotating a password) mid-run is
+ * not a project change to the drift check; the batch leaves it out by identity as well.
  */
 export function runOutputPaths(
-  parsed: Partial<Pick<RunCliConfig, "dbPath" | "outPath" | "progressOutPath">>,
+  parsed: Partial<Pick<RunCliConfig, "dbPath" | "outPath" | "progressOutPath" | "configPath">>,
 ): readonly string[] {
   return [
     ...(parsed.dbPath !== undefined
@@ -4143,6 +4144,7 @@ export function runOutputPaths(
       : []),
     ...(parsed.outPath !== undefined ? [parsed.outPath] : []),
     ...(parsed.progressOutPath !== undefined ? [parsed.progressOutPath] : []),
+    ...(parsed.configPath !== undefined ? [parsed.configPath] : []),
   ];
 }
 
@@ -4443,6 +4445,7 @@ export async function runFromCli(
             testDir: parsed.testDir,
             instrumentedDir: join(scratchRoot, "instrumented"),
             excludeOutputs: runOutputPaths(parsed),
+            configPath: parsed.configPath,
             selectorIds,
             skipKnownSurvivors: parsed.skipKnownSurvivors,
             workers: parsed.workers,

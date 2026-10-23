@@ -211,6 +211,7 @@
     "verify-equivalence.ts",
     "probe-alrunner-canary.ts",
     "census-hang-capable.ts",
+    "r668-batch-app-check.ts",
     "sample-declined-hang-capable.ts"
   ]
 }
