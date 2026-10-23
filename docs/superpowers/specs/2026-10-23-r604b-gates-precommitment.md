@@ -48,3 +48,16 @@ on `bc2` (bc1 is out of use, bc3 out), one gate at a time, each leased only when
 ## How the run is judged
 Gates run on the final R-604b head (master merged in). Any moved figure, any changed scheme-line count, any refused or
 added gate mutant, or any procedure outside the expected list is a BLOCK.
+
+## Addendum 1 (before any gate): the leg list, copied literally
+`selectLegs` on the final diff (`git diff --name-only origin/master...lethal/r604b`, 19 paths, head f0bc3a60):
+`{"legs":["bcdev","lease","stale-publish","tables","chunked","alrunner-v3","hang"],"park":[],"unmatched":["fixtures/sandbox-harden/lethal.equivalent.json"]}`
+- **The legs to run:** bcdev, lease, stale-publish, tables, chunked, alrunner-v3 and hang. `lease` is
+  `itest:lease`.
+- The full set follows from default-deny on the one unmatched path. Each leg is unchanged per mutant, as in the
+  sections above.
+- **Proposed in addition: `itest:harden`.** The unmatched path, the harden marks file restamped 41 to 42, is read only
+  by that gate, and no agentflow leg covers it. Expected: unchanged per mutant against `harden.baseline.json`
+  (scheme 38), with its scheme line `(38 -> 42)`, and the marked mutants still applied as marked.
+- **Where they run:** the BC legs on bc1 or bc2, one gate at a time under a lease, each server checked for an
+  out-of-use marker first; itest:alrunner-v3 locally, with `LETHAL_ITEST_V3_CDO` and `LETHAL_ITEST_V3_TABLES` set.
