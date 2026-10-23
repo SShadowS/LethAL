@@ -61,3 +61,9 @@ added gate mutant, or any procedure outside the expected list is a BLOCK.
   (scheme 38), with its scheme line `(38 -> 42)`, and the marked mutants still applied as marked.
 - **Where they run:** the BC legs on bc1 or bc2, one gate at a time under a lease, each server checked for an
   out-of-use marker first; itest:alrunner-v3 locally, with `LETHAL_ITEST_V3_CDO` and `LETHAL_ITEST_V3_TABLES` set.
+
+## Addendum 2 (before any gate): itest:harden is added (orchestrator ruling)
+- `itest:harden` runs too. The restamped `fixtures/sandbox-harden/lethal.equivalent.json` is exactly what it reads.
+- Expected: every per-mutant verdict unchanged against `harden.baseline.json`, its scheme line `(38 -> 42)` with N
+  and M equal to master's, and every marked mutant still applied as marked.
+- It runs on bc1 or bc2, both proven for harden, under a lease.
