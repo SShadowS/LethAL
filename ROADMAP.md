@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**88 of 673 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**89 of 674 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -718,6 +718,7 @@ that ordering is the priority.
 - **R674** · `--backend al-runner-v3` ignores a configured `envTool` section without a word (R18's warning went with the .NET al-runner) · [R674.md](docs/roadmap/R674.md) · done (e1a8cee8)
 - **R676** · `--backend al-runner-v3 --dry-run` with an `envTool` section runs the env tool's `resolve` and prints a bcdev publish ceiling for a run that publishes nothing: `dryRunCeiling` is not told the backend · [R676.md](docs/roadmap/R676.md) · done (ddd8bab5)
 - **R677** · al-runner v3: baselineRefused is session-wide and never reset, so a test refused at batch 0's baseline still drives batch 1's nearby-refusal notes · [R677.md](docs/roadmap/R677.md) · open, filed 2026-10-23
+- **R678** · al-runner v3: a --resume session whose batches all reuse their baseline snapshots records no baseline refusal, so no survivor gets its [v3-refused-test-nearby] note · [R678.md](docs/roadmap/R678.md) · open, filed 2026-10-23
 
 ---
 
