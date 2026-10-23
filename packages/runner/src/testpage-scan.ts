@@ -1280,6 +1280,13 @@ const SYSTEM_ROOTS = new Set([
 
 /** R-371: a type whose value may be a record of any table (folded, not fallen back). */
 const HOLDS_RECORD = /^\s*(variant|recordref|fieldref)\b/i;
+/**
+ * R390: a record over a platform table that lists object ids. `Published Application` is left out:
+ * it lists apps, whose ids nothing runs. Measured cost (`/coord/handoff/R-175/cost390*`): 27 more
+ * tests on the fallback across BC.History, CDO, DC and DO.
+ */
+const PLATFORM_ID_TABLE =
+  /^\s*record\s+("?)(allobjwithcaption|allobj|object|object metadata|application object metadata)\1\s*(?:temporary\s*)?$/i;
 /** R-371: the position(s) of the codeunit-id arguments of a platform run by id, by `root.member`;
  *  the bare `StartSession` is `reachBare`'s. */
 const RUN_BY_ID: Readonly<Record<string, readonly number[]>> = {
@@ -1339,6 +1346,8 @@ export class Scanner {
   /** `normalizeAlName` per distinct text, once: a walk asks for the same few names millions of
    *  times on a large suite, and each answer was a fresh string (R-371's RSS measurement). */
   private readonly normCache = new Map<string, string>();
+  /** R390: `platformIdTable` per procedure, once: `reach` asks for every procedure of every test. */
+  private readonly platformCache = new Map<Proc, string | undefined>();
   /** `unitsFor` per distinct type text, once, for the same reason. */
   private readonly unitsForCache = new Map<string, Unit[]>();
   /** R-389: interface name -> the test-app codeunits and interfaces naming it in `implements`. */
@@ -1668,6 +1677,14 @@ export class Scanner {
     if (st.procs.has(p)) return;
     st.procs.add(p);
     this.reachUnit(p.unit, st);
+    // R390: an object id read from the platform names no test-app object in the source, so no
+    // fold can follow it to the codeunit or report external code then runs.
+    const platform = this.platformIdTable(p);
+    if (platform !== undefined)
+      fallBack(
+        st,
+        `${p.display} declares a Record ${platform}, whose object ids can be a test-app object's that code the walk does not follow runs (R390)`,
+      );
     // Any code of a non-codeunit object can fire that object's triggers (`Modify(true)`,
     // `CurrPage.Update()`, ...): walk them all, and the test app's extensions' with them.
     if (p.unit.kind !== "codeunit" && p.unit.baseKey !== undefined)
@@ -1687,6 +1704,23 @@ export class Scanner {
       if (site.kind === "bare") this.reachBare(p, site, st);
       else this.reachMember(p, site, st);
     }
+  }
+
+  /**
+   * R390: the platform object-id table (`PLATFORM_ID_TABLE`) that `p`'s variables or parameters, or
+   * its object's globals, are a record of, as written; undefined when none is.
+   */
+  private platformIdTable(p: Proc): string | undefined {
+    if (this.platformCache.has(p)) return this.platformCache.get(p);
+    let found: string | undefined;
+    for (const types of [...p.scope.values(), ...p.unit.globals.values()]) {
+      for (const t of types) {
+        const m = PLATFORM_ID_TABLE.exec(t);
+        if (m !== null) found ??= t.trim().replace(/^record\s+/i, "");
+      }
+    }
+    this.platformCache.set(p, found);
+    return found;
   }
 
   private reachUnit(u: Unit, st: ReachState): void {

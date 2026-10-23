@@ -723,6 +723,50 @@ codeunit 50120 "Sub"
     });
   });
 
+  // R390: an object id read from the PLATFORM (an `AllObj` loop) names no test-app object in the
+  // source, so no fold can follow it. Code that declares a record over such a table falls back.
+  describe("R390: reached code reading object ids from a platform table falls back", () => {
+    const body = (vars: string, stmts: string) =>
+      T(`    procedure A()\n    var\n${vars}    begin\n${stmts}    end;\n`);
+    /** On the fallback: an edit to the unreached codeunit moves A's digest. */
+    const onFallback = (f: Files) => digestA(unrelated(f)) !== digestA(f);
+
+    test.each([
+      "AllObj",
+      "AllObjWithCaption",
+      "Object",
+      '"Object Metadata"',
+      '"Application Object Metadata"',
+    ])("a local Record %s falls back", (table) => {
+      const f = base(body(`        O: Record ${table};\n`, "        if O.FindFirst() then;\n"));
+      expect(onFallback(f)).toBe(true);
+    });
+
+    test("a GLOBAL of such a record, in a reached codeunit, falls back too", () => {
+      const lib = `codeunit 50111 "Ids"\n{\n    var\n        O: Record AllObjWithCaption;\n\n    procedure First(): Integer\n    begin\n        if O.FindFirst() then\n            exit(O."Object ID");\n    end;\n}\n`;
+      const f = base(body('        L: Codeunit "Ids";\n', "        L.First();\n"), {
+        "Ids.al": lib,
+      });
+      expect(onFallback(f)).toBe(true);
+    });
+
+    test("control: a test whose reached code declares no such record keeps its narrow digest", () => {
+      const f = base(
+        body(
+          '        C: Record Customer;\n        P: Record "Published Application";\n',
+          "        if C.FindFirst() then;\n",
+        ),
+      );
+      expect(onFallback(f)).toBe(false);
+    });
+
+    test("control: such a record in UNREACHED code does not put the test on the fallback", () => {
+      const lib = `codeunit 50112 "Unreached"\n{\n    procedure Z()\n    var\n        O: Record AllObj;\n    begin\n        if O.FindFirst() then;\n    end;\n}\n`;
+      const f = base(body("        X: Integer;\n", "        X := 1;\n"), { "U.al": lib });
+      expect(onFallback(f)).toBe(false);
+    });
+  });
+
   // External review r1 #1: each reached hash is bound to its procedure and object.
   test("swapping the bodies of same-named procedures in two reached codeunits changes the digest", () => {
     const lib = (id: number, name: string, msg: string) =>
