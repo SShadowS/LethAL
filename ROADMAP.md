@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**84 of 679 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**82 of 679 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -242,11 +242,11 @@ that ordering is the priority.
 - **R522** · Report-loop hang refusal does not see callee objects wrapped in `#if` (they are not object declarations to it) · [R522.md](docs/roadmap/R522.md) · open, filed 2026-10-08
 - **R523** · Report-loop hang refusal does not follow table triggers that open-item code fires (`Insert(true)`, `Modify(true)`, `Validate`, `Rename`) · [R523.md](docs/roadmap/R523.md) · closed 2026-10-23 — no fired trigger consumes or re-orders the report loop's set (37 measured by parse); a…
 - **R524** · Report-loop hang refusal follows events raised by open-item code and by one-hop callees only, not events raised deeper · [R524.md](docs/roadmap/R524.md) · open, filed 2026-10-08
-- **R540** · al-runner refusals R534 does not match (`BcShapeGapException`, `BcAppSymbolReadException`, a refusal trapped by a `[TryFunction]`) can still score a kill or a pass · [R540.md](docs/roadmap/R540.md) · open, filed 2026-10-09
+- **R540** · al-runner refusals R534 does not match (`BcShapeGapException`, `BcAppSymbolReadException`, a refusal trapped by a `[TryFunction]`) can still score a kill or a pass · [R540.md](docs/roadmap/R540.md) · closed 2026-10-23 — ruling: v3 writes every refusal as notRun (scored error) and a trap does not swallow it…
 - **R525** · Report-loop hang refusal does not cross apps: interface implementers and event subscribers in another app are not refused · [R525.md](docs/roadmap/R525.md) · open, filed 2026-10-08
 - **R541** · al-runner auto-discovers `tests/expectations`: a manifest can turn a pass into `fail` (a false kill) or a failure into `pass` (a lost kill) · [R541.md](docs/roadmap/R541.md) · closed 2026-10-23 — retired with the .NET al-runner (R654): the defect is v2 only…
 - **R526** · Report-loop hang refusal ignores `interface B extends A`: a receiver typed A does not reach implementers of B · [R526.md](docs/roadmap/R526.md) · open, filed 2026-10-08
-- **R542** · al-runner: a `fail` row whose exception type AL cannot raise (`NullReferenceException`, `NotImplementedException`) is an al-runner bug, but is scored a kill · [R542.md](docs/roadmap/R542.md) · open, filed 2026-10-09
+- **R542** · al-runner: a `fail` row whose exception type AL cannot raise (`NullReferenceException`, `NotImplementedException`) is an al-runner bug, but is scored a kill · [R542.md](docs/roadmap/R542.md) · closed 2026-10-23 — ruling: a v3 panic is a notRun row, a crash is a transport error, no exception-type text…
 - **R527** · Report-loop hang refusal does not follow `Codeunit.Run` or `Report.Run` targets called from open-item code · [R527.md](docs/roadmap/R527.md) · open, filed 2026-10-08
 - **R528** · Report-loop hang refusal does not match events published by a tableextension (keyed to the extension, raised on the base table) · [R528.md](docs/roadmap/R528.md) · open, filed 2026-10-08
 - **R529** · Self-inserting report items: an insert made from another object is not seen, so the item's own filter is not protected · [R529.md](docs/roadmap/R529.md) · open, filed 2026-10-08
