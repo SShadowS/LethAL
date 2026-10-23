@@ -21,6 +21,7 @@ import {
   AL_RUNNER_V3_VERSION,
   AlRunnerV3Backend,
   type AlRunnerV3Config,
+  AlRunnerV3DependencySkippedError,
   AlRunnerV3RowMissingError,
   AlRunnerV3ServeStopUnsetError,
   AlRunnerV3UnprovenBatchError,
@@ -313,6 +314,8 @@ interface ServeScript {
     lines: Record<string, unknown>[],
   ) => { lines: unknown[]; eof?: boolean } | undefined;
   coverage?: CoverageFn;
+  /** R590: a line the daemon writes to stderr as the request arrives. */
+  stderr?: (req: Req, n: number) => string | undefined;
 }
 const goodEcho: Echo = (m) => ({
   method: "Echo",
@@ -332,11 +335,12 @@ function fakeServe(script: ServeScript = {}) {
     const daemon = daemons.length;
     daemons.push([...argv]);
     const out = new Chan();
+    const err = new Chan();
     let compiled = new Set<number>();
     out.push(JSON.stringify({ ready: true }));
     const handle: ServerProcessHandle = {
       stdout: out,
-      stderr: new Chan(),
+      stderr: err,
       kill: () => out.end(),
       write: (line) => {
         void (async () => {
@@ -363,6 +367,8 @@ function fakeServe(script: ServeScript = {}) {
                 : [`plain:${String(body.test)}`],
           };
           requests.push(req);
+          const errLine = script.stderr?.(req, n);
+          if (errLine !== undefined) err.push(errLine);
           const cuOf = (t: unknown) => Number(/^Codeunit(\d+)\.$/.exec(String(t))?.[1]);
           const rowsOf = (m: string, cu: number): FakeRow[] => {
             if (cu !== ECHO) return rows(m, cu, daemon, n);
@@ -1022,6 +1028,42 @@ describe("8 (other direction): a refusal inside the bracket IS a baseline refusa
     const r = await rig({ serve: { rows: refusesB } });
     await baseline(r.b, SUITE1);
     expect(r.b.survivorNote([ref("A")])).toContain("[v3-refused-test-nearby]");
+  });
+});
+
+describe("R590: the daemon's stderr is read after every request", () => {
+  const SKIP =
+    "dependency skipped: dependency `D` by X (00000000-0000-0000-0000-000000000001) version 1.0.0.0 or higher was not found";
+
+  test("a skipped dependency on a live request stops the session (the one-shot baseline was clean)", async () => {
+    let skip = false;
+    const r = await rig({ serve: { rows: killsM1, stderr: () => (skip ? SKIP : undefined) } });
+    await baseline(r.b, SUITE1);
+    skip = true;
+    await r.b.activate("M0001");
+    await expect(r.b.run(ref("A"), OPTS)).rejects.toBeInstanceOf(AlRunnerV3DependencySkippedError);
+  });
+
+  test("a skipped dependency on a kill pair stops the session (never the pair-skipped warning)", async () => {
+    let skip = false;
+    const r = await readyRig({
+      serve: { rows: killsM1, stderr: () => (skip ? SKIP : undefined) },
+      mutants: ["M0001"],
+    });
+    await r.b.activate("M0001");
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("fail");
+    skip = true;
+    await expect(r.b.sendKillPair("M0001", ref("A"))).rejects.toBeInstanceOf(
+      AlRunnerV3DependencySkippedError,
+    );
+  });
+
+  test("a skipped dependency at the warm-up stops it there", async () => {
+    const r = await rig({ serve: { rows: killsM1, stderr: () => SKIP } });
+    await baseline(r.b, SUITE1);
+    await expect(r.b.prefetchMutants(plans(["M0001"]))).rejects.toBeInstanceOf(
+      AlRunnerV3DependencySkippedError,
+    );
   });
 });
 
@@ -2419,6 +2461,20 @@ describe("R652: the bound is checked before each SEND, not at each run()", () =>
       serve: { coverage: sleepCoverage(), ...opts.serve },
     });
   const onDisk = (r: Rig) => readFile(resourceFile(activeOf(r)), "utf8");
+
+  test("R590: a skipped dependency logged on the coverage window's plain request stops the session", async () => {
+    const r = await windowRig({
+      serve: {
+        stderr: (q) =>
+          q.ids[0]?.startsWith("plain:") === true
+            ? "dependency skipped: dependency `D` by X (00000000-0000-0000-0000-000000000001) was not found"
+            : undefined,
+      },
+    });
+    await r.b.activate("M0001");
+    await expect(r.b.run(ref("A"), OPTS)).rejects.toBeInstanceOf(AlRunnerV3DependencySkippedError);
+    expect(r.b.entriesStats().coverageRequests).toBe(1);
+  });
 
   test("T5(a): a change before the window is refused at the window, with zero plain requests", async () => {
     const r = await windowRig();

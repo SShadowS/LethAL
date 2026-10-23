@@ -20,6 +20,7 @@ import {
   AL_RUNNER_V3_VERSION,
   AlRunnerV3Backend,
   type AlRunnerV3Config,
+  AlRunnerV3DependencySkippedError,
   AlRunnerV3ResourceSelectorRefusedError,
   AlRunnerV3ReusedBaselineUnclassifiedError,
   AlRunnerV3RowMissingError,
@@ -190,6 +191,8 @@ function fakeV3(
     coverage?: (activeId: string, active: string, testDir: string) => unknown;
     exit?: number;
     stdout?: string;
+    /** R590: v3's stderr, per call (the mutant id the selector read). */
+    stderr?: (activeId: string) => string;
   } = {},
 ) {
   const calls: string[][] = [];
@@ -218,7 +221,7 @@ function fakeV3(
     return {
       exitCode: opts.exit ?? 0,
       stdout: opts.stdout ?? JSON.stringify({ tests, exitCode: 0 }),
-      stderr: "",
+      stderr: opts.stderr?.(activeId) ?? "",
     };
   };
   return { spawn, calls };
@@ -810,6 +813,81 @@ describe("§4 selection, the cache and T5 / T21 / T28 / T29", () => {
     const seven = backendOf(l, fakeV3(allPass, { exit: 7 }).spawn, fakeAlc().io);
     await seven.deploy(l.batch);
     expect((await seven.run(ref("A"), { coverage: "none", timeoutMs: 1000 })).outcome).toBe("pass");
+  });
+
+  // R590 (R-537): the line R-537's probe read from alpha.2 when the dependency's package was absent.
+  const SKIP_LINE =
+    "dependency skipped: dependency `R537 Dep` by LethAL R537 (9b3e6c1a-2f47-4d8e-a5b0-537a00000001) version 1.0.0.0 or higher was not found; searched: pkgsM, app/.alpackages, tests/.alpackages; put its .app with AL source (or its source archive) in the project's .alpackages or pass --deps DIR";
+  const MISSING_OBJECT =
+    "You tried to invoke the CodeUnit object with the ID 50960 from the object R537 ById Tests. An object with that ID does not exist in the current application compiled with emit version 28014.";
+  const byIdFails = () => [
+    { method: "A", status: "pass" as const },
+    { method: "B", status: "fail" as const, message: MISSING_OBJECT },
+  ];
+  const skipStderr = (line: string) => () => `${line}\nalrunner 3.0.0-alpha.2 (91253f2d6)\n`;
+
+  test("R590: a skipped dependency stops the session before its missing-object fail can score a kill", async () => {
+    const l = await layout();
+    const v3 = fakeV3(byIdFails, { exit: 1, stderr: skipStderr(SKIP_LINE) });
+    const b = backendOf(l, v3.spawn, fakeAlc().io);
+    await b.deploy(l.batch);
+    const err = await b
+      .run(ref("B"), { coverage: "none", timeoutMs: 1000 })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AlRunnerV3DependencySkippedError);
+    expect(String(err)).toContain("R537 Dep");
+    expect(String(err)).toContain("AL source");
+  });
+
+  test("R590: the check runs on a mutant call too, with exit 0 and every row passing, and before exit 6", async () => {
+    const l = await layout();
+    const mutantOnly = (id: string) => (id === "M0001" ? `${SKIP_LINE}\n` : "");
+    const v3 = fakeV3(allPass, { coverage: plainCoverage, stderr: mutantOnly });
+    const b = backendOf(l, v3.spawn, fakeAlc().io);
+    await b.deploy(l.batch);
+    expect((await b.run(ref("A"), { coverage: "none", timeoutMs: 1000 })).outcome).toBe("pass");
+    await b.activate("M0001");
+    await expect(b.run(ref("A"), { coverage: "none", timeoutMs: 1000 })).rejects.toBeInstanceOf(
+      AlRunnerV3DependencySkippedError,
+    );
+    const six = backendOf(
+      l,
+      fakeV3(allPass, { exit: 6, stdout: "", stderr: skipStderr(SKIP_LINE) }).spawn,
+      fakeAlc().io,
+    );
+    await six.deploy(l.batch);
+    await expect(six.run(ref("A"), { coverage: "none", timeoutMs: 1000 })).rejects.toBeInstanceOf(
+      AlRunnerV3DependencySkippedError,
+    );
+  });
+
+  test("R590: v3's hidden-notes line refuses too (a skipped line may be among the hidden)", async () => {
+    const l = await layout();
+    const hidden = "... 14 more dependency notes (--verbose lists them)";
+    const b = backendOf(l, fakeV3(allPass, { stderr: skipStderr(hidden) }).spawn, fakeAlc().io);
+    await b.deploy(l.batch);
+    const err = await b
+      .run(ref("A"), { coverage: "none", timeoutMs: 1000 })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AlRunnerV3DependencySkippedError);
+    expect(String(err)).toContain("--verbose");
+  });
+
+  test("R590 near misses: the words mid-line, and System's optional-root note, score the row as before", async () => {
+    const l = await layout();
+    for (const line of [
+      "warning: dependency skipped: X",
+      "dependency note: optional dependency `System` by Microsoft (8874ed3a-0643-4247-9ced-7a7002f7135d) skipped",
+      "... more dependency notes",
+    ]) {
+      const b = backendOf(
+        l,
+        fakeV3(byIdFails, { exit: 1, stderr: skipStderr(line) }).spawn,
+        fakeAlc().io,
+      );
+      await b.deploy(l.batch);
+      expect((await b.run(ref("B"), { coverage: "none", timeoutMs: 1000 })).outcome).toBe("fail");
+    }
   });
 
   test("T10: exit 0 with no document is a transport failure, never 'all passed'", async () => {

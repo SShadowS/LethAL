@@ -85,6 +85,9 @@ const ASSERT_ROW = row(50661, "AssertAreEqual", "fail", {
     "Assert.AreEqual failed. Expected:<1> (Integer). Actual:<2> (Integer). R667 values differ.",
 });
 const LIBRARY_ASSERT = "/fake/ms/Microsoft_Library Assert_28.0.46665.49944.app";
+/** R590 (R-537): v3's skip line for the probe's absent dependency, in the shape R-537 measured. */
+const DEP_SKIP_STDERR =
+  "dependency skipped: dependency `LethAL R590 Absent` by LethAL (7a1c0e52-5b8e-4d3a-9f60-2c7b8e1d2590) version 1.0.0.0 or higher was not found; searched: /fake/pkgs; put its .app with AL source (or its source archive) in the project's .alpackages or pass --deps DIR\nalrunner 3.0.0-alpha.2 (91253f2d6)\n";
 
 /** A fake alpha.2 that answers every probe call as measured; `over` replaces one answer by key. */
 function fakeV3(over: Over = {}): SpawnFn {
@@ -239,6 +242,8 @@ function fakeV3(over: Over = {}): SpawnFn {
       "cu50652-n3": { exitCode: 7, stdout: doc(cutRows) },
       // R667: the Assert.AreEqual text R657 measured on alpha.2 and edge (no `<Type>: ` prefix).
       cu50661: { exitCode: 1, stdout: doc([ASSERT_ROW]) },
+      // R590 (R-537): the shape alpha.2 and edge wrote for a dependency with no package (probe M).
+      cu50662: { exitCode: 0, stdout: doc([row(50662, "Runs", "pass")]), stderr: DEP_SKIP_STDERR },
       cu50655: { exitCode: 0, stdout: doc([row(50655, "DuplicateNamedKey", "pass")]) },
       "cu50660-n3": { exitCode: 1, stdout: doc(sleepRows) },
       cu50660: { exitCode: 1, stdout: doc(sleepRows) },
@@ -517,6 +522,7 @@ describe("§8 the contract probe", () => {
         "quoted-name-in-rows",
         "bc-build-pinned",
         "define-honoured",
+        "dependency-skip-line",
         "per-test-coverage",
         "codeunit-runs-whole",
         "codeunit-row-equals-exact-row",
@@ -670,7 +676,7 @@ describe("§8 the contract probe", () => {
       kind: "contract",
       verdict: "matches",
     });
-    expect(r.facts.length).toBe(27);
+    expect(r.facts.length).toBe(28);
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("pass");
   });
 
@@ -961,14 +967,14 @@ describe("R639 (pre-commitment r9): leg C's BC readings", () => {
     );
   });
 
-  test("P10 (R667): 27 facts, 9 defect, 17 contract, 1 warn; the old count of 26 is gate-fail", async () => {
+  test("P10 (R590, r13): 28 facts, 9 defect, 18 contract, 1 warn; the old count of 27 is gate-fail", async () => {
     const r = await probe();
     const kinds = (k: string) => r.facts.filter((f) => f.kind === k).length;
     expect([r.facts.length, kinds("defect"), kinds("contract"), kinds("warn")]).toEqual([
-      27, 9, 17, 1,
+      28, 9, 18, 1,
     ]);
-    expect(V3_LEG_C_FACTS).toBe(27);
-    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 26).outcome).toBe("gate-fail");
+    expect(V3_LEG_C_FACTS).toBe(28);
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 27).outcome).toBe("gate-fail");
     expect(
       r.facts
         .filter((f) => f.kind === "defect")
@@ -1008,6 +1014,48 @@ describe("R639 (pre-commitment r9): leg C's BC readings", () => {
     const r = await at50653(1, EDGE_ROWS);
     expect(v3ContractRefusals(r).join("\n")).toMatch(/UNLIKE-BC — refusal-row-shape/);
     expect(v3DefectWarnings(r).join("\n")).not.toMatch(/unlike-bc/);
+  });
+});
+
+describe("R590 dependency-skip-line: v3 says when it leaves a dependency out", () => {
+  const F = "dependency-skip-line";
+  const runs =
+    (stderr: string, exitCode = 0) =>
+    () => ({
+      exitCode,
+      stdout: doc([row(50662, "Runs", "pass")]),
+      stderr,
+    });
+
+  test("as R-537 measured on alpha.2 and edge: matches, a contract fact; the probe app declares the absent dependency", async () => {
+    const r = await probe();
+    expect(r.facts.find((f) => f.fact === F)).toMatchObject({
+      kind: "contract",
+      verdict: "matches",
+    });
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("pass");
+  });
+
+  for (const [why, stderr] of [
+    ["no line (a build that logs it only with --verbose)", "alrunner 3.0.0-alpha.2 (91253f2d6)\n"],
+    ["a reworded line", "dependency missing: dependency `LethAL R590 Absent` by LethAL\n"],
+    [
+      "the words mid-line",
+      "warning: dependency skipped: dependency `LethAL R590 Absent` by LethAL\n",
+    ],
+    ["a skip line for another app", "dependency skipped: dependency `Other` by X\n"],
+  ] as const) {
+    test(`${why}: diverged, refuses a session, gate-fail`, async () => {
+      const r = await probe({ cu50662: runs(stderr) });
+      expect(r.facts.find((f) => f.fact === F)?.verdict).toBe("diverged");
+      expect(v3ContractRefusals(r).join("\n")).toMatch(/DIVERGED — dependency-skip-line/);
+      expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("gate-fail");
+    });
+  }
+
+  test("a call that did not run: unmeasurable, never matches", async () => {
+    const r = await probe({ cu50662: runs("spawn failed", -1) });
+    expect(r.facts.find((f) => f.fact === F)?.verdict).toBe("unmeasurable");
   });
 });
 

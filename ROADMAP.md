@@ -633,7 +633,7 @@ that ordering is the priority.
 - **R440** · scripts/r402-shape-sweep.ts crashes since R-307: it calls writeInstrumentedProject without identityOrdinals, and no typecheck covers the script · [R440.md](docs/roadmap/R440.md) · done (3e3555ab)
 - **R449** · Three SQLite-heavy unit tests time out at bun's 5 s default on GitHub CI's Windows job only (7 to 8.3 s), each passing on other runs · [R449.md](docs/roadmap/R449.md) · done (f224fa0d)
 - **R453** · al-runner loses a reportextension after a test calls Code Coverage Mgt. (found by the R-254 probe) · [R453.md](docs/roadmap/R453.md) · closed 2026-10-09 — not reproduced on 43f76177 and c5bbaf89 (3 setups); upstream fix inferred from the title…
-- **R471** · al-runner compiles a project that BC's alc rejects with AL0155 (a report and its reportextension declaring the same global), so LethAL's al-runner path can look green where bcdev errors · [R471.md](docs/roadmap/R471.md) · closed 2026-10-23 — ruling: moot for LethAL; alc accepts the shape from runtime 16, v3 runs every app as 16…
+- **R471** · al-runner compiles a project that BC's alc rejects with AL0155 (a report and its reportextension declaring the same global), so LethAL's al-runner path can look green where bcdev errors · [R471.md](docs/roadmap/R471.md) · closed 2026-10-23 — ruling: moot for LethAL, because alc proves every batch before v3 runs it (leg X (a))…
 - **R482** · `r214-history.test.ts` "R214 I4 ... marks: an old-scheme mark on the old key is stale" failed once in a full `verify` run and passed alone and on re-run (flaky) · [R482.md](docs/roadmap/R482.md) · closed 2026-10-05 — not reproduced in 20 repeats under load; the one failure was a starvation timeout during…
 - **R551** · al-runner one-shot: use `--test-exact` where the build accepts it; R488's path stays as the fallback · [R551.md](docs/roadmap/R551.md) · done (a63a3ac2)
 - **R519** · al-runner `--server`: per-request `test` / `excludeTests` would run only a mutant's covering tests and confine a hang to one test · [R519.md](docs/roadmap/R519.md) · closed 2026-10-23 — retired with the .NET al-runner (R654): a request field of the v2 server, whose LethAL…
@@ -724,7 +724,7 @@ that ordering is the priority.
 - **R678** · al-runner v3: a --resume session whose batches all reuse their baseline snapshots records no baseline refusal, so no survivor gets its [v3-refused-test-nearby] note · [R678.md](docs/roadmap/R678.md) · done (3d78e671)
 - **R679** · bc-linux-setup's Continia P1 stop did not name `--accept-build`, so a server on a newer Microsoft build read as blocked when R594's accepted-build path was one flag away · [R679.md](docs/roadmap/R679.md) · done (84c7d4f6)
 - **R683** · Host step: re-record `envtool.baseline.json` at the current identity scheme on the next live envtool run (it is the last gate baseline with no scheme and no mutated-text hash) · [R683.md](docs/roadmap/R683.md) · open, filed 2026-10-23 — a HOST step for the owner (the env tool is host-only)
-- **R684** · bcdev: a test codeunit whose OnRun raises an error gets no method lines on BC, and LethAL reports it as a stale test app and stops the run · [R684.md](docs/roadmap/R684.md) · open, filed 2026-10-23
+- **R686** · bcdev: a test codeunit whose OnRun raises an error gets no method lines on BC, and LethAL reports it as a stale test app and stops the run · [R686.md](docs/roadmap/R686.md) · open, filed 2026-10-23
 
 ---
 
