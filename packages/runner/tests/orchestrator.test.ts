@@ -9791,6 +9791,22 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         r.store.close();
       });
 
+      // Build review M3: the rule is the same for a bcdev session WITHOUT the env-tool hook.
+      test("a session without the hook refuses across a changed generation too", async () => {
+        const first = await envRun({ post: P2, generation: G1, noHook: true });
+        expect(first.outcome).not.toBeInstanceOf(Error);
+        const r = await envRun({
+          post: P2,
+          generation: G2,
+          noHook: true,
+          dirs: first.dirs,
+          store: first.store,
+          extra: { resume: first.runId },
+        });
+        refused(r, G1, G2);
+        r.store.close();
+      });
+
       test("control: the same generation resumes and carries", async () => {
         const first = await priorRun(G1);
         const r = await envRun({

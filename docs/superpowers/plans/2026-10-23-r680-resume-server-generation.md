@@ -72,7 +72,8 @@ and `AcquireLease` grants only at that current value. So the lease is taken AFTE
    lends none. A session with no generation filters nothing, as before.
 
 **Not changed:**
-- history lending (`--skip-known-survivors`) and the R192 baseline-snapshot reuse; they compare identities as before;
+- history lending (`--skip-known-survivors`): it compares identities as before (the R192 snapshot reuse is changed,
+  step 5);
 - `lethal verify`.
 
 R632 measured that a dependent published and removed inside the gap (0 → 1 → 0) leaves no readable history on the

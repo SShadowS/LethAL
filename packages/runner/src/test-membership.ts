@@ -155,7 +155,7 @@ export class ServerGenerationChangedError extends Error {
 
   constructor(flag: string, runId: number, recorded: string | null, current: string) {
     super(
-      `${flag}: run ${runId} recorded server generation ${recorded ?? "none (none recorded)"}, and the server now reports ${current}. The server was restarted or its lease force-reset since that run${recorded === null ? ", or the run predates R680" : ""}, so the apps and data its verdicts were measured against may be gone. None of its verdicts is carried (R680). Drop the flag to run from scratch.`,
+      `${flag}: run ${runId} ${recorded === null ? "has no server generation (none recorded)" : `recorded server generation ${recorded}`}, and the server now reports ${current}. The server was restarted or its lease force-reset since that run${recorded === null ? ", or the run predates R680" : ""}, so the apps and data its verdicts were measured against may be gone. None of its verdicts is carried (R680). Drop the flag to run from scratch.`,
     );
     this.name = "ServerGenerationChangedError";
     this.flag = flag;
