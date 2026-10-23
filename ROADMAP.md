@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**70 of 687 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**71 of 688 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -303,6 +303,7 @@ that ordering is the priority.
 - **R684** · lethal verify misses a test-app report, page, xmlport or query that another app runs by its id: the codeunit-id fold and fallback see codeunits only · [R684.md](docs/roadmap/R684.md) · done (ac8a7b02)
 - **R687** · After the release: fold the server's installed-app list (minus LethAL's own instrumented targets) into every verify digest, through a new LethAL Control procedure · [R687.md](docs/roadmap/R687.md) · open, filed 2026-10-23 — after the first release (orchestrator ruling)
 - **R690** · Re-record the seven gate baselines that lag IDENTITY_SCHEME (six BC gates and al-runner-v3's leg T), once, after R-604b decides whether the scheme moves to 42 · [R690.md](docs/roadmap/R690.md) · open, filed 2026-10-23 — waits on R-604b's scheme decision
+- **R692** · bcdev: RunMutant answered HTTP 500 while reproducing a kill (tables gate on bc1, M0232); the op could not be confirmed, so the session quarantined the tier and stopped · [R692.md](docs/roadmap/R692.md) · open, filed 2026-10-23
 
 ## Product gaps a real project hits
 
