@@ -959,6 +959,10 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **The content digest refuses invalid UTF-8 in `NavxManifest.xml` and `navigation.xml`** ([R627](docs/roadmap/R627.md)).
+  Before, two packages differing only in invalid bytes could get one digest. No valid package's digest changes.
+- **`bc-linux-setup.ts` keeps one lease-token record per lane** ([R615](docs/roadmap/R615.md)): `lease-<server>-<lane>.txt`,
+  so two lanes on one server no longer overwrite each other.
 - **The al-runner v3 compile proof now binds the non-`.al` files too** ([R608](docs/roadmap/R608.md)).
   Left out on purpose: both `app.json` files and the resource selector (each checked on its own), and the tool
   folders `.vscode`, `.git` and `node_modules`.
