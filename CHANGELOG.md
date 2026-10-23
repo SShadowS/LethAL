@@ -226,6 +226,14 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **`lethal verify`'s blind spot for installed apps is now a stated, measured limit** ([R434](docs/roadmap/R434.md)).
+  An app installed on the server but outside the test app's dependencies (a global subscriber, a setup change, a
+  test-runner extension) still leaves every test old when it is installed or upgraded. Measured on LethAL's
+  servers: about 120 installed apps each, and one outside every closure (ALDirectCompile's "Test Runner
+  Extension"). The agent guide says so, with what to do: re-run `lethal run` after installing or upgrading an app.
+  The guide no longer says a partner dependency published but not installed is unseen. Since R496 verify refuses it
+  (`dependency-unreadable`). Folding the installed list into the digest is [R687](docs/roadmap/R687.md), after the
+  release.
 - **An unknown `bcdev.coverageMode` is refused by name** ([R681](docs/roadmap/R681.md)). Only `"procedure"`,
   `"none"` and `"fenced"` are accepted, and the message lists them. Before, a typo such as `"Fenced"` ran silently as
   `none`, and `"line"`, a hub mode the docs never offer, reached the hub. An explicit `null` is refused too: leave

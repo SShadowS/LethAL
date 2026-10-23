@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**81 of 681 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**81 of 682 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -167,7 +167,7 @@ that ordering is the priority.
 - **R426** · verify's reach filter cannot see a kill that depends on state left by an earlier test in the same call, or on code run in another session; filtered verify keeps fresh `lethal run`'s blind spot · [R426.md](docs/roadmap/R426.md) · closed 2026-10-06 — stated limit: a per-project detector would fire on every real product target…
 - **R431** · lethal verify cannot see a test-app codeunit that another app runs by its integer id (Codeunit.Run(<id>)), when the test hands that id over as a plain Integer · [R431.md](docs/roadmap/R431.md) · done (bb2ef6a1) — the codeunit routes were closed by R-371 before this was filed; R-431's probe confirms…
 - **R433** · The unfiltered automation extensions query hangs BC 28.4 (and took Cronus28 down) and must never be issued · [R433.md](docs/roadmap/R433.md) · done (4aeb224a)
-- **R434** · lethal verify cannot see an installed app outside the test app's dependency closure, nor a non-Microsoft dependency that is published but not the installed one · [R434.md](docs/roadmap/R434.md) · open, filed 2026-10-04
+- **R434** · lethal verify cannot see an installed app outside the test app's dependency closure, nor a non-Microsoft dependency that is published but not the installed one · [R434.md](docs/roadmap/R434.md) · closed 2026-10-23 — part 2 done by R496 (47179723); part 1 measured…
 - **R438** · R433's run-time guard checks only the request path: an `extensions` expand in the query, or an escape left encoded after 16 decoding rounds, gets through · [R438.md](docs/roadmap/R438.md) · done (9c58e352)
 - **R441** · R433's extensions guard checks the request text before fetch normalises it: a tab, CR or LF inside `extensions` passes the check and is stripped by the URL parser · [R441.md](docs/roadmap/R441.md) · done (1a266901)
 - **R442** · A header-refused file reserves no identity ordinals, so a same-tuple twin's recorded key can later name the refused file's mutant and --skip-known-survivors carries the wrong verdict; and EMIT's import allow-list ignores external imports · [R442.md](docs/roadmap/R442.md) · done (5afbbe70)
@@ -301,6 +301,7 @@ that ordering is the priority.
 - **R681** · an unknown `bcdev.coverageMode` in lethal.config.json is not refused: `validateBcDevConfig` returns the section unchecked, so a typo runs silently as `none` and `"line"` reaches the hub · [R681.md](docs/roadmap/R681.md) · done (c9e416de)
 - **R682** · after every identity-scheme bump, a gate baseline's byte-identical twins are text-UNVERIFIED until it is re-recorded, and nothing schedules that re-record · [R682.md](docs/roadmap/R682.md) · open, filed 2026-10-23
 - **R684** · lethal verify misses a test-app report, page, xmlport or query that another app runs by its id: the codeunit-id fold and fallback see codeunits only · [R684.md](docs/roadmap/R684.md) · done (ac8a7b02)
+- **R687** · After the release: fold the server's installed-app list (minus LethAL's own instrumented targets) into every verify digest, through a new LethAL Control procedure · [R687.md](docs/roadmap/R687.md) · open, filed 2026-10-23 — after the first release (orchestrator ruling)
 
 ## Product gaps a real project hits
 
