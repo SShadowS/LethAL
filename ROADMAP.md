@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**51 of 695 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**50 of 695 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -404,7 +404,7 @@ that ordering is the priority.
 - **R305** · An object whose HEADER is split by `#if` (`preproc_split_declaration`) is refused as a whole file, so none of its sites are instrumented · [R305.md](docs/roadmap/R305.md) · closed 2026-10-05 — stated limit: 593 sites lost in 2 BaseApp files (0.026%), 0 elsewhere (R-305 census)
 - **R444** · Eight more grammar containers can hold statements and `isStatementSlot` knows none of them: `preproc_guarded_statement` (two) and six split-directive kinds · [R444.md](docs/roadmap/R444.md) · closed 2026-10-06 — stated limit: 0 statements in any of the eight containers on BaseApp, CDO, DC, DO and the…
 - **R307** · One bad file still aborts the whole run: `assertNoOverlap`, the injector's unsupported-kind throw, the latch's no-owner throw and the line map's declared-but-unmapped throw all stay whole-run throws · [R307.md](docs/roadmap/R307.md) · done (cf354d51)
-- **R308** · `describeObjectKinds` reads a file's top-level children directly, so it names the `#if` wrapper (or reports no object at all) instead of the object inside it · [R308.md](docs/roadmap/R308.md) · open, filed 2026-09-28
+- **R308** · `describeObjectKinds` reads a file's top-level children directly, so it names the `#if` wrapper (or reports no object at all) instead of the object inside it · [R308.md](docs/roadmap/R308.md) · done (4991508f)
 - **R309** · A split-header procedure whose arms EACH have their own `var` section (`preproc_split_procedure_preamble`) has no single place for a reach latch, and is refused by name instead of throwing · [R309.md](docs/roadmap/R309.md) · done (24e7169..34f9780)
 - **R310** · R303's reach-latch refusal has no SessionReport field, so a mutant it refuses reads only as an unplaced reachGrain, never named as R303's · [R310.md](docs/roadmap/R310.md) · closed 2026-09-28, ruling: after R303's hoist, a member is refused only by R303's header-end predicate…
 - **R311** · Even past the parser's WASM heap limit, `writeInstrumentedProject` cannot serialize a whole-BaseApp manifest: `JSON.stringify` runs out of memory · [R311.md](docs/roadmap/R311.md) · done (054a9774)
