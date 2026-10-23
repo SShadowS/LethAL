@@ -91,3 +91,21 @@ target lists 14 sites with no refusal. No prediction changes.
 | `app/src/Sum.Report.al` | `ac940b5c532f74f01088349858f31a128dd3ff6d19b31704d9b1376cacc70712` |
 | `build/app.app` | `b4816b51f4b4a8d89710130bba1a2aabb055741b2bf804c8a2c1c1a0c4dd956b` |
 | `build/tests.app` | `6ec1e35d06a5d00acb24e9699e85d50dc5f560b3ea08788a9d10a73f8a085b96` |
+
+## Delta 3 (after the third run, before the fourth)
+
+**Third run (12:25:33Z), as measured.** The baseline ran all six tests on bc2:
+- `HandlerUnused` failed with `The following UI handlers were not executed: MsgHandler`: **P1 holds**.
+- `HandlerUsed` passed.
+- `ReportWithRequestPage` and `ReportNoRequestPage` both failed in `Seed`, with `Sorry, the current permissions
+  prevented the action. (TableData 50971 R537 Entry Insert: R537 Tests)`. This is a probe defect: codeunit 50980
+  does not declare `TestPermissions = Disabled`. **P4 is not answered**, and P2 is answered only for `HandlerUsed`.
+- The two `R537 OnRun Tests` tests got 0 method lines on BC (`expected exactly one method AfterThrowingOnRun,
+  found 0`). LethAL classified them `stale-test-app` and stopped the run with `StaleTestAppError` after the baseline.
+  **P3 is refuted:** BC reported no failed test.
+- `serverGeneration` was unchanged before and after, and both apps read back absent: **P5 holds**.
+
+**The one change for the fourth run:** codeunit 50980 declares `TestPermissions = Disabled`, and the tests app is
+rebuilt (`tests/src/Tests.al` `4c3326a8e229e21150fbad806555eede4c2c65d6051273f1e3857baf1fd4c706`, `build/tests.app`
+`1c05fd71a8416b32f2b263a2c44f4f727ac2102e971d16485bd2235471d1e76e`). P2 and P4 stand as written. The fourth run
+re-measures P1, P3 and P5 as well; a result that differs from the third run is reported, not chosen.
