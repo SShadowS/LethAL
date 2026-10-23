@@ -10,7 +10,6 @@ import {
   assertNamesRun,
   expectedNamesRows,
 } from "../itest/names-fixture";
-import { qualifiedTestName } from "../src/al-runner-transport";
 import { discoverTests } from "../src/discovery";
 import { generateMutationSet, operatorTiers, planArtifacts } from "../src/orchestrator";
 import type { SessionReport } from "../src/report";
@@ -53,13 +52,12 @@ describe("sandbox-names: the pre-committed table describes the fixture (R557)", 
     );
   });
 
-  test("the twelve tests are discovered in table order, and each is sent under the table's row name", async () => {
+  // R654 S3: the check that each test is SENT under the row name went with the .NET al-runner's
+  // `qualifiedTestName`; the rows stay as the table's data.
+  test("the twelve tests are discovered in table order", async () => {
     const tests = await discoverTests(NAMES_TEST_DIR);
     expect(tests.map((t) => [t.codeunitId, t.codeunitName, t.method])).toEqual(
       NAMES_TABLE.map((r) => [NAMES_TESTS_CODEUNIT_ID, "Names Tests", r.killer]),
-    );
-    expect(NAMES_TABLE.map((r) => qualifiedTestName(NAMES_TESTS_CODEUNIT_ID, r.killer))).toEqual(
-      NAMES_TABLE.map((r) => r.row),
     );
     // Ten renamed, two controls (pre-commitment section B).
     expect(NAMES_TABLE.filter((r) => r.row !== `Codeunit78850.${r.killer}`)).toHaveLength(10);
@@ -137,15 +135,5 @@ describe("assertNamesRun: the names legs' checker (R557)", () => {
       );
       expect(() => run(good)).not.toThrow();
     }
-  });
-
-  test("an al-runner-undecided-test-missing warning fails the leg", () => {
-    expect(() =>
-      assertNamesRun(report("exact"), "t", {
-        coverage: "al-runner",
-        transport: "server",
-        seen: { warningCodes: ["al-runner-undecided-test-missing"], contractLines: [] },
-      }),
-    ).toThrow(/undecided/);
   });
 });

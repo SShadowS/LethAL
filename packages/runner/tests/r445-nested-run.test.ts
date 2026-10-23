@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AlRunnerBackend } from "../src/al-runner-backend";
+import type { ExecutionBackend } from "../src/backend";
 import { type RunCliConfig, runFromCli } from "../src/cli";
 import { TestProjectNestedError } from "../src/verify";
 import { removeRunScratchAfterAll, removeScratchDir } from "./helpers/scratch";
@@ -56,7 +56,10 @@ async function layout(tests: "app/test" | "tests" | "." | "app"): Promise<RunCli
     mode: "run",
     projectDir: app,
     testDir,
-    backendKind: "al-runner",
+    // R654: re-pointed from the retired .NET al-runner to al-runner-v3, the backend that runs on
+    // this test's empty config (bcdev refuses it for its missing "bcdev" section before the sibling
+    // case can reach runSession). The R445 refusal reads no backend kind.
+    backendKind: "al-runner-v3",
     dbPath: ":memory:",
     configPath,
     skipKnownSurvivors: false,
@@ -77,12 +80,8 @@ function spies() {
       validateSelectorIdsForProject: async () => {},
       buildBackend: async () => {
         calls.buildBackend++;
-        return new AlRunnerBackend({
-          alRunnerPath: "unused",
-          instrumentedDir: "unused",
-          testDir: "unused",
-          selectorObjectId: 1,
-        });
+        // R654: was an unused `AlRunnerBackend`; runSession is stubbed, so nothing reads it.
+        return {} as ExecutionBackend;
       },
       runSession: async () => {
         calls.runSession++;

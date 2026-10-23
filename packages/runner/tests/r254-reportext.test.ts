@@ -4,11 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser } from "@lethal/engine";
 import { type MutantManifest, writeInstrumentedProject } from "@lethal/schemata";
-import {
-  alRunnerCoverageFrom,
-  buildAlRunnerCoverageIndex,
-  parseCobertura,
-} from "../src/al-runner-coverage";
 import { AppMethodIndex, objectTypeName } from "../src/app-package";
 import { assertManifestObjectsDeclared, buildLineMap } from "../src/line-map";
 import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/orchestrator";
@@ -332,42 +327,5 @@ describe("R254: fenced coverage joins a 22:<id> row to the extension's procedure
     }));
 });
 
-/** al-runner's Cobertura for the probe, MEASURED (scripts/r254-probe/README.md section (b)). */
-const PROBE_COBERTURA = `<?xml version="1.0" encoding="utf-8"?>
-<coverage line-rate="1.0000" branch-rate="0" version="1.0">
-  <packages>
-    <package name="al-source" line-rate="1.0000" branch-rate="0">
-      <classes>
-        <class name="R254ProbeRepExt.ReportExt" filename="${PROBE_FILE}" line-rate="1.0000">
-          <lines>
-            <line number="12" hits="6" />
-            <line number="19" hits="2" />
-            <line number="26" hits="2" />
-            <line number="31" hits="6" />
-            <line number="32" hits="4" />
-            <line number="33" hits="2" />
-            <line number="40" hits="1" />
-          </lines>
-        </class>
-      </classes>
-    </package>
-  </packages>
-</coverage>
-`;
-
-describe("R254: al-runner's own <class> for a reportextension resolves by the line map", () => {
-  test("the measured class block gives ReportExtension:91601 Classify and GetExtTotal", () =>
-    withProject({ [PROBE_FILE]: PROBE_EXT }, async (dir) => {
-      const index = await buildAlRunnerCoverageIndex(dir);
-      const map = alRunnerCoverageFrom(parseCobertura(PROBE_COBERTURA), index);
-      const named = map.entries
-        .filter((e) => e.procedure !== undefined)
-        .map((e) => `${e.objectType}:${e.objectId}:${e.procedure}`);
-      expect([...new Set(named)]).toEqual([
-        "ReportExtension:91601:Classify",
-        "ReportExtension:91601:GetExtTotal",
-      ]);
-      // The trigger lines are evidence too, at object level.
-      expect(map.entries.some((e) => e.procedure === undefined && e.objectId === 91601)).toBe(true);
-    }));
-});
+// R654 S3: "R254: al-runner's own <class> for a reportextension resolves by the line map" read the
+// .NET al-runner's measured Cobertura, and went with that backend's one-shot reader.

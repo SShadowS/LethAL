@@ -76,7 +76,6 @@ export interface SeedOverrides {
   readonly testAppHash?: string;
   /** Appended to the source run's test-app hash (`PENDING_SUFFIX`, `REVOKED_SUFFIX`). */
   readonly hashSuffix?: string;
-  readonly alRunnerNames?: boolean;
   /** Default true. `false` writes no mutant row. */
   readonly rows?: boolean;
   /** Only the rows whose identity key is in this set. Default: every row. */
@@ -135,7 +134,6 @@ export function seedRunFrom(store: ResultsStore, fromRunId: number, o: SeedOverr
     twinTuples: src.twinTuples,
     numberingDigest: src.numberingDigest,
     dependencySourceSha256: src.dependencySourceSha256,
-    alRunnerNames: o.alRunnerNames ?? src.alRunnerNames,
     testScope: src.testScope,
     ...(runnerBuild !== undefined ? { runnerBuild } : {}),
     ...(src.resourceKey !== null ? { resourceKey: src.resourceKey } : {}),

@@ -83,64 +83,24 @@ export async function appJsonSymbols(
   return validateSymbolList(raw, path);
 }
 
-/**
- * R377: the symbols al-runner PREDEFINES when it compiles a project, with no `--define` and nothing
- * in `app.json`: exactly CLEANSCHEMA1 .. CLEANSCHEMA25. Measured on al-runner v2.12.0 (2026-10-01,
- * one probe arm per candidate; CLEANSCHEMA26 and up, CLEANSCHEMA, NOTCLEANSCHEMA25 are NOT defined).
- * alc predefines nothing. A fact about that one release, so it is NOT what a run uses: since R392
- * every al-runner session measures the set (`probeAlRunnerPredefinedSymbols`), and this list is only
- * what that measurement is compared against for the `al-runner-predefined-symbols-changed` warning.
- */
-export const AL_RUNNER_PREDEFINED_SYMBOLS_V2_12_0: readonly string[] = Array.from(
-  { length: 25 },
-  (_, i) => `CLEANSCHEMA${i + 1}`,
-);
-
-/** R377: the text to append to a message that shows two different symbol sets. It is non-empty
- *  only when the two sets differ by EXACTLY al-runner's predefined symbols (an al-runner build
- *  against an alc build of the same project). A `null` set (not recorded) gets no hint. */
-export function predefinedSymbolsHint(
-  a: readonly string[] | null,
-  b: readonly string[] | null,
-): string {
-  if (a === null || b === null) return "";
-  const inA = new Set(a);
-  const inB = new Set(b);
-  const diff = new Set([...inA, ...inB].filter((s) => inA.has(s) !== inB.has(s)));
-  const same =
-    diff.size === AL_RUNNER_PREDEFINED_SYMBOLS_V2_12_0.length &&
-    AL_RUNNER_PREDEFINED_SYMBOLS_V2_12_0.every((s) => diff.has(s));
-  return same ? " (al-runner v2.12.0 predefines CLEANSCHEMA1..CLEANSCHEMA25, R377)" : "";
-}
-
-/** R392: what one al-runner session MEASURED al-runner to predefine (`probeAlRunnerPredefinedSymbols`). */
-export interface AlRunnerPredefinedProbe {
-  /** Sorted. Only the probe's candidates (CLEANSCHEMA1..40, CLEANSCHEMA) can appear. */
-  readonly symbols: readonly string[];
-}
-
-/** The compiler a build symbol set is computed for: `bcdev` is alc, `al-runner` is al-runner.
- *  R392: the al-runner variant cannot be built without a probe result, so no caller can fall back
- *  to an assumed list. */
-export type BuildBackend =
-  | { readonly kind: "bcdev" }
-  | { readonly kind: "al-runner"; readonly predefined: AlRunnerPredefinedProbe }
-  // R586: al-runner v3 runs only what alc proved, and `runSession` refuses a v3 that predefines a
-  // symbol, so its build set is alc's: no predefined symbols.
-  | { readonly kind: "al-runner-v3" };
+/** The compiler a build symbol set is computed for: `bcdev` is alc. R586: al-runner v3 runs only
+ *  what alc proved, and `runSession` refuses a v3 that predefines a symbol, so its build set is
+ *  alc's: no predefined symbols. (R654 removed the .NET al-runner's variant, which carried its
+ *  measured predefined symbols, R377 and R392.) */
+export type BuildBackend = { readonly kind: "bcdev" } | { readonly kind: "al-runner-v3" };
 
 /** The build's effective symbols: sorted and de-duplicated, so two equal sets compare equal.
- *  `backend` is required so no caller can forget it: an al-runner build also has al-runner's
- *  measured predefined symbols (R377, R392), an alc build does not. */
+ *  `backend` is required so a future backend that predefines symbols has one place to add them;
+ *  neither of today's does. */
 export async function effectiveBuildSymbols(
   projectDir: string,
   configSymbols: readonly string[],
   snapshot: ReadonlyMap<string, Buffer> | undefined,
   backend: BuildBackend,
 ): Promise<readonly string[]> {
+  void backend;
   const fromApp = await appJsonSymbols(projectDir, snapshot);
-  const predefined = backend.kind === "al-runner" ? backend.predefined.symbols : [];
-  return [...new Set([...fromApp, ...configSymbols, ...predefined])].sort();
+  return [...new Set([...fromApp, ...configSymbols])].sort();
 }
 
 /** R214: `runSession` recorded one effective symbol set and generation enumerated under another.

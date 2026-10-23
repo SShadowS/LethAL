@@ -48,12 +48,13 @@ const files = (src: Record<string, string>) =>
   Object.entries(src).map(([path, text]) => ({ path, root: wrapRoot(parseAL(text)) }));
 
 describe("R654 I1 (a): the rule each backend kind gets, and what a v3 session refuses", () => {
-  test("the exact map: bcdev bc-shape, al-runner al-runner-index, al-runner-v3 refuse-wrapped", () => {
-    expect([
-      wrappedRuleFor("bcdev"),
-      wrappedRuleFor("al-runner"),
-      wrappedRuleFor("al-runner-v3"),
-    ]).toEqual(["bc-shape", "al-runner-index", "refuse-wrapped"]);
+  // R654 S3: the .NET al-runner kind is gone; the `al-runner-index` rule stays (I1) and is reached
+  // by its own name below.
+  test("the exact map: bcdev bc-shape, al-runner-v3 refuse-wrapped", () => {
+    expect([wrappedRuleFor("bcdev"), wrappedRuleFor("al-runner-v3")]).toEqual([
+      "bc-shape",
+      "refuse-wrapped",
+    ]);
   });
 
   test("a v3 session refuses every object of an admitted wrapped file, by today's sentences", () => {
@@ -75,10 +76,8 @@ describe("R654 I1 (a): the rule each backend kind gets, and what a v3 session re
 });
 
 describe("R654 I1 (b): the al-runner index rule admits the measured shape", () => {
-  test("under the rule al-runner gets, an admitted W1 refuses nothing", () => {
-    expect(coverageRefusedObjects(files({ [W1_FILE]: W1 }), wrappedRuleFor("al-runner")).size).toBe(
-      0,
-    );
+  test("under the al-runner-index rule, an admitted W1 refuses nothing", () => {
+    expect(coverageRefusedObjects(files({ [W1_FILE]: W1 }), "al-runner-index").size).toBe(0);
   });
 });
 
@@ -86,7 +85,7 @@ describe("R654 I1 (c): carryBarredFiles follows the rule", () => {
   test("a v3 session bars no file (it admits none); the index rule bars the admitted file", () => {
     const fs = files({ [W1_FILE]: W1, [BARE_FILE]: BARE_BEFORE });
     expect([...carryBarredFiles(fs, wrappedRuleFor("al-runner-v3"), new Map())]).toEqual([]);
-    expect([...carryBarredFiles(fs, wrappedRuleFor("al-runner"), new Map())]).toEqual([W1_FILE]);
+    expect([...carryBarredFiles(fs, "al-runner-index", new Map())]).toEqual([W1_FILE]);
   });
 
   test("bcdev with no arms for a file bars nothing (admittedOnBc needs the arms)", () => {

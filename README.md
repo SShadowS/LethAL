@@ -485,7 +485,7 @@ this build returns.
 |------|---------|-------------|
 | `--project` | *(required)* | AL project directory to mutate |
 | `--tests` | *(required)* | Test project directory (refused with `--dry-run`, which needs no test project) |
-| `--backend` | *(required)* | `bcdev`, `al-runner` or `al-runner-v3` |
+| `--backend` | *(required)* | `bcdev` or `al-runner-v3` (`al-runner`, the retired .NET al-runner, is refused by name: `al-runner-v2-retired`, R654) |
 | `--only <glob>` | *(all files)* | Only these files contribute mutants. Repeatable. Cannot change a verdict, because every file is still parsed, compiled and published |
 | `--tests-only <glob>` | *(whole suite)* | Only these test files run at baseline. Repeatable. **Can change a verdict**: excluding a killing test manufactures a survivor. Flagged `tests-narrowed` in the report |
 | `--skip-known-survivors` | `false` | Skip mutants a prior finished run recorded as survivors |
@@ -639,7 +639,7 @@ The short version, before the evidence:
 - **Big apps must be run in slices** (`--only`). An unscoped run on a real project is refused by
   default.
 - **One tenant per server.** LethAL cannot fence a second tenant publishing to the same instance.
-- **The `al-runner` backend is not authoritative**. Use `bcdev` for any number you intend to quote.
+- **The `al-runner-v3` backend is not authoritative**. Use `bcdev` for any number you intend to quote.
 
 The rest of this section is the evidence for each, with the measurements behind it.
 
@@ -701,32 +701,11 @@ a LethAL feature or a mode.
 - **Single-tenant servers only.** App publication is service-instance-wide, so a second tenant
   publishing to the same instance is outside the lease entirely. Documented, **not enforced**, since
   AL cannot enumerate tenants from an extension. Verify out of band with `Get-BcContainerTenants`.
-- **`al-runner` is not authoritative,** though not for the reason earlier versions of this file
-  gave. The 2026-07 finding that its `asserterror` never fails a test was fixed upstream in v2, and
-  a startup canary re-measures it against the installed binary every session (`defect-not-reproduced`
-  on v2.10.0.0). Both later reasons have moved too (R220): LethAL can read al-runner's own
-  `--coverage`, and on 2.11.0 the canary reports that a row written inside `Codeunit.Run` IS
-  discarded by the error. What remains is that coverage is CONDITIONAL: `lethal run` uses it by
-  default since R394 (`"alRunner": { "coverage": "none" }` turns it off), and a file holding a
-  `#if`-wrapped object turns it off for the whole run, with a warning naming the file. A file
-  declaring more than one object turns it off too, unless a once-per-session frame probe admits the
-  installed al-runner build (R407): al-runner v2.12.0-main.c39ad5de reports those objects' lines in
-  a frame LethAL cannot convert, so they would land in the wrong object (R383), while 43f76177 and
-  c5bbaf89 (measured) report them correctly; the probe decides for any other build. A warning line names the probe's answer and the build either way. The
-  `#if` reason is R298, pending R300. Without coverage a mutant no test reaches is run against every
-  test and comes back `survived` rather than `no-coverage`. That is one measured route to a false survivor. No measurement has shown a false
-  kill from this backend, but none rules one out either; in particular, a pinned platform-app directory
-  that exists but holds a mismatched build is untested (R235). Use it for offline smoke-testing, not for a score.
-- **`al-runner` settings (R387).** The `alRunner` config section takes `alRunnerPath`, `packagesDir`,
-  `serverMode`, `selectorMode` and `coverage`; any other key is refused by name. By default `lethal run`
-  uses al-runner's warm `--server` daemon (one per worker under `--workers`) and the resource selector,
-  which compiles each batch once instead of once per mutant, and reads al-runner's coverage (R394;
-  `"coverage": "none"` turns it off). `"serverMode": false` goes back to one
-  process per test, and then the selector defaults to `"static"`. A run with a slow setting prints one
-  `[lethal] al-runner settings:` line naming it. Verdicts are the same per mutant on the fixtures the
-  gate measures; under `--server` a hung test becomes an error after one long suite deadline (at least
-  10 minutes) rather than a per-test timeout.
-- **`al-runner-v3` (the Rust al-runner, R586) is not authoritative either.** It is pinned
+- **The .NET al-runner backend is retired (R654).** `--backend al-runner` is refused with
+  `al-runner-v2-retired`, a stored run of it lends nothing to any later session, and `explain` and
+  `campaign` refuse a report of it. Its gate (`itest:alrunner`) is gone; its frozen figures are kept
+  on [docs/gates/alrunner.md](docs/gates/alrunner.md).
+- **`al-runner-v3` (the Rust al-runner, R586) is not authoritative.** It is pinned
   (`alrunner 3.0.0-alpha.2`, `/work/tools/al-runner-v3/current`, `.gated`) and configured in an
   `alRunnerV3` section (`packagesDir` and `bcVersion` required; `coverage`, `path`, `alcPath`,
   `cacheDir`). Measured on alpha.2, it differs from BC in three ways that change verdicts:
@@ -864,7 +843,6 @@ per-mutant baseline**, where a differing verdict is a regression, never "close e
 | `LETHAL_ITEST_BCDEV=1 bun run itest:bcdev` | End-to-end verdicts against real BC | 3 killed / 12 survived / 4 no-coverage |
 | `LETHAL_ITEST_TABLES=1 bun run itest:tables` | Tier-2 operators, table-trigger and extension-object mutation | 299 / 63 / 15 over 377 deployed |
 | `LETHAL_ITEST_ENVTOOL=1 bun run itest:envtool` | An externally-owned environment, reached through config | 3 / 12 / 4 |
-| `LETHAL_ITEST_ALRUNNER=1 bun run itest:alrunner` | The al-runner backend, plus `sandbox-symbols` under `[LETHALA]` and `[LETHALB]` (R321), plus the CLI's own defaults (R387) | 3 / 12 / 4; 5 / 8 / 0 per symbol set; 3 / 12 / 4 CLI-default leg, equal per mutant to leg A since R394 (recorded per mutant as pre-committed) |
 | `LETHAL_ITEST_ALRUNNER_V3=1 bun run itest:alrunner-v3` | The al-runner-v3 backend (R586): contract probe, sandbox-app, sandbox-names, the compile proof and its binding, the Sleep rule live; opt-in the R546 CDO slice (`LETHAL_ITEST_V3_CDO`) and the tables fixture (`LETHAL_ITEST_V3_TABLES=1`, the update gate's leg T) | 3 / 12 / 4 and 36 / 0 / 0, per mutant equal to bcdev; CDO 51 / 12 / 0 and 51 / 8 / 4; tables 290 / 57 / 59 against v3's own baseline (`docs/superpowers/specs/2026-10-21-r586-alrunner-v3-precommitment.md`) |
 | `LETHAL_ITEST_BCDEV=1 bun run itest:lease` | Lease lifecycle, contention, recovery | n/a |
 | `LETHAL_ITEST_BCDEV=1 bun run itest:stale-publish` | Publish serialization and staleness | n/a |

@@ -45,7 +45,7 @@ The legs:
     in a session, and never counted as gone.
   - In every session, a row whose message starts `NotRun: out-of-scope:` but has no `notRun` scores `error`
     (`runner-test-error`), never a kill, survive or pass (K1(a)).
-- S1, S3: `fixtures/sandbox-app`, one-shot, per mutant equal to `itest:alrunner`'s table.
+- S1, S3: `fixtures/sandbox-app`, one-shot, per mutant equal to `bcdev.baseline.json` (`itest:bcdev`'s table).
 - N1: the names fixture (R557's tests are unselectable on v3, upstream #5572).
 - X (a) to (f): the compile proof, the binding checks and the Sleep rule (§6) on `scripts/r586-probe`.
 - D1, D1c: the Continia Document Output slice, compared per mutant with R594's BC oracle
@@ -126,7 +126,7 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
 - **When a file is missing,** `preflightGateBaseline` refuses the WHOLE run, before any leg starts, and names the record command. This happens whenever the run selects the leg whose baseline is missing (L1, Y-A or Y-B; by default all three are selected). It does not skip just that leg.
 - **A record run never exits 3 when a leg that it did not record failed.** It exits 1 and names the leg (`v3RecordRunFailures`). A table mismatch writes no file.
 
-**agentflow.** `scripts/agentflow/gate-table.ts` selects the `alrunner-v3` leg wherever it selects `alrunner`. A challenged run (the four `LETHAL_GATE_*` variables) writes a receipt whose sublegs must equal the default legs, with no corpus and no tables leg (`V3_AGENTFLOW_LEGS`).
+**agentflow.** `scripts/agentflow/gate-table.ts` selects the `alrunner-v3` leg wherever it selected the retired `alrunner` leg (R654). A challenged run (the four `LETHAL_GATE_*` variables) writes a receipt whose sublegs must equal the default legs, with no corpus and no tables leg (`V3_AGENTFLOW_LEGS`).
 
 ## The pin and the update gate
 

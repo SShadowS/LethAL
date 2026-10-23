@@ -291,7 +291,8 @@ describe("R346: every gate's failure handler prints through formatFailure", () =
 
   test("the scan found the gates", () => {
     // A scan that reads nothing passes everything.
-    for (const g of ["bcdev", "al-runner", "envtool", "tables", "hang", "harden", "chunked"]) {
+    // R654: al-runner-v3 replaces the retired .NET al-runner's gate.
+    for (const g of ["bcdev", "al-runner-v3", "envtool", "tables", "hang", "harden", "chunked"]) {
       expect(gates).toContain(`${g}.itest.ts`);
     }
   });

@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import { IDENTITY_SCHEME, type MutantManifestEntry } from "@lethal/schemata";
-import type { AlRunnerCanaryResult } from "../src/al-runner-canary";
 import type { RunEvent, RunEventInput } from "../src/events";
 import { HANG_CAPABLE_EXPLANATIONS } from "../src/hang-capable";
 import type { PermissionCanaryResult } from "../src/permission-canary";
@@ -11,13 +10,10 @@ import { identityKeyOf, serializeKey } from "../src/selection";
 import { legacyBuildReport } from "./helpers/legacy-report";
 
 // ————————————————————————————————————————————————————————————————————————
-// R7/R8: `renderConsole` repeats the al-runner canary's measured verdict at the END of the
-// printed report (after the score line), not just once at session start via console.warn
-// (`announceAlRunnerCanary`, cli.ts) — the end of a long run is where a reader actually is.
-// Reverting this addition (i.e. `renderConsole` ignoring `r.alRunnerCanary` entirely) would fail
-// every test below asserting the R7/R8 lines appear in its output.
+// R654 removed the .NET al-runner's canary and its R7/R8 end-of-report reiteration. What is left
+// pins that a local-runner report prints no canary lines at all.
 // ————————————————————————————————————————————————————————————————————————
-describe("renderConsole — al-runner canary reiteration (R7/R8)", () => {
+describe("renderConsole — no al-runner canary lines (R654)", () => {
   const baseReport: SessionReport = {
     schemaVersion: 2,
     validity: {
@@ -39,7 +35,7 @@ describe("renderConsole — al-runner canary reiteration (R7/R8)", () => {
     },
     survivorsByProcedure: [],
     testFiles: {},
-    backend: "al-runner",
+    backend: "al-runner-v3",
     authoritative: false,
     baselineGreen: true,
     batches: 1,
@@ -72,58 +68,11 @@ describe("renderConsole — al-runner canary reiteration (R7/R8)", () => {
     untargetedTriggerCount: 0,
   };
 
-  test("appends both canary lines after the score when the backend is non-authoritative and a canary result is present", () => {
-    const canary: AlRunnerCanaryResult = {
-      asserterror: "defect-confirmed",
-      tableGlobalVar: "defect-not-reproduced",
-      transactionRollback: "defect-not-reproduced",
-    };
-    const out = renderConsole({ ...baseReport, alRunnerCanary: canary });
-    const scoreLineIdx = out.split("\n").findIndex((l) => l.startsWith("score:"));
-    const r7LineIdx = out.split("\n").findIndex((l) => l.includes("R7"));
-    const r8LineIdx = out.split("\n").findIndex((l) => l.includes("R8"));
-    expect(scoreLineIdx).toBeGreaterThanOrEqual(0);
-    expect(r7LineIdx).toBeGreaterThan(scoreLineIdx);
-    expect(r8LineIdx).toBeGreaterThan(scoreLineIdx);
-    expect(out).toContain("CONFIRMED");
-    expect(out).toContain("did NOT reproduce");
-  });
-
-  test("omits the reiteration entirely when no canary result is present (bcdev session, or the al-runner no-alRunnerPath fallback)", () => {
+  test("an al-runner-v3 report prints no canary line", () => {
     const out = renderConsole(baseReport);
     expect(out).not.toContain("R7");
     expect(out).not.toContain("R8");
     expect(out).not.toContain("canary");
-  });
-
-  test("omits the reiteration on an authoritative (bcdev) report even if alRunnerCanary were somehow set", () => {
-    const canary: AlRunnerCanaryResult = {
-      asserterror: "defect-confirmed",
-      tableGlobalVar: "defect-confirmed",
-      transactionRollback: "defect-not-reproduced",
-    };
-    // R586: the reiteration keys on the v2 backend, so a bcdev report is labelled bcdev.
-    const out = renderConsole({
-      ...baseReport,
-      backend: "bcdev",
-      authoritative: true,
-      alRunnerCanary: canary,
-    });
-    expect(out).not.toContain("R7");
-    expect(out).not.toContain("R8");
-  });
-
-  test("inconclusive verdicts still print something (never silently dropped)", () => {
-    const canary: AlRunnerCanaryResult = {
-      asserterror: "inconclusive",
-      tableGlobalVar: "inconclusive",
-      transactionRollback: "defect-not-reproduced",
-      asserterrorDetail: "spawn ENOENT",
-      tableGlobalVarDetail: "spawn ENOENT",
-    };
-    const out = renderConsole({ ...baseReport, alRunnerCanary: canary });
-    expect(out).toContain("could not determine");
-    expect(out).toContain("spawn ENOENT");
   });
 });
 
@@ -897,7 +846,7 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
 describe("R577: killReproduced, reproducedFailure and kill-not-reproduced on the report", () => {
   const STATICS: FoldStatics = {
     caps: {
-      kind: "al-runner",
+      kind: "al-runner-v3",
       authoritative: false,
       coverage: "none",
       deploy: "publish",

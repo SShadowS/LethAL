@@ -15,7 +15,6 @@ import type {
 import { nestedProjectWarning } from "../src/nested-project";
 import { runSession } from "../src/orchestrator";
 import { ResultsStore } from "../src/store";
-import { measuredV2_12 } from "./helpers/al-runner-predefined";
 
 /**
  * R629 / R634: a project whose folder sits under another app.json (a nested module that the
@@ -97,14 +96,17 @@ describe("R629: nested-project warning", () => {
 
 describe("R629: runSession emits the warning once per session, not per batch", () => {
   class StubBackend implements ExecutionBackend {
-    readonly measurePredefinedSymbols = measuredV2_12;
+    // R654: re-pointed from the retired .NET al-runner to al-runner-v3, which names its build.
+    async runnerBuild(): Promise<{ version: string; binarySha256: string }> {
+      return { version: "alrunner 3.0.0-alpha.2 (91253f2d6)", binarySha256: "b".repeat(64) };
+    }
     batches = 0;
     capabilities(): BackendCapabilities {
       return {
         coverage: "procedure",
         deploy: "publish",
         isolation: "session",
-        kind: "al-runner",
+        kind: "al-runner-v3",
         authoritative: false,
       };
     }
