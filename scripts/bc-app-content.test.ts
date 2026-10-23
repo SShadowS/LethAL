@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { FetchFn } from "../packages/runner/src/activation.ts";
@@ -642,5 +643,76 @@ describe("residentPackage: the one strict dev/packages read (R624)", () => {
     expect(calls.filter((c) => c.defines).map((c) => c.f)).toEqual(["bc-app-content.ts"]);
     for (const f of ["bc-republish.ts", "r594/cdo-publish.ts"])
       expect(readFileSync(join(import.meta.dir, f), "utf8")).toMatch(/\bresidentPackage,/);
+  });
+});
+
+describe("R627: the two decoded entries refuse invalid UTF-8 and keep every valid digest", () => {
+  const MANIFEST_OK = '<Package><Build Timestamp="t" /></Package>';
+  const NAV_OK = "<NavigationDefinition />";
+  const pkg = (manifest: string | Buffer, navigation: string | Buffer) =>
+    buildFakeAppWithEntries({ "NavxManifest.xml": manifest, "navigation.xml": navigation });
+  const bad = (b: number) =>
+    Buffer.concat([Buffer.from("<A>"), Buffer.from([b]), Buffer.from("</A>")]);
+
+  test("navigation.xml bytes 0x80 and 0x81 are each refused by name, not given one digest", () => {
+    for (const b of [0x80, 0x81]) {
+      const p = pkg(MANIFEST_OK, bad(b));
+      expect(() => contentDigest(p)).toThrow(ContentUnknownError);
+      expect(() => contentDigest(p)).toThrow(/navigation\.xml is not valid UTF-8/);
+      expect(() => changedEntries(p, p)).toThrow(ContentUnknownError);
+    }
+  });
+
+  test("NavxManifest.xml bytes 0x80 and 0x81 are each refused by name", () => {
+    for (const b of [0x80, 0x81]) {
+      const m = Buffer.concat([Buffer.from('<Package><Build Timestamp="t" />'), Buffer.from([b])]);
+      const p = pkg(m, NAV_OK);
+      expect(() => contentDigest(p)).toThrow(ContentUnknownError);
+      expect(() => contentDigest(p)).toThrow(/NavxManifest\.xml is not valid UTF-8/);
+    }
+  });
+
+  test("a BOM and non-ASCII text stay in the hashed bytes (the same as the old utf8 round trip)", () => {
+    const bom = Buffer.from([0xef, 0xbb, 0xbf]);
+    const withBom = (s: string) => Buffer.concat([bom, Buffer.from(s, "utf8")]);
+    const a = pkg(withBom(MANIFEST_OK), withBom("<N Caption='Æblegrød ✓' />"));
+    const b = pkg(MANIFEST_OK, "<N Caption='Æblegrød ✓' />");
+    expect(contentDigest(a)).not.toBe(contentDigest(b)); // the BOM is content, as before
+    expect(contentDigest(a)).toBe(
+      createHash("sha256")
+        .update("NavxManifest.xml\0")
+        .update(String(3 + MANIFEST_OK.replace(' Timestamp="t"', "").length))
+        .update("\0")
+        .update(bom)
+        .update(MANIFEST_OK.replace(' Timestamp="t"', ""))
+        .update("navigation.xml\0")
+        .update(String(withBom("<N Caption='Æblegrød ✓' />").length))
+        .update("\0")
+        .update(withBom("<N Caption='Æblegrød ✓' />"))
+        .digest("hex"),
+    );
+  });
+
+  test("every real build under testdata/ keeps the digest it had before R627", () => {
+    const pinned: Record<string, string> = {
+      "data1.app": "d054829357425150fa3db1644728757f7ccc7719286a79396d713026b0889901",
+      "data2.app": "d054829357425150fa3db1644728757f7ccc7719286a79396d713026b0889901",
+      "names1.app": "bbd7f8947571c37e18bf93314283e7d535e9f785cfb7f155e5425561fe4625ba",
+      "names2.app": "bbd7f8947571c37e18bf93314283e7d535e9f785cfb7f155e5425561fe4625ba",
+      "nt-comment.app": "a56ae76c2b180083383b5767075763d17bcd13ae24f28422e36dad15ba445453",
+      "nt-local.app": "99f9d28afe4d09f1293bed9270d13841f959ddb0ea99c1c560405ca533955a49",
+      "nt-resident1.app": "99f9d28afe4d09f1293bed9270d13841f959ddb0ea99c1c560405ca533955a49",
+      "probes-navedit.app": "e45e9d8e5e93b43342a40521e8299218cad49bed9a69edb345f2e5952eabd2e2",
+      "probes1.app": "fb1d6aa2a03d730ca2d971ae3764a745fc8df937a128c8f12dc558b3e8e3b8f7",
+      "probes2.app": "fb1d6aa2a03d730ca2d971ae3764a745fc8df937a128c8f12dc558b3e8e3b8f7",
+      "wrapped1.app": "3a91c311c9b6495a5028f7694eb8b69595ca855aa8a797f49b96ef0b892ed34b",
+      "wrapped2.app": "3a91c311c9b6495a5028f7694eb8b69595ca855aa8a797f49b96ef0b892ed34b",
+    };
+    const files = readdirSync(join(import.meta.dir, "testdata"))
+      .filter((f) => f.endsWith(".app"))
+      .sort();
+    expect(files).toEqual(Object.keys(pinned));
+    for (const f of files)
+      expect(contentDigest(pkgOf(f.replace(/\.app$/, "")))).toBe(pinned[f] ?? "unpinned");
   });
 });

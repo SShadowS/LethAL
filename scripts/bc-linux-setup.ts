@@ -528,6 +528,7 @@ export class UnitTestCoordWriteError extends Error {}
 export function krakenLeaseFor(
   lane: string,
   run: (args: readonly string[]) => Promise<string> = kraken,
+  tokenDir: string = TOKEN_DIR,
 ): LeaseDeps {
   return {
     async take(server) {
@@ -541,12 +542,14 @@ export function krakenLeaseFor(
     recordToken(server, token) {
       // R617: the test preload sets LETHAL_TEST_FAKE_HOME. A unit test that reaches this writer
       // would overwrite a real token file wherever /coord exists, and fail only on CI.
-      if (process.env.LETHAL_TEST_FAKE_HOME !== undefined) {
+      // Only the default folder is guarded: a test that passes its own `tokenDir` writes there.
+      if (process.env.LETHAL_TEST_FAKE_HOME !== undefined && tokenDir === TOKEN_DIR) {
         throw new UnitTestCoordWriteError(
           `a unit test reached the real recordToken for ${server}; stub recordToken (it writes ${TOKEN_DIR})`,
         );
       }
-      writeFileSync(join(TOKEN_DIR, `lease-${server}.txt`), `${token}\n`, "utf8");
+      // R615: the lane is in the name, so two lanes on one server keep two records.
+      writeFileSync(join(tokenDir, `lease-${server}-${lane}.txt`), `${token}\n`, "utf8");
     },
     async heartbeat(server, token) {
       await run(["heartbeat", server, token]);

@@ -533,16 +533,30 @@ describe("R617: --held-lease never takes or releases a lease", () => {
 
   test("under the unit-test preload, the real recordToken refuses by name and writes no /coord file", () => {
     expect(process.env.LETHAL_TEST_FAKE_HOME).toBeDefined();
-    const before = existsSync("/coord/handoff/R-589/lease-bc3.txt")
-      ? readFileSync("/coord/handoff/R-589/lease-bc3.txt", "utf8")
+    const before = existsSync("/coord/handoff/R-589/lease-bc3-preproc.txt")
+      ? readFileSync("/coord/handoff/R-589/lease-bc3-preproc.txt", "utf8")
       : undefined;
     expect(() => krakenLeaseFor("preproc", fakeKraken().run).recordToken("bc3", "t-unit")).toThrow(
       UnitTestCoordWriteError,
     );
-    const after = existsSync("/coord/handoff/R-589/lease-bc3.txt")
-      ? readFileSync("/coord/handoff/R-589/lease-bc3.txt", "utf8")
+    const after = existsSync("/coord/handoff/R-589/lease-bc3-preproc.txt")
+      ? readFileSync("/coord/handoff/R-589/lease-bc3-preproc.txt", "utf8")
       : undefined;
     expect(after).toBe(before);
+  });
+
+  test("R615: the record is per lane: two lanes on one server keep two files, a lane re-records its own", () => {
+    const dir = mkdtempSync(join(tmpdir(), "r615-"));
+    const k = fakeKraken();
+    krakenLeaseFor("preproc", k.run, dir).recordToken("bc1", "t-a");
+    krakenLeaseFor("bugs", k.run, dir).recordToken("bc1", "t-b");
+    expect(readdirSync(dir).sort()).toEqual(["lease-bc1-bugs.txt", "lease-bc1-preproc.txt"]);
+    expect(readFileSync(join(dir, "lease-bc1-preproc.txt"), "utf8")).toBe("t-a\n");
+    expect(readFileSync(join(dir, "lease-bc1-bugs.txt"), "utf8")).toBe("t-b\n");
+    krakenLeaseFor("preproc", k.run, dir).recordToken("bc1", "t-c");
+    expect(readdirSync(dir)).toHaveLength(2);
+    expect(readFileSync(join(dir, "lease-bc1-preproc.txt"), "utf8")).toBe("t-c\n");
+    expect(readFileSync(join(dir, "lease-bc1-bugs.txt"), "utf8")).toBe("t-b\n");
   });
 
   test("parseArgs: one held token leases one server", () => {
