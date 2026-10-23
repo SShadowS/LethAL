@@ -302,7 +302,7 @@ that ordering is the priority.
 - **R682** · after every identity-scheme bump, a gate baseline's byte-identical twins are text-UNVERIFIED until it is re-recorded, and nothing schedules that re-record · [R682.md](docs/roadmap/R682.md) · done (7c0337c7) — the rule is on docs/gates/README.md and checked by gate-pages.test.ts; today's lagging…
 - **R684** · lethal verify misses a test-app report, page, xmlport or query that another app runs by its id: the codeunit-id fold and fallback see codeunits only · [R684.md](docs/roadmap/R684.md) · done (ac8a7b02)
 - **R687** · After the release: fold the server's installed-app list (minus LethAL's own instrumented targets) into every verify digest, through a new LethAL Control procedure · [R687.md](docs/roadmap/R687.md) · open, filed 2026-10-23 — after the first release (orchestrator ruling)
-- **R690** · Re-record the ten gate baselines that lag IDENTITY_SCHEME 42 (six BC gates and four al-runner-v3 legs), once, on master · [R690.md](docs/roadmap/R690.md) · done (pending)
+- **R690** · Re-record the ten gate baselines that lag IDENTITY_SCHEME 42 (six BC gates and four al-runner-v3 legs), once, on master · [R690.md](docs/roadmap/R690.md) · done (fcfdd988)
 - **R692** · bcdev: RunMutant answered HTTP 500 while reproducing a kill (tables gate on bc1, M0232); the op could not be confirmed, so the session quarantined the tier and stopped · [R692.md](docs/roadmap/R692.md) · open, filed 2026-10-23
 - **R695** · `Fixed Asset - Projected Value`'s `GetNextDate` advances a loop's exit date but is not hang-refused: unverified by a read of the loop · [R695.md](docs/roadmap/R695.md) · open, filed 2026-10-23
 
