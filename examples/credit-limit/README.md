@@ -50,14 +50,15 @@ real gap.
 
 ## The measured result
 
-Run against Cronus283 (BC 28), 2026-08-24, and re-frozen 2026-08-26 when
-`lethal.shift-integer` shipped:
+First run against Cronus283 (BC 28) on 2026-08-24, and re-frozen there on 2026-08-26 when `lethal.shift-integer`
+shipped. Re-frozen again on 2026-10-23 (R560), on bc1 (BC 28.4 W1), at identity scheme 41 under
+`coverageMode: "fenced"`. Every mutant's verdict matched the 2026-08-26 freeze, and a second run matched the new
+baseline mutant by mutant, with every mutated text checked:
 
 ```
 dry run: 2 file(s), 46 mutant site(s), 42 deployed mutant(s), 1 batch(es)
-score: 74.2%  (killed 23, survived 8, no-coverage 11, error 0)
-TIMING: total 16.6s = generate 0.1s + deploy 4.8s + baseline 0.5s + mutants 8.5s + overhead 2.7s
-reliability: full
+score: 74.2%  (killed 23, survived 8, no-coverage 11, deadline-exceeded 0, timeout-killed 0, known-survivor 0, error 0 [unstable 0])
+TIMING: total 13.0s = generate 0.0s + deploy 2.6s + baseline 0.7s + mutants 1.3s + overhead 8.5s
 ```
 
 The report this section quotes is `demo.report.json` next to this file (with
