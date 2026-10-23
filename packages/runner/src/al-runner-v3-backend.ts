@@ -2169,8 +2169,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * R590 (R-537 plan review 2): the daemon reloads its dependencies on every request and logs a skip
    * on its stderr only; the `.alpackages` dirs v3 also searches are outside the §3 proof. Read after
    * every request, over the whole kept tail, so a line that lands late still stops the next request.
+   * ponytail: stderr is pumped by its own loop, so one event-loop turn is yielded first; v3 writes the
+   * line when it loads dependencies, long before the answer, but a line later than that turn is seen
+   * only by the next request.
    */
   private async refuseDaemonDependencySkip(daemon: Daemon): Promise<void> {
+    await new Promise<void>((r) => setImmediate(r));
     const lines = v3DependencySkipLines(daemon.server.stderrSoFar());
     if (lines.length === 0) return;
     await this.closeDaemon();

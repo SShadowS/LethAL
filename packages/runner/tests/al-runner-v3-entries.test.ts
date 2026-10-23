@@ -1037,11 +1037,15 @@ describe("R590: the daemon's stderr is read after every request", () => {
 
   test("a skipped dependency on a live request stops the session (the one-shot baseline was clean)", async () => {
     let skip = false;
-    const r = await rig({ serve: { rows: killsM1, stderr: () => (skip ? SKIP : undefined) } });
-    await baseline(r.b, SUITE1);
+    // The daemon is warm (M0002 prefetched), so M0001's run is a live request, not the warm-up.
+    const r = await readyRig({
+      serve: { rows: killsM1, stderr: () => (skip ? SKIP : undefined) },
+      mutants: ["M0002"],
+    });
     skip = true;
     await r.b.activate("M0001");
     await expect(r.b.run(ref("A"), OPTS)).rejects.toBeInstanceOf(AlRunnerV3DependencySkippedError);
+    expect(r.b.entriesStats().liveRequests).toBe(1);
   });
 
   test("a skipped dependency on a kill pair stops the session (never the pair-skipped warning)", async () => {

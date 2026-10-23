@@ -661,7 +661,7 @@ that ordering is the priority.
 - **R591** · The bcdev itests and LethAL's altool publish ignore a non-default port, so bc2 and bc3 configs would reach bc1 · [R591.md](docs/roadmap/R591.md) · done (f17a41d9)
 - **R587** · itest:alrunner split into legs (--legs groups, --parallel=N ≤ 3, exact 23-id receipt, partial exits 4) · [R587.md](docs/roadmap/R587.md) · done (d42a0d0e)
 - **R593** · Iteration is slow: no shared master-corpus snapshot tool, and verify.ts always runs the whole suite · [R593.md](docs/roadmap/R593.md) · done (3d591a53)
-- **R590** · al-runner: a kill through a DROPPED dependency object (NavNCLMissingMethodException) is scored killed, where BC would run it · [R590.md](docs/roadmap/R590.md) · closed 2026-10-23 — ruling: v3 loads a dependency whole or skips it, and a test that reaches a skipped one is…
+- **R590** · al-runner: a kill through a DROPPED dependency object (NavNCLMissingMethodException) is scored killed, where BC would run it · [R590.md](docs/roadmap/R590.md) · done (SHA-PENDING)
 - **R595** · itest:verify fails on master: its pinned gap ids predate R276's gapIdOf change · [R595.md](docs/roadmap/R595.md) · done (d7683ff3)
 - **R596** · bc-linux-setup writes no selectorIds into the sandbox-harden config, so itest:agreement refuses on bc servers · [R596.md](docs/roadmap/R596.md) · done (c881d0ba)
 - **R597** · lethal verify's test-app-version-below-resident refusal tells the user to run Sync-NAVApp, a Windows/BcContainerHelper-only fix, on the Linux bc servers too · [R597.md](docs/roadmap/R597.md) · open, filed 2026-10-21

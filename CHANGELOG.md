@@ -918,7 +918,8 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   dependency notes` line, in every one-shot call and after every serve-daemon request.
   - **What changes for you:** a project with a dependency that v3 can only find as a symbol package
     is now refused on v3, instead of having some tests not run. Put that dependency's `.app` with AL
-    source (or its source archive) in `<deps>`.
+    source (or its source archive) in `<deps>`. A project whose dependency log has more than 12
+    problem lines is refused too, even when nothing was skipped; `--verbose` lists them.
   - Leg C of `itest:alrunner-v3` has a new contract fact, `dependency-skip-line` (28 facts), so a v3
     build that stops writing the line is refused by the update gate and by every session.
 
