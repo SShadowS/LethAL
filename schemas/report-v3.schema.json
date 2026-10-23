@@ -404,7 +404,8 @@
               "runner-test-error",
               "runner-refused",
               "kill-not-reproduced",
-              "confirm-stopped"
+              "confirm-stopped",
+              "test-discovery-failed"
             ]
           },
           "platformKillMechanism": {

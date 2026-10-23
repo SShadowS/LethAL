@@ -131,7 +131,6 @@ import { identityKeyOf, serializeKey } from "../src/selection";
 import { SessionSafety, SessionUnsafeError } from "../src/session-safety";
 import {
   GROUP_SUITE_UNRESOLVED_HEAD,
-  MutantBrokeTestDiscoveryError,
   ONRUN_HINT,
   STALE_TEST_APP_REMEDY,
   StaleTestAppError,
@@ -2912,9 +2911,10 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
         expect(m.failureNote).not.toContain("TestPermissions = Disabled");
     });
 
-    // R686 (B-small): a found-0 answer UNDER A MUTANT (the mutant made a test codeunit's OnRun
-    // raise during suite discovery) stops the session by name, never as "two consecutive run()
-    // failures", and says how to go on. Any other mid-run transport error keeps today's abort.
+    // R686, then R688: a found-0 answer UNDER A MUTANT (the mutant made a test codeunit's OnRun
+    // raise during suite discovery) is confirmed with no mutant active and, when that passes,
+    // scored `error test-discovery-failed`; the session goes on. Any other mid-run transport
+    // error keeps today's abort.
     describe("R686: a mutant that breaks a test codeunit's suite discovery", () => {
       async function midRun(mutantAnswer: string): Promise<unknown> {
         const dirs = await qualProject();
@@ -2937,23 +2937,35 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
         );
       }
 
-      test("single path: MutantBrokeTestDiscoveryError names the mutant, its file and the codeunit, and --resume / --exclude", async () => {
-        const err = await midRun(
-          runMutantLineCountMessage(0, "expected exactly one method SupportedTest, found 0"),
-        );
-        expect(err).toBeInstanceOf(MutantBrokeTestDiscoveryError);
-        const msg = (err as Error).message;
-        expect(msg).not.toContain("two consecutive");
-        for (const s of ["SandboxLogic.Codeunit.al", "Sandbox Tests", "--resume", "--exclude"])
-          expect(msg).toContain(s);
-      });
-
-      test("grouped path: suite-unresolved found 0 names the reason's codeunit", async () => {
-        const err = await midRun(
-          `${GROUP_SUITE_UNRESOLVED_HEAD}expected exactly one method SupportedTest in codeunit 50981, found 0`,
-        );
-        expect(err).toBeInstanceOf(MutantBrokeTestDiscoveryError);
-        expect((err as Error).message).toContain("codeunit 50981");
+      // R688: the single path's found-0, confirmed with no mutant active, is scored per mutant and
+      // the session completes. The grouped path is R688's G1.
+      test("single path: a confirmed found-0 is error test-discovery-failed and the session completes", async () => {
+        const dirs = await qualProject();
+        const backend = new QualificationBackend(baselineFor);
+        const run = backend.run.bind(backend);
+        const report = await runSession({
+          backend: Object.assign(backend, {
+            run: async (ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> =>
+              (backend.activations.at(-1) ?? null) === null
+                ? run(ref, opts)
+                : {
+                    ref,
+                    outcome: "error",
+                    durationMs: 1,
+                    failureMessage: runMutantLineCountMessage(
+                      0,
+                      `expected exactly one method ${ref.method}, found 0`,
+                    ),
+                  },
+          }),
+          store: new ResultsStore(":memory:"),
+          ...dirs,
+          selectorIds,
+        });
+        const scored = report.mutants.filter((m) => m.coveringTests !== undefined);
+        expect(scored.length).toBeGreaterThan(0);
+        for (const m of scored)
+          expect([m.verdict, m.cause]).toEqual(["error", "test-discovery-failed"]);
       });
 
       // Build review S1: the baseline wiring end to end. A proven, installed test app whose COMPILED
@@ -3047,9 +3059,8 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
           () => undefined,
           (e: unknown) => e,
         );
-        // The single path's confirm found-0 never reaches the abort (the session completes); the
-        // `transportErrorUnderMutant` flag guards the GROUPED warm replay, which this stub cannot
-        // reach (recorded in redcheck.md and R688).
+        // The single path's kill confirm answering found-0 never reaches an abort (the session
+        // completes). The grouped warm replay's found-0 is R688's G3.
         expect([mutantRan, confirms > 0, err]).toEqual([true, true, undefined]);
       });
 
@@ -3060,7 +3071,6 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
           "some other transport fault",
         ]) {
           const err = await midRun(answer);
-          expect(err).not.toBeInstanceOf(MutantBrokeTestDiscoveryError);
           expect((err as Error).message).toContain("two consecutive run() failures");
         }
       });
@@ -16219,6 +16229,426 @@ describe("R198: grouped covering runs", () => {
     store.close();
   });
 });
+
+/**
+ * R688: a mutant that makes BC's suite discovery list no methods for a test codeunit (measured
+ * cause: the codeunit's OnRun raises, and LethAL Control activates the mutant before discovery).
+ * Two test codeunits: "Sandbox Tests" 79100 (T1, T2) and "Zulu Tests" 79101 (K1), so R197's cold
+ * order is T1, T2, K1. `blanks` names the codeunits the active mutant blanks: a single run answers
+ * the RunMutant found-0 form, a group call the `suite-unresolved ... found 0` refusal for the
+ * whole chunk, naming the first blanked pair (as `ResolvePairs` does).
+ */
+const DISCOVERY_TESTS_AL = `codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure T1() begin end;
+    [Test]
+    procedure T2() begin end;
+}
+
+codeunit 79101 "Zulu Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure K1() begin end;
+}
+`;
+
+class DiscoveryStub extends GroupStubBackend {
+  blanks: (mutant: string) => readonly number[] = () => [];
+  /** Overrides a run with no mutant active, once a mutant has been activated (the confirms). */
+  confirmAnswer?: (ref: TestMethodRef) => Partial<TestVerdict> | undefined;
+  /** Every `run`, also the ones a group call makes (`via: "many"`), in order. */
+  readonly runs: Array<{
+    active: string | null;
+    started: boolean;
+    codeunitId: number;
+    method: string;
+    via: "run" | "many";
+  }> = [];
+  private inMany = false;
+  override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+    const active = this.activations.at(-1) ?? null;
+    const started = this.activations.some((a) => a !== null);
+    const via = this.inMany ? "many" : "run";
+    this.runs.push({ active, started, codeunitId: ref.codeunitId, method: ref.method, via });
+    if (active !== null && this.blanks(active).includes(ref.codeunitId)) {
+      return {
+        ref,
+        outcome: "error",
+        durationMs: 1,
+        failureMessage: runMutantLineCountMessage(
+          0,
+          `expected exactly one method ${ref.method}, found 0`,
+        ),
+      };
+    }
+    const over = active === null && started ? this.confirmAnswer?.(ref) : undefined;
+    if (over !== undefined) return { ref, outcome: "error", durationMs: 1, ...over };
+    return super.run(ref, opts);
+  }
+  /** Every group call: the active mutant and the methods asked for. */
+  readonly manyUnder: Array<{ active: string | null; methods: string[] }> = [];
+  override async runMany(opts: RunManyOpts): Promise<RunManyResult> {
+    const active = this.activations.at(-1) ?? null;
+    this.manyUnder.push({ active, methods: opts.methods.map((m) => m.ref.method) });
+    const blanked =
+      active === null
+        ? []
+        : opts.methods.filter((m) => this.blanks(active).includes(m.ref.codeunitId));
+    const [first] = opts.methods;
+    const [hit] = blanked;
+    if (opts.confirmation !== true && first !== undefined && hit !== undefined) {
+      this.manyCalls.push(opts);
+      return {
+        kind: "call",
+        methodIndex: 1,
+        verdict: {
+          ref: first.ref,
+          outcome: "error",
+          durationMs: 1,
+          failureMessage: `${GROUP_SUITE_UNRESOLVED_HEAD}expected exactly one method ${hit.ref.method} in codeunit ${hit.ref.codeunitId}, found 0`,
+        },
+        fencedOp: { attemptId: "d1", opSeq: 900 + this.manyCalls.length },
+      };
+    }
+    this.inMany = true;
+    try {
+      return await super.runMany(opts);
+    } finally {
+      this.inMany = false;
+    }
+  }
+}
+
+describe("R688: a mutant that blanks a test codeunit's discovery is scored per mutant", () => {
+  /** M0001 blanks `blank`; `kill` names the test that fails under M0001; K1 covers when `k1Covers`. */
+  const stub = (o: { blank?: number; kill?: string; k1Covers?: boolean } = {}) => {
+    const b = new DiscoveryStub(
+      CAPS_NST,
+      (mutant, ref) => (mutant === "M0001" && ref.method === o.kill ? "fail" : "pass"),
+      ["IsOverBudget"],
+    );
+    if (o.k1Covers === false)
+      b.coverageEntriesFor = (ref) => (ref.method === "K1" ? [] : undefined);
+    const blank = o.blank ?? 79100;
+    b.blanks = (m) => (m === "M0001" ? [blank] : []);
+    return b;
+  };
+  const session = async (
+    backend: DiscoveryStub,
+    groupRuns?: { maxMethodsPerCall?: number; enabled?: boolean },
+  ) => {
+    const dirs = await makeProject(DISCOVERY_TESTS_AL);
+    const store = new ResultsStore(":memory:");
+    let error: unknown;
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      ...(groupRuns !== undefined ? { groupRuns } : {}),
+    }).catch((e: unknown) => {
+      error = e;
+      return undefined;
+    });
+    const m1 = report?.mutants.find((m) => m.mutantCode === "M0001");
+    return { report, error, store, m1 };
+  };
+  const SEQ = { enabled: false };
+  /** Single runs with no mutant active, after the first activation, of codeunit `id`. */
+  const discoveryConfirms = (b: DiscoveryStub, id = 79100) =>
+    b.runs.filter((r) => r.via === "run" && r.active === null && r.started && r.codeunitId === id)
+      .length;
+  const ranUnder = (b: DiscoveryStub, mutant: string, method: string) =>
+    b.runs.filter((r) => r.active === mutant && r.method === method).length;
+
+  test("O1 + R1: sequential, M covered only by the blanked codeunit: error test-discovery-failed, one confirm, the banner names it", async () => {
+    const b = stub({ k1Covers: false });
+    const { report, error, m1 } = await session(b, SEQ);
+    expect(error).toBeUndefined();
+    expect([m1?.verdict, m1?.cause]).toEqual(["error", "test-discovery-failed"]);
+    expect(m1?.failureNote).toContain('"Sandbox Tests"');
+    expect(discoveryConfirms(b)).toBe(1);
+    expect(ranUnder(b, "M0001", "T2")).toBe(0);
+    expect(report !== undefined && renderConsole(report)).toContain(", test-discovery-failed 1");
+  });
+
+  test("O2 + Q6: K1 kills after the found-0: killed by K1, T2 never ran under M, the confirm row is unmutated and not in the mutant's time", async () => {
+    const b = stub({ kill: "K1" });
+    b.confirmAnswer = (ref) =>
+      ref.codeunitId === 79100 ? { outcome: "pass", durationMs: 1000 } : undefined;
+    const { error, store, m1 } = await session(b, SEQ);
+    expect(error).toBeUndefined();
+    expect([m1?.verdict, m1?.killingTest]).toEqual(["killed", "K1"]);
+    expect(ranUnder(b, "M0001", "T2")).toBe(0);
+    expect(discoveryConfirms(b)).toBe(1);
+    // Q6: the kill keeps the found-0 note.
+    expect(m1?.failureNote).toContain("were not run under this mutant");
+    const rows = store.db
+      .query(
+        "SELECT t.mutant_code AS code, t.duration_ms AS ms FROM test_results t JOIN mutants m ON m.id = t.mutant_row_id WHERE t.run_id = 1 AND m.mutant_code = 'M0001' AND t.method = 'T1' ORDER BY t.id",
+      )
+      .all() as Array<{ code: string | null; ms: number }>;
+    expect(rows).toEqual([
+      { code: "M0001", ms: 1 },
+      { code: null, ms: 1000 },
+    ]);
+    expect(m1?.durationMs ?? 0).toBeLessThan(1000);
+  });
+
+  test("O3: the confirm answers found-0 again: the session stops (no mutant active), after M is recorded and flushed", async () => {
+    const b = stub({ k1Covers: false });
+    b.confirmAnswer = (ref) => ({
+      failureMessage: runMutantLineCountMessage(
+        0,
+        `expected exactly one method ${ref.method}, found 0`,
+      ),
+    });
+    const { error, store } = await session(b, SEQ);
+    expect((error as Error).message).toContain("with no mutant active");
+    expect((error as Error).message).toContain("not mutant M0001's verdict");
+    const row = store.db
+      .query("SELECT id, verdict FROM mutants WHERE run_id = 1 AND mutant_code = 'M0001'")
+      .get() as { id: number; verdict: string } | null;
+    expect(row?.verdict).toBe("error");
+    const flushed = store.db
+      .query("SELECT COUNT(*) AS n FROM test_results WHERE mutant_row_id = ?")
+      .get(row?.id ?? -1) as { n: number };
+    expect(flushed.n).toBe(2);
+  });
+
+  test("O4: the confirm fails: the session stops, the mutant is not scored test-discovery-failed", async () => {
+    const b = stub({ k1Covers: false });
+    b.confirmAnswer = () => ({ outcome: "fail", failureMessage: "boom" });
+    const { error, store } = await session(b, SEQ);
+    expect((error as Error).message).toContain("with no mutant active");
+    expect((error as Error).message).toContain("failed");
+    const row = store.db
+      .query(
+        "SELECT verdict, failure_note AS note FROM mutants WHERE run_id = 1 AND mutant_code = 'M0001'",
+      )
+      .get() as { verdict: string; note: string | null } | null;
+    expect(row?.verdict).toBe("error");
+    expect(row?.note).toBe((error as Error).message);
+  });
+
+  test("O5: the confirm's deadline-exceeded is M's own error cause; the next mutant is scored", async () => {
+    const b = stub({ k1Covers: false });
+    b.confirmAnswer = () => ({ outcome: "deadline-exceeded" });
+    const { report, error, m1 } = await session(b, SEQ);
+    expect(error).toBeUndefined();
+    expect([m1?.verdict, m1?.cause]).toEqual(["error", "deadline-exceeded"]);
+    const m2 = report?.mutants.find((m) => m.mutantCode === "M0002");
+    expect(m2?.verdict).toBe("survived");
+  });
+
+  test("T-c: a confirm pass in a reused session is session-reused, never test-discovery-failed", async () => {
+    const b = stub({ k1Covers: false });
+    b.confirmAnswer = () => ({ outcome: "pass", testRunsBefore: 3, sessionId: 7 });
+    const { error, m1 } = await session(b, SEQ);
+    expect(error).toBeUndefined();
+    expect([m1?.verdict, m1?.cause]).toEqual(["error", "session-reused"]);
+  });
+
+  test("T-b: the skip is per mutant: M0002 runs the codeunit M0001 skipped", async () => {
+    const b = stub({ k1Covers: false });
+    const { error } = await session(b, SEQ);
+    expect(error).toBeUndefined();
+    expect([
+      ranUnder(b, "M0001", "T2"),
+      ranUnder(b, "M0002", "T1"),
+      ranUnder(b, "M0002", "T2"),
+    ]).toEqual([0, 1, 1]);
+  });
+
+  test("G1: grouped found-0 runs that chunk's methods singly: one confirm, the codeunit skipped, K1 kills", async () => {
+    const b = stub({ kill: "K1" });
+    const { error, m1 } = await session(b);
+    expect(error).toBeUndefined();
+    expect([m1?.verdict, m1?.killingTest]).toEqual(["killed", "K1"]);
+    expect(discoveryConfirms(b)).toBe(1);
+    expect(ranUnder(b, "M0001", "T2")).toBe(0);
+    // K1 ran under M0001 as a single call, after the refused chunk.
+    expect(
+      b.runs.filter((r) => r.active === "M0001" && r.method === "K1").map((r) => r.via),
+    ).toEqual(["run"]);
+  });
+
+  test("G2: sequential, grouped and two-per-call agree on O1 and on O2", async () => {
+    for (const o of [{ k1Covers: false }, { kill: "K1" }]) {
+      const seq = await session(stub(o), SEQ);
+      const grp = await session(stub(o));
+      const two = await session(stub(o), { maxMethodsPerCall: 2 });
+      expect(seq.report).toBeDefined();
+      if (seq.report === undefined || grp.report === undefined || two.report === undefined)
+        throw new Error("a session did not complete");
+      expect(verdictTable(grp.report)).toEqual(verdictTable(seq.report));
+      expect(verdictTable(two.report)).toEqual(verdictTable(seq.report));
+      expect([grp.m1?.cause, two.m1?.cause]).toEqual([seq.m1?.cause, seq.m1?.cause]);
+    }
+  });
+
+  test("G1b: one method per call: a skipped codeunit's later tests are never sent again", async () => {
+    const b = stub({ kill: "K1" });
+    const { m1 } = await session(b, { maxMethodsPerCall: 1 });
+    expect([m1?.verdict, m1?.killingTest]).toEqual(["killed", "K1"]);
+    expect(b.manyUnder.filter((c) => c.active === "M0001").map((c) => c.methods)).toEqual([
+      ["T1"],
+      ["K1"],
+    ]);
+  });
+
+  test("G3: a found-0 on the grouped warm replay (no mutant active) keeps the plain abort, with no discovery confirm", async () => {
+    const b = stub({ kill: "T2" });
+    b.blanks = () => [];
+    b.manyOverride = (call, opts, composed) => {
+      const [first] = opts.methods;
+      if (call !== 0 || first === undefined) return composed;
+      return {
+        kind: "call",
+        methodIndex: 1,
+        verdict: {
+          ref: first.ref,
+          outcome: "error",
+          durationMs: 1,
+          failureMessage: `${GROUP_SUITE_UNRESOLVED_HEAD}expected exactly one method T1 in codeunit 79100, found 0`,
+        },
+        fencedOp: composed.fencedOp,
+      };
+    };
+    const { error } = await session(b);
+    expect((error as Error).message).toContain("two consecutive run() failures");
+    expect(discoveryConfirms(b)).toBe(0);
+  });
+
+  test("T-a: grouped found-0, then the single fallback's confirm answers an identity mismatch: the identity abort", async () => {
+    const b = stub({ k1Covers: false });
+    b.confirmAnswer = () => ({
+      failureMessage:
+        "RunMutant attestation identity mismatch: a selector with a non-matching (targetAppId, artifactId) ran — wrong/stale binary",
+    });
+    const { error, store } = await session(b);
+    expect((error as Error).message).toContain("identity mismatch");
+    expect((error as Error).message).toContain("two consecutive run() failures");
+    const row = store.db
+      .query("SELECT failure_note AS note FROM mutants WHERE run_id = 1 AND mutant_code = 'M0001'")
+      .get() as { note: string | null } | null;
+    expect(row?.note ?? "").not.toContain("test-discovery-failed");
+  });
+
+  test("T-e: chunk [T1 kills, T2, K1 blanked]: killed by T1 with no discovery confirm, as sequential", async () => {
+    const o = { kill: "T1", blank: 79101 };
+    const b = stub(o);
+    const grp = await session(b);
+    const seq = await session(stub(o), SEQ);
+    expect([grp.m1?.verdict, grp.m1?.killingTest]).toEqual(["killed", "T1"]);
+    expect(discoveryConfirms(b, 79101)).toBe(0);
+    if (seq.report === undefined || grp.report === undefined) throw new Error("no report");
+    expect(verdictTable(grp.report)).toEqual(verdictTable(seq.report));
+  });
+
+  test("T-f: after a skip, a chunk that never attempts K1 is group-coverage-incomplete, not test-discovery-failed (R198)", async () => {
+    const b = stub({});
+    b.manyOverride = (_call, opts, composed) =>
+      b.activations.at(-1) === "M0001" && opts.methods.some((m) => m.ref.method === "K1")
+        ? { ...composed, endedBy: "complete", ranCount: opts.methods.length, verdicts: [] }
+        : composed;
+    const { error, m1 } = await session(b, { maxMethodsPerCall: 2 });
+    expect(error).toBeUndefined();
+    expect([m1?.verdict, m1?.cause]).toEqual(["error", "group-coverage-incomplete"]);
+  });
+
+  test("T-g: a group call answering the single path's found-0 text keeps today's abort", async () => {
+    const b = stub({});
+    b.blanks = () => [];
+    b.manyOverride = (_call, opts, composed) => {
+      const [first] = opts.methods;
+      if (b.activations.at(-1) !== "M0001" || first === undefined) return composed;
+      return {
+        kind: "call",
+        methodIndex: 1,
+        verdict: {
+          ref: first.ref,
+          outcome: "error",
+          durationMs: 1,
+          failureMessage: runMutantLineCountMessage(0, "expected exactly one method T1, found 0"),
+        },
+        fencedOp: composed.fencedOp,
+      };
+    };
+    const { error } = await session(b);
+    expect((error as Error).message).toContain("two consecutive run() failures");
+    expect(discoveryConfirms(b)).toBe(0);
+  });
+
+  test("T-d: a confirm lease-lost is M's error with the lease latched; a confirm in-flight-unknown strands and stops the shard", async () => {
+    const found0 = (ref: TestMethodRef): TestVerdict => ({
+      ref,
+      outcome: "error",
+      durationMs: 1,
+      failureMessage: runMutantLineCountMessage(
+        0,
+        `expected exactly one method ${ref.method}, found 0`,
+      ),
+    });
+    const blankThen = (confirm: Partial<TestVerdict>, target: string) => {
+      let active: string | null = null;
+      let found = false;
+      return {
+        activate: async (id: string | null) => {
+          active = id;
+        },
+        run: async (ref: TestMethodRef): Promise<TestVerdict> => {
+          if (active === target) {
+            found = true;
+            return found0(ref);
+          }
+          if (active === null && found) return { ref, outcome: "error", durationMs: 1, ...confirm };
+          return {
+            ref,
+            outcome: "pass",
+            durationMs: 1,
+            attestation: { observedAny: true, identityMismatch: false },
+          };
+        },
+      };
+    };
+    const client = new FakeLeaseClient();
+    const { lease } = leaseCfg(client);
+    const lost = await runSessionForTest(
+      leaseBackend(
+        blankThen({ operation: "lease-lost", leaseInvalidReason: "lease-invalid" }, "M0002"),
+      ),
+      { quarantineDir: freshTmpDir(), lease },
+    );
+    const m2 = lost.mutants.find((m) => m.mutantCode === "M0002");
+    expect(m2?.verdict).toBe("error");
+    expect(m2?.failureNote).toContain("lease-lost");
+    expect(lost.quarantined?.reason).toContain("lease-lost");
+
+    const dir = freshTmpDir();
+    const stranded = await runSessionForTest(
+      fakeBackend({
+        capabilities: () => ({
+          coverage: "none",
+          deploy: "publish",
+          isolation: "session",
+          kind: "bcdev",
+          authoritative: true,
+        }),
+        ...blankThen({ outcome: "deadline-exceeded", operation: "in-flight-unknown" }, "M0001"),
+      }),
+      { quarantineDir: dir },
+    );
+    expect(stranded.mutants.map((m) => [m.mutantCode, m.cause])).toEqual([["M0001", "stranded"]]);
+    expect(await new QuarantineStore(dir).read("http://cronus281|BC")).not.toBeNull();
+  });
+});
+
 /**
  * R206: the warm confirmation and the session guard. A fake backend with a SESSION-SCOPED cache
  * (a value that persists across the methods of one `runMany` call and resets between calls),

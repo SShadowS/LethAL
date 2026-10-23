@@ -1446,6 +1446,18 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "survivors",
         "toolConditions",
       ],
+      "explain-v20.schema.json": [
+        "caveats",
+        "contract",
+        "derivedFromReportSchemaVersion",
+        "explainSchemaVersion",
+        "markIdentityScheme",
+        "notMeasured",
+        "score",
+        "survivorSelection",
+        "survivors",
+        "toolConditions",
+      ],
       "report-v2.schema.json": [
         "authoritative",
         "backend",
@@ -1685,6 +1697,7 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "runner-refused",
         "kill-not-reproduced",
         "confirm-stopped",
+        "test-discovery-failed",
       ],
       "#/properties/toolConditions/items/properties/condition": ["quarantined", "stranded-skips"],
       // R273: new domains on the new optional `suggestions` (an optional additive field, so no
@@ -1755,6 +1768,8 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     expect(required("explain-v18.schema.json")).toEqual(required("explain-v17.schema.json"));
     // R658's v19 added a cause value and a caveat value, not a required field.
     expect(required("explain-v19.schema.json")).toEqual(required("explain-v18.schema.json"));
+    // R688's v20 added a cause value, not a required field.
+    expect(required("explain-v20.schema.json")).toEqual(required("explain-v19.schema.json"));
     expect(v6).toEqual([
       "attribution",
       "codeunitName",

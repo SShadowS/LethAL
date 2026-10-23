@@ -360,27 +360,6 @@ export function baselineFoundNoneRefusal(a: {
   );
 }
 
-/**
- * R686 (B-small): under a mutant, BC's suite discovery listed no methods for a test codeunit whose
- * tests ran at baseline. The session still stops (a per-mutant verdict needs an unmutated confirm,
- * filed separately), but by its likely cause and with how to go on. Extends `Error` directly.
- */
-export class MutantBrokeTestDiscoveryError extends Error {
-  constructor(a: {
-    readonly mutantId: string;
-    readonly file: string;
-    readonly operator: string;
-    readonly test: string;
-    readonly codeunit: string;
-    readonly serverText: string;
-  }) {
-    super(
-      `under mutant ${a.mutantId} (${a.operator} in ${a.file}), BC's suite discovery listed no methods for test codeunit "${a.codeunit}" (asked for ${a.test}), whose tests ran at baseline. The likely cause: the mutant makes that codeunit's OnRun raise an error, which BC runs while it builds the suite. A test app replaced on the server mid-run gives the same answer. Stopping the session (one call answered; server: ${a.serverText}). To go on: --resume keeps the verdicts already scored (killed, survived, timeout-killed, no-coverage and known-survivor are carried, when this run's test app was proven installed), but runs ${a.mutantId} again and stops here again. To get past it, make "${a.codeunit}"'s OnRun not depend on the code under test, or add --exclude "${a.file}" (no mutants from that file), or narrow --tests-only to leave out that codeunit's file (this can change verdicts). There is no per-mutant exclusion.`,
-    );
-    this.name = "MutantBrokeTestDiscoveryError";
-  }
-}
-
 function missingTestsHead(missing: readonly StaleTestAppFinding[]): {
   readonly head: string;
   readonly names: readonly string[];

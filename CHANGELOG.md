@@ -935,7 +935,20 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   - **Mid-run,** a mutant that makes a test codeunit's `OnRun` raise used to stop the session as
     "two consecutive run() failures". It now stops with `MutantBrokeTestDiscoveryError`, which names
     the mutant, its file and the codeunit, and says how to go on (`--resume` stops at the same
-    mutant again; `--exclude <file>` gets past it). Scoring it per mutant is R688.
+    mutant again; `--exclude <file>` gets past it). R688, below, replaced this stop with a
+    per-mutant score.
+- **bcdev: a mutant that blanks a test codeunit's suite discovery is scored per mutant, not a
+  stopped session** ([R688](docs/roadmap/R688.md)). When BC lists no methods for a covering test
+  under a mutant, LethAL runs that test once with no mutant active.
+  - **It passes:** that codeunit is skipped for this mutant only, and the other covering tests still
+    run. A kill by one of them stands, and its note names the skipped codeunit. If none kills, the
+    mutant is `error` with the new cause `test-discovery-failed` (`lethal explain` schema v20).
+  - **It does not pass** (found 0 again, a failure, a timeout): the session stops after recording
+    the mutant, and says the test app, the server or committed data changed, not the mutant.
+  - **Grouped calls:** BC refuses a whole chunk for one such codeunit, so LethAL runs that chunk one
+    method at a time. Grouped and sequential runs give the same verdicts.
+  - **An identity mismatch** in a RunMutant answer is now read before its line count, so a wrong
+    binary is never taken for a blank discovery. `MutantBrokeTestDiscoveryError` is gone.
 - **`al-runner-v3` refuses a session in which v3 left out a dependency app** (R590). v3 skips a
   dependency whole when it finds no package with AL source for it. A call into that app by id
   (`Codeunit.Run(<id>)`) then fails with BC's missing-object error, which LethAL scored as a kill,

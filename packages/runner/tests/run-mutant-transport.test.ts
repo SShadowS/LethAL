@@ -10,7 +10,11 @@ import {
   RunMutantTransport,
   isAlStopResponse,
 } from "../src/run-mutant-transport";
-import { describeStaleTestApp, runMutantLineCountMessage } from "../src/stale-test-app";
+import {
+  describeStaleTestApp,
+  isRunMutantFoundNone,
+  runMutantLineCountMessage,
+} from "../src/stale-test-app";
 
 const CFG: ActivationConfig = {
   baseUrl: "http://bc:7048/BC",
@@ -143,6 +147,23 @@ describe("RunMutantTransport.run — terminal mapping", () => {
       runMutantLineCountMessage(0, "expected exactly one method OverBudgetDetected, found 0"),
     );
     expect(describeStaleTestApp(v.failureMessage)).toBeDefined();
+  });
+
+  // R688 (T1, S8): a wrong or stale binary that also blanks discovery must read as the identity
+  // fault, never as a found-0 answer the orchestrator would confirm and score per mutant.
+  test("R688 T1: zero test lines with identityMismatch true is the identity fault, not found 0", async () => {
+    const found0 = { error: "expected exactly one method OverBudgetDetected, found 0" };
+    const v = await transport(
+      okFetch(echo({ codeunitResults: JSON.stringify(found0), identityMismatch: true })),
+    ).run(REQ);
+    expect(v.outcome).toBe("error");
+    expect(v.failureMessage).toContain("identity mismatch");
+    expect(isRunMutantFoundNone(v.failureMessage)).toBe(false);
+    // The negative: false keeps the found-0 text byte for byte.
+    const kept = await transport(
+      okFetch(echo({ codeunitResults: JSON.stringify(found0), identityMismatch: false })),
+    ).run(REQ);
+    expect(kept.failureMessage).toBe(runMutantLineCountMessage(0, found0.error));
   });
 
   test("zero test lines with no server error key: the message is unchanged", async () => {

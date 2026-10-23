@@ -242,7 +242,6 @@ import type {
 } from "./selection";
 import { SessionSafety, SessionUnsafeError } from "./session-safety";
 import {
-  MutantBrokeTestDiscoveryError,
   baselineFoundNoneRefusal,
   describeStaleTestApp,
   groupedFoundNone,
@@ -2841,6 +2840,9 @@ interface CoveringStep {
   readonly chunkPrefix: readonly { readonly ref: TestMethodRef; readonly budgetMs: number }[];
   /** The ceiling and grace the call ran under; the replay runs under the same. */
   readonly callSettings: { readonly requestCeilingMs: number; readonly stopGraceMs: number };
+  /** R688: a group call BC refused whole with `suite-unresolved ... found 0`. Recorded only: the
+   *  generator then runs that chunk's methods one at a time. */
+  readonly discoveryRefused?: true;
 }
 
 /**
@@ -2931,6 +2933,12 @@ async function singleStep(
  *
  * The consumer breaks out of the iteration at the first non-pass step, exactly as it broke out of
  * the old `for` loop, and this generator is then never pulled again.
+ *
+ * R688: `skip` holds the test codeunits whose discovery the mutant blanked (the consumer adds one
+ * after a confirmed found-0, between pulls); their tests are not sent again. A group call BC
+ * refuses whole with `suite-unresolved ... found 0` is yielded once, marked `discoveryRefused`, and
+ * that chunk's methods are then run one at a time, in order, so every found-0 the consumer handles
+ * comes from a one-codeunit discovery and the first failure is met where sequential meets it.
  */
 async function* coveringRuns(args: {
   readonly backend: ExecutionBackend;
@@ -2942,19 +2950,24 @@ async function* coveringRuns(args: {
   readonly resyncOpSeq: (() => Promise<void>) | undefined;
   readonly group: GroupRunSettings | undefined;
   readonly mutantId: string;
+  readonly skip: ReadonlySet<number>;
 }): AsyncGenerator<CoveringStep, void, undefined> {
   const single = (ref: TestMethodRef): Promise<CoveringStep> =>
     singleStep(args, ref, args.budgetOf(ref));
+  const skipped = (ref: TestMethodRef) => args.skip.has(ref.codeunitId);
   const group = args.group;
   if (group === undefined || args.backend.runMany === undefined) {
-    for (const ref of args.ordered) yield await single(ref);
+    for (const ref of args.ordered) if (!skipped(ref)) yield await single(ref);
     return;
   }
   const fits = (ref: TestMethodRef) =>
     args.budgetOf(ref).ms + group.stopGraceMs <= group.requestCeilingMs;
+  let work: readonly TestMethodRef[] = args.ordered;
   let cursor = 0;
-  while (cursor < args.ordered.length) {
-    const head = args.ordered[cursor];
+  while (cursor < work.length) {
+    // R688: drop skipped codeunits' tests from the unvisited tail before a chunk is built.
+    work = [...work.slice(0, cursor), ...work.slice(cursor).filter((ref) => !skipped(ref))];
+    const head = work[cursor];
     if (head === undefined) return;
     if (!fits(head)) {
       yield await single(head);
@@ -2964,8 +2977,8 @@ async function* coveringRuns(args: {
     const methods: { ref: TestMethodRef; budgetMs: number }[] = [];
     // R516 (M2): each method's budget SOURCE beside the `budgetMs` it is sent, index for index.
     const sources: BudgetSource[] = [];
-    for (let i = cursor; i < args.ordered.length && methods.length < group.maxMethodsPerCall; i++) {
-      const ref = args.ordered[i];
+    for (let i = cursor; i < work.length && methods.length < group.maxMethodsPerCall; i++) {
+      const ref = work[i];
       if (ref === undefined || !fits(ref)) break;
       const b = args.budgetOf(ref);
       methods.push({ ref, budgetMs: b.ms });
@@ -3023,6 +3036,30 @@ async function* coveringRuns(args: {
     if (out.result.kind === "call") {
       const { verdict, cause, abortSession, methodIndex } = out.result;
       const position = Math.min(Math.max(methodIndex, 1), methods.length);
+      if (
+        cause === undefined &&
+        abortSession === undefined &&
+        verdict.operation === undefined &&
+        groupedFoundNone(verdict.failureMessage) !== undefined
+      ) {
+        // R688: BC refused the whole chunk because discovery listed no methods for one pair. Run
+        // the chunk one method at a time instead; the consumer confirms any single found-0.
+        yield {
+          ...provenance,
+          ref: verdict.ref,
+          verdict,
+          ...sentAt(position),
+          groupBudgetMs,
+          opKind: "many",
+          groupPosition: position,
+          chunkPrefix: methods.slice(0, position),
+          callSettings,
+          discoveryRefused: true,
+        };
+        for (const { ref } of methods) if (!skipped(ref)) yield await single(ref);
+        cursor += methods.length;
+        continue;
+      }
       yield {
         ...provenance,
         ref: verdict.ref,
@@ -10104,6 +10141,99 @@ async function reproduceKill(p: Parameters<typeof confirmWarm>[0]): Promise<Repr
   );
 }
 
+/** R688: the note naming the test codeunits a mutant's covering loop skipped, or `undefined`. */
+function discoveryFailedNote(found: readonly TestMethodRef[]): string | undefined {
+  if (found.length === 0) return undefined;
+  const codeunits = found.map((r) => `"${r.codeunitName}" (${r.codeunitId})`).join(", ");
+  return `test codeunit(s) ${codeunits} were not run under this mutant: BC's suite discovery listed none of their methods (asked for ${found.map((r) => qualifiedTestName(r)).join(", ")}); with no mutant active they ran`;
+}
+
+/** R688: how `confirmFoundNone` ended. `abort` is thrown only after the mutant is recorded. */
+type FoundNoneDecision =
+  | { readonly kind: "confirmed" }
+  | { readonly kind: "abort"; readonly message: string }
+  | KillErrorDecision;
+
+/**
+ * R688: BC's suite discovery listed no methods for `step.ref` (the single path's found-0 answer)
+ * under mutant `m`. Run the same test once more with NO mutant active, at the budget the mutated
+ * run was sent, as the kill confirm does. The row is an unmutated row (`mutantCode` null) and its
+ * duration is not added to `spent`.
+ *
+ * - A reused session proves nothing: `session-reused` (R206).
+ * - `pass`: confirmed. The test runs without the mutant, so the found-0 was the mutant's doing.
+ * - found-0 again, `fail`, `timeout` (or `skip`): the environment changed, not this mutant (the
+ *   test passed at this batch's baseline). An abort, thrown by the caller after recording.
+ * - Any other non-verdict keeps its own cause through `classifyNonVerdictStep`, side effects
+ *   included; with `transportError` it is today's generic abort.
+ */
+async function confirmFoundNone(p: Parameters<typeof confirmWarm>[0]): Promise<FoundNoneDecision> {
+  const { args, m, step, leaseSession, resyncOpSeq, testResultBuffer } = p;
+  const ref = step.ref;
+  const what = `confirming ${ref.method} with no mutant active after BC's suite discovery listed none of it under mutant ${m.mutantId}`;
+  await activateOnce(args.backend, args.safety, null);
+  const r = await singleStep(
+    { backend: args.backend, safety: args.safety, leaseSession, emit: args.emit, resyncOpSeq },
+    ref,
+    { ms: step.testBudgetMs, source: step.testBudgetSource },
+  );
+  const v = r.verdict;
+  testResultBuffer.push({
+    mutantCode: null,
+    ref,
+    outcome: v.outcome,
+    durationMs: v.durationMs,
+    failureMessage: v.failureMessage,
+    opKind: "single",
+    ...(v.sessionId !== undefined ? { sessionId: v.sessionId } : {}),
+  });
+  feedAttestation(args.attestation, v.attestation);
+  if (sessionWasReused(v)) {
+    return {
+      kind: "error",
+      cause: "session-reused",
+      failureNote: `session-reused ${what}: the server reported ${v.testRunsBefore} test method(s) had already run in session ${v.sessionId ?? "?"} before the confirm started, so it does not show the test runs without the mutant (R688)`,
+      transportError: false,
+    };
+  }
+  if (v.outcome === "pass") return { kind: "confirmed" };
+  const ended =
+    v.outcome === "fail"
+      ? "failed"
+      : v.outcome === "timeout"
+        ? "timed out"
+        : v.outcome === "skip"
+          ? "was skipped"
+          : r.cause === undefined &&
+              v.operation === undefined &&
+              isRunMutantFoundNone(v.failureMessage)
+            ? "was again not listed by BC's suite discovery (found 0)"
+            : undefined;
+  if (ended !== undefined) {
+    return {
+      kind: "abort",
+      message: `under mutant ${m.mutantId} (${m.operatorName} in ${m.file}), BC's suite discovery listed no methods for test codeunit "${ref.codeunitName}" (asked for ${qualifiedTestName(ref)}); with no mutant active ${qualifiedTestName(ref)} then ${ended}${v.failureMessage !== undefined ? ` (${v.failureMessage.split("\n")[0] ?? ""})` : ""}, though it passed at this batch's baseline: the published test app, the server or committed data changed; this is not mutant ${m.mutantId}'s verdict. Check the published test app and re-run; --resume keeps the verdicts already scored (R688).`,
+    };
+  }
+  const nv = await classifyNonVerdictStep(r, {
+    m,
+    leaseSession,
+    safety: args.safety,
+    quarantineStore: args.quarantineStore,
+    resourceKey: args.resourceKey,
+    nowIso: args.nowIso,
+    what,
+  });
+  const note = nv?.failureNote ?? `${what}: the confirm answered ${v.outcome}`;
+  return {
+    kind: "error",
+    cause: nv?.cause,
+    // Never in front of a strand's note, whose prefix `--resume` reads (`isStrandedNote`).
+    failureNote: nv?.cause === "stranded" || note.includes(what) ? note : `${what}: ${note}`,
+    transportError: nv?.transportError ?? true,
+  };
+}
+
 /**
  * R206: what the covering loop and the warm confirmation's replay do with a step that carries NO
  * verdict (a lease answer, a lost ack, the group call's own per-mutant causes, our own deadline,
@@ -10538,9 +10668,11 @@ async function runMutantsOnBackend(args: {
       sessionId?: number;
     }> = [];
     let transportErrorRef: TestMethodRef | undefined;
-    // R686 (build review S2): the transport error came from the MUTATED covering call itself, not
-    // from a confirm or replay that ran with no mutant active.
-    let transportErrorUnderMutant = false;
+    // R688: the test codeunits whose discovery this mutant blanked, confirmed with no mutant active
+    // (per mutant, never shared), the found-0 tests in order, and an abort to throw after recording.
+    const skip = new Set<number>();
+    const discoveryFailed: TestMethodRef[] = [];
+    let abortAfterRecord: string | undefined;
     // R197: tests that already killed in this procedure first, then the narrowest, then the
     // fastest. A cost heuristic only; see test-order.ts for the measurement behind it.
     const ordered = orderCoveringTests(covering, m, args.killLedger, args.memberCountsByTest);
@@ -10564,6 +10696,7 @@ async function runMutantsOnBackend(args: {
       resyncOpSeq,
       group: args.groupRuns,
       mutantId: m.mutantId,
+      skip,
     })) {
       // Layer 5C-B2: `runFenced` (or R198's `runFencedMany`), not `runOnce` — a lost ack that
       // reconciliation PROVES completed earns one fresh attempt, and `v` is then that attempt's
@@ -10592,6 +10725,8 @@ async function runMutantsOnBackend(args: {
       });
       if (v.outcome === "pass" || v.outcome === "fail") attempted.add(testKeyOf(ref));
       spent += v.durationMs;
+      // R688: a chunk refused whole for a found-0; the generator runs its methods singly next.
+      if (step.discoveryRefused === true) continue;
       // Layer 5C-A Task 8, Task 10 (design §G): this covering run went through the coverage:
       // "none" transport path (the only path that ever attests) — feed the artifact's ledger.
       feedAttestation(args.attestation, v.attestation);
@@ -10649,13 +10784,46 @@ async function runMutantsOnBackend(args: {
         nowIso: args.nowIso,
       });
       if (nonVerdict !== null) {
+        // R688: BC's suite discovery listed no methods for this test under the mutant. Confirm it
+        // with no mutant active; a pass makes it a non-run of that codeunit, and the loop goes on.
+        if (
+          step.opKind === "single" &&
+          nonVerdict.transportError &&
+          nonVerdict.cause === undefined &&
+          step.cause === undefined &&
+          v.operation === undefined &&
+          isRunMutantFoundNone(v.failureMessage)
+        ) {
+          const d = await confirmFoundNone({
+            args,
+            m,
+            step,
+            leaseSession,
+            resyncOpSeq,
+            testResultBuffer,
+          });
+          if (d.kind === "confirmed") {
+            skip.add(ref.codeunitId);
+            discoveryFailed.push(ref);
+            // MANDATORY, as in `reproduceKill`: the confirm cleared the activation.
+            await activateOnce(args.backend, args.safety, m.mutantId);
+            continue;
+          }
+          verdict = "error";
+          if (d.kind === "abort") {
+            failureNote = d.message;
+            abortAfterRecord = d.message;
+          } else {
+            cause = d.cause;
+            failureNote = d.failureNote;
+            if (d.transportError) transportErrorRef = ref;
+          }
+          break;
+        }
         verdict = "error";
         failureNote = nonVerdict.failureNote;
         cause = nonVerdict.cause;
-        if (nonVerdict.transportError) {
-          transportErrorRef = ref;
-          transportErrorUnderMutant = true;
-        }
+        if (nonVerdict.transportError) transportErrorRef = ref;
         break;
       }
       // R206 §2.1, the session guard: the server's own per-session count of test methods run
@@ -11056,14 +11224,30 @@ async function runMutantsOnBackend(args: {
     // R198: a survivor is a mutant EVERY covering test ran against. On the group path a chunking
     // bug could skip tests and still answer all-pass; on the sequential path the set is complete
     // by construction. Checked here, before anything is recorded.
+    // R688 (S5): the tests of a codeunit whose discovery the mutant blanked are not wanted, and no
+    // pass of theirs counts; every other covering test must still have been attempted.
+    const blanked = discoveryFailedNote(discoveryFailed);
     if (verdict === "survived") {
-      const wanted = new Set(ordered.map((ref) => testKeyOf(ref)));
+      const skippedKeys = new Set(
+        ordered.filter((ref) => skip.has(ref.codeunitId)).map((ref) => testKeyOf(ref)),
+      );
+      const wanted = new Set(
+        ordered.map((ref) => testKeyOf(ref)).filter((k) => !skippedKeys.has(k)),
+      );
       const missing = [...wanted].filter((k) => !attempted.has(k));
-      if (missing.length > 0 || attempted.size !== wanted.size) {
+      const counted = [...attempted].filter((k) => !skippedKeys.has(k)).length;
+      if (missing.length > 0 || counted !== wanted.size) {
         verdict = "error";
         cause = "group-coverage-incomplete";
         failureNote = `group-coverage-incomplete: every call answered and every returned method passed, but ${missing.length} of ${wanted.size} covering test(s) were never attempted (${missing.slice(0, 5).join(", ")}${missing.length > 5 ? ", …" : ""}) — not a survivor (R198)`;
+      } else if (blanked !== undefined) {
+        verdict = "error";
+        cause = "test-discovery-failed";
+        failureNote = `test-discovery-failed: ${blanked}; ${wanted.size > 0 ? `the other ${wanted.size} covering test(s) ran and none killed it` : "no other test covers it"}, so this is not a survivor (R688)`;
       }
+    } else if (blanked !== undefined && (verdict === "killed" || verdict === "timeout-killed")) {
+      // Q6: a kill elsewhere stands, and says which tests did not run against the mutant.
+      failureNote = failureNote !== undefined ? `${failureNote} ${blanked}` : blanked;
     }
     // R586 (I3): the backend's tagged note on a survivor (v3: a baseline refusal beside it).
     if (verdict === "survived") {
@@ -11123,31 +11307,9 @@ async function runMutantsOnBackend(args: {
         t.sessionId,
       );
     }
+    // R688 (S10): a discovery confirm that did not pass stops the session, after the record above.
+    if (abortAfterRecord !== undefined) throw new Error(abortAfterRecord);
     if (transportErrorRef !== undefined) {
-      // R686 (B-small): a found-0 answer under a mutant is not a transport fault. The session still
-      // stops (a per-mutant verdict needs an unmutated confirm, filed as its own item), but by its
-      // likely cause and with how to go on. The grouped answer names its own codeunit; its `ref` is
-      // only the chunk's first method.
-      const grouped = groupedFoundNone(failureNote);
-      if (
-        transportErrorUnderMutant &&
-        (grouped !== undefined || isRunMutantFoundNone(failureNote))
-      ) {
-        throw new MutantBrokeTestDiscoveryError({
-          mutantId: m.mutantId,
-          file: m.file,
-          operator: m.operatorName,
-          test:
-            grouped !== undefined
-              ? `${grouped.method} (codeunit ${grouped.codeunitId})`
-              : qualifiedTestName(transportErrorRef),
-          codeunit:
-            grouped !== undefined
-              ? `codeunit ${grouped.codeunitId}`
-              : transportErrorRef.codeunitName,
-          serverText: failureNote ?? "",
-        });
-      }
       throw new Error(
         `backend transport error: two consecutive run() failures for mutant ${m.mutantId} ` +
           `(test ${transportErrorRef.method}) — aborting session per spec §11: ${failureNote ?? ""}`,
