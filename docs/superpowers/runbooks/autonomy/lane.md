@@ -66,6 +66,19 @@ Below, `<session>`, `<worktree>`, `<branch>` and `<lane>` mean your row.
    roadmap item cites. Delete only paths you listed first, never by a wildcard over `/coord`.
    (Owner, 2026-10-23: 28 GB of finished tasks' census output had piled up.)
 
+## Which model a subagent runs on
+
+Set `model` on every Agent call; never leave it to default to Opus (owner, 2026-10-03, restated 2026-10-23).
+
+| Step | Model |
+|---|---|
+| Measurement and census runs, greps, reading logs, running a gate and reporting its figures, coord and status reads | `haiku` |
+| Writing tests first, building to a reviewed plan, red checks from a given recipe, docs and roadmap edits, post-merge checks | `sonnet` |
+| Deep plan reviews, build reviews, adversarial false-kill hunts, root-causing a hard bug, any ruling | `opus` |
+
+When a step is unclear, pick the cheaper model and escalate only if its result is weak. Your own session's model is set
+in `.kraken/project.yaml` by the owner, not by you. Name the model per agent in your submit note.
+
 ## Context size
 
 You cannot run `/clear` or `/compact` yourself; only the owner can. Every turn re-sends your
