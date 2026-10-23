@@ -58,7 +58,9 @@ The legs:
     in a session, and never counted as gone.
   - In every session, a row whose message holds `NotRun: out-of-scope:` anywhere (R675) but has no `notRun`
     scores `error` (`runner-test-error`), never a kill, survive or pass (K1(a)).
-- S1, S3: `fixtures/sandbox-app`, one-shot, per mutant equal to `bcdev.baseline.json` (`itest:bcdev`'s table).
+- S1: `fixtures/sandbox-app`, one-shot, per mutant equal to `bcdev.baseline.json` (`itest:bcdev`'s table).
+- S3: runs no session. It checks that `selectorMode: "resource"` is refused by name
+  (`al-runner-v3-resource-selector-refused`).
 - N1: the names fixture (R557's tests are unselectable on v3, upstream #5572).
 - X (a) to (f): the compile proof, the binding checks and the Sleep rule (§6) on `scripts/r586-probe`.
 - D1, D1c: the Continia Document Output slice, compared per mutant with R594's BC oracle
@@ -102,20 +104,20 @@ The legs:
 
 ### Legs L1, Y-A, Y-B and K (R654 S2)
 
-These legs were ported from `itest:alrunner` before the .NET al-runner is retired. They are pre-committed in `docs/superpowers/specs/2026-10-22-r654-v3-gate-legs-precommitment.md` (43115c78). Each runs one-shot, with coverage `"al-runner"` and a packages folder that holds only the Microsoft apps of `fixtures/sandbox-tests/.alpackages`.
+These legs were ported from `itest:alrunner` before the .NET al-runner was retired (R654 S3, 2026-10-22). They are pre-committed in `docs/superpowers/specs/2026-10-22-r654-v3-gate-legs-precommitment.md` (43115c78). Each runs one-shot, with coverage `"al-runner"` and a packages folder that holds only the Microsoft apps of `fixtures/sandbox-tests/.alpackages`.
 
 Each leg first checks its pre-committed table. A difference is `gate-fail`, and no baseline is written. Only then does it compare against its own baseline.
 
 - **L1** (R353's table): multi-batch layout, with figures equal to v2's. `fixtures/sandbox-layout` runs at `maxGuardsPerBatch` 7, which gives two batches.
   - It checks `EXPECTED_LAYOUT` (`layout-fixture.ts`) per `<batch>/<code>`: verdict, killing test, covering tests and attribution.
-  - Predicted 7 / 3 / 0 over 10. Baseline: `al-runner-v3.layout.baseline.json`, identical per mutant to `al-runner.layout.baseline.json`.
+  - Predicted 7 / 3 / 0 over 10. Baseline: `al-runner-v3.layout.baseline.json`, identical per mutant to `al-runner.layout.baseline.json` (the .NET gate's, deleted in R654 S3).
   - It is the v3 gate's only multi-batch leg.
   - **Its purpose is shape only.** L1 is NOT R349's stale-layout check on v3. Two reverts were measured on 2026-10-22, and both left it green (7 / 3 / 0, with 1/M0006 and 1/M0007 killed by TwiceOfThree):
     - deleting `resetLayoutState()` from `AlRunnerV3Backend.deploy` (`/coord/handoff/R-654/s2-live-LR1.log`);
     - keeping batch 0's coverage index across deploys, `this.coverageIndex ??= index` (`s2-live-LR2.log`).
   - **Why L-R1 stays green:** on v3, `deploy()` rebuilds the coverage index, the Sleep index and the proof for every batch, and `activate(null)` clears the row cache.
   - **Why L-R2 stays green is not measured.** The leading guess (marked as a guess in `/coord/handoff/R-654/s2-LR1-finding.md`) is that instrumenting `LayoutBeta` does not move its line numbers, so batch 0's index of the file reads batch 1's coverage the same way.
-  - **R349's stale-layout coverage is LOST when the .NET al-runner is retired (R654 S3), because no v3 leg catches it.** On v2, `itest:alrunner`'s one-shot layout leg went red on it.
+  - **R349's stale-layout coverage was LOST when the .NET al-runner was retired (R654 S3), because no v3 leg catches it ([R666](../roadmap/R666.md)).** On v2, `itest:alrunner`'s one-shot layout leg went red on it.
   - **The one guard that exists on v3** is offline. It covers `batchBlind`, the only layout-scoped field that `deploy()` does not rebuild on one-shot. The test is "R654 S2: a batch's latched blind note does not cross into the next batch" in `tests/al-runner-v3-entries.test.ts`. Deleting the reset turns it red.
 - **Y-A and Y-B** (R321): `fixtures/sandbox-symbols` under `[LETHALA]` and `[LETHALB]`. The symbols go to the backend, which passes them to v3 as `--define`, and to the session.
   - Each checks `EXPECTED_BY_SET` (`symbol-fixture.ts`).
