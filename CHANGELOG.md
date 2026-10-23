@@ -226,6 +226,24 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **Leg C's `timeout-is-cpu` fact no longer depends on CPU speed** ([R693](docs/roadmap/R693.md)). Its fixed burn
+  counts stopped working on 2026-10-23 (the same burn now costs more CPU than the 2 s limit on a loaded core), so
+  every v3 leg C and the daily update gate read gate-fail. It now runs one huge burn (2,000,000,000 steps) twice
+  at a 2 s limit on core 0: alone it must be stopped, and beside seven busy loops it must also be stopped, but
+  late (over 3000 ms and over twice the first call's time), which tells a CPU-time limit from a wall-time one. Each call has a 60 s process timeout.
+  Gate and probe code only; no mutation result changes.
+- **The worker fan-out is deleted from `runSession`, and `--compile-concurrency` is gone** ([R671](docs/roadmap/R671.md)).
+  Since R654 no backend accepts `--workers` above 1, so the fan-out (`backendFactory`, sharding, per-worker deploy and
+  bisection, `executeCovering`) could not run. `--workers 1` still works and `--workers 2` is still refused by name.
+  `--compile-concurrency` only bounded that fan-out, so it is now an unknown flag. `packages/runner/src/pool.ts`
+  (`Semaphore`, `shardEvenly`) went with it. No sequential behaviour changed.
+- **R586's backend-identity scanner (T15) now sees more** ([R611](docs/roadmap/R611.md)). It also catches `case`
+  labels, a compare split over two lines, `.includes` on an array of backend names, the `"al-runner-v3"` name, and
+  files in `src` subfolders. The sites it found were all explicit and are now classified. Test code only.
+- **The R192 snapshot key and the v3 compile proof no longer skip a user file named like a LethAL control file**
+  ([R691](docs/roadmap/R691.md)). Only LethAL's own control files at the root of the instrumented batch folder are left
+  out; a same-named file in a subfolder, or anywhere in the test folder, is now hashed. No stored key changes unless a
+  project has such a file (none known), so stored snapshots stay reusable.
 - **`lethal verify`'s blind spot for installed apps is now a stated, measured limit** ([R434](docs/roadmap/R434.md)).
   An app installed on the server but outside the test app's dependencies (a global subscriber, a setup change, a
   test-runner extension) still leaves every test old when it is installed or upgraded. Measured on LethAL's
@@ -918,6 +936,16 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **The al-runner v3 compile proof now binds the non-`.al` files too** ([R608](docs/roadmap/R608.md)).
+  Left out on purpose: both `app.json` files and the resource selector (each checked on its own), and the tool
+  folders `.vscode`, `.git` and `node_modules`.
+  - **Before:** only `.al` files, both `app.json` files and the `<deps>` file list were bound. A non-`.al` file in the
+    batch or the test dir, a file in the test dir's `.alpackages`, or a subfolder of `<deps>` could change after alc
+    proved the build and v3 would read it.
+  - **Now:** such a change refuses before the next send with `AlRunnerV3UnprovenBatchError`, naming the folder and
+    file. A `<deps>` subfolder is refused at deploy.
+- **The al-runner v3 backend no longer leaves `coverage.cobertura.xml` in your working directory**
+  ([R645](docs/roadmap/R645.md)). Every v3 process now runs in a scratch folder.
 - **`lethal doctor` no longer fails a healthy BC-on-Linux server whose config has no `bcdev.apiBaseUrl`**
   ([R253](docs/roadmap/R253.md)).
   - **The cause:** BC on Linux serves its API (`api/v2.0`) on its own port, and without `apiBaseUrl` LethAL reads it

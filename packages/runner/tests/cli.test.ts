@@ -646,7 +646,7 @@ describe("parseCliConfig — worker flags", () => {
     expect(p.workers).toBe(1);
   });
 
-  test("accepts --workers 1 and --compile-concurrency", () => {
+  test("accepts --workers 1", () => {
     const p = parseCliConfig([
       "run",
       "--project",
@@ -657,12 +657,26 @@ describe("parseCliConfig — worker flags", () => {
       "bcdev",
       "--workers",
       "1",
-      "--compile-concurrency",
-      "2",
     ]);
     if (p.mode !== "run") throw new Error("expected a run config");
     expect(p.workers).toBe(1);
-    expect(p.compileConcurrency).toBe(2);
+  });
+
+  // R671: the flag had no effect once the worker fan-out was gone, so it is refused by name.
+  test("--compile-concurrency is refused by name", () => {
+    expect(() =>
+      parseCliConfig([
+        "run",
+        "--project",
+        "p",
+        "--tests",
+        "t",
+        "--backend",
+        "bcdev",
+        "--compile-concurrency",
+        "2",
+      ]),
+    ).toThrow(/compile-concurrency/);
   });
 
   test("rejects a non-positive worker count with a clear message", () => {
@@ -3070,7 +3084,6 @@ const VALUE: Readonly<Record<string, string>> = {
   top: "3",
   "expect-mutants": "7",
   workers: "2",
-  "compile-concurrency": "3",
   "max-guards-per-batch": "5",
   "mutant-timeout-ms": "200000",
   "max-methods-per-call": "4",
@@ -3259,7 +3272,7 @@ describe("C02-07: flags are read or refused, never ignored", () => {
       ];
       expect(() => parseCliConfig(argv), flag).toThrow(`--${flag} has no effect with --dry-run`);
     }
-    expect(DRY_RUN_REFUSED.length).toBe(17);
+    expect(DRY_RUN_REFUSED.length).toBe(16);
   });
 
   test("R377: --dry-run reads an optional --backend, validated as run validates it", () => {

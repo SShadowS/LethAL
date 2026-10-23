@@ -10,9 +10,9 @@
  */
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { decodeV3Rows } from "./al-runner-v3-backend";
-import { type SpawnFn, defaultSpawn } from "./publisher";
+import { type SpawnFn, absToolPath, defaultSpawn } from "./publisher";
 
 /** What the probe MEASURED v3 to predefine: sorted, only `V3_PREDEFINED_CANDIDATES` can appear.
  *  (Was `preprocessor-symbols.ts`' `AlRunnerPredefinedProbe`, shared with the retired v2 probe.) */
@@ -176,9 +176,10 @@ export async function probeV3PredefinedSymbols(a: {
       }),
     );
     await writeFile(join(tests, "MaskProbe.Codeunit.al"), TEST_AL);
+    // R645: run in `root` (v3 writes coverage.cobertura.xml into its cwd), so paths are absolute.
     const res = await (a.spawn ?? defaultSpawn)(
       [
-        a.alRunnerPath,
+        absToolPath(a.alRunnerPath),
         "test",
         "--output-json",
         "--isolation",
@@ -186,14 +187,17 @@ export async function probeV3PredefinedSymbols(a: {
         "--codeunit",
         String(TEST_ID),
         "--package-cache",
-        a.packagesDir,
+        resolve(a.packagesDir),
         "--bc-version",
         a.bcVersion,
         "--no-download",
         src,
         tests,
       ],
-      a.cacheDir !== undefined ? { env: { ALRUNNER_CACHE: a.cacheDir } } : {},
+      {
+        cwd: root,
+        ...(a.cacheDir !== undefined ? { env: { ALRUNNER_CACHE: resolve(a.cacheDir) } } : {}),
+      },
     );
     if (res.exitCode !== 1) {
       throw new AlRunnerV3ProbeError(
