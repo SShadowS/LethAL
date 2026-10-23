@@ -728,7 +728,7 @@ that ordering is the priority.
 - **R679** · bc-linux-setup's Continia P1 stop did not name `--accept-build`, so a server on a newer Microsoft build read as blocked when R594's accepted-build path was one flag away · [R679.md](docs/roadmap/R679.md) · done (84c7d4f6)
 - **R683** · Host step: re-record `envtool.baseline.json` at the current identity scheme on the next live envtool run (it is the last gate baseline with no scheme and no mutated-text hash) · [R683.md](docs/roadmap/R683.md) · open, filed 2026-10-23 — a HOST step for the owner (the env tool is host-only)
 - **R686** · bcdev: a test codeunit whose OnRun raises an error gets no method lines on BC, and LethAL reports it as a stale test app and stops the run · [R686.md](docs/roadmap/R686.md) · done (388ea7c9)
-- **R688** · bcdev: a mutant that makes a test codeunit's OnRun raise stops the whole session; score it per mutant instead (an unmutated confirm, then error test-discovery-failed) · [R688.md](docs/roadmap/R688.md) · done (SHA-PENDING)
+- **R688** · bcdev: a mutant that makes a test codeunit's OnRun raise stops the whole session; score it per mutant instead (an unmutated confirm, then error test-discovery-failed) · [R688.md](docs/roadmap/R688.md) · done (918f9222)
 - **R689** · LethAL Control could report a test codeunit's own OnRun error when suite discovery lists none of its methods (today LethAL can only name the likely cause) · [R689.md](docs/roadmap/R689.md) · open, filed 2026-10-23
 
 ---
