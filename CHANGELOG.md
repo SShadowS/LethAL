@@ -894,7 +894,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
     workers in parallel ([R671](docs/roadmap/R671.md)).
   - **Known gaps left open:** a config `alRunner` section is still ignored without a word until the
     owner rules on its refusal, and an `envTool` section is ignored without a word on `al-runner-v3`
-    ([R674](docs/roadmap/R674.md)). No v3 leg can see a stale layout ([R666](docs/roadmap/R666.md)).
+    ([R674](docs/roadmap/R674.md)). Leg L1 does catch a stale layout on v3: it goes red when both
+    coverage-index guards are removed ([R666](docs/roadmap/R666.md)).
+  - **The v2 tooling and its container wiring are gone** (R654 S5): `scripts/al-runner-update.sh`,
+    `scripts/al-runner-bootstrap.sh` and the update script's test; the container's bootstrap step,
+    `LETHAL_ALRUNNER_PATH` and the pinned c39ad5de build. The v3 update gate,
+    `bun scripts/al-runner-v3-update.ts`, is the only al-runner update path.
 
 - **The unused `MutationControlClient` and `postOData`**, left over from before the LethAL Control
   extension (R506).
