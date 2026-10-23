@@ -14,8 +14,13 @@ The leg-by-leg tables live in those pre-commitments and are asserted by the ites
 
 The legs:
 
-- C: the contract probe, 27 facts (`runV3ContractProbe`, `V3_LEG_C_FACTS`) of three kinds: 9 defect, 17 contract
-  and 1 warn (r9, below). Since r12
+- C: the contract probe, 28 facts (`runV3ContractProbe`, `V3_LEG_C_FACTS`) of three kinds: 9 defect, 18 contract
+  and 1 warn (r9, below). Since r13
+  (`docs/superpowers/specs/2026-10-23-r586-alrunner-v3-precommitment-r13-dependency-skip.md`, [[R590]]), the 18th
+  contract fact is `dependency-skip-line`: a tests app that declares a dependency no package holds must make v3
+  write a stderr line starting `dependency skipped:` that names it. The backend refuses a session on that line
+  (`AlRunnerV3DependencySkippedError`), so a build that stops writing it, or writes it only with `--verbose`, reads
+  `diverged`: `gate-fail` in leg C, a refused update gate, and a refusal in a session. Since r12
   (`docs/superpowers/specs/2026-10-23-r586-alrunner-v3-precommitment-r12-message-prefix.md`, [[R667]]), the 17th
   contract fact is `message-has-no-type-prefix`: the `message` of a plain `Error()` (`Fails`, on the main call)
   and of an `Assert.AreEqual` failure (codeunit 50661, its own tests app, Microsoft's Library Assert passed as
@@ -312,3 +317,10 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
 - 2026-10-23: [[R666]] restores L1's purpose as R349's stale-layout check on v3. R-654 S2's two red checks had each
   removed only one of the two coverage-index guards; L-R3 removes both and turns L1 red. No figure, baseline or leg
   code moves.
+- 2026-10-23: r13 ([[R590]], coord task R-537) adds the contract fact `dependency-skip-line`, so leg C has 28 facts:
+  9 defect, 18 contract and 1 warn. v3 leaves out a dependency it finds no source package for, and a call into it
+  by id then fails with BC's missing-object text, which would score a kill BC never gives (measured on alpha.2 and
+  edge, `/coord/handoff/R-537/plan.r1.md`). The backend now refuses the session on v3's skip line (one-shot calls,
+  and the serve daemon's stderr after every request), and the fact pins that the gated build writes it. **The
+  daily update gate (`al-runner-v3-update.ts`, `--edge`) now refuses a build that does not write that line.**
+  Predicted `matches` on alpha.2 and edge; no other figure or baseline moves.

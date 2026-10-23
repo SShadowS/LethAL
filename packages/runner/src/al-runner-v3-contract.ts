@@ -26,7 +26,12 @@ import {
   V3_SERVE_SAFE_REFUSALS,
   defaultServerSpawn,
 } from "./al-runner-server";
-import { type V3Row, V3_REFUSAL_PREFIX, decodeV3Rows } from "./al-runner-v3-backend";
+import {
+  type V3Row,
+  V3_REFUSAL_PREFIX,
+  decodeV3Rows,
+  v3DependencySkipLines,
+} from "./al-runner-v3-backend";
 import { baseAppJson, probeV3PredefinedSymbols } from "./al-runner-v3-probe";
 import { AlcCompileError, ArtifactCompiler, type ArtifactIo, defaultArtifactIo } from "./artifact";
 import { type SpawnFn, defaultSpawn } from "./publisher";
@@ -597,6 +602,26 @@ const LIBRARY_ASSERT_DEP = {
   publisher: "Microsoft",
   version: "28.0.0.0",
 };
+
+/** R590: a dependency no package holds (an invented id), so v3 must say it skipped it. */
+const ABSENT_DEP = {
+  id: "7a1c0e52-5b8e-4d3a-9f60-2c7b8e1d2590",
+  name: "LethAL R590 Absent",
+  publisher: "LethAL",
+  version: "1.0.0.0",
+};
+
+/** R590: one passing test, so v3 loads the project (an empty selection stops before dependencies). */
+const DEP_SKIP_TESTS_AL = `codeunit 50662 "Probe DepSkip"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure Runs()
+    begin
+    end;
+}
+`;
 
 /** R667: a plain failed row's message, or `undefined` when the row is not a plain `fail`. */
 const plainFailMessage = (r: V3Row | undefined): string | undefined =>
@@ -1232,6 +1257,40 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         "Fails (a plain Error()) and AssertAreEqual are plain fails whose messages start exactly with `boom 5` and `Assert.AreEqual failed.` (any text before them is a prefix; R675)",
         // The reading first: a session's refusal names it in its `measured:` line (`v3ContractRefusals`).
         `${seen !== undefined ? `${seen}; ` : ""}Fails ${JSON.stringify(plain ?? null)}; ${assertMeasured}`,
+      ),
+    );
+    // dependency-skip-line (R590, R-537): the backend refuses a session on v3's `dependency skipped:`
+    // line, so a build that stops printing it (or prints it only with --verbose) must refuse here, or
+    // a call into the left-out app by id would score a kill BC never gives. A tests app that declares
+    // a dependency no package holds.
+    const dt = join(root, "dep-skip-tests");
+    await mkdir(join(dt, "src"), { recursive: true });
+    await writeFile(
+      join(dt, "app.json"),
+      baseAppJson({
+        id: TESTS_ID,
+        name: "LethAL R590 Dependency Skip Probe Tests",
+        idFrom: 50650,
+        idTo: 50699,
+        dependencies: [ABSENT_DEP],
+      }),
+    );
+    await writeFile(join(dt, "src", "DepSkip.Codeunit.al"), DEP_SKIP_TESTS_AL);
+    const ds = await call(["--codeunit", "50662"], { tests: dt, codeunit: 50662 });
+    const skipLines = v3DependencySkipLines(ds.stderr).filter((l) =>
+      l.startsWith("dependency skipped:"),
+    );
+    facts.push(
+      fact(
+        "dependency-skip-line",
+        "contract",
+        ds.exitCode === -1
+          ? "unmeasurable"
+          : skipLines.some((l) => l.includes(ABSENT_DEP.name))
+            ? "matches"
+            : "diverged",
+        `stderr has a line starting "dependency skipped:" that names ${ABSENT_DEP.name}`,
+        `exit ${ds.exitCode}; ${skipLines.length > 0 ? JSON.stringify(skipLines[0]) : `no such line; stderr ${JSON.stringify(ds.stderr.slice(-300))}`}`,
       ),
     );
     // serve-keep-reasons (R612): GATE-ONLY, like timeout-is-cpu. M-2: a gate passes whatever this

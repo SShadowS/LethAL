@@ -430,7 +430,7 @@ export function knownDifferencesRefusal(
 
 /**
  * Leg C's defect facts: each must read `defect-present` (r6; `none-selected-exit` since r7, R632;
- * `refusal-row-shape` since r9, R639). Every other fact of the 27 is a contract fact and must read
+ * `refusal-row-shape` since r9, R639). Every other fact of the 28 is a contract fact and must read
  * `matches`, except the warn facts.
  */
 export const V3_DEFECT_FACTS = [
@@ -447,10 +447,10 @@ export const V3_DEFECT_FACTS = [
 ] as const;
 
 /**
- * Leg C's pre-committed fact count: 9 defect, 17 contract, 1 warn (r12, R667: the contract fact
- * `message-has-no-type-prefix`; r9 had 26).
+ * Leg C's pre-committed fact count: 9 defect, 18 contract, 1 warn (r13, R590: the contract fact
+ * `dependency-skip-line`; r12 (R667, `message-has-no-type-prefix`) had 27, r9 had 26).
  */
-export const V3_LEG_C_FACTS = 27;
+export const V3_LEG_C_FACTS = 28;
 
 /** F4 (R639): leg C's per-fact log line, with `measured` whole. */
 export const legCFactLine = (f: {
