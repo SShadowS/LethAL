@@ -937,6 +937,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     return [this.cfg.packagesDir];
   }
 
+  /** R435: v3's artifact cache app folder, where it keeps `*.Source.zip` Microsoft test libraries.
+   *  Absent without a `cacheDir`: v3's own default cache is not named here. */
+  dependencyArtifactAppsDir(): string | undefined {
+    return this.cfg.cacheDir === undefined
+      ? undefined
+      : join(resolve(this.cfg.cacheDir), "artifacts", this.cfg.bcVersion, "apps");
+  }
+
   /** R635 §3 (R517): the daemon's stop, `S = max(1, ceil(max(floor, baseline) / 1000))`. */
   useMutantBudgetFloor(floorMs: number, baselineTimeoutMs: number): void {
     this.dropPair();
@@ -1400,6 +1408,40 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     const verdict = v3RowVerdict(ref, row, call.stopSeconds, call.wallMs, coverage);
     if (this.lastActivated === null) return verdict;
+    // R-435 (upstream #5776): v3 marks a later FAILURE after an unfinished test as not trusted, but
+    // not a later TIMEOUT. A timeout after a row that was refused or stopped (or holds the refusal
+    // marker) may come from that row's partial state. Outside entries mode a call runs the whole
+    // codeunit, so the cold confirm runs the sequence unmutated (the refused row leaves the same
+    // state but the test passes) and R577's re-run repeats it: neither tells the refusal's state
+    // from the mutant. Never `runner-refused`: R639 must not go on past it.
+    if (verdict.outcome === "timeout") {
+      const earlier = call.rows
+        .slice(0, call.rows.indexOf(row))
+        .filter((r) => r.notRun || isV3RefusalText(r.message));
+      if (earlier.length > 0)
+        return {
+          ref,
+          outcome: "error",
+          durationMs: call.wallMs,
+          failureMessage: `${row.message ?? ""} [al-runner v3: a timeout after ${earlier.map((r) => r.method).join(", ")} refused or stopped earlier in the same call is not trusted; never scored (R-435)]`,
+          operation: "completed-accepted",
+          runnerRow: "runner-test-error",
+        };
+    }
+    // R639: v3's refusal that follows a timeout, where that timeout is the call's FIRST not-run row.
+    // The refused row's cause is the stop's cascade, so the covering loop may go on to the next
+    // test (the row it asks for is the row it would get were that test first in the order). A
+    // refusal after an earlier non-timeout refusal is not flagged: that partial state is unknown.
+    if (verdict.runnerRow === "runner-refused" && row.notRun) {
+      const first = call.rows.findIndex((r) => r.notRun);
+      const stop = call.rows[first];
+      if (
+        stop !== undefined &&
+        first < call.rows.indexOf(row) &&
+        V3_TIMEOUT_MESSAGE.test(stop.message ?? "")
+      )
+        return { ...verdict, refusedAfterStop: stop.method };
+    }
     // A covering pass under a mutant: §6.
     // §6 on RAW lines whatever the session's coverage mode (none, or refused for a multi-object
     // or wrapped file): every call requested --coverage-json (`v3CallArgv`).

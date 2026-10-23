@@ -14,7 +14,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, normalize } from "node:path";
+import { isAbsolute, join, normalize, resolve } from "node:path";
 import { initParser } from "@lethal/engine";
 import { emitStaticSelector } from "@lethal/schemata";
 import {
@@ -1291,6 +1291,137 @@ describe("§5 the row decoder", () => {
         2,
       ),
     ).toHaveProperty("rows");
+  });
+});
+
+describe("R-435 (B1): the artifact cache's apps folder", () => {
+  test("dependencyArtifactAppsDir is <cacheDir>/artifacts/<bcVersion>/apps, and absent without a cacheDir", async () => {
+    const l = await layout();
+    const spawn = fakeV3(() => [], { coverage: plainCoverage }).spawn;
+    const withCache = backendOf(l, spawn, fakeAlc().io, { cacheDir: "rel-cache" });
+    expect(withCache.dependencyArtifactAppsDir()).toBe(
+      join(resolve("rel-cache"), "artifacts", "28.0.46665.47126", "apps"),
+    );
+    expect(backendOf(l, spawn, fakeAlc().io).dependencyArtifactAppsDir()).toBeUndefined();
+  });
+});
+
+describe("R-435: a timeout after an earlier refusal or stop in the same call is not trusted", () => {
+  const STOP = "Test exceeded 1s timeout.";
+  const refused = (method: string) => ({
+    method,
+    status: "error" as const,
+    notRun: true,
+    message: "NotRun: out-of-scope: Commit",
+  });
+  const timedOut = (method: string) => ({
+    method,
+    status: "error" as const,
+    notRun: true,
+    message: STOP,
+  });
+  /** Rows in v3's run order; `mutant` false = the baseline call. Returns the verdict of `ask`. */
+  async function verdictOf(rows: FakeRow[], ask: string, mutant = true) {
+    const l = await layout();
+    const b = backendOf(l, fakeV3(() => rows, { coverage: plainCoverage }).spawn, fakeAlc().io);
+    await b.deploy(l.batch);
+    if (mutant) {
+      await b.activate("M0001");
+      b.useCoveringBudgets(
+        "M0001",
+        rows.map((r) => ({ ref: ref(r.method), budgetMs: 1000 })),
+      );
+    } else await b.activate(null);
+    return b.run(ref(ask), { coverage: "none", timeoutMs: 1000 });
+  }
+
+  test("[E refused, D timeout] -> error, never a timeout and never runner-refused", async () => {
+    const v = await verdictOf([refused("A"), timedOut("B")], "B");
+    expect(v.outcome).toBe("error");
+    expect(v.runnerRow).toBe("runner-test-error");
+    expect(v.failureMessage).toContain("A");
+    expect(v.failureMessage).toContain("R-435");
+  });
+
+  test("[A timeout, D timeout] -> error for D, while A itself stays a timeout", async () => {
+    const rows = [timedOut("A"), timedOut("B")];
+    const d = await verdictOf(rows, "B");
+    expect(d.outcome).toBe("error");
+    expect(d.runnerRow).toBe("runner-test-error");
+    expect((await verdictOf(rows, "A")).outcome).toBe("timeout");
+  });
+
+  test("the twin: [P pass, D timeout] stays a timeout", async () => {
+    const v = await verdictOf([{ method: "A", status: "pass" }, timedOut("B")], "B");
+    expect(v.outcome).toBe("timeout");
+    expect(v.runnerRow).toBeUndefined();
+  });
+
+  test("a K1(a) refusal marker in an earlier plain row also guards the timeout", async () => {
+    const marker = {
+      method: "A",
+      status: "pass" as const,
+      message: "NotRun: out-of-scope: Commit",
+    };
+    const v = await verdictOf([marker, timedOut("B")], "B");
+    expect(v.outcome).toBe("error");
+    expect(v.runnerRow).toBe("runner-test-error");
+  });
+
+  test("the baseline call is unchanged: [E refused, D timeout] still reads D as a timeout", async () => {
+    const v = await verdictOf([refused("A"), timedOut("B")], "B", false);
+    expect(v.outcome).toBe("timeout");
+  });
+
+  // R639: a refusal that follows a call's FIRST not-run row, when that row is a timeout, is
+  // flagged so the covering loop may go on to the next test (the order cannot hide the timeout).
+  describe("R639: refusedAfterStop", () => {
+    const failMarker = {
+      method: "B",
+      status: "fail" as const,
+      message: "NotRun: out-of-scope: Commit",
+    };
+    test("B1: [A timeout, B refusal] flags B with the timed-out test's name", async () => {
+      const v = await verdictOf([timedOut("A"), refused("B")], "B");
+      expect(v.runnerRow).toBe("runner-refused");
+      expect(v.refusedAfterStop).toBe("A");
+    });
+    test("B1b: the whole sequence [A timeout, B refusal, D timeout]: B is flagged, then D is guarded (error, never timeout)", async () => {
+      const rows = [timedOut("A"), refused("B"), timedOut("D")];
+      expect((await verdictOf(rows, "B")).refusedAfterStop).toBe("A");
+      const d = await verdictOf(rows, "D");
+      expect(d.outcome).toBe("error");
+      expect(d.runnerRow).toBe("runner-test-error");
+    });
+    test("B2a: a refusal with no timeout is not flagged", async () => {
+      const v = await verdictOf([{ method: "A", status: "pass" }, refused("B")], "B");
+      expect(v.runnerRow).toBe("runner-refused");
+      expect(v.refusedAfterStop).toBeUndefined();
+    });
+    test("B2b: a timeout AFTER the refused row does not flag it", async () => {
+      const v = await verdictOf([refused("B"), timedOut("A")], "B");
+      expect(v.runnerRow).toBe("runner-refused");
+      expect(v.refusedAfterStop).toBeUndefined();
+    });
+    test("B2c: an earlier non-timeout refusal first: not flagged", async () => {
+      const v = await verdictOf([refused("E"), timedOut("A"), refused("B")], "B");
+      expect(v.refusedAfterStop).toBeUndefined();
+    });
+    test("B2d: a plain fail holding the marker (runner-test-error) is not flagged", async () => {
+      const v = await verdictOf([timedOut("A"), failMarker], "B");
+      expect(v.runnerRow).toBe("runner-test-error");
+      expect(v.refusedAfterStop).toBeUndefined();
+    });
+    test("B2e: no mutant active: not flagged", async () => {
+      const v = await verdictOf([timedOut("A"), refused("B")], "B", false);
+      expect(v.runnerRow).toBe("runner-refused");
+      expect(v.refusedAfterStop).toBeUndefined();
+    });
+    test("B2f: the timeout row itself is not flagged", async () => {
+      const v = await verdictOf([timedOut("A"), refused("B")], "A");
+      expect(v.outcome).toBe("timeout");
+      expect(v.refusedAfterStop).toBeUndefined();
+    });
   });
 });
 
