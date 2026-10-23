@@ -21,6 +21,7 @@ import {
   AlRunnerV3Backend,
   type AlRunnerV3Config,
   AlRunnerV3ResourceSelectorRefusedError,
+  AlRunnerV3ReusedBaselineUnclassifiedError,
   AlRunnerV3RowMissingError,
   AlRunnerV3SelectionError,
   AlRunnerV3UnprovenBatchError,
@@ -1215,6 +1216,31 @@ describe("T24 (I1) and I3: the notes", () => {
       { ref: ref("A"), verdict: { ref: ref("A"), outcome: "pass", durationMs: 1 } },
     ]);
     expect(b.survivorNote([ref("A")])).toBeUndefined();
+  });
+
+  test("R678: a reused verdict with v3's notRun refusal text but no runner-refused row throws by name, never records nothing", async () => {
+    const l = await layout();
+    const b = backendOf(l, fakeV3(() => []).spawn, fakeAlc().io);
+    await b.deploy(l.batch);
+    const refused = notRunVerdict("B", "error", "NotRun: out-of-scope: Commit");
+    // Today's shapes, refusal and not, do not throw.
+    expect(() =>
+      b.noteReusedBaseline([
+        { ref: ref("B"), verdict: refused },
+        { ref: ref("T"), verdict: notRunVerdict("T", "error", "Test exceeded 1s timeout.") },
+        { ref: ref("C"), verdict: notRunVerdict("C", "fail", "NotRun: out-of-scope: Commit") },
+        { ref: ref("A"), verdict: { ref: ref("A"), outcome: "pass", durationMs: 1 } },
+      ]),
+    ).not.toThrow();
+    const { runnerRow: _dropped, ...malformed } = refused;
+    expect(() => b.noteReusedBaseline([{ ref: ref("M"), verdict: malformed }])).toThrow(
+      AlRunnerV3ReusedBaselineUnclassifiedError,
+    );
+    expect(() =>
+      b.noteReusedBaseline([
+        { ref: ref("M"), verdict: { ...refused, runnerRow: "runner-test-error" } },
+      ]),
+    ).toThrow(AlRunnerV3ReusedBaselineUnclassifiedError);
   });
 
   test("R678: a fresh baseline's notRun row with a non-error status (a contract error, not a refusal) notes nothing, as a reused one would", async () => {

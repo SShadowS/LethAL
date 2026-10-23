@@ -115,11 +115,26 @@ export const V3_TIMEOUT_MESSAGE = /^Test exceeded (\d+)s timeout\.$/;
 
 /**
  * The end of a v3 refusal's verdict text (a notRun `error` row that is not a timeout). R678: a
- * reused snapshot's refusals are read back by it, so changing it under the same IDENTITY_SCHEME
- * and v3 build silently drops their `[v3-refused-test-nearby]` notes on a resume.
+ * reused snapshot's refusals are read back by it. Changing its text needs an IDENTITY_SCHEME bump:
+ * otherwise a same-build snapshot stored under the old text is lent, and its refusals lose their
+ * `[v3-refused-test-nearby]` notes on a resume.
  */
 const V3_NOT_RUN_SUFFIX =
   "[al-runner v3 did not run this test (notRun), so whether the mutant changes its outcome on BC is unknown: NOT scored (R586 §5)]";
+
+/**
+ * R678: a reused snapshot's stored verdict carries the v3 notRun refusal text but not
+ * `runnerRow: "runner-refused"`, so whether v3 refused it cannot be told. Refused loudly rather
+ * than recording nothing.
+ */
+export class AlRunnerV3ReusedBaselineUnclassifiedError extends Error {
+  constructor(readonly detail: string) {
+    super(
+      `al-runner-v3: ${detail}: a reused baseline verdict holds v3's notRun refusal text without runnerRow "runner-refused", so its refusal cannot be classified (R678)`,
+    );
+    this.name = "AlRunnerV3ReusedBaselineUnclassifiedError";
+  }
+}
 
 /** The four note tags (plan §4, §6), in `failureNote`; the gate and any count read them by tag. */
 export const V3_STATE_NOTE_TAG = "[v3-codeunit-state-possible]";
@@ -1568,12 +1583,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     baseline: readonly { readonly ref: TestMethodRef; readonly verdict: TestVerdict }[],
   ): void {
     for (const { ref, verdict } of baseline) {
-      if (
-        verdict.runnerRow === "runner-refused" &&
-        verdict.failureMessage?.endsWith(V3_NOT_RUN_SUFFIX) === true
-      ) {
-        this.noteRefused(ref.codeunitId, ref.method);
+      if (verdict.failureMessage?.endsWith(V3_NOT_RUN_SUFFIX) !== true) continue;
+      // Unreachable today (`v3RowVerdict` writes the suffix only with the runnerRow); never silent.
+      if (verdict.runnerRow !== "runner-refused") {
+        throw new AlRunnerV3ReusedBaselineUnclassifiedError(
+          `${ref.codeunitName}.${ref.method} (runnerRow ${verdict.runnerRow ?? "<none>"})`,
+        );
       }
+      this.noteRefused(ref.codeunitId, ref.method);
     }
   }
 
