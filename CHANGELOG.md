@@ -918,6 +918,14 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **The al-runner v3 compile proof now covers every file v3 reads** ([R608](docs/roadmap/R608.md)).
+  - **Before:** only `.al` files, both `app.json` files and the `<deps>` file list were bound. A non-`.al` file in the
+    batch or the test dir, a file in the test dir's `.alpackages`, or a subfolder of `<deps>` could change after alc
+    proved the build and v3 would read it.
+  - **Now:** such a change refuses before the next send with `AlRunnerV3UnprovenBatchError`, naming the folder and
+    file. A `<deps>` subfolder is refused at deploy.
+- **The al-runner v3 backend no longer leaves `coverage.cobertura.xml` in your working directory**
+  ([R645](docs/roadmap/R645.md)). Every v3 process now runs in a scratch folder.
 - **`lethal doctor` no longer fails a healthy BC-on-Linux server whose config has no `bcdev.apiBaseUrl`**
   ([R253](docs/roadmap/R253.md)).
   - **The cause:** BC on Linux serves its API (`api/v2.0`) on its own port, and without `apiBaseUrl` LethAL reads it

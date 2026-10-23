@@ -17,7 +17,7 @@
  */
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { isV3RefusalText } from "./al-runner-rows";
 import {
   AlRunnerServer,
@@ -34,7 +34,7 @@ import {
 } from "./al-runner-v3-backend";
 import { baseAppJson, probeV3PredefinedSymbols } from "./al-runner-v3-probe";
 import { AlcCompileError, ArtifactCompiler, type ArtifactIo, defaultArtifactIo } from "./artifact";
-import { type SpawnFn, defaultSpawn } from "./publisher";
+import { type SpawnFn, absToolPath, defaultSpawn } from "./publisher";
 
 /**
  * R675: the start each leg-C probe message must have, from LethAL's own probe AL (`Error('boom %1',
@@ -655,11 +655,14 @@ async function serveKeepReasons(env: V3ProbeEnv, app: string, root: string): Pro
     }),
   );
   await writeFile(join(tests, "src", "Serve.Codeunit.al"), SERVE_TESTS_AL);
-  const cache = env.cacheDir !== undefined ? { ALRUNNER_CACHE: env.cacheDir } : undefined;
-  const spawn: ServerSpawnFn =
-    env.serveSpawn ??
-    ((argv) => defaultServerSpawn(argv, cache !== undefined ? { env: cache } : {}));
-  const server = new AlRunnerServer(env.alRunnerPath, spawn, [], "serve");
+  const cache = env.cacheDir !== undefined ? { ALRUNNER_CACHE: resolve(env.cacheDir) } : undefined;
+  // R645: in the probe's scratch dir, so v3's coverage file never lands in the caller's.
+  const spawn: ServerSpawnFn = (argv) =>
+    (env.serveSpawn ?? defaultServerSpawn)(argv, {
+      cwd: root,
+      ...(cache !== undefined ? { env: cache } : {}),
+    });
+  const server = new AlRunnerServer(absToolPath(env.alRunnerPath), spawn, [], "serve");
   const expected = `one serve daemon (--test-timeout ${SERVE_TEST_TIMEOUT_S}, testIsolation test): each row notRun, error, and its V3_SERVE_SAFE_REFUSALS entry (${SERVE_CASES.map(([e]) => e).join(", ")})`;
   let rows: readonly ServerTestLine[];
   try {
@@ -797,8 +800,14 @@ const rowsText = (c: Call, method: string): string =>
 
 /** The probe. Never throws for a v3 answer; a fact it could not read is `unmeasurable`. */
 export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractResult> {
-  const spawn = env.spawn ?? defaultSpawn;
   const root = await mkdtemp(join(tmpdir(), "lethal-r586-contract-"));
+  // R645: every v3 process the probe starts runs in `root` (v3 writes coverage.cobertura.xml into
+  // its cwd). Paths handed to v3 are made absolute below.
+  const spawnIn = env.spawn ?? defaultSpawn;
+  const spawn: SpawnFn = (argv, opts) => spawnIn(argv, { ...opts, cwd: root });
+  const alRunnerPath = absToolPath(env.alRunnerPath);
+  const packagesDir = resolve(env.packagesDir);
+  const cacheDir = env.cacheDir !== undefined ? resolve(env.cacheDir) : undefined;
   const facts: V3Fact[] = [];
   try {
     const { app, tests } = await writeProject(root, logicAl());
@@ -817,13 +826,13 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
       const cov = join(root, `cov-${seq}.json`);
       const argv = [
         ...(o.wrap ?? []),
-        env.alRunnerPath,
+        alRunnerPath,
         "test",
         "--output-json",
         "--isolation",
         "test",
         "--package-cache",
-        env.packagesDir,
+        packagesDir,
         "--bc-version",
         env.bcVersion,
         "--no-download",
@@ -835,7 +844,7 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
       const t0 = Date.now();
       const res = await spawn(
         argv,
-        env.cacheDir !== undefined ? { env: { ALRUNNER_CACHE: env.cacheDir } } : {},
+        cacheDir !== undefined ? { env: { ALRUNNER_CACHE: cacheDir } } : {},
       ).catch((e: unknown) => ({ exitCode: -1, stdout: "", stderr: String(e) }));
       const wallMs = Date.now() - t0;
       const decoded = o.codeunit !== undefined ? decodeV3Rows(res.stdout, o.codeunit) : undefined;
@@ -856,7 +865,7 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
     };
 
     // version
-    const v = await spawn([env.alRunnerPath, "--version"]).catch(() => ({
+    const v = await spawn([alRunnerPath, "--version"]).catch(() => ({
       exitCode: -1,
       stdout: "",
       stderr: "",
@@ -874,7 +883,7 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
 
     // unknown-flag-rejected
     const bad = await spawn([
-      env.alRunnerPath,
+      alRunnerPath,
       "test",
       "--lethal-wire-contract-probe",
       app,

@@ -331,9 +331,12 @@ function fakeServe(script: ServeScript = {}) {
   const requests: Req[] = [];
   /** R672: each shutdown, with how many requests (over every daemon) came before it. */
   const closes: { daemon: number; afterRequests: number }[] = [];
-  const spawn: ServerSpawnFn = (argv) => {
+  /** R645: the working directory each daemon was started in. */
+  const cwds: (string | undefined)[] = [];
+  const spawn: ServerSpawnFn = (argv, opts) => {
     const daemon = daemons.length;
     daemons.push([...argv]);
+    cwds.push(opts?.cwd);
     const out = new Chan();
     const err = new Chan();
     let compiled = new Set<number>();
@@ -437,7 +440,7 @@ function fakeServe(script: ServeScript = {}) {
   };
   /** The first request each daemon got. */
   const firsts = () => daemons.map((_, d) => requests.find((r) => r.daemon === d));
-  return { spawn, daemons, requests, firsts, closes };
+  return { spawn, daemons, requests, firsts, closes, cwds };
 }
 
 interface Rig {
@@ -1137,6 +1140,12 @@ describe("10: R612's keep rule per entry, in entry order", () => {
       "M0003|echo",
       `M0003|${CU}`,
     ]);
+  });
+
+  test("R645: the daemon starts in the session's scratch dir, never the caller's working directory", async () => {
+    const r = await readyRig({ mutants: ["M0001"] });
+    expect(r.serve.cwds).toEqual([r.l.scratch]);
+    expect(r.serve.cwds[0]).not.toBe(process.cwd());
   });
 
   test("all entries kept: one daemon", async () => {

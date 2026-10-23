@@ -92,12 +92,18 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "./backend";
-import { hashAlTree, hashTestDir } from "./baseline-snapshot";
+import {
+  type OtherFile,
+  hashAlTree,
+  hashTestDir,
+  listOtherFiles,
+  otherFilesDrift,
+} from "./baseline-snapshot";
 import { assertManifestObjectsDeclared, readManifestObjectKeys } from "./line-map";
-import { type SpawnFn, defaultSpawn } from "./publisher";
+import { type SpawnFn, absToolPath, defaultSpawn } from "./publisher";
 import { assertResourceSelectorRuntime, installResourceSelector } from "./resource-selector";
 import { TestAppError, symbolPackageId } from "./test-app-publish";
-import { ProjectSymlinkRefusedError } from "./walk";
+import { LINK_EXCUSED_DIRS, ProjectSymlinkRefusedError } from "./walk";
 
 /**
  * `--version` of a v3 build: `alrunner 3.0.0-alpha.2 (91253f2d6)` (alpha.3 renamed it `al-runner`).
@@ -476,6 +482,9 @@ interface BatchProof {
   readonly activeHashExceptSelector: string;
   readonly activeAppJsonSha256: string;
   readonly testDirHash: string;
+  /** R608: the non-.al files of `active/` and of the test dir (`.alpackages` included). */
+  readonly activeOther: ReadonlyMap<string, OtherFile>;
+  readonly testOther: ReadonlyMap<string, OtherFile>;
   readonly testAppJsonSha256: string;
   readonly deps: readonly DepsEntry[];
   readonly artifactId: string;
@@ -572,12 +581,33 @@ async function fileSha256(path: string): Promise<string> {
   return sha256Of(new Uint8Array(await readFile(path)));
 }
 
+/**
+ * R608: the non-.al files the "other files" proof does NOT bind, because LethAL writes or checks
+ * them itself during a session: both `app.json` files (checked by sha), the resource selector
+ * (checked by its own rule, and rewritten inside a coverage window), and the editor folders v3
+ * never reads. Nothing else of LethAL's lands under `active/` or the test dir: v3's coverage goes
+ * to `<instrumentedDir>/cov`, outside both.
+ */
+const OTHER_FILES_UNBOUND = (rel: string): boolean => {
+  const lower = rel.toLowerCase();
+  return (
+    lower === "app.json" ||
+    lower === `${SELECTOR_RESOURCE_FOLDER}/${SELECTOR_RESOURCE_NAME}`.toLowerCase() ||
+    rel.split("/").some((p) => LINK_EXCUSED_DIRS.includes(p.toLowerCase()))
+  );
+};
+
 async function listDeps(dir: string, withSha: boolean): Promise<DepsEntry[]> {
   const out: DepsEntry[] = [];
   for (const name of (await readdir(dir)).sort()) {
     const p = join(dir, name);
     const s = await stat(p);
-    if (!s.isFile()) continue;
+    // R608: a folder (or anything else that is not a plain file) is not bound by the proof.
+    if (!s.isFile()) {
+      throw new AlRunnerV3UnprovenBatchError(
+        `${p} is not a plain file (a folder?); v3 may read it, and the alc proof does not bind it. Move its packages up into ${dir} or remove it`,
+      );
+    }
     out.push({
       name,
       size: s.size,
@@ -944,6 +974,18 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     return this.sleepIndex?.sizes;
   }
 
+  /** R645: the working directory of every v3 process of the session (absolute, never the caller's). */
+  private scratchCwd(): string {
+    return resolve(this.cfg.instrumentedDir);
+  }
+
+  /** R645: `ALRUNNER_CACHE`, absolute, because v3 now runs in another cwd. */
+  private cacheEnv(): { env: Record<string, string> } | Record<string, never> {
+    return this.cfg.cacheDir !== undefined
+      ? { env: { ALRUNNER_CACHE: resolve(this.cfg.cacheDir) } }
+      : {};
+  }
+
   private activeDir(): string {
     return join(this.cfg.instrumentedDir, "active");
   }
@@ -1028,6 +1070,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         activeAppJsonSha256: await fileSha256(join(active, "app.json")),
         // R631: the test dir is a USER root: a link refuses rather than hashing a partial tree.
         testDirHash: await hashTestDir(this.cfg.testDir),
+        // R608: the same two folders' non-.al files (resources, `.alpackages`).
+        activeOther: await listOtherFiles(active, OTHER_FILES_UNBOUND, true),
+        testOther: await listOtherFiles(this.cfg.testDir, OTHER_FILES_UNBOUND, true),
         testAppJsonSha256: await fileSha256(join(this.cfg.testDir, "app.json")),
         deps: await listDeps(this.cfg.packagesDir, true),
         artifactId,
@@ -1222,6 +1267,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (activeHashNow !== proof.activeHashExceptSelector) {
       throw new AlRunnerV3UnprovenBatchError(`an .al file in ${dir} changed after the alc proof`);
     }
+    const activeOtherDrift = await linkIsUnproven(
+      otherFilesDrift(dir, OTHER_FILES_UNBOUND, proof.activeOther).then((d) => d ?? ""),
+      `${dir} after the alc proof`,
+    );
+    if (activeOtherDrift !== "") {
+      throw new AlRunnerV3UnprovenBatchError(
+        `a non-.al file in ${dir} changed after the alc proof (${activeOtherDrift})`,
+      );
+    }
     if ((await fileSha256(join(dir, "app.json"))) !== proof.activeAppJsonSha256) {
       throw new AlRunnerV3UnprovenBatchError(`${dir}/app.json changed after the alc proof`);
     }
@@ -1262,6 +1316,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (testDirHashNow !== proof.testDirHash) {
       throw new AlRunnerV3UnprovenBatchError(
         "an .al file in the test dir changed after the alc proof",
+      );
+    }
+    const testOtherDrift = await linkIsUnproven(
+      otherFilesDrift(this.cfg.testDir, OTHER_FILES_UNBOUND, proof.testOther).then((d) => d ?? ""),
+      "the test dir after the alc proof",
+    );
+    if (testOtherDrift !== "") {
+      throw new AlRunnerV3UnprovenBatchError(
+        `a non-.al file in ${this.cfg.testDir} changed after the alc proof (${testOtherDrift})`,
       );
     }
     if ((await fileSha256(join(this.cfg.testDir, "app.json"))) !== proof.testAppJsonSha256) {
@@ -1487,13 +1550,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const covPath = join(covDir, `call-${this.callSeq}.json`);
     await rm(covPath, { force: true });
     const argv = v3CallArgv({
-      alRunnerPath: this.cfg.alRunnerPath,
+      alRunnerPath: absToolPath(this.cfg.alRunnerPath),
       codeunitId: id,
       stopSeconds,
       packagesDir: resolve(this.cfg.packagesDir),
       bcVersion: this.cfg.bcVersion,
       symbols: this.cfg.preprocessorSymbols ?? [],
-      coverageJson: covPath,
+      coverageJson: resolve(covPath),
       // I-1: the same real paths the Sleep index is keyed by.
       activeDir: this.realDirs?.active ?? resolve(this.activeDir()),
       testDir: this.realDirs?.test ?? resolve(this.cfg.testDir),
@@ -1513,7 +1576,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     try {
       res = await this.spawn(argv, {
         signal: controller.signal,
-        ...(this.cfg.cacheDir !== undefined ? { env: { ALRUNNER_CACHE: this.cfg.cacheDir } } : {}),
+        // R645: v3 writes coverage.cobertura.xml into its cwd; never the caller's.
+        // R645: v3 writes coverage.cobertura.xml into its cwd; never the caller's.
+        cwd: this.scratchCwd(),
+        ...this.cacheEnv(),
       });
     } catch (err) {
       clearTimeout(timer);
@@ -1692,12 +1758,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       );
     }
     const server = new AlRunnerServer(
-      this.cfg.alRunnerPath,
-      (argv) =>
-        this.serverSpawn(
-          argv,
-          this.cfg.cacheDir !== undefined ? { env: { ALRUNNER_CACHE: this.cfg.cacheDir } } : {},
-        ),
+      absToolPath(this.cfg.alRunnerPath),
+      (argv) => this.serverSpawn(argv, { cwd: this.scratchCwd(), ...this.cacheEnv() }),
       this.cfg.preprocessorSymbols ?? [],
       "serve",
     );

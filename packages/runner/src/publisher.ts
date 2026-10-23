@@ -1,5 +1,5 @@
 import { access, readFile, readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { CompiledArtifact } from "./artifact";
 import { describeThrown } from "./describe-error";
 import { homeDir } from "./home";
@@ -51,6 +51,12 @@ const bunSpawn: SpawnFn = async (argv, opts) => {
 };
 
 export const defaultSpawn = bunSpawn;
+
+/**
+ * R645: a tool path for a process started in ANOTHER working directory: absolute when it names a
+ * path, left alone when it is a bare command (looked up on PATH).
+ */
+export const absToolPath = (p: string): string => (/[\\/]/.test(p) ? resolve(p) : p);
 
 /**
  * The publish half of a deployment channel. `ContainerDeployer` (altool against a container) and
