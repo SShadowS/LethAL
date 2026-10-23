@@ -105,6 +105,25 @@ export class HarnessAuthError extends Error {
   }
 }
 
+/**
+ * R253: BC's API (`api/v2.0`) is not served at the base URL this config reads it from. With no
+ * `bcdev.apiBaseUrl`, API reads go to the OData base, which is right on a Windows BC container and
+ * wrong on BC on Linux, where the API has its own port (measured on bc2, 2026-10-23: the OData port
+ * answers 404 "Resource not found for the segment"). A config gap, named with its fix, never a
+ * server fault: `lethal doctor` reports it as a skip, not a failure.
+ */
+export class ApiBaseUnsetError extends Error {
+  readonly base: string;
+
+  constructor(what: string, base: string) {
+    super(
+      `${what}: BC's API (api/v2.0) is not served at ${base}, the OData base URL this config reads it from (HTTP 404, "Resource not found for the segment"). On BC on Linux the API has its own port: set bcdev.apiBaseUrl to it, for example http://<host>:7052/BC (R253).`,
+    );
+    this.name = "ApiBaseUnsetError";
+    this.base = base;
+  }
+}
+
 export class HarnessVerificationError extends Error {
   constructor(message: string) {
     super(message);
@@ -696,6 +715,15 @@ export class HarnessVerifier {
         throw new HarnessAuthError(
           `${what} failed: HTTP ${res.status}${bodyText ? `: ${bodyText}` : ""} — an authentication failure; the request never reached the API.`,
         );
+      }
+      // R253: only with no apiBaseUrl, and only on BC's own wording: a configured API base that
+      // 404s is a real failure.
+      if (
+        this.cfg.apiBaseUrl === undefined &&
+        res.status === 404 &&
+        /Resource not found for the segment/i.test(bodyText)
+      ) {
+        throw new ApiBaseUnsetError(what, this.cfg.baseUrl);
       }
       throw new HarnessVerificationError(
         `${what} failed: HTTP ${res.status}${bodyText ? `: ${bodyText}` : ""}`,

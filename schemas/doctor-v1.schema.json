@@ -32,6 +32,10 @@
           "detail": {
             "type": "string",
             "description": "What was observed, never just \"ok\". Prose for a human; do not parse it."
+          },
+          "skipped": {
+            "const": true,
+            "description": "R253: present when doctor could not ask at all, for a reason the config names (`detail` says which, and the fix, e.g. no `bcdev.apiBaseUrl` on BC on Linux). `ok` is then `true`: nothing failed and nothing was verified."
           }
         }
       }
