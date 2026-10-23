@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**84 of 677 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**85 of 679 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -222,7 +222,7 @@ that ordering is the priority.
 - **R556** · `campaign compare` and the frozen itest baselines compare by identity key with no scheme and no mutated text, so a mutant that changed under an unchanged key reads as identical or as a regression · [R556.md](docs/roadmap/R556.md) · done (b0e24094)
 - **R505** · Not measured: how al-runner maps a compiled file back to the source path it labels coverage with, when an object moves between files or its workspace cache is stale · [R505.md](docs/roadmap/R505.md) · done (63594b46)
 - **R506** · Four more BC reads clear their abort timer at the headers, so a body BC never finishes has no bound (the R191 class), and two of them turn an unread body into `{}` · [R506.md](docs/roadmap/R506.md) · done (abc6919b)
-- **R560** · 13 gate baselines and 6 campaign stages are text-UNVERIFIED until re-recorded: a mutant changed under an unchanged key is not caught there yet · [R560.md](docs/roadmap/R560.md) · open, filed 2026-10-09
+- **R560** · 13 gate baselines and 6 campaign stages are text-UNVERIFIED until re-recorded: a mutant changed under an unchanged key is not caught there yet · [R560.md](docs/roadmap/R560.md) · closed 2026-10-23 — credit-limit re-frozen on bc1 at scheme 41…
 - **R507** · On the lease path, R-496's `UnfilteredExtensionsQueryError` is wrapped in a `LeaseUnavailableError` labelled "unreachable": its type is lost and the label is a wrong diagnosis · [R507.md](docs/roadmap/R507.md) · done (abc6919b)
 - **R533** · R505's project watch trusted a stat taken within one timestamp tick of an edit, so a same-size edit could go unseen (master red on Windows) · [R533.md](docs/roadmap/R533.md) · done (9c31edf6)
 - **R508** · `--resume` can carry the verdicts of a batch that a lease loss invalidated, kills included · [R508.md](docs/roadmap/R508.md) · done (3203624b)
@@ -299,6 +299,7 @@ that ordering is the priority.
 - **R675** · al-runner v3: a failure-message prefix with a space or a `::` path is seen by neither K1(a) nor leg C · [R675.md](docs/roadmap/R675.md) · done (10fe5dc0)
 - **R680** · A resume can refuse a crash gap that spans a BC restart: record LethAL Control's serverGeneration at the first guard ask, and compare on resume · [R680.md](docs/roadmap/R680.md) · open, filed 2026-10-23
 - **R681** · an unknown `bcdev.coverageMode` in lethal.config.json is not refused: `validateBcDevConfig` returns the section unchecked, so a typo runs silently as `none` and `"line"` reaches the hub · [R681.md](docs/roadmap/R681.md) · done (c9e416de)
+- **R682** · after every identity-scheme bump, a gate baseline's byte-identical twins are text-UNVERIFIED until it is re-recorded, and nothing schedules that re-record · [R682.md](docs/roadmap/R682.md) · open, filed 2026-10-23
 
 ## Product gaps a real project hits
 
@@ -722,6 +723,7 @@ that ordering is the priority.
 - **R677** · al-runner v3: baselineRefused is session-wide and never reset, so a test refused at batch 0's baseline still drives batch 1's nearby-refusal notes · [R677.md](docs/roadmap/R677.md) · closed 2026-10-23 — ruling: session-wide is correct…
 - **R678** · al-runner v3: a --resume session whose batches all reuse their baseline snapshots records no baseline refusal, so no survivor gets its [v3-refused-test-nearby] note · [R678.md](docs/roadmap/R678.md) · done (3d78e671)
 - **R679** · bc-linux-setup's Continia P1 stop did not name `--accept-build`, so a server on a newer Microsoft build read as blocked when R594's accepted-build path was one flag away · [R679.md](docs/roadmap/R679.md) · done (84c7d4f6)
+- **R683** · Host step: re-record `envtool.baseline.json` at the current identity scheme on the next live envtool run (it is the last gate baseline with no scheme and no mutated-text hash) · [R683.md](docs/roadmap/R683.md) · open, filed 2026-10-23 — a HOST step for the owner (the env tool is host-only)
 
 ---
 
