@@ -2366,6 +2366,14 @@ export function validateBcDevConfig(
       `lethal.config.json "bcdev" section names two dev ports: "port" ${raw.port} and ${serverPort} in "server" (${raw.server}). Make them the same.`,
     );
   }
+  // R681: only the type said which modes exist. A typo ran silently as `none`, and "line" (a hub
+  // mode the docs never offer) reached the hub, so an unknown value is refused by name.
+  const modes = ["procedure", "none", "fenced"];
+  if (raw.coverageMode !== undefined && !modes.includes(raw.coverageMode)) {
+    throw new Error(
+      `lethal.config.json "bcdev" section: "coverageMode" ${JSON.stringify(raw.coverageMode)} is not one of ${modes.map((m) => `"${m}"`).join(", ")}`,
+    );
+  }
   return raw as BcDevConfigSection;
 }
 
@@ -4731,9 +4739,17 @@ export async function buildDoctorDeps(
  *  `isCreateMode` for what triggers it and why it is not merged into that fixed constant (it is
  *  conditional; `DOCTOR_NOT_CHECKED` is universal). */
 export function renderDoctorReport(report: DoctorReport, createModeCaveat?: string): string {
-  const lines = report.checks.map((c) => `  [${c.ok ? "ok" : "FAIL"}] ${c.name}: ${c.detail}`);
+  const lines = report.checks.map(
+    (c) => `  [${c.skipped === true ? "skip" : c.ok ? "ok" : "FAIL"}] ${c.name}: ${c.detail}`,
+  );
+  // R253: a skipped check is not a pass, so the banner never says "every check passed" over one.
+  const skipped = report.checks.filter((c) => c.skipped === true).length;
   return [
-    report.ok ? "ok: every check passed" : "FAIL: at least one check failed",
+    !report.ok
+      ? "FAIL: at least one check failed"
+      : skipped > 0
+        ? `ok: no check failed, but ${skipped} could not be checked (see [skip])`
+        : "ok: every check passed",
     ...lines,
     "",
     DOCTOR_NOT_CHECKED,
@@ -4800,6 +4816,10 @@ export async function initFromCli(parsed: InitCliConfig): Promise<number> {
     "  bcdev.username / password + env.*         the same credentials, twice: bc-dev-mcp reads them from the environment, not from parameters",
   );
   console.log("  bcdev.controlSymbolPath                   the lethal-control.app you published");
+  // R253: BC on Linux serves its API on its own port, not the OData one.
+  console.log(
+    "  bcdev.apiBaseUrl (BC on Linux only)       its API root, e.g. http://<host>:7052/BC; a Windows container serves the API on the OData port and needs none",
+  );
   console.log(`\nThen: lethal doctor --config ${outPath}`);
   return 0;
 }

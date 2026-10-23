@@ -729,9 +729,14 @@ many tests new.
 
 What verify still does NOT see, so it reports the affected tests as OLD (not re-run, no cause) with
 no warning:
-- an installed app no test-app dependency reaches (for example one with a global event
-  subscriber), and a non-Microsoft dependency that is published but not the installed version
-  (R434);
+- an installed app that no test-app dependency reaches (R434, a stated limit). Installing,
+  upgrading or removing such an app leaves every test old, even when it changes what a test does,
+  for example through a global event subscriber, a setup change, or a test-runner extension.
+  Measured on LethAL's own servers (2026-10-23): each holds about 120 installed apps (100 Microsoft
+  ones), and one of them is outside every test app's dependencies: ALDirectCompile's "Test Runner
+  Extension". After you install or upgrade an app on the server, re-run `lethal run` before you
+  trust verify. (A partner dependency that is published but not the installed version IS seen
+  since R496: verify refuses `dependency-unreadable`, above.)
 - a body-only rebuild of a symbols-only package (no `.al` source inside): measured, that is
   `Application`, which is expected because it is a wrapper app whose dependencies carry the source,
   and the `LethAL Control` package, whose bytes are not hashed anyway;
@@ -798,6 +803,21 @@ the session refuses with `TestAppRepublishedError` (code `test-app-republished`)
 baseline (R486). `--skip-known-survivors` compares the read-back instead: after a new test app, or
 an unreadable read-back, it skips nothing and warns `history-test-app-changed`. The run records the
 read-back's identity, or none when it could not be read.
+
+**A resume across a server restart is refused (R680).** On bcdev, each run records the server's
+generation (LethAL Control's `serverGeneration`), read once at the start of the session. The server
+mints a new generation when its lease row is created, as after a restart that lost an in-memory
+database, and on `ForceResetLease`.
+- **`--resume` and `--resume-run`** refuse with `ServerGenerationChangedError` (code
+  `server-generation-changed`) when the run they would resume recorded another generation, or none.
+  A run recorded before R680 has none, so it refuses too. The error names both values; drop the
+  flag to run from scratch.
+- **A saved baseline** is reused only from a run on the same generation.
+- **The lease** is asked at the generation the session recorded. A server that restarted since
+  refuses it (`generation-changed`) before anything is deployed.
+- **Not covered:** `--skip-known-survivors` still lends across a restart. It skips survivors only,
+  so a test that now kills one can be missed (an under-report). It never scores a false kill.
+- al-runner-v3 has no server and records no generation.
 
 **A run lends its test-app identity to a later session only when it PROVED it (R495).** `--resume`,
 `--resume-run`, `--skip-known-survivors` and the reuse of a saved baseline all require the earlier

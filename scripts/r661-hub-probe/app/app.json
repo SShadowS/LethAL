@@ -1,0 +1,12 @@
+{
+  "id": "b6f3e0a2-5c41-4e7d-9a18-61c2d7f4e905",
+  "name": "LethAL R661 Hub Session Probe",
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "brief": "R661 throwaway probe: lists BC's Active Session rows over OData, to see whether a hub test session outlives LethAL's budget.",
+  "platform": "28.0.0.0",
+  "runtime": "17.0",
+  "target": "OnPrem",
+  "idRanges": [{ "from": 92960, "to": 92969 }],
+  "features": ["NoImplicitWith"]
+}

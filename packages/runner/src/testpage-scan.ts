@@ -459,7 +459,8 @@ export interface Proc {
   /** R-371: carries an `[EventSubscriber]` attribute. */
   readonly subscriber: boolean;
   /** R-371: every `Codeunit::X` name and every integer literal of 1000 or more in the body, as
-   *  written: where a codeunit id an Integer can carry may come from (`Scanner.foldIdTargets`). */
+   *  written, and (R684) a `Report::`, `Page::`, `XmlPort::`, `Query::` or `Database::` reference as
+   *  `<kind>::<name>`: where an id an Integer can carry may come from (`Scanner.foldIdTargets`). */
   readonly idRefs: readonly string[];
   /** R-389: an attribute says the platform or another app calls it (`PLATFORM_CALLED`). */
   readonly platformCalled: boolean;
@@ -1101,7 +1102,18 @@ function argInfo(call: ALSyntaxNode): {
 
 const NO_IDS: readonly string[] = Object.freeze([]);
 
-/** `Proc.idRefs`: `Codeunit::X` names and integer literals of 1000 or more under `block`. */
+/**
+ * R684: the kinds other than a codeunit that external code can run, or open, by an integer id
+ * (`Report.Run(Id)`, `Page.Run(Id)`, `Xmlport.Run(Id)`, a query by id, `RecRef.Open(Id)`).
+ */
+const ID_RUN_KINDS = ["report", "page", "xmlport", "query", "table"] as const;
+const ID_RUN_REF = /^\s*(report|page|xmlport|query|database)\s*::\s*(.+?)\s*$/i;
+const KINDED_REF = /^(report|page|xmlport|query|table)::(.+)$/;
+
+/**
+ * `Proc.idRefs`: `Codeunit::X` names (bare), integer literals of 1000 or more, and (R684) a
+ * reference to another kind in `ID_RUN_KINDS` as `<kind>::<name>`, `Database::` read as `table`.
+ */
 function idRefsIn(block: ALSyntaxNode): readonly string[] {
   let out: string[] | undefined;
   visit(block, (n) => {
@@ -1109,6 +1121,12 @@ function idRefsIn(block: ALSyntaxNode): readonly string[] {
     if (n.rawKind === "database_reference") {
       const m = /^\s*codeunit\s*::\s*(.+?)\s*$/i.exec(n.text);
       v = m?.[1];
+      if (v === undefined) {
+        const o = ID_RUN_REF.exec(n.text);
+        const kind = o?.[1]?.toLowerCase();
+        if (kind !== undefined && o?.[2] !== undefined)
+          v = `${kind === "database" ? "table" : kind}::${o[2]}`;
+      }
     } else if (n.rawKind === "integer" && n.text.trim().length >= 4) v = n.text.trim();
     if (v === undefined) return;
     out ??= [];
@@ -1262,6 +1280,14 @@ const SYSTEM_ROOTS = new Set([
 
 /** R-371: a type whose value may be a record of any table (folded, not fallen back). */
 const HOLDS_RECORD = /^\s*(variant|recordref|fieldref)\b/i;
+/**
+ * R390: a record over a platform table that lists object ids, also as `array[n] of` and namespaced
+ * (`System.Reflection.AllObj`). `Published Application` is left out: it lists apps, whose ids
+ * nothing runs. Measured cost on the final rule (`/coord/handoff/R-175/digest-diff/`): 20 more tests
+ * on the fallback across BC.History, CDO and DO.
+ */
+const PLATFORM_ID_TABLE =
+  /^\s*(?:array\s*\[[^\]]*\]\s*of\s+)?record\s+(?:[\w.]+\.)?("?)(allobjwithcaption|allobj|object|object metadata|application object metadata)\1\s*(?:temporary\s*)?$/i;
 /** R-371: the position(s) of the codeunit-id arguments of a platform run by id, by `root.member`;
  *  the bare `StartSession` is `reachBare`'s. */
 const RUN_BY_ID: Readonly<Record<string, readonly number[]>> = {
@@ -1314,9 +1340,15 @@ export class Scanner {
   private readonly anyDamage: boolean;
   /** R-371: a test-app codeunit's id is below 1000, which `Proc.idRefs` does not keep. */
   private readonly lowIds: boolean;
+  /** R684: every non-extension test-app object of an `ID_RUN_KINDS` kind. */
+  private readonly idRunObjects: readonly Unit[];
+  /** R684: one of `idRunObjects` has an id below 1000, which `Proc.idRefs` does not keep. */
+  private readonly lowObjectIds: boolean;
   /** `normalizeAlName` per distinct text, once: a walk asks for the same few names millions of
    *  times on a large suite, and each answer was a fresh string (R-371's RSS measurement). */
   private readonly normCache = new Map<string, string>();
+  /** R390: `platformIdTable` per procedure, once: `reach` asks for every procedure of every test. */
+  private readonly platformCache = new Map<Proc, string | undefined>();
   /** `unitsFor` per distinct type text, once, for the same reason. */
   private readonly unitsForCache = new Map<string, Unit[]>();
   /** R-389: interface name -> the test-app codeunits and interfaces naming it in `implements`. */
@@ -1367,6 +1399,9 @@ export class Scanner {
     );
     this.anyDamage = model.damaged.length > 0;
     this.lowIds = model.units.some((u) => u.id < 1000);
+    const idRunKinds: ReadonlySet<string> = new Set(ID_RUN_KINDS);
+    this.idRunObjects = model.objects.filter((u) => idRunKinds.has(u.kind));
+    this.lowObjectIds = this.idRunObjects.some((u) => u.id < 1000);
     this.allProcs = [...model.units, ...model.objects].flatMap((u) => [...u.procs, ...u.triggers]);
     for (const u of [...model.units, ...model.objects]) {
       for (const i of u.implements) add(this.implementers, lastSegment(i), u);
@@ -1643,6 +1678,14 @@ export class Scanner {
     if (st.procs.has(p)) return;
     st.procs.add(p);
     this.reachUnit(p.unit, st);
+    // R390: an object id read from the platform names no test-app object in the source, so no
+    // fold can follow it to the codeunit or report external code then runs.
+    const platform = this.platformIdTable(p);
+    if (platform !== undefined)
+      fallBack(
+        st,
+        `${p.display} declares a Record ${platform}, whose object ids can be a test-app object's that code the walk does not follow runs (R390)`,
+      );
     // Any code of a non-codeunit object can fire that object's triggers (`Modify(true)`,
     // `CurrPage.Update()`, ...): walk them all, and the test app's extensions' with them.
     if (p.unit.kind !== "codeunit" && p.unit.baseKey !== undefined)
@@ -1662,6 +1705,25 @@ export class Scanner {
       if (site.kind === "bare") this.reachBare(p, site, st);
       else this.reachMember(p, site, st);
     }
+  }
+
+  /**
+   * R390: the platform object-id table (`PLATFORM_ID_TABLE`) that `p`'s variables or parameters, its
+   * object's globals, or its object's implicit records (`Rec` of a page's `SourceTable` or a
+   * codeunit's `TableNo`, a report data item) are a record of, as written; undefined when none is.
+   */
+  private platformIdTable(p: Proc): string | undefined {
+    if (this.platformCache.has(p)) return this.platformCache.get(p);
+    let found: string | undefined;
+    const all = [...p.scope.values(), ...p.unit.globals.values(), ...p.unit.implicit.values()];
+    for (const types of all) {
+      for (const t of types) {
+        const m = PLATFORM_ID_TABLE.exec(t);
+        if (m !== null) found ??= t.trim().replace(/^record\s+/i, "");
+      }
+    }
+    this.platformCache.set(p, found);
+    return found;
   }
 
   private reachUnit(u: Unit, st: ReachState): void {
@@ -1884,8 +1946,9 @@ export class Scanner {
       if (skipAt.has(f.at)) continue;
       // External review r1 #3: an external callee can run a codeunit by the id it is handed.
       if (f.k === "int") {
-        if (!refsOnly && this.byNameAll(f.value).length > 0)
-          fallBack(st, `${label} is handed ${f.value}, a test-app codeunit's id, by ${p.display}`);
+        const owner = refsOnly ? undefined : this.idOwner(f.value);
+        if (owner !== undefined)
+          fallBack(st, `${label} is handed ${f.value}, a test-app ${owner}'s id, by ${p.display}`);
         continue;
       }
       let what: string | undefined;
@@ -1987,20 +2050,51 @@ export class Scanner {
    * reached (the test codeunit's other methods, whose writes the test can read back). With a
    * test-app codeunit whose id is below 1000 (`idRefs` keeps no such literal), every test-app
    * codeunit is folded. Stated limit: an id read from the platform (an AllObj loop) is not seen.
+   *
+   * R684: the same for every other kind external code can run or open by id (`ID_RUN_KINDS`): an
+   * object a reached procedure names (`Report::X`, `Database::X`, ...) or by its literal id is
+   * folded with `foldObject`, every trigger of it and of its extensions. With such an object below
+   * 1000, every one is folded. The object half runs whatever `lowIds` says: only the codeunit
+   * half is conditional (plan r2, review finding 1).
    */
   foldIdTargets(st: ReachState, extra: readonly Proc[] = []): void {
-    const fold = (raw: string): void => {
+    const foldCodeunit = (raw: string): void => {
       for (const u of this.byNameAll(this.norm(raw))) {
         this.reachUnit(u, st);
         for (const c of [...u.procs, ...u.triggers]) this.reach(c, st);
       }
     };
-    if (this.lowIds) {
-      for (const list of this.byKey.values()) for (const u of list) fold(String(u.id));
-      return;
-    }
-    for (const p of extra) for (const r of p.idRefs) fold(r);
-    for (const p of st.procs) for (const r of p.idRefs) fold(r);
+    const foldObjects = (raw: string): boolean => {
+      const kinded = KINDED_REF.exec(raw);
+      if (kinded !== null) {
+        const [, kind = "", name = ""] = kinded;
+        for (const u of this.objectsNamed(kind, name)) this.foldObject(u, st);
+        return true;
+      }
+      if (/^\d+$/.test(raw))
+        for (const kind of ID_RUN_KINDS)
+          for (const u of this.objectsNamed(kind, raw)) this.foldObject(u, st);
+      return false;
+    };
+    if (this.lowObjectIds) for (const u of this.idRunObjects) this.foldObject(u, st);
+    if (this.lowIds)
+      for (const list of this.byKey.values()) for (const u of list) foldCodeunit(String(u.id));
+    const foldRef = (r: string): void => {
+      if (!foldObjects(r) && !this.lowIds) foldCodeunit(r);
+    };
+    for (const p of extra) for (const r of p.idRefs) foldRef(r);
+    for (const p of st.procs) for (const r of p.idRefs) foldRef(r);
+  }
+
+  /**
+   * R684: the kind of the test-app object whose id `value` is, for the two `int` checks: a
+   * codeunit, else a non-extension object of an `ID_RUN_KINDS` kind; undefined for any other value.
+   */
+  private idOwner(value: string): string | undefined {
+    if (this.byNameAll(value).length > 0) return "codeunit";
+    for (const kind of ID_RUN_KINDS)
+      if (this.objectsNamed(kind, value).some((u) => !u.kind.endsWith("extension"))) return kind;
+    return undefined;
   }
 
   /** R-371: an object folded into every digest: entered, with its parts (`enterObject`). */
@@ -2260,8 +2354,9 @@ export class Scanner {
       const f = site.argFacts.find((x) => x.at === at);
       if (f === undefined) continue; // a literal or an operator's result: a value
       if (f.k === "int") {
-        if (this.byNameAll(f.value).length > 0)
-          fallBack(st, `${why}: ${q.display} passes ${f.value}, a test-app codeunit's id`);
+        const owner = this.idOwner(f.value);
+        if (owner !== undefined)
+          fallBack(st, `${why}: ${q.display} passes ${f.value}, a test-app ${owner}'s id`);
       } else if (f.k === "ref") {
         if (this.isTestAppObject(f.kind === "database" ? "table" : f.kind, f.name))
           fallBack(st, `${why}: ${q.display} passes ${f.kind}::${f.name}`);

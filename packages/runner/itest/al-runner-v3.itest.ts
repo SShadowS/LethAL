@@ -375,8 +375,8 @@ async function legC(scratch: string): Promise<readonly string[]> {
   legCWarnFacts = Object.fromEntries(
     r.facts.filter((f) => V3_WARN_FACTS.includes(f.fact)).map((f) => [f.fact, f.verdict]),
   );
-  // RC-2 (I-2): a defect fact moving to `gone` is held; any diverged is gate-fail. 27 facts (r12,
-  // R667: 9 defect, 17 contract, 1 warn); a warn fact (V3_WARN_FACTS) only adds its line.
+  // RC-2 (I-2): a defect fact moving to `gone` is held; any diverged is gate-fail. 28 facts (r13,
+  // R590: 9 defect, 18 contract, 1 warn); a warn fact (V3_WARN_FACTS) only adds its line.
   const c = classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS, V3_WARN_FACTS);
   for (const l of c.lines) console.log(`  C: ${l}`);
   if (c.outcome === "gate-fail") throw new LegFailure(`C: ${c.lines.join("; ")}`);

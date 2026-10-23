@@ -434,6 +434,48 @@ describe("ResultsStore", () => {
     rmSync(path, { force: true });
   });
 
+  test("R680: serverGeneration round-trips, reads null when absent, and null on a row from before the column", () => {
+    const store = new ResultsStore(":memory:");
+    const base = {
+      testScope: [],
+      coverageMode: "fenced" as const,
+      identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
+      projectPath: "P",
+      backend: "bcdev",
+      appVersion: "0.0.0.0",
+    };
+    const withGen = store.createRun({ ...base, serverGeneration: "g".repeat(32) });
+    const without = store.createRun(base);
+    expect(store.getRun(withGen)?.serverGeneration).toBe("g".repeat(32));
+    expect(store.getRun(without)?.serverGeneration).toBeNull();
+    store.close();
+    const path = testDbPath("lethal-store-server-generation.sqlite");
+    const legacy = new Database(path);
+    legacy.exec(`CREATE TABLE runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at TEXT,
+    project_path TEXT NOT NULL,
+    backend TEXT NOT NULL,
+    app_version TEXT NOT NULL,
+    batch_count INTEGER,
+    baseline_green INTEGER,
+    app_id TEXT,
+    artifact_id TEXT,
+    artifact_sha256 TEXT,
+    config_fingerprint TEXT
+  );`);
+    legacy.exec(
+      `INSERT INTO runs (project_path, backend, app_version) VALUES ('P','bcdev','1.0.0.0')`,
+    );
+    legacy.close();
+    const migrated = new ResultsStore(path);
+    expect(migrated.getRun(1)?.serverGeneration).toBeNull();
+    migrated.close();
+    rmSync(path, { force: true });
+  });
+
   test("artifactsForRun is empty for a run that published nothing", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({

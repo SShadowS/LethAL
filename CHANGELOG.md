@@ -226,6 +226,18 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **`lethal verify`'s blind spot for installed apps is now a stated, measured limit** ([R434](docs/roadmap/R434.md)).
+  An app installed on the server but outside the test app's dependencies (a global subscriber, a setup change, a
+  test-runner extension) still leaves every test old when it is installed or upgraded. Measured on LethAL's
+  servers: about 120 installed apps each, and one outside every closure (ALDirectCompile's "Test Runner
+  Extension"). The agent guide says so, with what to do: re-run `lethal run` after installing or upgrading an app.
+  The guide no longer says a partner dependency published but not installed is unseen. Since R496 verify refuses it
+  (`dependency-unreadable`). Folding the installed list into the digest is [R687](docs/roadmap/R687.md), after the
+  release.
+- **An unknown `bcdev.coverageMode` is refused by name** ([R681](docs/roadmap/R681.md)). Only `"procedure"`,
+  `"none"` and `"fenced"` are accepted, and the message lists them. Before, a typo such as `"Fenced"` ran silently as
+  `none`, and `"line"`, a hub mode the docs never offer, reached the hub. An explicit `null` is refused too: leave
+  the field out for the default.
 - **LethAL now stops a BASELINE test, a kill confirm or a warm replay that runs past its budget,
   even without `--stop-hung-sessions`** (R658). The flag still governs mutants. Before, such a run
   was abandoned at its budget and kept running on the BC server, so its op held the control-app
@@ -906,6 +918,57 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **`lethal doctor` no longer fails a healthy BC-on-Linux server whose config has no `bcdev.apiBaseUrl`**
+  ([R253](docs/roadmap/R253.md)).
+  - **The cause:** BC on Linux serves its API (`api/v2.0`) on its own port, and without `apiBaseUrl` LethAL reads it
+    from the OData port, which answers BC's 404 "Resource not found for the segment".
+  - **What you see now:** that read is a named `ApiBaseUnsetError` with the fix (set `bcdev.apiBaseUrl`, e.g.
+    `http://<host>:7052/BC`). Doctor shows the `company` and `test-app-present` checks as `[skip]` instead of
+    `[FAIL]`, and `--json` marks them `skipped: true`.
+  - **Unchanged:** a configured `apiBaseUrl` that 404s still fails.
+  - **`lethal init`** now names the field.
+- **A scheme bump must re-record the gate baselines, or name the item that does** ([R682](docs/roadmap/R682.md)).
+  The rule is on `docs/gates/README.md` and checked by `gate-pages.test.ts`. Today's eight lagging baselines wait
+  on R690 (after R-604b's scheme decision) and R683.
+- **A resume across a BC server restart is refused** ([R680](docs/roadmap/R680.md)).
+  - **What changed:** each bcdev run records the server's generation (LethAL Control's `serverGeneration`), read
+    once before the session's first guard check.
+  - **On resume:** `--resume` and `--resume-run` refuse with `ServerGenerationChangedError` when the run recorded
+    another generation, or none. A run recorded before this release has none, so it refuses too.
+  - **The lease** is asked at that generation, so a restart after the read is refused before anything is deployed.
+  - **A saved baseline** is reused only from a run on the same generation.
+  - **Why:** before, a resume could carry verdicts and reuse a baseline measured before a restart that lost every
+    app and its data.
+- **`lethal verify` sees a test whose code reads object ids from the platform** ([R390](docs/roadmap/R390.md)). A test
+  that reaches code holding a record over `AllObj`, `AllObjWithCaption`, `Object`, `Object Metadata` or
+  `Application Object Metadata` now takes the whole-source digest. That includes a page or codeunit whose implicit
+  `Rec` is one, an array of one and a namespaced one. An id read from such a table may be a test-app
+  object's that another app runs, and nothing in the source names it. Before, an edit to that object left the test
+  old. Measured cost over every test app of BC.History, CDO, DC and DO (53,936 tests): 20 more on the fallback. An
+  id computed from data stays a stated limit.
+- **bcdev: a test codeunit whose `OnRun` raises is no longer reported as a stale test app** (R686).
+  BC runs a test codeunit's `OnRun` while it builds the suite, and lists none of its methods when
+  that fails, which looked exactly like a test missing from the published app.
+  - **At baseline,** when the installed test app is proven to compile every test of that codeunit,
+    the run now stops with `TestCodeunitDiscoveryError`, which names the codeunit and the OnRun
+    cause and drops the republish remedy. When LethAL cannot prove that, the stale-test-app refusal
+    stays, with one sentence naming the OnRun cause too.
+  - **Mid-run,** a mutant that makes a test codeunit's `OnRun` raise used to stop the session as
+    "two consecutive run() failures". It now stops with `MutantBrokeTestDiscoveryError`, which names
+    the mutant, its file and the codeunit, and says how to go on (`--resume` stops at the same
+    mutant again; `--exclude <file>` gets past it). Scoring it per mutant is R688.
+- **`al-runner-v3` refuses a session in which v3 left out a dependency app** (R590). v3 skips a
+  dependency whole when it finds no package with AL source for it. A call into that app by id
+  (`Codeunit.Run(<id>)`) then fails with BC's missing-object error, which LethAL scored as a kill,
+  where BC runs the call. The backend now stops the session by name
+  (`AlRunnerV3DependencySkippedError`) on v3's `dependency skipped:` line, or its `... N more
+  dependency notes` line, in every one-shot call and after every serve-daemon request.
+  - **What changes for you:** a project with a dependency that v3 can only find as a symbol package
+    is now refused on v3, instead of having some tests not run. Put that dependency's `.app` with AL
+    source (or its source archive) in `<deps>`. A project whose dependency log has more than 12
+    problem lines is refused too, even when nothing was skipped; `--verbose` lists them.
+  - Leg C of `itest:alrunner-v3` has a new contract fact, `dependency-skip-line` (28 facts), so a v3
+    build that stops writing the line is refused by the update gate and by every session.
 - **A mutant run whose stop was not refused and whose answer was lost now quarantines the server**
   (R665). Before, a reconcile that read `completed` or `not-started` scored it
   `stop-outcome-unconfirmed` with no quarantine, and the session ran on. But `completed` may be the

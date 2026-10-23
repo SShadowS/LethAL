@@ -130,9 +130,13 @@ import { CARRYABLE_VERDICTS, isStrandedNote } from "../src/resume";
 import { identityKeyOf, serializeKey } from "../src/selection";
 import { SessionSafety, SessionUnsafeError } from "../src/session-safety";
 import {
+  GROUP_SUITE_UNRESOLVED_HEAD,
+  MutantBrokeTestDiscoveryError,
+  ONRUN_HINT,
   STALE_TEST_APP_REMEDY,
   StaleTestAppError,
   TestAppChangedError,
+  TestCodeunitDiscoveryError,
   runMutantLineCountMessage,
   testAppRefusal,
 } from "../src/stale-test-app";
@@ -146,6 +150,7 @@ import {
 import { testDigestsOfModel, testDigestsOfSources } from "../src/test-digest";
 import {
   PublishAppUnreadableError,
+  ServerGenerationChangedError,
   TestAppDiffersError,
   TestAppDriftedError,
   TestAppRepublishedError,
@@ -166,6 +171,7 @@ import { buildFakeAppWithEntries } from "./helpers/fake-app";
 import { legacyBuildReport } from "./helpers/legacy-report";
 import { fakeMicrosoftMode } from "./helpers/microsoft-mode";
 import {
+  TEST_APP,
   servedIsInstalled,
   servedTestAppDeps,
   servesTestApp,
@@ -2170,6 +2176,61 @@ ${TRIGGER_TABLE_AL}#endif
     }
   });
 
+  // R175 (closing): the selection-level test pins `coverageFilter` with its flag off, but nothing
+  // pinned that the SESSION passes it off for the fenced default. Measured by red-check: making the
+  // orchestrator widen locals under `fenced` left every runner test green. A public procedure calls
+  // a local; coverage names the public one and reports an UNNAMED object-level entry, the only
+  // thing the local widening can widen to.
+  describe("R175: the local widening fires on the hub only", () => {
+    const LOCAL_AL = `codeunit 79000 "Sandbox Logic"
+{
+    procedure IsOverBudget(Amount: Decimal; Budget: Decimal): Boolean
+    begin
+        exit(Over(Amount, Budget));
+    end;
+
+    local procedure Over(Amount: Decimal; Budget: Decimal): Boolean
+    begin
+        exit(Amount > Budget);
+    end;
+}
+`;
+    async function localRun(coverage: "fenced" | "procedure") {
+      const dirs = await makeProject();
+      await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), LOCAL_AL);
+      const backend = new StubBackend({ ...CAPS_NST, coverage }, () => "pass");
+      backend.coverageEntriesFor = () => [
+        { objectType: "Codeunit", objectId: 79000, procedure: "IsOverBudget" },
+        { objectType: "Codeunit", objectId: 79000 },
+      ];
+      const store = new ResultsStore(":memory:");
+      try {
+        const report = await runSession({ backend, store, ...dirs, selectorIds });
+        return report.mutants.filter((m) => m.procedureName === "Over");
+      } finally {
+        store.close();
+      }
+    }
+
+    test("fenced: a local whose member key misses is NOT widened to the object, it is no-coverage", async () => {
+      const over = await localRun("fenced");
+      expect(over.length).toBeGreaterThan(0);
+      for (const m of over) {
+        expect(m.verdict).toBe("no-coverage");
+        expect(m.coveringTests).toEqual([]);
+      }
+    });
+
+    test("hub (procedure): the same local IS widened to the object and run, so it survives", async () => {
+      const over = await localRun("procedure");
+      expect(over.length).toBeGreaterThan(0);
+      for (const m of over) {
+        expect(m.verdict).toBe("survived");
+        expect(m.coverageAttribution).toBe("object");
+      }
+    });
+  });
+
   // R516: since then a position-1 timeout earns one unmutated confirmation re-run on every batch;
   // here it passes in well under half the budget, so the kill stands.
   test("timeout under mutant = timeout-killed, after its unmutated confirmation re-run passes", async () => {
@@ -2850,6 +2911,160 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
       expect(report.validity.caveats).not.toContain("tests-permission-refused");
       for (const m of report.mutants.filter((m) => m.verdict === "error"))
         expect(m.failureNote).not.toContain("TestPermissions = Disabled");
+    });
+
+    // R686 (B-small): a found-0 answer UNDER A MUTANT (the mutant made a test codeunit's OnRun
+    // raise during suite discovery) stops the session by name, never as "two consecutive run()
+    // failures", and says how to go on. Any other mid-run transport error keeps today's abort.
+    describe("R686: a mutant that breaks a test codeunit's suite discovery", () => {
+      async function midRun(mutantAnswer: string): Promise<unknown> {
+        const dirs = await qualProject();
+        const backend = new QualificationBackend(baselineFor);
+        const run = backend.run.bind(backend);
+        const store = new ResultsStore(":memory:");
+        return runSession({
+          backend: Object.assign(backend, {
+            run: async (ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> =>
+              (backend.activations.at(-1) ?? null) === null
+                ? run(ref, opts)
+                : { ref, outcome: "error", durationMs: 1, failureMessage: mutantAnswer },
+          }),
+          store,
+          ...dirs,
+          selectorIds,
+        }).then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+      }
+
+      test("single path: MutantBrokeTestDiscoveryError names the mutant, its file and the codeunit, and --resume / --exclude", async () => {
+        const err = await midRun(
+          runMutantLineCountMessage(0, "expected exactly one method SupportedTest, found 0"),
+        );
+        expect(err).toBeInstanceOf(MutantBrokeTestDiscoveryError);
+        const msg = (err as Error).message;
+        expect(msg).not.toContain("two consecutive");
+        for (const s of ["SandboxLogic.Codeunit.al", "Sandbox Tests", "--resume", "--exclude"])
+          expect(msg).toContain(s);
+      });
+
+      test("grouped path: suite-unresolved found 0 names the reason's codeunit", async () => {
+        const err = await midRun(
+          `${GROUP_SUITE_UNRESOLVED_HEAD}expected exactly one method SupportedTest in codeunit 50981, found 0`,
+        );
+        expect(err).toBeInstanceOf(MutantBrokeTestDiscoveryError);
+        expect((err as Error).message).toContain("codeunit 50981");
+      });
+
+      // Build review S1: the baseline wiring end to end. A proven, installed test app whose COMPILED
+      // symbols declare both tests of "Sandbox Tests", and BC answering found 0 for both: the OnRun
+      // cause is named. The same run without symbols (no compiled evidence) stays a stale refusal
+      // with ONRUN_HINT. Red check: hard-code `testsCompiledInPublishedPackage` to false.
+      test("baseline: a proven app whose compiled symbols declare the blanked codeunit -> TestCodeunitDiscoveryError", async () => {
+        const NS = 'xmlns="http://schemas.microsoft.com/navx/2015/manifest"';
+        const symbols = JSON.stringify({
+          Codeunits: [
+            {
+              Id: 79100,
+              Name: "Sandbox Tests",
+              Properties: [{ Name: "Subtype", Value: "Test" }],
+              Methods: ["GreenTest", "UnsupportedTest"].map((m, i) => ({
+                Id: i + 1,
+                Name: m,
+                Attributes: [{ Name: "Test" }],
+              })),
+            },
+          ],
+        });
+        const compiled = new Uint8Array(
+          buildFakeAppWithEntries({
+            "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${TEST_APP.id}" Name="${TEST_APP.name}" Publisher="${TEST_APP.publisher}" Version="1.0.0.0" /></Package>`,
+            "SymbolReference.json": symbols,
+          }),
+        );
+        const allFound0 = (method: string) => ({
+          outcome: "error" as const,
+          procedure: method === "GreenTest" ? "IsOverBudget" : "IsUnderBudget",
+          failureMessage: runMutantLineCountMessage(
+            0,
+            `expected exactly one method ${method}, found 0`,
+          ),
+        });
+        const baselineRun = async (pkg: Uint8Array) => {
+          const dirs = await qualProject();
+          await Bun.write(join(dirs.testDir, "app.json"), testAppJson());
+          const backend = new QualificationBackend(allFound0);
+          return runSession({
+            backend: Object.assign(backend, servesTestApp(pkg)),
+            store: new ResultsStore(":memory:"),
+            ...dirs,
+            selectorIds,
+          }).then(
+            () => undefined,
+            (e: unknown) => e,
+          );
+        };
+        const named = await baselineRun(compiled);
+        expect(named).toBeInstanceOf(TestCodeunitDiscoveryError);
+        expect((named as Error).message).toContain('"Sandbox Tests"');
+        const unproven = await baselineRun(testAppPackage());
+        expect(unproven).toBeInstanceOf(StaleTestAppError);
+        expect((unproven as Error).message).toContain(ONRUN_HINT);
+      });
+
+      // Build review S2: the kill's unmutated confirm answering found-0 is not the mutant's doing.
+      test("a found-0 on the unmutated single-path confirm (after a kill) never stops the session as the mutant's doing", async () => {
+        const dirs = await qualProject();
+        const backend = new QualificationBackend(baselineFor);
+        const run = backend.run.bind(backend);
+        let mutantRan = false;
+        let confirms = 0;
+        const err = await runSession({
+          backend: Object.assign(backend, {
+            run: async (ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> => {
+              if ((backend.activations.at(-1) ?? null) !== null) {
+                mutantRan = true;
+                return run(ref, opts); // the stub's mutant run: a kill
+              }
+              if (mutantRan) confirms++;
+              return mutantRan
+                ? {
+                    ref,
+                    outcome: "error",
+                    durationMs: 1,
+                    failureMessage: runMutantLineCountMessage(
+                      0,
+                      `expected exactly one method ${ref.method}, found 0`,
+                    ),
+                  }
+                : run(ref, opts);
+            },
+          }),
+          store: new ResultsStore(":memory:"),
+          ...dirs,
+          selectorIds,
+        }).then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+        // The single path's confirm found-0 never reaches the abort (the session completes); the
+        // `transportErrorUnderMutant` flag guards the GROUPED warm replay, which this stub cannot
+        // reach (recorded in redcheck.md and R688).
+        expect([mutantRan, confirms > 0, err]).toEqual([true, true, undefined]);
+      });
+
+      test("grouped found 2, and any other transport error, keep today's abort", async () => {
+        for (const answer of [
+          `${GROUP_SUITE_UNRESOLVED_HEAD}expected exactly one method SupportedTest in codeunit 50981, found 2`,
+          runMutantLineCountMessage(0, "expected exactly one method SupportedTest, found 2"),
+          "some other transport fault",
+        ]) {
+          const err = await midRun(answer);
+          expect(err).not.toBeInstanceOf(MutantBrokeTestDiscoveryError);
+          expect((err as Error).message).toContain("two consecutive run() failures");
+        }
+      });
     });
 
     // R462: the published test app is hashed before the baseline (R192's snapshot key) and again at
@@ -9193,6 +9408,16 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
     interface EnvRun {
       /** The test app the server serves after the hook (`null`: the read fails). */
       readonly post: Uint8Array | null;
+      /** R680: the server's `serverGeneration` (HarnessInfo); default `FAKE_GENERATION`. */
+      readonly generation?: string;
+      /** R680: the lease client's acquire answers, in order; default one grant. */
+      readonly acquireQueue?: AcquireOutcome[];
+      /**
+       * R680: the server restarts after the session's FIRST HarnessInfo read: every later read
+       * answers this generation, and, as `TryAcquire` does, an acquire at any other expected
+       * generation is refused `generation-changed`.
+       */
+      readonly restartAfterFirstRead?: string;
       /** The publishApps test-app file the hook publishes; default `post`, else P2. */
       readonly file?: Uint8Array;
       /** Installed versions by app id; default the test app at 1.0.0.2, others 1.0.0.0. */
@@ -9289,15 +9514,38 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         return served ?? failed;
       };
       const client = new FakeLeaseClient();
+      if (o.acquireQueue !== undefined) client.acquireQueue = o.acquireQueue;
       // R496: a lease client that marks the moment the lease is granted, so the server can change
       // a dependency between this session's pre-lease walk and its walk under the lease.
+      // R680: every HarnessInfo read answers the server's generation; `generationReads` counts them.
+      let generationReads = 0;
+      const current = () =>
+        o.restartAfterFirstRead !== undefined && generationReads > 0
+          ? o.restartAfterFirstRead
+          : (o.generation ?? FAKE_GENERATION);
       const acquire = client.acquire.bind(client);
       client.acquire = async (...args: Parameters<typeof acquire>) => {
+        const [, , , expectedGeneration] = args;
+        if (o.restartAfterFirstRead !== undefined && expectedGeneration !== current()) {
+          client.acquireArgs.push({
+            owner: args[0],
+            ttlSeconds: args[1],
+            clientNonce: args[2],
+            expectedGeneration,
+          });
+          return { granted: false, reason: "generation-changed" };
+        }
         const got = await acquire(...args);
         acquired = true;
         return got;
       };
-      const { lease } = leaseCfg(client);
+      const { lease } = leaseCfg(client, {
+        serverGeneration: async () => {
+          const g = current();
+          generationReads++;
+          return g;
+        },
+      });
       const backend = leaseBackend({
         fetchPublishedAppPackage: fetch,
         ...(o.dependentCount !== undefined ? { dependentCount: o.dependentCount } : {}),
@@ -9377,6 +9625,8 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         fetchesAfterHook: () => fetchesAfterHook,
         readsDuringHook: () => readsDuringHook,
         installedCalls,
+        client,
+        generationReads: () => generationReads,
       };
     }
 
@@ -9629,6 +9879,165 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         expect(r.outcome).not.toBeInstanceOf(Error);
         r.store.close();
       });
+    });
+
+    // R680: a resume across a change of the server's generation (a restart of these in-memory
+    // servers, or a ForceResetLease) carries nothing. Each prior run is proven, so the test-app
+    // checks pass and only the generation can refuse; the refusals assert the class, not a message.
+    describe("R680: a resume refuses when the server's generation changed", () => {
+      const proven = { pre: P2, post: P2, installed: { [APP_ID]: ["1.0.0.2"] } } as const;
+      const G1 = "1".repeat(32);
+      const G2 = "2".repeat(32);
+      const priorRun = async (generation: string) => {
+        const first = await envRun({ post: P2, generation });
+        expect(first.outcome).not.toBeInstanceOf(Error);
+        expect(first.store.getRun(first.runId)?.serverGeneration).toBe(generation);
+        return first;
+      };
+      const maxRunId = (s: ResultsStore) =>
+        (s.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+      const refused = (r: { outcome: unknown }, recorded: string | null, now: string) => {
+        expect(r.outcome).toBeInstanceOf(ServerGenerationChangedError);
+        const e = r.outcome as ServerGenerationChangedError;
+        expect(e.recorded).toBe(recorded);
+        expect(e.current).toBe(now);
+        return e.message;
+      };
+
+      test("--resume-run across a changed generation refuses by name, before any run row", async () => {
+        const first = await priorRun(G1);
+        const r = await envRun({
+          ...proven,
+          generation: G2,
+          dirs: first.dirs,
+          store: first.store,
+          extra: { resume: first.runId },
+        });
+        const msg = refused(r, G1, G2);
+        expect(msg).toContain(`--resume-run ${first.runId}`);
+        expect(msg).toContain(G1);
+        expect(msg).toContain(G2);
+        expect(maxRunId(r.store)).toBe(first.runId);
+        r.store.close();
+      });
+
+      test("bare --resume across a changed generation refuses by name", async () => {
+        const first = await priorRun(G1);
+        first.store.db.run("UPDATE runs SET finished_at = NULL WHERE id = ?", [first.runId]);
+        const r = await envRun({
+          ...proven,
+          generation: G2,
+          dirs: first.dirs,
+          store: first.store,
+          extra: { resume: "last" },
+        });
+        refused(r, G1, G2);
+        expect(maxRunId(r.store)).toBe(first.runId);
+        r.store.close();
+      });
+
+      test("a resumed run that recorded no generation refuses by name (no back-compat)", async () => {
+        const first = await priorRun(G1);
+        first.store.db.run("UPDATE runs SET server_generation = NULL WHERE id = ?", [first.runId]);
+        const r = await envRun({
+          ...proven,
+          generation: G1,
+          dirs: first.dirs,
+          store: first.store,
+          extra: { resume: first.runId },
+        });
+        expect(refused(r, null, G1)).toContain("none recorded");
+        r.store.close();
+      });
+
+      // Build review M3: the rule is the same for a bcdev session WITHOUT the env-tool hook.
+      test("a session without the hook refuses across a changed generation too", async () => {
+        const first = await envRun({ post: P2, generation: G1, noHook: true });
+        expect(first.outcome).not.toBeInstanceOf(Error);
+        const r = await envRun({
+          post: P2,
+          generation: G2,
+          noHook: true,
+          dirs: first.dirs,
+          store: first.store,
+          extra: { resume: first.runId },
+        });
+        refused(r, G1, G2);
+        r.store.close();
+      });
+
+      test("control: the same generation resumes and carries", async () => {
+        const first = await priorRun(G1);
+        const r = await envRun({
+          ...proven,
+          generation: G1,
+          dirs: first.dirs,
+          store: first.store,
+          extra: { resume: first.runId },
+        });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect((r.outcome as SessionReport).resumedFrom?.runId).toBe(first.runId);
+        expect(r.store.getRun(r.runId)?.serverGeneration).toBe(G1);
+        r.store.close();
+      });
+
+      test("the lease is asked at the generation read first, and that read is the only one", async () => {
+        const r = await envRun({ post: P2, generation: G1 });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(r.client.acquireArgs[0]?.expectedGeneration).toBe(G1);
+        expect(r.generationReads()).toBe(1);
+        // The run row records the very generation the lease was asked at.
+        expect(r.store.getRun(r.runId)?.serverGeneration).toBe(G1);
+        r.store.close();
+      });
+
+      for (const resumed of [false, true]) {
+        test(`a restart between the first read and the lease stops the ${resumed ? "resumed" : "fresh"} session before any deploy`, async () => {
+          const first = resumed ? await priorRun(G1) : undefined;
+          const r = await envRun({
+            ...(resumed ? proven : { post: P2 }),
+            generation: G1,
+            restartAfterFirstRead: G2,
+            ...(first !== undefined
+              ? { dirs: first.dirs, store: first.store, extra: { resume: first.runId } }
+              : {}),
+          });
+          expect(r.outcome).toBeInstanceOf(LeaseUnavailableError);
+          expect((r.outcome as Error).message).toContain("generation-changed");
+          expect(r.client.acquireArgs[0]?.expectedGeneration).toBe(G1);
+          expect(r.store.baselineTests(r.runId)).toEqual([]);
+          r.store.close();
+        });
+      }
+
+      // The R192 snapshot (plan review I1): run A's baseline, recorded before a restart, must not
+      // be reused by a resumed run after it. Run B is the one resumed; it loses its own snapshot and
+      // a mutant, so A's is the only candidate. Under A's own generation it is reused (control).
+      for (const same of [false, true]) {
+        test(`resume: a snapshot from a run on ${same ? "the same" : "another"} generation is ${same ? "reused (control)" : "not reused"}`, async () => {
+          const a = await envRun({ post: P2, generation: G1 });
+          expect(a.outcome).not.toBeInstanceOf(Error);
+          const now = same ? G1 : G2;
+          const b = await envRun({ post: P2, generation: now, dirs: a.dirs, store: a.store });
+          expect(b.outcome).not.toBeInstanceOf(Error);
+          a.store.db.run("DELETE FROM baseline_snapshots WHERE run_id = ?", [b.runId]);
+          a.store.db.run("UPDATE runs SET finished_at = NULL WHERE id = ?", [b.runId]);
+          const victim = a.store.db
+            .query("SELECT MIN(id) AS id FROM mutants WHERE run_id = ?")
+            .get(b.runId) as { id: number };
+          a.store.db.run("DELETE FROM mutants WHERE id = ?", [victim.id]);
+          const r = await envRun({
+            ...proven,
+            generation: now,
+            dirs: a.dirs,
+            store: a.store,
+            extra: { resume: b.runId },
+          });
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          expect(r.reuseWarning).toHaveLength(same ? 1 : 0);
+          r.store.close();
+        });
+      }
     });
 
     // R492 item 1: the server serves P2 while P1 is still installed, so run 1 MEASURES P1. Later P2

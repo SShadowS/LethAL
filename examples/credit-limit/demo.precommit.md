@@ -91,3 +91,39 @@ rises from 73.3% to **74.2%**, the right direction for an arm that adds one kill
 
 The re-run behind this freeze was executed TWICE against Cronus283 and the two runs are per-mutant
 identical, so the demo is reproducible and not merely recorded.
+
+## Amended 2026-10-23 by R-560c: re-frozen at the current identity scheme, on bc1 (written before the run)
+
+**Why.** R560: this stage predates R556 and R355. Its baseline records no identity scheme, no mutated-text hash
+and no coverage mode, so a mutant changed under an unchanged key is not caught here. Only a fresh live run can add
+them (`campaign freeze` refuses a report with no `coverageMode`).
+
+**The run, twice.**
+- **Server:** bc1 (BC 28.4 W1, company `CRONUS International Ltd.`), under lane bugs' coord lease. Cronus283 is gone.
+- **LethAL:** branch `lethal/r560c`, head `dba8db9d327bae3f92b83348a7bd1a0331239f5b`, from source.
+- **Setup:** `bun scripts/r560c-credit-limit-setup.ts --server bc1`. It writes the gitignored
+  `lethal.config.bc1.json` (selector ids 90297-90299) and publishes credit-limit and credit-limit-tests in Dev
+  scope, by content.
+- **Command:** `lethal run --project examples/credit-limit --tests examples/credit-limit-tests --backend bcdev
+  --config examples/credit-limit/lethal.config.bc1.json --out <scratch>/demo.report.json --progress-out
+  <scratch>/demo.events.ndjson`, with the default coverage mode (`fenced`).
+
+**Prediction: per-mutant identical to the committed `demo.baseline.json`.**
+- 46 sites, 42 deployed. Checked offline at this head: the dry run gives 46 and 42, with the same operator counts
+  as the baseline's keys.
+- A 5-test baseline, all green. Killed 23, survived 8, no-coverage 11, error 0. The same verdict, `killingTest`,
+  `coverageFiltered` and `errorClass` for every key.
+
+**The check, in this order.**
+1. Run 1, then `lethal campaign compare --manifest examples/credit-limit/campaign.json --stage demo --report <run 1>`
+   against the committed baseline. It must report a per-mutant match. Its identity and coverage-mode UNVERIFIED notes
+   are expected: the stage records neither.
+   - **Any per-mutant difference is a BLOCK.** Archive the report as `demo.mismatch.report.json`, re-freeze nothing,
+     and report it.
+2. On a match: delete `demo.baseline.json` and run `lethal campaign freeze --stage demo` on run 1. Review the diff:
+   the same keys, and per key the same verdict, `killingTest`, `coverageFiltered` and `errorClass`. Only
+   `identityScheme`, `coverageMode` and the per-row `mutatedTextSha256` are new.
+   - A key that changes, appears or disappears is a BLOCK, as above.
+3. Run 2, then `campaign compare` against the new baseline. It must match per mutant, with every row's text checked.
+4. Commit: the new baseline, `demo.report.json` and `demo.events.ndjson` from run 1, and the README's measured-result
+   section updated to run 1's figures and server.

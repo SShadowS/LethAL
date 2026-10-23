@@ -548,6 +548,20 @@ describe("validateBcDevConfig", () => {
   test("empty mcpCommand array counts as missing", () => {
     expect(() => validateBcDevConfig({ ...full, mcpCommand: [] })).toThrow(/mcpCommand/);
   });
+
+  test("R681: every accepted coverageMode passes", () => {
+    for (const coverageMode of ["procedure", "none", "fenced"] as const) {
+      expect(validateBcDevConfig({ ...full, coverageMode })).toEqual({ ...full, coverageMode });
+    }
+  });
+
+  test('R681: an unknown coverageMode ("line", a typo) is refused by name, listing the accepted values', () => {
+    for (const bad of ["line", "Fenced", "fenced "]) {
+      expect(() => validateBcDevConfig({ ...full, coverageMode: bad as "fenced" })).toThrow(
+        `"coverageMode" ${JSON.stringify(bad)} is not one of "procedure", "none", "fenced"`,
+      );
+    }
+  });
 });
 
 describe("odataBaseUrl", () => {

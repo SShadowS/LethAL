@@ -242,9 +242,12 @@ import type {
 } from "./selection";
 import { SessionSafety, SessionUnsafeError } from "./session-safety";
 import {
+  MutantBrokeTestDiscoveryError,
+  baselineFoundNoneRefusal,
   describeStaleTestApp,
+  groupedFoundNone,
+  isRunMutantFoundNone,
   isRunMutantLineCountMessage,
-  testAppRefusal,
 } from "./stale-test-app";
 import { type LendingSession, sameHiddenFiles } from "./store";
 import type { ResultsStore } from "./store";
@@ -253,6 +256,7 @@ import { TestAppError } from "./test-app-publish";
 import { TestDigestError, type TestDigestParts, testDigestsOfModel } from "./test-digest";
 import {
   PublishAppUnreadableError,
+  ServerGenerationChangedError,
   TestAppDriftedError,
   TestAppRepublishedError,
   type TestArmEvidence,
@@ -3964,6 +3968,18 @@ interface PendingResumeCheck {
   readonly resourceKey: string | undefined;
   /** Why this session is open-world, when it is (`testAppIdentity`). */
   readonly openWorldWhy: string | undefined;
+  /** R680: this session's `serverGeneration`, `undefined` when it has no lease (no server). */
+  readonly serverGeneration?: string | undefined;
+}
+
+/**
+ * R680: a session with a server generation resumes only a run that recorded the same one. A run that
+ * recorded none (before R680) refuses too: no back-compat before the release. A session with no
+ * generation has no lease and no server; its prior has none either (the backend is in the key).
+ */
+function assertSameServerGeneration(row: RunRow, flag: string, current: string | undefined): void {
+  if (current === undefined || row.serverGeneration === current) return;
+  throw new ServerGenerationChangedError(flag, row.id, row.serverGeneration, current);
 }
 
 /** R601: why a pending prior is not resumed by this session, in one or two sentences. */
@@ -4041,6 +4057,8 @@ function resolveResume(
   | undefined {
   if (cfg.resume === undefined) return undefined;
   const sameTestApp = (row: RunRow, flag: string): void => {
+    // R680: first, and for a hook session too: the server's generation is fixed before any hook.
+    assertSameServerGeneration(row, flag, pending.serverGeneration);
     if (!testAppAfterHook) assertSameTestApp(row, flag, testAppHash, pending);
   };
   // R619: the one lend decision (`runMayLend`), called once in each branch below: step 1 (R586,
@@ -4416,6 +4434,9 @@ interface ScoreBatchInput {
   /** For the section G note only: `compiled?.artifactId`, or the bound artifact's id. */
   readonly artifactId: string | undefined;
   readonly tests: readonly TestMethodRef[];
+  /** R686: the session's test-arm evidence is R403's compiled membership of the PUBLISHED package
+   *  (`{kind: "compiled", from: "published-package"}`). Absent or false: not proven. */
+  readonly testsCompiledInPublishedPackage?: boolean;
   /** R192 snapshot reuse and recording, runSession only. Absent: always run, record nothing. */
   readonly snapshot?: {
     readonly batchDir: string;
@@ -4429,6 +4450,9 @@ interface ScoreBatchInput {
      *  read stops the session (`assertNoTestAppDrift`). R496: with its dependency fingerprint,
      *  which a reused snapshot's run must have recorded too. */
     readonly provenTestApp?: TestAppIdentity;
+    /** R680: the session's `serverGeneration`; with one, only a snapshot of a run on the same
+     *  generation is reused (a baseline from before a restart describes data that may be gone). */
+    readonly serverGeneration?: string;
     /** R586: `runMayLend` step 1's session side; a snapshot from another backend or v3 build is
      *  not reused. Absent: no v3 snapshot is reused. */
     readonly lendingSession?: LendingSession;
@@ -5059,7 +5083,8 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   try {
     await activateOnce(backend, safety, null);
     if (input.snapshot !== undefined) {
-      const { batchDir, testDir, allowReuse, closedWorld, provenTestApp } = input.snapshot;
+      const { batchDir, testDir, allowReuse, closedWorld, provenTestApp, serverGeneration } =
+        input.snapshot;
       const batchHash = await hashAlTree(batchDir);
       hashTestApp = await batchTestAppReader(backend, testDir, closedWorld);
       const read = await hashTestApp();
@@ -5073,7 +5098,13 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       const runsWhatWasRead = provenTestApp !== undefined && testAppHash === provenTestApp.hash;
       const reusable =
         allowReuse && testAppHash !== undefined && runsWhatWasRead
-          ? store.findBaselineSnapshot(batchHash, testAppHash, provenTestApp.deps, caps.coverage)
+          ? store.findBaselineSnapshot(
+              batchHash,
+              testAppHash,
+              provenTestApp.deps,
+              caps.coverage,
+              serverGeneration,
+            )
           : null;
       reused = snapshotApplies(reusable, batchHash, testAppHash) ? reusable : undefined;
       // R619: the one lend decision (`runMayLend`), on the snapshot's OWN run, since
@@ -5296,7 +5327,15 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     // matcher when the refusal is the only output the run produces.
     return described === undefined
       ? []
-      : [{ name: qualifiedTestName(b.ref), description: described }];
+      : [
+          {
+            name: qualifiedTestName(b.ref),
+            description: described,
+            // R686: whose codeunit, and whether it is the found-0 form an OnRun raise also gives.
+            codeunit: b.ref.codeunitName,
+            foundNone: isRunMutantFoundNone(b.verdict.failureMessage),
+          },
+        ];
   });
   if (missingFromServer.length > 0) {
     // R462: a failed re-read proves nothing, so it is `undefined`, never a guess.
@@ -5307,12 +5346,22 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     // nor its verdicts lend anything later.
     const proven = input.snapshot?.provenTestApp?.hash;
     if (proven !== undefined && after !== proven) store.setRunTestAppHash(runId, null, false, null);
-    throw testAppRefusal(
-      missingFromServer,
-      snapshotKey?.testAppHash,
+    // R686: a codeunit whose OnRun raises gives the same found-0 answer; named only when proven.
+    const unread = unreadOf(reread) ?? firstUnread;
+    const testsPerCodeunit = new Map<string, number>();
+    for (const b of baseline) {
+      const c = b.ref.codeunitName;
+      testsPerCodeunit.set(c, (testsPerCodeunit.get(c) ?? 0) + 1);
+    }
+    throw baselineFoundNoneRefusal({
+      missing: missingFromServer,
+      testsPerCodeunit,
+      proven,
+      before: snapshotKey?.testAppHash,
       after,
-      unreadOf(reread) ?? firstUnread,
-    );
+      compiledInPublishedPackage: input.testsCompiledInPublishedPackage === true,
+      ...(unread !== undefined ? { unread } : {}),
+    });
   }
 
   const plan = input.select(baseline);
@@ -5716,6 +5765,16 @@ async function runSessionBody(
   if (nestedWarning !== undefined) {
     emit({ type: "warning", code: "nested-project", message: nestedWarning });
   }
+  // R680: the server's generation, read ONCE, before the first guard ask. The run row records it, a
+  // resume compares it, and the lease is asked at it, so a restart after this read is refused by the
+  // server itself (`generation-changed`) before anything is deployed. No lease: no server, none.
+  const sessionGeneration =
+    cfg.lease !== undefined ? await cfg.lease.serverGeneration() : undefined;
+  if (sessionGeneration === "") {
+    throw new LeaseUnavailableError(
+      "the harness reported an empty serverGeneration, so this session cannot record which server generation it runs on, nor ask the lease at one (R680)",
+    );
+  }
   // R-372: the digests come from the same read, so they describe the body the server RUNS.
   const {
     testAppHash,
@@ -5849,7 +5908,7 @@ async function runSessionBody(
     testPageRefusedNames,
     envPublishes !== undefined,
     lendingSession,
-    { resourceKey, openWorldWhy },
+    { resourceKey, openWorldWhy, serverGeneration: sessionGeneration },
   );
 
   const runId = cfg.store.createRun({
@@ -5867,6 +5926,8 @@ async function runSessionBody(
     generationSourceSha256: sourceHashAtGeneration,
     // R360: the group `finishRun` prunes installed bundles within, with the run's app id.
     ...(resourceKey !== undefined ? { resourceKey } : {}),
+    // R680: the generation this session runs on (read before the guard ask, the lease asked at it).
+    ...(sessionGeneration !== undefined ? { serverGeneration: sessionGeneration } : {}),
     // R492: an env-tool session records its test app only once the read-back after the hook is
     // proven installed (below), never the pre-lease read, which can hold the OUTGOING one.
     // R495: any other session records it only when proven, and the flag with it.
@@ -6238,7 +6299,12 @@ async function runSessionBody(
    */
   let resyncSessionOpSeq: (() => Promise<void>) | undefined;
   ({ leaseSession, resyncOpSeq: resyncSessionOpSeq } = await openLeaseScope({
-    lease: cfg.lease,
+    // R680: the lease is asked at the generation recorded on the run row, never at a second read: the
+    // server grants only at the generation it holds, so a restart since is refused `generation-changed`.
+    lease:
+      cfg.lease !== undefined && sessionGeneration !== undefined
+        ? { ...cfg.lease, serverGeneration: async () => sessionGeneration }
+        : cfg.lease,
     backend: cfg.backend,
     safety,
     store: cfg.store,
@@ -7629,6 +7695,12 @@ async function runSessionBody(
         batchIndex: batchIdx,
         artifactId: compiled?.artifactId,
         tests,
+        // R686 (build review B1): a hook session's proven app is the read AFTER its hook, which the
+        // pre-lease membership check never saw; only a hook-free session's proof covers the check.
+        testsCompiledInPublishedPackage:
+          envPublishes === undefined &&
+          testArmEvidence.kind === "compiled" &&
+          testArmEvidence.from === "published-package",
         snapshot: {
           batchDir,
           testDir: cfg.testDir,
@@ -7641,6 +7713,7 @@ async function runSessionBody(
             !manifest.mutants.some((m) => m.coverageArmNames !== undefined),
           closedWorld: sessionClosedWorld,
           ...(historyTestApp !== undefined ? { provenTestApp: historyTestApp } : {}),
+          ...(sessionGeneration !== undefined ? { serverGeneration: sessionGeneration } : {}),
           lendingSession,
         },
         select,
@@ -10508,6 +10581,9 @@ async function runMutantsOnBackend(args: {
       sessionId?: number;
     }> = [];
     let transportErrorRef: TestMethodRef | undefined;
+    // R686 (build review S2): the transport error came from the MUTATED covering call itself, not
+    // from a confirm or replay that ran with no mutant active.
+    let transportErrorUnderMutant = false;
     // R197: tests that already killed in this procedure first, then the narrowest, then the
     // fastest. A cost heuristic only; see test-order.ts for the measurement behind it.
     const ordered = orderCoveringTests(covering, m, args.killLedger, args.memberCountsByTest);
@@ -10619,7 +10695,10 @@ async function runMutantsOnBackend(args: {
         verdict = "error";
         failureNote = nonVerdict.failureNote;
         cause = nonVerdict.cause;
-        if (nonVerdict.transportError) transportErrorRef = ref;
+        if (nonVerdict.transportError) {
+          transportErrorRef = ref;
+          transportErrorUnderMutant = true;
+        }
         break;
       }
       // R206 §2.1, the session guard: the server's own per-session count of test methods run
@@ -11088,6 +11167,30 @@ async function runMutantsOnBackend(args: {
       );
     }
     if (transportErrorRef !== undefined) {
+      // R686 (B-small): a found-0 answer under a mutant is not a transport fault. The session still
+      // stops (a per-mutant verdict needs an unmutated confirm, filed as its own item), but by its
+      // likely cause and with how to go on. The grouped answer names its own codeunit; its `ref` is
+      // only the chunk's first method.
+      const grouped = groupedFoundNone(failureNote);
+      if (
+        transportErrorUnderMutant &&
+        (grouped !== undefined || isRunMutantFoundNone(failureNote))
+      ) {
+        throw new MutantBrokeTestDiscoveryError({
+          mutantId: m.mutantId,
+          file: m.file,
+          operator: m.operatorName,
+          test:
+            grouped !== undefined
+              ? `${grouped.method} (codeunit ${grouped.codeunitId})`
+              : qualifiedTestName(transportErrorRef),
+          codeunit:
+            grouped !== undefined
+              ? `codeunit ${grouped.codeunitId}`
+              : transportErrorRef.codeunitName,
+          serverText: failureNote ?? "",
+        });
+      }
       throw new Error(
         `backend transport error: two consecutive run() failures for mutant ${m.mutantId} ` +
           `(test ${transportErrorRef.method}) — aborting session per spec §11: ${failureNote ?? ""}`,
