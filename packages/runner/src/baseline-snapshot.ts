@@ -18,7 +18,7 @@
  * same lineage is not a different kind of risk; it is stated rather than measured away.
  *
  * The batch hash covers the `.al` files of the instrumented artifact directory EXCEPT the three
- * control files LethAL emits, because `MutationSelector.Codeunit.al` embeds the artifact id, which
+ * control files LethAL emits at the directory's root (a same-named file elsewhere is hashed), because `MutationSelector.Codeunit.al` embeds the artifact id, which
  * is random per artifact by design (`newArtifactId`), and it carries no target code whose lines a
  * coverage row could name. Two artifacts of one batch therefore hash the same, which is what makes
  * a prior run's fenced line-number coverage apply to this run's artifact.
@@ -67,7 +67,7 @@ export interface BaselineSnapshot {
 
 /**
  * SHA-256 over every `.al` file under `dir` (recursively, sorted, path and bytes), skipping the
- * control files. Deterministic across two artifacts of the same batch, different for any change
+ * three control files at the root of `dir` only (R691). Deterministic across two artifacts of the same batch, different for any change
  * to any instrumented line.
  *
  * R655: under the R631 rule (`hashTestDir`), so a link refuses by name. Its callers hash
@@ -76,7 +76,9 @@ export interface BaselineSnapshot {
  * out of the hash.
  */
 export async function hashAlTree(dir: string): Promise<string> {
-  return hashTestDir(dir);
+  // R691: LethAL writes its control files at the ROOT of this tree only; a same-named file
+  // anywhere else is user AL and is hashed.
+  return hashWalked(dir, "refuse", true);
 }
 
 /**
@@ -85,9 +87,18 @@ export async function hashAlTree(dir: string): Promise<string> {
  * out AL that alc and al-runner would compile. `links` exists only so a test can force a skip.
  */
 export async function hashTestDir(dir: string, links: LinkPolicy = "refuse"): Promise<string> {
+  // R691: LethAL writes nothing here, so no file is left out.
+  return hashWalked(dir, links, false);
+}
+
+async function hashWalked(
+  dir: string,
+  links: LinkPolicy,
+  skipRootControl: boolean,
+): Promise<string> {
   const walk = await walkFiles(dir, { links });
   assertNoUnexcusedLinks(dir, walk.skippedLinks);
-  return hashAlFiles(dir, walk.files);
+  return hashAlFiles(dir, walk.files, skipRootControl);
 }
 
 /** R608: one non-`.al` file of a bound folder, as the proof recorded it. */
@@ -147,11 +158,15 @@ export async function otherFilesDrift(
   return undefined;
 }
 
-async function hashAlFiles(dir: string, all: readonly string[]): Promise<string> {
+async function hashAlFiles(
+  dir: string,
+  all: readonly string[],
+  skipRootControl: boolean,
+): Promise<string> {
   const entries = all
     .map((f) => f.replaceAll("\\", "/"))
     .filter((f) => f.toLowerCase().endsWith(".al"))
-    .filter((f) => !CONTROL_FILES.has(f.split("/").at(-1) ?? ""))
+    .filter((f) => !(skipRootControl && CONTROL_FILES.has(f)))
     .sort();
   const h = createHash("sha256");
   for (const rel of entries) {
