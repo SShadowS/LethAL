@@ -887,30 +887,32 @@ describe("R639 (pre-commitment r9): leg C's BC readings", () => {
 
   // R672 (plan 2026-10-23-r672-v3-refusal-prefix.md §1a, S9 and S10): a one-word-prefixed refusal
   // written as a plain fail reads as the unprefixed one does, never unlike-bc or gone.
+  // R675: the marker after ANY text (a spaced or `::` prefix, an Assert quoting it) reads diverged.
   for (const p of [
     "Error: ",
     "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: ",
+    "Runtime error: ",
+    "a::b: ",
+    "Assert.AreEqual failed. Expected: ",
   ]) {
-    test(`R672 S9: refusal-row-shape reads a "${p}"-prefixed refusal written as a fail as diverged`, async () => {
+    test(`R672/R675 S9: refusal-row-shape reads a fail holding the marker after "${p}" as diverged`, async () => {
       const m = `${p}NotRun: out-of-scope: an outbound HTTP request`;
       expect(verdictOf(await at50653(1, [http({ message: m }), LATER_FAIL]), RRS)).toBe("diverged");
     });
-    test(`R672 S10: commit-under-test-isolation reads a "${p}"-prefixed refusal written as a fail as diverged`, async () => {
+    test(`R672/R675 S10: commit-under-test-isolation reads a fail holding the marker after "${p}" as diverged`, async () => {
       const dressed = row(50657, "CommitCall", "fail", {
         message: `${p}NotRun: out-of-scope: Commit`,
       });
       expect(verdictOf(await at50657(1, [dressed]), CUC)).toBe("diverged");
     });
   }
-  test("R672 S9: an Assert text that quotes the refusal is still unlike-bc (anchored)", async () => {
-    const m = "Assert.AreEqual failed. Expected: NotRun: out-of-scope: x";
-    expect(verdictOf(await at50653(1, [http({ message: m }), LATER_FAIL]), RRS)).toBe("unlike-bc");
-  });
-  test("R672 S10: an Assert text that quotes the refusal is still gone (anchored)", async () => {
-    const quoted = row(50657, "CommitCall", "fail", {
-      message: "Assert.AreEqual failed. Expected: NotRun: out-of-scope: x",
-    });
-    expect(verdictOf(await at50657(1, [quoted]), CUC)).toBe("gone");
+  test("R675 S9/S10: a fail WITHOUT the marker keeps its reading (unlike-bc, gone)", async () => {
+    const other = "out-of-scope: an outbound HTTP request";
+    expect(verdictOf(await at50653(1, [http({ message: other }), LATER_FAIL]), RRS)).toBe(
+      "unlike-bc",
+    );
+    const plain = row(50657, "CommitCall", "fail", { message: "boom" });
+    expect(verdictOf(await at50657(1, [plain]), CUC)).toBe("gone");
   });
 
   const at50655 = (exitCode: number, rows: unknown[]) =>
@@ -1066,23 +1068,70 @@ describe("R667 message-has-no-type-prefix: v3's failure message carries no `<Typ
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("gate-fail");
   });
 
-  // R672: the fact reads `^V3_TYPE_PREFIX` (one word, dots allowed), not only `...Exception: `.
-  for (const message of ["Error: boom 5", "A: B: boom 5", "X.Y: boom 5", "SomeException: boom 5"]) {
-    test(`R672: Fails "${message}" reads diverged and refuses a session with the reason`, async () => {
+  // R675: the fact reads the exact expected start (`boom 5`), so ANY text before it diverges.
+  for (const p of [
+    "Runtime error: ",
+    "al_runtime::Error: ",
+    " ",
+    "[x] ",
+    "A: B: ",
+    "Error: ",
+    "X.Y: ",
+    "SomeException: ",
+  ]) {
+    const message = `${p}boom 5`;
+    test(`R675: Fails "${message}" reads diverged, names the prefix, refuses a session with the reason`, async () => {
       const r = await probe({ cu50650: mainWith(row(50650, "Fails", "fail", { message })) });
-      expect(r.facts.find((f) => f.fact === MSG)?.verdict).toBe("diverged");
+      const f = r.facts.find((x) => x.fact === MSG);
+      expect(f?.verdict).toBe("diverged");
+      expect(f?.measured.startsWith(`prefix ${JSON.stringify(p)}; Fails `)).toBe(true);
       expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("gate-fail");
       const text = v3ContractRefusals(r).join("\n");
       expect(text).toMatch(/DIVERGED — message-has-no-type-prefix/);
       expect(text).toContain(`\n    why: ${MESSAGE_PREFIX_REASON}\n`);
     });
   }
-  test("R672: today's two probe texts (boom 5, an Assert.AreEqual text) read matches", async () => {
+  test("R675 (nit A): a Fails text without the expected start reads diverged as reworded, not prefix", async () => {
+    for (const message of ["Boom 5", "Error: Boom 5", "boom 6"]) {
+      const r = await probe({ cu50650: mainWith(row(50650, "Fails", "fail", { message })) });
+      const f = r.facts.find((x) => x.fact === MSG);
+      expect([message, f?.verdict, f?.measured.split("; Fails ")[0]]).toEqual([
+        message,
+        "diverged",
+        `reworded ${JSON.stringify(message)}`,
+      ]);
+    }
+  });
+  test("R675: an Assert text with text before `Assert.AreEqual failed.` reads diverged, naming the prefix", async () => {
+    const r = await probe({
+      cu50661: () => ({
+        exitCode: 1,
+        stdout: doc([
+          row(50661, "AssertAreEqual", "fail", {
+            message:
+              "Runtime error: Assert.AreEqual failed. Expected:<1> (Integer). Actual:<2> (Integer). R667 values differ.",
+          }),
+        ]),
+      }),
+    });
+    const f = r.facts.find((x) => x.fact === MSG);
+    expect(f?.verdict).toBe("diverged");
+    expect(f?.measured.startsWith('prefix "Runtime error: "; Fails "boom 5"; ')).toBe(true);
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("gate-fail");
+  });
+  test("R672/R675: today's two probe texts (boom 5, an Assert.AreEqual text) read matches", async () => {
     // The default fake writes R657's measured texts (`boom 5`, `Assert.AreEqual failed. Expected:<1> ...`).
     const f = (await probe()).facts.find((x) => x.fact === MSG);
     expect(f?.verdict).toBe("matches");
     expect(f?.measured).toContain('Fails "boom 5"');
     expect(f?.measured).toContain("Assert.AreEqual failed. Expected:<1>");
+    expect(f?.measured).not.toMatch(/^(prefix|reworded) /);
+  });
+  test("R675: boom 5 with an appended call stack still matches (startsWith, not equality)", async () => {
+    const r = await probe({
+      cu50650: mainWith(row(50650, "Fails", "fail", { message: "boom 5\n   at Fails line 3" })),
+    });
+    expect(r.facts.find((x) => x.fact === MSG)?.verdict).toBe("matches");
   });
 
   test("a prefixed plain Error() row (Fails) is broken: diverged, gate-fail", async () => {
@@ -1160,11 +1209,13 @@ describe("R667 message-has-no-type-prefix: v3's failure message carries no `<Typ
     // (This fake main call writes no coverage, so only per-test-coverage refuses here.)
     expect(v3ContractRefusals(ok).join("\n")).not.toContain(MSG);
     expect(calls.some((c) => c.includes("--codeunit 50661"))).toBe(false);
-    // A prefixed plain Error(), and a prefixed refusal written as a plain fail (the K1(a) hole):
-    // both refuse the session, naming the reason.
+    // A prefixed plain Error() (any shape, R675), and a prefixed refusal written as a plain fail:
+    // each refuses the session, naming the reason.
     for (const message of [
       PREFIXED,
       "SomeException: NotRun: out-of-scope: an outbound HTTP request",
+      "Runtime error: boom 5",
+      "al_runtime::Error: boom 5",
     ]) {
       const bad = await run(row(50650, "Fails", "fail", { message }));
       const text = v3ContractRefusals(bad).join("\n");
@@ -1175,7 +1226,7 @@ describe("R667 message-has-no-type-prefix: v3's failure message carries no `<Typ
 
   test("the refusal's reason text is pinned", () => {
     expect(MESSAGE_PREFIX_REASON).toBe(
-      "a `<Type>:` prefix on v3's failure messages would turn v3's timeouts into errors (`V3_TIMEOUT_MESSAGE` is anchored), close the serve daemon on every refusal (R612's keep list is anchored), and skew the R553 assertion screen. K1(a) keeps a refusal written as a plain fail unscored only after a ONE-word prefix (`V3_TYPE_PREFIX`, R672); a longer prefix could still make it score as a kill (R667)",
+      "text before, or in place of, the expected start of v3's failure messages (a `<Type>:` prefix of any shape) would turn v3's timeouts into errors (`V3_TIMEOUT_MESSAGE` is anchored), close the serve daemon on every refusal (R612's keep list is anchored), and skew the R553 assertion screen. K1(a) and the serve-keep rule read v3's refusal marker anywhere in a message (R675), so a prefix cannot turn a refusal into a kill; the session still refuses, because v3 no longer writes what was measured",
     );
   });
 });

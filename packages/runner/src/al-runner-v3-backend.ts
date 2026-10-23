@@ -107,8 +107,8 @@ import { ProjectSymlinkRefusedError } from "./walk";
 export const AL_RUNNER_V3_VERSION =
   /^al-?runner 3\.\d+\.\d+(?:-[\w.]+)?(?:\+[0-9A-Za-z.-]+)? \([0-9a-f]+\)$/;
 
-/** v3's refusal row prefix (`NotRun: out-of-scope: <reason>`), R586 measure.md row 14. */
-export const V3_REFUSAL_PREFIX = "NotRun: out-of-scope:";
+/** v3's refusal row prefix; R675 moved its one source to `al-runner-rows.ts`. */
+export { V3_REFUSAL_PREFIX } from "./al-runner-rows";
 
 /** v3's timeout row (`notRun: true`), anchored: `Test exceeded <N>s timeout.` */
 export const V3_TIMEOUT_MESSAGE = /^Test exceeded (\d+)s timeout\.$/;
@@ -335,14 +335,15 @@ export function v3RowVerdict(
     };
   }
   // R639 K1(a), r9 §1: a refusal written WITHOUT notRun (a plain `fail` or `pass` whose message
-  // starts with v3's refusal prefix) never scores: no refusal path becomes a kill, survive or pass.
-  // R672: also after one `V3_TYPE_PREFIX` word (`isV3RefusalText`).
+  // holds v3's refusal marker) never scores: no refusal path becomes a kill, survive or pass.
+  // R675: the marker ANYWHERE in the message (`isV3RefusalText`), so no prefix shape can hide it.
+  // A user Assert that quotes the marker is not a refusal, so the text says "holds the marker".
   if (isV3RefusalText(row.message)) {
     return {
       ref,
       outcome: "error",
       durationMs: wallMs,
-      failureMessage: `${row.message ?? ""} [al-runner v3: a refusal written as a ${row.status}; never scored (R639)]`,
+      failureMessage: `${row.message ?? ""} [al-runner v3: a ${row.status} that holds v3's refusal marker; never scored (R639, R675)]`,
       operation: "completed-accepted",
       runnerRow: "runner-test-error",
     };
@@ -2171,14 +2172,14 @@ function serveLines(rows: readonly V3Row[]): ServerTestLine[] {
   }));
 }
 
-/** R672 (review r2 nit): a row the keep rule closes on because it is a refusal written as a plain
- *  pass/fail (no notRun) is closed by R672's rule, not R612's. */
+/** R672 (review r2 nit), R675: a plain pass/fail (no notRun) that holds v3's refusal marker
+ *  anywhere is closed by R672's rule, not R612's. */
 function r672Unkept(r: V3Row | undefined): string | undefined {
   return r !== undefined &&
     r.notRun !== true &&
     (r.status === "pass" || r.status === "fail") &&
     isV3RefusalText(r.message)
-    ? `a refusal written as a plain ${r.status}, which R672 does not keep`
+    ? `a plain ${r.status} that holds v3's refusal marker (R675), which R672 does not keep`
     : undefined;
 }
 

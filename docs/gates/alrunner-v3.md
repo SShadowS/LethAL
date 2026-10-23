@@ -19,14 +19,15 @@ The legs:
   (`docs/superpowers/specs/2026-10-23-r586-alrunner-v3-precommitment-r12-message-prefix.md`, [[R667]]), the 17th
   contract fact is `message-has-no-type-prefix`: the `message` of a plain `Error()` (`Fails`, on the main call)
   and of an `Assert.AreEqual` failure (codeunit 50661, its own tests app, Microsoft's Library Assert passed as
-  `--dep` from `fixtures/sandbox-data-tests/.alpackages`) must be plain fails that do NOT start with
-  `V3_TYPE_PREFIX` (`[A-Za-z_][\w.]*: `, in `al-runner-rows.ts`; since [[R672]] the same prefix K1(a) in
-  `v3RowVerdict` and the v3 serve-keep rule read, and a strict superset of R553's `...Exception: `). A prefix
-  reads `diverged`: `gate-fail` in leg C, and a refusal in a session, by name (`MESSAGE_PREFIX_REASON`): it would
-  turn v3's timeouts into errors, close the serve daemon on every refusal and skew the R553 assertion screen, and
-  K1(a) keeps a refusal written as a plain fail unscored only after ONE prefix word. The fact is wider than K1(a)
-  on purpose: `A: B: boom` matches, so a build with chained prefixes is refused. The Assert half is gate-only, as `timeout-is-cpu` is: a session reads
-  `Fails` alone (a prefix there still refuses it). Since r7
+  `--dep` from `fixtures/sandbox-data-tests/.alpackages`) must be plain fails whose messages start exactly with
+  `boom 5` and `Assert.AreEqual failed.` (since [[R675]]; `startsWith`, so an appended call stack is fine). Any
+  text before, or in place of, that start reads `diverged` (its `measured` says `prefix "<text>"` or `reworded`):
+  `gate-fail` in leg C, and a refusal in a session, by name (`MESSAGE_PREFIX_REASON`): it would turn v3's timeouts
+  into errors, close the serve daemon on every refusal and skew the R553 assertion screen. It no longer guards
+  verdicts: since R675, K1(a) in `v3RowVerdict`, the v3 serve-keep rule and two defect facts read v3's refusal
+  marker `NotRun: out-of-scope:` ANYWHERE in a `pass`/`fail` message (`isV3RefusalText` in `al-runner-rows.ts`),
+  so no prefix shape can turn a refusal into a kill. The Assert half is gate-only, as `timeout-is-cpu` is: a session reads
+  `Fails` alone (any text before `boom 5` still refuses it). Since r7
   (`docs/superpowers/specs/2026-10-22-r586-alrunner-v3-precommitment-r7-none-selected.md`, 16681485), 8 are
   defect facts (`V3_DEFECT_FACTS` in `al-runner-v3-gate.ts`, `none-selected-exit` included). Since r8
   (`docs/superpowers/specs/2026-10-22-r586-alrunner-v3-precommitment-r8-dependent-notrun.md`, 848371cb), 16 are
@@ -301,3 +302,9 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
   `message-has-no-type-prefix` read `V3_TYPE_PREFIX` instead of `AL_RUNNER_EXCEPTION_PREFIX` (deleted), the same
   prefix K1(a) and the v3 serve-keep rule read. Both probe texts have no `<word>: ` at the start, so the fact is
   predicted `matches` on alpha.2 and edge; still 27 facts. No figure or baseline moves.
+- 2026-10-23: [[R675]] (plan `docs/superpowers/plans/2026-10-23-r675-v3-refusal-marker-anywhere.md`) deletes
+  `V3_TYPE_PREFIX`. `message-has-no-type-prefix` now requires the exact starts `boom 5` and
+  `Assert.AreEqual failed.`, which both builds write in all six logs (`/coord/handoff/R-675/measure.md` §3), so it
+  is predicted `matches` on alpha.2 and edge; still 27 facts. K1(a), serve-keep and the two defect facts read the
+  refusal marker anywhere: 0 of 13,773 stored kills and 0 stored v3 `pass`/`fail` rows hold it, so no verdict,
+  fact reading or daemon count is predicted to move. No figure or baseline moves.

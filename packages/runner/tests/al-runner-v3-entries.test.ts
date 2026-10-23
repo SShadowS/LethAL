@@ -1267,10 +1267,8 @@ describe("R654 S1: R612 T2-T6 on v3's serve-entries", () => {
 describe("R672: a refusal written as a plain fail closes the daemon; the tainted next request never scores", () => {
   const PLAIN_REFUSAL = "NotRun: out-of-scope: runtime panic (bug): x";
   const PREFIXED_REFUSAL = `Error: ${PLAIN_REFUSAL}`;
-  const REFUSALS = [
-    PLAIN_REFUSAL,
-    PREFIXED_REFUSAL,
-  ];
+  // R675: the marker after a spaced prefix (`Runtime error: `) closes the daemon too.
+  const REFUSALS = [PLAIN_REFUSAL, PREFIXED_REFUSAL, `Runtime error: ${PLAIN_REFUSAL}`];
   const tainting = (refusal: string): RowsFn => {
     const tainted = new Set<number>();
     return (m, cu, d, n) =>
@@ -1381,7 +1379,9 @@ describe("R672: a refusal written as a plain fail closes the daemon; the tainted
     await baseline(r.b, SUITE1);
     const err = await r.b.prefetchMutants(plans(["M0001"])).catch((e: unknown) => e);
     expect(String(err)).toContain("al-runner-v3-entries-warmup-dirty");
-    expect(String(err)).toContain("a refusal written as a plain fail, which R672 does not keep");
+    expect(String(err)).toContain(
+      "a plain fail that holds v3's refusal marker (R675), which R672 does not keep",
+    );
     expect(String(err)).not.toContain("R612");
   });
 
@@ -1400,7 +1400,7 @@ describe("R672: a refusal written as a plain fail closes the daemon; the tainted
     const v = await r.b.run(ref("A"), OPTS);
     expect(v.outcome).toBe("error");
     expect(v.failureMessage).toContain(
-      "a refusal written as a plain fail, which R672 does not keep",
+      "a plain fail that holds v3's refusal marker (R675), which R672 does not keep",
     );
   });
 });

@@ -143,20 +143,29 @@ describe("serveDaemonReusable, the rule alone", () => {
   // R672 (plan 2026-10-23-r672-v3-refusal-prefix.md §1c): a refusal written as a plain pass/fail
   // (no notRun) says the runtime's state is not trusted, so v3 closes the daemon on it.
   const REFUSAL = "NotRun: out-of-scope: x";
-  test("R672: v3 closes on a refusal written as a plain fail or pass, unprefixed or one-word prefixed", () => {
+  // R675: and on a plain pass/fail that holds the marker after ANY text (an Assert quoting it too).
+  test("R672/R675: v3 closes on a plain fail or pass that holds the refusal marker anywhere", () => {
     for (const row of [
       r("fail", { notRun: false, message: REFUSAL }),
       r("fail", { notRun: false, message: `Error: ${REFUSAL}` }),
       r("pass", { message: `X.Y: ${REFUSAL}` }),
+      r("fail", { message: `Runtime error: ${REFUSAL}` }),
+      r("pass", { message: `Runtime error: ${REFUSAL}` }),
+      r("fail", { message: `a::b: ${REFUSAL}` }),
+      r("fail", { message: `A: B: ${REFUSAL}` }),
+      r("fail", { message: `Assert.AreEqual failed. Expected: ${REFUSAL}` }),
     ]) {
       expect([row, serveDaemonReusable([row], "v3")]).toEqual([row, false]);
     }
   });
-  test("R672: v3 still keeps on a plain fail, an Assert text quoting the refusal, and a pass; v2 is unchanged", () => {
+  test("R672/R675: v3 still keeps on a plain fail, a pass and every R612 keep-list refusal; v2 is unchanged", () => {
     for (const row of [
-      r("fail", { message: `Assert.AreEqual failed. Expected: ${REFUSAL}` }),
       r("fail", { message: "boom" }),
+      r("fail", { message: "out-of-scope: x" }),
       r("pass"),
+      ...[HTTP, COMMIT, CASCADE, ONRUN, NO_CALLEE].map((message) =>
+        r("error", { notRun: true, message }),
+      ),
     ]) {
       expect([row, serveDaemonReusable([row], "v3")]).toEqual([row, true]);
     }

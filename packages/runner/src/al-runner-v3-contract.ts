@@ -18,7 +18,7 @@
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { V3_TYPE_PREFIX, isV3RefusalText } from "./al-runner-rows";
+import { isV3RefusalText } from "./al-runner-rows";
 import {
   AlRunnerServer,
   type ServerSpawnFn,
@@ -32,22 +32,21 @@ import { AlcCompileError, ArtifactCompiler, type ArtifactIo, defaultArtifactIo }
 import { type SpawnFn, defaultSpawn } from "./publisher";
 
 /**
- * R667, R672: a `<Type>: ` message prefix at the start of a failure message, from the ONE source
- * K1(a) also reads (`V3_TYPE_PREFIX`), a strict superset of v2's `{Type}Exception: ` (R553). R657
- * measured that v3 writes no such prefix; the fact `message-has-no-type-prefix` notices a v3 build
- * that starts writing one. It is wider than K1(a) on purpose: `A: B: boom` matches, so a build
- * with chained prefixes is refused.
+ * R675: the start each leg-C probe message must have, from LethAL's own probe AL (`Error('boom %1',
+ * 5)`; `Assert.AreEqual(1, 2, ...)`). R657 measured v3 writing no text before them; the fact
+ * `message-has-no-type-prefix` notices a build that adds ANY text there, of any shape.
  */
-const MESSAGE_TYPE_PREFIX = new RegExp(`^${V3_TYPE_PREFIX}`);
+const PROBE_MESSAGE_START = { Fails: "boom 5", AssertAreEqual: "Assert.AreEqual failed." } as const;
 
 /** R667: a contract fact: `gate-fail` in leg C, a refusal in a session. */
 export const MESSAGE_PREFIX_FACT = "message-has-no-type-prefix";
 
 /**
- * R667 (review r1), R672 (plan §3): why a prefix refuses a session, not only skews the R553 screen.
+ * R667 (review r1), R672, R675 (plan §1f): why a prefix refuses a session, not only skews the R553
+ * screen.
  */
 export const MESSAGE_PREFIX_REASON =
-  "a `<Type>:` prefix on v3's failure messages would turn v3's timeouts into errors (`V3_TIMEOUT_MESSAGE` is anchored), close the serve daemon on every refusal (R612's keep list is anchored), and skew the R553 assertion screen. K1(a) keeps a refusal written as a plain fail unscored only after a ONE-word prefix (`V3_TYPE_PREFIX`, R672); a longer prefix could still make it score as a kill (R667)";
+  "text before, or in place of, the expected start of v3's failure messages (a `<Type>:` prefix of any shape) would turn v3's timeouts into errors (`V3_TIMEOUT_MESSAGE` is anchored), close the serve daemon on every refusal (R612's keep list is anchored), and skew the R553 assertion screen. K1(a) and the serve-keep rule read v3's refusal marker anywhere in a message (R675), so a prefix cannot turn a refusal into a kill; the session still refuses, because v3 no longer writes what was measured";
 
 export type V3ContractVerdict = "matches" | "diverged" | "unmeasurable";
 /**
@@ -1204,12 +1203,22 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
           : "no Library Assert app";
     }
     // A session without the app trusts the gate for the Assert half; leg C without it cannot read it.
-    const msgs =
+    const msgs: [string | undefined, string][] =
       env.libraryAssertApp === undefined && env.gateOnlyTrusted !== undefined
-        ? [plain]
-        : [plain, assertMsg];
+        ? [[plain, PROBE_MESSAGE_START.Fails]]
+        : [
+            [plain, PROBE_MESSAGE_START.Fails],
+            [assertMsg, PROBE_MESSAGE_START.AssertAreEqual],
+          ];
+    // R675 (review r1 nit A): `prefix` when the expected start comes later, `reworded` when absent.
     const seen = msgs
-      .map((m) => (m !== undefined ? MESSAGE_TYPE_PREFIX.exec(m)?.[0] : undefined))
+      .map(([m, start]) => {
+        if (m === undefined || m.startsWith(start)) return undefined;
+        const at = m.indexOf(start);
+        return at > 0
+          ? `prefix ${JSON.stringify(m.slice(0, at))}`
+          : `reworded ${JSON.stringify(m.slice(0, 60))}`;
+      })
       .find((p) => p !== undefined);
     facts.push(
       fact(
@@ -1217,12 +1226,12 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         "contract",
         seen !== undefined
           ? "diverged"
-          : msgs.every((m) => m !== undefined)
+          : msgs.every(([m]) => m !== undefined)
             ? "matches"
             : "unmeasurable",
-        "Fails (a plain Error()) and AssertAreEqual are plain fails whose message does not start with a `<Type>: ` prefix (V3_TYPE_PREFIX, `[A-Za-z_][\\w.]*: `; R672)",
-        // The prefix first: a session's refusal names it in its `measured:` line (`v3ContractRefusals`).
-        `${seen !== undefined ? `prefix ${JSON.stringify(seen)}; ` : ""}Fails ${JSON.stringify(plain ?? null)}; ${assertMeasured}`,
+        "Fails (a plain Error()) and AssertAreEqual are plain fails whose messages start exactly with `boom 5` and `Assert.AreEqual failed.` (any text before them is a prefix; R675)",
+        // The reading first: a session's refusal names it in its `measured:` line (`v3ContractRefusals`).
+        `${seen !== undefined ? `${seen}; ` : ""}Fails ${JSON.stringify(plain ?? null)}; ${assertMeasured}`,
       ),
     );
     // serve-keep-reasons (R612): GATE-ONLY, like timeout-is-cpu. M-2: a gate passes whatever this
