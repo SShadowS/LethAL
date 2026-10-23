@@ -242,7 +242,7 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   `Application` and every Microsoft package it finds in `alRunnerV3.packagesDir` or, failing that, in v3's artifact
   cache (`<cacheDir>/artifacts/<bcVersion>/apps/*.Source.zip`), with their dependencies. A Microsoft app found in
   neither leaves the run unproven (`test-app-dependencies-unproven`); the run goes on, and every run of such a
-  project is unproven (no `--resume`, no `--skip-known-survivors`, no lending). Every v3 test-app fingerprint
+  project (or of every project, when `alRunnerV3` names no `cacheDir`) is unproven (no `--resume`, no `--skip-known-survivors`, no lending). Every v3 test-app fingerprint
   changes once, so a `--resume` of a v3 run made before this change is refused once (`TestAppRepublishedError`:
   the test app's dependencies changed), and stored v3 snapshots stop matching once.
 

@@ -386,15 +386,22 @@ export async function dependencyFingerprint(
     ) {
       // B1: v3 takes some Microsoft test libraries from its artifact cache, not a package folder.
       // The package folders were tried first because v3 prefers them when both hold the app.
-      const zip = await sourceZips?.(dep);
-      if (zip !== undefined) {
+      // D1: every zip carrying the id is hashed, as every folder .app is.
+      const zips = (await sourceZips?.(dep)) ?? [];
+      for (const zip of zips) {
         lines.add(`X ${dep.id} ${sha256(zip.bytes)}`);
         enqueue(zip.inputs);
-        continue;
       }
+      if (zips.length > 0) continue;
     }
     if ("unread" in packages || packages.length === 0) {
-      const cause = "unread" in packages ? ` (${packages.unread})` : "";
+      const base = "unread" in packages ? packages.unread : undefined;
+      const searched =
+        sourceZips !== undefined && microsoft.kind === "folder" && isMicrosoft(dep.publisher)
+          ? `no *.Source.zip for it in ${sourceZips.dir}`
+          : undefined;
+      const parts = [base, searched].filter((x) => x !== undefined);
+      const cause = parts.length > 0 ? ` (${parts.join(", and ")})` : "";
       throw new DependencyUnreadableError(
         `the package of dependency "${dep.name}" (${dep.publisher}, ${dep.id}) could not be read${cause}`,
       );
@@ -502,11 +509,16 @@ export function packageFolderReader(dirs: readonly string[]): PackageReader {
   };
 }
 
-/** B1: an app v3 keeps as a source zip in its artifact cache: the zip's bytes, and the inputs
- *  read from the `app.json` inside it. `undefined` when the cache holds no zip for the app. */
-export type SourceZipReader = (
-  dep: AppDependency,
-) => Promise<{ readonly bytes: Uint8Array; readonly inputs: AppInputs } | undefined>;
+/** B1: the apps v3 keeps as source zips in its artifact cache: each zip's bytes, and the inputs
+ *  read from the `app.json` inside it. Several when the cache holds more than one zip for the
+ *  app (all are hashed); empty when it holds none. `dir` is where it looks, for the refusal. */
+export type SourceZipReader = ((dep: AppDependency) => Promise<readonly SourceZip[]>) & {
+  readonly dir?: string;
+};
+interface SourceZip {
+  readonly bytes: Uint8Array;
+  readonly inputs: AppInputs;
+}
 
 /**
  * The `*.Source.zip` files in `dir` (v3's `<cache>/artifacts/<build>/apps`), indexed once by the
@@ -514,9 +526,9 @@ export type SourceZipReader = (
  * zip's own bytes; the `.json` sidecar next to it carries no app id.
  */
 export function sourceZipReader(dir: string): SourceZipReader {
-  let index: Map<string, { bytes: Uint8Array; inputs: AppInputs }> | undefined;
+  let index: Map<string, SourceZip[]> | undefined;
   const build = async () => {
-    const out = new Map<string, { bytes: Uint8Array; inputs: AppInputs }>();
+    const out = new Map<string, SourceZip[]>();
     let names: string[];
     try {
       names = await readdir(dir);
@@ -530,18 +542,24 @@ export function sourceZipReader(dir: string): SourceZipReader {
         if (text === undefined) continue;
         const json = JSON.parse(text.replace(/^﻿/, "")) as Record<string, unknown>;
         const id = str(json.id);
-        if (id !== undefined)
-          out.set(id.toLowerCase(), { bytes, inputs: appInputsOfAppJson(json) });
+        if (id !== undefined) {
+          const key = id.toLowerCase();
+          out.set(key, [...(out.get(key) ?? []), { bytes, inputs: appInputsOfAppJson(json) }]);
+        }
       } catch {
         // not a readable source zip: it cannot be the dependency either
       }
     }
     return out;
   };
-  return async (dep) => {
-    index ??= await build();
-    return index.get(dep.id);
-  };
+  const read: SourceZipReader = Object.assign(
+    async (dep: AppDependency) => {
+      index ??= await build();
+      return index.get(dep.id) ?? [];
+    },
+    { dir },
+  );
+  return read;
 }
 
 /** The app under test, for `dependencyFingerprint`'s `target`: its project's app.json. R205: from

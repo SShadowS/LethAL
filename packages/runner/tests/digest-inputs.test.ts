@@ -479,7 +479,7 @@ describe("R435: Microsoft dependencies by the bytes in the package folder", () =
   const cache =
     (id: string, build: string, inputs: AppInputs = appInputsOfAppJson({})): SourceZipReader =>
     async (d) =>
-      d.id === id ? { bytes: zipOf(id, build), inputs } : undefined;
+      d.id === id ? [{ bytes: zipOf(id, build), inputs }] : [];
 
   test("a Microsoft dependency found only in the artifact cache zip is hashed; a changed zip moves the fingerprint", async () => {
     const only = (build: string) =>
@@ -513,6 +513,40 @@ describe("R435: Microsoft dependencies by the bytes in the package folder", () =
       ),
       MS,
     );
+    // D2: with the real reader the message also says where the cache was searched.
+    const dir = scratch("lethal-source-zips-empty-");
+    const err = await dependencyFingerprint(
+      direct,
+      folder({ missing: [MS] }),
+      FOLDER,
+      undefined,
+      sourceZipReader(dir),
+    ).catch((e: unknown) => e);
+    expect((err as Error).message).toContain(`no *.Source.zip for it in ${dir}`);
+  });
+
+  test("D1: two cache zips carrying the same app id are BOTH hashed (changing either moves the fingerprint)", async () => {
+    const dir = scratch("lethal-source-zips-dup-");
+    const write = (file: string, a: string, b: string) => {
+      writeFileSync(join(dir, "A.Source.zip"), zipOf(MS, a));
+      writeFileSync(join(dir, file), zipOf(MS, b));
+    };
+    const fp = () =>
+      dependencyFingerprint(
+        direct,
+        folder({ missing: [MS] }),
+        FOLDER,
+        undefined,
+        sourceZipReader(dir),
+      );
+    write("B.Source.zip", "a1", "b1");
+    const base = await fp();
+    write("B.Source.zip", "a2", "b1");
+    expect(await fp()).not.toBe(base);
+    write("B.Source.zip", "a1", "b2");
+    expect(await fp()).not.toBe(base);
+    write("B.Source.zip", "a1", "b1");
+    expect(await fp()).toBe(base);
   });
 
   test("a package folder copy wins over a cache zip of the same app", async () => {
@@ -540,10 +574,11 @@ describe("R435: Microsoft dependencies by the bytes in the package folder", () =
     const read = sourceZipReader(dir);
     const ask = (id: string) => ({ id, name: "", publisher: "Microsoft", version: "" });
     const hit = await read(ask(MS));
-    expect(hit?.bytes).toEqual(bytes);
-    expect(hit?.inputs.dependencies.map((d) => d.id)).toEqual([MS2]);
-    expect(await read(ask(SYSTEM_ID))).toBeUndefined();
-    expect(await sourceZipReader(join(dir, "nope"))(ask(MS))).toBeUndefined();
+    expect(hit).toHaveLength(1);
+    expect(hit[0]?.bytes).toEqual(bytes);
+    expect(hit[0]?.inputs.dependencies.map((d) => d.id)).toEqual([MS2]);
+    expect(await read(ask(SYSTEM_ID))).toEqual([]);
+    expect(await sourceZipReader(join(dir, "nope"))(ask(MS))).toEqual([]);
   });
 });
 
