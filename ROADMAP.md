@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**86 of 681 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**82 of 681 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -87,7 +87,7 @@ that ordering is the priority.
 - **R214** · Site enumeration ignores preprocessor directives, so a mutant can be planted in an `#if` branch the compiler never builds and can never be killed · [R214.md](docs/roadmap/R214.md) · closed 2026-10-06 — the false-survivor risk is gone: 0 of 2,143,029 mutants on BaseApp, CDO, DC and DO sit in…
 - **R215** · `tree-sitter-al` shapes an enum's `Implementation` mapping as a comparison; LethAL's declarative guard already drops it, and this row records that rather than a defect · [R215.md](docs/roadmap/R215.md) · open, filed 2026-09-08, severity CORRECTED the same day: not a LethAL defect
 - **R218** · `census-operator-sites.ts` did not sort its file list, so the grammar-bump proof instrument produced spurious per-site diffs · [R218.md](docs/roadmap/R218.md) · done (see the 4.3.0 bump), filed and fixed 2026-09-09
-- **R223** · Every env-gated itest exits 0 when it skips, so a caller reading exit codes cannot tell a passed gate from one that never contacted BC · [R223.md](docs/roadmap/R223.md) · open, NARROWED twice: 2026-09-18 all seven live gates emit receipts and exit non-zero on a challenged skip…
+- **R223** · Every env-gated itest exits 0 when it skips, so a caller reading exit codes cannot tell a passed gate from one that never contacted BC · [R223.md](docs/roadmap/R223.md) · done (1ab922d5): point 1 closed by ruling…
 - **R226** · Three `lethal doctor` tests spawn real probes on a 5 s budget and fail the unit suite when the machine is busy, so `bun test` is not safe to run beside a live gate · [R226.md](docs/roadmap/R226.md) · done (7e27b0b, a3d961f): the cause was a walk of the real al-runner cache, not a real probe; R264 removed it…
 - **R228** · `--exclude` never reaches the resume fingerprint, so `--resume` can carry verdicts across a change of exclusions · [R228.md](docs/roadmap/R228.md) · done (this commit) — `SessionFingerprintInput.exclude`, a conditional key; digests of runs with no exclusions…
 - **R229** · A reader mark on a TRIGGER mutant never matches: the report joins marks on `procedureName ?? triggerName`, and a trigger's `procedureName` is `""` · [R229.md](docs/roadmap/R229.md) · done (f352d68c)
@@ -228,7 +228,7 @@ that ordering is the priority.
 - **R508** · `--resume` can carry the verdicts of a batch that a lease loss invalidated, kills included · [R508.md](docs/roadmap/R508.md) · done (3203624b)
 - **R509** · The type table reads `Record "X" temporary` as no table, so a field of a temporary record has no type · [R509.md](docs/roadmap/R509.md) · done (b8e3e2e5)
 - **R510** · `resolveObject` parses any name as an id first, so a table named `"50000 Foo"` resolves to table 50000 · [R510.md](docs/roadmap/R510.md) · done (b8e3e2e5)
-- **R511** · A namespace-qualified `extends` or `implements` does not parse, so the extension is indexed under one segment of the name · [R511.md](docs/roadmap/R511.md) · open, filed 2026-10-08
+- **R511** · A namespace-qualified `extends` or `implements` does not parse, so the extension is indexed under one segment of the name · [R511.md](docs/roadmap/R511.md) · closed 2026-10-23 — ruling: upstream tree-sitter-al#36; zero reach in every corpus; re-open when a project or…
 - **R512** · The attestation gate invalidates a batch's verdicts but its R192 baseline snapshot is still reused · [R512.md](docs/roadmap/R512.md) · done (7d4c56fc)
 - **R513** · A verdict recorded after a lease-loss note and before a crash is still carried by --resume · [R513.md](docs/roadmap/R513.md) · done (7d4c56fc)
 - **R514** · A reused baseline lets a position-1 timeout score a kill with no unmutated confirm · [R514.md](docs/roadmap/R514.md) · done (e461bc90)
@@ -242,11 +242,11 @@ that ordering is the priority.
 - **R522** · Report-loop hang refusal does not see callee objects wrapped in `#if` (they are not object declarations to it) · [R522.md](docs/roadmap/R522.md) · open, filed 2026-10-08
 - **R523** · Report-loop hang refusal does not follow table triggers that open-item code fires (`Insert(true)`, `Modify(true)`, `Validate`, `Rename`) · [R523.md](docs/roadmap/R523.md) · closed 2026-10-23 — no fired trigger consumes or re-orders the report loop's set (37 measured by parse); a…
 - **R524** · Report-loop hang refusal follows events raised by open-item code and by one-hop callees only, not events raised deeper · [R524.md](docs/roadmap/R524.md) · open, filed 2026-10-08
-- **R540** · al-runner refusals R534 does not match (`BcShapeGapException`, `BcAppSymbolReadException`, a refusal trapped by a `[TryFunction]`) can still score a kill or a pass · [R540.md](docs/roadmap/R540.md) · open, filed 2026-10-09
+- **R540** · al-runner refusals R534 does not match (`BcShapeGapException`, `BcAppSymbolReadException`, a refusal trapped by a `[TryFunction]`) can still score a kill or a pass · [R540.md](docs/roadmap/R540.md) · closed 2026-10-23 — ruling: v3 writes every refusal as notRun (scored error) and a trap does not swallow it…
 - **R525** · Report-loop hang refusal does not cross apps: interface implementers and event subscribers in another app are not refused · [R525.md](docs/roadmap/R525.md) · open, filed 2026-10-08
 - **R541** · al-runner auto-discovers `tests/expectations`: a manifest can turn a pass into `fail` (a false kill) or a failure into `pass` (a lost kill) · [R541.md](docs/roadmap/R541.md) · closed 2026-10-23 — retired with the .NET al-runner (R654): the defect is v2 only…
 - **R526** · Report-loop hang refusal ignores `interface B extends A`: a receiver typed A does not reach implementers of B · [R526.md](docs/roadmap/R526.md) · open, filed 2026-10-08
-- **R542** · al-runner: a `fail` row whose exception type AL cannot raise (`NullReferenceException`, `NotImplementedException`) is an al-runner bug, but is scored a kill · [R542.md](docs/roadmap/R542.md) · open, filed 2026-10-09
+- **R542** · al-runner: a `fail` row whose exception type AL cannot raise (`NullReferenceException`, `NotImplementedException`) is an al-runner bug, but is scored a kill · [R542.md](docs/roadmap/R542.md) · closed 2026-10-23 — ruling: a v3 panic is a notRun row, a crash is a transport error, no exception-type text…
 - **R527** · Report-loop hang refusal does not follow `Codeunit.Run` or `Report.Run` targets called from open-item code · [R527.md](docs/roadmap/R527.md) · open, filed 2026-10-08
 - **R528** · Report-loop hang refusal does not match events published by a tableextension (keyed to the extension, raised on the base table) · [R528.md](docs/roadmap/R528.md) · open, filed 2026-10-08
 - **R529** · Self-inserting report items: an insert made from another object is not seen, so the item's own filter is not protected · [R529.md](docs/roadmap/R529.md) · open, filed 2026-10-08
