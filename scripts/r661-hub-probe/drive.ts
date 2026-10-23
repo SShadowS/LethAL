@@ -111,6 +111,9 @@ function baselineReading(v: TestVerdict): string {
 
 class StopRule extends Error {}
 
+/** Set at an H dispatch, cleared when its +35 s read lists none of its sessions. */
+let mayBeLive = false;
+
 async function main(): Promise<number> {
   let server: ServerName;
   let holder: string;
@@ -271,6 +274,7 @@ async function main(): Promise<number> {
         r.closedAtMs = Date.now() - t0;
         continue;
       }
+      mayBeLive = true;
       const appeared = new Set<string>();
       const reads: Record<string, unknown>[] = [];
       r.reads = reads;
@@ -300,6 +304,7 @@ async function main(): Promise<number> {
         doc.stop = `${k.role}: session(s) ${last.appearedStillListed.join(",")} still listed at +${STOP_READ_MS} ms`;
         throw new StopRule(doc.stop as string);
       }
+      mayBeLive = false;
     }
 
     const markerAfter = await opStatus(info.serverGeneration);
@@ -325,9 +330,10 @@ async function main(): Promise<number> {
     doc.finalRelease = await leases.release(got.lease);
     log(`final release: ${JSON.stringify(doc.finalRelease)}`);
   } catch (err) {
-    if (err instanceof StopRule) {
+    if (err instanceof StopRule || mayBeLive) {
       code = 5;
-      log(`STOP RULE: ${err.message}. No removal; keep the coord lease.`);
+      doc.stop ??= `failed while a session may be live: ${errText(err)}`;
+      log(`STOP RULE: ${String(doc.stop)}. No removal; keep the coord lease.`);
     } else {
       code = 1;
       doc.error = errText(err);
@@ -372,10 +378,17 @@ async function removeProbe(c: Conn, ext: string, steps: string[]): Promise<void>
 }
 
 if (import.meta.main) {
+  // A crash while a session may be live: exit 5, so the wrapper holds bc3.
+  const crash = (err: unknown) => {
+    console.error(`driver crashed: ${errText(err)}`);
+    process.exit(mayBeLive ? 5 : 1);
+  };
+  process.on("unhandledRejection", crash);
+  process.on("uncaughtException", crash);
   process.exit(
     await main().catch((err: unknown) => {
       console.error(`driver failed: ${errText(err)}`);
-      return 1;
+      return mayBeLive ? 5 : 1;
     }),
   );
 }
