@@ -14,13 +14,14 @@ if [ $# -ne 4 ]; then
   echo "usage: $0 <old.tar> <repo> <workdir> <out.tar>" >&2
   exit 2
 fi
-old=$1 repo=$2 work=$3 out=$4
-if [ -e "$out" ]; then
-  echo "refused: $out exists; a tar another worktree may pin is never overwritten" >&2
+# absolute from here on: the pack below runs inside (cd "$tree"), where a relative path means another place
+old=$(realpath -m -- "$1") repo=$(realpath -m -- "$2") work=$(realpath -m -- "$3") out=$(realpath -m -- "$4")
+if [ "$out" = "$(realpath -m -- "$OLD_TAR")" ]; then
+  echo "refused: $out is the kraken secret_files tar ($OLD_TAR); write beside it under a new name" >&2
   exit 2
 fi
-if [ "$(realpath -m -- "$out")" = "$OLD_TAR" ]; then
-  echo "refused: $out is the kraken secret_files tar ($OLD_TAR); write beside it under a new name" >&2
+if [ -e "$out" ]; then
+  echo "refused: $out exists; a tar another worktree may pin is never overwritten" >&2
   exit 2
 fi
 alc="${LETHAL_ALC_DIR:?}/alc"
@@ -48,6 +49,6 @@ for proj in $(cd "$tree" && ls -d fixtures/*/ examples/*/ | sed 's#/$##'); do
   done
 done
 (cd "$tree" && tar --format=ustar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
-  --mode='a=rX,u+w' -cf "$(realpath -m -- "$out")" examples extensions fixtures)
+  --mode='a=rX,u+w' -cf "$out" examples extensions fixtures)
 sha256sum "$out"
 stat -c %s "$out"

@@ -2,7 +2,7 @@
 // so no tar and no alc are needed here.
 import { afterEach, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -50,9 +50,29 @@ test("the kraken secret_files tar's path is refused as an output, even spelled a
   expect(r.stderr).toContain("is the kraken secret_files tar");
 });
 
-test("the default secret path is the real kraken delivery", () => {
-  const r = run(["old.tar", ".", "work", "/work/lethal/.kraken-local/./fixture-symbols.tar"]);
-  // Where that file exists the exists-refusal fires first; both are refusals, never a build.
+test("the default secret path is the real kraken delivery, refused as such whether it exists or not", () => {
+  dir = mkdtempSync(join(tmpdir(), "lethal-r670-"));
+  // The secret check runs BEFORE the exists check, so its own text is asserted on any machine.
+  const r = run([
+    join(dir, "old.tar"),
+    dir,
+    join(dir, "absent", "work"),
+    "/work/lethal/.kraken-local/./fixture-symbols.tar",
+  ]);
   expect(r.status).toBe(2);
-  expect(r.stderr).toContain("refused:");
+  expect(r.stderr).toContain(
+    "refused: /work/lethal/.kraken-local/fixture-symbols.tar is the kraken secret_files tar",
+  );
+});
+
+test("a relative output path is resolved against the caller's directory, not the extracted tree", () => {
+  dir = realpathSync(mkdtempSync(join(tmpdir(), "lethal-r670-")));
+  writeFileSync(join(dir, "rel.tar"), "keep");
+  const r = spawnSync("bash", [SCRIPT, "old.tar", ".", "work", "rel.tar"], {
+    cwd: dir,
+    encoding: "utf8",
+    env: { PATH: process.env.PATH ?? "" },
+  });
+  expect(r.status).toBe(2);
+  expect(r.stderr).toContain(`refused: ${dir}/rel.tar exists`);
 });

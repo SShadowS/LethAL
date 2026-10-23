@@ -397,6 +397,14 @@ describe("R670: symbolTarDrift", () => {
     expect(members.length).toBeGreaterThan(100);
     expect(symbolTarDrift(members, repoApps())).toEqual([]);
   });
+  test("every manifest folder is a scanned project's (or the control app's), so none escapes the check", () => {
+    const apps = repoApps();
+    // a floor, so a scan that finds nothing cannot pass the drift test vacuously
+    expect(apps.length).toBeGreaterThanOrEqual(20);
+    const scanned = new Set([...apps.map((a) => a.dir), "extensions/lethal-control"]);
+    const folders = [...new Set(members.map((m) => m.slice(0, m.indexOf("/.alpackages/"))))];
+    expect(folders.filter((f) => !scanned.has(f))).toEqual([]);
+  });
   test.skipIf(!existsSync(FIXTURE_SYMBOLS_TAR))(
     "the committed manifest equals the pinned tar's listing (only where the tar exists)",
     () => {

@@ -33,10 +33,12 @@ export const FIXTURE_SYMBOLS_TAR = "/work/lethal/.kraken-local/fixture-symbols-2
 /**
  * F5: the tar, pinned by sha256 (R670 rebuild, 2026-10-23, 1,705,676,800 bytes; it replaced
  * `fixture-symbols.tar`, `bdf460e2…`). A different tar is refused by name; changing it is a
- * deliberate edit here and in `FIXTURE_SYMBOLS_MANIFEST`, then a `--regate`. A re-pin refuses the
- * gate worktree once (its marker names the old pin, `al-runner-v3-gate-symbols-unverified`):
- * before that `--regate`, delete the gate worktree's two folders and its `SYMBOLS_MARKER`, so the
- * run extracts them from the new tar.
+ * deliberate edit here and in `FIXTURE_SYMBOLS_MANIFEST`, then a `--regate`. A re-pin refuses
+ * EVERY worktree whose two folders came from the old tar, the gate worktree included (its marker
+ * names the old pin, `al-runner-v3-gate-symbols-unverified`), and a FRESH worktree on any machine
+ * that lacks the sha-named tar, until the owner's secret swap delivers it. The one-line fix, per
+ * worktree, by hand: `bun scripts/fixture-symbols-reset.ts <worktree>` deletes the two folders and
+ * its `SYMBOLS_MARKER`, and the next run extracts them from the new tar.
  */
 export const FIXTURE_SYMBOLS_TAR_SHA256 =
   "26f680ae967178f63f2705fa6248f4e7e308d7c8a75608bb18f819e1772cdda1";

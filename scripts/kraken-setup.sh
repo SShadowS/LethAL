@@ -35,6 +35,14 @@ if [ -f .kraken-local/fixture-symbols.tar ]; then
   fi
   tar -xf .kraken-local/fixture-symbols.tar
   mv "$man.new" "$man"
+  # R670: the code reads the pinned tar as fixture-symbols-<first 12 hex of its sha256>.tar, so a
+  # re-pin never overwrites a tar older worktrees still pin. Keep a copy under that name, once per tar.
+  named=.kraken-local/fixture-symbols-$(sha256sum .kraken-local/fixture-symbols.tar | cut -c1-12).tar
+  if [ ! -f "$named" ]; then
+    cp .kraken-local/fixture-symbols.tar "$named.part"
+    chmod 600 "$named.part"
+    mv "$named.part" "$named"
+  fi
 fi
 # The main checkout (/work/lethal) holds the control app every worktree's config points at
 # (controlSymbolPath). Build it, as the control-app skill does, when missing or older than its

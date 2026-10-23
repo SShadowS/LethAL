@@ -1,4 +1,5 @@
 import { test as bunTest, expect } from "bun:test";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -75,6 +76,31 @@ function makeTar(t: ReturnType<typeof setup>, files: string[]) {
   expect(r.exitCode).toBe(0);
   writeFileSync(tar, readFileSync(join(stage, "fixture-symbols.tar")));
 }
+
+test("R670: each delivered tar is also kept under its sha-named file, and an older one stays", () => {
+  const t = setup();
+  try {
+    const local = join(t.wt, ".kraken-local");
+    const named = () => {
+      const tar = readFileSync(join(local, "fixture-symbols.tar"));
+      const sha = createHash("sha256").update(tar).digest("hex");
+      return { tar, path: join(local, `fixture-symbols-${sha.slice(0, 12)}.tar`) };
+    };
+    makeTar(t, ["fx/a/one.app"]);
+    run(t);
+    const first = named();
+    expect(readFileSync(first.path)).toEqual(first.tar);
+    run(t); // a re-run with the same tar copies nothing and does not fail
+    makeTar(t, ["fx/a/one.app", "fx/b/two.app"]);
+    run(t);
+    const second = named();
+    expect(second.path).not.toBe(first.path);
+    expect(readFileSync(second.path)).toEqual(second.tar);
+    expect(readFileSync(first.path)).toEqual(first.tar);
+  } finally {
+    rmSync(t.root, { recursive: true, force: true });
+  }
+});
 
 test("clones once then pulls, and removes files a newer tar no longer carries", () => {
   const t = setup();

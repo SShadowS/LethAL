@@ -184,9 +184,16 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
   the outcome on each gate run: `<time> <tag>: fixture .alpackages: extracted|verified|marked`.
 - Every leg selection needs the two fixture folders or the tar, CDO-only legs (`D1`, `D1c`) included: the itest
   prepares them before any leg.
-- Re-pinning the symbol tar (a new `FIXTURE_SYMBOLS_TAR_SHA256`) refuses the gate worktree once, because its
-  marker names the old pin. Before the `--regate`, delete `/work/lethal-wt/al-runner-v3-gate`'s two folders and
-  its `.fixture-symbols.sha256`; the run then extracts them from the new tar.
+- Re-pinning the symbol tar (a new `FIXTURE_SYMBOLS_TAR_SHA256`) refuses EVERY worktree whose two folders came
+  from the old tar, not only the gate worktree: its marker names the old pin (`bdf460e2…` before R670), so the
+  next `itest:alrunner-v3` or gate run there stops with `al-runner-v3-gate-symbols-unverified`. Nothing is
+  deleted automatically (R614). The one-line fix, per worktree, by hand: `bun scripts/fixture-symbols-reset.ts
+  <worktree>` (`--dry-run` first lists them), which deletes `fixtures/sandbox-tests/.alpackages`,
+  `fixtures/sandbox-data-tests/.alpackages` and `.fixture-symbols.sha256` only when the marker names another
+  pin; the next run extracts them from the new tar. Do it in `/work/lethal-wt/al-runner-v3-gate` before the
+  `--regate`. A FRESH worktree extracts from `FIXTURE_SYMBOLS_TAR`, so it refuses
+  (`al-runner-v3-gate-worktree-unprepared`) on any machine where that sha-named file is absent, until the owner's
+  secret swap delivers the pinned tar and `scripts/kraken-setup.sh` keeps it under that name.
 - Since R670 the tar is named by its pin, `/work/lethal/.kraken-local/fixture-symbols-<first 12 hex of the
   sha256>.tar`, so a rebuilt tar is written BESIDE the one older worktrees still pin and never replaces it. The
   pinned tar's file list is committed as `packages/runner/itest/fixture-symbols.manifest`, with the sha256 on its
@@ -210,8 +217,14 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
   by master. The lane that landed the re-pin deletes it, once no open worktree's `.fixture-symbols.sha256` names
   it. The original `/work/lethal/.kraken-local/fixture-symbols.tar` (`bdf460e2…`) is different: it is kraken's
   `secret_files` delivery, which `scripts/kraken-setup.sh` extracts into the main checkout, and kraken would put
-  it back. The owner replaces it on the host (the secrets folder `scripts/kraken-secrets.ts` writes) with the
-  current tar, or retires that entry.
+  it back. And `scripts/kraken-secrets.ts` (`symbolTar`) REBUILDS that secret from the HOST repo's `.alpackages`
+  on every run, so a refresh from stale host folders ships stale copies again. Since R670 that build is refused
+  on drift (`tarDrift`, the same `symbolTarDrift` rule), and it can never equal the pin anyway (GNU tar's
+  default format, host mtimes and owners). So the owner ships the pinned tar VERBATIM: `bun
+  scripts/kraken-secrets.ts ... --symbol-tar <the pinned tar>` refuses a tar whose sha256 is not the pin, then
+  writes its bytes unchanged. Alternatively the owner retires that `secret_files` entry. Since R670
+  `kraken-setup.sh` also keeps each delivered tar as `fixture-symbols-<sha12>.tar`, the name the code reads.
+  The exact owner steps for R670 are in `/coord/handoff/R-670/owner-steps.md`.
 - A leg's outcome comes from its error's TYPE, never its text:
   - `gate-fail`: a pre-committed figure differs, a contract fact or a defect fact reads `diverged`, or v3's
     coverage paths no longer join LethAL's (`AlRunnerV3CoverageJoinError`, a real behaviour change; in a user

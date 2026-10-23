@@ -3,6 +3,11 @@
  * every fixture's `.alpackages` into `fixture-symbols.tar`.
  *
  *   bun scripts/kraken-secrets.ts --repo U:/Git/LethAL --out U:/Git/kraken/secrets/lethal
+ *       [--symbol-tar <the pinned fixture-symbols tar>]
+ *
+ * R670: `fixture-symbols.tar` is either packed from the host repo's `.alpackages`, or, with
+ * `--symbol-tar`, the given tar shipped verbatim once its sha256 equals the pin. Either way it is
+ * refused when a LethAL app copy in it disagrees with the repo's `app.json` versions.
  *
  * The file list is `.kraken/project.yaml`'s `secret_files` (read from THIS script's repo): each
  * `to` is the file's path relative to `--repo` on the host too, and the output takes the `from`
@@ -14,7 +19,7 @@
  * It never prints a value: only file names, JSON paths and fixed error kinds. A JSON parse error
  * is reported without its message (Bun's quotes the source text); any other error by class name.
  */
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   type Stats,
   existsSync,
@@ -27,6 +32,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
+import {
+  FIXTURE_SYMBOLS_TAR_SHA256,
+  type FixtureApp,
+  symbolTarDrift,
+} from "../packages/runner/itest/fixture-symbols.ts";
 import { fixtureProjects } from "./compile-fixtures.ts";
 
 const ALX = "/home/dev/.vscode/extensions/ms-dynamics-smb.al-current";
@@ -240,12 +250,77 @@ function symbolTar(repo: string, errors: string[]): Uint8Array | undefined {
     errors.push(`fixture-symbols.tar: tar failed (exit ${r.exitCode})`);
     return undefined;
   }
-  const problems = tarProblems(r.stdout);
+  return checkedSymbolTar(r.stdout, repo, errors);
+}
+
+/** The listing checks and R670's drift check on a finished tar; its bytes, or `undefined` with errors. */
+function checkedSymbolTar(tar: Uint8Array, repo: string, errors: string[]): Uint8Array | undefined {
+  const problems = tarProblems(tar);
   if (problems.length > 0) {
     errors.push(`fixture-symbols.tar: ${problems.join(", ")}`);
     return undefined;
   }
-  return r.stdout;
+  const names = Bun.spawnSync(["tar", "-tf", "-"], { stdin: tar });
+  const drift = tarDrift(new TextDecoder().decode(names.stdout).split(/\r?\n/), repoApps(repo));
+  if (drift.length > 0) {
+    errors.push(...drift);
+    return undefined;
+  }
+  return tar;
+}
+
+/** R670: every repo AL project as `symbolTarDrift` reads it (a missing field reads as ""). */
+export function repoApps(repo: string): FixtureApp[] {
+  return fixtureProjects(repo).map((p) => {
+    const j = JSON.parse(readFileSync(join(p, "app.json"), "utf8").replace(/^﻿/, "")) as {
+      name?: unknown;
+      version?: unknown;
+      dependencies?: { name?: unknown; publisher?: unknown }[];
+    };
+    return {
+      dir: relative(repo, p).replaceAll("\\", "/"),
+      name: String(j.name ?? ""),
+      version: String(j.version ?? ""),
+      lethalDeps: (j.dependencies ?? [])
+        .filter((d) => d.publisher === "LethAL")
+        .map((d) => String(d.name ?? "")),
+    };
+  });
+}
+
+/**
+ * R670: a tar's `tar -tf` names (directories and blank lines skipped) against the repo's
+ * `app.json` files, so a tar made from stale `.alpackages` is refused where it is made. Each line
+ * names a file and two versions, never a value.
+ */
+export function tarDrift(names: readonly string[], apps: readonly FixtureApp[]): string[] {
+  const files = names.filter((n) => n !== "" && !n.endsWith("/"));
+  return symbolTarDrift(files, apps).map((d) => `fixture-symbols.tar: drift: ${d}`);
+}
+
+/**
+ * R670 `--symbol-tar <path>`: ship that tar's bytes verbatim, after its sha256 equals the pin
+ * (`FIXTURE_SYMBOLS_TAR_SHA256`) and it passes the same checks as a built one. A tar `symbolTar`
+ * builds can never equal the pin (GNU tar's default format, host mtimes and owners), so this is
+ * how the pinned tar reaches the container.
+ */
+export function pinnedSymbolTar(
+  path: string,
+  repo: string,
+  errors: string[],
+  pin: string = FIXTURE_SYMBOLS_TAR_SHA256,
+): Uint8Array | undefined {
+  if (!existsSync(path)) {
+    errors.push("fixture-symbols.tar: --symbol-tar: missing");
+    return undefined;
+  }
+  const bytes = readFileSync(path);
+  const sha = createHash("sha256").update(bytes).digest("hex");
+  if (sha !== pin) {
+    errors.push(`fixture-symbols.tar: --symbol-tar has sha256 ${sha}, the pin is ${pin}`);
+    return undefined;
+  }
+  return checkedSymbolTar(bytes, repo, errors);
 }
 
 export class OwnerOnlyError extends Error {
@@ -381,7 +456,9 @@ function main(): number {
 
   for (const { from, to } of secretFiles()) {
     if (from === "fixture-symbols.tar") {
-      const tar = symbolTar(repo, errors);
+      const given = arg("--symbol-tar");
+      const tar =
+        given !== undefined ? pinnedSymbolTar(given, repo, errors) : symbolTar(repo, errors);
       if (tar !== undefined) outputs.push({ name: from, bytes: tar });
       continue;
     }

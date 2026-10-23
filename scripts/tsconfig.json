@@ -134,6 +134,8 @@
     "bc-linux-setup.ts",
     "bc-linux-setup.test.ts",
     "build-fixture-symbols-tar.test.ts",
+    "fixture-symbols-reset.ts",
+    "fixture-symbols-reset.test.ts",
     "bc-demo-setup.ts",
     "bc-demo-setup.test.ts",
     "bc-republish.ts",
