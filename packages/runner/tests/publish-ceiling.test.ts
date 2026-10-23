@@ -1458,6 +1458,77 @@ describe("R112 — the ceiling is reachable on an env-tool project", () => {
     }
   });
 
+  /**
+   * R676: an al-runner-v3 dry run publishes nothing to any server, so it must neither run the env
+   * tool's `resolve` (an external step that may need the tool's login) nor print a bcdev tier's
+   * ceiling. The env tool is injected through the config: its first `resolve` step writes a marker
+   * file, so a call is seen whether or not it succeeds.
+   */
+  async function markedProject(): Promise<{
+    root: string;
+    projectDir: string;
+    dbPath: string;
+    configPath: string;
+    marker: string;
+  }> {
+    const p = await envToolProject();
+    const marker = join(p.root, "resolve-called");
+    const config = structuredClone(ENVTOOL_CONFIG);
+    const first = config.envTool.resolve[0];
+    if (first === undefined) throw new Error("ENVTOOL_CONFIG has no resolve step");
+    first.command = [
+      "-e",
+      `require("fs").writeFileSync(${JSON.stringify(marker)}, "x"); console.log(JSON.stringify({url:'https://host/env-4711'}))`,
+    ];
+    await Bun.write(p.configPath, JSON.stringify(config));
+    return { ...p, marker };
+  }
+
+  async function dryRunAs(
+    p: { projectDir: string; dbPath: string; configPath: string },
+    backendKind: "bcdev" | "al-runner-v3",
+  ): Promise<string> {
+    const lines: string[] = [];
+    const log = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(" "));
+    });
+    try {
+      await printDryRun(p.projectDir, undefined, {
+        dbPath: p.dbPath,
+        configPath: p.configPath,
+        backendKind,
+      });
+    } finally {
+      log.mockRestore();
+    }
+    return lines.join("\n");
+  }
+
+  test("R676: --backend al-runner-v3 --dry-run runs no env-tool resolve and prints no publish ceiling", async () => {
+    const p = await markedProject();
+    try {
+      const out = await dryRunAs(p, "al-runner-v3");
+      expect(existsSync(p.marker)).toBe(false);
+      expect(out).not.toContain("publish ceiling");
+      expect(out).not.toContain("https://host|env-4711");
+      expect(out).not.toContain("could not read the configured server");
+    } finally {
+      await rm(p.root, { recursive: true, force: true });
+    }
+  });
+
+  test("R676 control: --backend bcdev --dry-run still resolves through the env tool and prints the bracket", async () => {
+    const p = await markedProject();
+    try {
+      const out = await dryRunAs(p, "bcdev");
+      expect(existsSync(p.marker)).toBe(true);
+      expect(out).toContain("https://host|env-4711");
+      expect(out).toContain("331");
+    } finally {
+      await rm(p.root, { recursive: true, force: true });
+    }
+  });
+
   test("clear-ceiling accepts --config in place of --server/--instance, and says which tier it chose", async () => {
     const p = await envToolProject();
     const lines: string[] = [];
