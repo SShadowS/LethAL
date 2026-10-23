@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**75 of 683 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**76 of 685 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -727,7 +727,9 @@ that ordering is the priority.
 - **R678** · al-runner v3: a --resume session whose batches all reuse their baseline snapshots records no baseline refusal, so no survivor gets its [v3-refused-test-nearby] note · [R678.md](docs/roadmap/R678.md) · done (3d78e671)
 - **R679** · bc-linux-setup's Continia P1 stop did not name `--accept-build`, so a server on a newer Microsoft build read as blocked when R594's accepted-build path was one flag away · [R679.md](docs/roadmap/R679.md) · done (84c7d4f6)
 - **R683** · Host step: re-record `envtool.baseline.json` at the current identity scheme on the next live envtool run (it is the last gate baseline with no scheme and no mutated-text hash) · [R683.md](docs/roadmap/R683.md) · open, filed 2026-10-23 — a HOST step for the owner (the env tool is host-only)
-- **R686** · bcdev: a test codeunit whose OnRun raises an error gets no method lines on BC, and LethAL reports it as a stale test app and stops the run · [R686.md](docs/roadmap/R686.md) · open, filed 2026-10-23
+- **R686** · bcdev: a test codeunit whose OnRun raises an error gets no method lines on BC, and LethAL reports it as a stale test app and stops the run · [R686.md](docs/roadmap/R686.md) · done (388ea7c9)
+- **R688** · bcdev: a mutant that makes a test codeunit's OnRun raise stops the whole session; score it per mutant instead (an unmutated confirm, then error test-discovery-failed) · [R688.md](docs/roadmap/R688.md) · open, filed 2026-10-23
+- **R689** · LethAL Control could report a test codeunit's own OnRun error when suite discovery lists none of its methods (today LethAL can only name the likely cause) · [R689.md](docs/roadmap/R689.md) · open, filed 2026-10-23
 
 ---
 
