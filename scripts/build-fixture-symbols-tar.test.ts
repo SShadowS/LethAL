@@ -1,11 +1,13 @@
 // R670: the tar rebuild script's argument refusals. They run before anything is extracted or built,
-// so no tar and no alc are needed here.
-import { afterEach, expect, test } from "bun:test";
+// so no tar and no alc are needed here. Linux only, like kraken-setup.test.ts: the script runs only
+// in the kraken image, and Git Bash's `realpath` spells Windows paths differently (CI run 39882085249).
+import { test as bunTest, afterEach, expect } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+const test = process.platform === "win32" ? bunTest.skip : bunTest;
 const SCRIPT = join(import.meta.dir, "build-fixture-symbols-tar.sh");
 const run = (args: string[], env: Record<string, string> = {}) =>
   spawnSync("bash", [SCRIPT, ...args], {
