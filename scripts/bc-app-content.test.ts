@@ -663,6 +663,14 @@ describe("R627: the two decoded entries refuse invalid UTF-8 and keep every vali
     }
   });
 
+  test("decideApp: a resident package with invalid UTF-8 in navigation.xml is refused content-unknown", () => {
+    const manifest =
+      '<Package><App Id="aaaa" Name="LethAL Sandbox Names" Publisher="LethAL" Version="1.0.0.0" /><Build Timestamp="t" CompilerVersion="18.0.43.1464" /></Package>';
+    const d = decideApp(base({ resident: pkg(manifest, bad(0x80)) }));
+    expect(d).toMatchObject({ action: "refuse", why: "content-unknown" });
+    expect(d.line).toMatch(/navigation\.xml is not valid UTF-8/);
+  });
+
   test("NavxManifest.xml bytes 0x80 and 0x81 are each refused by name", () => {
     for (const b of [0x80, 0x81]) {
       const m = Buffer.concat([Buffer.from('<Package><Build Timestamp="t" />'), Buffer.from([b])]);
