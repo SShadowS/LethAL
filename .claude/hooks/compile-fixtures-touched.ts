@@ -63,12 +63,16 @@ async function main(): Promise<void> {
 
   const cwd = process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
   const scratch = mkdtempSync(join(tmpdir(), "lethal-hook-inventory-"));
-  const res = Bun.spawnSync(compileCommand(join(scratch, "inventory.json")), {
-    cwd,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  rmSync(scratch, { recursive: true, force: true });
+  let res: ReturnType<typeof Bun.spawnSync>;
+  try {
+    res = Bun.spawnSync(compileCommand(join(scratch, "inventory.json")), {
+      cwd,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
 
   if (hookExit(res.exitCode) === 0) process.exit(0);
 
