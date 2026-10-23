@@ -1,4 +1,20 @@
-# R680: a resume refuses when the server's generation changed since the run it resumes (plan r1)
+# R680: a resume refuses when the server's generation changed since the run it resumes (plan r2)
+
+## Changes from r1
+
+Plan review (spec-adversary, Opus, on r1 3494d307): ADOPT with fixes. All applied:
+1. **Important, the R192 baseline snapshot.** `findBaselineSnapshot` lends a baseline from ANY run (gated only on a
+   resume). A run recorded before a restart could lend its baseline to a resumed run after it, and a test that is red
+   on the restarted data would then score a false kill. r2 adds the generation to that query (step 5).
+2. **Important, the window check.** The real server grants a lease only at the generation it holds now (`TryAcquire`
+   never mints one), so a second read is always granted at the second value, and r1's comparison could only fail in a
+   fake. r2 reads once, and hands `acquireSessionLease` that recorded value as its `expectedGeneration`. A change in
+   between is then refused by the server itself (`generation-changed` → `LeaseUnavailableError`, before any deploy).
+3. **Minor, where it is read:** before `testAppIdentity` (the first guard ask), as R680 says.
+4. **Minor, tests:** the fresh-session window case; `instanceof` for the refusals, so an R486/R495 test-app refusal
+   cannot pass them; test 3 sets the column NULL explicitly.
+5. **Minor, history lending** (`--skip-known-survivors`) is not covered across a restart. It lends survivors only,
+   so it can under-report, which is the safe direction. Recorded in R680 as a known gap.
 
 Task: `/coord/tasks/R-680/task.md`. Item: `docs/roadmap/R680.md`. Background: R632 (the probe that measured
 `serverGeneration`), R601 (a closed-world pending prior resumes when the guard answers the same now). All code is in
@@ -30,7 +46,7 @@ and `AcquireLease` grants only at that current value. So the lease is taken AFTE
 
 ## The change
 
-1. **Read the generation once, before `resolveResume`,** when the session has a lease config (`cfg.lease !==
+1. **Read the generation once, before `testAppIdentity` (r2),** when the session has a lease config (`cfg.lease !==
    undefined`: a bcdev session against a LethAL Control harness). An empty answer throws, as
    `acquireSessionLease` already does. A session with no lease (al-runner-v3, or a unit-test session) has no server
    generation and records none.
@@ -47,11 +63,13 @@ and `AcquireLease` grants only at that current value. So the lease is taken AFTE
    - When this session has NO generation (no lease), the rule does not apply; a lease-less session's prior is
      lease-less too, because the config fingerprint must match.
    - **No back-compat before release:** an old row without the column's value refuses, by name.
-4. **The window between the read and the lease:** `acquireSessionLease` reads the generation again for
-   `AcquireLease`. When the granted lease's `serverGeneration` differs from the value recorded in step 1, the server
-   changed after the resume decision. The session then throws `ServerGenerationChangedError` before any batch is
-   deployed, and the lease is released by the scope's normal `finally`. A fresh session (no resume) also throws in
-   that case: its row would record a generation that is not the one it ran on.
+4. **The window between the read and the lease (r2):** the lease config passed to `openLeaseScope` answers
+   `serverGeneration` with the value recorded in step 1, so `AcquireLease` is asked at it. A server that changed in
+   between answers `generation-changed`, and `acquireSessionLease` throws `LeaseUnavailableError` before any batch is
+   deployed. This holds for a fresh session too: its row would otherwise record a generation it did not run on.
+5. **The R192 snapshot (r2):** `findBaselineSnapshot` takes the session's generation. When the session has one, only
+   a snapshot of a run with the same `server_generation` lends; a NULL never equals, so a run recorded before R680
+   lends none. A session with no generation filters nothing, as before.
 
 **Not changed:**
 - history lending (`--skip-known-survivors`) and the R192 baseline-snapshot reuse; they compare identities as before;
@@ -73,9 +91,14 @@ In `orchestrator.test.ts`, on the existing resume harness with a `FakeLeaseClien
 3. A stored run with no generation (a row written without the column) refuses, naming "none recorded". RED before.
 4. **The keeps direction:** an equal generation still resumes and carries its verdicts. GREEN before and after,
    asserted with the carried count.
-5. **The window:** the generation read before the resume and the granted lease's differ, and the session throws
-   before any deploy. RED before.
+5. **The window (r2):** `acquireArgs[0].expectedGeneration` equals the recorded value (RED before: today it is a
+   second read). A seeded `generation-changed` refusal stops the session before any deploy, both for a resume and
+   for a fresh session.
 6. **A lease-less session** (no `cfg.lease`) resumes as before, with no generation read. GREEN before and after.
+7. **The snapshot (r2):** run Z records a baseline snapshot under generation g1, and a resumed run under g2 does NOT
+   reuse it (its baseline runs). Under the same g1 it does. RED before.
+8. **The refusals assert `instanceof ServerGenerationChangedError`;** test 3 sets `server_generation` to NULL
+   explicitly.
 
 In `store.test.ts`: `createRun` round-trips `serverGeneration`, and a row without it reads `null`.
 
