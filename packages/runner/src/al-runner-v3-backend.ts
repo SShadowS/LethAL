@@ -179,6 +179,39 @@ export class AlRunnerV3SelectionError extends Error {
   }
 }
 
+/**
+ * R590 (R-537): v3's stderr lines that say it ran WITHOUT a dependency app: `dependency skipped: ...`
+ * (no package with AL source was found, so the whole app is left out), or `... N more dependency
+ * notes` (v3 prints 12 problem lines and hides the rest, the skipped ones last). Matched at line start.
+ */
+export function v3DependencySkipLines(stderr: string): string[] {
+  return stderr
+    .split("\n")
+    .map((l) => l.replace(/\r$/, ""))
+    .filter(
+      (l) => l.startsWith("dependency skipped:") || /^\.\.\. \d+ more dependency notes/.test(l),
+    );
+}
+
+/**
+ * R590: v3 left a dependency out. A call into it by id (`Codeunit.Run(<id>)`) then fails with BC's
+ * missing-object text and would score a kill BC never gives (upstream #5749). Stops the session.
+ */
+export class AlRunnerV3DependencySkippedError extends Error {
+  constructor(lines: readonly string[]) {
+    super(
+      `al-runner-v3: v3 ran without a dependency app, so a call into it by id fails with BC's missing-object error and would score a kill BC never gives (R590); refusing the session. v3 needs each dependency's .app with AL source (or its source archive) in <deps>; a "more dependency notes" line means v3 hid lines that --verbose lists. v3 said: ${lines.join(" | ").slice(0, 1200)}`,
+    );
+    this.name = "AlRunnerV3DependencySkippedError";
+  }
+}
+
+/** R590: throws `AlRunnerV3DependencySkippedError` when `stderr` has a skip line. */
+function refuseDependencySkip(stderr: string): void {
+  const lines = v3DependencySkipLines(stderr);
+  if (lines.length > 0) throw new AlRunnerV3DependencySkippedError(lines);
+}
+
 /** §4: a session-suite test has no row (or two) in its codeunit's call. At baseline it stops. */
 export class AlRunnerV3RowMissingError extends Error {
   constructor(readonly detail: string) {
@@ -1494,6 +1527,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     clearTimeout(timer);
     const wallMs = Date.now() - started;
+    // R590: first, so a skipped dependency is named as the cause, not a later symptom.
+    refuseDependencySkip(res.stderr);
     if (timedOut) {
       return {
         verdict: {
@@ -1764,6 +1799,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       await this.closeDaemon();
       throw err;
     }
+    await this.refuseDaemonDependencySkip(daemon);
     if (answer.summary.cached === false) this.stats.cachedFalse += 1;
     const decoded = decodeEntriesAnswer(sent, answer);
     if ("why" in decoded) {
@@ -1974,6 +2010,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         this.pair = { mutantId, ref, noneVerdict, next: "null" };
         return;
       }
+      if (err instanceof AlRunnerV3DependencySkippedError) throw err;
       console.warn(
         `[lethal] al-runner-v3-pair-skipped: the kill pair for ${mutantId} was not sent (${err instanceof Error ? `${err.name}: ${err.message.slice(0, 300)}` : String(err)}); the confirm and the reproduction run as live requests (R653).`,
       );
@@ -2128,6 +2165,22 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     return { call: next };
   }
 
+  /**
+   * R590 (R-537 plan review 2): the daemon reloads its dependencies on every request and logs a skip
+   * on its stderr only; the `.alpackages` dirs v3 also searches are outside the §3 proof. Read after
+   * every request, over the whole kept tail, so a line that lands late still stops the next request.
+   * ponytail: stderr is pumped by its own loop, so one event-loop turn is yielded first; v3 writes the
+   * line when it loads dependencies, long before the answer, but a line later than that turn is seen
+   * only by the next request.
+   */
+  private async refuseDaemonDependencySkip(daemon: Daemon): Promise<void> {
+    await new Promise<void>((r) => setImmediate(r));
+    const lines = v3DependencySkipLines(daemon.server.stderrSoFar());
+    if (lines.length === 0) return;
+    await this.closeDaemon();
+    throw new AlRunnerV3DependencySkippedError(lines);
+  }
+
   /** R635 §5: a plain request for one codeunit (the echo, or `cu` with coverage) on `daemon`. */
   private async plain(
     daemon: Daemon,
@@ -2150,6 +2203,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       await this.closeDaemon();
       throw err;
     }
+    await this.refuseDaemonDependencySkip(daemon);
     if (answer.summary.cached === false) this.stats.cachedFalse += 1;
     const rows: V3Row[] = [];
     for (const t of answer.tests) {

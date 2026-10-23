@@ -729,9 +729,14 @@ many tests new.
 
 What verify still does NOT see, so it reports the affected tests as OLD (not re-run, no cause) with
 no warning:
-- an installed app no test-app dependency reaches (for example one with a global event
-  subscriber), and a non-Microsoft dependency that is published but not the installed version
-  (R434);
+- an installed app that no test-app dependency reaches (R434, a stated limit). Installing,
+  upgrading or removing such an app leaves every test old, even when it changes what a test does,
+  for example through a global event subscriber, a setup change, or a test-runner extension.
+  Measured on LethAL's own servers (2026-10-23): each holds about 120 installed apps (100 Microsoft
+  ones), and one of them is outside every test app's dependencies: ALDirectCompile's "Test Runner
+  Extension". After you install or upgrade an app on the server, re-run `lethal run` before you
+  trust verify. (A partner dependency that is published but not the installed version IS seen
+  since R496: verify refuses `dependency-unreadable`, above.)
 - a body-only rebuild of a symbols-only package (no `.al` source inside): measured, that is
   `Application`, which is expected because it is a wrapper app whose dependencies carry the source,
   and the `LethAL Control` package, whose bytes are not hashed anyway;

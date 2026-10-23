@@ -226,6 +226,14 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **`lethal verify`'s blind spot for installed apps is now a stated, measured limit** ([R434](docs/roadmap/R434.md)).
+  An app installed on the server but outside the test app's dependencies (a global subscriber, a setup change, a
+  test-runner extension) still leaves every test old when it is installed or upgraded. Measured on LethAL's
+  servers: about 120 installed apps each, and one outside every closure (ALDirectCompile's "Test Runner
+  Extension"). The agent guide says so, with what to do: re-run `lethal run` after installing or upgrading an app.
+  The guide no longer says a partner dependency published but not installed is unseen. Since R496 verify refuses it
+  (`dependency-unreadable`). Folding the installed list into the digest is [R687](docs/roadmap/R687.md), after the
+  release.
 - **An unknown `bcdev.coverageMode` is refused by name** ([R681](docs/roadmap/R681.md)). Only `"procedure"`,
   `"none"` and `"fenced"` are accepted, and the message lists them. Before, a typo such as `"Fenced"` ran silently as
   `none`, and `"line"`, a hub mode the docs never offer, reached the hub. An explicit `null` is refused too: leave
@@ -909,6 +917,19 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   extension (R506).
 
 ### Fixed
+
+- **`al-runner-v3` refuses a session in which v3 left out a dependency app** (R590). v3 skips a
+  dependency whole when it finds no package with AL source for it. A call into that app by id
+  (`Codeunit.Run(<id>)`) then fails with BC's missing-object error, which LethAL scored as a kill,
+  where BC runs the call. The backend now stops the session by name
+  (`AlRunnerV3DependencySkippedError`) on v3's `dependency skipped:` line, or its `... N more
+  dependency notes` line, in every one-shot call and after every serve-daemon request.
+  - **What changes for you:** a project with a dependency that v3 can only find as a symbol package
+    is now refused on v3, instead of having some tests not run. Put that dependency's `.app` with AL
+    source (or its source archive) in `<deps>`. A project whose dependency log has more than 12
+    problem lines is refused too, even when nothing was skipped; `--verbose` lists them.
+  - Leg C of `itest:alrunner-v3` has a new contract fact, `dependency-skip-line` (28 facts), so a v3
+    build that stops writing the line is refused by the update gate and by every session.
 
 - **A mutant run whose stop was not refused and whose answer was lost now quarantines the server**
   (R665). Before, a reconcile that read `completed` or `not-started` scored it
