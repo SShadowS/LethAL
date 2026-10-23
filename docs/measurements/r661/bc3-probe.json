@@ -1,0 +1,186 @@
+{
+  "server": "bc3",
+  "date": "2026-10-23",
+  "harness": "scripts/r661-hub-probe/drive.ts@5b9190b1f126ff221fa402ab55b5dd57de08c508",
+  "probeSourceSha": "562db036586c2a3075053056b7c5723888c8099c",
+  "appSha256": "1ed257a92ef88cb09b32e28c792ff2cf6931918d5fbb6c8faa67afcec303ea0d",
+  "lease": {
+    "holder": {
+      "lane": "bugs",
+      "attempt": "083",
+      "at": 1792743001929
+    },
+    "releasedAt": null
+  },
+  "budgetMs": 10000,
+  "readAtMs": [
+    5000,
+    12000,
+    16000,
+    21000,
+    35000
+  ],
+  "closeAtMs": 13000,
+  "lethalControl": "1.0.0.23",
+  "opMarkerBefore": {
+    "opKind": "none",
+    "opAttemptId": "",
+    "opSeq": 0,
+    "lastCompletedOpSeq": 711
+  },
+  "results": [
+    {
+      "role": "C",
+      "method": "ZPassesAfterTheStoppedTest",
+      "coverage": "procedure",
+      "sessionsBefore": [
+        "-4900/Web Service/2026-10-23T08:09:46.01Z/4"
+      ],
+      "verdict": {
+        "outcome": "pass",
+        "operation": null,
+        "durationMs": 4250,
+        "failureMessage": null,
+        "atMs": 4251
+      },
+      "baselineReading": "green",
+      "closedAtMs": 4264
+    },
+    {
+      "role": "H-line",
+      "method": "SleepsPastTheBaselineBudget",
+      "coverage": "line",
+      "sessionsBefore": [],
+      "reads": [
+        {
+          "atMs": 5058,
+          "appearedStillListed": [
+            "4924"
+          ],
+          "rows": [
+            "4924/Web Client/2026-10-23T08:10:07.647Z/4"
+          ]
+        },
+        {
+          "atMs": 12058,
+          "appearedStillListed": [
+            "4924"
+          ],
+          "rows": [
+            "4924/Web Client/2026-10-23T08:10:07.647Z/4"
+          ]
+        },
+        {
+          "atMs": 16064,
+          "appearedStillListed": [],
+          "rows": []
+        },
+        {
+          "atMs": 21060,
+          "appearedStillListed": [],
+          "rows": [
+            "-4932/Web Service/2026-10-23T08:10:26.703Z/4"
+          ]
+        },
+        {
+          "atMs": 35065,
+          "appearedStillListed": [],
+          "rows": [
+            "-4932/Web Service/2026-10-23T08:10:26.703Z/4"
+          ]
+        }
+      ],
+      "verdict": {
+        "outcome": "deadline-exceeded",
+        "operation": "in-flight-unknown",
+        "durationMs": 10089,
+        "failureMessage": null,
+        "atMs": 10089
+      },
+      "baselineReading": "quarantine (in-flight-unknown): tier quarantined, session stops",
+      "closedAtMs": 15010,
+      "appeared": [
+        "4924"
+      ]
+    },
+    {
+      "role": "H-procedure",
+      "method": "SleepsPastTheBaselineBudget",
+      "coverage": "procedure",
+      "sessionsBefore": [
+        "-4932/Web Service/2026-10-23T08:10:26.703Z/4"
+      ],
+      "reads": [
+        {
+          "atMs": 5059,
+          "appearedStillListed": [
+            "-4942",
+            "4940"
+          ],
+          "rows": [
+            "-4942/Web Service/2026-10-23T08:10:47.047Z/4",
+            "4940/Web Client/2026-10-23T08:10:42.79Z/4"
+          ]
+        },
+        {
+          "atMs": 12060,
+          "appearedStillListed": [
+            "-4942",
+            "4940"
+          ],
+          "rows": [
+            "-4942/Web Service/2026-10-23T08:10:47.047Z/4",
+            "4940/Web Client/2026-10-23T08:10:42.79Z/4"
+          ]
+        },
+        {
+          "atMs": 16065,
+          "appearedStillListed": [],
+          "rows": []
+        },
+        {
+          "atMs": 21091,
+          "appearedStillListed": [],
+          "rows": []
+        },
+        {
+          "atMs": 35166,
+          "appearedStillListed": [],
+          "rows": [
+            "-4950/Web Service/2026-10-23T08:11:07.46Z/4"
+          ]
+        }
+      ],
+      "verdict": {
+        "outcome": "deadline-exceeded",
+        "operation": "in-flight-unknown",
+        "durationMs": 10087,
+        "failureMessage": null,
+        "atMs": 10087
+      },
+      "baselineReading": "quarantine (in-flight-unknown): tier quarantined, session stops",
+      "closedAtMs": 15008,
+      "appeared": [
+        "-4942",
+        "4940"
+      ]
+    }
+  ],
+  "opMarkerAfter": {
+    "opKind": "none",
+    "opAttemptId": "",
+    "opSeq": 0,
+    "lastCompletedOpSeq": 711
+  },
+  "finalAcquire": {
+    "granted": true
+  },
+  "finalRelease": {
+    "released": true
+  },
+  "removal": [
+    "uninstall HTTP 204",
+    "unpublish HTTP 204",
+    "read-back absent (0 rows)"
+  ]
+}

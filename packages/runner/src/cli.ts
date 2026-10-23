@@ -2366,6 +2366,14 @@ export function validateBcDevConfig(
       `lethal.config.json "bcdev" section names two dev ports: "port" ${raw.port} and ${serverPort} in "server" (${raw.server}). Make them the same.`,
     );
   }
+  // R681: only the type said which modes exist. A typo ran silently as `none`, and "line" (a hub
+  // mode the docs never offer) reached the hub, so an unknown value is refused by name.
+  const modes = ["procedure", "none", "fenced"];
+  if (raw.coverageMode !== undefined && !modes.includes(raw.coverageMode)) {
+    throw new Error(
+      `lethal.config.json "bcdev" section: "coverageMode" ${JSON.stringify(raw.coverageMode)} is not one of ${modes.map((m) => `"${m}"`).join(", ")}`,
+    );
+  }
   return raw as BcDevConfigSection;
 }
 

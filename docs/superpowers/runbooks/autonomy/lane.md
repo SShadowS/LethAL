@@ -60,6 +60,11 @@ Below, `<session>`, `<worktree>`, `<branch>` and `<lane>` mean your row.
    next free id right before writing, regenerate the index).
 7. Commit on your branch, `coord submit <id> <runId> <token> <sha> <branch>`, message
    `lethal-orchestrator`: `submitted <id> run <runId> commit <sha>`. Rewrite your handoff.
+8. Before submitting, delete the bulk you can regenerate from `/coord/handoff/<id>/`: census and
+   dump output (`scratch/out/`, `*.jsonl` mutation-site lists) and copies of the tree (`wt-*`,
+   `node_modules`). Keep notes, plans, logs, scripts and every file your submit note or a
+   roadmap item cites. Delete only paths you listed first, never by a wildcard over `/coord`.
+   (Owner, 2026-10-23: 28 GB of finished tasks' census output had piled up.)
 
 ## Context size
 
