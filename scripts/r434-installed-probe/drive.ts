@@ -156,7 +156,8 @@ async function main(): Promise<number> {
     const httpMs = Date.now() - t0;
     if (!res.ok) throw new Error(`ListInstalled HTTP ${res.status}: ${text.slice(0, 500)}`);
     const value = String((JSON.parse(text) as { value?: unknown }).value ?? "");
-    const head = /^rows=(\d+) ms=(\d+) /.exec(value);
+    // Delta 1: AL formats a 0 ms Duration as an empty string (measured on bc2), so `ms=` may be bare.
+    const head = /^rows=(\d+) ms=(\d*) /.exec(value);
     if (head === null) throw new Error(`ListInstalled answered no header: ${value.slice(0, 200)}`);
     const out: Row[] = [];
     for (const r of value.slice(head[0].length).split(";")) {
@@ -183,13 +184,35 @@ async function main(): Promise<number> {
     if (after.length !== 1 || after[0]?.isInstalled !== true)
       throw new Error("probe app not read back installed");
 
-    const calls: { httpMs: number; alMs: number; rows: number; fingerprint: string }[] = [];
+    const calls: {
+      httpMs: number;
+      alMs: number;
+      rows: number;
+      fingerprint: string;
+      /** Delta 1: the `id version` lines that differ from call 1's (added `+`, gone `-`). */
+      vsFirst: string[];
+    }[] = [];
     let last: Row[] = [];
+    let first: Set<string> | undefined;
     for (let i = 0; i < CALLS; i++) {
       const r = await list();
-      const lines = r.rows.map((x) => `${x.id} ${x.version}`).sort();
-      const fingerprint = new Bun.CryptoHasher("sha256").update(lines.join("\n")).digest("hex");
-      calls.push({ httpMs: r.httpMs, alMs: r.alMs, rows: r.rows.length, fingerprint });
+      const lines = r.rows.map((x) => `${x.id} ${x.version} ${x.publisher} ${x.name}`).sort();
+      const fingerprint = new Bun.CryptoHasher("sha256")
+        .update(
+          r.rows
+            .map((x) => `${x.id} ${x.version}`)
+            .sort()
+            .join("\n"),
+        )
+        .digest("hex");
+      first ??= new Set(lines);
+      const now = new Set(lines);
+      const vsFirst = [
+        ...[...now].filter((l) => !first?.has(l)).map((l) => `+ ${l}`),
+        ...[...first].filter((l) => !now.has(l)).map((l) => `- ${l}`),
+      ];
+      calls.push({ httpMs: r.httpMs, alMs: r.alMs, rows: r.rows.length, fingerprint, vsFirst });
+      if (vsFirst.length > 0) log(`call ${i + 1} vs call 1: ${vsFirst.join(" ; ")}`);
       log(
         `call ${i + 1}: ${r.rows.length} rows, AL ${r.alMs} ms, HTTP ${r.httpMs} ms, fingerprint ${fingerprint.slice(0, 16)}`,
       );
