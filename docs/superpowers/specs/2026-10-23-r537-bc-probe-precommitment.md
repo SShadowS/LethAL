@@ -109,3 +109,15 @@ target lists 14 sites with no refusal. No prediction changes.
 rebuilt (`tests/src/Tests.al` `4c3326a8e229e21150fbad806555eede4c2c65d6051273f1e3857baf1fd4c706`, `build/tests.app`
 `1c05fd71a8416b32f2b263a2c44f4f727ac2102e971d16485bd2235471d1e76e`). P2 and P4 stand as written. The fourth run
 re-measures P1, P3 and P5 as well; a result that differs from the third run is reported, not chosen.
+
+## Delta 4 (the fourth run published nothing)
+
+The fourth run (12:26:35Z) was refused at its first publish, HTTP 422: `Cannot install the extension R537 Target by
+LethAL R537 1.0.0.0 because a newer version 1.0.20749.22369 was already installed.` That is the version LethAL minted
+in the third run. bc2 keeps that record although both ids read back absent, so it is a leftover on bc2 until its next
+restart, and it goes in the submit note. Nothing was published; generation was unchanged; the lease was released.
+**The one change:** the target's app.json version is `1.0.20749.22370` (`app/app.json`
+`25c08dd96dab9e0acf1a2383ac9015276f6eab9f9f124734659937e182e62669`; `build/app.app`
+`81b6899eb77b36cd2a7d3e7da6f2e86e5535553fe719d2e8c16af3c076801f85`; `build/tests.app`
+`6ad7bebb1b5c564cb6aab053c61ef0853b42339586dadf92fd5401883c46d79e`). Predictions as in delta 3. If this run is also
+refused or defective, I stop and report; there is no sixth run without the orchestrator.
