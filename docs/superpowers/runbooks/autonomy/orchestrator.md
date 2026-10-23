@@ -33,10 +33,10 @@ You coordinate LethAL's autonomous run. You write plans, `task.md` files, decisi
 4. New questions: push-notify the owner with the id and first line.
 5. Pre-commitments are committed by the lanes themselves (README); check each one landed on
    master before its live run (`git log origin/master -- docs/superpowers/specs/<file>`).
-6. Once per day run `bash scripts/al-runner-update.sh` from the main checkout. It builds
-   upstream al-runner `main` and moves `/work/tools/al-runner/current` onto it only if
-   `itest:alrunner` passes. On failure keep working on the current build and file what broke
-   (a roadmap item with the failing summary the script printed).
+6. Once per day run the v3 update gate, `bun scripts/al-runner-v3-update.ts`, from the main checkout.
+   It moves `/work/tools/al-runner-v3/current` onto a new build only if `itest:alrunner-v3` passes on
+   it, and records the result in `.gated`. On failure keep working on the current build and file what
+   broke (a roadmap item with the failing summary the script printed).
 7. Rewrite your handoff file. Next sweep in 5 to 10 minutes while work is active, 20 to 30
    when waiting on long gates.
 
