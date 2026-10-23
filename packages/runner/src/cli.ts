@@ -3641,6 +3641,19 @@ export async function runFromCli(
   const nested = await testProjectNestedProblem(parsed.projectDir, parsed.testDir, "lethal run");
   if (nested !== null) throw new TestProjectNestedError(nested);
   const configFile = await loadLethalConfigFile(parsed.configPath);
+  // R674 (R18's warning, which R654 S3 deleted with the .NET al-runner's branch): a configured
+  // `envTool` section is silently unused on a local runner, since `resolveEnvToolSession` returns
+  // early for every backend but bcdev. Warned, not refused: a config file is often shared across
+  // `--backend` choices, so a one-off al-runner-v3 run must not be blocked by its bcdev section.
+  if (isLocalRunner(parsed.backendKind) && configFile.envTool !== undefined) {
+    console.warn(
+      [
+        `[lethal] envTool is configured but IGNORED: --backend ${parsed.backendKind} has no environment`,
+        "to resolve or provision — the entire `envTool` section in this config is silently unused",
+        "on this path. Remove it, or run with --backend bcdev to have it take effect.",
+      ].join(" "),
+    );
+  }
   // R205: the target's source, read ONCE before anything else reads it. The `--changed-since`
   // lines, the al-runner coverage guard and the session's build all use this snapshot, so an edit
   // landing later is never built; the session's last-batch re-read warns about it.
