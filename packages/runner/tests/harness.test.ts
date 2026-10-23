@@ -669,6 +669,15 @@ describe("HarnessVerifier.fetchCompanies (R195)", () => {
     expect(err).not.toBeInstanceOf(ApiBaseUnsetError);
   });
 
+  test("R253: with no apiBaseUrl, the segment 404 naming another segment (an API that is off) is a real failure", async () => {
+    const { fetchFn } = capturing(404, {
+      error: { code: "BadRequest_NotFound", message: "Resource not found for the segment 'api'." },
+    });
+    const err = await new HarnessVerifier(CFG, fetchFn).fetchCompanies().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(HarnessVerificationError);
+    expect(err).not.toBeInstanceOf(ApiBaseUnsetError);
+  });
+
   test("R253: with no apiBaseUrl, any other 404 is still a real failure", async () => {
     const { fetchFn } = capturing(404, { error: { code: "Other", message: "nope" } });
     const err = await new HarnessVerifier(CFG, fetchFn).fetchCompanies().catch((e: unknown) => e);

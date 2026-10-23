@@ -436,6 +436,9 @@ describe("lethal doctor — the company check (R195)", () => {
     const text = renderDoctorReport(r);
     expect(text).toContain("[skip] company:");
     expect(text).not.toContain("[FAIL]");
+    // The banner never says "every check passed" over a skip (build review M5).
+    expect(text).toContain("ok: no check failed, but 2 could not be checked");
+    expect(text).not.toContain("every check passed");
   });
 
   test("R253: any other failure of the same read still fails the check and the report", async () => {

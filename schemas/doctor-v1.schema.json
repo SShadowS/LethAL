@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/SShadowS/LethAL/blob/master/schemas/doctor-v1.schema.json",
   "title": "LethAL doctor --json output",
-  "description": "What `lethal doctor --config <path> --json` prints on stdout. Versioned by doctorSchemaVersion: bumped when a field is renamed, removed or changes meaning, or when a value domain changes in either direction. Additive fields do not bump it, so a consumer must tolerate properties it does not know. Exit code 0 means every check passed, 1 means at least one failed; the code is the gate, not this document.",
+  "description": "What `lethal doctor --config <path> --json` prints on stdout. Versioned by doctorSchemaVersion: bumped when a field is renamed, removed or changes meaning, or when a value domain changes in either direction. Additive fields do not bump it, so a consumer must tolerate properties it does not know. Exit code 0 means no check failed, 1 means at least one failed; the code is the gate, not this document. A check can be skipped (`checks[].skipped`, R253) without failing; before R253 none could be, so every older report reads the same under either wording.",
   "type": "object",
   "additionalProperties": false,
   "required": ["doctorSchemaVersion", "ok", "checks", "notChecked"],
@@ -14,7 +14,7 @@
     },
     "ok": {
       "type": "boolean",
-      "description": "True only when every check passed. Mirrors the exit code."
+      "description": "True when no check failed. Mirrors the exit code. A skipped check (`checks[].skipped`) does not fail, and was not verified: read it before trusting a true."
     },
     "checks": {
       "type": "array",

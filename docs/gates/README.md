@@ -74,8 +74,8 @@ compared across a scheme change. There a byte-identical twin's mutated text cann
   roadmap item that will re-record it.
 - **The check:** `gate-pages.test.ts`, "R682". Every committed `itest/*.baseline.json` must record the current
   scheme or appear in its `LAGGING_SCHEME` list with an item. A listed file that has caught up fails too.
-- **Today's list:** the seven BC gate baselines behind scheme 41 wait on R690, and `envtool.baseline.json` waits
-  on R683 (host only).
+- **Today's list:** six BC gate baselines and `al-runner-v3.tables.baseline.json` (leg T, no server) are behind
+  scheme 41 and wait on R690; `envtool.baseline.json` waits on R683 (host only).
 
 ## Control app versions
 

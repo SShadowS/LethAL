@@ -716,12 +716,16 @@ export class HarnessVerifier {
           `${what} failed: HTTP ${res.status}${bodyText ? `: ${bodyText}` : ""} — an authentication failure; the request never reached the API.`,
         );
       }
-      // R253: only with no apiBaseUrl, and only on BC's own wording: a configured API base that
-      // 404s is a real failure.
+      // R253: only with no apiBaseUrl, and only on BC's own wording naming the INSTANCE segment (the
+      // base URL's last one, 'BC' on bc2): that is the port not routing the instance at all. Any
+      // other segment (an API that is off on a Windows container) and a configured API base that
+      // 404s are real failures.
+      const instance = new URL(this.cfg.baseUrl).pathname.split("/").filter(Boolean).pop();
       if (
         this.cfg.apiBaseUrl === undefined &&
         res.status === 404 &&
-        /Resource not found for the segment/i.test(bodyText)
+        instance !== undefined &&
+        bodyText.includes(`Resource not found for the segment '${instance}'`)
       ) {
         throw new ApiBaseUnsetError(what, this.cfg.baseUrl);
       }
