@@ -750,6 +750,39 @@ codeunit 50120 "Sub"
       expect(onFallback(f)).toBe(true);
     });
 
+    test.each([
+      ["an array", "array[2] of Record AllObj"],
+      ["a namespaced type", "Record System.Reflection.AllObj"],
+    ])("%s of such a record falls back", (_, type) => {
+      const f = base(body(`        O: ${type};\n`, "        if O[1].FindFirst() then;\n"));
+      expect(onFallback(f)).toBe(true);
+    });
+
+    test("a PARAMETER of such a record, in a reached procedure, falls back", () => {
+      const lib = `codeunit 50113 "Takes"\n{\n    procedure Use(var O: Record AllObj)\n    begin\n        if O.FindFirst() then;\n    end;\n}\n`;
+      const f = base(
+        body('        L: Codeunit "Takes";\n        O: Record Customer;\n', "        L.Use(O);\n"),
+        { "Takes.al": lib },
+      );
+      expect(onFallback(f)).toBe(true);
+    });
+
+    test("review finding 1: a reached page whose implicit Rec is such a record falls back", () => {
+      const page = `page 50114 "Objects"\n{\n    SourceTable = AllObjWithCaption;\n\n    trigger OnOpenPage()\n    begin\n        if Rec.FindFirst() then;\n    end;\n}\n`;
+      const f = base(body('        P: Page "Objects";\n', "        P.Run();\n"), {
+        "Pg.al": page,
+      });
+      expect(onFallback(f)).toBe(true);
+    });
+
+    test("review finding 1: a reached TableNo codeunit over such a table falls back", () => {
+      const cu = `codeunit 50115 "On Objects"\n{\n    TableNo = AllObj;\n\n    trigger OnRun()\n    begin\n        if Rec.FindFirst() then;\n    end;\n}\n`;
+      const f = base(body('        C: Codeunit "On Objects";\n', "        C.Run();\n"), {
+        "Cu.al": cu,
+      });
+      expect(onFallback(f)).toBe(true);
+    });
+
     test("control: a test whose reached code declares no such record keeps its narrow digest", () => {
       const f = base(
         body(
@@ -757,12 +790,14 @@ codeunit 50120 "Sub"
           "        if C.FindFirst() then;\n",
         ),
       );
+      expect(digestA(f)).toMatch(/^v3:/);
       expect(onFallback(f)).toBe(false);
     });
 
     test("control: such a record in UNREACHED code does not put the test on the fallback", () => {
       const lib = `codeunit 50112 "Unreached"\n{\n    procedure Z()\n    var\n        O: Record AllObj;\n    begin\n        if O.FindFirst() then;\n    end;\n}\n`;
       const f = base(body("        X: Integer;\n", "        X := 1;\n"), { "U.al": lib });
+      expect(digestA(f)).toMatch(/^v3:/);
       expect(onFallback(f)).toBe(false);
     });
   });

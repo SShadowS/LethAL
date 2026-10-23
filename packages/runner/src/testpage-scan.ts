@@ -1281,12 +1281,13 @@ const SYSTEM_ROOTS = new Set([
 /** R-371: a type whose value may be a record of any table (folded, not fallen back). */
 const HOLDS_RECORD = /^\s*(variant|recordref|fieldref)\b/i;
 /**
- * R390: a record over a platform table that lists object ids. `Published Application` is left out:
- * it lists apps, whose ids nothing runs. Measured cost (`/coord/handoff/R-175/cost390*`): 27 more
- * tests on the fallback across BC.History, CDO, DC and DO.
+ * R390: a record over a platform table that lists object ids, also as `array[n] of` and namespaced
+ * (`System.Reflection.AllObj`). `Published Application` is left out: it lists apps, whose ids
+ * nothing runs. Measured cost on the final rule (`/coord/handoff/R-175/digest-diff/`): 20 more tests
+ * on the fallback across BC.History, CDO and DO.
  */
 const PLATFORM_ID_TABLE =
-  /^\s*record\s+("?)(allobjwithcaption|allobj|object|object metadata|application object metadata)\1\s*(?:temporary\s*)?$/i;
+  /^\s*(?:array\s*\[[^\]]*\]\s*of\s+)?record\s+(?:[\w.]+\.)?("?)(allobjwithcaption|allobj|object|object metadata|application object metadata)\1\s*(?:temporary\s*)?$/i;
 /** R-371: the position(s) of the codeunit-id arguments of a platform run by id, by `root.member`;
  *  the bare `StartSession` is `reachBare`'s. */
 const RUN_BY_ID: Readonly<Record<string, readonly number[]>> = {
@@ -1707,13 +1708,15 @@ export class Scanner {
   }
 
   /**
-   * R390: the platform object-id table (`PLATFORM_ID_TABLE`) that `p`'s variables or parameters, or
-   * its object's globals, are a record of, as written; undefined when none is.
+   * R390: the platform object-id table (`PLATFORM_ID_TABLE`) that `p`'s variables or parameters, its
+   * object's globals, or its object's implicit records (`Rec` of a page's `SourceTable` or a
+   * codeunit's `TableNo`, a report data item) are a record of, as written; undefined when none is.
    */
   private platformIdTable(p: Proc): string | undefined {
     if (this.platformCache.has(p)) return this.platformCache.get(p);
     let found: string | undefined;
-    for (const types of [...p.scope.values(), ...p.unit.globals.values()]) {
+    const all = [...p.scope.values(), ...p.unit.globals.values(), ...p.unit.implicit.values()];
+    for (const types of all) {
       for (const t of types) {
         const m = PLATFORM_ID_TABLE.exec(t);
         if (m !== null) found ??= t.trim().replace(/^record\s+/i, "");

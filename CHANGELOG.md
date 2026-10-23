@@ -919,11 +919,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 ### Fixed
 
 - **`lethal verify` sees a test whose code reads object ids from the platform** ([R390](docs/roadmap/R390.md)). A test
-  that reaches code declaring a record over `AllObj`, `AllObjWithCaption`, `Object`, `Object Metadata` or
-  `Application Object Metadata` now takes the whole-source digest. An id read from such a table may be a test-app
+  that reaches code holding a record over `AllObj`, `AllObjWithCaption`, `Object`, `Object Metadata` or
+  `Application Object Metadata` now takes the whole-source digest. That includes a page or codeunit whose implicit
+  `Rec` is one, an array of one and a namespaced one. An id read from such a table may be a test-app
   object's that another app runs, and nothing in the source names it. Before, an edit to that object left the test
-  old. Measured cost: 20 more tests on the fallback across BC.History, CDO and DO. An id computed from data stays a
-  stated limit.
+  old. Measured cost over every test app of BC.History, CDO, DC and DO (53,936 tests): 20 more on the fallback. An
+  id computed from data stays a stated limit.
 - **A mutant run whose stop was not refused and whose answer was lost now quarantines the server**
   (R665). Before, a reconcile that read `completed` or `not-started` scored it
   `stop-outcome-unconfirmed` with no quarantine, and the session ran on. But `completed` may be the
