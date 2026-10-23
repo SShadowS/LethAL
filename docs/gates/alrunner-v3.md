@@ -14,8 +14,18 @@ The leg-by-leg tables live in those pre-commitments and are asserted by the ites
 
 The legs:
 
-- C: the contract probe, 26 facts (`runV3ContractProbe`, `V3_LEG_C_FACTS`) of three kinds: 9 defect, 16 contract
-  and 1 warn (r9, below). Since r7
+- C: the contract probe, 27 facts (`runV3ContractProbe`, `V3_LEG_C_FACTS`) of three kinds: 9 defect, 17 contract
+  and 1 warn (r9, below). Since r12
+  (`docs/superpowers/specs/2026-10-23-r586-alrunner-v3-precommitment-r12-message-prefix.md`, [[R667]]), the 17th
+  contract fact is `message-has-no-type-prefix`: the `message` of a plain `Error()` (`Fails`, on the main call)
+  and of an `Assert.AreEqual` failure (codeunit 50661, its own tests app, Microsoft's Library Assert passed as
+  `--dep` from `fixtures/sandbox-data-tests/.alpackages`) must be plain fails that do NOT match
+  `AL_RUNNER_EXCEPTION_PREFIX` (R553's regex, now in `al-runner-v3-contract.ts`). A prefix (v2's
+  `{Type}: {Message}`) reads `diverged`: `gate-fail` in leg C, and a refusal in a session, by name: a `<Type>:`
+  prefix would hide v3's not-trusted refusal from the K1(a) guard (`v3RowVerdict` reads `NotRun: out-of-scope:`
+  at the start of the message, so a prefixed refusal written as a plain fail would score as a kill), and it would
+  also skew the R553 assertion screen. The Assert half is gate-only, as `timeout-is-cpu` is: a session reads
+  `Fails` alone (a prefix there still refuses it). Since r7
   (`docs/superpowers/specs/2026-10-22-r586-alrunner-v3-precommitment-r7-none-selected.md`, 16681485), 8 are
   defect facts (`V3_DEFECT_FACTS` in `al-runner-v3-gate.ts`, `none-selected-exit` included). Since r8
   (`docs/superpowers/specs/2026-10-22-r586-alrunner-v3-precommitment-r8-dependent-notrun.md`, 848371cb), 16 are
@@ -282,3 +292,9 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
   bc2 measured BC's own Sleep under LethAL's baseline call ([[R649]], `docs/measurements/r649/`): 5 s passes,
   600 s gets no answer within the budget. r11 (338af789) changes that one literal to 5000. No figure, index size
   or baseline moves.
+- 2026-10-23: r12 ([[R667]]) adds the contract fact `message-has-no-type-prefix`, so leg C has 27 facts: 9 defect,
+  17 contract and 1 warn. Expected `matches` on alpha.2 (91253f2d6) and edge (57f1e4f98), INFERRED from R657's
+  measurement (`/coord/handoff/R-657/measure.md`: no `<Type>: ` prefix on any of seven shapes, both builds). R657
+  measured its own `PlainError`, not the probe's `Fails`, and the new Assert codeunit ran offline on alpha.2 only.
+  It costs one extra one-shot call in leg C and none in a session. No other figure or baseline moves. The 27-fact
+  head is not yet run live.
