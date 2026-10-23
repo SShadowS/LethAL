@@ -122,6 +122,7 @@
     "host-path-inventory.ts",
     "host-path-inventory.test.ts",
     "compile-fixtures.test.ts",
+    "compile-fixtures-hook.test.ts",
     "report-summary.ts",
     "report-summary.test.ts",
     "report-diff.ts",
