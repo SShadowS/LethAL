@@ -255,6 +255,7 @@ import { TestAppError } from "./test-app-publish";
 import { TestDigestError, type TestDigestParts, testDigestsOfModel } from "./test-digest";
 import {
   PublishAppUnreadableError,
+  ServerGenerationChangedError,
   TestAppDriftedError,
   TestAppRepublishedError,
   type TestArmEvidence,
@@ -4004,6 +4005,18 @@ interface PendingResumeCheck {
   readonly resourceKey: string | undefined;
   /** Why this session is open-world, when it is (`testAppIdentity`). */
   readonly openWorldWhy: string | undefined;
+  /** R680: this session's `serverGeneration`, `undefined` when it has no lease (no server). */
+  readonly serverGeneration?: string | undefined;
+}
+
+/**
+ * R680: a session with a server generation resumes only a run that recorded the same one. A run that
+ * recorded none (before R680) refuses too: no back-compat before the release. A session with no
+ * generation has no lease and no server; its prior has none either (the backend is in the key).
+ */
+function assertSameServerGeneration(row: RunRow, flag: string, current: string | undefined): void {
+  if (current === undefined || row.serverGeneration === current) return;
+  throw new ServerGenerationChangedError(flag, row.id, row.serverGeneration, current);
 }
 
 /** R601: why a pending prior is not resumed by this session, in one or two sentences. */
@@ -4081,6 +4094,8 @@ function resolveResume(
   | undefined {
   if (cfg.resume === undefined) return undefined;
   const sameTestApp = (row: RunRow, flag: string): void => {
+    // R680: first, and for a hook session too: the server's generation is fixed before any hook.
+    assertSameServerGeneration(row, flag, pending.serverGeneration);
     if (!testAppAfterHook) assertSameTestApp(row, flag, testAppHash, pending);
   };
   // R619: the one lend decision (`runMayLend`), called once in each branch below: step 1 (R586,
@@ -4472,6 +4487,9 @@ interface ScoreBatchInput {
      *  read stops the session (`assertNoTestAppDrift`). R496: with its dependency fingerprint,
      *  which a reused snapshot's run must have recorded too. */
     readonly provenTestApp?: TestAppIdentity;
+    /** R680: the session's `serverGeneration`; with one, only a snapshot of a run on the same
+     *  generation is reused (a baseline from before a restart describes data that may be gone). */
+    readonly serverGeneration?: string;
     /** R586: `runMayLend` step 1's session side; a snapshot from another backend or v3 build is
      *  not reused. Absent: no v3 snapshot is reused. */
     readonly lendingSession?: LendingSession;
@@ -5102,7 +5120,8 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   try {
     await activateOnce(backend, safety, null);
     if (input.snapshot !== undefined) {
-      const { batchDir, testDir, allowReuse, closedWorld, provenTestApp } = input.snapshot;
+      const { batchDir, testDir, allowReuse, closedWorld, provenTestApp, serverGeneration } =
+        input.snapshot;
       const batchHash = await hashAlTree(batchDir);
       hashTestApp = await batchTestAppReader(backend, testDir, closedWorld);
       const read = await hashTestApp();
@@ -5116,7 +5135,13 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       const runsWhatWasRead = provenTestApp !== undefined && testAppHash === provenTestApp.hash;
       const reusable =
         allowReuse && testAppHash !== undefined && runsWhatWasRead
-          ? store.findBaselineSnapshot(batchHash, testAppHash, provenTestApp.deps, caps.coverage)
+          ? store.findBaselineSnapshot(
+              batchHash,
+              testAppHash,
+              provenTestApp.deps,
+              caps.coverage,
+              serverGeneration,
+            )
           : null;
       reused = snapshotApplies(reusable, batchHash, testAppHash) ? reusable : undefined;
       // R619: the one lend decision (`runMayLend`), on the snapshot's OWN run, since
@@ -5777,6 +5802,16 @@ async function runSessionBody(
   if (nestedWarning !== undefined) {
     emit({ type: "warning", code: "nested-project", message: nestedWarning });
   }
+  // R680: the server's generation, read ONCE, before the first guard ask. The run row records it, a
+  // resume compares it, and the lease is asked at it, so a restart after this read is refused by the
+  // server itself (`generation-changed`) before anything is deployed. No lease: no server, none.
+  const sessionGeneration =
+    cfg.lease !== undefined ? await cfg.lease.serverGeneration() : undefined;
+  if (sessionGeneration === "") {
+    throw new LeaseUnavailableError(
+      "the harness reported an empty serverGeneration, so this session cannot record which server generation it runs on, nor ask the lease at one (R680)",
+    );
+  }
   // R-372: the digests come from the same read, so they describe the body the server RUNS.
   const {
     testAppHash,
@@ -5910,7 +5945,7 @@ async function runSessionBody(
     testPageRefusedNames,
     envPublishes !== undefined,
     lendingSession,
-    { resourceKey, openWorldWhy },
+    { resourceKey, openWorldWhy, serverGeneration: sessionGeneration },
   );
 
   const runId = cfg.store.createRun({
@@ -5928,6 +5963,8 @@ async function runSessionBody(
     generationSourceSha256: sourceHashAtGeneration,
     // R360: the group `finishRun` prunes installed bundles within, with the run's app id.
     ...(resourceKey !== undefined ? { resourceKey } : {}),
+    // R680: the generation this session runs on (read before the guard ask, the lease asked at it).
+    ...(sessionGeneration !== undefined ? { serverGeneration: sessionGeneration } : {}),
     // R492: an env-tool session records its test app only once the read-back after the hook is
     // proven installed (below), never the pre-lease read, which can hold the OUTGOING one.
     // R495: any other session records it only when proven, and the flag with it.
@@ -6299,7 +6336,12 @@ async function runSessionBody(
    */
   let resyncSessionOpSeq: (() => Promise<void>) | undefined;
   ({ leaseSession, resyncOpSeq: resyncSessionOpSeq } = await openLeaseScope({
-    lease: cfg.lease,
+    // R680: the lease is asked at the generation recorded on the run row, never at a second read: the
+    // server grants only at the generation it holds, so a restart since is refused `generation-changed`.
+    lease:
+      cfg.lease !== undefined && sessionGeneration !== undefined
+        ? { ...cfg.lease, serverGeneration: async () => sessionGeneration }
+        : cfg.lease,
     backend: cfg.backend,
     safety,
     store: cfg.store,
@@ -7708,6 +7750,7 @@ async function runSessionBody(
             !manifest.mutants.some((m) => m.coverageArmNames !== undefined),
           closedWorld: sessionClosedWorld,
           ...(historyTestApp !== undefined ? { provenTestApp: historyTestApp } : {}),
+          ...(sessionGeneration !== undefined ? { serverGeneration: sessionGeneration } : {}),
           lendingSession,
         },
         select,

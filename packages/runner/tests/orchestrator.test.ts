@@ -149,6 +149,7 @@ import {
 import { testDigestsOfModel, testDigestsOfSources } from "../src/test-digest";
 import {
   PublishAppUnreadableError,
+  ServerGenerationChangedError,
   TestAppDiffersError,
   TestAppDriftedError,
   TestAppRepublishedError,
@@ -9417,6 +9418,16 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
     interface EnvRun {
       /** The test app the server serves after the hook (`null`: the read fails). */
       readonly post: Uint8Array | null;
+      /** R680: the server's `serverGeneration` (HarnessInfo); default `FAKE_GENERATION`. */
+      readonly generation?: string;
+      /** R680: the lease client's acquire answers, in order; default one grant. */
+      readonly acquireQueue?: AcquireOutcome[];
+      /**
+       * R680: the server restarts after the session's FIRST HarnessInfo read: every later read
+       * answers this generation, and, as `TryAcquire` does, an acquire at any other expected
+       * generation is refused `generation-changed`.
+       */
+      readonly restartAfterFirstRead?: string;
       /** The publishApps test-app file the hook publishes; default `post`, else P2. */
       readonly file?: Uint8Array;
       /** Installed versions by app id; default the test app at 1.0.0.2, others 1.0.0.0. */
@@ -9513,15 +9524,38 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         return served ?? failed;
       };
       const client = new FakeLeaseClient();
+      if (o.acquireQueue !== undefined) client.acquireQueue = o.acquireQueue;
       // R496: a lease client that marks the moment the lease is granted, so the server can change
       // a dependency between this session's pre-lease walk and its walk under the lease.
+      // R680: every HarnessInfo read answers the server's generation; `generationReads` counts them.
+      let generationReads = 0;
+      const current = () =>
+        o.restartAfterFirstRead !== undefined && generationReads > 0
+          ? o.restartAfterFirstRead
+          : (o.generation ?? FAKE_GENERATION);
       const acquire = client.acquire.bind(client);
       client.acquire = async (...args: Parameters<typeof acquire>) => {
+        const [, , , expectedGeneration] = args;
+        if (o.restartAfterFirstRead !== undefined && expectedGeneration !== current()) {
+          client.acquireArgs.push({
+            owner: args[0],
+            ttlSeconds: args[1],
+            clientNonce: args[2],
+            expectedGeneration,
+          });
+          return { granted: false, reason: "generation-changed" };
+        }
         const got = await acquire(...args);
         acquired = true;
         return got;
       };
-      const { lease } = leaseCfg(client);
+      const { lease } = leaseCfg(client, {
+        serverGeneration: async () => {
+          const g = current();
+          generationReads++;
+          return g;
+        },
+      });
       const backend = leaseBackend({
         fetchPublishedAppPackage: fetch,
         ...(o.dependentCount !== undefined ? { dependentCount: o.dependentCount } : {}),
@@ -9601,6 +9635,8 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         fetchesAfterHook: () => fetchesAfterHook,
         readsDuringHook: () => readsDuringHook,
         installedCalls,
+        client,
+        generationReads: () => generationReads,
       };
     }
 
@@ -9853,6 +9889,165 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         expect(r.outcome).not.toBeInstanceOf(Error);
         r.store.close();
       });
+    });
+
+    // R680: a resume across a change of the server's generation (a restart of these in-memory
+    // servers, or a ForceResetLease) carries nothing. Each prior run is proven, so the test-app
+    // checks pass and only the generation can refuse; the refusals assert the class, not a message.
+    describe("R680: a resume refuses when the server's generation changed", () => {
+      const proven = { pre: P2, post: P2, installed: { [APP_ID]: ["1.0.0.2"] } } as const;
+      const G1 = "1".repeat(32);
+      const G2 = "2".repeat(32);
+      const priorRun = async (generation: string) => {
+        const first = await envRun({ post: P2, generation });
+        expect(first.outcome).not.toBeInstanceOf(Error);
+        expect(first.store.getRun(first.runId)?.serverGeneration).toBe(generation);
+        return first;
+      };
+      const maxRunId = (s: ResultsStore) =>
+        (s.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+      const refused = (r: { outcome: unknown }, recorded: string | null, now: string) => {
+        expect(r.outcome).toBeInstanceOf(ServerGenerationChangedError);
+        const e = r.outcome as ServerGenerationChangedError;
+        expect(e.recorded).toBe(recorded);
+        expect(e.current).toBe(now);
+        return e.message;
+      };
+
+      test("--resume-run across a changed generation refuses by name, before any run row", async () => {
+        const first = await priorRun(G1);
+        const r = await envRun({
+          ...proven,
+          generation: G2,
+          dirs: first.dirs,
+          store: first.store,
+          extra: { resume: first.runId },
+        });
+        const msg = refused(r, G1, G2);
+        expect(msg).toContain(`--resume-run ${first.runId}`);
+        expect(msg).toContain(G1);
+        expect(msg).toContain(G2);
+        expect(maxRunId(r.store)).toBe(first.runId);
+        r.store.close();
+      });
+
+      test("bare --resume across a changed generation refuses by name", async () => {
+        const first = await priorRun(G1);
+        first.store.db.run("UPDATE runs SET finished_at = NULL WHERE id = ?", [first.runId]);
+        const r = await envRun({
+          ...proven,
+          generation: G2,
+          dirs: first.dirs,
+          store: first.store,
+          extra: { resume: "last" },
+        });
+        refused(r, G1, G2);
+        expect(maxRunId(r.store)).toBe(first.runId);
+        r.store.close();
+      });
+
+      test("a resumed run that recorded no generation refuses by name (no back-compat)", async () => {
+        const first = await priorRun(G1);
+        first.store.db.run("UPDATE runs SET server_generation = NULL WHERE id = ?", [first.runId]);
+        const r = await envRun({
+          ...proven,
+          generation: G1,
+          dirs: first.dirs,
+          store: first.store,
+          extra: { resume: first.runId },
+        });
+        expect(refused(r, null, G1)).toContain("none recorded");
+        r.store.close();
+      });
+
+      // Build review M3: the rule is the same for a bcdev session WITHOUT the env-tool hook.
+      test("a session without the hook refuses across a changed generation too", async () => {
+        const first = await envRun({ post: P2, generation: G1, noHook: true });
+        expect(first.outcome).not.toBeInstanceOf(Error);
+        const r = await envRun({
+          post: P2,
+          generation: G2,
+          noHook: true,
+          dirs: first.dirs,
+          store: first.store,
+          extra: { resume: first.runId },
+        });
+        refused(r, G1, G2);
+        r.store.close();
+      });
+
+      test("control: the same generation resumes and carries", async () => {
+        const first = await priorRun(G1);
+        const r = await envRun({
+          ...proven,
+          generation: G1,
+          dirs: first.dirs,
+          store: first.store,
+          extra: { resume: first.runId },
+        });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect((r.outcome as SessionReport).resumedFrom?.runId).toBe(first.runId);
+        expect(r.store.getRun(r.runId)?.serverGeneration).toBe(G1);
+        r.store.close();
+      });
+
+      test("the lease is asked at the generation read first, and that read is the only one", async () => {
+        const r = await envRun({ post: P2, generation: G1 });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(r.client.acquireArgs[0]?.expectedGeneration).toBe(G1);
+        expect(r.generationReads()).toBe(1);
+        // The run row records the very generation the lease was asked at.
+        expect(r.store.getRun(r.runId)?.serverGeneration).toBe(G1);
+        r.store.close();
+      });
+
+      for (const resumed of [false, true]) {
+        test(`a restart between the first read and the lease stops the ${resumed ? "resumed" : "fresh"} session before any deploy`, async () => {
+          const first = resumed ? await priorRun(G1) : undefined;
+          const r = await envRun({
+            ...(resumed ? proven : { post: P2 }),
+            generation: G1,
+            restartAfterFirstRead: G2,
+            ...(first !== undefined
+              ? { dirs: first.dirs, store: first.store, extra: { resume: first.runId } }
+              : {}),
+          });
+          expect(r.outcome).toBeInstanceOf(LeaseUnavailableError);
+          expect((r.outcome as Error).message).toContain("generation-changed");
+          expect(r.client.acquireArgs[0]?.expectedGeneration).toBe(G1);
+          expect(r.store.baselineTests(r.runId)).toEqual([]);
+          r.store.close();
+        });
+      }
+
+      // The R192 snapshot (plan review I1): run A's baseline, recorded before a restart, must not
+      // be reused by a resumed run after it. Run B is the one resumed; it loses its own snapshot and
+      // a mutant, so A's is the only candidate. Under A's own generation it is reused (control).
+      for (const same of [false, true]) {
+        test(`resume: a snapshot from a run on ${same ? "the same" : "another"} generation is ${same ? "reused (control)" : "not reused"}`, async () => {
+          const a = await envRun({ post: P2, generation: G1 });
+          expect(a.outcome).not.toBeInstanceOf(Error);
+          const now = same ? G1 : G2;
+          const b = await envRun({ post: P2, generation: now, dirs: a.dirs, store: a.store });
+          expect(b.outcome).not.toBeInstanceOf(Error);
+          a.store.db.run("DELETE FROM baseline_snapshots WHERE run_id = ?", [b.runId]);
+          a.store.db.run("UPDATE runs SET finished_at = NULL WHERE id = ?", [b.runId]);
+          const victim = a.store.db
+            .query("SELECT MIN(id) AS id FROM mutants WHERE run_id = ?")
+            .get(b.runId) as { id: number };
+          a.store.db.run("DELETE FROM mutants WHERE id = ?", [victim.id]);
+          const r = await envRun({
+            ...proven,
+            generation: now,
+            dirs: a.dirs,
+            store: a.store,
+            extra: { resume: b.runId },
+          });
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          expect(r.reuseWarning).toHaveLength(same ? 1 : 0);
+          r.store.close();
+        });
+      }
     });
 
     // R492 item 1: the server serves P2 while P1 is still installed, so run 1 MEASURES P1. Later P2
