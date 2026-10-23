@@ -132,6 +132,7 @@
     "bc-linux-setup.test.ts",
     "bc-demo-setup.ts",
     "bc-demo-setup.test.ts",
+    "r560c-credit-limit-setup.ts",
     "bc-republish.ts",
     "bc-republish.test.ts",
     "r594/cdo-publish.ts",
