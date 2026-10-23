@@ -686,10 +686,10 @@ that ordering is the priority.
 - **R615** · scripts/bc-linux-setup.ts records every lane's lease token in one shared file per server (TOKEN_DIR fixed to the R-589 folder, lease-<server>.txt), so two lanes overwrite each other's record · [R615.md](docs/roadmap/R615.md) · open, filed 2026-10-21
 - **R611** · R586's T15 backend-identity scanner is blind to case labels, split compares, .includes and src subfolders · [R611.md](docs/roadmap/R611.md) · done (d43ed20c)
 - **R614** · al-runner-v3 update gate: existing fixture .alpackages are not checked against the pinned symbol tar · [R614.md](docs/roadmap/R614.md) · done (72203cfc)
-- **R616** · A parallel full verify times out under real load (two tests at 5000 ms); its worker count does not adapt · [R616.md](docs/roadmap/R616.md) · done (SHA-PENDING)
+- **R616** · A parallel full verify times out under real load (two tests at 5000 ms); its worker count does not adapt · [R616.md](docs/roadmap/R616.md) · done (854d0c6b)
 - **R617** · bc-linux-setup --held-lease has no test: nothing checks it never takes or releases a lease · [R617.md](docs/roadmap/R617.md) · done (8daecd3f)
 - **R621** · --resume carries a stored no-coverage verdict without checking it against this session's coverage: always in a wholly carried batch (replayCarriedBatch), and in a partly carried one (scoreBatch) whenever this session covers the mutant · [R621.md](docs/roadmap/R621.md) · done (91683742)
-- **R622** · A full verify HUNG for 10 minutes in real-home-guard.test.ts (one worker at 100% CPU, no timeout fired) instead of failing; not reproduced · [R622.md](docs/roadmap/R622.md) · done (SHA-PENDING)
+- **R622** · A full verify HUNG for 10 minutes in real-home-guard.test.ts (one worker at 100% CPU, no timeout fired) instead of failing; not reproduced · [R622.md](docs/roadmap/R622.md) · done (854d0c6b)
 - **R623** · An in-place same-version publish of a fixture TARGET under an installed dependent is not measured, so bc-linux-setup.ts and bc-republish.ts refuse it by name · [R623.md](docs/roadmap/R623.md) · open
 - **R624** · bc-linux-setup.ts's downloadSymbols and the Continia step's residentVersion read any failed dev/packages answer as "absent" · [R624.md](docs/roadmap/R624.md) · done (fb1a753a)
 - **R625** · 123 tracked scripts/*.ts files are outside scripts/tsconfig.json, so bun run typecheck never sees them (24 of them tests) · [R625.md](docs/roadmap/R625.md) · done (c15286fe)
