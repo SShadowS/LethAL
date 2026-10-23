@@ -17,7 +17,6 @@ import type {
   TestVerdict,
 } from "../src/backend";
 import { type SessionConfig, runSession } from "../src/orchestrator";
-import type { AlRunnerPredefinedProbe } from "../src/preprocessor-symbols";
 import { ResultsStore } from "../src/store";
 
 const SRC = join(import.meta.dir, "..", "src");
@@ -38,15 +37,17 @@ const SHAPES: readonly RegExp[] = [
 
 /**
  * file -> the trimmed text of each classified line -> its class. Text, not line numbers (R117).
- * Classes: `v2` (the .NET al-runner alone, v3 deliberately excluded), `coverage-mode` (the
- * CoverageMode "al-runner", not a backend), `report-field` (the report's own `authoritative`),
- * `config` (the CLI's backend argument / config section), `predicate` (the predicate itself).
+ * Classes: `retired` (R654: the retired .NET al-runner's name, kept only to refuse it),
+ * `coverage-mode` (the CoverageMode "al-runner", not a backend), `report-field` (the report's own
+ * `authoritative`), `config` (the CLI's backend argument / config section), `predicate` (the
+ * predicate itself). R654 S3 deleted every `v2` read with the backend.
  */
 const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "backend.ts": {
     'return kind === "bcdev";': "predicate",
-    'return kind === "al-runner";': "predicate",
-    'return kind === "al-runner" || kind === "al-runner-v3";': "predicate",
+  },
+  "v2-retired.ts": {
+    'export const RETIRED_V2_BACKEND = "al-runner";': "retired",
   },
   "verify-reach.ts": { 'case "al-runner":': "coverage-mode" },
   "al-runner-v3-config.ts": {
@@ -56,59 +57,17 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   },
   // R654 S1: the coverage index passes its own `WrappedRule` ("al-runner-index"), not a backend
   // name, so it is no longer a backend-identity read.
-  // A directory name, not a backend.
-  "al-runner-cache.ts": {
-    'return join(homeDir(), ".local", "share", "al-runner", "artifacts");': "path",
-    'return join(homeDir(), ".cache", "al-runner");': "path",
-  },
-  "doctor.ts": {
-    'checkPromises.push(runCheck("al-runner", async () => checkAlRunner(await alRunner())));':
-      "config",
-  },
-  "store.ts": {
-    'return run.backend !== "al-runner" || run.alRunnerNames;': "v2",
-    'if (run.backend === "al-runner" && ctx.renamed !== undefined) {': "v2",
-  },
-  // R-300b: bcdev's shape rule with arms; v2's measured admission; v3 takes neither (refused).
-  // R654 S1 (plan r2 D-I2): read once, in `wrappedRuleFor`'s switch; the rule itself keys on the
-  // `WrappedRule`, and `carryBarredFiles` (orchestrator.ts) on the same rule.
-  "line-map.ts": {
-    'case "al-runner":': "v2",
-  },
-  "preprocessor-symbols.ts": {
-    'const predefined = backend.kind === "al-runner" ? backend.predefined.symbols : [];': "v2",
-  },
   "report.ts": {
     "authoritative: input.caps.authoritative,": "report-field",
     "if (!r.authoritative) {": "report-field",
-    'if (r.backend === "al-runner" && r.alRunnerCanary !== undefined) {': "v2",
-    // R553's assertion screen: strips al-runner v2's `{Type}Exception: ` prefix. v3 takes the
-    // bcdev branch (its messages carry no such prefix: "rows=0 counter=1", "Test exceeded 3s
-    // timeout."), so these are v2-only reads.
-    'const screenBackend = input.caps.kind === "al-runner" ? "al-runner" : "bcdev";': "v2",
-    'screenBackend === "al-runner" &&': "v2",
-  },
-  "assertion-screen.ts": {
-    'return backend === "al-runner" ? m.replace(AL_RUNNER_EXCEPTION_PREFIX, "") : m;': "v2",
-  },
-  "orchestrator.ts": {
-    '...(backendName === "al-runner" ? { alRunnerNames: true } : {}),': "v2",
   },
   "cli.ts": {
-    'if (raw !== "bcdev" && raw !== "al-runner" && raw !== "al-runner-v3") {': "config",
+    'if (raw !== "bcdev" && raw !== "al-runner-v3") {': "config",
     'if (coverage === "al-runner") {': "coverage-mode",
-    'coverage: c.coverage ?? "al-runner",': "coverage-mode",
-    'if (effectiveAlRunnerTransport(section).coverage !== "al-runner") {': "coverage-mode",
-    '`[lethal] al-runner-coverage-unsupported: al-runner coverage (${section.coverage === "al-runner" ? \'set by "alRunner.coverage": "al-runner"\' : "on by default"}) is turned OFF for this run, which runs with coverage "none" instead. al-runner\'s coverage cannot be placed in ${named.join(", ")}: ${why.join("; ")}. Trusting it would credit those objects\' mutants to the wrong tests, or report them no-coverage while tests do reach them.`,':
-      "coverage-mode",
-    'if (parsed.backendKind === "al-runner") {': "config",
-    'if (paths.backendKind === "al-runner") {': "config",
-    // R656: `dryRunDependencyPackageDirs`, one branch per backend kind (v3 has its own).
-    'if (backendKind === "al-runner") {': "config",
     'if (backendArg === "bcdev" && workers > 1) {': "bcdev",
     'if (parsed.backendKind !== "bcdev" || configFile.envTool === undefined) {': "bcdev",
     'if (parsed.backendKind !== "bcdev") return {};': "bcdev",
-    '} else if (paths.backendKind === "bcdev") {': "bcdev",
+    'if (paths.backendKind === "bcdev") {': "bcdev",
     '...(parsed.backendKind === "bcdev"': "bcdev",
     'if (highestPublished !== undefined && parsed.backendKind === "bcdev") {': "bcdev",
   },
@@ -243,7 +202,7 @@ class V3KindStub implements ExecutionBackend {
 function withProbe(b: V3KindStub, set: readonly string[] | undefined): ExecutionBackend {
   if (set === undefined) return b;
   return Object.assign(b, {
-    measurePredefinedSymbols: async (): Promise<AlRunnerPredefinedProbe> => ({ symbols: [...set] }),
+    measurePredefinedSymbols: async (): Promise<{ symbols: string[] }> => ({ symbols: [...set] }),
   });
 }
 
@@ -297,8 +256,6 @@ describe("R586 C1: runSession keys on kind, not on authoritative", () => {
         binarySha256: "b".repeat(64),
       });
       expect(store.getRun(1)?.backend).toBe("al-runner-v3");
-      // R557's stamp is the v2 mark: a v3 run must not carry it.
-      expect(store.getRun(1)?.alRunnerNames).toBe(false);
       // R586: the build `runMayLend` lends under.
       expect(store.getRun(1)?.runnerBuild).toBe(
         `alrunner 3.0.0-alpha.2 (91253f2d6) ${"b".repeat(64)}`,
@@ -316,12 +273,14 @@ describe("R586 C1: runSession keys on kind, not on authoritative", () => {
     });
   });
 
-  test("T27: v3 never takes v2's predefined-probe branch, and its build set has no predefined symbol", async () => {
+  // R654: the .NET al-runner's R392 probe branch is gone; its other direction (a v2-kind backend
+  // without the probe refused) went with the kind.
+  test("T27: v3 never calls a predefined-symbol probe, and its build set has no predefined symbol", async () => {
     await inProject(async (root) => {
       const store = new ResultsStore(":memory:");
       let probed = 0;
       const b = Object.assign(new V3KindStub(undefined), {
-        measurePredefinedSymbols: async (): Promise<AlRunnerPredefinedProbe> => {
+        measurePredefinedSymbols: async (): Promise<{ symbols: string[] }> => {
           probed += 1;
           return { symbols: ["CLEANSCHEMA25"] };
         },
@@ -329,22 +288,6 @@ describe("R586 C1: runSession keys on kind, not on authoritative", () => {
       await v3Session(root, store, b);
       expect(probed).toBe(0);
       expect(store.getRun(1)?.buildSymbols).toEqual([]);
-    });
-  });
-
-  test("T27 (other direction): a v2-kind backend without the R392 probe is still refused", async () => {
-    await inProject(async (root) => {
-      const store = new ResultsStore(":memory:");
-      const v2 = Object.assign(new V3KindStub(undefined), {
-        capabilities: (): BackendCapabilities => ({
-          kind: "al-runner",
-          coverage: "none",
-          deploy: "none",
-          isolation: "session",
-          authoritative: false,
-        }),
-      });
-      await expect(v3Session(root, store, v2)).rejects.toThrow(/measurePredefinedSymbols/);
     });
   });
 

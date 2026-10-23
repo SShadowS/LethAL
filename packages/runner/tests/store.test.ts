@@ -9,7 +9,6 @@ import {
   PRUNED_BY_ENV_TEARDOWN,
   ResultsStore,
   STORE_BUSY_TIMEOUT_MS,
-  runLendsAlRunnerNames,
 } from "../src/store";
 import { tinyBundle } from "./helpers/bundle";
 import { testDbPath } from "./helpers/test-db";
@@ -726,10 +725,10 @@ describe("ResultsStore", () => {
     rmSync(path, { force: true });
   });
 
-  // R557 (I1): a runs table from before R557 gains `al_runner_names`, and its rows read NULL. An
-  // al-runner row without the mark lends no survivor; a bcdev row without it lends as before; the
-  // mark, once set, lends again.
-  test("R557: migrates al_runner_names; an unmarked al-runner run lends no survivor, an unmarked bcdev run does", () => {
+  // R557 (I1): a runs table from before R557 gains `al_runner_names` (the column stays after R654,
+  // which stopped reading it). R654: a retired .NET al-runner row lends no survivor at all; a
+  // bcdev row lends as before.
+  test("R557/R654: migrates al_runner_names; a retired al-runner run lends no survivor, a bcdev run does", () => {
     const path = testDbPath("lethal-store-r557.sqlite");
     const legacy = new Database(path);
     legacy.exec(`CREATE TABLE runs (
@@ -757,8 +756,6 @@ describe("ResultsStore", () => {
     const store = new ResultsStore(path);
     const cols = store.db.query("PRAGMA table_info(runs)").all() as Array<{ name: string }>;
     expect(cols.map((c) => c.name)).toContain("al_runner_names");
-    expect(store.getRun(1)?.alRunnerNames).toBe(false);
-    expect(store.getRun(2)?.alRunnerNames).toBe(false);
     const A = { hash: "package:a", deps: "D" };
     for (const id of [1, 2]) {
       store.setRunTestAppHash(id, "package:a", true, "D");
@@ -771,20 +768,12 @@ describe("ResultsStore", () => {
       store.recordMutant(id, mutantRow("survived"));
       store.finishRun(id, { batchCount: 1, baselineGreen: true });
     }
-    const unmarked: unknown[] = [];
-    const ask = (p: string) =>
-      store.priorSurvivorKeys(p, "procedure", A, [], [], [], {
-        alRunnerUnmarked: (i) => unmarked.push(i),
-      }).keys.size;
+    const ask = (p: string) => store.priorSurvivorKeys(p, "procedure", A, [], [], []).keys.size;
     expect(ask("P")).toBe(0);
-    expect(unmarked).toEqual([{ runId: 1 }]);
     expect(ask("Q")).toBe(1);
-    expect(unmarked).toHaveLength(1);
-    // The mark is what lends: set it on the al-runner row and the same survivor comes back.
+    // The old mark no longer lends: set it on the al-runner row and nothing comes back.
     store.db.run("UPDATE runs SET al_runner_names = 1 WHERE id = 1");
-    expect(store.getRun(1)?.alRunnerNames).toBe(true);
-    expect(ask("P")).toBe(1);
-    expect(unmarked).toHaveLength(1);
+    expect(ask("P")).toBe(0);
     store.close();
     rmSync(path, { force: true });
   });
@@ -820,31 +809,6 @@ describe("ResultsStore", () => {
     expect(() => store.getRun(id)).toThrow(/corrupt "test_scope"/);
     store.close();
     rmSync(path, { force: true });
-  });
-
-  test("R557: createRun stamps al_runner_names only when asked; runLendsAlRunnerNames reads it per backend", () => {
-    const store = new ResultsStore(":memory:");
-    const make = (backend: string, alRunnerNames?: boolean) =>
-      store.createRun({
-        testScope: [],
-        coverageMode: "procedure",
-        identityScheme: IDENTITY_SCHEME,
-        buildSymbols: [],
-        projectPath: "/p",
-        backend,
-        appVersion: "1",
-        ...(alRunnerNames !== undefined ? { alRunnerNames } : {}),
-      });
-    const lends = (id: number) => {
-      const row = store.getRun(id);
-      if (row === null) throw new Error(`no run ${id}`);
-      return runLendsAlRunnerNames(row);
-    };
-    expect(lends(make("al-runner", true))).toBe(true);
-    expect(lends(make("al-runner"))).toBe(false);
-    expect(lends(make("al-runner", false))).toBe(false);
-    expect(lends(make("bcdev"))).toBe(true);
-    store.close();
   });
 
   test("priorSurvivorKeys returns a same-test-app run's survivors and none across a change", () => {
@@ -1190,7 +1154,7 @@ CREATE TABLE IF NOT EXISTS mutants (
           identityScheme: IDENTITY_SCHEME,
           buildSymbols: [],
           projectPath: "/p",
-          backend: "al-runner",
+          backend: "al-runner-v3",
           appVersion: "1",
         });
         // A kill the rule reproduced, written after the migration.

@@ -12,7 +12,7 @@ import {
 } from "./gate-table.ts";
 
 // R654 S2 (plan docs/superpowers/plans/2026-10-22-r654-retire-dotnet-alrunner.md §S2a): the v3
-// gate is a leg of its own, selected wherever the .NET al-runner leg is, until S3 removes v2.
+// gate is a leg of its own. S3 removed the .NET al-runner leg it was selected beside.
 describe("R654 S2: the alrunner-v3 leg", () => {
   test("a change to al-runner-v3-backend.ts selects alrunner-v3", () => {
     expect(selectLegs(["packages/runner/src/al-runner-v3-backend.ts"]).legs).toContain(
@@ -30,7 +30,8 @@ describe("R654 S2: the alrunner-v3 leg", () => {
     }
   });
 
-  test("every selection holding alrunner also holds alrunner-v3, and v2's leg stays", () => {
+  test("R654 S3: every selection that held the retired alrunner leg holds alrunner-v3, and no leg is alrunner", () => {
+    expect((LEG_ORDER as readonly string[]).includes("alrunner")).toBe(false);
     for (const p of [
       "packages/engine/src/x.ts",
       "packages/schemata/src/x.ts",
@@ -39,8 +40,12 @@ describe("R654 S2: the alrunner-v3 leg", () => {
       "extensions/lethal-control/src/x.al",
       "packages/somewhere-new/x.ts",
     ]) {
-      const legs = selectLegs([p]).legs;
-      expect([p, legs.includes("alrunner"), legs.includes("alrunner-v3")]).toEqual([p, true, true]);
+      const legs = selectLegs([p]).legs as readonly string[];
+      expect([p, legs.includes("alrunner"), legs.includes("alrunner-v3")]).toEqual([
+        p,
+        false,
+        true,
+      ]);
     }
   });
 
@@ -48,10 +53,10 @@ describe("R654 S2: the alrunner-v3 leg", () => {
     expect(selectLegs(["docs/gates/alrunner-v3.md"]).legs).toEqual([]);
   });
 
-  test("its receipt is checked against the exact default leg list, on agent-app, right after alrunner", () => {
+  test("its receipt is checked against the exact default leg list, on agent-app, right after chunked", () => {
     expect(EXPECTED_SUBLEGS["alrunner-v3" as Leg]).toEqual(V3_AGENTFLOW_LEGS);
     expect(LEG_CONTAINER["alrunner-v3" as Leg]).toBe("agent-app");
-    expect(LEG_ORDER.indexOf("alrunner-v3" as Leg)).toBe(LEG_ORDER.indexOf("alrunner") + 1);
+    expect(LEG_ORDER.indexOf("alrunner-v3" as Leg)).toBe(LEG_ORDER.indexOf("chunked") + 1);
   });
 });
 
@@ -85,7 +90,7 @@ describe("rows union, they never override", () => {
     expect(s.legs).toContain("lease");
     expect(s.legs).toContain("tables");
     expect(s.legs).toContain("chunked");
-    expect(s.legs).toContain("alrunner");
+    expect(s.legs).toContain("alrunner-v3");
     // And the specific row adds the one gate that races two publishes.
     expect(s.legs).toContain("stale-publish");
   });
@@ -113,7 +118,7 @@ describe("rows union, they never override", () => {
     expect(s.legs).toContain("tables");
     expect(s.legs).toContain("chunked");
     expect(s.legs).toContain("bcdev");
-    expect(s.legs).toContain("alrunner");
+    expect(s.legs).toContain("alrunner-v3");
   });
 });
 

@@ -16,6 +16,7 @@ import type { V3Row } from "../src/al-runner-v3-backend";
 import {
   BC_END_OF_TEST_TEXT,
   BC_HTTP_INTERNAL_TEXT,
+  MESSAGE_PREFIX_REASON,
   type V3ContractResult,
   classifySleep,
   runV3ContractProbe,
@@ -1105,10 +1106,30 @@ describe("R667 message-has-no-type-prefix: v3's failure message carries no `<Typ
     const ok = await run(row(50650, "Fails", "fail", { message: "boom 5" }));
     const f = ok.facts.find((x) => x.fact === MSG);
     expect(f?.verdict).toBe("matches");
-    expect(f?.measured).toMatch(/Assert half not re-measured in a session/);
+    // Review r1: never "trusted from" a leg C that, before r12, did not read this half.
+    expect(f?.measured).toBe(
+      'Fails "boom 5"; Assert half not re-measured in a session (gate-only); leg C reads it only from r12 on, so a .gated recorded before r12 never read it (the gated build\'s leg C at 5eb544ef)',
+    );
+    // (This fake main call writes no coverage, so only per-test-coverage refuses here.)
+    expect(v3ContractRefusals(ok).join("\n")).not.toContain(MSG);
     expect(calls.some((c) => c.includes("--codeunit 50661"))).toBe(false);
-    const bad = await run(row(50650, "Fails", "fail", { message: PREFIXED }));
-    expect(v3ContractRefusals(bad).join("\n")).toMatch(/DIVERGED — message-has-no-type-prefix/);
+    // A prefixed plain Error(), and a prefixed refusal written as a plain fail (the K1(a) hole):
+    // both refuse the session, naming the reason.
+    for (const message of [
+      PREFIXED,
+      "SomeException: NotRun: out-of-scope: an outbound HTTP request",
+    ]) {
+      const bad = await run(row(50650, "Fails", "fail", { message }));
+      const text = v3ContractRefusals(bad).join("\n");
+      expect(text).toMatch(/DIVERGED — message-has-no-type-prefix/);
+      expect(text).toContain(`\n    why: ${MESSAGE_PREFIX_REASON}\n`);
+    }
+  });
+
+  test("the refusal's reason text is pinned", () => {
+    expect(MESSAGE_PREFIX_REASON).toBe(
+      "a `<Type>:` prefix would hide v3's not-trusted refusal from the K1(a) guard (`v3RowVerdict` reads `NotRun: out-of-scope:` at the start of the message, so a prefixed refusal written as a plain fail would score as a kill) (R667)",
+    );
   });
 });
 

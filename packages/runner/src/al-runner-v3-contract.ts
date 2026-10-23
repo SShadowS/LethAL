@@ -28,8 +28,25 @@ import {
 import { type V3Row, V3_REFUSAL_PREFIX, decodeV3Rows } from "./al-runner-v3-backend";
 import { baseAppJson, probeV3PredefinedSymbols } from "./al-runner-v3-probe";
 import { AlcCompileError, ArtifactCompiler, type ArtifactIo, defaultArtifactIo } from "./artifact";
-import { AL_RUNNER_EXCEPTION_PREFIX } from "./assertion-screen";
 import { type SpawnFn, defaultSpawn } from "./publisher";
+
+/**
+ * R667: the .NET al-runner's (v2) `{Type}Exception: ` message prefix: R553's regex, which R654 S3
+ * removed from assertion-screen.ts with v2. R657 measured that v3 writes no such prefix; the fact
+ * `message-has-no-type-prefix` keeps the regex to notice a v3 build that starts writing one.
+ */
+export const AL_RUNNER_EXCEPTION_PREFIX = /^(?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*Exception: /;
+
+/** R667: a contract fact: `gate-fail` in leg C, a refusal in a session. */
+export const MESSAGE_PREFIX_FACT = "message-has-no-type-prefix";
+
+/**
+ * R667 (review r1): why a prefix refuses a session, not only skews the R553 screen. `v3RowVerdict`'s
+ * K1(a) guard reads `startsWith(V3_REFUSAL_PREFIX)`, so `SomeException: NotRun: out-of-scope: ...`
+ * written as a plain fail would score as a kill.
+ */
+export const MESSAGE_PREFIX_REASON =
+  "a `<Type>:` prefix would hide v3's not-trusted refusal from the K1(a) guard (`v3RowVerdict` reads `NotRun: out-of-scope:` at the start of the message, so a prefixed refusal written as a plain fail would score as a kill) (R667)";
 
 export type V3ContractVerdict = "matches" | "diverged" | "unmeasurable";
 /**
@@ -1182,7 +1199,7 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
     } else {
       assertMeasured =
         env.gateOnlyTrusted !== undefined
-          ? `Assert half not re-measured in a session: trusted from ${env.gateOnlyTrusted}`
+          ? `Assert half not re-measured in a session (gate-only); leg C reads it only from r12 on, so a .gated recorded before r12 never read it (${env.gateOnlyTrusted})`
           : "no Library Assert app";
     }
     // A session without the app trusts the gate for the Assert half; leg C without it cannot read it.
@@ -1190,17 +1207,21 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
       env.libraryAssertApp === undefined && env.gateOnlyTrusted !== undefined
         ? [plain]
         : [plain, assertMsg];
+    const seen = msgs
+      .map((m) => (m !== undefined ? AL_RUNNER_EXCEPTION_PREFIX.exec(m)?.[0] : undefined))
+      .find((p) => p !== undefined);
     facts.push(
       fact(
-        "message-has-no-type-prefix",
+        MESSAGE_PREFIX_FACT,
         "contract",
-        msgs.some((m) => m !== undefined && AL_RUNNER_EXCEPTION_PREFIX.test(m))
+        seen !== undefined
           ? "diverged"
           : msgs.every((m) => m !== undefined)
             ? "matches"
             : "unmeasurable",
         "Fails (a plain Error()) and AssertAreEqual are plain fails whose message does not match AL_RUNNER_EXCEPTION_PREFIX",
-        `Fails ${JSON.stringify(plain ?? null)}; ${assertMeasured}`,
+        // The prefix first: a session's warning names it (`v3DefectWarnings`).
+        `${seen !== undefined ? `prefix ${JSON.stringify(seen)}; ` : ""}Fails ${JSON.stringify(plain ?? null)}; ${assertMeasured}`,
       ),
     );
     // serve-keep-reasons (R612): GATE-ONLY, like timeout-is-cpu. M-2: a gate passes whatever this
@@ -1455,7 +1476,7 @@ export function v3ContractRefusals(r: V3ContractResult, s: V3SessionKind = {}): 
       )
       .map(
         (f) =>
-          `[lethal] al-runner-v3 contract ${f.verdict.toUpperCase()} — ${f.fact}\n    expected: ${f.expected}\n    measured: ${f.measured.slice(0, 600)}\n    Re-measure (plan §8) before changing code; the pinned build is in .gated (R586).`,
+          `[lethal] al-runner-v3 contract ${f.verdict.toUpperCase()} — ${f.fact}\n    expected: ${f.expected}\n    measured: ${f.measured.slice(0, 600)}${f.fact === MESSAGE_PREFIX_FACT && f.verdict === "diverged" ? `\n    why: ${MESSAGE_PREFIX_REASON}` : ""}\n    Re-measure (plan §8) before changing code; the pinned build is in .gated (R586).`,
       )
   );
 }

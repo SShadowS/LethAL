@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { join, resolve } from "node:path";
-import { dryRunDependencyPackageDirs } from "../src/cli";
+import { dryRunDependencyPackageDirs, parseCliConfig } from "../src/cli";
+import { AlRunnerV2RetiredError } from "../src/v2-retired";
 
 // R656: `--dry-run` lists dependency reports from the folders the REAL run of that backend reads.
 // al-runner-v3 used to fall into bcdev's package cache.
 
 const config = {
   bcdev: { packageCachePath: "bc-cache" },
-  alRunner: { packagesDir: "v2-pkgs" },
   alRunnerV3: { packagesDir: "v3-pkgs" },
 };
 
@@ -22,14 +22,6 @@ describe("R656: dryRunDependencyPackageDirs per backend kind", () => {
     ]);
   });
 
-  test("al-runner (v2) reads alRunner.packagesDir", () => {
-    expect(dryRunDependencyPackageDirs("al-runner", config, "proj")).toEqual(["v2-pkgs"]);
-  });
-
-  test("al-runner (v2) with no packagesDir reads none", () => {
-    expect(dryRunDependencyPackageDirs("al-runner", {}, "proj")).toEqual([]);
-  });
-
   test("al-runner-v3 reads alRunnerV3.packagesDir, as the v3 backend's dependencyPackageDirs does", () => {
     expect(dryRunDependencyPackageDirs("al-runner-v3", config, "proj")).toEqual(["v3-pkgs"]);
   });
@@ -39,5 +31,11 @@ describe("R656: dryRunDependencyPackageDirs per backend kind", () => {
       [],
     );
     expect(dryRunDependencyPackageDirs("al-runner-v3", undefined, "proj")).toEqual([]);
+  });
+
+  test("--dry-run --backend al-runner (v2) never reaches here: al-runner-v2-retired", () => {
+    expect(() =>
+      parseCliConfig(["run", "--project", "proj", "--dry-run", "--backend", "al-runner"]),
+    ).toThrow(AlRunnerV2RetiredError);
   });
 });

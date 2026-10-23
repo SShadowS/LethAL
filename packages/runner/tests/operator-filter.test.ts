@@ -22,7 +22,6 @@ import {
 import { buildReport, renderConsole } from "../src/report";
 import type { FoldStatics } from "../src/report-fold";
 import { ResultsStore } from "../src/store";
-import { measuredV2_12 } from "./helpers/al-runner-predefined";
 
 /**
  * R127. `--operator <name>` narrows which OPERATORS contribute mutants, so a question about one
@@ -455,7 +454,7 @@ describe("runSession — --operator reaches both the mutant set AND the report",
     coverage: "procedure",
     deploy: "publish",
     isolation: "session",
-    kind: "al-runner",
+    kind: "al-runner-v3",
     authoritative: false,
   };
 
@@ -491,7 +490,10 @@ describe("runSession — --operator reaches both the mutant set AND the report",
 `;
 
   class StubBackend implements ExecutionBackend {
-    readonly measurePredefinedSymbols = measuredV2_12; // R392
+    // R654: re-pointed from the retired .NET al-runner to al-runner-v3, which names its build.
+    async runnerBuild(): Promise<{ version: string; binarySha256: string }> {
+      return { version: "alrunner 3.0.0-alpha.2 (91253f2d6)", binarySha256: "b".repeat(64) };
+    }
     private activations: Array<string | null> = [];
     capabilities(): BackendCapabilities {
       return RUN_CAPS;
@@ -578,7 +580,7 @@ describe("runSession — --operator reaches both the mutant set AND the report",
 });
 
 describe("parseCliConfig — --operator", () => {
-  const RUN_ARGS = ["run", "--project", "p", "--tests", "t", "--backend", "al-runner"] as const;
+  const RUN_ARGS = ["run", "--project", "p", "--tests", "t", "--backend", "bcdev"] as const;
 
   test("a single --operator lands as a one-element array", () => {
     const cfg = parseCliConfig([...RUN_ARGS, "--operator", "swap-call-arguments"]);

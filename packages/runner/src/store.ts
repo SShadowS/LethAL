@@ -15,6 +15,7 @@ import {
   serializeKey,
   twinSiteOf,
 } from "./selection";
+import { RETIRED_V2_BACKEND, v2RetiredRun } from "./v2-retired";
 
 /** R644: two faced lists name the same tests (order ignored); a `null` (no record) equals nothing. */
 function sameFaced(a: FacedTests, b: FacedTests): boolean {
@@ -297,9 +298,6 @@ export interface RunRow {
   /** R601: `runs.resource_key`, the server tier the run ran on (`quarantineResourceKey`). `null`
    *  on a run with no tier identity (al-runner, or no server fields): never equal to anything. */
   readonly resourceKey: string | null;
-  /** R557 (I1): the run carries the R557 test-name mark (`runs.al_runner_names`). `false` on a row
-   *  recorded before the column, and on every run that is not an R557+ al-runner session. */
-  readonly alRunnerNames: boolean;
   /** R586: `runs.runner_build` (an al-runner-v3 run's build), `null` on every other run. */
   readonly runnerBuild: string | null;
   /** R585: the sorted keys (`testKeyOf`) of the tests the run's baseline was given. `null` on a
@@ -317,23 +315,18 @@ export interface LendingSession {
  * R586 `runMayLend` step 1 (plan r2 §10, run FIRST so the reason it names is the real one): when
  * EITHER side is `al-runner-v3`, both must be, and the run's recorded build must equal the
  * session's. A v3 verdict carries v3's known differences (#5603's false survivors, #5605), so it
- * is evidence only for that build. R592: any other pair of different backends is refused too (a
- * survivor is evidence only on the backend that measured it; bcdev and al-runner share coverage
- * mode `none`). With no session named, only a v3 run is refused. Remove-only. `undefined` = lends.
+ * is evidence only for that build. R654: a run of the retired .NET al-runner lends nothing, by
+ * name, FIRST, against any session or none. (R654 also removed R592's arm: once no session can be
+ * v2, its only remaining pair was a stored v2 run against a bcdev session, which the R654 refusal
+ * names first.) With no session named, only a v2 or v3 run is refused. Remove-only.
+ * `undefined` = lends.
  */
 export function backendBuildRefusal(
   run: { readonly id: number; readonly backend: string; readonly runnerBuild: string | null },
   session: LendingSession | undefined,
 ): string | undefined {
+  if (run.backend === RETIRED_V2_BACKEND) return v2RetiredRun(run.id);
   const v3 = "al-runner-v3";
-  if (
-    session !== undefined &&
-    run.backend !== session.backend &&
-    run.backend !== v3 &&
-    session.backend !== v3
-  ) {
-    return `run ${run.id} ran on ${run.backend} and this session runs ${session.backend}; a verdict is lent only within one backend (R592)`;
-  }
   if (run.backend !== v3 && session?.backend !== v3) return undefined;
   if (session === undefined) {
     return `run ${run.id} ran on al-runner-v3 and this caller named no session backend, so nothing of it is lent (R586)`;
@@ -351,24 +344,7 @@ export function backendBuildRefusal(
 export type LendRefusal =
   | { readonly step: "backend-build"; readonly why: string }
   /** The site's own check refused, and has already said why. */
-  | { readonly step: "site" }
-  | { readonly step: "al-runner-unmarked" }
-  | { readonly step: "al-runner-renamed"; readonly tests: readonly string[] };
-
-/**
- * R557 (I1): whether a run may lend history, carry or a baseline snapshot, as far as al-runner test
- * names go. An al-runner run lends only with the R557 mark, which an R557+ session stamps at run
- * creation: before R557 a renamed test was sent under its AL name and never ran, so its only-kills
- * read survived, and a run that CARRIED such verdicts (a resume, `known-survivor` rows) holds no
- * baseline row that shows it. Any other backend lends. A separate predicate that only REMOVES: each
- * caller ANDs it with its own checks, and it never re-admits a run another check refused.
- */
-export function runLendsAlRunnerNames(run: {
-  readonly backend: string;
-  readonly alRunnerNames: boolean;
-}): boolean {
-  return run.backend !== "al-runner" || run.alRunnerNames;
-}
+  | { readonly step: "site" };
 
 /** R391: a stored `twin_tuples`, checked. NULL stays `null`; anything but a JSON string array
  *  is a corrupt row and throws. */
@@ -822,8 +798,8 @@ export class ResultsStore {
       ["runs", "numbering_digest TEXT", runCols],
       // R565: NULL on an older row, read as "not recorded": no rule-1 carry from it.
       ["runs", "dependency_source_sha256 TEXT", runCols],
-      // R557 (I1): NULL on an older row, read as untrusted: an al-runner run without it lends no
-      // history, carry or baseline snapshot (`runLendsAlRunnerNames`).
+      // R557 (I1): the retired .NET al-runner's test-name mark. Unread and unwritten since R654,
+      // which refuses every v2 run by name; kept so an older database needs no migration.
       ["runs", "al_runner_names INTEGER", runCols],
       // R586: `<--version line> <binary sha256>` of an al-runner-v3 run; NULL on every other run
       // and on older rows. `runMayLend` step 1 lends a v3 run only to a v3 session of that build.
@@ -891,9 +867,6 @@ export class ResultsStore {
     /** R565: the run's dependency source digest. Absent or `null` writes NULL. `runSession` writes
      *  it after generation (`setDependencySourceSha256`); verify copies its source's here. */
     dependencySourceSha256?: string | null;
-    /** R557 (I1): the run sends al-runner tests under `alRunnerMethodName`. `true` writes 1;
-     *  absent or `false` writes NULL, which an al-runner run reads as untrusted. */
-    alRunnerNames?: boolean;
     /** R586: the al-runner-v3 build (`runnerBuildOf`); absent writes NULL (every other backend). */
     runnerBuild?: string;
     /** R585: the keys (`testKeyOf`) of the tests this run's baseline is given. Required, so no run
@@ -910,8 +883,8 @@ export class ResultsStore {
       info.testAppDeps !== undefined;
     const r = this.db
       .query(
-        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, resource_key, test_app_hash, test_app_proven, test_app_deps, test_digests, test_digest_parts, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, al_runner_names, runner_build, test_scope) " +
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, resource_key, test_app_hash, test_app_proven, test_app_deps, test_digests, test_digest_parts, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, runner_build, test_scope) " +
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
       )
       .get(
         info.projectPath,
@@ -932,7 +905,6 @@ export class ResultsStore {
         info.twinTuples != null ? JSON.stringify(info.twinTuples) : null,
         info.numberingDigest ?? null,
         info.dependencySourceSha256 ?? null,
-        info.alRunnerNames === true ? 1 : null,
         info.runnerBuild ?? null,
         info.testScope === null ? null : JSON.stringify([...new Set(info.testScope)].sort()),
       ) as {
@@ -1295,13 +1267,12 @@ export class ResultsStore {
   getRun(runId: number): RunRow | null {
     const row = this.db
       .query(
-        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, al_runner_names, runner_build, resource_key, test_scope FROM runs WHERE id = ?",
+        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, runner_build, resource_key, test_scope FROM runs WHERE id = ?",
       )
       .get(runId) as {
       test_scope: string | null;
       resource_key: string | null;
       dependency_source_sha256: string | null;
-      al_runner_names: number | null;
       runner_build: string | null;
       test_app_proven: number | null;
       test_app_deps: string | null;
@@ -1337,7 +1308,6 @@ export class ResultsStore {
       twinTuples: parseTwinTuples(row.twin_tuples, row.id),
       numberingDigest: row.numbering_digest,
       dependencySourceSha256: row.dependency_source_sha256,
-      alRunnerNames: row.al_runner_names === 1,
       runnerBuild: row.runner_build,
       resourceKey: row.resource_key,
       testScope: parseTestScope(row.test_scope, row.id),
@@ -2263,54 +2233,31 @@ export class ResultsStore {
   }
 
   /**
-   * R557 C1: the distinct `method` of `runId`'s BASELINE rows (`mutant_row_id IS NULL`) whose
-   * outcome is `error`. Read-only, existing columns. The caller decides which of them a pre-R557
-   * al-runner run sent under a name al-runner never had (`alRunnerRenamed`).
-   */
-  baselineErrorMethods(runId: number): string[] {
-    const rows = this.db
-      .query(
-        "SELECT DISTINCT method FROM test_results WHERE run_id = ? AND mutant_row_id IS NULL AND outcome = 'error' ORDER BY method",
-      )
-      .all(runId) as Array<{ method: string }>;
-    return rows.map((r) => r.method);
-  }
-
-  /**
    * R586, R619: the one run-level lend decision. All four lend sites call it once (history in
    * `priorSurvivorKeys`; `--resume`, `--resume-run` and baseline-snapshot reuse in the
    * orchestrator), and nothing else decides. Remove-only, in a fixed order; the first step that
-   * refuses names the reason. 1: backend and build (`backendBuildRefusal`). Then the site's own
-   * checks (`siteChecks`). 2: R557's mark (`runLendsAlRunnerNames`). 3: R557 C1, a v2 run's renamed
-   * baseline errors (`renamed` over `baselineErrorMethods`, the caller's OWN inputs: a snapshot
-   * passes its own error rows).
+   * refuses names the reason. 1: backend and build (`backendBuildRefusal`, which also names a run
+   * of the retired .NET al-runner, R654). Then the site's own checks (`siteChecks`). R654 removed
+   * R557's steps 2 and 3, which only a v2 run reached.
    */
   runMayLend(
     run: {
       readonly id: number;
       readonly backend: string;
       readonly runnerBuild: string | null;
-      readonly alRunnerNames: boolean;
     },
     session: LendingSession | undefined,
     ctx: {
       /** Which site calls (read by the R619 tests' call log). */
       readonly site: "history" | "resume" | "resume-run" | "snapshot";
-      /** The site's own checks, after step 1 and before step 2. `true` = refused (the site has
-       *  already said why). A throw is the site's refusal too, and propagates. */
+      /** The site's own checks, after step 1. `true` = refused (the site has already said why).
+       *  A throw is the site's refusal too, and propagates. */
       readonly siteChecks?: () => boolean;
-      readonly baselineErrorMethods: () => readonly string[];
-      readonly renamed?: (methods: readonly string[]) => readonly string[];
     },
   ): LendRefusal | undefined {
     const why = backendBuildRefusal(run, session);
     if (why !== undefined) return { step: "backend-build", why };
     if (ctx.siteChecks?.() === true) return { step: "site" };
-    if (!runLendsAlRunnerNames(run)) return { step: "al-runner-unmarked" };
-    if (run.backend === "al-runner" && ctx.renamed !== undefined) {
-      const tests = ctx.renamed(ctx.baselineErrorMethods());
-      if (tests.length > 0) return { step: "al-runner-renamed", tests };
-    }
     return undefined;
   }
 
@@ -2384,19 +2331,6 @@ export class ResultsStore {
         proven: boolean;
         deps: string | null;
       }) => void;
-      /**
-       * R557 C1: the latest finished run ran on al-runner and recorded, as baseline errors, tests
-       * whose al-runner name differs from the AL name (`renamed` picks them from the run's
-       * baseline error methods). Before R557 such a test was never run, so its only-kills read
-       * survived: no key is returned. Checked last. Absent: no check.
-       */
-      readonly alRunnerTestNames?: {
-        readonly renamed: (methods: readonly string[]) => readonly string[];
-        readonly refused: (info: { runId: number; tests: readonly string[] }) => void;
-      };
-      /** R557 (I1): the latest finished run is an al-runner run without the R557 test-name mark
-       *  (`runLendsAlRunnerNames`): no key. Checked always, before `alRunnerTestNames`. */
-      readonly alRunnerUnmarked?: (info: { runId: number }) => void;
       /** R586: this session's backend and build, for `runMayLend` step 1, checked FIRST. Absent: a
        *  v3 run lends nothing (the safe direction); every other pair is unchanged. */
       readonly session?: LendingSession;
@@ -2407,12 +2341,11 @@ export class ResultsStore {
     const none = NO_PRIOR_SURVIVORS;
     const run = this.db
       .query(
-        "SELECT id, backend, COALESCE(identity_scheme, 1) AS scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, dependency_source_sha256, al_runner_names, runner_build, test_scope FROM runs WHERE project_path = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1",
+        "SELECT id, backend, COALESCE(identity_scheme, 1) AS scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, dependency_source_sha256, runner_build, test_scope FROM runs WHERE project_path = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1",
       )
       .get(projectPath) as {
       test_scope: string | null;
       backend: string;
-      al_runner_names: number | null;
       runner_build: string | null;
       dependency_source_sha256: string | null;
       test_app_proven: number | null;
@@ -2428,17 +2361,9 @@ export class ResultsStore {
     } | null;
     if (!run) return none;
     // R619: the one lend decision (`runMayLend`): step 1 (R586) before any other reason, so the
-    // reason named is the real one; then this site's own checks; then R557's mark (I1: an unmarked
-    // al-runner run lends nothing, whatever its own rows hold) and its renamed baseline errors (C1:
-    // a pre-fix al-runner run never ran a renamed test; its only-kills read survived).
-    const names = on.alRunnerTestNames;
+    // reason named is the real one; then this site's own checks.
     const refused = this.runMayLend(
-      {
-        id: run.id,
-        backend: run.backend,
-        runnerBuild: run.runner_build,
-        alRunnerNames: run.al_runner_names === 1,
-      },
+      { id: run.id, backend: run.backend, runnerBuild: run.runner_build },
       on.session,
       {
         site: "history",
@@ -2489,21 +2414,15 @@ export class ResultsStore {
           }
           return false;
         },
-        baselineErrorMethods: () => this.baselineErrorMethods(run.id),
-        ...(names !== undefined ? { renamed: names.renamed } : {}),
       },
     );
     if (refused !== undefined) {
       if (refused.step === "backend-build") {
         on.backendBuildRefused?.({ runId: run.id, why: refused.why });
-      } else if (refused.step === "al-runner-unmarked") {
-        on.alRunnerUnmarked?.({ runId: run.id });
-      } else if (refused.step === "al-runner-renamed") {
-        names?.refused({ runId: run.id, tests: refused.tests });
       }
       return none;
     }
-    // R585: the very last check, AFTER `runMayLend` lends (steps 2 and 3 included), so every
+    // R585: the very last check, AFTER `runMayLend` lends, so every
     // pre-R585 run (NULL scope) refused for another reason keeps that reason's name (review I1).
     // Remove-only. Equal or wider lends; narrower, other or unknown does not.
     const scope = parseTestScope(run.test_scope, run.id);

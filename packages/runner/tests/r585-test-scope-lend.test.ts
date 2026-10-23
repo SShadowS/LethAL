@@ -18,7 +18,6 @@ import type { RunEvent } from "../src/events";
 import { runSession } from "../src/orchestrator";
 import type { SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
-import { measuredV2_12 } from "./helpers/al-runner-predefined";
 import { servedIsInstalled, testAppJson, testAppPackage } from "./helpers/proven-test-app";
 import { scratchDirs } from "./helpers/scratch";
 
@@ -67,19 +66,24 @@ const NARROW = ["NarrowTests.Codeunit.al"];
 class Stub implements ExecutionBackend {
   mutantRuns = 0;
   private active: string | null = null;
-  readonly measurePredefinedSymbols = measuredV2_12;
   constructor(
     private readonly killerKills: boolean,
     private readonly abortAfter?: number,
   ) {}
   capabilities(): BackendCapabilities {
     return {
-      kind: "al-runner",
+      // R654 (plan I2): re-pointed from the retired .NET al-runner to al-runner-v3, one build (B1)
+      // throughout, so the backend-build step always lends and R585's own check decides. (bcdev
+      // needs a published, proven test app this local stub does not have.)
+      kind: "al-runner-v3",
       coverage: "none",
       deploy: "none",
       isolation: "session",
       authoritative: false,
     };
+  }
+  async runnerBuild(): Promise<{ version: string; binarySha256: string }> {
+    return { version: "alrunner 3.0.0-alpha.2 (91253f2d6)", binarySha256: "b".repeat(64) };
   }
   microsoftMode(): MicrosoftMode {
     return servedIsInstalled(() => testAppPackage());

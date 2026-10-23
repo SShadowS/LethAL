@@ -42,7 +42,7 @@ export interface TickInput {
   readonly testsWithoutRedCheck: readonly string[];
   /**
    * Sublegs each leg is required to run, as a count. Absent means one. A leg with an exact list in
-   * `EXPECTED_SUBLEGS` (alrunner) uses that list, and a count for it is refused.
+   * `EXPECTED_SUBLEGS` (alrunner-v3) uses that list, and a count for it is refused.
    */
   readonly expectedSublegs?: Readonly<Record<string, number>>;
 }

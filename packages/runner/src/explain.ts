@@ -40,6 +40,7 @@ import type {
 import { ATTRIBUTION_INTERPRETATIONS, twinSiteOf } from "./selection";
 import type { CoverageAttribution } from "./selection";
 import type { MutantVerdict } from "./store";
+import { refuseRetiredV2Report } from "./v2-retired";
 
 /**
  * `lethal explain <report.json>` — a projection of a finished `SessionReport` that says what the
@@ -899,6 +900,8 @@ export function assertExplainableReport(value: unknown): SessionReport {
     refuse("input is not a JSON object", value);
   }
   const record = value as Record<string, unknown>;
+  // R654 F3: a report of the retired .NET al-runner is refused by name, before any other read.
+  refuseRetiredV2Report(record, "the report");
   // R231 ruling 1: v3 changed only the run-level mutant lists (bare codes became
   // `<batchIndex>/<mutantCode>`), and explain reads none of them, so a v2 report still projects
   // with the same meanings. A change that makes explain read one of those lists must revisit this.
