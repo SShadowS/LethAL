@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**76 of 686 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**74 of 686 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -299,7 +299,7 @@ that ordering is the priority.
 - **R675** · al-runner v3: a failure-message prefix with a space or a `::` path is seen by neither K1(a) nor leg C · [R675.md](docs/roadmap/R675.md) · done (10fe5dc0)
 - **R680** · A resume can refuse a crash gap that spans a BC restart: record LethAL Control's serverGeneration at the first guard ask, and compare on resume · [R680.md](docs/roadmap/R680.md) · done (6fcd38d5) — a bcdev run records serverGeneration before the first guard ask; --resume and --resume-run…
 - **R681** · an unknown `bcdev.coverageMode` in lethal.config.json is not refused: `validateBcDevConfig` returns the section unchecked, so a typo runs silently as `none` and `"line"` reaches the hub · [R681.md](docs/roadmap/R681.md) · done (c9e416de)
-- **R682** · after every identity-scheme bump, a gate baseline's byte-identical twins are text-UNVERIFIED until it is re-recorded, and nothing schedules that re-record · [R682.md](docs/roadmap/R682.md) · open, filed 2026-10-23
+- **R682** · after every identity-scheme bump, a gate baseline's byte-identical twins are text-UNVERIFIED until it is re-recorded, and nothing schedules that re-record · [R682.md](docs/roadmap/R682.md) · done (7c0337c7) — the rule is on docs/gates/README.md and checked by gate-pages.test.ts; today's lagging…
 - **R684** · lethal verify misses a test-app report, page, xmlport or query that another app runs by its id: the codeunit-id fold and fallback see codeunits only · [R684.md](docs/roadmap/R684.md) · done (ac8a7b02)
 - **R687** · After the release: fold the server's installed-app list (minus LethAL's own instrumented targets) into every verify digest, through a new LethAL Control procedure · [R687.md](docs/roadmap/R687.md) · open, filed 2026-10-23 — after the first release (orchestrator ruling)
 - **R690** · Re-record the seven BC gate baselines that lag IDENTITY_SCHEME, once, after R-604b decides whether the scheme moves to 42 · [R690.md](docs/roadmap/R690.md) · open, filed 2026-10-23 — waits on R-604b's scheme decision
@@ -368,7 +368,7 @@ that ordering is the priority.
 - **R239** · `flip-boolean-literal` can still make a loop that never exits: a literal NESTED in its condition, under a unary `not`, or governing its only exit from the body · [R239.md](docs/roadmap/R239.md) · done (88de04e4)
 - **R245** · Reach is measured only at a mutant's own statement: a call or block alone in a branch or case arm reports no reach · [R245.md](docs/roadmap/R245.md) · closed 2026-10-06 — stated limit: 3.4% of mutants (72,806 on BaseApp, CDO, DC, DO) have no reach and read…
 - **R252** · `lethal explain` refuses a `coverageMode: "none"` report that LethAL itself wrote, because its survivors carry no `coverageAttribution` · [R252.md](docs/roadmap/R252.md) · done (a7bd0c55)
-- **R253** · `doctor`'s API checks call `api/v2.0` on the OData base URL, which is the wrong port on `bc-linux`, so a healthy setup reports `ok: false` · [R253.md](docs/roadmap/R253.md) · open
+- **R253** · `doctor`'s API checks call `api/v2.0` on the OData base URL, which is the wrong port on `bc-linux`, so a healthy setup reports `ok: false` · [R253.md](docs/roadmap/R253.md) · done (7c0337c7) — measured on bc2: BC on Linux serves api/v2.0 on its API port only; with no bcdev.apiBaseUrl…
 - **R254** · A `reportextension` is never mutated: it is skipped as a non-carrier, though alc accepts the selector variable in one, and the index would not declare it either · [R254.md](docs/roadmap/R254.md) · done (2573f39b)
 - **R258** · lethal verify cannot see an edited test that did not cover the mutant, because a test is new only by identity against the source run's baseline · [R258.md](docs/roadmap/R258.md) · done (42f66228, 66146b08)
 - **R259** · lethal verify does not say whether a new test also kills other survivors in the same procedure (the overfitting signal, #16 requirement 4) · [R259.md](docs/roadmap/R259.md) · done (6bfc005b)
