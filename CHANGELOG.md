@@ -918,6 +918,18 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **bcdev: a test codeunit whose `OnRun` raises is no longer reported as a stale test app** (R686).
+  BC runs a test codeunit's `OnRun` while it builds the suite, and lists none of its methods when
+  that fails, which looked exactly like a test missing from the published app.
+  - **At baseline,** when the installed test app is proven to compile every test of that codeunit,
+    the run now stops with `TestCodeunitDiscoveryError`, which names the codeunit and the OnRun
+    cause and drops the republish remedy. When LethAL cannot prove that, the stale-test-app refusal
+    stays, with one sentence naming the OnRun cause too.
+  - **Mid-run,** a mutant that makes a test codeunit's `OnRun` raise used to stop the session as
+    "two consecutive run() failures". It now stops with `MutantBrokeTestDiscoveryError`, which names
+    the mutant, its file and the codeunit, and says how to go on (`--resume` stops at the same
+    mutant again; `--exclude <file>` gets past it). Scoring it per mutant is R688.
+
 - **`al-runner-v3` refuses a session in which v3 left out a dependency app** (R590). v3 skips a
   dependency whole when it finds no package with AL source for it. A call into that app by id
   (`Codeunit.Run(<id>)`) then fails with BC's missing-object error, which LethAL scored as a kill,

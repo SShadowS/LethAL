@@ -298,6 +298,12 @@ describe("R686: a test codeunit whose OnRun raises is named, not called a stale 
       method: "My Test, in codeunit,",
       codeunitId: 50981,
     });
+    // A quoted AL name may hold " in codeunit " itself: the LAST one is the separator.
+    expect(
+      groupedFoundNone(
+        g("expected exactly one method Run in codeunit X in codeunit 50981, found 0"),
+      ),
+    ).toEqual({ method: "Run in codeunit X", codeunitId: 50981 });
     expect(
       groupedFoundNone(g("expected exactly one method A in codeunit 50981, found 2")),
     ).toBeUndefined();
