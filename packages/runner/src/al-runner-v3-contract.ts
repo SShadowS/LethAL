@@ -1220,7 +1220,7 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
             ? "matches"
             : "unmeasurable",
         "Fails (a plain Error()) and AssertAreEqual are plain fails whose message does not match AL_RUNNER_EXCEPTION_PREFIX",
-        // The prefix first: a session's warning names it (`v3DefectWarnings`).
+        // The prefix first: a session's refusal names it in its `measured:` line (`v3ContractRefusals`).
         `${seen !== undefined ? `prefix ${JSON.stringify(seen)}; ` : ""}Fails ${JSON.stringify(plain ?? null)}; ${assertMeasured}`,
       ),
     );
