@@ -3,7 +3,20 @@ import type { MutantManifestEntry } from "@lethal/schemata";
 import { NO_RESULT_FOR_METHOD } from "../src/bcdev-backend";
 import { renderConsole } from "../src/report";
 import type { SessionOutcome } from "../src/report";
-import { describeStaleTestApp, runMutantLineCountMessage } from "../src/stale-test-app";
+import {
+  GROUP_SUITE_UNRESOLVED_HEAD,
+  MutantBrokeTestDiscoveryError,
+  ONRUN_HINT,
+  STALE_TEST_APP_REMEDY,
+  StaleTestAppError,
+  TestAppChangedError,
+  TestCodeunitDiscoveryError,
+  baselineFoundNoneRefusal,
+  describeStaleTestApp,
+  groupedFoundNone,
+  isRunMutantFoundNone,
+  runMutantLineCountMessage,
+} from "../src/stale-test-app";
 import { legacyBuildReport } from "./helpers/legacy-report";
 
 /**
@@ -191,5 +204,129 @@ describe("describeStaleTestApp (R139)", () => {
 
   test("declines undefined — a verdict need not carry a message", () => {
     expect(describeStaleTestApp(undefined)).toBeUndefined();
+  });
+});
+
+describe("R686: a test codeunit whose OnRun raises is named, not called a stale test app", () => {
+  const found0 = (m: string) =>
+    runMutantLineCountMessage(0, `expected exactly one method ${m}, found 0`);
+  const P = "package:aaaa";
+  const finding = (method: string, text = found0(method)) => ({
+    name: `R537 OnRun Tests.${method}`,
+    codeunit: "R537 OnRun Tests",
+    description: "d",
+    foundNone: isRunMutantFoundNone(text),
+  });
+  const both = [finding("AfterThrowingOnRun"), finding("AfterThrowingOnRunTwo")];
+  const proven = {
+    missing: both,
+    testsPerCodeunit: new Map([["R537 OnRun Tests", 2]]),
+    proven: P,
+    before: P,
+    after: P,
+    compiledInPublishedPackage: true,
+  };
+
+  test("A1: every condition holds -> TestCodeunitDiscoveryError, naming the codeunit, no republish remedy", () => {
+    const err = baselineFoundNoneRefusal(proven);
+    expect(err).toBeInstanceOf(TestCodeunitDiscoveryError);
+    expect(err.message).toContain("R537 OnRun Tests");
+    expect(err.message).toContain("OnRun");
+    expect(err.message).not.toContain(STALE_TEST_APP_REMEDY);
+    expect((err as TestCodeunitDiscoveryError).missingTests).toEqual(both.map((f) => f.name));
+  });
+
+  test("A2: evidence not compiled -> StaleTestAppError, with the OnRun sentence", () => {
+    const err = baselineFoundNoneRefusal({ ...proven, compiledInPublishedPackage: false });
+    expect(err).toBeInstanceOf(StaleTestAppError);
+    expect(err.message).toContain(STALE_TEST_APP_REMEDY);
+    expect(err.message).toContain(ONRUN_HINT);
+  });
+
+  test("A3: the test app not proven installed (a staged upgrade) -> StaleTestAppError + sentence", () => {
+    for (const p of [undefined, "package:bbbb", "source:aaaa"]) {
+      const err = baselineFoundNoneRefusal({ ...proven, proven: p });
+      expect(err).toBeInstanceOf(StaleTestAppError);
+      expect(err.message).toContain(ONRUN_HINT);
+    }
+    // Equal `source:` hashes prove nothing either.
+    const s = "source:cccc";
+    expect(baselineFoundNoneRefusal({ ...proven, proven: s, before: s, after: s })).toBeInstanceOf(
+      StaleTestAppError,
+    );
+  });
+
+  test("A4: the package changed between the reads -> TestAppChangedError", () => {
+    expect(baselineFoundNoneRefusal({ ...proven, after: "package:bbbb" })).toBeInstanceOf(
+      TestAppChangedError,
+    );
+  });
+
+  test("A5: one method missing beside a passing sibling -> StaleTestAppError (OnRun blanks a whole codeunit)", () => {
+    const err = baselineFoundNoneRefusal({
+      ...proven,
+      missing: [finding("AfterThrowingOnRun")],
+    });
+    expect(err).toBeInstanceOf(StaleTestAppError);
+  });
+
+  test("A6: NO_RESULT_FOR_METHOD is not the found-0 form: StaleTestAppError without the sentence", () => {
+    const err = baselineFoundNoneRefusal({
+      ...proven,
+      missing: both.map((f) => ({ ...f, foundNone: isRunMutantFoundNone(NO_RESULT_FOR_METHOD) })),
+    });
+    expect(err).toBeInstanceOf(StaleTestAppError);
+    expect(err.message).not.toContain(ONRUN_HINT);
+  });
+
+  test("isRunMutantFoundNone: only the RunMutant found-0 form", () => {
+    expect(isRunMutantFoundNone(found0("X"))).toBe(true);
+    expect(
+      isRunMutantFoundNone(runMutantLineCountMessage(0, "expected exactly one method X, found 2")),
+    ).toBe(false);
+    expect(isRunMutantFoundNone(NO_RESULT_FOR_METHOD)).toBe(false);
+    expect(isRunMutantFoundNone(undefined)).toBe(false);
+  });
+
+  test("groupedFoundNone reads the method and codeunit from the reason; found 2 and same-line are not it", () => {
+    const g = (reason: string) => `${GROUP_SUITE_UNRESOLVED_HEAD}${reason}`;
+    expect(
+      groupedFoundNone(
+        g("expected exactly one method My Test, in codeunit, in codeunit 50981, found 0"),
+      ),
+    ).toEqual({
+      method: "My Test, in codeunit,",
+      codeunitId: 50981,
+    });
+    expect(
+      groupedFoundNone(g("expected exactly one method A in codeunit 50981, found 2")),
+    ).toBeUndefined();
+    expect(
+      groupedFoundNone(g("entries 1 and 2 (50981.A) resolve to the same function line 10000")),
+    ).toBeUndefined();
+    expect(
+      groupedFoundNone("expected exactly one method A in codeunit 50981, found 0"),
+    ).toBeUndefined();
+  });
+
+  test("B: the mid-run error says one call answered, names the mutant, file and codeunit, and how to go on", () => {
+    const e = new MutantBrokeTestDiscoveryError({
+      mutantId: "M0007",
+      file: "src/Logic.Codeunit.al",
+      operator: "lethal.empty-block",
+      test: "R537 OnRun Tests.AfterThrowingOnRun",
+      codeunit: "R537 OnRun Tests",
+      serverText: found0("AfterThrowingOnRun"),
+    });
+    expect(e.message).not.toContain("two consecutive");
+    for (const s of [
+      "M0007",
+      "src/Logic.Codeunit.al",
+      "R537 OnRun Tests",
+      "OnRun",
+      "--resume",
+      "--exclude src/Logic.Codeunit.al",
+    ])
+      expect(e.message).toContain(s);
   });
 });

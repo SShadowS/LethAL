@@ -130,6 +130,9 @@ import { CARRYABLE_VERDICTS, isStrandedNote } from "../src/resume";
 import { identityKeyOf, serializeKey } from "../src/selection";
 import { SessionSafety, SessionUnsafeError } from "../src/session-safety";
 import {
+  GROUP_SUITE_UNRESOLVED_HEAD,
+  MutantBrokeTestDiscoveryError,
+  ONRUN_HINT,
   STALE_TEST_APP_REMEDY,
   StaleTestAppError,
   TestAppChangedError,
@@ -2850,6 +2853,63 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
       expect(report.validity.caveats).not.toContain("tests-permission-refused");
       for (const m of report.mutants.filter((m) => m.verdict === "error"))
         expect(m.failureNote).not.toContain("TestPermissions = Disabled");
+    });
+
+    // R686 (B-small): a found-0 answer UNDER A MUTANT (the mutant made a test codeunit's OnRun
+    // raise during suite discovery) stops the session by name, never as "two consecutive run()
+    // failures", and says how to go on. Any other mid-run transport error keeps today's abort.
+    describe("R686: a mutant that breaks a test codeunit's suite discovery", () => {
+      async function midRun(mutantAnswer: string): Promise<unknown> {
+        const dirs = await qualProject();
+        const backend = new QualificationBackend(baselineFor);
+        const run = backend.run.bind(backend);
+        const store = new ResultsStore(":memory:");
+        return runSession({
+          backend: Object.assign(backend, {
+            run: async (ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> =>
+              (backend.activations.at(-1) ?? null) === null
+                ? run(ref, opts)
+                : { ref, outcome: "error", durationMs: 1, failureMessage: mutantAnswer },
+          }),
+          store,
+          ...dirs,
+          selectorIds,
+        }).then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+      }
+
+      test("single path: MutantBrokeTestDiscoveryError names the mutant, its file and the codeunit, and --resume / --exclude", async () => {
+        const err = await midRun(
+          runMutantLineCountMessage(0, "expected exactly one method SupportedTest, found 0"),
+        );
+        expect(err).toBeInstanceOf(MutantBrokeTestDiscoveryError);
+        const msg = (err as Error).message;
+        expect(msg).not.toContain("two consecutive");
+        for (const s of ["SandboxLogic.Codeunit.al", "Sandbox Tests", "--resume", "--exclude"])
+          expect(msg).toContain(s);
+      });
+
+      test("grouped path: suite-unresolved found 0 names the reason's codeunit", async () => {
+        const err = await midRun(
+          `${GROUP_SUITE_UNRESOLVED_HEAD}expected exactly one method SupportedTest in codeunit 50981, found 0`,
+        );
+        expect(err).toBeInstanceOf(MutantBrokeTestDiscoveryError);
+        expect((err as Error).message).toContain("codeunit 50981");
+      });
+
+      test("grouped found 2, and any other transport error, keep today's abort", async () => {
+        for (const answer of [
+          `${GROUP_SUITE_UNRESOLVED_HEAD}expected exactly one method SupportedTest in codeunit 50981, found 2`,
+          runMutantLineCountMessage(0, "expected exactly one method SupportedTest, found 2"),
+          "some other transport fault",
+        ]) {
+          const err = await midRun(answer);
+          expect(err).not.toBeInstanceOf(MutantBrokeTestDiscoveryError);
+          expect((err as Error).message).toContain("two consecutive run() failures");
+        }
+      });
     });
 
     // R462: the published test app is hashed before the baseline (R192's snapshot key) and again at
