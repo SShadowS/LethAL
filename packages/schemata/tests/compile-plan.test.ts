@@ -230,6 +230,11 @@ describe("describeObjectKinds", () => {
   it("sees an object that sits only in an #elif arm", () => {
     expect(kindsOf(`#if A\n#elif B\n${CU(50100)}#endif\n`)).toBe("codeunit_declaration");
   });
+  it("names a #if-split header, also inside a #if wrapper (R307 kept one level deeper)", () => {
+    const split = `#if not SYM\ncodeunit 50100 "Made Up A"\n#else\ncodeunit 50100 "Made Up B"\n#endif\n{\n}\n`;
+    expect(kindsOf(split)).toBe("preproc_split_declaration");
+    expect(kindsOf(`#if OUTER\n${split}#endif\n`)).toBe("preproc_split_declaration");
+  });
   it("keeps the fallback when there is no object", () => {
     const none = "no object declaration (root is source_file)";
     expect(kindsOf("// only a comment\n")).toBe(none);
