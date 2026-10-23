@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**84 of 676 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**85 of 677 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -297,6 +297,7 @@ that ordering is the priority.
 - **R665** · a mutant run whose stop was confirmed but got no 408 is scored "no verdict, no quarantine" when its op then reads completed: the tombstone is the stop's own, so the BC session may still be alive while the run goes on · [R665.md](docs/roadmap/R665.md) · done (6a28db55)
 - **R672** · al-runner v3: the K1(a) guard recognizes v3's not-trusted refusal only at the start of the message, so a type-prefixed refusal would score as a kill · [R672.md](docs/roadmap/R672.md) · done (e11a42c6)
 - **R675** · al-runner v3: a failure-message prefix with a space or a `::` path is seen by neither K1(a) nor leg C · [R675.md](docs/roadmap/R675.md) · done (10fe5dc0)
+- **R680** · A resume can refuse a crash gap that spans a BC restart: record LethAL Control's serverGeneration at the first guard ask, and compare on resume · [R680.md](docs/roadmap/R680.md) · open, filed 2026-10-23
 - **R681** · an unknown `bcdev.coverageMode` in lethal.config.json is not refused: `validateBcDevConfig` returns the section unchecked, so a typo runs silently as `none` and `"line"` reaches the hub · [R681.md](docs/roadmap/R681.md) · open, filed 2026-10-23
 
 ## Product gaps a real project hits
