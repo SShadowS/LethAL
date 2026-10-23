@@ -788,6 +788,172 @@ describe("R500 shape 3 (LIMIT): a self-inserting item's own filter", () => {
 });
 
 // ---------------------------------------------------------------------------------------------
+// R530: sites in a self-inserting item, its feeds, and outside filters on it
+// ---------------------------------------------------------------------------------------------
+
+const TBL530 = `table 50501 "Cust. Ledger Entry"
+{
+    fields
+    {
+        field(1; "Entry No."; Integer) { }
+    }
+}
+
+table 50502 "Other Entry"
+{
+    fields
+    {
+        field(1; "Entry No."; Integer) { }
+    }
+}
+`;
+
+type Opts530 = {
+  /** The statement that does (or does not) insert. */
+  readonly insert?: string;
+  /** Statements in OnPreReport, outside the item's scope. */
+  readonly pre?: string;
+  readonly itemType?: string;
+  /** The operand the exit guard compares with (default `LastEntryNo`). */
+  readonly guard?: string;
+  /** Item properties (a `MaxIteration` keeps an Integer or Date item bounded). */
+  readonly props?: string;
+};
+
+/** One report whose item `Walk` ends on a guard reading `LastEntryNo`. */
+function report530(o: Opts530 = {}): string {
+  return `report 50500 "R530"
+{
+    dataset
+    {
+        dataitem(Walk; ${o.itemType ?? '"Cust. Ledger Entry"'})
+        {
+            ${o.props ?? ""}
+            trigger OnAfterGetRecord()
+            begin
+                if Walk."Entry No." > ${o.guard ?? "LastEntryNo"} then
+                    CurrReport.Break();
+                Mark1 := 1;
+                ${o.insert ?? "Walk.Insert();"}
+                Helper();
+                CurrReport.ViaQualified();
+                if ViaBare then
+                    Other := 1;
+            end;
+        }
+    }
+
+    trigger OnPreReport()
+    begin
+        ${o.pre ?? "Other := 2;"}
+    end;
+
+    local procedure Helper()
+    begin
+        Mark2 := 1;
+    end;
+
+    local procedure ViaQualified()
+    begin
+        Mark3 := 1;
+    end;
+
+    local procedure ViaBare(): Boolean
+    begin
+        Mark4 := 1;
+        exit(true);
+    end;
+
+    var
+        Mgt: Codeunit "R530 Mgt";
+        Scratch: Record "Cust. Ledger Entry" temporary;
+        Elsewhere: Record "Other Entry";
+        LastEntryNo: Integer;
+        Mark1: Integer;
+        Mark2: Integer;
+        Mark3: Integer;
+        Mark4: Integer;
+        Other: Integer;
+        Unrelated: Integer;
+}
+`;
+}
+
+describe("R530: sites in a self-inserting item, its feeds and outside filters", () => {
+  const p = (o: Opts530 = {}) => project({ "R530.al": report530(o), "Tbl530.al": TBL530 });
+  const stmt = (x: ReturnType<typeof p>, text: string) =>
+    x.at("R530.al", "assignment_statement", text);
+
+  it("T1: a site in the item's own OnAfterGetRecord is refused", () => {
+    expect(stmt(p(), "Mark1 := 1")).toBe(true);
+  });
+  it("T2: a site in a helper reached by a bare call is refused", () => {
+    expect(stmt(p(), "Mark2 := 1")).toBe(true);
+  });
+  it("T3a: a site in a helper reached by CurrReport.P() is refused", () => {
+    expect(stmt(p(), "Mark3 := 1")).toBe(true);
+  });
+  it("T3b: a site in a helper reached by a bare name in an expression is refused", () => {
+    expect(stmt(p(), "Mark4 := 1")).toBe(true);
+  });
+  it("T4: a write, outside the scope, of a name the exit guard reads is refused", () => {
+    expect(stmt(p({ pre: "LastEntryNo := 5;" }), "LastEntryNo := 5")).toBe(true);
+  });
+  it("T5: a call outside the scope that passes the guard's name is refused, callee unknown", () => {
+    const x = p({ pre: "Mgt.GetLastEntry(LastEntryNo, Unrelated);" });
+    expect(x.at("R530.al", "call_expression", "Mgt.GetLastEntry(LastEntryNo, Unrelated)")).toBe(
+      true,
+    );
+  });
+  it("T5b: a call passing a field of a record the guard reads is refused", () => {
+    const x = p({
+      guard: 'Setup."Last Entry No."',
+      pre: 'Mgt.GetLast(Setup."Last Entry No.");',
+    });
+    expect(x.at("R530.al", "call_expression", 'Mgt.GetLast(Setup."Last Entry No.")')).toBe(true);
+  });
+  it("T6: a SetRange on the self-inserting item from OnPreReport is refused", () => {
+    const x = p({ pre: "Walk.SetRange(Filtered, 0, 5);" });
+    expect(x.at("R530.al", "call_expression", "Walk.SetRange(Filtered, 0, 5)")).toBe(true);
+  });
+
+  it("E1: the same item inserting only into a temporary record emits", () => {
+    const x = p({ insert: "Scratch.Insert();" });
+    expect(stmt(x, "Mark1 := 1")).toBe(false);
+    expect(stmt(x, "Mark2 := 1")).toBe(false);
+  });
+  it("E2: the same item inserting into another table emits", () => {
+    const x = p({ insert: "Elsewhere.Insert();" });
+    expect(stmt(x, "Mark1 := 1")).toBe(false);
+    expect(stmt(x, "Mark3 := 1")).toBe(false);
+  });
+  it("E3: the same item with no insert emits, feed and outside filter included", () => {
+    const x = p({
+      insert: "Other := 3;",
+      pre: "LastEntryNo := 5; Walk.SetRange(Filtered, 0, 5);",
+    });
+    expect(stmt(x, "Mark1 := 1")).toBe(false);
+    expect(stmt(x, "LastEntryNo := 5")).toBe(false);
+    expect(x.at("R530.al", "call_expression", "Walk.SetRange(Filtered, 0, 5)")).toBe(false);
+  });
+  it("E4: a call that does not pass the guard's name, and an assignment to another name, emit", () => {
+    const x = p({ pre: "Mgt.Other(Unrelated); Unrelated := 3;" });
+    expect(x.at("R530.al", "call_expression", "Mgt.Other(Unrelated)")).toBe(false);
+    expect(stmt(x, "Unrelated := 3")).toBe(false);
+  });
+  it("E5: a bounded Integer or Date item with the same text is not claimed by this rule", () => {
+    for (const [itemType, props] of [
+      ["Integer", "MaxIteration = 1;"],
+      ["Date", "MaxIteration = 3;"],
+    ] as const) {
+      const x = p({ itemType, props, insert: "Walk.Insert();" });
+      expect(stmt(x, "Mark1 := 1")).toBe(false);
+      expect(stmt(x, "Mark2 := 1")).toBe(false);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
 // Shapes 4, 5b, 9: Date items and their children, outside filter calls, hidden call shapes
 // ---------------------------------------------------------------------------------------------
 

@@ -13,6 +13,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **A report data item that inserts into its own table is no longer mutated inside its own code** (R530). Every
+  site in its triggers and the helpers they reach, the writers of any name its exit guard reads, and an outside
+  filter call on it are refused, for every operator. This is a refusal, not a new mutation: Date Compress and
+  Copy Company style reports lose about 0.44% of BaseApp's sites (measured on the prototype), in exchange for no endless loop. R522 and R524
+  to R529 are closed by ruling (measured, no consumer found; stated limits in each item).
+
 - **`scripts/verify.ts` runs one full verify at a time and survives a stalled disk** (R616, R622). The test
   step takes a slot lock beside the ledger (a dead pid frees it, never age), the per-test timeout rises to
   15000 ms only when the io stall is >= 5% just before the tests, and a run over 900 s is killed and named.
