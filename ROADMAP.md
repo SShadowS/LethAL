@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**81 of 679 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**81 of 681 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -165,7 +165,7 @@ that ordering is the priority.
 - **R419** · R-307's per-file trial checks the latch refusals (C1-C4) only on the FULL mutant set, but the writer re-instruments BATCH SUBSETS, where a member's reach grain can change and a latch refusal can first appear at write time · [R419.md](docs/roadmap/R419.md) · closed 2026-10-05 — measured: no batch subset can be refused where the full set is not; 0 refusals over…
 - **R421** · Discovered file paths keep the OS separator, so the manifest's `file` (and every report) says `src\X.al` on Windows and `src/X.al` on Linux, and mutant numbering can differ between the two in a project with subfolders · [R421.md](docs/roadmap/R421.md) · done (dda76e88)
 - **R426** · verify's reach filter cannot see a kill that depends on state left by an earlier test in the same call, or on code run in another session; filtered verify keeps fresh `lethal run`'s blind spot · [R426.md](docs/roadmap/R426.md) · closed 2026-10-06 — stated limit: a per-project detector would fire on every real product target…
-- **R431** · lethal verify cannot see a test-app codeunit that another app runs by its integer id (Codeunit.Run(<id>)), when the test hands that id over as a plain Integer · [R431.md](docs/roadmap/R431.md) · open, filed 2026-10-04
+- **R431** · lethal verify cannot see a test-app codeunit that another app runs by its integer id (Codeunit.Run(<id>)), when the test hands that id over as a plain Integer · [R431.md](docs/roadmap/R431.md) · done (bb2ef6a1) — the codeunit routes were closed by R-371 before this was filed; R-431's probe confirms…
 - **R433** · The unfiltered automation extensions query hangs BC 28.4 (and took Cronus28 down) and must never be issued · [R433.md](docs/roadmap/R433.md) · done (4aeb224a)
 - **R434** · lethal verify cannot see an installed app outside the test app's dependency closure, nor a non-Microsoft dependency that is published but not the installed one · [R434.md](docs/roadmap/R434.md) · open, filed 2026-10-04
 - **R438** · R433's run-time guard checks only the request path: an `extensions` expand in the query, or an escape left encoded after 16 decoding rounds, gets through · [R438.md](docs/roadmap/R438.md) · done (9c58e352)
@@ -300,6 +300,7 @@ that ordering is the priority.
 - **R680** · A resume can refuse a crash gap that spans a BC restart: record LethAL Control's serverGeneration at the first guard ask, and compare on resume · [R680.md](docs/roadmap/R680.md) · open, filed 2026-10-23
 - **R681** · an unknown `bcdev.coverageMode` in lethal.config.json is not refused: `validateBcDevConfig` returns the section unchecked, so a typo runs silently as `none` and `"line"` reaches the hub · [R681.md](docs/roadmap/R681.md) · done (c9e416de)
 - **R682** · after every identity-scheme bump, a gate baseline's byte-identical twins are text-UNVERIFIED until it is re-recorded, and nothing schedules that re-record · [R682.md](docs/roadmap/R682.md) · open, filed 2026-10-23
+- **R684** · lethal verify misses a test-app report, page, xmlport or query that another app runs by its id: the codeunit-id fold and fallback see codeunits only · [R684.md](docs/roadmap/R684.md) · done (ac8a7b02)
 
 ## Product gaps a real project hits
 
@@ -447,6 +448,7 @@ that ordering is the priority.
 - **R600** · lethal verify digests under the server's closed-world answer now, so an open-world source run on a closed server re-runs every test · [R600.md](docs/roadmap/R600.md) · open
 - **R601** · a closed-world run that ends before its post-execution re-ask stays pending forever, so --resume after a crash is off on a closed server · [R601.md](docs/roadmap/R601.md) · done (f9002861)
 - **R620** · A crashed or interrupted closed-world run is never resumable: its test-app identity stays |pending, so --resume refuses the very run it exists for · [R620.md](docs/roadmap/R620.md) · closed 2026-10-22 — a duplicate of R601 (orchestrator ruling Q2); closed with R601 (92d23854)
+- **R685** · a bare `Kind::X` id handed to an unfollowed call puts the test on verify's whole-source fallback, where folding the object would do: since R684 this takes a whole Microsoft test app (Guided Experience) to the fallback · [R685.md](docs/roadmap/R685.md) · open, filed 2026-10-23
 
 ## Backends and tooling
 
