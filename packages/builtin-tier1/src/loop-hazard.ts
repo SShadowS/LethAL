@@ -69,9 +69,14 @@ import {
  * - a filter call on an open item's record from outside its code (`altersOpenItemFilter`, 5b);
  * - an unparsed reportextension extends every report (shape 7); `CurrReport.P()` and a bare
  *   procedure name in an expression are calls (`hiddenCallee`, shape 9);
- * - two stated LIMITS, with their blind spots in their own comments: a write, before the item, of a
- *   global the item's exit reads (`writesPresetExitName`, shape 1), and the OnPreDataItem filter of
- *   an item that inserts into its own table (`altersSelfInsertFilter`, shape 3).
+ * - a stated LIMIT, with its blind spots in its own comment: a write, before the item, of a
+ *   global the item's exit reads (`writesPresetExitName`, shape 1);
+ * - an item that inserts into its own table (shape 3): its OnPreDataItem filter
+ *   (`altersSelfInsertFilter`), and, since R530 (`inSelfInsertItem`), (a) every site in its triggers
+ *   and the helpers they reach, (b) the writers, outside that scope, of any name an exit guard in it
+ *   reads (an assignment, or any call passing the name), (c) an outside filter call on it
+ *   (`altersOpenItemFilter`). Not seen: an insert made in another object (R529, closed by ruling), a
+ *   bound set only by a reportextension `modify()` trigger, a `with` receiver (measure.md, R530);
  * Two RULINGS: a reportextension outside the project cannot reach this project's open items (its
  * code is not in the run), and a `while`/`repeat` inside a BOUNDED item's code keeps
  * the product-wide loop rules only (shape 8): R196/R446/R480, R531's consuming loop, and R570's
@@ -808,6 +813,7 @@ export function openItemHangRefuses(
     inR570Callee(node, ctx) ||
     inR572Guard(node, ctx) ||
     altersSelfInsertFilter(node, ctx) ||
+    inSelfInsertItem(node, ctx) ||
     altersOpenItemFilter(node, ctx) ||
     writesPresetExitName(node, ctx) ||
     consumingLoopRefuses(node, ctx, op)
@@ -2525,15 +2531,22 @@ function crossWriterCall(n: ALSyntaxNode, ctx: SemanticContext): boolean {
   return cw.byReport.get(t.name)?.has(m) === true || cw.anyReport.has(m);
 }
 
-/** An exit that can stop the rest of `scope`: `exit`, `CurrReport.Break/Quit/Skip` (and the XMLport
- *  twins), an `Error` outside `asserterror`, or a guard statement whose branches hold one. */
-function isEarlyExit(n: ALSyntaxNode, scope: ALSyntaxNode): boolean {
-  const exits = (x: ALSyntaxNode): boolean =>
+/** The one exit set `isEarlyExit` and R530's feed rule (`inSelfInsertItem`) share: `exit`, an
+ *  `Error` outside `asserterror`, and `CurrReport.Break/Skip/Quit` (the bare member form too). */
+function endsScope(x: ALSyntaxNode, scope: ALSyntaxNode): boolean {
+  return (
     x.rawKind === "exit_statement" ||
     isRaisedError(x, scope) ||
     (x.rawKind === "member_expression" &&
       REPORT_INSTANCES.has(normalizeAlName(x.childForFieldName("object")?.text ?? "")) &&
-      EARLY_EXITS.has(normalizeAlName(x.childForFieldName("member")?.text ?? "")));
+      EARLY_EXITS.has(normalizeAlName(x.childForFieldName("member")?.text ?? "")))
+  );
+}
+
+/** An exit that can stop the rest of `scope`: `exit`, `CurrReport.Break/Quit/Skip` (and the XMLport
+ *  twins), an `Error` outside `asserterror`, or a guard statement whose branches hold one. */
+function isEarlyExit(n: ALSyntaxNode, scope: ALSyntaxNode): boolean {
+  const exits = (x: ALSyntaxNode): boolean => endsScope(x, scope);
   const fn =
     n.rawKind === "call_expression" || n.rawKind === "call_statement"
       ? n.childForFieldName("function")
@@ -2719,7 +2732,11 @@ function altersOpenItemFilter(node: ALSyntaxNode, ctx: SemanticContext): boolean
   const calls = cached(ctx, obj, "outsidefilters", () => {
     const open = new Set<string>();
     visitAll(obj, (n) => {
-      if (isLoopItem(n) && itemOpen(n, ctx))
+      // R530 (M6): a self-inserting report data item counts like an open one
+      if (
+        isLoopItem(n) &&
+        (itemOpen(n, ctx) || (n.rawKind === "report_dataitem" && selfInserts(n, ctx)))
+      )
         open.add(normalizeAlName(n.childForFieldName("name")?.text ?? ""));
     });
     const out: ALSyntaxNode[] = [];
@@ -2758,9 +2775,10 @@ const ITEM_FILTERS: ReadonlySet<string> = new Set([
  * record in its OnPreDataItem is refused. "Inserts into its own table": an unqualified `Insert` in
  * the item's triggers, or `X.Insert` where `X` is declared `Record <the item's table>` and NOT
  * temporary, or is a record the engine binds to that table (`resolveReceiverTable`: a data item's
- * name), in the item's triggers or a same-object procedure they reach. Not seen: an insert made
- * in another object, a bound set elsewhere (a callee, OnPreReport), and the item's other mutants (a
- * guard before the insert, a key value).
+ * name), in the item's triggers or a same-object procedure they reach. This rule covers only the
+ * OnPreDataItem filter; the rest of such an item (its other sites, the writers of a name its exit
+ * guard reads, an outside filter call) is `inSelfInsertItem` (R530). Not seen: an insert made in
+ * another object (R529, closed by ruling).
  */
 function altersSelfInsertFilter(node: ALSyntaxNode, ctx: SemanticContext): boolean {
   const s = codeScope(node);
@@ -2792,36 +2810,53 @@ function altersSelfInsertFilter(node: ALSyntaxNode, ctx: SemanticContext): boole
   return hit && selfInserts(item, ctx);
 }
 
+/**
+ * The item's own triggers (first), then the same-object procedures they reach, transitively. The
+ * closure follows every call shape `openReachable` follows (`P()`, `this.P()`, `CurrReport.P()`, a
+ * bare name in an expression; R530, S4). That also widens `selfInserts`' own insert detection: a
+ * helper reached only by `CurrReport.P()` or a bare name now counts, so shape 3 may refuse a few more
+ * OnPreDataItem filters than before.
+ */
+function itemScopes(item: ALSyntaxNode, ctx: SemanticContext): ALSyntaxNode[] {
+  const obj = objectOf(item);
+  const body = item.childForFieldName("body");
+  if (obj === null || body === null) return [];
+  const names = procedureNamesOf(obj, ctx);
+  const scopes: ALSyntaxNode[] = itemMembers(body, ctx).filter(
+    (m) => m.kind === ALNodeKind.trigger,
+  );
+  const seen = new Set<string>();
+  for (let i = 0; i < scopes.length; i++) {
+    const sc = scopes[i];
+    if (sc === undefined) continue;
+    visitAll(sc, (c) => {
+      const callee = bareCallee(c) ?? hiddenCallee(c, names, ctx);
+      if (callee === null || seen.has(callee)) return;
+      seen.add(callee);
+      visitAll(obj, (p) => {
+        if ((isProcedureLike(p) || p.rawKind === "procedure") && procNames(p).includes(callee))
+          scopes.push(p);
+      });
+    });
+  }
+  return scopes;
+}
+
 function selfInserts(item: ALSyntaxNode, ctx: SemanticContext): boolean {
   return cached(ctx, item, "selfins", () => {
     const table = itemTable(item);
-    const obj = objectOf(item);
-    const body = item.childForFieldName("body");
-    if (obj === null || body === null) return false;
-    const triggers = itemMembers(body, ctx).filter((m) => m.kind === ALNodeKind.trigger);
-    // the item's triggers, then same-object procedures they reach, transitively
-    const scopes: ALSyntaxNode[] = [...triggers];
-    const seen = new Set<string>();
-    for (let i = 0; i < scopes.length; i++) {
-      const sc = scopes[i];
-      if (sc === undefined) continue;
-      visitAll(sc, (c) => {
-        const callee = bareCallee(c);
-        if (callee === null || seen.has(callee)) return;
-        seen.add(callee);
-        visitAll(obj, (p) => {
-          if ((isProcedureLike(p) || p.rawKind === "procedure") && procNames(p).includes(callee))
-            scopes.push(p);
-        });
-      });
-    }
-    return scopes.some((sc, i) => {
+    const scopes = itemScopes(item, ctx);
+    return scopes.some((sc) => {
       let found = false;
       visitAll(sc, (c) => {
         if (found || (c.rawKind !== "call_expression" && c.rawKind !== "call_statement")) return;
         const f = c.childForFieldName("function");
         if (f === null) return;
-        if (i < triggers.length && isIdentifierLike(f) && normalizeAlName(f.text) === "insert")
+        if (
+          sc.kind === ALNodeKind.trigger &&
+          isIdentifierLike(f) &&
+          normalizeAlName(f.text) === "insert"
+        )
           found = true;
         if (f.rawKind !== "member_expression") return;
         if (normalizeAlName(f.childForFieldName("member")?.text ?? "") !== "insert") return;
@@ -2836,6 +2871,65 @@ function selfInserts(item: ALSyntaxNode, ctx: SemanticContext): boolean {
       return found;
     });
   });
+}
+
+/**
+ * R530 (shape 3, widened). A report data item that inserts into its own table (`selfInserts`; not
+ * an `Integer` or `Date` item) can walk the rows it adds. Refused, for every operator:
+ * (a) every site in the item's own triggers and the same-object procedures they reach
+ *     (`itemScopes`);
+ * (b) the writers, OUTSIDE that scope and anywhere in the report object, of any name an exit guard
+ *     in the scope reads (`endsScope`): an assignment to it, or ANY call that passes the name as an
+ *     argument (fail closed: a callee that is not in the project, such as `GetLastEntry(LastEntryNo, ...)`,
+ *     is still refused). A site that contains or sits inside such a writer is refused.
+ * (c) an outside filter call on such an item is refused in `altersOpenItemFilter`.
+ * Not seen: an insert made in another object (R529, closed by ruling), a bound set only by a
+ * reportextension `modify()` trigger, a `with` receiver. Cost and mechanisms: measure.md, R530.
+ */
+function inSelfInsertItem(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+  const obj = objectOf(node);
+  if (obj === null) return false;
+  const { scope, feeds } = cached(ctx, obj, "selfinsscope", () => {
+    const scope: { s: number; e: number }[] = [];
+    const names = new Set<string>();
+    visitAll(obj, (item) => {
+      if (item.rawKind !== "report_dataitem") return;
+      const t = itemTable(item);
+      if (t === "integer" || t === "date" || !selfInserts(item, ctx)) return;
+      for (const sc of itemScopes(item, ctx)) {
+        scope.push({ s: sc.startIndex, e: sc.endIndex });
+        for (const g of exitGuards(sc, sc, (x) => endsScope(x, sc)))
+          visitAll(g, (x) => {
+            if (isIdentifierLike(x)) names.add(normalizeAlName(x.text));
+          });
+      }
+    });
+    const feeds: { s: number; e: number }[] = [];
+    if (names.size === 0) return { scope, feeds };
+    visitAll(obj, (n) => {
+      if (scope.some((r) => r.s <= n.startIndex && n.endIndex <= r.e)) return;
+      let feed = false;
+      if (n.rawKind === "assignment_statement") {
+        const l = n.childForFieldName("left");
+        feed = l !== null && names.has(rootName(l));
+      } else if (n.rawKind === "call_expression" || n.rawKind === "call_statement") {
+        // unreadable arguments (a pragma among them): fail closed
+        feed =
+          !argumentsReadable(n) ||
+          argumentList(n).some((a) => isIdentifierLike(a) && names.has(normalizeAlName(a.text)));
+      }
+      if (feed) feeds.push({ s: n.startIndex, e: n.endIndex });
+    });
+    return { scope, feeds };
+  });
+  return (
+    scope.some((r) => r.s <= node.startIndex && node.endIndex <= r.e) ||
+    feeds.some(
+      (r) =>
+        (node.startIndex <= r.s && r.e <= node.endIndex) ||
+        (r.s <= node.startIndex && node.endIndex <= r.e),
+    )
+  );
 }
 
 /**
