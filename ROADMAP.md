@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**57 of 693 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**58 of 694 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -307,6 +307,7 @@ that ordering is the priority.
 - **R695** · `Fixed Asset - Projected Value`'s `GetNextDate` advances a loop's exit date but is not hang-refused: unverified by a read of the loop · [R695.md](docs/roadmap/R695.md) · closed 2026-10-23 — premise wrong: already refused by R487's inOpenItemCode scope
 - **R697** · lethal verify misses code a test-app page, report, xmlport or table runs through its properties (SourceTable, RunObject, CardPageId, LookupPageId, DrillDownPageId, tableelement): an edit there leaves the digest unchanged · [R697.md](docs/roadmap/R697.md) · open, filed 2026-10-23
 - **R698** · lethal verify reads a namespace-qualified object reference (Codeunit::My.Ns.CU) as a member chain: it is neither folded nor a fallback · [R698.md](docs/roadmap/R698.md) · open, filed 2026-10-23
+- **R699** · lethal verify looks up an integer literal with leading zeros (01000) as text, so a test-app object's id written that way is neither folded nor a fallback · [R699.md](docs/roadmap/R699.md) · open, filed 2026-10-23
 
 ## Product gaps a real project hits
 
