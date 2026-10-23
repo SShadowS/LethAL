@@ -544,6 +544,15 @@ export interface ExecutionBackend {
   survivorNote?(covering: readonly TestMethodRef[]): string | undefined;
 
   /**
+   * R678, OPTIONAL: a batch's baseline came from a reused `--resume` snapshot (R192), so no
+   * baseline call ran. Called once, inside the baseline bracket, with the reused verdicts, so the
+   * backend can record what a baseline call would have (v3: its refused tests, for `survivorNote`).
+   */
+  noteReusedBaseline?(
+    baseline: readonly { readonly ref: TestMethodRef; readonly verdict: TestVerdict }[],
+  ): void;
+
+  /**
    * R635 §4, OPTIONAL: `true` right before a batch's baseline step (`activateOnce(null)`), `false`
    * in a `finally` after its baseline loop. al-runner v3's serve-entries transport reads its
    * baseline (one-shot, coverage, baseline refusals) from this bracket ONLY, never from "no mutant

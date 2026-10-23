@@ -21,6 +21,7 @@ import {
   AlRunnerV3Backend,
   type AlRunnerV3Config,
   AlRunnerV3ResourceSelectorRefusedError,
+  AlRunnerV3ReusedBaselineUnclassifiedError,
   AlRunnerV3RowMissingError,
   AlRunnerV3SelectionError,
   AlRunnerV3UnprovenBatchError,
@@ -1166,6 +1167,100 @@ describe("T24 (I1) and I3: the notes", () => {
     await b.deploy(l.batch);
     await b.activate(null);
     expect(b.survivorNote([ref("A")])?.startsWith(V3_REFUSED_NEARBY_TAG)).toBe(true);
+  });
+
+  // R678: the stored verdict of each notRun row shape, made by the same decoder a baseline uses.
+  const notRunVerdict = (method: string, status: "pass" | "fail" | "error", message: string) =>
+    v3RowVerdict(
+      ref(method),
+      { codeunit: CU, name: `Codeunit${CU}.${method}`, method, status, message, notRun: true },
+      1,
+      5,
+      undefined,
+    );
+
+  test("R678: a fully reused --resume snapshot's v3 refusal still notes a survivor (no baseline call in this session)", async () => {
+    const l = await layout();
+    const b = backendOf(l, fakeV3(() => []).spawn, fakeAlc().io);
+    await b.deploy(l.batch);
+    b.noteReusedBaseline([
+      { ref: ref("B"), verdict: notRunVerdict("B", "error", "NotRun: out-of-scope: Commit") },
+    ]);
+    expect(b.survivorNote([ref("A")])).toStartWith(`${V3_REFUSED_NEARBY_TAG} Tests.B:`);
+    expect(b.survivorNote([ref("Q", 1)])).toBeUndefined();
+  });
+
+  test("R678: a reused snapshot with no v3 refusal notes nothing (a timeout, a contract error, a .NET-shaped refusal, a pass)", async () => {
+    const l = await layout();
+    const b = backendOf(l, fakeV3(() => []).spawn, fakeAlc().io);
+    await b.deploy(l.batch);
+    const dotnetShaped = v3RowVerdict(
+      ref("D"),
+      {
+        codeunit: CU,
+        name: `Codeunit${CU}.D`,
+        method: "D",
+        status: "fail",
+        message: "Commit: out-of-scope: x",
+        notRun: false,
+      },
+      1,
+      5,
+      undefined,
+    );
+    expect(dotnetShaped.runnerRow).toBe("runner-refused");
+    b.noteReusedBaseline([
+      { ref: ref("T"), verdict: notRunVerdict("T", "error", "Test exceeded 1s timeout.") },
+      { ref: ref("C"), verdict: notRunVerdict("C", "fail", "NotRun: out-of-scope: Commit") },
+      { ref: ref("D"), verdict: dotnetShaped },
+      { ref: ref("A"), verdict: { ref: ref("A"), outcome: "pass", durationMs: 1 } },
+    ]);
+    expect(b.survivorNote([ref("A")])).toBeUndefined();
+  });
+
+  test("R678: a reused verdict with v3's notRun refusal text but no runner-refused row throws by name, never records nothing", async () => {
+    const l = await layout();
+    const b = backendOf(l, fakeV3(() => []).spawn, fakeAlc().io);
+    await b.deploy(l.batch);
+    const refused = notRunVerdict("B", "error", "NotRun: out-of-scope: Commit");
+    // Today's shapes, refusal and not, do not throw.
+    expect(() =>
+      b.noteReusedBaseline([
+        { ref: ref("B"), verdict: refused },
+        { ref: ref("T"), verdict: notRunVerdict("T", "error", "Test exceeded 1s timeout.") },
+        { ref: ref("C"), verdict: notRunVerdict("C", "fail", "NotRun: out-of-scope: Commit") },
+        { ref: ref("A"), verdict: { ref: ref("A"), outcome: "pass", durationMs: 1 } },
+      ]),
+    ).not.toThrow();
+    const { runnerRow: _dropped, ...malformed } = refused;
+    expect(() => b.noteReusedBaseline([{ ref: ref("M"), verdict: malformed }])).toThrow(
+      AlRunnerV3ReusedBaselineUnclassifiedError,
+    );
+    expect(() =>
+      b.noteReusedBaseline([
+        { ref: ref("M"), verdict: { ...refused, runnerRow: "runner-test-error" } },
+      ]),
+    ).toThrow(AlRunnerV3ReusedBaselineUnclassifiedError);
+  });
+
+  test("R678: a fresh baseline's notRun row with a non-error status (a contract error, not a refusal) notes nothing, as a reused one would", async () => {
+    const l = await layout();
+    const rows = () => [
+      { method: "A", status: "pass" as const },
+      {
+        method: "B",
+        status: "fail" as const,
+        notRun: true,
+        message: "NotRun: out-of-scope: Commit",
+      },
+    ];
+    const b = backendOf(l, fakeV3(rows, { coverage: plainCoverage }).spawn, fakeAlc().io);
+    await b.deploy(l.batch);
+    await b.activate(null);
+    expect((await b.run(ref("B"), { coverage: "none", timeoutMs: 1000 })).runnerRow).toBe(
+      "runner-test-error",
+    );
+    expect(b.survivorNote([ref("A")])).toBeUndefined();
   });
 });
 

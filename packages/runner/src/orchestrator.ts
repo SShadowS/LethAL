@@ -5108,6 +5108,9 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
             b.verdict.sessionId,
           );
         }
+        // R678: the reused verdicts stand in for this batch's baseline calls, so the backend
+        // records from them what a baseline call would have (v3: its refused tests).
+        backend.noteReusedBaseline?.(baseline);
       }
     }
     for (const ref of reused !== undefined ? [] : tests) {
