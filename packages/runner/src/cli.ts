@@ -3214,7 +3214,11 @@ const dryRunTierOf: TierResolver = (name) => operatorTiers.get(name);
 async function dryRunCeiling(
   dbPath: string,
   configPath: string,
+  /** R676: absent is bcdev (as in `printDryRun`). A local runner publishes to no server, so it
+   *  has no ceiling to report and must not run the env tool's `resolve`. */
+  backendKind: BackendKind | undefined,
 ): Promise<{ tier: string; ceiling: PublishCeiling } | { note: string } | undefined> {
+  if (backendKind !== undefined && isLocalRunner(backendKind)) return undefined;
   if (!existsSync(configPath) || !existsSync(dbPath)) return undefined;
   let server: string | undefined;
   let serverInstance: string | undefined;
@@ -3396,7 +3400,7 @@ export async function printDryRun(
   // bracket with its date, never as a limit. A tier with no recorded failure refuses nothing —
   // discovering the ceiling costs exactly one honest failure, and this is where a user learns
   // whether that price has already been paid here.
-  const measured = await dryRunCeiling(paths.dbPath, paths.configPath);
+  const measured = await dryRunCeiling(paths.dbPath, paths.configPath, paths.backendKind);
   if (measured !== undefined && "note" in measured) {
     console.log(`\nNOTE: ${measured.note}`);
   } else if (measured !== undefined) {
