@@ -10145,7 +10145,7 @@ async function reproduceKill(p: Parameters<typeof confirmWarm>[0]): Promise<Repr
 function discoveryFailedNote(found: readonly TestMethodRef[]): string | undefined {
   if (found.length === 0) return undefined;
   const codeunits = found.map((r) => `"${r.codeunitName}" (${r.codeunitId})`).join(", ");
-  return `test codeunit(s) ${codeunits} were not run under this mutant: BC's suite discovery listed none of their methods (asked for ${found.map((r) => qualifiedTestName(r)).join(", ")}); with no mutant active they ran`;
+  return `test codeunit(s) ${codeunits} were skipped under this mutant: BC's suite discovery listed none of their methods when asked for ${found.map((r) => qualifiedTestName(r)).join(", ")}, which passed with no mutant active`;
 }
 
 /** R688: how `confirmFoundNone` ended. `abort` is thrown only after the mutant is recorded. */

@@ -425,7 +425,7 @@ function buildScenarioReport(): SessionReport {
       coveringTests: ["Sales Approval Tests.LogInsertsOnApproval"],
       cause: "test-discovery-failed",
       failureNote:
-        'test-discovery-failed: test codeunit(s) "Sales Approval Tests" (50100) were not run under this mutant: BC\'s suite discovery listed none of their methods (asked for Sales Approval Tests.LogInsertsOnApproval); with no mutant active they ran; no other test covers it, so this is not a survivor (R688)',
+        'test-discovery-failed: test codeunit(s) "Sales Approval Tests" (50100) were skipped under this mutant: BC\'s suite discovery listed none of their methods when asked for Sales Approval Tests.LogInsertsOnApproval, which passed with no mutant active; no other test covers it, so this is not a survivor (R688)',
     },
     // R53: two mutants a prior run stranded the tier on, skipped rather than retried —
     // `mutant-skipped-stranded`, never `mutant-scored`: the event's own type already implies

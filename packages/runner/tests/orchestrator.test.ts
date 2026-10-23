@@ -16259,6 +16259,8 @@ codeunit 79101 "Zulu Tests"
 
 class DiscoveryStub extends GroupStubBackend {
   blanks: (mutant: string) => readonly number[] = () => [];
+  /** A single run of one method only answering found-0 under a mutant (A1). */
+  blanksMethod?: (mutant: string, ref: TestMethodRef) => boolean;
   /** Overrides a run with no mutant active, once a mutant has been activated (the confirms). */
   confirmAnswer?: (ref: TestMethodRef) => Partial<TestVerdict> | undefined;
   /** Every `run`, also the ones a group call makes (`via: "many"`), in order. */
@@ -16275,7 +16277,10 @@ class DiscoveryStub extends GroupStubBackend {
     const started = this.activations.some((a) => a !== null);
     const via = this.inMany ? "many" : "run";
     this.runs.push({ active, started, codeunitId: ref.codeunitId, method: ref.method, via });
-    if (active !== null && this.blanks(active).includes(ref.codeunitId)) {
+    if (
+      active !== null &&
+      (this.blanks(active).includes(ref.codeunitId) || this.blanksMethod?.(active, ref) === true)
+    ) {
       return {
         ref,
         outcome: "error",
@@ -16387,7 +16392,7 @@ describe("R688: a mutant that blanks a test codeunit's discovery is scored per m
     expect(ranUnder(b, "M0001", "T2")).toBe(0);
     expect(discoveryConfirms(b)).toBe(1);
     // Q6: the kill keeps the found-0 note.
-    expect(m1?.failureNote).toContain("were not run under this mutant");
+    expect(m1?.failureNote).toContain("were skipped under this mutant");
     const rows = store.db
       .query(
         "SELECT t.mutant_code AS code, t.duration_ms AS ms FROM test_results t JOIN mutants m ON m.id = t.mutant_row_id WHERE t.run_id = 1 AND m.mutant_code = 'M0001' AND t.method = 'T1' ORDER BY t.id",
@@ -16434,6 +16439,19 @@ describe("R688: a mutant that blanks a test codeunit's discovery is scored per m
       .get() as { verdict: string; note: string | null } | null;
     expect(row?.verdict).toBe("error");
     expect(row?.note).toBe((error as Error).message);
+  });
+
+  test("A1: C's first test passes under M, its later test answers found-0, the confirm passes: test-discovery-failed, not group-coverage-incomplete", async () => {
+    const b = stub({ k1Covers: false });
+    b.blanks = () => [];
+    b.blanksMethod = (m, ref) => m === "M0001" && ref.method === "T2";
+    const { error, m1 } = await session(b, SEQ);
+    expect(error).toBeUndefined();
+    expect(ranUnder(b, "M0001", "T1")).toBe(1);
+    expect([m1?.verdict, m1?.cause]).toEqual(["error", "test-discovery-failed"]);
+    // The note must not claim C's already-run T1 did not run.
+    expect(m1?.failureNote).not.toContain("were not run");
+    expect(m1?.failureNote).toContain("Sandbox Tests.T2");
   });
 
   test("O5: the confirm's deadline-exceeded is M's own error cause; the next mutant is scored", async () => {

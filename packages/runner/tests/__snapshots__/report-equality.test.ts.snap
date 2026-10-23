@@ -409,7 +409,7 @@ exports[`buildReport output is stable across the event-stream refactor an event 
       ],
       "durationMs": 0,
       "endIndex": 90,
-      "failureNote": "test-discovery-failed: test codeunit(s) "Sales Approval Tests" (50100) were not run under this mutant: BC's suite discovery listed none of their methods (asked for Sales Approval Tests.LogInsertsOnApproval); with no mutant active they ran; no other test covers it, so this is not a survivor (R688)",
+      "failureNote": "test-discovery-failed: test codeunit(s) "Sales Approval Tests" (50100) were skipped under this mutant: BC's suite discovery listed none of their methods when asked for Sales Approval Tests.LogInsertsOnApproval, which passed with no mutant active; no other test covers it, so this is not a survivor (R688)",
       "file": "Al/Table/Table 50103 Sales Approval Log.al",
       "line": 5,
       "mutantCode": "M0016",
