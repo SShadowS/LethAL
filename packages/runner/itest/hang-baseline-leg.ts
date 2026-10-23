@@ -279,7 +279,9 @@ export function quarantineStopReasons(
   if (i.quarantinedEvents > 0) out.push(`[${label}] ${i.quarantinedEvents} quarantined event(s)`);
   if (i.quarantineRecords > 0) out.push(`[${label}] ${i.quarantineRecords} quarantine record(s)`);
   for (const m of i.report.mutants) {
-    // `stop-outcome-unconfirmed`: a stop with no 408 and no quarantine, so a session may be live.
+    // `stranded` now also covers a lost answer after an unrefused stop (R665).
+    // `stop-outcome-unconfirmed` is left only for a grouped answer that came back unusable after
+    // an unrefused stop, which is still a STOP: the stopped session's end is not proven.
     if (
       m.cause === "stranded" ||
       m.cause === "confirm-stopped" ||

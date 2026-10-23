@@ -14079,12 +14079,14 @@ describe("runSession — Layer 5C-B2: a proven-complete lost ack earns one fresh
   function m2Answers(
     answers: readonly Partial<TestVerdict>[],
     dispatches: { count: number },
+    activated: (string | null)[] = [],
   ): ExecutionBackend {
     let activeMutant: string | null = null;
     let issued = 0;
     return leaseBackend({
       activate: async (id) => {
         activeMutant = id;
+        activated.push(id);
       },
       run: async (ref) => {
         if (activeMutant === "M0002") {
@@ -14333,6 +14335,7 @@ describe("runSession — Layer 5C-B2: a proven-complete lost ack earns one fresh
   function m2ManyAnswers(
     answers: readonly ((opts: RunManyOpts, fencedOp: RunManyResult["fencedOp"]) => RunManyResult)[],
     dispatches: { count: number },
+    activated: (string | null)[] = [],
   ): ExecutionBackend {
     let activeMutant: string | null = null;
     let issued = 0;
@@ -14352,6 +14355,7 @@ describe("runSession — Layer 5C-B2: a proven-complete lost ack earns one fresh
     return leaseBackend({
       activate: async (id) => {
         activeMutant = id;
+        activated.push(id);
       },
       run: async (ref) => ({ ref, outcome: "pass" as const, durationMs: 1, attestation: ATTESTED }),
       runMany: async (opts) => {
@@ -14521,43 +14525,176 @@ describe("runSession — Layer 5C-B2: a proven-complete lost ack earns one fresh
       };
     };
 
+  /** R665: the shape every unrefused-stop lost ack now ends in. M0002 is a stranded error, the
+   *  tier is quarantined, and the session stops: the later mutant M0003 is never activated and
+   *  never scored. `dispatches` is the expected count of M0002's calls. */
+  const expectStranded = async (
+    report: SessionReport,
+    dir: string,
+    activated: readonly (string | null)[],
+  ): Promise<string | undefined> => {
+    const m2 = report.mutants.find((m) => m.mutantCode === "M0002");
+    expect(m2?.verdict).toBe("error");
+    expect(m2?.cause).toBe("stranded");
+    expect(isStrandedNote(m2?.failureNote)).toBe(true);
+    expect((await new QuarantineStore(dir).read(TIER))?.opKind).toBe("test-run");
+    expect(report.quarantined).toBeDefined();
+    expect(activated).not.toContain("M0003");
+    const m3 = report.mutants.find((m) => m.mutantCode === "M0003");
+    expect(m3?.verdict === "killed" || m3?.verdict === "survived").toBe(false);
+    return m2?.failureNote;
+  };
+  /** R665: the `not-started` read after an unrefused stop (the R194 rule-2b shape). */
+  const neverClaimed = (_attemptId: string, opSeq: number): OperationStatus => ({
+    opKind: "none",
+    opAttemptId: "",
+    opSeq: 0,
+    lastCompletedOpSeq: opSeq - 1,
+    completed: false,
+  });
+
   for (const state of ["confirmed", "unknown", "pending", "issued"] as const) {
-    test(`R-204b 6/7. single path, stop ${state} + 400 + reconcile completed: NO retry, error / stop-outcome-unconfirmed`, async () => {
+    test(`R-204b 6/7 (R665). single path, stop ${state} + 400 + reconcile completed: NO retry, stranded and quarantined, the session stops`, async () => {
       const dir = freshTmpDir();
       const client = new FakeLeaseClient();
       client.reconcileStatus = tombstoned;
       const { lease } = leaseCfg(client);
       const dispatches = { count: 0 };
+      const activated: (string | null)[] = [];
       // A retry would pass: the guard is what keeps this from scoring survived.
       const report = await runSessionForTest(
-        m2Answers([lostAfter(state), { outcome: "pass", attestation: ATTESTED }], dispatches),
+        m2Answers(
+          [lostAfter(state), { outcome: "pass", attestation: ATTESTED }],
+          dispatches,
+          activated,
+        ),
         { quarantineDir: dir, lease },
       );
-      const m2 = report.mutants.find((m) => m.mutantCode === "M0002");
       expect(dispatches.count).toBe(1);
-      expect(m2?.verdict).toBe("error");
-      expect(m2?.cause).toBe("stop-outcome-unconfirmed");
-      expect(await new QuarantineStore(dir).read(TIER)).toBeNull();
-      expect(report.mutants.find((m) => m.mutantCode === "M0003")).toBeDefined();
+      const note = await expectStranded(report, dir, activated);
+      expect(note).toContain("reconciled completed");
     });
 
-    test(`R-204b 6/7. grouped, stop ${state} + 400 + reconcile completed: NO retry, error / stop-outcome-unconfirmed`, async () => {
+    test(`R-204b 6/7 (R665). grouped, stop ${state} + 400 + reconcile completed: NO retry, stranded and quarantined, the session stops`, async () => {
       const dir = freshTmpDir();
       const client = new FakeLeaseClient();
       client.reconcileStatus = tombstoned;
       const { lease } = leaseCfg(client);
       const dispatches = { count: 0 };
+      const activated: (string | null)[] = [];
       const report = await runSessionForTest(
-        m2ManyAnswers([callAfter(state), passAllMany], dispatches),
+        m2ManyAnswers([callAfter(state), passAllMany], dispatches, activated),
         { quarantineDir: dir, lease },
       );
-      const m2 = report.mutants.find((m) => m.mutantCode === "M0002");
       expect(dispatches.count).toBe(1);
-      expect(m2?.verdict).toBe("error");
-      expect(m2?.cause).toBe("stop-outcome-unconfirmed");
-      expect(await new QuarantineStore(dir).read(TIER)).toBeNull();
+      const note = await expectStranded(report, dir, activated);
+      expect(note).toContain("reconciled completed");
     });
   }
+
+  test("R665 twin. single path, stop unknown + 400 + reconcile NOT-STARTED: stranded and quarantined, with no tombstone text", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = neverClaimed;
+    const { lease } = leaseCfg(client);
+    const dispatches = { count: 0 };
+    const activated: (string | null)[] = [];
+    const report = await runSessionForTest(
+      m2Answers(
+        [lostAfter("unknown"), { outcome: "pass", attestation: ATTESTED }],
+        dispatches,
+        activated,
+      ),
+      { quarantineDir: dir, lease },
+    );
+    expect(dispatches.count).toBe(1);
+    const note = await expectStranded(report, dir, activated);
+    expect(note).toContain("never claimed");
+    expect(note).toContain("the original may still arrive");
+    expect(note).not.toContain("tombstone");
+    const detail = (await new QuarantineStore(dir).read(TIER))?.detail;
+    expect(detail).toContain("never claimed");
+    expect(detail).not.toContain("tombstone");
+  });
+
+  test("R665 twin. grouped, stop unknown + 400 + reconcile NOT-STARTED: stranded and quarantined, with no tombstone text", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = neverClaimed;
+    const { lease } = leaseCfg(client);
+    const dispatches = { count: 0 };
+    const activated: (string | null)[] = [];
+    const report = await runSessionForTest(
+      m2ManyAnswers([callAfter("unknown"), passAllMany], dispatches, activated),
+      { quarantineDir: dir, lease },
+    );
+    expect(dispatches.count).toBe(1);
+    const note = await expectStranded(report, dir, activated);
+    expect(note).toContain("never claimed");
+    expect(note).not.toContain("tombstone");
+    expect((await new QuarantineStore(dir).read(TIER))?.detail).not.toContain("tombstone");
+  });
+
+  test("R665. grouped, a confirmed stop + 400 that also carries abortSession still aborts the session (R198), with the tier quarantined", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = tombstoned;
+    const { lease } = leaseCfg(client);
+    const lost = callAfter("confirmed");
+    const backend = m2ManyAnswers(
+      [
+        (opts, fencedOp) => ({
+          ...lost(opts, fencedOp),
+          abortSession: "control-app-route-missing: LethALControl_RunMutantMany answered 404",
+        }),
+        passAllMany,
+      ],
+      { count: 0 },
+      [],
+    );
+    await expect(runSessionForTest(backend, { quarantineDir: dir, lease })).rejects.toThrow(
+      /control-app-route-missing/,
+    );
+    expect((await new QuarantineStore(dir).read(TIER))?.opKind).toBe("test-run");
+  });
+
+  test("R665. reproduceKill: a lost answer on the reproduction under the mutant after a confirmed stop is stranded and quarantined, never a kill", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = tombstoned;
+    const { lease } = leaseCfg(client);
+    const activated: (string | null)[] = [];
+    let activeMutant: string | null = null;
+    let m2Runs = 0;
+    const backend = leaseBackend({
+      killsMustReproduce: true,
+      activate: async (id) => {
+        activeMutant = id;
+        activated.push(id);
+      },
+      run: async (ref) => {
+        if (activeMutant === "M0002") {
+          m2Runs++;
+          // The covering run fails, the unmutated confirm passes, the reproduction is lost.
+          if (m2Runs === 1) {
+            return { ref, outcome: "fail" as const, durationMs: 1, attestation: ATTESTED };
+          }
+          return { ref, outcome: "error" as const, durationMs: 1, ...lostAfter("confirmed") };
+        }
+        return { ref, outcome: "pass" as const, durationMs: 1, attestation: ATTESTED };
+      },
+    });
+    const report = await runSessionForTest(backend, { quarantineDir: dir, lease });
+    expect(m2Runs).toBe(2);
+    expect(activated.slice(activated.indexOf("M0002"), activated.indexOf("M0002") + 3)).toEqual([
+      "M0002",
+      null,
+      "M0002",
+    ]);
+    const note = await expectStranded(report, dir, activated);
+    expect(note).toContain("tombstone");
+    expect(report.counts.killed).toBe(0);
+  });
 
   test("R-204b 8. single path, stop REFUSED + 400 + reconcile completed: exactly one retry, and its pass stands", async () => {
     const dir = freshTmpDir();
@@ -14665,21 +14802,20 @@ describe("runSession — Layer 5C-B2: a proven-complete lost ack earns one fresh
   });
 
   // ——— R-204b final review: the RETRY's own ending is normalized too ———
-  test("R-204b retry, single path: a permitted retry that sends an unrefused stop and loses its answer is stop-outcome-unconfirmed, not result-lost", async () => {
+  test("R-204b retry (R665), single path: a permitted retry that sends an unrefused stop and loses its answer is stranded and quarantined, not result-lost", async () => {
     const dir = freshTmpDir();
     const client = new FakeLeaseClient();
     client.reconcileStatus = tombstoned;
     const { lease } = leaseCfg(client);
     const dispatches = { count: 0 };
+    const activated: (string | null)[] = [];
     const report = await runSessionForTest(
-      m2Answers([lostAfter(undefined), lostAfter("confirmed")], dispatches),
+      m2Answers([lostAfter(undefined), lostAfter("confirmed")], dispatches, activated),
       { quarantineDir: dir, lease },
     );
-    const m2 = report.mutants.find((m) => m.mutantCode === "M0002");
+    // The first (stop-less) lost ack earned its one retry; the retry's own stop ends it.
     expect(dispatches.count).toBe(2);
-    expect(m2?.verdict).toBe("error");
-    expect(m2?.cause).toBe("stop-outcome-unconfirmed");
-    expect(await new QuarantineStore(dir).read(TIER)).toBeNull();
+    await expectStranded(report, dir, activated);
   });
 
   test("R-204b retry, single path control: a retry with NO stop that loses its answer stays result-lost", async () => {
@@ -14692,21 +14828,19 @@ describe("runSession — Layer 5C-B2: a proven-complete lost ack earns one fresh
     expect(report.mutants.find((m) => m.mutantCode === "M0002")?.cause).toBe("result-lost");
   });
 
-  test("R-204b retry, grouped: a permitted retry with an unknown stop and a lost answer is stop-outcome-unconfirmed", async () => {
+  test("R-204b retry (R665), grouped: a permitted retry with an unknown stop and a lost answer is stranded and quarantined", async () => {
     const dir = freshTmpDir();
     const client = new FakeLeaseClient();
     client.reconcileStatus = tombstoned;
     const { lease } = leaseCfg(client);
     const dispatches = { count: 0 };
+    const activated: (string | null)[] = [];
     const report = await runSessionForTest(
-      m2ManyAnswers([callAfter(undefined), callAfter("unknown")], dispatches),
+      m2ManyAnswers([callAfter(undefined), callAfter("unknown")], dispatches, activated),
       { quarantineDir: dir, lease },
     );
-    const m2 = report.mutants.find((m) => m.mutantCode === "M0002");
     expect(dispatches.count).toBe(2);
-    expect(m2?.verdict).toBe("error");
-    expect(m2?.cause).toBe("stop-outcome-unconfirmed");
-    expect(await new QuarantineStore(dir).read(TIER)).toBeNull();
+    await expectStranded(report, dir, activated);
   });
 
   test("R-204b retry, grouped: a malformed retry answer after a confirmed stop is stop-outcome-unconfirmed; with no stop it keeps group-answer-malformed", async () => {

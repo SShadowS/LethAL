@@ -9694,8 +9694,8 @@ async function confirmWarm(p: {
     feedAttestation(args.attestation, verdict.attestation);
     // R658 (I1 on the warm replay): our stop was sent, not refused, and BC never sent its 408. A
     // `completed` reconcile then proves nothing, because our own stop writes that tombstone while
-    // the AL session may still run. Before `classifyNonVerdictStep`, whose `stop-outcome-unconfirmed`
-    // is "no verdict, no quarantine", as the cold confirm does.
+    // the AL session may still run. Checked here, before `classifyNonVerdictStep`, so the note names
+    // the replay; since R665 that branch strands the same shape too.
     if (verdict.operation === "in-flight-unknown" && !stopIsRetrySafe(verdict.stopState)) {
       await quarantineInFlight({
         safety: args.safety,
@@ -10210,11 +10210,31 @@ async function classifyNonVerdictStep(
     // readable answer — it already reconciled, and (when the op was proven complete) already
     // spent its one fresh attempt on it. All that is left is which diagnosis to record.
     if (step.cause === "stop-outcome-unconfirmed") {
-      // R-204b (R202): the op reconciled clean, but LethAL had sent a stop for this run and it was
-      // not refused, so the retry was withheld: whether the stop or the test ended the run is not
-      // established. No verdict, no quarantine; `--resume` re-runs it.
-      note = `stop outcome unconfirmed ${what}: LethAL sent a stop for this run (${v.stopState ?? "unknown"}) and its answer could not be read${v.failureMessage !== undefined ? ` (${v.failureMessage})` : ""}; the operation reconciled ${lostAck}, but a run our stop may have ended is never retried, because a hang need not recur — no verdict (R202). Re-run with --resume`;
-      cause = step.cause;
+      // R-204b (R202) kept the retry withheld: a run our stop may have ended is never retried.
+      // R665 (R658's C1 on the mutant path): neither clean-looking read proves the server clean.
+      // `completed` may be our own stop's tombstone while the AL session still runs beside the
+      // next mutant on the same database (a false-kill door). `not-started` after an unrefused
+      // stop whose answer was lost means the original may still arrive, unretried, with the op
+      // counter one off. Both strand: no verdict, quarantine, stop scheduling.
+      const risk =
+        lostAck === "completed"
+          ? `the operation reconciled completed, which may be our own stop's tombstone while the session still runs${tombstoneSentence(v.stopState)}`
+          : "the attempt was never claimed when the marker was read, but the stop was sent and its answer was lost, so the original may still arrive; nothing was re-dispatched";
+      await quarantineInFlight({
+        safety: ctx.safety,
+        quarantineStore: ctx.quarantineStore,
+        resourceKey: ctx.resourceKey,
+        nowIso: ctx.nowIso,
+        detail: `stop outcome unconfirmed ${what} (mutant ${ctx.m.mutantId}), stop ${v.stopState ?? "unknown"}${v.failureMessage !== undefined ? `: ${v.failureMessage}` : ""}; ${risk}`,
+      });
+      note = `${STRANDED_NOTE_PREFIX}${ref.method}: LethAL sent a stop for this run (${v.stopState ?? "unknown"}) and its answer could not be read${v.failureMessage !== undefined ? ` (${v.failureMessage})` : ""}; ${risk} — container may be stranded, no verdict (R665)`;
+      cause = "stranded";
+      // R198, as in the generic strand below: an identity disagreement or a missing route still
+      // names itself and aborts the session.
+      if (step.abortSession !== undefined) {
+        note = `${note} — ${step.abortSession}`;
+        transportError = true;
+      }
       return { failureNote: note, cause, transportError };
     }
     if (lostAck === "completed") {
