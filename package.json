@@ -3,9 +3,7 @@
   "version": "0.1.0-alpha.3",
   "private": true,
   "type": "module",
-  "workspaces": [
-    "packages/*"
-  ],
+  "workspaces": ["packages/*"],
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --build --force",
@@ -13,7 +11,6 @@
     "lint": "biome check .",
     "build:binary": "bun scripts/build-binary.ts",
     "build:binaries": "bun scripts/build-binary.ts --all",
-    "itest:alrunner": "bun packages/runner/itest/al-runner.itest.ts",
     "itest:alrunner-v3": "bun packages/runner/itest/al-runner-v3.itest.ts",
     "itest:bcdev": "bun packages/runner/itest/bcdev.itest.ts",
     "itest:bcdev-names": "bun packages/runner/itest/bcdev-names.itest.ts",

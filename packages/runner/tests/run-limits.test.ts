@@ -202,7 +202,7 @@ describe("assertRunSizeAcceptable (R48)", () => {
 });
 
 describe("CLI flags (R47/R48)", () => {
-  const RUN_ARGS = ["run", "--project", "p", "--tests", "t", "--backend", "al-runner"] as const;
+  const RUN_ARGS = ["run", "--project", "p", "--tests", "t", "--backend", "bcdev"] as const;
 
   test("--mutant-timeout-ms parses as a positive integer", () => {
     const cfg = parseCliConfig([...RUN_ARGS, "--mutant-timeout-ms", "120000"]);
@@ -266,7 +266,7 @@ describe("CLI flags (R47/R48)", () => {
 });
 
 describe("--help and --version (R49)", () => {
-  const RUN_ARGS = ["run", "--project", "p", "--tests", "t", "--backend", "al-runner"] as const;
+  const RUN_ARGS = ["run", "--project", "p", "--tests", "t", "--backend", "bcdev"] as const;
 
   test("--help and -h are recognised BEFORE strict parseArgs rejects them", () => {
     // The defect: parseArgs runs in strict mode, so `--help` used to exit 1 with a raw TypeError

@@ -11,9 +11,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser, parseAL, wrapRoot } from "@lethal/engine";
-import { AlRunnerBackend } from "../src/al-runner-backend";
 import {
-  alRunnerCoverageFrom,
   alRunnerCoverageFromServer,
   alRunnerCoverageSupport,
   buildAlRunnerCoverageIndex,
@@ -25,10 +23,13 @@ import {
   lineMapFromSources,
 } from "../src/line-map";
 import { generateMutationSet } from "../src/orchestrator";
-import type { SpawnFn } from "../src/publisher";
 import { buildCoverageIndex, coverageFilter } from "../src/selection";
-import { alRunnerStdout } from "./helpers/al-runner-stdout";
 import { removeScratchDir } from "./helpers/scratch";
+
+// R654 S3: the one-shot Cobertura reader went with the .NET al-runner. The index cases below read
+// the same hits as `perTestCoverage` statements (`srv`), with the scope al-runner names for each
+// line, and the backend's own describe ("the backend evaluates arms under the session's
+// symbols", which drove `AlRunnerBackend`) is gone with that backend.
 
 const scratchDirs: string[] = [];
 afterAll(() => {
@@ -94,7 +95,14 @@ codeunit 91904 "R300b Q"
 #endif
 `;
 
-const hits = (file: string, ...lines: number[]) => lines.map((line) => ({ file, line, hits: 1 }));
+/** One `perTestCoverage` record: each row's lines hit once, under that row's scope. */
+const srv = (...rows: { file: string; scope: string; lines: number[] }[]) => ({
+  test: "Codeunit91930.ReachW1",
+  coverage: rows.map((r) => ({
+    file: r.file,
+    statements: r.lines.map((line) => ({ line, hits: 1, scope: r.scope })),
+  })),
+});
 const roots = async (files: Record<string, string>) => {
   await initParser();
   return Object.entries(files).map(([path, text]) => ({ path, root: wrapRoot(parseAL(text)) }));
@@ -193,7 +201,7 @@ function mutant(mutantId: string, proc: string) {
 }
 
 describe("R-300b (b): al-runner scores W1 by its original file lines", () => {
-  test("Cobertura and --server both name Hit at lines 10/14/18; nothing is refused; Hit is covered and Miss is a real miss", async () => {
+  test("--server names Hit at lines 10/14/18; nothing is refused; Hit is covered and Miss is a real miss", async () => {
     const dir = await bundle({ [W1_FILE]: W1 });
     const index = await buildAlRunnerCoverageIndex(dir, SYMS);
     expect(index.refusedFiles).toEqual([]);
@@ -205,7 +213,6 @@ describe("R-300b (b): al-runner scores W1 by its original file lines", () => {
       procedure: "Hit",
       line,
     }));
-    expect(alRunnerCoverageFrom(hits(W1_FILE, 10, 14, 18), index).entries).toEqual(want);
     const server = alRunnerCoverageFromServer(
       {
         test: "Codeunit91930.ReachW1",
@@ -229,7 +236,13 @@ describe("R-300b (b): al-runner scores W1 by its original file lines", () => {
     expect(refused.size).toBe(0);
     const ref = { codeunitId: 91930, codeunitName: "Reach", method: "ReachW1" };
     const cov = buildCoverageIndex([
-      { ref, coverage: alRunnerCoverageFrom(hits(W1_FILE, 10, 14, 18), index) },
+      {
+        ref,
+        coverage: alRunnerCoverageFromServer(
+          srv({ file: W1_FILE, scope: "Hit", lines: [10, 14, 18] }),
+          index,
+        ),
+      },
     ]);
     const split = coverageFilter(
       [mutant("M1", "Hit"), mutant("M2", "Miss")],
@@ -254,7 +267,12 @@ describe("R-300b (b): al-runner scores W1 by its original file lines", () => {
       expect(index.refusedFiles).toEqual(["src/Q.Codeunit.al"]);
       expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([`[lethal] ${sentence}`]);
       // Line 6 is `exit(1);` in QIfHit; a widened rule would place it.
-      expect(alRunnerCoverageFrom(hits("src/Q.Codeunit.al", 6), index).entries).toEqual([]);
+      expect(
+        alRunnerCoverageFromServer(
+          srv({ file: "src/Q.Codeunit.al", scope: "QIfHit", lines: [6] }),
+          index,
+        ).entries,
+      ).toEqual([]);
       expect((await alRunnerCoverageSupport(dir)).wrappedObjectFiles).toEqual([
         "src/Q.Codeunit.al",
       ]);
@@ -275,7 +293,10 @@ describe("R-300b (b): al-runner scores W1 by its original file lines", () => {
       const dir = await bundle({ [W1_FILE]: text });
       expect((await alRunnerCoverageSupport(dir)).wrappedObjectFiles).toEqual([W1_FILE]);
       const index = await buildAlRunnerCoverageIndex(dir, SYMS);
-      expect(alRunnerCoverageFrom(hits(W1_FILE, 10), index).entries).toEqual([]);
+      expect(
+        alRunnerCoverageFromServer(srv({ file: W1_FILE, scope: "Hit", lines: [10] }), index)
+          .entries,
+      ).toEqual([]);
     } finally {
       warn.mockRestore();
     }
@@ -288,29 +309,28 @@ describe("R-300b (C1): only active declarations are indexed; a key in two indexe
   // A: `exit(1);` on line 6. B: the same statement on line 9, inside its own FromB.
   const A = pair("PROBESYM", "FromA", "");
   const B = pair("not PROBESYM", "FromB", "\n\n\n");
+  /** A's line 6 and B's line 9, each under its own procedure's scope. */
+  const PAIR_HITS = srv(
+    { file: "src/A.Codeunit.al", scope: "FromA", lines: [6] },
+    { file: "src/B.Codeunit.al", scope: "FromB", lines: [9] },
+  );
 
   test("A active, B compiled out: A's hits name A's procedure, B is skipped and its hits drop", async () => {
     const dir = await bundle({ "src/A.Codeunit.al": A, "src/B.Codeunit.al": B });
     const index = await buildAlRunnerCoverageIndex(dir, SYMS);
     expect(index.skippedFiles).toEqual(["src/b.codeunit.al"]);
-    expect(
-      alRunnerCoverageFrom(
-        [...hits("src/A.Codeunit.al", 6), ...hits("src/B.Codeunit.al", 9)],
-        index,
-      ).entries,
-    ).toEqual([{ objectType: "Codeunit", objectId: 91910, procedure: "FromA", line: 6 }]);
+    expect(alRunnerCoverageFromServer(PAIR_HITS, index).entries).toEqual([
+      { objectType: "Codeunit", objectId: 91910, procedure: "FromA", line: 6 },
+    ]);
   });
 
   test("the same pair under no symbols: B is active and A is skipped", async () => {
     const dir = await bundle({ "src/A.Codeunit.al": A, "src/B.Codeunit.al": B });
     const index = await buildAlRunnerCoverageIndex(dir, { symbols: [] });
     expect(index.skippedFiles).toEqual(["src/a.codeunit.al"]);
-    expect(
-      alRunnerCoverageFrom(
-        [...hits("src/A.Codeunit.al", 6), ...hits("src/B.Codeunit.al", 9)],
-        index,
-      ).entries,
-    ).toEqual([{ objectType: "Codeunit", objectId: 91910, procedure: "FromB", line: 9 }]);
+    expect(alRunnerCoverageFromServer(PAIR_HITS, index).entries).toEqual([
+      { objectType: "Codeunit", objectId: 91910, procedure: "FromB", line: 9 },
+    ]);
   });
 
   test("both active: the key is refused by name, exempt, and both files are skipped", async () => {
@@ -327,12 +347,7 @@ describe("R-300b (C1): only active declarations are indexed; a key in two indexe
       expect(index.exempt.has("codeunit:91910")).toBe(true);
       expect(index.declared.has("codeunit:91910")).toBe(false);
       expect(index.skippedFiles).toEqual(["src/a.codeunit.al", "src/b.codeunit.al"]);
-      expect(
-        alRunnerCoverageFrom(
-          [...hits("src/A.Codeunit.al", 6), ...hits("src/B.Codeunit.al", 9)],
-          index,
-        ).entries,
-      ).toEqual([]);
+      expect(alRunnerCoverageFromServer(PAIR_HITS, index).entries).toEqual([]);
     } finally {
       warn.mockRestore();
     }
@@ -353,7 +368,10 @@ describe("R-300b (C1): only active declarations are indexed; a key in two indexe
       expect(said[0]).toStartWith(
         "[lethal] coverage refused for Codeunit:91902 (src/U.Codeunit.al): its #if arms could not be evaluated as alc does (",
       );
-      expect(alRunnerCoverageFrom(hits(W1_FILE, 10), index).entries).toEqual([]);
+      expect(
+        alRunnerCoverageFromServer(srv({ file: W1_FILE, scope: "Hit", lines: [10] }), index)
+          .entries,
+      ).toEqual([]);
     } finally {
       warn.mockRestore();
     }
@@ -431,100 +449,5 @@ describe("R-300b (I3): --server's own name disagreeing with the position drops t
     } finally {
       warn.mockRestore();
     }
-  });
-});
-
-describe("R-300b: the backend evaluates arms under the session's symbols", () => {
-  function coveringSpawn(file: string, line: number): SpawnFn {
-    return async (argv) => {
-      const o = argv.indexOf("--coverage-out");
-      const out = o >= 0 ? argv[o + 1] : undefined;
-      if (out !== undefined) {
-        await writeFile(
-          out,
-          `<coverage><packages><package><classes><class name="x" filename="${file}"><lines><line number="${line}" hits="1"/></lines></class></classes></package></packages></coverage>`,
-          "utf8",
-        );
-      }
-      return {
-        exitCode: 0,
-        stdout: alRunnerStdout({
-          tests: [{ name: "Codeunit91930.ReachW1", status: "pass", durationMs: 1 }],
-          passed: 1,
-          failed: 0,
-          errors: 0,
-          total: 1,
-          exitCode: 0,
-        }),
-        stderr: "",
-      };
-    };
-  }
-  async function batch(): Promise<string> {
-    return bundle({
-      [W1_FILE]: W1,
-      "MutationSelector.Codeunit.al": "placeholder",
-      "mutant-manifest.json": JSON.stringify({
-        artifactId: "a".repeat(32),
-        mutants: [{ objectType: "codeunit", codeunitId: 91900 }],
-      }),
-    });
-  }
-  const backendOf = async () =>
-    new AlRunnerBackend(
-      {
-        alRunnerPath: "al-runner",
-        instrumentedDir: await bundle({}),
-        testDir: "/tests",
-        selectorObjectId: 50000,
-        coverage: "al-runner",
-      },
-      coveringSpawn(W1_FILE, 10),
-    );
-  const ref = { codeunitId: 91930, codeunitName: "Reach", method: "ReachW1" };
-
-  test("useBuildSymbols reaches the index: W1's line 10 names Hit", async () => {
-    const backend = await backendOf();
-    backend.useBuildSymbols(["PROBESYM"]);
-    await backend.deploy(await batch());
-    const v = await backend.run(ref, { coverage: "none", timeoutMs: 5000 });
-    await backend.close();
-    expect(v.coverage?.entries).toEqual([
-      { objectType: "Codeunit", objectId: 91900, procedure: "Hit", line: 10 },
-    ]);
-  });
-
-  // Sol run 001 (I): what runSession merges into selection's refusal map after each deploy.
-  test("coverageRefusals names the deployed bundle's undecided wrapped object, with the index's sentence", async () => {
-    const warn = spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      const backend = await backendOf();
-      backend.useBuildSymbols([]);
-      await backend.deploy(
-        await bundle({
-          "src/U.Codeunit.al": `#if PROBESYM PROBESYM\n${W1_BODY.replace("91900", "91902")}#endif\n`,
-          "MutationSelector.Codeunit.al": "placeholder",
-          "mutant-manifest.json": JSON.stringify({ artifactId: "a".repeat(32), mutants: [] }),
-        }),
-      );
-      const refusals = await backend.coverageRefusals();
-      await backend.close();
-      expect([...refusals.keys()]).toEqual(["codeunit:91902"]);
-      expect(refusals.get("codeunit:91902")).toStartWith(
-        "coverage refused for Codeunit:91902 (src/U.Codeunit.al): its #if arms could not be evaluated as alc does (",
-      );
-    } finally {
-      warn.mockRestore();
-    }
-  });
-
-  test("without the session's symbols, a coverage deploy refuses rather than guessing the arms", async () => {
-    const backend = await backendOf();
-    const err = await backend.deploy(await batch()).then(
-      () => undefined,
-      (e: unknown) => e,
-    );
-    await backend.close();
-    expect((err as Error | undefined)?.message).toContain("useBuildSymbols");
   });
 });

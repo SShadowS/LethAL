@@ -19,7 +19,6 @@ import { generateMutationSet, operatorTiers, runSession } from "../src/orchestra
 import { buildReport, renderConsole } from "../src/report";
 import { sessionFingerprint } from "../src/resume";
 import { ResultsStore } from "../src/store";
-import { measuredV2_12 } from "./helpers/al-runner-predefined";
 
 /**
  * Issue #19 (R227): a line-scoped mutant filter for PR runs. Two properties are load-bearing:
@@ -128,7 +127,7 @@ describe("parsing", () => {
   });
 
   test("the CLI parses --lines (repeatable) and --changed-since, and leaves both absent", () => {
-    const base = ["run", "--project", "p", "--tests", "t", "--backend", "al-runner"];
+    const base = ["run", "--project", "p", "--tests", "t", "--backend", "bcdev"];
     const cfg = parseCliConfig([
       ...base,
       "--lines",
@@ -323,12 +322,15 @@ describe("runSession: the line filter reaches both the mutant set AND the report
     coverage: "procedure",
     deploy: "publish",
     isolation: "session",
-    kind: "al-runner",
+    kind: "al-runner-v3",
     authoritative: false,
   };
 
   class StubBackend implements ExecutionBackend {
-    readonly measurePredefinedSymbols = measuredV2_12; // R392
+    // R654: re-pointed from the retired .NET al-runner to al-runner-v3, which names its build.
+    async runnerBuild(): Promise<{ version: string; binarySha256: string }> {
+      return { version: "alrunner 3.0.0-alpha.2 (91253f2d6)", binarySha256: "b".repeat(64) };
+    }
     private activations: Array<string | null> = [];
     capabilities(): BackendCapabilities {
       return RUN_CAPS;

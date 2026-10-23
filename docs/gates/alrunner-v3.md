@@ -14,8 +14,20 @@ The leg-by-leg tables live in those pre-commitments and are asserted by the ites
 
 The legs:
 
-- C: the contract probe, 26 facts (`runV3ContractProbe`, `V3_LEG_C_FACTS`) of three kinds: 9 defect, 16 contract
-  and 1 warn (r9, below). Since r7
+- C: the contract probe, 27 facts (`runV3ContractProbe`, `V3_LEG_C_FACTS`) of three kinds: 9 defect, 17 contract
+  and 1 warn (r9, below). Since r12
+  (`docs/superpowers/specs/2026-10-23-r586-alrunner-v3-precommitment-r12-message-prefix.md`, [[R667]]), the 17th
+  contract fact is `message-has-no-type-prefix`: the `message` of a plain `Error()` (`Fails`, on the main call)
+  and of an `Assert.AreEqual` failure (codeunit 50661, its own tests app, Microsoft's Library Assert passed as
+  `--dep` from `fixtures/sandbox-data-tests/.alpackages`) must be plain fails whose messages start exactly with
+  `boom 5` and `Assert.AreEqual failed.` (since [[R675]]; `startsWith`, so an appended call stack is fine). Any
+  text before, or in place of, that start reads `diverged` (its `measured` says `prefix "<text>"` or `reworded`):
+  `gate-fail` in leg C, and a refusal in a session, by name (`MESSAGE_PREFIX_REASON`): it would turn v3's timeouts
+  into errors, close the serve daemon on every refusal and skew the R553 assertion screen. It no longer guards
+  verdicts: since R675, K1(a) in `v3RowVerdict`, the v3 serve-keep rule and two defect facts read v3's refusal
+  marker `NotRun: out-of-scope:` ANYWHERE in a `pass`/`fail` message (`isV3RefusalText` in `al-runner-rows.ts`),
+  so no prefix shape can turn a refusal into a kill. The Assert half is gate-only, as `timeout-is-cpu` is: a session reads
+  `Fails` alone (any text before `boom 5` still refuses it). Since r7
   (`docs/superpowers/specs/2026-10-22-r586-alrunner-v3-precommitment-r7-none-selected.md`, 16681485), 8 are
   defect facts (`V3_DEFECT_FACTS` in `al-runner-v3-gate.ts`, `none-selected-exit` included). Since r8
   (`docs/superpowers/specs/2026-10-22-r586-alrunner-v3-precommitment-r8-dependent-notrun.md`, 848371cb), 16 are
@@ -39,13 +51,16 @@ The legs:
     leg's receipt lines that ran under it.
   - The refusal row shape is now probed by the contract fact `refusal-row-shape-public` (codeunit 50654,
     `http://example.com/x`, refused by host string with no network), and `refusal-cascade` reads that call.
-  - `commit-under-test-isolation` is `gone` only for a row that is not a refusal written as a fail.
+  - `commit-under-test-isolation` is `gone` only for a row that is not a pass/fail row that holds v3's refusal
+    marker (R675).
   - `duplicate-key-insert-raises` (50655, `TestPermissions = Disabled`) is `gone` only for bc1's end-of-test text.
     v3's #5623 refusal reads `refused`: `held` in leg C (on a contract or warn fact it is `gate-fail`), a warning
     in a session, and never counted as gone.
-  - In every session, a row whose message starts `NotRun: out-of-scope:` but has no `notRun` scores `error`
-    (`runner-test-error`), never a kill, survive or pass (K1(a)).
-- S1, S3: `fixtures/sandbox-app`, one-shot, per mutant equal to `itest:alrunner`'s table.
+  - In every session, a row whose message holds `NotRun: out-of-scope:` anywhere (R675) but has no `notRun`
+    scores `error` (`runner-test-error`), never a kill, survive or pass (K1(a)).
+- S1: `fixtures/sandbox-app`, one-shot, per mutant equal to `bcdev.baseline.json` (`itest:bcdev`'s table).
+- S3: runs no session. It checks that `selectorMode: "resource"` is refused by name
+  (`al-runner-v3-resource-selector-refused`).
 - N1: the names fixture (R557's tests are unselectable on v3, upstream #5572).
 - X (a) to (f): the compile proof, the binding checks and the Sleep rule (§6) on `scripts/r586-probe`.
 - D1, D1c: the Continia Document Output slice, compared per mutant with R594's BC oracle
@@ -89,21 +104,19 @@ The legs:
 
 ### Legs L1, Y-A, Y-B and K (R654 S2)
 
-These legs were ported from `itest:alrunner` before the .NET al-runner is retired. They are pre-committed in `docs/superpowers/specs/2026-10-22-r654-v3-gate-legs-precommitment.md` (43115c78). Each runs one-shot, with coverage `"al-runner"` and a packages folder that holds only the Microsoft apps of `fixtures/sandbox-tests/.alpackages`.
+These legs were ported from `itest:alrunner` before the .NET al-runner was retired (R654 S3, 2026-10-22). They are pre-committed in `docs/superpowers/specs/2026-10-22-r654-v3-gate-legs-precommitment.md` (43115c78). Each runs one-shot, with coverage `"al-runner"` and a packages folder that holds only the Microsoft apps of `fixtures/sandbox-tests/.alpackages`.
 
 Each leg first checks its pre-committed table. A difference is `gate-fail`, and no baseline is written. Only then does it compare against its own baseline.
 
 - **L1** (R353's table): multi-batch layout, with figures equal to v2's. `fixtures/sandbox-layout` runs at `maxGuardsPerBatch` 7, which gives two batches.
   - It checks `EXPECTED_LAYOUT` (`layout-fixture.ts`) per `<batch>/<code>`: verdict, killing test, covering tests and attribution.
-  - Predicted 7 / 3 / 0 over 10. Baseline: `al-runner-v3.layout.baseline.json`, identical per mutant to `al-runner.layout.baseline.json`.
+  - Predicted 7 / 3 / 0 over 10. Baseline: `al-runner-v3.layout.baseline.json`, identical per mutant to `al-runner.layout.baseline.json` (the .NET gate's, deleted in R654 S3).
   - It is the v3 gate's only multi-batch leg.
-  - **Its purpose is shape only.** L1 is NOT R349's stale-layout check on v3. Two reverts were measured on 2026-10-22, and both left it green (7 / 3 / 0, with 1/M0006 and 1/M0007 killed by TwiceOfThree):
-    - deleting `resetLayoutState()` from `AlRunnerV3Backend.deploy` (`/coord/handoff/R-654/s2-live-LR1.log`);
-    - keeping batch 0's coverage index across deploys, `this.coverageIndex ??= index` (`s2-live-LR2.log`).
-  - **Why L-R1 stays green:** on v3, `deploy()` rebuilds the coverage index, the Sleep index and the proof for every batch, and `activate(null)` clears the row cache.
-  - **Why L-R2 stays green is not measured.** The leading guess (marked as a guess in `/coord/handoff/R-654/s2-LR1-finding.md`) is that instrumenting `LayoutBeta` does not move its line numbers, so batch 0's index of the file reads batch 1's coverage the same way.
-  - **R349's stale-layout coverage is LOST when the .NET al-runner is retired (R654 S3), because no v3 leg catches it.** On v2, `itest:alrunner`'s one-shot layout leg went red on it.
-  - **The one guard that exists on v3** is offline. It covers `batchBlind`, the only layout-scoped field that `deploy()` does not rebuild on one-shot. The test is "R654 S2: a batch's latched blind note does not cross into the next batch" in `tests/al-runner-v3-entries.test.ts`. Deleting the reset turns it red.
+  - **It is R349's stale-layout check on v3** ([[R666]]). v3 labels a target file's coverage by the deployed flat path (`active/LayoutBeta.Codeunit.al`) in the EMITTED line numbers of that batch's text: in batch 1, TwiceOfThree hits lines 71, 73 and 79 of the 83-line instrumented file (measured on alpha.2, `/coord/handoff/R-666/measure.md`). So batch 1's lines must be read through batch 1's coverage index.
+  - **The guard L1 proves is both coverage-index guards together:** `resetLayoutState()` sets `coverageIndex` to `undefined`, AND `deploy()` then assigns the new index unconditionally (`this.coverageIndex = index`). Either one alone keeps the index fresh.
+  - **Its live red check is L-R3**, which removes both: delete `this.coverageIndex = undefined;` from `resetLayoutState` and change the assignment to `this.coverageIndex ??= index`. L1 then goes red as R353 predicts: 5 / 5 / 0, with 1/M0006 and 1/M0007 survived and `Layout Tests.GrowAboveTen` as their covering test (`/coord/handoff/R-666/live-LR3.log`; pre-committed in `docs/superpowers/specs/2026-10-23-r666-l1-stale-layout-precommitment.md`, 51d76b74).
+  - **Two single-guard reverts stay green, by design** (2026-10-22, R-654 S2): L-R1 deleted `resetLayoutState()` (`/coord/handoff/R-654/s2-live-LR1.log`), and `deploy()`'s assignment still replaced the index. L-R2 changed the assignment to `??=` (`s2-live-LR2.log`), and the reset had just cleared the field, so `??=` still assigned.
+  - **Offline guards** of the same property and of the reset's other fields: "R666: batch 1's coverage is read through batch 1's layout (one-shot)" in `tests/al-runner-v3-backend.test.ts` (red only with both guards removed); "R654 S2: a batch's latched blind note does not cross into the next batch" (`batchBlind`) and "R666: serve-entries state does not cross a deploy" (`baselineRows`, `union`) in `tests/al-runner-v3-entries.test.ts`, red when the reset is deleted. L1 cannot see those three fields: it has no Sleep and runs one-shot.
 - **Y-A and Y-B** (R321): `fixtures/sandbox-symbols` under `[LETHALA]` and `[LETHALB]`. The symbols go to the backend, which passes them to v3 as `--define`, and to the session.
   - Each checks `EXPECTED_BY_SET` (`symbol-fixture.ts`).
   - Predicted 5 / 4 / 0 over 9 each. Baselines: `al-runner-v3.symbols-lethala.baseline.json` and `-lethalb`.
@@ -126,7 +139,7 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
 - **When a file is missing,** `preflightGateBaseline` refuses the WHOLE run, before any leg starts, and names the record command. This happens whenever the run selects the leg whose baseline is missing (L1, Y-A or Y-B; by default all three are selected). It does not skip just that leg.
 - **A record run never exits 3 when a leg that it did not record failed.** It exits 1 and names the leg (`v3RecordRunFailures`). A table mismatch writes no file.
 
-**agentflow.** `scripts/agentflow/gate-table.ts` selects the `alrunner-v3` leg wherever it selects `alrunner`. A challenged run (the four `LETHAL_GATE_*` variables) writes a receipt whose sublegs must equal the default legs, with no corpus and no tables leg (`V3_AGENTFLOW_LEGS`).
+**agentflow.** `scripts/agentflow/gate-table.ts` selects the `alrunner-v3` leg wherever it selected the retired `alrunner` leg (R654). A challenged run (the four `LETHAL_GATE_*` variables) writes a receipt whose sublegs must equal the default legs, with no corpus and no tables leg (`V3_AGENTFLOW_LEGS`).
 
 ## The pin and the update gate
 
@@ -280,3 +293,22 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
   bc2 measured BC's own Sleep under LethAL's baseline call ([[R649]], `docs/measurements/r649/`): 5 s passes,
   600 s gets no answer within the budget. r11 (338af789) changes that one literal to 5000. No figure, index size
   or baseline moves.
+- 2026-10-23: r12 ([[R667]]) adds the contract fact `message-has-no-type-prefix`, so leg C has 27 facts: 9 defect,
+  17 contract and 1 warn. Expected `matches` on alpha.2 (91253f2d6) and edge (57f1e4f98), INFERRED from R657's
+  measurement (`/coord/handoff/R-657/measure.md`: no `<Type>: ` prefix on any of seven shapes, both builds). R657
+  measured its own `PlainError`, not the probe's `Fails`, and the new Assert codeunit ran offline on alpha.2 only.
+  It costs one extra one-shot call in leg C and none in a session. No other figure or baseline moves. The 27-fact
+  head is not yet run live.
+- 2026-10-23: [[R672]] (plan `docs/superpowers/plans/2026-10-23-r672-v3-refusal-prefix.md`) makes
+  `message-has-no-type-prefix` read `V3_TYPE_PREFIX` instead of `AL_RUNNER_EXCEPTION_PREFIX` (deleted), the same
+  prefix K1(a) and the v3 serve-keep rule read. Both probe texts have no `<word>: ` at the start, so the fact is
+  predicted `matches` on alpha.2 and edge; still 27 facts. No figure or baseline moves.
+- 2026-10-23: [[R675]] (plan `docs/superpowers/plans/2026-10-23-r675-v3-refusal-marker-anywhere.md`) deletes
+  `V3_TYPE_PREFIX`. `message-has-no-type-prefix` now requires the exact starts `boom 5` and
+  `Assert.AreEqual failed.`, which both builds write in all six logs (`/coord/handoff/R-675/measure.md` §3), so it
+  is predicted `matches` on alpha.2 and edge; still 27 facts. K1(a), serve-keep and the two defect facts read the
+  refusal marker anywhere: 0 of 13,773 stored kills and 0 stored v3 `pass`/`fail` rows hold it, so no verdict,
+  fact reading or daemon count is predicted to move. No figure or baseline moves.
+- 2026-10-23: [[R666]] restores L1's purpose as R349's stale-layout check on v3. R-654 S2's two red checks had each
+  removed only one of the two coverage-index guards; L-R3 removes both and turns L1 red. No figure, baseline or leg
+  code moves.

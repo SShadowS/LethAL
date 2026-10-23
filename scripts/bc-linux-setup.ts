@@ -992,7 +992,10 @@ export async function decideContinia(
   resident.set("System", await ops.residentVersion("Microsoft", "System"));
   summary.push(`  P1        Microsoft System: ${resident.get("System") ?? "absent"}`);
   if (!ok) {
-    summary.push(`  STOPPED   the Microsoft apps are not all ${want}: no Continia app published`);
+    // R679: name the way past, since a server on a newer build may be a deliberate new oracle (R594).
+    summary.push(
+      `  STOPPED   the Microsoft apps are not all ${want}: no Continia app published. If this server's build (Base Application ${resident.get("Base Application") ?? "absent"}) is a deliberate new oracle, rerun with --accept-build <that build> (R594)`,
+    );
     return { ok: false, toPublish: [] };
   }
   const pinned = new Map(

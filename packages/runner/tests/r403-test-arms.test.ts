@@ -15,10 +15,6 @@ import type {
 } from "../src/backend";
 import * as discoveryModule from "../src/discovery";
 import { type SessionConfig, runSession } from "../src/orchestrator";
-import {
-  AL_RUNNER_PREDEFINED_SYMBOLS_V2_12_0,
-  type AlRunnerPredefinedProbe,
-} from "../src/preprocessor-symbols";
 import { sessionFingerprint } from "../src/resume";
 import { ResultsStore } from "../src/store";
 import {
@@ -78,8 +74,8 @@ class StubBackend implements ExecutionBackend {
   constructor(private readonly authoritative: boolean) {
     // R495: as bcdev, a served test app, installed, so the run's identity is proven (as a real
     // bcdev's is). It carries no SymbolReference.json, so the suite and its evidence are what no
-    // read gives. As al-runner, no package read: it compiles the test source it hashed. A subclass
-    // that serves its own package keeps it.
+    // read gives. As al-runner-v3 (R654: was the retired .NET al-runner), no package read: it
+    // compiles the test source it hashed. A subclass that serves its own package keeps it.
     if (authoritative && !("fetchPublishedAppPackage" in this)) {
       Object.assign(this, servesTestApp());
     }
@@ -89,15 +85,15 @@ class StubBackend implements ExecutionBackend {
       coverage: "procedure",
       deploy: "publish",
       isolation: "session",
-      kind: this.authoritative ? "bcdev" : "al-runner",
+      kind: this.authoritative ? "bcdev" : "al-runner-v3",
       authoritative: this.authoritative,
     };
   }
   async status(): Promise<BackendStatus> {
     return { ok: true, details: "stub" };
   }
-  measurePredefinedSymbols(): Promise<AlRunnerPredefinedProbe> {
-    return Promise.resolve({ symbols: [...AL_RUNNER_PREDEFINED_SYMBOLS_V2_12_0].sort() });
+  async runnerBuild(): Promise<{ version: string; binarySha256: string }> {
+    return { version: "al-runner 3.0.0-test", binarySha256: "b".repeat(64) };
   }
   async deploy(): Promise<null> {
     return null;
@@ -292,9 +288,9 @@ describe("R403 phase A: the resume fingerprint carries the test app's set (plan 
     expect(await pair(true)).toBe(true);
   });
 
-  // With no directive line in any test file, no symbol set can change the suite, so an al-runner
-  // session (whose set always holds CLEANSCHEMA1..25) keeps the digest it had before R403.
-  test("al-runner, no directive in any test file: the pre-R403 fingerprint, byte for byte", async () => {
+  // With no directive line in any test file, no symbol set can change the suite, so a local-runner
+  // session keeps the digest it had before R403.
+  test("al-runner-v3, no directive in any test file: the pre-R403 fingerprint, byte for byte", async () => {
     const root = await project({});
     await Bun.write(
       join(root, "tests", "R403.Codeunit.al"),
@@ -305,12 +301,11 @@ describe("R403 phase A: the resume fingerprint carries the test app's set (plan 
     const preR403 = sessionFingerprint({
       projectDir: join(root, "app"),
       testDir: join(root, "tests"),
-      backend: "al-runner",
+      backend: "al-runner-v3",
       skipKnownSurvivors: false,
       identityScheme: IDENTITY_SCHEME,
       coverageMode: "procedure",
       selectorIds: { selectorId: 50147, controlId: 50148, tableId: 50149 },
-      preprocessorSymbols: [...AL_RUNNER_PREDEFINED_SYMBOLS_V2_12_0].sort(),
     });
     expect(store.getRun(1)?.configFingerprint).toBe(preR403);
   });
@@ -693,13 +688,16 @@ describe("R403 phase B: compiledMembershipOf and compareTestMembership", () => {
 });
 
 describe("R403 phase C: the report says what the arm filter did (plan §3(g))", () => {
-  test("al-runner, [] symbols: OnlyUnderX is listed compiled-out, the derived set is recorded, tests-compiled-out is raised", async () => {
+  // R654: re-pointed from the retired .NET al-runner, whose derived set held its predefined
+  // CLEANSCHEMA1..25. v3 predefines none, so the empty set is not written (`testBuildSymbols` is
+  // written only when non-empty).
+  test("al-runner-v3, [] symbols: OnlyUnderX is listed compiled-out, tests-compiled-out is raised", async () => {
     const root = await project({});
     const report = await session(root, new ResultsStore(":memory:"), new StubBackend(false));
     expect(report.excludedTests).toEqual([
       { test: "R403 Tests.OnlyUnderX", file: "R403.Codeunit.al", reason: "compiled-out" },
     ]);
-    expect(report.testBuildSymbols).toEqual([...AL_RUNNER_PREDEFINED_SYMBOLS_V2_12_0].sort());
+    expect(report.testBuildSymbols).toBeUndefined();
     expect(report.validity.caveats).toContain("tests-compiled-out");
     expect(report.validity.caveats).not.toContain("test-symbols-unverified");
     expect(report.testSymbolsUnverifiedFiles).toBeUndefined();

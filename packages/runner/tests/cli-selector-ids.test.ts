@@ -1,7 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { AlRunnerBackend } from "../src/al-runner-backend";
 import { readTargetSource } from "../src/baseline-snapshot";
 import type { LethalConfigFile, RunCliConfig } from "../src/cli";
 import { buildBackend, validateSelectorIdsForProject } from "../src/cli";
@@ -37,7 +36,7 @@ async function writeTempProject(
 const IN_RANGE_IDS = { selectorId: 79199, controlId: 79198, tableId: 79197 };
 const DEFAULT_RANGE = [{ from: 79000, to: 79199 }];
 
-function runConfig(projectDir: string, backendKind: "bcdev" | "al-runner"): RunCliConfig {
+function runConfig(projectDir: string, backendKind: "bcdev" | "al-runner-v3"): RunCliConfig {
   return {
     mode: "run",
     projectDir,
@@ -132,131 +131,50 @@ describe("validateSelectorIdsForProject", () => {
 });
 
 describe("buildBackend — R3/R4 selector id validation wiring", () => {
-  it("al-runner: builds successfully with in-range, non-colliding ids", async () => {
-    const dir = await writeTempProject(DEFAULT_RANGE);
-    const configFile: LethalConfigFile = { alRunner: { alRunnerPath: "al-runner.exe" } };
-    const backend = await buildBackend(
-      runConfig(dir, "al-runner"),
-      configFile,
-      dir,
-      undefined,
-      {},
-      IN_RANGE_IDS,
-    );
-    expect(backend).toBeInstanceOf(AlRunnerBackend);
-  });
+  // R654: these ran on the retired .NET al-runner. Re-pointed to al-runner-v3, whose build checks
+  // the ids right after its platform check (so Linux only) and BEFORE it reads its config section:
+  // an empty config reaching the `alRunnerV3` section error proves the id check passed.
+  it.skipIf(process.platform !== "linux")(
+    "R205 al-runner-v3: the id check inside buildBackend reads the snapshot it is handed",
+    async () => {
+      const dir = await writeTempProject(DEFAULT_RANGE);
+      const snapshot = await readTargetSource(dir);
+      await writeFile(join(dir, "app.json"), JSON.stringify({ idRanges: [{ from: 1, to: 2 }] }));
+      await expect(
+        buildBackend(
+          runConfig(dir, "al-runner-v3"),
+          {},
+          dir,
+          undefined,
+          {},
+          IN_RANGE_IDS,
+          snapshot,
+        ),
+      ).rejects.toThrow(/alRunnerV3/);
+    },
+  );
 
-  it("R205 al-runner: the id check inside buildBackend reads the snapshot it is handed", async () => {
-    const dir = await writeTempProject(DEFAULT_RANGE);
-    const snapshot = await readTargetSource(dir);
-    await writeFile(join(dir, "app.json"), JSON.stringify({ idRanges: [{ from: 1, to: 2 }] }));
-    const configFile: LethalConfigFile = { alRunner: { alRunnerPath: "al-runner.exe" } };
-    const backend = await buildBackend(
-      runConfig(dir, "al-runner"),
-      configFile,
-      dir,
-      undefined,
-      {},
-      IN_RANGE_IDS,
-      snapshot,
-    );
-    expect(backend).toBeInstanceOf(AlRunnerBackend);
-  });
-
-  it("al-runner: refuses an out-of-range selectorId before constructing the backend", async () => {
-    const dir = await writeTempProject(DEFAULT_RANGE);
-    const configFile: LethalConfigFile = { alRunner: { alRunnerPath: "al-runner.exe" } };
-    await expect(
-      buildBackend(
-        runConfig(dir, "al-runner"),
-        configFile,
-        dir,
-        undefined,
-        {},
-        {
-          selectorId: 1,
-          controlId: 79198,
-          tableId: 79197,
-        },
-      ),
-    ).rejects.toThrow(/selectorId.*= 1 falls outside every idRange/s);
-  });
-
-  it("al-runner: honors the resolved selectorId as the emitted selector's object id", async () => {
-    const dir = await writeTempProject(DEFAULT_RANGE);
-    // R387: "static" explicitly. The default is now "resource", whose activate() writes a resource
-    // file rather than the selector, so the no-deploy path below would test nothing. The resource
-    // twin follows.
-    const configFile: LethalConfigFile = {
-      alRunner: { alRunnerPath: "al-runner.exe", selectorMode: "static" },
-    };
-    const customIds = { selectorId: 79150, controlId: 79151, tableId: 79152 };
-    const backend = (await buildBackend(
-      runConfig(dir, "al-runner"),
-      configFile,
-      dir,
-      undefined,
-      {},
-      customIds,
-    )) as AlRunnerBackend;
-    // AlRunnerBackend keeps no public getter for `selectorObjectId` — the only observable proof
-    // it received the RESOLVED id (not a silently-reverted `DEFAULT_SELECTOR_IDS.selectorId`) is
-    // what `activate()` actually bakes into the emitted static selector's `codeunit <id>` header
-    // (`emitStaticSelector`, selector.ts). No prior `deploy()` here, so `activate()` writes
-    // straight into `cfg.instrumentedDir` (`join(scratchDir, "al-runner-active")`, scratchDir ===
-    // `dir` for this call) — that directory must exist first (`activate()` itself never creates
-    // it; `deploy()` normally would).
-    const instrumentedDir = join(dir, "al-runner-active");
-    await mkdir(instrumentedDir, { recursive: true });
-    await backend.activate(null);
-    const selectorSrc = await readFile(
-      join(instrumentedDir, "MutationSelector.Codeunit.al"),
-      "utf8",
-    );
-    expect(selectorSrc).toContain(`codeunit ${customIds.selectorId} "Mutation Selector"`);
-    // Guards specifically against the wiring regression a red-check found missing here: reverting
-    // `buildBackend`'s al-runner branch back to `selectorObjectId: DEFAULT_SELECTOR_IDS.selectorId`
-    // would still construct an `AlRunnerBackend` successfully (an `instanceof` check alone can't
-    // tell), but would bake object id 79199 instead of the resolved 79150 into the emitted source.
-    expect(selectorSrc).not.toContain('codeunit 79199 "Mutation Selector"');
-  });
-
-  it("al-runner (R387, the default resource selector): deploy() installs the resolved selectorId", async () => {
-    const dir = await writeTempProject(DEFAULT_RANGE);
-    const configFile: LethalConfigFile = { alRunner: { alRunnerPath: "al-runner.exe" } };
-    const customIds = { selectorId: 79150, controlId: 79151, tableId: 79152 };
-    const backend = (await buildBackend(
-      runConfig(dir, "al-runner"),
-      configFile,
-      dir,
-      undefined,
-      {},
-      customIds,
-    )) as AlRunnerBackend;
-    // deploy() FIRST: the resource selector is installed there, once per batch, and activate()
-    // only rewrites the resource file, so without it this would prove nothing about the layout.
-    const batch = join(dir, "batch");
-    await mkdir(batch, { recursive: true });
-    await writeFile(join(batch, "app.json"), JSON.stringify({ id: "x" }), "utf8");
-    await writeFile(join(batch, "MutationSelector.Codeunit.al"), "placeholder", "utf8");
-    await writeFile(
-      join(batch, "mutant-manifest.json"),
-      JSON.stringify({ artifactId: "c".repeat(32), mutants: [] }),
-      "utf8",
-    );
-    // R394: coverage is on by default, and `runSession` hands the build symbols over before deploy.
-    backend.useBuildSymbols([]);
-    await backend.deploy(batch);
-    await backend.activate("M0001");
-    const active = join(dir, "al-runner-active", "active");
-    const selectorSrc = await readFile(join(active, "MutationSelector.Codeunit.al"), "utf8");
-    expect(selectorSrc).toContain(`codeunit ${customIds.selectorId} "Mutation Selector"`);
-    expect(selectorSrc).not.toContain('codeunit 79199 "Mutation Selector"');
-    expect(await readFile(join(active, "LethALResources", "active-mutant.txt"), "utf8")).toBe(
-      "M0001",
-    );
-    await backend.close();
-  });
+  it.skipIf(process.platform !== "linux")(
+    "al-runner-v3: refuses an out-of-range selectorId before constructing the backend",
+    async () => {
+      const dir = await writeTempProject(DEFAULT_RANGE);
+      const configFile: LethalConfigFile = {};
+      await expect(
+        buildBackend(
+          runConfig(dir, "al-runner-v3"),
+          configFile,
+          dir,
+          undefined,
+          {},
+          {
+            selectorId: 1,
+            controlId: 79198,
+            tableId: 79197,
+          },
+        ),
+      ).rejects.toThrow(/selectorId.*= 1 falls outside every idRange/s);
+    },
+  );
 
   it("bcdev: refuses an id colliding with the target's existing objects, once alc/altool are found", async () => {
     const dir = await writeTempProject(DEFAULT_RANGE, {

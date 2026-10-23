@@ -30,7 +30,7 @@ function recordRun(store: ResultsStore, rows: readonly Row[]): number {
     identityScheme: 1,
     buildSymbols: [],
     projectPath: "/p",
-    backend: "al-runner",
+    backend: "al-runner-v3",
     appVersion: "1",
   });
   const ref = { codeunitId: 1, codeunitName: "Tests", method: "T1" };
@@ -176,19 +176,13 @@ describe("R577: the gate's kill-reproduction check", () => {
     expect(() => killReproductionFailures("nope", report, store, runId, {}, TABLE)).toThrow(
       "has no row in REPRODUCTION_EXPECTED",
     );
-    // 20 al-runner legs (measured at 102821df; R557's names legs pre-committed, a40097fc) and,
-    // since R582, 20 BC legs (pre-committed, 39eaf536), envtool's included; R-658 adds
-    // hang/baseline (pre-committed, 00d508c4).
-    expect(Object.keys(REPRODUCTION_EXPECTED)).toHaveLength(41);
+    // Since R582, 20 BC legs (pre-committed, 39eaf536), envtool's included. R654 S3 removed the
+    // retired itest:alrunner's 20 legs. R-658 adds hang/baseline (pre-committed, 00d508c4).
+    expect(Object.keys(REPRODUCTION_EXPECTED)).toHaveLength(21);
     const blanks = Object.entries(REPRODUCTION_EXPECTED)
       .filter(([, f]) => Object.values(f).some((v) => v === null))
       .map(([leg]) => leg);
     expect(blanks).toEqual([]);
-    expect(Object.keys(REPRODUCTION_EXPECTED["cli-default"] ?? {}).sort()).toEqual([
-      "activations",
-      "killerRowsPerKill",
-      "serverSuiteRuns",
-    ]);
     for (const leg of [
       "bcdev",
       "tables",

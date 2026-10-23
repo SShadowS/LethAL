@@ -11,35 +11,17 @@ const lender = new ResultsStore(":memory:");
 
 const B1 = `alrunner 3.0.0-alpha.2 (91253f2d6) ${"b".repeat(64)}`;
 const B2 = `alrunner 3.0.0-alpha.3 (c893e3633) ${"c".repeat(64)}`;
-const run = (backend: string, runnerBuild: string | null, alRunnerNames = true) => ({
-  id: 7,
-  backend,
-  runnerBuild,
-  alRunnerNames,
-});
-const ctx = { site: "history", baselineErrorMethods: () => [] } as const;
+const run = (backend: string, runnerBuild: string | null) => ({ id: 7, backend, runnerBuild });
+const ctx = { site: "history" } as const;
+const BCDEV = { backend: "bcdev", runnerBuild: undefined } as const;
+const V3_B1 = { backend: "al-runner-v3", runnerBuild: B1 } as const;
+const RETIRED =
+  "al-runner-v2-retired: run 7 ran on the retired .NET al-runner (R654); nothing of it is lent";
 
 describe("T14: runMayLend", () => {
-  test("v3 never lends to v2 or bcdev, and v2 / bcdev never lend to v3", () => {
-    expect(
-      lender.runMayLend(
-        run("al-runner-v3", B1),
-        { backend: "al-runner", runnerBuild: undefined },
-        ctx,
-      )?.step,
-    ).toBe("backend-build");
-    expect(
-      lender.runMayLend(run("al-runner-v3", B1), { backend: "bcdev", runnerBuild: undefined }, ctx)
-        ?.step,
-    ).toBe("backend-build");
-    expect(
-      lender.runMayLend(run("al-runner", null), { backend: "al-runner-v3", runnerBuild: B1 }, ctx)
-        ?.step,
-    ).toBe("backend-build");
-    expect(
-      lender.runMayLend(run("bcdev", null), { backend: "al-runner-v3", runnerBuild: B1 }, ctx)
-        ?.step,
-    ).toBe("backend-build");
+  test("v3 never lends to bcdev, and bcdev never lends to v3", () => {
+    expect(lender.runMayLend(run("al-runner-v3", B1), BCDEV, ctx)?.step).toBe("backend-build");
+    expect(lender.runMayLend(run("bcdev", null), V3_B1, ctx)?.step).toBe("backend-build");
   });
   test("v3 lends to the same build only; another build or an unrecorded one refuses", () => {
     expect(
@@ -57,73 +39,36 @@ describe("T14: runMayLend", () => {
       )?.step,
     ).toBe("backend-build");
   });
-  test("R592: v2 <-> bcdev are refused by step 1 in both directions; the same backend lends", () => {
-    expect(
-      backendBuildRefusal(run("bcdev", null), { backend: "al-runner", runnerBuild: undefined }),
-    ).toBe(
-      "run 7 ran on bcdev and this session runs al-runner; a verdict is lent only within one backend (R592)",
-    );
-    expect(
-      backendBuildRefusal(run("al-runner", null), { backend: "bcdev", runnerBuild: undefined }),
-    ).toBe(
-      "run 7 ran on al-runner and this session runs bcdev; a verdict is lent only within one backend (R592)",
-    );
-    expect(
-      backendBuildRefusal(run("bcdev", null), { backend: "bcdev", runnerBuild: undefined }),
-    ).toBeUndefined();
-    expect(
-      lender.runMayLend(
-        run("al-runner", null),
-        { backend: "al-runner", runnerBuild: undefined },
-        ctx,
-      ),
-    ).toBeUndefined();
-  });
-  test("no session named: a v3 run lends nothing, any other run is unchanged", () => {
-    expect(backendBuildRefusal(run("al-runner-v3", B1), undefined)).toBeDefined();
-    expect(backendBuildRefusal(run("al-runner", null), undefined)).toBeUndefined();
-  });
-  test("order: step 1 names the reason before R557's mark, and the mark before the renamed tests", () => {
-    const unmarkedV3 = run("al-runner-v3", B2, false);
-    expect(
-      lender.runMayLend(unmarkedV3, { backend: "al-runner-v3", runnerBuild: B1 }, ctx)?.step,
-    ).toBe("backend-build");
-    const unmarkedV2 = run("al-runner", null, false);
-    const renamed = {
-      site: "history",
-      baselineErrorMethods: () => ["X"],
-      renamed: () => ["X"],
-    } as const;
-    expect(
-      lender.runMayLend(unmarkedV2, { backend: "al-runner", runnerBuild: undefined }, renamed)
-        ?.step,
-    ).toBe("al-runner-unmarked");
-    expect(
-      lender.runMayLend(
-        run("al-runner", null),
-        { backend: "al-runner", runnerBuild: undefined },
-        renamed,
-      ),
-    ).toEqual({
-      step: "al-runner-renamed",
-      tests: ["X"],
+  // R654 F3 (D-m3): R592's v2 <-> bcdev arm is gone with v2; a stored v2 run is refused by name,
+  // for every session and for none, ahead of every other rule. bcdev still lends to bcdev.
+  test("R654: a retired .NET al-runner run is refused by name; bcdev lends to bcdev", () => {
+    expect(backendBuildRefusal(run("al-runner", null), BCDEV)).toBe(RETIRED);
+    expect(backendBuildRefusal(run("al-runner", null), V3_B1)).toBe(RETIRED);
+    expect(backendBuildRefusal(run("al-runner", null), undefined)).toBe(RETIRED);
+    expect(lender.runMayLend(run("al-runner", null), BCDEV, ctx)).toEqual({
+      step: "backend-build",
+      why: RETIRED,
     });
+    expect(backendBuildRefusal(run("bcdev", null), BCDEV)).toBeUndefined();
+    expect(lender.runMayLend(run("bcdev", null), BCDEV, ctx)).toBeUndefined();
   });
-  test("R619 order: the site's checks run after step 1 and before step 2", () => {
+  test("no session named: a v3 run lends nothing, a bcdev run is unchanged", () => {
+    expect(backendBuildRefusal(run("al-runner-v3", B1), undefined)).toBeDefined();
+    expect(backendBuildRefusal(run("bcdev", null), undefined)).toBeUndefined();
+  });
+  test("R619 order: the site's checks run after step 1, and decide when step 1 lends", () => {
     const calls: string[] = [];
     const refuse = { ...ctx, siteChecks: () => calls.push("site") > 0 };
-    const v2 = { backend: "al-runner", runnerBuild: undefined };
     // Step 1 refuses first: the site checks never run.
-    expect(lender.runMayLend(run("al-runner-v3", B1), v2, refuse)?.step).toBe("backend-build");
+    expect(lender.runMayLend(run("al-runner-v3", B1), BCDEV, refuse)?.step).toBe("backend-build");
+    expect(lender.runMayLend(run("al-runner", null), BCDEV, refuse)?.step).toBe("backend-build");
     expect(calls).toEqual([]);
-    // An unmarked run the site refuses is named by the site, not by step 2.
-    expect(lender.runMayLend(run("al-runner", null, false), v2, refuse)).toEqual({ step: "site" });
+    // Step 1 lends: the site's refusal is named by the site.
+    expect(lender.runMayLend(run("bcdev", null), BCDEV, refuse)).toEqual({ step: "site" });
     expect(calls).toEqual(["site"]);
-    // The site lends: step 2 decides.
+    // The site lends: so does the run.
     const lendSite = { ...ctx, siteChecks: () => false };
-    expect(lender.runMayLend(run("al-runner", null, false), v2, lendSite)?.step).toBe(
-      "al-runner-unmarked",
-    );
+    expect(lender.runMayLend(run("bcdev", null), BCDEV, lendSite)).toBeUndefined();
   });
 });
 
@@ -158,7 +103,6 @@ function finishedRun(store: ResultsStore, backend: string, runnerBuild?: string)
     testAppDeps: "D",
     carryHidden: { tuples: [], files: [] },
     twinTuples: [],
-    ...(backend === "al-runner" ? { alRunnerNames: true } : {}),
     ...(runnerBuild !== undefined ? { runnerBuild } : {}),
   });
   store.recordMutant(id, mutantRow("survived"));
@@ -176,10 +120,10 @@ describe("T14 at the store sites", () => {
     return { keys: prior.keys.size, refused };
   };
 
-  test("history: a v3 survivor is not lent to a v2 session (the #5603 false survivor case), and is lent to its own build", () => {
+  test("history: a v3 survivor is not lent to a bcdev session, and is lent to its own build", () => {
     const store = new ResultsStore(":memory:");
     finishedRun(store, "al-runner-v3", B1);
-    expect(ask(store, "al-runner", undefined)).toMatchObject({
+    expect(ask(store, "bcdev", undefined)).toMatchObject({
       keys: 0,
       refused: [expect.stringMatching(/al-runner-v3/)],
     });
@@ -187,19 +131,24 @@ describe("T14 at the store sites", () => {
     expect(ask(store, "al-runner-v3", B1)).toEqual({ keys: 1, refused: [] });
   });
 
-  test("history: a v2 survivor is not lent to a v3 session, and still is to v2", () => {
+  test("history (R654): a stored v2 survivor is lent to no session, by name; a bcdev one is", () => {
     const store = new ResultsStore(":memory:");
     finishedRun(store, "al-runner");
-    expect(ask(store, "al-runner-v3", B1).keys).toBe(0);
-    expect(ask(store, "al-runner", undefined)).toEqual({ keys: 1, refused: [] });
+    const why =
+      "al-runner-v2-retired: run 1 ran on the retired .NET al-runner (R654); nothing of it is lent";
+    expect(ask(store, "al-runner-v3", B1)).toEqual({ keys: 0, refused: [why] });
+    expect(ask(store, "bcdev", undefined)).toEqual({ keys: 0, refused: [why] });
+    const other = new ResultsStore(":memory:");
+    finishedRun(other, "bcdev");
+    expect(ask(other, "bcdev", undefined)).toEqual({ keys: 1, refused: [] });
   });
 
   test("the run row records the v3 build, and NULL for any other backend", () => {
     const store = new ResultsStore(":memory:");
     const v3 = finishedRun(store, "al-runner-v3", B1);
-    const v2 = finishedRun(store, "al-runner");
+    const bc = finishedRun(store, "bcdev");
     expect(store.getRun(v3)?.runnerBuild).toBe(B1);
-    expect(store.getRun(v2)?.runnerBuild).toBeNull();
+    expect(store.getRun(bc)?.runnerBuild).toBeNull();
   });
 
   test("resume: a v3 session finds only an unfinished run of its own build", () => {
@@ -240,7 +189,7 @@ describe("campaign freeze is refused for v3 by name", () => {
       await expect(freezeStageTo(path, "s", 0, dir)).rejects.toThrow(
         /al-runner-v3-campaign-freeze-refused/,
       );
-      await writeFile(path, JSON.stringify({ backend: "al-runner", coverageMode: "al-runner" }));
+      await writeFile(path, JSON.stringify({ backend: "bcdev", coverageMode: "procedure" }));
       await expect(freezeStageTo(path, "s", 0, dir)).rejects.not.toThrow(
         /al-runner-v3-campaign-freeze-refused/,
       );

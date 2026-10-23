@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser } from "@lethal/engine";
 import type { ActivationConfig } from "../src/activation";
-import { AlRunnerBackend } from "../src/al-runner-backend";
+import { AlRunnerV3Backend } from "../src/al-runner-v3-backend";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
 import {
   type DigestedApp,
@@ -221,10 +221,11 @@ describe("R389 closedWorldOf: the guard", () => {
     expect(r.why).toContain("permission denied");
   });
 
-  test("a backend without the action (al-runner) falls back and is never asked", async () => {
+  // R654: re-pointed from the retired .NET al-runner to al-runner-v3.
+  test("a backend without the action (al-runner-v3) falls back and is never asked", async () => {
     const r = await closedWorldOf({ id: TEST_APP }, D, {});
     expect(r.closedWorld).toEqual({ public: false, internal: false });
-    expect("dependentCount" in AlRunnerBackend.prototype).toBe(false);
+    expect("dependentCount" in AlRunnerV3Backend.prototype).toBe(false);
     // Control: the bcdev backend is the one that has it.
     expect("dependentCount" in BcDevMcpBackend.prototype).toBe(true);
   });

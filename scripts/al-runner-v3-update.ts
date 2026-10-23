@@ -1,7 +1,7 @@
 /**
  * R586 §12 (plan `docs/superpowers/plans/2026-10-21-r586-alrunner-v3-backend.md`, r2 §12 with r3's
- * F6 and r4's I-3): the al-runner v3 update gate. Separate from `al-runner-update.sh` (the frozen
- * .NET al-runner). Daily, or by hand:
+ * F6 and r4's I-3): the al-runner v3 update gate, the only al-runner update path since the .NET
+ * al-runner (v2) and its update script were retired (R654). Daily, or by hand:
  *
  *   bun scripts/al-runner-v3-update.ts [--regate <lethal commit>]
  *   bun scripts/al-runner-v3-update.ts --edge        (the daily edge-by-download path, `edgeOnce`)

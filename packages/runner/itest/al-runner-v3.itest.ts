@@ -350,6 +350,13 @@ let legCWarnFacts: Record<string, string> | undefined;
 
 /** Returns the warn lines (R612 `serve-keep-reasons`) of a passing leg, for the receipt. */
 async function legC(scratch: string): Promise<readonly string[]> {
+  // R667 (r12): `message-has-no-type-prefix`'s Assert half needs Microsoft's Library Assert, which
+  // only the tables fixture's packages hold. Absent, the fact reads unmeasurable (infra-fail).
+  const dataPkgs = join(fixture("sandbox-data-tests"), ".alpackages");
+  const assertApps = (await readdir(dataPkgs)).filter((f) =>
+    f.startsWith("Microsoft_Library Assert_"),
+  );
+  const [libraryAssert] = assertApps;
   const r = await runV3ContractProbe({
     alRunnerPath: BIN,
     expectedVersion: (execFileSync(BIN, ["--version"], { encoding: "utf8" }) as string).trim(),
@@ -358,6 +365,9 @@ async function legC(scratch: string): Promise<readonly string[]> {
     alcPath: ALC,
     cacheDir: CACHE,
     tasksetPath: "/usr/bin/taskset",
+    ...(assertApps.length === 1 && libraryAssert !== undefined
+      ? { libraryAssertApp: join(dataPkgs, libraryAssert) }
+      : {}),
   });
   // F4 (R639): the measured rows whole, so the kept gate.log shows every field.
   for (const f of r.facts) console.log(legCFactLine(f));
@@ -365,8 +375,8 @@ async function legC(scratch: string): Promise<readonly string[]> {
   legCWarnFacts = Object.fromEntries(
     r.facts.filter((f) => V3_WARN_FACTS.includes(f.fact)).map((f) => [f.fact, f.verdict]),
   );
-  // RC-2 (I-2): a defect fact moving to `gone` is held; any diverged is gate-fail. 26 facts (r9,
-  // R639: 9 defect, 16 contract, 1 warn); a warn fact (V3_WARN_FACTS) only adds its line.
+  // RC-2 (I-2): a defect fact moving to `gone` is held; any diverged is gate-fail. 27 facts (r12,
+  // R667: 9 defect, 17 contract, 1 warn); a warn fact (V3_WARN_FACTS) only adds its line.
   const c = classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS, V3_WARN_FACTS);
   for (const l of c.lines) console.log(`  C: ${l}`);
   if (c.outcome === "gate-fail") throw new LegFailure(`C: ${c.lines.join("; ")}`);
@@ -502,9 +512,12 @@ function assertCleanLeg(r: SessionReport, b: AlRunnerV3Backend, leg: string): vo
 
 /**
  * L1 (R353's table): multi-batch layout, figures equal v2's. sandbox-layout at maxGuardsPerBatch 7,
- * two batches, EXPECTED_LAYOUT per ref. NOT R349's stale-layout check on v3: deleting
- * `resetLayoutState()` leaves it green (measured, R-654 S2 L-R1), because `deploy()` rebuilds the
- * indexes and proof and `activate(null)` clears the row cache. See docs/gates/alrunner-v3.md.
+ * two batches, EXPECTED_LAYOUT per ref. It is R349's stale-layout check on v3 (R666): v3 reports a
+ * target file's coverage in the batch's EMITTED line numbers, so batch 1 must read it through its own
+ * coverage index. It proves both index guards together, `resetLayoutState()` clearing the index AND
+ * `deploy()` assigning the new one; removing both (L-R3) turns 1/M0006 and 1/M0007 survived, covered
+ * by GrowAboveTen. Removing either alone stays green (R-654 S2 L-R1, L-R2). See
+ * docs/gates/alrunner-v3.md.
  */
 async function legL1(scratch: string): Promise<SessionReport> {
   const b = new AlRunnerV3Backend(

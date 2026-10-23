@@ -12,7 +12,6 @@ figures, what they mean, and how they came to be.
 | bcdev | `LETHAL_ITEST_BCDEV=1 bun run itest:bcdev` | [bcdev.md](bcdev.md) | `bcdev.baseline.json` |
 | bcdev-names | `LETHAL_ITEST_BCDEV=1 bun run itest:bcdev-names` | [bcdev-names.md](bcdev-names.md) | `bcdev.names.baseline.json` |
 | bcdev-wrapped | `LETHAL_ITEST_BCDEV=1 bun run itest:bcdev-wrapped` | [bcdev-wrapped.md](bcdev-wrapped.md) | `bcdev.wrapped.baseline.json` |
-| alrunner | `LETHAL_ITEST_ALRUNNER=1 bun run itest:alrunner` | [alrunner.md](alrunner.md) | the `al-runner.*` baselines |
 | alrunner-v3 | `LETHAL_ITEST_ALRUNNER_V3=1 bun run itest:alrunner-v3` | [alrunner-v3.md](alrunner-v3.md) | `al-runner-v3.tables.baseline.json`; the `al-runner-v3.layout` and `al-runner-v3.symbols-lethala`/`-lethalb` baselines (R654 S2) |
 | envtool | `LETHAL_ITEST_ENVTOOL=1 bun run itest:envtool` | [envtool.md](envtool.md) | `envtool.baseline.json` |
 | tables | `LETHAL_ITEST_TABLES=1 bun run itest:tables` | [tables.md](tables.md) | `tables.baseline.json` |
@@ -22,7 +21,9 @@ figures, what they mean, and how they came to be.
 | harden | `LETHAL_ITEST_HARDEN=1 bun run itest:harden` | [harden.md](harden.md) | `harden.baseline.json` |
 
 The BC gates run on the BC on Linux servers `bc1`, `bc2` and `bc3`: see [servers.md](servers.md).
-That page carries no figure block, because it describes no single gate.
+That page carries no figure block, because it describes no single gate. Nor does
+[alrunner.md](alrunner.md): `itest:alrunner` (the .NET al-runner's gate) was retired by R654, and
+its page is kept as history.
 
 ## The figure block
 
@@ -48,7 +49,7 @@ fields are:
   `{identityScheme, entries}` object and the older plain list.
 - An exported pre-committed table exists for that baseline, and its verdict counts differ.
 - A `constants` figure differs from the exported constant.
-- A registered gate baseline (`GATE_BASELINES`, `SYMBOL_BASELINES`) is on no page, or on two.
+- A registered gate baseline (`GATE_BASELINES`) is on no page, or on two.
 - The "## Frozen figures" prose states a count the block does not hold: a
   `killed / survived / no-coverage` triple, an "over N" total, a count in words ("16 killed",
   "5 timeout-killed"), or a named figure ("`groupedCalls` is 399"). On a page with several
@@ -57,7 +58,7 @@ fields are:
 - A count in `gate-expected.ts` (killed, survived, no-coverage and their total) differs from the
   gate's baseline file.
 - A figure in `gate-expected.ts` is named on no page.
-- One of the seven itests it serves does not read its figures from it, or restates one as a literal.
+- One of the six itests it serves does not read its figures from it, or restates one as a literal.
 - CLAUDE.md names a `docs/...md` path that does not exist.
 
 So a re-recorded baseline, or a changed itest figure, cannot leave its page stale. The commit that

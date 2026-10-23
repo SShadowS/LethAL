@@ -62,9 +62,15 @@ anyone who writes a new screen, a check that tags kills as suspect.
 
 ## al-runner builds
 
-The Windows host pins a source build of upstream main instead of the released global tool, because
-v2.12.0 crashed concurrent sessions (R345). The global tool stays installed as the fallback. The
+**The .NET al-runner (v2) was retired on 2026-10-22 (R654).** Its backend and its gate,
+`itest:alrunner`, are gone. While it was in use, the Windows host pinned a source build of upstream
+main instead of the released global tool, because v2.12.0 crashed concurrent sessions (R345); the
 paths and history are in `docs/gates/alrunner.md`.
+
+The Rust al-runner (v3) is pinned under `/work/tools/al-runner-v3/`, and its `.gated` file names the
+one build the backend will run. The pin moves only through `bun scripts/al-runner-v3-update.ts`,
+which runs `itest:alrunner-v3` on the new build first. Details: `docs/gates/alrunner-v3.md`, "The
+pin and the update gate".
 
 ## Editing files
 

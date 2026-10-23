@@ -34,6 +34,7 @@ import { assertCardinality } from "./campaign-anchors";
 import { type CampaignManifest, resolveRecordsDir } from "./campaign-manifest";
 import { REDACTION_MARKER } from "./explain";
 import type { SessionReport } from "./report";
+import { refuseRetiredV2Report } from "./v2-retired";
 
 // `findRepoRoot`'s public surface (used by nothing outside this module today, per a repo-wide
 // grep, but exported since Task 2 landed) is unchanged: same walk-up, same refusal, just now
@@ -77,11 +78,13 @@ export async function freezeStageTo(
   recordsDir: string,
 ): Promise<void> {
   const report = JSON.parse(await readFile(reportPath, "utf8")) as SessionReport;
-  // R586 (I4): a stage baseline records no backend, so a frozen v3 stage could later "match" a v2
-  // or bcdev run. Refused by name in v1; `campaign compare` of a v3 report stays allowed.
+  // R654 F3: a report of the retired .NET al-runner is refused by name first.
+  refuseRetiredV2Report(report, reportPath);
+  // R586 (I4): a stage baseline records no backend, so a frozen v3 stage could later "match" a
+  // bcdev run. Refused by name in v1; `campaign compare` of a v3 report stays allowed.
   if (report.backend === "al-runner-v3") {
     throw new Error(
-      `al-runner-v3-campaign-freeze-refused: ${stage} freeze: ${reportPath} ran on al-runner-v3, and a frozen stage records no backend, so it could later match a run of another backend (R586). Freeze a bcdev or al-runner report instead.`,
+      `al-runner-v3-campaign-freeze-refused: ${stage} freeze: ${reportPath} ran on al-runner-v3, and a frozen stage records no backend, so it could later match a run of another backend (R586). Freeze a bcdev report instead.`,
     );
   }
   // R355: every stage frozen from now on records the coverage mode it was measured under, so

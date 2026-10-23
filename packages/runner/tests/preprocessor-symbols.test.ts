@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildAlRunnerArgv } from "../src/al-runner-transport";
 import { ArtifactCompiler } from "../src/artifact";
 import type { ArtifactIo } from "../src/artifact";
 import { validatePreprocessorSymbols } from "../src/cli";
@@ -81,32 +80,6 @@ describe("preprocessor symbols reach LethAL's own alc step (R101(c))", () => {
   test("an empty list is also omitted, not sent empty", async () => {
     const argv = await alcArgv([]);
     expect(argv.some((a) => a.startsWith("/define"))).toBe(false);
-  });
-});
-
-describe("preprocessor symbols reach al-runner too (R101(c))", () => {
-  test("one repeated --define per symbol", () => {
-    // 2.1.1 has both `--define SYM` and `--preprocessor-symbols A,B,...`, and its own help says the
-    // comma form's entries are "validated identically to --define". The repeated form is used
-    // because it cannot be broken by a symbol that ever contains a comma.
-    const argv = buildAlRunnerArgv("al-runner", {
-      sourceDir: "/src",
-      testDir: "/tests",
-      qualifiedTest: "Codeunit1.T",
-      preprocessorSymbols: ["DOSMTP", "CLOUD"],
-    });
-    expect(argv.filter((a) => a === "--define").length).toBe(2);
-    expect(argv).toContain("DOSMTP");
-    expect(argv).toContain("CLOUD");
-  });
-
-  test("absent when nothing is configured", () => {
-    const argv = buildAlRunnerArgv("al-runner", {
-      sourceDir: "/src",
-      testDir: "/tests",
-      qualifiedTest: "Codeunit1.T",
-    });
-    expect(argv).not.toContain("--define");
   });
 });
 

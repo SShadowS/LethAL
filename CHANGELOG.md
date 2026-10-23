@@ -28,8 +28,9 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
     53-80 s on bcdev. Every mutant's verdict equals one-shot's and BC's.
   - **`alRunnerV3.secondEcho`** (default on) adds an echo before each Sleep coverage window.
 
-- **A new backend, `al-runner-v3`, for the Rust al-runner** (R586). It sits beside the .NET
-  al-runner (`--backend al-runner`), which does not change. Select it with `--backend al-runner-v3`
+- **A new backend, `al-runner-v3`, for the Rust al-runner** (R586). It sat beside the .NET
+  al-runner (`--backend al-runner`), which did not change; that backend was retired later (R654,
+  under Removed). Select it with `--backend al-runner-v3`
   and an `alRunnerV3` section in `lethal.config.json` (`packagesDir` and a four-number `bcVersion` are
   required). It is pinned to `alrunner 3.0.0-alpha.2 (91253f2d6)` under `/work/tools/al-runner-v3/`,
   and it runs only a build whose `.gated` file names its sha256. It is NOT authoritative: v3 runs code
@@ -874,6 +875,31 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   On al-runner nothing changes: the scan runs on bcdev only.
 
 ### Removed
+
+- **The .NET al-runner backend (v2) is retired** (R654). The Rust al-runner, `--backend al-runner-v3`,
+  replaces it. Upstream moved to the Rust runtime, and the .NET build gets no more updates.
+  - **Refused by name, never ignored:** `--backend al-runner` (on `run` and `--dry-run`), a stored run
+    of that backend (it lends nothing to history, `--resume`, `--resume-run` or snapshot reuse), and a
+    report of it (`explain`, `campaign freeze`, `campaign compare`, `anchors`, `lethal export`). Each
+    names `al-runner-v2-retired`.
+  - **Gone:** `itest:alrunner`, its legs and its baselines; agentflow's `alrunner` leg; the startup
+    canary (`alRunnerCanary` in the report) and the v2 stream events; v2's `--server` transport and
+    its resource-selector mode; the v2 probe scripts.
+  - **Moved to the v3 gate first:** the layout, symbol-set and CLI-default checks are legs L1, Y-A, Y-B
+    and K of `itest:alrunner-v3`.
+  - **Schemas narrowed in place** (no version bump): the report loses `alRunnerCanary` and the v2-only
+    fields, the event stream its three v2 events, and `doctor` the `al-runner-only` caveat. Committed
+    v2 reports are kept as history and no longer validate.
+  - **`--workers` > 1 is now refused on every backend.** The .NET al-runner was the only one that ran
+    workers in parallel ([R671](docs/roadmap/R671.md)).
+  - **Known gaps left open:** a config `alRunner` section is still ignored without a word until the
+    owner rules on its refusal, and an `envTool` section is ignored without a word on `al-runner-v3`
+    ([R674](docs/roadmap/R674.md)). Leg L1 does catch a stale layout on v3: it goes red when both
+    coverage-index guards are removed ([R666](docs/roadmap/R666.md)).
+  - **The v2 tooling and its container wiring are gone** (R654 S5): `scripts/al-runner-update.sh`,
+    `scripts/al-runner-bootstrap.sh` and the update script's test; the container's bootstrap step,
+    `LETHAL_ALRUNNER_PATH` and the pinned c39ad5de build. The v3 update gate,
+    `bun scripts/al-runner-v3-update.ts`, is the only al-runner update path.
 
 - **The unused `MutationControlClient` and `postOData`**, left over from before the LethAL Control
   extension (R506).
