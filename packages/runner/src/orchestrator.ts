@@ -6209,15 +6209,15 @@ async function runSessionBody(
   // A scan-refused test does not pass, even when every batch carries and no baseline runs (R-236c
   // run 002, review r1 #3); the report fold reads the same fact from `tests-testpage-refused`.
   let baselineGreenOverall = testPageRefusedNames.length === 0;
-  // R671: the worker fan-out is gone; `workers > 1` is refused by name below. Math.floor keeps a
-  // fractional value (2.5) from slipping past the `> 1` test as 1.x.
+  // R671: the worker fan-out is gone; `workers > 1` is refused by name below. The floor lets a
+  // direct runSession caller pass 1.5 and run as 1; 2.5 is refused either way. The CLI only
+  // accepts integers.
   const workers = Math.max(1, Math.floor(cfg.workers ?? 1));
   // Layer 5C-A Task 8, Task 10 (design §G, preconditions): bcdev (authoritative) is single-flight
   // in 5C-A — the single `LC Mutation Active` row is not lease-protected against concurrent
   // RunMutant calls, so two workers racing activate()/run() against the same container could
   // silently cross-attribute a verdict to the wrong mutant. Cross-process safety (a real lease)
-  // is 5C-B; for now this must fail loudly rather than let it happen. al-runner (non-
-  // authoritative) has its own per-worker process/backend and is unaffected.
+  // is 5C-B; for now this must fail loudly rather than let it happen.
   if (isBcdev(caps.kind) && workers > 1) {
     throw new Error(
       `runSession: workers=${workers} > 1 is rejected for an authoritative (bcdev) backend in Layer 5C-A — the single LC Mutation Active row is not lease-protected against parallel RunMutant calls (cross-process safety is 5C-B).`,

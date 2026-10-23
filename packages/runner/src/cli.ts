@@ -2592,17 +2592,6 @@ export function odataCfgFor(c: BcDevConfigSection): ActivationConfig {
 }
 
 /**
- * Builds one backend instance targeting `scratchDir` for all of its own scratch
- * output. Called once for the session's main backend (baseline/coverage), and —
- * when `--workers > 1` — once more per worker with a distinct `scratchDir`
- * (`cli.ts`'s `runFromCli`), so that each bcdev worker gets its own
- * `ArtifactCompiler.outputDir`. Since Layer 5A the compiled .app is content-addressed per artifact
- * id (never a fixed filename), so collisions are already structurally impossible — a private
- * outputDir per worker additionally keeps each worker's scratch/final artifacts physically
- * separate and independently disposable. (al-runner-v3 refuses `--workers > 1`.)
- */
-
-/**
  * Builds one `EnvToolPublisher` for a resolved bcdev connection. The ONLY place that derives
  * `serializerKey` for this project — called both by `resolveEnvToolSession` (for the control app
  * and `publishApps` entries) and by `buildBackend` (for each batch's compiled artifact), always

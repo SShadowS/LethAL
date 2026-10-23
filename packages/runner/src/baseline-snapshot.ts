@@ -18,7 +18,7 @@
  * same lineage is not a different kind of risk; it is stated rather than measured away.
  *
  * The batch hash covers the `.al` files of the instrumented artifact directory EXCEPT the three
- * control files LethAL emits, because `MutationSelector.Codeunit.al` embeds the artifact id, which
+ * control files LethAL emits at the directory's root (a same-named file elsewhere is hashed), because `MutationSelector.Codeunit.al` embeds the artifact id, which
  * is random per artifact by design (`newArtifactId`), and it carries no target code whose lines a
  * coverage row could name. Two artifacts of one batch therefore hash the same, which is what makes
  * a prior run's fenced line-number coverage apply to this run's artifact.
@@ -67,7 +67,7 @@ export interface BaselineSnapshot {
 
 /**
  * SHA-256 over every `.al` file under `dir` (recursively, sorted, path and bytes), skipping the
- * control files. Deterministic across two artifacts of the same batch, different for any change
+ * three control files at the root of `dir` only (R691). Deterministic across two artifacts of the same batch, different for any change
  * to any instrumented line.
  *
  * R655: under the R631 rule (`hashTestDir`), so a link refuses by name. Its callers hash
