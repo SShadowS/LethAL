@@ -411,6 +411,14 @@ describe("R598: the coord lease is taken in the caller's lane, never a fixed one
     expect(resolveLane("preproc", {})).toBe("preproc");
   });
 
+  test("R615: a lane that is not a plain word is refused by name (it becomes a file name)", () => {
+    for (const bad of ["../../x", "A B", "a/b"])
+      expect(() => resolveLane(bad, {})).toThrow(LaneUnknownError);
+    expect(() => resolveLane(undefined, { KRAKEN_AGENT: "lane-A B" })).toThrow(LaneUnknownError);
+    expect(resolveLane("code", {})).toBe("code");
+    expect(resolveLane("preproc", {})).toBe("preproc");
+  });
+
   test("no --lane and no kraken identity: refused by name, before any lease call", () => {
     expect(() => resolveLane(undefined, {})).toThrow(LaneUnknownError);
     expect(() => resolveLane(undefined, {})).toThrow(/--lane/);
@@ -533,16 +541,60 @@ describe("R617: --held-lease never takes or releases a lease", () => {
 
   test("under the unit-test preload, the real recordToken refuses by name and writes no /coord file", () => {
     expect(process.env.LETHAL_TEST_FAKE_HOME).toBeDefined();
-    const before = existsSync("/coord/handoff/R-589/lease-bc3.txt")
-      ? readFileSync("/coord/handoff/R-589/lease-bc3.txt", "utf8")
+    const before = existsSync("/coord/handoff/R-589/lease-bc3-preproc.txt")
+      ? readFileSync("/coord/handoff/R-589/lease-bc3-preproc.txt", "utf8")
       : undefined;
     expect(() => krakenLeaseFor("preproc", fakeKraken().run).recordToken("bc3", "t-unit")).toThrow(
       UnitTestCoordWriteError,
     );
-    const after = existsSync("/coord/handoff/R-589/lease-bc3.txt")
-      ? readFileSync("/coord/handoff/R-589/lease-bc3.txt", "utf8")
+    const after = existsSync("/coord/handoff/R-589/lease-bc3-preproc.txt")
+      ? readFileSync("/coord/handoff/R-589/lease-bc3-preproc.txt", "utf8")
       : undefined;
     expect(after).toBe(before);
+  });
+
+  test("R615: the record is per lane: two lanes on one server keep two files, a lane re-records its own", () => {
+    const dir = mkdtempSync(join(tmpdir(), "r615-"));
+    const k = fakeKraken();
+    krakenLeaseFor("preproc", k.run, dir).recordToken("bc1", "t-a");
+    krakenLeaseFor("bugs", k.run, dir).recordToken("bc1", "t-b");
+    expect(readdirSync(dir).sort()).toEqual(["lease-bc1-bugs.txt", "lease-bc1-preproc.txt"]);
+    expect(readFileSync(join(dir, "lease-bc1-preproc.txt"), "utf8")).toBe("t-a\n");
+    expect(readFileSync(join(dir, "lease-bc1-bugs.txt"), "utf8")).toBe("t-b\n");
+    krakenLeaseFor("preproc", k.run, dir).recordToken("bc1", "t-c");
+    expect(readdirSync(dir)).toHaveLength(2);
+    expect(readFileSync(join(dir, "lease-bc1-preproc.txt"), "utf8")).toBe("t-c\n");
+    expect(readFileSync(join(dir, "lease-bc1-bugs.txt"), "utf8")).toBe("t-b\n");
+  });
+
+  test("R615/B1: under the preload, any folder under /coord is refused (trailing slash too); a temp folder writes", () => {
+    const k = fakeKraken();
+    for (const d of ["/coord/handoff/R-589/", "/coord/handoff/other", "/coord"])
+      expect(() => krakenLeaseFor("x", k.run, d).recordToken("bc1", "t")).toThrow(
+        UnitTestCoordWriteError,
+      );
+    const tmp = mkdtempSync(join(tmpdir(), "r615b-"));
+    krakenLeaseFor("x", k.run, tmp).recordToken("bc1", "t");
+    expect(existsSync(join(tmp, "lease-bc1-x.txt"))).toBe(true);
+  });
+
+  test("R615/B1: the root is compared by path segment: a sibling sharing the prefix is not under it", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "r615c-"));
+    const sibling = `${tmp}x`;
+    mkdirSync(sibling);
+    const prev = process.env.LETHAL_COORD_ROOT;
+    process.env.LETHAL_COORD_ROOT = tmp;
+    try {
+      const k = fakeKraken();
+      expect(() => krakenLeaseFor("x", k.run, tmp).recordToken("bc1", "t")).toThrow(
+        UnitTestCoordWriteError,
+      );
+      krakenLeaseFor("x", k.run, sibling).recordToken("bc1", "t");
+      expect(existsSync(join(sibling, "lease-bc1-x.txt"))).toBe(true);
+    } finally {
+      if (prev === undefined) Reflect.deleteProperty(process.env, "LETHAL_COORD_ROOT");
+      else process.env.LETHAL_COORD_ROOT = prev;
+    }
   });
 
   test("parseArgs: one held token leases one server", () => {
