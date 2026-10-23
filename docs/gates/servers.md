@@ -153,6 +153,10 @@ cache (dir 0555, files 0444) with no error (`/coord/handoff/R-599/symcache/alc-r
 
 The databases are in memory. A container restart or a server1 reboot resets each server to a fresh
 CRONUS with no LethAL app on it. The script is idempotent, so re-running it is the fix.
+- **bc3's Continia stack is lost too.** Republish it with `--with-continia --accept-build 28.4.53241.56646` (R594's
+  accepted build). The 22-23 Oct restart needed this; R679's stop message now names the flag.
+- **A server with an out-of-use marker** needs `LETHAL_OUT_OF_USE_CLEARING=<server>` on that one setup command
+  (R669).
 
 `scripts/bc-republish.ts` publishes named fixtures on their own. Every one of its modes works only
 under a coord lease in your own lane (`--lane <lane> --token-dir <dir>`, both required):
@@ -228,7 +232,7 @@ fixture apps change.
 | `bc1` | `itest:testapp` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-testapp.c23.log` |
 | `bc1` | `itest:lease` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-lease.c23.log` |
 | `bc1` | `itest:chunked` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-chunked.log` |
-| `bc1` | `itest:hang` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-hang.log` |
+| `bc1` | `itest:hang` | 1.0.0.23 | not re-proven at 1.0.0.4; hang does not run on bc1 (R-658). Was R-604, `/coord/handoff/R-604/bc1-hang.log` |
 | `bc1` | `itest:harden` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-harden.log` |
 | `bc1` | `itest:agreement` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-agreement.log` |
 | `bc2` | `itest:bcdev` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-bcdev.c23.log` |
@@ -241,10 +245,10 @@ fixture apps change.
 | `bc2` | `itest:testapp` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-testapp.c23.log` |
 | `bc2` | `itest:lease` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-lease.c23.log` |
 | `bc2` | `itest:chunked` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-chunked.c23.log` |
-| `bc2` | `itest:hang` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-hang.c23.log` |
+| `bc2` | `itest:hang` | 1.0.0.23 | unproven (tests app 1.0.0.4, R-658). Was R-604, `/coord/handoff/R-604/bc2-hang.c23.log` |
 | `bc2` | `itest:harden` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-harden.c23.log` |
 | `bc2` | `itest:agreement` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-agreement.c23.log` |
-| `bc3` | `itest:hang` | 1.0.0.23 | R-604 (re-proven after the republish), `/coord/handoff/R-604/bc3-hang.log` |
+| `bc3` | `itest:hang` | 1.0.0.23 | R-658 (tests app 1.0.0.4, with the BASELINE leg; 2026-10-23 at 84c7d4f6), `/coord/handoff/R-658/hang-bc3/hang.log` |
 | `bc3` | `itest:bcdev` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-bcdev.log` |
 | `bc3` | `itest:bcdev-wrapped` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-bcdev-wrapped.log` |
 | `bc3` | `itest:bcdev-names` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-bcdev-names.log` |

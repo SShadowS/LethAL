@@ -38,7 +38,11 @@ import { requiresUnsafeLatch } from "../src/operation-outcome";
 import type { LeaseFence } from "../src/orchestrator";
 import { ContainerDeployer } from "../src/publisher";
 import type { SpawnFn } from "../src/publisher";
-import { type ControlState, RunMutantTransport } from "../src/run-mutant-transport";
+import {
+  type ControlState,
+  type RunMutantManyResult,
+  RunMutantTransport,
+} from "../src/run-mutant-transport";
 import { buildCoverageIndex, coverageFilter } from "../src/selection";
 import { buildFakeApp, buildFakeAppWithEntries } from "./helpers/fake-app";
 import { scratchDirs } from "./helpers/scratch";
@@ -2584,11 +2588,42 @@ describe('coverageMode "fenced" (R58)', () => {
     /** Captures the hook's presence on each dispatched request. */
     class HookSpyTransport extends RunMutantTransport {
       static hooks: Array<boolean> = [];
+      /** R658 W5: each request's own fence, and each hook, to fire after a later request. */
+      static sent: Array<{ attemptId: string; opSeq: number; hook?: (ms: number) => unknown }> = [];
+      static stops: Array<{ attemptId: string; opSeq: number }> = [];
+      /** R658 W6: the `stopHungSessions` each group call was sent. */
+      static manyStops: boolean[] = [];
       override async run(req: Parameters<RunMutantTransport["run"]>[0]) {
         HookSpyTransport.hooks.push(req.onBudgetExceeded !== undefined);
+        HookSpyTransport.sent.push({
+          attemptId: req.attemptId,
+          opSeq: req.lease.opSeq,
+          ...(req.onBudgetExceeded !== undefined ? { hook: req.onBudgetExceeded } : {}),
+        });
         return await super.run(req);
       }
+      override async stopHungRun(req: Parameters<RunMutantTransport["stopHungRun"]>[0]) {
+        HookSpyTransport.stops.push({ attemptId: req.attemptId, opSeq: req.lease.opSeq });
+        return { stopped: true };
+      }
+      override async runMany(req: Parameters<RunMutantTransport["runMany"]>[0]) {
+        HookSpyTransport.manyStops.push(req.stopHungSessions);
+        const none: RunMutantManyResult = {
+          kind: "verdicts",
+          endedBy: "complete",
+          ranCount: 0,
+          verdicts: [],
+          durationMs: 0,
+        };
+        return none;
+      }
     }
+    const resetSpy = () => {
+      HookSpyTransport.hooks = [];
+      HookSpyTransport.sent = [];
+      HookSpyTransport.stops = [];
+      HookSpyTransport.manyStops = [];
+    };
 
     function spyFactory() {
       const okFetch = (async (_url: unknown, init?: RequestInit) => {
@@ -2649,8 +2684,8 @@ describe('coverageMode "fenced" (R58)', () => {
       };
     }
 
-    test("a MUTANT run carries the stop hook when the flag is on", async () => {
-      HookSpyTransport.hooks = [];
+    test("R658 W4: a MUTANT run carries the stop hook when the flag is on", async () => {
+      resetSpy();
       const { backend, cleanup } = await backendWith(true);
       try {
         await backend.activate("M0007");
@@ -2661,13 +2696,37 @@ describe('coverageMode "fenced" (R58)', () => {
       }
     });
 
-    // The safety property. A baseline overrunning is not a hanging mutant — there is no mutation
-    // active to blame — so stopping its session would end a healthy run and score nothing.
-    test("a BASELINE run never carries the hook, even with the flag on", async () => {
-      HookSpyTransport.hooks = [];
+    // R658: an UNMUTATED run abandoned at its budget keeps running on the server and holds the
+    // lease until an NST restart (measured on bc2), so it always gets the stop.
+    test("R658 W1: an UNMUTATED run carries the hook with the flag OFF", async () => {
+      resetSpy();
+      const { backend, cleanup } = await backendWith(false);
+      try {
+        await backend.activate(null);
+        await backend.run(ref, { coverage: "none", timeoutMs: 1000 });
+        expect(HookSpyTransport.hooks).toEqual([true]);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test("R658 W2: an UNMUTATED run carries the hook with the flag ON", async () => {
+      resetSpy();
       const { backend, cleanup } = await backendWith(true);
       try {
         await backend.activate(null);
+        await backend.run(ref, { coverage: "none", timeoutMs: 1000 });
+        expect(HookSpyTransport.hooks).toEqual([true]);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test("R658 W3: with the flag OFF a mutant run carries no hook — R53 stays opt-in for mutants", async () => {
+      resetSpy();
+      const { backend, cleanup } = await backendWith(false);
+      try {
+        await backend.activate("M0007");
         await backend.run(ref, { coverage: "none", timeoutMs: 1000 });
         expect(HookSpyTransport.hooks).toEqual([false]);
       } finally {
@@ -2675,13 +2734,52 @@ describe('coverageMode "fenced" (R58)', () => {
       }
     });
 
-    test("with the flag OFF a mutant run carries no hook — the default path is untouched", async () => {
-      HookSpyTransport.hooks = [];
+    // The hook fires on a TIMER after its request was built; a later request has moved the
+    // counters on, so a hook that re-read them would stop the wrong op.
+    test("R658 W5: an unmutated run's hook stops ITS OWN attemptId and opSeq, fired after a later run", async () => {
+      resetSpy();
+      const { backend, cleanup } = await backendWith(false);
+      try {
+        await backend.activate(null);
+        await backend.run(ref, { coverage: "none", timeoutMs: 1000 });
+        await backend.run(ref, { coverage: "none", timeoutMs: 1000 });
+        const [first, second] = HookSpyTransport.sent;
+        if (first?.hook === undefined || second === undefined) throw new Error("two hooked runs");
+        expect(second.opSeq).not.toBe(first.opSeq);
+        await first.hook(500);
+        expect(HookSpyTransport.stops).toEqual([
+          { attemptId: first.attemptId, opSeq: first.opSeq },
+        ]);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    const oneMethod = {
+      methods: [{ ref, budgetMs: 1000 }],
+      requestCeilingMs: 5000,
+      stopGraceMs: 500,
+    };
+
+    test("R658 W6: the warm confirmation's unmutated replay is sent stopHungSessions with the flag OFF", async () => {
+      resetSpy();
+      const { backend, cleanup } = await backendWith(false);
+      try {
+        await backend.activate(null);
+        await backend.runMany({ ...oneMethod, confirmation: true });
+        expect(HookSpyTransport.manyStops).toEqual([true]);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test("R658 W6 twin: a MUTANT group call with the flag OFF is sent stopHungSessions false", async () => {
+      resetSpy();
       const { backend, cleanup } = await backendWith(false);
       try {
         await backend.activate("M0007");
-        await backend.run(ref, { coverage: "none", timeoutMs: 1000 });
-        expect(HookSpyTransport.hooks).toEqual([false]);
+        await backend.runMany(oneMethod);
+        expect(HookSpyTransport.manyStops).toEqual([false]);
       } finally {
         await cleanup();
       }

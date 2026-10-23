@@ -81,7 +81,8 @@
               "preproc-files-refused",
               "tests-compiled-out",
               "test-symbols-unverified",
-              "project-symlink-skipped"
+              "project-symlink-skipped",
+              "baseline-test-stopped"
             ]
           }
         },
@@ -402,7 +403,8 @@
               "timeout-unconfirmed",
               "runner-test-error",
               "runner-refused",
-              "kill-not-reproduced"
+              "kill-not-reproduced",
+              "confirm-stopped"
             ]
           },
           "platformKillMechanism": {
@@ -871,6 +873,25 @@
         },
         "diagnosis": {
           "type": "string"
+        }
+      }
+    },
+    "baselineStopped": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tests",
+        "budgetMs"
+      ],
+      "properties": {
+        "tests": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "budgetMs": {
+          "type": "number"
         }
       }
     },

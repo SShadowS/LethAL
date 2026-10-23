@@ -1433,9 +1433,10 @@ export class RunMutantTransport {
         ref: decision.ref,
         outcome: "timeout",
         durationMs,
+        // R658 (M2): the warm confirmation's unmutated replay (mutantId "") scores nothing.
         failureMessage:
-          `RunMutantMany: ${decision.ref.method} exceeded its ${decision.ref.method === watchedRef.method ? "" : ""}budget and was stopped server-side so it could ` +
-          `be scored rather than strand the tier. BC's own words: ${JSON.stringify(rawBody.slice(0, 400))}`,
+          `RunMutantMany: ${decision.ref.method} exceeded its ${decision.ref.method === watchedRef.method ? "" : ""}budget and was stopped server-side ${mutantId === "" ? "so it would not strand the server" : "so it could be scored rather than strand the tier"}. ` +
+          `BC's own words: ${JSON.stringify(rawBody.slice(0, 400))}`,
       });
     }
     if (!res.ok) {
@@ -2003,13 +2004,18 @@ export class RunMutantTransport {
             stopRefusal: "stopped-after-completion",
           };
         }
+        // R658 (M5): an unmutated run's stop scores nothing; it only keeps the op off the server.
+        const why =
+          mutantId === ""
+            ? "so it would not strand the server"
+            : "so it could be scored rather than strand the tier";
         return {
           ref,
           outcome: "timeout",
           durationMs: Date.now() - started,
           failureMessage:
-            `RunMutant exceeded its ${timeoutMs} ms budget and was stopped server-side so it could ` +
-            `be scored rather than strand the tier. BC's own words: ${JSON.stringify(body.slice(0, 400))}`,
+            `RunMutant exceeded its ${timeoutMs} ms budget and was stopped server-side ${why}. ` +
+            `BC's own words: ${JSON.stringify(body.slice(0, 400))}`,
         };
       }
       // A 408 that is NOT BC's AL-stop answer (a proxy timing the socket out looks like this).

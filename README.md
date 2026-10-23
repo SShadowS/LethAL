@@ -762,9 +762,12 @@ a LethAL feature or a mode.
   | Real (triggers, FlowFields, a `pageextension` writing on open) | **hangs; the session quarantines and the ENTIRE run scores nothing** | opens and passes in ~451 ms; run completes |
 
   Both rows are measured, repeatedly, on real containers. The hang is the severe case: one such test
-  at baseline takes every other test and every mutant down with it, not just its own. `--stop-hung-sessions`
-  does **not** rescue it: it makes the failure faster, not survivable, because the baseline loop
-  quarantines on the forced-stop result exactly as it does on a hang.
+  at baseline takes every other test and every mutant down with it, not just its own. Since R658,
+  LethAL stops a baseline test that runs past `--baseline-timeout-ms`, with or without
+  `--stop-hung-sessions` (that flag governs mutants only). When BC confirms the stop with its 408,
+  the test is reported as a stopped `timeout` (`baselineStopped`), it covers no mutant, and the run
+  goes on. A stop BC does not confirm still quarantines the run. The stop on a hung TestPage is not
+  yet measured live.
 
   **What is still not recovered:** a mutant reached only by a refused test is reported
   `no-coverage`, with the refused tests named in the report. See ROADMAP R69/R74/R75.

@@ -193,6 +193,7 @@
     "r402-shape-sweep.ts",
     "r546-bucket.test.ts",
     "r546-bucket.ts",
+    "r658-hang-gate.test.ts",
     "r572-flag-census.ts",
     "r595-gap-map.ts",
     "r624-absent-status.ts",

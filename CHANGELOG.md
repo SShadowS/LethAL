@@ -226,6 +226,21 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **LethAL now stops a BASELINE test, a kill confirm or a warm replay that runs past its budget,
+  even without `--stop-hung-sessions`** (R658). The flag still governs mutants. Before, such a run
+  was abandoned at its budget and kept running on the BC server, so its op held the control-app
+  lease until an NST restart. Now:
+  - a baseline test our stop ended (BC's 408, or the op was already tombstoned by that stop) is a
+    `timeout`, not green, named in the new `baselineStopped` report field and the
+    `baseline-test-stopped` caveat, and the run goes on;
+  - a cold kill confirm our stop ended the same way is `error` with the new cause `confirm-stopped`;
+  - a stop BC never answers is quarantined as stranded at the baseline, the cold kill confirm and
+    the warm replay alike, and its note says the lease will read clean but must not be trusted
+    until an NST restart;
+  - a baseline holding a stopped test is not saved for `--resume` reuse;
+  - `lethal doctor` says to restart the NST first for a lease held by a `run` op;
+  - `lethal explain` is v19 (`schemas/explain-v19.schema.json`).
+
 - **`--resume` and `--resume-run` now resume a closed-world run that ended before its
   post-execution check** (R601, R620). Before, such a run (a crash, Ctrl-C, any exception after the
   lease) kept its `|pending` test-app identity and was always refused. Now it resumes when it ran

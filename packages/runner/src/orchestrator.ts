@@ -77,6 +77,7 @@ import type {
   RunManyCause,
   RunManyOpts,
   RunManyResult,
+  StopState,
   TestMethodRef,
   TestVerdict,
 } from "./backend";
@@ -1531,6 +1532,11 @@ export interface SessionConfig {
    * server-side tombstone check — but the id cannot be independently verified (`Active Session` is
    * unusable from a web-service session, measured), so accepting that residual risk is the user's
    * call, not the tool's.
+   *
+   * R658: the flag governs MUTANT runs only. An UNMUTATED run (a baseline test, a kill confirm, a
+   * warm replay) that overruns is stopped regardless: abandoned, it keeps running on the server
+   * and its op blocks the lease until an NST restart (measured), which is worse for the user than
+   * the same residual risk.
    */
   readonly stopHungSessions?: boolean;
   /**
@@ -4846,16 +4852,18 @@ async function dispatchUnmutated(
     store.recordTestResult(runId, null, null, ref, "skip", 0, refused.failureMessage);
     return { verdict: refused, stop: false };
   }
-  const v = await runOnce(
-    backend,
-    safety,
-    ref,
-    {
-      coverage: caps.coverage,
-      timeoutMs: scope.baselineTimeoutMs,
-    },
-    scope.resyncOpSeq,
-    scope.emit,
+  const v = ownStopAsTimeout(
+    await runOnce(
+      backend,
+      safety,
+      ref,
+      {
+        coverage: caps.coverage,
+        timeoutMs: scope.baselineTimeoutMs,
+      },
+      scope.resyncOpSeq,
+      scope.emit,
+    ),
   );
   // Baseline test results are not tied to any mutant: mutant_row_id stays NULL. R206: the
   // session id rides along as data (the store's liveness check counts baseline rows too).
@@ -4896,11 +4904,45 @@ async function dispatchUnmutated(
       quarantineStore,
       resourceKey,
       nowIso,
-      detail: `baseline test in-flight-unknown running ${ref.method}: ${v.failureMessage ?? "no failure message"}`,
+      detail: `baseline test in-flight-unknown running ${ref.method}: ${v.failureMessage ?? "no failure message"}${tombstoneSentence(v.stopState)}`,
     });
     return { verdict: v, stop: true };
   }
   return { verdict: v, stop: false };
+}
+
+/**
+ * R658: OUR stop's two clean endings of an UNMUTATED run, read as the `timeout` they are: R204's
+ * `stopped-after-completion` (BC's 408 came, but the method had recorded its completion) and
+ * R203's `op-stopped` (the session finished and phase 3 refused an op our stop had tombstoned).
+ * Either way the op is over and the server is clean. `operation` and `leaseInvalidReason` are
+ * DROPPED (D3), or `classifyLeaseVerdict`/`requiresUnsafeLatch` would still read a lease loss or
+ * a strand. Only with a `stopState`: without one, no stop of ours was sent and nothing is ours.
+ * BC's own 408 (`outcome: "timeout"` with a `stopState`) needs no mapping.
+ */
+function ownStopAsTimeout(v: TestVerdict): TestVerdict {
+  if (v.stopState === undefined) return v;
+  if (v.stopRefusal !== "stopped-after-completion" && v.leaseInvalidReason !== "op-stopped") {
+    return v;
+  }
+  const { operation: _operation, leaseInvalidReason: _reason, ...kept } = v;
+  return { ...kept, outcome: "timeout" };
+}
+
+/** R658: an unmutated run that ran past its budget and that OUR stop ended. */
+function stoppedByUs(v: TestVerdict): boolean {
+  return v.outcome === "timeout" && v.stopState !== undefined;
+}
+
+/**
+ * R658 (M7): a stop LethAL sent that BC never answered with its 408. A `confirmed` stop
+ * tombstoned the op (an `unknown` one may have), so the control-app lease reads clean to the next
+ * session while the AL session may still run. Empty when no stop was sent or it was refused.
+ */
+function tombstoneSentence(s: StopState | undefined): string {
+  if (s !== "confirmed" && s !== "unknown") return "";
+  const did = s === "confirmed" ? "was confirmed and tombstoned" : "may have tombstoned";
+  return `. LethAL's stop ${did} the op, but BC never sent its 408; the control-app lease will read clean and must not be trusted until an NST restart (R658)`;
 }
 
 /**
@@ -5141,7 +5183,10 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     snapshotKey !== undefined &&
     reused === undefined &&
     testAppHash !== undefined &&
-    baseline.length === tests.length
+    baseline.length === tests.length &&
+    // R658 (D5): the key does not include --baseline-timeout-ms, so a snapshot holding a stopped
+    // test would bring it back stopped on a `--resume` that raised the budget.
+    !baseline.some((b) => stoppedByUs(b.verdict))
   ) {
     store.recordBaselineSnapshot({
       runId,
@@ -5179,6 +5224,11 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   emit({
     type: "baseline-batch-finished",
     batchIndex: batchIdx,
+    // R658: the budget a stopped test ran past, for the banner. Only with one, so older streams
+    // and every unstopped batch read as before.
+    ...(baseline.some((b) => stoppedByUs(b.verdict))
+      ? { stoppedBudgetMs: scope.baselineTimeoutMs }
+      : {}),
     verdicts: baseline.map((b) => {
       const classification: BaselineClassification[] = [];
       // R139: a line-count answer is the transport reporting that RunMutant did not return one
@@ -5209,6 +5259,8 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       if (isTestPageNotRunMessage(b.verdict.failureMessage)) {
         classification.push("tests-testpage-refused");
       }
+      // R658: ran past --baseline-timeout-ms and OUR stop ended it (`ownStopAsTimeout`).
+      if (stoppedByUs(b.verdict)) classification.push("baseline-test-stopped");
       const measured = b.verdict.measuredDurationMs;
       return {
         name: qualifiedTestName(b.ref),
@@ -9640,6 +9692,23 @@ async function confirmWarm(p: {
       ...(verdict.sessionId !== undefined ? { sessionId: verdict.sessionId } : {}),
     });
     feedAttestation(args.attestation, verdict.attestation);
+    // R658 (I1 on the warm replay): our stop was sent, not refused, and BC never sent its 408. A
+    // `completed` reconcile then proves nothing, because our own stop writes that tombstone while
+    // the AL session may still run. Before `classifyNonVerdictStep`, whose `stop-outcome-unconfirmed`
+    // is "no verdict, no quarantine", as the cold confirm does.
+    if (verdict.operation === "in-flight-unknown" && !stopIsRetrySafe(verdict.stopState)) {
+      await quarantineInFlight({
+        safety: args.safety,
+        quarantineStore: args.quarantineStore,
+        resourceKey: args.resourceKey,
+        nowIso: args.nowIso,
+        detail: `warm replay stopped without BC's 408, ${what} (mutant ${m.mutantId})${verdict.failureMessage !== undefined ? `: ${verdict.failureMessage}` : ""}${tombstoneSentence(verdict.stopState)}`,
+      });
+      return error(
+        "stranded",
+        `${STRANDED_NOTE_PREFIX}${what}: the replay ran past its budget and LethAL stopped it, but BC never sent its 408, so the session may still run on the server — container may be stranded (R658)`,
+      );
+    }
     if (cause === "stopped-after-completion") {
       // G3(a): R204's narrowing fired on the REPLAY's own 408; the covering call's wording would
       // describe the mutated run. What it means here is that k's duration could not be established.
@@ -10645,12 +10714,11 @@ async function runMutantsOnBackend(args: {
       // `timeout`, the only timeout that reaches here.
       if (v.outcome === "fail" || v.outcome === "timeout") {
         const timedOut = v.outcome === "timeout";
-        // R514: an unmutated run has no stop hook (bcdev wires R53's only for a pending mutant), so
-        // an overrun is an abort and a quarantine. A timeout's confirm runs at the baseline's
-        // deadline when that is longer, and judges the duration against the budget the timed-out
-        // run was SENT (`budget`, R516 M2) with R53's 2x margin. With the default floor (above the
-        // baseline deadline) it runs at the budget, and a test slower than that today is abandoned
-        // at that deadline: `in-flight-unknown`, a strand, the tier quarantined; never a kill.
+        // R514: a timeout's confirm runs at the baseline's deadline when that is longer, and judges
+        // the duration against the budget the timed-out run was SENT (`budget`, R516 M2) with R53's
+        // 2x margin. With the default floor (above the baseline deadline) it runs at the budget.
+        // R658: an unmutated run has the stop on bcdev, so a confirm slower than that is stopped:
+        // BC's 408 gives `confirm-stopped`, a stop with no 408 a strand; never a kill.
         const confirmMs = timedOut ? Math.max(budget, args.fallbackTimeoutMs) : budget;
         // R653: a fail kill's confirm and its R577 reproduction may travel as ONE request (al-runner
         // v3 serve-entries, confirm first); the two reads below are unchanged.
@@ -10667,7 +10735,7 @@ async function runMutantsOnBackend(args: {
         // attempt after a proven-complete lost ack, so an intermittent unreadable answer during
         // confirmation costs a kill verdict no more than it costs a covering run's.
         const {
-          verdict: confirm,
+          verdict: confirmRaw,
           lostAck: confirmLostAck,
           retried: confirmRetried,
           retryAfter: confirmRetryAfter,
@@ -10681,6 +10749,9 @@ async function runMutantsOnBackend(args: {
           args.emit,
           resyncOpSeq,
         );
+        // R658 (D6): our stop's `op-stopped` and `stopped-after-completion` on the confirm are the
+        // timeout they are, so they reach `confirm-stopped` below, never a lease branch.
+        const confirm = ownStopAsTimeout(confirmRaw);
         const confirmRefusal =
           classifyLeaseVerdict(confirm) === "lost" &&
           confirmRetryAfter === "not-started" &&
@@ -10729,8 +10800,9 @@ async function runMutantsOnBackend(args: {
             noteLeaseLostOrThrow(leaseSession, detail);
             failureNote = `lease-lost while ${detail} — the kill could not be confirmed under a provable lease`;
           } else if (confirmLease === "op-stopped") {
-            // R203 on the confirmation rerun (unreachable in practice: a null-activation run has
-            // no stop hook), scored the same way: no latch, no verdict, the kill unconfirmed.
+            // R203 on the confirmation rerun. Since R658 the confirm has the stop, and
+            // `ownStopAsTimeout` maps our own `op-stopped` (it carries a `stopState`) to
+            // `confirm-stopped`; this is left for an `op-stopped` with no stop state recorded.
             failureNote = `op-stopped while ${detail} — the fence refused to record the confirmation because our own stop had tombstoned its op; the kill could not be confirmed and the lease was NOT lost (R203)`;
             cause = "op-stopped";
           } else {
@@ -10756,7 +10828,22 @@ async function runMutantsOnBackend(args: {
           // either way (`error`, never `killed`); what differs is whether the tier is condemned.
           // The post-loop `safety.isUnsafe` check (below) stops scheduling only if it is.
           verdict = "error";
-          if (confirmLostAck === "completed") {
+          // Covers `runFenced`'s `stop-outcome-unconfirmed` (that cause is only ever set on such a
+          // verdict) and an unresolved reconcile after a stop, which gets the tombstone sentence.
+          if (confirm.operation === "in-flight-unknown" && !stopIsRetrySafe(confirm.stopState)) {
+            // R658 (I1, D4): our stop was sent, not refused, and BC never sent its 408. A
+            // `completed` reconciliation then proves nothing, because our own stop writes that
+            // tombstone while the AL session may still run. Before `result-lost`, never after it.
+            await quarantineInFlight({
+              safety: args.safety,
+              quarantineStore: args.quarantineStore,
+              resourceKey: args.resourceKey,
+              nowIso: args.nowIso,
+              detail: `confirm stopped without BC's 408, confirming ${ref.method} (mutant ${m.mutantId})${confirm.failureMessage !== undefined ? `: ${confirm.failureMessage}` : ""}${tombstoneSentence(confirm.stopState)}`,
+            });
+            failureNote = `${STRANDED_NOTE_PREFIX}${ref.method} confirm ran past its ${confirmMs} ms budget and LethAL stopped it, but BC never sent its 408, so the session may still run on the server — container may be stranded (R658)`;
+            cause = "stranded";
+          } else if (confirmLostAck === "completed") {
             failureNote = `lost ack confirming ${ref.method}: RunMutant's response was unreadable${confirm.failureMessage !== undefined ? ` (${confirm.failureMessage})` : ""}, but GetOperationStatus confirms the operation COMPLETED server-side — the confirmation was retried once and that attempt was unreadable too, so the kill could not be confirmed; the container is not stranded (design §5)`;
             // R122(b), confirmation-side twin — the op provably finished, only its answer was lost.
             cause = "result-lost";
@@ -10858,6 +10945,13 @@ async function runMutantsOnBackend(args: {
           verdict = "error";
           failureNote = `deadline exceeded confirming ${ref.method} (infrastructure, not a kill)`;
           cause = "deadline-exceeded";
+        } else if (stoppedByUs(confirm)) {
+          // R658 (I3): our stop ended the unmutated run cleanly (BC's 408, or phase 3 refused an op
+          // our stop had tombstoned). It says the test is slow or hangs with no mutant, which is not
+          // `unstable` and not a kill; no quarantine.
+          verdict = "error";
+          cause = "confirm-stopped";
+          failureNote = `confirming ${ref.method}: unmutated, the test also ran past its ${confirmMs} ms budget and LethAL stopped it (BC's 408, or the op was already tombstoned by that stop), so the ${v.outcome} under the mutant is not attributed to it (R658)`;
         } else {
           // Fails under the mutant AND at baseline: by construction this says nothing about the
           // mutant, so it stays `error cause=unstable` (the verdict is NOT reconsidered below).

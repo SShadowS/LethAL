@@ -248,7 +248,8 @@ export type Caveat =
   | "preproc-files-refused"
   | "tests-compiled-out"
   | "test-symbols-unverified"
-  | "project-symlink-skipped";
+  | "project-symlink-skipped"
+  | "baseline-test-stopped";
 
 /**
  * R403 phase C: one test the arm filter dealt with, as `SessionReport.excludedTests` lists it.
@@ -578,6 +579,22 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "Does not mean the target or test project holds a link: those refuse by name instead.",
     basis: "R631",
   },
+  "baseline-test-stopped": {
+    meaning:
+      "One or more baseline tests ran past `--baseline-timeout-ms` with no mutant active, and " +
+      "LethAL stopped each one on the server (BC confirmed with its 408, or the op was already " +
+      "tombstoned by that stop). They are `timeout`, " +
+      "not green, so they cover no mutant: a mutant covered only by them reads `no-coverage` " +
+      "(see baseline-red). The server was left clean. LethAL stops such a test whether or not " +
+      "`--stop-hung-sessions` is given, because an abandoned one keeps running and blocks the " +
+      "server's lease until an NST restart. Raise `--baseline-timeout-ms` if a test is slow " +
+      "rather than hung (R658).",
+    entailedNegative:
+      "Not a statement about any mutant, and not `stop-hung-sessions`: no mutant was stopped. " +
+      "Not a quarantine: a stop BC never answers quarantines the run instead, at the baseline, " +
+      "the cold kill confirm and the warm replay alike.",
+    basis: "R658",
+  },
 };
 
 /**
@@ -618,7 +635,10 @@ export type MutantErrorCause =
   | "runner-refused"
   // R577: the killer failed (or timed out) under the mutant and passed with no mutant, but the
   // reproduction under the mutant did not end with it failing (or timing out) again.
-  | "kill-not-reproduced";
+  | "kill-not-reproduced"
+  // R658: the unmutated cold confirm also ran past its budget and LethAL's stop ended it (BC's 408,
+  // or the op was already tombstoned by that stop).
+  | "confirm-stopped";
 
 /**
  * What each `MutantErrorCause` MEANS for a reader, and — because both are facts about LethAL's OWN
@@ -891,6 +911,19 @@ export const ERROR_CAUSE_INTERPRETATIONS: Record<MutantErrorCause, Interpretatio
       "Not `survived`: the test failed once under the mutant. Not `killed`: the failure did not " +
       "repeat. Not `unstable`: the test passed with no mutant.",
     basis: "R577",
+  },
+  "confirm-stopped": {
+    meaning:
+      "The test failed or timed out under the mutant. LethAL then ran it with no mutant active to " +
+      "confirm the kill, and that run also ran past its budget, so LethAL stopped it on the server " +
+      "(BC confirmed with its 408, or the op was already tombstoned by that stop). A test that is " +
+      "slow or hangs with no mutant says nothing about the mutant. No verdict, and the server was " +
+      "left clean. Raise `--baseline-timeout-ms` or `--mutant-timeout-ms` if the test is slow " +
+      "rather than hung, and re-run with `--resume` (R658).",
+    entailedNegative:
+      "Not `unstable`: the test did not fail with no mutant, it ran out of time. Not `stranded`: " +
+      "a stop BC did not answer is `stranded` instead, and quarantined. Not a kill.",
+    basis: "R658",
   },
 };
 
@@ -1288,6 +1321,16 @@ export interface SessionReport {
   readonly testPageRefused?: {
     readonly tests: readonly string[];
     readonly diagnosis: string;
+  };
+  /**
+   * R658: baseline tests that ran past `--baseline-timeout-ms` (`budgetMs`) and that LethAL
+   * stopped on the server (see `CAVEAT_INTERPRETATIONS["baseline-test-stopped"]`). They are
+   * `timeout` rows, so not in `unsupportedTests`. Absent when no baseline test was stopped. A
+   * baseline holding one is never saved for `--resume` reuse, so it always names this run's tests.
+   */
+  readonly baselineStopped?: {
+    readonly tests: readonly string[];
+    readonly budgetMs: number;
   };
   /**
    * R72: KILLED mutants whose site carries a recognised platform kill mechanism — a SCREEN over the
@@ -2752,6 +2795,8 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   // See CAVEAT_INTERPRETATIONS["tests-testpage-refused"].
   const testPageRefusedTests = input.testPageRefusedTests ?? [];
   if (testPageRefusedTests.length > 0) caveats.push("tests-testpage-refused");
+  // R658 - see CAVEAT_INTERPRETATIONS["baseline-test-stopped"].
+  if (input.baselineStopped !== undefined) caveats.push("baseline-test-stopped");
   // R403 phase C - see CAVEAT_INTERPRETATIONS["tests-compiled-out"] and ["test-symbols-unverified"].
   const testBuildSymbols = input.testBuildSymbols ?? [];
   const excludedTests = input.excludedTests ?? [];
@@ -3014,6 +3059,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
           },
         }
       : {}),
+    ...(input.baselineStopped !== undefined ? { baselineStopped: input.baselineStopped } : {}),
     ...(platformArtifactKills !== undefined ? { platformArtifactKills } : {}),
     ...(likelyEquivalentSurvivors !== undefined ? { likelyEquivalentSurvivors } : {}),
     ...(readerMarkedEquivalent !== undefined ? { readerMarkedEquivalent } : {}),
@@ -3156,7 +3202,7 @@ function summarizeRunnerContexts(
  * R206 causes are listed beside it when non-zero, so a run full of them does not read
  * `error N [unstable 0]`. R-204b adds `stop-outcome-unconfirmed`, the error a stop leaves behind
  * when its run's answer was lost. R514 adds `reused-budget-stale`, R516 `timeout-unconfirmed`,
- * R534 `runner-test-error` and `runner-refused`, R577 `kill-not-reproduced`.
+ * R534 `runner-test-error` and `runner-refused`, R577 `kill-not-reproduced`, R658 `confirm-stopped`.
  */
 function errorBreakdown(r: SessionReport): string {
   const named: MutantErrorCause[] = [
@@ -3170,6 +3216,7 @@ function errorBreakdown(r: SessionReport): string {
     "runner-test-error",
     "runner-refused",
     "kill-not-reproduced",
+    "confirm-stopped",
   ];
   const parts: string[] = [];
   for (const cause of named) {
@@ -3382,6 +3429,15 @@ export function renderConsole(r: SessionReport): string {
       `TESTPAGE REFUSED, NOT RUN: ${n} test(s) were not sent. ${r.testPageRefused.diagnosis}`,
     );
     for (const t of r.testPageRefused.tests.slice(0, 10)) lines.push(`  ${t}`);
+    if (n > 10) lines.push(`  ... ${n - 10} more`);
+  }
+  // R658: a stopped baseline test reads as one more failing test otherwise.
+  if (r.baselineStopped !== undefined) {
+    const n = r.baselineStopped.tests.length;
+    lines.push(
+      `BASELINE TEST STOPPED: ${n} baseline test(s) ran past --baseline-timeout-ms (${r.baselineStopped.budgetMs} ms) and LethAL stopped them on the server (BC confirmed with its 408, or the op was already tombstoned by that stop). They are not green and cover no mutant; the server was left clean. Raise --baseline-timeout-ms if a test is slow rather than hung.`,
+    );
+    for (const t of r.baselineStopped.tests.slice(0, 10)) lines.push(`  ${t}`);
     if (n > 10) lines.push(`  ... ${n - 10} more`);
   }
   // R72: same prominence, and the reader's default reading is the one to interrupt — a kill counts
