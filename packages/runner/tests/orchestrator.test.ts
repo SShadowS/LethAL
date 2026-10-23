@@ -14635,6 +14635,29 @@ describe("runSession — Layer 5C-B2: a proven-complete lost ack earns one fresh
     expect((await new QuarantineStore(dir).read(TIER))?.detail).not.toContain("tombstone");
   });
 
+  test("R665. grouped, a confirmed stop + 400 that also carries abortSession still aborts the session (R198), with the tier quarantined", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = tombstoned;
+    const { lease } = leaseCfg(client);
+    const lost = callAfter("confirmed");
+    const backend = m2ManyAnswers(
+      [
+        (opts, fencedOp) => ({
+          ...lost(opts, fencedOp),
+          abortSession: "control-app-route-missing: LethALControl_RunMutantMany answered 404",
+        }),
+        passAllMany,
+      ],
+      { count: 0 },
+      [],
+    );
+    await expect(runSessionForTest(backend, { quarantineDir: dir, lease })).rejects.toThrow(
+      /control-app-route-missing/,
+    );
+    expect((await new QuarantineStore(dir).read(TIER))?.opKind).toBe("test-run");
+  });
+
   test("R665. reproduceKill: a lost answer on the reproduction under the mutant after a confirmed stop is stranded and quarantined, never a kill", async () => {
     const dir = freshTmpDir();
     const client = new FakeLeaseClient();

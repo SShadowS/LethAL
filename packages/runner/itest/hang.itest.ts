@@ -936,8 +936,9 @@ function assertTwoStops(label: string, leg: LegResult): void {
  * scores the ON leg's verdict (`EXPECTED_ON`), every hang stays `timeout-killed` with BC's own stop
  * words on a single-call row, every kill sits at position 1 (one method per call, so the line-145
  * hang is no longer a position-2 warm kill), and NO mutant ends `stopped-after-completion` (Part A
- * must not swallow a real hang) or `stop-outcome-unconfirmed` (R202's 400; if it appears live it
- * is a gate failure to re-run once, never a baseline value). `main()` then checks the per-mutant
+ * must not swallow a real hang) or `stop-outcome-unconfirmed`. Since R665, R202's lost answer
+ * ends `stranded` with a quarantine record, which is a STOP (D-C), so R582's F3 one-rerun no
+ * longer applies to it. Never a baseline value. `main()` then checks the per-mutant
  * baseline.
  */
 function assertSingleLeg(leg: LegResult): void {

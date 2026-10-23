@@ -9694,8 +9694,8 @@ async function confirmWarm(p: {
     feedAttestation(args.attestation, verdict.attestation);
     // R658 (I1 on the warm replay): our stop was sent, not refused, and BC never sent its 408. A
     // `completed` reconcile then proves nothing, because our own stop writes that tombstone while
-    // the AL session may still run. Before `classifyNonVerdictStep`, whose `stop-outcome-unconfirmed`
-    // is "no verdict, no quarantine", as the cold confirm does.
+    // the AL session may still run. Checked here, before `classifyNonVerdictStep`, so the note names
+    // the replay; since R665 that branch strands the same shape too.
     if (verdict.operation === "in-flight-unknown" && !stopIsRetrySafe(verdict.stopState)) {
       await quarantineInFlight({
         safety: args.safety,
@@ -10229,6 +10229,12 @@ async function classifyNonVerdictStep(
       });
       note = `${STRANDED_NOTE_PREFIX}${ref.method}: LethAL sent a stop for this run (${v.stopState ?? "unknown"}) and its answer could not be read${v.failureMessage !== undefined ? ` (${v.failureMessage})` : ""}; ${risk} — container may be stranded, no verdict (R665)`;
       cause = "stranded";
+      // R198, as in the generic strand below: an identity disagreement or a missing route still
+      // names itself and aborts the session.
+      if (step.abortSession !== undefined) {
+        note = `${note} — ${step.abortSession}`;
+        transportError = true;
+      }
       return { failureNote: note, cause, transportError };
     }
     if (lostAck === "completed") {
