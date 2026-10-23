@@ -885,6 +885,34 @@ describe("R639 (pre-commitment r9): leg C's BC readings", () => {
     expect(verdictOf(await at50657(0, []), CUC)).toBe("unmeasurable");
   });
 
+  // R672 (plan 2026-10-23-r672-v3-refusal-prefix.md §1a, S9 and S10): a one-word-prefixed refusal
+  // written as a plain fail reads as the unprefixed one does, never unlike-bc or gone.
+  for (const p of [
+    "Error: ",
+    "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: ",
+  ]) {
+    test(`R672 S9: refusal-row-shape reads a "${p}"-prefixed refusal written as a fail as diverged`, async () => {
+      const m = `${p}NotRun: out-of-scope: an outbound HTTP request`;
+      expect(verdictOf(await at50653(1, [http({ message: m }), LATER_FAIL]), RRS)).toBe("diverged");
+    });
+    test(`R672 S10: commit-under-test-isolation reads a "${p}"-prefixed refusal written as a fail as diverged`, async () => {
+      const dressed = row(50657, "CommitCall", "fail", {
+        message: `${p}NotRun: out-of-scope: Commit`,
+      });
+      expect(verdictOf(await at50657(1, [dressed]), CUC)).toBe("diverged");
+    });
+  }
+  test("R672 S9: an Assert text that quotes the refusal is still unlike-bc (anchored)", async () => {
+    const m = "Assert.AreEqual failed. Expected: NotRun: out-of-scope: x";
+    expect(verdictOf(await at50653(1, [http({ message: m }), LATER_FAIL]), RRS)).toBe("unlike-bc");
+  });
+  test("R672 S10: an Assert text that quotes the refusal is still gone (anchored)", async () => {
+    const quoted = row(50657, "CommitCall", "fail", {
+      message: "Assert.AreEqual failed. Expected: NotRun: out-of-scope: x",
+    });
+    expect(verdictOf(await at50657(1, [quoted]), CUC)).toBe("gone");
+  });
+
   const at50655 = (exitCode: number, rows: unknown[]) =>
     probe({ cu50655: () => ({ exitCode, stdout: doc(rows) }) });
   const DUP = "duplicate-key-insert-raises";
@@ -1038,6 +1066,25 @@ describe("R667 message-has-no-type-prefix: v3's failure message carries no `<Typ
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("gate-fail");
   });
 
+  // R672: the fact reads `^V3_TYPE_PREFIX` (one word, dots allowed), not only `...Exception: `.
+  for (const message of ["Error: boom 5", "A: B: boom 5", "X.Y: boom 5", "SomeException: boom 5"]) {
+    test(`R672: Fails "${message}" reads diverged and refuses a session with the reason`, async () => {
+      const r = await probe({ cu50650: mainWith(row(50650, "Fails", "fail", { message })) });
+      expect(r.facts.find((f) => f.fact === MSG)?.verdict).toBe("diverged");
+      expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("gate-fail");
+      const text = v3ContractRefusals(r).join("\n");
+      expect(text).toMatch(/DIVERGED — message-has-no-type-prefix/);
+      expect(text).toContain(`\n    why: ${MESSAGE_PREFIX_REASON}\n`);
+    });
+  }
+  test("R672: today's two probe texts (boom 5, an Assert.AreEqual text) read matches", async () => {
+    // The default fake writes R657's measured texts (`boom 5`, `Assert.AreEqual failed. Expected:<1> ...`).
+    const f = (await probe()).facts.find((x) => x.fact === MSG);
+    expect(f?.verdict).toBe("matches");
+    expect(f?.measured).toContain('Fails "boom 5"');
+    expect(f?.measured).toContain("Assert.AreEqual failed. Expected:<1>");
+  });
+
   test("a prefixed plain Error() row (Fails) is broken: diverged, gate-fail", async () => {
     const r = await probe({
       cu50650: mainWith(row(50650, "Fails", "fail", { message: PREFIXED })),
@@ -1128,7 +1175,7 @@ describe("R667 message-has-no-type-prefix: v3's failure message carries no `<Typ
 
   test("the refusal's reason text is pinned", () => {
     expect(MESSAGE_PREFIX_REASON).toBe(
-      "a `<Type>:` prefix would hide v3's not-trusted refusal from the K1(a) guard (`v3RowVerdict` reads `NotRun: out-of-scope:` at the start of the message, so a prefixed refusal written as a plain fail would score as a kill) (R667)",
+      "a `<Type>:` prefix on v3's failure messages would turn v3's timeouts into errors (`V3_TIMEOUT_MESSAGE` is anchored), close the serve daemon on every refusal (R612's keep list is anchored), and skew the R553 assertion screen. K1(a) keeps a refusal written as a plain fail unscored only after a ONE-word prefix (`V3_TYPE_PREFIX`, R672); a longer prefix could still make it score as a kill (R667)",
     );
   });
 });

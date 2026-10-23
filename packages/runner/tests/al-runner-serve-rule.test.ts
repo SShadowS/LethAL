@@ -140,4 +140,26 @@ describe("serveDaemonReusable, the rule alone", () => {
       expect([row, serveDaemonReusable([r("pass"), row], "v3")]).toEqual([row, false]);
     }
   });
+  // R672 (plan 2026-10-23-r672-v3-refusal-prefix.md §1c): a refusal written as a plain pass/fail
+  // (no notRun) says the runtime's state is not trusted, so v3 closes the daemon on it.
+  const REFUSAL = "NotRun: out-of-scope: x";
+  test("R672: v3 closes on a refusal written as a plain fail or pass, unprefixed or one-word prefixed", () => {
+    for (const row of [
+      r("fail", { notRun: false, message: REFUSAL }),
+      r("fail", { notRun: false, message: `Error: ${REFUSAL}` }),
+      r("pass", { message: `X.Y: ${REFUSAL}` }),
+    ]) {
+      expect([row, serveDaemonReusable([row], "v3")]).toEqual([row, false]);
+    }
+  });
+  test("R672: v3 still keeps on a plain fail, an Assert text quoting the refusal, and a pass; v2 is unchanged", () => {
+    for (const row of [
+      r("fail", { message: `Assert.AreEqual failed. Expected: ${REFUSAL}` }),
+      r("fail", { message: "boom" }),
+      r("pass"),
+    ]) {
+      expect([row, serveDaemonReusable([row], "v3")]).toEqual([row, true]);
+    }
+    expect(serveDaemonReusable([r("fail", { notRun: false, message: REFUSAL })], "v2")).toBe(true);
+  });
 });

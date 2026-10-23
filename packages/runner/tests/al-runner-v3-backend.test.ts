@@ -979,6 +979,63 @@ describe("§5 the row decoder", () => {
       v3RowVerdict(r, row({ status: "fail", message: `x ${PREFIXED}` }), 3, 10, undefined).outcome,
     ).toBe("fail");
   });
+  // R672 (plan 2026-10-23-r672-v3-refusal-prefix.md §2): K1(a) reads the refusal after at most ONE
+  // `V3_TYPE_PREFIX` word (dots allowed).
+  for (const p of [
+    "SomeException: ",
+    "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: ",
+    "Error: ",
+  ]) {
+    for (const status of ["fail", "pass"] as const) {
+      test(`R672 K1: ${status} "${p}${PREFIXED}" is error/runner-test-error, never scored`, () => {
+        const v = v3RowVerdict(r, row({ status, message: `${p}${PREFIXED}` }), 3, 10, undefined);
+        expect([v.outcome, v.runnerRow]).toEqual(["error", "runner-test-error"]);
+        expect(v.failureMessage).toContain(`a refusal written as a ${status}; never scored`);
+      });
+    }
+  }
+  test("R672 K1: an unprefixed refusal's verdict is byte-identical (the whole object)", () => {
+    for (const status of ["fail", "pass"] as const) {
+      expect(v3RowVerdict(r, row({ status, message: PREFIXED }), 3, 10, undefined)).toEqual({
+        ref: r,
+        outcome: "error",
+        durationMs: 10,
+        failureMessage: `NotRun: out-of-scope: x [al-runner v3: a refusal written as a ${status}; never scored (R639)]`,
+        operation: "completed-accepted",
+        runnerRow: "runner-test-error",
+      });
+    }
+  });
+  test("R672 K1: an Assert text that quotes the refusal is still a kill", () => {
+    const v = v3RowVerdict(
+      r,
+      row({ status: "fail", message: `Assert.AreEqual failed. Expected: ${PREFIXED}` }),
+      3,
+      10,
+      undefined,
+    );
+    expect(v.outcome).toBe("fail");
+  });
+  test("R672 residual (closed by leg C's message-has-no-type-prefix, which refuses such a build): A: B: + refusal still scores fail", () => {
+    // Two prefix words: K1(a) reads one. The leg-C fact matches `A: B: boom`, so such a build is
+    // refused before any mutant (al-runner-rows.test.ts, the chain asymmetry).
+    expect(
+      v3RowVerdict(r, row({ status: "fail", message: `A: B: ${PREFIXED}` }), 3, 10, undefined)
+        .outcome,
+    ).toBe("fail");
+  });
+  test("R672 residual (open, R675): Runtime error: + refusal still scores fail", () => {
+    // A prefix with a space: neither K1(a) nor leg C sees it (R675).
+    expect(
+      v3RowVerdict(
+        r,
+        row({ status: "fail", message: `Runtime error: ${PREFIXED}` }),
+        3,
+        10,
+        undefined,
+      ).outcome,
+    ).toBe("fail");
+  });
   test("decodeV3Rows refuses another codeunit's row and a name that is not Codeunit<id>.<method>", () => {
     const doc = (t: object) => JSON.stringify({ tests: [t] });
     expect(
