@@ -7,7 +7,7 @@ import { describeThrown } from "./describe-error";
 import { UnfilteredExtensionsQueryError } from "./harness";
 import { assertAttemptId, parseOperationStatus } from "./lease";
 import type { LeaseTuple, OperationStatus } from "./lease";
-import { runMutantLineCountMessage } from "./stale-test-app";
+import { GROUP_SUITE_UNRESOLVED_HEAD, runMutantLineCountMessage } from "./stale-test-app";
 
 /**
  * OData client for the `LethALControl_RunMutant` action (Layer 5C-A). One call does
@@ -1577,7 +1577,8 @@ export class RunMutantTransport {
         ref: firstMethod.ref,
         outcome: "error",
         durationMs,
-        failureMessage: `RunMutantMany suite-unresolved: the server could not resolve this request's test methods to exactly one function line each, and ran nothing — ${reason}`,
+        // R686: `groupedFoundNone` reads this text back; the head lives beside it.
+        failureMessage: `${GROUP_SUITE_UNRESOLVED_HEAD}${reason}`,
       });
     }
     if (result.status !== "ran") {

@@ -42,6 +42,8 @@ function source(): { store: ResultsStore; a: number } {
     dependencySourceSha256: "dep",
     // R601: copied, so a pending clone resumes on its source's server.
     resourceKey: "http://bc1|BC",
+    // R680: copied, so a clone resumes on its source's server generation.
+    serverGeneration: "g".repeat(32),
   });
   CODES.forEach((code, i) => {
     const m = LEND_MUTANTS[code];

@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**77 of 683 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**74 of 686 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -67,7 +67,7 @@ that ordering is the priority.
 - **R166** · `astSubtreeHash` erases method and label names, so three different guard deletions share one identity · [R166.md](docs/roadmap/R166.md) · done (this commit) — the enclosing PROCEDURE (or trigger) joined the identity. `itest:tables` goes from 225…
 - **R167** · The AL extension moved `alc.exe` out of `bin/win32/`, and tool discovery built a path it never checked · [R167.md](docs/roadmap/R167.md) · done (this commit) — discovery walks newest-first and verifies the tool EXISTS, trying the per-RID directory…
 - **R172** · An equivalent mutant and a coverage gap both report `survived`, and nothing in the record separates them · [R172.md](docs/roadmap/R172.md) · done — all three proposals resolved. 1 shipped (`6a8a14d`, operators declare an `EquivalenceRisk`). 2 REFUSED…
-- **R175** · `no-coverage` on a PUBLIC procedure is an inference, not an observation, and the inference is wrong · [R175.md](docs/roadmap/R175.md) · open — FIXED for the fenced default (`41daa29`) but the IMPACT is larger than this row assumed and is now…
+- **R175** · `no-coverage` on a PUBLIC procedure is an inference, not an observation, and the inference is wrong · [R175.md](docs/roadmap/R175.md) · closed 2026-10-23 — fixed for the fenced default (41daa29), now pinned at session level too…
 - **R179** · `empty-block` on a loop body is the largest non-termination source measured, and it was never counted · [R179.md](docs/roadmap/R179.md) · done (`d0e6c6c`) — `lethal.loop-skip` (Tier 1, 1.0.0) ships and `empty-block` cedes a `while` body to it. The…
 - **R181** · R13's marginal-site bar is self-extinguishing: applied today it refuses `swap-additive`, which we shipped and value · [R181.md](docs/roadmap/R181.md) · closed 2026-08-31 — the ruling landed on [[R013]]: effect grain, three admission grounds…
 - **R182** · R147's platform-app pin engaged only on a COLD cache, so the optimisation switched itself off whenever the cache was healthy · [R182.md](docs/roadmap/R182.md) · done (`al-runner-transport.ts`, `al-runner-backend.ts`) — the warm-cache sentence is now read, the two…
@@ -155,7 +155,7 @@ that ordering is the priority.
 - **R374** · Identity ordinals are numbered per batch, so twins in two batches share one identity key and --skip-known-survivors can skip a mutant on its twin's verdict · [R374.md](docs/roadmap/R374.md) · done (eab7e089)
 - **R385** · lethal verify cannot see a Microsoft dependency rebuilt or upgraded on the server while the test app's declared minimum version stays the same · [R385.md](docs/roadmap/R385.md) · done (e64bc53e)
 - **R389** · lethal verify cannot see an edit to a test-app codeunit that external code runs through a Variant or interface the test passed it · [R389.md](docs/roadmap/R389.md) · done (bdd95b17)
-- **R390** · R-371's reachable-set walk misses a test-app codeunit whose id the test reads from the platform (an AllObj loop); one item for shapes found after the build · [R390.md](docs/roadmap/R390.md) · open, filed 2026-10-01
+- **R390** · R-371's reachable-set walk misses a test-app codeunit whose id the test reads from the platform (an AllObj loop); one item for shapes found after the build · [R390.md](docs/roadmap/R390.md) · done (cff6eafe) — a reached record over AllObj, AllObjWithCaption, Object, Object Metadata or Application…
 - **R391** · An identity key carries no file or namespace, so removing a site in one file can renumber a twin in another, and --skip-known-survivors then reads the wrong verdict · [R391.md](docs/roadmap/R391.md) · done (baaf290b)
 - **R402** · The hang tag misses a loop-condition operand that sits inside an ACTIVE #if · [R402.md](docs/roadmap/R402.md) · done (65e5cad2)
 - **R403** · Test-app readers (testpage-scan, discovery, test-digest) read every #if arm: the test app's own build symbols are not modelled · [R403.md](docs/roadmap/R403.md) · closed 2026-10-06 — discovery fixed by R-403 (phases A-C); testpage-scan and test-digest measured to err only…
@@ -297,11 +297,12 @@ that ordering is the priority.
 - **R665** · a mutant run whose stop was confirmed but got no 408 is scored "no verdict, no quarantine" when its op then reads completed: the tombstone is the stop's own, so the BC session may still be alive while the run goes on · [R665.md](docs/roadmap/R665.md) · done (6a28db55)
 - **R672** · al-runner v3: the K1(a) guard recognizes v3's not-trusted refusal only at the start of the message, so a type-prefixed refusal would score as a kill · [R672.md](docs/roadmap/R672.md) · done (e11a42c6)
 - **R675** · al-runner v3: a failure-message prefix with a space or a `::` path is seen by neither K1(a) nor leg C · [R675.md](docs/roadmap/R675.md) · done (10fe5dc0)
-- **R680** · A resume can refuse a crash gap that spans a BC restart: record LethAL Control's serverGeneration at the first guard ask, and compare on resume · [R680.md](docs/roadmap/R680.md) · open, filed 2026-10-23
+- **R680** · A resume can refuse a crash gap that spans a BC restart: record LethAL Control's serverGeneration at the first guard ask, and compare on resume · [R680.md](docs/roadmap/R680.md) · done (6fcd38d5) — a bcdev run records serverGeneration before the first guard ask; --resume and --resume-run…
 - **R681** · an unknown `bcdev.coverageMode` in lethal.config.json is not refused: `validateBcDevConfig` returns the section unchecked, so a typo runs silently as `none` and `"line"` reaches the hub · [R681.md](docs/roadmap/R681.md) · done (c9e416de)
-- **R682** · after every identity-scheme bump, a gate baseline's byte-identical twins are text-UNVERIFIED until it is re-recorded, and nothing schedules that re-record · [R682.md](docs/roadmap/R682.md) · open, filed 2026-10-23
+- **R682** · after every identity-scheme bump, a gate baseline's byte-identical twins are text-UNVERIFIED until it is re-recorded, and nothing schedules that re-record · [R682.md](docs/roadmap/R682.md) · done (7c0337c7) — the rule is on docs/gates/README.md and checked by gate-pages.test.ts; today's lagging…
 - **R684** · lethal verify misses a test-app report, page, xmlport or query that another app runs by its id: the codeunit-id fold and fallback see codeunits only · [R684.md](docs/roadmap/R684.md) · done (ac8a7b02)
 - **R687** · After the release: fold the server's installed-app list (minus LethAL's own instrumented targets) into every verify digest, through a new LethAL Control procedure · [R687.md](docs/roadmap/R687.md) · open, filed 2026-10-23 — after the first release (orchestrator ruling)
+- **R690** · Re-record the seven gate baselines that lag IDENTITY_SCHEME (six BC gates and al-runner-v3's leg T), once, after R-604b decides whether the scheme moves to 42 · [R690.md](docs/roadmap/R690.md) · open, filed 2026-10-23 — waits on R-604b's scheme decision
 
 ## Product gaps a real project hits
 
@@ -367,7 +368,7 @@ that ordering is the priority.
 - **R239** · `flip-boolean-literal` can still make a loop that never exits: a literal NESTED in its condition, under a unary `not`, or governing its only exit from the body · [R239.md](docs/roadmap/R239.md) · done (88de04e4)
 - **R245** · Reach is measured only at a mutant's own statement: a call or block alone in a branch or case arm reports no reach · [R245.md](docs/roadmap/R245.md) · closed 2026-10-06 — stated limit: 3.4% of mutants (72,806 on BaseApp, CDO, DC, DO) have no reach and read…
 - **R252** · `lethal explain` refuses a `coverageMode: "none"` report that LethAL itself wrote, because its survivors carry no `coverageAttribution` · [R252.md](docs/roadmap/R252.md) · done (a7bd0c55)
-- **R253** · `doctor`'s API checks call `api/v2.0` on the OData base URL, which is the wrong port on `bc-linux`, so a healthy setup reports `ok: false` · [R253.md](docs/roadmap/R253.md) · open
+- **R253** · `doctor`'s API checks call `api/v2.0` on the OData base URL, which is the wrong port on `bc-linux`, so a healthy setup reports `ok: false` · [R253.md](docs/roadmap/R253.md) · done (5d524280) — measured on bc2: BC on Linux serves api/v2.0 on its API port only; with no bcdev.apiBaseUrl…
 - **R254** · A `reportextension` is never mutated: it is skipped as a non-carrier, though alc accepts the selector variable in one, and the index would not declare it either · [R254.md](docs/roadmap/R254.md) · done (2573f39b)
 - **R258** · lethal verify cannot see an edited test that did not cover the mutant, because a test is new only by identity against the source run's baseline · [R258.md](docs/roadmap/R258.md) · done (42f66228, 66146b08)
 - **R259** · lethal verify does not say whether a new test also kills other survivors in the same procedure (the overfitting signal, #16 requirement 4) · [R259.md](docs/roadmap/R259.md) · done (6bfc005b)
@@ -727,7 +728,9 @@ that ordering is the priority.
 - **R678** · al-runner v3: a --resume session whose batches all reuse their baseline snapshots records no baseline refusal, so no survivor gets its [v3-refused-test-nearby] note · [R678.md](docs/roadmap/R678.md) · done (3d78e671)
 - **R679** · bc-linux-setup's Continia P1 stop did not name `--accept-build`, so a server on a newer Microsoft build read as blocked when R594's accepted-build path was one flag away · [R679.md](docs/roadmap/R679.md) · done (84c7d4f6)
 - **R683** · Host step: re-record `envtool.baseline.json` at the current identity scheme on the next live envtool run (it is the last gate baseline with no scheme and no mutated-text hash) · [R683.md](docs/roadmap/R683.md) · open, filed 2026-10-23 — a HOST step for the owner (the env tool is host-only)
-- **R686** · bcdev: a test codeunit whose OnRun raises an error gets no method lines on BC, and LethAL reports it as a stale test app and stops the run · [R686.md](docs/roadmap/R686.md) · open, filed 2026-10-23
+- **R686** · bcdev: a test codeunit whose OnRun raises an error gets no method lines on BC, and LethAL reports it as a stale test app and stops the run · [R686.md](docs/roadmap/R686.md) · done (388ea7c9)
+- **R688** · bcdev: a mutant that makes a test codeunit's OnRun raise stops the whole session; score it per mutant instead (an unmutated confirm, then error test-discovery-failed) · [R688.md](docs/roadmap/R688.md) · open, filed 2026-10-23
+- **R689** · LethAL Control could report a test codeunit's own OnRun error when suite discovery lists none of its methods (today LethAL can only name the likely cause) · [R689.md](docs/roadmap/R689.md) · open, filed 2026-10-23
 
 ---
 

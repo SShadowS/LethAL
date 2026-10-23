@@ -298,6 +298,10 @@ export interface RunRow {
   /** R601: `runs.resource_key`, the server tier the run ran on (`quarantineResourceKey`). `null`
    *  on a run with no tier identity (al-runner, or no server fields): never equal to anything. */
   readonly resourceKey: string | null;
+  /** R680: `runs.server_generation`, LethAL Control's `serverGeneration` when the session started.
+   *  `null` on a run with no lease (al-runner) or recorded before R680: no resume carries from it
+   *  into a session that has a generation. */
+  readonly serverGeneration: string | null;
   /** R586: `runs.runner_build` (an al-runner-v3 run's build), `null` on every other run. */
   readonly runnerBuild: string | null;
   /** R585: the sorted keys (`testKeyOf`) of the tests the run's baseline was given. `null` on a
@@ -788,6 +792,8 @@ export class ResultsStore {
       // R360: the quarantine resource key of the run's server; NULL for al-runner and for a
       // backend with no server. `finishRun` prunes within (app_id, resource_key).
       ["runs", "resource_key TEXT", runCols],
+      // R680: the server's generation when the session started; NULL with no lease, or before R680.
+      ["runs", "server_generation TEXT", runCols],
       // R442: NULL on an older row, read as untrusted: no history or resume carries from it.
       ["runs", "carry_hidden TEXT", runCols],
       // R391: NULL on an older row, read as "not recorded": no rule-1 carry from it.
@@ -839,6 +845,9 @@ export class ResultsStore {
     /** R360: `quarantineResourceKey` of the run's server. Absent (al-runner, a backend with no
      *  server) writes NULL, which groups with NULL when `finishRun` prunes. */
     resourceKey?: string;
+    /** R680: LethAL Control's `serverGeneration` when the session started. Absent (no lease) writes
+     *  NULL. */
+    serverGeneration?: string;
     /** R247: the test app this run measures against. Absent is recorded NULL, "unknown", which
      *  no resume or history read ever matches. */
     testAppHash?: string;
@@ -883,8 +892,8 @@ export class ResultsStore {
       info.testAppDeps !== undefined;
     const r = this.db
       .query(
-        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, resource_key, test_app_hash, test_app_proven, test_app_deps, test_digests, test_digest_parts, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, runner_build, test_scope) " +
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, resource_key, server_generation, test_app_hash, test_app_proven, test_app_deps, test_digests, test_digest_parts, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, runner_build, test_scope) " +
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
       )
       .get(
         info.projectPath,
@@ -895,6 +904,7 @@ export class ResultsStore {
         JSON.stringify([...new Set(info.buildSymbols)].sort()),
         info.coverageMode,
         info.resourceKey ?? null,
+        info.serverGeneration ?? null,
         info.testAppHash ?? null,
         proven ? 1 : null,
         proven ? (info.testAppDeps ?? null) : null,
@@ -1267,11 +1277,12 @@ export class ResultsStore {
   getRun(runId: number): RunRow | null {
     const row = this.db
       .query(
-        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, runner_build, resource_key, test_scope FROM runs WHERE id = ?",
+        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, runner_build, resource_key, server_generation, test_scope FROM runs WHERE id = ?",
       )
       .get(runId) as {
       test_scope: string | null;
       resource_key: string | null;
+      server_generation: string | null;
       dependency_source_sha256: string | null;
       runner_build: string | null;
       test_app_proven: number | null;
@@ -1310,6 +1321,7 @@ export class ResultsStore {
       dependencySourceSha256: row.dependency_source_sha256,
       runnerBuild: row.runner_build,
       resourceKey: row.resource_key,
+      serverGeneration: row.server_generation,
       testScope: parseTestScope(row.test_scope, row.id),
     };
   }
@@ -1939,27 +1951,40 @@ export class ResultsStore {
    * may have measured a wrong or stale binary, and a test green there but red on the real one
    * would be sent as covering and could score a false timeout kill.
    * R513: and never a snapshot of a batch in `lost_batches`, even when `onLost`'s drop failed.
+   * R680: with `serverGeneration` (a session with a lease), only from a run on that generation: a
+   * baseline recorded before a server restart describes apps and data that may be gone, and a test
+   * green then but red now would be sent as covering and score a false kill. `=` never matches
+   * NULL, so a run recorded before R680 lends none. Absent (no server), no filter.
    */
   findBaselineSnapshot(
     batchHash: string,
     testAppHash: string,
     testAppDeps: string,
     coverageMode: CoverageMode,
+    serverGeneration?: string,
   ): BaselineSnapshot | null {
     const row = this.db
       .query(
         `SELECT run_id, batch_index, batch_hash, test_app_hash, payload FROM baseline_snapshots
-         WHERE batch_hash = ? AND test_app_hash = ?
-           AND run_id IN (SELECT id FROM runs WHERE COALESCE(identity_scheme, 1) = ? AND coverage_mode = ?
+         WHERE batch_hash = ?1 AND test_app_hash = ?2
+           AND run_id IN (SELECT id FROM runs WHERE COALESCE(identity_scheme, 1) = ?3 AND coverage_mode = ?4
              AND test_app_hash = baseline_snapshots.test_app_hash
              AND test_app_proven = 1
-             AND test_app_deps = ?
+             AND test_app_deps = ?5
+             AND (?6 IS NULL OR server_generation = ?6)
              AND COALESCE(test_app_hash, '') NOT LIKE '%|pending')
            AND NOT EXISTS (SELECT 1 FROM suspect_snapshots s WHERE s.run_id = baseline_snapshots.run_id AND s.batch_index = baseline_snapshots.batch_index)
            AND NOT EXISTS (SELECT 1 FROM lost_batches l WHERE l.run_id = baseline_snapshots.run_id AND l.batch_index = baseline_snapshots.batch_index)
          ORDER BY id DESC LIMIT 1`,
       )
-      .get(batchHash, testAppHash, IDENTITY_SCHEME, coverageMode, testAppDeps) as {
+      .get(
+        batchHash,
+        testAppHash,
+        IDENTITY_SCHEME,
+        coverageMode,
+        testAppDeps,
+        serverGeneration ?? null,
+      ) as {
       run_id: number;
       batch_index: number;
       batch_hash: string;
