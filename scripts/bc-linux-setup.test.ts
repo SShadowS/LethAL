@@ -1148,4 +1148,20 @@ describe("R624: a failed dev/packages read stops every reader by its status", ()
     );
     expect(summary.join("\n")).not.toContain("publish   Continia Core");
   });
+
+  test("decideContinia (R679): Microsoft on another build stops, naming that build and --accept-build", async () => {
+    const c = connBy((publisher, name) =>
+      publisher === "Microsoft"
+        ? new Response(pkgOf(name, "Microsoft", "28.4.53241.56646"), { status: 200 })
+        : new Response("not found", { status: 404 }),
+    );
+    const files = [{ bytes: pkgOf("Continia Core", "Continia Software", "28.5.0.1") }];
+    const summary: string[] = [];
+    const r = await decideContinia(realContiniaOps(c), files, summary, undefined);
+    expect(r.ok).toBe(false);
+    expect(r.toPublish).toEqual([]);
+    const stopped = summary.find((l) => l.includes("STOPPED"));
+    expect(stopped).toContain("Base Application 28.4.53241.56646");
+    expect(stopped).toContain("--accept-build");
+  });
 });
