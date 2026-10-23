@@ -16,6 +16,8 @@ import type { V3Row } from "../src/al-runner-v3-backend";
 import {
   BC_END_OF_TEST_TEXT,
   BC_HTTP_INTERNAL_TEXT,
+  BURN_BUSY_LOOPS,
+  BURN_HUGE,
   MESSAGE_PREFIX_REASON,
   type V3ContractResult,
   classifySleep,
@@ -59,6 +61,13 @@ const row = (
   ...(o.notRun === true ? { notRun: true } : {}),
 });
 const doc = (tests: unknown[]) => JSON.stringify({ tests });
+/** R693 r14b: the huge burn's row when v3 stopped it at the 2 s limit, after `durationMs`. */
+const burnRow = (durationMs: number) =>
+  row(50656, "CpuBurnLong", "error", {
+    notRun: true,
+    message: "Test exceeded 2s timeout.",
+    durationMs,
+  });
 const NOT_TRUSTED_MESSAGE =
   "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (HangsDirty: did not run (the test used more than the time limit of 3 s of CPU time and was stopped (--test-timeout-secs)): it can change the global variable Probe Cut.Dirty that this test reads, so the state it would have left is not BC's; this failure is not trusted: dirty";
 const CUT_TIMEOUT = row(50652, "HangsDirty", "error", {
@@ -91,6 +100,7 @@ const DEP_SKIP_STDERR =
 
 /** A fake alpha.2 that answers every probe call as measured; `over` replaces one answer by key. */
 function fakeV3(over: Over = {}): SpawnFn {
+  let burnCalls = 0;
   return async (argv, _opts) => {
     const a = argv[0] === "/usr/bin/taskset" ? argv.slice(3) : argv;
     const has = (x: string) => a.includes(x);
@@ -105,6 +115,7 @@ function fakeV3(over: Over = {}): SpawnFn {
               ? "quoted"
               : "exact"
             : `cu${val("--codeunit")}${has("--define") ? "-def" : ""}${argv[0] === "/usr/bin/taskset" ? "-shared" : ""}${a.some((x) => x.includes("/broken/")) ? "-broken" : ""}${a.some((x) => x.includes("tests-pinned")) ? "-pinned" : ""}${has("--test-timeout-secs") ? `-n${val("--test-timeout-secs")}` : ""}`;
+    if (key === "cu50656-shared-n2") burnCalls += 1;
     const o = over[key]?.(a);
     if (o !== undefined) return { stderr: "", ...o };
     if (has("--coverage-json")) {
@@ -201,18 +212,10 @@ function fakeV3(over: Over = {}): SpawnFn {
           row(50651, "CpuHang", "error", { notRun: true, message: "Test exceeded 3s timeout." }),
         ]),
       },
-      "cu50656-n2": {
+      // R693 (r14b): call A (alone, stopped at about 2 s) then call B (beside 7 loops, stopped late).
+      "cu50656-shared-n2": {
         exitCode: 7,
-        stdout: doc([
-          row(50656, "CpuBurnLong", "error", {
-            notRun: true,
-            message: "Test exceeded 2s timeout.",
-          }),
-        ]),
-      },
-      "cu50658-shared-n2": {
-        exitCode: 0,
-        stdout: doc([row(50658, "CpuBurnShort", "pass", { durationMs: 3105 })]),
+        stdout: doc([burnRow(burnCalls === 1 ? 2010 : 16000)]),
       },
       cu50653: {
         exitCode: 7,
@@ -596,39 +599,211 @@ describe("§8 the contract probe", () => {
     });
     expect(v3ContractRefusals(r).join("\n")).toMatch(/timeout-classified/);
   });
+});
 
-  test("timeout-is-cpu diverges when the shared-core run is ALSO stopped (a wall-time stop)", async () => {
-    const r = await probe({
-      "cu50658-shared-n2": () => ({
-        exitCode: 7,
-        stdout: doc([
-          row(50658, "CpuBurnShort", "error", {
-            notRun: true,
-            message: "Test exceeded 2s timeout.",
-          }),
-        ]),
-      }),
+describe("R693 r14b: timeout-is-cpu runs one huge burn alone, then beside busy loops", () => {
+  /** "hang-rows": killed by the process timeout, but its stdout already holds a late timeout row. */
+  type Ans = { exitCode: number; stdout: string } | "hang" | "hang-rows" | undefined;
+  /**
+   * Runs the probe; `a` and `b` answer the first (alone) and second (shared) call of codeunit 50656.
+   * "hang" waits for the call's process timeout and returns as a killed process does.
+   */
+  const run = async (a: Ans, b: Ans, burnerThrowsAt = 0) => {
+    const events: string[] = [];
+    const argvs: (readonly string[])[] = [];
+    const guards: (number | undefined)[] = [];
+    let starts = 0;
+    let n = 0;
+    const base = fakeV3({
+      "cu50656-shared-n2": () => {
+        const ans = n === 1 ? a : b;
+        return ans === "hang" || ans === "hang-rows" ? undefined : ans;
+      },
     });
-    expect(r.facts.find((f) => f.fact === "timeout-is-cpu")?.verdict).toBe("diverged");
+    const probeP = runV3ContractProbe({
+      alRunnerPath: "/fake/alrunner",
+      expectedVersion: VERSION,
+      packagesDir: "/fake/deps",
+      bcVersion: BC,
+      alcPath: "/fake/alc",
+      alcIo: fakeAlcIo,
+      tasksetPath: "/usr/bin/taskset",
+      startBurner: () => {
+        starts += 1;
+        if (starts === burnerThrowsAt) throw new Error("burner failed to start");
+        events.push("burner-start");
+        return { kill: () => events.push("burner-kill") };
+      },
+      burnGuardMs: 20,
+      spawn: async (argv, o) => {
+        const cu = argv.find((_, i) => argv[i - 1] === "--codeunit");
+        if (cu === "50656") {
+          n += 1;
+          argvs.push(argv);
+          guards.push(o?.signal !== undefined ? 1 : undefined);
+          events.push(`call-${n === 1 ? "A" : "B"}`);
+          const ans = n === 1 ? a : b;
+          if (ans === "hang" || ans === "hang-rows") {
+            // A process that never ends: only the call's process timeout (abort signal) stops it.
+            await new Promise<void>((resolve) => {
+              o?.signal?.addEventListener("abort", () => resolve());
+            });
+            return {
+              exitCode: -1,
+              stdout: ans === "hang-rows" ? doc([burnRow(16000)]) : "",
+              stderr: "",
+            };
+          }
+        }
+        return base(argv, o);
+      },
+      serveSpawn: fakeServe().spawn,
+      libraryAssertApp: LIBRARY_ASSERT,
+    });
+    if (burnerThrowsAt > 0) await probeP.catch(() => undefined);
+    const r = burnerThrowsAt > 0 ? undefined : await probeP;
+    return { r, events, argvs, guards, f: r?.facts.find((x) => x.fact === "timeout-is-cpu") };
+  };
+
+  const stopped = (ms: number) => ({ exitCode: 7, stdout: doc([burnRow(ms)]) });
+  const passed = {
+    exitCode: 0,
+    stdout: doc([row(50656, "CpuBurnLong", "pass", { durationMs: 900 })]),
+  };
+  const noRows = { exitCode: 7, stdout: doc([]) };
+  const D = BURN_HUGE;
+
+  test("the burn is one huge constant in the tests app source, and there are 7 busy loops", async () => {
+    expect(D).toBe(2_000_000_000);
+    expect(BURN_BUSY_LOOPS).toBe(7);
+    let src = "";
+    const base = fakeV3();
+    await runV3ContractProbe({
+      alRunnerPath: "/fake/alrunner",
+      expectedVersion: VERSION,
+      packagesDir: "/fake/deps",
+      bcVersion: BC,
+      alcPath: "/fake/alc",
+      alcIo: fakeAlcIo,
+      tasksetPath: "/usr/bin/taskset",
+      startBurner: () => ({ kill: () => {} }),
+      spawn: async (argv, o) => {
+        if (argv.includes("50656"))
+          src = await Bun.file(join(argv[argv.length - 1] ?? "", "src", "Burn.Codeunit.al")).text();
+        return base(argv, o);
+      },
+      serveSpawn: fakeServe().spawn,
+      libraryAssertApp: LIBRARY_ASSERT,
+    });
+    expect(src).toContain(`Logic.Burn(${D})`);
   });
 
-  test("timeout-is-cpu diverges when the alone run is NOT stopped (no CPU timeout at all)", async () => {
-    const r = await probe({
-      "cu50656-n2": () => ({ exitCode: 0, stdout: doc([row(50656, "CpuBurnLong", "pass")]) }),
-    });
-    expect(r.facts.find((f) => f.fact === "timeout-is-cpu")?.verdict).toBe("diverged");
+  test("matches: A stopped alone, B stopped late (over 3000 ms) beside 7 busy loops; both rows and walls shown", async () => {
+    const { f, events } = await run(stopped(2010), stopped(16000));
+    expect(f?.verdict).toBe("matches");
+    expect(events).toEqual([
+      "call-A",
+      ...Array(7).fill("burner-start"),
+      "call-B",
+      ...Array(7).fill("burner-kill"),
+    ]);
+    expect(f?.measured).toMatch(
+      /A .*"durationMs":2010.*wall \d+ ms\); B .*"durationMs":16000.*wall \d+ ms/,
+    );
+    expect(f?.measured).toContain("Test exceeded 2s timeout.");
   });
 
-  test("timeout-is-cpu diverges when the shared pass did not actually take over N of wall", async () => {
-    const r = await probe({
-      "cu50658-shared-n2": () => ({
-        exitCode: 0,
-        stdout: doc([row(50658, "CpuBurnShort", "pass", { durationMs: 1500 })]),
-      }),
-    });
-    expect(r.facts.find((f) => f.fact === "timeout-is-cpu")?.verdict).toBe("diverged");
+  test("both calls are pinned to core 0, limit 2, with a process timeout", async () => {
+    const { argvs, guards } = await run(stopped(2010), stopped(16000));
+    expect(argvs).toHaveLength(2);
+    for (const argv of argvs) {
+      expect(argv.slice(0, 3)).toEqual(["/usr/bin/taskset", "-c", "0"]);
+      expect(argv[argv.indexOf("--test-timeout-secs") + 1]).toBe("2");
+    }
+    expect(guards).toEqual([1, 1]);
   });
 
+  test("the default process timeout is 60 s (unset hook)", async () => {
+    const seen: (AbortSignal | undefined)[] = [];
+    const base = fakeV3();
+    await runV3ContractProbe({
+      alRunnerPath: "/fake/alrunner",
+      expectedVersion: VERSION,
+      packagesDir: "/fake/deps",
+      bcVersion: BC,
+      alcPath: "/fake/alc",
+      alcIo: fakeAlcIo,
+      tasksetPath: "/usr/bin/taskset",
+      startBurner: () => ({ kill: () => {} }),
+      spawn: async (argv, o) => {
+        if (argv.includes("50656")) seen.push(o?.signal);
+        return base(argv, o);
+      },
+      serveSpawn: fakeServe().spawn,
+      libraryAssertApp: LIBRARY_ASSERT,
+    });
+    expect(seen).toHaveLength(2);
+    for (const s of seen) expect(s).toBeDefined();
+  });
+
+  test("diverged: A is not stopped (it passed: no limit at all), and B never runs", async () => {
+    const { f, events } = await run(passed, stopped(16000));
+    expect(f?.verdict).toBe("diverged");
+    expect(events).toEqual(["call-A"]);
+  });
+
+  test("diverged: A killed by the process timeout (no limit stopped it), and B never runs", async () => {
+    const { f, events } = await run("hang", stopped(16000));
+    expect(f?.verdict).toBe("diverged");
+    expect(f?.measured).toMatch(/killed by the 20 ms process timeout/);
+    expect(events).toEqual(["call-A"]);
+  });
+
+  test("diverged: B stopped at durationMs 2050 (a wall-like stop)", async () => {
+    const { f } = await run(stopped(2010), stopped(2050));
+    expect(f?.verdict).toBe("diverged");
+  });
+
+  test("the 3000 ms line: 3000 diverges, 3001 matches", async () => {
+    expect((await run(stopped(2010), stopped(3000))).f?.verdict).toBe("diverged");
+    expect((await run(stopped(2010), stopped(3001))).f?.verdict).toBe("matches");
+  });
+
+  test("diverged: B passes (not stopped) although A was: the limit contract is broken", async () => {
+    const { f } = await run(stopped(2010), passed);
+    expect(f?.verdict).toBe("diverged");
+    // Even when it ran long (over 3000 ms), a pass is not a timeout row.
+    const long = {
+      exitCode: 0,
+      stdout: doc([row(50656, "CpuBurnLong", "pass", { durationMs: 9000 })]),
+    };
+    expect((await run(stopped(2010), long)).f?.verdict).toBe("diverged");
+  });
+
+  test("unmeasurable: B was killed by the process timeout even though its stdout holds a late timeout row", async () => {
+    const { f } = await run(stopped(2010), "hang-rows");
+    expect(f?.verdict).toBe("unmeasurable");
+  });
+
+  test("unmeasurable: B killed by the process timeout (cannot be read)", async () => {
+    const { f, events } = await run(stopped(2010), "hang");
+    expect(f?.verdict).toBe("unmeasurable");
+    expect(events.filter((e) => e === "burner-kill")).toHaveLength(7);
+  });
+
+  test("unmeasurable: A has no row, and B has no row", async () => {
+    expect((await run(noRows, stopped(16000))).f?.verdict).toBe("unmeasurable");
+    expect((await run(stopped(2010), noRows)).f?.verdict).toBe("unmeasurable");
+  });
+
+  test("a busy loop already started is killed when the next one fails to start (finally)", async () => {
+    const { events } = await run(stopped(2010), stopped(16000), 2);
+    expect(events.filter((e) => e === "burner-start").length).toBe(1);
+    expect(events.filter((e) => e === "burner-kill").length).toBe(1);
+  });
+});
+
+describe("§8 the contract probe, continued", () => {
   test("a predefined symbol diverges predefined-symbols", async () => {
     const r = await probe({
       cu50191: () => ({

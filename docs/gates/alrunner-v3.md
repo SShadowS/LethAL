@@ -223,8 +223,9 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
   worktree was dirty (a dirty `pass` is refused), and give its outcome from its legs over the exact leg set.
   Dirty means any tracked change, or any untracked file under `fixtures/` or `packages/` (it would compile into
   a leg); other untracked files are the gate's own outputs. `.gated`'s `lethalCommit` is also the full sha.
-- `timeout-is-cpu` is GATE-ONLY: its burns are fixed iteration counts calibrated on one machine, so only leg C
-  measures it, and a session trusts the gated build's record instead of re-burning (M1). That trust is per v3
+- `timeout-is-cpu` is GATE-ONLY: since r14b it runs one huge burn (2,000,000,000 steps) at the 2 s limit, pinned to
+  core 0: alone it must be stopped, and beside seven busy loops it must ALSO be stopped, with a durationMs over
+  3000 ms (a CPU-time stop is late in wall time), so only leg C measures it, and a session trusts the gated build's record instead of re-burning (M1). That trust is per v3
   BUILD: a later LethAL change to how a call's timeout is sent (`v3CallArgv`, `stopSecondsOf`) is not covered by
   the old record and needs `bun scripts/al-runner-v3-update.ts --regate <commit>`.
 - `.gated` names a commit on `lethal/r586`. The orchestrator merges with `--no-ff`, so that commit stays reachable
@@ -324,3 +325,15 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
   and the serve daemon's stderr after every request), and the fact pins that the gated build writes it. **The
   daily update gate (`al-runner-v3-update.ts`, `--edge`) now refuses a build that does not write that line.**
   Predicted `matches` on alpha.2 and edge; no other figure or baseline moves.
+- 2026-10-23: r14b ([[R693]], coord task R-693) replaces `timeout-is-cpu`'s fixed burns. r6's counts stopped
+  working that day: 55M steps now cost 1.6-3.8 s of CPU pinned to core 0 (r6 measured 1.5 s), so the short burn
+  flipped between a pass and a stop with core-0 conditions, and every leg C and the daily update gate read
+  gate-fail. A calibrated design (r14) also flipped in measured runs, because the burn's speed moved about 2x
+  between the calibration and the burn. r14b needs no calibration: one huge burn (2,000,000,000 steps, never
+  finishes), two calls pinned to core 0 at a 2 s limit. A (alone) must be a "Test exceeded 2s timeout." row. B
+  (beside seven busy loops, killed in a `finally`) must be that row too, with durationMs over 3000 ms (1.5 times
+  the limit; the burn gets about 1/8 of the core, so a CPU-time stop is late, a wall-time stop is at about 2000).
+  Each call has a 60 s process timeout: a killed A reads `diverged` (no limit), a killed B `unmeasurable`. A
+  missing row is `unmeasurable`; B not stopped, or stopped at 3000 ms or less, is `diverged`. Measured offline on
+  alpha.2 in three back-to-back leg C runs: A 2.0-2.05 s, B 16.0-16.1 s, all `matches`. Fact count unchanged (28).
+  Predicted `matches` on alpha.2 and edge.

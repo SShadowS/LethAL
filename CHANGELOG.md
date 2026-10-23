@@ -226,6 +226,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **Leg C's `timeout-is-cpu` fact no longer depends on CPU speed** ([R693](docs/roadmap/R693.md)). Its fixed burn
+  counts stopped working on 2026-10-23 (the same burn now costs more CPU than the 2 s limit on a loaded core), so
+  every v3 leg C and the daily update gate read gate-fail. It now runs one huge burn (2,000,000,000 steps) twice
+  at a 2 s limit on core 0: alone it must be stopped, and beside seven busy loops it must also be stopped, but
+  late (over 3000 ms), which tells a CPU-time limit from a wall-time one. Each call has a 60 s process timeout.
+  Gate and probe code only; no mutation result changes.
 - **The worker fan-out is deleted from `runSession`, and `--compile-concurrency` is gone** ([R671](docs/roadmap/R671.md)).
   Since R654 no backend accepts `--workers` above 1, so the fan-out (`backendFactory`, sharding, per-worker deploy and
   bisection, `executeCovering`) could not run. `--workers 1` still works and `--workers 2` is still refused by name.
