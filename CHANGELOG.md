@@ -226,6 +226,10 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **An unknown `bcdev.coverageMode` is refused by name** ([R681](docs/roadmap/R681.md)). Only `"procedure"`,
+  `"none"` and `"fenced"` are accepted, and the message lists them. Before, a typo such as `"Fenced"` ran silently as
+  `none`, and `"line"`, a hub mode the docs never offer, reached the hub. An explicit `null` is refused too: leave
+  the field out for the default.
 - **LethAL now stops a BASELINE test, a kill confirm or a warm replay that runs past its budget,
   even without `--stop-hung-sessions`** (R658). The flag still governs mutants. Before, such a run
   was abandoned at its budget and kept running on the BC server, so its op held the control-app
