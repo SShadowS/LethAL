@@ -12,6 +12,7 @@ import {
   isObjectContainer,
   isProcedureLike,
   isStatementPosition,
+  objectDeclarationsOf,
   planEdits,
 } from "@lethal/engine";
 import type { SpanEdit } from "@lethal/engine";
@@ -406,11 +407,17 @@ export const CARRIER_KINDS: readonly ALNodeKind[] = [
 /**
  * Names the object declaration(s) this file actually contains, for the "cannot instrument this
  * object kind" error below and for `generateMutationSet`'s skip warning. `wrapRoot(parseAL(src))`
- * yields a `source_file` whose named children are the object declarations; a caller that passed a
- * declaration node straight in is handled too.
+ * yields a `source_file`; `objectDeclarationsOf` looks inside every `#if` wrapper (R308).
+ * A caller that passed a declaration node straight in is handled too.
  */
 export function describeObjectKinds(root: ALSyntaxNode): string {
-  const candidates = root.rawKind.endsWith("_declaration") ? [root] : root.namedChildren;
+  // Direct children stay as they are (a top-level `preproc_split_declaration` still names its object);
+  // only a `#if` wrapper is replaced by what it holds.
+  const candidates = root.rawKind.endsWith("_declaration")
+    ? [root]
+    : root.namedChildren.flatMap((c) =>
+        c.rawKind === "preproc_conditional_object" ? objectDeclarationsOf(c) : [c],
+      );
   const kinds = [
     ...new Set(
       candidates
