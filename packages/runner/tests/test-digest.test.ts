@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, test } from "bun:test";
 import { initParser } from "@lethal/engine";
 import { testsInAlSource } from "../src/discovery";
 import { testDigestKey, testDigestsOfSources } from "../src/test-digest";
-import { buildTestAppModel, newReachState, Scanner } from "../src/testpage-scan";
+import { Scanner, buildTestAppModel, newReachState } from "../src/testpage-scan";
 
 beforeAll(async () => {
   await initParser();
