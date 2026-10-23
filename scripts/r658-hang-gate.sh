@@ -10,10 +10,14 @@
 #
 # Injectable for scripts/r658-hang-gate.test.ts (defaults are the live values):
 #   LETHAL_COORD_ROOT (marker dir <root>/machine/out-of-use, resolved as in
-#   packages/runner/itest/out-of-use.ts), R658_EVIDENCE_DIR, R658_WORKTREE,
-#   R658_BEAT_SECS (heartbeat interval, 60), R658_HOLD_MAX_BEATS (hold loop cap; unset = forever).
+#   packages/runner/itest/out-of-use.ts), R658_EVIDENCE_DIR, R658_BEAT_SECS (heartbeat interval,
+#   default 60; a number > 0 and <= 60). Test-only, refused unless R658_EVIDENCE_DIR is set:
+#   R658_WORKTREE, R658_HOLD_MAX_BEATS (hold loop cap; unset = forever).
 # kraken, bun, git and openssl are found on PATH.
 set -u
+# F4: the gate's command-line prefix is the only source of the owner token; no inherited value
+# reaches any child.
+unset LETHAL_OUT_OF_USE_OWNER
 SRV=${1:-}
 case "$SRV" in
   bc2) WANT="server=192.168.2.157:7149" ;;
@@ -30,15 +34,25 @@ ROOT=${LETHAL_COORD_ROOT:-}
 [ -n "$ROOT" ] || { [ -n "${KRAKEN_PROJECT:-}" ] && ROOT=${CG_COORD_ROOT:-}; }
 ROOT=${ROOT:-/coord}
 [ -d "$ROOT/machine" ] || { echo "refused: $ROOT/machine does not exist; the coord root is wrong"; exit 2; }
+# F3: the test-only knobs are refused unless R658_EVIDENCE_DIR is set too, so a live run cannot
+# carry one by accident.
+for k in R658_HOLD_MAX_BEATS R658_WORKTREE; do
+  if [ -n "${!k+x}" ] && [ -z "${R658_EVIDENCE_DIR:-}" ]; then
+    echo "refused: $k is test-only and needs R658_EVIDENCE_DIR"; exit 2
+  fi
+done
 H=${R658_EVIDENCE_DIR:-$ROOT/handoff/R-658/hang-$SRV}
 WT=${R658_WORKTREE:-/work/lethal-wt/r658}
 OOU=$ROOT/machine/out-of-use/$SRV.md
 BEAT=${R658_BEAT_SECS:-60}
+{ [[ "$BEAT" =~ ^[0-9]+(\.[0-9]+)?$ ]] && awk -v b="$BEAT" 'BEGIN { exit !(b > 0 && b <= 60) }'; } \
+  || { echo "refused: R658_BEAT_SECS='$BEAT' must be a number > 0 and <= 60"; exit 2; }
 MAXB=${R658_HOLD_MAX_BEATS:-}
+[ -z "$MAXB" ] || [[ "$MAXB" =~ ^[0-9]+$ ]] || { echo "refused: R658_HOLD_MAX_BEATS='$MAXB' is not a count"; exit 2; }
 CFG="lethal.config.$SRV.json"
 STATE="$H/baseline-leg.state"
 # (a) An existing marker (a STOP, a lapsed hold, an unreviewed failure) refuses before anything else.
-[ -e "$OOU" ] && { echo "refused: $OOU exists"; cat "$OOU"; exit 2; }
+[ -e "$OOU" ] && { echo "refused: $OOU exists"; grep -v '^owner:' "$OOU"; exit 2; }
 mkdir -p "$H" "$ROOT/machine/out-of-use"
 cd "$WT" || exit 9
 # Offline checks, before any lease: a clean worktree, and the config's target line (no login printed).
@@ -91,7 +105,8 @@ release() {
 hold() {
   trap - EXIT INT TERM
   kill "$hb" 2>/dev/null
-  mark "STOP or hold: $1. The control-app lease and lethal doctor may read $SRV CLEAN; do not trust that."
+  mark "STOP or hold: $1. The control-app lease and lethal doctor may read $SRV CLEAN; do not trust that." \
+    || echo "!!! the STOP/hold marker $OOU could NOT be written; the coord lease is still held"
   msg="STOP: $SRV coord lease HELD, do not release until the owner restart + re-setup"
   echo "$msg"
   echo "LANE: SendMessage lethal-orchestrator NOW: $SRV STOP ($1), marker $OOU"
@@ -103,7 +118,10 @@ hold() {
 }
 trap release EXIT
 rm -f "$STATE"
-mark "in use by an R-658 itest:hang run (started $(date -u +%FT%TZ)); not yet finished" "$OWNER"
+# F2: noclobber, so a marker that appeared after (a) is never overwritten. On failure the EXIT trap
+# releases the lease, and no gate has started.
+( set -C; mark "in use by an R-658 itest:hang run (started $(date -u +%FT%TZ)); not yet finished" "$OWNER" ) 2>/dev/null \
+  || { echo "refused: $OOU appeared or could not be written"; exit 2; }
 echo "$(date -u +%T) start at $SHA on $SRV"
 sig=""
 trap 'sig=INT' INT
@@ -121,6 +139,9 @@ case "$(grep -m1 '^\[itest target\]' "$H/hang.log")" in
 esac
 case "$g:$st" in
   0:passed) rm -f "$OOU"; exit 0 ;;
-  0:absent|1:passed|1:absent) mark "gate exit $g, leg $st: released, believed clean; lane reviews and clears"; exit "$g" ;;
+  0:absent|1:passed|1:absent)
+    mark "gate exit $g, leg $st: released, believed clean; lane reviews and clears" \
+      || echo "!!! the 'believed clean' marker $OOU could NOT be written; check it by hand"
+    exit "$g" ;;
 esac
 hold "gate exit $g, leg $st"
