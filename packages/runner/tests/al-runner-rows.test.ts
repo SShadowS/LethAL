@@ -6,7 +6,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   AL_RUNNER_UNCLASSIFIED_ERROR,
-  V3_TYPE_PREFIX,
+  V3_REFUSAL_PREFIX,
   isV3RefusalText,
   parseReportedStopMs,
   verdictFromRunnerTest,
@@ -184,39 +184,39 @@ describe("verdictFromRunnerTest, direct (R654 S1 r1 M2): the R534 rules on the f
   });
 });
 
-// R672 (plan docs/superpowers/plans/2026-10-23-r672-v3-refusal-prefix.md §2): K1(a) and leg C's
-// `message-has-no-type-prefix` read ONE prefix. The fact's regex is `^V3_TYPE_PREFIX`.
-describe("R672: V3_TYPE_PREFIX ties K1(a) to the leg-C fact", () => {
-  const fact = new RegExp(`^${V3_TYPE_PREFIX}`);
+// R675 (plan docs/superpowers/plans/2026-10-23-r675-v3-refusal-marker-anywhere.md §3): K1(a), the
+// serve-keep rule and the defect facts read v3's refusal marker ANYWHERE; no prefix model is left.
+describe("R675: isV3RefusalText reads the marker anywhere", () => {
   const REFUSAL = "NotRun: out-of-scope: x";
-  const PREFIXES = [
+  const BEFORE = [
+    "",
     "X: ",
     "X.Y: ",
-    "NavNCLDialogException: ",
-    "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: ",
-    "Error: ",
-    "_a1: ",
     "Runtime error: ",
-    "a::b: ",
+    "al_runtime::Error: ",
+    "A: B: ",
     "x ",
+    "[x] ",
     "Assert.AreEqual failed. Expected: ",
-    "1X: ",
-    ": ",
   ];
-  test("for each prefix, the fact matches p+boom exactly when K1 matches p+refusal", () => {
-    for (const p of PREFIXES) {
-      expect([p, fact.test(`${p}boom`)]).toEqual([p, isV3RefusalText(`${p}${REFUSAL}`)]);
-    }
-    // The six one-word prefixes are seen by both; the other six by neither.
-    expect(PREFIXES.filter((p) => isV3RefusalText(`${p}${REFUSAL}`))).toEqual(PREFIXES.slice(0, 6));
+  test("true for the marker at 0 and after any text", () => {
+    expect(BEFORE.map((p) => [p, isV3RefusalText(`${p}${REFUSAL}`)])).toEqual(
+      BEFORE.map((p) => [p, true]),
+    );
   });
-  test("the empty prefix: K1 true (today's unprefixed refusal), the fact false", () => {
-    expect([isV3RefusalText(REFUSAL), fact.test("boom")]).toEqual([true, false]);
+  test("the marker is the one constant, V3_REFUSAL_PREFIX", () => {
+    expect(V3_REFUSAL_PREFIX).toBe("NotRun: out-of-scope:");
   });
-  test("A: B: (a chain): the fact true (it refuses the build), K1 false", () => {
-    expect([fact.test("A: B: boom"), isV3RefusalText(`A: B: ${REFUSAL}`)]).toEqual([true, false]);
-  });
-  test("undefined is no refusal", () => {
-    expect(isV3RefusalText(undefined)).toBe(false);
+  test("false without the exact marker", () => {
+    const NO = [
+      undefined,
+      "",
+      "boom",
+      "NotRun: out-of-scope",
+      "notrun: out-of-scope: x",
+      "NotRun:  out-of-scope: x",
+      "out-of-scope: x",
+    ];
+    expect(NO.map((m) => [m, isV3RefusalText(m)])).toEqual(NO.map((m) => [m, false]));
   });
 });

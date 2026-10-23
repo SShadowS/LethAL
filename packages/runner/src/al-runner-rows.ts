@@ -49,21 +49,19 @@ export const RUNNER_REFUSAL =
   /^(?:The test codeunit's OnRun trigger failed, so none of its test methods ran \(as in BC\): )?[A-Za-z_][\w.]*: out-of-scope: /;
 
 /**
- * R672: ONE `<Type>: ` failure-message prefix: the type slot of R534's `RUNNER_REFUSAL`, a strict
- * superset of R553's `...Exception: ` (every `[\w.]`-word ending in `Exception` is one such word).
- * It is the one source for K1(a), the v3 serve-keep rule and leg C's `message-has-no-type-prefix`.
- * `Assert.*` text never fills it, because a space comes before its first colon.
+ * v3's not-trusted refusal marker (`NotRun: out-of-scope: <reason>`), R586 measure.md row 14.
+ * R675: ONE source; `al-runner-v3-backend.ts` re-exports it.
  */
-export const V3_TYPE_PREFIX = String.raw`[A-Za-z_][\w.]*: `;
+export const V3_REFUSAL_PREFIX = "NotRun: out-of-scope:";
 
 /**
- * R672: v3's refusal text after at most one `V3_TYPE_PREFIX`. One anchored regex with an OPTIONAL
- * group, never "strip, then startsWith": the slot also matches `NotRun: `, and stripping that
- * would lose today's unprefixed refusal. The engine backtracks to the empty group.
+ * R675: a message that holds v3's refusal marker ANYWHERE (fail closed): whatever v3 writes before
+ * it (a `<Type>: `, `Runtime error: `, `a::b: `, a chain) or whatever quotes it, the row is not
+ * trusted. The cost is a lost kill for a user message that quotes the marker (the safe direction;
+ * measured 0 of 13,773 kills). Read by K1(a), the v3 serve-keep rule and two defect facts.
  */
-const V3_REFUSAL_TEXT = new RegExp(`^(?:${V3_TYPE_PREFIX})?NotRun: out-of-scope:`);
 export function isV3RefusalText(m: string | undefined): boolean {
-  return m !== undefined && V3_REFUSAL_TEXT.test(m);
+  return m?.includes(V3_REFUSAL_PREFIX) === true;
 }
 
 /**
