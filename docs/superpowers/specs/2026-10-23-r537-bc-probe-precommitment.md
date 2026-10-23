@@ -121,3 +121,19 @@ restart, and it goes in the submit note. Nothing was published; generation was u
 `81b6899eb77b36cd2a7d3e7da6f2e86e5535553fe719d2e8c16af3c076801f85`; `build/tests.app`
 `6ad7bebb1b5c564cb6aab053c61ef0853b42339586dadf92fd5401883c46d79e`). Predictions as in delta 3. If this run is also
 refused or defective, I stop and report; there is no sixth run without the orchestrator.
+
+## Delta 5: results of the fifth run (12:27:00Z, as measured)
+
+The fifth run published both apps (target 1.0.20749.22370, tests 1.0.0.0) and ran the baseline on bc2 through LethAL
+Control 1.0.0.23 (`/coord/handoff/R-537/bc/progress.bc2.ndjson`, event `baseline-batch-finished`):
+- `HandlerUnused` failed with `The following UI handlers were not executed: MsgHandler`: **P1 holds**.
+- `HandlerUsed` and `ReportNoRequestPage` passed: **P2 holds**.
+- `ReportWithRequestPage` failed with `An error occurred and the transaction is stopped. Contact your administrator
+  or partner for further assistance.` at `SumViaReport`'s `RunModal` (line 27 of the instrumented build): **P4 is
+  refuted**. v3 gives the same text, so R578 is closed as a repro defect.
+- Both `R537 OnRun Tests` tests got 0 method lines again, as in the third run: **P3 stays refuted**. LethAL stopped
+  the run with `StaleTestAppError` after the baseline (filed as R686).
+- `serverGeneration` read `2b8971cb88584ba486dcf6c453a2d76c` before and after; the tests app and the minted target
+  1.0.20749.22411 were uninstalled, unpublished and read back absent: **P5 holds**.
+- **Left on bc2:** bc2 still remembers the minted target version (a lower version is refused as a downgrade) until
+  its next restart.
