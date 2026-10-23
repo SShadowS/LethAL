@@ -6,6 +6,7 @@ import type { TestMethodRef } from "../src/backend";
 import { UnfilteredExtensionsQueryError } from "../src/harness";
 import { ControlDrainTimeoutError, RunMutantTransport } from "../src/run-mutant-transport";
 import type { RunMutantManyRequest, RunMutantManyResult } from "../src/run-mutant-transport";
+import { GROUP_SUITE_UNRESOLVED_HEAD, groupedFoundNone } from "../src/stale-test-app";
 import { scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
@@ -993,6 +994,34 @@ describe("runMany — the session keys (R206 §2.1)", () => {
     ).runMany(req());
     if (raised.kind !== "call") throw new Error("expected call");
     expect(raised.cause).toBe("group-run-error");
+  });
+
+  // R688 (T2, S8): the control app sends identityMismatch false on suite-unresolved today; if it
+  // ever sends true, the identity fault wins over the found-0 reason. False keeps the text.
+  test("R688 T2: suite-unresolved found 0 with identityMismatch true is the identity fault", async () => {
+    const unresolved = (identityMismatch: boolean) =>
+      transport(
+        fakes({
+          many: odata(
+            answer({
+              status: "suite-unresolved",
+              reason: "expected exactly one method Beta in codeunit 79100, found 0",
+              identityMismatch,
+              sessionId: undefined,
+              testRunsBefore: undefined,
+            }),
+          ),
+        }).fetchFn,
+      ).runMany(req());
+    const r = await unresolved(true);
+    if (r.kind !== "call") throw new Error("expected call");
+    expect(r.verdict.failureMessage).toContain("identity mismatch");
+    expect(groupedFoundNone(r.verdict.failureMessage)).toBeUndefined();
+    const kept = await unresolved(false);
+    if (kept.kind !== "call") throw new Error("expected call");
+    expect(kept.verdict.failureMessage).toBe(
+      `${GROUP_SUITE_UNRESOLVED_HEAD}expected exactly one method Beta in codeunit 79100, found 0`,
+    );
   });
 
   test("suite-unresolved is a call-level error with NO cause and NO operation, carrying the server's reason", async () => {

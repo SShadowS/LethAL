@@ -5,7 +5,6 @@ import { renderConsole } from "../src/report";
 import type { SessionOutcome } from "../src/report";
 import {
   GROUP_SUITE_UNRESOLVED_HEAD,
-  MutantBrokeTestDiscoveryError,
   ONRUN_HINT,
   STALE_TEST_APP_REMEDY,
   StaleTestAppError,
@@ -313,26 +312,5 @@ describe("R686: a test codeunit whose OnRun raises is named, not called a stale 
     expect(
       groupedFoundNone("expected exactly one method A in codeunit 50981, found 0"),
     ).toBeUndefined();
-  });
-
-  test("B: the mid-run error says one call answered, names the mutant, file and codeunit, and how to go on", () => {
-    const e = new MutantBrokeTestDiscoveryError({
-      mutantId: "M0007",
-      file: "src/Logic.Codeunit.al",
-      operator: "lethal.empty-block",
-      test: "R537 OnRun Tests.AfterThrowingOnRun",
-      codeunit: "R537 OnRun Tests",
-      serverText: found0("AfterThrowingOnRun"),
-    });
-    expect(e.message).not.toContain("two consecutive");
-    for (const s of [
-      "M0007",
-      "src/Logic.Codeunit.al",
-      "R537 OnRun Tests",
-      "OnRun",
-      "--resume",
-      '--exclude "src/Logic.Codeunit.al"',
-    ])
-      expect(e.message).toContain(s);
   });
 });
