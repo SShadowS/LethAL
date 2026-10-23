@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**85 of 680 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**86 of 681 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -448,6 +448,7 @@ that ordering is the priority.
 - **R600** · lethal verify digests under the server's closed-world answer now, so an open-world source run on a closed server re-runs every test · [R600.md](docs/roadmap/R600.md) · open
 - **R601** · a closed-world run that ends before its post-execution re-ask stays pending forever, so --resume after a crash is off on a closed server · [R601.md](docs/roadmap/R601.md) · done (f9002861)
 - **R620** · A crashed or interrupted closed-world run is never resumable: its test-app identity stays |pending, so --resume refuses the very run it exists for · [R620.md](docs/roadmap/R620.md) · closed 2026-10-22 — a duplicate of R601 (orchestrator ruling Q2); closed with R601 (92d23854)
+- **R685** · a bare `Kind::X` id handed to an unfollowed call puts the test on verify's whole-source fallback, where folding the object would do: since R684 this takes a whole Microsoft test app (Guided Experience) to the fallback · [R685.md](docs/roadmap/R685.md) · open, filed 2026-10-23
 
 ## Backends and tooling
 
