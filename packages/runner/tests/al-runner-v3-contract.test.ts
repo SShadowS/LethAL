@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   V3_DEFECT_FACTS,
   V3_LEG_C_FACTS,
@@ -429,7 +429,7 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     const r = await probe({}, s.spawn);
     const f = r.facts.find((x) => x.fact === "serve-keep-reasons");
     expect(f).toMatchObject({ kind: "warn", verdict: "matches" });
-    expect(s.argvs).toEqual([["/fake/alrunner", "serve", "--test-timeout", "3"]]);
+    expect(s.argvs).toEqual([[resolve("/fake/alrunner"), "serve", "--test-timeout", "3"]]);
     const run = s.requests.filter((q) => q.command === "runTests");
     expect(run.length).toBe(1);
     expect(run[0]?.testIsolation).toBe("test");

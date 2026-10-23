@@ -14,7 +14,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, normalize, relative } from "node:path";
+import { isAbsolute, join, normalize } from "node:path";
 import { initParser } from "@lethal/engine";
 import { emitStaticSelector } from "@lethal/schemata";
 import {
@@ -750,23 +750,30 @@ describe("R645: v3 runs in the session's scratch dir, so its coverage.cobertura.
         seen.push({ argv, cwd: opts?.cwd, cache: opts?.env?.ALRUNNER_CACHE });
       return inner.spawn(argv, opts);
     };
-    // Every configured path relative to the caller's cwd: all must reach v3 absolute.
-    const rel = (p: string) => relative(process.cwd(), p);
-    const b = backendOf(l, spawn, fakeAlc().io, {
-      cacheDir: "rel-cache",
-      instrumentedDir: rel(l.scratch),
-      testDir: rel(l.testDir),
-      packagesDir: rel(l.deps),
-      alRunnerPath: "fake/alrunner",
-    });
-    await b.deploy(l.batch);
-    await b.activate("M0002");
-    await b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
-    expect(seen).toHaveLength(1);
-    expect(isAbsolute(seen[0]?.argv[0] ?? "")).toBe(true);
-    expect(seen[0]?.cwd).toBe(l.scratch);
-    expect(seen[0]?.cwd).not.toBe(process.cwd());
-    expect(seen[0]?.cache).toBe(join(process.cwd(), "rel-cache"));
+    // Every configured path relative to the caller's cwd: all must reach v3 absolute. The cwd is
+    // moved into the layout's root so the relative names hold no `..` (Windows `rm` refuses those).
+    const before = process.cwd();
+    process.chdir(l.root);
+    try {
+      const here = process.cwd();
+      const b = backendOf(l, spawn, fakeAlc().io, {
+        cacheDir: "rel-cache",
+        instrumentedDir: "scratch",
+        testDir: "tests",
+        packagesDir: "deps",
+        alRunnerPath: join("fake", "alrunner"),
+      });
+      await b.deploy(l.batch);
+      await b.activate("M0002");
+      await b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
+      expect(seen).toHaveLength(1);
+      expect(isAbsolute(seen[0]?.argv[0] ?? "")).toBe(true);
+      expect(seen[0]?.cwd).toBe(join(here, "scratch"));
+      expect(seen[0]?.cwd).not.toBe(here);
+      expect(seen[0]?.cache).toBe(join(here, "rel-cache"));
+    } finally {
+      process.chdir(before);
+    }
     // Every path argument is absolute, or the new cwd would break it.
     const argv = seen[0]?.argv ?? [];
     const argAfter = (flag: string) => argv[argv.indexOf(flag) + 1] ?? "";

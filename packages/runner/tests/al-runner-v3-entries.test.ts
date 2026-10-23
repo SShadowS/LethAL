@@ -6,7 +6,7 @@ import { afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { appendFileSync } from "node:fs";
 import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { initParser } from "@lethal/engine";
 import { emitResourceSelector, emitStaticSelector } from "@lethal/schemata";
 import { v3ItestTransport, v3SplitLine } from "../itest/al-runner-v3-gate";
@@ -1595,7 +1595,7 @@ describe("12: the stop is the daemon's S", () => {
     expect(r.b.inRunStopIsBudget).toBe(false);
     expect(r.b.inRunStopMs).toBe(3000);
     const argv = r.serve.daemons[0] ?? [];
-    expect(argv.slice(0, 2)).toEqual(["/fake/al-runner", "serve"]);
+    expect(argv.slice(0, 2)).toEqual([resolve("/fake/al-runner"), "serve"]);
     expect(argv.join(" ")).toContain("--test-timeout 3");
     expect(argv.join(" ")).toContain(`--package-cache ${r.l.deps}`);
     expect(argv.join(" ")).toContain("--bc-version 28.0.46665.47126 --no-download");
