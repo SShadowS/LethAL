@@ -187,6 +187,31 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
 - Re-pinning the symbol tar (a new `FIXTURE_SYMBOLS_TAR_SHA256`) refuses the gate worktree once, because its
   marker names the old pin. Before the `--regate`, delete `/work/lethal-wt/al-runner-v3-gate`'s two folders and
   its `.fixture-symbols.sha256`; the run then extracts them from the new tar.
+- Since R670 the tar is named by its pin, `/work/lethal/.kraken-local/fixture-symbols-<first 12 hex of the
+  sha256>.tar`, so a rebuilt tar is written BESIDE the one older worktrees still pin and never replaces it. The
+  pinned tar's file list is committed as `packages/runner/itest/fixture-symbols.manifest`, with the sha256 on its
+  `# sha256` line. An ordinary unit test (`R670: symbolTarDrift`) checks that list against every fixture's
+  `app.json`: each `LethAL_<name>_<version>.app` in a project's `.alpackages` must be a declared dependency at
+  its fixture's current version, older or newer. So a fixture version bump without a tar rebuild fails CI, which
+  has no tar. A second test, which runs only where the tar exists, checks the list against the tar itself.
+- To rebuild the tar after a fixture bump, run `bash scripts/build-fixture-symbols-tar.sh <pinned tar> <repo>
+  <scratch dir> <out.tar>` (it refuses an output that exists, and the path of kraken's `fixture-symbols.tar`).
+  What it does: keep every non-LethAL member byte for byte; replace each LethAL copy
+  with an `alc` build of the dependency's current source (`$LETHAL_ALC_DIR/alc /project:<target>
+  /packagecachepath:<target>/.alpackages`), named `LethAL_<name>_<version>.app`, in each project that declares
+  it; drop a project's copy of its OWN app (never a dependency, R148). Pack it reproducibly from the folder
+  holding `examples`, `extensions` and `fixtures`: `tar --format=ustar --sort=name --mtime=@0 --owner=0 --group=0
+  --numeric-owner --mode='a=rX,u+w' -cf <out> examples extensions fixtures`. The pack is reproducible from the
+  same files, but `alc` is not byte-stable (two builds of one source differ), so the pin, not a rebuild, is the
+  identity. Then write the tar as `fixture-symbols-<sha12>.tar`, update `FIXTURE_SYMBOLS_TAR`,
+  `FIXTURE_SYMBOLS_TAR_SHA256` and the manifest (`tar -tf <tar> | grep -v '/$'`, under its two header lines),
+  and `--regate` as above.
+- After a re-pin merges and the gate worktree has re-extracted from the new tar, the old tar is no longer pinned
+  by master. The lane that landed the re-pin deletes it, once no open worktree's `.fixture-symbols.sha256` names
+  it. The original `/work/lethal/.kraken-local/fixture-symbols.tar` (`bdf460e2…`) is different: it is kraken's
+  `secret_files` delivery, which `scripts/kraken-setup.sh` extracts into the main checkout, and kraken would put
+  it back. The owner replaces it on the host (the secrets folder `scripts/kraken-secrets.ts` writes) with the
+  current tar, or retires that entry.
 - A leg's outcome comes from its error's TYPE, never its text:
   - `gate-fail`: a pre-committed figure differs, a contract fact or a defect fact reads `diverged`, or v3's
     coverage paths no longer join LethAL's (`AlRunnerV3CoverageJoinError`, a real behaviour change; in a user
