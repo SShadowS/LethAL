@@ -1251,6 +1251,66 @@ describe("R697/R698: code named only in properties, and qualified object referen
         expect(dg(edit(files, "Z.al", "z1", "z2"))).not.toBe(dg(files));
       });
     }
+
+    // A qualified reference in a run by id keeps the fallback it has on master (widening only).
+    const RUN_SHAPES: Array<[string, string]> = [
+      ["Codeunit.Run, test-app codeunit", "Codeunit.Run(Codeunit::My.Ns.CU);"],
+      ["Codeunit.Run, dependency codeunit", "Codeunit.Run(Codeunit::Other.Ns.Dep);"],
+      [
+        "TaskScheduler.CreateTask, test-app codeunit",
+        "TaskScheduler.CreateTask(Codeunit::My.Ns.CU, 0);",
+      ],
+      [
+        "TaskScheduler.CreateTask, dependency codeunit",
+        "TaskScheduler.CreateTask(Codeunit::Other.Ns.Dep, 0);",
+      ],
+      ["Page.Run, dependency page", "Page.Run(Page::Other.Ns.P);"],
+    ];
+    for (const [name, call] of RUN_SHAPES) {
+      test(`still falls back: ${name}`, () => {
+        const files = { "T.al": USING + TEST(`        ${call}\n`), "CU.al": NS("a"), "Z.al": Z };
+        expect(dg(edit(files, "Z.al", "z1", "z2"))).not.toBe(dg(files));
+      });
+    }
+
+    for (const call of ['Codeunit::"CU".ToText()', 'Codeunit::"CU".ToText']) {
+      test(`a member on a plain reference keeps its fold: ${call}`, () => {
+        moves(
+          {
+            "T.al": TEST(`        T := ${call};\n`, "        T: Text;\n"),
+            "CU.al": cu(50201, "CU"),
+          },
+          "CU.al",
+          "'c1'",
+          "'c2'",
+        );
+      });
+    }
+
+    test("a qualified reference split across lines still folds", () => {
+      moves(
+        { "T.al": USING + storedId("Codeunit::My.Ns\n            .CU"), "CU.al": NS("a") },
+        "CU.al",
+        "'a'",
+        "'b'",
+      );
+    });
+
+    test("a TableRelation names a table whose LookupPageId page runs", () => {
+      moves(
+        {
+          "T.al": openPage("PS"),
+          "PS.al": pg(50420, "PS", '    SourceTable = "TS";\n'),
+          "TS.al": `table 50320 "TS"\n{\n    fields\n    {\n        field(1; F1; Code[20])\n        {\n            TableRelation = "TU".F1;\n        }\n    }\n}\n`,
+          "TU.al": tbl(50321, "TU", '    LookupPageId = "LU";\n'),
+          "LU.al": pg(50421, "LU", '    SourceTable = "TU";\n'),
+        },
+        "LU.al",
+        "'p1'",
+        "'p2'",
+      );
+    });
+
     test("stored Report::My.Ns.RQ folds", () => {
       moves(
         {

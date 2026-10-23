@@ -216,7 +216,14 @@ type Site =
  * argument shape (an expression, a field) is dropped. `at` is the argument's position.
  */
 type ArgFact =
-  | { readonly k: "ref"; readonly at: number; readonly kind: string; readonly name: string }
+  | {
+      readonly k: "ref";
+      readonly at: number;
+      readonly kind: string;
+      readonly name: string;
+      /** R698: a namespace-qualified chain. A run by id reads it as master did (a fallback). */
+      readonly qualified?: true;
+    }
   | { readonly k: "int"; readonly at: number; readonly value: string }
   /** Any other argument but a literal or an operator's result: its shape, read in the caller. */
   | { readonly k: "expr"; readonly at: number; readonly recv: Recv };
@@ -969,6 +976,9 @@ function implementationsIn(text: string): string[] {
 export interface ObjectRef {
   readonly kind: string;
   readonly raw: string;
+  /** A candidate only (a `TableRelation` value holds field names too): folded when the test app
+   *  declares it, never sent to `outside()`. */
+  readonly soft?: true;
 }
 
 /** R697: the properties that name one kind of object (`RunObject` names its own kind). */
@@ -1053,6 +1063,10 @@ function buildObjectUnit(
         const r = /^(codeunit|page|report|xmlport|query|table)\s*(?:::)?\s*(.+)$/i.exec(value);
         if (r?.[1] !== undefined && r[2] !== undefined)
           objectRefs.push({ kind: r[1].toLowerCase(), raw: r[2] });
+      } else if (name === "tablerelation" && value !== undefined) {
+        // Every name in the value is a candidate table (`if (...) "A" else "B"`, `"A".Field`).
+        for (const t of value.match(/"[^"]*"|[A-Za-z_]\w*/g) ?? [])
+          objectRefs.push({ kind: "table", raw: t, soft: true });
       } else if (name !== undefined && value !== undefined) {
         const kind = PROPERTY_OBJECT_KIND[name];
         if (kind !== undefined)
@@ -1118,9 +1132,15 @@ function argInfo(call: ALSyntaxNode): {
   for (const [at, a] of real.entries()) {
     let f: ArgFact | undefined;
     if (a.rawKind === "database_reference" || qualifiedRef(a)) {
-      const m = /^\s*(\w+)\s*::\s*(.+?)\s*$/.exec(a.text);
+      const m = /^\s*(\w+)\s*::\s*([\s\S]+?)\s*$/.exec(a.text);
       if (m?.[1] !== undefined && m[2] !== undefined)
-        f = { k: "ref", at, kind: m[1].toLowerCase(), name: m[2] };
+        f = {
+          k: "ref",
+          at,
+          kind: m[1].toLowerCase(),
+          name: m[2],
+          ...(a.rawKind === "database_reference" ? {} : { qualified: true as const }),
+        };
     } else if (a.rawKind === "integer") {
       f = { k: "int", at, value: a.text.trim() };
     } else {
@@ -1136,7 +1156,7 @@ function argInfo(call: ALSyntaxNode): {
     arg0:
       first === undefined
         ? undefined
-        : first.rawKind === "database_reference" || qualifiedRef(first)
+        : first.rawKind === "database_reference"
           ? first.text.trim()
           : "",
     argFacts: argFacts ?? NO_ARGS,
@@ -1162,7 +1182,7 @@ const NO_IDS: readonly string[] = Object.freeze([]);
  * (`Report.Run(Id)`, `Page.Run(Id)`, `Xmlport.Run(Id)`, a query by id, `RecRef.Open(Id)`).
  */
 const ID_RUN_KINDS = ["report", "page", "xmlport", "query", "table"] as const;
-const ID_RUN_REF = /^\s*(report|page|xmlport|query|database)\s*::\s*(.+?)\s*$/i;
+const ID_RUN_REF = /^\s*(report|page|xmlport|query|database)\s*::\s*([\s\S]+?)\s*$/i;
 const KINDED_REF = /^(report|page|xmlport|query|table)::(.+)$/;
 
 /**
@@ -1171,14 +1191,12 @@ const KINDED_REF = /^(report|page|xmlport|query|table)::(.+)$/;
  */
 function idRefsIn(block: ALSyntaxNode): readonly string[] {
   let out: string[] | undefined;
-  const chains = new Set<number>(); // R698: where a qualified reference's chain starts
   visit(block, (n) => {
     let v: string | undefined;
-    if (chains.has(n.startIndex)) return;
-    const qualified = qualifiedRef(n);
-    if (qualified) chains.add(n.startIndex);
-    if (n.rawKind === "database_reference" || qualified) {
-      const m = /^\s*codeunit\s*::\s*(.+?)\s*$/i.exec(n.text);
+    // R698: every node of a chain is read too (the inner reference gives master's entry), so the
+    // extra entries only widen.
+    if (n.rawKind === "database_reference" || qualifiedRef(n)) {
+      const m = /^\s*codeunit\s*::\s*([\s\S]+?)\s*$/i.exec(n.text);
       v = m?.[1];
       if (v === undefined) {
         const o = ID_RUN_REF.exec(n.text);
@@ -1816,7 +1834,7 @@ export class Scanner {
       }
       // R697: the objects its properties name run with it (a SourceTable's field triggers, an
       // action's RunObject, a card or lookup page). Only widens; `st.entered` ends a cycle.
-      for (const { kind, raw } of u.objectRefs) {
+      for (const { kind, raw, soft } of u.objectRefs) {
         const label = `${u.display} property ${kind} ${raw}`;
         if (kind === "codeunit") {
           const us = this.unitsNamed(raw);
@@ -1826,7 +1844,7 @@ export class Scanner {
         }
         const found = this.objectsNamed(kind, raw);
         for (const f of found) this.foldObject(f, st);
-        if (found.length === 0) this.outside(kind, raw, label, st);
+        if (found.length === 0 && soft !== true) this.outside(kind, raw, label, st);
       }
     }
   }
@@ -2567,7 +2585,7 @@ export class Scanner {
     for (const i of at) {
       if (i >= args) continue;
       const f = facts.find((x) => x.at === i);
-      if (f?.k === "ref" && f.kind === "codeunit")
+      if (f?.k === "ref" && f.kind === "codeunit" && f.qualified !== true)
         for (const u of this.unitsNamed(f.name)) this.runUnit(u, st);
       else if (f?.k === "int") for (const u of this.byNameAll(f.value)) this.runUnit(u, st);
       // A variable, or an expression (which keeps no fact).
