@@ -918,6 +918,18 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **`lethal doctor` no longer fails a healthy BC-on-Linux server whose config has no `bcdev.apiBaseUrl`**
+  ([R253](docs/roadmap/R253.md)).
+  - **The cause:** BC on Linux serves its API (`api/v2.0`) on its own port, and without `apiBaseUrl` LethAL reads it
+    from the OData port, which answers BC's 404 "Resource not found for the segment".
+  - **What you see now:** that read is a named `ApiBaseUnsetError` with the fix (set `bcdev.apiBaseUrl`, e.g.
+    `http://<host>:7052/BC`). Doctor shows the `company` and `test-app-present` checks as `[skip]` instead of
+    `[FAIL]`, and `--json` marks them `skipped: true`.
+  - **Unchanged:** a configured `apiBaseUrl` that 404s still fails.
+  - **`lethal init`** now names the field.
+- **A scheme bump must re-record the gate baselines, or name the item that does** ([R682](docs/roadmap/R682.md)).
+  The rule is on `docs/gates/README.md` and checked by `gate-pages.test.ts`. Today's eight lagging baselines wait
+  on R690 (after R-604b's scheme decision) and R683.
 - **A resume across a BC server restart is refused** ([R680](docs/roadmap/R680.md)).
   - **What changed:** each bcdev run records the server's generation (LethAL Control's `serverGeneration`), read
     once before the session's first guard check.

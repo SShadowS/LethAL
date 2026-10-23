@@ -64,6 +64,19 @@ fields are:
 So a re-recorded baseline, or a changed itest figure, cannot leave its page stale. The commit that
 changes one must change the other.
 
+## A scheme bump re-records the baselines (R682)
+
+A baseline recorded under an older identity scheme (`IDENTITY_SCHEME`, `packages/schemata/src/project.ts`) is
+compared across a scheme change. There a byte-identical twin's mutated text cannot be checked, so the gate prints
+"N mutant(s) text-UNVERIFIED", and a mutant changed under an unchanged key goes unseen.
+- **The rule:** a change that raises `IDENTITY_SCHEME` re-records every gate baseline in the same change, by the
+  R332 procedure (pre-commit, delete, record once, confirm a pass), OR lists each one it leaves behind with the
+  roadmap item that will re-record it.
+- **The check:** `gate-pages.test.ts`, "R682". Every committed `itest/*.baseline.json` must record the current
+  scheme or appear in its `LAGGING_SCHEME` list with an item. A listed file that has caught up fails too.
+- **Today's list:** the seven BC gate baselines behind scheme 41 wait on R690, and `envtool.baseline.json` waits
+  on R683 (host only).
+
 ## Control app versions
 
 The grouped path (`RunMutantMany`, `StopHungRunAt`, `LC Op Progress`) exists only

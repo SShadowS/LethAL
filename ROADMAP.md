@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**75 of 685 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**76 of 686 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -302,6 +302,7 @@ that ordering is the priority.
 - **R682** · after every identity-scheme bump, a gate baseline's byte-identical twins are text-UNVERIFIED until it is re-recorded, and nothing schedules that re-record · [R682.md](docs/roadmap/R682.md) · open, filed 2026-10-23
 - **R684** · lethal verify misses a test-app report, page, xmlport or query that another app runs by its id: the codeunit-id fold and fallback see codeunits only · [R684.md](docs/roadmap/R684.md) · done (ac8a7b02)
 - **R687** · After the release: fold the server's installed-app list (minus LethAL's own instrumented targets) into every verify digest, through a new LethAL Control procedure · [R687.md](docs/roadmap/R687.md) · open, filed 2026-10-23 — after the first release (orchestrator ruling)
+- **R690** · Re-record the seven BC gate baselines that lag IDENTITY_SCHEME, once, after R-604b decides whether the scheme moves to 42 · [R690.md](docs/roadmap/R690.md) · open, filed 2026-10-23 — waits on R-604b's scheme decision
 
 ## Product gaps a real project hits
 
