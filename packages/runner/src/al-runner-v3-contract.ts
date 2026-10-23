@@ -18,6 +18,7 @@
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { V3_TYPE_PREFIX, isV3RefusalText } from "./al-runner-rows";
 import {
   AlRunnerServer,
   type ServerSpawnFn,
@@ -31,22 +32,22 @@ import { AlcCompileError, ArtifactCompiler, type ArtifactIo, defaultArtifactIo }
 import { type SpawnFn, defaultSpawn } from "./publisher";
 
 /**
- * R667: the .NET al-runner's (v2) `{Type}Exception: ` message prefix: R553's regex, which R654 S3
- * removed from assertion-screen.ts with v2. R657 measured that v3 writes no such prefix; the fact
- * `message-has-no-type-prefix` keeps the regex to notice a v3 build that starts writing one.
+ * R667, R672: a `<Type>: ` message prefix at the start of a failure message, from the ONE source
+ * K1(a) also reads (`V3_TYPE_PREFIX`), a strict superset of v2's `{Type}Exception: ` (R553). R657
+ * measured that v3 writes no such prefix; the fact `message-has-no-type-prefix` notices a v3 build
+ * that starts writing one. It is wider than K1(a) on purpose: `A: B: boom` matches, so a build
+ * with chained prefixes is refused.
  */
-export const AL_RUNNER_EXCEPTION_PREFIX = /^(?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*Exception: /;
+const MESSAGE_TYPE_PREFIX = new RegExp(`^${V3_TYPE_PREFIX}`);
 
 /** R667: a contract fact: `gate-fail` in leg C, a refusal in a session. */
 export const MESSAGE_PREFIX_FACT = "message-has-no-type-prefix";
 
 /**
- * R667 (review r1): why a prefix refuses a session, not only skews the R553 screen. `v3RowVerdict`'s
- * K1(a) guard reads `startsWith(V3_REFUSAL_PREFIX)`, so `SomeException: NotRun: out-of-scope: ...`
- * written as a plain fail would score as a kill.
+ * R667 (review r1), R672 (plan §3): why a prefix refuses a session, not only skews the R553 screen.
  */
 export const MESSAGE_PREFIX_REASON =
-  "a `<Type>:` prefix would hide v3's not-trusted refusal from the K1(a) guard (`v3RowVerdict` reads `NotRun: out-of-scope:` at the start of the message, so a prefixed refusal written as a plain fail would score as a kill) (R667)";
+  "a `<Type>:` prefix on v3's failure messages would turn v3's timeouts into errors (`V3_TIMEOUT_MESSAGE` is anchored), close the serve daemon on every refusal (R612's keep list is anchored), and skew the R553 assertion screen. K1(a) keeps a refusal written as a plain fail unscored only after a ONE-word prefix (`V3_TYPE_PREFIX`, R672); a longer prefix could still make it score as a kill (R667)";
 
 export type V3ContractVerdict = "matches" | "diverged" | "unmeasurable";
 /**
@@ -95,7 +96,7 @@ function refusalRowShape(c: {
   const m = h.message ?? "";
   if (h.status !== "fail" || h.notRun || c.exitCode !== 1) return "diverged";
   if (m === BC_HTTP_INTERNAL_TEXT) return "gone";
-  return m.startsWith(V3_REFUSAL_PREFIX) ? "diverged" : "unlike-bc";
+  return isV3RefusalText(m) ? "diverged" : "unlike-bc";
 }
 
 export interface V3Fact {
@@ -1163,7 +1164,7 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
           ? "unmeasurable"
           : c?.notRun === true
             ? "defect-present"
-            : c !== undefined && !(c.message ?? "").startsWith(V3_REFUSAL_PREFIX)
+            : c !== undefined && !isV3RefusalText(c.message)
               ? "gone"
               : "diverged",
         "CommitCall under --isolation test is notRun",
@@ -1208,7 +1209,7 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         ? [plain]
         : [plain, assertMsg];
     const seen = msgs
-      .map((m) => (m !== undefined ? AL_RUNNER_EXCEPTION_PREFIX.exec(m)?.[0] : undefined))
+      .map((m) => (m !== undefined ? MESSAGE_TYPE_PREFIX.exec(m)?.[0] : undefined))
       .find((p) => p !== undefined);
     facts.push(
       fact(
@@ -1219,7 +1220,7 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
           : msgs.every((m) => m !== undefined)
             ? "matches"
             : "unmeasurable",
-        "Fails (a plain Error()) and AssertAreEqual are plain fails whose message does not match AL_RUNNER_EXCEPTION_PREFIX",
+        "Fails (a plain Error()) and AssertAreEqual are plain fails whose message does not start with a `<Type>: ` prefix (V3_TYPE_PREFIX, `[A-Za-z_][\\w.]*: `; R672)",
         // The prefix first: a session's refusal names it in its `measured:` line (`v3ContractRefusals`).
         `${seen !== undefined ? `prefix ${JSON.stringify(seen)}; ` : ""}Fails ${JSON.stringify(plain ?? null)}; ${assertMeasured}`,
       ),

@@ -6,6 +6,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   AL_RUNNER_UNCLASSIFIED_ERROR,
+  V3_TYPE_PREFIX,
+  isV3RefusalText,
   parseReportedStopMs,
   verdictFromRunnerTest,
 } from "../src/al-runner-rows";
@@ -179,5 +181,42 @@ describe("verdictFromRunnerTest, direct (R654 S1 r1 M2): the R534 rules on the f
       undefined,
     );
     expect([v.outcome, v.durationMs, v.measuredDurationMs]).toEqual(["pass", 10, 7]);
+  });
+});
+
+// R672 (plan docs/superpowers/plans/2026-10-23-r672-v3-refusal-prefix.md §2): K1(a) and leg C's
+// `message-has-no-type-prefix` read ONE prefix. The fact's regex is `^V3_TYPE_PREFIX`.
+describe("R672: V3_TYPE_PREFIX ties K1(a) to the leg-C fact", () => {
+  const fact = new RegExp(`^${V3_TYPE_PREFIX}`);
+  const REFUSAL = "NotRun: out-of-scope: x";
+  const PREFIXES = [
+    "X: ",
+    "X.Y: ",
+    "NavNCLDialogException: ",
+    "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: ",
+    "Error: ",
+    "_a1: ",
+    "Runtime error: ",
+    "a::b: ",
+    "x ",
+    "Assert.AreEqual failed. Expected: ",
+    "1X: ",
+    ": ",
+  ];
+  test("for each prefix, the fact matches p+boom exactly when K1 matches p+refusal", () => {
+    for (const p of PREFIXES) {
+      expect([p, fact.test(`${p}boom`)]).toEqual([p, isV3RefusalText(`${p}${REFUSAL}`)]);
+    }
+    // The six one-word prefixes are seen by both; the other six by neither.
+    expect(PREFIXES.filter((p) => isV3RefusalText(`${p}${REFUSAL}`))).toEqual(PREFIXES.slice(0, 6));
+  });
+  test("the empty prefix: K1 true (today's unprefixed refusal), the fact false", () => {
+    expect([isV3RefusalText(REFUSAL), fact.test("boom")]).toEqual([true, false]);
+  });
+  test("A: B: (a chain): the fact true (it refuses the build), K1 false", () => {
+    expect([fact.test("A: B: boom"), isV3RefusalText(`A: B: ${REFUSAL}`)]).toEqual([true, false]);
+  });
+  test("undefined is no refusal", () => {
+    expect(isV3RefusalText(undefined)).toBe(false);
   });
 });

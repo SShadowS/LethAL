@@ -19,12 +19,13 @@ The legs:
   (`docs/superpowers/specs/2026-10-23-r586-alrunner-v3-precommitment-r12-message-prefix.md`, [[R667]]), the 17th
   contract fact is `message-has-no-type-prefix`: the `message` of a plain `Error()` (`Fails`, on the main call)
   and of an `Assert.AreEqual` failure (codeunit 50661, its own tests app, Microsoft's Library Assert passed as
-  `--dep` from `fixtures/sandbox-data-tests/.alpackages`) must be plain fails that do NOT match
-  `AL_RUNNER_EXCEPTION_PREFIX` (R553's regex, now in `al-runner-v3-contract.ts`). A prefix (v2's
-  `{Type}: {Message}`) reads `diverged`: `gate-fail` in leg C, and a refusal in a session, by name: a `<Type>:`
-  prefix would hide v3's not-trusted refusal from the K1(a) guard (`v3RowVerdict` reads `NotRun: out-of-scope:`
-  at the start of the message, so a prefixed refusal written as a plain fail would score as a kill), and it would
-  also skew the R553 assertion screen. The Assert half is gate-only, as `timeout-is-cpu` is: a session reads
+  `--dep` from `fixtures/sandbox-data-tests/.alpackages`) must be plain fails that do NOT start with
+  `V3_TYPE_PREFIX` (`[A-Za-z_][\w.]*: `, in `al-runner-rows.ts`; since [[R672]] the same prefix K1(a) in
+  `v3RowVerdict` and the v3 serve-keep rule read, and a strict superset of R553's `...Exception: `). A prefix
+  reads `diverged`: `gate-fail` in leg C, and a refusal in a session, by name (`MESSAGE_PREFIX_REASON`): it would
+  turn v3's timeouts into errors, close the serve daemon on every refusal and skew the R553 assertion screen, and
+  K1(a) keeps a refusal written as a plain fail unscored only after ONE prefix word. The fact is wider than K1(a)
+  on purpose: `A: B: boom` matches, so a build with chained prefixes is refused. The Assert half is gate-only, as `timeout-is-cpu` is: a session reads
   `Fails` alone (a prefix there still refuses it). Since r7
   (`docs/superpowers/specs/2026-10-22-r586-alrunner-v3-precommitment-r7-none-selected.md`, 16681485), 8 are
   defect facts (`V3_DEFECT_FACTS` in `al-runner-v3-gate.ts`, `none-selected-exit` included). Since r8
@@ -296,3 +297,7 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
   measured its own `PlainError`, not the probe's `Fails`, and the new Assert codeunit ran offline on alpha.2 only.
   It costs one extra one-shot call in leg C and none in a session. No other figure or baseline moves. The 27-fact
   head is not yet run live.
+- 2026-10-23: [[R672]] (plan `docs/superpowers/plans/2026-10-23-r672-v3-refusal-prefix.md`) makes
+  `message-has-no-type-prefix` read `V3_TYPE_PREFIX` instead of `AL_RUNNER_EXCEPTION_PREFIX` (deleted), the same
+  prefix K1(a) and the v3 serve-keep rule read. Both probe texts have no `<word>: ` at the start, so the fact is
+  predicted `matches` on alpha.2 and edge; still 27 facts. No figure or baseline moves.

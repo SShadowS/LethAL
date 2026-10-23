@@ -39,7 +39,7 @@ import {
   buildAlRunnerCoverageIndex,
   normalizeFileKey,
 } from "./al-runner-coverage";
-import { verdictFromRunnerTest } from "./al-runner-rows";
+import { isV3RefusalText, verdictFromRunnerTest } from "./al-runner-rows";
 import {
   AlRunnerServer,
   AlRunnerServerRequestError,
@@ -336,7 +336,8 @@ export function v3RowVerdict(
   }
   // R639 K1(a), r9 §1: a refusal written WITHOUT notRun (a plain `fail` or `pass` whose message
   // starts with v3's refusal prefix) never scores: no refusal path becomes a kill, survive or pass.
-  if ((row.message ?? "").startsWith(V3_REFUSAL_PREFIX)) {
+  // R672: also after one `V3_TYPE_PREFIX` word (`isV3RefusalText`).
+  if (isV3RefusalText(row.message)) {
     return {
       ref,
       outcome: "error",
@@ -1647,7 +1648,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         const bad = mine.find((r) => !serveDaemonReusable(serveLines([r]), "v3"));
         throw new AlRunnerV3EntriesRefusedError(
           "al-runner-v3-entries-warmup-dirty",
-          `the warm-up row ${bad?.name ?? e.id} (codeunit ${e.codeunit}) is one R612 does not keep (${bad?.message ?? bad?.status ?? "?"}); every daemon repeats it, so no entry is trusted on any`,
+          `the warm-up row ${bad?.name ?? e.id} (codeunit ${e.codeunit}) is ${r672Unkept(bad) ?? "one R612 does not keep"} (${bad?.message ?? bad?.status ?? "?"}); every daemon repeats it, so no entry is trusted on any`,
         );
       }
     } catch (err) {
@@ -1809,11 +1810,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const cutRow = (rows.get(sent[cut]?.id ?? "") ?? []).find(
       (r) => !serveDaemonReusable(serveLines([r]), "v3"),
     );
+    const r672 = r672Unkept(cutRow);
     return {
       results,
       resend,
       ...(cutRow !== undefined
-        ? { cutWhy: `${cutRow.name}: ${cutRow.message ?? cutRow.status}` }
+        ? {
+            cutWhy: `${cutRow.name}: ${cutRow.message ?? cutRow.status}${r672 !== undefined ? ` (${r672})` : ""}`,
+          }
         : {}),
     };
   }
@@ -2165,6 +2169,17 @@ function serveLines(rows: readonly V3Row[]): ServerTestLine[] {
     ...(r.message !== undefined ? { message: r.message } : {}),
     notRun: r.notRun,
   }));
+}
+
+/** R672 (review r2 nit): a row the keep rule closes on because it is a refusal written as a plain
+ *  pass/fail (no notRun) is closed by R672's rule, not R612's. */
+function r672Unkept(r: V3Row | undefined): string | undefined {
+  return r !== undefined &&
+    r.notRun !== true &&
+    (r.status === "pass" || r.status === "fail") &&
+    isV3RefusalText(r.message)
+    ? `a refusal written as a plain ${r.status}, which R672 does not keep`
+    : undefined;
 }
 
 /** R635 §3, §5: rows compared by method, status, notRun and (for notRun) the reason, in method
