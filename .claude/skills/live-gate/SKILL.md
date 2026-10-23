@@ -33,7 +33,8 @@ LETHAL_ITEST_ALRUNNER_V3=1 LETHAL_ITEST_V3_CDO=/work/lethal-wt/cdo-r396 LETHAL_I
 Without `LETHAL_ITEST_V3_CDO` the D legs (D1, D1c) do not run, and without `LETHAL_ITEST_V3_TABLES=1` leg T does not run. Both make the gate a corpus job, so count it toward the container's heavy-job limit. The binary defaults to the pinned build (`/work/tools/al-runner-v3/current/al-runner`); `LETHAL_ALRUNNER_V3_PATH` overrides it.
 
 **Check the al-runner build before trusting a verdict from this leg.** The backend refuses a build that its `.gated` file does not name (`AlRunnerV3UngatedBuildError`), so the pin moves only through `bun scripts/al-runner-v3-update.ts`, never by hand. If a leg differs after the pin moved, that is a TOOL change first, not a code regression: see `docs/gates/alrunner-v3.md` §"The pin and the update gate" and `docs/measurements/README.md` §"al-runner v3" before touching anything.
-Connection details come from the gitignored fixture configs that `bun scripts/bc-linux-setup.ts --server bcN` writes. Never print them or put a login on a command line.
+Connection details come from the gitignored `fixtures/sandbox-app/.vscode/launch.local.json` + `fixtures/sandbox-app/lethal.config.local.json` (Cronus28, sshadows/1234, company `CRONUS Danmark A/S`, tenant default).
+Cronus28 is parked: on `bc1`-`bc3` the connection details come from the gitignored fixture configs that `bun scripts/bc-linux-setup.ts --server bcN` writes.
 
 ## Expected (frozen — BLOCKED on any difference)
 The frozen figures, per gate and per leg, are on the gate pages: `docs/gates/bcdev.md`, `docs/gates/alrunner-v3.md`, and the rest listed in `docs/gates/README.md` (`docs/gates/alrunner.md` is the retired .NET gate's page, kept as history). `packages/runner/tests/gate-pages.test.ts` keeps those pages equal to the committed baselines, so do not copy figures into this skill. On top of the figures:
