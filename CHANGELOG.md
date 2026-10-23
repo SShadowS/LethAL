@@ -918,7 +918,9 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
-- **The al-runner v3 compile proof now covers every file v3 reads** ([R608](docs/roadmap/R608.md)).
+- **The al-runner v3 compile proof now binds the non-`.al` files too** ([R608](docs/roadmap/R608.md)).
+  Left out on purpose: both `app.json` files and the resource selector (each checked on its own), and the tool
+  folders `.vscode`, `.git` and `node_modules`.
   - **Before:** only `.al` files, both `app.json` files and the `<deps>` file list were bound. A non-`.al` file in the
     batch or the test dir, a file in the test dir's `.alpackages`, or a subfolder of `<deps>` could change after alc
     proved the build and v3 would read it.

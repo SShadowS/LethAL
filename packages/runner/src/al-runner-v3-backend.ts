@@ -1577,7 +1577,6 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       res = await this.spawn(argv, {
         signal: controller.signal,
         // R645: v3 writes coverage.cobertura.xml into its cwd; never the caller's.
-        // R645: v3 writes coverage.cobertura.xml into its cwd; never the caller's.
         cwd: this.scratchCwd(),
         ...this.cacheEnv(),
       });

@@ -10,6 +10,7 @@ import {
   realpath,
   rm,
   symlink,
+  utimes,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -684,6 +685,27 @@ describe("R608: the proof binds the non-.al files, the test dir's .alpackages an
     const { l, b, v3 } = await deployed(withRes);
     await mkdir(join(l.testDir, ".vscode"), { recursive: true });
     await writeFile(join(l.testDir, ".vscode", "settings.json"), "{}");
+    expect((await run(b)).outcome).toBe("pass");
+    expect(v3.calls).toHaveLength(1);
+  });
+
+  test("a same-size rewrite with a moved mtime is caught by the re-hash", async () => {
+    const { l, b, v3 } = await deployed(withRes);
+    const p = join(l.testDir, "res.txt");
+    await writeFile(p, "two");
+    const later = new Date(Date.now() + 60_000);
+    await utimes(p, later, later);
+    const err = await run(b).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AlRunnerV3UnprovenBatchError);
+    expect((err as Error).message).toContain("res.txt");
+    expect(v3.calls).toHaveLength(0);
+  });
+
+  test("a moved mtime alone (same bytes) does not refuse", async () => {
+    const { l, b, v3 } = await deployed(withRes);
+    const p = join(l.testDir, ".alpackages", "Sym.app");
+    const later = new Date(Date.now() + 60_000);
+    await utimes(p, later, later);
     expect((await run(b)).outcome).toBe("pass");
     expect(v3.calls).toHaveLength(1);
   });
