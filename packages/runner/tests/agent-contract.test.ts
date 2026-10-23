@@ -4,7 +4,6 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, normalize } from "node:path";
 import { IDENTITY_SCHEME, type MutantManifestEntry } from "@lethal/schemata";
 import {
-  DOCTOR_AL_RUNNER_ONLY_CAVEAT,
   DOCTOR_CAVEAT_KINDS,
   DOCTOR_CREATE_MODE_CAVEAT,
   DOCTOR_NOT_CHECKED_TOKENS,
@@ -573,11 +572,9 @@ describe("C02-07: the documents' commands and tables are the code's", () => {
     // "present only for a config shape that has one": absent without a caveat, and every caveat
     // constant maps to one of the listed kinds.
     expect(Object.keys(doctorJson(report))).not.toContain("caveat");
-    expect(
-      [DOCTOR_CREATE_MODE_CAVEAT, DOCTOR_AL_RUNNER_ONLY_CAVEAT].map(
-        (c) => doctorJson(report, c).caveat?.kind,
-      ),
-    ).toEqual([...DOCTOR_CAVEAT_KINDS]);
+    expect([DOCTOR_CREATE_MODE_CAVEAT].map((c) => doctorJson(report, c).caveat?.kind)).toEqual([
+      ...DOCTOR_CAVEAT_KINDS,
+    ]);
     const owners = FLAG_OWNERS.find((r) => r.flag === "json")?.owners ?? [];
     expect(text).toContain(`\`--json\` is accepted by ${listed(owners, "and")} only.`);
   });
@@ -664,8 +661,8 @@ describe("C02-07: the documents' commands and tables are the code's", () => {
     expect(parseCliConfig([...bare, "--out", "plan.json"])).toMatchObject({ outPath: "plan.json" });
     // R377: the paragraph says `--backend` is read there, not refused.
     expect(para).toContain("`--backend` is optional there");
-    expect(parseCliConfig([...bare, "--backend", "al-runner"])).toMatchObject({
-      backendKind: "al-runner",
+    expect(parseCliConfig([...bare, "--backend", "bcdev"])).toMatchObject({
+      backendKind: "bcdev",
     });
   });
 

@@ -151,9 +151,6 @@ export type RunEventInput =
       readonly carryableCount: number;
       readonly strandedKeyCount: number;
       readonly retryStranded: boolean;
-      /** R557: why NOTHING of the run is carried (an al-runner run without the R557 test-name
-       *  mark, or one whose baseline holds renamed errors). Absent when its verdicts may carry. */
-      readonly carryRefused?: string;
     }
   | {
       readonly type: "phase-entered";
@@ -359,57 +356,6 @@ export type RunEventInput =
       /** The once-per-session permission canary's measured verdict — one observation. */
       readonly type: "permission-canary";
       readonly result: PermissionCanaryResult;
-    }
-  | {
-      /**
-       * R129 — which BC artifact build al-runner announced it executed this session's tests
-       * against, read off the runner's own `[bc]` line. Emitted once, after the mutant phase, and
-       * ONLY when a run actually announced one: a session that never reached the runner, or a
-       * runner build that stopped printing the line, emits nothing rather than a defaulted version.
-       *
-       * al-runner-specific by design. The bcdev path's runtime is the container the config names,
-       * which the report already identifies; this exists because the al-runner path chooses a BC
-       * build on its own and nothing recorded the choice.
-       */
-      readonly type: "al-runner-bc-build";
-      readonly build: string;
-      /** The runner's own line, verbatim — see `AlRunnerBcBuild.announcement`. */
-      readonly announcement: string;
-    }
-  | {
-      /**
-       * R147 — the Microsoft platform-app directory this session PINNED, so that no invocation after
-       * the one-time provisioning run pays for provisioning again.
-       *
-       * Emitted once, right after the provisioning step, and ONLY when a pin was actually
-       * established: a session that declined to pin emits an `al-runner-platform-apps-unpinned`
-       * warning carrying the reason instead. Both directions are reported, because a build whose
-       * parse had gone stale would otherwise produce exactly the same verdicts, the same counts and
-       * no line anywhere.
-       *
-       * R242: also NOT emitted when the backend's transport would not send the pin (`--server`),
-       * and nothing is emitted in its place: that is normal server operation, and the absent
-       * `platformAppsDir` in the report is the statement.
-       *
-       * al-runner-specific by design, the same as `al-runner-bc-build`: no other backend provisions
-       * anything.
-       */
-      readonly type: "al-runner-platform-apps";
-      readonly dir: string;
-    }
-  | {
-      /**
-       * R558: the test selector R551's one-call probe chose for this session's one-shot al-runner
-       * runs: `exact` (`--test X --test-exact X`) or `substring-with-excludes` (R488's `--test X
-       * --exclude-test <sibling>...`), with the probe's `reason` on the latter.
-       *
-       * Emitted once, beside the `al-runner-test-selector` WARNING (kept for the console line), and
-       * only when the probe applied: never on `--server`, where it answers `not-applicable`, and never
-       * on bcdev, which has no probe. Folded into `ExecutionContext.testSelector`.
-       */
-      readonly type: "al-runner-test-selector";
-      readonly selector: "exact" | "substring-with-excludes";
-      readonly reason?: string;
     }
   | {
       readonly type: "mutant-scored";

@@ -276,8 +276,8 @@ chunked 42 / 62 on bc3, hang 46 / 40 / 6 on bc2. Logs are `/coord/handoff/R-582/
 | `bc3` | `itest:tables`, `itest:chunked`, `itest:bcdev-names` (R-599's live check, after the in-place publish of Sandbox Names Tests and back: run 1 on build 42c7dc7b and run 2 on d89d6eb4, each 36 / 0 / 0 with every kill reproduced by 2 killer rows; `/coord/handoff/R-599/live/6-gate.log`, `live/run2/6-gate.log`) |
 
 `itest:stale-publish` and `itest:lease` have no per-mutant figures; they passed their own checks.
-`itest:envtool` is host-only and not proven on any bc server. `itest:alrunner` and
-`itest:growth` need no BC server.
+`itest:envtool` is host-only and not proven on any bc server. `itest:alrunner-v3` and
+`itest:growth` need no BC server. (`itest:alrunner`, the .NET al-runner's gate, was retired by R654.)
 
 **bc3's fixture apps (R599, R605).** R-604's pre-commitment predicted that bc3's four stale apps
 (`Sandbox App`, `Sandbox Hang`, `Sandbox Names`, `Sandbox Names Tests`) would end up resident at

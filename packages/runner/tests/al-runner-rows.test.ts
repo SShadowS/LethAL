@@ -6,6 +6,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   AL_RUNNER_UNCLASSIFIED_ERROR,
+  V3_REFUSAL_PREFIX,
+  isV3RefusalText,
   parseReportedStopMs,
   verdictFromRunnerTest,
 } from "../src/al-runner-rows";
@@ -179,5 +181,42 @@ describe("verdictFromRunnerTest, direct (R654 S1 r1 M2): the R534 rules on the f
       undefined,
     );
     expect([v.outcome, v.durationMs, v.measuredDurationMs]).toEqual(["pass", 10, 7]);
+  });
+});
+
+// R675 (plan docs/superpowers/plans/2026-10-23-r675-v3-refusal-marker-anywhere.md §3): K1(a), the
+// serve-keep rule and the defect facts read v3's refusal marker ANYWHERE; no prefix model is left.
+describe("R675: isV3RefusalText reads the marker anywhere", () => {
+  const REFUSAL = "NotRun: out-of-scope: x";
+  const BEFORE = [
+    "",
+    "X: ",
+    "X.Y: ",
+    "Runtime error: ",
+    "al_runtime::Error: ",
+    "A: B: ",
+    "x ",
+    "[x] ",
+    "Assert.AreEqual failed. Expected: ",
+  ];
+  test("true for the marker at 0 and after any text", () => {
+    expect(BEFORE.map((p) => [p, isV3RefusalText(`${p}${REFUSAL}`)])).toEqual(
+      BEFORE.map((p) => [p, true]),
+    );
+  });
+  test("the marker is the one constant, V3_REFUSAL_PREFIX", () => {
+    expect(V3_REFUSAL_PREFIX).toBe("NotRun: out-of-scope:");
+  });
+  test("false without the exact marker", () => {
+    const NO = [
+      undefined,
+      "",
+      "boom",
+      "NotRun: out-of-scope",
+      "notrun: out-of-scope: x",
+      "NotRun:  out-of-scope: x",
+      "out-of-scope: x",
+    ];
+    expect(NO.map((m) => [m, isV3RefusalText(m)])).toEqual(NO.map((m) => [m, false]));
   });
 });

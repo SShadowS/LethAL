@@ -11,18 +11,13 @@ import type {
   TestVerdict,
 } from "../src/backend";
 import { type SessionConfig, runSession } from "../src/orchestrator";
-import {
-  AL_RUNNER_PREDEFINED_SYMBOLS_V2_12_0,
-  type AlRunnerPredefinedProbe,
-  effectiveBuildSymbols,
-} from "../src/preprocessor-symbols";
+import { effectiveBuildSymbols } from "../src/preprocessor-symbols";
 import { type SessionReport, collapseNumberedRuns, renderConsole } from "../src/report";
 import { ResultsStore } from "../src/store";
 import { servesTestApp, testAppJson } from "./helpers/proven-test-app";
 
 /**
- * R-381: `SessionReport.buildSymbols` is the target's EFFECTIVE build symbols (app.json, config and
- * on al-runner its predefined ones). Written on every new report, `[]` included.
+ * R-381: `SessionReport.buildSymbols` is the target's EFFECTIVE build symbols (app.json and config). Written on every new report, `[]` included.
  */
 
 // Line 6 sits in the `#if not CLEANSCHEMA25` arm, line 11 in `#if CLEANSCHEMA26`, which no
@@ -92,7 +87,8 @@ class StubBackend implements ExecutionBackend {
   private active: string | null = null;
   constructor(private readonly authoritative: boolean) {
     // R495: as bcdev, a served test app, installed, so the run's identity is proven (as a real
-    // bcdev's is). As al-runner, no package read: it compiles the test source it hashed.
+    // bcdev's is). As al-runner-v3 (R654: was the retired .NET al-runner), no package read: it
+    // compiles the test source it hashed.
     if (authoritative) Object.assign(this, servesTestApp());
   }
   capabilities(): BackendCapabilities {
@@ -100,15 +96,15 @@ class StubBackend implements ExecutionBackend {
       coverage: "procedure",
       deploy: "publish",
       isolation: "session",
-      kind: this.authoritative ? "bcdev" : "al-runner",
+      kind: this.authoritative ? "bcdev" : "al-runner-v3",
       authoritative: this.authoritative,
     };
   }
   async status(): Promise<BackendStatus> {
     return { ok: true, details: "stub" };
   }
-  async measurePredefinedSymbols(): Promise<AlRunnerPredefinedProbe> {
-    return { symbols: [...AL_RUNNER_PREDEFINED_SYMBOLS_V2_12_0].sort() };
+  async runnerBuild(): Promise<{ version: string; binarySha256: string }> {
+    return { version: "al-runner 3.0.0-test", binarySha256: "b".repeat(64) };
   }
   async deploy(): Promise<null> {
     return null;
@@ -193,12 +189,7 @@ async function agree(
     join(root, "app"),
     config,
     undefined,
-    authoritative
-      ? { kind: "bcdev" }
-      : {
-          kind: "al-runner",
-          predefined: { symbols: [...AL_RUNNER_PREDEFINED_SYMBOLS_V2_12_0].sort() },
-        },
+    authoritative ? { kind: "bcdev" } : { kind: "al-runner-v3" },
   );
   expect(report.buildSymbols).toEqual([...expected]);
   expect(report.buildSymbols).toEqual(row?.buildSymbols ?? undefined);
@@ -230,10 +221,11 @@ describe("R-381: report.buildSymbols equals the effective set", () => {
     });
   }, 60_000);
 
-  test("al-runner: its predefined symbols are included", async () => {
+  // R654: the retired .NET al-runner added its predefined CLEANSCHEMA1..25 here; v3 predefines none.
+  test("al-runner-v3: no predefined symbols are added", async () => {
     await withProject(undefined, async (root) => {
       const r = await agree(root, false, []);
-      expect(r.buildSymbols).toEqual(CLEANSCHEMA_LITERAL);
+      expect(r.buildSymbols).toEqual([]);
       expect(r.preprocessorSymbols).toEqual([]);
     });
   }, 60_000);
@@ -294,7 +286,7 @@ describe("R-381: the console banner", () => {
     );
   });
 
-  test("al-runner: CLEANSCHEMA1..25 collapse into one name", async () => {
+  test("CLEANSCHEMA1..25 collapse into one name", async () => {
     const r = await base();
     expect(bannerOf({ ...r, buildSymbols: CLEANSCHEMA_LITERAL })).toBe("CLEANSCHEMA1..25");
   });

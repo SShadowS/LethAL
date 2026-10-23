@@ -25,14 +25,6 @@ export const ENVTOOL_FIGURES = {
   noCoverage: 4,
 } as const;
 
-export const ALRUNNER_FIGURES = {
-  totalMutantSites: 19,
-  killed: 3,
-  survived: 12,
-  noCoverage: 4,
-  noCoverageFile: "SandboxPricing.Codeunit.al",
-} as const;
-
 export const TABLES_FIGURES = {
   totalMutantSites: 428,
   killed: 314,

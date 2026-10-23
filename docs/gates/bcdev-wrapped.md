@@ -32,4 +32,6 @@ The fenced leg scores 60 killed and 38 survived.
 
 R497: recorded on 2026-10-08 on Cronus28 (record run exit 3, confirm run PASS, fenced and hub legs
 equal mutant by mutant), per `docs/superpowers/specs/2026-10-08-r497-bcdev-wrapped-precommitment.md`.
-The al-runner side of the same fixture is on [alrunner.md](alrunner.md), "Wrapped leg".
+The .NET al-runner's side of the same fixture is on [alrunner.md](alrunner.md), "Wrapped leg"; that
+gate was retired by R654. The Rust al-runner turns coverage off for wrapped files and runs no wrapped
+leg ([R602](../roadmap/R602.md)), so this gate is now the only live check of the fixture.

@@ -76,6 +76,7 @@ import { freezeStageTo } from "./campaign-freeze";
 import { UncommittedPathError, assertCommitted } from "./campaign-git";
 import { findRepoRoot, readCampaignManifest, resolveRecordsDirIn } from "./campaign-manifest";
 import type { SessionReport } from "./report";
+import { refuseRetiredV2Report } from "./v2-retired";
 
 /** One `git` invocation's raw result. */
 export interface GitCommandResult {
@@ -588,6 +589,8 @@ export async function compareCampaignStage(args: CampaignArgsBase): Promise<Camp
     "campaign compare reads the committed stage baseline `campaign freeze` wrote; refusing to compare against it.",
   );
   const report = JSON.parse(await readFile(args.reportPath, "utf8")) as SessionReport;
+  // R654 F3: a report of the retired .NET al-runner is refused by name.
+  refuseRetiredV2Report(report, args.reportPath);
   const reportMode: unknown = report.coverageMode;
   if (reportMode !== undefined && !isCoverageMode(reportMode)) {
     throw new Error(

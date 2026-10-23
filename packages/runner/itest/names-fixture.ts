@@ -186,8 +186,6 @@ export function assertNamesRun(
   problems.push(...namesKillTextDifferences(report));
   const seen = o.seen;
   if (seen !== undefined) {
-    if (seen.warningCodes.includes("al-runner-undecided-test-missing"))
-      problems.push("an al-runner-undecided-test-missing warning was emitted");
     // Pre-commitment r4: EVERY al-runner leg, one-shot and `--server` alike, emits exactly one
     // contract line carrying test-name-mangling=matches. runSession's R149 re-probe runs whenever
     // provisioning yields a platform-app directory, `--server` included (R344); r3's "no contract

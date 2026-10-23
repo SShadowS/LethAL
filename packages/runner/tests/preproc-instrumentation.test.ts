@@ -10,11 +10,7 @@ import {
   withRunIdentityOrdinals,
   writeInstrumentedProject,
 } from "@lethal/schemata";
-import {
-  alRunnerCoverageFrom,
-  alRunnerCoverageFromServer,
-  buildAlRunnerCoverageIndex,
-} from "../src/al-runner-coverage";
+import { alRunnerCoverageFromServer, buildAlRunnerCoverageIndex } from "../src/al-runner-coverage";
 import type { TestMethodRef } from "../src/backend";
 import type { RunEvent, RunEventInput } from "../src/events";
 import { explain } from "../src/explain";
@@ -4336,17 +4332,7 @@ ${head}    var
           coverage: serverRun(index, "Codeunit50150.AfterOnly", [{ scope: "After", line: 16 }]),
         },
       ];
-      const cobertura = [
-        { ref: memberOnly, lines: [11, 12] },
-        { ref: otherOnly, lines: [12] },
-        { ref: afterOnly, lines: [16] },
-      ].map(({ ref: r, lines }) => ({
-        ref: r,
-        coverage: alRunnerCoverageFrom(
-          lines.map((line) => ({ file: "Repro.Codeunit.al", line, hits: 1 })),
-          index,
-        ),
-      }));
+      // R654 S3: the line-only (one-shot Cobertura) half of this case went with the .NET al-runner.
       const covering = (runs: ReturnType<typeof server>) => {
         const split = coverageFilter(
           manifest.mutants,
@@ -4364,8 +4350,7 @@ ${head}    var
       };
       // BOTH members' covering lists, pinned. The member (lines 10-12): MemberOnly only, never
       // OtherOnly. Other (line 12): OtherOnly on the server path, which keeps the producer's own
-      // scope on a shared line; NO test on the line-only path, which cannot tell the two apart
-      // (the stated cost of "names nobody").
+      // scope on a shared line.
       const memberAndOther = [
         "L10 MemberOnly",
         "L11 MemberOnly",
@@ -4386,17 +4371,6 @@ ${head}    var
           ].sort(),
         ]);
       }
-      expect(covering(cobertura)).toEqual(
-        [
-          ...memberAndOther,
-          "L12 -",
-          "L12 -",
-          "L12 -",
-          "L15 AfterOnly",
-          "L16 AfterOnly",
-          "L16 AfterOnly",
-        ].sort(),
-      );
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

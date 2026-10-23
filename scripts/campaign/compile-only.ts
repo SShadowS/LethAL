@@ -77,6 +77,8 @@ export async function stageCompileOnlyBatch(input: {
   readonly artifactId: string;
   readonly targetAppId: string;
   readonly appManifest: Record<string, unknown>;
+  /** R668: the `--config` file, left out of the batch by identity like a real run's. */
+  readonly configPath: string | undefined;
 }): Promise<void> {
   const flatNames = await batchFlatNames(input.projectDir);
   await writeInstrumentedProject({
@@ -97,6 +99,7 @@ export async function stageCompileOnlyBatch(input: {
     undefined,
     [],
     flatNames,
+    input.configPath,
   );
 }
 
@@ -137,6 +140,7 @@ export async function compileOnly(
       artifactId,
       targetAppId,
       appManifest,
+      configPath: args.configPath,
     });
 
     // The delegating selector schemata/project.ts just wrote always references
