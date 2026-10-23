@@ -6186,15 +6186,39 @@ export async function dryRunFromCli(parsed: DryRunCliConfig): Promise<number> {
     ...(dryRunConfig?.alRunner?.alRunnerPath !== undefined
       ? { alRunnerPath: dryRunConfig.alRunner.alRunnerPath }
       : {}),
-    // R565: the folders a real run searches, less al-runner's provisioned platform apps.
-    dependencyPackageDirs:
-      parsed.backendKind === "al-runner"
-        ? dryRunConfig?.alRunner?.packagesDir !== undefined
-          ? [dryRunConfig.alRunner.packagesDir]
-          : []
-        : [resolve(packageCachePathDefault(dryRunConfig?.bcdev, parsed.projectDir))],
+    dependencyPackageDirs: dryRunDependencyPackageDirs(
+      parsed.backendKind,
+      dryRunConfig,
+      parsed.projectDir,
+    ),
   });
   return 0;
+}
+
+/**
+ * R565/R656: the folders a real run of `backendKind` searches for dependency reports, less
+ * al-runner's provisioned platform apps. al-runner-v3 mirrors `AlRunnerV3Backend
+ * .dependencyPackageDirs` (`[packagesDir]`); a v3 config without one is refused by the real run
+ * (`validateAlRunnerV3Config`), so the dry run lists none rather than bcdev's cache.
+ */
+export function dryRunDependencyPackageDirs(
+  backendKind: BackendKind | undefined,
+  config: Pick<LethalConfigFile, "bcdev" | "alRunner" | "alRunnerV3"> | undefined,
+  projectDir: string,
+): readonly string[] {
+  if (backendKind === "al-runner") {
+    const dir = config?.alRunner?.packagesDir;
+    return dir !== undefined ? [dir] : [];
+  }
+  if (backendKind === "al-runner-v3") {
+    const v3 = config?.alRunnerV3;
+    const dir =
+      v3 !== null && typeof v3 === "object"
+        ? (v3 as { packagesDir?: unknown }).packagesDir
+        : undefined;
+    return typeof dir === "string" && dir !== "" ? [dir] : [];
+  }
+  return [resolve(packageCachePathDefault(config?.bcdev, projectDir))];
 }
 
 async function main(): Promise<number> {

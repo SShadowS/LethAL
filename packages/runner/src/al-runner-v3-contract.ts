@@ -28,6 +28,7 @@ import {
 import { type V3Row, V3_REFUSAL_PREFIX, decodeV3Rows } from "./al-runner-v3-backend";
 import { baseAppJson, probeV3PredefinedSymbols } from "./al-runner-v3-probe";
 import { AlcCompileError, ArtifactCompiler, type ArtifactIo, defaultArtifactIo } from "./artifact";
+import { AL_RUNNER_EXCEPTION_PREFIX } from "./assertion-screen";
 import { type SpawnFn, defaultSpawn } from "./publisher";
 
 export type V3ContractVerdict = "matches" | "diverged" | "unmeasurable";
@@ -556,6 +557,34 @@ codeunit 50674 "Serve NoCallee"
 }
 `;
 
+/** R667: one `Assert.AreEqual` failure, in its own tests app (only it depends on Library Assert). */
+const ASSERT_TESTS_AL = `codeunit 50661 "Probe Assert"
+{
+    Subtype = Test;
+
+    var
+        Assert: Codeunit "Library Assert";
+
+    [Test]
+    procedure AssertAreEqual()
+    begin
+        Assert.AreEqual(1, 2, 'R667 values differ');
+    end;
+}
+`;
+
+/** Microsoft's Library Assert, as R657's probe declared it. */
+const LIBRARY_ASSERT_DEP = {
+  id: "dd0be2ea-f733-4d65-bb34-a28f4624fb14",
+  name: "Library Assert",
+  publisher: "Microsoft",
+  version: "28.0.0.0",
+};
+
+/** R667: a plain failed row's message, or `undefined` when the row is not a plain `fail`. */
+const plainFailMessage = (r: V3Row | undefined): string | undefined =>
+  r !== undefined && r.status === "fail" && r.notRun !== true ? r.message : undefined;
+
 /** R612: each `V3_SERVE_SAFE_REFUSALS` entry and the serve row that must match it. */
 const SERVE_CASES: ReadonlyArray<readonly [string, string]> = [
   ["http", "Codeunit50670.HttpGet"],
@@ -649,6 +678,12 @@ export interface V3ProbeEnv {
   readonly serveSpawn?: ServerSpawnFn;
   /** R612 M-2: `.gated`'s warn-fact readings (what the gate's leg C read), shown by a session. */
   readonly gatedWarnFacts?: Readonly<Record<string, string>>;
+  /**
+   * R667: Microsoft's Library Assert `.app`, passed as `--dep` to the `Assert.AreEqual` half of
+   * `message-has-no-type-prefix`. Leg C only: a session's packages need not hold it, so a session
+   * (`gateOnlyTrusted`) reads the plain `Error()` half alone.
+   */
+  readonly libraryAssertApp?: string;
 }
 
 interface Call {
@@ -1116,6 +1151,56 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
               : "diverged",
         "CommitCall under --isolation test is notRun",
         rowsText(commit, "CommitCall"),
+      ),
+    );
+    // message-has-no-type-prefix (R667): R657 measured v3's failure `message` with no `<Type>: `
+    // prefix, so v3 keeps bcdev's assertion-screen rule. A build that adds one (v2's shape) would
+    // skew the screen (R553); read a plain Error() (Fails, on the main call) and an Assert.AreEqual.
+    const plain = plainFailMessage(rowOf(main, "Fails"));
+    let assertMsg: string | undefined;
+    let assertMeasured: string;
+    if (env.libraryAssertApp !== undefined) {
+      const at = join(root, "assert-tests");
+      await mkdir(join(at, "src"), { recursive: true });
+      await writeFile(
+        join(at, "app.json"),
+        baseAppJson({
+          id: TESTS_ID,
+          name: "LethAL R667 Assert Probe Tests",
+          idFrom: 50650,
+          idTo: 50699,
+          dependencies: [LIBRARY_ASSERT_DEP],
+        }),
+      );
+      await writeFile(join(at, "src", "Assert.Codeunit.al"), ASSERT_TESTS_AL);
+      const ac = await call(["--dep", env.libraryAssertApp, "--codeunit", "50661"], {
+        tests: at,
+        codeunit: 50661,
+      });
+      assertMsg = plainFailMessage(onlyRow(ac, "AssertAreEqual"));
+      assertMeasured = rowsText(ac, "AssertAreEqual");
+    } else {
+      assertMeasured =
+        env.gateOnlyTrusted !== undefined
+          ? `Assert half not re-measured in a session: trusted from ${env.gateOnlyTrusted}`
+          : "no Library Assert app";
+    }
+    // A session without the app trusts the gate for the Assert half; leg C without it cannot read it.
+    const msgs =
+      env.libraryAssertApp === undefined && env.gateOnlyTrusted !== undefined
+        ? [plain]
+        : [plain, assertMsg];
+    facts.push(
+      fact(
+        "message-has-no-type-prefix",
+        "contract",
+        msgs.some((m) => m !== undefined && AL_RUNNER_EXCEPTION_PREFIX.test(m))
+          ? "diverged"
+          : msgs.every((m) => m !== undefined)
+            ? "matches"
+            : "unmeasurable",
+        "Fails (a plain Error()) and AssertAreEqual are plain fails whose message does not match AL_RUNNER_EXCEPTION_PREFIX",
+        `Fails ${JSON.stringify(plain ?? null)}; ${assertMeasured}`,
       ),
     );
     // serve-keep-reasons (R612): GATE-ONLY, like timeout-is-cpu. M-2: a gate passes whatever this

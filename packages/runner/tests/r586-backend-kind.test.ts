@@ -103,7 +103,8 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
       "coverage-mode",
     'if (parsed.backendKind === "al-runner") {': "config",
     'if (paths.backendKind === "al-runner") {': "config",
-    'parsed.backendKind === "al-runner"': "config",
+    // R656: `dryRunDependencyPackageDirs`, one branch per backend kind (v3 has its own).
+    'if (backendKind === "al-runner") {': "config",
     'if (backendArg === "bcdev" && workers > 1) {': "bcdev",
     'if (parsed.backendKind !== "bcdev" || configFile.envTool === undefined) {': "bcdev",
     'if (parsed.backendKind !== "bcdev") return {};': "bcdev",
