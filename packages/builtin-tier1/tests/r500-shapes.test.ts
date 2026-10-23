@@ -814,6 +814,8 @@ type Opts530 = {
   /** Statements in OnPreReport, outside the item's scope. */
   readonly pre?: string;
   readonly itemType?: string;
+  /** The operand the exit guard compares with (default `LastEntryNo`). */
+  readonly guard?: string;
   /** Item properties (a `MaxIteration` keeps an Integer or Date item bounded). */
   readonly props?: string;
 };
@@ -829,7 +831,7 @@ function report530(o: Opts530 = {}): string {
             ${o.props ?? ""}
             trigger OnAfterGetRecord()
             begin
-                if Walk."Entry No." > LastEntryNo then
+                if Walk."Entry No." > ${o.guard ?? "LastEntryNo"} then
                     CurrReport.Break();
                 Mark1 := 1;
                 ${o.insert ?? "Walk.Insert();"}
@@ -888,10 +890,11 @@ describe("R530: sites in a self-inserting item, its feeds and outside filters", 
   it("T2: a site in a helper reached by a bare call is refused", () => {
     expect(stmt(p(), "Mark2 := 1")).toBe(true);
   });
-  it("T3: a site in a helper reached by CurrReport.P() or a bare name in an expression is refused", () => {
-    const x = p();
-    expect(stmt(x, "Mark3 := 1")).toBe(true);
-    expect(stmt(x, "Mark4 := 1")).toBe(true);
+  it("T3a: a site in a helper reached by CurrReport.P() is refused", () => {
+    expect(stmt(p(), "Mark3 := 1")).toBe(true);
+  });
+  it("T3b: a site in a helper reached by a bare name in an expression is refused", () => {
+    expect(stmt(p(), "Mark4 := 1")).toBe(true);
   });
   it("T4: a write, outside the scope, of a name the exit guard reads is refused", () => {
     expect(stmt(p({ pre: "LastEntryNo := 5;" }), "LastEntryNo := 5")).toBe(true);
@@ -901,6 +904,13 @@ describe("R530: sites in a self-inserting item, its feeds and outside filters", 
     expect(x.at("R530.al", "call_expression", "Mgt.GetLastEntry(LastEntryNo, Unrelated)")).toBe(
       true,
     );
+  });
+  it("T5b: a call passing a field of a record the guard reads is refused", () => {
+    const x = p({
+      guard: 'Setup."Last Entry No."',
+      pre: 'Mgt.GetLast(Setup."Last Entry No.");',
+    });
+    expect(x.at("R530.al", "call_expression", 'Mgt.GetLast(Setup."Last Entry No.")')).toBe(true);
   });
   it("T6: a SetRange on the self-inserting item from OnPreReport is refused", () => {
     const x = p({ pre: "Walk.SetRange(Filtered, 0, 5);" });

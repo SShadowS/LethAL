@@ -2883,8 +2883,11 @@ function selfInserts(item: ALSyntaxNode, ctx: SemanticContext): boolean {
  *     argument (fail closed: a callee that is not in the project, such as `GetLastEntry(LastEntryNo, ...)`,
  *     is still refused). A site that contains or sits inside such a writer is refused.
  * (c) an outside filter call on such an item is refused in `altersOpenItemFilter`.
+ *     An argument counts by its root name (`GetLast(Setup."Last Entry No.")` passes `Setup`).
  * Not seen: an insert made in another object (R529, closed by ruling), a bound set only by a
- * reportextension `modify()` trigger, a `with` receiver. Cost and mechanisms: measure.md, R530.
+ * reportextension `modify()` trigger, a `with` receiver, and the body of a feed call's same-object
+ * callee (only the call is refused). Over-refusal: a field name an exit guard reads (`"Entry No."`)
+ * also counts as a feed name, about 3 sites in a 19-report sample. Cost and mechanisms: measure.md, R530.
  */
 function inSelfInsertItem(node: ALSyntaxNode, ctx: SemanticContext): boolean {
   const obj = objectOf(node);
@@ -2914,9 +2917,7 @@ function inSelfInsertItem(node: ALSyntaxNode, ctx: SemanticContext): boolean {
         feed = l !== null && names.has(rootName(l));
       } else if (n.rawKind === "call_expression" || n.rawKind === "call_statement") {
         // unreadable arguments (a pragma among them): fail closed
-        feed =
-          !argumentsReadable(n) ||
-          argumentList(n).some((a) => isIdentifierLike(a) && names.has(normalizeAlName(a.text)));
+        feed = !argumentsReadable(n) || argumentList(n).some((a) => names.has(rootName(a)));
       }
       if (feed) feeds.push({ s: n.startIndex, e: n.endIndex });
     });
