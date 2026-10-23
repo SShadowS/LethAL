@@ -125,11 +125,11 @@ runs live (Q3).
   breaking step 1 inside `ResultsStore.runMayLend` for either resume site reddens no leg here.
   `tests/r619-one-lend.test.ts` covers it through `--resume-run` (`--resume` cannot reach it: its
   SQL selects the backend and, on v3, the build).
-- **The snapshot site's R557 check** (steps 2 and 3 of `runMayLend` on the snapshot's run). A
-  bcdev session cannot hold an al-runner snapshot of the same coverage mode. The al-runner legs
-  and `tests/r619-one-lend.test.ts` cover it.
-- **The history site's R557 check and its order against coverage mode and test app.** These are
-  pinned offline in `tests/r618-lend-order.test.ts` (the N1o unit test and the RC4a case), not live.
+- **R557's checks are gone.** They were steps 2 and 3 of `runMayLend`, and only a run of the .NET
+  al-runner reached them. R654 retired that backend (2026-10-22) and removed both steps: a stored
+  v2 run now lends nothing, by name, at step 1 (`backendBuildRefusal`). The history site's order
+  against coverage mode and test app is pinned offline in `tests/r618-lend-order.test.ts` (the
+  N1o unit test), not live.
 - **Another `runner_build`.** Only v3 compares builds.
 - **Which site calls `runMayLend`.** Since [R619](../roadmap/R619.md) all four lend sites call
   `ResultsStore.runMayLend` once each, with no inline copy left. That each one calls it, and that

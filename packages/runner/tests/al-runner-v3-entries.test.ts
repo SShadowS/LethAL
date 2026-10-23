@@ -326,6 +326,8 @@ function fakeServe(script: ServeScript = {}) {
   const echo = script.echo ?? goodEcho;
   const daemons: string[][] = [];
   const requests: Req[] = [];
+  /** R672: each shutdown, with how many requests (over every daemon) came before it. */
+  const closes: { daemon: number; afterRequests: number }[] = [];
   const spawn: ServerSpawnFn = (argv) => {
     const daemon = daemons.length;
     daemons.push([...argv]);
@@ -340,6 +342,7 @@ function fakeServe(script: ServeScript = {}) {
         void (async () => {
           const body = JSON.parse(line) as Record<string, unknown>;
           if (body.command === "shutdown") {
+            closes.push({ daemon, afterRequests: requests.length });
             out.push("{}");
             out.end();
             return;
@@ -428,7 +431,7 @@ function fakeServe(script: ServeScript = {}) {
   };
   /** The first request each daemon got. */
   const firsts = () => daemons.map((_, d) => requests.find((r) => r.daemon === d));
-  return { spawn, daemons, requests, firsts };
+  return { spawn, daemons, requests, firsts, closes };
 }
 
 interface Rig {
@@ -1113,6 +1116,8 @@ describe("10: R612's keep rule per entry, in entry order", () => {
     const v = await r.b.run(ref("A"), OPTS);
     expect(outcome(v)).toEqual(["error", "runner-test-error"]);
     expect(v.failureMessage).toContain(TIMEOUT_1S);
+    // R672: a timeout cut names no R672 rule.
+    expect(v.failureMessage).not.toContain("R672");
   });
 });
 
@@ -1253,6 +1258,153 @@ describe("R654 S1: R612 T2-T6 on v3's serve-entries", () => {
   });
 });
 
+/**
+ * R672 (plan docs/superpowers/plans/2026-10-23-r672-v3-refusal-prefix.md §1c): a refusal written as
+ * a plain `fail` (no notRun) says the runtime's state is not trusted, so the daemon that wrote it is
+ * closed. The fake daemon is stateful: once it writes M0001's A as such a refusal, every later A on
+ * THAT daemon fails ("tainted state"). Without the close, M0002's A would score that taint as a kill.
+ */
+describe("R672: a refusal written as a plain fail closes the daemon; the tainted next request never scores", () => {
+  const PLAIN_REFUSAL = "NotRun: out-of-scope: runtime panic (bug): x";
+  const PREFIXED_REFUSAL = `Error: ${PLAIN_REFUSAL}`;
+  // R675: the marker after a spaced prefix (`Runtime error: `) closes the daemon too.
+  const REFUSALS = [PLAIN_REFUSAL, PREFIXED_REFUSAL, `Runtime error: ${PLAIN_REFUSAL}`];
+  const tainting = (refusal: string): RowsFn => {
+    const tainted = new Set<number>();
+    return (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) => {
+        if (x.method !== "A" || d < 0) return x;
+        if (m === "M0001") {
+          tainted.add(d);
+          return { ...x, status: "fail" as const, message: refusal };
+        }
+        return tainted.has(d) ? { ...x, status: "fail" as const, message: "tainted state" } : x;
+      });
+  };
+
+  for (const refusal of REFUSALS) {
+    test(`entries (prefetch), "${refusal.slice(0, 12)}...": daemon 0 closes right after the refusal; M0002 is re-sent on a fresh daemon and passes`, async () => {
+      const r = await readyRig({
+        serve: { rows: tainting(refusal) },
+        oneShotRows: allPass,
+        mutants: ["M0001", "M0002"],
+      });
+      await r.b.activate("M0001");
+      expect(outcome(await r.b.run(ref("A"), OPTS))).toEqual(["error", "runner-test-error"]);
+      await r.b.activate("M0002");
+      const two = await r.b.run(ref("A"), OPTS);
+      // Never the taint scored as a kill.
+      expect([two.outcome, two.failureMessage]).toEqual(["pass", undefined]);
+      const i = r.serve.requests.findIndex((q) => q.ids.includes(`M0001|${CU}`));
+      expect(r.serve.requests[i]?.daemon).toBe(0);
+      expect(r.serve.requests.filter((q) => q.daemon === 0)).toHaveLength(i + 1);
+      expect(r.serve.closes).toEqual([{ daemon: 0, afterRequests: i + 1 }]);
+      expect(r.serve.daemons).toHaveLength(2);
+      expect(r.serve.requests.filter((q) => q.ids.includes(`M0002|${CU}`)).at(-1)?.daemon).toBe(1);
+    });
+
+    test(`live requests, "${refusal.slice(0, 12)}...": daemon 0 closes after the refusal; M0002 runs on a fresh daemon and passes`, async () => {
+      const r = await rig({ serve: { rows: tainting(refusal) }, oneShotRows: allPass });
+      await baseline(r.b, SUITE1);
+      await r.b.activate("M0001");
+      expect(outcome(await r.b.run(ref("A"), OPTS))).toEqual(["error", "runner-test-error"]);
+      const n0 = r.serve.requests.length;
+      await r.b.activate("M0002");
+      const two = await r.b.run(ref("A"), OPTS);
+      // Never the taint scored as a kill.
+      expect([two.outcome, two.failureMessage]).toEqual(["pass", undefined]);
+      // Daemon 0 closed right after the refusal's request, before M0002's.
+      expect(r.serve.requests.filter((q) => q.daemon === 0)).toHaveLength(n0);
+      expect(r.serve.closes).toEqual([{ daemon: 0, afterRequests: n0 }]);
+      expect(r.serve.daemons).toHaveLength(2);
+      expect(r.serve.requests.at(-1)).toMatchObject({
+        daemon: 1,
+        ids: ["M0002|echo", `M0002|${CU}`],
+      });
+    });
+  }
+
+  test("a §5 window request (plain) with a refusal written as a plain fail closes the daemon after the window; M0002 runs on a fresh one", async () => {
+    // Requests: 0 warm-up, 1 prefetch, 2 echo, 3 the coverage request (A refused as a fail), 4 echo.
+    const tainted = new Set<number>();
+    const rows: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) => {
+        if (x.method !== "A" || d < 0) return x;
+        if (n === 3) {
+          tainted.add(d);
+          return { ...x, status: "fail" as const, message: PREFIXED_REFUSAL };
+        }
+        return tainted.has(d) ? { ...x, status: "fail" as const, message: "tainted state" } : x;
+      });
+    const r = await readyRig({
+      targetAl: SLEEPER_AL,
+      serve: { rows, coverage: sleepCoverage() },
+      oneShotRows: allPass,
+      mutants: ["M0001"],
+    });
+    await r.b.activate("M0001");
+    expect((await r.b.run(ref("A"), OPTS)).outcome).not.toBe("fail");
+    await r.b.activate("M0002");
+    const two = await r.b.run(ref("A"), OPTS);
+    expect([two.outcome, two.failureMessage]).toEqual(["pass", undefined]);
+    expect(r.serve.closes[0]).toEqual({ daemon: 0, afterRequests: 5 });
+    expect(r.serve.daemons).toHaveLength(2);
+    expect(r.serve.requests.find((q) => q.ids.includes(`M0002|${CU}`))?.daemon).toBe(1);
+  });
+
+  test("the control: a normal plain fail keeps the daemon (one daemon, no close, M0001 a kill)", async () => {
+    const r = await readyRig({ serve: { rows: killsM1 }, oneShotRows: allPass });
+    expect(r.serve.daemons).toHaveLength(1);
+    expect(r.serve.closes).toEqual([]);
+    await r.b.activate("M0001");
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("fail");
+    const live = await rig({ serve: { rows: killsM1 }, oneShotRows: allPass });
+    await baseline(live.b, SUITE1);
+    await live.b.activate("M0001");
+    expect((await live.b.run(ref("A"), OPTS)).outcome).toBe("fail");
+    await live.b.activate("M0002");
+    expect((await live.b.run(ref("A"), OPTS)).outcome).toBe("pass");
+    expect(live.serve.daemons).toHaveLength(1);
+    expect(live.serve.closes).toEqual([]);
+  });
+
+  test("review nit: a warm-up refusal written as a plain fail is refused naming R672's rule, not R612's", async () => {
+    const underNone: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        m === "NONE" && x.method === "B"
+          ? { ...x, status: "fail" as const, message: PLAIN_REFUSAL }
+          : x,
+      );
+    const r = await rig({ serve: { rows: underNone } });
+    await baseline(r.b, SUITE1);
+    const err = await r.b.prefetchMutants(plans(["M0001"])).catch((e: unknown) => e);
+    expect(String(err)).toContain("al-runner-v3-entries-warmup-dirty");
+    expect(String(err)).toContain(
+      "a plain fail that holds v3's refusal marker (R675), which R672 does not keep",
+    );
+    expect(String(err)).not.toContain("R612");
+  });
+
+  test("review nit: an echo cut by a refusal written as a plain fail names R672's rule in the mutant's error", async () => {
+    const r = await rig({
+      serve: {
+        echo: (m, d, n) =>
+          m === "M0002"
+            ? { method: "Echo", status: "fail", message: PLAIN_REFUSAL }
+            : goodEcho(m, d, n),
+      },
+      oneShotRows: allPass,
+    });
+    await baseline(r.b, SUITE1);
+    await r.b.activate("M0002");
+    const v = await r.b.run(ref("A"), OPTS);
+    expect(v.outcome).toBe("error");
+    expect(v.failureMessage).toContain(
+      "a plain fail that holds v3's refusal marker (R675), which R672 does not keep",
+    );
+  });
+});
+
 describe("M1 (build review r1): a warm-up row R612 does not keep refuses by name", () => {
   // B behaves the same under NONE in the one-shot baseline and in the warm-up, so they agree.
   const underNone =
@@ -1272,6 +1424,8 @@ describe("M1 (build review r1): a warm-up row R612 does not keep refuses by name
     expect(String(err)).toContain("al-runner-v3-entries-warmup-dirty");
     expect(String(err)).toContain(`Codeunit${CU}.B`);
     expect(String(err)).toContain(TIMEOUT_1S);
+    // R672: a timeout is still closed by R612's rule, and says so.
+    expect(String(err)).toContain("is one R612 does not keep");
     expect(r.serve.requests.map((q) => q.ids[0])).toEqual(["NONE|echo"]);
   });
 

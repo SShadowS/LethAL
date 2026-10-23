@@ -49,6 +49,22 @@ export const RUNNER_REFUSAL =
   /^(?:The test codeunit's OnRun trigger failed, so none of its test methods ran \(as in BC\): )?[A-Za-z_][\w.]*: out-of-scope: /;
 
 /**
+ * v3's not-trusted refusal marker (`NotRun: out-of-scope: <reason>`), R586 measure.md row 14.
+ * R675: ONE source; `al-runner-v3-backend.ts` re-exports it.
+ */
+export const V3_REFUSAL_PREFIX = "NotRun: out-of-scope:";
+
+/**
+ * R675: a message that holds v3's refusal marker ANYWHERE (fail closed): whatever v3 writes before
+ * it (a `<Type>: `, `Runtime error: `, `a::b: `, a chain) or whatever quotes it, the row is not
+ * trusted. The cost is a lost kill for a user message that quotes the marker (the safe direction;
+ * measured 0 of 13,773 kills). Read by K1(a), the v3 serve-keep rule and two defect facts.
+ */
+export function isV3RefusalText(m: string | undefined): boolean {
+  return m?.includes(V3_REFUSAL_PREFIX) === true;
+}
+
+/**
  * R517: the stop al-runner says it ENFORCED, from a timeout row's whole message
  * (`Test exceeded {N}s timeout.`, built in `TestExecutor.RunOne` from the timeout it used, or
  * R534's OnRun-trigger wording, built from the same timeout), in ms.

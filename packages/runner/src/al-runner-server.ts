@@ -63,6 +63,7 @@
  *   (measured on 2.11.0, R319); the symbols are start-time flags, see the constructor.
  */
 
+import { isV3RefusalText } from "./al-runner-rows";
 import type { EntriesAnswer } from "./al-runner-v3-entries";
 
 /** One `compilationErrors` entry, from the one-shot envelope or the `--server` summary. Moved
@@ -636,7 +637,8 @@ export type ServeDaemonRule = "v2" | "v3";
 /**
  * R612: true when the daemon may serve another request after this answer's rows.
  * - v2 (R517 I2 + I-1, unchanged): every row is `pass` or `fail`.
- * - v3: every row is `pass`/`fail` without `notRun`, or a `notRun` `error` row whose message is
+ * - v3: every row is `pass`/`fail` without `notRun` and without v3's refusal marker
+ *   (`isV3RefusalText`: R672, anywhere since R675), or a `notRun` `error` row whose message is
  *   one of `V3_SERVE_SAFE_REFUSALS`. Anything else (a timeout, a panic, an unknown kind) closes.
  *   A test name seen twice THROWS `AlRunnerServeDuplicateRowError` (build review r1 M-3: in the
  *   rule, so every serve path that applies it gets the check). The caller closes the daemon on a
@@ -653,7 +655,10 @@ export function serveDaemonReusable(
     seen.add(t.name);
   }
   return rows.every((t) => {
-    if (t.status === "pass" || t.status === "fail") return t.notRun !== true;
+    // R672, R675: a plain pass/fail that holds v3's refusal marker says the runtime's state is not
+    // trusted.
+    if (t.status === "pass" || t.status === "fail")
+      return t.notRun !== true && !isV3RefusalText(t.message);
     const m = t.message;
     return (
       t.notRun === true &&
