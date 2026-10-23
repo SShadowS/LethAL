@@ -1150,8 +1150,72 @@ describe("buildBackend (R21 — accurate alc/altool requirement per path)", () =
   });
 });
 
-// R654 S3: "runFromCli (R18 — envTool configured but ignored under al-runner)" went with the .NET
-// al-runner, whose session branch printed that warning. al-runner-v3 never printed it.
+// ————————————————————————————————————————————————————————————————————————
+// R674 (R18's warning, back): R654 S3 deleted the .NET al-runner's session branch, which printed
+// it, so `--backend al-runner-v3` ignored a configured `envTool` section without a word. Warned,
+// not refused: a config file is often shared across `--backend` choices.
+// ————————————————————————————————————————————————————————————————————————
+describe("runFromCli (R674 — envTool configured but ignored under al-runner-v3)", () => {
+  async function writeConfigWithEnvTool(): Promise<string> {
+    const dir = scratch("lethal-cfgtest-");
+    const path = join(dir, "lethal.config.json");
+    await writeFile(path, JSON.stringify({ envTool: { toolPath: "tool.exe" } }), "utf8");
+    return path;
+  }
+
+  // The warning is decided right after the config is read, so a later refusal (bcdev with no
+  // `bcdev` section, here) does not hide it: the run's own outcome is not what is tested.
+  async function warningsOf(parsed: RunCliConfig): Promise<string[]> {
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await runFromCli(parsed, {
+        validateSelectorIdsForProject: async () => {},
+        resolveEnvToolSession: async () => ({ effectiveConfig: {} }),
+        // The faked `runSession` never touches the backend, so a stub is enough.
+        buildBackend: async () => ({}) as ExecutionBackend,
+        runSession: async () => FAKE_REPORT,
+      }).catch(() => undefined);
+      // Captured BEFORE mockRestore(), which clears .mock.calls.
+      return warnSpy.mock.calls.map((c) => String(c[0]));
+    } finally {
+      warnSpy.mockRestore();
+    }
+  }
+
+  it("warns, naming the backend, when envTool is configured and --backend al-runner-v3 cannot use it", async () => {
+    const warnings = await warningsOf({
+      ...RUN_CONFIG_BCDEV,
+      backendKind: "al-runner-v3",
+      configPath: await writeConfigWithEnvTool(),
+      dbPath: ":memory:",
+    });
+    expect(
+      warnings.some(
+        (w) =>
+          w.includes("envTool") && w.includes("IGNORED") && w.includes("--backend al-runner-v3"),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not warn under al-runner-v3 when no envTool section is configured", async () => {
+    const warnings = await warningsOf({
+      ...RUN_CONFIG_BCDEV,
+      backendKind: "al-runner-v3",
+      configPath: await writeTempConfig(),
+      dbPath: ":memory:",
+    });
+    expect(warnings.some((w) => w.includes("envTool"))).toBe(false);
+  });
+
+  it("does not warn under bcdev, where the envTool section takes effect", async () => {
+    const warnings = await warningsOf({
+      ...RUN_CONFIG_BCDEV,
+      configPath: await writeConfigWithEnvTool(),
+      dbPath: ":memory:",
+    });
+    expect(warnings.some((w) => w.includes("envTool") && w.includes("IGNORED"))).toBe(false);
+  });
+});
 
 // ————————————————————————————————————————————————————————————————————————
 // Task 7 review, Important 4 — `coverageMode` (the env-tool fallback for when bc-dev-mcp cannot

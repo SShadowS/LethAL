@@ -66,6 +66,8 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     'if (coverage === "al-runner") {': "coverage-mode",
     'if (backendArg === "bcdev" && workers > 1) {': "bcdev",
     'if (parsed.backendKind !== "bcdev" || configFile.envTool === undefined) {': "bcdev",
+    // R674: R18's warning that a configured envTool section is unused on a local runner.
+    'if (parsed.backendKind !== "bcdev" && configFile.envTool !== undefined) {': "bcdev",
     'if (parsed.backendKind !== "bcdev") return {};': "bcdev",
     'if (paths.backendKind === "bcdev") {': "bcdev",
     '...(parsed.backendKind === "bcdev"': "bcdev",
