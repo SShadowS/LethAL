@@ -112,13 +112,11 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
   - It checks `EXPECTED_LAYOUT` (`layout-fixture.ts`) per `<batch>/<code>`: verdict, killing test, covering tests and attribution.
   - Predicted 7 / 3 / 0 over 10. Baseline: `al-runner-v3.layout.baseline.json`, identical per mutant to `al-runner.layout.baseline.json` (the .NET gate's, deleted in R654 S3).
   - It is the v3 gate's only multi-batch leg.
-  - **Its purpose is shape only.** L1 is NOT R349's stale-layout check on v3. Two reverts were measured on 2026-10-22, and both left it green (7 / 3 / 0, with 1/M0006 and 1/M0007 killed by TwiceOfThree):
-    - deleting `resetLayoutState()` from `AlRunnerV3Backend.deploy` (`/coord/handoff/R-654/s2-live-LR1.log`);
-    - keeping batch 0's coverage index across deploys, `this.coverageIndex ??= index` (`s2-live-LR2.log`).
-  - **Why L-R1 stays green:** on v3, `deploy()` rebuilds the coverage index, the Sleep index and the proof for every batch, and `activate(null)` clears the row cache.
-  - **Why L-R2 stays green is not measured.** The leading guess (marked as a guess in `/coord/handoff/R-654/s2-LR1-finding.md`) is that instrumenting `LayoutBeta` does not move its line numbers, so batch 0's index of the file reads batch 1's coverage the same way.
-  - **R349's stale-layout coverage was LOST when the .NET al-runner was retired (R654 S3), because no v3 leg catches it ([R666](../roadmap/R666.md)).** On v2, `itest:alrunner`'s one-shot layout leg went red on it.
-  - **The one guard that exists on v3** is offline. It covers `batchBlind`, the only layout-scoped field that `deploy()` does not rebuild on one-shot. The test is "R654 S2: a batch's latched blind note does not cross into the next batch" in `tests/al-runner-v3-entries.test.ts`. Deleting the reset turns it red.
+  - **It is R349's stale-layout check on v3** ([[R666]]). v3 labels a target file's coverage by the deployed flat path (`active/LayoutBeta.Codeunit.al`) in the EMITTED line numbers of that batch's text: in batch 1, TwiceOfThree hits lines 71, 73 and 79 of the 83-line instrumented file (measured on alpha.2, `/coord/handoff/R-666/measure.md`). So batch 1's lines must be read through batch 1's coverage index.
+  - **The guard L1 proves is both coverage-index guards together:** `resetLayoutState()` sets `coverageIndex` to `undefined`, AND `deploy()` then assigns the new index unconditionally (`this.coverageIndex = index`). Either one alone keeps the index fresh.
+  - **Its live red check is L-R3**, which removes both: delete `this.coverageIndex = undefined;` from `resetLayoutState` and change the assignment to `this.coverageIndex ??= index`. L1 then goes red as R353 predicts: 5 / 5 / 0, with 1/M0006 and 1/M0007 survived and `Layout Tests.GrowAboveTen` as their covering test (`/coord/handoff/R-666/live-LR3.log`; pre-committed in `docs/superpowers/specs/2026-10-23-r666-l1-stale-layout-precommitment.md`, 51d76b74).
+  - **Two single-guard reverts stay green, by design** (2026-10-22, R-654 S2): L-R1 deleted `resetLayoutState()` (`/coord/handoff/R-654/s2-live-LR1.log`), and `deploy()`'s assignment still replaced the index. L-R2 changed the assignment to `??=` (`s2-live-LR2.log`), and the reset had just cleared the field, so `??=` still assigned.
+  - **Offline guards** of the same property and of the reset's other fields: "R666: batch 1's coverage is read through batch 1's layout (one-shot)" in `tests/al-runner-v3-backend.test.ts` (red only with both guards removed); "R654 S2: a batch's latched blind note does not cross into the next batch" (`batchBlind`) and "R666: serve-entries state does not cross a deploy" (`baselineRows`, `union`) in `tests/al-runner-v3-entries.test.ts`, red when the reset is deleted. L1 cannot see those three fields: it has no Sleep and runs one-shot.
 - **Y-A and Y-B** (R321): `fixtures/sandbox-symbols` under `[LETHALA]` and `[LETHALB]`. The symbols go to the backend, which passes them to v3 as `--define`, and to the session.
   - Each checks `EXPECTED_BY_SET` (`symbol-fixture.ts`).
   - Predicted 5 / 4 / 0 over 9 each. Baselines: `al-runner-v3.symbols-lethala.baseline.json` and `-lethalb`.
@@ -311,3 +309,6 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
   is predicted `matches` on alpha.2 and edge; still 27 facts. K1(a), serve-keep and the two defect facts read the
   refusal marker anywhere: 0 of 13,773 stored kills and 0 stored v3 `pass`/`fail` rows hold it, so no verdict,
   fact reading or daemon count is predicted to move. No figure or baseline moves.
+- 2026-10-23: [[R666]] restores L1's purpose as R349's stale-layout check on v3. R-654 S2's two red checks had each
+  removed only one of the two coverage-index guards; L-R3 removes both and turns L1 red. No figure, baseline or leg
+  code moves.

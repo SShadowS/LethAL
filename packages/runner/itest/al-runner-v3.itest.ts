@@ -512,9 +512,12 @@ function assertCleanLeg(r: SessionReport, b: AlRunnerV3Backend, leg: string): vo
 
 /**
  * L1 (R353's table): multi-batch layout, figures equal v2's. sandbox-layout at maxGuardsPerBatch 7,
- * two batches, EXPECTED_LAYOUT per ref. NOT R349's stale-layout check on v3: deleting
- * `resetLayoutState()` leaves it green (measured, R-654 S2 L-R1), because `deploy()` rebuilds the
- * indexes and proof and `activate(null)` clears the row cache. See docs/gates/alrunner-v3.md.
+ * two batches, EXPECTED_LAYOUT per ref. It is R349's stale-layout check on v3 (R666): v3 reports a
+ * target file's coverage in the batch's EMITTED line numbers, so batch 1 must read it through its own
+ * coverage index. It proves both index guards together, `resetLayoutState()` clearing the index AND
+ * `deploy()` assigning the new one; removing both (L-R3) turns 1/M0006 and 1/M0007 survived, covered
+ * by GrowAboveTen. Removing either alone stays green (R-654 S2 L-R1, L-R2). See
+ * docs/gates/alrunner-v3.md.
  */
 async function legL1(scratch: string): Promise<SessionReport> {
   const b = new AlRunnerV3Backend(
