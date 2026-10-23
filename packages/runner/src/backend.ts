@@ -220,6 +220,13 @@ export interface TestVerdict {
    * `failureNote`; it never moves a verdict. Internal only; absent on every backend but v3.
    */
   readonly backendNote?: string;
+  /**
+   * R639: on a `runner-refused` row under a mutant, the test whose timeout was the call's first
+   * not-run row and came before this one. The covering loop may then go on to the next test; a
+   * loop that finds nothing else ends the mutant as this refusal. Internal only (v3); never a
+   * `SessionReport` field.
+   */
+  readonly refusedAfterStop?: string;
 }
 
 /** R-204b: see `TestVerdict.stopState`. */
@@ -486,6 +493,13 @@ export interface ExecutionBackend {
    * RAN. Absent: none, and such a dependency cannot be read (the run records no test digests).
    */
   dependencyPackageDirs?(): readonly string[];
+
+  /**
+   * R435, OPTIONAL: the folder of `*.Source.zip` apps the backend loads Microsoft test libraries
+   * from when no package folder holds them (al-runner v3's artifact cache), or `undefined` when
+   * the backend cannot name it. The dependency fingerprint hashes those zips too.
+   */
+  dependencyArtifactAppsDir?(): string | undefined;
 
   /**
    * R-385, OPTIONAL: how a backend that PUBLISHES reads Microsoft dependencies for the dependency
