@@ -218,9 +218,13 @@ exports[`R420 part 2: no committed fixture's digest moves fixtures/sandbox-hang-
     "79450::spinuntilatzeroexitsearly": "v3:343165fa567bc07b6b6f724c6957dbc2ec9a7f8b2c5a7de456739559803aa66f",
     "79450::spinuntilreachesthetarget": "v3:470fcc42037e1575fabd84175548c78227a509dd45f246d20965ad826bb6fb05",
     "79450::walkonerowvisitsexactlyonerow": "v3:066f1634b0dbd3bb734512c3c2179642d3e2a1ff356abad629b6b71675870435",
+    "79451::sleepspastthebaselinebudget": "v3:5811d06b0a0f126df014023280e85d0ba5a23e8fd7d367e6dc6a4b43287d97ae",
+    "79451::zpassesafterthestoppedtest": "v3:9076bb93e04ed397b33658cbc434d9260b9d15c873d1786e1599852e3b6d8766",
+    "79451::zzdrainsafterthestop": "v3:0dbb683a7ac6689046b6aece8ddb7ebdab30e5a32b5a0adf45506e0ad4f567d0",
   },
   "objects": {
     "codeunit:79450:Hang Tests": "5a50aaa6162daefc",
+    "codeunit:79451:Hang Z Baseline Tests": "b9efd34b2669ccfc",
   },
   "procs": {
     "79450:Hang Tests.CountUpToReachesTheLimit": "8c961145895736fc",
@@ -228,6 +232,9 @@ exports[`R420 part 2: no committed fixture's digest moves fixtures/sandbox-hang-
     "79450:Hang Tests.SpinUntilAtZeroExitsEarly": "95e8c56bb042abec",
     "79450:Hang Tests.SpinUntilReachesTheTarget": "d325a72551b47ee4",
     "79450:Hang Tests.WalkOneRowVisitsExactlyOneRow": "7912f6a058950ac1",
+    "79451:Hang Z Baseline Tests.SleepsPastTheBaselineBudget": "2af4682fcb9e3deb",
+    "79451:Hang Z Baseline Tests.ZPassesAfterTheStoppedTest": "704f318b90008e7a",
+    "79451:Hang Z Baseline Tests.ZZDrainsAfterTheStop": "32ad378f497b8a98",
   },
 }
 `;

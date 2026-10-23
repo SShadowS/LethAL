@@ -15,7 +15,8 @@ RUN TMPDIR=/opt bash /tmp/install-llvm.sh linux-x64 && test -x /opt/llvm-23.1.2/
 ENV RUSTUP_HOME=/opt/rustup
 RUN curl -fsSL https://sh.rustup.rs | CARGO_HOME=/opt/cargo sh -s -- -y --profile minimal --default-toolchain stable --no-modify-path
 ENV PATH=/opt/cargo/bin:$PATH
-# .NET 10 SDK + 8 runtime (alc/altool run on 10; al-runner targets 8)
+# .NET 10 SDK + 8 runtime (alc/altool run on 10; the 8 runtime served the retired .NET al-runner, R654, and is
+# kept until nothing is shown to need it)
 RUN curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
     && bash /tmp/dotnet-install.sh --channel 10.0 --install-dir /opt/dotnet \
     && bash /tmp/dotnet-install.sh --channel 8.0 --runtime dotnet --install-dir /opt/dotnet \
@@ -42,21 +43,6 @@ RUN ALV="$(curl -fsS -X POST -H 'Content-Type: application/json' -H 'Accept: app
     && for t in alc altool; do printf '#!/bin/sh\nexec /opt/dotnet/dotnet "%s/bin/%s.dll" "$@"\n' "$ALX" "$t" > $ALX/bin/linux/$t; chmod +x $ALX/bin/linux/$t; done \
     && ln -s ms-dynamics-smb.al-$ALV /home/dev/.vscode/extensions/ms-dynamics-smb.al-current \
     && chown -R dev:dev /home/dev/.vscode
-# al-runner: pinned source build c39ad5de (R345), BC 28.5 (same flags as the measured lethal-ops container)
-ARG ALRUNNER_SHA=c39ad5ded38e3bfb3c690f1b48450446754bfa18
-ARG ALRUNNER_VERSION=2.12.0-main.c39ad5de
-ARG ALRUNNER_BC=28.5.54151.55132
-# Build-time HOME is /home/dev, so dotnet and NuGet would leave root-owned ~/.dotnet and ~/.nuget there:
-# give root RUNs that write a cache a throwaway HOME and delete it in the same layer
-RUN export HOME=/tmp/build-home \
-    && git clone --filter=blob:none https://github.com/StefanMaron/BusinessCentral.AL.Runner.git /tmp/alr \
-    && git -C /tmp/alr checkout --detach $ALRUNNER_SHA \
-    && dotnet pack /tmp/alr/AlRunner/AlRunner.csproj -c Release -p:Version=$ALRUNNER_VERSION \
-         -p:AllowBcArtifactDownload=true -p:ServiceTierPath=/tmp/alr-bc/$ALRUNNER_BC -o /tmp/alr-nupkg \
-    && dotnet tool install MSDyn365BC.AL.Runner --tool-path /opt/al-runner/c39ad5de \
-         --add-source /tmp/alr-nupkg --version $ALRUNNER_VERSION \
-    && rm -rf /tmp/alr /tmp/alr-nupkg /tmp/alr-bc /tmp/build-home \
-    && /opt/al-runner/c39ad5de/al-runner --version
 # PowerShell from Microsoft's apt repo (the .deb installs its signing key and list). The base is Ubuntu 26.04
 # and Microsoft's 26.04 repo has no powershell package yet (measured 2026-10-03), so this uses the 24.04 repo;
 # switch to ${VERSION_ID} once the repo carries it. Pinned: powershell is the only package taken from it.

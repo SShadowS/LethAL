@@ -571,6 +571,27 @@ describe("runMany — the watchdog (R198 §3.2)", () => {
     expect(r.cause).toBeUndefined();
   });
 
+  // R658 (M2): the warm confirmation's replay is unmutated, so its 408 scores nothing.
+  for (const [mutantId, text] of [
+    ["", "so it would not strand the server"],
+    ["M0003", "so it could be scored rather than strand the tier"],
+  ] as const) {
+    test(`R658 M2: the grouped 408 text for mutantId ${JSON.stringify(mutantId)} says "${text}"`, async () => {
+      const f = fakes({
+        many: "hold",
+        status: () => statusOf(),
+        stopAt: () => {
+          setTimeout(() => f.release(new Response(AL_STOP_BODY, { status: 408 })), 5);
+          return { stopped: true, sessionId: 9 };
+        },
+      });
+      const r = await transport(f.fetchFn).runMany(req({ stopHungSessions: true, mutantId }));
+      if (r.kind !== "call") throw new Error("expected a call-level answer");
+      expect(r.verdict.outcome).toBe("timeout");
+      expect(r.verdict.failureMessage).toContain(text);
+    });
+  }
+
   test("an unparseable server timestamp never fires (elapsed > budget is false for NaN)", async () => {
     const f = fakes({
       many: "hold",

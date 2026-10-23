@@ -177,13 +177,21 @@ describe("R577: the gate's kill-reproduction check", () => {
       "has no row in REPRODUCTION_EXPECTED",
     );
     // Since R582, 20 BC legs (pre-committed, 39eaf536), envtool's included. R654 S3 removed the
-    // retired itest:alrunner's 20 legs.
-    expect(Object.keys(REPRODUCTION_EXPECTED)).toHaveLength(20);
+    // retired itest:alrunner's 20 legs. R-658 adds hang/baseline (pre-committed, 00d508c4).
+    expect(Object.keys(REPRODUCTION_EXPECTED)).toHaveLength(21);
     const blanks = Object.entries(REPRODUCTION_EXPECTED)
       .filter(([, f]) => Object.values(f).some((v) => v === null))
       .map(([leg]) => leg);
     expect(blanks).toEqual([]);
-    for (const leg of ["bcdev", "tables", "hang/on", "hang/single", "chunked/chunked", "envtool"]) {
+    for (const leg of [
+      "bcdev",
+      "tables",
+      "hang/on",
+      "hang/single",
+      "hang/baseline",
+      "chunked/chunked",
+      "envtool",
+    ]) {
       expect(REPRODUCTION_EXPECTED[leg]).toEqual({ killerRowsPerKill: 2 });
     }
   });

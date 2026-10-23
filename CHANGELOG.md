@@ -226,6 +226,21 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **LethAL now stops a BASELINE test, a kill confirm or a warm replay that runs past its budget,
+  even without `--stop-hung-sessions`** (R658). The flag still governs mutants. Before, such a run
+  was abandoned at its budget and kept running on the BC server, so its op held the control-app
+  lease until an NST restart. Now:
+  - a baseline test our stop ended (BC's 408, or the op was already tombstoned by that stop) is a
+    `timeout`, not green, named in the new `baselineStopped` report field and the
+    `baseline-test-stopped` caveat, and the run goes on;
+  - a cold kill confirm our stop ended the same way is `error` with the new cause `confirm-stopped`;
+  - a stop BC never answers is quarantined as stranded at the baseline, the cold kill confirm and
+    the warm replay alike, and its note says the lease will read clean but must not be trusted
+    until an NST restart;
+  - a baseline holding a stopped test is not saved for `--resume` reuse;
+  - `lethal doctor` says to restart the NST first for a lease held by a `run` op;
+  - `lethal explain` is v19 (`schemas/explain-v19.schema.json`).
+
 - **`--resume` and `--resume-run` now resume a closed-world run that ended before its
   post-execution check** (R601, R620). Before, such a run (a crash, Ctrl-C, any exception after the
   lease) kept its `|pending` test-app identity and was always refused. Now it resumes when it ran
@@ -879,12 +894,25 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
     workers in parallel ([R671](docs/roadmap/R671.md)).
   - **Known gaps left open:** a config `alRunner` section is still ignored without a word until the
     owner rules on its refusal, and an `envTool` section is ignored without a word on `al-runner-v3`
-    ([R674](docs/roadmap/R674.md)). No v3 leg can see a stale layout ([R666](docs/roadmap/R666.md)).
+    ([R674](docs/roadmap/R674.md)). Leg L1 does catch a stale layout on v3: it goes red when both
+    coverage-index guards are removed ([R666](docs/roadmap/R666.md)).
+  - **The v2 tooling and its container wiring are gone** (R654 S5): `scripts/al-runner-update.sh`,
+    `scripts/al-runner-bootstrap.sh` and the update script's test; the container's bootstrap step,
+    `LETHAL_ALRUNNER_PATH` and the pinned c39ad5de build. The v3 update gate,
+    `bun scripts/al-runner-v3-update.ts`, is the only al-runner update path.
 
 - **The unused `MutationControlClient` and `postOData`**, left over from before the LethAL Control
   extension (R506).
 
 ### Fixed
+
+- **A mutant run whose stop was not refused and whose answer was lost now quarantines the server**
+  (R665). Before, a reconcile that read `completed` or `not-started` scored it
+  `stop-outcome-unconfirmed` with no quarantine, and the session ran on. But `completed` may be the
+  stop's own tombstone while the stopped session still runs on the same database as the next mutant
+  (a false-kill risk), and after `not-started` the original request may still arrive. It is now
+  `error` / `stranded`, with a quarantine record and a note `--resume` skips, as at R658's confirm
+  sites. `stop-outcome-unconfirmed` now names only a group answer that arrived but could not be used.
 
 - **`--skip-known-survivors` no longer lends a narrower run's survivors** (R585). A run now records
   its test scope (the tests its baseline is given, as `runs.test_scope`). History lends only when

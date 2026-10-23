@@ -10,13 +10,36 @@ from the gitignored config in `fixtures/sandbox-hang/` that `LETHAL_ITEST_CONFIG
 second, 18:25-18:35 UTC, was under R-389's code with the runtime-17 fixtures and LethAL Control
 1.0.0.23 (log `/coord/handoff/R-389/bc-live/hang-bc3.log`).
 
-It runs three legs, in this order on purpose:
+It runs four legs, in this order on purpose:
 
 - ON (`--stop-hung-sessions`): the stop works, and BC's 408 answer confirms each hang. This leg
   leaves the tier clean.
 - SINGLE (R-204b): the ON leg with `--no-group-runs`, so every covering test goes through
   `RunMutant` alone. This leg is frozen in `hang.single.baseline.json`.
-- OFF: puts the tier in quarantine on purpose, and is torn down afterwards.
+- BASELINE (R-658): stops an UNMUTATED test. It runs without `--stop-hung-sessions`, with a 10 s
+  baseline budget, `--tests-only` on `HangBaselineTests.Codeunit.al` (codeunit 79451 "Hang Z
+  Baseline Tests") and `--operator conditional-boundary`. `SleepsPastTheBaselineBudget` sleeps
+  25 s, so LethAL stops it on the server at 10 s, on the coverage path. The gate then checks 20
+  assertions: the stopped test is a `timeout` with BC's own stop words and is not green, the next
+  test shows no leaked coverage, `ZZDrainsAfterTheStop` still covers and kills the `DrainQueue`
+  mutant (the control that coverage did not silently return nothing), every other mutant is
+  `no-coverage`, there is no quarantine and no baseline snapshot, and a fresh control-app lease is
+  granted and released afterwards. Any failure in this leg is a STOP: exit 5, no further leg, no
+  teardown force-reset, the evidence copied out, and the server's coord lease held until the
+  owner restarts it. The rule and its wrapper are in
+  `docs/superpowers/specs/2026-10-22-r658-hang-baseline-leg-precommitment.md`; the judgements are
+  in `packages/runner/itest/hang-baseline-leg.ts`. A quarantine in ON or SINGLE is a STOP too.
+- OFF: puts the tier in quarantine on purpose, and is torn down afterwards. Since R658 every
+  baseline has the stop, even with the flag off: only the MUTANT runs depend on the flag. At the
+  120 s default no baseline test of this leg runs near its budget, so nothing in it moves.
+
+The three new tests also run in the ON, SINGLE and OFF legs, at the 120 s default, where all three
+pass. Their names sort after codeunit 79450's, so the existing killers stay first and no new test
+runs under a mutant (plan test F1 in `test-order.test.ts`). They add one baseline pass row each
+per leg, and about 25 s per leg.
+
+The BASELINE leg runs only on `bc2` or `bc3`, never on `bc1`, and only through the wrapper
+`/coord/handoff/R-658/run-hang-gate.sh`, which holds the lease on a STOP.
 
 The ON and OFF legs guard against different faults. One fault is minting a kill from LethAL's own
 abort. The other is recording a kill without BC's confirmation. Neither leg is redundant. See the
@@ -43,7 +66,11 @@ it exists. The method undercounts a path that runs through a third app. See R634
     "HANG_FIGURES.warmKills": 4,
     "HANG_FIGURES.coldConfirmsOn": 4,
     "HANG_FIGURES.coldConfirmsSingle": 5,
-    "HANG_FIGURES.stoppedCallsOn": 6
+    "HANG_FIGURES.stoppedCallsOn": 6,
+    "HANG_FIGURES.baselineBudgetMs": 10000,
+    "HANG_FIGURES.baselineSleepMs": 25000,
+    "HANG_FIGURES.baselineLegMutants": 5,
+    "HANG_FIGURES.baselineLegKilled": 1
   }
 }
 ```
@@ -65,8 +92,14 @@ it exists. The method undercounts a path that runs through a third app. See R634
 - The ON leg's group calls are `scored + 2 x warmKills` (one replay and one re-run per warm kill),
   42 before R582 and 46 since. 6 of them are stopped and answer no session id
   (`stoppedCallsOn`): the 5 first timeouts and line 145's re-run. So the distinct grouped session
-  ids are 46 - 6 = 40. The re-runs add about ten 20-25 s stops, which takes the gate to about
+  ids are 46 - 6 = 40. The re-runs add about ten 20-25 s stops, which took the gate to about
   15 minutes.
+- The BASELINE leg (R-658) uses a 10 s baseline budget (`baselineBudgetMs`) against a 25 s
+  `Sleep` (`baselineSleepMs`). It has 5 `conditional-boundary` mutants (`baselineLegMutants`) and
+  exactly one kill (`baselineLegKilled`), the line-103 `DrainQueue` mutant by
+  `ZZDrainsAfterTheStop` at position 1. Both are pinned as numbers, never read back from the
+  report. The leg must finish in under 5 minutes. With it, and the three new tests' 25 s in each
+  of the other legs, the gate takes about 20 minutes, bounded at 25.
 - The ON leg's per-mutant table (`EXPECTED_ON` in `hang.itest.ts`, keyed by line and operator,
   with `killPosition` where it was pre-committed) is asserted by the gate and not pinned here.
 
@@ -86,3 +119,11 @@ R582 (2026-10-22) switched R577's "a kill must reproduce" rule on for bcdev. No 
 the ON leg's group calls went from 42 to 46 and its distinct grouped session ids from 37 to 40,
 and every timeout kill now carries two BC stops. This gate is the first live proof of R577's
 timeout half (`docs/superpowers/specs/2026-10-22-r582-bcdev-kill-reproduction-precommitment.md`).
+
+R658 (2026-10-22, built offline, not yet run live) stops every unmutated run at its budget. It
+added the BASELINE leg, third, and codeunit 79451 to the tests app, which went from 1.0.0.3 to
+1.0.0.4; the target is unchanged. The ON, SINGLE and OFF legs are predicted unchanged per mutant
+(`docs/superpowers/specs/2026-10-22-r658-hang-baseline-leg-precommitment.md` §3). The receipt's
+sublegs are now `stop-hung-sessions-on`, `stop-hung-sessions-single`, `stop-baseline` and
+`stop-hung-sessions-off`. Until a run passes on a server at tests app 1.0.0.4, this gate is
+unproven there (see [servers.md](servers.md)).
