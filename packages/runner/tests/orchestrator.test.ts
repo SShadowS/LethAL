@@ -2170,6 +2170,61 @@ ${TRIGGER_TABLE_AL}#endif
     }
   });
 
+  // R175 (closing): the selection-level test pins `coverageFilter` with its flag off, but nothing
+  // pinned that the SESSION passes it off for the fenced default. Measured by red-check: making the
+  // orchestrator widen locals under `fenced` left every runner test green. A public procedure calls
+  // a local; coverage names the public one and reports an UNNAMED object-level entry, the only
+  // thing the local widening can widen to.
+  describe("R175: the local widening fires on the hub only", () => {
+    const LOCAL_AL = `codeunit 79000 "Sandbox Logic"
+{
+    procedure IsOverBudget(Amount: Decimal; Budget: Decimal): Boolean
+    begin
+        exit(Over(Amount, Budget));
+    end;
+
+    local procedure Over(Amount: Decimal; Budget: Decimal): Boolean
+    begin
+        exit(Amount > Budget);
+    end;
+}
+`;
+    async function localRun(coverage: "fenced" | "procedure") {
+      const dirs = await makeProject();
+      await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), LOCAL_AL);
+      const backend = new StubBackend({ ...CAPS_NST, coverage }, () => "pass");
+      backend.coverageEntriesFor = () => [
+        { objectType: "Codeunit", objectId: 79000, procedure: "IsOverBudget" },
+        { objectType: "Codeunit", objectId: 79000 },
+      ];
+      const store = new ResultsStore(":memory:");
+      try {
+        const report = await runSession({ backend, store, ...dirs, selectorIds });
+        return report.mutants.filter((m) => m.procedureName === "Over");
+      } finally {
+        store.close();
+      }
+    }
+
+    test("fenced: a local whose member key misses is NOT widened to the object, it is no-coverage", async () => {
+      const over = await localRun("fenced");
+      expect(over.length).toBeGreaterThan(0);
+      for (const m of over) {
+        expect(m.verdict).toBe("no-coverage");
+        expect(m.coveringTests).toEqual([]);
+      }
+    });
+
+    test("hub (procedure): the same local IS widened to the object and run, so it survives", async () => {
+      const over = await localRun("procedure");
+      expect(over.length).toBeGreaterThan(0);
+      for (const m of over) {
+        expect(m.verdict).toBe("survived");
+        expect(m.coverageAttribution).toBe("object");
+      }
+    });
+  });
+
   // R516: since then a position-1 timeout earns one unmutated confirmation re-run on every batch;
   // here it passes in well under half the budget, so the kill stands.
   test("timeout under mutant = timeout-killed, after its unmutated confirmation re-run passes", async () => {

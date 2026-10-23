@@ -918,6 +918,13 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **`lethal verify` sees a test whose code reads object ids from the platform** ([R390](docs/roadmap/R390.md)). A test
+  that reaches code holding a record over `AllObj`, `AllObjWithCaption`, `Object`, `Object Metadata` or
+  `Application Object Metadata` now takes the whole-source digest. That includes a page or codeunit whose implicit
+  `Rec` is one, an array of one and a namespaced one. An id read from such a table may be a test-app
+  object's that another app runs, and nothing in the source names it. Before, an edit to that object left the test
+  old. Measured cost over every test app of BC.History, CDO, DC and DO (53,936 tests): 20 more on the fallback. An
+  id computed from data stays a stated limit.
 - **`al-runner-v3` refuses a session in which v3 left out a dependency app** (R590). v3 skips a
   dependency whole when it finds no package with AL source for it. A call into that app by id
   (`Codeunit.Run(<id>)`) then fails with BC's missing-object error, which LethAL scored as a kill,
@@ -930,7 +937,6 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
     problem lines is refused too, even when nothing was skipped; `--verbose` lists them.
   - Leg C of `itest:alrunner-v3` has a new contract fact, `dependency-skip-line` (28 facts), so a v3
     build that stops writing the line is refused by the update gate and by every session.
-
 - **A mutant run whose stop was not refused and whose answer was lost now quarantines the server**
   (R665). Before, a reconcile that read `completed` or `not-started` scored it
   `stop-outcome-unconfirmed` with no quarantine, and the session ran on. But `completed` may be the
