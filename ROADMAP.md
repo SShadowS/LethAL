@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**68 of 689 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**64 of 690 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -633,7 +633,7 @@ that ordering is the priority.
 - **R437** · TypeScript is at 5.9; 7.0 (the native compiler) is out and LethAL has not migrated · [R437.md](docs/roadmap/R437.md) · done (befafd2e)
 - **R423** · The biome auto-format hook runs on a .ts file that still holds merge-conflict markers and damages the code around them · [R423.md](docs/roadmap/R423.md) · open
 - **R428** · r214-history.test.ts times out a hook at the 5 s default under machine load and then leaks its `lethal-r214-hist-*` temp folders, failing R358's leak check too · [R428.md](docs/roadmap/R428.md) · done (772632ef)
-- **R435** · On al-runner (now al-runner-v3) the dependency fingerprint still reads Microsoft apps by declared version; hash them from packagesDir before verify supports it · [R435.md](docs/roadmap/R435.md) · open, filed 2026-10-04
+- **R435** · On al-runner (now al-runner-v3) the dependency fingerprint still reads Microsoft apps by declared version; hash them from packagesDir before verify supports it · [R435.md](docs/roadmap/R435.md) · done (SHA-PENDING)
 - **R439** · Two more unit tests time out at Bun's 5 s default under machine load and pass alone: manifest-stream's short-writes test and runSession's I7 transport-error abort · [R439.md](docs/roadmap/R439.md) · done (8ef7ce7e)
 - **R440** · scripts/r402-shape-sweep.ts crashes since R-307: it calls writeInstrumentedProject without identityOrdinals, and no typecheck covers the script · [R440.md](docs/roadmap/R440.md) · done (3e3555ab)
 - **R449** · Three SQLite-heavy unit tests time out at bun's 5 s default on GitHub CI's Windows job only (7 to 8.3 s), each passing on other runs · [R449.md](docs/roadmap/R449.md) · done (f224fa0d)
@@ -671,17 +671,17 @@ that ordering is the priority.
 - **R596** · bc-linux-setup writes no selectorIds into the sandbox-harden config, so itest:agreement refuses on bc servers · [R596.md](docs/roadmap/R596.md) · done (c881d0ba)
 - **R597** · lethal verify's test-app-version-below-resident refusal tells the user to run Sync-NAVApp, a Windows/BcContainerHelper-only fix, on the Linux bc servers too · [R597.md](docs/roadmap/R597.md) · open, filed 2026-10-21
 - **R598** · scripts/bc-linux-setup.ts takes its bc server lease in lane `code`'s name, whoever runs it · [R598.md](docs/roadmap/R598.md) · done (7dd00798)
-- **R602** · al-runner-v3 inherits v2's multi-object and #if-wrapped coverage refusal without a measurement on v3 · [R602.md](docs/roadmap/R602.md) · open
+- **R602** · al-runner-v3 inherits v2's multi-object and #if-wrapped coverage refusal without a measurement on v3 · [R602.md](docs/roadmap/R602.md) · open (narrowed 2026-10-23: v3 measured correct in two shapes; the refusal costs speed only)
 - **R599** · scripts/bc-linux-setup.ts compares app versions, not contents, so a fixture rebuilt without a version bump keeps a stale build resident · [R599.md](docs/roadmap/R599.md) · done (d89d6eb4): decides by normalised content digest; live on bc3 twice (run 2 on this head)
 - **R603** · CI's Windows check job runs the unit suite serially; a parallel run there is unmeasured · [R603.md](docs/roadmap/R603.md) · open, filed 2026-10-21
 - **R605** · The dev endpoint refuses a publish below the installed-version record after an unpublish, so a minted gate version cannot be replaced by the app.json build on the Linux bc servers · [R605.md](docs/roadmap/R605.md) · open
 - **R606** · al-runner v3 serve: resources are in the warm compile key, so a changed resource file forces a full recompile although resources reach the VM only at run time (upstream #5635's first half; local build and measurement only, no PR) · [R606.md](docs/roadmap/R606.md) · closed 2026-10-22 — ruling (owner): implemented upstream…
-- **R607** · al-runner-v3: snapshot reuse and --resume drop the [v3-refused-test-nearby] note · [R607.md](docs/roadmap/R607.md) · open
+- **R607** · al-runner-v3: snapshot reuse and --resume drop the [v3-refused-test-nearby] note · [R607.md](docs/roadmap/R607.md) · closed 2026-10-23 — fixed by R678 (3d78e671)
 - **R608** · al-runner-v3: the compile proof does not bind non-.al files, <testDir>/.alpackages or subfolders of <deps> · [R608.md](docs/roadmap/R608.md) · done (86903c8b)
 - **R612** · On al-runner v3, the v2-era serve rule "close the daemon after any non-pass/fail row" makes every suite run cold-start, because #5607's Commit tests are always not run · [R612.md](docs/roadmap/R612.md) · done (592ec593)
 - **R609** · al-runner-v3: a no-coverage caused by a refused covering test carries no note · [R609.md](docs/roadmap/R609.md) · open
 - **R613** · al-runner v3: one routine lowering cannot handle (a [RunOnClient] DotNet call) anywhere in a subscriber's static reach makes the reach "not known", so every test is refused although the routine never runs (upstream #5641; local fix only, no PR) · [R613.md](docs/roadmap/R613.md) · closed 2026-10-22 — ruling (owner): implemented upstream…
-- **R610** · al-runner-v3: unmeasured whether --coverage-json lists files reached only by a dynamic call · [R610.md](docs/roadmap/R610.md) · open
+- **R610** · al-runner-v3: unmeasured whether --coverage-json lists files reached only by a dynamic call · [R610.md](docs/roadmap/R610.md) · closed 2026-10-23 — measured: dynamically reached files are listed (alpha.2 and alpha.4); large projects…
 - **R615** · scripts/bc-linux-setup.ts records every lane's lease token in one shared file per server (TOKEN_DIR fixed to the R-589 folder, lease-<server>.txt), so two lanes overwrite each other's record · [R615.md](docs/roadmap/R615.md) · open, filed 2026-10-21
 - **R611** · R586's T15 backend-identity scanner is blind to case labels, split compares, .includes and src subfolders · [R611.md](docs/roadmap/R611.md) · done (d43ed20c)
 - **R614** · al-runner-v3 update gate: existing fixture .alpackages are not checked against the pinned symbol tar · [R614.md](docs/roadmap/R614.md) · done (72203cfc)
@@ -698,7 +698,7 @@ that ordering is the priority.
 - **R635** · al-runner v3 backend: use serve's multi-entry runTests (one compile, a resources override per mutant) for bcdev-like speed · [R635.md](docs/roadmap/R635.md) · done (5159e50e)
 - **R636** · R631's link scan caps depth through links, not real depth: a long pnpm link chain with no .al refuses falsely · [R636.md](docs/roadmap/R636.md) · done (ee9f0a3b)
 - **R638** · al-runner v3: a test codeunit's OnRun trigger is not under the per-test CPU limit, so a hang there holds the call until LethAL's own deadline (upstream #5698) · [R638.md](docs/roadmap/R638.md) · closed 2026-10-23 — ruling: still present on alpha.2 and edge 57f1e4f98 (measured), and LethAL's own call…
-- **R639** · al-runner v3: when LethAL's first covering test is a not-trusted row after a timeout, the mutant ends as error and never reaches the hanging sibling's timeout kill · [R639.md](docs/roadmap/R639.md) · open, filed 2026-10-22
+- **R639** · al-runner v3: when LethAL's first covering test is a not-trusted row after a timeout, the mutant ends as error and never reaches the hanging sibling's timeout kill · [R639.md](docs/roadmap/R639.md) · done (SHA-PENDING)
 - **R640** · R636's link-scan cap message blames the LAST link for a folder budget shared across the whole walk · [R640.md](docs/roadmap/R640.md) · done (8daecd3f)
 - **R642** · corpus-snapshot's heavy-job guard still allows two heavy jobs; the 32 GB container allows three, with BaseApp corpus jobs still capped at two · [R642.md](docs/roadmap/R642.md) · done (1e6d3b8a)
 - **R643** · Since R-646c, --resume deploys every fully scored batch (no whole-batch replay); a snapshot-confirmed whole carry could skip that deploy · [R643.md](docs/roadmap/R643.md) · open, filed 2026-10-22
@@ -734,6 +734,7 @@ that ordering is the priority.
 - **R689** · LethAL Control could report a test codeunit's own OnRun error when suite discovery lists none of its methods (today LethAL can only name the likely cause) · [R689.md](docs/roadmap/R689.md) · open, filed 2026-10-23
 - **R691** · hashAlFiles drops a file named like a LethAL control file at ANY folder depth, so such a user file is in no hash while v3 and alc still compile it · [R691.md](docs/roadmap/R691.md) · done (d43ed20c)
 - **R693** · Leg C's timeout-is-cpu flips with core-0 conditions; every v3 leg C and the daily update gate read gate-fail · [R693.md](docs/roadmap/R693.md) · done (b9942236)
+- **R694** · al-runner v3 marks a later failure after a refusal as not trusted but not a later timeout; LethAL now refuses such a timeout · [R694.md](docs/roadmap/R694.md) · done (SHA-PENDING)
 
 ---
 

@@ -226,6 +226,25 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **al-runner v3: a timeout after an earlier refusal or stop in the same call is no longer a kill**
+  ([R694](docs/roadmap/R694.md), upstream issue 5776). v3 marks a later failure after a refused test as not
+  trusted, but not a later timeout, and a refusal can leave state behind. With a mutant active, such a timeout is
+  now an `error` (`runner-test-error`) with a note naming the earlier tests. A timeout with no earlier refusal or
+  stop is still `timeout-killed`.
+
+- **al-runner v3: the covering loop goes on past a refusal that follows a timeout** ([R639](docs/roadmap/R639.md)).
+  Before, such a refusal ended the mutant as `error` and the hanging test, which would have been a confirmed
+  timeout kill, was never asked. Now the next covering test is asked. If nothing else decides the mutant, it still
+  ends `error` (`runner-refused`) with the same note; it is never `survived`.
+
+- **al-runner v3: Microsoft dependencies are hashed by the bytes in the package folder** ([R435](docs/roadmap/R435.md)).
+  The dependency fingerprint of the test app used the declared version of each Microsoft app. It now hashes
+  `Application` and every Microsoft package it finds in `alRunnerV3.packagesDir`, with their dependencies. A
+  Microsoft app missing from the folder leaves the run unproven (`test-app-dependencies-unproven`); the run
+  goes on. Every v3 test-app fingerprint changes once, so a `--resume` of a v3 run made before this change is
+  refused once (`TestAppRepublishedError`: the test app's dependencies changed), and stored v3 snapshots stop
+  matching once.
+
 - **Leg C's `timeout-is-cpu` fact no longer depends on CPU speed** ([R693](docs/roadmap/R693.md)). Its fixed burn
   counts stopped working on 2026-10-23 (the same burn now costs more CPU than the 2 s limit on a loaded core), so
   every v3 leg C and the daily update gate read gate-fail. It now runs one huge burn (2,000,000,000 steps) twice

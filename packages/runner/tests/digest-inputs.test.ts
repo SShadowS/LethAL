@@ -406,6 +406,66 @@ describe("R-385: Microsoft dependencies by the bytes the server holds", () => {
 });
 
 /**
+ * R435: a backend that does not publish but is handed package folders (al-runner v3) hashes the
+ * Microsoft packages in those folders. No System, no control app, no installed check.
+ */
+describe("R435: Microsoft dependencies by the bytes in the package folder", () => {
+  const FOLDER: MicrosoftMode = { kind: "folder" };
+  /** A folder holding Application (which depends on `MS`) and `MS`, each at its own build. */
+  const folder =
+    (o: { app?: string; lib?: string; missing?: readonly string[] } = {}): PackageReader =>
+    async (d) => {
+      if (o.missing?.includes(d.id)) return UNREAD;
+      if (d.id === APPLICATION_APP_ID)
+        return [
+          pkg(
+            APPLICATION_APP_ID,
+            "Application",
+            "Microsoft",
+            o.app ?? "a",
+            depTag(MS, "Lib", "Microsoft"),
+          ),
+        ];
+      if (d.id === MS) return [pkg(MS, "Lib", "Microsoft", o.lib ?? "l")];
+      return UNREAD;
+    };
+  // The test app declares ONLY `application`, as a real suite's app.json does.
+  const appOnly = appInputsOfAppJson({ application: "28.0.0.0" });
+  const direct = root("Microsoft", MS);
+
+  test("Application swapped at the same version changes the fingerprint (the meta app is queued)", async () => {
+    const at = (app: string) => dependencyFingerprint(appOnly, folder({ app }), FOLDER);
+    expect(await at("one")).not.toBe(await at("two"));
+    expect(await at("one")).toBe(await at("one"));
+  });
+
+  test("a Microsoft app reached only through Application is read too", async () => {
+    const at = (lib: string) => dependencyFingerprint(appOnly, folder({ lib }), FOLDER);
+    expect(await at("one")).not.toBe(await at("two"));
+  });
+
+  test("a direct Microsoft dependency swapped at the same version changes it; the same bytes do not", async () => {
+    const at = (lib: string) => dependencyFingerprint(direct, folder({ lib }), FOLDER);
+    expect(await at("one")).not.toBe(await at("two"));
+    expect(await at("one")).toBe(await at("one"));
+  });
+
+  test("the folder fingerprint never equals the declared one", async () => {
+    expect(await dependencyFingerprint(direct, folder(), FOLDER)).not.toBe(
+      await dependencyFingerprint(direct, folder(), DECLARED),
+    );
+  });
+
+  test("a Microsoft dependency missing from the folder refuses by name, never falls back to declared", async () => {
+    await refusesNaming(dependencyFingerprint(direct, folder({ missing: [MS] }), FOLDER), MS);
+    await refusesNaming(
+      dependencyFingerprint(appOnly, folder({ missing: [APPLICATION_APP_ID] }), FOLDER),
+      "Application",
+    );
+  });
+});
+
+/**
  * R630: an unread package keeps refusing with the same `DependencyUnreadableError`, and its message
  * now names the read's cause. Each through the real reader or caller, never the error alone.
  */
