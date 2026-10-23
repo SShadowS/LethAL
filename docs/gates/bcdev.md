@@ -59,7 +59,7 @@ What the figures mean:
 - R193 and R197 (2026-09-02) re-recorded the baseline. R193 added identity ordinals for twins.
   R197 made covering tests run killer-first.
 - From R220 until R654 the .NET al-runner gate was compared with this gate's table mutant by
-  mutant (history: [alrunner.md](alrunner.md)). Since R654 the Rust al-runner's legs S1, S3 and K
+  mutant (history: [alrunner.md](alrunner.md)). Since R654 the Rust al-runner's legs S1 and K
   are compared with it the same way; see [alrunner-v3.md](alrunner-v3.md).
 - R589 (2026-10-21): the gate passed on `bc1`, `bc2` and `bc3`, per mutant equal to its baseline,
   on the pre-runtime-17 fixtures. It passed on `bc1` again under R-583's runtime-17 code. The

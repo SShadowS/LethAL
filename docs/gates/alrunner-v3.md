@@ -45,7 +45,9 @@ The legs:
     in a session, and never counted as gone.
   - In every session, a row whose message starts `NotRun: out-of-scope:` but has no `notRun` scores `error`
     (`runner-test-error`), never a kill, survive or pass (K1(a)).
-- S1, S3: `fixtures/sandbox-app`, one-shot, per mutant equal to `bcdev.baseline.json` (`itest:bcdev`'s table).
+- S1: `fixtures/sandbox-app`, one-shot, per mutant equal to `bcdev.baseline.json` (`itest:bcdev`'s table).
+- S3: runs no session. It checks that `selectorMode: "resource"` is refused by name
+  (`al-runner-v3-resource-selector-refused`).
 - N1: the names fixture (R557's tests are unselectable on v3, upstream #5572).
 - X (a) to (f): the compile proof, the binding checks and the Sleep rule (§6) on `scripts/r586-probe`.
 - D1, D1c: the Continia Document Output slice, compared per mutant with R594's BC oracle

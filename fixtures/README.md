@@ -876,7 +876,7 @@ The table was first worked out by hand, by walking `fixtures/sandbox-app/src/*.a
 Tier 1 operator (`packages/builtin-tier1`) and reasoning through
 `fixtures/sandbox-tests/src/SandboxTests.Codeunit.al`. Its verdict columns are now copied from the
 committed frozen baselines (R243). The bcdev column is `packages/runner/itest/bcdev.baseline.json`,
-the per-mutant truth. `itest:alrunner-v3`'s legs S1, S3 and K must equal that column per mutant.
+the per-mutant truth. `itest:alrunner-v3`'s legs S1 and K must equal that column per mutant.
 
 The two al-runner columns are HISTORY. They were copied from `al-runner.baseline.json` (the .NET
 gate's legs, which read al-runner's `--coverage`, R220) and `al-runner.cli-default.baseline.json`
@@ -915,7 +915,7 @@ nested `if`/`while` blocks (confirmed by `packages/builtin-tier1/tests/empty-blo
 | Backend | killed | survived | no-coverage | mutation score |
 |---|---|---|---|---|
 | bcdev (`itest:bcdev`) | 3 | 12 | 4 | 3/15 = 20.0% |
-| al-runner-v3 (`itest:alrunner-v3` legs S1, S3 and K; coverage on, the default) | 3 | 12 | 4 | 3/15 = 20.0% |
+| al-runner-v3 (`itest:alrunner-v3` legs S1 and K; coverage on, the default) | 3 | 12 | 4 | 3/15 = 20.0% |
 | .NET al-runner (retired, R654), gate legs with `--coverage` (`itest:alrunner`), and the CLI default since R394 (the gate's CLI-default leg) | 3 | 12 | 4 | 3/15 = 20.0% |
 | .NET al-runner (retired, R654), `coverage:"none"` (the CLI default under R387) | 3 | 16 | 0 | 3/19 = 15.8% |
 
@@ -1774,8 +1774,8 @@ bun packages/runner/src/cli.ts run \
 
 ## Parallel execution
 
-**Since R654 (2026-10-22) no backend accepts `--workers` > 1.** bcdev refuses it (below), and
-`al-runner-v3` runs one worker. The .NET al-runner was the only backend that ran workers in
+**Since R654 (2026-10-22) no backend accepts `--workers` > 1.** bcdev refuses it (below), and so does
+`al-runner-v3` (`al-runner-v3-workers-refused`). The .NET al-runner was the only backend that ran workers in
 parallel, and it was retired. `runSession`'s worker fan-out is still in the code but unreachable,
 and its tests are skipped ([R671](../docs/roadmap/R671.md)). Everything in this section about
 al-runner workers is history.
