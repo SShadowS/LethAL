@@ -33,7 +33,7 @@ import {
   v3CallDeadlineMs,
   v3RowVerdict,
 } from "../src/al-runner-v3-backend";
-import type { V3ContractResult } from "../src/al-runner-v3-contract";
+import { MESSAGE_PREFIX_REASON, type V3ContractResult } from "../src/al-runner-v3-contract";
 import { sha256OfFile } from "../src/al-runner-v3-pin";
 import { AlRunnerV3CoverageJoinError } from "../src/al-runner-v3-sleep";
 import { AlcCompileError, type ArtifactIo, ArtifactPrepareError } from "../src/artifact";
@@ -389,7 +389,7 @@ describe("R639 r9 §2: status() passes candidate into the unlike-bc refusals and
       },
     ],
   };
-  async function statusOf(candidate: boolean) {
+  async function statusOf(candidate: boolean, contract: V3ContractResult = UNLIKE) {
     const l = await layout();
     const NS = 'xmlns="http://schemas.microsoft.com/navx/2015/manifest"';
     await writeFile(
@@ -415,7 +415,7 @@ describe("R639 r9 §2: status() passes candidate into the unlike-bc refusals and
       ...(candidate ? { candidate: true } : {}),
     });
     // The probe itself is tested in al-runner-v3-contract.test.ts; seed its result, test the wiring.
-    (b as unknown as { contract: V3ContractResult }).contract = UNLIKE;
+    (b as unknown as { contract: V3ContractResult }).contract = contract;
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
       const s = await b.status();
@@ -434,6 +434,24 @@ describe("R639 r9 §2: status() passes candidate into the unlike-bc refusals and
     expect(s.ok).toBe(false);
     expect(s.details).toMatch(/UNLIKE-BC — refusal-row-shape/);
     expect(warned).not.toMatch(/unlike-bc/);
+  });
+  test("R667: a prefixed failure message refuses the session before any mutant is scored, naming K1(a)", async () => {
+    const prefixed: V3ContractResult = {
+      facts: [
+        {
+          fact: "message-has-no-type-prefix",
+          kind: "contract",
+          verdict: "diverged",
+          expected: "x",
+          measured: 'prefix "SomeException: "; Fails "SomeException: NotRun: out-of-scope: x"',
+        },
+      ],
+    };
+    for (const candidate of [false, true]) {
+      const { s } = await statusOf(candidate, prefixed);
+      expect(s.ok).toBe(false);
+      expect(s.details).toContain(`why: ${MESSAGE_PREFIX_REASON}`);
+    }
   });
 });
 

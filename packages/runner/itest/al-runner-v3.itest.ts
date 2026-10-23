@@ -350,6 +350,13 @@ let legCWarnFacts: Record<string, string> | undefined;
 
 /** Returns the warn lines (R612 `serve-keep-reasons`) of a passing leg, for the receipt. */
 async function legC(scratch: string): Promise<readonly string[]> {
+  // R667 (r12): `message-has-no-type-prefix`'s Assert half needs Microsoft's Library Assert, which
+  // only the tables fixture's packages hold. Absent, the fact reads unmeasurable (infra-fail).
+  const dataPkgs = join(fixture("sandbox-data-tests"), ".alpackages");
+  const assertApps = (await readdir(dataPkgs)).filter((f) =>
+    f.startsWith("Microsoft_Library Assert_"),
+  );
+  const [libraryAssert] = assertApps;
   const r = await runV3ContractProbe({
     alRunnerPath: BIN,
     expectedVersion: (execFileSync(BIN, ["--version"], { encoding: "utf8" }) as string).trim(),
@@ -358,6 +365,9 @@ async function legC(scratch: string): Promise<readonly string[]> {
     alcPath: ALC,
     cacheDir: CACHE,
     tasksetPath: "/usr/bin/taskset",
+    ...(assertApps.length === 1 && libraryAssert !== undefined
+      ? { libraryAssertApp: join(dataPkgs, libraryAssert) }
+      : {}),
   });
   // F4 (R639): the measured rows whole, so the kept gate.log shows every field.
   for (const f of r.facts) console.log(legCFactLine(f));
@@ -365,8 +375,8 @@ async function legC(scratch: string): Promise<readonly string[]> {
   legCWarnFacts = Object.fromEntries(
     r.facts.filter((f) => V3_WARN_FACTS.includes(f.fact)).map((f) => [f.fact, f.verdict]),
   );
-  // RC-2 (I-2): a defect fact moving to `gone` is held; any diverged is gate-fail. 26 facts (r9,
-  // R639: 9 defect, 16 contract, 1 warn); a warn fact (V3_WARN_FACTS) only adds its line.
+  // RC-2 (I-2): a defect fact moving to `gone` is held; any diverged is gate-fail. 27 facts (r12,
+  // R667: 9 defect, 17 contract, 1 warn); a warn fact (V3_WARN_FACTS) only adds its line.
   const c = classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS, V3_WARN_FACTS);
   for (const l of c.lines) console.log(`  C: ${l}`);
   if (c.outcome === "gate-fail") throw new LegFailure(`C: ${c.lines.join("; ")}`);
