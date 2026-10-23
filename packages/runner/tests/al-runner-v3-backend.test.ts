@@ -1146,6 +1146,27 @@ describe("T24 (I1) and I3: the notes", () => {
     expect(b.survivorNote([ref("A")])?.startsWith(V3_REFUSED_NEARBY_TAG)).toBe(true);
     expect(b.survivorNote([ref("Q", 1)])).toBeUndefined();
   });
+
+  test("R677: a batch-0 baseline refusal still notes a survivor in a later batch whose baseline ran nothing (a reused --resume snapshot)", async () => {
+    const l = await layout();
+    const rows = () => [
+      { method: "A", status: "pass" as const },
+      {
+        method: "B",
+        status: "error" as const,
+        notRun: true,
+        message: "NotRun: out-of-scope: Commit",
+      },
+    ];
+    const b = backendOf(l, fakeV3(rows, { coverage: plainCoverage }).spawn, fakeAlc().io);
+    await b.deploy(l.batch);
+    await b.activate(null);
+    await b.run(ref("B"), { coverage: "none", timeoutMs: 1000 });
+    // Batch 1: a reused snapshot runs no baseline call, so it records no refusal of its own.
+    await b.deploy(l.batch);
+    await b.activate(null);
+    expect(b.survivorNote([ref("A")])?.startsWith(V3_REFUSED_NEARBY_TAG)).toBe(true);
+  });
 });
 
 describe("§6 the Sleep rule through the backend (T12, T31, T32)", () => {

@@ -653,7 +653,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private testsPerCodeunit = new Map<number, number>();
   /** The session suite, per codeunit: the tests a call must have exactly one row for. */
   private suitePerCodeunit = new Map<number, readonly TestMethodRef[]>();
-  /** I3: tests v3 refused at baseline (notRun, not a timeout), per codeunit. */
+  /**
+   * I3: tests v3 refused at baseline (notRun, not a timeout), per codeunit. Session-scoped on
+   * purpose, so `resetLayoutState` does not clear it (R677): a refusal depends on the test and the
+   * v3 build, both fixed for the session, and every batch's baseline runs the whole suite. A
+   * resumed batch that reuses its snapshot runs no baseline call, and a per-batch clear would
+   * silently drop a true note there.
+   */
   private baselineRefused = new Map<number, Set<string>>();
   private dotnetHelperWarned = false;
   private readonly compiler: ArtifactCompiler;
