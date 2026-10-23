@@ -24,11 +24,17 @@ The probe ran on bc3 on 2026-10-23, 08:10-08:11Z, under lane bugs' coord lease. 
 - **The close.** `backend.close()` began at +13 s and returned at +15.0 s in both cases, because it waits for the
   bc-dev-mcp child to end. The pre-commitment named +13 s. The +16 s read still falls after the close and 9 s before
   the test's Sleep would end.
-- **Reading the rows:** each H case's hub test session is the one `Web Client` row that appeared. It was listed while
-  the hub was open, at +5 s and +12 s, after LethAL had already given up at about 10 s. It was gone at +16 s, after
-  the close and before its own Sleep's end. So BC ended it when the hub connection closed.
-  - The `Web Service` rows with negative ids (-4900, -4932, -4942) log in at the time of the probe's own reads. They
-    are most likely the reading session itself under the opposite-sign id R53 measured. They are not the test.
+- **Reading the rows:** each H case's hub test session is taken to be the one `Web Client` row that appeared.
+  - It was listed while the hub was open, at +5 s and +12 s, after LethAL had already given up at about 10 s.
+  - It was gone at +16 s, before its own Sleep's end. So it ended between +12 s and +16 s, and the only event in
+    that window was the close (+13 s to +15 s). That the close ended it is an inference, not a direct reading.
+  - "Gone from `Active Session`" was not checked against a side effect of the AL code, such as a write after the
+    Sleep.
+- **The negative-id `Web Service` rows (-4900, -4932, -4942) are not identified.** -4900 logged in before the lease
+  was taken, and only -4942 lines up with one of the probe's reads. Row E does not depend on which row is the test:
+  every row that appeared in a case was gone by +16 s, -4942 included.
+- **Not in the evidence file:** `lease.releasedAt` reads `null` in `bc3-probe.json`, because the driver writes the
+  file before the wrapper releases the lease. The release happened at 08:11:18Z (`/coord/handoff/R-661/probe/lease.txt`).
 - **Decision row E** (pre-commitment §7), in both H cases. The predictions held, including the low-confidence one
   (gone by +16 s).
 
@@ -36,9 +42,11 @@ The probe ran on bc3 on 2026-10-23, 08:10-08:11Z, under lane bugs' coord lease. 
 
 - A hub baseline that outlives its budget keeps running while LethAL's bc-dev-mcp child keeps the hub open. LethAL
   already treats it as `in-flight-unknown`: it quarantines the tier and stops the session (F2). The hub connection
-  closes when the session closes the backend, and BC then ends the test session. Nothing is left on the server, and
-  the op marker is never involved.
+  closes when the session closes the backend (`cli.ts` calls `backend.close()` in a `finally`). The test session
+  was then gone within seconds. Nothing was left on the server, and the op marker is never involved.
 - So the quarantine is conservative: it asks an operator to clear a server that is in fact clean. That is the safe
-  direction, for a mode due for deletion after the first release (R059) and a mode, `line`, that no config can select
-  (F1).
+  direction, for a mode due for deletion after the first release (R059).
+- **F1, corrected by the build review:** `line` is not in the typed config, but it is not refused at runtime either.
+  `validateBcDevConfig` returns the config section unchecked, so a hand-written `"coverageMode": "line"` reaches the
+  hub. The ruling still holds, because `line` was measured and also fell in row E. The gap is filed as R681.
 - R661 is closed by ruling (pre-commitment row E): docs only, no code.
