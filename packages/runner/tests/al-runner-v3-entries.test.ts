@@ -2691,6 +2691,59 @@ describe("R654 S2: a batch's latched blind note does not cross into the next bat
   });
 });
 
+// R666: `baselineRows` and `union` are cleared only by `resetLayoutState()` (deploy() rebuilds
+// neither), so these are the serve-entries state a missing reset would carry into the next batch.
+describe("R666: serve-entries state does not cross a deploy", () => {
+  const twoCu = [
+    { mutantId: "M0001", refs: [ref("A")] },
+    { mutantId: "M0002", refs: [ref("C", CU2)] },
+  ];
+
+  test("S1a: batch 0's baseline rows never answer for a batch that ran no baseline (a reused snapshot)", async () => {
+    const r = await rig();
+    await baseline(r.b, SUITE1);
+    await r.b.prefetchMutants(plans(["M0001"]));
+    expect(r.serve.daemons).toHaveLength(1);
+    const n0 = r.serve.requests.length;
+    await r.b.deploy(r.l.batch);
+    await baseline(r.b, []);
+    const err = await r.b.prefetchMutants(plans(["M0001"])).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AlRunnerV3EntriesRefusedError);
+    expect(String(err)).toContain("al-runner-v3-entries-no-baseline-rows");
+    expect(String(err)).toContain(String(CU));
+    expect(r.serve.requests).toHaveLength(n0);
+    expect(r.serve.daemons).toHaveLength(1);
+  });
+
+  test("S1b: batch 1's warm-up is compared with batch 1's own baseline rows", async () => {
+    // B fails in batch 1 only, on the one-shot baseline and on the daemon alike.
+    let batch = 0;
+    const rows: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        batch === 1 && x.method === "B" ? { ...x, status: "fail" as const, message: "b1" } : x,
+      );
+    const r = await rig({ oneShotRows: rows, serve: { rows } });
+    await baseline(r.b, SUITE1);
+    await r.b.prefetchMutants(plans(["M0001"]));
+    batch = 1;
+    await r.b.deploy(r.l.batch);
+    await baseline(r.b, SUITE1);
+    await r.b.prefetchMutants(plans(["M0001"]));
+    expect(r.serve.daemons).toHaveLength(2);
+  });
+
+  test("S2: batch 1's warm-up selects batch 1's codeunits only", async () => {
+    const r = await rig({ suite: SUITE2 });
+    await baseline(r.b, SUITE2);
+    await r.b.prefetchMutants(twoCu);
+    expect(r.serve.firsts()[0]?.ids).toEqual(["NONE|echo", `NONE|${CU}`, `NONE|${CU2}`]);
+    await r.b.deploy(r.l.batch);
+    await baseline(r.b, SUITE2);
+    await r.b.prefetchMutants(plans(["M0001"]));
+    expect(r.serve.firsts()[1]?.ids).toEqual(["NONE|echo", `NONE|${CU}`]);
+  });
+});
+
 // R653 (plans 2026-10-22-r653-paired-confirm-r2.md, -r3.md): a cold fail kill's confirm (NONE) and
 // its R577 reproduction (M) in ONE entries request, confirm first. Requests on the fake: 0 the
 // warm-up, 1 the prefetch, 2 the pair (or today's live confirm), 3 today's live reproduction.

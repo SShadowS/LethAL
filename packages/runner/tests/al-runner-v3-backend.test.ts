@@ -1467,3 +1467,88 @@ codeunit 79000 "Logic"
     expect(b.sleepIndexSize()).toEqual({ target: 0, test: 0 });
   });
 });
+
+// R666 (R349 on v3): v3 labels a target file's coverage by the deployed flat path, in the EMITTED
+// line numbers of that batch's text (measured on alpha.2, /coord/handoff/R-666/measure.md §2).
+// So batch 1's lines must be read through batch 1's index. Two guards keep the index fresh:
+// `resetLayoutState()` clears it, and `deploy()` assigns the new one unconditionally. Either alone
+// is enough, so deleting only one of them leaves this test green BY DESIGN; it goes red only when
+// both go (the stale index), or when batch 1 gets no index at all.
+describe("R666: batch 1's coverage is read through batch 1's layout (one-shot)", () => {
+  // Batch 0: Grow on lines 3-6, Twice on lines 8-15; the object ends on line 16.
+  const BATCH0_AL = `codeunit 79000 "Logic"
+{
+    procedure Grow(X: Integer): Integer
+    begin
+        exit(X + 1);
+    end;
+
+    procedure Twice(X: Integer): Integer
+    // padding: Twice spans lines 8 to 15 here
+    //
+    //
+    //
+    begin
+        exit(X * 2);
+    end;
+}
+`;
+  // Batch 1: Grow lengthened to lines 3-14, so Twice's exit (line 18) is past batch 0's object.
+  const BATCH1_AL = `codeunit 79000 "Logic"
+{
+    procedure Grow(X: Integer): Integer
+    begin
+        X := X + 1;
+        X := X + 1;
+        X := X + 1;
+        X := X + 1;
+        X := X + 1;
+        X := X + 1;
+        X := X + 1;
+        X := X + 1;
+        exit(X);
+    end;
+
+    procedure Twice(X: Integer): Integer
+    begin
+        exit(X * 2);
+    end;
+}
+`;
+  test("batch 1's Grow line inside batch 0's Twice span is Grow, and its Twice line past batch 0's end is Twice", async () => {
+    const l = await layout(BATCH0_AL);
+    // A calls Grow, B calls Twice; each hit is at the emitted line of the batch deployed now.
+    let lines = { A: 5, B: 14 };
+    const cov = (_id: string, active: string) => ({
+      coverage: [],
+      perTestCoverage: (["A", "B"] as const).map((m) => ({
+        test: `Codeunit${CU}.${m}`,
+        coverage: [
+          {
+            file: join(active, "Logic.Codeunit.al"),
+            statements: [{ line: lines[m], hits: 1, scope: m === "A" ? "Grow" : "Twice" }],
+          },
+        ],
+      })),
+    });
+    const v3 = fakeV3(allPass, { coverage: cov });
+    const b = backendOf(l, v3.spawn, fakeAlc().io, { coverage: "al-runner" });
+    b.useBuildSymbols([]);
+    const procs = async () => {
+      await b.activate(null);
+      const out: (string | undefined)[][] = [];
+      for (const m of ["A", "B"]) {
+        const v = await b.run(ref(m), { coverage: "al-runner", timeoutMs: 1000 });
+        out.push((v.coverage?.entries ?? [{ procedure: "<no coverage>" }]).map((e) => e.procedure));
+      }
+      return out;
+    };
+    await b.deploy(l.batch);
+    expect(await procs()).toEqual([["Grow"], ["Twice"]]);
+    // The next batch: the same file, instrumented differently.
+    await writeFile(join(l.batch, "Logic.Codeunit.al"), BATCH1_AL);
+    lines = { A: 10, B: 18 };
+    await b.deploy(l.batch);
+    expect(await procs()).toEqual([["Grow"], ["Twice"]]);
+  });
+});
