@@ -1,5 +1,3 @@
-import { describeAlRunnerCache } from "./al-runner-cache";
-import type { AlRunnerCacheReport } from "./al-runner-cache";
 import { compareAppVersions } from "./app-version";
 import { MIN_CONTROL_VERSION, UnfilteredExtensionsQueryError } from "./harness";
 import type { LeaseSnapshot } from "./harness";
@@ -89,7 +87,7 @@ export interface DoctorDeps {
    * (`HarnessVerifier.fetchCompanies`, BC's own `api/v2.0/companies`). Both come from ONE lazy
    * call, because on an env-tool config the configured company is itself resolved by the tool,
    * and resolving it eagerly in `buildDoctorDeps` would turn a tool failure into an abort of the
-   * whole report instead of a failing check. Absent in create mode and on an al-runner-only
+   * whole report instead of a failing check. Absent in create mode and on an al-runner-v3-only
    * project, like every other live-BC dep. Listed BEFORE `control-version` in the report because a
    * wrong company makes that check fail too, with BC's 404 naming only the configured name; this
    * one names the ones that exist.
@@ -110,42 +108,11 @@ export interface DoctorDeps {
    *  cli.ts) — an empty string means "not found". Whether an empty `altool` is a FAILURE depends
    *  on `DoctorConfig.altoolRequired` — see that field. Present in create mode too: resolving a
    *  local compiler/publisher path needs no environment to exist.
-   *
-   *  ABSENT on an al-runner-only project (R146), and that is measured rather than assumed.
-   *  `buildBackend`'s al-runner branch returns before `defaultAlToolPaths`/`resolveAlToolPaths` are
-   *  reached at all, and LethAL's own `ArtifactCompiler` is constructed only on the bcdev branch —
-   *  al-runner compiles the bundle with its own compiler. Checking `alc` there would fail configs
-   *  `lethal run --backend al-runner` accepts, which is the stricter-than-`run` drift R21 and R34
-   *  already caught twice. */
+   *  Absent on an al-runner-v3-only project. */
   readonly toolPaths?: () => Promise<{ readonly alc: string; readonly altool: string }>;
-  /**
-   * R146: al-runner's own `--version` probe — `AlRunnerBackend.status()`, the SAME call `runSession`
-   * makes before a session starts, which refuses a binary that is not v2 because this adapter's
-   * v2-only argv pointed at v1 produces WRONG VERDICTS rather than an error.
-   *
-   * Present whenever the config declares an `alRunner` section, on an al-runner-only project and on
-   * a bcdev project that also names one. Absent otherwise: a config that never mentions al-runner
-   * has no binary to ask about, and inventing one to report on would be the opposite of the
-   * `lease` lesson two fields up but the same mistake.
-   */
-  readonly alRunner?: () => Promise<{ readonly ok: boolean; readonly details: string }>;
   /** R586: the al-runner-v3 binary: its `--version`, its `.gated` pin and `bcVersion` against the
    *  package folder. Read-only; the session's contract probe is not run here. */
   readonly alRunnerV3?: () => Promise<{ readonly ok: boolean; readonly details: string }>;
-  /**
-   * R131: al-runner's artifact cache, READ. Supplied on every path `buildDoctorDeps` produces —
-   * reading a local directory needs no environment to exist — but OPTIONAL on the type since R146,
-   * because every other dep is and singling this one out as mandatory was arbitrary rather than
-   * meaningful. What stops "all deps optional" becoming "a report of nothing, rendered green" is
-   * `runDoctor`'s refusal when the deps produce no checks at all.
-   *
-   * Its check can never be `ok: false`, and that is a deliberate exception to the lesson `lease`
-   * carries three fields above. `lease` shipped as a check that structurally could not fail while
-   * CLAIMING a safety property, which is a false green. This one claims nothing: it reports a size
-   * and names which builds al-runner will not select again. R131 ruled that deleting from a cache
-   * another tool owns is not LethAL's to do, so there is no threshold here that would be a fault.
-   */
-  readonly alRunnerCache?: () => Promise<AlRunnerCacheReport>;
   /**
    * Issue #23: the alc compiler's own version (its banner) beside the `Runtime` the server's
    * Microsoft `System` symbol package declares, read from the configured package cache. An alc
@@ -456,20 +423,6 @@ export function checkTestApp(probe: {
 }
 
 /**
- * R146. A straight pass-through of `AlRunnerBackend.status()`, whose `details` already says what was
- * observed on both branches: the version line the binary reported, or the refusal naming what it
- * reported and what this adapter needs. Nothing is re-derived here, so doctor and `runSession`
- * cannot come to different conclusions about the same binary.
- *
- * This check CAN fail, which is what separates it from the withdrawn lease check R110 records. A
- * missing binary fails it, and so does a v1 one — and v1 matters more than "not installed", because
- * this adapter's v2-only argv pointed at v1 produces wrong verdicts rather than an error.
- */
-function checkAlRunner(status: { readonly ok: boolean; readonly details: string }): DoctorCheck {
-  return { name: "al-runner", ok: status.ok, detail: status.details };
-}
-
-/**
  * Runs EVERY AVAILABLE check before reporting — never stops at the first failure. That is the
  * entire point over `lethal run`'s own pre-flight refusals, which each fire (correctly) but one at
  * a time, across however many slow round-trips it takes a user to fix one problem and discover the
@@ -491,9 +444,7 @@ export async function runDoctor(cfg: DoctorConfig, deps: DoctorDeps): Promise<Do
     controlVersion,
     lease,
     toolPaths,
-    alRunner,
     alRunnerV3,
-    alRunnerCache,
     companies,
     alcRuntime,
     testApp,
@@ -531,12 +482,6 @@ export async function runDoctor(cfg: DoctorConfig, deps: DoctorDeps): Promise<Do
     const now = cfg.now ?? new Date();
     checkPromises.push(runCheck("lease", async () => checkLease(await lease(), now)));
   }
-  // R146: FIRST among the local checks, because on an al-runner-only project it is the one that
-  // can actually refuse, and a reader scanning the report should meet it before the informational
-  // cache line.
-  if (alRunner !== undefined) {
-    checkPromises.push(runCheck("al-runner", async () => checkAlRunner(await alRunner())));
-  }
   if (alRunnerV3 !== undefined) {
     checkPromises.push(
       runCheck("al-runner-v3", async () => {
@@ -555,16 +500,6 @@ export async function runDoctor(cfg: DoctorConfig, deps: DoctorDeps): Promise<Do
   }
   if (testApp !== undefined) {
     checkPromises.push(runCheck("test-app-present", async () => checkTestApp(await testApp())));
-  }
-  if (alRunnerCache !== undefined) {
-    // R131 — informational by construction; see `DoctorDeps.alRunnerCache` for why it cannot fail.
-    checkPromises.push(
-      runCheck("al-runner-cache", async () => ({
-        name: "al-runner-cache",
-        ok: true,
-        detail: describeAlRunnerCache(await alRunnerCache()),
-      })),
-    );
   }
   // R146. `checks.every(...)` on an empty array is `true`, so a deps object with nothing in it would
   // print "ok: every check passed" having checked nothing at all — empty-vs-empty agreement, this

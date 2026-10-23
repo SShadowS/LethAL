@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ALRUNNER_LEG_IDS } from "../../packages/runner/itest/alrunner-legs.ts";
+import { V3_AGENTFLOW_LEGS } from "../../packages/runner/itest/alrunner-v3-legs.ts";
 import { EffectRefusedError, EffectRunner } from "./effects.ts";
 import { type FakeWorld, emptyWorld, fakePorts } from "./fakes.ts";
 import type { MutantDiff } from "./gate-outcome.ts";
@@ -218,19 +218,22 @@ describe("receipts, not exit codes", () => {
   });
 });
 
-describe("R-587 M1: alrunner's receipt is checked against its exact leg ids", () => {
-  test("alrunner gets the 23 ids; a leg with no list keeps the count, default 1", () => {
-    expect(expectedSublegsFor("alrunner")).toEqual(ALRUNNER_LEG_IDS);
+// R654: re-pointed from the retired `alrunner` leg (23 ids) to `alrunner-v3`, the leg with a list now.
+describe("R-587 M1: alrunner-v3's receipt is checked against its exact leg ids", () => {
+  test("alrunner-v3 gets its ids; a leg with no list keeps the count, default 1", () => {
+    expect(expectedSublegsFor("alrunner-v3")).toEqual(V3_AGENTFLOW_LEGS);
     expect(expectedSublegsFor("tables")).toBe(1);
     expect(expectedSublegsFor("tables", { tables: 2 })).toBe(2);
   });
 
-  test("a count for alrunner is refused rather than replacing the list", () => {
-    // Before R-587, `?? 1` accepted a one-leg alrunner receipt and rejected the full one.
-    expect(() => expectedSublegsFor("alrunner", { alrunner: 1 })).toThrow(/never by a count/);
+  test("a count for alrunner-v3 is refused rather than replacing the list", () => {
+    // Before R-587, `?? 1` accepted a one-leg receipt and rejected the full one.
+    expect(() => expectedSublegsFor("alrunner-v3", { "alrunner-v3": 1 })).toThrow(
+      /never by a count/,
+    );
   });
 
-  test("a tick that runs alrunner challenges it with the 23 ids", async () => {
+  test("a tick that runs alrunner-v3 challenges it with its ids", async () => {
     const w = world({ changedPaths: ["fixtures/sandbox-app/src/Sandbox.Codeunit.al"] });
     const ports = fakePorts(w);
     const seen: unknown[] = [];
@@ -239,14 +242,14 @@ describe("R-587 M1: alrunner's receipt is checked against its exact leg ids", ()
       gates: {
         ...ports.gates,
         runLeg: (...a: Parameters<typeof ports.gates.runLeg>) => {
-          if (a[0] === "alrunner") seen.push(a[1].expectedSublegs);
+          if (a[0] === "alrunner-v3") seen.push(a[1].expectedSublegs);
           return ports.gates.runLeg(...a);
         },
       },
     };
     const r = new EffectRunner({ dryRun: false, isHalted: () => false });
     await runTick(patched, r, input());
-    expect(seen).toEqual([ALRUNNER_LEG_IDS]);
+    expect(seen).toEqual([V3_AGENTFLOW_LEGS]);
   });
 });
 

@@ -1,4 +1,4 @@
-import { access, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { openItemHangRefuses, tier1Operators } from "@lethal/builtin-tier1";
@@ -54,12 +54,6 @@ import {
   varSectionUnparsed,
   writeInstrumentedProject,
 } from "@lethal/schemata";
-import { AL_RUNNER_UNDECIDED_ARM_MISSING } from "./al-runner-backend";
-import type { AlRunnerProvisionResult, TestSelectorProbe } from "./al-runner-backend";
-import { contractRefusals, contractSummary, runAlRunnerContractProbe } from "./al-runner-contract";
-import { predefinedSymbolsChangedWarning } from "./al-runner-predefined-probe";
-import { alRunnerRenamed } from "./al-runner-transport";
-import type { AlRunnerBcBuild } from "./al-runner-transport";
 import {
   confirmedDowngradeRefusal,
   nextAbove,
@@ -86,7 +80,7 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "./backend";
-import { isAlRunnerV2, isBcdev, isLocalRunner, isUnread, stopIsRetrySafe } from "./backend";
+import { isBcdev, isLocalRunner, isUnread, stopIsRetrySafe } from "./backend";
 import {
   decodeSource,
   hashAlTree,
@@ -182,11 +176,9 @@ import {
 } from "./permission-canary";
 import { Semaphore, shardEvenly } from "./pool";
 import {
-  type AlRunnerPredefinedProbe,
   type BuildBackend,
   BuildSymbolsDivergedError,
   effectiveBuildSymbols,
-  predefinedSymbolsHint,
   sameBuildSymbols,
 } from "./preprocessor-symbols";
 import {
@@ -288,6 +280,7 @@ import {
   isTestPageNotRunMessage,
   testPageNotRunMessage,
 } from "./testpage-unsupported";
+import { AlRunnerV2RetiredError, RETIRED_V2_BACKEND, v2RetiredRun } from "./v2-retired";
 import { onSkippedLinks, refuseProjectLinks, walkFiles } from "./walk";
 
 // C02-04b: named-mutants.ts is not part of the package's `export *` barrel (index.ts), so its
@@ -633,9 +626,8 @@ export interface MutationSetOptions {
    */
   readonly preprocessorSymbols?: readonly string[];
   /**
-   * R377: the compiler the build is for. `al-runner` adds the predefined symbols its session
-   * MEASURED (R392, `probeAlRunnerPredefinedSymbols`) to the effective set; absent means `bcdev`,
-   * i.e. alc, which predefines nothing.
+   * R377: the compiler the build is for; absent means `bcdev`, i.e. alc, which predefines
+   * nothing. Neither of today's backends predefines a symbol (R654 removed the .NET al-runner's).
    */
   readonly backend?: BuildBackend;
   /**
@@ -1454,14 +1446,6 @@ export async function generateMutationSet(
 
 export interface SessionConfig {
   readonly backend: ExecutionBackend;
-  /**
-   * R149 — the al-runner wire-contract probe, injectable so the pinned re-measurement is testable
-   * without spawning a real binary.
-   *
-   * Defaults to the real `runAlRunnerContractProbe`. Only ever called when the session established a
-   * platform-app PIN and the backend knows its al-runner path, so a bcdev session never touches it.
-   */
-  readonly alRunnerContractProbe?: typeof runAlRunnerContractProbe;
   readonly store: ResultsStore;
   readonly projectDir: string; // target AL project (source of truth)
   /**
@@ -1478,6 +1462,11 @@ export interface SessionConfig {
    * dir when they sit inside the project. Absent means none.
    */
   readonly excludeOutputs?: readonly string[];
+  /**
+   * R668: the run's `--config` file. A project file that IS this file (same device and inode,
+   * whatever its name or path) is never copied into a batch. Absent means none.
+   */
+  readonly configPath?: string;
   readonly selectorIds: SelectorConfig;
   readonly baselineTimeoutMs?: number; // default 120000
   readonly skipKnownSurvivors?: boolean;
@@ -1996,6 +1985,8 @@ async function prepareArtifactDir(args: {
   readonly source: ReadonlyMap<string, Buffer> | undefined;
   /** R363: the run's own output files, never copied into the batch; see `prepareBatchProject`. */
   readonly excludeOutputs: readonly string[];
+  /** R668: the run's `--config` file, never copied into the batch; see `prepareBatchProject`. */
+  readonly configPath: string | undefined;
 }): Promise<readonly AppJsonPathChange[]> {
   await rm(args.targetDir, { recursive: true, force: true });
   const files =
@@ -2021,6 +2012,7 @@ async function prepareArtifactDir(args: {
     args.source,
     args.excludeOutputs,
     flatNames,
+    args.configPath,
   );
 }
 
@@ -2038,6 +2030,7 @@ async function checkPlainBuild(args: {
   readonly appVersion: string;
   readonly source: ReadonlyMap<string, Buffer> | undefined;
   readonly excludeOutputs: readonly string[];
+  readonly configPath: string | undefined;
   readonly compilePlainCheck: (dir: string) => Promise<void>;
 }): Promise<void> {
   await rm(args.scratchDir, { recursive: true, force: true });
@@ -2050,6 +2043,8 @@ async function checkPlainBuild(args: {
       args.appVersion,
       args.source,
       args.excludeOutputs,
+      undefined,
+      args.configPath,
     );
     try {
       await args.compilePlainCheck(args.scratchDir);
@@ -2118,6 +2113,7 @@ async function bisectAndNote(args: {
   readonly originalErr: unknown;
   readonly source: ReadonlyMap<string, Buffer> | undefined;
   readonly excludeOutputs: readonly string[];
+  readonly configPath: string | undefined;
 }): Promise<string> {
   try {
     const outcome = await bisectFailingMutant(args.subsetMutants, async (subset) => {
@@ -2134,6 +2130,7 @@ async function bisectAndNote(args: {
           artifactId: args.artifactId,
           source: args.source,
           excludeOutputs: args.excludeOutputs,
+          configPath: args.configPath,
         });
       } catch (err) {
         // NOT a compile answer — abort the search rather than feeding it a
@@ -4009,7 +4006,7 @@ function assertSameBuildSymbols(
   if (row === null) throw new Error(`${flag}: no such run in this database`);
   if (row.buildSymbols !== null && sameBuildSymbols(row.buildSymbols, buildSymbols)) return;
   throw new Error(
-    `${flag} was built with preprocessor symbols ${symbolList(row.buildSymbols)}, but this build uses ${symbolList(buildSymbols)}${predefinedSymbolsHint(row.buildSymbols, buildSymbols)}. ${SYMBOLS_WHY} (R214). Drop the resume flag to run from scratch.`,
+    `${flag} was built with preprocessor symbols ${symbolList(row.buildSymbols)}, but this build uses ${symbolList(buildSymbols)}. ${SYMBOLS_WHY} (R214). Drop the resume flag to run from scratch.`,
   );
 }
 
@@ -4041,26 +4038,21 @@ function resolveResume(
     if (!testAppAfterHook) assertSameTestApp(row, flag, testAppHash, pending);
   };
   // R619: the one lend decision (`runMayLend`), called once in each branch below: step 1 (R586,
-  // a throw), then the branch's own checks (each throws), then R557's mark and renamed baseline
-  // errors. Those two do not throw: the resume goes on with an EMPTY carry, so every mutant is
-  // executed (a warning, by ruling; still a resume, so the report says which run it came from,
-  // R89). Returns why the carry is refused, or `undefined`.
+  // R654; a throw), then the branch's own checks (each throws).
   const lend = (
     row: RunRow,
     flag: string,
     site: "resume" | "resume-run",
     siteChecks: () => void,
-  ): string | undefined => {
+  ): void => {
     const r = cfg.store.runMayLend(row, lendingSession, {
       site,
       siteChecks: () => {
         siteChecks();
         return false;
       },
-      baselineErrorMethods: () => cfg.store.baselineErrorMethods(row.id),
-      renamed: alRunnerRenamed,
     });
-    if (r === undefined) return undefined;
+    if (r === undefined) return;
     switch (r.step) {
       case "backend-build":
         throw new Error(
@@ -4070,10 +4062,6 @@ function resolveResume(
         throw new Error(
           `${flag}: a resume site check returned a refusal instead of throwing (R619)`,
         );
-      case "al-runner-unmarked":
-        return `run ${row.id} ${AL_RUNNER_UNMARKED_WHY}`;
-      case "al-runner-renamed":
-        return alRunnerRefusal(row.id, r.tests);
     }
   };
 
@@ -4081,8 +4069,6 @@ function resolveResume(
   // R391: the resumed run's generation hash and `twin_tuples`, never its `source_sha256`.
   let recorded: RecordedCarrySide;
   let priorHidden: CarryHidden | null;
-  // R557: why the resumed run's carry is refused (`lend`), or `undefined`.
-  let carryRefused: string | undefined;
   // R601: the resumed run's recorded test-app identity, for the `resume-reusing-run` clause.
   let priorTestAppHash: string | null;
   if (cfg.resume === "last") {
@@ -4131,7 +4117,7 @@ function resolveResume(
       });
       if (otherBuild !== null) {
         throw new Error(
-          `--resume found an unfinished run for this project and backend, run ${otherBuild.runId}, but it was built with preprocessor symbols ${symbolList(otherBuild.buildSymbols)} and this build uses ${symbolList(buildSymbols)}${predefinedSymbolsHint(otherBuild.buildSymbols, buildSymbols)}. ${SYMBOLS_WHY} (R214). Drop --resume to run from scratch.`,
+          `--resume found an unfinished run for this project and backend, run ${otherBuild.runId}, but it was built with preprocessor symbols ${symbolList(otherBuild.buildSymbols)} and this build uses ${symbolList(buildSymbols)}. ${SYMBOLS_WHY} (R214). Drop --resume to run from scratch.`,
         );
       }
       throw new Error(
@@ -4144,7 +4130,7 @@ function resolveResume(
       throw new Error("--resume: the run it found is no longer in this database");
     // Review M4: step 1 cannot refuse here in production (`findResumableRun` selects the backend
     // and, on v3, the build); it stays as the guard.
-    carryRefused = lend(foundRow, `--resume: run ${found}`, "resume", () => {
+    lend(foundRow, `--resume: run ${found}`, "resume", () => {
       sameTestApp(foundRow, "--resume");
       // R214: the fingerprint carries the symbols, but a row recorded before the column (NULL)
       // must still never be read as a match.
@@ -4176,13 +4162,17 @@ function resolveResume(
         `--resume-run ${cfg.resume}: run ${cfg.resume} already finished; nothing to resume. Its report is the file that run wrote with --out, if it was given --out (\`lethal explain <report.json>\` re-reads it; no command re-renders a report from the results store). Drop --resume-run to measure again (R618).`,
       );
     }
+    // R654: a run of the retired .NET al-runner is named so, before the generic mismatch below.
+    if (row.backend === RETIRED_V2_BACKEND) {
+      throw new AlRunnerV2RetiredError(v2RetiredRun(row.id));
+    }
     if (row.backend !== backendName) {
       throw new Error(
-        `--resume-run ${cfg.resume} ran on backend ${row.backend}, but this session uses ${backendName} — verdicts are not interchangeable across backends (neither local runner, al-runner or al-runner-v3, is authoritative)`,
+        `--resume-run ${cfg.resume} ran on backend ${row.backend}, but this session uses ${backendName} — verdicts are not interchangeable across backends (al-runner-v3 is not authoritative)`,
       );
     }
     const id = cfg.resume;
-    carryRefused = lend(row, `--resume-run ${id}`, "resume-run", () => {
+    lend(row, `--resume-run ${id}`, "resume-run", () => {
       // R325: checked BEFORE the fingerprint, so the refusal names the real reason. The
       // fingerprint carries the scheme too and would refuse this run anyway, as "scoped
       // differently".
@@ -4232,22 +4222,10 @@ function resolveResume(
   // dir's hash and the test app. Every batch is rebuilt and republished (R-646c).
   // `lethal verify` keeps its refusal.
 
-  // R557 C1: a pre-fix al-runner run sent a renamed test under its AL name, al-runner ran nothing,
-  // and its only-kills read survived. (I1): a run without the R557 mark may have CARRIED such
-  // verdicts (a resume of a resume, `known-survivor` rows) and hold no baseline row showing it.
-  // `lend` decided both, above.
-  if (carryRefused !== undefined) {
-    emit({
-      type: "warning",
-      code: "resume-al-runner-test-names",
-      message: `[lethal] --resume: ${carryRefused}; its verdicts are not carried: every mutant is executed, including any it recorded as stranding the tier (R53), since nothing of it is carried (R557).`,
-    });
-  }
   const { index, dropped: refusedDropped } = withoutRefusedTests(
     buildResumeIndex(
-      // Two remove-only filters (R557 + R577, agreed 2026-10-20): R557's run-level trust empties the
-      // rows of an untrusted run, then R577's row-level rule refuses an unmarked kill among the rest.
-      carryRefused !== undefined ? [] : cfg.store.mutantVerdicts(priorRunId),
+      // R577's row-level rule refuses an unmarked kill among the rows.
+      cfg.store.mutantVerdicts(priorRunId),
       cfg.stopHungSessions === true,
       cfg.backend.killsMustReproduce === true,
     ),
@@ -4300,21 +4278,8 @@ function resolveResume(
     carryableCount: index.carryable.size,
     strandedKeyCount: index.strandedKeys.size,
     retryStranded: cfg.retryStranded ?? false,
-    ...(carryRefused !== undefined ? { carryRefused: `${carryRefused} (R557)` } : {}),
   });
   return { runId: priorRunId, index, carryHidden: priorHidden, recorded };
-}
-
-/** R557 (I1): why an al-runner run without the R557 test-name mark lends nothing. */
-const AL_RUNNER_UNMARKED_WHY =
-  "ran on al-runner before R557 (its run row carries no R557 test-name mark), so a test whose al-runner name differs from its AL name may never have run in it, or in a run it carried verdicts from";
-
-/** R557 C1: why a run whose own baseline holds renamed `error` tests lends nothing, or
- *  `undefined` when `tests` is empty. */
-function alRunnerRefusal(runId: number, tests: readonly string[]): string | undefined {
-  return tests.length === 0
-    ? undefined
-    : `run ${runId} ran on al-runner before R557 and recorded ${tests.length} test(s) as errors that al-runner never ran (${namesSample(tests)})`;
 }
 
 /** R557 C1: up to five test names for a warning, `, ...` when there are more. */
@@ -4330,43 +4295,6 @@ function recordedCarrySideOf(row: RunRow | null): RecordedCarrySide {
     twins: twins === null ? null : new Set(twins),
     dependencyHash: row?.dependencySourceSha256 ?? null,
   };
-}
-
-/**
- * R147 — hand a backend the platform-app directory this session pinned, and REFUSE the session if it
- * cannot take one.
- *
- * A structural check, like `provisionOnce` and `observedBcBuild` above it: no other backend has the
- * concept, and widening `ExecutionBackend` for one implementation would make every other backend
- * answer nothing forever. What is different here is the failure: those two are best-effort readers,
- * this one decides the ARGV that produces verdicts. An optional call that silently no-ops would let
- * the baseline and the mutants run under different command lines, which is the caller-contract
- * violation this repo throws on rather than defaulting past.
- *
- * Only ever reached when a pin was established, which only happens on the al-runner path — so a
- * bcdev session never sees this function at all.
- */
-function pinPlatformAppsDir(backend: ExecutionBackend, dir: string, who: string): boolean {
-  const pinnable = backend as { usePlatformAppsDir?: (d: string) => unknown };
-  if (typeof pinnable.usePlatformAppsDir !== "function") {
-    throw new Error(
-      `runSession: this session pinned al-runner's platform-app directory (${dir}) but ${who} does ` +
-        "not accept one, so it would run every mutant with --auto-provision while the rest of the " +
-        "session ran with --package-cache. Two argv in one report is a wrong-provenance claim, not " +
-        "a slow run, so this refuses rather than proceeding (R147).",
-    );
-  }
-  // R242: true only when the backend's transport will SEND the pin. The report records
-  // `platformAppsDir` only then, since a directory the run never searched is not provenance.
-  // Anything but a boolean is an invalid answer, never read as "declined": a setter that still
-  // sends the pin but answers nothing would otherwise lose its provenance silently.
-  const consumed = pinnable.usePlatformAppsDir(dir);
-  if (typeof consumed !== "boolean") {
-    throw new Error(
-      `runSession: ${who} was handed al-runner's platform-app directory (${dir}) but its usePlatformAppsDir answered ${String(consumed)} instead of a boolean, so this run cannot tell whether its transport sends --package-cache, and the report cannot say which directory the verdicts ran against. Refusing rather than guessing (R242).`,
-    );
-  }
-  return consumed;
 }
 
 /**
@@ -5108,10 +5036,9 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       reused = snapshotApplies(reusable, batchHash, testAppHash) ? reusable : undefined;
       // R619: the one lend decision (`runMayLend`), on the snapshot's OWN run, since
       // `findBaselineSnapshot` can lend one from ANY run. Step 1 (R586): it selects by hash and
-      // coverage mode, not by backend, and v3 shares coverage mode "al-runner" with v2. Steps 2 and
-      // 3 (R557, I1 and C1): the run's mark, then the snapshot's own `error` rows: a pre-fix
-      // al-runner snapshot holds a renamed test as an `error` al-runner never ran. A refused snapshot
-      // is not reused, and this batch re-runs its baseline.
+      // coverage mode, not by backend, and v3 records coverage mode "al-runner" (as the retired
+      // .NET al-runner did, R654). A refused snapshot is not reused, and this batch re-runs its
+      // baseline.
       if (reused !== undefined) {
         const snap = reused;
         const snapshotRun = store.getRun(snap.runId);
@@ -5123,9 +5050,6 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
         }
         const refused = store.runMayLend(snapshotRun, input.snapshot.lendingSession, {
           site: "snapshot",
-          baselineErrorMethods: () =>
-            snap.baseline.filter((b) => b.verdict.outcome === "error").map((b) => b.ref.method),
-          renamed: alRunnerRenamed,
         });
         if (refused !== undefined) {
           const notReused = `run ${snap.runId}'s batch ${snap.batchIndex} baseline snapshot`;
@@ -5135,20 +5059,6 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
                 type: "warning",
                 code: "snapshot-backend-build-changed",
                 message: `[lethal] ${notReused} is not reused: ${refused.why}. Batch ${batchIdx}'s baseline is re-run.`,
-              });
-              break;
-            case "al-runner-unmarked":
-              emit({
-                type: "warning",
-                code: "resume-al-runner-test-names",
-                message: `[lethal] --resume: ${notReused} is not reused: run ${snap.runId} ${AL_RUNNER_UNMARKED_WHY}. Batch ${batchIdx}'s baseline is re-run (R557).`,
-              });
-              break;
-            case "al-runner-renamed":
-              emit({
-                type: "warning",
-                code: "resume-al-runner-test-names",
-                message: `[lethal] --resume: ${notReused} ran on al-runner before R557 and recorded ${refused.tests.length} test(s) as errors that al-runner never ran (${namesSample(refused.tests)}); it is not reused: batch ${batchIdx}'s baseline is re-run (R557).`,
               });
               break;
             case "site":
@@ -5240,19 +5150,6 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
           ? `${testAppHash}${PENDING_SUFFIX}`
           : testAppHash,
       baseline: baseline as BaselineObservation[],
-    });
-  }
-  // R557 (I3): one warning per batch naming every test al-runner had no row for that sits in an
-  // `#if` arm discovery could not decide; it is not run, so a mutant only it would kill may read
-  // survived.
-  const undecidedMissing = baseline
-    .filter((b) => b.verdict.failureMessage?.startsWith(AL_RUNNER_UNDECIDED_ARM_MISSING) === true)
-    .map((b) => qualifiedTestName(b.ref));
-  if (undecidedMissing.length > 0) {
-    emit({
-      type: "warning",
-      code: "al-runner-undecided-test-missing",
-      message: `[lethal] batch ${batchIdx}: al-runner has no row for these tests, which sit in an \`#if\` arm LethAL could not decide (R403); they are not run, so a mutant only they would kill may read survived. Pass the build's symbols to decide the arm (R557): ${undecidedMissing.join(", ")}`,
     });
   }
   // baseline-batch-finished: the moment of observation IS the batch's baseline RETURNING (see
@@ -5625,171 +5522,13 @@ async function runSessionBody(
     );
   }
 
-  // R128: pay al-runner's artifact provisioning ONCE, here, before any mutant's clock starts.
-  // `--auto-provision` rides in every mutant's argv, so without this the FIRST invocation of a run
-  // does the downloading inside that mutant's own timeout budget and the mutant is scored
-  // `deadline-exceeded` for a reason that has nothing to do with it.
-  //
-  // Measured 2026-08-09 (see `AlRunnerBackend.provisionOnce`): the download is NOT a
-  // once-per-machine cost. `--auto-provision` resolves the project's BC version by PREFIX to the
-  // latest matching Microsoft build, so a cache that was warm yesterday is cold the moment upstream
-  // publishes a new one — a fully warm machine still fetched 135 MB.
-  //
-  // A structural check rather than a widened `ExecutionBackend`, for the same reason as
-  // `observedBcBuild` below: no other backend provisions anything. Best-effort — a failure here
-  // leaves the session exactly as it behaved before this existed.
-  // R147 — set once, from the provisioning run below, and read again when the worker backends are
-  // built so that every instance executing a mutant sends the SAME argv as the baseline.
-  let platformAppsDir: string | undefined;
-  // R392: the directory provisioning reported, whether or not the backend took the pin, so the
-  // one-shot predefined-symbol probe below does not pay --auto-provision (as R149's re-probe does).
-  let provisionedPlatformAppsDir: string | undefined;
-  const provisioner = cfg.backend as { provisionOnce?: () => Promise<AlRunnerProvisionResult> };
-  if (provisioner.provisionOnce !== undefined) {
-    const provisioned = await provisioner.provisionOnce();
-    provisionedPlatformAppsDir = provisioned.platformAppsDir;
-    // R147 — pin the platform-app directory this provisioning run reported, so that no LATER
-    // invocation pays for provisioning again. Measured 2026-08-15 on al-runner 2.1.2.0, on a FULLY
-    // warm cache: `--auto-provision` costs 17.1 s and re-downloads 2 x 115 MB on EVERY invocation,
-    // and the same run handed `--package-cache <that directory>` costs 6.8 s and downloads nothing.
-    // One invocation per (mutant x covering test) means that is paid on every one.
-    //
-    // The pin is also what makes a mid-session Microsoft publish unable to move the platform apps
-    // under a running campaign: today the runner resolves the project's version PREFIX forward on
-    // every invocation, so a run that starts on ...53655 can finish on ...53671 with nothing
-    // recording that it did. Frozen at session start, it cannot.
-    if (provisioned.platformAppsDir !== undefined) {
-      // R242: a `--server` backend declines the pin (the daemon never receives it), and then the
-      // absent `platformAppsDir` in the report is the whole statement. That is normal operation.
-      if (pinPlatformAppsDir(cfg.backend, provisioned.platformAppsDir, "the session backend")) {
-        platformAppsDir = provisioned.platformAppsDir;
-        emit({ type: "al-runner-platform-apps", dir: provisioned.platformAppsDir });
-      }
-      // R149 — re-measure the wire contract UNDER THE PIN.
-      //
-      // `cli.ts` already ran the probe before the session, and that run is what refuses early,
-      // before anything is generated or published. But it runs before provisioning exists, so it
-      // builds its argv with no pin and therefore sends `--auto-provision`, while every mutant from
-      // here on sends `--package-cache <pin>`. The probe's own doc comment promises it measures
-      // "the SAME argv and env the transport sends, because a probe that blesses a command line
-      // nobody runs measures nothing", and R147 made that half false.
-      //
-      // This closes it WITHOUT giving up the early refusal: both measurements happen. The
-      // pre-session one guards the expensive work; this one guards the decode, under the argv the
-      // verdicts are actually produced with. `compile-failure-not-scorable` is the reason it is
-      // worth a second measurement rather than a note — it is what stands between a project that
-      // failed to compile and a batch of false SURVIVED verdicts, and until now no run had ever
-      // measured it under the flags its own mutants use.
-      //
-      // Refuses at the same severity as the pre-session probe, and for the same reason: "we could
-      // not confirm the contract" is not "the contract holds".
-      const alRunnerPath = (
-        cfg.backend as { alRunnerPath?: () => string | undefined }
-      ).alRunnerPath?.();
-      if (alRunnerPath !== undefined) {
-        const probe = cfg.alRunnerContractProbe ?? runAlRunnerContractProbe;
-        const pinned = await probe(alRunnerPath, undefined, undefined, provisioned.platformAppsDir);
-        emit({
-          type: "warning",
-          code: "al-runner-contract-pinned",
-          message: `${contractSummary(pinned)} (re-measured under the session's pin, R149)`,
-        });
-        const refusals = contractRefusals(pinned);
-        if (refusals.length > 0) {
-          throw new Error(
-            `${refusals.join("\n")}\nRefusing to run: al-runner's wire contract differs UNDER THIS SESSION'S PIN (--package-cache ${provisioned.platformAppsDir}) from what it reported unpinned before the session. The verdicts this run would produce are decoded by assumptions measured under different flags (R149).`,
-          );
-        }
-      }
-    } else {
-      // NEVER silent. A build whose parse had gone stale would otherwise be indistinguishable from
-      // a build that never had this feature: same verdicts, same counts, no line anywhere. The
-      // wording this reads has already moved once inside a week (R130's 2.1.1.0 transcript printed
-      // no path at all), so a quiet death is the expected failure rather than a hypothetical one.
-      emit({
-        type: "warning",
-        code: "al-runner-platform-apps-unpinned",
-        message: `runSession: al-runner's platform-app directory was NOT pinned, so every invocation keeps paying --auto-provision (R147). ${provisioned.platformAppsRefusal ?? "no reason was reported, which is itself a defect"}`,
-      });
-    }
-    if (!provisioned.ran) {
-      emit({
-        type: "warning",
-        code: "al-runner-provision-failed",
-        message: `runSession: the one-time al-runner provisioning step could not be spawned, so artifact downloading (if any is needed) will happen inside the FIRST mutant's timeout budget and may score it \`deadline-exceeded\` for an infrastructure reason (R128). Runner said: ${provisioned.detail}`,
-      });
-    } else if (provisioned.downloaded) {
-      const seconds = (provisioned.elapsedMs / 1000).toFixed(1);
-      emit({
-        type: "warning",
-        code: "al-runner-provisioned",
-        message: `runSession: al-runner fetched BC artifacts before this session started (${seconds}s). That cost is now OUTSIDE every mutant's budget, which is why this step exists (R128). It recurs whenever Microsoft publishes a new build matching the project's BC version prefix, not only on a fresh machine.`,
-      });
-    }
-  }
-
-  // R551: does this al-runner build accept `--test-exact`? One call, once per session, on the
-  // session backend, before the baseline, so the baseline and every mutant run under one selector.
-  // Structural, like `provisionOnce`. Anything but an acceptance keeps R488's path, which is
-  // correct on every build measured, so "not accepted" never refuses the session.
-  let exactTestSelector = false;
-  const selectorProber = cfg.backend as {
-    probeExactTestSelector?: () => Promise<TestSelectorProbe>;
-  };
-  const selectorProbed = selectorProber.probeExactTestSelector !== undefined;
-  if (selectorProber.probeExactTestSelector !== undefined) {
-    const p = await selectorProber.probeExactTestSelector();
-    if (p.kind !== "not-applicable") {
-      exactTestSelector = p.kind === "exact";
-      emit({
-        type: "warning",
-        code: "al-runner-test-selector",
-        message:
-          p.kind === "exact"
-            ? `al-runner test selector: exact (--test-exact accepted by a one-call probe in ${p.elapsedMs} ms; R551)`
-            : `al-runner test selector: substring with R488 excludes (--test-exact not accepted: ${p.reason}; probe ${p.elapsedMs} ms; R551)`,
-      });
-      // R558: the same choice as a structured event, which the report folds into
-      // `ExecutionContext.testSelector`. The warning above stays for the console line.
-      emit(
-        p.kind === "exact"
-          ? { type: "al-runner-test-selector", selector: "exact" }
-          : {
-              type: "al-runner-test-selector",
-              selector: "substring-with-excludes",
-              reason: p.reason,
-            },
-      );
-    }
-  }
-
-  // R392: MEASURE al-runner's predefined symbols, every al-runner session, after provisioning and
-  // before anything computes the build's symbols. Awaited, with nothing else in flight. A probe that
-  // cannot give a complete answer throws AlRunnerPredefinedProbeError and the run is refused.
-  // Structural, like `provisionOnce`: only the al-runner backend can answer.
-  let buildBackend: BuildBackend = { kind: "bcdev" };
-  if (caps.kind === "al-runner-v3") {
-    // R586 (plan r2 §9): v3 runs only what LethAL's alc proof compiled, and alc predefines no
-    // symbol. That v3 predefines none either is the contract probe's `predefined-symbols` fact,
-    // measured in the backend's `status()` (a `diverged` fact refuses the session), never R392's
-    // v2 probe here.
-    buildBackend = { kind: "al-runner-v3" };
-  } else if (isAlRunnerV2(caps.kind)) {
-    const prober = cfg.backend as {
-      measurePredefinedSymbols?: (platformAppsDir?: string) => Promise<AlRunnerPredefinedProbe>;
-    };
-    if (typeof prober.measurePredefinedSymbols !== "function") {
-      throw new Error(
-        "runSession: this al-runner backend cannot measure the preprocessor symbols al-runner predefines (it has no measurePredefinedSymbols), so the build's arms are unknown; refusing rather than assuming a list (R392).",
-      );
-    }
-    const predefined = await prober.measurePredefinedSymbols(provisionedPlatformAppsDir);
-    const changed = predefinedSymbolsChangedWarning(predefined);
-    if (changed !== undefined) {
-      emit({ type: "warning", code: "al-runner-predefined-symbols-changed", message: changed });
-    }
-    buildBackend = { kind: "al-runner", predefined };
-  }
+  // R377: the backend the build's symbols are decided for, once, and the same value reaches
+  // generation below. R586 (plan r2 §9): v3 runs only what LethAL's alc proof compiled, and alc
+  // predefines no symbol. That v3 predefines none either is the contract probe's
+  // `predefined-symbols` fact, measured in the backend's `status()` (a `diverged` fact refuses the
+  // session). R654 removed the .NET al-runner's provisioning, pin, selector and symbol probes here.
+  const buildBackend: BuildBackend =
+    caps.kind === "al-runner-v3" ? { kind: "al-runner-v3" } : { kind: "bcdev" };
 
   // NOTE: a prior preflight here scanned [Test] codeunit sources for
   // `TestIsolation = Function;` and aborted session-isolation backends when
@@ -5803,9 +5542,8 @@ async function runSessionBody(
   // R403: the parser first, on every path: arm-aware discovery parses each test file that holds a
   // `[Test]`, and the scan and digests below parse them again.
   await initParser();
-  // R403: the TEST app's derived symbol set: the config's symbols, the test `app.json`'s own, and
-  // on al-runner its measured predefined ones (`buildBackend`, decided above). Read from disk: the
-  // snapshot below is the TARGET's.
+  // R403: the TEST app's derived symbol set: the config's symbols, the test `app.json`'s own
+  // (`buildBackend`, decided above). Read from disk: the snapshot below is the TARGET's.
   const testBuildSymbols = await effectiveBuildSymbols(
     cfg.testDir,
     cfg.preprocessorSymbols ?? [],
@@ -6031,8 +5769,7 @@ async function runSessionBody(
     ...(buildSymbols.length > 0 ? { preprocessorSymbols: buildSymbols } : {}),
     // R403: the test app's derived set, which can change while the target's does not (plan §3(e)).
     // Only when some test file in scope holds a directive line: without one no symbol set can
-    // change the suite, so the pre-R403 digest is kept (on al-runner too, whose set always holds
-    // its predefined symbols).
+    // change the suite, so the pre-R403 digest is kept.
     ...(testBuildSymbols.length > 0 && discovery.anyDirective ? { testBuildSymbols } : {}),
     // R403: only when the arm policy changed the suite this session runs, or kept a file it could
     // not decide. The policy is applied on al-runner and on bcdev with compiled evidence; on the
@@ -6066,9 +5803,6 @@ async function runSessionBody(
     // R585: the tests this session's baseline is given; history lends only to a session whose
     // tests are all in it.
     testScope: sessionTestScope,
-    // R557 (I1): this session sends al-runner tests under `alRunnerMethodName`; the mark is what
-    // lets its verdicts be lent (`runLendsAlRunnerNames`).
-    ...(backendName === "al-runner" ? { alRunnerNames: true } : {}),
     // R586: a v3 run records its build; `runMayLend` lends it only to that build.
     ...(lendingSession.runnerBuild !== undefined
       ? { runnerBuild: lendingSession.runnerBuild }
@@ -6155,10 +5889,9 @@ async function runSessionBody(
     preprocessorSymbols: sourceSymbols,
     backend: buildBackend,
     emit,
-    // R565: al-runner's provisioned platform apps first, then the backend's own package folders
-    // (al-runner's `packagesDir`), then the config's (bcdev and envtool: `packageCachePath`).
+    // R565: the backend's own package folders (al-runner-v3's `packagesDir`), then the config's
+    // (bcdev and envtool: `packageCachePath`).
     dependencyPackageDirs: [
-      ...(provisionedPlatformAppsDir !== undefined ? [provisionedPlatformAppsDir] : []),
       ...(cfg.backend.dependencyPackageDirs?.() ?? []),
       ...(cfg.dependencyPackageDirs ?? []),
     ],
@@ -6424,8 +6157,6 @@ async function runSessionBody(
   let historyTestApp: TestAppIdentity | undefined;
   // R442: likewise for its untrusted-run and hidden-files warnings.
   let historyCarryWarned = false;
-  // R557 C1: likewise for its pre-fix al-runner test-names warning.
-  let historyAlRunnerNamesWarned = false;
   // R585: likewise for its test-scope warning.
   let historyTestScopeWarned = false;
 
@@ -6706,36 +6437,7 @@ async function runSessionBody(
       }
       for (let i = 0; i < workers; i++) {
         const worker = factory(i);
-        // R147 — every backend that will execute a mutant gets the SAME pin, and a backend that
-        // cannot take it fails the session LOUDLY rather than quietly running different argv.
-        //
-        // What the silent version would cost: the baseline always runs on `cfg.backend` and is never
-        // sharded, so it would execute under the frozen pin while the mutants executed under
-        // `--auto-provision`, whose prefix resolves forward on EVERY invocation. A Microsoft publish
-        // mid-session would then move the platform apps under the mutants and not under the
-        // baseline. The report would not show it either: `observedBcBuild` is read from
-        // `cfg.backend` alone, so it would name the build that produced the BASELINE and present it
-        // as the build that produced the verdicts.
-        if (
-          platformAppsDir !== undefined &&
-          !pinPlatformAppsDir(worker, platformAppsDir, `worker backend ${i}`)
-        ) {
-          throw new Error(
-            `runSession: the session backend sends al-runner's pinned platform-app directory (${platformAppsDir}) but worker backend ${i} declined it, so the baseline and the mutants would run under different argv (R147, R242).`,
-          );
-        }
         handBuildSymbols(worker, buildSymbols);
-        // R551: every worker gets the session's selector, true or false, every time. Workers never
-        // probe. A worker that cannot take it would run other argv than the baseline: refuse.
-        if (selectorProbed) {
-          const sel = worker as { useExactTestSelector?: (on: boolean) => void };
-          if (typeof sel.useExactTestSelector !== "function") {
-            throw new Error(
-              `runSession: the session backend probed al-runner's --test-exact (${exactTestSelector ? "accepted" : "not accepted"}) but worker backend ${i} has no useExactTestSelector, so the baseline and the mutants could run under different test selectors (R551).`,
-            );
-          }
-          sel.useExactTestSelector(exactTestSelector);
-        }
         // R488: each worker starts with an empty sibling cache, so it needs the list too.
         worker.useDiscoveredTests?.(discovery.unfiltered);
         // R557 (I3): and the session suite, so a worker stops (or carves out) exactly as the
@@ -6843,6 +6545,7 @@ async function runSessionBody(
         artifactId,
         source: sourceSnapshot,
         excludeOutputs: cfg.excludeOutputs ?? [],
+        configPath: cfg.configPath,
       });
       if (pathChanges.length > 0 && !appJsonPathsWarned) {
         appJsonPathsWarned = true;
@@ -6851,6 +6554,20 @@ async function runSessionBody(
           code: "app-json-backslash-path",
           message: appJsonPathWarning(pathChanges),
         });
+      }
+      // R668: once per session, after the first batch built (so a link refusal comes from it).
+      if (batchIdx === 0) {
+        for (const rel of await configFilesInResourceFolders(
+          cfg.projectDir,
+          projectManifest,
+          cfg.configPath,
+        )) {
+          emit({
+            type: "warning",
+            code: "lethal-config-resource",
+            message: configResourceWarning(rel),
+          });
+        }
       }
       if (batchIdx === artifacts.length - 1) {
         const atLastBatch = await readTargetSourceHash(cfg.projectDir, sourceSymbols);
@@ -7036,7 +6753,7 @@ async function runSessionBody(
             emit({
               type: "warning",
               code: "history-build-symbols-changed",
-              message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, was built with preprocessor symbols ${symbolList(old.buildSymbols)}, and this build uses ${symbolList(buildSymbols)}${predefinedSymbolsHint(old.buildSymbols, buildSymbols)}. ${SYMBOLS_WHY}, and no survivor from it is skipped: every mutant is executed (R214).`,
+              message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, was built with preprocessor symbols ${symbolList(old.buildSymbols)}, and this build uses ${symbolList(buildSymbols)}. ${SYMBOLS_WHY}, and no survivor from it is skipped: every mutant is executed (R214).`,
             });
           },
           coverageModeChanged: (old) => {
@@ -7079,27 +6796,6 @@ async function runSessionBody(
               code: "history-hidden-files-changed",
               message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, hid ${describeHiddenFiles(old.before)} whole from identity numbering, and this run hides ${describeHiddenFiles(old.now)} (--only/--exclude scope, a preprocessor directive that could not be evaluated, or a file no selector var fits). A file hidden in one run and not the other moves its twins' ordinals, so a recorded key can name another mutant: no survivor from it is skipped, every mutant is executed (R442).`,
             });
-          },
-          alRunnerUnmarked: (old) => {
-            if (historyAlRunnerNamesWarned || !(cfg.skipKnownSurvivors ?? false)) return;
-            historyAlRunnerNamesWarned = true;
-            emit({
-              type: "warning",
-              code: "history-al-runner-test-names",
-              message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, ${AL_RUNNER_UNMARKED_WHY}; its survivors may be false, so none is skipped: every mutant is executed (R557).`,
-            });
-          },
-          alRunnerTestNames: {
-            renamed: alRunnerRenamed,
-            refused: (old) => {
-              if (historyAlRunnerNamesWarned || !(cfg.skipKnownSurvivors ?? false)) return;
-              historyAlRunnerNamesWarned = true;
-              emit({
-                type: "warning",
-                code: "history-al-runner-test-names",
-                message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, ran on al-runner before R557 and recorded ${old.tests.length} test(s) as errors that al-runner never ran (${namesSample(old.tests)}); its survivors may be false, so none is skipped: every mutant is executed (R557).`,
-              });
-            },
           },
         },
       );
@@ -7233,6 +6929,7 @@ async function runSessionBody(
             appVersion,
             source: sourceSnapshot,
             excludeOutputs: cfg.excludeOutputs ?? [],
+            configPath: cfg.configPath,
             compilePlainCheck,
           });
         }
@@ -7267,6 +6964,7 @@ async function runSessionBody(
           originalErr: deployErr,
           source: sourceSnapshot,
           excludeOutputs: cfg.excludeOutputs ?? [],
+          configPath: cfg.configPath,
         });
         for (const m of execute)
           record(cfg.store, runId, m, "error", outcomes, batchIdx, emit, undefined, note);
@@ -7833,6 +7531,7 @@ async function runSessionBody(
                 originalErr: err,
                 source: sourceSnapshot,
                 excludeOutputs: cfg.excludeOutputs ?? [],
+                configPath: cfg.configPath,
               });
               for (const m of shard) {
                 if (perMutantTests.get(m.mutantId) === undefined) continue; // already recorded no-coverage
@@ -8063,60 +7762,8 @@ async function runSessionBody(
   // comment on the `buildReport` call below), and `foldEvents` (report-fold.ts) now owns the
   // equivalent sort, applied to what IT accumulates from `collectedEvents`, so the folded report's
   // ordering still never depends on which worker finished first regardless of arrival order.
-  // R129: which BC RUNTIME produced these verdicts, on the one backend that chooses one itself.
-  // al-runner announces its selection on every invocation and nothing read the line, so a report
-  // said which al-runner BINARY ran (R123's contract probe) but not which BC build it ran the tests
-  // against — the thing the verdicts actually depend on.
-  //
-  // A structural check rather than a widened `ExecutionBackend`: no other backend has the concept
-  // (bcdev's runtime is the container the config names, which the report already identifies), and
-  // adding the method to the shared interface would make every other backend answer `undefined`
-  // forever. Emitted AFTER the mutant phase so it describes the invocations this run actually made,
-  // and only when one of them said something — never a defaulted version.
-  const bcBuildSource = cfg.backend as { observedBcBuild?: () => AlRunnerBcBuild | undefined };
-  const observedBcBuild = bcBuildSource.observedBcBuild?.();
-  if (observedBcBuild !== undefined) {
-    emit({
-      type: "al-runner-bc-build",
-      build: observedBcBuild.build,
-      announcement: observedBcBuild.announcement,
-    });
-  }
-  // R148: al-runner tells us when dependency resolution picked a SYMBOL-ONLY package for an app the
-  // tests call into, and until now nothing read it. On the fixture it is harmless — the run also
-  // compiles the target from source and an implementation package wins at execution time — but on a
-  // real project the same line means every mutant in that app was scored against a program whose
-  // procedure bodies are absent. The line does not distinguish the two, which is why it has to reach
-  // the report rather than the scrollback. Structural check for the same reason `observedBcBuild` is
-  // one: no other backend has the concept.
-  const missingImplSource = cfg.backend as {
-    observedMissingImplementation?: () => { app: string; announcement: string } | undefined;
-  };
-  const observedMissingImpl = missingImplSource.observedMissingImplementation?.();
-  if (observedMissingImpl !== undefined) {
-    emit({
-      type: "warning",
-      code: "al-runner-missing-implementation",
-      message:
-        `al-runner resolved ${observedMissingImpl.app} to a package with NO IMPLEMENTATION, and said calls into ` +
-        "it will fail. If that app is one this session mutated or called, its procedure bodies were absent and " +
-        "every verdict touching it describes a program that cannot run. Runner said: " +
-        observedMissingImpl.announcement,
-    });
-  }
-  // R583: a dependency (not the target, not the test app) lost objects in al-runner's compile. The
-  // run is scored anyway; tests touching a dropped object fail, and the rest cover less. Structural,
-  // as above. One-shot reads it from each invocation's stderr. `--server` CANNOT see it: the measured
-  // drop prints only on the daemon's stderr, which is never read per request, so on `--server` the
-  // absence of this warning is not evidence that no dependency lost objects.
-  const depSource = cfg.backend as { observedDependencyDrops?: () => readonly string[] };
-  for (const drop of depSource.observedDependencyDrops?.() ?? []) {
-    emit({
-      type: "warning",
-      code: "al-runner-dependency-emit-excluded",
-      message: `al-runner dropped objects from a DEPENDENCY of this run (neither the target nor the test app), so it was scored anyway: a test that touches a dropped object fails, and one that touches only the survivors covers less than it claims (R583). Seen on the one-shot transport; --server cannot see such drops (they print only on the daemon's stderr), so no warning there is not evidence of no drop. Runner said: ${drop.slice(0, 1500)}`,
-    });
-  }
+  // R654 removed three .NET al-runner readers here (R129's BC build, R148's missing
+  // implementation, R583's dependency drops): no remaining backend reports any of them.
   const totalMs = Date.now() - sessionStartedMs;
   emit({ type: "session-finished", elapsedMs: totalMs });
   // buildReport(statics, events) (spec 2026-08-05 §A): the closed statics set this run was GIVEN —
@@ -11513,7 +11160,90 @@ export function isProjectResource(rel: string): boolean {
   const lower = rel.toLowerCase();
   if (lower.endsWith(".al") || lower.endsWith(".app")) return false;
   if (basename(lower) === "app.json") return false;
+  if (isLethalConfigName(rel)) return false;
   return !isToolResourcePath(rel);
+}
+
+/**
+ * R668: LethAL's own config (`lethal.config.json`, `lethal.config.<name>.json`, any case, any
+ * depth). It holds the server login and its default place is the target folder, so it is never a
+ * batch resource. A `--config` of any other name is caught by identity (`sameFileAs`).
+ */
+function isLethalConfigName(rel: string): boolean {
+  return /^lethal\.config(\.[^/\\]+)?\.json$/i.test(basename(rel.replaceAll("\\", "/")));
+}
+
+/**
+ * R668: a test for "is this the run's `--config` file", by device and inode, so another name, a
+ * letter case, a symlinked parent directory or a hard link all match. The config is stat-ed once,
+ * here; without a config (or with none on disk) nothing matches.
+ */
+export async function sameFileAs(
+  configPath: string | undefined,
+  statOf: StatOf = (p) => stat(p, { bigint: true }),
+): Promise<(p: string) => Promise<boolean>> {
+  const id = configPath === undefined ? undefined : await fileIdentity(configPath, statOf);
+  if (configPath === undefined || id === undefined) return async () => false;
+  // Some SMB and FAT mounts report ino 0 for every file, so identity says nothing: exact path only.
+  if (id.ino === 0n) {
+    const key = outputPathKey(configPath);
+    return async (p) => outputPathKey(p) === key;
+  }
+  return async (p) => {
+    const other = await fileIdentity(p, statOf);
+    return other !== undefined && other.dev === id.dev && other.ino === id.ino;
+  };
+}
+
+/** A seam for the ino-0 test; the default is `stat` with bigint fields. */
+type StatOf = (p: string) => Promise<{ readonly dev: bigint; readonly ino: bigint }>;
+
+async function fileIdentity(
+  p: string,
+  statOf: StatOf,
+): Promise<{ readonly dev: bigint; readonly ino: bigint } | undefined> {
+  try {
+    const s = await statOf(p);
+    return { dev: s.dev, ino: s.ino };
+  } catch (err) {
+    if ((err as { code?: unknown }).code === "ENOENT") return undefined;
+    throw err;
+  }
+}
+
+/**
+ * R668: the project files LethAL leaves out as its config (by name or as the `--config` file) that
+ * app.json's `resourceFolders` covers. The user's own build packs them into the .app; a batch does
+ * not, so a test reading one fails at the baseline. Project-relative, sorted.
+ */
+export async function configFilesInResourceFolders(
+  projectDir: string,
+  projectManifest: Readonly<Record<string, unknown>>,
+  configPath: string | undefined,
+): Promise<readonly string[]> {
+  const raw = projectManifest.resourceFolders;
+  const folders = (Array.isArray(raw) ? raw : [])
+    .filter((f): f is string => typeof f === "string")
+    .map((f) =>
+      f
+        .replaceAll("\\", "/")
+        .replace(/^\.\/?/, "")
+        .replace(/\/+$/, "")
+        .toLowerCase(),
+    );
+  if (folders.length === 0) return [];
+  const isConfig = await sameFileAs(configPath);
+  const out: string[] = [];
+  for (const rel of (await walkFiles(projectDir, { links: "refuse" })).files) {
+    const key = rel.replaceAll("\\", "/").toLowerCase();
+    if (!folders.some((f) => f === "" || key.startsWith(`${f}/`))) continue;
+    if (isLethalConfigName(rel) || (await isConfig(join(projectDir, rel)))) out.push(rel);
+  }
+  return out;
+}
+
+function configResourceWarning(rel: string): string {
+  return `${rel}: LethAL left this config file out of the app it builds for each batch (R668). app.json's resourceFolders covers it, so a test that reads it as a resource fails at the baseline. Your own build still ships it inside the .app, with any login it holds: take it out of resourceFolders.`;
 }
 
 /**
@@ -11571,12 +11301,15 @@ export async function prepareBatchProject(
   excludeOutputs: readonly string[] = [],
   /** R219: the map `writeInstrumentedProject` named its files by; built here when absent. */
   flatNamesIn?: FlatNames,
+  /** R668: the run's `--config` file; a project file that is the same file is never copied. */
+  configPath?: string,
 ): Promise<readonly AppJsonPathChange[]> {
   const pathChanges = await writeStampedAppJson(batchDir, projectManifest, appVersion);
   // R363: the run's own output files (the results database and its sidecars, `--out`,
   // `--progress-out`), named by the caller. Exact paths only: an old report this run did not name
   // is copied like any resource, and nothing is guessed from an extension.
   const excluded = new Set(excludeOutputs.map(outputPathKey));
+  const isConfig = await sameFileAs(configPath);
 
   // R631: a link refuses here too, so a batch never copies a tree alc would compile differently.
   const entries = (await walkFiles(projectDir, { links: "refuse" })).files;
@@ -11641,6 +11374,7 @@ export async function prepareBatchProject(
     const lower = rel.toLowerCase();
     if (!isProjectResource(rel)) continue;
     if (excluded.has(outputPathKey(join(projectDir, rel)))) continue;
+    if (await isConfig(join(projectDir, rel))) continue;
     if (lower.replaceAll("\\", "/") === reserved) refuseReserved(rel);
     const dest = join(batchDir, rel);
     await mkdir(dirname(dest), { recursive: true });

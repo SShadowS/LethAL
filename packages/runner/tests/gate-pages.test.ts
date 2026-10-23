@@ -1,14 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { GATE_BASELINES, PENDING_FIRST_RECORD, parseGateBaseline } from "../itest/baseline-guard";
 import {
-  GATE_BASELINES,
-  PENDING_FIRST_RECORD,
-  SYMBOL_BASELINES,
-  parseGateBaseline,
-} from "../itest/baseline-guard";
-import {
-  ALRUNNER_FIGURES,
   BCDEV_FIGURES,
   CHUNKED_FIGURES,
   ENVTOOL_FIGURES,
@@ -19,10 +13,9 @@ import {
 import { EXPECTED as HARDEN_EXPECTED } from "../itest/harden-expected";
 import { REPRODUCTION_EXPECTED } from "../itest/kill-reproduction";
 import { EXPECTED_LAYOUT, LAYOUT_MAX_GUARDS } from "../itest/layout-fixture";
-import { EXPECTED_MULTIOBJECT } from "../itest/multiobject-fixture";
 import { NAMES_TABLE } from "../itest/names-fixture";
 import { EXPECTED_BY_SET } from "../itest/symbol-fixture";
-import { EXPECTED_WRAPPED, EXPECTED_WRAPPED_BC } from "../itest/wrapped-fixture";
+import { EXPECTED_WRAPPED_BC } from "../itest/wrapped-fixture";
 
 /**
  * R-592: the frozen figures moved out of CLAUDE.md into `docs/gates/<gate>.md`. Each page carries
@@ -45,20 +38,18 @@ const CONSTANTS: Record<string, unknown> = {
   NAMES_TABLE,
   BCDEV_FIGURES,
   ENVTOOL_FIGURES,
-  ALRUNNER_FIGURES,
   TABLES_FIGURES,
   CHUNKED_FIGURES,
   HANG_FIGURES,
   LEND_FIGURES,
 };
 
-/** Baselines with an exported pre-committed table: its verdict counts must match the page too. */
+/** Baselines with an exported pre-committed table: its verdict counts must match the page too.
+ *  R654 S3: the layout and symbol tables now pin the v3 baselines (their v2 twins are gone). */
 const TABLES: Record<string, ReadonlyArray<{ readonly verdict: string }>> = {
-  "al-runner.layout.baseline.json": EXPECTED_LAYOUT,
-  "al-runner.multiobject.baseline.json": EXPECTED_MULTIOBJECT,
-  "al-runner.symbols-lethala.baseline.json": EXPECTED_BY_SET["[LETHALA]"] ?? [],
-  "al-runner.symbols-lethalb.baseline.json": EXPECTED_BY_SET["[LETHALB]"] ?? [],
-  "al-runner.wrapped.baseline.json": EXPECTED_WRAPPED,
+  "al-runner-v3.layout.baseline.json": EXPECTED_LAYOUT,
+  "al-runner-v3.symbols-lethala.baseline.json": EXPECTED_BY_SET["[LETHALA]"] ?? [],
+  "al-runner-v3.symbols-lethalb.baseline.json": EXPECTED_BY_SET["[LETHALB]"] ?? [],
   "bcdev.wrapped.baseline.json": EXPECTED_WRAPPED_BC,
   "harden.baseline.json": HARDEN_EXPECTED,
 };
@@ -223,7 +214,6 @@ function leaves(value: unknown, prefix: string): string[] {
 const FIGURES_BASELINE: Record<string, readonly [string, Readonly<Record<string, unknown>>]> = {
   BCDEV_FIGURES: ["bcdev.baseline.json", BCDEV_FIGURES],
   ENVTOOL_FIGURES: ["envtool.baseline.json", ENVTOOL_FIGURES],
-  ALRUNNER_FIGURES: ["al-runner.baseline.json", ALRUNNER_FIGURES],
   TABLES_FIGURES: ["tables.baseline.json", TABLES_FIGURES],
 };
 
@@ -231,7 +221,6 @@ const FIGURES_BASELINE: Record<string, readonly [string, Readonly<Record<string,
 const ITEST_FIGURES: Record<string, string> = {
   "bcdev.itest.ts": "BCDEV_FIGURES",
   "envtool.itest.ts": "ENVTOOL_FIGURES",
-  "al-runner.itest.ts": "ALRUNNER_FIGURES",
   "tables.itest.ts": "TABLES_FIGURES",
   "chunked.itest.ts": "CHUNKED_FIGURES",
   "hang.itest.ts": "HANG_FIGURES",
@@ -250,8 +239,9 @@ function restatedFigures(source: string, exportName: string): string[] {
   return out;
 }
 
-/** Pages under docs/gates that describe no single gate, so carry no figure block. */
-const NOT_GATE_PAGES = new Set(["README.md", "servers.md"]);
+/** Pages under docs/gates that describe no single gate, so carry no figure block. R654 S3:
+ *  `alrunner.md` is the retired `itest:alrunner`'s stub, kept for its history. */
+const NOT_GATE_PAGES = new Set(["README.md", "servers.md", "alrunner.md"]);
 
 const pages = readdirSync(PAGES)
   .filter((f) => f.endsWith(".md") && !NOT_GATE_PAGES.has(f))
@@ -271,7 +261,7 @@ describe("docs/gates pages pin their frozen figures (R-592)", () => {
     for (const { page, block } of pages) {
       for (const b of Object.keys(block.baselines)) seen.set(b, [...(seen.get(b) ?? []), page]);
     }
-    for (const b of [...Object.keys(GATE_BASELINES), ...SYMBOL_BASELINES]) {
+    for (const b of Object.keys(GATE_BASELINES)) {
       expect({ baseline: b, pages: seen.get(b) ?? [] }).toEqual({
         baseline: b,
         pages: [expect.any(String)],
@@ -332,7 +322,6 @@ describe("itest/gate-expected.ts (R-592)", () => {
     const exports: Record<string, unknown> = {
       BCDEV_FIGURES,
       ENVTOOL_FIGURES,
-      ALRUNNER_FIGURES,
       TABLES_FIGURES,
       CHUNKED_FIGURES,
       HANG_FIGURES,

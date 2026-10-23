@@ -73,7 +73,6 @@ import type {
 import { assertManifestObjectsDeclared } from "../src/line-map";
 import { loadInstalledArtifact } from "../src/named-mutants";
 import { NamedMutantError } from "../src/named-mutants";
-import { measuredV2_12 } from "./helpers/al-runner-predefined";
 import { bundleFor, tinyBundle } from "./helpers/bundle";
 import { IDLE_STATUS, leaseRouter } from "./helpers/lease-wire";
 import type { WireAnswer } from "./helpers/lease-wire";
@@ -81,6 +80,11 @@ import { scratchDirs } from "./helpers/scratch";
 import { testDbPath } from "./helpers/test-db";
 
 const scratch = scratchDirs();
+/** R654: the .NET al-runner fakes here were re-pointed to al-runner-v3, the local runner left; a
+ *  v3 session asks its backend for its build (`runnerBuildOf`), so each such fake names one. */
+async function v3RunnerBuild(): Promise<{ version: string; binarySha256: string }> {
+  return { version: "alrunner 3.0.0-alpha.2 (91253f2d6)", binarySha256: "b".repeat(64) };
+}
 import {
   DependencyUnreadableError,
   type MicrosoftMode,
@@ -316,7 +320,7 @@ const APP_JSON = JSON.stringify(
 const TESTS_APP = { name: "Sandbox Tests", publisher: "LethAL", version: "1.0.0.2" };
 
 class StubBackend implements ExecutionBackend {
-  readonly measurePredefinedSymbols = measuredV2_12; // R392
+  readonly runnerBuild = v3RunnerBuild; // R654
   activations: Array<string | null> = [];
   deploys: string[] = [];
   /**
@@ -507,7 +511,7 @@ const CAPS_NST_WORKERS: BackendCapabilities = {
   coverage: "procedure",
   deploy: "publish",
   isolation: "session",
-  kind: "al-runner",
+  kind: "al-runner-v3",
   authoritative: false,
 };
 
@@ -550,7 +554,7 @@ describe("runSession", () => {
         coverage: "none",
         deploy: "none",
         isolation: "full-reset",
-        kind: "al-runner",
+        kind: "al-runner-v3",
         authoritative: false,
       },
       (mutant) => (mutant === null ? "pass" : "fail"),
@@ -585,7 +589,7 @@ describe("runSession", () => {
         coverage: "none",
         deploy: "none",
         isolation: "full-reset",
-        kind: "al-runner",
+        kind: "al-runner-v3",
         authoritative: false,
       },
       (mutant) => (mutant === null ? "pass" : "fail"),
@@ -1347,7 +1351,7 @@ describe("runSession", () => {
         coverage: "fenced",
         deploy: "publish",
         isolation: "session",
-        kind: "al-runner",
+        kind: "al-runner-v3",
         authoritative: false,
       },
       () => "pass",
@@ -1368,7 +1372,7 @@ describe("runSession", () => {
         coverage: "fenced",
         deploy: "publish",
         isolation: "session",
-        kind: "al-runner",
+        kind: "al-runner-v3",
         authoritative: false,
       },
       () => "pass",
@@ -1391,7 +1395,7 @@ describe("runSession", () => {
         coverage: "none",
         deploy: "none",
         isolation: "full-reset",
-        kind: "al-runner",
+        kind: "al-runner-v3",
         authoritative: false,
       },
       (mutant) => (mutant === null ? "pass" : "fail"),
@@ -1520,16 +1524,10 @@ interface "I Probe"
         }
       });
 
-      test("al-runner: the mutants are covered and run (survived), with no refusal", async () => {
-        const report = await wrappedRun(CAPS_NST_WORKERS);
-        expect(report.mutants.length).toBeGreaterThan(0);
-        for (const m of report.mutants) {
-          expect(m.verdict).toBe("survived");
-          expect(m.failureNote ?? "").not.toContain("coverage refused");
-        }
-      });
-
-      test("the session's build symbols reach the session backend AND every worker backend", async () => {
+      // R654 S3: "al-runner: the mutants are covered and run (survived), with no refusal" was the
+      // .NET al-runner's index rule; al-runner-v3 refuses a wrapped file (`wrappedRuleFor`, pinned
+      // by r654-wrapped-rule.test.ts). Its worker half below went too: no backend takes workers > 1.
+      test("the session's build symbols reach the session backend", async () => {
         const dirs = await makeProject();
         // Sol run 001 (minor): DISTINCT app and config symbols, so an empty or partial handoff
         // cannot match the expected set the way three equal empty sets matched each other.
@@ -1548,8 +1546,6 @@ interface "I Probe"
         try {
           await runSession({
             backend: make(),
-            backendFactory: make,
-            workers: 2,
             store,
             ...dirs,
             selectorIds,
@@ -1558,19 +1554,19 @@ interface "I Probe"
         } finally {
           store.close();
         }
-        // app.json's, the config's and al-runner's predefined set (R392), sorted and unique.
-        const { symbols: predefined } = await measuredV2_12();
-        const expected = [...new Set(["APPSYM", "CFGSYM", ...predefined])].sort();
-        // One session backend plus two workers, each given exactly that set.
-        expect(got).toEqual([expected, expected, expected]);
+        // app.json's and the config's, sorted and unique (v3 predefines none).
+        expect(got).toEqual([["APPSYM", "CFGSYM"]]);
       });
 
       // Sol run 001 (I): an admitted wrapped file whose INSTRUMENTED text re-parses with undecided
       // arms is dropped by the al-runner index, which refuses its objects. Selection read the
       // ORIGINAL source, which decides, so it held no refusal: a reached procedure read plain
       // no-coverage and a table trigger took the all-green fallback and was SCORED. The fake
-      // builds the real index over the deployed batch, as AlRunnerBackend does.
-      describe("an index-only refusal (instrumented text undecided)", () => {
+      // builds the real index over the deployed batch, as AlRunnerBackend did.
+      // R654 S3: only the retired .NET al-runner ADMITTED a wrapped file to a session; al-runner-v3
+      // refuses it whole in selection first (`wrappedRuleFor`), so this case cannot arise and its
+      // three tests are skipped. The index's own refusal stays pinned in r300b-wrapped.test.ts.
+      describe.skip("an index-only refusal (instrumented text undecided)", () => {
         async function undecidedProject() {
           const dirs = await makeProject();
           // R318's seed: `Other`'s nested `#if` in a conditional var section parses in the original
@@ -2100,7 +2096,7 @@ ${TRIGGER_TABLE_AL}#endif
   test("R35 Fix 1: a PASSING baseline verdict with a permission-shaped failureMessage does NOT land in permissionsRefused", async () => {
     const dirs = await makeProject();
     class PassWithFailureMessageBackend implements ExecutionBackend {
-      readonly measurePredefinedSymbols = measuredV2_12; // R392
+      readonly runnerBuild = v3RunnerBuild; // R654
       activations: Array<string | null> = [];
       capabilities() {
         return CAPS_NST;
@@ -2296,7 +2292,7 @@ const TWO_TEST_AL = `codeunit 79100 "Sandbox Tests"
 `;
 
 class QualificationBackend implements ExecutionBackend {
-  readonly measurePredefinedSymbols = measuredV2_12; // R392
+  readonly runnerBuild = v3RunnerBuild; // R654
   activations: Array<string | null> = [];
   deploys: string[] = [];
   ranActive = 0; // active (mutant !== null) run count — proves a scheduled mutant executed
@@ -3152,7 +3148,7 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
 
   test("a non-authoritative backend is unchanged: no scan, the test is sent", async () => {
     const dirs = await project();
-    const backend = new RecordingBackend({ ...FENCED, kind: "al-runner", authoritative: false });
+    const backend = new RecordingBackend({ ...FENCED, kind: "al-runner-v3", authoritative: false });
     const store = new ResultsStore(":memory:");
     const report = await runSession({ backend, store, ...dirs, selectorIds });
     expect(backend.baselineSent).toContain("UnsupportedTest");
@@ -3461,7 +3457,7 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
     const classify = async (failureMessage: string) => {
       const dirs = await project();
       const backend = new RecordingBackend(
-        { ...FENCED, kind: "al-runner", authoritative: false },
+        { ...FENCED, kind: "al-runner-v3", authoritative: false },
         failureMessage,
       );
       const store = new ResultsStore(":memory:");
@@ -3756,7 +3752,7 @@ describe("runSession — per-mutant budget floor (Tier 6B Phase 0 Task 6)", () =
    * procedure coverage list — every green test runs under every mutant regardless.
    */
   class BudgetProbeBackend implements ExecutionBackend {
-    readonly measurePredefinedSymbols = measuredV2_12; // R392
+    readonly runnerBuild = v3RunnerBuild; // R654
     activations: Array<string | null> = [];
     readonly runs: Array<{ active: string | null; timeoutMs: number }> = [];
     constructor(private readonly baselineDurationMs: number) {}
@@ -3765,7 +3761,7 @@ describe("runSession — per-mutant budget floor (Tier 6B Phase 0 Task 6)", () =
         coverage: "none",
         deploy: "none",
         isolation: "full-reset",
-        kind: "al-runner",
+        kind: "al-runner-v3",
         authoritative: false,
       };
     }
@@ -3875,7 +3871,8 @@ describe("runSession — I7 second consecutive transport error aborts the sessio
   }, 30_000);
 });
 
-describe("runSession — parallel workers", () => {
+// R671: no backend accepts workers > 1 since R654 retired the .NET al-runner; skipped, not lost.
+describe.skip("runSession — parallel workers", () => {
   test("verdicts are identical at 1, 2 and 4 workers", async () => {
     const shape = (r: Awaited<ReturnType<typeof runSession>>) =>
       [...r.mutants].map((m) => `${m.file}:${m.line}:${m.operatorName}:${m.verdict}`).sort();
@@ -3936,7 +3933,7 @@ describe("runSession — parallel workers", () => {
       coverage: "none",
       deploy: "none",
       isolation: "full-reset",
-      kind: "al-runner",
+      kind: "al-runner-v3",
       authoritative: false,
     };
 
@@ -4003,7 +4000,7 @@ describe("runSession — parallel workers", () => {
           coverage: "none",
           deploy: "none",
           isolation: "full-reset",
-          kind: "al-runner",
+          kind: "al-runner-v3",
           authoritative: false,
         },
         (mutant) => (mutant === null ? "pass" : "fail"),
@@ -4036,7 +4033,7 @@ describe("runSession — parallel workers", () => {
       coverage: "none",
       deploy: "none",
       isolation: "full-reset",
-      kind: "al-runner",
+      kind: "al-runner-v3",
       authoritative: false,
     };
     // Layer 4.3 collapsed overlap batching to a single artifact, so
@@ -4110,7 +4107,7 @@ describe("runSession — parallel workers", () => {
       coverage: "none",
       deploy: "none",
       isolation: "full-reset",
-      kind: "al-runner",
+      kind: "al-runner-v3",
       authoritative: false,
     };
     // R491: one shared event log across every backend, so ORDER is read from call counters, never
@@ -4158,167 +4155,6 @@ describe("runSession — parallel workers", () => {
     }
     expect(made).toBe(3);
     store.close();
-  });
-
-  // R551: the session backend's `--test-exact` probe, and the boolean it hands every worker.
-  describe("the --test-exact probe (R551)", () => {
-    const caps: BackendCapabilities = {
-      coverage: "none",
-      deploy: "none",
-      isolation: "full-reset",
-      kind: "al-runner",
-      authoritative: false,
-    };
-    type Probe =
-      | { kind: "not-applicable" }
-      | { kind: "exact"; elapsedMs: number }
-      | { kind: "substring"; elapsedMs: number; reason: string };
-    type Entry = { backend: number; what: "probe" | "selector" | "run"; on?: boolean };
-
-    /** Backend 0 is the session's. `withSetter: false` leaves the WORKERS without the setter. */
-    async function session(probe: Probe, o: { workers?: number; withSetter?: boolean } = {}) {
-      const dirs = await makeProject();
-      await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
-      const store = new ResultsStore(":memory:");
-      const log: Entry[] = [];
-      const events: RunEvent[] = [];
-      let made = 0;
-      const make = () => {
-        const id = made++;
-        const b = new StubBackend(caps, (mutant) => (mutant === null ? "pass" : "fail"), []);
-        const run = b.run.bind(b);
-        const extra: Record<string, unknown> = {
-          run: (ref: TestMethodRef, opts: RunOpts) => {
-            log.push({ backend: id, what: "run" });
-            return run(ref, opts);
-          },
-        };
-        if (id === 0) {
-          extra.probeExactTestSelector = async () => {
-            log.push({ backend: id, what: "probe" });
-            return probe;
-          };
-        }
-        if (id === 0 || o.withSetter !== false) {
-          extra.useExactTestSelector = (on: boolean) => {
-            log.push({ backend: id, what: "selector", on });
-          };
-        }
-        return Object.assign(b, extra);
-      };
-      let report: Awaited<ReturnType<typeof runSession>>;
-      try {
-        report = await runSession({
-          backend: make(),
-          backendFactory: make,
-          store,
-          ...dirs,
-          selectorIds,
-          workers: o.workers ?? 2,
-          emit: [(e) => events.push(e)],
-        });
-      } finally {
-        store.close();
-      }
-      const selectorLines = events.flatMap((e) =>
-        e.type === "warning" && e.code === "al-runner-test-selector" ? [e.message] : [],
-      );
-      const selectorEvents = events.filter((e) => e.type === "al-runner-test-selector");
-      const contexts = report.validity.executionContexts.filter((c) => c.verdictCount > 0);
-      return { log, made, selectorLines, events, selectorEvents, contexts };
-    }
-
-    test("O1: the probe runs once, before the session's first run(); every worker gets the boolean before its own", async () => {
-      const { log, made } = await session({ kind: "exact", elapsedMs: 5 });
-      expect(made).toBe(3);
-      const probes = log.filter((e) => e.what === "probe");
-      expect(probes).toEqual([{ backend: 0, what: "probe" }]);
-      const firstRun0 = log.findIndex((e) => e.backend === 0 && e.what === "run");
-      expect(firstRun0).toBeGreaterThan(log.indexOf(probes[0] as Entry));
-      for (const id of [1, 2]) {
-        const sel = log.filter((e) => e.backend === id && e.what === "selector");
-        expect(sel).toEqual([{ backend: id, what: "selector", on: true }]);
-        const at = log.findIndex((e) => e.backend === id && e.what === "selector");
-        const firstRun = log.findIndex((e) => e.backend === id && e.what === "run");
-        expect(firstRun).toBeGreaterThan(at);
-      }
-    });
-
-    test("O2: a rejecting probe hands every worker false", async () => {
-      const { log } = await session({ kind: "substring", elapsedMs: 5, reason: "exit 2" });
-      for (const id of [1, 2]) {
-        expect(log.filter((e) => e.backend === id && e.what === "selector")).toEqual([
-          { backend: id, what: "selector", on: false },
-        ]);
-      }
-    });
-
-    test("O3: a worker without useExactTestSelector makes runSession throw, naming the worker", async () => {
-      await expect(session({ kind: "exact", elapsedMs: 5 }, { withSetter: false })).rejects.toThrow(
-        /worker backend 0.*useExactTestSelector|useExactTestSelector.*worker backend 0/,
-      );
-    });
-
-    test("O4: exactly one al-runner-test-selector warning per probed session; none when not-applicable", async () => {
-      expect(
-        (await session({ kind: "exact", elapsedMs: 7 }, { workers: 1 })).selectorLines,
-      ).toEqual([
-        "al-runner test selector: exact (--test-exact accepted by a one-call probe in 7 ms; R551)",
-      ]);
-      expect(
-        (
-          await session(
-            { kind: "substring", elapsedMs: 9, reason: "exit 2; stderr: Unknown option" },
-            { workers: 1 },
-          )
-        ).selectorLines,
-      ).toEqual([
-        "al-runner test selector: substring with R488 excludes (--test-exact not accepted: exit 2; stderr: Unknown option; probe 9 ms; R551)",
-      ]);
-      const na = await session({ kind: "not-applicable" }, { workers: 1 });
-      expect(na.selectorLines).toEqual([]);
-      // Non-vacuous: the hook did receive the session's other events.
-      expect(na.events.length).toBeGreaterThan(0);
-    });
-
-    // R558: the choice reaches the report through a structured event, not the warning text.
-    test("R558 exact: one structured event, and every measured context records exact with no reason", async () => {
-      const s = await session({ kind: "exact", elapsedMs: 7 }, { workers: 1 });
-      expect(s.selectorEvents).toHaveLength(1);
-      const [ev] = s.selectorEvents;
-      expect(ev).toMatchObject({ type: "al-runner-test-selector", selector: "exact" });
-      expect(ev !== undefined && "reason" in ev).toBe(false);
-      expect(s.contexts.length).toBeGreaterThan(0);
-      for (const c of s.contexts) {
-        expect(c.testSelector).toBe("exact");
-        expect(c.testSelectorReason).toBeUndefined();
-      }
-    });
-
-    test("R558 substring: the event and every measured context carry substring-with-excludes and the probe's reason", async () => {
-      const s = await session(
-        { kind: "substring", elapsedMs: 9, reason: "exit 2; stderr: Unknown option" },
-        { workers: 1 },
-      );
-      expect(s.selectorEvents).toHaveLength(1);
-      expect(s.selectorEvents[0]).toMatchObject({
-        type: "al-runner-test-selector",
-        selector: "substring-with-excludes",
-        reason: "exit 2; stderr: Unknown option",
-      });
-      expect(s.contexts.length).toBeGreaterThan(0);
-      for (const c of s.contexts) {
-        expect(c.testSelector).toBe("substring-with-excludes");
-        expect(c.testSelectorReason).toBe("exit 2; stderr: Unknown option");
-      }
-    });
-
-    test("R558 not-applicable (--server): no event, and no measured context records a selector", async () => {
-      const s = await session({ kind: "not-applicable" }, { workers: 1 });
-      expect(s.selectorEvents).toEqual([]);
-      expect(s.contexts.length).toBeGreaterThan(0);
-      for (const c of s.contexts) expect(c.testSelector).toBeUndefined();
-    });
   });
 
   test("a worker deploy failure does not double-record a mutant step 5 already marked no-coverage", async () => {
@@ -4392,7 +4228,7 @@ describe("runSession — parallel workers", () => {
       coverage: "none",
       deploy: "none",
       isolation: "full-reset",
-      kind: "al-runner",
+      kind: "al-runner-v3",
       authoritative: false,
     };
     // Worker 0 is slow — 30ms per run(). Worker 1 errors on every
@@ -4449,7 +4285,7 @@ describe("runSession — parallel workers", () => {
       coverage: "none",
       deploy: "none",
       isolation: "full-reset",
-      kind: "al-runner",
+      kind: "al-runner-v3",
       authoritative: false,
     };
     let factoryCalls = 0;
@@ -4503,7 +4339,7 @@ describe("runSession — parallel workers", () => {
       coverage: "none",
       deploy: "none",
       isolation: "full-reset",
-      kind: "al-runner",
+      kind: "al-runner-v3",
       authoritative: false,
     };
     const make = () => new StubBackend(caps, (mutant) => (mutant === null ? "pass" : "fail"), []);
@@ -4537,7 +4373,7 @@ describe("runSession — M4 outcome ordering", () => {
       coverage: "none",
       deploy: "none",
       isolation: "full-reset",
-      kind: "al-runner",
+      kind: "al-runner-v3",
       authoritative: false,
     };
     const backend = new StubBackend(caps, (mutant) => (mutant === null ? "pass" : "fail"), []);
@@ -5432,7 +5268,7 @@ const PHASE_VERIFIER_CFG = {
  * artifact id surviving anywhere in the orchestrator fails every one of these tests loudly.
  */
 class PhaseBackend implements ExecutionBackend {
-  readonly measurePredefinedSymbols = measuredV2_12; // R392
+  readonly runnerBuild = v3RunnerBuild; // R654
   readonly calls: string[] = [];
   lastCompiledVersion: string | undefined;
   /** C02-02: the exact object each successful deploy() call returned, one entry per batch, in
@@ -5643,6 +5479,107 @@ describe("runSession — Layer 5A deployment identity", () => {
     const [only] = warnings;
     expect(only?.type === "warning" ? only.message : undefined).toBe(BACKSLASH_WARNING);
     store.close();
+  });
+
+  // R668: a config file LethAL leaves out of the batch, but that app.json's resourceFolders
+  // covers. One warning per file per session; no refusal.
+  const configWarning = (rel: string): string =>
+    `${rel}: LethAL left this config file out of the app it builds for each batch (R668). app.json's resourceFolders covers it, so a test that reads it as a resource fails at the baseline. Your own build still ships it inside the .app, with any login it holds: take it out of resourceFolders.`;
+  async function configWarnings(
+    resourceFolders: readonly string[] | undefined,
+    files: readonly string[],
+    configRel?: string,
+  ): Promise<readonly string[]> {
+    const dirs = await twoBatchProject();
+    await Bun.write(
+      join(dirs.projectDir, "app.json"),
+      JSON.stringify({
+        ...JSON.parse(APP_JSON),
+        ...(resourceFolders !== undefined ? { resourceFolders } : {}),
+      }),
+    );
+    for (const rel of files) await Bun.write(join(dirs.projectDir, rel), '{"dummy":"R668"}');
+    const events: RunEvent[] = [];
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({
+      backend: new PhaseBackend(),
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+      ...(configRel !== undefined ? { configPath: join(dirs.projectDir, configRel) } : {}),
+      emit: [(e) => events.push(e)],
+    });
+    expect(report.batches).toBe(2);
+    store.close();
+    return events.flatMap((e) =>
+      e.type === "warning" && e.code === "lethal-config-resource" ? [e.message] : [],
+    );
+  }
+
+  test("warns once per dropped config file that resourceFolders covers, across batches (R668)", async () => {
+    const warnings = await configWarnings(
+      ["."],
+      ["lethal.config.json", join("Res", "lethal.config.bc1.json"), join("Res", "a.txt")],
+    );
+    expect([...warnings].sort()).toEqual(
+      [
+        configWarning("lethal.config.json"),
+        configWarning(join("Res", "lethal.config.bc1.json")),
+      ].sort(),
+    );
+  });
+
+  test("warns for the --config file of another name that resourceFolders covers (R668)", async () => {
+    const warnings = await configWarnings(
+      ["Res"],
+      [join("Res", "conn.json")],
+      join("Res", "conn.json"),
+    );
+    expect(warnings).toEqual([configWarning(join("Res", "conn.json"))]);
+  });
+
+  // R668: the session hands its --config to every batch build. Revert: drop `configPath` from the
+  // `prepareArtifactDir` call in `runSession`, and conn.json reaches the deployed dir.
+  test("the --config file of another name never reaches a deployed batch dir (R668)", async () => {
+    const dirs = await twoBatchProject();
+    await Bun.write(join(dirs.projectDir, "conn.json"), '{"dummy":"R668"}');
+    await Bun.write(join(dirs.projectDir, "notes.json"), "{}");
+    const deployed: string[][] = [];
+    class ListingBackend extends PhaseBackend {
+      override async deploy(dir: string): Promise<CompiledArtifact | null> {
+        deployed.push(await readdir(dir));
+        return await super.deploy(dir);
+      }
+    }
+    const store = new ResultsStore(":memory:");
+    await runSession({
+      backend: new ListingBackend(),
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+      configPath: join(dirs.projectDir, "conn.json"),
+    });
+    store.close();
+    expect(deployed).toHaveLength(2);
+    for (const names of deployed) {
+      expect(names).toContain("notes.json");
+      expect(names).not.toContain("conn.json");
+    }
+  });
+
+  test("no config warning when resourceFolders is absent or does not cover the file (R668)", async () => {
+    expect(await configWarnings(undefined, ["lethal.config.json"], "lethal.config.json")).toEqual(
+      [],
+    );
+    expect(
+      await configWarnings(
+        ["Res"],
+        ["lethal.config.json", join("Res", "a.txt")],
+        "lethal.config.json",
+      ),
+    ).toEqual([]);
   });
 
   test("an all-/ project raises no app-json-backslash-path warning (R-422)", async () => {
@@ -6033,7 +5970,7 @@ describe("runSession — Layer 5A deployment identity", () => {
       mode: "run",
       projectDir: dirs.projectDir,
       testDir: dirs.testDir,
-      backendKind: "al-runner",
+      backendKind: "al-runner-v3",
       dbPath: ":memory:",
       configPath,
       skipKnownSurvivors: false,
@@ -6416,7 +6353,7 @@ describe("runSession — deploy:none (al-runner) app_version", () => {
     coverage: "none",
     deploy: "none",
     isolation: "full-reset",
-    kind: "al-runner",
+    kind: "al-runner-v3",
     authoritative: false,
   };
 
@@ -6759,7 +6696,8 @@ describe("runSession — bisection on compile failure", () => {
   // complement still fails (the OTHER procedure's conditional-boundary is still present) and
   // report "environmental" instead of naming either one. Scoping to one procedure keeps this
   // fixture a genuine single-culprit case.
-  test("a worker's deploy failure is bisected to a named mutant, not blamed on its whole shard", async () => {
+  // R671: no backend accepts workers > 1 since R654.
+  test.skip("a worker's deploy failure is bisected to a named mutant, not blamed on its whole shard", async () => {
     const dirs = await makeProject();
     await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
     const store = new ResultsStore(":memory:");
@@ -6767,7 +6705,7 @@ describe("runSession — bisection on compile failure", () => {
       coverage: "none",
       deploy: "none",
       isolation: "full-reset",
-      kind: "al-runner",
+      kind: "al-runner-v3",
       authoritative: false,
     };
     const make = (workerIndex: number) =>
@@ -6820,7 +6758,8 @@ describe("runSession — bisection on compile failure", () => {
   // through into the same bisection machinery the previous test exercises for a plain compile
   // error, and get silently downgraded into a per-mutant "error" note instead of aborting the
   // run.
-  test("a worker's DeploymentError aborts the whole session instead of being bisected", async () => {
+  // R671: no backend accepts workers > 1 since R654.
+  test.skip("a worker's DeploymentError aborts the whole session instead of being bisected", async () => {
     const dbPath = testDbPath("results.sqlite");
     const dirs = await makeProject();
     await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
@@ -6829,7 +6768,7 @@ describe("runSession — bisection on compile failure", () => {
       coverage: "none",
       deploy: "none",
       isolation: "full-reset",
-      kind: "al-runner",
+      kind: "al-runner-v3",
       authoritative: false,
     };
     // The exact object worker 0's deploy() throws — asserted below by reference (`.toBe`),
@@ -7045,7 +6984,8 @@ describe("runSession — Task 7: bisects the full manifest, not the history-filt
   // "no-repro" — exactly the sequential path's bug, reproduced per-shard. Guarding both workers
   // identically (they see the same artifact) and searching `manifest.mutants` for both finds
   // the true culprit regardless of which shard it landed in.
-  test("a worker's shard-scoped bisection can miss a culprit outside its own shard; the full manifest finds it", async () => {
+  // R671: no backend accepts workers > 1 since R654.
+  test.skip("a worker's shard-scoped bisection can miss a culprit outside its own shard; the full manifest finds it", async () => {
     const dirs = await makeProject();
     await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
     const store = new ResultsStore(":memory:");
@@ -7053,7 +6993,7 @@ describe("runSession — Task 7: bisects the full manifest, not the history-filt
       coverage: "none",
       deploy: "none",
       isolation: "full-reset",
-      kind: "al-runner",
+      kind: "al-runner-v3",
       authoritative: false,
     };
     // Scoped to one specific mutant (operatorName AND procedureName) so there is exactly one
@@ -7173,7 +7113,8 @@ describe("runSession — Task 7: only a typed AlcCompileError may be bisected", 
   // failing deploy would eventually abort with the right error via the INNER guard alone even
   // if this outer one were missing — `calls === 1` is what only the outer guard delivers (zero
   // wasted bisection compiles, not merely "eventually aborts correctly").
-  test("a worker's ArtifactPrepareError aborts the whole session instead of being bisected", async () => {
+  // R671: no backend accepts workers > 1 since R654.
+  test.skip("a worker's ArtifactPrepareError aborts the whole session instead of being bisected", async () => {
     const dbPath = testDbPath("results.sqlite");
     const dirs = await makeProject();
     await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
@@ -7182,7 +7123,7 @@ describe("runSession — Task 7: only a typed AlcCompileError may be bisected", 
       coverage: "none",
       deploy: "none",
       isolation: "full-reset",
-      kind: "al-runner",
+      kind: "al-runner-v3",
       authoritative: false,
     };
     const deployErr = new ArtifactPrepareError("boom: worker 0 disk full");
@@ -7280,7 +7221,7 @@ describe("runSession — Task 7: only a typed AlcCompileError may be bisected", 
  * which mutant a given subset still carries, not on call order alone.
  */
 class CompilePublishVerifyBackend implements ExecutionBackend {
-  readonly measurePredefinedSymbols = measuredV2_12; // R392
+  readonly runnerBuild = v3RunnerBuild; // R654
   compileViaDeployCalls = 0;
   compileViaCheckCalls = 0;
   publisherCalls = 0;
@@ -7301,7 +7242,7 @@ class CompilePublishVerifyBackend implements ExecutionBackend {
   capabilities(): BackendCapabilities {
     return {
       ...PHASE_CAPS,
-      kind: this.authoritative ? "bcdev" : "al-runner",
+      kind: this.authoritative ? "bcdev" : "al-runner-v3",
       authoritative: this.authoritative,
     };
   }
@@ -7387,7 +7328,8 @@ describe("runSession — Task 7b: bisection's compile-only seam (spec §10 count
     store.close();
   });
 
-  test("worker path: the failing shard's publisher/verifier stay at zero while bisection names the culprit", async () => {
+  // R671: no backend accepts workers > 1 since R654.
+  test.skip("worker path: the failing shard's publisher/verifier stay at zero while bisection names the culprit", async () => {
     const dirs = await makeProject();
     await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
     const store = new ResultsStore(":memory:");
@@ -7476,7 +7418,7 @@ function fakeBackend(overrides: Partial<ExecutionBackend> = {}): ExecutionBacken
     }),
     ...overrides,
   };
-  return Object.assign(backend, { measurePredefinedSymbols: measuredV2_12 });
+  return Object.assign(backend, { runnerBuild: v3RunnerBuild });
 }
 
 function aRef(): TestMethodRef {
@@ -8019,7 +7961,7 @@ describe("runSession — Task 13 folded fix: warn when authoritative but no tier
         coverage: "none",
         deploy: "none",
         isolation: "full-reset",
-        kind: "al-runner",
+        kind: "al-runner-v3",
         authoritative: false,
       }),
     });
@@ -8048,7 +7990,7 @@ describe("runSession — fix round 1: stream-started carries the run's own id", 
         coverage: "none",
         deploy: "none",
         isolation: "full-reset",
-        kind: "al-runner",
+        kind: "al-runner-v3",
         authoritative: false,
       }),
     });
@@ -8145,7 +8087,7 @@ describe("runSession — Task 12 quarantine on in-flight-unknown deadline", () =
         coverage: "none",
         deploy: "publish",
         isolation: "session",
-        kind: "al-runner",
+        kind: "al-runner-v3",
         authoritative: false, // al-runner shape: no shared tier, mirrors the brief's "no shared tier" case
       }),
       activate: async (id) => {
@@ -10805,7 +10747,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
               coverage: "none",
               deploy: "none",
               isolation: "full-reset",
-              kind: "al-runner",
+              kind: "al-runner-v3",
               authoritative: false,
             },
             (mutant) => (mutant === null ? "pass" : "fail"),
@@ -15270,7 +15212,8 @@ describe("runSession — Layer 5C-B1 fix round 1: deploy latch guard + earlier-b
     expect(report.quarantined?.reason).toContain("lease-lost");
   });
 
-  test("a lease lost during a worker's deploy stops the NEXT worker's deploy", async () => {
+  // R671: no backend accepts workers > 1 since R654.
+  test.skip("a lease lost during a worker's deploy stops the NEXT worker's deploy", async () => {
     // The worker-shard deploy has its own latch guard (a fan-out path, so it cannot reuse
     // `deployOnce`). `workers > 1` is rejected outright for an AUTHORITATIVE backend, so the only
     // configuration that reaches this guard under a lease is a non-authoritative fenced backend.
@@ -15288,7 +15231,7 @@ describe("runSession — Layer 5C-B1 fix round 1: deploy latch guard + earlier-b
         coverage: "none",
         deploy: "publish",
         isolation: "session",
-        kind: "al-runner",
+        kind: "al-runner-v3",
         authoritative: false,
       }) as const;
     const workerDeploys = [0, 0];
@@ -15646,460 +15589,9 @@ describe("runSession — R108: a batch whose TOTAL crosses the bracket warns bef
   });
 });
 
-/**
- * R147 — the platform-app pin must reach EVERY backend that will execute a mutant, or the session
- * refuses.
- *
- * The failure this prevents is not a slow run. The baseline always executes on `cfg.backend` and is
- * never sharded, so a pin that reached only that instance would have the baseline running under a
- * FROZEN platform-app build while the mutants ran under `--auto-provision`, which resolves the
- * project's version prefix forward on every invocation. A Microsoft publish mid-session then moves
- * the platform apps under the mutants and not under the baseline. Worse, the report would not show
- * it: `observedBcBuild` is read from `cfg.backend` alone, so it would name the build that produced
- * the BASELINE and present it as the build that produced the verdicts.
- */
-describe("runSession propagates al-runner's pinned platform-app directory (R147)", () => {
-  const PIN = "C:/cache/28.0.46665.53671/platform-apps";
-
-  const caps: BackendCapabilities = {
-    coverage: "none",
-    deploy: "none",
-    isolation: "full-reset",
-    kind: "al-runner",
-    authoritative: false,
-  };
-
-  /** A backend that provisions and CAN be pinned — the real `AlRunnerBackend` shape. */
-  class PinnableStub extends StubBackend {
-    pins: string[] = [];
-    // `null` rather than `undefined` for "do not pin": an explicit `undefined` argument triggers the
-    // JavaScript DEFAULT and would silently give this stub a pin the test was written to withhold.
-    constructor(
-      private readonly pin: string | null = PIN,
-      // R242: what `AlRunnerBackend.usePlatformAppsDir` answers. False is the `--server` shape;
-      // anything but a boolean is an invalid answer that `runSession` must refuse.
-      private readonly consumes: unknown = true,
-    ) {
-      super(caps, (mutant) => (mutant === null ? "pass" : "fail"));
-    }
-    async provisionOnce() {
-      return {
-        elapsedMs: 1,
-        ran: true,
-        downloaded: false,
-        detail: "",
-        ...(this.pin !== null
-          ? { platformAppsDir: this.pin }
-          : { platformAppsRefusal: "measured nothing, on purpose" }),
-      };
-    }
-    usePlatformAppsDir(dir: string): unknown {
-      this.pins.push(dir);
-      return this.consumes;
-    }
-  }
-
-  /** Provisions, but cannot take the answer. The shape a future wrapper or decorator would have. */
-  class UnpinnableStub extends StubBackend {
-    constructor() {
-      super(caps, (mutant) => (mutant === null ? "pass" : "fail"));
-    }
-    async provisionOnce() {
-      return { elapsedMs: 1, ran: true, downloaded: false, detail: "", platformAppsDir: PIN };
-    }
-  }
-
-  test("the session backend is pinned, and the run SAYS which directory", async () => {
-    const dirs = await makeProject();
-    const store = new ResultsStore(":memory:");
-    const events: RunEvent[] = [];
-    const backend = new PinnableStub();
-    await runSession({
-      backend,
-      store,
-      ...dirs,
-      selectorIds,
-      emit: [createEmitter([(e) => events.push(e)])],
-    });
-    expect(backend.pins).toEqual([PIN]);
-    expect(events.some((e) => e.type === "al-runner-platform-apps" && e.dir === PIN)).toBe(true);
-    store.close();
-  });
-
-  test("R242 one-shot: a transport that SENDS the pin records platformAppsDir in the report", async () => {
-    const dirs = await makeProject();
-    const store = new ResultsStore(":memory:");
-    const report = await runSession({ backend: new PinnableStub(), store, ...dirs, selectorIds });
-    const measured = report.validity.executionContexts.filter((c) => c.verdictCount > 0);
-    expect(measured.length).toBeGreaterThan(0);
-    expect(measured.map((c) => c.platformAppsDir)).toEqual(measured.map(() => PIN));
-    store.close();
-  });
-
-  test("R242 server: a transport that does NOT send the pin leaves platformAppsDir absent", async () => {
-    const dirs = await makeProject();
-    const store = new ResultsStore(":memory:");
-    const events: RunEvent[] = [];
-    const backend = new PinnableStub(PIN, false);
-    const report = await runSession({
-      backend,
-      store,
-      ...dirs,
-      selectorIds,
-      emit: [createEmitter([(e) => events.push(e)])],
-    });
-    expect(backend.pins).toEqual([PIN]);
-    // A MEASURED context, not the zero-verdict placeholder an empty report also carries: the
-    // absence below must be a statement about a run that scored mutants.
-    const measured = report.validity.executionContexts.filter((c) => c.verdictCount > 0);
-    expect(measured.length).toBeGreaterThan(0);
-    expect(report.validity.executionContexts.every((c) => c.platformAppsDir === undefined)).toBe(
-      true,
-    );
-    expect(events.some((e) => e.type === "al-runner-platform-apps")).toBe(false);
-    // Normal server operation: no warning of any kind about the pin.
-    expect(events.some((e) => e.type === "warning" && /platform-app/.test(e.code))).toBe(false);
-    store.close();
-  });
-
-  test("R242: a pin setter that answers anything but a boolean REFUSES the session", async () => {
-    // `undefined` is what a pre-R242 setter returns. Reading it as "declined" would silently drop
-    // the provenance of a transport that still sends the pin.
-    for (const answer of [undefined, "yes", 1]) {
-      const dirs = await makeProject();
-      const store = new ResultsStore(":memory:");
-      // Overridden rather than passed to the constructor: an explicit `undefined` argument would
-      // take the constructor's DEFAULT and test `true` instead.
-      const backend = new PinnableStub();
-      backend.usePlatformAppsDir = (_dir: string): unknown => answer;
-      await expect(runSession({ backend, store, ...dirs, selectorIds })).rejects.toThrow(
-        /usePlatformAppsDir answered .* instead of a boolean/,
-      );
-      store.close();
-    }
-  });
-
-  test("every worker backend is pinned too, with the SAME directory", async () => {
-    const dirs = await makeProject();
-    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
-    const store = new ResultsStore(":memory:");
-    const workers = [new PinnableStub(), new PinnableStub()];
-    await runSession({
-      backend: new PinnableStub(),
-      backendFactory: (i: number) => workers[i] ?? new PinnableStub(),
-      store,
-      ...dirs,
-      selectorIds,
-      workers: 2,
-    });
-    // Both, and one apiece — the pin is applied once at construction time, not per mutant.
-    expect(workers.map((w) => w.pins)).toEqual([[PIN], [PIN]]);
-    store.close();
-  });
-
-  test("a worker backend that cannot be pinned FAILS the session, rather than running other argv", async () => {
-    const dirs = await makeProject();
-    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
-    const store = new ResultsStore(":memory:");
-    await expect(
-      runSession({
-        backend: new PinnableStub(),
-        backendFactory: () => new UnpinnableStub(),
-        store,
-        ...dirs,
-        selectorIds,
-        workers: 2,
-      }),
-    ).rejects.toThrow(/does not accept one/);
-    store.close();
-  });
-
-  test("CONTROL: no pin, no propagation, no throw — an unpinnable worker is fine", async () => {
-    // Passes with the feature enabled and disabled alike. Without it, "the throw fires" would be
-    // indistinguishable from "the throw fires always", and disabling the pin would still look green.
-    const dirs = await makeProject();
-    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
-    const store = new ResultsStore(":memory:");
-    const events: RunEvent[] = [];
-    const report = await runSession({
-      backend: new PinnableStub(null),
-      backendFactory: () => new UnpinnableStub(),
-      store,
-      ...dirs,
-      selectorIds,
-      workers: 2,
-      emit: [createEmitter([(e) => events.push(e)])],
-    });
-    expect(report.mutants.length).toBeGreaterThan(0);
-    // And it is REPORTED, never silent: a build whose parse had gone stale must not look identical
-    // to a build that never had the feature.
-    expect(
-      events.some((e) => e.type === "warning" && e.code === "al-runner-platform-apps-unpinned"),
-    ).toBe(true);
-    store.close();
-  });
-
-  test("a bcdev-shaped backend, which never provisions, is never asked to be pinned", async () => {
-    const dirs = await makeProject();
-    const store = new ResultsStore(":memory:");
-    const events: RunEvent[] = [];
-    await runSession({
-      backend: new StubBackend(caps, (mutant) => (mutant === null ? "pass" : "fail")),
-      store,
-      ...dirs,
-      selectorIds,
-      emit: [createEmitter([(e) => events.push(e)])],
-    });
-    expect(events.some((e) => e.type === "al-runner-platform-apps")).toBe(false);
-    expect(
-      events.some((e) => e.type === "warning" && e.code === "al-runner-platform-apps-unpinned"),
-    ).toBe(false);
-    store.close();
-  });
-});
-
-/**
- * R148 — al-runner's "NO IMPLEMENTATION" warning must reach the event stream, not the scrollback.
- *
- * The line means dependency resolution picked a SYMBOL-ONLY package for an app the tests call into.
- * On the fixture it is harmless, because the run also compiles the target from source and an
- * implementation package wins at execution time. On a real project the identical line means every
- * mutant in that app was scored against a program whose procedure bodies are absent. Nothing in the
- * line distinguishes the two, so it has to be recorded rather than read.
- *
- * Tested here rather than only on the live gate for a specific reason: LethAL CAPTURES al-runner's
- * stderr instead of inheriting it, so the gate's own transcript shows no `[dep]` line at all and
- * cannot answer whether the warning was emitted. This drives the same emission path with a stub.
- */
-describe("runSession surfaces al-runner's NO IMPLEMENTATION warning (R148)", () => {
-  const caps: BackendCapabilities = {
-    coverage: "none",
-    deploy: "none",
-    isolation: "full-reset",
-    kind: "al-runner",
-    authoritative: false,
-  };
-
-  /** The `AlRunnerBackend` shape for this one question: it saw the line, or it did not. */
-  class MissingImplStub extends StubBackend {
-    constructor(private readonly seen: { app: string; announcement: string } | null) {
-      super(caps, (mutant) => (mutant === null ? "pass" : "fail"));
-    }
-    observedMissingImplementation(): { app: string; announcement: string } | undefined {
-      return this.seen ?? undefined;
-    }
-  }
-
-  const ANNOUNCEMENT =
-    "[dep] LethAL/LethAL Sandbox App v1.0.0.999 resolved to a package with NO IMPLEMENTATION (no publishedartifacts DLL,";
-
-  test("emits a warning naming the app and quoting the runner", async () => {
-    const dirs = await makeProject();
-    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
-    const store = new ResultsStore(":memory:");
-    const events: RunEvent[] = [];
-    await runSession({
-      backend: new MissingImplStub({
-        app: "LethAL/LethAL Sandbox App v1.0.0.999",
-        announcement: ANNOUNCEMENT,
-      }),
-      store,
-      ...dirs,
-      selectorIds,
-      emit: [createEmitter([(e) => events.push(e)])],
-    });
-    const warning = events.find(
-      (e) => e.type === "warning" && e.code === "al-runner-missing-implementation",
-    );
-    expect(warning).toBeDefined();
-    // The app must be NAMED: a warning that says something is wrong without saying what sends the
-    // reader back to a transcript LethAL already threw away.
-    expect((warning as { message: string }).message).toContain("LethAL Sandbox App v1.0.0.999");
-    // And the runner's own words carried through, so the report is greppable for the line itself.
-    expect((warning as { message: string }).message).toContain("NO IMPLEMENTATION");
-    store.close();
-  });
-
-  test("CONTROL: a backend that saw nothing emits NO such warning", async () => {
-    // Without this, "the warning fires" would be indistinguishable from "the warning always fires",
-    // and a wiring that emitted unconditionally would look identical on the test above.
-    const dirs = await makeProject();
-    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
-    const store = new ResultsStore(":memory:");
-    const events: RunEvent[] = [];
-    await runSession({
-      backend: new MissingImplStub(null),
-      store,
-      ...dirs,
-      selectorIds,
-      emit: [createEmitter([(e) => events.push(e)])],
-    });
-    expect(
-      events.some((e) => e.type === "warning" && e.code === "al-runner-missing-implementation"),
-    ).toBe(false);
-    store.close();
-  });
-
-  test("a backend WITHOUT the method at all is fine — no throw, no warning", async () => {
-    // Every non-al-runner backend is this shape. The orchestrator asks structurally rather than
-    // widening `ExecutionBackend`, so a backend that has never heard of the method must simply pass.
-    const dirs = await makeProject();
-    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
-    const store = new ResultsStore(":memory:");
-    const events: RunEvent[] = [];
-    await runSession({
-      backend: new StubBackend(caps, (mutant) => (mutant === null ? "pass" : "fail")),
-      store,
-      ...dirs,
-      selectorIds,
-      emit: [createEmitter([(e) => events.push(e)])],
-    });
-    expect(
-      events.some((e) => e.type === "warning" && e.code === "al-runner-missing-implementation"),
-    ).toBe(false);
-    store.close();
-  });
-});
-
-/**
- * R149 — the wire contract must be re-measured UNDER THE SESSION'S PIN.
- *
- * `cli.ts` runs the probe before the session, which is what refuses early, before anything is
- * generated or published. But it runs before provisioning exists, so it builds its argv unpinned and
- * sends `--auto-provision`, while every mutant from that point sends `--package-cache <pin>`. The
- * probe's own doc comment promises it measures "the SAME argv and env the transport sends, because a
- * probe that blesses a command line nobody runs measures nothing", and R147 made that half false.
- *
- * Both measurements now happen, so the early refusal is kept AND the decode is guarded under the
- * flags the verdicts are actually produced with.
- *
- * Driven through a stub because the LIVE gate cannot show this: `itest:alrunner` calls `runSession`
- * directly rather than `runFromCli`, and the result is emitted as a warning EVENT rather than
- * printed, so a green gate is silent either way.
- */
-describe("runSession re-measures the al-runner contract under its pin (R149)", () => {
-  const caps: BackendCapabilities = {
-    coverage: "none",
-    deploy: "none",
-    isolation: "full-reset",
-    kind: "al-runner",
-    authoritative: false,
-  };
-  const PIN = "C:/cache/28.0.46665.53671/platform-apps";
-
-  /** A probe that measures nothing and refuses nothing — the subject here is WHETHER it is called
-   *  and with what, not what al-runner answers. */
-  const fakeProbe = async (
-    _path: string,
-    _spawn?: unknown,
-    _deadline?: unknown,
-    platformAppsDir?: string,
-  ) =>
-    ({
-      facts: [],
-      bannerOnStdout: false,
-      measuredProvisioning: platformAppsDir !== undefined ? "package-cache" : "auto-provision",
-    }) as never;
-
-  /** Provisions, can be pinned, and knows its al-runner path — the real backend's shape. */
-  class ProbeableStub extends StubBackend {
-    constructor(private readonly path: string | null = "al-runner.exe") {
-      super(caps, (mutant) => (mutant === null ? "pass" : "fail"));
-    }
-    async provisionOnce(): Promise<{
-      elapsedMs: number;
-      ran: boolean;
-      downloaded: boolean;
-      detail: string;
-      platformAppsDir?: string;
-      platformAppsRefusal?: string;
-    }> {
-      return { elapsedMs: 1, ran: true, downloaded: false, detail: "", platformAppsDir: PIN };
-    }
-    usePlatformAppsDir(_dir: string): boolean {
-      return true;
-    }
-    alRunnerPath(): string | undefined {
-      return this.path ?? undefined;
-    }
-  }
-
-  test("emits the pinned contract summary, carrying the pin", async () => {
-    const dirs = await makeProject();
-    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
-    const store = new ResultsStore(":memory:");
-    const events: RunEvent[] = [];
-    await runSession({
-      backend: new ProbeableStub(),
-      store,
-      ...dirs,
-      selectorIds,
-      alRunnerContractProbe: fakeProbe,
-      emit: [createEmitter([(e) => events.push(e)])],
-    });
-    const warning = events.find(
-      (e) => e.type === "warning" && e.code === "al-runner-contract-pinned",
-    );
-    expect(warning).toBeDefined();
-    // It must say WHICH argv it measured, or the reader cannot tell it apart from the pre-session
-    // measurement that this exists to complement.
-    expect((warning as { message: string }).message).toContain("measured-under=--package-cache");
-    store.close();
-  });
-
-  test("CONTROL: a backend with no al-runner path emits NO pinned summary", async () => {
-    // Without this, "the re-measurement runs" would be indistinguishable from "it always runs", and
-    // a bcdev session must not spawn an al-runner probe.
-    const dirs = await makeProject();
-    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
-    const store = new ResultsStore(":memory:");
-    const events: RunEvent[] = [];
-    await runSession({
-      backend: new ProbeableStub(null),
-      store,
-      ...dirs,
-      selectorIds,
-      alRunnerContractProbe: fakeProbe,
-      emit: [createEmitter([(e) => events.push(e)])],
-    });
-    expect(events.some((e) => e.type === "warning" && e.code === "al-runner-contract-pinned")).toBe(
-      false,
-    );
-    store.close();
-  });
-
-  test("a backend that establishes NO pin does not re-measure", async () => {
-    // Nothing to re-measure against: the pre-session probe already measured the unpinned argv, which
-    // is the one such a session actually uses.
-    class UnpinnedStub extends ProbeableStub {
-      override async provisionOnce() {
-        return {
-          elapsedMs: 1,
-          ran: true,
-          downloaded: false,
-          detail: "",
-          platformAppsRefusal: "measured nothing, on purpose",
-        };
-      }
-    }
-    const dirs = await makeProject();
-    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
-    const store = new ResultsStore(":memory:");
-    const events: RunEvent[] = [];
-    await runSession({
-      backend: new UnpinnedStub(),
-      store,
-      ...dirs,
-      selectorIds,
-      alRunnerContractProbe: fakeProbe,
-      emit: [createEmitter([(e) => events.push(e)])],
-    });
-    expect(events.some((e) => e.type === "warning" && e.code === "al-runner-contract-pinned")).toBe(
-      false,
-    );
-    store.close();
-  });
-});
+// R654 S3: the .NET al-runner's session hooks went with it, and so did their describes here:
+// R147's platform-app pin (and R242's report field), R148's NO IMPLEMENTATION warning, and R149's
+// contract re-measured under the pin. No remaining backend provisions, pins or probes that way.
 
 /**
  * R198: the differential proof. One fake backend WITH `runMany` (a loop over the same scripted
@@ -17353,7 +16845,8 @@ describe("C02-04 characterization", () => {
     expect(characterize(trace, store, outcome)).toMatchSnapshot();
   });
 
-  test("11: parallel workers", async () => {
+  // R671: no backend accepts workers > 1 since R654.
+  test.skip("11: parallel workers", async () => {
     // From "verdicts are identical at 1, 2 and 4 workers", at workers: 2.
     const trace: Trace = [];
     const make = () =>
@@ -17718,7 +17211,7 @@ const MIRROR_TESTS_AL = `codeunit 79101 "Zulu Tests"
  * `deadline-exceeded` + `in-flight-unknown`, everything else passes; each attests `observedAny`.
  */
 class NamedFake implements ExecutionBackend {
-  readonly measurePredefinedSymbols = measuredV2_12; // R392
+  readonly runnerBuild = v3RunnerBuild; // R654
   /** Every artifact `attach` was handed, in call order. */
   readonly attached: BoundArtifact[] = [];
   private active: string | null = null;
@@ -20489,7 +19982,7 @@ describe("R252: coverageMode on the report, and explain on a coverage-off report
         coverage: "none",
         deploy: "none",
         isolation: "full-reset",
-        kind: "al-runner",
+        kind: "al-runner-v3",
         authoritative: false,
       },
       () => "pass",
@@ -20519,7 +20012,7 @@ describe("R252: coverageMode on the report, and explain on a coverage-off report
           coverage: "fenced",
           deploy: "publish",
           isolation: "session",
-          kind: "al-runner",
+          kind: "al-runner-v3",
           authoritative: false,
         },
         () => "pass",

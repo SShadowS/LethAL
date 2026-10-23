@@ -22,8 +22,29 @@ endpoint.
 
 `bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all` (add `--dry-run` to see the plan). It takes the lease in
 your lane: `--lane <lane>` if given, else your kraken agent identity (`KRAKEN_AGENT`); with neither it refuses
-(R598). For each
-server it:
+(R598).
+
+**An out-of-use marker stops it (R669).** If `<coord>/machine/out-of-use/<server>.md` exists for any server
+the run names, setup refuses the WHOLE run by name, in every mode, before it reads the login, takes a lease or
+calls a server, and prints the marker. `scripts/bc-republish.ts` refuses the same way before its lease. The
+clearing run sets `LETHAL_OUT_OF_USE_CLEARING=<server>` (that exact server only).
+- **Set it on the one clearing command only, never `export` it.** Left set in a shell, it lets every later
+  marker for that server through, and only the loud `!!!` line shows that it did.
+
+Every BC itest refuses a marked bc1-bc3 the same way, in `printItestTarget`, BEFORE it prints its
+`[itest target]` line, so a script that greps for that line finds nothing and fails closed. Only a gate
+wrapper's own "in use" marker lets a gate through:
+- the marker carries exactly one line `owner: <token>`, and the gate gets the same token in
+  `LETHAL_OUT_OF_USE_OWNER`;
+- the token is 32 lowercase hex, made fresh for each run (`openssl rand -hex 16`), and passed ONLY on the gate's
+  command line (`LETHAL_OUT_OF_USE_OWNER=$T bun run itest:...`), never exported for the whole wrapper. A
+  constant token is refused;
+- a STOP marker must not carry the owner line, so the run's token cannot pass it.
+
+A server other than bc1-bc3 has no marker and is never checked. A coord root whose `machine` directory does not
+exist is an error, never "no marker": set `LETHAL_COORD_ROOT`.
+
+For each server it:
 
 1. reads the login from `/coord/secrets/bc-linux.env`, which only the owner writes;
 2. takes the coord lease for the server, and releases it at the end;

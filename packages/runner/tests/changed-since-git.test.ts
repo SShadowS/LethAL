@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
-import { AlRunnerBackend } from "../src/al-runner-backend";
+import type { ExecutionBackend } from "../src/backend";
 import { readTargetSource } from "../src/baseline-snapshot";
 import { type RunCliConfig, runFromCli } from "../src/cli";
 import { changedLinesSince, parseUnifiedDiffAdded } from "../src/line-filter";
@@ -667,7 +667,8 @@ test("runFromCli hands the changed-since source to runSession", async () => {
       mode: "run",
       projectDir: app,
       testDir: join(root, "tests"),
-      backendKind: "al-runner",
+      // R654: re-pointed from the retired .NET al-runner (this empty config suits a local runner).
+      backendKind: "al-runner-v3",
       dbPath: ":memory:",
       configPath,
       skipKnownSurvivors: false,
@@ -691,13 +692,7 @@ test("runFromCli hands the changed-since source to runSession", async () => {
       runFromCli(parsed, {
         gitSpawn,
         validateSelectorIdsForProject: async () => {},
-        buildBackend: async () =>
-          new AlRunnerBackend({
-            alRunnerPath: "unused",
-            instrumentedDir: "unused",
-            testDir: "unused",
-            selectorObjectId: 1,
-          }),
+        buildBackend: async () => ({}) as ExecutionBackend,
         runSession: async (cfg) => {
           captured = cfg;
           throw stop;
