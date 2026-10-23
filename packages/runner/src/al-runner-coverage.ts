@@ -1,38 +1,17 @@
 /**
- * al-runner's Cobertura coverage, turned into the `CoverageMap` the selector already speaks.
+ * al-runner's per-test coverage (`perTestCoverage`), turned into the `CoverageMap` the selector
+ * already speaks. al-runner v3 writes it with `--coverage-json`. The rules below were measured on
+ * the .NET al-runner (v2), which R654 retired; v3 sidesteps the multi-object and wrapped-file ones
+ * by turning coverage off for such a project (`alRunnerCoverageSupport`, R602).
  *
- * al-runner 2.11.0 grew `--coverage`: "statement-level coverage via BC's own StmtHit
- * instrumentation (no rewrite of emitted AL output, the hook lives in Ncl.dll)", written as
- * Cobertura XML. Before it, `AlRunnerBackend.capabilities()` reported `coverage: "none"` and every
- * mutant ran against every green test, so an unreached mutant came back `survived` instead of
- * `no-coverage`. That under-reports rather than lies, but it is half of why [[R183]] holds the
- * backend `authoritative: false`, and it is the whole of the difference between the two frozen
- * gates: `itest:bcdev` 3 / 12 / 4 against `itest:alrunner` 3 / 16 / 0, where those four are
- * `SandboxPricing`'s mutants. Measured before any of this was written, al-runner's own coverage
- * reports that file at `line-rate 0.0000`, so the two backends already agree; only the wiring was
- * missing.
+ * ## Multi-object files (R383, R407)
  *
- * ## Multi-object files: admitted only on builds the frame probe admits (R407)
- *
- * al-runner 2.11.0 lost every object after a file's first (upstream #3713). That is FIXED on
- * v2.12.0: the second object's lines are reported now, on both transports. But measured on
- * v2.12.0-main.c39ad5de (`docs/roadmap/R383.md`), they were reported in the WRONG FRAME.
- * al-runner compiled LethAL's instrumented bundle, found the source project with the same app id,
- * and labelled coverage with the SOURCE path. For the first object in a file the lines were right.
- * For every object after it, a line was reported as (the previous object's closing line in the
- * SOURCE) + (its distance from that line in the INSTRUMENTED text). On `sandbox-multiobject`
- * instrumented lines 33/35/40/45/50 of `Multi B` came back as 16/18/23/28/33, inside `Multi A`.
- * Upstream #5249 fixed it (measured on 43f76177, both transports: instrumented frame, bundle label).
- *
- * So the CLI guard runs `probeAlRunnerCoverageFrame` (`al-runner-frame-probe.ts`) once per session
- * when the project holds a multi-object file. Admitted, the backend's index admits such files
- * (`AlRunnerConfig.admitMultiObjectFiles`, never a config key), and three backstops stop the session
- * with `AlRunnerCoverageFrameError` if a run does not look like the probe: a label for an admitted
- * file outside the index's own bundle (`assertAdmittedLabel`), a `--server` scope its position
- * contradicts in such a file, and a multi-object index built without admission or before any
- * `deploy()` (`AlRunnerBackend.coverageIndexOf`). Refused (c39ad5de, or any other answer), a file
- * declaring more than one object disables coverage for the WHOLE run (`supported: false`, and the
- * CLI guard falls back to `"none"`), and the index skips such a file so nothing can resolve against
+ * Measured on v2.12.0-main.c39ad5de (`docs/roadmap/R383.md`), every object after a file's first
+ * was reported in the WRONG FRAME (upstream #5249, fixed on 43f76177). So an index built without
+ * `admitMultiObjectFiles` skips such a file, and with it a label outside the index's own bundle
+ * (`assertAdmittedLabel`) or a scope its position contradicts stops the session with
+ * `AlRunnerCoverageFrameError`. A file declaring more than one object disables coverage for the
+ * WHOLE run (`supported: false`), and the index skips such a file so nothing can resolve against
  * it. Coarse on purpose: dropping just that file's objects would
  * read their mutants a false `no-coverage`, because `coverageFilter`'s every-green-test fallback is
  * gated to table triggers. The rule (`refusedAsMultiObject`, R383 r2 ruling): a file is refused
@@ -71,41 +50,6 @@ import {
 } from "./line-map";
 import { effectiveBuildSymbols } from "./preprocessor-symbols";
 import { walkFiles } from "./walk";
-
-/** One `<line>` of one `<class>`, as al-runner writes it. */
-export interface CoberturaLine {
-  /** The `filename` attribute of the enclosing `<class>`, verbatim. */
-  readonly file: string;
-  readonly line: number;
-  readonly hits: number;
-}
-
-/**
- * Cobertura is parsed with regexes rather than an XML library, and that is a deliberate limit
- * rather than a shortcut worth hiding: the input is one machine-generated file from one known
- * producer, and adding an XML dependency to read it would be the larger risk. The shapes assumed
- * are `<class ... filename="...">` and `<line number="N" hits="M" />`, both of which al-runner
- * writes on one line with double quotes. A producer change breaks this LOUDLY (zero lines parsed
- * from a non-empty file is refused by the caller) rather than silently returning partial coverage,
- * which is the failure mode that matters.
- */
-export function parseCobertura(xml: string): readonly CoberturaLine[] {
-  const out: CoberturaLine[] = [];
-  const classRe = /<class\b[^>]*\bfilename="([^"]*)"[^>]*>([\s\S]*?)<\/class>/g;
-  const lineRe = /<line\b[^>]*\bnumber="(\d+)"[^>]*\bhits="(\d+)"/g;
-  for (const cls of xml.matchAll(classRe)) {
-    const file = cls[1];
-    const body = cls[2];
-    if (file === undefined || body === undefined) continue;
-    for (const ln of body.matchAll(lineRe)) {
-      const num = Number.parseInt(ln[1] ?? "", 10);
-      const hits = Number.parseInt(ln[2] ?? "", 10);
-      if (Number.isNaN(num) || Number.isNaN(hits)) continue;
-      out.push({ file, line: num, hits });
-    }
-  }
-  return out;
-}
 
 /**
  * What one instrumented bundle can tell us about its own files: which object each declares, and a
@@ -633,55 +577,12 @@ function indexedFile(
 }
 
 /**
- * Turns one test's Cobertura output into a `CoverageMap`.
+ * One test's coverage, as `perTestCoverage` (v3's `--coverage-json`, the `--server` shape the
+ * retired .NET al-runner also wrote), into a `CoverageMap`. R654 removed the one-shot Cobertura
+ * reader (`parseCobertura`, `alRunnerCoverageFrom`), which only v2 used.
  *
- * Only lines with `hits > 0` become entries: a reported-but-unhit line is evidence the file was
- * COMPILED, never that the test reached it, and treating it as coverage is precisely the
- * manufactured-coverage failure [[R63]] records.
- *
- * `procedure` is attached when the line map can place the line and omitted when it cannot. That
- * omission is load-bearing rather than lossy: `CoverageEntry` documents an absent `procedure` as
- * object-level evidence, which feeds `byObject` and lets a trigger mutant's FALLBACK 1 answer,
- * whereas a blank-but-present one would collide with the key a trigger mutant builds.
- *
- * R383: the `<line number>` is FILE-relative (measured on v2.12.0), so it is resolved by position
- * (`resolveFileLine`) to an object and an OBJECT-relative line, and the entry carries that object
- * line, the frame the line map and BC use. A line in no indexed object gives no entry at all.
- */
-export function alRunnerCoverageFrom(
-  lines: readonly CoberturaLine[],
-  index: AlRunnerCoverageIndex,
-): CoverageMap {
-  const entries: CoverageEntry[] = [];
-  const seen = new Set<string>();
-  const skipped = new Set(index.skippedFiles);
-  for (const ln of lines) {
-    if (ln.hits <= 0) continue;
-    const found = indexedFile(ln.file, index, skipped);
-    // A coverage row for something this bundle does not declare — the test app, Base Application,
-    // a dependency — is skipped rather than an error, the same rule `LineMap` states for the
-    // hub path. Cobertura serialises every file it instrumented, and most are legitimately not
-    // ours.
-    if (found === undefined) continue;
-    assertAdmittedLabel(ln.file, found.key, index);
-    const at = resolveFileLine(found.entries, ln.line);
-    if (at === undefined) continue;
-    const procedure = index.lineMap.lookup(at.objectType, at.objectId, at.objectLine);
-    const key = `${at.objectType}:${at.objectId}:${procedure ?? ""}:${at.objectLine}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    entries.push({
-      objectType: at.objectType,
-      objectId: at.objectId,
-      ...(procedure !== undefined ? { procedure } : {}),
-      line: at.objectLine,
-    });
-  }
-  return { granularity: "line", entries };
-}
-
-/**
- * The same mapping, from `--server`'s `perTestCoverage` instead of Cobertura.
+ * A row for something this bundle does not declare (the test app, Base Application, a
+ * dependency) is skipped rather than an error, the same rule `LineMap` states for the hub path.
  *
  * Each statement carries `scope`, the procedure the server itself attributes it to, and a
  * FILE-relative `line` (measured on v2.12.0, R383). The OBJECT always comes from the line's
@@ -728,9 +629,8 @@ export function alRunnerCoverageFromServer(
     // R-300b (I3): in an admitted wrapped file a disagreement drops the line instead.
     const strict = index.admittedWrappedFiles.has(found.key);
     for (const st of file.statements ?? []) {
-      // Same rule as the Cobertura path: a reported-but-unhit statement is evidence the file was
-      // COMPILED, never that this test reached it. Treating it as coverage is [[R63]]'s
-      // manufactured coverage.
+      // A reported-but-unhit statement is evidence the file was COMPILED, never that this test
+      // reached it. Treating it as coverage is [[R63]]'s manufactured coverage.
       if ((st.hits ?? 0) <= 0) continue;
       const at = placeStatement(objects, st.line);
       if (at === undefined) continue;

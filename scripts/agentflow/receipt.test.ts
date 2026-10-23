@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { ALRUNNER_LEG_IDS } from "../../packages/runner/itest/alrunner-legs.ts";
 import {
   type ReceiptChallenge,
   ReceiptError,
@@ -113,9 +112,9 @@ describe("replay and misdirection", () => {
 describe("partial runs are not passes", () => {
   test("a four-subleg gate reporting one subleg is refused", () => {
     // A receipt for one of four sublegs is a partial run presented as a complete one.
-    const four: ReceiptChallenge = { ...CHALLENGE, leg: "alrunner", expectedSublegs: 4 };
+    const four: ReceiptChallenge = { ...CHALLENGE, leg: "alrunner-v3", expectedSublegs: 4 };
     expect(() =>
-      validateReceipt(four, receipt({ leg: "alrunner", sublegs: ["one-shot"] })),
+      validateReceipt(four, receipt({ leg: "alrunner-v3", sublegs: ["one-shot"] })),
     ).toThrow(ReceiptError);
   });
 
@@ -127,19 +126,22 @@ describe("partial runs are not passes", () => {
   });
 
   test("the exact expected count validates", () => {
-    const four: ReceiptChallenge = { ...CHALLENGE, leg: "alrunner", expectedSublegs: 4 };
+    const four: ReceiptChallenge = { ...CHALLENGE, leg: "alrunner-v3", expectedSublegs: 4 };
     const r = validateReceipt(
       four,
-      receipt({ leg: "alrunner", sublegs: ["one-shot", "server", "resource", "platform-pin"] }),
+      receipt({ leg: "alrunner-v3", sublegs: ["one-shot", "server", "resource", "platform-pin"] }),
     );
     expect(r.sublegs).toHaveLength(4);
   });
 });
 
-describe("an exact subleg list (R-587: itest:alrunner's 23 leg ids)", () => {
+// R654: the vehicle moved from the retired `alrunner` leg to `alrunner-v3`; R-587's
+// "17 old names against the 23 ids" case went with the 23-id list.
+describe("an exact subleg list (R-587)", () => {
   const LIST = ["a", "b", "c"];
-  const exact: ReceiptChallenge = { ...CHALLENGE, leg: "alrunner", expectedSublegs: LIST };
-  const run = (sublegs: string[]) => validateReceipt(exact, receipt({ leg: "alrunner", sublegs }));
+  const exact: ReceiptChallenge = { ...CHALLENGE, leg: "alrunner-v3", expectedSublegs: LIST };
+  const run = (sublegs: string[]) =>
+    validateReceipt(exact, receipt({ leg: "alrunner-v3", sublegs }));
 
   test("the exact names, in any order, validate", () => {
     expect(run(["c", "a", "b"]).sublegs).toEqual(["c", "a", "b"]);
@@ -156,32 +158,6 @@ describe("an exact subleg list (R-587: itest:alrunner's 23 leg ids)", () => {
 
   test("a duplicate is refused", () => {
     expect(() => run(["a", "b", "c", "c"])).toThrow(ReceiptError);
-  });
-
-  test("the 17 names the receipt carried before R-587 are refused against the 23 ids", () => {
-    const old17 = [
-      "one-shot",
-      "server",
-      "resource",
-      "platform-pin",
-      "layout-one-shot",
-      "layout-server",
-      "multiobject-one-shot",
-      "multiobject-server",
-      "multiobject-resource",
-      "wrapped-one-shot",
-      "wrapped-server",
-      "wrapped-resource",
-      "names-one-shot-al-runner",
-      "names-one-shot-none",
-      "names-server-al-runner",
-      "names-server-none",
-      "cli-default",
-    ];
-    const c: ReceiptChallenge = { ...exact, expectedSublegs: ALRUNNER_LEG_IDS };
-    expect(() => validateReceipt(c, receipt({ leg: "alrunner", sublegs: old17 }))).toThrow(
-      /missing \[sandbox-a/,
-    );
   });
 });
 

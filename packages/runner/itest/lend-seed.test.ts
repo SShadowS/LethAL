@@ -109,7 +109,6 @@ const survivorKeys = (store: ResultsStore) => {
       symbolsChanged: hit("symbolsChanged"),
       carryUntrusted: hit("carryUntrusted"),
       hiddenFilesChanged: hit("hiddenFilesChanged"),
-      alRunnerUnmarked: hit("alRunnerUnmarked"),
       testScopeChanged: hit("testScopeChanged"),
     },
   ).keys;
@@ -162,7 +161,6 @@ describe("R618 seedRunFrom: each override changes only its own field", () => {
     ["coverageMode", { coverageMode: "al-runner" }, ["coverageMode"]],
     ["hashSuffix pending", { hashSuffix: PENDING_SUFFIX }, ["testAppHash"]],
     ["testAppHash", { testAppHash: `${H}+internal`, hashSuffix: PENDING_SUFFIX }, ["testAppHash"]],
-    ["alRunnerNames", { alRunnerNames: true }, ["alRunnerNames"]],
     ["revoke", { revoke: true }, ["testAppHash"]],
     ["rows: false", { rows: false }, []],
   ];

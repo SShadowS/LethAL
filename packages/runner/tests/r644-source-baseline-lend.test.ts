@@ -23,7 +23,6 @@ import { facedEveryCoveringTest, runSession } from "../src/orchestrator";
 import type { SessionReport } from "../src/report";
 import { STRANDED_SKIP_NOTE } from "../src/resume";
 import { ResultsStore } from "../src/store";
-import { measuredV2_12 } from "./helpers/al-runner-predefined";
 import { servedIsInstalled, testAppJson, testAppPackage } from "./helpers/proven-test-app";
 import { scratchDirs } from "./helpers/scratch";
 
@@ -82,11 +81,15 @@ class Stub implements ExecutionBackend {
   mutantRuns = 0;
   readonly activated: string[] = [];
   private active: string | null = null;
-  readonly measurePredefinedSymbols = measuredV2_12;
   constructor(private readonly o: StubOpts) {}
+  // R654 (plan I2): re-pointed from the retired .NET al-runner to al-runner-v3, one build (B1)
+  // throughout, so the backend-build step always lends and R644's own check decides.
+  async runnerBuild(): Promise<{ version: string; binarySha256: string }> {
+    return { version: "alrunner 3.0.0-alpha.2 (91253f2d6)", binarySha256: "b".repeat(64) };
+  }
   capabilities(): BackendCapabilities {
     return {
-      kind: "al-runner",
+      kind: "al-runner-v3",
       coverage: "none",
       deploy: "none",
       isolation: "session",

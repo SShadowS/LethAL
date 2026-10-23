@@ -5,7 +5,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BcDevConfigSection, LethalConfigFile } from "../src/cli";
 import {
-  DOCTOR_AL_RUNNER_ONLY_CAVEAT,
   DOCTOR_CREATE_MODE_CAVEAT,
   DOCTOR_NOT_CHECKED,
   DOCTOR_NOT_CHECKED_TOKENS,
@@ -24,13 +23,6 @@ import { scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
 
-/**
- * R131, R264: directories that do not exist, unique per process, so a cache check reports a
- * measured absence and this suite never walks whatever multi-GB cache the machine running it
- * holds. Their own behaviour is tested in `al-runner-cache.test.ts`.
- */
-const NO_CACHE_DIR = join(tmpdir(), `lethal-doctor-cli-no-al-runner-cache-${randomUUID()}`);
-const NO_SECONDARY_DIR = join(tmpdir(), `lethal-doctor-cli-no-al-runner-second-${randomUUID()}`);
 import type { DoctorReport } from "../src/doctor";
 import { EnvToolClient, validateEnvToolConfig } from "../src/env-tool";
 import type { EnvToolConfigSection } from "../src/env-tool";
@@ -58,8 +50,6 @@ const fakeAlc18 = async () => ({
  * when a test asserts only one, so every test needs all of these, not only the ones it asserts.
  */
 const NO_REAL_IO = {
-  alRunnerCacheDir: NO_CACHE_DIR,
-  alRunnerSecondaryCacheDir: NO_SECONDARY_DIR,
   alToolPaths: async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" }),
   alcSpawn: fakeAlc18,
 } as const;
@@ -157,7 +147,7 @@ describe("lethal doctor CLI wiring — config-level parity", () => {
     const configFile: LethalConfigFile = {};
     expect(() => validateBcDevConfig(configFile.bcdev)).toThrow(/missing the "bcdev" section/);
     await expect(buildDoctorDeps(configFile)).rejects.toThrow(
-      /no "bcdev", "envTool" or "alRunner" section/,
+      /no "bcdev", "envTool" or "alRunnerV3" section/,
     );
     // And it names the remedy in doctor's own terms, never `--backend`, which doctor has no flag for.
     await expect(buildDoctorDeps(configFile)).rejects.toThrow(/Add the section for the backend/);
@@ -388,19 +378,14 @@ describe("lethal doctor CLI wiring — create-mode envTool config (final review,
     ).not.toThrow();
   });
 
-  test("doctor omits environment/quarantine/control-version for create mode, keeps tool-paths and the al-runner cache report, and names why", async () => {
+  test("doctor omits environment/quarantine/control-version for create mode, keeps tool-paths, and names why", async () => {
     const cfg = createModeCfg();
     const configFile: LethalConfigFile = { bcdev: BCDEV_RAW, envTool: cfg };
     const { cfg: doctorCfg, deps, caveat: createModeCaveat } = await depsOf(configFile, {});
     expect(createModeCaveat).toBe(DOCTOR_CREATE_MODE_CAVEAT);
     const report = await runDoctor(doctorCfg, deps);
-    // R131 added `al-runner-cache`, and it belongs in create mode for the same reason `tool-paths`
-    // does: reading a local directory needs no environment to exist.
-    expect(report.checks.map((c) => c.name)).toEqual([
-      "tool-paths",
-      "alc-runtime",
-      "al-runner-cache",
-    ]);
+    // R654: R131's `al-runner-cache` left with the .NET al-runner.
+    expect(report.checks.map((c) => c.name)).toEqual(["tool-paths", "alc-runtime"]);
     expect(report.checks[0]?.ok).toBe(true);
     expect(report.ok).toBe(true);
   });
@@ -835,21 +820,6 @@ describe("doctorFromCli (final review, Important 1)", () => {
     expect(out).not.toContain("{envId}");
   });
 
-  test("doctorFromCli threads BOTH al-runner cache roots to the report (R264)", async () => {
-    const second = scratch("lethal-doctor-r264-second-");
-    await writeFile(join(second, "marker.bin"), "x".repeat(10));
-    const { out } = await run(
-      { bcdev: RESOLVED_BCDEV },
-      {
-        quarantineDir: scratch("lethal-doctor-fromcli-r264-q-"),
-        alRunnerSecondaryCacheDir: second,
-        fetchFn: okFetch(info()),
-      },
-    );
-    expect(out).toContain(`no al-runner artifact cache at ${NO_CACHE_DIR}`);
-    expect(out).toContain(`al-runner keeps 10 B in ${second}`);
-  });
-
   // R151 — `--json`. The pre-flight an agent runs first was the one surface it could not parse.
 
   async function runJson(
@@ -969,7 +939,6 @@ describe("doctorJson (R151)", () => {
   test("each caveat constant maps to its own token", () => {
     const report = reportOf([{ name: "tool-paths", ok: true, detail: "x" }]);
     expect(doctorJson(report, DOCTOR_CREATE_MODE_CAVEAT)?.caveat?.kind).toBe("create-mode");
-    expect(doctorJson(report, DOCTOR_AL_RUNNER_ONLY_CAVEAT)?.caveat?.kind).toBe("al-runner-only");
   });
 
   test("an unrecognised caveat THROWS rather than shipping unlabelled prose", () => {
@@ -1077,24 +1046,5 @@ describe("issue #23: --tests wires the test-app-present check", () => {
 
   test("no --tests means no check at all", async () => {
     expect(check(await reportFor(true, undefined))).toBeUndefined();
-  });
-});
-
-describe("R264: doctor tests never reach the real disk", () => {
-  test("buildDoctorDeps reads al-runner's SECOND cache root from the injected dir (R264)", async () => {
-    const { deps } = await depsOf(
-      { bcdev: RESOLVED_BCDEV },
-      {
-        quarantineDir: scratch("lethal-doctor-r264-q-"),
-        fetchFn: okFetch(info()),
-      },
-    );
-    const read = deps.alRunnerCache;
-    expect(read).toBeDefined();
-    if (read === undefined) return;
-    const report = await read();
-    expect(report.dir).toBe(NO_CACHE_DIR);
-    expect(report.secondaryDir).toBe(NO_SECONDARY_DIR);
-    expect(report.secondaryBytes).toBeNull();
   });
 });

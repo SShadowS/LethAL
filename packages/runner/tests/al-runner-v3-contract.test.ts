@@ -16,6 +16,7 @@ import type { V3Row } from "../src/al-runner-v3-backend";
 import {
   BC_END_OF_TEST_TEXT,
   BC_HTTP_INTERNAL_TEXT,
+  MESSAGE_PREFIX_REASON,
   type V3ContractResult,
   classifySleep,
   runV3ContractProbe,
@@ -79,6 +80,11 @@ const PUBLIC_LATER_NOTRUN = row(50654, "LaterFails", "error", {
   message: "NotRun: out-of-scope: an earlier test was refused",
 });
 const PUBLIC_ROWS = [PUBLIC_REFUSED, PUBLIC_LATER_NOTRUN];
+const ASSERT_ROW = row(50661, "AssertAreEqual", "fail", {
+  message:
+    "Assert.AreEqual failed. Expected:<1> (Integer). Actual:<2> (Integer). R667 values differ.",
+});
+const LIBRARY_ASSERT = "/fake/ms/Microsoft_Library Assert_28.0.46665.49944.app";
 
 /** A fake alpha.2 that answers every probe call as measured; `over` replaces one answer by key. */
 function fakeV3(over: Over = {}): SpawnFn {
@@ -231,6 +237,8 @@ function fakeV3(over: Over = {}): SpawnFn {
       },
       // r8 (R-637), as measured on alpha.2 (/coord/handoff/R-637/r8-measure/out/cut.stdout).
       "cu50652-n3": { exitCode: 7, stdout: doc(cutRows) },
+      // R667: the Assert.AreEqual text R657 measured on alpha.2 and edge (no `<Type>: ` prefix).
+      cu50661: { exitCode: 1, stdout: doc([ASSERT_ROW]) },
       cu50655: { exitCode: 0, stdout: doc([row(50655, "DuplicateNamedKey", "pass")]) },
       "cu50660-n3": { exitCode: 1, stdout: doc(sleepRows) },
       cu50660: { exitCode: 1, stdout: doc(sleepRows) },
@@ -370,6 +378,7 @@ const probe = (over: Over = {}, serveSpawn = fakeServe().spawn): Promise<V3Contr
     startBurner: () => ({ kill: () => {} }),
     spawn: fakeV3(over),
     serveSpawn,
+    libraryAssertApp: LIBRARY_ASSERT,
   });
 
 describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS on serve rows", () => {
@@ -528,6 +537,7 @@ describe("§8 the contract probe", () => {
         "positional-target-wins",
         "serve-keep-reasons",
         "dependent-fail-after-timeout-is-notrun",
+        "message-has-no-type-prefix",
       ].sort(),
     );
   });
@@ -660,7 +670,7 @@ describe("§8 the contract probe", () => {
       kind: "contract",
       verdict: "matches",
     });
-    expect(r.facts.length).toBe(26);
+    expect(r.facts.length).toBe(27);
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("pass");
   });
 
@@ -921,13 +931,14 @@ describe("R639 (pre-commitment r9): leg C's BC readings", () => {
     );
   });
 
-  test("P10: 26 facts, 9 defect, 16 contract, 1 warn; the old count of 25 is gate-fail", async () => {
+  test("P10 (R667): 27 facts, 9 defect, 17 contract, 1 warn; the old count of 26 is gate-fail", async () => {
     const r = await probe();
     const kinds = (k: string) => r.facts.filter((f) => f.kind === k).length;
     expect([r.facts.length, kinds("defect"), kinds("contract"), kinds("warn")]).toEqual([
-      26, 9, 16, 1,
+      27, 9, 17, 1,
     ]);
-    expect(V3_LEG_C_FACTS).toBe(26);
+    expect(V3_LEG_C_FACTS).toBe(27);
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 26).outcome).toBe("gate-fail");
     expect(
       r.facts
         .filter((f) => f.kind === "defect")
@@ -967,6 +978,158 @@ describe("R639 (pre-commitment r9): leg C's BC readings", () => {
     const r = await at50653(1, EDGE_ROWS);
     expect(v3ContractRefusals(r).join("\n")).toMatch(/UNLIKE-BC — refusal-row-shape/);
     expect(v3DefectWarnings(r).join("\n")).not.toMatch(/unlike-bc/);
+  });
+});
+
+describe("R667 message-has-no-type-prefix: v3's failure message carries no `<Type>: ` prefix", () => {
+  const MSG = "message-has-no-type-prefix";
+  const PREFIXED = "NavNCLDialogException: R667 text";
+  const mainWith = (fails: ReturnType<typeof row>) => () => ({
+    exitCode: 1,
+    stdout: doc([
+      row(50650, "Passes", "pass"),
+      fails,
+      row(50650, "Space Step", "pass"),
+      row(50650, "PersistA", "pass"),
+      row(50650, "PersistB", "fail", { message: "rows=0 counter=1" }),
+      row(50650, "ArmIs", "fail", { message: "arm=none" }),
+      row(50650, "CoversOnlyA", "pass"),
+    ]),
+    stderr: `target: BC ${BC}, runtime 16.0\n`,
+  });
+
+  test("alpha.2 and edge as R657 measured: matches, a contract fact; the Assert call gets --dep Library Assert", async () => {
+    const calls: string[][] = [];
+    const base = fakeV3();
+    const r = await runV3ContractProbe({
+      alRunnerPath: "/fake/alrunner",
+      expectedVersion: VERSION,
+      packagesDir: "/fake/deps",
+      bcVersion: BC,
+      alcPath: "/fake/alc",
+      alcIo: fakeAlcIo,
+      tasksetPath: "/usr/bin/taskset",
+      startBurner: () => ({ kill: () => {} }),
+      spawn: async (argv, o) => {
+        calls.push([...argv]);
+        return base(argv, o);
+      },
+      serveSpawn: fakeServe().spawn,
+      libraryAssertApp: LIBRARY_ASSERT,
+    });
+    expect(r.facts.find((f) => f.fact === MSG)).toMatchObject({
+      kind: "contract",
+      verdict: "matches",
+    });
+    const a = calls.find((c) => c.includes("50661")) ?? [];
+    expect(a[a.indexOf("--dep") + 1]).toBe(LIBRARY_ASSERT);
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("pass");
+  });
+
+  test("a prefixed Assert row is broken: diverged, refuses, gate-fail", async () => {
+    const r = await probe({
+      cu50661: () => ({
+        exitCode: 1,
+        stdout: doc([row(50661, "AssertAreEqual", "fail", { message: PREFIXED })]),
+      }),
+    });
+    expect(r.facts.find((f) => f.fact === MSG)?.verdict).toBe("diverged");
+    expect(v3ContractRefusals(r).join("\n")).toMatch(/DIVERGED — message-has-no-type-prefix/);
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("gate-fail");
+  });
+
+  test("a prefixed plain Error() row (Fails) is broken: diverged, gate-fail", async () => {
+    const r = await probe({
+      cu50650: mainWith(row(50650, "Fails", "fail", { message: PREFIXED })),
+    });
+    expect(r.facts.find((f) => f.fact === MSG)?.verdict).toBe("diverged");
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("gate-fail");
+  });
+
+  test("a row that is not a plain fail (a refusal, or no row) is unmeasurable, never matches", async () => {
+    const refused = await probe({
+      cu50661: () => ({
+        exitCode: 7,
+        stdout: doc([
+          row(50661, "AssertAreEqual", "error", {
+            notRun: true,
+            message: "NotRun: out-of-scope: x",
+          }),
+        ]),
+      }),
+    });
+    expect(refused.facts.find((f) => f.fact === MSG)?.verdict).toBe("unmeasurable");
+    const noFails = await probe({ cu50650: mainWith(row(50650, "Other", "pass")) });
+    expect(noFails.facts.find((f) => f.fact === MSG)?.verdict).toBe("unmeasurable");
+  });
+
+  test("leg C without the Library Assert app is unmeasurable (infra-fail), never a silent matches", async () => {
+    const r = await runV3ContractProbe({
+      alRunnerPath: "/fake/alrunner",
+      expectedVersion: VERSION,
+      packagesDir: "/fake/deps",
+      bcVersion: BC,
+      alcPath: "/fake/alc",
+      alcIo: fakeAlcIo,
+      tasksetPath: "/usr/bin/taskset",
+      startBurner: () => ({ kill: () => {} }),
+      spawn: fakeV3(),
+      serveSpawn: fakeServe().spawn,
+    });
+    expect(r.facts.find((f) => f.fact === MSG)?.verdict).toBe("unmeasurable");
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("infra-fail");
+  });
+
+  test("a SESSION reads Fails only (the Assert half is gate-only) and still refuses a prefix there", async () => {
+    const calls: string[] = [];
+    const base = fakeV3();
+    const run = (fails: ReturnType<typeof row>) =>
+      runV3ContractProbe({
+        alRunnerPath: "/fake/alrunner",
+        expectedVersion: VERSION,
+        packagesDir: "/fake/deps",
+        bcVersion: BC,
+        alcPath: "/fake/alc",
+        alcIo: fakeAlcIo,
+        spawn: async (argv, o) => {
+          calls.push(argv.join(" "));
+          const k = argv.join(" ");
+          return k.includes("--codeunit 50650") &&
+            !k.includes("--define") &&
+            !k.includes("/broken/") &&
+            !k.includes("tests-pinned")
+            ? mainWith(fails)()
+            : base(argv, o);
+        },
+        gateOnlyTrusted: "the gated build's leg C at 5eb544ef",
+      });
+    const ok = await run(row(50650, "Fails", "fail", { message: "boom 5" }));
+    const f = ok.facts.find((x) => x.fact === MSG);
+    expect(f?.verdict).toBe("matches");
+    // Review r1: never "trusted from" a leg C that, before r12, did not read this half.
+    expect(f?.measured).toBe(
+      'Fails "boom 5"; Assert half not re-measured in a session (gate-only); leg C reads it only from r12 on, so a .gated recorded before r12 never read it (the gated build\'s leg C at 5eb544ef)',
+    );
+    // (This fake main call writes no coverage, so only per-test-coverage refuses here.)
+    expect(v3ContractRefusals(ok).join("\n")).not.toContain(MSG);
+    expect(calls.some((c) => c.includes("--codeunit 50661"))).toBe(false);
+    // A prefixed plain Error(), and a prefixed refusal written as a plain fail (the K1(a) hole):
+    // both refuse the session, naming the reason.
+    for (const message of [
+      PREFIXED,
+      "SomeException: NotRun: out-of-scope: an outbound HTTP request",
+    ]) {
+      const bad = await run(row(50650, "Fails", "fail", { message }));
+      const text = v3ContractRefusals(bad).join("\n");
+      expect(text).toMatch(/DIVERGED — message-has-no-type-prefix/);
+      expect(text).toContain(`\n    why: ${MESSAGE_PREFIX_REASON}\n`);
+    }
+  });
+
+  test("the refusal's reason text is pinned", () => {
+    expect(MESSAGE_PREFIX_REASON).toBe(
+      "a `<Type>:` prefix would hide v3's not-trusted refusal from the K1(a) guard (`v3RowVerdict` reads `NotRun: out-of-scope:` at the start of the message, so a prefixed refusal written as a plain fail would score as a kill) (R667)",
+    );
   });
 });
 

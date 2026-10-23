@@ -21,10 +21,6 @@ import {
 } from "../src/discovery";
 import type { RunEvent } from "../src/events";
 import { type SessionConfig, runSession } from "../src/orchestrator";
-import {
-  AL_RUNNER_PREDEFINED_SYMBOLS_V2_12_0,
-  type AlRunnerPredefinedProbe,
-} from "../src/preprocessor-symbols";
 import { sessionFingerprint, testDiscoveryMarker } from "../src/resume";
 import { ResultsStore } from "../src/store";
 import { testDigestsOfSources, walkTest } from "../src/test-digest";
@@ -128,15 +124,16 @@ class StubBackend implements ExecutionBackend {
       coverage: "procedure",
       deploy: "publish",
       isolation: "session",
-      kind: this.authoritative ? "bcdev" : "al-runner",
+      // R654: the local runner is al-runner-v3 (was the retired .NET al-runner).
+      kind: this.authoritative ? "bcdev" : "al-runner-v3",
       authoritative: this.authoritative,
     };
   }
   async status(): Promise<BackendStatus> {
     return { ok: true, details: "stub" };
   }
-  measurePredefinedSymbols(): Promise<AlRunnerPredefinedProbe> {
-    return Promise.resolve({ symbols: [...AL_RUNNER_PREDEFINED_SYMBOLS_V2_12_0].sort() });
+  async runnerBuild(): Promise<{ version: string; binarySha256: string }> {
+    return { version: "al-runner 3.0.0-test", binarySha256: "b".repeat(64) };
   }
   async deploy(): Promise<null> {
     return null;
@@ -992,21 +989,19 @@ describe("R424: digests", () => {
 // runSession and the resume fingerprint's `split-v1`.
 // ————————————————————————————————————————————————————————————————————————
 
-const PREDEFINED = [...AL_RUNNER_PREDEFINED_SYMBOLS_V2_12_0].sort();
 const base = (root: string) =>
   ({
     projectDir: join(root, "app"),
     testDir: join(root, "tests"),
-    backend: "al-runner",
+    backend: "al-runner-v3",
     skipKnownSurvivors: false,
     identityScheme: IDENTITY_SCHEME,
     coverageMode: "procedure",
     selectorIds: { selectorId: 50147, controlId: 50148, tableId: 50149 },
-    preprocessorSymbols: PREDEFINED,
   }) as const;
 
 describe("R424: runSession", () => {
-  test("S10 on al-runner: the active arm's test runs, split-v1 is set, no warning", async () => {
+  test("S10 on al-runner-v3: the active arm's test runs, split-v1 is set, no warning", async () => {
     const root = await project({ "V1.Codeunit.al": V.V1 ?? "" });
     const store = new ResultsStore(":memory:");
     const events: RunEvent[] = [];
@@ -1019,7 +1014,6 @@ describe("R424: runSession", () => {
     expect(store.getRun(1)?.configFingerprint).toBe(
       sessionFingerprint({
         ...base(root),
-        testBuildSymbols: PREDEFINED,
         testDiscovery: "arms-v1+tree-v1+split-v1",
       }),
     );
@@ -1034,9 +1028,7 @@ describe("R424: runSession", () => {
       "OpensThroughHelper",
       "PlainTest",
     ]);
-    expect(store.getRun(1)?.configFingerprint).toBe(
-      sessionFingerprint({ ...base(root), testBuildSymbols: PREDEFINED }),
-    );
+    expect(store.getRun(1)?.configFingerprint).toBe(sessionFingerprint(base(root)));
   });
 
   test("testDiscoveryMarker returns each of the seven combinations, and nothing for none", () => {

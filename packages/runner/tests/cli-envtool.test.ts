@@ -5,7 +5,8 @@ import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
-import { AlRunnerBackend } from "../src/al-runner-backend";
+import type { ExecutionBackend } from "../src/backend";
+import { BcDevMcpBackend } from "../src/bcdev-backend";
 import type { BcDevConfigSection, LethalConfigFile, RunCliConfig } from "../src/cli";
 import {
   afterLeaseAcquiredFor,
@@ -75,7 +76,8 @@ describe("env-tool CLI flags", () => {
     expect(cfg.allowExpiringEnv).toBe(true);
   });
 
-  it("rejects --keep-env with --backend al-runner, which has no environment", () => {
+  // R654: re-pointed from the retired .NET al-runner to al-runner-v3, the local runner left.
+  it("rejects --keep-env with --backend al-runner-v3, which has no environment", () => {
     // Minor 9 (Task 7 review): `/keep-env/` also matches parseArgs' OWN "Unknown option
     // '--keep-env'" — deleting both the option declaration and the guard would leave this green.
     // Match text unique to the guard's own message instead.
@@ -87,17 +89,17 @@ describe("env-tool CLI flags", () => {
         "--tests",
         "t",
         "--backend",
-        "al-runner",
+        "al-runner-v3",
         "--config",
         "c.json",
         "--keep-env",
       ]),
-    ).toThrow(/al-runner has no environment/);
+    ).toThrow(/al-runner-v3 has no environment/);
   });
 
   // Minor 5 (Task 7 review): `--allow-expiring-env` got the silent-no-op treatment `--keep-env`
   // above explicitly refuses against — give it the identical guard and the identical test shape.
-  it("rejects --allow-expiring-env with --backend al-runner, which has no environment", () => {
+  it("rejects --allow-expiring-env with --backend al-runner-v3, which has no environment", () => {
     expect(() =>
       parseCliConfig([
         "run",
@@ -106,12 +108,12 @@ describe("env-tool CLI flags", () => {
         "--tests",
         "t",
         "--backend",
-        "al-runner",
+        "al-runner-v3",
         "--config",
         "c.json",
         "--allow-expiring-env",
       ]),
-    ).toThrow(/al-runner has no environment/);
+    ).toThrow(/al-runner-v3 has no environment/);
   });
 });
 
@@ -188,14 +190,14 @@ function fakeSpawn(envId: string, extra: Record<string, string> = {}) {
 }
 
 describe("resolveEnvToolSession", () => {
-  it("is a no-op for al-runner — never calls startEnvToolSession, config passes through unchanged", async () => {
+  // R654: re-pointed from the retired .NET al-runner to al-runner-v3.
+  it("is a no-op for al-runner-v3 — never calls startEnvToolSession, config passes through unchanged", async () => {
     let startCalls = 0;
     const configFile: LethalConfigFile = {
-      alRunner: { alRunnerPath: "al-runner" },
       envTool: resolveModeCfg("env-x"),
     };
     const result = await resolveEnvToolSession(
-      { ...RUN_CONFIG_BCDEV, backendKind: "al-runner" },
+      { ...RUN_CONFIG_BCDEV, backendKind: "al-runner-v3" },
       configFile,
       "run-1",
       {
@@ -773,13 +775,13 @@ describe("runFromCli (Task 7 review wiring)", () => {
         return undefined;
       },
     };
-    // al-runner (not bcdev): `resourceIdentityFor`/`leaseSessionFor` are no-ops for al-runner, so
+    // al-runner-v3 (not bcdev): `resourceIdentityFor`/`leaseSessionFor` are no-ops for it, so
     // this doesn't ALSO need a real/fake `bcdev` config section just to reach `runTheSession` — the
     // point of this test is purely the store/backend cleanup-vs-return-value ordering, which is
-    // identical for either backend kind.
+    // identical for either backend kind. (R654: was the retired .NET al-runner.)
     const parsed: RunCliConfig = {
       ...RUN_CONFIG_BCDEV,
-      backendKind: "al-runner",
+      backendKind: "al-runner-v3",
       configPath,
       dbPath: ":memory:",
     };
@@ -794,13 +796,7 @@ describe("runFromCli (Task 7 review wiring)", () => {
           effectiveConfig: {},
           envSession: fakeSession,
         }),
-        buildBackend: async () =>
-          new AlRunnerBackend({
-            alRunnerPath: "unused",
-            instrumentedDir: "unused",
-            testDir: "unused",
-            selectorObjectId: 1,
-          }),
+        buildBackend: async () => ({}) as ExecutionBackend,
         runSession: async () => QUARANTINED_FAKE_REPORT,
       });
       expect(result).toBe(QUARANTINED_FAKE_REPORT);
@@ -814,33 +810,34 @@ describe("runFromCli (Task 7 review wiring)", () => {
     expect(teardownCalls).toEqual([{ keepEnv: false, quarantined: true }]);
   });
 
+  // R654: the backend whose close fails is a bcdev one now (runFromCli closes only that kind since
+  // the .NET al-runner retired), built over the real prototype so the `instanceof` check engages.
   it("wave 2: a normal report survives a backend.close() failure", async () => {
     const configPath = await writeTempConfig();
     const parsed: RunCliConfig = {
       ...RUN_CONFIG_BCDEV,
-      backendKind: "al-runner",
+      backendKind: "bcdev",
       configPath,
       dbPath: ":memory:",
     };
-    const originalClose = AlRunnerBackend.prototype.close;
-    AlRunnerBackend.prototype.close = async () => {
+    const originalClose = BcDevMcpBackend.prototype.close;
+    let closes = 0;
+    BcDevMcpBackend.prototype.close = async () => {
+      closes += 1;
       throw new Error("backend.close boom");
     };
     try {
       const result = await runFromCli(parsed, {
         validateSelectorIdsForProject: async () => {},
-        buildBackend: async () =>
-          new AlRunnerBackend({
-            alRunnerPath: "unused",
-            instrumentedDir: "unused",
-            testDir: "unused",
-            selectorObjectId: 1,
-          }),
+        resolveEnvToolSession: async () => ({ effectiveConfig: { bcdev: RESOLVED_BCDEV } }),
+        buildBackend: async () => Object.create(BcDevMcpBackend.prototype) as BcDevMcpBackend,
         runSession: async () => FAKE_REPORT,
       });
       expect(result).toBe(FAKE_REPORT);
+      // Non-vacuous: the failing close was really reached.
+      expect(closes).toBe(1);
     } finally {
-      AlRunnerBackend.prototype.close = originalClose;
+      BcDevMcpBackend.prototype.close = originalClose;
     }
   });
 });
@@ -849,13 +846,8 @@ describe("runFromCli owns its scratch folder from mkdtemp on (R360 I2)", () => {
   /** `lethal-XXXXXX` folders in this test process's private temp folder (the R358 preload). */
   const runFolders = () =>
     new Set(readdirSync(tmpdir()).filter((e) => /^lethal-[A-Za-z0-9]{6}$/.test(e)));
-  const alRunnerBackend = async () =>
-    new AlRunnerBackend({
-      alRunnerPath: "unused",
-      instrumentedDir: "unused",
-      testDir: "unused",
-      selectorObjectId: 1,
-    });
+  // R654: was an unused `AlRunnerBackend`; runSession is stubbed in every case below.
+  const alRunnerBackend = async () => ({}) as ExecutionBackend;
   async function drive(
     over: Partial<RunCliConfig>,
     deps: Parameters<typeof runFromCli>[1],
@@ -867,7 +859,7 @@ describe("runFromCli owns its scratch folder from mkdtemp on (R360 I2)", () => {
       await runFromCli(
         {
           ...RUN_CONFIG_BCDEV,
-          backendKind: "al-runner",
+          backendKind: "al-runner-v3",
           configPath: await writeTempConfig(),
           dbPath: ":memory:",
           ...over,
@@ -920,25 +912,6 @@ describe("runFromCli owns its scratch folder from mkdtemp on (R360 I2)", () => {
       },
     );
     expect((err as Error).message).toBe("resolve boom");
-    expect(made).toHaveLength(1);
-    expect(warned).toContain(`[lethal] kept scratch folder ${made[0]}`);
-  });
-
-  it("keeps and names the folder when the al-runner contract probe throws, before any teardown owner", async () => {
-    const configPath = await writeTempConfig();
-    await writeFile(
-      configPath,
-      JSON.stringify({ alRunner: { alRunnerPath: "C:/nope/al-runner.exe" } }),
-    );
-    const { made, warned, err } = await drive(
-      { configPath },
-      {
-        runAlRunnerContractProbe: async () => {
-          throw new Error("probe boom");
-        },
-      },
-    );
-    expect((err as Error).message).toBe("probe boom");
     expect(made).toHaveLength(1);
     expect(warned).toContain(`[lethal] kept scratch folder ${made[0]}`);
   });
@@ -1009,13 +982,8 @@ describe("an environment deleted at teardown takes its stored bundles with it (R
         validateSelectorIdsForProject: async () => {},
         quarantineDir: scratch("lethal-r360-q-"),
         resolveEnvToolSession: async () => ({ effectiveConfig: { bcdev }, envSession: session }),
-        buildBackend: async () =>
-          new AlRunnerBackend({
-            alRunnerPath: "unused",
-            instrumentedDir: "unused",
-            testDir: "unused",
-            selectorObjectId: 1,
-          }),
+        // R654: was an unused `AlRunnerBackend`; runSession is stubbed.
+        buildBackend: async () => ({}) as ExecutionBackend,
         runSession: async (cfg) => {
           const key = quarantineResourceKey({
             server: cfg.resourceServer ?? "",
@@ -1084,7 +1052,7 @@ describe("runFromCli hands the run's own output paths to the session (R363)", ()
     const db = testDbPath("results.db");
     const parsed: RunCliConfig = {
       ...RUN_CONFIG_BCDEV,
-      backendKind: "al-runner",
+      backendKind: "al-runner-v3",
       configPath,
       dbPath: db,
       outPath: join(dir, "report.json"),
@@ -1094,13 +1062,8 @@ describe("runFromCli hands the run's own output paths to the session (R363)", ()
     let seenConfig: string | undefined;
     await runFromCli(parsed, {
       validateSelectorIdsForProject: async () => {},
-      buildBackend: async () =>
-        new AlRunnerBackend({
-          alRunnerPath: "unused",
-          instrumentedDir: "unused",
-          testDir: "unused",
-          selectorObjectId: 1,
-        }),
+      // R654: was an unused `AlRunnerBackend`; runSession is stubbed.
+      buildBackend: async () => ({}) as ExecutionBackend,
       runSession: async (cfg) => {
         seen = cfg.excludeOutputs;
         seenConfig = cfg.configPath;
@@ -1187,81 +1150,8 @@ describe("buildBackend (R21 — accurate alc/altool requirement per path)", () =
   });
 });
 
-// ————————————————————————————————————————————————————————————————————————
-// R18: `--keep-env`/`--allow-expiring-env` are refused OUTRIGHT for `--backend al-runner` on the
-// reasoning that a silent no-op is wrong (see parseCliConfig). A whole configured `envTool`
-// section being silently ignored on that same backend deserves at least a warning.
-// ————————————————————————————————————————————————————————————————————————
-describe("runFromCli (R18 — envTool configured but ignored under al-runner)", () => {
-  async function writeConfigWithEnvTool(): Promise<string> {
-    const dir = scratch("lethal-cfgtest-");
-    const path = join(dir, "lethal.config.json");
-    await writeFile(path, JSON.stringify({ envTool: { toolPath: "tool.exe" } }), "utf8");
-    return path;
-  }
-
-  it("warns when envTool is configured but --backend al-runner cannot use it", async () => {
-    const configPath = await writeConfigWithEnvTool();
-    const parsed: RunCliConfig = {
-      ...RUN_CONFIG_BCDEV,
-      backendKind: "al-runner",
-      configPath,
-      dbPath: ":memory:",
-    };
-    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
-    let warnings: string[];
-    try {
-      await runFromCli(parsed, {
-        validateSelectorIdsForProject: async () => {},
-        resolveEnvToolSession: async () => ({ effectiveConfig: {} }),
-        buildBackend: async () =>
-          new AlRunnerBackend({
-            alRunnerPath: "unused",
-            instrumentedDir: "unused",
-            testDir: "unused",
-            selectorObjectId: 1,
-          }),
-        runSession: async () => FAKE_REPORT,
-      });
-      // Captured BEFORE mockRestore(), which clears .mock.calls (mirrors harness.test.ts's
-      // verifyQuiet — reading .mock.calls after restore sees an empty array).
-      warnings = warnSpy.mock.calls.map((c) => String(c[0]));
-    } finally {
-      warnSpy.mockRestore();
-    }
-    expect(warnings.some((w) => w.includes("envTool") && w.includes("IGNORED"))).toBe(true);
-  });
-
-  it("does not warn under al-runner when no envTool section is configured", async () => {
-    const configPath = await writeTempConfig(); // writes "{}" — no envTool key at all
-    const parsed: RunCliConfig = {
-      ...RUN_CONFIG_BCDEV,
-      backendKind: "al-runner",
-      configPath,
-      dbPath: ":memory:",
-    };
-    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
-    let warnings: string[];
-    try {
-      await runFromCli(parsed, {
-        validateSelectorIdsForProject: async () => {},
-        resolveEnvToolSession: async () => ({ effectiveConfig: {} }),
-        buildBackend: async () =>
-          new AlRunnerBackend({
-            alRunnerPath: "unused",
-            instrumentedDir: "unused",
-            testDir: "unused",
-            selectorObjectId: 1,
-          }),
-        runSession: async () => FAKE_REPORT,
-      });
-      warnings = warnSpy.mock.calls.map((c) => String(c[0]));
-    } finally {
-      warnSpy.mockRestore();
-    }
-    expect(warnings.some((w) => w.includes("envTool"))).toBe(false);
-  });
-});
+// R654 S3: "runFromCli (R18 — envTool configured but ignored under al-runner)" went with the .NET
+// al-runner, whose session branch printed that warning. al-runner-v3 never printed it.
 
 // ————————————————————————————————————————————————————————————————————————
 // Task 7 review, Important 4 — `coverageMode` (the env-tool fallback for when bc-dev-mcp cannot

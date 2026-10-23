@@ -260,23 +260,20 @@ export type CoverageMode = "none" | "procedure" | "line" | "fenced" | "al-runner
  * second non-authoritative backend would have read as the frozen .NET al-runner. Every branch about
  * the backend's identity keys on this, through the predicates below; `authoritative` keeps only
  * its own meaning (a verdict to act on). `"al-runner-v3"` is the Rust al-runner (`3.0.0-alpha.N`,
- * plan `docs/superpowers/plans/2026-10-21-r586-alrunner-v3-backend.md`).
+ * plan `docs/superpowers/plans/2026-10-21-r586-alrunner-v3-backend.md`). R654 retired the .NET
+ * al-runner (`"al-runner"`): a stored run or report that names it is refused by name
+ * (`v2-retired.ts`).
  */
-export type BackendKind = "bcdev" | "al-runner" | "al-runner-v3";
+export type BackendKind = "bcdev" | "al-runner-v3";
 
 /** R586: the backend publishes to a BC server (leases, attestation, quarantine, TestPage scan). */
 export function isBcdev(kind: BackendKind): boolean {
   return kind === "bcdev";
 }
 
-/** R586: the frozen .NET al-runner (v2): its predefined-symbol probe, R557 names, R147 pin. */
-export function isAlRunnerV2(kind: BackendKind): boolean {
-  return kind === "al-runner";
-}
-
-/** R586: a backend that publishes nothing and compiles the source it was given (v2 or v3). */
+/** R586: a backend that publishes nothing and compiles the source it was given (v3, since R654). */
 export function isLocalRunner(kind: BackendKind): boolean {
-  return kind === "al-runner" || kind === "al-runner-v3";
+  return kind === "al-runner-v3";
 }
 
 export interface BackendCapabilities {

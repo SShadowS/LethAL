@@ -5,54 +5,19 @@ import { join } from "node:path";
 import { initParser, parseAL, wrapRoot } from "@lethal/engine";
 import {
   AlRunnerCoverageFrameError,
-  alRunnerCoverageFrom,
   alRunnerCoverageFromServer,
   alRunnerCoverageSupport,
   buildAlRunnerCoverageIndex,
-  parseCobertura,
 } from "../src/al-runner-coverage";
 import type { ServerPerTestCoverage } from "../src/al-runner-server";
 import { coverageRefusedObjects } from "../src/line-map";
 import { buildCoverageIndex, coverageFilter } from "../src/selection";
 import { removeScratchDir } from "./helpers/scratch";
 
-/**
- * Verbatim al-runner 2.11.0 output, captured by running
- *
- *   al-runner --coverage --coverage-out cov.xml fixtures/sandbox-app fixtures/sandbox-tests
- *
- * and kept verbatim BECAUSE it is the producer's real shape rather than one invented to suit the
- * parser. `SandboxPricing` at `line-rate 0.0000` with every line at `hits="0"` is the case this
- * whole feature exists for: those are the four mutants `itest:bcdev` calls `no-coverage` and
- * `itest:alrunner` currently calls `survived`.
- */
-const REAL_COBERTURA = `<?xml version="1.0" encoding="utf-8"?>
-<!DOCTYPE coverage SYSTEM "http://cobertura.sourceforge.net/xml/coverage-04.dtd">
-<coverage line-rate="0.6111" branch-rate="0" lines-covered="11" lines-valid="18" version="1.0" timestamp="1788960915">
-  <sources>
-    <source>.</source>
-  </sources>
-  <packages>
-    <package name="al-source" line-rate="0.6111" branch-rate="0">
-      <classes>
-        <class name="SandboxLogic.Codeunit" filename="fixtures/sandbox-app/src/SandboxLogic.Codeunit.al" line-rate="0.8571" branch-rate="0">
-          <lines>
-            <line number="5" hits="3" />
-            <line number="10" hits="1" />
-            <line number="11" hits="0" />
-            <line number="12" hits="1" />
-          </lines>
-        </class>
-        <class name="SandboxPricing.Codeunit" filename="fixtures/sandbox-app/src/SandboxPricing.Codeunit.al" line-rate="0.0000" branch-rate="0">
-          <lines>
-            <line number="5" hits="0" />
-            <line number="6" hits="0" />
-          </lines>
-        </class>
-      </classes>
-    </package>
-  </packages>
-</coverage>`;
+// R654 S3: the one-shot Cobertura reader (`parseCobertura`, `alRunnerCoverageFrom`) went with the
+// .NET al-runner. Its basic cases are re-pointed below to `alRunnerCoverageFromServer` (the
+// `perTestCoverage` shape v3 writes), because they exercise the index lookup both readers shared;
+// every "both transports" case keeps its server half.
 
 const scratchDirs: string[] = [];
 afterAll(() => {
@@ -93,32 +58,6 @@ const ONE_OBJECT = `codeunit 79150 "Probe One"
 }
 `;
 
-describe("parseCobertura", () => {
-  test("reads every line of every class from al-runner's real output", () => {
-    const lines = parseCobertura(REAL_COBERTURA);
-    expect(lines).toHaveLength(6);
-    expect(lines.filter((l) => l.file.endsWith("SandboxPricing.Codeunit.al"))).toEqual([
-      { file: "fixtures/sandbox-app/src/SandboxPricing.Codeunit.al", line: 5, hits: 0 },
-      { file: "fixtures/sandbox-app/src/SandboxPricing.Codeunit.al", line: 6, hits: 0 },
-    ]);
-  });
-
-  test("keeps hits, so an unhit line stays distinguishable from an absent one", () => {
-    const lines = parseCobertura(REAL_COBERTURA);
-    const logic = lines.filter((l) => l.file.endsWith("SandboxLogic.Codeunit.al"));
-    expect(logic.map((l) => [l.line, l.hits])).toEqual([
-      [5, 3],
-      [10, 1],
-      [11, 0],
-      [12, 1],
-    ]);
-  });
-
-  test("returns nothing for output carrying no classes", () => {
-    expect(parseCobertura("<coverage></coverage>")).toEqual([]);
-  });
-});
-
 describe("buildAlRunnerCoverageIndex", () => {
   test("indexes a single-object file and reports no multi-object files", async () => {
     const dir = await bundle({ "src/One.Codeunit.al": ONE_OBJECT });
@@ -155,18 +94,30 @@ describe("buildAlRunnerCoverageIndex", () => {
   });
 });
 
-describe("alRunnerCoverageFrom", () => {
-  test("an unhit line produces NO entry, which is what makes no-coverage real", async () => {
+/** One `perTestCoverage` record: each statement in `file` with its own hits. */
+const serverRows = (
+  file: string,
+  statements: { scope: string; line: number; hits: number }[],
+): ServerPerTestCoverage => ({ test: "Codeunit50140.T", coverage: [{ file, statements }] });
+
+describe("alRunnerCoverageFromServer: the basics (re-pointed from alRunnerCoverageFrom, R654)", () => {
+  test("an unhit statement produces NO entry, which is what makes no-coverage real", async () => {
     const dir = await bundle({ "src/One.Codeunit.al": ONE_OBJECT });
     const index = await buildAlRunnerCoverageIndex(dir);
-    const map = alRunnerCoverageFrom([{ file: "src/One.Codeunit.al", line: 5, hits: 0 }], index);
+    const map = alRunnerCoverageFromServer(
+      serverRows("src/One.Codeunit.al", [{ scope: "Reached", line: 5, hits: 0 }]),
+      index,
+    );
     expect(map.entries).toEqual([]);
   });
 
-  test("a hit line resolves to its object AND its procedure", async () => {
+  test("a hit statement resolves to its object AND its procedure", async () => {
     const dir = await bundle({ "src/One.Codeunit.al": ONE_OBJECT });
     const index = await buildAlRunnerCoverageIndex(dir);
-    const map = alRunnerCoverageFrom([{ file: "src/One.Codeunit.al", line: 5, hits: 1 }], index);
+    const map = alRunnerCoverageFromServer(
+      serverRows("src/One.Codeunit.al", [{ scope: "Reached", line: 5, hits: 1 }]),
+      index,
+    );
     expect(map.granularity).toBe("line");
     expect(map.entries).toEqual([
       { objectType: "Codeunit", objectId: 79150, procedure: "Reached", line: 5 },
@@ -176,23 +127,25 @@ describe("alRunnerCoverageFrom", () => {
   test("distinguishes the two procedures of one object, so selection can be narrow", async () => {
     const dir = await bundle({ "src/One.Codeunit.al": ONE_OBJECT });
     const index = await buildAlRunnerCoverageIndex(dir);
-    const map = alRunnerCoverageFrom(
-      [
-        { file: "src/One.Codeunit.al", line: 5, hits: 1 },
-        { file: "src/One.Codeunit.al", line: 10, hits: 1 },
-      ],
+    const map = alRunnerCoverageFromServer(
+      serverRows("src/One.Codeunit.al", [
+        { scope: "Reached", line: 5, hits: 1 },
+        { scope: "NotReached", line: 10, hits: 1 },
+      ]),
       index,
     );
     expect(map.entries.map((e) => e.procedure)).toEqual(["Reached", "NotReached"]);
   });
 
-  test("matches an ABSOLUTE Cobertura path against a project-relative index", async () => {
+  test("matches an ABSOLUTE path against a project-relative index", async () => {
     // al-runner echoes whatever path it was given, and LethAL hands it an absolute bundle dir, so
     // the tail match is what makes the lookup work at all rather than silently finding nothing.
     const dir = await bundle({ "src/One.Codeunit.al": ONE_OBJECT });
     const index = await buildAlRunnerCoverageIndex(dir);
-    const map = alRunnerCoverageFrom(
-      [{ file: "C:/somewhere/else/instrumented/active/src/One.Codeunit.al", line: 5, hits: 1 }],
+    const map = alRunnerCoverageFromServer(
+      serverRows("C:/somewhere/else/instrumented/active/src/One.Codeunit.al", [
+        { scope: "Reached", line: 5, hits: 1 },
+      ]),
       index,
     );
     expect(map.entries).toHaveLength(1);
@@ -202,32 +155,13 @@ describe("alRunnerCoverageFrom", () => {
   test("skips a row for a file this bundle does not declare", async () => {
     const dir = await bundle({ "src/One.Codeunit.al": ONE_OBJECT });
     const index = await buildAlRunnerCoverageIndex(dir);
-    const map = alRunnerCoverageFrom(
-      [{ file: "fixtures/sandbox-tests/src/SandboxTests.Codeunit.al", line: 11, hits: 1 }],
+    const map = alRunnerCoverageFromServer(
+      serverRows("fixtures/sandbox-tests/src/SandboxTests.Codeunit.al", [
+        { scope: "T", line: 11, hits: 1 },
+      ]),
       index,
     );
     expect(map.entries).toEqual([]);
-  });
-
-  test("end to end on al-runner's real output: Logic is covered, Pricing is not", async () => {
-    const dir = await bundle({
-      "fixtures/sandbox-app/src/SandboxLogic.Codeunit.al": ONE_OBJECT,
-      "fixtures/sandbox-app/src/SandboxPricing.Codeunit.al": `codeunit 79151 "Probe Pricing"
-{
-    procedure Never(): Integer
-    begin
-        exit(1);
-    end;
-}
-`,
-    });
-    const index = await buildAlRunnerCoverageIndex(dir);
-    const map = alRunnerCoverageFrom(parseCobertura(REAL_COBERTURA), index);
-    const objects = new Set(map.entries.map((e) => e.objectId));
-    expect(objects.has(79150)).toBe(true);
-    // The whole point: every Pricing line came back hits="0", so it contributes NO evidence and
-    // its mutants are no-coverage rather than survived.
-    expect(objects.has(79151)).toBe(false);
   });
 });
 
@@ -282,17 +216,6 @@ describe("R298: a file holding a #if-wrapped object is refused whole", () => {
       const said = warn.mock.calls.map((c) => String(c[0]));
       expect(said).toEqual([R298_REFUSED]);
 
-      const cobertura = alRunnerCoverageFrom(
-        [
-          { file: "src/B2.Codeunit.al", line: 7, hits: 1 },
-          { file: "src/B2.Codeunit.al", line: 18, hits: 1 },
-          { file: "src/Other.Codeunit.al", line: 6, hits: 1 },
-        ],
-        index,
-      );
-      expect(cobertura.entries).toEqual([
-        { objectType: "Codeunit", objectId: 50107, procedure: "R", line: 6 },
-      ]);
       const server = alRunnerCoverageFromServer(
         {
           test: "Codeunit50140.T",
@@ -357,12 +280,14 @@ describe("R298: a file holding a #if-wrapped object is refused whole", () => {
     const index = await buildAlRunnerCoverageIndex(dir);
     expect(index.multiObjectFiles).toEqual([]);
     expect(
-      alRunnerCoverageFrom([{ file: "src/WithPerms.Codeunit.al", line: 6, hits: 1 }], index)
-        .entries,
+      alRunnerCoverageFromServer(
+        serverRows("src/WithPerms.Codeunit.al", [{ scope: "R", line: 6, hits: 1 }]),
+        index,
+      ).entries,
     ).toEqual([{ objectType: "Codeunit", objectId: 50107, procedure: "R", line: 6 }]);
   });
 
-  test("R383 r3: a codeunit then a #if split-header codeunit IS two objects: guard refuses, index skips, no hit resolves on either transport", async () => {
+  test("R383 r3: a codeunit then a #if split-header codeunit IS two objects: guard refuses, index skips, no hit resolves", async () => {
     // Line 7 is `L := 1;` in Other.R. al-runner reports a later object's lines shifted up into
     // the first object's (r383-real-frame), so a hit of Split B's can arrive as line 7.
     const dir = await bundle({ "src/Split.Codeunit.al": `${R298_PLAIN}${R383_SPLIT}` });
@@ -374,9 +299,6 @@ describe("R298: a file holding a #if-wrapped object is refused whole", () => {
     const index = await buildAlRunnerCoverageIndex(dir);
     expect(index.multiObjectFiles).toEqual(["src/Split.Codeunit.al"]);
     expect(index.byFile.size).toBe(0);
-    expect(
-      alRunnerCoverageFrom([{ file: "src/Split.Codeunit.al", line: 7, hits: 1 }], index).entries,
-    ).toEqual([]);
     const server: ServerPerTestCoverage = {
       test: "Codeunit50140.T",
       coverage: [{ file: "src/Split.Codeunit.al", statements: [{ line: 7, hits: 1, scope: "Q" }] }],
@@ -447,16 +369,6 @@ describe("R298: a refused file's hits never fall through to a shorter path endin
       const index = await buildAlRunnerCoverageIndex(dir);
       expect(index.refusedFiles).toEqual(["src/Foo.Codeunit.al"]);
       expect([...index.byFile.keys()]).toEqual(["foo.codeunit.al"]);
-      const cobertura = alRunnerCoverageFrom(
-        [
-          { file: "C:/x/instrumented/active/src/Foo.Codeunit.al", line: 7, hits: 1 },
-          { file: "C:/x/instrumented/active/Foo.Codeunit.al", line: 6, hits: 1 },
-        ],
-        index,
-      );
-      expect(cobertura.entries).toEqual([
-        { objectType: "Codeunit", objectId: 50107, procedure: "R", line: 6 },
-      ]);
       const server = alRunnerCoverageFromServer(
         {
           test: "Codeunit50140.T",
@@ -480,7 +392,6 @@ describe("R298: a refused file's hits never fall through to a shorter path endin
     // codeunit, 50107, whose line 6 is inside `R`. A fall-through credits 50107.R on both paths.
     const two = `codeunit 50151 "Foo A"\n${R298_BODY("Reached")}codeunit 50152 "Foo B"\n${R298_BODY("Other")}`;
     const dir = await bundle({ "src/Foo.Codeunit.al": two, "Foo.Codeunit.al": R298_PLAIN });
-    const rows = [{ file: "C:/x/instrumented/active/src/Foo.Codeunit.al", line: 6, hits: 1 }];
     const server: ServerPerTestCoverage = {
       test: "Codeunit50140.T",
       coverage: [
@@ -490,7 +401,6 @@ describe("R298: a refused file's hits never fall through to a shorter path endin
     const index = await buildAlRunnerCoverageIndex(dir);
     expect(index.multiObjectFiles).toEqual(["src/Foo.Codeunit.al"]);
     expect([...index.byFile.keys()]).toEqual(["foo.codeunit.al"]);
-    expect(alRunnerCoverageFrom(rows, index).entries).toEqual([]);
     expect(alRunnerCoverageFromServer(server, index).entries).toEqual([]);
     // Admitted, the same hit resolves to src/Foo's own first object: the stop-list does not block
     // an index that was let in. R407: an admitted file's label must name a file inside the bundle,
@@ -500,8 +410,6 @@ describe("R298: a refused file's hits never fall through to a shorter path endin
       labelBase: dir,
     });
     const own = [{ objectType: "Codeunit", objectId: 50151, procedure: "Reached", line: 6 }];
-    const inBundle = [{ file: "src/Foo.Codeunit.al", line: 6, hits: 1 }];
-    expect(alRunnerCoverageFrom(inBundle, admittedIndex).entries).toEqual(own);
     const absServer: ServerPerTestCoverage = {
       test: "Codeunit50140.T",
       coverage: [
@@ -557,7 +465,7 @@ table 50110 "Wrapped T"
 `;
 
 describe("R298 end to end (al-runner): a wrapped table trigger reads no-coverage, not all-green", () => {
-  test("Cobertura and --server coverage, then selection: the trigger mutant is refused by name", async () => {
+  test("--server coverage, then selection: the trigger mutant is refused by name", async () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
       const files = { "src/W.Table.al": R298_WRAPPED_TABLE, "src/Other.Codeunit.al": R298_PLAIN };
@@ -572,13 +480,6 @@ describe("R298 end to end (al-runner): a wrapped table trigger reads no-coverage
       const ref = { codeunitId: 50140, codeunitName: "Tests", method: "T" };
       const other = { codeunitId: 50140, codeunitName: "Tests", method: "U" };
       const coverages = [
-        alRunnerCoverageFrom(
-          [
-            { file: "src/W.Table.al", line: 11, hits: 1 },
-            { file: "src/Other.Codeunit.al", line: 6, hits: 1 },
-          ],
-          index,
-        ),
         alRunnerCoverageFromServer(
           {
             test: "Codeunit50140.T",
@@ -707,12 +608,20 @@ describe("R298 end to end (al-runner): a bare table before a wrapped enum reads 
       expect(warn.mock.calls.map((c) => String(c[0]))).toContain(`[lethal] ${sentence}`);
       const ref = { codeunitId: 50140, codeunitName: "Tests", method: "T" };
       const other = { codeunitId: 50140, codeunitName: "Tests", method: "U" };
-      const coverage = alRunnerCoverageFrom(
-        [
-          { file: "src/T.Table.al", line: 10, hits: 1 },
-          { file: "src/T.Table.al", line: 15, hits: 1 },
-          { file: "src/Other.Codeunit.al", line: 6, hits: 1 },
-        ],
+      const coverage = alRunnerCoverageFromServer(
+        {
+          test: "Codeunit50140.T",
+          coverage: [
+            {
+              file: "src/T.Table.al",
+              statements: [
+                { scope: "Touch", line: 10, hits: 1 },
+                { scope: "OnInsert", line: 15, hits: 1 },
+              ],
+            },
+            { file: "src/Other.Codeunit.al", statements: [{ scope: "R", line: 6, hits: 1 }] },
+          ],
+        },
         index,
       );
       const cov = buildCoverageIndex([
@@ -789,31 +698,6 @@ codeunit 50101 ProbeB
 }
 `;
 
-/** The probe's `s1.xml` (A+B in one file, a test calling only B), trimmed to its two classes. */
-const PROBE_S1 = `<coverage line-rate="0.2857" branch-rate="0" lines-covered="4" lines-valid="14" version="1.0">
-  <packages>
-    <package name="al-source" line-rate="0.2857" branch-rate="0">
-      <classes>
-        <class name="Two.Codeunit" filename="two/app/Two.Codeunit.al" line-rate="0.5000" branch-rate="0">
-          <lines>
-            <line number="7" hits="0" />
-            <line number="8" hits="0" />
-            <line number="9" hits="0" />
-            <line number="19" hits="1" />
-            <line number="20" hits="1" />
-            <line number="21" hits="1" />
-          </lines>
-        </class>
-        <class name="T.Codeunit" filename="two/tests/T.Codeunit.al" line-rate="0.1250" branch-rate="0">
-          <lines>
-            <line number="19" hits="1" />
-          </lines>
-        </class>
-      </classes>
-    </package>
-  </packages>
-</coverage>`;
-
 const PROBE_ROOT = "C:/Users/SShadowS/AppData/Local/Temp/claude/r383probe";
 /** The probe's `server-two.json`, test `OnlyB`, trimmed to the fields LethAL reads. */
 const PROBE_SERVER_ONLY_B = {
@@ -855,17 +739,7 @@ const serverOne = (
   test = "Codeunit50140.T",
 ) => ({ test, coverage: [{ file, statements: statements.map((s) => ({ ...s, hits: 1 })) }] });
 
-describe("R383: a multi-object file's rows resolve by position, on both transports", () => {
-  test("Cobertura: the probe's s1.xml covers B.RunB only, at object-relative lines (LF, CRLF, BOM)", async () => {
-    for (const [label, src] of variantsOf(PROBE_TWO)) {
-      const index = await admitted(await bundle({ "two/app/Two.Codeunit.al": src }));
-      expect([label, alRunnerCoverageFrom(parseCobertura(PROBE_S1), index).entries]).toEqual([
-        label,
-        ONLY_B,
-      ]);
-    }
-  });
-
+describe("R383: a multi-object file's rows resolve by position", () => {
   test("--server: the probe's OnlyB record covers B.RunB only (LF, CRLF, BOM)", async () => {
     for (const [label, src] of variantsOf(PROBE_TWO)) {
       const dir = await bundle({ "two/app/Two.Codeunit.al": src });
@@ -882,7 +756,7 @@ describe("R383: a multi-object file's rows resolve by position, on both transpor
     }
   });
 
-  test("a table extension then a page extension in one file, on both transports", async () => {
+  test("a table extension then a page extension in one file", async () => {
     //  1 tableextension 50130 ...   9 pageextension 50131 ...
     //  5         exit(1);          13         exit(2);
     const src = `tableextension 50130 "TExt" extends Customer
@@ -909,10 +783,6 @@ pageextension 50131 "PExt" extends "Customer Card"
     ];
     for (const [label, text] of variantsOf(src)) {
       const index = await admitted(await bundle({ "src/Ext.al": text }));
-      const cob = alRunnerCoverageFrom(
-        [5, 13].map((line) => ({ file: "src/Ext.al", line, hits: 1 })),
-        index,
-      );
       const srv = alRunnerCoverageFromServer(
         serverOne("src/Ext.al", [
           { scope: "TouchT", line: 5 },
@@ -920,18 +790,22 @@ pageextension 50131 "PExt" extends "Customer Card"
         ]),
         index,
       );
-      expect([label, cob.entries, srv.entries]).toEqual([label, want, want]);
+      expect([label, srv.entries]).toEqual([label, want]);
     }
   });
 
   test("a blank line between objects, or B's header, yields no member evidence", async () => {
     const index = await admitted(await bundle({ "two/app/Two.Codeunit.al": PROBE_TWO }));
-    const cob = alRunnerCoverageFrom(
-      [12, 13, 14].map((line) => ({ file: "two/app/Two.Codeunit.al", line, hits: 1 })),
+    // No scope: a statement the server names no procedure for (re-pointed from Cobertura, R654).
+    const srv = alRunnerCoverageFromServer(
+      serverOne(
+        "two/app/Two.Codeunit.al",
+        [12, 13, 14].map((line) => ({ line })),
+      ),
       index,
     );
     // 12 is the gap: no entry at all. 13 and 14 are B's own header: object-level, never A's.
-    expect(cob.entries).toEqual([
+    expect(srv.entries).toEqual([
       { objectType: "Codeunit", objectId: 50101, line: 2 },
       { objectType: "Codeunit", objectId: 50101, line: 3 },
     ]);
@@ -963,7 +837,7 @@ describe("R383: covering sets are keyed by (file, type, id), never by a procedur
     codeunitName: "N",
     procedureName,
   });
-  /** M1 and M2's covering tests under both transports, T1 hitting `hit1` and T2 hitting `hit2`. */
+  /** M1 and M2's covering tests, T1 hitting `hit1` and T2 hitting `hit2`. */
   const covering = async (
     files: Record<string, string>,
     hit1: { file: string; line: number; scope: string },
@@ -972,14 +846,9 @@ describe("R383: covering sets are keyed by (file, type, id), never by a procedur
   ): Promise<string[][]> => {
     const index = await admitted(await bundle(files));
     const out: string[][] = [];
-    for (const transport of ["cobertura", "server"]) {
+    for (const transport of ["server"]) {
       const cov = (h: typeof hit1) =>
-        transport === "cobertura"
-          ? alRunnerCoverageFrom([{ file: h.file, line: h.line, hits: 1 }], index)
-          : alRunnerCoverageFromServer(
-              serverOne(h.file, [{ scope: h.scope, line: h.line }]),
-              index,
-            );
+        alRunnerCoverageFromServer(serverOne(h.file, [{ scope: h.scope, line: h.line }]), index);
       const split = coverageFilter(
         mutants,
         buildCoverageIndex([
@@ -1015,10 +884,7 @@ describe("R383: covering sets are keyed by (file, type, id), never by a procedur
           mutant("M2", file, "codeunit", 50101, "Run"),
         ],
       ),
-    ).toEqual([
-      ["cobertura M1 T1", "cobertura M2 T2"],
-      ["server M1 T1", "server M2 T2"],
-    ]);
+    ).toEqual([["server M1 T1", "server M2 T2"]]);
   });
 
   test("same name, two files: each file's Run is covered by its own test", async () => {
@@ -1032,10 +898,7 @@ describe("R383: covering sets are keyed by (file, type, id), never by a procedur
           mutant("M2", "src/Y.Codeunit.al", "codeunit", 50101, "Run"),
         ],
       ),
-    ).toEqual([
-      ["cobertura M1 T1", "cobertura M2 T2"],
-      ["server M1 T1", "server M2 T2"],
-    ]);
+    ).toEqual([["server M1 T1", "server M2 T2"]]);
   });
 
   test("same id, two kinds: codeunit 50100 and table 50100 in one file are two keys", async () => {
@@ -1061,10 +924,7 @@ describe("R383: covering sets are keyed by (file, type, id), never by a procedur
         { file, line: 17, scope: "Touch" },
         [mutant("M1", file, "codeunit", 50100, "Run"), mutant("M2", file, "table", 50100, "Touch")],
       ),
-    ).toEqual([
-      ["cobertura M1 T1", "cobertura M2 T2"],
-      ["server M1 T1", "server M2 T2"],
-    ]);
+    ).toEqual([["server M1 T1", "server M2 T2"]]);
   });
 });
 
