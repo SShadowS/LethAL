@@ -24,7 +24,7 @@
  * a prior run's fenced line-number coverage apply to this run's artifact.
  */
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import {
   CONTROL_REGISTER_FILENAME,
@@ -88,6 +88,63 @@ export async function hashTestDir(dir: string, links: LinkPolicy = "refuse"): Pr
   const walk = await walkFiles(dir, { links });
   assertNoUnexcusedLinks(dir, walk.skippedLinks);
   return hashAlFiles(dir, walk.files);
+}
+
+/** R608: one non-`.al` file of a bound folder, as the proof recorded it. */
+export interface OtherFile {
+  readonly size: number;
+  readonly mtimeMs: number;
+  readonly sha256: string;
+}
+
+/**
+ * R608: every NON-`.al` file under `dir` (resources, `.alpackages`, ...) except those `skip` names
+ * (root-relative, forward slashes), under the same walk and link refusal as `hashTestDir`.
+ * `withSha` hashes each file; without it `sha256` is "" (the cheap re-list).
+ */
+export async function listOtherFiles(
+  dir: string,
+  skip: (rel: string) => boolean,
+  withSha: boolean,
+): Promise<Map<string, OtherFile>> {
+  const walk = await walkFiles(dir, { links: "refuse" });
+  assertNoUnexcusedLinks(dir, walk.skippedLinks);
+  const out = new Map<string, OtherFile>();
+  for (const f of walk.files) {
+    const rel = f.replaceAll("\\", "/");
+    if (rel.toLowerCase().endsWith(".al") || skip(rel)) continue;
+    const p = join(dir, f);
+    const s = await stat(p);
+    out.set(rel, {
+      size: s.size,
+      mtimeMs: s.mtimeMs,
+      sha256: withSha ? hashPackage(new Uint8Array(await readFile(p))) : "",
+    });
+  }
+  return out;
+}
+
+/**
+ * R608: the first path (added, removed or changed) where `dir` no longer matches `was`, or
+ * `undefined`. A file whose size and mtime are unchanged is taken as unchanged; one that moved is
+ * re-hashed (the rule `<deps>` already uses).
+ * ponytail: a rewrite with the same size inside the same mtime tick is missed; hash every file if a
+ * measured case needs it.
+ */
+export async function otherFilesDrift(
+  dir: string,
+  skip: (rel: string) => boolean,
+  was: ReadonlyMap<string, OtherFile>,
+): Promise<string | undefined> {
+  const now = await listOtherFiles(dir, skip, false);
+  for (const rel of now.keys()) if (!was.has(rel)) return rel;
+  for (const [rel, w] of was) {
+    const n = now.get(rel);
+    if (n === undefined) return rel;
+    if (n.size === w.size && n.mtimeMs === w.mtimeMs) continue;
+    if (hashPackage(new Uint8Array(await readFile(join(dir, rel)))) !== w.sha256) return rel;
+  }
+  return undefined;
 }
 
 async function hashAlFiles(dir: string, all: readonly string[]): Promise<string> {

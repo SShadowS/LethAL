@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   V3_DEFECT_FACTS,
   V3_LEG_C_FACTS,
@@ -371,6 +371,43 @@ function fakeServe(
   return { spawn, argvs, requests };
 }
 
+describe("R645: the probe's v3 processes run in its scratch dir, not the caller's", () => {
+  test("every test call and the serve daemon get a cwd that is not process.cwd(); --version may stay", async () => {
+    const inner = fakeV3();
+    const seen: { argv: readonly string[]; cwd: string | undefined }[] = [];
+    const serveInner = fakeServe();
+    const serveCwds: (string | undefined)[] = [];
+    await runV3ContractProbe({
+      alRunnerPath: "/fake/alrunner",
+      expectedVersion: VERSION,
+      packagesDir: "/fake/deps",
+      bcVersion: BC,
+      alcPath: "/fake/alc",
+      alcIo: fakeAlcIo,
+      tasksetPath: "/usr/bin/taskset",
+      startBurner: () => ({ kill: () => {} }),
+      spawn: (argv, opts) => {
+        seen.push({ argv, cwd: opts?.cwd });
+        return inner(argv, opts);
+      },
+      serveSpawn: (argv, opts) => {
+        serveCwds.push(opts?.cwd);
+        return serveInner.spawn(argv, opts);
+      },
+      libraryAssertApp: LIBRARY_ASSERT,
+    });
+    const calls = seen.filter((s) => s.argv[1] === "test");
+    expect(calls.length).toBeGreaterThan(5);
+    for (const c of calls) {
+      expect(c.cwd).toBeDefined();
+      expect(c.cwd).not.toBe(process.cwd());
+    }
+    expect(serveCwds).toHaveLength(1);
+    expect(serveCwds[0]).toBeDefined();
+    expect(serveCwds[0]).not.toBe(process.cwd());
+  });
+});
+
 const probe = (over: Over = {}, serveSpawn = fakeServe().spawn): Promise<V3ContractResult> =>
   runV3ContractProbe({
     alRunnerPath: "/fake/alrunner",
@@ -392,7 +429,7 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     const r = await probe({}, s.spawn);
     const f = r.facts.find((x) => x.fact === "serve-keep-reasons");
     expect(f).toMatchObject({ kind: "warn", verdict: "matches" });
-    expect(s.argvs).toEqual([["/fake/alrunner", "serve", "--test-timeout", "3"]]);
+    expect(s.argvs).toEqual([[resolve("/fake/alrunner"), "serve", "--test-timeout", "3"]]);
     const run = s.requests.filter((q) => q.command === "runTests");
     expect(run.length).toBe(1);
     expect(run[0]?.testIsolation).toBe("test");
