@@ -937,6 +937,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     return [this.cfg.packagesDir];
   }
 
+  /** R435: v3's artifact cache app folder, where it keeps `*.Source.zip` Microsoft test libraries.
+   *  Absent without a `cacheDir`: v3's own default cache is not named here. */
+  dependencyArtifactAppsDir(): string | undefined {
+    return this.cfg.cacheDir === undefined
+      ? undefined
+      : join(resolve(this.cfg.cacheDir), "artifacts", this.cfg.bcVersion, "apps");
+  }
+
   /** R635 §3 (R517): the daemon's stop, `S = max(1, ceil(max(floor, baseline) / 1000))`. */
   useMutantBudgetFloor(floorMs: number, baselineTimeoutMs: number): void {
     this.dropPair();
@@ -1402,8 +1410,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (this.lastActivated === null) return verdict;
     // R-435 (upstream #5776): v3 marks a later FAILURE after an unfinished test as not trusted, but
     // not a later TIMEOUT. A timeout after a row that was refused or stopped (or holds the refusal
-    // marker) may come from that row's partial state, and the cold confirm and R577's re-run both
-    // run the test alone, so neither sees it. Never `runner-refused`: R639 must not go on past it.
+    // marker) may come from that row's partial state. Outside entries mode a call runs the whole
+    // codeunit, so the cold confirm runs the sequence unmutated (the refused row leaves the same
+    // state but the test passes) and R577's re-run repeats it: neither tells the refusal's state
+    // from the mutant. Never `runner-refused`: R639 must not go on past it.
     if (verdict.outcome === "timeout") {
       const earlier = call.rows
         .slice(0, call.rows.indexOf(row))

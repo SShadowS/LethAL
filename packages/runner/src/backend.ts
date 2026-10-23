@@ -495,6 +495,13 @@ export interface ExecutionBackend {
   dependencyPackageDirs?(): readonly string[];
 
   /**
+   * R435, OPTIONAL: the folder of `*.Source.zip` apps the backend loads Microsoft test libraries
+   * from when no package folder holds them (al-runner v3's artifact cache), or `undefined` when
+   * the backend cannot name it. The dependency fingerprint hashes those zips too.
+   */
+  dependencyArtifactAppsDir?(): string | undefined;
+
+  /**
    * R-385, OPTIONAL: how a backend that PUBLISHES reads Microsoft dependencies for the dependency
    * fingerprint: the bytes the server holds (`System`, every Microsoft app in the closure, the
    * control app's dependencies) and each one's installed version. A run or verify on the

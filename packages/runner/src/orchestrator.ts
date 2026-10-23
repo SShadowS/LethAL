@@ -124,6 +124,7 @@ import {
   packageFolderReader,
   publishedPackageReader,
   readAppJsonInputs,
+  sourceZipReader,
   targetOf,
 } from "./digest-inputs";
 import { type ArmAwareDiscovery, discoverTests } from "./discovery";
@@ -9127,7 +9128,15 @@ async function testAppDependencies(
     // loads (v3 reads Library Assert from `--package-cache`): hash Microsoft's from there too.
     microsoft = { kind: "folder" };
   }
-  return dependencyFingerprint(inputs, read, microsoft, await targetOf(cfg.projectDir, source));
+  const zipsDir =
+    microsoft.kind === "folder" ? cfg.backend.dependencyArtifactAppsDir?.() : undefined;
+  return dependencyFingerprint(
+    inputs,
+    read,
+    microsoft,
+    await targetOf(cfg.projectDir, source),
+    zipsDir !== undefined ? sourceZipReader(zipsDir) : undefined,
+  );
 }
 
 /** R496: `testAppDependencies`, or why it could not be taken. */

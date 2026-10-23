@@ -10436,11 +10436,47 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
           events.filter(
             (e) =>
               e.type === "warning" &&
-              (e.code === "test-app-dependencies-unproven" ||
-                e.code === "test-digests-unavailable") &&
+              e.code === "test-app-dependencies-unproven" &&
               e.message.includes("Dep Lib"),
           ),
         ).not.toEqual([]);
+        w.store.close();
+      });
+      test("R435 (B1): a MICROSOFT dependency absent from the folder but present as a Source.zip in the backend's artifact cache is proven", async () => {
+        const w = await world("Microsoft", false);
+        const artifactDir = join(w.pkgDir, "..", "artifact-apps");
+        mkdirSync(artifactDir, { recursive: true });
+        writeFileSync(
+          join(artifactDir, "Dep Lib.Source.zip"),
+          buildFakeAppWithEntries({
+            "app.json": JSON.stringify({
+              id: DEP.id,
+              name: DEP.name,
+              publisher: "Microsoft",
+              version: "1.0.0.0",
+            }),
+          }),
+        );
+        const backend = Object.assign(
+          new StubBackend(
+            {
+              coverage: "none",
+              deploy: "none",
+              isolation: "full-reset",
+              kind: "al-runner-v3",
+              authoritative: false,
+            },
+            (mutant) => (mutant === null ? "pass" : "fail"),
+          ),
+          { dependencyPackageDirs: () => [w.pkgDir], dependencyArtifactAppsDir: () => artifactDir },
+        );
+        const out = await runSession({ backend, store: w.store, ...w.dirs, selectorIds }).catch(
+          (e: unknown) => e,
+        );
+        expect(out).not.toBeInstanceOf(Error);
+        const runId = (w.store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number })
+          .id;
+        expect(w.store.getRun(runId)?.testAppProven).toBe(true);
         w.store.close();
       });
       test("R435: a backend with NO package folders keeps the declared version for Microsoft (and runs)", async () => {
@@ -21779,10 +21815,12 @@ describe("R639: the covering loop and a refusal that follows a timeout", () => {
   });
 
   test("O6: a flagged refusal in a kill's REPRODUCTION still ends as error runner-refused, never a kill", async () => {
-    const { report } = await session(
+    const { backend, report } = await session(
       (mutant, ref) => (mutant !== null && ref.method === "T1" ? "fail" : "pass"),
       (_mutant, ref, n, v) => (ref.method === "T1" && n === 2 ? refusedRow(v, true) : undefined),
     );
+    // The refused run IS the reproduction: T1's second run under M0001 (the first scored the kill).
+    expect(ranUnder(backend, "M0001", "T1")).toBe(2);
     expect(m1(report)?.verdict).toBe("error");
     expect(m1(report)?.cause).toBe("runner-refused");
   });

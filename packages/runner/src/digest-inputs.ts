@@ -256,7 +256,9 @@ export const APPLICATION_APP_ID = "c1335042-3002-4257-bf8a-75c898ccb1b8";
  * - `folder` (R435): a Microsoft app is hashed by the bytes of its package in the folders the
  *   backend is handed (al-runner v3's `--package-cache`), walked like any other dependency, with
  *   `Application` queued by its id. No System, no control app, no installed check (v3 publishes
- *   nothing); a Microsoft app missing from the folders refuses by name. Tagged `K folder`. Chosen
+ *   nothing); a Microsoft app missing from the folders is looked up as a `*.Source.zip` in the
+ *   backend's artifact cache (`SourceZipReader`, folders first as v3 prefers them), and refuses by
+ *   name when found in neither. Tagged `K folder`. Chosen
  *   by `testAppDependencies`; no backend returns it from `microsoftMode`.
  */
 export type MicrosoftMode =
@@ -304,6 +306,7 @@ export async function dependencyFingerprint(
   read: PackageReader,
   microsoft: MicrosoftMode,
   target?: { readonly id: string; readonly inputs: AppInputs },
+  sourceZips?: SourceZipReader,
 ): Promise<string> {
   const lines = new Set<string>();
   const seen = new Set<string>();
@@ -376,6 +379,20 @@ export async function dependencyFingerprint(
       continue;
     }
     const packages = await read(dep);
+    if (
+      ("unread" in packages || packages.length === 0) &&
+      microsoft.kind === "folder" &&
+      isMicrosoft(dep.publisher)
+    ) {
+      // B1: v3 takes some Microsoft test libraries from its artifact cache, not a package folder.
+      // The package folders were tried first because v3 prefers them when both hold the app.
+      const zip = await sourceZips?.(dep);
+      if (zip !== undefined) {
+        lines.add(`X ${dep.id} ${sha256(zip.bytes)}`);
+        enqueue(zip.inputs);
+        continue;
+      }
+    }
     if ("unread" in packages || packages.length === 0) {
       const cause = "unread" in packages ? ` (${packages.unread})` : "";
       throw new DependencyUnreadableError(
@@ -482,6 +499,48 @@ export function packageFolderReader(dirs: readonly string[]): PackageReader {
     const paths = index.get(dep.id);
     if (paths === undefined) return { unread: "no package for it in the package folders" };
     return Promise.all(paths.map(async (p) => new Uint8Array(await readFile(p))));
+  };
+}
+
+/** B1: an app v3 keeps as a source zip in its artifact cache: the zip's bytes, and the inputs
+ *  read from the `app.json` inside it. `undefined` when the cache holds no zip for the app. */
+export type SourceZipReader = (
+  dep: AppDependency,
+) => Promise<{ readonly bytes: Uint8Array; readonly inputs: AppInputs } | undefined>;
+
+/**
+ * The `*.Source.zip` files in `dir` (v3's `<cache>/artifacts/<build>/apps`), indexed once by the
+ * `id` in each zip's `app.json`. A missing folder or an unreadable zip holds no app. Hashed by the
+ * zip's own bytes; the `.json` sidecar next to it carries no app id.
+ */
+export function sourceZipReader(dir: string): SourceZipReader {
+  let index: Map<string, { bytes: Uint8Array; inputs: AppInputs }> | undefined;
+  const build = async () => {
+    const out = new Map<string, { bytes: Uint8Array; inputs: AppInputs }>();
+    let names: string[];
+    try {
+      names = await readdir(dir);
+    } catch {
+      return out;
+    }
+    for (const n of names.filter((x) => x.toLowerCase().endsWith(".source.zip")).sort()) {
+      try {
+        const bytes = new Uint8Array(await readFile(join(dir, n)));
+        const text = readPackageEntry(Buffer.from(bytes), "app.json")?.toString("utf8");
+        if (text === undefined) continue;
+        const json = JSON.parse(text.replace(/^﻿/, "")) as Record<string, unknown>;
+        const id = str(json.id);
+        if (id !== undefined)
+          out.set(id.toLowerCase(), { bytes, inputs: appInputsOfAppJson(json) });
+      } catch {
+        // not a readable source zip: it cannot be the dependency either
+      }
+    }
+    return out;
+  };
+  return async (dep) => {
+    index ??= await build();
+    return index.get(dep.id);
   };
 }
 

@@ -239,11 +239,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 - **al-runner v3: Microsoft dependencies are hashed by the bytes in the package folder** ([R435](docs/roadmap/R435.md)).
   The dependency fingerprint of the test app used the declared version of each Microsoft app. It now hashes
-  `Application` and every Microsoft package it finds in `alRunnerV3.packagesDir`, with their dependencies. A
-  Microsoft app missing from the folder leaves the run unproven (`test-app-dependencies-unproven`); the run
-  goes on. Every v3 test-app fingerprint changes once, so a `--resume` of a v3 run made before this change is
-  refused once (`TestAppRepublishedError`: the test app's dependencies changed), and stored v3 snapshots stop
-  matching once.
+  `Application` and every Microsoft package it finds in `alRunnerV3.packagesDir` or, failing that, in v3's artifact
+  cache (`<cacheDir>/artifacts/<bcVersion>/apps/*.Source.zip`), with their dependencies. A Microsoft app found in
+  neither leaves the run unproven (`test-app-dependencies-unproven`); the run goes on, and every run of such a
+  project is unproven (no `--resume`, no `--skip-known-survivors`, no lending). Every v3 test-app fingerprint
+  changes once, so a `--resume` of a v3 run made before this change is refused once (`TestAppRepublishedError`:
+  the test app's dependencies changed), and stored v3 snapshots stop matching once.
 
 - **Leg C's `timeout-is-cpu` fact no longer depends on CPU speed** ([R693](docs/roadmap/R693.md)). Its fixed burn
   counts stopped working on 2026-10-23 (the same burn now costs more CPU than the 2 s limit on a loaded core), so

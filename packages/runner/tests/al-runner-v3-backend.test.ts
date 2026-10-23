@@ -14,7 +14,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, normalize } from "node:path";
+import { isAbsolute, join, normalize, resolve } from "node:path";
 import { initParser } from "@lethal/engine";
 import { emitStaticSelector } from "@lethal/schemata";
 import {
@@ -1294,6 +1294,18 @@ describe("§5 the row decoder", () => {
   });
 });
 
+describe("R-435 (B1): the artifact cache's apps folder", () => {
+  test("dependencyArtifactAppsDir is <cacheDir>/artifacts/<bcVersion>/apps, and absent without a cacheDir", async () => {
+    const l = await layout();
+    const spawn = fakeV3(() => [], { coverage: plainCoverage }).spawn;
+    const withCache = backendOf(l, spawn, fakeAlc().io, { cacheDir: "rel-cache" });
+    expect(withCache.dependencyArtifactAppsDir()).toBe(
+      join(resolve("rel-cache"), "artifacts", "28.0.46665.47126", "apps"),
+    );
+    expect(backendOf(l, spawn, fakeAlc().io).dependencyArtifactAppsDir()).toBeUndefined();
+  });
+});
+
 describe("R-435: a timeout after an earlier refusal or stop in the same call is not trusted", () => {
   const STOP = "Test exceeded 1s timeout.";
   const refused = (method: string) => ({
@@ -1373,6 +1385,13 @@ describe("R-435: a timeout after an earlier refusal or stop in the same call is 
       const v = await verdictOf([timedOut("A"), refused("B")], "B");
       expect(v.runnerRow).toBe("runner-refused");
       expect(v.refusedAfterStop).toBe("A");
+    });
+    test("B1b: the whole sequence [A timeout, B refusal, D timeout]: B is flagged, then D is guarded (error, never timeout)", async () => {
+      const rows = [timedOut("A"), refused("B"), timedOut("D")];
+      expect((await verdictOf(rows, "B")).refusedAfterStop).toBe("A");
+      const d = await verdictOf(rows, "D");
+      expect(d.outcome).toBe("error");
+      expect(d.runnerRow).toBe("runner-test-error");
     });
     test("B2a: a refusal with no timeout is not flagged", async () => {
       const v = await verdictOf([{ method: "A", status: "pass" }, refused("B")], "B");
