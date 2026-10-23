@@ -411,6 +411,10 @@ export interface Unit {
   /** R-371: the target of every `part(Name; Target)` in the object (a page's subpages), as
    *  written; `""` when the target could not be read. Empty for a codeunit. */
   readonly parts: readonly string[];
+  /** R697: the objects the object's properties name, as written (`SourceTable`, `CardPageId`,
+   *  `LookupPageId`, `DrillDownPageId`, `RunObject`, an xmlport/report data item's table). Empty
+   *  for a codeunit. Their code runs when this object is opened or run. */
+  readonly objectRefs: readonly ObjectRef[];
   /** R-371, an enum or enumextension: every implementation codeunit it names, as written
    *  (`Implementation = "I" = "C"` on a value, `DefaultImplementation`, ...). */
   readonly implementations: readonly string[];
@@ -917,6 +921,7 @@ function buildUnit(
     textHash: sha256(normalizeSource(text)),
     baseKey: undefined,
     parts: [],
+    objectRefs: [],
     implementations: [],
     implements: node.namedChildren
       .filter((c) => c.rawKind === "implements_clause")
@@ -959,6 +964,20 @@ function implementationsIn(text: string): string[] {
   }
   return out;
 }
+
+/** R697: an object a property names. */
+export interface ObjectRef {
+  readonly kind: string;
+  readonly raw: string;
+}
+
+/** R697: the properties that name one kind of object (`RunObject` names its own kind). */
+const PROPERTY_OBJECT_KIND: Readonly<Record<string, string | undefined>> = {
+  sourcetable: "table",
+  cardpageid: "page",
+  lookuppageid: "page",
+  drilldownpageid: "page",
+};
 
 /** A report, query or xmlport data item's name and table: `dataitem(Name; Table)`. */
 const DATA_ITEM =
@@ -1008,6 +1027,7 @@ function buildObjectUnit(
     addType(implicit, "xRec", recType);
   }
   const parts: string[] = [];
+  const objectRefs: ObjectRef[] = [];
   visit(node, (x) => {
     if (x.rawKind === "part_section") {
       const target = realChildren(x).filter((c) => c.rawKind !== "part_keyword")[1];
@@ -1015,7 +1035,29 @@ function buildObjectUnit(
     }
     if (DATA_ITEM_KIND.test(x.rawKind)) {
       const m = DATA_ITEM.exec(x.text);
-      if (m?.[1] !== undefined && m[2] !== undefined) addType(implicit, m[1], `Record ${m[2]}`);
+      if (m?.[1] !== undefined && m[2] !== undefined) {
+        addType(implicit, m[1], `Record ${m[2]}`);
+        objectRefs.push({ kind: "table", raw: m[2] });
+      }
+    }
+    if (x.rawKind === "xmlport_element") {
+      const m = DATA_ITEM.exec(x.text);
+      if (m?.[2] !== undefined && /^\s*tableelement/i.test(x.text))
+        objectRefs.push({ kind: "table", raw: m[2] });
+    }
+    if (x.rawKind === "property") {
+      const m = /^\s*([A-Za-z]+)\s*=\s*([\s\S]*?)\s*;?\s*$/.exec(x.text);
+      const name = m?.[1]?.toLowerCase();
+      const value = m?.[2];
+      if (name === "runobject" && value !== undefined) {
+        const r = /^(codeunit|page|report|xmlport|query|table)\s*(?:::)?\s*(.+)$/i.exec(value);
+        if (r?.[1] !== undefined && r[2] !== undefined)
+          objectRefs.push({ kind: r[1].toLowerCase(), raw: r[2] });
+      } else if (name !== undefined && value !== undefined) {
+        const kind = PROPERTY_OBJECT_KIND[name];
+        if (kind !== undefined)
+          objectRefs.push({ kind, raw: value.replace(/^table\s*::\s*/i, "") });
+      }
     }
   });
   const text = normalizeSource(source.slice(node.startIndex, node.endIndex));
@@ -1039,6 +1081,7 @@ function buildObjectUnit(
     textHash: hash,
     baseKey,
     parts,
+    objectRefs,
     implementations: kind.startsWith("enum") ? implementationsIn(text) : [],
     implements:
       kind === "interface"
@@ -1074,7 +1117,7 @@ function argInfo(call: ALSyntaxNode): {
   let argFacts: ArgFact[] | undefined;
   for (const [at, a] of real.entries()) {
     let f: ArgFact | undefined;
-    if (a.rawKind === "database_reference") {
+    if (a.rawKind === "database_reference" || qualifiedRef(a)) {
       const m = /^\s*(\w+)\s*::\s*(.+?)\s*$/.exec(a.text);
       if (m?.[1] !== undefined && m[2] !== undefined)
         f = { k: "ref", at, kind: m[1].toLowerCase(), name: m[2] };
@@ -1093,11 +1136,23 @@ function argInfo(call: ALSyntaxNode): {
     arg0:
       first === undefined
         ? undefined
-        : first.rawKind === "database_reference"
+        : first.rawKind === "database_reference" || qualifiedRef(first)
           ? first.text.trim()
           : "",
     argFacts: argFacts ?? NO_ARGS,
   };
+}
+
+/**
+ * R698: `Codeunit::My.Ns.CU` parses as a member chain on the reference `Codeunit::My`. True for
+ * such a chain (a member expression whose leftmost part is a `database_reference`), so the whole
+ * chain is read as ONE reference, `<kind>::<qualified name>`.
+ */
+function qualifiedRef(n: ALSyntaxNode): boolean {
+  let cur: ALSyntaxNode | undefined = n;
+  if (cur.rawKind !== "member_expression") return false;
+  while (cur?.rawKind === "member_expression") cur = cur.namedChildren[0];
+  return cur?.rawKind === "database_reference";
 }
 
 const NO_IDS: readonly string[] = Object.freeze([]);
@@ -1116,9 +1171,13 @@ const KINDED_REF = /^(report|page|xmlport|query|table)::(.+)$/;
  */
 function idRefsIn(block: ALSyntaxNode): readonly string[] {
   let out: string[] | undefined;
+  const chains = new Set<number>(); // R698: where a qualified reference's chain starts
   visit(block, (n) => {
     let v: string | undefined;
-    if (n.rawKind === "database_reference") {
+    if (chains.has(n.startIndex)) return;
+    const qualified = qualifiedRef(n);
+    if (qualified) chains.add(n.startIndex);
+    if (n.rawKind === "database_reference" || qualified) {
       const m = /^\s*codeunit\s*::\s*(.+?)\s*$/i.exec(n.text);
       v = m?.[1];
       if (v === undefined) {
@@ -1755,6 +1814,20 @@ export class Scanner {
         }
         if (found.length === 0) this.outside("page", raw, `${u.display} part ${raw}`, st);
       }
+      // R697: the objects its properties name run with it (a SourceTable's field triggers, an
+      // action's RunObject, a card or lookup page). Only widens; `st.entered` ends a cycle.
+      for (const { kind, raw } of u.objectRefs) {
+        const label = `${u.display} property ${kind} ${raw}`;
+        if (kind === "codeunit") {
+          const us = this.unitsNamed(raw);
+          this.foldWhole(us, st);
+          if (us.length === 0) this.outside("codeunit", raw, label, st);
+          continue;
+        }
+        const found = this.objectsNamed(kind, raw);
+        for (const f of found) this.foldObject(f, st);
+        if (found.length === 0) this.outside(kind, raw, label, st);
+      }
     }
   }
 
@@ -2059,10 +2132,7 @@ export class Scanner {
    */
   foldIdTargets(st: ReachState, extra: readonly Proc[] = []): void {
     const foldCodeunit = (raw: string): void => {
-      for (const u of this.byNameAll(this.norm(raw))) {
-        this.reachUnit(u, st);
-        for (const c of [...u.procs, ...u.triggers]) this.reach(c, st);
-      }
+      this.foldWhole(this.unitsNamed(raw), st); // R698: a qualified name folds by its last segment
     };
     const foldObjects = (raw: string): boolean => {
       const kinded = KINDED_REF.exec(raw);
@@ -2095,6 +2165,14 @@ export class Scanner {
     for (const kind of ID_RUN_KINDS)
       if (this.objectsNamed(kind, value).some((u) => !u.kind.endsWith("extension"))) return kind;
     return undefined;
+  }
+
+  /** A codeunit folded whole: reached, with every procedure and trigger of it. */
+  private foldWhole(us: readonly Unit[], st: ReachState): void {
+    for (const u of us) {
+      this.reachUnit(u, st);
+      for (const c of [...u.procs, ...u.triggers]) this.reach(c, st);
+    }
   }
 
   /** R-371: an object folded into every digest: entered, with its parts (`enterObject`). */
