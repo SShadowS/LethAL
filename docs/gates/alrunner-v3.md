@@ -51,12 +51,13 @@ The legs:
     leg's receipt lines that ran under it.
   - The refusal row shape is now probed by the contract fact `refusal-row-shape-public` (codeunit 50654,
     `http://example.com/x`, refused by host string with no network), and `refusal-cascade` reads that call.
-  - `commit-under-test-isolation` is `gone` only for a row that is not a refusal written as a fail.
+  - `commit-under-test-isolation` is `gone` only for a row that is not a pass/fail row that holds v3's refusal
+    marker (R675).
   - `duplicate-key-insert-raises` (50655, `TestPermissions = Disabled`) is `gone` only for bc1's end-of-test text.
     v3's #5623 refusal reads `refused`: `held` in leg C (on a contract or warn fact it is `gate-fail`), a warning
     in a session, and never counted as gone.
-  - In every session, a row whose message starts `NotRun: out-of-scope:` but has no `notRun` scores `error`
-    (`runner-test-error`), never a kill, survive or pass (K1(a)).
+  - In every session, a row whose message holds `NotRun: out-of-scope:` anywhere (R675) but has no `notRun`
+    scores `error` (`runner-test-error`), never a kill, survive or pass (K1(a)).
 - S1, S3: `fixtures/sandbox-app`, one-shot, per mutant equal to `bcdev.baseline.json` (`itest:bcdev`'s table).
 - N1: the names fixture (R557's tests are unselectable on v3, upstream #5572).
 - X (a) to (f): the compile proof, the binding checks and the Sleep rule (§6) on `scripts/r586-probe`.

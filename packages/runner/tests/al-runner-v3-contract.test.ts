@@ -1102,6 +1102,19 @@ describe("R667 message-has-no-type-prefix: v3's failure message carries no `<Typ
       ]);
     }
   });
+  test("R675 (build review): a present fail row with an EMPTY message reads diverged (reworded), never matches", async () => {
+    const fails = await probe({ cu50650: mainWith(row(50650, "Fails", "fail", { message: "" })) });
+    const f = fails.facts.find((x) => x.fact === MSG);
+    expect([f?.verdict, f?.measured.split("; Fails ")[0]]).toEqual(["diverged", 'reworded ""']);
+    const asserted = await probe({
+      cu50661: () => ({
+        exitCode: 1,
+        stdout: doc([row(50661, "AssertAreEqual", "fail", { message: "" })]),
+      }),
+    });
+    const a = asserted.facts.find((x) => x.fact === MSG);
+    expect([a?.verdict, a?.measured.split("; Fails ")[0]]).toEqual(["diverged", 'reworded ""']);
+  });
   test("R675: an Assert text with text before `Assert.AreEqual failed.` reads diverged, naming the prefix", async () => {
     const r = await probe({
       cu50661: () => ({
