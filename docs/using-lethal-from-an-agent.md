@@ -804,6 +804,21 @@ baseline (R486). `--skip-known-survivors` compares the read-back instead: after 
 an unreadable read-back, it skips nothing and warns `history-test-app-changed`. The run records the
 read-back's identity, or none when it could not be read.
 
+**A resume across a server restart is refused (R680).** On bcdev, each run records the server's
+generation (LethAL Control's `serverGeneration`), read once at the start of the session. The server
+mints a new generation when its lease row is created, as after a restart that lost an in-memory
+database, and on `ForceResetLease`.
+- **`--resume` and `--resume-run`** refuse with `ServerGenerationChangedError` (code
+  `server-generation-changed`) when the run they would resume recorded another generation, or none.
+  A run recorded before R680 has none, so it refuses too. The error names both values; drop the
+  flag to run from scratch.
+- **A saved baseline** is reused only from a run on the same generation.
+- **The lease** is asked at the generation the session recorded. A server that restarted since
+  refuses it (`generation-changed`) before anything is deployed.
+- **Not covered:** `--skip-known-survivors` still lends across a restart. It skips survivors only,
+  so a test that now kills one can be missed (an under-report). It never scores a false kill.
+- al-runner-v3 has no server and records no generation.
+
 **A run lends its test-app identity to a later session only when it PROVED it (R495).** `--resume`,
 `--resume-run`, `--skip-known-survivors` and the reuse of a saved baseline all require the earlier
 run to have proven that the test app it recorded is the one it ran. The proof, by backend:

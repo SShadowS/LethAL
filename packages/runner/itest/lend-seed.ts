@@ -137,6 +137,8 @@ export function seedRunFrom(store: ResultsStore, fromRunId: number, o: SeedOverr
     testScope: src.testScope,
     ...(runnerBuild !== undefined ? { runnerBuild } : {}),
     ...(src.resourceKey !== null ? { resourceKey: src.resourceKey } : {}),
+    // R680: a resume refuses a run on another server generation, or one with none recorded.
+    ...(src.serverGeneration !== null ? { serverGeneration: src.serverGeneration } : {}),
   });
   if (o.rows !== false) {
     const rows = storedMutants(store, fromRunId).filter(

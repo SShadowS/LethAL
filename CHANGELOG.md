@@ -918,6 +918,15 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **A resume across a BC server restart is refused** ([R680](docs/roadmap/R680.md)).
+  - **What changed:** each bcdev run records the server's generation (LethAL Control's `serverGeneration`), read
+    once before the session's first guard check.
+  - **On resume:** `--resume` and `--resume-run` refuse with `ServerGenerationChangedError` when the run recorded
+    another generation, or none. A run recorded before this release has none, so it refuses too.
+  - **The lease** is asked at that generation, so a restart after the read is refused before anything is deployed.
+  - **A saved baseline** is reused only from a run on the same generation.
+  - **Why:** before, a resume could carry verdicts and reuse a baseline measured before a restart that lost every
+    app and its data.
 - **`lethal verify` sees a test whose code reads object ids from the platform** ([R390](docs/roadmap/R390.md)). A test
   that reaches code holding a record over `AllObj`, `AllObjWithCaption`, `Object`, `Object Metadata` or
   `Application Object Metadata` now takes the whole-source digest. That includes a page or codeunit whose implicit
