@@ -1,5 +1,10 @@
 # R396 campaign manifest: al-runner old vs new defaults on a real app
 
+> **History: the .NET al-runner, retired 2026-10-22 (R654).** The three `run-*.report.json` files
+> here are reports of that backend. They no longer validate against the current report schema
+> (they carry the removed `alRunnerCanary`), and `explain`, `campaign` and `lethal export` refuse
+> them by name (`al-runner-v2-retired`). They are kept as the evidence for R396.
+
 **Status: (i) and (ii) COMPLETED on 2026-10-04 in the kraken container; per-mutant verdicts IDENTICAL.**
 Run (iii) (optional) also completed. Results are in the section "Results, 2026-10-04" below. The
 "What happened on 2026-10-02" section is old-machine history only.

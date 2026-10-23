@@ -1057,6 +1057,12 @@ the figures are pre-committed in `docs/superpowers/specs/2026-10-21-r586-alrunne
 
 ## al-runner v2 — the CLI and wire contract, measured against the released binary
 
+> **Retired 2026-10-22 (R654).** LethAL no longer has a .NET al-runner backend: R654 S3 (35f3c67f)
+> deleted it, its contract probe and its gate (`itest:alrunner`). This section, and the two
+> "server mode" sections after it, are kept as history and as the evidence behind closed roadmap
+> items. Nothing in them describes a backend LethAL runs today. The Rust al-runner's measured
+> contract is §"al-runner v3" above.
+
 ### A test row's name is BC's C# name for the AL method (measured 2026-10-09, c5bbaf89 and 43f76177; R557)
 
 al-runner names each row `Codeunit<id>.<CLR method>`, and the CLR method is the C# identifier BC's
@@ -1512,6 +1518,9 @@ daemon with one `--define` per symbol, the same list the one-shot argv already s
 
 ## al-runner 2.1.0.0 server mode — measured, and it is a different protocol now
 
+> **Retired 2026-10-22 (R654).** History: a .NET al-runner build. LethAL's v2 server transport was
+> deleted in R654 S3.
+
 Answers R97. Every line below came from driving `al-runner --server` directly over stdin/stdout on
 this Windows machine on **2026-08-08**, against **al-runner v2.1.0.0**, with
 `fixtures/sandbox-app` as the source bundle and `fixtures/sandbox-tests` as the test bundle.
@@ -1591,6 +1600,9 @@ R126.
 ---
 
 ## al-runner 2.1.2.0 server mode — a resident server answers with the FIRST bundle it compiled
+
+> **Retired 2026-10-22 (R654).** History: a .NET al-runner build. LethAL's v2 server transport was
+> deleted in R654 S3.
 
 Answers R126, and it is not the answer that row expected. Measured **2026-08-14** against
 **al-runner v2.1.2.0** by driving `--server` over stdin/stdout, with `fixtures/sandbox-app` +

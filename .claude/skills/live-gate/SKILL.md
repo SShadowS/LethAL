@@ -25,24 +25,24 @@ LETHAL_ITEST_BCDEV=1 bun run itest:bcdev
 
 Inside the kraken container, run it from the repo checkout instead of `U:/Git/LethAL`; the gate reaches `Cronus28` by name. Publishing the control app Global is host-only: ask the owner.
 
-**The al-runner leg GATES again** (R93 closed, `51e6415`). It was skipped while v2's CLI rewrite left it unrunnable; the adapter landed and it passes per-mutant on v2.
+**The al-runner leg is the Rust al-runner's gate, `itest:alrunner-v3`** (R586). The .NET al-runner's gate, `itest:alrunner`, was retired with that backend on 2026-10-22 (R654): it no longer exists, and `--backend al-runner` is refused by name. The v3 gate needs no BC server and no lease, and runs on Linux only.
 
 ```bash
-LETHAL_ITEST_ALRUNNER=1 LETHAL_ALRUNNER_PATH="H:/al-runner-builds/c39ad5de/al-runner.exe" bun run itest:alrunner
+LETHAL_ITEST_ALRUNNER_V3=1 bun run itest:alrunner-v3
 ```
 
-In the kraken container `LETHAL_ALRUNNER_PATH` is already set (`/work/tools/al-runner/current/al-runner`, the daily local build), so drop it from the command.
+The binary defaults to the pinned build (`/work/tools/al-runner-v3/current/al-runner`); `LETHAL_ALRUNNER_V3_PATH` overrides it.
 
-**Check the al-runner version before trusting a verdict from this leg.** al-runner publishes several times a day, and it is a globally-installed dotnet tool that `dotnet tool update` can move between one gate run and the next. Measured 2026-08-07: 2.0.0.0 reported a runner-enforced timeout as `TIMEOUT after <n>s`, and 2.0.1.0 — released the same day — changed it back to `Test exceeded <n>s timeout.`. The gate prints `al-runner build under test: <version>` as its first line; read it. If it is not what the freeze below names, that is a TOOL change, not a code regression — re-measure the contract (`docs/measurements/README.md` §"al-runner v2") before touching anything. `dotnet package search MSDyn365BC.AL.Runner --exact-match` lists what is published.
+**Check the al-runner build before trusting a verdict from this leg.** The backend refuses a build that its `.gated` file does not name (`AlRunnerV3UngatedBuildError`), so the pin moves only through `bun scripts/al-runner-v3-update.ts`, never by hand. If a leg differs after the pin moved, that is a TOOL change first, not a code regression: see `docs/gates/alrunner-v3.md` §"The pin and the update gate" and `docs/measurements/README.md` §"al-runner v3" before touching anything.
 Connection details come from the gitignored `fixtures/sandbox-app/.vscode/launch.local.json` + `fixtures/sandbox-app/lethal.config.local.json` (Cronus28, sshadows/1234, company `CRONUS Danmark A/S`, tenant default).
 
 ## Expected (frozen — BLOCKED on any difference)
-The frozen figures, per gate and per leg, are on the gate pages: `docs/gates/bcdev.md`, `docs/gates/alrunner.md`, and the rest listed in `docs/gates/README.md`. `packages/runner/tests/gate-pages.test.ts` keeps those pages equal to the committed baselines, so do not copy figures into this skill. On top of the figures:
+The frozen figures, per gate and per leg, are on the gate pages: `docs/gates/bcdev.md`, `docs/gates/alrunner-v3.md`, and the rest listed in `docs/gates/README.md` (`docs/gates/alrunner.md` is the retired .NET gate's page, kept as history). `packages/runner/tests/gate-pages.test.ts` keeps those pages equal to the committed baselines, so do not copy figures into this skill. On top of the figures:
 - **bcdev**: baseline green, per-mutant baseline matches `packages/runner/itest/bcdev.baseline.json`, all protocol-invariant probes pass, ≥1 clean attestation (`observedAny && !identityMismatch`) per deployed artifact, NO `identityMismatch` on any run.
-- **al-runner**: baseline green, per-mutant baseline matches `packages/runner/itest/al-runner.baseline.json`, and the table equals bcdev's PER MUTANT. Every leg (one-shot, rerun, `--server`, resource selector) must match per mutant; the platform-app pin is asserted on the one-shot legs only. The symbol-set baselines are refused when missing (record once with `LETHAL_ITEST_RECORD_SYMBOL_BASELINES=1`, never a pass).
+- **al-runner-v3**: every leg passes, and the itest asserts each leg's pre-committed table before its baseline. S1, S3 and K equal `bcdev.baseline.json` (`itest:bcdev`'s table) PER MUTANT. L1, Y-A, Y-B and the tables leg match their own baselines (`al-runner-v3.layout`, `al-runner-v3.symbols-lethala` / `-lethalb`, `al-runner-v3.tables`) per mutant. A missing baseline is refused; record one only by the R332 procedure (`LETHAL_ITEST_RECORD_BASELINE=<file>`, which exits 3, never a pass). The legs and their rules: `docs/gates/alrunner-v3.md`.
 
 ## On failure
-BLOCKED. Live execution is the authority — diagnose the root cause (not a shotgun retry), fix in one commit, re-run. Do not proceed on a differing verdict, failing probe, attestation mismatch, or a never-attested artifact. **No standing exceptions.** The al-runner one is retired: that leg gates again. Before diagnosing an al-runner failure as a code regression, check the version line the gate prints — an upstream release is the likelier cause and is not a regression.
+BLOCKED. Live execution is the authority — diagnose the root cause (not a shotgun retry), fix in one commit, re-run. Do not proceed on a differing verdict, failing probe, attestation mismatch, or a never-attested artifact. **No standing exceptions.** Before diagnosing an al-runner-v3 failure as a code regression, check which build ran: a moved pin is the likelier cause and is not a regression.
 
 ## Optional (touches shared infra)
 ```bash
