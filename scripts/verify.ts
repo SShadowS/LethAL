@@ -59,7 +59,7 @@
  *   2. If io pressure `full` avg10 is >= 5.0 when read just before the test step (after the slot
  *      wait), the test child gets `--timeout=15000` (bun's default is 5000). Unreadable pressure
  *      (Windows) keeps the default. Receipt line: `per-test timeout: ...`. See `testTimeout`.
- *   3. A whole-run wall limit of 900 s on each child verify runs (typecheck, `bun test`; `RUN_LIMIT_S`),
+ *   3. A whole-run wall limit of 900 s on every child that verify runs (typecheck, `bun test`; `RUN_LIMIT_S`),
  *      besides the per-file one.
  *
  * R616 (test DBs and stall figures). The preload puts each test process's scratch SQLite DBs on a
@@ -590,8 +590,8 @@ export interface WatchOptions {
 
 /**
  * R616b C (R622's remaining gap): a whole-run wall limit. A full verify takes 30 to 45 s; the
- * slowest ever seen was 631 s, in R622's own hang. If the `bun test` child is still running after
- * 900 s, verify kills it through its handle and fails by name. This catches a hang in bun's own
+ * slowest ever seen was 631 s, in R622's own hang. If a child that verify runs (the typecheck or
+ * `bun test`) is still running after 900 s, verify kills it through its handle and fails by name. This catches a hang in bun's own
  * coordinator after every file ran, which no per-file heartbeat sees.
  */
 export const RUN_LIMIT_S = 900;
