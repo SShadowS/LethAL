@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**98 of 667 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**100 of 669 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -295,6 +295,7 @@ that ordering is the priority.
 - **R666** · R349's stale-layout check is lost with the .NET al-runner: no al-runner-v3 leg can see a stale layout · [R666.md](docs/roadmap/R666.md) · open, filed 2026-10-22
 - **R661** · bcdev hub coverage modes (`procedure`, `line`) run their baseline outside the fenced transport, so R658's baseline stop never reaches them: a baseline that outlives its budget there is abandoned as before · [R661.md](docs/roadmap/R661.md) · open, filed 2026-10-22
 - **R665** · a mutant run whose stop was confirmed but got no 408 is scored "no verdict, no quarantine" when its op then reads completed: the tombstone is the stop's own, so the BC session may still be alive while the run goes on · [R665.md](docs/roadmap/R665.md) · open, filed 2026-10-22
+- **R672** · al-runner v3: the K1(a) guard recognizes v3's not-trusted refusal only at the start of the message, so a type-prefixed refusal would score as a kill · [R672.md](docs/roadmap/R672.md) · open, filed 2026-10-23
 
 ## Product gaps a real project hits
 
@@ -712,6 +713,7 @@ that ordering is the priority.
 - **R669** · bc-linux-setup and the BC itests should refuse a server that has an out-of-use marker (`/coord/machine/out-of-use/<server>.md`): today nothing reads it, so a held-dirty server is kept off only by the coord lease and by messages · [R669.md](docs/roadmap/R669.md) · done (9210ba70)
 - **R670** · the pinned fixture-symbols tar holds `LethAL Sandbox Data` 1.0.0.10 for `sandbox-data-tests`, older than the fixture (1.0.0.13), so `compile:fixtures` from the tar fails that project with AL0185 `Data Band Report` is missing · [R670.md](docs/roadmap/R670.md) · open, filed 2026-10-22
 - **R671** · after R654 no backend accepts `--workers` > 1, so `runSession`'s worker fan-out is unreachable and its unit tests are skipped · [R671.md](docs/roadmap/R671.md) · open, filed 2026-10-22
+- **R673** · the fixture-symbols tar has never held `.alpackages` for sandbox-names, sandbox-names-tests, sandbox-wrapped or sandbox-wrapped-tests, so `compile:fixtures` SKIPS all four in a fresh worktree and `--require-symbol-sets` fails on sandbox-wrapped · [R673.md](docs/roadmap/R673.md) · open, filed 2026-10-23
 
 ---
 
