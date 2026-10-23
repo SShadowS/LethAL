@@ -879,6 +879,8 @@ describe("§4 selection, the cache and T5 / T21 / T28 / T29", () => {
       "warning: dependency skipped: X",
       "dependency note: optional dependency `System` by Microsoft (8874ed3a-0643-4247-9ced-7a7002f7135d) skipped",
       "... more dependency notes",
+      // No count: v3 always writes one; `\d*` would accept this line, `\d+` does not.
+      "...  more dependency notes",
     ]) {
       const b = backendOf(
         l,
