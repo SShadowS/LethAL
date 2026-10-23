@@ -965,7 +965,8 @@ describe("R622 the verify ledger", () => {
         .slice(1, -1)
         .map((l) => l.split("\t"));
       const start = new Date(T + 1000).toISOString();
-      // R616: the 10th column is the pressure read at that moment (P1 at start, P2 at end).
+      // R616: the 10th column is the pressure read at that moment (P1 at start, P3 at end; P2 is
+      // the read just before the test step, R616b).
       expect(rows[0]).toEqual([
         "START",
         start,
@@ -981,10 +982,10 @@ describe("R622 the verify ledger", () => {
       const end = rows[1];
       expect(end?.slice(0, 2)).toEqual(["END", start]);
       expect(Date.parse(end?.[2] ?? "")).toBeGreaterThan(T + 1000);
-      expect(end?.slice(3)).toEqual(["100", "8", "pass", "0", "full", "/work/me", "P2"]);
+      expect(end?.slice(3)).toEqual(["100", "8", "pass", "0", "full", "/work/me", "P3"]);
       expect(r.lines).toContain(`ledger: 1 other verify running at start (${path})`);
       expect(r.lines).toContain("pressure at start: P1");
-      expect(r.lines).toContain("pressure at end: P2");
+      expect(r.lines).toContain("pressure at end: P3");
       expect(r.lines.at(-2)).toBe(
         `ledger: 1 other verify running at start, 1 overlapped by end (${path})`,
       );
@@ -1181,6 +1182,20 @@ describe("R616b one full verify at a time (the slot lock)", () => {
       expect((err as Error).message).toContain("10 s");
       expect(sleeps.reduce((a, b) => a + b, 0)).toBeGreaterThanOrEqual(10_000);
       expect(lockPid(io.path)).toBe(String(HOLDER));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("M4: an empty lock file is waited for, then fails saying the lock holds no pid", async () => {
+    const dir = tempDir("slot");
+    try {
+      writeFileSync(join(dir, "verify-slot.lock"), "");
+      const { io } = slotIo(dir, { waitLimitS: 4 });
+      const err = await acquireSlot(io).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(SlotTimeoutError);
+      expect((err as Error).message).toContain("the lock holds no pid");
+      expect((err as Error).message).not.toContain("pid ?");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1390,41 +1405,54 @@ describe("R616b a longer per-test timeout only under measured io pressure", () =
     });
     expect(r.lines).toContain("per-test timeout: 15000 ms (io full avg10 12.00 >= 5)");
   });
-  test("a test that never yields still fails under the raised timeout (it is a longer limit, not none)", () => {
-    const dir = tempDir("r616b-timeout");
-    try {
-      writeFileSync(
-        join(dir, "hang.test.ts"),
-        'import { test } from "bun:test";\ntest("hangs", async () => { await Bun.sleep(25_000); });\n',
-      );
-      const cmd = testCommand({ kind: "full" }, 1, undefined, join(dir, "j.xml"), 15000);
-      const r = bunTest(
-        dir,
-        cmd.slice(2).filter((a) => !a.startsWith("--reporter")),
-        process.env,
-      );
-      expect(r.code, r.out).not.toBe(0);
-      expect(r.out).toContain("timed out after 15000ms");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  }, 60_000);
+  test("I1: the pressure is read just before the test step, so a stall that began after the start raises the timeout", async () => {
+    let reads = 0;
+    let t = 0;
+    const r = await runVerify(["runner"], {
+      packages: KNOWN,
+      cores: 32,
+      env: {},
+      exec: () => ({ code: 0, output: " 1 pass\n 0 fail\n" }),
+      git: () => "",
+      snapState: () => new Map(),
+      log: () => "log",
+      junitPath: () => "/j.xml",
+      readJunit: () => "",
+      expectedTestFiles: () => [],
+      cleanDist: () => [],
+      now: () => {
+        t += 1000;
+        return t;
+      },
+      print: () => {},
+      pressure: () => press(reads++ === 0 ? "0.00" : "12.00"),
+    });
+    expect(r.lines).toContain(`pressure at start: ${press("0.00")}`);
+    expect(r.lines).toContain("per-test timeout: 15000 ms (io full avg10 12.00 >= 5)");
+  });
 });
 
 describe("R616b the whole-run limit", () => {
-  const HANG = [process.execPath, "-e", "setTimeout(() => {}, 30000)"];
-  test("a child that never exits is killed at the run limit and fails by name", async () => {
+  // The child also starts a grandchild that holds the output pipes for 8 s, so after the kill the
+  // watchdog keeps ticking for a while: only `backstopped` stops a second line.
+  const HANG = [
+    process.execPath,
+    "-e",
+    'Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 8000)"], { stdout: "inherit", stderr: "inherit" }); setTimeout(() => {}, 30000)',
+  ];
+  test("a child that never exits is killed at the run limit and fails by name, once", async () => {
     const printed: string[] = [];
     const t0 = Date.now();
     const r = await execWatched(HANG, process.env, tmpdir(), 180, {
       runLimitS: 2,
+      graceMs: 4000,
       print: (l) => void printed.push(l),
     });
     expect(Date.now() - t0).toBeLessThan(15_000);
     expect(r.watchdog?.fails.join("\n")).toContain(
-      "watchdog: FAIL, the bun test run went over 2 s (no file was over its limit)",
+      "watchdog: FAIL, this run went over 2 s (no file was over its limit)",
     );
-    expect(printed.join("\n")).toContain("the bun test run went over 2 s");
+    expect(printed.filter((l) => l.includes("went over 2 s")).length).toBe(1);
     expect(r.code).not.toBe(0);
   }, 40_000);
   test("a normal run prints no run-limit line", async () => {

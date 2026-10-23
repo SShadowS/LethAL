@@ -54,10 +54,13 @@
  *      handler: the dead pid is what the next verify recovers from. Typecheck stays parallel. Skipped
  *      under CI. Receipt line: `verify slot: took | waited N s | took a stale lock from pid P |
  *      skipped (CI)`. See `acquireSlot` for the known ceilings (pid reuse).
- *   2. If io pressure `full` avg10 is >= 5.0 at the start, the test child gets `--timeout=15000`
- *      (bun's default is 5000). Unreadable pressure (Windows) keeps the default. Receipt line:
- *      `per-test timeout: ...`. See `testTimeout`.
- *   3. A whole-run wall limit of 900 s on the bun test child (`RUN_LIMIT_S`), besides the per-file one.
+ *      Known limit: a SIGTERM or SIGHUP sent to verify alone releases the lock, but the orphaned
+ *      `bun test` child may keep running (Ctrl-C reaches the whole group and is fine).
+ *   2. If io pressure `full` avg10 is >= 5.0 when read just before the test step (after the slot
+ *      wait), the test child gets `--timeout=15000` (bun's default is 5000). Unreadable pressure
+ *      (Windows) keeps the default. Receipt line: `per-test timeout: ...`. See `testTimeout`.
+ *   3. A whole-run wall limit of 900 s on each child verify runs (typecheck, `bun test`; `RUN_LIMIT_S`),
+ *      besides the per-file one.
  *
  * R616 (test DBs and stall figures). The preload puts each test process's scratch SQLite DBs on a
  * tmpfs when it can (see packages/runner/tests/helpers/test-db.ts), and each process reports where
@@ -658,7 +661,7 @@ export async function execWatched(
       backstopped = true;
       proc.kill("SIGKILL");
       say(
-        `watchdog: FAIL, the bun test run went over ${runLimitMs / 1000} s${fails.length === 0 ? " (no file was over its limit)" : ""}; sent SIGKILL to bun test process ${proc.pid} through its handle. R622.`,
+        `watchdog: FAIL, this run went over ${runLimitMs / 1000} s${fails.length === 0 ? " (no file was over its limit)" : ""}; sent SIGKILL to process ${proc.pid} through its handle. R622.`,
       );
     }
     for (const b of stuckWorkers(
@@ -886,11 +889,11 @@ export const RAISED_TIMEOUT_MS = 15000;
 export const IO_FULL_RAISE = 5.0;
 
 /**
- * R616b B. When the disk is already stalled at the start (io `full` avg10 >= 5.0: all tasks waited
- * on io for 5% of the last 10 s), the test child gets `--timeout=15000`. Otherwise bun's 5000 ms
- * stays. Pressure that cannot be read (Windows, no /proc) keeps the default and says so. A test that
- * hangs still fails, only 10 s later. ponytail: one reading at the start; a stall that begins later
- * is not seen. Upgrade: read again just before the test step.
+ * R616b B. When the disk is stalled just before the test step (io `full` avg10 >= 5.0: all tasks
+ * waited on io for 5% of the last 10 s; read after the slot wait, so it describes the disk the
+ * tests will meet), the test child gets `--timeout=15000`. Otherwise bun's 5000 ms stays. Pressure
+ * that cannot be read (Windows, no /proc) keeps the default and says so. A test that hangs still
+ * fails, only 10 s later. bun's own timeout is not re-tested here.
  */
 export function testTimeout(pressure: string | undefined): { ms: number; line: string } {
   const m = /io some [\d.]+\/[\d.]+\/[\d.]+ full ([\d.]+)\//.exec(pressure ?? "");
@@ -981,6 +984,10 @@ function slotHolder(path: string): { pid: number | undefined; worktree: string }
  * the other's fresh lock; the re-read before the delete makes that window microseconds. A lock
  * file with no readable pid (caught half-written, or a crash between create and write) is waited
  * for like a live one. Upgrade for any of these: a real flock, which bun cannot call.
+ *
+ * ponytail: a SIGTERM or SIGHUP sent to verify ALONE releases the lock, but the `bun test` child
+ * is orphaned and may keep running, so the next verify can start beside it. Ctrl-C reaches the
+ * whole process group and is fine. Upgrade: kill the child from the handler (needs its handle).
  */
 export async function acquireSlot(s: SlotIo): Promise<Slot> {
   const limitMs = (s.waitLimitS ?? SLOT_WAIT_LIMIT_S) * 1000;
@@ -1006,16 +1013,20 @@ export async function acquireSlot(s: SlotIo): Promise<Slot> {
       }
       continue;
     }
+    const who =
+      holder.pid === undefined
+        ? "a verify (the lock holds no pid)"
+        : `pid ${holder.pid} (${holder.worktree})`;
     const waited = s.now() - t0;
     if (waited >= limitMs) {
       throw new SlotTimeoutError(
-        `waited ${limitMs / 1000} s for pid ${holder.pid ?? "?"} (${holder.worktree}) to finish its tests; not running anyway. ` +
+        `waited ${limitMs / 1000} s for ${who} to finish its tests; not running anyway. ` +
           `If that verify is gone, delete ${s.path}.`,
       );
     }
     if (!announced) {
       announced = true;
-      s.print(`verify slot: waiting for pid ${holder.pid ?? "?"} (${holder.worktree})`);
+      s.print(`verify slot: waiting for ${who}`);
     }
     await s.sleep(SLOT_POLL_MS);
   }
@@ -1319,7 +1330,7 @@ export async function runVerify(
       );
     }
   }
-  const timeout = testTimeout(startPressure);
+  const timeout = testTimeout(io.pressure?.());
   say(timeout.line);
   let step: Awaited<ReturnType<typeof testStep>>;
   try {

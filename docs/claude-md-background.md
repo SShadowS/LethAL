@@ -29,8 +29,9 @@ not about one gate (gate history is under `docs/gates/`). Moved here by R-592.
   says so. It is released on every exit path (`finally`, SIGINT, SIGTERM, SIGHUP); after SIGKILL or a
   crash the dead pid is the recovery. If the 10 min wait fails and the holder is gone, delete the file.
   Skipped under CI. The receipt prints the `verify slot:` and `per-test timeout:` lines: the timeout is
-  raised to 15000 ms only when the io stall was >= 5% at the start. A run over 900 s is killed and
-  named. Unit tests give the lock a temp folder and never touch `/coord`.
+  raised to 15000 ms only when the io stall was >= 5% just before the tests (read after the slot wait). A run over 900 s is killed and
+  named. Known limit: SIGTERM or SIGHUP sent to verify alone releases the lock while an orphaned
+  `bun test` child may keep running. Unit tests give the lock a temp folder and never touch `/coord`.
 - **compile:fixtures (R56).** A docs-only commit deleted a procedure's body in a fixture, and
   `itest:tables` stayed green for days, because the gate kept measuring the previously published
   test app.
