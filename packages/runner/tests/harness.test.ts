@@ -5,6 +5,7 @@ import type { ActivationConfig } from "../src/activation";
 import { compareAppVersions } from "../src/app-version";
 import { BcAnswerUnreadError } from "../src/bc-fetch";
 import {
+  ApiBaseUnsetError,
   CONTROL_APP_ID,
   HarnessAuthError,
   HarnessVerificationError,
@@ -637,6 +638,51 @@ describe("HarnessVerifier.fetchCompanies (R195)", () => {
     await expect(new HarnessVerifier(CFG, fetchFn).fetchCompanies()).rejects.toBeInstanceOf(
       HarnessAuthError,
     );
+  });
+
+  // R253, measured on bc2 (2026-10-23, /coord/handoff/R-253/bc2-api.json): BC on Linux serves
+  // api/v2.0 on its own API port only. The OData port answers this exact 404.
+  const SEGMENT_404 = {
+    error: { code: "BadRequest_NotFound", message: "Resource not found for the segment 'BC'." },
+  };
+
+  test("R253: a healthy BC-on-Linux config (apiBaseUrl set) reads from the API port", async () => {
+    const { seen, fetchFn } = capturing(200, { value: [{ id: "1", name: "CRONUS" }] });
+    const cfg = { ...CFG, apiBaseUrl: "http://bc:7052/BC" };
+    expect(await new HarnessVerifier(cfg, fetchFn).fetchCompanies()).toEqual(["CRONUS"]);
+    expect(seen[0]?.url).toBe("http://bc:7052/BC/api/v2.0/companies?tenant=default");
+  });
+
+  test("R253: with no apiBaseUrl, BC's segment-not-found 404 is ApiBaseUnsetError, naming the fix", async () => {
+    const { fetchFn } = capturing(404, SEGMENT_404);
+    const err = await new HarnessVerifier(CFG, fetchFn).fetchCompanies().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiBaseUnsetError);
+    expect((err as Error).message).toContain("bcdev.apiBaseUrl");
+    expect((err as Error).message).toContain("http://bc:7048/BC");
+  });
+
+  test("R253: with apiBaseUrl set, the same 404 is a real failure, never ApiBaseUnsetError", async () => {
+    const { fetchFn } = capturing(404, SEGMENT_404);
+    const cfg = { ...CFG, apiBaseUrl: "http://bc:7052/BC" };
+    const err = await new HarnessVerifier(cfg, fetchFn).fetchCompanies().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(HarnessVerificationError);
+    expect(err).not.toBeInstanceOf(ApiBaseUnsetError);
+  });
+
+  test("R253: with no apiBaseUrl, the segment 404 naming another segment (an API that is off) is a real failure", async () => {
+    const { fetchFn } = capturing(404, {
+      error: { code: "BadRequest_NotFound", message: "Resource not found for the segment 'api'." },
+    });
+    const err = await new HarnessVerifier(CFG, fetchFn).fetchCompanies().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(HarnessVerificationError);
+    expect(err).not.toBeInstanceOf(ApiBaseUnsetError);
+  });
+
+  test("R253: with no apiBaseUrl, any other 404 is still a real failure", async () => {
+    const { fetchFn } = capturing(404, { error: { code: "Other", message: "nope" } });
+    const err = await new HarnessVerifier(CFG, fetchFn).fetchCompanies().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(HarnessVerificationError);
+    expect(err).not.toBeInstanceOf(ApiBaseUnsetError);
   });
 
   test("a body without a value array, or a row without a string name, is refused rather than read as no companies", async () => {
