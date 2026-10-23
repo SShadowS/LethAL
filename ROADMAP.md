@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**91 of 673 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**89 of 674 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -292,7 +292,7 @@ that ordering is the priority.
 - **R647** · al-runner v3 gate: leg T checks its counts before it classifies, so r9 §7's held can never be reached, and X (d) cannot tell a timed-out baseline from a broken Sleep rule · [R647.md](docs/roadmap/R647.md) · done (80491bb9)
 - **R650** · al-runner v3 gate: on leg T's held path the text check runs without R556's bare-hash refusal, so a run whose mutated-text hashes are missing can hide a text change · [R650.md](docs/roadmap/R650.md) · done (dd7215d0)
 - **R658** · a baseline test that outlives LethAL's 120 s client budget keeps running on the BC server: no stop is wired for a baseline, so the op stays in flight and the control-app lease cannot be released · [R658.md](docs/roadmap/R658.md) · open, filed 2026-10-22
-- **R666** · R349's stale-layout check is lost with the .NET al-runner: no al-runner-v3 leg can see a stale layout · [R666.md](docs/roadmap/R666.md) · open, filed 2026-10-22
+- **R666** · R349's stale-layout check is lost with the .NET al-runner: no al-runner-v3 leg can see a stale layout · [R666.md](docs/roadmap/R666.md) · done (646b1610)
 - **R661** · bcdev hub coverage modes (`procedure`, `line`) run their baseline outside the fenced transport, so R658's baseline stop never reaches them: a baseline that outlives its budget there is abandoned as before · [R661.md](docs/roadmap/R661.md) · open, filed 2026-10-22
 - **R665** · a mutant run whose stop was confirmed but got no 408 is scored "no verdict, no quarantine" when its op then reads completed: the tombstone is the stop's own, so the BC session may still be alive while the run goes on · [R665.md](docs/roadmap/R665.md) · open, filed 2026-10-22
 - **R672** · al-runner v3: the K1(a) guard recognizes v3's not-trusted refusal only at the start of the message, so a type-prefixed refusal would score as a kill · [R672.md](docs/roadmap/R672.md) · done (e11a42c6)
@@ -715,9 +715,10 @@ that ordering is the priority.
 - **R670** · the pinned fixture-symbols tar holds `LethAL Sandbox Data` 1.0.0.10 for `sandbox-data-tests`, older than the fixture (1.0.0.13), so `compile:fixtures` from the tar fails that project with AL0185 `Data Band Report` is missing · [R670.md](docs/roadmap/R670.md) · open, filed 2026-10-22
 - **R671** · after R654 no backend accepts `--workers` > 1, so `runSession`'s worker fan-out is unreachable and its unit tests are skipped · [R671.md](docs/roadmap/R671.md) · open, filed 2026-10-22
 - **R673** · the fixture-symbols tar has never held `.alpackages` for sandbox-names, sandbox-names-tests, sandbox-wrapped or sandbox-wrapped-tests, so `compile:fixtures` SKIPS all four in a fresh worktree and `--require-symbol-sets` fails on sandbox-wrapped · [R673.md](docs/roadmap/R673.md) · open, filed 2026-10-23
-- **R674** · `--backend al-runner-v3` ignores a configured `envTool` section without a word (R18's warning went with the .NET al-runner) · [R674.md](docs/roadmap/R674.md) · open, filed 2026-10-23
-- **R676** · `--backend al-runner-v3 --dry-run` with an `envTool` section runs the env tool's `resolve` and prints a bcdev publish ceiling for a run that publishes nothing: `dryRunCeiling` is not told the backend · [R676.md](docs/roadmap/R676.md) · open, filed 2026-10-23
+- **R674** · `--backend al-runner-v3` ignores a configured `envTool` section without a word (R18's warning went with the .NET al-runner) · [R674.md](docs/roadmap/R674.md) · done (e1a8cee8)
+- **R676** · `--backend al-runner-v3 --dry-run` with an `envTool` section runs the env tool's `resolve` and prints a bcdev publish ceiling for a run that publishes nothing: `dryRunCeiling` is not told the backend · [R676.md](docs/roadmap/R676.md) · done (ddd8bab5)
 - **R677** · al-runner v3: baselineRefused is session-wide and never reset, so a test refused at batch 0's baseline still drives batch 1's nearby-refusal notes · [R677.md](docs/roadmap/R677.md) · open, filed 2026-10-23
+- **R678** · al-runner v3: a --resume session whose batches all reuse their baseline snapshots records no baseline refusal, so no survivor gets its [v3-refused-test-nearby] note · [R678.md](docs/roadmap/R678.md) · open, filed 2026-10-23
 
 ---
 

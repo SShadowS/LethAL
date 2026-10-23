@@ -3214,7 +3214,11 @@ const dryRunTierOf: TierResolver = (name) => operatorTiers.get(name);
 async function dryRunCeiling(
   dbPath: string,
   configPath: string,
+  /** R676: absent is bcdev (as in `printDryRun`). A local runner publishes to no server, so it
+   *  has no ceiling to report and must not run the env tool's `resolve`. */
+  backendKind: BackendKind | undefined,
 ): Promise<{ tier: string; ceiling: PublishCeiling } | { note: string } | undefined> {
+  if (backendKind !== undefined && isLocalRunner(backendKind)) return undefined;
   if (!existsSync(configPath) || !existsSync(dbPath)) return undefined;
   let server: string | undefined;
   let serverInstance: string | undefined;
@@ -3396,7 +3400,7 @@ export async function printDryRun(
   // bracket with its date, never as a limit. A tier with no recorded failure refuses nothing —
   // discovering the ceiling costs exactly one honest failure, and this is where a user learns
   // whether that price has already been paid here.
-  const measured = await dryRunCeiling(paths.dbPath, paths.configPath);
+  const measured = await dryRunCeiling(paths.dbPath, paths.configPath, paths.backendKind);
   if (measured !== undefined && "note" in measured) {
     console.log(`\nNOTE: ${measured.note}`);
   } else if (measured !== undefined) {
@@ -3641,6 +3645,19 @@ export async function runFromCli(
   const nested = await testProjectNestedProblem(parsed.projectDir, parsed.testDir, "lethal run");
   if (nested !== null) throw new TestProjectNestedError(nested);
   const configFile = await loadLethalConfigFile(parsed.configPath);
+  // R674 (R18's warning, which R654 S3 deleted with the .NET al-runner's branch): a configured
+  // `envTool` section is silently unused on a local runner, since `resolveEnvToolSession` returns
+  // early for every backend but bcdev. Warned, not refused: a config file is often shared across
+  // `--backend` choices, so a one-off al-runner-v3 run must not be blocked by its bcdev section.
+  if (isLocalRunner(parsed.backendKind) && configFile.envTool !== undefined) {
+    console.warn(
+      [
+        `[lethal] envTool is configured but IGNORED: --backend ${parsed.backendKind} has no environment`,
+        "to resolve or provision — the entire `envTool` section in this config is silently unused",
+        "on this path. Remove it, or run with --backend bcdev to have it take effect.",
+      ].join(" "),
+    );
+  }
   // R205: the target's source, read ONCE before anything else reads it. The `--changed-since`
   // lines, the al-runner coverage guard and the session's build all use this snapshot, so an edit
   // landing later is never built; the session's last-batch re-read warns about it.
