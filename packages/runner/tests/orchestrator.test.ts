@@ -136,6 +136,7 @@ import {
   STALE_TEST_APP_REMEDY,
   StaleTestAppError,
   TestAppChangedError,
+  TestCodeunitDiscoveryError,
   runMutantLineCountMessage,
   testAppRefusal,
 } from "../src/stale-test-app";
@@ -169,6 +170,7 @@ import { buildFakeAppWithEntries } from "./helpers/fake-app";
 import { legacyBuildReport } from "./helpers/legacy-report";
 import { fakeMicrosoftMode } from "./helpers/microsoft-mode";
 import {
+  TEST_APP,
   servedIsInstalled,
   servedTestAppDeps,
   servesTestApp,
@@ -2897,6 +2899,103 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
         );
         expect(err).toBeInstanceOf(MutantBrokeTestDiscoveryError);
         expect((err as Error).message).toContain("codeunit 50981");
+      });
+
+      // Build review S1: the baseline wiring end to end. A proven, installed test app whose COMPILED
+      // symbols declare both tests of "Sandbox Tests", and BC answering found 0 for both: the OnRun
+      // cause is named. The same run without symbols (no compiled evidence) stays a stale refusal
+      // with ONRUN_HINT. Red check: hard-code `testsCompiledInPublishedPackage` to false.
+      test("baseline: a proven app whose compiled symbols declare the blanked codeunit -> TestCodeunitDiscoveryError", async () => {
+        const NS = 'xmlns="http://schemas.microsoft.com/navx/2015/manifest"';
+        const symbols = JSON.stringify({
+          Codeunits: [
+            {
+              Id: 79100,
+              Name: "Sandbox Tests",
+              Properties: [{ Name: "Subtype", Value: "Test" }],
+              Methods: ["GreenTest", "UnsupportedTest"].map((m, i) => ({
+                Id: i + 1,
+                Name: m,
+                Attributes: [{ Name: "Test" }],
+              })),
+            },
+          ],
+        });
+        const compiled = new Uint8Array(
+          buildFakeAppWithEntries({
+            "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${TEST_APP.id}" Name="${TEST_APP.name}" Publisher="${TEST_APP.publisher}" Version="1.0.0.0" /></Package>`,
+            "SymbolReference.json": symbols,
+          }),
+        );
+        const allFound0 = (method: string) => ({
+          outcome: "error" as const,
+          procedure: method === "GreenTest" ? "IsOverBudget" : "IsUnderBudget",
+          failureMessage: runMutantLineCountMessage(
+            0,
+            `expected exactly one method ${method}, found 0`,
+          ),
+        });
+        const baselineRun = async (pkg: Uint8Array) => {
+          const dirs = await qualProject();
+          await Bun.write(join(dirs.testDir, "app.json"), testAppJson());
+          const backend = new QualificationBackend(allFound0);
+          return runSession({
+            backend: Object.assign(backend, servesTestApp(pkg)),
+            store: new ResultsStore(":memory:"),
+            ...dirs,
+            selectorIds,
+          }).then(
+            () => undefined,
+            (e: unknown) => e,
+          );
+        };
+        const named = await baselineRun(compiled);
+        expect(named).toBeInstanceOf(TestCodeunitDiscoveryError);
+        expect((named as Error).message).toContain('"Sandbox Tests"');
+        const unproven = await baselineRun(testAppPackage());
+        expect(unproven).toBeInstanceOf(StaleTestAppError);
+        expect((unproven as Error).message).toContain(ONRUN_HINT);
+      });
+
+      // Build review S2: the kill's unmutated confirm answering found-0 is not the mutant's doing.
+      test("a found-0 on the unmutated single-path confirm (after a kill) never stops the session as the mutant's doing", async () => {
+        const dirs = await qualProject();
+        const backend = new QualificationBackend(baselineFor);
+        const run = backend.run.bind(backend);
+        let mutantRan = false;
+        let confirms = 0;
+        const err = await runSession({
+          backend: Object.assign(backend, {
+            run: async (ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> => {
+              if ((backend.activations.at(-1) ?? null) !== null) {
+                mutantRan = true;
+                return run(ref, opts); // the stub's mutant run: a kill
+              }
+              if (mutantRan) confirms++;
+              return mutantRan
+                ? {
+                    ref,
+                    outcome: "error",
+                    durationMs: 1,
+                    failureMessage: runMutantLineCountMessage(
+                      0,
+                      `expected exactly one method ${ref.method}, found 0`,
+                    ),
+                  }
+                : run(ref, opts);
+            },
+          }),
+          store: new ResultsStore(":memory:"),
+          ...dirs,
+          selectorIds,
+        }).then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+        // The single path's confirm found-0 never reaches the abort (the session completes); the
+        // `transportErrorUnderMutant` flag guards the GROUPED warm replay, which this stub cannot
+        // reach (recorded in redcheck.md and R688).
+        expect([mutantRan, confirms > 0, err]).toEqual([true, true, undefined]);
       });
 
       test("grouped found 2, and any other transport error, keep today's abort", async () => {

@@ -331,7 +331,7 @@ describe("R686: a test codeunit whose OnRun raises is named, not called a stale 
       "R537 OnRun Tests",
       "OnRun",
       "--resume",
-      "--exclude src/Logic.Codeunit.al",
+      '--exclude "src/Logic.Codeunit.al"',
     ])
       expect(e.message).toContain(s);
   });

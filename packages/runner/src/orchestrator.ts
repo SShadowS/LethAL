@@ -7653,8 +7653,12 @@ async function runSessionBody(
         batchIndex: batchIdx,
         artifactId: compiled?.artifactId,
         tests,
+        // R686 (build review B1): a hook session's proven app is the read AFTER its hook, which the
+        // pre-lease membership check never saw; only a hook-free session's proof covers the check.
         testsCompiledInPublishedPackage:
-          testArmEvidence.kind === "compiled" && testArmEvidence.from === "published-package",
+          envPublishes === undefined &&
+          testArmEvidence.kind === "compiled" &&
+          testArmEvidence.from === "published-package",
         snapshot: {
           batchDir,
           testDir: cfg.testDir,
@@ -10534,6 +10538,9 @@ async function runMutantsOnBackend(args: {
       sessionId?: number;
     }> = [];
     let transportErrorRef: TestMethodRef | undefined;
+    // R686 (build review S2): the transport error came from the MUTATED covering call itself, not
+    // from a confirm or replay that ran with no mutant active.
+    let transportErrorUnderMutant = false;
     // R197: tests that already killed in this procedure first, then the narrowest, then the
     // fastest. A cost heuristic only; see test-order.ts for the measurement behind it.
     const ordered = orderCoveringTests(covering, m, args.killLedger, args.memberCountsByTest);
@@ -10645,7 +10652,10 @@ async function runMutantsOnBackend(args: {
         verdict = "error";
         failureNote = nonVerdict.failureNote;
         cause = nonVerdict.cause;
-        if (nonVerdict.transportError) transportErrorRef = ref;
+        if (nonVerdict.transportError) {
+          transportErrorRef = ref;
+          transportErrorUnderMutant = true;
+        }
         break;
       }
       // R206 §2.1, the session guard: the server's own per-session count of test methods run
@@ -11119,7 +11129,10 @@ async function runMutantsOnBackend(args: {
       // likely cause and with how to go on. The grouped answer names its own codeunit; its `ref` is
       // only the chunk's first method.
       const grouped = groupedFoundNone(failureNote);
-      if (grouped !== undefined || isRunMutantFoundNone(failureNote)) {
+      if (
+        transportErrorUnderMutant &&
+        (grouped !== undefined || isRunMutantFoundNone(failureNote))
+      ) {
         throw new MutantBrokeTestDiscoveryError({
           mutantId: m.mutantId,
           file: m.file,
