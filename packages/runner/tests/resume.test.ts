@@ -1607,6 +1607,92 @@ describe("runSession --resume (R47)", () => {
     expect(report.validity.baselineTests).toEqual(control.validity.baselineTests);
   });
 
+  test("R678: a session whose every batch reuses its snapshot hands the reused baseline to the backend, so a stored refusal still notes a survivor", async () => {
+    const dirs = await makeProject({ secondFile: true });
+    // A second test in the same codeunit: the one the backend refuses at baseline.
+    await Bun.write(
+      join(dirs.testDir, "SandboxTests.Codeunit.al"),
+      TEST_AL.replace(
+        "    end;\n}",
+        "    end;\n\n    [Test]\n    procedure Refused()\n    begin\n    end;\n}",
+      ),
+    );
+    /** Refuses `Refused` at baseline; notes a survivor from the refusals it was handed. */
+    class RefusingBackend extends CountingBackend {
+      handed: string[] = [];
+      override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+        const before = this.baselineRuns;
+        const v = await super.run(ref, opts);
+        return ref.method === "Refused" && this.baselineRuns > before
+          ? {
+              ref,
+              outcome: "error",
+              durationMs: 5,
+              failureMessage: "refused",
+              operation: "completed-accepted",
+              runnerRow: "runner-refused",
+            }
+          : v;
+      }
+      noteReusedBaseline(baseline: readonly { ref: TestMethodRef; verdict: TestVerdict }[]): void {
+        for (const b of baseline)
+          if (b.verdict.runnerRow === "runner-refused") this.handed.push(b.ref.method);
+      }
+      survivorNote(): string | undefined {
+        return this.handed.length === 0 ? undefined : `[fake-refused] ${this.handed.join(",")}`;
+      }
+    }
+    const store = new ResultsStore(":memory:");
+    await runSession({
+      backend: new RefusingBackend("pass", undefined, 2), // batch 1 aborts on its first mutant
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+    });
+    const second = new RefusingBackend("pass");
+    const report = await runSession({
+      backend: second,
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+      resume: "last",
+    });
+    // Every baseline was reused: no baseline call ran in this session.
+    expect(second.baselineRuns).toBe(0);
+    expect(second.handed).toEqual(["Refused", "Refused"]);
+    // A carried survivor keeps its stored note; the ones measured here get the backend's.
+    const survivors = report.mutants.filter((m) => m.verdict === "survived" && m.carried !== true);
+    expect(survivors.length).toBeGreaterThan(0);
+    for (const s of survivors) expect(s.failureNote).toBe("[fake-refused] Refused,Refused");
+  });
+
+  test("R678: a backend without the hook is unchanged: a fully reused session's survivors carry no note", async () => {
+    const dirs = await makeProject({ secondFile: true });
+    const store = new ResultsStore(":memory:");
+    await runSession({
+      backend: new CountingBackend("pass", undefined, 2),
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+    });
+    const second = new CountingBackend("pass");
+    const report = await runSession({
+      backend: second,
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+      resume: "last",
+    });
+    expect(second.baselineRuns).toBe(0);
+    const survivors = report.mutants.filter((m) => m.verdict === "survived");
+    expect(survivors.length).toBeGreaterThan(0);
+    expect(survivors.every((s) => s.failureNote === undefined)).toBe(true);
+  });
+
   // C02-06: lethal verify refuses a carried row, because a carried verdict was measured against
   // an earlier build. Same run as the test above: batch 0 carries whole, batch 1 runs.
   test("a carried verdict is stored carried, a measured one not", async () => {

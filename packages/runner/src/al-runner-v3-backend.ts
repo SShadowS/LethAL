@@ -113,6 +113,14 @@ export { V3_REFUSAL_PREFIX } from "./al-runner-rows";
 /** v3's timeout row (`notRun: true`), anchored: `Test exceeded <N>s timeout.` */
 export const V3_TIMEOUT_MESSAGE = /^Test exceeded (\d+)s timeout\.$/;
 
+/**
+ * The end of a v3 refusal's verdict text (a notRun `error` row that is not a timeout). R678: a
+ * reused snapshot's refusals are read back by it, so changing it under the same IDENTITY_SCHEME
+ * and v3 build silently drops their `[v3-refused-test-nearby]` notes on a resume.
+ */
+const V3_NOT_RUN_SUFFIX =
+  "[al-runner v3 did not run this test (notRun), so whether the mutant changes its outcome on BC is unknown: NOT scored (R586 §5)]";
+
 /** The four note tags (plan §4, §6), in `failureNote`; the gate and any count read them by tag. */
 export const V3_STATE_NOTE_TAG = "[v3-codeunit-state-possible]";
 export const V3_REFUSED_NEARBY_TAG = "[v3-refused-test-nearby]";
@@ -329,7 +337,7 @@ export function v3RowVerdict(
       ref,
       outcome: "error",
       durationMs: wallMs,
-      failureMessage: `${row.message ?? "<no message>"} [al-runner v3 did not run this test (notRun), so whether the mutant changes its outcome on BC is unknown: NOT scored (R586 §5)]`,
+      failureMessage: `${row.message ?? "<no message>"} ${V3_NOT_RUN_SUFFIX}`,
       operation: "completed-accepted",
       runnerRow: "runner-refused",
     };
@@ -654,7 +662,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** The session suite, per codeunit: the tests a call must have exactly one row for. */
   private suitePerCodeunit = new Map<number, readonly TestMethodRef[]>();
   /**
-   * I3: tests v3 refused at baseline (notRun, not a timeout), per codeunit. Session-scoped on
+   * I3: tests v3 refused at baseline (notRun `error`, not a timeout), per codeunit, from a
+   * baseline call or (R678) a reused snapshot's verdicts (`noteReusedBaseline`). Session-scoped on
    * purpose, so `resetLayoutState` does not clear it (R677): a refusal depends on the test and the
    * v3 build, both fixed for the session, and every batch's baseline runs the whole suite. A
    * resumed batch that reuses its snapshot runs no baseline call, and a per-batch clear would
@@ -1542,12 +1551,36 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (!this.isBaselineCall()) return;
     if (this.entries) this.baselineRows.set(id, rows);
     for (const r of rows) {
-      if (r.notRun && !(r.message !== undefined && V3_TIMEOUT_MESSAGE.test(r.message))) {
-        const set = this.baselineRefused.get(id) ?? new Set<string>();
-        set.add(r.method);
-        this.baselineRefused.set(id, set);
+      // R678: exactly `v3RowVerdict`'s refusal branch (a notRun with another status is a contract
+      // error), so a reused snapshot's verdicts give the same set (`noteReusedBaseline`).
+      if (
+        r.notRun &&
+        r.status === "error" &&
+        !(r.message !== undefined && V3_TIMEOUT_MESSAGE.test(r.message))
+      ) {
+        this.noteRefused(id, r.method);
       }
     }
+  }
+
+  /** R678: a reused baseline's refusals, read back from the verdicts `v3RowVerdict` stored. */
+  noteReusedBaseline(
+    baseline: readonly { readonly ref: TestMethodRef; readonly verdict: TestVerdict }[],
+  ): void {
+    for (const { ref, verdict } of baseline) {
+      if (
+        verdict.runnerRow === "runner-refused" &&
+        verdict.failureMessage?.endsWith(V3_NOT_RUN_SUFFIX) === true
+      ) {
+        this.noteRefused(ref.codeunitId, ref.method);
+      }
+    }
+  }
+
+  private noteRefused(id: number, method: string): void {
+    const set = this.baselineRefused.get(id) ?? new Set<string>();
+    set.add(method);
+    this.baselineRefused.set(id, set);
   }
 
   private resourcePath(): string {
