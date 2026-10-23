@@ -124,6 +124,7 @@ import {
   packageFolderReader,
   publishedPackageReader,
   readAppJsonInputs,
+  sourceZipReader,
   targetOf,
 } from "./digest-inputs";
 import { type ArmAwareDiscovery, discoverTests } from "./discovery";
@@ -9122,8 +9123,20 @@ async function testAppDependencies(
       );
     }
     microsoft = cfg.backend.microsoftMode();
+  } else if (cfg.backend.dependencyPackageDirs !== undefined) {
+    // R435: no server to ask, but the package folders the backend runs against hold the bytes it
+    // loads (v3 reads Library Assert from `--package-cache`): hash Microsoft's from there too.
+    microsoft = { kind: "folder" };
   }
-  return dependencyFingerprint(inputs, read, microsoft, await targetOf(cfg.projectDir, source));
+  const zipsDir =
+    microsoft.kind === "folder" ? cfg.backend.dependencyArtifactAppsDir?.() : undefined;
+  return dependencyFingerprint(
+    inputs,
+    read,
+    microsoft,
+    await targetOf(cfg.projectDir, source),
+    zipsDir !== undefined ? sourceZipReader(zipsDir) : undefined,
+  );
 }
 
 /** R496: `testAppDependencies`, or why it could not be taken. */
@@ -10456,6 +10469,8 @@ async function runMutantsOnBackend(args: {
     // active; a later test that kills and reproduces makes it `killed`, a later error keeps that
     // error, and a loop that ends with no other verdict records this one.
     let notReproduced: KillErrorDecision | undefined;
+    // R639: the FIRST refusal flagged `refusedAfterStop` (its note); see the covering loop.
+    let refusedPending: string | undefined;
     // Fix round 2, residual 1 (events.ts doc comment): the exact instant the kill-confirmation
     // loop below decides `cause: "unstable"` because a HUB-green test failed on the FENCE is also
     // the exact instant it knows WHICH test disagreed — captured here so the eventual `record()`
@@ -10594,6 +10609,15 @@ async function runMutantsOnBackend(args: {
         if (r.transportError) transportErrorRef = ref;
         return false;
       };
+      // R639: v3's refusal that follows a timeout in the same call is a cascade of that stop. The
+      // next covering test's row is one it would get were it first in the order, so the loop goes
+      // on; the refusal stays pending and ends the mutant as an error if nothing else decides it.
+      // Here and not in `classifyNonVerdictStep`: a refused row in a reproduction or a confirm
+      // (which share it) must still end the mutant.
+      if (step.cause === "runner-refused" && v.refusedAfterStop !== undefined) {
+        refusedPending ??= v.failureMessage ?? `${step.cause} running ${ref.method}`;
+        continue;
+      }
       // R206: every non-verdict ending (a lease answer, a lost ack, a group cause, our own
       // deadline, a transport error) is classified by `classifyNonVerdictStep`, the same branches
       // the warm confirmation's replay is classified by. `null` means a real outcome, decided below.
@@ -11042,6 +11066,11 @@ async function runMutantsOnBackend(args: {
       verdict = "error";
       cause = notReproduced.cause;
       failureNote = notReproduced.failureNote;
+    } else if (verdict === "survived" && refusedPending !== undefined) {
+      // R639: no test decided the mutant past the refusal, so it is that refusal, as before.
+      verdict = "error";
+      cause = "runner-refused";
+      failureNote = refusedPending;
     }
     // R198: a survivor is a mutant EVERY covering test ran against. On the group path a chunking
     // bug could skip tests and still answer all-pass; on the sequential path the set is complete

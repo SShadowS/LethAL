@@ -8577,10 +8577,10 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
           ...o.extra,
         }),
       );
-    const depPkg = (build: string) =>
+    const depPkg = (build: string, publisher = DEP.publisher) =>
       new Uint8Array(
         buildFakeAppWithEntries({
-          "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${DEP.id}" Name="${DEP.name}" Publisher="${DEP.publisher}" Version="1.0.0.0" /></Package>`,
+          "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${DEP.id}" Name="${DEP.name}" Publisher="${publisher}" Version="1.0.0.0" /></Package>`,
           "src/Dep.al": `// build ${build}`,
         }),
       );
@@ -10372,7 +10372,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
           ...o.extra,
         }).catch((e: unknown) => e);
       };
-      const world = async () => {
+      const world = async (publisher = DEP.publisher, withPackage = true) => {
         const dirs = await makeProject(BODY_B);
         await Bun.write(
           join(dirs.testDir, "app.json"),
@@ -10380,14 +10380,12 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
             name: "Tests",
             publisher: "P",
             version: "1.0.0.0",
-            dependencies: [
-              { id: DEP.id, name: DEP.name, publisher: DEP.publisher, version: "1.0.0.0" },
-            ],
+            dependencies: [{ id: DEP.id, name: DEP.name, publisher, version: "1.0.0.0" }],
           }),
         );
         const pkgDir = join(dirs.testDir, "..", "packages");
         mkdirSync(pkgDir, { recursive: true });
-        writeFileSync(join(pkgDir, "Dep.app"), depPkg("one"));
+        if (withPackage) writeFileSync(join(pkgDir, "Dep.app"), depPkg("one", publisher));
         return { dirs, pkgDir, store: new ResultsStore(":memory:") };
       };
       const firstRun = async (w: Awaited<ReturnType<typeof world>>) => {
@@ -10411,6 +10409,95 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         const out = await alRun({ ...w, extra: { resume: runId } });
         expect(out).toBeInstanceOf(TestAppRepublishedError);
         expect((out as Error).message).toContain("the test app's dependencies changed");
+        w.store.close();
+      });
+      // R435: Microsoft's packages in the folder are hashed too, not kept by declared version.
+      test("R435: a MICROSOFT .app swapped in its package folder at the same version is refused on resume", async () => {
+        const w = await world("Microsoft");
+        const runId = await firstRun(w);
+        writeFileSync(join(w.pkgDir, "Dep.app"), depPkg("two", "Microsoft"));
+        const out = await alRun({ ...w, extra: { resume: runId } });
+        expect(out).toBeInstanceOf(TestAppRepublishedError);
+        expect((out as Error).message).toContain("the test app's dependencies changed");
+        w.store.close();
+      });
+      test("R435: a MICROSOFT .app missing from the folder leaves the run unproven and the run completes", async () => {
+        const w = await world("Microsoft", false);
+        const events: RunEvent[] = [];
+        const out = await alRun({
+          ...w,
+          extra: { emit: [createEmitter([(e) => events.push(e)])] },
+        });
+        expect(out).not.toBeInstanceOf(Error);
+        const runId = (w.store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number })
+          .id;
+        expect(w.store.getRun(runId)?.testAppProven).toBe(false);
+        expect(
+          events.filter(
+            (e) =>
+              e.type === "warning" &&
+              e.code === "test-app-dependencies-unproven" &&
+              e.message.includes("Dep Lib"),
+          ),
+        ).not.toEqual([]);
+        w.store.close();
+      });
+      test("R435 (B1): a MICROSOFT dependency absent from the folder but present as a Source.zip in the backend's artifact cache is proven", async () => {
+        const w = await world("Microsoft", false);
+        const artifactDir = join(w.pkgDir, "..", "artifact-apps");
+        mkdirSync(artifactDir, { recursive: true });
+        writeFileSync(
+          join(artifactDir, "Dep Lib.Source.zip"),
+          buildFakeAppWithEntries({
+            "app.json": JSON.stringify({
+              id: DEP.id,
+              name: DEP.name,
+              publisher: "Microsoft",
+              version: "1.0.0.0",
+            }),
+          }),
+        );
+        const backend = Object.assign(
+          new StubBackend(
+            {
+              coverage: "none",
+              deploy: "none",
+              isolation: "full-reset",
+              kind: "al-runner-v3",
+              authoritative: false,
+            },
+            (mutant) => (mutant === null ? "pass" : "fail"),
+          ),
+          { dependencyPackageDirs: () => [w.pkgDir], dependencyArtifactAppsDir: () => artifactDir },
+        );
+        const out = await runSession({ backend, store: w.store, ...w.dirs, selectorIds }).catch(
+          (e: unknown) => e,
+        );
+        expect(out).not.toBeInstanceOf(Error);
+        const runId = (w.store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number })
+          .id;
+        expect(w.store.getRun(runId)?.testAppProven).toBe(true);
+        w.store.close();
+      });
+      test("R435: a backend with NO package folders keeps the declared version for Microsoft (and runs)", async () => {
+        const w = await world("Microsoft", false);
+        const backend = new StubBackend(
+          {
+            coverage: "none",
+            deploy: "none",
+            isolation: "full-reset",
+            kind: "al-runner-v3",
+            authoritative: false,
+          },
+          (mutant) => (mutant === null ? "pass" : "fail"),
+        );
+        const out = await runSession({ backend, store: w.store, ...w.dirs, selectorIds }).catch(
+          (e: unknown) => e,
+        );
+        expect(out).not.toBeInstanceOf(Error);
+        const runId = (w.store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number })
+          .id;
+        expect(w.store.getRun(runId)?.testAppProven).toBe(true);
         w.store.close();
       });
       test("an unchanged .app, rewritten later with the same bytes, carries", async () => {
@@ -21617,5 +21704,146 @@ describe("runSession — R658: a stopped unmutated run", () => {
     ]);
     expect(s.m2?.cause).toBe("confirm-stopped");
     expect(s.report.quarantined).toBeUndefined();
+  });
+});
+
+/**
+ * R639 (with R-435's timeout guard): the covering loop goes on past a `runner-refused` row that
+ * v3 flagged `refusedAfterStop`, and only that. FIVE_TESTS_AL orders T1..T5 on a cold ledger; a
+ * test is "refused" here when `answer` replaces its first mutated run.
+ */
+describe("R639: the covering loop and a refusal that follows a timeout", () => {
+  const REFUSED = "NotRun: out-of-scope: Commit [not run by al-runner v3]";
+  const refusedRow = (v: TestVerdict, flagged: boolean): TestVerdict => ({
+    ref: v.ref,
+    outcome: "error",
+    durationMs: 1,
+    failureMessage: REFUSED,
+    operation: "completed-accepted",
+    runnerRow: "runner-refused",
+    ...(flagged ? { refusedAfterStop: "T2" } : {}),
+  });
+  const session = async (
+    script: (mutant: string | null, ref: TestMethodRef, nth: number) => TestVerdict["outcome"],
+    answer?: (
+      mutant: string,
+      ref: TestMethodRef,
+      n: number,
+      v: TestVerdict,
+    ) => TestVerdict | undefined,
+  ) => {
+    const backend: ReproStub = new ReproStub(
+      CAPS_NST,
+      (mutant, ref) => script(mutant, ref, backend.nth.get(mutant ?? "") ?? 0),
+      ["IsOverBudget"],
+    );
+    backend.answer = (mutant, n, v) =>
+      mutant === null ? undefined : answer?.(mutant, v.ref, n, v);
+    const dirs = await makeProject(FIVE_TESTS_AL);
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    store.close();
+    return { backend, report };
+  };
+  const ranUnder = (b: ReproStub, mutant: string, method: string) =>
+    b.sent.filter((s) => s.mutant === mutant && s.method === method).length;
+  const m1 = (r: SessionReport) => r.mutants.find((m) => m.mutantCode === "M0001");
+
+  /** T1 is refused (flagged or not) on its first run under a mutant. */
+  const t1Refused =
+    (flagged: boolean) => (_mutant: string, ref: TestMethodRef, n: number, v: TestVerdict) =>
+      ref.method === "T1" && n === 1 ? refusedRow(v, flagged) : undefined;
+
+  test("O1: refused-after-stop T1, then T2 times out and reproduces -> timeout-killed by T2", async () => {
+    const { backend, report } = await session(
+      (mutant, ref) => (mutant !== null && ref.method === "T2" ? "timeout" : "pass"),
+      t1Refused(true),
+    );
+    expect(report.mutants.length).toBeGreaterThan(0);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("timeout-killed");
+      expect(m.killingTest).toContain("T2");
+      expect(m.killReproduced).toBe(true);
+    }
+    expect(ranUnder(backend, "M0001", "T2")).toBeGreaterThan(0);
+  });
+
+  test("O2: refused-after-stop T1, every other test passes -> error runner-refused with T1's note, never survived or group-coverage-incomplete", async () => {
+    const { report } = await session(() => "pass", t1Refused(true));
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("error");
+      expect(m.cause).toBe("runner-refused");
+      expect(m.failureNote).toBe(REFUSED);
+    }
+  });
+
+  test("O3: a refused row WITHOUT the flag still ends the mutant; the next test never runs under it", async () => {
+    const { backend, report } = await session(
+      (mutant, ref) => (mutant !== null && ref.method === "T2" ? "timeout" : "pass"),
+      t1Refused(false),
+    );
+    expect(m1(report)?.verdict).toBe("error");
+    expect(m1(report)?.cause).toBe("runner-refused");
+    expect(ranUnder(backend, "M0001", "T2")).toBe(0);
+  });
+
+  test("O4: a pending kill-not-reproduced wins over the pending refusal; a reproduced kill wins over both", async () => {
+    const once = await session(
+      (mutant, ref, n) => (mutant !== null && ref.method === "T2" && n === 2 ? "fail" : "pass"),
+      t1Refused(true),
+    );
+    expect(m1(once.report)?.verdict).toBe("error");
+    expect(m1(once.report)?.cause).toBe("kill-not-reproduced");
+    const always = await session(
+      (mutant, ref) => (mutant !== null && ref.method === "T2" ? "fail" : "pass"),
+      t1Refused(true),
+    );
+    expect(m1(always.report)?.verdict).toBe("killed");
+    expect(m1(always.report)?.killReproduced).toBe(true);
+  });
+
+  test("O5: refused-after-stop T1, then a T2 that also fails at baseline confirmation -> unstable wins", async () => {
+    // T2 passes its one baseline run, then fails every later run, the confirmation included.
+    let t2Runs = 0;
+    const { report } = await session((_mutant, ref) => {
+      if (ref.method !== "T2") return "pass";
+      t2Runs += 1;
+      return t2Runs === 1 ? "pass" : "fail";
+    }, t1Refused(true));
+    expect(m1(report)?.verdict).toBe("error");
+    expect(m1(report)?.cause).toBe("unstable");
+  });
+
+  test("O6: a flagged refusal in a kill's REPRODUCTION still ends as error runner-refused, never a kill", async () => {
+    const { backend, report } = await session(
+      (mutant, ref) => (mutant !== null && ref.method === "T1" ? "fail" : "pass"),
+      (_mutant, ref, n, v) => (ref.method === "T1" && n === 2 ? refusedRow(v, true) : undefined),
+    );
+    // The refused run IS the reproduction: T1's second run under M0001 (the first scored the kill).
+    expect(ranUnder(backend, "M0001", "T1")).toBe(2);
+    expect(m1(report)?.verdict).toBe("error");
+    expect(m1(report)?.cause).toBe("runner-refused");
+  });
+
+  test("O8: refused-after-stop T1, then T2 answers the backend's not-trusted timeout (runner-test-error) -> error, never timeout-killed", async () => {
+    const { report } = await session(
+      () => "pass",
+      (_mutant, ref, n, v) =>
+        ref.method === "T1" && n === 1
+          ? refusedRow(v, true)
+          : ref.method === "T2"
+            ? {
+                ref: v.ref,
+                outcome: "error",
+                durationMs: 1,
+                failureMessage: "a timeout after T1 refused earlier is not trusted (R-435)",
+                operation: "completed-accepted",
+                runnerRow: "runner-test-error",
+              }
+            : undefined,
+    );
+    expect(m1(report)?.verdict).toBe("error");
+    expect(m1(report)?.cause).toBe("runner-test-error");
+    expect(report.counts.timeoutKilled).toBe(0);
   });
 });
