@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, test } from "bun:test";
 import { initParser } from "@lethal/engine";
 import { testsInAlSource } from "../src/discovery";
 import { testDigestKey, testDigestsOfSources } from "../src/test-digest";
-import { buildTestAppModel } from "../src/testpage-scan";
+import { buildTestAppModel, newReachState, Scanner } from "../src/testpage-scan";
 
 beforeAll(async () => {
   await initParser();
@@ -1308,6 +1308,58 @@ describe("R697/R698: code named only in properties, and qualified object referen
         "LU.al",
         "'p1'",
         "'p2'",
+      );
+    });
+
+    test("a TableRelation with if/else alternatives folds the else table", () => {
+      moves(
+        {
+          "T.al": openPage("PS"),
+          "PS.al": pg(50420, "PS", '    SourceTable = "TS";\n'),
+          "TS.al": `table 50320 "TS"\n{\n    fields\n    {\n        field(1; F1; Code[20])\n        {\n            TableRelation = if (F1 = const('A')) "Other" else "TU";\n        }\n    }\n}\n`,
+          "TU.al": tbl(50321, "TU", '    LookupPageId = "LU";\n'),
+          "LU.al": pg(50421, "LU", '    SourceTable = "TU";\n'),
+        },
+        "LU.al",
+        "'p1'",
+        "'p2'",
+      );
+    });
+
+    test("a TableRelation name the test app lacks falls back when the app has parse damage", () => {
+      const rel = (name: string) =>
+        `table 50320 "TS"\n{\n    fields\n    {\n        field(1; F1; Code[20])\n        {\n            TableRelation = "${name}";\n        }\n    }\n}\n`;
+      const broken = `table 50330 "Broken"\n{\n    fields\n    {\n        field(1; "No."; Code[20]\n    }\n`;
+      const files = {
+        "T.al": openPage("PS"),
+        "PS.al": pg(50420, "PS", '    SourceTable = "TS";\n'),
+        "TS.al": rel("Missing"),
+        "B.al": broken,
+        "Z.al": Z,
+      };
+      // The digest already falls back on any damage, so read the scanner's own state.
+      const fallbackOf = (fs: Files): string | undefined => {
+        const model = buildTestAppModel(Object.entries(fs).map(([path, text]) => ({ path, text })));
+        const sc = new Scanner(model);
+        const st = newReachState();
+        const t = model.units.find((u) => u.id === 50100);
+        for (const p of t?.procs ?? []) sc.reach(p, st);
+        return st.fallback;
+      };
+      expect(fallbackOf(files)).toBeDefined();
+      // Control: the same damage with a relation to a declared table takes no fallback.
+      expect(fallbackOf({ ...files, "TS.al": rel("TS") })).toBeUndefined();
+    });
+
+    test("a split Report::My.Ns / .RQ reference folds", () => {
+      moves(
+        {
+          "T.al": USING + storedId("Report::My.Ns\n            .RQ"),
+          "RQ.al": `namespace My.Ns;\nreport 50601 "RQ"\n{\n    trigger OnPreReport()\n    begin\n        Message('a');\n    end;\n}\n`,
+        },
+        "RQ.al",
+        "'a'",
+        "'b'",
       );
     });
 

@@ -1183,7 +1183,7 @@ const NO_IDS: readonly string[] = Object.freeze([]);
  */
 const ID_RUN_KINDS = ["report", "page", "xmlport", "query", "table"] as const;
 const ID_RUN_REF = /^\s*(report|page|xmlport|query|database)\s*::\s*([\s\S]+?)\s*$/i;
-const KINDED_REF = /^(report|page|xmlport|query|table)::(.+)$/;
+const KINDED_REF = /^(report|page|xmlport|query|table)::([\s\S]+)$/;
 
 /**
  * `Proc.idRefs`: `Codeunit::X` names (bare), integer literals of 1000 or more, and (R684) a
@@ -1844,7 +1844,14 @@ export class Scanner {
         }
         const found = this.objectsNamed(kind, raw);
         for (const f of found) this.foldObject(f, st);
-        if (found.length === 0 && soft !== true) this.outside(kind, raw, label, st);
+        if (found.length === 0) {
+          if (soft !== true) this.outside(kind, raw, label, st);
+          else if (this.anyDamage)
+            fallBack(
+              st,
+              `${label} is not in the test app, which has parse errors that could hide it`,
+            );
+        }
       }
     }
   }
