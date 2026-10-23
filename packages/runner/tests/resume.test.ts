@@ -656,8 +656,9 @@ describe("sessionFingerprint (R47)", () => {
   // again for R565 (scheme 40, an outside report's preset writers are read from the dependency
   // packages); it was f1086a61...e634 under scheme 39. It moved again for R572 (scheme 41, a guard
   // refused as a single site renumbers its procedure's same-tuple twins); it was 7abca7bc...6109
-  // under scheme 40.
-  const PINNED = "c49d72bc1d8b52b8c9d4964c21cd080b1e5ed95cfa79933cdb0530705f30773a";
+  // under scheme 40. It moved again for R-604b (scheme 42, a same-object callee that inserts into
+  // the iterated table or touches a `var` cursor is refused); it was c49d72bc...773a under scheme 41.
+  const PINNED = "cbd5ae2c09bda02dc73267f7702dcb587418a7a0b40dea20e15d9894dcaf5fba";
   test("a run with no exclusions adds nothing to the digest", () => {
     expect(sessionFingerprint(base)).toBe(PINNED);
   });
@@ -2460,8 +2461,9 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
     // 38 is R555 (a call to a preset-exit-name writer is hang-refused). 39 is R-531 (a loop that
     // ends only by consuming its record set: its consumers are hang-refused). 40 is R565 (an
     // outside report's preset writers are read from the dependency packages). 41 is R572 (a guard
-    // refused as a single site renumbers its procedure's same-tuple twins).
-    expect(IDENTITY_SCHEME).toBe(41);
+    // refused as a single site renumbers its procedure's same-tuple twins). 42 is R-604b (a
+    // same-object callee that inserts into the iterated table or touches a `var` cursor is refused).
+    expect(IDENTITY_SCHEME).toBe(42);
     expect(report.identityScheme).toBe(IDENTITY_SCHEME);
   });
 
