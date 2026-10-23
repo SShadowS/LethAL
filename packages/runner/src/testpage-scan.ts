@@ -459,7 +459,8 @@ export interface Proc {
   /** R-371: carries an `[EventSubscriber]` attribute. */
   readonly subscriber: boolean;
   /** R-371: every `Codeunit::X` name and every integer literal of 1000 or more in the body, as
-   *  written: where a codeunit id an Integer can carry may come from (`Scanner.foldIdTargets`). */
+   *  written, and (R684) a `Report::`, `Page::`, `XmlPort::`, `Query::` or `Database::` reference as
+   *  `<kind>::<name>`: where an id an Integer can carry may come from (`Scanner.foldIdTargets`). */
   readonly idRefs: readonly string[];
   /** R-389: an attribute says the platform or another app calls it (`PLATFORM_CALLED`). */
   readonly platformCalled: boolean;
@@ -2041,11 +2042,11 @@ export class Scanner {
     if (this.lowObjectIds) for (const u of this.idRunObjects) this.foldObject(u, st);
     if (this.lowIds)
       for (const list of this.byKey.values()) for (const u of list) foldCodeunit(String(u.id));
-    const one = (r: string): void => {
+    const foldRef = (r: string): void => {
       if (!foldObjects(r) && !this.lowIds) foldCodeunit(r);
     };
-    for (const p of extra) for (const r of p.idRefs) one(r);
-    for (const p of st.procs) for (const r of p.idRefs) one(r);
+    for (const p of extra) for (const r of p.idRefs) foldRef(r);
+    for (const p of st.procs) for (const r of p.idRefs) foldRef(r);
   }
 
   /**

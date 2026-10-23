@@ -700,7 +700,9 @@ codeunit 50120 "Sub"
       });
     });
 
-    test("an object whose id is below 1000 is folded when an Integer carries a literal", () => {
+    // `idRefs` keeps no literal below 1000, so such an object is folded into every digest
+    // (`lowObjectIds`), whatever the test names; the `Id := 500` only makes the shape realistic.
+    test("an object whose id is below 1000 is folded into every digest", () => {
       const page = KINDS[1];
       expectFolded(files(page.al(500), ID, "        Id := 500;\n        DepCU.RunById(Id);\n"));
     });
