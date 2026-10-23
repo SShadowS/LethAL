@@ -117,7 +117,7 @@ describe("planArtifacts: a file never spans two batches (R231)", () => {
 });
 
 describe("parseCliConfig — --max-guards-per-batch (R44)", () => {
-  const RUN_ARGS = ["run", "--project", "p", "--tests", "t", "--backend", "al-runner"] as const;
+  const RUN_ARGS = ["run", "--project", "p", "--tests", "t", "--backend", "bcdev"] as const;
 
   test("parses a positive integer", async () => {
     const { parseCliConfig } = await import("../src/cli");

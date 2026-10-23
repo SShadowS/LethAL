@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
-import { defaultAlRunnerCacheDir, defaultAlRunnerSecondaryCacheDir } from "../src/al-runner-cache";
 import { homeDir } from "../src/home";
+import { defaultQuarantineDir } from "../src/orchestrator";
 import { walkFilesSync } from "../src/walk";
 
 /** R631: never a recursive `readdir`, which follows a link cycle in a lane's scratch dir forever. */
@@ -34,17 +34,11 @@ test("unit tests run with the real home directory hidden (R264)", () => {
   if (process.platform === "win32") expect(same(homedir())).toBe(same(fake));
   expect(same(process.env.USERPROFILE ?? "")).toBe(same(fake));
   expect(same(process.env.HOME ?? "")).toBe(same(fake));
-  expect(same(defaultAlRunnerCacheDir())).toBe(
-    same(join(fake, ".local", "share", "al-runner", "artifacts")),
-  );
-  expect(same(defaultAlRunnerSecondaryCacheDir())).toBe(same(join(fake, ".cache", "al-runner")));
-  // The two real roots, named, so the failure message says which one a regression reaches.
-  expect(same(defaultAlRunnerCacheDir())).not.toBe(
-    same(join(real, ".local", "share", "al-runner", "artifacts")),
-  );
-  expect(same(defaultAlRunnerSecondaryCacheDir())).not.toBe(
-    same(join(real, ".cache", "al-runner")),
-  );
+  // R654 S3: re-pointed from the retired .NET al-runner's two cache roots to the quarantine dir,
+  // another default under the home directory.
+  expect(same(defaultQuarantineDir())).toBe(same(join(fake, ".lethal", "quarantine")));
+  // The real root, named, so the failure message says which one a regression reaches.
+  expect(same(defaultQuarantineDir())).not.toBe(same(join(real, ".lethal", "quarantine")));
 });
 
 test("R359: a child process sees the fake home and the private temp folder, whichever spawn form", async () => {

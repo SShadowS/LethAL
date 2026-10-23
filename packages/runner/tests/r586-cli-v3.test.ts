@@ -1,5 +1,5 @@
 // R586 T16 and T17 (plan r2 §9): the al-runner-v3 CLI surface, its config section and its
-// refusals by name, each with the direction that must NOT fire (v2 keeps its server and resource legs).
+// refusals by name, each with the direction that must NOT fire.
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -9,7 +9,7 @@ import {
   refuseV3Platform,
   validateAlRunnerV3Config,
 } from "../src/al-runner-v3-config";
-import { parseCliConfig, validateAlRunnerConfig } from "../src/cli";
+import { parseCliConfig } from "../src/cli";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
 
 const ok = { packagesDir: "/deps", bcVersion: "28.0.46665.47126" };
@@ -28,23 +28,13 @@ describe("T16: refused by name for v3, and not for v2", () => {
     const c = parseCliConfig(["run", ...base]);
     expect(c.mode === "run" && c.backendKind).toBe("al-runner-v3");
   });
-  test("--workers > 1 is refused for v3, not for v2", () => {
+  // R654 S3: the "not for v2" direction went with the .NET al-runner; the direction that must not
+  // fire is now v3 at one worker.
+  test("--workers > 1 is refused for v3, and --workers 1 is not", () => {
     expect(() => parseCliConfig(["run", ...base, "--workers", "2"])).toThrow(
       LINUX ? /al-runner-v3-workers-refused/ : PLATFORM_REFUSED,
     );
-    expect(() =>
-      parseCliConfig([
-        "run",
-        "--project",
-        "P",
-        "--tests",
-        "T",
-        "--backend",
-        "al-runner",
-        "--workers",
-        "2",
-      ]),
-    ).not.toThrow();
+    if (LINUX) expect(() => parseCliConfig(["run", ...base, "--workers", "1"])).not.toThrow();
   });
   test("--keep-env is refused for v3 (no environment)", () => {
     expect(() => parseCliConfig(["run", ...base, "--keep-env"])).toThrow(
@@ -55,17 +45,13 @@ describe("T16: refused by name for v3, and not for v2", () => {
     expect(() => refuseV3Platform("win32")).toThrow(/al-runner-v3-windows-unsupported/);
     expect(() => refuseV3Platform("linux")).not.toThrow();
   });
-  test("serverMode and selectorMode in the v3 section are refused by name; v2's section still takes them", () => {
+  test("serverMode and selectorMode in the v3 section are refused by name", () => {
     expect(() => validateAlRunnerV3Config({ ...ok, serverMode: true })).toThrow(
       /al-runner-v3-config-refused/,
     );
     expect(() => validateAlRunnerV3Config({ ...ok, selectorMode: "resource" })).toThrow(
       /al-runner-v3-resource-selector-refused/,
     );
-    expect(
-      validateAlRunnerConfig({ alRunnerPath: "/a", serverMode: true, selectorMode: "resource" })
-        .serverMode,
-    ).toBe(true);
   });
   test("an unknown key is refused; the defaults are the pinned path and coverage al-runner", () => {
     expect(() => validateAlRunnerV3Config({ ...ok, servermode: true })).toThrow(/unknown key/);

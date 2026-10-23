@@ -23,10 +23,6 @@ import {
 } from "../src/discovery";
 import type { RunEvent } from "../src/events";
 import { type SessionConfig, runSession } from "../src/orchestrator";
-import {
-  AL_RUNNER_PREDEFINED_SYMBOLS_V2_12_0,
-  type AlRunnerPredefinedProbe,
-} from "../src/preprocessor-symbols";
 import { sessionFingerprint } from "../src/resume";
 import { ResultsStore } from "../src/store";
 import {
@@ -803,15 +799,16 @@ class StubBackend implements ExecutionBackend {
       coverage: "procedure",
       deploy: "publish",
       isolation: "session",
-      kind: this.authoritative ? "bcdev" : "al-runner",
+      // R654: the local runner is al-runner-v3 (was the retired .NET al-runner).
+      kind: this.authoritative ? "bcdev" : "al-runner-v3",
       authoritative: this.authoritative,
     };
   }
   async status(): Promise<BackendStatus> {
     return { ok: true, details: "stub" };
   }
-  measurePredefinedSymbols(): Promise<AlRunnerPredefinedProbe> {
-    return Promise.resolve({ symbols: [...AL_RUNNER_PREDEFINED_SYMBOLS_V2_12_0].sort() });
+  async runnerBuild(): Promise<{ version: string; binarySha256: string }> {
+    return { version: "al-runner 3.0.0-test", binarySha256: "b".repeat(64) };
   }
   async deploy(): Promise<null> {
     return null;
@@ -883,8 +880,7 @@ const session = (
     ...extra,
   });
 
-const PREDEFINED = [...AL_RUNNER_PREDEFINED_SYMBOLS_V2_12_0].sort();
-const base = (root: string, backend: "al-runner" | "bcdev") =>
+const base = (root: string, backend: "al-runner-v3" | "bcdev") =>
   ({
     projectDir: join(root, "app"),
     testDir: join(root, "tests"),
@@ -893,18 +889,17 @@ const base = (root: string, backend: "al-runner" | "bcdev") =>
     identityScheme: IDENTITY_SCHEME,
     coverageMode: "procedure",
     selectorIds: { selectorId: 50147, controlId: 50148, tableId: 50149 },
-    ...(backend === "al-runner" ? { preprocessorSymbols: PREDEFINED } : {}),
   }) as const;
 
 describe("R420: runSession", () => {
-  test("S4 on al-runner: T4 runs, and the fingerprint carries tree-v1", async () => {
+  test("S4 on al-runner-v3: T4 runs, and the fingerprint carries tree-v1", async () => {
     const root = await project("S4");
     const store = new ResultsStore(":memory:");
     const backend = new StubBackend(false);
     await session(root, store, backend);
     expect([...new Set(backend.baselineMethods)].sort()).toEqual(["PlainTest", "T4"]);
     expect(store.getRun(1)?.configFingerprint).toBe(
-      sessionFingerprint({ ...base(root, "al-runner"), testDiscovery: "tree-v1" }),
+      sessionFingerprint({ ...base(root, "al-runner-v3"), testDiscovery: "tree-v1" }),
     );
   });
 
@@ -919,7 +914,7 @@ describe("R420: runSession", () => {
     );
   });
 
-  test("S2 on al-runner: compiled out AND tree-found, so arms-v1+tree-v1", async () => {
+  test("S2 on al-runner-v3: compiled out AND tree-found, so arms-v1+tree-v1", async () => {
     const root = await project("S2");
     const store = new ResultsStore(":memory:");
     const backend = new StubBackend(false);
@@ -927,8 +922,7 @@ describe("R420: runSession", () => {
     expect([...new Set(backend.baselineMethods)]).toEqual(["PlainTest"]);
     expect(store.getRun(1)?.configFingerprint).toBe(
       sessionFingerprint({
-        ...base(root, "al-runner"),
-        testBuildSymbols: PREDEFINED,
+        ...base(root, "al-runner-v3"),
         testDiscovery: "arms-v1+tree-v1",
       }),
     );
@@ -936,7 +930,7 @@ describe("R420: runSession", () => {
 
   test("a project the regex reads in full keeps its fingerprint byte for byte", async () => {
     for (const [authoritative, name] of [
-      [false, "al-runner"],
+      [false, "al-runner-v3"],
       [true, "bcdev"],
     ] as const) {
       const root = await project("S8");

@@ -911,6 +911,27 @@ describe("lethal campaign freeze | anchors | compare", () => {
     TEST_TIMEOUT_MS,
   );
 
+  // R654 F3: a report of the retired .NET al-runner is refused by name by anchors and compare.
+  // The other direction (a bcdev report is read) is every passing anchors/compare test here.
+  test(
+    "R654: anchors and compare refuse a backend al-runner report as al-runner-v2-retired",
+    async () => {
+      const v2 = join(dirname(reportPath), "report-v2.json");
+      await writeFile(v2, JSON.stringify({ ...TWO_MUTANTS, backend: "al-runner" }));
+      const text = `al-runner-v2-retired: ${v2} is a report of the retired .NET al-runner (R654); it is not read`;
+      await expect(
+        runCampaignAnchors({ manifestPath, stage: "stage-ok", reportPath: v2 }),
+      ).rejects.toThrow(text);
+      await expect(
+        compareCampaignStage({ manifestPath, stage: "stage-cmp", reportPath: v2 }),
+      ).rejects.toThrow(text);
+      await expect(
+        runCampaignAnchors({ manifestPath, stage: "stage-ok", reportPath }),
+      ).resolves.toBe(0);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
   // ---- compare ------------------------------------------------------------------------------
 
   test(

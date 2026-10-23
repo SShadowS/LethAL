@@ -18,6 +18,7 @@
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isV3RefusalText } from "./al-runner-rows";
 import {
   AlRunnerServer,
   type ServerSpawnFn,
@@ -29,6 +30,23 @@ import { type V3Row, V3_REFUSAL_PREFIX, decodeV3Rows } from "./al-runner-v3-back
 import { baseAppJson, probeV3PredefinedSymbols } from "./al-runner-v3-probe";
 import { AlcCompileError, ArtifactCompiler, type ArtifactIo, defaultArtifactIo } from "./artifact";
 import { type SpawnFn, defaultSpawn } from "./publisher";
+
+/**
+ * R675: the start each leg-C probe message must have, from LethAL's own probe AL (`Error('boom %1',
+ * 5)`; `Assert.AreEqual(1, 2, ...)`). R657 measured v3 writing no text before them; the fact
+ * `message-has-no-type-prefix` notices a build that adds ANY text there, of any shape.
+ */
+const PROBE_MESSAGE_START = { Fails: "boom 5", AssertAreEqual: "Assert.AreEqual failed." } as const;
+
+/** R667: a contract fact: `gate-fail` in leg C, a refusal in a session. */
+export const MESSAGE_PREFIX_FACT = "message-has-no-type-prefix";
+
+/**
+ * R667 (review r1), R672, R675 (plan §1f): why a prefix refuses a session, not only skews the R553
+ * screen.
+ */
+export const MESSAGE_PREFIX_REASON =
+  "text before, or in place of, the expected start of v3's failure messages (a `<Type>:` prefix of any shape) would turn v3's timeouts into errors (`V3_TIMEOUT_MESSAGE` is anchored), close the serve daemon on every refusal (R612's keep list is anchored), and skew the R553 assertion screen. K1(a) and the serve-keep rule read v3's refusal marker anywhere in a message (R675), so a prefix cannot turn a refusal into a kill; the session still refuses, because v3 no longer writes what was measured";
 
 export type V3ContractVerdict = "matches" | "diverged" | "unmeasurable";
 /**
@@ -77,7 +95,7 @@ function refusalRowShape(c: {
   const m = h.message ?? "";
   if (h.status !== "fail" || h.notRun || c.exitCode !== 1) return "diverged";
   if (m === BC_HTTP_INTERNAL_TEXT) return "gone";
-  return m.startsWith(V3_REFUSAL_PREFIX) ? "diverged" : "unlike-bc";
+  return isV3RefusalText(m) ? "diverged" : "unlike-bc";
 }
 
 export interface V3Fact {
@@ -556,6 +574,34 @@ codeunit 50674 "Serve NoCallee"
 }
 `;
 
+/** R667: one `Assert.AreEqual` failure, in its own tests app (only it depends on Library Assert). */
+const ASSERT_TESTS_AL = `codeunit 50661 "Probe Assert"
+{
+    Subtype = Test;
+
+    var
+        Assert: Codeunit "Library Assert";
+
+    [Test]
+    procedure AssertAreEqual()
+    begin
+        Assert.AreEqual(1, 2, 'R667 values differ');
+    end;
+}
+`;
+
+/** Microsoft's Library Assert, as R657's probe declared it. */
+const LIBRARY_ASSERT_DEP = {
+  id: "dd0be2ea-f733-4d65-bb34-a28f4624fb14",
+  name: "Library Assert",
+  publisher: "Microsoft",
+  version: "28.0.0.0",
+};
+
+/** R667: a plain failed row's message, or `undefined` when the row is not a plain `fail`. */
+const plainFailMessage = (r: V3Row | undefined): string | undefined =>
+  r !== undefined && r.status === "fail" && r.notRun !== true ? r.message : undefined;
+
 /** R612: each `V3_SERVE_SAFE_REFUSALS` entry and the serve row that must match it. */
 const SERVE_CASES: ReadonlyArray<readonly [string, string]> = [
   ["http", "Codeunit50670.HttpGet"],
@@ -649,6 +695,12 @@ export interface V3ProbeEnv {
   readonly serveSpawn?: ServerSpawnFn;
   /** R612 M-2: `.gated`'s warn-fact readings (what the gate's leg C read), shown by a session. */
   readonly gatedWarnFacts?: Readonly<Record<string, string>>;
+  /**
+   * R667: Microsoft's Library Assert `.app`, passed as `--dep` to the `Assert.AreEqual` half of
+   * `message-has-no-type-prefix`. Leg C only: a session's packages need not hold it, so a session
+   * (`gateOnlyTrusted`) reads the plain `Error()` half alone.
+   */
+  readonly libraryAssertApp?: string;
 }
 
 interface Call {
@@ -1111,11 +1163,75 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
           ? "unmeasurable"
           : c?.notRun === true
             ? "defect-present"
-            : c !== undefined && !(c.message ?? "").startsWith(V3_REFUSAL_PREFIX)
+            : c !== undefined && !isV3RefusalText(c.message)
               ? "gone"
               : "diverged",
         "CommitCall under --isolation test is notRun",
         rowsText(commit, "CommitCall"),
+      ),
+    );
+    // message-has-no-type-prefix (R667): R657 measured v3's failure `message` with no `<Type>: `
+    // prefix, so v3 keeps bcdev's assertion-screen rule. A build that adds one (v2's shape) would
+    // skew the screen (R553); read a plain Error() (Fails, on the main call) and an Assert.AreEqual.
+    const plain = plainFailMessage(rowOf(main, "Fails"));
+    let assertMsg: string | undefined;
+    let assertMeasured: string;
+    if (env.libraryAssertApp !== undefined) {
+      const at = join(root, "assert-tests");
+      await mkdir(join(at, "src"), { recursive: true });
+      await writeFile(
+        join(at, "app.json"),
+        baseAppJson({
+          id: TESTS_ID,
+          name: "LethAL R667 Assert Probe Tests",
+          idFrom: 50650,
+          idTo: 50699,
+          dependencies: [LIBRARY_ASSERT_DEP],
+        }),
+      );
+      await writeFile(join(at, "src", "Assert.Codeunit.al"), ASSERT_TESTS_AL);
+      const ac = await call(["--dep", env.libraryAssertApp, "--codeunit", "50661"], {
+        tests: at,
+        codeunit: 50661,
+      });
+      assertMsg = plainFailMessage(onlyRow(ac, "AssertAreEqual"));
+      assertMeasured = rowsText(ac, "AssertAreEqual");
+    } else {
+      assertMeasured =
+        env.gateOnlyTrusted !== undefined
+          ? `Assert half not re-measured in a session (gate-only); leg C reads it only from r12 on, so a .gated recorded before r12 never read it (${env.gateOnlyTrusted})`
+          : "no Library Assert app";
+    }
+    // A session without the app trusts the gate for the Assert half; leg C without it cannot read it.
+    const msgs: [string | undefined, string][] =
+      env.libraryAssertApp === undefined && env.gateOnlyTrusted !== undefined
+        ? [[plain, PROBE_MESSAGE_START.Fails]]
+        : [
+            [plain, PROBE_MESSAGE_START.Fails],
+            [assertMsg, PROBE_MESSAGE_START.AssertAreEqual],
+          ];
+    // R675 (review r1 nit A): `prefix` when the expected start comes later, `reworded` when absent.
+    const seen = msgs
+      .map(([m, start]) => {
+        if (m === undefined || m.startsWith(start)) return undefined;
+        const at = m.indexOf(start);
+        return at > 0
+          ? `prefix ${JSON.stringify(m.slice(0, at))}`
+          : `reworded ${JSON.stringify(m.slice(0, 60))}`;
+      })
+      .find((p) => p !== undefined);
+    facts.push(
+      fact(
+        MESSAGE_PREFIX_FACT,
+        "contract",
+        seen !== undefined
+          ? "diverged"
+          : msgs.every(([m]) => m !== undefined)
+            ? "matches"
+            : "unmeasurable",
+        "Fails (a plain Error()) and AssertAreEqual are plain fails whose messages start exactly with `boom 5` and `Assert.AreEqual failed.` (any text before them is a prefix; R675)",
+        // The reading first: a session's refusal names it in its `measured:` line (`v3ContractRefusals`).
+        `${seen !== undefined ? `${seen}; ` : ""}Fails ${JSON.stringify(plain ?? null)}; ${assertMeasured}`,
       ),
     );
     // serve-keep-reasons (R612): GATE-ONLY, like timeout-is-cpu. M-2: a gate passes whatever this
@@ -1370,7 +1486,7 @@ export function v3ContractRefusals(r: V3ContractResult, s: V3SessionKind = {}): 
       )
       .map(
         (f) =>
-          `[lethal] al-runner-v3 contract ${f.verdict.toUpperCase()} — ${f.fact}\n    expected: ${f.expected}\n    measured: ${f.measured.slice(0, 600)}\n    Re-measure (plan §8) before changing code; the pinned build is in .gated (R586).`,
+          `[lethal] al-runner-v3 contract ${f.verdict.toUpperCase()} — ${f.fact}\n    expected: ${f.expected}\n    measured: ${f.measured.slice(0, 600)}${f.fact === MESSAGE_PREFIX_FACT && f.verdict === "diverged" ? `\n    why: ${MESSAGE_PREFIX_REASON}` : ""}\n    Re-measure (plan §8) before changing code; the pinned build is in .gated (R586).`,
       )
   );
 }

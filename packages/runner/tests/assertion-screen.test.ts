@@ -4,11 +4,9 @@ import { join } from "node:path";
 import type { MutantManifestEntry } from "@lethal/schemata";
 import {
   ASSERTION_SCREEN_DISCRIMINATION_NOTES,
-  ASSERTION_SCREEN_VACUOUS_AL_RUNNER_NOTE,
   killMessageOf,
   looksLikeAssertionFailure,
   looksLikeRunnerRefusal,
-  screenMessageOf,
 } from "../src/assertion-screen";
 import type { BackendCapabilities } from "../src/backend";
 import { renderConsole } from "../src/report";
@@ -66,13 +64,6 @@ function kill(id: string, failure?: string): SessionOutcome {
   };
 }
 
-/** R553: the al-runner backend's identity, as `AlRunnerBackend.capabilities()` declares it. */
-const AL_RUNNER_CAPS: BackendCapabilities = {
-  ...CAPS,
-  coverage: "none",
-  authoritative: false,
-  kind: "al-runner",
-};
 const BCDEV_CAPS: BackendCapabilities = { ...CAPS, kind: "bcdev" };
 
 function build(outcomes: readonly SessionOutcome[], caps: BackendCapabilities = CAPS) {
@@ -228,80 +219,21 @@ describe("SessionReport.assertionScreen (R121)", () => {
 });
 
 /**
- * R553: al-runner writes every failure as `{Type.Name}: {Message}` (R101(f)), so the `Assert.`
- * prefix the rule looks for sits behind an exception type name and the screen flagged every kill.
- * The screen now reads past ONE leading `...Exception: ` on the al-runner backend only, keyed on the
- * backend's own identity (`caps.kind`), never on `authoritative` and never on the text. All texts
- * here are synthetic.
+ * R654 retired the .NET al-runner and with it R553's arm that read past its `{Type}Exception: `
+ * prefix. One rule now reads every backend's text unchanged. All texts here are synthetic.
  */
-describe("R553: the screen reads past al-runner's exception-type prefix", () => {
+describe("R654: one screen rule for bcdev and al-runner-v3", () => {
   const CS = "\nA(CodeUnit 1).P line 3";
   const P_ASSERT = `NavNCLDialogException: Assert.AreEqual failed. Expected:<1> (Integer). Actual:<2>.${CS}`;
   const P_BARE = `NavNCLDialogException: expected 2 rows, got 5${CS}`;
-  const P_DUPKEY = `NavCSideDuplicateKeyException: The record already exists.${CS}`;
   const BARE = `expected 2 rows, got 5${CS}`;
-  const WRAPPED =
-    "An OnBeforeTestMethodRun subscriber (codeunit 50100) failed, so the test did not run: NavNCLDialogException: Assert.IsTrue failed.";
-
-  function timeoutKill(id: string, failure: string): SessionOutcome {
-    return {
-      mutant: entry(id),
-      verdict: "timeout-killed",
-      batchIndex: 0,
-      killingTestFailure: failure,
-    };
-  }
-
-  test("1. a prefixed assertion is read as an assertion on al-runner", () => {
-    const r = build([kill("M0001", P_ASSERT), kill("M0002", P_BARE)], AL_RUNNER_CAPS);
-    expect(r.assertionScreen?.flaggedMutants).toEqual(["0/M0002"]);
-    expect(r.assertionScreen?.discrimination).toBe("partial");
-  });
-
-  test("2. a prefixed NON-assertion is still flagged", () => {
-    const r = build([kill("M0001", P_DUPKEY), kill("M0002", P_ASSERT)], AL_RUNNER_CAPS);
-    expect(r.assertionScreen?.flaggedMutants).toEqual(["0/M0001"]);
-  });
-
-  test("2. the prefix is anchored: a type name later in the text is not stripped (I2)", () => {
-    expect(screenMessageOf(WRAPPED, "al-runner")).toBe(killMessageOf(WRAPPED));
-  });
-
-  test("2. only a name ending in `Exception` is stripped", () => {
-    const r = build([kill("M0001", `Total: Assert.AreEqual failed.${CS}`)], AL_RUNNER_CAPS);
-    expect(r.assertionScreen?.flaggedMutants).toEqual(["0/M0001"]);
-  });
-
-  test("2. the prefix is stripped ONCE", () => {
-    const r = build(
-      [kill("M0001", `XException: YException: Assert.AreEqual failed.${CS}`)],
-      AL_RUNNER_CAPS,
-    );
-    expect(r.assertionScreen?.flaggedMutants).toEqual(["0/M0001"]);
-  });
-
-  test("2. a namespaced type name is stripped too", () => {
-    expect(
-      screenMessageOf(`System.InvalidOperationException: Assert.IsTrue failed.${CS}`, "al-runner"),
-    ).toBe("Assert.IsTrue failed.");
-  });
 
   test("3. bcdev text is unchanged, whatever it starts with", () => {
     const x = `NavNCLDialogException: Assert.AreEqual failed.${CS}`;
-    expect(screenMessageOf(x, "bcdev")).toBe(killMessageOf(x));
     for (const caps of [CAPS, BCDEV_CAPS]) {
       const r = build([kill("M0001", x), kill("M0002", ASSERTION)], caps);
       expect(r.assertionScreen?.flaggedMutants).toEqual(["0/M0001"]);
     }
-  });
-
-  test("ruling: an al-runner backend forced authoritative still strips", () => {
-    const r = build([kill("M0001", P_ASSERT), kill("M0002", P_BARE)], {
-      ...AL_RUNNER_CAPS,
-      authoritative: true,
-    });
-    expect(r.assertionScreen?.flaggedMutants).toEqual(["0/M0002"]);
-    expect(r.backend).toBe("al-runner");
   });
 
   test("ruling: a bcdev backend never strips, even when not authoritative", () => {
@@ -314,26 +246,11 @@ describe("R553: the screen reads past al-runner's exception-type prefix", () => 
   });
 
   test("4. the stored failure text is never changed", () => {
-    const r = build([kill("M0001", P_ASSERT), kill("M0002", P_BARE)], AL_RUNNER_CAPS);
+    const r = build([kill("M0001", P_ASSERT), kill("M0002", P_BARE)], BCDEV_CAPS);
     expect(r.mutants.map((m) => m.killingTestFailure)).toEqual([P_ASSERT, P_BARE]);
   });
 
-  test("5a. al-runner, a killed kill without the prefix: the backend note", () => {
-    const r = build([kill("M0001", BARE), kill("M0002", OVERFLOW)], AL_RUNNER_CAPS);
-    expect(r.assertionScreen?.discrimination).toBe("vacuous");
-    expect(r.assertionScreen?.discriminationNote).toBe(ASSERTION_SCREEN_VACUOUS_AL_RUNNER_NOTE);
-    expect(r.assertionScreen?.discriminationNote).toContain("al-runner");
-  });
-
-  test("5b. al-runner, every killed kill prefixed with bare text: the standard note", () => {
-    const r = build([kill("M0001", P_BARE), kill("M0002", P_DUPKEY)], AL_RUNNER_CAPS);
-    expect(r.assertionScreen?.discrimination).toBe("vacuous");
-    expect(r.assertionScreen?.discriminationNote).toBe(
-      ASSERTION_SCREEN_DISCRIMINATION_NOTES.vacuous,
-    );
-  });
-
-  test("5c. bcdev, the same texts as 5a: the standard note", () => {
+  test("5c. bcdev, a plain vacuous run: the standard note", () => {
     const r = build([kill("M0001", BARE), kill("M0002", OVERFLOW)], BCDEV_CAPS);
     expect(r.assertionScreen?.discrimination).toBe("vacuous");
     expect(r.assertionScreen?.discriminationNote).toBe(
@@ -341,58 +258,55 @@ describe("R553: the screen reads past al-runner's exception-type prefix", () => 
     );
   });
 
-  test("R586: al-runner-v3 is on the bcdev branch: no al-runner note on a plain kill, and `XException: ` is NOT stripped", () => {
-    const V3_CAPS: BackendCapabilities = { ...CAPS, kind: "al-runner-v3" };
-    // Same texts as 5a: v3 gets the standard note, never the al-runner "no prefix" one.
+  const V3_CAPS: BackendCapabilities = { ...CAPS, kind: "al-runner-v3" };
+
+  test("R586/R657: al-runner-v3 reads like bcdev: the standard note on a plain kill, and `XException: ` is NOT stripped", () => {
+    // R657 measured v3 writing no prefix at all.
     const plain = build([kill("M0001", BARE), kill("M0002", OVERFLOW)], V3_CAPS);
     expect(plain.backend).toBe("al-runner-v3");
+    expect(plain.assertionScreen?.discrimination).toBe("vacuous");
     expect(plain.assertionScreen?.discriminationNote).toBe(
       ASSERTION_SCREEN_DISCRIMINATION_NOTES.vacuous,
     );
-    // A prefixed assertion is read WITHOUT stripping, so it is flagged (on al-runner it is not, test 1).
+    // A prefixed assertion is read WITHOUT stripping, so it is flagged.
     const prefixed = build([kill("M0001", P_ASSERT), kill("M0002", ASSERTION)], V3_CAPS);
     expect(prefixed.assertionScreen?.flaggedMutants).toEqual(["0/M0001"]);
   });
 
-  test("5d. a timeout kill's unprefixed text does not pick the backend note (I3)", () => {
-    const r = build(
-      [
-        kill("M0001", P_BARE),
-        kill("M0002", P_DUPKEY),
-        timeoutKill("M0003", "Test exceeded 5s timeout."),
-      ],
-      AL_RUNNER_CAPS,
-    );
-    expect(r.assertionScreen?.discrimination).toBe("vacuous");
-    expect(r.assertionScreen?.flagged).toBe(3);
-    expect(r.assertionScreen?.discriminationNote).toBe(
-      ASSERTION_SCREEN_DISCRIMINATION_NOTES.vacuous,
-    );
-  });
-
-  test("5e. ONE unprefixed killed kill among prefixed ones picks the backend note (some, not every)", () => {
-    const r = build(
-      [kill("M0001", P_BARE), kill("M0002", BARE), kill("M0003", P_DUPKEY)],
-      AL_RUNNER_CAPS,
-    );
-    expect(r.assertionScreen?.discrimination).toBe("vacuous");
-    expect(r.assertionScreen?.discriminationNote).toBe(ASSERTION_SCREEN_VACUOUS_AL_RUNNER_NOTE);
-  });
-
-  test("6. al-runner's out-of-scope refusal is still counted under al-runner caps", () => {
-    const r = build(
-      [
-        kill(
-          "M0001",
-          "InvalidOperationException: out-of-scope: HttpClient.Get - external-http - see docs/scope.md#external-http",
-        ),
-        kill("M0002", P_ASSERT),
-      ],
-      AL_RUNNER_CAPS,
-    );
-    expect(r.assertionScreen?.flaggedMutants).toEqual(["0/M0001"]);
-    expect(r.assertionScreen?.runnerRefusals).toBe(1);
-    expect(r.assertionScreen?.runnerRefusalMutants).toEqual(["0/M0001"]);
+  /**
+   * R657: the seven failure messages al-runner v3 wrote for an invented probe, byte-equal on alpha.2
+   * and edge 57f1e4f98, one-shot and serve (`/coord/handoff/R-657/measure.md` §3). v3 stores the
+   * message alone, with no callstack and no `<Type>: ` prefix.
+   */
+  test("R657: v3's measured message shapes, read with bcdev's rule", () => {
+    const shapes = [
+      kill("M0001", "R657 plain error text"),
+      kill(
+        "M0002",
+        "Assert.AreEqual failed. Expected:<1> (Integer). Actual:<2> (Integer). R657 values differ.",
+      ),
+      kill("M0003", "Assert.IsTrue failed. R657 should be true"),
+      kill(
+        "M0004",
+        "Description must have a value in R657 Widget: No.=W1. It cannot be zero or empty.",
+      ),
+      kill(
+        "M0005",
+        "Assert.ExpectedError failed. Expected: R657 other text. Actual: R657 actual text.",
+      ),
+      kill("M0006", "An error was expected inside an ASSERTERROR statement."),
+      kill("M0007", "Attempted to divide by zero."),
+    ];
+    const flagged = ["0/M0001", "0/M0004", "0/M0006", "0/M0007"];
+    for (const caps of [V3_CAPS, BCDEV_CAPS]) {
+      const r = build(shapes, caps);
+      expect(r.assertionScreen?.flaggedMutants).toEqual(flagged);
+      expect(r.assertionScreen?.discrimination).toBe("partial");
+      expect(r.assertionScreen?.discriminationNote).toBe(
+        ASSERTION_SCREEN_DISCRIMINATION_NOTES.partial,
+      );
+      expect(r.assertionScreen?.runnerRefusals).toBe(0);
+    }
   });
 });
 

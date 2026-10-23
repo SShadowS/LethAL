@@ -165,6 +165,8 @@ export interface FoldedReport {
   /** R-236c: baseline verdicts classified `tests-testpage-refused`, plus the session scan's
    *  `tests-testpage-refused` event; see `SessionReport.testPageRefused`. */
   readonly testPageRefusedTests?: readonly string[];
+  /** R658: baseline verdicts classified `baseline-test-stopped`; see `SessionReport.baselineStopped`. */
+  readonly baselineStopped?: { readonly tests: readonly string[]; readonly budgetMs: number };
   readonly runnerDisagreementTests?: readonly string[];
   /** R403 phase C: from the `tests-discovered` event, each only when non-empty. */
   readonly testBuildSymbols?: readonly string[];
@@ -175,7 +177,6 @@ export interface FoldedReport {
     readonly runId: number;
     readonly carriedMutants: number;
     readonly skippedStranded: number;
-    readonly carryRefused?: string;
   };
   readonly timings: {
     readonly totalMs: number;
@@ -210,19 +211,6 @@ export interface FoldedReport {
   readonly artifacts: readonly BatchArtifact[];
   readonly quarantined?: { readonly reason: string };
   readonly permissionCanary?: PermissionCanaryResult;
-  /** R129 — the BC artifact build al-runner announced it executed against, when it announced one.
-   *  Absent on every other backend, and absent on an al-runner session whose runs said nothing. */
-  readonly alRunnerBcBuild?: { readonly build: string; readonly announcement: string };
-  /** R147 — the Microsoft platform-app directory this session pinned, when it pinned one. Absent on
-   *  every other backend, and absent on an al-runner session that declined to pin (which emits a
-   *  named `al-runner-platform-apps-unpinned` warning carrying the reason instead). */
-  readonly alRunnerPlatformAppsDir?: string;
-  /** R558 — the test selector R551's probe chose for this session's one-shot al-runner runs. Absent
-   *  on every other backend and on `--server`, where the probe is not-applicable. */
-  readonly alRunnerTestSelector?: {
-    readonly selector: "exact" | "substring-with-excludes";
-    readonly reason?: string;
-  };
 }
 
 interface BatchInvalidation {
@@ -301,6 +289,17 @@ export function testMethodsOf(
     });
 }
 
+/** R658: the producer writes `stoppedBudgetMs` with every stopped test, so a stream without it
+ *  is corrupt. */
+function requireStoppedBudget(ms: number | undefined): number {
+  if (ms === undefined) {
+    throw new Error(
+      "foldEvents: a baseline-batch-finished verdict is classified baseline-test-stopped, but no event carries stoppedBudgetMs (R658). The producer writes both.",
+    );
+  }
+  return ms;
+}
+
 export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): FoldedReport {
   let sawMutationSetGenerated = false;
   let sawBaselineBatchFinished = false;
@@ -330,6 +329,8 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   const permissionsRefusedTests = new Set<string>();
   const testPageUnsupportedTests = new Set<string>();
   const testPageRefusedTests = new Set<string>();
+  const baselineStoppedTests = new Set<string>();
+  let stoppedBudgetMs: number | undefined;
   const runnerDisagreementTests = new Set<string>();
   let testBuildSymbols: readonly string[] = [];
   let excludedTests: readonly ExcludedTestRecord[] = [];
@@ -393,13 +394,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
 
   let quarantinedReason: string | undefined;
   let permissionCanary: PermissionCanaryResult | undefined;
-  let alRunnerBcBuild: { build: string; announcement: string } | undefined;
-  let alRunnerPlatformAppsDir: string | undefined;
-  let alRunnerTestSelector:
-    | { selector: "exact" | "substring-with-excludes"; reason?: string }
-    | undefined;
   let resumeFromRunId: number | undefined;
-  let resumeCarryRefused: string | undefined;
 
   const outcomes: SessionOutcome[] = [];
   const invalidations: BatchInvalidation[] = [];
@@ -450,6 +445,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         break;
       case "baseline-batch-finished":
         sawBaselineBatchFinished = true;
+        if (e.stoppedBudgetMs !== undefined) stoppedBudgetMs = e.stoppedBudgetMs;
         // R106: a batch with at least one GREEN test is a batch that reaches the coverage filter.
         // A batch whose baseline is entirely red does not — `runSession` records every mutant
         // "no green baseline tests" and `continue`s BEFORE step 5 — so it owes no `coverage-split`
@@ -473,6 +469,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
           if (v.classification.includes("tests-testpage-refused")) {
             testPageRefusedTests.add(v.name);
           }
+          if (v.classification.includes("baseline-test-stopped")) baselineStoppedTests.add(v.name);
           if (v.durationMs !== undefined) {
             baselineDurations.set(v.name, [...(baselineDurations.get(v.name) ?? []), v.durationMs]);
           }
@@ -559,21 +556,8 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
       case "group-call":
         groupedCalls += 1;
         break;
-      case "al-runner-bc-build":
-        alRunnerBcBuild = { build: e.build, announcement: e.announcement };
-        break;
-      case "al-runner-platform-apps":
-        alRunnerPlatformAppsDir = e.dir;
-        break;
-      case "al-runner-test-selector":
-        alRunnerTestSelector = {
-          selector: e.selector,
-          ...(e.reason !== undefined ? { reason: e.reason } : {}),
-        };
-        break;
       case "resume-resolved":
         resumeFromRunId = e.fromRunId;
-        resumeCarryRefused = e.carryRefused;
         break;
       case "mutant-scored":
         outcomes.push({
@@ -783,6 +767,14 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
     ...(testPageRefusedTests.size > 0
       ? { testPageRefusedTests: [...testPageRefusedTests].sort() }
       : {}),
+    ...(baselineStoppedTests.size > 0
+      ? {
+          baselineStopped: {
+            tests: [...baselineStoppedTests].sort(),
+            budgetMs: requireStoppedBudget(stoppedBudgetMs),
+          },
+        }
+      : {}),
     ...(runnerDisagreementTests.size > 0
       ? { runnerDisagreementTests: [...runnerDisagreementTests].sort() }
       : {}),
@@ -802,7 +794,6 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
             runId: resumeFromRunId,
             carriedMutants: carriedCount,
             skippedStranded: strandedSkipCount,
-            ...(resumeCarryRefused !== undefined ? { carryRefused: resumeCarryRefused } : {}),
           },
         }
       : {}),
@@ -821,9 +812,6 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
     artifacts: [...artifactsByBatch.values()].sort((a, b) => a.batchIndex - b.batchIndex),
     ...(quarantinedReason !== undefined ? { quarantined: { reason: quarantinedReason } } : {}),
     ...(permissionCanary !== undefined ? { permissionCanary } : {}),
-    ...(alRunnerBcBuild !== undefined ? { alRunnerBcBuild } : {}),
-    ...(alRunnerPlatformAppsDir !== undefined ? { alRunnerPlatformAppsDir } : {}),
-    ...(alRunnerTestSelector !== undefined ? { alRunnerTestSelector } : {}),
     ...(numbering !== undefined ? { numbering } : {}),
     ...(sourceSha256 !== undefined ? { sourceSha256 } : {}),
     ...(dependencyReportSources !== undefined ? { dependencyReportSources } : {}),

@@ -36,9 +36,9 @@
  *     the al-runner path a plain `Error()` surfaces as `NavNCLDialogException: <message>` (R101(f)),
  *     so an exception-type prefix sits where the assertion prefix would be. Measured on R546's CDO
  *     slice: unstripped, al-runner flagged 51 of 51 (`vacuous`) where bcdev flagged 3 (`partial`).
- *     R553 reads past ONE leading `...Exception: ` on the al-runner backend only
- *     (`screenMessageOf`); after it the 51 al-runner messages are byte-equal to bcdev's and the same
- *     three are flagged.
+ *     R553 read past ONE leading `...Exception: ` on that (.NET, v2) backend; R654 retired it.
+ *     al-runner v3 (Rust) does NOT prefix: R657 measured it writing BC's own message (alpha.2 and
+ *     edge 57f1e4f98, one-shot and serve), so v3 reads on bcdev's rule.
  *
  * THE ONE NON-LOCALISING SIGNAL ANYONE HAS FOUND. R101(f) measured al-runner emitting
  * `InvalidOperationException: out-of-scope: <api> - <category> - see docs/scope.md#<anchor>` when its
@@ -94,40 +94,6 @@ export function looksLikeAssertionFailure(message: string): boolean {
 export function looksLikeRunnerRefusal(message: string): boolean {
   return /\bout-of-scope:\s/.test(message);
 }
-
-/**
- * R553: al-runner writes every failure as `{Type.Name}: {Message}` (R101(f)). One anchored .NET
- * type name ending in `Exception`, optional namespace, then `: `. Stripped ONCE, so a second type
- * name stays in the text and keeps the kill flagged: under-stripping errs toward MORE flags, which
- * keeps the screen's recall.
- */
-export const AL_RUNNER_EXCEPTION_PREFIX = /^(?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*Exception: /;
-
-/**
- * The text R121's rule reads. bcdev: `killMessageOf`, unchanged, whatever the text starts with (a
- * bcdev text CAN carry a .NET type name). al-runner: minus `AL_RUNNER_EXCEPTION_PREFIX`. Keyed on
- * the backend's identity (`BackendCapabilities.kind`), never on `authoritative` and never on the
- * text. Reads only; the stored `killingTestFailure` is never rewritten.
- */
-export function screenMessageOf(
-  failure: string | undefined,
-  backend: "bcdev" | "al-runner",
-): string {
-  const m = killMessageOf(failure);
-  return backend === "al-runner" ? m.replace(AL_RUNNER_EXCEPTION_PREFIX, "") : m;
-}
-
-/**
- * R553: the `vacuous` note on an al-runner run where at least one KILLED kill's text lacked the
- * exception-type prefix (a `timeout-killed` text does not count). The rule then read text in a shape
- * it was not measured on, so the backend, not only the suite, may be why nothing separated.
- */
-export const ASSERTION_SCREEN_VACUOUS_AL_RUNNER_NOTE =
-  "EVERY kill carrying failure text was flagged, so this screen separated nothing on this run. The " +
-  "run used al-runner, and at least one kill's text did not start with the `<Type>Exception: ` " +
-  "prefix al-runner normally writes, so the rule read text in a shape it was not measured on. The " +
-  "backend, not only the suite's assertion style, may be the cause: run the same slice on bcdev " +
-  "before reading anything into the count.";
 
 /** `SessionReport.assertionScreen.diagnosis`, stated once. */
 export const ASSERTION_SCREEN_DIAGNOSIS =

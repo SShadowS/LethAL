@@ -251,7 +251,7 @@ export async function defaultAlToolPaths(
       [
         `the AL Language VS Code extension ships no alc/altool build for platform "${platform}"`,
         `(only ${Object.keys(AL_TOOL_BIN_LAYOUT).join(", ")}) — set bcdev.alcPath and`,
-        "bcdev.altoolPath to tools you supply yourself, or run with --backend al-runner",
+        "bcdev.altoolPath to tools you supply yourself",
       ].join(" "),
     );
   }

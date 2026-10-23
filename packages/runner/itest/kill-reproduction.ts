@@ -33,35 +33,11 @@ export interface ReproductionFigures {
 }
 
 /**
- * Leg names: `<fixture>/<transport>`, and `cli-default`. MEASURED at 102821df (itest:alrunner,
- * log /coord/handoff/R-577/scratch/itest-measure.log): every kill on every leg reproduced, none was
- * kill-not-reproduced. Killer rows are 2 per kill everywhere (the kill and its reproduction);
- * cli-default made 23 activations and 22 `runTests` requests.
+ * Leg names, one per BC gate leg. R654 S3 removed the retired itest:alrunner's 20 legs (measured at
+ * 102821df, log /coord/handoff/R-577/scratch/itest-measure.log, 2 killer rows per kill everywhere).
+ * The `activations`/`serverSuiteRuns` figures were its cli-default leg's; no leg sets them now.
  */
 export const REPRODUCTION_EXPECTED: Readonly<Record<string, ReproductionFigures>> = {
-  "sandbox/one-shot": { killerRowsPerKill: 2 },
-  "sandbox/server": { killerRowsPerKill: 2 },
-  "sandbox/resource": { killerRowsPerKill: 2 },
-  "layout/one-shot": { killerRowsPerKill: 2 },
-  "layout/server": { killerRowsPerKill: 2 },
-  "multiobject/one-shot": { killerRowsPerKill: 2 },
-  "multiobject/server": { killerRowsPerKill: 2 },
-  "multiobject/resource": { killerRowsPerKill: 2 },
-  "wrapped/one-shot": { killerRowsPerKill: 2 },
-  "wrapped/server": { killerRowsPerKill: 2 },
-  "wrapped/resource": { killerRowsPerKill: 2 },
-  "symbols-LETHALA/one-shot": { killerRowsPerKill: 2 },
-  "symbols-LETHALA/server": { killerRowsPerKill: 2 },
-  "symbols-LETHALA/resource": { killerRowsPerKill: 2 },
-  "symbols-LETHALB/one-shot": { killerRowsPerKill: 2 },
-  "symbols-LETHALB/server": { killerRowsPerKill: 2 },
-  "symbols-LETHALB/resource": { killerRowsPerKill: 2 },
-  "cli-default": { killerRowsPerKill: 2, activations: 23, serverSuiteRuns: 22 },
-  // R557's names legs (A1/A2 one-shot, A3/A4 --server) arrived in the merge with master after the
-  // 102821df measurement. Their 2 is PREDICTED (pre-commitment addendum a40097fc), not measured: the
-  // store's method and `killing_test` both come from LethAL's own test reference.
-  "names/one-shot": { killerRowsPerKill: 2 },
-  "names/server": { killerRowsPerKill: 2 },
   // R582: the BC gates, PREDICTED (pre-commitment 39eaf536 §2): the first run and its re-run, a
   // `many` or `single` row and a `single` (k = 1) or `many` (k > 1) re-run row. A test app is one
   // codeunit with no repeated method name, so the count cannot pick up a second test.
@@ -75,6 +51,9 @@ export const REPRODUCTION_EXPECTED: Readonly<Record<string, ReproductionFigures>
   "hang/on": { killerRowsPerKill: 2 },
   "hang/single": { killerRowsPerKill: 2 },
   "hang/off": { killerRowsPerKill: 2 },
+  // R-658's BASELINE leg (pre-commitment 00d508c4 §4, assertion 6): the DrainQueue kill's group
+  // call and its single re-run, both `ZZDrainsAfterTheStop`.
+  "hang/baseline": { killerRowsPerKill: 2 },
   "harden/A": { killerRowsPerKill: 2 },
   "harden/B": { killerRowsPerKill: 2 },
   "agreement/A": { killerRowsPerKill: 2 },

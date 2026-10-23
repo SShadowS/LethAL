@@ -25,14 +25,6 @@ export const ENVTOOL_FIGURES = {
   noCoverage: 4,
 } as const;
 
-export const ALRUNNER_FIGURES = {
-  totalMutantSites: 19,
-  killed: 3,
-  survived: 12,
-  noCoverage: 4,
-  noCoverageFile: "SandboxPricing.Codeunit.al",
-} as const;
-
 export const TABLES_FIGURES = {
   totalMutantSites: 428,
   killed: 314,
@@ -100,6 +92,13 @@ export const HANG_FIGURES = {
   /** R582: the ON leg's grouped calls BC stopped, which answer no session id: the 5 first
    *  timeouts plus line 145's warm timeout re-run (the 4 position-1 re-runs are single calls). */
   stoppedCallsOn: 6,
+  /** R-658: the BASELINE leg's `--baseline-timeout-ms`; `SleepsPastTheBaselineBudget` runs past it. */
+  baselineBudgetMs: 10_000,
+  /** R-658: that test's `Sleep`, which ends by itself (R164 untouched) and passes at the 120 s default. */
+  baselineSleepMs: 25_000,
+  /** R-658: the BASELINE leg's `conditional-boundary` mutants, and its one kill (D2's control). */
+  baselineLegMutants: 5,
+  baselineLegKilled: 1,
 } as const;
 
 /**

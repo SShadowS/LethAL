@@ -1132,15 +1132,13 @@ export type WrappedRule = "bc-shape" | "al-runner-index" | "refuse-wrapped";
 
 /**
  * R654 S1: the rule a SESSION of each backend applies, exactly the pre-R654 mapping (a v3 session
- * got neither the bcdev arm nor the al-runner arm, so it refuses every wrapped file). A `switch`
- * so R586's T15 scanner sees the `"al-runner"` arm (plan r2 D-I2).
+ * gets neither the bcdev arm nor the al-runner index arm, so it refuses every wrapped file). S3
+ * removed the retired .NET al-runner's row; `"al-runner-index"` stays, for the coverage index.
  */
 export function wrappedRuleFor(kind: BuildBackend["kind"]): WrappedRule {
   switch (kind) {
     case "bcdev":
       return "bc-shape";
-    case "al-runner":
-      return "al-runner-index";
     case "al-runner-v3":
       return "refuse-wrapped";
   }

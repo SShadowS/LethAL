@@ -4,11 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { initParser } from "@lethal/engine";
 import { FLAT_NAMES_FILENAME, flatNamesFor } from "@lethal/schemata";
-import {
-  alRunnerCoverageFrom,
-  alRunnerCoverageFromServer,
-  buildAlRunnerCoverageIndex,
-} from "../src/al-runner-coverage";
+import { alRunnerCoverageFromServer, buildAlRunnerCoverageIndex } from "../src/al-runner-coverage";
 import { AlcCompileError, ArtifactCompiler } from "../src/artifact";
 import type {
   BackendCapabilities,
@@ -229,28 +225,8 @@ describe("R219: two same-basename files in different directories", () => {
       // owner, so its last segment is not contested and the suffix match is exact.
       ["another batch directory's flat path", (p: string) => `/tmp/lethal-x/b0/${names.flatOf(p)}`],
     ] as const;
+    // R654 S3: the one-shot Cobertura case of each shape went with the .NET al-runner.
     for (const [what, label] of shapes) {
-      test(`one-shot Cobertura labelled with ${what}`, async () => {
-        const index = await indexOf();
-        for (const [path, id] of [
-          [SALES, 50100],
-          [PURCHASE, 50101],
-        ] as const) {
-          const lines = await covered(path);
-          const map = alRunnerCoverageFrom(
-            lines.map((line) => ({ file: label(path), line, hits: 1 })),
-            index,
-          );
-          expect(map.entries).toEqual(
-            lines.map((line) => ({
-              objectType: "Codeunit",
-              objectId: id,
-              procedure: "Pick",
-              line,
-            })),
-          );
-        }
-      });
       test(`--server statements labelled with ${what}`, async () => {
         const index = await indexOf();
         for (const [path, id] of [
@@ -314,10 +290,9 @@ describe("R219: two same-basename files in different directories", () => {
       "Helper.Codeunit.al",
       "/x/Sales/Helper.Codeunit.al",
     ]) {
-      test(`"${file}" names no file exactly: refused by name, on both transports`, async () => {
+      test(`"${file}" names no file exactly: refused by name`, async () => {
         const index = await indexOf();
         const why = /neither inside the project .* nor directly in the batch/;
-        expect(() => alRunnerCoverageFrom([{ file, line: 5, hits: 1 }], index)).toThrow(why);
         expect(() =>
           alRunnerCoverageFromServer(
             { test: "Codeunit50190.X", coverage: [{ file, statements: [{ line: 5, hits: 1 }] }] },
@@ -333,7 +308,6 @@ describe("R219: two same-basename files in different directories", () => {
       const index = await buildAlRunnerCoverageIndex(run.batch);
       const file = join(run.projectDir, SALES);
       const why = /neither inside the project \(not known\)/;
-      expect(() => alRunnerCoverageFrom([{ file, line: 5, hits: 1 }], index)).toThrow(why);
       expect(() =>
         alRunnerCoverageFromServer(
           { test: "Codeunit50190.X", coverage: [{ file, statements: [{ line: 5, hits: 1 }] }] },
@@ -342,8 +316,16 @@ describe("R219: two same-basename files in different directories", () => {
       ).toThrow(why);
       const [line = 0] = await covered(SALES);
       expect(
-        alRunnerCoverageFrom(
-          [{ file: join(run.batch, names.flatOf(SALES)), line, hits: 1 }],
+        alRunnerCoverageFromServer(
+          {
+            test: "Codeunit50190.X",
+            coverage: [
+              {
+                file: join(run.batch, names.flatOf(SALES)),
+                statements: [{ scope: "Pick", line, hits: 1 }],
+              },
+            ],
+          },
           index,
         ).entries.map((e) => e.objectId),
       ).toEqual([50100]);
@@ -376,11 +358,8 @@ describe("R219: two same-basename files in different directories", () => {
       return { projectDir, batch, flat };
     };
     // Lines 5 and 6 of `helper` (`if X > 1 then`, `exit(1)`): a plain copy, not instrumented.
+    // R654 S3: was both transports; the one-shot Cobertura reader went with the .NET al-runner.
     const both = (file: string, index: Awaited<ReturnType<typeof buildAlRunnerCoverageIndex>>) => [
-      alRunnerCoverageFrom(
-        [5, 6].map((line) => ({ file, line, hits: 1 })),
-        index,
-      ).entries,
       alRunnerCoverageFromServer(
         {
           test: "Codeunit50190.X",

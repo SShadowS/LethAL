@@ -63,6 +63,7 @@ describe("stageCompileOnlyBatch (R219)", () => {
       artifactId: "a".repeat(32),
       targetAppId: APP.id,
       appManifest: APP,
+      configPath: undefined,
     });
 
     const names = flatNamesFor([SALES, PURCHASE]);
@@ -73,6 +74,29 @@ describe("stageCompileOnlyBatch (R219)", () => {
     expect(sales).not.toBe(SALES_AL);
     expect(sales).toContain('codeunit 50100 "Sales Helper"');
     expect(await readFile(join(target, names.flatOf(PURCHASE)), "utf8")).toBe(PURCHASE_AL);
+  });
+
+  // R668: the --config file reaches the batch copy here too. Revert: drop it from the call.
+  test("leaves the --config file of another name out of the batch (R668)", async () => {
+    const projectDir = join(root, "r668-app");
+    const target = join(root, "r668-batch");
+    await Bun.write(join(projectDir, "app.json"), JSON.stringify(APP));
+    await Bun.write(join(projectDir, SALES), SALES_AL);
+    await Bun.write(join(projectDir, "conn.json"), '{"dummy":"DUMMY-NOT-A-SECRET-R668"}');
+    await Bun.write(join(projectDir, "notes.json"), "{}");
+    await stageCompileOnlyBatch({
+      projectDir,
+      target,
+      set: await generateMutationSet(projectDir),
+      selectorIds: { selectorId: 50197, controlId: 50198, tableId: 50199 },
+      artifactId: "b".repeat(32),
+      targetAppId: APP.id,
+      appManifest: APP,
+      configPath: join(projectDir, "conn.json"),
+    });
+    const names = await readdir(target);
+    expect(names).not.toContain("conn.json");
+    expect(names).toContain("notes.json");
   });
 });
 

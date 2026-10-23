@@ -81,7 +81,8 @@
               "preproc-files-refused",
               "tests-compiled-out",
               "test-symbols-unverified",
-              "project-symlink-skipped"
+              "project-symlink-skipped",
+              "baseline-test-stopped"
             ]
           }
         },
@@ -151,25 +152,6 @@
               },
               "verdictCount": {
                 "type": "number"
-              },
-              "bcBuild": {
-                "type": "string"
-              },
-              "bcBuildAnnouncement": {
-                "type": "string"
-              },
-              "platformAppsDir": {
-                "type": "string"
-              },
-              "testSelector": {
-                "type": "string",
-                "enum": [
-                  "exact",
-                  "substring-with-excludes"
-                ]
-              },
-              "testSelectorReason": {
-                "type": "string"
               },
               "runnerBuild": {
                 "type": "string"
@@ -421,7 +403,8 @@
               "timeout-unconfirmed",
               "runner-test-error",
               "runner-refused",
-              "kill-not-reproduced"
+              "kill-not-reproduced",
+              "confirm-stopped"
             ]
           },
           "platformKillMechanism": {
@@ -893,6 +876,25 @@
         }
       }
     },
+    "baselineStopped": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tests",
+        "budgetMs"
+      ],
+      "properties": {
+        "tests": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "budgetMs": {
+          "type": "number"
+        }
+      }
+    },
     "platformArtifactKills": {
       "type": "object",
       "additionalProperties": false,
@@ -1032,9 +1034,6 @@
         },
         "skippedStranded": {
           "type": "number"
-        },
-        "carryRefused": {
-          "type": "string"
         }
       }
     },
@@ -1437,50 +1436,6 @@
       ],
       "properties": {
         "reason": {
-          "type": "string"
-        }
-      }
-    },
-    "alRunnerCanary": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "asserterror",
-        "tableGlobalVar",
-        "transactionRollback"
-      ],
-      "properties": {
-        "asserterror": {
-          "type": "string",
-          "enum": [
-            "defect-confirmed",
-            "defect-not-reproduced",
-            "inconclusive"
-          ]
-        },
-        "tableGlobalVar": {
-          "type": "string",
-          "enum": [
-            "defect-confirmed",
-            "defect-not-reproduced",
-            "inconclusive"
-          ]
-        },
-        "transactionRollback": {
-          "type": "string",
-          "enum": [
-            "defect-confirmed",
-            "defect-not-reproduced",
-            "inconclusive"
-          ]
-        },
-        "asserterrorDetail": {
-          "type": "string"
-        },
-        "tableGlobalVarDetail": {
-          "type": "string"
-        },
-        "transactionRollbackDetail": {
           "type": "string"
         }
       }

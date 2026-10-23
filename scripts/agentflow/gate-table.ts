@@ -25,16 +25,20 @@
  * coverage moved four verdicts with the mutant population unchanged at 19.
  */
 
-import { ALRUNNER_LEG_IDS } from "../../packages/runner/itest/alrunner-legs.ts";
+import { V3_AGENTFLOW_LEGS } from "../../packages/runner/itest/alrunner-v3-legs.ts";
 
-/** Every live leg the repo has. `envtool` is absent on purpose: see `MANUAL_ONLY`. */
+/**
+ * Every live leg the repo has. `envtool` is absent on purpose: see `MANUAL_ONLY`.
+ * R654: `alrunner-v3` (the Rust al-runner's gate) replaced `alrunner` (the retired .NET one's)
+ * wherever that was selected; it needs no BC server.
+ */
 export const LEGS = [
   "bcdev",
   "lease",
   "stale-publish",
   "tables",
   "chunked",
-  "alrunner",
+  "alrunner-v3",
   "hang",
   "coverage-differential",
 ] as const;
@@ -45,6 +49,11 @@ export type Leg = (typeof LEGS)[number];
  * Everything an unmatched path selects. `coverage-differential` is deliberately NOT here: it is a
  * required gate for the coverage rows but has no `package.json` script and no receipt today, so
  * including it in the default would park every unmatched change on a gate nobody can run yet.
+ *
+ * `scripts/agentflow/**` (this selection logic itself) deliberately matches no rule, so a change
+ * here selects this full set (orchestrator ruling, R654 S2). A change to selection logic is rare;
+ * choosing too many gates is the safe way to be wrong; and the orchestrator rules such a change
+ * case by case rather than this table trying to.
  */
 export const FULL_SET: readonly Leg[] = [
   "bcdev",
@@ -52,7 +61,7 @@ export const FULL_SET: readonly Leg[] = [
   "stale-publish",
   "tables",
   "chunked",
-  "alrunner",
+  "alrunner-v3",
   "hang",
 ];
 
@@ -72,7 +81,7 @@ export const LEG_ORDER: readonly Leg[] = [
   "stale-publish",
   "tables",
   "chunked",
-  "alrunner",
+  "alrunner-v3",
   "coverage-differential",
   "hang",
 ];
@@ -82,7 +91,9 @@ export const LEG_ORDER: readonly Leg[] = [
  * count (one, unless the caller says otherwise); a leg present here refuses a numeric override.
  */
 export const EXPECTED_SUBLEGS: Readonly<Partial<Record<Leg, readonly string[]>>> = {
-  alrunner: ALRUNNER_LEG_IDS,
+  // R654 S2: the v3 itest's default legs with no corpus and no tables leg (what a challenged run
+  // runs), K included: a gated run must pass K (`v3ItestFailures`).
+  "alrunner-v3": V3_AGENTFLOW_LEGS,
 };
 
 /** Which container each leg runs against. One instrumented target per container is a hard rule. */
@@ -90,7 +101,7 @@ export const LEG_CONTAINER: Readonly<Record<Leg, "agent-app" | "agent-data">> = 
   bcdev: "agent-app",
   lease: "agent-app",
   "stale-publish": "agent-app",
-  alrunner: "agent-app",
+  "alrunner-v3": "agent-app",
   hang: "agent-app",
   tables: "agent-data",
   chunked: "agent-data",
@@ -134,19 +145,19 @@ const RULES: readonly Rule[] = [
       "packages/builtin-tier1/",
       "packages/builtin-tier2/",
     ),
-    legs: ["bcdev", "tables", "chunked", "alrunner"],
+    legs: ["bcdev", "tables", "chunked", "alrunner-v3"],
     why: "these decide WHICH mutants exist and what their identity is",
   },
   {
     test: startsWith("packages/schemata/"),
     // `hang` is here because the selector schemata emits is what the stop has to interrupt, and no
     // other fixture contains a non-terminating mutant.
-    legs: ["bcdev", "tables", "chunked", "alrunner", "hang"],
+    legs: ["bcdev", "tables", "chunked", "alrunner-v3", "hang"],
     why: "the compiler that instruments a project, including the selector the stop interrupts",
   },
   {
     test: startsWith("packages/runner/"),
-    legs: ["bcdev", "lease", "tables", "chunked", "alrunner"],
+    legs: ["bcdev", "lease", "tables", "chunked", "alrunner-v3"],
     why: "orchestration, backends, store and transport",
   },
   {
@@ -188,7 +199,7 @@ const RULES: readonly Rule[] = [
   },
   {
     test: startsWith("fixtures/sandbox-app/", "fixtures/sandbox-tests/"),
-    legs: ["bcdev", "alrunner"],
+    legs: ["bcdev", "alrunner-v3"],
     why: "the codeunit fixture and its suite",
   },
   {

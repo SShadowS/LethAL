@@ -2,8 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import ts from "@typescript/typescript6";
-import { GATE_BASELINES, PENDING_FIRST_RECORD, SYMBOL_BASELINES } from "../itest/baseline-guard";
-import { SYMBOL_SETS } from "../itest/symbol-fixture";
+import { GATE_BASELINES, PENDING_FIRST_RECORD } from "../itest/baseline-guard";
 
 /**
  * R332: the live gates run and exit at module top level, so they cannot be imported. Their wiring
@@ -313,16 +312,9 @@ function exitsThreeOnRecord(sf: ts.SourceFile): boolean {
   return ok;
 }
 
-/** Each writing gate's baselines, keyed by the constant that holds the path. R353 gave al-runner a second. */
+/** Each writing gate's baselines, keyed by the constant that holds the path. R654 S3 removed
+ *  `al-runner.itest.ts` (the retired .NET al-runner's gate) and its six. */
 const WRITING_GATES: Record<string, Readonly<Record<string, string>>> = {
-  "al-runner.itest.ts": {
-    BASELINE_PATH: "al-runner.baseline.json",
-    LAYOUT_BASELINE_PATH: "al-runner.layout.baseline.json",
-    MULTIOBJECT_BASELINE_PATH: "al-runner.multiobject.baseline.json",
-    CLI_DEFAULT_BASELINE_PATH: "al-runner.cli-default.baseline.json",
-    WRAPPED_BASELINE_PATH: "al-runner.wrapped.baseline.json",
-    NAMES_BASELINE_PATH: "al-runner.names.baseline.json",
-  },
   "bcdev.itest.ts": { BASELINE_PATH: "bcdev.baseline.json" },
   "bcdev-names.itest.ts": { BASELINE_PATH: "bcdev.names.baseline.json" },
   "bcdev-wrapped.itest.ts": { BASELINE_PATH: "bcdev.wrapped.baseline.json" },
@@ -331,7 +323,13 @@ const WRITING_GATES: Record<string, Readonly<Record<string, string>>> = {
   "hang.itest.ts": { SINGLE_BASELINE_PATH: "hang.single.baseline.json" },
   "tables.itest.ts": { BASELINE_PATH: "tables.baseline.json" },
   // R586: leg T, preflighted only when the leg runs (inside an `if` before the first await).
-  "al-runner-v3.itest.ts": { TABLES_BASELINE_PATH: "al-runner-v3.tables.baseline.json" },
+  // R654 S2: legs L1, Y-A and Y-B, the same way.
+  "al-runner-v3.itest.ts": {
+    TABLES_BASELINE_PATH: "al-runner-v3.tables.baseline.json",
+    LAYOUT_BASELINE_PATH: "al-runner-v3.layout.baseline.json",
+    SYMBOLS_A_BASELINE_PATH: "al-runner-v3.symbols-lethala.baseline.json",
+    SYMBOLS_B_BASELINE_PATH: "al-runner-v3.symbols-lethalb.baseline.json",
+  },
 };
 const READERS: Record<string, string> = {
   "verify.itest.ts": "bcdev.baseline.json",
@@ -386,7 +384,7 @@ describe("R332 wiring: real call sites, not text", () => {
     const committed = readdirSync(ITEST)
       .filter((f) => f.endsWith(".baseline.json"))
       .sort();
-    const registered = [...Object.keys(GATE_BASELINES), ...SYMBOL_BASELINES];
+    const registered = Object.keys(GATE_BASELINES);
     expect(registered.filter((n) => !PENDING_FIRST_RECORD.includes(n)).sort()).toEqual(committed);
     // R387: a pending name must be a registered gate baseline that is NOT committed yet, so the
     // list cannot hide a typo or outlive the record run that fills it.
@@ -445,49 +443,6 @@ describe("R332 wiring: real call sites, not text", () => {
     const stmts = handler !== undefined && ts.isBlock(handler) ? [...handler.statements] : [];
     expect(stmts[0]?.getText(sf).startsWith("console.error(")).toBe(true);
     expect(stmts[1]?.getText(sf).startsWith("await emitFailed(")).toBe(true);
-  });
-
-  test("al-runner: SYMBOL_SETS names exactly the registered symbol baselines", () => {
-    const sf = parse(join(ITEST, "al-runner.itest.ts"));
-    const fn = sf.statements.find(
-      (s): s is ts.FunctionDeclaration =>
-        ts.isFunctionDeclaration(s) && s.name?.text === "symbolBaselinePath",
-    );
-    const returned = fn?.body?.statements.find(ts.isReturnStatement)?.expression?.getText(sf);
-    expect(returned).toBe(
-      'join(HERE, `al-runner.symbols-${symbols.join("-").toLowerCase()}.baseline.json`)',
-    );
-    const names = SYMBOL_SETS.map(
-      (s) => `al-runner.symbols-${s.join("-").toLowerCase()}.baseline.json`,
-    );
-    expect([...names].sort()).toEqual([...SYMBOL_BASELINES].sort());
-  });
-
-  test("al-runner preflights BOTH symbol baselines before its first await", () => {
-    const sf = parse(join(ITEST, "al-runner.itest.ts"));
-    const pre = preAwait(sf).flatMap((s) => calls(s, sf, "preflightFrozenBaseline"));
-    expect(pre.map((c) => c.arguments.map((a) => a.getText(sf)))).toEqual([
-      ["symbolBaselinePath(symbols)", '"al-runner itest symbols"', "RECORD_SYMBOL_BASELINES"],
-    ]);
-    const loop = preAwait(sf).find(ts.isForOfStatement);
-    expect(loop?.expression.getText(sf)).toBe("SYMBOL_SETS");
-  });
-
-  test("al-runner writes the symbol baselines only through assertMatchesFrozenBaseline, per set", () => {
-    const sf = parse(join(ITEST, "al-runner.itest.ts"));
-    const inSymbolLoop = (n: ts.Node): boolean => {
-      for (let p = n.parent; p !== undefined; p = p.parent) {
-        if (ts.isForOfStatement(p) && p.expression.getText(sf) === "SYMBOL_SETS") return true;
-      }
-      return false;
-    };
-    const writes = calls(sf, sf, "assertMatchesFrozenBaseline").filter(
-      (c) =>
-        c.arguments[1]?.getText(sf) === "symbolBaselinePath(symbols)" &&
-        c.arguments[3]?.getText(sf) === "RECORD_SYMBOL_BASELINES" &&
-        inSymbolLoop(c),
-    );
-    expect(writes.length).toBeGreaterThan(0);
   });
 
   test("each reader: BASELINE_PATH and a startup preflightReadOnlyBaseline", () => {

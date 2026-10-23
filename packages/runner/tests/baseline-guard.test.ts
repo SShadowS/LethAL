@@ -11,7 +11,6 @@ import {
   RECORD_BASELINE_ENV,
   assertGateBaseline,
   assertMatchesBaseline,
-  assertMatchesFrozenBaseline,
   parseStageBaseline,
   preflightFrozenBaseline,
   preflightGateBaseline,
@@ -197,45 +196,6 @@ describe("assertMatchesBaseline", () => {
   });
 });
 
-describe("assertMatchesFrozenBaseline (R321)", () => {
-  const r = () =>
-    report([outcome({ mutantCode: "M0001", verdict: "killed", killingTest: "RateSmall" })]);
-
-  test("no committed baseline and no record mode: refuses, and writes nothing", async () => {
-    const path = join(dir, "al-runner.symbols-lethala.baseline.json");
-    await expect(assertMatchesFrozenBaseline(r(), path, "t", false)).rejects.toThrow(
-      /never records one silently/,
-    );
-    expect(existsSync(path)).toBe(false);
-  });
-
-  test("record mode with no baseline: records it", async () => {
-    const path = join(dir, "al-runner.symbols-lethala.baseline.json");
-    await assertMatchesFrozenBaseline(r(), path, "t", true);
-    expect(existsSync(path)).toBe(true);
-  });
-
-  test("record mode with a baseline present: refuses to overwrite it", async () => {
-    const path = join(dir, "al-runner.symbols-lethala.baseline.json");
-    await assertMatchesFrozenBaseline(r(), path, "t", true);
-    const before = await readFile(path, "utf8");
-    await expect(assertMatchesFrozenBaseline(r(), path, "t", true)).rejects.toThrow(
-      /refuses to overwrite/,
-    );
-    expect(await readFile(path, "utf8")).toBe(before);
-  });
-
-  test("a committed baseline is compared, and a difference throws", async () => {
-    const path = join(dir, "al-runner.symbols-lethala.baseline.json");
-    await assertMatchesFrozenBaseline(r(), path, "t", true);
-    await assertMatchesFrozenBaseline(r(), path, "t", false);
-    const moved = report([outcome({ mutantCode: "M0001", verdict: "survived" })]);
-    await expect(assertMatchesFrozenBaseline(moved, path, "t", false)).rejects.toThrow(
-      /per-mutant regression/,
-    );
-  });
-});
-
 describe("R332: a frozen baseline never records itself", () => {
   const NAME = "bcdev.baseline.json"; // a registered gate basename, placed in a temp dir
   const r = () =>
@@ -259,7 +219,7 @@ describe("R332: a frozen baseline never records itself", () => {
     );
   });
 
-  test("recordRequested throws on =1, a typo, a wrong case, a path, or a symbol file", () => {
+  test("recordRequested throws on =1, a typo, a wrong case, a path, or a retired v2 file", () => {
     const p = join(dir, NAME);
     for (const bad of [
       "1",
@@ -267,20 +227,20 @@ describe("R332: a frozen baseline never records itself", () => {
       "BCDEV.baseline.json",
       "packages/runner/itest/bcdev.baseline.json",
       "al-runner.symbols-lethala.baseline.json",
+      "al-runner.baseline.json",
     ]) {
       expect(() => recordRequested(p, arm(bad))).toThrow(/not a gate baseline/);
     }
   });
 
-  test("the registry names fourteen gate baselines and their record commands", () => {
+  // R654 S2: seventeen, with v3's layout and two symbol-set baselines (pre-committed 43115c78).
+  // R654 S3: eleven, the six registered `al-runner.*` (v2) files gone with `itest:alrunner`.
+  test("the registry names eleven gate baselines and their record commands", () => {
     expect(Object.keys(GATE_BASELINES).sort()).toEqual([
+      "al-runner-v3.layout.baseline.json",
+      "al-runner-v3.symbols-lethala.baseline.json",
+      "al-runner-v3.symbols-lethalb.baseline.json",
       "al-runner-v3.tables.baseline.json",
-      "al-runner.baseline.json",
-      "al-runner.cli-default.baseline.json",
-      "al-runner.layout.baseline.json",
-      "al-runner.multiobject.baseline.json",
-      "al-runner.names.baseline.json",
-      "al-runner.wrapped.baseline.json",
       "bcdev.baseline.json",
       "bcdev.names.baseline.json",
       "bcdev.wrapped.baseline.json",
@@ -558,22 +518,15 @@ describe("R332: a frozen baseline never records itself", () => {
   });
 });
 
-describe("R332 finding C: the R321 symbol writer is exclusive too", () => {
-  const SYM = "al-runner.symbols-lethala.baseline.json";
-  const r = () => report([outcome({ mutantCode: "M0001", verdict: "killed", killingTest: "T" })]);
-
-  test("record mode never overwrites a symbol file, even with no preflight in front of it", async () => {
-    const p = join(dir, SYM);
-    await writeFile(p, "sentinel\n", "utf8");
-    await expect(assertMatchesFrozenBaseline(r(), p, "t", true)).rejects.toThrow(
-      /refuses to overwrite/,
-    );
-    expect(await readFile(p, "utf8")).toBe("sentinel\n");
-  });
+// R654 S3: R321's v2 symbol writer (`assertMatchesFrozenBaseline`) went with `itest:alrunner`; the
+// v3 symbol baselines are ordinary gate baselines. Re-pointed to them: the preflight still covers
+// both files before either is written.
+describe("R332 finding C: a two-file record run is stopped before either file is written", () => {
+  const SYM = "al-runner-v3.symbols-lethala.baseline.json";
 
   test("preflightFrozenBaseline covers both symbol files before either is written", async () => {
     const a = join(dir, SYM);
-    const b = join(dir, "al-runner.symbols-lethalb.baseline.json");
+    const b = join(dir, "al-runner-v3.symbols-lethalb.baseline.json");
     await writeFile(b, "[]\n", "utf8");
     // record run, a absent, b present: the preflight must stop it before a is written
     expect(() => {
@@ -581,16 +534,8 @@ describe("R332 finding C: the R321 symbol writer is exclusive too", () => {
     }).toThrow(/refuses to overwrite/);
     expect(existsSync(a)).toBe(false);
     expect(() => preflightFrozenBaseline(a, "t", false)).toThrow(
-      /LETHAL_ITEST_RECORD_SYMBOL_BASELINES=1/,
+      /LETHAL_ITEST_RECORD_BASELINE=al-runner-v3\.symbols-lethala\.baseline\.json/,
     );
-  });
-
-  test("assertMatchesFrozenBaseline refuses a gate basename, even though it is registered somewhere", async () => {
-    const p = join(dir, "bcdev.baseline.json");
-    await expect(assertMatchesFrozenBaseline(r(), p, "t", true)).rejects.toThrow(
-      /not a registered symbol baseline/,
-    );
-    expect(existsSync(p)).toBe(false);
   });
 });
 

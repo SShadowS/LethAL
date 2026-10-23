@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ALRUNNER_LEG_IDS, fullRunSublegs } from "../../packages/runner/itest/alrunner-legs.ts";
+import { V3_AGENTFLOW_LEGS } from "../../packages/runner/itest/alrunner-v3-legs.ts";
 import { readChallenge, writeReceipt } from "../../packages/runner/itest/gate-receipt.ts";
 import { ReceiptError, validateReceipt } from "./receipt.ts";
 
@@ -17,7 +17,8 @@ import { ReceiptError, validateReceipt } from "./receipt.ts";
  * longer looks at.
  */
 describe("what a gate writes is what the executor accepts", () => {
-  test("itest:alrunner's 23-leg pass round-trips (R-587)", async () => {
+  // R654: was itest:alrunner's 23 legs; the retired gate's list went with it.
+  test("itest:alrunner-v3's exact-list pass round-trips (R-587)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lethal-rt-"));
     try {
       const c = readChallenge({
@@ -29,25 +30,25 @@ describe("what a gate writes is what the executor accepts", () => {
       expect(c).toBeDefined();
       if (c === undefined) throw new Error("unreachable");
 
-      await writeReceipt(c, "alrunner", {
+      await writeReceipt(c, "alrunner-v3", {
         status: "passed",
-        sublegs: fullRunSublegs(ALRUNNER_LEG_IDS),
+        sublegs: V3_AGENTFLOW_LEGS,
         artifacts: { reported: false },
       });
 
       const raw = JSON.parse(await readFile(c.receiptPath, "utf8"));
       const ok = validateReceipt(
         {
-          leg: "alrunner",
+          leg: "alrunner-v3",
           nonce: c.nonce,
           candidateSha: c.candidateSha,
           containerGeneration: 5,
-          expectedSublegs: ALRUNNER_LEG_IDS,
+          expectedSublegs: V3_AGENTFLOW_LEGS,
         },
         raw,
       );
       expect(ok.status).toBe("passed");
-      expect(ok.sublegs).toEqual([...ALRUNNER_LEG_IDS]);
+      expect(ok.sublegs).toEqual([...V3_AGENTFLOW_LEGS]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

@@ -17,7 +17,15 @@ import { AlRunnerV3CoverageJoinError } from "../src/al-runner-v3-sleep";
 import { bareHashRows } from "./mutant-equality";
 import type { MutantComparison, NormalizedMutant } from "./mutant-equality";
 
-export type V3LegOutcome = "pass" | "held" | "gate-fail" | "infra-fail" | "skipped";
+/** R654 S2: `"skipped (candidate build)"` is K's value on a candidate (`V3_K_CANDIDATE_SKIP` in
+ *  `alrunner-v3-legs.ts`); K is outside `V3_GATE_LEGS`, so `gateOutcome` never reads it. */
+export type V3LegOutcome =
+  | "pass"
+  | "held"
+  | "gate-fail"
+  | "infra-fail"
+  | "skipped"
+  | "skipped (candidate build)";
 export type V3GateOutcome = "pass" | "held" | "gate-fail" | "infra-fail";
 
 /**
@@ -137,8 +145,21 @@ export function cdoCheckoutRefusal(c: {
   return undefined;
 }
 
-/** The exact leg set a `pass` must hold (r3 F6 d). */
-export const V3_GATE_LEGS = ["C", "S1", "S3", "N1", "X", "D1", "D1c", "T"] as const;
+/** The exact leg set a `pass` must hold (r3 F6 d). R654 S2 adds L1, Y-A and Y-B (a candidate is
+ *  judged on layout and symbol sets too); K is outside it by ruling (`alrunner-v3-legs.ts`). */
+export const V3_GATE_LEGS = [
+  "C",
+  "S1",
+  "S3",
+  "N1",
+  "X",
+  "L1",
+  "Y-A",
+  "Y-B",
+  "D1",
+  "D1c",
+  "T",
+] as const;
 
 /** Rows by key; a key repeated (R193 twins) is not classified here, so it is refused upstream. */
 function byKey(rows: readonly NormalizedMutant[]): Map<string, NormalizedMutant[]> {
@@ -409,7 +430,7 @@ export function knownDifferencesRefusal(
 
 /**
  * Leg C's defect facts: each must read `defect-present` (r6; `none-selected-exit` since r7, R632;
- * `refusal-row-shape` since r9, R639). Every other fact of the 26 is a contract fact and must read
+ * `refusal-row-shape` since r9, R639). Every other fact of the 27 is a contract fact and must read
  * `matches`, except the warn facts.
  */
 export const V3_DEFECT_FACTS = [
@@ -425,8 +446,11 @@ export const V3_DEFECT_FACTS = [
   "refusal-row-shape",
 ] as const;
 
-/** r9 (R639): leg C's pre-committed fact count: 9 defect, 16 contract, 1 warn. */
-export const V3_LEG_C_FACTS = 26;
+/**
+ * Leg C's pre-committed fact count: 9 defect, 17 contract, 1 warn (r12, R667: the contract fact
+ * `message-has-no-type-prefix`; r9 had 26).
+ */
+export const V3_LEG_C_FACTS = 27;
 
 /** F4 (R639): leg C's per-fact log line, with `measured` whole. */
 export const legCFactLine = (f: {

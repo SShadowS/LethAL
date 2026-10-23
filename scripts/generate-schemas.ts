@@ -34,7 +34,6 @@ const FILES = [
   "store.ts",
   "events.ts",
   "backend.ts",
-  "al-runner-canary.ts",
   "permission-canary.ts",
   "assertion-screen.ts",
   "excluded-sites.ts",

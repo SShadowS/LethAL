@@ -39,7 +39,7 @@ import {
   buildAlRunnerCoverageIndex,
   normalizeFileKey,
 } from "./al-runner-coverage";
-import { verdictFromRunnerTest } from "./al-runner-rows";
+import { isV3RefusalText, verdictFromRunnerTest } from "./al-runner-rows";
 import {
   AlRunnerServer,
   AlRunnerServerRequestError,
@@ -107,11 +107,34 @@ import { ProjectSymlinkRefusedError } from "./walk";
 export const AL_RUNNER_V3_VERSION =
   /^al-?runner 3\.\d+\.\d+(?:-[\w.]+)?(?:\+[0-9A-Za-z.-]+)? \([0-9a-f]+\)$/;
 
-/** v3's refusal row prefix (`NotRun: out-of-scope: <reason>`), R586 measure.md row 14. */
-export const V3_REFUSAL_PREFIX = "NotRun: out-of-scope:";
+/** v3's refusal row prefix; R675 moved its one source to `al-runner-rows.ts`. */
+export { V3_REFUSAL_PREFIX } from "./al-runner-rows";
 
 /** v3's timeout row (`notRun: true`), anchored: `Test exceeded <N>s timeout.` */
 export const V3_TIMEOUT_MESSAGE = /^Test exceeded (\d+)s timeout\.$/;
+
+/**
+ * The end of a v3 refusal's verdict text (a notRun `error` row that is not a timeout). R678: a
+ * reused snapshot's refusals are read back by it. Changing its text needs an IDENTITY_SCHEME bump:
+ * otherwise a same-build snapshot stored under the old text is lent, and its refusals lose their
+ * `[v3-refused-test-nearby]` notes on a resume.
+ */
+const V3_NOT_RUN_SUFFIX =
+  "[al-runner v3 did not run this test (notRun), so whether the mutant changes its outcome on BC is unknown: NOT scored (R586 §5)]";
+
+/**
+ * R678: a reused snapshot's stored verdict carries the v3 notRun refusal text but not
+ * `runnerRow: "runner-refused"`, so whether v3 refused it cannot be told. Refused loudly rather
+ * than recording nothing.
+ */
+export class AlRunnerV3ReusedBaselineUnclassifiedError extends Error {
+  constructor(readonly detail: string) {
+    super(
+      `al-runner-v3: ${detail}: a reused baseline verdict holds v3's notRun refusal text without runnerRow "runner-refused", so its refusal cannot be classified (R678)`,
+    );
+    this.name = "AlRunnerV3ReusedBaselineUnclassifiedError";
+  }
+}
 
 /** The four note tags (plan §4, §6), in `failureNote`; the gate and any count read them by tag. */
 export const V3_STATE_NOTE_TAG = "[v3-codeunit-state-possible]";
@@ -134,6 +157,16 @@ export class AlRunnerV3UnprovenBatchError extends Error {
     );
     this.name = "AlRunnerV3UnprovenBatchError";
   }
+}
+
+/** R631/R655: a link under a bound root (`ProjectSymlinkRefusedError`) is unproven drift, by path. */
+async function linkIsUnproven(hash: Promise<string>, where: string): Promise<string> {
+  return hash.catch((err: unknown) => {
+    if (err instanceof ProjectSymlinkRefusedError) {
+      throw new AlRunnerV3UnprovenBatchError(`a link is in ${where} (${err.linkPath})`);
+    }
+    throw err;
+  });
 }
 
 /** §5, #5613: exit 6, "the selection matched no test", with no document. Stops the session. */
@@ -319,19 +352,21 @@ export function v3RowVerdict(
       ref,
       outcome: "error",
       durationMs: wallMs,
-      failureMessage: `${row.message ?? "<no message>"} [al-runner v3 did not run this test (notRun), so whether the mutant changes its outcome on BC is unknown: NOT scored (R586 §5)]`,
+      failureMessage: `${row.message ?? "<no message>"} ${V3_NOT_RUN_SUFFIX}`,
       operation: "completed-accepted",
       runnerRow: "runner-refused",
     };
   }
   // R639 K1(a), r9 §1: a refusal written WITHOUT notRun (a plain `fail` or `pass` whose message
-  // starts with v3's refusal prefix) never scores: no refusal path becomes a kill, survive or pass.
-  if ((row.message ?? "").startsWith(V3_REFUSAL_PREFIX)) {
+  // holds v3's refusal marker) never scores: no refusal path becomes a kill, survive or pass.
+  // R675: the marker ANYWHERE in the message (`isV3RefusalText`), so no prefix shape can hide it.
+  // A user Assert that quotes the marker is not a refusal, so the text says "holds the marker".
+  if (isV3RefusalText(row.message)) {
     return {
       ref,
       outcome: "error",
       durationMs: wallMs,
-      failureMessage: `${row.message ?? ""} [al-runner v3: a refusal written as a ${row.status}; never scored (R639)]`,
+      failureMessage: `${row.message ?? ""} [al-runner v3: a ${row.status} that holds v3's refusal marker; never scored (R639, R675)]`,
       operation: "completed-accepted",
       runnerRow: "runner-test-error",
     };
@@ -641,7 +676,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private testsPerCodeunit = new Map<number, number>();
   /** The session suite, per codeunit: the tests a call must have exactly one row for. */
   private suitePerCodeunit = new Map<number, readonly TestMethodRef[]>();
-  /** I3: tests v3 refused at baseline (notRun, not a timeout), per codeunit. */
+  /**
+   * I3: tests v3 refused at baseline (notRun `error`, not a timeout), per codeunit, from a
+   * baseline call or (R678) a reused snapshot's verdicts (`noteReusedBaseline`). Session-scoped on
+   * purpose, so `resetLayoutState` does not clear it (R677): a refusal depends on the test and the
+   * v3 build, both fixed for the session, and every batch's baseline runs the whole suite. A
+   * resumed batch that reuses its snapshot runs no baseline call, and a per-batch clear would
+   * silently drop a true note there.
+   */
   private baselineRefused = new Map<number, Set<string>>();
   private dotnetHelperWarned = false;
   private readonly compiler: ArtifactCompiler;
@@ -948,7 +990,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       const testAppSha256 = await this.compileTestAppAgainst(target.appPath, active);
       // Step 3: the proof, every <deps> file hashed now (m-2), and the per-run checks' baseline.
       this.proof = {
-        activeHashExceptSelector: await hashAlTree(active),
+        // R655: active/ is LethAL's copy and holds no link; one refuses here, by path.
+        activeHashExceptSelector: await linkIsUnproven(hashAlTree(active), "the staged batch"),
         activeAppJsonSha256: await fileSha256(join(active, "app.json")),
         // R631: the test dir is a USER root: a link refuses rather than hashing a partial tree.
         testDirHash: await hashTestDir(this.cfg.testDir),
@@ -1141,7 +1184,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (proof === undefined || dir === undefined) {
       throw new AlRunnerV3UnprovenBatchError("no batch was deployed and proved");
     }
-    if ((await hashAlTree(dir)) !== proof.activeHashExceptSelector) {
+    // R655: a link that appears in active/ mid-run is drift, as in the test dir (R631).
+    const activeHashNow = await linkIsUnproven(hashAlTree(dir), `${dir} after the alc proof`);
+    if (activeHashNow !== proof.activeHashExceptSelector) {
       throw new AlRunnerV3UnprovenBatchError(`an .al file in ${dir} changed after the alc proof`);
     }
     if ((await fileSha256(join(dir, "app.json"))) !== proof.activeAppJsonSha256) {
@@ -1177,14 +1222,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       );
     }
     // R631: a link that appears in the test dir mid-run is drift like any other change.
-    const testDirHashNow = await hashTestDir(this.cfg.testDir).catch((err: unknown) => {
-      if (err instanceof ProjectSymlinkRefusedError) {
-        throw new AlRunnerV3UnprovenBatchError(
-          `a link appeared in the test dir after the alc proof (${err.linkPath})`,
-        );
-      }
-      throw err;
-    });
+    const testDirHashNow = await linkIsUnproven(
+      hashTestDir(this.cfg.testDir),
+      "the test dir after the alc proof",
+    );
     if (testDirHashNow !== proof.testDirHash) {
       throw new AlRunnerV3UnprovenBatchError(
         "an .al file in the test dir changed after the alc proof",
@@ -1525,12 +1566,38 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (!this.isBaselineCall()) return;
     if (this.entries) this.baselineRows.set(id, rows);
     for (const r of rows) {
-      if (r.notRun && !(r.message !== undefined && V3_TIMEOUT_MESSAGE.test(r.message))) {
-        const set = this.baselineRefused.get(id) ?? new Set<string>();
-        set.add(r.method);
-        this.baselineRefused.set(id, set);
+      // R678: exactly `v3RowVerdict`'s refusal branch (a notRun with another status is a contract
+      // error), so a reused snapshot's verdicts give the same set (`noteReusedBaseline`).
+      if (
+        r.notRun &&
+        r.status === "error" &&
+        !(r.message !== undefined && V3_TIMEOUT_MESSAGE.test(r.message))
+      ) {
+        this.noteRefused(id, r.method);
       }
     }
+  }
+
+  /** R678: a reused baseline's refusals, read back from the verdicts `v3RowVerdict` stored. */
+  noteReusedBaseline(
+    baseline: readonly { readonly ref: TestMethodRef; readonly verdict: TestVerdict }[],
+  ): void {
+    for (const { ref, verdict } of baseline) {
+      if (verdict.failureMessage?.endsWith(V3_NOT_RUN_SUFFIX) !== true) continue;
+      // Unreachable today (`v3RowVerdict` writes the suffix only with the runnerRow); never silent.
+      if (verdict.runnerRow !== "runner-refused") {
+        throw new AlRunnerV3ReusedBaselineUnclassifiedError(
+          `${ref.codeunitName}.${ref.method} (runnerRow ${verdict.runnerRow ?? "<none>"})`,
+        );
+      }
+      this.noteRefused(ref.codeunitId, ref.method);
+    }
+  }
+
+  private noteRefused(id: number, method: string): void {
+    const set = this.baselineRefused.get(id) ?? new Set<string>();
+    set.add(method);
+    this.baselineRefused.set(id, set);
   }
 
   private resourcePath(): string {
@@ -1638,7 +1705,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         const bad = mine.find((r) => !serveDaemonReusable(serveLines([r]), "v3"));
         throw new AlRunnerV3EntriesRefusedError(
           "al-runner-v3-entries-warmup-dirty",
-          `the warm-up row ${bad?.name ?? e.id} (codeunit ${e.codeunit}) is one R612 does not keep (${bad?.message ?? bad?.status ?? "?"}); every daemon repeats it, so no entry is trusted on any`,
+          `the warm-up row ${bad?.name ?? e.id} (codeunit ${e.codeunit}) is ${r672Unkept(bad) ?? "one R612 does not keep"} (${bad?.message ?? bad?.status ?? "?"}); every daemon repeats it, so no entry is trusted on any`,
         );
       }
     } catch (err) {
@@ -1800,11 +1867,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const cutRow = (rows.get(sent[cut]?.id ?? "") ?? []).find(
       (r) => !serveDaemonReusable(serveLines([r]), "v3"),
     );
+    const r672 = r672Unkept(cutRow);
     return {
       results,
       resend,
       ...(cutRow !== undefined
-        ? { cutWhy: `${cutRow.name}: ${cutRow.message ?? cutRow.status}` }
+        ? {
+            cutWhy: `${cutRow.name}: ${cutRow.message ?? cutRow.status}${r672 !== undefined ? ` (${r672})` : ""}`,
+          }
         : {}),
     };
   }
@@ -2156,6 +2226,17 @@ function serveLines(rows: readonly V3Row[]): ServerTestLine[] {
     ...(r.message !== undefined ? { message: r.message } : {}),
     notRun: r.notRun,
   }));
+}
+
+/** R672 (review r2 nit), R675: a plain pass/fail (no notRun) that holds v3's refusal marker
+ *  anywhere is closed by R672's rule, not R612's. */
+function r672Unkept(r: V3Row | undefined): string | undefined {
+  return r !== undefined &&
+    r.notRun !== true &&
+    (r.status === "pass" || r.status === "fail") &&
+    isV3RefusalText(r.message)
+    ? `a plain ${r.status} that holds v3's refusal marker (R675), which R672 does not keep`
+    : undefined;
 }
 
 /** R635 §3, §5: rows compared by method, status, notRun and (for notRun) the reason, in method

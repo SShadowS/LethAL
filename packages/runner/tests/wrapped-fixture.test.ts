@@ -18,7 +18,7 @@ import {
   assertWrappedRun,
   twinDifferences,
 } from "../itest/wrapped-fixture";
-import { alRunnerCoverageFrom, buildAlRunnerCoverageIndex } from "../src/al-runner-coverage";
+import { alRunnerCoverageFromServer, buildAlRunnerCoverageIndex } from "../src/al-runner-coverage";
 import { buildLineMap } from "../src/line-map";
 import {
   generateMutationSet,
@@ -28,7 +28,6 @@ import {
   prepareBatchProject,
 } from "../src/orchestrator";
 import { effectiveBuildSymbols } from "../src/preprocessor-symbols";
-import { AL_RUNNER_PREDEFINED_SYMBOLS_V2_12_0 } from "../src/preprocessor-symbols";
 import { removeScratchDir } from "./helpers/scratch";
 
 /**
@@ -40,7 +39,9 @@ import { removeScratchDir } from "./helpers/scratch";
  * shortened header comment fails here in seconds.
  */
 
-const predefined = { symbols: [...AL_RUNNER_PREDEFINED_SYMBOLS_V2_12_0].sort() };
+// R654 S3: built for al-runner-v3 (alc's build, no predefined symbol) where it was built for the
+// retired .NET al-runner, which predefined CLEANSCHEMA1..25. The fixture names none of them, so
+// the 98 mutants are the same.
 
 interface Built {
   readonly rows: readonly string[];
@@ -50,7 +51,7 @@ interface Built {
 async function build(root: string): Promise<Built> {
   const set = await generateMutationSet(WRAPPED_PROJECT_DIR, {
     preprocessorSymbols: WRAPPED_SYMBOLS,
-    backend: { kind: "al-runner", predefined },
+    backend: { kind: "al-runner-v3" },
   });
   const batches = planArtifacts(set.files, {});
   const [batch, ...more] = batches;
@@ -107,7 +108,7 @@ describe("R-300b: sandbox-wrapped", () => {
 
   it("admits WrappedTop, WrappedPre, WrappedPairA, WrappedTrigger, WrappedView, WrappedXtra and WrappedYBand; refuses WrappedArms; skips WrappedPairB", async () => {
     const index = await buildAlRunnerCoverageIndex(get().dir, {
-      symbols: ["WRAPAPP", ...WRAPPED_SYMBOLS, ...predefined.symbols],
+      symbols: ["WRAPAPP", ...WRAPPED_SYMBOLS],
     });
     expect([...index.admittedWrappedFiles].sort()).toEqual([
       "wrappedpaira.codeunit.al",
@@ -124,11 +125,16 @@ describe("R-300b: sandbox-wrapped", () => {
 
   it("a frame misread moves Twice's original-frame lines into the instrumented Grow", async () => {
     const index = await buildAlRunnerCoverageIndex(get().dir, {
-      symbols: ["WRAPAPP", ...WRAPPED_SYMBOLS, ...predefined.symbols],
+      symbols: ["WRAPAPP", ...WRAPPED_SYMBOLS],
     });
+    // R654 S3: read as `perTestCoverage` under scope Grow. In these admitted wrapped files a scope
+    // its position contradicts is DROPPED (R-300b I3), so each line stays only if it lies in Grow.
     const owners = (file: string, lines: number[]) =>
-      alRunnerCoverageFrom(
-        lines.map((line) => ({ file, line, hits: 1 })),
+      alRunnerCoverageFromServer(
+        {
+          test: "Codeunit78950.T",
+          coverage: [{ file, statements: lines.map((line) => ({ scope: "Grow", line, hits: 1 })) }],
+        },
         index,
       ).entries.map((e) => e.procedure);
     // Twice's original lines: WrappedTop 32-36, WrappedPre 35-36 (the table's Twice rows).

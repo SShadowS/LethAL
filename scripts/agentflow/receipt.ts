@@ -42,7 +42,7 @@ export interface ReceiptChallenge {
   readonly containerGeneration: number;
   /**
    * The sublegs the caller requires: a count, or (R-587) the exact names, which the receipt must
-   * equal as a set. `itest:alrunner` has 23 named legs (`ALRUNNER_LEG_IDS`); a receipt naming fewer
+   * equal as a set. `itest:alrunner-v3` has named legs (`V3_AGENTFLOW_LEGS`); a receipt naming fewer
    * is a partial run being presented as a complete one.
    */
   readonly expectedSublegs: number | readonly string[];

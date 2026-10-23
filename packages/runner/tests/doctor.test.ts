@@ -22,21 +22,6 @@ function cfgFixture(): DoctorConfig {
   return { envReady: "Running" };
 }
 
-/**
- * R131: a machine with no al-runner cache. Every fixture below uses it, because the cache check
- * reports a local disk fact that has nothing to do with what these tests are about — and a fixture
- * reading the REAL `~/.local/share/al-runner` would make these tests depend on whoever ran a gate
- * last. The check's own behaviour is tested in `al-runner-cache.test.ts`.
- */
-const EMPTY_CACHE = {
-  dir: "/nonexistent",
-  present: false,
-  totalBytes: 0,
-  builds: [],
-  secondaryBytes: null,
-  secondaryDir: "/nonexistent-cache",
-} as const;
-
 describe("lethal doctor", () => {
   test("reports every check, not just the first failure", async () => {
     const r = await runDoctor(cfgFixture(), {
@@ -44,7 +29,6 @@ describe("lethal doctor", () => {
       quarantine: async () => "clear",
       controlVersion: async () => MIN_CONTROL_VERSION,
       toolPaths: async () => ({ alc: "ok", altool: "ok" }),
-      alRunnerCache: async () => EMPTY_CACHE,
     });
     // Review round 1: was `>= 5` — the `lease` check shipped in round 0 but was REMOVED (a check
     // that structurally could not fail was counted as a pass; see `DOCTOR_NOT_CHECKED` in cli.ts
@@ -59,7 +43,6 @@ describe("lethal doctor", () => {
       quarantine: async () => "clear",
       controlVersion: async () => MIN_CONTROL_VERSION,
       toolPaths: async () => ({ alc: "ok", altool: "ok" }),
-      alRunnerCache: async () => EMPTY_CACHE,
     });
     const env = r.checks.find((c) => c.name === "environment");
     expect(env?.ok).toBe(false);
@@ -72,7 +55,6 @@ describe("lethal doctor", () => {
       quarantine: async () => "clear",
       controlVersion: async () => MIN_CONTROL_VERSION,
       toolPaths: async () => ({ alc: "ok", altool: "ok" }),
-      alRunnerCache: async () => EMPTY_CACHE,
     });
     expect(r.ok).toBe(true);
   });
@@ -89,7 +71,6 @@ describe("lethal doctor", () => {
       quarantine: async () => "clear",
       controlVersion: async () => MIN_CONTROL_VERSION,
       toolPaths: async () => ({ alc: "ok", altool: "ok" }),
-      alRunnerCache: async () => EMPTY_CACHE,
     });
     expect(r.ok).toBe(false);
     const env = r.checks.find((c) => c.name === "environment");
@@ -108,7 +89,6 @@ describe("lethal doctor", () => {
       quarantine: async () => "clear",
       controlVersion: async () => "not-a-version",
       toolPaths: async () => ({ alc: "ok", altool: "ok" }),
-      alRunnerCache: async () => EMPTY_CACHE,
     });
     expect(r.ok).toBe(false);
     const cv = r.checks.find((c) => c.name === "control-version");
@@ -122,7 +102,6 @@ describe("lethal doctor", () => {
       quarantine: async () => "clear",
       controlVersion: async () => "1.0.0.0",
       toolPaths: async () => ({ alc: "ok", altool: "ok" }),
-      alRunnerCache: async () => EMPTY_CACHE,
     });
     const cv = r.checks.find((c) => c.name === "control-version");
     expect(cv?.ok).toBe(false);
@@ -135,7 +114,6 @@ describe("lethal doctor", () => {
       quarantine: async () => "clear",
       controlVersion: async () => MIN_CONTROL_VERSION,
       toolPaths: async () => ({ alc: "", altool: "ok" }),
-      alRunnerCache: async () => EMPTY_CACHE,
     });
     const tp = r.checks.find((c) => c.name === "tool-paths");
     expect(tp?.ok).toBe(false);
@@ -153,7 +131,6 @@ describe("lethal doctor", () => {
         quarantine: async () => "clear",
         controlVersion: async () => MIN_CONTROL_VERSION,
         toolPaths: async () => ({ alc: "ok", altool: "" }),
-        alRunnerCache: async () => EMPTY_CACHE,
       },
     );
     const tp = r.checks.find((c) => c.name === "tool-paths");
@@ -166,7 +143,6 @@ describe("lethal doctor", () => {
       quarantine: async () => "run: activation deadline exceeded",
       controlVersion: async () => MIN_CONTROL_VERSION,
       toolPaths: async () => ({ alc: "ok", altool: "ok" }),
-      alRunnerCache: async () => EMPTY_CACHE,
     });
     expect(r.ok).toBe(false);
     expect(r.checks.find((c) => c.name === "quarantine")?.detail).toBe(
@@ -183,7 +159,6 @@ describe("lethal doctor", () => {
     let quarantineCalls = 0;
     let controlVersionCalls = 0;
     let toolPathsCalls = 0;
-    let cacheCalls = 0;
     await runDoctor(cfgFixture(), {
       envStatus: async () => {
         envCalls++;
@@ -201,16 +176,11 @@ describe("lethal doctor", () => {
         toolPathsCalls++;
         return { alc: "ok", altool: "ok" };
       },
-      alRunnerCache: async () => {
-        cacheCalls++;
-        return EMPTY_CACHE;
-      },
     });
     expect(envCalls).toBe(1);
     expect(quarantineCalls).toBe(1);
     expect(controlVersionCalls).toBe(1);
     expect(toolPathsCalls).toBe(1);
-    expect(cacheCalls).toBe(1);
   });
 });
 
@@ -229,7 +199,6 @@ describe("lethal doctor — the lease check (R110)", () => {
     quarantine: async () => "clear",
     controlVersion: async () => MIN_CONTROL_VERSION,
     toolPaths: async () => ({ alc: "ok", altool: "ok" }),
-    alRunnerCache: async () => EMPTY_CACHE,
   };
   // A cleanly RELEASED lease, not a virgin one: `TryRelease` leaves `Owner` populated, which is
   // the shape a healthy container actually presents and the one an owner-keyed check got wrong.
@@ -296,6 +265,38 @@ describe("lethal doctor — the lease check (R110)", () => {
     expect(live.checks.find((c) => c.name === "lease")?.detail).not.toContain("orphaned");
   });
 
+  // R658 (M8): a `run` op may still be executing on the server; a reset under it lets the next
+  // session overlap it. Restart first.
+  const leaseDetail = async (opKind: string) => {
+    const r = await runDoctor(
+      { ...cfgFixture(), now: NOW },
+      {
+        ...green,
+        lease: async () => ({
+          owner: "x",
+          opKind,
+          expiresAt: "2026-08-07T11:00:00.000Z",
+          tokenPresent: true,
+        }),
+      },
+    );
+    return r.checks.find((c) => c.name === "lease")?.detail ?? "";
+  };
+
+  test("R658 D1: an op kind `run` says restart the NST first, then force-reset-lease", async () => {
+    const d = await leaseDetail("run");
+    expect(d).toContain("restart the NST first");
+    expect(d.indexOf("restart the NST")).toBeLessThan(d.indexOf("force-reset-lease"));
+  });
+
+  test("R658 D2: an op kind `publish` or `none` keeps today's text", async () => {
+    for (const kind of ["publish", "none"]) {
+      const d = await leaseDetail(kind);
+      expect(d).not.toContain("restart the NST");
+      expect(d).toContain("orphaned lease: recover it with `lethal force-reset-lease");
+    }
+  });
+
   test("an op marker with NO owner still fails — that is what a killed session leaves", async () => {
     // Green requires BOTH halves. Keying only on `owner` would pass the exact shape the recovery
     // tooling exists for.
@@ -344,7 +345,6 @@ describe("lethal doctor — the company check (R195)", () => {
     quarantine: async () => "clear",
     controlVersion: async () => MIN_CONTROL_VERSION,
     toolPaths: async () => ({ alc: "ok", altool: "ok" }),
-    alRunnerCache: async () => EMPTY_CACHE,
   };
 
   test("a company the server has passes, naming it", async () => {

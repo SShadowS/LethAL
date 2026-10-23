@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { initParser } from "@lethal/engine";
-import { describeAlRunnerCache, readAlRunnerCache } from "../src/al-runner-cache";
 import { alRunnerCoverageSupport } from "../src/al-runner-coverage";
 import { buildPackageCacheCopy } from "../src/artifact";
 import {
@@ -299,20 +298,6 @@ describe("R631: package caches", () => {
   });
 });
 
-describe("R631: doctor's al-runner cache size", () => {
-  test("a linked folder is not followed, not counted, and the count is said", async () => {
-    const base = scratch("lethal-r631-");
-    const dir = join(base, "artifacts");
-    put(dir, "28.0.1.1/a.app", "x".repeat(100));
-    put(base, "install/big.dll", "y".repeat(5000));
-    symlinkSync(join(base, "install"), join(dir, "28.0.1.1", "shadow"), "junction");
-    const report = await readAlRunnerCache(dir, join(base, "no-secondary"));
-    expect(report.totalBytes).toBe(100);
-    expect(report.skippedLinks).toBe(1);
-    expect(describeAlRunnerCache(report)).toContain("1 link(s) in these caches were not followed");
-  });
-});
-
 describe("R631 review L2: a link that appears mid-run is drift, never the tripwire", () => {
   test("the drift watch does not announce the new link to onSkippedLinks", async () => {
     const base = scratch("lethal-r631-");
@@ -359,14 +344,16 @@ describe("R631 review L3: a dangling .app link in the package cache warns", () =
 });
 
 describe("R631 review H1: configured package caches", () => {
-  test("configuredPackageCaches reads bcdev, alRunner and alRunnerV3 cache paths", () => {
+  // R654: the retired .NET al-runner's `alRunner` section is no longer read (F2, its refusal, is
+  // held), so its cache path is not one.
+  test("configuredPackageCaches reads bcdev and alRunnerV3 cache paths, not the retired alRunner's", () => {
     expect(
       configuredPackageCaches({
         bcdev: { packageCachePath: "a" },
         alRunner: { packagesDir: "b" },
         alRunnerV3: { packagesDir: "c" },
       }),
-    ).toEqual(["a", "b", "c"]);
+    ).toEqual(["a", "c"]);
     expect(configuredPackageCaches({})).toEqual([]);
   });
 

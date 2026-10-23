@@ -313,36 +313,8 @@ const gateHow = (enable: string, name: string, script: string): string =>
  * file, and `tests/baseline-wiring.test.ts` pins every gate's path to `join(HERE, <this key>)`.
  */
 export const GATE_BASELINES: Readonly<Record<string, string>> = {
-  "al-runner.baseline.json": gateHow(
-    "LETHAL_ITEST_ALRUNNER=1 LETHAL_ALRUNNER_PATH=<al-runner.exe>",
-    "al-runner.baseline.json",
-    "itest:alrunner",
-  ),
-  "al-runner.layout.baseline.json": gateHow(
-    "LETHAL_ITEST_ALRUNNER=1 LETHAL_ALRUNNER_PATH=<al-runner.exe>",
-    "al-runner.layout.baseline.json",
-    "itest:alrunner",
-  ),
-  "al-runner.multiobject.baseline.json": gateHow(
-    "LETHAL_ITEST_ALRUNNER=1 LETHAL_ALRUNNER_PATH=<al-runner.exe>",
-    "al-runner.multiobject.baseline.json",
-    "itest:alrunner",
-  ),
-  "al-runner.cli-default.baseline.json": gateHow(
-    "LETHAL_ITEST_ALRUNNER=1 LETHAL_ALRUNNER_PATH=<al-runner.exe>",
-    "al-runner.cli-default.baseline.json",
-    "itest:alrunner",
-  ),
-  "al-runner.wrapped.baseline.json": gateHow(
-    "LETHAL_ITEST_ALRUNNER=1 LETHAL_ALRUNNER_PATH=<al-runner.exe>",
-    "al-runner.wrapped.baseline.json",
-    "itest:alrunner",
-  ),
-  "al-runner.names.baseline.json": gateHow(
-    "LETHAL_ITEST_ALRUNNER=1 LETHAL_ALRUNNER_PATH=<al-runner.exe>",
-    "al-runner.names.baseline.json",
-    "itest:alrunner",
-  ),
+  // R654 S3: the eight `al-runner.*.baseline.json` files left with `itest:alrunner` (the retired
+  // .NET al-runner's gate).
   "bcdev.baseline.json": gateHow("LETHAL_ITEST_BCDEV=1", "bcdev.baseline.json", "itest:bcdev"),
   "bcdev.names.baseline.json": gateHow(
     "LETHAL_ITEST_BCDEV=1",
@@ -372,6 +344,23 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
     "al-runner-v3.tables.baseline.json",
     "itest:alrunner-v3",
   ),
+  // R654 S2: legs L1, Y-A and Y-B (pre-commitment
+  // docs/superpowers/specs/2026-10-22-r654-v3-gate-legs-precommitment.md, 43115c78).
+  "al-runner-v3.layout.baseline.json": gateHow(
+    "LETHAL_ITEST_ALRUNNER_V3=1 LETHAL_ITEST_V3_LEGS=L1",
+    "al-runner-v3.layout.baseline.json",
+    "itest:alrunner-v3",
+  ),
+  "al-runner-v3.symbols-lethala.baseline.json": gateHow(
+    "LETHAL_ITEST_ALRUNNER_V3=1 LETHAL_ITEST_V3_LEGS=Y-A",
+    "al-runner-v3.symbols-lethala.baseline.json",
+    "itest:alrunner-v3",
+  ),
+  "al-runner-v3.symbols-lethalb.baseline.json": gateHow(
+    "LETHAL_ITEST_ALRUNNER_V3=1 LETHAL_ITEST_V3_LEGS=Y-B",
+    "al-runner-v3.symbols-lethalb.baseline.json",
+    "itest:alrunner-v3",
+  ),
 };
 
 /**
@@ -398,16 +387,13 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
  * 3.0.0-alpha.2 (91253f2d6), LethAL 0043dda1: record exit 3 at 290 / 57 / 59 over 406, its 52
  * differences from `tables.baseline.json` equal to `precommitment-tables-52.txt` by key and by
  * transition (pre-commitments dcdd1489, abe76fa6, c7c505e6).
+ * R654 S2's three v3 legs (`al-runner-v3.layout.baseline.json`,
+ * `al-runner-v3.symbols-lethala.baseline.json`, `al-runner-v3.symbols-lethalb.baseline.json`) were
+ * recorded 2026-10-22 on al-runner v3 3.0.0-alpha.2 (91253f2d6) in one record run (exit 3,
+ * `/coord/handoff/R-654/s2-record.log`) at 7 / 3 / 0, 5 / 4 / 0 and 5 / 4 / 0 as pre-committed
+ * (43115c78), each identical per mutant to its .NET al-runner twin.
  */
 export const PENDING_FIRST_RECORD: readonly string[] = [];
-
-/** R321's symbol baselines. Recorded only through `LETHAL_ITEST_RECORD_SYMBOL_BASELINES=1`. */
-export const SYMBOL_BASELINES: readonly string[] = [
-  "al-runner.symbols-lethala.baseline.json",
-  "al-runner.symbols-lethalb.baseline.json",
-];
-const SYMBOL_HOW =
-  "LETHAL_ITEST_RECORD_SYMBOL_BASELINES=1 LETHAL_ITEST_ALRUNNER=1 LETHAL_ALRUNNER_PATH=<al-runner.exe> bun run itest:alrunner";
 
 /** R332: thrown after a gate record run wrote its baseline. The gate exits 3: never a pass. */
 export class BaselineRecordedError extends Error {
@@ -422,9 +408,8 @@ export function recordHowFor(baselinePath: string): string {
   const name = basename(baselinePath);
   const gate = GATE_BASELINES[name];
   if (gate !== undefined) return gate;
-  if (SYMBOL_BASELINES.includes(name)) return SYMBOL_HOW;
   throw new Error(
-    `${baselinePath} is not a registered frozen baseline. Register its basename in GATE_BASELINES or SYMBOL_BASELINES (baseline-guard.ts).`,
+    `${baselinePath} is not a registered frozen baseline. Register its basename in GATE_BASELINES (baseline-guard.ts).`,
   );
 }
 
@@ -439,7 +424,7 @@ export function recordRequested(
   for (const entry of listed) {
     if (GATE_BASELINES[entry] === undefined) {
       throw new Error(
-        `${RECORD_BASELINE_ENV} lists ${JSON.stringify(entry)}, which is not a gate baseline. It takes exact basenames from: ${Object.keys(GATE_BASELINES).join(", ")}. The symbol baselines use LETHAL_ITEST_RECORD_SYMBOL_BASELINES=1.`,
+        `${RECORD_BASELINE_ENV} lists ${JSON.stringify(entry)}, which is not a gate baseline. It takes exact basenames from: ${Object.keys(GATE_BASELINES).join(", ")}.`,
       );
     }
   }
@@ -554,32 +539,5 @@ export async function assertGateBaseline(
   await writeBaselineOnce(actual, baselinePath, label);
   throw new BaselineRecordedError(
     `${label}: RECORDED ${baselinePath}; NOT a pass. Review it against the pre-commitment, re-run without ${RECORD_BASELINE_ENV} to confirm it passes, then commit it.`,
-  );
-}
-
-/**
- * R321's symbol legs. Same refusals, exclusive write (finding C). Recording returns instead of
- * throwing, so one record run writes BOTH symbol files; al-runner.itest.ts then exits 3.
- */
-export async function assertMatchesFrozenBaseline(
-  report: SessionReport,
-  baselinePath: string,
-  label: string,
-  record: boolean,
-): Promise<void> {
-  const name = basename(baselinePath);
-  if (!SYMBOL_BASELINES.includes(name)) {
-    throw new Error(
-      `${baselinePath} is not a registered symbol baseline (SYMBOL_BASELINES: ${SYMBOL_BASELINES.join(", ")}). A gate baseline belongs to assertGateBaseline instead.`,
-    );
-  }
-  const actual = sortedForDisk(normalizeForComparison(report));
-  if (!record) {
-    await compareWithCommitted(actual, baselinePath, label);
-    return;
-  }
-  await writeBaselineOnce(actual, baselinePath, label);
-  console.log(
-    `${label}: recorded ${baselinePath}. Review it against the pre-commitment and commit it.`,
   );
 }

@@ -1,5 +1,10 @@
 # R546 reports
 
+> **History: `ar-A` and `ar-B` are reports of the .NET al-runner, retired 2026-10-22 (R654).** They
+> no longer validate against the current report schema (they carry the removed `alRunnerCanary`),
+> and `explain`, `campaign` and `lethal export` refuse them by name (`al-runner-v2-retired`). They
+> are kept as the evidence for R546. The `bc-*` reports are unaffected.
+
 The four `SessionReport`s behind `docs/measurements/2026-10-09-r546-alrunner-bc-agreement.md`:
 
 | File | Backend | Leg | Coverage |

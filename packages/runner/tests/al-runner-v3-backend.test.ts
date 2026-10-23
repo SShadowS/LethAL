@@ -21,6 +21,7 @@ import {
   AlRunnerV3Backend,
   type AlRunnerV3Config,
   AlRunnerV3ResourceSelectorRefusedError,
+  AlRunnerV3ReusedBaselineUnclassifiedError,
   AlRunnerV3RowMissingError,
   AlRunnerV3SelectionError,
   AlRunnerV3UnprovenBatchError,
@@ -33,7 +34,7 @@ import {
   v3CallDeadlineMs,
   v3RowVerdict,
 } from "../src/al-runner-v3-backend";
-import type { V3ContractResult } from "../src/al-runner-v3-contract";
+import { MESSAGE_PREFIX_REASON, type V3ContractResult } from "../src/al-runner-v3-contract";
 import { sha256OfFile } from "../src/al-runner-v3-pin";
 import { AlRunnerV3CoverageJoinError } from "../src/al-runner-v3-sleep";
 import { AlcCompileError, type ArtifactIo, ArtifactPrepareError } from "../src/artifact";
@@ -389,7 +390,7 @@ describe("R639 r9 §2: status() passes candidate into the unlike-bc refusals and
       },
     ],
   };
-  async function statusOf(candidate: boolean) {
+  async function statusOf(candidate: boolean, contract: V3ContractResult = UNLIKE) {
     const l = await layout();
     const NS = 'xmlns="http://schemas.microsoft.com/navx/2015/manifest"';
     await writeFile(
@@ -415,7 +416,7 @@ describe("R639 r9 §2: status() passes candidate into the unlike-bc refusals and
       ...(candidate ? { candidate: true } : {}),
     });
     // The probe itself is tested in al-runner-v3-contract.test.ts; seed its result, test the wiring.
-    (b as unknown as { contract: V3ContractResult }).contract = UNLIKE;
+    (b as unknown as { contract: V3ContractResult }).contract = contract;
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
       const s = await b.status();
@@ -434,6 +435,24 @@ describe("R639 r9 §2: status() passes candidate into the unlike-bc refusals and
     expect(s.ok).toBe(false);
     expect(s.details).toMatch(/UNLIKE-BC — refusal-row-shape/);
     expect(warned).not.toMatch(/unlike-bc/);
+  });
+  test("R667: a prefixed failure message refuses the session before any mutant is scored, naming K1(a)", async () => {
+    const prefixed: V3ContractResult = {
+      facts: [
+        {
+          fact: "message-has-no-type-prefix",
+          kind: "contract",
+          verdict: "diverged",
+          expected: "x",
+          measured: 'prefix "SomeException: "; Fails "SomeException: NotRun: out-of-scope: x"',
+        },
+      ],
+    };
+    for (const candidate of [false, true]) {
+      const { s } = await statusOf(candidate, prefixed);
+      expect(s.ok).toBe(false);
+      expect(s.details).toContain(`why: ${MESSAGE_PREFIX_REASON}`);
+    }
   });
 });
 
@@ -559,6 +578,36 @@ describe("T22: the proof is bound to the bytes v3 reads (c1-c5)", () => {
       expect(v3.calls).toHaveLength(0);
     });
   }
+
+  // R655: active/ is LethAL's own copy and holds no link (measured), so one is drift by name.
+  const linkHelpers = async (l: Layout, into: string): Promise<string> => {
+    await mkdir(join(l.root, "helpers"), { recursive: true });
+    await writeFile(join(l.root, "helpers", "H.Codeunit.al"), "codeunit 79150 H { }");
+    const link = join(into, "helpers");
+    await symlink(join(l.root, "helpers"), link, "junction");
+    return link;
+  };
+
+  test("R655: a junction holding an .al added under active/ after deploy is refused at the next send, by path", async () => {
+    const { l, b, v3 } = await deployed();
+    const link = await linkHelpers(l, active(l));
+    const err = await run(b).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AlRunnerV3UnprovenBatchError);
+    expect((err as Error).message).toContain(link);
+    expect(v3.calls).toHaveLength(0);
+  });
+
+  test("R655: a link in the batch (cp carries it into active/) is refused at deploy, by path; v3 not started", async () => {
+    const l = await layout();
+    await linkHelpers(l, l.batch);
+    const v3 = fakeV3(allPass);
+    const b = backendOf(l, v3.spawn, fakeAlc().io);
+    const err = await b.deploy(l.batch).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AlRunnerV3UnprovenBatchError);
+    expect((err as Error).message).toContain(join(active(l), "helpers"));
+    await expect(run(b)).rejects.toBeInstanceOf(AlRunnerV3UnprovenBatchError);
+    expect(v3.calls).toHaveLength(0);
+  });
 
   test("activate refuses an id the manifest does not hold", async () => {
     const { b } = await deployed();
@@ -915,7 +964,7 @@ describe("§5 the row decoder", () => {
   test("K1-a: a fail whose message starts with the refusal prefix (notRun false) is error/runner-test-error, never a kill", () => {
     const v = v3RowVerdict(r, row({ status: "fail", message: PREFIXED }), 3, 10, undefined);
     expect([v.outcome, v.runnerRow]).toEqual(["error", "runner-test-error"]);
-    expect(v.failureMessage).toContain("a refusal written as a fail; never scored");
+    expect(v.failureMessage).toContain("a fail that holds v3's refusal marker; never scored");
   });
   test("K1-b: the same with status pass is error, never a pass", () => {
     const v = v3RowVerdict(r, row({ status: "pass", message: PREFIXED }), 3, 10, undefined);
@@ -926,10 +975,77 @@ describe("§5 the row decoder", () => {
       v3RowVerdict(r, row({ status: "fail", message: "boom" }), 3, 10, undefined).outcome,
     ).toBe("fail");
   });
-  test("K1-d: the prefix NOT at the start still scores fail (the match is anchored)", () => {
+  test("R675 K1-d (inverts R672's): the marker NOT at the start is error, never a kill", () => {
+    const v = v3RowVerdict(r, row({ status: "fail", message: `x ${PREFIXED}` }), 3, 10, undefined);
+    expect([v.outcome, v.runnerRow]).toEqual(["error", "runner-test-error"]);
+  });
+  // R675 (plan 2026-10-23-r675-v3-refusal-marker-anywhere.md §3): K1(a) reads the marker after ANY
+  // text: the R672 one-word prefixes, the spaced and `::` shapes, a chain, and an Assert quoting it
+  // (the last one a lost kill, the safe direction; R675's known limit).
+  for (const p of [
+    "SomeException: ",
+    "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: ",
+    "Error: ",
+    "Runtime error: ",
+    "al_runtime::Error: ",
+    "A: B: ",
+    "Assert.AreEqual failed. Expected: ",
+  ]) {
+    for (const status of ["fail", "pass"] as const) {
+      test(`R675 K1: ${status} "${p}${PREFIXED}" is error/runner-test-error, never scored`, () => {
+        const v = v3RowVerdict(r, row({ status, message: `${p}${PREFIXED}` }), 3, 10, undefined);
+        expect([v.outcome, v.runnerRow]).toEqual(["error", "runner-test-error"]);
+        expect(v.failureMessage).toContain(
+          `a ${status} that holds v3's refusal marker; never scored (R639, R675)`,
+        );
+        expect(v.failureMessage).not.toContain("a refusal written as");
+      });
+    }
+  }
+  test("R672 K1: an unprefixed refusal's verdict (the whole object; R675's marker wording)", () => {
+    for (const status of ["fail", "pass"] as const) {
+      expect(v3RowVerdict(r, row({ status, message: PREFIXED }), 3, 10, undefined)).toEqual({
+        ref: r,
+        outcome: "error",
+        durationMs: 10,
+        failureMessage: `NotRun: out-of-scope: x [al-runner v3: a ${status} that holds v3's refusal marker; never scored (R639, R675)]`,
+        operation: "completed-accepted",
+        runnerRow: "runner-test-error",
+      });
+    }
+  });
+  test("R675: today's refusal (marker at 0, with notRun) is byte-identical (the whole object)", () => {
     expect(
-      v3RowVerdict(r, row({ status: "fail", message: `x ${PREFIXED}` }), 3, 10, undefined).outcome,
-    ).toBe("fail");
+      v3RowVerdict(
+        r,
+        row({ status: "error", notRun: true, message: `${PREFIXED} an outbound HTTP request` }),
+        3,
+        10,
+        undefined,
+      ),
+    ).toEqual({
+      ref: r,
+      outcome: "error",
+      durationMs: 10,
+      failureMessage:
+        "NotRun: out-of-scope: x an outbound HTTP request [al-runner v3 did not run this test (notRun), so whether the mutant changes its outcome on BC is unknown: NOT scored (R586 §5)]",
+      operation: "completed-accepted",
+      runnerRow: "runner-refused",
+    });
+  });
+  test("R675 kill direction: rows without the marker give master's exact object", () => {
+    for (const message of [
+      "boom 5",
+      "Assert.AreEqual failed. Expected:<1> (Integer). Actual:<2> (Integer). R667 values differ.",
+      "out-of-scope: x",
+    ]) {
+      expect(v3RowVerdict(r, row({ status: "fail", message }), 3, 10, undefined)).toEqual({
+        ref: r,
+        outcome: "fail",
+        durationMs: 10,
+        failureMessage: message,
+      });
+    }
   });
   test("decodeV3Rows refuses another codeunit's row and a name that is not Codeunit<id>.<method>", () => {
     const doc = (t: object) => JSON.stringify({ tests: [t] });
@@ -1030,6 +1146,121 @@ describe("T24 (I1) and I3: the notes", () => {
     );
     expect(b.survivorNote([ref("A")])?.startsWith(V3_REFUSED_NEARBY_TAG)).toBe(true);
     expect(b.survivorNote([ref("Q", 1)])).toBeUndefined();
+  });
+
+  test("R677: a batch-0 baseline refusal still notes a survivor in a later batch whose baseline ran nothing (a reused --resume snapshot)", async () => {
+    const l = await layout();
+    const rows = () => [
+      { method: "A", status: "pass" as const },
+      {
+        method: "B",
+        status: "error" as const,
+        notRun: true,
+        message: "NotRun: out-of-scope: Commit",
+      },
+    ];
+    const b = backendOf(l, fakeV3(rows, { coverage: plainCoverage }).spawn, fakeAlc().io);
+    await b.deploy(l.batch);
+    await b.activate(null);
+    await b.run(ref("B"), { coverage: "none", timeoutMs: 1000 });
+    // Batch 1: a reused snapshot runs no baseline call, so it records no refusal of its own.
+    await b.deploy(l.batch);
+    await b.activate(null);
+    expect(b.survivorNote([ref("A")])?.startsWith(V3_REFUSED_NEARBY_TAG)).toBe(true);
+  });
+
+  // R678: the stored verdict of each notRun row shape, made by the same decoder a baseline uses.
+  const notRunVerdict = (method: string, status: "pass" | "fail" | "error", message: string) =>
+    v3RowVerdict(
+      ref(method),
+      { codeunit: CU, name: `Codeunit${CU}.${method}`, method, status, message, notRun: true },
+      1,
+      5,
+      undefined,
+    );
+
+  test("R678: a fully reused --resume snapshot's v3 refusal still notes a survivor (no baseline call in this session)", async () => {
+    const l = await layout();
+    const b = backendOf(l, fakeV3(() => []).spawn, fakeAlc().io);
+    await b.deploy(l.batch);
+    b.noteReusedBaseline([
+      { ref: ref("B"), verdict: notRunVerdict("B", "error", "NotRun: out-of-scope: Commit") },
+    ]);
+    expect(b.survivorNote([ref("A")])).toStartWith(`${V3_REFUSED_NEARBY_TAG} Tests.B:`);
+    expect(b.survivorNote([ref("Q", 1)])).toBeUndefined();
+  });
+
+  test("R678: a reused snapshot with no v3 refusal notes nothing (a timeout, a contract error, a .NET-shaped refusal, a pass)", async () => {
+    const l = await layout();
+    const b = backendOf(l, fakeV3(() => []).spawn, fakeAlc().io);
+    await b.deploy(l.batch);
+    const dotnetShaped = v3RowVerdict(
+      ref("D"),
+      {
+        codeunit: CU,
+        name: `Codeunit${CU}.D`,
+        method: "D",
+        status: "fail",
+        message: "Commit: out-of-scope: x",
+        notRun: false,
+      },
+      1,
+      5,
+      undefined,
+    );
+    expect(dotnetShaped.runnerRow).toBe("runner-refused");
+    b.noteReusedBaseline([
+      { ref: ref("T"), verdict: notRunVerdict("T", "error", "Test exceeded 1s timeout.") },
+      { ref: ref("C"), verdict: notRunVerdict("C", "fail", "NotRun: out-of-scope: Commit") },
+      { ref: ref("D"), verdict: dotnetShaped },
+      { ref: ref("A"), verdict: { ref: ref("A"), outcome: "pass", durationMs: 1 } },
+    ]);
+    expect(b.survivorNote([ref("A")])).toBeUndefined();
+  });
+
+  test("R678: a reused verdict with v3's notRun refusal text but no runner-refused row throws by name, never records nothing", async () => {
+    const l = await layout();
+    const b = backendOf(l, fakeV3(() => []).spawn, fakeAlc().io);
+    await b.deploy(l.batch);
+    const refused = notRunVerdict("B", "error", "NotRun: out-of-scope: Commit");
+    // Today's shapes, refusal and not, do not throw.
+    expect(() =>
+      b.noteReusedBaseline([
+        { ref: ref("B"), verdict: refused },
+        { ref: ref("T"), verdict: notRunVerdict("T", "error", "Test exceeded 1s timeout.") },
+        { ref: ref("C"), verdict: notRunVerdict("C", "fail", "NotRun: out-of-scope: Commit") },
+        { ref: ref("A"), verdict: { ref: ref("A"), outcome: "pass", durationMs: 1 } },
+      ]),
+    ).not.toThrow();
+    const { runnerRow: _dropped, ...malformed } = refused;
+    expect(() => b.noteReusedBaseline([{ ref: ref("M"), verdict: malformed }])).toThrow(
+      AlRunnerV3ReusedBaselineUnclassifiedError,
+    );
+    expect(() =>
+      b.noteReusedBaseline([
+        { ref: ref("M"), verdict: { ...refused, runnerRow: "runner-test-error" } },
+      ]),
+    ).toThrow(AlRunnerV3ReusedBaselineUnclassifiedError);
+  });
+
+  test("R678: a fresh baseline's notRun row with a non-error status (a contract error, not a refusal) notes nothing, as a reused one would", async () => {
+    const l = await layout();
+    const rows = () => [
+      { method: "A", status: "pass" as const },
+      {
+        method: "B",
+        status: "fail" as const,
+        notRun: true,
+        message: "NotRun: out-of-scope: Commit",
+      },
+    ];
+    const b = backendOf(l, fakeV3(rows, { coverage: plainCoverage }).spawn, fakeAlc().io);
+    await b.deploy(l.batch);
+    await b.activate(null);
+    expect((await b.run(ref("B"), { coverage: "none", timeoutMs: 1000 })).runnerRow).toBe(
+      "runner-test-error",
+    );
+    expect(b.survivorNote([ref("A")])).toBeUndefined();
   });
 });
 
@@ -1350,5 +1581,90 @@ codeunit 79000 "Logic"
     await writeFile(join(l.batch, "Logic.Codeunit.al"), TARGET_AL);
     await b.deploy(l.batch);
     expect(b.sleepIndexSize()).toEqual({ target: 0, test: 0 });
+  });
+});
+
+// R666 (R349 on v3): v3 labels a target file's coverage by the deployed flat path, in the EMITTED
+// line numbers of that batch's text (measured on alpha.2, /coord/handoff/R-666/measure.md §2).
+// So batch 1's lines must be read through batch 1's index. Two guards keep the index fresh:
+// `resetLayoutState()` clears it, and `deploy()` assigns the new one unconditionally. Either alone
+// is enough, so deleting only one of them leaves this test green BY DESIGN; it goes red only when
+// both go (the stale index), or when batch 1 gets no index at all.
+describe("R666: batch 1's coverage is read through batch 1's layout (one-shot)", () => {
+  // Batch 0: Grow on lines 3-6, Twice on lines 8-15; the object ends on line 16.
+  const BATCH0_AL = `codeunit 79000 "Logic"
+{
+    procedure Grow(X: Integer): Integer
+    begin
+        exit(X + 1);
+    end;
+
+    procedure Twice(X: Integer): Integer
+    // padding: Twice spans lines 8 to 15 here
+    //
+    //
+    //
+    begin
+        exit(X * 2);
+    end;
+}
+`;
+  // Batch 1: Grow lengthened to lines 3-14, so Twice's exit (line 18) is past batch 0's object.
+  const BATCH1_AL = `codeunit 79000 "Logic"
+{
+    procedure Grow(X: Integer): Integer
+    begin
+        X := X + 1;
+        X := X + 1;
+        X := X + 1;
+        X := X + 1;
+        X := X + 1;
+        X := X + 1;
+        X := X + 1;
+        X := X + 1;
+        exit(X);
+    end;
+
+    procedure Twice(X: Integer): Integer
+    begin
+        exit(X * 2);
+    end;
+}
+`;
+  test("batch 1's Grow line inside batch 0's Twice span is Grow, and its Twice line past batch 0's end is Twice", async () => {
+    const l = await layout(BATCH0_AL);
+    // A calls Grow, B calls Twice; each hit is at the emitted line of the batch deployed now.
+    let lines = { A: 5, B: 14 };
+    const cov = (_id: string, active: string) => ({
+      coverage: [],
+      perTestCoverage: (["A", "B"] as const).map((m) => ({
+        test: `Codeunit${CU}.${m}`,
+        coverage: [
+          {
+            file: join(active, "Logic.Codeunit.al"),
+            statements: [{ line: lines[m], hits: 1, scope: m === "A" ? "Grow" : "Twice" }],
+          },
+        ],
+      })),
+    });
+    const v3 = fakeV3(allPass, { coverage: cov });
+    const b = backendOf(l, v3.spawn, fakeAlc().io, { coverage: "al-runner" });
+    b.useBuildSymbols([]);
+    const procs = async () => {
+      await b.activate(null);
+      const out: (string | undefined)[][] = [];
+      for (const m of ["A", "B"]) {
+        const v = await b.run(ref(m), { coverage: "al-runner", timeoutMs: 1000 });
+        out.push((v.coverage?.entries ?? [{ procedure: "<no coverage>" }]).map((e) => e.procedure));
+      }
+      return out;
+    };
+    await b.deploy(l.batch);
+    expect(await procs()).toEqual([["Grow"], ["Twice"]]);
+    // The next batch: the same file, instrumented differently.
+    await writeFile(join(l.batch, "Logic.Codeunit.al"), BATCH1_AL);
+    lines = { A: 10, B: 18 };
+    await b.deploy(l.batch);
+    expect(await procs()).toEqual([["Grow"], ["Twice"]]);
   });
 });

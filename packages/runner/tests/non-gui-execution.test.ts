@@ -25,7 +25,12 @@ const CAPS_AUTHORITATIVE = {
   authoritative: true,
 } as const;
 
-const CAPS_AL_RUNNER = { ...CAPS_AUTHORITATIVE, kind: "al-runner", authoritative: false } as const;
+// R654: re-pointed from the retired .NET al-runner ("al-runner CLI") to al-runner-v3.
+const CAPS_AL_RUNNER = {
+  ...CAPS_AUTHORITATIVE,
+  kind: "al-runner-v3",
+  authoritative: false,
+} as const;
 
 function entry(): MutantManifestEntry {
   return {
@@ -87,7 +92,7 @@ describe("validity.executionContexts (R60, widened by R69 Phase 2 Task 5)", () =
     const r = build({ caps: CAPS_AL_RUNNER });
     const ctx = r.validity.executionContexts.find((c) => c.runner === "fenced");
     expect(ctx?.guiAllowed).toBe(false);
-    expect(ctx?.clientType).toBe("al-runner CLI");
+    expect(ctx?.clientType).toBe("al-runner v3 CLI");
     expect(ctx?.basis).toContain("not separately measured");
   });
 

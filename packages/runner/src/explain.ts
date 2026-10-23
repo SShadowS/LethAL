@@ -40,6 +40,7 @@ import type {
 import { ATTRIBUTION_INTERPRETATIONS, twinSiteOf } from "./selection";
 import type { CoverageAttribution } from "./selection";
 import type { MutantVerdict } from "./store";
+import { refuseRetiredV2Report } from "./v2-retired";
 
 /**
  * `lethal explain <report.json>` — a projection of a finished `SessionReport` that says what the
@@ -245,8 +246,11 @@ import type { MutantVerdict } from "./store";
  *
  * 18: R631 added the caveat value `project-symlink-skipped` to `$.caveats[].caveat`. A new value,
  * so it bumps (R233); v17 is frozen.
+ *
+ * 19: R658 added the cause value `confirm-stopped` to `$.notMeasured[].cause` and the caveat value
+ * `baseline-test-stopped` to `$.caveats[].caveat`. New values, so it bumps (R233); v18 is frozen.
  */
-export const EXPLAIN_SCHEMA_VERSION = 18;
+export const EXPLAIN_SCHEMA_VERSION = 19;
 
 /**
  * Thrown when the input is not an explainable `SessionReport` — a caller-contract violation, not a
@@ -899,6 +903,8 @@ export function assertExplainableReport(value: unknown): SessionReport {
     refuse("input is not a JSON object", value);
   }
   const record = value as Record<string, unknown>;
+  // R654 F3: a report of the retired .NET al-runner is refused by name, before any other read.
+  refuseRetiredV2Report(record, "the report");
   // R231 ruling 1: v3 changed only the run-level mutant lists (bare codes became
   // `<batchIndex>/<mutantCode>`), and explain reads none of them, so a v2 report still projects
   // with the same meanings. A change that makes explain read one of those lists must revisit this.

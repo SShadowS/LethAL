@@ -28,6 +28,7 @@ import {
   reconcileNotInstrumented,
 } from "./campaign-anchors";
 import type { SessionReport } from "./report";
+import { refuseRetiredV2Report } from "./v2-retired";
 
 /**
  * The on-disk anchor config, committed BEFORE the run it gates (plan Task 6 step 1).
@@ -143,6 +144,8 @@ export interface AnchorRunOutcome {
  */
 export async function runAnchorCheck(args: AnchorRunArgs): Promise<AnchorRunOutcome> {
   const report = JSON.parse(await readFile(args.reportPath, "utf8")) as SessionReport;
+  // R654 F3: a report of the retired .NET al-runner is refused by name.
+  refuseRetiredV2Report(report, args.reportPath);
   const cfg = parseAnchorConfig(
     JSON.parse(await readFile(args.configPath, "utf8")),
     args.configPath,

@@ -243,18 +243,13 @@ containers assigned to this project can be leased. A missing `allocation.json` t
   run only on Cronus28 and only under a lease, and need no `coord ask` (standing authorization
   above). `itest:alrunner` runs locally and needs no container. A differing verdict or moved
   frozen figure is a block reported to the owner; never re-record a baseline yourself.
-- **al-runner: use the pinned source build c39ad5de** (since 2026-10-02). It carries upstream's
-  fix for R345 (concurrent sessions crashing on the shared ncl-shadow cache, #5018/#5019), so lanes
-  no longer take turns. The released global v2.12.0 still has the defect: never run it beside
-  another al-runner session.
-  - **On the Windows host only:** `H:/al-runner-builds/c39ad5de/al-runner.exe`; set it as
-    `LETHAL_ALRUNNER_PATH` and as `alRunner.alRunnerPath` in your gitignored fixture configs.
-  - **Inside the kraken container:** al-runner is a daily local build of upstream `main`, not the
-    pinned c39ad5de: `/work/tools/al-runner/current/al-runner`. `scripts/al-runner-update.sh` builds
-    it and moves `current` onto it only after `itest:alrunner` passes on that build (until the first
-    update, `current` points at the c39ad5de build baked into the image). It is already in
-    `LETHAL_ALRUNNER_PATH` there and the container's fixture configs already name it: do not
-    overwrite either with the host path.
+- **al-runner: the Rust al-runner v3 only.** The .NET al-runner (v2) is retired (R654), with its update
+  script and container build.
+  - The gated v3 build is `/work/tools/al-runner-v3/current/al-runner`, and `.gated` beside it records which
+    build passed the gate and on which LethAL commit.
+  - `bun scripts/al-runner-v3-update.ts` moves `current` only after `itest:alrunner-v3` passes on the new
+    build (`--edge` and `--regate` are documented in that script and on `docs/gates/alrunner-v3.md`).
+  - An edge or candidate build runs only under `LETHAL_ALRUNNER_V3_CANDIDATE=1`, never as `current` by hand.
 - Pause: `coord checkpoint` answers `"paused": true` while the owner has paused the machine.
   Finish the running step (never kill a live gate midway), release leases, commit, checkpoint
   `--wait paused`, and go idle until the orchestrator says `resume`.

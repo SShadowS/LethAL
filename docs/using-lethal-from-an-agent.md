@@ -38,7 +38,7 @@ The `--json` payload:
 ```
 
 `notChecked` is always `publish-ceiling` and `baseline-test-health`. `caveat` is present only for
-a config shape that has one, and `caveat.kind` is `create-mode` or `al-runner-only`.
+a config shape that has one, and `caveat.kind` is `create-mode`.
 
 `--json` is accepted by `doctor` and `campaign` only. On any other subcommand it is refused rather than ignored, and `campaign` reads it only on `compare`.
 
@@ -99,42 +99,16 @@ killing test and its mutant is reported survived. `--only` and `--exclude` give 
 caveat, `--operator` gives `operator-narrowed`, `--lines` and `--changed-since` give `line-narrowed`,
 and `--tests-only` gives `tests-narrowed`.
 
-**Backends.** `bcdev` is authoritative. `al-runner` is offline and is NOT: its coverage is
-CONDITIONAL. `lethal run` reads al-runner's own coverage output (R220) by default since R394;
-`"alRunner": { "coverage": "none" }` turns it off. One file holding a `#if`-wrapped object turns it off for
-the whole run, with a warning naming the file. One file declaring more than one object keeps it only
-when a once-per-session frame probe admits the installed al-runner build, and turns it off
-otherwise; either way one warning line names the probe's answer and the build. (Multi-object:
-al-runner v2.12.0-main.c39ad5de reports later objects' lines in the wrong frame, R383; 43f76177 and
-c5bbaf89 (measured) do not, and the probe tells the builds apart at run time, R407. `#if`: R298, pending R300.) Without coverage an unreached mutant comes back survived rather than no-coverage. That is one measured route to a false survivor. No measurement has shown a false kill from this backend, but none rules one out (a pinned platform-app directory holding a mismatched build is untested, R235). Do not quote a score from it. (Its `asserterror` DID
-fail to fail a test in 2026-07; that was fixed upstream in v2 and the startup canary re-measures
-it every session.)
+**Backends.** `bcdev` is authoritative. `al-runner-v3` (the Rust al-runner, configured by the
+`alRunnerV3` section, Linux only, one worker) is offline and is NOT: its coverage is CONDITIONAL. A
+project holding a multi-object or an `#if`-wrapped object file runs with coverage off, with a
+warning naming the file, and without coverage an unreached mutant comes back survived rather than
+no-coverage. Do not quote a score from it. Its gate is `itest:alrunner-v3`
+([docs/gates/alrunner-v3.md](gates/alrunner-v3.md)).
 
-**Do not edit the project during an al-runner run with coverage on (R505).** al-runner
-v2.12.0-main.c39ad5de labels coverage with the files of the project it finds beside the test app,
-as they are on disk at that moment, while LethAL compiled the run's snapshot. If an object moves
-to another file, or a file is renamed, its coverage would be credited to the wrong object or
-dropped. So `lethal run` checks the project's `.al` files, `app.json` and resources before and
-after every al-runner call that produces coverage. On any change it stops with
-`ProjectChangedDuringRunError`, naming the first files that changed. Undo the change, or wait for
-the run to end, then continue with `lethal run --resume` (it carries the verdicts recorded so far;
-a run stopped before its first verdict has none, so run it again). A log written into the project
-(`*.log`, `nohup.out`) and an office lock file (`~$...`) never count, but any other file written
-there during the run does: keep outputs outside the project. **Limit:** an edit that is undone
-between two checks, so it starts and ends inside one al-runner call, is not seen. A `git checkout`
-of another branch and back during a run is exactly that, so do not do it. Upstream fixed the
-labelling after this build (#5249). The container's al-runner (`43f76177`) is past it, and is measured to label
-the compiled batch, so there the check can only refuse. The host still pins `c39ad5de`.
-
-**al-runner settings (R387).** The `alRunner` section accepts `alRunnerPath`, `packagesDir`,
-`serverMode`, `selectorMode` and `coverage`, and refuses any other key by name. With none of the last
-three set, `lethal run` uses `--server` (one daemon per worker), the resource selector (one compile
-per batch) and al-runner's coverage (R394). `"serverMode": false` gives one process per test with the `"static"` selector (a recompile
-per mutant), which is much slower. The run prints one `[lethal] al-runner settings:` line naming any
-slow or unmeasured setting; it names `coverage` only when the config sets `"none"` (an unreached
-mutant then reads survived, not no-coverage) or when the coverage guard turned it off. `lethal
-doctor` checks the binary's version only, not the transport. Under `--server` a hung test becomes an
-error after one suite deadline of at least 10 minutes, not a per-test timeout.
+**The .NET al-runner is retired (R654).** `--backend al-runner` is refused with
+`al-runner-v2-retired`, and so is a stored run of it: its verdicts are lent to no session (history,
+`--resume`, `--resume-run`, a baseline snapshot), and `explain` and `campaign` refuse a report of it.
 
 **Cost.** On `bcdev` a mutant's covering tests run in ONE call to the server (one per mutant, not
 one per test), stopping at the first failure, so a survivor with forty covering tests costs one
@@ -180,13 +154,8 @@ has the complete set.
 
 `lethal run --dry-run` executes no tests, so it refuses every execution flag by name (`--tests`,
 `--workers`, `--progress-out` and the rest: "has no effect with --dry-run"). `--backend` is
-optional there and changes the listing. With `--backend al-runner` a dry run runs al-runner ONCE
-to measure the preprocessor symbols it predefines (R392), needs `alRunner.alRunnerPath` in the
-config and refuses without it, and lists the `#if` arms for the MEASURED set (absent lists alc's
-build). A dry run on al-runner also has no provisioned platform-apps folder, so a Microsoft report
-the project calls through `Report X` is read only from `alRunner.packagesDir`, and the hang-refused
-set can differ from a real run's; it warns (R565). The other
-exception is `--out <file>`, which writes the dry-run listing as JSON:
+optional there and changes the listing (every backend lists alc's build: none predefines a
+symbol). The other exception is `--out <file>`, which writes the dry-run listing as JSON:
 `{files, sites, deployed, perFile[{file, sites, deployed}], batches[{index, sites[{file, line,
 operator, deployed}]}], notInstrumented[{file, kinds, sites}]}`. `sites` counts raw mutation sites;
 `deployed` counts what would ship.
@@ -281,7 +250,7 @@ code.
 Each surface below is versioned separately and has a published JSON Schema in [`../schemas/`](../schemas/):
 
 - the report: [../schemas/report-v3.schema.json](../schemas/report-v3.schema.json)
-- `lethal explain`: [../schemas/explain-v18.schema.json](../schemas/explain-v18.schema.json)
+- `lethal explain`: [../schemas/explain-v19.schema.json](../schemas/explain-v19.schema.json)
 - the event stream: [../schemas/stream-v1.schema.json](../schemas/stream-v1.schema.json)
 - `lethal doctor --json`: [../schemas/doctor-v1.schema.json](../schemas/doctor-v1.schema.json)
 
@@ -327,7 +296,7 @@ some mutants at all, and they read `no-coverage` rather than `survived`.
 
 ### `lethal explain report.json`: what it MEANS (checked)
 
-`explainSchemaVersion: 18`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
+`explainSchemaVersion: 19`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
 `survivorSelection` and `markIdentityScheme`. Each `survivors` row carries `executionProven`,
 `reach` and `markKey`. The top level can also carry `markKeysStale`. Each `survivors` row can
 also carry `mark`. Explain writes it for a report that records its numbering facts.
@@ -691,11 +660,11 @@ Mark an equivalent survivor in `<project>/lethal.equivalent.json`:
 5. Keep the mark's `"preprocessorSymbols"` as explain printed it: the report's `buildSymbols`, the
    build's effective set (for example `"preprocessorSymbols": ["CLEAN27"]`). A mark without the
    field means `[]`: it applies only to a build with no symbols. A key names a site within one
-   build, so a mark made under other symbols is reported stale and never applied (R214). A mark
-   for an AL-RUNNER run lists the run's whole effective set, which includes `CLEANSCHEMA1` to
-   `CLEANSCHEMA25` even when the project defines no symbols. Such a mark applies only to an
-   al-runner build; a mark without them applies only to a build with no symbols (for example
-   bcdev), so one mark cannot cover both backends. LethAL warns by name
+   build, so a mark made under other symbols is reported stale and never applied (R214). The
+   retired .NET al-runner added `CLEANSCHEMA1` to `CLEANSCHEMA25` to every build, so a mark from
+   one of its runs applies to no current build. `al-runner-v3` adds none: a session refuses a v3
+   build that predefines any symbol (its `predefined-symbols` contract fact), so a bcdev run and a
+   v3 run of the same project have the same effective set. LethAL warns by name
    (`equivalence-marks-build-symbols`) when a mark's set differs.
 
 A mark proves which mutant it names (R443). A key holds no file, and twins (mutants with the same
@@ -769,7 +738,7 @@ no warning:
 - a service-tier binary update with no new `System` package (unmeasured);
 - the control app's own changes: its bytes are not hashed, or every control-app upgrade would make
   every test new;
-- on al-runner, Microsoft apps are still read by declared version (R435; verify is bcdev only).
+- on al-runner-v3, Microsoft apps are still read by declared version (R435; verify is bcdev only).
 
 Under `fenced` coverage (bcdev's default) a new test is sent only to the survivors its own
 coverage reaches (R-384), read from the unmutated run verify already makes of it, so the filter
@@ -820,7 +789,7 @@ every app it published is installed at the version the server serves, and, when 
 file is the test app, the read-back has that file's name, publisher, version and `.al` sources.
 Where the run could not read that source or prove it (no dev endpoint, a failed or unproven
 read-back, a package without source) it records none and warns `test-digests-unavailable` once,
-naming why, and verify refuses that run as `source-predates-verify`. On al-runner the source on
+naming why, and verify refuses that run as `source-predates-verify`. On al-runner-v3 the source on
 disk is what runs, and that is what the run records.
 
 An env-tool session's `--resume` finds the run to resume before the lease, against the test app the
@@ -838,7 +807,7 @@ run to have proven that the test app it recorded is the one it ran. The proof, b
   local `app.json`) has exactly one installed row on the server. A served package that is published
   but not installed, a backend that cannot read installed versions, or no package read at all (no
   dev-endpoint credentials: the source on disk is not what BC runs) proves nothing;
-- al-runner: it compiles the test source it hashed, so its identity is proven by construction.
+- al-runner-v3: it compiles the test source it hashed, so its identity is proven by construction.
 
 An unproven run records no identity. It still runs and reports normally, and it lends nothing: a
 later `--resume` of it is refused by name ("not proven installed"), and `--skip-known-survivors`
@@ -866,7 +835,8 @@ runs (same id and version, other bytes) carries nothing across. Where the finger
   its digests and warns `test-digests-unavailable` once; a fresh run then runs unproven, and a
   requested resume refuses with `TestAppRepublishedError`;
 - bcdev with a hook: from the read-back after the hook;
-- al-runner: from the test project's `app.json` and the `.app` files in its package folders.
+- al-runner-v3: from the test project's `app.json` and the `.app` files in its package folder
+  (`alRunnerV3.packagesDir`).
 
 A fingerprint that cannot be taken (a dependency not served, or not installed at the served
 version) leaves the run unproven, with a `test-app-dependencies-unproven` or
@@ -1018,6 +988,11 @@ into a transcript and do not copy it into an issue.
   infinite is ordinary on real code, and without the flag each one costs the mutant budget, a
   quarantine, and a full redeploy-and-baseline on `--resume` (measured 2026-09-02: about ten
   minutes per hang on a hosted sandbox). With it the mutant is stopped and scored `timeout-killed`.
+  The flag covers MUTANT runs only. A run with no mutant active (a baseline test, a kill confirm, a
+  warm replay) that runs past its budget is stopped either way, with no consent asked, because an
+  abandoned one keeps running on the server and blocks its lease until an NST restart (R658). Tell
+  the user this once. A stopped baseline test is named in `baselineStopped`; a stopped kill confirm
+  is `error` with cause `confirm-stopped`.
 - A report from a real project carries that project's source code in every mutant's `originalText`
   and `mutatedText`. Do not publish one, and run `bun scripts/redact-campaign-report.ts <report>`
   before committing one anywhere public.
