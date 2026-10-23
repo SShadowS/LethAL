@@ -66,3 +66,12 @@ Controls: `HandlerUsed` (the handler fires), `ReportNoRequestPage` (the same rep
   note. An app that cannot be removed stays until bc2's next restart.
 - A result that fits none of the above (for example the bcdev path refuses a test before BC runs it) is reported as
   it is, and the question stays open; it is not read as BC's behaviour.
+
+## Delta 1 (before the second run)
+
+The first run (12:24Z) stopped inside `lethal run` before LethAL made any server call: the default selector id 79199
+is outside the target's idRanges. The driver's own steps ran as committed: `serverGeneration` read
+`2b8971cb88584ba486dcf6c453a2d76c` before and after, both apps were published, then removed and read back absent,
+and the lease was released. The one change is that `drive.ts` now passes `--selector-id 50977 --control-id 50978
+--table-id 50979`, inside 50970-50979 (sha256 `799e52672dee1acb217f83e05e660dd2cc07a90f30d90eddb7ef506106b4c566`).
+No prediction changes.
