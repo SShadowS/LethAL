@@ -660,11 +660,11 @@ Mark an equivalent survivor in `<project>/lethal.equivalent.json`:
 5. Keep the mark's `"preprocessorSymbols"` as explain printed it: the report's `buildSymbols`, the
    build's effective set (for example `"preprocessorSymbols": ["CLEAN27"]`). A mark without the
    field means `[]`: it applies only to a build with no symbols. A key names a site within one
-   build, so a mark made under other symbols is reported stale and never applied (R214). A mark
-   for an AL-RUNNER run lists the run's whole effective set, which includes `CLEANSCHEMA1` to
-   `CLEANSCHEMA25` even when the project defines no symbols. Such a mark applies only to an
-   al-runner build; a mark without them applies only to a build with no symbols (for example
-   bcdev), so one mark cannot cover both backends. LethAL warns by name
+   build, so a mark made under other symbols is reported stale and never applied (R214). The
+   retired .NET al-runner added `CLEANSCHEMA1` to `CLEANSCHEMA25` to every build, so a mark from
+   one of its runs applies to no current build. `al-runner-v3` adds none: a session refuses a v3
+   build that predefines any symbol (its `predefined-symbols` contract fact), so a bcdev run and a
+   v3 run of the same project have the same effective set. LethAL warns by name
    (`equivalence-marks-build-symbols`) when a mark's set differs.
 
 A mark proves which mutant it names (R443). A key holds no file, and twins (mutants with the same
@@ -738,7 +738,7 @@ no warning:
 - a service-tier binary update with no new `System` package (unmeasured);
 - the control app's own changes: its bytes are not hashed, or every control-app upgrade would make
   every test new;
-- on al-runner, Microsoft apps are still read by declared version (R435; verify is bcdev only).
+- on al-runner-v3, Microsoft apps are still read by declared version (R435; verify is bcdev only).
 
 Under `fenced` coverage (bcdev's default) a new test is sent only to the survivors its own
 coverage reaches (R-384), read from the unmutated run verify already makes of it, so the filter
@@ -789,7 +789,7 @@ every app it published is installed at the version the server serves, and, when 
 file is the test app, the read-back has that file's name, publisher, version and `.al` sources.
 Where the run could not read that source or prove it (no dev endpoint, a failed or unproven
 read-back, a package without source) it records none and warns `test-digests-unavailable` once,
-naming why, and verify refuses that run as `source-predates-verify`. On al-runner the source on
+naming why, and verify refuses that run as `source-predates-verify`. On al-runner-v3 the source on
 disk is what runs, and that is what the run records.
 
 An env-tool session's `--resume` finds the run to resume before the lease, against the test app the
@@ -807,7 +807,7 @@ run to have proven that the test app it recorded is the one it ran. The proof, b
   local `app.json`) has exactly one installed row on the server. A served package that is published
   but not installed, a backend that cannot read installed versions, or no package read at all (no
   dev-endpoint credentials: the source on disk is not what BC runs) proves nothing;
-- al-runner: it compiles the test source it hashed, so its identity is proven by construction.
+- al-runner-v3: it compiles the test source it hashed, so its identity is proven by construction.
 
 An unproven run records no identity. It still runs and reports normally, and it lends nothing: a
 later `--resume` of it is refused by name ("not proven installed"), and `--skip-known-survivors`
@@ -835,7 +835,8 @@ runs (same id and version, other bytes) carries nothing across. Where the finger
   its digests and warns `test-digests-unavailable` once; a fresh run then runs unproven, and a
   requested resume refuses with `TestAppRepublishedError`;
 - bcdev with a hook: from the read-back after the hook;
-- al-runner: from the test project's `app.json` and the `.app` files in its package folders.
+- al-runner-v3: from the test project's `app.json` and the `.app` files in its package folder
+  (`alRunnerV3.packagesDir`).
 
 A fingerprint that cannot be taken (a dependency not served, or not installed at the served
 version) leaves the run unproven, with a `test-app-dependencies-unproven` or

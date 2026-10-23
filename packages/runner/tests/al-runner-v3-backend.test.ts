@@ -33,7 +33,7 @@ import {
   v3CallDeadlineMs,
   v3RowVerdict,
 } from "../src/al-runner-v3-backend";
-import type { V3ContractResult } from "../src/al-runner-v3-contract";
+import { MESSAGE_PREFIX_REASON, type V3ContractResult } from "../src/al-runner-v3-contract";
 import { sha256OfFile } from "../src/al-runner-v3-pin";
 import { AlRunnerV3CoverageJoinError } from "../src/al-runner-v3-sleep";
 import { AlcCompileError, type ArtifactIo, ArtifactPrepareError } from "../src/artifact";
@@ -389,7 +389,7 @@ describe("R639 r9 §2: status() passes candidate into the unlike-bc refusals and
       },
     ],
   };
-  async function statusOf(candidate: boolean) {
+  async function statusOf(candidate: boolean, contract: V3ContractResult = UNLIKE) {
     const l = await layout();
     const NS = 'xmlns="http://schemas.microsoft.com/navx/2015/manifest"';
     await writeFile(
@@ -415,7 +415,7 @@ describe("R639 r9 §2: status() passes candidate into the unlike-bc refusals and
       ...(candidate ? { candidate: true } : {}),
     });
     // The probe itself is tested in al-runner-v3-contract.test.ts; seed its result, test the wiring.
-    (b as unknown as { contract: V3ContractResult }).contract = UNLIKE;
+    (b as unknown as { contract: V3ContractResult }).contract = contract;
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
       const s = await b.status();
@@ -434,6 +434,24 @@ describe("R639 r9 §2: status() passes candidate into the unlike-bc refusals and
     expect(s.ok).toBe(false);
     expect(s.details).toMatch(/UNLIKE-BC — refusal-row-shape/);
     expect(warned).not.toMatch(/unlike-bc/);
+  });
+  test("R667: a prefixed failure message refuses the session before any mutant is scored, naming K1(a)", async () => {
+    const prefixed: V3ContractResult = {
+      facts: [
+        {
+          fact: "message-has-no-type-prefix",
+          kind: "contract",
+          verdict: "diverged",
+          expected: "x",
+          measured: 'prefix "SomeException: "; Fails "SomeException: NotRun: out-of-scope: x"',
+        },
+      ],
+    };
+    for (const candidate of [false, true]) {
+      const { s } = await statusOf(candidate, prefixed);
+      expect(s.ok).toBe(false);
+      expect(s.details).toContain(`why: ${MESSAGE_PREFIX_REASON}`);
+    }
   });
 });
 
@@ -945,7 +963,7 @@ describe("§5 the row decoder", () => {
   test("K1-a: a fail whose message starts with the refusal prefix (notRun false) is error/runner-test-error, never a kill", () => {
     const v = v3RowVerdict(r, row({ status: "fail", message: PREFIXED }), 3, 10, undefined);
     expect([v.outcome, v.runnerRow]).toEqual(["error", "runner-test-error"]);
-    expect(v.failureMessage).toContain("a refusal written as a fail; never scored");
+    expect(v.failureMessage).toContain("a fail that holds v3's refusal marker; never scored");
   });
   test("K1-b: the same with status pass is error, never a pass", () => {
     const v = v3RowVerdict(r, row({ status: "pass", message: PREFIXED }), 3, 10, undefined);
@@ -956,10 +974,77 @@ describe("§5 the row decoder", () => {
       v3RowVerdict(r, row({ status: "fail", message: "boom" }), 3, 10, undefined).outcome,
     ).toBe("fail");
   });
-  test("K1-d: the prefix NOT at the start still scores fail (the match is anchored)", () => {
+  test("R675 K1-d (inverts R672's): the marker NOT at the start is error, never a kill", () => {
+    const v = v3RowVerdict(r, row({ status: "fail", message: `x ${PREFIXED}` }), 3, 10, undefined);
+    expect([v.outcome, v.runnerRow]).toEqual(["error", "runner-test-error"]);
+  });
+  // R675 (plan 2026-10-23-r675-v3-refusal-marker-anywhere.md §3): K1(a) reads the marker after ANY
+  // text: the R672 one-word prefixes, the spaced and `::` shapes, a chain, and an Assert quoting it
+  // (the last one a lost kill, the safe direction; R675's known limit).
+  for (const p of [
+    "SomeException: ",
+    "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: ",
+    "Error: ",
+    "Runtime error: ",
+    "al_runtime::Error: ",
+    "A: B: ",
+    "Assert.AreEqual failed. Expected: ",
+  ]) {
+    for (const status of ["fail", "pass"] as const) {
+      test(`R675 K1: ${status} "${p}${PREFIXED}" is error/runner-test-error, never scored`, () => {
+        const v = v3RowVerdict(r, row({ status, message: `${p}${PREFIXED}` }), 3, 10, undefined);
+        expect([v.outcome, v.runnerRow]).toEqual(["error", "runner-test-error"]);
+        expect(v.failureMessage).toContain(
+          `a ${status} that holds v3's refusal marker; never scored (R639, R675)`,
+        );
+        expect(v.failureMessage).not.toContain("a refusal written as");
+      });
+    }
+  }
+  test("R672 K1: an unprefixed refusal's verdict (the whole object; R675's marker wording)", () => {
+    for (const status of ["fail", "pass"] as const) {
+      expect(v3RowVerdict(r, row({ status, message: PREFIXED }), 3, 10, undefined)).toEqual({
+        ref: r,
+        outcome: "error",
+        durationMs: 10,
+        failureMessage: `NotRun: out-of-scope: x [al-runner v3: a ${status} that holds v3's refusal marker; never scored (R639, R675)]`,
+        operation: "completed-accepted",
+        runnerRow: "runner-test-error",
+      });
+    }
+  });
+  test("R675: today's refusal (marker at 0, with notRun) is byte-identical (the whole object)", () => {
     expect(
-      v3RowVerdict(r, row({ status: "fail", message: `x ${PREFIXED}` }), 3, 10, undefined).outcome,
-    ).toBe("fail");
+      v3RowVerdict(
+        r,
+        row({ status: "error", notRun: true, message: `${PREFIXED} an outbound HTTP request` }),
+        3,
+        10,
+        undefined,
+      ),
+    ).toEqual({
+      ref: r,
+      outcome: "error",
+      durationMs: 10,
+      failureMessage:
+        "NotRun: out-of-scope: x an outbound HTTP request [al-runner v3 did not run this test (notRun), so whether the mutant changes its outcome on BC is unknown: NOT scored (R586 §5)]",
+      operation: "completed-accepted",
+      runnerRow: "runner-refused",
+    });
+  });
+  test("R675 kill direction: rows without the marker give master's exact object", () => {
+    for (const message of [
+      "boom 5",
+      "Assert.AreEqual failed. Expected:<1> (Integer). Actual:<2> (Integer). R667 values differ.",
+      "out-of-scope: x",
+    ]) {
+      expect(v3RowVerdict(r, row({ status: "fail", message }), 3, 10, undefined)).toEqual({
+        ref: r,
+        outcome: "fail",
+        durationMs: 10,
+        failureMessage: message,
+      });
+    }
   });
   test("decodeV3Rows refuses another codeunit's row and a name that is not Codeunit<id>.<method>", () => {
     const doc = (t: object) => JSON.stringify({ tests: [t] });

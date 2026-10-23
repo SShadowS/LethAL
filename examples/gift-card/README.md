@@ -119,9 +119,11 @@ that inserts a card fails at the platform. Measured here on 2026-08-16: omitting
 8 tests. LethAL names the condition, names the fix and lists the tests, and records their mutants as
 score-excluded rather than as a silent `no-coverage`.
 
-**Use the `bcdev` backend.** Several kills depend on `asserterror`, which `al-runner` cannot fail —
-on that backend those mutants come back survived, which would make the demo look wrong for a reason
-that has nothing to do with the app.
+**Use the `bcdev` backend.** It is the only authoritative one, and the committed report is a bcdev
+run. When this demo was written, several kills depended on `asserterror`, which the early .NET
+al-runner could not fail, so those mutants came back survived. That backend has since been retired
+(R654). The Rust al-runner (`al-runner-v3`) is not authoritative either: its known differences from
+BC are listed in the main README.
 
 ```bash
 lethal doctor --config examples/gift-card/lethal.config.local.json
