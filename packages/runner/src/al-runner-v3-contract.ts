@@ -708,8 +708,8 @@ export interface V3ProbeEnv {
   /** Test hook: `timeout-is-cpu`'s per-call hard process timeout (default 60 s). */
   readonly burnGuardMs?: number;
   /**
-   * M1 (review build Opus): `timeout-is-cpu`'s burns are fixed iteration counts calibrated on ONE
-   * machine, so the fact is GATE-ONLY: the update gate's leg C measures it (this field absent), and
+   * M1 (review build Opus): `timeout-is-cpu` pins burns to one core beside busy loops and takes about
+   * 20 s (R693, r14b), so the fact is GATE-ONLY: the update gate's leg C measures it (this field absent), and
    * its pass is recorded with `.gated`. A session names that record here instead: the burns do not
    * run, and the fact cannot refuse a session on other hardware.
    */
