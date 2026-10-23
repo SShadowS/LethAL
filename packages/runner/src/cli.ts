@@ -3645,7 +3645,7 @@ export async function runFromCli(
   // `envTool` section is silently unused on a local runner, since `resolveEnvToolSession` returns
   // early for every backend but bcdev. Warned, not refused: a config file is often shared across
   // `--backend` choices, so a one-off al-runner-v3 run must not be blocked by its bcdev section.
-  if (parsed.backendKind !== "bcdev" && configFile.envTool !== undefined) {
+  if (isLocalRunner(parsed.backendKind) && configFile.envTool !== undefined) {
     console.warn(
       [
         `[lethal] envTool is configured but IGNORED: --backend ${parsed.backendKind} has no environment`,
