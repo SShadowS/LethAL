@@ -880,6 +880,14 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **A mutant run whose stop was not refused and whose answer was lost now quarantines the server**
+  (R665). Before, a reconcile that read `completed` or `not-started` scored it
+  `stop-outcome-unconfirmed` with no quarantine, and the session ran on. But `completed` may be the
+  stop's own tombstone while the stopped session still runs on the same database as the next mutant
+  (a false-kill risk), and after `not-started` the original request may still arrive. It is now
+  `error` / `stranded`, with a quarantine record and a note `--resume` skips, as at R658's confirm
+  sites. `stop-outcome-unconfirmed` now names only a group answer that arrived but could not be used.
+
 - **`--skip-known-survivors` no longer lends a narrower run's survivors** (R585). A run now records
   its test scope (the tests its baseline is given, as `runs.test_scope`). History lends only when
   every test this session sends is in the source run's scope: an equal or wider run lends, a

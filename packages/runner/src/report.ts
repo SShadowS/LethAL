@@ -622,7 +622,8 @@ export type MutantErrorCause =
   | "group-coverage-incomplete"
   | "op-stopped"
   | "stopped-after-completion"
-  // R-204b (R202): a stop was sent, not refused, and the run's answer could not be read.
+  // R-204b (R202): a stop was sent, not refused, and the group's answer arrived but could not be
+  // used. A lost answer after such a stop is `stranded` since R665.
   | "stop-outcome-unconfirmed"
   // R206: the session guard and the warm confirmation's own endings.
   | "session-reused"
@@ -787,14 +788,17 @@ export const ERROR_CAUSE_INTERPRETATIONS: Record<MutantErrorCause, Interpretatio
   },
   "stop-outcome-unconfirmed": {
     meaning:
-      "LethAL sent a stop for this run because it exceeded its budget, and the run's answer could " +
-      "not be read. The stop was not refused, so whether it ended the run or the test finished " +
-      "first is not established, and the run is not retried: a hang need not recur, so a passing " +
-      "retry would prove nothing. No verdict. Re-run with `--resume` (R202).",
+      "LethAL sent a stop for this grouped run because it exceeded its budget, and the group's " +
+      "answer arrived but could not be used (malformed, or the server's loop raised). The stop " +
+      "was not refused, so whether it ended the run or the test finished first is not " +
+      "established, and the run is not retried: a hang need not recur, so a passing retry would " +
+      "prove nothing. No verdict. Re-run with `--resume` (R202). An answer that never arrived " +
+      "after such a stop is `stranded` instead (R665).",
     entailedNegative:
       "Not `survived`: a retry that passed after a stop that may have ended the run is exactly how " +
       "a real timeout became a survivor before R-204b. Not `timeout-killed` either: no stop 408 " +
-      "proved the stop ended the run. Not `stranded`: the operation reconciled clean.",
+      "proved the stop ended the run. Not `stranded`: an answer came back over HTTP, so the call " +
+      "itself ended.",
     basis: "R202",
   },
   "session-reused": {
@@ -3331,7 +3335,7 @@ function summarizeRunnerContexts(
  * R206: the banner's error breakdown. `counts.unstable` keeps counting `unstable` alone; the four
  * R206 causes are listed beside it when non-zero, so a run full of them does not read
  * `error N [unstable 0]`. R-204b adds `stop-outcome-unconfirmed`, the error a stop leaves behind
- * when its run's answer was lost. R514 adds `reused-budget-stale`, R516 `timeout-unconfirmed`,
+ * when its group's answer arrived but could not be used (R665). R514 adds `reused-budget-stale`, R516 `timeout-unconfirmed`,
  * R534 `runner-test-error` and `runner-refused`, R577 `kill-not-reproduced`, R658 `confirm-stopped`.
  */
 function errorBreakdown(r: SessionReport): string {
