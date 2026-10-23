@@ -500,7 +500,7 @@ Cost and recovery:
 | `--resume` / `--resume-run <id>` | *(none)* | Continue an aborted run, reusing verdicts it already measured |
 | `--retry-stranded` | `false` | On resume, retry mutants that left the server stuck. Skipped by default: a mutant that never terminates blocks every mutant behind it |
 | `--allow-large-run` | `false` | Run more than 1,000 mutation sites |
-| `--workers <n>` | `1` | Parallel shards (rejected for the authoritative backend) |
+| `--workers <n>` | `1` | Must be 1; above 1 is refused for every backend |
 
 Environment and output:
 

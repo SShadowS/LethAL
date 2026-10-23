@@ -656,8 +656,9 @@ describe("sessionFingerprint (R47)", () => {
   // again for R565 (scheme 40, an outside report's preset writers are read from the dependency
   // packages); it was f1086a61...e634 under scheme 39. It moved again for R572 (scheme 41, a guard
   // refused as a single site renumbers its procedure's same-tuple twins); it was 7abca7bc...6109
-  // under scheme 40.
-  const PINNED = "c49d72bc1d8b52b8c9d4964c21cd080b1e5ed95cfa79933cdb0530705f30773a";
+  // under scheme 40. It moved again for R-604b (scheme 42, a same-object callee that inserts into
+  // the iterated table or touches a `var` cursor is refused); it was c49d72bc...773a under scheme 41.
+  const PINNED = "cbd5ae2c09bda02dc73267f7702dcb587418a7a0b40dea20e15d9894dcaf5fba";
   test("a run with no exclusions adds nothing to the digest", () => {
     expect(sessionFingerprint(base)).toBe(PINNED);
   });
@@ -2460,8 +2461,9 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
     // 38 is R555 (a call to a preset-exit-name writer is hang-refused). 39 is R-531 (a loop that
     // ends only by consuming its record set: its consumers are hang-refused). 40 is R565 (an
     // outside report's preset writers are read from the dependency packages). 41 is R572 (a guard
-    // refused as a single site renumbers its procedure's same-tuple twins).
-    expect(IDENTITY_SCHEME).toBe(41);
+    // refused as a single site renumbers its procedure's same-tuple twins). 42 is R-604b (a
+    // same-object callee that inserts into the iterated table or touches a `var` cursor is refused).
+    expect(IDENTITY_SCHEME).toBe(42);
     expect(report.identityScheme).toBe(IDENTITY_SCHEME);
   });
 
@@ -4753,7 +4755,7 @@ interface ClockOptions {
   readonly grouped?: boolean;
   /** BSlow's simulated duration while a mutant is active; `Infinity` is a hang. Absent: `slowMs`. */
   readonly mutatedMs?: number;
-  /** false: a non-authoritative backend, so `workers > 1` is allowed. */
+  /** false: a non-authoritative backend. */
   readonly authoritative?: boolean;
   /**
    * R516 (c): model al-runner one-shot. The in-run test limit is `oneShotLimits(timeoutMs)`'s
@@ -5000,20 +5002,15 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
 
   /** (a) Run 1, yesterday: one batch, finishes the first mutant (both tests answer, attested
    *  clean), then hangs. Run 2, today, resumes with --retry-stranded and reuses run 1's snapshot. */
-  async function sameBatchReuse(
-    today: ClockBackend,
-    extra: { maxMethodsPerCall?: number; workers?: ClockBackend[] } = {},
-  ) {
+  async function sameBatchReuse(today: ClockBackend, extra: { maxMethodsPerCall?: number } = {}) {
     const dirs = await twoTestProject(false);
     const store = new ResultsStore(":memory:");
-    const authoritative = extra.workers === undefined;
     await runSession({
       ...opts(store, dirs),
-      backend: new ClockBackend(YESTERDAY_MS, { abort: { after: 2 }, authoritative }),
+      backend: new ClockBackend(YESTERDAY_MS, { abort: { after: 2 } }),
     });
     const run1 = lastRun(store);
     const events: RunEvent[] = [];
-    const workers = extra.workers;
     const report = await runSession({
       ...opts(store, dirs),
       backend: today,
@@ -5022,16 +5019,6 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
       emit: [(e) => events.push(e)],
       ...(extra.maxMethodsPerCall !== undefined
         ? { groupRuns: { maxMethodsPerCall: extra.maxMethodsPerCall } }
-        : {}),
-      ...(workers !== undefined
-        ? {
-            workers: workers.length,
-            backendFactory: (i: number) => {
-              const w = workers[i];
-              if (w === undefined) throw new Error(`no worker backend ${i}`);
-              return w;
-            },
-          }
         : {}),
     });
     return { run1, today, report, reused: reusedOf(events), events };
@@ -5046,22 +5033,6 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
     expect(slowBudgets(today)).toEqual([Math.max(2 * YESTERDAY_MS, FLOOR_MS), 2 * TODAY_MS]);
     expect(falseKills(report, 0)).toEqual([]);
     expectStaleThenRebudgeted(today, report, 0, run1);
-  });
-
-  // R671: no backend accepts workers > 1 since R654 retired the .NET al-runner; skipped, not lost.
-  test.skip("R514 fixed (a), single path, workers = 2: executeCovering forwards the reuse to every worker", async () => {
-    const today = new ClockBackend(TODAY_MS, { authoritative: false });
-    const workers = [
-      new ClockBackend(TODAY_MS, { authoritative: false }),
-      new ClockBackend(TODAY_MS, { authoritative: false }),
-    ];
-    const { run1, report, reused } = await sameBatchReuse(today, { workers });
-    expect(reused.filter((m) => m.includes(`run ${run1}'s batch 0`))).toHaveLength(1);
-    expect(falseKills(report, 0)).toEqual([]);
-    const scored = expectStale(report, 0, run1);
-    expect(workers.flatMap((w) => slowConfirms(w)).map((s) => s.timeoutMs)).toEqual(
-      scored.map(() => 120_000),
-    );
   });
 
   test("R514 fixed (a), the (budget/2, budget] band: an unmutated confirm inside the budget but over half of it is reused-budget-stale (R53's 2x margin)", async () => {
@@ -5308,7 +5279,7 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
     expect(stale).toHaveLength(1);
     expect(renderConsole(report)).toContain(", reused-budget-stale 1])");
     const out = explain(report);
-    expect(out.explainSchemaVersion).toBe(19);
+    expect(out.explainSchemaVersion).toBe(20);
     const rows = out.notMeasured.filter((n) => n.cause === "reused-budget-stale");
     expect(rows).toHaveLength(1);
     for (const r of rows) {
@@ -5433,44 +5404,6 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
     // R515: after the 1500 ms confirm the budget is 3000, and BSlow passes at 2500 under a mutant.
     expect(slowBudgetsInOrder(today)).toEqual([2_000, 3_000, 3_000]);
     expectConfirmsAtBaselineDeadline(today, 1);
-  });
-
-  // R671: no backend accepts workers > 1 since R654.
-  test.skip("R516 T2 (repro b): workers = 2, the baseline measured on a fast tier sets budgets on a slower worker tier: no kill; the confirm runs on the slow worker", async () => {
-    // The session backend (where the baseline runs) and worker 0 run BSlow in 1000 ms; worker 1's
-    // tier runs it in 5000 ms, mutant or not. No mutant touches BSlow's time.
-    const dirs = await twoTestProject(false);
-    const store = new ResultsStore(":memory:");
-    const session = new ClockBackend(YESTERDAY_MS, { authoritative: false });
-    const workers = [
-      new ClockBackend(YESTERDAY_MS, { authoritative: false }),
-      new ClockBackend(TODAY_MS, { authoritative: false }),
-    ];
-    const report = await runSession({
-      ...opts(store, dirs),
-      backend: session,
-      workers: 2,
-      backendFactory: (i: number) => {
-        const w = workers[i];
-        if (w === undefined) throw new Error(`no worker backend ${i}`);
-        return w;
-      },
-    });
-    const [fast, slow] = workers;
-    if (fast === undefined || slow === undefined) throw new Error("two workers expected");
-    expect(session.baselineRuns).toBeGreaterThan(0);
-    expect(slow.mutantRuns).toBeGreaterThan(0);
-    expect(slowBudgets(slow)).toEqual([2_000]);
-    expect(falseKills(report, 0)).toEqual([]);
-    // The slow tier's mutant is the error; the fast tier's survive.
-    expect(verdictsOf(report, 0)).toEqual([
-      ["M0001", "survived", null],
-      ["M0002", "error", "timeout-unconfirmed"],
-      ["M0003", "survived", null],
-    ]);
-    // The confirm ran on worker 1 (the slow tier), at the baseline deadline; none on worker 0.
-    expectConfirmsAtBaselineDeadline(slow, 1);
-    expect(slowConfirms(fast)).toEqual([]);
   });
 
   test("R516 T3a (repro c reused): al-runner one-shot gives the test its whole budget in-run, so a 5.8% slower body under an unrelated mutant passes: survived, no confirm", async () => {
@@ -5632,38 +5565,6 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
       "timeout-killed",
     ]);
     expect(slowBudgetsInOrder(today)).toEqual([8_000, 8_000, 8_000]);
-  });
-
-  // R671: no backend accepts workers > 1 since R654.
-  test.skip("R515 T10: the re-budget is per shard:the slow tier re-budgets, the fast tier's budgets stay 2000", async () => {
-    // Two carriers, so each worker gets more than one mutant. The baseline (session backend) and
-    // worker 0 run BSlow in 1000 ms; worker 1 in 5000 ms, mutant or not.
-    const dirs = await twoTestProject(true);
-    const store = new ResultsStore(":memory:");
-    const session = new ClockBackend(YESTERDAY_MS, { authoritative: false });
-    const fast = new ClockBackend(YESTERDAY_MS, { authoritative: false });
-    const slow = new ClockBackend(TODAY_MS, { authoritative: false });
-    const workers = [fast, slow];
-    const report = await runSession({
-      ...opts(store, dirs),
-      backend: session,
-      workers: 2,
-      backendFactory: (i: number) => {
-        const w = workers[i];
-        if (w === undefined) throw new Error(`no worker backend ${i}`);
-        return w;
-      },
-    });
-    expect(falseKills(report, 0)).toEqual([]);
-    // The slow tier: its first mutated BSlow run is sent 2000, the rest 10000 (its own confirm).
-    const slowSent = slowBudgetsInOrder(slow);
-    expect(slowSent.length).toBeGreaterThan(1);
-    expect(slowSent).toEqual([2_000, ...slowSent.slice(1).map(() => 2 * TODAY_MS)]);
-    expectConfirmsAtBaselineDeadline(slow, 1);
-    // The fast tier never saw a timeout: every budget it was sent is the baseline's 2000.
-    const fastSent = slowBudgetsInOrder(fast);
-    expect(fastSent.length).toBeGreaterThan(1);
-    expect(fastSent).toEqual(fastSent.map(() => 2_000));
   });
 
   test("R516 T11 (M2): on the grouped path the confirm is judged against each method's budgetMs as sent, before and after a re-budget", async () => {
@@ -6131,32 +6032,6 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
     expect(overridden.floorCalls).toEqual([
       { floorMs: FLOOR_MS, baselineTimeoutMs: 5_000, runsBefore: 0 },
     ]);
-  });
-
-  // R671: no backend accepts workers > 1 since R654.
-  test.skip("R517 wiring: under workers = 2 every worker backend gets the same pair, before its first run", async () => {
-    const dirs = await twoTestProject(true);
-    const session = new ClockBackend(100, { authoritative: false, server: { restMs: 0 } });
-    const workers = [
-      new ClockBackend(100, { authoritative: false, server: { restMs: 0 } }),
-      new ClockBackend(100, { authoritative: false, server: { restMs: 0 } }),
-    ];
-    await runSession({
-      ...opts(new ResultsStore(":memory:"), dirs),
-      backend: session,
-      workers: 2,
-      backendFactory: (i: number) => {
-        const w = workers[i];
-        if (w === undefined) throw new Error(`no worker backend ${i}`);
-        return w;
-      },
-    });
-    const pair = { floorMs: FLOOR_MS, baselineTimeoutMs: 120_000, runsBefore: 0 };
-    expect(session.floorCalls).toEqual([pair]);
-    for (const w of workers) {
-      expect(w.sent.length).toBeGreaterThan(0);
-      expect(w.floorCalls).toEqual([pair]);
-    }
   });
 });
 

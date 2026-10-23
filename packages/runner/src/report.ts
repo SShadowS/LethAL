@@ -639,7 +639,10 @@ export type MutantErrorCause =
   | "kill-not-reproduced"
   // R658: the unmutated cold confirm also ran past its budget and LethAL's stop ended it (BC's 408,
   // or the op was already tombstoned by that stop).
-  | "confirm-stopped";
+  | "confirm-stopped"
+  // R688: under the mutant BC's suite discovery listed no methods for a covering test codeunit, and
+  // with no mutant active its test ran; the other covering tests ran and none killed it.
+  | "test-discovery-failed";
 
 /**
  * What each `MutantErrorCause` MEANS for a reader, and — because both are facts about LethAL's OWN
@@ -928,6 +931,18 @@ export const ERROR_CAUSE_INTERPRETATIONS: Record<MutantErrorCause, Interpretatio
       "Not `unstable`: the test did not fail with no mutant, it ran out of time. Not `stranded`: " +
       "a stop BC did not answer is `stranded` instead, and quarantined. Not a kill.",
     basis: "R658",
+  },
+  "test-discovery-failed": {
+    meaning:
+      "LethAL could not run one covering test codeunit's tests under this mutant: BC's suite " +
+      "discovery listed none of its methods (BC runs a test codeunit's OnRun while it builds the " +
+      "suite). With no mutant active LethAL ran that test, and it passed. The other covering tests " +
+      "ran against the mutant and none killed it. The note names the codeunit (R688).",
+    entailedNegative:
+      "Not `survived`: not every covering test ran against the mutant. Not `killed`: no test " +
+      "failed under it. Not `unstable`: the test passed with no mutant active. It does not say " +
+      "the tests that did not run would miss the mutant.",
+    basis: "R688",
   },
 };
 
@@ -3206,7 +3221,8 @@ function summarizeRunnerContexts(
  * R206 causes are listed beside it when non-zero, so a run full of them does not read
  * `error N [unstable 0]`. R-204b adds `stop-outcome-unconfirmed`, the error a stop leaves behind
  * when its group's answer arrived but could not be used (R665). R514 adds `reused-budget-stale`, R516 `timeout-unconfirmed`,
- * R534 `runner-test-error` and `runner-refused`, R577 `kill-not-reproduced`, R658 `confirm-stopped`.
+ * R534 `runner-test-error` and `runner-refused`, R577 `kill-not-reproduced`, R658 `confirm-stopped`,
+ * R688 `test-discovery-failed`.
  */
 function errorBreakdown(r: SessionReport): string {
   const named: MutantErrorCause[] = [
@@ -3221,6 +3237,7 @@ function errorBreakdown(r: SessionReport): string {
     "runner-refused",
     "kill-not-reproduced",
     "confirm-stopped",
+    "test-discovery-failed",
   ];
   const parts: string[] = [];
   for (const cause of named) {

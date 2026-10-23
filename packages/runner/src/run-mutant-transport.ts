@@ -1571,8 +1571,19 @@ export class RunMutantTransport {
       // lines, or two pairs matched one. Nothing ran; phase 3 tombstoned the op. A call-level
       // error with NO cause and NO operation, so the orchestrator's transport-error path aborts
       // the session with the server's words: a test app that does not resolve is not a
-      // per-mutant fact (R139/R56's channel).
+      // per-mutant fact (R139/R56's channel). R688: except a found-0 under a mutant, which the
+      // orchestrator re-runs one method at a time and confirms with no mutant active.
       const reason = typeof result.reason === "string" ? result.reason : "no reason given";
+      // R688 (S8): a wrong binary that also blanks discovery is the identity fault, never a found-0
+      // the orchestrator would confirm. The control app sends false here today.
+      if (result.identityMismatch === true) {
+        return call({
+          ref: firstMethod.ref,
+          outcome: "error",
+          durationMs,
+          failureMessage: `RunMutantMany attestation identity mismatch: a selector with a non-matching (targetAppId, artifactId) ran — wrong/stale binary (the server also answered suite-unresolved: ${reason})`,
+        });
+      }
       return call({
         ref: firstMethod.ref,
         outcome: "error",
@@ -2190,6 +2201,19 @@ export class RunMutantTransport {
       );
     }
     const lines = Array.isArray(parsed.testResults) ? parsed.testResults : [];
+    // Per-run binary-identity attestation (spec §G): identityMismatch=true means SOME instrumented
+    // site during this run presented a non-matching (targetAppId, artifactId), a wrong/stale binary
+    // is live. Reject it, never map it to a verdict. R688 (S8): read BEFORE the line count, so a
+    // wrong binary that also blanks discovery is never read as a found-0 answer.
+    if (result.identityMismatch === true) {
+      return {
+        ref,
+        outcome: "error",
+        durationMs,
+        failureMessage:
+          "RunMutant attestation identity mismatch: a selector with a non-matching (targetAppId, artifactId) ran — wrong/stale binary",
+      };
+    }
     // Fail closed: RunMutant selects exactly one method server-side, so exactly one line is the
     // only acceptable shape (spec §5.7). Zero or many is a protocol fault, never a verdict.
     if (lines.length !== 1) {
@@ -2229,23 +2253,9 @@ export class RunMutantTransport {
         failureMessage: `RunMutant unexpected result enum ${JSON.stringify(line.result)} for ${ref.method}`,
       };
     }
-    // Per-run binary-identity attestation (spec §G): observedAny=false is allowed (no
-    // instrumented site executed this run — coverage over-approximates); identityMismatch=true
-    // means SOME instrumented site during this run presented a non-matching (targetAppId,
-    // artifactId) — a wrong/stale binary is live. Reject it, never map it to a verdict.
-    const attestation = {
-      observedAny: result.observedAny === true,
-      identityMismatch: result.identityMismatch === true,
-    };
-    if (attestation.identityMismatch) {
-      return {
-        ref,
-        outcome: "error",
-        durationMs,
-        failureMessage:
-          "RunMutant attestation identity mismatch: a selector with a non-matching (targetAppId, artifactId) ran — wrong/stale binary",
-      };
-    }
+    // observedAny=false is allowed (no instrumented site executed this run — coverage
+    // over-approximates); identityMismatch=true was refused above.
+    const attestation = { observedAny: result.observedAny === true, identityMismatch: false };
     // GH-24: a `ran` answer must carry a boolean `observedActive` for THIS test method. Never
     // defaulted to `false` — a missing value is refused rather than read as "not reached".
     if (typeof result.observedActive !== "boolean") {

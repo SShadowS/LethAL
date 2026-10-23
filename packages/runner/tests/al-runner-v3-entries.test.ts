@@ -6,7 +6,7 @@ import { afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { appendFileSync } from "node:fs";
 import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { initParser } from "@lethal/engine";
 import { emitResourceSelector, emitStaticSelector } from "@lethal/schemata";
 import { v3ItestTransport, v3SplitLine } from "../itest/al-runner-v3-gate";
@@ -331,9 +331,12 @@ function fakeServe(script: ServeScript = {}) {
   const requests: Req[] = [];
   /** R672: each shutdown, with how many requests (over every daemon) came before it. */
   const closes: { daemon: number; afterRequests: number }[] = [];
-  const spawn: ServerSpawnFn = (argv) => {
+  /** R645: the working directory each daemon was started in. */
+  const cwds: (string | undefined)[] = [];
+  const spawn: ServerSpawnFn = (argv, opts) => {
     const daemon = daemons.length;
     daemons.push([...argv]);
+    cwds.push(opts?.cwd);
     const out = new Chan();
     const err = new Chan();
     let compiled = new Set<number>();
@@ -437,7 +440,7 @@ function fakeServe(script: ServeScript = {}) {
   };
   /** The first request each daemon got. */
   const firsts = () => daemons.map((_, d) => requests.find((r) => r.daemon === d));
-  return { spawn, daemons, requests, firsts, closes };
+  return { spawn, daemons, requests, firsts, closes, cwds };
 }
 
 interface Rig {
@@ -1139,6 +1142,12 @@ describe("10: R612's keep rule per entry, in entry order", () => {
     ]);
   });
 
+  test("R645: the daemon starts in the session's scratch dir, never the caller's working directory", async () => {
+    const r = await readyRig({ mutants: ["M0001"] });
+    expect(r.serve.cwds).toEqual([r.l.scratch]);
+    expect(r.serve.cwds[0]).not.toBe(process.cwd());
+  });
+
   test("all entries kept: one daemon", async () => {
     const r = await readyRig({ mutants: ["M0001", "M0002", "M0003"] });
     expect(r.serve.daemons).toHaveLength(1);
@@ -1586,7 +1595,7 @@ describe("12: the stop is the daemon's S", () => {
     expect(r.b.inRunStopIsBudget).toBe(false);
     expect(r.b.inRunStopMs).toBe(3000);
     const argv = r.serve.daemons[0] ?? [];
-    expect(argv.slice(0, 2)).toEqual(["/fake/al-runner", "serve"]);
+    expect(argv.slice(0, 2)).toEqual([resolve("/fake/al-runner"), "serve"]);
     expect(argv.join(" ")).toContain("--test-timeout 3");
     expect(argv.join(" ")).toContain(`--package-cache ${r.l.deps}`);
     expect(argv.join(" ")).toContain("--bc-version 28.0.46665.47126 --no-download");

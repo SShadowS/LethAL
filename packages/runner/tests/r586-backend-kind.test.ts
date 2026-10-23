@@ -4,10 +4,10 @@
 // backend read as the .NET al-runner. A new read of `.authoritative`, or a compare / argument /
 // default / case arm on the backend name "al-runner", fails here until it is classified below.
 import { beforeAll, describe, expect, test } from "bun:test";
-import { readFileSync, readdirSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { initParser } from "@lethal/engine";
 import type {
   BackendCapabilities,
@@ -21,18 +21,23 @@ import { ResultsStore } from "../src/store";
 
 const SRC = join(import.meta.dir, "..", "src");
 
-/** The shapes C1 and M1 name. Comment lines are skipped. */
+/** A backend name as a string literal: bcdev, al-runner-v3, and the retired al-runner. */
+const NAME = '"(?:bcdev|al-runner-v3|al-runner)"';
+
+/**
+ * The shapes C1, M1 and R611 name. Comment lines are skipped. A shape may span lines (`\s` matches
+ * a newline): R611 added a compare split over two lines, `case` labels, `.includes` on an array of
+ * names, and the v3 name (the first scanner only knew `"al-runner"` and `"bcdev"` compares).
+ */
 const SHAPES: readonly RegExp[] = [
-  /\.authoritative\b/,
-  /[=!]==\s*"al-runner"/,
-  /"al-runner"\s*[=!]==/,
-  /[(,]\s*"al-runner"\s*[,)]/,
-  /=\s*"al-runner"\s*[,;)]/,
-  /case\s+"al-runner"\s*:/,
-  /\?\?\s*"al-runner"/,
-  // Plan r2 §9: the bcdev compares too.
-  /[=!]==\s*"bcdev"/,
-  /"bcdev"\s*[=!]==/,
+  /\.authoritative\b/g,
+  new RegExp(`[=!]==\\s*${NAME}`, "g"),
+  new RegExp(`${NAME}\\s*[=!]==`, "g"),
+  new RegExp(`[(,]\\s*${NAME}\\s*[,)]`, "g"),
+  new RegExp(`=\\s*${NAME}\\s*[,;)]`, "g"),
+  new RegExp(`case\\s+${NAME}\\s*:`, "g"),
+  new RegExp(`\\?\\?\\s*${NAME}`, "g"),
+  new RegExp(`\\[[^\\]]*${NAME}[^\\]]*\\]\\s*\\.includes\\(`, "g"),
 ];
 
 /**
@@ -43,8 +48,27 @@ const SHAPES: readonly RegExp[] = [
  * predicate itself). R654 S3 deleted every `v2` read with the backend.
  */
 const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  // R611: the sites the widened scanner found (the v3 name, `case` labels). Each names its backend
+  // explicitly; none treats "not bcdev" as v3. Classes: `v3` / `bcdev` (an explicit branch),
+  // `exhaustive-switch` (both kinds, no default), `check-name` (a label), `path-name` (a folder).
   "backend.ts": {
     'return kind === "bcdev";': "predicate",
+    'return kind === "al-runner-v3";': "predicate",
+  },
+  "campaign-freeze.ts": { 'if (report.backend === "al-runner-v3") {': "v3" },
+  "line-map.ts": {
+    'case "bcdev":': "exhaustive-switch",
+    'case "al-runner-v3":': "exhaustive-switch",
+  },
+  "orchestrator.ts": {
+    'caps.kind === "al-runner-v3" ? { kind: "al-runner-v3" } : { kind: "bcdev" };': "v3",
+    'if (caps.kind === "al-runner-v3" && workers > 1) {': "v3",
+    'if (kind !== "al-runner-v3") return undefined;': "v3",
+  },
+  "doctor.ts": { 'runCheck("al-runner-v3", async () => {': "check-name" },
+  "store.ts": {
+    'const v3 = "al-runner-v3";': "v3",
+    'const v3 = q.backend === "al-runner-v3";': "v3",
   },
   "v2-retired.ts": {
     'export const RETIRED_V2_BACKEND = "al-runner";': "retired",
@@ -60,9 +84,16 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "report.ts": {
     "authoritative: input.caps.authoritative,": "report-field",
     "if (!r.authoritative) {": "report-field",
+    'if (caps.kind === "al-runner-v3") {': "v3",
+    '...(runnerBuild !== undefined && caps.kind === "al-runner-v3"': "v3",
   },
   "cli.ts": {
     'if (raw !== "bcdev" && raw !== "al-runner-v3") {': "config",
+    'if (backendArg === "al-runner-v3") {': "v3",
+    'instrumentedDir: join(scratchDir, "al-runner-v3"),': "path-name",
+    'if (parsed.backendKind === "al-runner-v3") {': "v3",
+    '} else if (paths.backendKind === "al-runner-v3") {': "v3",
+    'if (backendKind === "al-runner-v3") {': "v3",
     'if (coverage === "al-runner") {': "coverage-mode",
     'if (backendArg === "bcdev" && workers > 1) {': "bcdev",
     'if (parsed.backendKind !== "bcdev" || configFile.envTool === undefined) {': "bcdev",
@@ -73,16 +104,50 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   },
 };
 
-/** Every (file, trimmed line) matching a shape, comment lines excluded. */
+/**
+ * Every (file, text) matching a shape, comment lines excluded. `text` is the trimmed lines the
+ * match touches, joined by one space; overlapping matches share one entry, so a split compare or a
+ * multi-line array is one read with one key.
+ */
 function backendIdentityReads(
   files: ReadonlyMap<string, string>,
 ): Array<{ file: string; text: string }> {
   const out: Array<{ file: string; text: string }> = [];
   for (const [file, src] of files) {
-    for (const raw of src.split("\n")) {
-      const text = raw.trim();
-      if (text.startsWith("//") || text.startsWith("*") || text.startsWith("/*")) continue;
-      if (SHAPES.some((s) => s.test(text))) out.push({ file, text });
+    const lines = src.split("\n");
+    const code = lines.map((raw) => {
+      const t = raw.trim();
+      return t.startsWith("//") || t.startsWith("*") || t.startsWith("/*") ? "" : raw;
+    });
+    const starts: number[] = [];
+    let at = 0;
+    for (const l of code) {
+      starts.push(at);
+      at += l.length + 1;
+    }
+    const lineOf = (offset: number) => starts.filter((s) => s <= offset).length - 1;
+    const body = code.join("\n");
+    const spans: Array<[number, number]> = [];
+    for (const shape of SHAPES) {
+      for (const m of body.matchAll(shape)) {
+        spans.push([lineOf(m.index), lineOf(m.index + Math.max(m[0].length - 1, 0))]);
+      }
+    }
+    spans.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    const merged: Array<[number, number]> = [];
+    for (const [s, e] of spans) {
+      const last = merged.at(-1);
+      if (last !== undefined && s <= last[1]) last[1] = Math.max(last[1], e);
+      else merged.push([s, e]);
+    }
+    for (const [s, e] of merged) {
+      out.push({
+        file,
+        text: lines
+          .slice(s, e + 1)
+          .map((l) => l.trim())
+          .join(" "),
+      });
     }
   }
   return out;
@@ -106,11 +171,12 @@ function unclassified(
   return { fresh, stale };
 }
 
-function readSrc(): Map<string, string> {
+/** Every non-test `.ts` under `dir`, subfolders included; keys are `/`-separated relative paths. */
+function readSrc(dir: string = SRC): Map<string, string> {
   const files = new Map<string, string>();
-  for (const f of readdirSync(SRC)) {
+  for (const f of readdirSync(dir, { recursive: true, encoding: "utf8" })) {
     if (f.endsWith(".ts") && !f.endsWith(".test.ts")) {
-      files.set(f, readFileSync(join(SRC, f), "utf8"));
+      files.set(f.split(sep).join("/"), readFileSync(join(dir, f), "utf8"));
     }
   }
   return files;
@@ -139,6 +205,83 @@ describe("R586 T15: every backend-identity read in src is classified", () => {
       ],
     ]);
     expect(unclassified(files, {}).fresh).toHaveLength(4);
+  });
+
+  // R611: the shapes the first scanner missed. Each fixture is flagged (red-going) when unclassified
+  // and accepted once its collapsed text is in the table.
+  test("R611 direction 1: a case label, v3 compares and a split compare are caught", () => {
+    const cases: Array<[string, string]> = [
+      ['switch (k) {\n  case "bcdev":\n', 'case "bcdev":'],
+      ['switch (k) {\n  case "al-runner-v3":\n', 'case "al-runner-v3":'],
+      ['if (caps.kind === "al-runner-v3") {\n', 'if (caps.kind === "al-runner-v3") {'],
+      ['if ("al-runner-v3" !== caps.kind) {\n', 'if ("al-runner-v3" !== caps.kind) {'],
+      ['if (caps.kind ===\n    "bcdev") {\n', 'if (caps.kind === "bcdev") {'],
+      ['if (caps.kind !==\n    "al-runner-v3") {\n', 'if (caps.kind !== "al-runner-v3") {'],
+      // `&&` after the name: only the compare shape itself can catch these two.
+      ['if (caps.kind ===\n    "bcdev" && x) {\n', 'if (caps.kind === "bcdev" && x) {'],
+      [
+        'if (x && "al-runner-v3"\n    !== caps.kind) {\n',
+        'if (x && "al-runner-v3" !== caps.kind) {',
+      ],
+    ];
+    for (const [src, key] of cases) {
+      const files = new Map([["x.ts", src]]);
+      expect(unclassified(files, {}).fresh, src).toEqual([`x.ts: ${key}`]);
+      expect(unclassified(files, { "x.ts": { [key]: "bcdev" } }), src).toEqual({
+        fresh: [],
+        stale: [],
+      });
+    }
+  });
+
+  test("R611 direction 1: .includes on an array of backend names is caught, one line or split", () => {
+    const cases: Array<[string, string]> = [
+      [
+        'const ok = ["bcdev", "al-runner-v3"].includes(caps.kind);\n',
+        'const ok = ["bcdev", "al-runner-v3"].includes(caps.kind);',
+      ],
+      [
+        'const ok = [\n  "al-runner-v3",\n  "bcdev",\n].includes(caps.kind);\n',
+        'const ok = [ "al-runner-v3", "bcdev", ].includes(caps.kind);',
+      ],
+    ];
+    for (const [src, key] of cases) {
+      const files = new Map([["x.ts", src]]);
+      expect(unclassified(files, {}).fresh, src).toEqual([`x.ts: ${key}`]);
+      expect(unclassified(files, { "x.ts": { [key]: "bcdev" } }), src).toEqual({
+        fresh: [],
+        stale: [],
+      });
+    }
+  });
+
+  test("R611: a name in a comment, a type position or an unrelated array is not a read", () => {
+    const files = new Map([
+      [
+        "x.ts",
+        [
+          '// if (caps.kind === "al-runner-v3") {',
+          'type K = "bcdev" | "al-runner-v3";',
+          'const xs = ["a", "b"].includes(name);',
+        ].join("\n"),
+      ],
+    ]);
+    expect(unclassified(files, {})).toEqual({ fresh: [], stale: [] });
+  });
+
+  test("R611 direction 1: a file in a subfolder of src is scanned", async () => {
+    const root = await mkdtemp(join(tmpdir(), "lethal-r611-src-"));
+    try {
+      mkdirSync(join(root, "deep", "er"), { recursive: true });
+      writeFileSync(join(root, "top.ts"), "export const a = 1;\n");
+      writeFileSync(join(root, "deep", "er", "x.ts"), 'if (caps.kind === "bcdev") {\n');
+      writeFileSync(join(root, "deep", "er", "x.test.ts"), 'if (caps.kind === "bcdev") {\n');
+      const files = readSrc(root);
+      expect([...files.keys()].sort()).toEqual(["deep/er/x.ts", "top.ts"]);
+      expect(unclassified(files, {}).fresh).toEqual(['deep/er/x.ts: if (caps.kind === "bcdev") {']);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   test("direction 2: a classified line that is gone is reported stale, and comments are not reads", () => {
@@ -295,9 +438,9 @@ describe("R586 C1: runSession keys on kind, not on authoritative", () => {
     await inProject(async (root) => {
       const store = new ResultsStore(":memory:");
       const mk = () => withProbe(new V3KindStub([]), []);
-      await expect(
-        v3Session(root, store, mk(), { workers: 2, backendFactory: () => mk() }),
-      ).rejects.toThrow(/refused for the al-runner-v3 backend/);
+      await expect(v3Session(root, store, mk(), { workers: 2 })).rejects.toThrow(
+        /refused for the al-runner-v3 backend/,
+      );
     });
   });
 });

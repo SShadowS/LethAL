@@ -412,6 +412,21 @@ function buildScenarioReport(): SessionReport {
       failureNote:
         "confirm-stopped ApproveBatchSendsRequest: timed out under the mutant, then ran past its budget with no mutant active and LethAL stopped it on the server (BC confirmed with its 408); not attributed to the mutant (R658).",
     },
+    {
+      // R688: under the mutant BC's suite discovery listed no methods for a covering test
+      // codeunit; with no mutant active its test passed. Zero duration, so R54's `mutantsMs` oracle
+      // is unmoved.
+      type: "mutant-scored",
+      // The golden input has no M0016; M0011's site under a new id and hash.
+      mutant: { ...mutant("M0011"), mutantId: "M0016", astHash: "r688-m0016" },
+      verdict: "error",
+      batchIndex: 2,
+      durationMs: 0,
+      coveringTests: ["Sales Approval Tests.LogInsertsOnApproval"],
+      cause: "test-discovery-failed",
+      failureNote:
+        'test-discovery-failed: test codeunit(s) "Sales Approval Tests" (50100) were skipped under this mutant: BC\'s suite discovery listed none of their methods when asked for Sales Approval Tests.LogInsertsOnApproval, which passed with no mutant active; no other test covers it, so this is not a survivor (R688)',
+    },
     // R53: two mutants a prior run stranded the tier on, skipped rather than retried —
     // `mutant-skipped-stranded`, never `mutant-scored`: the event's own type already implies
     // "error" (events.ts). This is what backs `resumedFrom.skippedStranded: 2` with real rows.

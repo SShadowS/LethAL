@@ -4053,8 +4053,52 @@ function r572LoopRows(loop: ALSyntaxNode, obj: ALSyntaxNode, ctx: SemanticContex
   const rows: R572Row[] = [];
   for (const { n, c, flag, varOut, additive, ts } of calls) {
     for (const q of ts) {
+      /** R-604b: this same-object callee was refused by an M1 rule below (so it is not "dropped") */
+      let m1Refused = false;
       if (cursors.size > 0) {
         const sh = shared(c, q);
+        const own = sameObject(q);
+        /** R-604b: refuse callee `q` and `chain` (stateful, no writers; the guard-writer rule follows) */
+        const refuse = (reason: keyof R572Gaps, chain: ALSyntaxNode[]): void => {
+          m1Refused = true;
+          if (r572GapSink !== null) {
+            r572GapSink.m1Refused++;
+            r572GapSink[reason]++;
+          }
+          rows.push({
+            loop,
+            call: n,
+            flag,
+            varOut,
+            wrapper: q,
+            chain,
+            stateful: true,
+            selfFeed: false,
+            additive,
+            writers: [],
+          });
+        };
+        // R-604b (I2): a forced GLOBAL cursor that a same-object callee names (not shadowed) is
+        // shared by `var`, counted by name as `r572HelperKeeps` does
+        const viaGlobal = new Set<string>();
+        if (own) {
+          const og = objectOf(q);
+          const gn = og === null ? new Set<string>() : objectGlobalNames(og);
+          const named = r572Globals(q, ctx);
+          for (const k of cursors)
+            if (k !== "" && gn.has(k) && named.has(k) && !sh.some((s) => s.key === k)) {
+              sh.push({ key: k, byValue: false });
+              viaGlobal.add(k);
+            }
+        }
+        // R-604b (A0): a same-object callee that gets the cursor and inserts or renames rows of
+        // the iterated table (any record: temporary, real or unknown) within R570_HOPS calls
+        if (own && (sh.length > 0 || r572GapSink !== null)) {
+          const ins = r604Inserters(q, r604CursorTables(loop, cursors, ctx), ctx);
+          if (ins.length > 0 && sh.length > 0) refuse("m1RefusedA0", [q, ...ins]);
+          // counted only: a callee that gets no cursor but inserts into the iterated table
+          else if (ins.length > 0 && r572GapSink !== null) r572GapSink.m1A0NoCursor++;
+        }
         // option D: the loop's own step alone forces the exit and the callee does not get that
         // cursor, so the callee can only end the loop sooner
         if (sh.length === 0) continue;
@@ -4068,6 +4112,27 @@ function r572LoopRows(loop: ALSyntaxNode, obj: ALSyntaxNode, ctx: SemanticContex
           )
         )
           continue;
+        // R-604b (var-touch): a same-object callee that gets the cursor unreadably, or by `var`,
+        // and touches it for ANY r570Scan reason is refused with its touches (an unreadable
+        // binding: with the touches of its record parameters). By value keeps today's drop.
+        if (own) {
+          const hit = sh.flatMap((s) =>
+            s.key === R570_UNKNOWN
+              ? [q, ...r604RecordParamTouches(q, filtered, ctx)]
+              : s.byValue
+                ? []
+                : r570Touches(q, s.key, false, 0, filtered, ctx),
+          );
+          if (hit.length > 0)
+            refuse(
+              sh.some((s) => s.key === R570_UNKNOWN)
+                ? "m1RefusedUnknown"
+                : sh.some((s) => viaGlobal.has(s.key) && !s.byValue)
+                  ? "m1RefusedGlobal"
+                  : "m1RefusedVar",
+              hit,
+            );
+        }
       }
       let wrapper: ALSyntaxNode | null = null;
       let chain: ALSyntaxNode[];
@@ -4078,8 +4143,8 @@ function r572LoopRows(loop: ALSyntaxNode, obj: ALSyntaxNode, ctx: SemanticContex
           .flatMap((t) => r572Chain(t, 1, ctx));
         if (chain.length === 0) {
           // R604 census (M1): a same-object callee that gets and TOUCHES the forced cursor, with no
-          // `exit(<call>)` into another object: nothing is refused
-          if (r572GapSink !== null && cursors.size > 0) r572GapSink.m1TouchViaWrapper++;
+          // `exit(<call>)` into another object, and that no M1 rule refused: dropped
+          if (r572GapSink !== null && cursors.size > 0 && !m1Refused) r572GapSink.m1Dropped++;
           continue;
         }
         wrapper = q;
@@ -4112,8 +4177,14 @@ function r572LoopRows(loop: ALSyntaxNode, obj: ALSyntaxNode, ctx: SemanticContex
  * `r572Census` runs and never read by the refusal itself. Each counts a SHAPE, not mutants:
  * - `h2SplitQueue`: a pure (non-stateful) exit chain that reads a local REAL record of table T,
  *   with a loop-body call into the same object that inserts, modifies, deletes or renames T;
- * - `m1TouchViaWrapper`: under option D, a same-object callee that gets and touches the cursor
- *   but has no `exit(<call>)` into another object;
+ * - M1 (R-604b narrowed it; two counters were split out of the old `m1TouchViaWrapper`):
+ *   `m1Dropped` is a same-object callee that gets and touches the cursor, has no `exit(<call>)`
+ *   into another object, and that no M1 rule refused (so it is still dropped, e.g. a cursor by
+ *   value); `m1Refused` counts the refusals the M1 rules add, one per rule row, split by reason
+ *   into `m1RefusedA0` (inserts or renames rows of the iterated table), `m1RefusedVar` (a `var`
+ *   cursor touched), `m1RefusedUnknown` (an unreadable binding) and `m1RefusedGlobal` (a forced
+ *   global cursor named in the callee); `m1A0NoCursor` is a callee that gets NO cursor but
+ *   inserts into the iterated table (counted only, limit L2);
  * - `m2ReachCutOff`: a stateful chain whose writer reach stopped at the hop cap with calls unread;
  * - `m3CopyShared`: a `Copy(X, true)` in a refused chain's object (an alias of shared state);
  * - `m3RecRefByValue`: a forced RecordRef cursor handed BY VALUE to a callee;
@@ -4125,7 +4196,13 @@ function r572LoopRows(loop: ALSyntaxNode, obj: ALSyntaxNode, ctx: SemanticContex
  */
 export interface R572Gaps {
   h2SplitQueue: number;
-  m1TouchViaWrapper: number;
+  m1Dropped: number;
+  m1Refused: number;
+  m1RefusedA0: number;
+  m1RefusedVar: number;
+  m1RefusedUnknown: number;
+  m1RefusedGlobal: number;
+  m1A0NoCursor: number;
   m2ReachCutOff: number;
   m3CopyShared: number;
   m3RecRefByValue: number;
@@ -4170,7 +4247,13 @@ export function r572Census(ctx: SemanticContext): {
 } {
   const gaps: R572Gaps = {
     h2SplitQueue: 0,
-    m1TouchViaWrapper: 0,
+    m1Dropped: 0,
+    m1Refused: 0,
+    m1RefusedA0: 0,
+    m1RefusedVar: 0,
+    m1RefusedUnknown: 0,
+    m1RefusedGlobal: 0,
+    m1A0NoCursor: 0,
     m2ReachCutOff: 0,
     m3CopyShared: 0,
     m3RecRefByValue: 0,
@@ -4187,6 +4270,106 @@ export function r572Census(ctx: SemanticContext): {
 }
 
 const R572_READS: ReadonlySet<string> = new Set([...R570_CURSOR]);
+
+/** R-604b: the tables of the loop's forced cursors; `null` in the set = a cursor of unknown table. */
+function r604CursorTables(
+  loop: ALSyntaxNode,
+  cursors: ReadonlySet<string>,
+  ctx: SemanticContext,
+): Set<string | null> {
+  const out = new Set<string | null>();
+  const found = new Set<string>();
+  for (const part of loopConditionParts(loop))
+    r531Walk(part, ctx, (n) => {
+      const c = r531Call(n);
+      if (c === null || !cursors.has(c.recv ?? "")) return;
+      const recv = r572Receiver(n);
+      const t = recv === null ? null : declaredType(recv, ctx);
+      found.add(c.recv ?? "");
+      if (t !== null && t.kind === "table") out.add(t.name);
+      else if (c.recv === "" || c.recv === null) {
+        const o = objectOf(loop);
+        out.add(o === null ? null : r604ObjectTable(o));
+      } else out.add(null);
+    });
+  for (const k of cursors) if (!found.has(k)) out.add(null);
+  return out;
+}
+
+/** The table a table or tableextension object is (normalized), else null. */
+function r604ObjectTable(o: ALSyntaxNode): string | null {
+  if (o.rawKind === "table_declaration") return objectNameOf(o);
+  if (o.rawKind === "tableextension_declaration") {
+    const t = o.childForFieldName("base_object") ?? o.childForFieldName("target");
+    return t === null ? null : normalizeAlName(t.text);
+  }
+  return null;
+}
+
+const R604_ROWS_IN: ReadonlySet<string> = new Set(["insert", "rename"]);
+
+/** R-604b (A0): procedures within R570_HOPS calls of `q` (any object, `q` included) that insert or
+ *  rename rows of a table in `tables` through ANY record; an unknown table on either side matches.
+ *  A paren-less `X.Insert;` is a member expression and counts (N1). Not followed (limits): `Codeunit.Run`,
+ *  page, report and XMLport inserts, and inserts deeper than R570_HOPS calls. */
+function r604Inserters(
+  q: ALSyntaxNode,
+  tables: ReadonlySet<string | null>,
+  ctx: SemanticContext,
+): ALSyntaxNode[] {
+  const seen = new Map<string, ALSyntaxNode>([[r572Id(q), q]]);
+  let todo = [q];
+  const out: ALSyntaxNode[] = [];
+  const matches = (name: string | null): boolean =>
+    name === null || tables.has(null) || tables.has(name);
+  for (let d = 0; d <= R570_HOPS && todo.length > 0; d++) {
+    const next: ALSyntaxNode[] = [];
+    for (const p of todo) {
+      let hit = false;
+      r531Walk(p, ctx, (n) => {
+        const c = r531Call(n);
+        if (c === null) return;
+        if (!hit && R604_ROWS_IN.has(c.method)) {
+          if (c.recv === "" || (c.recv === null && r531Implicit(n, ctx))) {
+            const o = objectOf(p);
+            if (matches(o === null ? null : r604ObjectTable(o))) hit = true;
+          } else if (c.recv !== null) {
+            const recv = r572Receiver(n);
+            const t = recv === null ? null : declaredType(recv, ctx);
+            if (t === null || (t.kind === "table" && matches(t.name))) hit = true;
+          }
+        }
+        for (const t of r570Targets(n, c, ctx)) {
+          const id = r572Id(t);
+          if (seen.has(id)) continue;
+          seen.set(id, t);
+          next.push(t);
+        }
+      });
+      if (hit) out.push(p);
+    }
+    todo = next;
+  }
+  return out;
+}
+
+/** R-604b (I3): `r570Touches` over each record parameter of `q`, by its own var/by-value mode. */
+function r604RecordParamTouches(
+  q: ALSyntaxNode,
+  filtered: ReadonlySet<string>,
+  ctx: SemanticContext,
+): ALSyntaxNode[] {
+  const list = q.namedChildren.find((c) => c.rawKind === "parameter_list");
+  const ps = list?.namedChildren.filter((c) => c.rawKind === "parameter") ?? [];
+  const out: ALSyntaxNode[] = [];
+  ps.forEach((p, i) => {
+    if (!/:\s*record/i.test(p.text)) return;
+    const prm = r531Param(q, i);
+    if (prm === null) return;
+    out.push(...r570Touches(q, r531ParamKey(prm[0]), !prm[1], 0, filtered, ctx));
+  });
+  return out;
+}
 
 function r572CensusRun(
   ctx: SemanticContext,

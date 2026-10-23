@@ -28,7 +28,7 @@ exports[`buildReport output is stable across the event-stream refactor an event 
   "buildSymbols": [],
   "counts": {
     "deadlineExceeded": 1,
-    "errors": 6,
+    "errors": 7,
     "killed": 2,
     "knownSurvivors": 1,
     "noCoverage": 1,
@@ -62,7 +62,7 @@ exports[`buildReport output is stable across the event-stream refactor an event 
     "totalFiles": 13,
   },
   "groupedCalls": 0,
-  "identityScheme": 41,
+  "identityScheme": 42,
   "mutants": [
     {
       "astHash": "hashA1",
@@ -399,6 +399,30 @@ exports[`buildReport output is stable across the event-stream refactor an event 
       "triggerName": "OnInsert",
       "verdict": "error",
     },
+    {
+      "astHash": "r688-m0016",
+      "batchIndex": 2,
+      "cause": "test-discovery-failed",
+      "codeunitName": "Sales Approval Log",
+      "coveringTests": [
+        "Sales Approval Tests.LogInsertsOnApproval",
+      ],
+      "durationMs": 0,
+      "endIndex": 90,
+      "failureNote": "test-discovery-failed: test codeunit(s) "Sales Approval Tests" (50100) were skipped under this mutant: BC's suite discovery listed none of their methods when asked for Sales Approval Tests.LogInsertsOnApproval, which passed with no mutant active; no other test covers it, so this is not a survivor (R688)",
+      "file": "Al/Table/Table 50103 Sales Approval Log.al",
+      "line": 5,
+      "mutantCode": "M0016",
+      "mutatedText": "if not (Rec.Status = Rec.Status::New) then",
+      "operatorMajor": 1,
+      "operatorName": "lethal.negate-condition",
+      "originalText": "if Rec.Status = Rec.Status::New then",
+      "procedureName": "",
+      "runner": "fenced",
+      "startIndex": 50,
+      "triggerName": "OnInsert",
+      "verdict": "error",
+    },
   ],
   "mutationScore": 0.42857142857142855,
   "notInstrumented": {
@@ -619,7 +643,7 @@ exports[`buildReport output is stable across the event-stream refactor an event 
         "clientType": "ODataV4",
         "guiAllowed": false,
         "runner": "fenced",
-        "verdictCount": 13,
+        "verdictCount": 14,
       },
       {
         "basis": "carried from run 41 by --resume: not measured in this run — the prior run's own report is the authority on how it was produced",
@@ -639,7 +663,7 @@ exports[`buildReport output is stable across the event-stream refactor an event 
     "reliability": "narrowed-degraded",
     "scoreDescribes": "7 scored mutant(s) in Al/Codeunit/Codeunit 50100 Sales Helper.al, Al/Codeunit/Codeunit 50101 Sales Post Mgt.al, Al/Codeunit/Codeunit 50102 Sales Approval Mgt.al, Al/Table/Table 50103 Sales Approval Log.al (4 of 13 .al files); 2 file(s) not instrumentable, 9 site(s) not mutated, with 3 of 12 baseline tests failing",
     "scoredMutants": {
-      "recorded": 15,
+      "recorded": 16,
       "scored": 7,
     },
   },
