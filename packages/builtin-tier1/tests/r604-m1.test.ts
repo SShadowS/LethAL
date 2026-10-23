@@ -143,6 +143,69 @@ describe("R-604b M1: a same-object callee that gets the cursor is REFUSED when i
     );
     expect(refused(f, "A0p")).toBe(true);
   });
+  it("A0_byvalue: gets the cursor BY VALUE and inserts rows of the same table (A0 is not gated on var)", () => {
+    const f = files(
+      loop({ filter: FILTER, callee: step("A0v", param(false), L1, insertRows("L.Insert();")) }),
+    );
+    expect(refused(f, "A0v")).toBe(true);
+    expect(gapsOf(f).m1RefusedA0).toBeGreaterThan(0);
+  });
+  it("byvalue_insert: gets the cursor by value and inserts the cursor record itself", () => {
+    const f = files(
+      loop({
+        filter: FILTER,
+        callee: step("BVI", param(false), "", '        B."Entry No." := 0;\n        B.Insert();'),
+      }),
+    );
+    expect(refused(f, "BVI")).toBe(true);
+  });
+  it("A0_temp_local: the insert goes through a TEMPORARY local of the iterated table", () => {
+    const f = files(
+      loop({
+        filter: FILTER,
+        callee: step(
+          "A0t",
+          param(true),
+          '        L: Record "R604 Buf" temporary;\n',
+          insertRows("L.Insert();"),
+        ),
+      }),
+    );
+    expect(refused(f, "A0t")).toBe(true);
+  });
+  it("C pin: a rows-only by-var callee (non-key field, Modify(false)) is refused: handing the cursor on makes every field count as filtered", () => {
+    const f = files(
+      loop({
+        filter: FILTER,
+        callee: step("C", param(true), "", "        B.Val := 'y';\n        B.Modify(false);"),
+      }),
+    );
+    expect(refused(f, "C")).toBe(true);
+    expect(gapsOf(f).m1RefusedVar).toBeGreaterThan(0);
+  });
+  it("I3 (r1): a callee with exit(<call into another object>) that touches its var cursor is refused", () => {
+    const f: Files = {
+      ...files(
+        loop({
+          filter: FILTER,
+          callee: step(
+            "I3x",
+            param(true),
+            '        O: Codeunit "R604 Pure";\n',
+            "        B.SetRange(Val, 'x');\n        exit(O.Pure());",
+          ),
+        }),
+      ),
+      "Pure.Codeunit.al": `codeunit 57303 "R604 Pure"
+{
+    procedure Pure(): Boolean
+    begin
+        exit(false);
+    end;
+}`,
+    };
+    expect(refused(f, "I3x")).toBe(true);
+  });
   it("B: gets a temporary cursor by var and moves it (SetRange, FindFirst)", () => {
     const f = files(
       loop({
