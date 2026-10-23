@@ -35,8 +35,8 @@ All three MEASURED on a Cronus283 container (BC 28), first run 2026-08-24, not p
 2. **Nobody ever owes anything.** No test writes a ledger entry, so `Balance` is 0 in every test
    and `CalcFields` never changes anything. `remove-calcfields` (`WouldExceedLimit`, line 36): **survived**,
    with `attribution: "exact"` and `executionProven: true`, covered by all five tests. The posting
-   helpers (`PostInvoice`, `PostPayment`, `PostEntry`) are called by no test, so all 8 of their
-   mutants came back `no-coverage`.
+   helpers (`PostInvoice`, `PostPayment`, `PostEntry`) are called by no test, so all 11 of their
+   mutants come back `no-coverage` (8 at the first run; `remove-assignment` added 3).
 3. **There is only ever one customer.** Every test creates `C-10000` and nothing else, so the
    `SetRange("Customer No.", ...)` in `OutstandingOrderAmount` is never load-bearing.
    `remove-setrange` on it (`OutstandingOrderAmount`, line 56): **survived**. The Status filter next to it: **killed**
@@ -62,7 +62,9 @@ TIMING: total 13.0s = generate 0.0s + deploy 2.6s + baseline 0.7s + mutants 1.3s
 ```
 
 The report this section quotes is `demo.report.json` next to this file (with
-`demo.events.ndjson`), produced by the command in Running it below. It is FROZEN:
+`demo.events.ndjson`). It was produced by the command in Running it below, with `--config` naming bc1's
+gitignored `lethal.config.bc1.json` (written by `scripts/r560c-credit-limit-setup.ts`) and `--progress-out` writing
+the events file. It is FROZEN:
 `demo.baseline.json` holds the same run's verdicts per mutant, so a re-run is checked mutant by
 mutant rather than by total.
 
@@ -72,7 +74,7 @@ lethal campaign compare --manifest examples/credit-limit/campaign.json \
 ```
 
 Run that before quoting these numbers anywhere. Each survivor named above is a claim about ONE
-mutant, and a total that still reads 22 / 8 / 11 can hide a verdict that moved.
+mutant, and a total that still reads 23 / 8 / 11 can hide a verdict that moved.
 
 Named by procedure and operator, never by mutant code. Codes are per-run labels that renumber
 the moment an operator lands earlier in the file — `flip-boolean-literal` shifted all three of

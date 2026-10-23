@@ -614,6 +614,7 @@ describe("R355: stage baselines, list form and moded form", () => {
     const path = join(REPO, "examples/credit-limit/demo.baseline.json");
     const stage = parseStageBaseline(await readFile(path, "utf8"), path, "remedy");
     expect(stage.coverageMode).toBe("fenced");
+    expect(stage.identityScheme).toBe(41);
     expect(stage.entries).toHaveLength(42);
     expect(stage.entries.every((e) => e.mutatedTextSha256 !== undefined)).toBe(true);
   });
