@@ -1,13 +1,15 @@
 /**
- * Owner-run: rewrite LethAL's private configs (credentials inside) for the kraken container, and pack
- * every fixture's `.alpackages` into `fixture-symbols.tar`.
+ * Owner-run: rewrite LethAL's private configs (credentials inside) for the kraken container, and ship
+ * the pinned fixture symbol tar as `fixture-symbols.tar`.
  *
  *   bun scripts/kraken-secrets.ts --repo U:/Git/LethAL --out U:/Git/kraken/secrets/lethal
- *       [--symbol-tar <the pinned fixture-symbols tar>]
+ *       --symbol-tar <the pinned fixture-symbols tar>
  *
- * R670: `fixture-symbols.tar` is either packed from the host repo's `.alpackages`, or, with
- * `--symbol-tar`, the given tar shipped verbatim once its sha256 equals the pin. Either way it is
- * refused when a LethAL app copy in it disagrees with the repo's `app.json` versions.
+ * R670: `fixture-symbols.tar` is the `--symbol-tar` file shipped verbatim, once its sha256 equals the
+ * pin (`FIXTURE_SYMBOLS_TAR_SHA256`) and no LethAL app copy in it disagrees with the repo's
+ * `app.json` versions. Without `--symbol-tar` the run is refused by name: a tar packed from the
+ * host's `.alpackages` could never equal the pin (GNU tar's default format, host mtimes and owners),
+ * and packing stale host folders shipped stale copies before.
  *
  * The file list is `.kraken/project.yaml`'s `secret_files` (read from THIS script's repo): each
  * `to` is the file's path relative to `--repo` on the host too, and the output takes the `from`
@@ -21,17 +23,17 @@
  */
 import { createHash, randomBytes } from "node:crypto";
 import {
-  type Stats,
   existsSync,
-  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, join, relative } from "node:path";
+import { tmpdir } from "node:os";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import {
   FIXTURE_SYMBOLS_TAR_SHA256,
   type FixtureApp,
@@ -172,41 +174,26 @@ function arg(name: string): string | undefined {
   return i >= 0 ? process.argv[i + 1] : undefined;
 }
 
-type Lstat = (p: string) => Pick<Stats, "isFile" | "isDirectory">;
-
-/** A fixture has symbols only if `.alpackages` is a real directory holding at least one `*.app`. */
-export function hasSymbols(dir: string, lstat: Lstat = lstatSync): boolean {
-  try {
-    if (!lstat(dir).isDirectory()) return false;
-  } catch {
-    return false;
-  }
-  return readdirSync(dir).some((n) => /\.app$/i.test(n));
-}
-
-/** Every entry under `root` (relative, `/`-separated) that is not a regular file or directory:
- *  a symlink or junction would make tar pack something from outside the folder. */
-export function nonRegularEntries(root: string, lstat: Lstat = lstatSync): string[] {
-  const bad: string[] = [];
-  const walk = (rel: string): void => {
-    for (const name of readdirSync(join(root, rel))) {
-      const r = rel === "" ? name : `${rel}/${name}`;
-      const s = lstat(join(root, r));
-      if (s.isDirectory()) walk(r);
-      else if (!s.isFile()) bad.push(r);
-    }
-  };
-  walk("");
-  return bad;
-}
-
-/** Problems with a finished tar: an entry that is absolute or has `..`, or is not a file or dir. */
-export function tarProblems(tar: Uint8Array): string[] {
+/**
+ * A tar's `tar -tf` names, and its problems: a failed listing, an entry that is absolute or has
+ * `..`, or one that is not a file or directory. R670: a listing with no file at all is a problem
+ * too, so an empty or unreadable tar can never pass the drift check by naming nothing.
+ */
+export function tarListing(tar: Uint8Array): { names: string[]; problems: string[] } {
   const names = Bun.spawnSync(["tar", "-tf", "-"], { stdin: tar });
   const long = Bun.spawnSync(["tar", "-tvf", "-"], { stdin: tar });
-  if (names.exitCode !== 0 || long.exitCode !== 0) return ["tar listing failed"];
+  if (names.exitCode !== 0 || long.exitCode !== 0)
+    return { names: [], problems: ["tar listing failed"] };
   const lines = (b: Uint8Array) => new TextDecoder().decode(b).split(/\r?\n/);
-  return listingProblems(lines(names.stdout), lines(long.stdout));
+  const n = lines(names.stdout);
+  const empty = !n.some((x) => x !== "" && !x.endsWith("/"));
+  return {
+    names: n,
+    problems: [
+      ...listingProblems(n, lines(long.stdout)),
+      ...(empty ? ["the tar holds no file"] : []),
+    ],
+  };
 }
 
 /** The pure half of `tarProblems`: `tar -tf` names and `tar -tvf` lines in, problems out. */
@@ -221,47 +208,14 @@ export function listingProblems(names: readonly string[], long: readonly string[
   ];
 }
 
-/** Tar of every fixture's `.alpackages`, built in memory, entries relative to the repo root. */
-function symbolTar(repo: string, errors: string[]): Uint8Array | undefined {
-  // plus the control app's symbols: kraken-setup.sh compiles it in the container
-  const dirs = [
-    ...fixtureProjects(repo).map((p) => relative(repo, p).replaceAll("\\", "/")),
-    "extensions/lethal-control",
-  ];
-  const bare = dirs.filter((d) => !hasSymbols(join(repo, d, ".alpackages")));
-  if (bare.length > 0) {
-    errors.push(
-      `fixture-symbols.tar: no .alpackages: ${bare.join(", ")} (stage their symbols first)`,
-    );
-    return undefined;
-  }
-  const odd = dirs.flatMap((d) =>
-    nonRegularEntries(join(repo, d, ".alpackages")).map((e) => `${d}/.alpackages/${e}`),
-  );
-  if (odd.length > 0) {
-    errors.push(`fixture-symbols.tar: not a regular file or directory: ${odd.join(", ")}`);
-    return undefined;
-  }
-  // cwd + relative paths + stdout: no absolute entry, and GNU tar never reads `U:` as a remote host
-  const r = Bun.spawnSync(["tar", "-cf", "-", ...dirs.map((d) => `${d}/.alpackages`)], {
-    cwd: repo,
-  });
-  if (r.exitCode !== 0) {
-    errors.push(`fixture-symbols.tar: tar failed (exit ${r.exitCode})`);
-    return undefined;
-  }
-  return checkedSymbolTar(r.stdout, repo, errors);
-}
-
 /** The listing checks and R670's drift check on a finished tar; its bytes, or `undefined` with errors. */
 function checkedSymbolTar(tar: Uint8Array, repo: string, errors: string[]): Uint8Array | undefined {
-  const problems = tarProblems(tar);
+  const { names, problems } = tarListing(tar);
   if (problems.length > 0) {
     errors.push(`fixture-symbols.tar: ${problems.join(", ")}`);
     return undefined;
   }
-  const names = Bun.spawnSync(["tar", "-tf", "-"], { stdin: tar });
-  const drift = tarDrift(new TextDecoder().decode(names.stdout).split(/\r?\n/), repoApps(repo));
+  const drift = tarDrift(names, repoApps(repo));
   if (drift.length > 0) {
     errors.push(...drift);
     return undefined;
@@ -300,9 +254,8 @@ export function tarDrift(names: readonly string[], apps: readonly FixtureApp[]):
 
 /**
  * R670 `--symbol-tar <path>`: ship that tar's bytes verbatim, after its sha256 equals the pin
- * (`FIXTURE_SYMBOLS_TAR_SHA256`) and it passes the same checks as a built one. A tar `symbolTar`
- * builds can never equal the pin (GNU tar's default format, host mtimes and owners), so this is
- * how the pinned tar reaches the container.
+ * (`FIXTURE_SYMBOLS_TAR_SHA256`) and it passes the listing and drift checks. The only way the
+ * symbol tar reaches the container.
  */
 export function pinnedSymbolTar(
   path: string,
@@ -434,10 +387,28 @@ export function recoverInterruptedSwap(outDir: string): string | undefined {
   return only;
 }
 
+/** Whether `p` (which may not exist yet) lies under the OS temp dir, both compared by real path. */
+export function underTempDir(p: string): boolean {
+  let at = resolve(p);
+  let rest = "";
+  while (!existsSync(at) && dirname(at) !== at) {
+    rest = rest === "" ? basename(at) : join(basename(at), rest);
+    at = dirname(at);
+  }
+  const real = join(realpathSync(at), rest);
+  const tmp = realpathSync(tmpdir());
+  return real === tmp || real.startsWith(`${tmp}${sep}`);
+}
+
 function main(): number {
   const repo = arg("--repo") ?? join(import.meta.dir, "..");
   const outDir = arg("--out") ?? "U:/Git/kraken/secrets/lethal";
   const pkgPath = arg("--bcdev-package") ?? "U:/Git/bc-dev-mcp/package.json";
+  // The pin seam must never reach a real secrets folder: refused before anything is touched.
+  if (process.env.KRAKEN_SECRETS_TEST_PIN !== undefined && !underTempDir(outDir)) {
+    console.error("kraken-secrets: KRAKEN_SECRETS_TEST_PIN is test-only: --out must be a temp dir");
+    return 1;
+  }
   const restored = recoverInterruptedSwap(outDir);
   if (restored !== undefined)
     console.log(`kraken-secrets: restored ${restored} (a previous run stopped mid-swap)`);
@@ -457,8 +428,15 @@ function main(): number {
   for (const { from, to } of secretFiles()) {
     if (from === "fixture-symbols.tar") {
       const given = arg("--symbol-tar");
-      const tar =
-        given !== undefined ? pinnedSymbolTar(given, repo, errors) : symbolTar(repo, errors);
+      if (given === undefined) {
+        errors.push(
+          "fixture-symbols.tar: use --symbol-tar <pinned tar>; a tar packed from the host's .alpackages can never equal the pin (R670)",
+        );
+        continue;
+      }
+      // the unit tests' seam: their synthetic tars cannot have the real pin's sha256
+      const pin = process.env.KRAKEN_SECRETS_TEST_PIN ?? FIXTURE_SYMBOLS_TAR_SHA256;
+      const tar = pinnedSymbolTar(given, repo, errors, pin);
       if (tar !== undefined) outputs.push({ name: from, bytes: tar });
       continue;
     }

@@ -1,7 +1,15 @@
 // R670: the by-hand reset of a worktree's fixture `.alpackages` after a re-pin. Temp dirs only:
 // never a real worktree, never /coord.
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -38,6 +46,8 @@ const refused = (f: () => unknown, text: string) => {
   expect(f).toThrow(text);
 };
 
+// Also R670's swap window: the marker names master's old pin while kraken-setup has already put
+// the new tar's files in the folders. To r670's code that marker is simply not the current pin.
 test("a marker naming the old pin: both folders and the marker are planned for removal", () => {
   const wt = worktree(OLD);
   expect(resetPlan({ worktree: wt, roots: [root] })).toEqual([
@@ -77,6 +87,38 @@ test("refused: no marker but the folders exist (the R614 fix is named), and noth
     err.mockRestore();
   }
   for (const f of GATE_ALPACKAGES) expect(existsSync(join(wt, f))).toBe(true);
+});
+
+test("refused: one folder only, with no marker or with the pin's marker; the gate's by-hand fix", () => {
+  for (const marker of [undefined, FIXTURE_SYMBOLS_TAR_SHA256]) {
+    const wt = worktree(marker);
+    const [, second] = GATE_ALPACKAGES;
+    rmSync(join(wt, second ?? ""), { recursive: true });
+    refused(() => resetPlan({ worktree: wt, roots: [root] }), "the one-time fix, by hand: remove");
+    expect(() => resetPlan({ worktree: wt, roots: [root] })).not.toThrow("run itest");
+    rmSync(root, { recursive: true, force: true });
+    root = "";
+  }
+});
+
+test("refused: a symlinked fixtures/ aims outside the worktree, and nothing there is touched", () => {
+  const wt = worktree(OLD, false);
+  const elsewhere = join(root, "elsewhere");
+  for (const f of GATE_ALPACKAGES) {
+    const rel = f.replace(/^fixtures\//, "");
+    mkdirSync(join(elsewhere, rel), { recursive: true });
+    writeFileSync(join(elsewhere, rel, "x.app"), "x");
+  }
+  symlinkSync(elsewhere, join(wt, "fixtures"), "dir");
+  refused(() => resetPlan({ worktree: wt, roots: [root] }), "outside the worktree");
+  const err = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    expect(main([wt], [root])).toBe(1);
+  } finally {
+    err.mockRestore();
+  }
+  for (const f of GATE_ALPACKAGES)
+    expect(existsSync(join(elsewhere, f.replace(/^fixtures\//, ""), "x.app"))).toBe(true);
 });
 
 test("refused: no marker and no folders", () => {

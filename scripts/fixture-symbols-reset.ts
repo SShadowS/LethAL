@@ -11,12 +11,18 @@
  * - The marker names another sha than the current pin: removes the gate's two folders and the
  *   marker, printing each path (`--dry-run` only lists them). The next `itest:alrunner-v3` or gate
  *   run then extracts them from the pinned tar.
- * - Refused, nothing removed: the marker equals the pin (nothing to do); no marker but folders
- *   there (placed by hand or before R614: the R614 fix is printed instead); no marker and no
- *   folders; a path that is not a LethAL checkout; a path under `/coord` or outside `/work/lethal*`.
+ * - Refused, nothing removed: the marker equals the pin (nothing to do); no marker but both folders
+ *   there (placed by hand or before R614: the R614 fix is printed instead); one folder only with no
+ *   marker, or with a marker equal to the pin (the gate's own by-hand fix is printed); no marker
+ *   and no folders; a folder or the marker whose parent resolves outside the worktree (a symlinked
+ *   `fixtures/`); a path that is not a LethAL checkout; a path under `/coord` or outside
+ *   `/work/lethal*`.
+ * - R670's swap window: the marker names master's OLD pin while the folders already hold the new
+ *   tar's files (kraken-setup wrote them). Run from r670's code that is the ordinary "marker is not
+ *   the current pin" case, so the folders and the marker are removed.
  */
 import { existsSync, readFileSync, realpathSync, rmSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import {
   FIXTURE_SYMBOLS_TAR_SHA256,
   GATE_ALPACKAGES,
@@ -54,8 +60,25 @@ export function resetPlan(s: {
       `${wt}: not a LethAL checkout (no .git or packages/runner); refused`,
     );
   const marker = join(wt, SYMBOLS_MARKER);
-  const folders = GATE_ALPACKAGES.map((f) => join(wt, f)).filter((f) => existsSync(f));
+  const all = GATE_ALPACKAGES.map((f) => join(wt, f));
+  const folders = all.filter((f) => existsSync(f));
+  // Each path is removed through its parent folder: a symlinked `fixtures/` (or worktree root)
+  // would aim the removal outside the worktree.
+  for (const p of [...folders, marker]) {
+    const parent = realpathSync(dirname(p));
+    if (parent !== wt && !parent.startsWith(`${wt}${sep}`))
+      throw new ResetRefusedError(
+        `${p}: its folder resolves to ${parent}, outside the worktree ${wt}; refused`,
+      );
+  }
+  // the same one-time fix the gate's own refusal names (`al-runner-v3-gate-symbols-unverified`)
+  const manual = `the one-time fix, by hand: remove ${[...folders, marker].join(" and ")}, then run again to extract them from the pinned tar`;
+  const partial = folders.length > 0 && folders.length < all.length;
   if (!existsSync(marker)) {
+    if (partial)
+      throw new ResetRefusedError(
+        `${wt}: no ${SYMBOLS_MARKER} and only ${folders.join(", ")} of the two folders; nothing removed. ${manual}`,
+      );
     if (folders.length > 0)
       throw new ResetRefusedError(
         `${wt}: no ${SYMBOLS_MARKER} but ${folders.join(" and ")} exist, so where they came from is unknown; nothing removed. The R614 fix: run itest:alrunner-v3 or the gate once, which compares them with the pinned tar and writes the marker if they are equal; or, after checking them yourself, remove the folders by hand and run again to extract them`,
@@ -65,6 +88,10 @@ export function resetPlan(s: {
     );
   }
   const found = readFileSync(marker, "utf8").trim();
+  if (found === pin && partial)
+    throw new ResetRefusedError(
+      `${wt}: ${SYMBOLS_MARKER} names the pin but only ${folders.join(", ")} of the two folders exist; nothing removed. ${manual}`,
+    );
   if (found === pin)
     throw new ResetRefusedError(
       `${wt}: ${SYMBOLS_MARKER} already names the pin ${pin}; nothing to do`,

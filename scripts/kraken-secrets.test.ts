@@ -11,19 +11,17 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { removeScratchDir } from "../packages/runner/tests/helpers/scratch";
 import {
   CONTAINER_MAP,
   SwapRecoveryError,
   UnsupportedLauncherError,
   describeError,
-  hasSymbols,
   hasWindowsPath,
   icaclsArgv,
   isSecretEntry,
   listingProblems,
-  nonRegularEntries,
   pinnedSymbolTar,
   recoverInterruptedSwap,
   repoApps,
@@ -31,6 +29,7 @@ import {
   secretFiles,
   sweepSwapFolders,
   tarDrift,
+  underTempDir,
   writeOutputs,
 } from "./kraken-secrets.ts";
 
@@ -207,23 +206,46 @@ function makeRepo(override: Record<string, string> = {}): { repo: string; pkg: s
   return { repo, pkg };
 }
 
+const sha256 = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
+
+/** A tar of every `<root>/<project>/.alpackages` the synthetic repo has, as the owner's would be. */
+function tarOf(repo: string): Uint8Array {
+  const dirs = ["examples", "extensions", "fixtures"].flatMap((root) =>
+    existsSync(join(repo, root))
+      ? readdirSync(join(repo, root))
+          .map((d) => `${root}/${d}/.alpackages`)
+          .filter((d) => existsSync(join(repo, d)))
+      : [],
+  );
+  const r = Bun.spawnSync(["tar", "-cf", "-", ...dirs], { cwd: repo });
+  expect(r.exitCode).toBe(0);
+  return r.stdout;
+}
+
+/**
+ * Runs the CLI. With no `extra`, it passes `--symbol-tar` with a tar of the repo's `.alpackages`
+ * and pins THAT tar through the test seam `KRAKEN_SECRETS_TEST_PIN`, since a synthetic tar cannot
+ * have the real pin's sha256. With `extra`, exactly those arguments and the real pin.
+ */
 function cli(
   repo: string,
   pkg: string,
   out: string,
-  extra: string[] = [],
+  extra?: string[],
 ): { code: number; text: string } {
-  const r = Bun.spawnSync([
-    "bun",
-    SCRIPT,
-    "--repo",
-    repo,
-    "--out",
-    out,
-    "--bcdev-package",
-    pkg,
-    ...extra,
-  ]);
+  let args = extra ?? [];
+  let env: Record<string, string | undefined> = { ...process.env };
+  if (extra === undefined) {
+    const bytes = tarOf(repo);
+    const tar = join(temp(), "symbols.tar");
+    writeFileSync(tar, bytes);
+    args = ["--symbol-tar", tar];
+    env = { ...env, KRAKEN_SECRETS_TEST_PIN: sha256(bytes) };
+  }
+  const r = Bun.spawnSync(
+    ["bun", SCRIPT, "--repo", repo, "--out", out, "--bcdev-package", pkg, ...args],
+    { env },
+  );
   return { code: r.exitCode, text: r.stdout.toString() + r.stderr.toString() };
 }
 
@@ -304,25 +326,41 @@ describe("CLI", () => {
     expect(readdirSync(out)).toEqual([]);
   });
 
-  test("the control app without symbols: refused by name, nothing written", () => {
+  test("R670: KRAKEN_SECRETS_TEST_PIN with an --out outside the temp dir: refused by name, nothing written", () => {
     const { repo, pkg } = makeRepo();
-    rmSync(join(repo, "extensions", "lethal-control", ".alpackages", SYM));
-    const out = temp();
-    const r = cli(repo, pkg, out);
+    const out = resolve("/nonexistent-r670", "secrets"); // outside the temp dir, never created
+    expect(underTempDir(out)).toBe(false);
+    const r = cli(repo, pkg, out); // the default cli() sets the test pin
     expect(r.code).toBe(1);
-    expect(r.text).toContain("no .alpackages: extensions/lethal-control");
+    expect(r.text).toContain("KRAKEN_SECRETS_TEST_PIN is test-only: --out must be a temp dir");
+    expect(existsSync(out)).toBe(false);
+    expect(underTempDir(join(temp(), "not-yet", "secrets"))).toBe(true);
+  });
+
+  test("R670: no --symbol-tar: refused by name, never packed from the host folders, nothing written", () => {
+    const { repo, pkg } = makeRepo();
+    const out = temp();
+    const r = cli(repo, pkg, out, []);
+    expect(r.code).toBe(1);
+    expect(r.text).toContain("fixture-symbols.tar: use --symbol-tar <pinned tar>");
     expect(readdirSync(out)).toEqual([]);
   });
 
-  test("a fixture project without .alpackages: refused by name, nothing written", () => {
+  test("R670: a pinned tar that holds no file (or cannot be listed): refused, nothing written", () => {
     const { repo, pkg } = makeRepo();
-    mkdirSync(join(repo, "fixtures", "gamma"));
-    writeFileSync(join(repo, "fixtures", "gamma", "app.json"), "{}");
     const out = temp();
-    const r = cli(repo, pkg, out);
-    expect(r.code).toBe(1);
-    expect(r.text).toContain("no .alpackages: fixtures/gamma");
-    expect(readdirSync(out)).toEqual([]);
+    for (const bytes of [Buffer.alloc(1024), Buffer.from("not a tar at all")]) {
+      const tar = join(temp(), "empty.tar");
+      writeFileSync(tar, bytes);
+      const r = Bun.spawnSync(
+        ["bun", SCRIPT, "--repo", repo, "--out", out, "--bcdev-package", pkg, "--symbol-tar", tar],
+        { env: { ...process.env, KRAKEN_SECRETS_TEST_PIN: sha256(bytes) } },
+      );
+      const text = r.stdout.toString() + r.stderr.toString();
+      expect(r.exitCode).toBe(1);
+      expect(text).toMatch(/fixture-symbols\.tar: (the tar holds no file|tar listing failed)/);
+      expect(readdirSync(out)).toEqual([]);
+    }
   });
 
   test("a missing input file: refused by name, nothing written", () => {
@@ -335,22 +373,7 @@ describe("CLI", () => {
     expect(readdirSync(out)).toEqual([]);
   });
 
-  test("an empty .alpackages, or a FILE named .alpackages, counts as no symbols", () => {
-    const { repo, pkg } = makeRepo();
-    mkdirSync(join(repo, "fixtures", "empty", ".alpackages"), { recursive: true });
-    writeFileSync(join(repo, "fixtures", "empty", "app.json"), "{}");
-    mkdirSync(join(repo, "fixtures", "filed"));
-    writeFileSync(join(repo, "fixtures", "filed", "app.json"), "{}");
-    writeFileSync(join(repo, "fixtures", "filed", ".alpackages"), "not a folder");
-    const out = temp();
-    const r = cli(repo, pkg, out);
-    expect(r.code).toBe(1);
-    expect(r.text).toContain("no .alpackages: fixtures/empty, fixtures/filed");
-    expect(readdirSync(out)).toEqual([]);
-    expect(hasSymbols(join(repo, "fixtures", "alpha", ".alpackages"))).toBe(true);
-  });
-
-  test("a symlink inside a fixture's .alpackages is refused by path", () => {
+  test("a symlink inside the pinned tar is refused", () => {
     const { repo, pkg } = makeRepo();
     try {
       symlinkSync(join(repo, ".mcp.json"), join(repo, "fixtures", "alpha", ".alpackages", "x.app"));
@@ -360,7 +383,7 @@ describe("CLI", () => {
     const out = temp();
     const r = cli(repo, pkg, out);
     expect(r.code).toBe(1);
-    expect(r.text).toContain("not a regular file or directory: fixtures/alpha/.alpackages/x.app");
+    expect(r.text).toContain("fixture-symbols.tar: 1 entry(ies) not a regular file or directory");
     expect(readdirSync(out)).toEqual([]);
   });
 
@@ -425,33 +448,6 @@ describe("writeOutputs", () => {
       "/grant:r",
       "owner:(OI)(CI)F",
     ]);
-  });
-});
-
-describe("symbol folder checks", () => {
-  const fake = (kinds: Record<string, "file" | "dir" | "link">) => (p: string) => {
-    const k = kinds[p.replaceAll("\\", "/").split("/").pop() ?? ""] ?? "file";
-    return { isFile: () => k === "file", isDirectory: () => k === "dir" };
-  };
-
-  test("nonRegularEntries names a symlink or junction, and walks into real directories", () => {
-    const root = temp();
-    mkdirSync(join(root, "sub"));
-    writeFileSync(join(root, "a.app"), "");
-    writeFileSync(join(root, "sub", "j.app"), "");
-    expect(nonRegularEntries(root)).toEqual([]);
-    expect(nonRegularEntries(root, fake({ sub: "dir", "j.app": "link" }))).toEqual(["sub/j.app"]);
-  });
-
-  test("hasSymbols needs a directory with at least one .app", () => {
-    const root = temp();
-    expect(hasSymbols(join(root, "none"))).toBe(false);
-    mkdirSync(join(root, "d"));
-    writeFileSync(join(root, "d", "readme.txt"), "");
-    expect(hasSymbols(join(root, "d"))).toBe(false);
-    writeFileSync(join(root, "d", "x.APP"), "");
-    expect(hasSymbols(join(root, "d"))).toBe(true);
-    expect(hasSymbols(join(root, "d"), fake({ d: "link" }))).toBe(false);
   });
 });
 
@@ -637,15 +633,6 @@ describe("R670: drift guard on fixture-symbols.tar", () => {
     );
     writeFileSync(join(repo, "fixtures", "gamma-tests", ".alpackages", copy), "app");
   }
-  const tarOf = (repo: string): Uint8Array => {
-    const dirs = ["fixtures/alpha", "fixtures/gamma", "fixtures/gamma-tests", "examples/beta"];
-    const r = Bun.spawnSync(["tar", "-cf", "-", ...dirs.map((d) => `${d}/.alpackages`)], {
-      cwd: repo,
-    });
-    expect(r.exitCode).toBe(0);
-    return r.stdout;
-  };
-
   test("tarDrift on a synthetic listing: directories skipped, a stale copy named with both versions", () => {
     const repo = temp();
     addGamma(repo, "LethAL_G_1.0.0.2.app");
@@ -661,7 +648,7 @@ describe("R670: drift guard on fixture-symbols.tar", () => {
     ]);
   });
 
-  test("a packed tar with a stale copy: refused by name, nothing written", () => {
+  test("a pinned tar with a stale copy: refused by name, nothing written", () => {
     const { repo, pkg } = makeRepo();
     addGamma(repo, "LethAL_G_1.0.0.1.app");
     const out = temp();
@@ -688,16 +675,15 @@ describe("R670: drift guard on fixture-symbols.tar", () => {
     const good = tarOf(repo);
     const goodPath = join(temp(), "good.tar");
     writeFileSync(goodPath, good);
-    const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
     const errors: string[] = [];
-    expect(pinnedSymbolTar(goodPath, repo, errors, sha(good))).toEqual(Buffer.from(good));
+    expect(pinnedSymbolTar(goodPath, repo, errors, sha256(good))).toEqual(Buffer.from(good));
     expect(errors).toEqual([]);
 
     writeFileSync(
       join(repo, "fixtures", "gamma", "app.json"),
       JSON.stringify({ name: "G", version: "1.0.0.3" }),
     );
-    expect(pinnedSymbolTar(goodPath, repo, errors, sha(good))).toBeUndefined();
+    expect(pinnedSymbolTar(goodPath, repo, errors, sha256(good))).toBeUndefined();
     expect(errors.join("\n")).toContain("but fixtures/gamma/app.json is 1.0.0.3");
   });
 });

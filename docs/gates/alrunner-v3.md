@@ -217,14 +217,16 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
   by master. The lane that landed the re-pin deletes it, once no open worktree's `.fixture-symbols.sha256` names
   it. The original `/work/lethal/.kraken-local/fixture-symbols.tar` (`bdf460e2…`) is different: it is kraken's
   `secret_files` delivery, which `scripts/kraken-setup.sh` extracts into the main checkout, and kraken would put
-  it back. And `scripts/kraken-secrets.ts` (`symbolTar`) REBUILDS that secret from the HOST repo's `.alpackages`
-  on every run, so a refresh from stale host folders ships stale copies again. Since R670 that build is refused
-  on drift (`tarDrift`, the same `symbolTarDrift` rule), and it can never equal the pin anyway (GNU tar's
-  default format, host mtimes and owners). So the owner ships the pinned tar VERBATIM: `bun
-  scripts/kraken-secrets.ts ... --symbol-tar <the pinned tar>` refuses a tar whose sha256 is not the pin, then
-  writes its bytes unchanged. Alternatively the owner retires that `secret_files` entry. Since R670
-  `kraken-setup.sh` also keeps each delivered tar as `fixture-symbols-<sha12>.tar`, the name the code reads.
-  The exact owner steps for R670 are in `/coord/handoff/R-670/owner-steps.md`.
+  it back. Before R670, `scripts/kraken-secrets.ts` REBUILT that secret from the HOST repo's `.alpackages` on
+  every run, which shipped stale copies from stale host folders and could never equal the pin (GNU tar's
+  default format, host mtimes and owners). Since R670 the owner ships the pinned tar VERBATIM: `bun
+  scripts/kraken-secrets.ts ... --symbol-tar <the pinned tar>` refuses a tar whose sha256 is not the pin, whose
+  listing fails or is empty, or that drifts from `app.json` (`tarDrift`, the `symbolTarDrift` rule), then writes
+  its bytes unchanged; without `--symbol-tar` it refuses by name. Alternatively the owner retires that
+  `secret_files` entry. Since R670 `kraken-setup.sh`, in the main checkout only, also keeps each delivered tar as
+  `fixture-symbols-<sha12>.tar`, the name the code reads. In a worktree with a `.fixture-symbols.sha256` marker
+  it neither removes nor extracts the two gate folders, so another tar's files never sit under a stale marker
+  that would read `verified`. The exact owner steps for R670 are in `/coord/handoff/R-670/owner-steps.md`.
 - A leg's outcome comes from its error's TYPE, never its text:
   - `gate-fail`: a pre-committed figure differs, a contract fact or a defect fact reads `diverged`, or v3's
     coverage paths no longer join LethAL's (`AlRunnerV3CoverageJoinError`, a real behaviour change; in a user
