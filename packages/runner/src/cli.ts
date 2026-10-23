@@ -354,7 +354,6 @@ export const DRY_RUN_REFUSED = [
   "tests",
   "progress-out",
   "workers",
-  "compile-concurrency",
   "keep-env",
   "allow-expiring-env",
   "selector-id",
@@ -421,7 +420,6 @@ export interface RunCliConfig {
   readonly skipKnownSurvivors: boolean;
   readonly outPath?: string;
   readonly workers: number;
-  readonly compileConcurrency?: number;
   // Env-tool session controls (Task 7). Both default to false and are only meaningful for the
   // bcdev backend's environment tool (Task 6) — al-runner has no environment to keep or expire.
   readonly keepEnv: boolean;
@@ -1004,7 +1002,6 @@ RUN — cost and recovery
                              A baseline test, kill confirm or warm replay with NO mutant active
                              is stopped at its budget regardless of this flag (R658)
   --workers <n>              parallel workers (every backend is limited to 1)
-  --compile-concurrency <n>  concurrent alc processes
   --progress-out <path>      stream events to this file as NDJSON, one JSON object per line,
                              flushed as each event arrives — a crash diagnostic and a structured
                              feed for agents/CI. VERDICT LINES ARE PROVISIONAL UNTIL
@@ -1230,7 +1227,6 @@ export const RUN_FLAGS = {
   "skip-known-survivors": { type: "boolean", default: false },
   "dry-run": { type: "boolean", default: false },
   workers: { type: "string" },
-  "compile-concurrency": { type: "string" },
   server: { type: "string" },
   instance: { type: "string" },
   // R90 fix round 1: `clear-ceiling`'s optional per-file narrowing. Lives in the shared flag table
@@ -1307,7 +1303,6 @@ const RUN_ONLY_FLAGS = [
   "skip-known-survivors",
   "dry-run",
   "workers",
-  "compile-concurrency",
   "keep-env",
   "allow-expiring-env",
   "selector-id",
@@ -2040,19 +2035,12 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
   const workers = values.workers === undefined ? 1 : Number(values.workers);
   if (!Number.isInteger(workers) || workers < 1)
     throw new Error("--workers must be a positive integer");
-  const compileConcurrency =
-    values["compile-concurrency"] === undefined ? undefined : Number(values["compile-concurrency"]);
-  if (
-    compileConcurrency !== undefined &&
-    (!Number.isInteger(compileConcurrency) || compileConcurrency < 1)
-  )
-    throw new Error("--compile-concurrency must be a positive integer");
 
   // R3: `--selector-id`/`--control-id`/`--table-id` override the three injected object ids
   // (DEFAULT_SELECTOR_IDS) independently — see `resolveSelectorIds`'s doc comment for why three
   // explicit ids rather than one base+offsets. Parsed here (not left to `resolveSelectorIds`) so
-  // a non-integer/non-positive value is rejected at argv-parse time, matching `--workers`/
-  // `--compile-concurrency` immediately above.
+  // a non-integer/non-positive value is rejected at argv-parse time, matching `--workers`
+  // immediately above.
   const selectorIdFlag = parseObjectIdFlag(values["selector-id"], "selector-id");
   const controlIdFlag = parseObjectIdFlag(values["control-id"], "control-id");
   const tableIdFlag = parseObjectIdFlag(values["table-id"], "table-id");
@@ -2123,7 +2111,6 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     keepEnv,
     allowExpiringEnv,
     ...(values.out !== undefined ? { outPath: values.out } : {}),
-    ...(compileConcurrency !== undefined ? { compileConcurrency } : {}),
     ...(Object.keys(selectorIdOverrides).length > 0 ? { selectorIdOverrides } : {}),
     ...only,
     ...exclude,
@@ -3796,37 +3783,6 @@ export async function runFromCli(
             selectorIds,
             source,
           );
-          // `SessionConfig.backendFactory` is synchronous (`runSession` calls it
-          // without awaiting — see orchestrator.ts), but building a worker's backend
-          // is async (bcdev needs `defaultAlToolPaths()` + `mkdir`). So every worker
-          // backend is constructed here, up front, each with its own
-          // `<scratchRoot>/worker-<i>` scratch dir; the factory below just hands back
-          // the already-built instance for that index. `runSession` still owns
-          // disposing them (see `closeIfSupported` in orchestrator.ts) — it just
-          // doesn't own constructing them.
-          //
-          // (bcdev + --workers > 1 is refused in `parseCliConfig`, and so is al-runner-v3, so since
-          // R654 this loop builds nothing today. `deploy` is still threaded through
-          // (Important 3, Task 7 review): a bcdev worker built without it would silently publish via
-          // `ContainerDeployer`/altool instead of through the configured env tool — unreachable today
-          // only because of the `--workers > 1` bcdev refusal above, and that restriction is
-          // explicitly deferred rather than permanent.)
-          const workerBackends: ExecutionBackend[] = [];
-          if (parsed.workers > 1) {
-            for (let i = 0; i < parsed.workers; i++) {
-              workerBackends.push(
-                await build(
-                  parsed,
-                  effectiveConfig,
-                  join(scratchRoot, `worker-${i}`),
-                  deploy,
-                  {},
-                  selectorIds,
-                  source,
-                ),
-              );
-            }
-          }
           store = new ResultsStore(parsed.dbPath);
           // Task 5 (event-stream refactor, spec 2026-08-05 §A): a run this long (a baseline alone
           // can run for minutes with zero prior output) needs a live indication it hasn't stalled.
@@ -3923,23 +3879,9 @@ export async function runFromCli(
             preprocessorSymbols: validatePreprocessorSymbols(effectiveConfig.preprocessorSymbols),
             ...afterLeaseAcquiredFor(envSession),
             ...(parsed.allowLargeRun === true ? { allowLargeRun: true } : {}),
-            ...(parsed.compileConcurrency !== undefined
-              ? { compileConcurrency: parsed.compileConcurrency }
-              : {}),
             ...tier,
             ...leaseSessionFor(parsed, effectiveConfig),
             ...permissionCanaryFor(parsed, effectiveConfig),
-            ...(parsed.workers > 1
-              ? {
-                  backendFactory: (i: number) => {
-                    const b = workerBackends[i];
-                    if (b === undefined) {
-                      throw new Error(`runFromCli: no worker backend pre-built for index ${i}`);
-                    }
-                    return b;
-                  },
-                }
-              : {}),
           });
         } finally {
           // Best-effort cleanup — mirrors orchestrator.ts's own posture (~line 2056: "deliberately

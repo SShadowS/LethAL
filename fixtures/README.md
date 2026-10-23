@@ -1776,13 +1776,11 @@ bun packages/runner/src/cli.ts run \
 
 **Since R654 (2026-10-22) no backend accepts `--workers` > 1.** bcdev refuses it (below), and so does
 `al-runner-v3` (`al-runner-v3-workers-refused`). The .NET al-runner was the only backend that ran workers in
-parallel, and it was retired. `runSession`'s worker fan-out is still in the code but unreachable,
-and its tests are skipped ([R671](../docs/roadmap/R671.md)). Everything in this section about
-al-runner workers is history.
+parallel, and it was retired. `runSession`'s worker fan-out and `--compile-concurrency` were deleted with
+it ([R671](../docs/roadmap/R671.md)). Everything in this section about al-runner workers is history.
 
-`lethal run` accepts `--workers <n>` (default 1) and `--compile-concurrency <n>` (default
-`min(workers, 4)`), wired straight through to `SessionConfig.workers`/`compileConcurrency` —
-see `packages/runner/src/cli.ts`'s `parseCliConfig`/`buildBackend`/`runFromCli`. Each .NET al-runner
+`lethal run` accepts `--workers <n>` (default 1; above 1 is refused), wired through to
+`SessionConfig.workers` — see `packages/runner/src/cli.ts`'s `parseCliConfig`. Each .NET al-runner
 worker got its own scratch directory (`<scratchRoot>/worker-<i>`), so its private copy of the
 batch's instrumented sources (`AlRunnerBackend.deploy`) never collided with another worker's.
 

@@ -76,7 +76,9 @@ export interface BaselineSnapshot {
  * out of the hash.
  */
 export async function hashAlTree(dir: string): Promise<string> {
-  return hashTestDir(dir);
+  // R691: LethAL writes its control files at the ROOT of this tree only; a same-named file
+  // anywhere else is user AL and is hashed.
+  return hashWalked(dir, "refuse", true);
 }
 
 /**
@@ -85,9 +87,18 @@ export async function hashAlTree(dir: string): Promise<string> {
  * out AL that alc and al-runner would compile. `links` exists only so a test can force a skip.
  */
 export async function hashTestDir(dir: string, links: LinkPolicy = "refuse"): Promise<string> {
+  // R691: LethAL writes nothing here, so no file is left out.
+  return hashWalked(dir, links, false);
+}
+
+async function hashWalked(
+  dir: string,
+  links: LinkPolicy,
+  skipRootControl: boolean,
+): Promise<string> {
   const walk = await walkFiles(dir, { links });
   assertNoUnexcusedLinks(dir, walk.skippedLinks);
-  return hashAlFiles(dir, walk.files);
+  return hashAlFiles(dir, walk.files, skipRootControl);
 }
 
 /** R608: one non-`.al` file of a bound folder, as the proof recorded it. */
@@ -147,11 +158,15 @@ export async function otherFilesDrift(
   return undefined;
 }
 
-async function hashAlFiles(dir: string, all: readonly string[]): Promise<string> {
+async function hashAlFiles(
+  dir: string,
+  all: readonly string[],
+  skipRootControl: boolean,
+): Promise<string> {
   const entries = all
     .map((f) => f.replaceAll("\\", "/"))
     .filter((f) => f.toLowerCase().endsWith(".al"))
-    .filter((f) => !CONTROL_FILES.has(f.split("/").at(-1) ?? ""))
+    .filter((f) => !(skipRootControl && CONTROL_FILES.has(f)))
     .sort();
   const h = createHash("sha256");
   for (const rel of entries) {

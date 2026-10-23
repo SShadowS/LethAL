@@ -175,7 +175,6 @@ import {
   describeTestPermissionsRefusal,
   permissionCanaryWarnings,
 } from "./permission-canary";
-import { Semaphore, shardEvenly } from "./pool";
 import {
   type BuildBackend,
   BuildSymbolsDivergedError,
@@ -1637,10 +1636,8 @@ export interface SessionConfig {
   // runSession falls back to the project's own app.json version for that case when unset (see
   // readAppVersionBestEffort) rather than the meaningless "0.0.0.0" default.
   readonly appVersion?: string;
-  readonly workers?: number; // default 1 — a pool of one IS the sequential path
-  readonly compileConcurrency?: number; // default min(workers, 4)
-  /** Required when workers > 1: each worker needs its own backend instance. */
-  readonly backendFactory?: (workerIndex: number) => ExecutionBackend;
+  /** Default 1. R671: more than 1 is refused by name for every backend (no fan-out exists). */
+  readonly workers?: number;
   /** Machine-local durable-quarantine base directory (spec §9). Defaults to
    *  `~/.lethal/quarantine` via `defaultQuarantineDir()` when omitted; tests inject a scratch dir
    *  so quarantine state never leaks across test runs or into the real user's home directory. */
@@ -2095,10 +2092,7 @@ class BisectPrepareError extends Error {
 /**
  * Bisects `subsetMutants` against a `deploy`-shaped compile check, reusing
  * `scratchDir` for every candidate via `prepareArtifactDir`. Shared by the
- * sequential deploy-failure path (step 3) and every worker shard's own
- * deploy-failure path (`workers > 1`, step 6) — same algorithm and the same
- * artifact-preparation helper, just a different mutant subset and a
- * different backend/compile-limit to deploy through.
+ * sequential deploy-failure path (step 3).
  *
  * `scratchDir` is removed once bisection finishes, win or lose — a failed
  * batch must not leave a scratch artifact behind on disk indefinitely.
@@ -4496,13 +4490,6 @@ interface ScoreBatchInput {
   };
   /** Called once, after the stale-test-app check. `undefined` = nothing left to run. */
   readonly select: (baseline: readonly BaselineRow[]) => CoveringPlan | undefined;
-  /** Replaces the sequential `runMutantsOnBackend` call. runSession's worker fan-out only.
-   *  R514: `baselineReused` is the batch's reused snapshot, forwarded to `runMutantsOnBackend`. */
-  readonly executeCovering?: (
-    plan: CoveringPlan,
-    attestation: AttestationLedger,
-    baselineReused: ReusedBaseline | undefined,
-  ) => Promise<void>;
 }
 /** R514: the run and batch whose stored baseline (R192) a batch reused. */
 interface ReusedBaseline {
@@ -4683,7 +4670,6 @@ async function openLeaseScope(a: {
 /** C02-04: the session's latch-gated teardown, ending with the op-gated lease release. */
 async function closeLeaseScope(a: {
   backend: ExecutionBackend;
-  workerBackends: readonly ExecutionBackend[];
   safety: SessionSafety;
   leaseSession: LeaseSession | undefined;
   emit: RunEmitter;
@@ -4699,16 +4685,9 @@ async function closeLeaseScope(a: {
   // itself a mutating op on the stranded tier (spec §8). Only local teardown runs.
   if (!a.safety.isUnsafe) {
     await a.backend.activate(null).catch(() => {});
-    for (const backend of a.workerBackends) {
-      await backend.activate(null).catch(() => {});
-      await closeIfSupported(backend).catch(() => {});
-    }
   } else {
     // local teardown only: close transports/children, never activate.
     await closeIfSupported(a.backend).catch(() => {});
-    for (const backend of a.workerBackends) {
-      await closeIfSupported(backend).catch(() => {});
-    }
   }
   // Layer 5C-B1 (design §6 step 5): stop the heartbeat and release the lease — op-gated, so a
   // tier with an unresolved operation marker is left held (and durably quarantined) rather than
@@ -4718,11 +4697,9 @@ async function closeLeaseScope(a: {
   // R499: one bounded wait for control requests still in flight (a stop or readback a non-scored
   // last call left behind), so a refusal landing on one is taken below rather than lost. Never
   // throws, so it never skips the release above; after the release, the server's lease fence decides.
-  for (const backend of [a.backend, ...a.workerBackends]) {
-    await (
-      backend as { drainControlRequests?: (ms: number) => Promise<void> }
-    ).drainControlRequests?.(CONTROL_DRAIN_MS);
-  }
+  await (
+    a.backend as { drainControlRequests?: (ms: number) => Promise<void> }
+  ).drainControlRequests?.(CONTROL_DRAIN_MS);
   a.emit({ type: "phase-left", phase: "teardown", elapsedMs: Date.now() - teardownStartedMs });
   // R-496: a redirect to an unfiltered extensions query that arrived after the last call returned
   // has no next call to throw it. R507: so has one a lease call met (taken after `finish()`, so a
@@ -4731,10 +4708,8 @@ async function closeLeaseScope(a: {
   const refusals: Error[] = [];
   const leaseRefusal = a.leaseSession?.takeRefusal();
   if (leaseRefusal !== undefined) refusals.push(leaseRefusal);
-  for (const backend of [a.backend, ...a.workerBackends]) {
-    const late = (backend as { takeLateRefusal?: () => Error | undefined }).takeLateRefusal?.();
-    if (late !== undefined) refusals.push(late);
-  }
+  const late = (a.backend as { takeLateRefusal?: () => Error | undefined }).takeLateRefusal?.();
+  if (late !== undefined) refusals.push(late);
   const [first, ...rest] = refusals;
   for (const other of rest) {
     console.warn(`[lethal] another refused unfiltered extensions query: ${other.message}`);
@@ -5411,10 +5386,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     memberCountsByTest: memberCounts,
   } = plan;
 
-  // 6. per-mutant loop — sharded across workers when workers > 1. The
-  // baseline/coverage discovery above always runs once against
-  // scope.backend; only the kill-detection phase below fans out, since
-  // that's the part that's actually per-mutant work.
+  // 6. per-mutant loop, on scope.backend (R671: no fan-out).
   const fallbackTimeoutMs = scope.baselineTimeoutMs;
   // Layer 5C-A Task 8, Task 10 (design §G): per-ARTIFACT clean-attestation ledger. Declared
   // fresh for each batch (each batch republishes its own artifactId) — `clean` flips true the
@@ -5444,39 +5416,31 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   const mutantsStartedMs = Date.now();
   const baselineReused: ReusedBaseline | undefined =
     reused !== undefined ? { runId: reused.runId, batchIndex: reused.batchIndex } : undefined;
-  if (input.executeCovering !== undefined) {
-    await input.executeCovering(plan, attestation, baselineReused);
-  } else {
-    // Sequential IS the parallel path with a pool of one: this is the
-    // exact same runMutantsOnBackend call the caller's `executeCovering`
-    // makes per shard, just with all of `execute` as a single "shard" on
-    // the one backend already deployed in step 3.
-    await runMutantsOnBackend({
-      backend,
-      safety,
-      ...(leaseSession !== undefined ? { leaseSession } : {}),
-      mutants: toExecute,
-      perMutantTests,
-      coverageAttribution,
-      baselineDuration,
-      fallbackTimeoutMs,
-      minMutantBudgetMs,
-      store,
-      runId,
-      batchIndex: batchIdx,
-      outcomes,
-      quarantineStore,
-      resourceKey,
-      nowIso,
-      attestation,
-      emit,
-      killLedger,
-      memberCountsByTest: memberCounts,
-      groupRuns,
-      sessionReuse,
-      baselineReused,
-    });
-  }
+  await runMutantsOnBackend({
+    backend,
+    safety,
+    ...(leaseSession !== undefined ? { leaseSession } : {}),
+    mutants: toExecute,
+    perMutantTests,
+    coverageAttribution,
+    baselineDuration,
+    fallbackTimeoutMs,
+    minMutantBudgetMs,
+    store,
+    runId,
+    batchIndex: batchIdx,
+    outcomes,
+    quarantineStore,
+    resourceKey,
+    nowIso,
+    attestation,
+    emit,
+    killLedger,
+    memberCountsByTest: memberCounts,
+    groupRuns,
+    sessionReuse,
+    baselineReused,
+  });
   emit({ type: "phase-left", phase: "mutants", elapsedMs: Date.now() - mutantsStartedMs });
   // Layer 5C-A Task 8, Task 10 (design §G): per-artifact fail-closed attestation gate. A
   // batch "contributed verdicts" if any mutant it scheduled had >=1 covering test (a batch
@@ -6245,11 +6209,8 @@ async function runSessionBody(
   // A scan-refused test does not pass, even when every batch carries and no baseline runs (R-236c
   // run 002, review r1 #3); the report fold reads the same fact from `tests-testpage-refused`.
   let baselineGreenOverall = testPageRefusedNames.length === 0;
-  // Math.floor: a fractional workers value (e.g. 2.5) would otherwise reach
-  // shardEvenly's `Array.from({ length: n }, ...)`, which silently truncates
-  // to a shorter array than `i % n` can index into — mutants landing on the
-  // missing fractional index are dropped with no error (shardEvenly's own
-  // `if (target !== undefined)` guard swallows them).
+  // R671: the worker fan-out is gone; `workers > 1` is refused by name below. Math.floor keeps a
+  // fractional value (2.5) from slipping past the `> 1` test as 1.x.
   const workers = Math.max(1, Math.floor(cfg.workers ?? 1));
   // Layer 5C-A Task 8, Task 10 (design §G, preconditions): bcdev (authoritative) is single-flight
   // in 5C-A — the single `LC Mutation Active` row is not lease-protected against concurrent
@@ -6269,25 +6230,6 @@ async function runSessionBody(
       `runSession: workers=${workers} > 1 is refused for the al-runner-v3 backend (R586 v1 is sequential).`,
     );
   }
-  // Bounds compile-heavy deploy() calls independently of worker count: alc is
-  // CPU-bound, so worker count (mutant concurrency) must not silently become
-  // compile concurrency.
-  const compileLimit = new Semaphore(cfg.compileConcurrency ?? Math.min(workers, 4));
-  // Built ONCE for the whole session, never per batch: each worker owns one
-  // backend instance (its own instrumented dir and, for al-runner, its own
-  // server process) that is reused across every batch and disposed exactly
-  // once in the `finally` below. Constructing a fresh set per batch would
-  // leak batches × workers instances/processes instead of `workers`.
-  //
-  // Pushed one at a time rather than built via `Array.from` in one
-  // expression: a real factory (Task 7's) does directory/process setup that
-  // can throw partway through — e.g. factory(2) fails after factory(0) and
-  // factory(1) already spun up. Array.from would discard everything built so
-  // far along with the throw, leaking those already-constructed instances
-  // since the `finally` below only ever sees whatever `workerBackends` was
-  // last assigned. Pushing into a pre-declared array means the ones built
-  // before the failure are still visible to (and disposed by) the `finally`.
-  const workerBackends: ExecutionBackend[] = [];
   // Session-scoped: threads each reserved app version into the next reservation so versions
   // stay strictly increasing within one session even when the clock doesn't advance (or a
   // conflict retry re-stamped above something newer than the clock would produce).
@@ -6586,23 +6528,6 @@ async function runSessionBody(
       emit({ type: "permission-canary", result: permissionCanary });
       for (const line of permissionCanaryWarnings(permissionCanary)) {
         emit({ type: "warning", code: "permission-canary", message: line });
-      }
-    }
-    if (workers > 1) {
-      const factory = cfg.backendFactory;
-      if (factory === undefined) {
-        throw new Error("runSession: workers > 1 requires backendFactory");
-      }
-      for (let i = 0; i < workers; i++) {
-        const worker = factory(i);
-        handBuildSymbols(worker, buildSymbols);
-        // R488: each worker starts with an empty sibling cache, so it needs the list too.
-        worker.useDiscoveredTests?.(discovery.unfiltered);
-        // R557 (I3): and the session suite, so a worker stops (or carves out) exactly as the
-        // session backend does.
-        worker.useSessionTests?.(tests, undecidedKeptTests);
-        worker.useMutantBudgetFloor?.(minMutantBudgetMs, baselineTimeoutMs);
-        workerBackends.push(worker);
       }
     }
     // R197: one ledger for the whole session, so a kill in batch 0 orders batch 1's tests too.
@@ -7077,7 +7002,7 @@ async function runSessionBody(
         // sufficient to exclude both.
         if (!(deployErr instanceof AlcCompileError)) throw deployErr;
         // 3b'. R461: before blaming a mutant, does the UNMUTATED target compile? Sequential path
-        // only: bcdev, the one backend with the check, refuses `workers > 1`.
+        // only (the one session backend).
         const compilePlainCheck = cfg.backend.compilePlainCheck?.bind(cfg.backend);
         if (compilePlainCheck !== undefined) {
           await plainBuild({
@@ -7597,137 +7522,6 @@ async function runSessionBody(
           memberCountsByTest: memberCounts,
         };
       };
-      // The worker fan-out, used only when workers > 1. It stays here because it deploys to each
-      // worker, which needs this batch's directory and files.
-      const executeCovering = async (
-        plan: CoveringPlan,
-        attestation: AttestationLedger,
-        baselineReused: ReusedBaseline | undefined,
-      ): Promise<void> => {
-        const {
-          mutants: toExecute,
-          perMutantTests,
-          coverageAttribution,
-          baselineDuration,
-          memberCountsByTest: memberCounts,
-        } = plan;
-        const fallbackTimeoutMs = scope.baselineTimeoutMs;
-        const shards = shardEvenly(toExecute, workers);
-        // allSettled, not all: if one shard throws (e.g. the I7 two-
-        // consecutive-transport-errors abort), `Promise.all` would reject
-        // immediately and return control to the caller WHILE sibling shards
-        // are still mid-flight — they'd keep calling record()/
-        // recordTestResult() on a store the caller may already have closed.
-        // Waiting for every shard to settle first means the store is
-        // quiescent before the failure is ever rethrown below.
-        const settled = await Promise.allSettled(
-          shards.map(async (shard, i) => {
-            if (shard.length === 0) return;
-            const backend = workerBackends[i];
-            if (backend === undefined) return; // defensive: shards.length === workerBackends.length
-            // Mirror the sequential deploy try/catch above (step 3), but NOT
-            // verbatim: step 3 runs BEFORE step 5's coverage filter, so
-            // iterating all of `execute` there is correct — nothing has been
-            // recorded yet. This catch runs AFTER step 5, and `shard` (a
-            // slice of `execute`) still includes mutants step 5 already
-            // recorded as `no-coverage`. Skipping those here (same
-            // `perMutantTests.get(...) === undefined` guard
-            // `runMutantsOnBackend` uses) avoids double-recording an
-            // uncovered mutant as `error` too — `mutants` has no unique
-            // constraint on (run_id, mutant_code), so a duplicate INSERT
-            // would corrupt the report silently rather than fail loudly.
-            try {
-              // Latch-guarded like every other work-plane dispatch (design §6). No publish fence
-              // here: `workers > 1` is rejected outright for an authoritative backend (above), so
-              // a worker shard never publishes under a lease.
-              // C02-02: the returned CompiledArtifact is discarded on purpose. Every worker
-              // deploys this SAME batchDir, whose artifactId prepareArtifactDir already baked in,
-              // so this is a copy of the batch's one artifact, not a new identity. `artifacts[]`
-              // (recordArtifact / the batch-published event) records the primary publish per
-              // batch, which happens once above (step 3d), not once per worker here.
-              await compileLimit.run(() => {
-                safety.assertSafe(`deploy(${batchDir}) worker ${i}`);
-                return backend.deploy(batchDir);
-              });
-            } catch (err) {
-              // Same session-abort rule as the sequential path (3b): only a deterministic alc
-              // rejection (AlcCompileError) is bisectable. A DeploymentError, an
-              // ArtifactPrepareError, or anything else is never a compile verdict, so it must
-              // not be bisected or downgraded to per-mutant errors here either — it aborts the
-              // whole session.
-              if (!(err instanceof AlcCompileError)) throw err;
-              // Same "one bad mutant, uninformative errors" problem as the
-              // sequential path above applies here identically — bisect
-              // this worker's own deploy failure the same way. Searches the
-              // FULL manifest, not just `shard`: every worker deploys the
-              // SAME `batchDir` (the whole artifact, every mutant, not a
-              // shard-scoped subset — sharding only decides which worker
-              // EXECUTES which mutant's tests), so a compile failure any
-              // worker observes here is a property of the whole artifact,
-              // and the true culprit need not be one of THIS worker's own
-              // shard's mutants. Recording below still stays scoped to
-              // `shard` (this worker's own mutants) — only the SEARCH scope
-              // widened, not which mutants get marked "error". Each worker
-              // gets its own scratch dir (suffixed by `i`) so concurrently
-              // bisecting shards never race on the same directory.
-              const note = await bisectAndNote({
-                subsetMutants: manifest.mutants,
-                scratchDir: join(
-                  cfg.instrumentedDir,
-                  `run-${runId}-batch-${batchIdx}-bisect-worker-${i}`,
-                ),
-                batchFiles,
-                identityOrdinals,
-                selectorIds: cfg.selectorIds,
-                projectDir: cfg.projectDir,
-                projectManifest,
-                appVersion,
-                artifactId: newArtifactId(),
-                // Keep the compileLimit wrapper: it bounds concurrent alc processes, which is
-                // exactly what bisection candidates are — compileCheck doesn't change that.
-                compileCheck: (dir) => compileLimit.run(() => backend.compileCheck(dir)),
-                originalErr: err,
-                source: sourceSnapshot,
-                excludeOutputs: cfg.excludeOutputs ?? [],
-                configPath: cfg.configPath,
-              });
-              for (const m of shard) {
-                if (perMutantTests.get(m.mutantId) === undefined) continue; // already recorded no-coverage
-                record(cfg.store, runId, m, "error", outcomes, batchIdx, emit, undefined, note);
-              }
-              return;
-            }
-            await runMutantsOnBackend({
-              backend,
-              safety,
-              mutants: shard,
-              perMutantTests,
-              coverageAttribution,
-              baselineDuration,
-              fallbackTimeoutMs,
-              minMutantBudgetMs,
-              store: cfg.store,
-              runId,
-              batchIndex: batchIdx,
-              outcomes,
-              quarantineStore,
-              resourceKey,
-              nowIso,
-              attestation,
-              emit,
-              killLedger,
-              memberCountsByTest: memberCounts,
-              groupRuns,
-              sessionReuse,
-              baselineReused,
-            });
-          }),
-        );
-        const firstRejection = settled.find(
-          (r): r is PromiseRejectedResult => r.status === "rejected",
-        );
-        if (firstRejection !== undefined) throw firstRejection.reason;
-      };
       const scored = await scoreBatch(scope, {
         batchIndex: batchIdx,
         artifactId: compiled?.artifactId,
@@ -7754,7 +7548,6 @@ async function runSessionBody(
           lendingSession,
         },
         select,
-        ...(workers > 1 ? { executeCovering } : {}),
       });
       if (scored === "unsafe") break; // stop the whole session: no mutant scheduling, no next batch
       if (scored === "nothing-to-run") continue;
@@ -7809,7 +7602,6 @@ async function runSessionBody(
     try {
       late = await closeLeaseScope({
         backend: cfg.backend,
-        workerBackends,
         safety,
         leaseSession,
         emit,
@@ -8429,7 +8221,7 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
   } finally {
     let late: Error | undefined;
     try {
-      late = await closeLeaseScope({ backend, workerBackends: [], safety, leaseSession, emit });
+      late = await closeLeaseScope({ backend, safety, leaseSession, emit });
     } finally {
       // R508: the lost batch's event and store correction, as in `runSession`'s `finally`.
       invalidateLostBatch(store, runId, leaseSession, safety, emit, late, failure);
@@ -9595,10 +9387,7 @@ async function proveReadBack(
 }
 
 /**
- * Worker backends are constructed by `backendFactory` inside `runSession`
- * (unlike `cfg.backend`, which the CALLER constructs and is responsible for
- * — see `cli.ts`'s `instanceof BcDevMcpBackend`/`AlRunnerBackend` close
- * calls), so `runSession` itself owns disposing them. `ExecutionBackend`
+ * `ExecutionBackend`
  * doesn't declare a `close()` method (not every backend needs one — the
  * in-memory ones don't), so this duck-types rather than importing concrete
  * backend classes, keeping the orchestrator decoupled from any specific
@@ -10516,17 +10305,7 @@ async function classifyNonVerdictStep(
 }
 
 /**
- * The per-mutant kill-detection loop, extracted so that `workers = 1` (one
- * shard containing every mutant, run on `cfg.backend`) and `workers > 1`
- * (N shards, each on its own backend from `backendFactory`) are the exact
- * same code path — there is one session implementation, not two that can
- * drift out of sync with each other.
- *
- * `outcomes` and `store` are shared across concurrent invocations when
- * `workers > 1`; that's safe because `Array.push` and the `bun:sqlite` calls
- * inside `record`/`recordTestResult` are all synchronous within this single
- * process, so interleaving different mutants' async awaits never races on
- * them.
+ * The per-mutant kill-detection loop, run on `cfg.backend` over every mutant of the batch.
  */
 async function runMutantsOnBackend(args: {
   readonly backend: ExecutionBackend;

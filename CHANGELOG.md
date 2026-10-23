@@ -226,6 +226,18 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **The worker fan-out is deleted from `runSession`, and `--compile-concurrency` is gone** ([R671](docs/roadmap/R671.md)).
+  Since R654 no backend accepts `--workers` above 1, so the fan-out (`backendFactory`, sharding, per-worker deploy and
+  bisection, `executeCovering`) could not run. `--workers 1` still works and `--workers 2` is still refused by name.
+  `--compile-concurrency` only bounded that fan-out, so it is now an unknown flag. `packages/runner/src/pool.ts`
+  (`Semaphore`, `shardEvenly`) went with it. No sequential behaviour changed.
+- **R586's backend-identity scanner (T15) now sees more** ([R611](docs/roadmap/R611.md)). It also catches `case`
+  labels, a compare split over two lines, `.includes` on an array of backend names, the `"al-runner-v3"` name, and
+  files in `src` subfolders. The sites it found were all explicit and are now classified. Test code only.
+- **The R192 snapshot key and the v3 compile proof no longer skip a user file named like a LethAL control file**
+  ([R691](docs/roadmap/R691.md)). Only LethAL's own control files at the root of the instrumented batch folder are left
+  out; a same-named file in a subfolder, or anywhere in the test folder, is now hashed. No stored key changes unless a
+  project has such a file (none known), so stored snapshots stay reusable.
 - **`lethal verify`'s blind spot for installed apps is now a stated, measured limit** ([R434](docs/roadmap/R434.md)).
   An app installed on the server but outside the test app's dependencies (a global subscriber, a setup change, a
   test-runner extension) still leaves every test old when it is installed or upgraded. Measured on LethAL's
