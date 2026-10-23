@@ -715,7 +715,7 @@ that ordering is the priority.
 - **R670** · the pinned fixture-symbols tar holds `LethAL Sandbox Data` 1.0.0.10 for `sandbox-data-tests`, older than the fixture (1.0.0.13), so `compile:fixtures` from the tar fails that project with AL0185 `Data Band Report` is missing · [R670.md](docs/roadmap/R670.md) · open, filed 2026-10-22
 - **R671** · after R654 no backend accepts `--workers` > 1, so `runSession`'s worker fan-out is unreachable and its unit tests are skipped · [R671.md](docs/roadmap/R671.md) · open, filed 2026-10-22
 - **R673** · the fixture-symbols tar has never held `.alpackages` for sandbox-names, sandbox-names-tests, sandbox-wrapped or sandbox-wrapped-tests, so `compile:fixtures` SKIPS all four in a fresh worktree and `--require-symbol-sets` fails on sandbox-wrapped · [R673.md](docs/roadmap/R673.md) · open, filed 2026-10-23
-- **R674** · `--backend al-runner-v3` ignores a configured `envTool` section without a word (R18's warning went with the .NET al-runner) · [R674.md](docs/roadmap/R674.md) · open, filed 2026-10-23
+- **R674** · `--backend al-runner-v3` ignores a configured `envTool` section without a word (R18's warning went with the .NET al-runner) · [R674.md](docs/roadmap/R674.md) · done (e1a8cee8)
 - **R676** · `--backend al-runner-v3 --dry-run` with an `envTool` section runs the env tool's `resolve` and prints a bcdev publish ceiling for a run that publishes nothing: `dryRunCeiling` is not told the backend · [R676.md](docs/roadmap/R676.md) · open, filed 2026-10-23
 - **R677** · al-runner v3: baselineRefused is session-wide and never reset, so a test refused at batch 0's baseline still drives batch 1's nearby-refusal notes · [R677.md](docs/roadmap/R677.md) · closed 2026-10-23 — ruling: session-wide is correct…
 
