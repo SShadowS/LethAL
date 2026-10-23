@@ -362,16 +362,6 @@ describe("itest/gate-expected.ts (R-592)", () => {
  * fails too, so the list cannot go stale.
  */
 const LAGGING_SCHEME: Readonly<Record<string, string>> = {
-  "bcdev.baseline.json": "R690",
-  "bcdev.names.baseline.json": "R690",
-  "bcdev.wrapped.baseline.json": "R690",
-  "hang.single.baseline.json": "R690",
-  "harden.baseline.json": "R690",
-  "tables.baseline.json": "R690",
-  "al-runner-v3.tables.baseline.json": "R690",
-  "al-runner-v3.layout.baseline.json": "R690",
-  "al-runner-v3.symbols-lethala.baseline.json": "R690",
-  "al-runner-v3.symbols-lethalb.baseline.json": "R690",
   // A bare array (no scheme at all): the env tool is host-only.
   "envtool.baseline.json": "R683",
 };
