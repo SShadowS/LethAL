@@ -75,3 +75,19 @@ is outside the target's idRanges. The driver's own steps ran as committed: `serv
 and the lease was released. The one change is that `drive.ts` now passes `--selector-id 50977 --control-id 50978
 --table-id 50979`, inside 50970-50979 (sha256 `799e52672dee1acb217f83e05e660dd2cc07a90f30d90eddb7ef506106b4c566`).
 No prediction changes.
+
+## Delta 2 (before the third run)
+
+The second run (12:24:55Z) also stopped inside `lethal run` before LethAL made any server call: R307 refuses a file
+that holds a codeunit with a table and a report. The driver's own steps again ran as committed (generation unchanged
+before and after, both apps removed and read back absent, lease released). The one change is that `app/src/Target.al`
+is split, unchanged, into one file per object, and both apps are rebuilt by alc. `lethal run --dry-run` on the split
+target lists 14 sites with no refusal. No prediction changes.
+
+| file | sha256 |
+|---|---|
+| `app/src/Logic.Codeunit.al` | `b725306c90a2cc09ed0a18178f6e85cc9561b2579a07890045a7c6c4f50f4fc7` |
+| `app/src/Entry.Table.al` | `92b3e4ca5cb17f49e78a84001a38997f464f80ad33d95d8cb7df57f57f9591e6` |
+| `app/src/Sum.Report.al` | `ac940b5c532f74f01088349858f31a128dd3ff6d19b31704d9b1376cacc70712` |
+| `build/app.app` | `b4816b51f4b4a8d89710130bba1a2aabb055741b2bf804c8a2c1c1a0c4dd956b` |
+| `build/tests.app` | `6ec1e35d06a5d00acb24e9699e85d50dc5f560b3ea08788a9d10a73f8a085b96` |
