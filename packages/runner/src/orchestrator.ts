@@ -776,7 +776,8 @@ export function resolveOperatorNames(
  *
  * R654 S1 (plan r1 I1, r2 D-m2): extracted from `runSession` unchanged, and keyed on the session's
  * `WrappedRule` instead of its backend kind. `bcArms` holds the build's arms per file on bcdev and
- * is empty otherwise, so a `"refuse-wrapped"` session (v3) bars no file: it admits none.
+ * is empty otherwise. R602: v3 now runs the `"al-runner-index"` rule, so it bars an admitted
+ * wrapped file from carry (the safe direction); a `"refuse-wrapped"` session would bar none.
  * Returns the barred files' paths, forward slashes.
  */
 export function carryBarredFiles(

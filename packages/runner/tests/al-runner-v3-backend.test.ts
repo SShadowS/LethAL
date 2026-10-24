@@ -2029,3 +2029,59 @@ describe("R666: batch 1's coverage is read through batch 1's layout (one-shot)",
     expect(await procs()).toEqual([["Grow"], ["Twice"]]);
   });
 });
+
+describe("R602 A1/A2: a multi-object batch deploys with coverage on, and its second object is covered", () => {
+  // `Logic` (79000) is the file's SECOND object: header on line 9, `exit(X * 2)` on line 13.
+  const MULTI = `codeunit 79001 "First"
+{
+    procedure One(): Integer
+    begin
+        exit(1);
+    end;
+}
+
+${TARGET_AL}`;
+  const cov = (_id: string, active: string) => ({
+    coverage: [],
+    perTestCoverage: [
+      {
+        test: `Codeunit${CU}.A`,
+        coverage: [
+          {
+            file: join(active, "Logic.Codeunit.al"),
+            statements: [{ line: 13, hits: 1, scope: "Twice" }],
+          },
+        ],
+      },
+      { test: `Codeunit${CU}.B`, coverage: [] },
+    ],
+  });
+
+  test("A2: deploy does not throw on a multi-object file (the old frame throw is gone)", async () => {
+    const l = await layout(MULTI);
+    const b = backendOf(l, fakeV3(allPass, { coverage: cov }).spawn, fakeAlc().io, {
+      coverage: "al-runner",
+    });
+    b.useBuildSymbols([]);
+    await b.deploy(l.batch);
+  });
+
+  test("A1: test A's coverage is the SECOND object's procedure, at its own object line", async () => {
+    // File line 13 is object line 6: the second object's base is 8 (R383's frame, the line before
+    // its header), the same frame the line map and BC use.
+    const l = await layout(MULTI);
+    const b = backendOf(l, fakeV3(allPass, { coverage: cov }).spawn, fakeAlc().io, {
+      coverage: "al-runner",
+    });
+    b.useBuildSymbols([]);
+    await b.deploy(l.batch);
+    await b.activate(null);
+    const a = await b.run(ref("A"), { coverage: "al-runner", timeoutMs: 1000 });
+    expect(a.coverage?.entries).toEqual([
+      { objectType: "Codeunit", objectId: 79000, procedure: "Twice", line: 6 },
+    ]);
+    expect(
+      (await b.run(ref("B"), { coverage: "al-runner", timeoutMs: 1000 })).coverage?.entries,
+    ).toEqual([]);
+  });
+});

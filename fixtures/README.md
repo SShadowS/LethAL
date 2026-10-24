@@ -1670,7 +1670,8 @@ CLI flags:
     // refused by name.
     "path": "/work/tools/al-runner-v3/current/al-runner",
     // "al-runner" reads v3's coverage; turned off, with the al-runner-v3-coverage-off warning,
-    // for a project holding a multi-object or an #if-wrapped object file (R602). "none" turns it off.
+    // for a project holding an #if wrapper shape the index has no rule for (two-arm, #elif, nested,
+    // or a multi-object file holding a wrapper; R602). "none" turns it off.
     "coverage": "al-runner",
     "transport": "one-shot"
   },

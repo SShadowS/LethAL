@@ -132,14 +132,31 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
     1. On a candidate (`LETHAL_ALRUNNER_V3_CANDIDATE=1`), K does not run. Its value in the itest's leg summary is `"K":"skipped (candidate build)"`, and its reason goes into the log and the receipt lines. It is never silent.
     2. On a gated build, a K that is anything but a pass FAILS the itest, a skip included (`v3ItestFailures`). So K can never become an always-skipped leg.
 
-  The update gate's receipt outcome still reads only `V3_GATE_LEGS`.
+  The update gate's receipt outcome reads only `V3_GATE_LEGS` (which now holds MO and WR, below).
+
+### Legs MO and WR (R602)
+
+Pre-committed on master (`docs/superpowers/specs/2026-10-24-r602-alrunner-v3-mo-wr-precommitment.md`, c2f67f0a) and recorded once under R332 on 2026-10-24 on the pin (alpha.2 91253f2d6), equal to the pre-commitment per mutant (MO 12/12 rows, WR 98/98). The gate REFUSES to start MO or WR without their baselines (R332). Both are default legs AND in `V3_GATE_LEGS` (orchestrator ruling 2026-10-24): they are the only measurement of v3's per-object frame, so a build that breaks it must not move `current`. Inside these two legs an `AlRunnerCoverageFrameError` is `gate-fail` (`legOutcomeOfError(err, leg)`); in every other leg it stays `infra-fail`. `scripts/al-runner-v3-update.ts` needs no change: it judges the receipt by `gateOutcome` over `V3_GATE_LEGS`, so an older receipt without MO and WR reads `infra-fail` ("missing legs MO,WR").
+
+Both legs are one-shot only (the measurement was one-shot): `LETHAL_ITEST_V3_TRANSPORT=serve-entries` makes them fail by name, `al-runner-v3-itest-leg-transport-refused`.
+
+Both run as the other legs do (`runSession`, the v3 backend, one-shot, coverage `"al-runner"`, a packages folder of the Microsoft apps), not through the CLI guard. Each makes a **durable killer check** before it compares with its baseline: every mutant that `--mode none` kills (a constant in `alrunner-v3-legs.ts`, `V3_MO_KILLERS` and `V3_WR_KILLERS`, built from the measured `none` runs) must be killed by the same test. The constants are code, so a re-record of a baseline cannot absorb a lost kill.
+
+- **MO** (R383's fixture): `fixtures/sandbox-multiobject`. `MultiPair.Codeunit.al` holds two codeunits, so the index places the second object's lines by position.
+  - 6 / 1 / 5 over 12, as pre-committed (`al-runner-v3.multiobject.baseline.json`): the 5 `no-coverage` are in procedures no test calls (`Never`, `Unreached`).
+  - Killer constant: 6 kills.
+- **WR** (R-300b's fixture): `fixtures/sandbox-wrapped` whole, config symbol `WRAPDEF`, so the two-arm control `WrappedArms` is in it.
+  - 58 / 37 / 3 over 98, as pre-committed (`al-runner-v3.wrapped.baseline.json`). The 3 `no-coverage` are the `WrappedArms` rows, each with the refusal sentence (`ARMS_REFUSAL`); that by-name refusal costs two kills `none` finds (M0001, M0003), named, not hidden.
+  - Killer constant: 58 kills (`none` kills 60, minus those two).
+  - Six `[v3-codeunit-state-possible]` notes are pre-committed (`V3_WR_STATE_NOTES`: M0071, M0072, M0078, M0085, M0086, M0092; BandYRun and BandYRunTwin after BandYDirect and BandYDirectTwin in one codeunit call, #5611). They are kills that stay kills. The leg asserts that exact set; MO and every other leg assert none.
+  - As a whole the project is OFF from the CLI (the two-arm file), with the warning naming `WrappedArms`' file; the leg measures the index, which the CLI guard does not reach.
 
 **Legs ruled out:**
 - **The server and resource variants.** v3 one-shot uses the static selector, and serve-entries (R635) is opt-in. S3 pins that the resource selector is refused on one-shot.
-- **Multi-object and wrapped.** v3 turns coverage off there by design (R602).
 - **Names.** Quoted test names are unselectable on v3 (#5572), and N1 covers the fixture.
 
 **Recording (R332).** Run `LETHAL_ITEST_ALRUNNER_V3=1 LETHAL_ITEST_V3_LEGS=L1,Y-A,Y-B LETHAL_ITEST_RECORD_BASELINE=al-runner-v3.layout.baseline.json,al-runner-v3.symbols-lethala.baseline.json,al-runner-v3.symbols-lethalb.baseline.json bun run itest:alrunner-v3`. It exits 3 by design. Then confirm with every leg.
+- **MO and WR (R602)** are recorded the same way, once, after their pre-commitment is on master: `LETHAL_ITEST_ALRUNNER_V3=1 LETHAL_ITEST_V3_LEGS=MO,WR LETHAL_ITEST_RECORD_BASELINE=al-runner-v3.multiobject.baseline.json,al-runner-v3.wrapped.baseline.json bun run itest:alrunner-v3`. The killer check and the counts run before anything is written.
 - **Recorded 2026-10-22** on alpha.2 (91253f2d6), once, by that command (`/coord/handoff/R-654/s2-record.log`, exit 3). The figures are 7 / 3 / 0, 5 / 4 / 0 and 5 / 4 / 0 as pre-committed. Each file is identical per mutant to its .NET al-runner twin (`al-runner.layout`, `-symbols-lethala`, `-symbols-lethalb`; 0 differences).
 - **When a file is missing,** `preflightGateBaseline` refuses the WHOLE run, before any leg starts, and names the record command. This happens whenever the run selects the leg whose baseline is missing (L1, Y-A or Y-B; by default all three are selected). It does not skip just that leg.
 - **A record run never exits 3 when a leg that it did not record failed.** It exits 1 and names the leg (`v3RecordRunFailures`). A table mismatch writes no file.
@@ -241,7 +258,9 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
     "al-runner-v3.tables.baseline.json": { "killed": 290, "survived": 57, "no-coverage": 59 },
     "al-runner-v3.layout.baseline.json": { "killed": 7, "survived": 3 },
     "al-runner-v3.symbols-lethala.baseline.json": { "killed": 5, "survived": 4 },
-    "al-runner-v3.symbols-lethalb.baseline.json": { "killed": 5, "survived": 4 }
+    "al-runner-v3.symbols-lethalb.baseline.json": { "killed": 5, "survived": 4 },
+    "al-runner-v3.multiobject.baseline.json": { "killed": 6, "survived": 1, "no-coverage": 5 },
+    "al-runner-v3.wrapped.baseline.json": { "killed": 58, "survived": 37, "no-coverage": 3 }
   }
 }
 ```
@@ -249,6 +268,9 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
 - Leg L1, `al-runner-v3.layout.baseline.json`: 7 / 3 / 0 over 10, as pre-committed (43115c78).
 - Leg Y-A, `al-runner-v3.symbols-lethala.baseline.json`: 5 / 4 / 0 over 9, as pre-committed.
 - Leg Y-B, `al-runner-v3.symbols-lethalb.baseline.json`: 5 / 4 / 0 over 9, as pre-committed. All three were recorded once under R332 on 2026-10-22, and each is identical per mutant to its .NET al-runner twin.
+
+- Leg MO, `al-runner-v3.multiobject.baseline.json`: 6 / 1 / 5 over 12, as pre-committed (c2f67f0a), recorded once under R332 on 2026-10-24.
+- Leg WR, `al-runner-v3.wrapped.baseline.json`: 58 / 37 / 3 over 98, as pre-committed (c2f67f0a), recorded once under R332 on 2026-10-24.
 
 - Leg T, `al-runner-v3.tables.baseline.json`: 290 / 57 / 59 over 406, as pre-committed. Its rows differ from
   `itest:tables`' baseline on exactly the 52 keys and transitions of the pre-commitment's list (41 Commit, 7

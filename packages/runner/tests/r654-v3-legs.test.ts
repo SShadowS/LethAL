@@ -32,6 +32,8 @@ describe("R654 S2: the leg sets", () => {
   });
 
   test("the default legs: K always listed (it runs, or is skipped with its summary); D and T only when configured", () => {
+    // R602 (flipped on purpose): MO and WR join the default set, after Y-B, and (orchestrator
+    // ruling) V3_GATE_LEGS too, so the update gate judges them.
     expect(v3DefaultLegs({ cdo: false, tables: false })).toEqual([
       "C",
       "S1",
@@ -41,6 +43,8 @@ describe("R654 S2: the leg sets", () => {
       "L1",
       "Y-A",
       "Y-B",
+      "MO",
+      "WR",
       "K",
     ]);
     expect(v3DefaultLegs({ cdo: true, tables: true })).toEqual([
@@ -52,6 +56,8 @@ describe("R654 S2: the leg sets", () => {
       "L1",
       "Y-A",
       "Y-B",
+      "MO",
+      "WR",
       "K",
       "D1",
       "D1c",

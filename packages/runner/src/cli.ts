@@ -2822,10 +2822,28 @@ export type BackendInputs = Pick<
   Partial<Pick<RunCliConfig, "dbPath" | "outPath" | "progressOutPath">>;
 
 /**
+ * The coverage mode a v3 run gets: the configured one, or "none" (with a warning naming the files)
+ * when the project holds an `#if`-wrapped object file of a shape the coverage index has no rule
+ * for (R602: a multi-object file and a single-wrapper file are indexed, so they keep coverage on).
+ */
+export async function v3CoverageMode(
+  configured: "al-runner" | "none",
+  projectDir: string,
+  source?: ReadonlyMap<string, Buffer>,
+): Promise<"al-runner" | "none"> {
+  if (configured !== "al-runner") return configured;
+  const support = await alRunnerCoverageSupport(projectDir, source);
+  const named = support.wrappedObjectFiles;
+  if (named.length === 0) return configured;
+  console.warn(
+    `[lethal] al-runner-v3-coverage-off: coverage is turned OFF for this run (coverage "none"): the coverage index has no rule for the #if wrapper shape (two-arm, #elif, nested, or a multi-object file holding a wrapper) in ${named.join(", ")} (R602).`,
+  );
+  return "none";
+}
+
+/**
  * R586 (plan r2 §9): the al-runner-v3 backend from the `alRunnerV3` section. One-shot, static
- * selector, sequential. Coverage is turned off (with a warning) for a project holding a
- * multi-object or an `#if`-wrapped object file: v3's frame for those is not measured, and its
- * index refuses a multi-object file rather than guess.
+ * selector, sequential. Coverage is turned off (with a warning) by `v3CoverageMode`.
  */
 async function buildAlRunnerV3Backend(
   parsed: BackendInputs,
@@ -2851,17 +2869,7 @@ async function buildAlRunnerV3Backend(
       'could not locate alc under the AL Language VS Code extension install; --backend al-runner-v3 compiles every batch with alc before v3 runs it (R586). Install the extension, or set "alRunnerV3.alcPath".',
     );
   }
-  let coverage = c.coverage;
-  if (coverage === "al-runner") {
-    const support = await alRunnerCoverageSupport(parsed.projectDir, deps.source);
-    const named = [...support.multiObjectFiles, ...support.wrappedObjectFiles];
-    if (named.length > 0) {
-      console.warn(
-        `[lethal] al-runner-v3-coverage-off: coverage is turned OFF for this run (coverage "none"): v3's coverage frame for a multi-object or #if-wrapped object file is not measured (${named.join(", ")}) (R586).`,
-      );
-      coverage = "none";
-    }
-  }
+  const coverage = await v3CoverageMode(c.coverage, parsed.projectDir, deps.source);
   console.warn(AL_RUNNER_V3_NOT_AUTHORITATIVE);
   return new AlRunnerV3Backend(
     {
