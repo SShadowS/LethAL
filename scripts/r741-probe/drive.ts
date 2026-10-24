@@ -50,10 +50,11 @@ const RUN_TIMEOUT_MS = 900_000;
 const SYMBOL_ROOT = "/coord/cache/bc-symbols";
 
 const mkApp = (id: string, name: string) => ({ id, publisher: "LethAL Probe", name });
-// Set 1. A re-run needs set 2 (README), since bc2 keeps set 1's records until a restart (R605).
-const B = mkApp("35e61124-0818-4a55-bb52-a59e866d2f43", "R741 Probe Base");
-const P = mkApp("7eafd7d0-28ea-4943-862f-61dc273065b9", "R741 Probe Target");
-const Q = mkApp("ef054a8e-e34c-4102-a551-200b153aaea5", "R741 Probe Tests");
+// Run 2 (the live proof of R749 on the built head): the SECOND id set. bc2 keeps run 1's records
+// (set 1: 35e61124…, 7eafd7d0…, ef054a8e…) until a restart (R605).
+const B = mkApp("28c577b9-5e6a-4735-add0-bd6c3f451ea6", "R741 Probe Base");
+const P = mkApp("15fda437-a323-4426-8a43-1e24acfb18b2", "R741 Probe Target");
+const Q = mkApp("87ce8474-9f15-4641-bbed-b8d6ae3c0103", "R741 Probe Tests");
 type App = typeof P;
 
 /** Build -> source dir; `against` are the builds a dependent compiles against. */
