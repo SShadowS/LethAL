@@ -58,6 +58,15 @@ import {
   readFixtureConfig,
 } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import {
+  checkGateWarnings,
+  collectWarnings,
+  finishGate,
+  gateEndLine,
+  nonPassExit,
+  preflightObserve,
+  settleThrown,
+} from "./gate-warnings";
 import { assertKillsReproduced } from "./kill-reproduction";
 import { diffMutants, keyOf, normalizeForComparison } from "./mutant-equality";
 import { LOG_THEN_GAP, OVER_BUDGET_GAP, PREDICTED_GAPS } from "./verify-gaps";
@@ -156,6 +165,7 @@ LeaseClient.prototype.acquire = function (
 };
 
 async function main(): Promise<void> {
+  preflightObserve();
   preflightReadOnlyBaseline(BASELINE_PATH, "verify itest");
   const alpackages = join(TEST_DIR, ".alpackages");
   const symbols = await readdir(alpackages).catch(() => [] as string[]);
@@ -243,7 +253,9 @@ async function main(): Promise<void> {
     console.log(`verify itest: BC build (Base Application) ${base.versions.join(", ")}`);
 
     // ---- 1. The gate-equivalent run: leaves a guarded build installed with a trusted record.
+    const warnings = collectWarnings();
     const report = await runSession({
+      emit: [warnings.subscriber],
       backend,
       store,
       projectDir: PROJECT_DIR,
@@ -258,10 +270,14 @@ async function main(): Promise<void> {
       resourceServerInstance: bcdev.serverInstance,
       // A SCRATCH quarantine dir for the full run, for the reason bcdev.itest.ts gives.
       quarantineDir: join(scratch, "quarantine"),
+    }).catch((e: unknown) => {
+      settleThrown("verify", "run", warnings);
+      throw e;
     });
     // R582: every kill of the full run was re-run under the mutant (verify's own kills in step 3
     // are not evidenced: `VerifyResult` carries no marker).
     assertKillsReproduced("verify", report, store);
+    checkGateWarnings("verify", "run", warnings);
     // Closed before verify opens the same file through the CLI path.
     store.close();
     store = undefined;
@@ -736,8 +752,10 @@ async function main(): Promise<void> {
     await rm(scratch, { recursive: true, force: true }).catch(() => {});
   }
 
-  console.log("verify itest: PASS");
-  await emitPassed("verify", { sublegs: ["verify"], artifacts: { reported: false } });
+  console.log(gateEndLine("verify"));
+  await finishGate(() =>
+    emitPassed("verify", { sublegs: ["verify"], artifacts: { reported: false } }),
+  );
 }
 
 main().catch(async (err: unknown) => {
@@ -745,5 +763,5 @@ main().catch(async (err: unknown) => {
   // the following receipt write is slow or the process is killed before it finishes.
   console.error(formatFailure(err));
   await emitFailed("verify", err instanceof Error ? err.message : String(err));
-  process.exit(1);
+  process.exit(nonPassExit(err, 1));
 });

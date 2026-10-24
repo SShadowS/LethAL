@@ -54,6 +54,15 @@ import {
 } from "./config-path";
 import { TABLES_FIGURES } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import {
+  checkGateWarnings,
+  collectWarnings,
+  finishGate,
+  gateEndLine,
+  nonPassExit,
+  preflightObserve,
+  settleThrown,
+} from "./gate-warnings";
 import { killReproductionFailures } from "./kill-reproduction";
 import { assertNotInstrumentedEvidence } from "./notinstrumented-evidence";
 import { acquireProbeLease, odataReadRegisteredArtifact } from "./probe-lease";
@@ -753,7 +762,7 @@ interface RunOnceResult {
   readonly repro: readonly string[];
 }
 
-async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
+async function runOnce(scratchRoot: string, leg: "first" | "second"): Promise<RunOnceResult> {
   const launchCfg = await readOptionalLaunchConfig();
   const configFile = readFixtureConfig(CONFIG_LOCAL_PATH, itestConfigName());
   const bcdev = validateBcDevConfig(configFile.bcdev);
@@ -836,7 +845,9 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
 
   const store = new ResultsStore(join(PROJECT_DIR, "lethal.sqlite"));
   try {
+    const warnings = collectWarnings();
     const report = await runSession({
+      emit: [warnings.subscriber],
       backend,
       store,
       projectDir: PROJECT_DIR,
@@ -856,7 +867,11 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
       // failure landing in the real ~/.lethal store poisons every later gate run until an
       // operator deletes it by hand (observed live). Same reasoning as bcdev.itest.ts.
       quarantineDir: join(scratchRoot, "quarantine"),
+    }).catch((e: unknown) => {
+      settleThrown("tables", leg, warnings);
+      throw e;
     });
+    checkGateWarnings("tables", leg, warnings);
     const runId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
     const sessionLiveness = store.sessionIdLiveness(runId);
     // GH-24: the report keeps only the tests that REACHED, so the order both control tests ran in,
@@ -1775,6 +1790,7 @@ function assertFilterLiteralEvidence(report: SessionReport): void {
 }
 
 async function main(): Promise<void> {
+  preflightObserve();
   preflightGateBaseline(BASELINE_PATH, "tables itest");
   // PROJECT_DIR, not `<PROJECT_DIR>/src` — `runSession` generates from `cfg.projectDir`, so
   // scanning anything else would let this header describe a different file set than the run
@@ -1793,7 +1809,7 @@ async function main(): Promise<void> {
   const scratchA = await mkdtemp(join(tmpdir(), "lethal-itest-tables-a-"));
   const scratchB = await mkdtemp(join(tmpdir(), "lethal-itest-tables-b-"));
   try {
-    const first = await runOnce(scratchA);
+    const first = await runOnce(scratchA, "first");
     assertVerdictTable(first.report);
     assertSessionLiveness(first.report, first.sessionLiveness, 0);
     // The trigger claim itself, read off the manifests the run actually deployed (the scratch
@@ -1816,7 +1832,7 @@ async function main(): Promise<void> {
     await assertGateBaseline(first.report, BASELINE_PATH, "tables itest");
     assert.deepEqual(first.repro, [], first.repro.join("; "));
 
-    const second = await runOnce(scratchB);
+    const second = await runOnce(scratchB, "second");
     assertVerdictTable(second.report);
     assert.deepEqual(second.repro, [], second.repro.join("; "));
     await assertTriggerKillAndSurvive(
@@ -1850,8 +1866,10 @@ async function main(): Promise<void> {
     await rm(scratchB, { recursive: true, force: true });
   }
 
-  console.log("tables itest: PASS");
-  await emitPassed("tables", { sublegs: ["tables"], artifacts: { reported: false } });
+  console.log(gateEndLine("tables"));
+  await finishGate(() =>
+    emitPassed("tables", { sublegs: ["tables"], artifacts: { reported: false } }),
+  );
 }
 
 main().catch(async (err: unknown) => {
@@ -1859,5 +1877,5 @@ main().catch(async (err: unknown) => {
   // the following receipt write is slow or the process is killed before it finishes.
   console.error(formatFailure(err));
   await emitFailed("tables", err instanceof Error ? err.message : String(err));
-  process.exit(err instanceof BaselineRecordedError ? 3 : 1);
+  process.exit(err instanceof BaselineRecordedError ? 3 : nonPassExit(err, 1));
 });

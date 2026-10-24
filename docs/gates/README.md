@@ -77,6 +77,23 @@ compared across a scheme change. There a byte-identical twin's mutated text cann
 - **Today's list:** R690 re-recorded ten baselines at scheme 42 (figures unchanged). Only
   `envtool.baseline.json` still lags; it waits on R683 (host only).
 
+## Warning sets: `GATE_WARNINGS` and observe mode (R736)
+
+Every itest that calls `runSession` collects the run's `warning` events and compares the SORTED, unique warning
+CODES (never the messages) with a committed set in `GATE_WARNINGS` (`packages/runner/itest/gate-expected.ts`),
+keyed `"<gate>/<leg>"`. An extra or a missing code fails the gate, naming it. A key that is absent makes the gate
+refuse: a gate never records its own set (the same rule as R332's baselines).
+- **Observe mode:** `LETHAL_ITEST_OBSERVE_WARNINGS=1` runs the gate as usual, asserts nothing about warnings, and
+  prints `[gate-warnings] <gate>/<leg>: [codes]` plus one example message per code. It always ends as a non-pass: when
+  nothing else failed, exit 3, a failed receipt and a closing line `OBSERVED (exit 3, not a pass)`; a leg that
+  fails ends the gate with its own error first. al-runner-v3 keys its sessions by scratch folder (`S1`, `x-s1`,
+  `xd-d` … `xd-f3` for leg X's Sleep runs). Any other value refuses at the
+  start. `itest:alrunner-v3` refuses observe mode when `LETHAL_V3_GATE_RECEIPT` is set (the update gate).
+- **A run that throws:** its own error wins. Its codes are printed, never asserted.
+- **The order:** observe, explain each code, pre-commit the set, add it to `GATE_WARNINGS` by hand, then prove it
+  with one normal run. Today only `hang/baseline` is pinned (equal to check 11 of `hang-baseline-leg.ts`); every
+  other leg refuses until it is observed.
+
 ## Control app versions
 
 The grouped path (`RunMutantMany`, `StopHungRunAt`, `LC Op Progress`) exists only

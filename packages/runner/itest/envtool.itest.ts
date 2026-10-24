@@ -127,6 +127,15 @@ import { BaselineRecordedError, assertGateBaseline, preflightGateBaseline } from
 import { readFixtureConfig } from "./config-path";
 import { ENVTOOL_FIGURES } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import {
+  checkGateWarnings,
+  collectWarnings,
+  finishGate,
+  gateEndLine,
+  nonPassExit,
+  preflightObserve,
+  settleThrown,
+} from "./gate-warnings";
 import { assertKillsReproduced } from "./kill-reproduction";
 import { assertReachEvidence } from "./reach-evidence";
 
@@ -253,7 +262,9 @@ async function runOnce(scratchRoot: string): Promise<SessionReport> {
     // workflow, matching bcdev.itest.ts.
     const store = new ResultsStore(join(PROJECT_DIR, "lethal.sqlite"));
     try {
+      const warnings = collectWarnings();
       const report = await runSession({
+        emit: [warnings.subscriber],
         backend,
         store,
         projectDir: PROJECT_DIR,
@@ -272,11 +283,15 @@ async function runOnce(scratchRoot: string): Promise<SessionReport> {
         // 2026-08-12 when the gate environment had to be recreated.
         ...afterLeaseAcquiredFor(envSession),
         quarantineDir: join(scratchRoot, "quarantine"),
+      }).catch((e: unknown) => {
+        settleThrown("envtool", "run", warnings);
+        throw e;
       });
       // R582 (UNMEASURED until the owner runs this gate): every kill was re-run under the
       // mutant. The fixture's store is persistent; the check reads only this run's rows. A re-run
       // on a hosted environment can score `session-reused`, the fail-safe direction.
       assertKillsReproduced("envtool", report, store);
+      checkGateWarnings("envtool", "run", warnings);
       return report;
     } finally {
       store.close();
@@ -393,6 +408,7 @@ function refuseSelfRecordWhileUnverified(): void {
 }
 
 async function main(): Promise<void> {
+  preflightObserve();
   refuseSelfRecordWhileUnverified();
   preflightGateBaseline(BASELINE_PATH, "envtool itest");
   const { files } = await generateMutationSet(join(PROJECT_DIR, "src"));
@@ -413,8 +429,10 @@ async function main(): Promise<void> {
     await rm(scratch, { recursive: true, force: true });
   }
 
-  console.log("envtool itest: PASS");
-  await emitPassed("envtool", { sublegs: ["envtool"], artifacts: { reported: false } });
+  console.log(gateEndLine("envtool"));
+  await finishGate(() =>
+    emitPassed("envtool", { sublegs: ["envtool"], artifacts: { reported: false } }),
+  );
 }
 
 main().catch(async (err: unknown) => {
@@ -422,5 +440,5 @@ main().catch(async (err: unknown) => {
   // the following receipt write is slow or the process is killed before it finishes.
   console.error(formatFailure(err));
   await emitFailed("envtool", err instanceof Error ? err.message : String(err));
-  process.exit(err instanceof BaselineRecordedError ? 3 : 1);
+  process.exit(err instanceof BaselineRecordedError ? 3 : nonPassExit(err, 1));
 });

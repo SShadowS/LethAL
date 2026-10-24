@@ -17,6 +17,7 @@ import type { V3EntriesStats } from "../src/al-runner-v3-backend";
 import { applyTPin, pinnedFactMatches } from "../src/al-runner-v3-pins";
 import type { V3BuildPin, XbPin } from "../src/al-runner-v3-pins";
 import { AlRunnerV3CoverageJoinError } from "../src/al-runner-v3-sleep";
+import { GateWarningsMismatchError } from "./gate-warnings";
 import { bareHashRows, compareMutants } from "./mutant-equality";
 import type { MutantComparison, NormalizedMutant } from "./mutant-equality";
 
@@ -809,6 +810,9 @@ export class V3LegHeld extends Error {
 export function legOutcomeOfError(err: unknown, leg?: string): V3LegOutcome {
   if (err instanceof V3LegHeld) return "held";
   if (err instanceof V3LegFailure) return "gate-fail";
+  // R736: codes that differ from the recorded set judge the build; a set nobody recorded is LethAL's
+  // own gap, never a verdict on the binary (the update script keeps a gate-fail for good).
+  if (err instanceof GateWarningsMismatchError) return "gate-fail";
   if (err instanceof AlRunnerV3CoverageJoinError) return "gate-fail";
   if (err instanceof AlRunnerCoverageFrameError && (leg === "MO" || leg === "WR")) {
     return "gate-fail";
@@ -823,6 +827,29 @@ export function gateOutcome(legs: Readonly<Record<string, V3LegOutcome>>): V3Gat
   if (vals.includes("infra-fail") || vals.includes("skipped")) return "infra-fail";
   if (vals.includes("held")) return "held";
   return "pass";
+}
+
+/**
+ * R736: the outcome the receipt carries. An observe run is never a pass: it writes `gate-fail`,
+ * which the update script cannot match to the legs' `gateOutcome`, so it reads the receipt as an
+ * infra-fail and never moves the pin. The itest also refuses observe mode outright when a receipt
+ * is demanded (`observeWithReceiptRefusal`).
+ */
+export function v3ReceiptOutcome(
+  legs: Readonly<Record<string, V3LegOutcome>>,
+  observe: boolean,
+): V3GateOutcome {
+  return observe ? "gate-fail" : gateOutcome(legs);
+}
+
+/** R736: the update gate (a receipt path set) must never run in observe mode. */
+export function observeWithReceiptRefusal(
+  observe: boolean,
+  receiptPath: string | undefined,
+): string | undefined {
+  return observe && receiptPath !== undefined
+    ? "LETHAL_ITEST_OBSERVE_WARNINGS=1 with LETHAL_V3_GATE_RECEIPT set: the update gate trusts its receipt and an observe run is never a pass, so the two cannot be combined. Observe by running the gate by hand."
+    : undefined;
 }
 
 /** What the update script reads (r3 F6 a): matched by nonce AND the candidate binary's sha256. */
