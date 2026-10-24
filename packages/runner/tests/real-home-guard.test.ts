@@ -96,9 +96,12 @@ function innerPreloadRun(env: Record<string, string | undefined>, check: string)
 test("R704: a child test run started from a test keeps the parent's REAL home, not its fake", () => {
   const real = process.env.LETHAL_TEST_REAL_HOME ?? "";
   expect(real).not.toBe("");
+  const outerFake = process.env.LETHAL_TEST_FAKE_HOME ?? "";
+  // The second line proves the inner preload ran (it made its own fake home), so the first cannot
+  // pass by plain inheritance (build review M2).
   const r = innerPreloadRun(
     { ...process.env },
-    `expect(process.env.LETHAL_TEST_REAL_HOME).toBe(${JSON.stringify(real)});`,
+    `expect(process.env.LETHAL_TEST_REAL_HOME).toBe(${JSON.stringify(real)});\nexpect(process.env.LETHAL_TEST_FAKE_HOME).not.toBe(${JSON.stringify(outerFake)});`,
   );
   expect(r.out).toContain("1 pass");
   expect(r.code, r.out).toBe(0);
@@ -109,12 +112,22 @@ test("R704: a stray LETHAL_TEST_REAL_HOME, with no matching fake home, is ignore
   try {
     const { LETHAL_TEST_FAKE_HOME: _f, ...rest } = process.env;
     const bogus = join(S, "bogus-real-home");
-    const r = innerPreloadRun(
-      { ...rest, HOME: S, USERPROFILE: S, LETHAL_TEST_REAL_HOME: bogus },
-      `expect(process.env.LETHAL_TEST_REAL_HOME).not.toBe(${JSON.stringify(bogus)});`,
-    );
-    expect(r.out).toContain("1 pass");
-    expect(r.code, r.out).toBe(0);
+    const ignored = `expect(process.env.LETHAL_TEST_REAL_HOME).not.toBe(${JSON.stringify(bogus)});`;
+    // No fake home at all, and (build review M1) a stray fake home that is NOT the current HOME.
+    for (const fakeHome of [undefined, join(S, "stray-fake-home")]) {
+      const r = innerPreloadRun(
+        {
+          ...rest,
+          HOME: S,
+          USERPROFILE: S,
+          LETHAL_TEST_REAL_HOME: bogus,
+          ...(fakeHome !== undefined ? { LETHAL_TEST_FAKE_HOME: fakeHome } : {}),
+        },
+        ignored,
+      );
+      expect(r.out, `fake home ${fakeHome}`).toContain("1 pass");
+      expect(r.code, r.out).toBe(0);
+    }
   } finally {
     rmSync(S, { recursive: true, force: true });
   }

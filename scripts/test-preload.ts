@@ -33,8 +33,13 @@ const runDir = mkdtempSync(join(tmpdir(), "lethal-unit-run-"));
 const redirected =
   process.env.LETHAL_TEST_FAKE_HOME !== undefined &&
   process.env.LETHAL_TEST_FAKE_HOME === process.env.HOME;
-if (!redirected || process.env.LETHAL_TEST_REAL_HOME === undefined) {
+if (!redirected) {
   process.env.LETHAL_TEST_REAL_HOME = homedir();
+} else if (process.env.LETHAL_TEST_REAL_HOME === undefined) {
+  // homedir() is the earlier preload's fake here, so recording it would mislabel a fake as real.
+  throw new Error(
+    "test-preload: this process was redirected by an earlier preload (LETHAL_TEST_FAKE_HOME is HOME) but LETHAL_TEST_REAL_HOME is missing; pass the parent's env whole",
+  );
 }
 const fake = join(runDir, "home");
 mkdirSync(fake);
