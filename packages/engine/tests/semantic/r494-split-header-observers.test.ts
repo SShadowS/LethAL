@@ -275,7 +275,9 @@ describe("R329: subscriber attributes are collected once per symbol table", () =
     CALLER_CU,
     sub(50321, "SubOne", "T One", "OnAfterModifyEvent"),
     sub(50322, "SubTwo", "T Two", "OnAfterDeleteEvent"),
-    // the only subscriber of T Three is in a compiled-out arm
+    // T Three's only subscriber is `#if`-wrapped and read without an arm map, so it is unindexed:
+    // its answer comes from the unindexed-codeunit path, not from the indexed subscriber list
+
     `#if NEVER\n${sub(50323, "SubOff", "T Three", "OnAfterModifyEvent")}#endif\n`,
   ];
 
