@@ -31,6 +31,7 @@ import {
   IDENTITY_SCHEME,
   type IdentityEntry,
   type InstrumentedFile,
+  type IsolatedOut,
   type MutantManifest,
   type MutantManifestEntry,
   type SelectorConfig,
@@ -96,7 +97,7 @@ import {
 } from "./baseline-snapshot";
 import type { BaselineObservation, BaselineSnapshot } from "./baseline-snapshot";
 import { PublishFailedError } from "./bcdev-backend";
-import { bisectFailingMutant } from "./bisect";
+import { MAX_ISOLATION_COMPILES, isolateBreakingMutants } from "./bisect";
 import {
   type ClosedWorldResult,
   PENDING_SUFFIX,
@@ -1880,6 +1881,16 @@ export function narrowFilesToSubset(
   return out;
 }
 
+/** R734: each mutant's id, keyed by its site, for `writeInstrumentedProject`'s `fixedIds`. */
+function fixedIdsOf(mutants: readonly MutantManifestEntry[]): ReadonlyMap<string, string> {
+  return new Map(
+    mutants.map((m) => [
+      identitySiteKey(m.file, m.startIndex, m.endIndex, m.operatorName),
+      m.mutantId,
+    ]),
+  );
+}
+
 /**
  * 128 cryptographically random bits as 32 lowercase hex characters — the ONLY id shape
  * `DeploymentVerifier.verify` accepts (it throws on anything else, by design). Generated fresh
@@ -1994,6 +2005,10 @@ async function prepareArtifactDir(args: {
   readonly targetDir: string;
   readonly files: readonly InstrumentedFile[];
   readonly subset?: readonly MutantManifestEntry[];
+  /** R734: ids a narrowed write keeps; see `writeInstrumentedProject`. */
+  readonly fixedIds?: ReadonlyMap<string, string>;
+  /** R734: the mutants this narrowed artifact leaves out because they broke the compile. */
+  readonly isolatedOut?: readonly IsolatedOut[];
   /** R374: the run-wide ordinals from `identityOrdinalsOf`. */
   readonly identityOrdinals: ReadonlyMap<string, number>;
   readonly selectorIds: SelectorConfig;
@@ -2023,6 +2038,8 @@ async function prepareArtifactDir(args: {
     operatorTiers,
     identityOrdinals: args.identityOrdinals,
     flatNames,
+    ...(args.fixedIds !== undefined ? { fixedIds: args.fixedIds } : {}),
+    ...(args.isolatedOut !== undefined ? { isolatedOut: args.isolatedOut } : {}),
   });
   return await prepareBatchProject(
     args.projectDir,
@@ -2104,14 +2121,52 @@ class BisectPrepareError extends Error {
 }
 
 /**
- * Bisects `subsetMutants` against a `deploy`-shaped compile check, reusing
- * `scratchDir` for every candidate via `prepareArtifactDir`. Shared by the
- * sequential deploy-failure path (step 3).
+ * R734: what isolation decided about a failed batch compile.
+ * - `none`: nobody can be named (no repro, environmental, a candidate could not be prepared, or a
+ *   singleton failed with no alc diagnostic): every mutant is `error` with `note`.
+ * - `isolated`: `removed` (culprits and pair members, each with its own note) are `error`.
+ *   When `unresolved` is empty, `clean` compiled and may be redeployed; otherwise `clean` and
+ *   `unresolved` are unknown and are `error` with `unresolvedNote`.
+ */
+type IsolationPlan =
+  | { readonly kind: "none"; readonly note: string }
+  | {
+      readonly kind: "isolated";
+      readonly removed: ReadonlyMap<MutantManifestEntry, string>;
+      readonly clean: readonly MutantManifestEntry[];
+      readonly unresolved: readonly MutantManifestEntry[];
+      readonly unresolvedNote: string;
+    };
+
+/** R734 A6: an alc rejection with no `error AL<nnnn>` line is not a verdict on a mutant. */
+const ALC_ERROR_LINE = /^(.*?)\((\d+),\d+(?:,\d+,\d+)?\):\s*error\s+(AL\d{4})\b/;
+
+/** Codes and positions alc named, never its message text (that can quote source). */
+function alcCodesOf(text: string): string {
+  const seen = new Set<string>();
+  for (const raw of text.split(/\r?\n/)) {
+    const m = ALC_ERROR_LINE.exec(raw.trim());
+    if (m !== null) {
+      seen.add(
+        `${m[3]} (instrumented ${(m[1] ?? "").replaceAll("\\", "/").split("/").pop()} line ${m[2]})`,
+      );
+    }
+  }
+  return [...seen].slice(0, 5).join(", ");
+}
+
+/** Raised inside the isolation compile when a singleton fails with no alc error line. */
+class NoDiagnosticError extends Error {}
+
+/**
+ * Isolates the mutants of `subsetMutants` that break the compile (R734), against a compile-only
+ * check, reusing `scratchDir` for every candidate via `prepareArtifactDir`. Every candidate is
+ * written under the ids the failed artifact gave its mutants (`fixedIds`, A9).
  *
- * `scratchDir` is removed once bisection finishes, win or lose — a failed
+ * `scratchDir` is removed once isolation finishes, win or lose — a failed
  * batch must not leave a scratch artifact behind on disk indefinitely.
  */
-async function bisectAndNote(args: {
+async function isolateAndNote(args: {
   readonly subsetMutants: readonly MutantManifestEntry[];
   readonly scratchDir: string;
   readonly batchFiles: readonly InstrumentedFile[];
@@ -2131,14 +2186,17 @@ async function bisectAndNote(args: {
   readonly source: ReadonlyMap<string, Buffer> | undefined;
   readonly excludeOutputs: readonly string[];
   readonly configPath: string | undefined;
-}): Promise<string> {
+}): Promise<IsolationPlan> {
+  const fixedIds = fixedIdsOf(args.subsetMutants);
+  const singletonText = new Map<MutantManifestEntry, string>();
   try {
-    const outcome = await bisectFailingMutant(args.subsetMutants, async (subset) => {
+    const outcome = await isolateBreakingMutants(args.subsetMutants, async (subset) => {
       try {
         await prepareArtifactDir({
           targetDir: args.scratchDir,
           files: args.batchFiles,
           subset,
+          fixedIds,
           identityOrdinals: args.identityOrdinals,
           selectorIds: args.selectorIds,
           projectDir: args.projectDir,
@@ -2165,30 +2223,125 @@ async function bisectAndNote(args: {
         // set chasing a problem that has nothing to do with any mutant, and could converge on
         // (and name) an innocent one. Let it abort the search instead.
         if (!(err instanceof AlcCompileError)) throw err;
+        // A6: a lone mutant is named only when alc says WHY (an `error AL<nnnn>` line).
+        const [only] = subset;
+        if (subset.length === 1 && only !== undefined) {
+          if (!err.message.split(/\r?\n/).some((l) => ALC_ERROR_LINE.test(l.trim()))) {
+            throw new NoDiagnosticError(err.message);
+          }
+          singletonText.set(only, err.message);
+        }
         return false;
       }
     });
+    const site = (m: MutantManifestEntry) =>
+      `${m.mutantId} (${m.file}:${m.startLine} ${m.operatorName})`;
+    const notAttributable = (why: string) =>
+      `deploy failed for a reason that is not attributable to any SINGLE mutant (${why}) — either environmental (e.g. app-version monotonicity, transport, licence) or MORE THAN ONE mutant breaks the compile, which isolation could not separate; read the compiler output below for the sites it names: ${String(args.originalErr)}`;
     switch (outcome.kind) {
       case "no-repro":
-        return String(args.originalErr);
+        return { kind: "none", note: String(args.originalErr) };
       case "environmental":
-        // R190: bisection isolates ONE culprit and confirms it by compiling the complement. With
-        // two or more independent culprits every complement still fails and this branch is
-        // reached with the failure being entirely mutant-caused (measured: three `then ; else`
-        // sites in one codeunit). Say so, beside the environmental candidates, rather than
-        // pointing a reader away from the artifact.
-        return `deploy failed for a reason that is not attributable to any SINGLE mutant (${outcome.detail}) — either environmental (e.g. app-version monotonicity, transport, licence) or MORE THAN ONE mutant breaks the compile, which bisection cannot separate; read the compiler output below for the sites it names: ${String(args.originalErr)}`;
-      case "culprit":
-        return `compile failed; bisected to mutant ${outcome.culprit.mutantId} (${outcome.culprit.file}:${outcome.culprit.startLine} ${outcome.culprit.operatorName}), confirmed: fails alone, complement compiles`;
+        return { kind: "none", note: notAttributable(outcome.detail) };
+      case "isolated": {
+        const removed = new Map<MutantManifestEntry, string>();
+        for (const m of outcome.culprits) {
+          removed.set(
+            m,
+            `compile failed; mutant ${site(m)} fails to compile on its own: ${alcCodesOf(singletonText.get(m) ?? "")}`,
+          );
+        }
+        for (let i = 0; i < outcome.groupErrors.length; i += 2) {
+          const a = outcome.groupErrors[i];
+          const b = outcome.groupErrors[i + 1];
+          if (a === undefined || b === undefined) continue;
+          const note = `compile failed; mutants ${site(a)} and ${site(b)} fail to compile only together (each compiles alone)`;
+          removed.set(a, note);
+          removed.set(b, note);
+        }
+        const gone = new Set<MutantManifestEntry>([...removed.keys(), ...outcome.unresolved]);
+        return {
+          kind: "isolated",
+          removed,
+          clean: args.subsetMutants.filter((m) => !gone.has(m)),
+          unresolved: outcome.unresolved,
+          unresolvedNote: notAttributable(
+            `isolation stopped with ${outcome.unresolved.length} mutant(s) unresolved: the compile budget of ${MAX_ISOLATION_COMPILES} was spent, or more than two mutants break it together`,
+          ),
+        };
+      }
     }
   } catch (err) {
     if (err instanceof BisectPrepareError) {
-      return `${String(args.originalErr)} (bisection aborted: preparing a candidate artifact failed — ${err.message})`;
+      return {
+        kind: "none",
+        note: `${String(args.originalErr)} (isolation aborted: preparing a candidate artifact failed — ${err.message})`,
+      };
+    }
+    if (err instanceof NoDiagnosticError) {
+      return {
+        kind: "none",
+        note: `deploy failed, and a lone mutant failed with no alc error line, so no mutant is blamed (not attributable to any SINGLE mutant): ${err.message}`,
+      };
     }
     throw err;
   } finally {
     await rm(args.scratchDir, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+type DeployAttempt = { readonly alc: AlcCompileError } | { readonly done: CompiledArtifact | null };
+
+/**
+ * R734: rewrites the batch with only the `clean` mutants, under the ids they had (`original`), and
+ * deploys it. Returns the attempt, or a `note` when it cannot be trusted (the rewritten manifest is
+ * not exactly the clean set, or alc rejects the clean set too). The manifest is checked BEFORE
+ * anything is published, and `adopt` runs before the deploy so the deploy's bookkeeping sees the
+ * redeployed set. A non-alc failure from `deploy` throws, as it does for the first deploy.
+ */
+async function redeployClean(args: {
+  readonly clean: readonly MutantManifestEntry[];
+  readonly removed: ReadonlyMap<MutantManifestEntry, string>;
+  readonly original: readonly MutantManifestEntry[];
+  readonly prepare: (
+    subset: readonly MutantManifestEntry[],
+    fixedIds: ReadonlyMap<string, string>,
+    isolatedOut: readonly IsolatedOut[],
+  ) => Promise<unknown>;
+  readonly readManifest: () => Promise<MutantManifest>;
+  readonly adopt: (manifest: MutantManifest) => void;
+  readonly deploy: () => Promise<DeployAttempt>;
+}): Promise<{ readonly note: string } | { readonly attempt: DeployAttempt }> {
+  const count = `${args.removed.size} breaking mutant(s) isolated`;
+  await args.prepare(
+    args.clean,
+    fixedIdsOf(args.original),
+    [...args.removed.keys()].map((m) => ({
+      mutantId: m.mutantId,
+      file: m.file,
+      startIndex: m.startIndex,
+      endIndex: m.endIndex,
+      operatorName: m.operatorName,
+    })),
+  );
+  const next = await args.readManifest();
+  const site = (m: MutantManifestEntry) =>
+    `${m.mutantId}|${identitySiteKey(m.file, m.startIndex, m.endIndex, m.operatorName)}`;
+  const want = new Set(args.clean.map(site));
+  const got = new Set(next.mutants.map(site));
+  if (want.size !== got.size || [...want].some((s) => !got.has(s))) {
+    return {
+      note: `${count}, but the rewritten manifest does not hold exactly the clean set under its original ids, so nothing was redeployed and no mutant is scored (R734)`,
+    };
+  }
+  args.adopt(next);
+  const attempt = await args.deploy();
+  if ("alc" in attempt) {
+    return {
+      note: `${count}, but alc rejected the clean set too, so no mutant is scored (R734): ${attempt.alc.message}`,
+    };
+  }
+  return { attempt };
 }
 
 /** Production default for `SessionConfig.quarantineDir` (spec §9). Kept as a named helper (rather
@@ -6684,7 +6837,7 @@ async function runSessionBody(
           });
         }
       }
-      const manifest = JSON.parse(
+      let manifest = JSON.parse(
         await readFile(join(batchDir, "mutant-manifest.json"), "utf8"),
       ) as MutantManifest;
 
@@ -6730,7 +6883,7 @@ async function runSessionBody(
           true, // strandedSkip
         );
       }
-      const runnable = manifest.mutants.filter((m) => !strandedSkips.has(m));
+      let runnable = manifest.mutants.filter((m) => !strandedSkips.has(m));
       if (strandedSkips.size > 0 && runnable.length === 0) continue;
 
       // 1c. R90 pre-flight: refuse a FILE this tier has already MEASURED to be unpublishable,
@@ -6744,7 +6897,7 @@ async function runSessionBody(
       // authoritative backend that omitted the identity fields, which is warned about above) makes
       // the ceiling inert in BOTH directions: nothing is consulted and nothing is recorded, since
       // a ceiling keyed to no tier could only mix measurements from unrelated topologies.
-      const perFileGuards = guardsPerFile(manifest.mutants);
+      let perFileGuards = guardsPerFile(manifest.mutants);
       if (
         resourceKey !== undefined &&
         cfg.resourceServer !== undefined &&
@@ -6797,7 +6950,7 @@ async function runSessionBody(
       // The ONE file this artifact's guards came from, when there is one — recorded alongside the
       // outcome so a `failed` row can say what was too big. `undefined` for a multi-file artifact,
       // never an empty string standing in for "unknown" (mirrors `soleFileOf`, bcdev-backend.ts).
-      const soleBatchFile = perFileGuards.size === 1 ? [...perFileGuards.keys()][0] : undefined;
+      let soleBatchFile = perFileGuards.size === 1 ? [...perFileGuards.keys()][0] : undefined;
 
       // 2. history filter
       // R325: a latest finished run keyed under another identity scheme yields no keys, so nothing
@@ -6916,7 +7069,7 @@ async function runSessionBody(
         }
         candidates.set(m.mutantId, faced);
       }
-      const execute = [...runnable];
+      let execute = [...runnable];
 
       // 3. deploy — always, even for in-memory backends: they need the
       // per-batch instrumented dir just as much as a publishing backend
@@ -6924,102 +7077,121 @@ async function runSessionBody(
       // publish cost for callers, it just no longer gates this call.
       emit({ type: "phase-entered", phase: "deploy" });
       let compiled: CompiledArtifact | null = null;
-      let deployed = false;
-      let deployErr: unknown;
       const deployStartedMs = Date.now();
-      try {
-        compiled = await deployOnce(
-          cfg.backend,
-          safety,
-          leaseSession,
-          batchDir,
-          targetIdentity(projectManifest, appVersion),
-        );
-        deployed = true;
-      } catch (err) {
-        deployErr = err;
-      }
-      if (!deployed) {
-        // R709: BC could not restore after a refused upgrade; never re-stamp past it.
-        const notRestored = upgradeNotRestored(deployErr);
-        if (notRestored !== undefined) throw notRestored;
-        // 3a. version conflict: BC's downgrade rejection is machine-parseable and names the
-        // installed version verbatim. Re-stamp strictly above it, recompile, and retry
-        // EXACTLY once — a second conflict means the server's installed version is moving
-        // underneath us, and that must fail the session loudly, not loop.
-        // R461: an AlcCompileError is never read as a conflict, here or in the retry below: its text is
-        // alc's output, which now carries stdout too. A conflict is a publish answer.
-        const installed =
-          deployErr instanceof AlcCompileError ? null : parseVersionConflict(messageOf(deployErr));
-        if (installed !== null) {
-          const bumped = nextAbove(installed);
-          lastIssuedVersion = bumped;
-          appVersion = bumped;
-          await writeStampedAppJson(batchDir, projectManifest, bumped);
-          try {
-            // A fresh publish op (design §4/§6): the first attempt's marker was already
-            // tombstoned by its `EndPublish("failed")` — a version conflict is BC naming the
-            // installed version verbatim, i.e. a confirmed deterministic rejection.
-            compiled = await deployOnce(
-              cfg.backend,
-              safety,
-              leaseSession,
-              batchDir,
-              targetIdentity(projectManifest, appVersion),
-            );
-            deployed = true;
-          } catch (retryErr) {
-            const retryNotRestored = upgradeNotRestored(retryErr);
-            if (retryNotRestored !== undefined) throw retryNotRestored;
-            const stillInstalled =
-              retryErr instanceof AlcCompileError
-                ? null
-                : parseVersionConflict(messageOf(retryErr));
-            if (stillInstalled !== null) {
-              throw new Error(
-                `version conflict persisted after retry: re-stamped to ${bumped} above BC's ` +
-                  `reported ${installed}, but publish was rejected again naming ` +
-                  `${stillInstalled} — ${messageOf(retryErr)}`,
+      /**
+       * Deploys `batchDir` once, with every guard the first deploy had (R709, the version-conflict
+       * retry, R90's outcome record). Returns alc's rejection, or the compiled artifact; any other
+       * failure throws. R734 (A2): the redeploy of a clean set runs through here too, so it is
+       * never a second, weaker deploy path.
+       */
+      const deployStep = async (): Promise<
+        { readonly alc: AlcCompileError } | { readonly done: CompiledArtifact | null }
+      > => {
+        let got: CompiledArtifact | null = null;
+        let deployed = false;
+        let deployErr: unknown;
+        try {
+          got = await deployOnce(
+            cfg.backend,
+            safety,
+            leaseSession,
+            batchDir,
+            targetIdentity(projectManifest, appVersion),
+          );
+          deployed = true;
+        } catch (err) {
+          deployErr = err;
+        }
+        if (!deployed) {
+          // R709: BC could not restore after a refused upgrade; never re-stamp past it.
+          const notRestored = upgradeNotRestored(deployErr);
+          if (notRestored !== undefined) throw notRestored;
+          // 3a. version conflict: BC's downgrade rejection is machine-parseable and names the
+          // installed version verbatim. Re-stamp strictly above it, recompile, and retry
+          // EXACTLY once — a second conflict means the server's installed version is moving
+          // underneath us, and that must fail the session loudly, not loop.
+          // R461: an AlcCompileError is never read as a conflict, here or in the retry below: its text is
+          // alc's output, which now carries stdout too. A conflict is a publish answer.
+          const installed =
+            deployErr instanceof AlcCompileError
+              ? null
+              : parseVersionConflict(messageOf(deployErr));
+          if (installed !== null) {
+            const bumped = nextAbove(installed);
+            lastIssuedVersion = bumped;
+            appVersion = bumped;
+            await writeStampedAppJson(batchDir, projectManifest, bumped);
+            try {
+              // A fresh publish op (design §4/§6): the first attempt's marker was already
+              // tombstoned by its `EndPublish("failed")` — a version conflict is BC naming the
+              // installed version verbatim, i.e. a confirmed deterministic rejection.
+              got = await deployOnce(
+                cfg.backend,
+                safety,
+                leaseSession,
+                batchDir,
+                targetIdentity(projectManifest, appVersion),
+              );
+              deployed = true;
+            } catch (retryErr) {
+              const retryNotRestored = upgradeNotRestored(retryErr);
+              if (retryNotRestored !== undefined) throw retryNotRestored;
+              const stillInstalled =
+                retryErr instanceof AlcCompileError
+                  ? null
+                  : parseVersionConflict(messageOf(retryErr));
+              if (stillInstalled !== null) {
+                throw new Error(
+                  `version conflict persisted after retry: re-stamped to ${bumped} above BC's ` +
+                    `reported ${installed}, but publish was rejected again naming ` +
+                    `${stillInstalled} — ${messageOf(retryErr)}`,
+                );
+              }
+              deployErr = retryErr;
+            }
+          }
+        }
+        if (!deployed) {
+          // 3a'. R90: learn the ceiling from what just happened, BEFORE the throw below carries the
+          // error out of the session — this is the only place the outcome and the guard count that
+          // produced it are both in hand. The stored value is the outcome CATEGORY, not a boolean:
+          // R90's own measured reproduction (an external publish tool exiting 0 while its JSON body
+          // reports `{"success": false, "message": "The operation timed out."}`) arrives here as
+          // `indeterminate`, not `failed` (env-tool.ts has no `success` handling — R107). Recording
+          // the category means that failure still lands a row, tagged for what it was, instead of
+          // being silently indistinguishable from "this tier has never failed"; `knownCeiling`
+          // counts only `failed` rows, so it cannot become a refusal. See `classifyDeployFailure`
+          // for what is deliberately NOT recorded.
+          if (resourceKey !== undefined) {
+            const failureOutcome = classifyDeployFailure(deployErr);
+            if (failureOutcome !== undefined) {
+              recordPublishOutcome(
+                cfg.store,
+                resourceKey,
+                manifest.mutants.length,
+                failureOutcome,
+                soleBatchFile,
               );
             }
-            deployErr = retryErr;
           }
+          // 3b. A publish/verification failure is environmental: catalog conflict, schema sync,
+          // dependency mismatch, license, transport, NST limits. Attributing it to a mutant would
+          // be unsound, and republishing subset artifacts to diagnose it can leave a narrowed
+          // candidate installed. Only a deterministic alc rejection (AlcCompileError) is
+          // bisectable — everything else (DeploymentError, ArtifactPrepareError, a bare
+          // string/Error from some other failure) aborts the session instead of being fed into
+          // bisection (design §5; §6 restricts bisection to compile verdicts specifically).
+          // `DeploymentError` and `ArtifactPrepareError` both extend `Error` directly, not
+          // `AlcCompileError` — `instanceof` cannot cross-match them, so this guard alone is
+          // sufficient to exclude both.
+          if (!(deployErr instanceof AlcCompileError)) throw deployErr;
+          return { alc: deployErr };
         }
-      }
-      if (!deployed) {
-        // 3a'. R90: learn the ceiling from what just happened, BEFORE the throw below carries the
-        // error out of the session — this is the only place the outcome and the guard count that
-        // produced it are both in hand. The stored value is the outcome CATEGORY, not a boolean:
-        // R90's own measured reproduction (an external publish tool exiting 0 while its JSON body
-        // reports `{"success": false, "message": "The operation timed out."}`) arrives here as
-        // `indeterminate`, not `failed` (env-tool.ts has no `success` handling — R107). Recording
-        // the category means that failure still lands a row, tagged for what it was, instead of
-        // being silently indistinguishable from "this tier has never failed"; `knownCeiling`
-        // counts only `failed` rows, so it cannot become a refusal. See `classifyDeployFailure`
-        // for what is deliberately NOT recorded.
-        if (resourceKey !== undefined) {
-          const failureOutcome = classifyDeployFailure(deployErr);
-          if (failureOutcome !== undefined) {
-            recordPublishOutcome(
-              cfg.store,
-              resourceKey,
-              manifest.mutants.length,
-              failureOutcome,
-              soleBatchFile,
-            );
-          }
-        }
-        // 3b. A publish/verification failure is environmental: catalog conflict, schema sync,
-        // dependency mismatch, license, transport, NST limits. Attributing it to a mutant would
-        // be unsound, and republishing subset artifacts to diagnose it can leave a narrowed
-        // candidate installed. Only a deterministic alc rejection (AlcCompileError) is
-        // bisectable — everything else (DeploymentError, ArtifactPrepareError, a bare
-        // string/Error from some other failure) aborts the session instead of being fed into
-        // bisection (design §5; §6 restricts bisection to compile verdicts specifically).
-        // `DeploymentError` and `ArtifactPrepareError` both extend `Error` directly, not
-        // `AlcCompileError` — `instanceof` cannot cross-match them, so this guard alone is
-        // sufficient to exclude both.
-        if (!(deployErr instanceof AlcCompileError)) throw deployErr;
+        return { done: got };
+      };
+      let attempt = await deployStep();
+      if ("alc" in attempt) {
+        const deployErr = attempt.alc;
         // 3b'. R461: before blaming a mutant, does the UNMUTATED target compile? Sequential path
         // only (the one session backend).
         const compilePlainCheck = cfg.backend.compilePlainCheck?.bind(cfg.backend);
@@ -7052,7 +7224,12 @@ async function runSessionBody(
         // History filtering is an execution decision, not a compilation
         // decision. (Since R644, `execute` holds the history candidates
         // too, so each of them gets an error row below, review I1.)
-        const note = await bisectAndNote({
+        emit({
+          type: "warning",
+          code: "compile-isolation",
+          message: `[lethal] batch ${batchIdx} failed to compile: isolating the breaking mutants (at most ${MAX_ISOLATION_COMPILES} compile-only runs, R734).`,
+        });
+        const plan = await isolateAndNote({
           subsetMutants: manifest.mutants,
           scratchDir: join(cfg.instrumentedDir, `run-${runId}-batch-${batchIdx}-bisect`),
           batchFiles,
@@ -7068,11 +7245,88 @@ async function runSessionBody(
           excludeOutputs: cfg.excludeOutputs ?? [],
           configPath: cfg.configPath,
         });
-        for (const m of execute)
-          record(cfg.store, runId, m, "error", outcomes, batchIdx, emit, undefined, note);
-        emit({ type: "phase-left", phase: "deploy", elapsedMs: Date.now() - deployStartedMs });
-        continue; // batch aborted, next batch still attempted
+        // R734 A3: rows are written only once the redeploy's outcome is known, one per `execute`
+        // mutant (a stranded skip was recorded already and gets no second row). Every edge below
+        // fails closed: those mutants stay `error` with a named note, never scored.
+        const failedExecute = execute;
+        const removed =
+          plan.kind === "isolated" ? plan.removed : new Map<MutantManifestEntry, string>();
+        let restNote = plan.kind === "none" ? plan.note : plan.unresolvedNote;
+        const cleanIds = new Set(
+          plan.kind === "isolated" && plan.unresolved.length === 0
+            ? plan.clean.map((m) => m.mutantId)
+            : [],
+        );
+        // Nothing to run (empty clean set, or only stranded skips) means no redeploy.
+        if (plan.kind === "isolated" && failedExecute.some((m) => cleanIds.has(m.mutantId))) {
+          const next = await redeployClean({
+            clean: plan.clean,
+            removed: plan.removed,
+            prepare: (subset, fixedIds, isolatedOut) =>
+              prepareArtifactDir({
+                targetDir: batchDir,
+                files: batchFiles,
+                subset,
+                fixedIds,
+                isolatedOut,
+                identityOrdinals,
+                selectorIds: cfg.selectorIds,
+                projectDir: cfg.projectDir,
+                projectManifest,
+                appVersion,
+                artifactId: newArtifactId(),
+                source: sourceSnapshot,
+                excludeOutputs: cfg.excludeOutputs ?? [],
+                configPath: cfg.configPath,
+              }),
+            original: manifest.mutants,
+            readManifest: async () =>
+              JSON.parse(
+                await readFile(join(batchDir, "mutant-manifest.json"), "utf8"),
+              ) as MutantManifest,
+            deploy: deployStep,
+            // A1: from here on the batch is the redeployed one. `manifest`, `runnable`, `execute`
+            // and the history `candidates` all drop the removed mutants, so none of them can be
+            // activated, scored or lent a verdict; A8: the R90 record sees the redeployed count.
+            adopt: (m) => {
+              const executeIds = new Set(failedExecute.map((r) => r.mutantId));
+              const runnableIds = new Set(runnable.map((r) => r.mutantId));
+              manifest = m;
+              execute = m.mutants.filter((x) => executeIds.has(x.mutantId));
+              runnable = m.mutants.filter((x) => runnableIds.has(x.mutantId));
+              for (const id of [...candidates.keys()]) if (!cleanIds.has(id)) candidates.delete(id);
+              perFileGuards = guardsPerFile(m.mutants);
+              soleBatchFile = perFileGuards.size === 1 ? [...perFileGuards.keys()][0] : undefined;
+            },
+          });
+          if ("note" in next) restNote = next.note;
+          else attempt = next.attempt;
+        }
+        if (!("done" in attempt)) {
+          for (const m of failedExecute)
+            record(
+              cfg.store,
+              runId,
+              m,
+              "error",
+              outcomes,
+              batchIdx,
+              emit,
+              undefined,
+              removed.get(m) ?? restNote,
+            );
+          emit({ type: "phase-left", phase: "deploy", elapsedMs: Date.now() - deployStartedMs });
+          continue; // batch aborted, next batch still attempted
+        }
+        for (const m of failedExecute) {
+          const own = removed.get(m);
+          if (own !== undefined)
+            record(cfg.store, runId, m, "error", outcomes, batchIdx, emit, undefined, own);
+        }
       }
+      if (!("done" in attempt))
+        throw new Error("runSession: the deploy attempt ended with no outcome");
+      compiled = attempt.done;
       // 3d. provenance: correct the run row with what was ACTUALLY compiled and deployed —
       // createRun could only write a placeholder. Backends with no compiled artifact
       // (deploy: "none") have no artifact provenance to record; their run row keeps the

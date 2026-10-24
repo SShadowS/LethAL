@@ -57,6 +57,7 @@ export type {
   InstrumentedFile,
   WriteInput,
   IdentityEntry,
+  IsolatedOut,
   MutantManifest,
   MutantManifestEntry,
 } from "./project";

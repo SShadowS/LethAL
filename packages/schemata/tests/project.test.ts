@@ -1739,6 +1739,29 @@ describe("writeInstrumentedProject fixedIds (R734)", () => {
   });
 });
 
+describe("writeInstrumentedProject fixedIds, one id twice (R734)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  it("two specs given one fixed id are refused, never written as two mutants of one id", async () => {
+    const input = twoProcedureInput();
+    try {
+      const [file] = input.files;
+      if (file === undefined) throw new Error("fixture shape");
+      const fixedIds = new Map(
+        file.specs.map((s) => [
+          identitySiteKey(file.path, s.before.startIndex, s.before.endIndex, s.operatorName),
+          "M0001",
+        ]),
+      );
+      await expect(writeInstrumentedProject({ ...input, fixedIds })).rejects.toThrow(/used twice/);
+    } finally {
+      await rm(input.targetDir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("gap ids (C02-09)", () => {
   beforeAll(async () => {
     await initParser();
