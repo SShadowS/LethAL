@@ -173,9 +173,30 @@ export function findV3Pin(version: string, binarySha256: string): V3BuildPin | u
 }
 
 /**
+ * Does a leg-C reading equal the pin's entry for its fact? The gate (`classifyLegC`) and the
+ * session's mute (`pinnedDefectCoverage`) both use this one function, so they cannot drift: the fact
+ * is an own property of the pin, the verdict equals the pinned one, and the measured text matches
+ * the pinned pattern (and its extra check, if any).
+ */
+export function pinnedFactMatches(
+  pin: V3BuildPin["legC"],
+  f: { readonly fact: string; readonly verdict: string; readonly measured?: string },
+): boolean {
+  if (!Object.hasOwn(pin, f.fact)) return false;
+  const p = pin[f.fact];
+  return (
+    p !== undefined &&
+    f.verdict === p.verdict &&
+    f.measured !== undefined &&
+    p.measured.test(f.measured) &&
+    (p.extra === undefined || p.extra(f.measured))
+  );
+}
+
+/**
  * R719: which of a session's `gone` / `refused` defect facts the running build's pin already covers.
  * A fact is covered only when the pin matches the binary (`findV3Pin`: version line AND sha256), the
- * pin names that fact, AND the pin's outcome equals the one just read. `undefined` when nothing is
+ * pin names that fact with that outcome AND that measured text (`pinnedFactMatches`). `undefined` when nothing is
  * covered. `line` is the one summary a pinned session prints instead of the warnings.
  */
 export function pinnedDefectCoverage(
@@ -189,16 +210,15 @@ export function pinnedDefectCoverage(
   const issues = new Set<string>();
   for (const f of r.facts) {
     if (f.kind !== "defect" || (f.verdict !== "gone" && f.verdict !== "refused")) continue;
-    const p = pin.legC[f.fact];
-    if (p === undefined || p.verdict !== f.verdict) continue;
+    if (!pinnedFactMatches(pin.legC, f)) continue;
     muted.add(v3MuteKey(f));
-    const n = p.issue?.split("/").at(-1);
+    const n = pin.legC[f.fact]?.issue?.split("/").at(-1);
     if (n !== undefined) issues.add(`#${n}`);
   }
   if (muted.size === 0) return undefined;
   return {
     muted,
-    line: `[lethal] al-runner-v3 pin ${pin.id} covers ${muted.size} facts (${[...issues].sort().join(", ")}, R586c)`,
+    line: `[lethal] al-runner-v3 pin ${pin.id} covers ${muted.size} facts (${[...[...issues].sort(), "R586c"].join(", ")})`,
   };
 }
 

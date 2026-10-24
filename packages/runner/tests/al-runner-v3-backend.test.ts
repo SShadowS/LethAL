@@ -38,6 +38,7 @@ import {
 } from "../src/al-runner-v3-backend";
 import { MESSAGE_PREFIX_REASON, type V3ContractResult } from "../src/al-runner-v3-contract";
 import { sha256OfFile } from "../src/al-runner-v3-pin";
+import * as pinsNs from "../src/al-runner-v3-pins";
 import { AlRunnerV3CoverageJoinError } from "../src/al-runner-v3-sleep";
 import { AlcCompileError, type ArtifactIo, ArtifactPrepareError } from "../src/artifact";
 import type { TestMethodRef } from "../src/backend";
@@ -430,7 +431,11 @@ describe("R639 r9 §2: status() passes candidate into the unlike-bc refusals and
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
       const s = await b.status();
-      return { s, warned: warn.mock.calls.map((c) => String(c[0])).join("\n") };
+      return {
+        s,
+        warned: warn.mock.calls.map((c) => String(c[0])).join("\n"),
+        sha: await sha256OfFile(bin),
+      };
     } finally {
       warn.mockRestore();
     }
@@ -439,6 +444,33 @@ describe("R639 r9 §2: status() passes candidate into the unlike-bc refusals and
     const { s, warned } = await statusOf(true);
     expect(s.ok).toBe(true);
     expect(warned).toMatch(/al-runner-v3-defect-unlike-bc: refusal-row-shape/);
+  });
+  test("R719: status() passes the pin's muted set to the warnings and prints the pin line", async () => {
+    const gone = (fact: string): V3ContractResult["facts"][number] => ({
+      fact,
+      kind: "defect",
+      verdict: "gone",
+      expected: "x",
+      measured: "m",
+    });
+    const contract: V3ContractResult = {
+      facts: [gone("refusal-row-shape"), gone("none-selected-exit")],
+    };
+    const spy = spyOn(pinsNs, "pinnedDefectCoverage").mockReturnValue({
+      muted: new Set(["refusal-row-shape=gone"]),
+      line: "PINLINE",
+    });
+    try {
+      const { s, warned, sha } = await statusOf(false, contract);
+      expect(s.ok).toBe(true);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy.mock.calls[0]).toEqual([contract, VERSION, sha]);
+      expect(warned).toContain("PINLINE");
+      expect(warned).toMatch(/defect-gone: none-selected-exit/);
+      expect(warned).not.toMatch(/defect-gone: refusal-row-shape/);
+    } finally {
+      spy.mockRestore();
+    }
   });
   test("a non-candidate backend refuses, naming refusal-row-shape", async () => {
     const { s, warned } = await statusOf(false);

@@ -1,19 +1,36 @@
 // R719: a session mutes a defect-gone / defect-refused warning only when the running build's pin
 // (exact version line AND binarySha256) names that exact fact with that exact outcome.
 import { describe, expect, test } from "bun:test";
-import { type V3ContractResult, type V3Fact, v3DefectWarnings } from "../src/al-runner-v3-contract";
+import {
+  BC_HTTP_HUB_TEXT,
+  type V3ContractResult,
+  type V3Fact,
+  v3DefectWarnings,
+} from "../src/al-runner-v3-contract";
 import { V3_BUILD_PINS, pinnedDefectCoverage } from "../src/al-runner-v3-pins";
 
 const VERSION = "al-runner 3.0.0-alpha.5 (07342060e)";
 const SHA = "fd4d6d406a2f2170fccfe13413d51bbb1317b78b3ef5af3800ca9a6009b51db2";
 const OTHER_SHA = `${SHA.slice(0, -1)}${SHA.endsWith("0") ? "1" : "0"}`;
 
-const fact = (name: string, verdict: V3Fact["verdict"]): V3Fact => ({
+const ROW = (cu: number, m: string) =>
+  `{"codeunit":${cu},"method":"${m}","name":"Codeunit${cu}.${m}"`;
+// The alpha.5 readings the pin matches (the same texts as r586c-pins.test.ts).
+const MEASURED: Record<string, string> = {
+  "none-selected-exit": "exit 6, stdout 0 rows",
+  "quoted-name-unselectable": "exit 0",
+  "refusal-cascade": `[${ROW(50654, "LaterFails")},"status":"fail","durationMs":0,"message":"later","notRun":false}] exit 1`,
+  "sleep-is-noop": `N=3: 46 ms [${ROW(50660, "ShortSleep")},"status":"pass","durationMs":0,"notRun":false},${ROW(50660, "LongSleepA")},"status":"error","durationMs":0,"message":"Test exceed; no flag: 38 ms`,
+  "upstream-compile-errors": "exit 3 null",
+  "refusal-row-shape": `[${ROW(50653, "HttpGet")},"status":"fail","durationMs":0,"message":"${BC_HTTP_HUB_TEXT}","notRun":false}] exit 1`,
+  "duplicate-key-insert-raises": `[${ROW(50655, "DuplicateNamedKey")},"status":"error","durationMs":0,"message":"NotRun: out-of-scope: the test ends while the error of a duplicate-key Insert into table Probe Row is deferred: whether the test runner raises it at the end of the test is not pinned","notRun":true}] exit 7`,
+};
+const fact = (name: string, verdict: V3Fact["verdict"], measured?: string): V3Fact => ({
   fact: name,
   kind: "defect",
   verdict,
   expected: "x",
-  measured: "m",
+  measured: measured ?? MEASURED[name] ?? "m",
 });
 const GONE = [
   "none-selected-exit",
@@ -62,6 +79,19 @@ describe("R719: pin-covered defect warnings", () => {
     expect(w).toHaveLength(2);
     expect(w[0]).toMatch(/defect-gone: duplicate-key-insert-raises/);
     expect(w[1]).toMatch(/defect-refused: none-selected-exit/);
+  });
+  test("a pinned fact with the pinned outcome but a measured text the pin does not match warns", () => {
+    const r = {
+      facts: [fact("none-selected-exit", "gone", "m"), fact("refusal-row-shape", "gone")],
+    };
+    const w = warns(warnings(r, VERSION, SHA));
+    expect(w).toHaveLength(1);
+    expect(w[0]).toMatch(/defect-gone: none-selected-exit/);
+  });
+  test("sleep-is-noop: the pin's extra check (no-flag wall under 1000 ms) also gates the mute", () => {
+    const slow = MEASURED["sleep-is-noop"]?.replace("no flag: 38 ms", "no flag: 5000 ms");
+    const r = { facts: [fact("sleep-is-noop", "gone", slow)] };
+    expect(warns(warnings(r, VERSION, SHA))).toHaveLength(1);
   });
   test("no pin: all seven warn", () => {
     expect(warns(warnings(PINNED, "al-runner 3.0.0-alpha.4 (x)", SHA))).toHaveLength(7);

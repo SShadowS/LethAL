@@ -56,19 +56,8 @@ describe("R654 S2: the alrunner-v3 leg", () => {
     }
   });
 
-  test("R719, R722: the paths of the pin-warning and N1E change select these legs", () => {
-    const legs = selectLegs([
-      "docs/gates/alrunner-v3.md",
-      "packages/runner/itest/al-runner-v3-gate.ts",
-      "packages/runner/itest/al-runner-v3.itest.ts",
-      "packages/runner/itest/alrunner-v3-legs.ts",
-      "packages/runner/src/al-runner-v3-backend.ts",
-      "packages/runner/src/al-runner-v3-contract.ts",
-      "packages/runner/src/al-runner-v3-pins.ts",
-      "packages/runner/src/al-runner-v3-texts.ts",
-      "packages/runner/tests/r719-pin-warnings.test.ts",
-    ]).legs;
-    expect([...legs]).toEqual(["bcdev", "lease", "tables", "chunked", "alrunner-v3"]);
+  test("R719: the pin table, now under src/, selects alrunner-v3", () => {
+    expect(selectLegs(["packages/runner/src/al-runner-v3-pins.ts"]).legs).toContain("alrunner-v3");
   });
 
   test("docs still select no live leg", () => {

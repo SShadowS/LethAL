@@ -518,7 +518,7 @@ async function legN1(scratch: string): Promise<void> {
  * The reading is `judgeN1Serve`'s: on alpha.5 the session fails closed by name (#5798); anything
  * else is `held` (re-pre-commit) or `gate-fail`, never a silent pass.
  */
-async function legN1E(scratch: string): Promise<void> {
+async function legN1E(scratch: string, version: string): Promise<void> {
   const deps = await microsoftDeps(scratch);
   const b = new AlRunnerV3Backend(
     backendCfg({
@@ -541,7 +541,7 @@ async function legN1E(scratch: string): Promise<void> {
   } catch (e) {
     reading = { threw: e instanceof Error ? e.message : String(e) };
   }
-  const j = judgeN1Serve(reading);
+  const j = judgeN1Serve(reading, version);
   for (const l of j.lines) console.log(`  N1E: ${l}`);
   if (j.outcome === "held") throw new V3LegHeld(j.lines);
   if (j.outcome === "gate-fail") throw new LegFailure(j.lines.join("; "));
@@ -1588,7 +1588,7 @@ async function main(): Promise<void> {
         else if (leg === "S1") await legS1(scratch);
         else if (leg === "S3") await legS3(scratch);
         else if (leg === "N1") await legN1(scratch);
-        else if (leg === V3_N1E_LEG) await legN1E(scratch);
+        else if (leg === V3_N1E_LEG) await legN1E(scratch, version);
         else if (leg === "X") await legX(scratch, (l) => lines.push(l));
         else if (leg === "D1" || leg === "D1c") await legD(scratch, leg);
         // R654 S2: each leg checks its pre-committed table FIRST (gate-fail on a difference, and

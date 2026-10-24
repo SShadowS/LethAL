@@ -19,11 +19,16 @@ export const V3_K_LEG = "K";
 export const V3_K_CANDIDATE_SKIP = "skipped (candidate build)";
 
 /**
- * R722: N1's dotted test name (`Dot.Step`) under serve-entries. Outside `V3_GATE_LEGS` on purpose:
- * alpha.2 has no serve-entries path, so the update gate's leg list (and its `--regate` of an old
- * build) stays as it was; the itest still fails on anything but a pass, so `held` is never silent.
+ * R722: N1's dotted test name (`Dot.Step`) under serve-entries. A leg of the update gate
+ * (`V3_GATE_LEGS`), so a build that fixes #5798 reads `held` there, never silence. alpha.2 has no
+ * serve-entries path: `V3_NO_SERVE_ENTRIES` names it, and its refusal of `entries` is `pass`.
  */
 export const V3_N1E_LEG = "N1E";
+
+/** The exact `--version` lines of builds that have no serve-entries path (alpha.2's `.gated`). */
+export const V3_NO_SERVE_ENTRIES: readonly string[] = ["alrunner 3.0.0-alpha.2 (91253f2d6)"];
+
+const UNKNOWN_ENTRIES_FIELD = 'the request was refused: "unknown field `entries` for runTests"';
 
 /** What the N1E session did: it finished, or it threw this message. */
 export type N1EReading = { readonly completed: true } | { readonly threw: string };
@@ -33,9 +38,14 @@ export type N1EReading = { readonly completed: true } | { readonly threw: string
  * invalid: a test line without v3's row shape: {...}` for `Codeunit<n>.Dot.Step`, a line that has no
  * `codeunit` and no `method` (upstream #5798). That is the only `pass`. A finished session, or a line
  * that now has `codeunit` or `method`, is `held` (upstream may have fixed it: re-pre-commit). Any
- * other error, or the refusal for another test, is `gate-fail`.
+ * other error, or the refusal for another test, is `gate-fail`. One exception: a build in
+ * `V3_NO_SERVE_ENTRIES` that refuses the `entries` field by name is `pass` (not applicable); any
+ * other build refusing `entries` is `gate-fail`.
  */
-export function judgeN1Serve(r: N1EReading): {
+export function judgeN1Serve(
+  r: N1EReading,
+  version: string,
+): {
   readonly outcome: "pass" | "held" | "gate-fail";
   readonly lines: string[];
 } {
@@ -44,6 +54,12 @@ export function judgeN1Serve(r: N1EReading): {
     lines: [`re-pre-commit: upstream may have fixed #5798 (${why})`],
   });
   if ("completed" in r) return held("the serve-entries session completed");
+  if (V3_NO_SERVE_ENTRIES.includes(version) && r.threw.includes(UNKNOWN_ENTRIES_FIELD)) {
+    return {
+      outcome: "pass",
+      lines: ["N1E: not applicable: this build has no serve-entries path"],
+    };
+  }
   const m = /the entries answer is invalid: a test line without v3's row shape: (\{.*\})/.exec(
     r.threw,
   );
