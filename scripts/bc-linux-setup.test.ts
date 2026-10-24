@@ -15,7 +15,7 @@ import { itestLaunchName } from "../packages/runner/itest/config-path.ts";
 import { MARKER_HOST, MARKER_SERVERS } from "../packages/runner/itest/out-of-use.ts";
 import type { FetchFn } from "../packages/runner/src/activation.ts";
 import { buildFakeAppWithEntries } from "../packages/runner/tests/helpers/fake-app.ts";
-import type { AppManifest, Conn, ServerOps } from "./bc-app-content.ts";
+import type { Conn, ServerOps } from "./bc-app-content.ts";
 import {
   GATE_FIXTURES,
   HOST,
@@ -657,7 +657,6 @@ describe("--write-config-only: configs from the secret file, no server call, no 
       continiaFiles: () => [],
       controlBytes: noServer("controlBytes"),
       compile: noServer("compile"),
-      fixtures: () => new Map(),
       doctor: noServer("doctor"),
       // R669: never the real /coord; a test plants markers here.
       outOfUseDir,
@@ -876,23 +875,11 @@ describe("--write-config-only: configs from the secret file, no server call, no 
     const calls = { publish: [] as string[], continiaReads: 0, doctor: 0, take: 0 };
     const local = new Map<string, Buffer>();
     const resident = new Map<string, { pkg: Buffer; version: string }>();
-    const fixtures = new Map<string, AppManifest>();
     const last = PUBLISH_PLAN.at(-1)?.dependents.at(-1);
     for (const step of PUBLISH_PLAN) {
       for (const dir of [step.target, ...step.dependents]) {
         const b = appPkg(dir, `${dir}-id`);
         local.set(dir, b);
-        fixtures.set(dir, {
-          id: `${dir}-id`,
-          name: dir,
-          publisher: "LethAL",
-          version: "1.0.0.0",
-          ...(dir === step.target
-            ? {}
-            : {
-                dependencies: [{ id: `${step.target}-id`, name: step.target, publisher: "LethAL" }],
-              }),
-        });
         if (dir === "sandbox-probes") continue;
         resident.set(
           dir,
@@ -951,7 +938,6 @@ describe("--write-config-only: configs from the secret file, no server call, no 
         },
       }),
       continiaFiles: () => [{ bytes: continia }],
-      fixtures: () => fixtures,
       doctor: async () => {
         calls.doctor++;
         return true;
