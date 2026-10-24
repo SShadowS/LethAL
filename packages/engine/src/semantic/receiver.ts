@@ -886,6 +886,19 @@ function declarationAt(
 }
 
 /**
+ * R720: `declarationAt` for an identifier node. `null` only when the name is PROVABLY undeclared;
+ * `"unknown"` when the engine refuses to resolve it (a swallowed or unindexed member, a global
+ * declared inside `#if`, an every-arm-ambiguous name). `resolveVarRef` answers `null` for both, so
+ * R196's hang check asks this to tell absence from refusal.
+ */
+export function declarationStateAt(
+  node: ALSyntaxNode,
+  ctx: SemanticContext,
+): VarSymbol | null | "unknown" {
+  return declarationAt(stripQuotes(node.text.trim()), node, ctx.symbols);
+}
+
+/**
  * The source text whose declarations are visible at `node`: its own procedure or trigger, plus the
  * object with every OTHER procedure and trigger blanked out (offsets kept). With `node` null, every
  * procedure and trigger is blanked.
