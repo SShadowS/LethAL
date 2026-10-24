@@ -3535,10 +3535,11 @@ describe("fenced coverage — the thin-coverage diagnostic", () => {
     expect(said).not.toContain("Codeunit:79101");
   });
 
-  test("R747: more than 5 flagged objects are capped with '+N more'", async () => {
+  test("R747: more than 5 flagged objects are capped with '+N more', sorted, not in row order", async () => {
     const ids = [79160, 79161, 79162, 79163, 79164, 79165, 79166];
     const said = await saidFor(
-      ids.map((id) => ({ objectType: 1, objectId: id, lineNo: 7, hits: 1 })),
+      // Rows arrive in reverse id order: the cap must still show the lowest five.
+      [...ids].reverse().map((id) => ({ objectType: 1, objectId: id, lineNo: 7, hits: 1 })),
       {
         files: Object.fromEntries(
           ids.map((id) => [

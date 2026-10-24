@@ -1528,7 +1528,9 @@ export class BcDevMcpBackend implements ExecutionBackend {
       .map((g) => {
         const key = `${g.objectType}:${g.objectId}`;
         return `${key} (${rowsPerObject.get(key) ?? 0} row(s))`;
-      });
+      })
+      // Sorted, so the message (and which objects the cap shows) does not follow the server's row order.
+      .sort();
     this.warnOnThinFencedCoverage(
       ref,
       rows.length,

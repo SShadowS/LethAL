@@ -338,7 +338,6 @@ describe("R739: bcdev notices reach setNotify, never the console", () => {
       internals.warnOnThinFencedCoverage(REF, 3, 2, 0, ["table:79150 (2 row(s))"], []);
       // R746/R747: no flagged object (no gap, or a member row) says nothing.
       internals.warnOnThinFencedCoverage(REF, 3, 2, 0, [], []);
-      internals.warnOnThinFencedCoverage(REF, 3, 2, 0, [], []);
       expect(seen.map(([c]) => c)).toEqual([
         "fenced-coverage-no-object-rows",
         "fenced-coverage-no-procedure-lines",
