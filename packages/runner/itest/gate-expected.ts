@@ -255,8 +255,8 @@ export const LEND_FIGURES = {
  * `verify-scale` is exempt (a measurement script, R270).
  *
  * R739 (pre-commitment docs/superpowers/specs/2026-10-24-r739-warning-sets-precommitment.md, master
- * c84ae94b): session console lines became events. Deliberate moves: chunked gains
- * fenced-coverage-no-procedure-lines (R746 will make it precise), al-runner-v3/WR gains the two
+ * c84ae94b): session console lines became events. Deliberate moves: chunked gained
+ * fenced-coverage-no-procedure-lines, removed again by R746 (master d2516693), al-runner-v3/WR gains the two
  * coverage-refused-* codes, D1/D1c gain resource-rebase-collision. New step keys for verify, testapp and
  * agreement (all empty). Never pinned: the environment codes package-cache-leftover,
  * package-cache-dangling and al-runner-v3-dotnet-helper-missing.
@@ -278,9 +278,6 @@ const CDO_D = [
   "resource-rebase-collision",
   "tests-only-narrowed-baseline",
 ];
-// R739: the bcdev fenced-coverage line, now an event (Data Tests.NoTriggerValidateRunsWeak covers only a field
-// declaration; R746).
-const CHUNKED = ["fenced-coverage-no-procedure-lines", "only-narrowed-run"];
 export const GATE_WARNINGS: Readonly<Record<string, readonly string[]>> = {
   "bcdev/first": [],
   "bcdev/second": [],
@@ -289,8 +286,10 @@ export const GATE_WARNINGS: Readonly<Record<string, readonly string[]>> = {
   "bcdev-wrapped/hub": COMPILED_OUT,
   "tables/first": TABLES,
   "tables/second": TABLES,
-  "chunked/control": CHUNKED,
-  "chunked/chunked": CHUNKED,
+  // R746 (pre-commitment docs/superpowers/specs/2026-10-24-r746-chunked-pin-precommitment.md, master
+  // d2516693): fenced-coverage-no-procedure-lines no longer fires for trigger-only coverage.
+  "chunked/control": ["only-narrowed-run"],
+  "chunked/chunked": ["only-narrowed-run"],
   "harden/a": HARDEN_DEPENDENTS,
   "harden/b": HARDEN_DEPENDENTS,
   "lend/L0": [],

@@ -1,0 +1,12 @@
+{
+  "id": "ef6468b3-8053-4383-a69a-8114dd06fd12",
+  "name": "R740 Probe Target",
+  "publisher": "LethAL Probe",
+  "version": "1.0.0.1",
+  "brief": "R740 throwaway probe app, no tables.",
+  "platform": "28.0.0.0",
+  "runtime": "17.0",
+  "target": "OnPrem",
+  "idRanges": [{ "from": 93830, "to": 93839 }],
+  "features": ["NoImplicitWith"]
+}
