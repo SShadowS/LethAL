@@ -784,7 +784,7 @@ describe("RunMutantTransport.run — R53 server-side stop", () => {
     expect(v.failureMessage).toContain("stopped the session");
   });
 
-  test("R709: a wall-clock step back during the held request does not shorten the stop row", async () => {
+  test("R710: a wall-clock step back during the held request does not shorten the stop row", async () => {
     const { fetchFn, answer } = heldFetch();
     const realNow = Date.now;
     let stepped = false;
@@ -796,9 +796,14 @@ describe("RunMutantTransport.run — R53 server-side stop", () => {
         onBudgetExceeded: async () => {
           stepped = true; // the host corrects the clock while BC holds the request
           answer(new Response(AL_STOP_BODY, { status: 408 }));
+          // The stop confirms a little LATE: the grace wait (`stopDeadline` in execute, `left` in
+          // settleStop) must read one clock on both sides, or the wait is skipped and the state
+          // stays `issued`.
+          await new Promise((r) => setTimeout(r, 20));
           return { stopped: true };
         },
       });
+      expect(v.stopState).toBe("confirmed");
       expect(v.outcome).toBe("timeout");
       expect(v.durationMs).toBeGreaterThanOrEqual(20);
       expect(v.durationMs).toBeLessThan(20 + 30_000);

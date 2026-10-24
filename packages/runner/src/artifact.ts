@@ -197,7 +197,9 @@ export async function buildPackageCacheCopy(
     }
     await linkOrCopy(fs, controlSymbolPath, join(copy, CONTROL_SYMBOL_FILE));
   } catch (e) {
-    await removePackageCacheCopy(copy).catch(() => {});
+    await removePackageCacheCopy(copy).catch((err) =>
+      console.warn(`[lethal] could not remove the package cache copy ${copy}: ${String(err)}`),
+    );
     throw e;
   }
   return copy;

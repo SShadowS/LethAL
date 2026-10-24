@@ -12,6 +12,7 @@ import { AppMethodIndex } from "../src/app-package";
 import {
   AlcCompileError,
   ArtifactCompiler,
+  ArtifactPrepareError,
   DeploymentError,
   InstalledArtifactError,
   defaultArtifactIo,
@@ -1512,6 +1513,80 @@ describe("BcDevMcpBackend.deploy", () => {
       // Even on a compile failure, the staged copy must not linger — same `finally` cleanup as
       // the success path above.
       await expect(stat(`${dir}-staged`)).rejects.toThrow();
+    } finally {
+      await rmStaged(dir);
+      await rm(dir, { recursive: true, force: true });
+    }
+    // R708: a long lock costs 4.5 s in deploy() and 4.5 s more in rmStaged: past Bun's 5 s default.
+  }, 15_000);
+
+  /** R708: a deployment whose compile throws and whose staged-copy removal is the given fake. */
+  async function stagedCleanupBackend(
+    dir: string,
+    removeDir: (path: string) => Promise<void>,
+  ): Promise<BcDevMcpBackend> {
+    const fakeCompiler = {
+      compile: async () => {
+        throw new AlcCompileError("boom");
+      },
+    } as unknown as ArtifactCompiler;
+    return new BcDevMcpBackend(
+      {
+        mcpCommand: ["unused"],
+        project: "/al",
+        server: "http://bc",
+        serverInstance: "BC",
+        ...(await controlStaging(dir)),
+      },
+      undefined,
+      {
+        compiler: fakeCompiler,
+        deployer: {} as ContainerDeployer,
+        verifier: {} as DeploymentVerifier,
+        harnessVerifier: fakeHarnessVerifier(),
+        removeDir,
+      },
+    );
+  }
+
+  test("R708: a staged copy that cannot be removed is named in a warning and never masks the compile error", async () => {
+    const dir = scratch("lethal-bcdev-deploy-stage-cleanup-warns-");
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const removed: string[] = [];
+    try {
+      await writeDeployInputs(dir);
+      const backend = await stagedCleanupBackend(dir, async (path) => {
+        removed.push(path);
+        // The first call is stageForCompile clearing a stale copy (none here); the second is the
+        // cleanup after the compile.
+        if (removed.length === 1) return;
+        throw Object.assign(new Error("EBUSY: locked"), { code: "EBUSY" });
+      });
+      await expect(backend.deploy(dir)).rejects.toBeInstanceOf(AlcCompileError);
+      expect(removed).toEqual([`${dir}-staged`, `${dir}-staged`]);
+      const warned = warn.mock.calls.map((c) => String(c[0]));
+      expect(
+        warned.filter(
+          (m) =>
+            m.includes("could not remove the staged compile copy") && m.includes(`${dir}-staged`),
+        ).length,
+      ).toBe(1);
+    } finally {
+      warn.mockRestore();
+      await rmStaged(dir);
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("R708: stageForCompile refuses by name when a stale staged copy is still there after clearing", async () => {
+    const dir = scratch("lethal-bcdev-deploy-stage-stale-");
+    try {
+      await writeDeployInputs(dir);
+      await mkdir(`${dir}-staged`, { recursive: true });
+      const backend = await stagedCleanupBackend(dir, async () => {});
+      const err = await backend.deploy(dir).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ArtifactPrepareError);
+      expect(String(err)).toContain(`${dir}-staged`);
     } finally {
       await rmStaged(dir);
       await rm(dir, { recursive: true, force: true });

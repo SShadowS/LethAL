@@ -104,7 +104,7 @@ function stampManyStop(
 }
 
 /**
- * R709: the clock for every elapsed-time reading in this file. Monotonic, so a wall-clock step
+ * R710: the clock for every elapsed-time reading in this file. Monotonic, so a wall-clock step
  * (WSL2 time sync) cannot shorten or lengthen a measured duration. `Date.now()` stays only for
  * wall timestamps (trace `at:`, poll `sentAt`).
  */
