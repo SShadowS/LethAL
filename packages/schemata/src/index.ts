@@ -72,7 +72,7 @@ export type { ReachGrain } from "./dispatch";
 export { resolveSite, resolveStatement, isMutableSite } from "./enclosing";
 // R-307 O6: the trial runs PLAN only (`planOneFile`); `emitOneFile` is exported so a test can pin
 // that the trial never calls it.
-export { planOneFile } from "./project-plan";
+export { objectHeadersOf, planOneFile } from "./project-plan";
 export type { FilePlan, PlannedMutant } from "./project-plan";
 export { emitOneFile } from "./project-emit";
 export type { ResolvedSite } from "./enclosing";
