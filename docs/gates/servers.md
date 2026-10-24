@@ -94,8 +94,7 @@ duplicate entry. The decision, in order:
 | anything but exactly one installed row at the downloaded package's version, or a package that cannot be digested | `refuse content-unknown` (the owner) |
 | the same digest | `skip` |
 | a lower version | `publish upgrade` (nothing removed) |
-| the same version, other content, a target with an installed fixture dependent | `refuse same-version-target` (not measured; R623) |
-| the same version, other content, otherwise | `publish in place` |
+| the same version, other content (a target under an installed fixture dependent too; measured on bc2, R623) | `publish in place` |
 | a higher version, a target a gate deploys itself (`gateDeploys`) whose resident build is instrumented | `kept` (setup only; R605 ruling (a)) |
 | a higher version, anything else | `refuse above-build` |
 

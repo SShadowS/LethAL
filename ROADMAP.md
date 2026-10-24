@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**30 of 700 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**28 of 703 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -572,7 +572,7 @@ that ordering is the priority.
 - **R194** · On a hosted sandbox the gateway drops idle keep-alive sockets, the next RunMutant write fails after dispatch, and a request the server provably never started is still reconciled as `unresolved` and quarantines the tier · [R194.md](docs/roadmap/R194.md) · done — both halves 2026-09-02. Half 1 (`bc-fetch.ts`): every HTTPS request to BC on a fresh connection. Half…
 - **R198** · One RunMutant call runs one test method, so a survivor with 35 covering tests costs 35 round trips, and on a hosted sandbox the round trip is most of the cost: 0.46 s a call against 0.11 s for the same tests on a container · [R198.md](docs/roadmap/R198.md) · done (`0451532`, control app 1.0.0.17) — 2026-09-03. Built to the converged design…
 - **R200** · al-runner 2.10.0.0 prints NO `[provision]` sentence on a warm cache, so R147's platform-app pin had nothing to read and `itest:alrunner` refused on `platformAppsDir` again · [R200.md](docs/roadmap/R200.md) · done (`parseAlRunnerPlatformAppsDir`, basis `selected-artifact`) — 2026-09-02, same day. The pin now falls…
-- **R202** · The held request of a session ended by R53's stop can answer HTTP 400 ("Cannot establish a connection to the SQL Server/Database") instead of the 408 that names the AL StopSession call; the transport then quarantines the tier the stop existed to score · [R202.md](docs/roadmap/R202.md) · open — filed 2026-09-03 from the R198 probe (`scripts/r198-group-runner-probe/`, Cronus283): 1 of 34 stops…
+- **R202** · The held request of a session ended by R53's stop can answer HTTP 400 ("Cannot establish a connection to the SQL Server/Database") instead of the 408 that names the AL StopSession call; the transport then quarantines the tier the stop existed to score · [R202.md](docs/roadmap/R202.md) · closed 2026-10-24 — fail-closed on every path: a 400 after an unrefused stop is only ever `stranded` plus a…
 - **R203** · A successful R53 stop whose session finishes the test before `StopSession` lands makes phase 3 refuse `lease-invalid`, which the client classifies as a GENUINE lease loss and invalidates the batch, with a note that names the wrong cause · [R203.md](docs/roadmap/R203.md) · done (`0451532`, with R198) — 2026-09-03. `TryFinishRun` answers `reason: op-stopped` when the lease tuple…
 - **R204** · R53's stop can land between a test's last statement and phase 3's commit, and the 408 then scores `timeout-killed` for a test that PASSED; the window is inherited by every stop and R198 makes each one smaller but adds one per method · [R204.md](docs/roadmap/R204.md) · closed 2026-10-24 — narrowed three times…
 - **R206** · A grouped call runs a mutant's covering tests in ONE BC session, so `SingleInstance` state carries from test to test where the per-request path gave every test a cold session: 8 of 741 verdicts moved `survived` to `killed` on Document Output, all cache code, all killed at group position 2 or later · [R206.md](docs/roadmap/R206.md) · done (`59081aa`, control app 1.0.0.18 in `a4ece0b`) — option (A) built after five design revisions and four…
@@ -593,7 +593,7 @@ that ordering is the priority.
 - **R264** · Unit tests read the machine's REAL al-runner secondary cache, so `doctor-cli.test.ts`, `doctor-al-runner.test.ts` and `al-runner-cache.test.ts` time out once it grows (30 fail at 5 s on a 5.4 GB cache) · [R264.md](docs/roadmap/R264.md) · done (7e27b0b, a3d961f)
 - **R267** · Two stale al-runner claims outside the agent docs: the run-time warning still describes the v1 `asserterror` bug, and `fixtures/README.md` still quotes `itest:alrunner` at 3 / 16 / 0 · [R267.md](docs/roadmap/R267.md) · done (cba033cc)
 - **R269** · `itest:testapp` hard-codes the sandbox-tests version 1.0.0.2, so it fails since GH-09 bumped the fixture to 1.0.0.3 · [R269.md](docs/roadmap/R269.md) · done (61f1f80)
-- **R271** · harden, verify, testapp and agreement are not in the agentflow gate table, because LEG_CONTAINER cannot name Cronus28 · [R271.md](docs/roadmap/R271.md) · open
+- **R271** · harden, verify, testapp and agreement are not in the agentflow gate table, because LEG_CONTAINER cannot name Cronus28 · [R271.md](docs/roadmap/R271.md) · done (89e53d7c)
 - **R290** · R-236b's fix has no early readback and no restart recovery: a lost reply still waits the full budget, and a wedge still needs a manual coord ask · [R290.md](docs/roadmap/R290.md) · closed 2026-10-24 — moot since R-236c: no TestPage test is sent, so its lost reply cannot occur
 - **R291** · R-236c: refuse TestPage tests up front instead of dispatching them and risking a lost reply · [R291.md](docs/roadmap/R291.md) · done (71b8df1b)
 - **R314** · A native Rust tree-sitter-al parser (RUST-01 spike) parsed BaseApp 1.8x SLOWER than the WASM path; the Rust route stopped at its pre-committed bar · [R314.md](docs/roadmap/R314.md) · closed 2026-09-29: superseded by RUST-02/RUST-03 (clang build; native switch landed 9f7cb5f0)
@@ -678,12 +678,12 @@ that ordering is the priority.
 - **R590** · al-runner: a kill through a DROPPED dependency object (NavNCLMissingMethodException) is scored killed, where BC would run it · [R590.md](docs/roadmap/R590.md) · done (8818860c)
 - **R595** · itest:verify fails on master: its pinned gap ids predate R276's gapIdOf change · [R595.md](docs/roadmap/R595.md) · done (d7683ff3)
 - **R596** · bc-linux-setup writes no selectorIds into the sandbox-harden config, so itest:agreement refuses on bc servers · [R596.md](docs/roadmap/R596.md) · done (c881d0ba)
-- **R597** · lethal verify's test-app-version-below-resident refusal tells the user to run Sync-NAVApp, a Windows/BcContainerHelper-only fix, on the Linux bc servers too · [R597.md](docs/roadmap/R597.md) · open, filed 2026-10-21
+- **R597** · lethal verify's test-app-version-below-resident refusal tells the user to run Sync-NAVApp, a Windows/BcContainerHelper-only fix, on the Linux bc servers too · [R597.md](docs/roadmap/R597.md) · done (89e53d7c)
 - **R598** · scripts/bc-linux-setup.ts takes its bc server lease in lane `code`'s name, whoever runs it · [R598.md](docs/roadmap/R598.md) · done (7dd00798)
 - **R602** · al-runner-v3 coverage for multi-object and single-wrapper #if files: measured correct, admitted (and a shipping lost-kill defect fixed) · [R602.md](docs/roadmap/R602.md) · done (7b3dd27b) — v3 coverage is on for multi-object and single-wrapper #if projects; gate legs MO and WR…
 - **R599** · scripts/bc-linux-setup.ts compares app versions, not contents, so a fixture rebuilt without a version bump keeps a stale build resident · [R599.md](docs/roadmap/R599.md) · done (d89d6eb4): decides by normalised content digest; live on bc3 twice (run 2 on this head)
 - **R603** · CI's Windows check job runs the unit suite serially; a parallel run there is unmeasured · [R603.md](docs/roadmap/R603.md) · done (6d3f654b)
-- **R605** · The dev endpoint refuses a publish below the installed-version record after an unpublish, so a minted gate version cannot be replaced by the app.json build on the Linux bc servers · [R605.md](docs/roadmap/R605.md) · open
+- **R605** · The dev endpoint refuses a publish below the installed-version record after an unpublish, so a minted gate version cannot be replaced by the app.json build on the Linux bc servers · [R605.md](docs/roadmap/R605.md) · closed 2026-10-24 — measured on bc2 (R-623): after uninstall and unpublish, a publish below the…
 - **R606** · al-runner v3 serve: resources are in the warm compile key, so a changed resource file forces a full recompile although resources reach the VM only at run time (upstream #5635's first half; local build and measurement only, no PR) · [R606.md](docs/roadmap/R606.md) · closed 2026-10-22 — ruling (owner): implemented upstream…
 - **R607** · al-runner-v3: snapshot reuse and --resume drop the [v3-refused-test-nearby] note · [R607.md](docs/roadmap/R607.md) · closed 2026-10-23 — fixed by R678 (3d78e671)
 - **R608** · al-runner-v3: the compile proof does not bind non-.al files, <testDir>/.alpackages or subfolders of <deps> · [R608.md](docs/roadmap/R608.md) · done (86903c8b)
@@ -698,7 +698,7 @@ that ordering is the priority.
 - **R617** · bc-linux-setup --held-lease has no test: nothing checks it never takes or releases a lease · [R617.md](docs/roadmap/R617.md) · done (8daecd3f)
 - **R621** · --resume carries a stored no-coverage verdict without checking it against this session's coverage: always in a wholly carried batch (replayCarriedBatch), and in a partly carried one (scoreBatch) whenever this session covers the mutant · [R621.md](docs/roadmap/R621.md) · done (91683742)
 - **R622** · A full verify HUNG for 10 minutes in real-home-guard.test.ts (one worker at 100% CPU, no timeout fired) instead of failing; not reproduced · [R622.md](docs/roadmap/R622.md) · done (854d0c6b)
-- **R623** · An in-place same-version publish of a fixture TARGET under an installed dependent is not measured, so bc-linux-setup.ts and bc-republish.ts refuse it by name · [R623.md](docs/roadmap/R623.md) · open
+- **R623** · An in-place same-version publish of a fixture TARGET under an installed dependent is not measured, so bc-linux-setup.ts and bc-republish.ts refuse it by name · [R623.md](docs/roadmap/R623.md) · done (1c38026f)
 - **R624** · bc-linux-setup.ts's downloadSymbols and the Continia step's residentVersion read any failed dev/packages answer as "absent" · [R624.md](docs/roadmap/R624.md) · done (fb1a753a)
 - **R625** · 123 tracked scripts/*.ts files are outside scripts/tsconfig.json, so bun run typecheck never sees them (24 of them tests) · [R625.md](docs/roadmap/R625.md) · done (c15286fe)
 - **R626** · corpus-snapshot's heavy-job guard counts a parallel itest:alrunner's al-runner children as separate jobs · [R626.md](docs/roadmap/R626.md) · done (bb55c64c)
@@ -745,6 +745,9 @@ that ordering is the priority.
 - **R693** · Leg C's timeout-is-cpu flips with core-0 conditions; every v3 leg C and the daily update gate read gate-fail · [R693.md](docs/roadmap/R693.md) · done (b9942236)
 - **R694** · al-runner v3 marks a later failure after a refusal as not trusted but not a later timeout; LethAL now refuses such a timeout · [R694.md](docs/roadmap/R694.md) · done (aa970869)
 - **R704** · Test A7 (the preload moves HOME and TMPDIR in every --parallel worker) fails on CI's Windows runner; it skips there until the cause is read · [R704.md](docs/roadmap/R704.md) · done (208a85fb)
+- **R705** · v3 contract probe serve-keep-reasons is blind on #5602-fixed builds: its tests app holds a non-compiling codeunit (50674) · [R705.md](docs/roadmap/R705.md) · open, filed 2026-10-24
+- **R707** · What BC does with an installed dependent (a fixture tests app) when its target is republished with changed SIGNATURES is not measured; the worst case under-reports · [R707.md](docs/roadmap/R707.md) · open, filed 2026-10-24
+- **R706** · Measure #5700's HTTP refusal text in a client session on a leased bc server (the only LethAL-side way to settle unlike-bc) · [R706.md](docs/roadmap/R706.md) · open, filed 2026-10-24
 
 ---
 

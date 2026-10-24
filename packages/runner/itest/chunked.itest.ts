@@ -90,6 +90,7 @@ import {
 } from "./config-path";
 import { CHUNKED_FIGURES } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import { CHUNKED_SUBLEGS } from "./gate-sublegs";
 import { killReproductionFailures, latestRunId } from "./kill-reproduction";
 import { assertReachEvidence, assertReachIdenticalAcrossLegs } from "./reach-evidence";
 
@@ -515,7 +516,7 @@ async function main(): Promise<void> {
 
     console.log("chunked itest: PASS");
     await emitPassed("chunked", {
-      sublegs: ["unbounded", "chunked-2"],
+      sublegs: [...CHUNKED_SUBLEGS],
       artifacts: { reported: false },
     });
   } finally {
