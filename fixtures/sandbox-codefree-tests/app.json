@@ -1,0 +1,35 @@
+{
+  "id": "2f8d4b6a-9c17-4e53-a0b8-1d6e3c7f5a92",
+  "name": "LethAL Sandbox CodeFree Tests",
+  "publisher": "LethAL",
+  "version": "1.0.0.2",
+  "brief": "LethAL R-579 fixture: tests for the code-free target.",
+  "description": "Kills most mutants of CF Active, CF Inactive, CF First, CF Second and CF Plain; one survives on purpose (see CFTests.Codeunit.al). Asserts via Error(), no Library Assert. Not for production use, see fixtures/README.md.",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "dependencies": [
+    {
+      "id": "e3a1c7d4-5b2f-4a96-8d10-7f4b9c2e6a31",
+      "name": "LethAL Sandbox CodeFree",
+      "publisher": "LethAL",
+      "version": "1.0.0.0"
+    }
+  ],
+  "screenshots": [],
+  "idRanges": [
+    {
+      "from": 79950,
+      "to": 79999
+    }
+  ],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "17.0",
+  "features": []
+}
