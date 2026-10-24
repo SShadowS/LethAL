@@ -29,3 +29,15 @@ harden-answers), Sandbox Tests 0.
 Any figure difference is a BLOCK. A warning where none is predicted, or none where one is predicted, is a finding to
 explain before submit. If a server holds an extra published version of a fixture tests app, N can exceed 1 there;
 that would be R727's known limit (published, not installed), named per server.
+
+## Addendum (2026-10-24, from the build review, before any gate ran)
+- **`itest:hang` is the one gate where an R727 warning FAILS the gate.** Check 11 in
+  `packages/runner/itest/hang-baseline-leg.ts` compares the baseline leg's warning codes with an exact list
+  (`operator-narrowed-run`, `tests-only-narrowed-baseline`).
+- Hang runs on bc3 only. There `DependentCount` for Sandbox Hang is 1 and its tests app declares the target (K = 1),
+  so the prediction stands: **no R727 warning, hang passes unchanged.**
+- A hang failure on check 11 naming `installed-dependents` is a BLOCK to explain, not a figure move. That includes a
+  transient "could not check", a new flake path the code adds. Either the server's dependents changed, or the read
+  failed.
+- **Gates the original list left out:** bcdev-names, bcdev-wrapped, envtool and lend. None asserts on this warning
+  code, and their figures are predicted unchanged.
