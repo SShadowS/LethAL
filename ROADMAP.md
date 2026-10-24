@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**24 of 728 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**24 of 729 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -323,6 +323,7 @@ that ordering is the priority.
 - **R721** · A global declared inside a var-section `#if` is not collected, so R196's hang refusal declined a loop write to it and deployed a mutant that can hang · [R721.md](docs/roadmap/R721.md) · done (bc0f9a8f)
 - **R725** · Hang readers that treat a null `resolveVarRef` as "absent": the r531/R696 write collectors read it as the implicit Rec, and R572 drops a var-out flag, inside swallowed members, `#if` globals and ambiguous names · [R725.md](docs/roadmap/R725.md) · done (e07c78ec)
 - **R737** · A callee receiver declared inside a var-section `#if` (or every-arm-ambiguous) is never followed: `declaredType`'s text fallback skips preprocessor nodes · [R737.md](docs/roadmap/R737.md) · open, filed 2026-10-24 (found by R-725's review; not built)
+- **R738** · Silent under-report risk: an altool publish that removes a member an installed tests app calls is accepted, and the tests then fail at run time instead of being refused as a stale tests app · [R738.md](docs/roadmap/R738.md) · open, filed 2026-10-24 (measure through a real test run first)
 
 ## Product gaps a real project hits
 
@@ -768,7 +769,7 @@ that ordering is the priority.
 - **R716** · r391-cross-file-twin.test.ts's two file-backed stores sat on disk, the one place R616's tmpfs move missed, so its R565 NULL-digest test timed out under a parallel verify · [R716.md](docs/roadmap/R716.md) · done (11c504df)
 - **R719** · mute al-runner-v3-defect-gone / -refused session warnings for facts a per-build pin covers · [R719.md](docs/roadmap/R719.md) · done (091e8df2)
 - **R722** · No committed v3 leg covers N1 (dotted test names) under serve-entries; alpha.5's serve rows drop codeunit and method for such names (#5798) · [R722.md](docs/roadmap/R722.md) · done (091e8df2)
-- **R728** · BC's not-reinstalled list is measured only over a direct HTTP publish; through altool (a real run) it may never parse · [R728.md](docs/roadmap/R728.md) · open, filed 2026-10-24 (a small bc2 measurement)
+- **R728** · BC's not-reinstalled list is measured only over a direct HTTP publish; through altool (a real run) it may never parse · [R728.md](docs/roadmap/R728.md) · closed 2026-10-24 — measured: no not-reinstalled list on altool's path (measure.md, pre-commitment 9f26ffac)
 - **R723** · The v3 update gate tried candidates oldest first, so two predicted fails ran before the newest release · [R723.md](docs/roadmap/R723.md) · done (3d805efe)
 - **R724** · `corpus-snapshot.ts` exits 2 for every refusal, so a retry loop cannot tell "heavy slot busy, try later" from "no master entry, never retry" · [R724.md](docs/roadmap/R724.md) · done (8d978cc9)
 - **R726** · A single-process I/O stall on the Windows CI job timed out 27 resume tests at 5 s, and verify's CI console named none of them · [R726.md](docs/roadmap/R726.md) · open, mitigated (8d978cc9): resume.test.ts has a 30 s per-test timeout, and verify prints each failure's…

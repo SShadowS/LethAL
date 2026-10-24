@@ -1,6 +1,9 @@
 # R728 probe: the error a real `lethal run` gets when an altool upgrade publish is refused
 
-**Status: built and compiled offline only, run on NO server.**
+**Status: run once on bc2, 2026-10-24 18:57:34Z (R-728, pre-commitment 9f26ffac; every build's sha256 matched).
+Result: the altool publish of T2 was ACCEPTED, with no refusal (`/coord/handoff/R-728/measure.md`, R728, R738). Do not
+re-run without a rebuild under a new pre-commitment: bc2 holds T's installed-version record at 1.0.0.2 until a
+restart (R605).**
 
 Question (R728): R-709b measured BC's 422 "could not be restored ... could not be reinstalled ... to do so:"
 text over a DIRECT HTTP publish. A real run publishes through altool, via LethAL's own `ContainerDeployer`
