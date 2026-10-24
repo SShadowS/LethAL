@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**24 of 710 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**24 of 711 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -133,7 +133,7 @@ that ordering is the priority.
 - **R323** · A named return value is not a declaration to type resolution, so when a global shares its name the global's type authorizes a mutant that does not compile · [R323.md](docs/roadmap/R323.md) · done (a1f0e093..c65ffb5c)
 - **R324** · A call's type is taken from the first procedure of that name, so an overloaded name can type a call by the wrong overload and authorize a mutant that does not compile · [R324.md](docs/roadmap/R324.md) · done (db641338)
 - **R325** · Identity keys carry no scheme version, so an engine change that renumbers ordinals can hand an old mutant's verdict to a new mutant through history, resume or equivalence marks · [R325.md](docs/roadmap/R325.md) · done (f10a1051)
-- **R327** · A split-header procedure after an object-level `var` section parses INSIDE that section; before the R-302 fix round its names typed by the object's GLOBALS, an `alc`-failing false site · [R327.md](docs/roadmap/R327.md) · closed 2026-10-06 — stated limit: 0 swallowed members in 20,598 corpus files; the engine guard holds…
+- **R327** · A split-header procedure after an object-level `var` section parses INSIDE that section; before the R-302 fix round its names typed by the object's GLOBALS, an `alc`-failing false site · [R327.md](docs/roadmap/R327.md) · closed 2026-10-06 — stated limit: 0 swallowed SPLIT-HEADER members in 20,598 corpus files; the engine guard…
 - **R330** · The symbol table does not index declarations inside a `#if` region, so name resolution reads through them: a call is typed as unique and a local fails to hide a global · [R330.md](docs/roadmap/R330.md) · done (7b8409c7, d0a0a9e4)
 - **R331** · The Tier-2 rule-3 guard does not see a `#if`-wrapped procedure, so a table's own procedure of a built-in name can be claimed as the built-in · [R331.md](docs/roadmap/R331.md) · done (84f38b9f)
 - **R336** · The grammar does not parse `tableextension ... extends <number>`, so the whole extension becomes a root ERROR node · [R336.md](docs/roadmap/R336.md) · closed 2026-10-06 — stated limit: 0 in 20,598 corpus files, no wrong mutant…
@@ -314,6 +314,7 @@ that ordering is the priority.
 - **R702** · Moved-walk refusal follows no callee from a Next loop's body, and does not cover temporary walks · [R702.md](docs/roadmap/R702.md) · open, filed 2026-10-24
 - **R703** · After the release: read the platform's committed test result after a stop (R-204b Part B, a LethAL Control change), and measure BC's CPU-only cancel latency and a slow test's spread near its budget, to size and narrow R204's residual false timeout-killed window · [R703.md](docs/roadmap/R703.md) · open, filed 2026-10-24 — after the first release (orchestrator ruling)
 - **R710** · Transport durations were measured with the wall clock, so a clock step could record a stop row shorter than its budget (hang gate, bc3) · [R710.md](docs/roadmap/R710.md) · done (2502f82b)
+- **R720** · Whole members in a `#if` right after the global `var` section parse INSIDE that section, so the symbol table never indexes them: 235 compiled-in members lose their typed sites · [R720.md](docs/roadmap/R720.md) · open, deferred 2026-10-24 — no wrong mutant (the R-302 guard holds); typed sites lost in 235 compiled-in…
 
 ## Product gaps a real project hits
 
@@ -415,7 +416,7 @@ that ordering is the priority.
 - **R311** · Even past the parser's WASM heap limit, `writeInstrumentedProject` cannot serialize a whole-BaseApp manifest: `JSON.stringify` runs out of memory · [R311.md](docs/roadmap/R311.md) · done (054a9774)
 - **R315** · No offline alc compile of a real corpus's emitted target: dc's Continia dependencies are not staged at a compatible version on this machine · [R315.md](docs/roadmap/R315.md) · open, filed 2026-09-28; blocked on an owner step (re-measured 2026-10-23, R-315)
 - **R333** · Low priority: the trigger-local rule drops four valid BaseApp mutants where the trigger local and the global it shadows have the same type · [R333.md](docs/roadmap/R333.md) · closed 2026-10-24 — already fixed by R340 (e6c71f72), which types a trigger's own locals by their…
-- **R334** · Low priority: index `#if`-wrapped members under the every-arm rule, to recover the typed sites the R-302 fail-safe refuses · [R334.md](docs/roadmap/R334.md) · open, deferred 2026-10-24 — mostly recovered by R405 (a) (bd5ce769), not R340: 47 of the 49 pinned rows still…
+- **R334** · Low priority: index `#if`-wrapped members under the every-arm rule, to recover the typed sites the R-302 fail-safe refuses · [R334.md](docs/roadmap/R334.md) · closed 2026-10-24 — fixed for the build's arm by R405 (a) (bd5ce769), not R340: 47 of the 49 pinned rows…
 - **R340** · Resolve trigger header names: a trigger's parameters, `var` locals and named return are unknown since R330 and R323, so no typed operator reaches them · [R340.md](docs/roadmap/R340.md) · done (e6c71f72)
 - **R376** · A `#if` in a single-statement slot is not lifted by R214, so its arm statements are still not sites (exclusion `slot`) · [R376.md](docs/roadmap/R376.md) · closed 2026-10-05 — 0 lost sites in every corpus; unit repro only (R-364 census)
 - **R380** · Upstream: tree-sitter-al scopes `not` over a following `and` or `or` in a `#if` condition · [R380.md](docs/roadmap/R380.md) · open, filed 2026-10-01
