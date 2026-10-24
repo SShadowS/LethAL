@@ -17,7 +17,7 @@ import type { V3EntriesStats } from "../src/al-runner-v3-backend";
 import { applyTPin, pinnedFactMatches } from "../src/al-runner-v3-pins";
 import type { V3BuildPin, XbPin } from "../src/al-runner-v3-pins";
 import { AlRunnerV3CoverageJoinError } from "../src/al-runner-v3-sleep";
-import { isGateWarningsError } from "./gate-warnings";
+import { GateWarningsMismatchError } from "./gate-warnings";
 import { bareHashRows, compareMutants } from "./mutant-equality";
 import type { MutantComparison, NormalizedMutant } from "./mutant-equality";
 
@@ -810,7 +810,9 @@ export class V3LegHeld extends Error {
 export function legOutcomeOfError(err: unknown, leg?: string): V3LegOutcome {
   if (err instanceof V3LegHeld) return "held";
   if (err instanceof V3LegFailure) return "gate-fail";
-  if (isGateWarningsError(err)) return "gate-fail";
+  // R736: codes that differ from the recorded set judge the build; a set nobody recorded is LethAL's
+  // own gap, never a verdict on the binary (the update script keeps a gate-fail for good).
+  if (err instanceof GateWarningsMismatchError) return "gate-fail";
   if (err instanceof AlRunnerV3CoverageJoinError) return "gate-fail";
   if (err instanceof AlRunnerCoverageFrameError && (leg === "MO" || leg === "WR")) {
     return "gate-fail";

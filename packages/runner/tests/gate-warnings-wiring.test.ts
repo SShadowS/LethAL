@@ -81,5 +81,9 @@ describe("gate-warnings wiring", () => {
     );
     expect(ok.missing).toEqual([]);
     expect(ok.bare).toBe(0);
+    // A name in a comment or a string is not a call.
+    const fake = scan("runSession({}); // finishGate()\nconst s = 'collectWarnings()';");
+    expect(fake.missing).toContain("finishGate");
+    expect(fake.missing).toContain("collectWarnings");
   });
 });

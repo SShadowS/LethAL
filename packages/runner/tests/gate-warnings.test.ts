@@ -182,9 +182,9 @@ describe("al-runner-v3 gate and observe mode (R736)", () => {
     expect(observeWithReceiptRefusal(false, "/x/receipt.json")).toBeUndefined();
   });
 
-  test("a warning-set error is a gate-fail, not an infra-fail", () => {
+  test("differing codes are a gate-fail; an unrecorded set is an infra-fail, never a verdict on the build", () => {
     expect(legOutcomeOfError(new GateWarningsMismatchError("m"))).toBe("gate-fail");
-    expect(legOutcomeOfError(new GateWarningsUnrecordedError("m"))).toBe("gate-fail");
+    expect(legOutcomeOfError(new GateWarningsUnrecordedError("m"))).toBe("infra-fail");
     expect(legOutcomeOfError(new Error("plain"))).toBe("infra-fail");
   });
 });
