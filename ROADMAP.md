@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**41 of 697 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**38 of 697 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -587,13 +587,13 @@ that ordering is the priority.
 - **R243** · fixtures/README.md's hand-computed sandbox-app verdict table lists 16 mutant sites; the fixture has 19 on both backends · [R243.md](docs/roadmap/R243.md) · done (409fc467)
 - **R255** · The al-runner warning `lethal run` prints still says al-runner reports `pass` for an `asserterror` that raised no error, a v1 finding fixed in v2 · [R255.md](docs/roadmap/R255.md) · done (cba033cc)
 - **R257** · The EMEA runbook's explain rank and executionProven claims were measured on a pre-GH-24 report and need a new one · [R257.md](docs/roadmap/R257.md) · open
-- **R263** · The TestPage baseline reply was lost in 6 of 7 Cronus28 smoke sessions but only 6 of 60 counted sessions on a fresh Cronus284; the cause of the difference is unknown · [R263.md](docs/roadmap/R263.md) · open
+- **R263** · The TestPage baseline reply was lost in 6 of 7 Cronus28 smoke sessions but only 6 of 60 counted sessions on a fresh Cronus284; the cause of the difference is unknown · [R263.md](docs/roadmap/R263.md) · closed 2026-10-24 — unmeasurable (Cronus28 parked, Cronus284 not ours) and moot since R-236c refuses TestPage…
 - **R264** · Unit tests read the machine's REAL al-runner secondary cache, so `doctor-cli.test.ts`, `doctor-al-runner.test.ts` and `al-runner-cache.test.ts` time out once it grows (30 fail at 5 s on a 5.4 GB cache) · [R264.md](docs/roadmap/R264.md) · done (7e27b0b, a3d961f)
 - **R267** · Two stale al-runner claims outside the agent docs: the run-time warning still describes the v1 `asserterror` bug, and `fixtures/README.md` still quotes `itest:alrunner` at 3 / 16 / 0 · [R267.md](docs/roadmap/R267.md) · done (cba033cc)
 - **R269** · `itest:testapp` hard-codes the sandbox-tests version 1.0.0.2, so it fails since GH-09 bumped the fixture to 1.0.0.3 · [R269.md](docs/roadmap/R269.md) · done (61f1f80)
 - **R271** · harden, verify, testapp and agreement are not in the agentflow gate table, because LEG_CONTAINER cannot name Cronus28 · [R271.md](docs/roadmap/R271.md) · open
-- **R290** · R-236b's fix has no early readback and no restart recovery: a lost reply still waits the full budget, and a wedge still needs a manual coord ask · [R290.md](docs/roadmap/R290.md) · open
-- **R291** · R-236c: refuse TestPage tests up front instead of dispatching them and risking a lost reply · [R291.md](docs/roadmap/R291.md) · open
+- **R290** · R-236b's fix has no early readback and no restart recovery: a lost reply still waits the full budget, and a wedge still needs a manual coord ask · [R290.md](docs/roadmap/R290.md) · closed 2026-10-24 — moot since R-236c: no TestPage test is sent, so its lost reply cannot occur
+- **R291** · R-236c: refuse TestPage tests up front instead of dispatching them and risking a lost reply · [R291.md](docs/roadmap/R291.md) · done (71b8df1b)
 - **R314** · A native Rust tree-sitter-al parser (RUST-01 spike) parsed BaseApp 1.8x SLOWER than the WASM path; the Rust route stopped at its pre-committed bar · [R314.md](docs/roadmap/R314.md) · closed 2026-09-29: superseded by RUST-02/RUST-03 (clang build; native switch landed 9f7cb5f0)
 - **R317** · OData V4 throttling (event 705) was seen sharing a BC user with the gate; a per-user concurrency limit is not measured · [R317.md](docs/roadmap/R317.md) · open, filed 2026-09-28
 - **R320** · GitHub Actions in ci.yml and release.yml are pinned by mutable version tags, not commit SHAs · [R320.md](docs/roadmap/R320.md) · done (e413175)
