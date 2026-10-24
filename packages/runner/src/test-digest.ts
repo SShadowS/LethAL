@@ -14,6 +14,9 @@
  *   object, and every enum implementation codeunit, whole, with everything it reaches
  *   (`subscriberFold`): an event can run a subscriber from anywhere, and a dependency's own code
  *   can fire an extension's triggers or run an enum value's implementation;
+ * - every test-app codeunit with a platform install or upgrade trigger, whole, with what it
+ *   reaches (R700), and every test-app permission set and permission-set extension, by text, as
+ *   one line (R701);
  * - the dependency fingerprint and the test app's build inputs (digest-inputs.ts);
  * - when the test, or the subscriber fold, has an edge the walk cannot follow (UNFOLLOWED, fail
  *   closed), the WHOLE test-app source: every `.al` file's normalised text.
@@ -152,7 +155,9 @@ const PLATFORM_APP_TRIGGER =
  * its triggers reach. Folded into EVERY digest: an event can run a subscriber from any code, a
  * manual one is bound by BindSubscription, which the walk deliberately does not treat as an edge
  * (ruling 1), and an extension's triggers on a dependency's object fire from that dependency's
- * code, which the walk never sees.
+ * code, which the walk never sees. Also (R700) every codeunit with a platform install or upgrade
+ * trigger, whole, with what it reaches, and (R701) every permission set and permission-set
+ * extension, by text, as one line.
  */
 export function subscriberFold(
   scanner: Scanner,
@@ -191,7 +196,7 @@ export function subscriberFold(
   for (const u of model.units) {
     if (u.kind !== "codeunit" || !u.triggers.some((t) => PLATFORM_APP_TRIGGER.test(t.name)))
       continue;
-    lines.push(`P ${key(u)} ${u.textHash}`);
+    lines.push(`L ${key(u)} ${u.textHash}`);
     scanner.foldEntryUnit(u, st);
   }
   // R701: a permission set holds no code but decides which reads and writes a test may do.

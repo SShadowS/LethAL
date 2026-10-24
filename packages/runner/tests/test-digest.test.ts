@@ -1414,6 +1414,8 @@ describe("R700/R701: install, upgrade and permission-set code in every digest", 
     ["Upgrade", "OnUpgradePerDatabase"],
     ["Upgrade", "OnCheckPreconditionsPerCompany"],
     ["Upgrade", "OnValidateUpgradePerDatabase"],
+    ["Upgrade", "OnCheckPreconditionsPerDatabase"],
+    ["Upgrade", "OnValidateUpgradePerCompany"],
   ] as const) {
     describe(`${subtype} codeunit ${trigger}`, () => {
       const files: Files = {
