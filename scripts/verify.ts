@@ -58,7 +58,7 @@
  *      `bun test` child may keep running (Ctrl-C reaches the whole group and is fine).
  *   2. If io pressure `full` avg10 is >= 5.0 when read just before the test step (after the slot
  *      wait), the test child gets `--timeout=15000` (bun's default is 5000). Unreadable pressure
- *      (Windows) keeps the default. Receipt line: `per-test timeout: ...`. See `testTimeout`.
+ *      (Windows) keeps the default, except on the Windows CI job (R726), which gets 60000. Receipt line: `per-test timeout: ...`. See `testTimeout`.
  *   3. A whole-run wall limit of 900 s on every child that verify runs (typecheck, `bun test`; `RUN_LIMIT_S`),
  *      besides the per-file one.
  *
@@ -962,15 +962,33 @@ const others = (n: number): string => `${n} other ${n === 1 ? "verify" : "verifi
 export const DEFAULT_TIMEOUT_MS = 5000;
 export const RAISED_TIMEOUT_MS = 15000;
 export const IO_FULL_RAISE = 5.0;
+/**
+ * R726: the Windows CI job has had single-worker async-I/O stalls of about 130 s (resume.test.ts,
+ * corpus-snapshot.test.ts), which timed out 27 and 6 tests at 5 s. io pressure cannot be read
+ * there, so the rule is by platform. 60 s still catches a real hang; the per-file watchdog stays.
+ */
+export const WINDOWS_CI_TIMEOUT_MS = 60_000;
 
 /**
  * R616b B. When the disk is stalled just before the test step (io `full` avg10 >= 5.0: all tasks
  * waited on io for 5% of the last 10 s; read after the slot wait, so it describes the disk the
  * tests will meet), the test child gets `--timeout=15000`. Otherwise bun's 5000 ms stays. Pressure
- * that cannot be read (Windows, no /proc) keeps the default and says so. A test that hangs still
- * fails, only 10 s later. bun's own timeout is not re-tested here.
+ * that cannot be read (Windows, no /proc) keeps the default and says so, except on Windows CI,
+ * which gets WINDOWS_CI_TIMEOUT_MS (R726). A test that hangs still fails, only later. bun's own
+ * timeout is not re-tested here. `platform` and `ci` have no defaults on purpose: a caller that
+ * left them out would read the real runner, and a test would pass on Linux and fail on Windows CI.
  */
-export function testTimeout(pressure: string | undefined): { ms: number; line: string } {
+export function testTimeout(
+  pressure: string | undefined,
+  platform: string,
+  ci: boolean,
+): { ms: number; line: string } {
+  if (platform === "win32" && ci) {
+    return {
+      ms: WINDOWS_CI_TIMEOUT_MS,
+      line: `per-test timeout: ${WINDOWS_CI_TIMEOUT_MS} ms (Windows CI, R726: single-worker I/O stalls on the runner)`,
+    };
+  }
   const m = /io some [\d.]+\/[\d.]+\/[\d.]+ full ([\d.]+)\//.exec(pressure ?? "");
   if (m?.[1] === undefined) {
     return {
@@ -1420,7 +1438,7 @@ export async function runVerify(
       );
     }
   }
-  const timeout = testTimeout(io.pressure?.());
+  const timeout = testTimeout(io.pressure?.(), process.platform, ci !== undefined);
   say(timeout.line);
   let step: Awaited<ReturnType<typeof testStep>>;
   try {

@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
@@ -56,12 +56,6 @@ import {
 import { removeScratchDir, scratchDirs } from "./helpers/scratch";
 import { testDbPath } from "./helpers/test-db";
 import { UNREAD } from "./helpers/unread";
-
-// R726 MITIGATION, not a fix. Every test here takes under 0.1 s locally, but Windows CI run
-// 40105067954 had a single-process async-I/O stall of about 130 s in this file (starting at D1, run
-// mode; other files ran at normal speed), the family of R449. 27 tests hit the 5 s default. A 30 s
-// limit turns about 27 failures into about 4 and leaves the file near the 180 s watchdog.
-setDefaultTimeout(30_000);
 
 const scratch = scratchDirs();
 
