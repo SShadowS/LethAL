@@ -1,5 +1,6 @@
 import { describe, expect, it, test } from "bun:test";
 import { copyFile, link, mkdir, readFile, readdir, stat } from "node:fs/promises";
+import type { rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { MutantManifest } from "@lethal/schemata";
 import {
@@ -8,6 +9,7 @@ import {
   ArtifactPrepareError,
   buildPackageCacheCopy,
   defaultArtifactIo,
+  removeWithRetry,
 } from "../src/artifact";
 import type { ArtifactIo, CompiledArtifact } from "../src/artifact";
 import { ContainerDeployer } from "../src/publisher";
@@ -713,5 +715,29 @@ describe("C02-05: compileProject", () => {
     await expect(
       c.compileProject({ projectDir: "C:/tests", packageCachePath: "C:/s", name: "t" }),
     ).rejects.toThrow(/AL0132/);
+  });
+});
+
+describe("removeWithRetry (R708)", () => {
+  const failing = (code: string, until: number, counter: { n: number }) =>
+    (async () => {
+      counter.n++;
+      if (counter.n <= until) throw Object.assign(new Error(`${code}: locked`), { code });
+    }) as unknown as typeof rm;
+
+  test("retries a Windows EBUSY, then removes", async () => {
+    const c = { n: 0 };
+    await removeWithRetry("/x/batch-0-staged", failing("EBUSY", 1, c), 3, 1);
+    expect(c.n).toBe(2);
+  });
+  test("gives up after its tries and throws the last error", async () => {
+    const c = { n: 0 };
+    await expect(removeWithRetry("/x", failing("EBUSY", 99, c), 3, 1)).rejects.toThrow("EBUSY");
+    expect(c.n).toBe(3);
+  });
+  test("a non-lock error is not retried", async () => {
+    const c = { n: 0 };
+    await expect(removeWithRetry("/x", failing("EIO", 99, c), 3, 1)).rejects.toThrow("EIO");
+    expect(c.n).toBe(1);
   });
 });

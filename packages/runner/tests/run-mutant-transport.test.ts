@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import type { ActivationConfig } from "../src/activation";
 import type { TestMethodRef } from "../src/backend";
 import { UnfilteredExtensionsQueryError } from "../src/harness";
@@ -782,6 +782,34 @@ describe("RunMutantTransport.run — R53 server-side stop", () => {
     expect(v.outcome).toBe("timeout");
     expect(v.operation).toBeUndefined();
     expect(v.failureMessage).toContain("stopped the session");
+  });
+
+  test("R710: a wall-clock step back during the held request does not shorten the stop row", async () => {
+    const { fetchFn, answer } = heldFetch();
+    const realNow = Date.now;
+    let stepped = false;
+    const spy = spyOn(Date, "now").mockImplementation(() => realNow() - (stepped ? 5_000 : 0));
+    try {
+      const v = await transport(fetchFn).run({
+        ...REQ,
+        timeoutMs: 20,
+        onBudgetExceeded: async () => {
+          stepped = true; // the host corrects the clock while BC holds the request
+          answer(new Response(AL_STOP_BODY, { status: 408 }));
+          // The stop confirms a little LATE: the grace wait (`stopDeadline` in execute, `left` in
+          // settleStop) must read one clock on both sides, or the wait is skipped and the state
+          // stays `issued`.
+          await new Promise((r) => setTimeout(r, 20));
+          return { stopped: true };
+        },
+      });
+      expect(v.stopState).toBe("confirmed");
+      expect(v.outcome).toBe("timeout");
+      expect(v.durationMs).toBeGreaterThanOrEqual(20);
+      expect(v.durationMs).toBeLessThan(20 + 30_000);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   // The half the first draft never reached: a 408 that DOES say "stopped the session" but does not

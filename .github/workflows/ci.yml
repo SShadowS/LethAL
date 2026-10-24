@@ -74,6 +74,15 @@ jobs:
           LETHAL_VERIFY_PARALLEL: "4"
         run: bun scripts/verify.ts
 
+      - name: Upload the verify logs (failure only)
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: verify-logs-windows-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/lethal-verify-*.log
+          if-no-files-found: warn
+          retention-days: 14
+
       # `biome check .` is not run repo-wide on purpose: it reports pre-existing organizeImports and
       # format debt in engine/ and builtin-tier1/, so a repo-wide run would fail every build and
       # teach everyone to ignore this job. Formatting is enforced per-file by a local PostToolUse
@@ -111,3 +120,12 @@ jobs:
       # verify.ts runs the typecheck and the dist clean itself, in that order, before `bun test`.
       - name: Typecheck and unit tests
         run: bun scripts/verify.ts
+
+      - name: Upload the verify logs (failure only)
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: verify-logs-linux-${{ github.run_attempt }}
+          path: /tmp/lethal-verify-*.log
+          if-no-files-found: warn
+          retention-days: 14

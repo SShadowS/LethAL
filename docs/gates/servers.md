@@ -28,6 +28,7 @@ your lane: `--lane <lane>` if given, else your kraken agent identity (`KRAKEN_AG
 the run names, setup refuses the WHOLE run by name, in every mode, before it reads the login, takes a lease or
 calls a server, and prints the marker. `scripts/bc-republish.ts` refuses the same way before its lease. The
 clearing run sets `LETHAL_OUT_OF_USE_CLEARING=<server>` (that exact server only).
+
 - **Set it on the one clearing command only, never `export` it.** Left set in a shell, it lets every later
   marker for that server through, and only the loud `!!!` line shows that it did.
 
@@ -43,6 +44,16 @@ wrapper's own "in use" marker lets a gate through:
 
 A server other than bc1-bc3 has no marker and is never checked. A coord root whose `machine` directory does not
 exist is an error, never "no marker": set `LETHAL_COORD_ROOT`.
+
+**A refused upgrade can strip a server of a fixture tests app (R709).** BC recompiles an INSTALLED dependent from
+the source inside its resident package. If a target change breaks that source, BC refuses the upgrade and may
+fail to restore: the target is left uninstalled and the tests app is gone. Setup and `bc-republish.ts` now read
+each installed dependent's resident source and compile it against the new target build BEFORE anything is sent;
+a break refuses the whole run (`resident-dependent-breaks`, R-707), also when the new tests app is published
+together with the target. A new tests app that publishes while its target is KEPT (a gate-deployed target) is
+checked against the resident target (`dependent-vs-kept-target`). The safe manual sequence: (1) uninstall and
+unpublish the dependent; (2) publish the target (after a gate run, with `--mint`, R605); (3) publish the new dependent build (R605: a same-version test-app republish is accepted after an
+unpublish). To recover a stripped server: the owner restarts it, then re-run setup (not measured; rests on R605).
 
 For each server it:
 
