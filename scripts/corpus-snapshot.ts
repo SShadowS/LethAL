@@ -38,7 +38,9 @@
  * toward the BaseApp cap only while one of its processes names /work/src/BC.History; a job over a
  * COPY of the corpus counts toward the total cap only.
  *
- * Exit codes: 0 ok / identical, 1 different or a dump failure, 2 refused.
+ * Exit codes: 0 ok / identical, 1 different or a dump failure, 2 refused for good (no master entry,
+ * unknown set, error projects, bad flag: retrying never helps), 75 the heavy-job guard refused (no
+ * free slot: retry later). A retry loop waits only on 75 (`until [ $rc != 75 ]`), never on 2 (R724).
  * The report prints paths, operators and counts only, never tuple text (it can carry source).
  */
 import { createHash } from "node:crypto";
@@ -59,10 +61,21 @@ import { FORMAT } from "./prod-identity-keys.ts";
 const REPO_ROOT = join(import.meta.dir, "..");
 
 export class RefusedError extends Error {
-  constructor(message: string) {
+  /** True only for the heavy-job guard: retrying later is right. Every other refusal is permanent. */
+  readonly transient: boolean;
+  constructor(message: string, transient = false) {
     super(message);
     this.name = "RefusedError";
+    this.transient = transient;
   }
+}
+
+/** Exit code of the heavy-job guard refusal (EX_TEMPFAIL); a retry loop may wait on it (R724). */
+export const HEAVY_GUARD_EXIT = 75;
+
+export function exitCodeOf(e: unknown): number {
+  if (!(e instanceof RefusedError)) return 1;
+  return e.transient ? HEAVY_GUARD_EXIT : 2;
 }
 
 export const EXTERNAL_SETS: Readonly<Record<string, string>> = {
@@ -720,7 +733,7 @@ function guardInSlot(mine: number, baseApp: boolean, print: (l: string) => void)
   }).stdout.toString();
   const v = heavyVerdict(parsePs(ps), process.pid, pids, held.length, baseApp);
   print(v.message);
-  if (v.refuse) throw new RefusedError(v.message);
+  if (v.refuse) throw new RefusedError(v.message, true);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -856,6 +869,7 @@ function slotted(
   if (r === null)
     throw new RefusedError(
       `heavy-job guard: all three heavy slots held (${lockDir()}/heavy.1, heavy.2, heavy.3)`,
+      true,
     );
   return r.code;
 }
@@ -1076,6 +1090,6 @@ if (import.meta.main) {
     process.exit(main(process.argv.slice(2)));
   } catch (e) {
     console.error(e instanceof Error ? e.message : String(e));
-    process.exit(e instanceof RefusedError ? 2 : 1);
+    process.exit(exitCodeOf(e));
   }
 }

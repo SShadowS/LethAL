@@ -14,11 +14,14 @@ import {
   type Dump,
   EXTERNAL_SETS,
   type Git,
+  HEAVY_GUARD_EXIT,
   RefusedError,
+  SLOT_BUSY,
   corpusHeadOf,
   diffDumps,
   dumperKeyOf,
   entryDir,
+  exitCodeOf,
   findProjects,
   generationChanged,
   gitIn,
@@ -399,6 +402,26 @@ describe("review r1: --projects and bad flags", () => {
     );
     expect(r.exitCode, r.stderr.toString()).toBe(2);
     expect(r.stderr.toString()).toContain("--bogus");
+  });
+});
+
+describe("R724 exit codes of a refusal", () => {
+  test("the heavy-job guard refusal exits 75 (try later)", () => {
+    expect(exitCodeOf(new RefusedError("heavy-job guard: all three heavy slots held", true))).toBe(
+      75,
+    );
+  });
+  test("a missing master entry exits 2 (never retry)", () => {
+    expect(exitCodeOf(new RefusedError("no master entry for abc with dumper k. Run first."))).toBe(
+      2,
+    );
+  });
+  test("another permanent refusal exits 2, and a non-refusal exits 1", () => {
+    expect(exitCodeOf(new RefusedError("zero keys on both sides"))).toBe(2);
+    expect(exitCodeOf(new Error("dump failed"))).toBe(1);
+  });
+  test("75 is the code the guard's own flock uses for a busy slot", () => {
+    expect(HEAVY_GUARD_EXIT).toBe(SLOT_BUSY);
   });
 });
 
