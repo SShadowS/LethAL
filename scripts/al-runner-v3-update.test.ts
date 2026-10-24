@@ -175,11 +175,28 @@ linuxOnly("T19: the v3 update gate", () => {
 
   test("R586d: versions compare by their alpha number, not as text: alpha.10 is newer than alpha.9", () => {
     expect(
-      candidates(["v3.0.0-alpha.9", "v3.0.0-alpha.10", "v3.0.0-alpha.3", "v3.0.0-alpha.2"], 2),
+      candidates(
+        [
+          "v3.0.0-alpha.9",
+          "v3.0.0-alpha.10",
+          "v3.0.0-alpha.3",
+          "v3.0.0-alpha.2",
+          "v3.0.0-alpha.1",
+          "v3.0.0-alpha.5+edge.1",
+        ],
+        2,
+      ),
     ).toEqual(["v3.0.0-alpha.10", "v3.0.0-alpha.9", "v3.0.0-alpha.3"]);
   });
 
-  const TAGS_345 = ["edge", "v3.0.0-alpha.3", "v3.0.0-alpha.5", "v3.0.0-alpha.4", "v3.0.0-alpha.2"];
+  const TAGS_345 = [
+    "edge",
+    "v3.0.0-alpha.3",
+    "v3.0.0-alpha.5",
+    "v3.0.0-alpha.4",
+    "v3.0.0-alpha.2",
+    "v3.0.0-alpha.1",
+  ];
 
   test("R586d: a newest pass stops the run: no older candidate is downloaded or gated", async () => {
     await setup();
@@ -210,6 +227,11 @@ linuxOnly("T19: the v3 update gate", () => {
     expect(await updateOnce(deps)).toEqual(["held", "infra-fail", "pass"]);
     expect(seen.tagsGated).toEqual(["v3.0.0-alpha.5", "v3.0.0-alpha.4", "v3.0.0-alpha.3"]);
     expect(await current()).toBe(join(root, "3.0.0-alpha.3-c893e3633"));
+    expect(
+      seen.logs.some((l) =>
+        l.includes("v3.0.0-alpha.3: passed after v3.0.0-alpha.4 was not judged (infra-fail) today"),
+      ),
+    ).toBe(true);
   });
 
   test("R586d: all candidates fail: current is unchanged and each failure is recorded", async () => {

@@ -482,10 +482,17 @@ async function updateLocked(
   if (gatedAlpha === undefined)
     throw new Error(`the gated build "${current.version}" is not a v3 alpha`);
   const out: Outcome[] = [];
+  const unjudged: string[] = [];
   for (const tag of candidates(await deps.listReleases(), Number(gatedAlpha))) {
     const o = await gateOne(deps, tag, current);
     out.push(o);
-    if (o === "pass") break;
+    if (o === "infra-fail") unjudged.push(tag);
+    if (o === "pass") {
+      // A newer release the gate could not judge today is not a verdict: say so.
+      for (const t of unjudged)
+        await deps.log(`${deps.now()} ${tag}: passed after ${t} was not judged (infra-fail) today`);
+      break;
+    }
   }
   return out;
 }

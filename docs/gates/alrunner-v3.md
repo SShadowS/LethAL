@@ -47,7 +47,7 @@ The legs:
   left with R705: a fixed build runs nothing in a request that does not compile. In serve-entries, a warm-up whose
   every entry refuses with one identical no-callee text now throws `al-runner-v3-entries-batch-refused`: the safe
   direction, opt-in and rare.
-  It must read `matches` on alpha.2, but any other reading (`diverged`, `unmeasurable`) only prints
+  It must read `matches` on alpha.2 and alpha.5, but any other reading (`diverged`, `unmeasurable`) only prints
   `al-runner-v3-serve-keep-reason-moved` in the log and the receipt `lines`: it is never a `gate-fail` or a `held`,
   because a moved reason only makes the daemon close (slower, never wrong). It is gate-only, as `timeout-is-cpu`
   is: the receipt's `warnFacts` carries the reading, the update script copies it into `.gated`, and a session
@@ -190,9 +190,11 @@ Both run as the other legs do (`runSession`, the v3 backend, one-shot, coverage 
   Before R586d the order was oldest first, and a day with alpha.3 and alpha.4 both failing cost two gates before
   alpha.5 ran.
 - **No longer measured (R586d).** Once a newer release passes, the older releases skipped that day get no daily
-  verdict. Their last record stays in `failed/` (or `held/`), and is not refreshed. A skipped release is only
-  gated again if it ever becomes the newest candidate above `current` again (it cannot, once a newer one is
-  `current`), so those records are final.
+  verdict. Their last record stays in `failed/` (or `held/`), if it was ever gated, and is not refreshed. A release
+  skipped that day is gated again only on a later day when every newer candidate fails to pass and it is still
+  above `current`; once a newer release is `current` it is never a candidate again, so its record is final. When
+  an older candidate passes after a newer one's `infra-fail`, the log says so (`<tag>: passed after <newer tag> was
+  not judged (infra-fail) today`): the newer release has no verdict yet.
 - `--edge-rejudge <edge sha>` (R639) re-gates a KEPT edge binary at `.gated`'s current commit, never a new
   download, and never reads or writes `edge.last-seen`.
   - It refuses by name (`al-runner-v3-edge-rejudge-refused`) when `failed/edge-<sha>@<commit>` exists at all, or a
