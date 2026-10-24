@@ -796,7 +796,8 @@ function altersBoundCall(node: ALSyntaxNode, ctx: SemanticContext): boolean {
  * never sets the flag the item's Break reads). R500 adds the one-hop callees, the outside filter
  * calls and the two LIMITS (header). It needs `ctx.files` and throws without it.
  *
- * R-696 adds loops that move the record they walk through a second variable (`inMovedWalk`).
+ * R-696 adds loops that move the record they walk (`inMovedWalk`): a Rename, Insert or key-field
+ * ModifyAll by any non-temporary variable of the walked table, or a key-changing Modify by a second one.
  *
  * R-531 adds loops that end only by consuming their record set (`consumingLoopRefuses`). `op` is
  * the operator's name and is REQUIRED: that rule exempts `lethal.swap-find-direction` inside the
@@ -3355,7 +3356,12 @@ function r696Item(
   visitAll(obj, (n) => {
     if (!r696IsCall(n)) return;
     const c = r531Call(n);
-    if (c !== null && c.recv === iname && R696_FILTER.has(c.method)) onItem.push(n);
+    if (c === null || !R696_FILTER.has(c.method)) return;
+    // a bare call counts when it sits in the item's own code: the implicit Rec is the item there
+    const bare =
+      (c.recv === "" || (c.recv === null && r531Implicit(n, ctx))) &&
+      scopes.some((sc) => sc.startIndex <= n.startIndex && n.endIndex <= sc.endIndex);
+    if (c.recv === iname || bare) onItem.push(n);
   });
   const sorting: ALSyntaxNode[] = [];
   const body = item.childForFieldName("body");

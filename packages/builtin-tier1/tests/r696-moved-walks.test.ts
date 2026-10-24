@@ -515,6 +515,71 @@ describe("R696 shape A: a report data item whose triggers move or insert into it
   });
 });
 
+describe("R696 shape A: keys set by a bare call in the item's own trigger, and a codeunit callee", () => {
+  const byNo = (s: string): string => s.replace("sorting(Seq)", 'sorting("No.")');
+  const trigs = (pre: string, field: string): string => `            trigger OnPreDataItem()
+            begin
+${pre}
+            end;
+
+            trigger OnAfterGetRecord()
+            var
+                N: Record "R696 Line";
+            begin
+                N.Get(Ln."No.");
+                N.${field} := 'X';
+                N.Modify();
+                CurrReport.Skip();
+            end;`;
+  const skipRefused = (pre: string, field: string): boolean =>
+    project({
+      "line.al": LINE_TABLE(),
+      "other.al": OTHER_TABLE,
+      "rpt.al": byNo(ITEM_REPORT(trigs(pre, field))),
+    }).refused("rpt.al", "CurrReport.Skip()");
+
+  it("24. a BARE SetCurrentKey in OnPreDataItem is part of the item's key (the Skip is refused)", () => {
+    // revert: the bare-call branch of the item's key collector
+    expect(skipRefused('                SetCurrentKey("Doc No.");', '"Doc No."')).toBe(true);
+    // twin: no SetCurrentKey, "Doc No." is in neither SORTING nor the primary key
+    expect(skipRefused("                SetRange(Status, 1);", '"Doc No."')).toBe(false);
+  });
+
+  it("24b. a BARE SetView in OnPreDataItem makes every field a key field", () => {
+    // revert: the bare-call branch of the item's key collector
+    expect(skipRefused("                SetView('sorting(Seq)');", "Note")).toBe(true);
+    // twin: a bare SetRange leaves Note outside the key
+    expect(skipRefused("                SetRange(Status, 1);", "Note")).toBe(false);
+  });
+
+  it("25. a codeunit callee that inserts into the item's table is followed", () => {
+    const cu = `codeunit 50221 "R696 Inserter"
+{
+    procedure Add()
+    var
+        L: Record "R696 Line";
+    begin
+        L.Insert();
+    end;
+}`;
+    const p = project({
+      "line.al": LINE_TABLE(),
+      "other.al": OTHER_TABLE,
+      "inserter.al": cu,
+      "rpt.al": ITEM_REPORT(`            trigger OnAfterGetRecord()
+            var
+                W: Codeunit "R696 Inserter";
+            begin
+                if Ln.Status = 1 then
+                    CurrReport.Skip();
+                W.Add();
+            end;`),
+    });
+    // revert: the callee rule (callTargets over scopes)
+    expect(p.refused("rpt.al", "CurrReport.Skip()")).toBe(true);
+  });
+});
+
 describe("R696 twins: loops that must stay emitted", () => {
   it("17. the walked variable's own Modify never revisits a row", () => {
     const p = project(
