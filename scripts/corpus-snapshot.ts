@@ -25,7 +25,7 @@
  *
  * Heavy-job guard (owner rule R642: three heavy jobs container-wide, of which at most two BaseApp
  * (BC.History, set `bch`) corpus jobs; a BaseApp job counts against both caps), for every set but
- * `fixtures`, before a dump: the tool re-execs itself under `flock -n -E 75 <locks>/heavy.<n>`
+ * `fixtures`, before a dump: the tool re-execs itself under `flock -n -E 111 <locks>/heavy.<n>`
  * (slot 1, then 2, then 3;
  * `LETHAL_HEAVY_LOCK_DIR`, default /coord/locks). The kernel holds the lock for as long as any
  * process holds the fd, project children included, so SIGKILL needs no cleanup. Inside the slot, a
@@ -40,7 +40,7 @@
  *
  * Exit codes: 0 ok / identical, 1 different or a dump failure, 2 refused for good (no master entry,
  * unknown set, error projects, bad flag: retrying never helps), 75 the heavy-job guard refused (no
- * free slot: retry later). A retry loop waits only on 75 (`until [ $rc != 75 ]`), never on 2 (R724).
+ * free slot: retry later; flock's own busy code is the private 111). A retry loop waits only on 75 (`until [ $rc != 75 ]`), never on 2 (R724).
  * The report prints paths, operators and counts only, never tuple text (it can carry source).
  */
 import { createHash } from "node:crypto";
@@ -683,11 +683,13 @@ export function heavyVerdict(
   return { refuse, foreign, message };
 }
 
-export const SLOT_BUSY = 75;
+/** flock's "slot busy" code. Private to the slot probe: it must never equal 0, 1, 2 or
+ *  HEAVY_GUARD_EXIT (75), or a child's own exit would read as a busy slot (R724). */
+export const SLOT_BUSY = 111;
 
 /**
- * N3: run `cmd(n)` under `flock -n -E 75 <lockDir>/heavy.<n>`, slot 1, then 2, then 3. Returns the
- * slot and the command's exit code, or null when every slot is held (each returned 75).
+ * N3: run `cmd(n)` under `flock -n -E 111 <lockDir>/heavy.<n>`, slot 1, then 2, then 3. Returns the
+ * slot and the command's exit code, or null when every slot is held (each returned 111).
  */
 export function trySlots(
   lockDir: string,
@@ -721,7 +723,7 @@ function lockDir(): string {
 }
 
 /** Inside slot `mine`: record our pid, then the ps scan. Throws RefusedError. */
-function guardInSlot(mine: number, baseApp: boolean, print: (l: string) => void): void {
+export function guardInSlot(mine: number, baseApp: boolean, print: (l: string) => void): void {
   const dir = lockDir();
   writeFileSync(join(dir, `heavy.${mine}`), `${process.pid}\n`);
   const held = SLOTS.filter((s) => s !== mine && slotHeld(dir, s));
@@ -844,7 +846,7 @@ function depDirsEnv(): string[] {
 
 /** Re-exec under a heavy slot unless already in one or the set is fixtures. Returns the exit code
  *  of the slotted child, or undefined to go on in this process. */
-function slotted(
+export function slotted(
   set: string,
   argv: readonly string[],
   inSlot: number | undefined,

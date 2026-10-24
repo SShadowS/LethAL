@@ -25,6 +25,7 @@ import {
   findProjects,
   generationChanged,
   gitIn,
+  guardInSlot,
   heavyVerdict,
   isHeavy,
   parseKeyLine,
@@ -33,6 +34,7 @@ import {
   readEntry,
   resolveProjects,
   slotHeld,
+  slotted,
   trySlots,
   writeEntry,
 } from "./corpus-snapshot.ts";
@@ -420,8 +422,9 @@ describe("R724 exit codes of a refusal", () => {
     expect(exitCodeOf(new RefusedError("zero keys on both sides"))).toBe(2);
     expect(exitCodeOf(new Error("dump failed"))).toBe(1);
   });
-  test("75 is the code the guard's own flock uses for a busy slot", () => {
-    expect(HEAVY_GUARD_EXIT).toBe(SLOT_BUSY);
+  test("flock's busy code is private: it is not the guard's 75, nor 0, 1 or 2", () => {
+    expect(SLOT_BUSY).not.toBe(HEAVY_GUARD_EXIT);
+    expect([0, 1, 2]).not.toContain(SLOT_BUSY);
   });
 });
 
@@ -756,6 +759,75 @@ describe("B5 the heavy-job guard", () => {
       for (const pid of held) kill(pid);
     }
   });
+  posix("R724: a child that exits 75 is a result in slot 1, never a busy slot", () => {
+    const dir = fresh("locks");
+    expect(trySlots(dir, () => ["sh", "-c", "exit 75"])).toEqual({ slot: 1, code: 75 });
+  });
+  // R724 both throw sites, called in-process: a spawned `snapshot cdo --master` reads the real
+  // do-lethal corpus (`git rev-parse HEAD`) and the cache BEFORE it reaches the guard, so a spawn
+  // cannot be kept off a real corpus. These two take only a temp lock dir.
+  const withLockDir = async (dir: string, f: () => Promise<void> | void): Promise<void> => {
+    const old = process.env.LETHAL_HEAVY_LOCK_DIR;
+    process.env.LETHAL_HEAVY_LOCK_DIR = dir;
+    try {
+      await f();
+    } finally {
+      if (old === undefined) Reflect.deleteProperty(process.env, "LETHAL_HEAVY_LOCK_DIR");
+      else process.env.LETHAL_HEAVY_LOCK_DIR = old;
+    }
+  };
+  const refusal = (f: () => unknown): RefusedError => {
+    try {
+      f();
+    } catch (e) {
+      if (e instanceof RefusedError) return e;
+      throw e;
+    }
+    throw new Error("expected a RefusedError");
+  };
+  posix("R724 (a): all three slots held -> the refusal exits 75", async () => {
+    const dir = fresh("locks");
+    const held: number[] = [];
+    try {
+      for (const n of [1, 2, 3]) held.push((await hold(join(dir, `heavy.${n}`))).pid);
+      await withLockDir(dir, () => {
+        const e = refusal(() =>
+          slotted("cdo", ["snapshot", "cdo", "--master"], undefined, () => {}),
+        );
+        expect(e.message).toContain("all three heavy slots held");
+        expect(exitCodeOf(e)).toBe(75);
+      });
+    } finally {
+      for (const pid of held) kill(pid);
+    }
+  });
+  posix(
+    "R724 (b): the in-slot ps scan refuses -> exits 75 with the guard's own message",
+    async () => {
+      const dir = fresh("locks");
+      const held: number[] = [];
+      // `bash -c sleep 30 _ /work/src/DC/x`: its argv names a corpus root, so isHeavy matches it.
+      const dummy = Bun.spawn(["bash", "-c", "sleep 30", "_", "/work/src/DC/x"], {
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+      try {
+        for (const n of [2, 3]) {
+          const h = await hold(join(dir, `heavy.${n}`));
+          held.push(h.pid);
+          writeFileSync(join(dir, `heavy.${n}`), `${h.pid}\n`);
+        }
+        await withLockDir(dir, () => {
+          const e = refusal(() => guardInSlot(1, false, () => {}));
+          expect(e.message).toContain("-> REFUSED");
+          expect(exitCodeOf(e)).toBe(75);
+        });
+      } finally {
+        for (const pid of held) kill(pid);
+        kill(dummy.pid);
+      }
+    },
+  );
   posix(
     "a holder that was SIGKILLed frees its slot at once; an orphaned child keeps it held",
     async () => {

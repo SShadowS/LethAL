@@ -280,21 +280,34 @@ describe("parseTestSummary", () => {
     expect(step.lines).toContain("  (fail) c.test.ts (worker crashed: SIGKILL)");
   });
   test("R724: a failing test's error text is printed under its (fail) line, once, capped", async () => {
+    // Bun's real shape (CI 40105067954): an assertion error prints BEFORE its (fail) line, a
+    // timeout prints `  ^ this test timed out` AFTER it, and CI wraps files in ::group:: lines.
     const out = [
-      "(pass) a [1ms]",
+      "bun test v1.4.4 (38afee6c8) 4x PARALLEL",
+      "::group::packages\\runner\\tests\\resume.test.ts:",
+      "(pass) fast [1.00ms]",
+      "(pass) slow but fine [2002.50ms]",
       "error: expect(received).toBe(expected)",
       "Expected: 1",
       "Received: 2",
-      "(fail) t1 [2ms]",
-      "this test timed out after 5000ms.",
-      "(fail) t2 [5000ms]",
+      "(fail) t1 [2.00ms]",
+      '::error title=error: Test "t2" timed out after 5000ms::',
+      "(fail) t2 [5041.51ms]",
+      "  ^ this test timed out after 5000ms.",
       "",
-      "2 tests failed:",
-      "(fail) t1 [2ms]",
-      "(fail) t2 [5000ms]",
-      " 1 pass",
-      " 2 fail",
-      "Ran 3 tests across 1 file. [1.00s]",
+      "::endgroup::",
+      "error: expect(received).toBe(expected)",
+      "Expected: 3",
+      "Received: 4",
+      "(fail) t3 [3.00ms]",
+      "",
+      "3 tests failed:",
+      "(fail) t1 [2.00ms]",
+      "(fail) t2 [5041.51ms]",
+      "(fail) t3 [3.00ms]",
+      " 2 pass",
+      " 3 fail",
+      "Ran 5 tests across 1 file. [1.00s]",
     ].join("\n");
     const step = await testStep(FULL, {
       exec: () => ({ code: 1, output: out }),
@@ -308,8 +321,38 @@ describe("parseTestSummary", () => {
     const text = step.lines.join("\n");
     expect(text).toContain("  (fail) t1\n    | error: expect(received).toBe(expected)");
     expect(text).toContain("    | Received: 2");
-    expect(text).toContain("  (fail) t2\n    | this test timed out after 5000ms.");
+    // The timeout line sits under its own test (t2), not under t3, and not under t1.
+    expect(text).toContain("  (fail) t2\n    | ^ this test timed out after 5000ms.");
+    expect(text).toContain(
+      "  (fail) t3\n    | error: expect(received).toBe(expected)\n    | Expected: 3",
+    );
+    expect(text).not.toContain("::error");
+    expect(text).not.toContain("bun test v");
     expect(text.match(/timed out after/g)?.length).toBe(1);
+    expect(text).toContain(
+      "slow pass in packages/runner/tests/resume.test.ts: slow but fine [2002.50ms]",
+    );
+  });
+  test("R724: error text is printed for the first 20 failing tests only", async () => {
+    const out = [
+      ...Array.from({ length: 22 }, (_, i) => `error: boom ${i}\n(fail) f${i} [1.00ms]`),
+      " 0 pass",
+      " 22 fail",
+      "Ran 22 tests across 1 file. [1.00s]",
+    ].join("\n");
+    const step = await testStep(FULL, {
+      exec: () => ({ code: 1, output: out }),
+      snapState: () => new Map(),
+      env: {},
+      log: () => "log",
+      junitPath: () => "/j.xml",
+      readJunit: () => "",
+      expectedTestFiles: () => ["a.test.ts"],
+    });
+    const text = step.lines.join("\n");
+    expect(text).toContain("error: boom 19");
+    expect(text).not.toContain("error: boom 20");
+    expect(text).toContain("first 20 of 22 failing tests");
   });
   test("bun exiting non-zero with `0 fail` and no crash line still fails (the exit-code backstop)", async () => {
     const step = await testStep(FULL, {
