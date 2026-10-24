@@ -140,6 +140,8 @@
     "r623-probe/drive.ts",
     "r706-client-probe/classify.ts",
     "r706-client-probe/classify.test.ts",
+    "r706-client-probe/lease-options.ts",
+    "r706-client-probe/lease-options.test.ts",
     "bc-symbol-cache.ts",
     "bc-symbol-cache.test.ts",
     "bc-app-content.ts",

@@ -63,6 +63,7 @@ import {
   pathClass,
   readingOf,
 } from "./classify.ts";
+import { leaseOptions } from "./lease-options.ts";
 
 const REPO = join(import.meta.dir, "..", "..");
 const EVIDENCE = "/coord/handoff/R-705/probe";
@@ -322,9 +323,10 @@ async function main(): Promise<number> {
     let opSeq = 0;
     /** The web-service path: RunMutant baseline, one method per call, under a control-app lease. */
     const wsPass = async (): Promise<{ calls: Call[]; raw: unknown[] }> => {
+      const { ttlSeconds, heartbeatMs } = leaseOptions();
       const got = await leases.acquire(
         "r706-client-probe (lane bugs)",
-        120,
+        ttlSeconds,
         crypto.randomUUID(),
         info.serverGeneration,
       );
@@ -333,10 +335,23 @@ async function main(): Promise<number> {
       opSeq = Math.max(opSeq, lease.lastCompletedOpSeq);
       const calls: Call[] = [];
       const raw: unknown[] = [];
+      // The runner's heartbeat (orchestrator.ts): a single-flight renew every ttl/3 while the pass
+      // runs. Only `renewed: false` is loss; a thrown renew is a lost ack and the next tick retries.
+      let lost = false;
+      let ticking = false;
+      const beat = setInterval(async () => {
+        if (ticking) return;
+        ticking = true;
+        try {
+          if (!(await leases.renew(lease, ttlSeconds)).renewed) lost = true;
+        } catch {
+        } finally {
+          ticking = false;
+        }
+      }, heartbeatMs);
       try {
         for (const k of CASES) {
-          const r = await leases.renew(lease, 120);
-          if (!r.renewed) throw new Error("control-app lease renew refused");
+          if (lost) throw new Error("control-app lease lost (renew answered renewed:false)");
           opSeq += 1;
           const answerText = await postAction(odata, "LethALControl_RunMutant", {
             targetAppId: TARGET.id,
@@ -357,6 +372,7 @@ async function main(): Promise<number> {
           calls.push(wsCall(k.codeunit, answer.codeunitResults));
         }
       } finally {
+        clearInterval(beat);
         log(`control-app lease release: ${JSON.stringify(await leases.release(lease))}`);
       }
       return { calls, raw };
