@@ -10,6 +10,7 @@ import { initParser, parseAL, wrapRoot } from "@lethal/engine";
 import {
   coverageRefusedObjects,
   refusedCoverageReason,
+  refusedUnmeasuredShapeReason,
   refusedWholeFileReason,
   wrappedRuleFor,
 } from "../src/line-map";
@@ -50,28 +51,42 @@ const files = (src: Record<string, string>) =>
 describe("R654 I1 (a): the rule each backend kind gets, and what a v3 session refuses", () => {
   // R654 S3: the .NET al-runner kind is gone; the `al-runner-index` rule stays (I1) and is reached
   // by its own name below.
-  test("the exact map: bcdev bc-shape, al-runner-v3 refuse-wrapped", () => {
+  test("the exact map: bcdev bc-shape, al-runner-v3 al-runner-index", () => {
+    // R602 (B3, flipped on purpose): v3 was "refuse-wrapped". The CLI kept v3 coverage ON for a
+    // project of single-wrapper files while selection refused every wrapped object by name, so
+    // their mutants read no-coverage (32 lost kills on sandbox-wrapped). v3 now runs the coverage
+    // index's own rule, so selection and the index cannot disagree.
     expect([wrappedRuleFor("bcdev"), wrappedRuleFor("al-runner-v3")]).toEqual([
       "bc-shape",
-      "refuse-wrapped",
+      "al-runner-index",
     ]);
   });
 
-  test("a v3 session refuses every object of an admitted wrapped file, by today's sentences", () => {
+  test("R602 (B3, flipped on purpose): a v3 session refuses nothing in an admitted wrapped file, and names a non-admitted one", () => {
+    // Was: both files refused, W1's object by `refusedCoverageReason`. W1 alone is admitted now;
+    // BARE_FILE (a bare object before a wrapper) is not, and gets the index rule's sentence.
     const refused = coverageRefusedObjects(
       files({ [W1_FILE]: W1, [BARE_FILE]: BARE_BEFORE }),
       wrappedRuleFor("al-runner-v3"),
     );
     expect(Object.fromEntries(refused)).toEqual({
+      "codeunit:91900": refusedUnmeasuredShapeReason("Codeunit", 91900, BARE_FILE),
+      "codeunit:91921": refusedUnmeasuredShapeReason("Codeunit", 91921, BARE_FILE),
+    });
+    expect(
+      coverageRefusedObjects(files({ [W1_FILE]: W1 }), wrappedRuleFor("al-runner-v3")).size,
+    ).toBe(0);
+  });
+
+  test("the retired rule's sentences, reached by its own name", () => {
+    const refused = coverageRefusedObjects(
+      files({ [W1_FILE]: W1, [BARE_FILE]: BARE_BEFORE }),
+      "refuse-wrapped",
+    );
+    expect(Object.fromEntries(refused)).toEqual({
       "codeunit:91900": refusedCoverageReason("Codeunit", 91900, BARE_FILE),
       "codeunit:91921": refusedWholeFileReason("Codeunit", 91921, BARE_FILE),
     });
-    // W1 alone: the same key, its own file's sentence (the later file wins the key above).
-    expect(
-      Object.fromEntries(
-        coverageRefusedObjects(files({ [W1_FILE]: W1 }), wrappedRuleFor("al-runner-v3")),
-      ),
-    ).toEqual({ "codeunit:91900": refusedCoverageReason("Codeunit", 91900, W1_FILE) });
   });
 });
 
@@ -82,10 +97,13 @@ describe("R654 I1 (b): the al-runner index rule admits the measured shape", () =
 });
 
 describe("R654 I1 (c): carryBarredFiles follows the rule", () => {
-  test("a v3 session bars no file (it admits none); the index rule bars the admitted file", () => {
+  test("R602 (B3, flipped on purpose): a v3 session now bars the admitted file from carry, as the index rule does", () => {
+    // Was: [] (v3 admitted none). v3 admits W1 now, and an admitted wrapped file's instrumented
+    // text can still re-parse undecided after deploy, so its mutants take no carried verdict.
     const fs = files({ [W1_FILE]: W1, [BARE_FILE]: BARE_BEFORE });
-    expect([...carryBarredFiles(fs, wrappedRuleFor("al-runner-v3"), new Map())]).toEqual([]);
+    expect([...carryBarredFiles(fs, wrappedRuleFor("al-runner-v3"), new Map())]).toEqual([W1_FILE]);
     expect([...carryBarredFiles(fs, "al-runner-index", new Map())]).toEqual([W1_FILE]);
+    expect([...carryBarredFiles(fs, "refuse-wrapped", new Map())]).toEqual([]);
   });
 
   test("bcdev with no arms for a file bars nothing (admittedOnBc needs the arms)", () => {

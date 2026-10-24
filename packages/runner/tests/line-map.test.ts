@@ -950,6 +950,12 @@ describe("R383 r2: refusedAsMultiObject", () => {
     ["enum", "enum_declaration", "enum 50120 E\n{\n    value(0; A) { }\n}\n"],
     ["interface", "interface_declaration", 'interface "I Probe"\n{\n    procedure Q();\n}\n'],
     ["entitlement", "entitlement_declaration", 'entitlement "E Probe"\n{\n    Type = Role;\n}\n'],
+    // R-579's B1 ruling moved this row from the refused side: an enumextension holds no AL code.
+    [
+      "enumextension",
+      "enumextension_declaration",
+      "enumextension 50125 EX extends E\n{\n    value(1; B) { }\n}\n",
+    ],
   ];
 
   for (const [label, kind, src] of CODE_FREE) {
@@ -978,11 +984,6 @@ describe("R383 r2: refusedAsMultiObject", () => {
       "xmlport 50131 X\n{\n    schema\n    {\n        textelement(Root) { }\n    }\n}\n",
     ],
     ["a second codeunit", "codeunit_declaration", 'codeunit 50124 "C Two"\n{\n}\n'],
-    [
-      "an enumextension (not on the list)",
-      "enumextension_declaration",
-      "enumextension 50125 EX extends E\n{\n    value(1; B) { }\n}\n",
-    ],
   ];
   for (const [label, kind, src] of CODE_BEARING) {
     test(`a codeunit then ${label} is REFUSED`, () => {

@@ -29,6 +29,9 @@ export function v3DefaultLegs(o: { readonly cdo: boolean; readonly tables: boole
     "L1",
     "Y-A",
     "Y-B",
+    // R602: coverage on for multi-object files (MO) and single-wrapper `#if` files (WR).
+    "MO",
+    "WR",
     V3_K_LEG,
     ...(o.cdo ? ["D1", "D1c"] : []),
     ...(o.tables ? ["T"] : []),
@@ -87,6 +90,193 @@ export function v3RecordRunFailures(
 export function isSessionTestCall(argv: readonly string[], testDirs: readonly string[]): boolean {
   const last = argv.at(-1);
   return argv[1] === "test" && last !== undefined && testDirs.includes(last);
+}
+
+/**
+ * R602 (durable killer check). A killer: `[mutantCode, file, line, operator, killing test]` of a
+ * mutant that `--mode none` (the ground truth: every green test runs against every mutant) KILLS.
+ * Legs MO and WR assert each is killed by the same test with coverage ON. They live in code, NOT in
+ * the R332 baselines, so a re-record of a baseline can never absorb a lost kill. Built from
+ * `/coord/handoff/R-602/measure/out/{multi,wrapped}.pin.none` (pin and edge identical), mutant
+ * codes at identity scheme 42.
+ */
+export type V3Killer = readonly [
+  code: string,
+  file: string,
+  line: number,
+  operator: string,
+  test: string,
+];
+
+/** `sandbox-multiobject`: the 6 kills of `none`. */
+export const V3_MO_KILLERS: readonly V3Killer[] = [
+  ["M0001", "src/MultiControl.Codeunit.al", 4, "empty-block", "ControlDoubles"],
+  ["M0002", "src/MultiControl.Codeunit.al", 5, "return-value", "ControlDoubles"],
+  ["M0006", "src/MultiPair.Codeunit.al", 12, "empty-block", "ReachedBothWays"],
+  ["M0008", "src/MultiPair.Codeunit.al", 14, "return-value", "ReachedBothWays"],
+  ["M0009", "src/MultiPair.Codeunit.al", 14, "swap-additive", "ReachedBothWays"],
+  ["M0010", "src/MultiPair.Codeunit.al", 15, "return-value", "ReachedBothWays"],
+];
+
+/**
+ * `sandbox-wrapped`: the 60 kills of `none` minus M0001 and M0003 (the two `WrappedArms` kills,
+ * which the by-name refusal of a two-arm wrapper costs; `judgeWrArms` pins that refusal instead).
+ */
+export const V3_WR_KILLERS: readonly V3Killer[] = [
+  ["M0004", "src/WrappedPairA.Codeunit.al", 10, "empty-block", "PairPick"],
+  ["M0006", "src/WrappedPairA.Codeunit.al", 12, "return-value", "PairPick"],
+  ["M0007", "src/WrappedPre.Codeunit.al", 9, "empty-block", "GrowPre"],
+  ["M0009", "src/WrappedPre.Codeunit.al", 11, "return-value", "GrowPre"],
+  ["M0010", "src/WrappedPre.Codeunit.al", 11, "swap-additive", "GrowPre"],
+  ["M0012", "src/WrappedPre.Codeunit.al", 35, "empty-block", "TwicePre"],
+  ["M0013", "src/WrappedPre.Codeunit.al", 36, "return-value", "TwicePre"],
+  ["M0014", "src/WrappedPreTwin.Codeunit.al", 9, "empty-block", "GrowPreTwin"],
+  ["M0016", "src/WrappedPreTwin.Codeunit.al", 11, "return-value", "GrowPreTwin"],
+  ["M0017", "src/WrappedPreTwin.Codeunit.al", 11, "swap-additive", "GrowPreTwin"],
+  ["M0019", "src/WrappedPreTwin.Codeunit.al", 35, "empty-block", "TwicePreTwin"],
+  ["M0020", "src/WrappedPreTwin.Codeunit.al", 36, "return-value", "TwicePreTwin"],
+  ["M0021", "src/WrappedTop.Codeunit.al", 7, "empty-block", "GrowTop"],
+  ["M0023", "src/WrappedTop.Codeunit.al", 9, "return-value", "GrowTop"],
+  ["M0024", "src/WrappedTop.Codeunit.al", 9, "swap-additive", "GrowTop"],
+  ["M0026", "src/WrappedTop.Codeunit.al", 32, "empty-block", "TwiceTop"],
+  ["M0027", "src/WrappedTop.Codeunit.al", 34, "remove-assignment", "TwiceTop"],
+  ["M0028", "src/WrappedTop.Codeunit.al", 36, "return-value", "TwiceTop"],
+  ["M0029", "src/WrappedTopTwin.Codeunit.al", 7, "empty-block", "GrowTopTwin"],
+  ["M0031", "src/WrappedTopTwin.Codeunit.al", 9, "return-value", "GrowTopTwin"],
+  ["M0032", "src/WrappedTopTwin.Codeunit.al", 9, "swap-additive", "GrowTopTwin"],
+  ["M0034", "src/WrappedTopTwin.Codeunit.al", 32, "empty-block", "TwiceTopTwin"],
+  ["M0035", "src/WrappedTopTwin.Codeunit.al", 34, "remove-assignment", "TwiceTopTwin"],
+  ["M0036", "src/WrappedTopTwin.Codeunit.al", 36, "return-value", "TwiceTopTwin"],
+  ["M0037", "src/WrappedTrigger.Table.al", 19, "empty-block", "ClampTrigger"],
+  ["M0039", "src/WrappedTrigger.Table.al", 21, "remove-assignment", "ClampTrigger"],
+  ["M0040", "src/WrappedTrigger.Table.al", 21, "shift-integer", "ClampTrigger"],
+  ["M0041", "src/WrappedTrigger.Table.al", 35, "empty-block", "DoubledTrigger"],
+  ["M0042", "src/WrappedTrigger.Table.al", 36, "return-value", "DoubledTrigger"],
+  ["M0043", "src/WrappedTriggerTwin.Table.al", 19, "empty-block", "ClampTriggerTwin"],
+  ["M0045", "src/WrappedTriggerTwin.Table.al", 21, "remove-assignment", "ClampTriggerTwin"],
+  ["M0046", "src/WrappedTriggerTwin.Table.al", 21, "shift-integer", "ClampTriggerTwin"],
+  ["M0047", "src/WrappedTriggerTwin.Table.al", 35, "empty-block", "DoubledTriggerTwin"],
+  ["M0048", "src/WrappedTriggerTwin.Table.al", 36, "return-value", "DoubledTriggerTwin"],
+  ["M0052", "src/WrappedView.Page.al", 32, "empty-block", "LabelView"],
+  ["M0057", "src/WrappedViewTwin.Page.al", 32, "empty-block", "LabelViewTwin"],
+  ["M0062", "src/WrappedXtra.PageExt.al", 19, "empty-block", "ScaledXtra"],
+  ["M0064", "src/WrappedXtra.PageExt.al", 21, "return-value", "ScaledXtra"],
+  ["M0068", "src/WrappedXtraTwin.PageExt.al", 19, "empty-block", "ScaledXtraTwin"],
+  ["M0070", "src/WrappedXtraTwin.PageExt.al", 21, "return-value", "ScaledXtraTwin"],
+  ["M0071", "src/WrappedYBand.Report.al", 22, "empty-block", "BandYRun"],
+  ["M0072", "src/WrappedYBand.Report.al", 23, "remove-assignment", "BandYRun"],
+  ["M0078", "src/WrappedYBand.Report.al", 53, "shift-integer", "BandYRun"],
+  ["M0079", "src/WrappedYBand.Report.al", 57, "empty-block", "BandYDirect"],
+  ["M0080", "src/WrappedYBand.Report.al", 58, "conditional-boundary", "BandYDirect"],
+  ["M0081", "src/WrappedYBand.Report.al", 59, "return-value", "BandYDirect"],
+  ["M0082", "src/WrappedYBand.Report.al", 60, "return-value", "BandYDirect"],
+  ["M0083", "src/WrappedYBand.Report.al", 64, "empty-block", "BandYRun"],
+  ["M0084", "src/WrappedYBand.Report.al", 65, "return-value", "BandYRun"],
+  ["M0085", "src/WrappedYBandTwin.Report.al", 22, "empty-block", "BandYRunTwin"],
+  ["M0086", "src/WrappedYBandTwin.Report.al", 23, "remove-assignment", "BandYRunTwin"],
+  ["M0092", "src/WrappedYBandTwin.Report.al", 53, "shift-integer", "BandYRunTwin"],
+  ["M0093", "src/WrappedYBandTwin.Report.al", 57, "empty-block", "BandYDirectTwin"],
+  ["M0094", "src/WrappedYBandTwin.Report.al", 58, "conditional-boundary", "BandYDirectTwin"],
+  ["M0095", "src/WrappedYBandTwin.Report.al", 59, "return-value", "BandYDirectTwin"],
+  ["M0096", "src/WrappedYBandTwin.Report.al", 60, "return-value", "BandYDirectTwin"],
+  ["M0097", "src/WrappedYBandTwin.Report.al", 64, "empty-block", "BandYRunTwin"],
+  ["M0098", "src/WrappedYBandTwin.Report.al", 65, "return-value", "BandYRunTwin"],
+];
+
+/**
+ * Leg WR's pre-committed `[v3-codeunit-state-possible]` notes, `<batchIndex>/<code>` sorted (#5611:
+ * BandYRun and BandYRunTwin run after BandYDirect and BandYDirectTwin in one codeunit call). They are
+ * kills that stay kills; the note changes no verdict. Measured on the pin and the edge build alike.
+ * Every other leg, MO included, pre-commits none.
+ */
+export const V3_WR_STATE_NOTES: readonly string[] = [
+  "0/M0071",
+  "0/M0072",
+  "0/M0078",
+  "0/M0085",
+  "0/M0086",
+  "0/M0092",
+];
+
+/** One line when the run's state notes are not exactly `want` (both as `batch/code`); else none. */
+export function judgeStateNotes(got: readonly string[], want: readonly string[]): string[] {
+  const g = [...got].sort().join(",");
+  const w = [...want].sort().join(",");
+  return g === w ? [] : [`state notes [${g}], pre-committed [${w}]`];
+}
+
+/** R602: MO and WR were measured one-shot only. A named refusal for another transport, else undefined. */
+export function moWrTransportRefusal(
+  leg: string,
+  transport: string | undefined,
+): string | undefined {
+  return transport === undefined || transport === "one-shot"
+    ? undefined
+    : `${leg}: al-runner-v3-itest-leg-transport-refused: legs MO and WR were measured on the one-shot transport only (R602), not ${transport}`;
+}
+
+/** The fields of a report row the judges read. */
+export interface V3RowFacts {
+  readonly mutantCode: string;
+  readonly file: string;
+  readonly line: number;
+  readonly operatorName: string;
+  readonly verdict: string;
+  readonly killingTest?: string;
+  readonly failureNote?: string;
+}
+
+/**
+ * One line per killer that is not killed by its test at its site; empty is a pass. A missing
+ * mutant, a moved site and a kill by another test each count: the list is the ground truth, so a
+ * changed identity is a difference too, never a skip.
+ */
+export function judgeKillers(rows: readonly V3RowFacts[], killers: readonly V3Killer[]): string[] {
+  const byCode = new Map(rows.map((r) => [r.mutantCode, r]));
+  const out: string[] = [];
+  for (const [code, file, line, op, test] of killers) {
+    const r = byCode.get(code);
+    if (r === undefined) {
+      out.push(
+        `${code} (${file}:${line} ${op}) is missing from the run, \`none\` killed it by ${test}`,
+      );
+      continue;
+    }
+    const at = `${r.file.replace(/\\/g, "/")}:${r.line} ${r.operatorName}`;
+    if (at !== `${file}:${line} lethal.${op}`) {
+      out.push(`${code} is at ${at}, the killer list has ${file}:${line} lethal.${op}`);
+    } else if (r.verdict !== "killed" || r.killingTest !== test) {
+      out.push(
+        `${code} (${file}:${line} ${op}) is ${r.verdict}${r.killingTest !== undefined ? ` by ${r.killingTest}` : ""}, \`none\` killed it by ${test}`,
+      );
+    }
+  }
+  return out;
+}
+
+const WR_ARMS_FILE = "src/WrappedArms.Codeunit.al";
+
+/**
+ * Leg WR's by-name refusal: exactly three `WrappedArms` rows, each `no-coverage` with `refusal` as
+ * its note, and no other row carrying that note. Empty is a pass.
+ */
+export function judgeWrArms(rows: readonly V3RowFacts[], refusal: string): string[] {
+  const out: string[] = [];
+  const arms = rows.filter((r) => r.file.replace(/\\/g, "/") === WR_ARMS_FILE);
+  if (arms.length !== 3) out.push(`${arms.length} WrappedArms row(s), pre-committed 3`);
+  for (const r of arms) {
+    if (r.verdict !== "no-coverage" || r.failureNote !== refusal) {
+      out.push(
+        `${r.mutantCode} (WrappedArms) is ${r.verdict}, note ${JSON.stringify(r.failureNote)}; pre-committed no-coverage with the refusal`,
+      );
+    }
+  }
+  for (const r of rows) {
+    if (r.file.replace(/\\/g, "/") !== WR_ARMS_FILE && r.failureNote === refusal) {
+      out.push(`${r.mutantCode} (${r.file}) carries the WrappedArms refusal`);
+    }
+  }
+  return out;
 }
 
 /**

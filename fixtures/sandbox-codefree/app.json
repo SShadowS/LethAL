@@ -1,0 +1,30 @@
+{
+  "id": "e3a1c7d4-5b2f-4a96-8d10-7f4b9c2e6a31",
+  "name": "LethAL Sandbox CodeFree",
+  "publisher": "LethAL",
+  "version": "1.0.0.1",
+  "brief": "LethAL R-579 fixture: codeunits after a pragma-only #if, two codeunits split by one, and #if-wrapped code-free objects.",
+  "description": "v3-only (R-579's coverage differential), in no BC gate. Built with the app.json symbol CFACTIVE. CFActive.Codeunit.al and CFInactive.Codeunit.al hold a pragma-only #if before their codeunit (the condition is defined for one, not the other); CFSplit.Codeunit.al holds codeunit A, a pragma-only #if, then codeunit B; the CF*.al files with a kind in their name are code-free objects wrapped in #if. Deliberately its OWN app and id range. Not for production use, see fixtures/README.md.",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "dependencies": [],
+  "screenshots": [],
+  "idRanges": [
+    {
+      "from": 79900,
+      "to": 79949
+    }
+  ],
+  "preprocessorSymbols": ["CFACTIVE"],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "target": "OnPrem",
+  "runtime": "17.0",
+  "features": []
+}

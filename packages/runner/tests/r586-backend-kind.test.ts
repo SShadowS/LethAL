@@ -94,7 +94,7 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     'if (parsed.backendKind === "al-runner-v3") {': "v3",
     '} else if (paths.backendKind === "al-runner-v3") {': "v3",
     'if (backendKind === "al-runner-v3") {': "v3",
-    'if (coverage === "al-runner") {': "coverage-mode",
+    'if (configured !== "al-runner") return configured;': "coverage-mode",
     'if (backendArg === "bcdev" && workers > 1) {': "bcdev",
     'if (parsed.backendKind !== "bcdev" || configFile.envTool === undefined) {': "bcdev",
     'if (parsed.backendKind !== "bcdev") return {};': "bcdev",

@@ -329,6 +329,9 @@ const WRITING_GATES: Record<string, Readonly<Record<string, string>>> = {
     LAYOUT_BASELINE_PATH: "al-runner-v3.layout.baseline.json",
     SYMBOLS_A_BASELINE_PATH: "al-runner-v3.symbols-lethala.baseline.json",
     SYMBOLS_B_BASELINE_PATH: "al-runner-v3.symbols-lethalb.baseline.json",
+    // R602: legs MO and WR.
+    MULTIOBJECT_BASELINE_PATH: "al-runner-v3.multiobject.baseline.json",
+    WRAPPED_BASELINE_PATH: "al-runner-v3.wrapped.baseline.json",
   },
 };
 const READERS: Record<string, string> = {

@@ -202,6 +202,8 @@
     "r546-bucket.ts",
     "r658-hang-gate.test.ts",
     "r572-flag-census.ts",
+    "r579-coverage-census.test.ts",
+    "r579-coverage-census.ts",
     "r595-gap-map.ts",
     "r624-absent-status.ts",
     "redact-campaign-report.test.ts",

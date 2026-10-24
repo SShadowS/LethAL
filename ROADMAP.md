@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**33 of 699 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**30 of 700 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -252,7 +252,7 @@ that ordering is the priority.
 - **R529** · Self-inserting report items: an insert made from another object is not seen, so the item's own filter is not protected · [R529.md](docs/roadmap/R529.md) · closed 2026-10-23 — ruling: all 18 items read (BaseApp only), none consumes; the covering rule is the…
 - **R530** · Self-inserting report items: a bound set in a callee or in OnPreReport is not protected · [R530.md](docs/roadmap/R530.md) · done (191cd4be)
 - **R531** · A loop that ends only by consuming its record set (`while Rec.FindFirst() do ... Rec.Delete()`) is not hang-refused anywhere · [R531.md](docs/roadmap/R531.md) · done (129295cf): record-consuming loops hang-refused; BC.History 984, CDO 9, DC 39, DO 9; scheme 39
-- **R696** · Report-loop hang refusal does not see a report data item's own Rename, or a Modify after a key or filter field write, on the record it walks · [R696.md](docs/roadmap/R696.md) · open, filed 2026-10-24
+- **R696** · Report-loop hang refusal does not see a report data item's own Rename, or a Modify after a key or filter field write, on the record it walks · [R696.md](docs/roadmap/R696.md) · done (c101cedb)
 - **R532** · Preset report exit names: a value computed in another object, or passed through another variable, is not refused · [R532.md](docs/roadmap/R532.md) · done (a6b08d50): same-scope feeds refused, BaseApp -60, no scheme change; the cross-object part closed…
 - **R547** · A base-report procedure called bare from an open `reportextension` block is looked up on the data item's table, never on the base report, so its hang-capable mutants stay deployed · [R547.md](docs/roadmap/R547.md) · done (6ec70aac): bare and this. calls followed into the base report; 0 BaseApp sites today
 - **R548** · A base report's `protected var` written by a `reportextension` is not seen by loop-hazard's `writesPresetExitName` · [R548.md](docs/roadmap/R548.md) · done (6ec70aac): BaseApp 2 more hang-refused (MfgWhseSourceCreateDocument SetProdOrder); 0 keys moved
@@ -311,6 +311,7 @@ that ordering is the priority.
 - **R699** · lethal verify looks up an integer literal with leading zeros (01000) as text, so a test-app object's id written that way is neither folded nor a fallback · [R699.md](docs/roadmap/R699.md) · done (a7cbd81e)
 - **R700** · lethal verify puts a test app's Install and Upgrade codeunits in no digest: an edit to the code the platform runs at install or upgrade leaves every test's digest unchanged · [R700.md](docs/roadmap/R700.md) · done (c2d51590)
 - **R701** · lethal verify puts no permission set in any digest: a test app's permission set (included through IncludedPermissionSets) can change a test's outcome without changing its digest · [R701.md](docs/roadmap/R701.md) · done (c2d51590)
+- **R702** · Moved-walk refusal follows no callee from a Next loop's body, and does not cover temporary walks · [R702.md](docs/roadmap/R702.md) · open, filed 2026-10-24
 - **R703** · After the release: read the platform's committed test result after a stop (R-204b Part B, a LethAL Control change), and measure BC's CPU-only cancel latency and a slow test's spread near its budget, to size and narrow R204's residual false timeout-killed window · [R703.md](docs/roadmap/R703.md) · open, filed 2026-10-24 — after the first release (orchestrator ruling)
 
 ## Product gaps a real project hits
@@ -663,8 +664,8 @@ that ordering is the priority.
 - **R565** · No dependency source loader: a rule that needs a DEPENDENCY's procedure bodies (R561's known preset writer) cannot run, though Microsoft's .app packages ship their source · [R565.md](docs/roadmap/R565.md) · done (8fc29663): dependency report source loader for known preset writers; QM -7, ATL -15…
 - **R566** · Host step: does the env tool's own publish serve a source-less test app back byte for byte? (R498's gain on that route is unmeasured) · [R566.md](docs/roadmap/R566.md) · open, filed 2026-10-10 — a HOST step for the owner (the env tool is host-only)
 - **R578** · al-runner fails Report.RunModal with a request page shown to a [RequestPageHandler] ("An error occurred and the transaction is stopped"); not yet checked on BC · [R578.md](docs/roadmap/R578.md) · closed 2026-10-23 — ruling: BC 28.4 fails the same test with the same text at RunModal, so v3 matches BC; a…
-- **R579** · A #if block holding only #pragma lines counts as an object wrapper, so 21 Power BI Report embeddings files turn al-runner coverage off (wrapperHoldsObject vs isTopLevelObject) · [R579.md](docs/roadmap/R579.md) · open, filed 2026-10-11
-- **R580** · A #if-wrapped CODE-FREE object (enum, interface, permission set, control add-in, dotnet, enumextension) turns al-runner coverage off for its whole project, though it has no coverage identity: 42 files in 12 BC.History projects · [R580.md](docs/roadmap/R580.md) · open, filed 2026-10-11
+- **R579** · A #if block holding only #pragma lines counts as an object wrapper, so 21 Power BI Report embeddings files turn al-runner coverage off (wrapperHoldsObject vs isTopLevelObject) · [R579.md](docs/roadmap/R579.md) · done (cbee8b6a)
+- **R580** · A #if-wrapped CODE-FREE object (enum, interface, permission set, control add-in, dotnet, enumextension) turns al-runner coverage off for its whole project, though it has no coverage identity: 42 files in 12 BC.History projects · [R580.md](docs/roadmap/R580.md) · done (cbee8b6a)
 - **R581** · An al-runner --server baseline that fails before running any test reports "returned: <no tests>" and hides al-runner's own reason ("BC version selection failed ... minimum 28.6") · [R581.md](docs/roadmap/R581.md) · closed 2026-10-23 — retired with the .NET al-runner (R654): the v2 --server baseline path was deleted in R654…
 - **R583** · al-runner 069cbf32 fails itest:alrunner's --server + resource-selector leg: NavNclResourceNotFoundException for 'active-mutant.txt' · [R583.md](docs/roadmap/R583.md) · done (3d826909)
 - **R586** · The al-runner-v3 backend: the Rust al-runner v3 (formerly al-runtime-rs), its contract measured first (owner request) · [R586.md](docs/roadmap/R586.md) · done (8a71e87d)
@@ -679,7 +680,7 @@ that ordering is the priority.
 - **R596** · bc-linux-setup writes no selectorIds into the sandbox-harden config, so itest:agreement refuses on bc servers · [R596.md](docs/roadmap/R596.md) · done (c881d0ba)
 - **R597** · lethal verify's test-app-version-below-resident refusal tells the user to run Sync-NAVApp, a Windows/BcContainerHelper-only fix, on the Linux bc servers too · [R597.md](docs/roadmap/R597.md) · open, filed 2026-10-21
 - **R598** · scripts/bc-linux-setup.ts takes its bc server lease in lane `code`'s name, whoever runs it · [R598.md](docs/roadmap/R598.md) · done (7dd00798)
-- **R602** · al-runner-v3 multi-object and #if-wrapped coverage refusal: measured correct in two shapes; lifting it needs fixture legs · [R602.md](docs/roadmap/R602.md) · open (narrowed 2026-10-23: v3 measured correct in two shapes; the refusal costs speed only)
+- **R602** · al-runner-v3 coverage for multi-object and single-wrapper #if files: measured correct, admitted (and a shipping lost-kill defect fixed) · [R602.md](docs/roadmap/R602.md) · done (7b3dd27b) — v3 coverage is on for multi-object and single-wrapper #if projects; gate legs MO and WR…
 - **R599** · scripts/bc-linux-setup.ts compares app versions, not contents, so a fixture rebuilt without a version bump keeps a stale build resident · [R599.md](docs/roadmap/R599.md) · done (d89d6eb4): decides by normalised content digest; live on bc3 twice (run 2 on this head)
 - **R603** · CI's Windows check job runs the unit suite serially; a parallel run there is unmeasured · [R603.md](docs/roadmap/R603.md) · done (6d3f654b)
 - **R605** · The dev endpoint refuses a publish below the installed-version record after an unpublish, so a minted gate version cannot be replaced by the app.json build on the Linux bc servers · [R605.md](docs/roadmap/R605.md) · open

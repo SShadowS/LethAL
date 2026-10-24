@@ -796,6 +796,9 @@ function altersBoundCall(node: ALSyntaxNode, ctx: SemanticContext): boolean {
  * never sets the flag the item's Break reads). R500 adds the one-hop callees, the outside filter
  * calls and the two LIMITS (header). It needs `ctx.files` and throws without it.
  *
+ * R-696 adds loops that move the record they walk (`inMovedWalk`): a Rename, Insert or key-field
+ * ModifyAll by any non-temporary variable of the walked table, or a key-changing Modify by a second one.
+ *
  * R-531 adds loops that end only by consuming their record set (`consumingLoopRefuses`). `op` is
  * the operator's name and is REQUIRED: that rule exempts `lethal.swap-find-direction` inside the
  * loop's own condition, and a caller that passes `undefined` gets no exemption (the safe default).
@@ -814,6 +817,7 @@ export function openItemHangRefuses(
     inR572Guard(node, ctx) ||
     altersSelfInsertFilter(node, ctx) ||
     inSelfInsertItem(node, ctx) ||
+    inMovedWalk(node, ctx) ||
     altersOpenItemFilter(node, ctx) ||
     writesPresetExitName(node, ctx) ||
     consumingLoopRefuses(node, ctx, op)
@@ -2931,6 +2935,471 @@ function inSelfInsertItem(node: ALSyntaxNode, ctx: SemanticContext): boolean {
         (r.s <= node.startIndex && node.endIndex <= r.e),
     )
   );
+}
+
+/**
+ * R696: a test-only seam. Tests and cost measurements switch `on` off to get master's behaviour.
+ */
+export const r696Seam = { on: true };
+
+/**
+ * R696. A loop that MOVES THE RECORD IT WALKS. Measured on bc2 (probe results, pre-commitment
+ * a67f292f): `Next` sees a row that a SECOND variable of the walked table moved ahead of the cursor
+ * (a Rename, or a Modify that changed a field of the current sort key), or that an insert put ahead
+ * of it, under `FindSet`, `FindSet(true)` and `Find('-')`, in code and in a report data item. A move
+ * by the walked variable's own Modify never revisits a row. So the walk ends only because an exit
+ * works, and a mutant that removes the exit (or a `CurrReport.Skip`) never ends. Refused, for every
+ * operator, as R531 does (a site inside a span, or containing one inside its limit):
+ *
+ * SHAPE B, a `repeat .. until R.Next() ..` or `while R.Next() .. do` loop (any object) over a
+ * non-temporary R, whose BODY holds a mover: `Rename` on a non-temporary variable of R's table (R
+ * itself too: no Rename leg was probed); `ModifyAll(F, ..)` with F in R's sort key (R too);
+ * `Insert` on such a variable (R too); `Modify` on another such variable after a write of a field of
+ * R's sort key or of the whole record (`V.F :=`, `V.Validate(F, ..)`, `TransferFields`, `V := X`,
+ * `Copy`, `Init`); the implicit Rec counts as that other variable when R is a local. Refused: the
+ * exits that leave the walk and their guards; the mover and its writes; the pre-loop filter calls on
+ * R (`SetRange`, `SetFilter`, `SetCurrentKey`, `Copy*`, `SetView`, `Reset`; one inside an enclosing
+ * loop counts as pre-loop), the guards around them; and the assignments that feed all of these
+ * (`r531Feeds`). R's sort key: the primary key plus the union of every pre-loop `SetCurrentKey` on
+ * R; EVERY field after a `SetView` or `Copy` on R, for a table the project does not declare, and
+ * when R is a parameter, a global or the implicit Rec with no `SetCurrentKey` (the caller set it).
+ *
+ * SHAPE A, a report data item or XMLport table element over an ordinary table that R530 does not
+ * already take: the same movers through another variable, or a one-hop callee (or `V.P()` on a
+ * variable of the item's table) that inserts into the item's table. Refused: every site in the
+ * item's triggers and the same-object procedures they reach, plus the filter calls on the item
+ * anywhere in the object and their feeds. The key is the item's SORTING, a `SetCurrentKey` on it,
+ * and the primary key.
+ *
+ * LIMITS, accepted: shape B follows no callee (R passed to a call is not followed) and does not
+ * read a guard in a helper; a bound set by a caller; temporary walks (not probed); an XMLport
+ * self-insert item (outside R530 and this). R696 roadmap item, "Done".
+ */
+function inMovedWalk(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+  if (!r696Seam.on) return false;
+  const obj = objectOf(node);
+  if (obj === null) return false;
+  return cached(ctx, obj, "r696spans", () => r696Spans(obj, ctx)).some(
+    (sp) =>
+      (sp.s <= node.startIndex && node.endIndex <= sp.e) ||
+      (!sp.inside &&
+        node.startIndex <= sp.s &&
+        sp.e <= node.endIndex &&
+        sp.limS <= node.startIndex &&
+        node.endIndex <= sp.limE),
+  );
+}
+
+/** A refused span: a site INSIDE it is refused; a site CONTAINING it and sitting inside its limit is
+ *  refused too, unless `inside` (inside only, the R530 way). */
+interface R696Span {
+  readonly s: number;
+  readonly e: number;
+  readonly inside: boolean;
+  readonly limS: number;
+  readonly limE: number;
+}
+type R696Push = (n: ALSyntaxNode, limit: ALSyntaxNode | null, inside?: boolean) => void;
+
+/** The sort key fields of a walk; "all" when it cannot be known (fail closed). */
+type R696Keys = ReadonlySet<string> | "all";
+const r696InKey = (k: R696Keys, f: string): boolean => k === "all" || f === "*" || k.has(f);
+
+const R696_FILTER: ReadonlySet<string> = new Set([
+  "setrange",
+  "setfilter",
+  "setcurrentkey",
+  "copyfilters",
+  "copyfilter",
+  "copy",
+  "setview",
+  "setrecfilter",
+  "reset",
+]);
+/** Calls that write the whole record. */
+const R696_WHOLE: ReadonlySet<string> = new Set(["transferfields", "copy", "init"]);
+const R696_MOVE: ReadonlySet<string> = new Set(["rename", "modify", "modifyall", "insert"]);
+
+const r696IsCall = (n: ALSyntaxNode): boolean =>
+  n.rawKind === "call_expression" || n.rawKind === "call_statement";
+
+function r696Spans(obj: ALSyntaxNode, ctx: SemanticContext): R696Span[] {
+  const out: R696Span[] = [];
+  const push: R696Push = (n, limit, inside = false) => {
+    out.push({
+      s: n.startIndex,
+      e: n.endIndex,
+      inside,
+      limS: limit?.startIndex ?? -1,
+      limE: limit?.endIndex ?? -1,
+    });
+  };
+  visitAll(obj, (n) => {
+    if (isLoopItem(n)) r696Item(n, obj, ctx, push);
+    else if (n.rawKind === "while_statement" || n.rawKind === "repeat_statement")
+      r696Loop(n, ctx, push);
+  });
+  return out;
+}
+
+/** The primary key fields of a project table; null when the project does not declare it. */
+function r696Pk(table: string, ctx: SemanticContext): Set<string> | null {
+  const t = objectsOfType({ kind: "table", name: table, temporary: false }, ctx).find(
+    (o) => o.rawKind === "table_declaration",
+  );
+  if (t === undefined) return null;
+  return cached(ctx, t, "r696pk", () => {
+    const first: Set<string>[] = [];
+    visitAll(t, (k) => {
+      if (first.length > 0 || k.rawKind !== "key_declaration") return;
+      const list = k.namedChildren.find((c) => c.rawKind === "field_list");
+      first.push(
+        new Set(
+          (list?.namedChildren ?? []).filter(isIdentifierLike).map((f) => normalizeAlName(f.text)),
+        ),
+      );
+    });
+    const [pk] = first;
+    return pk === undefined || pk.size === 0 ? null : pk;
+  });
+}
+
+/** The table a call's receiver names, and whether it is temporary: the declared type, else the
+ *  record the engine binds (`resolveReceiverTable`: a data item's name, the implicit Rec). */
+function r696Table(call: ALSyntaxNode, ctx: SemanticContext): DeclaredType | null {
+  const f = call.rawKind === "member_expression" ? call : call.childForFieldName("function");
+  const recv = f?.rawKind === "member_expression" ? f.childForFieldName("object") : null;
+  const t =
+    recv !== null && recv !== undefined && isIdentifierLike(recv) ? declaredType(recv, ctx) : null;
+  if (t !== null) return t.kind === "table" ? t : null;
+  const name = resolveReceiverTable(call, ctx);
+  return name === null ? null : { kind: "table", name: normalizeAlName(name), temporary: false };
+}
+
+/** The field a Validate/ModifyAll call names (`F` or `Rec.F`); "*" when unreadable. */
+function r696Field(c: R531Call): string | null {
+  if (c.uncertain) return "*";
+  const a = c.args[0];
+  if (a === undefined) return null;
+  const m = a.rawKind === "member_expression" ? a.childForFieldName("member") : null;
+  return normalizeAlName((m ?? a).text);
+}
+
+interface R696Write {
+  readonly node: ALSyntaxNode;
+  /** "*": the whole record */
+  readonly field: string;
+  /** what the write reads: feeds */
+  readonly reads: ALSyntaxNode[];
+}
+
+/** The writes to variable `vkey` under `body`: `V.F :=`, a bare `F :=` (the implicit Rec),
+ *  `V.Validate(F, ..)`, and the whole-record writes `V := X`, `TransferFields`, `Copy`, `Init`. */
+function r696Writes(body: ALSyntaxNode, vkey: string, ctx: SemanticContext): R696Write[] {
+  const out: R696Write[] = [];
+  visitAll(body, (n) => {
+    if (n.kind === ALNodeKind.assignment_statement) {
+      const l = n.childForFieldName("left");
+      const r = n.childForFieldName("right");
+      if (l === null) return;
+      const reads = r === null ? [] : [r];
+      if (l.rawKind === "member_expression") {
+        const m = l.childForFieldName("member");
+        if (m !== null && r531Key(l.childForFieldName("object")) === vkey)
+          out.push({ node: n, field: normalizeAlName(m.text), reads });
+      } else if (isIdentifierLike(l)) {
+        const declared = resolveVarRef(l, ctx) !== null;
+        if (normalizeAlName(l.text) === "rec" || declared) {
+          if (r531Key(l) === vkey) out.push({ node: n, field: "*", reads });
+        } else if (vkey === "") out.push({ node: n, field: normalizeAlName(l.text), reads });
+      }
+      return;
+    }
+    if (!r696IsCall(n)) return;
+    const c = r531Call(n);
+    if (c === null || (c.recv ?? (r531Implicit(n, ctx) ? "" : null)) !== vkey) return;
+    if (c.method === "validate") {
+      const f = r696Field(c);
+      if (f !== null) out.push({ node: n, field: f, reads: [...c.args] });
+    } else if (R696_WHOLE.has(c.method)) out.push({ node: n, field: "*", reads: [...c.args] });
+  });
+  return out;
+}
+
+interface R696Mover {
+  readonly call: ALSyntaxNode;
+  readonly writes: R696Write[];
+}
+interface R696Walk {
+  /** the receiver keys that name the walked record */
+  readonly rkeys: ReadonlySet<string>;
+  readonly table: string;
+  readonly keys: R696Keys;
+  /** the walked variable's own Rename, ModifyAll and Insert move too (not its Modify) */
+  readonly self: boolean;
+  /** the implicit Rec is a variable other than the walked one */
+  readonly recDistinct: boolean;
+}
+
+/** The movers under `body` (see `inMovedWalk`). */
+function r696Movers(body: ALSyntaxNode, w: R696Walk, ctx: SemanticContext): R696Mover[] {
+  const out: R696Mover[] = [];
+  const writes = new Map<string, R696Write[]>();
+  visitAll(body, (c) => {
+    if (!r696IsCall(c)) return;
+    const rc = r531Call(c);
+    if (rc === null || !R696_MOVE.has(rc.method)) return;
+    const vkey = rc.recv ?? (r531Implicit(c, ctx) ? "" : null);
+    if (vkey === null || vkey.startsWith("\u0001")) return;
+    const t = r696Table(c, ctx);
+    if (t === null || t.temporary || t.name !== w.table) return;
+    if (w.rkeys.has(vkey)) {
+      if (!w.self || rc.method === "modify") return;
+    } else if (rc.method === "modify" && vkey === "" && !w.recDistinct) return;
+    if (rc.method === "rename") out.push({ call: c, writes: [] });
+    else if (rc.method === "modifyall") {
+      const f = r696Field(rc);
+      if (f !== null && r696InKey(w.keys, f)) out.push({ call: c, writes: [] });
+    } else {
+      const all = writes.get(vkey) ?? r696Writes(body, vkey, ctx);
+      writes.set(vkey, all);
+      const before = all.filter((x) => x.node.startIndex < c.startIndex);
+      if (rc.method === "insert") out.push({ call: c, writes: before });
+      else {
+        const keyed = before.filter((x) => r696InKey(w.keys, x.field));
+        if (keyed.length > 0) out.push({ call: c, writes: keyed });
+      }
+    }
+  });
+  return out;
+}
+
+/** The `Next` call in a loop's condition, or null. */
+function r696Next(loop: ALSyntaxNode): ALSyntaxNode | null {
+  const hits: ALSyntaxNode[] = [];
+  for (const p of loopConditionParts(loop))
+    visitAll(p, (c) => {
+      if (hits.length === 0 && r696IsCall(c) && r531Call(c)?.method === "next") hits.push(c);
+    });
+  return hits[0] ?? null;
+}
+
+/** The filter and key calls on `rkey` that run before `loop`: earlier in the text, or anywhere in a
+ *  loop that encloses it (they run before its next pass). */
+function r696PreFilters(
+  scope: ALSyntaxNode,
+  loop: ALSyntaxNode,
+  rkey: string,
+  ctx: SemanticContext,
+): ALSyntaxNode[] {
+  const enclosing: ALSyntaxNode[] = [];
+  for (let a = loop.parent; a !== null && !samePos(a, scope); a = a.parent)
+    if (BREAK_SCOPES.has(a.rawKind)) enclosing.push(a);
+  const out: ALSyntaxNode[] = [];
+  visitAll(scope, (n) => {
+    if (!r696IsCall(n)) return;
+    const c = r531Call(n);
+    if (c === null || !R696_FILTER.has(c.method)) return;
+    if ((c.recv ?? (r531Implicit(n, ctx) ? "" : null)) !== rkey) return;
+    if (loop.startIndex <= n.startIndex && n.endIndex <= loop.endIndex) return;
+    if (
+      n.endIndex <= loop.startIndex ||
+      enclosing.some((e) => e.startIndex <= n.startIndex && n.endIndex <= e.endIndex)
+    )
+      out.push(n);
+  });
+  return out;
+}
+
+/** The sort key of a walk: the primary key plus every `SetCurrentKey` field in `calls`; "all" after
+ *  a `SetView`/`Copy`/`CopyFilters`, for a table the project lacks, and (`callerKey`) when nothing
+ *  in this procedure set a key. */
+function r696Keys(
+  table: string,
+  calls: ALSyntaxNode[],
+  callerKey: boolean,
+  ctx: SemanticContext,
+): R696Keys {
+  const pk = r696Pk(table, ctx);
+  if (pk === null) return "all";
+  const keys = new Set(pk);
+  let set = false;
+  for (const n of calls) {
+    const c = r531Call(n);
+    if (c === null) continue;
+    if (c.method === "setcurrentkey") {
+      set = true;
+      if (c.uncertain) return "all";
+      for (const a of c.args) keys.add(normalizeAlName(a.text));
+    } else if (c.method === "setview" || c.method === "copy" || c.method === "copyfilters")
+      return "all";
+  }
+  return callerKey && !set ? "all" : keys;
+}
+
+function r696Loop(loop: ALSyntaxNode, ctx: SemanticContext, push: R696Push): void {
+  const nc = r696Next(loop);
+  const scope = codeScope(loop);
+  const body = loop.childForFieldName("body");
+  if (nc === null || scope === null || body === null) return;
+  const rc = r531Call(nc);
+  const rkey = rc?.recv ?? "";
+  if (rc === null || rkey.startsWith("\u0001")) return;
+  const rt = r696Table(nc, ctx);
+  if (rt === null || rt.temporary) return;
+  const rLocal = rkey !== "" && r531Declares(scope, rkey, false);
+  const filters = r696PreFilters(scope, loop, rkey, ctx);
+  const movers = r696Movers(
+    body,
+    {
+      rkeys: new Set([rkey]),
+      table: rt.name,
+      keys: r696Keys(rt.name, filters, !rLocal, ctx),
+      self: true,
+      recDistinct: rLocal,
+    },
+    ctx,
+  );
+  if (movers.length === 0) return;
+  const parts: ALSyntaxNode[] = [];
+  for (const m of movers) {
+    push(m.call, loop);
+    parts.push(...(r531Call(m.call)?.args ?? []));
+    for (const x of m.writes) {
+      push(x.node, loop);
+      parts.push(...x.reads);
+    }
+  }
+  const isExit = (x: ALSyntaxNode): boolean =>
+    endsScope(x, scope) || (x.rawKind === "break_statement" && exitsLoop(x, loop));
+  visitAll(body, (x) => {
+    if (isExit(x)) push(x.parent !== null && r696IsCall(x.parent) ? x.parent : x, loop);
+  });
+  for (const g of exitGuards(body, loop, isExit)) {
+    push(g, loop);
+    parts.push(g);
+  }
+  for (const f of filters) {
+    push(f, scope);
+    parts.push(...(r531Call(f)?.args ?? []));
+    for (const g of guardsUpTo(f, scope)) {
+      push(g, scope);
+      parts.push(g);
+    }
+  }
+  for (const a of r531Feeds(scope, parts, ctx)) push(a, scope);
+}
+
+/** Does procedure `p` of object `o` insert into `table`: a bare `Insert` in a procedure of the table
+ *  (or its tableextension), or `V.Insert` on a non-temporary `Record <table>` variable? */
+function r696Inserts(
+  p: ALSyntaxNode,
+  o: ALSyntaxNode,
+  table: string,
+  ctx: SemanticContext,
+): boolean {
+  const ownTable =
+    (o.rawKind === "table_declaration" && objectNameOf(o) === table) ||
+    (o.rawKind === "tableextension_declaration" &&
+      normalizeAlName(lastFieldChild(o, "base_object")?.text ?? "") === table);
+  let found = false;
+  visitAll(p, (x) => {
+    if (found || !r696IsCall(x)) return;
+    const c = r531Call(x);
+    if (c === null || c.method !== "insert") return;
+    if (c.recv === null) {
+      if (ownTable && r531Implicit(x, ctx)) found = true;
+      return;
+    }
+    const t = r696Table(x, ctx);
+    if (t !== null && !t.temporary && t.name === table) found = true;
+  });
+  return found;
+}
+
+/** Does code under `scope` call (one hop) a procedure that inserts into `table`? `V.P()` counts only
+ *  for a non-temporary V. */
+function r696CalleeInserts(scope: ALSyntaxNode, table: string, ctx: SemanticContext): boolean {
+  let found = false;
+  visitAll(scope, (c) => {
+    if (found || !r696IsCall(c)) return;
+    const tg = callTargets(c, ctx);
+    if (tg === null || tg.member === "") return;
+    const f = c.childForFieldName("function");
+    const recv = f?.rawKind === "member_expression" ? f.childForFieldName("object") : null;
+    const rt =
+      recv !== null && recv !== undefined && isIdentifierLike(recv)
+        ? declaredType(recv, ctx)
+        : null;
+    if (rt?.kind === "table" && rt.temporary) return;
+    for (const o of tg.objs)
+      visitAll(o, (p) => {
+        if (found || !(isProcedureLike(p) || p.rawKind === "procedure")) return;
+        if (procNames(p).includes(tg.member) && r696Inserts(p, o, table, ctx)) found = true;
+      });
+  });
+  return found;
+}
+
+function r696Item(
+  item: ALSyntaxNode,
+  obj: ALSyntaxNode,
+  ctx: SemanticContext,
+  push: R696Push,
+): void {
+  const table = itemTable(item);
+  if (table === "integer" || table === "date" || table === "" || selfInserts(item, ctx)) return;
+  const iname = normalizeAlName(item.childForFieldName("name")?.text ?? "");
+  const scopes = itemScopes(item, ctx);
+  // filter and key calls on the item, anywhere in the object (OnPreReport, helpers)
+  const onItem: ALSyntaxNode[] = [];
+  visitAll(obj, (n) => {
+    if (!r696IsCall(n)) return;
+    const c = r531Call(n);
+    if (c === null || !R696_FILTER.has(c.method)) return;
+    // a bare call counts when it sits in the item's own code: the implicit Rec is the item there
+    const bare =
+      (c.recv === "" || (c.recv === null && r531Implicit(n, ctx))) &&
+      scopes.some((sc) => sc.startIndex <= n.startIndex && n.endIndex <= sc.endIndex);
+    if (c.recv === iname || bare) onItem.push(n);
+  });
+  const sorting: ALSyntaxNode[] = [];
+  const body = item.childForFieldName("body");
+  for (const m of body === null ? [] : itemMembers(body, ctx)) {
+    const name = normalizeAlName(m.childForFieldName("name")?.text ?? "");
+    const v = m.childForFieldName("value");
+    if (
+      m.rawKind === "property" &&
+      v !== null &&
+      /^(dataitemtableview|sourcetableview)$/.test(name)
+    )
+      visitAll(v, (w) => {
+        if (w.rawKind === "sorting_value") sorting.push(w);
+      });
+  }
+  const sortKeys = new Set<string>();
+  for (const s of sorting)
+    for (const c of s.namedChildren) if (isIdentifierLike(c)) sortKeys.add(normalizeAlName(c.text));
+  const base = r696Keys(table, onItem, false, ctx);
+  const keys: R696Keys = base === "all" ? base : new Set([...base, ...sortKeys]);
+  const walk: R696Walk = {
+    rkeys: new Set([iname, ""]),
+    table,
+    keys,
+    self: false,
+    recDistinct: false,
+  };
+  if (
+    !scopes.some((sc) => r696Movers(sc, walk, ctx).length > 0 || r696CalleeInserts(sc, table, ctx))
+  )
+    return;
+  for (const sc of scopes) push(sc, null, true);
+  const parts: ALSyntaxNode[] = [];
+  for (const f of onItem) {
+    push(f, obj);
+    parts.push(...(r531Call(f)?.args ?? []));
+  }
+  for (const a of r531Feeds(obj, parts, ctx)) push(a, obj);
 }
 
 /**
