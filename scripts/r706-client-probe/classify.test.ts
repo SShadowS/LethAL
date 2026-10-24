@@ -7,6 +7,7 @@ import {
   type Reading,
   type RunClasses,
   SECURITY,
+  contradictsR639,
   outcomeOf,
   pathClass,
   readingOf,
@@ -78,8 +79,8 @@ describe("pathClass", () => {
 });
 
 describe("outcomeOf: one case per table row", () => {
-  test("row 1: a SPLIT path", () =>
-    expect(outcomeOf([run(B, pc("SPLIT")), run(B, S)]).row).toBe(1));
+  test("row 1: a SPLIT path (the same SPLIT in both runs, so no disagreement)", () =>
+    expect(outcomeOf([run(B, pc("SPLIT")), run(B, pc("SPLIT"))]).row).toBe(1));
   test("row 1: run 1 and run 2 disagree on a path", () =>
     expect(outcomeOf([run(B, S), run(B, B)]).row).toBe(1));
   test("row 1: two runs, different third texts", () =>
@@ -104,4 +105,22 @@ describe("outcomeOf: one case per table row", () => {
   });
   test("gap: web-service NONE with a hub text", () =>
     expect(outcomeOf([run(pc("NONE"), S), run(pc("NONE"), S)]).row).toBe(0));
+  test("row 7 beats the gap row: web-service NONE with a third hub text", () => {
+    const t = pc("OTHER", "t");
+    expect(outcomeOf([run(pc("NONE"), t), run(pc("NONE"), t)]).row).toBe(7);
+  });
+});
+
+describe("contradictsR639", () => {
+  const none = pc("NONE");
+  test("row 2 with a web-service class that is not BLOCKED", () =>
+    expect(contradictsR639(2, [run(S, none), run(S, none)])).toBe(true));
+  test("row 2 with the web-service BLOCKED is a reproduction", () =>
+    expect(contradictsR639(2, [run(B, none), run(B, none)])).toBe(false));
+  test("only row 2 can contradict", () => expect(contradictsR639(3, [run(S, S)])).toBe(false));
+});
+
+describe("firstLine", () => {
+  test("a CRLF line ends at the CR", () =>
+    expect(readingOf(92910, `${BLOCKED}\r\nstack`).cls).toBe("BLOCKED"));
 });

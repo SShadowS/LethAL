@@ -56,6 +56,7 @@
   "scripts/r658-bc-probe/drive.ts": "live probe for R658 (open); run once on bc3 by /coord/handoff/R-658/run-probe.sh under its pre-commitment. It imports packages/runner/src by relative path, which a composite scripts project cannot reach (TS6059/TS6307)",
   "scripts/r434-installed-probe/drive.ts": "spent probe for R434 (closed); run once per bc server by scripts/r434-installed-probe/run-probe.sh, cited by docs/measurements/r434/README.md. It imports packages/runner/src by relative path, which a composite scripts project cannot reach (TS6059/TS6307)",
   "scripts/r661-hub-probe/drive.ts": "spent probe for R661 (closed); run once on bc3 by scripts/r661-hub-probe/run-probe.sh, cited by docs/measurements/r661/README.md. It imports packages/runner/src by relative path, which a composite scripts project cannot reach (TS6059/TS6307)",
+  "scripts/r706-client-probe/drive.ts": "live probe for R706; run once on bc1 by scripts/r706-client-probe/run-probe.sh under its pre-commitment. It imports @modelcontextprotocol/sdk, which the scripts project cannot resolve (TS2307, the same reason as probe-continia-env.ts), and packages/runner/src by relative path. Its classifier, classify.ts, and the classifier test ARE type-checked",
   "scripts/r72-probe/drive.ts": "spent probe for R72 (done); the folder's README gives its run line, and the folder is cited by R072.md, R169.md, docs/measurements/README.md and source comments",
   "scripts/r83-probe/drive.ts": "spent probe for R83 (done); the folder's README gives its run line, and the folder is cited by R083.md"
 }

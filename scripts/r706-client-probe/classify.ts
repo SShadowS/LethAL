@@ -39,7 +39,11 @@ export function parseMeasured(text: string): { raw: string; rawCode: string } {
   return { raw: text.slice(s + 10, e), rawCode: text.slice(e + 3, z) };
 }
 
-const firstLine = (s: string): string => s.split("\n")[0] ?? "";
+const firstLine = (s: string): string => s.split(/\r?\n/)[0] ?? "";
+
+/** Row 2 (hub unmeasured) with a web-service reading that is not BLOCKED contradicts r639. */
+export const contradictsR639 = (row: number, runs: readonly RunClasses[]): boolean =>
+  row === 2 && runs.some((r) => r.ws.cls !== "BLOCKED");
 
 function clsOf(line: string): Cls {
   return line === BLOCKED ? "BLOCKED" : line === SECURITY ? "SECURITY" : "OTHER";
@@ -107,10 +111,11 @@ export function outcomeOf(runs: readonly RunClasses[]): Outcome {
     );
   if (split || disagree) return { row: 1, outcome: "Unsettled" };
   if (runs.some((r) => r.hub.cls === "NONE")) return { row: 2, outcome: "Hub unmeasured" };
-  if (runs.some((r) => r.ws.cls === "NONE"))
-    return { row: 0, outcome: "Web-service unmeasured (no table row)" };
   if (runs.some((r) => r.ws.cls === "OTHER" || r.hub.cls === "OTHER"))
     return { row: 7, outcome: "Record the text" };
+  // After row 7, so the gap row never changes a committed row.
+  if (runs.some((r) => r.ws.cls === "NONE"))
+    return { row: 0, outcome: "Web-service unmeasured (no table row)" };
   // Runs agree and no class is SPLIT/NONE/OTHER, so the first run speaks for all.
   const ws = first?.ws.cls;
   const hub = first?.hub.cls;

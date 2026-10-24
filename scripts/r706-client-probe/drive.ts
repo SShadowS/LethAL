@@ -50,6 +50,7 @@ import {
   type PathClass,
   type Reading,
   type RunClasses,
+  contradictsR639,
   outcomeOf,
   pathClass,
   readingOf,
@@ -150,6 +151,7 @@ interface Call {
   method: string;
   reading: Reading;
   runner: string | null;
+  isError?: boolean;
   note?: string;
 }
 
@@ -397,10 +399,16 @@ async function main(): Promise<number> {
     } else removal.note = "nothing published; nothing removed";
     doc.removal = removal;
     if (runs.length === ORDER.length) {
-      const o = outcomeOf(runs);
-      doc.outcomeRow = o.row;
-      doc.outcome = o.outcome;
-      log(`outcome: row ${o.row} ${o.outcome}`);
+      try {
+        const o = outcomeOf(runs);
+        doc.outcomeRow = o.row;
+        doc.outcome = o.outcome;
+        if (contradictsR639(o.row, runs)) doc.contradictsR639 = true;
+        log(`outcome: row ${o.row} ${o.outcome}`);
+      } catch (err) {
+        doc.outcomeError = errText(err);
+        log(`outcome FAILED: ${errText(err)}`);
+      }
     }
     try {
       mkdirSync(EVIDENCE, { recursive: true });
@@ -492,11 +500,18 @@ async function hubCall(
     raw: { args, note, response: raw },
     overrun,
   });
+  // Once callTool has been sent, any failure may leave a running session: an overrun (HOLD).
+  let sent = false;
   try {
-    await client.connect(
-      new StdioClientTransport({ command: cmd[0] ?? "", args: cmd.slice(1), env }),
-    );
+    try {
+      await client.connect(
+        new StdioClientTransport({ command: cmd[0] ?? "", args: cmd.slice(1), env }),
+      );
+    } catch (err) {
+      return none(`connect failed: ${errText(err)}`, null);
+    }
     let timer: ReturnType<typeof setTimeout> | undefined;
+    sent = true;
     const call = client.callTool({ name: "bcdev_test_run", arguments: args }, undefined, {
       timeout: HUB_BUDGET_MS,
     });
@@ -510,8 +525,11 @@ async function hubCall(
     if (res === "timeout") return none("hub call outlived its budget", null, true);
     const content = (res as { content?: { type: string; text?: string }[] }).content ?? [];
     const text = content.find((x) => x.type === "text")?.text;
-    if ((res as { isError?: boolean }).isError === true || text === undefined)
-      return none("isError or no text", res);
+    const isError = (res as { isError?: boolean }).isError === true;
+    if (isError || text === undefined) {
+      const n = none("isError or no text", res);
+      return { ...n, call: { ...n.call, isError } };
+    }
     let payload: {
       results?: { codeunitId: number; method: string; status: string; output: string }[];
     };
@@ -530,14 +548,13 @@ async function hubCall(
         method,
         reading: readingOf(codeunit === 92911 ? 92911 : 92910, out),
         runner: frameOf(out),
+        isError,
       },
       raw: { args, response: res },
       overrun: false,
     };
   } catch (err) {
-    // A request timeout of the SDK is an overrun too: the session may still be running.
-    const overrun = /timed out|timeout/i.test(errText(err));
-    return none(`call threw: ${errText(err)}`, null, overrun);
+    return none(`call threw: ${errText(err)}`, null, sent);
   } finally {
     await client.close().catch(() => {});
   }
