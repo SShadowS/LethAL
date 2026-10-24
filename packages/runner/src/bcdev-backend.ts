@@ -1519,6 +1519,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
       declaredRows,
       refusedRows,
       memberEntries,
+      namingGaps.length > 0,
       rowKeys,
       stats,
     );
@@ -1550,6 +1551,12 @@ export class BcDevMcpBackend implements ExecutionBackend {
    *
    * Reported per test rather than aggregated: the point is to name WHICH test, and a fenced
    * baseline is tens of tests, not thousands. Silent when coverage looks healthy.
+   *
+   * R746: the no-procedure-lines case needs `hasNamingGap` (some declared, unrefused row in NO
+   * known span). A test that runs only a trigger body (a field's OnValidate), line-0 rows, or
+   * R318 shared lines has no member entry but nothing wrong with the frame, and stays quiet.
+   * Blind spot: a frame shift that lands every row in such spans stays quiet too (a real shift
+   * is 1-2 lines, and the old rule could not tell it from correct trigger-only coverage either).
    */
   private warnOnThinFencedCoverage(
     ref: TestMethodRef,
@@ -1557,6 +1564,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
     declaredRows: number,
     refusedRows: number,
     memberEntries: number,
+    hasNamingGap: boolean,
     rowKeys: readonly string[],
     stats?: FencedCoverageStats,
   ): void {
@@ -1583,12 +1591,15 @@ export class BcDevMcpBackend implements ExecutionBackend {
       );
       return;
     }
+    if (!hasNamingGap) return; // R746: trigger bodies, line 0 and shared lines only
     const blame =
       "Suspect the line map's base-line frame — a shifted range degrades every observation " +
       "to object level instead of naming a member.";
+    const lost =
+      "Member attribution is lost for this test; only object-level (trigger) matching remains.";
     this.notify(
       "fenced-coverage-no-procedure-lines",
-      `[lethal] fenced coverage for ${where}: ${declaredRows} row(s) for objects this artifact declares, but NOT ONE line fell inside a known procedure${server}. ${consequence} ${blame}`,
+      `[lethal] fenced coverage for ${where}: ${declaredRows} row(s) for objects this artifact declares, but NOT ONE line fell inside a known procedure${server}. ${lost} ${blame}`,
     );
   }
 

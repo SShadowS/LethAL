@@ -321,6 +321,7 @@ describe("R739: bcdev notices reach setNotify, never the console", () => {
       declaredRows: number,
       refusedRows: number,
       memberEntries: number,
+      hasNamingGap: boolean,
       rowKeys: readonly string[],
     ): void;
     stageForCompile(instrumentedDir: string): Promise<string>;
@@ -334,10 +335,12 @@ describe("R739: bcdev notices reach setNotify, never the console", () => {
       const seen: Array<[string, string]> = [];
       backend.setNotify((c, m) => seen.push([c, m]));
       const internals = backend as unknown as Internals;
-      internals.warnOnThinFencedCoverage(REF, 3, 0, 0, 0, []);
-      internals.warnOnThinFencedCoverage(REF, 3, 2, 0, 0, []);
+      internals.warnOnThinFencedCoverage(REF, 3, 0, 0, 0, false, []);
+      internals.warnOnThinFencedCoverage(REF, 3, 2, 0, 0, true, []);
+      // R746: no gap (trigger or line-0 rows only) says nothing.
+      internals.warnOnThinFencedCoverage(REF, 3, 2, 0, 0, false, []);
       // Healthy coverage (a member entry) says nothing.
-      internals.warnOnThinFencedCoverage(REF, 3, 2, 0, 1, []);
+      internals.warnOnThinFencedCoverage(REF, 3, 2, 0, 1, false, []);
       expect(seen.map(([c]) => c)).toEqual([
         "fenced-coverage-no-object-rows",
         "fenced-coverage-no-procedure-lines",
