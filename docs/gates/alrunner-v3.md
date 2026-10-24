@@ -47,7 +47,7 @@ The legs:
   left with R705: a fixed build runs nothing in a request that does not compile. In serve-entries, a warm-up whose
   every entry refuses with one identical no-callee text now throws `al-runner-v3-entries-batch-refused`: the safe
   direction, opt-in and rare.
-  It must read `matches` on alpha.2, but any other reading (`diverged`, `unmeasurable`) only prints
+  It must read `matches` on alpha.2 and alpha.5, but any other reading (`diverged`, `unmeasurable`) only prints
   `al-runner-v3-serve-keep-reason-moved` in the log and the receipt `lines`: it is never a `gate-fail` or a `held`,
   because a moved reason only makes the daemon close (slower, never wrong). It is gate-only, as `timeout-is-cpu`
   is: the receipt's `warnFacts` carries the reading, the update script copies it into `.gated`, and a session
@@ -174,12 +174,27 @@ Both run as the other legs do (`runSession`, the v3 backend, one-shot, coverage 
 
 ## The pin and the update gate
 
-- The binary is pinned at `/work/tools/al-runner-v3/3.0.0-alpha.2-91253f2d6/`, and `current` points at it. Its
+- The binary is pinned at `/work/tools/al-runner-v3/3.0.0-alpha.5-07342060e/` (since 2026-10-24; alpha.2 was
+  `current` before), and `current` points at it. Its
   `.gated` file names the build, its sha256 and the LethAL commit that gated it. The backend refuses any build that
   `.gated` does not name (`AlRunnerV3UngatedBuildError`), unless `LETHAL_ALRUNNER_V3_CANDIDATE=1`.
 - The pin is never moved by hand. `bun scripts/al-runner-v3-update.ts` gates newer `v3.0.0-alpha.N` releases, and
   `--edge` gates the daily `edge` release by download. The version check accepts SemVer build metadata
   (`al-runner 3.0.0-alpha.4+edge.20261022 (57f1e4f98)`, R639 F1).
+- **Candidate order (R586d): newest first.** The alpha path lists the releases above `current`'s alpha number and
+  gates the NEWEST one first, with a full gate. A `pass` makes it `current` and ends the run: no older candidate is
+  downloaded or gated. Anything else (`gate-fail`, `held`, `infra-fail`, or a skip because `failed/<tag>@<this
+  commit>` exists) sends the run to the next older candidate, down to but not including `current`. If none passes,
+  `current` stays, and each candidate has its own record (`failed/`, `held/`, `infra/`). Versions compare by the
+  alpha number as a number, so alpha.10 is newer than alpha.9. `--edge` is unchanged: one candidate, no fallback.
+  Before R586d the order was oldest first, and a day with alpha.3 and alpha.4 both failing cost two gates before
+  alpha.5 ran.
+- **No longer measured (R586d).** Once a newer release passes, the older releases skipped that day get no daily
+  verdict. Their last record stays in `failed/` (or `held/`), if it was ever gated, and is not refreshed. A release
+  skipped that day is gated again only on a later day when every newer candidate fails to pass and it is still
+  above `current`; once a newer release is `current` it is never a candidate again, so its record is final. When
+  an older candidate passes after a newer one's `infra-fail`, the log says so (`<tag>: passed after <newer tag> was
+  not judged (infra-fail) today`): the newer release has no verdict yet.
 - `--edge-rejudge <edge sha>` (R639) re-gates a KEPT edge binary at `.gated`'s current commit, never a new
   download, and never reads or writes `edge.last-seen`.
   - It refuses by name (`al-runner-v3-edge-rejudge-refused`) when `failed/edge-<sha>@<commit>` exists at all, or a
