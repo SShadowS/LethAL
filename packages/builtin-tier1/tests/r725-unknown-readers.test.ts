@@ -10,6 +10,7 @@ import {
   wrapRoot,
 } from "@lethal/engine";
 import { openItemHangRefuses } from "../src/index";
+import { r737Seam } from "../src/loop-hazard";
 
 /**
  * R725: hang readers in loop-hazard.ts that read a null `resolveVarRef` as "absent". The engine
@@ -498,5 +499,104 @@ describe("R725 review S5: R530 and a self-insert through an unknown variable", (
     expect(p.state("Rep.al", "X")).toBe("unknown");
     // red when selfInserts reads an unknown receiver's Insert as no self-insert
     expect(p.refused("Rep.al", "LastEntryNo := 5")).toBe(true);
+  });
+});
+
+describe("R737: a callee receiver declared inside a var-section #if", () => {
+  const CAP = `codeunit 57202 "R725 Cap"
+{
+    procedure GetNext(var B: Integer)
+    var
+        Tag: Text;
+    begin
+        Tag := 'T4';
+        B := B + 10;
+    end;
+}`;
+  const PLAIN = `codeunit 57203 "R725 Plain"
+{
+    procedure GetNext(var B: Integer)
+    begin
+        B := B + 10;
+    end;
+}`;
+  /** `globals` goes in the object's var section, `locals` in Run's. */
+  const loop = (globals: string, locals: string) => `codeunit 57201 "R725 Loop"
+{
+    var
+        G0: Integer;
+${globals}
+
+    procedure Run()
+    var
+        Bottom: Integer;
+${locals}
+    begin
+        repeat
+            Cap.GetNext(Bottom);
+        until Bottom >= 100;
+    end;
+}`;
+  const refusedWith = (loopSrc: string, seam: boolean): boolean => {
+    const files = { "Cap.al": CAP, "Plain.al": PLAIN, "Loop.al": loopSrc };
+    const was = r737Seam.on;
+    r737Seam.on = seam;
+    try {
+      return project(files).refused("Cap.al", "'T4'");
+    } finally {
+      r737Seam.on = was;
+    }
+  };
+  const BOTH = `#if not LETHALX
+        Cap: Codeunit "R725 Cap";
+#else
+        Cap: Codeunit "R725 Cap";
+#endif`;
+
+  it("T1: a #if global with the same type in both arms is followed (off: not)", () => {
+    expect(refusedWith(loop(BOTH, ""), true)).toBe(true);
+    expect(refusedWith(loop(BOTH, ""), false)).toBe(false);
+  });
+
+  it("T2: a single-arm live #if local is followed (off: not)", () => {
+    const l = `#if not CLEAN27\n        Cap: Codeunit "R725 Cap";\n#endif`;
+    expect(refusedWith(loop("", l), true)).toBe(true);
+    expect(refusedWith(loop("", l), false)).toBe(false);
+  });
+
+  it("T3: a plain local control is followed with the seam on and off", () => {
+    const l = `        Cap: Codeunit "R725 Cap";`;
+    expect(refusedWith(loop("", l), true)).toBe(true);
+    expect(refusedWith(loop("", l), false)).toBe(true);
+  });
+
+  it("T4: an UNDECIDED file with two types follows both (the stateful one is second)", () => {
+    const g = `#if CLEAN27 && Q
+        Cap: Codeunit "Absent X";
+#else
+        Cap: Codeunit "R725 Cap";
+#endif`;
+    const src = loop(g, "");
+    const root = wrapRoot(parseAL(src));
+    expect(evaluateArms(root, src, []).kind).toBe("undecided");
+    expect(refusedWith(src, true)).toBe(true);
+    expect(refusedWith(src, false)).toBe(false);
+  });
+
+  it("T5: a decided file reads only the live arm (the stateful type is compiled out)", () => {
+    const g = `#if CLEAN27
+        Cap: Codeunit "R725 Cap";
+#else
+        Cap: Codeunit "R725 Plain";
+#endif`;
+    expect(refusedWith(loop(g, ""), true)).toBe(false);
+    // a compiled-out local does not exist: the plain global types the receiver
+    const out = `#if CLEAN27\n        Cap: Codeunit "R725 Cap";\n#endif`;
+    expect(refusedWith(loop(`        Cap: Codeunit "R725 Plain";`, out), true)).toBe(false);
+  });
+
+  it("T6: a live #if local hides a #if global of another type", () => {
+    const l = `#if not CLEAN27\n        Cap: Codeunit "R725 Plain";\n#endif`;
+    expect(refusedWith(loop(BOTH, l), true)).toBe(false);
   });
 });
