@@ -77,6 +77,13 @@ export async function isolateBreakingMutants<T>(
     if (remaining.length === 0 || (await probe(remaining))) return { kind: "no-repro" };
     // Invariant: `remaining` fails to compile, and the empty set compiles.
     for (;;) {
+      // Early stop: a round on n mutants costs ceil(log2 n) searches, 1 confirm and 1 recompile
+      // (nothing when n is 1). Do not start one the budget cannot finish: it would spend the rest
+      // of the budget and name nobody.
+      const roundCost = remaining.length <= 1 ? 0 : Math.ceil(Math.log2(remaining.length)) + 2;
+      if (cap - used < roundCost) {
+        return { kind: "isolated", culprits, groupErrors, unresolved: remaining };
+      }
       const c = await lastNeeded(remaining, []);
       if (c === undefined)
         return { kind: "isolated", culprits, groupErrors, unresolved: remaining };

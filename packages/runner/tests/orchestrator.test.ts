@@ -14,7 +14,12 @@ import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { swapAdditive } from "@lethal/builtin-tier1";
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
-import { IDENTITY_SCHEME, type InstrumentedFile, type MutantManifestEntry } from "@lethal/schemata";
+import {
+  IDENTITY_SCHEME,
+  type InstrumentedFile,
+  type MutantManifest,
+  type MutantManifestEntry,
+} from "@lethal/schemata";
 import { flatNamesFor, withRunIdentityOrdinals, writeInstrumentedProject } from "@lethal/schemata";
 import { type ChunkedRow, foldChunkedRows, rerunMismatches } from "../itest/chunked-rows";
 import { buildAlRunnerCoverageIndex } from "../src/al-runner-coverage";
@@ -118,6 +123,7 @@ import {
   narrowFilesToSubset,
   noGreenBaselineNote,
   operatorTiers,
+  redeployClean,
   runNamedMutants,
   runOnce,
   runSession,
@@ -7332,6 +7338,59 @@ describe("runSession — R734: isolate the breaking mutants, score the rest", ()
           !m.failureNote.includes("not attributable to any SINGLE"),
       ),
     ).toBe(true);
+  });
+});
+
+describe("redeployClean — R734: the rewritten manifest must hold exactly the clean set", () => {
+  const entry = (mutantId: string, startIndex: number) =>
+    ({
+      mutantId,
+      file: "A.al",
+      startIndex,
+      endIndex: startIndex + 1,
+      operatorName: "op",
+    }) as unknown as MutantManifestEntry;
+  const clean = [entry("M0001", 10), entry("M0003", 30)];
+  const original = [entry("M0001", 10), entry("M0002", 20), entry("M0003", 30)];
+
+  async function run(manifestMutants: MutantManifestEntry[]) {
+    const counts = { prepare: 0, adopt: 0, deploy: 0 };
+    const result = await redeployClean({
+      clean,
+      removed: new Map([[entry("M0002", 20), "alc said no"]]),
+      original,
+      prepare: async () => {
+        counts.prepare++;
+      },
+      readManifest: async () =>
+        ({ mutants: manifestMutants, artifactId: "a".repeat(32) }) as unknown as MutantManifest,
+      adopt: () => {
+        counts.adopt++;
+      },
+      deploy: async () => {
+        counts.deploy++;
+        return { done: null };
+      },
+    });
+    return { result, counts };
+  }
+
+  test("a manifest that renumbered a mutant (wrong id) is refused: nothing adopted, nothing deployed", async () => {
+    const { result, counts } = await run([entry("M0001", 10), entry("M0002", 30)]);
+    expect("note" in result && result.note).toContain("does not hold exactly the clean set");
+    expect(counts).toEqual({ prepare: 1, adopt: 0, deploy: 0 });
+  });
+
+  test("a manifest with an extra mutant is refused too", async () => {
+    const { result, counts } = await run([...clean, entry("M0002", 20)]);
+    expect("note" in result).toBe(true);
+    expect(counts.deploy).toBe(0);
+  });
+
+  test("the exact clean set is adopted and deployed once", async () => {
+    const { result, counts } = await run([...clean]);
+    expect("attempt" in result).toBe(true);
+    expect(counts).toEqual({ prepare: 1, adopt: 1, deploy: 1 });
   });
 });
 

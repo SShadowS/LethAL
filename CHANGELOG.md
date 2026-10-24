@@ -16,7 +16,8 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 - **A mutant that breaks the compile no longer costs the whole batch its verdicts** (R734). When alc rejects a batch,
   LethAL now finds every mutant that fails to compile on its own (not only one), redeploys the rest under their
   original ids, and scores them. Each breaking mutant is an `error` row whose note names its source file and line and
-  alc's own error codes. Isolation spends at most 64 compile-only runs. If the empty build fails, the budget runs out,
+  alc's own error codes. Isolation spends about log2(n)+2 compile-only runs per breaking mutant, at most 64, and
+  stops early when the budget left cannot finish another one. If the empty build fails, the budget runs out,
   the clean set cannot be redeployed or its manifest does not match, every mutant stays `error` with a named note.
   The redeployed manifest lists the removed mutants (`isolatedOut`), so `lethal verify` does not read their rows as a
   corrupt store, and bcdev refuses to run a removed id.

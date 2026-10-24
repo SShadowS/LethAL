@@ -2312,7 +2312,7 @@ type DeployAttempt = { readonly alc: AlcCompileError } | { readonly done: Compil
  * anything is published, and `adopt` runs before the deploy so the deploy's bookkeeping sees the
  * redeployed set. A non-alc failure from `deploy` throws, as it does for the first deploy.
  */
-async function redeployClean(args: {
+export async function redeployClean(args: {
   readonly clean: readonly MutantManifestEntry[];
   readonly removed: ReadonlyMap<MutantManifestEntry, string>;
   readonly original: readonly MutantManifestEntry[];
@@ -7253,7 +7253,7 @@ async function runSessionBody(
         emit({
           type: "warning",
           code: "compile-isolation",
-          message: `[lethal] batch ${batchIdx} failed to compile: isolating the breaking mutants (at most ${MAX_ISOLATION_COMPILES} compile-only runs, R734).`,
+          message: `[lethal] batch ${batchIdx} failed to compile: isolating the breaking mutants (each breaking mutant costs about log2(n)+2 compile-only runs; at most ${MAX_ISOLATION_COMPILES} in all, and it stops early when the rest of the budget cannot finish another one, R734).`,
         });
         const plan = await isolateAndNote({
           subsetMutants: manifest.mutants,

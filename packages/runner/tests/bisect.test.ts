@@ -82,6 +82,21 @@ describe("isolateBreakingMutants", () => {
     expect(clean.every((m) => !bad.has(m))).toBe(true);
   });
 
+  test("early stop: a round the budget cannot finish is not started (2 compiles, not the whole budget)", async () => {
+    // 16 mutants: a round costs 4 + 2 = 6. After the 2 opening compiles 3 are left.
+    const f = fake((s) => s.includes("M0007"));
+    const out = await isolateBreakingMutants(ids(16), f.compile, 5);
+    expect(f.calls.length).toBe(2);
+    expect(out).toEqual({ kind: "isolated", culprits: [], groupErrors: [], unresolved: ids(16) });
+  });
+
+  test("early stop: with exactly enough budget for the round, the culprit is still found", async () => {
+    const f = fake((s) => s.includes("M0007"));
+    const out = await isolateBreakingMutants(ids(16), f.compile, 8);
+    expect(out).toEqual({ kind: "isolated", culprits: ["M0007"], groupErrors: [], unresolved: [] });
+    expect(f.calls.length).toBe(8);
+  });
+
   test("cap: under the budget nothing is left unresolved", async () => {
     const f = fake((s) => s.includes("M0005"));
     const out = await isolateBreakingMutants(ids(16), f.compile, 64);

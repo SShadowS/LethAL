@@ -1525,6 +1525,49 @@ describe("BcDevMcpBackend.deploy", () => {
     // R708: a long lock costs 4.5 s in deploy() and 4.5 s more in rmStaged: past Bun's 5 s default.
   }, 15_000);
 
+  test("R734: an alc rejection in deploy() happens before any publish or verify call", async () => {
+    const dir = scratch("lethal-bcdev-deploy-alc-before-publish-");
+    try {
+      await writeDeployInputs(dir);
+      const calls = { compile: 0, publish: 0, verify: 0 };
+      const backend = new BcDevMcpBackend(
+        {
+          mcpCommand: ["unused"],
+          project: "/al",
+          server: "http://bc",
+          serverInstance: "BC",
+          ...(await controlStaging(dir)),
+        },
+        undefined,
+        {
+          compiler: {
+            compile: async () => {
+              calls.compile++;
+              throw new AlcCompileError("Sandbox.al(5,9): error AL0001: boom");
+            },
+          } as unknown as ArtifactCompiler,
+          deployer: {
+            publish: async () => {
+              calls.publish++;
+            },
+          } as unknown as ContainerDeployer,
+          verifier: {
+            verify: async () => {
+              calls.verify++;
+              return { kind: "absent" };
+            },
+          } as unknown as DeploymentVerifier,
+          harnessVerifier: fakeHarnessVerifier(),
+        },
+      );
+      await expect(backend.deploy(dir)).rejects.toBeInstanceOf(AlcCompileError);
+      expect(calls).toEqual({ compile: 1, publish: 0, verify: 0 });
+    } finally {
+      await rmStaged(dir);
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   /** R708: a deployment whose compile throws and whose staged-copy removal is the given fake. */
   async function stagedCleanupBackend(
     dir: string,

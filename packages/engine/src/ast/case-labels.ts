@@ -10,7 +10,7 @@ import type { ALSyntaxNode } from "./syntax-node";
  *
  * What alc counts as "the same label" was measured offline (2026-10-24): the label's own text with
  * comments and outer spacing ignored (`X = 1 /* c *\/` equals `X = 1`), and integer constants folded
- * (`1` equals `0 + 1` equals `01`). It did NOT merge `X=1` with `X = 1`, `x` with `X`, `(X = 1)` with
+ * (`1` equals `0 + 1` equals `01`, and in a value case `-1` equals `0 - 1`). It did NOT merge `X=1` with `X = 1`, `x` with `X`, `(X = 1)` with
  * `X = 1`, `1 = X` with `X = 1` or `'A'` with `'a'`. {@link normalise} merges the first three (a
  * superset: refusing a site that would have compiled costs one mutant, missing one costs the batch).
  */
@@ -88,6 +88,12 @@ function foldInteger(s: string): string | null {
   const fail = Symbol("not foldable");
   const atom = (): number | typeof fail => {
     const c = s.charAt(pos);
+    if (c === "-") {
+      // alc: `-1` equals `0 - 1` in a value case (measured 2026-10-24)
+      pos++;
+      const v = atom();
+      return v === fail ? fail : -v;
+    }
     if (c === "(") {
       pos++;
       const v = sum();
