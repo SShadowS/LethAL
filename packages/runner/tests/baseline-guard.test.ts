@@ -235,12 +235,15 @@ describe("R332: a frozen baseline never records itself", () => {
 
   // R654 S2: seventeen, with v3's layout and two symbol-set baselines (pre-committed 43115c78).
   // R654 S3: eleven, the six registered `al-runner.*` (v2) files gone with `itest:alrunner`.
-  test("the registry names eleven gate baselines and their record commands", () => {
+  // R602: thirteen, with v3's multi-object and wrapped legs (pending their record run).
+  test("the registry names thirteen gate baselines and their record commands", () => {
     expect(Object.keys(GATE_BASELINES).sort()).toEqual([
       "al-runner-v3.layout.baseline.json",
+      "al-runner-v3.multiobject.baseline.json",
       "al-runner-v3.symbols-lethala.baseline.json",
       "al-runner-v3.symbols-lethalb.baseline.json",
       "al-runner-v3.tables.baseline.json",
+      "al-runner-v3.wrapped.baseline.json",
       "bcdev.baseline.json",
       "bcdev.names.baseline.json",
       "bcdev.wrapped.baseline.json",

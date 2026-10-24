@@ -66,23 +66,22 @@ describe("buildAlRunnerCoverageIndex", () => {
     expect(identities(index)).toEqual([[{ objectType: "Codeunit", objectId: 79150 }]]);
   });
 
-  test("NAMES a file declaring two objects, which is what disables coverage for the run", async () => {
-    // The upstream defect this guards, as of R383: al-runner v2.12.0-main.c39ad5de reports every
-    // object after a file's first at (previous object's end in the SOURCE) + (distance in the
-    // INSTRUMENTED text), so a later object's lines land in the wrong object. Before that (2.11.0,
-    // #3713, fixed upstream) it lost those objects outright.
+  test("R602 (A4, flipped on purpose): a file declaring two objects is still NAMED, and is now INDEXED", async () => {
+    // Why flipped: this test used to pin that the index skipped such a file (byFile.size 0) because
+    // the retired v2 al-runner reported a later object in the wrong frame. R602 measured v3
+    // reporting every object in its own file's frame (0 lost kills against `--mode none`), so the
+    // index always places a multi-object file; the option that switched this on is deleted.
     const two = `${ONE_OBJECT}\ncodeunit 79151 "Probe Two"\n{\n    procedure P()\n    begin\n    end;\n}\n`;
     const dir = await bundle({ "src/Two.Codeunit.al": two });
     const index = await buildAlRunnerCoverageIndex(dir);
     expect(index.multiObjectFiles).toEqual(["src/Two.Codeunit.al"]);
-    // And it is not indexed, so nothing can accidentally resolve against half of it.
-    expect(index.byFile.size).toBe(0);
+    expect(index.byFile.size).toBe(1);
   });
 
-  test("R383: admitMultiObjectFiles (infrastructure, tests only) indexes both objects, in order", async () => {
+  test("R383: a multi-object file indexes both objects, in order", async () => {
     const two = `${ONE_OBJECT}\ncodeunit 79151 "Probe Two"\n{\n    procedure P()\n    begin\n    end;\n}\n`;
     const dir = await bundle({ "src/Two.Codeunit.al": two });
-    const index = await buildAlRunnerCoverageIndex(dir, { admitMultiObjectFiles: true });
+    const index = await buildAlRunnerCoverageIndex(dir);
     expect(index.multiObjectFiles).toEqual(["src/Two.Codeunit.al"]);
     expect(identities(index)).toEqual([
       [
@@ -198,7 +197,7 @@ codeunit 50108 "Split B"
 ${R298_BODY("Q")}`;
 /** R-300b: a two-arm wrapper is a shape al-runner is not admitted on, named as such. */
 const R298_REFUSED =
-  "[lethal] coverage refused for Codeunit:50103 (src/B2.Codeunit.al): its file holds a #if object wrapper of a shape not measured on al-runner (R300). Its mutants read no-coverage.";
+  "[lethal] coverage refused for Codeunit:50103 (src/B2.Codeunit.al): its file holds a #if object wrapper of a shape the al-runner coverage index has no rule for (two-arm, #elif, nested, or a multi-object file holding a wrapper; R602). Its mutants read no-coverage.";
 
 describe("R298: a file holding a #if-wrapped object is refused whole", () => {
   test("the wrapped file is named in refusedFiles and indexed nowhere; the plain file is indexed", async () => {
@@ -237,46 +236,43 @@ describe("R298: a file holding a #if-wrapped object is refused whole", () => {
   test("a two-arm wrapped object counts as ONE object for the multi-object guard", async () => {
     const dir = await bundle({ "src/B2.Codeunit.al": R298_TWO_ARM });
     // R387: listed as wrapped, by the index's own rule, so the CLI can fall back to no coverage.
-    // `supported` still answers the multi-object question alone, as before.
+    // R602 (A4): the result carries only that list; the multi-object list is gone.
     expect(await alRunnerCoverageSupport(dir)).toEqual({
-      supported: true,
-      multiObjectFiles: [],
       wrappedObjectFiles: ["src/B2.Codeunit.al"],
     });
   });
 
-  test("a bare object plus a wrapped one IS two objects for the guard", async () => {
+  test("a bare object plus a wrapped one is listed as wrapped (the index has no rule for it)", async () => {
+    // R602 (A4, flipped on purpose): also pinned `supported: false` and a multi-object list; the
+    // wrapped list is what turns coverage off now, and it still names this file.
     const dir = await bundle({ "src/Mixed.Codeunit.al": R298_MIXED });
     expect(await alRunnerCoverageSupport(dir)).toEqual({
-      supported: false,
-      multiObjectFiles: ["src/Mixed.Codeunit.al"],
       wrappedObjectFiles: ["src/Mixed.Codeunit.al"],
     });
   });
 
-  test("R383 r2: an enum then a codeunit IS two objects: the guard refuses and the index skips", async () => {
-    // The codeunit is the file's SECOND object, which is the one al-runner reports in the wrong
-    // frame, though the enum has no coverage identity.
+  test("R602 (A4, flipped on purpose): an enum then a codeunit keeps coverage on and the index places the codeunit", async () => {
+    // Was: the guard refused and the index skipped (the codeunit is the SECOND object, the one the
+    // retired v2 reported in the wrong frame). v3 reports it in its own file frame (R602), so file
+    // line 10 (the codeunit starts at line 5) is object line 6 of Other.R.
     const src = `enum 50120 E\n{\n    value(0; A) { }\n}\n${R298_PLAIN}`;
     const dir = await bundle({ "src/EnumThenCodeunit.Codeunit.al": src });
-    expect(await alRunnerCoverageSupport(dir)).toEqual({
-      supported: false,
-      multiObjectFiles: ["src/EnumThenCodeunit.Codeunit.al"],
-      wrappedObjectFiles: [],
-    });
-    const index = await buildAlRunnerCoverageIndex(dir);
+    expect(await alRunnerCoverageSupport(dir)).toEqual({ wrappedObjectFiles: [] });
+    const index = await buildAlRunnerCoverageIndex(dir, { labelBase: dir });
     expect(index.multiObjectFiles).toEqual(["src/EnumThenCodeunit.Codeunit.al"]);
-    expect(index.byFile.size).toBe(0);
+    expect(index.byFile.size).toBe(1);
+    expect(
+      alRunnerCoverageFromServer(
+        serverRows("src/EnumThenCodeunit.Codeunit.al", [{ scope: "R", line: 10, hits: 1 }]),
+        index,
+      ).entries,
+    ).toEqual([{ objectType: "Codeunit", objectId: 50107, procedure: "R", line: 6 }]);
   });
 
   test("R383 r2 ruling: a codeunit then a permission set is ADMITTED: the guard keeps coverage and the index resolves the codeunit", async () => {
     const src = `${R298_PLAIN}permissionset 50122 PS\n{\n    Assignable = true;\n}\n`;
     const dir = await bundle({ "src/WithPerms.Codeunit.al": src });
-    expect(await alRunnerCoverageSupport(dir)).toEqual({
-      supported: true,
-      multiObjectFiles: [],
-      wrappedObjectFiles: [],
-    });
+    expect(await alRunnerCoverageSupport(dir)).toEqual({ wrappedObjectFiles: [] });
     const index = await buildAlRunnerCoverageIndex(dir);
     expect(index.multiObjectFiles).toEqual([]);
     expect(
@@ -287,39 +283,36 @@ describe("R298: a file holding a #if-wrapped object is refused whole", () => {
     ).toEqual([{ objectType: "Codeunit", objectId: 50107, procedure: "R", line: 6 }]);
   });
 
-  test("R383 r3: a codeunit then a #if split-header codeunit IS two objects: guard refuses, index skips, no hit resolves", async () => {
-    // Line 7 is `L := 1;` in Other.R. al-runner reports a later object's lines shifted up into
-    // the first object's (r383-real-frame), so a hit of Split B's can arrive as line 7.
+  test("R602 (A4, flipped on purpose): a codeunit then a #if split-header codeunit keeps coverage on; the index places the first, nothing resolves in the split object", async () => {
+    // Was: the guard refused and the index skipped the file, because a later object's lines could
+    // arrive shifted into the first's (v2, r383-real-frame). v3 reports each in its own file
+    // frame (R602). Line 7 is `L := 1;` in Other.R; the split object (lines 10-) has no coverage
+    // identity, so a hit in it resolves to nothing, and a hit at line 7 NAMING Q contradicts its
+    // position and stops the session (R407's backstop, which v3 never trips on measured shapes).
     const dir = await bundle({ "src/Split.Codeunit.al": `${R298_PLAIN}${R383_SPLIT}` });
-    expect(await alRunnerCoverageSupport(dir)).toEqual({
-      supported: false,
-      multiObjectFiles: ["src/Split.Codeunit.al"],
-      wrappedObjectFiles: [],
-    });
-    const index = await buildAlRunnerCoverageIndex(dir);
+    expect(await alRunnerCoverageSupport(dir)).toEqual({ wrappedObjectFiles: [] });
+    const index = await buildAlRunnerCoverageIndex(dir, { labelBase: dir });
     expect(index.multiObjectFiles).toEqual(["src/Split.Codeunit.al"]);
-    expect(index.byFile.size).toBe(0);
-    const server: ServerPerTestCoverage = {
+    expect(index.byFile.size).toBe(1);
+    const at = (line: number, scope: string): ServerPerTestCoverage => ({
       test: "Codeunit50140.T",
-      coverage: [{ file: "src/Split.Codeunit.al", statements: [{ line: 7, hits: 1, scope: "Q" }] }],
-    };
-    expect(alRunnerCoverageFromServer(server, index).entries).toEqual([]);
+      coverage: [{ file: "src/Split.Codeunit.al", statements: [{ line, hits: 1, scope }] }],
+    });
+    expect(alRunnerCoverageFromServer(at(20, "Q"), index).entries).toEqual([]);
+    expect(() => alRunnerCoverageFromServer(at(7, "Q"), index)).toThrow(AlRunnerCoverageFrameError);
   });
 
-  test("R383 r3: a split-header object FIRST is the first object: a code-free permission set after it is admitted, a codeunit after it is refused", async () => {
+  test("R383 r3: a split-header object FIRST: a code-free permission set after it leaves no entry, a codeunit after it is indexed", async () => {
+    // R602 (A4, flipped on purpose): the codeunit after the split object used to be refused (the
+    // file skipped); it is indexed now, and only the split object (no identity) has no entry.
     const perms = "permissionset 50122 PS\n{\n    Assignable = true;\n}\n";
     const dir = await bundle({
       "src/SplitFirst.Codeunit.al": `${R383_SPLIT}${perms}`,
       "src/SplitThenPlain.Codeunit.al": `${R383_SPLIT}${R298_PLAIN}`,
     });
-    expect(await alRunnerCoverageSupport(dir)).toEqual({
-      supported: false,
-      multiObjectFiles: ["src/SplitThenPlain.Codeunit.al"],
-      wrappedObjectFiles: [],
-    });
-    // The split object has no coverage identity, so the admitted file has no entry to resolve.
+    expect(await alRunnerCoverageSupport(dir)).toEqual({ wrappedObjectFiles: [] });
     const index = await buildAlRunnerCoverageIndex(dir);
-    expect(index.byFile.size).toBe(0);
+    expect([...index.byFile.keys()]).toEqual(["src/splitthenplain.codeunit.al"]);
   });
 
   test("R383 r3: a #if wrapper holding only a split-header object holds an object (R298 refuses the file)", async () => {
@@ -337,24 +330,25 @@ describe("R298: a file holding a #if-wrapped object is refused whole", () => {
       // Genuine alternative arms ARE one object, and every arm is checked, not only the first.
       "src/IfaceArms.Codeunit.al": `${R298_PLAIN}#if X\n${i1}#else\n${i1.replace("procedure P();", "procedure P()\n    begin\n    end;")}#endif\n`,
     });
+    // R602 (A4): the multi-object list is gone from the result; the two multi-object files are
+    // indexed, and the wrapped one (refused whole, never reaching the multi-object check) is not.
     expect(await alRunnerCoverageSupport(dir)).toEqual({
-      supported: false,
-      multiObjectFiles: [
-        "src/IfaceArms.Codeunit.al",
-        "src/IfaceFirst.Codeunit.al",
-        "src/Ifaces.Codeunit.al",
-      ],
       wrappedObjectFiles: ["src/IfaceArms.Codeunit.al"],
     });
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect((await buildAlRunnerCoverageIndex(dir)).multiObjectFiles).toEqual([
+        "src/IfaceFirst.Codeunit.al",
+        "src/Ifaces.Codeunit.al",
+      ]);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
-  test("R387: a clean project lists no file in either list", async () => {
+  test("R387: a clean project lists no wrapped file", async () => {
     const dir = await bundle({ "src/A.Codeunit.al": "codeunit 50100 A\n{\n}\n" });
-    expect(await alRunnerCoverageSupport(dir)).toEqual({
-      supported: true,
-      multiObjectFiles: [],
-      wrappedObjectFiles: [],
-    });
+    expect(await alRunnerCoverageSupport(dir)).toEqual({ wrappedObjectFiles: [] });
   });
 });
 
@@ -387,28 +381,19 @@ describe("R298: a refused file's hits never fall through to a shorter path endin
     }
   });
 
-  test("R383 r2: a hit on a skipped multi-object src/Foo.Codeunit.al is not credited to a root Foo.Codeunit.al", async () => {
+  test("R383 r2: a hit on multi-object src/Foo.Codeunit.al is credited to ITS object, never to a root Foo.Codeunit.al", async () => {
     // src/Foo holds two codeunits; its line 6 is inside 50151's `Reached`. The root Foo holds one
     // codeunit, 50107, whose line 6 is inside `R`. A fall-through credits 50107.R on both paths.
+    // R602 (A4, flipped on purpose): the file used to be SKIPPED (the hit resolved to nothing); it
+    // is indexed now, so the longest ending (`src/foo.codeunit.al`) must win over the root's.
+    // R407: a multi-object file's label must name a file inside the bundle, so here the labels are
+    // the bundle's own (relative to `labelBase`, and absolute).
     const two = `codeunit 50151 "Foo A"\n${R298_BODY("Reached")}codeunit 50152 "Foo B"\n${R298_BODY("Other")}`;
     const dir = await bundle({ "src/Foo.Codeunit.al": two, "Foo.Codeunit.al": R298_PLAIN });
-    const server: ServerPerTestCoverage = {
-      test: "Codeunit50140.T",
-      coverage: [
-        { file: "src/Foo.Codeunit.al", statements: [{ line: 6, hits: 1, scope: "Reached" }] },
-      ],
-    };
     const index = await buildAlRunnerCoverageIndex(dir);
     expect(index.multiObjectFiles).toEqual(["src/Foo.Codeunit.al"]);
-    expect([...index.byFile.keys()]).toEqual(["foo.codeunit.al"]);
-    expect(alRunnerCoverageFromServer(server, index).entries).toEqual([]);
-    // Admitted, the same hit resolves to src/Foo's own first object: the stop-list does not block
-    // an index that was let in. R407: an admitted file's label must name a file inside the bundle,
-    // so here the labels are the bundle's own (relative to `labelBase`, and absolute).
-    const admittedIndex = await buildAlRunnerCoverageIndex(dir, {
-      admitMultiObjectFiles: true,
-      labelBase: dir,
-    });
+    expect([...index.byFile.keys()].sort()).toEqual(["foo.codeunit.al", "src/foo.codeunit.al"]);
+    const admittedIndex = await buildAlRunnerCoverageIndex(dir, { labelBase: dir });
     const own = [{ objectType: "Codeunit", objectId: 50151, procedure: "Reached", line: 6 }];
     const absServer: ServerPerTestCoverage = {
       test: "Codeunit50140.T",
@@ -589,8 +574,6 @@ describe("R298 end to end (al-runner): a bare table before a wrapped enum reads 
       const dir = await bundle(files);
       // R383 r2 ruling: the enum is the later object, and it is code-free, so not multi-object.
       expect(await alRunnerCoverageSupport(dir)).toEqual({
-        supported: true,
-        multiObjectFiles: [],
         wrappedObjectFiles: ["src/T.Table.al"],
       });
       const index = await buildAlRunnerCoverageIndex(dir);
@@ -602,7 +585,7 @@ describe("R298 end to end (al-runner): a bare table before a wrapped enum reads 
       );
       // R-300b: a bare object beside a wrapper is a shape al-runner is not measured on.
       const sentence =
-        "coverage refused for Table:50110 (src/T.Table.al): its file holds a #if object wrapper of a shape not measured on al-runner (R300). Its mutants read no-coverage.";
+        "coverage refused for Table:50110 (src/T.Table.al): its file holds a #if object wrapper of a shape the al-runner coverage index has no rule for (two-arm, #elif, nested, or a multi-object file holding a wrapper; R602). Its mutants read no-coverage.";
       expect(refused.get("table:50110")).toBe(sentence);
       // al-runner names the table with the SAME sentence selection uses, not "inside, or after".
       expect(warn.mock.calls.map((c) => String(c[0]))).toContain(`[lethal] ${sentence}`);
@@ -660,17 +643,15 @@ describe("R298 end to end (al-runner): a bare table before a wrapped enum reads 
 });
 
 /**
- * R383 infrastructure: multi-object files, both transports, through an index built with
- * `admitMultiObjectFiles`. Production admits them only when the R407 frame probe admits the
- * al-runner build (v2.12.0-main.c39ad5de reported later objects in the wrong frame; see the
- * real-frame evidence test). These pin the resolver: every row resolved by POSITION
+ * R383 infrastructure: multi-object files, both transports. Since R602 the index always places
+ * them (v2.12.0-main.c39ad5de reported later objects in the wrong frame; see the real-frame
+ * evidence test; v3 does not). These pin the resolver: every row resolved by POSITION
  * (`resolveFileLine`) from the INSTRUMENTED file frame before a procedure is looked up. The probe
  * inputs below come from an UNinstrumented probe app, where the compiled text is the source, so the
  * frame defect cannot show in them. R407: relative labels resolve against the bundle itself
  * (`labelBase`), as if al-runner ran there, so they name files inside it.
  */
-const admitted = (dir: string) =>
-  buildAlRunnerCoverageIndex(dir, { admitMultiObjectFiles: true, labelBase: dir });
+const admitted = (dir: string) => buildAlRunnerCoverageIndex(dir, { labelBase: dir });
 
 /** The probe's own `two/app/Two.Codeunit.al`, verbatim. A: 1-11, B: 13-23 (bases 1 and 12). */
 const PROBE_TWO = `codeunit 50100 ProbeA
@@ -1106,7 +1087,7 @@ describe("R383: the --server procedure rule (r3 Design 3)", () => {
       expect(() => alRunnerCoverageFromServer(disagree, index)).toThrow(AlRunnerCoverageFrameError);
       // The message names file and line as `<file>:<line>`; matched by pattern (R117's line check).
       expect(() => alRunnerCoverageFromServer(disagree, index)).toThrow(
-        /Two\.Codeunit\.al.19 "RunA", but that line is inside "RunB", in an admitted multi-object file/,
+        /Two\.Codeunit\.al.19 "RunA", but that line is inside "RunB", in a multi-object file/,
       );
       expect(warn).not.toHaveBeenCalled();
       // Agreeing scopes in the same file pass.

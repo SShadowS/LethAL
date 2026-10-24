@@ -134,9 +134,22 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
 
   The update gate's receipt outcome still reads only `V3_GATE_LEGS`.
 
+### Legs MO and WR (R602)
+
+Written, **not yet run**: their baselines are pending (`PENDING_FIRST_RECORD`), and the gate REFUSES to start MO or WR without them (R332). The pre-commitment goes on master first, then one record run. Neither is in `V3_GATE_LEGS` (like K, they do not change what an update receipt must hold), but both are default legs.
+
+Both run as the other legs do (`runSession`, the v3 backend, one-shot, coverage `"al-runner"`, a packages folder of the Microsoft apps), not through the CLI guard. Each makes a **durable killer check** before it compares with its baseline: every mutant that `--mode none` kills (a constant in `alrunner-v3-legs.ts`, `V3_MO_KILLERS` and `V3_WR_KILLERS`, built from the measured `none` runs) must be killed by the same test. The constants are code, so a re-record of a baseline cannot absorb a lost kill.
+
+- **MO** (R383's fixture): `fixtures/sandbox-multiobject`. `MultiPair.Codeunit.al` holds two codeunits, so the index places the second object's lines by position.
+  - Predicted 6 / 1 / 5 over 12 (`al-runner-v3.multiobject.baseline.json`): the 5 `no-coverage` are in procedures no test calls (`Never`, `Unreached`).
+  - Killer constant: 6 kills.
+- **WR** (R-300b's fixture): `fixtures/sandbox-wrapped` whole, config symbol `WRAPDEF`, so the two-arm control `WrappedArms` is in it.
+  - Predicted 58 / 37 / 3 over 98 (`al-runner-v3.wrapped.baseline.json`). The 3 `no-coverage` are the `WrappedArms` rows, each with the refusal sentence (`ARMS_REFUSAL`); that by-name refusal costs two kills `none` finds (M0001, M0003), named, not hidden.
+  - Killer constant: 58 kills (`none` kills 60, minus those two).
+  - As a whole the project is OFF from the CLI (the two-arm file), with the warning naming `WrappedArms`' file; the leg measures the index, which the CLI guard does not reach.
+
 **Legs ruled out:**
 - **The server and resource variants.** v3 one-shot uses the static selector, and serve-entries (R635) is opt-in. S3 pins that the resource selector is refused on one-shot.
-- **Multi-object and wrapped.** v3 turns coverage off there by design (R602).
 - **Names.** Quoted test names are unselectable on v3 (#5572), and N1 covers the fixture.
 
 **Recording (R332).** Run `LETHAL_ITEST_ALRUNNER_V3=1 LETHAL_ITEST_V3_LEGS=L1,Y-A,Y-B LETHAL_ITEST_RECORD_BASELINE=al-runner-v3.layout.baseline.json,al-runner-v3.symbols-lethala.baseline.json,al-runner-v3.symbols-lethalb.baseline.json bun run itest:alrunner-v3`. It exits 3 by design. Then confirm with every leg.
@@ -241,7 +254,9 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
     "al-runner-v3.tables.baseline.json": { "killed": 290, "survived": 57, "no-coverage": 59 },
     "al-runner-v3.layout.baseline.json": { "killed": 7, "survived": 3 },
     "al-runner-v3.symbols-lethala.baseline.json": { "killed": 5, "survived": 4 },
-    "al-runner-v3.symbols-lethalb.baseline.json": { "killed": 5, "survived": 4 }
+    "al-runner-v3.symbols-lethalb.baseline.json": { "killed": 5, "survived": 4 },
+    "al-runner-v3.multiobject.baseline.json": { "killed": 6, "survived": 1, "no-coverage": 5 },
+    "al-runner-v3.wrapped.baseline.json": { "killed": 58, "survived": 37, "no-coverage": 3 }
   }
 }
 ```
@@ -249,6 +264,9 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
 - Leg L1, `al-runner-v3.layout.baseline.json`: 7 / 3 / 0 over 10, as pre-committed (43115c78).
 - Leg Y-A, `al-runner-v3.symbols-lethala.baseline.json`: 5 / 4 / 0 over 9, as pre-committed.
 - Leg Y-B, `al-runner-v3.symbols-lethalb.baseline.json`: 5 / 4 / 0 over 9, as pre-committed. All three were recorded once under R332 on 2026-10-22, and each is identical per mutant to its .NET al-runner twin.
+
+- Leg MO, `al-runner-v3.multiobject.baseline.json`: 6 / 1 / 5 over 12, predicted from the measurement (R602), figures pending the record run.
+- Leg WR, `al-runner-v3.wrapped.baseline.json`: 58 / 37 / 3 over 98, predicted from the measurement (R602), figures pending the record run.
 
 - Leg T, `al-runner-v3.tables.baseline.json`: 290 / 57 / 59 over 406, as pre-committed. Its rows differ from
   `itest:tables`' baseline on exactly the 52 keys and transitions of the pre-commitment's list (41 Commit, 7

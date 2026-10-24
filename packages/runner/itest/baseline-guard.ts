@@ -361,6 +361,18 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
     "al-runner-v3.symbols-lethalb.baseline.json",
     "itest:alrunner-v3",
   ),
+  // R602: legs MO (sandbox-multiobject) and WR (sandbox-wrapped), pre-committed on master before
+  // any live run; each waits in PENDING_FIRST_RECORD for its one record run.
+  "al-runner-v3.multiobject.baseline.json": gateHow(
+    "LETHAL_ITEST_ALRUNNER_V3=1 LETHAL_ITEST_V3_LEGS=MO",
+    "al-runner-v3.multiobject.baseline.json",
+    "itest:alrunner-v3",
+  ),
+  "al-runner-v3.wrapped.baseline.json": gateHow(
+    "LETHAL_ITEST_ALRUNNER_V3=1 LETHAL_ITEST_V3_LEGS=WR",
+    "al-runner-v3.wrapped.baseline.json",
+    "itest:alrunner-v3",
+  ),
 };
 
 /**
@@ -392,8 +404,14 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
  * recorded 2026-10-22 on al-runner v3 3.0.0-alpha.2 (91253f2d6) in one record run (exit 3,
  * `/coord/handoff/R-654/s2-record.log`) at 7 / 3 / 0, 5 / 4 / 0 and 5 / 4 / 0 as pre-committed
  * (43115c78), each identical per mutant to its .NET al-runner twin.
+ * R602's two v3 legs (`al-runner-v3.multiobject.baseline.json`, `al-runner-v3.wrapped.baseline.json`)
+ * wait here for their record run, after their pre-commitment is on master. The commit that records
+ * them empties this list.
  */
-export const PENDING_FIRST_RECORD: readonly string[] = [];
+export const PENDING_FIRST_RECORD: readonly string[] = [
+  "al-runner-v3.multiobject.baseline.json",
+  "al-runner-v3.wrapped.baseline.json",
+];
 
 /** R332: thrown after a gate record run wrote its baseline. The gate exits 3: never a pass. */
 export class BaselineRecordedError extends Error {

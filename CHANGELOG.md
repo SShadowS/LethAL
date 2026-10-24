@@ -11,6 +11,24 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`al-runner-v3` projects with single-wrapper `#if` files no longer report killed mutants as no-coverage** ([R602](docs/roadmap/R602.md)).
+  Before, the CLI kept coverage on for such a project while selection refused every wrapped object by name, so
+  their mutants read `no-coverage` (32 of 98 on `sandbox-wrapped` were kills that `--mode none` finds). Selection now
+  applies the coverage index's own rule. Verdicts change: single-wrapper files go from `no-coverage` to `killed` or
+  `survived`.
+
+### Changed
+
+- **`al-runner-v3` keeps coverage on for projects with multi-object files** ([R602](docs/roadmap/R602.md)). v3 reports
+  every object in its own file's frame (measured on the pin and the edge build, 0 lost kills against `--mode none`).
+  Verdicts change: mutants in code no test calls go from `survived` to `no-coverage`. Coverage is still turned off,
+  with the warning naming the file, for a wrapper shape the index has no rule for (two-arm `#if/#else`, `#elif`,
+  nested, or a multi-object file holding a wrapper). An admitted wrapped file whose `scope` disagrees with its
+  position now stops the session (`AlRunnerCoverageFrameError`) instead of dropping the line.
+- New `itest:alrunner-v3` legs `MO` and `WR`; their baselines are pending a pre-commitment.
+
 ### Added
 
 - **A report data item that inserts into its own table is no longer mutated inside its own code** (R530). Every

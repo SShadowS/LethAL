@@ -33,7 +33,6 @@ import {
   emitStaticSelector,
 } from "@lethal/schemata";
 import {
-  AlRunnerCoverageFrameError,
   type AlRunnerCoverageIndex,
   alRunnerCoverageFromServer,
   buildAlRunnerCoverageIndex,
@@ -1105,11 +1104,6 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           ? { sourceProjectDir: this.cfg.sourceProjectDir }
           : {}),
       });
-      if (index.multiObjectFiles.length > 0) {
-        throw new AlRunnerCoverageFrameError(
-          `al-runner-v3: coverage is on and the batch holds multi-object file(s) ${index.multiObjectFiles.join(", ")}; v3's frame for them is not measured, so they are not admitted`,
-        );
-      }
       assertManifestObjectsDeclared(
         await readManifestObjectKeys(active),
         index.declared,

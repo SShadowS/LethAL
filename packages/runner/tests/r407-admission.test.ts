@@ -51,10 +51,7 @@ describe("R407 P5: the label backstop, each label shape (index level)", () => {
     const bundle = join(root, "inst", "active");
     await mkdir(bundle, { recursive: true });
     await writeFile(join(bundle, PAIR_FILE), text, "utf8");
-    const index = await buildAlRunnerCoverageIndex(bundle, {
-      admitMultiObjectFiles: true,
-      labelBase: root,
-    });
+    const index = await buildAlRunnerCoverageIndex(bundle, { labelBase: root });
     return { root, index };
   }
   const server = (file: string) => ({
