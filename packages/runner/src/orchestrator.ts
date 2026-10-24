@@ -14,6 +14,7 @@ import {
   type SemanticContext,
   buildSemanticContext,
   buildSpanIndex,
+  caseLabelCollides,
   evaluateArms,
   formatRefusal,
   initParser,
@@ -1072,6 +1073,7 @@ export async function generateMutationSet(
     let compiledOutHere = 0;
     const specs: MutationSpec[] = [];
     let declarativeInThisFile = 0;
+    let caseLabelCollisionsHere = 0;
     const hangRefusedHere = new Map<string, number>();
     const carrierFile = canCarryMutationSelectorVar(root);
     visit(root, (node) => {
@@ -1116,6 +1118,10 @@ export async function generateMutationSet(
               // shrink of the mutant set is impossible.
               nonExecutableSites++;
               declarativeInThisFile++;
+            } else if (validation.ok && caseLabelCollides(spec.before, spec.after.text)) {
+              // R732: the mutated label would equal a sibling label (AL0402), which fails the
+              // whole batch. Counted and named below, never a silent shrink.
+              caseLabelCollisionsHere++;
             } else if (validation.ok) {
               specs.push(spec);
             } else {
@@ -1129,6 +1135,12 @@ export async function generateMutationSet(
         }
       }
     });
+    if (caseLabelCollisionsHere > 0) {
+      warn(
+        "case-label-collision",
+        `[lethal] ${rel}: ${caseLabelCollisionsHere} mutation(s) not generated: the changed case label would equal another label of the same case statement (alc AL0402). R732.`,
+      );
+    }
     // R144: recorded BEFORE the `specs.length === 0` bail below, deliberately. A page whose only
     // matched sites are declarative produces no spec at all, and that is exactly the file a reader
     // most needs named — dropping the row with the file would report zero for the project that has
