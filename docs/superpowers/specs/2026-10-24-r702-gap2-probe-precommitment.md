@@ -77,3 +77,15 @@ publish -> run-perm -> run-temp -> cleanup (unpublish; read back absent). Result
   run 1 and is checked after run 2.
 - **Every reading above stands unchanged.** The next run's build sha256 is recorded in Addendum 2, committed before
   that run.
+
+## Addendum 2 (2026-10-24, before run 3)
+
+- **The cause of run 2:** the first temp T1v call's `X.Get(Id)` found no row. A by-value `Record` parameter copy of a
+  TEMPORARY record holds none of the walker's rows.
+- **The fix** (lethal/r702 be90a0f3): `MoveByValue` counts a failed `Get` as a **miss** (nothing moved), and the cell's
+  summary reports `misses=<n>`. Nothing else changed.
+- **Reading for T1v, added now:** `misses` equal to the number of moves attempted, on a temp cell, means the by-value
+  copy does not share the temp data, so it can move nothing and T1v is FINITE by construction. Its rows count as
+  "the skip is right" for that mechanism. `misses=0` with a capped cell would be the FOREVER reading above.
+- **Run 3 build:** `R702.app` sha256 `ed57d19eb8833f52d20e36a25ee203ef19af52a9c535774f328a1c2e255e6447`; the run uses
+  exactly that file. All other readings stand unchanged.
