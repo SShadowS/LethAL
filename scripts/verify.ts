@@ -241,6 +241,81 @@ export function parseTestSummary(output: string): TestSummary | null {
   };
 }
 
+/**
+ * R724: the error text of each failing test, so a CI console shows the cause, not only the log
+ * artifact. A test is reported once, at its first `(fail)` line (bun repeats the names in its
+ * closing summary, with no text before them). At most `maxLines` lines per test, each cut to 300
+ * characters.
+ */
+export interface FailureScan {
+  /** Error text per failing test name. */
+  readonly details: Map<string, string[]>;
+  /** The test file each failing test ran in, when bun's output names it. */
+  readonly fileOf: Map<string, string>;
+  /** Per file: its passing tests that took 1 s or more (`name [ms]`), the stall's neighbours. */
+  readonly slow: Map<string, string[]>;
+}
+
+/**
+ * Bun's real shape: an assertion error prints BEFORE its `(fail)` line, but a timeout prints
+ * `  ^ this test timed out after Nms.` AFTER it (seen in CI run 40105067954). `::` lines (CI
+ * group/error annotations), `file.test.ts:` headers and the banner are not error text; a header
+ * (or `::group::<file>:`) says which file the following tests belong to.
+ */
+export function scanFailures(output: string, maxLines = 12): FailureScan {
+  const details = new Map<string, string[]>();
+  const fileOf = new Map<string, string>();
+  const slow = new Map<string, string[]>();
+  let buf: string[] = [];
+  let lastFail: string | undefined;
+  let file = "";
+  for (const raw of output.split(/\r?\n/)) {
+    const line = raw.trimEnd();
+    // The closing recap repeats every (fail) line and its timeout line: stop, the first pass has them.
+    if (/^\d+ tests? failed:$/.test(line)) break;
+    const header = /^(?:::group::)?(\S+\.test\.[cm]?[jt]sx?):$/.exec(line)?.[1];
+    if (header !== undefined) {
+      file = header.replaceAll("\\", "/");
+      buf = [];
+      lastFail = undefined;
+      continue;
+    }
+    if (line === "" || line.startsWith("::") || line.startsWith("bun test v")) continue;
+    const failed = /^\(fail\) (.+?)(?: \[[\d.]+m?s\])?$/.exec(line);
+    if (failed?.[1] !== undefined) {
+      if (!details.has(failed[1])) {
+        details.set(failed[1], buf.slice(-maxLines));
+        if (file !== "") fileOf.set(failed[1], file);
+      }
+      buf = [];
+      lastFail = failed[1];
+      continue;
+    }
+    const pass = /^\(pass\) (.+?) \[([\d.]+)ms\]$/.exec(line);
+    if (pass !== null || /^\((skip|todo)\) /.test(line)) {
+      buf = [];
+      lastFail = undefined;
+      if (pass?.[1] !== undefined && Number(pass[2]) >= 1000) {
+        const l = slow.get(file) ?? [];
+        if (l.length < 10) l.push(`${pass[1]} [${pass[2]}ms]`);
+        slow.set(file, l);
+      }
+      continue;
+    }
+    if (/^\s*\^ this test timed out after /.test(line)) {
+      const d = lastFail === undefined ? undefined : details.get(lastFail);
+      if (d !== undefined) d.push(line.trim());
+      continue;
+    }
+    lastFail = undefined;
+    buf.push(line.length > 300 ? `${line.slice(0, 300)}...` : line);
+  }
+  return { details, fileOf, slow };
+}
+
+/** Failing tests whose detail verify prints to the console; the log file has the rest. */
+const DETAIL_CAP = 20;
+
 export interface JunitCase {
   readonly file: string;
   readonly classname: string;
@@ -1126,7 +1201,22 @@ export async function testStep(
     lines.push(
       `test (${scope}): ${ok ? "ok" : "FAIL"} ${counts}, ${summary.files ?? "?"} files${ok ? "" : ` (exit ${t.code}), log ${io.log(t.output)}`}`,
     );
-    for (const name of summary.failing) lines.push(`  (fail) ${name}`);
+    const scan = scanFailures(t.output);
+    const slowShown = new Set<string>();
+    for (const [i, name] of summary.failing.entries()) {
+      lines.push(`  (fail) ${name}`);
+      if (i >= DETAIL_CAP) continue;
+      for (const d of scan.details.get(name) ?? []) lines.push(`    | ${d}`);
+      const f = scan.fileOf.get(name);
+      if (f !== undefined && !slowShown.has(f)) {
+        slowShown.add(f);
+        for (const s of scan.slow.get(f) ?? []) lines.push(`    | slow pass in ${f}: ${s}`);
+      }
+    }
+    if (summary.failing.length > DETAIL_CAP)
+      lines.push(
+        `  ... error text shown for the first ${DETAIL_CAP} of ${summary.failing.length} failing tests; the log has the rest`,
+      );
     if (!ok) code = 1;
     if (plan.mode.kind === "full") {
       const junitFiles = [...new Set(parseJunit(io.readJunit(junit)).map((c) => c.file))];
