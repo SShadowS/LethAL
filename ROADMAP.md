@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**26 of 714 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**28 of 716 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -316,7 +316,7 @@ that ordering is the priority.
 - **R710** · Transport durations were measured with the wall clock, so a clock step could record a stop row shorter than its budget (hang gate, bc3) · [R710.md](docs/roadmap/R710.md) · done (2502f82b)
 - **R717** · A callee's inserted copy kept ahead of a walk by a deleted statement (DC's Clone shape) is not refused · [R717.md](docs/roadmap/R717.md) · open, filed 2026-10-24 (measure if wanted)
 - **R718** · R696 refuses a walk's own Insert as a mover, but an own Insert ahead of the cursor was measured finite · [R718.md](docs/roadmap/R718.md) · open, filed 2026-10-24 (a loosening: needs its own measurement and review)
-- **R720** · Whole members in a `#if` right after the global `var` section parse INSIDE that section, so the symbol table never indexes them: 235 compiled-in members lose their typed sites · [R720.md](docs/roadmap/R720.md) · open, deferred 2026-10-24 — no wrong mutant (the R-302 guard holds); typed sites lost in 235 compiled-in…
+- **R720** · Whole members in a `#if` right after the global `var` section parse INSIDE that section, so the symbol table never indexes them: 235 compiled-in members lose their typed sites, and lost R196's hang refusal (fixed) · [R720.md](docs/roadmap/R720.md) · open, deferred 2026-10-24 — the lost hang refusal is fixed on lethal/r327b…
 - **R721** · A global declared inside a var-section `#if` is not collected, so R196's hang refusal declined a loop write to it and deployed a mutant that can hang · [R721.md](docs/roadmap/R721.md) · open, filed 2026-10-24 (fix in progress on lethal/r327b, with R720)
 
 ## Product gaps a real project hits
@@ -759,6 +759,8 @@ that ordering is the priority.
 - **R712** · Which BC path is the oracle for HTTP-in-test behaviour: the test runner hub or the web-service path · [R712.md](docs/roadmap/R712.md) · closed 2026-10-24 — owner ruling: the test runner hub path
 - **R713** · bcdev runs tests through the web-service path, so a test asserting on BC's HTTP error text reads a different text than VS Code or the hub (R706) · [R713.md](docs/roadmap/R713.md) · open, filed 2026-10-24
 - **R716** · r391-cross-file-twin.test.ts's two file-backed stores sat on disk, the one place R616's tmpfs move missed, so its R565 NULL-digest test timed out under a parallel verify · [R716.md](docs/roadmap/R716.md) · done (11c504df)
+- **R719** · mute al-runner-v3-defect-gone / -refused session warnings for facts a per-build pin covers · [R719.md](docs/roadmap/R719.md) · open
+- **R722** · No committed v3 leg covers N1 (dotted test names) under serve-entries; alpha.5's serve rows drop codeunit and method for such names (#5798) · [R722.md](docs/roadmap/R722.md) · open
 
 ---
 
