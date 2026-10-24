@@ -257,13 +257,6 @@ function projectObserves(
     }
   }
   const names = new Set([tableName, String(table.id)]);
-  const subscribes = (node: ALSyntaxNode): boolean => {
-    let found = false;
-    visit(node, (n) => {
-      if (!found && n.rawKind === "attribute_argument_list") found = subscribesTo(n, names, events);
-    });
-    return found;
-  };
   // Objects the symbol table does not index. Since R343 a clean wrapped object in an arm the build
   // compiles IS indexed and is read above like a root one; what lands here is a wrapped object in a
   // compiled-out arm, in an undecided file, or read without an arm map. R485: a CLEAN
@@ -317,10 +310,32 @@ function projectObserves(
     });
     if (found) return true;
   }
+  return subscriberArgumentLists(symbols).some((n) => subscribesTo(n, names, events));
+}
+
+/** Test hook: codeunit attribute walks done by `subscriberArgumentLists`. */
+export let subscriberWalks = 0;
+/** Test hook: reset `subscriberWalks`. */
+export function resetSubscriberWalks(): void {
+  subscriberWalks = 0;
+}
+
+const subscriberListsMemo = new WeakMap<SymbolTable, ALSyntaxNode[]>();
+/** Every `attribute_argument_list` of every indexed codeunit, in `symbols.objects` order, all `#if`
+ *  arms: one walk per codeunit per symbol table, however many tables ask. */
+function subscriberArgumentLists(symbols: SymbolTable): ALSyntaxNode[] {
+  const hit = subscriberListsMemo.get(symbols);
+  if (hit !== undefined) return hit;
+  const lists: ALSyntaxNode[] = [];
   for (const cu of symbols.objects) {
-    if (cu.kind === "codeunit" && subscribes(cu.node)) return true;
+    if (cu.kind !== "codeunit") continue;
+    subscriberWalks++;
+    visit(cu.node, (n) => {
+      if (n.rawKind === "attribute_argument_list") lists.push(n);
+    });
   }
-  return false;
+  subscriberListsMemo.set(symbols, lists);
+  return lists;
 }
 
 const TABLEEXTENSION_DECLARATION = "tableextension_declaration";
