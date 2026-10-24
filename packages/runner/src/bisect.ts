@@ -30,28 +30,78 @@ export type IsolationOutcome<T> =
     };
 
 /**
- * The most compiles one isolation may spend. Each culprit costs about log2(n) + 2.
- * ponytail: a fixed budget; R735 (alc's diagnostics name the suspects) is the way to isolate many
- * culprits inside it.
+ * The most compiles one isolation may spend. Halving costs about log2(n) + 2 per culprit; alc's
+ * own diagnostics (R735) bring that to about 2 per culprit when they point at the right place.
  */
 export const MAX_ISOLATION_COMPILES = 64;
 
 class BudgetSpent extends Error {}
 
+export interface AlcDiag {
+  readonly code: string;
+  readonly file: string;
+  readonly line: number;
+}
+
+/** The `error ALnnnn` lines of alc output, as code + file name + line. Message text is dropped. */
+export function parseAlcErrors(text: string): AlcDiag[] {
+  const out: AlcDiag[] = [];
+  const re = /^(.*?)\((\d+),\d+(?:,\d+,\d+)?\):\s*error\s+(AL\d+|[A-Z]{2,}\d+)\b/;
+  for (const raw of text.split(/\r?\n/)) {
+    const m = re.exec(raw.trim());
+    if (m === null) continue;
+    out.push({
+      code: m[3] as string,
+      file: (m[1] as string).replaceAll("\\", "/").split("/").pop() as string,
+      line: Number(m[2]),
+    });
+  }
+  return out;
+}
+
+const ACTIVE_GUARD = /\.Active\('(M[^']*)'\)/;
+
 /**
- * `compile(subset)` answers true when the subset compiles, false when alc rejects it, and THROWS
- * for anything that is not a compile answer (the search then aborts).
+ * R735: the mutant id of the dispatch branch that holds `line` (1-based) of an emitted file, or
+ * `undefined` when no guard lies above it or the line is out of range. A chain is
+ * `if SEL.Active('Mi') then begin <root with Mi> end else if ...`, so the branch is the nearest
+ * guard line at or above. An error ON a guard line is the previous branch's: alc reports a missing
+ * token at the start of the NEXT line (R734 proof, AL0111), so the scan starts one line up. The
+ * `else` branch (the original text) reads as the last member: a wrong pointer that costs one
+ * compile and blames nobody.
+ */
+export function guardGoverning(text: string, line: number): string | undefined {
+  const lines = text.split(/\r?\n/);
+  if (!Number.isInteger(line) || line < 1 || line > lines.length) return undefined;
+  let at = line - 1;
+  if (ACTIVE_GUARD.test(lines[at] ?? "")) at--;
+  for (; at >= 0; at--) {
+    const m = ACTIVE_GUARD.exec(lines[at] ?? "");
+    if (m !== null) return m[1];
+  }
+  return undefined;
+}
+
+/**
+ * `compile(subset)` answers true when the subset compiles, false when alc rejects it, or an array
+ * when alc rejects it AND pointed at those mutants (R735; an empty array is the same as false), and
+ * THROWS for anything that is not a compile answer (the search then aborts).
+ * Pointed-at mutants are only suspects: each is confirmed by compiling it alone.
  */
 export async function isolateBreakingMutants<T>(
   mutants: readonly T[],
-  compile: (subset: readonly T[]) => Promise<boolean>,
+  compile: (subset: readonly T[]) => Promise<boolean | readonly T[]>,
   cap: number = MAX_ISOLATION_COMPILES,
 ): Promise<IsolationOutcome<T>> {
   let used = 0;
+  let lastSuspects: readonly T[] = [];
   const probe = async (subset: readonly T[]): Promise<boolean> => {
     if (used >= cap) throw new BudgetSpent();
     used++;
-    return compile(subset);
+    const answer = await compile(subset);
+    if (answer === true) return true;
+    lastSuspects = answer === false ? [] : answer;
+    return false;
   };
   // Smallest prefix of `pool` that, added to `base`, breaks the compile; returns that last element.
   // Needs: base + pool fails, base alone compiles.
@@ -76,7 +126,31 @@ export async function isolateBreakingMutants<T>(
     }
     if (remaining.length === 0 || (await probe(remaining))) return { kind: "no-repro" };
     // Invariant: `remaining` fails to compile, and the empty set compiles.
+    // `pointed`: what alc named in the last failing compile of `remaining`. `cleared`: compiled
+    // alone and fine, so never tried alone again (it may still be half of a pair).
+    // ponytail: a diagnostic that cascades onto innocent mutants costs one compile each.
+    let pointed = lastSuspects;
+    const cleared = new Set<T>();
     for (;;) {
+      // Suspects first, BEFORE the early stop below (which guards only halving).
+      let found = false;
+      for (const s of pointed) {
+        if (!remaining.includes(s) || cleared.has(s)) continue;
+        if (await probe([s])) cleared.add(s);
+        else {
+          culprits.push(s);
+          remaining = remaining.filter((x) => x !== s);
+          found = true;
+        }
+      }
+      pointed = [];
+      if (found) {
+        if (remaining.length === 0 || (await probe(remaining))) {
+          return { kind: "isolated", culprits, groupErrors, unresolved: [] };
+        }
+        pointed = lastSuspects;
+        continue;
+      }
       // Early stop: a round on n mutants costs ceil(log2 n) searches, 1 confirm and 1 recompile
       // (nothing when n is 1). Do not start one the budget cannot finish: it would spend the rest
       // of the budget and name nobody.
@@ -103,6 +177,7 @@ export async function isolateBreakingMutants<T>(
       if (remaining.length === 0 || (await probe(remaining))) {
         return { kind: "isolated", culprits, groupErrors, unresolved: [] };
       }
+      pointed = lastSuspects;
     }
   } catch (err) {
     if (!(err instanceof BudgetSpent)) throw err;
