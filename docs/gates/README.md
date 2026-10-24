@@ -88,8 +88,8 @@ refuse: a gate never records its own set (the same rule as R332's baselines).
   `testapp/step6`, `testapp/step7`, `agreement/verify`, `agreement/named`. A call that throws or refuses by design
   (verify's refusals, testapp's two absence probes) has its own collector, printed and never asserted.
   `gate-warnings-wiring.test.ts` checks that every `runNamedMutants(` and `runVerify(` call in an itest passes an
-  `emit`. The keys above are not pinned yet: each stays absent until an observe run has been explained and
-  pre-committed.
+  `emit` holding a collector's `subscriber`. The keys are pinned from an explained, pre-committed observe run
+  (`2026-10-24-r739-warning-sets-precommitment.md`).
 - **What is an event:** since R739 the backends' notices (`setNotify`) and the orchestrator's lease and coverage
   lines are warning events, not console lines. Only a few diagnostics stay on the console: the v3 contract lines,
   the v3 close stats, staged-copy removal, the R289 trace, the store's WAL notice, the cache-removal notice, the
@@ -105,8 +105,12 @@ refuse: a gate never records its own set (the same rule as R332's baselines).
   start. `itest:alrunner-v3` refuses observe mode when `LETHAL_V3_GATE_RECEIPT` is set (the update gate).
 - **A run that throws:** its own error wins. Its codes are printed, never asserted.
 - **The order:** observe, explain each code, pre-commit the set, add it to `GATE_WARNINGS` by hand, then prove it
-  with one normal run. Today only `hang/baseline` is pinned (equal to check 11 of `hang-baseline-leg.ts`); every
-  other leg refuses until it is observed.
+  with one normal run. `hang/baseline` must stay equal to check 11 of `hang-baseline-leg.ts` (a unit test pins the
+  two equal). A key that was never observed refuses (envtool: host-only, recorded by the owner's R683 run).
+- **Server-independent sets.** The sets are proven on bc1 (plus hang on bc3) and claim to hold on every server:
+  the environment codes (`package-cache-leftover`, `package-cache-dangling`, `al-runner-v3-dotnet-helper-missing`)
+  are in no set. The first run of each gate on bc2 or bc3 is the check: a lane that sees a set difference there
+  reports it as a BLOCK against R736/R739, and never adjusts the set.
 
 ## Control app versions
 
