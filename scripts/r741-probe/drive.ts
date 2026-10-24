@@ -323,7 +323,6 @@ async function step(x: Ctx, n: string): Promise<Facts> {
       for (const a of [Q, P, B]) removed[a.name] = await remove(x, a);
       const left: Record<string, Row[]> = {};
       for (const a of [Q, P, B]) left[a.name] = await read(x, a);
-      rmSync(join(OUT, "run.config.json"), { force: true });
       return {
         removed,
         remained: Object.fromEntries(Object.entries(left).filter(([, r]) => r.length > 0)),
@@ -367,16 +366,21 @@ async function main(): Promise<number> {
     console.log(JSON.stringify({ server, step: n, ...(await step(x, n)) }));
   };
   try {
-    for (const n of want) {
-      if (n === undefined) throw new Refused("--step or --all is required");
-      await run(n);
+    try {
+      for (const n of want) {
+        if (n === undefined) throw new Refused("--step or --all is required");
+        await run(n);
+      }
+    } catch (err) {
+      // --all stops at the first failure but still cleans up.
+      if (all) await run("cleanup");
+      throw err;
     }
-  } catch (err) {
-    // --all stops at the first failure but still cleans up.
     if (all) await run("cleanup");
-    throw err;
+  } finally {
+    // The run config holds the login: gone whatever happened above.
+    rmSync(join(OUT, "run.config.json"), { force: true });
   }
-  if (all) await run("cleanup");
   return 0;
 }
 

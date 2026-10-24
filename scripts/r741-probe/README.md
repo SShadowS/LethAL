@@ -1,7 +1,9 @@
 # R741 probe: which object id BC names for a stale member the target added through an extension
 
-**Status: built and compiled offline only, run on NO server.** Pre-commitment:
-`docs/superpowers/specs/2026-10-24-r741-extension-member-id-precommitment.md`.
+**Status: run twice on bc2, 2026-10-24** (`/coord/handoff/R-741/measure.md`): run 1 with id set 1, run 2 (the live
+proof of R749) with set 2, which `drive.ts` and the `app.json` files now carry. A re-run needs a third id set: bc2 keeps
+both sets' records until a restart. Pre-commitment:
+`docs/superpowers/specs/2026-10-24-r741-extension-member-id-precommitment.md` and its addendum 1.
 
 Question (R741): R738 refuses "Function ID <n> was called. The object with ID <id> does not have a member with that
 ID." when `<id>` is one of the target's declared objects. When the stale member is a procedure the target added
