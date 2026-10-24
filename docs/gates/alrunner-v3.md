@@ -174,12 +174,25 @@ Both run as the other legs do (`runSession`, the v3 backend, one-shot, coverage 
 
 ## The pin and the update gate
 
-- The binary is pinned at `/work/tools/al-runner-v3/3.0.0-alpha.2-91253f2d6/`, and `current` points at it. Its
+- The binary is pinned at `/work/tools/al-runner-v3/3.0.0-alpha.5-07342060e/` (since 2026-10-24; alpha.2 was
+  `current` before), and `current` points at it. Its
   `.gated` file names the build, its sha256 and the LethAL commit that gated it. The backend refuses any build that
   `.gated` does not name (`AlRunnerV3UngatedBuildError`), unless `LETHAL_ALRUNNER_V3_CANDIDATE=1`.
 - The pin is never moved by hand. `bun scripts/al-runner-v3-update.ts` gates newer `v3.0.0-alpha.N` releases, and
   `--edge` gates the daily `edge` release by download. The version check accepts SemVer build metadata
   (`al-runner 3.0.0-alpha.4+edge.20261022 (57f1e4f98)`, R639 F1).
+- **Candidate order (R586d): newest first.** The alpha path lists the releases above `current`'s alpha number and
+  gates the NEWEST one first, with a full gate. A `pass` makes it `current` and ends the run: no older candidate is
+  downloaded or gated. Anything else (`gate-fail`, `held`, `infra-fail`, or a skip because `failed/<tag>@<this
+  commit>` exists) sends the run to the next older candidate, down to but not including `current`. If none passes,
+  `current` stays, and each candidate has its own record (`failed/`, `held/`, `infra/`). Versions compare by the
+  alpha number as a number, so alpha.10 is newer than alpha.9. `--edge` is unchanged: one candidate, no fallback.
+  Before R586d the order was oldest first, and a day with alpha.3 and alpha.4 both failing cost two gates before
+  alpha.5 ran.
+- **No longer measured (R586d).** Once a newer release passes, the older releases skipped that day get no daily
+  verdict. Their last record stays in `failed/` (or `held/`), and is not refreshed. A skipped release is only
+  gated again if it ever becomes the newest candidate above `current` again (it cannot, once a newer one is
+  `current`), so those records are final.
 - `--edge-rejudge <edge sha>` (R639) re-gates a KEPT edge binary at `.gated`'s current commit, never a new
   download, and never reads or writes `edge.last-seen`.
   - It refuses by name (`al-runner-v3-edge-rejudge-refused`) when `failed/edge-<sha>@<commit>` exists at all, or a

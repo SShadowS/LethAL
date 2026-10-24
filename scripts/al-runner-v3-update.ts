@@ -12,7 +12,9 @@
  * and `--edge-rejudge`.
  *
  * 1. Candidates: `v3.0.0-alpha.N` releases of aldevtools/BusinessCentral.AL.Runner with N above the
- *    gated build's. `edge` only through `--edge`, never as an alpha candidate.
+ *    gated build's, tried NEWEST first (R586d): the first pass becomes `current` and ends the run;
+ *    anything else falls back to the next older one. `edge` only through `--edge`, never as an
+ *    alpha candidate.
  * 2. The linux-x64 tarball and SHA256SUMS go into a NEW empty folder; a checksum mismatch is
  *    `infra-fail` and the tarball is NEVER extracted. Extraction goes into another new folder.
  * 3. The gate runs in a detached worktree at `.gated`'s `lethalCommit` (never a moving master), with
@@ -110,12 +112,15 @@ export function alphaOf(tag: string): number | undefined {
   return m === null ? undefined : Number(m[1]);
 }
 
-/** Candidates above the gated alpha, oldest first; never `edge`. */
+/**
+ * Candidates above the gated alpha, NEWEST first (R586d); never `edge`. Versions compare by the
+ * alpha number as a number, so alpha.10 is newer than alpha.9.
+ */
 export function candidates(tags: readonly string[], gatedAlpha: number): string[] {
   return tags
     .map((t) => ({ t, n: alphaOf(t) }))
     .filter((x): x is { t: string; n: number } => x.n !== undefined && x.n > gatedAlpha)
-    .sort((a, b) => a.n - b.n)
+    .sort((a, b) => b.n - a.n)
     .map((x) => x.t);
 }
 
@@ -446,7 +451,11 @@ async function infra(deps: UpdateDeps, name: string): Promise<Outcome> {
   return "infra-fail";
 }
 
-/** The daily run: every candidate above the gated alpha, oldest first, until one passes. */
+/**
+ * The daily run: the candidates above the gated alpha, newest first, until one passes (R586d). A
+ * candidate that does not pass (gate-fail, held, infra-fail, or already in `failed/`) sends the run
+ * to the next older one. Older releases skipped after a pass get no verdict that day.
+ */
 export async function updateOnce(
   deps: UpdateDeps,
   opts: { readonly regateAt?: string } = {},

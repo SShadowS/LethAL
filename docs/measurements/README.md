@@ -1006,7 +1006,11 @@ Measured 2026-10-21 on `alrunner 3.0.0-alpha.2 (91253f2d6)` (binary sha256 `b23f
 in this container. The raw measurements are under `/coord/handoff/R-586/` (`measure.md`,
 `plan-measure/`, `contract-alpha2/`). LethAL re-measures the contract every session
 (`packages/runner/src/al-runner-v3-contract.ts`, 25 facts since R612 and r8) and gates the pin with
-`itest:alrunner-v3`. The plan is `docs/superpowers/plans/2026-10-21-r586-alrunner-v3-backend.md`;
+`itest:alrunner-v3`. **`current` has been alpha.5 (`07342060e`) since 2026-10-24**, under a per-build
+pin of the readings that differ from this section (R586c; table and costs in
+`docs/gates/alrunner-v3.md` §"Per-build pins"). Read the facts below as alpha.2's: on alpha.5 the
+#5602 compile hole, the #5613 exit shape and the #5610 cascade are fixed, a duplicate-key insert is
+refused (#5788), and the virtual clock counts toward the time limit (#5793, guarded). The plan is `docs/superpowers/plans/2026-10-21-r586-alrunner-v3-backend.md`;
 the figures are pre-committed in `docs/superpowers/specs/2026-10-21-r586-alrunner-v3-precommitment.md`.
 
 - **Command line.** `al-runner test --output-json --isolation test --test-timeout-secs N --codeunit
