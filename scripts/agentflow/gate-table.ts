@@ -26,6 +26,11 @@
  */
 
 import { V3_AGENTFLOW_LEGS } from "../../packages/runner/itest/alrunner-v3-legs.ts";
+import {
+  CHUNKED_SUBLEGS,
+  HANG_SUBLEGS,
+  HARDEN_SUBLEGS,
+} from "../../packages/runner/itest/gate-sublegs.ts";
 
 /**
  * Every live leg the repo has. `envtool` is absent on purpose: see `MANUAL_ONLY`.
@@ -92,9 +97,10 @@ export const FULL_SET: readonly Leg[] = [
  *
  * R271: `harden` follows the read-only legs. `verify`, `testapp` and `agreement` come next because
  * each swaps a scratch or marker test app over the resident one and restores it in a `finally`; a
- * failed restore leaves a stale test app (`StaleTestAppError` for the next run on that fixture),
- * so they run after every gate that needs the resident build. `hang` stays last: its residue is
- * worse.
+ * failed restore throws, so the leg fails and the tick stops; the leftover stale test app
+ * (`StaleTestAppError`) then hits the NEXT run on that fixture, not a later leg of this tick. The
+ * order still helps the control run, which replays the accepted legs in the same order. `hang`
+ * stays last: its residue is worse.
  */
 export const LEG_ORDER: readonly Leg[] = [
   "bcdev",
@@ -119,14 +125,21 @@ export const EXPECTED_SUBLEGS: Readonly<Partial<Record<Leg, readonly string[]>>>
   // R654 S2: the v3 itest's default legs with no corpus and no tables leg (what a challenged run
   // runs), K included: a gated run must pass K (`v3ItestFailures`).
   "alrunner-v3": V3_AGENTFLOW_LEGS,
+  // R271 (build review B1): these itests emit more than one subleg, and a count of one would
+  // refuse their passing receipt. verify, testapp and agreement emit one, named after the leg.
+  harden: HARDEN_SUBLEGS,
+  chunked: CHUNKED_SUBLEGS,
+  hang: HANG_SUBLEGS,
 };
 
 /**
  * Which container each leg runs against. One instrumented target per container is a hard rule.
  * The name is a lease key, not a host: tick.ts only groups legs by it. R271 added `agent-harden`
  * for the legs that read the `sandbox-harden` fixture config (`harden`, `agreement`), a third
- * instrumented target that must not share a lease with the codeunit or table fixture. `verify`
- * and `testapp` read `sandbox-app`'s config, like `bcdev`.
+ * instrumented target kept off the codeunit and table fixtures' keys. (`hang` already shares
+ * `agent-app` with its own different target: a known exception.) `verify` and `testapp` read
+ * `sandbox-app`'s config, like `bcdev`. A real ContainerPort's key-to-server map must include
+ * `agent-harden`.
  */
 export const LEG_CONTAINER: Readonly<Record<Leg, "agent-app" | "agent-data" | "agent-harden">> = {
   bcdev: "agent-app",
@@ -234,7 +247,9 @@ const RULES: readonly Rule[] = [
   },
   {
     test: startsWith("fixtures/sandbox-app/", "fixtures/sandbox-tests/"),
-    legs: ["bcdev", "alrunner-v3"],
+    // verify and testapp measure this fixture pair (verify-gaps.ts pins its gap ids; testapp
+    // republishes sandbox-tests).
+    legs: ["bcdev", "alrunner-v3", "verify", "testapp"],
     why: "the codeunit fixture and its suite",
   },
   {
@@ -267,6 +282,7 @@ const RULES: readonly Rule[] = [
         "packages/runner/src/equivalence-marks.ts",
       )(p),
     // `agreement` reads the same fixture pair, so a change to the planted survivors moves both.
+    // equivalence-marks.ts is also imported by verify.ts: its own row below adds verify.
     legs: ["harden", "agreement"],
     why: "the planted-survivor fixture, its answer key and its pre-committed table",
   },
@@ -280,10 +296,18 @@ const RULES: readonly Rule[] = [
         "packages/runner/src/testpage-scan.ts",
         "packages/runner/src/testpage-unsupported.ts",
         "packages/runner/src/runner-disagreement.ts",
+        "packages/runner/src/gaps.ts",
+        "packages/runner/src/closed-world.ts",
+        "packages/runner/src/assertion-screen.ts",
+        "packages/runner/src/digest-inputs.ts",
+        "packages/runner/src/equivalence-marks.ts",
         "packages/runner/itest/verify.itest.ts",
         "packages/runner/itest/verify-gaps.ts",
         "packages/runner/itest/verify-reach-fields.ts",
       )(p),
+    // cli.ts (the verify subcommand) is deliberately NOT listed: it changes often, listing it would
+    // add verify and agreement (two long legs) to every CLI change, and the general runner row
+    // already selects the BC legs for it. Cost, not correctness.
     legs: ["verify", "agreement"],
     why: "the verify command's code; agreement compares verify with full runs, so it moves with it",
   },

@@ -70,6 +70,7 @@ import { BaselineRecordedError, assertGateBaseline, preflightGateBaseline } from
 import { itestConfigName, itestConfigPath, printItestTarget } from "./config-path";
 import { HANG_FIGURES } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import { HANG_SUBLEGS } from "./gate-sublegs";
 import {
   BASELINE_PROBE_OWNER,
   type BaselineVerdictEvent,
@@ -1157,12 +1158,7 @@ async function main(): Promise<void> {
 
     console.log("hang itest: PASS");
     await emitPassed("hang", {
-      sublegs: [
-        "stop-hung-sessions-on",
-        "stop-hung-sessions-single",
-        "stop-baseline",
-        "stop-hung-sessions-off",
-      ],
+      sublegs: [...HANG_SUBLEGS],
       artifacts: { reported: false },
     });
   } catch (err) {

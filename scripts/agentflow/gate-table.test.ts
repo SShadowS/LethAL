@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { V3_AGENTFLOW_LEGS } from "../../packages/runner/itest/alrunner-v3-legs.ts";
+import {
+  CHUNKED_SUBLEGS,
+  HANG_SUBLEGS,
+  HARDEN_SUBLEGS,
+} from "../../packages/runner/itest/gate-sublegs.ts";
 import {
   EXPECTED_SUBLEGS,
   FULL_SET,
@@ -10,6 +16,7 @@ import {
   selectLegs,
   widenWithDelta,
 } from "./gate-table.ts";
+import { expectedSublegsFor } from "./tick.ts";
 
 // R654 S2 (plan docs/superpowers/plans/2026-10-22-r654-retire-dotnet-alrunner.md §S2a): the v3
 // gate is a leg of its own. S3 removed the .NET al-runner leg it was selected beside.
@@ -76,12 +83,21 @@ describe("R271: harden, verify, testapp and agreement legs", () => {
       "packages/runner/src/verify.ts",
       "packages/runner/src/test-digest.ts",
       "packages/runner/src/testpage-scan.ts",
+      "packages/runner/src/gaps.ts",
+      "packages/runner/src/closed-world.ts",
+      "packages/runner/src/assertion-screen.ts",
+      "packages/runner/src/digest-inputs.ts",
+      "packages/runner/src/equivalence-marks.ts",
       "packages/runner/itest/verify.itest.ts",
+      "fixtures/sandbox-app/src/Sandbox.Codeunit.al",
+      "fixtures/sandbox-tests/Sandbox.Test.al",
     ],
     testapp: [
       "packages/runner/src/test-app-publish.ts",
       "packages/runner/src/stale-test-app.ts",
       "packages/runner/itest/test-app-publish.itest.ts",
+      "fixtures/sandbox-app/src/Sandbox.Codeunit.al",
+      "fixtures/sandbox-tests/Sandbox.Test.al",
     ],
     agreement: [
       "packages/runner/itest/verify-agreement.itest.ts",
@@ -122,6 +138,42 @@ describe("R271: harden, verify, testapp and agreement legs", () => {
     expect(h).not.toContain("testapp");
     const t = selectLegs(["packages/runner/src/test-app-publish.ts"]).legs;
     expect(t).not.toContain("harden");
+  });
+
+  // Build review B1: harden, chunked and hang emit several sublegs; a missing or wrong entry makes
+  // the tick refuse their passing receipt ("A partial run is not a pass").
+  test("EXPECTED_SUBLEGS holds each multi-subleg itest's list, and the one-subleg legs have none", () => {
+    expect(EXPECTED_SUBLEGS.harden).toEqual(["base-suite", "answer-key"]);
+    expect(EXPECTED_SUBLEGS.chunked).toEqual(["unbounded", "chunked-2"]);
+    expect(EXPECTED_SUBLEGS.hang).toEqual([
+      "stop-hung-sessions-on",
+      "stop-hung-sessions-single",
+      "stop-baseline",
+      "stop-hung-sessions-off",
+    ]);
+    for (const l of ["verify", "testapp", "agreement"] as const) {
+      expect([l, EXPECTED_SUBLEGS[l]]).toEqual([l, undefined]);
+    }
+    expect(expectedSublegsFor("harden")).toEqual(HARDEN_SUBLEGS);
+  });
+
+  test("each itest emits its shared subleg constant, and the one-subleg itests emit one name", () => {
+    const src = (f: string) =>
+      readFileSync(new URL(`../../packages/runner/itest/${f}`, import.meta.url), "utf8");
+    const emitted = (f: string, leg: string) =>
+      new RegExp(`emitPassed\\("${leg}",\\s*\\{\\s*sublegs: \\[([^\\]]*)\\]`).exec(src(f))?.[1];
+    expect(emitted("harden.itest.ts", "harden")).toBe("...HARDEN_SUBLEGS");
+    expect(emitted("chunked.itest.ts", "chunked")).toBe("...CHUNKED_SUBLEGS");
+    expect(emitted("hang.itest.ts", "hang")).toBe("...HANG_SUBLEGS");
+    expect(CHUNKED_SUBLEGS).toEqual(EXPECTED_SUBLEGS.chunked as readonly string[]);
+    expect(HANG_SUBLEGS).toEqual(EXPECTED_SUBLEGS.hang as readonly string[]);
+    for (const [f, leg] of [
+      ["verify.itest.ts", "verify"],
+      ["test-app-publish.itest.ts", "testapp"],
+      ["verify-agreement.itest.ts", "agreement"],
+    ] as const) {
+      expect([leg, emitted(f, leg)]).toEqual([leg, `"${leg}"`]);
+    }
   });
 
   test("all four are in FULL_SET (default-deny) and the unmatched path selects them", () => {

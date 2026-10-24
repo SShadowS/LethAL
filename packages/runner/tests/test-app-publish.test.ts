@@ -477,15 +477,17 @@ async function belowResidentMessage(): Promise<string> {
   return (err as Error).message;
 }
 
-test("R597: the version-below-resident detail names the Linux fix (uninstall, then Microsoft.NAV.unpublish)", async () => {
+test("R597: the version-below-resident detail names the Linux fix (Microsoft.NAV.uninstall, then Microsoft.NAV.unpublish)", async () => {
   const msg = await belowResidentMessage();
-  expect(msg).toContain("on a Linux bc server (bc1-bc3), uninstall the app");
-  expect(msg).toContain("Microsoft.NAV.unpublish");
+  expect(msg).toContain("on a BC server on Linux, call the automation API's");
+  expect(msg).toContain("Microsoft.NAV.uninstall, then Microsoft.NAV.unpublish");
 });
 
 test("R597: the version-below-resident detail names the Windows fix (Sync-NAVApp) labelled for a Windows container", async () => {
   const msg = await belowResidentMessage();
-  expect(msg).toContain("on a Windows container, run Sync-NAVApp -Mode Clean");
+  expect(msg).toContain(
+    "on a Windows container, run UnPublish-BcContainerApp, then Sync-NAVApp -Mode Clean",
+  );
 });
 
 test("publishTestApp: a BC downgrade refusal inside the fence is publish-failed and names the installed version", async () => {
