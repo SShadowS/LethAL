@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**28 of 707 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**27 of 707 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -689,7 +689,7 @@ that ordering is the priority.
 - **R607** · al-runner-v3: snapshot reuse and --resume drop the [v3-refused-test-nearby] note · [R607.md](docs/roadmap/R607.md) · closed 2026-10-23 — fixed by R678 (3d78e671)
 - **R608** · al-runner-v3: the compile proof does not bind non-.al files, <testDir>/.alpackages or subfolders of <deps> · [R608.md](docs/roadmap/R608.md) · done (86903c8b)
 - **R612** · On al-runner v3, the v2-era serve rule "close the daemon after any non-pass/fail row" makes every suite run cold-start, because #5607's Commit tests are always not run · [R612.md](docs/roadmap/R612.md) · done (592ec593)
-- **R609** · al-runner-v3: a no-coverage caused by a refused covering test carries no note · [R609.md](docs/roadmap/R609.md) · open
+- **R609** · al-runner-v3: a no-coverage caused by a refused covering test carries no note · [R609.md](docs/roadmap/R609.md) · done (SHA-PENDING)
 - **R613** · al-runner v3: one routine lowering cannot handle (a [RunOnClient] DotNet call) anywhere in a subscriber's static reach makes the reach "not known", so every test is refused although the routine never runs (upstream #5641; local fix only, no PR) · [R613.md](docs/roadmap/R613.md) · closed 2026-10-22 — ruling (owner): implemented upstream…
 - **R610** · al-runner-v3: unmeasured whether --coverage-json lists files reached only by a dynamic call · [R610.md](docs/roadmap/R610.md) · closed 2026-10-23 — measured: dynamically reached files are listed (alpha.2 and alpha.4); large projects…
 - **R615** · scripts/bc-linux-setup.ts records every lane's lease token in one shared file per server (TOKEN_DIR fixed to the R-589 folder, lease-<server>.txt), so two lanes overwrite each other's record · [R615.md](docs/roadmap/R615.md) · done (d32ca909)
