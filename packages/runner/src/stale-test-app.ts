@@ -263,20 +263,78 @@ export class StaleTestAppError extends Error {
  * target member the INSTALLED tests app still calls. Read structurally from the message's FIRST
  * line only (BC's sentence, never the call stack), anchored to its measured start: "Function ID
  * <n> was called. The object with ID <id> does not have a member". Returns that id only when it is
- * one of `targetIds` (the target's own declared objects); a member of another app's object is left
- * as an ordinary failure. LIMITS: English text only; the fenced (RunMutant) path's layout only,
+ * one of `targetIds` (the target's own declared objects); another app's object is R740's
+ * (`staleDependencyMember`). LIMITS: English text only; the fenced (RunMutant) path's layout only,
  * as measured; the line-count wrapper and the legacy hub path are not read.
  */
 const STALE_MEMBER =
   /^Function ID \d+ was called\. The object with ID (\d+) does not have a member\b/;
+/** The object id BC's stale-member sentence names, read from the first line only, anchored. */
+function staleMemberObject(failureText: string | undefined): number | undefined {
+  const first = failureText?.split("\n", 1)[0];
+  const m = first === undefined ? null : STALE_MEMBER.exec(first);
+  return m?.[1] === undefined ? undefined : Number(m[1]);
+}
 export function staleTargetMember(
   failureText: string | undefined,
   targetIds: ReadonlySet<number>,
 ): number | undefined {
-  const first = failureText?.split("\n", 1)[0];
-  const m = first === undefined ? null : STALE_MEMBER.exec(first);
-  const id = m?.[1] === undefined ? undefined : Number(m[1]);
+  const id = staleMemberObject(failureText);
   return id !== undefined && targetIds.has(id) ? id : undefined;
+}
+
+/**
+ * R740: the same sentence naming an object the target does NOT declare: a stale member of a
+ * DEPENDENCY (measured on bc2, R-740: a library upgraded through altool under a tests app that was
+ * not recompiled; the test then drops silently, as R738's did). Returns the object id and the
+ * failure's FIRST stack frame (it names the calling object and app), or undefined.
+ */
+export function staleDependencyMember(
+  failureText: string | undefined,
+  targetIds: ReadonlySet<number>,
+): { readonly objectId: number; readonly frame: string } | undefined {
+  const id = staleMemberObject(failureText);
+  if (id === undefined || targetIds.has(id)) return undefined;
+  const frame = (failureText?.split("\n")[1] ?? "").split(";", 1)[0]?.trim() ?? "";
+  return { objectId: id, frame };
+}
+
+/** R740: one baseline test that failed on a stale dependency member. */
+export interface StaleDependencyMemberFinding {
+  readonly name: string;
+  readonly objectId: number;
+  /** the failure's first stack frame: the calling object and app */
+  readonly frame: string;
+}
+
+/**
+ * R740: refuses the session when baseline tests failed because an installed app calls a member
+ * that a DEPENDENCY (not the target) no longer has. Without it those tests silently left the green
+ * set and every mutant only they covered read `no-coverage` under a 100% score (measured). The
+ * remedy is neutral, since the stale caller may be the tests app or another app it uses. Extends
+ * `Error` directly.
+ */
+export class StaleDependencyMemberError extends Error {
+  readonly staleTests: readonly string[];
+
+  constructor(findings: readonly StaleDependencyMemberFinding[]) {
+    const names = findings.map((f) => f.name);
+    const each = findings
+      .map(
+        (f) => `${f.name} (object ${f.objectId}, called from ${f.frame || "an unreadable frame"})`,
+      )
+      .join("; ");
+    super(
+      `${findings.length} baseline test(s) failed because an installed app calls a member that a dependency ` +
+        `no longer has (BC: "... does not have a member with that ID"; the object is not one this project ` +
+        `declares): ${each}. LethAL refused rather than drop them from the green set, which would score every ` +
+        "mutant they cover no-coverage. Recompile and republish the calling app (usually the tests app) against " +
+        "the dependencies installed now, then re-run. If it cannot be rebuilt, run only the other test files with " +
+        "--tests-only <glob> (it selects whole files, not single tests; the report then flags 'tests-narrowed').",
+    );
+    this.name = "StaleDependencyMemberError";
+    this.staleTests = names;
+  }
 }
 
 /** R738: one baseline test that failed on a stale target member, and the object BC named. */
