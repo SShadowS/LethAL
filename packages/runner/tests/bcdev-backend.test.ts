@@ -3299,6 +3299,26 @@ describe("fenced coverage — the thin-coverage diagnostic", () => {
 }
 `;
 
+  // R746: DataNoTrigger's shape (fixtures/sandbox-data): the field's OnValidate body is lines 9-13,
+  // its `if` is line 11, the field declaration is line 7.
+  const TRIG_AL = `table 79150 "Data No Trigger"
+{
+    DataClassification = CustomerContent;
+
+    fields
+    {
+        field(1; "No."; Code[20])
+        {
+            trigger OnValidate()
+            begin
+                if StrLen("No.") > 10 then
+                    Error('No. too long');
+            end;
+        }
+    }
+}
+`;
+
   async function deployed(inner: unknown): Promise<{
     backend: BcDevMcpBackend;
     cleanup: () => Promise<void>;
@@ -3312,6 +3332,7 @@ describe("fenced coverage — the thin-coverage diagnostic", () => {
       JSON.stringify({ ...app, idRanges: [{ from: 79000, to: 79199 }] }),
     );
     await Bun.write(join(outputDir, "Ours.Codeunit.al"), OURS_AL);
+    await Bun.write(join(outputDir, "DataNoTrigger.Table.al"), TRIG_AL);
     const backend = new BcDevMcpBackend(
       {
         mcpCommand: ["unused"],
@@ -3324,7 +3345,10 @@ describe("fenced coverage — the thin-coverage diagnostic", () => {
       () => {
         throw new Error("bc-dev-mcp must not be contacted in fenced mode");
       },
-      makeDeployment(outputDir, { Codeunits: [{ Id: 79100, Name: "Ours" }] }),
+      makeDeployment(outputDir, {
+        Codeunits: [{ Id: 79100, Name: "Ours" }],
+        Tables: [{ Id: 79150, Name: "Data No Trigger" }],
+      }),
       factory([], inner),
     );
     await backend.deploy(outputDir);
@@ -3382,6 +3406,46 @@ describe("fenced coverage — the thin-coverage diagnostic", () => {
       warn.mockRestore();
       await cleanup();
     }
+  });
+
+  // R746: through the REAL line map. Each runs one test and returns what it said.
+  async function saidFor(coverage: unknown[]): Promise<string> {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const { backend, cleanup } = await deployed({ coverage });
+    try {
+      await backend.run(ref, { coverage: "fenced", timeoutMs: 1000 });
+      return warn.mock.calls.map((c) => String(c[0])).join("\n");
+    } finally {
+      warn.mockRestore();
+      await cleanup();
+    }
+  }
+  const T = (lineNo: number) => ({ objectType: 1, objectId: 79150, lineNo, hits: 1 });
+  const C = (lineNo: number) => ({ objectType: 5, objectId: 79100, lineNo, hits: 1 });
+
+  test("R746: a row on a trigger body line is silent (the frame is fine)", async () => {
+    expect(await saidFor([T(11)])).not.toContain("fenced coverage for");
+  });
+
+  test("R746: a row on a gap line (the field declaration, or past the end) warns", async () => {
+    for (const line of [7, 999]) {
+      const said = await saidFor([T(line)]);
+      expect(said).toContain("NOT ONE line fell inside a known procedure");
+      expect(said).toContain("only object-level matching (triggers and local procedures) remains");
+    }
+  });
+
+  test("R746: trigger row FIRST, then a gap row in the same object, warns", async () => {
+    const said = await saidFor([T(11), T(7)]);
+    expect(said).toContain("NOT ONE line fell inside a known procedure");
+  });
+
+  test("R746: only line-0 rows are silent (pinned)", async () => {
+    expect(await saidFor([T(0), C(0)])).not.toContain("fenced coverage for");
+  });
+
+  test("R746: a procedure row is silent (unchanged)", async () => {
+    expect(await saidFor([T(7), C(4)])).not.toContain("fenced coverage for");
   });
 
   test("silent when even one line resolves to a member", async () => {
