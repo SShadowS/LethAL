@@ -1730,3 +1730,68 @@ describe("R700/R701: install, upgrade and permission-set code in every digest", 
     );
   });
 });
+
+describe("R699: an integer literal with leading zeros is the number it names", () => {
+  type Files = Record<string, string>;
+  const dg = (files: Files): string | undefined => {
+    const list = Object.entries(files).map(([path, text]) => ({ path, text }));
+    const tests = list.flatMap((f) => testsInAlSource(f.path, f.text));
+    return testDigestsOfSources(list, tests, I)["50100::a"];
+  };
+  const edit = (files: Files, path: string, from: string, to: string): Files => {
+    const text = files[path];
+    if (text === undefined || !text.includes(from)) throw new Error(`no ${from} in ${path}`);
+    return { ...files, [path]: text.replace(from, to) };
+  };
+  const TEST = (body: string, vars = "") =>
+    `codeunit 50100 "T"\n{\n    Subtype = Test;\n    [Test]\n    procedure A()\n    var\n        Ext: Codeunit "Dep Thing";\n${vars}    begin\n${body}    end;\n}\n`;
+  const Z = `codeunit 50999 "Zed"\n{\n    procedure Z()\n    begin\n        Message('z1');\n    end;\n}\n`;
+  const CU = (id: number) =>
+    `codeunit ${id} "Obj"\n{\n    trigger OnRun()\n    begin\n        Message('a');\n    end;\n}\n`;
+  const PG = (id: number) =>
+    `page ${id} "Obj"\n{\n    PageType = Card;\n\n    trigger OnOpenPage()\n    begin\n        Message('a');\n    end;\n}\n`;
+  const STORED = (lit: string) =>
+    TEST(`        Id := ${lit};\n        Ext.Foo(Id);\n`, "        Id: Integer;\n");
+
+  /** Folded: off the fallback, and the object's edit moves the digest while an unrelated one does not. */
+  const folds = (files: Files): void => {
+    const all = { ...files, "Z.al": Z };
+    const was = dg(all);
+    expect(was).toMatch(/^v3:/);
+    expect(dg(edit(all, "Z.al", "z1", "z2"))).toBe(was);
+    expect(dg(edit(all, "O.al", "'a'", "'b'"))).not.toBe(was);
+  };
+  /** Nothing folded, nothing on the fallback: neither edit moves the digest. */
+  const nothing = (files: Files): void => {
+    const all = { ...files, "Z.al": Z };
+    const was = dg(all);
+    expect(was).toMatch(/^v3:/);
+    expect(dg(edit(all, "Z.al", "z1", "z2"))).toBe(was);
+    expect(dg(edit(all, "O.al", "'a'", "'b'"))).toBe(was);
+  };
+
+  test("01000 handed out folds codeunit 1000, as 1000 does", () => {
+    folds({ "T.al": TEST("        Ext.Foo(1000);\n"), "O.al": CU(1000) });
+    folds({ "T.al": TEST("        Ext.Foo(01000);\n"), "O.al": CU(1000) });
+  });
+
+  test("01000 stored, then handed out, folds codeunit 1000", () => {
+    folds({ "T.al": STORED("1000"), "O.al": CU(1000) });
+    folds({ "T.al": STORED("01000"), "O.al": CU(1000) });
+  });
+
+  test("01000 handed out folds page 1000", () => {
+    folds({ "T.al": TEST("        Ext.Foo(01000);\n"), "O.al": PG(1000) });
+  });
+
+  test("00042 is no object's id: nothing folds, as 42 (control)", () => {
+    nothing({ "T.al": TEST("        Ext.Foo(42);\n"), "O.al": CU(50202) });
+    nothing({ "T.al": TEST("        Ext.Foo(00042);\n"), "O.al": CU(50202) });
+    nothing({ "T.al": TEST("        Ext.Foo(00042);\n"), "O.al": PG(50202) });
+    nothing({ "T.al": STORED("00042"), "O.al": CU(50202) });
+  });
+
+  test("00012 is 12, not a 4-digit id: it does not reach the page 12 lookup (control)", () => {
+    nothing({ "T.al": TEST("        Ext.Foo(00012);\n"), "O.al": PG(50202) });
+  });
+});
