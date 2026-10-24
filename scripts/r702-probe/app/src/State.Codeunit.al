@@ -63,10 +63,10 @@ codeunit 93722 "R702 State"
                 if IsTemp then begin
                     TmpCopy.Copy(R, true);
                     Move(TmpCopy, R.Id);
-                end else begin
-                    PermCopy.Copy(R, true);
+                end else
+                    // BC refuses Copy(R, true) unless both records are temporary (measured: HTTP 400); a plain
+                    // second variable of the table is R696's own L1 control.
                     Move(PermCopy, R.Id);
-                end;
             'T1v':
                 MoveByValue(R, R.Id);
             'T3o':
@@ -75,10 +75,9 @@ codeunit 93722 "R702 State"
                 if IsTemp then begin
                     TmpCopy.Copy(R, true);
                     InsertAhead(TmpCopy);
-                end else begin
-                    PermCopy.Copy(R, true);
+                end else
+                    // As T1c: a plain second variable (R696's L3 control).
                     InsertAhead(PermCopy);
-                end;
             'L2':
                 begin
                     R.SortKey += 1000000;
