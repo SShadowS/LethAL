@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { join } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
@@ -23,7 +23,7 @@ import type { BcDevConfig } from "../src/bcdev-backend";
 import type { MicrosoftMode } from "../src/digest-inputs";
 import type { RunEvent } from "../src/events";
 import { EXPLAIN_SCHEMA_VERSION, explain } from "../src/explain";
-import { feedAttestation, runSession } from "../src/orchestrator";
+import { feedAttestation, runSession as runSessionRaw } from "../src/orchestrator";
 import type { AttestationLedger } from "../src/orchestrator";
 import { ERROR_CAUSE_INTERPRETATIONS, renderConsole } from "../src/report";
 import type { SessionReport } from "../src/report";
@@ -56,6 +56,12 @@ import {
 import { removeScratchDir, scratchDirs } from "./helpers/scratch";
 import { testDbPath } from "./helpers/test-db";
 import { UNREAD } from "./helpers/unread";
+
+// R726 MITIGATION, not a fix. Every test here takes under 0.1 s locally, but Windows CI run
+// 40105067954 had a single-process async-I/O stall of about 130 s in this file (starting at D1, run
+// mode; other files ran at normal speed), the family of R449. 27 tests hit the 5 s default. A 30 s
+// limit turns about 27 failures into about 4 and leaves the file near the 180 s watchdog.
+setDefaultTimeout(30_000);
 
 const scratch = scratchDirs();
 
@@ -118,7 +124,24 @@ const SECOND_AL = `codeunit 79002 "Sandbox Extra"
 }
 `;
 
-async function makeProject(opts: { secondFile?: boolean } = {}) {
+/** R724 diagnostics: a phase over 1 s is named on stderr, so a stalled CI run shows where. */
+async function timed<T>(phase: string, f: () => Promise<T>): Promise<T> {
+  const t0 = performance.now();
+  try {
+    return await f();
+  } finally {
+    const ms = performance.now() - t0;
+    if (ms > 1000) console.error(`resume.test.ts: slow phase ${phase}: ${Math.round(ms)} ms`);
+  }
+}
+const runSession = (...a: Parameters<typeof runSessionRaw>): ReturnType<typeof runSessionRaw> =>
+  timed("runSession", () => runSessionRaw(...a));
+
+function makeProject(opts: { secondFile?: boolean } = {}) {
+  return timed("makeProject", () => makeProjectRaw(opts));
+}
+
+async function makeProjectRaw(opts: { secondFile?: boolean } = {}) {
   const root = scratch("lethal-resume-");
   const projectDir = join(root, "app");
   const testDir = join(root, "tests");
