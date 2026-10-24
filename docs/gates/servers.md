@@ -201,6 +201,18 @@ under a coord lease in your own lane (`--lane <lane> --token-dir <dir>`, both re
 - Every gate prints its target as its first line:
   `[itest target] config=<file> server=<host>:<dev port> odata=<url> api=<url>`.
 
+## Concurrent requests per BC user (R317)
+
+Measured on `bc2` on 2026-10-24 with one BC user (pre-commitment
+`docs/superpowers/specs/2026-10-24-r317-odata-concurrency-precommitment.md`; results
+`/coord/handoff/R-317/results.md`): up to **16 requests in flight**, OData V4 (the control app's `HarnessInfo`)
+and the dev endpoint (`dev/packages`) both answered every request, with no 429, 5xx, timeout or truncated
+body, and latency rose smoothly (OData median 57 ms at 1, 201 ms at 16; dev 115 ms at 1, 238 ms at 16). Load on
+`bc2` did not slow `bc3` (median 62 ms alone, 69 ms during). LethAL's own peak per server is 3 calls in flight for a
+run session and 5 for `lethal doctor` (counted from the code, not measured live), so no client-side limit is
+needed. Not measured: long-held calls (`RunMutant`) holding request slots, and more than 16. Keep probes and gates
+on separate BC users anyway (R289's rule, `scripts/r289-probe/`).
+
 ## Proof that the gates reproduce here
 
 **Proof is per server** (orchestrator ruling, 2026-10-21). A gate runs on a server only after its
