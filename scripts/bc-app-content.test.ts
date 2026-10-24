@@ -13,6 +13,7 @@ import {
   type ExtensionRow,
   type ServerOps,
   actAll,
+  appJsonFromManifest,
   changedEntries,
   compilerVersion,
   contentDigest,
@@ -722,5 +723,22 @@ describe("R627: the two decoded entries refuse invalid UTF-8 and keep every vali
     expect(files).toEqual(Object.keys(pinned));
     for (const f of files)
       expect(contentDigest(pkgOf(f.replace(/\.app$/, "")))).toBe(pinned[f] ?? "unpinned");
+  });
+});
+
+describe("R-707: appJsonFromManifest rebuilds an app.json from a package manifest", () => {
+  test("keeps identity, runtime, dependencies and id ranges", () => {
+    const pkg = buildFakeAppWithEntries({
+      "NavxManifest.xml": `<Package><App Id="i1" Name="T" Publisher="P" Version="1.2.3.4" Runtime="17.0" Target="Cloud" Application="28.0.0.0" Platform="28.0.0.0" /><IdRanges><IdRange MinObjectId="70" MaxObjectId="79" /></IdRanges><Dependencies><Dependency Id="d1" Name="Tgt" Publisher="P" MinVersion="1.0.0.0" /></Dependencies></Package>`,
+    });
+    expect(appJsonFromManifest(pkg)).toMatchObject({
+      id: "i1",
+      name: "T",
+      version: "1.2.3.4",
+      runtime: "17.0",
+      application: "28.0.0.0",
+      dependencies: [{ id: "d1", name: "Tgt", publisher: "P", version: "1.0.0.0" }],
+      idRanges: [{ from: 70, to: 79 }],
+    });
   });
 });

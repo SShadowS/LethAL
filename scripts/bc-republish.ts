@@ -55,6 +55,7 @@ import { defaultAlToolPaths } from "../packages/runner/src/publisher.ts";
 import {
   type AppItem,
   type AppManifest,
+  type ResidentPair,
   type ServerOps,
   actAll,
   controlAction,
@@ -62,9 +63,11 @@ import {
   dependsOn,
   describeRows,
   fixtureManifests,
+  guardResident,
   packageStatus,
   realOps,
   refusals,
+  refuseDependent,
 } from "./bc-app-content.ts";
 import {
   CONTROL_APP,
@@ -74,6 +77,7 @@ import {
   PUBLISH_PLAN,
   type ServerName,
   alcCompile,
+  compileResidentSource,
   compiledLine,
   downloadSymbols,
   errText,
@@ -232,28 +236,41 @@ export function roleOf(dir: string, all: ReadonlyMap<string, AppManifest>): "tar
  * R-707 (/coord/handoff/R-707/measure.md): on bc2 a refused UPGRADE could not restore and stripped the
  * tests app. So before `publish` runs, compile each fixture dependent the run did not request
  * against the new target build; one that breaks refuses the whole run, with nothing sent to BC.
- * A requested dependent is already compiled against the new target, so it is not checked twice.
+ * A requested dependent is already compiled against the new target, so its NEW source is not checked twice.
+ * But BC recompiles an INSTALLED dependent from its RESIDENT source, so every dependent of a requested
+ * app, requested or not, also has its resident source checked (`guardResident`): a co-change is no cure.
  */
 export async function guardDependents(
   requested: readonly string[],
   all: ReadonlyMap<string, AppManifest>,
   compile: (dir: string) => Promise<void>,
+  resident: {
+    readonly fetch: (publisher: string, name: string) => Promise<Buffer | null>;
+    readonly compile: (pair: ResidentPair, pkg: Buffer) => Promise<void>;
+  },
   publish: () => Promise<void>,
 ): Promise<void> {
   for (const dir of republishPlan(requested, all).added) {
     try {
       await compile(dir);
     } catch (err) {
-      const first =
-        errText(err)
-          .split(/\r?\n/)
-          .find((l) => /: error [A-Z]{2}\d+:/.test(l)) ?? errText(err).split(/\r?\n/)[0];
-      throw new Error(
-        `refuse dependent-breaks: ${all.get(dir)?.name ?? dir} (${first?.trim()})\nNOTHING was published. Republish the dependent together with its target, or fix the change.`,
-      );
+      throw refuseDependent("dependent-breaks", all.get(dir)?.name ?? dir, err);
     }
   }
+  await guardResident(residentPairs(requested, all), resident.fetch, resident.compile);
   await publish();
+}
+
+/** Each requested app with each fixture that depends on it (direct dependents only). */
+export function residentPairs(
+  requested: readonly string[],
+  all: ReadonlyMap<string, AppManifest>,
+): ResidentPair[] {
+  return requested.flatMap((target) =>
+    [...all]
+      .filter(([d, m]) => d !== target && dependsOn(m, all.get(target) as AppManifest))
+      .map(([dir, m]) => ({ target, dependent: { dir, name: m.name, publisher: m.publisher } })),
+  );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -387,6 +404,21 @@ async function republish(args: Args): Promise<void> {
       apps,
       all,
       async (dir) => void (await compileDir(dir, `${dir}-check.app`)),
+      {
+        fetch: ops.resident,
+        compile: async (pair, pkg) => {
+          const bytes = items.find((i) => i.dir === pair.target)?.local;
+          if (bytes === undefined) throw new Error(`no build of ${pair.target}`);
+          const id = readAppIdentity(bytes);
+          await compileResidentSource(
+            c,
+            tools.alcPath,
+            join(build, "resident"),
+            { publisher: id.publisher, name: id.name, bytes },
+            pkg,
+          );
+        },
+      },
       async () => {
         try {
           // 2. decide every app; 3. refuse before publishing anything

@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { itestLaunchName } from "../packages/runner/itest/config-path.ts";
 import { MARKER_HOST, MARKER_SERVERS } from "../packages/runner/itest/out-of-use.ts";
 import type { FetchFn } from "../packages/runner/src/activation.ts";
+import { readAppIdentity } from "../packages/runner/src/published-test-app.ts";
 import { buildFakeAppWithEntries } from "../packages/runner/tests/helpers/fake-app.ts";
 import type { Conn, ServerOps } from "./bc-app-content.ts";
 import {
@@ -657,6 +658,7 @@ describe("--write-config-only: configs from the secret file, no server call, no 
       continiaFiles: () => [],
       controlBytes: noServer("controlBytes"),
       compile: noServer("compile"),
+      checkResident: noServer("checkResident"),
       doctor: noServer("doctor"),
       // R669: never the real /coord; a test plants markers here.
       outOfUseDir,
@@ -871,8 +873,18 @@ describe("--write-config-only: configs from the secret file, no server call, no 
    * except `sandbox-probes` (absent: a publish) and, with `refuseLast`, the LAST step's
    * dependent (above its build: a refusal). LethAL Control is absent (a publish).
    */
-  function fleet(refuseLast: boolean) {
-    const calls = { publish: [] as string[], continiaReads: 0, doctor: 0, take: 0 };
+  function fleet(
+    refuseLast: boolean,
+    // R-707: `check` stands in for the resident-source compile; `uninstalled` has no resident row.
+    opts: { check?: (name: string) => void; uninstalled?: string } = {},
+  ) {
+    const calls = {
+      publish: [] as string[],
+      checked: [] as string[],
+      continiaReads: 0,
+      doctor: 0,
+      take: 0,
+    };
     const local = new Map<string, Buffer>();
     const resident = new Map<string, { pkg: Buffer; version: string }>();
     const last = PUBLISH_PLAN.at(-1)?.dependents.at(-1);
@@ -880,7 +892,7 @@ describe("--write-config-only: configs from the secret file, no server call, no 
       for (const dir of [step.target, ...step.dependents]) {
         const b = appPkg(dir, `${dir}-id`);
         local.set(dir, b);
-        if (dir === "sandbox-probes") continue;
+        if (dir === "sandbox-probes" || dir === opts.uninstalled) continue;
         resident.set(
           dir,
           refuseLast && dir === last
@@ -926,6 +938,11 @@ describe("--write-config-only: configs from the secret file, no server call, no 
           ...(dir === step.target ? {} : { targetDir: step.target }),
         })),
       serverOps: () => ops,
+      checkResident: async (_c, _target, pkg) => {
+        const name = readAppIdentity(pkg).name;
+        calls.checked.push(name);
+        opts.check?.(name);
+      },
       continiaOps: () => ({
         residentVersion: async (publisher, name) => {
           calls.continiaReads++;
@@ -1004,6 +1021,59 @@ describe("--write-config-only: configs from the secret file, no server call, no 
     expect(h.counts.writes).toBe(8);
     expect(f.calls.doctor).toBe(4);
     expect(code).toBe(0);
+  });
+
+  describe("R-707: an INSTALLED dependent's resident source is checked before anything is sent", () => {
+    const go = async (f: ReturnType<typeof fleet>) => {
+      const h = harness(GOOD, f.over);
+      const code = await h.go(["--server", "bc3", "--lane", "bugs"]);
+      return { code, out: h.printed.join("\n") };
+    };
+    const dependents = PUBLISH_PLAN.flatMap((s) => s.dependents);
+
+    test("T-cochange: the resident source breaks against the new target: refused, zero publishes", async () => {
+      const f = fleet(false, {
+        check: (name) => {
+          if (name === "sandbox-tests")
+            throw new Error("alc failed on x (exit 1):\nsrc/T.al(7,21): error AL0135: no argument");
+        },
+      });
+      const r = await go(f);
+      expect(r.out).toContain("refuse resident-dependent-breaks: sandbox-tests (src/T.al(7,21)");
+      expect(r.out).toContain("(1) uninstall and unpublish the dependent");
+      expect(f.calls.publish).toEqual([]);
+      expect(f.calls.doctor).toBe(0);
+      expect(r.code).toBe(1);
+    });
+
+    test("T-resident-ok: every installed dependent is checked, and the run publishes as before", async () => {
+      const f = fleet(false);
+      const r = await go(f);
+      expect(f.calls.checked.sort()).toEqual([...dependents].sort());
+      expect(f.calls.publish).toContain("LethAL_sandbox-probes_1.0.0.0.app");
+      expect(r.code).toBe(0);
+    });
+
+    test("T-not-installed: a dependent with no resident row is not checked", async () => {
+      const f = fleet(false, { uninstalled: "sandbox-tests" });
+      const r = await go(f);
+      expect(f.calls.checked).not.toContain("sandbox-tests");
+      expect(f.calls.checked.length).toBe(dependents.length - 1);
+      expect(r.out).not.toContain("refuse");
+    });
+
+    test("T-not-compile: a throw with no AL error line is not called a break, and nothing is sent", async () => {
+      const f = fleet(false, {
+        check: () => {
+          throw new Error("the dev endpoint refused the login (HTTP 401)");
+        },
+      });
+      const r = await go(f);
+      expect(r.out).toContain("dependent check failed (not a compile result)");
+      expect(r.out).not.toContain("dependent-breaks");
+      expect(f.calls.publish).toEqual([]);
+      expect(r.code).toBe(1);
+    });
   });
 
   describe("R669: a server with an out-of-use marker", () => {

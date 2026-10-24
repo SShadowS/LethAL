@@ -123,8 +123,14 @@ describe("R-707: guardDependents compiles unrequested dependents before anything
     ["tt", app("tt", ["t"])],
     ["t", app("t")],
   ]);
-  const run = async (requested: string[], failing: string[]) => {
+  // `res`: the dependent "tt" is installed (default), and its resident compile throws `throws`.
+  const run = async (
+    requested: string[],
+    failing: string[],
+    res: { installed?: boolean; throws?: string } = {},
+  ) => {
     const compiled: string[] = [];
+    const residentChecked: string[] = [];
     const published: string[][] = [];
     let error: Error | undefined;
     try {
@@ -138,13 +144,21 @@ describe("R-707: guardDependents compiles unrequested dependents before anything
               `alc failed on ${dir} (exit 1):\nsrc/Dep.al(7,21): error AL0135: no argument given`,
             );
         },
+        {
+          fetch: async () => (res.installed === false ? null : Buffer.from("resident")),
+          compile: async (pair) => {
+            residentChecked.push(pair.dependent.dir);
+            if (res.throws !== undefined) throw new Error(res.throws);
+          },
+        },
         async () => void published.push(publishOrder(requested, all)),
       );
     } catch (e) {
       error = e as Error;
     }
-    return { compiled, published, error };
+    return { compiled, residentChecked, published, error };
   };
+  const AL_ERROR = "alc failed on tt (exit 1):\nsrc/Old.al(3,9): error AL0132: no definition";
 
   test("(a) a breaking change is refused by name, and nothing is published", async () => {
     const r = await run(["t"], ["tt"]);
@@ -161,11 +175,43 @@ describe("R-707: guardDependents compiles unrequested dependents before anything
     expect(r.published).toEqual([["t"]]);
   });
 
-  test("(c) a dependent requested with its target is not compiled a second time", async () => {
+  test("(c) a dependent requested with its target: its NEW source is not compiled a second time, its RESIDENT source is checked", async () => {
     const r = await run(["tt", "t"], ["tt"]);
     expect(r.error).toBeUndefined();
     expect(r.compiled.length).toBe(0);
+    expect(r.residentChecked).toEqual(["tt"]);
     expect(r.published).toEqual([["t", "tt"]]);
+  });
+
+  test("T-cochange: the NEW tests source is fine but the RESIDENT one breaks: refused, zero publishes", async () => {
+    const r = await run(["tt", "t"], [], { throws: AL_ERROR });
+    expect(r.error?.message).toContain(
+      "refuse resident-dependent-breaks: App tt (src/Old.al(3,9): error AL0132",
+    );
+    expect(r.error?.message).toContain("(1) uninstall and unpublish the dependent");
+    expect(r.error?.message).not.toContain("together");
+    expect(r.published.length).toBe(0);
+  });
+
+  test("T-resident-ok: the resident source compiles: published as before", async () => {
+    const r = await run(["tt", "t"], []);
+    expect(r.error).toBeUndefined();
+    expect(r.residentChecked).toEqual(["tt"]);
+    expect(r.published).toEqual([["t", "tt"]]);
+  });
+
+  test("T-not-installed: a dependent with no resident package is not checked", async () => {
+    const r = await run(["tt", "t"], [], { installed: false, throws: AL_ERROR });
+    expect(r.error).toBeUndefined();
+    expect(r.residentChecked.length).toBe(0);
+    expect(r.published).toEqual([["t", "tt"]]);
+  });
+
+  test("T-not-compile: a throw with no AL error line is not called a break, and nothing is published", async () => {
+    const r = await run(["t"], [], { throws: "the dev endpoint refused the login (HTTP 401)" });
+    expect(r.error?.message).toContain("dependent check failed (not a compile result)");
+    expect(r.error?.message).not.toContain("dependent-breaks");
+    expect(r.published.length).toBe(0);
   });
 });
 
