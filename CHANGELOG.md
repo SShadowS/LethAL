@@ -13,6 +13,11 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **A baseline test that fails with bcdev's web-service HTTP text now says so** (R713). Under bcdev, an unhandled
+  outbound HTTP call fails with "The request was blocked by the runtime…", while VS Code, the test runner hub and
+  al-runner v3 give "…the connecting endpoint violates security requirements…" (the hub is the oracle, R712). A test
+  that fails at baseline with the web-service text gets a note naming the difference, and one
+  `bcdev-http-text-differs` warning fires per batch. A note and a warning only: no verdict moves.
 - **A mutant that only a v3-refused test reaches now says so** (R609). When al-runner v3 refuses a test mid-run, the
   code the test reached before the refusal is recorded and the mutant's note names v3's refusal, not evidence of a
   gap in your suite. A note only: the verdict stays `no-coverage`, and selection and R140's fallback 2 are
