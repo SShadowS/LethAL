@@ -32,6 +32,26 @@
       "sha256": "787eb9c41b9238cf0f971aacfd499e0a26f1be24dd6c594d6ec085a9fcacd9de",
       "mutants": 4
     },
+    "fixtures/sandbox-codefree-tests/src/CFTests.Codeunit.al": {
+      "sha256": "efc56aec519565ecb0d0362fc687e31c753631218567a3bd5d8a33b298d925ab",
+      "mutants": 79
+    },
+    "fixtures/sandbox-codefree/src/CFActive.Codeunit.al": {
+      "sha256": "b3e32ed0112cfde4b06a3509dade5c5750bd379dbf89a9d6799894135ee90782",
+      "mutants": 9
+    },
+    "fixtures/sandbox-codefree/src/CFInactive.Codeunit.al": {
+      "sha256": "d57c3ae9b4271c97dea463ba74ea33081cfc587b03c6e11c483a9cfc0ea7c0a5",
+      "mutants": 9
+    },
+    "fixtures/sandbox-codefree/src/CFPlain.Codeunit.al": {
+      "sha256": "b940bd0d4464fa6a316737a0355c8fd1906a740f110b95e3304912d3e33c223e",
+      "mutants": 10
+    },
+    "fixtures/sandbox-codefree/src/CFSplit.Codeunit.al": {
+      "sha256": "bab2d65c3eba5cd4f4e28e3186f374524a2a2264eb29a62e93e46aa3b47ee537",
+      "mutants": 15
+    },
     "fixtures/sandbox-coverage-probe/src/CoverageCapabilityProbe.Codeunit.al": {
       "sha256": "1ad0b031fab68a3618d27ccdf856821ef7bb6f4f646761500f0465eb3c19535a",
       "mutants": 29

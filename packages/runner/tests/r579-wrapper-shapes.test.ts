@@ -74,7 +74,7 @@ const CODE_FREE: Record<string, string> = {
 };
 const B1_KINDS: Record<string, string> = {
   enumextension: `enumextension 57914 "R579 EnumExt" extends "R579 Enum"\n{\n    value(1; Second) { }\n}\n`,
-  controladdin: `controladdin "R579 Addin"\n{\n    Scripts = 'main.js';\n    RequestedHeight = 100;\n}\n`,
+  controladdin: `controladdin "R579 Addin"\n{\n    Scripts = 'main.js';\n    RequestedHeight = 100;\n\n    procedure Refresh();\n\n    event Ready();\n}\n`,
   dotnet: `dotnet\n{\n    assembly("mscorlib")\n    {\n        type("System.String"; MyString) { }\n    }\n}\n`,
 };
 const wrap = (obj: string) => `#if not R579SYM\n${obj}#endif\n`;
@@ -284,5 +284,17 @@ describe("E: the BC path", () => {
   // E. Guards: fixing the coverage index but leaving the BC shape check treating the pragma #if as a wrapper.
   test("E: a pragma-only #if with an object after it gives no refusal", () => {
     expect(bcWrappedShapeRefusal(rootOf(AFTER), decided)).toBeUndefined();
+  });
+
+  // M1. Guards: the pragma-only #if being counted as the first wrapper, which would refuse the
+  // real wrapper after it or move its base. INFERRED on BC, as in plan I5 (not measured live).
+  test("M1: a pragma-only #if, then a single-codeunit #if wrapper: admitted (v3), base 1 (BC)", () => {
+    const text = PRAGMA_IF + wrap(codeunit(57971, "R579 PW"));
+    const root = rootOf(text);
+    expect(alRunnerAdmitsWrappedFile(root)).toBe(true);
+    expect(bcWrappedShapeRefusal(root, decided)).toBeUndefined();
+    const entries = fileLineMapEntries(root, objectIdentityOf, FILE);
+    // `refused` is the wrapper's own coverage refusal (R300), not part of this test.
+    expect(entries.map((e) => [e.objectId, e.baseLine])).toEqual([[57971, 1]]);
   });
 });
