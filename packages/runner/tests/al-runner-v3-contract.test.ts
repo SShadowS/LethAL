@@ -21,6 +21,7 @@ import {
   BURN_HUGE,
   BURN_RELATIVE_FACTOR,
   MESSAGE_PREFIX_REASON,
+  SERVE_TESTS_AL,
   type V3ContractResult,
   burnerArgv,
   classifySleep,
@@ -318,12 +319,19 @@ const SERVE_ROWS: Record<string, { status: string; notRun?: boolean; message?: s
     message:
       "NotRun: out-of-scope: OnRun failed (runner behaviour not pinned): Arithmetic operation resulted in an overflow.",
   },
-  "Codeunit50674.DoesNotCompile": {
-    status: "error",
-    notRun: true,
-    message:
-      "NotRun: out-of-scope: Serve NoCallee.DoesNotCompile: call `NoSuchProcedure(1)` has no callee the checker resolved",
+};
+
+type ServeRow = { status: string; notRun?: boolean; message?: string };
+
+/** R705: a #5602-fixed build: http and cascade come back as plain trusted fails. */
+const FIXED_ROWS: Record<string, ServeRow> = {
+  ...SERVE_ROWS,
+  "Codeunit50670.HttpGet": {
+    status: "fail",
+    notRun: false,
+    message: "There was an error while executing the HTTP request, connection refused",
   },
+  "Codeunit50672.LaterFails": { status: "fail", notRun: false, message: "later" },
 };
 
 /** A fake `alrunner serve`: answers every runTests with `rows`; records each argv and request. */
@@ -435,6 +443,9 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     const r = await probe({}, s.spawn);
     const f = r.facts.find((x) => x.fact === "serve-keep-reasons");
     expect(f).toMatchObject({ kind: "warn", verdict: "matches" });
+    expect(f?.measured).toContain("the keep rule accepts every row of all 4 entries");
+    expect(f?.measured).toContain("http: refusal");
+    expect(f?.measured).toContain("cascade: refusal");
     expect(s.argvs).toEqual([[resolve("/fake/alrunner"), "serve", "--test-timeout", "3"]]);
     const run = s.requests.filter((q) => q.command === "runTests");
     expect(run.length).toBe(1);
@@ -450,7 +461,6 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     ["commit", "Codeunit50671.CommitCall"],
     ["cascade", "Codeunit50672.LaterFails"],
     ["onrun-failed", "Codeunit50673.Never"],
-    ["no-callee", "Codeunit50674.DoesNotCompile"],
   ] as const) {
     test(`a reworded ${entry} reason is diverged, names the entry, never refuses, and leg C still passes with the warning`, async () => {
       const rows = {
@@ -472,6 +482,79 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
       );
     });
   }
+
+  const serveFact = async (rows: Record<string, ServeRow>) =>
+    (await probe({}, fakeServe(rows).spawn)).facts.find((x) => x.fact === "serve-keep-reasons");
+
+  test("R705 fixed build: the four compilable cases come back as rows, not no row", async () => {
+    const r = await probe({}, fakeServe(FIXED_ROWS).spawn);
+    const f = r.facts.find((x) => x.fact === "serve-keep-reasons");
+    expect(f?.verdict).toBe("matches");
+    expect(f?.measured).toContain("http: plain fail");
+    expect(f?.measured).toContain("cascade: plain fail");
+    expect(f?.measured).toContain("commit: refusal");
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("pass");
+  });
+
+  test("R705 guard: the probe's tests app has no uncompilable test", () => {
+    expect(SERVE_TESTS_AL).not.toContain("NoSuchProcedure");
+    expect(SERVE_TESTS_AL.match(/^codeunit 5067\d /gm)).toHaveLength(4);
+  });
+
+  test("R705: the tolerance is narrow", async () => {
+    const http = "Codeunit50670.HttpGet";
+    // commit as a plain fail: only http and cascade tolerate one.
+    expect(
+      (
+        await serveFact({
+          ...FIXED_ROWS,
+          "Codeunit50671.CommitCall": { status: "fail", notRun: false, message: "x" },
+        })
+      )?.verdict,
+    ).toBe("diverged");
+    // http as a pass row.
+    expect((await serveFact({ ...FIXED_ROWS, [http]: { status: "pass" } }))?.verdict).toBe(
+      "diverged",
+    );
+    // http as a fail that did not run.
+    expect(
+      (
+        await serveFact({
+          ...FIXED_ROWS,
+          [http]: { status: "fail", notRun: true, message: "later" },
+        })
+      )?.verdict,
+    ).toBe("diverged");
+    // http as a plain fail that holds v3's refusal marker.
+    expect(
+      (
+        await serveFact({
+          ...FIXED_ROWS,
+          [http]: { status: "fail", notRun: false, message: "NotRun: out-of-scope: x" },
+        })
+      )?.verdict,
+    ).toBe("diverged");
+    // cascade as a plain fail with another message.
+    expect(
+      (
+        await serveFact({
+          ...FIXED_ROWS,
+          "Codeunit50672.LaterFails": { status: "fail", notRun: false, message: "other" },
+        })
+      )?.verdict,
+    ).toBe("diverged");
+  });
+
+  test("R705: no row is never OK for the tolerated cases", async () => {
+    const none = await serveFact({});
+    expect(none?.verdict).toBe("diverged");
+    for (const e of ["http", "commit", "cascade", "onrun-failed"])
+      expect(none?.measured).toContain(`${e}: MOVED no row`);
+    const { "Codeunit50670.HttpGet": _gone, ...noHttp } = FIXED_ROWS;
+    const f = await serveFact(noHttp);
+    expect(f?.verdict).toBe("diverged");
+    expect(f?.measured).toContain("http: MOVED no row");
+  });
 
   test("a missing row or a row without notRun is diverged", async () => {
     const { "Codeunit50673.Never": _gone, ...rest } = SERVE_ROWS;

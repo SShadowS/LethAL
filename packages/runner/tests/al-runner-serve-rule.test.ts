@@ -36,8 +36,19 @@ describe("serveDaemonReusable, the rule alone", () => {
     expect(serveDaemonReusable([r("error", { notRun: true, message: COMMIT })], "v2")).toBe(false);
     expect(serveDaemonReusable([], "v2")).toBe(true);
   });
-  test("v3 keeps on each of the five entries, and on pass/fail without notRun", () => {
-    for (const m of [HTTP, COMMIT, CASCADE, ONRUN, NO_CALLEE]) {
+  test("R705: a no-callee row closes the v3 daemon", () => {
+    expect(
+      serveDaemonReusable(
+        [
+          { name: "C.NC1", status: "pass" },
+          { name: "C.NC2", status: "error", notRun: true, message: NO_CALLEE },
+        ],
+        "v3",
+      ),
+    ).toBe(false);
+  });
+  test("v3 keeps on each of the four entries, and on pass/fail without notRun", () => {
+    for (const m of [HTTP, COMMIT, CASCADE, ONRUN]) {
       expect([
         m,
         serveDaemonReusable([r("pass"), r("error", { notRun: true, message: m })], "v3"),
@@ -128,7 +139,6 @@ describe("serveDaemonReusable, the rule alone", () => {
       r("error", { notRun: true, message: DUP_KEY }),
       r("error", { notRun: true, message: `${HTTP} and more` }),
       r("error", { notRun: true, message: `${COMMIT}.` }),
-      r("error", { notRun: true, message: `${NO_CALLEE} too` }),
       r("error", { notRun: true }),
       r("error", { message: COMMIT }),
       r("error", { notRun: false, message: COMMIT }),
@@ -163,9 +173,7 @@ describe("serveDaemonReusable, the rule alone", () => {
       r("fail", { message: "boom" }),
       r("fail", { message: "out-of-scope: x" }),
       r("pass"),
-      ...[HTTP, COMMIT, CASCADE, ONRUN, NO_CALLEE].map((message) =>
-        r("error", { notRun: true, message }),
-      ),
+      ...[HTTP, COMMIT, CASCADE, ONRUN].map((message) => r("error", { notRun: true, message })),
     ]) {
       expect([row, serveDaemonReusable([row], "v3")]).toEqual([row, true]);
     }

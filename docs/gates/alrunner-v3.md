@@ -40,8 +40,13 @@ The legs:
   false kill. A failure caused by a timed-out sibling's state must come back as v3's not-trusted `notRun` row,
   never as a plain `fail`.
   Since R612 (plan `docs/superpowers/plans/2026-10-22-r612-v3-serve-keep-rule.md`), 1 is a WARN fact
-  (`V3_WARN_FACTS`): `serve-keep-reasons` runs one `alrunner serve` daemon over five invented tests and checks each
-  row against its entry of `V3_SERVE_SAFE_REFUSALS`, the reasons after which the v3 serve rule keeps the daemon.
+  (`V3_WARN_FACTS`): `serve-keep-reasons` runs one `alrunner serve` daemon over four codeunits (five tests) and checks each
+  row against its entry of `V3_SERVE_SAFE_REFUSALS` (four entries: http, commit, cascade, onrun-failed), the reasons
+  after which the v3 serve rule keeps the daemon. Since R705, http and cascade (cascade only for the message
+  `later`) are also accepted as a plain trusted fail (a #5602-fixed build), and `measured` says which. no-callee
+  left with R705: a fixed build runs nothing in a request that does not compile. In serve-entries, a warm-up whose
+  every entry refuses with one identical no-callee text now throws `al-runner-v3-entries-batch-refused`: the safe
+  direction, opt-in and rare.
   It must read `matches` on alpha.2, but any other reading (`diverged`, `unmeasurable`) only prints
   `al-runner-v3-serve-keep-reason-moved` in the log and the receipt `lines`: it is never a `gate-fail` or a `held`,
   because a moved reason only makes the daemon close (slower, never wrong). It is gate-only, as `timeout-is-cpu`

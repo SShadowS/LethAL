@@ -513,10 +513,13 @@ const SLEEP_TESTS_AL = `codeunit 50660 "Sleep Probe"
 
 /**
  * R612 `serve-keep-reasons` (plan r3 §2): one test per entry of `V3_SERVE_SAFE_REFUSALS`, run in
- * ONE `serve` request. Its own tests folder, so the not-compiling test (no-callee) never reaches
- * the one-shot facts. The OnRun overflows at once (row 6's text, without its 53 s loop, R638).
+ * ONE `serve` request. Its own tests folder, so these tests never reach the one-shot facts. The
+ * OnRun overflows at once (row 6's text, without its 53 s loop, R638). Every test here must
+ * COMPILE: since #5602's fix v3 runs nothing in a request whose apps do not compile, so one bad
+ * test blinds the fact for all (R705).
  */
-const SERVE_TESTS_AL = `codeunit 50670 "Serve Http"
+/** test hook (R705) */
+export const SERVE_TESTS_AL = `codeunit 50670 "Serve Http"
 {
     Subtype = Test;
 
@@ -578,17 +581,6 @@ codeunit 50673 "Serve OnRun"
     begin
     end;
 }
-
-codeunit 50674 "Serve NoCallee"
-{
-    Subtype = Test;
-
-    [Test]
-    procedure DoesNotCompile()
-    begin
-        NoSuchProcedure(1);
-    end;
-}
 `;
 
 /** R667: one `Assert.AreEqual` failure, in its own tests app (only it depends on Library Assert). */
@@ -639,13 +631,16 @@ const DEP_SKIP_TESTS_AL = `codeunit 50662 "Probe DepSkip"
 const plainFailMessage = (r: V3Row | undefined): string | undefined =>
   r !== undefined && r.status === "fail" && r.notRun !== true ? r.message : undefined;
 
-/** R612: each `V3_SERVE_SAFE_REFUSALS` entry and the serve row that must match it. */
-const SERVE_CASES: ReadonlyArray<readonly [string, string]> = [
-  ["http", "Codeunit50670.HttpGet"],
-  ["commit", "Codeunit50671.CommitCall"],
-  ["cascade", "Codeunit50672.LaterFails"],
-  ["onrun-failed", "Codeunit50673.Never"],
-  ["no-callee", "Codeunit50674.DoesNotCompile"],
+/**
+ * R612: each `V3_SERVE_SAFE_REFUSALS` entry and the serve row that must match it. R705: the third
+ * element says a plain trusted fail is also accepted (a #5602-fixed build moved http and cascade
+ * one-shot; commit and onrun-failed are still refusals there).
+ */
+const SERVE_CASES: ReadonlyArray<readonly [string, string, boolean]> = [
+  ["http", "Codeunit50670.HttpGet", true],
+  ["commit", "Codeunit50671.CommitCall", false],
+  ["cascade", "Codeunit50672.LaterFails", true],
+  ["onrun-failed", "Codeunit50673.Never", false],
 ];
 
 /** R612: the stop the update gate's serve daemon runs with (leg C's `timeout-classified` N). */
@@ -675,7 +670,7 @@ async function serveKeepReasons(env: V3ProbeEnv, app: string, root: string): Pro
       ...(cache !== undefined ? { env: cache } : {}),
     });
   const server = new AlRunnerServer(absToolPath(env.alRunnerPath), spawn, [], "serve");
-  const expected = `one serve daemon (--test-timeout ${SERVE_TEST_TIMEOUT_S}, testIsolation test): each row notRun, error, and its V3_SERVE_SAFE_REFUSALS entry (${SERVE_CASES.map(([e]) => e).join(", ")})`;
+  const expected = `one serve daemon (--test-timeout ${SERVE_TEST_TIMEOUT_S}, testIsolation test): four codeunits (five tests), each row notRun, error, and its V3_SERVE_SAFE_REFUSALS entry (${SERVE_CASES.map(([e]) => e).join(", ")}); http and cascade also accepted as a plain trusted fail (R705)`;
   let rows: readonly ServerTestLine[];
   try {
     await server.start(SERVE_DEADLINE_MS, [], SERVE_TEST_TIMEOUT_S);
@@ -688,25 +683,39 @@ async function serveKeepReasons(env: V3ProbeEnv, app: string, root: string): Pro
     await server.close();
   }
   const moved: string[] = [];
-  for (const [entry, name] of SERVE_CASES) {
+  const how: string[] = [];
+  for (const [entry, name, plainFailOk] of SERVE_CASES) {
     const r = rows.find((t) => t.name === name);
-    const ok =
+    const refusal =
       r !== undefined &&
       r.notRun === true &&
       r.status === "error" &&
       r.message !== undefined &&
       V3_SERVE_SAFE_REFUSALS[entry]?.test(r.message) === true;
-    if (!ok)
+    // R705: written out (not `r?.status`): no row must never read as fine.
+    const plainFail =
+      plainFailOk &&
+      r !== undefined &&
+      r.status === "fail" &&
+      r.notRun !== true &&
+      !isV3RefusalText(r.message) &&
+      (entry !== "cascade" || r.message === "later");
+    if (refusal || plainFail) {
+      how.push(`${entry}: ${refusal ? "refusal" : "plain fail"}`);
+    } else {
       moved.push(
         `${entry}: MOVED ${r === undefined ? `no row ${name}` : `${r.status} notRun=${String(r.notRun)} ${r.message ?? ""}`}`,
       );
+    }
   }
   return fact(
     "serve-keep-reasons",
     "warn",
     moved.length === 0 ? "matches" : "diverged",
     expected,
-    moved.length === 0 ? "all 5 entries match" : moved.join("; "),
+    moved.length === 0
+      ? `the keep rule accepts every row of all ${SERVE_CASES.length} entries (${how.join(", ")})`
+      : moved.join("; "),
   );
 }
 
