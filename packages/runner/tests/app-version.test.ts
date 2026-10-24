@@ -5,9 +5,84 @@ import {
   confirmedDowngradeRefusal,
   nextAbove,
   parseVersionConflict,
+  UpgradeNotRestoredError,
+  notReinstalledApps,
   reserveAppVersion,
   restoreFailed,
 } from "../src/app-version";
+
+/** R-709b, measured on bc2 (probe `scripts/r709-probe/`, body-3.txt): BC's `Message` when T2 broke
+ *  two installed dependents. The list after "to do so:" is one "<name> by <publisher>" per line,
+ *  the target first, and gives no versions. */
+const BODY_TWO =
+  "Publishing failed due to 'Extension compilation failed\nsrc/Dep.Codeunit.al(7,21): error AL0132: " +
+  "'Codeunit \"R709 Target\"' does not contain a definition for 'Answer''. The original extensions " +
+  "could not be restored due to Cannot install the extension R709 Probe Target by LethAL Probe 1.0.0.1 " +
+  "because a newer version 1.0.0.2 was already installed..\nExtensions that were previously installed " +
+  "but could not be reinstalled. These extensions should be manually reinstalled. If they are part of " +
+  "your current workspace, you can use the 'Full Dependency Publishing' command to do so: \n" +
+  "R709 Probe Target by LethAL Probe\nR709 Probe Dep One by LethAL Probe\nR709 Probe Dep Two by " +
+  "LethAL Probe\n\n\n";
+/** body-5.txt: one dependent. */
+const BODY_ONE =
+  "Publishing failed due to 'Extension compilation failed\nsrc/Dep.Codeunit.al(7,21): error AL0132: " +
+  "'Codeunit \"R709 Solo Target\"' does not contain a definition for 'Answer''. The original " +
+  "extensions could not be restored due to Cannot install the extension R709 Probe Target Solo by " +
+  "LethAL Probe 1.0.0.1 because a newer version 1.0.0.2 was already installed..\nExtensions that " +
+  "were previously installed but could not be reinstalled. These extensions should be manually " +
+  "reinstalled. If they are part of your current workspace, you can use the 'Full Dependency " +
+  "Publishing' command to do so: \nR709 Probe Target Solo by LethAL Probe\nR709 Probe Dep Solo by " +
+  "LethAL Probe\n\n\n";
+
+describe("notReinstalledApps (R709 part 2: BC's measured list)", () => {
+  it("two dependents: every line after 'to do so:', the target first", () => {
+    // red when the list is cut at the first entry, or the separator is not a line break
+    expect(notReinstalledApps(BODY_TWO)).toEqual([
+      { name: "R709 Probe Target", publisher: "LethAL Probe" },
+      { name: "R709 Probe Dep One", publisher: "LethAL Probe" },
+      { name: "R709 Probe Dep Two", publisher: "LethAL Probe" },
+    ]);
+  });
+
+  it("one dependent", () => {
+    expect(notReinstalledApps(BODY_ONE)).toEqual([
+      { name: "R709 Probe Target Solo", publisher: "LethAL Probe" },
+      { name: "R709 Probe Dep Solo", publisher: "LethAL Probe" },
+    ]);
+  });
+
+  it("the raw JSON body, line breaks escaped as \\n (as a client printing the body shows it)", () => {
+    const raw = JSON.stringify({ Message: BODY_TWO, ErrorType: "InvalidOperation" });
+    // red when only real line breaks separate entries
+    expect(notReinstalledApps(raw)?.map((a) => a.name)).toEqual([
+      "R709 Probe Target",
+      "R709 Probe Dep One",
+      "R709 Probe Dep Two",
+    ]);
+  });
+
+  it("fail-closed: no list (R-707's 500-char text) is null, never an empty list", () => {
+    // red when an unreadable list reads as "nothing was removed"
+    expect(notReinstalledApps(R709_RESTORE_TEXT)).toBeNull();
+    expect(
+      notReinstalledApps(BODY_TWO.replace(/to do so: \n[\s\S]*$/, "to do so: \n\n")),
+    ).toBeNull();
+  });
+
+  it("the refusal names every listed app, or says the list could not be read", () => {
+    const named = new UpgradeNotRestoredError(BODY_TWO).message;
+    // red when the parsed names do not reach the message
+    expect(named).toContain(
+      "BC lists 3 apps it could not reinstall (name by publisher; BC gives no versions): " +
+        "R709 Probe Target by LethAL Probe; R709 Probe Dep One by LethAL Probe; " +
+        "R709 Probe Dep Two by LethAL Probe.",
+    );
+    const unread = new UpgradeNotRestoredError(R709_RESTORE_TEXT).message;
+    // red when an unreadable list is silently omitted
+    expect(unread).toContain("BC's list of the apps it could not reinstall could not be read");
+    expect(unread).toContain(R709_RESTORE_TEXT); // BC's text stays, either way
+  });
+});
 
 /** BC's 422 when an upgrade breaks an installed dependent and the old target cannot be put back.
  *  BC's sentence is R-707's bc2 measurement (step 4, a direct HTTP publish; nothing after "If they

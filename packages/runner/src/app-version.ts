@@ -133,8 +133,41 @@ export function restoreFailed(message: string): boolean {
   return /could not be restored/i.test(message);
 }
 
-/** R709: the named refusal for `restoreFailed`. Keeps BC's text verbatim (it lists the apps BC
- *  removed) and says how to recover. Extends `Error` directly. */
+/**
+ * R709 part 2: the apps BC lists as "previously installed but could not be reinstalled". Measured
+ * on bc2 (R-709b, `scripts/r709-probe/`): after "... command to do so:" BC writes one
+ * "<name> by <publisher>" per line (the target first, then its dependents) and a blank line; it
+ * gives NO versions. A body printed raw has its line breaks escaped (`\n`), so both are read.
+ * Fail-closed: null when the list is missing, empty, or has a line not in that form, never `[]`.
+ */
+export function notReinstalledApps(
+  text: string,
+): { readonly name: string; readonly publisher: string }[] | null {
+  const t = text.replace(/\\n/g, "\n");
+  const head = /could not be reinstalled[^\n]*?to do so:[^\S\n]*\n/i.exec(t);
+  if (head === null) return null;
+  const out: { name: string; publisher: string }[] = [];
+  for (const raw of t.slice(head.index + head[0].length).split("\n")) {
+    const line = raw.trim();
+    if (line === "") break;
+    const by = line.lastIndexOf(" by ");
+    if (by <= 0) return null;
+    out.push({ name: line.slice(0, by), publisher: line.slice(by + 4) });
+  }
+  return out.length > 0 ? out : null;
+}
+
+/** The sentence naming what BC lists, or saying the list could not be read. */
+function notReinstalledSentence(bcText: string): string {
+  const apps = notReinstalledApps(bcText);
+  return apps === null
+    ? "BC's list of the apps it could not reinstall could not be read; see BC's text below. "
+    : `BC lists ${apps.length} apps it could not reinstall (name by publisher; BC gives no ` +
+        `versions): ${apps.map((a) => `${a.name} by ${a.publisher}`).join("; ")}. `;
+}
+
+/** R709: the named refusal for `restoreFailed`. Keeps BC's text verbatim, names every app BC lists
+ *  (`notReinstalledApps`), and says how to recover. Extends `Error` directly. */
 export class UpgradeNotRestoredError extends Error {
   constructor(bcText: string) {
     super(
@@ -148,7 +181,7 @@ export class UpgradeNotRestoredError extends Error {
         "the setup script refuses this state: ask the owner to restart the server, then run " +
         "`bun scripts/bc-linux-setup.ts --server bcN` (docs/gates/servers.md, R709). If BC " +
         "refuses an old version as a downgrade, its installed-version record needs a restart " +
-        `(R605). BC said: ${bcText}`,
+        `(R605). ${notReinstalledSentence(bcText)}BC said: ${bcText}`,
     );
     this.name = "UpgradeNotRestoredError";
   }
