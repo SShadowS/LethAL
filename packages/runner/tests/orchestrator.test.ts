@@ -3067,10 +3067,19 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
       const dirs = await qualProject();
       const backend = new QualificationBackend(failing(staleOn(79000)));
       const store = new ResultsStore(":memory:");
-      const err = await runSession({ backend, store, ...dirs, selectorIds }).then(
+      const events: RunEvent[] = [];
+      const err = await runSession({
+        backend,
+        store,
+        ...dirs,
+        selectorIds,
+        emit: [createEmitter([(e) => events.push(e)])],
+      }).then(
         () => undefined,
         (e: unknown) => e,
       );
+      // red when the refusal comes after `select`: its coverage split is then already emitted
+      expect(events.some((e) => e.type === "coverage-split")).toBe(false);
       // red when the stale-member failure is not read (it then leaves the green set silently)
       expect(err).toBeInstanceOf(StaleTargetMemberError);
       expect((err as StaleTargetMemberError).staleTests).toEqual(["Sandbox Tests.UnsupportedTest"]);
@@ -3085,6 +3094,25 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
       const backend = new QualificationBackend(failing(staleOn(130440)));
       const store = new ResultsStore(":memory:");
       // red when any object id refuses, not only the target's own
+      const report = await runSession({ backend, store, ...dirs, selectorIds });
+      expect(report.baselineGreen).toBe(false);
+    });
+
+    test("a target with an interface and a permissionset (no header objectHeadersOf reads) still runs", async () => {
+      const dirs = await qualProject();
+      await Bun.write(
+        join(dirs.projectDir, "IFoo.Interface.al"),
+        `interface "IFoo"\n{\n    procedure Bar(): Integer;\n}\n`,
+      );
+      await Bun.write(
+        join(dirs.projectDir, "Perms.PermissionSet.al"),
+        `permissionset 79010 "Sandbox Perms"\n{\n    Assignable = true;\n}\n`,
+      );
+      const backend = new QualificationBackend(
+        failing("genuine failure\nSandbox Tests(CodeUnit 79100).UnsupportedTest line 2"),
+      );
+      const store = new ResultsStore(":memory:");
+      // red when reading the target's object ids throws on a file with no codeunit/table/... header
       const report = await runSession({ backend, store, ...dirs, selectorIds });
       expect(report.baselineGreen).toBe(false);
     });

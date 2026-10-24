@@ -47,6 +47,13 @@ describe("staleTargetMember (R738)", () => {
     expect(staleTargetMember(quoted, TARGET)).toBeUndefined();
   });
 
+  it("anchored to BC's measured start: a test's own message quoting the sentence is not read", () => {
+    const asserted =
+      "Assert.AreEqual failed. Expected: 1. Actual: The object with ID 93790 does not have a member with that ID.";
+    // red when the pattern is found anywhere on the first line instead of at its measured start
+    expect(staleTargetMember(asserted, TARGET)).toBeUndefined();
+  });
+
   it("the found-0 path is untouched: a stale member is not a missing method", () => {
     expect(describeStaleTestApp(MEASURED)).toBeUndefined();
   });

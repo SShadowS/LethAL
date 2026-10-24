@@ -261,11 +261,14 @@ export class StaleTestAppError extends Error {
  * with ID <id> does not have a member with that ID." It arises when this run's own altool publish
  * (accepted: altool does not ask BC to recompile installed dependents, R728) removed or re-signed a
  * target member the INSTALLED tests app still calls. Read structurally from the message's FIRST
- * line only (BC's sentence, never the call stack): the object id, then "does not have a member".
- * Returns that id only when it is one of `targetIds` (the target's own declared objects); a member
- * of another app's object is left as an ordinary failure. English text only.
+ * line only (BC's sentence, never the call stack), anchored to its measured start: "Function ID
+ * <n> was called. The object with ID <id> does not have a member". Returns that id only when it is
+ * one of `targetIds` (the target's own declared objects); a member of another app's object is left
+ * as an ordinary failure. LIMITS: English text only; the fenced (RunMutant) path's layout only,
+ * as measured; the line-count wrapper and the legacy hub path are not read.
  */
-const STALE_MEMBER = /\bThe object with ID (\d+) does not have a member\b/;
+const STALE_MEMBER =
+  /^Function ID \d+ was called\. The object with ID (\d+) does not have a member\b/;
 export function staleTargetMember(
   failureText: string | undefined,
   targetIds: ReadonlySet<number>,

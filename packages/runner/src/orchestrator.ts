@@ -1927,12 +1927,19 @@ function messageOf(err: unknown): string {
 }
 
 /** R738: every object id the target's `.al` sources declare (any type: BC's stale-member message
- *  names the id alone). */
+ *  names the id alone). A file `objectHeadersOf` refuses (an interface, a permissionset, an
+ *  enumextension, an empty file: no header kind it reads) declares no id a member is called on
+ *  here, and is skipped, never fatal. */
 function targetObjectIdsOf(sources: Iterable<readonly [string, string]>): ReadonlySet<number> {
   const ids = new Set<number>();
-  for (const [path, text] of sources)
-    if (path.toLowerCase().endsWith(".al"))
+  for (const [path, text] of sources) {
+    if (!path.toLowerCase().endsWith(".al")) continue;
+    try {
       for (const h of objectHeadersOf(text, path)) ids.add(h.id);
+    } catch (e) {
+      if (!(e instanceof FileRefusedError)) throw e;
+    }
+  }
   return ids;
 }
 
