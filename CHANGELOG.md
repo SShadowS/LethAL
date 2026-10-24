@@ -13,6 +13,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **Many breaking mutants are now isolated inside the compile budget** (R735). When a batch fails to compile, alc's own
+  error lines are mapped to the mutant whose branch holds each line, and those mutants are compiled alone first. A
+  suspect is blamed only if it fails alone; a line that maps to nothing falls back to the halving search of R734. On
+  DC, 30 breaking mutants among 2000 are isolated in 34 compiles (halving needed about 540). A new
+  `compile-isolation-result` warning reports how many of the 64 compile-only runs were used and how many mutants were
+  named alone, in pairs, or left unresolved.
 - **A mutant that breaks the compile no longer costs the whole batch its verdicts** (R734). When alc rejects a batch,
   LethAL now finds every mutant that fails to compile on its own (not only one), redeploys the rest under their
   original ids, and scores them. Each breaking mutant is an `error` row whose note names its source file and line and
