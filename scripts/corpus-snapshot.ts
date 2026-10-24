@@ -723,17 +723,21 @@ function lockDir(): string {
 }
 
 /** Inside slot `mine`: record our pid, then the ps scan. Throws RefusedError. */
-export function guardInSlot(mine: number, baseApp: boolean, print: (l: string) => void): void {
+export function guardInSlot(
+  mine: number,
+  baseApp: boolean,
+  print: (l: string) => void,
+  // The ps seam: a test passes fixed rows, so its verdict never depends on a live process.
+  readPs: () => string = () =>
+    Bun.spawnSync(["ps", "-eo", "pid,ppid,pgid,args"], { stdout: "pipe" }).stdout.toString(),
+): void {
   const dir = lockDir();
   writeFileSync(join(dir, `heavy.${mine}`), `${process.pid}\n`);
   const held = SLOTS.filter((s) => s !== mine && slotHeld(dir, s));
   const pids = held
     .map((s) => Number(readFileSync(join(dir, `heavy.${s}`), "utf8").trim()))
     .filter((p) => !Number.isNaN(p));
-  const ps = Bun.spawnSync(["ps", "-eo", "pid,ppid,pgid,args"], {
-    stdout: "pipe",
-  }).stdout.toString();
-  const v = heavyVerdict(parsePs(ps), process.pid, pids, held.length, baseApp);
+  const v = heavyVerdict(parsePs(readPs()), process.pid, pids, held.length, baseApp);
   print(v.message);
   if (v.refuse) throw new RefusedError(v.message, true);
 }

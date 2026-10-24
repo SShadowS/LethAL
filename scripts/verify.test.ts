@@ -304,6 +304,7 @@ describe("parseTestSummary", () => {
       "3 tests failed:",
       "(fail) t1 [2.00ms]",
       "(fail) t2 [5041.51ms]",
+      "  ^ this test timed out after 5000ms.",
       "(fail) t3 [3.00ms]",
       " 2 pass",
       " 3 fail",

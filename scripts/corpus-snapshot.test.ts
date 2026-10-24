@@ -806,11 +806,11 @@ describe("B5 the heavy-job guard", () => {
     async () => {
       const dir = fresh("locks");
       const held: number[] = [];
-      // `bash -c sleep 30 _ /work/src/DC/x`: its argv names a corpus root, so isHeavy matches it.
-      const dummy = Bun.spawn(["bash", "-c", "sleep 30", "_", "/work/src/DC/x"], {
-        stdout: "ignore",
-        stderr: "ignore",
-      });
+      // Fixed ps rows (the seam): one corpus job that is not ours. No live process is read.
+      const rows = [
+        "PID PPID PGID COMMAND",
+        "500 1 500 bun scripts/prod-identity-keys.ts x /work/src/DC/Cloud",
+      ].join("\n");
       try {
         for (const n of [2, 3]) {
           const h = await hold(join(dir, `heavy.${n}`));
@@ -818,13 +818,19 @@ describe("B5 the heavy-job guard", () => {
           writeFileSync(join(dir, `heavy.${n}`), `${h.pid}\n`);
         }
         await withLockDir(dir, () => {
-          const e = refusal(() => guardInSlot(1, false, () => {}));
+          const e = refusal(() =>
+            guardInSlot(
+              1,
+              false,
+              () => {},
+              () => rows,
+            ),
+          );
           expect(e.message).toContain("-> REFUSED");
           expect(exitCodeOf(e)).toBe(75);
         });
       } finally {
         for (const pid of held) kill(pid);
-        kill(dummy.pid);
       }
     },
   );

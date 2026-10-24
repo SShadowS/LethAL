@@ -271,6 +271,8 @@ export function scanFailures(output: string, maxLines = 12): FailureScan {
   let file = "";
   for (const raw of output.split(/\r?\n/)) {
     const line = raw.trimEnd();
+    // The closing recap repeats every (fail) line and its timeout line: stop, the first pass has them.
+    if (/^\d+ tests? failed:$/.test(line)) break;
     const header = /^(?:::group::)?(\S+\.test\.[cm]?[jt]sx?):$/.exec(line)?.[1];
     if (header !== undefined) {
       file = header.replaceAll("\\", "/");
@@ -295,7 +297,7 @@ export function scanFailures(output: string, maxLines = 12): FailureScan {
       lastFail = undefined;
       if (pass?.[1] !== undefined && Number(pass[2]) >= 1000) {
         const l = slow.get(file) ?? [];
-        l.push(`${pass[1]} [${pass[2]}ms]`);
+        if (l.length < 10) l.push(`${pass[1]} [${pass[2]}ms]`);
         slow.set(file, l);
       }
       continue;
