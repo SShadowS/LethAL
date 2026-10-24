@@ -1341,6 +1341,7 @@ function r562FilterHop(
     if (r562NotAProc(c.method) || n.rawKind !== "call_expression") return none;
     for (const p of r531TableProcs(n, c.method, arity, ctx))
       targets.push({ proc: p, key: "", r: c.recv });
+    // ponytail: R_amb = 0 on every corpus (R737 census); add a red test if the census ever finds an ambiguous receiver here
     unresolved = !targets.some((t) => bodyOf(t.proc) !== null) || r737Partial(n, ctx);
   } else if (bareRec.length > 0) {
     for (const p of bareRec) targets.push({ proc: p, key: "", r: "" });
@@ -4534,6 +4535,7 @@ function r572HelperKeys(
   const c = r531Call(call);
   const obj = objectOf(frame.loop);
   if (c === null || obj === null) return [];
+  // ponytail: R_amb = 0 on every corpus (R737 census); add a red test if the census ever finds an ambiguous receiver here
   const ts = r570Targets(call, c, ctx, true);
   if (ts.length === 0) return [];
   let common: Set<string> | null = null;
@@ -4621,6 +4623,7 @@ function r572HelperKeeps(
     }
     c.args.forEach((a, i) => {
       if (moved || !isIdentifierLike(a) || r531Key(a) !== key) return;
+      // ponytail: R_amb = 0 on every corpus (R737 census); add a red test if the census ever finds an ambiguous receiver here
       const ts = c.uncertain ? [] : r570Targets(n, c, ctx, true);
       if (ts.length === 0) {
         if (!(c.recv === null && R531_PURE.has(c.method) && c.method !== "clear")) moved = true;
@@ -5561,6 +5564,7 @@ function r572StatefulOnce(p: ALSyntaxNode, hops: number, ctx: SemanticContext): 
           hit = true;
         if (hit) return;
       }
+      // ponytail: R_amb = 0 on every corpus (R737 census); add a red test if the census ever finds an ambiguous receiver here
       const ts = r570Targets(n, c, ctx, true);
       if (ts.length === 0) {
         // UNKNOWN (plan r2 review 7): no target and no resolved built-in
@@ -5751,6 +5755,7 @@ function r572WritesNode(
       hit = true;
       return;
     }
+    // ponytail: R_amb = 0 on every corpus (R737 census); add a red test if the census ever finds an ambiguous receiver here
     const ts = r570Targets(n, c, ctx, true);
     if (ts.length === 0) {
       if (!(c.recv === null && R572_NO_WRITE.has(c.method))) hit = true;
@@ -5913,6 +5918,7 @@ function r570LoopFilters(
         else if (!R531_BUILTIN.has(c.method)) {
           // a table procedure on the cursor: the filters it sets on its implicit Rec, one level
           // (ponytail: a deeper call, or none resolved, reads as any field)
+          // ponytail: R_amb = 0 on every corpus (R737 census); add a red test if the census ever finds an ambiguous receiver here
           const ts = r570Targets(n, c, ctx, true);
           if (ts.length === 0) out.add("*");
           for (const t of ts) {
@@ -6119,7 +6125,8 @@ function r570Scan(
       // `R.M(...)` (or `Rec.M(...)` for the implicit Rec)
       if (recMethod(c)) direct = true;
       else if (c.method !== "modify" && c.method !== "modifyall" && !R531_BUILTIN.has(c.method)) {
-        const ts = r570Targets(n, c, ctx);
+        // viaRec reads [] as direct, so ask for the strict (complete) list
+        const ts = r570Targets(n, c, ctx, true);
         // a paren-less `R.X` that names no procedure is a field read
         if (c.uncertain) direct = true;
         else if (n.rawKind !== "member_expression" || ts.length > 0) viaRec(ts);
@@ -6130,6 +6137,7 @@ function r570Scan(
       } else if (r531Implicit(n, ctx)) {
         if (recMethod(c)) direct = true;
         else if (c.method !== "modify" && c.method !== "modifyall" && !R531_BUILTIN.has(c.method)) {
+          // ponytail: R_amb = 0 on every corpus (R737 census); add a red test if the census ever finds an ambiguous receiver here
           const ts = r570Targets(n, c, ctx, true);
           if (ts.length > 0) viaRec(ts);
           else if (!r570ProjectRec(p, ctx)) direct = true; // maybe the base table's procedure
@@ -6149,6 +6157,7 @@ function r570Scan(
       if (normalizeAlName(c.args[1]?.text ?? "") !== "false") direct = true;
       return;
     }
+    // ponytail: R_amb = 0 on every corpus (R737 census); add a red test if the census ever finds an ambiguous receiver here
     const ts = r570Targets(n, c, ctx, true);
     if (ts.length === 0) {
       const readOnly =
