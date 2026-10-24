@@ -5393,13 +5393,14 @@ describe("runSession — Layer 5A deployment identity", () => {
       (e: unknown) => e,
     );
     store.close();
-    // red when the restore text reaches the version-conflict retry (attempts 2)
+    // red only when BOTH guards are gone (upgradeNotRestored here, and parseVersionConflict's own
+    // null): the restore text then reaches the version-conflict retry (attempts 2)
     expect(attempts).toBe(1);
     // red when the refusal is not the named class
     expect(err).toBeInstanceOf(UpgradeNotRestoredError);
     const msg = err instanceof Error ? err.message : "";
     expect(msg).toContain("could not be restored"); // BC's own text, verbatim
-    expect(msg).toContain("lethal doctor");
+    expect(msg).toContain("bc-linux-setup.ts");
     expect(msg).toContain("tests app");
   });
 

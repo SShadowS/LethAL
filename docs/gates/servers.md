@@ -195,12 +195,14 @@ when a fixture's target changes a procedure its tests call and a run, or a hand 
 is republished. `lethal run` refuses at that point with `UpgradeNotRestoredError` and BC's text, and does not retry.
 `bc-linux-setup.ts` and `bc-republish.ts` refuse BEFORE publishing (`resident-dependent-breaks`).
 
-**To recover (under the server's lease):**
-1. `lethal doctor --config <the fixture's config>` shows what is installed now.
-2. `bun scripts/bc-linux-setup.ts --server bcN` publishes the target and then the tests apps from the current source.
-3. If BC refuses the old target version as a downgrade, the server's installed-version record ([R605](../roadmap/R605.md))
-   blocks it. A `--mint` publish outranks the record (not measured as a recovery). Otherwise the owner restarts the
-   server, which clears the record, and step 2 is run again (the databases are in memory, so the setup runs anyway).
+**To recover.** The scripts cannot do it on their own. The stripped target is one row that is NOT installed, and
+`decideApp` (`scripts/bc-app-content.ts`) refuses that as `content-unknown`. So both `bc-linux-setup.ts` and
+`bc-republish.ts` stop with "NOTHING was published". They refuse by name and damage nothing.
+1. On `bc1`-`bc3`: ask the owner to restart the server. Its databases are in memory, so the restart also clears the
+   installed-version record ([R605](../roadmap/R605.md)). Then run `bun scripts/bc-linux-setup.ts --server bcN` under
+   the server's lease. It publishes the targets and then the tests apps from the current source.
+2. Elsewhere: uninstall and unpublish the stranded target row, then publish the target and the dependents again.
+   BC's 422 text names the dependents it removed. This route is not measured.
 
 ## How a gate reads a server
 

@@ -9,8 +9,9 @@ import {
   restoreFailed,
 } from "../src/app-version";
 
-/** BC's 422 when an upgrade breaks an installed dependent and the old target cannot be put back,
- *  as measured on bc2 by R-707 (step 4; BC's text after "If they are part" was not captured). */
+/** BC's 422 when an upgrade breaks an installed dependent and the old target cannot be put back.
+ *  BC's sentence is R-707's bc2 measurement (step 4, a direct HTTP publish; nothing after "If they
+ *  are part" was captured); the altool-style "The request for path ..." wrapper is not measured. */
 const R709_RESTORE_TEXT =
   "The request for path /BC/dev/apps failed with code UnprocessableEntity. Reason: " +
   "error AL0132: 'Codeunit \"R707 Target\"' does not contain a definition for 'Answer'. " +
