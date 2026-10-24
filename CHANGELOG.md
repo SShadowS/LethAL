@@ -235,6 +235,13 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **`lethal verify`: a test no longer falls back to the whole-source digest for handing out an object id, a plain
+  test-app codeunit or an Interface** ([R685](docs/roadmap/R685.md), [R430](docs/roadmap/R430.md)). A codeunit,
+  page, report, xmlport, query or table reference or literal id, a `Codeunit X` variable and an `Interface I`
+  variable handed to code the walk does not follow are folded instead (the object's code, or every procedure of
+  the codeunit or implementer). `this`, a record, a page/report/xmlport/query variable, an array or collection
+  element, a mixed `#if` declaration and an unreached caller's `Codeunit::X` into a traced Variant parameter keep
+  the fallback ([R386](docs/roadmap/R386.md) stays open for those).
 - **al-runner v3: a timeout after an earlier refusal or stop in the same call is no longer a kill**
   ([R694](docs/roadmap/R694.md), upstream issue 5776). v3 marks a later failure after a refused test as not
   trusted, but not a later timeout, and a refusal can leave state behind. With a mutant active, such a timeout is

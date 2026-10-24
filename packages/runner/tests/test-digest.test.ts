@@ -373,14 +373,40 @@ codeunit 50120 "Sub"
       );
     const onFallback = (files: Files) => digestA(unrelated(files)) !== digestA(files);
 
-    test("(b) a test-app codeunit variable, such as a mock behind an interface parameter", () => {
-      expect(onFallback(callExt('        Mock: Codeunit "Lib";\n', "ExtLib.Process(Mock);"))).toBe(
-        true,
-      );
+    // R685: a plain test-app codeunit variable and an allow-listed reference are folded now.
+    test("(b) a test-app codeunit variable, such as a mock behind an interface parameter, is folded", () => {
+      const f = callExt('        Mock: Codeunit "Lib";\n', "ExtLib.Process(Mock);");
+      expect(onFallback(f)).toBe(false);
+      expect(digestA(edit(f, "Lib.al", "G := 2;", "G := 3;"))).not.toBe(digestA(f));
     });
 
-    test('(c) an object reference to a test-app object, Report::"Test Rep"', () => {
-      expect(onFallback(callExt("", 'ExtLib.RunReport(Report::"Test Rep");'))).toBe(true);
+    test('(c) an object reference to a test-app object, Report::"Test Rep", is folded', () => {
+      const f = callExt("", 'ExtLib.RunReport(Report::"Test Rep");');
+      expect(onFallback(f)).toBe(false);
+      expect(digestA(edit(f, "Rep.al", "dataset", "dataset /* x */"))).not.toBe(digestA(f));
+      // A trigger edit moves it too.
+      const g = edit(
+        f,
+        "Rep.al",
+        "    dataset",
+        "    trigger OnPreReport()\n    begin\n        Message('a');\n    end;\n\n    dataset",
+      );
+      expect(onFallback(g)).toBe(false);
+      expect(digestA(edit(g, "Rep.al", "Message('a');", "Message('b');"))).not.toBe(digestA(g));
+      // The trigger's callee moves it too: only `enterObject` walks a trigger's calls.
+      const h = {
+        ...edit(
+          f,
+          "Rep.al",
+          "    dataset",
+          '    trigger OnPreReport()\n    var\n        H: Codeunit "Rep Helper";\n    begin\n        H.Go();\n    end;\n\n    dataset',
+        ),
+        "Hlp.al":
+          "codeunit 50171 \"Rep Helper\"\n{\n    procedure Go()\n    begin\n        Message('h1');\n    end;\n}\n",
+      };
+      expect(onFallback(h)).toBe(false);
+      expect(digestA(edit(h, "Hlp.al", "'h1'", "'h2'"))).not.toBe(digestA(h));
+      expect(digestA(unrelated(h))).toBe(digestA(h));
     });
 
     test("(d) a record of a test-app table", () => {
@@ -440,9 +466,13 @@ codeunit 50120 "Sub"
       T(`    procedure A()\n    var\n${vars}    begin\n${body}    end;\n`);
     const DEP = '        DepCU: Codeunit "Dep CU";\n';
 
-    test("item 1: a parenthesised, subscripted or collected mock passed out falls back", () => {
+    test("item 1: a parenthesised mock is folded (R685); a subscripted or collected one falls back", () => {
+      const paren = withMock(
+        test1(`${DEP}        Mock: Codeunit "Mock";\n`, "        DepCU.Process((Mock));\n"),
+      );
+      expect(onFallback(paren)).toBe(false);
+      expect(digestA(mockEdit(paren))).not.toBe(digestA(paren));
       for (const [vars, body] of [
-        ['        Mock: Codeunit "Mock";\n', "        DepCU.Process((Mock));\n"],
         ['        Mocks: array[2] of Codeunit "Mock";\n', "        DepCU.Process(Mocks[1]);\n"],
         [
           '        Mock: Codeunit "Mock";\n        L: List of [Interface "IDep"];\n',
@@ -466,7 +496,16 @@ codeunit 50120 "Sub"
       for (const call of ["DepProc(Mock);", "this.DepProc(Mock);"]) {
         const ext = `tableextension 50102 "X" extends "Dep Table"\n{\n    trigger OnModify()\n    var\n        Mock: Codeunit "Mock";\n    begin\n        ${call}\n    end;\n}\n`;
         const files = withMock(test1("", "        X := 1;\n"), { "X.al": ext });
-        expect(onFallback(files)).toBe(true);
+        // R685: a plain codeunit variable is folded, not a fallback; a record still falls back.
+        expect(onFallback(files)).toBe(false);
+        expect(digestA(mockEdit(files))).not.toBe(digestA(files));
+        const rec = edit(
+          { ...files, "TT.al": TABLE("") },
+          "X.al",
+          'Mock: Codeunit "Mock";',
+          'Mock: Record "TT";',
+        );
+        expect(onFallback(rec)).toBe(true);
       }
     });
 
@@ -517,12 +556,15 @@ codeunit 50120 "Sub"
       );
     });
 
-    test("item 6: a built-in type's method handed Codeunit::X of a test-app codeunit falls back", () => {
+    test("item 6: a built-in type's method handed Codeunit::X of a test-app codeunit folds it (R685)", () => {
       for (const [v, call] of [
         ["N: Notification", "N.AddAction('x', Codeunit::\"Mock\", 'Go');"],
         ["E: ErrorInfo", "E.AddAction('x', Codeunit::\"Mock\", 'Go');"],
-      ] as const)
-        expect(onFallback(withMock(test1(`        ${v};\n`, `        ${call}\n`)))).toBe(true);
+      ] as const) {
+        const f = withMock(test1(`        ${v};\n`, `        ${call}\n`));
+        expect(onFallback(f)).toBe(false);
+        expect(digestA(mockEdit(f))).not.toBe(digestA(f));
+      }
       // Control: a dependency's codeunit there is not a test-app object.
       const dep = test1(
         "        N: Notification;\n",
@@ -572,9 +614,10 @@ codeunit 50120 "Sub"
       );
     const mockEdit = (f: Files) => edit(f, "M.al", "Message('a');", "Message('b');");
 
-    test("a literal id of a test-app codeunit is an UNFOLLOWED edge", () => {
+    test("a literal id of a test-app codeunit folds that codeunit (R685), no fallback", () => {
       const f = files("", "        DepCU.RunById(50101);\n");
-      expect(digestA(unrelated(f))).not.toBe(digestA(f));
+      expect(digestA(unrelated(f))).toBe(digestA(f));
+      expect(digestA(mockEdit(f))).not.toBe(digestA(f));
       // Control: a literal that is no test-app codeunit's id.
       const g = files("", "        DepCU.RunById(42);\n");
       expect(digestA(unrelated(g))).toBe(digestA(g));
@@ -680,9 +723,8 @@ codeunit 50120 "Sub"
         );
       });
 
-      test("the literal id handed to an unfollowed call is an UNFOLLOWED edge (falls back)", () => {
-        const f = files(al(id), "", `        DepCU.RunById(${id});\n`);
-        expect(digestA(unrelated(f))).not.toBe(digestA(f));
+      test("the literal id handed to an unfollowed call folds the object (R685), no fallback", () => {
+        expectFolded(files(al(id), "", `        DepCU.RunById(${id});\n`));
       });
 
       test("control: an ordinary Integer handed out moves nothing", () => {
@@ -1240,15 +1282,19 @@ describe("R697/R698: code named only in properties, and qualified object referen
           "'b'",
         );
       });
-      test(`handed-out Codeunit::${ref} falls back`, () => {
-        const files = {
-          "T.al":
-            USING +
-            TEST(`        Ext.Foo(Codeunit::${ref});\n`, '        Ext: Codeunit "Dep Thing";\n'),
-          "CU.al": NS("a"),
-          "Z.al": Z,
-        };
-        expect(dg(edit(files, "Z.al", "z1", "z2"))).not.toBe(dg(files));
+      // R685: foldIdTargets folds a qualified name (R698), so handing it out is no fallback.
+      test(`handed-out Codeunit::${ref} folds`, () => {
+        moves(
+          {
+            "T.al":
+              USING +
+              TEST(`        Ext.Foo(Codeunit::${ref});\n`, '        Ext: Codeunit "Dep Thing";\n'),
+            "CU.al": NS("a"),
+          },
+          "CU.al",
+          "'a'",
+          "'b'",
+        );
       });
     }
 
@@ -1373,6 +1419,230 @@ describe("R697/R698: code named only in properties, and qualified object referen
         "'a'",
         "'b'",
       );
+    });
+  });
+});
+
+describe("R685: a test-app object id, codeunit or Interface handed to external code is folded", () => {
+  type Files = Record<string, string>;
+  const dg = (files: Files): string | undefined => {
+    const list = Object.entries(files).map(([path, text]) => ({ path, text }));
+    const tests = list.flatMap((f) => testsInAlSource(f.path, f.text));
+    return testDigestsOfSources(list, tests, I)["50100::a"];
+  };
+  const edit = (files: Files, path: string, from: string, to: string): Files => {
+    const text = files[path];
+    if (text === undefined || !text.includes(from)) throw new Error(`no ${from} in ${path}`);
+    return { ...files, [path]: text.replace(from, to) };
+  };
+  const EXT = '        Ext: Codeunit "Dep Thing";\n';
+  const TEST = (body: string, vars = "", extraProcs = "") =>
+    `codeunit 50100 "T"\n{\n    Subtype = Test;\n    [Test]\n    procedure A()\n    var\n${EXT}${vars}    begin\n${body}    end;\n${extraProcs}}\n`;
+  const Z = `codeunit 50999 "Zed"\n{\n    procedure Z()\n    begin\n        Message('z1');\n    end;\n}\n`;
+  const MOCK = `codeunit 50201 "Mock"\n{\n    procedure Go()\n    begin\n        Message('a');\n    end;\n}\n`;
+  const TT =
+    'table 50130 "TT"\n{\n    fields\n    {\n        field(1; "No."; Code[20]) { }\n    }\n}\n';
+
+  /** The test A is off the fallback: an unrelated edit does not move it. */
+  const folded = (files: Files): void => {
+    const was = dg({ ...files, "Z.al": Z });
+    expect(was).toMatch(/^v3:/);
+    expect(dg(edit({ ...files, "Z.al": Z }, "Z.al", "z1", "z2"))).toBe(was);
+  };
+  /** The folded object's edit moves the digest, an unrelated one does not. */
+  const moves = (files: Files, path: string, from: string, to: string): void => {
+    folded(files);
+    const was = dg({ ...files, "Z.al": Z });
+    expect(dg(edit({ ...files, "Z.al": Z }, path, from, to))).not.toBe(was);
+  };
+  /** The whole-source fallback: an unrelated edit moves the digest. */
+  const fallsBack = (files: Files): void => {
+    const was = dg({ ...files, "Z.al": Z });
+    expect(dg(edit({ ...files, "Z.al": Z }, "Z.al", "z1", "z2"))).not.toBe(was);
+  };
+
+  const KINDS = [
+    {
+      kind: "codeunit",
+      ref: 'Codeunit::"Obj"',
+      al: `codeunit 50202 "Obj"\n{\n    trigger OnRun()\n    begin\n        Message('a');\n    end;\n}\n`,
+    },
+    {
+      kind: "page",
+      ref: 'Page::"Obj"',
+      al: `page 50202 "Obj"\n{\n    PageType = Card;\n\n    trigger OnOpenPage()\n    begin\n        Message('a');\n    end;\n}\n`,
+    },
+    {
+      kind: "report",
+      ref: 'Report::"Obj"',
+      al: `report 50202 "Obj"\n{\n    ProcessingOnly = true;\n\n    trigger OnPreReport()\n    begin\n        Message('a');\n    end;\n}\n`,
+    },
+    {
+      kind: "xmlport",
+      ref: 'Xmlport::"Obj"',
+      al: `xmlport 50202 "Obj"\n{\n    schema\n    {\n        textelement(Root) { }\n    }\n\n    trigger OnPreXmlPort()\n    begin\n        Message('a');\n    end;\n}\n`,
+    },
+    {
+      kind: "query",
+      ref: 'Query::"Obj"',
+      al: `query 50202 "Obj"\n{\n    elements\n    {\n        dataitem(D; "Ext Table") { }\n    }\n\n    trigger OnBeforeOpen()\n    begin\n        Message('a');\n    end;\n}\n`,
+    },
+    {
+      kind: "database",
+      ref: 'Database::"Obj"',
+      al: `table 50202 "Obj"\n{\n    fields\n    {\n        field(1; "No."; Code[20]) { }\n    }\n\n    trigger OnDelete()\n    begin\n        Message('a');\n    end;\n}\n`,
+    },
+  ] as const;
+
+  describe.each([...KINDS])("$kind reference", ({ ref, al }) => {
+    test("handed out: leaves the fallback, and the object's edit moves the digest", () => {
+      moves({ "T.al": TEST(`        Ext.Foo(${ref});\n`), "O.al": al }, "O.al", "'a'", "'b'");
+    });
+  });
+
+  test("a literal codeunit id handed out folds that codeunit", () => {
+    moves({ "T.al": TEST("        Ext.Foo(50202);\n"), "O.al": KINDS[0].al }, "O.al", "'a'", "'b'");
+  });
+
+  test("a literal page id handed out folds that page", () => {
+    moves({ "T.al": TEST("        Ext.Foo(50202);\n"), "O.al": KINDS[1].al }, "O.al", "'a'", "'b'");
+  });
+
+  test("a literal integer that is no object's id: no fold, no fallback (control)", () => {
+    const files = { "T.al": TEST("        Ext.Foo(77777);\n"), "O.al": KINDS[0].al };
+    folded(files);
+    expect(dg(edit({ ...files, "Z.al": Z }, "O.al", "'a'", "'b'"))).toBe(
+      dg({ ...files, "Z.al": Z }),
+    );
+  });
+
+  test("a qualified Codeunit::My.Ns.Obj is folded too (foldIdTargets folds it by unitsNamed)", () => {
+    moves(
+      {
+        "T.al": `using My.Ns;\n${TEST("        Ext.Foo(Codeunit::My.Ns.Obj);\n")}`,
+        "O.al": `namespace My.Ns;\n${KINDS[0].al}`,
+      },
+      "O.al",
+      "'a'",
+      "'b'",
+    );
+  });
+
+  test("a codeunit variable declared by id handed out folds the codeunit", () => {
+    moves(
+      {
+        "T.al": TEST("        Ext.Foo(M);\n", "        M: Codeunit 50202;\n"),
+        "O.al": KINDS[0].al,
+      },
+      "O.al",
+      "'a'",
+      "'b'",
+    );
+  });
+
+  test("a literal id below 1000 handed out folds through lowIds", () => {
+    const low = `codeunit 500 "Low"\n{\n    trigger OnRun()\n    begin\n        Message('a');\n    end;\n}\n`;
+    // lowIds folds every codeunit (so an unrelated codeunit edit moves it too); an unrelated page
+    // edit must not, which tells it from the whole-source fallback.
+    const page = `page 50300 "Pg"\n{\n    trigger OnOpenPage()\n    begin\n        Message('p1');\n    end;\n}\n`;
+    const files = { "T.al": TEST("        Ext.Foo(500);\n"), "L.al": low, "P.al": page };
+    const was = dg(files);
+    expect(was).toMatch(/^v3:/);
+    expect(dg(edit(files, "L.al", "'a'", "'b'"))).not.toBe(was);
+    expect(dg(edit(files, "P.al", "'p1'", "'p2'"))).toBe(was);
+  });
+
+  test("a codeunit variable handed out folds the codeunit", () => {
+    moves(
+      { "T.al": TEST("        Ext.Foo(M);\n", '        M: Codeunit "Mock";\n'), "M.al": MOCK },
+      "M.al",
+      "'a'",
+      "'b'",
+    );
+  });
+
+  describe("an Interface variable", () => {
+    const IFACE = 'interface "IThing"\n{\n    procedure Go();\n}\n';
+    const IMPL = `codeunit 50203 "Impl" implements "IThing"\n{\n    procedure Go()\n    begin\n        Message('a');\n    end;\n}\n`;
+
+    test("folds a test-app implementer", () => {
+      moves(
+        {
+          "T.al": TEST("        Ext.Foo(I);\n", '        I: Interface "IThing";\n'),
+          "I.al": IFACE,
+          "M.al": IMPL,
+        },
+        "M.al",
+        "'a'",
+        "'b'",
+      );
+    });
+
+    test("an implementer of a dependency interface, through a dependency extends chain, is folded", () => {
+      // IDerived (a dependency's) may extend IBase (a dependency's): the test app cannot see
+      // that, so an implementer of IDerived counts as one of IBase (`unknownAncestry`).
+      moves(
+        {
+          "T.al": TEST("        Ext.Foo(I);\n", '        I: Interface "IBase";\n'),
+          "M.al": IMPL.replace('implements "IThing"', 'implements "IDerived"'),
+        },
+        "M.al",
+        "'a'",
+        "'b'",
+      );
+    });
+  });
+
+  // `Enum::"E"` parses to no argument fact (an ordinal, not an object id), so it never fell back
+  // on master either: it is outside the allow-list by construction, and nothing here changes it.
+  test("control: an Enum reference handed out keeps master's behaviour (no fallback, no fold)", () => {
+    folded({
+      "T.al": TEST('        Ext.Foo(Enum::"E");\n'),
+      "E.al": 'enum 50210 "E"\n{\n    value(0; A) { }\n}\n',
+    });
+  });
+
+  describe("still falls back", () => {
+    test("this", () => {
+      fallsBack({ "T.al": TEST("        Ext.Foo(this);\n"), "M.al": MOCK });
+    });
+
+    test("a record variable", () => {
+      fallsBack({
+        "T.al": TEST("        Ext.Foo(R);\n", '        R: Record "TT";\n'),
+        "TT.al": TT,
+      });
+    });
+
+    test("a page variable", () => {
+      fallsBack({
+        "T.al": TEST("        Ext.Foo(P);\n", '        P: Page "Pg";\n'),
+        "P.al": KINDS[1].al.replace('"Obj"', '"Pg"'),
+      });
+    });
+
+    test("an element of an array of codeunits", () => {
+      fallsBack({
+        "T.al": TEST("        Ext.Foo(Arr[1]);\n", '        Arr: array[2] of Codeunit "Mock";\n'),
+        "M.al": MOCK,
+      });
+    });
+
+    test("a variable declared as a codeunit in one #if arm and a record in the other", () => {
+      fallsBack({
+        "T.al": TEST(
+          "        Ext.Foo(M);\n",
+          '#if CLEAN1\n        M: Codeunit "Mock";\n#else\n        M: Record "TT";\n#endif\n',
+        ),
+        "M.al": MOCK,
+        "TT.al": TT,
+      });
+    });
+
+    test("N1: an unreached caller passes Codeunit::X into a traced Variant parameter", () => {
+      // `traceParam` reads callers over every procedure, reached or not; their ids are not folded.
+      const procs = `    local procedure Help(V: Variant)\n    var\n${EXT}    begin\n        Ext.Foo(V);\n    end;\n\n    local procedure Unreached()\n    begin\n        Help(Codeunit::"Obj");\n    end;\n`;
+      fallsBack({ "T.al": TEST("        Help(1);\n", "", procs), "O.al": KINDS[0].al });
     });
   });
 });
