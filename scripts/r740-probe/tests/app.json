@@ -1,5 +1,5 @@
 {
-  "id": "a2a9b0bb-7274-42ae-8eee-89f12b23a6f2",
+  "id": "a3014e4e-2f3e-4185-8fce-0519bd133e3a",
   "name": "R740 Probe Tests",
   "publisher": "LethAL Probe",
   "version": "1.0.0.1",
@@ -10,13 +10,13 @@
   "idRanges": [{ "from": 93840, "to": 93849 }],
   "dependencies": [
     {
-      "id": "916727ff-fac6-40f5-bc66-38800422d6d6",
+      "id": "edbf191d-45cd-45dd-bd38-f9910c0d60a7",
       "name": "R740 Probe Lib",
       "publisher": "LethAL Probe",
       "version": "1.0.0.1"
     },
     {
-      "id": "157d4738-4e4d-410b-b1be-743a3ba29106",
+      "id": "ef6468b3-8053-4383-a69a-8114dd06fd12",
       "name": "R740 Probe Target",
       "publisher": "LethAL Probe",
       "version": "1.0.0.1"
