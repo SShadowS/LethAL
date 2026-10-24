@@ -334,6 +334,15 @@ describe("§3 the compile proof", () => {
     expect(v3.calls).toHaveLength(0);
   });
 
+  test("R734: an alc rejection of the batch stops deploy() at the target compile: the test app is never compiled and nothing is deployed", async () => {
+    const l = await layout();
+    const alc = fakeAlc((p) => p.endsWith("active"));
+    const b = backendOf(l, fakeV3(allPass).spawn, alc.io);
+    await expect(b.deploy(l.batch)).rejects.toBeInstanceOf(AlcCompileError);
+    // exactly one alc run (the target), never the test app's
+    expect(alc.calls.map((c) => c.project)).toEqual([join(l.scratch, "active")]);
+  });
+
   test("a test app that does not compile against the batch stops the session, and is NOT an AlcCompileError (bisection must not read it as the batch's)", async () => {
     const l = await layout();
     const alc = fakeAlc((p) => p === l.testDir);
