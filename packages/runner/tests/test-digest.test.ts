@@ -1791,7 +1791,19 @@ describe("R699: an integer literal with leading zeros is the number it names", (
     nothing({ "T.al": STORED("00042"), "O.al": CU(50202) });
   });
 
-  test("00012 is 12, not a 4-digit id: it does not reach the page 12 lookup (control)", () => {
-    nothing({ "T.al": TEST("        Ext.Foo(00012);\n"), "O.al": PG(50202) });
+  /** On the fallback: an edit to an unrelated codeunit moves the digest. */
+  const fallsBack = (files: Files): void => {
+    const all = { ...files, "Z.al": Z };
+    const was = dg(all);
+    expect(was).toMatch(/^v3:/);
+    expect(dg(edit(all, "Z.al", "z1", "z2"))).not.toBe(was);
+  };
+  const VIA_VARIANT = (lit: string) =>
+    `codeunit 50100 "T"\n{\n    Subtype = Test;\n    [Test]\n    procedure A()\n    begin\n        H(${lit});\n    end;\n\n    local procedure H(Id: Variant)\n    var\n        Ext: Codeunit "Dep Thing";\n    begin\n        Ext.Foo(Id);\n    end;\n}\n`;
+
+  // The argument-fact half of the fix: `traceParam` reads the literal through `idOwner`.
+  test("01000 passed into a Variant parameter and handed out falls back, as 1000 does (traceParam)", () => {
+    fallsBack({ "T.al": VIA_VARIANT("1000"), "O.al": CU(1000) });
+    fallsBack({ "T.al": VIA_VARIANT("01000"), "O.al": CU(1000) });
   });
 });

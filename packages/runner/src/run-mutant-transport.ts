@@ -2050,6 +2050,7 @@ export class RunMutantTransport {
         if (text !== "") bodyNote = ` — BC's body: ${JSON.stringify(text.slice(0, 400))}`;
       } catch (err) {
         bodyNote = ` (body unread: ${describeThrown(err)})`;
+        void res.body?.cancel().catch(() => {}); // free the socket of a stream that never ended
       }
       return {
         ref,

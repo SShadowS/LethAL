@@ -10257,10 +10257,11 @@ async function classifyNonVerdictStep(
     }
     // Unresolved: latch unsafe, record a durable tier quarantine, and stop — no further
     // work-plane call (spec §8, §12).
-    // R692: "raise the floor" is advice for a budget overrun. An HTTP status that came back
-    // inside the budget names itself instead.
-    const fastHttp =
-      v.durationMs < budget ? /\bHTTP (\d{3})\b/.exec(v.failureMessage ?? "")?.[1] : undefined;
+    // R692: "raise the floor" is advice for a budget overrun only. A failure that came back inside
+    // the budget names itself instead (its HTTP status when the message has one).
+    const overran = v.outcome === "deadline-exceeded" || v.durationMs >= budget;
+    const status = /\bHTTP (\d{3})\b/.exec(v.failureMessage ?? "")?.[1];
+    const early = `${status !== undefined ? `HTTP ${status}` : "an error"} after ${v.durationMs} ms, inside its ${budget} ms budget`;
     await quarantineInFlight({
       safety: ctx.safety,
       quarantineStore: ctx.quarantineStore,
@@ -10269,12 +10270,12 @@ async function classifyNonVerdictStep(
       // Carry the transport's own failure message into the record. Without it the operator
       // is told to recycle a tier and clear a quarantine with no statement of what actually
       // went wrong — and this record outlives the process that wrote it.
-      detail: `test in-flight-unknown ${what} (mutant ${ctx.m.mutantId})${retried ? " — a first, proven-complete attempt had already been retried once" : ""}${v.failureMessage !== undefined ? `: ${v.failureMessage}` : ""} [${fastHttp !== undefined ? `HTTP ${fastHttp} after ${v.durationMs} ms, inside the ${budget} ms budget; continue with --resume` : `budget was ${budget} ms; raise the floor with --mutant-timeout-ms and continue with --resume`}]`,
+      detail: `test in-flight-unknown ${what} (mutant ${ctx.m.mutantId})${retried ? " — a first, proven-complete attempt had already been retried once" : ""}${v.failureMessage !== undefined ? `: ${v.failureMessage}` : ""} [${overran ? `budget was ${budget} ms; raise the floor with --mutant-timeout-ms and continue with --resume` : `${early}; continue with --resume`}]`,
     });
     // R47: the two things the operator needs are the budget this run used and the fact that
     // the verdicts already measured are NOT lost. Both went unsaid until a real project hit
     // this at mutant 13 of 138 and discarded the first twelve.
-    note = `${STRANDED_NOTE_PREFIX}${ref.method} returned no readable result and its operation could not be confirmed complete — container may be stranded. ${fastHttp !== undefined ? `It failed with HTTP ${fastHttp} after ${v.durationMs} ms, inside its ${budget} ms budget, so a longer budget will not help; re-run with --resume to keep this session's verdicts` : `Its budget was ${budget} ms; if the mutant was merely slow rather than stranded, raise the floor with --mutant-timeout-ms and re-run with --resume to keep this session's verdicts`}`;
+    note = `${STRANDED_NOTE_PREFIX}${ref.method} returned no readable result and its operation could not be confirmed complete — container may be stranded. ${overran ? `Its budget was ${budget} ms; if the mutant was merely slow rather than stranded, raise the floor with --mutant-timeout-ms and re-run with --resume to keep this session's verdicts` : `It failed with ${early}, so a longer budget will not help; re-run with --resume to keep this session's verdicts`}`;
     // R114: the machine value that goes with the prose above. Without it this outcome shipped
     // `cause: undefined`, so `lethal explain`'s R91 prescription — keyed on `cause`, which is
     // the right thing to key on — could never fire for the very case R91 measured. Deliberately

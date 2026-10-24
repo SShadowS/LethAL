@@ -7535,6 +7535,16 @@ describe("runSession — Task 12 quarantine on in-flight-unknown deadline", () =
     expect(reason).not.toContain("raise the floor");
   });
 
+  test("R692: a fast failure with no HTTP status does not advise raising the floor either", async () => {
+    const reason = await strandReason({
+      outcome: "error",
+      durationMs: 40,
+      failureMessage: "RunMutant connection failed after dispatch: ECONNRESET",
+    });
+    expect(reason).toContain("an error after 40 ms");
+    expect(reason).not.toContain("raise the floor");
+  });
+
   test("R692: a real budget overrun still advises raising the floor", async () => {
     const reason = await strandReason({
       outcome: "deadline-exceeded",
