@@ -13,6 +13,13 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **A mutant that breaks the compile no longer costs the whole batch its verdicts** (R734). When alc rejects a batch,
+  LethAL now finds every mutant that fails to compile on its own (not only one), redeploys the rest under their
+  original ids, and scores them. Each breaking mutant is an `error` row whose note names its source file and line and
+  alc's own error codes. Isolation spends at most 64 compile-only runs. If the empty build fails, the budget runs out,
+  the clean set cannot be redeployed or its manifest does not match, every mutant stays `error` with a named note.
+  The redeployed manifest lists the removed mutants (`isolatedOut`), so `lethal verify` does not read their rows as a
+  corrupt store, and bcdev refuses to run a removed id.
 - **A baseline test that fails with bcdev's web-service HTTP text now says so** (R713). Under bcdev, an unhandled
   outbound HTTP call fails with "The request was blocked by the runtime…", while VS Code, the test runner hub and
   al-runner v3 give "…the connecting endpoint violates security requirements…" (the hub is the oracle, R712). A test

@@ -84,7 +84,10 @@ const FAKE_LEASE: Lease = {
 };
 
 /** Writes the compile inputs deploy()'s prepare step reads from an instrumented dir. */
-async function writeDeployInputs(dir: string): Promise<void> {
+async function writeDeployInputs(
+  dir: string,
+  manifestExtra: Record<string, unknown> = {},
+): Promise<void> {
   await Bun.write(
     join(dir, "app.json"),
     JSON.stringify({
@@ -104,6 +107,7 @@ async function writeDeployInputs(dir: string): Promise<void> {
       selectorIds: { selectorId: 1, controlId: 2, tableId: 3 },
       artifactId: TEST_ARTIFACT_ID,
       mutants: [],
+      ...manifestExtra,
     }),
   );
 }
@@ -403,6 +407,7 @@ async function makeBackendWithDeploy(
     controlState: ControlState,
   ) => RunMutantTransport,
   buildSymbols?: readonly string[],
+  manifestExtra?: Record<string, unknown>,
 ): Promise<{
   backend: BcDevMcpBackend;
   artifact: CompiledArtifact;
@@ -418,7 +423,7 @@ async function makeBackendWithDeploy(
 
   const outputDir = scratch("lethal-bcdev-backend-test-");
   const deployDir = instrumentedDir ?? outputDir;
-  await writeDeployInputs(deployDir);
+  await writeDeployInputs(deployDir, manifestExtra);
   const backend = new BcDevMcpBackend(
     {
       mcpCommand: ["unused"],
@@ -2306,6 +2311,36 @@ describe("BcDevMcpBackend.activate — bookkeeping (Layer 5C-A)", () => {
         mutantId: "",
         opSeq: FAKE_LEASE.lastCompletedOpSeq + 2, // incremented once per RunMutant call issued
       });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  // R734 A1: a mutant the redeployed manifest lists as isolated out is refused before any send.
+  test("run() refuses a mutant the deployed manifest lists as isolated out; others still run", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const { backend, cleanup } = await makeBackendWithDeploy(
+      () => ({ results: [] }),
+      {},
+      undefined,
+      capturingRunMutantFactory(bodies),
+      undefined,
+      {
+        isolatedOut: [
+          { mutantId: "M0007", file: "F.al", startIndex: 1, endIndex: 2, operatorName: "op" },
+        ],
+      },
+    );
+    try {
+      backend.setLease(FAKE_LEASE);
+      await backend.activate("M0007");
+      await expect(backend.run(ref, { coverage: "none", timeoutMs: 1000 })).rejects.toThrow(
+        /not in the deployed artifact's manifest/,
+      );
+      expect(bodies).toHaveLength(0); // never dispatched
+      await backend.activate("M0003");
+      await backend.run(ref, { coverage: "none", timeoutMs: 1000 });
+      expect(bodies).toHaveLength(1);
     } finally {
       await cleanup();
     }
