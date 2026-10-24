@@ -79,7 +79,8 @@ paths and history are in `docs/gates/alrunner.md`.
 
 The Rust al-runner (v3) is pinned under `/work/tools/al-runner-v3/`, and its `.gated` file names the
 one build the backend will run. The pin moves only through `bun scripts/al-runner-v3-update.ts`,
-which runs `itest:alrunner-v3` on the new build first. Details: `docs/gates/alrunner-v3.md`, "The
+which runs `itest:alrunner-v3` on the new build first, newest release first, falling back to the
+next older one when it does not pass (R586d). Details: `docs/gates/alrunner-v3.md`, "The
 pin and the update gate".
 
 ## Editing files

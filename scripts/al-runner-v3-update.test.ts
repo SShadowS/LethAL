@@ -88,8 +88,12 @@ function fake(o: {
   onGate?: () => Promise<void>;
   /** R614 I2: the gate's preparation line, sent through runGate's `log`. */
   prepLine?: string;
+  /** R586d: the gate's outcome per candidate tag (falls back to `outcome`). */
+  byTag?: Record<string, Outcome>;
 }) {
+  let lastTag = "";
   const seen = {
+    tagsGated: [] as string[],
     gates: [] as string[],
     envs: [] as Readonly<Record<string, string>>[],
     extracts: 0,
@@ -104,7 +108,8 @@ function fake(o: {
     root,
     listReleases: async () =>
       o.tags ?? ["edge", "v3.0.0-alpha.3", "v3.0.0-alpha.2", "v3.0.0-alpha.1"],
-    download: async (_tag, dir) => {
+    download: async (tag, dir) => {
+      lastTag = tag;
       seen.downloads += 1;
       await writeFile(join(dir, "t.tar.xz"), "tarball");
       await writeFile(
@@ -120,6 +125,8 @@ function fake(o: {
     },
     versionOf: async () => o.version ?? "al-runner 3.0.0-alpha.3 (c893e3633)",
     runGate: async (commit, env, log) => {
+      seen.tagsGated.push(lastTag);
+      const outcome = o.byTag?.[lastTag] ?? o.outcome;
       seen.gates.push(commit);
       seen.envs.push(env);
       if (o.prepLine !== undefined) await log(o.prepLine);
@@ -127,7 +134,7 @@ function fake(o: {
       const receiptPath = env.LETHAL_V3_GATE_RECEIPT ?? "";
       if (o.gateLog !== undefined)
         await writeFile(join(dirname(receiptPath), "gate.log"), o.gateLog);
-      if (o.outcome === undefined) {
+      if (outcome === undefined) {
         if (o.throwText !== undefined) throw new Error(o.throwText);
         return;
       }
@@ -138,8 +145,8 @@ function fake(o: {
           binarySha256: o.receiptSha ?? (o.badSha === true ? sha("other") : sha("alpha3")),
           lethalCommit: o.receiptCommit ?? commit,
           dirty: false,
-          outcome: o.outcome,
-          legs: o.legs ?? legsFor(o.outcome),
+          outcome,
+          legs: o.legs ?? legsFor(outcome),
           lines: o.lines ?? [],
           ...(o.warnFacts !== undefined ? { warnFacts: o.warnFacts } : {}),
         }),
@@ -159,11 +166,91 @@ const current = async () => readlink(join(root, "current"));
 const failedAt = (tag: string, commit = GATED_COMMIT) => join(root, "failed", `${tag}@${commit}`);
 
 linuxOnly("T19: the v3 update gate", () => {
-  test("candidates: alphas above the gated one, oldest first, never edge", () => {
+  test("candidates: alphas above the gated one, NEWEST first, never edge", () => {
     expect(
-      candidates(["edge", "v3.0.0-alpha.4", "v3.0.0-alpha.3", "v3.0.0-alpha.2", "v2.12.0"], 2),
-    ).toEqual(["v3.0.0-alpha.3", "v3.0.0-alpha.4"]);
+      candidates(["edge", "v3.0.0-alpha.3", "v3.0.0-alpha.4", "v3.0.0-alpha.2", "v2.12.0"], 2),
+    ).toEqual(["v3.0.0-alpha.4", "v3.0.0-alpha.3"]);
     expect(expectedSha(`${"a".repeat(64)}  x.tar.xz\n`, "/d/x.tar.xz")).toBe("a".repeat(64));
+  });
+
+  test("R586d: versions compare by their alpha number, not as text: alpha.10 is newer than alpha.9", () => {
+    expect(
+      candidates(
+        [
+          "v3.0.0-alpha.9",
+          "v3.0.0-alpha.10",
+          "v3.0.0-alpha.3",
+          "v3.0.0-alpha.2",
+          "v3.0.0-alpha.1",
+          "v3.0.0-alpha.5+edge.1",
+        ],
+        2,
+      ),
+    ).toEqual(["v3.0.0-alpha.10", "v3.0.0-alpha.9", "v3.0.0-alpha.3"]);
+  });
+
+  const TAGS_345 = [
+    "edge",
+    "v3.0.0-alpha.3",
+    "v3.0.0-alpha.5",
+    "v3.0.0-alpha.4",
+    "v3.0.0-alpha.2",
+    "v3.0.0-alpha.1",
+  ];
+
+  test("R586d: a newest pass stops the run: no older candidate is downloaded or gated", async () => {
+    await setup();
+    const { deps, seen } = fake({ outcome: "pass", tags: TAGS_345 });
+    expect(await updateOnce(deps)).toEqual(["pass"]);
+    expect(seen.tagsGated).toEqual(["v3.0.0-alpha.5"]);
+    expect(seen.downloads).toBe(1);
+    expect(await current()).toBe(join(root, "3.0.0-alpha.5-c893e3633"));
+  });
+
+  test("R586d: a newest fail falls back to the next older candidate, which passes and becomes current", async () => {
+    await setup();
+    const { deps, seen } = fake({
+      tags: TAGS_345,
+      byTag: { "v3.0.0-alpha.5": "gate-fail", "v3.0.0-alpha.4": "pass" },
+    });
+    expect(await updateOnce(deps)).toEqual(["gate-fail", "pass"]);
+    expect(seen.tagsGated).toEqual(["v3.0.0-alpha.5", "v3.0.0-alpha.4"]);
+    expect(await current()).toBe(join(root, "3.0.0-alpha.4-c893e3633"));
+  });
+
+  test("R586d: held and infra-fail also fall back to an older candidate", async () => {
+    await setup();
+    const { deps, seen } = fake({
+      tags: TAGS_345,
+      byTag: { "v3.0.0-alpha.5": "held", "v3.0.0-alpha.4": "infra-fail", "v3.0.0-alpha.3": "pass" },
+    });
+    expect(await updateOnce(deps)).toEqual(["held", "infra-fail", "pass"]);
+    expect(seen.tagsGated).toEqual(["v3.0.0-alpha.5", "v3.0.0-alpha.4", "v3.0.0-alpha.3"]);
+    expect(await current()).toBe(join(root, "3.0.0-alpha.3-c893e3633"));
+    expect(
+      seen.logs.some((l) =>
+        l.includes("v3.0.0-alpha.3: passed after v3.0.0-alpha.4 was not judged (infra-fail) today"),
+      ),
+    ).toBe(true);
+  });
+
+  test("R586d: all candidates fail: current is unchanged and each failure is recorded", async () => {
+    await setup();
+    const { deps, seen } = fake({ outcome: "gate-fail", tags: TAGS_345 });
+    expect(await updateOnce(deps)).toEqual(["gate-fail", "gate-fail", "gate-fail"]);
+    expect(seen.tagsGated).toEqual(["v3.0.0-alpha.5", "v3.0.0-alpha.4", "v3.0.0-alpha.3"]);
+    for (const n of [3, 4, 5])
+      expect(existsSync(join(failedAt(`v3.0.0-alpha.${n}`), "al-runner"))).toBe(true);
+    expect(await current()).toBe(join(root, "3.0.0-alpha.2-91253f2d6"));
+  });
+
+  test("R586d: a candidate already in failed/<tag>@<this commit> is skipped without a gate; the next older one is tried", async () => {
+    await setup();
+    await mkdir(failedAt("v3.0.0-alpha.5"), { recursive: true });
+    const { deps, seen } = fake({ outcome: "pass", tags: TAGS_345 });
+    expect(await updateOnce(deps)).toEqual(["gate-fail", "pass"]);
+    expect(seen.tagsGated).toEqual(["v3.0.0-alpha.4"]);
+    expect(await current()).toBe(join(root, "3.0.0-alpha.4-c893e3633"));
   });
 
   test("pass: installed with .gated naming the gating commit, current moved; the gate ran at .gated's lethalCommit", async () => {
@@ -554,6 +641,17 @@ linuxOnly("the daily edge path (edgeOnce)", () => {
     expect(seen.gates).toEqual([GATED_COMMIT]);
     expect(await current()).not.toBe(join(root, "3.0.0-alpha.2-91253f2d6"));
     expect((await readFile(join(root, "edge.last-seen"), "utf8")).trim()).toBe("c893e3633");
+  });
+
+  test("R586d: --edge stays a single candidate: a failing edge never falls back to a release", async () => {
+    await setup();
+    const { deps, seen } = edge({
+      outcome: "gate-fail",
+      tags: ["edge", "v3.0.0-alpha.5", "v3.0.0-alpha.4", "v3.0.0-alpha.2"],
+    });
+    expect(await edgeOnce(deps)).toBe("gate-fail");
+    expect(seen.tagsGated).toEqual(["edge-c893e3633"]);
+    expect(await current()).toBe(join(root, "3.0.0-alpha.2-91253f2d6"));
   });
 
   test("a bad hash is refused and nothing is extracted; the commit is NOT marked seen (retried)", async () => {
