@@ -38,7 +38,11 @@ export function dependentsWarning(
     return `[lethal] R727: could not check which installed apps depend on the target ${target.name} (${reason}); if an installed app depends on it and this build breaks it, BC removes that app (R709).`;
   }
   if (read <= k) return null;
-  return `[lethal] R727: ${read} published app(s) depend on the target ${target.name} (${target.id}); this run accounts for ${k} (its tests app). If this build breaks one of the others, BC refuses the upgrade and removes it (R709). Names need LethAL Control 1.0.0.24; the count includes every published version.`;
+  const own =
+    k === 1
+      ? "this run accounts for 1 (its tests app)"
+      : "this run accounts for 0 (its tests app does not depend on the target)";
+  return `[lethal] R727: ${read} published app(s) depend on the target ${target.name} (${target.id}); ${own}. If this build breaks one of the others, BC refuses the upgrade and removes it (R709). The count includes every published version; naming the apps needs a newer LethAL Control (R733).`;
 }
 
 /** One read-only call, then the message. No `dependentCount` on the backend: no call, no message. */
