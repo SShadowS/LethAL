@@ -405,13 +405,10 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
  * `/coord/handoff/R-654/s2-record.log`) at 7 / 3 / 0, 5 / 4 / 0 and 5 / 4 / 0 as pre-committed
  * (43115c78), each identical per mutant to its .NET al-runner twin.
  * R602's two v3 legs (`al-runner-v3.multiobject.baseline.json`, `al-runner-v3.wrapped.baseline.json`)
- * wait here for their record run, after their pre-commitment is on master. The commit that records
- * them empties this list.
+ * waited here and were recorded once on 2026-10-24 (R-602, after their pre-commitment c2f67f0a), equal to
+ * it per mutant; the list is empty again.
  */
-export const PENDING_FIRST_RECORD: readonly string[] = [
-  "al-runner-v3.multiobject.baseline.json",
-  "al-runner-v3.wrapped.baseline.json",
-];
+export const PENDING_FIRST_RECORD: readonly string[] = [];
 
 /** R332: thrown after a gate record run wrote its baseline. The gate exits 3: never a pass. */
 export class BaselineRecordedError extends Error {
