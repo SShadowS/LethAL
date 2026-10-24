@@ -150,6 +150,7 @@ import {
   GROUP_SUITE_UNRESOLVED_HEAD,
   ONRUN_HINT,
   STALE_TEST_APP_REMEDY,
+  StaleDependencyMemberError,
   StaleTargetMemberError,
   StaleTestAppError,
   TestAppChangedError,
@@ -3102,13 +3103,20 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
       expect(backend.ranActive).toBe(0);
     });
 
-    test("the same text naming a NON-target object does not refuse (another app's member)", async () => {
+    test("R740: the same text naming a NON-target object refuses as a stale DEPENDENCY member", async () => {
       const dirs = await qualProject();
       const backend = new QualificationBackend(failing(staleOn(130440)));
       const store = new ResultsStore(":memory:");
-      // red when any object id refuses, not only the target's own
-      const report = await runSession({ backend, store, ...dirs, selectorIds });
-      expect(report.baselineGreen).toBe(false);
+      const err = await runSession({ backend, store, ...dirs, selectorIds }).then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      // red when a non-target object reaches R738's error (its remedy blames the target)
+      expect(err).not.toBeInstanceOf(StaleTargetMemberError);
+      // red when a non-target stale member is left as an ordinary failure (the silent drop)
+      expect(err).toBeInstanceOf(StaleDependencyMemberError);
+      expect((err as Error).message).toContain("130440");
+      expect(backend.ranActive).toBe(0);
     });
 
     test("a target with an interface and a permissionset (no header objectHeadersOf reads) still runs", async () => {
