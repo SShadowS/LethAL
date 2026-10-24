@@ -256,6 +256,62 @@ export class StaleTestAppError extends Error {
 }
 
 /**
+ * R738: BC's run-time answer when a test calls a member its object no longer has, measured on bc2
+ * (R-738) for a removed member AND for a changed signature: "Function ID <n> was called. The object
+ * with ID <id> does not have a member with that ID." It arises when this run's own altool publish
+ * (accepted: altool does not ask BC to recompile installed dependents, R728) removed or re-signed a
+ * target member the INSTALLED tests app still calls. Read structurally from the message's FIRST
+ * line only (BC's sentence, never the call stack), anchored to its measured start: "Function ID
+ * <n> was called. The object with ID <id> does not have a member". Returns that id only when it is
+ * one of `targetIds` (the target's own declared objects); a member of another app's object is left
+ * as an ordinary failure. LIMITS: English text only; the fenced (RunMutant) path's layout only,
+ * as measured; the line-count wrapper and the legacy hub path are not read.
+ */
+const STALE_MEMBER =
+  /^Function ID \d+ was called\. The object with ID (\d+) does not have a member\b/;
+export function staleTargetMember(
+  failureText: string | undefined,
+  targetIds: ReadonlySet<number>,
+): number | undefined {
+  const first = failureText?.split("\n", 1)[0];
+  const m = first === undefined ? null : STALE_MEMBER.exec(first);
+  const id = m?.[1] === undefined ? undefined : Number(m[1]);
+  return id !== undefined && targetIds.has(id) ? id : undefined;
+}
+
+/** R738: one baseline test that failed on a stale target member, and the object BC named. */
+export interface StaleTargetMemberFinding {
+  readonly name: string;
+  readonly objectId: number;
+}
+
+/**
+ * R738: refuses the session when baseline tests failed because the INSTALLED tests app calls a
+ * member of the target that this run's build no longer has (removed, or its signature changed).
+ * Without it those tests silently left the green set and every mutant they covered read
+ * `no-coverage` (measured: a 100% score). Not a "missing test" (`StaleTestAppError`): the tests
+ * exist, they are compiled against an older target. Extends `Error` directly.
+ */
+export class StaleTargetMemberError extends Error {
+  readonly staleTests: readonly string[];
+
+  constructor(findings: readonly StaleTargetMemberFinding[]) {
+    const names = findings.map((f) => f.name);
+    const objects = [...new Set(findings.map((f) => f.objectId))].join(", ");
+    super(
+      `${findings.length} baseline test(s) failed because the installed tests app calls a member that this ` +
+        `run's target build no longer has (BC: "The object with ID ${objects} does not have a member with that ID"; ` +
+        `a removed procedure or a changed signature): ${names.join(", ")}. LethAL refused rather than drop them ` +
+        "from the green set, which would score every mutant they cover no-coverage. The tests app on the server " +
+        "was compiled against an older target: republish the tests app built against the current target " +
+        `source, then re-run. ${STALE_TEST_APP_REMEDY}`,
+    );
+    this.name = "StaleTargetMemberError";
+    this.staleTests = names;
+  }
+}
+
+/**
  * R462: the published test app's package CHANGED between the read at the start of this batch's
  * baseline and the read at the refusal, so another publish landed in that interval. Extends `Error`
  * directly, for the same reason `StaleTestAppError` does.
