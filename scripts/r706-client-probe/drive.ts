@@ -24,11 +24,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+// The SDK is a dependency of packages/runner only, so it is not resolvable by name from scripts/.
+// Imported by path into runner's node_modules (its package.json `exports` points at dist/esm).
+import { Client } from "../../packages/runner/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js";
 import {
   StdioClientTransport,
   getDefaultEnvironment,
-} from "@modelcontextprotocol/sdk/client/stdio.js";
+} from "../../packages/runner/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js";
 import { bcFetch } from "../../packages/runner/src/bc-fetch";
 import { HarnessVerifier } from "../../packages/runner/src/harness";
 import { type Lease, LeaseClient } from "../../packages/runner/src/lease";
@@ -44,7 +46,13 @@ import {
   rowVersion,
   rows,
 } from "../bc-app-content.ts";
-import { bcDevMcpCommand, errText, readSecretFile } from "../bc-linux-setup.ts";
+import {
+  SECRET_PATH,
+  bcDevMcpCommand,
+  describeLogin,
+  errText,
+  readSecretFile,
+} from "../bc-linux-setup.ts";
 import {
   NONE,
   type PathClass,
@@ -155,7 +163,48 @@ interface Call {
   note?: string;
 }
 
+/** The pre-committed bytes: copied into the evidence folder, or a StopBeforePublish. */
+function checkApps(): { sha: Record<string, string>; bytes: Record<string, Buffer> } {
+  mkdirSync(join(EVIDENCE, "apps"), { recursive: true });
+  const sha: Record<string, string> = {};
+  const bytes: Record<string, Buffer> = {};
+  for (const a of [TARGET, TESTS]) {
+    const b = readFileSync(join(R639_BUILD, a.file));
+    sha[a.file] = new Bun.CryptoHasher("sha256").update(b).digest("hex");
+    if (sha[a.file] !== a.sha256)
+      throw new StopBeforePublish(`${a.file} sha256 ${sha[a.file]} is not ${a.sha256}`);
+    writeFileSync(join(EVIDENCE, "apps", a.file), b);
+    bytes[a.file] = b;
+  }
+  return { sha, bytes };
+}
+
+/** `--dry-run`: everything local, then exit 0. No server call, no lease check, no publish. */
+function dryRun(): number {
+  const mods = {
+    Client: typeof Client,
+    StdioClientTransport: typeof StdioClientTransport,
+    getDefaultEnvironment: typeof getDefaultEnvironment,
+    HarnessVerifier: typeof HarnessVerifier,
+    LeaseClient: typeof LeaseClient,
+    RunMutantTransport: typeof RunMutantTransport,
+  };
+  console.log(`modules loaded: ${JSON.stringify(mods)}`);
+  console.log(`app hashes ok: ${JSON.stringify(checkApps().sha)}`);
+  console.log(`bc-dev-mcp: ${JSON.stringify(mcpBuildFacts())}`);
+  console.log(`bc-dev-mcp command: ${JSON.stringify(bcDevMcpCommand())}`);
+  const login = readSecretFile();
+  console.log(`login file ${SECRET_PATH}: ${describeLogin(login)}`);
+  for (const k of CASES)
+    console.log(
+      `hub args ${k.codeunit}: ${JSON.stringify(hubArgs(k.codeunit, k.method, SERVERS.bc1))}`,
+    );
+  console.log("dry run ok: no server call, no lease check");
+  return 0;
+}
+
 async function main(): Promise<number> {
+  if (process.argv.includes("--dry-run")) return dryRun();
   let holder: string;
   try {
     if (existsSync(OUT_OF_USE)) throw new Error(`${OUT_OF_USE} exists`);
@@ -206,17 +255,7 @@ async function main(): Promise<number> {
   doc.runs = [];
   try {
     // Hashes first: the pre-committed bytes, copied into the evidence folder, or nothing.
-    mkdirSync(join(EVIDENCE, "apps"), { recursive: true });
-    const sha: Record<string, string> = {};
-    const bytes: Record<string, Buffer> = {};
-    for (const a of [TARGET, TESTS]) {
-      const b = readFileSync(join(R639_BUILD, a.file));
-      sha[a.file] = new Bun.CryptoHasher("sha256").update(b).digest("hex");
-      if (sha[a.file] !== a.sha256)
-        throw new StopBeforePublish(`${a.file} sha256 ${sha[a.file]} is not ${a.sha256}`);
-      writeFileSync(join(EVIDENCE, "apps", a.file), b);
-      bytes[a.file] = b;
-    }
+    const { sha, bytes } = checkApps();
     doc.appSha256 = sha;
     doc.bcDevMcp = mcpBuildFacts();
 
@@ -465,6 +504,20 @@ function wsCall(codeunit: number, codeunitResults: unknown): Call {
   };
 }
 
+/** The `bcdev_test_run` arguments (no secrets: the login travels in the child's env). */
+function hubArgs(codeunit: number, method: string, ports: { dev: number }) {
+  return {
+    codeunits: [{ id: codeunit, methods: [method] }],
+    coverage: "none",
+    project: PROJECT,
+    server: `${HOST}:${ports.dev}`,
+    serverInstance: "BC",
+    tenant: "default",
+    port: ports.dev,
+    company: COMPANY,
+  };
+}
+
 interface HubResult {
   call: Call;
   raw: unknown;
@@ -485,16 +538,7 @@ async function hubCall(
     BC_DEV_API_PORT: String(ports.api),
   };
   const client = new Client({ name: "lethal-r706", version: "0.0.0" });
-  const args = {
-    codeunits: [{ id: codeunit, methods: [method] }],
-    coverage: "none",
-    project: PROJECT,
-    server: `${HOST}:${ports.dev}`,
-    serverInstance: "BC",
-    tenant: "default",
-    port: ports.dev,
-    company: COMPANY,
-  };
+  const args = hubArgs(codeunit, method, ports);
   const none = (note: string, raw: unknown, overrun = false): HubResult => ({
     call: { codeunit, method, reading: NONE, runner: null, note },
     raw: { args, note, response: raw },
