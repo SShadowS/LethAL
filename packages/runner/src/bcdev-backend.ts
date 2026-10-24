@@ -1,4 +1,5 @@
 import { appendFile, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { MutantManifest } from "@lethal/schemata";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -15,6 +16,7 @@ import {
   buildPackageCacheCopy,
   isControlSymbolName,
   removePackageCacheCopy,
+  removeWithRetry,
 } from "./artifact";
 import type { ArtifactCompiler, CompileInput, CompiledArtifact } from "./artifact";
 import type {
@@ -251,6 +253,8 @@ export interface BcDevDeployment {
   readonly deployer: AppPublisher;
   readonly verifier: DeploymentVerifier;
   readonly harnessVerifier: HarnessVerifier;
+  /** R708: test seam for the staged-copy cleanup. Default: `removeWithRetry`. */
+  readonly removeDir?: (path: string) => Promise<void>;
 }
 
 /**
@@ -408,6 +412,22 @@ export function unreadOfError(
   let text = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
   for (const s of secrets) if (s.length > 0) text = text.split(s).join("***");
   return { unread: `the request failed (${text})` };
+}
+
+/**
+ * R708: reclaim a staged compile copy with retries (Windows scanners hold fresh files). Never
+ * throws: the compile outcome is already decided and must not be masked. A copy that still
+ * cannot be removed is named in a warning, not swallowed.
+ */
+async function removeStagedCopy(
+  staged: string,
+  remove: (path: string) => Promise<void> = removeWithRetry,
+): Promise<void> {
+  await remove(staged).catch((e) =>
+    console.warn(
+      `[lethal] could not remove the staged compile copy ${staged}: ${describeThrown(e)}`,
+    ),
+  );
 }
 
 export class BcDevMcpBackend implements ExecutionBackend {
@@ -764,7 +784,12 @@ export class BcDevMcpBackend implements ExecutionBackend {
    */
   private async stageForCompile(instrumentedDir: string): Promise<string> {
     const staging = `${instrumentedDir}-staged`;
-    await rm(staging, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    await (this.deployment?.removeDir ?? removeWithRetry)(staging);
+    if (existsSync(staging)) {
+      throw new ArtifactPrepareError(
+        `could not clear the staged compile copy ${staging} before staging`,
+      );
+    }
     await cp(instrumentedDir, staging, { recursive: true });
     try {
       // Inject the dependency into the STAGED app.json only (never the shared instrumented dir).
@@ -787,7 +812,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
         console.warn(dangling);
       }
     } catch (e) {
-      await rm(staging, { recursive: true, force: true }).catch(() => {});
+      await removeStagedCopy(staging, this.deployment?.removeDir);
       throw e;
     }
     return staging;
@@ -966,9 +991,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
       // reads `artifact.appPath` (the compiled .app in outputDir). Best-effort, same idiom as
       // compileCheck()'s own cleanup — a compile already decided the outcome by here, so a
       // stray cleanup failure must never mask it.
-      await rm(staged, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch(
-        () => {},
-      );
+      await removeStagedCopy(staged, deployment.removeDir);
     }
     // See `indexArtifact`'s doc comment: must happen before publish().
     await this.indexArtifact(artifact.appPath, instrumentedDir, artifact.mutantManifest);
@@ -1119,7 +1142,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
       const artifact = await this.compileStaged(deployment.compiler, staged);
       await rm(artifact.appPath, { force: true }).catch(() => {});
     } finally {
-      await rm(staged, { recursive: true, force: true }).catch(() => {});
+      await removeStagedCopy(staged, deployment.removeDir);
     }
   }
 
@@ -1218,7 +1241,8 @@ export class BcDevMcpBackend implements ExecutionBackend {
         : await this.runViaTransport(ref, opts);
     // R272: one call per test on both paths, so `durationMs` is this test's own wall clock. Not a
     // recovered reply (R236b), whose duration is the time until the reply was declared lost. Not a
-    // negative one: a `Date.now()` delta goes below 0 when the clock steps back.
+    // negative one: the hub path's `Date.now()` delta can go below 0 when the clock steps back (the
+    // transport is monotonic since R710).
     return v.outcome === "pass" && v.replyRecovered === undefined && v.durationMs >= 0
       ? { ...v, measuredDurationMs: v.durationMs }
       : v;

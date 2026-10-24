@@ -42,6 +42,7 @@ describe("R582: hang's two stop rows per timeout kill", () => {
   test("a re-run row out of band fails, both ends", () => {
     expect(check([stop(), stop({ duration_ms: 19_999 })])[0]).toContain("outside [20000, 50000)");
     expect(check([stop(), stop({ duration_ms: 50_000 })])[0]).toContain("outside [20000, 50000)");
+    expect(check([stop(), stop({ duration_ms: 5_000 })])[0]).toContain("outside [20000, 50000)");
   });
 
   test("a timeout row of another method, an unmutated row and another mutant's row are ignored", () => {
