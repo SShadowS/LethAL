@@ -1414,6 +1414,24 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     const verdict = v3RowVerdict(ref, row, call.stopSeconds, call.wallMs, coverage);
     if (this.lastActivated === null) return verdict;
+    // R586c (B2): alpha.5 counts a Sleep toward --test-timeout-secs on a VIRTUAL clock, so a test it
+    // "stopped at 3 s" returned after a few ms. A genuine CPU stop has a wall time of at least the
+    // stop (n x 1000 ms). Under a mutant, an earlier one is not a real timeout and must not kill:
+    // error, never scored. Here (mutant active), not in `v3RowVerdict`: baselines keep reading such
+    // a row as a timeout (X (d)'s 600 s Sleep siblings, R678's baseline symmetry).
+    if (
+      verdict.outcome === "timeout" &&
+      typeof row.durationMs === "number" &&
+      row.durationMs < (verdict.reportedStopMs ?? 0)
+    )
+      return {
+        ref,
+        outcome: "error",
+        durationMs: call.wallMs,
+        failureMessage: `${row.message ?? ""} [al-runner v3: stopped on v3's virtual clock; BC's real wait unknown; never scored]`,
+        operation: "completed-accepted",
+        runnerRow: "runner-refused",
+      };
     // R-435 (upstream #5776): v3 marks a later FAILURE after an unfinished test as not trusted, but
     // not a later TIMEOUT. A timeout after a row that was refused or stopped (or holds the refusal
     // marker) may come from that row's partial state. Outside entries mode a call runs the whole
