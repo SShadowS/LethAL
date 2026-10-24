@@ -398,15 +398,16 @@ function bunTest(cwd: string, args: string[], env: Env): { code: number; out: st
   return { code: r.exitCode ?? 1, out: `${r.stdout.toString()}${r.stderr.toString()}` };
 }
 
-// CI is serial (P=1) on every OS and Windows `bun test --parallel` is unmeasured (R593 follow-up), so
-// the two --parallel spawn tests run where verify.ts runs parallel: Linux and macOS.
+// R603: CI's Windows job runs verify.ts parallel (P=4, measured per test name), so A5 runs on every OS.
+// A7 still skips on Windows: it failed there in CI run 40064651790, cause not yet read (R704). The two
+// --parallel watchdog tests below also still skip on Windows: their kill paths are not measured there.
 const parallelOs = test.skipIf(process.platform === "win32");
 // On Windows Bun's `process.kill(pid, "SIGTERM")` is libuv's TerminateProcess, which no handler can
 // catch, so a file deaf to SIGTERM cannot exist there: the SIGKILL step has nothing to escalate.
 const posixSignals = test.skipIf(process.platform === "win32");
 
 describe("spawned bun test (the guards hold inside --parallel workers)", () => {
-  parallelOs("A5 a missing snapshot is refused serial AND --parallel=2 under testChildEnv", () => {
+  test("A5 a missing snapshot is refused serial AND --parallel=2 under testChildEnv", () => {
     const dir = tempDir("a5");
     try {
       writeFileSync(
@@ -654,8 +655,8 @@ describe("R622 the per-file watchdog", () => {
       ),
     )?.length ?? 0;
 
-  // Skipped on Windows for the same reason as A5 and A7 above: Windows `bun test --parallel` is
-  // unmeasured. The serial watchdog tests below run there.
+  // Skipped on Windows (`parallelOs`): R603 measured Windows `--parallel` for the suite, not a
+  // parallel worker's watchdog kill. The serial watchdog tests below run there.
   parallelOs(
     "--parallel=2: a file that spins past the limit fails the run in seconds, named once; the other file passes",
     async () => {
