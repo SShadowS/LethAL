@@ -466,6 +466,10 @@ export class BcDevMcpBackend implements ExecutionBackend {
   // (coverage: "none") passes it to a single RunMutant OData call that activates+runs+clears
   // server-side. The transport is built at deploy() once the target's identity is known.
   private pendingMutantId: string | null = null;
+  /** R734: the ids the DEPLOYED manifest holds, so a mutant that was removed from a redeployed
+   *  artifact (it broke the compile) can never be sent to RunMutant and scored. */
+  private deployedIds: ReadonlySet<string> | undefined;
+  private isolatedIds: ReadonlySet<string> | undefined;
   private runMutantTransport: RunMutantTransport | undefined;
   // R499: the one control state every transport this backend binds shares (in-flight orphans and a
   // late refusal), so a re-deploy/attach never strands a refusal on a replaced transport.
@@ -860,6 +864,10 @@ export class BcDevMcpBackend implements ExecutionBackend {
     instrumentedDir: string,
     manifest: MutantManifest,
   ): Promise<void> {
+    // An artifact with no mutants has nothing to refuse against; one that lists the mutants it
+    // dropped (`isolatedOut`) refuses exactly those even when it holds none.
+    this.deployedIds = new Set(manifest.mutants.map((m) => m.mutantId));
+    this.isolatedIds = new Set((manifest.isolatedOut ?? []).map((m) => m.mutantId));
     this.methodIndex = await AppMethodIndex.fromAppFile(appPath);
     const keys = manifestObjectKeys(manifest.mutants);
     if ((this.cfg.coverageMode ?? DEFAULT_COVERAGE_MODE) === "fenced") {
@@ -883,6 +891,8 @@ export class BcDevMcpBackend implements ExecutionBackend {
 
   /** `indexArtifact` over the in-memory copy `loadInstalledArtifact` verified; reads no file. */
   private async indexInstalled(artifact: BoundArtifact): Promise<void> {
+    this.deployedIds = undefined; // `lethal verify` resolves its ids against the stored manifest
+    this.isolatedIds = undefined;
     this.methodIndex = AppMethodIndex.fromAppBytes(artifact.appBytes);
     if ((this.cfg.coverageMode ?? DEFAULT_COVERAGE_MODE) === "fenced") {
       this.lineMap = await lineMapFromSources(
@@ -1193,6 +1203,19 @@ export class BcDevMcpBackend implements ExecutionBackend {
     });
   }
 
+  /** R734 A1: refuse a mutant the deployed manifest does not hold (one removed after it broke the
+   *  compile). `activate` stays bookkeeping that never throws; the refusal fires before any send. */
+  private assertPendingDeployed(): void {
+    const id = this.pendingMutantId;
+    if (id === null || id === "" || this.deployedIds === undefined) return;
+    const unknown = this.deployedIds.size > 0 && !this.deployedIds.has(id);
+    if (unknown || this.isolatedIds?.has(id) === true) {
+      throw new Error(
+        `BcDevMcpBackend: mutant ${id} is not in the deployed artifact's manifest (it was removed after it broke the compile); refusing to run it (R734)`,
+      );
+    }
+  }
+
   async activate(mutantId: string | null): Promise<void> {
     // Bookkeeping only (Layer 5C-A): RunMutant folds activate + run-one-method + clear into a
     // single OData call, so there is NO persistent server-side active state to set here. Record
@@ -1284,6 +1307,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
         "BcDevMcpBackend: runMany() is for a MUTANT run; no mutant is pending, and a baseline keeps the single-method call because coverage is per test",
       );
     }
+    this.assertPendingDeployed();
     this.attemptSeq += 1;
     const opSeq = this.nextOpSeq;
     this.nextOpSeq += 1;
@@ -1335,6 +1359,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
         `BcDevMcpBackend: a fenced-coverage run is a BASELINE run, but mutant ${this.pendingMutantId} is still pending — ${why}`,
       );
     }
+    this.assertPendingDeployed();
     this.attemptSeq += 1;
     const opSeq = this.nextOpSeq;
     this.nextOpSeq += 1;

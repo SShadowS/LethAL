@@ -286,7 +286,7 @@ describe("R461: the unmutated build is compiled once, at the first compile failu
     const store = new ResultsStore(":memory:");
     const report = await runSession({ backend, store, ...dirs, selectorIds });
     const noted = report.mutants.find((m) => m.verdict === "error");
-    expect(noted?.failureNote).toContain("bisected to mutant");
+    expect(noted?.failureNote).toContain("fails to compile on its own");
     expect(noted?.failureNote).toContain("lethal.conditional-boundary");
     expect(backend.plainCompiles).toBe(1);
     // No selector, no install/upgrade codeunit, no manifest, and the .al byte-identical to the source.
@@ -418,7 +418,8 @@ describe("R461: the unmutated build is compiled once, at the first compile failu
     const store = new ResultsStore(":memory:");
     const report = await runSession({ backend, store, ...dirs, selectorIds, maxGuardsPerBatch: 1 });
     expect(report.batches).toBe(2);
-    expect(backend.deploys).toBe(2);
+    // Each batch: the failed deploy, then (R734) the clean set's redeploy.
+    expect(backend.deploys).toBe(4);
     expect(backend.plainCompiles).toBe(1);
     store.close();
   });

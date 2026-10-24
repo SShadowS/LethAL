@@ -1853,6 +1853,8 @@ type Seed = {
   readonly carried?: boolean;
   /** No store row: the source run stopped before scoring it. */
   readonly unrecorded?: boolean;
+  /** R734: a row with no manifest entry (the mutant was isolated out of a redeployed artifact). */
+  readonly notInManifest?: boolean;
 };
 
 function seed(
@@ -1862,9 +1864,10 @@ function seed(
   over: Partial<MutantManifestEntry> & {
     readonly carried?: boolean;
     readonly unrecorded?: boolean;
+    readonly notInManifest?: boolean;
   } = {},
 ): Seed {
-  const { carried, unrecorded, ...rest } = over;
+  const { carried, unrecorded, notInManifest, ...rest } = over;
   return {
     entry: entry(mutantId, {
       startLine: Number(mutantId.slice(1)),
@@ -1874,6 +1877,7 @@ function seed(
     verdict,
     ...(carried !== undefined ? { carried } : {}),
     ...(unrecorded !== undefined ? { unrecorded } : {}),
+    ...(notInManifest !== undefined ? { notInManifest } : {}),
   };
 }
 
@@ -1885,12 +1889,14 @@ function installedRun(
   projectPath = "P",
   sourceSha256 = "5".repeat(64),
   coveringTests: readonly string[] = ["T.M"],
+  isolatedOut?: MutantManifest["isolatedOut"],
 ): number {
   const dir = scratch("lethal-verify-gap-");
   const manifest: MutantManifest = {
     selectorIds: { selectorId: 1, controlId: 2, tableId: 3 },
     artifactId,
-    mutants: seeds.map((s) => s.entry),
+    mutants: seeds.filter((s) => s.notInManifest !== true).map((s) => s.entry),
+    ...(isolatedOut !== undefined ? { isolatedOut } : {}),
   };
   const manifestText = JSON.stringify(manifest);
   writeFileSync(join(dir, "mutant-manifest.json"), manifestText);
@@ -2106,6 +2112,57 @@ describe("C02-09: gap ids", () => {
       expect((e as Error).message).toContain("(a corrupt store)");
     }
     store.close();
+  });
+
+  // R734 A5: a mutant isolated out of a redeployed artifact has an `error` row and no manifest entry.
+  // Only the manifest's own hash-covered `isolatedOut` list excuses that, and only for an `error`.
+  describe("R734: rows of mutants isolated out of the artifact", () => {
+    const out = (id: string) => ({
+      mutantId: id,
+      file: "F.al",
+      startIndex: 1,
+      endIndex: 2,
+      operatorName: "op",
+    });
+    test("a listed `error` row is not a corrupt store; the gap still expands", async () => {
+      const store = new ResultsStore(":memory:");
+      installedRun(
+        store,
+        A1,
+        [seed("M0001", GA, "survived"), seed("M0002", GA, "error", { notInManifest: true })],
+        "P",
+        "5".repeat(64),
+        ["T.M"],
+        [out("M0002")],
+      );
+      expect(idsOf(await expandGapIds(store, parseVerifyRequest(A1, [GA])))).toEqual(["0/M0001"]);
+      store.close();
+    });
+    test("an unlisted manifest-less row is still a corrupt store", async () => {
+      const store = new ResultsStore(":memory:");
+      installedRun(store, A1, [
+        seed("M0001", GA, "survived"),
+        seed("M0002", GA, "error", { notInManifest: true }),
+      ]);
+      const e = await expandGapIds(store, parseVerifyRequest(A1, [GA])).catch((x: unknown) => x);
+      expect((e as Error).message).toContain("(a corrupt store)");
+      store.close();
+    });
+    test("a listed id with a verdict other than `error` is still a corrupt store", async () => {
+      const store = new ResultsStore(":memory:");
+      installedRun(
+        store,
+        A1,
+        [seed("M0001", GA, "survived"), seed("M0002", GA, "survived", { notInManifest: true })],
+        "P",
+        "5".repeat(64),
+        ["T.M"],
+        [out("M0002")],
+      );
+      const e = await expandGapIds(store, parseVerifyRequest(A1, [GA])).catch((x: unknown) => x);
+      expect((e as Error).message).toContain("(a corrupt store)");
+      store.close();
+    });
   });
 
   test("on a FINISHED run with every row recorded, a gap still expands", async () => {

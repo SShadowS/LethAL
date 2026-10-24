@@ -66,6 +66,26 @@ export interface WriteInput {
    * basename with one of them (tests and scripts writing a hand-built set). A real run passes it.
    */
   readonly flatNames?: FlatNames;
+  /**
+   * R734: the ids a narrowed REWRITE must keep, keyed by `identitySiteKey`. After a compile failure
+   * the clean mutants are redeployed (and every isolation candidate is compiled) under the ids they
+   * had in the failed artifact, so rows, selector and control state all name one mutant by one id.
+   * Absent: ids are numbered fresh. Given: every spec must have an entry, else this throws; a spec
+   * with no id is never numbered silently.
+   */
+  readonly fixedIds?: ReadonlyMap<string, string>;
+  /** R734: the mutants removed from this artifact because they broke the compile; written into the
+   *  manifest so a reader can tell a row with no manifest entry from a lost one. */
+  readonly isolatedOut?: readonly IsolatedOut[];
+}
+
+/** R734: one mutant left out of a redeployed artifact (never any source text). */
+export interface IsolatedOut {
+  readonly mutantId: string;
+  readonly file: string;
+  readonly startIndex: number;
+  readonly endIndex: number;
+  readonly operatorName: string;
 }
 
 /** C02-09: a gap's id. Reads the file (separators normalised), the block's position and its source
@@ -556,6 +576,8 @@ export interface MutantManifest {
   readonly selectorIds: SelectorConfig;
   readonly artifactId: string;
   readonly mutants: readonly MutantManifestEntry[];
+  /** R734: present only on an artifact redeployed after a compile failure. */
+  readonly isolatedOut?: readonly IsolatedOut[];
 }
 
 /** RUST-03 S4.2a: the offset of every line's first character, built once per file. */
@@ -724,6 +746,27 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
   const specsByFile = new Map<string, readonly MutationSpec[]>();
   for (const f of input.files) specsByFile.set(f.path, dedupeSpecs(f.specs, tierOf));
   const idedByFile = assignMutantIds(specsByFile);
+  const { fixedIds } = input;
+  if (fixedIds !== undefined) {
+    const used = new Set<string>();
+    for (const [path, list] of idedByFile) {
+      idedByFile.set(
+        path,
+        list.map(({ spec }) => {
+          const mutantId = fixedIds.get(
+            identitySiteKey(path, spec.before.startIndex, spec.before.endIndex, spec.operatorName),
+          );
+          if (mutantId === undefined || used.has(mutantId)) {
+            throw new Error(
+              `writeInstrumentedProject: no fixed id for (${path}, ${spec.before.startIndex}..${spec.before.endIndex}, ${spec.operatorName}), or its id is used twice (R734)`,
+            );
+          }
+          used.add(mutantId);
+          return { mutantId, spec };
+        }),
+      );
+    }
+  }
 
   // R374: rows are numbered from the run-wide `identityOrdinals`, never per batch.
   const rows: { -readonly [K in keyof MutantManifestEntry]: MutantManifestEntry[K] }[] = [];
@@ -894,6 +937,7 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
     selectorIds: input.selectorIds,
     artifactId: input.artifactId,
     mutants: manifest,
+    ...(input.isolatedOut !== undefined ? { isolatedOut: input.isolatedOut } : {}),
   };
   await writeManifestJson(join(input.targetDir, "mutant-manifest.json"), manifestJson);
 }
@@ -914,7 +958,10 @@ export interface ManifestIo {
 }
 
 // If MutantManifest gains a field, writeManifestJson must write it too: this fails typecheck first.
-type _ManifestKeys = Exclude<keyof MutantManifest, "selectorIds" | "artifactId" | "mutants">;
+type _ManifestKeys = Exclude<
+  keyof MutantManifest,
+  "selectorIds" | "artifactId" | "mutants" | "isolatedOut"
+>;
 const _manifestKeysCovered: [_ManifestKeys] extends [never] ? true : never = true;
 void _manifestKeysCovered;
 
@@ -968,6 +1015,9 @@ export async function writeManifestJson(
           }
         }
         await writeAll(`${chunk}\n  ]`);
+      }
+      if (manifest.isolatedOut !== undefined) {
+        await writeAll(`,\n  "isolatedOut": ${nest(manifest.isolatedOut, "  ")}`);
       }
       await writeAll("\n}\n");
       written = true;

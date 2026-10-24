@@ -9,7 +9,9 @@ import {
 import { synthesizeAfter } from "./mutate-helpers";
 
 const OPERATOR_NAME = "lethal.toggle-blank-string";
-const OPERATOR_VERSION = "1.0.0";
+/** R731: 1.1.0, MINOR. A one-character literal assigned to a Char (or an untyped target) is no longer
+ *  claimed; no replacement text changes, and the identity tuple reads the major only. */
+const OPERATOR_VERSION = "1.1.0";
 
 /**
  * The non-blank stand-in. ONE character, deliberately.
@@ -90,16 +92,16 @@ export const toggleBlankString: MutationOperator = {
   // type-checking cleanly. The conformance suite caught it; nothing else would have.
   targetNodeKinds: [ALNodeKind.text_literal],
   producesNodeKinds: [ALNodeKind.text_literal],
-  requiresSemantic: [],
+  requiresSemantic: ["type-info", "symbol-table"],
   // R172: R172 names it beside the other two; it rewrites a written string.
   equivalenceRisk: "value-rewrite",
 
-  targets(node: ALSyntaxNode, _ctx: SemanticContext): boolean {
-    return toggled(node) !== null;
+  targets(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+    return toggled(node, ctx) !== null;
   },
 
-  generate(node: ALSyntaxNode, _ctx: SemanticContext): readonly MutationSpec[] {
-    const after = toggled(node);
+  generate(node: ALSyntaxNode, ctx: SemanticContext): readonly MutationSpec[] {
+    const after = toggled(node, ctx);
     if (after === null) return [];
     return [
       {
@@ -152,7 +154,7 @@ export const toggleBlankString: MutationOperator = {
 };
 
 /** The toggled literal text, or `null` where this operator does not claim the site. */
-function toggled(node: ALSyntaxNode): string | null {
+function toggled(node: ALSyntaxNode, ctx: SemanticContext): string | null {
   if (node.rawKind !== ALNodeKind.text_literal) return null;
   const parent = node.parent;
   if (parent === null || !BEHAVIOURAL_PARENTS.has(parent.rawKind)) return null;
@@ -160,7 +162,32 @@ function toggled(node: ALSyntaxNode): string | null {
   // deny-list of declarative parents is only ever as complete as the last person's memory.
   if (!inExecutableBody(node)) return null;
   const inner = node.text.replace(/^'/, "").replace(/'$/, "");
-  return inner.length === 0 ? NON_BLANK : BLANK;
+  if (inner.length === 0) return NON_BLANK;
+  if (oneCharacterMayBeChar(node, parent, inner, ctx)) return null;
+  return BLANK;
+}
+
+/**
+ * R731: blanking a ONE-character literal that is ASSIGNED to a `Char` is AL0122 (`'x'` converts to
+ * `Char`, `''` does not: measured with alc, 2026-10-24), and one such mutant fails the whole batch.
+ * A comparison (`Ch = ''`) compiles, so only assignments are checked.
+ *
+ * Fails closed: a target whose type is unknown (`T[1]` has none, a `with` name has none) refuses.
+ * A record member is exempt: a table field cannot be `Char` (AL0156, same probe).
+ */
+function oneCharacterMayBeChar(
+  literal: ALSyntaxNode,
+  parent: ALSyntaxNode,
+  inner: string,
+  ctx: SemanticContext,
+): boolean {
+  if (parent.rawKind !== ALNodeKind.assignment_statement) return false;
+  if (inner.replace(/''/g, "'").length !== 1) return false;
+  const target = parent.childForFieldName("left");
+  if (target === null || target.startIndex === literal.startIndex) return false;
+  if (target.rawKind === ALNodeKind.field_access) return false;
+  const type = ctx.types.typeOf(target);
+  return type === null || /^char$/i.test(type);
 }
 
 function inExecutableBody(node: ALSyntaxNode): boolean {
