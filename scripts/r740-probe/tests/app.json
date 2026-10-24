@@ -1,0 +1,31 @@
+{
+  "id": "a2a9b0bb-7274-42ae-8eee-89f12b23a6f2",
+  "name": "R740 Probe Tests",
+  "publisher": "LethAL Probe",
+  "version": "1.0.0.1",
+  "brief": "R740 throwaway probe test app, no tables.",
+  "platform": "28.0.0.0",
+  "runtime": "17.0",
+  "target": "OnPrem",
+  "idRanges": [{ "from": 93840, "to": 93849 }],
+  "dependencies": [
+    {
+      "id": "916727ff-fac6-40f5-bc66-38800422d6d6",
+      "name": "R740 Probe Lib",
+      "publisher": "LethAL Probe",
+      "version": "1.0.0.1"
+    },
+    {
+      "id": "157d4738-4e4d-410b-b1be-743a3ba29106",
+      "name": "R740 Probe Target",
+      "publisher": "LethAL Probe",
+      "version": "1.0.0.1"
+    }
+  ],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "features": ["NoImplicitWith"]
+}
