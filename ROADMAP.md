@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**23 of 718 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**24 of 719 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -466,6 +466,7 @@ that ordering is the priority.
 - **R601** · a closed-world run that ends before its post-execution re-ask stays pending forever, so --resume after a crash is off on a closed server · [R601.md](docs/roadmap/R601.md) · done (f9002861)
 - **R620** · A crashed or interrupted closed-world run is never resumable: its test-app identity stays |pending, so --resume refuses the very run it exists for · [R620.md](docs/roadmap/R620.md) · closed 2026-10-22 — a duplicate of R601 (orchestrator ruling Q2); closed with R601 (92d23854)
 - **R685** · a bare `Kind::X` id handed to an unfollowed call puts the test on verify's whole-source fallback, where folding the object would do: since R684 this takes a whole Microsoft test app (Guided Experience) to the fallback · [R685.md](docs/roadmap/R685.md) · done (e2cd0992)
+- **R727** · A run publishes the target over installed dependents other than the tests app without a word; on a customer server a refused upgrade removes them (R709) · [R727.md](docs/roadmap/R727.md) · open, filed 2026-10-24 (prevention; build later)
 
 ## Backends and tooling
 
@@ -752,7 +753,7 @@ that ordering is the priority.
 - **R704** · Test A7 (the preload moves HOME and TMPDIR in every --parallel worker) fails on CI's Windows runner; it skips there until the cause is read · [R704.md](docs/roadmap/R704.md) · done (208a85fb)
 - **R705** · v3 contract probe serve-keep-reasons is blind on #5602-fixed builds: its tests app holds a non-compiling codeunit (50674) · [R705.md](docs/roadmap/R705.md) · done (195f90ec)
 - **R707** · What BC does with an installed dependent (a fixture tests app) when its target is republished with changed SIGNATURES is not measured; the worst case under-reports · [R707.md](docs/roadmap/R707.md) · closed 2026-10-24 — measured on bc2 (R-707): BC recompiles installed dependents at publish and refuses a…
-- **R709** · A refused UPGRADE can fail to restore: BC leaves the target uninstalled and the dependent removed (the R605 version record blocks reinstalling the old target) · [R709.md](docs/roadmap/R709.md) · open, filed 2026-10-24
+- **R709** · A refused UPGRADE can fail to restore: BC leaves the target uninstalled and the dependent removed (the R605 version record blocks reinstalling the old target) · [R709.md](docs/roadmap/R709.md) · open, filed 2026-10-24 (part 1 built by R-709: a run refuses by name; the list parser waits on a probe)
 - **R706** · Measure #5700's HTTP refusal text in a client session on a leased bc server (the only LethAL-side way to settle unlike-bc) · [R706.md](docs/roadmap/R706.md) · done (9c19550b)
 - **R708** · The Windows staged-copy cleanup gave up silently after a short retry, so a scanner-locked folder made a unit test flake (CI run 40072847202, attempt 1) · [R708.md](docs/roadmap/R708.md) · done (2502f82b)
 - **R711** · Option B: setup and bc-republish could remove an installed dependent first (uninstall, unpublish), publish the target, then republish the dependent, behind a flag · [R711.md](docs/roadmap/R711.md) · open, filed 2026-10-24 (build only if a lane needs it)

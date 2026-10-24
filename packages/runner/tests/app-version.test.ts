@@ -6,7 +6,18 @@ import {
   nextAbove,
   parseVersionConflict,
   reserveAppVersion,
+  restoreFailed,
 } from "../src/app-version";
+
+/** BC's 422 when an upgrade breaks an installed dependent and the old target cannot be put back,
+ *  as measured on bc2 by R-707 (step 4; BC's text after "If they are part" was not captured). */
+const R709_RESTORE_TEXT =
+  "The request for path /BC/dev/apps failed with code UnprocessableEntity. Reason: " +
+  "error AL0132: 'Codeunit \"R707 Target\"' does not contain a definition for 'Answer'. " +
+  "The original extensions could not be restored due to Cannot install the extension R707 Probe " +
+  "Target by LethAL Probe 1.0.0.1 because a newer version 1.0.0.2 was already installed..\n" +
+  "Extensions that were previously installed but could not be reinstalled. These extensions " +
+  "should be manually reinstalled. If they are part";
 
 // 2026-07-19T00:00:00Z = 20653 days since epoch.
 const T0 = Date.UTC(2026, 6, 19, 0, 0, 0);
@@ -75,6 +86,22 @@ describe("parseVersionConflict", () => {
 
   it("returns null for an unrelated publish failure", () => {
     expect(parseVersionConflict("Publish failed: connection refused")).toBeNull();
+  });
+
+  it("R709: returns null for BC's restore-failure text, which embeds the same sentence", () => {
+    // red when parseVersionConflict reads the embedded sentence: the run would re-stamp and
+    // publish again over a server BC just stripped of the target's dependents
+    expect(parseVersionConflict(R709_RESTORE_TEXT)).toBeNull();
+    expect(restoreFailed(R709_RESTORE_TEXT)).toBe(true);
+  });
+
+  it("R709: a plain downgrade conflict is not a restore failure", () => {
+    const plain =
+      "Cannot install the extension LethAL Sandbox App by LethAL 1.0.0.999 because a newer " +
+      "version 1.0.106.0 was already installed.";
+    // red when restoreFailed matches the conflict sentence alone
+    expect(restoreFailed(plain)).toBe(false);
+    expect(parseVersionConflict(plain)).toBe("1.0.106.0");
   });
 });
 

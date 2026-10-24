@@ -112,7 +112,9 @@ import {
   runNamedMutants,
   runOnce,
   runSession,
+  upgradeNotRestored,
 } from "../src/orchestrator";
+import { UpgradeNotRestoredError } from "../src/app-version";
 import type {
   LeaseFence,
   LeaseSessionConfig,
@@ -5365,6 +5367,70 @@ describe("runSession — Layer 5A deployment identity", () => {
     expect(backend.lastCompiledVersion).toBe("9.9.9.10");
     expect(report.counts.errors).toBe(0);
     store.close();
+  });
+
+  // R709: BC's 422 when an upgrade breaks an installed dependent and the old target cannot be
+  // restored (measured by R-707 on bc2). It embeds the conflict sentence, naming the NEW version.
+  const R709_RESTORE =
+    "error AL0132: 'Codeunit \"R707 Target\"' does not contain a definition for 'Answer'. The " +
+    "original extensions could not be restored due to Cannot install the extension R707 Probe " +
+    "Target by LethAL Probe 1.0.0.1 because a newer version 1.0.0.2 was already installed..\n" +
+    "Extensions that were previously installed but could not be reinstalled. These extensions " +
+    "should be manually reinstalled.";
+
+  test("R709: a restore failure is refused by name, with BC's text and recovery steps, and NOT retried", async () => {
+    const dirs = await makeProject();
+    let attempts = 0;
+    const backend = new PhaseBackend({
+      onPublish: () => {
+        attempts++;
+        throw new Error(R709_RESTORE);
+      },
+    });
+    const store = new ResultsStore(":memory:");
+    const err = await runSession({ backend, store, ...dirs, selectorIds }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    store.close();
+    // red when the restore text reaches the version-conflict retry (attempts 2)
+    expect(attempts).toBe(1);
+    // red when the refusal is not the named class
+    expect(err).toBeInstanceOf(UpgradeNotRestoredError);
+    const msg = err instanceof Error ? err.message : "";
+    expect(msg).toContain("could not be restored"); // BC's own text, verbatim
+    expect(msg).toContain("lethal doctor");
+    expect(msg).toContain("tests app");
+  });
+
+  test("R709: a restore failure on the version-conflict RETRY is refused by name too", async () => {
+    const dirs = await makeProject();
+    let attempts = 0;
+    const backend = new PhaseBackend({
+      onPublish: () => {
+        attempts++;
+        throw new Error(
+          attempts === 1
+            ? "Cannot install the extension X by Y 1.0.1.1 because a newer version 9.9.9.9 was already installed."
+            : R709_RESTORE,
+        );
+      },
+    });
+    const store = new ResultsStore(":memory:");
+    const err = await runSession({ backend, store, ...dirs, selectorIds }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    store.close();
+    expect(attempts).toBe(2);
+    // red when only the first publish's error is read for a restore failure
+    expect(err).toBeInstanceOf(UpgradeNotRestoredError);
+  });
+
+  test("R709: a compile verdict carrying the restore words is not a restore refusal", () => {
+    // red when upgradeNotRestored reads an AlcCompileError (its text is alc's output, R461)
+    expect(upgradeNotRestored(new AlcCompileError(R709_RESTORE))).toBeUndefined();
+    expect(upgradeNotRestored(new Error(R709_RESTORE))).toBeInstanceOf(UpgradeNotRestoredError);
   });
 
   // R-422: a project app.json written on Windows names its logo and resource folders with `\`,

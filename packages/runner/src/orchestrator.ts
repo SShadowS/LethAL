@@ -55,10 +55,12 @@ import {
   writeInstrumentedProject,
 } from "@lethal/schemata";
 import {
+  UpgradeNotRestoredError,
   confirmedDowngradeRefusal,
   nextAbove,
   parseVersionConflict,
   reserveAppVersion,
+  restoreFailed,
 } from "./app-version";
 import type { PublishIdentity } from "./app-version";
 import {
@@ -1895,6 +1897,15 @@ function newArtifactId(): string {
  *  plain `Error`, or a bare string. */
 function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/** R709: the named refusal when a failed publish says BC could not restore the previous target
+ *  (`restoreFailed`); undefined otherwise, and always for a compile verdict (its text is alc's
+ *  output, R461). */
+export function upgradeNotRestored(err: unknown): UpgradeNotRestoredError | undefined {
+  if (err instanceof AlcCompileError) return undefined;
+  const text = messageOf(err);
+  return restoreFailed(text) ? new UpgradeNotRestoredError(text) : undefined;
 }
 
 /**
@@ -6929,6 +6940,9 @@ async function runSessionBody(
         deployErr = err;
       }
       if (!deployed) {
+        // R709: BC could not restore after a refused upgrade; never re-stamp past it.
+        const notRestored = upgradeNotRestored(deployErr);
+        if (notRestored !== undefined) throw notRestored;
         // 3a. version conflict: BC's downgrade rejection is machine-parseable and names the
         // installed version verbatim. Re-stamp strictly above it, recompile, and retry
         // EXACTLY once — a second conflict means the server's installed version is moving
@@ -6955,6 +6969,8 @@ async function runSessionBody(
             );
             deployed = true;
           } catch (retryErr) {
+            const retryNotRestored = upgradeNotRestored(retryErr);
+            if (retryNotRestored !== undefined) throw retryNotRestored;
             const stillInstalled =
               retryErr instanceof AlcCompileError
                 ? null
