@@ -14,9 +14,9 @@
 import { writeFile } from "node:fs/promises";
 import { AlRunnerCoverageFrameError } from "../src/al-runner-coverage";
 import type { V3EntriesStats } from "../src/al-runner-v3-backend";
+import { applyTPin, pinnedFactMatches } from "../src/al-runner-v3-pins";
+import type { V3BuildPin, XbPin } from "../src/al-runner-v3-pins";
 import { AlRunnerV3CoverageJoinError } from "../src/al-runner-v3-sleep";
-import { applyTPin } from "./al-runner-v3-pins";
-import type { V3BuildPin, XbPin } from "./al-runner-v3-pins";
 import { bareHashRows, compareMutants } from "./mutant-equality";
 import type { MutantComparison, NormalizedMutant } from "./mutant-equality";
 
@@ -151,12 +151,15 @@ export function cdoCheckoutRefusal(c: {
 /** The exact leg set a `pass` must hold (r3 F6 d). R654 S2 adds L1, Y-A and Y-B (a candidate is
  *  judged on layout and symbol sets too); K is outside it by ruling (`alrunner-v3-legs.ts`).
  *  R602 (orchestrator ruling 2026-10-24) adds MO and WR: they are the only measurement of v3's
- *  per-object frame, so a pin that breaks it must not move `current`. */
+ *  per-object frame, so a pin that breaks it must not move `current`.
+ *  R722 adds N1E (N1 under serve-entries): a build that fixes #5798 reads `held`; alpha.2, which has
+ *  no serve-entries path, reads `pass` (not applicable, `V3_NO_SERVE_ENTRIES`). */
 export const V3_GATE_LEGS = [
   "C",
   "S1",
   "S3",
   "N1",
+  "N1E",
   "X",
   "L1",
   "Y-A",
@@ -591,13 +594,8 @@ export function classifyLegC(
     // judged by today's rules and then forced to at least `held` (the old reading means the build
     // moved back, which today's rules would pass).
     const p = pin !== undefined && Object.hasOwn(pin, f.fact) ? pin[f.fact] : undefined;
-    if (p !== undefined) {
-      if (
-        f.verdict === p.verdict &&
-        f.measured !== undefined &&
-        p.measured.test(f.measured) &&
-        (p.extra === undefined || p.extra(f.measured))
-      ) {
+    if (pin !== undefined && p !== undefined) {
+      if (pinnedFactMatches(pin, f)) {
         lines.push(`pinned: ${f.fact} = ${f.verdict} (${p.issue ?? "as BC"})`);
         continue;
       }
