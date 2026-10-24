@@ -28,13 +28,17 @@ const runDir = mkdtempSync(join(tmpdir(), "lethal-unit-run-"));
  * `mkdirSync` throws if it cannot create one, so a failure stops the suite rather than silently
  * leaving the real home in place.
  */
-// R704: keep an inherited value only when an earlier preload redirected this process (a reused
-// Windows worker, or a child of a test); otherwise homedir() here would record that fake as "real".
+// R704: keep an inherited value only when an earlier preload redirected this process (a child of a
+// test, whose env carries the fake); otherwise homedir() here would record that fake as "real".
 const redirected =
   process.env.LETHAL_TEST_FAKE_HOME !== undefined &&
   process.env.LETHAL_TEST_FAKE_HOME === process.env.HOME;
 if (!redirected) {
-  process.env.LETHAL_TEST_REAL_HOME = homedir();
+  // R704 (measured, CI run 40066648992): a reused Windows --parallel worker gets process.env restored
+  // between files (USERPROFILE is the real home again), but os.homedir() still returns the previous
+  // file's fake. So on Windows the real home is read from USERPROFILE, the variable homedir() reads.
+  process.env.LETHAL_TEST_REAL_HOME =
+    process.platform === "win32" ? (process.env.USERPROFILE ?? homedir()) : homedir();
 } else if (process.env.LETHAL_TEST_REAL_HOME === undefined) {
   // homedir() is the earlier preload's fake here, so recording it would mislabel a fake as real.
   throw new Error(
