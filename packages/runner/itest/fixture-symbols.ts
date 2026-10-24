@@ -24,18 +24,90 @@ import { createReadStream, existsSync } from "node:fs";
 import { type FileHandle, mkdir, open, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 
-/** Where kraken keeps the symbol tar (gitignored, never committed). */
-export const FIXTURE_SYMBOLS_TAR = "/work/lethal/.kraken-local/fixture-symbols.tar";
+/**
+ * Where the symbol tar lives (gitignored, never committed). R670: named by its sha256's first 12
+ * hex digits, so a rebuilt tar sits beside the one older worktrees still pin and never replaces it.
+ */
+export const FIXTURE_SYMBOLS_TAR = "/work/lethal/.kraken-local/fixture-symbols-2279aee3857b.tar";
 
 /**
- * F5: the tar, pinned by sha256 (measured 2026-10-21, 1,705,707,520 bytes). A different tar is
- * refused by name; changing it is a deliberate edit here, then a `--regate`. A re-pin refuses
- * the gate worktree once (its marker names the old pin, `al-runner-v3-gate-symbols-unverified`):
- * before that `--regate`, delete the gate worktree's two folders and its `SYMBOLS_MARKER`, so the
- * run extracts them from the new tar.
+ * F5: the tar, pinned by sha256 (R673 rebuild, 2026-10-24, 2,103,091,200 bytes: the R670 tar,
+ * `26f680ae…`, plus `.alpackages` for sandbox-names, -names-tests, -wrapped, -wrapped-tests,
+ * -codefree and -codefree-tests; that replaced `fixture-symbols.tar`, `bdf460e2…`). A different tar is refused by name; changing it is a
+ * deliberate edit here and in `FIXTURE_SYMBOLS_MANIFEST`, then a `--regate`. A re-pin refuses
+ * EVERY worktree whose two folders came from the old tar, the gate worktree included (its marker
+ * names the old pin, `al-runner-v3-gate-symbols-unverified`), and a FRESH worktree on any machine
+ * that lacks the sha-named tar, until the owner's secret swap delivers it. The one-line fix, per
+ * worktree, by hand: `bun scripts/fixture-symbols-reset.ts <worktree>` deletes the two folders and
+ * its `SYMBOLS_MARKER`, and the next run extracts them from the new tar.
  */
 export const FIXTURE_SYMBOLS_TAR_SHA256 =
-  "bdf460e292f005f1c02cc7b45e83ede1d5c5df280070dc97231f9b314d4f175e";
+  "2279aee3857bc2f123f602bb9dc265b1be783a782486d9982ddd37fd50d46359";
+
+/**
+ * R670: the pinned tar's files in archive order (`tar -tf`, directories left out), committed, with
+ * the tar's sha256 on its `# sha256` line. CI has no tar, so `symbolTarDrift` checks this list
+ * against the fixtures' `app.json` instead; a test that runs only where the tar exists checks
+ * the list against the tar.
+ */
+export const FIXTURE_SYMBOLS_MANIFEST = join(import.meta.dir, "fixture-symbols.manifest");
+
+/** R670: one AL project of the repo, as its `app.json` declares it. */
+export interface FixtureApp {
+  /** Relative to the repo root, `/`-separated: `fixtures/sandbox-data-tests`. */
+  readonly dir: string;
+  readonly name: string;
+  readonly version: string;
+  /** The names of its dependencies published by `LethAL`. */
+  readonly lethalDeps: readonly string[];
+}
+
+const LETHAL_COPY = /^LethAL_(.+)_(\d+\.\d+\.\d+\.\d+)\.app$/;
+const OTHER_SYMBOL = /^(Microsoft_[^/]+\.app|System\.app|lethal-control\.app)$/;
+
+/**
+ * R670: each way the tar's LethAL app copies disagree with the fixtures, for every project the tar
+ * has an `.alpackages` for. A copy is named `LethAL_<name>_<version>.app`, and it must be a declared
+ * LethAL dependency of that project at its fixture's `app.json` version: older AND newer both fail,
+ * so a fixture bump without a tar refresh fails CI. Each such dependency needs exactly one copy.
+ * Any other file must be `Microsoft_*.app`, `System.app` or an R552 `lethal-control.app` leftover
+ * (never compiled against); anything else, a `target.app` included, hides its version and is
+ * refused. A project the tar has no folder for is not checked (`compile:fixtures` skips it).
+ */
+export function symbolTarDrift(members: readonly string[], apps: readonly FixtureApp[]): string[] {
+  const byName = new Map(apps.map((a) => [a.name, a]));
+  const out: string[] = [];
+  for (const app of apps) {
+    const prefix = `${app.dir}/.alpackages/`;
+    const files = members.filter((m) => m.startsWith(prefix)).map((m) => m.slice(prefix.length));
+    if (files.length === 0) continue;
+    const copies = new Map<string, number>();
+    for (const file of files) {
+      const [, name, version] = LETHAL_COPY.exec(file) ?? [];
+      if (name === undefined || version === undefined) {
+        if (!OTHER_SYMBOL.test(file))
+          out.push(
+            `${prefix}${file}: not a Microsoft symbol, and a LethAL app copy must be named LethAL_<name>_<version>.app`,
+          );
+        continue;
+      }
+      const dep = byName.get(name);
+      if (dep === undefined || !app.lethalDeps.includes(name)) {
+        out.push(`${prefix}${file}: ${app.dir} declares no dependency on a repo app named ${name}`);
+        continue;
+      }
+      copies.set(name, (copies.get(name) ?? 0) + 1);
+      if (version !== dep.version)
+        out.push(
+          `${prefix}${file}: the tar holds ${name} ${version}, but ${dep.dir}/app.json is ${dep.version}; rebuild the tar (R670)`,
+        );
+    }
+    for (const d of app.lethalDeps)
+      if (byName.has(d) && copies.get(d) !== 1)
+        out.push(`${prefix}: ${copies.get(d) ?? 0} copies of ${d}, want exactly 1`);
+  }
+  return out;
+}
 
 /** Fixture symbol folders the gate's legs compile against (gitignored, from the tar). */
 export const GATE_ALPACKAGES = [

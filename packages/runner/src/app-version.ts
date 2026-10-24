@@ -116,8 +116,42 @@ export function nextAbove(version: string): string {
  * Verified live against Cronus281 on 2026-07-19.
  */
 export function parseVersionConflict(message: string): string | null {
+  // R709: BC's restore-failure text embeds this sentence (naming the NEW version); it is not a
+  // conflict to re-stamp past, and a caller that skips `restoreFailed` must still not retry it.
+  if (restoreFailed(message)) return null;
   const m = /newer version (\d+\.\d+\.\d+\.\d+) was already installed/.exec(message);
   return m?.[1] ?? null;
+}
+
+/**
+ * R709: BC refused an UPGRADE because an installed dependent no longer compiles against it, and
+ * then could not put the old target back ("The original extensions could not be restored ...").
+ * Measured on bc2 by R-707 (step 4): the target is left uninstalled and every installed app that
+ * depends on it (the tests app at least) is removed.
+ */
+export function restoreFailed(message: string): boolean {
+  return /could not be restored/i.test(message);
+}
+
+/** R709: the named refusal for `restoreFailed`. Keeps BC's text verbatim (it lists the apps BC
+ *  removed) and says how to recover. Extends `Error` directly. */
+export class UpgradeNotRestoredError extends Error {
+  constructor(bcText: string) {
+    super(
+      "BC refused to upgrade the target and could not restore the previous version (R709). " +
+        "An installed app that depends on the target no longer compiles against the new build " +
+        "(most often the tests app on the server is older than your tests source). BC has left " +
+        "the target UNINSTALLED and REMOVED every installed app that depends on it, the tests " +
+        "app at least; BC's text below names them. LethAL did not retry. To recover: uninstall " +
+        "and unpublish the stranded target, then publish the target, the tests app built from " +
+        "your CURRENT source, and every other app BC names. On a LethAL gate server (bc1-bc3) " +
+        "the setup script refuses this state: ask the owner to restart the server, then run " +
+        "`bun scripts/bc-linux-setup.ts --server bcN` (docs/gates/servers.md, R709). If BC " +
+        "refuses an old version as a downgrade, its installed-version record needs a restart " +
+        `(R605). BC said: ${bcText}`,
+    );
+    this.name = "UpgradeNotRestoredError";
+  }
 }
 
 /** The app a publish tried to install: its name and publisher, and the version sent. */

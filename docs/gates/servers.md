@@ -186,6 +186,24 @@ under a coord lease in your own lane (`--lane <lane> --token-dir <dir>`, both re
 - `alpackages --server bcN <tests fixture>...` fills a tests fixture's gitignored `.alpackages`
   from that server, which `itest:testapp`, `:verify`, `:verify-scale` and `:agreement` need.
 
+### Recovering from a refused upgrade that BC could not restore (R709)
+
+**How it happens.** A target publish is an upgrade. If an installed dependent (most often the tests app) no longer
+compiles against the new build, BC refuses the upgrade with 422 "... The original extensions could not be restored
+...". It leaves the target UNINSTALLED and REMOVES every installed dependent (measured on bc2 by R-707). This happens
+when a fixture's target changes a procedure its tests call and a run, or a hand publish, goes out before the tests app
+is republished. `lethal run` refuses at that point with `UpgradeNotRestoredError` and BC's text, and does not retry.
+`bc-linux-setup.ts` and `bc-republish.ts` refuse BEFORE publishing (`resident-dependent-breaks`).
+
+**To recover.** The scripts cannot do it on their own. The stripped target is one row that is NOT installed, and
+`decideApp` (`scripts/bc-app-content.ts`) refuses that as `content-unknown`. So both `bc-linux-setup.ts` and
+`bc-republish.ts` stop with "NOTHING was published". They refuse by name and damage nothing.
+1. On `bc1`-`bc3`: ask the owner to restart the server. Its databases are in memory, so the restart also clears the
+   installed-version record ([R605](../roadmap/R605.md)). Then run `bun scripts/bc-linux-setup.ts --server bcN` under
+   the server's lease. It publishes the targets and then the tests apps from the current source.
+2. Elsewhere: uninstall and unpublish the stranded target row, then publish the target and the dependents again.
+   BC's 422 text names the dependents it removed. This route is not measured.
+
 ## How a gate reads a server
 
 - `LETHAL_ITEST_CONFIG=lethal.config.<x>.json` selects the config file in one of the four fixture
