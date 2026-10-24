@@ -860,7 +860,8 @@ export class ResultsStore {
     /** R-278: every discovered test's source digest, by `testDigestKey`. Absent is recorded NULL,
      *  which `lethal verify` refuses as a run that predates it. */
     testDigests?: Readonly<Record<string, string>>;
-    /** R-371: the parts those digests are made of (`TestDigestParts`), recorded with them. */
+    /** R-371: the parts those digests are made of (`TestDigestParts`), recorded with them. Never
+     *  decides a verdict; R600: verify reads their closed-world tag to choose which digests it makes. */
     testDigestParts?: unknown;
     /** R442: what the run's keys numbered no ordinal for. Absent or `null` writes NULL (untrusted).
      *  `runSession` writes it after generation (`setCarryHidden`); verify copies its source's here. */
