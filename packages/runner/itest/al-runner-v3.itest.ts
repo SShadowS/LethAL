@@ -94,11 +94,19 @@ import {
 } from "./al-runner-v3-gate";
 import { TABLES_KNOWN_DIFFERENCES } from "./al-runner-v3-tables-known";
 import {
+  type V3RowFacts,
   V3_K_CANDIDATE_SKIP,
   V3_K_LEG,
+  V3_MO_KILLERS,
+  V3_WR_KILLERS,
+  V3_WR_STATE_NOTES,
   isSessionTestCall,
+  judgeKillers,
   judgeLegK,
+  judgeStateNotes,
+  judgeWrArms,
   legKSection,
+  moWrTransportRefusal,
   v3DefaultLegs,
   v3ItestFailures,
   v3RecordRunFailures,
@@ -122,6 +130,13 @@ import {
 } from "./layout-fixture";
 import { compareMutants, keyOf, normalizeForComparison } from "./mutant-equality";
 import { assertSymbolBuild, printSymbolTable } from "./symbol-fixture";
+import {
+  ARMS_REFUSAL,
+  WRAPPED_PROJECT_DIR,
+  WRAPPED_SELECTOR_IDS,
+  WRAPPED_SYMBOLS,
+  WRAPPED_TEST_DIR,
+} from "./wrapped-fixture";
 
 if (!process.env.LETHAL_ITEST_ALRUNNER_V3) {
   console.log("al-runner-v3 itest: skipped (set LETHAL_ITEST_ALRUNNER_V3=1)");
@@ -137,6 +152,9 @@ const TABLES_BASELINE_PATH = join(HERE, "al-runner-v3.tables.baseline.json");
 const LAYOUT_BASELINE_PATH = join(HERE, "al-runner-v3.layout.baseline.json");
 const SYMBOLS_A_BASELINE_PATH = join(HERE, "al-runner-v3.symbols-lethala.baseline.json");
 const SYMBOLS_B_BASELINE_PATH = join(HERE, "al-runner-v3.symbols-lethalb.baseline.json");
+// R602: legs MO (multi-object files) and WR (`#if`-wrapped files), each recorded once under R332.
+const MULTIOBJECT_BASELINE_PATH = join(HERE, "al-runner-v3.multiobject.baseline.json");
+const WRAPPED_BASELINE_PATH = join(HERE, "al-runner-v3.wrapped.baseline.json");
 const BIN = process.env.LETHAL_ALRUNNER_V3_PATH ?? AL_RUNNER_V3_DEFAULT_PATH;
 const CANDIDATE = process.env.LETHAL_ALRUNNER_V3_CANDIDATE === "1";
 const CACHE = process.env.LETHAL_ALRUNNER_V3_CACHE ?? "/work/tools/al-runtime-rs/cache";
@@ -493,15 +511,20 @@ function asLegFailure(leg: string, check: () => void): void {
 }
 
 /** §1's checks every new leg makes: a clean baseline, no note, no refusal, Sleep index 0 + 0. */
-function assertCleanLeg(r: SessionReport, b: AlRunnerV3Backend, leg: string): void {
+function assertCleanLeg(
+  r: SessionReport,
+  b: AlRunnerV3Backend,
+  leg: string,
+  /** R602: the leg's pre-committed state notes (`batch/code`); every other leg pre-commits none. */
+  stateNotes: readonly string[] = [],
+): void {
   must(
     r.baselineGreen && r.unsupportedTests.length === 0,
     `${leg}: baseline not green or a refused test`,
   );
-  must(
-    tagged(r, V3_STATE_NOTE_TAG).length === 0 && tagged(r, V3_REFUSED_NEARBY_TAG).length === 0,
-    `${leg}: state or refused-nearby notes`,
-  );
+  const stateDiff = judgeStateNotes(tagged(r, V3_STATE_NOTE_TAG), stateNotes);
+  must(stateDiff.length === 0, `${leg}: ${stateDiff.join("; ")}`);
+  must(tagged(r, V3_REFUSED_NEARBY_TAG).length === 0, `${leg}: refused-nearby notes`);
   must(
     tagged(r, SLEEP_NOTE_TAG).length === 0 && refusedCause(r).length === 0,
     `${leg}: a §6 or runner refusal`,
@@ -566,6 +589,102 @@ async function legY(scratch: string, leg: "Y-A" | "Y-B"): Promise<SessionReport>
   assertCounts(r, leg, 5, 4, 0, 9);
   asLegFailure(leg, () => assertSymbolBuild(r, symbols, leg));
   assertCleanLeg(r, b, leg);
+  return r;
+}
+
+// --- R602: MO and WR (pre-commitment: docs/superpowers/specs/2026-10-24-r602-alrunner-v3-mo-wr-precommitment.md, c2f67f0a)
+
+/** The report's rows as the pure judges read them. */
+function rowFacts(r: SessionReport): V3RowFacts[] {
+  return r.mutants.map((m) => ({
+    mutantCode: m.mutantCode,
+    file: m.file,
+    line: m.line,
+    operatorName: m.operatorName,
+    verdict: m.verdict,
+    ...(m.killingTest !== undefined ? { killingTest: m.killingTest } : {}),
+    ...(m.failureNote !== undefined ? { failureNote: m.failureNote } : {}),
+  }));
+}
+
+/**
+ * The durable killer check, BEFORE the own-baseline compare so that a record run (which writes the
+ * baseline from whatever it measured) can never absorb a lost kill: every mutant `--mode none` kills
+ * (`killers`, in code) must be killed by the same test with coverage on.
+ */
+function assertKillers(
+  r: SessionReport,
+  b: AlRunnerV3Backend,
+  leg: string,
+  killers: typeof V3_MO_KILLERS,
+): void {
+  must(b.capabilities().coverage === "al-runner", `${leg}: coverage is not on`);
+  const lost = judgeKillers(rowFacts(r), killers);
+  for (const l of lost) console.log(`    - ${l}`);
+  must(lost.length === 0, `${leg}: ${lost.length} of ${killers.length} \`none\` kills lost`);
+  console.log(`  ${leg}: all ${killers.length} \`none\` kills killed by the same test`);
+}
+
+/**
+ * MO (R602): `sandbox-multiobject` with coverage ON, run as the other legs run (`runSession`, the v3
+ * backend, one-shot). Two codeunits in one file (`MultiPair`), so v3's per-object frame is what the
+ * index places. Pre-committed 6 / 1 / 5 over 12: the 5 no-coverage are in procedures no test calls.
+ */
+async function legMO(scratch: string): Promise<SessionReport> {
+  const refused = moWrTransportRefusal("MO", TRANSPORT.transport);
+  if (refused !== undefined) throw new LegFailure(refused);
+  const projectDir = fixture("sandbox-multiobject");
+  const testDir = fixture("sandbox-multiobject-tests");
+  const ids = { selectorId: 79849, controlId: 79848, tableId: 79847 };
+  const b = new AlRunnerV3Backend(
+    backendCfg({
+      instrumentedDir: join(scratch, "backend"),
+      testDir,
+      packagesDir: await microsoftDeps(scratch),
+      bcVersion: SANDBOX_BC,
+      selectorObjectId: ids.selectorId,
+      sourceProjectDir: projectDir,
+    }),
+  );
+  const r = await session(scratch, b, { projectDir, testDir, selectorIds: ids });
+  assertKillers(r, b, "MO", V3_MO_KILLERS);
+  assertCounts(r, "MO", 6, 1, 5, 12);
+  assertCleanLeg(r, b, "MO");
+  return r;
+}
+
+/**
+ * WR (R602): `sandbox-wrapped` whole, config symbol WRAPDEF, coverage ON. 98 mutants: the 8
+ * single-wrapper files score as `none` does (killer constant), and the three `WrappedArms` mutants
+ * (the two-arm control, which the index has no rule for) read no-coverage with the refusal sentence.
+ * That refusal costs 2 kills `none` finds (M0001, M0003), named, not hidden. Pre-committed 58 / 37 / 3.
+ */
+async function legWR(scratch: string): Promise<SessionReport> {
+  const refused = moWrTransportRefusal("WR", TRANSPORT.transport);
+  if (refused !== undefined) throw new LegFailure(refused);
+  const b = new AlRunnerV3Backend(
+    backendCfg({
+      instrumentedDir: join(scratch, "backend"),
+      testDir: WRAPPED_TEST_DIR,
+      packagesDir: await microsoftDeps(scratch),
+      bcVersion: SANDBOX_BC,
+      selectorObjectId: WRAPPED_SELECTOR_IDS.selectorId,
+      preprocessorSymbols: WRAPPED_SYMBOLS,
+      sourceProjectDir: WRAPPED_PROJECT_DIR,
+    }),
+  );
+  const r = await session(scratch, b, {
+    projectDir: WRAPPED_PROJECT_DIR,
+    testDir: WRAPPED_TEST_DIR,
+    selectorIds: WRAPPED_SELECTOR_IDS,
+    preprocessorSymbols: WRAPPED_SYMBOLS,
+  });
+  assertKillers(r, b, "WR", V3_WR_KILLERS);
+  const arms = judgeWrArms(rowFacts(r), ARMS_REFUSAL);
+  for (const l of arms) console.log(`    - ${l}`);
+  must(arms.length === 0, `WR: the WrappedArms refusal differs: ${arms.join("; ")}`);
+  assertCounts(r, "WR", 58, 37, 3, 98);
+  assertCleanLeg(r, b, "WR", V3_WR_STATE_NOTES);
   return r;
 }
 
@@ -922,8 +1041,9 @@ async function legXSleep(scratch: string): Promise<void> {
     join(PROBE, "extras", "ProbeSleep.Codeunit.al"),
     join(tests, "src", "ProbeSleep.Codeunit.al"),
   );
-  // The multi-object file and its test leave the scratch copy: with coverage on, the v3 index
-  // refuses a multi-object file (its frame is not measured on v3).
+  // The multi-object file and its test leave the scratch copy. Since R602 the v3 index places a
+  // multi-object file (leg MO measures that), so this is no longer needed for coverage; the `rm`
+  // stays so that X (d)'s pre-committed predictions do not move.
   await rm(join(app, "src", "ProbePair.Codeunit.al"));
   await rm(join(tests, "src", "ProbeCoverage.Codeunit.al"));
   // r5a (f32aa92a): `TestPermissions = Restricted` does not compile against X (d)'s deps
@@ -1302,6 +1422,11 @@ async function main(): Promise<void> {
     preflightGateBaseline(SYMBOLS_A_BASELINE_PATH, "al-runner-v3 itest leg Y-A");
   if (LEGS.includes("Y-B"))
     preflightGateBaseline(SYMBOLS_B_BASELINE_PATH, "al-runner-v3 itest leg Y-B");
+  // R602: the same, for MO and WR.
+  if (LEGS.includes("MO"))
+    preflightGateBaseline(MULTIOBJECT_BASELINE_PATH, "al-runner-v3 itest leg MO");
+  if (LEGS.includes("WR"))
+    preflightGateBaseline(WRAPPED_BASELINE_PATH, "al-runner-v3 itest leg WR");
   // R614: the fixture .alpackages, from the pinned tar (a fresh worktree extracts them itself).
   // M9: every leg selection needs them, CDO-only legs included (or the tar to extract them from).
   const prepared = await prepareFixtureSymbols({ worktree: REPO });
@@ -1374,6 +1499,24 @@ async function main(): Promise<void> {
             if (e instanceof BaselineRecordedError) throw e;
             throw new LegFailure(`Y-B: ${e instanceof Error ? e.message : String(e)}`);
           }
+        } else if (leg === "MO") {
+          // R602: the killer check and the counts ran inside the leg (nothing is written on a
+          // difference); then the own-baseline compare, which a record run writes (R332).
+          const r = await legMO(scratch);
+          try {
+            await assertGateBaseline(r, MULTIOBJECT_BASELINE_PATH, "al-runner-v3 itest leg MO");
+          } catch (e) {
+            if (e instanceof BaselineRecordedError) throw e;
+            throw new LegFailure(`MO: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        } else if (leg === "WR") {
+          const r = await legWR(scratch);
+          try {
+            await assertGateBaseline(r, WRAPPED_BASELINE_PATH, "al-runner-v3 itest leg WR");
+          } catch (e) {
+            if (e instanceof BaselineRecordedError) throw e;
+            throw new LegFailure(`WR: ${e instanceof Error ? e.message : String(e)}`);
+          }
         } else if (leg === V3_K_LEG) await legK(scratch);
         else if (leg === "T") {
           const t = await legT(scratch, (l) => lines.push(l));
@@ -1403,7 +1546,7 @@ async function main(): Promise<void> {
         }
         const msg = err instanceof Error ? err.message : String(err);
         // M2: by the error's TYPE only (legOutcomeOfError), never by its text.
-        legs[leg] = legOutcomeOfError(err);
+        legs[leg] = legOutcomeOfError(err, leg);
         if (err instanceof V3LegHeld) lines.push(...err.lines.map((l) => `${leg}: ${l}`));
         else lines.push(`${leg}: ${msg.slice(0, 1000)}`);
         console.log(`leg ${leg}: ${legs[leg]?.toUpperCase()} ${formatFailure(err).slice(0, 2000)}`);

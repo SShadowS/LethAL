@@ -101,8 +101,9 @@ and `--tests-only` gives `tests-narrowed`.
 
 **Backends.** `bcdev` is authoritative. `al-runner-v3` (the Rust al-runner, configured by the
 `alRunnerV3` section, Linux only, one worker) is offline and is NOT: its coverage is CONDITIONAL. A
-project holding a multi-object or an `#if`-wrapped object file runs with coverage off, with a
-warning naming the file, and without coverage an unreached mutant comes back survived rather than
+project holding an `#if`-wrapped object file of a shape the index has no rule for (two-arm,
+`#elif`, nested, or a multi-object file holding a wrapper) runs with coverage off, with a
+warning naming the file (multi-object and single-wrapper files keep coverage on, R602), and without coverage an unreached mutant comes back survived rather than
 no-coverage. Do not quote a score from it. Its gate is `itest:alrunner-v3`
 ([docs/gates/alrunner-v3.md](gates/alrunner-v3.md)).
 

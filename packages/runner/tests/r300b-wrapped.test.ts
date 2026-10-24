@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser, parseAL, wrapRoot } from "@lethal/engine";
 import {
+  AlRunnerCoverageFrameError,
   alRunnerCoverageFromServer,
   alRunnerCoverageSupport,
   buildAlRunnerCoverageIndex,
@@ -226,11 +227,8 @@ describe("R-300b (b): al-runner scores W1 by its original file lines", () => {
       index,
     );
     expect(server.entries).toEqual(want);
-    expect(await alRunnerCoverageSupport(dir)).toEqual({
-      supported: true,
-      multiObjectFiles: [],
-      wrappedObjectFiles: [],
-    });
+    // R602 (A4, flipped on purpose): the result lost `supported` and `multiObjectFiles`.
+    expect(await alRunnerCoverageSupport(dir)).toEqual({ wrappedObjectFiles: [] });
 
     const refused = coverageRefusedObjects(await roots({ [W1_FILE]: W1 }), "al-runner-index");
     expect(refused.size).toBe(0);
@@ -263,7 +261,7 @@ describe("R-300b (b): al-runner scores W1 by its original file lines", () => {
       const dir = await bundle({ "src/Q.Codeunit.al": TWO_ARM });
       const index = await buildAlRunnerCoverageIndex(dir, SYMS);
       const sentence =
-        "coverage refused for Codeunit:91904 (src/Q.Codeunit.al): its file holds a #if object wrapper of a shape not measured on al-runner (R300). Its mutants read no-coverage.";
+        "coverage refused for Codeunit:91904 (src/Q.Codeunit.al): its file holds a #if object wrapper of a shape the al-runner coverage index has no rule for (two-arm, #elif, nested, or a multi-object file holding a wrapper; R602). Its mutants read no-coverage.";
       expect(index.refusedFiles).toEqual(["src/Q.Codeunit.al"]);
       expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([`[lethal] ${sentence}`]);
       // Line 6 is `exit(1);` in QIfHit; a widened rule would place it.
@@ -416,8 +414,12 @@ describe("R-300b (C1): only active declarations are indexed; a key in two indexe
   });
 });
 
-describe("R-300b (I3): --server's own name disagreeing with the position drops the line in an admitted file", () => {
-  test("admitted W1: the line is dropped with a warning; the unwrapped twin keeps R383's position-wins", async () => {
+describe("R-300b (I3), changed by R602 (D): --server's own name disagreeing with the position THROWS in an admitted file", () => {
+  // Flipped on purpose. Before R602 the line was dropped with a warning. v3's frame was measured
+  // with 0 scope disagreements on every wrapped fixture file, so a disagreement now means the run
+  // is not the measured one and the session stops (`AlRunnerCoverageFrameError`). The unwrapped
+  // twin keeps R383's position-wins (a single-object file is not a multi-object file).
+  test("admitted W1: the session stops; the unwrapped twin keeps R383's position-wins", async () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
       // Another id, so the twin is not a duplicate key of W1.
@@ -427,25 +429,20 @@ describe("R-300b (I3): --server's own name disagreeing with the position drops t
       const dir = await bundle({ [W1_FILE]: W1, "src/C1.Codeunit.al": twin });
       const index = await buildAlRunnerCoverageIndex(dir, SYMS);
       const st = [{ line: 10, hits: 1, scope: "Miss" }];
-      const got = alRunnerCoverageFromServer(
-        {
-          test: "Codeunit91930.ReachW1",
-          coverage: [
-            { file: W1_FILE, statements: st },
-            { file: "src/C1.Codeunit.al", statements: st },
-          ],
-        },
-        index,
+      const row = (file: string) => ({
+        test: "Codeunit91930.ReachW1",
+        coverage: [{ file, statements: st }],
+      });
+      expect(() => alRunnerCoverageFromServer(row(W1_FILE), index)).toThrow(
+        AlRunnerCoverageFrameError,
       );
+      const got = alRunnerCoverageFromServer(row("src/C1.Codeunit.al"), index);
       expect(got.entries).toEqual([
         { objectType: "Codeunit", objectId: 91901, procedure: "Hit", line: 10 },
       ]);
       const said = warn.mock.calls.map((c) => String(c[0]));
-      const at = (file: string) => `${file}:${st[0]?.line}`;
-      expect(said.filter((s) => s.includes(at(W1_FILE)))).toEqual([
-        `[lethal] al-runner --server named the covered statement at ${at(W1_FILE)} "Miss", but that line is inside "Hit", in a #if-wrapped file; the line is dropped (R300).`,
-      ]);
-      expect(said.filter((s) => s.includes(at("src/C1.Codeunit.al")))).toHaveLength(1);
+      // The twin's disagreement is the R383 position-wins warning (one), not a throw.
+      expect(said.filter((s) => s.includes("the position wins (R383)"))).toHaveLength(1);
     } finally {
       warn.mockRestore();
     }

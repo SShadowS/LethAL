@@ -169,7 +169,7 @@ export function refusedUnmeasuredShapeReason(
   objectId: number,
   file: string,
 ): string {
-  return `coverage refused for ${objectType}:${objectId} (${file}): its file holds a #if object wrapper of a shape not measured on al-runner (R300). Its mutants read no-coverage.`;
+  return `coverage refused for ${objectType}:${objectId} (${file}): its file holds a #if object wrapper of a shape the al-runner coverage index has no rule for (two-arm, #elif, nested, or a multi-object file holding a wrapper; R602). Its mutants read no-coverage.`;
 }
 
 /** R-300b (C1): the sentence for an object key two files declare. */
@@ -1131,16 +1131,18 @@ export function undecidedArmsReason(
 export type WrappedRule = "bc-shape" | "al-runner-index" | "refuse-wrapped";
 
 /**
- * R654 S1: the rule a SESSION of each backend applies, exactly the pre-R654 mapping (a v3 session
- * gets neither the bcdev arm nor the al-runner index arm, so it refuses every wrapped file). S3
- * removed the retired .NET al-runner's row; `"al-runner-index"` stays, for the coverage index.
+ * R654 S1: the rule a SESSION of each backend applies. R602: a v3 session gets the al-runner index
+ * arm, the same rule the coverage index applies (`alRunnerAdmitsWrappedFile`): a single-wrapper
+ * file is scored and any other wrapped file is refused by name. Before R602 it refused every
+ * wrapped file in selection while the CLI kept coverage ON for a project of single-wrapper files,
+ * so their mutants read `no-coverage` (32 lost kills on `sandbox-wrapped`).
  */
 export function wrappedRuleFor(kind: BuildBackend["kind"]): WrappedRule {
   switch (kind) {
     case "bcdev":
       return "bc-shape";
     case "al-runner-v3":
-      return "refuse-wrapped";
+      return "al-runner-index";
   }
 }
 
