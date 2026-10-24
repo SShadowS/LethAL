@@ -1,0 +1,12 @@
+{
+  "id": "9ff560dd-bcde-4128-8f36-d9eaf8110c4c",
+  "name": "R709 Probe Target",
+  "publisher": "LethAL Probe",
+  "version": "1.0.0.1",
+  "brief": "R709 throwaway probe app, no tables.",
+  "platform": "28.0.0.0",
+  "runtime": "17.0",
+  "target": "OnPrem",
+  "idRanges": [{ "from": 93730, "to": 93739 }],
+  "features": ["NoImplicitWith"]
+}
