@@ -751,6 +751,18 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    */
   private baselineRefused = new Map<number, Set<string>>();
   private dotnetHelperWarned = false;
+  /** R739: where this backend's notices go. Default: the console, until a session installs one. */
+  private notify: (code: string, message: string) => void = (_code, message) =>
+    console.warn(message);
+
+  /**
+   * R739: a session installs its emitter here, with a fresh once-per-backend notice flag so each
+   * session on a reused backend sees its own notice; `undefined` restores the console.
+   */
+  setNotify(notify?: (code: string, message: string) => void): void {
+    this.notify = notify ?? ((_code, message) => console.warn(message));
+    if (notify !== undefined) this.dotnetHelperWarned = false;
+  }
   private readonly compiler: ArtifactCompiler;
   /** Test hook (legs X (e), (f)): rewrites a mutant call's coverage file before it is read. */
   coverageTamper?: (path: string) => Promise<void>;
@@ -1110,6 +1122,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
       const index = await buildAlRunnerCoverageIndex(active, {
         symbols,
+        notify: this.notify,
         ...(this.cfg.sourceProjectDir !== undefined
           ? { sourceProjectDir: this.cfg.sourceProjectDir }
           : {}),
@@ -1588,7 +1601,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         );
       }
     }
-    return alRunnerCoverageFromServer({ test: entry.test, coverage: entry.coverage }, index);
+    return alRunnerCoverageFromServer(
+      { test: entry.test, coverage: entry.coverage },
+      index,
+      this.notify,
+    );
   }
 
   private rowMissing(ref: TestMethodRef, why: string, wallMs: number): TestVerdict {
@@ -1690,7 +1707,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     if (res.exitCode === 8 && !this.dotnetHelperWarned) {
       this.dotnetHelperWarned = true;
-      console.warn(
+      this.notify(
+        "al-runner-v3-dotnet-helper-missing",
         "[lethal] al-runner-v3-dotnet-helper-missing: v3 exited 8, some tests were not run because its .NET helper could not be used; those tests are never scored (R586 §5).",
       );
     }
@@ -2087,7 +2105,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         if (err instanceof AlRunnerServerRequestError) {
           // Never silent: its mutants run live, so a cause like a timer overflow shows.
           this.stats.prefetchDropped += 1;
-          console.warn(
+          this.notify(
+            "al-runner-v3-entries-prefetch-dropped",
             `[lethal] al-runner-v3-entries-prefetch-dropped: a prefetch request of ${chunk.length} mutant group(s) gave no usable answer (${err.kind}: ${err.message.slice(0, 300)}); its mutants run as live requests (R635 §6).`,
           );
           continue;
@@ -2146,7 +2165,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         return;
       }
       if (err instanceof AlRunnerV3DependencySkippedError) throw err;
-      console.warn(
+      this.notify(
+        "al-runner-v3-pair-skipped",
         `[lethal] al-runner-v3-pair-skipped: the kill pair for ${mutantId} was not sent (${err instanceof Error ? `${err.name}: ${err.message.slice(0, 300)}` : String(err)}); the confirm and the reproduction run as live requests (R653).`,
       );
       return;

@@ -68,12 +68,15 @@ import {
 } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
+  type WarningCollector,
   checkGateWarnings,
   collectWarnings,
   finishGate,
   gateEndLine,
+  isGateWarningsError,
   nonPassExit,
   preflightObserve,
+  printObserved,
   settleThrown,
 } from "./gate-warnings";
 import {
@@ -417,6 +420,10 @@ async function main(): Promise<void> {
     // ---- Steps 3 to 6. Step 7 (restore) runs whatever happens here.
     let gateErr: unknown;
     let bStarted = false;
+    // R739: the warning events of step 3's `runVerify` and of step 7's `runNamedMutants`.
+    const verifyWarnings = collectWarnings();
+    const namedWarnings = collectWarnings();
+    let verifyReturned = false;
     try {
       // ---- 3. lethal verify, through the CLI code path.
       const quarantineBefore = await quarantineRecords(defaultQuarantineDir());
@@ -442,6 +449,7 @@ async function main(): Promise<void> {
           runVerify: (args, deps) =>
             runVerify(args, {
               ...deps,
+              emit: [...(deps.emit ?? []), verifyWarnings.subscriber],
               log: (line) => {
                 reachLog.push(line);
                 process.stderr.write(`${line}\n`);
@@ -449,6 +457,7 @@ async function main(): Promise<void> {
             }),
         },
       );
+      verifyReturned = true;
       const publishes = testAppPublishes - publishesBefore;
       const acquired = acquires - acquiresBefore;
       const out = JSON.parse(text) as VerifyOutput;
@@ -620,6 +629,8 @@ async function main(): Promise<void> {
         },
       });
       const verifyMs = out.timings.totalMs;
+      // R739: step 3's warning set, once every other step 3 check has run.
+      checkGateWarnings("agreement", "verify", verifyWarnings);
       console.log(
         `step 3 PASS: 4 killed by the answer tests, S5 skipped; testsRun and reach line as pre-committed (R-384); exit 0; one test-app publish; read-back equal; lease free; verify totalMs ${verifyMs}`,
       );
@@ -744,16 +755,34 @@ async function main(): Promise<void> {
       console.log("step 6 PASS: verify is faster than the fresh full run");
     } catch (err) {
       gateErr = err;
+      // The run's own error wins: step 3's codes are printed, never asserted. "The run threw" is
+      // said only when the verify call itself threw; a later step's failure just shows the codes.
+      if (!isGateWarningsError(err)) {
+        if (verifyReturned) printObserved("agreement", "verify", verifyWarnings);
+        else settleThrown("agreement", "verify", verifyWarnings);
+      }
     }
 
     // ---- 7. Restore the committed tests app. Always, once step 3 began.
     let restoreErr: unknown;
     try {
-      await restore(bStarted, aDb, bDb, lastArtifact.artifactId);
+      await restore(bStarted, aDb, bDb, lastArtifact.artifactId, namedWarnings);
     } catch (err) {
       restoreErr = err;
     }
-    if (gateErr !== undefined || restoreErr !== undefined) {
+    // R739: the restore's warning set is checked apart from the restore proof, so a mismatch is
+    // never reported as a failed restore (the RECOVERY text below would be wrong).
+    let namedWarningsErr: unknown;
+    if (restoreErr === undefined) {
+      try {
+        checkGateWarnings("agreement", "named", namedWarnings);
+      } catch (err) {
+        namedWarningsErr = err;
+      }
+    } else {
+      settleThrown("agreement", "named", namedWarnings);
+    }
+    if (gateErr !== undefined || restoreErr !== undefined || namedWarningsErr !== undefined) {
       const describe = (e: unknown) => formatFailure(e);
       throw new Error(
         [
@@ -763,6 +792,9 @@ async function main(): Promise<void> {
           restoreErr !== undefined
             ? `step 7 (restore) FAILED: ${describe(restoreErr)}. ${RECOVERY}`
             : "step 7 (restore) PASSED: the committed tests app is back, by a fresh read-back",
+          ...(namedWarningsErr !== undefined
+            ? [`step 7 (warning codes) FAILED: ${describe(namedWarningsErr)}`]
+            : []),
         ].join("\n"),
       );
     }
@@ -780,6 +812,8 @@ async function main(): Promise<void> {
     aPath: string,
     bPath: string,
     aArtifactId: string,
+    /** R739: collects the warning events of the one `runNamedMutants` below. */
+    namedWarnings: WarningCollector,
   ): Promise<void> {
     type Candidate = { path: string; artifactId: string; appId: string };
     const recorded = (path: string): Candidate | undefined => {
@@ -868,6 +902,7 @@ async function main(): Promise<void> {
       });
       let published: PublishedTestApp | undefined;
       const res = await runNamedMutants({
+        emit: [namedWarnings.subscriber],
         backend,
         store,
         runId,

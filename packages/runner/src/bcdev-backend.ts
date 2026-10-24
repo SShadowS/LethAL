@@ -450,6 +450,24 @@ export class BcDevMcpBackend implements ExecutionBackend {
   /** R552: the leftover `lethal-control.app` warning is printed once per backend. */
   private leftoverWarned = false;
   private danglingWarned = false;
+  /** R739: where this backend's notices go. Default: the console, as before a session installs one. */
+  private notify: (code: string, message: string) => void = (_code, message) =>
+    console.warn(message);
+
+  /**
+   * R739: a session installs its emitter here (and a fresh start for the once-per-backend notice
+   * flags, so each session on a reused backend sees its own notices); `undefined` restores the
+   * console. The control state's notify follows, for the transport's late-refusal warning.
+   */
+  setNotify(notify?: (code: string, message: string) => void): void {
+    this.notify = notify ?? ((_code, message) => console.warn(message));
+    this.controlState.notify = notify;
+    if (notify !== undefined) {
+      this.refusalsWarned.clear();
+      this.leftoverWarned = false;
+      this.danglingWarned = false;
+    }
+  }
   /** R552: this backend's package-cache copy, built on the first compile and removed by `close()`. */
   private packageCacheCopy: Promise<string> | undefined;
   // R298 (`coverageMode: "procedure"`, the hub): refused declared objects, `type:id` -> reason, by
@@ -808,12 +826,12 @@ export class BcDevMcpBackend implements ExecutionBackend {
       const leftover = controlLeftoverWarning(this.cfg.packageCachePath);
       if (leftover !== undefined && !this.leftoverWarned) {
         this.leftoverWarned = true;
-        console.warn(leftover);
+        this.notify("package-cache-leftover", leftover);
       }
       const dangling = danglingPackageWarning(this.cfg.packageCachePath);
       if (dangling !== undefined && !this.danglingWarned) {
         this.danglingWarned = true;
-        console.warn(dangling);
+        this.notify("package-cache-dangling", dangling);
       }
     } catch (e) {
       await removeStagedCopy(staging, this.deployment?.removeDir);
@@ -975,7 +993,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
     for (const [key, reason] of refused) {
       if (this.refusalsWarned.has(key)) continue;
       this.refusalsWarned.add(key);
-      console.warn(`[lethal] ${reason}`);
+      this.notify("coverage-refused-object", `[lethal] ${reason}`);
     }
   }
 
@@ -1501,6 +1519,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
       declaredRows,
       refusedRows,
       memberEntries,
+      namingGaps.length > 0,
       rowKeys,
       stats,
     );
@@ -1532,6 +1551,12 @@ export class BcDevMcpBackend implements ExecutionBackend {
    *
    * Reported per test rather than aggregated: the point is to name WHICH test, and a fenced
    * baseline is tens of tests, not thousands. Silent when coverage looks healthy.
+   *
+   * R746: the no-procedure-lines case needs `hasNamingGap` (some declared, unrefused row in NO
+   * known span). A test that runs only a trigger body (a field's OnValidate), line-0 rows, or
+   * R318 shared lines has no member entry but nothing wrong with the frame, and stays quiet.
+   * Blind spot: a frame shift that lands every row in such spans stays quiet too (a real shift
+   * is 1-2 lines, and the old rule could not tell it from correct trigger-only coverage either).
    */
   private warnOnThinFencedCoverage(
     ref: TestMethodRef,
@@ -1539,6 +1564,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
     declaredRows: number,
     refusedRows: number,
     memberEntries: number,
+    hasNamingGap: boolean,
     rowKeys: readonly string[],
     stats?: FencedCoverageStats,
   ): void {
@@ -1559,16 +1585,21 @@ export class BcDevMcpBackend implements ExecutionBackend {
         this.lineMap?.declaredSample(3) ?? [],
         this.coverageObjectIdFilter,
       );
-      console.warn(
+      this.notify(
+        "fenced-coverage-no-object-rows",
         `[lethal] fenced coverage for ${where}: ${totalRows} row(s) came back, NONE of them for an object this artifact declares${server}. ${consequence} ${blame}`,
       );
       return;
     }
+    if (!hasNamingGap) return; // R746: trigger bodies, line 0 and shared lines only
     const blame =
       "Suspect the line map's base-line frame — a shifted range degrades every observation " +
       "to object level instead of naming a member.";
-    console.warn(
-      `[lethal] fenced coverage for ${where}: ${declaredRows} row(s) for objects this artifact declares, but NOT ONE line fell inside a known procedure${server}. ${consequence} ${blame}`,
+    const lost =
+      "Member attribution is lost for this test; only object-level matching (triggers and local procedures) remains.";
+    this.notify(
+      "fenced-coverage-no-procedure-lines",
+      `[lethal] fenced coverage for ${where}: ${declaredRows} row(s) for objects this artifact declares, but NOT ONE line fell inside a known procedure${server}. ${lost} ${blame}`,
     );
   }
 
