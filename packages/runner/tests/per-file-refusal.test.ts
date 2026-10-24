@@ -256,7 +256,8 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
       // R276: `gapId` values only, the gap partition unchanged (was 59942c7a...4e81).
       // R-463: re-recorded for R-463's DataBandExt arm, ruling orchestrator 2026-10-09 (was
       // c83bdd08...23eb); 4 new arm entries, ids +4 after DataBandExt, proven in id-shift-proof.txt.
-      "dc2c1f197b0932e58f3d1cc1fde4f4c6a80a11f9a66d221c3090af766986da48",
+      // R731: toggle-blank-string's operatorVersion 1.1.0 is the only change (was dc2c1f19...da48).
+      "a7dba8bc19cf696a66651ee2446a6409a2a73918dbc2e055cd66669f99fd0835",
     );
     const all = createHash("sha256");
     for (const f of (await readdir(dir)).sort()) {
@@ -275,8 +276,9 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
     // R-463: re-recorded for R-463's DataBandExt arm, ruling orchestrator 2026-10-09 (was
     // d77b17a3...49ea); DataBandExt gains 4 mutants, ids +4 after DataBandExt, proven in
     // id-shift-proof.txt (/coord/handoff/R-463/).
+    // R731: only the manifest moved it, by toggle-blank-string's operatorVersion 1.1.0 (was 0e1a6cbb...2166).
     expect(all.digest("hex")).toBe(
-      "0e1a6cbb7b0cd434b8e7de141ccf567a2d483a112f21611429daf22027c82166",
+      "6a1f8e8042233cb795a8a812665afa1fa53f4795e197826f5cfcc487acbfeacf",
     );
   }, 60_000);
 });

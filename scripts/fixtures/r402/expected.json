@@ -44,5 +44,7 @@
   "w7_for_control_unknown": { "specs": [12, 9, 12, 9] },
   "e1_empty_then_sole_if_body": { "specs": [10, 10, 10, 10] },
   "e2_empty_then_case_branch": { "specs": [8, 8, 8, 8] },
-  "e3_remove_call_comment_before_else": { "specs": [10, 10, 10, 10] }
+  "e3_remove_call_comment_before_else": { "specs": [10, 10, 10, 10] },
+  "x1_char_element": { "specs": [8, 8, 8, 8] },
+  "x2_case_true_dup": { "specs": [9, 9, 9, 9] }
 }

@@ -188,6 +188,8 @@ const NEITHER_MODULES = [
   /** A member's attribute run (R474: the member hash; runner's testpage-scan and test digest). */
   "packages/engine/src/ast/attribute-run.ts",
   "packages/engine/src/ast/canonicalization.ts",
+  /** Case-label equality, for the admission check in generateMutationSet (R732). */
+  "packages/engine/src/ast/case-labels.ts",
   "packages/engine/src/ast/hash.ts",
   "packages/engine/src/ast/mask.ts",
   "packages/engine/src/ast/native-parser.ts",

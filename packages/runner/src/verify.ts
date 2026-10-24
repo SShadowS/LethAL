@@ -453,22 +453,28 @@ export async function expandGapIds(
   }
   const entries = new Map(manifest.mutants.map((m) => [m.mutantId, m] as const));
   const rows = store.batchMutantRows(rec.runId, rec.batchIndex);
-  const gapRows: GapRow[] = rows.map((r) => {
+  // R734 A5: the mutants a redeployed artifact left out because they broke the compile have `error`
+  // rows and no manifest entry; the manifest lists them (hash-covered), and only those are skipped.
+  const isolated = new Set((manifest.isolatedOut ?? []).map((i) => i.mutantId));
+  const gapRows: GapRow[] = rows.flatMap((r) => {
     const entry = entries.get(r.mutantCode);
     const gapId = entry?.gapId;
+    if (entry === undefined && r.verdict === "error" && isolated.has(r.mutantCode)) return [];
     if (entry === undefined || gapId === undefined) {
       throw new Error(
         `verify.ts: run ${rec.runId} batch ${rec.batchIndex} records ${r.mutantCode}, which artifact ${req.artifactId}'s manifest does not hold (a corrupt store)`,
       );
     }
-    return {
-      mutantCode: r.mutantCode,
-      verdict: r.verdict,
-      gapId,
-      batchIndex: rec.batchIndex,
-      // The report row's `line` is the same `startLine`, so explain orders members the same way.
-      line: entry.startLine,
-    };
+    return [
+      {
+        mutantCode: r.mutantCode,
+        verdict: r.verdict,
+        gapId,
+        batchIndex: rec.batchIndex,
+        // The report row's `line` is the same `startLine`, so explain orders members the same way.
+        line: entry.startLine,
+      },
+    ];
   });
   // Two rows for one mutant is corruption. A manifest entry with NO row is "not measured" only
   // when the run did not finish: a run that quarantined or threw partway through its last batch

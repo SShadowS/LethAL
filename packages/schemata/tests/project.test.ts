@@ -25,6 +25,7 @@ import {
   attributeHeader,
   gapIdOf,
   identityEntriesOf,
+  identitySiteKey,
   identityTupleOf,
   runIdentityOrdinals,
   scanDeclaredObjects,
@@ -1693,6 +1694,73 @@ function twoProcedureInput(
     operatorTiers: NO_TIERS,
   };
 }
+
+// R734: the clean set is redeployed after a compile failure with the ids it was first given.
+describe("writeInstrumentedProject fixedIds (R734)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  const idsByStart = async (input: WriteInput): Promise<Map<number, string>> => {
+    await writeInstrumentedProject(input);
+    const manifest = JSON.parse(
+      await readFile(join(input.targetDir, "mutant-manifest.json"), "utf8"),
+    ) as { mutants: { mutantId: string; startIndex: number }[] };
+    return new Map(manifest.mutants.map((m) => [m.startIndex, m.mutantId]));
+  };
+
+  it("a narrowed write keeps the ids of the full write; a spec with no fixed id is refused", async () => {
+    const full = twoProcedureInput();
+    const narrowed = twoProcedureInput();
+    try {
+      const original = await idsByStart(full);
+      const [file] = narrowed.files;
+      if (file === undefined) throw new Error("fixture shape");
+      const second = file.specs[1];
+      if (second === undefined) throw new Error("fixture shape");
+      const key = identitySiteKey(
+        file.path,
+        second.before.startIndex,
+        second.before.endIndex,
+        second.operatorName,
+      );
+      expect(original.get(second.before.startIndex)).toBe("M0002");
+      const onlySecond = { ...narrowed, files: [{ ...file, specs: [second] }] };
+      const kept = await idsByStart({ ...onlySecond, fixedIds: new Map([[key, "M0002"]]) });
+      // Without fixedIds the lone spec would be renumbered M0001: the bug this option closes.
+      expect([...kept.values()]).toEqual(["M0002"]);
+      await expect(
+        writeInstrumentedProject({ ...onlySecond, fixedIds: new Map() }),
+      ).rejects.toThrow(/no fixed id/);
+    } finally {
+      await rm(full.targetDir, { recursive: true, force: true });
+      await rm(narrowed.targetDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("writeInstrumentedProject fixedIds, one id twice (R734)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  it("two specs given one fixed id are refused, never written as two mutants of one id", async () => {
+    const input = twoProcedureInput();
+    try {
+      const [file] = input.files;
+      if (file === undefined) throw new Error("fixture shape");
+      const fixedIds = new Map(
+        file.specs.map((s) => [
+          identitySiteKey(file.path, s.before.startIndex, s.before.endIndex, s.operatorName),
+          "M0001",
+        ]),
+      );
+      await expect(writeInstrumentedProject({ ...input, fixedIds })).rejects.toThrow(/used twice/);
+    } finally {
+      await rm(input.targetDir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("gap ids (C02-09)", () => {
   beforeAll(async () => {
