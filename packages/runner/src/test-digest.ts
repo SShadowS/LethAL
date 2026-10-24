@@ -143,6 +143,9 @@ function unitKeyMissing(u: Unit): never {
   throw new Error(`test-digest.ts: ${u.display} (${u.file}) has no unit key`);
 }
 
+const PLATFORM_APP_TRIGGER =
+  /^on(installapp|upgrade|checkpreconditions|validateupgrade)per(company|database)$/;
+
 /**
  * Every test-app subscriber codeunit, whole, and everything its procedures and triggers reach;
  * and every test-app extension object (tableextension, pageextension, ...), whole, and everything
@@ -182,6 +185,23 @@ export function subscriberFold(
     for (const raw of u.implementations)
       scanner.foldImplementation(raw, `${u.display} implementation ${raw}`, st);
   }
+  // R700: the platform runs an Install or Upgrade codeunit's app triggers when it installs or
+  // upgrades the test app, before any test. Only those codeunits declare these trigger names, so
+  // the names stand for `Subtype = Install|Upgrade` (the model holds no Subtype).
+  for (const u of model.units) {
+    if (u.kind !== "codeunit" || !u.triggers.some((t) => PLATFORM_APP_TRIGGER.test(t.name)))
+      continue;
+    lines.push(`P ${key(u)} ${u.textHash}`);
+    scanner.foldEntryUnit(u, st);
+  }
+  // R701: a permission set holds no code but decides which reads and writes a test may do.
+  // Every test-app permission set and permission-set extension, whole, as ONE line (fail closed);
+  // no permission set in the app, no line.
+  const perms = model.objects
+    .filter((u) => u.kind === "permissionset" || u.kind === "permissionsetextension")
+    .map((u) => `${key(u)} ${u.textHash}`)
+    .sort();
+  if (perms.length > 0) lines.push(`Q ${sha256(perms.join("\n"))}`);
   // A test-app codeunit the folded code names as a value can be run by id from anywhere.
   scanner.foldIdTargets(st);
   lines.push(...reachLines(st, keys));
