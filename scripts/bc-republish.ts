@@ -228,6 +228,34 @@ export function roleOf(dir: string, all: ReadonlyMap<string, AppManifest>): "tar
   return [...all].some(([d, m]) => d !== dir && dependsOn(m, me)) ? "target" : "dependent";
 }
 
+/**
+ * R-707 (/coord/handoff/R-707/measure.md): on bc2 a refused UPGRADE could not restore and stripped the
+ * tests app. So before `publish` runs, compile each fixture dependent the run did not request
+ * against the new target build; one that breaks refuses the whole run, with nothing sent to BC.
+ * A requested dependent is already compiled against the new target, so it is not checked twice.
+ */
+export async function guardDependents(
+  requested: readonly string[],
+  all: ReadonlyMap<string, AppManifest>,
+  compile: (dir: string) => Promise<void>,
+  publish: () => Promise<void>,
+): Promise<void> {
+  for (const dir of republishPlan(requested, all).added) {
+    try {
+      await compile(dir);
+    } catch (err) {
+      const first =
+        errText(err)
+          .split(/\r?\n/)
+          .find((l) => /: error [A-Z]{2}\d+:/.test(l)) ?? errText(err).split(/\r?\n/)[0];
+      throw new Error(
+        `refuse dependent-breaks: ${all.get(dir)?.name ?? dir} (${first?.trim()})\nNOTHING was published. Republish the dependent together with its target, or fix the change.`,
+      );
+    }
+  }
+  await publish();
+}
+
 // ---------------------------------------------------------------------------------------------
 // the server
 
@@ -299,7 +327,9 @@ async function republish(args: Args): Promise<void> {
     const ops = realOps(c);
     // 1. compile everything before deciding anything
     const items: AppItem[] = [];
-    for (const dir of order) {
+    // Compiles one fixture against the new local builds of `order` (already in `items`), else the
+    // server's resident package. Returns the built bytes.
+    const compileDir = async (dir: string, outName: string): Promise<Buffer> => {
       const m = all.get(dir) as AppManifest;
       const symbols = join(build, `${dir}-symbols`);
       mkdirSync(symbols, { recursive: true });
@@ -322,7 +352,7 @@ async function republish(args: Args): Promise<void> {
         }
         writeFileSync(join(symbols, `${d.publisher}_${d.name}.app`), pkg);
       }
-      const out = join(build, `${dir}.app`);
+      const out = join(build, outName);
       const defines = PUBLISH_PLAN.find((s) => s.target === dir)?.defines;
       let project = join(FIXTURES, dir);
       let version = m.version;
@@ -345,31 +375,44 @@ async function republish(args: Args): Promise<void> {
       await alcCompile(tools.alcPath, project, symbols, out, defines);
       const bytes = readFileSync(out);
       log(compiledLine(bytes, version !== m.version ? ` (minted; app.json ${m.version})` : ""));
-      items.push({ dir, local: bytes, role: roleOf(dir, all), gateDeploys: false });
+      return bytes;
+    };
+    for (const dir of order) {
+      const local = await compileDir(dir, `${dir}.app`);
+      items.push({ dir, local, role: roleOf(dir, all), gateDeploys: false });
     }
-    try {
-      // 2. decide every app; 3. refuse before publishing anything
-      const decided = await decideAll(items, ops, "republish", log);
-      const refused = refusals(decided);
-      if (refused.length > 0)
-        throw new Error(
-          `${refused.length} app(s) refused, so NOTHING was published:\n  ${refused.map((d) => d.decision.line).join("\n  ")}`,
-        );
-      if (args.predict === true) {
-        log("  predicted: nothing published");
-        return;
-      }
-      // 4. publish in order, reading each back
-      await actAll(decided, ops, log);
-    } finally {
-      // 5. the rows after, whatever happened; a failed read here never replaces the run's own
-      // refusal or read-back error (review M3)
-      try {
-        await printRows("after", items, ops, all, log);
-      } catch (err) {
-        log(`  after     the rows could not be read: ${errText(err)}`);
-      }
-    }
+    // Every fixture dependent that was not requested is checked, installed or not: fail closed,
+    // and it needs no server read. Nothing from these compiles is published.
+    await guardDependents(
+      apps,
+      all,
+      async (dir) => void (await compileDir(dir, `${dir}-check.app`)),
+      async () => {
+        try {
+          // 2. decide every app; 3. refuse before publishing anything
+          const decided = await decideAll(items, ops, "republish", log);
+          const refused = refusals(decided);
+          if (refused.length > 0)
+            throw new Error(
+              `${refused.length} app(s) refused, so NOTHING was published:\n  ${refused.map((d) => d.decision.line).join("\n  ")}`,
+            );
+          if (args.predict === true) {
+            log("  predicted: nothing published");
+            return;
+          }
+          // 4. publish in order, reading each back
+          await actAll(decided, ops, log);
+        } finally {
+          // 5. the rows after, whatever happened; a failed read here never replaces the run's own
+          // refusal or read-back error (review M3)
+          try {
+            await printRows("after", items, ops, all, log);
+          } catch (err) {
+            log(`  after     the rows could not be read: ${errText(err)}`);
+          }
+        }
+      },
+    );
   });
 }
 

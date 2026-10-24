@@ -28,6 +28,11 @@ your lane: `--lane <lane>` if given, else your kraken agent identity (`KRAKEN_AG
 the run names, setup refuses the WHOLE run by name, in every mode, before it reads the login, takes a lease or
 calls a server, and prints the marker. `scripts/bc-republish.ts` refuses the same way before its lease. The
 clearing run sets `LETHAL_OUT_OF_USE_CLEARING=<server>` (that exact server only).
+
+**A refused upgrade can strip a server of a fixture tests app (R709).** If BC refuses an upgrade of a target
+because an installed dependent no longer compiles, it may fail to restore: the target is left uninstalled and the
+tests app is gone. `bc-republish.ts` now refuses such a change before publishing (`dependent-breaks`, R-707). To
+recover a stripped server, the owner restarts it (which clears the R605 version record), then re-run setup.
 - **Set it on the one clearing command only, never `export` it.** Left set in a shell, it lets every later
   marker for that server through, and only the loud `!!!` line shows that it did.
 

@@ -6,6 +6,7 @@ import { ServerOutOfUseError } from "../packages/runner/itest/out-of-use.ts";
 import type { AppManifest } from "./bc-linux-setup.ts";
 import {
   controlAction,
+  guardDependents,
   packageStatus,
   parseArgs,
   publishOrder,
@@ -114,6 +115,57 @@ describe("publishOrder and roleOf (R599: nothing is removed, so no dependent is 
   test("a PUBLISH_PLAN target with no dependent (sandbox-probes) is a target, so it is told --mint (M4)", () => {
     const probes = new Map<string, AppManifest>([["sandbox-probes", app("p")]]);
     expect(roleOf("sandbox-probes", probes)).toBe("target");
+  });
+});
+
+describe("R-707: guardDependents compiles unrequested dependents before anything is published", () => {
+  const all = new Map<string, AppManifest>([
+    ["tt", app("tt", ["t"])],
+    ["t", app("t")],
+  ]);
+  const run = async (requested: string[], failing: string[]) => {
+    const compiled: string[] = [];
+    const published: string[][] = [];
+    let error: Error | undefined;
+    try {
+      await guardDependents(
+        requested,
+        all,
+        async (dir) => {
+          compiled.push(dir);
+          if (failing.includes(dir))
+            throw new Error(
+              `alc failed on ${dir} (exit 1):\nsrc/Dep.al(7,21): error AL0135: no argument given`,
+            );
+        },
+        async () => void published.push(publishOrder(requested, all)),
+      );
+    } catch (e) {
+      error = e as Error;
+    }
+    return { compiled, published, error };
+  };
+
+  test("(a) a breaking change is refused by name, and nothing is published", async () => {
+    const r = await run(["t"], ["tt"]);
+    expect(r.error?.message).toContain(
+      "refuse dependent-breaks: App tt (src/Dep.al(7,21): error AL0135",
+    );
+    expect(r.published.length).toBe(0);
+  });
+
+  test("(b) a compatible change publishes, after one compile per dependent", async () => {
+    const r = await run(["t"], []);
+    expect(r.error).toBeUndefined();
+    expect(r.compiled).toEqual(["tt"]);
+    expect(r.published).toEqual([["t"]]);
+  });
+
+  test("(c) a dependent requested with its target is not compiled a second time", async () => {
+    const r = await run(["tt", "t"], ["tt"]);
+    expect(r.error).toBeUndefined();
+    expect(r.compiled.length).toBe(0);
+    expect(r.published).toEqual([["t", "tt"]]);
   });
 });
 
