@@ -138,6 +138,8 @@
     "bc-republish.test.ts",
     "r594/cdo-publish.ts",
     "r623-probe/drive.ts",
+    "r706-client-probe/classify.ts",
+    "r706-client-probe/classify.test.ts",
     "bc-symbol-cache.ts",
     "bc-symbol-cache.test.ts",
     "bc-app-content.ts",
