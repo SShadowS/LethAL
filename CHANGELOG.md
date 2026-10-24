@@ -1002,6 +1002,9 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **A recurring verify timeout in `r391-cross-file-twin.test.ts` is gone** ([R716](docs/roadmap/R716.md)). Its two
+  file-backed test stores sat on disk, the one place R616's move to tmpfs missed, so the R565 NULL-digest test hit
+  5 s under a parallel verify's disk load. They now use `testDbPath`. No timeout was raised.
 - **The Windows staged compile copy is removed with a real retry, and a failure is named** ([R708](docs/roadmap/R708.md)).
   A scanner-locked folder used to be left behind silently, which flaked one unit test. CI now uploads the verify logs
   of a failed run.

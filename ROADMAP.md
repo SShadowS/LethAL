@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**25 of 709 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**25 of 710 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -754,6 +754,7 @@ that ordering is the priority.
 - **R711** · Option B: setup and bc-republish could remove an installed dependent first (uninstall, unpublish), publish the target, then republish the dependent, behind a flag · [R711.md](docs/roadmap/R711.md) · open, filed 2026-10-24 (build only if a lane needs it)
 - **R712** · Which BC path is the oracle for HTTP-in-test behaviour: the test runner hub or the web-service path · [R712.md](docs/roadmap/R712.md) · closed 2026-10-24 — owner ruling: the test runner hub path
 - **R713** · bcdev runs tests through the web-service path, so a test asserting on BC's HTTP error text reads a different text than VS Code or the hub (R706) · [R713.md](docs/roadmap/R713.md) · open, filed 2026-10-24
+- **R716** · r391-cross-file-twin.test.ts's two file-backed stores sat on disk, the one place R616's tmpfs move missed, so its R565 NULL-digest test timed out under a parallel verify · [R716.md](docs/roadmap/R716.md) · done (11c504df)
 
 ---
 
