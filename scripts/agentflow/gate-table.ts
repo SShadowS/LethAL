@@ -41,6 +41,11 @@ export const LEGS = [
   "alrunner-v3",
   "hang",
   "coverage-differential",
+  // R271: the four legs that used to run only on the old Cronus28.
+  "harden",
+  "verify",
+  "testapp",
+  "agreement",
 ] as const;
 
 export type Leg = (typeof LEGS)[number];
@@ -54,6 +59,12 @@ export type Leg = (typeof LEGS)[number];
  * here selects this full set (orchestrator ruling, R654 S2). A change to selection logic is rare;
  * choosing too many gates is the safe way to be wrong; and the orchestrator rules such a change
  * case by case rather than this table trying to.
+ *
+ * R271: `harden`, `verify`, `testapp` and `agreement` ARE here. Each has a `package.json` script
+ * (unlike `coverage-differential`), so they can be run, and default-deny
+ * must fail toward more gates, not fewer. The control app is also on all four's path (each
+ * publishes and drives it), and its row uses this set. The cost is four more legs on an unmatched
+ * change, which is the safe way to be wrong.
  */
 export const FULL_SET: readonly Leg[] = [
   "bcdev",
@@ -62,6 +73,10 @@ export const FULL_SET: readonly Leg[] = [
   "tables",
   "chunked",
   "alrunner-v3",
+  "harden",
+  "verify",
+  "testapp",
+  "agreement",
   "hang",
 ];
 
@@ -74,6 +89,12 @@ export const FULL_SET: readonly Leg[] = [
  * best-effort; a failure there makes later bcdev runs refuse with `operation-orphaned`
  * (the OFF leg's teardown), so a cheap-first schedule would make one gate red for the previous
  * gate's residue.
+ *
+ * R271: `harden` follows the read-only legs. `verify`, `testapp` and `agreement` come next because
+ * each swaps a scratch or marker test app over the resident one and restores it in a `finally`; a
+ * failed restore leaves a stale test app (`StaleTestAppError` for the next run on that fixture),
+ * so they run after every gate that needs the resident build. `hang` stays last: its residue is
+ * worse.
  */
 export const LEG_ORDER: readonly Leg[] = [
   "bcdev",
@@ -83,6 +104,10 @@ export const LEG_ORDER: readonly Leg[] = [
   "chunked",
   "alrunner-v3",
   "coverage-differential",
+  "harden",
+  "verify",
+  "testapp",
+  "agreement",
   "hang",
 ];
 
@@ -96,8 +121,14 @@ export const EXPECTED_SUBLEGS: Readonly<Partial<Record<Leg, readonly string[]>>>
   "alrunner-v3": V3_AGENTFLOW_LEGS,
 };
 
-/** Which container each leg runs against. One instrumented target per container is a hard rule. */
-export const LEG_CONTAINER: Readonly<Record<Leg, "agent-app" | "agent-data">> = {
+/**
+ * Which container each leg runs against. One instrumented target per container is a hard rule.
+ * The name is a lease key, not a host: tick.ts only groups legs by it. R271 added `agent-harden`
+ * for the legs that read the `sandbox-harden` fixture config (`harden`, `agreement`), a third
+ * instrumented target that must not share a lease with the codeunit or table fixture. `verify`
+ * and `testapp` read `sandbox-app`'s config, like `bcdev`.
+ */
+export const LEG_CONTAINER: Readonly<Record<Leg, "agent-app" | "agent-data" | "agent-harden">> = {
   bcdev: "agent-app",
   lease: "agent-app",
   "stale-publish": "agent-app",
@@ -106,6 +137,10 @@ export const LEG_CONTAINER: Readonly<Record<Leg, "agent-app" | "agent-data">> = 
   tables: "agent-data",
   chunked: "agent-data",
   "coverage-differential": "agent-data",
+  harden: "agent-harden",
+  agreement: "agent-harden",
+  verify: "agent-app",
+  testapp: "agent-app",
 };
 
 interface Rule {
@@ -216,6 +251,61 @@ const RULES: readonly Rule[] = [
     test: startsWith("fixtures/sandbox-hang/", "fixtures/sandbox-hang-tests/"),
     legs: ["hang"],
     why: "the hang fixture and its suite",
+  },
+  // R271. These rows only add; the general runner row above still applies to the same paths.
+  {
+    test: (p) =>
+      startsWith(
+        "fixtures/sandbox-harden/",
+        "fixtures/sandbox-harden-tests/",
+        "fixtures/sandbox-harden-answers/",
+      )(p) ||
+      isOneOf(
+        "packages/runner/itest/harden.itest.ts",
+        "packages/runner/itest/harden-expected.ts",
+        "packages/runner/itest/harden.baseline.json",
+        "packages/runner/src/equivalence-marks.ts",
+      )(p),
+    // `agreement` reads the same fixture pair, so a change to the planted survivors moves both.
+    legs: ["harden", "agreement"],
+    why: "the planted-survivor fixture, its answer key and its pre-committed table",
+  },
+  {
+    test: (p) =>
+      isOneOf(
+        "packages/runner/src/verify.ts",
+        "packages/runner/src/verify-read.ts",
+        "packages/runner/src/verify-reach.ts",
+        "packages/runner/src/test-digest.ts",
+        "packages/runner/src/testpage-scan.ts",
+        "packages/runner/src/testpage-unsupported.ts",
+        "packages/runner/src/runner-disagreement.ts",
+        "packages/runner/itest/verify.itest.ts",
+        "packages/runner/itest/verify-gaps.ts",
+        "packages/runner/itest/verify-reach-fields.ts",
+      )(p),
+    legs: ["verify", "agreement"],
+    why: "the verify command's code; agreement compares verify with full runs, so it moves with it",
+  },
+  {
+    test: isOneOf(
+      "packages/runner/src/test-app-publish.ts",
+      "packages/runner/src/published-test-app.ts",
+      "packages/runner/src/stale-test-app.ts",
+      "packages/runner/itest/test-app-publish.itest.ts",
+      "packages/runner/itest/test-app-version.ts",
+    ),
+    // verify and agreement publish their scratch test app through the same code.
+    legs: ["testapp", "verify", "agreement"],
+    why: "test-app publish and its version and staleness checks",
+  },
+  {
+    test: isOneOf(
+      "packages/runner/itest/verify-agreement.itest.ts",
+      "packages/runner/itest/verify-agreement.ts",
+    ),
+    legs: ["agreement"],
+    why: "the agreement gate's own code",
   },
 ];
 

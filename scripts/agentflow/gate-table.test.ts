@@ -60,6 +60,95 @@ describe("R654 S2: the alrunner-v3 leg", () => {
   });
 });
 
+// R271: harden, verify, testapp and agreement. Each leg: its own paths select it (and a path of
+// another leg's does not), so a rule that is dropped or widened to everything goes red.
+describe("R271: harden, verify, testapp and agreement legs", () => {
+  const OWN: Readonly<Record<string, readonly string[]>> = {
+    harden: [
+      "fixtures/sandbox-harden/src/Harden.Codeunit.al",
+      "fixtures/sandbox-harden-tests/Harden.Test.al",
+      "fixtures/sandbox-harden-answers/Answers.Test.al",
+      "packages/runner/itest/harden.itest.ts",
+      "packages/runner/itest/harden-expected.ts",
+      "packages/runner/src/equivalence-marks.ts",
+    ],
+    verify: [
+      "packages/runner/src/verify.ts",
+      "packages/runner/src/test-digest.ts",
+      "packages/runner/src/testpage-scan.ts",
+      "packages/runner/itest/verify.itest.ts",
+    ],
+    testapp: [
+      "packages/runner/src/test-app-publish.ts",
+      "packages/runner/src/stale-test-app.ts",
+      "packages/runner/itest/test-app-publish.itest.ts",
+    ],
+    agreement: [
+      "packages/runner/itest/verify-agreement.itest.ts",
+      "packages/runner/itest/verify-agreement.ts",
+      "packages/runner/src/verify.ts",
+      "fixtures/sandbox-harden/src/Harden.Codeunit.al",
+    ],
+  };
+
+  for (const [leg, paths] of Object.entries(OWN)) {
+    test(`a change under ${leg}'s own paths selects ${leg}`, () => {
+      for (const p of paths) {
+        const s = selectLegs([p]);
+        // Matched by a rule, not rescued by default-deny (which would select every leg).
+        expect([p, s.unmatched]).toEqual([p, []]);
+        expect([p, (s.legs as readonly string[]).includes(leg)]).toEqual([p, true]);
+      }
+    });
+  }
+
+  test("an unrelated change selects none of the four", () => {
+    for (const p of [
+      "fixtures/sandbox-hang/src/Hang.Codeunit.al",
+      "fixtures/sandbox-data/src/DataMain.Table.al",
+      "packages/runner/src/store.ts",
+      "packages/runner/src/publisher.ts",
+    ]) {
+      const legs = selectLegs([p]).legs as readonly string[];
+      for (const l of ["harden", "verify", "testapp", "agreement"]) {
+        expect([p, l, legs.includes(l)]).toEqual([p, l, false]);
+      }
+    }
+  });
+
+  test("a hardening change does not select verify or testapp, and a test-app change does not select harden", () => {
+    const h = selectLegs(["fixtures/sandbox-harden/src/Harden.Codeunit.al"]).legs;
+    expect(h).not.toContain("verify");
+    expect(h).not.toContain("testapp");
+    const t = selectLegs(["packages/runner/src/test-app-publish.ts"]).legs;
+    expect(t).not.toContain("harden");
+  });
+
+  test("all four are in FULL_SET (default-deny) and the unmatched path selects them", () => {
+    const s = selectLegs(["packages/somewhere-new/src/thing.ts"]).legs;
+    for (const l of ["harden", "verify", "testapp", "agreement"] as const) {
+      expect(FULL_SET).toContain(l);
+      expect(s).toContain(l);
+    }
+  });
+
+  test("containers: harden and agreement on the harden lease, verify and testapp on agent-app", () => {
+    expect(LEG_CONTAINER.harden).toBe("agent-harden");
+    expect(LEG_CONTAINER.agreement).toBe("agent-harden");
+    expect(LEG_CONTAINER.verify).toBe("agent-app");
+    expect(LEG_CONTAINER.testapp).toBe("agent-app");
+  });
+
+  test("order: the test-app swappers run after the read-only legs and before hang", () => {
+    const at = (l: Leg) => LEG_ORDER.indexOf(l);
+    expect(at("coverage-differential")).toBeLessThan(at("harden"));
+    expect(at("harden")).toBeLessThan(at("verify"));
+    expect(at("verify")).toBeLessThan(at("testapp"));
+    expect(at("testapp")).toBeLessThan(at("agreement"));
+    expect(at("agreement")).toBeLessThan(at("hang"));
+  });
+});
+
 describe("default-deny", () => {
   test("a path matching no rule selects the FULL SET, never nothing", () => {
     // The property that makes this table safe to be wrong.

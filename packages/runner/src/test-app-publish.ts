@@ -336,7 +336,7 @@ export async function publishTestApp(
   if (compareVersionsOrRefuse(app.version, resident) < 0) {
     throw new TestAppError(
       "version-below-resident",
-      `the container holds ${app.name} ${resident}, above this project's app.json ${app.version}. LethAL publishes a test app at its own version and never mints one. Clear the resident record (Sync-NAVApp -Mode Clean, see .claude/skills/control-app) or raise app.json above ${resident}.`,
+      `the container holds ${app.name} ${resident}, above this project's app.json ${app.version}. LethAL publishes a test app at its own version and never mints one. Clear the resident record, or raise app.json above ${resident}. To clear it: on a Linux bc server (bc1-bc3), uninstall the app, then call the automation API's bound Microsoft.NAV.unpublish action on its extension (no BcContainerHelper needed); on a Windows container, run Sync-NAVApp -Mode Clean (UnPublish-BcContainerApp, see .claude/skills/control-app).`,
       resident,
     );
   }
