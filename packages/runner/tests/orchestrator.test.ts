@@ -11,6 +11,7 @@ import { IDENTITY_SCHEME, type InstrumentedFile, type MutantManifestEntry } from
 import { flatNamesFor, withRunIdentityOrdinals, writeInstrumentedProject } from "@lethal/schemata";
 import { type ChunkedRow, foldChunkedRows, rerunMismatches } from "../itest/chunked-rows";
 import { buildAlRunnerCoverageIndex } from "../src/al-runner-coverage";
+import { BC_HTTP_INTERNAL_TEXT } from "../src/al-runner-v3-contract";
 import {
   AlcCompileError,
   ArtifactPrepareError,
@@ -2899,6 +2900,100 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
       expect(report.validity.caveats).not.toContain("tests-testpage-unsupported");
       for (const m of report.mutants.filter((m) => m.verdict === "error"))
         expect(m.failureNote).toContain("unsupported test type");
+    });
+  });
+
+  // ————————————————————————————————————————————————————————————————————————————————————————
+  // R713. A baseline test that failed with BC's web-service HTTP text is named in the note and in
+  // one warning. Nothing here may move a verdict: the test is red at baseline either way.
+  // ————————————————————————————————————————————————————————————————————————————————————————
+  describe("R713 — a baseline test failed with the web-service HTTP text", () => {
+    const WARNING = "bcdev-http-text-differs";
+    const OTHER_TEXT = "Assert.AreEqual failed: expected 3, got 4";
+
+    async function runHttp(failureText: string, unsupportedProcedure = "IsUnderBudget") {
+      const dirs = await qualProject();
+      const backend = new QualificationBackend((method: string) =>
+        method === "UnsupportedTest"
+          ? {
+              outcome: "error" as const,
+              procedure: unsupportedProcedure,
+              failureMessage: failureText,
+            }
+          : { outcome: "pass" as const, procedure: "IsOverBudget" },
+      );
+      const store = new ResultsStore(":memory:");
+      const events: RunEvent[] = [];
+      const report = await runSession({
+        backend,
+        store,
+        ...dirs,
+        selectorIds,
+        emit: [createEmitter([(e) => events.push(e)])],
+      });
+      const warnings = events.filter((e) => e.type === "warning" && e.code === WARNING);
+      return { report, warnings };
+    }
+
+    test("a mutant covered only by it is error with the HTTP note, and one warning fires", async () => {
+      const { report, warnings } = await runHttp(BC_HTTP_INTERNAL_TEXT);
+      const errored = report.mutants.filter((m) => m.verdict === "error");
+      expect(errored.length).toBe(3);
+      for (const m of errored) {
+        expect(m.failureNote).toStartWith("web-service HTTP text differs from the hub's:");
+        expect(m.failureNote).toContain("Sandbox Tests.UnsupportedTest");
+      }
+      expect(warnings.length).toBe(1);
+      const w = warnings[0];
+      expect(w?.type === "warning" ? w.message : "").toContain("Sandbox Tests.UnsupportedTest");
+    });
+
+    test("an unrelated failure text gives the identical outcomes and no such warning", async () => {
+      const web = await runHttp(BC_HTTP_INTERNAL_TEXT);
+      const other = await runHttp(OTHER_TEXT);
+      const shape = (r: typeof web.report) => ({
+        counts: r.counts,
+        verdicts: r.mutants.map((m) => [m.mutantCode, m.verdict, m.killingTest ?? null]).sort(),
+      });
+      expect(shape(web.report)).toEqual(shape(other.report));
+      expect(other.warnings.length).toBe(0);
+      for (const m of other.report.mutants.filter((m) => m.verdict === "error"))
+        expect(m.failureNote).toContain("unsupported test type");
+    });
+
+    test("a mutant also covered by a green test keeps its verdict, gets no note, and the warning still fires once", async () => {
+      // The red test covers IsOverBudget as well, where GreenTest also covers it.
+      const { report, warnings } = await runHttp(BC_HTTP_INTERNAL_TEXT, "IsOverBudget");
+      const killed = report.mutants.filter((m) => m.verdict === "killed");
+      expect(killed.length).toBe(3);
+      for (const m of killed) expect(m.failureNote ?? "").not.toContain("web-service HTTP");
+      expect(warnings.length).toBe(1);
+    });
+
+    test("a green baseline emits no such warning, and a kill whose text holds the web text stays killed", async () => {
+      const dirs = await qualProject();
+      class HttpKillBackend extends QualificationBackend {
+        override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+          const v = await super.run(ref, opts);
+          const active = this.activations.at(-1) ?? null;
+          return active === null ? v : { ...v, failureMessage: BC_HTTP_INTERNAL_TEXT };
+        }
+      }
+      const backend = new HttpKillBackend((method: string) => ({
+        outcome: "pass" as const,
+        procedure: method === "UnsupportedTest" ? "IsUnderBudget" : "IsOverBudget",
+      }));
+      const store = new ResultsStore(":memory:");
+      const events: RunEvent[] = [];
+      const report = await runSession({
+        backend,
+        store,
+        ...dirs,
+        selectorIds,
+        emit: [createEmitter([(e) => events.push(e)])],
+      });
+      expect(report.counts.killed).toBe(6);
+      expect(events.filter((e) => e.type === "warning" && e.code === WARNING).length).toBe(0);
     });
   });
 

@@ -286,6 +286,7 @@ import {
 } from "./testpage-unsupported";
 import { AlRunnerV2RetiredError, RETIRED_V2_BACKEND, v2RetiredRun } from "./v2-retired";
 import { onSkippedLinks, refuseProjectLinks, walkFiles } from "./walk";
+import { describeWebServiceHttpText } from "./webservice-http-text";
 
 // C02-04b: named-mutants.ts is not part of the package's `export *` barrel (index.ts), so its
 // public types are re-exported one by one from here, the module the barrel does list.
@@ -7139,6 +7140,7 @@ async function runSessionBody(
       }> = [];
       let refusedThisBatch = new Map<string, string>();
       let testPageThisBatch = new Map<string, string>();
+      let httpTextThisBatch = new Map<string, string>(); // R713
       let v3RefusedThisBatch = new Set<string>(); // R609
       // Sol run 001 (I): plus what THIS batch's deployed index refused by name, read after deploy
       // and before any mutant is scored. Selection read the original source, which can decide
@@ -7193,6 +7195,7 @@ async function runSessionBody(
         // R69: batch-local for exactly the reasons the R35 map above documents — this batch's note
         // must describe THIS batch's baseline, not one a later batch's classification would overwrite.
         testPageThisBatch = new Map<string, string>();
+        httpTextThisBatch = new Map<string, string>();
         for (const b of unsupportedBaseline) {
           const name = qualifiedTestName(b.ref);
           // R139: same guard as the classification emit above, and needed in BOTH places because
@@ -7208,6 +7211,24 @@ async function runSessionBody(
           if (testPage !== undefined) {
             testPageThisBatch.set(name, testPage);
           }
+          // R713: a note and one warning only. The test is already out of the green set by outcome.
+          const httpText = describeWebServiceHttpText(b.verdict.failureMessage);
+          if (httpText !== undefined) {
+            httpTextThisBatch.set(name, httpText);
+          }
+        }
+        if (httpTextThisBatch.size > 0) {
+          emit({
+            type: "warning",
+            code: "bcdev-http-text-differs",
+            message: [
+              `[lethal] bcdev-http-text-differs: ${httpTextThisBatch.size} baseline test(s) failed with`,
+              `BC's web-service HTTP text (${[...httpTextThisBatch.keys()].join(", ")}). VS Code, the hub`,
+              "and your CI report another text for the same call (R706, R712); a test that asserts the",
+              "other text is dropped here, so mutants only it would kill may read survived or unscored.",
+              "No verdict was changed (R713).",
+            ].join(" "),
+          });
         }
         // R31 (a test the SOURCE declares but the server returned no result for) no longer needs a
         // session-level accumulator here: `unsupportedTests`/`staleTestApp`/`testPageUnsupported` are
@@ -7379,6 +7400,7 @@ async function runSessionBody(
                 refusedThisBatch,
                 testPageThisBatch,
                 v3RefusedThisBatch,
+                httpTextThisBatch,
               ),
               undefined,
               0,
@@ -7635,6 +7657,7 @@ async function runSessionBody(
               refusedThisBatch,
               testPageThisBatch,
               v3RefusedThisBatch,
+              httpTextThisBatch,
             ),
           );
         }
@@ -8687,6 +8710,8 @@ export function unsupportedCoverageNote(
   testPageThisBatch: ReadonlyMap<string, string> = new Map(),
   /** R609: tests al-runner-v3 refused at baseline (qualified names). */
   v3RefusedThisBatch: ReadonlySet<string> = new Set(),
+  /** R713: tests that failed at baseline with the web-service HTTP text (qualified name to diagnosis). */
+  httpTextThisBatch: ReadonlyMap<string, string> = new Map(),
 ): string {
   // "Covered by refused tests AND others" and "covered ONLY by refused tests" are different facts;
   // saying "only" in both cases contradicts the list that follows it. Shared by both named causes.
@@ -8727,6 +8752,20 @@ export function unsupportedCoverageNote(
       testPage,
       testPageText,
       "that cannot run on this session type",
+    );
+  }
+
+  // R713: the test failed with the web-service HTTP text, which the hub writes differently. A note
+  // only: the test is already out of the green set, so no verdict depends on this branch.
+  const http = qualified.filter((n) => httpTextThisBatch.has(n));
+  const httpFirst = http[0];
+  const httpText = httpFirst === undefined ? undefined : httpTextThisBatch.get(httpFirst);
+  if (httpText !== undefined) {
+    return describe(
+      "web-service HTTP text differs from the hub's",
+      http,
+      httpText,
+      "that failed with the web-service HTTP text",
     );
   }
 
