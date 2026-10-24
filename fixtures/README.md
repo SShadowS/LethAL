@@ -1681,7 +1681,8 @@ CLI flags:
     }
   },
   // R586: the Rust al-runner (--backend al-runner-v3; Linux only). The .NET al-runner's
-  // "alRunner" section went with that backend (R654).
+  // "alRunner" section went with that backend; a config that still has one is refused by name
+  // (R654).
   "alRunnerV3": {
     // Required: the folder v3 and alc both read packages from, and a four-number BC build.
     "packagesDir": "/path/to/.alpackages",
