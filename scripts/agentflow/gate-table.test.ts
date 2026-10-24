@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { V3_AGENTFLOW_LEGS } from "../../packages/runner/itest/alrunner-v3-legs.ts";
+import {
+  CHUNKED_SUBLEGS,
+  HANG_SUBLEGS,
+  HARDEN_SUBLEGS,
+} from "../../packages/runner/itest/gate-sublegs.ts";
 import {
   EXPECTED_SUBLEGS,
   FULL_SET,
@@ -10,6 +16,7 @@ import {
   selectLegs,
   widenWithDelta,
 } from "./gate-table.ts";
+import { expectedSublegsFor } from "./tick.ts";
 
 // R654 S2 (plan docs/superpowers/plans/2026-10-22-r654-retire-dotnet-alrunner.md §S2a): the v3
 // gate is a leg of its own. S3 removed the .NET al-runner leg it was selected beside.
@@ -57,6 +64,140 @@ describe("R654 S2: the alrunner-v3 leg", () => {
     expect(EXPECTED_SUBLEGS["alrunner-v3" as Leg]).toEqual(V3_AGENTFLOW_LEGS);
     expect(LEG_CONTAINER["alrunner-v3" as Leg]).toBe("agent-app");
     expect(LEG_ORDER.indexOf("alrunner-v3" as Leg)).toBe(LEG_ORDER.indexOf("chunked") + 1);
+  });
+});
+
+// R271: harden, verify, testapp and agreement. Each leg: its own paths select it (and a path of
+// another leg's does not), so a rule that is dropped or widened to everything goes red.
+describe("R271: harden, verify, testapp and agreement legs", () => {
+  const OWN: Readonly<Record<string, readonly string[]>> = {
+    harden: [
+      "fixtures/sandbox-harden/src/Harden.Codeunit.al",
+      "fixtures/sandbox-harden-tests/Harden.Test.al",
+      "fixtures/sandbox-harden-answers/Answers.Test.al",
+      "packages/runner/itest/harden.itest.ts",
+      "packages/runner/itest/harden-expected.ts",
+      "packages/runner/src/equivalence-marks.ts",
+    ],
+    verify: [
+      "packages/runner/src/verify.ts",
+      "packages/runner/src/test-digest.ts",
+      "packages/runner/src/testpage-scan.ts",
+      "packages/runner/src/gaps.ts",
+      "packages/runner/src/closed-world.ts",
+      "packages/runner/src/assertion-screen.ts",
+      "packages/runner/src/digest-inputs.ts",
+      "packages/runner/src/equivalence-marks.ts",
+      "packages/runner/itest/verify.itest.ts",
+      "fixtures/sandbox-app/src/Sandbox.Codeunit.al",
+      "fixtures/sandbox-tests/Sandbox.Test.al",
+    ],
+    testapp: [
+      "packages/runner/src/test-app-publish.ts",
+      "packages/runner/src/stale-test-app.ts",
+      "packages/runner/itest/test-app-publish.itest.ts",
+      "fixtures/sandbox-app/src/Sandbox.Codeunit.al",
+      "fixtures/sandbox-tests/Sandbox.Test.al",
+    ],
+    agreement: [
+      "packages/runner/itest/verify-agreement.itest.ts",
+      "packages/runner/itest/verify-agreement.ts",
+      "packages/runner/src/verify.ts",
+      "fixtures/sandbox-harden/src/Harden.Codeunit.al",
+    ],
+  };
+
+  for (const [leg, paths] of Object.entries(OWN)) {
+    test(`a change under ${leg}'s own paths selects ${leg}`, () => {
+      for (const p of paths) {
+        const s = selectLegs([p]);
+        // Matched by a rule, not rescued by default-deny (which would select every leg).
+        expect([p, s.unmatched]).toEqual([p, []]);
+        expect([p, (s.legs as readonly string[]).includes(leg)]).toEqual([p, true]);
+      }
+    });
+  }
+
+  test("an unrelated change selects none of the four", () => {
+    for (const p of [
+      "fixtures/sandbox-hang/src/Hang.Codeunit.al",
+      "fixtures/sandbox-data/src/DataMain.Table.al",
+      "packages/runner/src/store.ts",
+      "packages/runner/src/publisher.ts",
+    ]) {
+      const legs = selectLegs([p]).legs as readonly string[];
+      for (const l of ["harden", "verify", "testapp", "agreement"]) {
+        expect([p, l, legs.includes(l)]).toEqual([p, l, false]);
+      }
+    }
+  });
+
+  test("a hardening change does not select verify or testapp, and a test-app change does not select harden", () => {
+    const h = selectLegs(["fixtures/sandbox-harden/src/Harden.Codeunit.al"]).legs;
+    expect(h).not.toContain("verify");
+    expect(h).not.toContain("testapp");
+    const t = selectLegs(["packages/runner/src/test-app-publish.ts"]).legs;
+    expect(t).not.toContain("harden");
+  });
+
+  // Build review B1: harden, chunked and hang emit several sublegs; a missing or wrong entry makes
+  // the tick refuse their passing receipt ("A partial run is not a pass").
+  test("EXPECTED_SUBLEGS holds each multi-subleg itest's list, and the one-subleg legs have none", () => {
+    expect(EXPECTED_SUBLEGS.harden).toEqual(["base-suite", "answer-key"]);
+    expect(EXPECTED_SUBLEGS.chunked).toEqual(["unbounded", "chunked-2"]);
+    expect(EXPECTED_SUBLEGS.hang).toEqual([
+      "stop-hung-sessions-on",
+      "stop-hung-sessions-single",
+      "stop-baseline",
+      "stop-hung-sessions-off",
+    ]);
+    for (const l of ["verify", "testapp", "agreement"] as const) {
+      expect([l, EXPECTED_SUBLEGS[l]]).toEqual([l, undefined]);
+    }
+    expect(expectedSublegsFor("harden")).toEqual(HARDEN_SUBLEGS);
+  });
+
+  test("each itest emits its shared subleg constant, and the one-subleg itests emit one name", () => {
+    const src = (f: string) =>
+      readFileSync(new URL(`../../packages/runner/itest/${f}`, import.meta.url), "utf8");
+    const emitted = (f: string, leg: string) =>
+      new RegExp(`emitPassed\\("${leg}",\\s*\\{\\s*sublegs: \\[([^\\]]*)\\]`).exec(src(f))?.[1];
+    expect(emitted("harden.itest.ts", "harden")).toBe("...HARDEN_SUBLEGS");
+    expect(emitted("chunked.itest.ts", "chunked")).toBe("...CHUNKED_SUBLEGS");
+    expect(emitted("hang.itest.ts", "hang")).toBe("...HANG_SUBLEGS");
+    expect(CHUNKED_SUBLEGS).toEqual(EXPECTED_SUBLEGS.chunked as readonly string[]);
+    expect(HANG_SUBLEGS).toEqual(EXPECTED_SUBLEGS.hang as readonly string[]);
+    for (const [f, leg] of [
+      ["verify.itest.ts", "verify"],
+      ["test-app-publish.itest.ts", "testapp"],
+      ["verify-agreement.itest.ts", "agreement"],
+    ] as const) {
+      expect([leg, emitted(f, leg)]).toEqual([leg, `"${leg}"`]);
+    }
+  });
+
+  test("all four are in FULL_SET (default-deny) and the unmatched path selects them", () => {
+    const s = selectLegs(["packages/somewhere-new/src/thing.ts"]).legs;
+    for (const l of ["harden", "verify", "testapp", "agreement"] as const) {
+      expect(FULL_SET).toContain(l);
+      expect(s).toContain(l);
+    }
+  });
+
+  test("containers: harden and agreement on the harden lease, verify and testapp on agent-app", () => {
+    expect(LEG_CONTAINER.harden).toBe("agent-harden");
+    expect(LEG_CONTAINER.agreement).toBe("agent-harden");
+    expect(LEG_CONTAINER.verify).toBe("agent-app");
+    expect(LEG_CONTAINER.testapp).toBe("agent-app");
+  });
+
+  test("order: the test-app swappers run after the read-only legs and before hang", () => {
+    const at = (l: Leg) => LEG_ORDER.indexOf(l);
+    expect(at("coverage-differential")).toBeLessThan(at("harden"));
+    expect(at("harden")).toBeLessThan(at("verify"));
+    expect(at("verify")).toBeLessThan(at("testapp"));
+    expect(at("testapp")).toBeLessThan(at("agreement"));
+    expect(at("agreement")).toBeLessThan(at("hang"));
   });
 });
 

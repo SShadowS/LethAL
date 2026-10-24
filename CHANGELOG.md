@@ -20,6 +20,10 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   every operator. 5 forever stops are refused; at 3 of them no current operator deletes the exit. Cost, measured:
   0.87% of BaseApp's mutants (6,501 of 743,985), 0.63% of DC's, 0.29% of DO's, 0.26% of CDO's. Limits are in R696
   and R702.
+- **The agentflow gate table now selects `harden`, `verify`, `testapp` and `agreement`** ([R271](docs/roadmap/R271.md)),
+  with path rules, a container each and a place in the run order. A `lethal verify` test-app
+  `version-below-resident` refusal now names the fix for a Linux bc server and for a Windows container
+  ([R597](docs/roadmap/R597.md)).
 
 - **A report data item that inserts into its own table is no longer mutated inside its own code** (R530). Every
   site in its triggers and the helpers they reach, the writers of any name its exit guard reads, and an outside
