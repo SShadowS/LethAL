@@ -1596,7 +1596,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
       "Suspect the line map's base-line frame — a shifted range degrades every observation " +
       "to object level instead of naming a member.";
     const lost =
-      "Member attribution is lost for this test; only object-level (trigger) matching remains.";
+      "Member attribution is lost for this test; only object-level matching (triggers and local procedures) remains.";
     this.notify(
       "fenced-coverage-no-procedure-lines",
       `[lethal] fenced coverage for ${where}: ${declaredRows} row(s) for objects this artifact declares, but NOT ONE line fell inside a known procedure${server}. ${lost} ${blame}`,

@@ -3431,7 +3431,7 @@ describe("fenced coverage — the thin-coverage diagnostic", () => {
     for (const line of [7, 999]) {
       const said = await saidFor([T(line)]);
       expect(said).toContain("NOT ONE line fell inside a known procedure");
-      expect(said).toContain("only object-level (trigger) matching remains");
+      expect(said).toContain("only object-level matching (triggers and local procedures) remains");
     }
   });
 
