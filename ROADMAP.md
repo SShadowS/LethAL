@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**32 of 699 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**30 of 699 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -663,8 +663,8 @@ that ordering is the priority.
 - **R565** · No dependency source loader: a rule that needs a DEPENDENCY's procedure bodies (R561's known preset writer) cannot run, though Microsoft's .app packages ship their source · [R565.md](docs/roadmap/R565.md) · done (8fc29663): dependency report source loader for known preset writers; QM -7, ATL -15…
 - **R566** · Host step: does the env tool's own publish serve a source-less test app back byte for byte? (R498's gain on that route is unmeasured) · [R566.md](docs/roadmap/R566.md) · open, filed 2026-10-10 — a HOST step for the owner (the env tool is host-only)
 - **R578** · al-runner fails Report.RunModal with a request page shown to a [RequestPageHandler] ("An error occurred and the transaction is stopped"); not yet checked on BC · [R578.md](docs/roadmap/R578.md) · closed 2026-10-23 — ruling: BC 28.4 fails the same test with the same text at RunModal, so v3 matches BC; a…
-- **R579** · A #if block holding only #pragma lines counts as an object wrapper, so 21 Power BI Report embeddings files turn al-runner coverage off (wrapperHoldsObject vs isTopLevelObject) · [R579.md](docs/roadmap/R579.md) · open, filed 2026-10-11
-- **R580** · A #if-wrapped CODE-FREE object (enum, interface, permission set, control add-in, dotnet, enumextension) turns al-runner coverage off for its whole project, though it has no coverage identity: 42 files in 12 BC.History projects · [R580.md](docs/roadmap/R580.md) · open, filed 2026-10-11
+- **R579** · A #if block holding only #pragma lines counts as an object wrapper, so 21 Power BI Report embeddings files turn al-runner coverage off (wrapperHoldsObject vs isTopLevelObject) · [R579.md](docs/roadmap/R579.md) · done (cbee8b6a)
+- **R580** · A #if-wrapped CODE-FREE object (enum, interface, permission set, control add-in, dotnet, enumextension) turns al-runner coverage off for its whole project, though it has no coverage identity: 42 files in 12 BC.History projects · [R580.md](docs/roadmap/R580.md) · done (cbee8b6a)
 - **R581** · An al-runner --server baseline that fails before running any test reports "returned: <no tests>" and hides al-runner's own reason ("BC version selection failed ... minimum 28.6") · [R581.md](docs/roadmap/R581.md) · closed 2026-10-23 — retired with the .NET al-runner (R654): the v2 --server baseline path was deleted in R654…
 - **R583** · al-runner 069cbf32 fails itest:alrunner's --server + resource-selector leg: NavNclResourceNotFoundException for 'active-mutant.txt' · [R583.md](docs/roadmap/R583.md) · done (3d826909)
 - **R586** · The al-runner-v3 backend: the Rust al-runner v3 (formerly al-runtime-rs), its contract measured first (owner request) · [R586.md](docs/roadmap/R586.md) · done (8a71e87d)
