@@ -22,6 +22,9 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 - **`lethal verify` reads an integer id written with leading zeros (`01000`) as the number it names** ([R699](docs/roadmap/R699.md)).
   A test-app object handed to external code that way is now folded or put on the fallback exactly as `1000` is.
   Digests only widen.
+- **A `RunMutant` HTTP error now carries BC's own error text, and the stranded note no longer says "raise the floor" for it** ([R692](docs/roadmap/R692.md)).
+  The first 400 characters of the body are in the failure message (read with a time bound). "Raise the floor with
+  `--mutant-timeout-ms`" is advised only when the run reached its budget. Diagnostic only: no verdict changes.
 - **`scripts/verify.ts` runs one full verify at a time and survives a stalled disk** (R616, R622). The test
   step takes a slot lock beside the ledger (a dead pid frees it, never age), the per-test timeout rises to
   15000 ms only when the io stall is >= 5% just before the tests, and a run over 900 s is killed and named.

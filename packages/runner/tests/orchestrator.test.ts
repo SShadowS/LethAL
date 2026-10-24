@@ -7495,6 +7495,55 @@ describe("runSession — Task 12 quarantine on in-flight-unknown deadline", () =
     );
   });
 
+  // R692: "raise the floor with --mutant-timeout-ms" is advice for a budget overrun only.
+  const strandReason = async (v: {
+    outcome: "error" | "deadline-exceeded";
+    durationMs: number;
+    failureMessage: string;
+  }): Promise<string> => {
+    let activeMutant: string | null = null;
+    const backend = fakeBackend({
+      capabilities: () => ({
+        coverage: "none",
+        deploy: "publish",
+        isolation: "session",
+        kind: "bcdev",
+        authoritative: true,
+      }),
+      activate: async (id) => {
+        activeMutant = id;
+      },
+      run: async (ref) =>
+        activeMutant === null
+          ? { ref, outcome: "pass", durationMs: 1 }
+          : { ref, ...v, operation: "in-flight-unknown" },
+    });
+    const report = await runSessionForTest(backend, {
+      quarantineDir: freshTmpDir(),
+      nowIso: () => "2026-07-20T12:00:00.000Z",
+    });
+    return report.quarantined?.reason ?? "";
+  };
+
+  test("R692: a fast HTTP 500 names the status and does not advise raising the floor", async () => {
+    const reason = await strandReason({
+      outcome: "error",
+      durationMs: 40,
+      failureMessage: "RunMutant failed: HTTP 500",
+    });
+    expect(reason).toContain("HTTP 500 after 40 ms");
+    expect(reason).not.toContain("raise the floor");
+  });
+
+  test("R692: a real budget overrun still advises raising the floor", async () => {
+    const reason = await strandReason({
+      outcome: "deadline-exceeded",
+      durationMs: 999_999_999,
+      failureMessage: "RunMutant failed: HTTP 408",
+    });
+    expect(reason).toContain("raise the floor with --mutant-timeout-ms");
+  });
+
   test("a plain deadline-exceeded (no in-flight-unknown operation) stays an ordinary error — no quarantine, session continues", async () => {
     const dir = freshTmpDir();
     let activeMutant: string | null = null;

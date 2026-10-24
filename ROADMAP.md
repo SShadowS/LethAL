@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**43 of 697 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**41 of 697 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -85,7 +85,7 @@ that ordering is the priority.
 - **R211** · `docs/campaign/2026-08-16-gift-card/rehearsal.events.ndjson` predates `hangCapableCount` and is pinned as a known schema-validation failure, not backfilled · [R211.md](docs/roadmap/R211.md) · done (bef6693d..eab34a51): the R231 re-freeze re-ran the gift-card rehearsal live on Cronus28, seq 5 now…
 - **R212** · No fixture is a NAMESPACED AL app, which is why every gate stayed green while namespaced projects got zero coverage attribution · [R212.md](docs/roadmap/R212.md) · done (7f37015)
 - **R214** · Site enumeration ignores preprocessor directives, so a mutant can be planted in an `#if` branch the compiler never builds and can never be killed · [R214.md](docs/roadmap/R214.md) · closed 2026-10-06 — the false-survivor risk is gone: 0 of 2,143,029 mutants on BaseApp, CDO, DC and DO sit in…
-- **R215** · `tree-sitter-al` shapes an enum's `Implementation` mapping as a comparison; LethAL's declarative guard already drops it, and this row records that rather than a defect · [R215.md](docs/roadmap/R215.md) · open, filed 2026-09-08, severity CORRECTED the same day: not a LethAL defect
+- **R215** · `tree-sitter-al` shapes an enum's `Implementation` mapping as a comparison; LethAL's declarative guard already drops it, and this row records that rather than a defect · [R215.md](docs/roadmap/R215.md) · closed 2026-10-24 — the grammar no longer shapes it as a comparison (an implementation_value_list); pinned by…
 - **R218** · `census-operator-sites.ts` did not sort its file list, so the grammar-bump proof instrument produced spurious per-site diffs · [R218.md](docs/roadmap/R218.md) · done (see the 4.3.0 bump), filed and fixed 2026-09-09
 - **R223** · Every env-gated itest exits 0 when it skips, so a caller reading exit codes cannot tell a passed gate from one that never contacted BC · [R223.md](docs/roadmap/R223.md) · done (1ab922d5): point 1 closed by ruling…
 - **R226** · Three `lethal doctor` tests spawn real probes on a 5 s budget and fail the unit suite when the machine is busy, so `bun test` is not safe to run beside a live gate · [R226.md](docs/roadmap/R226.md) · done (7e27b0b, a3d961f): the cause was a walk of the real al-runner cache, not a real probe; R264 removed it…
@@ -304,7 +304,7 @@ that ordering is the priority.
 - **R684** · lethal verify misses a test-app report, page, xmlport or query that another app runs by its id: the codeunit-id fold and fallback see codeunits only · [R684.md](docs/roadmap/R684.md) · done (ac8a7b02)
 - **R687** · After the release: fold the server's installed-app list (minus LethAL's own instrumented targets) into every verify digest, through a new LethAL Control procedure · [R687.md](docs/roadmap/R687.md) · open, filed 2026-10-23 — after the first release (orchestrator ruling)
 - **R690** · Re-record the ten gate baselines that lag IDENTITY_SCHEME 42 (six BC gates and four al-runner-v3 legs), once, on master · [R690.md](docs/roadmap/R690.md) · done (fcfdd988)
-- **R692** · bcdev: RunMutant answered HTTP 500 while reproducing a kill (tables gate on bc1, M0232); the op could not be confirmed, so the session quarantined the tier and stopped · [R692.md](docs/roadmap/R692.md) · open, filed 2026-10-23
+- **R692** · bcdev: RunMutant answered HTTP 500 while reproducing a kill (tables gate on bc1, M0232); the op could not be confirmed, so the session quarantined the tier and stopped · [R692.md](docs/roadmap/R692.md) · done (SHA-PENDING)
 - **R695** · `Fixed Asset - Projected Value`'s `GetNextDate` advances a loop's exit date but is not hang-refused: unverified by a read of the loop · [R695.md](docs/roadmap/R695.md) · closed 2026-10-23 — premise wrong: already refused by R487's inOpenItemCode scope
 - **R697** · lethal verify misses code a test-app page, report, xmlport or table runs through its properties (SourceTable, RunObject, CardPageId, LookupPageId, DrillDownPageId, tableelement): an edit there leaves the digest unchanged · [R697.md](docs/roadmap/R697.md) · done (2e9e2d3a)
 - **R698** · lethal verify reads a namespace-qualified object reference (Codeunit::My.Ns.CU) as a member chain: it is neither folded nor a fallback · [R698.md](docs/roadmap/R698.md) · done (2e9e2d3a)
