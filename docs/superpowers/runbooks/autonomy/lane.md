@@ -76,7 +76,7 @@ Set `model` on every Agent call; never leave it to default to Opus (owner, 2026-
 | Writing tests first, building to a reviewed plan, red checks from a given recipe, docs and roadmap edits, post-merge checks | `sonnet` |
 | Deep plan reviews, build reviews, adversarial false-kill hunts, root-causing a hard bug, any ruling | `opus` |
 
-When a step is unclear, pick the cheaper model and escalate only if its result is weak. Your own session's model is set
+A gate-runner brief must make the agent wait in the foreground until the gate driver exits, then report each gate's PASS/FAIL line and the log path; a runner that hands back while the gate still runs costs a round trip (R-308, R-600). When a step is unclear, pick the cheaper model and escalate only if its result is weak. Your own session's model is set
 in `.kraken/project.yaml` by the owner, not by you. Name the model per agent in your submit note.
 
 ## Context size

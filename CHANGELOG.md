@@ -972,6 +972,14 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **`lethal verify` digests widen: a test app's Install and Upgrade codeunits, and its permission sets, now count**
+  ([R700](docs/roadmap/R700.md), [R701](docs/roadmap/R701.md)). The platform runs `OnInstallApp...`,
+  `OnUpgrade...`, `OnCheckPreconditions...` and `OnValidateUpgrade...` before any test, and a permission set decides
+  what a test may read and write, yet an edit to either left every digest unchanged. Both are now in every digest of an
+  app that has them, so those tests run once again after the upgrade. An app with neither keeps its digests. The first `lethal verify` after upgrading treats every test of such an app as
+  new and, on a big app, may refuse with `too-many-new-tests` (it now names the widened cover as a cause); a fresh
+  `lethal run` records the new digests.
+
 - **`lethal verify` digests widen: code a test-app object runs through its properties, and a namespace-qualified
   object reference, now count** ([R697](docs/roadmap/R697.md), [R698](docs/roadmap/R698.md)). A page's
   `SourceTable`, `CardPageId`, an action's `RunObject`, a table's `LookupPageId` / `DrillDownPageId`, a report's

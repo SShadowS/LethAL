@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**46 of 695 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**45 of 697 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -309,6 +309,8 @@ that ordering is the priority.
 - **R697** · lethal verify misses code a test-app page, report, xmlport or table runs through its properties (SourceTable, RunObject, CardPageId, LookupPageId, DrillDownPageId, tableelement): an edit there leaves the digest unchanged · [R697.md](docs/roadmap/R697.md) · done (2e9e2d3a)
 - **R698** · lethal verify reads a namespace-qualified object reference (Codeunit::My.Ns.CU) as a member chain: it is neither folded nor a fallback · [R698.md](docs/roadmap/R698.md) · done (2e9e2d3a)
 - **R699** · lethal verify looks up an integer literal with leading zeros (01000) as text, so a test-app object's id written that way is neither folded nor a fallback · [R699.md](docs/roadmap/R699.md) · open, filed 2026-10-23
+- **R700** · lethal verify puts a test app's Install and Upgrade codeunits in no digest: an edit to the code the platform runs at install or upgrade leaves every test's digest unchanged · [R700.md](docs/roadmap/R700.md) · done (c2d51590)
+- **R701** · lethal verify puts no permission set in any digest: a test app's permission set (included through IncludedPermissionSets) can change a test's outcome without changing its digest · [R701.md](docs/roadmap/R701.md) · done (c2d51590)
 
 ## Product gaps a real project hits
 
@@ -408,7 +410,7 @@ that ordering is the priority.
 - **R309** · A split-header procedure whose arms EACH have their own `var` section (`preproc_split_procedure_preamble`) has no single place for a reach latch, and is refused by name instead of throwing · [R309.md](docs/roadmap/R309.md) · done (24e7169..34f9780)
 - **R310** · R303's reach-latch refusal has no SessionReport field, so a mutant it refuses reads only as an unplaced reachGrain, never named as R303's · [R310.md](docs/roadmap/R310.md) · closed 2026-09-28, ruling: after R303's hoist, a member is refused only by R303's header-end predicate…
 - **R311** · Even past the parser's WASM heap limit, `writeInstrumentedProject` cannot serialize a whole-BaseApp manifest: `JSON.stringify` runs out of memory · [R311.md](docs/roadmap/R311.md) · done (054a9774)
-- **R315** · No offline alc compile of a real corpus's emitted target: dc's Continia dependencies are not staged at a compatible version on this machine · [R315.md](docs/roadmap/R315.md) · open, filed 2026-09-28
+- **R315** · No offline alc compile of a real corpus's emitted target: dc's Continia dependencies are not staged at a compatible version on this machine · [R315.md](docs/roadmap/R315.md) · open, filed 2026-09-28; blocked on an owner step (re-measured 2026-10-23, R-315)
 - **R333** · Low priority: the trigger-local rule drops four valid BaseApp mutants where the trigger local and the global it shadows have the same type · [R333.md](docs/roadmap/R333.md) · open, filed 2026-09-29
 - **R334** · Low priority: index `#if`-wrapped members under the every-arm rule, to recover the typed sites the R-302 fail-safe refuses · [R334.md](docs/roadmap/R334.md) · open, filed 2026-09-29
 - **R340** · Resolve trigger header names: a trigger's parameters, `var` locals and named return are unknown since R330 and R323, so no typed operator reaches them · [R340.md](docs/roadmap/R340.md) · done (e6c71f72)
@@ -453,7 +455,7 @@ that ordering is the priority.
 - **R497** · BC paths score `#if`-wrapped objects (fenced under H1a, hub by name), and the line map's H1b rule is wrong for a bare object after a wrapper · [R497.md](docs/roadmap/R497.md) · done (e02c874b)
 - **R498** · A hook session whose test app carries no `.al` never proves its identity, so it never resumes, skips or reuses · [R498.md](docs/roadmap/R498.md) · done (e4907b30)
 - **R535** · A nested `#if` object wrapper is refused by name on every coverage path: BaseApp has 2 such files (70 sites), unmeasured · [R535.md](docs/roadmap/R535.md) · closed 2026-10-09 — 2 BaseApp files, 70 sites, refused by name on every coverage path; not worth an R-300b…
-- **R600** · lethal verify digests under the server's closed-world answer now, so an open-world source run on a closed server re-runs every test · [R600.md](docs/roadmap/R600.md) · open
+- **R600** · lethal verify digests under the server's closed-world answer now, so an open-world source run on a closed server re-runs every test · [R600.md](docs/roadmap/R600.md) · done (6317d4e5)
 - **R601** · a closed-world run that ends before its post-execution re-ask stays pending forever, so --resume after a crash is off on a closed server · [R601.md](docs/roadmap/R601.md) · done (f9002861)
 - **R620** · A crashed or interrupted closed-world run is never resumable: its test-app identity stays |pending, so --resume refuses the very run it exists for · [R620.md](docs/roadmap/R620.md) · closed 2026-10-22 — a duplicate of R601 (orchestrator ruling Q2); closed with R601 (92d23854)
 - **R685** · a bare `Kind::X` id handed to an unfollowed call puts the test on verify's whole-source fallback, where folding the object would do: since R684 this takes a whole Microsoft test app (Guided Experience) to the fallback · [R685.md](docs/roadmap/R685.md) · done (SHA-PENDING)
