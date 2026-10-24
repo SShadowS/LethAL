@@ -2406,10 +2406,10 @@ export class Scanner {
     for (const t of types) this.builtinHolds(t, why, st, p.unit);
   }
 
-  /** R685: whether `t` is exactly `Codeunit <name>` or `Interface <name>`, one plain name. */
+  /** R685: whether `t` is exactly `Codeunit <name>` or `Interface <name>` (not an array or
+   *  collection). A name `foldInterface` cannot resolve falls back there, in `outside`. */
   private plainEntryType(t: string): boolean {
-    const name = INTERFACE_TYPE.exec(t)?.[1] ?? CODEUNIT_TYPE.exec(t)?.[1];
-    return name !== undefined && PLAIN_NAME.test(name);
+    return INTERFACE_TYPE.test(t) || CODEUNIT_TYPE.test(t);
   }
 
   /** `builtinArg` for one non-Variant type: an Interface or a test-app codeunit is folded. */

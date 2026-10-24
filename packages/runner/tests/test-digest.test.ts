@@ -384,6 +384,15 @@ codeunit 50120 "Sub"
       const f = callExt("", 'ExtLib.RunReport(Report::"Test Rep");');
       expect(onFallback(f)).toBe(false);
       expect(digestA(edit(f, "Rep.al", "dataset", "dataset /* x */"))).not.toBe(digestA(f));
+      // A trigger edit moves it too.
+      const g = edit(
+        f,
+        "Rep.al",
+        "    dataset",
+        "    trigger OnPreReport()\n    begin\n        Message('a');\n    end;\n\n    dataset",
+      );
+      expect(onFallback(g)).toBe(false);
+      expect(digestA(edit(g, "Rep.al", "Message('a');", "Message('b');"))).not.toBe(digestA(g));
     });
 
     test("(d) a record of a test-app table", () => {
@@ -1503,6 +1512,30 @@ describe("R685: a test-app object id, codeunit or Interface handed to external c
       "'a'",
       "'b'",
     );
+  });
+
+  test("a codeunit variable declared by id handed out folds the codeunit", () => {
+    moves(
+      {
+        "T.al": TEST("        Ext.Foo(M);\n", "        M: Codeunit 50202;\n"),
+        "O.al": KINDS[0].al,
+      },
+      "O.al",
+      "'a'",
+      "'b'",
+    );
+  });
+
+  test("a literal id below 1000 handed out folds through lowIds", () => {
+    const low = `codeunit 500 "Low"\n{\n    trigger OnRun()\n    begin\n        Message('a');\n    end;\n}\n`;
+    // lowIds folds every codeunit (so an unrelated codeunit edit moves it too); an unrelated page
+    // edit must not, which tells it from the whole-source fallback.
+    const page = `page 50300 "Pg"\n{\n    trigger OnOpenPage()\n    begin\n        Message('p1');\n    end;\n}\n`;
+    const files = { "T.al": TEST("        Ext.Foo(500);\n"), "L.al": low, "P.al": page };
+    const was = dg(files);
+    expect(was).toMatch(/^v3:/);
+    expect(dg(edit(files, "L.al", "'a'", "'b'"))).not.toBe(was);
+    expect(dg(edit(files, "P.al", "'p1'", "'p2'"))).toBe(was);
   });
 
   test("a codeunit variable handed out folds the codeunit", () => {
