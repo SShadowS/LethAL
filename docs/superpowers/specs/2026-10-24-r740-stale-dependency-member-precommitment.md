@@ -69,3 +69,27 @@ publish with the default option refuses instead (R709). How often a real project
 ## Leftovers
 bc2 keeps installed-version records for L (1.0.0.2), P (LethAL's minted version) and Q (1.0.0.1) until a restart
 (R605), plus the control app's run rows.
+
+## Addendum 1 (2026-10-24, before run 2): the live proof on the BUILT head
+Run 1 (20:37:50Z) gave M1, M2 and M3 (`/coord/handoff/R-740/measure.md`). The orchestrator ruled (A), and the refusal
+was built (`StaleDependencyMemberError`, lethal/r740 f5991df3). Run 2 repeats the probe on the built head with the
+SECOND id set (L edbf191d-45cd-45dd-bd38-f9910c0d60a7, P ef6468b3-8053-4383-a69a-8114dd06fd12, Q
+a3014e4e-2f3e-4185-8fce-0519bd133e3a), because bc2 holds run 1's records. Same AL, same object ids, rebuilt only for
+the ids:
+
+| build | sha256 |
+|---|---|
+| L1 | 93f913ac830b3db732a44eb52c1da262bf69d8978bfda7b8b8e20beed0662185 |
+| L2 | 1b282640565b5e9d505b7a6ef78a73536b0fce2a1d1d2f3b9705ed265e69eb6b |
+| P | 228751a669ca7c6d3e834631c2798f918e719006b233a3c6b5481652f436fa35 |
+| Q | c4f2118392d667f9b7667f0895a7d91dfccd61ca5542fa98155c9bd423fb70b6 |
+
+**Prediction (run 2):**
+- M1 again (L2 accepted through altool; Q stays installed);
+- the `lethal run` REFUSES with `StaleDependencyMemberError`, exit non-zero;
+- its message names `R740 Tests.TestLib`, object 93820, and the calling frame
+  `R740 Tests(CodeUnit 93840).TestLib line 2 - R740 Probe Tests ...`;
+- it does NOT name the target or `TestFails`, and it is not `StaleTargetMemberError`;
+- no report is written, no `coverage-split` event is emitted, and no mutant is scored.
+
+Anything else is a BLOCK on the build. Run 2 leaves records for the second id set on bc2 until a restart.
