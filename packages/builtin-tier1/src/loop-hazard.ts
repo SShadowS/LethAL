@@ -8,6 +8,7 @@ import {
   argumentsReadable,
   armOfNode,
   declarationMembers,
+  declarationStateAt,
   declaredNames,
   enclosingTrigger,
   fieldSegments,
@@ -7065,7 +7066,10 @@ function sameDeclaration(
  * a guess (spec 3.1). R-364: inside an object the symbol table does not index (`unindexedObjects`,
  * R343) nothing outside a trigger's own `var` section can resolve, so there an unresolved target
  * is matched by NAME (`loopConditionReadsByName`). That is the safe direction: an extra refusal
- * costs a site, a missed one can hang a session. R-458: when the declaration path says no, the
+ * costs a site, a missed one can hang a session. R720: the same by-name match applies when the
+ * engine's three-state lookup (`declarationStateAt`) says "unknown" rather than provably absent (a
+ * swallowed `#if` member, a global declared inside `#if`, an every-arm-ambiguous name), for a plain
+ * target and for a member target's receiver. R-458: when the declaration path says no, the
  * target is also matched by name through every `with` subject and implicit record its name can bind
  * to (`byNameRefusal`).
  */
@@ -7086,8 +7090,12 @@ export function classifyHangCapable(
       const trigger = enclosingTrigger(node);
       const headerReceiver =
         trigger !== null && triggerLocalNames(trigger).has(normalizeAlName(parts.receiver.text));
-      return (inUnindexedObject(node, ctx) || headerReceiver) &&
-        loopConditionReadsByName(node, byName, ctx)
+      // R720: a receiver the engine refuses to resolve ("unknown") is matched by name too. The
+      // cheap loop-name test runs first: `declarationStateAt` scans the whole object.
+      return loopConditionReadsByName(node, byName, ctx) &&
+        (inUnindexedObject(node, ctx) ||
+          headerReceiver ||
+          declarationStateAt(parts.receiver, ctx) === "unknown")
         ? "loop-condition-target"
         : byNameRefusal(node, byName, ctx, "none");
     }
@@ -7099,7 +7107,11 @@ export function classifyHangCapable(
   const byName = { receiver: null, member: target.text };
   const targetSym = resolveVarRef(target, ctx);
   if (targetSym === null) {
-    return (inUnindexedObject(node, ctx) && loopConditionReadsByName(node, byName, ctx)) ||
+    // R720: "unknown" (not provably absent) is matched by name too, including an enclosing `for`'s
+    // control variable (R480, `loopReadsNameAt`). The cheap loop-name test runs first:
+    // `declarationStateAt` scans the whole object.
+    return (loopReadsNameAt(node, target.text, ctx) &&
+      (inUnindexedObject(node, ctx) || declarationStateAt(target, ctx) === "unknown")) ||
       triggerHeaderLoopWrite(node, target.text, ctx)
       ? "loop-condition-target"
       : byNameRefusal(node, byName, ctx, "none");

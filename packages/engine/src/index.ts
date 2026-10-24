@@ -100,6 +100,7 @@ export {
   recordScopesAt,
   bareReceiverText,
   bareFieldAssignable,
+  declarationStateAt,
   identifierTokens,
   recordTableObjectOfName,
   tableObjectOfRef,

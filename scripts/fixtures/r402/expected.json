@@ -1,5 +1,5 @@
 {
-  "_comment": "R402: each shape's expected outcome under the builds [], [LETHALX], [LETHALY], [LETHALX,LETHALY]. 'refused' names the preproc-undecided reason prefix; an admitted shape lists its generateMutationSet spec count per build, measured on master 0ef6652f, where every admitted shape had the same counts. R196 (identity scheme 10) re-measured the loop shapes: each variable a loop condition reads loses its remove-assignment and swap-additive sites (2 per variable); t1/t2 (a boolean #if tail of a while condition, and of an if outside a loop) were added for R239. scripts/r402-shape-sweep.ts exits 1 on any difference.",
+  "_comment": "R402: each shape's expected outcome under the builds [], [LETHALX], [LETHALY], [LETHALX,LETHALY]. 'refused' names the preproc-undecided reason prefix; an admitted shape lists its generateMutationSet spec count per build, measured on master 0ef6652f, where every admitted shape had the same counts. R196 (identity scheme 10) re-measured the loop shapes: each variable a loop condition reads loses its remove-assignment and swap-additive sites (2 per variable); t1/t2 (a boolean #if tail of a while condition, and of an if outside a loop) were added for R239; w1/w2 (whole members inside a `#if` right after the global var section, which the grammar swallows into that section) were added for R-327b, measured on master 047857ef; w3 (typing inside a swallowed member) and w4..w6 were added for R-327b / R720 and measured after the R720 fix (w4: a swallowed member's loop writes are refused by name, 20 -> 16 specs; w5: a global declared in a var-section #if, 7 -> 6; w6: a swallowed table Validate overload, 29/15 both before and after); w7 is R480's for-control write (`for P := 10 downto 1 do if Found then P := 1`) in the R720 shapes (a swallowed member local, a var-section #if global, an every-arm-ambiguous local) beside a direct twin: BEFORE the for-aware by-name match 18/13/18/13 specs, AFTER 12/9/12/9. scripts/r402-shape-sweep.ts exits 1 on any difference.",
   "c1_owned_terminator": { "specs": [9, 10, 9, 10] },
   "c2_empty_end_of_block": { "specs": [6, 6, 6, 6] },
   "c2b_comment_only_end_of_block": { "specs": [6, 6, 6, 6] },
@@ -34,5 +34,12 @@
   "s15_assign_tail": { "specs": [5, 5, 5, 5] },
   "s16_if_tail": { "specs": [7, 8, 7, 8] },
   "t1_while_bool_tail": { "specs": [10, 10, 10, 10] },
-  "t2_if_bool_tail": { "specs": [6, 7, 6, 7] }
+  "t2_if_bool_tail": { "specs": [6, 7, 6, 7] },
+  "w1_var_swallowed_members": { "specs": [15, 7, 15, 7] },
+  "w2_var_swallowed_else": { "specs": [7, 7, 7, 7] },
+  "w3_var_swallowed_typing": { "specs": [8, 6, 8, 6] },
+  "w4_var_swallowed_loop": { "specs": [16, 8, 16, 8] },
+  "w5_var_cond_global_loop": { "specs": [6, 6, 6, 6] },
+  "w6_var_swallowed_table": { "specs": [29, 15, 29, 15] },
+  "w7_for_control_unknown": { "specs": [12, 9, 12, 9] }
 }
