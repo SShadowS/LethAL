@@ -1,0 +1,20 @@
+{
+  "id": "7eafd7d0-28ea-4943-862f-61dc273065b9",
+  "name": "R741 Probe Target",
+  "publisher": "LethAL Probe",
+  "version": "1.0.0.1",
+  "brief": "R741 throwaway probe target: members added through a tableextension and a pageextension.",
+  "platform": "28.0.0.0",
+  "runtime": "17.0",
+  "target": "OnPrem",
+  "idRanges": [{ "from": 93860, "to": 93869 }],
+  "dependencies": [
+    {
+      "id": "35e61124-0818-4a55-bb52-a59e866d2f43",
+      "name": "R741 Probe Base",
+      "publisher": "LethAL Probe",
+      "version": "1.0.0.1"
+    }
+  ],
+  "features": ["NoImplicitWith"]
+}

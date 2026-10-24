@@ -1,0 +1,12 @@
+{
+  "id": "35e61124-0818-4a55-bb52-a59e866d2f43",
+  "name": "R741 Probe Base",
+  "publisher": "LethAL Probe",
+  "version": "1.0.0.1",
+  "brief": "R741 throwaway probe base app: one table, one page.",
+  "platform": "28.0.0.0",
+  "runtime": "17.0",
+  "target": "OnPrem",
+  "idRanges": [{ "from": 93850, "to": 93859 }],
+  "features": ["NoImplicitWith"]
+}
