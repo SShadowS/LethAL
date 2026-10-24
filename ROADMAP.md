@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**24 of 735 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**24 of 736 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -325,7 +325,7 @@ that ordering is the priority.
 - **R725** · Hang readers that treat a null `resolveVarRef` as "absent": the r531/R696 write collectors read it as the implicit Rec, and R572 drops a var-out flag, inside swallowed members, `#if` globals and ambiguous names · [R725.md](docs/roadmap/R725.md) · done (e07c78ec)
 - **R737** · A callee receiver declared inside a var-section `#if` (or every-arm-ambiguous) is never followed: `declaredType`'s text fallback skips preprocessor nodes · [R737.md](docs/roadmap/R737.md) · open, filed 2026-10-24 (found by R-725's review; not built)
 - **R738** · Silent under-report risk: an altool publish that removes a member an installed tests app calls is accepted, and the tests then fail at run time instead of being refused as a stale tests app · [R738.md](docs/roadmap/R738.md) · done (dab2d844)
-- **R740** · Silent under-report risk: a stale member of a DEPENDENCY app (upgraded under an unchanged tests app) drops tests from the green set the way R738 did for the target · [R740.md](docs/roadmap/R740.md) · open, filed 2026-10-24 (found by R-738's build review; not measured)
+- **R740** · Silent under-report risk: a stale member of a DEPENDENCY app (upgraded under an unchanged tests app) drops tests from the green set the way R738 did for the target · [R740.md](docs/roadmap/R740.md) · done (f5991df3)
 - **R741** · Unmeasured: a stale member the target adds through a tableextension or pageextension may be named by its BASE object's id, which R738 does not read as the target's · [R741.md](docs/roadmap/R741.md) · open, filed 2026-10-24 (found by R-738's build review; measure first)
 
 ## Product gaps a real project hits
@@ -477,6 +477,7 @@ that ordering is the priority.
 - **R620** · A crashed or interrupted closed-world run is never resumable: its test-app identity stays |pending, so --resume refuses the very run it exists for · [R620.md](docs/roadmap/R620.md) · closed 2026-10-22 — a duplicate of R601 (orchestrator ruling Q2); closed with R601 (92d23854)
 - **R685** · a bare `Kind::X` id handed to an unfollowed call puts the test on verify's whole-source fallback, where folding the object would do: since R684 this takes a whole Microsoft test app (Guided Experience) to the fallback · [R685.md](docs/roadmap/R685.md) · done (e2cd0992)
 - **R727** · A run publishes the target over installed dependents other than the tests app without a word; on a customer server a refused upgrade removes them (R709) · [R727.md](docs/roadmap/R727.md) · done (b2ce2cc4)
+- **R745** · After the release: exclude single test METHODS from a run (today --tests-only narrows test FILES only); R740's refusal is its first user · [R745.md](docs/roadmap/R745.md) · open, filed 2026-10-24 (after the release)
 - **R733** · Name the installed dependents before the first publish: LethAL Control 1.0.0.24 `InstalledDependents(AppId)` (after the Directions talk) · [R733.md](docs/roadmap/R733.md) · open, filed 2026-10-24 (after the Directions talk)
 
 ## Backends and tooling
