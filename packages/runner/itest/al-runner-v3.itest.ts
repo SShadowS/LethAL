@@ -592,7 +592,7 @@ async function legY(scratch: string, leg: "Y-A" | "Y-B"): Promise<SessionReport>
   return r;
 }
 
-// --- R602: MO and WR (pre-commitment: draft /coord/handoff/R-602/precommitment-draft.md, committed to master before any live run)
+// --- R602: MO and WR (pre-commitment: docs/superpowers/specs/2026-10-24-r602-alrunner-v3-mo-wr-precommitment.md, c2f67f0a)
 
 /** The report's rows as the pure judges read them. */
 function rowFacts(r: SessionReport): V3RowFacts[] {
