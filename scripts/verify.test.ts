@@ -398,9 +398,9 @@ function bunTest(cwd: string, args: string[], env: Env): { code: number; out: st
   return { code: r.exitCode ?? 1, out: `${r.stdout.toString()}${r.stderr.toString()}` };
 }
 
-// R603: CI's Windows job runs verify.ts parallel (P=4, measured per test name), so A5 and A7 run on every
-// OS. The two --parallel watchdog tests below still skip on Windows: their kill paths are not measured
-// there (see `posixSignals`).
+// R603: CI's Windows job runs verify.ts parallel (P=4, measured per test name), so A5 runs on every OS.
+// A7 still skips on Windows: it failed there in CI run 40064651790, cause not yet read (R704). The two
+// --parallel watchdog tests below also still skip on Windows: their kill paths are not measured there.
 const parallelOs = test.skipIf(process.platform === "win32");
 // On Windows Bun's `process.kill(pid, "SIGTERM")` is libuv's TerminateProcess, which no handler can
 // catch, so a file deaf to SIGTERM cannot exist there: the SIGKILL step has nothing to escalate.
@@ -437,59 +437,62 @@ describe("spawned bun test (the guards hold inside --parallel workers)", () => {
     }
   });
 
-  test("A7 R264: under --parallel=2 the preload moves HOME and TMPDIR in EVERY worker", () => {
-    const root = tempDir("a7");
-    try {
-      const S = join(root, "sentinel-home");
-      const T = join(root, "sentinel-tmp");
-      const proj = join(root, "proj");
-      for (const d of [S, T, proj]) mkdirSync(d);
-      const env = sentinelEnv(process.env, S, T);
-      expect(Object.keys(env).filter((k) => k.startsWith("LETHAL_TEST_"))).toEqual([]);
-      const preload = JSON.stringify(join(REPO_ROOT, "scripts", "test-preload.ts"));
-      const homeTs = JSON.stringify(join(REPO_ROOT, "packages", "runner", "src", "home.ts"));
-      // On POSIX bun's os.homedir() keeps the HOME the process started with (R409), so product
-      // code reads `homeDir()`; os.homedir() is asserted on Windows only (as real-home-guard does).
-      const body = [
-        'import { expect, test } from "bun:test";',
-        'import { homedir } from "node:os";',
-        `import { homeDir } from ${homeTs};`,
-        `const S = ${JSON.stringify(S)};`,
-        `const T = ${JSON.stringify(T)};`,
-        'test("home and tmp are the preload\'s", () => {',
-        "  expect(process.env.HOME).not.toBe(S);",
-        "  expect(homeDir()).not.toBe(S);",
-        '  if (process.platform === "win32") expect(homedir()).not.toBe(S);',
-        "  expect(process.env.USERPROFILE).not.toBe(S);",
-        "  expect(process.env.TMPDIR).not.toBe(T);",
-        "  expect(process.env.LETHAL_TEST_REAL_HOME).toBe(S);",
-        "});",
-        "",
-      ].join("\n");
-      const files = ["a.test.ts", "b.test.ts", "c.test.ts"];
-      for (const f of files) writeFileSync(join(proj, f), body);
-      const run = (bunfig: string): Map<string, string> => {
-        writeFileSync(join(proj, "bunfig.toml"), bunfig);
-        const xml = join(root, "out.xml");
-        rmSync(xml, { force: true });
-        const r = bunTest(
-          proj,
-          ["--parallel=2", "--reporter=junit", `--reporter-outfile=${xml}`],
-          env,
-        );
-        const cases = existsSync(xml) ? parseJunit(readFileSync(xml, "utf8")) : [];
-        expect(cases.length, r.out).toBe(3);
-        return new Map(cases.map((c) => [c.file, c.status]));
-      };
-      const withPreload = run(`[test]\npreload = [${preload}]\n`);
-      for (const f of files) expect(withPreload.get(f), `${f} with the preload`).toBe("pass");
-      // The control: without the preload, each of the three fails BY NAME, so the check can go red.
-      const without = run("[test]\n");
-      for (const f of files) expect(without.get(f), `${f} without the preload`).toBe("fail");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
+  parallelOs(
+    "A7 R264: under --parallel=2 the preload moves HOME and TMPDIR in EVERY worker",
+    () => {
+      const root = tempDir("a7");
+      try {
+        const S = join(root, "sentinel-home");
+        const T = join(root, "sentinel-tmp");
+        const proj = join(root, "proj");
+        for (const d of [S, T, proj]) mkdirSync(d);
+        const env = sentinelEnv(process.env, S, T);
+        expect(Object.keys(env).filter((k) => k.startsWith("LETHAL_TEST_"))).toEqual([]);
+        const preload = JSON.stringify(join(REPO_ROOT, "scripts", "test-preload.ts"));
+        const homeTs = JSON.stringify(join(REPO_ROOT, "packages", "runner", "src", "home.ts"));
+        // On POSIX bun's os.homedir() keeps the HOME the process started with (R409), so product
+        // code reads `homeDir()`; os.homedir() is asserted on Windows only (as real-home-guard does).
+        const body = [
+          'import { expect, test } from "bun:test";',
+          'import { homedir } from "node:os";',
+          `import { homeDir } from ${homeTs};`,
+          `const S = ${JSON.stringify(S)};`,
+          `const T = ${JSON.stringify(T)};`,
+          'test("home and tmp are the preload\'s", () => {',
+          "  expect(process.env.HOME).not.toBe(S);",
+          "  expect(homeDir()).not.toBe(S);",
+          '  if (process.platform === "win32") expect(homedir()).not.toBe(S);',
+          "  expect(process.env.USERPROFILE).not.toBe(S);",
+          "  expect(process.env.TMPDIR).not.toBe(T);",
+          "  expect(process.env.LETHAL_TEST_REAL_HOME).toBe(S);",
+          "});",
+          "",
+        ].join("\n");
+        const files = ["a.test.ts", "b.test.ts", "c.test.ts"];
+        for (const f of files) writeFileSync(join(proj, f), body);
+        const run = (bunfig: string): Map<string, string> => {
+          writeFileSync(join(proj, "bunfig.toml"), bunfig);
+          const xml = join(root, "out.xml");
+          rmSync(xml, { force: true });
+          const r = bunTest(
+            proj,
+            ["--parallel=2", "--reporter=junit", `--reporter-outfile=${xml}`],
+            env,
+          );
+          const cases = existsSync(xml) ? parseJunit(readFileSync(xml, "utf8")) : [];
+          expect(cases.length, r.out).toBe(3);
+          return new Map(cases.map((c) => [c.file, c.status]));
+        };
+        const withPreload = run(`[test]\npreload = [${preload}]\n`);
+        for (const f of files) expect(withPreload.get(f), `${f} with the preload`).toBe("pass");
+        // The control: without the preload, each of the three fails BY NAME, so the check can go red.
+        const without = run("[test]\n");
+        for (const f of files) expect(without.get(f), `${f} without the preload`).toBe("fail");
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("A8 discoverTestFiles matches what a real bun test runs", () => {
     const dir = tempDir("a8");
