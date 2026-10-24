@@ -287,7 +287,11 @@ Leg T is judged against the committed alpha.2 baseline with the seven keys overr
 
 **The virtual-clock guard (B2).** alpha.5 counts a Sleep toward `--test-timeout-secs` on a virtual clock, so a "3 s" stop can return after tens of ms. In the backend, when a MUTANT is active and a timeout row's `durationMs` is below its stop, the verdict is `error` / `runner-refused` ("stopped on v3's virtual clock", never scored). Baselines are unchanged. Upstream text: `/coord/handoff/R-586c/upstream-virtual-clock.md`.
 
-**K and serve on alpha.5** (measured by the live sequence, recorded here after it runs): K on the candidate, `serve-entries` E1 / E2 / E3a. Not yet measured.
+**K and serve on alpha.5** (measured at LethAL `81e7f1b4`, alpha.5 as a candidate under the pin):
+- L2, the full gate: 14 of 14 legs pass; K reads 3 / 12 / 4 over 19.
+- L3, `serve-entries` (receipts `measure/L3r-*`): S1 3 / 12 / 4 with 0 differences; T 290 / 50 / 59 with 7 errors, the pinned 7 rows; D1 51 / 12 / 0 with 0 differences.
+- L2b: alpha.3 and alpha.4 as candidates (no pin) both read `gate-fail` (D1 and D1c), as pre-committed in r18 table E.
+- **Leg N1 under `serve-entries` fails on alpha.5**: for a dotted test name, v3 writes a serve row without `codeunit` and `method` (upstream [#5798](https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/5798)). alpha.2 has no serve-entries path. The serve path is opt-in and fails closed. See [[R722]]. The virtual clock is upstream [#5793](https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/5793).
 
 ## Frozen figures
 
