@@ -64,7 +64,7 @@ import { basename, dirname, join, resolve, sep } from "node:path";
 import { outOfUseDir, outOfUseRefusal } from "../packages/runner/itest/out-of-use.ts";
 import { compareAppVersions } from "../packages/runner/src/app-version.ts";
 import { appInputsOfPackage } from "../packages/runner/src/digest-inputs.ts";
-import { readAppIdentity } from "../packages/runner/src/published-test-app.ts";
+import { publishedAlSources, readAppIdentity } from "../packages/runner/src/published-test-app.ts";
 import { defaultAlToolPaths } from "../packages/runner/src/publisher.ts";
 import {
   type AppItem,
@@ -73,18 +73,23 @@ import {
   type ConnServer,
   type Decided,
   HOST,
+  type ResidentPair,
   SERVERS,
   type ServerName,
   type ServerOps,
   actAll,
+  appJsonFromManifest,
   contentDigest,
   decideAll,
+  dependencyBytes,
+  guardResident,
   headerPackageId,
   manifest,
   portsOf,
   publishBytes,
   realOps,
   refusals,
+  refuseDependent,
   residentPackage,
   sha256Of,
 } from "./bc-app-content.ts";
@@ -653,6 +658,48 @@ export async function alcCompile(
   }
 }
 
+/**
+ * R-707: compiles an installed dependent's RESIDENT source (its `.al` entries, with an app.json
+ * rebuilt from its package manifest) against the NEW target build, into `build`, as a check only.
+ * Throws the alc error text on a break; any other throw is not a compile result (`refuseDependent`).
+ */
+export async function compileResidentSource(
+  c: Conn,
+  alc: string,
+  build: string,
+  target: { readonly publisher: string; readonly name: string; readonly bytes: Buffer },
+  pkg: Buffer,
+): Promise<void> {
+  const id = readAppIdentity(pkg);
+  const sources = publishedAlSources(pkg);
+  if (sources.length === 0)
+    throw new Error(`resident ${id.name} carries no AL source, so it cannot be checked`);
+  const scratch = resolve(build, `resident-${id.name.replace(/[^\w.-]/g, "_")}`);
+  // M-1: an old output must not satisfy alc's output check.
+  for (const p of [scratch, `${scratch}.app`, `${scratch}-symbols`])
+    rmSync(p, { recursive: true, force: true });
+  for (const s of sources) {
+    const dest = resolve(scratch, s.path);
+    if (!dest.startsWith(`${scratch}${sep}`))
+      throw new Error(`resident ${id.name}: source entry ${s.path} leaves the project`);
+    mkdirSync(dirname(dest), { recursive: true });
+    writeFileSync(dest, s.text);
+  }
+  writeFileSync(join(scratch, "app.json"), JSON.stringify(appJsonFromManifest(pkg), null, 2));
+  const symbols = `${scratch}-symbols`;
+  mkdirSync(symbols, { recursive: true });
+  await downloadSymbols(c, scratch, symbols);
+  for (const d of (manifest(scratch).dependencies ?? []).filter(
+    (x) => x.publisher !== "Microsoft",
+  )) {
+    const dep = await dependencyBytes(d, target, () => residentPackage(c, d.publisher, d.name));
+    if (dep === null)
+      throw new Error(`resident ${id.name}: dependency ${d.name} is not on ${c.server}`);
+    writeFileSync(join(symbols, `${d.publisher}_${d.name}.app`), dep);
+  }
+  await alcCompile(alc, scratch, symbols, `${scratch}.app`);
+}
+
 /** The compile line: version, raw sha256 and the header's per-compile id (the future packageId). */
 export function compiledLine(bytes: Buffer, note = ""): string {
   const id = readAppIdentity(bytes);
@@ -1096,6 +1143,12 @@ export interface RunDeps {
     symbols: string,
     log: string[],
   ) => Promise<AppItem[]>;
+  /** R-707: compiles an installed dependent's resident source against the new target build; sends nothing. */
+  readonly checkResident: (
+    c: Conn,
+    target: { readonly publisher: string; readonly name: string; readonly bytes: Buffer },
+    pkg: Buffer,
+  ) => Promise<void>;
   readonly doctor: (configPath: string, projectDir: string, testsDir: string) => Promise<boolean>;
   /** R669: where `<server>.md` out-of-use markers live (a test passes its own temp dir). */
   readonly outOfUseDir: string;
@@ -1149,6 +1202,17 @@ export const REAL_DEPS: RunDeps = {
   continiaFiles: () => CONTINIA_APPS.map((app) => ({ bytes: readContinia(app) })),
   controlBytes: pinnedControl,
   compile: realCompile,
+  checkResident: async (c, target, pkg) => {
+    const tools = await defaultAlToolPaths();
+    if (tools === undefined) throw new Error("no alc found under the AL Language extension");
+    await compileResidentSource(
+      c,
+      tools.alcPath,
+      join(STATE_ROOT, c.server, "build", "resident-check"),
+      target,
+      pkg,
+    );
+  },
   doctor,
   outOfUseDir: outOfUseDir(process.env),
 };
@@ -1287,6 +1351,64 @@ async function setupServer(
       : { ok: true, toPublish: [] };
     const ops = deps.serverOps(conn);
     const decided: Decided[] = await decideAll(items, ops, "setup", log);
+    if (compiled) {
+      // R-707: read-only, so still before any state-changing call. A pair is checked against the
+      // target the server will HOLD after this run: the new build when the target publishes, the
+      // resident one when it is kept or skipped.
+      const publishes = (dir: string) =>
+        decided.find((d) => d.item.dir === dir)?.decision.action === "publish";
+      const toPublish: ResidentPair[] = [];
+      const againstKept: ResidentPair[] = [];
+      for (const step of PUBLISH_PLAN) {
+        for (const dep of step.dependents) {
+          const local = items.find((i) => i.dir === dep)?.local;
+          if (local === undefined) continue;
+          const id = readAppIdentity(local);
+          const pair = {
+            target: step.target,
+            dependent: { dir: dep, name: id.name, publisher: id.publisher },
+          };
+          if (publishes(step.target)) toPublish.push(pair);
+          else if (publishes(dep)) againstKept.push(pair);
+        }
+      }
+      const build = (dir: string) => {
+        const bytes = items.find((i) => i.dir === dir)?.local;
+        if (bytes === undefined) throw new Error(`no build of ${dir}`);
+        return { bytes, ...readAppIdentity(bytes) };
+      };
+      try {
+        await guardResident(toPublish, ops.resident, async (pair, pkg) => {
+          const t = build(pair.target);
+          await deps.checkResident(
+            conn,
+            { publisher: t.publisher, name: t.name, bytes: t.bytes },
+            pkg,
+          );
+          log(`  checked   ${pair.dependent.name} (resident) against ${t.name} ${t.version}: ok`);
+        });
+        for (const pair of againstKept) {
+          const t = build(pair.target);
+          try {
+            const resident = await ops.resident(t.publisher, t.name);
+            if (resident === null) throw new Error(`${t.name} is not on ${server}`);
+            await deps.checkResident(
+              conn,
+              { publisher: t.publisher, name: t.name, bytes: resident },
+              build(pair.dependent.dir).bytes,
+            );
+            log(
+              `  checked   ${pair.dependent.name} (new build) against kept ${t.name} ${readAppIdentity(resident).version}: ok`,
+            );
+          } catch (err) {
+            throw refuseDependent("dependent-vs-kept-target", pair.dependent.name, err);
+          }
+        }
+      } catch (err) {
+        compiled = false;
+        summary.push(`  FAILED    ${errText(err)}`);
+      }
+    }
     const refused = refusals(decided);
     if (!compiled || refused.length > 0 || !continia.ok) {
       summary.push(
