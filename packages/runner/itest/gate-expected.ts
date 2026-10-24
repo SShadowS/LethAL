@@ -259,6 +259,15 @@ const HARDEN_DEPENDENTS = ["installed-dependents"];
 const RESUME_REUSED = ["resume-baseline-reused", "resume-reusing-run"];
 const XD_NARROWED = ["only-narrowed-run", "tests-only-narrowed-baseline"];
 const TABLES = ["non-executable-sites-dropped", "not-instrumentable-files-skipped"];
+// R744: the D legs (CDO 5f2a71d, `only` + `testsOnly`): the two narrowing notices of XD_NARROWED, plus the
+// pinned checkout's own app.json `logo` path with a backslash (app-json-backslash-path) and five pinned
+// Test/.alpackages apps whose build number exceeds 65535 (dependency-report-source-unavailable).
+const CDO_D = [
+  "app-json-backslash-path",
+  "dependency-report-source-unavailable",
+  "only-narrowed-run",
+  "tests-only-narrowed-baseline",
+];
 export const GATE_WARNINGS: Readonly<Record<string, readonly string[]>> = {
   "bcdev/first": [],
   "bcdev/second": [],
@@ -302,4 +311,7 @@ export const GATE_WARNINGS: Readonly<Record<string, readonly string[]>> = {
   "al-runner-v3/Y-A": COMPILED_OUT,
   "al-runner-v3/Y-B": COMPILED_OUT,
   "al-runner-v3/WR": COMPILED_OUT,
+  "al-runner-v3/D1": CDO_D,
+  "al-runner-v3/D1c": CDO_D,
+  "al-runner-v3/T": TABLES,
 };

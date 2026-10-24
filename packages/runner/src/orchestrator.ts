@@ -49,6 +49,7 @@ import {
   identitySiteKey,
   isMutableSite,
   numberIdentityOrdinals,
+  objectHeadersOf,
   planOneFile,
   reachLatchRefusedOwner,
   runIdentityEntries,
@@ -98,7 +99,12 @@ import {
 } from "./baseline-snapshot";
 import type { BaselineObservation, BaselineSnapshot } from "./baseline-snapshot";
 import { PublishFailedError } from "./bcdev-backend";
-import { MAX_ISOLATION_COMPILES, isolateBreakingMutants } from "./bisect";
+import {
+  MAX_ISOLATION_COMPILES,
+  guardGoverning,
+  isolateBreakingMutants,
+  parseAlcErrors,
+} from "./bisect";
 import {
   type ClosedWorldResult,
   PENDING_SUFFIX,
@@ -247,11 +253,13 @@ import type {
 } from "./selection";
 import { SessionSafety, SessionUnsafeError } from "./session-safety";
 import {
+  StaleTargetMemberError,
   baselineFoundNoneRefusal,
   describeStaleTestApp,
   groupedFoundNone,
   isRunMutantFoundNone,
   isRunMutantLineCountMessage,
+  staleTargetMember,
 } from "./stale-test-app";
 import { type LendingSession, sameHiddenFiles } from "./store";
 import type { ResultsStore } from "./store";
@@ -1923,6 +1931,23 @@ function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** R738: every object id the target's `.al` sources declare (any type: BC's stale-member message
+ *  names the id alone). A file `objectHeadersOf` refuses (an interface, a permissionset, an
+ *  enumextension, an empty file: no header kind it reads) declares no id a member is called on
+ *  here, and is skipped, never fatal. */
+function targetObjectIdsOf(sources: Iterable<readonly [string, string]>): ReadonlySet<number> {
+  const ids = new Set<number>();
+  for (const [path, text] of sources) {
+    if (!path.toLowerCase().endsWith(".al")) continue;
+    try {
+      for (const h of objectHeadersOf(text, path)) ids.add(h.id);
+    } catch (e) {
+      if (!(e instanceof FileRefusedError)) throw e;
+    }
+  }
+  return ids;
+}
+
 /** R709: the named refusal when a failed publish says BC could not restore the previous target
  *  (`restoreFailed`); undefined otherwise, and always for a compile verdict (its text is alc's
  *  output, R461). */
@@ -2014,7 +2039,7 @@ function sourceChanges(
     .join("; ");
 }
 
-async function prepareArtifactDir(args: {
+export async function prepareArtifactDir(args: {
   readonly targetDir: string;
   readonly files: readonly InstrumentedFile[];
   readonly subset?: readonly MutantManifestEntry[];
@@ -2147,10 +2172,14 @@ class BisectPrepareError extends Error {
  *   When `unresolved` is empty, `clean` compiled and may be redeployed; otherwise `clean` and
  *   `unresolved` are unknown and are `error` with `unresolvedNote`.
  */
-type IsolationPlan =
-  | { readonly kind: "none"; readonly note: string }
+export type IsolationPlan =
+  | { readonly kind: "none"; readonly note: string; readonly compiles: number }
   | {
       readonly kind: "isolated";
+      /** R735: compile-only runs spent, and how many mutants were named alone / in pairs. */
+      readonly compiles: number;
+      readonly culprits: number;
+      readonly grouped: number;
       readonly removed: ReadonlyMap<MutantManifestEntry, string>;
       readonly clean: readonly MutantManifestEntry[];
       readonly unresolved: readonly MutantManifestEntry[];
@@ -2185,7 +2214,7 @@ class NoDiagnosticError extends Error {}
  * `scratchDir` is removed once isolation finishes, win or lose — a failed
  * batch must not leave a scratch artifact behind on disk indefinitely.
  */
-async function isolateAndNote(args: {
+export async function isolateAndNote(args: {
   readonly subsetMutants: readonly MutantManifestEntry[];
   readonly scratchDir: string;
   readonly batchFiles: readonly InstrumentedFile[];
@@ -2210,8 +2239,11 @@ async function isolateAndNote(args: {
 }): Promise<IsolationPlan> {
   const fixedIds = fixedIdsOf(args.subsetMutants);
   const singletonText = new Map<MutantManifestEntry, string>();
+  const byId = new Map(args.subsetMutants.map((m) => [m.mutantId, m]));
+  let compiles = 0;
   try {
     const outcome = await isolateBreakingMutants(args.subsetMutants, async (subset) => {
+      compiles++;
       try {
         await prepareArtifactDir({
           targetDir: args.scratchDir,
@@ -2253,7 +2285,25 @@ async function isolateAndNote(args: {
           }
           singletonText.set(only, err.message);
         }
-        return false;
+        // R735: map each diagnostic to the mutant whose branch holds its line. The staged copy
+        // alc compiled has the same bytes as `scratchDir`, which holds THIS subset until the next
+        // `prepareArtifactDir`, so it is read here, never later. Names, never paths: R219 keeps
+        // batch basenames unique.
+        const texts = new Map<string, string | undefined>();
+        const suspects: MutantManifestEntry[] = [];
+        for (const d of parseAlcErrors(err.message)) {
+          if (!texts.has(d.file)) {
+            texts.set(
+              d.file,
+              await readFile(join(args.scratchDir, d.file), "utf8").catch(() => undefined),
+            );
+          }
+          const text = texts.get(d.file);
+          const id = text === undefined ? undefined : guardGoverning(text, d.line);
+          const hit = id === undefined ? undefined : byId.get(id);
+          if (hit !== undefined && !suspects.includes(hit)) suspects.push(hit);
+        }
+        return suspects;
       }
     });
     const site = (m: MutantManifestEntry) =>
@@ -2262,9 +2312,9 @@ async function isolateAndNote(args: {
       `deploy failed for a reason that is not attributable to any SINGLE mutant (${why}) — either environmental (e.g. app-version monotonicity, transport, licence) or MORE THAN ONE mutant breaks the compile, which isolation could not separate; read the compiler output below for the sites it names: ${String(args.originalErr)}`;
     switch (outcome.kind) {
       case "no-repro":
-        return { kind: "none", note: String(args.originalErr) };
+        return { kind: "none", note: String(args.originalErr), compiles };
       case "environmental":
-        return { kind: "none", note: notAttributable(outcome.detail) };
+        return { kind: "none", note: notAttributable(outcome.detail), compiles };
       case "isolated": {
         const removed = new Map<MutantManifestEntry, string>();
         for (const m of outcome.culprits) {
@@ -2284,6 +2334,9 @@ async function isolateAndNote(args: {
         const gone = new Set<MutantManifestEntry>([...removed.keys(), ...outcome.unresolved]);
         return {
           kind: "isolated",
+          compiles,
+          culprits: outcome.culprits.length,
+          grouped: outcome.groupErrors.length,
           removed,
           clean: args.subsetMutants.filter((m) => !gone.has(m)),
           unresolved: outcome.unresolved,
@@ -2298,12 +2351,14 @@ async function isolateAndNote(args: {
       return {
         kind: "none",
         note: `${String(args.originalErr)} (isolation aborted: preparing a candidate artifact failed — ${err.message})`,
+        compiles,
       };
     }
     if (err instanceof NoDiagnosticError) {
       return {
         kind: "none",
         note: `deploy failed, and a lone mutant failed with no alc error line, so no mutant is blamed (not attributable to any SINGLE mutant): ${err.message}`,
+        compiles,
       };
     }
     throw err;
@@ -4676,6 +4731,9 @@ interface ScoreBatchInput {
   /** R686: the session's test-arm evidence is R403's compiled membership of the PUBLISHED package
    *  (`{kind: "compiled", from: "published-package"}`). Absent or false: not proven. */
   readonly testsCompiledInPublishedPackage?: boolean;
+  /** R738: the target's own declared object ids (`targetObjectIdsOf`), so a baseline failure on a
+   *  stale target member refuses the session. Absent: no such check. */
+  readonly targetObjectIds?: ReadonlySet<number>;
   /** R192 snapshot reuse and recording, runSession only. Absent: always run, record nothing. */
   readonly snapshot?: {
     readonly batchDir: string;
@@ -5609,6 +5667,19 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     });
   }
 
+  // R738: tests the INSTALLED tests app still has but that call a member this run's own build of
+  // the target removed or re-signed (an altool publish is accepted over them, R728). After the
+  // found-0 refusal above and before `select`, so no mutant is scored and they never leave the
+  // green set silently.
+  const targetIds = input.targetObjectIds;
+  if (targetIds !== undefined) {
+    const stale = baseline.flatMap((b) => {
+      const objectId = staleTargetMember(b.verdict.failureMessage, targetIds);
+      return objectId === undefined ? [] : [{ name: qualifiedTestName(b.ref), objectId }];
+    });
+    if (stale.length > 0) throw new StaleTargetMemberError(stale);
+  }
+
   const plan = input.select(baseline);
   if (plan === undefined) return "nothing-to-run";
   const {
@@ -5995,6 +6066,10 @@ async function runSessionBody(
   // (`SourceSnapshotUnreadableError`): every batch copies its files and `app.json` from this one
   // snapshot, so each compiles exactly the hashed bytes.
   const sourceSnapshot = cfg.source ?? (await readTargetSource(cfg.projectDir));
+  // R738: the target's declared object ids, for the stale-member refusal at each baseline.
+  const sessionTargetIds = targetObjectIdsOf(
+    [...sourceSnapshot].map(([p, b]) => [p, b.toString("utf8")] as const),
+  );
   // R629: a warning only, once per session; it changes no deploy decision.
   const nestedWarning = nestedProjectWarning(cfg.projectDir);
   if (nestedWarning !== undefined) {
@@ -7313,7 +7388,7 @@ async function runSessionBody(
         emit({
           type: "warning",
           code: "compile-isolation",
-          message: `[lethal] batch ${batchIdx} failed to compile: isolating the breaking mutants (each breaking mutant costs about log2(n)+2 compile-only runs; at most ${MAX_ISOLATION_COMPILES} in all, and it stops early when the rest of the budget cannot finish another one, R734).`,
+          message: `[lethal] batch ${batchIdx} failed to compile: isolating the breaking mutants (alc's own diagnostics name the suspects first, about 2 compile-only runs per breaking mutant when they point right; otherwise halving costs about log2(n)+2 each; at most ${MAX_ISOLATION_COMPILES} in all, R734, R735).`,
         });
         const plan = await isolateAndNote({
           subsetMutants: manifest.mutants,
@@ -7331,6 +7406,11 @@ async function runSessionBody(
           excludeOutputs: cfg.excludeOutputs ?? [],
           configPath: cfg.configPath,
           emit,
+        });
+        emit({
+          type: "warning",
+          code: "compile-isolation-result",
+          message: `[lethal] batch ${batchIdx}: isolation used ${plan.compiles} of ${MAX_ISOLATION_COMPILES} compile-only runs: ${plan.kind === "isolated" ? plan.culprits : 0} culprit(s), ${plan.kind === "isolated" ? plan.grouped : 0} in pairs, ${plan.kind === "isolated" ? plan.unresolved.length : 0} unresolved`,
         });
         // R734 A3: rows are written only once the redeploy's outcome is known, one per `execute`
         // mutant (a stranded skip was recorded already and gets no second row). Every edge below
@@ -7968,6 +8048,7 @@ async function runSessionBody(
           envPublishes === undefined &&
           testArmEvidence.kind === "compiled" &&
           testArmEvidence.from === "published-package",
+        targetObjectIds: sessionTargetIds,
         snapshot: {
           batchDir,
           testDir: cfg.testDir,
@@ -8615,6 +8696,7 @@ async function runNamedMutantsBody(
       batchIndex: installed.batchIndex,
       artifactId: artifact.artifactId,
       tests: baselineTests,
+      targetObjectIds: targetObjectIdsOf(artifact.alSources.map((s) => [s.path, s.text] as const)),
       select: (baseline) => {
         baselineRows = baseline;
         for (const b of baseline) baselineRan.set(testKeyOf(b.ref), b.verdict);

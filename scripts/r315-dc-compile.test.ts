@@ -59,4 +59,18 @@ describe("r315-dc-compile", () => {
     expect(() => parseArgs(["p", "s", "o", "--table-id", "0"])).toThrow("positive integer");
     expect(() => parseArgs(["p", "s", "o", "--table-id"])).toThrow("needs a value");
   });
+
+  test("parseArgs (R735): --isolate and --keep are positive integers, --keep needs --isolate", () => {
+    expect(parseArgs(["p", "s", "o"]).isolate).toBeUndefined();
+    const a = parseArgs(["p", "s", "o", "--isolate", "30"]);
+    expect(a.isolate).toBe(30);
+    expect(a.keep).toBe(2000);
+    expect(parseArgs(["p", "s", "o", "--isolate", "2", "--keep", "500"]).keep).toBe(500);
+    expect(() => parseArgs(["p", "s", "o", "--isolate", "0"])).toThrow("positive integer");
+    expect(() => parseArgs(["p", "s", "o", "--isolate", "x"])).toThrow("positive integer");
+    expect(() => parseArgs(["p", "s", "o", "--keep", "5"])).toThrow("--keep needs --isolate");
+    expect(() => parseArgs(["p", "s", "o", "--isolate", "9", "--keep", "5"])).toThrow(
+      "more than --keep",
+    );
+  });
 });
