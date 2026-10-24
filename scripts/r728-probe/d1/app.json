@@ -1,0 +1,20 @@
+{
+  "id": "bcd962d9-58d6-4e7b-8f46-20d6087cfda2",
+  "name": "R728 Probe Dep One",
+  "publisher": "LethAL Probe",
+  "version": "1.0.0.1",
+  "brief": "R728 throwaway probe app, no tables.",
+  "platform": "28.0.0.0",
+  "runtime": "17.0",
+  "target": "OnPrem",
+  "idRanges": [{ "from": 93770, "to": 93774 }],
+  "dependencies": [
+    {
+      "id": "cd81e5cb-17c3-4a98-a12f-c03a41c5c517",
+      "name": "R728 Probe Target",
+      "publisher": "LethAL Probe",
+      "version": "1.0.0.1"
+    }
+  ],
+  "features": ["NoImplicitWith"]
+}
