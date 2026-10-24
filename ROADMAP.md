@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**39 of 697 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**36 of 698 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -311,6 +311,7 @@ that ordering is the priority.
 - **R699** · lethal verify looks up an integer literal with leading zeros (01000) as text, so a test-app object's id written that way is neither folded nor a fallback · [R699.md](docs/roadmap/R699.md) · done (a7cbd81e)
 - **R700** · lethal verify puts a test app's Install and Upgrade codeunits in no digest: an edit to the code the platform runs at install or upgrade leaves every test's digest unchanged · [R700.md](docs/roadmap/R700.md) · done (c2d51590)
 - **R701** · lethal verify puts no permission set in any digest: a test app's permission set (included through IncludedPermissionSets) can change a test's outcome without changing its digest · [R701.md](docs/roadmap/R701.md) · done (c2d51590)
+- **R703** · After the release: read the platform's committed test result after a stop (R-204b Part B, a LethAL Control change), and measure BC's CPU-only cancel latency and a slow test's spread near its budget, to size and narrow R204's residual false timeout-killed window · [R703.md](docs/roadmap/R703.md) · open, filed 2026-10-24 — after the first release (orchestrator ruling)
 
 ## Product gaps a real project hits
 
@@ -572,7 +573,7 @@ that ordering is the priority.
 - **R200** · al-runner 2.10.0.0 prints NO `[provision]` sentence on a warm cache, so R147's platform-app pin had nothing to read and `itest:alrunner` refused on `platformAppsDir` again · [R200.md](docs/roadmap/R200.md) · done (`parseAlRunnerPlatformAppsDir`, basis `selected-artifact`) — 2026-09-02, same day. The pin now falls…
 - **R202** · The held request of a session ended by R53's stop can answer HTTP 400 ("Cannot establish a connection to the SQL Server/Database") instead of the 408 that names the AL StopSession call; the transport then quarantines the tier the stop existed to score · [R202.md](docs/roadmap/R202.md) · open — filed 2026-09-03 from the R198 probe (`scripts/r198-group-runner-probe/`, Cronus283): 1 of 34 stops…
 - **R203** · A successful R53 stop whose session finishes the test before `StopSession` lands makes phase 3 refuse `lease-invalid`, which the client classifies as a GENUINE lease loss and invalidates the batch, with a note that names the wrong cause · [R203.md](docs/roadmap/R203.md) · done (`0451532`, with R198) — 2026-09-03. `TryFinishRun` answers `reason: op-stopped` when the lease tuple…
-- **R204** · R53's stop can land between a test's last statement and phase 3's commit, and the 408 then scores `timeout-killed` for a test that PASSED; the window is inherited by every stop and R198 makes each one smaller but adds one per method · [R204.md](docs/roadmap/R204.md) · open — NARROWED at both grains. Grouped: R198's build (`0451532`, 2026-09-03). Single: R-204b Part A…
+- **R204** · R53's stop can land between a test's last statement and phase 3's commit, and the 408 then scores `timeout-killed` for a test that PASSED; the window is inherited by every stop and R198 makes each one smaller but adds one per method · [R204.md](docs/roadmap/R204.md) · closed 2026-10-24 — narrowed three times…
 - **R206** · A grouped call runs a mutant's covering tests in ONE BC session, so `SingleInstance` state carries from test to test where the per-request path gave every test a cold session: 8 of 741 verdicts moved `survived` to `killed` on Document Output, all cache code, all killed at group position 2 or later · [R206.md](docs/roadmap/R206.md) · done (`59081aa`, control app 1.0.0.18 in `a4ece0b`) — option (A) built after five design revisions and four…
 - **R207** · al-runner's `provision` subcommand is refused by `provisionOnce` for a reason that no longer reproduces: on v2.10.0.0 the run and the subcommand both resolve every artifact at the binary's build, so the toolkit-version gap measured on 2.1.1.0 is not visible on the fixture · [R207.md](docs/roadmap/R207.md) · closed 2026-10-23 — retired with the .NET al-runner (R654): AlRunnerBackend.provisionOnce was deleted with v2…
 - **R208** · The chunked group path (`--max-methods-per-call`) has no live gate: R198 §7/§8's two forced-chunk campaigns were never implemented, and under R206 a chunked replay is the one place where `chunkPrefix` versus `ordered` is verdict-bearing · [R208.md](docs/roadmap/R208.md) · done (`itest:chunked`, 2026-09-04) — a two-leg differential gate over…
@@ -587,13 +588,13 @@ that ordering is the priority.
 - **R243** · fixtures/README.md's hand-computed sandbox-app verdict table lists 16 mutant sites; the fixture has 19 on both backends · [R243.md](docs/roadmap/R243.md) · done (409fc467)
 - **R255** · The al-runner warning `lethal run` prints still says al-runner reports `pass` for an `asserterror` that raised no error, a v1 finding fixed in v2 · [R255.md](docs/roadmap/R255.md) · done (cba033cc)
 - **R257** · The EMEA runbook's explain rank and executionProven claims were measured on a pre-GH-24 report and need a new one · [R257.md](docs/roadmap/R257.md) · open
-- **R263** · The TestPage baseline reply was lost in 6 of 7 Cronus28 smoke sessions but only 6 of 60 counted sessions on a fresh Cronus284; the cause of the difference is unknown · [R263.md](docs/roadmap/R263.md) · open
+- **R263** · The TestPage baseline reply was lost in 6 of 7 Cronus28 smoke sessions but only 6 of 60 counted sessions on a fresh Cronus284; the cause of the difference is unknown · [R263.md](docs/roadmap/R263.md) · closed 2026-10-24 — unmeasurable (Cronus28 parked, Cronus284 not ours) and moot since R-236c refuses TestPage…
 - **R264** · Unit tests read the machine's REAL al-runner secondary cache, so `doctor-cli.test.ts`, `doctor-al-runner.test.ts` and `al-runner-cache.test.ts` time out once it grows (30 fail at 5 s on a 5.4 GB cache) · [R264.md](docs/roadmap/R264.md) · done (7e27b0b, a3d961f)
 - **R267** · Two stale al-runner claims outside the agent docs: the run-time warning still describes the v1 `asserterror` bug, and `fixtures/README.md` still quotes `itest:alrunner` at 3 / 16 / 0 · [R267.md](docs/roadmap/R267.md) · done (cba033cc)
 - **R269** · `itest:testapp` hard-codes the sandbox-tests version 1.0.0.2, so it fails since GH-09 bumped the fixture to 1.0.0.3 · [R269.md](docs/roadmap/R269.md) · done (61f1f80)
 - **R271** · harden, verify, testapp and agreement are not in the agentflow gate table, because LEG_CONTAINER cannot name Cronus28 · [R271.md](docs/roadmap/R271.md) · open
-- **R290** · R-236b's fix has no early readback and no restart recovery: a lost reply still waits the full budget, and a wedge still needs a manual coord ask · [R290.md](docs/roadmap/R290.md) · open
-- **R291** · R-236c: refuse TestPage tests up front instead of dispatching them and risking a lost reply · [R291.md](docs/roadmap/R291.md) · open
+- **R290** · R-236b's fix has no early readback and no restart recovery: a lost reply still waits the full budget, and a wedge still needs a manual coord ask · [R290.md](docs/roadmap/R290.md) · closed 2026-10-24 — moot since R-236c: no TestPage test is sent, so its lost reply cannot occur
+- **R291** · R-236c: refuse TestPage tests up front instead of dispatching them and risking a lost reply · [R291.md](docs/roadmap/R291.md) · done (71b8df1b)
 - **R314** · A native Rust tree-sitter-al parser (RUST-01 spike) parsed BaseApp 1.8x SLOWER than the WASM path; the Rust route stopped at its pre-committed bar · [R314.md](docs/roadmap/R314.md) · closed 2026-09-29: superseded by RUST-02/RUST-03 (clang build; native switch landed 9f7cb5f0)
 - **R317** · OData V4 throttling (event 705) was seen sharing a BC user with the gate; a per-user concurrency limit is not measured · [R317.md](docs/roadmap/R317.md) · open, filed 2026-09-28
 - **R320** · GitHub Actions in ci.yml and release.yml are pinned by mutable version tags, not commit SHAs · [R320.md](docs/roadmap/R320.md) · done (e413175)
