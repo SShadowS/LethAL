@@ -1409,22 +1409,22 @@ describe("R616b a longer per-test timeout only under measured io pressure", () =
   const press = (full: string): string =>
     `io some 9.00/2.00/3.00 full ${full}/0.20/0.30; cpu some 0.25/0.50/0.75`;
   test("io full avg10 12.0 raises the timeout to 15000 and says why", () => {
-    const t = testTimeout(press("12.00"));
+    const t = testTimeout(press("12.00"), "linux", false);
     expect(t.ms).toBe(15000);
     expect(t.line).toBe("per-test timeout: 15000 ms (io full avg10 12.00 >= 5)");
   });
   test("io full avg10 1.0 keeps the default (the some figure does not count)", () => {
-    const t = testTimeout(press("1.00"));
+    const t = testTimeout(press("1.00"), "linux", false);
     expect(t.ms).toBe(5000);
     expect(t.line).toBe("per-test timeout: 5000 ms (default)");
-    expect(testTimeout(press("5.00")).ms).toBe(15000); // the edge is inclusive
+    expect(testTimeout(press("5.00"), "linux", false).ms).toBe(15000); // the edge is inclusive
   });
   test("unreadable pressure keeps the default and says so", () => {
     for (const p of [
       undefined,
       "io skipped (cannot read /proc/pressure/io: ENOENT); cpu skipped (x)",
     ]) {
-      const t = testTimeout(p);
+      const t = testTimeout(p, "win32", false);
       expect(t.ms).toBe(5000);
       expect(t.line).toBe("per-test timeout: 5000 ms (default; io pressure unreadable)");
     }

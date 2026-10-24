@@ -973,13 +973,15 @@ export const WINDOWS_CI_TIMEOUT_MS = 60_000;
  * R616b B. When the disk is stalled just before the test step (io `full` avg10 >= 5.0: all tasks
  * waited on io for 5% of the last 10 s; read after the slot wait, so it describes the disk the
  * tests will meet), the test child gets `--timeout=15000`. Otherwise bun's 5000 ms stays. Pressure
- * that cannot be read (Windows, no /proc) keeps the default and says so. A test that hangs still
- * fails, only 10 s later. bun's own timeout is not re-tested here.
+ * that cannot be read (Windows, no /proc) keeps the default and says so, except on Windows CI,
+ * which gets WINDOWS_CI_TIMEOUT_MS (R726). A test that hangs still fails, only later. bun's own
+ * timeout is not re-tested here. `platform` and `ci` have no defaults on purpose: a caller that
+ * left them out would read the real runner, and a test would pass on Linux and fail on Windows CI.
  */
 export function testTimeout(
   pressure: string | undefined,
-  platform: string = process.platform,
-  ci: boolean = ciVariable(process.env) !== undefined,
+  platform: string,
+  ci: boolean,
 ): { ms: number; line: string } {
   if (platform === "win32" && ci) {
     return {
