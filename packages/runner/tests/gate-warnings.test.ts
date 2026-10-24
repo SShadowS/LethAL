@@ -223,6 +223,9 @@ describe("GATE_WARNINGS", () => {
       "Y-A",
       "Y-B",
       "WR",
+      "D1",
+      "D1c",
+      "T",
     ];
     for (const leg of v3) expect(GATE_WARNINGS[`al-runner-v3/${leg}`], leg).toBeDefined();
     // N1E throws by design and is never asserted.
