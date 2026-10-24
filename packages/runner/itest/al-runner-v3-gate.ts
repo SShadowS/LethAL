@@ -704,7 +704,7 @@ export function recordRefusal(
   requested: readonly string[],
 ): string | undefined {
   if ((!pinned && !candidate) || requested.length === 0) return undefined;
-  return `a record run refuses a ${pinned ? "pinned" : "candidate"} build (${requested.join(", ")}): record from the build current is gated on`;
+  return `al-runner-v3-itest-record-refused: a record run refuses a ${pinned ? "pinned" : "candidate"} build (${requested.join(", ")}): record from the build current is gated on`;
 }
 
 /**

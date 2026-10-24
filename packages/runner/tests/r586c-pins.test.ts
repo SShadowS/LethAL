@@ -16,7 +16,7 @@ import {
 import { V3_BUILD_PINS, applyTPin, findV3Pin, pinPattern } from "../itest/al-runner-v3-pins";
 import { TABLES_KNOWN_DIFFERENCES } from "../itest/al-runner-v3-tables-known";
 import { type NormalizedMutant, compareMutants } from "../itest/mutant-equality";
-import { BC_HTTP_HUB_TEXT } from "../src/al-runner-v3-contract";
+import { BC_END_OF_TEST_TEXT, BC_HTTP_HUB_TEXT } from "../src/al-runner-v3-contract";
 
 const VERSION = "al-runner 3.0.0-alpha.5 (07342060e)";
 const SHA = "fd4d6d406a2f2170fccfe13413d51bbb1317b78b3ef5af3800ca9a6009b51db2";
@@ -252,10 +252,20 @@ describe("R586c leg C: the pin", () => {
     );
     expect(r.outcome).toBe("gate-fail");
   });
-  test("C-pin-5: duplicate-key read as gone (BC's fail text) is held, and not a pin pass", () => {
+  test("C-pin-5: duplicate-key read as gone with the pinned refusal text is held, and not a pin pass", () => {
     const r = runC(
       // The pinned refusal text but read as `gone`: only the verdict compare can refuse it.
       withFact(alpha5Facts(), "duplicate-key-insert-raises", { verdict: "gone" }),
+    );
+    expect(r.outcome).toBe("held");
+    expect(r.lines.some((l) => l.startsWith("pinned: duplicate-key"))).toBe(false);
+  });
+  test("C-pin-5b: duplicate-key read as gone with BC's end-of-test text is held", () => {
+    const r = runC(
+      withFact(alpha5Facts(), "duplicate-key-insert-raises", {
+        verdict: "gone",
+        measured: `[{"status":"fail","message":"${BC_END_OF_TEST_TEXT}","notRun":false}] exit 1`,
+      }),
     );
     expect(r.outcome).toBe("held");
     expect(r.lines.some((l) => l.startsWith("pinned: duplicate-key"))).toBe(false);
@@ -489,6 +499,11 @@ describe("R586c itest wiring", () => {
     expect(call).toBeGreaterThan(0);
     expect(call).toBeLessThan(ITEST.indexOf("for (const leg of LEGS)"));
   });
+  test("a held X (b) on a pinned build prints the pin-mismatch line", () => {
+    expect(ITEST).toContain(
+      "X (b): pin-mismatch: pinned exit 3, passed 0, notRun 0, no rows, compilationErrors non-empty; read ${b7}",
+    );
+  });
   test("S3: the candidate seam is passed only inside legK, and only on a candidate", () => {
     expect(ITEST.match(/alRunnerCandidate/g)?.length).toBe(1);
     const k = ITEST.indexOf("async function legK(");
@@ -503,7 +518,9 @@ describe("R586c itest wiring", () => {
 
 describe("R586c M5: a record request on a pinned or candidate build is refused", () => {
   test("a pinned build refuses a request for any leg's baseline", () => {
-    expect(recordRefusal(true, false, ["al-runner-v3.layout.baseline.json"])).toMatch(/refuses/);
+    expect(recordRefusal(true, false, ["al-runner-v3.layout.baseline.json"])).toMatch(
+      /^al-runner-v3-itest-record-refused: .*refuses/,
+    );
   });
   test("a candidate build refuses it too", () => {
     expect(recordRefusal(false, true, ["al-runner-v3.tables.baseline.json"])).toMatch(/refuses/);

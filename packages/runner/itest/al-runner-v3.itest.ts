@@ -939,7 +939,13 @@ async function legX(scratch: string, push: (line: string) => void): Promise<void
   const xbOutcome = classifyXb(xb, activePin?.xb);
   must(xbOutcome !== "gate-fail", `X (b): ${b7}`);
   const xHeld: string[] =
-    xbOutcome === "held" ? [`X (b): ${b7}: v3 now refuses the broken target (#5602 fixed)`] : [];
+    xbOutcome === "held"
+      ? [
+          activePin !== undefined
+            ? `X (b): pin-mismatch: pinned exit 3, passed 0, notRun 0, no rows, compilationErrors non-empty; read ${b7}`
+            : `X (b): ${b7}: v3 now refuses the broken target (#5602 fixed)`,
+        ]
+      : [];
   for (const l of xHeld) console.log(`  ${l}`);
   if (activePin !== undefined && xbOutcome === "pass")
     push(`X: pinned X (b) = ${b7} (pin ${activePin.id}, as BC)`);
