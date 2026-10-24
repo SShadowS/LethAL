@@ -54,6 +54,7 @@ import {
 } from "./config-path";
 import { TABLES_FIGURES } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import { checkGateWarnings, collectWarnings, finishGate, nonPassExit } from "./gate-warnings";
 import { killReproductionFailures } from "./kill-reproduction";
 import { assertNotInstrumentedEvidence } from "./notinstrumented-evidence";
 import { acquireProbeLease, odataReadRegisteredArtifact } from "./probe-lease";
@@ -836,7 +837,9 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
 
   const store = new ResultsStore(join(PROJECT_DIR, "lethal.sqlite"));
   try {
+    const warnings = collectWarnings();
     const report = await runSession({
+      emit: [warnings.subscriber],
       backend,
       store,
       projectDir: PROJECT_DIR,
@@ -857,6 +860,7 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
       // operator deletes it by hand (observed live). Same reasoning as bcdev.itest.ts.
       quarantineDir: join(scratchRoot, "quarantine"),
     });
+    checkGateWarnings("tables", "run", warnings);
     const runId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
     const sessionLiveness = store.sessionIdLiveness(runId);
     // GH-24: the report keeps only the tests that REACHED, so the order both control tests ran in,
@@ -1851,7 +1855,9 @@ async function main(): Promise<void> {
   }
 
   console.log("tables itest: PASS");
-  await emitPassed("tables", { sublegs: ["tables"], artifacts: { reported: false } });
+  await finishGate(() =>
+    emitPassed("tables", { sublegs: ["tables"], artifacts: { reported: false } }),
+  );
 }
 
 main().catch(async (err: unknown) => {
@@ -1859,5 +1865,5 @@ main().catch(async (err: unknown) => {
   // the following receipt write is slow or the process is killed before it finishes.
   console.error(formatFailure(err));
   await emitFailed("tables", err instanceof Error ? err.message : String(err));
-  process.exit(err instanceof BaselineRecordedError ? 3 : 1);
+  process.exit(err instanceof BaselineRecordedError ? 3 : nonPassExit(err, 1));
 });

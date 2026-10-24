@@ -67,6 +67,7 @@ import {
   readFixtureConfig,
 } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import { checkGateWarnings, collectWarnings, finishGate, nonPassExit } from "./gate-warnings";
 import {
   ANSWER_KILLERS,
   EXPECTED,
@@ -304,7 +305,9 @@ async function main(): Promise<void> {
     const backend = connect();
     const store = new ResultsStore(dbPath);
     try {
+      const warnings = collectWarnings();
       const report = await runSession({
+        emit: [warnings.subscriber],
         backend,
         store,
         projectDir: PROJECT_DIR,
@@ -321,6 +324,7 @@ async function main(): Promise<void> {
       // R582: every kill was re-run under the mutant (verify's own kills are not evidenced:
       // `VerifyResult` carries no marker).
       assertKillsReproduced(`agreement/${leg === "a" ? "A" : "B"}`, report, store);
+      checkGateWarnings("agreement", leg, warnings);
       return report;
     } finally {
       store.close();
@@ -893,7 +897,9 @@ async function main(): Promise<void> {
   }
 
   console.log("agreement itest: PASS");
-  await emitPassed("agreement", { sublegs: ["agreement"], artifacts: { reported: false } });
+  await finishGate(() =>
+    emitPassed("agreement", { sublegs: ["agreement"], artifacts: { reported: false } }),
+  );
 }
 
 main().catch(async (err: unknown) => {
@@ -901,5 +907,5 @@ main().catch(async (err: unknown) => {
   // the following receipt write is slow or the process is killed before it finishes.
   console.error(formatFailure(err));
   await emitFailed("agreement", err instanceof Error ? err.message : String(err));
-  process.exit(1);
+  process.exit(nonPassExit(err, 1));
 });

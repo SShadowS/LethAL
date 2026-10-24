@@ -61,6 +61,7 @@ import {
   readFixtureConfig,
 } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import { checkGateWarnings, collectWarnings, finishGate, nonPassExit } from "./gate-warnings";
 import { assertKillsReproduced } from "./kill-reproduction";
 import { diffMutants, keyOf, normalizeForComparison } from "./mutant-equality";
 import { expectedTestAppVersion } from "./test-app-version";
@@ -246,7 +247,9 @@ async function main(): Promise<void> {
     console.log(`testapp itest: BC build (Base Application) ${base.versions.join(", ")}`);
 
     // ---- 1. The gate-equivalent run: leaves a guarded build installed with a trusted record.
+    const warnings = collectWarnings();
     const report = await runSession({
+      emit: [warnings.subscriber],
       backend,
       store,
       projectDir: PROJECT_DIR,
@@ -257,6 +260,7 @@ async function main(): Promise<void> {
     });
     // R582: every kill of the full run was re-run under the mutant.
     assertKillsReproduced("testapp", report, store);
+    checkGateWarnings("testapp", "run", warnings);
     assert.equal(report.quarantined, undefined, "step 1: the full run must not quarantine");
     const committed = (await readGateBaseline(BASELINE_PATH)).entries;
     const diffs = diffMutants(committed, normalizeForComparison(report));
@@ -500,7 +504,9 @@ async function main(): Promise<void> {
   }
 
   console.log("testapp itest: PASS");
-  await emitPassed("testapp", { sublegs: ["testapp"], artifacts: { reported: false } });
+  await finishGate(() =>
+    emitPassed("testapp", { sublegs: ["testapp"], artifacts: { reported: false } }),
+  );
 }
 
 main().catch(async (err: unknown) => {
@@ -508,5 +514,5 @@ main().catch(async (err: unknown) => {
   // the following receipt write is slow or the process is killed before it finishes.
   console.error(formatFailure(err));
   await emitFailed("testapp", err instanceof Error ? err.message : String(err));
-  process.exit(1);
+  process.exit(nonPassExit(err, 1));
 });

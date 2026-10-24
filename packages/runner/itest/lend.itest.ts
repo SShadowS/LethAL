@@ -64,6 +64,7 @@ import {
 } from "./config-path";
 import { LEND_FIGURES, LEND_MUTANTS, type LendCode } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import { checkGateWarnings, collectWarnings, finishGate, nonPassExit } from "./gate-warnings";
 import { PENDING_SUFFIX, REVOKED_SUFFIX, seedRunFrom } from "./lend-seed";
 import { compareMutants, keyOf, normalizeForComparison } from "./mutant-equality";
 import type { NormalizedMutant } from "./mutant-equality";
@@ -198,6 +199,7 @@ async function session(
   const events: RunEvent[] = [];
   console.log(`  ${label}: ${JSON.stringify(extra)}`);
   try {
+    const warnings = collectWarnings();
     const report = await runSession({
       backend,
       store,
@@ -213,9 +215,10 @@ async function session(
       resourceServerInstance: bcdev.serverInstance,
       // A scratch quarantine dir, never the real store (see bcdev.itest.ts).
       quarantineDir: join(root, "quarantine"),
-      emit: [(e) => events.push(e)],
+      emit: [(e) => events.push(e), warnings.subscriber],
       ...extra,
     });
+    checkGateWarnings("lend", label, warnings);
     return { report, events, runId: maxRunId(store) };
   } finally {
     await backend.close();
@@ -715,11 +718,11 @@ async function main(): Promise<void> {
     await rm(root, { recursive: true, force: true });
   }
   console.log("lend itest: PASS");
-  await emitPassed("lend", { sublegs, artifacts: { reported: false } });
+  await finishGate(() => emitPassed("lend", { sublegs, artifacts: { reported: false } }));
 }
 
 main().catch(async (err: unknown) => {
   console.error(formatFailure(err));
   await emitFailed("lend", err instanceof Error ? err.message : String(err));
-  process.exit(1);
+  process.exit(nonPassExit(err, 1));
 });

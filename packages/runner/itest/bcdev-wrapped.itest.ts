@@ -39,6 +39,7 @@ import {
   readFixtureConfig,
 } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import { checkGateWarnings, collectWarnings, finishGate, nonPassExit } from "./gate-warnings";
 import { assertKillsReproduced } from "./kill-reproduction";
 import {
   WRAPPED_PROJECT_DIR,
@@ -161,7 +162,9 @@ async function runLeg(
   };
   const store = new ResultsStore(join(scratchRoot, "lethal.sqlite"));
   try {
+    const collected = collectWarnings();
     const report = await runSession({
+      emit: [collected.subscriber],
       backend,
       store,
       projectDir: WRAPPED_PROJECT_DIR,
@@ -184,6 +187,7 @@ async function runLeg(
       report,
       store,
     );
+    checkGateWarnings("bcdev-wrapped", coverageMode === "fenced" ? "fenced" : "hub", collected);
     return { report, warnings };
   } finally {
     console.warn = original;
@@ -226,11 +230,13 @@ async function main(): Promise<void> {
     await rm(root, { recursive: true, force: true });
   }
   console.log("bcdev wrapped itest: PASS");
-  await emitPassed("bcdev-wrapped", { sublegs: ["fenced", "hub"], artifacts: { reported: false } });
+  await finishGate(() =>
+    emitPassed("bcdev-wrapped", { sublegs: ["fenced", "hub"], artifacts: { reported: false } }),
+  );
 }
 
 main().catch(async (err: unknown) => {
   console.error(formatFailure(err));
   await emitFailed("bcdev-wrapped", err instanceof Error ? err.message : String(err));
-  process.exit(err instanceof BaselineRecordedError ? 3 : 1);
+  process.exit(err instanceof BaselineRecordedError ? 3 : nonPassExit(err, 1));
 });

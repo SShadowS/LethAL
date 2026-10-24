@@ -66,6 +66,7 @@ import {
   readFixtureConfig,
 } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import { checkGateWarnings, collectWarnings, finishGate, nonPassExit } from "./gate-warnings";
 import { assertKillsReproduced } from "./kill-reproduction";
 import { keyOf } from "./mutant-equality";
 import { assertFreshFullRun } from "./verify-agreement";
@@ -325,7 +326,9 @@ async function main(): Promise<void> {
     const store = new ResultsStore(dbPath);
     let report: SessionReport;
     try {
+      const warnings = collectWarnings();
       report = await runSession({
+        emit: [warnings.subscriber],
         backend,
         store,
         projectDir: PROJECT_DIR,
@@ -339,6 +342,7 @@ async function main(): Promise<void> {
       });
       // R582: every kill was re-run under the mutant, by marker and by its 2 killer rows.
       assertKillsReproduced(`verify-scale/${leg.toUpperCase()}`, report, store);
+      checkGateWarnings("verify-scale", leg, warnings);
     } finally {
       store.close();
       await backend.close();
@@ -663,7 +667,9 @@ async function main(): Promise<void> {
   }
 
   console.log("verify-scale itest: PASS (measurement mode, the 0.20 line is recorded, not gated)");
-  await emitPassed("verify-scale", { sublegs: ["verify-scale"], artifacts: { reported: false } });
+  await finishGate(() =>
+    emitPassed("verify-scale", { sublegs: ["verify-scale"], artifacts: { reported: false } }),
+  );
 }
 
 main().catch(async (err: unknown) => {
@@ -671,5 +677,5 @@ main().catch(async (err: unknown) => {
   // the following receipt write is slow or the process is killed before it finishes.
   console.error(formatFailure(err));
   await emitFailed("verify-scale", err instanceof Error ? err.message : String(err));
-  process.exit(1);
+  process.exit(nonPassExit(err, 1));
 });

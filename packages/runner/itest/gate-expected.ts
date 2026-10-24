@@ -240,3 +240,14 @@ export const LEND_FIGURES = {
   /** K2 leaves out only this one. */
   r3Rerun: ["M0019"],
 } as const;
+
+/**
+ * R736: the exact SORTED, unique warning codes a gate leg's run emits, keyed `"<gate>/<leg>"`.
+ * An ABSENT key makes the gate refuse (or, with LETHAL_ITEST_OBSERVE_WARNINGS=1, print the set and
+ * exit 3). Fill a set in only by a deliberate edit after an observe run whose codes were each
+ * explained and pre-committed. The gate never writes this. Only `hang/baseline` is filled, equal to
+ * check 11 of `hang-baseline-leg.ts` (a unit test keeps the two equal).
+ */
+export const GATE_WARNINGS: Readonly<Record<string, readonly string[]>> = {
+  "hang/baseline": ["operator-narrowed-run", "tests-only-narrowed-baseline"],
+};

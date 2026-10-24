@@ -92,6 +92,7 @@ import {
 import { CHUNKED_FIGURES } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { CHUNKED_SUBLEGS } from "./gate-sublegs";
+import { checkGateWarnings, collectWarnings, finishGate, nonPassExit } from "./gate-warnings";
 import { killReproductionFailures, latestRunId } from "./kill-reproduction";
 import { assertReachEvidence, assertReachIdenticalAcrossLegs } from "./reach-evidence";
 
@@ -275,7 +276,9 @@ async function runLeg(scratchRoot: string, maxMethodsPerCall?: number): Promise<
   // and must not disturb `itest:tables`' resume history in fixtures/sandbox-data/lethal.sqlite.
   const store = new ResultsStore(join(scratchRoot, "chunked.sqlite"));
   try {
+    const warnings = collectWarnings();
     const report = await runSession({
+      emit: [warnings.subscriber],
       backend,
       store,
       projectDir: PROJECT_DIR,
@@ -292,6 +295,7 @@ async function runLeg(scratchRoot: string, maxMethodsPerCall?: number): Promise<
       resourceServerInstance: bcdev.serverInstance,
       quarantineDir: join(scratchRoot, "quarantine"),
     });
+    checkGateWarnings("chunked", maxMethodsPerCall === undefined ? "control" : "chunked", warnings);
 
     const runId = latestRunId(store);
     const codeOf = new Map<number, string>();
@@ -516,10 +520,12 @@ async function main(): Promise<void> {
     );
 
     console.log("chunked itest: PASS");
-    await emitPassed("chunked", {
-      sublegs: [...CHUNKED_SUBLEGS],
-      artifacts: { reported: false },
-    });
+    await finishGate(() =>
+      emitPassed("chunked", {
+        sublegs: [...CHUNKED_SUBLEGS],
+        artifacts: { reported: false },
+      }),
+    );
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }
@@ -530,5 +536,5 @@ main().catch(async (err) => {
   // cannot hide it.
   console.error(formatFailure(err));
   await emitFailed("chunked", err instanceof Error ? err.message : String(err));
-  process.exit(1);
+  process.exit(nonPassExit(err, 1));
 });

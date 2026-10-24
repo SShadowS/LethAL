@@ -77,6 +77,13 @@ import { HANG_FIGURES } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { HANG_SUBLEGS } from "./gate-sublegs";
 import {
+  checkGateWarnings,
+  collectWarnings,
+  finishGate,
+  nonPassExit,
+  observeGateWarnings,
+} from "./gate-warnings";
+import {
   BASELINE_PROBE_OWNER,
   type BaselineVerdictEvent,
   type HangTestRow,
@@ -529,6 +536,7 @@ async function runLeg(scratchRoot: string, mode: LegMode): Promise<LegResult> {
   const quarantineDir = join(scratchRoot, `quarantine-${mode}`);
   const store = new ResultsStore(join(scratchRoot, `hang-${mode}.sqlite`));
   const warnings: WarningDiagnostic[] = [];
+  const gateWarnings = collectWarnings();
   const baselineVerdicts: BaselineVerdictEvent[] = [];
   let quarantinedEvents = 0;
   const collect: EventSubscriber = (event: RunEvent) => {
@@ -570,7 +578,7 @@ async function runLeg(scratchRoot: string, mode: LegMode): Promise<LegResult> {
     resourceServer: bcdev.server,
     resourceServerInstance: bcdev.serverInstance,
     quarantineDir,
-    emit: [collect],
+    emit: [collect, gateWarnings.subscriber],
   };
   try {
     if (mode === "baseline") {
@@ -581,6 +589,10 @@ async function runLeg(scratchRoot: string, mode: LegMode): Promise<LegResult> {
       setLegState("armed");
     }
     const report = await runSession(sessionCfg);
+    // R736: only the BASELINE leg's set is pinned (`GATE_WARNINGS["hang/baseline"]`, equal to check
+    // 11). The other legs print in observe mode and assert nothing yet.
+    if (mode === "baseline") checkGateWarnings("hang", mode, gateWarnings);
+    else observeGateWarnings("hang", mode, gateWarnings);
     const testRows = store.db
       .query(
         "SELECT mutant_code, mutant_row_id, codeunit_name, method, outcome, duration_ms, failure_message, op_kind FROM test_results ORDER BY id",
@@ -1162,10 +1174,12 @@ async function main(): Promise<void> {
     }
 
     console.log("hang itest: PASS");
-    await emitPassed("hang", {
-      sublegs: [...HANG_SUBLEGS],
-      artifacts: { reported: false },
-    });
+    await finishGate(() =>
+      emitPassed("hang", {
+        sublegs: [...HANG_SUBLEGS],
+        artifacts: { reported: false },
+      }),
+    );
   } catch (err) {
     // §5 trigger 6: any throw once the marker reads `armed` (runSession, the probe, a store read).
     if (legState === "armed") {
@@ -1200,5 +1214,7 @@ try {
   await emitFailed("hang", stopReason !== undefined ? `STOP (exit 5): ${stopReason}` : msg);
   // R-658: a STOP exits 5. R332: a record run wrote the SINGLE leg's baseline and is never a pass.
   // The two never meet: a record run writes in SINGLE, after its D-C check and before BASELINE.
-  process.exit(err instanceof BaselineRecordedError ? 3 : stopReason !== undefined ? 5 : 1);
+  process.exit(
+    err instanceof BaselineRecordedError ? 3 : stopReason !== undefined ? 5 : nonPassExit(err, 1),
+  );
 }

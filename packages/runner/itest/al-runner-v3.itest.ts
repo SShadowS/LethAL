@@ -130,6 +130,7 @@ import {
 } from "./baseline-guard";
 import { prepareFixtureSymbols } from "./fixture-symbols";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import { checkGateWarnings, collectWarnings, finishGate, nonPassExit } from "./gate-warnings";
 import {
   LAYOUT_MAX_GUARDS,
   LAYOUT_PROJECT_DIR,
@@ -250,6 +251,7 @@ async function session(
   let r: SessionReport;
   // R651: the orchestrator's phase walls, summed per phase, for the split line (timing only).
   const phases: Record<string, number> = {};
+  const gateWarnings = collectWarnings();
   try {
     r = await runSession({
       backend,
@@ -257,6 +259,7 @@ async function session(
       instrumentedDir: join(scratch, "instr"),
       ...cfg,
       emit: [
+        gateWarnings.subscriber,
         (e) => {
           if (e.type === "warning") console.log(`  warn ${e.code}: ${e.message.slice(0, 300)}`);
           if (e.type === "phase-left") phases[e.phase] = (phases[e.phase] ?? 0) + e.elapsedMs;
@@ -279,6 +282,7 @@ async function session(
   }
   // R635: all of it only when a flag asks, so the unflagged gate is unchanged.
   const leg = basename(scratch);
+  checkGateWarnings("al-runner-v3", leg, gateWarnings);
   if (TRANSPORT.transport !== undefined) {
     console.log(`  ${leg}: entries ${JSON.stringify(backend.entriesStats())}`);
     console.log(`  ${leg}: ${v3SplitLine(phases, backend.entriesStats())}`);
@@ -1723,12 +1727,14 @@ async function main(): Promise<void> {
   if (bad.length > 0) throw new Error(`al-runner-v3 itest: FAIL: ${bad.join(", ")}`);
   console.log("al-runner-v3 itest: PASS");
   // R654 S2: agentflow's receipt (only when challenged), naming every leg that ran and passed.
-  await emitPassed("alrunner-v3", {
-    sublegs: Object.entries(legs)
-      .filter(([, v]) => v === "pass")
-      .map(([l]) => l),
-    artifacts: { reported: false },
-  });
+  await finishGate(() =>
+    emitPassed("alrunner-v3", {
+      sublegs: Object.entries(legs)
+        .filter(([, v]) => v === "pass")
+        .map(([l]) => l),
+      artifacts: { reported: false },
+    }),
+  );
 }
 
 main().catch(async (err: unknown) => {
@@ -1741,5 +1747,5 @@ main().catch(async (err: unknown) => {
         ? err.message
         : String(err),
   );
-  process.exit(err instanceof BaselineRecordedError ? 3 : 1);
+  process.exit(err instanceof BaselineRecordedError ? 3 : nonPassExit(err, 1));
 });
