@@ -1,0 +1,204 @@
+{
+  "server": "bc1",
+  "date": "2026-10-24",
+  "harness": "scripts/r706-client-probe/drive.ts@766d93b63cbcdaa3854d57385834220113eb21f6",
+  "probeSourceSha": "5ae9e035879d55a9078f464130a9ab16639f8bf9",
+  "lease": {
+    "holder": {
+      "lane": "bugs",
+      "attempt": "142",
+      "at": 1792831071635
+    },
+    "releasedAt": null
+  },
+  "coverageMode": "none",
+  "testHttpRequestPolicy": "absent",
+  "runs": [
+    {
+      "run": 1,
+      "order": [
+        "ws",
+        "hub"
+      ],
+      "ws": {
+        "class": {
+          "cls": "BLOCKED",
+          "raw": "The request was blocked by the runtime to prevent accidental use of production services."
+        },
+        "calls": [
+          {
+            "codeunit": 92911,
+            "method": "HttpGetRaw",
+            "reading": {
+              "cls": "BLOCKED",
+              "raw": "The request was blocked by the runtime to prevent accidental use of production services.",
+              "code": "HttpRequest",
+              "codeMismatch": false
+            },
+            "runner": "Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590"
+          },
+          {
+            "codeunit": 92910,
+            "method": "HttpGet",
+            "reading": {
+              "cls": "BLOCKED",
+              "raw": "The request was blocked by the runtime to prevent accidental use of production services.",
+              "code": null,
+              "codeMismatch": false
+            },
+            "runner": "Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590"
+          }
+        ]
+      },
+      "hub": {
+        "class": {
+          "cls": "SPLIT",
+          "raw": null
+        },
+        "calls": [
+          {
+            "codeunit": 92911,
+            "method": "HttpGetRaw",
+            "reading": {
+              "cls": "OTHER",
+              "raw": "MEASURED [There was an error while executing the HTTP request, the connecting endpoint violates security requirements. Make sure you are connecting to a valid endpoint.] [HttpRequest:Security]",
+              "code": null,
+              "codeMismatch": false
+            },
+            "runner": null,
+            "isError": false
+          },
+          {
+            "codeunit": 92910,
+            "method": "HttpGet",
+            "reading": {
+              "cls": "SECURITY",
+              "raw": "There was an error while executing the HTTP request, the connecting endpoint violates security requirements. Make sure you are connecting to a valid endpoint.",
+              "code": null,
+              "codeMismatch": false
+            },
+            "runner": null,
+            "isError": false
+          }
+        ]
+      }
+    },
+    {
+      "run": 2,
+      "order": [
+        "hub",
+        "ws"
+      ],
+      "ws": {
+        "class": {
+          "cls": "BLOCKED",
+          "raw": "The request was blocked by the runtime to prevent accidental use of production services."
+        },
+        "calls": [
+          {
+            "codeunit": 92911,
+            "method": "HttpGetRaw",
+            "reading": {
+              "cls": "BLOCKED",
+              "raw": "The request was blocked by the runtime to prevent accidental use of production services.",
+              "code": "HttpRequest",
+              "codeMismatch": false
+            },
+            "runner": "Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590"
+          },
+          {
+            "codeunit": 92910,
+            "method": "HttpGet",
+            "reading": {
+              "cls": "BLOCKED",
+              "raw": "The request was blocked by the runtime to prevent accidental use of production services.",
+              "code": null,
+              "codeMismatch": false
+            },
+            "runner": "Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590"
+          }
+        ]
+      },
+      "hub": {
+        "class": {
+          "cls": "SPLIT",
+          "raw": null
+        },
+        "calls": [
+          {
+            "codeunit": 92911,
+            "method": "HttpGetRaw",
+            "reading": {
+              "cls": "OTHER",
+              "raw": "MEASURED [There was an error while executing the HTTP request, the connecting endpoint violates security requirements. Make sure you are connecting to a valid endpoint.] [HttpRequest:Security]",
+              "code": null,
+              "codeMismatch": false
+            },
+            "runner": null,
+            "isError": false
+          },
+          {
+            "codeunit": 92910,
+            "method": "HttpGet",
+            "reading": {
+              "cls": "SECURITY",
+              "raw": "There was an error while executing the HTTP request, the connecting endpoint violates security requirements. Make sure you are connecting to a valid endpoint.",
+              "code": null,
+              "codeMismatch": false
+            },
+            "runner": null,
+            "isError": false
+          }
+        ]
+      }
+    }
+  ],
+  "appSha256": {
+    "target.app": "7c46f5f75efa2bab59a557394f39008ebe9549b1625a03b4976fccaa0e4d0060",
+    "tests.app": "2b1138ace6bd2e7aa903fc3bd8cba2ed9a57e1ed6bd5e2f3c15222203595cd5a"
+  },
+  "bcDevMcp": {
+    "dir": "/home/dev/src/bc-dev-mcp",
+    "head": "8371d0b24fb059516894b2f33ad8abcf3a2af98d",
+    "distBuiltAfterCommit": true,
+    "newerSources": ""
+  },
+  "bcBuild": {
+    "Base Application": "28.4.53241.56590",
+    "System Application": "28.4.53241.56590"
+  },
+  "platform": "not readable by app id on BC Linux (8874ed3a absent); Base and System Application checked",
+  "lethalControl": "1.0.0.23",
+  "opMarkerBefore": {
+    "opKind": "none",
+    "opAttemptId": "a156",
+    "opSeq": 34854,
+    "lastCompletedOpSeq": 34854
+  },
+  "opMarkerAfter": {
+    "opKind": "none",
+    "opAttemptId": "r706-92910-34858",
+    "opSeq": 34858,
+    "lastCompletedOpSeq": 34858
+  },
+  "removal": {
+    "LethAL R639 BC Probe Tests": {
+      "ok": true,
+      "steps": [
+        "uninstall HTTP 204",
+        "unpublish HTTP 204",
+        "read-back LethAL R639 BC Probe Tests (a9639c9f-d2c6-4b66-add7-d54a552cbfd2): absent (0 rows)"
+      ]
+    },
+    "LethAL R639 BC Probe": {
+      "ok": true,
+      "steps": [
+        "uninstall HTTP 204",
+        "unpublish HTTP 204",
+        "read-back LethAL R639 BC Probe (d371a89d-d1c8-4c83-aca5-49261b816c3b): absent (0 rows)"
+      ]
+    }
+  },
+  "outcomeRow": 1,
+  "outcome": "Unsettled"
+}

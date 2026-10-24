@@ -15,12 +15,14 @@ import type { ServerSpawnFn } from "../src/al-runner-server";
 import type { V3Row } from "../src/al-runner-v3-backend";
 import {
   BC_END_OF_TEST_TEXT,
+  BC_HTTP_HUB_TEXT,
   BC_HTTP_INTERNAL_TEXT,
   BURN_BUSY_LOOPS,
   BURN_GUARD_MS,
   BURN_HUGE,
   BURN_RELATIVE_FACTOR,
   MESSAGE_PREFIX_REASON,
+  SERVE_TESTS_AL,
   type V3ContractResult,
   burnerArgv,
   classifySleep,
@@ -318,12 +320,19 @@ const SERVE_ROWS: Record<string, { status: string; notRun?: boolean; message?: s
     message:
       "NotRun: out-of-scope: OnRun failed (runner behaviour not pinned): Arithmetic operation resulted in an overflow.",
   },
-  "Codeunit50674.DoesNotCompile": {
-    status: "error",
-    notRun: true,
-    message:
-      "NotRun: out-of-scope: Serve NoCallee.DoesNotCompile: call `NoSuchProcedure(1)` has no callee the checker resolved",
+};
+
+type ServeRow = { status: string; notRun?: boolean; message?: string };
+
+/** R705: a #5602-fixed build: http and cascade come back as plain trusted fails. */
+const FIXED_ROWS: Record<string, ServeRow> = {
+  ...SERVE_ROWS,
+  "Codeunit50670.HttpGet": {
+    status: "fail",
+    notRun: false,
+    message: "There was an error while executing the HTTP request, connection refused",
   },
+  "Codeunit50672.LaterFails": { status: "fail", notRun: false, message: "later" },
 };
 
 /** A fake `alrunner serve`: answers every runTests with `rows`; records each argv and request. */
@@ -435,6 +444,9 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     const r = await probe({}, s.spawn);
     const f = r.facts.find((x) => x.fact === "serve-keep-reasons");
     expect(f).toMatchObject({ kind: "warn", verdict: "matches" });
+    expect(f?.measured).toContain("the keep rule accepts every row of all 4 entries");
+    expect(f?.measured).toContain("http: refusal");
+    expect(f?.measured).toContain("cascade: refusal");
     expect(s.argvs).toEqual([[resolve("/fake/alrunner"), "serve", "--test-timeout", "3"]]);
     const run = s.requests.filter((q) => q.command === "runTests");
     expect(run.length).toBe(1);
@@ -450,7 +462,6 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     ["commit", "Codeunit50671.CommitCall"],
     ["cascade", "Codeunit50672.LaterFails"],
     ["onrun-failed", "Codeunit50673.Never"],
-    ["no-callee", "Codeunit50674.DoesNotCompile"],
   ] as const) {
     test(`a reworded ${entry} reason is diverged, names the entry, never refuses, and leg C still passes with the warning`, async () => {
       const rows = {
@@ -472,6 +483,88 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
       );
     });
   }
+
+  const serveFact = async (rows: Record<string, ServeRow>) =>
+    (await probe({}, fakeServe(rows).spawn)).facts.find((x) => x.fact === "serve-keep-reasons");
+
+  test("R705 fixed build: the four compilable cases come back as rows, not no row", async () => {
+    const r = await probe({}, fakeServe(FIXED_ROWS).spawn);
+    const f = r.facts.find((x) => x.fact === "serve-keep-reasons");
+    expect(f?.verdict).toBe("matches");
+    expect(f?.measured).toContain("http: plain fail");
+    expect(f?.measured).toContain("cascade: plain fail");
+    expect(f?.measured).toContain("commit: refusal");
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("pass");
+  });
+
+  test("R705 guard: the probe's tests app has no uncompilable test", () => {
+    expect(SERVE_TESTS_AL).not.toContain("NoSuchProcedure");
+    expect(SERVE_TESTS_AL.match(/^codeunit 5067\d /gm)).toHaveLength(4);
+  });
+
+  test("R705: the tolerance is narrow", async () => {
+    const http = "Codeunit50670.HttpGet";
+    // commit as a plain fail: only http and cascade tolerate one.
+    expect(
+      (
+        await serveFact({
+          ...FIXED_ROWS,
+          "Codeunit50671.CommitCall": { status: "fail", notRun: false, message: "x" },
+        })
+      )?.verdict,
+    ).toBe("diverged");
+    // http as a pass row.
+    expect((await serveFact({ ...FIXED_ROWS, [http]: { status: "pass" } }))?.verdict).toBe(
+      "diverged",
+    );
+    // http as a fail that did not run.
+    expect(
+      (
+        await serveFact({
+          ...FIXED_ROWS,
+          [http]: { status: "fail", notRun: true, message: "later" },
+        })
+      )?.verdict,
+    ).toBe("diverged");
+    // http as a plain fail that holds v3's refusal marker.
+    expect(
+      (
+        await serveFact({
+          ...FIXED_ROWS,
+          [http]: { status: "fail", notRun: false, message: "NotRun: out-of-scope: x" },
+        })
+      )?.verdict,
+    ).toBe("diverged");
+    // http as a plain fail with NO message.
+    expect(
+      (
+        await serveFact({
+          ...FIXED_ROWS,
+          [http]: { status: "fail", notRun: false },
+        })
+      )?.verdict,
+    ).toBe("diverged");
+    // cascade as a plain fail with another message.
+    expect(
+      (
+        await serveFact({
+          ...FIXED_ROWS,
+          "Codeunit50672.LaterFails": { status: "fail", notRun: false, message: "other" },
+        })
+      )?.verdict,
+    ).toBe("diverged");
+  });
+
+  test("R705: no row is never OK for the tolerated cases", async () => {
+    const none = await serveFact({});
+    expect(none?.verdict).toBe("diverged");
+    for (const e of ["http", "commit", "cascade", "onrun-failed"])
+      expect(none?.measured).toContain(`${e}: MOVED no row`);
+    const { "Codeunit50670.HttpGet": _gone, ...noHttp } = FIXED_ROWS;
+    const f = await serveFact(noHttp);
+    expect(f?.verdict).toBe("diverged");
+    expect(f?.measured).toContain("http: MOVED no row");
+  });
 
   test("a missing row or a row without notRun is diverged", async () => {
     const { "Codeunit50673.Never": _gone, ...rest } = SERVE_ROWS;
@@ -1017,7 +1110,7 @@ describe("§8 the contract probe, continued", () => {
 });
 
 describe("R639 (pre-commitment r9): leg C's BC readings", () => {
-  const EDGE_TEXT =
+  const HUB_TEXT =
     "There was an error while executing the HTTP request, the connecting endpoint violates security requirements. Make sure you are connecting to a valid endpoint.";
   const LATER_FAIL = row(50653, "LaterFails", "fail", { message: "later" });
   const http = (o: Parameters<typeof row>[3], status = "fail") => row(50653, "HttpGet", status, o);
@@ -1027,19 +1120,24 @@ describe("R639 (pre-commitment r9): leg C's BC readings", () => {
     r.facts.find((f) => f.fact === name)?.verdict;
   const RRS = "refusal-row-shape";
 
-  test("P1: refusal-row-shape reads gone on BC's exact text, fail, exit 1; leg C held; no refusal", async () => {
-    const r = await at50653(1, [http({ message: BC_HTTP_INTERNAL_TEXT }), LATER_FAIL]);
+  test("R705 ruling: the oracle is the test runner HUB text (a literal here, so the constant is checked)", () => {
+    expect(BC_HTTP_HUB_TEXT).toBe(HUB_TEXT);
+  });
+
+  test("P1: refusal-row-shape reads gone on the hub's exact text, fail, exit 1; leg C held; no refusal", async () => {
+    const r = await at50653(1, [http({ message: HUB_TEXT }), LATER_FAIL]);
     expect(r.facts.find((f) => f.fact === RRS)).toMatchObject({ kind: "defect", verdict: "gone" });
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("held");
     expect(v3ContractRefusals(r)).toEqual([]);
   });
 
-  test("P2 (text): BC's text changed by a trailing space, a cut, a suffix or its case is never gone: unlike-bc", async () => {
+  test("P2 (text): the hub text changed by a trailing space, a cut, a suffix or its case is never gone: unlike-bc; so is the web-service text (R705 ruling)", async () => {
     for (const m of [
-      `${BC_HTTP_INTERNAL_TEXT} `,
-      BC_HTTP_INTERNAL_TEXT.slice(0, -1),
-      `${BC_HTTP_INTERNAL_TEXT} more`,
-      BC_HTTP_INTERNAL_TEXT.toLowerCase(),
+      `${HUB_TEXT} `,
+      HUB_TEXT.slice(0, -1),
+      `${HUB_TEXT} more`,
+      HUB_TEXT.toLowerCase(),
+      BC_HTTP_INTERNAL_TEXT,
     ]) {
       const r = await at50653(1, [http({ message: m }), LATER_FAIL]);
       expect(verdictOf(r, RRS)).toBe("unlike-bc");
@@ -1048,10 +1146,10 @@ describe("R639 (pre-commitment r9): leg C's BC readings", () => {
 
   test("P2 (fields): status error, notRun without the prefix, exit 7, a second HttpGet row, or the prefix with notRun false read diverged", async () => {
     const cases: Array<[number, unknown[]]> = [
-      [1, [http({ message: BC_HTTP_INTERNAL_TEXT }, "error"), LATER_FAIL]],
-      [7, [http({ message: BC_HTTP_INTERNAL_TEXT, notRun: true }, "error"), LATER_FAIL]],
-      [7, [http({ message: BC_HTTP_INTERNAL_TEXT }), LATER_FAIL]],
-      [1, [http({ message: BC_HTTP_INTERNAL_TEXT }), http({ message: BC_HTTP_INTERNAL_TEXT })]],
+      [1, [http({ message: HUB_TEXT }, "error"), LATER_FAIL]],
+      [7, [http({ message: HUB_TEXT, notRun: true }, "error"), LATER_FAIL]],
+      [7, [http({ message: HUB_TEXT }), LATER_FAIL]],
+      [1, [http({ message: HUB_TEXT }), http({ message: HUB_TEXT })]],
       [1, [http({ message: "NotRun: out-of-scope: an outbound HTTP request" }), LATER_FAIL]],
     ];
     for (const [exitCode, rows] of cases) {
@@ -1082,7 +1180,7 @@ describe("R639 (pre-commitment r9): leg C's BC readings", () => {
     probe({
       cu50654: () => ({ exitCode, stdout: rows === "none" ? "" : doc(rows) }),
     });
-  const PUB_FAIL = row(50654, "HttpGetPublic", "fail", { message: EDGE_TEXT });
+  const PUB_FAIL = row(50654, "HttpGetPublic", "fail", { message: HUB_TEXT });
   const PUB_LATER_FAIL = row(50654, "LaterFails", "fail", { message: "later" });
   const PUB = "refusal-row-shape-public";
 
@@ -1235,10 +1333,11 @@ describe("R639 (pre-commitment r9): leg C's BC readings", () => {
     );
   });
 
-  const EDGE_ROWS = [http({ message: EDGE_TEXT }), LATER_FAIL];
+  // R705 ruling: a build that writes BC's web-service text is not the hub's reading: unlike-bc.
+  const WS_ROWS = [http({ message: BC_HTTP_INTERNAL_TEXT }), LATER_FAIL];
 
-  test("P12: edge's row is unlike-bc: gate-fail in leg C (#5700); a CANDIDATE session warns and runs", async () => {
-    const r = await at50653(1, EDGE_ROWS);
+  test("P12: a web-service-text row is unlike-bc: gate-fail in leg C (#5700); a CANDIDATE session warns and runs", async () => {
+    const r = await at50653(1, WS_ROWS);
     expect(verdictOf(r, RRS)).toBe("unlike-bc");
     const c = classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS);
     expect(c.outcome).toBe("gate-fail");
@@ -1252,7 +1351,7 @@ describe("R639 (pre-commitment r9): leg C's BC readings", () => {
   });
 
   test("P13: the same row refuses a NORMAL session, naming the fact, with no warning in its place", async () => {
-    const r = await at50653(1, EDGE_ROWS);
+    const r = await at50653(1, WS_ROWS);
     expect(v3ContractRefusals(r).join("\n")).toMatch(/UNLIKE-BC — refusal-row-shape/);
     expect(v3DefectWarnings(r).join("\n")).not.toMatch(/unlike-bc/);
   });

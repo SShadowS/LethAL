@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**28 of 707 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**25 of 710 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -598,7 +598,7 @@ that ordering is the priority.
 - **R290** · R-236b's fix has no early readback and no restart recovery: a lost reply still waits the full budget, and a wedge still needs a manual coord ask · [R290.md](docs/roadmap/R290.md) · closed 2026-10-24 — moot since R-236c: no TestPage test is sent, so its lost reply cannot occur
 - **R291** · R-236c: refuse TestPage tests up front instead of dispatching them and risking a lost reply · [R291.md](docs/roadmap/R291.md) · done (71b8df1b)
 - **R314** · A native Rust tree-sitter-al parser (RUST-01 spike) parsed BaseApp 1.8x SLOWER than the WASM path; the Rust route stopped at its pre-committed bar · [R314.md](docs/roadmap/R314.md) · closed 2026-09-29: superseded by RUST-02/RUST-03 (clang build; native switch landed 9f7cb5f0)
-- **R317** · OData V4 throttling (event 705) was seen sharing a BC user with the gate; a per-user concurrency limit is not measured · [R317.md](docs/roadmap/R317.md) · open, filed 2026-09-28
+- **R317** · OData V4 throttling (event 705) was seen sharing a BC user with the gate; a per-user concurrency limit is not measured · [R317.md](docs/roadmap/R317.md) · closed 2026-10-24 — measured on bc2: no per-user limit up to 16 in flight (OData V4 and the dev endpoint), no…
 - **R320** · GitHub Actions in ci.yml and release.yml are pinned by mutable version tags, not commit SHAs · [R320.md](docs/roadmap/R320.md) · done (e413175)
 - **R321** · `itest:alrunner` has no fixture that defines a preprocessor symbol, so no frozen gate can catch a transport that measures the wrong build · [R321.md](docs/roadmap/R321.md) · done (a7105681..5ccd9a60)
 - **R326** · Stubbing out `astSubtreeHash` cuts about 1.8 GB from the W8 manifest-row transient, but a single-pass hash that builds no canonical string saves nothing; the real source of that 1.8 GB is unknown · [R326.md](docs/roadmap/R326.md) · closed 2026-10-24 — the writer's whole transient is now about 1.0-1.1 GB, below the 1.8 GB it hunted; the…
@@ -689,7 +689,7 @@ that ordering is the priority.
 - **R607** · al-runner-v3: snapshot reuse and --resume drop the [v3-refused-test-nearby] note · [R607.md](docs/roadmap/R607.md) · closed 2026-10-23 — fixed by R678 (3d78e671)
 - **R608** · al-runner-v3: the compile proof does not bind non-.al files, <testDir>/.alpackages or subfolders of <deps> · [R608.md](docs/roadmap/R608.md) · done (86903c8b)
 - **R612** · On al-runner v3, the v2-era serve rule "close the daemon after any non-pass/fail row" makes every suite run cold-start, because #5607's Commit tests are always not run · [R612.md](docs/roadmap/R612.md) · done (592ec593)
-- **R609** · al-runner-v3: a no-coverage caused by a refused covering test carries no note · [R609.md](docs/roadmap/R609.md) · open
+- **R609** · al-runner-v3: a no-coverage caused by a refused covering test carries no note · [R609.md](docs/roadmap/R609.md) · done (adbd2db3)
 - **R613** · al-runner v3: one routine lowering cannot handle (a [RunOnClient] DotNet call) anywhere in a subscriber's static reach makes the reach "not known", so every test is refused although the routine never runs (upstream #5641; local fix only, no PR) · [R613.md](docs/roadmap/R613.md) · closed 2026-10-22 — ruling (owner): implemented upstream…
 - **R610** · al-runner-v3: unmeasured whether --coverage-json lists files reached only by a dynamic call · [R610.md](docs/roadmap/R610.md) · closed 2026-10-23 — measured: dynamically reached files are listed (alpha.2 and alpha.4); large projects…
 - **R615** · scripts/bc-linux-setup.ts records every lane's lease token in one shared file per server (TOKEN_DIR fixed to the R-589 folder, lease-<server>.txt), so two lanes overwrite each other's record · [R615.md](docs/roadmap/R615.md) · done (d32ca909)
@@ -746,12 +746,15 @@ that ordering is the priority.
 - **R693** · Leg C's timeout-is-cpu flips with core-0 conditions; every v3 leg C and the daily update gate read gate-fail · [R693.md](docs/roadmap/R693.md) · done (b9942236)
 - **R694** · al-runner v3 marks a later failure after a refusal as not trusted but not a later timeout; LethAL now refuses such a timeout · [R694.md](docs/roadmap/R694.md) · done (aa970869)
 - **R704** · Test A7 (the preload moves HOME and TMPDIR in every --parallel worker) fails on CI's Windows runner; it skips there until the cause is read · [R704.md](docs/roadmap/R704.md) · done (208a85fb)
-- **R705** · v3 contract probe serve-keep-reasons is blind on #5602-fixed builds: its tests app holds a non-compiling codeunit (50674) · [R705.md](docs/roadmap/R705.md) · open, filed 2026-10-24
+- **R705** · v3 contract probe serve-keep-reasons is blind on #5602-fixed builds: its tests app holds a non-compiling codeunit (50674) · [R705.md](docs/roadmap/R705.md) · done (195f90ec)
 - **R707** · What BC does with an installed dependent (a fixture tests app) when its target is republished with changed SIGNATURES is not measured; the worst case under-reports · [R707.md](docs/roadmap/R707.md) · closed 2026-10-24 — measured on bc2 (R-707): BC recompiles installed dependents at publish and refuses a…
 - **R709** · A refused UPGRADE can fail to restore: BC leaves the target uninstalled and the dependent removed (the R605 version record blocks reinstalling the old target) · [R709.md](docs/roadmap/R709.md) · open, filed 2026-10-24
-- **R706** · Measure #5700's HTTP refusal text in a client session on a leased bc server (the only LethAL-side way to settle unlike-bc) · [R706.md](docs/roadmap/R706.md) · open, filed 2026-10-24
+- **R706** · Measure #5700's HTTP refusal text in a client session on a leased bc server (the only LethAL-side way to settle unlike-bc) · [R706.md](docs/roadmap/R706.md) · done (9c19550b)
 - **R708** · The Windows staged-copy cleanup gave up silently after a short retry, so a scanner-locked folder made a unit test flake (CI run 40072847202, attempt 1) · [R708.md](docs/roadmap/R708.md) · done (2502f82b)
 - **R711** · Option B: setup and bc-republish could remove an installed dependent first (uninstall, unpublish), publish the target, then republish the dependent, behind a flag · [R711.md](docs/roadmap/R711.md) · open, filed 2026-10-24 (build only if a lane needs it)
+- **R712** · Which BC path is the oracle for HTTP-in-test behaviour: the test runner hub or the web-service path · [R712.md](docs/roadmap/R712.md) · closed 2026-10-24 — owner ruling: the test runner hub path
+- **R713** · bcdev runs tests through the web-service path, so a test asserting on BC's HTTP error text reads a different text than VS Code or the hub (R706) · [R713.md](docs/roadmap/R713.md) · open, filed 2026-10-24
+- **R716** · r391-cross-file-twin.test.ts's two file-backed stores sat on disk, the one place R616's tmpfs move missed, so its R565 NULL-digest test timed out under a parallel verify · [R716.md](docs/roadmap/R716.md) · done (11c504df)
 
 ---
 

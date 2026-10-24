@@ -616,6 +616,10 @@ const SAFE_TAIL = `(?!.*(?:${V3_TAIL_UNSAFE_WORDS.map(anyCase).join("|")}))`;
  * 57f1e4f98), measured clean by R-612's probe re-run (`/coord/handoff/R-635/edge-reasons.md`); each
  * wording is anchored at both ends. On edge, http is a plain fail and cascade / no-callee rows are
  * not produced, so nothing else is widened.
+ * R705: `no-callee` was removed. A #5602-fixed build refuses a request that does not compile (no
+ * rows), so the row cannot exist there and no gate pinned it. On alpha.2 such a row now closes the
+ * daemon. In serve-entries, a warm-up whose every entry refuses with one identical no-callee text
+ * now throws `al-runner-v3-entries-batch-refused`: the safe direction, opt-in and rare.
  */
 export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
   http: /^NotRun: out-of-scope: an outbound HTTP request with no \[HttpClientHandler\] bound to the test: the runtime never opens a connection \(ADR-027\)$/,
@@ -627,7 +631,6 @@ export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
   "onrun-failed": new RegExp(
     String.raw`^NotRun: out-of-scope: OnRun failed \(runner behaviour not pinned\): ${SAFE_TAIL}.*$`,
   ),
-  "no-callee": /^NotRun: out-of-scope: [^:\n]+: call `[^`\n]*` has no callee the checker resolved$/,
 };
 
 /** R612: which close rule a `--server`/`serve` daemon follows. Chosen by the backend that owns

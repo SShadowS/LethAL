@@ -353,6 +353,8 @@ class StubBackend implements ExecutionBackend {
    * off, which is how a run without an answer looks.
    */
   reachedFor?: (mutant: string | null, ref: TestMethodRef) => boolean | undefined;
+  /** R609: a baseline row's `runnerRow` (al-runner-v3's refusal), so a fake can model a refused test. */
+  runnerRowFor?: (ref: TestMethodRef) => TestVerdict["runnerRow"];
   constructor(
     private readonly caps: BackendCapabilities,
     private readonly script: (
@@ -412,6 +414,7 @@ class StubBackend implements ExecutionBackend {
     // and R58's `"fenced"` alike. Written as `!== "none"` so the two stay indistinguishable to the
     // orchestrator, which is the point of the mode being a routing axis rather than a granularity.
     const hasCoverage = active === null && this.caps.coverage !== "none";
+    const runnerRow = active === null ? this.runnerRowFor?.(ref) : undefined;
     // Layer 5C-A Task 8, Task 10 (design §G): this stub represents a healthy, correctly-deployed
     // authoritative backend by default — every coverage:"none" (the transport path) call attests
     // cleanly, mirroring what a real RunMutant `ran` result would report. Only the dedicated
@@ -419,7 +422,7 @@ class StubBackend implements ExecutionBackend {
     // every pre-existing test here keeps its prior verdicts unaffected by the new fail-closed gate.
     const hasAttestation = this.caps.authoritative && opts.coverage === "none";
     const failureMessage =
-      outcome === "fail" || outcome === "timeout"
+      outcome === "fail" || outcome === "timeout" || outcome === "error"
         ? this.failureMessageFor?.(active, ref)
         : undefined;
     return {
@@ -427,6 +430,7 @@ class StubBackend implements ExecutionBackend {
       outcome,
       durationMs: 5,
       ...(failureMessage !== undefined ? { failureMessage } : {}),
+      ...(runnerRow !== undefined ? { runnerRow } : {}),
       ...(hasCoverage
         ? {
             coverage: {
@@ -1880,6 +1884,114 @@ ${TRIGGER_TABLE_AL}#endif
       // Covered by the GREEN test at member level, mutant runs pass: ordinary survivors, and they
       // must stay ordinary survivors.
       expect(logic.every((m) => m.verdict === "survived")).toBe(true);
+    });
+  });
+
+  // R609. al-runner-v3 refused a test MID-RUN (runnerRow "runner-refused") and recorded what it reached
+  // before the refusal. That coverage is for the NOTE only: selection must not move, and R140's
+  // fallback 2 (which reads the non-green index's byObject) must not see it.
+  describe("R609: coverage of a test v3 refused", () => {
+    const REFUSED = "RefusedByV3";
+    const TWO_TEST_AL = `codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure OverBudgetDetected()
+    begin
+    end;
+
+    [Test]
+    procedure ${REFUSED}()
+    begin
+    end;
+}
+`;
+    type Entry = { objectType: string; objectId: number; procedure?: string };
+    const LOGIC: Entry = { objectType: "Codeunit", objectId: 79000, procedure: "IsOverBudget" };
+    const ELSEWHERE: Entry = { objectType: "Codeunit", objectId: 79555, procedure: "Other" };
+    const TABLE: Entry = { objectType: "Table", objectId: 79001 };
+
+    async function runIt(green: Entry[], refused: Entry[], withTable = false) {
+      const dirs = await makeProject(TWO_TEST_AL);
+      if (withTable)
+        await Bun.write(join(dirs.projectDir, "SandboxTable.Table.al"), TRIGGER_TABLE_AL);
+      const mutantRuns: string[] = [];
+      const backend = new StubBackend(CAPS_NST, (mutant, ref) => {
+        if (mutant === null) return ref.method === REFUSED ? "error" : "pass";
+        mutantRuns.push(`${mutant}:${ref.method}`);
+        return "pass";
+      });
+      backend.runnerRowFor = (ref) => (ref.method === REFUSED ? "runner-refused" : undefined);
+      backend.failureMessageFor = () =>
+        "NotRun: out-of-scope: an outbound HTTP request [al-runner v3 did not run this test (notRun)]";
+      backend.coverageEntriesFor = (ref) => (ref.method === REFUSED ? refused : green);
+      const store = new ResultsStore(":memory:");
+      try {
+        const report = await runSession({ backend, store, ...dirs, selectorIds });
+        return { report, mutantRuns };
+      } finally {
+        store.close();
+      }
+    }
+    const logicOf = (r: Awaited<ReturnType<typeof runIt>>) =>
+      r.report.mutants.filter((m) => m.file.includes("SandboxLogic"));
+
+    test("a mutant covered only by the refused test carries a note naming v3's refusal", async () => {
+      const r = await runIt([ELSEWHERE], [LOGIC]);
+      const logic = logicOf(r);
+      expect(logic.length).toBeGreaterThan(0);
+      for (const m of logic) {
+        // R609 is a note only: the verdict stays no-coverage (counts and frozen tables do not move).
+        expect(m.verdict).toBe("no-coverage");
+        expect(m.failureNote).toContain(`Sandbox Tests.${REFUSED}`);
+        expect(m.failureNote).toContain("al-runner v3 refused");
+        expect(m.failureNote).toContain("not evidence of a gap in your suite");
+      }
+    });
+
+    test("a mutant no test reaches stays a bare no-coverage, with no note", async () => {
+      const r = await runIt([ELSEWHERE], [ELSEWHERE]);
+      const logic = logicOf(r);
+      expect(logic.length).toBeGreaterThan(0);
+      for (const m of logic) {
+        expect(m.verdict).toBe("no-coverage");
+        expect(m.failureNote ?? "").not.toContain(REFUSED);
+      }
+    });
+
+    test("a refused test with no coverage at all (refused before it started) gives no note and no throw", async () => {
+      const r = await runIt([ELSEWHERE], []);
+      for (const m of logicOf(r)) {
+        expect(m.verdict).toBe("no-coverage");
+        expect(m.failureNote ?? "").not.toContain(REFUSED);
+      }
+    });
+
+    test("selection is unchanged: a mutant covered by a green and a refused test runs only the green one", async () => {
+      const withRefused = await runIt([LOGIC], [LOGIC]);
+      const without = await runIt([LOGIC], []);
+      expect(withRefused.mutantRuns.length).toBeGreaterThan(0);
+      expect(withRefused.mutantRuns.every((x) => x.endsWith(":OverBudgetDetected"))).toBe(true);
+      expect(withRefused.mutantRuns).toEqual(without.mutantRuns);
+      expect(logicOf(withRefused).map((m) => m.verdict)).toEqual(
+        logicOf(without).map((m) => m.verdict),
+      );
+    });
+
+    test("R140 fallback 2 is unchanged: a refused v3 test's object coverage does not make a trigger mutant decline", async () => {
+      const withRefused = await runIt([LOGIC], [TABLE], true);
+      const without = await runIt([LOGIC], [], true);
+      const triggers = (r: Awaited<ReturnType<typeof runIt>>) =>
+        r.report.mutants.filter((m) => m.file.includes("SandboxTable"));
+      expect(triggers(withRefused).length).toBeGreaterThan(0);
+      // Same as with no refused coverage: run against every green test, scored, never declined.
+      expect(triggers(withRefused).map((m) => m.verdict)).toEqual(
+        triggers(without).map((m) => m.verdict),
+      );
+      expect(triggers(withRefused).some((m) => m.verdict === "survived")).toBe(true);
+      expect(withRefused.mutantRuns).toEqual(without.mutantRuns);
+      expect(withRefused.report.untargetedTriggerCount).toBe(without.report.untargetedTriggerCount);
     });
   });
 
