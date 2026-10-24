@@ -150,6 +150,7 @@ import {
   GROUP_SUITE_UNRESOLVED_HEAD,
   ONRUN_HINT,
   STALE_TEST_APP_REMEDY,
+  StaleTargetMemberError,
   StaleTestAppError,
   TestAppChangedError,
   TestCodeunitDiscoveryError,
@@ -3050,6 +3051,83 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
   // ran" can actually fail. With a single missing test the no-green-baseline path already executes
   // nothing, and the assertion would pass whether or not the refusal exists.
   // ————————————————————————————————————————————————————————————————————————————————————————
+  // R738 — measured on bc2 (R-738): a run's own altool publish of a target that removes (or
+  // re-signs) a member the INSTALLED tests app calls is accepted, and that test then fails at the
+  // baseline with BC's "Function ID <n> was called. The object with ID <id> does not have a member
+  // with that ID." Before R738 it silently left the green set and its mutants read no-coverage.
+  describe("R738 — a tests app left stale against the target by this run's own publish", () => {
+    const staleOn = (objectId: number) =>
+      `Function ID 1105190687 was called. The object with ID ${objectId} does not have a member with that ID.\nSandbox Tests(CodeUnit 79100).UnsupportedTest line 2 - Sandbox Tests by LethAL version 1.0.0.1;`;
+    const failing = (failureMessage: string) => (method: string) =>
+      method === "UnsupportedTest"
+        ? { outcome: "fail" as const, procedure: "IsUnderBudget", failureMessage }
+        : { outcome: "pass" as const, procedure: "IsOverBudget" };
+
+    test("a stale member of a TARGET object refuses by name before any mutant runs", async () => {
+      const dirs = await qualProject();
+      const backend = new QualificationBackend(failing(staleOn(79000)));
+      const store = new ResultsStore(":memory:");
+      const events: RunEvent[] = [];
+      const err = await runSession({
+        backend,
+        store,
+        ...dirs,
+        selectorIds,
+        emit: [createEmitter([(e) => events.push(e)])],
+      }).then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      // red when the refusal comes after `select`: its coverage split is then already emitted
+      expect(events.some((e) => e.type === "coverage-split")).toBe(false);
+      // red when the stale-member failure is not read (it then leaves the green set silently)
+      expect(err).toBeInstanceOf(StaleTargetMemberError);
+      expect((err as StaleTargetMemberError).staleTests).toEqual(["Sandbox Tests.UnsupportedTest"]);
+      expect((err as Error).message).toContain("79000");
+      expect((err as Error).message).toContain("republish");
+      // the refusal is at the baseline: no mutant ran under activation
+      expect(backend.ranActive).toBe(0);
+    });
+
+    test("the same text naming a NON-target object does not refuse (another app's member)", async () => {
+      const dirs = await qualProject();
+      const backend = new QualificationBackend(failing(staleOn(130440)));
+      const store = new ResultsStore(":memory:");
+      // red when any object id refuses, not only the target's own
+      const report = await runSession({ backend, store, ...dirs, selectorIds });
+      expect(report.baselineGreen).toBe(false);
+    });
+
+    test("a target with an interface and a permissionset (no header objectHeadersOf reads) still runs", async () => {
+      const dirs = await qualProject();
+      await Bun.write(
+        join(dirs.projectDir, "IFoo.Interface.al"),
+        `interface "IFoo"\n{\n    procedure Bar(): Integer;\n}\n`,
+      );
+      await Bun.write(
+        join(dirs.projectDir, "Perms.PermissionSet.al"),
+        `permissionset 79010 "Sandbox Perms"\n{\n    Assignable = true;\n}\n`,
+      );
+      const backend = new QualificationBackend(
+        failing("genuine failure\nSandbox Tests(CodeUnit 79100).UnsupportedTest line 2"),
+      );
+      const store = new ResultsStore(":memory:");
+      // red when reading the target's object ids throws on a file with no codeunit/table/... header
+      const report = await runSession({ backend, store, ...dirs, selectorIds });
+      expect(report.baselineGreen).toBe(false);
+    });
+
+    test("a genuinely failing test still reads as failing, not stale", async () => {
+      const dirs = await qualProject();
+      const backend = new QualificationBackend(
+        failing("genuine failure\nSandbox Tests(CodeUnit 79100).UnsupportedTest line 2"),
+      );
+      const store = new ResultsStore(":memory:");
+      const report = await runSession({ backend, store, ...dirs, selectorIds });
+      expect(report.baselineGreen).toBe(false);
+    });
+  });
+
   describe("R139 — the published test app is missing a test the source declares", () => {
     const missingFor = (method: string) =>
       method === "UnsupportedTest"

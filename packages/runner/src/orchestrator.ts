@@ -49,6 +49,7 @@ import {
   identitySiteKey,
   isMutableSite,
   numberIdentityOrdinals,
+  objectHeadersOf,
   planOneFile,
   reachLatchRefusedOwner,
   runIdentityEntries,
@@ -252,11 +253,13 @@ import type {
 } from "./selection";
 import { SessionSafety, SessionUnsafeError } from "./session-safety";
 import {
+  StaleTargetMemberError,
   baselineFoundNoneRefusal,
   describeStaleTestApp,
   groupedFoundNone,
   isRunMutantFoundNone,
   isRunMutantLineCountMessage,
+  staleTargetMember,
 } from "./stale-test-app";
 import { type LendingSession, sameHiddenFiles } from "./store";
 import type { ResultsStore } from "./store";
@@ -1926,6 +1929,23 @@ function newArtifactId(): string {
  *  plain `Error`, or a bare string. */
 function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/** R738: every object id the target's `.al` sources declare (any type: BC's stale-member message
+ *  names the id alone). A file `objectHeadersOf` refuses (an interface, a permissionset, an
+ *  enumextension, an empty file: no header kind it reads) declares no id a member is called on
+ *  here, and is skipped, never fatal. */
+function targetObjectIdsOf(sources: Iterable<readonly [string, string]>): ReadonlySet<number> {
+  const ids = new Set<number>();
+  for (const [path, text] of sources) {
+    if (!path.toLowerCase().endsWith(".al")) continue;
+    try {
+      for (const h of objectHeadersOf(text, path)) ids.add(h.id);
+    } catch (e) {
+      if (!(e instanceof FileRefusedError)) throw e;
+    }
+  }
+  return ids;
 }
 
 /** R709: the named refusal when a failed publish says BC could not restore the previous target
@@ -4683,6 +4703,9 @@ interface ScoreBatchInput {
   /** R686: the session's test-arm evidence is R403's compiled membership of the PUBLISHED package
    *  (`{kind: "compiled", from: "published-package"}`). Absent or false: not proven. */
   readonly testsCompiledInPublishedPackage?: boolean;
+  /** R738: the target's own declared object ids (`targetObjectIdsOf`), so a baseline failure on a
+   *  stale target member refuses the session. Absent: no such check. */
+  readonly targetObjectIds?: ReadonlySet<number>;
   /** R192 snapshot reuse and recording, runSession only. Absent: always run, record nothing. */
   readonly snapshot?: {
     readonly batchDir: string;
@@ -5591,6 +5614,19 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     });
   }
 
+  // R738: tests the INSTALLED tests app still has but that call a member this run's own build of
+  // the target removed or re-signed (an altool publish is accepted over them, R728). After the
+  // found-0 refusal above and before `select`, so no mutant is scored and they never leave the
+  // green set silently.
+  const targetIds = input.targetObjectIds;
+  if (targetIds !== undefined) {
+    const stale = baseline.flatMap((b) => {
+      const objectId = staleTargetMember(b.verdict.failureMessage, targetIds);
+      return objectId === undefined ? [] : [{ name: qualifiedTestName(b.ref), objectId }];
+    });
+    if (stale.length > 0) throw new StaleTargetMemberError(stale);
+  }
+
   const plan = input.select(baseline);
   if (plan === undefined) return "nothing-to-run";
   const {
@@ -5976,6 +6012,10 @@ async function runSessionBody(
   // (`SourceSnapshotUnreadableError`): every batch copies its files and `app.json` from this one
   // snapshot, so each compiles exactly the hashed bytes.
   const sourceSnapshot = cfg.source ?? (await readTargetSource(cfg.projectDir));
+  // R738: the target's declared object ids, for the stale-member refusal at each baseline.
+  const sessionTargetIds = targetObjectIdsOf(
+    [...sourceSnapshot].map(([p, b]) => [p, b.toString("utf8")] as const),
+  );
   // R629: a warning only, once per session; it changes no deploy decision.
   const nestedWarning = nestedProjectWarning(cfg.projectDir);
   if (nestedWarning !== undefined) {
@@ -7944,6 +7984,7 @@ async function runSessionBody(
           envPublishes === undefined &&
           testArmEvidence.kind === "compiled" &&
           testArmEvidence.from === "published-package",
+        targetObjectIds: sessionTargetIds,
         snapshot: {
           batchDir,
           testDir: cfg.testDir,
@@ -8574,6 +8615,7 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
       batchIndex: installed.batchIndex,
       artifactId: artifact.artifactId,
       tests: baselineTests,
+      targetObjectIds: targetObjectIdsOf(artifact.alSources.map((s) => [s.path, s.text] as const)),
       select: (baseline) => {
         baselineRows = baseline;
         for (const b of baseline) baselineRan.set(testKeyOf(b.ref), b.verdict);
