@@ -134,14 +134,14 @@ describe("rewrite", () => {
       {
         mcpServers: { x: { command: "node", args: ["U:/Git/other/x.js"] } },
         bcdev: { packageCachePath: "U:/Git/LethAL-wt/kraken-move/fixtures/a/.alpackages" },
-        alRunner: { packagesDir: "U:\\Git\\LethAL-wt\\x" },
+        extra: { packagesDir: "U:\\Git\\LethAL-wt\\x" },
       },
       map,
     );
     expect(leftovers).toEqual([
       "$.mcpServers.x.args[0]",
       "$.bcdev.packageCachePath",
-      "$.alRunner.packagesDir",
+      "$.extra.packagesDir",
     ]);
   });
 
@@ -149,14 +149,14 @@ describe("rewrite", () => {
     const { out, leftovers } = rewrite(
       {
         bcdev: { packageCachePath: "U:/Git/LethAL/fixtures/sandbox-app/.alpackages" },
-        alRunner: { packagesDir: "U:\\Git\\LethAL\\fixtures\\sandbox-app\\.alpackages" },
+        extra: { packagesDir: "U:\\Git\\LethAL\\fixtures\\sandbox-app\\.alpackages" },
         other: "u:/git/lethal/x",
       },
       map,
     );
     expect(out).toEqual({
       bcdev: { packageCachePath: "/work/lethal/fixtures/sandbox-app/.alpackages" },
-      alRunner: { packagesDir: "/work/lethal/fixtures/sandbox-app/.alpackages" },
+      extra: { packagesDir: "/work/lethal/fixtures/sandbox-app/.alpackages" },
       other: "/work/lethal/x",
     });
     expect(leftovers).toEqual([]);
@@ -310,6 +310,30 @@ describe("CLI", () => {
     expect(r.text).not.toContain("H:\\x");
     expect(r.text).not.toContain("s3cret");
     expect(readdirSync(out)).toEqual([]);
+  });
+
+  test.each([{ alRunner: {} }, { alRunner: { packagesDir: "/x" } }])(
+    "R730: a host config with a retired alRunner section is refused, naming it, nothing written: %j",
+    (section) => {
+      const { repo, pkg } = makeRepo({
+        "gift-card.local.json": JSON.stringify({ bcdev: { password: "s3cret" }, ...section }),
+      });
+      const out = temp();
+      const r = cli(repo, pkg, out);
+      expect(r.code).toBe(1);
+      expect(r.text).toContain('gift-card.local.json: retired "alRunner" section (R654)');
+      expect(r.text).not.toContain("s3cret");
+      expect(readdirSync(out)).toEqual([]);
+    },
+  );
+
+  test("R730 control: a host config without alRunner is processed as before", () => {
+    const { repo, pkg } = makeRepo({
+      "gift-card.local.json": JSON.stringify({ bcdev: { password: "pw-ok" }, alRunnerV3: {} }),
+    });
+    const r = cli(repo, pkg, temp());
+    expect(r.code).toBe(0);
+    expect(r.text).toContain("kraken-secrets: wrote gift-card.local.json");
   });
 
   test("a Windows launcher in .mcp.json: refused by class name, nothing written", () => {
