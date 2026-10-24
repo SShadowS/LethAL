@@ -10,7 +10,7 @@ import {
 // owners, the CLI refusal and the itest's resource-leg check) went with that backend.
 
 const NEEDS =
-  "which the resource selector needs (NavApp.GetResourceAsText, AL0666); set app.json runtime ≥ 17.0 or alRunner.selectorMode static";
+  "which the resource selector needs (NavApp.GetResourceAsText, AL0666); set app.json runtime ≥ 17.0";
 
 describe("R583 §2: assertResourceSelectorRuntime", () => {
   const check = (appJson: Record<string, unknown>) => () =>

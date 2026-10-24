@@ -5,7 +5,7 @@
  * a stored v2 run (every lend site), and a v2 SessionReport (explain, campaign freeze, anchors and
  * compare). No back-compat before release (owner, 2026-10-18).
  *
- * NOT here (held by the orchestrator, R654 S3): a config file's `alRunner` section.
+ * F2: a config file's `alRunner` section is refused too (`refuseRetiredV2ConfigSection`).
  */
 
 /** The retired backend kind, as stored run rows and old reports record it. */
@@ -36,6 +36,15 @@ export function refuseRetiredV2Report(report: unknown, where: string): void {
   ) {
     throw new AlRunnerV2RetiredError(
       `al-runner-v2-retired: ${where} is a report of the retired .NET al-runner (R654); it is not read`,
+    );
+  }
+}
+
+/** F2: a config file with a top-level `alRunner` section. The key's presence is the trigger. */
+export function refuseRetiredV2ConfigSection(config: unknown, path: string): void {
+  if (typeof config === "object" && config !== null && "alRunner" in config) {
+    throw new AlRunnerV2RetiredError(
+      `al-runner-v2-retired: config file ${path} has an "alRunner" section, which belonged to the .NET al-runner (v2) backend, retired in R654. Delete the "alRunner" section; use --backend al-runner-v3 and the "alRunnerV3" section instead`,
     );
   }
 }

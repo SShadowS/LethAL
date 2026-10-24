@@ -257,6 +257,8 @@ const WHITESPACE = /^\s$/;
 /** A `// ...` line comment, a `/* ... *\/` block comment, or a `#pragma`/`#region` line. */
 const TRIVIA = /(?:\/\/[^\n]*|\/\*[\s\S]*?\*\/|#(?:pragma|region|endregion)\b[^\n]*)/y;
 
+// Separate helper: it scans forward from a byte offset for the next token and must also step over
+// `#pragma`/`#region` lines; the engine's `maskAlNonCode` masks whole text and keeps directive lines.
 /**
  * The first index in `from..to` that is not white space or a comment. R729: a comment between a
  * removed statement and the `else` (or `;`) after it hid that token from the look-ahead above, so

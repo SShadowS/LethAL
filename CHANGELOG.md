@@ -977,6 +977,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Removed
 
+- **BREAKING: a config file with an `alRunner` section is refused by name** (R654 F2). The section belonged to
+  the retired .NET al-runner (v2). Any `lethal.config` with a top-level `alRunner` key, even an empty one, now
+  fails to load with `al-runner-v2-retired`, naming the section and the file. Delete the section; use
+  `--backend al-runner-v3` and the `alRunnerV3` section. `scripts/kraken-secrets.ts` no longer maps
+  `alRunner.alRunnerPath`.
+
 - **The .NET al-runner backend (v2) is retired** (R654). The Rust al-runner, `--backend al-runner-v3`,
   replaces it. Upstream moved to the Rust runtime, and the .NET build gets no more updates.
   - **Refused by name, never ignored:** `--backend al-runner` (on `run` and `--dry-run`), a stored run
@@ -993,8 +999,7 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
     v2 reports are kept as history and no longer validate.
   - **`--workers` > 1 is now refused on every backend.** The .NET al-runner was the only one that ran
     workers in parallel ([R671](docs/roadmap/R671.md)).
-  - **Known gaps left open:** a config `alRunner` section is still ignored without a word until the
-    owner rules on its refusal, and an `envTool` section is ignored without a word on `al-runner-v3`
+  - **Known gaps left open:** an `envTool` section is ignored without a word on `al-runner-v3`
     ([R674](docs/roadmap/R674.md)). Leg L1 does catch a stale layout on v3: it goes red when both
     coverage-index guards are removed ([R666](docs/roadmap/R666.md)).
   - **The v2 tooling and its container wiring are gone** (R654 S5): `scripts/al-runner-update.sh`,

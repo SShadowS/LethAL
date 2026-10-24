@@ -1030,6 +1030,25 @@ describe("compileSchemataForFile — selector var injection into extension objec
       }
     });
 
+    // The other direction: a comment after the removed call but NO `else` behind it keeps `;`.
+    it("R729: a comment after an emptied then-branch with no else still gets `;`, not an empty block", () => {
+      for (const src of [
+        `codeunit 51048 "C" { procedure P(Cond: Boolean) begin if Cond then Foo() // c\n end; }`,
+        `codeunit 51049 "C" { procedure P(Cond: Boolean) begin if Cond then Foo() /* c */ ; Bar(); end; }`,
+        `codeunit 51050 "C" { procedure P(A: Boolean; B: Boolean) begin if A then if B then Foo() /* c */ ; end; }`,
+        `codeunit 51052 "C" { procedure P(W: Integer) begin case W of 1: Foo() // c\n end; end; }`,
+        `codeunit 51053 "C" { procedure P(W: Integer) begin case W of 1: Foo() /* c */ 2: Bar(); end; end; }`,
+      ]) {
+        const out = deletionAtFoo(src);
+        expect(out).not.toContain("begin end");
+        expect(countErrorNodes(out)).toBe(0);
+      }
+      const out = deletionAtFoo(
+        `codeunit 51051 "C" { procedure P(Cond: Boolean) begin if Cond then Foo() // c\n end; }`,
+      );
+      expect(out).toMatch(/if Cond then ;/);
+    });
+
     it("R729: a comment before the `;` of a case arm still adds no second separator", () => {
       const out = deletionAtFoo(
         `codeunit 51047 "C" { procedure P(W: Integer) begin case W of 1: Foo() /* c */ ; 2: Bar(); end; end; }`,
