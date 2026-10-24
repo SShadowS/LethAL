@@ -267,3 +267,236 @@ ${f.wrapClose}
       expect(p.refused("Cu.al", "exit")).toBe(true);
     });
 });
+
+/**
+ * The other direction: a name that is provably ABSENT (declared nowhere; not compilable AL, which
+ * is exactly why it pins the contract) stays absent. Only "unknown" fails closed.
+ */
+describe("R725 twins: an ABSENT name is not an unknown one", () => {
+  it("an undeclared second receiver gets no table: the walk is not refused through it", () => {
+    const p = project({
+      "Line.al": LINE,
+      "Cu.al": `codeunit 50105 "R725 Absent"
+{
+    procedure Renumber(NewNo: Code[20])
+    var
+        R: Record "R725 Line";
+    begin
+        R.SetCurrentKey("Doc No.");
+        if R.FindSet() then
+            repeat
+                if R.Qty = 7 then
+                    exit;
+                Ghost.Get(R."No.");
+                Ghost."Doc No." := NewNo;
+                Ghost.Modify();
+            until R.Next() = 0;
+    end;
+}`,
+    });
+    expect(p.state("Cu.al", "Ghost")).not.toBe("unknown");
+    // red when any unresolved receiver (not only an "unknown" one) gets the wildcard table
+    expect(p.refused("Cu.al", "Ghost.Modify()")).toBe(false);
+  });
+
+  it("an undeclared var-out argument is no flag: its callee is not refused through it", () => {
+    const p = project({
+      "Cap.al": `codeunit 57212 "R725 Cap2"
+{
+    procedure GetNext(var B: Integer)
+    var
+        Tag: Text;
+    begin
+        Tag := 'T9';
+        B := B + 10;
+    end;
+}`,
+      "Loop.al": `codeunit 57211 "R725 Loop2"
+{
+    procedure Run()
+    var
+        Cap: Codeunit "R725 Cap2";
+    begin
+        repeat
+            Cap.GetNext(Phantom);
+        until Phantom >= 100;
+    end;
+}`,
+    });
+    expect(p.state("Loop.al", "Phantom")).not.toBe("unknown");
+    // red when an undeclared (not "unknown") argument is counted as a flag
+    expect(p.refused("Cap.al", "'T9'")).toBe(false);
+  });
+});
+
+describe("R725: an insert through an unknown receiver arms R717's fix-up refusal", () => {
+  it("a callee inserting through a var-section #if global still counts as inserting", () => {
+    const p = project({
+      "Line.al": `table 50110 "R725 Tmpl"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+        field(2; Ident; Code[20]) { }
+    }
+    keys
+    {
+        key(PK; "No.") { Clustered = true; }
+    }
+
+    var
+        G0: Integer;
+#if not LETHALX
+        X: Record "R725 Tmpl";
+#else
+        X: Record "R725 Tmpl";
+#endif
+
+    procedure CloneNo(var From: Record "R725 Tmpl"; NewNo: Code[20]): Code[20]
+    begin
+        X := From;
+        X."No." := NewNo;
+        X.Insert(true);
+        exit(X."No.");
+    end;
+}`,
+      "Cu.al": `codeunit 50111 "R725 Clone"
+{
+    procedure Clone(Id: Code[20]; NewNo: Code[20])
+    var
+        R: Record "R725 Tmpl";
+        T2: Record "R725 Tmpl";
+    begin
+        R.SetRange(Ident, Id);
+        if R.FindSet() then
+            repeat
+                T2.Get(T2.CloneNo(R, NewNo));
+                T2.Ident := NewNo;
+                T2.Modify();
+            until R.Next() = 0;
+    end;
+}`,
+    });
+    expect(p.state("Line.al", "X")).toBe("unknown");
+    // red when r696Inserts compares tables exactly (an unknown receiver's insert is then missed)
+    expect(p.refused("Cu.al", "T2.Modify()")).toBe(true);
+  });
+});
+
+describe("R725 review B1: R696's whole-record write by an unknown second variable", () => {
+  for (const f of forms('R2: Record "R725 Line";'))
+    it(`${f.name}: R2 := Src, then R2.Modify(), moves the walk and is refused`, () => {
+      const p = project({
+        "Line.al": LINE,
+        "Cu.al": `codeunit 50112 "R725 Whole"
+{
+    var
+        G0: Integer;
+${f.globals}
+${f.wrapOpen}
+    procedure Copy(var Src: Record "R725 Line")
+    var
+        R: Record "R725 Line";
+${f.locals}
+    begin
+        R.SetCurrentKey("Doc No.");
+        if R.FindSet() then
+            repeat
+                if R.Qty = 7 then
+                    exit;
+                R2 := Src;
+                R2.Modify();
+            until R.Next() = 0;
+    end;
+${f.wrapClose}
+}`,
+      });
+      // red when r696Writes reads an unknown R2 := X as an implicit-Rec field write only
+      expect(p.refused("Cu.al", "R2.Modify()")).toBe(true);
+      expect(p.refused("Cu.al", "exit")).toBe(true);
+    });
+});
+
+describe("R725 review S3: R572 statefulness and an unknown local record", () => {
+  it("every-arm-ambiguous local record in the callee is not a simple variable: refused", () => {
+    const p = project({
+      "Line.al": LINE,
+      "Cap.al": `codeunit 57222 "R725 Step"
+{
+    procedure Step(): Boolean
+    var
+        Tag: Text;
+#if not CLEAN27
+        E: Record "R725 Line";
+#endif
+    begin
+        Tag := 'S3';
+        E.Insert();
+        exit(E.Count() > 10);
+    end;
+}`,
+      "Loop.al": `codeunit 57221 "R725 StepLoop"
+{
+    procedure Run()
+    var
+        Cap: Codeunit "R725 Step";
+        Done: Boolean;
+    begin
+        repeat
+            Done := Cap.Step();
+        until Done;
+    end;
+}`,
+    });
+    expect(p.state("Cap.al", "E")).toBe("unknown");
+    // red when an unknown local passes as "a declared simple-type variable's built-in"
+    expect(p.refused("Cap.al", "'S3'")).toBe(true);
+  });
+});
+
+describe("R725 review S5: R530 and a self-insert through an unknown variable", () => {
+  it("a report item inserting through a var-section #if global: the exit guard's outside write is refused", () => {
+    const p = project({
+      "Tbl.al": `table 50120 "R725 Entry"
+{
+    fields
+    {
+        field(1; "Entry No."; Integer) { }
+    }
+}`,
+      "Rep.al": `report 50121 "R725 Rep"
+{
+    dataset
+    {
+        dataitem(Walk; "R725 Entry")
+        {
+            trigger OnAfterGetRecord()
+            begin
+                if Walk."Entry No." > LastEntryNo then
+                    CurrReport.Break();
+                X := Walk;
+                X."Entry No." := Walk."Entry No." + 1000;
+                X.Insert();
+            end;
+        }
+    }
+
+    trigger OnPreReport()
+    begin
+        LastEntryNo := 5;
+    end;
+
+    var
+        LastEntryNo: Integer;
+#if not LETHALX
+        X: Record "R725 Entry";
+#else
+        X: Record "R725 Entry";
+#endif
+}`,
+    });
+    expect(p.state("Rep.al", "X")).toBe("unknown");
+    // red when selfInserts reads an unknown receiver's Insert as no self-insert
+    expect(p.refused("Rep.al", "LastEntryNo := 5")).toBe(true);
+  });
+});

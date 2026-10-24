@@ -2872,6 +2872,18 @@ function selfInserts(item: ALSyntaxNode, ctx: SemanticContext): boolean {
         // the engine binds, as `callTargets` reads it
         if (t === null && normalizeAlName(resolveReceiverTable(c, ctx) ?? "") === table)
           found = true;
+        // R725: an Insert on a receiver the engine refuses to resolve may be a self-insert (fail
+        // closed, as R720)
+        if (
+          !found &&
+          t === null &&
+          recv !== null &&
+          isIdentifierLike(recv) &&
+          r725Seam.on &&
+          resolveReceiverTable(c, ctx) === null &&
+          declarationStateAt(recv, ctx) === "unknown"
+        )
+          found = true;
       });
       return found;
     });
@@ -3070,7 +3082,8 @@ function r696Pk(table: string, ctx: SemanticContext): Set<string> | null {
 }
 
 /** The table a call's receiver names, and whether it is temporary: the declared type, else the
- *  record the engine binds (`resolveReceiverTable`: a data item's name, the implicit Rec). */
+ *  record the engine binds (`resolveReceiverTable`: a data item's name, the implicit Rec), else,
+ *  for a receiver whose declaration is "unknown" (R725), a wildcard that matches every table. */
 function r696Table(call: ALSyntaxNode, ctx: SemanticContext): DeclaredType | null {
   const f = call.rawKind === "member_expression" ? call : call.childForFieldName("function");
   const recv = f?.rawKind === "member_expression" ? f.childForFieldName("object") : null;
@@ -3125,10 +3138,15 @@ function r696Writes(body: ALSyntaxNode, vkey: string, ctx: SemanticContext): R69
         if (m !== null && r531Key(l.childForFieldName("object")) === vkey)
           out.push({ node: n, field: normalizeAlName(m.text), reads });
       } else if (isIdentifierLike(l)) {
+        const isRec = normalizeAlName(l.text) === "rec";
         const declared = resolveVarRef(l, ctx) !== null;
-        if (normalizeAlName(l.text) === "rec" || declared) {
-          if (r531Key(l) === vkey) out.push({ node: n, field: "*", reads });
-        } else if (vkey === "") out.push({ node: n, field: normalizeAlName(l.text), reads });
+        // R725: an "unknown" name is read BOTH ways: a variable's whole-record write, and a field
+        // of the implicit Rec (fail closed)
+        const unknown = !declared && r725Seam.on && declarationStateAt(l, ctx) === "unknown";
+        if ((isRec || declared || unknown) && r531Key(l) === vkey)
+          out.push({ node: n, field: "*", reads });
+        if (!isRec && !declared && vkey === "")
+          out.push({ node: n, field: normalizeAlName(l.text), reads });
       }
       return;
     }
@@ -4740,6 +4758,11 @@ function r572LoopRows(loop: ALSyntaxNode, obj: ALSyntaxNode, ctx: SemanticContex
         // a var-out FLAG is a simple value (Boolean, number, date, text): a record, codeunit or
         // other object handed by var is the cursor or helper, not a flag (R570/R531 territory)
         const decl = resolveVarRef(a, ctx)?.node ?? null;
+        // the cheap var-position test first: `declarationStateAt` scans the whole object
+        const hit = ts.filter((t) =>
+          r531Positions(c, i, t).some((j) => r531Param(t, j)?.[1] === true),
+        );
+        if (hit.length === 0) return;
         // R725: a name the engine refuses to resolve ("unknown") may be a simple flag: count it
         // (fail closed, as R720); only a declaration that is provably not simple is skipped
         if (decl !== null || !r725Seam.on || declarationStateAt(a, ctx) !== "unknown") {
@@ -4749,18 +4772,14 @@ function r572LoopRows(loop: ALSyntaxNode, obj: ALSyntaxNode, ctx: SemanticContex
           if (tk === "basic_type" && !R572_SIMPLE_BASIC.has(normalizeAlName(tn?.text ?? "")))
             return;
         }
-        const hit = ts.filter((t) =>
-          r531Positions(c, i, t).some((j) => r531Param(t, j)?.[1] === true),
-        );
-        if (hit.length > 0)
-          calls.push({
-            n,
-            c,
-            flag: normalizeAlName(a.text),
-            varOut: true,
-            additive: false,
-            ts: hit,
-          });
+        calls.push({
+          n,
+          c,
+          flag: normalizeAlName(a.text),
+          varOut: true,
+          additive: false,
+          ts: hit,
+        });
       });
     });
   const cursors = new Set(forced.keys());
@@ -5557,7 +5576,13 @@ function r572StatefulOnce(p: ALSyntaxNode, hops: number, ctx: SemanticContext): 
         if (isIdentifierLike(o)) {
           if (R572_STATIC_RECEIVERS.has(normalizeAlName(o.text))) return;
           // a declared simple-type variable (Text, List, JsonObject, ...): its built-in
-          if (resolveVarRef(o, ctx) !== null || r531Declares(p, normalizeAlName(o.text), true))
+          // R725: an "unknown" name (e.g. an every-arm-ambiguous local record, which r531Declares
+          // reads by text) is not proven simple: it falls through to `hit` (fail closed)
+          if (
+            resolveVarRef(o, ctx) !== null ||
+            (r531Declares(p, normalizeAlName(o.text), true) &&
+              !(r725Seam.on && declarationStateAt(o, ctx) === "unknown"))
+          )
             return;
         }
         hit = true; // a chained or field receiver, or a name nothing declares
