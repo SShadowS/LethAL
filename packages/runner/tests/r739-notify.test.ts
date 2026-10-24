@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -308,5 +309,95 @@ describe("R739 B: the transport's further late refusals go through the backend's
       warn.mockRestore();
     }
     expect(seen).toHaveLength(1);
+  });
+});
+
+// Each test goes red if its bcdev site reverts to `console.warn`.
+describe("R739: bcdev notices reach setNotify, never the console", () => {
+  type Internals = {
+    warnOnThinFencedCoverage(
+      ref: { codeunitId: number; codeunitName: string; method: string },
+      totalRows: number,
+      declaredRows: number,
+      refusedRows: number,
+      memberEntries: number,
+      rowKeys: readonly string[],
+    ): void;
+    stageForCompile(instrumentedDir: string): Promise<string>;
+  };
+  const REF = { codeunitId: 79100, codeunitName: "Tests", method: "A" };
+
+  test("thin fenced coverage: no row for a declared object, and no line in a known procedure", () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const backend = new BcDevMcpBackend({} as never);
+      const seen: Array<[string, string]> = [];
+      backend.setNotify((c, m) => seen.push([c, m]));
+      const internals = backend as unknown as Internals;
+      internals.warnOnThinFencedCoverage(REF, 3, 0, 0, 0, []);
+      internals.warnOnThinFencedCoverage(REF, 3, 2, 0, 0, []);
+      // Healthy coverage (a member entry) says nothing.
+      internals.warnOnThinFencedCoverage(REF, 3, 2, 0, 1, []);
+      expect(seen.map(([c]) => c)).toEqual([
+        "fenced-coverage-no-object-rows",
+        "fenced-coverage-no-procedure-lines",
+      ]);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("staging a compile names a leftover control copy and a dangling package link, once per session", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const root = await mkdtemp(join(tmpdir(), "lethal-r739-stage-"));
+      roots.push(root);
+      const cache = join(root, "cache");
+      const instrumented = join(root, "instr");
+      mkdirSync(cache, { recursive: true });
+      mkdirSync(instrumented, { recursive: true });
+      writeFileSync(join(instrumented, "app.json"), APP_JSON);
+      writeFileSync(join(cache, "lethal-control.app"), "old");
+      symlinkSync(join(root, "gone.app"), join(cache, "Gone.app"));
+      const backend = new BcDevMcpBackend({ packageCachePath: cache } as never);
+      const seen: Array<[string, string]> = [];
+      backend.setNotify((c, m) => seen.push([c, m]));
+      const internals = backend as unknown as Internals;
+      await internals.stageForCompile(instrumented);
+      await internals.stageForCompile(instrumented); // once per session
+      expect(seen.map(([c]) => c).sort()).toEqual([
+        "package-cache-dangling",
+        "package-cache-leftover",
+      ]);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
+describe("R739: runSession restores the notifier on a throwing backend and a second session sees its notices", () => {
+  test("two sessions on one notifying backend both get their notice events", async () => {
+    const dirs = await project();
+    const backend = new NotifyingBackend();
+    const first: RunEvent[] = [];
+    const second: RunEvent[] = [];
+    await runSession({
+      backend,
+      store: new ResultsStore(":memory:"),
+      ...dirs,
+      selectorIds: SELECTOR_IDS,
+      emit: [(e) => first.push(e)],
+    });
+    await runSession({
+      backend,
+      store: new ResultsStore(":memory:"),
+      ...(await project()),
+      selectorIds: SELECTOR_IDS,
+      emit: [(e) => second.push(e)],
+    });
+    expect(noticesOf(first, "fake-notice")).toHaveLength(2);
+    expect(noticesOf(second, "fake-notice")).toHaveLength(2);
   });
 });

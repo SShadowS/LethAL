@@ -104,7 +104,8 @@ describe("gate-warnings wiring", () => {
  * `runVerify(` call (the seam wrapper `verifyFromCli` is given), must hand the run an object with
  * an `emit` property, so a gate cannot call one and leave its warnings uncollected. Per call, not
  * per file: one wired call must not hide a bare one. The object must hold an `emit` property of its
- * own; a spread of someone else's deps does not count.
+ * own, an array literal with a collector's `.subscriber` in it; a spread of someone else's deps, an
+ * empty array or a bare `emit` does not count.
  */
 const EMITTING_RUNS = new Set(["runNamedMutants", "runVerify"]);
 
@@ -118,9 +119,14 @@ function runsWithoutEmit(text: string): string[] {
         ts.isObjectLiteralExpression(a) &&
         a.properties.some(
           (p) =>
-            (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) &&
+            ts.isPropertyAssignment(p) &&
             ts.isIdentifier(p.name) &&
-            p.name.text === "emit",
+            p.name.text === "emit" &&
+            // The array must hold a collector's `.subscriber`, not only a spread or nothing.
+            ts.isArrayLiteralExpression(p.initializer) &&
+            p.initializer.elements.some(
+              (el) => ts.isPropertyAccessExpression(el) && el.name.text === "subscriber",
+            ),
         ),
     );
     if (!hasEmit) {
@@ -164,11 +170,21 @@ describe("gate-warnings wiring: runNamedMutants and runVerify calls", () => {
     ).toEqual(["runNamedMutants at line 2"]);
     // A comment or a string is not a call.
     expect(runsWithoutEmit("// runNamedMutants({})\nconst s = 'runVerify(a, {})';")).toEqual([]);
-    // Direction 2: an emit property, written out or as a shorthand, clears the call.
+    // The emit array must hold a collector's `.subscriber`: an empty array, a spread of the deps
+    // alone, or a shorthand `emit` does not collect anything.
+    expect(runsWithoutEmit("runNamedMutants({ emit: [], backend });")).toEqual([
+      "runNamedMutants at line 1",
+    ]);
+    expect(runsWithoutEmit("runVerify(args, { ...deps, emit: [...(deps.emit ?? [])] });")).toEqual([
+      "runVerify at line 1",
+    ]);
+    expect(runsWithoutEmit("runNamedMutants({ emit, backend });")).toEqual([
+      "runNamedMutants at line 1",
+    ]);
+    // Direction 2: an emit array holding `x.subscriber`, alone or after a spread, clears the call.
     expect(runsWithoutEmit("runNamedMutants({ emit: [c.subscriber], backend });")).toEqual([]);
-    expect(runsWithoutEmit("runVerify(args, { ...deps, emit: [...(deps.emit ?? [])] });")).toEqual(
-      [],
-    );
-    expect(runsWithoutEmit("runNamedMutants({ emit, backend });")).toEqual([]);
+    expect(
+      runsWithoutEmit("runVerify(args, { ...deps, emit: [...(deps.emit ?? []), c.subscriber] });"),
+    ).toEqual([]);
   });
 });

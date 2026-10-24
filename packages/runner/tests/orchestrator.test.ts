@@ -13062,11 +13062,17 @@ describe("R507: a refused unfiltered extensions query on the lease path ends the
     });
     // Nothing yet: the refusal has not arrived.
     expect(warnings(events, "lease-refusal-extra")).toHaveLength(0);
-    openGate(); // the renew is answered with the refusal only now, after takeRefusal()
-    await tick;
-    const extra = warnings(events, "lease-refusal-extra");
-    expect(extra).toHaveLength(1);
-    expect(extra[0]).toContain(REFUSAL_TEXT);
+    // R739: the session is over, so its subscribers may be closed (a `--progress-out` file): the
+    // late refusal goes to the console and emits no event.
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      openGate(); // the renew is answered with the refusal only now, after takeRefusal()
+      await tick;
+      expect(warnings(events, "lease-refusal-extra")).toHaveLength(0);
+      expect(warn.mock.calls.flat().join("\n")).toContain(REFUSAL_TEXT);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   test("R11: a lease refusal and a backend late refusal: the lease one is thrown, the other warned", async () => {
@@ -13087,6 +13093,8 @@ describe("R507: a refused unfiltered extensions query on the lease path ends the
     // R739: the backend's late refusal is an event (the lease path may add its own further ones).
     const extra = warnings(events, "lease-refusal-extra");
     expect(extra.filter((m) => m.includes("backend late refusal R499"))).toHaveLength(1);
+    // During the session the lease path's own further refusal is an event too.
+    expect(extra.some((m) => m.includes(REFUSAL_TEXT))).toBe(true);
   });
 
   test("R12: a session latched for another reason that then meets a refusal throws it, after warning the latch reason", async () => {
@@ -18697,6 +18705,50 @@ describe("R536: runNamedMutants reads the installed artifact under the source ru
     await runNamedMutants({ ...fx.cfg, backend: withSymbolsTaker(fx, log) });
     expect(log.slice(0, 2)).toEqual(['symbols ["LETHALQ"]', "attach"]);
     expect(log.filter((l) => l.startsWith("symbols"))).toHaveLength(1);
+  });
+
+  // R739: runNamedMutants installs the session's notifier before status() and restores it at the end.
+  test("runNamedMutants installs a notifier that emits warning events, then restores the console", async () => {
+    const fx = await installedFixture();
+    const log: string[] = [];
+    let installed: ((code: string, message: string) => void) | undefined;
+    const backend = {
+      ...fx.cfg.backend,
+      setNotify: (n?: (code: string, message: string) => void) => {
+        log.push(n === undefined ? "restore" : "install");
+        installed = n;
+      },
+      status: async () => {
+        log.push("status");
+        return { ok: true, details: "stub" };
+      },
+    } as ExecutionBackend;
+    const events: RunEvent[] = [];
+    await runNamedMutants({
+      ...fx.cfg,
+      backend,
+      emit: [...(fx.cfg.emit ?? []), (e) => events.push(e)],
+    });
+    // Installed before the readiness probe, restored last.
+    expect(log).toEqual(["install", "status", "restore"]);
+    expect(installed).toBeUndefined();
+  });
+
+  test("the notifier runNamedMutants installs turns a backend notice into a warning event", async () => {
+    const fx = await installedFixture();
+    const events: RunEvent[] = [];
+    const backend = {
+      ...fx.cfg.backend,
+      setNotify: (n?: (code: string, message: string) => void) => {
+        if (n !== undefined) n("fake-notice", "said during runNamedMutants");
+      },
+    } as ExecutionBackend;
+    await runNamedMutants({
+      ...fx.cfg,
+      backend,
+      emit: [...(fx.cfg.emit ?? []), (e) => events.push(e)],
+    });
+    expect(events.filter((e) => e.type === "warning" && e.code === "fake-notice").length).toBe(1);
   });
 
   test("a source run that recorded no build symbols is refused before any backend call, never read as []", async () => {

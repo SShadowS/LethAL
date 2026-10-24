@@ -76,6 +76,7 @@ import {
   isGateWarningsError,
   nonPassExit,
   preflightObserve,
+  printObserved,
   settleThrown,
 } from "./gate-warnings";
 import {
@@ -422,6 +423,7 @@ async function main(): Promise<void> {
     // R739: the warning events of step 3's `runVerify` and of step 7's `runNamedMutants`.
     const verifyWarnings = collectWarnings();
     const namedWarnings = collectWarnings();
+    let verifyReturned = false;
     try {
       // ---- 3. lethal verify, through the CLI code path.
       const quarantineBefore = await quarantineRecords(defaultQuarantineDir());
@@ -455,6 +457,7 @@ async function main(): Promise<void> {
             }),
         },
       );
+      verifyReturned = true;
       const publishes = testAppPublishes - publishesBefore;
       const acquired = acquires - acquiresBefore;
       const out = JSON.parse(text) as VerifyOutput;
@@ -752,8 +755,12 @@ async function main(): Promise<void> {
       console.log("step 6 PASS: verify is faster than the fresh full run");
     } catch (err) {
       gateErr = err;
-      // The run's own error wins: step 3's codes are printed, never asserted.
-      if (!isGateWarningsError(err)) settleThrown("agreement", "verify", verifyWarnings);
+      // The run's own error wins: step 3's codes are printed, never asserted. "The run threw" is
+      // said only when the verify call itself threw; a later step's failure just shows the codes.
+      if (!isGateWarningsError(err)) {
+        if (verifyReturned) printObserved("agreement", "verify", verifyWarnings);
+        else settleThrown("agreement", "verify", verifyWarnings);
+      }
     }
 
     // ---- 7. Restore the committed tests app. Always, once step 3 began.

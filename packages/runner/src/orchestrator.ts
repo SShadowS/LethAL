@@ -3366,7 +3366,14 @@ class LeaseSession {
   #refusal: UnfilteredExtensionsQueryError | undefined;
   /** R507: set once `takeRefusal()` has run; a later refusal is warned, never stored. */
   #refusalTaken = false;
+  /** R739: set when the session ends; a refusal noted after it goes to the console, not an event. */
+  #ended = false;
   private readonly d: LeaseSessionDeps;
+
+  /** R739: the session is over; its emitter must not be used again. */
+  end(): void {
+    this.#ended = true;
+  }
 
   constructor(d: LeaseSessionDeps) {
     // R507: ONE wrapper instead of edits to every `catch` below. Each lease call's error is
@@ -3397,11 +3404,10 @@ class LeaseSession {
   private noteRefusal(err: unknown): void {
     if (!(err instanceof UnfilteredExtensionsQueryError)) return;
     if (this.#refusalTaken || this.#refusal !== undefined) {
-      this.d.emit({
-        type: "warning",
-        code: "lease-refusal-extra",
-        message: `[lethal] another refused unfiltered extensions query on the lease path: ${err.message}`,
-      });
+      const message = `[lethal] another refused unfiltered extensions query on the lease path: ${err.message}`;
+      // R739: once the session has ended its subscribers may be closed, so a late one is a console line.
+      if (this.#ended) console.warn(message);
+      else this.d.emit({ type: "warning", code: "lease-refusal-extra", message });
       return;
     }
     this.#refusal = err;
@@ -5839,7 +5845,7 @@ async function runSessionBody(
   });
   cleanups.push(handNotify(cfg.backend, emit));
   const status = await cfg.backend.status();
-  // R109:`status.details` is kept VERBATIM here — this call site knows only that string, so
+  // R109: `status.details` is kept VERBATIM here — this call site knows only that string, so
   // naming a SPECIFIC cause ("environment stopped") would be an invented plausible default, this
   // project's signature bug. It names the NEXT ACTION instead: `lethal doctor --config <path>`
   // runs every pre-flight check read-only and reports them all at once, rather than this
@@ -6521,6 +6527,10 @@ async function runSessionBody(
     nowIso,
     emit,
   }));
+  if (leaseSession !== undefined) {
+    const ending = leaseSession;
+    cleanups.push(() => ending.end());
+  }
   // R26: the permission canary's measured verdict for THIS session, or `undefined` when no canary
   // was configured (al-runner; every in-memory-backend unit test). Declared out here so it reaches
   // `buildReport` at the very end — the whole point is that it survives into `--out` JSON and gets
@@ -8542,6 +8552,10 @@ async function runNamedMutantsBody(
     nowIso,
     emit,
   });
+  if (leaseSession !== undefined) {
+    const ending = leaseSession;
+    cleanups.push(() => ending.end());
+  }
   const outcomes: SessionOutcome[] = [];
   const strict = cfg.requireEveryMethodGreen === true;
   const baselineTests = baselineTestsOf(named);

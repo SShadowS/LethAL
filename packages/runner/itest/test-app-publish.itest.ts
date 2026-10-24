@@ -70,6 +70,7 @@ import {
   isGateWarningsError,
   nonPassExit,
   preflightObserve,
+  printObserved,
   settleThrown,
 } from "./gate-warnings";
 import { assertKillsReproduced } from "./kill-reproduction";
@@ -402,7 +403,9 @@ async function main(): Promise<void> {
       } catch (e) {
         err = e;
       }
-      settleThrown("testapp", probe, probeWarnings);
+      // "The run threw" only when it did; a call that returned is unexpected (thrown below).
+      if (err !== undefined) settleThrown("testapp", probe, probeWarnings);
+      else printObserved("testapp", probe, probeWarnings);
       if (!(err instanceof StaleTestAppError)) {
         throw new Error(
           `${step}: expected StaleTestAppError naming ${MARKER}, got ${err === undefined ? "no error" : String(err)}. The container carries a test app WITH the marker: restore it by hand (compile fixtures/sandbox-tests and publish it) before any gate.`,

@@ -93,7 +93,10 @@ refuse: a gate never records its own set (the same rule as R332's baselines).
 - **What is an event:** since R739 the backends' notices (`setNotify`) and the orchestrator's lease and coverage
   lines are warning events, not console lines. Only a few diagnostics stay on the console: the v3 contract lines,
   the v3 close stats, staged-copy removal, the R289 trace, the store's WAL notice, the cache-removal notice, the
-  harness tenant line, and the lines around a session in `cli.ts`.
+  harness tenant line, `app-package.ts`'s unmapped-object-type line, `env-tool-session.ts` (its 6 lines), the
+  lines around a session in `cli.ts`, and the no-emitter fallbacks in `generateMutationSet` and `batchByGuards`
+  (orchestrator.ts), which print only when a caller passes no emitter. A notice after a session has ended
+  (a late lease refusal, a backend used again) also goes to the console.
 - **Observe mode:** `LETHAL_ITEST_OBSERVE_WARNINGS=1` runs the gate as usual, asserts nothing about warnings, and
   prints `[gate-warnings] <gate>/<leg>: [codes]` plus one example message per code. It always ends as a non-pass: when
   nothing else failed, exit 3, a failed receipt and a closing line `OBSERVED (exit 3, not a pass)`; a leg that

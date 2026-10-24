@@ -660,11 +660,23 @@ async function main(): Promise<void> {
           filter: { state: "on" },
           rows: { [clampId]: { narrowed: false }, [logAuditId]: { narrowed: false } },
         });
-        // R739: the step's warning set is checked here, apart from the restore proof.
-        checkGateWarnings("verify", "step4", step4Warnings);
         console.log("step 4 PASS (R-384): testsRun and reach lines as pre-committed");
       } catch (err) {
         step4ReachErr = err;
+      }
+    }
+    // R739: the step's warning set, apart from the restore proof and from the reach pins, so a
+    // mismatch is labelled as itself. When a pin threw, the codes are printed and not asserted.
+    let step4WarningsErr: unknown;
+    if (step4Run !== undefined) {
+      if (step4ReachErr !== undefined) {
+        settleThrown("verify", "step4", step4Warnings);
+      } else {
+        try {
+          checkGateWarnings("verify", "step4", step4Warnings);
+        } catch (err) {
+          step4WarningsErr = err;
+        }
       }
     }
     // ---- 4b (C02-09). One gap by id, with the repo's test app. Only once step 4 restored it.
@@ -726,6 +738,7 @@ async function main(): Promise<void> {
       step3Err !== undefined ||
       step4Err !== undefined ||
       step4ReachErr !== undefined ||
+      step4WarningsErr !== undefined ||
       step4bErr !== undefined
     ) {
       const describe = (e: unknown) => formatFailure(e);
@@ -737,6 +750,9 @@ async function main(): Promise<void> {
             : "step 4 (restore) PASSED: ClampPercent survived with the repo's test app",
           ...(step4ReachErr !== undefined
             ? [`step 4 (R-384 reach pins) FAILED: ${describe(step4ReachErr)}`]
+            : []),
+          ...(step4WarningsErr !== undefined
+            ? [`step 4 (warning codes) FAILED: ${describe(step4WarningsErr)}`]
             : []),
           ...(step4bErr !== undefined ? [`step 4b FAILED: ${describe(step4bErr)}`] : []),
         ].join("\n"),
@@ -770,15 +786,19 @@ async function main(): Promise<void> {
       assertReachFields(step, out, { filter: "absent", rows: {} });
       console.log(`${step} PASS: refused ${reason}, no lease acquire`);
     };
-    await refused("step 5a", lastArtifact.artifactId, [killId], "not-a-survivor");
-    await refused("step 5b", randomBytes(16).toString("hex"), [clampId], "unknown-artifact");
-    assert.ok(
-      !report.mutants.some((m) => m.gapId === UNKNOWN_GAP_ID),
-      `step 5c: ${UNKNOWN_GAP_ID} is not the gap id of any report row`,
-    );
-    await refused("step 5c", lastArtifact.artifactId, [UNKNOWN_GAP_ID], "unknown-gap");
-    await refused("step 5d", lastArtifact.artifactId, [overBudgetGapId], "gap-has-no-survivor");
-    printObserved("verify", "refusals", refusalWarnings);
+    try {
+      await refused("step 5a", lastArtifact.artifactId, [killId], "not-a-survivor");
+      await refused("step 5b", randomBytes(16).toString("hex"), [clampId], "unknown-artifact");
+      assert.ok(
+        !report.mutants.some((m) => m.gapId === UNKNOWN_GAP_ID),
+        `step 5c: ${UNKNOWN_GAP_ID} is not the gap id of any report row`,
+      );
+      await refused("step 5c", lastArtifact.artifactId, [UNKNOWN_GAP_ID], "unknown-gap");
+      await refused("step 5d", lastArtifact.artifactId, [overBudgetGapId], "gap-has-no-survivor");
+    } finally {
+      // Printed even when a step threw: the run's own error still wins, and the codes are only shown.
+      printObserved("verify", "refusals", refusalWarnings);
+    }
 
     // ---- 6. The wall-time ratio. Recorded, not gated (plan decision 9, ruling 4).
     if (verifyMs === undefined) throw new Error("step 6: step 3 recorded no timing");
