@@ -1473,7 +1473,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
     const seen = new Set<string>();
     let declaredRows = 0;
     let refusedRows = 0;
-    let memberEntries = 0;
+    const rowsPerObject = new Map<string, number>(); // R747: declared, unrefused rows per object
     // R175: objects where a row landed in NO known span — not a procedure, not a trigger. The map
     // is built from the source LethAL emitted and compiled, so it should be able to place every
     // executable line of every object it declares; a row it cannot place is attribution FAILING,
@@ -1492,6 +1492,8 @@ export class BcDevMcpBackend implements ExecutionBackend {
         continue;
       }
       declaredRows += 1;
+      const objKey = `${objectType}:${row.objectId}`;
+      rowsPerObject.set(objKey, (rowsPerObject.get(objKey) ?? 0) + 1);
       const procedure = lineMap.lookup(objectType, row.objectId, row.lineNo);
       if (procedure === undefined && lineMap.isNamingGap(objectType, row.objectId, row.lineNo)) {
         const gapKey = `${objectType}:${row.objectId}`;
@@ -1503,7 +1505,6 @@ export class BcDevMcpBackend implements ExecutionBackend {
       const key = `${objectType}:${row.objectId}:${procedure ?? ""}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      if (procedure !== undefined) memberEntries += 1;
       entries.push({
         objectType,
         objectId: row.objectId,
@@ -1513,13 +1514,27 @@ export class BcDevMcpBackend implements ExecutionBackend {
     // Distinct `type:id` keys actually seen, so the diagnostic can show BOTH sides of the
     // comparison that failed rather than only naming the two suspects.
     const rowKeys = [...new Set(rows.map((r) => `${objectTypeName(r.objectType)}:${r.objectId}`))];
+    // R747: judged per object. An object with a naming gap and no member row in this test.
+    const flagged = namingGaps
+      .filter(
+        (g) =>
+          !entries.some(
+            (e) =>
+              e.objectType === g.objectType &&
+              e.objectId === g.objectId &&
+              e.procedure !== undefined,
+          ),
+      )
+      .map((g) => {
+        const key = `${g.objectType}:${g.objectId}`;
+        return `${key} (${rowsPerObject.get(key) ?? 0} row(s))`;
+      });
     this.warnOnThinFencedCoverage(
       ref,
       rows.length,
       declaredRows,
       refusedRows,
-      memberEntries,
-      namingGaps.length > 0,
+      flagged,
       rowKeys,
       stats,
     );
@@ -1552,23 +1567,28 @@ export class BcDevMcpBackend implements ExecutionBackend {
    * Reported per test rather than aggregated: the point is to name WHICH test, and a fenced
    * baseline is tens of tests, not thousands. Silent when coverage looks healthy.
    *
-   * R746: the no-procedure-lines case needs `hasNamingGap` (some declared, unrefused row in NO
-   * known span). A test that runs only a trigger body (a field's OnValidate), line-0 rows, or
-   * R318 shared lines has no member entry but nothing wrong with the frame, and stays quiet.
-   * Blind spot: a frame shift that lands every row in such spans stays quiet too (a real shift
-   * is 1-2 lines, and the old rule could not tell it from correct trigger-only coverage either).
+   * R746: the no-procedure-lines case needs a naming gap (a declared, unrefused row in NO known
+   * span). A test that runs only a trigger body (a field's OnValidate), line-0 rows, or R318
+   * shared lines has no member entry but nothing wrong with the frame, and stays quiet.
+   *
+   * R747: judged PER OBJECT, not per test. `flaggedObjects` holds the objects with a naming gap
+   * and no member row in this test. A per-test count was masked by LethAL's own selector
+   * codeunit, whose `Active` member runs in nearly every test. Blind spots: (i) an object with
+   * member rows AND gap rows stays quiet (the likeliest real 1-2 line shift looks like that);
+   * (ii) an R318 renamed split member with no coverage name sits in `unnamed`, which
+   * `isNamingGap` does not consult; (iii) report column, page field and property rows are
+   * unmeasured on real projects. A shift landing every row in trigger spans stays quiet too.
    */
   private warnOnThinFencedCoverage(
     ref: TestMethodRef,
     totalRows: number,
     declaredRows: number,
     refusedRows: number,
-    memberEntries: number,
-    hasNamingGap: boolean,
+    flaggedObjects: readonly string[],
     rowKeys: readonly string[],
     stats?: FencedCoverageStats,
   ): void {
-    if (totalRows === 0 || memberEntries > 0) return;
+    if (totalRows === 0) return;
     // R298: every declared row was a refused object's, and that refusal is already named. Neither
     // the filter nor the base-line frame is to blame for it.
     if (declaredRows === 0 && refusedRows > 0) return;
@@ -1591,15 +1611,17 @@ export class BcDevMcpBackend implements ExecutionBackend {
       );
       return;
     }
-    if (!hasNamingGap) return; // R746: trigger bodies, line 0 and shared lines only
+    if (flaggedObjects.length === 0) return; // R746/R747: no object with a gap and no member
+    const shown = flaggedObjects.slice(0, 5).join(", ");
+    const more = flaggedObjects.length > 5 ? ` +${flaggedObjects.length - 5} more` : "";
     const blame =
       "Suspect the line map's base-line frame — a shifted range degrades every observation " +
       "to object level instead of naming a member.";
     const lost =
-      "Member attribution is lost for this test; only object-level matching (triggers and local procedures) remains.";
+      "Member attribution is lost for these objects in this test; only object-level matching (triggers and local procedures) remains.";
     this.notify(
       "fenced-coverage-no-procedure-lines",
-      `[lethal] fenced coverage for ${where}: ${declaredRows} row(s) for objects this artifact declares, but NOT ONE line fell inside a known procedure${server}. ${lost} ${blame}`,
+      `[lethal] fenced coverage for ${where}: no row of ${shown}${more} fell inside a known procedure${server}. ${lost} ${blame}`,
     );
   }
 
