@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { homeDir } from "../src/home";
 import { defaultQuarantineDir } from "../src/orchestrator";
@@ -66,6 +66,58 @@ test("R359: a child process sees the fake home and the private temp folder, whic
     Bun.spawnSync(argv, { env: { ...process.env, HOME: "explicit" } }).stdout.toString(),
   );
   expect(own.home).toBe("explicit");
+});
+
+/**
+ * R704: runs `bun test` on a one-file project that loads the repo preload, with the given env. The
+ * inner test is `check`, a body of `expect` calls. Returns the exit code and the output.
+ */
+function innerPreloadRun(env: Record<string, string | undefined>, check: string) {
+  const dir = mkdtempSync(join(tmpdir(), "lethal-r704-"));
+  try {
+    const preload = resolve(import.meta.dir, "..", "..", "..", "scripts", "test-preload.ts");
+    writeFileSync(join(dir, "bunfig.toml"), `[test]\npreload = [${JSON.stringify(preload)}]\n`);
+    writeFileSync(
+      join(dir, "inner.test.ts"),
+      `import { expect, test } from "bun:test";\ntest("inner", () => {\n${check}\n});\n`,
+    );
+    const r = Bun.spawnSync([process.execPath, "test", "inner.test.ts"], {
+      cwd: dir,
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return { code: r.exitCode ?? 1, out: `${r.stdout.toString()}${r.stderr.toString()}` };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("R704: a child test run started from a test keeps the parent's REAL home, not its fake", () => {
+  const real = process.env.LETHAL_TEST_REAL_HOME ?? "";
+  expect(real).not.toBe("");
+  const r = innerPreloadRun(
+    { ...process.env },
+    `expect(process.env.LETHAL_TEST_REAL_HOME).toBe(${JSON.stringify(real)});`,
+  );
+  expect(r.out).toContain("1 pass");
+  expect(r.code, r.out).toBe(0);
+});
+
+test("R704: a stray LETHAL_TEST_REAL_HOME, with no matching fake home, is ignored", () => {
+  const S = mkdtempSync(join(tmpdir(), "lethal-r704-home-"));
+  try {
+    const { LETHAL_TEST_FAKE_HOME: _f, ...rest } = process.env;
+    const bogus = join(S, "bogus-real-home");
+    const r = innerPreloadRun(
+      { ...rest, HOME: S, USERPROFILE: S, LETHAL_TEST_REAL_HOME: bogus },
+      `expect(process.env.LETHAL_TEST_REAL_HOME).not.toBe(${JSON.stringify(bogus)});`,
+    );
+    expect(r.out).toContain("1 pass");
+    expect(r.code, r.out).toBe(0);
+  } finally {
+    rmSync(S, { recursive: true, force: true });
+  }
 });
 
 test("R409: no product source calls os.homedir() directly; home.ts is the one reader", () => {

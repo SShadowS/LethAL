@@ -28,7 +28,14 @@ const runDir = mkdtempSync(join(tmpdir(), "lethal-unit-run-"));
  * `mkdirSync` throws if it cannot create one, so a failure stops the suite rather than silently
  * leaving the real home in place.
  */
-process.env.LETHAL_TEST_REAL_HOME = homedir();
+// R704: keep an inherited value only when an earlier preload redirected this process (a reused
+// Windows worker, or a child of a test); otherwise homedir() here would record that fake as "real".
+const redirected =
+  process.env.LETHAL_TEST_FAKE_HOME !== undefined &&
+  process.env.LETHAL_TEST_FAKE_HOME === process.env.HOME;
+if (!redirected || process.env.LETHAL_TEST_REAL_HOME === undefined) {
+  process.env.LETHAL_TEST_REAL_HOME = homedir();
+}
 const fake = join(runDir, "home");
 mkdirSync(fake);
 process.env.LETHAL_TEST_FAKE_HOME = fake;
