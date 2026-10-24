@@ -28,11 +28,12 @@ import { dirname, isAbsolute, join, relative, sep } from "node:path";
  * Where the symbol tar lives (gitignored, never committed). R670: named by its sha256's first 12
  * hex digits, so a rebuilt tar sits beside the one older worktrees still pin and never replaces it.
  */
-export const FIXTURE_SYMBOLS_TAR = "/work/lethal/.kraken-local/fixture-symbols-26f680ae9671.tar";
+export const FIXTURE_SYMBOLS_TAR = "/work/lethal/.kraken-local/fixture-symbols-2279aee3857b.tar";
 
 /**
- * F5: the tar, pinned by sha256 (R670 rebuild, 2026-10-23, 1,705,676,800 bytes; it replaced
- * `fixture-symbols.tar`, `bdf460e2…`). A different tar is refused by name; changing it is a
+ * F5: the tar, pinned by sha256 (R673 rebuild, 2026-10-24, 2,103,091,200 bytes: the R670 tar,
+ * `26f680ae…`, plus `.alpackages` for sandbox-names, -names-tests, -wrapped, -wrapped-tests,
+ * -codefree and -codefree-tests; that replaced `fixture-symbols.tar`, `bdf460e2…`). A different tar is refused by name; changing it is a
  * deliberate edit here and in `FIXTURE_SYMBOLS_MANIFEST`, then a `--regate`. A re-pin refuses
  * EVERY worktree whose two folders came from the old tar, the gate worktree included (its marker
  * names the old pin, `al-runner-v3-gate-symbols-unverified`), and a FRESH worktree on any machine
@@ -41,7 +42,7 @@ export const FIXTURE_SYMBOLS_TAR = "/work/lethal/.kraken-local/fixture-symbols-2
  * its `SYMBOLS_MARKER`, and the next run extracts them from the new tar.
  */
 export const FIXTURE_SYMBOLS_TAR_SHA256 =
-  "26f680ae967178f63f2705fa6248f4e7e308d7c8a75608bb18f819e1772cdda1";
+  "2279aee3857bc2f123f602bb9dc265b1be783a782486d9982ddd37fd50d46359";
 
 /**
  * R670: the pinned tar's files in archive order (`tar -tf`, directories left out), committed, with
