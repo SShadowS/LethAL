@@ -79,7 +79,6 @@ import {
   actAll,
   contentDigest,
   decideAll,
-  fixtureManifests,
   headerPackageId,
   manifest,
   portsOf,
@@ -1097,7 +1096,6 @@ export interface RunDeps {
     symbols: string,
     log: string[],
   ) => Promise<AppItem[]>;
-  readonly fixtures: () => ReadonlyMap<string, AppManifest>;
   readonly doctor: (configPath: string, projectDir: string, testsDir: string) => Promise<boolean>;
   /** R669: where `<server>.md` out-of-use markers live (a test passes its own temp dir). */
   readonly outOfUseDir: string;
@@ -1151,7 +1149,6 @@ export const REAL_DEPS: RunDeps = {
   continiaFiles: () => CONTINIA_APPS.map((app) => ({ bytes: readContinia(app) })),
   controlBytes: pinnedControl,
   compile: realCompile,
-  fixtures: fixtureManifests,
   doctor,
   outOfUseDir: outOfUseDir(process.env),
 };
@@ -1289,7 +1286,7 @@ async function setupServer(
       ? await decideContinia(cops, deps.continiaFiles(), summary, args.acceptBuild)
       : { ok: true, toPublish: [] };
     const ops = deps.serverOps(conn);
-    const decided: Decided[] = await decideAll(items, ops, "setup", deps.fixtures(), log);
+    const decided: Decided[] = await decideAll(items, ops, "setup", log);
     const refused = refusals(decided);
     if (!compiled || refused.length > 0 || !continia.ok) {
       summary.push(
