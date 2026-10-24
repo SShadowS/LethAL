@@ -599,4 +599,124 @@ ${locals}
     const l = `#if not CLEAN27\n        Cap: Codeunit "R725 Plain";\n#endif`;
     expect(refusedWith(loop(BOTH, l), true)).toBe(false);
   });
+
+  it("T7 (review MUST 2): seam off equals master on a split-header procedure's compiled-out local", () => {
+    // decided file; the compiled-out arm declares the stateful type, the live arm the plain one
+    const split = `codeunit 57201 "R725 Loop"
+{
+#if CLEAN27
+    procedure Run()
+    var
+        Cap: Codeunit "R725 Cap";
+        Bottom: Integer;
+#else
+    procedure Run()
+    var
+        Cap: Codeunit "R725 Plain";
+        Bottom: Integer;
+#endif
+    begin
+        repeat
+            Cap.GetNext(Bottom);
+        until Bottom >= 100;
+    end;
+}`;
+    // red when the declaration-level inactive skip is not behind the seam: off no longer refuses
+    expect(refusedWith(split, false)).toBe(true);
+    expect(refusedWith(split, true)).toBe(false);
+  });
+
+  it("T8 (review SHOULD): an UNDECIDED local and a stateful global are both followed", () => {
+    const l = `#if CLEAN27 && Q\n        Cap: Codeunit "R725 Plain";\n#endif`;
+    const src = loop(`        Cap: Codeunit "R725 Cap";`, l);
+    expect(evaluateArms(wrapRoot(parseAL(src)), src, []).kind).toBe("undecided");
+    // red when an uncertain local no longer unions with the object pass
+    expect(refusedWith(src, true)).toBe(true);
+  });
+});
+
+describe("R737 review MUST 1: a two-type receiver where one type has no project object", () => {
+  const BUF = `table 57200 "R572 Buf"
+{
+    fields
+    {
+        field(1; "Entry No."; Integer) { }
+        field(3; Step; Integer) { }
+    }
+    keys
+    {
+        key(PK; "Entry No.") { Clustered = true; }
+    }
+}`;
+  const FEED = `codeunit 57202 "R572 Feed"
+{
+    var
+        Left: Integer;
+
+    procedure More(): Boolean
+    var
+        Tag: Text;
+    begin
+        Tag := 'FEED';
+        Left -= 1;
+        exit(Left > 0);
+    end;
+}`;
+  const Q = `codeunit 57203 "R572 Q"
+{
+    procedure Touch(S: Integer)
+    begin
+        Message('%1', S);
+    end;
+}`;
+  const files = (qdecl: string) => ({
+    "Buf.Table.al": BUF,
+    "Callee.Codeunit.al": FEED,
+    "Q.Codeunit.al": Q,
+    "Loop.Codeunit.al": `codeunit 57201 "R572 Loop"
+{
+    procedure Run()
+    var
+        R: Record "R572 Buf";
+        F: Codeunit "R572 Feed";
+        More: Boolean;
+        Step: Integer;
+${qdecl}
+    begin
+        Step := 1;
+        if R.FindSet() then
+            repeat
+                More := F.More();
+                Qv.Touch(Step);
+            until (R.Next(Step) = 0) or not More;
+    end;
+}`,
+  });
+  const amb = `#if CLEAN27 && Q
+        Qv: Codeunit "Absent X";
+#else
+        Qv: Codeunit "R572 Q";
+#endif`;
+  const refusedWith = (qdecl: string, seam: boolean): boolean => {
+    const was = r737Seam.on;
+    r737Seam.on = seam;
+    try {
+      return project(files(qdecl)).refused("Callee.Codeunit.al", "'FEED'");
+    } finally {
+      r737Seam.on = was;
+    }
+  };
+
+  it("an undecided Absent/project pair is unresolved: refused, seam on and off", () => {
+    const src = files(amb)["Loop.Codeunit.al"];
+    expect(evaluateArms(wrapRoot(parseAL(src)), src, []).kind).toBe("undecided");
+    // red when the union keeps only the resolving type: Touch(Step) by value looks complete
+    expect(refusedWith(amb, true)).toBe(true);
+    expect(refusedWith(amb, false)).toBe(true);
+  });
+
+  it("controls: plain absent refuses, plain project by-value skips", () => {
+    expect(refusedWith(`        Qv: Codeunit "Absent X";`, true)).toBe(true);
+    expect(refusedWith(`        Qv: Codeunit "R572 Q";`, true)).toBe(false);
+  });
 });

@@ -1341,7 +1341,7 @@ function r562FilterHop(
     if (r562NotAProc(c.method) || n.rawKind !== "call_expression") return none;
     for (const p of r531TableProcs(n, c.method, arity, ctx))
       targets.push({ proc: p, key: "", r: c.recv });
-    unresolved = !targets.some((t) => bodyOf(t.proc) !== null);
+    unresolved = !targets.some((t) => bodyOf(t.proc) !== null) || r737Partial(n, ctx);
   } else if (bareRec.length > 0) {
     for (const p of bareRec) targets.push({ proc: p, key: "", r: "" });
   } else if (c.recv === null && r531ObjectProcs(n, ctx).has(c.method)) {
@@ -4506,7 +4506,7 @@ function r572WritesName(
     if (c === null) return;
     c.args.forEach((a, i) => {
       if (hit || !isIdentifierLike(a) || normalizeAlName(a.text) !== k) return;
-      const ts = c.uncertain ? [] : r570Targets(x, c, ctx);
+      const ts = c.uncertain ? [] : r570Targets(x, c, ctx, true);
       if (ts.length === 0) hit = true;
       for (const t of ts) {
         const p = r531Param(t, i);
@@ -4534,7 +4534,7 @@ function r572HelperKeys(
   const c = r531Call(call);
   const obj = objectOf(frame.loop);
   if (c === null || obj === null) return [];
-  const ts = r570Targets(call, c, ctx);
+  const ts = r570Targets(call, c, ctx, true);
   if (ts.length === 0) return [];
   let common: Set<string> | null = null;
   for (const t of ts) {
@@ -4621,7 +4621,7 @@ function r572HelperKeeps(
     }
     c.args.forEach((a, i) => {
       if (moved || !isIdentifierLike(a) || r531Key(a) !== key) return;
-      const ts = c.uncertain ? [] : r570Targets(n, c, ctx);
+      const ts = c.uncertain ? [] : r570Targets(n, c, ctx, true);
       if (ts.length === 0) {
         if (!(c.recv === null && R531_PURE.has(c.method) && c.method !== "clear")) moved = true;
         return;
@@ -5561,7 +5561,7 @@ function r572StatefulOnce(p: ALSyntaxNode, hops: number, ctx: SemanticContext): 
           hit = true;
         if (hit) return;
       }
-      const ts = r570Targets(n, c, ctx);
+      const ts = r570Targets(n, c, ctx, true);
       if (ts.length === 0) {
         // UNKNOWN (plan r2 review 7): no target and no resolved built-in
         if (c.recv === null) {
@@ -5751,7 +5751,7 @@ function r572WritesNode(
       hit = true;
       return;
     }
-    const ts = r570Targets(n, c, ctx);
+    const ts = r570Targets(n, c, ctx, true);
     if (ts.length === 0) {
       if (!(c.recv === null && R572_NO_WRITE.has(c.method))) hit = true;
       return;
@@ -5913,7 +5913,7 @@ function r570LoopFilters(
         else if (!R531_BUILTIN.has(c.method)) {
           // a table procedure on the cursor: the filters it sets on its implicit Rec, one level
           // (ponytail: a deeper call, or none resolved, reads as any field)
-          const ts = r570Targets(n, c, ctx);
+          const ts = r570Targets(n, c, ctx, true);
           if (ts.length === 0) out.add("*");
           for (const t of ts) {
             const own = r531ObjectProcs(t, ctx);
@@ -6130,7 +6130,7 @@ function r570Scan(
       } else if (r531Implicit(n, ctx)) {
         if (recMethod(c)) direct = true;
         else if (c.method !== "modify" && c.method !== "modifyall" && !R531_BUILTIN.has(c.method)) {
-          const ts = r570Targets(n, c, ctx);
+          const ts = r570Targets(n, c, ctx, true);
           if (ts.length > 0) viaRec(ts);
           else if (!r570ProjectRec(p, ctx)) direct = true; // maybe the base table's procedure
         }
@@ -6149,7 +6149,7 @@ function r570Scan(
       if (normalizeAlName(c.args[1]?.text ?? "") !== "false") direct = true;
       return;
     }
-    const ts = r570Targets(n, c, ctx);
+    const ts = r570Targets(n, c, ctx, true);
     if (ts.length === 0) {
       const readOnly =
         c.recv !== null &&
@@ -6170,7 +6170,14 @@ function r570Scan(
 }
 
 /** The project procedures (with a body) that call `n` names, in any object. */
-function r570Targets(n: ALSyntaxNode, c: R531Call, ctx: SemanticContext): ALSyntaxNode[] {
+function r570Targets(
+  n: ALSyntaxNode,
+  c: R531Call,
+  ctx: SemanticContext,
+  complete = false,
+): ALSyntaxNode[] {
+  // R737: `complete` readers (an empty list means unresolved, strict) get [] for a partial union
+  if (complete && r737Partial(n, ctx)) return [];
   const arity = r531CallArity(c);
   const own = objectOf(n);
   const same = bareCallee(n);
@@ -6324,7 +6331,7 @@ function declaredTypes(recv: ALSyntaxNode, ctx: SemanticContext): DeclaredType[]
           // R521: any name of a multi-name declaration (PEPPOL's `A, B: Interface X`)
           // the `#if` node itself is not inside an inactive range; its compiled-out arm's body is
           if (
-            armOfNode(ctx, c) !== "inactive" &&
+            (!r737Seam.on || armOfNode(ctx, c) !== "inactive") &&
             declaredNames(c).some((nm) => normalizeAlName(nm) === name)
           )
             hits.push({
@@ -6410,6 +6417,18 @@ function projectObjects(ctx: SemanticContext): ALSyntaxNode[] {
   const objs = files.flatMap((f) => objectDeclarationsOf(f.root));
   projectObjectsMemo.set(ctx, objs);
   return objs;
+}
+
+/** R737 (build review MUST 1): is `n`'s receiver typed two or more ways with ANY type naming no
+ *  project object (a dependency codeunit)? Its target union is then PARTIAL: follow readers use it
+ *  (they follow what exists), but a reader that takes an empty list as "unresolved, strict" must not
+ *  see a partial list as complete (`r570Targets(..., true)`). */
+function r737Partial(n: ALSyntaxNode, ctx: SemanticContext): boolean {
+  const fn = n.rawKind === "call_expression" ? n.childForFieldName("function") : n;
+  const recv = fn?.rawKind === "member_expression" ? fn.childForFieldName("object") : null;
+  if (recv === null || recv === undefined || !isIdentifierLike(recv)) return false;
+  const ts = declaredTypes(recv, ctx);
+  return ts.length > 1 && ts.some((t) => objectsOfType(t, ctx).length === 0);
 }
 
 /** The project objects a declared type names: a codeunit; a table plus its tableextensions; or every
