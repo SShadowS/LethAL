@@ -3307,6 +3307,48 @@ function r702Shared(
   return out;
 }
 
+/** R717: a test-only seam, as `r696Seam`; off drops the filter fix-up refusal. */
+export const r717Seam = { on: true };
+
+/**
+ * R717. A walk that INSERTS into its own table (an Insert among its movers, or a one-hop callee
+ * that inserts: `r696CalleeInserts`) relies on a fix-up that moves the inserted row out of the
+ * walk's FILTER: a second variable's Modify, Rename or ModifyAll after a write of a filtered field
+ * (DC's `CDC Template.Clone` shape, read by parse in R-717's measure.md). A mutant deleting either
+ * keeps the row in the walk, which can then meet its own copies forever; it is a deleted
+ * statement, not a deleted exit, so R696's exit refusal does not take it, and a filter field is no
+ * key field. Refused: those movers and their writes (with feeds). The filtered fields are R's
+ * pre-loop `SetRange`/`SetFilter` fields, or EVERY field when R is not a local (its caller set the
+ * filters) or a filter field is unreadable. A key write is R696's mover already. Cost by parse
+ * (R-717): DC 3 specs, BaseApp, DO and CDO 0.
+ */
+function r717Fixups(
+  body: ALSyntaxNode,
+  w: R696Walk,
+  movers: readonly R696Mover[],
+  filters: readonly ALSyntaxNode[],
+  rLocal: boolean,
+  ctx: SemanticContext,
+): R696Mover[] {
+  if (!r717Seam.on) return [];
+  const inserts =
+    movers.some((m) => r531Call(m.call)?.method === "insert") ||
+    r696CalleeInserts(body, w.table, ctx);
+  if (!inserts) return [];
+  let all = !rLocal;
+  const fields = new Set<string>();
+  for (const f of filters) {
+    const c = r531Call(f);
+    if (c === null || (c.method !== "setrange" && c.method !== "setfilter")) continue;
+    const fld = r696Field(c);
+    if (fld === "*") all = true;
+    else if (fld !== null) fields.add(fld);
+  }
+  if (!all && fields.size === 0) return [];
+  // an Insert found here is one of R696's movers already
+  return r696Movers(body, { ...w, keys: all ? "all" : fields, self: false }, ctx);
+}
+
 function r696Loop(loop: ALSyntaxNode, ctx: SemanticContext, push: R696Push): void {
   const nc = r696Next(loop);
   const scope = codeScope(loop);
@@ -3323,19 +3365,25 @@ function r696Loop(loop: ALSyntaxNode, ctx: SemanticContext, push: R696Push): voi
   if (rt.temporary && shared.size === 0) return;
   const rLocal = rkey !== "" && r531Declares(scope, rkey, false);
   const filters = r696PreFilters(scope, loop, rkey, ctx);
-  const movers = r696Movers(
-    body,
-    {
-      rkeys: new Set([rkey]),
-      table: rt.name,
-      keys: r696Keys(rt.name, filters, !rLocal, ctx),
-      self: true,
-      recDistinct: rLocal,
-      shared,
-      temp: rt.temporary,
-    },
-    ctx,
-  );
+  const walk: R696Walk = {
+    rkeys: new Set([rkey]),
+    table: rt.name,
+    keys: r696Keys(rt.name, filters, !rLocal, ctx),
+    self: true,
+    recDistinct: rLocal,
+    shared,
+    temp: rt.temporary,
+  };
+  const movers = r696Movers(body, walk, ctx);
+  const fixParts: ALSyntaxNode[] = [];
+  for (const m of r717Fixups(body, walk, movers, filters, rLocal, ctx)) {
+    push(m.call, loop);
+    for (const x of m.writes) {
+      push(x.node, loop);
+      fixParts.push(...x.reads);
+    }
+  }
+  for (const a of r531Feeds(scope, fixParts, ctx)) push(a, scope);
   if (movers.length === 0) return;
   const parts: ALSyntaxNode[] = [];
   for (const m of movers) {
