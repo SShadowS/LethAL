@@ -1,0 +1,25 @@
+{
+  "id": "e08e9874-95dd-4a77-b4d4-bb1fdee916d2",
+  "name": "R738 Probe Tests",
+  "publisher": "LethAL Probe",
+  "version": "1.0.0.1",
+  "brief": "R738 throwaway probe test app, no tables.",
+  "platform": "28.0.0.0",
+  "runtime": "17.0",
+  "target": "OnPrem",
+  "idRanges": [{ "from": 93800, "to": 93809 }],
+  "dependencies": [
+    {
+      "id": "9ab6e9c7-80ec-440d-b1d9-13bf0799890d",
+      "name": "R738 Probe Target",
+      "publisher": "LethAL Probe",
+      "version": "1.0.0.1"
+    }
+  ],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "features": ["NoImplicitWith"]
+}
