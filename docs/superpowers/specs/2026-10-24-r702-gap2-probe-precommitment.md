@@ -61,3 +61,19 @@ Out of scope here (still open in R702): callee follow, RecordRef walks, helper g
 
 publish -> run-perm -> run-temp -> cleanup (unpublish; read back absent). Results in
 `.kraken-local/r702-probe/results.tsv` (temp, leg, find, N, visits, distinct, maxPerId, capped, first20, rows, perm).
+
+## Addendum 1 (2026-10-24): two errored runs, nothing read
+
+- **Run 1** (08:45:40Z, build 6cd73b5c) failed on its first call with HTTP 400: "The COPY function can only be used
+  with the shareTable argument set to true if both records are temporary."
+  - **The cause:** the PERMANENT controls T1c and T3c used `PermCopy.Copy(R, true)`. That is itself a measured fact:
+    a non-temporary variable cannot share a temporary table's data.
+  - **The fix** (lethal/r702 e79d6f13): a plain second variable in the permanent branch (R696's L1 and L3 control).
+- **Run 2** (08:46:51Z, build e58255bf) failed with HTTP 404: "The R702 Probe does not exist. Identification fields
+  and values: Id='1'". It is another probe bug, being fixed offline.
+- **Process slip, disclosed:** run 2 started before this addendum was committed. It produced no result, so nothing
+  from it can be read.
+- **By the rule above** (any call errors: no result, fix the probe), nothing from either run is read. Cleanup ran after
+  run 1 and is checked after run 2.
+- **Every reading above stands unchanged.** The next run's build sha256 is recorded in Addendum 2, committed before
+  that run.
