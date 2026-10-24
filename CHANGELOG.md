@@ -13,6 +13,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **Many breaking mutants are now isolated inside the compile budget** (R735). When a batch fails to compile, alc's own
+  error lines are mapped to the mutant whose branch holds each line, and those mutants are compiled alone first. A
+  suspect is blamed only if it fails alone; a line that maps to nothing falls back to the halving search of R734. On
+  DC, 30 breaking mutants among 2000 are isolated in 34 compiles (halving needed about 540). A new
+  `compile-isolation-result` warning reports how many of the 64 compile-only runs were used and how many mutants were
+  named alone, in pairs, or left unresolved.
 - **A mutant that breaks the compile no longer costs the whole batch its verdicts** (R734). When alc rejects a batch,
   LethAL now finds every mutant that fails to compile on its own (not only one), redeploys the rest under their
   original ids, and scores them. Each breaking mutant is an `error` row whose note names its source file and line and
@@ -271,6 +277,15 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **Session notices are warning events, so stderr changes** (R739). The lines a session used to print with
+  `console.warn` (the lease-path refusals, a failed store correction at a lease loss, the coverage lines about
+  unmatched triggers, unplaceable and refused mutants, the resource-rebase collision, and the backends' notices:
+  package-cache leftovers, refused objects, fenced-coverage warnings, the al-runner-v3 helper, prefetch and
+  kill-pair notices) are now `warning` events with a code (among them `al-runner-v3-scope-disagreement`,
+  `lost-batch-error-replaced`, `session-latched` and `late-refusal-while-failing`). The progress renderer prints them as
+  `WARNING [code]: [lethal] ...` on stderr and `--progress-out` records them. A caller of `runSession` or
+  `runNamedMutants` with no subscriber no longer sees these lines. A backend used outside a session still prints to
+  the console.
 - **`al-runner-v3` keeps coverage on for projects with multi-object files** ([R602](docs/roadmap/R602.md)). v3 reports
   every object in its own file's frame (measured on the pin and the edge build, 0 lost kills against `--mode none`).
   Verdicts change: mutants in code no test calls go from `survived` to `no-coverage`. Coverage is still turned off,

@@ -253,12 +253,34 @@ export const LEND_FIGURES = {
  * two equal). Left ABSENT on purpose: `envtool/run` (host-only, R683: it refuses by name until the
  * owner's observe run), and the legs that throw by design (lend RN3, RN1d, RN2, RN4; v3 N1E).
  * `verify-scale` is exempt (a measurement script, R270).
+ *
+ * R739 (pre-commitment docs/superpowers/specs/2026-10-24-r739-warning-sets-precommitment.md, master
+ * c84ae94b): session console lines became events. Deliberate moves: chunked gains
+ * fenced-coverage-no-procedure-lines (R746 will make it precise), al-runner-v3/WR gains the two
+ * coverage-refused-* codes, D1/D1c gain resource-rebase-collision. New step keys for verify, testapp and
+ * agreement (all empty). Never pinned: the environment codes package-cache-leftover,
+ * package-cache-dangling and al-runner-v3-dotnet-helper-missing.
  */
 const COMPILED_OUT = ["compiled-out-sites"];
 const HARDEN_DEPENDENTS = ["installed-dependents"];
 const RESUME_REUSED = ["resume-baseline-reused", "resume-reusing-run"];
 const XD_NARROWED = ["only-narrowed-run", "tests-only-narrowed-baseline"];
 const TABLES = ["non-executable-sites-dropped", "not-instrumentable-files-skipped"];
+// R744: the D legs (CDO 5f2a71d, `only` + `testsOnly`): the two narrowing notices of XD_NARROWED, plus the
+// pinned checkout's own app.json `logo` path with a backslash (app-json-backslash-path) and five pinned
+// Test/.alpackages apps whose build number exceeds 65535 (dependency-report-source-unavailable).
+// R739: plus resource-rebase-collision (three control-add-ins' Script/Start.js and Script/events.js rebase onto
+// one path, issue #20; the line became an event).
+const CDO_D = [
+  "app-json-backslash-path",
+  "dependency-report-source-unavailable",
+  "only-narrowed-run",
+  "resource-rebase-collision",
+  "tests-only-narrowed-baseline",
+];
+// R739: the bcdev fenced-coverage line, now an event (Data Tests.NoTriggerValidateRunsWeak covers only a field
+// declaration; R746).
+const CHUNKED = ["fenced-coverage-no-procedure-lines", "only-narrowed-run"];
 export const GATE_WARNINGS: Readonly<Record<string, readonly string[]>> = {
   "bcdev/first": [],
   "bcdev/second": [],
@@ -267,8 +289,8 @@ export const GATE_WARNINGS: Readonly<Record<string, readonly string[]>> = {
   "bcdev-wrapped/hub": COMPILED_OUT,
   "tables/first": TABLES,
   "tables/second": TABLES,
-  "chunked/control": ["only-narrowed-run"],
-  "chunked/chunked": ["only-narrowed-run"],
+  "chunked/control": CHUNKED,
+  "chunked/chunked": CHUNKED,
   "harden/a": HARDEN_DEPENDENTS,
   "harden/b": HARDEN_DEPENDENTS,
   "lend/L0": [],
@@ -281,9 +303,16 @@ export const GATE_WARNINGS: Readonly<Record<string, readonly string[]>> = {
   "lend/N1": ["history-backend-build-changed"],
   "lend/N5": ["history-test-app-changed"],
   "verify/run": [],
+  "verify/step3": [],
+  "verify/step4": [],
+  "verify/step4b": [],
   "testapp/run": [],
+  "testapp/step6": [],
+  "testapp/step7": [],
   "agreement/a": HARDEN_DEPENDENTS,
   "agreement/b": HARDEN_DEPENDENTS,
+  "agreement/verify": [],
+  "agreement/named": [],
   "hang/on": [],
   "hang/single": [],
   "hang/baseline": ["operator-narrowed-run", "tests-only-narrowed-baseline"],
@@ -301,5 +330,10 @@ export const GATE_WARNINGS: Readonly<Record<string, readonly string[]>> = {
   "al-runner-v3/xd-f3": XD_NARROWED,
   "al-runner-v3/Y-A": COMPILED_OUT,
   "al-runner-v3/Y-B": COMPILED_OUT,
-  "al-runner-v3/WR": COMPILED_OUT,
+  // R739: the wrapped fixture's two-arm #if object is refused by the v3 coverage index (R298), and its 3 mutants
+  // read no-coverage; both lines became events.
+  "al-runner-v3/WR": ["compiled-out-sites", "coverage-refused-mutants", "coverage-refused-object"],
+  "al-runner-v3/D1": CDO_D,
+  "al-runner-v3/D1c": CDO_D,
+  "al-runner-v3/T": TABLES,
 };

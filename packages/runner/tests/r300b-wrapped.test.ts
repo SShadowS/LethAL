@@ -448,3 +448,93 @@ describe("R-300b (I3), changed by R602 (D): --server's own name disagreeing with
     }
   });
 });
+
+// R739: the al-runner coverage index and the server conversion hand their lines to `notify`, with
+// their codes, and print nothing to the console. Each test goes red if its site reverts to
+// `console.warn`.
+describe("R739: the al-runner coverage index notifies instead of printing", () => {
+  const pairAt = (proc: string, pad: string) =>
+    `#if PROBESYM\ncodeunit 91910 "R300b Pair"\n{\n${pad}    procedure ${proc}(): Integer\n    begin\n        exit(1);\n    end;\n}\n#endif\n`;
+  const collect = () => {
+    const seen: Array<[string, string]> = [];
+    return { seen, notify: (c: string, m: string) => seen.push([c, m]) };
+  };
+
+  test("a two-arm wrapper's refusal is a coverage-refused-object notice", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { seen, notify } = collect();
+      await buildAlRunnerCoverageIndex(await bundle({ "src/Q.Codeunit.al": TWO_ARM }), {
+        ...SYMS,
+        notify,
+      });
+      expect(seen.map(([c]) => c)).toEqual(["coverage-refused-object"]);
+      expect(seen[0]?.[1]).toContain("coverage refused for Codeunit:91904");
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("an undecided wrapped file's refusal is a coverage-refused-object notice", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { seen, notify } = collect();
+      const undecided = `#if PROBESYM PROBESYM\n${W1_BODY.replace("91900", "91902")}#endif\n`;
+      await buildAlRunnerCoverageIndex(await bundle({ "src/U.Codeunit.al": undecided }), {
+        symbols: [],
+        notify,
+      });
+      expect(seen.map(([c]) => c)).toEqual(["coverage-refused-object"]);
+      expect(seen[0]?.[1]).toContain("could not be evaluated as alc does");
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("a key two active files declare is a coverage-refused-object notice", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { seen, notify } = collect();
+      const dir = await bundle({
+        "src/A.Codeunit.al": pairAt("FromA", ""),
+        "src/B.Codeunit.al": pairAt("FromB", "\n\n\n"),
+      });
+      await buildAlRunnerCoverageIndex(dir, { ...SYMS, notify });
+      expect(seen.map(([c]) => c)).toEqual(["coverage-refused-object"]);
+      expect(seen[0]?.[1]).toContain("it is declared in src/A.Codeunit.al and src/B.Codeunit.al");
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("a clean index notifies nothing (the other direction)", async () => {
+    const { seen, notify } = collect();
+    await buildAlRunnerCoverageIndex(await bundle({ [W1_FILE]: W1 }), { ...SYMS, notify });
+    expect(seen).toEqual([]);
+  });
+
+  test("a scope the position contradicts is an al-runner-v3-scope-disagreement notice", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { seen, notify } = collect();
+      const twin = W1.replace("#if PROBESYM", "// if PROBESYM")
+        .replace("#endif", "// endif")
+        .replace("91900", "91901");
+      const dir = await bundle({ "src/C1.Codeunit.al": twin });
+      const index = await buildAlRunnerCoverageIndex(dir, SYMS);
+      const got = alRunnerCoverageFromServer(
+        srv({ file: "src/C1.Codeunit.al", scope: "Miss", lines: [10] }),
+        index,
+        notify,
+      );
+      expect(got.entries.map((e) => e.procedure)).toEqual(["Hit"]);
+      expect(seen.map(([c]) => c)).toEqual(["al-runner-v3-scope-disagreement"]);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});

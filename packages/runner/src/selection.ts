@@ -606,13 +606,15 @@ export function coverageFilter(
    */
   refusedObjects: ReadonlyMap<string, string> = new Map(),
   /**
-   * R-384 (review 2). Where the three console lines below go. `lethal run` passes nothing and
-   * prints them through `console.warn` as before. `lethal verify` passes a no-op: inside verify
+   * R-384 (review 2). Where the three lines below go, each with its warning code
+   * (`coverage-triggers-unmatched`, `coverage-unplaceable`, `coverage-refused-mutants`; R739).
+   * With no argument they print through `console.warn` as before; `runSession` passes a function
+   * that emits a warning event. `lethal verify` passes a no-op: inside verify
    * two of them are false (an unplaceable survivor there takes every new test, and fallback 2's
    * "all N green test(s)" counts only the new tests whose coverage could be read), so verify
    * prints its own lines from the returned split instead.
    */
-  warn: (line: string) => void = console.warn,
+  warn: (code: string, line: string) => void = (_code, line) => console.warn(line),
 ): CoverageSplit {
   const byKey = new Map(allTests.map((t) => [testKeyOf(t), t]));
   const covered = new Map<string, TestMethodRef[]>();
@@ -794,17 +796,20 @@ export function coverageFilter(
   }
   if (untargetedTriggerCount > 0) {
     warn(
+      "coverage-triggers-unmatched",
       `[lethal] ${untargetedTriggerCount} table trigger mutant(s) could not be coverage-matched (no green test reported executing anything in that table, and no trigger is nameable at member level) — running each against all ${allTests.length} green test(s).`,
     );
   }
   if (unplaceable.size > 0) {
     warn(
+      "coverage-unplaceable",
       `[lethal] ${unplaceable.size} mutant(s) are reported no-coverage because coverage saw their object execute a member it could not NAME, not because nothing executed them (R175). That is a limit of LethAL's attribution, NOT a statement that your tests miss this code. Re-run with coverageMode "none" to score them: it runs every mutant against every green test and uses no attribution at all.`,
     );
   }
   if (refused.size > 0) {
     const reasons = [...new Set(refused.values())].map((r) => `  ${r}`);
     warn(
+      "coverage-refused-mutants",
       `[lethal] ${refused.size} mutant(s) read no-coverage because coverage is refused for their object (R298):\n${reasons.join("\n")}`,
     );
   }

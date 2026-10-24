@@ -2301,3 +2301,93 @@ describe("R609: a test v3 refused MID-RUN keeps the coverage it reached before t
     expect(v.coverage).toBeUndefined();
   });
 });
+
+// R739: a session's notifier gets the backend's notices; the console gets none. Each test goes red
+// if its site reverts to `console.warn`.
+describe("R739: v3 notices reach setNotify, never the console", () => {
+  const notices = (b: ReturnType<typeof backendOf>) => {
+    const seen: Array<[string, string]> = [];
+    b.setNotify((c, m) => seen.push([c, m]));
+    return seen;
+  };
+
+  test("exit 8 is an al-runner-v3-dotnet-helper-missing notice, once per session, again in the next", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const l = await layout();
+      const b = backendOf(l, fakeV3(allPass, { exit: 8 }).spawn, fakeAlc().io, {
+        coverage: "none",
+      });
+      const first = notices(b);
+      await b.deploy(l.batch);
+      await b.activate(null);
+      await b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
+      await b.run(ref("B"), { coverage: "none", timeoutMs: 1000 });
+      expect(first.map(([c]) => c)).toEqual(["al-runner-v3-dotnet-helper-missing"]);
+      // A second session on the same backend sees its own notice (setNotify resets the flag).
+      b.setNotify(undefined);
+      const second = notices(b);
+      await b.deploy(l.batch); // the next session's deploy clears the cached answers
+      await b.activate(null);
+      await b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
+      expect(second.map(([c]) => c)).toEqual(["al-runner-v3-dotnet-helper-missing"]);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("a disagreeing scope under coverage is an al-runner-v3-scope-disagreement notice", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const l = await layout();
+      const v3 = fakeV3(allPass, {
+        coverage: (_id, active) => ({
+          coverage: [],
+          perTestCoverage: [
+            {
+              test: `Codeunit${CU}.A`,
+              coverage: [
+                {
+                  file: join(active, "Logic.Codeunit.al"),
+                  statements: [{ line: 5, hits: 1, scope: "NotTwice" }],
+                },
+              ],
+            },
+          ],
+        }),
+      });
+      const b = backendOf(l, v3.spawn, fakeAlc().io, { coverage: "al-runner" });
+      b.useBuildSymbols([]);
+      const seen = notices(b);
+      await b.deploy(l.batch);
+      await b.activate(null);
+      const a = await b.run(ref("A"), { coverage: "al-runner", timeoutMs: 1000 });
+      expect(a.coverage?.entries.map((e) => e.procedure)).toEqual(["Twice"]);
+      expect(seen.map(([c]) => c)).toEqual(["al-runner-v3-scope-disagreement"]);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("the coverage index's refusals are coverage-refused-object notices, through the backend's notifier", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const l = await layout();
+      await writeFile(
+        join(l.batch, "Wrapped.Codeunit.al"),
+        '#if SOMESYM\ncodeunit 79050 "W"\n{\n}\n#else\ncodeunit 79050 "W"\n{\n}\n#endif\n',
+      );
+      const b = backendOf(l, fakeV3(allPass).spawn, fakeAlc().io, { coverage: "al-runner" });
+      b.useBuildSymbols([]);
+      const seen = notices(b);
+      await b.deploy(l.batch);
+      expect(seen.map(([c]) => c)).toEqual(["coverage-refused-object"]);
+      expect(seen[0]?.[1]).toContain("coverage refused for Codeunit:79050");
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
