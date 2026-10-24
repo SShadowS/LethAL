@@ -329,8 +329,8 @@ export class StaleDependencyMemberError extends Error {
         `no longer has (BC: "... does not have a member with that ID"; the object is not one this project ` +
         `declares): ${each}. LethAL refused rather than drop them from the green set, which would score every ` +
         "mutant they cover no-coverage. Recompile and republish the calling app (usually the tests app) against " +
-        "the dependencies installed now, then re-run. If the calling app cannot be rebuilt, leave its test files " +
-        "out with --tests-only (the report then flags 'tests-narrowed').",
+        "the dependencies installed now, then re-run. If it cannot be rebuilt, run only the other test files with " +
+        "--tests-only <glob> (it selects whole files, not single tests; the report then flags 'tests-narrowed').",
     );
     this.name = "StaleDependencyMemberError";
     this.staleTests = names;
