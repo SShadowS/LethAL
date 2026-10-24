@@ -2972,8 +2972,9 @@ export const r696Seam = { on: true };
  * and the primary key.
  *
  * LIMITS, accepted: shape B follows no callee (R passed to a call is not followed) and does not
- * read a guard in a helper; a bound set by a caller; temporary walks (not probed); an XMLport
- * self-insert item (outside R530 and this). R696 roadmap item, "Done".
+ * read a guard in a helper (R702 measured the callee case and closed it by ruling); a bound set by
+ * a caller; an XMLport self-insert item (outside R530 and this). R696 roadmap item, "Done". A
+ * temporary walk is refused only through a variable sharing its rows (`r702Shared`, R702).
  */
 function inMovedWalk(node: ALSyntaxNode, ctx: SemanticContext): boolean {
   if (!r696Seam.on) return false;
@@ -3139,6 +3140,8 @@ interface R696Walk {
   readonly self: boolean;
   /** the implicit Rec is a variable other than the walked one */
   readonly recDistinct: boolean;
+  /** R702: a temporary walk; only these variables (sharing R's rows) move it */
+  readonly shared?: ReadonlySet<string>;
 }
 
 /** The movers under `body` (see `inMovedWalk`). */
@@ -3152,7 +3155,8 @@ function r696Movers(body: ALSyntaxNode, w: R696Walk, ctx: SemanticContext): R696
     const vkey = rc.recv ?? (r531Implicit(c, ctx) ? "" : null);
     if (vkey === null || vkey.startsWith("\u0001")) return;
     const t = r696Table(c, ctx);
-    if (t === null || t.temporary || t.name !== w.table) return;
+    if (t === null || t.name !== w.table) return;
+    if (w.shared !== undefined ? !w.shared.has(vkey) : t.temporary) return;
     if (w.rkeys.has(vkey)) {
       if (!w.self || rc.method === "modify") return;
     } else if (rc.method === "modify" && vkey === "" && !w.recDistinct) return;
@@ -3237,6 +3241,52 @@ function r696Keys(
   return callerKey && !set ? "all" : keys;
 }
 
+/** R702: a test-only seam, as `r696Seam`; off restores R696's skip of every temporary walk. */
+export const r702Seam = { on: true };
+
+/**
+ * R702 gap 2. The variables that share a temporary R's rows: `X.Copy(R, true)` or `R.Copy(X, true)`
+ * before the walk, inside it, or inside a loop that encloses it, as `r696PreFilters` reads order
+ * (the share argument read as true unless absent or a literal `false`; any argument when they are
+ * unreadable). Measured on bc2 (R702 probe, run 3): such an X moving a
+ * row's key ahead of the cursor, or inserting ahead of it, keeps a temporary walk going; a by-value
+ * copy holds none of R's rows, and R's own Modify and Insert never revisit. LIMITS: the Copy and
+ * the mover in one procedure (a callee is not followed, as R696 shape B); a global X bound in
+ * another procedure; R's own Rename and ModifyAll on a temporary walk (not probed).
+ */
+function r702Shared(
+  scope: ALSyntaxNode,
+  loop: ALSyntaxNode,
+  rkey: string,
+  ctx: SemanticContext,
+): Set<string> {
+  const out = new Set<string>();
+  if (!r702Seam.on) return out;
+  const enclosing: ALSyntaxNode[] = [];
+  for (let a = loop.parent; a !== null && !samePos(a, scope); a = a.parent)
+    if (BREAK_SCOPES.has(a.rawKind)) enclosing.push(a);
+  visitAll(scope, (n) => {
+    if (!r696IsCall(n)) return;
+    const c = r531Call(n);
+    if (c === null || c.method !== "copy") return;
+    if (
+      n.endIndex > loop.endIndex &&
+      !enclosing.some((e) => e.startIndex <= n.startIndex && n.endIndex <= e.endIndex)
+    )
+      return;
+    const recv = c.recv ?? (r531Implicit(n, ctx) ? "" : null);
+    if (recv === null) return;
+    const share = c.args[1];
+    if (!c.uncertain && (share === undefined || normalizeAlName(share.text) === "false")) return;
+    const named = (c.uncertain ? c.args : c.args.slice(0, 1)).map((a) => r531Key(a));
+    if (recv === rkey) {
+      for (const k of named) if (k !== null) out.add(k);
+    } else if (named.includes(rkey)) out.add(recv);
+  });
+  out.delete(rkey);
+  return out;
+}
+
 function r696Loop(loop: ALSyntaxNode, ctx: SemanticContext, push: R696Push): void {
   const nc = r696Next(loop);
   const scope = codeScope(loop);
@@ -3246,7 +3296,9 @@ function r696Loop(loop: ALSyntaxNode, ctx: SemanticContext, push: R696Push): voi
   const rkey = rc?.recv ?? "";
   if (rc === null || rkey.startsWith("\u0001")) return;
   const rt = r696Table(nc, ctx);
-  if (rt === null || rt.temporary) return;
+  if (rt === null) return;
+  const shared = rt.temporary ? r702Shared(scope, loop, rkey, ctx) : undefined;
+  if (shared !== undefined && shared.size === 0) return;
   const rLocal = rkey !== "" && r531Declares(scope, rkey, false);
   const filters = r696PreFilters(scope, loop, rkey, ctx);
   const movers = r696Movers(
@@ -3257,6 +3309,7 @@ function r696Loop(loop: ALSyntaxNode, ctx: SemanticContext, push: R696Push): voi
       keys: r696Keys(rt.name, filters, !rLocal, ctx),
       self: true,
       recDistinct: rLocal,
+      ...(shared !== undefined ? { shared } : {}),
     },
     ctx,
   );
