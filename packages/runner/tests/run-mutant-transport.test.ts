@@ -286,6 +286,34 @@ describe("RunMutantTransport.run — 5B dispatch classification", () => {
     expect(v.operation).toBe("in-flight-unknown");
   });
 
+  // R692: BC's own error text reaches the message; the verdict and the operation do not change.
+  test("R692: a 500 with an error body puts BC's text in the message, verdict unchanged", async () => {
+    // Only the RunMutant call carries the text; the answer read-back that follows gets "boom".
+    const five00 = (async (url: unknown, _init?: RequestInit) =>
+      new Response(
+        String(url).includes("RunMutant") ? "The record Quux is locked by another user" : "boom",
+        { status: 500 },
+      )) as typeof fetch;
+    const v = await transport(five00).run(REQ);
+    expect(v.failureMessage).toContain("HTTP 500");
+    expect(v.failureMessage).toContain("The record Quux is locked by another user");
+    expect(v.outcome).toBe("error");
+    expect(v.operation).toBe("in-flight-unknown");
+    expect(v.fencedOp).toEqual({ attemptId: "a1", opSeq: 7 });
+  });
+
+  test("R692: a 500 body that never ends is bounded, noted, and the verdict is unchanged", async () => {
+    const hang = (async (_url: unknown, _init?: RequestInit) =>
+      new Response(new ReadableStream({ start() {} }), { status: 500 })) as typeof fetch;
+    // The timeout is tiny, so the bound on the read is tiny too: no 15 s wait.
+    const v = await transport(hang).run({ ...REQ, timeoutMs: 40 });
+    expect(v.failureMessage).toContain("HTTP 500");
+    expect(v.failureMessage).toContain("(body unread:");
+    expect(v.outcome).toBe("error");
+    expect(v.operation).toBe("in-flight-unknown");
+    expect(v.fencedOp).toEqual({ attemptId: "a1", opSeq: 7 });
+  });
+
   test("2xx malformed body → in-flight-unknown", async () => {
     const malformed = (async (_url: unknown, _init?: RequestInit) =>
       new Response(JSON.stringify({ nope: 1 }), { status: 200 })) as typeof fetch;

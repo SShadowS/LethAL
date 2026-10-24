@@ -11,7 +11,12 @@ import { initParser, parseAL } from "../../src/ast/parser";
 import { type ALSyntaxNode, visit, wrapRoot } from "../../src/ast/syntax-node";
 import { buildSemanticContext } from "../../src/semantic/context";
 import { bareReceiverText } from "../../src/semantic/receiver";
-import { forceCanRaise, modifySkipCanRaise } from "../../src/semantic/trigger-skip";
+import {
+  forceCanRaise,
+  modifySkipCanRaise,
+  resetSubscriberWalks,
+  subscriberWalks,
+} from "../../src/semantic/trigger-skip";
 
 /** Par has NO OnModify, so only an observer can make the answer "keep". */
 const PAR = `table 50300 Par
@@ -230,5 +235,80 @@ describe("R494: a split-header tableextension's members shadow like its plain tw
     expect(
       receiverOf(`${header("tableextension", "50302 ParExt extends Par")}${fieldBody}`),
     ).toBeNull();
+  });
+});
+
+/**
+ * R329: `projectObserves` reads every codeunit's subscriber attributes from one list per symbol
+ * table. The answers below are fixed values and held before the list existed; the counter shows
+ * each codeunit is walked once however many calls ask.
+ */
+describe("R329: subscriber attributes are collected once per symbol table", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  const table = (id: number, name: string) =>
+    `table ${id} "${name}"\n{\n    fields\n    {\n        field(1; "No."; Code[20]) { }\n    }\n}\n`;
+  const sub = (id: number, name: string, tableName: string, event: string) =>
+    `codeunit ${id} ${name}\n{\n    [EventSubscriber(ObjectType::Table, Database::"${tableName}", '${event}', '', false, false)]\n    local procedure Handle(var Rec: Record "${tableName}")\n    begin\n    end;\n}\n`;
+  const CALLER_CU = `codeunit 50320 Ops
+{
+    procedure P()
+    var
+        A: Record "T One";
+        B: Record "T Two";
+        C: Record "T Three";
+    begin
+        A.Modify();
+        B.Modify();
+        C.Modify();
+        A.Delete();
+        B.Delete();
+    end;
+}
+`;
+  const SOURCES = [
+    table(50310, "T One"),
+    table(50311, "T Two"),
+    table(50312, "T Three"),
+    CALLER_CU,
+    sub(50321, "SubOne", "T One", "OnAfterModifyEvent"),
+    sub(50322, "SubTwo", "T Two", "OnAfterDeleteEvent"),
+    // T Three's only subscriber is `#if`-wrapped and read without an arm map, so it is unindexed:
+    // its answer comes from the unindexed-codeunit path, not from the indexed subscriber list
+
+    `#if NEVER\n${sub(50323, "SubOff", "T Three", "OnAfterModifyEvent")}#endif\n`,
+  ];
+
+  function answers() {
+    const files = SOURCES.map((s, i) => ({ path: `f${i}.al`, root: wrapRoot(parseAL(s)) }));
+    const ctx = buildSemanticContext(files);
+    const ops = files[3]?.root;
+    if (ops === undefined) throw new Error("no caller");
+    const calls: ALSyntaxNode[] = [];
+    visit(ops, (n) => {
+      if (n.rawKind === "call_expression") calls.push(n);
+    });
+    const [aMod, bMod, cMod, aDel, bDel] = calls;
+    if (aMod === undefined || bMod === undefined || cMod === undefined) throw new Error("calls");
+    if (aDel === undefined || bDel === undefined) throw new Error("calls");
+    return [
+      forceCanRaise(aMod, ctx, "modify"),
+      forceCanRaise(bMod, ctx, "modify"),
+      forceCanRaise(cMod, ctx, "modify"),
+      forceCanRaise(aDel, ctx, "delete"),
+      forceCanRaise(bDel, ctx, "delete"),
+    ];
+  }
+
+  it("A1: each table keeps its tag only for the events its own subscriber names", () => {
+    expect(answers()).toEqual([true, false, true, false, true]);
+  });
+
+  it("A2: five calls walk each codeunit's attributes once in total", () => {
+    resetSubscriberWalks();
+    answers();
+    expect(subscriberWalks).toBe(3);
   });
 });

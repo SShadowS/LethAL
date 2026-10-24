@@ -1445,7 +1445,7 @@ export class RunMutantTransport {
         ref: watchedRef,
         outcome: "error",
         durationMs,
-        failureMessage: `RunMutantMany failed: HTTP ${res.status}${stopFired ? ` after our stop${stopConfirmed ? " (confirmed)" : ""}` : ""}.${stopDetail()}`,
+        failureMessage: `RunMutantMany failed: HTTP ${res.status}${stopFired ? ` after our stop${stopConfirmed ? " (confirmed)" : ""}` : ""}${rawBody === "" ? "" : ` — BC's body: ${JSON.stringify(rawBody.slice(0, 400))}`}.${stopDetail()}`,
         operation: "in-flight-unknown",
         fencedOp,
       };
@@ -2038,11 +2038,25 @@ export class RunMutantTransport {
       settleTimers();
       // Dispatched, then a non-2xx: RunMutant may have activated a mutant and not confirmed its
       // clear — the container could be left mutated. in-flight-unknown, never a verdict.
+      // R692: BC's error text is kept (diagnostic only, 400 characters). The timers are settled, so
+      // the read is bounded by hand (R191): a body that never ends adds a note and changes nothing.
+      let bodyNote = "";
+      try {
+        const text = await bounded(
+          res.text(),
+          Math.min(KEPT_ANSWER_READ_MS, timeoutMs),
+          "RunMutant error body",
+        );
+        if (text !== "") bodyNote = ` — BC's body: ${JSON.stringify(text.slice(0, 400))}`;
+      } catch (err) {
+        bodyNote = ` (body unread: ${describeThrown(err)})`;
+        void res.body?.cancel().catch(() => {}); // free the socket of a stream that never ended
+      }
       return {
         ref,
         outcome: "error",
         durationMs: Date.now() - started,
-        failureMessage: `RunMutant failed: HTTP ${res.status}`,
+        failureMessage: `RunMutant failed: HTTP ${res.status}${bodyNote}`,
         operation: "in-flight-unknown",
         fencedOp,
       };

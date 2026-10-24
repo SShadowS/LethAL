@@ -3464,7 +3464,7 @@ function oneHopReach(ctx: SemanticContext): Map<string, Set<string>> {
   }
   /** The subscribers of the event call `c` (inside object `o`) raises, or an empty list. */
   const raised = (c: ALSyntaxNode, o: ALSyntaxNode): { obj: ALSyntaxNode; proc: string }[] => {
-    let pubObjs: ALSyntaxNode[];
+    let pubObjs: readonly ALSyntaxNode[];
     let name = bareCallee(c);
     if (name !== null) pubObjs = [o];
     else {
@@ -6050,8 +6050,16 @@ export interface DeclaredType {
 }
 
 /** An object's own name, normalized the same way as `DeclaredType.name`. */
-const objectNameOf = (o: ALSyntaxNode): string =>
-  normalizeAlName(lastFieldChild(o, "object_name")?.text ?? "");
+const objectNameOf = (o: ALSyntaxNode): string => {
+  objectNameCalls++;
+  return normalizeAlName(lastFieldChild(o, "object_name")?.text ?? "");
+};
+/** Test hook: how many times `objectNameOf` ran. */
+export let objectNameCalls = 0;
+/** Test hook: reset `objectNameCalls`. */
+export function resetObjectNameCalls(): void {
+  objectNameCalls = 0;
+}
 
 /**
  * The declared type of a receiver, read from the declaration's type NODE (`record_type` or
@@ -6129,13 +6137,10 @@ function projectObjects(ctx: SemanticContext): ALSyntaxNode[] {
  *  `[]` on purpose: `callTargets` feeds R500 shape 2's callee follow, and widening it to reports is a
  *  separate decision from R555, whose report lookup is local (`crossWriters`). Exported for the
  *  test that pins that (internal). */
-export function objectsOfType(t: DeclaredType, ctx: SemanticContext): ALSyntaxNode[] {
+export function objectsOfType(t: DeclaredType, ctx: SemanticContext): readonly ALSyntaxNode[] {
+  if (t.kind === "codeunit") return objectNameIndex(ctx).get(`codeunit:${t.name}`) ?? [];
+  if (t.kind === "table") return objectNameIndex(ctx).get(`table:${t.name}`) ?? [];
   const objects = projectObjects(ctx);
-  if (t.kind === "codeunit") {
-    return objects.filter(
-      (o) => o.rawKind === "codeunit_declaration" && objectNameOf(o) === t.name,
-    );
-  }
   if (t.kind === "interface") {
     return objects.filter(
       (o) =>
@@ -6149,15 +6154,29 @@ export function objectsOfType(t: DeclaredType, ctx: SemanticContext): ALSyntaxNo
         ),
     );
   }
-  if (t.kind === "table") {
-    return objects.filter(
-      (o) =>
-        (o.rawKind === "table_declaration" && objectNameOf(o) === t.name) ||
-        (o.rawKind === "tableextension_declaration" &&
-          normalizeAlName(lastFieldChild(o, "base_object")?.text ?? "") === t.name),
-    );
-  }
   return [];
+}
+
+/** `codeunit:<name>` and `table:<name>` (a table and its tableextensions, in project order) to the
+ *  objects, per context: one pass over `projectObjects`, where each lookup used to filter it. */
+const objectNameIndexMemo = new WeakMap<object, Map<string, ALSyntaxNode[]>>();
+function objectNameIndex(ctx: SemanticContext): Map<string, ALSyntaxNode[]> {
+  const hit = objectNameIndexMemo.get(ctx);
+  if (hit !== undefined) return hit;
+  const index = new Map<string, ALSyntaxNode[]>();
+  for (const o of projectObjects(ctx)) {
+    let key: string;
+    if (o.rawKind === "codeunit_declaration") key = `codeunit:${objectNameOf(o)}`;
+    else if (o.rawKind === "table_declaration") key = `table:${objectNameOf(o)}`;
+    else if (o.rawKind === "tableextension_declaration")
+      key = `table:${normalizeAlName(lastFieldChild(o, "base_object")?.text ?? "")}`;
+    else continue;
+    const list = index.get(key);
+    if (list === undefined) index.set(key, [o]);
+    else list.push(o);
+  }
+  objectNameIndexMemo.set(ctx, index);
+  return index;
 }
 
 /** Every procedure name an object declares (all arm names). */
@@ -6181,7 +6200,11 @@ function procedureNamesOf(o: ALSyntaxNode, ctx: SemanticContext): Set<string> {
 function callTargets(
   c: ALSyntaxNode,
   ctx: SemanticContext,
-): { readonly objs: ALSyntaxNode[]; readonly member: string; readonly kind: string } | null {
+): {
+  readonly objs: readonly ALSyntaxNode[];
+  readonly member: string;
+  readonly kind: string;
+} | null {
   const f = c.childForFieldName("function");
   if (f === null) return null;
   const onTable = (table: string | null, member: string) =>
