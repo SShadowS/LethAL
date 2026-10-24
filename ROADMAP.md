@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**23 of 718 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**22 of 718 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -734,9 +734,9 @@ that ordering is the priority.
 - **R667** · al-runner v3: nothing live would catch a future build that prefixes failure messages, which would skew the R553 assertion screen · [R667.md](docs/roadmap/R667.md) · done (0ea0a076)
 - **R668** · The batch project copies every non-AL file of the target as a resource, so a lethal.config*.json holding a login is copied into every staged batch dir · [R668.md](docs/roadmap/R668.md) · done (3424c3f0)
 - **R669** · bc-linux-setup and the BC itests should refuse a server that has an out-of-use marker (`/coord/machine/out-of-use/<server>.md`): today nothing reads it, so a held-dirty server is kept off only by the coord lease and by messages · [R669.md](docs/roadmap/R669.md) · done (9210ba70)
-- **R670** · the pinned fixture-symbols tar holds `LethAL Sandbox Data` 1.0.0.10 for `sandbox-data-tests`, older than the fixture (1.0.0.13), so `compile:fixtures` from the tar fails that project with AL0185 `Data Band Report` is missing · [R670.md](docs/roadmap/R670.md) · open, filed 2026-10-22
+- **R670** · the pinned fixture-symbols tar holds `LethAL Sandbox Data` 1.0.0.10 for `sandbox-data-tests`, older than the fixture (1.0.0.13), so `compile:fixtures` from the tar fails that project with AL0185 `Data Band Report` is missing · [R670.md](docs/roadmap/R670.md) · done (f95df377)
 - **R671** · after R654 no backend accepts `--workers` > 1, so `runSession`'s worker fan-out is unreachable and its unit tests are skipped · [R671.md](docs/roadmap/R671.md) · done (d43ed20c)
-- **R673** · the fixture-symbols tar has never held `.alpackages` for sandbox-names, sandbox-names-tests, sandbox-wrapped or sandbox-wrapped-tests, so `compile:fixtures` SKIPS all four in a fresh worktree and `--require-symbol-sets` fails on sandbox-wrapped · [R673.md](docs/roadmap/R673.md) · open, filed 2026-10-23
+- **R673** · the fixture-symbols tar has never held `.alpackages` for sandbox-names, sandbox-names-tests, sandbox-wrapped or sandbox-wrapped-tests, so `compile:fixtures` SKIPS all four in a fresh worktree and `--require-symbol-sets` fails on sandbox-wrapped · [R673.md](docs/roadmap/R673.md) · open, filed 2026-10-23; the repo half is prepared 2026-10-24 (lethal/r673-prep); done when the owner's…
 - **R674** · `--backend al-runner-v3` ignores a configured `envTool` section without a word (R18's warning went with the .NET al-runner) · [R674.md](docs/roadmap/R674.md) · done (e1a8cee8)
 - **R676** · `--backend al-runner-v3 --dry-run` with an `envTool` section runs the env tool's `resolve` and prints a bcdev publish ceiling for a run that publishes nothing: `dryRunCeiling` is not told the backend · [R676.md](docs/roadmap/R676.md) · done (ddd8bab5)
 - **R677** · al-runner v3: baselineRefused is session-wide and never reset, so a test refused at batch 0's baseline still drives batch 1's nearby-refusal notes · [R677.md](docs/roadmap/R677.md) · closed 2026-10-23 — ruling: session-wide is correct…

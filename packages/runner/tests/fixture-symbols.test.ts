@@ -2,18 +2,22 @@
 // update gate (`scripts/al-runner-v3-update.ts`) and `itest:alrunner-v3`. Temp dirs and a small
 // fake tar only: never the real tar, the real gate worktree or /coord.
 import { afterEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
+  FIXTURE_SYMBOLS_MANIFEST,
   FIXTURE_SYMBOLS_TAR,
   FIXTURE_SYMBOLS_TAR_SHA256,
+  type FixtureApp,
   FixtureSymbolsRefusedError,
   GATE_ALPACKAGES,
   SYMBOLS_MARKER,
   prepareFixtureSymbols,
+  symbolTarDrift,
 } from "../itest/fixture-symbols";
 
 const A = "fx/a/.alpackages";
@@ -105,8 +109,11 @@ describe("R614: prepareFixtureSymbols", () => {
       "fixtures/sandbox-tests/.alpackages",
       "fixtures/sandbox-data-tests/.alpackages",
     ]);
-    expect(FIXTURE_SYMBOLS_TAR).toBe("/work/lethal/.kraken-local/fixture-symbols.tar");
     expect(FIXTURE_SYMBOLS_TAR_SHA256).toMatch(/^[0-9a-f]{64}$/);
+    // R670: the file is named by its pin, so a re-pin never overwrites a tar another worktree pins.
+    expect(FIXTURE_SYMBOLS_TAR).toBe(
+      `/work/lethal/.kraken-local/fixture-symbols-${FIXTURE_SYMBOLS_TAR_SHA256.slice(0, 12)}.tar`,
+    );
   });
 
   test("folders absent: the tar is sha-checked, ONLY the two folders extracted, and the marker written", async () => {
@@ -306,4 +313,104 @@ describe("R614: both callers use prepareFixtureSymbols", () => {
     expect(logged).toBeLessThan(gate.indexOf('"itest:alrunner-v3"'));
     expect(s).not.toContain('"tar", "-xf"');
   });
+});
+
+// R670: the tar's LethAL app copies against the fixtures' app.json. The synthetic cases pin each
+// rule; the repo case reads only the committed manifest, so it runs in CI without the tar.
+describe("R670: symbolTarDrift", () => {
+  const apps: FixtureApp[] = [
+    { dir: "fixtures/t", name: "T", version: "1.0.0.5", lethalDeps: [] },
+    { dir: "fixtures/t-tests", name: "T Tests", version: "1.0.0.1", lethalDeps: ["T"] },
+  ];
+  const ms = (...files: string[]) => [
+    "fixtures/t/.alpackages/Microsoft_System_28.0.47067.0.app",
+    "fixtures/t/.alpackages/System.app",
+    "fixtures/t/.alpackages/lethal-control.app",
+    "fixtures/t-tests/.alpackages/Microsoft_Base Application_28.0.46665.47126.app",
+    ...files.map((f) => `fixtures/t-tests/.alpackages/${f}`),
+  ];
+
+  test("the dependency at its fixture's version, plus Microsoft symbols: no drift", () => {
+    expect(symbolTarDrift(ms("LethAL_T_1.0.0.5.app"), apps)).toEqual([]);
+  });
+  test("the fixture is newer than the tar's copy: drift, naming both versions", () => {
+    expect(symbolTarDrift(ms("LethAL_T_1.0.0.4.app"), apps)).toEqual([
+      "fixtures/t-tests/.alpackages/LethAL_T_1.0.0.4.app: the tar holds T 1.0.0.4, but fixtures/t/app.json is 1.0.0.5; rebuild the tar (R670)",
+    ]);
+  });
+  test("the tar's copy is newer than the fixture: drift too", () => {
+    expect(symbolTarDrift(ms("LethAL_T_1.0.0.6.app"), apps)).toHaveLength(1);
+  });
+  test("a declared dependency with no copy, or two copies: drift", () => {
+    expect(symbolTarDrift(ms(), apps)).toEqual([
+      "fixtures/t-tests/.alpackages/: 0 copies of T, want exactly 1",
+    ]);
+    expect(symbolTarDrift(ms("LethAL_T_1.0.0.5.app", "LethAL_T_1.0.0.5.app"), apps)).toEqual([
+      "fixtures/t-tests/.alpackages/: 2 copies of T, want exactly 1",
+    ]);
+  });
+  test("a project's own app in its own folder (not a dependency): drift", () => {
+    const self = [...ms("LethAL_T_1.0.0.5.app"), "fixtures/t/.alpackages/LethAL_T_1.0.0.5.app"];
+    expect(symbolTarDrift(self, apps)).toEqual([
+      "fixtures/t/.alpackages/LethAL_T_1.0.0.5.app: fixtures/t declares no dependency on a repo app named T",
+    ]);
+  });
+  test("a copy whose name hides its version (target.app): drift", () => {
+    expect(symbolTarDrift(ms("LethAL_T_1.0.0.5.app", "target.app"), apps)).toEqual([
+      "fixtures/t-tests/.alpackages/target.app: not a Microsoft symbol, and a LethAL app copy must be named LethAL_<name>_<version>.app",
+    ]);
+  });
+  test("a project the tar has no folder for is not checked", () => {
+    expect(symbolTarDrift(["fixtures/t/.alpackages/System.app"], apps)).toEqual([]);
+  });
+
+  const repo = join(import.meta.dir, "..", "..", "..");
+  const manifest = readFileSync(FIXTURE_SYMBOLS_MANIFEST, "utf8").split("\n");
+  const members = manifest.filter((l) => l !== "" && !l.startsWith("#"));
+  const repoApps = (): FixtureApp[] =>
+    ["fixtures", "examples"].flatMap((root) =>
+      readdirSync(join(repo, root))
+        .filter((d) => existsSync(join(repo, root, d, "app.json")))
+        .map((d) => {
+          const j = JSON.parse(
+            readFileSync(join(repo, root, d, "app.json"), "utf8").replace(/^﻿/, ""),
+          ) as {
+            name: string;
+            version: string;
+            dependencies?: { name: string; publisher: string }[];
+          };
+          return {
+            dir: `${root}/${d}`,
+            name: j.name,
+            version: j.version,
+            lethalDeps: (j.dependencies ?? [])
+              .filter((x) => x.publisher === "LethAL")
+              .map((x) => x.name),
+          };
+        }),
+    );
+
+  test("the committed manifest names the pinned tar's sha256", () => {
+    expect(manifest).toContain(`# sha256 ${FIXTURE_SYMBOLS_TAR_SHA256}`);
+  });
+  test("the committed manifest's LethAL copies equal every fixture's app.json (CI, no tar)", () => {
+    expect(members.length).toBeGreaterThan(100);
+    expect(symbolTarDrift(members, repoApps())).toEqual([]);
+  });
+  test("every manifest folder is a scanned project's (or the control app's), so none escapes the check", () => {
+    const apps = repoApps();
+    // a floor, so a scan that finds nothing cannot pass the drift test vacuously
+    expect(apps.length).toBeGreaterThanOrEqual(20);
+    const scanned = new Set([...apps.map((a) => a.dir), "extensions/lethal-control"]);
+    const folders = [...new Set(members.map((m) => m.slice(0, m.indexOf("/.alpackages/"))))];
+    expect(folders.filter((f) => !scanned.has(f))).toEqual([]);
+  });
+  test.skipIf(!existsSync(FIXTURE_SYMBOLS_TAR))(
+    "the committed manifest equals the pinned tar's listing (only where the tar exists)",
+    () => {
+      const r = spawnSync("tar", ["-tf", FIXTURE_SYMBOLS_TAR], { encoding: "utf8" });
+      expect(r.status).toBe(0);
+      expect(r.stdout.split("\n").filter((l) => l !== "" && !l.endsWith("/"))).toEqual(members);
+    },
+  );
 });
