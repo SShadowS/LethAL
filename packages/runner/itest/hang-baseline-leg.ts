@@ -34,6 +34,12 @@ export const BASELINE_LEG_WALL_BOUND_MS = 300_000;
 /** Assertion 18's control-app lease owner. */
 export const BASELINE_PROBE_OWNER = "hang-itest-baseline-probe";
 
+/** Check 11's allow-list. `GATE_WARNINGS["hang/baseline"]` must equal it (R736). */
+export const HANG_BASELINE_WARNING_CODES: readonly string[] = [
+  "operator-narrowed-run",
+  "tests-only-narrowed-baseline",
+];
+
 /** §5's leg marker. Absent is the fourth state. */
 export type LegState = "armed" | "stop" | "passed";
 
@@ -220,10 +226,7 @@ export function baselineLegFailures(i: BaselineLegInput): string[] {
 
   // 11. The warning allow-list, each once.
   const codes = i.warnings.map((w) => w.code).sort();
-  if (
-    JSON.stringify(codes) !==
-    JSON.stringify(["operator-narrowed-run", "tests-only-narrowed-baseline"])
-  ) {
+  if (JSON.stringify(codes) !== JSON.stringify(HANG_BASELINE_WARNING_CODES)) {
     fail(11, `warning codes ${JSON.stringify(codes)}`);
   }
   const narrowed = i.warnings.find((w) => w.code === "tests-only-narrowed-baseline");
