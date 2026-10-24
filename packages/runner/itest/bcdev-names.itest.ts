@@ -38,6 +38,7 @@ import {
   itestConfigPath,
   itestLaunchPath,
   printItestTarget,
+  readFixtureConfig,
 } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { assertKillsReproduced } from "./kill-reproduction";
@@ -85,7 +86,7 @@ async function runFenced(scratchRoot: string): Promise<SessionReport> {
   const launchCfg = (await readJson<LaunchLocalConfig>(LAUNCH_LOCAL_PATH, "launch.local.json"))
     .configurations[0];
   if (!launchCfg) throw new Error(`${LAUNCH_LOCAL_PATH} has no configurations[0] entry`);
-  const configFile = await readJson<LethalConfigFile>(CONFIG_LOCAL_PATH, itestConfigName());
+  const configFile = readFixtureConfig(CONFIG_LOCAL_PATH, itestConfigName());
   const bcdev = validateBcDevConfig(configFile.bcdev);
   assertLaunchMatchesConfig(launchCfg, bcdev, LAUNCH_LOCAL_PATH);
   const toolPaths = await defaultAlToolPaths();

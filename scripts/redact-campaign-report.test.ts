@@ -107,6 +107,29 @@ describe("redact-campaign-report", () => {
   );
 
   test(
+    "KEEPS failureNote and quarantined.reason (owner ruling 2026-10-24, R-699b) while redacting source",
+    () => {
+      const { path, original } = reportFixture();
+      const note = "RunMutant answered HTTP 500: invented BC error text";
+      const reason = "RunMutant HTTP 500 body: invented quarantine reason";
+      const withText = {
+        ...original,
+        quarantined: { reason },
+        mutants: (original.mutants as Record<string, unknown>[]).map((m, i) =>
+          i === 0 ? { ...m, failureNote: note } : m,
+        ),
+      };
+      writeFileSync(path, JSON.stringify(withText, null, 2), "utf8");
+      expect(run([path]).status).toBe(0);
+      const after = JSON.parse(readFileSync(path, "utf8"));
+      expect(after.mutants[0].originalText).toBe(MARKER);
+      expect(after.mutants[0].failureNote).toBe(note);
+      expect(after.quarantined.reason).toBe(reason);
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
+
+  test(
     "leaves an EMPTY mutatedText alone — it is meaningful and reveals nothing",
     () => {
       // `mutatedText: ""` is a deletion operator's mutation, not a missing field. Stamping a marker

@@ -39,6 +39,10 @@ import {
   type FixtureApp,
   symbolTarDrift,
 } from "../packages/runner/itest/fixture-symbols.ts";
+import {
+  AlRunnerV2RetiredError,
+  refuseRetiredV2ConfigSection,
+} from "../packages/runner/src/v2-retired.ts";
 import { fixtureProjects } from "./compile-fixtures.ts";
 
 const ALX = "/home/dev/.vscode/extensions/ms-dynamics-smb.al-current";
@@ -453,6 +457,7 @@ function main(): number {
       continue;
     }
     try {
+      refuseRetiredV2ConfigSection(json, from);
       // Claude's own settings are copied as they are, after the same checks
       const copyOnly = to === ".claude/settings.local.json";
       const { out, leftovers } = rewrite(json, copyOnly ? { fields: {}, repos: {} } : map);
@@ -462,7 +467,9 @@ function main(): number {
       errors.push(
         e instanceof UnsupportedLauncherError
           ? `${from}: UnsupportedLauncherError at ${e.jsonPath}`
-          : `${from}: ${e instanceof Error ? e.constructor.name : "error"}`,
+          : e instanceof AlRunnerV2RetiredError
+            ? `${from}: retired "alRunner" section (R654): delete it from the host template`
+            : `${from}: ${e instanceof Error ? e.constructor.name : "error"}`,
       );
     }
   }

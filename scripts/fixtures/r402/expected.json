@@ -41,5 +41,8 @@
   "w4_var_swallowed_loop": { "specs": [16, 8, 16, 8] },
   "w5_var_cond_global_loop": { "specs": [6, 6, 6, 6] },
   "w6_var_swallowed_table": { "specs": [29, 15, 29, 15] },
-  "w7_for_control_unknown": { "specs": [12, 9, 12, 9] }
+  "w7_for_control_unknown": { "specs": [12, 9, 12, 9] },
+  "e1_empty_then_sole_if_body": { "specs": [10, 10, 10, 10] },
+  "e2_empty_then_case_branch": { "specs": [8, 8, 8, 8] },
+  "e3_remove_call_comment_before_else": { "specs": [10, 10, 10, 10] }
 }

@@ -124,6 +124,7 @@ import { generateMutationSet, runSession } from "../src/orchestrator";
 import type { SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
 import { BaselineRecordedError, assertGateBaseline, preflightGateBaseline } from "./baseline-guard";
+import { readFixtureConfig } from "./config-path";
 import { ENVTOOL_FIGURES } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { assertKillsReproduced } from "./kill-reproduction";
@@ -219,7 +220,7 @@ async function readJson<T>(path: string, what: string): Promise<T> {
  * store poisons every later gate run until an operator deletes it by hand (observed live).
  */
 async function runOnce(scratchRoot: string): Promise<SessionReport> {
-  const configFile = await readJson<LethalConfigFile>(CONFIG_PATH, "lethal.config.envtool.json");
+  const configFile = readFixtureConfig(CONFIG_PATH, "lethal.config.envtool.json");
   if (configFile.envTool === undefined) {
     throw new Error(
       `${CONFIG_PATH} has no "envTool" section — this gate exists to exercise the env-tool wiring; a config with only "bcdev" would make resolveEnvToolSession no-op (its no-envTool-section branch) and test nothing of Tasks 2-7. See this file's header comment for the expected shape.`,

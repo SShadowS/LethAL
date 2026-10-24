@@ -41,7 +41,12 @@ import {
   preflightGateBaseline,
   recordRequested,
 } from "./baseline-guard";
-import { itestConfigName, itestConfigPath, printItestTarget } from "./config-path";
+import {
+  itestConfigName,
+  itestConfigPath,
+  printItestTarget,
+  readFixtureConfig,
+} from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { HARDEN_SUBLEGS } from "./gate-sublegs";
 import {
@@ -94,7 +99,7 @@ async function runLeg(
   leg: "a" | "b",
   testDir: string,
 ): Promise<SessionReport> {
-  const configFile = await readJson<LethalConfigFile>(CONFIG_LOCAL_PATH, itestConfigName());
+  const configFile = readFixtureConfig(CONFIG_LOCAL_PATH, itestConfigName());
   const bcdev = validateBcDevConfig(configFile.bcdev);
   const toolPaths = await defaultAlToolPaths();
   if (!toolPaths) {

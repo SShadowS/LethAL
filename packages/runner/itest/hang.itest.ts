@@ -67,7 +67,12 @@ import type { SessionReport } from "../src/report";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
 import { BaselineRecordedError, assertGateBaseline, preflightGateBaseline } from "./baseline-guard";
-import { itestConfigName, itestConfigPath, printItestTarget } from "./config-path";
+import {
+  itestConfigName,
+  itestConfigPath,
+  printItestTarget,
+  readFixtureConfig,
+} from "./config-path";
 import { HANG_FIGURES } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { HANG_SUBLEGS } from "./gate-sublegs";
@@ -460,7 +465,7 @@ type LegMode = (typeof LEG_MODES)[number];
 
 async function runLeg(scratchRoot: string, mode: LegMode): Promise<LegResult> {
   const stopHungSessions = mode === "on" || mode === "single";
-  const configFile = await readJson<LethalConfigFile>(CONFIG_LOCAL_PATH, itestConfigName());
+  const configFile = readFixtureConfig(CONFIG_LOCAL_PATH, itestConfigName());
   const bcdev = validateBcDevConfig(configFile.bcdev);
   const toolPaths = await defaultAlToolPaths();
   if (!toolPaths) {

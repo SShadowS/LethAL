@@ -1016,6 +1016,94 @@ describe("compileSchemataForFile — selector var injection into extension objec
       );
       expect(countErrorNodes(out)).toBe(0);
     });
+
+    // R729 shape 2 (AL0110): a comment between the removed call and the `else` hid the `else` from
+    // the filler's look-ahead, so it emitted `then ; else`.
+    it("R729: fills an emptied then-branch with an empty block when a comment sits before the else", () => {
+      for (const comment of ["// why\n", "/* why */ ", "// a\n  // b\n"]) {
+        const out = deletionAtFoo(
+          `codeunit 51046 "C" { procedure P(Cond: Boolean) begin if Cond then Foo() ${comment} else Bar(); end; }`,
+        );
+        expect(out).toContain("begin end");
+        expect(out).not.toMatch(/then\s*;\s*(\/\/[^\n]*\n|\/\*.*?\*\/|\s)*else/);
+        expect(countErrorNodes(out)).toBe(0);
+      }
+    });
+
+    // The other direction: a comment after the removed call but NO `else` behind it keeps `;`.
+    it("R729: a comment after an emptied then-branch with no else still gets `;`, not an empty block", () => {
+      for (const src of [
+        `codeunit 51048 "C" { procedure P(Cond: Boolean) begin if Cond then Foo() // c\n end; }`,
+        `codeunit 51049 "C" { procedure P(Cond: Boolean) begin if Cond then Foo() /* c */ ; Bar(); end; }`,
+        `codeunit 51050 "C" { procedure P(A: Boolean; B: Boolean) begin if A then if B then Foo() /* c */ ; end; }`,
+        `codeunit 51052 "C" { procedure P(W: Integer) begin case W of 1: Foo() // c\n end; end; }`,
+        `codeunit 51053 "C" { procedure P(W: Integer) begin case W of 1: Foo() /* c */ 2: Bar(); end; end; }`,
+      ]) {
+        const out = deletionAtFoo(src);
+        expect(out).not.toContain("begin end");
+        expect(countErrorNodes(out)).toBe(0);
+      }
+      const out = deletionAtFoo(
+        `codeunit 51051 "C" { procedure P(Cond: Boolean) begin if Cond then Foo() // c\n end; }`,
+      );
+      expect(out).toMatch(/if Cond then ;/);
+    });
+
+    it("R729: a comment before the `;` of a case arm still adds no second separator", () => {
+      const out = deletionAtFoo(
+        `codeunit 51047 "C" { procedure P(W: Integer) begin case W of 1: Foo() /* c */ ; 2: Bar(); end; end; }`,
+      );
+      expect(out).not.toContain(";;");
+      expect(out).not.toMatch(/;\s*\/\*[^*]*\*\/\s*;/);
+    });
+  });
+
+  /**
+   * R729 shape 1 (AL0111). `if X then;` (an inner `if` whose then is empty) is the whole body of an
+   * outer `if` or a case branch. Its one `;` ends both statements. A guard arm wraps the inner `if`
+   * as `begin <marker> if not (X) then; end`, and the next statement then follows `end` with no `;`.
+   */
+  describe("R729: an `if X then;` as the sole body of a slot", () => {
+    // Two specs: one on the OUTER statement's own expression, so the component root is the outer
+    // statement, and a negate-guard on the inner condition, which then sits in a slot of that root.
+    const negateInnerGuard = (src: string): string => {
+      const root = wrapRoot(parseAL(src));
+      const inner = findAll(root, ALNodeKind.if_statement).find((s) =>
+        s.text.startsWith("if Check"),
+      );
+      const cond = inner?.childForFieldName("condition") ?? null;
+      if (cond === null) throw new Error("no inner if in fixture");
+      // The procedure body is the component root, as in DC: the inner `if` sits in a slot of the
+      // outer statement, which sits in the body's statement list with a sibling after it.
+      const body = findAll(root, ALNodeKind.block)[0];
+      if (body === undefined) throw new Error("no body in fixture");
+      return compileSchemataForFile(src, root, [
+        spec(body, "begin end", "lethal.empty-block"),
+        spec(cond, `not (${cond.text})`, "lethal.negate-guard"),
+      ]);
+    };
+
+    it("keeps the `;` after the wrapping `end` when the outer is an if", () => {
+      const out = negateInnerGuard(
+        `codeunit 51050 "C" { procedure P(F: Boolean) begin if not F then if Check() then; Bar(); end; }`,
+      );
+      expect(out).toMatch(/if not \(Check\(\)\) then;\s*end;/);
+    });
+
+    it("keeps the `;` after the wrapping `end` when the outer is a case branch", () => {
+      const out = negateInnerGuard(
+        `codeunit 51051 "C" { procedure P(N: Integer) begin case N of 1: if Check() then; 2: Bar(); end; end; }`,
+      );
+      expect(out).toMatch(/if not \(Check\(\)\) then;\s*end;/);
+    });
+
+    it("adds no `;` after `end` when the inner if has a real body", () => {
+      const out = negateInnerGuard(
+        `codeunit 51052 "C" { procedure P(F: Boolean) begin if not F then if Check() then Bar(); Bar(); end; }`,
+      );
+      expect(out).not.toContain(";;");
+      expect(out).not.toMatch(/end;\s*;/);
+    });
   });
 });
 /**

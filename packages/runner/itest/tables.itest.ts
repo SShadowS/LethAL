@@ -50,6 +50,7 @@ import {
   itestConfigPath,
   itestLaunchPath,
   printItestTarget,
+  readFixtureConfig,
 } from "./config-path";
 import { TABLES_FIGURES } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
@@ -754,7 +755,7 @@ interface RunOnceResult {
 
 async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
   const launchCfg = await readOptionalLaunchConfig();
-  const configFile = await readJson<LethalConfigFile>(CONFIG_LOCAL_PATH, itestConfigName());
+  const configFile = readFixtureConfig(CONFIG_LOCAL_PATH, itestConfigName());
   const bcdev = validateBcDevConfig(configFile.bcdev);
   assertLaunchMatchesConfig(launchCfg, bcdev, LAUNCH_LOCAL_PATH);
 
