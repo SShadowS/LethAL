@@ -16,7 +16,8 @@ import { MARKER_HOST, MARKER_SERVERS } from "../packages/runner/itest/out-of-use
 import type { FetchFn } from "../packages/runner/src/activation.ts";
 import { readAppIdentity } from "../packages/runner/src/published-test-app.ts";
 import { buildFakeAppWithEntries } from "../packages/runner/tests/helpers/fake-app.ts";
-import type { Conn, ServerOps } from "./bc-app-content.ts";
+import { CONTROL_SELECTOR_FILENAME } from "../packages/schemata/src/project.ts";
+import { type Conn, type ServerOps, sha256Of } from "./bc-app-content.ts";
 import {
   GATE_FIXTURES,
   HOST,
@@ -850,10 +851,17 @@ describe("--write-config-only: configs from the secret file, no server call, no 
   // -------------------------------------------------------------------------------------------
   // R599: the setup driver decides every app, then acts only if nothing was refused.
 
-  const appPkg = (name: string, id: string, version = "1.0.0.0", publisher = "LethAL") =>
+  const appPkg = (
+    name: string,
+    id: string,
+    version = "1.0.0.0",
+    publisher = "LethAL",
+    extra: Record<string, string> = {},
+  ) =>
     buildFakeAppWithEntries({
       "NavxManifest.xml": `<Package><App Id="${id}" Name="${name}" Publisher="${publisher}" Version="${version}" /><Build Timestamp="t" CompilerVersion="18.0.43.1464" /></Package>`,
       "src/a.al": name,
+      ...extra,
     });
   const rowAt = (version: string) => {
     const [a, b, c, d] = version.split(".").map(Number);
@@ -875,12 +883,19 @@ describe("--write-config-only: configs from the secret file, no server call, no 
    */
   function fleet(
     refuseLast: boolean,
-    // R-707: `check` stands in for the resident-source compile; `uninstalled` has no resident row.
-    opts: { check?: (name: string) => void; uninstalled?: string } = {},
+    // R-707: `check` stands in for the resident-source compile (it sees the dependent's name and the
+    // sha256 of the target bytes it was given); `uninstalled` has no resident row; `states` makes a
+    // resident build older ("older": the local build upgrades it) or a newer minted one ("kept").
+    opts: {
+      check?: (name: string, targetSha: string) => void;
+      uninstalled?: string;
+      states?: Record<string, "older" | "kept">;
+    } = {},
   ) {
     const calls = {
       publish: [] as string[],
       checked: [] as string[],
+      targetShas: [] as string[],
       continiaReads: 0,
       doctor: 0,
       take: 0,
@@ -893,11 +908,24 @@ describe("--write-config-only: configs from the secret file, no server call, no 
         const b = appPkg(dir, `${dir}-id`);
         local.set(dir, b);
         if (dir === "sandbox-probes" || dir === opts.uninstalled) continue;
+        const state = opts.states?.[dir];
         resident.set(
           dir,
-          refuseLast && dir === last
-            ? { pkg: appPkg(dir, `${dir}-id`, "1.0.0.9"), version: "1.0.0.9" }
-            : { pkg: b, version: "1.0.0.0" },
+          state === "older"
+            ? {
+                pkg: appPkg(dir, `${dir}-id`, "0.9.0.0", "LethAL", { "src/old.al": "old" }),
+                version: "0.9.0.0",
+              }
+            : state === "kept"
+              ? {
+                  pkg: appPkg(dir, `${dir}-id`, "1.0.0.9", "LethAL", {
+                    [`src/${CONTROL_SELECTOR_FILENAME}`]: "sel",
+                  }),
+                  version: "1.0.0.9",
+                }
+              : refuseLast && dir === last
+                ? { pkg: appPkg(dir, `${dir}-id`, "1.0.0.9"), version: "1.0.0.9" }
+                : { pkg: b, version: "1.0.0.0" },
         );
       }
     }
@@ -938,10 +966,12 @@ describe("--write-config-only: configs from the secret file, no server call, no 
           ...(dir === step.target ? {} : { targetDir: step.target }),
         })),
       serverOps: () => ops,
-      checkResident: async (_c, _target, pkg) => {
+      checkResident: async (_c, target, pkg) => {
         const name = readAppIdentity(pkg).name;
+        const sha = sha256Of(target.bytes);
         calls.checked.push(name);
-        opts.check?.(name);
+        calls.targetShas.push(sha);
+        opts.check?.(name, sha);
       },
       continiaOps: () => ({
         residentVersion: async (publisher, name) => {
@@ -960,7 +990,7 @@ describe("--write-config-only: configs from the secret file, no server call, no 
         return true;
       },
     });
-    return { calls, over };
+    return { calls, over, local, resident };
   }
 
   test("one refusal in the LAST step: NOTHING is published in any step, Continia included", async () => {
@@ -1029,13 +1059,15 @@ describe("--write-config-only: configs from the secret file, no server call, no 
       const code = await h.go(["--server", "bc3", "--lane", "bugs"]);
       return { code, out: h.printed.join("\n") };
     };
-    const dependents = PUBLISH_PLAN.flatMap((s) => s.dependents);
+    const AL_ERR = "alc failed on x (exit 1):\nsrc/T.al(7,21): error AL0135: no argument";
+    // sandbox-app's resident build is older, so the local one UPGRADES it: the target publishes.
+    const publishing = { states: { "sandbox-app": "older" } } as const;
 
     test("T-cochange: the resident source breaks against the new target: refused, zero publishes", async () => {
       const f = fleet(false, {
+        ...publishing,
         check: (name) => {
-          if (name === "sandbox-tests")
-            throw new Error("alc failed on x (exit 1):\nsrc/T.al(7,21): error AL0135: no argument");
+          if (name === "sandbox-tests") throw new Error(AL_ERR);
         },
       });
       const r = await go(f);
@@ -1046,24 +1078,71 @@ describe("--write-config-only: configs from the secret file, no server call, no 
       expect(r.code).toBe(1);
     });
 
-    test("T-resident-ok: every installed dependent is checked, and the run publishes as before", async () => {
-      const f = fleet(false);
+    test("T-resident-ok: a publishing target's installed dependent is checked against the NEW target build, and the run publishes", async () => {
+      const f = fleet(false, publishing);
+      const residentSha = sha256Of(f.resident.get("sandbox-app")?.pkg as Buffer); // before the run replaces it
       const r = await go(f);
-      expect(f.calls.checked.sort()).toEqual([...dependents].sort());
+      expect(f.calls.checked).toEqual(["sandbox-tests"]);
+      expect(f.calls.targetShas).toEqual([sha256Of(f.local.get("sandbox-app") as Buffer)]);
+      expect(f.calls.targetShas).not.toContain(residentSha);
+      expect(r.out).toContain(
+        "  checked   sandbox-tests (resident) against sandbox-app 1.0.0.0: ok",
+      );
       expect(f.calls.publish).toContain("LethAL_sandbox-probes_1.0.0.0.app");
       expect(r.code).toBe(0);
     });
 
-    test("T-not-installed: a dependent with no resident row is not checked", async () => {
-      const f = fleet(false, { uninstalled: "sandbox-tests" });
+    test("T-skipped: a skipped target with a skipped dependent is not checked", async () => {
+      const f = fleet(false);
       const r = await go(f);
-      expect(f.calls.checked).not.toContain("sandbox-tests");
-      expect(f.calls.checked.length).toBe(dependents.length - 1);
+      expect(f.calls.checked).toEqual([]);
+      expect(r.code).toBe(0);
+    });
+
+    test("T-kept-breaks: a KEPT target and a dependent that publishes but fails against the resident target: refused, zero publishes", async () => {
+      const f = fleet(false, {
+        states: { "sandbox-app": "kept", "sandbox-tests": "older" },
+        check: () => {
+          throw new Error(AL_ERR);
+        },
+      });
+      const r = await go(f);
+      expect(r.out).toContain("kept      minted target sandbox-app");
+      expect(r.out).toContain("refuse dependent-vs-kept-target: sandbox-tests (src/T.al(7,21)");
+      expect(r.out).toContain("--mint");
+      expect(f.calls.publish).toEqual([]);
+      expect(f.calls.doctor).toBe(0);
+      expect(r.code).toBe(1);
+    });
+
+    test("T-kept-ok: the same with a compatible dependent publishes; the check ran on the NEW dependent against the RESIDENT target", async () => {
+      const f = fleet(false, { states: { "sandbox-app": "kept", "sandbox-tests": "older" } });
+      const r = await go(f);
+      expect(f.calls.checked).toEqual(["sandbox-tests"]);
+      expect(f.calls.targetShas).toEqual([sha256Of(f.resident.get("sandbox-app")?.pkg as Buffer)]);
+      expect(r.out).toContain(
+        "  checked   sandbox-tests (new build) against kept sandbox-app 1.0.0.9: ok",
+      );
+      expect(f.calls.publish).toContain("LethAL_sandbox-probes_1.0.0.0.app");
+      expect(r.code).toBe(0);
+    });
+
+    test("T-kept-skip: a kept target whose dependent is only skipped is not checked", async () => {
+      const f = fleet(false, { states: { "sandbox-app": "kept" } });
+      await go(f);
+      expect(f.calls.checked).toEqual([]);
+    });
+
+    test("T-not-installed: a dependent with no resident row is not checked", async () => {
+      const f = fleet(false, { ...publishing, uninstalled: "sandbox-tests" });
+      const r = await go(f);
+      expect(f.calls.checked).toEqual([]);
       expect(r.out).not.toContain("refuse");
     });
 
     test("T-not-compile: a throw with no AL error line is not called a break, and nothing is sent", async () => {
       const f = fleet(false, {
+        ...publishing,
         check: () => {
           throw new Error("the dev endpoint refused the login (HTTP 401)");
         },

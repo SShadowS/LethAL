@@ -81,6 +81,7 @@ import {
   appJsonFromManifest,
   contentDigest,
   decideAll,
+  dependencyBytes,
   guardResident,
   headerPackageId,
   manifest,
@@ -88,6 +89,7 @@ import {
   publishBytes,
   realOps,
   refusals,
+  refuseDependent,
   residentPackage,
   sha256Of,
 } from "./bc-app-content.ts";
@@ -673,7 +675,9 @@ export async function compileResidentSource(
   if (sources.length === 0)
     throw new Error(`resident ${id.name} carries no AL source, so it cannot be checked`);
   const scratch = resolve(build, `resident-${id.name.replace(/[^\w.-]/g, "_")}`);
-  rmSync(scratch, { recursive: true, force: true });
+  // M-1: an old output must not satisfy alc's output check.
+  for (const p of [scratch, `${scratch}.app`, `${scratch}-symbols`])
+    rmSync(p, { recursive: true, force: true });
   for (const s of sources) {
     const dest = resolve(scratch, s.path);
     if (!dest.startsWith(`${scratch}${sep}`))
@@ -688,10 +692,7 @@ export async function compileResidentSource(
   for (const d of (manifest(scratch).dependencies ?? []).filter(
     (x) => x.publisher !== "Microsoft",
   )) {
-    const dep =
-      d.name === target.name && d.publisher === target.publisher
-        ? target.bytes
-        : await residentPackage(c, d.publisher, d.name);
+    const dep = await dependencyBytes(d, target, () => residentPackage(c, d.publisher, d.name));
     if (dep === null)
       throw new Error(`resident ${id.name}: dependency ${d.name} is not on ${c.server}`);
     writeFileSync(join(symbols, `${d.publisher}_${d.name}.app`), dep);
@@ -1349,33 +1350,65 @@ async function setupServer(
       ? await decideContinia(cops, deps.continiaFiles(), summary, args.acceptBuild)
       : { ok: true, toPublish: [] };
     const ops = deps.serverOps(conn);
+    const decided: Decided[] = await decideAll(items, ops, "setup", log);
     if (compiled) {
-      // R-707: an installed dependent's RESIDENT source must still compile against the new target.
-      const pairs: ResidentPair[] = [];
+      // R-707: read-only, so still before any state-changing call. A pair is checked against the
+      // target the server will HOLD after this run: the new build when the target publishes, the
+      // resident one when it is kept or skipped.
+      const publishes = (dir: string) =>
+        decided.find((d) => d.item.dir === dir)?.decision.action === "publish";
+      const toPublish: ResidentPair[] = [];
+      const againstKept: ResidentPair[] = [];
       for (const step of PUBLISH_PLAN) {
         for (const dep of step.dependents) {
           const local = items.find((i) => i.dir === dep)?.local;
           if (local === undefined) continue;
           const id = readAppIdentity(local);
-          pairs.push({
+          const pair = {
             target: step.target,
             dependent: { dir: dep, name: id.name, publisher: id.publisher },
-          });
+          };
+          if (publishes(step.target)) toPublish.push(pair);
+          else if (publishes(dep)) againstKept.push(pair);
         }
       }
+      const build = (dir: string) => {
+        const bytes = items.find((i) => i.dir === dir)?.local;
+        if (bytes === undefined) throw new Error(`no build of ${dir}`);
+        return { bytes, ...readAppIdentity(bytes) };
+      };
       try {
-        await guardResident(pairs, ops.resident, async (pair, pkg) => {
-          const bytes = items.find((i) => i.dir === pair.target)?.local;
-          if (bytes === undefined) throw new Error(`no build of ${pair.target}`);
-          const id = readAppIdentity(bytes);
-          await deps.checkResident(conn, { publisher: id.publisher, name: id.name, bytes }, pkg);
+        await guardResident(toPublish, ops.resident, async (pair, pkg) => {
+          const t = build(pair.target);
+          await deps.checkResident(
+            conn,
+            { publisher: t.publisher, name: t.name, bytes: t.bytes },
+            pkg,
+          );
+          log(`  checked   ${pair.dependent.name} (resident) against ${t.name} ${t.version}: ok`);
         });
+        for (const pair of againstKept) {
+          const t = build(pair.target);
+          try {
+            const resident = await ops.resident(t.publisher, t.name);
+            if (resident === null) throw new Error(`${t.name} is not on ${server}`);
+            await deps.checkResident(
+              conn,
+              { publisher: t.publisher, name: t.name, bytes: resident },
+              build(pair.dependent.dir).bytes,
+            );
+            log(
+              `  checked   ${pair.dependent.name} (new build) against kept ${t.name} ${readAppIdentity(resident).version}: ok`,
+            );
+          } catch (err) {
+            throw refuseDependent("dependent-vs-kept-target", pair.dependent.name, err);
+          }
+        }
       } catch (err) {
         compiled = false;
         summary.push(`  FAILED    ${errText(err)}`);
       }
     }
-    const decided: Decided[] = await decideAll(items, ops, "setup", log);
     const refused = refusals(decided);
     if (!compiled || refused.length > 0 || !continia.ok) {
       summary.push(

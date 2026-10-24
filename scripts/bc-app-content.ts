@@ -611,19 +611,21 @@ function appIdOf(b: Buffer): string {
 
 /** A line alc prints for a real compile error (`...: error AL0135: ...`). */
 const COMPILE_ERROR = /\berror [A-Z]+\d+\b/;
+const NOT_FOUND = /\bAL1022\b|package\b.*\bnot found|could not be found/i;
 
 /**
  * The refusal for a dependent check that threw. Only a throw that carries an alc error line is a
  * compile result ("breaks"); any other (a symbol download, a missing alc, no source) is not, and says so.
  */
 export function refuseDependent(
-  label: "dependent-breaks" | "resident-dependent-breaks",
+  label: "dependent-breaks" | "resident-dependent-breaks" | "dependent-vs-kept-target",
   name: string,
   err: unknown,
 ): Error {
   const text = err instanceof Error ? err.message : String(err);
   const lines = text.split(/\r?\n/);
-  const hit = lines.find((l) => COMPILE_ERROR.test(l));
+  // M-3: a missing package (AL1022 and its kin) is a dependency-resolution fault, not a code break.
+  const hit = lines.find((l) => COMPILE_ERROR.test(l) && !NOT_FOUND.test(l));
   if (hit === undefined)
     return new Error(
       `refuse dependent check failed (not a compile result): ${name} (${lines[0]?.trim()})\nNOTHING was published.`,
@@ -631,7 +633,9 @@ export function refuseDependent(
   const remedy =
     label === "dependent-breaks"
       ? "Fix the dependent's source, or change the target so it still compiles."
-      : "BC recompiles the installed dependent from its resident source, refuses, and can fail to restore (R709). Safe manual sequence: (1) uninstall and unpublish the dependent; (2) publish the target; (3) publish the new dependent build (R605: a same-version test-app republish is accepted after an unpublish).";
+      : label === "dependent-vs-kept-target"
+        ? "The new dependent build does not compile against the target the server keeps. The target must be published first, which after a gate run means --mint (R605)."
+        : "BC recompiles the installed dependent from its resident source, refuses, and can fail to restore (R709). Safe manual sequence: (1) uninstall and unpublish the dependent; (2) publish the target (after a gate run, with --mint, R605); (3) publish the new dependent build (R605: a same-version test-app republish is accepted after an unpublish).";
   return new Error(`refuse ${label}: ${name} (${hit.trim()})\nNOTHING was published. ${remedy}`);
 }
 
@@ -662,6 +666,15 @@ export async function guardResident(
   }
 }
 
+/** The package a resident-source compile puts in the symbols dir for one dependency: the new target build for the target, else `lookup`. */
+export async function dependencyBytes(
+  d: { readonly name: string; readonly publisher: string },
+  target: { readonly name: string; readonly publisher: string; readonly bytes: Buffer },
+  lookup: () => Promise<Buffer | null>,
+): Promise<Buffer | null> {
+  return d.name === target.name && d.publisher === target.publisher ? target.bytes : lookup();
+}
+
 /** An `app.json` for a resident package, from its `NavxManifest.xml` (the package carries no app.json). */
 export function appJsonFromManifest(pkg: Buffer): Record<string, unknown> {
   const xml = readPackageEntry(pkg, "NavxManifest.xml")?.toString("utf8");
@@ -670,6 +683,9 @@ export function appJsonFromManifest(pkg: Buffer): Record<string, unknown> {
     Object.fromEntries([...tag.matchAll(/(\w+)="([^"]*)"/g)].map((m) => [m[1], m[2]]));
   const appTag = /<App\s[^>]*>/.exec(xml)?.[0];
   if (appTag === undefined) throw new Error("resident package manifest has no <App> element");
+  // M-2: preprocessor symbols change what alc compiles; app.json cannot carry them, so refuse to guess.
+  if (/<PreprocessorSymbols\s*>\s*<\w/.test(xml))
+    throw new Error("resident package manifest has <PreprocessorSymbols> children; not rebuilt");
   const a = attrs(appTag);
   const opt = (k: string, v: string | undefined) => (v === undefined ? {} : { [k]: v });
   return {

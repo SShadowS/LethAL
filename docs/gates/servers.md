@@ -50,8 +50,9 @@ the source inside its resident package. If a target change breaks that source, B
 fail to restore: the target is left uninstalled and the tests app is gone. Setup and `bc-republish.ts` now read
 each installed dependent's resident source and compile it against the new target build BEFORE anything is sent;
 a break refuses the whole run (`resident-dependent-breaks`, R-707), also when the new tests app is published
-together with the target. The safe manual sequence: (1) uninstall and unpublish the dependent; (2) publish the
-target; (3) publish the new dependent build (R605: a same-version test-app republish is accepted after an
+together with the target. A new tests app that publishes while its target is KEPT (a gate-deployed target) is
+checked against the resident target (`dependent-vs-kept-target`). The safe manual sequence: (1) uninstall and
+unpublish the dependent; (2) publish the target (after a gate run, with `--mint`, R605); (3) publish the new dependent build (R605: a same-version test-app republish is accepted after an
 unpublish). To recover a stripped server: the owner restarts it, then re-run setup (not measured; rests on R605).
 
 For each server it:

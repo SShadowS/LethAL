@@ -3,8 +3,10 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ServerOutOfUseError } from "../packages/runner/itest/out-of-use.ts";
+import { buildFakeAppWithEntries } from "../packages/runner/tests/helpers/fake-app.ts";
 import type { AppManifest } from "./bc-linux-setup.ts";
 import {
+  againstBuilt,
   controlAction,
   guardDependents,
   packageStatus,
@@ -212,6 +214,34 @@ describe("R-707: guardDependents compiles unrequested dependents before anything
     expect(r.error?.message).toContain("dependent check failed (not a compile result)");
     expect(r.error?.message).not.toContain("dependent-breaks");
     expect(r.published.length).toBe(0);
+  });
+});
+
+describe("R-707: againstBuilt checks the resident dependent against the NEW local build", () => {
+  const pkgOf = (name: string, version: string) =>
+    buildFakeAppWithEntries({
+      "NavxManifest.xml": `<Package><App Id="${name}-id" Name="${name}" Publisher="LethAL" Version="${version}" /></Package>`,
+    });
+  test("the bytes reaching the compile are the items' local target, not the resident package; a pass is logged", async () => {
+    const local = pkgOf("T", "1.0.0.5");
+    const resident = pkgOf("TT", "1.0.0.1");
+    const seen: Buffer[] = [];
+    const lines: string[] = [];
+    const check = againstBuilt(
+      [{ dir: "t", local, role: "target", gateDeploys: false }],
+      async (target, pkg) => {
+        expect(target.name).toBe("T");
+        expect(pkg).toBe(resident);
+        seen.push(target.bytes);
+      },
+      (s) => lines.push(s),
+    );
+    await check(
+      { target: "t", dependent: { dir: "tt", name: "TT", publisher: "LethAL" } },
+      resident,
+    );
+    expect(seen).toEqual([local]);
+    expect(lines).toEqual(["  checked   TT (resident) against T 1.0.0.5: ok"]);
   });
 });
 

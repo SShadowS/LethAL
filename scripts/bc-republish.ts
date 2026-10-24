@@ -261,6 +261,27 @@ export async function guardDependents(
   await publish();
 }
 
+/**
+ * The `guardResident` compile step for a run: the dependent's resident package is checked against the
+ * NEW local build of the pair's target (never the resident one), and a pass is logged.
+ */
+export function againstBuilt(
+  items: readonly AppItem[],
+  run: (
+    target: { readonly publisher: string; readonly name: string; readonly bytes: Buffer },
+    pkg: Buffer,
+  ) => Promise<void>,
+  log: (s: string) => void,
+): (pair: ResidentPair, pkg: Buffer) => Promise<void> {
+  return async (pair, pkg) => {
+    const bytes = items.find((i) => i.dir === pair.target)?.local;
+    if (bytes === undefined) throw new Error(`no build of ${pair.target}`);
+    const id = readAppIdentity(bytes);
+    await run({ publisher: id.publisher, name: id.name, bytes }, pkg);
+    log(`  checked   ${pair.dependent.name} (resident) against ${id.name} ${id.version}: ok`);
+  };
+}
+
 /** Each requested app with each fixture that depends on it (direct dependents only). */
 export function residentPairs(
   requested: readonly string[],
@@ -406,18 +427,12 @@ async function republish(args: Args): Promise<void> {
       async (dir) => void (await compileDir(dir, `${dir}-check.app`)),
       {
         fetch: ops.resident,
-        compile: async (pair, pkg) => {
-          const bytes = items.find((i) => i.dir === pair.target)?.local;
-          if (bytes === undefined) throw new Error(`no build of ${pair.target}`);
-          const id = readAppIdentity(bytes);
-          await compileResidentSource(
-            c,
-            tools.alcPath,
-            join(build, "resident"),
-            { publisher: id.publisher, name: id.name, bytes },
-            pkg,
-          );
-        },
+        compile: againstBuilt(
+          items,
+          (target, pkg) =>
+            compileResidentSource(c, tools.alcPath, join(build, "resident"), target, pkg),
+          log,
+        ),
       },
       async () => {
         try {
