@@ -3627,7 +3627,9 @@ describe("R389: no verdict or baseline crosses a closed-world guard flip", () =>
       super("pass", undefined, abortFromDeploy);
       this.served = PKG;
     }
-    async dependentCount(): Promise<number> {
+    async dependentCount(appId: string): Promise<number> {
+      // R727: the run's one ask for the TARGET is not the guard's, and is not counted.
+      if (appId === APP_ID) return 0;
       this.asked += 1;
       return this.answer(this.asked);
     }

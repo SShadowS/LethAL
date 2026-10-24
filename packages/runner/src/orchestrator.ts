@@ -117,6 +117,7 @@ import {
   dependencySourceDigest,
   dependencySourceWarning,
 } from "./dependency-report-source";
+import { checkDependents } from "./dependents-warning";
 import type { PublishOutcome } from "./deployment-verifier";
 import {
   DependencyUnreadableError,
@@ -6584,6 +6585,8 @@ async function runSessionBody(
     // R-422: the backslash-path warning fires once per session; every batch re-reads the same
     // manifest snapshot, so every batch would report the same changes.
     let appJsonPathsWarned = false;
+    // R727: once per run, before the FIRST target publish; warn only.
+    let dependentsChecked = false;
     for (const [batchIdx, batchFiles] of artifacts.entries()) {
       // Layer 5C-B1 (design §6): a lease lost during THIS batch invalidates exactly THIS batch's
       // verdicts (at the loss and again at session end, R508) — earlier batches stand, every RunMutant in them having been
@@ -6935,6 +6938,17 @@ async function runSessionBody(
       // needs the compiled app. `capabilities().deploy` still describes
       // publish cost for callers, it just no longer gates this call.
       emit({ type: "phase-entered", phase: "deploy" });
+      if (!dependentsChecked) {
+        dependentsChecked = true;
+        const name = typeof projectManifest.name === "string" ? projectManifest.name : "(unnamed)";
+        const dependentsMessage = await checkDependents(cfg.backend, cfg.testDir, {
+          name,
+          id: targetAppIdOf(projectManifest),
+        });
+        if (dependentsMessage !== null) {
+          emit({ type: "warning", code: "installed-dependents", message: dependentsMessage });
+        }
+      }
       let compiled: CompiledArtifact | null = null;
       let deployed = false;
       let deployErr: unknown;

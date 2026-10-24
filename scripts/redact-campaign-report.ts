@@ -23,8 +23,9 @@
  *
  * BC's own error text is kept by the same rule: a mutant's `failureNote` and a `quarantined.reason`
  * can quote BC's answer (the stop 408's words, and since R692 up to 400 characters of a RunMutant
- * HTTP error body), which may name record values of the target database. Whether those fields should
- * go too is an open question for the owner (R-699, 2026-10-24); until then they are not touched.
+ * HTTP error body), which may name record values of the target database. The owner ruled on
+ * 2026-10-24 (R-699b) that both fields are KEPT, like `killingTestFailure`. The script never
+ * touches them, and a test pins that.
  *
  * WHAT THIS DOES NOT DO. It does not remove anything from git history. A report already pushed to a
  * public remote has been fetchable since the moment it landed; running this afterwards changes what a

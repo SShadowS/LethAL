@@ -78,6 +78,7 @@ import { bundleFor, tinyBundle } from "./helpers/bundle";
 import { IDLE_STATUS, leaseRouter } from "./helpers/lease-wire";
 import type { WireAnswer } from "./helpers/lease-wire";
 import { scratchDirs } from "./helpers/scratch";
+import { ignoreTargetAsk } from "./helpers/target-ask";
 import { testDbPath } from "./helpers/test-db";
 
 const scratch = scratchDirs();
@@ -86,6 +87,7 @@ const scratch = scratchDirs();
 async function v3RunnerBuild(): Promise<{ version: string; binarySha256: string }> {
   return { version: "alrunner 3.0.0-alpha.2 (91253f2d6)", binarySha256: "b".repeat(64) };
 }
+import { UpgradeNotRestoredError } from "../src/app-version";
 import {
   DependencyUnreadableError,
   type MicrosoftMode,
@@ -114,7 +116,6 @@ import {
   runSession,
   upgradeNotRestored,
 } from "../src/orchestrator";
-import { UpgradeNotRestoredError } from "../src/app-version";
 import type {
   LeaseFence,
   LeaseSessionConfig,
@@ -313,6 +314,10 @@ const SECOND_FILE_AL = `codeunit 79001 "Sandbox Other"
 `;
 
 const APP_ID = "11111111-1111-1111-1111-111111111111";
+/** R727: the TARGET's id in a project whose run asks `dependentCount` (`distinctTarget`); the TESTS
+ *  app, and the published package a guard digests, is APP_ID. Other projects keep APP_ID, since
+ *  committed snapshots hash this app.json. */
+const TARGET_APP_ID = "22222222-2222-2222-2222-222222222222";
 const APP_JSON = JSON.stringify(
   {
     id: APP_ID,
@@ -458,6 +463,11 @@ class StubBackend implements ExecutionBackend {
 
 function reachedOf(reachedActive: boolean | undefined): { reachedActive?: boolean } {
   return reachedActive !== undefined ? { reachedActive } : {};
+}
+
+/** R727: give the target its own id, so a fake `dependentCount` can tell its ask from the guard's. */
+async function distinctTarget(projectDir: string) {
+  await Bun.write(join(projectDir, "app.json"), APP_JSON.replace(APP_ID, TARGET_APP_ID));
 }
 
 async function makeProject(testAl: string = TEST_AL) {
@@ -680,6 +690,7 @@ describe("runSession", () => {
     ) {
       const dirs = await makeProject(NEW_AL);
       await Bun.write(join(dirs.testDir, "app.json"), JSON.stringify(testApp));
+      if (dependentCount !== undefined) await distinctTarget(dirs.projectDir);
       const stub = new StubBackend(CAPS_NST, (m) => (m === null ? "pass" : "fail"), [
         "IsOverBudget",
       ]);
@@ -687,7 +698,9 @@ describe("runSession", () => {
         ? Object.assign(stub, {
             fetchPublishedAppPackage: typeof read === "function" ? read : async () => read,
             ...(microsoft !== null ? { microsoftMode: () => microsoft } : {}),
-            ...(dependentCount !== undefined ? { dependentCount } : {}),
+            ...(dependentCount !== undefined
+              ? { dependentCount: ignoreTargetAsk(TARGET_APP_ID, dependentCount) }
+              : {}),
           })
         : stub;
       const store = extra.store ?? new ResultsStore(":memory:");
@@ -910,7 +923,7 @@ describe("runSession", () => {
           {
             fetchPublishedAppPackage: async () => OLD_PKG,
             microsoftMode: () => provenMode(),
-            dependentCount: async () => later,
+            dependentCount: ignoreTargetAsk(TARGET_APP_ID, async () => later),
           },
         );
         // R618: --resume-run refuses a finished run, so resume it as an interrupted one.
@@ -934,6 +947,7 @@ describe("runSession", () => {
     test("R618 Q1: a quarantined closed-world run is confirmed, unfinished, and found by --resume", async () => {
       const dirs = await makeProject(NEW_AL);
       await Bun.write(join(dirs.testDir, "app.json"), JSON.stringify({ ...TESTS_APP, id: APP_ID }));
+      await distinctTarget(dirs.projectDir);
       // Stateful: mutants survive until the second mutant call, which goes in-flight-unknown.
       let mutantCalls = 0;
       let guardAsked = 0;
@@ -942,10 +956,10 @@ describe("runSession", () => {
       const backend = Object.assign(stub, {
         fetchPublishedAppPackage: async () => OLD_PKG,
         microsoftMode: () => provenMode(),
-        dependentCount: async () => {
+        dependentCount: ignoreTargetAsk(TARGET_APP_ID, async () => {
           guardAsked++;
           return 0;
-        },
+        }),
         run: async (ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> => {
           if ((stub.activations.at(-1) ?? null) !== null && ++mutantCalls > 1) {
             return { ref, outcome: "error", durationMs: 5, operation: "in-flight-unknown" };
@@ -979,7 +993,7 @@ describe("runSession", () => {
         backend: Object.assign(new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]), {
           fetchPublishedAppPackage: async () => OLD_PKG,
           microsoftMode: () => provenMode(),
-          dependentCount: async () => 0,
+          dependentCount: ignoreTargetAsk(TARGET_APP_ID, async () => 0),
         }),
         store,
         ...dirs,
@@ -9009,6 +9023,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         join(dirs.testDir, "app.json"),
         JSON.stringify(o.dependentCount !== undefined ? { ...TESTS_APP, id: APP_ID } : TESTS_APP),
       );
+      if (o.dependentCount !== undefined) await distinctTarget(dirs.projectDir);
       const testAppFile = join(dirs.testDir, "..", "Tests.app");
       const depFile = join(dirs.testDir, "..", "Dep.app");
       writeFileSync(testAppFile, P1);
@@ -9082,7 +9097,9 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       });
       const backend = leaseBackend({
         fetchPublishedAppPackage: fetch,
-        ...(o.dependentCount !== undefined ? { dependentCount: o.dependentCount } : {}),
+        ...(o.dependentCount !== undefined
+          ? { dependentCount: ignoreTargetAsk(TARGET_APP_ID, o.dependentCount) }
+          : {}),
         ...(o.noMicrosoftMode === true
           ? {}
           : {
