@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import type { ActivationConfig } from "../src/activation";
 import type { TestMethodRef } from "../src/backend";
 import { UnfilteredExtensionsQueryError } from "../src/harness";
@@ -10,7 +10,11 @@ import {
   RunMutantTransport,
   isAlStopResponse,
 } from "../src/run-mutant-transport";
-import { describeStaleTestApp, runMutantLineCountMessage } from "../src/stale-test-app";
+import {
+  describeStaleTestApp,
+  isRunMutantFoundNone,
+  runMutantLineCountMessage,
+} from "../src/stale-test-app";
 
 const CFG: ActivationConfig = {
   baseUrl: "http://bc:7048/BC",
@@ -145,6 +149,23 @@ describe("RunMutantTransport.run — terminal mapping", () => {
     expect(describeStaleTestApp(v.failureMessage)).toBeDefined();
   });
 
+  // R688 (T1, S8): a wrong or stale binary that also blanks discovery must read as the identity
+  // fault, never as a found-0 answer the orchestrator would confirm and score per mutant.
+  test("R688 T1: zero test lines with identityMismatch true is the identity fault, not found 0", async () => {
+    const found0 = { error: "expected exactly one method OverBudgetDetected, found 0" };
+    const v = await transport(
+      okFetch(echo({ codeunitResults: JSON.stringify(found0), identityMismatch: true })),
+    ).run(REQ);
+    expect(v.outcome).toBe("error");
+    expect(v.failureMessage).toContain("identity mismatch");
+    expect(isRunMutantFoundNone(v.failureMessage)).toBe(false);
+    // The negative: false keeps the found-0 text byte for byte.
+    const kept = await transport(
+      okFetch(echo({ codeunitResults: JSON.stringify(found0), identityMismatch: false })),
+    ).run(REQ);
+    expect(kept.failureMessage).toBe(runMutantLineCountMessage(0, found0.error));
+  });
+
   test("zero test lines with no server error key: the message is unchanged", async () => {
     // `{"testResults":[]}` is a distinct, unmeasured server state. It must stay exactly as
     // informative (and as unclassified) as it was before R139, never gain an invented annotation.
@@ -263,6 +284,34 @@ describe("RunMutantTransport.run — 5B dispatch classification", () => {
     const v = await transport(five00).run(REQ);
     expect(v.outcome).toBe("error");
     expect(v.operation).toBe("in-flight-unknown");
+  });
+
+  // R692: BC's own error text reaches the message; the verdict and the operation do not change.
+  test("R692: a 500 with an error body puts BC's text in the message, verdict unchanged", async () => {
+    // Only the RunMutant call carries the text; the answer read-back that follows gets "boom".
+    const five00 = (async (url: unknown, _init?: RequestInit) =>
+      new Response(
+        String(url).includes("RunMutant") ? "The record Quux is locked by another user" : "boom",
+        { status: 500 },
+      )) as typeof fetch;
+    const v = await transport(five00).run(REQ);
+    expect(v.failureMessage).toContain("HTTP 500");
+    expect(v.failureMessage).toContain("The record Quux is locked by another user");
+    expect(v.outcome).toBe("error");
+    expect(v.operation).toBe("in-flight-unknown");
+    expect(v.fencedOp).toEqual({ attemptId: "a1", opSeq: 7 });
+  });
+
+  test("R692: a 500 body that never ends is bounded, noted, and the verdict is unchanged", async () => {
+    const hang = (async (_url: unknown, _init?: RequestInit) =>
+      new Response(new ReadableStream({ start() {} }), { status: 500 })) as typeof fetch;
+    // The timeout is tiny, so the bound on the read is tiny too: no 15 s wait.
+    const v = await transport(hang).run({ ...REQ, timeoutMs: 40 });
+    expect(v.failureMessage).toContain("HTTP 500");
+    expect(v.failureMessage).toContain("(body unread:");
+    expect(v.outcome).toBe("error");
+    expect(v.operation).toBe("in-flight-unknown");
+    expect(v.fencedOp).toEqual({ attemptId: "a1", opSeq: 7 });
   });
 
   test("2xx malformed body → in-flight-unknown", async () => {
@@ -733,6 +782,34 @@ describe("RunMutantTransport.run — R53 server-side stop", () => {
     expect(v.outcome).toBe("timeout");
     expect(v.operation).toBeUndefined();
     expect(v.failureMessage).toContain("stopped the session");
+  });
+
+  test("R710: a wall-clock step back during the held request does not shorten the stop row", async () => {
+    const { fetchFn, answer } = heldFetch();
+    const realNow = Date.now;
+    let stepped = false;
+    const spy = spyOn(Date, "now").mockImplementation(() => realNow() - (stepped ? 5_000 : 0));
+    try {
+      const v = await transport(fetchFn).run({
+        ...REQ,
+        timeoutMs: 20,
+        onBudgetExceeded: async () => {
+          stepped = true; // the host corrects the clock while BC holds the request
+          answer(new Response(AL_STOP_BODY, { status: 408 }));
+          // The stop confirms a little LATE: the grace wait (`stopDeadline` in execute, `left` in
+          // settleStop) must read one clock on both sides, or the wait is skipped and the state
+          // stays `issued`.
+          await new Promise((r) => setTimeout(r, 20));
+          return { stopped: true };
+        },
+      });
+      expect(v.stopState).toBe("confirmed");
+      expect(v.outcome).toBe("timeout");
+      expect(v.durationMs).toBeGreaterThanOrEqual(20);
+      expect(v.durationMs).toBeLessThan(20 + 30_000);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   // The half the first draft never reached: a 408 that DOES say "stopped the session" but does not

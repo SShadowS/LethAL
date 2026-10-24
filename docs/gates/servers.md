@@ -28,6 +28,7 @@ your lane: `--lane <lane>` if given, else your kraken agent identity (`KRAKEN_AG
 the run names, setup refuses the WHOLE run by name, in every mode, before it reads the login, takes a lease or
 calls a server, and prints the marker. `scripts/bc-republish.ts` refuses the same way before its lease. The
 clearing run sets `LETHAL_OUT_OF_USE_CLEARING=<server>` (that exact server only).
+
 - **Set it on the one clearing command only, never `export` it.** Left set in a shell, it lets every later
   marker for that server through, and only the loud `!!!` line shows that it did.
 
@@ -43,6 +44,16 @@ wrapper's own "in use" marker lets a gate through:
 
 A server other than bc1-bc3 has no marker and is never checked. A coord root whose `machine` directory does not
 exist is an error, never "no marker": set `LETHAL_COORD_ROOT`.
+
+**A refused upgrade can strip a server of a fixture tests app (R709).** BC recompiles an INSTALLED dependent from
+the source inside its resident package. If a target change breaks that source, BC refuses the upgrade and may
+fail to restore: the target is left uninstalled and the tests app is gone. Setup and `bc-republish.ts` now read
+each installed dependent's resident source and compile it against the new target build BEFORE anything is sent;
+a break refuses the whole run (`resident-dependent-breaks`, R-707), also when the new tests app is published
+together with the target. A new tests app that publishes while its target is KEPT (a gate-deployed target) is
+checked against the resident target (`dependent-vs-kept-target`). The safe manual sequence: (1) uninstall and
+unpublish the dependent; (2) publish the target (after a gate run, with `--mint`, R605); (3) publish the new dependent build (R605: a same-version test-app republish is accepted after an
+unpublish). To recover a stripped server: the owner restarts it, then re-run setup (not measured; rests on R605).
 
 For each server it:
 
@@ -94,8 +105,7 @@ duplicate entry. The decision, in order:
 | anything but exactly one installed row at the downloaded package's version, or a package that cannot be digested | `refuse content-unknown` (the owner) |
 | the same digest | `skip` |
 | a lower version | `publish upgrade` (nothing removed) |
-| the same version, other content, a target with an installed fixture dependent | `refuse same-version-target` (not measured; R623) |
-| the same version, other content, otherwise | `publish in place` |
+| the same version, other content (a target under an installed fixture dependent too; measured on bc2, R623) | `publish in place` |
 | a higher version, a target a gate deploys itself (`gateDeploys`) whose resident build is instrumented | `kept` (setup only; R605 ruling (a)) |
 | a higher version, anything else | `refuse above-build` |
 
@@ -176,6 +186,24 @@ under a coord lease in your own lane (`--lane <lane> --token-dir <dir>`, both re
 - `alpackages --server bcN <tests fixture>...` fills a tests fixture's gitignored `.alpackages`
   from that server, which `itest:testapp`, `:verify`, `:verify-scale` and `:agreement` need.
 
+### Recovering from a refused upgrade that BC could not restore (R709)
+
+**How it happens.** A target publish is an upgrade. If an installed dependent (most often the tests app) no longer
+compiles against the new build, BC refuses the upgrade with 422 "... The original extensions could not be restored
+...". It leaves the target UNINSTALLED and REMOVES every installed dependent (measured on bc2 by R-707). This happens
+when a fixture's target changes a procedure its tests call and a run, or a hand publish, goes out before the tests app
+is republished. `lethal run` refuses at that point with `UpgradeNotRestoredError` and BC's text, and does not retry.
+`bc-linux-setup.ts` and `bc-republish.ts` refuse BEFORE publishing (`resident-dependent-breaks`).
+
+**To recover.** The scripts cannot do it on their own. The stripped target is one row that is NOT installed, and
+`decideApp` (`scripts/bc-app-content.ts`) refuses that as `content-unknown`. So both `bc-linux-setup.ts` and
+`bc-republish.ts` stop with "NOTHING was published". They refuse by name and damage nothing.
+1. On `bc1`-`bc3`: ask the owner to restart the server. Its databases are in memory, so the restart also clears the
+   installed-version record ([R605](../roadmap/R605.md)). Then run `bun scripts/bc-linux-setup.ts --server bcN` under
+   the server's lease. It publishes the targets and then the tests apps from the current source.
+2. Elsewhere: uninstall and unpublish the stranded target row, then publish the target and the dependents again.
+   BC's 422 text names the dependents it removed. This route is not measured.
+
 ## How a gate reads a server
 
 - `LETHAL_ITEST_CONFIG=lethal.config.<x>.json` selects the config file in one of the four fixture
@@ -190,6 +218,23 @@ under a coord lease in your own lane (`--lane <lane> --token-dir <dir>`, both re
   7048 and 7049.
 - Every gate prints its target as its first line:
   `[itest target] config=<file> server=<host>:<dev port> odata=<url> api=<url>`.
+
+## Concurrent requests per BC user (R317)
+
+Measured on `bc2` on 2026-10-24 with one BC user (pre-commitment
+`docs/superpowers/specs/2026-10-24-r317-odata-concurrency-precommitment.md`; results
+`/coord/handoff/R-317/results.md`): up to **16 requests in flight**, OData V4 (the control app's `HarnessInfo`)
+and the dev endpoint (`dev/packages`) both answered every request, with no 429, 5xx, timeout or truncated
+body, and latency rose smoothly (OData median 57 ms at 1, 201 ms at 16; dev 115 ms at 1, 238 ms at 16). OData
+agreed over two runs. The dev endpoint was measured on ONE run only: run 1's phase B was lost to a probe bug
+(fixed before run 2), so the pre-commitment's second-run agreement holds for OData, not for the dev endpoint.
+`bc3`'s median moved 62 ms to 69 ms while `bc2` carried load (within the pre-committed 2x). LethAL's own peak per
+server is 3 calls in flight for a run session, 4 for two sessions before the lease, and 5 for `lethal doctor`
+alone, or 8 for `lethal doctor` beside a run on the same user (counted from the code, not measured live). All are
+under 16, so no client-side limit is needed at what was measured. Not measured: long-held calls (`RunMutant`)
+holding request slots, more than 16, `bc1` and `bc3` under ramp (phases A and B ran on `bc2` only), and the
+server's event log. Keep probes and gates
+on separate BC users anyway (R289's rule, `scripts/r289-probe/`).
 
 ## Proof that the gates reproduce here
 

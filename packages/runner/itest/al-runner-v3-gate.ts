@@ -12,9 +12,13 @@
  * (`runner-refused`, no killing test). Anything else is `gate-fail`.
  */
 import { writeFile } from "node:fs/promises";
+import { AlRunnerCoverageFrameError } from "../src/al-runner-coverage";
 import type { V3EntriesStats } from "../src/al-runner-v3-backend";
+import { applyTPin, pinnedFactMatches } from "../src/al-runner-v3-pins";
+import type { V3BuildPin, XbPin } from "../src/al-runner-v3-pins";
 import { AlRunnerV3CoverageJoinError } from "../src/al-runner-v3-sleep";
-import { bareHashRows } from "./mutant-equality";
+import { GateWarningsMismatchError } from "./gate-warnings";
+import { bareHashRows, compareMutants } from "./mutant-equality";
 import type { MutantComparison, NormalizedMutant } from "./mutant-equality";
 
 /** R654 S2: `"skipped (candidate build)"` is K's value on a candidate (`V3_K_CANDIDATE_SKIP` in
@@ -146,16 +150,23 @@ export function cdoCheckoutRefusal(c: {
 }
 
 /** The exact leg set a `pass` must hold (r3 F6 d). R654 S2 adds L1, Y-A and Y-B (a candidate is
- *  judged on layout and symbol sets too); K is outside it by ruling (`alrunner-v3-legs.ts`). */
+ *  judged on layout and symbol sets too); K is outside it by ruling (`alrunner-v3-legs.ts`).
+ *  R602 (orchestrator ruling 2026-10-24) adds MO and WR: they are the only measurement of v3's
+ *  per-object frame, so a pin that breaks it must not move `current`.
+ *  R722 adds N1E (N1 under serve-entries): a build that fixes #5798 reads `held`; alpha.2, which has
+ *  no serve-entries path, reads `pass` (not applicable, `V3_NO_SERVE_ENTRIES`). */
 export const V3_GATE_LEGS = [
   "C",
   "S1",
   "S3",
   "N1",
+  "N1E",
   "X",
   "L1",
   "Y-A",
   "Y-B",
+  "MO",
+  "WR",
   "D1",
   "D1c",
   "T",
@@ -280,7 +291,82 @@ function differenceKey(d: string, keys: ReadonlySet<string>): string | undefined
  * (no count check, I2); `pass` only with 0 compare differences, then 290 / 57 / 59 over 406. The
  * caller's `assertGateBaseline` compare follows a `pass`.
  */
-export function judgeLegT(i: {
+type LegTJudgement = {
+  readonly outcome: "pass" | "held" | "gate-fail";
+  readonly lines: readonly string[];
+  readonly failure?: string;
+  /** R586c: true only when the pin made this a pass (the caller skips the alpha.2 baseline compare). */
+  readonly pinned?: true;
+  /** Rows and compare agreed; only the figures (counts, total) differ: a real difference. */
+  readonly countMismatch?: true;
+};
+
+/** R586c: what leg T needs of a build pin: its rows and counts, the BC rows and the identity scheme. */
+export interface LegTPinInput {
+  readonly id: string;
+  readonly legT: V3BuildPin["legT"];
+  readonly bc: readonly NormalizedMutant[];
+  readonly sameScheme: boolean;
+}
+
+const WORSENESS = { pass: 0, held: 1, "gate-fail": 2 } as const;
+
+/**
+ * R586c (B1): leg T's judgement, pinned. The pinned run (own rows with the pinned keys overridden,
+ * the pin's counts) must be a `pass`; then the result is a pinned pass. Anything else returns the
+ * WORSE of today's judgement and `held`, plus one `T: pin-mismatch:` line, so alpha.2's old value
+ * (all seven `survived`) is never a pass on a pinned build.
+ */
+function judgeLegTPinned(i: LegTInput, pin: LegTPinInput): LegTJudgement {
+  const today = judgeLegTCore(i, { killed: 290, survived: 57, noCoverage: 59, total: 406 });
+  const mismatch = (reason: string): LegTJudgement => ({
+    outcome: WORSENESS[today.outcome] >= WORSENESS.held ? today.outcome : "held",
+    lines: [...today.lines, `T: pin-mismatch: ${reason}`],
+    ...(today.failure !== undefined ? { failure: today.failure } : {}),
+  });
+  const ownPinned = applyTPin(i.own, pin.legT);
+  if (ownPinned === undefined)
+    return mismatch(
+      "a pinned key is absent, repeated, or not survived/-/- in the committed baseline",
+    );
+  const run = judgeLegTCore(
+    {
+      ...i,
+      own: ownPinned,
+      classification: classifyLegT(ownPinned, i.now, pin.bc),
+      compare: compareMutants(ownPinned, i.now, { sameScheme: pin.sameScheme }),
+    },
+    { ...pin.legT.counts, total: pin.legT.total },
+  );
+  // The rows are exactly the pinned ones but the figures are not: a real difference, not a pin miss.
+  if (run.countMismatch === true)
+    return {
+      outcome: "gate-fail",
+      lines: [...today.lines, ...run.lines],
+      failure: run.failure ?? "T: counts",
+    };
+  if (run.outcome !== "pass")
+    return mismatch(run.failure ?? `the pinned compare is ${run.outcome}: ${run.lines[0] ?? "-"}`);
+  const bare = bareHashRows(ownPinned, i.now);
+  if (bare.length > 0)
+    return mismatch(
+      `${bare.length} mutant(s) of this run have no mutated-text hash (R556), first ${bare[0]?.key}`,
+    );
+  return {
+    outcome: "pass",
+    lines: [`T: pinned ${pin.legT.rows.length} rows (pin ${pin.id}, #5788)`],
+    pinned: true,
+  };
+}
+
+/** `judgeLegTCore` (r10 (a), above) with an optional build pin (R586c); no pin: exactly as before. */
+export function judgeLegT(i: LegTInput & { readonly pin?: LegTPinInput }): LegTJudgement {
+  const { pin, ...rest } = i;
+  if (pin === undefined) return judgeLegTCore(rest);
+  return judgeLegTPinned(rest, pin);
+}
+
+interface LegTInput {
   readonly classification: ReturnType<typeof classifyLegT>;
   readonly compare: MutantComparison;
   /** The own baseline's rows and this run's, for R556's bare-hash refusal on `held` (R650). */
@@ -297,11 +383,17 @@ export function judgeLegT(i: {
   readonly knownRefusal: string | undefined;
   /** Key -> the session report's mutant code. */
   readonly codes: ReadonlyMap<string, string>;
-}): {
-  readonly outcome: "pass" | "held" | "gate-fail";
-  readonly lines: readonly string[];
-  readonly failure?: string;
-} {
+}
+
+function judgeLegTCore(
+  i: LegTInput,
+  want: {
+    readonly killed: number;
+    readonly survived: number;
+    readonly noCoverage: number;
+    readonly total: number;
+  } = { killed: 290, survived: 57, noCoverage: 59, total: 406 },
+): LegTJudgement {
   const { rows } = i.classification;
   const lines = rows.map((r) => formatLegTRow(r, i.codes.get(r.key)));
   const rowKeys = new Set(rows.map((r) => r.key));
@@ -347,10 +439,18 @@ export function judgeLegT(i: {
       `T: ${i.compare.differences.length} compare difference(s) on a pass: ${lines.join("; ")}`,
     );
   const { killed, survived, noCoverage } = i.counts;
-  if (killed !== 290 || survived !== 57 || noCoverage !== 59 || i.total !== 406)
-    return fail(
-      `T: ${killed} / ${survived} / ${noCoverage} over ${i.total}, pre-committed 290 / 57 / 59 over 406`,
-    );
+  if (
+    killed !== want.killed ||
+    survived !== want.survived ||
+    noCoverage !== want.noCoverage ||
+    i.total !== want.total
+  )
+    return {
+      ...fail(
+        `T: ${killed} / ${survived} / ${noCoverage} over ${i.total}, pre-committed ${want.killed} / ${want.survived} / ${want.noCoverage} over ${want.total}`,
+      ),
+      countMismatch: true,
+    };
   return { outcome: "pass", lines };
 }
 
@@ -482,6 +582,7 @@ export function classifyLegC(
   defects: readonly string[],
   count: number,
   warns: readonly string[] = V3_WARN_FACTS,
+  pin?: V3BuildPin["legC"],
 ): { readonly outcome: "pass" | "held" | "gate-fail" | "infra-fail"; readonly lines: string[] } {
   const lines: string[] = [];
   let fail = facts.length !== count;
@@ -490,6 +591,18 @@ export function classifyLegC(
   let held = false;
   for (const f of facts) {
     const want = defects.includes(f.fact) ? "defect-present" : "matches";
+    // R586c: a pinned fact that reads exactly as pinned is accepted. B1: one that does not is
+    // judged by today's rules and then forced to at least `held` (the old reading means the build
+    // moved back, which today's rules would pass).
+    const p = pin !== undefined && Object.hasOwn(pin, f.fact) ? pin[f.fact] : undefined;
+    if (pin !== undefined && p !== undefined) {
+      if (pinnedFactMatches(pin, f)) {
+        lines.push(`pinned: ${f.fact} = ${f.verdict} (${p.issue ?? "as BC"})`);
+        continue;
+      }
+      lines.push(`pin-mismatch: ${f.fact}: pinned ${p.verdict}, read ${f.verdict}`);
+      held = true;
+    }
     if (f.verdict === want) continue;
     // R633 I1: what v3 returned, so the receipt itself carries the evidence.
     const m = f.measured !== undefined ? ` (measured ${f.measured.slice(0, 300)})` : "";
@@ -537,18 +650,60 @@ export function classifyLegC(
  * (AL0118, or a non-empty `compilationErrors`) reported. A panic or other code without the
  * diagnostic, a signal (no exit code), or unparseable output is `gate-fail`.
  */
-export function classifyXb(r: {
-  readonly exitCode: number;
-  readonly passed: number;
-  readonly notRun: number;
-  /** The `--output-json` document parsed. */
-  readonly parsed: boolean;
-  /** The output names the broken target's compile diagnostic (AL0118 / `compilationErrors`). */
-  readonly compileError: boolean;
-}): "pass" | "held" | "gate-fail" {
-  if (r.exitCode === 7 && r.passed === 1 && r.notRun === 1) return "pass";
-  if (r.exitCode > 0 && r.parsed && r.compileError && r.passed === 0) return "held";
-  return "gate-fail";
+export function classifyXb(
+  r: {
+    readonly exitCode: number;
+    readonly passed: number;
+    readonly notRun: number;
+    /** The `--output-json` document parsed. */
+    readonly parsed: boolean;
+    /** The output names the broken target's compile diagnostic (AL0118 / `compilationErrors`). */
+    readonly compileError: boolean;
+    /** R586c: read only with a pin. `passed` and `notRun` above default to 0 when absent. */
+    readonly passedPresent?: boolean;
+    readonly notRunPresent?: boolean;
+    readonly failed?: number;
+    /** The document's `tests[]` length; absent when it has none. */
+    readonly rowCount?: number;
+    readonly compilationErrorsCount?: number;
+  },
+  pin?: XbPin,
+): "pass" | "held" | "gate-fail" {
+  const today = ((): "pass" | "held" | "gate-fail" => {
+    if (r.exitCode === 7 && r.passed === 1 && r.notRun === 1) return "pass";
+    if (r.exitCode > 0 && r.parsed && r.compileError && r.passed === 0) return "held";
+    return "gate-fail";
+  })();
+  if (pin === undefined) return today;
+  // R586c (M1): the pinned shape is a pass; B1: every other shape, alpha.2's 7/1/1 included, is at
+  // best `held`.
+  const pinned =
+    r.exitCode === pin.exitCode &&
+    r.parsed &&
+    r.passedPresent === true &&
+    r.notRunPresent === true &&
+    r.passed === pin.passed &&
+    r.notRun === pin.notRun &&
+    (r.failed === undefined || r.failed === 0) &&
+    r.rowCount === 0 &&
+    (r.compilationErrorsCount ?? 0) > 0;
+  if (pinned) return "pass";
+  return today === "pass" ? "held" : today;
+}
+
+/**
+ * R586c (M5): a record request on a pinned or candidate build is refused by name, for every leg
+ * that records. A baseline is recorded from the build `current` is gated on, never from a build
+ * the pin or the candidate flag stands in for. `requested` is the selected legs' baseline paths
+ * whose record variable is set.
+ */
+export function recordRefusal(
+  pinned: boolean,
+  candidate: boolean,
+  requested: readonly string[],
+): string | undefined {
+  if ((!pinned && !candidate) || requested.length === 0) return undefined;
+  return `al-runner-v3-itest-record-refused: a record run refuses a ${pinned ? "pinned" : "candidate"} build (${requested.join(", ")}): record from the build current is gated on`;
 }
 
 /**
@@ -648,12 +803,20 @@ export class V3LegHeld extends Error {
  * M2: a leg's outcome from its error, by TYPE only. Anything untyped is `infra-fail`. F4: inside
  * the update gate, `AlRunnerV3CoverageJoinError` is a real v3 behaviour change (the form of its
  * coverage paths moved), so it is `gate-fail`, kept under `failed/<tag>@<commit>`; in a user
- * session it stays a plain refusal.
+ * session it stays a plain refusal. R602: inside legs MO and WR, `AlRunnerCoverageFrameError` is
+ * `gate-fail` too: those legs are the measurement of v3's per-object frame, so the error IS the
+ * regression. In every other leg it stays `infra-fail`.
  */
-export function legOutcomeOfError(err: unknown): V3LegOutcome {
+export function legOutcomeOfError(err: unknown, leg?: string): V3LegOutcome {
   if (err instanceof V3LegHeld) return "held";
   if (err instanceof V3LegFailure) return "gate-fail";
+  // R736: codes that differ from the recorded set judge the build; a set nobody recorded is LethAL's
+  // own gap, never a verdict on the binary (the update script keeps a gate-fail for good).
+  if (err instanceof GateWarningsMismatchError) return "gate-fail";
   if (err instanceof AlRunnerV3CoverageJoinError) return "gate-fail";
+  if (err instanceof AlRunnerCoverageFrameError && (leg === "MO" || leg === "WR")) {
+    return "gate-fail";
+  }
   return "infra-fail";
 }
 
@@ -664,6 +827,29 @@ export function gateOutcome(legs: Readonly<Record<string, V3LegOutcome>>): V3Gat
   if (vals.includes("infra-fail") || vals.includes("skipped")) return "infra-fail";
   if (vals.includes("held")) return "held";
   return "pass";
+}
+
+/**
+ * R736: the outcome the receipt carries. An observe run is never a pass: it writes `gate-fail`,
+ * which the update script cannot match to the legs' `gateOutcome`, so it reads the receipt as an
+ * infra-fail and never moves the pin. The itest also refuses observe mode outright when a receipt
+ * is demanded (`observeWithReceiptRefusal`).
+ */
+export function v3ReceiptOutcome(
+  legs: Readonly<Record<string, V3LegOutcome>>,
+  observe: boolean,
+): V3GateOutcome {
+  return observe ? "gate-fail" : gateOutcome(legs);
+}
+
+/** R736: the update gate (a receipt path set) must never run in observe mode. */
+export function observeWithReceiptRefusal(
+  observe: boolean,
+  receiptPath: string | undefined,
+): string | undefined {
+  return observe && receiptPath !== undefined
+    ? "LETHAL_ITEST_OBSERVE_WARNINGS=1 with LETHAL_V3_GATE_RECEIPT set: the update gate trusts its receipt and an observe run is never a pass, so the two cannot be combined. Observe by running the gate by hand."
+    : undefined;
 }
 
 /** What the update script reads (r3 F6 a): matched by nonce AND the candidate binary's sha256. */

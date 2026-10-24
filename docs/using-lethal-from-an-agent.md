@@ -101,8 +101,9 @@ and `--tests-only` gives `tests-narrowed`.
 
 **Backends.** `bcdev` is authoritative. `al-runner-v3` (the Rust al-runner, configured by the
 `alRunnerV3` section, Linux only, one worker) is offline and is NOT: its coverage is CONDITIONAL. A
-project holding a multi-object or an `#if`-wrapped object file runs with coverage off, with a
-warning naming the file, and without coverage an unreached mutant comes back survived rather than
+project holding an `#if`-wrapped object file of a shape the index has no rule for (two-arm,
+`#elif`, nested, or a multi-object file holding a wrapper) runs with coverage off, with a
+warning naming the file (multi-object and single-wrapper files keep coverage on, R602), and without coverage an unreached mutant comes back survived rather than
 no-coverage. Do not quote a score from it. Its gate is `itest:alrunner-v3`
 ([docs/gates/alrunner-v3.md](gates/alrunner-v3.md)).
 
@@ -250,7 +251,7 @@ code.
 Each surface below is versioned separately and has a published JSON Schema in [`../schemas/`](../schemas/):
 
 - the report: [../schemas/report-v3.schema.json](../schemas/report-v3.schema.json)
-- `lethal explain`: [../schemas/explain-v19.schema.json](../schemas/explain-v19.schema.json)
+- `lethal explain`: [../schemas/explain-v20.schema.json](../schemas/explain-v20.schema.json)
 - the event stream: [../schemas/stream-v1.schema.json](../schemas/stream-v1.schema.json)
 - `lethal doctor --json`: [../schemas/doctor-v1.schema.json](../schemas/doctor-v1.schema.json)
 
@@ -296,7 +297,7 @@ some mutants at all, and they read `no-coverage` rather than `survived`.
 
 ### `lethal explain report.json`: what it MEANS (checked)
 
-`explainSchemaVersion: 19`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
+`explainSchemaVersion: 20`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
 `survivorSelection` and `markIdentityScheme`. Each `survivors` row carries `executionProven`,
 `reach` and `markKey`. The top level can also carry `markKeysStale`. Each `survivors` row can
 also carry `mark`. Explain writes it for a report that records its numbering facts.
@@ -1013,6 +1014,12 @@ into a transcript and do not copy it into an issue.
   abandoned one keeps running on the server and blocks its lease until an NST restart (R658). Tell
   the user this once. A stopped baseline test is named in `baselineStopped`; a stopped kill confirm
   is `error` with cause `confirm-stopped`.
+- On bcdev a mutant can make BC's suite discovery list no methods for a test codeunit (BC runs the
+  codeunit's OnRun while it builds the suite). LethAL then runs that test once with no mutant
+  active. If it passes, the codeunit is skipped for this mutant only, the other covering tests still
+  run, and a mutant none of them kill is `error` with cause `test-discovery-failed` (R688). If that
+  unmutated run does not pass, or BC's answer also carries an identity mismatch, the session stops,
+  because then the server or the test app changed, not the mutant.
 - A report from a real project carries that project's source code in every mutant's `originalText`
   and `mutatedText`. Do not publish one, and run `bun scripts/redact-campaign-report.ts <report>`
   before committing one anywhere public.

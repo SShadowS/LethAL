@@ -41,8 +41,23 @@ import {
   preflightGateBaseline,
   recordRequested,
 } from "./baseline-guard";
-import { itestConfigName, itestConfigPath, printItestTarget } from "./config-path";
+import {
+  itestConfigName,
+  itestConfigPath,
+  printItestTarget,
+  readFixtureConfig,
+} from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import { HARDEN_SUBLEGS } from "./gate-sublegs";
+import {
+  checkGateWarnings,
+  collectWarnings,
+  finishGate,
+  gateEndLine,
+  nonPassExit,
+  preflightObserve,
+  settleThrown,
+} from "./gate-warnings";
 import {
   HardenGateError,
   assertHardenAnswers,
@@ -93,7 +108,7 @@ async function runLeg(
   leg: "a" | "b",
   testDir: string,
 ): Promise<SessionReport> {
-  const configFile = await readJson<LethalConfigFile>(CONFIG_LOCAL_PATH, itestConfigName());
+  const configFile = readFixtureConfig(CONFIG_LOCAL_PATH, itestConfigName());
   const bcdev = validateBcDevConfig(configFile.bcdev);
   const toolPaths = await defaultAlToolPaths();
   if (!toolPaths) {
@@ -162,7 +177,9 @@ async function runLeg(
       console.log(`harden itest: LethAL Control ${await harnessVerifier.fetchControlVersion()}`);
       console.log(`harden itest: BC build (Base Application) ${base.versions.join(", ")}`);
     }
+    const warnings = collectWarnings();
     const report = await runSession({
+      emit: [warnings.subscriber],
       backend,
       store,
       projectDir: PROJECT_DIR,
@@ -178,9 +195,13 @@ async function runLeg(
       resourceServerInstance: bcdev.serverInstance,
       // A SCRATCH quarantine dir, never the real ~/.lethal store (see bcdev.itest.ts).
       quarantineDir: join(scratchRoot, `quarantine-${leg}`),
+    }).catch((e: unknown) => {
+      settleThrown("harden", leg, warnings);
+      throw e;
     });
     // R582: every kill was re-run under the mutant, by marker and by its 2 killer rows.
     assertKillsReproduced(`harden/${leg === "a" ? "A" : "B"}`, report, store);
+    checkGateWarnings("harden", leg, warnings);
     return report;
   } finally {
     store.close();
@@ -210,6 +231,7 @@ function assertBaselineGreen(label: string, report: SessionReport): void {
 }
 
 async function main(): Promise<void> {
+  preflightObserve();
   preflightGateBaseline(BASELINE_PATH, "harden itest");
   const scratchRoot = await mkdtemp(join(tmpdir(), "lethal-harden-itest-"));
   try {
@@ -237,11 +259,13 @@ async function main(): Promise<void> {
       BASELINE_PATH,
     );
 
-    console.log("harden itest: PASS");
-    await emitPassed("harden", {
-      sublegs: ["base-suite", "answer-key"],
-      artifacts: { reported: false },
-    });
+    console.log(gateEndLine("harden"));
+    await finishGate(() =>
+      emitPassed("harden", {
+        sublegs: [...HARDEN_SUBLEGS],
+        artifacts: { reported: false },
+      }),
+    );
   } finally {
     await rm(scratchRoot, { recursive: true, force: true });
   }
@@ -254,5 +278,5 @@ try {
   // the following receipt write is slow or the process is killed before it finishes.
   console.error(formatFailure(err));
   await emitFailed("harden", err instanceof Error ? err.message : String(err));
-  process.exit(err instanceof BaselineRecordedError ? 3 : 1);
+  process.exit(err instanceof BaselineRecordedError ? 3 : nonPassExit(err, 1));
 }

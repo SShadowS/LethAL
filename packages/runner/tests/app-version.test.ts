@@ -1,12 +1,117 @@
 import { describe, expect, it } from "bun:test";
 import {
+  UpgradeNotRestoredError,
   VersionOverflowError,
   compareAppVersions,
   confirmedDowngradeRefusal,
   nextAbove,
+  notReinstalledApps,
   parseVersionConflict,
   reserveAppVersion,
+  restoreFailed,
 } from "../src/app-version";
+
+/** R-709b, measured on bc2 (probe `scripts/r709-probe/`, body-3.txt): BC's `Message` when T2 broke
+ *  two installed dependents. The list after "to do so:" is one "<name> by <publisher>" per line,
+ *  the target first, and gives no versions. */
+const BODY_TWO =
+  "Publishing failed due to 'Extension compilation failed\nsrc/Dep.Codeunit.al(7,21): error AL0132: " +
+  "'Codeunit \"R709 Target\"' does not contain a definition for 'Answer''. The original extensions " +
+  "could not be restored due to Cannot install the extension R709 Probe Target by LethAL Probe 1.0.0.1 " +
+  "because a newer version 1.0.0.2 was already installed..\nExtensions that were previously installed " +
+  "but could not be reinstalled. These extensions should be manually reinstalled. If they are part of " +
+  "your current workspace, you can use the 'Full Dependency Publishing' command to do so: \n" +
+  "R709 Probe Target by LethAL Probe\nR709 Probe Dep One by LethAL Probe\nR709 Probe Dep Two by " +
+  "LethAL Probe\n\n\n";
+/** body-5.txt: one dependent. */
+const BODY_ONE =
+  "Publishing failed due to 'Extension compilation failed\nsrc/Dep.Codeunit.al(7,21): error AL0132: " +
+  "'Codeunit \"R709 Solo Target\"' does not contain a definition for 'Answer''. The original " +
+  "extensions could not be restored due to Cannot install the extension R709 Probe Target Solo by " +
+  "LethAL Probe 1.0.0.1 because a newer version 1.0.0.2 was already installed..\nExtensions that " +
+  "were previously installed but could not be reinstalled. These extensions should be manually " +
+  "reinstalled. If they are part of your current workspace, you can use the 'Full Dependency " +
+  "Publishing' command to do so: \nR709 Probe Target Solo by LethAL Probe\nR709 Probe Dep Solo by " +
+  "LethAL Probe\n\n\n";
+
+describe("notReinstalledApps (R709 part 2: BC's measured list)", () => {
+  it("two dependents: every line after 'to do so:', the target first", () => {
+    // red when the list is cut at the first entry, or the separator is not a line break
+    expect(notReinstalledApps(BODY_TWO)).toEqual([
+      { name: "R709 Probe Target", publisher: "LethAL Probe" },
+      { name: "R709 Probe Dep One", publisher: "LethAL Probe" },
+      { name: "R709 Probe Dep Two", publisher: "LethAL Probe" },
+    ]);
+  });
+
+  it("one dependent", () => {
+    expect(notReinstalledApps(BODY_ONE)).toEqual([
+      { name: "R709 Probe Target Solo", publisher: "LethAL Probe" },
+      { name: "R709 Probe Dep Solo", publisher: "LethAL Probe" },
+    ]);
+  });
+
+  it("the raw JSON body, line breaks escaped as \\n (as a client printing the body shows it)", () => {
+    const raw = JSON.stringify({ Message: BODY_TWO, ErrorType: "InvalidOperation" });
+    // red when only real line breaks separate entries
+    expect(notReinstalledApps(raw)?.map((a) => a.name)).toEqual([
+      "R709 Probe Target",
+      "R709 Probe Dep One",
+      "R709 Probe Dep Two",
+    ]);
+  });
+
+  it("fail-closed: no list (R-707's 500-char text) is null, never an empty list", () => {
+    // red when an unreadable list reads as "nothing was removed"
+    expect(notReinstalledApps(R709_RESTORE_TEXT)).toBeNull();
+    expect(
+      notReinstalledApps(BODY_TWO.replace(/to do so: \n[\s\S]*$/, "to do so: \n\n")),
+    ).toBeNull();
+  });
+
+  it("the refusal names every listed app, or says it names no readable list", () => {
+    const named = new UpgradeNotRestoredError(BODY_TWO).message;
+    // red when the parsed names do not reach the message
+    expect(named).toContain(
+      "BC lists 3 apps it could not reinstall (name by publisher; BC gives no versions): " +
+        "R709 Probe Target by LethAL Probe; R709 Probe Dep One by LethAL Probe; " +
+        "R709 Probe Dep Two by LethAL Probe.",
+    );
+    const unread = new UpgradeNotRestoredError(R709_RESTORE_TEXT).message;
+    // red when an unreadable list is silently omitted
+    expect(unread).toContain(
+      "BC's text names no list of the apps it could not reinstall that LethAL can read",
+    );
+    expect(unread).toContain(R709_RESTORE_TEXT); // BC's text stays, either way
+  });
+
+  it("fail-closed: a line not in the '<name> by <publisher>' form voids the whole list", () => {
+    const head = BODY_ONE.slice(0, BODY_ONE.indexOf("to do so: \n") + "to do so: \n".length);
+    const odd = `${head}Good App by Pub\nNOT AN ENTRY\n\n`;
+    // red when an odd line is skipped (a partial list would read as the complete one)
+    expect(notReinstalledApps(odd)).toBeNull();
+    expect(new UpgradeNotRestoredError(odd).message).toContain("names no list");
+  });
+
+  it("a name containing ' by ' splits at the LAST ' by '", () => {
+    const head = BODY_ONE.slice(0, BODY_ONE.indexOf("to do so: \n") + "to do so: \n".length);
+    // red when the first " by " splits the line
+    expect(notReinstalledApps(`${head}Built by Design Tools by Contoso\n\n`)).toEqual([
+      { name: "Built by Design Tools", publisher: "Contoso" },
+    ]);
+  });
+});
+
+/** BC's 422 when an upgrade breaks an installed dependent and the old target cannot be put back.
+ *  BC's sentence is R-707's bc2 measurement (step 4, a direct HTTP publish; nothing after "If they
+ *  are part" was captured); the altool-style "The request for path ..." wrapper is not measured. */
+const R709_RESTORE_TEXT =
+  "The request for path /BC/dev/apps failed with code UnprocessableEntity. Reason: " +
+  "error AL0132: 'Codeunit \"R707 Target\"' does not contain a definition for 'Answer'. " +
+  "The original extensions could not be restored due to Cannot install the extension R707 Probe " +
+  "Target by LethAL Probe 1.0.0.1 because a newer version 1.0.0.2 was already installed..\n" +
+  "Extensions that were previously installed but could not be reinstalled. These extensions " +
+  "should be manually reinstalled. If they are part";
 
 // 2026-07-19T00:00:00Z = 20653 days since epoch.
 const T0 = Date.UTC(2026, 6, 19, 0, 0, 0);
@@ -75,6 +180,22 @@ describe("parseVersionConflict", () => {
 
   it("returns null for an unrelated publish failure", () => {
     expect(parseVersionConflict("Publish failed: connection refused")).toBeNull();
+  });
+
+  it("R709: returns null for BC's restore-failure text, which embeds the same sentence", () => {
+    // red when parseVersionConflict reads the embedded sentence: the run would re-stamp and
+    // publish again over a server BC just stripped of the target's dependents
+    expect(parseVersionConflict(R709_RESTORE_TEXT)).toBeNull();
+    expect(restoreFailed(R709_RESTORE_TEXT)).toBe(true);
+  });
+
+  it("R709: a plain downgrade conflict is not a restore failure", () => {
+    const plain =
+      "Cannot install the extension LethAL Sandbox App by LethAL 1.0.0.999 because a newer " +
+      "version 1.0.106.0 was already installed.";
+    // red when restoreFailed matches the conflict sentence alone
+    expect(restoreFailed(plain)).toBe(false);
+    expect(parseVersionConflict(plain)).toBe("1.0.106.0");
   });
 });
 

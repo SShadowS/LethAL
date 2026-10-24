@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { FetchFn } from "../packages/runner/src/activation.ts";
@@ -6,24 +7,26 @@ import { listPackageEntries, readPackageEntry } from "../packages/runner/src/app
 import { buildFakeAppWithEntries } from "../packages/runner/tests/helpers/fake-app.ts";
 import {
   type AppItem,
-  type AppManifest,
   type Conn,
   ContentUnknownError,
   type DecideInput,
   type ExtensionRow,
   type ServerOps,
   actAll,
+  appJsonFromManifest,
   changedEntries,
   compilerVersion,
   contentDigest,
   decideAll,
   decideApp,
   decideControl,
+  dependencyBytes,
   headerPackageId,
   isInstrumented,
   normaliseNavigation,
   realOps,
   refusals,
+  refuseDependent,
   residentPackage,
 } from "./bc-app-content.ts";
 
@@ -75,7 +78,6 @@ const base = (over: Partial<DecideInput>): DecideInput => ({
   rows: [row("1.0.0.0")],
   role: "target",
   gateDeploys: true,
-  installedDependent: null,
   mode: "setup",
   ...over,
 });
@@ -266,7 +268,7 @@ describe("changedEntries, compilerVersion, isInstrumented, headerPackageId", () 
   });
 });
 
-describe("decideApp: the nine rows, in order", () => {
+describe("decideApp: the rows, in order (row 6 removed by R623)", () => {
   test("row 1: nothing resident and no row: publish new", () => {
     const d = decideApp(base({ resident: null, rows: [] }));
     expect(d).toMatchObject({ action: "publish", how: "new" });
@@ -305,12 +307,28 @@ describe("decideApp: the nine rows, in order", () => {
     expect(d).toMatchObject({ action: "publish", how: "upgrade" });
   });
 
-  test("row 6: same version, other content, a target with an installed dependent: refused", () => {
+  // R623 (measured on bc2, 2026-10-24): the old row 6 refused a same-version target under an
+  // installed dependent; the in-place publish is safe, so a target takes row 7 like a test app.
+  test("R623 (former row 6): same version, other content, a target: published in place, never refused", () => {
+    const d = decideApp(base({ role: "target", local: fake({ src: "changed" }) }));
+    expect(d).toMatchObject({ action: "publish", how: "in place" });
+  });
+
+  test("R623: a same-version target with the SAME content is still a skip", () => {
+    const d = decideApp(base({ role: "target", local: fake({}), resident: fake({}) }));
+    expect(d.action).toBe("skip");
+  });
+
+  test("R605: a target ABOVE its build (installed record higher than app.json) is still refused above-build", () => {
     const d = decideApp(
-      base({ local: fake({ src: "changed" }), installedDependent: "LethAL Sandbox Names Tests" }),
+      base({
+        role: "target",
+        gateDeploys: false,
+        resident: fake({ version: "1.0.0.5" }),
+        rows: [row("1.0.0.5")],
+      }),
     );
-    expect(d).toMatchObject({ action: "refuse", why: "same-version-target" });
-    expect(d.line).toContain("LethAL Sandbox Names Tests is installed");
+    expect(d).toMatchObject({ action: "refuse", why: "above-build" });
   });
 
   test("row 7: same version, other content (no installed dependent): published in place, naming entries and compilers", () => {
@@ -438,22 +456,10 @@ const item = (dir: string, local: Buffer, role: "target" | "dependent"): AppItem
 
 const T_ID = "t-id";
 const D_ID = "d-id";
-const FIXTURES = new Map<string, AppManifest>([
-  ["target", { id: T_ID, name: "T", publisher: "LethAL", version: "1.0.0.0" }],
-  [
-    "tests",
-    {
-      id: D_ID,
-      name: "D",
-      publisher: "LethAL",
-      version: "1.0.0.0",
-      dependencies: [{ id: T_ID, name: "T", publisher: "LethAL" }],
-    },
-  ],
-]);
 
 describe("decideAll / actAll", () => {
-  test("F4: republish of a same-version target with an installed dependent NOT in the list is refused; 0 publishes", async () => {
+  // R623: F4 pinned the old refusal; the measured in-place publish keeps the dependent installed.
+  test("F4 (R623): republish of a same-version target with an installed dependent NOT in the list decides in place; no refusal", async () => {
     const s = fakeServer({
       T: { pkg: fakeNamed("T", T_ID, "1.0.0.0", "old"), rows: [row("1.0.0.0")] },
       D: { pkg: fakeNamed("D", D_ID), rows: [row("1.0.0.0")] },
@@ -462,11 +468,9 @@ describe("decideAll / actAll", () => {
     s.ids.set(D_ID, "D");
     const items: AppItem[] = [item("target", fakeNamed("T", T_ID, "1.0.0.0", "new"), "target")];
     const lines: string[] = [];
-    const decided = await decideAll(items, s.ops, "republish", FIXTURES, (l) => lines.push(l));
-    const refused = refusals(decided).map((d) => d.decision.line);
-    expect(refused.join("")).toContain("same-version-target");
-    expect(lines.join("\n")).toContain("dependent D of T: rows: 1.0.0.0 installed=true");
-    expect(s.published).toEqual([]);
+    const decided = await decideAll(items, s.ops, "republish", (l) => lines.push(l));
+    expect(refusals(decided)).toEqual([]);
+    expect(decided[0]?.decision).toMatchObject({ action: "publish", how: "in place" });
   });
 
   test("actAll publishes, then reads back version, raw sha256, digest and one installed row", async () => {
@@ -479,7 +483,7 @@ describe("decideAll / actAll", () => {
     });
     real.ids.set(id, "LethAL Sandbox Names Tests");
     const lines: string[] = [];
-    const decided = await decideAll(items, real.ops, "republish", new Map(), (l) => lines.push(l));
+    const decided = await decideAll(items, real.ops, "republish", (l) => lines.push(l));
     expect(decided[0]?.decision).toMatchObject({ action: "publish", how: "in place" });
     await actAll(decided, real.ops, (l) => lines.push(l));
     expect(real.published).toEqual(["LethAL_LethAL Sandbox Names Tests_1.0.0.0.app"]);
@@ -505,7 +509,7 @@ describe("decideAll / actAll", () => {
       apps["LethAL Sandbox Names Tests"] = { pkg: other, rows: [row("1.0.0.0")] };
     };
     const items: AppItem[] = [item("sandbox-names-tests", NT_COMMENT, "dependent")];
-    const decided = await decideAll(items, s.ops, "republish", new Map(), () => {});
+    const decided = await decideAll(items, s.ops, "republish", () => {});
     await expect(actAll(decided, s.ops, () => {})).rejects.toThrow(
       /read-back of LethAL Sandbox Names Tests \(sandbox-names-tests\) does not match/,
     );
@@ -528,7 +532,7 @@ describe("decideAll / actAll", () => {
         apps["LethAL Sandbox Names Tests"] = { pkg: bytes, rows: [...after] };
       };
       const items: AppItem[] = [item("sandbox-names-tests", NT_COMMENT, "dependent")];
-      const decided = await decideAll(items, s.ops, "republish", new Map(), () => {});
+      const decided = await decideAll(items, s.ops, "republish", () => {});
       await expect(
         actAll(decided, s.ops, () => {}),
         what,
@@ -545,7 +549,7 @@ describe("decideAll / actAll", () => {
       },
     );
     const items: AppItem[] = [item("target", fakeNamed("T", T_ID), "target")];
-    const decided = await decideAll(items, s.ops, "setup", FIXTURES, () => {});
+    const decided = await decideAll(items, s.ops, "setup", () => {});
     await expect(actAll(decided, s.ops, () => {})).rejects.toThrow(
       "T: BC holds an installed-version record at 1.0.20747.1 (R605); publish a newer build: bc-republish.ts republish --mint target",
     );
@@ -566,7 +570,7 @@ describe("decideAll / actAll", () => {
       { ...item("target", fakeNamed("T", T_ID), "target"), gateDeploys: true },
       { ...item("tests", fakeNamed("D", D_ID), "dependent"), targetDir: "target" },
     ];
-    const decided = await decideAll(items, s.ops, "setup", FIXTURES, () => {});
+    const decided = await decideAll(items, s.ops, "setup", () => {});
     expect(decided.map((d) => d.decision.action)).toEqual(["keep", "publish"]);
     await expect(actAll(decided, s.ops, () => {})).rejects.toThrow(
       "the target T is a kept minted build 1.0.20747.9; run the target's gate, or bc-republish.ts republish --mint target, then re-run setup",
@@ -576,7 +580,7 @@ describe("decideAll / actAll", () => {
   test("actAll refuses to run at all when anything was refused", async () => {
     const s = fakeServer({ T: { pkg: fakeNamed("T", T_ID), rows: [] } });
     const items: AppItem[] = [item("target", fakeNamed("T", T_ID), "target")];
-    const decided = await decideAll(items, s.ops, "setup", FIXTURES, () => {});
+    const decided = await decideAll(items, s.ops, "setup", () => {});
     expect(refusals(decided)).toHaveLength(1);
     await expect(actAll(decided, s.ops, () => {})).rejects.toThrow(/after a refusal/);
     expect(s.published).toEqual([]);
@@ -642,5 +646,150 @@ describe("residentPackage: the one strict dev/packages read (R624)", () => {
     expect(calls.filter((c) => c.defines).map((c) => c.f)).toEqual(["bc-app-content.ts"]);
     for (const f of ["bc-republish.ts", "r594/cdo-publish.ts"])
       expect(readFileSync(join(import.meta.dir, f), "utf8")).toMatch(/\bresidentPackage,/);
+  });
+});
+
+describe("R627: the two decoded entries refuse invalid UTF-8 and keep every valid digest", () => {
+  const MANIFEST_OK = '<Package><Build Timestamp="t" /></Package>';
+  const NAV_OK = "<NavigationDefinition />";
+  const pkg = (manifest: string | Buffer, navigation: string | Buffer) =>
+    buildFakeAppWithEntries({ "NavxManifest.xml": manifest, "navigation.xml": navigation });
+  const bad = (b: number) =>
+    Buffer.concat([Buffer.from("<A>"), Buffer.from([b]), Buffer.from("</A>")]);
+
+  test("navigation.xml bytes 0x80 and 0x81 are each refused by name, not given one digest", () => {
+    for (const b of [0x80, 0x81]) {
+      const p = pkg(MANIFEST_OK, bad(b));
+      expect(() => contentDigest(p)).toThrow(ContentUnknownError);
+      expect(() => contentDigest(p)).toThrow(/navigation\.xml is not valid UTF-8/);
+      expect(() => changedEntries(p, p)).toThrow(ContentUnknownError);
+    }
+  });
+
+  test("decideApp: a resident package with invalid UTF-8 in navigation.xml is refused content-unknown", () => {
+    const manifest =
+      '<Package><App Id="aaaa" Name="LethAL Sandbox Names" Publisher="LethAL" Version="1.0.0.0" /><Build Timestamp="t" CompilerVersion="18.0.43.1464" /></Package>';
+    const d = decideApp(base({ resident: pkg(manifest, bad(0x80)) }));
+    expect(d).toMatchObject({ action: "refuse", why: "content-unknown" });
+    expect(d.line).toMatch(/navigation\.xml is not valid UTF-8/);
+  });
+
+  test("NavxManifest.xml bytes 0x80 and 0x81 are each refused by name", () => {
+    for (const b of [0x80, 0x81]) {
+      const m = Buffer.concat([Buffer.from('<Package><Build Timestamp="t" />'), Buffer.from([b])]);
+      const p = pkg(m, NAV_OK);
+      expect(() => contentDigest(p)).toThrow(ContentUnknownError);
+      expect(() => contentDigest(p)).toThrow(/NavxManifest\.xml is not valid UTF-8/);
+    }
+  });
+
+  test("a BOM and non-ASCII text stay in the hashed bytes (the same as the old utf8 round trip)", () => {
+    const bom = Buffer.from([0xef, 0xbb, 0xbf]);
+    const withBom = (s: string) => Buffer.concat([bom, Buffer.from(s, "utf8")]);
+    const a = pkg(withBom(MANIFEST_OK), withBom("<N Caption='Æblegrød ✓' />"));
+    const b = pkg(MANIFEST_OK, "<N Caption='Æblegrød ✓' />");
+    expect(contentDigest(a)).not.toBe(contentDigest(b)); // the BOM is content, as before
+    expect(contentDigest(a)).toBe(
+      createHash("sha256")
+        .update("NavxManifest.xml\0")
+        .update(String(3 + MANIFEST_OK.replace(' Timestamp="t"', "").length))
+        .update("\0")
+        .update(bom)
+        .update(MANIFEST_OK.replace(' Timestamp="t"', ""))
+        .update("navigation.xml\0")
+        .update(String(withBom("<N Caption='Æblegrød ✓' />").length))
+        .update("\0")
+        .update(withBom("<N Caption='Æblegrød ✓' />"))
+        .digest("hex"),
+    );
+  });
+
+  test("every real build under testdata/ keeps the digest it had before R627", () => {
+    const pinned: Record<string, string> = {
+      "data1.app": "d054829357425150fa3db1644728757f7ccc7719286a79396d713026b0889901",
+      "data2.app": "d054829357425150fa3db1644728757f7ccc7719286a79396d713026b0889901",
+      "names1.app": "bbd7f8947571c37e18bf93314283e7d535e9f785cfb7f155e5425561fe4625ba",
+      "names2.app": "bbd7f8947571c37e18bf93314283e7d535e9f785cfb7f155e5425561fe4625ba",
+      "nt-comment.app": "a56ae76c2b180083383b5767075763d17bcd13ae24f28422e36dad15ba445453",
+      "nt-local.app": "99f9d28afe4d09f1293bed9270d13841f959ddb0ea99c1c560405ca533955a49",
+      "nt-resident1.app": "99f9d28afe4d09f1293bed9270d13841f959ddb0ea99c1c560405ca533955a49",
+      "probes-navedit.app": "e45e9d8e5e93b43342a40521e8299218cad49bed9a69edb345f2e5952eabd2e2",
+      "probes1.app": "fb1d6aa2a03d730ca2d971ae3764a745fc8df937a128c8f12dc558b3e8e3b8f7",
+      "probes2.app": "fb1d6aa2a03d730ca2d971ae3764a745fc8df937a128c8f12dc558b3e8e3b8f7",
+      "wrapped1.app": "3a91c311c9b6495a5028f7694eb8b69595ca855aa8a797f49b96ef0b892ed34b",
+      "wrapped2.app": "3a91c311c9b6495a5028f7694eb8b69595ca855aa8a797f49b96ef0b892ed34b",
+    };
+    const files = readdirSync(join(import.meta.dir, "testdata"))
+      .filter((f) => f.endsWith(".app"))
+      .sort();
+    expect(files).toEqual(Object.keys(pinned));
+    for (const f of files)
+      expect(contentDigest(pkgOf(f.replace(/\.app$/, "")))).toBe(pinned[f] ?? "unpinned");
+  });
+});
+
+describe("R-707: appJsonFromManifest rebuilds an app.json from a package manifest", () => {
+  test("keeps identity, runtime, dependencies and id ranges", () => {
+    const pkg = buildFakeAppWithEntries({
+      "NavxManifest.xml": `<Package><App Id="i1" Name="T" Publisher="P" Version="1.2.3.4" Runtime="17.0" Target="Cloud" Application="28.0.0.0" Platform="28.0.0.0" /><IdRanges><IdRange MinObjectId="70" MaxObjectId="79" /></IdRanges><Dependencies><Dependency Id="d1" Name="Tgt" Publisher="P" MinVersion="1.0.0.0" /></Dependencies></Package>`,
+    });
+    expect(appJsonFromManifest(pkg)).toMatchObject({
+      id: "i1",
+      name: "T",
+      version: "1.2.3.4",
+      runtime: "17.0",
+      application: "28.0.0.0",
+      dependencies: [{ id: "d1", name: "Tgt", publisher: "P", version: "1.0.0.0" }],
+      idRanges: [{ from: 70, to: 79 }],
+    });
+  });
+
+  test("M-2: PreprocessorSymbols with children is refused, an empty element is not", () => {
+    const withSyms = (inner: string) =>
+      buildFakeAppWithEntries({
+        "NavxManifest.xml": `<Package><App Id="i1" Name="T" Publisher="P" Version="1.2.3.4" /><PreprocessorSymbols>${inner}</PreprocessorSymbols></Package>`,
+      });
+    expect(() => appJsonFromManifest(withSyms("<Symbol>X</Symbol>"))).toThrow(
+      /PreprocessorSymbols/,
+    );
+    expect(appJsonFromManifest(withSyms(""))).toMatchObject({ id: "i1" });
+  });
+});
+
+describe("R-707: dependencyBytes maps the target's name to the given target bytes", () => {
+  const target = { name: "T", publisher: "P", bytes: Buffer.from("new") };
+  test("the target gets the new bytes and no lookup; anything else gets the lookup", async () => {
+    let lookups = 0;
+    const lookup = async () => {
+      lookups++;
+      return Buffer.from("resident");
+    };
+    expect((await dependencyBytes({ name: "T", publisher: "P" }, target, lookup))?.toString()).toBe(
+      "new",
+    );
+    expect(lookups).toBe(0);
+    expect((await dependencyBytes({ name: "U", publisher: "P" }, target, lookup))?.toString()).toBe(
+      "resident",
+    );
+    expect(lookups).toBe(1);
+  });
+});
+
+describe("R-707 M-3: a missing package is not a break", () => {
+  test("AL1022 and 'could not be found' lines are 'not a compile result'", () => {
+    for (const line of [
+      "x.json(1,1): error AL1022: The package 'A' could not be found",
+      "error AL1013: package P_A not found in the package cache",
+    ])
+      expect(refuseDependent("resident-dependent-breaks", "D", new Error(line)).message).toContain(
+        "not a compile result",
+      );
+  });
+  test("a real error line still names the label; the kept-target label has its own remedy", () => {
+    const e = new Error("src/a.al(7,21): error AL0135: no argument");
+    expect(refuseDependent("dependent-vs-kept-target", "D", e).message).toContain(
+      "refuse dependent-vs-kept-target: D (src/a.al(7,21): error AL0135",
+    );
+    expect(refuseDependent("dependent-vs-kept-target", "D", e).message).toContain("--mint");
   });
 });

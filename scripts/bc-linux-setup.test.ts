@@ -14,8 +14,10 @@ import { join } from "node:path";
 import { itestLaunchName } from "../packages/runner/itest/config-path.ts";
 import { MARKER_HOST, MARKER_SERVERS } from "../packages/runner/itest/out-of-use.ts";
 import type { FetchFn } from "../packages/runner/src/activation.ts";
+import { readAppIdentity } from "../packages/runner/src/published-test-app.ts";
 import { buildFakeAppWithEntries } from "../packages/runner/tests/helpers/fake-app.ts";
-import type { AppManifest, Conn, ServerOps } from "./bc-app-content.ts";
+import { CONTROL_SELECTOR_FILENAME } from "../packages/schemata/src/project.ts";
+import { type Conn, type ServerOps, sha256Of } from "./bc-app-content.ts";
 import {
   GATE_FIXTURES,
   HOST,
@@ -411,6 +413,14 @@ describe("R598: the coord lease is taken in the caller's lane, never a fixed one
     expect(resolveLane("preproc", {})).toBe("preproc");
   });
 
+  test("R615: a lane that is not a plain word is refused by name (it becomes a file name)", () => {
+    for (const bad of ["../../x", "A B", "a/b"])
+      expect(() => resolveLane(bad, {})).toThrow(LaneUnknownError);
+    expect(() => resolveLane(undefined, { KRAKEN_AGENT: "lane-A B" })).toThrow(LaneUnknownError);
+    expect(resolveLane("code", {})).toBe("code");
+    expect(resolveLane("preproc", {})).toBe("preproc");
+  });
+
   test("no --lane and no kraken identity: refused by name, before any lease call", () => {
     expect(() => resolveLane(undefined, {})).toThrow(LaneUnknownError);
     expect(() => resolveLane(undefined, {})).toThrow(/--lane/);
@@ -533,16 +543,60 @@ describe("R617: --held-lease never takes or releases a lease", () => {
 
   test("under the unit-test preload, the real recordToken refuses by name and writes no /coord file", () => {
     expect(process.env.LETHAL_TEST_FAKE_HOME).toBeDefined();
-    const before = existsSync("/coord/handoff/R-589/lease-bc3.txt")
-      ? readFileSync("/coord/handoff/R-589/lease-bc3.txt", "utf8")
+    const before = existsSync("/coord/handoff/R-589/lease-bc3-preproc.txt")
+      ? readFileSync("/coord/handoff/R-589/lease-bc3-preproc.txt", "utf8")
       : undefined;
     expect(() => krakenLeaseFor("preproc", fakeKraken().run).recordToken("bc3", "t-unit")).toThrow(
       UnitTestCoordWriteError,
     );
-    const after = existsSync("/coord/handoff/R-589/lease-bc3.txt")
-      ? readFileSync("/coord/handoff/R-589/lease-bc3.txt", "utf8")
+    const after = existsSync("/coord/handoff/R-589/lease-bc3-preproc.txt")
+      ? readFileSync("/coord/handoff/R-589/lease-bc3-preproc.txt", "utf8")
       : undefined;
     expect(after).toBe(before);
+  });
+
+  test("R615: the record is per lane: two lanes on one server keep two files, a lane re-records its own", () => {
+    const dir = mkdtempSync(join(tmpdir(), "r615-"));
+    const k = fakeKraken();
+    krakenLeaseFor("preproc", k.run, dir).recordToken("bc1", "t-a");
+    krakenLeaseFor("bugs", k.run, dir).recordToken("bc1", "t-b");
+    expect(readdirSync(dir).sort()).toEqual(["lease-bc1-bugs.txt", "lease-bc1-preproc.txt"]);
+    expect(readFileSync(join(dir, "lease-bc1-preproc.txt"), "utf8")).toBe("t-a\n");
+    expect(readFileSync(join(dir, "lease-bc1-bugs.txt"), "utf8")).toBe("t-b\n");
+    krakenLeaseFor("preproc", k.run, dir).recordToken("bc1", "t-c");
+    expect(readdirSync(dir)).toHaveLength(2);
+    expect(readFileSync(join(dir, "lease-bc1-preproc.txt"), "utf8")).toBe("t-c\n");
+    expect(readFileSync(join(dir, "lease-bc1-bugs.txt"), "utf8")).toBe("t-b\n");
+  });
+
+  test("R615/B1: under the preload, any folder under /coord is refused (trailing slash too); a temp folder writes", () => {
+    const k = fakeKraken();
+    for (const d of ["/coord/handoff/R-589/", "/coord/handoff/other", "/coord"])
+      expect(() => krakenLeaseFor("x", k.run, d).recordToken("bc1", "t")).toThrow(
+        UnitTestCoordWriteError,
+      );
+    const tmp = mkdtempSync(join(tmpdir(), "r615b-"));
+    krakenLeaseFor("x", k.run, tmp).recordToken("bc1", "t");
+    expect(existsSync(join(tmp, "lease-bc1-x.txt"))).toBe(true);
+  });
+
+  test("R615/B1: the root is compared by path segment: a sibling sharing the prefix is not under it", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "r615c-"));
+    const sibling = `${tmp}x`;
+    mkdirSync(sibling);
+    const prev = process.env.LETHAL_COORD_ROOT;
+    process.env.LETHAL_COORD_ROOT = tmp;
+    try {
+      const k = fakeKraken();
+      expect(() => krakenLeaseFor("x", k.run, tmp).recordToken("bc1", "t")).toThrow(
+        UnitTestCoordWriteError,
+      );
+      krakenLeaseFor("x", k.run, sibling).recordToken("bc1", "t");
+      expect(existsSync(join(sibling, "lease-bc1-x.txt"))).toBe(true);
+    } finally {
+      if (prev === undefined) Reflect.deleteProperty(process.env, "LETHAL_COORD_ROOT");
+      else process.env.LETHAL_COORD_ROOT = prev;
+    }
   });
 
   test("parseArgs: one held token leases one server", () => {
@@ -605,7 +659,7 @@ describe("--write-config-only: configs from the secret file, no server call, no 
       continiaFiles: () => [],
       controlBytes: noServer("controlBytes"),
       compile: noServer("compile"),
-      fixtures: () => new Map(),
+      checkResident: noServer("checkResident"),
       doctor: noServer("doctor"),
       // R669: never the real /coord; a test plants markers here.
       outOfUseDir,
@@ -797,10 +851,17 @@ describe("--write-config-only: configs from the secret file, no server call, no 
   // -------------------------------------------------------------------------------------------
   // R599: the setup driver decides every app, then acts only if nothing was refused.
 
-  const appPkg = (name: string, id: string, version = "1.0.0.0", publisher = "LethAL") =>
+  const appPkg = (
+    name: string,
+    id: string,
+    version = "1.0.0.0",
+    publisher = "LethAL",
+    extra: Record<string, string> = {},
+  ) =>
     buildFakeAppWithEntries({
       "NavxManifest.xml": `<Package><App Id="${id}" Name="${name}" Publisher="${publisher}" Version="${version}" /><Build Timestamp="t" CompilerVersion="18.0.43.1464" /></Package>`,
       "src/a.al": name,
+      ...extra,
     });
   const rowAt = (version: string) => {
     const [a, b, c, d] = version.split(".").map(Number);
@@ -820,33 +881,51 @@ describe("--write-config-only: configs from the secret file, no server call, no 
    * except `sandbox-probes` (absent: a publish) and, with `refuseLast`, the LAST step's
    * dependent (above its build: a refusal). LethAL Control is absent (a publish).
    */
-  function fleet(refuseLast: boolean) {
-    const calls = { publish: [] as string[], continiaReads: 0, doctor: 0, take: 0 };
+  function fleet(
+    refuseLast: boolean,
+    // R-707: `check` stands in for the resident-source compile (it sees the dependent's name and the
+    // sha256 of the target bytes it was given); `uninstalled` has no resident row; `states` makes a
+    // resident build older ("older": the local build upgrades it) or a newer minted one ("kept").
+    opts: {
+      check?: (name: string, targetSha: string) => void;
+      uninstalled?: string;
+      states?: Record<string, "older" | "kept">;
+    } = {},
+  ) {
+    const calls = {
+      publish: [] as string[],
+      checked: [] as string[],
+      targetShas: [] as string[],
+      continiaReads: 0,
+      doctor: 0,
+      take: 0,
+    };
     const local = new Map<string, Buffer>();
     const resident = new Map<string, { pkg: Buffer; version: string }>();
-    const fixtures = new Map<string, AppManifest>();
     const last = PUBLISH_PLAN.at(-1)?.dependents.at(-1);
     for (const step of PUBLISH_PLAN) {
       for (const dir of [step.target, ...step.dependents]) {
         const b = appPkg(dir, `${dir}-id`);
         local.set(dir, b);
-        fixtures.set(dir, {
-          id: `${dir}-id`,
-          name: dir,
-          publisher: "LethAL",
-          version: "1.0.0.0",
-          ...(dir === step.target
-            ? {}
-            : {
-                dependencies: [{ id: `${step.target}-id`, name: step.target, publisher: "LethAL" }],
-              }),
-        });
-        if (dir === "sandbox-probes") continue;
+        if (dir === "sandbox-probes" || dir === opts.uninstalled) continue;
+        const state = opts.states?.[dir];
         resident.set(
           dir,
-          refuseLast && dir === last
-            ? { pkg: appPkg(dir, `${dir}-id`, "1.0.0.9"), version: "1.0.0.9" }
-            : { pkg: b, version: "1.0.0.0" },
+          state === "older"
+            ? {
+                pkg: appPkg(dir, `${dir}-id`, "0.9.0.0", "LethAL", { "src/old.al": "old" }),
+                version: "0.9.0.0",
+              }
+            : state === "kept"
+              ? {
+                  pkg: appPkg(dir, `${dir}-id`, "1.0.0.9", "LethAL", {
+                    [`src/${CONTROL_SELECTOR_FILENAME}`]: "sel",
+                  }),
+                  version: "1.0.0.9",
+                }
+              : refuseLast && dir === last
+                ? { pkg: appPkg(dir, `${dir}-id`, "1.0.0.9"), version: "1.0.0.9" }
+                : { pkg: b, version: "1.0.0.0" },
         );
       }
     }
@@ -887,6 +966,13 @@ describe("--write-config-only: configs from the secret file, no server call, no 
           ...(dir === step.target ? {} : { targetDir: step.target }),
         })),
       serverOps: () => ops,
+      checkResident: async (_c, target, pkg) => {
+        const name = readAppIdentity(pkg).name;
+        const sha = sha256Of(target.bytes);
+        calls.checked.push(name);
+        calls.targetShas.push(sha);
+        opts.check?.(name, sha);
+      },
       continiaOps: () => ({
         residentVersion: async (publisher, name) => {
           calls.continiaReads++;
@@ -899,13 +985,12 @@ describe("--write-config-only: configs from the secret file, no server call, no 
         },
       }),
       continiaFiles: () => [{ bytes: continia }],
-      fixtures: () => fixtures,
       doctor: async () => {
         calls.doctor++;
         return true;
       },
     });
-    return { calls, over };
+    return { calls, over, local, resident };
   }
 
   test("one refusal in the LAST step: NOTHING is published in any step, Continia included", async () => {
@@ -966,6 +1051,108 @@ describe("--write-config-only: configs from the secret file, no server call, no 
     expect(h.counts.writes).toBe(8);
     expect(f.calls.doctor).toBe(4);
     expect(code).toBe(0);
+  });
+
+  describe("R-707: an INSTALLED dependent's resident source is checked before anything is sent", () => {
+    const go = async (f: ReturnType<typeof fleet>) => {
+      const h = harness(GOOD, f.over);
+      const code = await h.go(["--server", "bc3", "--lane", "bugs"]);
+      return { code, out: h.printed.join("\n") };
+    };
+    const AL_ERR = "alc failed on x (exit 1):\nsrc/T.al(7,21): error AL0135: no argument";
+    // sandbox-app's resident build is older, so the local one UPGRADES it: the target publishes.
+    const publishing = { states: { "sandbox-app": "older" } } as const;
+
+    test("T-cochange: the resident source breaks against the new target: refused, zero publishes", async () => {
+      const f = fleet(false, {
+        ...publishing,
+        check: (name) => {
+          if (name === "sandbox-tests") throw new Error(AL_ERR);
+        },
+      });
+      const r = await go(f);
+      expect(r.out).toContain("refuse resident-dependent-breaks: sandbox-tests (src/T.al(7,21)");
+      expect(r.out).toContain("(1) uninstall and unpublish the dependent");
+      expect(f.calls.publish).toEqual([]);
+      expect(f.calls.doctor).toBe(0);
+      expect(r.code).toBe(1);
+    });
+
+    test("T-resident-ok: a publishing target's installed dependent is checked against the NEW target build, and the run publishes", async () => {
+      const f = fleet(false, publishing);
+      const residentSha = sha256Of(f.resident.get("sandbox-app")?.pkg as Buffer); // before the run replaces it
+      const r = await go(f);
+      expect(f.calls.checked).toEqual(["sandbox-tests"]);
+      expect(f.calls.targetShas).toEqual([sha256Of(f.local.get("sandbox-app") as Buffer)]);
+      expect(f.calls.targetShas).not.toContain(residentSha);
+      expect(r.out).toContain(
+        "  checked   sandbox-tests (resident) against sandbox-app 1.0.0.0: ok",
+      );
+      expect(f.calls.publish).toContain("LethAL_sandbox-probes_1.0.0.0.app");
+      expect(r.code).toBe(0);
+    });
+
+    test("T-skipped: a skipped target with a skipped dependent is not checked", async () => {
+      const f = fleet(false);
+      const r = await go(f);
+      expect(f.calls.checked).toEqual([]);
+      expect(r.code).toBe(0);
+    });
+
+    test("T-kept-breaks: a KEPT target and a dependent that publishes but fails against the resident target: refused, zero publishes", async () => {
+      const f = fleet(false, {
+        states: { "sandbox-app": "kept", "sandbox-tests": "older" },
+        check: () => {
+          throw new Error(AL_ERR);
+        },
+      });
+      const r = await go(f);
+      expect(r.out).toContain("kept      minted target sandbox-app");
+      expect(r.out).toContain("refuse dependent-vs-kept-target: sandbox-tests (src/T.al(7,21)");
+      expect(r.out).toContain("--mint");
+      expect(f.calls.publish).toEqual([]);
+      expect(f.calls.doctor).toBe(0);
+      expect(r.code).toBe(1);
+    });
+
+    test("T-kept-ok: the same with a compatible dependent publishes; the check ran on the NEW dependent against the RESIDENT target", async () => {
+      const f = fleet(false, { states: { "sandbox-app": "kept", "sandbox-tests": "older" } });
+      const r = await go(f);
+      expect(f.calls.checked).toEqual(["sandbox-tests"]);
+      expect(f.calls.targetShas).toEqual([sha256Of(f.resident.get("sandbox-app")?.pkg as Buffer)]);
+      expect(r.out).toContain(
+        "  checked   sandbox-tests (new build) against kept sandbox-app 1.0.0.9: ok",
+      );
+      expect(f.calls.publish).toContain("LethAL_sandbox-probes_1.0.0.0.app");
+      expect(r.code).toBe(0);
+    });
+
+    test("T-kept-skip: a kept target whose dependent is only skipped is not checked", async () => {
+      const f = fleet(false, { states: { "sandbox-app": "kept" } });
+      await go(f);
+      expect(f.calls.checked).toEqual([]);
+    });
+
+    test("T-not-installed: a dependent with no resident row is not checked", async () => {
+      const f = fleet(false, { ...publishing, uninstalled: "sandbox-tests" });
+      const r = await go(f);
+      expect(f.calls.checked).toEqual([]);
+      expect(r.out).not.toContain("refuse");
+    });
+
+    test("T-not-compile: a throw with no AL error line is not called a break, and nothing is sent", async () => {
+      const f = fleet(false, {
+        ...publishing,
+        check: () => {
+          throw new Error("the dev endpoint refused the login (HTTP 401)");
+        },
+      });
+      const r = await go(f);
+      expect(r.out).toContain("dependent check failed (not a compile result)");
+      expect(r.out).not.toContain("dependent-breaks");
+      expect(f.calls.publish).toEqual([]);
+      expect(r.code).toBe(1);
+    });
   });
 
   describe("R669: a server with an out-of-use marker", () => {

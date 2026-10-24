@@ -244,8 +244,7 @@ export function planReachGrains(
 function emptiedSlotFiller(source: string, from: number, to: number, m: ComponentMember): string {
   if (m.afterText.trim() !== "") return "";
   if (isStatementPosition(m.spec.before) || !isStatementSlot(m.spec.before)) return "";
-  let at = from;
-  while (at < to && WHITESPACE.test(source.charAt(at))) at++;
+  const at = skipTrivia(source, from, to);
   if (at < to && source.charAt(at) === ";") return "";
   // Five characters decide `else` plus its word boundary, exactly as the test on the whole rest.
   if (/^else(?![A-Za-z0-9_])/i.test(source.slice(at, Math.min(at + 5, to)))) return "begin end";
@@ -254,6 +253,31 @@ function emptiedSlotFiller(source: string, from: number, to: number, m: Componen
 
 /** One character of what `trim` removes (`\s` is the same set: white space and line ends). */
 const WHITESPACE = /^\s$/;
+
+/** A `// ...` line comment, a `/* ... *\/` block comment, or a `#pragma`/`#region` line. */
+const TRIVIA = /(?:\/\/[^\n]*|\/\*[\s\S]*?\*\/|#(?:pragma|region|endregion)\b[^\n]*)/y;
+
+// Separate helper: it scans forward from a byte offset for the next token and must also step over
+// `#pragma`/`#region` lines; the engine's `maskAlNonCode` masks whole text and keeps directive lines.
+/**
+ * The first index in `from..to` that is not white space or a comment. R729: a comment between a
+ * removed statement and the `else` (or `;`) after it hid that token from the look-ahead above, so
+ * it emitted `then ; // c` before `else` (AL0110) and a doubled `;` in a case arm.
+ */
+function skipTrivia(source: string, from: number, to: number): number {
+  let at = from;
+  while (at < to) {
+    if (WHITESPACE.test(source.charAt(at))) {
+      at++;
+      continue;
+    }
+    TRIVIA.lastIndex = at;
+    const hit = TRIVIA.exec(source);
+    if (hit === null || at + hit[0].length > to) break;
+    at += hit[0].length;
+  }
+  return at;
+}
 
 /**
  * `source.slice(from, to).trimEnd().endsWith(";")`, read backwards one character at a time, so a

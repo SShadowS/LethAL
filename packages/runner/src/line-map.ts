@@ -169,7 +169,7 @@ export function refusedUnmeasuredShapeReason(
   objectId: number,
   file: string,
 ): string {
-  return `coverage refused for ${objectType}:${objectId} (${file}): its file holds a #if object wrapper of a shape not measured on al-runner (R300). Its mutants read no-coverage.`;
+  return `coverage refused for ${objectType}:${objectId} (${file}): its file holds a #if object wrapper of a shape the al-runner coverage index has no rule for (two-arm, #elif, nested, or a multi-object file holding a wrapper; R602). Its mutants read no-coverage.`;
 }
 
 /** R-300b (C1): the sentence for an object key two files declare. */
@@ -680,6 +680,7 @@ function stripQuotes(s: string): string {
 
 /** What a `#if` object wrapper may hold without holding an OBJECT: file-level lines, no code. */
 const NOT_AN_OBJECT: ReadonlySet<string> = new Set([
+  "pragma", // R579: a compiler directive like a comment; agrees with `isTopLevelObject`
   "namespace_declaration",
   "using_statement",
   "comment",
@@ -747,7 +748,6 @@ function containerNodesOf(root: ALSyntaxNode): ALSyntaxNode[] {
 export function isTopLevelObject(node: ALSyntaxNode): boolean {
   return (
     !NOT_AN_OBJECT.has(node.rawKind) &&
-    node.rawKind !== "pragma" &&
     node.rawKind !== "preproc_conditional_object" &&
     !DIRECTIVE_ONLY_KINDS.has(node.rawKind)
   );
@@ -760,10 +760,17 @@ export function isTopLevelObject(node: ALSyntaxNode): boolean {
  * _object_with_id(...)`, 487 `enum_declaration`, 529 `entitlement_declaration`; `interface_body` at
  * 559 is `repeat1(choice($._body_element, $.interface_procedure))`), and `node-types.json` lists
  * `procedure` and `trigger_declaration` among `declaration_body`'s and `interface_body`'s children.
- * So the grammar shows NO kind code-free, `enumextension` included, and none is added beyond the
- * ruling's list; `holdsCode` backs the list up by refusing an allow-listed node that parsed with code.
+ * So the grammar shows NO kind code-free, and r2 left `enumextension` out for that reason.
+ * R-579 (B1 ruling) reversed it: the same is true of the five listed kinds, which rest on AL
+ * semantics, and `holdsCode` already existed. By AL semantics an enumextension (values only), a
+ * controladdin (AL declares only event and procedure signatures; its script is not AL) and a dotnet
+ * block (assembly and type declarations only) hold no AL code either. `profile` stays out. `holdsCode`
+ * backs the list up by refusing an allow-listed node that parsed with code.
  */
 const CODE_FREE_KINDS: ReadonlySet<string> = new Set([
+  "enumextension_declaration",
+  "controladdin_declaration",
+  "dotnet_declaration",
   "permissionset_declaration",
   "permissionsetextension_declaration",
   "enum_declaration",
@@ -771,8 +778,12 @@ const CODE_FREE_KINDS: ReadonlySet<string> = new Set([
   "entitlement_declaration",
 ]);
 
-/** Node kinds that hold executable code (or a procedure split across `#if` arms). */
+/**
+ * Node kinds that hold executable code (or a procedure split across `#if` arms). R-579: `ERROR` too,
+ * fail-closed: a procedure in a dotnet block parses to an ERROR inside it, and that is not proof of no code.
+ */
 const CODE_KINDS: ReadonlySet<string> = new Set([
+  "ERROR",
   "procedure",
   "trigger_declaration",
   "code_block",
@@ -954,6 +965,11 @@ export function alRunnerAdmitsWrappedFile(root: ALSyntaxNode): boolean {
   const wrappers = root.namedChildren.filter(
     (c) => c.rawKind === "preproc_conditional_object" && wrapperHoldsObject(c),
   );
+  // R580: a file whose every wrapped object, in every arm, is code-free has no covered line to shift.
+  const all = wrappers.flatMap((w) => containerNodesOf(w).filter(isTopLevelObject));
+  if (all.length > 0 && all.every((n) => CODE_FREE_KINDS.has(n.rawKind) && !holdsCode(n))) {
+    return true;
+  }
   const [wrapper] = wrappers;
   if (wrappers.length !== 1 || wrapper === undefined) return false;
   const nested = wrapper.namedChildren.some(
@@ -1131,16 +1147,18 @@ export function undecidedArmsReason(
 export type WrappedRule = "bc-shape" | "al-runner-index" | "refuse-wrapped";
 
 /**
- * R654 S1: the rule a SESSION of each backend applies, exactly the pre-R654 mapping (a v3 session
- * gets neither the bcdev arm nor the al-runner index arm, so it refuses every wrapped file). S3
- * removed the retired .NET al-runner's row; `"al-runner-index"` stays, for the coverage index.
+ * R654 S1: the rule a SESSION of each backend applies. R602: a v3 session gets the al-runner index
+ * arm, the same rule the coverage index applies (`alRunnerAdmitsWrappedFile`): a single-wrapper
+ * file is scored and any other wrapped file is refused by name. Before R602 it refused every
+ * wrapped file in selection while the CLI kept coverage ON for a project of single-wrapper files,
+ * so their mutants read `no-coverage` (32 lost kills on `sandbox-wrapped`).
  */
 export function wrappedRuleFor(kind: BuildBackend["kind"]): WrappedRule {
   switch (kind) {
     case "bcdev":
       return "bc-shape";
     case "al-runner-v3":
-      return "refuse-wrapped";
+      return "al-runner-index";
   }
 }
 

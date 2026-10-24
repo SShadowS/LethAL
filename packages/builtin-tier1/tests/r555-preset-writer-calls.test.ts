@@ -8,7 +8,12 @@ import {
   wrapRoot,
 } from "@lethal/engine";
 import { openItemHangRefuses } from "../src/index";
-import { objectsOfType, presetExitNames } from "../src/loop-hazard";
+import {
+  objectNameCalls,
+  objectsOfType,
+  presetExitNames,
+  resetObjectNameCalls,
+} from "../src/loop-hazard";
 
 /**
  * R555 (coord task R-555): a CALL to a procedure that writes a preset exit name is refused like the
@@ -344,5 +349,45 @@ describe("R555: a writer called from another object through `Report X`", () => {
     expect(objectsOfType({ kind: "report", name: "cross rep", temporary: false }, x.ctx)).toEqual(
       [],
     );
+  });
+});
+
+/**
+ * R329: `objectsOfType` reads one name index per context. Fixed answers (they held for the filter
+ * it replaced), and a counter on `objectNameOf` showing each named object is read once.
+ */
+describe("R329: objectsOfType's name index", () => {
+  const files = {
+    "a.al": `tableextension 50402 "Ext One" extends Tee\n{\n}\n`,
+    "b.al": `table 50400 Tee\n{\n    fields\n    {\n        field(1; "No."; Code[20]) { }\n    }\n}\n`,
+    "c.al": `tableextension 50403 "Ext Two" extends Tee\n{\n}\n`,
+    "d.al": "codeunit 50401 Tee\n{\n}\n",
+    "e.al": "codeunit 50404 Other\n{\n}\n",
+  };
+  const head = (o: ALSyntaxNode) => o.text.split("\n")[0];
+
+  it("B1: a table lists ext, table, ext in file order; a codeunit only the codeunit", () => {
+    const x = project(files);
+    const tee = { kind: "table", name: "tee", temporary: false } as const;
+    expect(objectsOfType(tee, x.ctx).map(head)).toEqual([
+      'tableextension 50402 "Ext One" extends Tee',
+      "table 50400 Tee",
+      'tableextension 50403 "Ext Two" extends Tee',
+    ]);
+    expect(objectsOfType({ ...tee, kind: "codeunit" }, x.ctx).map(head)).toEqual([
+      "codeunit 50401 Tee",
+    ]);
+    expect(objectsOfType({ ...tee, name: "nothing" }, x.ctx)).toEqual([]);
+  });
+
+  it("B2: four lookups read each named object once", () => {
+    const x = project(files);
+    resetObjectNameCalls();
+    const tee = { kind: "table", name: "tee", temporary: false } as const;
+    objectsOfType(tee, x.ctx);
+    objectsOfType(tee, x.ctx);
+    objectsOfType({ ...tee, kind: "codeunit" }, x.ctx);
+    objectsOfType({ ...tee, name: "nothing" }, x.ctx);
+    expect(objectNameCalls).toBe(3);
   });
 });

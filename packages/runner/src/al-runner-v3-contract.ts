@@ -17,7 +17,7 @@
  */
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { isV3RefusalText } from "./al-runner-rows";
 import {
   AlRunnerServer,
@@ -33,8 +33,9 @@ import {
   v3DependencySkipLines,
 } from "./al-runner-v3-backend";
 import { baseAppJson, probeV3PredefinedSymbols } from "./al-runner-v3-probe";
+import { BC_HTTP_HUB_TEXT } from "./al-runner-v3-texts";
 import { AlcCompileError, ArtifactCompiler, type ArtifactIo, defaultArtifactIo } from "./artifact";
-import { type SpawnFn, defaultSpawn } from "./publisher";
+import { type SpawnFn, absToolPath, defaultSpawn } from "./publisher";
 
 /**
  * R675: the start each leg-C probe message must have, from LethAL's own probe AL (`Error('boom %1',
@@ -67,6 +68,14 @@ export type V3DefectVerdict = "defect-present" | "gone" | "unmeasurable" | "refu
  */
 export const BC_HTTP_INTERNAL_TEXT =
   "The request was blocked by the runtime to prevent accidental use of production services.";
+/**
+ * R705 (owner ruling 2026-10-24): the oracle for HTTP-in-test behaviour is BC's TEST RUNNER HUB path
+ * (VS Code, `bcdev_test_run`), not the web-service path. R706 measured the hub on bc1: this text, code
+ * `HttpRequest:Security`. `refusal-row-shape` reads `gone` on exactly this text.
+ * `BC_HTTP_INTERNAL_TEXT` above is BC's web-service-path text (r639, R706); it is kept, and a build that
+ * writes it now reads `unlike-bc`, as any text other than the hub's does.
+ */
+export { BC_HTTP_HUB_TEXT };
 /** Duplicate key at the end of a test: 92912's `DuplicateNamedKey`, 92913, and 92915's `raw`. */
 export const BC_END_OF_TEST_TEXT =
   "The record in table Probe Row already exists. Identification fields and values: Key='K1'";
@@ -99,7 +108,7 @@ function refusalRowShape(c: {
   if (isRefusalRow(h)) return "defect-present";
   const m = h.message ?? "";
   if (h.status !== "fail" || h.notRun || c.exitCode !== 1) return "diverged";
-  if (m === BC_HTTP_INTERNAL_TEXT) return "gone";
+  if (m === BC_HTTP_HUB_TEXT) return "gone";
   return isV3RefusalText(m) ? "diverged" : "unlike-bc";
 }
 
@@ -120,13 +129,6 @@ const TARGET_ID = "7a1c0e52-5b8e-4d3a-9f60-2c7b8e1d0586";
 const TESTS_ID = "7a1c0e52-5b8e-4d3a-9f60-2c7b8e1d1586";
 const TARGET_NAME = "LethAL R586 Contract App";
 
-/**
- * `timeout-is-cpu` (pre-commitment r6): fixed iteration counts, calibrated once on alpha.2 in this
- * container (2026-10-21): `Burn(110000000)` alone is 3.0 s of CPU (user 2.998 s, wall 3.02 s), and
- * at N=2 a notRun row "Test exceeded 2s timeout." at 2.04 s wall. `Burn(55000000)` is 1.49 s of CPU
- * alone; under `taskset -c 0` beside a busy loop it took 3.17 s wall for 1.52 s of CPU and PASSED at
- * N=2 (durationMs 3105). A wall-time stop would stop the second; a CPU-time stop does not.
- */
 /**
  * `sleep-is-noop` (#5605, pre-commitment r6) on one call of codeunit 50660:
  * - `defect-present`: the call is under 1 s, every Sleep row passes with durationMs under 100, AND
@@ -159,8 +161,39 @@ export function classifySleep(cl: {
     : "diverged";
 }
 
-export const BURN_LONG = 110_000_000;
-export const BURN_SHORT = 55_000_000;
+/**
+ * `timeout-is-cpu` (r14b, R693): CPU speed varies too much to size a burn (r6's fixed counts and r14's
+ * calibration both flipped with core-0 conditions), so ONE burn is used that never finishes in any
+ * budget here. Call A, pinned and alone, must be stopped at the limit. Call B, the same burn pinned
+ * beside BURN_BUSY_LOOPS busy loops (the burn gets about 1/8 of the core), must ALSO be stopped, but
+ * late in wall time: a CPU-time stop comes after the limit in CPU (about 8x that in wall), a
+ * wall-time stop at the limit. B's durationMs must exceed BURN_WALL_FACTOR x the limit AND
+ * BURN_RELATIVE_FACTOR x A's durationMs (a wall-time limit with slack stops both at the same time;
+ * healthy runs give B about 8x A).
+ */
+export const BURN_HUGE = 2_000_000_000;
+export const BURN_LIMIT_SECS = 2;
+export const BURN_BUSY_LOOPS = 7;
+export const BURN_WALL_FACTOR = 1.5;
+export const BURN_RELATIVE_FACTOR = 2;
+/** A hard process timeout per call, so a build with no limit cannot hang leg C. */
+export const BURN_GUARD_MS = 60_000;
+/**
+ * A busy loop on core 0. `timeout -s KILL` (coreutils) ends it on its own after 150 s, so a killed bun
+ * cannot leave it spinning for good.
+ */
+export const burnerArgv = (taskset: string): string[] => [
+  taskset,
+  "-c",
+  "0",
+  "timeout",
+  "-s",
+  "KILL",
+  "150",
+  "sh",
+  "-c",
+  "while :; do :; done",
+];
 
 /** Probe First: its lines are what `per-test-coverage` checks (5 `if`, 6 `exit(1)`, 7 `exit(0)`). */
 const FIRST_AL = `codeunit 50601 "Probe First"
@@ -256,6 +289,22 @@ const SLEEPER_AL = `codeunit 50605 "Probe Sleeper"
 }
 `;
 
+/** `timeout-is-cpu` (r14b): ONE burn that never finishes within any budget; both calls run it. */
+const BURN_AL = `codeunit 50656 "Probe Burn Long"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure CpuBurnLong()
+    var
+        Logic: Codeunit "Probe Logic";
+    begin
+        if Logic.Burn(${BURN_HUGE}) < 0 then
+            Error('negative');
+    end;
+}
+`;
+
 const TESTS_AL = `codeunit 50650 "Probe Tests"
 {
     Subtype = Test;
@@ -347,34 +396,6 @@ codeunit 50652 "Probe Cut"
     begin
         if Dirty then
             Error('dirty');
-    end;
-}
-
-codeunit 50656 "Probe Burn Long"
-{
-    Subtype = Test;
-
-    [Test]
-    procedure CpuBurnLong()
-    var
-        Logic: Codeunit "Probe Logic";
-    begin
-        if Logic.Burn(${BURN_LONG}) < 0 then
-            Error('negative');
-    end;
-}
-
-codeunit 50658 "Probe Burn Short"
-{
-    Subtype = Test;
-
-    [Test]
-    procedure CpuBurnShort()
-    var
-        Logic: Codeunit "Probe Logic";
-    begin
-        if Logic.Burn(${BURN_SHORT}) < 0 then
-            Error('negative');
     end;
 }
 
@@ -501,10 +522,13 @@ const SLEEP_TESTS_AL = `codeunit 50660 "Sleep Probe"
 
 /**
  * R612 `serve-keep-reasons` (plan r3 §2): one test per entry of `V3_SERVE_SAFE_REFUSALS`, run in
- * ONE `serve` request. Its own tests folder, so the not-compiling test (no-callee) never reaches
- * the one-shot facts. The OnRun overflows at once (row 6's text, without its 53 s loop, R638).
+ * ONE `serve` request. Its own tests folder, so these tests never reach the one-shot facts. The
+ * OnRun overflows at once (row 6's text, without its 53 s loop, R638). Every test here must
+ * COMPILE: since #5602's fix v3 runs nothing in a request whose apps do not compile, so one bad
+ * test blinds the fact for all (R705).
  */
-const SERVE_TESTS_AL = `codeunit 50670 "Serve Http"
+/** test hook (R705) */
+export const SERVE_TESTS_AL = `codeunit 50670 "Serve Http"
 {
     Subtype = Test;
 
@@ -566,17 +590,6 @@ codeunit 50673 "Serve OnRun"
     begin
     end;
 }
-
-codeunit 50674 "Serve NoCallee"
-{
-    Subtype = Test;
-
-    [Test]
-    procedure DoesNotCompile()
-    begin
-        NoSuchProcedure(1);
-    end;
-}
 `;
 
 /** R667: one `Assert.AreEqual` failure, in its own tests app (only it depends on Library Assert). */
@@ -624,16 +637,21 @@ const DEP_SKIP_TESTS_AL = `codeunit 50662 "Probe DepSkip"
 `;
 
 /** R667: a plain failed row's message, or `undefined` when the row is not a plain `fail`. */
-const plainFailMessage = (r: V3Row | undefined): string | undefined =>
+const plainFailMessage = (
+  r: { readonly status: string; readonly notRun?: boolean; readonly message?: string } | undefined,
+): string | undefined =>
   r !== undefined && r.status === "fail" && r.notRun !== true ? r.message : undefined;
 
-/** R612: each `V3_SERVE_SAFE_REFUSALS` entry and the serve row that must match it. */
-const SERVE_CASES: ReadonlyArray<readonly [string, string]> = [
-  ["http", "Codeunit50670.HttpGet"],
-  ["commit", "Codeunit50671.CommitCall"],
-  ["cascade", "Codeunit50672.LaterFails"],
-  ["onrun-failed", "Codeunit50673.Never"],
-  ["no-callee", "Codeunit50674.DoesNotCompile"],
+/**
+ * R612: each `V3_SERVE_SAFE_REFUSALS` entry and the serve row that must match it. R705: the third
+ * element says a plain trusted fail is also accepted (a #5602-fixed build moved http and cascade
+ * one-shot; commit and onrun-failed are still refusals there).
+ */
+const SERVE_CASES: ReadonlyArray<readonly [string, string, boolean]> = [
+  ["http", "Codeunit50670.HttpGet", true],
+  ["commit", "Codeunit50671.CommitCall", false],
+  ["cascade", "Codeunit50672.LaterFails", true],
+  ["onrun-failed", "Codeunit50673.Never", false],
 ];
 
 /** R612: the stop the update gate's serve daemon runs with (leg C's `timeout-classified` N). */
@@ -655,12 +673,15 @@ async function serveKeepReasons(env: V3ProbeEnv, app: string, root: string): Pro
     }),
   );
   await writeFile(join(tests, "src", "Serve.Codeunit.al"), SERVE_TESTS_AL);
-  const cache = env.cacheDir !== undefined ? { ALRUNNER_CACHE: env.cacheDir } : undefined;
-  const spawn: ServerSpawnFn =
-    env.serveSpawn ??
-    ((argv) => defaultServerSpawn(argv, cache !== undefined ? { env: cache } : {}));
-  const server = new AlRunnerServer(env.alRunnerPath, spawn, [], "serve");
-  const expected = `one serve daemon (--test-timeout ${SERVE_TEST_TIMEOUT_S}, testIsolation test): each row notRun, error, and its V3_SERVE_SAFE_REFUSALS entry (${SERVE_CASES.map(([e]) => e).join(", ")})`;
+  const cache = env.cacheDir !== undefined ? { ALRUNNER_CACHE: resolve(env.cacheDir) } : undefined;
+  // R645: in the probe's scratch dir, so v3's coverage file never lands in the caller's.
+  const spawn: ServerSpawnFn = (argv) =>
+    (env.serveSpawn ?? defaultServerSpawn)(argv, {
+      cwd: root,
+      ...(cache !== undefined ? { env: cache } : {}),
+    });
+  const server = new AlRunnerServer(absToolPath(env.alRunnerPath), spawn, [], "serve");
+  const expected = `one serve daemon (--test-timeout ${SERVE_TEST_TIMEOUT_S}, testIsolation test): four codeunits (five tests), each row notRun, error, and its V3_SERVE_SAFE_REFUSALS entry (${SERVE_CASES.map(([e]) => e).join(", ")}); http and cascade also accepted as a plain trusted fail (R705)`;
   let rows: readonly ServerTestLine[];
   try {
     await server.start(SERVE_DEADLINE_MS, [], SERVE_TEST_TIMEOUT_S);
@@ -673,25 +694,35 @@ async function serveKeepReasons(env: V3ProbeEnv, app: string, root: string): Pro
     await server.close();
   }
   const moved: string[] = [];
-  for (const [entry, name] of SERVE_CASES) {
+  const how: string[] = [];
+  for (const [entry, name, plainFailOk] of SERVE_CASES) {
     const r = rows.find((t) => t.name === name);
-    const ok =
+    const refusal =
       r !== undefined &&
       r.notRun === true &&
       r.status === "error" &&
       r.message !== undefined &&
       V3_SERVE_SAFE_REFUSALS[entry]?.test(r.message) === true;
-    if (!ok)
+    // R705: never a negated optional-chain form (r?.x !== ...): no row would read as fine.
+    const pm = plainFailOk ? plainFailMessage(r) : undefined;
+    const plainFail =
+      pm !== undefined && !isV3RefusalText(pm) && (entry !== "cascade" || pm === "later");
+    if (refusal || plainFail) {
+      how.push(`${entry}: ${refusal ? "refusal" : "plain fail"}`);
+    } else {
       moved.push(
         `${entry}: MOVED ${r === undefined ? `no row ${name}` : `${r.status} notRun=${String(r.notRun)} ${r.message ?? ""}`}`,
       );
+    }
   }
   return fact(
     "serve-keep-reasons",
     "warn",
     moved.length === 0 ? "matches" : "diverged",
     expected,
-    moved.length === 0 ? "all 5 entries match" : moved.join("; "),
+    moved.length === 0
+      ? `the keep rule accepts every row of all ${SERVE_CASES.length} entries (${how.join(", ")})`
+      : moved.join("; "),
   );
 }
 
@@ -707,11 +738,16 @@ export interface V3ProbeEnv {
   readonly alcIo?: ArtifactIo;
   /** `taskset` for `timeout-is-cpu`; absent: that fact is unmeasurable. */
   readonly tasksetPath?: string;
-  /** Test hook: the competing busy loop on core 0 (default: `taskset -c 0 sh -c 'while :; do :; done'`). */
-  readonly startBurner?: () => { kill(): void };
   /**
-   * M1 (review build Opus): `timeout-is-cpu`'s burns are fixed iteration counts calibrated on ONE
-   * machine, so the fact is GATE-ONLY: the update gate's leg C measures it (this field absent), and
+   * Test hook: starts ONE of the competing busy loops on core 0; `timeout-is-cpu` calls it
+   * `BURN_BUSY_LOOPS` times (default: `burnerArgv`, `taskset -c 0 timeout -s KILL 150 sh -c ...`).
+   */
+  readonly startBurner?: () => { kill(): void };
+  /** Test hook: `timeout-is-cpu`'s per-call hard process timeout (default 60 s). */
+  readonly burnGuardMs?: number;
+  /**
+   * M1 (review build Opus): `timeout-is-cpu` pins burns to one core beside busy loops and takes about
+   * 20 s (R693, r14b), so the fact is GATE-ONLY: the update gate's leg C measures it (this field absent), and
    * its pass is recorded with `.gated`. A session names that record here instead: the burns do not
    * run, and the fact cannot refuse a session on other hardware.
    */
@@ -733,6 +769,8 @@ interface Call {
   readonly stdout: string;
   readonly stderr: string;
   readonly wallMs: number;
+  /** The call's `guardMs` timeout fired (the process was killed by it). */
+  readonly timedOut: boolean;
   readonly rows: readonly V3Row[] | undefined;
   readonly coverage: unknown;
 }
@@ -766,6 +804,7 @@ async function writeProject(
   );
   await writeFile(join(tests, "src", "Tests.Codeunit.al"), TESTS_AL);
   await writeFile(join(tests, "src", "SleepProbe.Codeunit.al"), SLEEP_TESTS_AL);
+  await writeFile(join(tests, "src", "Burn.Codeunit.al"), BURN_AL);
   return { app, tests };
 }
 
@@ -797,8 +836,14 @@ const rowsText = (c: Call, method: string): string =>
 
 /** The probe. Never throws for a v3 answer; a fact it could not read is `unmeasurable`. */
 export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractResult> {
-  const spawn = env.spawn ?? defaultSpawn;
   const root = await mkdtemp(join(tmpdir(), "lethal-r586-contract-"));
+  // R645: every v3 process the probe starts runs in `root` (v3 writes coverage.cobertura.xml into
+  // its cwd). Paths handed to v3 are made absolute below.
+  const spawnIn = env.spawn ?? defaultSpawn;
+  const spawn: SpawnFn = (argv, opts) => spawnIn(argv, { ...opts, cwd: root });
+  const alRunnerPath = absToolPath(env.alRunnerPath);
+  const packagesDir = resolve(env.packagesDir);
+  const cacheDir = env.cacheDir !== undefined ? resolve(env.cacheDir) : undefined;
   const facts: V3Fact[] = [];
   try {
     const { app, tests } = await writeProject(root, logicAl());
@@ -811,19 +856,21 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         tests?: string;
         wrap?: readonly string[];
         codeunit?: number;
+        /** A hard process timeout: the call is killed after this long (`timedOut`). */
+        guardMs?: number;
       } = {},
     ): Promise<Call> => {
       seq += 1;
       const cov = join(root, `cov-${seq}.json`);
       const argv = [
         ...(o.wrap ?? []),
-        env.alRunnerPath,
+        alRunnerPath,
         "test",
         "--output-json",
         "--isolation",
         "test",
         "--package-cache",
-        env.packagesDir,
+        packagesDir,
         "--bc-version",
         env.bcVersion,
         "--no-download",
@@ -833,10 +880,11 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         o.tests ?? tests,
       ];
       const t0 = Date.now();
-      const res = await spawn(
-        argv,
-        env.cacheDir !== undefined ? { env: { ALRUNNER_CACHE: env.cacheDir } } : {},
-      ).catch((e: unknown) => ({ exitCode: -1, stdout: "", stderr: String(e) }));
+      const signal = o.guardMs !== undefined ? AbortSignal.timeout(o.guardMs) : undefined;
+      const res = await spawn(argv, {
+        ...(cacheDir !== undefined ? { env: { ALRUNNER_CACHE: cacheDir } } : {}),
+        ...(signal !== undefined ? { signal } : {}),
+      }).catch((e: unknown) => ({ exitCode: -1, stdout: "", stderr: String(e) }));
       const wallMs = Date.now() - t0;
       const decoded = o.codeunit !== undefined ? decodeV3Rows(res.stdout, o.codeunit) : undefined;
       let coverage: unknown;
@@ -850,13 +898,14 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
       return {
         ...res,
         wallMs,
+        timedOut: signal?.aborted === true,
         rows: decoded !== undefined && "rows" in decoded ? decoded.rows : undefined,
         coverage,
       };
     };
 
     // version
-    const v = await spawn([env.alRunnerPath, "--version"]).catch(() => ({
+    const v = await spawn([alRunnerPath, "--version"]).catch(() => ({
       exitCode: -1,
       stdout: "",
       stderr: "",
@@ -874,7 +923,7 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
 
     // unknown-flag-rejected
     const bad = await spawn([
-      env.alRunnerPath,
+      alRunnerPath,
       "test",
       "--lethal-wire-contract-probe",
       app,
@@ -1077,13 +1126,14 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         `exit ${cut.exitCode}, ${cut.rows?.length ?? "no"} rows, HangsDirty=${JSON.stringify(hd === undefined ? null : { notRun: hd.notRun, message: hd.message })} ChecksClean=${JSON.stringify(cc === undefined ? null : { notRun: cc.notRun, status: cc.status, message: cc.message })}`,
       ),
     );
-    // timeout-is-cpu (pre-commitment r6; r4's wall-clock spin was invalid: v3's AL clock is virtual):
-    //   alone:  `<v3> test --output-json --isolation test ... --test-timeout-secs 2 --codeunit 50656`
-    //           `CpuBurnLong` (BURN_LONG, 3.0 s of CPU) -> a notRun row "Test exceeded 2s timeout.";
-    //   shared: `--codeunit 50658` under `taskset -c 0`, beside `taskset -c 0 sh -c 'while :; do :; done'`
-    //           `CpuBurnShort` (BURN_SHORT, 1.5 s of CPU) -> a pass whose row durationMs is over 2000.
-    // A wall-time stop would stop the second; only a CPU-time stop gives both.
-    // M1: GATE-ONLY. The burns are fixed counts for one machine; a session trusts the gated record.
+    // timeout-is-cpu (pre-commitment r14b, R693; fixed counts and r14's calibration both flipped):
+    //   A: `--test-timeout-secs 2 --codeunit 50656` (`CpuBurnLong`, BURN_HUGE steps) under `taskset -c 0`,
+    //      alone -> a notRun row "Test exceeded 2s timeout.";
+    //   B: the same call beside 7 `taskset -c 0 sh -c 'while :; do :; done'` -> ALSO that row, with
+    //      durationMs over 1.5 x the limit (3000 ms): a CPU-time stop is late in wall time, a wall-time
+    //      stop comes at about 2000.
+    // Each call has a 60 s process timeout. Killed: A -> diverged (no limit at all), B -> unmeasurable.
+    // M1: GATE-ONLY. A session trusts the gated record.
     if (env.gateOnlyTrusted !== undefined) {
       facts.push(
         fact(
@@ -1098,42 +1148,69 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
       facts.push(
         fact("timeout-is-cpu", "contract", "unmeasurable", "taskset available", "no taskset"),
       );
-    } else {
-      const alone = await call(["--test-timeout-secs", "2", "--codeunit", "50656"], {
-        codeunit: 50656,
-      });
-      const burner =
-        env.startBurner?.() ??
-        Bun.spawn([env.tasksetPath, "-c", "0", "sh", "-c", "while :; do :; done"], {
-          stdout: "ignore",
-          stderr: "ignore",
-        });
-      let shared: Call;
-      try {
-        shared = await call(["--test-timeout-secs", "2", "--codeunit", "50658"], {
-          codeunit: 50658,
-          wrap: [env.tasksetPath, "-c", "0"],
-        });
-      } finally {
-        burner.kill();
-      }
-      const a = rowOf(alone, "CpuBurnLong");
-      const s = rowOf(shared, "CpuBurnShort");
-      const ok =
-        a?.notRun === true &&
-        a.message === "Test exceeded 2s timeout." &&
-        s?.status === "pass" &&
-        !s.notRun &&
-        (s.durationMs ?? 0) > 2000;
+    } else if (env.startBurner === undefined && Bun.which("timeout") === null) {
       facts.push(
         fact(
           "timeout-is-cpu",
           "contract",
-          a === undefined || s === undefined ? "unmeasurable" : ok ? "matches" : "diverged",
-          "at N=2: CpuBurnLong (3 s of CPU) alone is a timeout row; CpuBurnShort (1.5 s of CPU) on one core shared with a busy loop passes with durationMs over 2000",
-          `alone ${JSON.stringify(a ?? null)} (${alone.wallMs} ms); shared ${JSON.stringify(s ?? null)} (${shared.wallMs} ms)`,
+          "unmeasurable",
+          "timeout (coreutils) available for the busy loops",
+          "no timeout",
         ),
       );
+    } else {
+      const pin = [env.tasksetPath, "-c", "0"];
+      const lateMs = BURN_LIMIT_SECS * 1000 * BURN_WALL_FACTOR;
+      const expected = `at N=${BURN_LIMIT_SECS}: a huge burn on core 0 alone is a timeout row (A); the same burn beside ${BURN_BUSY_LOOPS} busy loops on core 0 is ALSO a timeout row, with durationMs over ${lateMs} AND over ${BURN_RELATIVE_FACTOR}x A's (B: a CPU-time stop is late in wall time; a wall-time limit stops both at the same time)`;
+      const guardMs = env.burnGuardMs ?? BURN_GUARD_MS;
+      const burnArgs = ["--test-timeout-secs", String(BURN_LIMIT_SECS), "--codeunit", "50656"];
+      const stopped = (r: V3Row | undefined) =>
+        r?.notRun === true && r.message === `Test exceeded ${BURN_LIMIT_SECS}s timeout.`;
+      const callText = (c: Call, r: V3Row | undefined) =>
+        `${JSON.stringify(r ?? null)} (wall ${c.wallMs} ms${c.timedOut ? `, killed by the ${guardMs} ms process timeout` : ""})`;
+      // A: pinned, alone.
+      const alone = await call(burnArgs, { codeunit: 50656, wrap: pin, guardMs });
+      const a = rowOf(alone, "CpuBurnLong");
+      let verdict: V3Fact["verdict"];
+      let measured = `A ${callText(alone, a)}`;
+      if (alone.timedOut) {
+        // No limit at all: a build that never stops the burn.
+        verdict = "diverged";
+      } else if (a === undefined) {
+        verdict = "unmeasurable";
+      } else if (!stopped(a)) {
+        verdict = "diverged";
+      } else {
+        // B: the same burn beside busy loops, started before and killed after (in a finally).
+        const burners: { kill(): void }[] = [];
+        let shared: Call;
+        try {
+          for (let i = 0; i < BURN_BUSY_LOOPS; i++)
+            burners.push(
+              env.startBurner?.() ??
+                Bun.spawn(burnerArgv(env.tasksetPath), {
+                  stdout: "ignore",
+                  stderr: "ignore",
+                }),
+            );
+          shared = await call(burnArgs, { codeunit: 50656, wrap: pin, guardMs });
+        } finally {
+          for (const b of burners) b.kill();
+        }
+        const s = rowOf(shared, "CpuBurnLong");
+        measured += `; B ${callText(shared, s)}`;
+        // Killed by the process timeout: B could not be read (A is the fact that shows a missing limit).
+        // A row that is not a timeout row, or a stop at about the limit in wall time, breaks the contract.
+        verdict =
+          shared.timedOut || s === undefined
+            ? "unmeasurable"
+            : !stopped(s) ||
+                (s.durationMs ?? 0) <= lateMs ||
+                (s.durationMs ?? 0) <= BURN_RELATIVE_FACTOR * (a.durationMs ?? 0)
+              ? "diverged"
+              : "matches";
+      }
+      facts.push(fact("timeout-is-cpu", "contract", verdict, expected, measured));
     }
     // refusal-row-shape (#5608), a DEFECT fact since r9 (R639): HttpGet to localhost on 50653.
     const ref = await call(["--codeunit", "50653"], { codeunit: 50653 });
@@ -1142,7 +1219,7 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         "refusal-row-shape",
         "defect",
         refusalRowShape(ref),
-        `HttpGet: a refusal row with the implied exit (#5608 present); its fix as BC (bc1): fail, notRun false, "${BC_HTTP_INTERNAL_TEXT}", exit 1`,
+        `HttpGet: a refusal row with the implied exit (#5608 present); its fix as BC's test runner hub (R706, owner ruling): fail, notRun false, "${BC_HTTP_HUB_TEXT}", exit 1`,
         rowsText(ref, "HttpGet"),
       ),
     );
@@ -1521,7 +1598,15 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
 /** Who runs the session: `candidate` only for the update gate's own legs (`cfg.candidate`). */
 export interface V3SessionKind {
   readonly candidate?: boolean;
+  /**
+   * R719: `<fact>=<verdict>` keys a per-build pin covers (`pinnedDefectCoverage`). Only the `gone`
+   * and `refused` warnings read it; every other line, and every key not in it, still prints.
+   */
+  readonly muted?: ReadonlySet<string> | undefined;
 }
+
+/** The key `V3SessionKind.muted` holds for a fact as read. */
+export const v3MuteKey = (f: { fact: string; verdict: string }): string => `${f.fact}=${f.verdict}`;
 
 /**
  * r9 §2: `unlike-bc` refuses a NORMAL session by name (a test that reads `GetLastErrorText` or
@@ -1551,9 +1636,9 @@ export function v3ContractRefusals(r: V3ContractResult, s: V3SessionKind = {}): 
 }
 
 /** The `al-runner-v3-defect-gone` lines; they change nothing until a human re-measures. */
-export function v3DefectsGone(r: V3ContractResult): string[] {
+export function v3DefectsGone(r: V3ContractResult, muted?: ReadonlySet<string>): string[] {
   return r.facts
-    .filter((f) => f.kind === "defect" && f.verdict === "gone")
+    .filter((f) => f.kind === "defect" && f.verdict === "gone" && !muted?.has(v3MuteKey(f)))
     .map(
       (f) =>
         `[lethal] al-runner-v3-defect-gone: ${f.fact}: re-measure before relying on it (measured ${f.measured.slice(0, 600)})`,
@@ -1568,12 +1653,14 @@ export function v3DefectsGone(r: V3ContractResult): string[] {
 export function v3DefectWarnings(r: V3ContractResult, s: V3SessionKind = {}): string[] {
   const defects = (v: string) => r.facts.filter((f) => f.kind === "defect" && f.verdict === v);
   return [
-    ...v3DefectsGone(r),
+    ...v3DefectsGone(r, s.muted),
     // r9 §6: v3 declines a case BC fails; held in the gate, never gone, never a refusal.
-    ...defects("refused").map(
-      (f) =>
-        `[lethal] al-runner-v3-defect-refused: ${f.fact}: v3 declines; not BC's reading (measured ${f.measured.slice(0, 600)})`,
-    ),
+    ...defects("refused")
+      .filter((f) => !s.muted?.has(v3MuteKey(f)))
+      .map(
+        (f) =>
+          `[lethal] al-runner-v3-defect-refused: ${f.fact}: v3 declines; not BC's reading (measured ${f.measured.slice(0, 600)})`,
+      ),
     // r9 §2: only a candidate session gets here (a normal one is refused); every leg prints it.
     ...(s.candidate === true ? defects("unlike-bc") : []).map(
       (f) =>

@@ -67,9 +67,25 @@ import type { SessionReport } from "../src/report";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
 import { BaselineRecordedError, assertGateBaseline, preflightGateBaseline } from "./baseline-guard";
-import { itestConfigName, itestConfigPath, printItestTarget } from "./config-path";
+import {
+  itestConfigName,
+  itestConfigPath,
+  printItestTarget,
+  readFixtureConfig,
+} from "./config-path";
 import { HANG_FIGURES } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import { HANG_SUBLEGS } from "./gate-sublegs";
+import {
+  checkGateWarnings,
+  collectWarnings,
+  finishGate,
+  gateEndLine,
+  nonPassExit,
+  preflightObserve,
+  settleThrown,
+} from "./gate-warnings";
+import type { WarningCollector } from "./gate-warnings";
 import {
   BASELINE_PROBE_OWNER,
   type BaselineVerdictEvent,
@@ -446,6 +462,8 @@ interface LegResult {
    * (`docs/measurements/2026-09-27-r289-hang-rootcause.md`, point 8).
    */
   readonly warnings: readonly WarningDiagnostic[];
+  /** R736: the exact-set collector; each leg is checked in `main`, after its own checks. */
+  readonly gateWarnings: WarningCollector;
   /** R582: `killReproductionFailures` for this leg, read before the store closes. */
   readonly repro: readonly string[];
 }
@@ -459,7 +477,7 @@ type LegMode = (typeof LEG_MODES)[number];
 
 async function runLeg(scratchRoot: string, mode: LegMode): Promise<LegResult> {
   const stopHungSessions = mode === "on" || mode === "single";
-  const configFile = await readJson<LethalConfigFile>(CONFIG_LOCAL_PATH, itestConfigName());
+  const configFile = readFixtureConfig(CONFIG_LOCAL_PATH, itestConfigName());
   const bcdev = validateBcDevConfig(configFile.bcdev);
   const toolPaths = await defaultAlToolPaths();
   if (!toolPaths) {
@@ -523,6 +541,7 @@ async function runLeg(scratchRoot: string, mode: LegMode): Promise<LegResult> {
   const quarantineDir = join(scratchRoot, `quarantine-${mode}`);
   const store = new ResultsStore(join(scratchRoot, `hang-${mode}.sqlite`));
   const warnings: WarningDiagnostic[] = [];
+  const gateWarnings = collectWarnings();
   const baselineVerdicts: BaselineVerdictEvent[] = [];
   let quarantinedEvents = 0;
   const collect: EventSubscriber = (event: RunEvent) => {
@@ -564,7 +583,7 @@ async function runLeg(scratchRoot: string, mode: LegMode): Promise<LegResult> {
     resourceServer: bcdev.server,
     resourceServerInstance: bcdev.serverInstance,
     quarantineDir,
-    emit: [collect],
+    emit: [collect, gateWarnings.subscriber],
   };
   try {
     if (mode === "baseline") {
@@ -596,8 +615,13 @@ async function runLeg(scratchRoot: string, mode: LegMode): Promise<LegResult> {
       quarantineDir,
       sessionLiveness,
       warnings,
+      gateWarnings,
       repro,
     };
+  } catch (e) {
+    // R736 rule: the run's own error wins; its codes are printed, never asserted.
+    settleThrown("hang", mode, gateWarnings);
+    throw e;
   } finally {
     store.close();
     // Without this the spawned bc-dev MCP child keeps the event loop alive and the script hangs —
@@ -1084,6 +1108,7 @@ async function teardown(odataCfg: ActivationConfig): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  preflightObserve();
   // R332: refuse in seconds, before any live work, when the SINGLE leg's baseline is missing.
   preflightGateBaseline(SINGLE_BASELINE_PATH, "hang itest SINGLE leg");
   const scratchRoot = await mkdtemp(join(tmpdir(), "lethal-hang-itest-"));
@@ -1101,6 +1126,7 @@ async function main(): Promise<void> {
       await printLegFailureDiagnostics("stop-hung-sessions ON", on);
       throw err;
     }
+    checkGateWarnings("hang", "on", on.gateWarnings);
 
     // R-204b: the single path, second, because it too leaves the tier clean.
     const single = await runLeg(scratchRoot, "single");
@@ -1113,6 +1139,7 @@ async function main(): Promise<void> {
       throw err;
     }
     await assertGateBaseline(single.report, SINGLE_BASELINE_PATH, "hang itest SINGLE leg");
+    checkGateWarnings("hang", "single", single.gateWarnings);
 
     // R-658: the BASELINE leg, third. `runLeg` checks assertion 19 and then arms the marker; from
     // there every failure and every throw is a STOP (D1).
@@ -1145,6 +1172,8 @@ async function main(): Promise<void> {
       throw new HangStopError(failures.join("; "));
     }
     setLegState("passed");
+    // R736: after check 11, the dump and the diagnostics, so none of them is cut off.
+    checkGateWarnings("hang", "baseline", baseline.gateWarnings);
 
     const off = await runLeg(scratchRoot, "off");
     odataCfg = off.odataCfg;
@@ -1154,17 +1183,15 @@ async function main(): Promise<void> {
       await printLegFailureDiagnostics("stop-hung-sessions OFF", off);
       throw err;
     }
+    checkGateWarnings("hang", "off", off.gateWarnings);
 
-    console.log("hang itest: PASS");
-    await emitPassed("hang", {
-      sublegs: [
-        "stop-hung-sessions-on",
-        "stop-hung-sessions-single",
-        "stop-baseline",
-        "stop-hung-sessions-off",
-      ],
-      artifacts: { reported: false },
-    });
+    console.log(gateEndLine("hang"));
+    await finishGate(() =>
+      emitPassed("hang", {
+        sublegs: [...HANG_SUBLEGS],
+        artifacts: { reported: false },
+      }),
+    );
   } catch (err) {
     // §5 trigger 6: any throw once the marker reads `armed` (runSession, the probe, a store read).
     if (legState === "armed") {
@@ -1199,5 +1226,7 @@ try {
   await emitFailed("hang", stopReason !== undefined ? `STOP (exit 5): ${stopReason}` : msg);
   // R-658: a STOP exits 5. R332: a record run wrote the SINGLE leg's baseline and is never a pass.
   // The two never meet: a record run writes in SINGLE, after its D-C check and before BASELINE.
-  process.exit(err instanceof BaselineRecordedError ? 3 : stopReason !== undefined ? 5 : 1);
+  process.exit(
+    err instanceof BaselineRecordedError ? 3 : stopReason !== undefined ? 5 : nonPassExit(err, 1),
+  );
 }

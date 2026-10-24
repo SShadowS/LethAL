@@ -52,6 +52,7 @@ export {
   objectDeclarationsOf,
 } from "./ast/tree-walks";
 export type { MemberPlace, PlacedMember } from "./ast/tree-walks";
+export { caseLabelCollides } from "./ast/case-labels";
 export { evaluateArms, hasDirectiveLine, startsInInactiveArm } from "./ast/preproc-arms";
 export {
   argumentList,
@@ -100,6 +101,7 @@ export {
   recordScopesAt,
   bareReceiverText,
   bareFieldAssignable,
+  declarationStateAt,
   identifierTokens,
   recordTableObjectOfName,
   tableObjectOfRef,

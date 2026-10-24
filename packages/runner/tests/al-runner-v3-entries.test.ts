@@ -6,7 +6,7 @@ import { afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { appendFileSync } from "node:fs";
 import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { initParser } from "@lethal/engine";
 import { emitResourceSelector, emitStaticSelector } from "@lethal/schemata";
 import { v3ItestTransport, v3SplitLine } from "../itest/al-runner-v3-gate";
@@ -174,6 +174,11 @@ interface FakeRow {
   message?: string;
   notRun?: boolean;
 }
+/** R586c (B2): a real CPU stop takes at least its stop; the fake's stop rows say so. */
+const stopMsOf = (message: string | undefined): number => {
+  const m = /^Test exceeded (\d+)s timeout\./.exec(message ?? "");
+  return m?.[1] === undefined ? 0 : Number(m[1]) * 1000;
+};
 /** `n` is the request's index over the whole fake (every daemon); -1 for a one-shot call. */
 type RowsFn = (mutant: string, cu: number, daemon: number, n: number) => FakeRow[];
 type CoverageFn = (mutant: string, cu: number, active: string, testDir: string) => unknown;
@@ -331,9 +336,12 @@ function fakeServe(script: ServeScript = {}) {
   const requests: Req[] = [];
   /** R672: each shutdown, with how many requests (over every daemon) came before it. */
   const closes: { daemon: number; afterRequests: number }[] = [];
-  const spawn: ServerSpawnFn = (argv) => {
+  /** R645: the working directory each daemon was started in. */
+  const cwds: (string | undefined)[] = [];
+  const spawn: ServerSpawnFn = (argv, opts) => {
     const daemon = daemons.length;
     daemons.push([...argv]);
+    cwds.push(opts?.cwd);
     const out = new Chan();
     const err = new Chan();
     let compiled = new Set<number>();
@@ -392,7 +400,7 @@ function fakeServe(script: ServeScript = {}) {
             type: "test",
             name: `Codeunit${cu}.${r.method}`,
             status: r.status,
-            durationMs: 0,
+            durationMs: stopMsOf(r.message),
             ...(r.message !== undefined ? { message: r.message } : {}),
             ...(r.notRun === true ? { notRun: true } : {}),
             ...(entry !== undefined ? { entry } : {}),
@@ -437,7 +445,7 @@ function fakeServe(script: ServeScript = {}) {
   };
   /** The first request each daemon got. */
   const firsts = () => daemons.map((_, d) => requests.find((r) => r.daemon === d));
-  return { spawn, daemons, requests, firsts, closes };
+  return { spawn, daemons, requests, firsts, closes, cwds };
 }
 
 interface Rig {
@@ -1139,6 +1147,12 @@ describe("10: R612's keep rule per entry, in entry order", () => {
     ]);
   });
 
+  test("R645: the daemon starts in the session's scratch dir, never the caller's working directory", async () => {
+    const r = await readyRig({ mutants: ["M0001"] });
+    expect(r.serve.cwds).toEqual([r.l.scratch]);
+    expect(r.serve.cwds[0]).not.toBe(process.cwd());
+  });
+
   test("all entries kept: one daemon", async () => {
     const r = await readyRig({ mutants: ["M0001", "M0002", "M0003"] });
     expect(r.serve.daemons).toHaveLength(1);
@@ -1214,7 +1228,6 @@ describe("R654 S1: R612 T2-T6 on v3's serve-entries", () => {
     ["commit", COMMIT],
     ["cascade", CASCADE],
     ["onrun-failed", ONRUN],
-    ["no-callee", NO_CALLEE],
   ] as const) {
     test(`T2: a ${entry} refusal keeps the daemon; M0002's verdict is that daemon's, and M0001 is no kill`, async () => {
       const r = await ready({ rows: onM1A(refusal(m)) });
@@ -1239,6 +1252,7 @@ describe("R654 S1: R612 T2-T6 on v3's serve-entries", () => {
   for (const extra of [
     refusal(DUP_KEY),
     refusal(`${HTTP} (extra)`),
+    refusal(NO_CALLEE),
     { status: "error", message: COMMIT },
     { status: "fail", notRun: true, message: COMMIT },
   ] as Extra[]) {
@@ -1586,7 +1600,7 @@ describe("12: the stop is the daemon's S", () => {
     expect(r.b.inRunStopIsBudget).toBe(false);
     expect(r.b.inRunStopMs).toBe(3000);
     const argv = r.serve.daemons[0] ?? [];
-    expect(argv.slice(0, 2)).toEqual(["/fake/al-runner", "serve"]);
+    expect(argv.slice(0, 2)).toEqual([resolve("/fake/al-runner"), "serve"]);
     expect(argv.join(" ")).toContain("--test-timeout 3");
     expect(argv.join(" ")).toContain(`--package-cache ${r.l.deps}`);
     expect(argv.join(" ")).toContain("--bc-version 28.0.46665.47126 --no-download");

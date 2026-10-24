@@ -13,6 +13,51 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **A mutant that breaks the compile no longer costs the whole batch its verdicts** (R734). When alc rejects a batch,
+  LethAL now finds every mutant that fails to compile on its own (not only one), redeploys the rest under their
+  original ids, and scores them. Each breaking mutant is an `error` row whose note names its source file and line and
+  alc's own error codes. Isolation spends about log2(n)+2 compile-only runs per breaking mutant, at most 64, and
+  stops early when the budget left cannot finish another one. If the empty build fails, the budget runs out,
+  the clean set cannot be redeployed or its manifest does not match, every mutant stays `error` with a named note.
+  The redeployed manifest lists the removed mutants (`isolatedOut`), so `lethal verify` does not read their rows as a
+  corrupt store, and bcdev refuses to run a removed id.
+- **A baseline test that fails with bcdev's web-service HTTP text now says so** (R713). Under bcdev, an unhandled
+  outbound HTTP call fails with "The request was blocked by the runtime…", while VS Code, the test runner hub and
+  al-runner v3 give "…the connecting endpoint violates security requirements…" (the hub is the oracle, R712). A test
+  that fails at baseline with the web-service text gets a note naming the difference, and one
+  `bcdev-http-text-differs` warning fires per batch. A note and a warning only: no verdict moves.
+- **A mutant that only a v3-refused test reaches now says so** (R609). When al-runner v3 refuses a test mid-run, the
+  code the test reached before the refusal is recorded and the mutant's note names v3's refusal, not evidence of a
+  gap in your suite. A note only: the verdict stays `no-coverage`, and selection and R140's fallback 2 are
+  unchanged. A test refused before it starts has no such record, so its mutants carry no note.
+
+- **A loop that moves the record it walks is no longer mutated at its exit** (R696). A `repeat .. until R.Next()` or
+  `while R.Next()` loop, or a report or XMLport data item, whose code renames, inserts into, or changes the sort key
+  of its own table through any variable of its table (a Modify only through a second one) can revisit rows
+  (measured on bc2). Its exits and their guards, the mover and its writes, and the pre-loop filters are refused for
+  every operator. 5 forever stops are refused; at 3 of them no current operator deletes the exit. Cost, measured:
+  0.87% of BaseApp's mutants (6,501 of 743,985), 0.63% of DC's, 0.29% of DO's, 0.26% of CDO's. Limits are in R696
+  and R702.
+- **The agentflow gate table now selects `harden`, `verify`, `testapp` and `agreement`** ([R271](docs/roadmap/R271.md)),
+  with path rules, a container each and a place in the run order. A `lethal verify` test-app
+  `version-below-resident` refusal now names the fix for a Linux bc server and for a Windows container
+  ([R597](docs/roadmap/R597.md)).
+
+- **A report data item that inserts into its own table is no longer mutated inside its own code** (R530). Every
+  site in its triggers and the helpers they reach, the writers of any name its exit guard reads, and an outside
+  filter call on it are refused, for every operator. This is a refusal, not a new mutation: Date Compress and
+  Copy Company style reports lose about 0.44% of BaseApp's sites (measured on the prototype), in exchange for no endless loop. R522 and R524
+  to R529 are closed by ruling (measured, no consumer found; stated limits in each item).
+
+- **`lethal verify` reads an integer id written with leading zeros (`01000`) as the number it names** ([R699](docs/roadmap/R699.md)).
+  A test-app object handed to external code that way is now folded or put on the fallback exactly as `1000` is.
+  Digests only widen.
+- **A `RunMutant` HTTP error now carries BC's own error text, and the stranded note no longer says "raise the floor" for it** ([R692](docs/roadmap/R692.md)).
+  The first 400 characters of the body are in the failure message (read with a time bound). "Raise the floor with
+  `--mutant-timeout-ms`" is advised only when the run reached its budget. Diagnostic only: no verdict changes.
+- **`scripts/verify.ts` runs one full verify at a time and survives a stalled disk** (R616, R622). The test
+  step takes a slot lock beside the ledger (a dead pid frees it, never age), the per-test timeout rises to
+  15000 ms only when the io stall is >= 5% just before the tests, and a run over 900 s is killed and named.
 - **`al-runner-v3` can run mutants on a warm `serve` daemon** (R635). Opt in with
   `"alRunnerV3": { "transport": "serve-entries" }`; the default stays `"one-shot"`, unchanged.
   - **How it works:**
@@ -226,6 +271,58 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **`al-runner-v3` keeps coverage on for projects with multi-object files** ([R602](docs/roadmap/R602.md)). v3 reports
+  every object in its own file's frame (measured on the pin and the edge build, 0 lost kills against `--mode none`).
+  Verdicts change: mutants in code no test calls go from `survived` to `no-coverage`. Coverage is still turned off,
+  with the warning naming the file, for a wrapper shape the index has no rule for (two-arm `#if/#else`, `#elif`,
+  nested, or a multi-object file holding a wrapper). An admitted wrapped file whose `scope` disagrees with its
+  position now stops the session (`AlRunnerCoverageFrameError`) instead of dropping the line.
+- New `itest:alrunner-v3` legs `MO` and `WR`, judged by the update gate; their baselines are pending a pre-commitment.
+- **`lethal verify`: a test no longer falls back to the whole-source digest for handing out an object id, a plain
+  test-app codeunit or an Interface** ([R685](docs/roadmap/R685.md), [R430](docs/roadmap/R430.md)). A codeunit,
+  page, report, xmlport, query or table reference or literal id, a `Codeunit X` variable and an `Interface I`
+  variable handed to code the walk does not follow are folded instead (the object's code, or every procedure of
+  the codeunit or implementer). `this`, a record, a page/report/xmlport/query variable, an array or collection
+  element, a mixed `#if` declaration and an unreached caller's `Codeunit::X` into a traced Variant parameter keep
+  the fallback ([R386](docs/roadmap/R386.md) stays open for those).
+- **al-runner v3: a timeout after an earlier refusal or stop in the same call is no longer a kill**
+  ([R694](docs/roadmap/R694.md), upstream issue 5776). v3 marks a later failure after a refused test as not
+  trusted, but not a later timeout, and a refusal can leave state behind. With a mutant active, such a timeout is
+  now an `error` (`runner-test-error`) with a note naming the earlier tests. A timeout with no earlier refusal or
+  stop is still `timeout-killed`.
+
+- **al-runner v3: the covering loop goes on past a refusal that follows a timeout** ([R639](docs/roadmap/R639.md)).
+  Before, such a refusal ended the mutant as `error` and the hanging test, which would have been a confirmed
+  timeout kill, was never asked. Now the next covering test is asked. If nothing else decides the mutant, it still
+  ends `error` (`runner-refused`) with the same note; it is never `survived`.
+
+- **al-runner v3: Microsoft dependencies are hashed by the bytes in the package folder** ([R435](docs/roadmap/R435.md)).
+  The dependency fingerprint of the test app used the declared version of each Microsoft app. It now hashes
+  `Application` and every Microsoft package it finds in `alRunnerV3.packagesDir` or, failing that, in v3's artifact
+  cache (`<cacheDir>/artifacts/<bcVersion>/apps/*.Source.zip`), with their dependencies. A Microsoft app found in
+  neither leaves the run unproven (`test-app-dependencies-unproven`); the run goes on, and every run of such a
+  project (or of every project, when `alRunnerV3` names no `cacheDir`) is unproven (no `--resume`, no `--skip-known-survivors`, no lending). Every v3 test-app fingerprint
+  changes once, so a `--resume` of a v3 run made before this change is refused once (`TestAppRepublishedError`:
+  the test app's dependencies changed), and stored v3 snapshots stop matching once.
+
+- **Leg C's `timeout-is-cpu` fact no longer depends on CPU speed** ([R693](docs/roadmap/R693.md)). Its fixed burn
+  counts stopped working on 2026-10-23 (the same burn now costs more CPU than the 2 s limit on a loaded core), so
+  every v3 leg C and the daily update gate read gate-fail. It now runs one huge burn (2,000,000,000 steps) twice
+  at a 2 s limit on core 0: alone it must be stopped, and beside seven busy loops it must also be stopped, but
+  late (over 3000 ms and over twice the first call's time), which tells a CPU-time limit from a wall-time one. Each call has a 60 s process timeout.
+  Gate and probe code only; no mutation result changes.
+- **The worker fan-out is deleted from `runSession`, and `--compile-concurrency` is gone** ([R671](docs/roadmap/R671.md)).
+  Since R654 no backend accepts `--workers` above 1, so the fan-out (`backendFactory`, sharding, per-worker deploy and
+  bisection, `executeCovering`) could not run. `--workers 1` still works and `--workers 2` is still refused by name.
+  `--compile-concurrency` only bounded that fan-out, so it is now an unknown flag. `packages/runner/src/pool.ts`
+  (`Semaphore`, `shardEvenly`) went with it. No sequential behaviour changed.
+- **R586's backend-identity scanner (T15) now sees more** ([R611](docs/roadmap/R611.md)). It also catches `case`
+  labels, a compare split over two lines, `.includes` on an array of backend names, the `"al-runner-v3"` name, and
+  files in `src` subfolders. The sites it found were all explicit and are now classified. Test code only.
+- **The R192 snapshot key and the v3 compile proof no longer skip a user file named like a LethAL control file**
+  ([R691](docs/roadmap/R691.md)). Only LethAL's own control files at the root of the instrumented batch folder are left
+  out; a same-named file in a subfolder, or anywhere in the test folder, is now hashed. No stored key changes unless a
+  project has such a file (none known), so stored snapshots stay reusable.
 - **`lethal verify`'s blind spot for installed apps is now a stated, measured limit** ([R434](docs/roadmap/R434.md)).
   An app installed on the server but outside the test app's dependencies (a global subscriber, a setup change, a
   test-runner extension) still leaves every test old when it is installed or upgraded. Measured on LethAL's
@@ -888,6 +985,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Removed
 
+- **BREAKING: a config file with an `alRunner` section is refused by name** (R654 F2). The section belonged to
+  the retired .NET al-runner (v2). Any `lethal.config` with a top-level `alRunner` key, even an empty one, now
+  fails to load with `al-runner-v2-retired`, naming the section and the file. Delete the section; use
+  `--backend al-runner-v3` and the `alRunnerV3` section. `scripts/kraken-secrets.ts` no longer maps
+  `alRunner.alRunnerPath`.
+
 - **The .NET al-runner backend (v2) is retired** (R654). The Rust al-runner, `--backend al-runner-v3`,
   replaces it. Upstream moved to the Rust runtime, and the .NET build gets no more updates.
   - **Refused by name, never ignored:** `--backend al-runner` (on `run` and `--dry-run`), a stored run
@@ -904,8 +1007,7 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
     v2 reports are kept as history and no longer validate.
   - **`--workers` > 1 is now refused on every backend.** The .NET al-runner was the only one that ran
     workers in parallel ([R671](docs/roadmap/R671.md)).
-  - **Known gaps left open:** a config `alRunner` section is still ignored without a word until the
-    owner rules on its refusal, and an `envTool` section is ignored without a word on `al-runner-v3`
+  - **Known gaps left open:** an `envTool` section is ignored without a word on `al-runner-v3`
     ([R674](docs/roadmap/R674.md)). Leg L1 does catch a stale layout on v3: it goes red when both
     coverage-index guards are removed ([R666](docs/roadmap/R666.md)).
   - **The v2 tooling and its container wiring are gone** (R654 S5): `scripts/al-runner-update.sh`,
@@ -918,6 +1020,60 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **Two kinds of mutant that alc rejects are no longer generated** ([R731](docs/roadmap/R731.md),
+  [R732](docs/roadmap/R732.md)). Found by the second offline compile of DC's `Cloud` target, one mutant each, and
+  each one fails the whole batch. `toggle-blank-string` no longer blanks a one-character text literal assigned to a
+  `Char`, to one element of a `Text` (`T[1] := 'x'`), or to a target whose type is unknown (AL0122); comparisons and
+  record fields are unchanged. And one central check now drops any mutant whose changed `case` label would equal a
+  sibling label of the same `case` (AL0402), for every operator, with a `case-label-collision` warning and a count per
+  file. Two new shapes in the R402 sweep. The cost is counted in the roadmap items.
+- **Two shapes of emitted AL that did not parse are fixed** ([R729](docs/roadmap/R729.md)). Found by the first offline
+  compile of DC's `Cloud` target (30 syntax errors, AL0111 and AL0110). An `if X then;` as the whole body of an `if` or
+  case branch lost its `;` when a mutant inside it was wrapped, and a comment between a removed call and its `else`
+  made the removal emit `then ; else`. Three new shapes in the R402 sweep. Two more invalid-mutant classes appeared at
+  the next layer: R731, R732 (fixed above).
+- **A recurring verify timeout in `r391-cross-file-twin.test.ts` is gone** ([R716](docs/roadmap/R716.md)). Its two
+  file-backed test stores sat on disk, the one place R616's move to tmpfs missed, so the R565 NULL-digest test hit
+  5 s under a parallel verify's disk load. They now use `testDbPath`. No timeout was raised.
+- **The Windows staged compile copy is removed with a real retry, and a failure is named** ([R708](docs/roadmap/R708.md)).
+  A scanner-locked folder used to be left behind silently, which flaked one unit test. CI now uploads the verify logs
+  of a failed run.
+- **Transport durations use a monotonic clock** ([R710](docs/roadmap/R710.md)). A wall-clock step can no longer record
+  a stopped run shorter than its budget (a hang-gate duration failure on bc3).
+
+- **`al-runner-v3` projects with single-wrapper `#if` files no longer report killed mutants as no-coverage** ([R602](docs/roadmap/R602.md)).
+  Before, the CLI kept coverage on for such a project while selection refused every wrapped object by name, so
+  their mutants read `no-coverage` (32 of 98 on `sandbox-wrapped` were kills that `--mode none` finds). Selection now
+  applies the coverage index's own rule. Verdicts change: single-wrapper files go from `no-coverage` to `killed` or
+  `survived`.
+- **`lethal verify` digests widen: a test app's Install and Upgrade codeunits, and its permission sets, now count**
+  ([R700](docs/roadmap/R700.md), [R701](docs/roadmap/R701.md)). The platform runs `OnInstallApp...`,
+  `OnUpgrade...`, `OnCheckPreconditions...` and `OnValidateUpgrade...` before any test, and a permission set decides
+  what a test may read and write, yet an edit to either left every digest unchanged. Both are now in every digest of an
+  app that has them, so those tests run once again after the upgrade. An app with neither keeps its digests. The first `lethal verify` after upgrading treats every test of such an app as
+  new and, on a big app, may refuse with `too-many-new-tests` (it now names the widened cover as a cause); a fresh
+  `lethal run` records the new digests.
+
+- **`lethal verify` digests widen: code a test-app object runs through its properties, and a namespace-qualified
+  object reference, now count** ([R697](docs/roadmap/R697.md), [R698](docs/roadmap/R698.md)). A page's
+  `SourceTable`, `CardPageId`, an action's `RunObject`, a table's `LookupPageId` / `DrillDownPageId`, a report's
+  request-page `SourceTable`, an xmlport's `tableelement` tables and a field's `TableRelation` are folded;
+  `Codeunit::My.Ns.CU` is read as one reference. Digests only widen (no test leaves the fallback, no fold is
+  dropped), so affected tests re-run once.
+- **The content digest refuses invalid UTF-8 in `NavxManifest.xml` and `navigation.xml`** ([R627](docs/roadmap/R627.md)).
+  Before, two packages differing only in invalid bytes could get one digest. No valid package's digest changes.
+- **`bc-linux-setup.ts` keeps one lease-token record per lane** ([R615](docs/roadmap/R615.md)): `lease-<server>-<lane>.txt`,
+  so two lanes on one server no longer overwrite each other.
+- **The al-runner v3 compile proof now binds the non-`.al` files too** ([R608](docs/roadmap/R608.md)).
+  Left out on purpose: both `app.json` files and the resource selector (each checked on its own), and the tool
+  folders `.vscode`, `.git` and `node_modules`.
+  - **Before:** only `.al` files, both `app.json` files and the `<deps>` file list were bound. A non-`.al` file in the
+    batch or the test dir, a file in the test dir's `.alpackages`, or a subfolder of `<deps>` could change after alc
+    proved the build and v3 would read it.
+  - **Now:** such a change refuses before the next send with `AlRunnerV3UnprovenBatchError`, naming the folder and
+    file. A `<deps>` subfolder is refused at deploy.
+- **The al-runner v3 backend no longer leaves `coverage.cobertura.xml` in your working directory**
+  ([R645](docs/roadmap/R645.md)). Every v3 process now runs in a scratch folder.
 - **`lethal doctor` no longer fails a healthy BC-on-Linux server whose config has no `bcdev.apiBaseUrl`**
   ([R253](docs/roadmap/R253.md)).
   - **The cause:** BC on Linux serves its API (`api/v2.0`) on its own port, and without `apiBaseUrl` LethAL reads it
@@ -956,7 +1112,20 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   - **Mid-run,** a mutant that makes a test codeunit's `OnRun` raise used to stop the session as
     "two consecutive run() failures". It now stops with `MutantBrokeTestDiscoveryError`, which names
     the mutant, its file and the codeunit, and says how to go on (`--resume` stops at the same
-    mutant again; `--exclude <file>` gets past it). Scoring it per mutant is R688.
+    mutant again; `--exclude <file>` gets past it). R688, below, replaced this stop with a
+    per-mutant score.
+- **bcdev: a mutant that blanks a test codeunit's suite discovery is scored per mutant, not a
+  stopped session** ([R688](docs/roadmap/R688.md)). When BC lists no methods for a covering test
+  under a mutant, LethAL runs that test once with no mutant active.
+  - **It passes:** that codeunit is skipped for this mutant only, and the other covering tests still
+    run. A kill by one of them stands, and its note names the skipped codeunit. If none kills, the
+    mutant is `error` with the new cause `test-discovery-failed` (`lethal explain` schema v20).
+  - **It does not pass** (found 0 again, a failure, a timeout): the session stops after recording
+    the mutant, and says the test app, the server or committed data changed, not the mutant.
+  - **Grouped calls:** BC refuses a whole chunk for one such codeunit, so LethAL runs that chunk one
+    method at a time. Grouped and sequential runs give the same verdicts.
+  - **An identity mismatch** in a RunMutant answer is now read before its line count, so a wrong
+    binary is never taken for a blank discovery. `MutantBrokeTestDiscoveryError` is gone.
 - **`al-runner-v3` refuses a session in which v3 left out a dependency app** (R590). v3 skips a
   dependency whole when it finds no package with AL source for it. A call into that app by id
   (`Codeunit.Run(<id>)`) then fails with BC's missing-object error, which LethAL scored as a kill,

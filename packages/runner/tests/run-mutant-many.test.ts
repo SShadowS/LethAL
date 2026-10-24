@@ -6,6 +6,7 @@ import type { TestMethodRef } from "../src/backend";
 import { UnfilteredExtensionsQueryError } from "../src/harness";
 import { ControlDrainTimeoutError, RunMutantTransport } from "../src/run-mutant-transport";
 import type { RunMutantManyRequest, RunMutantManyResult } from "../src/run-mutant-transport";
+import { GROUP_SUITE_UNRESOLVED_HEAD, groupedFoundNone } from "../src/stale-test-app";
 import { scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
@@ -443,6 +444,16 @@ describe("runMany — refusals classify exactly as run's do (the shared classifi
     expect(r.verdict.failureMessage).toContain("artifact-mismatch");
   });
 
+  test("R692: a non-2xx message carries BC's body", async () => {
+    const r = await transport(
+      fakes({ many: new Response("The record Quux is locked", { status: 500 }) }).fetchFn,
+    ).runMany(req());
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r.verdict.failureMessage).toContain("HTTP 500");
+    expect(r.verdict.failureMessage).toContain("The record Quux is locked");
+    expect(r.verdict.operation).toBe("in-flight-unknown");
+  });
+
   test("a non-2xx is in-flight-unknown with the fenced op, and a 404 also asks for a session abort", async () => {
     const r500 = await transport(
       fakes({ many: new Response("boom", { status: 500 }) }).fetchFn,
@@ -569,6 +580,30 @@ describe("runMany — the watchdog (R198 §3.2)", () => {
     expect(r.verdict.outcome).toBe("timeout");
     expect(r.verdict.ref.method).toBe("Alpha");
     expect(r.cause).toBeUndefined();
+  });
+
+  test("R710: a wall-clock step back while the grouped call is held does not give the stop row a negative duration", async () => {
+    let stepped = false;
+    const realNow = Date.now;
+    const spy = spyOn(Date, "now").mockImplementation(() => realNow() - (stepped ? 5_000 : 0));
+    try {
+      const f = fakes({
+        many: "hold",
+        status: () => statusOf(),
+        stopAt: () => {
+          stepped = true; // the host corrects the clock while BC holds the request
+          setTimeout(() => f.release(new Response(AL_STOP_BODY, { status: 408 })), 5);
+          return { stopped: true, sessionId: 9 };
+        },
+      });
+      const r = await transport(f.fetchFn).runMany(req({ stopHungSessions: true }));
+      if (r.kind !== "call") throw new Error("expected a call-level answer");
+      expect(r.verdict.outcome).toBe("timeout");
+      expect(r.verdict.durationMs).toBeGreaterThanOrEqual(0);
+      expect(r.verdict.durationMs).toBeLessThan(30_000);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   // R658 (M2): the warm confirmation's replay is unmutated, so its 408 scores nothing.
@@ -993,6 +1028,34 @@ describe("runMany — the session keys (R206 §2.1)", () => {
     ).runMany(req());
     if (raised.kind !== "call") throw new Error("expected call");
     expect(raised.cause).toBe("group-run-error");
+  });
+
+  // R688 (T2, S8): the control app sends identityMismatch false on suite-unresolved today; if it
+  // ever sends true, the identity fault wins over the found-0 reason. False keeps the text.
+  test("R688 T2: suite-unresolved found 0 with identityMismatch true is the identity fault", async () => {
+    const unresolved = (identityMismatch: boolean) =>
+      transport(
+        fakes({
+          many: odata(
+            answer({
+              status: "suite-unresolved",
+              reason: "expected exactly one method Beta in codeunit 79100, found 0",
+              identityMismatch,
+              sessionId: undefined,
+              testRunsBefore: undefined,
+            }),
+          ),
+        }).fetchFn,
+      ).runMany(req());
+    const r = await unresolved(true);
+    if (r.kind !== "call") throw new Error("expected call");
+    expect(r.verdict.failureMessage).toContain("identity mismatch");
+    expect(groupedFoundNone(r.verdict.failureMessage)).toBeUndefined();
+    const kept = await unresolved(false);
+    if (kept.kind !== "call") throw new Error("expected call");
+    expect(kept.verdict.failureMessage).toBe(
+      `${GROUP_SUITE_UNRESOLVED_HEAD}expected exactly one method Beta in codeunit 79100, found 0`,
+    );
   });
 
   test("suite-unresolved is a call-level error with NO cause and NO operation, carrying the server's reason", async () => {

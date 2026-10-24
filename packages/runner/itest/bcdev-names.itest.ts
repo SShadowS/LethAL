@@ -38,8 +38,18 @@ import {
   itestConfigPath,
   itestLaunchPath,
   printItestTarget,
+  readFixtureConfig,
 } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import {
+  checkGateWarnings,
+  collectWarnings,
+  finishGate,
+  gateEndLine,
+  nonPassExit,
+  preflightObserve,
+  settleThrown,
+} from "./gate-warnings";
 import { assertKillsReproduced } from "./kill-reproduction";
 import {
   NAMES_PROJECT_DIR,
@@ -85,7 +95,7 @@ async function runFenced(scratchRoot: string): Promise<SessionReport> {
   const launchCfg = (await readJson<LaunchLocalConfig>(LAUNCH_LOCAL_PATH, "launch.local.json"))
     .configurations[0];
   if (!launchCfg) throw new Error(`${LAUNCH_LOCAL_PATH} has no configurations[0] entry`);
-  const configFile = await readJson<LethalConfigFile>(CONFIG_LOCAL_PATH, itestConfigName());
+  const configFile = readFixtureConfig(CONFIG_LOCAL_PATH, itestConfigName());
   const bcdev = validateBcDevConfig(configFile.bcdev);
   assertLaunchMatchesConfig(launchCfg, bcdev, LAUNCH_LOCAL_PATH);
   const toolPaths = await defaultAlToolPaths();
@@ -144,7 +154,9 @@ async function runFenced(scratchRoot: string): Promise<SessionReport> {
   );
   const store = new ResultsStore(join(scratchRoot, "lethal.sqlite"));
   try {
+    const warnings = collectWarnings();
     const report = await runSession({
+      emit: [warnings.subscriber],
       backend,
       store,
       projectDir: NAMES_PROJECT_DIR,
@@ -159,9 +171,13 @@ async function runFenced(scratchRoot: string): Promise<SessionReport> {
       resourceServerInstance: bcdev.serverInstance,
       // A scratch quarantine dir, never the real store (see bcdev.itest.ts).
       quarantineDir: join(scratchRoot, "quarantine"),
+    }).catch((e: unknown) => {
+      settleThrown("bcdev-names", "fenced", warnings);
+      throw e;
     });
     // R582: every kill was re-run under the mutant, by marker and by its 2 killer rows.
     assertKillsReproduced("bcdev-names", report, store);
+    checkGateWarnings("bcdev-names", "fenced", warnings);
     return report;
   } finally {
     store.close();
@@ -170,6 +186,7 @@ async function runFenced(scratchRoot: string): Promise<SessionReport> {
 }
 
 async function main(): Promise<void> {
+  preflightObserve();
   preflightGateBaseline(BASELINE_PATH, "bcdev names itest");
   const root = await mkdtemp(join(tmpdir(), "lethal-bcdev-names-"));
   try {
@@ -184,12 +201,14 @@ async function main(): Promise<void> {
   } finally {
     await rm(root, { recursive: true, force: true });
   }
-  console.log("bcdev names itest: PASS");
-  await emitPassed("bcdev-names", { sublegs: ["fenced"], artifacts: { reported: false } });
+  console.log(gateEndLine("bcdev names"));
+  await finishGate(() =>
+    emitPassed("bcdev-names", { sublegs: ["fenced"], artifacts: { reported: false } }),
+  );
 }
 
 main().catch(async (err: unknown) => {
   console.error(formatFailure(err));
   await emitFailed("bcdev-names", err instanceof Error ? err.message : String(err));
-  process.exit(err instanceof BaselineRecordedError ? 3 : 1);
+  process.exit(err instanceof BaselineRecordedError ? 3 : nonPassExit(err, 1));
 });

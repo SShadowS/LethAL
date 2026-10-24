@@ -28,6 +28,10 @@
  *   (`v3ItestTransport`); `LETHAL_ITEST_V3_REPORT_DIR=<dir>` writes each session's report as
  *   `<dir>/<leg>.report.json` before any assertion; `LETHAL_ITEST_V3_CONTROL_DIR=<dir>` first
  *   compares each session per mutant with `<dir>/<leg>.report.json` (the edge one-shot control).
+ * - R586c: a build with a per-build pin (`al-runner-v3-pins.ts`, matched on the exact version line
+ *   AND sha256) is judged against it; the first line says so. `LETHAL_ITEST_V3_K_ON_CANDIDATE=1`
+ *   runs K on a candidate build (K stays outside `V3_GATE_LEGS`). A record request on a pinned or
+ *   candidate build is refused.
  * No leg needs a BC server.
  */
 import { execFileSync } from "node:child_process";
@@ -54,6 +58,7 @@ import {
 import { AL_RUNNER_V3_NOT_AUTHORITATIVE } from "../src/al-runner-v3-config";
 import { runV3ContractProbe, v3DefectWarnings } from "../src/al-runner-v3-contract";
 import { AL_RUNNER_V3_DEFAULT_PATH, sha256OfFile } from "../src/al-runner-v3-pin";
+import { type V3BuildPin, findV3Pin } from "../src/al-runner-v3-pins";
 import { SLEEP_NOTE_TAG } from "../src/al-runner-v3-sleep";
 import { AlcCompileError, ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import { buildBackend } from "../src/cli";
@@ -80,12 +85,14 @@ import {
   classifyXb,
   dirtyFromStatus,
   failsClosedRefusal,
-  gateOutcome,
   judgeLegT,
   knownDifferencesRefusal,
   legCFactLine,
   legOutcomeOfError,
+  observeWithReceiptRefusal,
+  recordRefusal,
   v3ItestTransport,
+  v3ReceiptOutcome,
   v3SplitLine,
   writeV3Receipt,
   xbHeldFirst,
@@ -94,13 +101,25 @@ import {
 } from "./al-runner-v3-gate";
 import { TABLES_KNOWN_DIFFERENCES } from "./al-runner-v3-tables-known";
 import {
+  type N1EReading,
+  type V3RowFacts,
   V3_K_CANDIDATE_SKIP,
   V3_K_LEG,
+  V3_MO_KILLERS,
+  V3_N1E_LEG,
+  V3_WR_KILLERS,
+  V3_WR_STATE_NOTES,
   isSessionTestCall,
+  judgeKillers,
   judgeLegK,
+  judgeN1Serve,
+  judgeStateNotes,
+  judgeWrArms,
   legKSection,
+  moWrTransportRefusal,
   v3DefaultLegs,
   v3ItestFailures,
+  v3KOnCandidate,
   v3RecordRunFailures,
 } from "./alrunner-v3-legs";
 import {
@@ -113,6 +132,17 @@ import {
 import { prepareFixtureSymbols } from "./fixture-symbols";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
+  checkGateWarnings,
+  collectWarnings,
+  finishGate,
+  gateEndLine,
+  isGateWarningsError,
+  nonPassExit,
+  observeRequested,
+  preflightObserve,
+  settleThrown,
+} from "./gate-warnings";
+import {
   LAYOUT_MAX_GUARDS,
   LAYOUT_PROJECT_DIR,
   LAYOUT_SELECTOR_IDS,
@@ -122,6 +152,13 @@ import {
 } from "./layout-fixture";
 import { compareMutants, keyOf, normalizeForComparison } from "./mutant-equality";
 import { assertSymbolBuild, printSymbolTable } from "./symbol-fixture";
+import {
+  ARMS_REFUSAL,
+  WRAPPED_PROJECT_DIR,
+  WRAPPED_SELECTOR_IDS,
+  WRAPPED_SYMBOLS,
+  WRAPPED_TEST_DIR,
+} from "./wrapped-fixture";
 
 if (!process.env.LETHAL_ITEST_ALRUNNER_V3) {
   console.log("al-runner-v3 itest: skipped (set LETHAL_ITEST_ALRUNNER_V3=1)");
@@ -137,8 +174,15 @@ const TABLES_BASELINE_PATH = join(HERE, "al-runner-v3.tables.baseline.json");
 const LAYOUT_BASELINE_PATH = join(HERE, "al-runner-v3.layout.baseline.json");
 const SYMBOLS_A_BASELINE_PATH = join(HERE, "al-runner-v3.symbols-lethala.baseline.json");
 const SYMBOLS_B_BASELINE_PATH = join(HERE, "al-runner-v3.symbols-lethalb.baseline.json");
+// R602: legs MO (multi-object files) and WR (`#if`-wrapped files), each recorded once under R332.
+const MULTIOBJECT_BASELINE_PATH = join(HERE, "al-runner-v3.multiobject.baseline.json");
+const WRAPPED_BASELINE_PATH = join(HERE, "al-runner-v3.wrapped.baseline.json");
 const BIN = process.env.LETHAL_ALRUNNER_V3_PATH ?? AL_RUNNER_V3_DEFAULT_PATH;
 const CANDIDATE = process.env.LETHAL_ALRUNNER_V3_CANDIDATE === "1";
+/** R586c: run K on a candidate build too (the CLI-built backend gets the test-only seam). */
+const K_ON_CANDIDATE = v3KOnCandidate(process.env);
+/** R586c: the per-build pin of the binary under test, set in `main` once its version and sha are known. */
+let activePin: V3BuildPin | undefined;
 const CACHE = process.env.LETHAL_ALRUNNER_V3_CACHE ?? "/work/tools/al-runtime-rs/cache";
 const ALC = join(process.env.LETHAL_ALC_DIR ?? "", "alc");
 const CDO = process.env.LETHAL_ITEST_V3_CDO;
@@ -218,6 +262,7 @@ async function session(
   let r: SessionReport;
   // R651: the orchestrator's phase walls, summed per phase, for the split line (timing only).
   const phases: Record<string, number> = {};
+  const gateWarnings = collectWarnings();
   try {
     r = await runSession({
       backend,
@@ -225,6 +270,7 @@ async function session(
       instrumentedDir: join(scratch, "instr"),
       ...cfg,
       emit: [
+        gateWarnings.subscriber,
         (e) => {
           if (e.type === "warning") console.log(`  warn ${e.code}: ${e.message.slice(0, 300)}`);
           if (e.type === "phase-left") phases[e.phase] = (phases[e.phase] ?? 0) + e.elapsedMs;
@@ -232,6 +278,10 @@ async function session(
         ...(onEvent !== undefined ? [onEvent] : []),
       ],
     });
+  } catch (e) {
+    // R736 rule: the session's own error wins; its codes are printed, never asserted.
+    settleThrown("al-runner-v3", basename(scratch), gateWarnings);
+    throw e;
   } finally {
     store.close();
     await backend.close();
@@ -247,6 +297,7 @@ async function session(
   }
   // R635: all of it only when a flag asks, so the unflagged gate is unchanged.
   const leg = basename(scratch);
+  checkGateWarnings("al-runner-v3", leg, gateWarnings);
   if (TRANSPORT.transport !== undefined) {
     console.log(`  ${leg}: entries ${JSON.stringify(backend.entriesStats())}`);
     console.log(`  ${leg}: ${v3SplitLine(phases, backend.entriesStats())}`);
@@ -377,7 +428,7 @@ async function legC(scratch: string): Promise<readonly string[]> {
   );
   // RC-2 (I-2): a defect fact moving to `gone` is held; any diverged is gate-fail. 28 facts (r13,
   // R590: 9 defect, 18 contract, 1 warn); a warn fact (V3_WARN_FACTS) only adds its line.
-  const c = classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS, V3_WARN_FACTS);
+  const c = classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS, V3_WARN_FACTS, activePin?.legC);
   for (const l of c.lines) console.log(`  C: ${l}`);
   if (c.outcome === "gate-fail") throw new LegFailure(`C: ${c.lines.join("; ")}`);
   if (c.outcome === "infra-fail") throw new V3LegEnvironment(`C: ${c.lines.join("; ")}`);
@@ -481,6 +532,42 @@ async function legN1(scratch: string): Promise<void> {
   assertReproduced(r, "N1");
 }
 
+/**
+ * R722 (pre-commitment r19): N1's project under serve-entries, whatever the run's own transport is.
+ * The reading is `judgeN1Serve`'s: on alpha.5 the session fails closed by name (#5798); anything
+ * else is `held` (re-pre-commit) or `gate-fail`, never a silent pass.
+ */
+async function legN1E(scratch: string, version: string): Promise<void> {
+  const deps = await microsoftDeps(scratch);
+  const b = new AlRunnerV3Backend(
+    backendCfg({
+      instrumentedDir: join(scratch, "backend"),
+      testDir: fixture("sandbox-names-tests"),
+      packagesDir: deps,
+      bcVersion: SANDBOX_BC,
+      selectorObjectId: 78849,
+      transport: "serve-entries",
+    }),
+  );
+  let reading: N1EReading;
+  try {
+    await session(scratch, b, {
+      projectDir: fixture("sandbox-names"),
+      testDir: fixture("sandbox-names-tests"),
+      selectorIds: { selectorId: 78849, controlId: 78848, tableId: 78847 },
+    });
+    reading = { completed: true };
+  } catch (e) {
+    // R736: the judge sees only the session's own error, never the warning check's.
+    if (isGateWarningsError(e)) throw e;
+    reading = { threw: e instanceof Error ? e.message : String(e) };
+  }
+  const j = judgeN1Serve(reading, version);
+  for (const l of j.lines) console.log(`  N1E: ${l}`);
+  if (j.outcome === "held") throw new V3LegHeld(j.lines);
+  if (j.outcome === "gate-fail") throw new LegFailure(j.lines.join("; "));
+}
+
 // --- R654 S2: L1, Y-A, Y-B and K (pre-commitment docs/superpowers/specs/2026-10-22-r654-v3-gate-legs-precommitment.md, 43115c78)
 
 /** A pre-committed table's own assertion error is a figure that differs (gate-fail), never infra. */
@@ -493,15 +580,20 @@ function asLegFailure(leg: string, check: () => void): void {
 }
 
 /** §1's checks every new leg makes: a clean baseline, no note, no refusal, Sleep index 0 + 0. */
-function assertCleanLeg(r: SessionReport, b: AlRunnerV3Backend, leg: string): void {
+function assertCleanLeg(
+  r: SessionReport,
+  b: AlRunnerV3Backend,
+  leg: string,
+  /** R602: the leg's pre-committed state notes (`batch/code`); every other leg pre-commits none. */
+  stateNotes: readonly string[] = [],
+): void {
   must(
     r.baselineGreen && r.unsupportedTests.length === 0,
     `${leg}: baseline not green or a refused test`,
   );
-  must(
-    tagged(r, V3_STATE_NOTE_TAG).length === 0 && tagged(r, V3_REFUSED_NEARBY_TAG).length === 0,
-    `${leg}: state or refused-nearby notes`,
-  );
+  const stateDiff = judgeStateNotes(tagged(r, V3_STATE_NOTE_TAG), stateNotes);
+  must(stateDiff.length === 0, `${leg}: ${stateDiff.join("; ")}`);
+  must(tagged(r, V3_REFUSED_NEARBY_TAG).length === 0, `${leg}: refused-nearby notes`);
   must(
     tagged(r, SLEEP_NOTE_TAG).length === 0 && refusedCause(r).length === 0,
     `${leg}: a §6 or runner refusal`,
@@ -569,6 +661,102 @@ async function legY(scratch: string, leg: "Y-A" | "Y-B"): Promise<SessionReport>
   return r;
 }
 
+// --- R602: MO and WR (pre-commitment: docs/superpowers/specs/2026-10-24-r602-alrunner-v3-mo-wr-precommitment.md, c2f67f0a)
+
+/** The report's rows as the pure judges read them. */
+function rowFacts(r: SessionReport): V3RowFacts[] {
+  return r.mutants.map((m) => ({
+    mutantCode: m.mutantCode,
+    file: m.file,
+    line: m.line,
+    operatorName: m.operatorName,
+    verdict: m.verdict,
+    ...(m.killingTest !== undefined ? { killingTest: m.killingTest } : {}),
+    ...(m.failureNote !== undefined ? { failureNote: m.failureNote } : {}),
+  }));
+}
+
+/**
+ * The durable killer check, BEFORE the own-baseline compare so that a record run (which writes the
+ * baseline from whatever it measured) can never absorb a lost kill: every mutant `--mode none` kills
+ * (`killers`, in code) must be killed by the same test with coverage on.
+ */
+function assertKillers(
+  r: SessionReport,
+  b: AlRunnerV3Backend,
+  leg: string,
+  killers: typeof V3_MO_KILLERS,
+): void {
+  must(b.capabilities().coverage === "al-runner", `${leg}: coverage is not on`);
+  const lost = judgeKillers(rowFacts(r), killers);
+  for (const l of lost) console.log(`    - ${l}`);
+  must(lost.length === 0, `${leg}: ${lost.length} of ${killers.length} \`none\` kills lost`);
+  console.log(`  ${leg}: all ${killers.length} \`none\` kills killed by the same test`);
+}
+
+/**
+ * MO (R602): `sandbox-multiobject` with coverage ON, run as the other legs run (`runSession`, the v3
+ * backend, one-shot). Two codeunits in one file (`MultiPair`), so v3's per-object frame is what the
+ * index places. Pre-committed 6 / 1 / 5 over 12: the 5 no-coverage are in procedures no test calls.
+ */
+async function legMO(scratch: string): Promise<SessionReport> {
+  const refused = moWrTransportRefusal("MO", TRANSPORT.transport);
+  if (refused !== undefined) throw new LegFailure(refused);
+  const projectDir = fixture("sandbox-multiobject");
+  const testDir = fixture("sandbox-multiobject-tests");
+  const ids = { selectorId: 79849, controlId: 79848, tableId: 79847 };
+  const b = new AlRunnerV3Backend(
+    backendCfg({
+      instrumentedDir: join(scratch, "backend"),
+      testDir,
+      packagesDir: await microsoftDeps(scratch),
+      bcVersion: SANDBOX_BC,
+      selectorObjectId: ids.selectorId,
+      sourceProjectDir: projectDir,
+    }),
+  );
+  const r = await session(scratch, b, { projectDir, testDir, selectorIds: ids });
+  assertKillers(r, b, "MO", V3_MO_KILLERS);
+  assertCounts(r, "MO", 6, 1, 5, 12);
+  assertCleanLeg(r, b, "MO");
+  return r;
+}
+
+/**
+ * WR (R602): `sandbox-wrapped` whole, config symbol WRAPDEF, coverage ON. 98 mutants: the 8
+ * single-wrapper files score as `none` does (killer constant), and the three `WrappedArms` mutants
+ * (the two-arm control, which the index has no rule for) read no-coverage with the refusal sentence.
+ * That refusal costs 2 kills `none` finds (M0001, M0003), named, not hidden. Pre-committed 58 / 37 / 3.
+ */
+async function legWR(scratch: string): Promise<SessionReport> {
+  const refused = moWrTransportRefusal("WR", TRANSPORT.transport);
+  if (refused !== undefined) throw new LegFailure(refused);
+  const b = new AlRunnerV3Backend(
+    backendCfg({
+      instrumentedDir: join(scratch, "backend"),
+      testDir: WRAPPED_TEST_DIR,
+      packagesDir: await microsoftDeps(scratch),
+      bcVersion: SANDBOX_BC,
+      selectorObjectId: WRAPPED_SELECTOR_IDS.selectorId,
+      preprocessorSymbols: WRAPPED_SYMBOLS,
+      sourceProjectDir: WRAPPED_PROJECT_DIR,
+    }),
+  );
+  const r = await session(scratch, b, {
+    projectDir: WRAPPED_PROJECT_DIR,
+    testDir: WRAPPED_TEST_DIR,
+    selectorIds: WRAPPED_SELECTOR_IDS,
+    preprocessorSymbols: WRAPPED_SYMBOLS,
+  });
+  assertKillers(r, b, "WR", V3_WR_KILLERS);
+  const arms = judgeWrArms(rowFacts(r), ARMS_REFUSAL);
+  for (const l of arms) console.log(`    - ${l}`);
+  must(arms.length === 0, `WR: the WrappedArms refusal differs: ${arms.join("; ")}`);
+  assertCounts(r, "WR", 58, 37, 3, 98);
+  assertCleanLeg(r, b, "WR", V3_WR_STATE_NOTES);
+  return r;
+}
+
 /**
  * K (R387, R394): the backend the CLI builds from an `alRunnerV3` section with no `coverage` and
  * no `transport` key. Its spawns are wrapped, so the leg sees which transport ran. Never on a
@@ -621,7 +809,12 @@ async function legK(scratch: string): Promise<void> {
       },
       join(scratch, "cli-scratch"),
       undefined,
-      { alRunnerSpawn: spawn, alRunnerServerSpawn: serverSpawn },
+      {
+        alRunnerSpawn: spawn,
+        alRunnerServerSpawn: serverSpawn,
+        // R586c: the test-only seam, for K on a candidate build and nowhere else.
+        ...(CANDIDATE ? { alRunnerCandidate: true as const } : {}),
+      },
       { selectorId: 79199, controlId: 79198, tableId: 79197 },
     );
   } finally {
@@ -665,15 +858,17 @@ async function sandboxBatch(scratch: string): Promise<string> {
       selectorObjectId: 79199,
     }),
   );
-  await session(join(scratch, "s1"), b, {
+  await session(join(scratch, "x-s1"), b, {
     projectDir: fixture("sandbox-app"),
     testDir: fixture("sandbox-tests"),
     selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
-  }).catch(async () => {
-    await mkdir(join(scratch, "s1"), { recursive: true });
+  }).catch(async (e: unknown) => {
+    // R736: a warning-set error is a gate failure, never swallowed with the session's own one.
+    if (isGateWarningsError(e)) throw e;
+    await mkdir(join(scratch, "x-s1"), { recursive: true });
     return undefined;
   });
-  const instr = join(scratch, "s1", "instr");
+  const instr = join(scratch, "x-s1", "instr");
   for (const e of await readdir(instr, { withFileTypes: true, recursive: true })) {
     if (e.isFile() && e.name === "mutant-manifest.json") return e.parentPath;
   }
@@ -681,7 +876,7 @@ async function sandboxBatch(scratch: string): Promise<string> {
 }
 
 async function legX(scratch: string, push: (line: string) => void): Promise<void> {
-  await mkdir(join(scratch, "s1"), { recursive: true });
+  await mkdir(join(scratch, "x-s1"), { recursive: true });
   const batch = await sandboxBatch(scratch);
   const sb = fixture("sandbox-tests");
   const deps = join(sb, ".alpackages");
@@ -729,7 +924,13 @@ async function legX(scratch: string, push: (line: string) => void): Promise<void
     }),
   );
   let b7 = "";
-  let xb = { exitCode: 0, passed: 0, notRun: 0, parsed: false, compileError: false };
+  let xb: Parameters<typeof classifyXb>[0] = {
+    exitCode: 0,
+    passed: 0,
+    notRun: 0,
+    parsed: false,
+    compileError: false,
+  };
   try {
     execFileSync(
       BIN,
@@ -754,7 +955,13 @@ async function legX(scratch: string, push: (line: string) => void): Promise<void
     b7 = "exit 0";
   } catch (e) {
     const x = e as { status?: number | null; stdout?: string; stderr?: string };
-    let doc: { passed?: number; notRun?: number; compilationErrors?: unknown } = {};
+    let doc: {
+      passed?: number;
+      notRun?: number;
+      failed?: number;
+      tests?: unknown;
+      compilationErrors?: unknown;
+    } = {};
     let parsed = false;
     try {
       doc = JSON.parse(x.stdout ?? "") as typeof doc;
@@ -772,16 +979,36 @@ async function legX(scratch: string, push: (line: string) => void): Promise<void
       notRun: doc.notRun ?? 0,
       parsed,
       compileError,
+      // R586c: read only with a pin; an absent field is not 0.
+      passedPresent: typeof doc.passed === "number",
+      notRunPresent: typeof doc.notRun === "number",
+      ...(typeof doc.failed === "number" ? { failed: doc.failed } : {}),
+      ...(Array.isArray(doc.tests) ? { rowCount: doc.tests.length } : {}),
+      compilationErrorsCount: Array.isArray(doc.compilationErrors)
+        ? doc.compilationErrors.length
+        : 0,
     };
     b7 = `exit ${x.status} passed ${doc.passed} notRun ${doc.notRun}`;
+    // R586c: the document's shape, before judging, so a changed shape shows in the kept log.
+    console.log(
+      `  X (b) document: keys [${parsed ? Object.keys(doc).join(",") : "unparsed"}], passed ${doc.passed}, notRun ${doc.notRun}, failed ${doc.failed}, rows ${xb.rowCount}, compilationErrors ${xb.compilationErrorsCount}`,
+    );
   }
   console.log(`  X (b): ${b7}`);
   // I-2: v3 refusing the broken target is #5602's fix, a move toward BC: held, not gate-fail.
-  const xbOutcome = classifyXb(xb);
+  const xbOutcome = classifyXb(xb, activePin?.xb);
   must(xbOutcome !== "gate-fail", `X (b): ${b7}`);
   const xHeld: string[] =
-    xbOutcome === "held" ? [`X (b): ${b7}: v3 now refuses the broken target (#5602 fixed)`] : [];
+    xbOutcome === "held"
+      ? [
+          activePin !== undefined
+            ? `X (b): pin-mismatch: pinned exit 3, passed 0, notRun 0, no rows, compilationErrors non-empty; read ${b7}`
+            : `X (b): ${b7}: v3 now refuses the broken target (#5602 fixed)`,
+        ]
+      : [];
   for (const l of xHeld) console.log(`  ${l}`);
+  if (activePin !== undefined && xbOutcome === "pass")
+    push(`X: pinned X (b) = ${b7} (pin ${activePin.id}, as BC)`);
   // r10 M5: the held line is in the receipt before (c)-(f) run, so a later gate-fail cannot hide it.
   await xbHeldFirst(xHeld, push, () => legXRest(scratch, batch, man.artifactId));
 }
@@ -922,8 +1149,9 @@ async function legXSleep(scratch: string): Promise<void> {
     join(PROBE, "extras", "ProbeSleep.Codeunit.al"),
     join(tests, "src", "ProbeSleep.Codeunit.al"),
   );
-  // The multi-object file and its test leave the scratch copy: with coverage on, the v3 index
-  // refuses a multi-object file (its frame is not measured on v3).
+  // The multi-object file and its test leave the scratch copy. Since R602 the v3 index places a
+  // multi-object file (leg MO measures that), so this is no longer needed for coverage; the `rm`
+  // stays so that X (d)'s pre-committed predictions do not move.
   await rm(join(app, "src", "ProbePair.Codeunit.al"));
   await rm(join(tests, "src", "ProbeCoverage.Codeunit.al"));
   // r5a (f32aa92a): `TestPermissions = Restricted` does not compile against X (d)'s deps
@@ -1226,7 +1454,12 @@ async function legD(scratch: string, leg: "D1" | "D1c"): Promise<void> {
 async function legT(
   scratch: string,
   push: (line: string) => void,
-): Promise<{ readonly outcome: "pass" | "held"; readonly r: SessionReport }> {
+): Promise<{
+  readonly outcome: "pass" | "held";
+  readonly r: SessionReport;
+  /** R586c: the pin made this a pass; `main` skips the alpha.2 baseline compare. */
+  readonly pinned?: true;
+}> {
   const b = new AlRunnerV3Backend(
     backendCfg({
       instrumentedDir: join(scratch, "backend"),
@@ -1267,13 +1500,14 @@ async function legT(
   console.log(`  T: ${counts(r)} over ${r.mutants.length} (judged after the rows)`);
   const idx = b.sleepIndexSize();
   console.log(`  T: Sleep index ${idx?.target} + ${idx?.test}`);
+  // As `assertGateBaseline` computes it (baseline-guard's `throwOnRowDiff`).
+  const sameScheme =
+    ownBase.identityScheme !== undefined && ownBase.identityScheme === IDENTITY_SCHEME;
+  const legTPin = activePin?.legT;
   const j = judgeLegT({
     classification: classifyLegT(own, now, bc),
     // As `assertGateBaseline` computes it (baseline-guard's `throwOnRowDiff`).
-    compare: compareMutants(own, now, {
-      sameScheme:
-        ownBase.identityScheme !== undefined && ownBase.identityScheme === IDENTITY_SCHEME,
-    }),
+    compare: compareMutants(own, now, { sameScheme }),
     own,
     now,
     counts: r.counts,
@@ -1282,6 +1516,9 @@ async function legT(
     sleepIndex: idx,
     knownRefusal: knownDifferencesRefusal(bc, own, TABLES_KNOWN_DIFFERENCES),
     codes: new Map(r.mutants.map((m) => [keyOf(m), m.mutantCode])),
+    ...(activePin !== undefined && legTPin !== undefined
+      ? { pin: { id: activePin.id, legT: legTPin, bc, sameScheme } }
+      : {}),
   });
   for (const l of j.lines) {
     console.log(`  ${l}`);
@@ -1289,12 +1526,18 @@ async function legT(
   }
   notes();
   if (j.outcome === "gate-fail") throw new LegFailure(j.failure ?? "T: gate-fail");
-  return { outcome: j.outcome, r };
+  return { outcome: j.outcome, r, ...(j.pinned === true ? { pinned: true as const } : {}) };
 }
 
 // ---------------------------------------------------------------------------------------------
 
 async function main(): Promise<void> {
+  preflightObserve();
+  const observeRefused = observeWithReceiptRefusal(
+    observeRequested(),
+    process.env.LETHAL_V3_GATE_RECEIPT,
+  );
+  if (observeRefused !== undefined) throw new Error(observeRefused);
   if (LEGS.includes("T")) preflightGateBaseline(TABLES_BASELINE_PATH, "al-runner-v3 itest leg T");
   // R654 S2: refused before any leg runs while a baseline is missing (R332).
   if (LEGS.includes("L1")) preflightGateBaseline(LAYOUT_BASELINE_PATH, "al-runner-v3 itest leg L1");
@@ -1302,6 +1545,11 @@ async function main(): Promise<void> {
     preflightGateBaseline(SYMBOLS_A_BASELINE_PATH, "al-runner-v3 itest leg Y-A");
   if (LEGS.includes("Y-B"))
     preflightGateBaseline(SYMBOLS_B_BASELINE_PATH, "al-runner-v3 itest leg Y-B");
+  // R602: the same, for MO and WR.
+  if (LEGS.includes("MO"))
+    preflightGateBaseline(MULTIOBJECT_BASELINE_PATH, "al-runner-v3 itest leg MO");
+  if (LEGS.includes("WR"))
+    preflightGateBaseline(WRAPPED_BASELINE_PATH, "al-runner-v3 itest leg WR");
   // R614: the fixture .alpackages, from the pinned tar (a fresh worktree extracts them itself).
   // M9: every leg selection needs them, CDO-only legs included (or the tar to extract them from).
   const prepared = await prepareFixtureSymbols({ worktree: REPO });
@@ -1321,6 +1569,29 @@ async function main(): Promise<void> {
   console.log(
     `al-runner-v3 itest: ${version} sha256 ${sha} (${BIN})${CANDIDATE ? " CANDIDATE" : ""}; legs ${LEGS.join(",")}`,
   );
+  // R586c: a per-build pin applies only when the version line AND the sha256 are both equal.
+  const PIN = findV3Pin(version, sha);
+  activePin = PIN;
+  if (PIN !== undefined)
+    console.log(`al-runner-v3 itest: PIN ${PIN.id} applies (version and sha256 equal)`);
+  // M5: no leg records a baseline from a pinned or candidate build.
+  const recordBaselines = new Map<string, string>([
+    ["T", TABLES_BASELINE_PATH],
+    ["L1", LAYOUT_BASELINE_PATH],
+    ["Y-A", SYMBOLS_A_BASELINE_PATH],
+    ["Y-B", SYMBOLS_B_BASELINE_PATH],
+    ["MO", MULTIOBJECT_BASELINE_PATH],
+    ["WR", WRAPPED_BASELINE_PATH],
+  ]);
+  const refusedRecord = recordRefusal(
+    PIN !== undefined,
+    CANDIDATE,
+    LEGS.flatMap((l) => {
+      const p = recordBaselines.get(l);
+      return p !== undefined && recordRequested(p) ? [p] : [];
+    }),
+  );
+  if (refusedRecord !== undefined) throw new V3LegEnvironment(refusedRecord);
   const legs: Record<string, V3LegOutcome> = {};
   const lines: string[] = [];
   const root = await mkdtemp(join(tmpdir(), "lethal-itest-v3-"));
@@ -1334,7 +1605,7 @@ async function main(): Promise<void> {
       const t0 = Date.now();
       console.log(`leg ${leg}:`);
       // R654 S2, ruling condition 1: on a candidate K never runs, and says so in the summary.
-      if (leg === V3_K_LEG && CANDIDATE) {
+      if (leg === V3_K_LEG && CANDIDATE && !K_ON_CANDIDATE) {
         legs[leg] = V3_K_CANDIDATE_SKIP;
         const why = `${leg}: ${V3_K_CANDIDATE_SKIP}: the CLI's alRunnerV3 config cannot name a candidate, and a CLI-built backend runs gated builds only`;
         console.log(`leg ${why}`);
@@ -1346,6 +1617,7 @@ async function main(): Promise<void> {
         else if (leg === "S1") await legS1(scratch);
         else if (leg === "S3") await legS3(scratch);
         else if (leg === "N1") await legN1(scratch);
+        else if (leg === V3_N1E_LEG) await legN1E(scratch, version);
         else if (leg === "X") await legX(scratch, (l) => lines.push(l));
         else if (leg === "D1" || leg === "D1c") await legD(scratch, leg);
         // R654 S2: each leg checks its pre-committed table FIRST (gate-fail on a difference, and
@@ -1374,6 +1646,24 @@ async function main(): Promise<void> {
             if (e instanceof BaselineRecordedError) throw e;
             throw new LegFailure(`Y-B: ${e instanceof Error ? e.message : String(e)}`);
           }
+        } else if (leg === "MO") {
+          // R602: the killer check and the counts ran inside the leg (nothing is written on a
+          // difference); then the own-baseline compare, which a record run writes (R332).
+          const r = await legMO(scratch);
+          try {
+            await assertGateBaseline(r, MULTIOBJECT_BASELINE_PATH, "al-runner-v3 itest leg MO");
+          } catch (e) {
+            if (e instanceof BaselineRecordedError) throw e;
+            throw new LegFailure(`MO: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        } else if (leg === "WR") {
+          const r = await legWR(scratch);
+          try {
+            await assertGateBaseline(r, WRAPPED_BASELINE_PATH, "al-runner-v3 itest leg WR");
+          } catch (e) {
+            if (e instanceof BaselineRecordedError) throw e;
+            throw new LegFailure(`WR: ${e instanceof Error ? e.message : String(e)}`);
+          }
         } else if (leg === V3_K_LEG) await legK(scratch);
         else if (leg === "T") {
           const t = await legT(scratch, (l) => lines.push(l));
@@ -1384,11 +1674,15 @@ async function main(): Promise<void> {
           }
           // r10: after the judge's pass (or the record branch's checks), the own-baseline compare.
           // A baseline row difference is a figure that differs (gate-fail), never infra (M2).
-          try {
-            await assertGateBaseline(t.r, TABLES_BASELINE_PATH, "al-runner-v3 itest leg T");
-          } catch (e) {
-            if (e instanceof BaselineRecordedError) throw e;
-            throw new LegFailure(`T: ${e instanceof Error ? e.message : String(e)}`);
+          // R586c: a pinned pass was judged against the pin's table (same compare, same R556
+          // check) in `judgeLegT`; alpha.2's baseline would fail on the seven moved rows.
+          if (!t.pinned) {
+            try {
+              await assertGateBaseline(t.r, TABLES_BASELINE_PATH, "al-runner-v3 itest leg T");
+            } catch (e) {
+              if (e instanceof BaselineRecordedError) throw e;
+              throw new LegFailure(`T: ${e instanceof Error ? e.message : String(e)}`);
+            }
           }
         } else throw new V3LegEnvironment(`unknown leg ${leg}`);
         legs[leg] = "pass";
@@ -1403,7 +1697,7 @@ async function main(): Promise<void> {
         }
         const msg = err instanceof Error ? err.message : String(err);
         // M2: by the error's TYPE only (legOutcomeOfError), never by its text.
-        legs[leg] = legOutcomeOfError(err);
+        legs[leg] = legOutcomeOfError(err, leg);
         if (err instanceof V3LegHeld) lines.push(...err.lines.map((l) => `${leg}: ${l}`));
         else lines.push(`${leg}: ${msg.slice(0, 1000)}`);
         console.log(`leg ${leg}: ${legs[leg]?.toUpperCase()} ${formatFailure(err).slice(0, 2000)}`);
@@ -1418,8 +1712,10 @@ async function main(): Promise<void> {
   } finally {
     await rm(root, { recursive: true, force: true }).catch(() => {});
   }
-  const outcome = gateOutcome(legs);
-  console.log(`al-runner-v3 itest: legs ${JSON.stringify(legs)}; update-gate outcome ${outcome}`);
+  const outcome = v3ReceiptOutcome(legs, observeRequested());
+  console.log(
+    `al-runner-v3 itest: legs ${JSON.stringify(legs)}; ${observeRequested() ? `observe run, receipt outcome ${outcome}, not a pass` : `update-gate outcome ${outcome}`}`,
+  );
   const nonce = process.env.LETHAL_V3_GATE_NONCE;
   const receipt = process.env.LETHAL_V3_GATE_RECEIPT;
   if (nonce !== undefined && receipt !== undefined) {
@@ -1454,16 +1750,18 @@ async function main(): Promise<void> {
   }
   // R654 S2, ruling condition 2: every selected leg must pass, K included on a gated build (a
   // skip there fails); only a candidate's K may read `V3_K_CANDIDATE_SKIP` (`v3ItestFailures`).
-  const bad = v3ItestFailures(legs, CANDIDATE, LEGS);
+  const bad = v3ItestFailures(legs, CANDIDATE, LEGS, K_ON_CANDIDATE);
   if (bad.length > 0) throw new Error(`al-runner-v3 itest: FAIL: ${bad.join(", ")}`);
-  console.log("al-runner-v3 itest: PASS");
+  console.log(gateEndLine("al-runner-v3"));
   // R654 S2: agentflow's receipt (only when challenged), naming every leg that ran and passed.
-  await emitPassed("alrunner-v3", {
-    sublegs: Object.entries(legs)
-      .filter(([, v]) => v === "pass")
-      .map(([l]) => l),
-    artifacts: { reported: false },
-  });
+  await finishGate(() =>
+    emitPassed("alrunner-v3", {
+      sublegs: Object.entries(legs)
+        .filter(([, v]) => v === "pass")
+        .map(([l]) => l),
+      artifacts: { reported: false },
+    }),
+  );
 }
 
 main().catch(async (err: unknown) => {
@@ -1476,5 +1774,5 @@ main().catch(async (err: unknown) => {
         ? err.message
         : String(err),
   );
-  process.exit(err instanceof BaselineRecordedError ? 3 : 1);
+  process.exit(err instanceof BaselineRecordedError ? 3 : nonPassExit(err, 1));
 });

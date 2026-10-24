@@ -10,10 +10,11 @@ import {
   realpath,
   rm,
   symlink,
+  utimes,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, normalize } from "node:path";
+import { isAbsolute, join, normalize, resolve } from "node:path";
 import { initParser } from "@lethal/engine";
 import { emitStaticSelector } from "@lethal/schemata";
 import {
@@ -37,6 +38,7 @@ import {
 } from "../src/al-runner-v3-backend";
 import { MESSAGE_PREFIX_REASON, type V3ContractResult } from "../src/al-runner-v3-contract";
 import { sha256OfFile } from "../src/al-runner-v3-pin";
+import * as pinsNs from "../src/al-runner-v3-pins";
 import { AlRunnerV3CoverageJoinError } from "../src/al-runner-v3-sleep";
 import { AlcCompileError, type ArtifactIo, ArtifactPrepareError } from "../src/artifact";
 import type { TestMethodRef } from "../src/backend";
@@ -179,7 +181,13 @@ interface FakeRow {
   status: "pass" | "fail" | "error";
   message?: string;
   notRun?: boolean;
+  /** R586c (B2): default 0, or the stop in ms for a "Test exceeded Ns timeout." row (a CPU stop); null omits it. */
+  durationMs?: number | null;
 }
+const stopMsOf = (message: string | undefined): number => {
+  const m = /^Test exceeded (\d+)s timeout\./.exec(message ?? "");
+  return m?.[1] === undefined ? 0 : Number(m[1]) * 1000;
+};
 
 /**
  * A fake v3: answers `test --codeunit <id>` with `rows(activeId, argv)` and writes `coverage` (or
@@ -211,7 +219,7 @@ function fakeV3(
     const tests = rows(activeId, argv).map((r) => ({
       codeunit: cu,
       codeunitName: "Tests",
-      durationMs: 0,
+      ...(r.durationMs === null ? {} : { durationMs: r.durationMs ?? stopMsOf(r.message) }),
       method: r.method,
       name: `Codeunit${cu}.${r.method}`,
       status: r.status,
@@ -326,6 +334,15 @@ describe("§3 the compile proof", () => {
     expect(v3.calls).toHaveLength(0);
   });
 
+  test("R734: an alc rejection of the batch stops deploy() at the target compile: the test app is never compiled and nothing is deployed", async () => {
+    const l = await layout();
+    const alc = fakeAlc((p) => p.endsWith("active"));
+    const b = backendOf(l, fakeV3(allPass).spawn, alc.io);
+    await expect(b.deploy(l.batch)).rejects.toBeInstanceOf(AlcCompileError);
+    // exactly one alc run (the target), never the test app's
+    expect(alc.calls.map((c) => c.project)).toEqual([join(l.scratch, "active")]);
+  });
+
   test("a test app that does not compile against the batch stops the session, and is NOT an AlcCompileError (bisection must not read it as the batch's)", async () => {
     const l = await layout();
     const alc = fakeAlc((p) => p === l.testDir);
@@ -423,7 +440,11 @@ describe("R639 r9 §2: status() passes candidate into the unlike-bc refusals and
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
       const s = await b.status();
-      return { s, warned: warn.mock.calls.map((c) => String(c[0])).join("\n") };
+      return {
+        s,
+        warned: warn.mock.calls.map((c) => String(c[0])).join("\n"),
+        sha: await sha256OfFile(bin),
+      };
     } finally {
       warn.mockRestore();
     }
@@ -432,6 +453,33 @@ describe("R639 r9 §2: status() passes candidate into the unlike-bc refusals and
     const { s, warned } = await statusOf(true);
     expect(s.ok).toBe(true);
     expect(warned).toMatch(/al-runner-v3-defect-unlike-bc: refusal-row-shape/);
+  });
+  test("R719: status() passes the pin's muted set to the warnings and prints the pin line", async () => {
+    const gone = (fact: string): V3ContractResult["facts"][number] => ({
+      fact,
+      kind: "defect",
+      verdict: "gone",
+      expected: "x",
+      measured: "m",
+    });
+    const contract: V3ContractResult = {
+      facts: [gone("refusal-row-shape"), gone("none-selected-exit")],
+    };
+    const spy = spyOn(pinsNs, "pinnedDefectCoverage").mockReturnValue({
+      muted: new Set(["refusal-row-shape=gone"]),
+      line: "PINLINE",
+    });
+    try {
+      const { s, warned, sha } = await statusOf(false, contract);
+      expect(s.ok).toBe(true);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy.mock.calls[0]).toEqual([contract, VERSION, sha]);
+      expect(warned).toContain("PINLINE");
+      expect(warned).toMatch(/defect-gone: none-selected-exit/);
+      expect(warned).not.toMatch(/defect-gone: refusal-row-shape/);
+    } finally {
+      spy.mockRestore();
+    }
   });
   test("a non-candidate backend refuses, naming refusal-row-shape", async () => {
     const { s, warned } = await statusOf(false);
@@ -629,6 +677,155 @@ describe("T22: the proof is bound to the bytes v3 reads (c1-c5)", () => {
     await b.activate("M0002");
     await expect(run(b)).rejects.toBeInstanceOf(AlRunnerV3UnprovenBatchError);
     expect(v3.calls).toHaveLength(1);
+  });
+});
+
+describe("R608: the proof binds the non-.al files, the test dir's .alpackages and <deps> subfolders", () => {
+  const active = (l: Layout) => join(l.scratch, "active");
+  const run = (b: AlRunnerV3Backend) => b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
+  async function deployed(before: (l: Layout) => Promise<void> = async () => {}) {
+    const l = await layout();
+    await before(l);
+    const v3 = fakeV3(allPass, { coverage: plainCoverage });
+    const b = backendOf(l, v3.spawn, fakeAlc().io);
+    await b.deploy(l.batch);
+    await b.activate("M0002");
+    return { l, v3, b };
+  }
+  const withRes = async (l: Layout) => {
+    await writeFile(join(l.testDir, "res.txt"), "one");
+    await mkdir(join(l.testDir, ".alpackages"), { recursive: true });
+    await writeFile(join(l.testDir, ".alpackages", "Sym.app"), "sym");
+  };
+  const cases: [string, (l: Layout) => Promise<void>][] = [
+    ["a non-.al file added to active/", (l) => writeFile(join(active(l), "extra.json"), "{}")],
+    [
+      "a non-.al file of active/ changed (the manifest)",
+      (l) => appendFile(join(active(l), "mutant-manifest.json"), " ", "utf8"),
+    ],
+    ["a non-.al file added to the test dir", (l) => writeFile(join(l.testDir, "extra.xlf"), "x")],
+    [
+      "a non-.al file of the test dir changed",
+      (l) => writeFile(join(l.testDir, "res.txt"), "twelve"),
+    ],
+    [
+      "a file added to <testDir>/.alpackages",
+      (l) => writeFile(join(l.testDir, ".alpackages", "New.app"), "n"),
+    ],
+    [
+      "a file of <testDir>/.alpackages changed",
+      (l) => writeFile(join(l.testDir, ".alpackages", "Sym.app"), "changed symbols"),
+    ],
+  ];
+  for (const [name, tamper] of cases) {
+    test(`${name} -> AlRunnerV3UnprovenBatchError naming the folder, 0 spawns`, async () => {
+      const { l, b, v3 } = await deployed(withRes);
+      await tamper(l);
+      const err = await run(b).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(AlRunnerV3UnprovenBatchError);
+      expect((err as Error).message).toContain("a non-.al file in");
+      expect(v3.calls).toHaveLength(0);
+    });
+  }
+
+  test("the other direction: nothing touched, and a new .vscode file (not read by v3), still runs", async () => {
+    const { l, b, v3 } = await deployed(withRes);
+    await mkdir(join(l.testDir, ".vscode"), { recursive: true });
+    await writeFile(join(l.testDir, ".vscode", "settings.json"), "{}");
+    expect((await run(b)).outcome).toBe("pass");
+    expect(v3.calls).toHaveLength(1);
+  });
+
+  test("a same-size rewrite with a moved mtime is caught by the re-hash", async () => {
+    const { l, b, v3 } = await deployed(withRes);
+    const p = join(l.testDir, "res.txt");
+    await writeFile(p, "two");
+    const later = new Date(Date.now() + 60_000);
+    await utimes(p, later, later);
+    const err = await run(b).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AlRunnerV3UnprovenBatchError);
+    expect((err as Error).message).toContain("res.txt");
+    expect(v3.calls).toHaveLength(0);
+  });
+
+  test("a moved mtime alone (same bytes) does not refuse", async () => {
+    const { l, b, v3 } = await deployed(withRes);
+    const p = join(l.testDir, ".alpackages", "Sym.app");
+    const later = new Date(Date.now() + 60_000);
+    await utimes(p, later, later);
+    expect((await run(b)).outcome).toBe("pass");
+    expect(v3.calls).toHaveLength(1);
+  });
+
+  test("a <deps> subfolder is refused at deploy, by name; v3 not started", async () => {
+    const l = await layout();
+    await mkdir(join(l.deps, "sub"), { recursive: true });
+    const v3 = fakeV3(allPass);
+    const b = backendOf(l, v3.spawn, fakeAlc().io);
+    const err = await b.deploy(l.batch).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AlRunnerV3UnprovenBatchError);
+    expect((err as Error).message).toContain(join(l.deps, "sub"));
+    expect(v3.calls).toHaveLength(0);
+  });
+
+  test("a <deps> subfolder created after deploy is refused at the next send", async () => {
+    const { l, b, v3 } = await deployed();
+    await mkdir(join(l.deps, "late"), { recursive: true });
+    const err = await run(b).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AlRunnerV3UnprovenBatchError);
+    expect((err as Error).message).toContain(join(l.deps, "late"));
+    expect(v3.calls).toHaveLength(0);
+  });
+
+  test("LethAL's own writes do not refuse: the cov/ output beside active/, and an activate() between sends", async () => {
+    const { b, v3 } = await deployed();
+    expect((await run(b)).outcome).toBe("pass");
+    await b.activate("M0001");
+    expect((await run(b)).outcome).toBe("pass");
+    expect(v3.calls).toHaveLength(2);
+  });
+});
+
+describe("R645: v3 runs in the session's scratch dir, so its coverage.cobertura.xml never lands in the caller's", () => {
+  test("the one-shot call's cwd is the scratch dir, not process.cwd(); a relative cache dir is made absolute", async () => {
+    const l = await layout();
+    const inner = fakeV3(allPass, { coverage: plainCoverage });
+    const seen: { argv: readonly string[]; cwd: string | undefined; cache: string | undefined }[] =
+      [];
+    const spawn: SpawnFn = (argv, opts) => {
+      if (argv[1] !== "--version")
+        seen.push({ argv, cwd: opts?.cwd, cache: opts?.env?.ALRUNNER_CACHE });
+      return inner.spawn(argv, opts);
+    };
+    // Every configured path relative to the caller's cwd: all must reach v3 absolute. The cwd is
+    // moved into the layout's root so the relative names hold no `..` (Windows `rm` refuses those).
+    const before = process.cwd();
+    process.chdir(l.root);
+    try {
+      const here = process.cwd();
+      const b = backendOf(l, spawn, fakeAlc().io, {
+        cacheDir: "rel-cache",
+        instrumentedDir: "scratch",
+        testDir: "tests",
+        packagesDir: "deps",
+        alRunnerPath: join("fake", "alrunner"),
+      });
+      await b.deploy(l.batch);
+      await b.activate("M0002");
+      await b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
+      expect(seen).toHaveLength(1);
+      expect(isAbsolute(seen[0]?.argv[0] ?? "")).toBe(true);
+      expect(seen[0]?.cwd).toBe(join(here, "scratch"));
+      expect(seen[0]?.cwd).not.toBe(here);
+      expect(seen[0]?.cache).toBe(join(here, "rel-cache"));
+    } finally {
+      process.chdir(before);
+    }
+    // Every path argument is absolute, or the new cwd would break it.
+    const argv = seen[0]?.argv ?? [];
+    const argAfter = (flag: string) => argv[argv.indexOf(flag) + 1] ?? "";
+    for (const p of [argAfter("--package-cache"), argAfter("--coverage-json"), ...argv.slice(-2)])
+      expect(isAbsolute(p)).toBe(true);
   });
 });
 
@@ -1141,6 +1338,208 @@ describe("§5 the row decoder", () => {
         2,
       ),
     ).toHaveProperty("rows");
+  });
+});
+
+describe("R-435 (B1): the artifact cache's apps folder", () => {
+  test("dependencyArtifactAppsDir is <cacheDir>/artifacts/<bcVersion>/apps, and absent without a cacheDir", async () => {
+    const l = await layout();
+    const spawn = fakeV3(() => [], { coverage: plainCoverage }).spawn;
+    const withCache = backendOf(l, spawn, fakeAlc().io, { cacheDir: "rel-cache" });
+    expect(withCache.dependencyArtifactAppsDir()).toBe(
+      join(resolve("rel-cache"), "artifacts", "28.0.46665.47126", "apps"),
+    );
+    expect(backendOf(l, spawn, fakeAlc().io).dependencyArtifactAppsDir()).toBeUndefined();
+  });
+});
+
+describe("R586c (B2): a timeout under a mutant whose wall time is under its stop ran on v3's virtual clock", () => {
+  const stopRow = (method: string, n: number, durationMs: number | null) => ({
+    method,
+    status: "error" as const,
+    notRun: true,
+    message: `Test exceeded ${n}s timeout.`,
+    durationMs,
+  });
+  async function verdictOf(rows: FakeRow[], ask: string, n: number, mutant = true) {
+    const l = await layout();
+    const b = backendOf(l, fakeV3(() => rows, { coverage: plainCoverage }).spawn, fakeAlc().io);
+    await b.deploy(l.batch);
+    if (mutant) {
+      await b.activate("M0001");
+      b.useCoveringBudgets(
+        "M0001",
+        rows.map((r) => ({ ref: ref(r.method), budgetMs: n * 1000 })),
+      );
+    } else await b.activate(null);
+    return b.run(ref(ask), { coverage: "none", timeoutMs: n * 1000 });
+  }
+  const outcomeAt = async (durationMs: number | null, n = 3) => {
+    const v = await verdictOf([stopRow("A", n, durationMs)], "A", n);
+    return [v.outcome, v.runnerRow] as const;
+  };
+
+  test("V-1: a stop whose wall time reached the stop (3006, 3009) is still a scored timeout", async () => {
+    expect(await outcomeAt(3006)).toEqual(["timeout", undefined]);
+    expect(await outcomeAt(3009)).toEqual(["timeout", undefined]);
+  });
+  test("V-2: durationMs 0 or 46 under a stop of 3 s is a runner-refused error naming the virtual clock", async () => {
+    for (const d of [0, 46]) {
+      const v = await verdictOf([stopRow("A", 3, d)], "A", 3);
+      expect([v.outcome, v.runnerRow]).toEqual(["error", "runner-refused"]);
+      expect(v.failureMessage).toContain("virtual clock");
+      expect(v.failureMessage).toContain("Test exceeded 3s timeout.");
+    }
+  });
+  test("V-3: the boundary: 2999 is refused, 3000 is scored", async () => {
+    expect(await outcomeAt(2999)).toEqual(["error", "runner-refused"]);
+    expect(await outcomeAt(3000)).toEqual(["timeout", undefined]);
+  });
+  test("V-4: no durationMs: scored as before", async () => {
+    expect(await outcomeAt(null)).toEqual(["timeout", undefined]);
+  });
+  test("V-5: timeout-is-cpu rows (limit 2: 2007 and 16038) stay timeouts", async () => {
+    expect(await outcomeAt(2007, 2)).toEqual(["timeout", undefined]);
+    expect(await outcomeAt(16038, 2)).toEqual(["timeout", undefined]);
+  });
+  test("V-6: the baseline call keeps reading a virtual stop as a timeout", async () => {
+    const v = await verdictOf([stopRow("A", 3, 0)], "A", 3, false);
+    expect(v.outcome).toBe("timeout");
+    expect(v.runnerRow).toBeUndefined();
+  });
+  test("V-6b: after a guarded mutant row, R639 and R-435 treat the sequence as pinned here", async () => {
+    const refusedB = {
+      method: "B",
+      status: "error" as const,
+      notRun: true,
+      message: "NotRun: out-of-scope: Commit",
+    };
+    const rows = [stopRow("A", 3, 0), refusedB, stopRow("D", 3, 3000)];
+    const a = await verdictOf(rows, "A", 3);
+    expect([a.runnerRow, a.refusedAfterStop]).toEqual(["runner-refused", undefined]);
+    const b = await verdictOf(rows, "B", 3);
+    expect([b.runnerRow, b.refusedAfterStop]).toEqual(["runner-refused", "A"]);
+    const d = await verdictOf(rows, "D", 3);
+    expect([d.outcome, d.runnerRow]).toEqual(["error", "runner-test-error"]);
+  });
+});
+
+describe("R-435: a timeout after an earlier refusal or stop in the same call is not trusted", () => {
+  const STOP = "Test exceeded 1s timeout.";
+  const refused = (method: string) => ({
+    method,
+    status: "error" as const,
+    notRun: true,
+    message: "NotRun: out-of-scope: Commit",
+  });
+  const timedOut = (method: string) => ({
+    method,
+    status: "error" as const,
+    notRun: true,
+    message: STOP,
+  });
+  /** Rows in v3's run order; `mutant` false = the baseline call. Returns the verdict of `ask`. */
+  async function verdictOf(rows: FakeRow[], ask: string, mutant = true) {
+    const l = await layout();
+    const b = backendOf(l, fakeV3(() => rows, { coverage: plainCoverage }).spawn, fakeAlc().io);
+    await b.deploy(l.batch);
+    if (mutant) {
+      await b.activate("M0001");
+      b.useCoveringBudgets(
+        "M0001",
+        rows.map((r) => ({ ref: ref(r.method), budgetMs: 1000 })),
+      );
+    } else await b.activate(null);
+    return b.run(ref(ask), { coverage: "none", timeoutMs: 1000 });
+  }
+
+  test("[E refused, D timeout] -> error, never a timeout and never runner-refused", async () => {
+    const v = await verdictOf([refused("A"), timedOut("B")], "B");
+    expect(v.outcome).toBe("error");
+    expect(v.runnerRow).toBe("runner-test-error");
+    expect(v.failureMessage).toContain("A");
+    expect(v.failureMessage).toContain("R-435");
+  });
+
+  test("[A timeout, D timeout] -> error for D, while A itself stays a timeout", async () => {
+    const rows = [timedOut("A"), timedOut("B")];
+    const d = await verdictOf(rows, "B");
+    expect(d.outcome).toBe("error");
+    expect(d.runnerRow).toBe("runner-test-error");
+    expect((await verdictOf(rows, "A")).outcome).toBe("timeout");
+  });
+
+  test("the twin: [P pass, D timeout] stays a timeout", async () => {
+    const v = await verdictOf([{ method: "A", status: "pass" }, timedOut("B")], "B");
+    expect(v.outcome).toBe("timeout");
+    expect(v.runnerRow).toBeUndefined();
+  });
+
+  test("a K1(a) refusal marker in an earlier plain row also guards the timeout", async () => {
+    const marker = {
+      method: "A",
+      status: "pass" as const,
+      message: "NotRun: out-of-scope: Commit",
+    };
+    const v = await verdictOf([marker, timedOut("B")], "B");
+    expect(v.outcome).toBe("error");
+    expect(v.runnerRow).toBe("runner-test-error");
+  });
+
+  test("the baseline call is unchanged: [E refused, D timeout] still reads D as a timeout", async () => {
+    const v = await verdictOf([refused("A"), timedOut("B")], "B", false);
+    expect(v.outcome).toBe("timeout");
+  });
+
+  // R639: a refusal that follows a call's FIRST not-run row, when that row is a timeout, is
+  // flagged so the covering loop may go on to the next test (the order cannot hide the timeout).
+  describe("R639: refusedAfterStop", () => {
+    const failMarker = {
+      method: "B",
+      status: "fail" as const,
+      message: "NotRun: out-of-scope: Commit",
+    };
+    test("B1: [A timeout, B refusal] flags B with the timed-out test's name", async () => {
+      const v = await verdictOf([timedOut("A"), refused("B")], "B");
+      expect(v.runnerRow).toBe("runner-refused");
+      expect(v.refusedAfterStop).toBe("A");
+    });
+    test("B1b: the whole sequence [A timeout, B refusal, D timeout]: B is flagged, then D is guarded (error, never timeout)", async () => {
+      const rows = [timedOut("A"), refused("B"), timedOut("D")];
+      expect((await verdictOf(rows, "B")).refusedAfterStop).toBe("A");
+      const d = await verdictOf(rows, "D");
+      expect(d.outcome).toBe("error");
+      expect(d.runnerRow).toBe("runner-test-error");
+    });
+    test("B2a: a refusal with no timeout is not flagged", async () => {
+      const v = await verdictOf([{ method: "A", status: "pass" }, refused("B")], "B");
+      expect(v.runnerRow).toBe("runner-refused");
+      expect(v.refusedAfterStop).toBeUndefined();
+    });
+    test("B2b: a timeout AFTER the refused row does not flag it", async () => {
+      const v = await verdictOf([refused("B"), timedOut("A")], "B");
+      expect(v.runnerRow).toBe("runner-refused");
+      expect(v.refusedAfterStop).toBeUndefined();
+    });
+    test("B2c: an earlier non-timeout refusal first: not flagged", async () => {
+      const v = await verdictOf([refused("E"), timedOut("A"), refused("B")], "B");
+      expect(v.refusedAfterStop).toBeUndefined();
+    });
+    test("B2d: a plain fail holding the marker (runner-test-error) is not flagged", async () => {
+      const v = await verdictOf([timedOut("A"), failMarker], "B");
+      expect(v.runnerRow).toBe("runner-test-error");
+      expect(v.refusedAfterStop).toBeUndefined();
+    });
+    test("B2e: no mutant active: not flagged", async () => {
+      const v = await verdictOf([timedOut("A"), refused("B")], "B", false);
+      expect(v.runnerRow).toBe("runner-refused");
+      expect(v.refusedAfterStop).toBeUndefined();
+    });
+    test("B2f: the timeout row itself is not flagged", async () => {
+      const v = await verdictOf([timedOut("A"), refused("B")], "A");
+      expect(v.outcome).toBe("timeout");
+      expect(v.refusedAfterStop).toBeUndefined();
+    });
   });
 });
 
@@ -1746,5 +2145,159 @@ describe("R666: batch 1's coverage is read through batch 1's layout (one-shot)",
     lines = { A: 10, B: 18 };
     await b.deploy(l.batch);
     expect(await procs()).toEqual([["Grow"], ["Twice"]]);
+  });
+});
+
+describe("R602 A1/A2: a multi-object batch deploys with coverage on, and its second object is covered", () => {
+  // `Logic` (79000) is the file's SECOND object: header on line 9, `exit(X * 2)` on line 13.
+  const MULTI = `codeunit 79001 "First"
+{
+    procedure One(): Integer
+    begin
+        exit(1);
+    end;
+}
+
+${TARGET_AL}`;
+  const cov = (_id: string, active: string) => ({
+    coverage: [],
+    perTestCoverage: [
+      {
+        test: `Codeunit${CU}.A`,
+        coverage: [
+          {
+            file: join(active, "Logic.Codeunit.al"),
+            statements: [{ line: 13, hits: 1, scope: "Twice" }],
+          },
+        ],
+      },
+      { test: `Codeunit${CU}.B`, coverage: [] },
+    ],
+  });
+
+  test("A2: deploy does not throw on a multi-object file (the old frame throw is gone)", async () => {
+    const l = await layout(MULTI);
+    const b = backendOf(l, fakeV3(allPass, { coverage: cov }).spawn, fakeAlc().io, {
+      coverage: "al-runner",
+    });
+    b.useBuildSymbols([]);
+    await b.deploy(l.batch);
+  });
+
+  test("A1: test A's coverage is the SECOND object's procedure, at its own object line", async () => {
+    // File line 13 is object line 6: the second object's base is 8 (R383's frame, the line before
+    // its header), the same frame the line map and BC use.
+    const l = await layout(MULTI);
+    const b = backendOf(l, fakeV3(allPass, { coverage: cov }).spawn, fakeAlc().io, {
+      coverage: "al-runner",
+    });
+    b.useBuildSymbols([]);
+    await b.deploy(l.batch);
+    await b.activate(null);
+    const a = await b.run(ref("A"), { coverage: "al-runner", timeoutMs: 1000 });
+    expect(a.coverage?.entries).toEqual([
+      { objectType: "Codeunit", objectId: 79000, procedure: "Twice", line: 6 },
+    ]);
+    expect(
+      (await b.run(ref("B"), { coverage: "al-runner", timeoutMs: 1000 })).coverage?.entries,
+    ).toEqual([]);
+  });
+});
+
+describe("R609: a test v3 refused MID-RUN keeps the coverage it reached before the refusal", () => {
+  const LOGIC = `codeunit 79000 "Logic"
+{
+    procedure Twice(X: Integer): Integer
+    begin
+        Sleep(600000);
+        exit(X * 2);
+    end;
+}
+`;
+  // A has a per-test entry that hits Logic line 6; B has an entry that hits only its own test file.
+  const cov = (_id: string, active: string, testDir: string) => ({
+    coverage: [],
+    perTestCoverage: [
+      {
+        test: `Codeunit${CU}.A`,
+        coverage: [
+          { file: join(active, "Logic.Codeunit.al"), statements: [{ line: 6, hits: 1 }] },
+          { file: join(testDir, "Tests.Codeunit.al"), statements: [{ line: 7, hits: 1 }] },
+        ],
+      },
+      {
+        test: `Codeunit${CU}.B`,
+        coverage: [
+          { file: join(testDir, "Tests.Codeunit.al"), statements: [{ line: 12, hits: 1 }] },
+        ],
+      },
+    ],
+  });
+  const REFUSAL = "NotRun: out-of-scope: an outbound HTTP request";
+  const runA = async (rowA: FakeRow, coverageFn: typeof cov = cov) => {
+    const l = await layout(LOGIC);
+    const v3 = fakeV3(() => [rowA, { method: "B", status: "pass" as const }], {
+      coverage: coverageFn,
+    });
+    const b = backendOf(l, v3.spawn, fakeAlc().io, { coverage: "al-runner" });
+    b.useBuildSymbols([]);
+    await b.deploy(l.batch);
+    await b.activate(null);
+    return b.run(ref("A"), { coverage: "al-runner", timeoutMs: 1000 });
+  };
+
+  test("a refused notRun row with a per-test entry carries that coverage", async () => {
+    const v = await runA({ method: "A", status: "error", notRun: true, message: REFUSAL });
+    expect(v.runnerRow).toBe("runner-refused");
+    expect(v.coverage?.entries.length ?? 0).toBeGreaterThan(0);
+  });
+
+  test("a row refused BEFORE it starts (no per-test entry) does not throw and has no coverage", async () => {
+    const none = (_id: string, _a: string, testDir: string) => ({
+      coverage: [],
+      perTestCoverage: [
+        {
+          test: `Codeunit${CU}.B`,
+          coverage: [
+            { file: join(testDir, "Tests.Codeunit.al"), statements: [{ line: 12, hits: 1 }] },
+          ],
+        },
+      ],
+    });
+    const v = await runA({ method: "A", status: "error", notRun: true, message: REFUSAL }, none);
+    expect(v.runnerRow).toBe("runner-refused");
+    expect(v.coverage).toBeUndefined();
+  });
+
+  test("a PASSING row with no per-test entry still refuses (R586 §6)", async () => {
+    const none = (_id: string, _a: string, testDir: string) => ({
+      coverage: [],
+      perTestCoverage: [
+        {
+          test: `Codeunit${CU}.B`,
+          coverage: [
+            { file: join(testDir, "Tests.Codeunit.al"), statements: [{ line: 12, hits: 1 }] },
+          ],
+        },
+      ],
+    });
+    await expect(runA({ method: "A", status: "pass" }, none)).rejects.toThrow(/R586 §6/);
+  });
+
+  test("a timeout notRun row stays without coverage", async () => {
+    const v = await runA({
+      method: "A",
+      status: "error",
+      notRun: true,
+      message: "Test exceeded 1s timeout.",
+    });
+    expect(v.outcome).toBe("timeout");
+    expect(v.coverage).toBeUndefined();
+  });
+
+  test("a refusal-marker row (a fail, not notRun) stays without coverage", async () => {
+    const v = await runA({ method: "A", status: "fail", message: REFUSAL });
+    expect(v.runnerRow).toBe("runner-test-error");
+    expect(v.coverage).toBeUndefined();
   });
 });

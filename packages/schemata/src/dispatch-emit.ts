@@ -79,5 +79,9 @@ function branchText(original: string, m: PlannedMember, latch: string, selector:
     return `${text.slice(0, at)} ${marker}${text.slice(at)}`;
   }
   if (place.kind === "list") return `${text.slice(0, start)}${marker} ${text.slice(start)}`;
-  return `${text.slice(0, start)}begin ${marker} ${text.slice(start, end)} end${text.slice(end)}`;
+  // R729. When `S`'s own text ends in a `;` (`if X then;`: the empty body's `;` is also the one
+  // that ends `S` and the statement around it), the `begin ... end` wrap must reproduce it, or the
+  // sibling after it loses its separator (AL0111). The same consumed-terminator rule as above.
+  const s = text.slice(start, end);
+  return `${text.slice(0, start)}begin ${marker} ${s} end${endsInTerminator(s) ? ";" : ""}${text.slice(end)}`;
 }

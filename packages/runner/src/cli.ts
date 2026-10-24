@@ -118,6 +118,7 @@ import {
   AlRunnerV2RetiredError,
   RETIRED_V2_BACKEND,
   V2_RETIRED_BACKEND_FLAG,
+  refuseRetiredV2ConfigSection,
   refuseRetiredV2Report,
 } from "./v2-retired";
 import {
@@ -354,7 +355,6 @@ export const DRY_RUN_REFUSED = [
   "tests",
   "progress-out",
   "workers",
-  "compile-concurrency",
   "keep-env",
   "allow-expiring-env",
   "selector-id",
@@ -421,7 +421,6 @@ export interface RunCliConfig {
   readonly skipKnownSurvivors: boolean;
   readonly outPath?: string;
   readonly workers: number;
-  readonly compileConcurrency?: number;
   // Env-tool session controls (Task 7). Both default to false and are only meaningful for the
   // bcdev backend's environment tool (Task 6) — al-runner has no environment to keep or expire.
   readonly keepEnv: boolean;
@@ -1004,7 +1003,6 @@ RUN — cost and recovery
                              A baseline test, kill confirm or warm replay with NO mutant active
                              is stopped at its budget regardless of this flag (R658)
   --workers <n>              parallel workers (every backend is limited to 1)
-  --compile-concurrency <n>  concurrent alc processes
   --progress-out <path>      stream events to this file as NDJSON, one JSON object per line,
                              flushed as each event arrives — a crash diagnostic and a structured
                              feed for agents/CI. VERDICT LINES ARE PROVISIONAL UNTIL
@@ -1230,7 +1228,6 @@ export const RUN_FLAGS = {
   "skip-known-survivors": { type: "boolean", default: false },
   "dry-run": { type: "boolean", default: false },
   workers: { type: "string" },
-  "compile-concurrency": { type: "string" },
   server: { type: "string" },
   instance: { type: "string" },
   // R90 fix round 1: `clear-ceiling`'s optional per-file narrowing. Lives in the shared flag table
@@ -1307,7 +1304,6 @@ const RUN_ONLY_FLAGS = [
   "skip-known-survivors",
   "dry-run",
   "workers",
-  "compile-concurrency",
   "keep-env",
   "allow-expiring-env",
   "selector-id",
@@ -2040,19 +2036,12 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
   const workers = values.workers === undefined ? 1 : Number(values.workers);
   if (!Number.isInteger(workers) || workers < 1)
     throw new Error("--workers must be a positive integer");
-  const compileConcurrency =
-    values["compile-concurrency"] === undefined ? undefined : Number(values["compile-concurrency"]);
-  if (
-    compileConcurrency !== undefined &&
-    (!Number.isInteger(compileConcurrency) || compileConcurrency < 1)
-  )
-    throw new Error("--compile-concurrency must be a positive integer");
 
   // R3: `--selector-id`/`--control-id`/`--table-id` override the three injected object ids
   // (DEFAULT_SELECTOR_IDS) independently — see `resolveSelectorIds`'s doc comment for why three
   // explicit ids rather than one base+offsets. Parsed here (not left to `resolveSelectorIds`) so
-  // a non-integer/non-positive value is rejected at argv-parse time, matching `--workers`/
-  // `--compile-concurrency` immediately above.
+  // a non-integer/non-positive value is rejected at argv-parse time, matching `--workers`
+  // immediately above.
   const selectorIdFlag = parseObjectIdFlag(values["selector-id"], "selector-id");
   const controlIdFlag = parseObjectIdFlag(values["control-id"], "control-id");
   const tableIdFlag = parseObjectIdFlag(values["table-id"], "table-id");
@@ -2123,7 +2112,6 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     keepEnv,
     allowExpiringEnv,
     ...(values.out !== undefined ? { outPath: values.out } : {}),
-    ...(compileConcurrency !== undefined ? { compileConcurrency } : {}),
     ...(Object.keys(selectorIdOverrides).length > 0 ? { selectorIdOverrides } : {}),
     ...only,
     ...exclude,
@@ -2223,12 +2211,6 @@ export interface BcDevConfigSection {
 
 export interface LethalConfigFile {
   readonly bcdev?: Partial<BcDevConfigSection>;
-  /**
-   * The retired .NET al-runner's section (R654). Nothing reads it. HELD (R654 S3, orchestrator
-   * ruling): its refusal by name (`al-runner-v2-retired`, plan F2) waits until the owner strips it
-   * from the provisioned config templates, so until then it is tolerated and ignored.
-   */
-  readonly alRunner?: unknown;
   /** R586: the al-runner-v3 section, validated by `validateAlRunnerV3Config`. */
   readonly alRunnerV3?: unknown;
   // Task 7: an environment tool (Task 6) resolves/provisions the bcdev section instead of it
@@ -2394,6 +2376,7 @@ async function loadLethalConfigFile(path: string): Promise<LethalConfigFile> {
       `config file at ${path} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
+  refuseRetiredV2ConfigSection(parsed, path);
   setPackageCacheDirs(configuredPackageCaches(parsed));
   return parsed;
 }
@@ -2603,17 +2586,6 @@ export function odataCfgFor(c: BcDevConfigSection): ActivationConfig {
     ...(c.tenant !== undefined ? { tenant: c.tenant } : {}),
   };
 }
-
-/**
- * Builds one backend instance targeting `scratchDir` for all of its own scratch
- * output. Called once for the session's main backend (baseline/coverage), and —
- * when `--workers > 1` — once more per worker with a distinct `scratchDir`
- * (`cli.ts`'s `runFromCli`), so that each bcdev worker gets its own
- * `ArtifactCompiler.outputDir`. Since Layer 5A the compiled .app is content-addressed per artifact
- * id (never a fixed filename), so collisions are already structurally impossible — a private
- * outputDir per worker additionally keeps each worker's scratch/final artifacts physically
- * separate and independently disposable. (al-runner-v3 refuses `--workers > 1`.)
- */
 
 /**
  * Builds one `EnvToolPublisher` for a resolved bcdev connection. The ONLY place that derives
@@ -2846,10 +2818,28 @@ export type BackendInputs = Pick<
   Partial<Pick<RunCliConfig, "dbPath" | "outPath" | "progressOutPath">>;
 
 /**
+ * The coverage mode a v3 run gets: the configured one, or "none" (with a warning naming the files)
+ * when the project holds an `#if`-wrapped object file of a shape the coverage index has no rule
+ * for (R602: a multi-object file and a single-wrapper file are indexed, so they keep coverage on).
+ */
+export async function v3CoverageMode(
+  configured: "al-runner" | "none",
+  projectDir: string,
+  source?: ReadonlyMap<string, Buffer>,
+): Promise<"al-runner" | "none"> {
+  if (configured !== "al-runner") return configured;
+  const support = await alRunnerCoverageSupport(projectDir, source);
+  const named = support.wrappedObjectFiles;
+  if (named.length === 0) return configured;
+  console.warn(
+    `[lethal] al-runner-v3-coverage-off: coverage is turned OFF for this run (coverage "none"): the coverage index has no rule for the #if wrapper shape (two-arm, #elif, nested, or a multi-object file holding a wrapper) in ${named.join(", ")} (R602).`,
+  );
+  return "none";
+}
+
+/**
  * R586 (plan r2 §9): the al-runner-v3 backend from the `alRunnerV3` section. One-shot, static
- * selector, sequential. Coverage is turned off (with a warning) for a project holding a
- * multi-object or an `#if`-wrapped object file: v3's frame for those is not measured, and its
- * index refuses a multi-object file rather than guess.
+ * selector, sequential. Coverage is turned off (with a warning) by `v3CoverageMode`.
  */
 async function buildAlRunnerV3Backend(
   parsed: BackendInputs,
@@ -2860,6 +2850,8 @@ async function buildAlRunnerV3Backend(
     readonly spawn?: SpawnFn;
     /** R635: the serve-entries daemon's spawn. */
     readonly serverSpawn?: ServerSpawnFn;
+    /** R586c: test seam, the update gate's leg K only. No flag, no config key. */
+    readonly candidate?: true;
     readonly selectorIds: SelectorConfig;
     readonly source?: ReadonlyMap<string, Buffer>;
     readonly preprocessorSymbols: readonly string[];
@@ -2875,17 +2867,7 @@ async function buildAlRunnerV3Backend(
       'could not locate alc under the AL Language VS Code extension install; --backend al-runner-v3 compiles every batch with alc before v3 runs it (R586). Install the extension, or set "alRunnerV3.alcPath".',
     );
   }
-  let coverage = c.coverage;
-  if (coverage === "al-runner") {
-    const support = await alRunnerCoverageSupport(parsed.projectDir, deps.source);
-    const named = [...support.multiObjectFiles, ...support.wrappedObjectFiles];
-    if (named.length > 0) {
-      console.warn(
-        `[lethal] al-runner-v3-coverage-off: coverage is turned OFF for this run (coverage "none"): v3's coverage frame for a multi-object or #if-wrapped object file is not measured (${named.join(", ")}) (R586).`,
-      );
-      coverage = "none";
-    }
-  }
+  const coverage = await v3CoverageMode(c.coverage, parsed.projectDir, deps.source);
   console.warn(AL_RUNNER_V3_NOT_AUTHORITATIVE);
   return new AlRunnerV3Backend(
     {
@@ -2898,6 +2880,7 @@ async function buildAlRunnerV3Backend(
       alcPath,
       coverage,
       sourceProjectDir: parsed.projectDir,
+      ...(deps.candidate === true ? { candidate: true } : {}),
       ...(c.cacheDir !== undefined ? { cacheDir: c.cacheDir } : {}),
       ...(deps.preprocessorSymbols.length > 0
         ? { preprocessorSymbols: deps.preprocessorSymbols }
@@ -2931,6 +2914,8 @@ export async function buildBackend(
     alToolPaths?: typeof defaultAlToolPaths;
     alRunnerSpawn?: SpawnFn;
     alRunnerServerSpawn?: ServerSpawnFn;
+    /** R586c: test seam for the update gate's leg K on a candidate build; never set by a user. */
+    alRunnerCandidate?: true;
   } = {},
   // R3: the resolved selector/control/table ids (`resolveSelectorIds`) — trailing, defaulted
   // param so every pre-existing positional call site (tests included) keeps behaving exactly as
@@ -2948,6 +2933,7 @@ export async function buildBackend(
       alToolPaths: deps.alToolPaths ?? defaultAlToolPaths,
       ...(deps.alRunnerSpawn !== undefined ? { spawn: deps.alRunnerSpawn } : {}),
       ...(deps.alRunnerServerSpawn !== undefined ? { serverSpawn: deps.alRunnerServerSpawn } : {}),
+      ...(deps.alRunnerCandidate === true ? { candidate: true as const } : {}),
       selectorIds,
       ...(source !== undefined ? { source } : {}),
       preprocessorSymbols,
@@ -3796,37 +3782,6 @@ export async function runFromCli(
             selectorIds,
             source,
           );
-          // `SessionConfig.backendFactory` is synchronous (`runSession` calls it
-          // without awaiting — see orchestrator.ts), but building a worker's backend
-          // is async (bcdev needs `defaultAlToolPaths()` + `mkdir`). So every worker
-          // backend is constructed here, up front, each with its own
-          // `<scratchRoot>/worker-<i>` scratch dir; the factory below just hands back
-          // the already-built instance for that index. `runSession` still owns
-          // disposing them (see `closeIfSupported` in orchestrator.ts) — it just
-          // doesn't own constructing them.
-          //
-          // (bcdev + --workers > 1 is refused in `parseCliConfig`, and so is al-runner-v3, so since
-          // R654 this loop builds nothing today. `deploy` is still threaded through
-          // (Important 3, Task 7 review): a bcdev worker built without it would silently publish via
-          // `ContainerDeployer`/altool instead of through the configured env tool — unreachable today
-          // only because of the `--workers > 1` bcdev refusal above, and that restriction is
-          // explicitly deferred rather than permanent.)
-          const workerBackends: ExecutionBackend[] = [];
-          if (parsed.workers > 1) {
-            for (let i = 0; i < parsed.workers; i++) {
-              workerBackends.push(
-                await build(
-                  parsed,
-                  effectiveConfig,
-                  join(scratchRoot, `worker-${i}`),
-                  deploy,
-                  {},
-                  selectorIds,
-                  source,
-                ),
-              );
-            }
-          }
           store = new ResultsStore(parsed.dbPath);
           // Task 5 (event-stream refactor, spec 2026-08-05 §A): a run this long (a baseline alone
           // can run for minutes with zero prior output) needs a live indication it hasn't stalled.
@@ -3923,23 +3878,9 @@ export async function runFromCli(
             preprocessorSymbols: validatePreprocessorSymbols(effectiveConfig.preprocessorSymbols),
             ...afterLeaseAcquiredFor(envSession),
             ...(parsed.allowLargeRun === true ? { allowLargeRun: true } : {}),
-            ...(parsed.compileConcurrency !== undefined
-              ? { compileConcurrency: parsed.compileConcurrency }
-              : {}),
             ...tier,
             ...leaseSessionFor(parsed, effectiveConfig),
             ...permissionCanaryFor(parsed, effectiveConfig),
-            ...(parsed.workers > 1
-              ? {
-                  backendFactory: (i: number) => {
-                    const b = workerBackends[i];
-                    if (b === undefined) {
-                      throw new Error(`runFromCli: no worker backend pre-built for index ${i}`);
-                    }
-                    return b;
-                  },
-                }
-              : {}),
           });
         } finally {
           // Best-effort cleanup — mirrors orchestrator.ts's own posture (~line 2056: "deliberately
@@ -4501,7 +4442,7 @@ export async function buildDoctorDeps(
   // R586: an AL-RUNNER-V3-ONLY project: one check, the binary's version, its `.gated` pin and
   // `bcVersion` against the package folder. The session's contract probe is not run here. Decided
   // BEFORE `prepareBcdevReadOnly`, because that helper resolves a bcdev identity this config does
-  // not have. (An `alRunner` section, the retired .NET al-runner's, is ignored: R654 F2 is held.)
+  // not have. (An `alRunner` section is refused at load: R654 F2.)
   if (
     configFile.envTool === undefined &&
     configFile.bcdev === undefined &&

@@ -1,16 +1,29 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  unlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { swapAdditive } from "@lethal/builtin-tier1";
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
-import { IDENTITY_SCHEME, type InstrumentedFile, type MutantManifestEntry } from "@lethal/schemata";
+import {
+  IDENTITY_SCHEME,
+  type InstrumentedFile,
+  type MutantManifest,
+  type MutantManifestEntry,
+} from "@lethal/schemata";
 import { flatNamesFor, withRunIdentityOrdinals, writeInstrumentedProject } from "@lethal/schemata";
 import { type ChunkedRow, foldChunkedRows, rerunMismatches } from "../itest/chunked-rows";
 import { buildAlRunnerCoverageIndex } from "../src/al-runner-coverage";
+import { BC_HTTP_INTERNAL_TEXT } from "../src/al-runner-v3-contract";
 import {
   AlcCompileError,
   ArtifactPrepareError,
@@ -77,6 +90,7 @@ import { bundleFor, tinyBundle } from "./helpers/bundle";
 import { IDLE_STATUS, leaseRouter } from "./helpers/lease-wire";
 import type { WireAnswer } from "./helpers/lease-wire";
 import { scratchDirs } from "./helpers/scratch";
+import { ignoreTargetAsk } from "./helpers/target-ask";
 import { testDbPath } from "./helpers/test-db";
 
 const scratch = scratchDirs();
@@ -85,6 +99,7 @@ const scratch = scratchDirs();
 async function v3RunnerBuild(): Promise<{ version: string; binarySha256: string }> {
   return { version: "alrunner 3.0.0-alpha.2 (91253f2d6)", binarySha256: "b".repeat(64) };
 }
+import { UpgradeNotRestoredError } from "../src/app-version";
 import {
   DependencyUnreadableError,
   type MicrosoftMode,
@@ -108,9 +123,11 @@ import {
   narrowFilesToSubset,
   noGreenBaselineNote,
   operatorTiers,
+  redeployClean,
   runNamedMutants,
   runOnce,
   runSession,
+  upgradeNotRestored,
 } from "../src/orchestrator";
 import type {
   LeaseFence,
@@ -126,12 +143,11 @@ import type { QuarantineRecord } from "../src/quarantine-store";
 import { COVERAGE_NOT_MEASURED_INTERPRETATION, renderConsole } from "../src/report";
 import type { SessionOutcome, SessionReport } from "../src/report";
 import { quarantineResourceKey } from "../src/resource-key";
-import { CARRYABLE_VERDICTS, isStrandedNote } from "../src/resume";
+import { CARRYABLE_VERDICTS, STRANDED_SKIP_NOTE, isStrandedNote } from "../src/resume";
 import { identityKeyOf, serializeKey } from "../src/selection";
 import { SessionSafety, SessionUnsafeError } from "../src/session-safety";
 import {
   GROUP_SUITE_UNRESOLVED_HEAD,
-  MutantBrokeTestDiscoveryError,
   ONRUN_HINT,
   STALE_TEST_APP_REMEDY,
   StaleTestAppError,
@@ -311,6 +327,10 @@ const SECOND_FILE_AL = `codeunit 79001 "Sandbox Other"
 `;
 
 const APP_ID = "11111111-1111-1111-1111-111111111111";
+/** R727: the TARGET's id in a project whose run asks `dependentCount` (`distinctTarget`); the TESTS
+ *  app, and the published package a guard digests, is APP_ID. Other projects keep APP_ID, since
+ *  committed snapshots hash this app.json. */
+const TARGET_APP_ID = "22222222-2222-2222-2222-222222222222";
 const APP_JSON = JSON.stringify(
   {
     id: APP_ID,
@@ -354,6 +374,8 @@ class StubBackend implements ExecutionBackend {
    * off, which is how a run without an answer looks.
    */
   reachedFor?: (mutant: string | null, ref: TestMethodRef) => boolean | undefined;
+  /** R609: a baseline row's `runnerRow` (al-runner-v3's refusal), so a fake can model a refused test. */
+  runnerRowFor?: (ref: TestMethodRef) => TestVerdict["runnerRow"];
   constructor(
     private readonly caps: BackendCapabilities,
     private readonly script: (
@@ -413,6 +435,7 @@ class StubBackend implements ExecutionBackend {
     // and R58's `"fenced"` alike. Written as `!== "none"` so the two stay indistinguishable to the
     // orchestrator, which is the point of the mode being a routing axis rather than a granularity.
     const hasCoverage = active === null && this.caps.coverage !== "none";
+    const runnerRow = active === null ? this.runnerRowFor?.(ref) : undefined;
     // Layer 5C-A Task 8, Task 10 (design §G): this stub represents a healthy, correctly-deployed
     // authoritative backend by default — every coverage:"none" (the transport path) call attests
     // cleanly, mirroring what a real RunMutant `ran` result would report. Only the dedicated
@@ -420,7 +443,7 @@ class StubBackend implements ExecutionBackend {
     // every pre-existing test here keeps its prior verdicts unaffected by the new fail-closed gate.
     const hasAttestation = this.caps.authoritative && opts.coverage === "none";
     const failureMessage =
-      outcome === "fail" || outcome === "timeout"
+      outcome === "fail" || outcome === "timeout" || outcome === "error"
         ? this.failureMessageFor?.(active, ref)
         : undefined;
     return {
@@ -428,6 +451,7 @@ class StubBackend implements ExecutionBackend {
       outcome,
       durationMs: 5,
       ...(failureMessage !== undefined ? { failureMessage } : {}),
+      ...(runnerRow !== undefined ? { runnerRow } : {}),
       ...(hasCoverage
         ? {
             coverage: {
@@ -452,6 +476,11 @@ class StubBackend implements ExecutionBackend {
 
 function reachedOf(reachedActive: boolean | undefined): { reachedActive?: boolean } {
   return reachedActive !== undefined ? { reachedActive } : {};
+}
+
+/** R727: give the target its own id, so a fake `dependentCount` can tell its ask from the guard's. */
+async function distinctTarget(projectDir: string) {
+  await Bun.write(join(projectDir, "app.json"), APP_JSON.replace(APP_ID, TARGET_APP_ID));
 }
 
 async function makeProject(testAl: string = TEST_AL) {
@@ -674,6 +703,7 @@ describe("runSession", () => {
     ) {
       const dirs = await makeProject(NEW_AL);
       await Bun.write(join(dirs.testDir, "app.json"), JSON.stringify(testApp));
+      if (dependentCount !== undefined) await distinctTarget(dirs.projectDir);
       const stub = new StubBackend(CAPS_NST, (m) => (m === null ? "pass" : "fail"), [
         "IsOverBudget",
       ]);
@@ -681,7 +711,9 @@ describe("runSession", () => {
         ? Object.assign(stub, {
             fetchPublishedAppPackage: typeof read === "function" ? read : async () => read,
             ...(microsoft !== null ? { microsoftMode: () => microsoft } : {}),
-            ...(dependentCount !== undefined ? { dependentCount } : {}),
+            ...(dependentCount !== undefined
+              ? { dependentCount: ignoreTargetAsk(TARGET_APP_ID, dependentCount) }
+              : {}),
           })
         : stub;
       const store = extra.store ?? new ResultsStore(":memory:");
@@ -904,7 +936,7 @@ describe("runSession", () => {
           {
             fetchPublishedAppPackage: async () => OLD_PKG,
             microsoftMode: () => provenMode(),
-            dependentCount: async () => later,
+            dependentCount: ignoreTargetAsk(TARGET_APP_ID, async () => later),
           },
         );
         // R618: --resume-run refuses a finished run, so resume it as an interrupted one.
@@ -928,6 +960,7 @@ describe("runSession", () => {
     test("R618 Q1: a quarantined closed-world run is confirmed, unfinished, and found by --resume", async () => {
       const dirs = await makeProject(NEW_AL);
       await Bun.write(join(dirs.testDir, "app.json"), JSON.stringify({ ...TESTS_APP, id: APP_ID }));
+      await distinctTarget(dirs.projectDir);
       // Stateful: mutants survive until the second mutant call, which goes in-flight-unknown.
       let mutantCalls = 0;
       let guardAsked = 0;
@@ -936,10 +969,10 @@ describe("runSession", () => {
       const backend = Object.assign(stub, {
         fetchPublishedAppPackage: async () => OLD_PKG,
         microsoftMode: () => provenMode(),
-        dependentCount: async () => {
+        dependentCount: ignoreTargetAsk(TARGET_APP_ID, async () => {
           guardAsked++;
           return 0;
-        },
+        }),
         run: async (ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> => {
           if ((stub.activations.at(-1) ?? null) !== null && ++mutantCalls > 1) {
             return { ref, outcome: "error", durationMs: 5, operation: "in-flight-unknown" };
@@ -973,7 +1006,7 @@ describe("runSession", () => {
         backend: Object.assign(new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]), {
           fetchPublishedAppPackage: async () => OLD_PKG,
           microsoftMode: () => provenMode(),
-          dependentCount: async () => 0,
+          dependentCount: ignoreTargetAsk(TARGET_APP_ID, async () => 0),
         }),
         store,
         ...dirs,
@@ -1884,6 +1917,114 @@ ${TRIGGER_TABLE_AL}#endif
     });
   });
 
+  // R609. al-runner-v3 refused a test MID-RUN (runnerRow "runner-refused") and recorded what it reached
+  // before the refusal. That coverage is for the NOTE only: selection must not move, and R140's
+  // fallback 2 (which reads the non-green index's byObject) must not see it.
+  describe("R609: coverage of a test v3 refused", () => {
+    const REFUSED = "RefusedByV3";
+    const TWO_TEST_AL = `codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure OverBudgetDetected()
+    begin
+    end;
+
+    [Test]
+    procedure ${REFUSED}()
+    begin
+    end;
+}
+`;
+    type Entry = { objectType: string; objectId: number; procedure?: string };
+    const LOGIC: Entry = { objectType: "Codeunit", objectId: 79000, procedure: "IsOverBudget" };
+    const ELSEWHERE: Entry = { objectType: "Codeunit", objectId: 79555, procedure: "Other" };
+    const TABLE: Entry = { objectType: "Table", objectId: 79001 };
+
+    async function runIt(green: Entry[], refused: Entry[], withTable = false) {
+      const dirs = await makeProject(TWO_TEST_AL);
+      if (withTable)
+        await Bun.write(join(dirs.projectDir, "SandboxTable.Table.al"), TRIGGER_TABLE_AL);
+      const mutantRuns: string[] = [];
+      const backend = new StubBackend(CAPS_NST, (mutant, ref) => {
+        if (mutant === null) return ref.method === REFUSED ? "error" : "pass";
+        mutantRuns.push(`${mutant}:${ref.method}`);
+        return "pass";
+      });
+      backend.runnerRowFor = (ref) => (ref.method === REFUSED ? "runner-refused" : undefined);
+      backend.failureMessageFor = () =>
+        "NotRun: out-of-scope: an outbound HTTP request [al-runner v3 did not run this test (notRun)]";
+      backend.coverageEntriesFor = (ref) => (ref.method === REFUSED ? refused : green);
+      const store = new ResultsStore(":memory:");
+      try {
+        const report = await runSession({ backend, store, ...dirs, selectorIds });
+        return { report, mutantRuns };
+      } finally {
+        store.close();
+      }
+    }
+    const logicOf = (r: Awaited<ReturnType<typeof runIt>>) =>
+      r.report.mutants.filter((m) => m.file.includes("SandboxLogic"));
+
+    test("a mutant covered only by the refused test carries a note naming v3's refusal", async () => {
+      const r = await runIt([ELSEWHERE], [LOGIC]);
+      const logic = logicOf(r);
+      expect(logic.length).toBeGreaterThan(0);
+      for (const m of logic) {
+        // R609 is a note only: the verdict stays no-coverage (counts and frozen tables do not move).
+        expect(m.verdict).toBe("no-coverage");
+        expect(m.failureNote).toContain(`Sandbox Tests.${REFUSED}`);
+        expect(m.failureNote).toContain("al-runner v3 refused");
+        expect(m.failureNote).toContain("not evidence of a gap in your suite");
+      }
+    });
+
+    test("a mutant no test reaches stays a bare no-coverage, with no note", async () => {
+      const r = await runIt([ELSEWHERE], [ELSEWHERE]);
+      const logic = logicOf(r);
+      expect(logic.length).toBeGreaterThan(0);
+      for (const m of logic) {
+        expect(m.verdict).toBe("no-coverage");
+        expect(m.failureNote ?? "").not.toContain(REFUSED);
+      }
+    });
+
+    test("a refused test with no coverage at all (refused before it started) gives no note and no throw", async () => {
+      const r = await runIt([ELSEWHERE], []);
+      for (const m of logicOf(r)) {
+        expect(m.verdict).toBe("no-coverage");
+        expect(m.failureNote ?? "").not.toContain(REFUSED);
+      }
+    });
+
+    test("selection is unchanged: a mutant covered by a green and a refused test runs only the green one", async () => {
+      const withRefused = await runIt([LOGIC], [LOGIC]);
+      const without = await runIt([LOGIC], []);
+      expect(withRefused.mutantRuns.length).toBeGreaterThan(0);
+      expect(withRefused.mutantRuns.every((x) => x.endsWith(":OverBudgetDetected"))).toBe(true);
+      expect(withRefused.mutantRuns).toEqual(without.mutantRuns);
+      expect(logicOf(withRefused).map((m) => m.verdict)).toEqual(
+        logicOf(without).map((m) => m.verdict),
+      );
+    });
+
+    test("R140 fallback 2 is unchanged: a refused v3 test's object coverage does not make a trigger mutant decline", async () => {
+      const withRefused = await runIt([LOGIC], [TABLE], true);
+      const without = await runIt([LOGIC], [], true);
+      const triggers = (r: Awaited<ReturnType<typeof runIt>>) =>
+        r.report.mutants.filter((m) => m.file.includes("SandboxTable"));
+      expect(triggers(withRefused).length).toBeGreaterThan(0);
+      // Same as with no refused coverage: run against every green test, scored, never declined.
+      expect(triggers(withRefused).map((m) => m.verdict)).toEqual(
+        triggers(without).map((m) => m.verdict),
+      );
+      expect(triggers(withRefused).some((m) => m.verdict === "survived")).toBe(true);
+      expect(withRefused.mutantRuns).toEqual(without.mutantRuns);
+      expect(withRefused.report.untargetedTriggerCount).toBe(without.report.untargetedTriggerCount);
+    });
+  });
+
   test("late flakiness: fails under mutant AND at confirmation = error + unstable", async () => {
     const dirs = await makeProject();
     // Deterministic script: the fixture has exactly 1 test, so baseline is 1 inactive run.
@@ -2791,6 +2932,100 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
     });
   });
 
+  // ————————————————————————————————————————————————————————————————————————————————————————
+  // R713. A baseline test that failed with BC's web-service HTTP text is named in the note and in
+  // one warning. Nothing here may move a verdict: the test is red at baseline either way.
+  // ————————————————————————————————————————————————————————————————————————————————————————
+  describe("R713 — a baseline test failed with the web-service HTTP text", () => {
+    const WARNING = "bcdev-http-text-differs";
+    const OTHER_TEXT = "Assert.AreEqual failed: expected 3, got 4";
+
+    async function runHttp(failureText: string, unsupportedProcedure = "IsUnderBudget") {
+      const dirs = await qualProject();
+      const backend = new QualificationBackend((method: string) =>
+        method === "UnsupportedTest"
+          ? {
+              outcome: "error" as const,
+              procedure: unsupportedProcedure,
+              failureMessage: failureText,
+            }
+          : { outcome: "pass" as const, procedure: "IsOverBudget" },
+      );
+      const store = new ResultsStore(":memory:");
+      const events: RunEvent[] = [];
+      const report = await runSession({
+        backend,
+        store,
+        ...dirs,
+        selectorIds,
+        emit: [createEmitter([(e) => events.push(e)])],
+      });
+      const warnings = events.filter((e) => e.type === "warning" && e.code === WARNING);
+      return { report, warnings };
+    }
+
+    test("a mutant covered only by it is error with the HTTP note, and one warning fires", async () => {
+      const { report, warnings } = await runHttp(BC_HTTP_INTERNAL_TEXT);
+      const errored = report.mutants.filter((m) => m.verdict === "error");
+      expect(errored.length).toBe(3);
+      for (const m of errored) {
+        expect(m.failureNote).toStartWith("web-service HTTP text differs from the hub's:");
+        expect(m.failureNote).toContain("Sandbox Tests.UnsupportedTest");
+      }
+      expect(warnings.length).toBe(1);
+      const w = warnings[0];
+      expect(w?.type === "warning" ? w.message : "").toContain("Sandbox Tests.UnsupportedTest");
+    });
+
+    test("an unrelated failure text gives the identical outcomes and no such warning", async () => {
+      const web = await runHttp(BC_HTTP_INTERNAL_TEXT);
+      const other = await runHttp(OTHER_TEXT);
+      const shape = (r: typeof web.report) => ({
+        counts: r.counts,
+        verdicts: r.mutants.map((m) => [m.mutantCode, m.verdict, m.killingTest ?? null]).sort(),
+      });
+      expect(shape(web.report)).toEqual(shape(other.report));
+      expect(other.warnings.length).toBe(0);
+      for (const m of other.report.mutants.filter((m) => m.verdict === "error"))
+        expect(m.failureNote).toContain("unsupported test type");
+    });
+
+    test("a mutant also covered by a green test keeps its verdict, gets no note, and the warning still fires once", async () => {
+      // The red test covers IsOverBudget as well, where GreenTest also covers it.
+      const { report, warnings } = await runHttp(BC_HTTP_INTERNAL_TEXT, "IsOverBudget");
+      const killed = report.mutants.filter((m) => m.verdict === "killed");
+      expect(killed.length).toBe(3);
+      for (const m of killed) expect(m.failureNote ?? "").not.toContain("web-service HTTP");
+      expect(warnings.length).toBe(1);
+    });
+
+    test("a green baseline emits no such warning, and a kill whose text holds the web text stays killed", async () => {
+      const dirs = await qualProject();
+      class HttpKillBackend extends QualificationBackend {
+        override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+          const v = await super.run(ref, opts);
+          const active = this.activations.at(-1) ?? null;
+          return active === null ? v : { ...v, failureMessage: BC_HTTP_INTERNAL_TEXT };
+        }
+      }
+      const backend = new HttpKillBackend((method: string) => ({
+        outcome: "pass" as const,
+        procedure: method === "UnsupportedTest" ? "IsUnderBudget" : "IsOverBudget",
+      }));
+      const store = new ResultsStore(":memory:");
+      const events: RunEvent[] = [];
+      const report = await runSession({
+        backend,
+        store,
+        ...dirs,
+        selectorIds,
+        emit: [createEmitter([(e) => events.push(e)])],
+      });
+      expect(report.counts.killed).toBe(6);
+      expect(events.filter((e) => e.type === "warning" && e.code === WARNING).length).toBe(0);
+    });
+  });
+
   test("a mutant covered by a green test still runs (no over-exclusion)", async () => {
     const dirs = await qualProject();
     const backend = new QualificationBackend(baselineFor);
@@ -2913,9 +3148,10 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
         expect(m.failureNote).not.toContain("TestPermissions = Disabled");
     });
 
-    // R686 (B-small): a found-0 answer UNDER A MUTANT (the mutant made a test codeunit's OnRun
-    // raise during suite discovery) stops the session by name, never as "two consecutive run()
-    // failures", and says how to go on. Any other mid-run transport error keeps today's abort.
+    // R686, then R688: a found-0 answer UNDER A MUTANT (the mutant made a test codeunit's OnRun
+    // raise during suite discovery) is confirmed with no mutant active and, when that passes,
+    // scored `error test-discovery-failed`; the session goes on. Any other mid-run transport
+    // error keeps today's abort.
     describe("R686: a mutant that breaks a test codeunit's suite discovery", () => {
       async function midRun(mutantAnswer: string): Promise<unknown> {
         const dirs = await qualProject();
@@ -2938,23 +3174,35 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
         );
       }
 
-      test("single path: MutantBrokeTestDiscoveryError names the mutant, its file and the codeunit, and --resume / --exclude", async () => {
-        const err = await midRun(
-          runMutantLineCountMessage(0, "expected exactly one method SupportedTest, found 0"),
-        );
-        expect(err).toBeInstanceOf(MutantBrokeTestDiscoveryError);
-        const msg = (err as Error).message;
-        expect(msg).not.toContain("two consecutive");
-        for (const s of ["SandboxLogic.Codeunit.al", "Sandbox Tests", "--resume", "--exclude"])
-          expect(msg).toContain(s);
-      });
-
-      test("grouped path: suite-unresolved found 0 names the reason's codeunit", async () => {
-        const err = await midRun(
-          `${GROUP_SUITE_UNRESOLVED_HEAD}expected exactly one method SupportedTest in codeunit 50981, found 0`,
-        );
-        expect(err).toBeInstanceOf(MutantBrokeTestDiscoveryError);
-        expect((err as Error).message).toContain("codeunit 50981");
+      // R688: the single path's found-0, confirmed with no mutant active, is scored per mutant and
+      // the session completes. The grouped path is R688's G1.
+      test("single path: a confirmed found-0 is error test-discovery-failed and the session completes", async () => {
+        const dirs = await qualProject();
+        const backend = new QualificationBackend(baselineFor);
+        const run = backend.run.bind(backend);
+        const report = await runSession({
+          backend: Object.assign(backend, {
+            run: async (ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> =>
+              (backend.activations.at(-1) ?? null) === null
+                ? run(ref, opts)
+                : {
+                    ref,
+                    outcome: "error",
+                    durationMs: 1,
+                    failureMessage: runMutantLineCountMessage(
+                      0,
+                      `expected exactly one method ${ref.method}, found 0`,
+                    ),
+                  },
+          }),
+          store: new ResultsStore(":memory:"),
+          ...dirs,
+          selectorIds,
+        });
+        const scored = report.mutants.filter((m) => m.coveringTests !== undefined);
+        expect(scored.length).toBeGreaterThan(0);
+        for (const m of scored)
+          expect([m.verdict, m.cause]).toEqual(["error", "test-discovery-failed"]);
       });
 
       // Build review S1: the baseline wiring end to end. A proven, installed test app whose COMPILED
@@ -3048,9 +3296,8 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
           () => undefined,
           (e: unknown) => e,
         );
-        // The single path's confirm found-0 never reaches the abort (the session completes); the
-        // `transportErrorUnderMutant` flag guards the GROUPED warm replay, which this stub cannot
-        // reach (recorded in redcheck.md and R688).
+        // The single path's kill confirm answering found-0 never reaches an abort (the session
+        // completes). The grouped warm replay's found-0 is R688's G3.
         expect([mutantRan, confirms > 0, err]).toEqual([true, true, undefined]);
       });
 
@@ -3061,7 +3308,6 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
           "some other transport fault",
         ]) {
           const err = await midRun(answer);
-          expect(err).not.toBeInstanceOf(MutantBrokeTestDiscoveryError);
           expect((err as Error).message).toContain("two consecutive run() failures");
         }
       });
@@ -4086,499 +4332,8 @@ describe("runSession — I7 second consecutive transport error aborts the sessio
   }, 30_000);
 });
 
-// R671: no backend accepts workers > 1 since R654 retired the .NET al-runner; skipped, not lost.
-describe.skip("runSession — parallel workers", () => {
-  test("verdicts are identical at 1, 2 and 4 workers", async () => {
-    const shape = (r: Awaited<ReturnType<typeof runSession>>) =>
-      [...r.mutants].map((m) => `${m.file}:${m.line}:${m.operatorName}:${m.verdict}`).sort();
-    // Unsorted report order: `shape()` above ends in `.sort()`, so it would
-    // still pass even if runSession's internal `outcomes.sort(...)` were
-    // deleted (report ordering would then depend on scheduling, but the
-    // multiset would be unaffected). This captures `report.mutants` in
-    // whatever order runSession actually produced it, unsorted, so a
-    // regression that drops the internal sort has something to break against.
-    const order = (r: Awaited<ReturnType<typeof runSession>>) =>
-      r.mutants.map((m) => `${m.file}:${m.line}:${m.operatorName}`);
-
-    const results: string[][] = [];
-    const orders: string[][] = [];
-    for (const workers of [1, 2, 4]) {
-      const dirs = await makeProject();
-      const store = new ResultsStore(":memory:");
-      const report = await runSession({
-        // CAPS_NST_WORKERS, not CAPS_NST: this test sweeps workers up to 4, which Task 10 (design
-        // §G) now rejects for an authoritative backend — the sharding determinism under test here
-        // is orthogonal to authoritativeness.
-        backend: new StubBackend(
-          CAPS_NST_WORKERS,
-          (mutant) => (mutant === null ? "pass" : "fail"),
-          ["IsOverBudget"],
-        ),
-        backendFactory: () =>
-          new StubBackend(CAPS_NST_WORKERS, (mutant) => (mutant === null ? "pass" : "fail"), [
-            "IsOverBudget",
-          ]),
-        store,
-        ...dirs,
-        selectorIds,
-        workers,
-      });
-      results.push(shape(report));
-      orders.push(order(report));
-      store.close();
-    }
-    expect(results[1]).toEqual(results[0]);
-    expect(results[2]).toEqual(results[0]);
-    expect(orders[1]).toEqual(orders[0]);
-    expect(orders[2]).toEqual(orders[0]);
-  });
-
-  // The test above reuses the standard single-comparison fixture; since
-  // Layer 4.3 (see TWO_PROC_AL comment) it too now shards its 3 mutants
-  // across workers, so it already exercises >1 concurrently executing
-  // shard. This test additionally uses TWO_PROC_AL so the cross-shard
-  // determinism check is stressed with mutants spanning two independent
-  // procedures, not just three sites within one.
-  test("verdicts are identical at 1, 2 and 4 workers when a batch has multiple shardable mutants", async () => {
-    const shape = (r: Awaited<ReturnType<typeof runSession>>) =>
-      [...r.mutants].map((m) => `${m.file}:${m.line}:${m.operatorName}:${m.verdict}`).sort();
-    const order = (r: Awaited<ReturnType<typeof runSession>>) =>
-      r.mutants.map((m) => `${m.file}:${m.line}:${m.operatorName}`);
-    const caps: BackendCapabilities = {
-      coverage: "none",
-      deploy: "none",
-      isolation: "full-reset",
-      kind: "al-runner-v3",
-      authoritative: false,
-    };
-
-    const results: string[][] = [];
-    const orders: string[][] = [];
-    for (const workers of [1, 2, 4]) {
-      const dirs = await makeProject();
-      await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
-      const store = new ResultsStore(":memory:");
-      // Worker 0 is made artificially slower than worker 1. (shardEvenly's
-      // round-robin no longer aligns worker assignment with procedure
-      // identity post-Layer-4.3 — both workers get a mix of IsOverBudget's
-      // and IsUnderBudget's mutants — so this no longer cleanly slows "the
-      // IsOverBudget worker"; it doesn't need to.) Without runSession's
-      // outcomes.sort(), whichever worker finishes first would call
-      // record() first, so the raw accumulation order could come out
-      // different from the workers=1 baseline depending on scheduling — the
-      // sort is what makes this test's order assertion pass regardless of
-      // which worker happens to finish first.
-      const make = (workerIndex: number) =>
-        new StubBackend(
-          caps,
-          (mutant) => (mutant === null ? "pass" : "fail"),
-          [],
-          undefined,
-          workerIndex === 0
-            ? async () => {
-                await new Promise((r) => setTimeout(r, 15));
-              }
-            : undefined,
-        );
-      const report = await runSession({
-        backend: make(-1),
-        backendFactory: make,
-        store,
-        ...dirs,
-        selectorIds,
-        workers,
-      });
-      results.push(shape(report));
-      orders.push(order(report));
-      store.close();
-    }
-    expect(results[1]).toEqual(results[0]);
-    expect(results[2]).toEqual(results[0]);
-    expect(orders[1]).toEqual(orders[0]);
-    expect(orders[2]).toEqual(orders[0]);
-  });
-
-  test("more than one worker actually runs concurrently", async () => {
-    const dirs = await makeProject();
-    // Overwrite the single-comparison fixture with two independent
-    // procedures (see TWO_PROC_AL comment) so a batch actually contains more
-    // than one shardable mutant. coverage:"none" means every mutant is
-    // covered by every green test regardless of which procedure it targets,
-    // so no per-procedure coverage bookkeeping is needed here.
-    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
-    const store = new ResultsStore(":memory:");
-    let concurrent = 0;
-    let peak = 0;
-    const make = () =>
-      new StubBackend(
-        {
-          coverage: "none",
-          deploy: "none",
-          isolation: "full-reset",
-          kind: "al-runner-v3",
-          authoritative: false,
-        },
-        (mutant) => (mutant === null ? "pass" : "fail"),
-        [],
-        undefined,
-        async () => {
-          concurrent++;
-          peak = Math.max(peak, concurrent);
-          await new Promise((r) => setTimeout(r, 5));
-          concurrent--;
-        },
-      );
-    await runSession({
-      backend: make(),
-      backendFactory: make,
-      store,
-      ...dirs,
-      selectorIds,
-      workers: 3,
-    });
-    expect(peak).toBeGreaterThan(1);
-    store.close();
-  });
-
-  test("a worker's own deploy failure records that shard's mutants as errors, other shards still run", async () => {
-    const dirs = await makeProject();
-    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
-    const store = new ResultsStore(":memory:");
-    const caps: BackendCapabilities = {
-      coverage: "none",
-      deploy: "none",
-      isolation: "full-reset",
-      kind: "al-runner-v3",
-      authoritative: false,
-    };
-    // Layer 4.3 collapsed overlap batching to a single artifact, so
-    // shardEvenly's round-robin (index % workers) no longer aligns with
-    // procedure boundaries — worker 0 and worker 1 each get a mix of
-    // IsOverBudget's and IsUnderBudget's mutants, 3 of TWO_PROC_AL's 6 total
-    // apiece. That mix doesn't matter here (unlike the coverage-scoped test
-    // below): every mutant behaves identically regardless of procedure, so
-    // worker 0's shard (deploy always fails) records 3 errors and worker 1's
-    // shard (deploy always succeeds) kills its 3, whichever specific mutants
-    // land where. Mirrors the sequential per-artifact deploy try/catch (step
-    // 3 in orchestrator.ts): a deploy failure must record every mutant in
-    // the affected shard as "error" and let the session continue, not
-    // reject the whole `runSession` call.
-    const make = (workerIndex: number) =>
-      new StubBackend(
-        caps,
-        (mutant) => (mutant === null ? "pass" : "fail"),
-        [],
-        // A typed AlcCompileError — the only shape a per-shard deploy failure may take and
-        // still be bisected/downgraded to per-mutant errors (Task 7); anything else now aborts
-        // the whole session (see the DeploymentError/ArtifactPrepareError abort tests below).
-        workerIndex === 0 ? new AlcCompileError("boom: worker 0 could not deploy") : undefined,
-      );
-    const report = await runSession({
-      backend: make(-1),
-      backendFactory: make,
-      store,
-      ...dirs,
-      selectorIds,
-      workers: 2,
-    });
-    // 6 total mutants split 3/3 across the two workers: worker 0's 3 error,
-    // worker 1's 3 are killed — the deploy failure never propagates past its
-    // own shard.
-    expect(report.counts.errors).toBe(3);
-    expect(report.counts.killed).toBe(3);
-    expect(report.counts.survived).toBe(0);
-    store.close();
-  });
-
-  // R488: each worker builds its own backend with an empty sibling cache, so without the list its
-  // FIRST al-runner call for `OverBudgetDetected` would also run the look-alike
-  // `OverBudgetDetectedTwin` and merge their coverage.
-  test("the session backend and every worker get the discovered tests, look-alikes included (R488)", async () => {
-    const dirs = await makeProject(`codeunit 79100 "Sandbox Tests"
-{
-    Subtype = Test;
-
-    [Test]
-    procedure OverBudgetDetected()
-    begin
-    end;
-
-    [Test]
-    procedure OverBudgetDetectedTwin()
-    begin
-    end;
-
-#if LETHAL_R491_NEVER_DEFINED
-    [Test]
-    procedure OverBudgetDetectedGone()
-    begin
-    end;
-#endif
-}
-`);
-    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
-    const store = new ResultsStore(":memory:");
-    const caps: BackendCapabilities = {
-      coverage: "none",
-      deploy: "none",
-      isolation: "full-reset",
-      kind: "al-runner-v3",
-      authoritative: false,
-    };
-    // R491: one shared event log across every backend, so ORDER is read from call counters, never
-    // from a clock: each backend's seed must come before its own first run().
-    // Each entry is pushed synchronously at the call's entry, so workers' runs never interleave
-    // into one another's entries.
-    const log: { backend: number; what: "seed" | "run"; method?: string }[] = [];
-    const given: string[][] = [];
-    let made = 0;
-    const make = () => {
-      const id = made++;
-      const b = new StubBackend(caps, (mutant) => (mutant === null ? "pass" : "fail"), []);
-      const run = b.run.bind(b);
-      return Object.assign(b, {
-        run: (ref: TestMethodRef, opts: RunOpts) => {
-          log.push({ backend: id, what: "run", method: ref.method });
-          return run(ref, opts);
-        },
-        useDiscoveredTests: (tests: readonly TestMethodRef[]) => {
-          log.push({ backend: id, what: "seed" });
-          given.push(tests.map((t) => t.method).sort());
-        },
-      });
-    };
-    await runSession({
-      backend: make(),
-      backendFactory: make,
-      store,
-      ...dirs,
-      selectorIds,
-      workers: 2,
-    });
-    // The UNFILTERED list: the compiled-out `OverBudgetDetectedGone` is in it, though it never runs.
-    const all = ["OverBudgetDetected", "OverBudgetDetectedGone", "OverBudgetDetectedTwin"];
-    expect(given).toEqual([all, all, all]);
-    const ranMethods = new Set(log.filter((e) => e.what === "run").map((e) => e.method));
-    expect(ranMethods.has("OverBudgetDetected")).toBe(true);
-    expect(ranMethods.has("OverBudgetDetectedGone")).toBe(false);
-    // Every backend (the session's and both workers') is seeded, and before its first run().
-    for (let id = 0; id < made; id++) {
-      const seed = log.findIndex((e) => e.backend === id && e.what === "seed");
-      const firstRun = log.findIndex((e) => e.backend === id && e.what === "run");
-      expect(seed).toBeGreaterThanOrEqual(0);
-      expect(firstRun).toBeGreaterThan(seed);
-    }
-    expect(made).toBe(3);
-    store.close();
-  });
-
-  test("a worker deploy failure does not double-record a mutant step 5 already marked no-coverage", async () => {
-    const dirs = await makeProject();
-    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
-    const store = new ResultsStore(":memory:");
-    // Procedure-level coverage (CAPS_NST), covering ONLY IsOverBudget's
-    // procedure — all 3 of IsUnderBudget's mutants are therefore uncovered
-    // and already recorded "no-coverage" by step 5, ONCE EACH (Layer 4.3:
-    // one artifact means step 5's coverage filter runs once over every
-    // mutant, not once per batch), before the per-mutant fan-out ever runs.
-    //
-    // TWO_PROC_AL's 6 mutants sort (by file, startIndex) as IsOverBudget's 3
-    // then IsUnderBudget's 3 (indices 0-2, 3-5). Since there's only one
-    // artifact now, shardEvenly's round-robin (index % workers) no longer
-    // has a per-batch boundary to align on, so it interleaves the two
-    // procedures instead of cleanly separating them: worker 0 gets indices
-    // 0, 2, 4 (IsOverBudget's 1st + 3rd mutants, plus IsUnderBudget's 2nd);
-    // worker 1 gets indices 1, 3, 5 (IsOverBudget's 2nd, plus IsUnderBudget's
-    // 1st + 3rd). Worker 1's backend always fails to deploy: without the
-    // `perMutantTests.get(...) === undefined` skip in the deploy-failure
-    // catch, its two already-no-coverage IsUnderBudget mutants would be
-    // recorded a SECOND time as "error" — `mutants` has no unique constraint
-    // on (run_id, mutant_code), so `recordMutant`'s plain INSERT would
-    // silently duplicate the row rather than fail loudly. Its one covered
-    // mutant (IsOverBudget's 2nd) has nothing recorded yet, so the deploy
-    // failure legitimately records it as "error".
-    // CAPS_NST_WORKERS, not CAPS_NST: this test runs `workers: 2`, which Task 10 (design §G) now
-    // rejects for an authoritative backend — the no-double-record property under test here is
-    // orthogonal to authoritativeness.
-    const make = (workerIndex: number) =>
-      new StubBackend(
-        CAPS_NST_WORKERS,
-        (mutant) => (mutant === null ? "pass" : "fail"),
-        ["IsOverBudget"],
-        // Typed AlcCompileError — see the sibling test above for why (Task 7 no longer
-        // bisects/downgrades an untyped deploy failure).
-        workerIndex === 1 ? new AlcCompileError("boom: worker 1 could not deploy") : undefined,
-      );
-    const report = await runSession({
-      backend: make(-1),
-      backendFactory: make,
-      store,
-      ...dirs,
-      selectorIds,
-      workers: 2,
-    });
-    // 6 total — never 9 (which would mean an IsUnderBudget mutant landed
-    // under both no-coverage and error).
-    expect(report.mutants.length).toBe(6);
-    expect(report.counts.noCoverage).toBe(3); // IsUnderBudget's 3 mutants, recorded once each
-    expect(report.counts.errors).toBe(1); // IsOverBudget's mutant on worker 1's shard
-    expect(report.counts.killed).toBe(2); // IsOverBudget's other 2 mutants, on worker 0's shard
-    // Belt-and-suspenders: no single mutant identity appears under both verdicts.
-    const noCoverageKeys = new Set(
-      report.mutants.filter((m) => m.verdict === "no-coverage").map((m) => `${m.file}:${m.line}`),
-    );
-    const errorKeys = new Set(
-      report.mutants.filter((m) => m.verdict === "error").map((m) => `${m.file}:${m.line}`),
-    );
-    for (const k of noCoverageKeys) expect(errorKeys.has(k)).toBe(false);
-    store.close();
-  });
-
-  test("a shard's transport-error abort drains sibling shards before rethrowing", async () => {
-    const dbPath = testDbPath("results.sqlite");
-    const dirs = await makeProject();
-    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
-    const store = new ResultsStore(dbPath);
-    const caps: BackendCapabilities = {
-      coverage: "none",
-      deploy: "none",
-      isolation: "full-reset",
-      kind: "al-runner-v3",
-      authoritative: false,
-    };
-    // Worker 0 is slow — 30ms per run(). Worker 1 errors on every
-    // active-mutant run, tripping the I7 "two consecutive transport errors"
-    // abort almost immediately. (Both behaviors key on workerIndex, not on
-    // which specific mutants land in a shard — shardEvenly's round-robin no
-    // longer aligns shard composition with procedure identity post-Layer-4.3,
-    // so each shard now holds a mix of IsOverBudget's and IsUnderBudget's
-    // mutants.) If runSession rethrew as soon as worker 1's shard rejected
-    // (plain `Promise.all` semantics) instead of waiting for every shard to
-    // settle (`Promise.allSettled`), worker 0 could still be mid-flight —
-    // and, worse, a caller reacting to the rejection by closing the store
-    // could race a still-running worker 0's write to it.
-    const make = (workerIndex: number) =>
-      new StubBackend(
-        caps,
-        (mutant) => (mutant === null ? "pass" : workerIndex === 1 ? "error" : "fail"),
-        [],
-        undefined,
-        workerIndex === 0
-          ? async () => {
-              await new Promise((r) => setTimeout(r, 30));
-            }
-          : undefined,
-      );
-    await expect(
-      runSession({
-        backend: make(-1),
-        backendFactory: make,
-        store,
-        ...dirs,
-        selectorIds,
-        workers: 2,
-      }),
-    ).rejects.toThrow(/transport error/i);
-
-    // Reopen the same on-disk DB from a second connection immediately after
-    // the rejection (no sleep, no retry): worker 0's mutant row must already
-    // be there, proving allSettled actually waited for it rather than the
-    // throw racing ahead of a still-writing sibling.
-    const raw = new Database(dbPath, { readonly: true });
-    const rows = raw.query("SELECT verdict FROM mutants").all() as Array<{ verdict: string }>;
-    raw.close();
-    expect(rows.some((r) => r.verdict === "error")).toBe(true); // worker 1's abort
-    expect(rows.length).toBeGreaterThanOrEqual(2); // worker 0's mutant landed too
-    store.close();
-  });
-
-  test("worker backends are built once per session and disposed exactly once, not once per batch", async () => {
-    const dirs = await makeProject();
-    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
-    const store = new ResultsStore(":memory:");
-    const caps: BackendCapabilities = {
-      coverage: "none",
-      deploy: "none",
-      isolation: "full-reset",
-      kind: "al-runner-v3",
-      authoritative: false,
-    };
-    let factoryCalls = 0;
-    const closeCallCounts: number[] = [];
-    // Duck-typed close(), same as real backends (BcDevMcpBackend,
-    // AlRunnerBackend) that StubBackend itself doesn't model.
-    const make = () => {
-      factoryCalls++;
-      let closed = 0;
-      const backend = new StubBackend(caps, (mutant) => (mutant === null ? "pass" : "fail"), []);
-      return Object.assign(backend, {
-        async close() {
-          closed++;
-          closeCallCounts.push(closed);
-        },
-      });
-    };
-    await runSession({
-      backend: make(),
-      backendFactory: make,
-      store,
-      ...dirs,
-      selectorIds,
-      workers: 2,
-    });
-    // TWO_PROC_AL yields exactly 1 artifact (Layer 4.3 collapsed overlap
-    // batching), so this can no longer observationally distinguish "built
-    // once per session" from "built once per artifact" the way it could
-    // when TWO_PROC_AL yielded 3 batches (the bug would have run the
-    // factory 1 (cfg.backend) + 3 batches * 2 workers = 7 times, vs. 1 + 2 =
-    // 3 once fixed). The invariant this asserts — workerBackends are built
-    // once, outside the artifacts loop, and reused across it — still holds
-    // structurally; Task 6's multi-artifact bisection will make it
-    // observable here again.
-    expect(factoryCalls).toBe(3);
-    // Exactly the 2 worker backends close, each exactly once — cfg.backend
-    // is caller-owned (see cli.ts) and is never closed by runSession itself.
-    expect(closeCallCounts).toEqual([1, 1]);
-    store.close();
-  });
-
-  test("a fractional workers count is floored, not silently dropping mutants", async () => {
-    const dirs = await makeProject();
-    // THREE_PROC_AL, not TWO_PROC_AL: needs >=3 shardable mutants in a
-    // single sharding call for the drop bug to manifest (`i % 2.5` for
-    // i=0,1 never lands outside shardEvenly's length-truncated 2-element
-    // shard array) — see THREE_PROC_AL's comment.
-    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), THREE_PROC_AL);
-    const store = new ResultsStore(":memory:");
-    const caps: BackendCapabilities = {
-      coverage: "none",
-      deploy: "none",
-      isolation: "full-reset",
-      kind: "al-runner-v3",
-      authoritative: false,
-    };
-    const make = () => new StubBackend(caps, (mutant) => (mutant === null ? "pass" : "fail"), []);
-    const report = await runSession({
-      backend: make(),
-      backendFactory: make,
-      store,
-      ...dirs,
-      selectorIds,
-      workers: 2.5,
-    });
-    // 9 total (3 procedures * 3 mutants each, all in the single Layer-4.3
-    // artifact). Before flooring, shardEvenly(execute, 2.5) built a
-    // length-2 shard array (Array.from truncates a fractional `length`)
-    // while still computing target indices via `i % 2.5`, so an item whose
-    // index (e.g. 2, `2 % 2.5 === 2`) fell outside the truncated array was
-    // silently dropped by shardEvenly's `if (target !== undefined)` guard —
-    // no error, just fewer mutants in the report than were generated.
-    expect(report.mutants.length).toBe(9);
-    expect(report.counts.killed).toBe(9);
-    store.close();
-  });
-});
-
+// R671: the worker fan-out and its tests are deleted. The `workers > 1` refusals keep their tests:
+// "authoritative backend with workers > 1 is rejected" (here) and r586-backend-kind.test.ts.
 describe("runSession — M4 outcome ordering", () => {
   test("report order is numeric by startIndex, not lexicographic on the colon-joined string", async () => {
     const dirs = await makeProject();
@@ -5639,6 +5394,71 @@ describe("runSession — Layer 5A deployment identity", () => {
     expect(backend.lastCompiledVersion).toBe("9.9.9.10");
     expect(report.counts.errors).toBe(0);
     store.close();
+  });
+
+  // R709: BC's 422 when an upgrade breaks an installed dependent and the old target cannot be
+  // restored (measured by R-707 on bc2). It embeds the conflict sentence, naming the NEW version.
+  const R709_RESTORE =
+    "error AL0132: 'Codeunit \"R707 Target\"' does not contain a definition for 'Answer'. The " +
+    "original extensions could not be restored due to Cannot install the extension R707 Probe " +
+    "Target by LethAL Probe 1.0.0.1 because a newer version 1.0.0.2 was already installed..\n" +
+    "Extensions that were previously installed but could not be reinstalled. These extensions " +
+    "should be manually reinstalled.";
+
+  test("R709: a restore failure is refused by name, with BC's text and recovery steps, and NOT retried", async () => {
+    const dirs = await makeProject();
+    let attempts = 0;
+    const backend = new PhaseBackend({
+      onPublish: () => {
+        attempts++;
+        throw new Error(R709_RESTORE);
+      },
+    });
+    const store = new ResultsStore(":memory:");
+    const err = await runSession({ backend, store, ...dirs, selectorIds }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    store.close();
+    // red only when BOTH guards are gone (upgradeNotRestored here, and parseVersionConflict's own
+    // null): the restore text then reaches the version-conflict retry (attempts 2)
+    expect(attempts).toBe(1);
+    // red when the refusal is not the named class
+    expect(err).toBeInstanceOf(UpgradeNotRestoredError);
+    const msg = err instanceof Error ? err.message : "";
+    expect(msg).toContain("could not be restored"); // BC's own text, verbatim
+    expect(msg).toContain("bc-linux-setup.ts");
+    expect(msg).toContain("tests app");
+  });
+
+  test("R709: a restore failure on the version-conflict RETRY is refused by name too", async () => {
+    const dirs = await makeProject();
+    let attempts = 0;
+    const backend = new PhaseBackend({
+      onPublish: () => {
+        attempts++;
+        throw new Error(
+          attempts === 1
+            ? "Cannot install the extension X by Y 1.0.1.1 because a newer version 9.9.9.9 was already installed."
+            : R709_RESTORE,
+        );
+      },
+    });
+    const store = new ResultsStore(":memory:");
+    const err = await runSession({ backend, store, ...dirs, selectorIds }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    store.close();
+    expect(attempts).toBe(2);
+    // red when only the first publish's error is read for a restore failure
+    expect(err).toBeInstanceOf(UpgradeNotRestoredError);
+  });
+
+  test("R709: a compile verdict carrying the restore words is not a restore refusal", () => {
+    // red when upgradeNotRestored reads an AlcCompileError (its text is alc's output, R461)
+    expect(upgradeNotRestored(new AlcCompileError(R709_RESTORE))).toBeUndefined();
+    expect(upgradeNotRestored(new Error(R709_RESTORE))).toBeInstanceOf(UpgradeNotRestoredError);
   });
 
   // R-422: a project app.json written on Windows names its logo and resource folders with `\`,
@@ -6831,7 +6651,7 @@ describe("runSession — bisection on compile failure", () => {
         );
         attempts.push(hasBoundary);
         return hasBoundary
-          ? new AlcCompileError("alc: AL0001 malformed operator replacement")
+          ? new AlcCompileError("Sandbox.al(5,9): error AL0001: malformed operator replacement")
           : undefined;
       },
     );
@@ -6849,7 +6669,7 @@ describe("runSession — bisection on compile failure", () => {
     const noted = report.mutants.find((m) => m.verdict === "error");
     expect(noted).toBeDefined();
     expect(noted?.failureNote).toBeDefined();
-    expect(noted?.failureNote).toContain("bisected to mutant");
+    expect(noted?.failureNote).toContain("fails to compile on its own");
     expect(noted?.failureNote).toContain("lethal.conditional-boundary");
     store.close();
   });
@@ -6890,136 +6710,7 @@ describe("runSession — bisection on compile failure", () => {
     // the artifact (measured: three AL0110 sites in one codeunit, all 155 mutants "environmental").
     expect(noted?.failureNote).toContain("MORE THAN ONE mutant breaks the compile");
     expect(noted?.failureNote).toContain("resource limit exceeded");
-    expect(noted?.failureNote).not.toContain("bisected to mutant");
-    store.close();
-  });
-
-  // Same problem, `workers > 1` path: a worker's own deploy of the shared artifact
-  // can fail while other workers succeed (existing "worker's own deploy failure"
-  // tests already cover that split), and until now that failure was never bisected —
-  // every mutant in the failing shard was blamed with a flat `String(err)`. Only
-  // worker 0's backend is guarded here (mirroring the existing per-worker-failure
-  // tests' `workerIndex === 0` convention); worker 1 has no guard and always
-  // succeeds, so its shard's mutants must resolve normally (killed/survived), never
-  // "error" — proving the bisected failure stayed scoped to worker 0's shard.
-  //
-  // The guard is scoped to IsOverBudget's conditional-boundary specifically (operatorName
-  // AND procedureName), not just operatorName: TWO_PROC_AL carries a conditional-boundary
-  // mutant in EACH procedure, so an operatorName-only check would make two mutants equally
-  // "guilty" — bisectFailingMutant assumes exactly one culprit, and confirmation against a
-  // manifest search that (correctly, post-Task-7) spans every procedure would then find the
-  // complement still fails (the OTHER procedure's conditional-boundary is still present) and
-  // report "environmental" instead of naming either one. Scoping to one procedure keeps this
-  // fixture a genuine single-culprit case.
-  // R671: no backend accepts workers > 1 since R654.
-  test.skip("a worker's deploy failure is bisected to a named mutant, not blamed on its whole shard", async () => {
-    const dirs = await makeProject();
-    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
-    const store = new ResultsStore(":memory:");
-    const caps: BackendCapabilities = {
-      coverage: "none",
-      deploy: "none",
-      isolation: "full-reset",
-      kind: "al-runner-v3",
-      authoritative: false,
-    };
-    const make = (workerIndex: number) =>
-      new StubBackend(
-        caps,
-        (mutant) => (mutant === null ? "pass" : "fail"),
-        [],
-        undefined,
-        undefined,
-        workerIndex === 0
-          ? (dir: string) => {
-              const manifest = JSON.parse(
-                readFileSync(join(dir, "mutant-manifest.json"), "utf8"),
-              ) as { mutants: Array<{ operatorName: string; procedureName: string }> };
-              const hasBoundary = manifest.mutants.some(
-                (m) =>
-                  m.operatorName === "lethal.conditional-boundary" &&
-                  m.procedureName === "IsOverBudget",
-              );
-              return hasBoundary
-                ? new AlcCompileError("alc: AL0001 malformed operator replacement")
-                : undefined;
-            }
-          : undefined,
-      );
-    const report = await runSession({
-      backend: make(-1),
-      backendFactory: make,
-      store,
-      ...dirs,
-      selectorIds,
-      workers: 2,
-    });
-    expect(report.counts.errors).toBeGreaterThan(0);
-    const noted = report.mutants.find((m) => m.verdict === "error");
-    expect(noted).toBeDefined();
-    expect(noted?.failureNote).toContain("bisected to mutant");
-    expect(noted?.failureNote).toContain("lethal.conditional-boundary");
-    // Worker 1's shard (no guard, always succeeds) still produced real verdicts —
-    // the bisected failure never spread past worker 0's own shard.
-    expect(report.counts.killed).toBeGreaterThan(0);
-    store.close();
-  });
-
-  // The `workers > 1` twin of the sequential AlcCompileError-guard abort (step 3b, covered
-  // above by the "reportedIdentity" tests using a single `backend`): a DeploymentError is
-  // NOT a compile verdict — the per-shard catch's `if (!(err instanceof AlcCompileError))
-  // throw err` must reject the whole session before `bisectAndNote` ever runs, exactly like
-  // the sequential path. Without that guard, a worker's publish/verify failure would fall
-  // through into the same bisection machinery the previous test exercises for a plain compile
-  // error, and get silently downgraded into a per-mutant "error" note instead of aborting the
-  // run.
-  // R671: no backend accepts workers > 1 since R654.
-  test.skip("a worker's DeploymentError aborts the whole session instead of being bisected", async () => {
-    const dbPath = testDbPath("results.sqlite");
-    const dirs = await makeProject();
-    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
-    const store = new ResultsStore(dbPath);
-    const caps: BackendCapabilities = {
-      coverage: "none",
-      deploy: "none",
-      isolation: "full-reset",
-      kind: "al-runner-v3",
-      authoritative: false,
-    };
-    // The exact object worker 0's deploy() throws — asserted below by reference (`.toBe`),
-    // so the rethrow in orchestrator.ts's per-shard catch around its
-    // `deploy(${batchDir}) worker ${i}` dispatch is proven to propagate it untouched, never
-    // wrapped in a "bisected to mutant ..." note the way a plain compile failure would be.
-    const deployErr = new DeploymentError("failed", "boom: worker 0 could not deploy", {
-      status: "unavailable",
-      detail: "no response",
-    });
-    const make = (workerIndex: number) =>
-      new StubBackend(
-        caps,
-        (mutant) => (mutant === null ? "pass" : "fail"),
-        [],
-        workerIndex === 0 ? deployErr : undefined,
-      );
-    await expect(
-      runSession({
-        backend: make(-1),
-        backendFactory: make,
-        store,
-        ...dirs,
-        selectorIds,
-        workers: 2,
-      }),
-    ).rejects.toBe(deployErr);
-
-    // Reopen the on-disk DB: no mutant anywhere carries a "bisected" note — proof the
-    // DeploymentError never reached bisectAndNote, on worker 0's shard or anywhere else.
-    const raw = new Database(dbPath, { readonly: true });
-    const rows = raw.query("SELECT failure_note FROM mutants").all() as Array<{
-      failure_note: string | null;
-    }>;
-    raw.close();
-    expect(rows.every((r) => !r.failure_note?.includes("bisected"))).toBe(true);
+    expect(noted?.failureNote).not.toContain("fails to compile on its own");
     store.close();
   });
 });
@@ -7165,7 +6856,7 @@ describe("runSession — Task 7: bisects the full manifest, not the history-filt
           (m) => m.operatorName === "lethal.conditional-boundary",
         );
         return hasBoundary
-          ? new AlcCompileError("alc: AL0001 malformed operator replacement")
+          ? new AlcCompileError("Sandbox.al(5,9): error AL0001: malformed operator replacement")
           : undefined;
       },
     );
@@ -7186,80 +6877,520 @@ describe("runSession — Task 7: bisects the full manifest, not the history-filt
     expect(candidate.map((m) => m.verdict)).toEqual(["error"]);
     const noted = report.mutants.find((m) => m.failureNote !== undefined);
     expect(noted).toBeDefined();
-    expect(noted?.failureNote).toContain("bisected to mutant");
+    expect(noted?.failureNote).toContain("fails to compile on its own");
     expect(noted?.failureNote).toContain("lethal.conditional-boundary");
     store.close();
   });
+});
 
-  // Defect 1 (per-shard worker path): every worker deploys the SAME `batchDir` — the whole
-  // artifact, every mutant, not a shard-scoped subset (sharding only decides which worker
-  // EXECUTES which mutant's tests). Bisecting `shard` (the shipped bug) can therefore miss a
-  // culprit that happens to be assigned to a DIFFERENT worker's shard: that worker's own search
-  // never re-includes it in any candidate, so it "compiles" trivially and falls back to
-  // "no-repro" — exactly the sequential path's bug, reproduced per-shard. Guarding both workers
-  // identically (they see the same artifact) and searching `manifest.mutants` for both finds
-  // the true culprit regardless of which shard it landed in.
-  // R671: no backend accepts workers > 1 since R654.
-  test.skip("a worker's shard-scoped bisection can miss a culprit outside its own shard; the full manifest finds it", async () => {
+// ————————————————————————————————————————————————————————————————————————
+// R734: a batch that fails to compile no longer scores EVERY mutant `error`. The mutants that break
+// the compile are isolated, scored `error` with a note, and the clean rest is redeployed with its
+// ORIGINAL ids and scored. Every edge fails closed: those mutants stay `error`, never scored.
+// ————————————————————————————————————————————————————————————————————————
+describe("runSession — R734: isolate the breaking mutants, score the rest", () => {
+  /** One boundary site per procedure, on its own line, in a file of its own. */
+  async function isolationProject(procedures: number) {
     const dirs = await makeProject();
-    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
-    const store = new ResultsStore(":memory:");
-    const caps: BackendCapabilities = {
-      coverage: "none",
-      deploy: "none",
-      isolation: "full-reset",
-      kind: "al-runner-v3",
-      authoritative: false,
-    };
-    // Scoped to one specific mutant (operatorName AND procedureName) so there is exactly one
-    // culprit — TWO_PROC_AL carries a conditional-boundary mutant in EACH procedure, and an
-    // operatorName-only guard would make two mutants equally "guilty", which bisection can't
-    // resolve to a single confirmed name (see the comment on the sibling test above).
-    const guard = (dir: string) => {
+    const body = Array.from(
+      { length: procedures },
+      (_, i) =>
+        `    procedure P${String(i).padStart(2, "0")}(A${String(i).padStart(2, "0")}: Integer; B${String(i).padStart(2, "0")}: Integer): Boolean\n    begin\n        exit(A${String(i).padStart(2, "0")} < B${String(i).padStart(2, "0")});\n    end;\n`,
+    ).join("\n");
+    await Bun.write(
+      join(dirs.projectDir, "Isolation.Codeunit.al"),
+      `codeunit 79050 "Isolation Extras"\n{\n${body}}\n`,
+    );
+    return dirs;
+  }
+  /** Every procedure of the isolation codeunit is covered by the one test, so a mutant there is
+   *  measured (killed or survived), not `no-coverage`. */
+  function covering<T extends StubBackend>(backend: T): T {
+    backend.coverageEntriesFor = () => [
+      { objectType: "Codeunit", objectId: 79000, procedure: "IsOverBudget" },
+      ...Array.from({ length: 8 }, (_, i) => ({
+        objectType: "Codeunit",
+        objectId: 79050,
+        procedure: `P${String(i).padStart(2, "0")}`,
+      })),
+    ];
+    return backend;
+  }
+  type Seen = { site: string; id: string };
+  /** Fails while the manifest still holds a boundary mutant of a `badProcs` procedure. Records each
+   *  manifest it was shown, so the tests can read the compile count and the ids. */
+  function brokenBy(badProcs: ReadonlySet<string>, shown: Seen[][]) {
+    return (dir: string): Error | undefined => {
       const manifest = JSON.parse(readFileSync(join(dir, "mutant-manifest.json"), "utf8")) as {
-        mutants: Array<{ operatorName: string; procedureName: string }>;
+        mutants: Array<{
+          mutantId: string;
+          file: string;
+          startIndex: number;
+          startLine: number;
+          operatorName: string;
+          procedureName: string;
+        }>;
       };
-      const hasCulprit = manifest.mutants.some(
-        (m) =>
-          m.operatorName === "lethal.conditional-boundary" && m.procedureName === "IsUnderBudget",
+      shown.push(
+        manifest.mutants.map((m) => ({
+          site: [m.file, m.startIndex, m.operatorName].join("|"),
+          id: m.mutantId,
+        })),
       );
-      return hasCulprit
-        ? new AlcCompileError("alc: AL0001 malformed operator replacement")
-        : undefined;
+      // The verdict comes from the EMITTED text in the staged directory, never from a mutant id: a
+      // fake that reads ids would pass whatever the ids became. A bad procedure breaks the
+      // compile while its mutated comparison (`A02 <= B02`) is written into the emitted file.
+      const emitted = readdirSync(dir)
+        .filter((f) => f.includes("Isolation") && f.endsWith(".al"))
+        .map((f) => ({ f, lines: readFileSync(join(dir, f), "utf8").split("\n") }));
+      for (const { f, lines } of emitted) {
+        for (const p of badProcs) {
+          const nn = p.slice(1);
+          const at = lines.findIndex((l) => l.includes(`A${nn} <= B${nn}`));
+          if (at >= 0) return new AlcCompileError(`${f}(${at + 1},9): error AL0123: broken`);
+        }
+      }
+      return undefined;
     };
-    // Both REAL workers (0 and 1) guarded identically: they deploy the same full batchDir, so
-    // both observe the same failure regardless of which one's own shard happens to contain the
-    // culprit. `cfg.backend` (workerIndex -1, the session's initial/step-3 deploy) is NOT
-    // guarded — matching the existing per-worker-failure tests' convention — so the batch's
-    // own whole-artifact deploy at step 3 succeeds and execution actually reaches the per-shard
-    // fan-out this test means to exercise, rather than the sequential catch handling it first.
-    const make = (workerIndex: number) =>
+  }
+  const isCulprit = (
+    m: { file: string; operatorName: string },
+    isolationLines: ReadonlySet<number>,
+    line: number,
+  ) =>
+    m.file.includes("Isolation") &&
+    m.operatorName === "lethal.conditional-boundary" &&
+    isolationLines.has(line);
+  // P<i> is the third line of its block: block i starts at line 3 + 5 * i, exit() at +2.
+  const lineOf = (i: number) => 3 + 5 * i + 2;
+
+  async function runIsolation(procedures: number, bad: readonly number[]) {
+    const dirs = await isolationProject(procedures);
+    const shown: Seen[][] = [];
+    const badProcs = new Set(bad.map((i) => `P${String(i).padStart(2, "0")}`));
+    const backend = covering(
       new StubBackend(
-        caps,
-        (mutant) => (mutant === null ? "pass" : "fail"),
-        [],
+        CAPS_NST,
+        () => "pass",
+        ["IsOverBudget"],
         undefined,
         undefined,
-        workerIndex === -1 ? undefined : guard,
+        brokenBy(badProcs, shown),
+      ),
+    );
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    store.close();
+    const lines = new Set(bad.map(lineOf));
+    return { report, shown, lines, backend };
+  }
+
+  // Direction 1 (k=1): the culprit is never scored. Red on master: every mutant is `error`, so the
+  // NEXT test is the one that fails there; this one passes on master and pins the other direction.
+  test("k=1: the culprit is `error` with a note naming the alc code and line, never scored", async () => {
+    const { report, lines } = await runIsolation(4, [2]);
+    const culprits = report.mutants.filter((m) => isCulprit(m, lines, m.line));
+    expect(culprits.map((m) => m.verdict)).toEqual(["error"]);
+    expect(culprits[0]?.failureNote).toContain("AL0123");
+    expect(culprits[0]?.failureNote).toContain(String(lineOf(2)));
+    expect(culprits[0]?.failureNote).not.toContain("not attributable to any SINGLE");
+  });
+
+  // Direction 2 (k=1): everything else IS scored. Red on master (all `error`).
+  test("k=1: every other mutant is scored, not `error`", async () => {
+    const { report, lines } = await runIsolation(4, [2]);
+    const others = report.mutants.filter((m) => !isCulprit(m, lines, m.line));
+    expect(others.length).toBeGreaterThan(3);
+    expect(others.filter((m) => m.verdict === "error")).toEqual([]);
+    expect(others.every((m) => m.verdict === "survived")).toBe(true);
+    expect(report.counts.errors).toBe(1);
+  });
+
+  test("k=2: both culprits are `error`, with their own notes", async () => {
+    const { report, lines } = await runIsolation(6, [1, 4]);
+    const culprits = report.mutants.filter((m) => isCulprit(m, lines, m.line));
+    expect(culprits.map((m) => m.verdict)).toEqual(["error", "error"]);
+    expect(culprits.every((m) => m.failureNote?.includes("AL0123"))).toBe(true);
+    expect(culprits.map((m) => m.failureNote).join()).not.toContain(
+      "not attributable to any SINGLE",
+    );
+  });
+
+  test("k=2: every other mutant is scored", async () => {
+    const { report, lines } = await runIsolation(6, [1, 4]);
+    const others = report.mutants.filter((m) => !isCulprit(m, lines, m.line));
+    expect(others.filter((m) => m.verdict === "error")).toEqual([]);
+    expect(report.counts.errors).toBe(2);
+  });
+
+  // The redeploy keeps the ids the clean mutants had in the failed artifact (the manifest, the
+  // selector and the control state all name them), per identity site.
+  test("the redeployed manifest carries the ORIGINAL ids, per site", async () => {
+    const { shown } = await runIsolation(4, [2]);
+    const first = shown[0];
+    const last = shown.at(-1);
+    expect(first).toBeDefined();
+    expect(last).toBeDefined();
+    if (first === undefined || last === undefined) return;
+    expect(last.length).toBe(first.length - 1); // the culprit is gone, nothing else
+    const original = new Map(first.map((s) => [s.site, s.id]));
+    for (const s of last) expect(original.get(s.site)).toBe(s.id);
+  });
+
+  // `--resume`: the culprit's `error` row has no entry in the stored artifact's manifest. The
+  // resume must not call that a corrupt store; the culprit is retried (an error is never carried)
+  // and isolated again, and every other row is carried or re-measured, one row per mutant.
+  test("--resume after an isolated compile failure retries the culprit, one row per mutant", async () => {
+    const dirs = await isolationProject(4);
+    // R495: the backend serves a proven test app, so a later session may carry from this run.
+    await Bun.write(join(dirs.testDir, "app.json"), testAppJson());
+    const make = () =>
+      Object.assign(
+        covering(
+          new StubBackend(
+            CAPS_NST,
+            () => "pass",
+            ["IsOverBudget"],
+            undefined,
+            undefined,
+            brokenBy(new Set(["P02"]), []),
+          ),
+        ),
+        servesTestApp(),
       );
-    const report = await runSession({
-      backend: make(-1),
-      backendFactory: make,
+    const store = new ResultsStore(":memory:");
+    const first = await runSession({ backend: make(), store, ...dirs, selectorIds });
+    store.db.run("UPDATE runs SET finished_at = NULL");
+    const resumed = await runSession({
+      backend: make(),
       store,
       ...dirs,
       selectorIds,
-      workers: 2,
+      resume: "last",
     });
-    const errorMutants = report.mutants.filter((m) => m.verdict === "error");
-    expect(errorMutants.length).toBeGreaterThan(0);
-    // Every errored mutant — from EITHER worker's shard — must be attributed to the actual
-    // culprit, never a shard-scoped "no-repro" fallback for whichever worker's own shard
-    // doesn't happen to contain it.
-    for (const m of errorMutants) {
-      expect(m.failureNote).toContain("bisected to mutant");
-      expect(m.failureNote).toContain("lethal.conditional-boundary");
-    }
+    expect(resumed.resumedFrom?.carriedMutants).toBeGreaterThan(0);
+    expect(resumed.mutants.length).toBe(first.mutants.length);
+    expect(resumed.mutants.filter((m) => m.verdict === "error").length).toBe(1);
+    expect(resumed.counts.errors).toBe(1);
     store.close();
+  });
+
+  // The ids on the redeployed artifact name the same SITES as before: a test that fails only while
+  // site X is active kills exactly the mutant at X, not its neighbour, after the redeploy.
+  test("kill-iff-site-X: the redeployed ids still map to their sites", async () => {
+    const dirs = await isolationProject(4);
+    const source = readFileSync(join(dirs.projectDir, "Isolation.Codeunit.al"), "utf8");
+    const siteX = source.indexOf("A03 < B03");
+    const shown: Seen[][] = [];
+    const backend = covering(
+      new StubBackend(
+        CAPS_NST,
+        (active) => {
+          if (active === null) return "pass";
+          const hit = (shown.at(-1) ?? []).find((s) => s.id === active);
+          return hit?.site.split("|")[1] === String(siteX) &&
+            hit.site.endsWith("lethal.conditional-boundary")
+            ? "fail"
+            : "pass";
+        },
+        ["IsOverBudget"],
+        undefined,
+        undefined,
+        brokenBy(new Set(["P02"]), shown),
+      ),
+    );
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    const boundary = report.mutants.filter(
+      (m) => m.file.includes("Isolation") && m.operatorName === "lethal.conditional-boundary",
+    );
+    const verdictAt = (i: number) => boundary.find((m) => m.line === lineOf(i))?.verdict;
+    expect(verdictAt(3)).toBe("killed");
+    expect(verdictAt(2)).toBe("error");
+    expect(verdictAt(0)).toBe("survived");
+    expect(verdictAt(1)).toBe("survived");
+    store.close();
+  });
+
+  // A4: the batch folder holds the REDEPLOYED text, so the stored bundle, its digests and the
+  // manifest all describe what was compiled. `loadInstalledArtifact` re-checks every digest.
+  test("the stored artifact is the redeployed one: digests verify, the culprit is listed as isolated out", async () => {
+    const dirs = await isolationProject(4);
+    const shown: Seen[][] = [];
+    const backend = new CompilePublishVerifyBackend(brokenBy(new Set(["P02"]), shown));
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend, store, ...dirs, selectorIds });
+    const { manifest } = await loadInstalledArtifact(store, {
+      fromRunId: 1,
+      batchIndex: 0,
+      appPath: "x",
+      instrumentedDir: "x",
+    });
+    const first = shown[0] ?? [];
+    expect(manifest.mutants.length).toBe(first.length - 1);
+    expect(manifest.isolatedOut?.length).toBe(1);
+    const gone = manifest.isolatedOut?.[0]?.mutantId ?? "";
+    expect(first.some((s) => s.id === gone)).toBe(true);
+    expect(manifest.mutants.some((m) => m.mutantId === gone)).toBe(false);
+    store.close();
+  });
+
+  // A1: a removed mutant is never activated, so it can never be scored or lent a verdict.
+  test("the culprit's id is never activated", async () => {
+    const { shown, backend } = await runIsolation(4, [2]);
+    const first = shown[0] ?? [];
+    const last = new Set((shown.at(-1) ?? []).map((s) => s.id));
+    const culprit = first.filter((s) => !last.has(s.id)).map((s) => s.id);
+    expect(culprit.length).toBe(1);
+    expect(backend.activations.filter((a) => a !== null).length).toBeGreaterThan(0);
+    expect(backend.activations).not.toContain(culprit[0] ?? "none");
+  });
+
+  // A2: only alc's rejection of the redeploy falls back to all-`error`. Any other failure goes the
+  // way a first-deploy failure goes: it throws and the session stops.
+  test("a redeploy that fails as indeterminate throws; it is not read as a compile answer", async () => {
+    const dirs = await isolationProject(4);
+    const inner = brokenBy(new Set(["P02"]), []);
+    // biome-ignore lint/style/useConst: read by the guard before it is assigned
+    let backend: CompilePublishVerifyBackend | undefined;
+    backend = new CompilePublishVerifyBackend((dir) =>
+      (backend?.compileViaDeployCalls ?? 0) >= 2
+        ? new DeploymentError("indeterminate", "connection reset mid-publish", {
+            status: "unavailable",
+            detail: "no response",
+          })
+        : inner(dir),
+    );
+    const store = new ResultsStore(":memory:");
+    await expect(runSession({ backend, store, ...dirs, selectorIds })).rejects.toThrow(
+      /connection reset mid-publish/,
+    );
+    expect(backend.compileViaDeployCalls).toBe(2);
+    store.close();
+  });
+
+  // A8: R90 records the redeployed artifact's guard count (N - k), not the failed artifact's N.
+  test("R90 records the redeployed guard count when the clean redeploy is refused", async () => {
+    const dirs = await isolationProject(4);
+    const shown: Seen[][] = [];
+    const inner = brokenBy(new Set(["P02"]), shown);
+    // biome-ignore lint/style/useConst: read by the guard before it is assigned
+    let backend: CompilePublishVerifyBackend | undefined;
+    backend = new CompilePublishVerifyBackend((dir) =>
+      (backend?.compileViaDeployCalls ?? 0) >= 2
+        ? new DeploymentError("failed", "BC rejected the package", {
+            status: "unavailable",
+            detail: "no response",
+          })
+        : inner(dir),
+    );
+    const store = new ResultsStore(":memory:");
+    await expect(
+      runSession({
+        backend,
+        store,
+        ...dirs,
+        selectorIds,
+        resourceServer: "http://cronus281",
+        resourceServerInstance: "BC",
+      }),
+    ).rejects.toThrow(/BC rejected the package/);
+    const rows = store.db.query("SELECT guard_count AS n FROM publish_outcomes").all() as Array<{
+      n: number;
+    }>;
+    expect(rows.length).toBe(1);
+    expect(rows[0]?.n).toBe((shown[0]?.length ?? 0) - 1);
+    store.close();
+  });
+
+  // A6: a lone mutant that fails with no `error AL<nnnn>` line is not named; nobody is blamed.
+  test("a singleton that fails with no alc error line names nobody", async () => {
+    const dirs = await isolationProject(4);
+    const backend = new StubBackend(
+      CAPS_NST,
+      () => "pass",
+      ["IsOverBudget"],
+      undefined,
+      undefined,
+      (dir: string) =>
+        brokenBy(new Set(["P02"]), [])(dir) ? new AlcCompileError("alc exited 1") : undefined,
+    );
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    expect(report.mutants.every((m) => m.verdict === "error")).toBe(true);
+    expect(report.mutants.some((m) => m.failureNote?.includes("fails to compile on its own"))).toBe(
+      false,
+    );
+    expect(report.mutants.every((m) => m.failureNote?.includes("no alc error line"))).toBe(true);
+    store.close();
+  });
+
+  // A3: a culprit that a prior run stranded is already recorded; isolation still searches it, and
+  // it gets no second row.
+  test("a stranded-skip culprit keeps its ONE row", async () => {
+    const dirs = await isolationProject(4);
+    await Bun.write(join(dirs.testDir, "app.json"), testAppJson());
+    const make = () =>
+      Object.assign(
+        covering(
+          new StubBackend(
+            CAPS_NST,
+            () => "pass",
+            ["IsOverBudget"],
+            undefined,
+            undefined,
+            brokenBy(new Set(["P02"]), []),
+          ),
+        ),
+        servesTestApp(),
+      );
+    const store = new ResultsStore(":memory:");
+    const first = await runSession({ backend: make(), store, ...dirs, selectorIds });
+    store.db.run("UPDATE runs SET finished_at = NULL");
+    store.db.run("UPDATE mutants SET failure_note = ? WHERE verdict = 'error'", [
+      STRANDED_SKIP_NOTE,
+    ]);
+    const resumed = await runSession({
+      backend: make(),
+      store,
+      ...dirs,
+      selectorIds,
+      resume: "last",
+    });
+    expect(resumed.mutants.length).toBe(first.mutants.length);
+    expect(resumed.mutants.filter((m) => m.verdict === "error").length).toBe(1);
+    store.close();
+  });
+
+  // Edge: the environment is at fault. Fail closed: all `error`, nobody blamed, the empty set was
+  // compiled.
+  test("an environmental failure (the empty set fails too): every mutant `error`, none named", async () => {
+    const dirs = await makeProject();
+    const sizes: number[] = [];
+    const backend = new StubBackend(
+      CAPS_NST,
+      () => "pass",
+      ["IsOverBudget"],
+      undefined,
+      undefined,
+      (dir: string) => {
+        const m = JSON.parse(readFileSync(join(dir, "mutant-manifest.json"), "utf8")) as {
+          mutants: unknown[];
+        };
+        sizes.push(m.mutants.length);
+        return new AlcCompileError("alc: AL0999 environment");
+      },
+    );
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    expect(sizes).toContain(0);
+    expect(report.mutants.length).toBeGreaterThan(0);
+    expect(report.mutants.every((m) => m.verdict === "error")).toBe(true);
+    expect(report.mutants.some((m) => m.failureNote?.includes("fails to compile on its own"))).toBe(
+      false,
+    );
+    store.close();
+  });
+
+  // Edge: the clean redeploy itself fails. Fail closed: all `error` with a note, nothing scored,
+  // nothing published.
+  test("a failed redeploy of the clean set leaves every mutant `error` with a note", async () => {
+    const dirs = await isolationProject(4);
+    const badProcs = new Set(["P02"]);
+    const shown: Seen[][] = [];
+    const inner = brokenBy(badProcs, shown);
+    // biome-ignore lint/style/useConst: the guard below reads it before it is assigned
+    let backend: CompilePublishVerifyBackend | undefined;
+    backend = new CompilePublishVerifyBackend((dir) =>
+      (backend?.compileViaDeployCalls ?? 0) >= 2
+        ? new AlcCompileError("Isolation.Codeunit.al(1,1): error AL9999: redeploy refused")
+        : inner(dir),
+    );
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    expect(backend.compileViaDeployCalls).toBe(2);
+    expect(backend.publisherCalls).toBe(0);
+    expect(report.mutants.every((m) => m.verdict === "error")).toBe(true);
+    expect(report.mutants.every((m) => (m.failureNote ?? "") !== "")).toBe(true);
+    store.close();
+  });
+
+  // Edge: the compile budget. Fail closed: with far more culprits than the budget isolates, nothing
+  // is scored, the compile count stays bounded, and the unresolved mutants carry the
+  // not-attributable note.
+  test("over the compile budget: nothing is scored, the compile count is bounded", async () => {
+    const n = 30;
+    const { report, shown } = await runIsolation(
+      n,
+      Array.from({ length: n }, (_, i) => i),
+    );
+    // 1 production compile + at most 64 isolation compiles
+    expect(shown.length).toBeLessThanOrEqual(65);
+    expect(report.mutants.every((m) => m.verdict === "error")).toBe(true);
+    expect(
+      report.mutants.some((m) => m.failureNote?.includes("not attributable to any SINGLE")),
+    ).toBe(true);
+    // The culprits found before the budget ran out keep their own note (red on master: one shared note).
+    expect(
+      report.mutants.some(
+        (m) =>
+          m.failureNote?.includes("AL0123") &&
+          !m.failureNote.includes("not attributable to any SINGLE"),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("redeployClean — R734: the rewritten manifest must hold exactly the clean set", () => {
+  const entry = (mutantId: string, startIndex: number) =>
+    ({
+      mutantId,
+      file: "A.al",
+      startIndex,
+      endIndex: startIndex + 1,
+      operatorName: "op",
+    }) as unknown as MutantManifestEntry;
+  const clean = [entry("M0001", 10), entry("M0003", 30)];
+  const original = [entry("M0001", 10), entry("M0002", 20), entry("M0003", 30)];
+
+  async function run(manifestMutants: MutantManifestEntry[]) {
+    const counts = { prepare: 0, adopt: 0, deploy: 0 };
+    const result = await redeployClean({
+      clean,
+      removed: new Map([[entry("M0002", 20), "alc said no"]]),
+      original,
+      prepare: async () => {
+        counts.prepare++;
+      },
+      readManifest: async () =>
+        ({ mutants: manifestMutants, artifactId: "a".repeat(32) }) as unknown as MutantManifest,
+      adopt: () => {
+        counts.adopt++;
+      },
+      deploy: async () => {
+        counts.deploy++;
+        return { done: null };
+      },
+    });
+    return { result, counts };
+  }
+
+  test("a manifest that renumbered a mutant (wrong id) is refused: nothing adopted, nothing deployed", async () => {
+    const { result, counts } = await run([entry("M0001", 10), entry("M0002", 30)]);
+    expect("note" in result && result.note).toContain("does not hold exactly the clean set");
+    expect(counts).toEqual({ prepare: 1, adopt: 0, deploy: 0 });
+  });
+
+  test("a manifest with an extra mutant is refused too", async () => {
+    const { result, counts } = await run([...clean, entry("M0002", 20)]);
+    expect("note" in result).toBe(true);
+    expect(counts.deploy).toBe(0);
+  });
+
+  test("the exact clean set is adopted and deployed once", async () => {
+    const { result, counts } = await run([...clean]);
+    expect("attempt" in result).toBe(true);
+    expect(counts).toEqual({ prepare: 1, adopt: 1, deploy: 1 });
   });
 });
 
@@ -7316,67 +7447,6 @@ describe("runSession — Task 7: only a typed AlcCompileError may be bisected", 
       /NST unavailable/,
     );
     expect(calls).toBe(1);
-    store.close();
-  });
-
-  // Same guard, worker path: mirrors the existing "a worker's DeploymentError aborts" test
-  // above, swapped to ArtifactPrepareError — the shape the shipped guard (`instanceof
-  // DeploymentError`) did NOT exclude, and would have bisected/downgraded to a per-shard error.
-  // Uses `deployGuard` (not the fixed `deployError`) so `calls` can prove the OUTER guard
-  // specifically: `subsetMutants` already searches the full manifest (Task 7's other fix), and
-  // the inner `compiles` callback already propagates a non-AlcCompileError too, so an always-
-  // failing deploy would eventually abort with the right error via the INNER guard alone even
-  // if this outer one were missing — `calls === 1` is what only the outer guard delivers (zero
-  // wasted bisection compiles, not merely "eventually aborts correctly").
-  // R671: no backend accepts workers > 1 since R654.
-  test.skip("a worker's ArtifactPrepareError aborts the whole session instead of being bisected", async () => {
-    const dbPath = testDbPath("results.sqlite");
-    const dirs = await makeProject();
-    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
-    const store = new ResultsStore(dbPath);
-    const caps: BackendCapabilities = {
-      coverage: "none",
-      deploy: "none",
-      isolation: "full-reset",
-      kind: "al-runner-v3",
-      authoritative: false,
-    };
-    const deployErr = new ArtifactPrepareError("boom: worker 0 disk full");
-    let worker0Calls = 0;
-    const make = (workerIndex: number) =>
-      new StubBackend(
-        caps,
-        (mutant) => (mutant === null ? "pass" : "fail"),
-        [],
-        undefined,
-        undefined,
-        workerIndex === 0
-          ? () => {
-              worker0Calls++;
-              return deployErr;
-            }
-          : undefined,
-      );
-    await expect(
-      runSession({
-        backend: make(-1),
-        backendFactory: make,
-        store,
-        ...dirs,
-        selectorIds,
-        workers: 2,
-      }),
-    ).rejects.toBe(deployErr);
-    // Exactly the one production deploy on worker 0's shard — the guard aborted before
-    // bisection ever called deploy() again.
-    expect(worker0Calls).toBe(1);
-
-    const raw = new Database(dbPath, { readonly: true });
-    const rows = raw.query("SELECT failure_note FROM mutants").all() as Array<{
-      failure_note: string | null;
-    }>;
-    raw.close();
-    expect(rows.every((r) => !r.failure_note?.includes("bisected"))).toBe(true);
     store.close();
   });
 
@@ -7518,85 +7588,29 @@ function manifestHasConditionalBoundary(dir: string): boolean {
 }
 
 describe("runSession — Task 7b: bisection's compile-only seam (spec §10 counters)", () => {
-  test("sequential: compiler failure leaves publisher/verifier at zero while bisection names the culprit", async () => {
+  test("sequential: compiler failure publishes only the clean redeploy while isolation names the culprit", async () => {
     const dirs = await makeProject();
     const backend = new CompilePublishVerifyBackend((dir) =>
       manifestHasConditionalBoundary(dir)
-        ? new AlcCompileError("alc: AL0001 malformed operator replacement")
+        ? new AlcCompileError("Sandbox.al(5,9): error AL0001: malformed operator replacement")
         : undefined,
     );
     const store = new ResultsStore(":memory:");
     const report = await runSession({ backend, store, ...dirs, selectorIds });
 
-    // The gate: publisher/verifier never ran at all, for this batch or for bisection.
-    expect(backend.publisherCalls).toBe(0);
-    expect(backend.verifierCalls).toBe(0);
-    expect(backend.methodIndexAssignments).toBe(0);
-    // Exactly one production compile (the whole-artifact deploy that failed); everything
-    // bisection did after that went through compileCheck, never deploy() again.
-    expect(backend.compileViaDeployCalls).toBe(1);
+    // The gate: no isolation candidate was ever published; the ONE publish is the clean set's
+    // redeploy (R734), which is the second production compile.
+    expect(backend.publisherCalls).toBe(1);
+    expect(backend.verifierCalls).toBe(1);
+    expect(backend.methodIndexAssignments).toBe(1);
+    // Two production compiles (the failed whole artifact, then the clean redeploy); everything
+    // isolation did in between went through compileCheck, never deploy().
+    expect(backend.compileViaDeployCalls).toBe(2);
     expect(backend.compileViaCheckCalls).toBeGreaterThan(1);
 
-    const noted = report.mutants.find((m) => m.verdict === "error");
-    expect(noted?.failureNote).toContain("bisected to mutant");
-    expect(noted?.failureNote).toContain("lethal.conditional-boundary");
-    store.close();
-  });
-
-  // R671: no backend accepts workers > 1 since R654.
-  test.skip("worker path: the failing shard's publisher/verifier stay at zero while bisection names the culprit", async () => {
-    const dirs = await makeProject();
-    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
-    const store = new ResultsStore(":memory:");
-    const backends = new Map<number, CompilePublishVerifyBackend>();
-    const make = (workerIndex: number) => {
-      const backend = new CompilePublishVerifyBackend(
-        workerIndex === 0
-          ? (dir) => {
-              const manifest = JSON.parse(
-                readFileSync(join(dir, "mutant-manifest.json"), "utf8"),
-              ) as { mutants: Array<{ operatorName: string; procedureName: string }> };
-              const hasBoundary = manifest.mutants.some(
-                (m) =>
-                  m.operatorName === "lethal.conditional-boundary" &&
-                  m.procedureName === "IsOverBudget",
-              );
-              return hasBoundary
-                ? new AlcCompileError("alc: AL0001 malformed operator replacement")
-                : undefined;
-            }
-          : () => undefined, // worker 1 and cfg.backend (-1) always compile fine
-        false, // non-authoritative: this test runs workers: 2, which Task 10 now rejects otherwise
-      );
-      backends.set(workerIndex, backend);
-      return backend;
-    };
-    const report = await runSession({
-      backend: make(-1),
-      backendFactory: make,
-      store,
-      ...dirs,
-      selectorIds,
-      workers: 2,
-    });
-
-    const worker0 = backends.get(0);
-    expect(worker0).toBeDefined();
-    if (worker0 === undefined) throw new Error("unreachable");
-    // The gate, scoped to the shard that actually hit a compiler failure: its ONE fan-out
-    // deploy() attempt failed before ever reaching publish/verify, and every bisection
-    // candidate after that went through compileCheck — publisher/verifier stayed at zero for
-    // this worker's whole search.
-    expect(worker0.publisherCalls).toBe(0);
-    expect(worker0.verifierCalls).toBe(0);
-    expect(worker0.methodIndexAssignments).toBe(0);
-    expect(worker0.compileViaDeployCalls).toBe(1);
-    expect(worker0.compileViaCheckCalls).toBeGreaterThan(1);
-
-    const noted = report.mutants.find((m) => m.verdict === "error");
-    expect(noted).toBeDefined();
-    expect(noted?.failureNote).toContain("bisected to mutant");
-    expect(noted?.failureNote).toContain("lethal.conditional-boundary");
+    // This fake never attests, so the redeployed batch is discarded whole as unattested (design
+    // §G): the counters above are the point of this test, the verdicts are `error` throughout.
+    expect(report.mutants.every((m) => m.verdict === "error")).toBe(true);
     store.close();
   });
 });
@@ -8292,6 +8306,65 @@ describe("runSession — Task 12 quarantine on in-flight-unknown deadline", () =
     expect((report as Awaited<ReturnType<typeof runSession>>).quarantined?.reason).toContain(
       "in-flight-unknown",
     );
+  });
+
+  // R692: "raise the floor with --mutant-timeout-ms" is advice for a budget overrun only.
+  const strandReason = async (v: {
+    outcome: "error" | "deadline-exceeded";
+    durationMs: number;
+    failureMessage: string;
+  }): Promise<string> => {
+    let activeMutant: string | null = null;
+    const backend = fakeBackend({
+      capabilities: () => ({
+        coverage: "none",
+        deploy: "publish",
+        isolation: "session",
+        kind: "bcdev",
+        authoritative: true,
+      }),
+      activate: async (id) => {
+        activeMutant = id;
+      },
+      run: async (ref) =>
+        activeMutant === null
+          ? { ref, outcome: "pass", durationMs: 1 }
+          : { ref, ...v, operation: "in-flight-unknown" },
+    });
+    const report = await runSessionForTest(backend, {
+      quarantineDir: freshTmpDir(),
+      nowIso: () => "2026-07-20T12:00:00.000Z",
+    });
+    return report.quarantined?.reason ?? "";
+  };
+
+  test("R692: a fast HTTP 500 names the status and does not advise raising the floor", async () => {
+    const reason = await strandReason({
+      outcome: "error",
+      durationMs: 40,
+      failureMessage: "RunMutant failed: HTTP 500",
+    });
+    expect(reason).toContain("HTTP 500 after 40 ms");
+    expect(reason).not.toContain("raise the floor");
+  });
+
+  test("R692: a fast failure with no HTTP status does not advise raising the floor either", async () => {
+    const reason = await strandReason({
+      outcome: "error",
+      durationMs: 40,
+      failureMessage: "RunMutant connection failed after dispatch: ECONNRESET",
+    });
+    expect(reason).toContain("an error after 40 ms");
+    expect(reason).not.toContain("raise the floor");
+  });
+
+  test("R692: a real budget overrun still advises raising the floor", async () => {
+    const reason = await strandReason({
+      outcome: "deadline-exceeded",
+      durationMs: 999_999_999,
+      failureMessage: "RunMutant failed: HTTP 408",
+    });
+    expect(reason).toContain("raise the floor with --mutant-timeout-ms");
   });
 
   test("a plain deadline-exceeded (no in-flight-unknown operation) stays an ordinary error — no quarantine, session continues", async () => {
@@ -9376,10 +9449,10 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
           ...o.extra,
         }),
       );
-    const depPkg = (build: string) =>
+    const depPkg = (build: string, publisher = DEP.publisher) =>
       new Uint8Array(
         buildFakeAppWithEntries({
-          "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${DEP.id}" Name="${DEP.name}" Publisher="${DEP.publisher}" Version="1.0.0.0" /></Package>`,
+          "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${DEP.id}" Name="${DEP.name}" Publisher="${publisher}" Version="1.0.0.0" /></Package>`,
           "src/Dep.al": `// build ${build}`,
         }),
       );
@@ -9475,6 +9548,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         join(dirs.testDir, "app.json"),
         JSON.stringify(o.dependentCount !== undefined ? { ...TESTS_APP, id: APP_ID } : TESTS_APP),
       );
+      if (o.dependentCount !== undefined) await distinctTarget(dirs.projectDir);
       const testAppFile = join(dirs.testDir, "..", "Tests.app");
       const depFile = join(dirs.testDir, "..", "Dep.app");
       writeFileSync(testAppFile, P1);
@@ -9548,7 +9622,9 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       });
       const backend = leaseBackend({
         fetchPublishedAppPackage: fetch,
-        ...(o.dependentCount !== undefined ? { dependentCount: o.dependentCount } : {}),
+        ...(o.dependentCount !== undefined
+          ? { dependentCount: ignoreTargetAsk(TARGET_APP_ID, o.dependentCount) }
+          : {}),
         ...(o.noMicrosoftMode === true
           ? {}
           : {
@@ -11171,7 +11247,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
           ...o.extra,
         }).catch((e: unknown) => e);
       };
-      const world = async () => {
+      const world = async (publisher = DEP.publisher, withPackage = true) => {
         const dirs = await makeProject(BODY_B);
         await Bun.write(
           join(dirs.testDir, "app.json"),
@@ -11179,14 +11255,12 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
             name: "Tests",
             publisher: "P",
             version: "1.0.0.0",
-            dependencies: [
-              { id: DEP.id, name: DEP.name, publisher: DEP.publisher, version: "1.0.0.0" },
-            ],
+            dependencies: [{ id: DEP.id, name: DEP.name, publisher, version: "1.0.0.0" }],
           }),
         );
         const pkgDir = join(dirs.testDir, "..", "packages");
         mkdirSync(pkgDir, { recursive: true });
-        writeFileSync(join(pkgDir, "Dep.app"), depPkg("one"));
+        if (withPackage) writeFileSync(join(pkgDir, "Dep.app"), depPkg("one", publisher));
         return { dirs, pkgDir, store: new ResultsStore(":memory:") };
       };
       const firstRun = async (w: Awaited<ReturnType<typeof world>>) => {
@@ -11210,6 +11284,95 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         const out = await alRun({ ...w, extra: { resume: runId } });
         expect(out).toBeInstanceOf(TestAppRepublishedError);
         expect((out as Error).message).toContain("the test app's dependencies changed");
+        w.store.close();
+      });
+      // R435: Microsoft's packages in the folder are hashed too, not kept by declared version.
+      test("R435: a MICROSOFT .app swapped in its package folder at the same version is refused on resume", async () => {
+        const w = await world("Microsoft");
+        const runId = await firstRun(w);
+        writeFileSync(join(w.pkgDir, "Dep.app"), depPkg("two", "Microsoft"));
+        const out = await alRun({ ...w, extra: { resume: runId } });
+        expect(out).toBeInstanceOf(TestAppRepublishedError);
+        expect((out as Error).message).toContain("the test app's dependencies changed");
+        w.store.close();
+      });
+      test("R435: a MICROSOFT .app missing from the folder leaves the run unproven and the run completes", async () => {
+        const w = await world("Microsoft", false);
+        const events: RunEvent[] = [];
+        const out = await alRun({
+          ...w,
+          extra: { emit: [createEmitter([(e) => events.push(e)])] },
+        });
+        expect(out).not.toBeInstanceOf(Error);
+        const runId = (w.store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number })
+          .id;
+        expect(w.store.getRun(runId)?.testAppProven).toBe(false);
+        expect(
+          events.filter(
+            (e) =>
+              e.type === "warning" &&
+              e.code === "test-app-dependencies-unproven" &&
+              e.message.includes("Dep Lib"),
+          ),
+        ).not.toEqual([]);
+        w.store.close();
+      });
+      test("R435 (B1): a MICROSOFT dependency absent from the folder but present as a Source.zip in the backend's artifact cache is proven", async () => {
+        const w = await world("Microsoft", false);
+        const artifactDir = join(w.pkgDir, "..", "artifact-apps");
+        mkdirSync(artifactDir, { recursive: true });
+        writeFileSync(
+          join(artifactDir, "Dep Lib.Source.zip"),
+          buildFakeAppWithEntries({
+            "app.json": JSON.stringify({
+              id: DEP.id,
+              name: DEP.name,
+              publisher: "Microsoft",
+              version: "1.0.0.0",
+            }),
+          }),
+        );
+        const backend = Object.assign(
+          new StubBackend(
+            {
+              coverage: "none",
+              deploy: "none",
+              isolation: "full-reset",
+              kind: "al-runner-v3",
+              authoritative: false,
+            },
+            (mutant) => (mutant === null ? "pass" : "fail"),
+          ),
+          { dependencyPackageDirs: () => [w.pkgDir], dependencyArtifactAppsDir: () => artifactDir },
+        );
+        const out = await runSession({ backend, store: w.store, ...w.dirs, selectorIds }).catch(
+          (e: unknown) => e,
+        );
+        expect(out).not.toBeInstanceOf(Error);
+        const runId = (w.store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number })
+          .id;
+        expect(w.store.getRun(runId)?.testAppProven).toBe(true);
+        w.store.close();
+      });
+      test("R435: a backend with NO package folders keeps the declared version for Microsoft (and runs)", async () => {
+        const w = await world("Microsoft", false);
+        const backend = new StubBackend(
+          {
+            coverage: "none",
+            deploy: "none",
+            isolation: "full-reset",
+            kind: "al-runner-v3",
+            authoritative: false,
+          },
+          (mutant) => (mutant === null ? "pass" : "fail"),
+        );
+        const out = await runSession({ backend, store: w.store, ...w.dirs, selectorIds }).catch(
+          (e: unknown) => e,
+        );
+        expect(out).not.toBeInstanceOf(Error);
+        const runId = (w.store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number })
+          .id;
+        expect(w.store.getRun(runId)?.testAppProven).toBe(true);
         w.store.close();
       });
       test("an unchanged .app, rewritten later with the same bytes, carries", async () => {
@@ -11403,13 +11566,22 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       const r = await envRun({ post: P2 });
       const recorded = r.store.testDigests(r.runId);
       expect(recorded).not.toBeNull();
-      const plan = () =>
+      const guard = { calls: 0 };
+      const plan = (closed = false) =>
         verifyDependencyFingerprint(
           { fetchPublishedAppPackage: onlyP(P2), microsoftMode: () => fakeMicrosoftMode() },
           r.dirs.testDir,
           r.dirs.projectDir,
         ).then((dependencies) =>
           planVerify({
+            ...(closed
+              ? {
+                  closedWorld: async () => {
+                    guard.calls++;
+                    return { public: true, internal: true };
+                  },
+                }
+              : {}),
             sourceTestDigestParts: r.store.testDigestParts(r.runId),
             coverage: "procedure",
             source: {
@@ -11469,6 +11641,9 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
           }),
         );
       expect((await plan()).newTests.map((t) => t.method)).toEqual([]);
+      // R600: the parts this run wrote say `none`, so a closed guard at verify is never asked.
+      expect((await plan(true)).newTests.map((t) => t.method)).toEqual([]);
+      expect(guard.calls).toBe(0);
       await Bun.write(
         join(r.dirs.testDir, "SandboxTests.Codeunit.al"),
         BODY_B.replace("B asserts", "B asserts more"),
@@ -15755,54 +15930,6 @@ describe("runSession — Layer 5C-B1 fix round 1: deploy latch guard + earlier-b
     expect(report.quarantined?.reason).toContain("lease-lost");
   });
 
-  // R671: no backend accepts workers > 1 since R654.
-  test.skip("a lease lost during a worker's deploy stops the NEXT worker's deploy", async () => {
-    // The worker-shard deploy has its own latch guard (a fan-out path, so it cannot reuse
-    // `deployOnce`). `workers > 1` is rejected outright for an AUTHORITATIVE backend, so the only
-    // configuration that reaches this guard under a lease is a non-authoritative fenced backend.
-    // `compileConcurrency: 1` makes the ordering deterministic (Semaphore's waiting queue is FIFO):
-    // worker 0 holds the one permit, loses the lease inside its deploy, and only then is worker 1
-    // woken — with the latch already set.
-    const dirs = await makeProject();
-    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), THREE_PROC_AL);
-    const client = new FakeLeaseClient();
-    client.renewQueue = [{ renewed: false }];
-    const timers = new FakeTimers();
-    const { lease } = leaseCfg(client, { timers });
-    const nonAuthoritative = () =>
-      ({
-        coverage: "none",
-        deploy: "publish",
-        isolation: "session",
-        kind: "al-runner-v3",
-        authoritative: false,
-      }) as const;
-    const workerDeploys = [0, 0];
-    const makeWorker = (i: number) =>
-      fakeBackend({
-        capabilities: nonAuthoritative,
-        deploy: async () => {
-          workerDeploys[i] = (workerDeploys[i] ?? 0) + 1;
-          if (i === 0) await timers.fire(); // worker 0 loses the lease mid-deploy
-          return null;
-        },
-      });
-    const report = await runSession({
-      backend: leaseBackend({ capabilities: nonAuthoritative }),
-      backendFactory: makeWorker,
-      store: new ResultsStore(":memory:"),
-      ...dirs,
-      selectorIds,
-      workers: 2,
-      compileConcurrency: 1,
-      quarantineDir: freshTmpDir(),
-      lease,
-    });
-    expect(workerDeploys[0]).toBe(1);
-    expect(workerDeploys[1]).toBe(0); // refused by the latch, never dispatched
-    expect(report.quarantined?.reason).toContain("lease-lost");
-  });
-
   test("a lease lost in the SECOND batch invalidates only that batch — the first batch's verdicts stand", async () => {
     // The "earlier batches STAND" guarantee is otherwise asserted only at the fold's own unit level
     // (`report-fold.test.ts`, against a hand-built event stream): nothing ELSE drives `runSession`
@@ -16414,6 +16541,444 @@ describe("R198: grouped covering runs", () => {
     store.close();
   });
 });
+
+/**
+ * R688: a mutant that makes BC's suite discovery list no methods for a test codeunit (measured
+ * cause: the codeunit's OnRun raises, and LethAL Control activates the mutant before discovery).
+ * Two test codeunits: "Sandbox Tests" 79100 (T1, T2) and "Zulu Tests" 79101 (K1), so R197's cold
+ * order is T1, T2, K1. `blanks` names the codeunits the active mutant blanks: a single run answers
+ * the RunMutant found-0 form, a group call the `suite-unresolved ... found 0` refusal for the
+ * whole chunk, naming the first blanked pair (as `ResolvePairs` does).
+ */
+const DISCOVERY_TESTS_AL = `codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure T1() begin end;
+    [Test]
+    procedure T2() begin end;
+}
+
+codeunit 79101 "Zulu Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure K1() begin end;
+}
+`;
+
+class DiscoveryStub extends GroupStubBackend {
+  blanks: (mutant: string) => readonly number[] = () => [];
+  /** A single run of one method only answering found-0 under a mutant (A1). */
+  blanksMethod?: (mutant: string, ref: TestMethodRef) => boolean;
+  /** Overrides a run with no mutant active, once a mutant has been activated (the confirms). */
+  confirmAnswer?: (ref: TestMethodRef) => Partial<TestVerdict> | undefined;
+  /** Every `run`, also the ones a group call makes (`via: "many"`), in order. */
+  readonly runs: Array<{
+    active: string | null;
+    started: boolean;
+    codeunitId: number;
+    method: string;
+    via: "run" | "many";
+  }> = [];
+  private inMany = false;
+  override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+    const active = this.activations.at(-1) ?? null;
+    const started = this.activations.some((a) => a !== null);
+    const via = this.inMany ? "many" : "run";
+    this.runs.push({ active, started, codeunitId: ref.codeunitId, method: ref.method, via });
+    if (
+      active !== null &&
+      (this.blanks(active).includes(ref.codeunitId) || this.blanksMethod?.(active, ref) === true)
+    ) {
+      return {
+        ref,
+        outcome: "error",
+        durationMs: 1,
+        failureMessage: runMutantLineCountMessage(
+          0,
+          `expected exactly one method ${ref.method}, found 0`,
+        ),
+      };
+    }
+    const over = active === null && started ? this.confirmAnswer?.(ref) : undefined;
+    if (over !== undefined) return { ref, outcome: "error", durationMs: 1, ...over };
+    return super.run(ref, opts);
+  }
+  /** Every group call: the active mutant and the methods asked for. */
+  readonly manyUnder: Array<{ active: string | null; methods: string[] }> = [];
+  override async runMany(opts: RunManyOpts): Promise<RunManyResult> {
+    const active = this.activations.at(-1) ?? null;
+    this.manyUnder.push({ active, methods: opts.methods.map((m) => m.ref.method) });
+    const blanked =
+      active === null
+        ? []
+        : opts.methods.filter((m) => this.blanks(active).includes(m.ref.codeunitId));
+    const [first] = opts.methods;
+    const [hit] = blanked;
+    if (opts.confirmation !== true && first !== undefined && hit !== undefined) {
+      this.manyCalls.push(opts);
+      return {
+        kind: "call",
+        methodIndex: 1,
+        verdict: {
+          ref: first.ref,
+          outcome: "error",
+          durationMs: 1,
+          failureMessage: `${GROUP_SUITE_UNRESOLVED_HEAD}expected exactly one method ${hit.ref.method} in codeunit ${hit.ref.codeunitId}, found 0`,
+        },
+        fencedOp: { attemptId: "d1", opSeq: 900 + this.manyCalls.length },
+      };
+    }
+    this.inMany = true;
+    try {
+      return await super.runMany(opts);
+    } finally {
+      this.inMany = false;
+    }
+  }
+}
+
+describe("R688: a mutant that blanks a test codeunit's discovery is scored per mutant", () => {
+  /** M0001 blanks `blank`; `kill` names the test that fails under M0001; K1 covers when `k1Covers`. */
+  const stub = (o: { blank?: number; kill?: string; k1Covers?: boolean } = {}) => {
+    const b = new DiscoveryStub(
+      CAPS_NST,
+      (mutant, ref) => (mutant === "M0001" && ref.method === o.kill ? "fail" : "pass"),
+      ["IsOverBudget"],
+    );
+    if (o.k1Covers === false)
+      b.coverageEntriesFor = (ref) => (ref.method === "K1" ? [] : undefined);
+    const blank = o.blank ?? 79100;
+    b.blanks = (m) => (m === "M0001" ? [blank] : []);
+    return b;
+  };
+  const session = async (
+    backend: DiscoveryStub,
+    groupRuns?: { maxMethodsPerCall?: number; enabled?: boolean },
+  ) => {
+    const dirs = await makeProject(DISCOVERY_TESTS_AL);
+    const store = new ResultsStore(":memory:");
+    let error: unknown;
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      ...(groupRuns !== undefined ? { groupRuns } : {}),
+    }).catch((e: unknown) => {
+      error = e;
+      return undefined;
+    });
+    const m1 = report?.mutants.find((m) => m.mutantCode === "M0001");
+    return { report, error, store, m1 };
+  };
+  const SEQ = { enabled: false };
+  /** Single runs with no mutant active, after the first activation, of codeunit `id`. */
+  const discoveryConfirms = (b: DiscoveryStub, id = 79100) =>
+    b.runs.filter((r) => r.via === "run" && r.active === null && r.started && r.codeunitId === id)
+      .length;
+  const ranUnder = (b: DiscoveryStub, mutant: string, method: string) =>
+    b.runs.filter((r) => r.active === mutant && r.method === method).length;
+
+  test("O1 + R1: sequential, M covered only by the blanked codeunit: error test-discovery-failed, one confirm, the banner names it", async () => {
+    const b = stub({ k1Covers: false });
+    const { report, error, m1 } = await session(b, SEQ);
+    expect(error).toBeUndefined();
+    expect([m1?.verdict, m1?.cause]).toEqual(["error", "test-discovery-failed"]);
+    expect(m1?.failureNote).toContain('"Sandbox Tests"');
+    expect(discoveryConfirms(b)).toBe(1);
+    expect(ranUnder(b, "M0001", "T2")).toBe(0);
+    expect(report !== undefined && renderConsole(report)).toContain(", test-discovery-failed 1");
+  });
+
+  test("O2 + Q6: K1 kills after the found-0: killed by K1, T2 never ran under M, the confirm row is unmutated and not in the mutant's time", async () => {
+    const b = stub({ kill: "K1" });
+    b.confirmAnswer = (ref) =>
+      ref.codeunitId === 79100 ? { outcome: "pass", durationMs: 1000 } : undefined;
+    const { error, store, m1 } = await session(b, SEQ);
+    expect(error).toBeUndefined();
+    expect([m1?.verdict, m1?.killingTest]).toEqual(["killed", "K1"]);
+    expect(ranUnder(b, "M0001", "T2")).toBe(0);
+    expect(discoveryConfirms(b)).toBe(1);
+    // Q6: the kill keeps the found-0 note.
+    expect(m1?.failureNote).toContain("were skipped under this mutant");
+    const rows = store.db
+      .query(
+        "SELECT t.mutant_code AS code, t.duration_ms AS ms FROM test_results t JOIN mutants m ON m.id = t.mutant_row_id WHERE t.run_id = 1 AND m.mutant_code = 'M0001' AND t.method = 'T1' ORDER BY t.id",
+      )
+      .all() as Array<{ code: string | null; ms: number }>;
+    expect(rows).toEqual([
+      { code: "M0001", ms: 1 },
+      { code: null, ms: 1000 },
+    ]);
+    expect(m1?.durationMs ?? 0).toBeLessThan(1000);
+  });
+
+  test("O3: the confirm answers found-0 again: the session stops (no mutant active), after M is recorded and flushed", async () => {
+    const b = stub({ k1Covers: false });
+    b.confirmAnswer = (ref) => ({
+      failureMessage: runMutantLineCountMessage(
+        0,
+        `expected exactly one method ${ref.method}, found 0`,
+      ),
+    });
+    const { error, store } = await session(b, SEQ);
+    expect((error as Error).message).toContain("with no mutant active");
+    expect((error as Error).message).toContain("not mutant M0001's verdict");
+    const row = store.db
+      .query("SELECT id, verdict FROM mutants WHERE run_id = 1 AND mutant_code = 'M0001'")
+      .get() as { id: number; verdict: string } | null;
+    expect(row?.verdict).toBe("error");
+    const flushed = store.db
+      .query("SELECT COUNT(*) AS n FROM test_results WHERE mutant_row_id = ?")
+      .get(row?.id ?? -1) as { n: number };
+    expect(flushed.n).toBe(2);
+  });
+
+  test("O4: the confirm fails: the session stops, the mutant is not scored test-discovery-failed", async () => {
+    const b = stub({ k1Covers: false });
+    b.confirmAnswer = () => ({ outcome: "fail", failureMessage: "boom" });
+    const { error, store } = await session(b, SEQ);
+    expect((error as Error).message).toContain("with no mutant active");
+    expect((error as Error).message).toContain("failed");
+    const row = store.db
+      .query(
+        "SELECT verdict, failure_note AS note FROM mutants WHERE run_id = 1 AND mutant_code = 'M0001'",
+      )
+      .get() as { verdict: string; note: string | null } | null;
+    expect(row?.verdict).toBe("error");
+    expect(row?.note).toBe((error as Error).message);
+  });
+
+  test("A1: C's first test passes under M, its later test answers found-0, the confirm passes: test-discovery-failed, not group-coverage-incomplete", async () => {
+    const b = stub({ k1Covers: false });
+    b.blanks = () => [];
+    b.blanksMethod = (m, ref) => m === "M0001" && ref.method === "T2";
+    const { error, m1 } = await session(b, SEQ);
+    expect(error).toBeUndefined();
+    expect(ranUnder(b, "M0001", "T1")).toBe(1);
+    expect([m1?.verdict, m1?.cause]).toEqual(["error", "test-discovery-failed"]);
+    // The note must not claim C's already-run T1 did not run.
+    expect(m1?.failureNote).not.toContain("were not run");
+    expect(m1?.failureNote).toContain("Sandbox Tests.T2");
+  });
+
+  test("O5: the confirm's deadline-exceeded is M's own error cause; the next mutant is scored", async () => {
+    const b = stub({ k1Covers: false });
+    b.confirmAnswer = () => ({ outcome: "deadline-exceeded" });
+    const { report, error, m1 } = await session(b, SEQ);
+    expect(error).toBeUndefined();
+    expect([m1?.verdict, m1?.cause]).toEqual(["error", "deadline-exceeded"]);
+    const m2 = report?.mutants.find((m) => m.mutantCode === "M0002");
+    expect(m2?.verdict).toBe("survived");
+  });
+
+  test("T-c: a confirm pass in a reused session is session-reused, never test-discovery-failed", async () => {
+    const b = stub({ k1Covers: false });
+    b.confirmAnswer = () => ({ outcome: "pass", testRunsBefore: 3, sessionId: 7 });
+    const { error, m1 } = await session(b, SEQ);
+    expect(error).toBeUndefined();
+    expect([m1?.verdict, m1?.cause]).toEqual(["error", "session-reused"]);
+  });
+
+  test("T-b: the skip is per mutant: M0002 runs the codeunit M0001 skipped", async () => {
+    const b = stub({ k1Covers: false });
+    const { error } = await session(b, SEQ);
+    expect(error).toBeUndefined();
+    expect([
+      ranUnder(b, "M0001", "T2"),
+      ranUnder(b, "M0002", "T1"),
+      ranUnder(b, "M0002", "T2"),
+    ]).toEqual([0, 1, 1]);
+  });
+
+  test("G1: grouped found-0 runs that chunk's methods singly: one confirm, the codeunit skipped, K1 kills", async () => {
+    const b = stub({ kill: "K1" });
+    const { error, m1 } = await session(b);
+    expect(error).toBeUndefined();
+    expect([m1?.verdict, m1?.killingTest]).toEqual(["killed", "K1"]);
+    expect(discoveryConfirms(b)).toBe(1);
+    expect(ranUnder(b, "M0001", "T2")).toBe(0);
+    // K1 ran under M0001 as a single call, after the refused chunk.
+    expect(
+      b.runs.filter((r) => r.active === "M0001" && r.method === "K1").map((r) => r.via),
+    ).toEqual(["run"]);
+  });
+
+  test("G2: sequential, grouped and two-per-call agree on O1 and on O2", async () => {
+    for (const o of [{ k1Covers: false }, { kill: "K1" }]) {
+      const seq = await session(stub(o), SEQ);
+      const grp = await session(stub(o));
+      const two = await session(stub(o), { maxMethodsPerCall: 2 });
+      expect(seq.report).toBeDefined();
+      if (seq.report === undefined || grp.report === undefined || two.report === undefined)
+        throw new Error("a session did not complete");
+      expect(verdictTable(grp.report)).toEqual(verdictTable(seq.report));
+      expect(verdictTable(two.report)).toEqual(verdictTable(seq.report));
+      expect([grp.m1?.cause, two.m1?.cause]).toEqual([seq.m1?.cause, seq.m1?.cause]);
+    }
+  });
+
+  test("G1b: one method per call: a skipped codeunit's later tests are never sent again", async () => {
+    const b = stub({ kill: "K1" });
+    const { m1 } = await session(b, { maxMethodsPerCall: 1 });
+    expect([m1?.verdict, m1?.killingTest]).toEqual(["killed", "K1"]);
+    expect(b.manyUnder.filter((c) => c.active === "M0001").map((c) => c.methods)).toEqual([
+      ["T1"],
+      ["K1"],
+    ]);
+  });
+
+  test("G3: a found-0 on the grouped warm replay (no mutant active) keeps the plain abort, with no discovery confirm", async () => {
+    const b = stub({ kill: "T2" });
+    b.blanks = () => [];
+    b.manyOverride = (call, opts, composed) => {
+      const [first] = opts.methods;
+      if (call !== 0 || first === undefined) return composed;
+      return {
+        kind: "call",
+        methodIndex: 1,
+        verdict: {
+          ref: first.ref,
+          outcome: "error",
+          durationMs: 1,
+          failureMessage: `${GROUP_SUITE_UNRESOLVED_HEAD}expected exactly one method T1 in codeunit 79100, found 0`,
+        },
+        fencedOp: composed.fencedOp,
+      };
+    };
+    const { error } = await session(b);
+    expect((error as Error).message).toContain("two consecutive run() failures");
+    expect(discoveryConfirms(b)).toBe(0);
+  });
+
+  test("T-a: grouped found-0, then the single fallback's confirm answers an identity mismatch: the identity abort", async () => {
+    const b = stub({ k1Covers: false });
+    b.confirmAnswer = () => ({
+      failureMessage:
+        "RunMutant attestation identity mismatch: a selector with a non-matching (targetAppId, artifactId) ran — wrong/stale binary",
+    });
+    const { error, store } = await session(b);
+    expect((error as Error).message).toContain("identity mismatch");
+    expect((error as Error).message).toContain("two consecutive run() failures");
+    const row = store.db
+      .query("SELECT failure_note AS note FROM mutants WHERE run_id = 1 AND mutant_code = 'M0001'")
+      .get() as { note: string | null } | null;
+    expect(row?.note ?? "").not.toContain("test-discovery-failed");
+  });
+
+  test("T-e: chunk [T1 kills, T2, K1 blanked]: killed by T1 with no discovery confirm, as sequential", async () => {
+    const o = { kill: "T1", blank: 79101 };
+    const b = stub(o);
+    const grp = await session(b);
+    const seq = await session(stub(o), SEQ);
+    expect([grp.m1?.verdict, grp.m1?.killingTest]).toEqual(["killed", "T1"]);
+    expect(discoveryConfirms(b, 79101)).toBe(0);
+    if (seq.report === undefined || grp.report === undefined) throw new Error("no report");
+    expect(verdictTable(grp.report)).toEqual(verdictTable(seq.report));
+  });
+
+  test("T-f: after a skip, a chunk that never attempts K1 is group-coverage-incomplete, not test-discovery-failed (R198)", async () => {
+    const b = stub({});
+    b.manyOverride = (_call, opts, composed) =>
+      b.activations.at(-1) === "M0001" && opts.methods.some((m) => m.ref.method === "K1")
+        ? { ...composed, endedBy: "complete", ranCount: opts.methods.length, verdicts: [] }
+        : composed;
+    const { error, m1 } = await session(b, { maxMethodsPerCall: 2 });
+    expect(error).toBeUndefined();
+    expect([m1?.verdict, m1?.cause]).toEqual(["error", "group-coverage-incomplete"]);
+  });
+
+  test("T-g: a group call answering the single path's found-0 text keeps today's abort", async () => {
+    const b = stub({});
+    b.blanks = () => [];
+    b.manyOverride = (_call, opts, composed) => {
+      const [first] = opts.methods;
+      if (b.activations.at(-1) !== "M0001" || first === undefined) return composed;
+      return {
+        kind: "call",
+        methodIndex: 1,
+        verdict: {
+          ref: first.ref,
+          outcome: "error",
+          durationMs: 1,
+          failureMessage: runMutantLineCountMessage(0, "expected exactly one method T1, found 0"),
+        },
+        fencedOp: composed.fencedOp,
+      };
+    };
+    const { error } = await session(b);
+    expect((error as Error).message).toContain("two consecutive run() failures");
+    expect(discoveryConfirms(b)).toBe(0);
+  });
+
+  test("T-d: a confirm lease-lost is M's error with the lease latched; a confirm in-flight-unknown strands and stops the shard", async () => {
+    const found0 = (ref: TestMethodRef): TestVerdict => ({
+      ref,
+      outcome: "error",
+      durationMs: 1,
+      failureMessage: runMutantLineCountMessage(
+        0,
+        `expected exactly one method ${ref.method}, found 0`,
+      ),
+    });
+    const blankThen = (confirm: Partial<TestVerdict>, target: string) => {
+      let active: string | null = null;
+      let found = false;
+      return {
+        activate: async (id: string | null) => {
+          active = id;
+        },
+        run: async (ref: TestMethodRef): Promise<TestVerdict> => {
+          if (active === target) {
+            found = true;
+            return found0(ref);
+          }
+          if (active === null && found) return { ref, outcome: "error", durationMs: 1, ...confirm };
+          return {
+            ref,
+            outcome: "pass",
+            durationMs: 1,
+            attestation: { observedAny: true, identityMismatch: false },
+          };
+        },
+      };
+    };
+    const client = new FakeLeaseClient();
+    const { lease } = leaseCfg(client);
+    const lost = await runSessionForTest(
+      leaseBackend(
+        blankThen({ operation: "lease-lost", leaseInvalidReason: "lease-invalid" }, "M0002"),
+      ),
+      { quarantineDir: freshTmpDir(), lease },
+    );
+    const m2 = lost.mutants.find((m) => m.mutantCode === "M0002");
+    expect(m2?.verdict).toBe("error");
+    expect(m2?.failureNote).toContain("lease-lost");
+    expect(lost.quarantined?.reason).toContain("lease-lost");
+
+    const dir = freshTmpDir();
+    const stranded = await runSessionForTest(
+      fakeBackend({
+        capabilities: () => ({
+          coverage: "none",
+          deploy: "publish",
+          isolation: "session",
+          kind: "bcdev",
+          authoritative: true,
+        }),
+        ...blankThen({ outcome: "deadline-exceeded", operation: "in-flight-unknown" }, "M0001"),
+      }),
+      { quarantineDir: dir },
+    );
+    expect(stranded.mutants.map((m) => [m.mutantCode, m.cause])).toEqual([["M0001", "stranded"]]);
+    expect(await new QuarantineStore(dir).read("http://cronus281|BC")).not.toBeNull();
+  });
+});
+
 /**
  * R206: the warm confirmation and the session guard. A fake backend with a SESSION-SCOPED cache
  * (a value that persists across the methods of one `runMany` call and resets between calls),
@@ -17459,30 +18024,6 @@ describe("C02-04 characterization", () => {
     );
     expect(outcome).toBeInstanceOf(StaleTestAppError);
     expect(characterize(trace, store, outcome)).toMatchSnapshot();
-  });
-
-  // R671: no backend accepts workers > 1 since R654.
-  test.skip("11: parallel workers", async () => {
-    // From "verdicts are identical at 1, 2 and 4 workers", at workers: 2.
-    const trace: Trace = [];
-    const make = () =>
-      new StubBackend(CAPS_NST_WORKERS, (mutant) => (mutant === null ? "pass" : "fail"), [
-        "IsOverBudget",
-      ]);
-    const dirs = await makeProject();
-    const store = new ResultsStore(":memory:");
-    const report = await settle(
-      runSession({
-        backend: recording(make(), trace, "primary"),
-        backendFactory: (i) => recording(make(), trace, `worker${i}`),
-        store,
-        ...dirs,
-        selectorIds,
-        workers: 2,
-        ...withEvents(trace),
-      }),
-    );
-    expect(characterize(trace, store, report)).toMatchSnapshot();
   });
 
   test("12: baseline in-flight", async () => {
@@ -22050,5 +22591,146 @@ describe("runSession — R658: a stopped unmutated run", () => {
     ]);
     expect(s.m2?.cause).toBe("confirm-stopped");
     expect(s.report.quarantined).toBeUndefined();
+  });
+});
+
+/**
+ * R639 (with R-435's timeout guard): the covering loop goes on past a `runner-refused` row that
+ * v3 flagged `refusedAfterStop`, and only that. FIVE_TESTS_AL orders T1..T5 on a cold ledger; a
+ * test is "refused" here when `answer` replaces its first mutated run.
+ */
+describe("R639: the covering loop and a refusal that follows a timeout", () => {
+  const REFUSED = "NotRun: out-of-scope: Commit [not run by al-runner v3]";
+  const refusedRow = (v: TestVerdict, flagged: boolean): TestVerdict => ({
+    ref: v.ref,
+    outcome: "error",
+    durationMs: 1,
+    failureMessage: REFUSED,
+    operation: "completed-accepted",
+    runnerRow: "runner-refused",
+    ...(flagged ? { refusedAfterStop: "T2" } : {}),
+  });
+  const session = async (
+    script: (mutant: string | null, ref: TestMethodRef, nth: number) => TestVerdict["outcome"],
+    answer?: (
+      mutant: string,
+      ref: TestMethodRef,
+      n: number,
+      v: TestVerdict,
+    ) => TestVerdict | undefined,
+  ) => {
+    const backend: ReproStub = new ReproStub(
+      CAPS_NST,
+      (mutant, ref) => script(mutant, ref, backend.nth.get(mutant ?? "") ?? 0),
+      ["IsOverBudget"],
+    );
+    backend.answer = (mutant, n, v) =>
+      mutant === null ? undefined : answer?.(mutant, v.ref, n, v);
+    const dirs = await makeProject(FIVE_TESTS_AL);
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    store.close();
+    return { backend, report };
+  };
+  const ranUnder = (b: ReproStub, mutant: string, method: string) =>
+    b.sent.filter((s) => s.mutant === mutant && s.method === method).length;
+  const m1 = (r: SessionReport) => r.mutants.find((m) => m.mutantCode === "M0001");
+
+  /** T1 is refused (flagged or not) on its first run under a mutant. */
+  const t1Refused =
+    (flagged: boolean) => (_mutant: string, ref: TestMethodRef, n: number, v: TestVerdict) =>
+      ref.method === "T1" && n === 1 ? refusedRow(v, flagged) : undefined;
+
+  test("O1: refused-after-stop T1, then T2 times out and reproduces -> timeout-killed by T2", async () => {
+    const { backend, report } = await session(
+      (mutant, ref) => (mutant !== null && ref.method === "T2" ? "timeout" : "pass"),
+      t1Refused(true),
+    );
+    expect(report.mutants.length).toBeGreaterThan(0);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("timeout-killed");
+      expect(m.killingTest).toContain("T2");
+      expect(m.killReproduced).toBe(true);
+    }
+    expect(ranUnder(backend, "M0001", "T2")).toBeGreaterThan(0);
+  });
+
+  test("O2: refused-after-stop T1, every other test passes -> error runner-refused with T1's note, never survived or group-coverage-incomplete", async () => {
+    const { report } = await session(() => "pass", t1Refused(true));
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("error");
+      expect(m.cause).toBe("runner-refused");
+      expect(m.failureNote).toBe(REFUSED);
+    }
+  });
+
+  test("O3: a refused row WITHOUT the flag still ends the mutant; the next test never runs under it", async () => {
+    const { backend, report } = await session(
+      (mutant, ref) => (mutant !== null && ref.method === "T2" ? "timeout" : "pass"),
+      t1Refused(false),
+    );
+    expect(m1(report)?.verdict).toBe("error");
+    expect(m1(report)?.cause).toBe("runner-refused");
+    expect(ranUnder(backend, "M0001", "T2")).toBe(0);
+  });
+
+  test("O4: a pending kill-not-reproduced wins over the pending refusal; a reproduced kill wins over both", async () => {
+    const once = await session(
+      (mutant, ref, n) => (mutant !== null && ref.method === "T2" && n === 2 ? "fail" : "pass"),
+      t1Refused(true),
+    );
+    expect(m1(once.report)?.verdict).toBe("error");
+    expect(m1(once.report)?.cause).toBe("kill-not-reproduced");
+    const always = await session(
+      (mutant, ref) => (mutant !== null && ref.method === "T2" ? "fail" : "pass"),
+      t1Refused(true),
+    );
+    expect(m1(always.report)?.verdict).toBe("killed");
+    expect(m1(always.report)?.killReproduced).toBe(true);
+  });
+
+  test("O5: refused-after-stop T1, then a T2 that also fails at baseline confirmation -> unstable wins", async () => {
+    // T2 passes its one baseline run, then fails every later run, the confirmation included.
+    let t2Runs = 0;
+    const { report } = await session((_mutant, ref) => {
+      if (ref.method !== "T2") return "pass";
+      t2Runs += 1;
+      return t2Runs === 1 ? "pass" : "fail";
+    }, t1Refused(true));
+    expect(m1(report)?.verdict).toBe("error");
+    expect(m1(report)?.cause).toBe("unstable");
+  });
+
+  test("O6: a flagged refusal in a kill's REPRODUCTION still ends as error runner-refused, never a kill", async () => {
+    const { backend, report } = await session(
+      (mutant, ref) => (mutant !== null && ref.method === "T1" ? "fail" : "pass"),
+      (_mutant, ref, n, v) => (ref.method === "T1" && n === 2 ? refusedRow(v, true) : undefined),
+    );
+    // The refused run IS the reproduction: T1's second run under M0001 (the first scored the kill).
+    expect(ranUnder(backend, "M0001", "T1")).toBe(2);
+    expect(m1(report)?.verdict).toBe("error");
+    expect(m1(report)?.cause).toBe("runner-refused");
+  });
+
+  test("O8: refused-after-stop T1, then T2 answers the backend's not-trusted timeout (runner-test-error) -> error, never timeout-killed", async () => {
+    const { report } = await session(
+      () => "pass",
+      (_mutant, ref, n, v) =>
+        ref.method === "T1" && n === 1
+          ? refusedRow(v, true)
+          : ref.method === "T2"
+            ? {
+                ref: v.ref,
+                outcome: "error",
+                durationMs: 1,
+                failureMessage: "a timeout after T1 refused earlier is not trusted (R-435)",
+                operation: "completed-accepted",
+                runnerRow: "runner-test-error",
+              }
+            : undefined,
+    );
+    expect(m1(report)?.verdict).toBe("error");
+    expect(m1(report)?.cause).toBe("runner-test-error");
+    expect(report.counts.timeoutKilled).toBe(0);
   });
 });

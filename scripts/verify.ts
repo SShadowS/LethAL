@@ -43,6 +43,25 @@
  * /coord/locks/verify-ledger.tsv, or the file LETHAL_VERIFY_LEDGER names (tests use a temp file),
  * and prints how many OTHER verifies overlapped it. See `ledgerLine` for the columns.
  *
+ * R616b (one verify at a time, and a longer timeout under io stall).
+ *   1. The slot lock. The test step runs only while this process holds `verify-slot.lock`, in the
+ *      same folder as the ledger (so LETHAL_VERIFY_LEDGER moves both; tests give a temp folder). It
+ *      is made with an exclusive create and holds `pid, worktree, start`. Another live holder: wait,
+ *      polling every 2 s, up to 10 min, then fail by name (verify never runs anyway). A holder whose
+ *      PID IS DEAD is stale and is taken over (named in the receipt); age alone never makes a lock
+ *      stale. Released on every exit path: a `finally`, and SIGINT/SIGTERM/SIGHUP handlers (remove
+ *      the lock only if it still holds our pid, exit 130/143/129). SIGKILL or a crash cannot run a
+ *      handler: the dead pid is what the next verify recovers from. Typecheck stays parallel. Skipped
+ *      under CI. Receipt line: `verify slot: took | waited N s | took a stale lock from pid P |
+ *      skipped (CI)`. See `acquireSlot` for the known ceilings (pid reuse).
+ *      Known limit: a SIGTERM or SIGHUP sent to verify alone releases the lock, but the orphaned
+ *      `bun test` child may keep running (Ctrl-C reaches the whole group and is fine).
+ *   2. If io pressure `full` avg10 is >= 5.0 when read just before the test step (after the slot
+ *      wait), the test child gets `--timeout=15000` (bun's default is 5000). Unreadable pressure
+ *      (Windows) keeps the default. Receipt line: `per-test timeout: ...`. See `testTimeout`.
+ *   3. A whole-run wall limit of 900 s on every child that verify runs (typecheck, `bun test`; `RUN_LIMIT_S`),
+ *      besides the per-file one.
+ *
  * R616 (test DBs and stall figures). The preload puts each test process's scratch SQLite DBs on a
  * tmpfs when it can (see packages/runner/tests/helpers/test-db.ts), and each process reports where
  * they went: the `test DBs:` line counts them per worker. `pressure at start:` and `pressure at
@@ -63,7 +82,7 @@ import {
   writeSync,
 } from "node:fs";
 import { availableParallelism, tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 
@@ -160,6 +179,7 @@ export function testCommand(
   p: number,
   changedSha: string | undefined,
   junitPath: string,
+  timeoutMs?: number,
 ): string[] {
   // R622 review I3: the running bun itself. A `bun` found on PATH may be a shim (Windows), whose
   // pid is not the test process's, and then the watchdog would never match a heartbeat to it.
@@ -169,6 +189,7 @@ export function testCommand(
     ...(p > 1 ? [`--parallel=${p}`] : []),
     ...(mode.kind === "changed" ? [`--changed=${changedSha}`] : []),
     ...(mode.kind === "packages" ? mode.paths : []),
+    ...(timeoutMs !== undefined ? [`--timeout=${timeoutMs}`] : []),
     "--reporter=junit",
     `--reporter-outfile=${junitPath}`,
   ];
@@ -219,6 +240,81 @@ export function parseTestSummary(output: string): TestSummary | null {
     files,
   };
 }
+
+/**
+ * R724: the error text of each failing test, so a CI console shows the cause, not only the log
+ * artifact. A test is reported once, at its first `(fail)` line (bun repeats the names in its
+ * closing summary, with no text before them). At most `maxLines` lines per test, each cut to 300
+ * characters.
+ */
+export interface FailureScan {
+  /** Error text per failing test name. */
+  readonly details: Map<string, string[]>;
+  /** The test file each failing test ran in, when bun's output names it. */
+  readonly fileOf: Map<string, string>;
+  /** Per file: its passing tests that took 1 s or more (`name [ms]`), the stall's neighbours. */
+  readonly slow: Map<string, string[]>;
+}
+
+/**
+ * Bun's real shape: an assertion error prints BEFORE its `(fail)` line, but a timeout prints
+ * `  ^ this test timed out after Nms.` AFTER it (seen in CI run 40105067954). `::` lines (CI
+ * group/error annotations), `file.test.ts:` headers and the banner are not error text; a header
+ * (or `::group::<file>:`) says which file the following tests belong to.
+ */
+export function scanFailures(output: string, maxLines = 12): FailureScan {
+  const details = new Map<string, string[]>();
+  const fileOf = new Map<string, string>();
+  const slow = new Map<string, string[]>();
+  let buf: string[] = [];
+  let lastFail: string | undefined;
+  let file = "";
+  for (const raw of output.split(/\r?\n/)) {
+    const line = raw.trimEnd();
+    // The closing recap repeats every (fail) line and its timeout line: stop, the first pass has them.
+    if (/^\d+ tests? failed:$/.test(line)) break;
+    const header = /^(?:::group::)?(\S+\.test\.[cm]?[jt]sx?):$/.exec(line)?.[1];
+    if (header !== undefined) {
+      file = header.replaceAll("\\", "/");
+      buf = [];
+      lastFail = undefined;
+      continue;
+    }
+    if (line === "" || line.startsWith("::") || line.startsWith("bun test v")) continue;
+    const failed = /^\(fail\) (.+?)(?: \[[\d.]+m?s\])?$/.exec(line);
+    if (failed?.[1] !== undefined) {
+      if (!details.has(failed[1])) {
+        details.set(failed[1], buf.slice(-maxLines));
+        if (file !== "") fileOf.set(failed[1], file);
+      }
+      buf = [];
+      lastFail = failed[1];
+      continue;
+    }
+    const pass = /^\(pass\) (.+?) \[([\d.]+)ms\]$/.exec(line);
+    if (pass !== null || /^\((skip|todo)\) /.test(line)) {
+      buf = [];
+      lastFail = undefined;
+      if (pass?.[1] !== undefined && Number(pass[2]) >= 1000) {
+        const l = slow.get(file) ?? [];
+        if (l.length < 10) l.push(`${pass[1]} [${pass[2]}ms]`);
+        slow.set(file, l);
+      }
+      continue;
+    }
+    if (/^\s*\^ this test timed out after /.test(line)) {
+      const d = lastFail === undefined ? undefined : details.get(lastFail);
+      if (d !== undefined) d.push(line.trim());
+      continue;
+    }
+    lastFail = undefined;
+    buf.push(line.length > 300 ? `${line.slice(0, 300)}...` : line);
+  }
+  return { details, fileOf, slow };
+}
+
+/** Failing tests whose detail verify prints to the console; the log file has the rest. */
+const DETAIL_CAP = 20;
 
 export interface JunitCase {
   readonly file: string;
@@ -384,7 +480,8 @@ export const HEARTBEAT_DIR = "LETHAL_VERIFY_HEARTBEAT_DIR";
  * limit on a whole file; no test timeout changes.
  *
  * Serial runs load the preload once, so a file stuck before its first test is named as the file
- * before it. A hang in bun's coordinator itself, after the files ran, is not covered.
+ * before it. A hang in bun's coordinator itself, after the files ran, is caught only by the
+ * whole-run limit (`RUN_LIMIT_S`, R616b), not by a heartbeat.
  */
 export interface Heartbeat {
   readonly pid: number;
@@ -562,7 +659,17 @@ export interface WatchOptions {
   readonly isChild?: (pid: number, parent: number) => boolean;
   /** How long a signal gets before the next step. Default: 3000 ms. */
   readonly graceMs?: number;
+  /** R616b C: the whole-run limit in seconds. Default: `RUN_LIMIT_S`. */
+  readonly runLimitS?: number;
 }
+
+/**
+ * R616b C (R622's remaining gap): a whole-run wall limit. A full verify takes 30 to 45 s; the
+ * slowest ever seen was 631 s, in R622's own hang. If a child that verify runs (the typecheck or
+ * `bun test`) is still running after 900 s, verify kills it through its handle and fails by name. This catches a hang in bun's own
+ * coordinator after every file ran, which no per-file heartbeat sees.
+ */
+export const RUN_LIMIT_S = 900;
 
 export async function execWatched(
   cmd: readonly string[],
@@ -621,8 +728,17 @@ export async function execWatched(
   };
   const sent: Array<{ pid: number; ppid: number; who: string; step: "TERM" | "KILL"; at: number }> =
     [];
+  const runLimitMs = (opts.runLimitS ?? RUN_LIMIT_S) * 1000;
+  const startedAt = Date.now();
   const timer = setInterval(() => {
     const now = Date.now();
+    if (!backstopped && now - startedAt > runLimitMs) {
+      backstopped = true;
+      proc.kill("SIGKILL");
+      say(
+        `watchdog: FAIL, this run went over ${runLimitMs / 1000} s${fails.length === 0 ? " (no file was over its limit)" : ""}; sent SIGKILL to process ${proc.pid} through its handle. R622.`,
+      );
+    }
     for (const b of stuckWorkers(
       readHeartbeats(beats),
       now,
@@ -842,6 +958,182 @@ function ledgerEvent(
 
 const others = (n: number): string => `${n} other ${n === 1 ? "verify" : "verifies"}`;
 
+/** R616b: bun's default per-test timeout, the raised one, and the io stall that raises it. */
+export const DEFAULT_TIMEOUT_MS = 5000;
+export const RAISED_TIMEOUT_MS = 15000;
+export const IO_FULL_RAISE = 5.0;
+
+/**
+ * R616b B. When the disk is stalled just before the test step (io `full` avg10 >= 5.0: all tasks
+ * waited on io for 5% of the last 10 s; read after the slot wait, so it describes the disk the
+ * tests will meet), the test child gets `--timeout=15000`. Otherwise bun's 5000 ms stays. Pressure
+ * that cannot be read (Windows, no /proc) keeps the default and says so. A test that hangs still
+ * fails, only 10 s later. bun's own timeout is not re-tested here.
+ */
+export function testTimeout(pressure: string | undefined): { ms: number; line: string } {
+  const m = /io some [\d.]+\/[\d.]+\/[\d.]+ full ([\d.]+)\//.exec(pressure ?? "");
+  if (m?.[1] === undefined) {
+    return {
+      ms: DEFAULT_TIMEOUT_MS,
+      line: `per-test timeout: ${DEFAULT_TIMEOUT_MS} ms (default; io pressure unreadable)`,
+    };
+  }
+  if (Number(m[1]) >= IO_FULL_RAISE) {
+    return {
+      ms: RAISED_TIMEOUT_MS,
+      line: `per-test timeout: ${RAISED_TIMEOUT_MS} ms (io full avg10 ${m[1]} >= ${IO_FULL_RAISE})`,
+    };
+  }
+  return { ms: DEFAULT_TIMEOUT_MS, line: `per-test timeout: ${DEFAULT_TIMEOUT_MS} ms (default)` };
+}
+
+/** R616b A: the slot lock's name (beside the ledger), the wait limit and the poll interval. */
+export const SLOT_NAME = "verify-slot.lock";
+export const SLOT_WAIT_LIMIT_S = 600;
+export const SLOT_POLL_MS = 2000;
+
+export function slotPath(ledgerPath: string): string {
+  return join(dirname(ledgerPath), SLOT_NAME);
+}
+
+/** The wait ran past its limit with a live holder. Verify fails by name; it never runs anyway. */
+export class SlotTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SlotTimeoutError";
+  }
+}
+
+export type SlotSignal = "SIGINT" | "SIGTERM" | "SIGHUP";
+const SLOT_SIGNAL_EXIT: Record<SlotSignal, number> = { SIGINT: 130, SIGTERM: 143, SIGHUP: 129 };
+
+export interface SlotIo {
+  readonly path: string;
+  readonly pid: number;
+  readonly worktree: string;
+  readonly alive: (pid: number) => boolean;
+  now(): number;
+  sleep(ms: number): Promise<void>;
+  print(line: string): void;
+  readonly proc: {
+    on(sig: SlotSignal, fn: () => void): void;
+    off(sig: SlotSignal, fn: () => void): void;
+    exit(code: number): void;
+  };
+  readonly waitLimitS?: number;
+}
+
+export interface Slot {
+  /** For the receipt: `took`, `waited N s` or `took a stale lock from pid P`. */
+  readonly line: string;
+  release(): void;
+}
+
+/** The pid in the lock file; `null` when the file is gone, `undefined` when it holds no pid (yet). */
+function slotHolder(path: string): { pid: number | undefined; worktree: string } | null {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw e;
+  }
+  const [pidText, worktree] = text.split("\t");
+  const pid = Number(pidText);
+  return { pid: Number.isInteger(pid) && pid > 0 ? pid : undefined, worktree: worktree ?? "?" };
+}
+
+/**
+ * R616b A. One full verify at a time: the test step runs only while this process holds
+ * `<ledger dir>/verify-slot.lock` (`<pid>\t<worktree>\t<start ISO>`), created with an exclusive
+ * create (`wx`). A live holder is waited for, polling every 2 s, up to 10 min (then
+ * `SlotTimeoutError`). A holder is stale when its PID IS DEAD (never by age alone: a slow verify
+ * is not a dead one), and then the lock is taken over. The lock is released on every exit path:
+ * the caller's `finally`, and SIGINT, SIGTERM and SIGHUP (the handler removes the lock only if it
+ * still holds our pid, then exits 128 + the signal number). SIGKILL or a crash cannot run a
+ * handler; the next verify finds the dead pid and takes over.
+ *
+ * ponytail: the pid-reuse window. If a crashed holder's pid has been given to an unrelated live
+ * process, its lock reads as live until that process ends or the 10 min limit fails the wait (then
+ * delete the file by hand). Two verifies taking over the same stale lock at once can each delete
+ * the other's fresh lock; the re-read before the delete makes that window microseconds. A lock
+ * file with no readable pid (caught half-written, or a crash between create and write) is waited
+ * for like a live one. Upgrade for any of these: a real flock, which bun cannot call.
+ *
+ * ponytail: a SIGTERM or SIGHUP sent to verify ALONE releases the lock, but the `bun test` child
+ * is orphaned and may keep running, so the next verify can start beside it. Ctrl-C reaches the
+ * whole process group and is fine. Upgrade: kill the child from the handler (needs its handle).
+ */
+export async function acquireSlot(s: SlotIo): Promise<Slot> {
+  const limitMs = (s.waitLimitS ?? SLOT_WAIT_LIMIT_S) * 1000;
+  const t0 = s.now();
+  let announced = false;
+  let stale: number | undefined;
+  for (;;) {
+    try {
+      writeFileSync(s.path, `${s.pid}\t${s.worktree}\t${new Date(s.now()).toISOString()}`, {
+        flag: "wx",
+      });
+      break;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+    }
+    const holder = slotHolder(s.path);
+    if (holder === null) continue; // it left between our create and our read
+    // Our own pid in the file is a leftover of an earlier process that had this pid.
+    if (holder.pid !== undefined && (holder.pid === s.pid || !s.alive(holder.pid))) {
+      if (slotHolder(s.path)?.pid === holder.pid) {
+        rmSync(s.path, { force: true });
+        stale = holder.pid;
+      }
+      continue;
+    }
+    const who =
+      holder.pid === undefined
+        ? "a verify (the lock holds no pid)"
+        : `pid ${holder.pid} (${holder.worktree})`;
+    const waited = s.now() - t0;
+    if (waited >= limitMs) {
+      throw new SlotTimeoutError(
+        `waited ${limitMs / 1000} s for ${who} to finish its tests; not running anyway. ` +
+          `If that verify is gone, delete ${s.path}.`,
+      );
+    }
+    if (!announced) {
+      announced = true;
+      s.print(`verify slot: waiting for ${who}`);
+    }
+    await s.sleep(SLOT_POLL_MS);
+  }
+  const handlers = new Map<SlotSignal, () => void>();
+  let released = false;
+  const release = (): void => {
+    if (released) return;
+    released = true;
+    for (const [sig, fn] of handlers) s.proc.off(sig, fn);
+    try {
+      if (slotHolder(s.path)?.pid === s.pid) rmSync(s.path, { force: true });
+    } catch {
+      // nothing more to do; the next verify sees our dead pid
+    }
+  };
+  for (const sig of Object.keys(SLOT_SIGNAL_EXIT) as SlotSignal[]) {
+    const fn = (): void => {
+      release();
+      s.proc.exit(SLOT_SIGNAL_EXIT[sig]);
+    };
+    handlers.set(sig, fn);
+    s.proc.on(sig, fn);
+  }
+  const line =
+    stale !== undefined
+      ? `took a stale lock from pid ${stale}`
+      : announced
+        ? `waited ${Math.round((s.now() - t0) / 1000)} s`
+        : "took";
+  return { line, release };
+}
+
 export interface TestStepIo {
   exec(cmd: string[], env: Env): ExecResult | Promise<ExecResult>;
   snapState(): SnapState;
@@ -860,6 +1152,8 @@ export interface TestStepPlan {
   readonly p: number;
   /** The resolved sha for `--changed`. */
   readonly changedSha?: string;
+  /** R616b: bun's `--timeout`, only when raised (`testTimeout`); none keeps bun's 5000 ms. */
+  readonly timeoutMs?: number;
 }
 
 /** The scope a line names. `all` is produced only for mode `full`. */
@@ -889,7 +1183,7 @@ export async function testStep(
   const junit = io.junitPath();
   const before = io.snapState();
   const t = await io.exec(
-    testCommand(plan.mode, plan.p, plan.changedSha, junit),
+    testCommand(plan.mode, plan.p, plan.changedSha, junit, plan.timeoutMs),
     testChildEnv(io.env),
   );
   const after = io.snapState();
@@ -907,7 +1201,22 @@ export async function testStep(
     lines.push(
       `test (${scope}): ${ok ? "ok" : "FAIL"} ${counts}, ${summary.files ?? "?"} files${ok ? "" : ` (exit ${t.code}), log ${io.log(t.output)}`}`,
     );
-    for (const name of summary.failing) lines.push(`  (fail) ${name}`);
+    const scan = scanFailures(t.output);
+    const slowShown = new Set<string>();
+    for (const [i, name] of summary.failing.entries()) {
+      lines.push(`  (fail) ${name}`);
+      if (i >= DETAIL_CAP) continue;
+      for (const d of scan.details.get(name) ?? []) lines.push(`    | ${d}`);
+      const f = scan.fileOf.get(name);
+      if (f !== undefined && !slowShown.has(f)) {
+        slowShown.add(f);
+        for (const s of scan.slow.get(f) ?? []) lines.push(`    | slow pass in ${f}: ${s}`);
+      }
+    }
+    if (summary.failing.length > DETAIL_CAP)
+      lines.push(
+        `  ... error text shown for the first ${DETAIL_CAP} of ${summary.failing.length} failing tests; the log has the rest`,
+      );
     if (!ok) code = 1;
     if (plan.mode.kind === "full") {
       const junitFiles = [...new Set(parseJunit(io.readJunit(junit)).map((c) => c.file))];
@@ -996,6 +1305,8 @@ export interface VerifyIo extends TestStepIo {
   readonly ledger?: LedgerIo;
   /** R616: the stall figures now (`pressureText`); none, no pressure lines and `-` in the ledger. */
   readonly pressure?: () => string;
+  /** R616b: the slot lock; none, no slot (the receipt says so). */
+  readonly slot?: SlotIo;
 }
 
 /** The whole run. Prints each line as it goes and returns them all, plus the exit code. */
@@ -1083,7 +1394,43 @@ export async function runVerify(
   say("typecheck: ok");
   const removed = io.cleanDist();
   say(`clean dist: removed ${removed.length} (${removed.join(", ") || "none present"})`);
-  const step = await testStep(plan, io);
+  // R616b: one verify at a time on the test step; typecheck above stays parallel.
+  let slot: Slot | undefined;
+  const ci = ciVariable(io.env);
+  if (ci !== undefined) {
+    say("verify slot: skipped (CI)");
+  } else if (io.slot === undefined) {
+    say("verify slot: skipped (no slot folder)");
+  } else {
+    try {
+      slot = await acquireSlot({
+        ...io.slot,
+        print: (l) => {
+          say(l);
+        },
+      });
+      say(`verify slot: ${slot.line}`);
+    } catch (e) {
+      if (e instanceof SlotTimeoutError) {
+        say(`verify slot: FAIL, ${e.message}`);
+        return done(1, null);
+      }
+      say(
+        `verify slot: unavailable (${e instanceof Error ? e.message : String(e)}); running without it`,
+      );
+    }
+  }
+  const timeout = testTimeout(io.pressure?.());
+  say(timeout.line);
+  let step: Awaited<ReturnType<typeof testStep>>;
+  try {
+    step = await testStep(
+      { ...plan, ...(timeout.ms !== DEFAULT_TIMEOUT_MS ? { timeoutMs: timeout.ms } : {}) },
+      io,
+    );
+  } finally {
+    slot?.release();
+  }
   for (const l of step.lines) say(l);
   return done(step.code, step.summary);
 }
@@ -1141,6 +1488,20 @@ async function main(argv: readonly string[]): Promise<number> {
         alive: pidAlive,
       },
       pressure: () => pressureText((p) => readFileSync(p, "utf8")),
+      slot: {
+        path: slotPath(process.env[LEDGER_ENV] || LEDGER_PATH),
+        pid: process.pid,
+        worktree: REPO_ROOT,
+        alive: pidAlive,
+        now: () => Date.now(),
+        sleep: (ms) => Bun.sleep(ms),
+        print: (l) => console.log(l),
+        proc: {
+          on: (sig, fn) => void process.on(sig, fn),
+          off: (sig, fn) => void process.off(sig, fn),
+          exit: (code) => process.exit(code),
+        },
+      },
     });
     return r.code;
   } finally {

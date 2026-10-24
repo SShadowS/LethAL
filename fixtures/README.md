@@ -505,6 +505,26 @@ if the twelve mutants or their owners moved, was deleted with the .NET al-runner
 `.alpackages` is gitignored. Create an empty `.alpackages` directory in `sandbox-multiobject`, and
 `alc` the target into `sandbox-multiobject-tests/.alpackages` from current source before compiling.
 
+## sandbox-codefree (R-579)
+
+v3-only: the fixture for R-579's coverage differential (`/coord/handoff/R-579/differential.sh`, run with
+`--backend al-runner-v3`). It is in no gate and needs no BC. Ids 79900-79949 (target) and 79950-79999
+(`sandbox-codefree-tests`, one test codeunit, `Error()` asserts). The app.json symbol is `CFACTIVE`, and the
+target is `"target": "OnPrem"` (see `dotnet` below).
+
+- `CFActive` / `CFInactive`: a codeunit after a pragma-only `#if` of three `#pragma` lines. `CFACTIVE` is defined
+  for the first, `CFINACTIVE` is not defined for the second. Short procedures, so a wrong base would cross one.
+- `CFSplit`: codeunit `CF First`, a pragma-only `#if`, then `CF Second` (both with mutants).
+- `CFPlain`: a plain codeunit the tests kill.
+- One `#if CFACTIVE` file per code-free kind: permissionset, permissionsetextension (with an `#else` arm, also
+  code-free), enum (with a nested `#if`), enumextension, interface, entitlement, controladdin, dotnet.
+- Of 43 mutants, 38 die. Five boundary mutants (`>`/`<`/`>=` edges, named in `CFTests`) survive on purpose.
+- Kind that needed a change: `dotnet` fails on a cloud target with `AL0296` ("has scope 'OnPrem' and cannot be
+  used for 'Extension' development"), so the target sets `"target": "OnPrem"`. An entitlement with `Type =
+  Implicit` takes no `RoleType` (`AL0223`). Every kind compiles.
+- `.alpackages` is gitignored: stage the five Microsoft packages into both projects, and `alc` the target into
+  `sandbox-codefree-tests/.alpackages` before compiling the tests.
+
 ## sandbox-names (R557)
 
 A target, `Names Calc` (78800), with twelve identical procedures, each `exit(x + 1)`, and a test
@@ -1661,7 +1681,8 @@ CLI flags:
     }
   },
   // R586: the Rust al-runner (--backend al-runner-v3; Linux only). The .NET al-runner's
-  // "alRunner" section went with that backend (R654).
+  // "alRunner" section went with that backend; a config that still has one is refused by name
+  // (R654).
   "alRunnerV3": {
     // Required: the folder v3 and alc both read packages from, and a four-number BC build.
     "packagesDir": "/path/to/.alpackages",
@@ -1670,7 +1691,8 @@ CLI flags:
     // refused by name.
     "path": "/work/tools/al-runner-v3/current/al-runner",
     // "al-runner" reads v3's coverage; turned off, with the al-runner-v3-coverage-off warning,
-    // for a project holding a multi-object or an #if-wrapped object file (R602). "none" turns it off.
+    // for a project holding an #if wrapper shape the index has no rule for (two-arm, #elif, nested,
+    // or a multi-object file holding a wrapper; R602). "none" turns it off.
     "coverage": "al-runner",
     "transport": "one-shot"
   },
@@ -1776,13 +1798,11 @@ bun packages/runner/src/cli.ts run \
 
 **Since R654 (2026-10-22) no backend accepts `--workers` > 1.** bcdev refuses it (below), and so does
 `al-runner-v3` (`al-runner-v3-workers-refused`). The .NET al-runner was the only backend that ran workers in
-parallel, and it was retired. `runSession`'s worker fan-out is still in the code but unreachable,
-and its tests are skipped ([R671](../docs/roadmap/R671.md)). Everything in this section about
-al-runner workers is history.
+parallel, and it was retired. `runSession`'s worker fan-out and `--compile-concurrency` were deleted with
+it ([R671](../docs/roadmap/R671.md)). Everything in this section about al-runner workers is history.
 
-`lethal run` accepts `--workers <n>` (default 1) and `--compile-concurrency <n>` (default
-`min(workers, 4)`), wired straight through to `SessionConfig.workers`/`compileConcurrency` —
-see `packages/runner/src/cli.ts`'s `parseCliConfig`/`buildBackend`/`runFromCli`. Each .NET al-runner
+`lethal run` accepts `--workers <n>` (default 1; above 1 is refused), wired through to
+`SessionConfig.workers` — see `packages/runner/src/cli.ts`'s `parseCliConfig`. Each .NET al-runner
 worker got its own scratch directory (`<scratchRoot>/worker-<i>`), so its private copy of the
 batch's instrumented sources (`AlRunnerBackend.deploy`) never collided with another worker's.
 

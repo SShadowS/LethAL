@@ -66,6 +66,26 @@ export interface WriteInput {
    * basename with one of them (tests and scripts writing a hand-built set). A real run passes it.
    */
   readonly flatNames?: FlatNames;
+  /**
+   * R734: the ids a narrowed REWRITE must keep, keyed by `identitySiteKey`. After a compile failure
+   * the clean mutants are redeployed (and every isolation candidate is compiled) under the ids they
+   * had in the failed artifact, so rows, selector and control state all name one mutant by one id.
+   * Absent: ids are numbered fresh. Given: every spec must have an entry, else this throws; a spec
+   * with no id is never numbered silently.
+   */
+  readonly fixedIds?: ReadonlyMap<string, string>;
+  /** R734: the mutants removed from this artifact because they broke the compile; written into the
+   *  manifest so a reader can tell a row with no manifest entry from a lost one. */
+  readonly isolatedOut?: readonly IsolatedOut[];
+}
+
+/** R734: one mutant left out of a redeployed artifact (never any source text). */
+export interface IsolatedOut {
+  readonly mutantId: string;
+  readonly file: string;
+  readonly startIndex: number;
+  readonly endIndex: number;
+  readonly operatorName: string;
 }
 
 /** C02-09: a gap's id. Reads the file (separators normalised), the block's position and its source
@@ -233,8 +253,9 @@ export function coarseIdentityTupleOf(
  * 39 R-531: 47 ordinals renumber (43 BaseApp, 4 System Application); no tuple moves. A loop whose cursor condition (`Find*`, `IsEmpty`, `Count`, never `Next`) ends only because its body consumes the record set is hang-refused (the consumers, their guards and feeds, a one-hop same-object callee's consumers, the pre-loop filters the ending depends on, and every operator in the condition but swap-find-direction), so a refused site renumbers its same-tuple twins.
  * 40: R565, a call through `Report X` to a preset writer of a report OUTSIDE the project is hang-refused when X's source can be read from the dependency packages, so the refused set depends on dependency bytes and a refused site renumbers its same-tuple twins (measured with al-runner's 28.5 platform apps: Quality Management 7 removed, Application Test Library 15 removed and 2 ordinals moved, 0 tuples moved; ten other projects none).
  * 41: R572, a loop whose exit is fed by another object's stateful procedure refuses that chain, its value-path writers and (`r572-guard-writer`) the guards that dominate a call into them in the loop body; a guard is refused as a SINGLE site, so it renumbers its procedure's same-tuple twins (measured on BaseApp at 950e69a3: 34 ordinals moved, 0 tuples moved, every move explained by a refused lower twin; /coord/handoff/R-572/reprice/investigation.md). Confirmed at the merge of master d5a8288a: master was 40 and no other branch had bumped it.
+ * 42: R-604b (R604 shape M1, narrowed): a same-object callee of a loop whose own step forces the exit, that gets the forcing cursor and either inserts or renames rows of the iterated table (within 4 calls, any record) or gets the cursor by `var`, or names a forced global cursor, and touches it, is hang-refused with its touches (and `r572-guard-writer` refuses the guards that dominate its call as single sites), so a refused site renumbers its procedure's same-tuple twins (measured at master f31ae5ad against r2's prototype: BaseApp 16 procedures and 18 guard sites added, DC 6 and 2, DO, CDO and fixtures none; /coord/handoff/R-604b/measure.md). The ten gate baselines below 42 wait on R690.
  */
-export const IDENTITY_SCHEME = 41;
+export const IDENTITY_SCHEME = 42;
 
 /**
  * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,
@@ -555,6 +576,8 @@ export interface MutantManifest {
   readonly selectorIds: SelectorConfig;
   readonly artifactId: string;
   readonly mutants: readonly MutantManifestEntry[];
+  /** R734: present only on an artifact redeployed after a compile failure. */
+  readonly isolatedOut?: readonly IsolatedOut[];
 }
 
 /** RUST-03 S4.2a: the offset of every line's first character, built once per file. */
@@ -723,6 +746,27 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
   const specsByFile = new Map<string, readonly MutationSpec[]>();
   for (const f of input.files) specsByFile.set(f.path, dedupeSpecs(f.specs, tierOf));
   const idedByFile = assignMutantIds(specsByFile);
+  const { fixedIds } = input;
+  if (fixedIds !== undefined) {
+    const used = new Set<string>();
+    for (const [path, list] of idedByFile) {
+      idedByFile.set(
+        path,
+        list.map(({ spec }) => {
+          const mutantId = fixedIds.get(
+            identitySiteKey(path, spec.before.startIndex, spec.before.endIndex, spec.operatorName),
+          );
+          if (mutantId === undefined || used.has(mutantId)) {
+            throw new Error(
+              `writeInstrumentedProject: no fixed id for (${path}, ${spec.before.startIndex}..${spec.before.endIndex}, ${spec.operatorName}), or its id is used twice (R734)`,
+            );
+          }
+          used.add(mutantId);
+          return { mutantId, spec };
+        }),
+      );
+    }
+  }
 
   // R374: rows are numbered from the run-wide `identityOrdinals`, never per batch.
   const rows: { -readonly [K in keyof MutantManifestEntry]: MutantManifestEntry[K] }[] = [];
@@ -893,6 +937,7 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
     selectorIds: input.selectorIds,
     artifactId: input.artifactId,
     mutants: manifest,
+    ...(input.isolatedOut !== undefined ? { isolatedOut: input.isolatedOut } : {}),
   };
   await writeManifestJson(join(input.targetDir, "mutant-manifest.json"), manifestJson);
 }
@@ -913,7 +958,10 @@ export interface ManifestIo {
 }
 
 // If MutantManifest gains a field, writeManifestJson must write it too: this fails typecheck first.
-type _ManifestKeys = Exclude<keyof MutantManifest, "selectorIds" | "artifactId" | "mutants">;
+type _ManifestKeys = Exclude<
+  keyof MutantManifest,
+  "selectorIds" | "artifactId" | "mutants" | "isolatedOut"
+>;
 const _manifestKeysCovered: [_ManifestKeys] extends [never] ? true : never = true;
 void _manifestKeysCovered;
 
@@ -967,6 +1015,9 @@ export async function writeManifestJson(
           }
         }
         await writeAll(`${chunk}\n  ]`);
+      }
+      if (manifest.isolatedOut !== undefined) {
+        await writeAll(`,\n  "isolatedOut": ${nest(manifest.isolatedOut, "  ")}`);
       }
       await writeAll("\n}\n");
       written = true;

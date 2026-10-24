@@ -1,4 +1,5 @@
 import { appendFile, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { MutantManifest } from "@lethal/schemata";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -15,6 +16,7 @@ import {
   buildPackageCacheCopy,
   isControlSymbolName,
   removePackageCacheCopy,
+  removeWithRetry,
 } from "./artifact";
 import type { ArtifactCompiler, CompileInput, CompiledArtifact } from "./artifact";
 import type {
@@ -251,6 +253,8 @@ export interface BcDevDeployment {
   readonly deployer: AppPublisher;
   readonly verifier: DeploymentVerifier;
   readonly harnessVerifier: HarnessVerifier;
+  /** R708: test seam for the staged-copy cleanup. Default: `removeWithRetry`. */
+  readonly removeDir?: (path: string) => Promise<void>;
 }
 
 /**
@@ -410,6 +414,22 @@ export function unreadOfError(
   return { unread: `the request failed (${text})` };
 }
 
+/**
+ * R708: reclaim a staged compile copy with retries (Windows scanners hold fresh files). Never
+ * throws: the compile outcome is already decided and must not be masked. A copy that still
+ * cannot be removed is named in a warning, not swallowed.
+ */
+async function removeStagedCopy(
+  staged: string,
+  remove: (path: string) => Promise<void> = removeWithRetry,
+): Promise<void> {
+  await remove(staged).catch((e) =>
+    console.warn(
+      `[lethal] could not remove the staged compile copy ${staged}: ${describeThrown(e)}`,
+    ),
+  );
+}
+
 export class BcDevMcpBackend implements ExecutionBackend {
   /** R582: R577's "a kill must reproduce" rule, on for bcdev too (the re-run is one more fenced
    *  call under the mutant: a single `RunMutant` at position 1, the call's prefix at k > 1). */
@@ -446,6 +466,10 @@ export class BcDevMcpBackend implements ExecutionBackend {
   // (coverage: "none") passes it to a single RunMutant OData call that activates+runs+clears
   // server-side. The transport is built at deploy() once the target's identity is known.
   private pendingMutantId: string | null = null;
+  /** R734: the ids the DEPLOYED manifest holds, so a mutant that was removed from a redeployed
+   *  artifact (it broke the compile) can never be sent to RunMutant and scored. */
+  private deployedIds: ReadonlySet<string> | undefined;
+  private isolatedIds: ReadonlySet<string> | undefined;
   private runMutantTransport: RunMutantTransport | undefined;
   // R499: the one control state every transport this backend binds shares (in-flight orphans and a
   // late refusal), so a re-deploy/attach never strands a refusal on a replaced transport.
@@ -764,7 +788,12 @@ export class BcDevMcpBackend implements ExecutionBackend {
    */
   private async stageForCompile(instrumentedDir: string): Promise<string> {
     const staging = `${instrumentedDir}-staged`;
-    await rm(staging, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    await (this.deployment?.removeDir ?? removeWithRetry)(staging);
+    if (existsSync(staging)) {
+      throw new ArtifactPrepareError(
+        `could not clear the staged compile copy ${staging} before staging`,
+      );
+    }
     await cp(instrumentedDir, staging, { recursive: true });
     try {
       // Inject the dependency into the STAGED app.json only (never the shared instrumented dir).
@@ -787,7 +816,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
         console.warn(dangling);
       }
     } catch (e) {
-      await rm(staging, { recursive: true, force: true }).catch(() => {});
+      await removeStagedCopy(staging, this.deployment?.removeDir);
       throw e;
     }
     return staging;
@@ -835,6 +864,10 @@ export class BcDevMcpBackend implements ExecutionBackend {
     instrumentedDir: string,
     manifest: MutantManifest,
   ): Promise<void> {
+    // An artifact with no mutants has nothing to refuse against; one that lists the mutants it
+    // dropped (`isolatedOut`) refuses exactly those even when it holds none.
+    this.deployedIds = new Set(manifest.mutants.map((m) => m.mutantId));
+    this.isolatedIds = new Set((manifest.isolatedOut ?? []).map((m) => m.mutantId));
     this.methodIndex = await AppMethodIndex.fromAppFile(appPath);
     const keys = manifestObjectKeys(manifest.mutants);
     if ((this.cfg.coverageMode ?? DEFAULT_COVERAGE_MODE) === "fenced") {
@@ -858,6 +891,8 @@ export class BcDevMcpBackend implements ExecutionBackend {
 
   /** `indexArtifact` over the in-memory copy `loadInstalledArtifact` verified; reads no file. */
   private async indexInstalled(artifact: BoundArtifact): Promise<void> {
+    this.deployedIds = undefined; // `lethal verify` resolves its ids against the stored manifest
+    this.isolatedIds = undefined;
     this.methodIndex = AppMethodIndex.fromAppBytes(artifact.appBytes);
     if ((this.cfg.coverageMode ?? DEFAULT_COVERAGE_MODE) === "fenced") {
       this.lineMap = await lineMapFromSources(
@@ -966,9 +1001,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
       // reads `artifact.appPath` (the compiled .app in outputDir). Best-effort, same idiom as
       // compileCheck()'s own cleanup — a compile already decided the outcome by here, so a
       // stray cleanup failure must never mask it.
-      await rm(staged, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch(
-        () => {},
-      );
+      await removeStagedCopy(staged, deployment.removeDir);
     }
     // See `indexArtifact`'s doc comment: must happen before publish().
     await this.indexArtifact(artifact.appPath, instrumentedDir, artifact.mutantManifest);
@@ -1119,7 +1152,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
       const artifact = await this.compileStaged(deployment.compiler, staged);
       await rm(artifact.appPath, { force: true }).catch(() => {});
     } finally {
-      await rm(staged, { recursive: true, force: true }).catch(() => {});
+      await removeStagedCopy(staged, deployment.removeDir);
     }
   }
 
@@ -1170,6 +1203,19 @@ export class BcDevMcpBackend implements ExecutionBackend {
     });
   }
 
+  /** R734 A1: refuse a mutant the deployed manifest does not hold (one removed after it broke the
+   *  compile). `activate` stays bookkeeping that never throws; the refusal fires before any send. */
+  private assertPendingDeployed(): void {
+    const id = this.pendingMutantId;
+    if (id === null || id === "" || this.deployedIds === undefined) return;
+    const unknown = this.deployedIds.size > 0 && !this.deployedIds.has(id);
+    if (unknown || this.isolatedIds?.has(id) === true) {
+      throw new Error(
+        `BcDevMcpBackend: mutant ${id} is not in the deployed artifact's manifest (it was removed after it broke the compile); refusing to run it (R734)`,
+      );
+    }
+  }
+
   async activate(mutantId: string | null): Promise<void> {
     // Bookkeeping only (Layer 5C-A): RunMutant folds activate + run-one-method + clear into a
     // single OData call, so there is NO persistent server-side active state to set here. Record
@@ -1218,7 +1264,8 @@ export class BcDevMcpBackend implements ExecutionBackend {
         : await this.runViaTransport(ref, opts);
     // R272: one call per test on both paths, so `durationMs` is this test's own wall clock. Not a
     // recovered reply (R236b), whose duration is the time until the reply was declared lost. Not a
-    // negative one: a `Date.now()` delta goes below 0 when the clock steps back.
+    // negative one: the hub path's `Date.now()` delta can go below 0 when the clock steps back (the
+    // transport is monotonic since R710).
     return v.outcome === "pass" && v.replyRecovered === undefined && v.durationMs >= 0
       ? { ...v, measuredDurationMs: v.durationMs }
       : v;
@@ -1260,6 +1307,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
         "BcDevMcpBackend: runMany() is for a MUTANT run; no mutant is pending, and a baseline keeps the single-method call because coverage is per test",
       );
     }
+    this.assertPendingDeployed();
     this.attemptSeq += 1;
     const opSeq = this.nextOpSeq;
     this.nextOpSeq += 1;
@@ -1311,6 +1359,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
         `BcDevMcpBackend: a fenced-coverage run is a BASELINE run, but mutant ${this.pendingMutantId} is still pending — ${why}`,
       );
     }
+    this.assertPendingDeployed();
     this.attemptSeq += 1;
     const opSeq = this.nextOpSeq;
     this.nextOpSeq += 1;

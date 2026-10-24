@@ -8,6 +8,7 @@ import {
   hashAlTree,
   hashPackage,
   hashTargetSource,
+  hashTestDir,
   snapshotApplies,
   testAppHashFor,
 } from "../src/baseline-snapshot";
@@ -40,6 +41,16 @@ const BATCH = {
   "app.json": '{"version":"1.0.20692.1"}',
 };
 
+describe("hashTestDir (R691)", () => {
+  test("a control-named file in the user's test dir is hashed, at the root and in a subfolder", async () => {
+    const a = await hashTestDir(tree(BATCH));
+    const root = await hashTestDir(tree({ ...BATCH, "MutationSelector.Codeunit.al": "user" }));
+    const sub = await hashTestDir(tree({ ...BATCH, "sub/MutationUpgrade.Codeunit.al": "user" }));
+    expect(root).not.toBe(a);
+    expect(sub).not.toBe(a);
+  });
+});
+
 describe("hashAlTree (R192)", () => {
   test("the same instrumented tree at two paths hashes the same", async () => {
     expect(await hashAlTree(tree(BATCH))).toBe(await hashAlTree(tree(BATCH)));
@@ -61,6 +72,22 @@ describe("hashAlTree (R192)", () => {
         "MutationUpgrade.Codeunit.al": "y",
       }),
     );
+    expect(b).toBe(a);
+  });
+
+  // R691: only LethAL's own ROOT control files are left out. A user file with the same name
+  // elsewhere is AL that alc and v3 compile, so it must move the hash.
+  test("R691: a control-named user file in a subfolder of the batch tree is hashed", async () => {
+    const a = await hashAlTree(tree(BATCH));
+    const b = await hashAlTree(tree({ ...BATCH, "sub/MutationSelector.Codeunit.al": "user" }));
+    const c = await hashAlTree(tree({ ...BATCH, "sub/MutationSelector.Codeunit.al": "user2" }));
+    expect(b).not.toBe(a);
+    expect(c).not.toBe(b);
+  });
+
+  test("R691: LethAL's own root control file changing does not move the batch hash", async () => {
+    const a = await hashAlTree(tree({ ...BATCH, "MutationSelector.Codeunit.al": "artifact 1" }));
+    const b = await hashAlTree(tree({ ...BATCH, "MutationSelector.Codeunit.al": "artifact 2" }));
     expect(b).toBe(a);
   });
 

@@ -1,0 +1,181 @@
+# R670: the files of the pinned fixture-symbols tar, in archive order (tar -tf, directories left out).
+# sha256 2279aee3857bc2f123f602bb9dc265b1be783a782486d9982ddd37fd50d46359
+examples/credit-limit/.alpackages/Microsoft_Application_28.0.46665.47126.app
+examples/credit-limit/.alpackages/Microsoft_Base Application_28.0.46665.47126.app
+examples/credit-limit/.alpackages/Microsoft_Business Foundation_28.0.46665.47126.app
+examples/credit-limit/.alpackages/Microsoft_System Application_28.0.46665.47126.app
+examples/credit-limit/.alpackages/Microsoft_System_28.0.47067.0.app
+examples/credit-limit/.alpackages/lethal-control.app
+examples/credit-limit-tests/.alpackages/LethAL_Credit Limit Demo_1.0.0.1.app
+examples/credit-limit-tests/.alpackages/Microsoft_Application_28.0.46665.47126.app
+examples/credit-limit-tests/.alpackages/Microsoft_Base Application_28.0.46665.47126.app
+examples/credit-limit-tests/.alpackages/Microsoft_Business Foundation_28.0.46665.47126.app
+examples/credit-limit-tests/.alpackages/Microsoft_System Application_28.0.46665.47126.app
+examples/credit-limit-tests/.alpackages/Microsoft_System_28.0.47067.0.app
+examples/gift-card/.alpackages/Microsoft_Application_28.0.46665.47126.app
+examples/gift-card/.alpackages/Microsoft_Base Application_28.0.46665.47126.app
+examples/gift-card/.alpackages/Microsoft_Business Foundation_28.0.46665.47126.app
+examples/gift-card/.alpackages/Microsoft_System Application_28.0.46665.47126.app
+examples/gift-card/.alpackages/Microsoft_System_28.0.47067.0.app
+examples/gift-card/.alpackages/lethal-control.app
+examples/gift-card-tests/.alpackages/LethAL_Gift Card Demo_1.0.0.1.app
+examples/gift-card-tests/.alpackages/Microsoft_Application_28.0.46665.47126.app
+examples/gift-card-tests/.alpackages/Microsoft_Base Application_28.0.46665.47126.app
+examples/gift-card-tests/.alpackages/Microsoft_Business Foundation_28.0.46665.47126.app
+examples/gift-card-tests/.alpackages/Microsoft_System Application_28.0.46665.47126.app
+examples/gift-card-tests/.alpackages/Microsoft_System_28.0.47067.0.app
+extensions/lethal-control/.alpackages/Microsoft_Application_28.0.46665.50383.app
+extensions/lethal-control/.alpackages/Microsoft_Base Application_28.0.46665.48632.app
+extensions/lethal-control/.alpackages/Microsoft_Base Application_28.0.46665.50383.app
+extensions/lethal-control/.alpackages/Microsoft_Business Foundation_28.0.46665.48632.app
+extensions/lethal-control/.alpackages/Microsoft_Business Foundation_28.0.46665.50383.app
+extensions/lethal-control/.alpackages/Microsoft_System Application_28.0.46665.48632.app
+extensions/lethal-control/.alpackages/Microsoft_System Application_28.0.46665.50383.app
+extensions/lethal-control/.alpackages/Microsoft_Test Runner_28.0.46665.48632.app
+extensions/lethal-control/.alpackages/Microsoft_Test Runner_28.0.46665.50383.app
+extensions/lethal-control/.alpackages/System.app
+fixtures/sandbox-app/.alpackages/Microsoft_Application_28.0.46665.47126.app
+fixtures/sandbox-app/.alpackages/Microsoft_Base Application_28.0.46665.47126.app
+fixtures/sandbox-app/.alpackages/Microsoft_Business Foundation_28.0.46665.47126.app
+fixtures/sandbox-app/.alpackages/Microsoft_System Application_28.0.46665.47126.app
+fixtures/sandbox-app/.alpackages/Microsoft_System_28.0.47067.0.app
+fixtures/sandbox-app/.alpackages/lethal-control.app
+fixtures/sandbox-codefree/.alpackages/Microsoft_Application_28.0.46665.47126.app
+fixtures/sandbox-codefree/.alpackages/Microsoft_Base Application_28.0.46665.47126.app
+fixtures/sandbox-codefree/.alpackages/Microsoft_Business Foundation_28.0.46665.47126.app
+fixtures/sandbox-codefree/.alpackages/Microsoft_System Application_28.0.46665.47126.app
+fixtures/sandbox-codefree/.alpackages/Microsoft_System_28.0.47067.0.app
+fixtures/sandbox-codefree-tests/.alpackages/LethAL_LethAL Sandbox CodeFree_1.0.0.1.app
+fixtures/sandbox-codefree-tests/.alpackages/Microsoft_Application_28.0.46665.47126.app
+fixtures/sandbox-codefree-tests/.alpackages/Microsoft_Base Application_28.0.46665.47126.app
+fixtures/sandbox-codefree-tests/.alpackages/Microsoft_Business Foundation_28.0.46665.47126.app
+fixtures/sandbox-codefree-tests/.alpackages/Microsoft_System Application_28.0.46665.47126.app
+fixtures/sandbox-codefree-tests/.alpackages/Microsoft_System_28.0.47067.0.app
+fixtures/sandbox-codefree-tests/.alpackages/Microsoft_Test Runner_28.0.46665.50383.app
+fixtures/sandbox-coverage-probe/.alpackages/Microsoft_Application_28.0.46665.50383.app
+fixtures/sandbox-coverage-probe/.alpackages/Microsoft_Base Application_28.0.46665.48632.app
+fixtures/sandbox-coverage-probe/.alpackages/Microsoft_Base Application_28.0.46665.50383.app
+fixtures/sandbox-coverage-probe/.alpackages/Microsoft_Business Foundation_28.0.46665.48632.app
+fixtures/sandbox-coverage-probe/.alpackages/Microsoft_Business Foundation_28.0.46665.50383.app
+fixtures/sandbox-coverage-probe/.alpackages/Microsoft_System Application_28.0.46665.48632.app
+fixtures/sandbox-coverage-probe/.alpackages/Microsoft_System Application_28.0.46665.50383.app
+fixtures/sandbox-coverage-probe/.alpackages/Microsoft_Test Runner_28.0.46665.48632.app
+fixtures/sandbox-coverage-probe/.alpackages/Microsoft_Test Runner_28.0.46665.50383.app
+fixtures/sandbox-coverage-probe/.alpackages/System.app
+fixtures/sandbox-data/.alpackages/Microsoft_Application_28.0.46665.47126.app
+fixtures/sandbox-data/.alpackages/Microsoft_Base Application_28.0.46665.47126.app
+fixtures/sandbox-data/.alpackages/Microsoft_Business Foundation_28.0.46665.47126.app
+fixtures/sandbox-data/.alpackages/Microsoft_System Application_28.0.46665.47126.app
+fixtures/sandbox-data/.alpackages/Microsoft_System_28.0.47067.0.app
+fixtures/sandbox-data/.alpackages/System.app
+fixtures/sandbox-data/.alpackages/lethal-control.app
+fixtures/sandbox-data-tests/.alpackages/LethAL_LethAL Sandbox Data_1.0.0.13.app
+fixtures/sandbox-data-tests/.alpackages/Microsoft_Application_28.0.46665.47126.app
+fixtures/sandbox-data-tests/.alpackages/Microsoft_Base Application_28.0.46665.47126.app
+fixtures/sandbox-data-tests/.alpackages/Microsoft_Business Foundation_28.0.46665.47126.app
+fixtures/sandbox-data-tests/.alpackages/Microsoft_Library Assert_28.0.46665.49944.app
+fixtures/sandbox-data-tests/.alpackages/Microsoft_System Application_28.0.46665.47126.app
+fixtures/sandbox-data-tests/.alpackages/Microsoft_System_28.0.47067.0.app
+fixtures/sandbox-data-tests/.alpackages/Microsoft_Test Runner_28.0.46665.50383.app
+fixtures/sandbox-data-tests/.alpackages/System.app
+fixtures/sandbox-hang/.alpackages/Microsoft_Application_28.0.46665.47126.app
+fixtures/sandbox-hang/.alpackages/Microsoft_Base Application_28.0.46665.47126.app
+fixtures/sandbox-hang/.alpackages/Microsoft_Business Foundation_28.0.46665.47126.app
+fixtures/sandbox-hang/.alpackages/Microsoft_System Application_28.0.46665.47126.app
+fixtures/sandbox-hang/.alpackages/Microsoft_System_28.0.47067.0.app
+fixtures/sandbox-hang/.alpackages/lethal-control.app
+fixtures/sandbox-hang-tests/.alpackages/LethAL_LethAL Sandbox Hang_1.0.0.4.app
+fixtures/sandbox-hang-tests/.alpackages/Microsoft_Application_28.0.46665.47126.app
+fixtures/sandbox-hang-tests/.alpackages/Microsoft_Base Application_28.0.46665.47126.app
+fixtures/sandbox-hang-tests/.alpackages/Microsoft_Business Foundation_28.0.46665.47126.app
+fixtures/sandbox-hang-tests/.alpackages/Microsoft_System Application_28.0.46665.47126.app
+fixtures/sandbox-hang-tests/.alpackages/Microsoft_System_28.0.47067.0.app
+fixtures/sandbox-hang-tests/.alpackages/Microsoft_Test Runner_28.0.46665.50383.app
+fixtures/sandbox-harden/.alpackages/Microsoft_Application_28.0.46665.47126.app
+fixtures/sandbox-harden/.alpackages/Microsoft_Base Application_28.0.46665.47126.app
+fixtures/sandbox-harden/.alpackages/Microsoft_Business Foundation_28.0.46665.47126.app
+fixtures/sandbox-harden/.alpackages/Microsoft_System Application_28.0.46665.47126.app
+fixtures/sandbox-harden/.alpackages/Microsoft_System_28.0.47067.0.app
+fixtures/sandbox-harden/.alpackages/lethal-control.app
+fixtures/sandbox-harden-answers/.alpackages/LethAL_LethAL Sandbox Harden_1.0.0.1.app
+fixtures/sandbox-harden-answers/.alpackages/Microsoft_Application_28.0.46665.47126.app
+fixtures/sandbox-harden-answers/.alpackages/Microsoft_Base Application_28.0.46665.47126.app
+fixtures/sandbox-harden-answers/.alpackages/Microsoft_Business Foundation_28.0.46665.47126.app
+fixtures/sandbox-harden-answers/.alpackages/Microsoft_System Application_28.0.46665.47126.app
+fixtures/sandbox-harden-answers/.alpackages/Microsoft_System_28.0.47067.0.app
+fixtures/sandbox-harden-answers/.alpackages/Microsoft_Test Runner_28.0.46665.50383.app
+fixtures/sandbox-harden-tests/.alpackages/LethAL_LethAL Sandbox Harden_1.0.0.1.app
+fixtures/sandbox-harden-tests/.alpackages/Microsoft_Application_28.0.46665.47126.app
+fixtures/sandbox-harden-tests/.alpackages/Microsoft_Base Application_28.0.46665.47126.app
+fixtures/sandbox-harden-tests/.alpackages/Microsoft_Business Foundation_28.0.46665.47126.app
+fixtures/sandbox-harden-tests/.alpackages/Microsoft_System Application_28.0.46665.47126.app
+fixtures/sandbox-harden-tests/.alpackages/Microsoft_System_28.0.47067.0.app
+fixtures/sandbox-harden-tests/.alpackages/Microsoft_Test Runner_28.0.46665.50383.app
+fixtures/sandbox-layout/.alpackages/Microsoft_Application_28.0.46665.47126.app
+fixtures/sandbox-layout/.alpackages/Microsoft_Base Application_28.0.46665.47126.app
+fixtures/sandbox-layout/.alpackages/Microsoft_Business Foundation_28.0.46665.47126.app
+fixtures/sandbox-layout/.alpackages/Microsoft_System Application_28.0.46665.47126.app
+fixtures/sandbox-layout/.alpackages/Microsoft_System_28.0.47067.0.app
+fixtures/sandbox-layout-tests/.alpackages/LethAL_LethAL Sandbox Layout_1.0.0.1.app
+fixtures/sandbox-layout-tests/.alpackages/Microsoft_Application_28.0.46665.47126.app
+fixtures/sandbox-layout-tests/.alpackages/Microsoft_Base Application_28.0.46665.47126.app
+fixtures/sandbox-layout-tests/.alpackages/Microsoft_Business Foundation_28.0.46665.47126.app
+fixtures/sandbox-layout-tests/.alpackages/Microsoft_System Application_28.0.46665.47126.app
+fixtures/sandbox-layout-tests/.alpackages/Microsoft_System_28.0.47067.0.app
+fixtures/sandbox-multiobject/.alpackages/Microsoft_Application_28.0.46665.47126.app
+fixtures/sandbox-multiobject/.alpackages/Microsoft_Base Application_28.0.46665.47126.app
+fixtures/sandbox-multiobject/.alpackages/Microsoft_Business Foundation_28.0.46665.47126.app
+fixtures/sandbox-multiobject/.alpackages/Microsoft_System Application_28.0.46665.47126.app
+fixtures/sandbox-multiobject/.alpackages/Microsoft_System_28.0.47067.0.app
+fixtures/sandbox-multiobject-tests/.alpackages/LethAL_LethAL Sandbox MultiObject_1.0.0.1.app
+fixtures/sandbox-multiobject-tests/.alpackages/Microsoft_Application_28.0.46665.47126.app
+fixtures/sandbox-multiobject-tests/.alpackages/Microsoft_Base Application_28.0.46665.47126.app
+fixtures/sandbox-multiobject-tests/.alpackages/Microsoft_Business Foundation_28.0.46665.47126.app
+fixtures/sandbox-multiobject-tests/.alpackages/Microsoft_System Application_28.0.46665.47126.app
+fixtures/sandbox-multiobject-tests/.alpackages/Microsoft_System_28.0.47067.0.app
+fixtures/sandbox-names/.alpackages/Microsoft_Application_28.0.46665.47126.app
+fixtures/sandbox-names/.alpackages/Microsoft_Base Application_28.0.46665.47126.app
+fixtures/sandbox-names/.alpackages/Microsoft_Business Foundation_28.0.46665.47126.app
+fixtures/sandbox-names/.alpackages/Microsoft_System Application_28.0.46665.47126.app
+fixtures/sandbox-names/.alpackages/Microsoft_System_28.0.47067.0.app
+fixtures/sandbox-names-tests/.alpackages/LethAL_LethAL Sandbox Names_1.0.0.0.app
+fixtures/sandbox-names-tests/.alpackages/Microsoft_Application_28.0.46665.47126.app
+fixtures/sandbox-names-tests/.alpackages/Microsoft_Base Application_28.0.46665.47126.app
+fixtures/sandbox-names-tests/.alpackages/Microsoft_Business Foundation_28.0.46665.47126.app
+fixtures/sandbox-names-tests/.alpackages/Microsoft_System Application_28.0.46665.47126.app
+fixtures/sandbox-names-tests/.alpackages/Microsoft_System_28.0.47067.0.app
+fixtures/sandbox-names-tests/.alpackages/Microsoft_Test Runner_28.0.46665.50383.app
+fixtures/sandbox-probes/.alpackages/Microsoft_Application_28.0.46665.47126.app
+fixtures/sandbox-probes/.alpackages/Microsoft_Base Application_28.0.46665.47126.app
+fixtures/sandbox-probes/.alpackages/Microsoft_Business Foundation_28.0.46665.47126.app
+fixtures/sandbox-probes/.alpackages/Microsoft_System Application_28.0.46665.47126.app
+fixtures/sandbox-probes/.alpackages/Microsoft_System_28.0.47067.0.app
+fixtures/sandbox-symbols/.alpackages/Microsoft_Application_28.0.46665.47126.app
+fixtures/sandbox-symbols/.alpackages/Microsoft_Base Application_28.0.46665.47126.app
+fixtures/sandbox-symbols/.alpackages/Microsoft_Business Foundation_28.0.46665.47126.app
+fixtures/sandbox-symbols/.alpackages/Microsoft_System Application_28.0.46665.47126.app
+fixtures/sandbox-symbols/.alpackages/Microsoft_System_28.0.47067.0.app
+fixtures/sandbox-symbols-tests/.alpackages/LethAL_LethAL Sandbox Symbols_1.0.0.1.app
+fixtures/sandbox-symbols-tests/.alpackages/Microsoft_Application_28.0.46665.47126.app
+fixtures/sandbox-symbols-tests/.alpackages/Microsoft_Base Application_28.0.46665.47126.app
+fixtures/sandbox-symbols-tests/.alpackages/Microsoft_Business Foundation_28.0.46665.47126.app
+fixtures/sandbox-symbols-tests/.alpackages/Microsoft_System Application_28.0.46665.47126.app
+fixtures/sandbox-symbols-tests/.alpackages/Microsoft_System_28.0.47067.0.app
+fixtures/sandbox-tests/.alpackages/LethAL_LethAL Sandbox App_1.0.0.2.app
+fixtures/sandbox-tests/.alpackages/Microsoft_Application_28.0.46665.47126.app
+fixtures/sandbox-tests/.alpackages/Microsoft_Base Application_28.0.46665.47126.app
+fixtures/sandbox-tests/.alpackages/Microsoft_Business Foundation_28.0.46665.47126.app
+fixtures/sandbox-tests/.alpackages/Microsoft_System Application_28.0.46665.47126.app
+fixtures/sandbox-tests/.alpackages/Microsoft_System_28.0.47067.0.app
+fixtures/sandbox-wrapped/.alpackages/Microsoft_Application_28.0.46665.47126.app
+fixtures/sandbox-wrapped/.alpackages/Microsoft_Base Application_28.0.46665.47126.app
+fixtures/sandbox-wrapped/.alpackages/Microsoft_Business Foundation_28.0.46665.47126.app
+fixtures/sandbox-wrapped/.alpackages/Microsoft_System Application_28.0.46665.47126.app
+fixtures/sandbox-wrapped/.alpackages/Microsoft_System_28.0.47067.0.app
+fixtures/sandbox-wrapped-tests/.alpackages/LethAL_LethAL Sandbox Wrapped_1.0.0.4.app
+fixtures/sandbox-wrapped-tests/.alpackages/Microsoft_Application_28.0.46665.47126.app
+fixtures/sandbox-wrapped-tests/.alpackages/Microsoft_Base Application_28.0.46665.47126.app
+fixtures/sandbox-wrapped-tests/.alpackages/Microsoft_Business Foundation_28.0.46665.47126.app
+fixtures/sandbox-wrapped-tests/.alpackages/Microsoft_System Application_28.0.46665.47126.app
+fixtures/sandbox-wrapped-tests/.alpackages/Microsoft_System_28.0.47067.0.app
+fixtures/sandbox-wrapped-tests/.alpackages/Microsoft_Test Runner_28.0.46665.50383.app

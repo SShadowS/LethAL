@@ -500,7 +500,7 @@ Cost and recovery:
 | `--resume` / `--resume-run <id>` | *(none)* | Continue an aborted run, reusing verdicts it already measured |
 | `--retry-stranded` | `false` | On resume, retry mutants that left the server stuck. Skipped by default: a mutant that never terminates blocks every mutant behind it |
 | `--allow-large-run` | `false` | Run more than 1,000 mutation sites |
-| `--workers <n>` | `1` | Parallel shards (rejected for the authoritative backend) |
+| `--workers <n>` | `1` | Must be 1; above 1 is refused for every backend |
 
 Environment and output:
 
@@ -568,7 +568,7 @@ That selects which mutants run and cannot change a verdict.
 | `lethal.flip-boolean-literal` | 1.1.0 | `true` → `false` | a flag nobody checks the other setting of |
 | `lethal.negate-conditional` | 1.0.0 | `Cust.Next() = 0` → `Cust.Next() <> 0` | a branch that is taken but never checked |
 | `lethal.negate-guard` | 1.0.0 | `Cust.Get('X')` → `not (Cust.Get('X'))` | a plain `if Rec.Get(...) then` guard nobody tests the other side of |
-| `lethal.toggle-blank-string` | 1.0.0 | `'FOO'` → `''` | a blank check nobody drives with a blank value |
+| `lethal.toggle-blank-string` | 1.1.0 | `'FOO'` → `''` | a blank check nobody drives with a blank value |
 | `lethal.toggle-blank-temporal` | 1.0.0 | `0D` → `17530101D` | a date-is-set check nobody drives with the other setting |
 | `lethal.void-method-call` | 1.1.0 | `DoThing()` → _(deleted)_ | a call whose effect nothing observes |
 | `lethal.return-value` | 1.0.0 | `exit(42)` → `exit(0)` | a return value the caller never asserts |
@@ -706,23 +706,31 @@ a LethAL feature or a mode.
   `campaign` refuse a report of it. Its gate (`itest:alrunner`) is gone; its frozen figures are kept
   on [docs/gates/alrunner.md](docs/gates/alrunner.md).
 - **`al-runner-v3` (the Rust al-runner, R586) is not authoritative.** It is pinned
-  (`alrunner 3.0.0-alpha.2`, `/work/tools/al-runner-v3/current`, `.gated`) and configured in an
+  (`alrunner 3.0.0-alpha.5 (07342060e)` since 2026-10-24, `/work/tools/al-runner-v3/current`,
+  `.gated`, under a per-build pin of its known readings, R586c) and configured in an
   `alRunnerV3` section (`packagesDir` and `bcVersion` required; `coverage`, `path`, `alcPath`,
-  `cacheDir`). Measured on alpha.2, it differs from BC in three ways that change verdicts:
-  - It runs code that does not compile (#5602). LethAL compiles every batch and the test app with
-    alc first, and refuses to run bytes alc did not see.
-  - A statement-form duplicate-key `Insert` does not raise (#5603), so kills through that error
-    read `survived` (7 on the tables fixture).
+  `cacheDir`). Measured on alpha.2 and re-read on alpha.5, it differs from BC in ways that change
+  verdicts:
+  - It runs code that does not compile (#5602; alpha.5 refuses it). LethAL compiles every batch and
+    the test app with alc first, and refuses to run bytes alc did not see.
+  - A statement-form duplicate-key `Insert` does not raise (#5603, #5788). On alpha.2 kills through
+    that error read `survived` (7 on the tables fixture). On alpha.5 v3 refuses it, so those 7 of 406
+    mutants read `error` / `runner-refused` where BC kills them.
   - `Sleep` returns at once and moves v3's virtual AL clock forward by the requested time (#5605):
     a test that reads the clock after a Sleep behaves as on BC, but a wait costs no time and is
-    never stopped. A covering pass that reaches a `Sleep` in the project reads `error`; one in a
-    dependency is not caught.
+    never stopped. On alpha.5 the clock also counts toward the time limit (#5793), so a stop can come
+    early: with a mutant active, a timeout row that returns before its stop reads `error` /
+    `runner-refused`, never scored. A covering pass that reaches a `Sleep` in the project reads
+    `error`; one in a dependency is not caught.
+  - `serve-entries` (opt-in) fails closed on alpha.5 for a dotted test name (#5798, R722).
 
   Selecting one test runs its whole codeunit (#5611), so LethAL makes one call per test codeunit
   and notes a kill made after another covering test of that codeunit. Tests v3 does not run
   (`notRun`, for example `Commit()` under per-test isolation, #5607) are never killed and never
-  survived. Coverage is turned off for a project holding a multi-object or an `#if`-wrapped object
-  file (R602). One-shot only; `--workers > 1`, Windows, `serverMode`, `selectorMode` and
+  survived. Coverage is on for a project holding a multi-object file or a single-wrapper `#if` object
+  file (R602, measured); it is turned off, with a warning naming the file, only for a wrapper shape
+  the index has no rule for (two-arm `#if/#else`, `#elif`, nested, or a multi-object file holding a
+  wrapper). One-shot only; `--workers > 1`, Windows, `serverMode`, `selectorMode` and
   `campaign freeze` are refused by name.
 - **A mutant that never terminates is stepped over, not scored.** AL cannot preempt a running loop,
   so LethAL sees only its own abort and cannot tell it from "the server is still working". Such a

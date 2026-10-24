@@ -886,6 +886,19 @@ function declarationAt(
 }
 
 /**
+ * R720: `declarationAt` for an identifier node. `null` only when the name is PROVABLY undeclared;
+ * `"unknown"` when the engine refuses to resolve it (a swallowed or unindexed member, a global
+ * declared inside `#if`, an every-arm-ambiguous name). `resolveVarRef` answers `null` for both, so
+ * R196's hang check asks this to tell absence from refusal.
+ */
+export function declarationStateAt(
+  node: ALSyntaxNode,
+  ctx: SemanticContext,
+): VarSymbol | null | "unknown" {
+  return declarationAt(stripQuotes(node.text.trim()), node, ctx.symbols);
+}
+
+/**
  * The source text whose declarations are visible at `node`: its own procedure or trigger, plus the
  * object with every OTHER procedure and trigger blanked out (offsets kept). With `node` null, every
  * procedure and trigger is blanked.
@@ -901,13 +914,19 @@ function visibleDeclarationText(node: ALSyntaxNode | null, objectNode: ALSyntaxN
     }
   };
   walk(objectNode);
-  let text = objectNode.text;
+  // R-326: one pass over the original text. The spans are in document order and never overlap, so
+  // this is the same string the old per-span re-slice (quadratic in the object's size) built.
+  const text = objectNode.text;
   const base = objectNode.startIndex;
-  for (const [a, b] of spans.reverse()) {
+  const parts: string[] = [];
+  let at = 0;
+  for (const [a, b] of spans) {
     if (own !== null && own.startIndex === a) continue;
-    text = `${text.slice(0, a - base)}${" ".repeat(b - a)}${text.slice(b - base)}`;
+    parts.push(text.slice(at, a - base), " ".repeat(b - a));
+    at = b - base;
   }
-  return text;
+  parts.push(text.slice(at));
+  return parts.join("");
 }
 
 /**

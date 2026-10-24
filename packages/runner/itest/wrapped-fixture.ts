@@ -78,7 +78,7 @@ export const TWINS: Readonly<Record<string, string>> = {
 export const PAIR_CODES: readonly string[] = ["M0004", "M0005", "M0006"];
 
 export const ARMS_REFUSAL =
-  "coverage refused for Codeunit:78906 (src/WrappedArms.Codeunit.al): its file holds a #if object wrapper of a shape not measured on al-runner (R300). Its mutants read no-coverage.";
+  "coverage refused for Codeunit:78906 (src/WrappedArms.Codeunit.al): its file holds a #if object wrapper of a shape the al-runner coverage index has no rule for (two-arm, #elif, nested, or a multi-object file holding a wrapper; R602). Its mutants read no-coverage.";
 
 export interface WrappedRow {
   readonly code: string;

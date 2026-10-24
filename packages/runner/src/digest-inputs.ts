@@ -15,8 +15,9 @@
  *    have exactly one INSTALLED row at the hashed version. Three roots: the test app's
  *    dependencies; `System` always, plus `Application` (by its id) when any walked app declares
  *    one; and the dependencies of the `LethAL Control` app the server runs (Test Runner, which runs
- *    every test). al-runner keeps Microsoft apps by declared version (`declared`, tagged so it
- *    never equals a bytes fingerprint; R435).
+ *    every test). al-runner-v3 hashes the Microsoft packages in its package folders (`folder`,
+ *    R435); a backend with no package folder keeps declared versions (`declared`). Both are
+ *    tagged, so neither equals a bytes fingerprint.
  *
  * A package that cannot be read throws `DependencyUnreadableError`: the run then records no
  * digests (`test-digests-unavailable`) and verify refuses, never a partial fingerprint.
@@ -250,7 +251,15 @@ export const APPLICATION_APP_ID = "c1335042-3002-4257-bf8a-75c898ccb1b8";
  *   app the server runs (`readControl`, which must report `controlVersion()`): today only Test
  *   Runner, which runs every test.
  * - `declared`: a Microsoft app by id and DECLARED version only (`M <id> <version>`), plus a
- *   `K declared` line so such a fingerprint never equals a bytes one. al-runner's (D6).
+ *   `K declared` line so such a fingerprint never equals a bytes one. The fallback for a backend
+ *   with no package folder (D6).
+ * - `folder` (R435): a Microsoft app is hashed by the bytes of its package in the folders the
+ *   backend is handed (al-runner v3's `--package-cache`), walked like any other dependency, with
+ *   `Application` queued by its id. No System, no control app, no installed check (v3 publishes
+ *   nothing); a Microsoft app missing from the folders is looked up as a `*.Source.zip` in the
+ *   backend's artifact cache (`SourceZipReader`, folders first as v3 prefers them), and refuses by
+ *   name when found in neither. Tagged `K folder`. Chosen
+ *   by `testAppDependencies`; no backend returns it from `microsoftMode`.
  */
 export type MicrosoftMode =
   | {
@@ -260,7 +269,8 @@ export type MicrosoftMode =
       controlVersion(): Promise<string>;
       installed(appId: string): Promise<readonly string[]>;
     }
-  | { readonly kind: "declared" };
+  | { readonly kind: "declared" }
+  | { readonly kind: "folder" };
 
 /** A package's identity and manifest, or `DependencyUnreadableError` naming `what`. */
 function openPackage(
@@ -296,6 +306,7 @@ export async function dependencyFingerprint(
   read: PackageReader,
   microsoft: MicrosoftMode,
   target?: { readonly id: string; readonly inputs: AppInputs },
+  sourceZips?: SourceZipReader,
 ): Promise<string> {
   const lines = new Set<string>();
   const seen = new Set<string>();
@@ -305,7 +316,7 @@ export async function dependencyFingerprint(
     if (i.application !== undefined) {
       lines.add(`M application ${i.application}`);
       // R-385: a real suite reaches Base and System Application through this meta app.
-      if (bytesMode !== undefined)
+      if (microsoft.kind !== "declared")
         queue.push({
           id: APPLICATION_APP_ID,
           name: "Application",
@@ -316,8 +327,10 @@ export async function dependencyFingerprint(
     if (i.platform !== undefined) lines.add(`M platform ${i.platform}`);
     queue.push(...i.dependencies);
   };
-  if (bytesMode === undefined) {
+  if (microsoft.kind === "declared") {
     lines.add("K declared");
+  } else if (bytesMode === undefined) {
+    lines.add("K folder");
   } else {
     // R-385 platform root: System, always. It is not an extension: no installed check.
     const system = openPackage(await bytesMode.readSystem(), 'the platform package "System"');
@@ -361,13 +374,34 @@ export async function dependencyFingerprint(
       enqueue(target.inputs);
       continue;
     }
-    if (bytesMode === undefined && isMicrosoft(dep.publisher)) {
+    if (microsoft.kind === "declared" && isMicrosoft(dep.publisher)) {
       lines.add(`M ${dep.id} ${dep.version}`);
       continue;
     }
     const packages = await read(dep);
+    if (
+      ("unread" in packages || packages.length === 0) &&
+      microsoft.kind === "folder" &&
+      isMicrosoft(dep.publisher)
+    ) {
+      // B1: v3 takes some Microsoft test libraries from its artifact cache, not a package folder.
+      // The package folders were tried first because v3 prefers them when both hold the app.
+      // D1: every zip carrying the id is hashed, as every folder .app is.
+      const zips = (await sourceZips?.(dep)) ?? [];
+      for (const zip of zips) {
+        lines.add(`X ${dep.id} ${sha256(zip.bytes)}`);
+        enqueue(zip.inputs);
+      }
+      if (zips.length > 0) continue;
+    }
     if ("unread" in packages || packages.length === 0) {
-      const cause = "unread" in packages ? ` (${packages.unread})` : "";
+      const base = "unread" in packages ? packages.unread : undefined;
+      const searched =
+        sourceZips !== undefined && microsoft.kind === "folder" && isMicrosoft(dep.publisher)
+          ? `no *.Source.zip for it in ${sourceZips.dir}`
+          : undefined;
+      const parts = [base, searched].filter((x) => x !== undefined);
+      const cause = parts.length > 0 ? ` (${parts.join(", and ")})` : "";
       throw new DependencyUnreadableError(
         `the package of dependency "${dep.name}" (${dep.publisher}, ${dep.id}) could not be read${cause}`,
       );
@@ -473,6 +507,59 @@ export function packageFolderReader(dirs: readonly string[]): PackageReader {
     if (paths === undefined) return { unread: "no package for it in the package folders" };
     return Promise.all(paths.map(async (p) => new Uint8Array(await readFile(p))));
   };
+}
+
+/** B1: the apps v3 keeps as source zips in its artifact cache: each zip's bytes, and the inputs
+ *  read from the `app.json` inside it. Several when the cache holds more than one zip for the
+ *  app (all are hashed); empty when it holds none. `dir` is where it looks, for the refusal. */
+export type SourceZipReader = ((dep: AppDependency) => Promise<readonly SourceZip[]>) & {
+  readonly dir?: string;
+};
+interface SourceZip {
+  readonly bytes: Uint8Array;
+  readonly inputs: AppInputs;
+}
+
+/**
+ * The `*.Source.zip` files in `dir` (v3's `<cache>/artifacts/<build>/apps`), indexed once by the
+ * `id` in each zip's `app.json`. A missing folder or an unreadable zip holds no app. Hashed by the
+ * zip's own bytes; the `.json` sidecar next to it carries no app id.
+ */
+export function sourceZipReader(dir: string): SourceZipReader {
+  let index: Map<string, SourceZip[]> | undefined;
+  const build = async () => {
+    const out = new Map<string, SourceZip[]>();
+    let names: string[];
+    try {
+      names = await readdir(dir);
+    } catch {
+      return out;
+    }
+    for (const n of names.filter((x) => x.toLowerCase().endsWith(".source.zip")).sort()) {
+      try {
+        const bytes = new Uint8Array(await readFile(join(dir, n)));
+        const text = readPackageEntry(Buffer.from(bytes), "app.json")?.toString("utf8");
+        if (text === undefined) continue;
+        const json = JSON.parse(text.replace(/^﻿/, "")) as Record<string, unknown>;
+        const id = str(json.id);
+        if (id !== undefined) {
+          const key = id.toLowerCase();
+          out.set(key, [...(out.get(key) ?? []), { bytes, inputs: appInputsOfAppJson(json) }]);
+        }
+      } catch {
+        // not a readable source zip: it cannot be the dependency either
+      }
+    }
+    return out;
+  };
+  const read: SourceZipReader = Object.assign(
+    async (dep: AppDependency) => {
+      index ??= await build();
+      return index.get(dep.id) ?? [];
+    },
+    { dir },
+  );
+  return read;
 }
 
 /** The app under test, for `dependencyFingerprint`'s `target`: its project's app.json. R205: from

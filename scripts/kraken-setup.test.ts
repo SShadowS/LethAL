@@ -1,4 +1,5 @@
 import { test as bunTest, expect } from "bun:test";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -75,6 +76,78 @@ function makeTar(t: ReturnType<typeof setup>, files: string[]) {
   expect(r.exitCode).toBe(0);
   writeFileSync(tar, readFileSync(join(stage, "fixture-symbols.tar")));
 }
+
+/** The main checkout's env, with an up-to-date control app so its build step does nothing. */
+function mainCheckout(t: ReturnType<typeof setup>): Record<string, string> {
+  const ctl = join(t.wt, "extensions", "lethal-control");
+  mkdirSync(join(ctl, "src"), { recursive: true });
+  writeFileSync(join(ctl, "app.json"), "{}");
+  writeFileSync(join(ctl, "src", "a.al"), "x");
+  const old = new Date(Date.now() - 60_000);
+  utimesSync(join(ctl, "app.json"), old, old);
+  utimesSync(join(ctl, "src", "a.al"), old, old);
+  writeFileSync(join(ctl, "lethal-control.app"), "built\n");
+  return { FAKE_TOP: "/work/x", KRAKEN_MAIN_TOP: "/work/x", LETHAL_ALC_DIR: t.bin };
+}
+const namedCopy = (t: ReturnType<typeof setup>) => {
+  const local = join(t.wt, ".kraken-local");
+  const tar = readFileSync(join(local, "fixture-symbols.tar"));
+  const sha = createHash("sha256").update(tar).digest("hex");
+  return { tar, path: join(local, `fixture-symbols-${sha.slice(0, 12)}.tar`) };
+};
+
+test("R670: each delivered tar is also kept under its sha-named file, and an older one stays", () => {
+  const t = setup();
+  try {
+    const main = mainCheckout(t);
+    makeTar(t, ["fx/a/one.app"]);
+    run(t, main);
+    const first = namedCopy(t);
+    expect(readFileSync(first.path)).toEqual(first.tar);
+    run(t, main); // a re-run with the same tar copies nothing and does not fail
+    makeTar(t, ["fx/a/one.app", "fx/b/two.app"]);
+    run(t, main);
+    const second = namedCopy(t);
+    expect(second.path).not.toBe(first.path);
+    expect(readFileSync(second.path)).toEqual(second.tar);
+    expect(readFileSync(first.path)).toEqual(first.tar);
+  } finally {
+    rmSync(t.root, { recursive: true, force: true });
+  }
+});
+
+test("R670: another worktree gets no sha-named copy (main checkout only)", () => {
+  const t = setup();
+  try {
+    makeTar(t, ["fx/a/one.app"]);
+    run(t, { FAKE_TOP: "/work/other", KRAKEN_MAIN_TOP: "/work/x" });
+    expect(existsSync(join(t.wt, "fx/a/one.app"))).toBe(true);
+    expect(existsSync(namedCopy(t).path)).toBe(false);
+  } finally {
+    rmSync(t.root, { recursive: true, force: true });
+  }
+});
+
+test("R670: with an R614 marker the two gate folders are neither removed nor written", () => {
+  const t = setup();
+  try {
+    const gate = "fixtures/sandbox-tests/.alpackages";
+    const data = "fixtures/sandbox-data-tests/.alpackages";
+    makeTar(t, [`${gate}/old.app`, `${data}/old.app`, "fx/a/one.app"]);
+    run(t); // no marker yet: extracted as any folder
+    expect(existsSync(join(t.wt, gate, "old.app"))).toBe(true);
+    writeFileSync(join(t.wt, ".fixture-symbols.sha256"), `${"b".repeat(64)}\n`);
+    makeTar(t, [`${gate}/new.app`, `${data}/new.app`, "fx/a/one.app", "fx/b/two.app"]);
+    run(t);
+    for (const d of [gate, data]) {
+      expect(existsSync(join(t.wt, d, "old.app"))).toBe(true); // not removed
+      expect(existsSync(join(t.wt, d, "new.app"))).toBe(false); // not written
+    }
+    expect(existsSync(join(t.wt, "fx/b/two.app"))).toBe(true); // every other folder still extracted
+  } finally {
+    rmSync(t.root, { recursive: true, force: true });
+  }
+});
 
 test("clones once then pulls, and removes files a newer tar no longer carries", () => {
   const t = setup();

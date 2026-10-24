@@ -33,7 +33,6 @@ import {
   emitStaticSelector,
 } from "@lethal/schemata";
 import {
-  AlRunnerCoverageFrameError,
   type AlRunnerCoverageIndex,
   alRunnerCoverageFromServer,
   buildAlRunnerCoverageIndex,
@@ -72,6 +71,7 @@ import {
   serveRow,
 } from "./al-runner-v3-entries";
 import { AlRunnerV3UngatedBuildError, checkGated } from "./al-runner-v3-pin";
+import { pinnedDefectCoverage } from "./al-runner-v3-pins";
 import {
   AlRunnerV3CoverageJoinError,
   type SleepIndex,
@@ -92,12 +92,18 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "./backend";
-import { hashAlTree, hashTestDir } from "./baseline-snapshot";
+import {
+  type OtherFile,
+  hashAlTree,
+  hashTestDir,
+  listOtherFiles,
+  otherFilesDrift,
+} from "./baseline-snapshot";
 import { assertManifestObjectsDeclared, readManifestObjectKeys } from "./line-map";
-import { type SpawnFn, defaultSpawn } from "./publisher";
+import { type SpawnFn, absToolPath, defaultSpawn } from "./publisher";
 import { assertResourceSelectorRuntime, installResourceSelector } from "./resource-selector";
 import { TestAppError, symbolPackageId } from "./test-app-publish";
-import { ProjectSymlinkRefusedError } from "./walk";
+import { LINK_EXCUSED_DIRS, ProjectSymlinkRefusedError } from "./walk";
 
 /**
  * `--version` of a v3 build: `alrunner 3.0.0-alpha.2 (91253f2d6)` (alpha.3 renamed it `al-runner`).
@@ -388,6 +394,8 @@ export function v3RowVerdict(
       failureMessage: `${row.message ?? "<no message>"} ${V3_NOT_RUN_SUFFIX}`,
       operation: "completed-accepted",
       runnerRow: "runner-refused",
+      // R609: what the test reached before v3 refused it (a note only; see the orchestrator).
+      ...(coverage !== undefined ? { coverage } : {}),
     };
   }
   // R639 K1(a), r9 §1: a refusal written WITHOUT notRun (a plain `fail` or `pass` whose message
@@ -476,6 +484,9 @@ interface BatchProof {
   readonly activeHashExceptSelector: string;
   readonly activeAppJsonSha256: string;
   readonly testDirHash: string;
+  /** R608: the non-.al files of `active/` and of the test dir (`.alpackages` included). */
+  readonly activeOther: ReadonlyMap<string, OtherFile>;
+  readonly testOther: ReadonlyMap<string, OtherFile>;
   readonly testAppJsonSha256: string;
   readonly deps: readonly DepsEntry[];
   readonly artifactId: string;
@@ -572,12 +583,33 @@ async function fileSha256(path: string): Promise<string> {
   return sha256Of(new Uint8Array(await readFile(path)));
 }
 
+/**
+ * R608: the non-.al files the "other files" proof does NOT bind, because LethAL writes or checks
+ * them itself during a session: both `app.json` files (checked by sha), the resource selector
+ * (checked by its own rule, and rewritten inside a coverage window), and the editor folders v3
+ * never reads. Nothing else of LethAL's lands under `active/` or the test dir: v3's coverage goes
+ * to `<instrumentedDir>/cov`, outside both.
+ */
+const OTHER_FILES_UNBOUND = (rel: string): boolean => {
+  const lower = rel.toLowerCase();
+  return (
+    lower === "app.json" ||
+    lower === `${SELECTOR_RESOURCE_FOLDER}/${SELECTOR_RESOURCE_NAME}`.toLowerCase() ||
+    rel.split("/").some((p) => LINK_EXCUSED_DIRS.includes(p.toLowerCase()))
+  );
+};
+
 async function listDeps(dir: string, withSha: boolean): Promise<DepsEntry[]> {
   const out: DepsEntry[] = [];
   for (const name of (await readdir(dir)).sort()) {
     const p = join(dir, name);
     const s = await stat(p);
-    if (!s.isFile()) continue;
+    // R608: a folder (or anything else that is not a plain file) is not bound by the proof.
+    if (!s.isFile()) {
+      throw new AlRunnerV3UnprovenBatchError(
+        `${p} is not a plain file (a folder?); v3 may read it, and the alc proof does not bind it. Move its packages up into ${dir} or remove it`,
+      );
+    }
     out.push({
       name,
       size: s.size,
@@ -814,11 +846,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // §12: only a gated build runs (the update gate's candidate excepted).
     let gateRecord: string;
     let gatedWarnFacts: Readonly<Record<string, string>> | undefined;
+    let binarySha256: string;
     try {
       const gated = await checkGated(this.cfg.alRunnerPath, reported, {
         ...(this.cfg.candidate === true ? { candidate: true } : {}),
       });
       this.build = { version: reported, binarySha256: gated.binarySha256 };
+      binarySha256 = gated.binarySha256;
       gatedWarnFacts = gated.warnFacts;
       // M1: a session trusts leg C's gate-only facts from this record instead of re-measuring them.
       gateRecord =
@@ -844,7 +878,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     });
     // R639 r9 §2: `unlike-bc` refuses a normal session; a candidate (update-gate) session warns.
     const kind = { candidate: this.cfg.candidate === true };
-    for (const line of v3DefectWarnings(this.contract, kind)) console.warn(line);
+    // R719: a fact the running build's pin already covers (exact fact and outcome) is not warned
+    // about; the session prints one pin line instead, so a pinned build is never fully silent.
+    const covered = pinnedDefectCoverage(this.contract, reported, binarySha256);
+    if (covered !== undefined) console.warn(covered.line);
+    for (const line of v3DefectWarnings(this.contract, { ...kind, muted: covered?.muted }))
+      console.warn(line);
     const refusals = v3ContractRefusals(this.contract, kind);
     if (refusals.length > 0) return { ok: false, details: refusals.join("\n") };
     return {
@@ -907,6 +946,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     return [this.cfg.packagesDir];
   }
 
+  /** R435: v3's artifact cache app folder, where it keeps `*.Source.zip` Microsoft test libraries.
+   *  Absent without a `cacheDir`: v3's own default cache is not named here. */
+  dependencyArtifactAppsDir(): string | undefined {
+    return this.cfg.cacheDir === undefined
+      ? undefined
+      : join(resolve(this.cfg.cacheDir), "artifacts", this.cfg.bcVersion, "apps");
+  }
+
   /** R635 §3 (R517): the daemon's stop, `S = max(1, ceil(max(floor, baseline) / 1000))`. */
   useMutantBudgetFloor(floorMs: number, baselineTimeoutMs: number): void {
     this.dropPair();
@@ -942,6 +989,18 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** The Sleep index size of the deployed batch (the pre-committed figure). */
   sleepIndexSize(): { readonly target: number; readonly test: number } | undefined {
     return this.sleepIndex?.sizes;
+  }
+
+  /** R645: the working directory of every v3 process of the session (absolute, never the caller's). */
+  private scratchCwd(): string {
+    return resolve(this.cfg.instrumentedDir);
+  }
+
+  /** R645: `ALRUNNER_CACHE`, absolute, because v3 now runs in another cwd. */
+  private cacheEnv(): { env: Record<string, string> } | Record<string, never> {
+    return this.cfg.cacheDir !== undefined
+      ? { env: { ALRUNNER_CACHE: resolve(this.cfg.cacheDir) } }
+      : {};
   }
 
   private activeDir(): string {
@@ -1028,6 +1087,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         activeAppJsonSha256: await fileSha256(join(active, "app.json")),
         // R631: the test dir is a USER root: a link refuses rather than hashing a partial tree.
         testDirHash: await hashTestDir(this.cfg.testDir),
+        // R608: the same two folders' non-.al files (resources, `.alpackages`).
+        activeOther: await listOtherFiles(active, OTHER_FILES_UNBOUND, true),
+        testOther: await listOtherFiles(this.cfg.testDir, OTHER_FILES_UNBOUND, true),
         testAppJsonSha256: await fileSha256(join(this.cfg.testDir, "app.json")),
         deps: await listDeps(this.cfg.packagesDir, true),
         artifactId,
@@ -1052,11 +1114,6 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           ? { sourceProjectDir: this.cfg.sourceProjectDir }
           : {}),
       });
-      if (index.multiObjectFiles.length > 0) {
-        throw new AlRunnerCoverageFrameError(
-          `al-runner-v3: coverage is on and the batch holds multi-object file(s) ${index.multiObjectFiles.join(", ")}; v3's frame for them is not measured, so they are not admitted`,
-        );
-      }
       assertManifestObjectsDeclared(
         await readManifestObjectKeys(active),
         index.declared,
@@ -1222,6 +1279,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (activeHashNow !== proof.activeHashExceptSelector) {
       throw new AlRunnerV3UnprovenBatchError(`an .al file in ${dir} changed after the alc proof`);
     }
+    const activeOtherDrift = await linkIsUnproven(
+      otherFilesDrift(dir, OTHER_FILES_UNBOUND, proof.activeOther).then((d) => d ?? ""),
+      `${dir} after the alc proof`,
+    );
+    if (activeOtherDrift !== "") {
+      throw new AlRunnerV3UnprovenBatchError(
+        `a non-.al file in ${dir} changed after the alc proof (${activeOtherDrift})`,
+      );
+    }
     if ((await fileSha256(join(dir, "app.json"))) !== proof.activeAppJsonSha256) {
       throw new AlRunnerV3UnprovenBatchError(`${dir}/app.json changed after the alc proof`);
     }
@@ -1262,6 +1328,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (testDirHashNow !== proof.testDirHash) {
       throw new AlRunnerV3UnprovenBatchError(
         "an .al file in the test dir changed after the alc proof",
+      );
+    }
+    const testOtherDrift = await linkIsUnproven(
+      otherFilesDrift(this.cfg.testDir, OTHER_FILES_UNBOUND, proof.testOther).then((d) => d ?? ""),
+      "the test dir after the alc proof",
+    );
+    if (testOtherDrift !== "") {
+      throw new AlRunnerV3UnprovenBatchError(
+        `a non-.al file in ${this.cfg.testDir} changed after the alc proof (${testOtherDrift})`,
       );
     }
     if ((await fileSha256(join(this.cfg.testDir, "app.json"))) !== proof.testAppJsonSha256) {
@@ -1324,10 +1399,20 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         call.wallMs,
       );
     }
-    const coverage =
-      row.status === "pass" && !row.notRun && this.isBaselineCall()
-        ? this.coverageOf(row.name, call.coverage)
+    // R609: a test v3 REFUSED mid-run (notRun, not a timeout) also has a per-test entry: the code it
+    // reached before the refusal. Recorded so a mutant only it reaches reads as v3's refusal, not a
+    // suite gap. A refusal before the test starts has no entry: no coverage, never the §6 throw.
+    const refusedMidRun =
+      row.notRun &&
+      row.status === "error" &&
+      !(row.message !== undefined && V3_TIMEOUT_MESSAGE.test(row.message));
+    let coverage =
+      (row.status === "pass" && !row.notRun) || refusedMidRun
+        ? this.isBaselineCall()
+          ? this.coverageOf(row.name, call.coverage)
+          : undefined
         : undefined;
+    if (refusedMidRun && coverage === "unavailable") coverage = undefined;
     if (coverage === "unavailable") {
       // A contract failure on an unmutated call: never read as "covered nothing" (which would
       // make its mutants no-coverage), so the session stops.
@@ -1337,6 +1422,58 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     const verdict = v3RowVerdict(ref, row, call.stopSeconds, call.wallMs, coverage);
     if (this.lastActivated === null) return verdict;
+    // R586c (B2): alpha.5 counts a Sleep toward --test-timeout-secs on a VIRTUAL clock, so a test it
+    // "stopped at 3 s" returned after a few ms. A genuine CPU stop has a wall time of at least the
+    // stop (n x 1000 ms). Under a mutant, an earlier one is not a real timeout and must not kill:
+    // error, never scored. Here (mutant active), not in `v3RowVerdict`: baselines keep reading such
+    // a row as a timeout (X (d)'s 600 s Sleep siblings, R678's baseline symmetry).
+    if (
+      verdict.outcome === "timeout" &&
+      typeof row.durationMs === "number" &&
+      row.durationMs < (verdict.reportedStopMs ?? 0)
+    )
+      return {
+        ref,
+        outcome: "error",
+        durationMs: call.wallMs,
+        failureMessage: `${row.message ?? ""} [al-runner v3: stopped on v3's virtual clock; BC's real wait unknown; never scored]`,
+        operation: "completed-accepted",
+        runnerRow: "runner-refused",
+      };
+    // R-435 (upstream #5776): v3 marks a later FAILURE after an unfinished test as not trusted, but
+    // not a later TIMEOUT. A timeout after a row that was refused or stopped (or holds the refusal
+    // marker) may come from that row's partial state. Outside entries mode a call runs the whole
+    // codeunit, so the cold confirm runs the sequence unmutated (the refused row leaves the same
+    // state but the test passes) and R577's re-run repeats it: neither tells the refusal's state
+    // from the mutant. Never `runner-refused`: R639 must not go on past it.
+    if (verdict.outcome === "timeout") {
+      const earlier = call.rows
+        .slice(0, call.rows.indexOf(row))
+        .filter((r) => r.notRun || isV3RefusalText(r.message));
+      if (earlier.length > 0)
+        return {
+          ref,
+          outcome: "error",
+          durationMs: call.wallMs,
+          failureMessage: `${row.message ?? ""} [al-runner v3: a timeout after ${earlier.map((r) => r.method).join(", ")} refused or stopped earlier in the same call is not trusted; never scored (R-435)]`,
+          operation: "completed-accepted",
+          runnerRow: "runner-test-error",
+        };
+    }
+    // R639: v3's refusal that follows a timeout, where that timeout is the call's FIRST not-run row.
+    // The refused row's cause is the stop's cascade, so the covering loop may go on to the next
+    // test (the row it asks for is the row it would get were that test first in the order). A
+    // refusal after an earlier non-timeout refusal is not flagged: that partial state is unknown.
+    if (verdict.runnerRow === "runner-refused" && row.notRun) {
+      const first = call.rows.findIndex((r) => r.notRun);
+      const stop = call.rows[first];
+      if (
+        stop !== undefined &&
+        first < call.rows.indexOf(row) &&
+        V3_TIMEOUT_MESSAGE.test(stop.message ?? "")
+      )
+        return { ...verdict, refusedAfterStop: stop.method };
+    }
     // A covering pass under a mutant: §6.
     // §6 on RAW lines whatever the session's coverage mode (none, or refused for a multi-object
     // or wrapped file): every call requested --coverage-json (`v3CallArgv`).
@@ -1487,13 +1624,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const covPath = join(covDir, `call-${this.callSeq}.json`);
     await rm(covPath, { force: true });
     const argv = v3CallArgv({
-      alRunnerPath: this.cfg.alRunnerPath,
+      alRunnerPath: absToolPath(this.cfg.alRunnerPath),
       codeunitId: id,
       stopSeconds,
       packagesDir: resolve(this.cfg.packagesDir),
       bcVersion: this.cfg.bcVersion,
       symbols: this.cfg.preprocessorSymbols ?? [],
-      coverageJson: covPath,
+      coverageJson: resolve(covPath),
       // I-1: the same real paths the Sleep index is keyed by.
       activeDir: this.realDirs?.active ?? resolve(this.activeDir()),
       testDir: this.realDirs?.test ?? resolve(this.cfg.testDir),
@@ -1513,7 +1650,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     try {
       res = await this.spawn(argv, {
         signal: controller.signal,
-        ...(this.cfg.cacheDir !== undefined ? { env: { ALRUNNER_CACHE: this.cfg.cacheDir } } : {}),
+        // R645: v3 writes coverage.cobertura.xml into its cwd; never the caller's.
+        cwd: this.scratchCwd(),
+        ...this.cacheEnv(),
       });
     } catch (err) {
       clearTimeout(timer);
@@ -1692,12 +1831,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       );
     }
     const server = new AlRunnerServer(
-      this.cfg.alRunnerPath,
-      (argv) =>
-        this.serverSpawn(
-          argv,
-          this.cfg.cacheDir !== undefined ? { env: { ALRUNNER_CACHE: this.cfg.cacheDir } } : {},
-        ),
+      absToolPath(this.cfg.alRunnerPath),
+      (argv) => this.serverSpawn(argv, { cwd: this.scratchCwd(), ...this.cacheEnv() }),
       this.cfg.preprocessorSymbols ?? [],
       "serve",
     );

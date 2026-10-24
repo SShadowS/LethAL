@@ -937,6 +937,95 @@ describe("planVerify", () => {
     expect(keys((await plan(closed)).newTests)).toEqual([]);
   });
 
+  // R600: the recorded parts' closed-world tag chooses whether verify asks the guard. Tag `none`
+  // (an env-tool run, an open-world run) is digested open without asking; `public` is asked.
+  describe("R600: the recorded closed-world tag chooses the digests", () => {
+    const CLOSED = { public: true, internal: false };
+    const EDIT = "        Message('x');\n";
+
+    /** Two test codeunits recorded under `cw` (parts included). */
+    async function recorded(cw: { public: boolean; internal: boolean } | undefined) {
+      const dir = testDir([
+        { id: 50100, name: "Old", methods: ["A"] },
+        { id: 50101, name: "Two", methods: ["B"] },
+      ]);
+      await initParser();
+      const model = buildTestAppModel(await readTestAppSources(dir));
+      const rec = testDigestsOfModel(model, await discoverTests(dir), {
+        ...INPUTS,
+        ...(cw !== undefined ? { closedWorld: cw } : {}),
+      });
+      return { dir, rec };
+    }
+
+    function plan(
+      dir: string,
+      rec: { digests: Record<string, string>; parts: unknown },
+      guard: { calls: number; answer: { public: boolean; internal: boolean } },
+      over: { maxNewTests?: number; parts?: unknown } = {},
+    ) {
+      return planVerify({
+        coverage: "procedure",
+        source: source(project(), [{ mutantCode: "M0001", coveringTests: ["Old.A"] }]),
+        manifest: manifest([entry("M0001")]),
+        sourceBaseline: [row(50100, "Old", "A"), row(50101, "Two", "B")],
+        sourceTestDigests: rec.digests,
+        sourceTestDigestParts: "parts" in over ? over.parts : rec.parts,
+        dependencies: DEPS,
+        testDir: dir,
+        closedWorld: async () => {
+          guard.calls++;
+          return guard.answer;
+        },
+        ...(over.maxNewTests !== undefined ? { maxNewTests: over.maxNewTests } : {}),
+      });
+    }
+
+    test("tag none: the guard is never asked; unchanged tests are not new, an edited and an added test are", async () => {
+      const { dir, rec } = await recorded(undefined);
+      expect((rec.parts as { closedWorld?: string }).closedWorld ?? "none").toBe("none");
+      const guard = { calls: 0, answer: CLOSED };
+      expect(keys((await plan(dir, rec, guard)).newTests)).toEqual([]);
+      writeFileSync(
+        join(dir, "50101.Codeunit.al"),
+        `codeunit 50101 "Two"\n{\n    Subtype = Test;\n\n    [Test]\n    procedure B()\n    begin\n${EDIT}    end;\n}\n`,
+      );
+      writeFileSync(
+        join(dir, "50102.Codeunit.al"),
+        'codeunit 50102 "Added"\n{\n    Subtype = Test;\n\n    [Test]\n    procedure C()\n    begin\n    end;\n}\n',
+      );
+      expect(keys((await plan(dir, rec, guard)).newTests)).toEqual(["50101::B", "50102::C"]);
+      expect(guard.calls).toBe(0);
+    });
+
+    test("tag public: the guard is asked once and, answering public, nothing is new", async () => {
+      const { dir, rec } = await recorded(CLOSED);
+      const guard = { calls: 0, answer: CLOSED };
+      expect(keys((await plan(dir, rec, guard)).newTests)).toEqual([]);
+      expect(guard.calls).toBe(1);
+    });
+
+    test("tag public, guard now open: every test is new, and the refusal names closed-world", async () => {
+      const { dir, rec } = await recorded(CLOSED);
+      const guard = { calls: 0, answer: { public: false, internal: false } };
+      expect(keys((await plan(dir, rec, guard)).newTests)).toEqual(["50100::A", "50101::B"]);
+      const e = await planRefusal(plan(dir, rec, guard, { maxNewTests: 0 }));
+      expect(e.reason).toBe("too-many-new-tests");
+      expect(e.detail).toContain("closed-world:");
+    });
+
+    test("an unknown tag throws, never read as open; no parts at all still asks the guard", async () => {
+      const { dir, rec } = await recorded(undefined);
+      const guard = { calls: 0, answer: CLOSED };
+      const bad = { ...(rec.parts as object), closedWorld: "bogus" };
+      await expect(plan(dir, rec, guard, { parts: bad })).rejects.toThrow("bogus");
+      expect(guard.calls).toBe(0);
+      const none = await plan(dir, rec, guard, { parts: null });
+      expect(keys(none.newTests)).toEqual(["50100::A", "50101::B"]);
+      expect(guard.calls).toBe(1);
+    });
+  });
+
   /** One survivor covered by `T.M`, planned against the given baseline and test codeunits. */
   function coveringPlan(baseline: ReturnType<typeof row>[], codeunits: readonly Codeunit[]) {
     return planUnchanged({
@@ -1764,6 +1853,8 @@ type Seed = {
   readonly carried?: boolean;
   /** No store row: the source run stopped before scoring it. */
   readonly unrecorded?: boolean;
+  /** R734: a row with no manifest entry (the mutant was isolated out of a redeployed artifact). */
+  readonly notInManifest?: boolean;
 };
 
 function seed(
@@ -1773,9 +1864,10 @@ function seed(
   over: Partial<MutantManifestEntry> & {
     readonly carried?: boolean;
     readonly unrecorded?: boolean;
+    readonly notInManifest?: boolean;
   } = {},
 ): Seed {
-  const { carried, unrecorded, ...rest } = over;
+  const { carried, unrecorded, notInManifest, ...rest } = over;
   return {
     entry: entry(mutantId, {
       startLine: Number(mutantId.slice(1)),
@@ -1785,6 +1877,7 @@ function seed(
     verdict,
     ...(carried !== undefined ? { carried } : {}),
     ...(unrecorded !== undefined ? { unrecorded } : {}),
+    ...(notInManifest !== undefined ? { notInManifest } : {}),
   };
 }
 
@@ -1796,12 +1889,14 @@ function installedRun(
   projectPath = "P",
   sourceSha256 = "5".repeat(64),
   coveringTests: readonly string[] = ["T.M"],
+  isolatedOut?: MutantManifest["isolatedOut"],
 ): number {
   const dir = scratch("lethal-verify-gap-");
   const manifest: MutantManifest = {
     selectorIds: { selectorId: 1, controlId: 2, tableId: 3 },
     artifactId,
-    mutants: seeds.map((s) => s.entry),
+    mutants: seeds.filter((s) => s.notInManifest !== true).map((s) => s.entry),
+    ...(isolatedOut !== undefined ? { isolatedOut } : {}),
   };
   const manifestText = JSON.stringify(manifest);
   writeFileSync(join(dir, "mutant-manifest.json"), manifestText);
@@ -2017,6 +2112,57 @@ describe("C02-09: gap ids", () => {
       expect((e as Error).message).toContain("(a corrupt store)");
     }
     store.close();
+  });
+
+  // R734 A5: a mutant isolated out of a redeployed artifact has an `error` row and no manifest entry.
+  // Only the manifest's own hash-covered `isolatedOut` list excuses that, and only for an `error`.
+  describe("R734: rows of mutants isolated out of the artifact", () => {
+    const out = (id: string) => ({
+      mutantId: id,
+      file: "F.al",
+      startIndex: 1,
+      endIndex: 2,
+      operatorName: "op",
+    });
+    test("a listed `error` row is not a corrupt store; the gap still expands", async () => {
+      const store = new ResultsStore(":memory:");
+      installedRun(
+        store,
+        A1,
+        [seed("M0001", GA, "survived"), seed("M0002", GA, "error", { notInManifest: true })],
+        "P",
+        "5".repeat(64),
+        ["T.M"],
+        [out("M0002")],
+      );
+      expect(idsOf(await expandGapIds(store, parseVerifyRequest(A1, [GA])))).toEqual(["0/M0001"]);
+      store.close();
+    });
+    test("an unlisted manifest-less row is still a corrupt store", async () => {
+      const store = new ResultsStore(":memory:");
+      installedRun(store, A1, [
+        seed("M0001", GA, "survived"),
+        seed("M0002", GA, "error", { notInManifest: true }),
+      ]);
+      const e = await expandGapIds(store, parseVerifyRequest(A1, [GA])).catch((x: unknown) => x);
+      expect((e as Error).message).toContain("(a corrupt store)");
+      store.close();
+    });
+    test("a listed id with a verdict other than `error` is still a corrupt store", async () => {
+      const store = new ResultsStore(":memory:");
+      installedRun(
+        store,
+        A1,
+        [seed("M0001", GA, "survived"), seed("M0002", GA, "survived", { notInManifest: true })],
+        "P",
+        "5".repeat(64),
+        ["T.M"],
+        [out("M0002")],
+      );
+      const e = await expandGapIds(store, parseVerifyRequest(A1, [GA])).catch((x: unknown) => x);
+      expect((e as Error).message).toContain("(a corrupt store)");
+      store.close();
+    });
   });
 
   test("on a FINISHED run with every row recorded, a gap still expands", async () => {

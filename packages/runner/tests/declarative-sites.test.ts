@@ -152,6 +152,49 @@ describe("generateMutationSet — declarative sites are counted, not just warned
   });
 });
 
+/**
+ * R215. The grammar shapes an enum's `Implementation = "IFace" = "Impl";` as a comparison. The
+ * guard in `generateMutationSet` drops it; this goes through that public path (never
+ * `writeInstrumentedProject` with raw operator output, which bypasses the guard and misled R215).
+ */
+const ENUM_WITH_IMPLEMENTATION_AL = `enum 79301 "Kind"
+{
+    value(1; X)
+    {
+        Implementation = "IFace" = "Impl";
+    }
+}
+`;
+
+describe("generateMutationSet — R215: an enum Implementation mapping is dropped, not mutated", () => {
+  test("it yields no mutant and is tallied and named; an ordinary comparison still does", async () => {
+    await withProject(
+      {
+        "Al/Codeunit/Logic.Codeunit.al": CODEUNIT_AL.replace("N > 10", "N = 10"),
+        "Al/Enum/Kind.Enum.al": ENUM_WITH_IMPLEMENTATION_AL,
+      },
+      async (projectDir) => {
+        const { files, declarativeSites } = await generateMutationSet(projectDir);
+        const norm = (p: string) => p.replaceAll("\\", "/");
+        const enumFile = files.find((f) => norm(f.path) === "Al/Enum/Kind.Enum.al");
+        expect(enumFile?.specs ?? []).toEqual([]);
+        // Measured 2026-10-24 (native parser): the mapping is an `implementation_value`, not a
+        // comparison, so nothing matches and the guard has nothing to drop. If the grammar shapes
+        // it as a comparison again, the guard must tally and name it (`enum_declaration`, 1 site).
+        const enumRows = declarativeSites.filter((d) => norm(d.file) === "Al/Enum/Kind.Enum.al");
+        for (const d of enumRows) {
+          expect(d.kinds).toBe("enum_declaration");
+          expect(d.sites).toBe(1);
+        }
+        expect(declarativeSites.length).toBeLessThanOrEqual(1);
+        // Control: the executable comparison keeps its negate-conditional mutant.
+        const logic = files.find((f) => norm(f.path) === "Al/Codeunit/Logic.Codeunit.al");
+        expect(logic?.specs.map((s) => s.operatorName)).toContain("lethal.negate-conditional");
+      },
+    );
+  });
+});
+
 const STATICS: FoldStatics = {
   caps: {
     kind: "bcdev",

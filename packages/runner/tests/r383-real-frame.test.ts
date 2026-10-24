@@ -40,10 +40,7 @@ async function layout(): Promise<{ root: string; index: AlRunnerCoverageIndex }>
   const bundle = join(root, "inst", "active");
   await mkdir(bundle, { recursive: true });
   await copyFile(join(DIR, PAIR), join(bundle, PAIR));
-  const index = await buildAlRunnerCoverageIndex(bundle, {
-    admitMultiObjectFiles: true,
-    labelBase: root,
-  });
+  const index = await buildAlRunnerCoverageIndex(bundle, { labelBase: root });
   return { root, index };
 }
 const show = (entries: readonly { objectId: number; procedure?: string; line?: number }[]) =>
@@ -88,7 +85,7 @@ describe("R383/R407: c39ad5de's real frame (negative evidence)", () => {
       })),
     };
     expect(() => alRunnerCoverageFromServer(relabelled, index)).toThrow(
-      `${PAIR}:16 "Reached", but that line is inside "Never", in an admitted multi-object file`,
+      `${PAIR}:16 "Reached", but that line is inside "Never", in a multi-object file`,
     );
   });
 

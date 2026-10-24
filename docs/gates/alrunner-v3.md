@@ -40,18 +40,26 @@ The legs:
   false kill. A failure caused by a timed-out sibling's state must come back as v3's not-trusted `notRun` row,
   never as a plain `fail`.
   Since R612 (plan `docs/superpowers/plans/2026-10-22-r612-v3-serve-keep-rule.md`), 1 is a WARN fact
-  (`V3_WARN_FACTS`): `serve-keep-reasons` runs one `alrunner serve` daemon over five invented tests and checks each
-  row against its entry of `V3_SERVE_SAFE_REFUSALS`, the reasons after which the v3 serve rule keeps the daemon.
-  It must read `matches` on alpha.2, but any other reading (`diverged`, `unmeasurable`) only prints
+  (`V3_WARN_FACTS`): `serve-keep-reasons` runs one `alrunner serve` daemon over four codeunits (five tests) and checks each
+  row against its entry of `V3_SERVE_SAFE_REFUSALS` (four entries: http, commit, cascade, onrun-failed), the reasons
+  after which the v3 serve rule keeps the daemon. Since R705, http and cascade (cascade only for the message
+  `later`) are also accepted as a plain trusted fail (a #5602-fixed build), and `measured` says which. no-callee
+  left with R705: a fixed build runs nothing in a request that does not compile. In serve-entries, a warm-up whose
+  every entry refuses with one identical no-callee text now throws `al-runner-v3-entries-batch-refused`: the safe
+  direction, opt-in and rare.
+  It must read `matches` on alpha.2 and alpha.5, but any other reading (`diverged`, `unmeasurable`) only prints
   `al-runner-v3-serve-keep-reason-moved` in the log and the receipt `lines`: it is never a `gate-fail` or a `held`,
   because a moved reason only makes the daemon close (slower, never wrong). It is gate-only, as `timeout-is-cpu`
   is: the receipt's `warnFacts` carries the reading, the update script copies it into `.gated`, and a session
   shows that reading (`unmeasurable` when `.gated` predates R612), never a `matches` it did not see.
   Since r9 (`docs/superpowers/specs/2026-10-22-r586-alrunner-v3-precommitment-r9-bc-readings.md`, 4995b8f6, R639),
   two texts measured on bc1 (`docs/measurements/r639/`) are pinned byte for byte, `BC_HTTP_INTERNAL_TEXT` and
-  `BC_END_OF_TEST_TEXT`, and `r639-bc-readings.test.ts` binds them to that file:
-  - `refusal-row-shape` (#5608) is a DEFECT fact (9 in all). `gone` is exactly bc1's reading. A plain fail with
-    any other text reads `unlike-bc`: `gate-fail` in leg C ("#5700"), a refusal by name in a normal session, and
+  `BC_END_OF_TEST_TEXT`, and `r639-bc-readings.test.ts` binds them to that file. R705 adds `BC_HTTP_HUB_TEXT`:
+  - `refusal-row-shape` (#5608) is a DEFECT fact (9 in all). `gone` is exactly the test runner HUB's reading
+    (`BC_HTTP_HUB_TEXT`, "...the connecting endpoint violates security requirements...", code `HttpRequest:Security`;
+    owner ruling 2026-10-24, R712, measured by R706 in `docs/measurements/r706/`). BC's web-service-path text
+    (`BC_HTTP_INTERNAL_TEXT`, "...blocked by the runtime...") is not the oracle. A plain fail with
+    any other text, that one included, reads `unlike-bc`: `gate-fail` in leg C ("#5700"), a refusal by name in a normal session, and
     only a warning (`al-runner-v3-defect-unlike-bc`) in the update gate's own candidate legs, printed in every
     leg's receipt lines that ran under it.
   - The refusal row shape is now probed by the contract fact `refusal-row-shape-public` (codeunit 50654,
@@ -131,15 +139,33 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
   - **K is outside `V3_GATE_LEGS`, by the orchestrator's ruling**, because the CLI's config cannot name a candidate build. Two conditions hold it, both pinned in `tests/r654-v3-legs.test.ts`:
     1. On a candidate (`LETHAL_ALRUNNER_V3_CANDIDATE=1`), K does not run. Its value in the itest's leg summary is `"K":"skipped (candidate build)"`, and its reason goes into the log and the receipt lines. It is never silent.
     2. On a gated build, a K that is anything but a pass FAILS the itest, a skip included (`v3ItestFailures`). So K can never become an always-skipped leg.
+  - **R586c: K can run on a candidate** with `LETHAL_ITEST_V3_K_ON_CANDIDATE=1` (any other value is refused by name). The itest then passes the test-only `alRunnerCandidate` seam to `buildBackend` (no CLI flag, no config key; `alRunnerV3.candidate` is rejected). With the variable set, a K skip on a candidate fails the itest. K is still outside `V3_GATE_LEGS`, and its result is read from the log, not the receipt.
 
-  The update gate's receipt outcome still reads only `V3_GATE_LEGS`.
+  The update gate's receipt outcome reads only `V3_GATE_LEGS` (which now holds MO and WR, below).
+
+### Legs MO and WR (R602)
+
+Pre-committed on master (`docs/superpowers/specs/2026-10-24-r602-alrunner-v3-mo-wr-precommitment.md`, c2f67f0a) and recorded once under R332 on 2026-10-24 on the pin (alpha.2 91253f2d6), equal to the pre-commitment per mutant (MO 12/12 rows, WR 98/98). The gate REFUSES to start MO or WR without their baselines (R332). Both are default legs AND in `V3_GATE_LEGS` (orchestrator ruling 2026-10-24): they are the only measurement of v3's per-object frame, so a build that breaks it must not move `current`. Inside these two legs an `AlRunnerCoverageFrameError` is `gate-fail` (`legOutcomeOfError(err, leg)`); in every other leg it stays `infra-fail`. `scripts/al-runner-v3-update.ts` needs no change: it judges the receipt by `gateOutcome` over `V3_GATE_LEGS`, so an older receipt without MO and WR reads `infra-fail` ("missing legs MO,WR").
+
+Both legs are one-shot only (the measurement was one-shot): `LETHAL_ITEST_V3_TRANSPORT=serve-entries` makes them fail by name, `al-runner-v3-itest-leg-transport-refused`.
+
+Both run as the other legs do (`runSession`, the v3 backend, one-shot, coverage `"al-runner"`, a packages folder of the Microsoft apps), not through the CLI guard. Each makes a **durable killer check** before it compares with its baseline: every mutant that `--mode none` kills (a constant in `alrunner-v3-legs.ts`, `V3_MO_KILLERS` and `V3_WR_KILLERS`, built from the measured `none` runs) must be killed by the same test. The constants are code, so a re-record of a baseline cannot absorb a lost kill.
+
+- **MO** (R383's fixture): `fixtures/sandbox-multiobject`. `MultiPair.Codeunit.al` holds two codeunits, so the index places the second object's lines by position.
+  - 6 / 1 / 5 over 12, as pre-committed (`al-runner-v3.multiobject.baseline.json`): the 5 `no-coverage` are in procedures no test calls (`Never`, `Unreached`).
+  - Killer constant: 6 kills.
+- **WR** (R-300b's fixture): `fixtures/sandbox-wrapped` whole, config symbol `WRAPDEF`, so the two-arm control `WrappedArms` is in it.
+  - 58 / 37 / 3 over 98, as pre-committed (`al-runner-v3.wrapped.baseline.json`). The 3 `no-coverage` are the `WrappedArms` rows, each with the refusal sentence (`ARMS_REFUSAL`); that by-name refusal costs two kills `none` finds (M0001, M0003), named, not hidden.
+  - Killer constant: 58 kills (`none` kills 60, minus those two).
+  - Six `[v3-codeunit-state-possible]` notes are pre-committed (`V3_WR_STATE_NOTES`: M0071, M0072, M0078, M0085, M0086, M0092; BandYRun and BandYRunTwin after BandYDirect and BandYDirectTwin in one codeunit call, #5611). They are kills that stay kills. The leg asserts that exact set; MO and every other leg assert none.
+  - As a whole the project is OFF from the CLI (the two-arm file), with the warning naming `WrappedArms`' file; the leg measures the index, which the CLI guard does not reach.
 
 **Legs ruled out:**
 - **The server and resource variants.** v3 one-shot uses the static selector, and serve-entries (R635) is opt-in. S3 pins that the resource selector is refused on one-shot.
-- **Multi-object and wrapped.** v3 turns coverage off there by design (R602).
 - **Names.** Quoted test names are unselectable on v3 (#5572), and N1 covers the fixture.
 
 **Recording (R332).** Run `LETHAL_ITEST_ALRUNNER_V3=1 LETHAL_ITEST_V3_LEGS=L1,Y-A,Y-B LETHAL_ITEST_RECORD_BASELINE=al-runner-v3.layout.baseline.json,al-runner-v3.symbols-lethala.baseline.json,al-runner-v3.symbols-lethalb.baseline.json bun run itest:alrunner-v3`. It exits 3 by design. Then confirm with every leg.
+- **MO and WR (R602)** are recorded the same way, once, after their pre-commitment is on master: `LETHAL_ITEST_ALRUNNER_V3=1 LETHAL_ITEST_V3_LEGS=MO,WR LETHAL_ITEST_RECORD_BASELINE=al-runner-v3.multiobject.baseline.json,al-runner-v3.wrapped.baseline.json bun run itest:alrunner-v3`. The killer check and the counts run before anything is written.
 - **Recorded 2026-10-22** on alpha.2 (91253f2d6), once, by that command (`/coord/handoff/R-654/s2-record.log`, exit 3). The figures are 7 / 3 / 0, 5 / 4 / 0 and 5 / 4 / 0 as pre-committed. Each file is identical per mutant to its .NET al-runner twin (`al-runner.layout`, `-symbols-lethala`, `-symbols-lethalb`; 0 differences).
 - **When a file is missing,** `preflightGateBaseline` refuses the WHOLE run, before any leg starts, and names the record command. This happens whenever the run selects the leg whose baseline is missing (L1, Y-A or Y-B; by default all three are selected). It does not skip just that leg.
 - **A record run never exits 3 when a leg that it did not record failed.** It exits 1 and names the leg (`v3RecordRunFailures`). A table mismatch writes no file.
@@ -148,12 +174,27 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
 
 ## The pin and the update gate
 
-- The binary is pinned at `/work/tools/al-runner-v3/3.0.0-alpha.2-91253f2d6/`, and `current` points at it. Its
+- The binary is pinned at `/work/tools/al-runner-v3/3.0.0-alpha.5-07342060e/` (since 2026-10-24; alpha.2 was
+  `current` before), and `current` points at it. Its
   `.gated` file names the build, its sha256 and the LethAL commit that gated it. The backend refuses any build that
   `.gated` does not name (`AlRunnerV3UngatedBuildError`), unless `LETHAL_ALRUNNER_V3_CANDIDATE=1`.
 - The pin is never moved by hand. `bun scripts/al-runner-v3-update.ts` gates newer `v3.0.0-alpha.N` releases, and
   `--edge` gates the daily `edge` release by download. The version check accepts SemVer build metadata
   (`al-runner 3.0.0-alpha.4+edge.20261022 (57f1e4f98)`, R639 F1).
+- **Candidate order (R586d): newest first.** The alpha path lists the releases above `current`'s alpha number and
+  gates the NEWEST one first, with a full gate. A `pass` makes it `current` and ends the run: no older candidate is
+  downloaded or gated. Anything else (`gate-fail`, `held`, `infra-fail`, or a skip because `failed/<tag>@<this
+  commit>` exists) sends the run to the next older candidate, down to but not including `current`. If none passes,
+  `current` stays, and each candidate has its own record (`failed/`, `held/`, `infra/`). Versions compare by the
+  alpha number as a number, so alpha.10 is newer than alpha.9. `--edge` is unchanged: one candidate, no fallback.
+  Before R586d the order was oldest first, and a day with alpha.3 and alpha.4 both failing cost two gates before
+  alpha.5 ran.
+- **No longer measured (R586d).** Once a newer release passes, the older releases skipped that day get no daily
+  verdict. Their last record stays in `failed/` (or `held/`), if it was ever gated, and is not refreshed. A release
+  skipped that day is gated again only on a later day when every newer candidate fails to pass and it is still
+  above `current`; once a newer release is `current` it is never a candidate again, so its record is final. When
+  an older candidate passes after a newer one's `infra-fail`, the log says so (`<tag>: passed after <newer tag> was
+  not judged (infra-fail) today`): the newer release has no verdict yet.
 - `--edge-rejudge <edge sha>` (R639) re-gates a KEPT edge binary at `.gated`'s current commit, never a new
   download, and never reads or writes `edge.last-seen`.
   - It refuses by name (`al-runner-v3-edge-rejudge-refused`) when `failed/edge-<sha>@<commit>` exists at all, or a
@@ -202,9 +243,49 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
   the outcome on each gate run: `<time> <tag>: fixture .alpackages: extracted|verified|marked`.
 - Every leg selection needs the two fixture folders or the tar, CDO-only legs (`D1`, `D1c`) included: the itest
   prepares them before any leg.
-- Re-pinning the symbol tar (a new `FIXTURE_SYMBOLS_TAR_SHA256`) refuses the gate worktree once, because its
-  marker names the old pin. Before the `--regate`, delete `/work/lethal-wt/al-runner-v3-gate`'s two folders and
-  its `.fixture-symbols.sha256`; the run then extracts them from the new tar.
+- Re-pinning the symbol tar (a new `FIXTURE_SYMBOLS_TAR_SHA256`) refuses EVERY worktree whose two folders came
+  from the old tar, not only the gate worktree: its marker names the old pin (`bdf460e2…` before R670), so the
+  next `itest:alrunner-v3` or gate run there stops with `al-runner-v3-gate-symbols-unverified`. Nothing is
+  deleted automatically (R614). The one-line fix, per worktree, by hand: `bun scripts/fixture-symbols-reset.ts
+  <worktree>` (`--dry-run` first lists them), which deletes `fixtures/sandbox-tests/.alpackages`,
+  `fixtures/sandbox-data-tests/.alpackages` and `.fixture-symbols.sha256` only when the marker names another
+  pin; the next run extracts them from the new tar. Do it in `/work/lethal-wt/al-runner-v3-gate` before the
+  `--regate`. A FRESH worktree extracts from `FIXTURE_SYMBOLS_TAR`, so it refuses
+  (`al-runner-v3-gate-worktree-unprepared`) on any machine where that sha-named file is absent, until the owner's
+  secret swap delivers the pinned tar and `scripts/kraken-setup.sh` keeps it under that name.
+- Since R670 the tar is named by its pin, `/work/lethal/.kraken-local/fixture-symbols-<first 12 hex of the
+  sha256>.tar`, so a rebuilt tar is written BESIDE the one older worktrees still pin and never replaces it. The
+  pinned tar's file list is committed as `packages/runner/itest/fixture-symbols.manifest`, with the sha256 on its
+  `# sha256` line. An ordinary unit test (`R670: symbolTarDrift`) checks that list against every fixture's
+  `app.json`: each `LethAL_<name>_<version>.app` in a project's `.alpackages` must be a declared dependency at
+  its fixture's current version, older or newer. So a fixture version bump without a tar rebuild fails CI, which
+  has no tar. A second test, which runs only where the tar exists, checks the list against the tar itself.
+- To rebuild the tar after a fixture bump, run `bash scripts/build-fixture-symbols-tar.sh <pinned tar> <repo>
+  <scratch dir> <out.tar>` (it refuses an output that exists, and the path of kraken's `fixture-symbols.tar`).
+  What it does: keep every non-LethAL member byte for byte; replace each LethAL copy
+  with an `alc` build of the dependency's current source (`$LETHAL_ALC_DIR/alc /project:<target>
+  /packagecachepath:<target>/.alpackages`), named `LethAL_<name>_<version>.app`, in each project that declares
+  it; drop a project's copy of its OWN app (never a dependency, R148). Pack it reproducibly from the folder
+  holding `examples`, `extensions` and `fixtures`: `tar --format=ustar --sort=name --mtime=@0 --owner=0 --group=0
+  --numeric-owner --mode='a=rX,u+w' -cf <out> examples extensions fixtures`. The pack is reproducible from the
+  same files, but `alc` is not byte-stable (two builds of one source differ), so the pin, not a rebuild, is the
+  identity. Then write the tar as `fixture-symbols-<sha12>.tar`, update `FIXTURE_SYMBOLS_TAR`,
+  `FIXTURE_SYMBOLS_TAR_SHA256` and the manifest (`tar -tf <tar> | grep -v '/$'`, under its two header lines),
+  and `--regate` as above.
+- After a re-pin merges and the gate worktree has re-extracted from the new tar, the old tar is no longer pinned
+  by master. The lane that landed the re-pin deletes it, once no open worktree's `.fixture-symbols.sha256` names
+  it. The original `/work/lethal/.kraken-local/fixture-symbols.tar` (`bdf460e2…`) is different: it is kraken's
+  `secret_files` delivery, which `scripts/kraken-setup.sh` extracts into the main checkout, and kraken would put
+  it back. Before R670, `scripts/kraken-secrets.ts` REBUILT that secret from the HOST repo's `.alpackages` on
+  every run, which shipped stale copies from stale host folders and could never equal the pin (GNU tar's
+  default format, host mtimes and owners). Since R670 the owner ships the pinned tar VERBATIM: `bun
+  scripts/kraken-secrets.ts ... --symbol-tar <the pinned tar>` refuses a tar whose sha256 is not the pin, whose
+  listing fails or is empty, or that drifts from `app.json` (`tarDrift`, the `symbolTarDrift` rule), then writes
+  its bytes unchanged; without `--symbol-tar` it refuses by name. Alternatively the owner retires that
+  `secret_files` entry. Since R670 `kraken-setup.sh`, in the main checkout only, also keeps each delivered tar as
+  `fixture-symbols-<sha12>.tar`, the name the code reads. In a worktree with a `.fixture-symbols.sha256` marker
+  it neither removes nor extracts the two gate folders, so another tar's files never sit under a stale marker
+  that would read `verified`. The exact owner steps for R670 are in `/coord/handoff/R-670/owner-steps.md`.
 - A leg's outcome comes from its error's TYPE, never its text:
   - `gate-fail`: a pre-committed figure differs, a contract fact or a defect fact reads `diverged`, or v3's
     coverage paths no longer join LethAL's (`AlRunnerV3CoverageJoinError`, a real behaviour change; in a user
@@ -223,12 +304,50 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
   worktree was dirty (a dirty `pass` is refused), and give its outcome from its legs over the exact leg set.
   Dirty means any tracked change, or any untracked file under `fixtures/` or `packages/` (it would compile into
   a leg); other untracked files are the gate's own outputs. `.gated`'s `lethalCommit` is also the full sha.
-- `timeout-is-cpu` is GATE-ONLY: its burns are fixed iteration counts calibrated on one machine, so only leg C
-  measures it, and a session trusts the gated build's record instead of re-burning (M1). That trust is per v3
+- `timeout-is-cpu` is GATE-ONLY: since r14b it runs one huge burn (2,000,000,000 steps) at the 2 s limit, pinned to
+  core 0: alone it must be stopped, and beside seven busy loops it must ALSO be stopped, with a durationMs over
+  3000 ms AND over twice A's (a CPU-time stop is late in wall time; a wall-time limit with slack stops both calls
+  together). It takes about 20 s and loads a core, so only leg C measures it, and a session trusts the gated build's record instead of re-burning (M1). That trust is per v3
   BUILD: a later LethAL change to how a call's timeout is sent (`v3CallArgv`, `stopSecondsOf`) is not covered by
   the old record and needs `bun scripts/al-runner-v3-update.ts --regate <commit>`.
 - `.gated` names a commit on `lethal/r586`. The orchestrator merges with `--no-ff`, so that commit stays reachable
   from master.
+
+## Per-build pins (R586c)
+
+A build can have a PIN: the exact readings that differ from alpha.2's expectations and are known and accepted. Without a pin the gate runs as before.
+
+- **Where.** `packages/runner/src/al-runner-v3-pins.ts` (`V3_BUILD_PINS`, `findV3Pin`; moved from `itest/` by [[R719]], because a session reads it too). A pin is code, so it is tied to a gated commit. The key is the pair (exact `--version` line, binary sha256): both must be equal. The itest prints `PIN <id> applies (version and sha256 equal)` as its second line, only when a pin applies.
+- **Muting a session warning (R719).** A session mutes an `al-runner-v3-defect-gone` or `al-runner-v3-defect-refused` warning only when ALL four hold: the running binary's version line AND sha256 equal a pin (`findV3Pin`), that pin names the fact in leg C, the pin's outcome for it equals the outcome just read (`gone` for the six, `refused` for `duplicate-key-insert-raises`), and the fact's measured text matches the pin's pattern (and its extra check). The last three are one function, `pinnedFactMatches`, which the update gate's leg C uses too, so the mute is never wider than the gate's own pin match. Any other fact, another outcome, another measured text, another sha or no pin still warns. A pinned session prints one line instead, so it is never fully silent: `[lethal] al-runner-v3 pin alpha.5-07342060e covers 7 facts (#5700, #5788, R586c)`. The rule is `pinnedDefectCoverage`; it only changes what is printed, never a verdict, and no gate figure moves. Tests: `r719-pin-warnings.test.ts`.
+- **The rule (B1).** An entry passes only when the reading equals the pinned one. A pinned entry that does NOT match is never better than `held`: today's rule runs for it, and the result is forced to at least `held` (a `gate-fail` stays `gate-fail`). So alpha.2's old reading on a pinned build (the old defect, alpha.2's X (b) 7/1/1, all seven T rows `survived`) reads at least `held` (never `pass`), for a person to look at.
+- **Patterns.** `measured` texts are built by `pinPattern` from the logged text: every regex character escaped, `{n}` a number, anchored, no flags. Facts are looked up with `Object.hasOwn`.
+- **S5.** A pin for a build that is or was `current` is never removed: a later `--regate` of that build needs it.
+- **Records (M5).** A `LETHAL_ITEST_RECORD_BASELINE` request on a pinned or candidate build is refused by name, for every leg that records.
+- **Unpinned builds** (alpha.2, alpha.3, alpha.4, edge) are judged as before; the judges get no pin argument.
+
+**The alpha.5 pin (`alpha.5-07342060e`, sha256 `fd4d6d40...51db2`).**
+
+| Entry | Pinned reading | As BC? | Cost |
+|---|---|---|---|
+| leg C `none-selected-exit` | gone: `exit 6, stdout 0 rows` | a CLI shape (#5613 fix) | none |
+| leg C `quoted-name-unselectable` | gone: `exit 0` | a CLI selection fix (#5572); LethAL never selects by name | none |
+| leg C `refusal-cascade` | gone: the plain `fail` row `later`, exit 1 | yes (#5610 fix) | none |
+| leg C `sleep-is-noop` | gone: N=3 shape, no-flag wall under 1000 ms | verdict class only (r11 at 120 s); wall time is not BC's | none for verdicts, with the virtual-clock guard below |
+| leg C `upstream-compile-errors` | gone: `exit 3 null` | yes (#5602 fix) | none |
+| leg C `refusal-row-shape` | gone: BC's hub text, exit 1 | yes (R706, R712); #5700 stays open | none |
+| leg C `duplicate-key-insert-raises` | refused (the deferred duplicate-key text), exit 7 | NO: BC fails the test; issue #5788 | lost kills, never a wrong verdict |
+| leg T | seven rows (`Data Flag Ops` x3, `Data Key Probe` x4) `error` / `runner-refused`, counts 290 / 50 / 59 over 406 | NO: BC kills them; #5788 | 7 of 406 mutants read `error` where BC kills |
+| X (b) | exit 3, `passed` 0 and `notRun` 0 present, no rows, non-empty `compilationErrors` | yes | none |
+
+Leg T is judged against the committed alpha.2 baseline with the seven keys overridden (`applyTPin`, S4): if a pinned key is absent, repeated or not `survived`/`null`/`null` there, the leg reads `held`. On a pinned pass the alpha.2 baseline compare is skipped (the pinned compare has the same identity-scheme and R556 checks). Rows equal to the pin but with other counts are a `gate-fail`.
+
+**The virtual-clock guard (B2).** alpha.5 counts a Sleep toward `--test-timeout-secs` on a virtual clock, so a "3 s" stop can return after tens of ms. In the backend, when a MUTANT is active and a timeout row's `durationMs` is below its stop, the verdict is `error` / `runner-refused` ("stopped on v3's virtual clock", never scored). Baselines are unchanged. Upstream text: `/coord/handoff/R-586c/upstream-virtual-clock.md`.
+
+**K and serve on alpha.5** (measured at LethAL `81e7f1b4`, alpha.5 as a candidate under the pin):
+- L2, the full gate: 14 of 14 legs pass; K reads 3 / 12 / 4 over 19.
+- L3, `serve-entries` (receipts `measure/L3r-*`): S1 3 / 12 / 4 with 0 differences; T 290 / 50 / 59 with 7 errors, the pinned 7 rows; D1 51 / 12 / 0 with 0 differences.
+- L2b: alpha.3 and alpha.4 as candidates (no pin) both read `gate-fail` (D1 and D1c), as pre-committed in r18 table E.
+- **Leg N1 under `serve-entries` fails on alpha.5**: for a dotted test name, v3 writes a serve row without `codeunit` and `method` (upstream [#5798](https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/5798)). alpha.2 has no serve-entries path. The serve path is opt-in and fails closed. See [[R722]]. **Leg N1E (R722)** now runs exactly that case: the names fixture under `serve-entries`, whatever transport the run uses. Pre-committed reading on alpha.5: the session fails closed, and the error carries `the entries answer is invalid: a test line without v3's row shape: {...Codeunit<n>.Dot.Step...}` with no `codeunit` and no `method` in the line. That is `pass`. A session that completes, or a line that now has `codeunit` or `method`, is `held` ("re-pre-commit: upstream may have fixed #5798"). Any other error is `gate-fail`. N1E is a default itest leg (and so an agentflow sub-leg) but NOT in `V3_GATE_LEGS`: alpha.2 has no serve-entries path, so the update gate's leg list and a `--regate` of an old build stay as they were. The itest still fails on anything but a pass, so `held` is never silent (`judgeN1Serve`, `r722-n1-serve.test.ts`). The virtual clock is upstream [#5793](https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/5793).
 
 ## Frozen figures
 
@@ -239,7 +358,9 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
     "al-runner-v3.tables.baseline.json": { "killed": 290, "survived": 57, "no-coverage": 59 },
     "al-runner-v3.layout.baseline.json": { "killed": 7, "survived": 3 },
     "al-runner-v3.symbols-lethala.baseline.json": { "killed": 5, "survived": 4 },
-    "al-runner-v3.symbols-lethalb.baseline.json": { "killed": 5, "survived": 4 }
+    "al-runner-v3.symbols-lethalb.baseline.json": { "killed": 5, "survived": 4 },
+    "al-runner-v3.multiobject.baseline.json": { "killed": 6, "survived": 1, "no-coverage": 5 },
+    "al-runner-v3.wrapped.baseline.json": { "killed": 58, "survived": 37, "no-coverage": 3 }
   }
 }
 ```
@@ -247,6 +368,9 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
 - Leg L1, `al-runner-v3.layout.baseline.json`: 7 / 3 / 0 over 10, as pre-committed (43115c78).
 - Leg Y-A, `al-runner-v3.symbols-lethala.baseline.json`: 5 / 4 / 0 over 9, as pre-committed.
 - Leg Y-B, `al-runner-v3.symbols-lethalb.baseline.json`: 5 / 4 / 0 over 9, as pre-committed. All three were recorded once under R332 on 2026-10-22, and each is identical per mutant to its .NET al-runner twin.
+
+- Leg MO, `al-runner-v3.multiobject.baseline.json`: 6 / 1 / 5 over 12, as pre-committed (c2f67f0a), recorded once under R332 on 2026-10-24.
+- Leg WR, `al-runner-v3.wrapped.baseline.json`: 58 / 37 / 3 over 98, as pre-committed (c2f67f0a), recorded once under R332 on 2026-10-24.
 
 - Leg T, `al-runner-v3.tables.baseline.json`: 290 / 57 / 59 over 406, as pre-committed. Its rows differ from
   `itest:tables`' baseline on exactly the 52 keys and transitions of the pre-commitment's list (41 Commit, 7
@@ -324,3 +448,17 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
   and the serve daemon's stderr after every request), and the fact pins that the gated build writes it. **The
   daily update gate (`al-runner-v3-update.ts`, `--edge`) now refuses a build that does not write that line.**
   Predicted `matches` on alpha.2 and edge; no other figure or baseline moves.
+- 2026-10-23: r14b ([[R693]], coord task R-693) replaces `timeout-is-cpu`'s fixed burns. r6's counts stopped
+  working that day: 55M steps now cost 1.6-3.8 s of CPU pinned to core 0 (r6 measured 1.5 s), so the short burn
+  flipped between a pass and a stop with core-0 conditions, and every leg C and the daily update gate read
+  gate-fail. A calibrated design (r14) also flipped in measured runs, because the burn's speed moved about 2x
+  between the calibration and the burn. r14b needs no calibration: one huge burn (2,000,000,000 steps, never
+  finishes), two calls pinned to core 0 at a 2 s limit. A (alone) must be a "Test exceeded 2s timeout." row. B
+  (beside seven busy loops, killed in a `finally`) must be that row too, with durationMs over 3000 ms (1.5 times
+  the limit; the burn gets about 1/8 of the core, so a CPU-time stop is late, a wall-time stop is at about 2000).
+  Each call has a 60 s process timeout: a killed A reads `diverged` (no limit), a killed B `unmeasurable`. A
+  missing row is `unmeasurable`; B not stopped, stopped at 3000 ms or less, or stopped at no more than twice A's
+  durationMs (build review B1: a wall-time limit with slack, A and B both near 4000 ms), is `diverged`. Each busy
+  loop is `taskset -c 0 timeout -s KILL 150 sh -c ...`, so a killed bun cannot orphan it. Measured offline on
+  alpha.2 in five back-to-back leg C runs: A 2.0-2.05 s, B 16.0-16.1 s (about 8x A), all `matches`. Fact count unchanged (28).
+  Predicted `matches` on alpha.2 and edge.

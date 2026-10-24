@@ -36,8 +36,18 @@ import {
   itestConfigPath,
   itestLaunchPath,
   printItestTarget,
+  readFixtureConfig,
 } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import {
+  checkGateWarnings,
+  collectWarnings,
+  finishGate,
+  gateEndLine,
+  nonPassExit,
+  preflightObserve,
+  settleThrown,
+} from "./gate-warnings";
 import { assertKillsReproduced } from "./kill-reproduction";
 import {
   WRAPPED_PROJECT_DIR,
@@ -88,7 +98,7 @@ async function runLeg(
   const launchCfg = (await readJson<LaunchLocalConfig>(LAUNCH_LOCAL_PATH, "launch.local.json"))
     .configurations[0];
   if (!launchCfg) throw new Error(`${LAUNCH_LOCAL_PATH} has no configurations[0] entry`);
-  const configFile = await readJson<LethalConfigFile>(CONFIG_LOCAL_PATH, itestConfigName());
+  const configFile = readFixtureConfig(CONFIG_LOCAL_PATH, itestConfigName());
   const bcdev = validateBcDevConfig(configFile.bcdev);
   assertLaunchMatchesConfig(launchCfg, bcdev, LAUNCH_LOCAL_PATH);
   const toolPaths = await defaultAlToolPaths();
@@ -160,7 +170,9 @@ async function runLeg(
   };
   const store = new ResultsStore(join(scratchRoot, "lethal.sqlite"));
   try {
+    const collected = collectWarnings();
     const report = await runSession({
+      emit: [collected.subscriber],
       backend,
       store,
       projectDir: WRAPPED_PROJECT_DIR,
@@ -176,6 +188,9 @@ async function runLeg(
       resourceServerInstance: bcdev.serverInstance,
       // A scratch quarantine dir, never the real store (see bcdev.itest.ts).
       quarantineDir: join(scratchRoot, "quarantine"),
+    }).catch((e: unknown) => {
+      settleThrown("bcdev-wrapped", coverageMode === "fenced" ? "fenced" : "hub", collected);
+      throw e;
     });
     // R582: every kill was re-run under the mutant, by marker and by its 2 killer rows.
     assertKillsReproduced(
@@ -183,6 +198,7 @@ async function runLeg(
       report,
       store,
     );
+    checkGateWarnings("bcdev-wrapped", coverageMode === "fenced" ? "fenced" : "hub", collected);
     return { report, warnings };
   } finally {
     console.warn = original;
@@ -192,6 +208,7 @@ async function runLeg(
 }
 
 async function main(): Promise<void> {
+  preflightObserve();
   preflightGateBaseline(BASELINE_PATH, "bcdev wrapped itest");
   const root = await mkdtemp(join(tmpdir(), "lethal-bcdev-wrapped-"));
   try {
@@ -224,12 +241,14 @@ async function main(): Promise<void> {
   } finally {
     await rm(root, { recursive: true, force: true });
   }
-  console.log("bcdev wrapped itest: PASS");
-  await emitPassed("bcdev-wrapped", { sublegs: ["fenced", "hub"], artifacts: { reported: false } });
+  console.log(gateEndLine("bcdev wrapped"));
+  await finishGate(() =>
+    emitPassed("bcdev-wrapped", { sublegs: ["fenced", "hub"], artifacts: { reported: false } }),
+  );
 }
 
 main().catch(async (err: unknown) => {
   console.error(formatFailure(err));
   await emitFailed("bcdev-wrapped", err instanceof Error ? err.message : String(err));
-  process.exit(err instanceof BaselineRecordedError ? 3 : 1);
+  process.exit(err instanceof BaselineRecordedError ? 3 : nonPassExit(err, 1));
 });

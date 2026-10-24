@@ -60,9 +60,19 @@ import {
   itestConfigPath,
   itestLaunchPath,
   printItestTarget,
+  readFixtureConfig,
 } from "./config-path";
 import { LEND_FIGURES, LEND_MUTANTS, type LendCode } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import {
+  checkGateWarnings,
+  collectWarnings,
+  finishGate,
+  gateEndLine,
+  nonPassExit,
+  preflightObserve,
+  settleThrown,
+} from "./gate-warnings";
 import { PENDING_SUFFIX, REVOKED_SUFFIX, seedRunFrom } from "./lend-seed";
 import { compareMutants, keyOf, normalizeForComparison } from "./mutant-equality";
 import type { NormalizedMutant } from "./mutant-equality";
@@ -139,7 +149,7 @@ async function session(
   const launchCfg = (await readJson<LaunchLocalConfig>(LAUNCH_LOCAL_PATH, "launch file"))
     .configurations[0];
   if (!launchCfg) throw new Error(`${LAUNCH_LOCAL_PATH} has no configurations[0] entry`);
-  const configFile = await readJson<LethalConfigFile>(CONFIG_LOCAL_PATH, itestConfigName());
+  const configFile = readFixtureConfig(CONFIG_LOCAL_PATH, itestConfigName());
   const bcdev = validateBcDevConfig(configFile.bcdev);
   assertLaunchMatchesConfig(launchCfg, bcdev, LAUNCH_LOCAL_PATH);
   const toolPaths = await defaultAlToolPaths();
@@ -197,6 +207,7 @@ async function session(
   const events: RunEvent[] = [];
   console.log(`  ${label}: ${JSON.stringify(extra)}`);
   try {
+    const warnings = collectWarnings();
     const report = await runSession({
       backend,
       store,
@@ -212,9 +223,13 @@ async function session(
       resourceServerInstance: bcdev.serverInstance,
       // A scratch quarantine dir, never the real store (see bcdev.itest.ts).
       quarantineDir: join(root, "quarantine"),
-      emit: [(e) => events.push(e)],
+      emit: [(e) => events.push(e), warnings.subscriber],
       ...extra,
+    }).catch((e: unknown) => {
+      settleThrown("lend", label, warnings);
+      throw e;
     });
+    checkGateWarnings("lend", label, warnings);
     return { report, events, runId: maxRunId(store) };
   } finally {
     await backend.close();
@@ -372,6 +387,7 @@ async function assertRefused(
 }
 
 async function main(): Promise<void> {
+  preflightObserve();
   preflightReadOnlyBaseline(BASELINE_PATH, "lend itest");
   const baseline = await readGateBaseline(BASELINE_PATH);
   const root = await mkdtemp(join(tmpdir(), "lethal-lend-"));
@@ -713,12 +729,12 @@ async function main(): Promise<void> {
     store.close();
     await rm(root, { recursive: true, force: true });
   }
-  console.log("lend itest: PASS");
-  await emitPassed("lend", { sublegs, artifacts: { reported: false } });
+  console.log(gateEndLine("lend"));
+  await finishGate(() => emitPassed("lend", { sublegs, artifacts: { reported: false } }));
 }
 
 main().catch(async (err: unknown) => {
   console.error(formatFailure(err));
   await emitFailed("lend", err instanceof Error ? err.message : String(err));
-  process.exit(1);
+  process.exit(nonPassExit(err, 1));
 });

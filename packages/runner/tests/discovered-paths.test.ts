@@ -219,7 +219,8 @@ test("5. sandbox-data's manifest is byte-identical from a `\\`-keyed snapshot an
   // hashed instead of its byte offsets and raw text); sites, ids and every other field unchanged.
   // R-463: re-recorded for R-463's DataBandExt arm, ruling orchestrator 2026-10-09 (was
   // c83bdd08...23eb); 4 new arm entries, ids +4 after DataBandExt, proven in id-shift-proof.txt.
-  const pinned = "dc2c1f197b0932e58f3d1cc1fde4f4c6a80a11f9a66d221c3090af766986da48";
+  // R731: toggle-blank-string's operatorVersion 1.1.0 is the only change (was dc2c1f19...da48).
+  const pinned = "a7dba8bc19cf696a66651ee2446a6409a2a73918dbc2e055cd66669f99fd0835";
   expect(await hashOf(await generateMutationSet(fixtureDir, { emit: () => {} }))).toBe(pinned);
   expect(
     await hashOf(
