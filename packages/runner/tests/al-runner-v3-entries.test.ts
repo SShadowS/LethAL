@@ -1223,7 +1223,6 @@ describe("R654 S1: R612 T2-T6 on v3's serve-entries", () => {
     ["commit", COMMIT],
     ["cascade", CASCADE],
     ["onrun-failed", ONRUN],
-    ["no-callee", NO_CALLEE],
   ] as const) {
     test(`T2: a ${entry} refusal keeps the daemon; M0002's verdict is that daemon's, and M0001 is no kill`, async () => {
       const r = await ready({ rows: onM1A(refusal(m)) });
@@ -1248,6 +1247,7 @@ describe("R654 S1: R612 T2-T6 on v3's serve-entries", () => {
   for (const extra of [
     refusal(DUP_KEY),
     refusal(`${HTTP} (extra)`),
+    refusal(NO_CALLEE),
     { status: "error", message: COMMIT },
     { status: "fail", notRun: true, message: COMMIT },
   ] as Extra[]) {
