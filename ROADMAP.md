@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**24 of 724 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**23 of 724 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -319,7 +319,7 @@ that ordering is the priority.
 - **R718** · R696 refuses a walk's own Insert as a mover, but an own Insert ahead of the cursor was measured finite · [R718.md](docs/roadmap/R718.md) · closed 2026-10-24 — ruling: keep the over-refusal…
 - **R720** · Whole members in a `#if` right after the global `var` section parse INSIDE that section, so the symbol table never indexes them: 235 compiled-in members lose their typed sites, and lost R196's hang refusal (fixed) · [R720.md](docs/roadmap/R720.md) · open, deferred 2026-10-24 — the lost hang refusal is fixed…
 - **R721** · A global declared inside a var-section `#if` is not collected, so R196's hang refusal declined a loop write to it and deployed a mutant that can hang · [R721.md](docs/roadmap/R721.md) · done (bc0f9a8f)
-- **R725** · Hang readers that treat a null `resolveVarRef` as "absent": the r531/R696 write collectors read it as the implicit Rec, and R572 drops a var-out flag, inside swallowed members, `#if` globals and ambiguous names · [R725.md](docs/roadmap/R725.md) · open, filed 2026-10-24 (unprobed suspects from the R-327b review)
+- **R725** · Hang readers that treat a null `resolveVarRef` as "absent": the r531/R696 write collectors read it as the implicit Rec, and R572 drops a var-out flag, inside swallowed members, `#if` globals and ambiguous names · [R725.md](docs/roadmap/R725.md) · done (r725 head, set at submit)
 
 ## Product gaps a real project hits
 

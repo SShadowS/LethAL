@@ -3074,12 +3074,24 @@ function r696Pk(table: string, ctx: SemanticContext): Set<string> | null {
 function r696Table(call: ALSyntaxNode, ctx: SemanticContext): DeclaredType | null {
   const f = call.rawKind === "member_expression" ? call : call.childForFieldName("function");
   const recv = f?.rawKind === "member_expression" ? f.childForFieldName("object") : null;
-  const t =
-    recv !== null && recv !== undefined && isIdentifierLike(recv) ? declaredType(recv, ctx) : null;
+  const ident = recv !== null && recv !== undefined && isIdentifierLike(recv) ? recv : null;
+  const t = ident !== null ? declaredType(ident, ctx) : null;
   if (t !== null) return t.kind === "table" ? t : null;
   const name = resolveReceiverTable(call, ctx);
-  return name === null ? null : { kind: "table", name: normalizeAlName(name), temporary: false };
+  if (name !== null) return { kind: "table", name: normalizeAlName(name), temporary: false };
+  // R725: a receiver the engine refuses to resolve (a swallowed member, a var-section `#if`
+  // global, an every-arm-ambiguous name) may be a record of any table: fail closed (R720).
+  return ident !== null && r725Seam.on && declarationStateAt(ident, ctx) === "unknown"
+    ? { kind: "table", name: R725_ANY_TABLE, temporary: false }
+    : null;
 }
+
+/** R725: a test-only seam, as `r696Seam`; off restores reading an "unknown" name as absent. */
+export const r725Seam = { on: true };
+/** R725: the table of a receiver whose declaration is "unknown"; it matches every table. */
+const R725_ANY_TABLE = "\u0000unknown";
+const sameTable = (a: string, b: string): boolean =>
+  a === b || a === R725_ANY_TABLE || b === R725_ANY_TABLE;
 
 /** The field a Validate/ModifyAll call names (`F` or `Rec.F`); "*" when unreadable. */
 function r696Field(c: R531Call): string | null {
@@ -3161,7 +3173,7 @@ function r696Movers(body: ALSyntaxNode, w: R696Walk, ctx: SemanticContext): R696
     const vkey = rc.recv ?? (r531Implicit(c, ctx) ? "" : null);
     if (vkey === null || vkey.startsWith("\u0001")) return;
     const t = r696Table(c, ctx);
-    if (t === null || t.name !== w.table) return;
+    if (t === null || !sameTable(t.name, w.table)) return;
     const viaShare = w.shared?.has(vkey) ?? false;
     if (!viaShare && (w.temp === true || t.temporary)) return;
     if (w.rkeys.has(vkey)) {
@@ -3470,7 +3482,7 @@ function r696Inserts(
       return;
     }
     const t = r696Table(x, ctx);
-    if (t !== null && !t.temporary && t.name === table) found = true;
+    if (t !== null && !t.temporary && sameTable(t.name, table)) found = true;
   });
   return found;
 }
@@ -4728,10 +4740,15 @@ function r572LoopRows(loop: ALSyntaxNode, obj: ALSyntaxNode, ctx: SemanticContex
         // a var-out FLAG is a simple value (Boolean, number, date, text): a record, codeunit or
         // other object handed by var is the cursor or helper, not a flag (R570/R531 territory)
         const decl = resolveVarRef(a, ctx)?.node ?? null;
-        const tn = decl?.childForFieldName("type")?.namedChildren[0] ?? null;
-        const tk = tn?.rawKind ?? null;
-        if (tk === null || !R572_SIMPLE_TYPES.has(tk)) return;
-        if (tk === "basic_type" && !R572_SIMPLE_BASIC.has(normalizeAlName(tn?.text ?? ""))) return;
+        // R725: a name the engine refuses to resolve ("unknown") may be a simple flag: count it
+        // (fail closed, as R720); only a declaration that is provably not simple is skipped
+        if (decl !== null || !r725Seam.on || declarationStateAt(a, ctx) !== "unknown") {
+          const tn = decl?.childForFieldName("type")?.namedChildren[0] ?? null;
+          const tk = tn?.rawKind ?? null;
+          if (tk === null || !R572_SIMPLE_TYPES.has(tk)) return;
+          if (tk === "basic_type" && !R572_SIMPLE_BASIC.has(normalizeAlName(tn?.text ?? "")))
+            return;
+        }
         const hit = ts.filter((t) =>
           r531Positions(c, i, t).some((j) => r531Param(t, j)?.[1] === true),
         );
