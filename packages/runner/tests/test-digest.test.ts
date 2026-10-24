@@ -1376,3 +1376,87 @@ describe("R697/R698: code named only in properties, and qualified object referen
     });
   });
 });
+
+describe("R700/R701: install, upgrade and permission-set code in every digest", () => {
+  type Files = Record<string, string>;
+  const both = (files: Files): Record<string, string> => {
+    const list = Object.entries(files).map(([path, text]) => ({ path, text }));
+    const tests = list.flatMap((f) => testsInAlSource(f.path, f.text));
+    return testDigestsOfSources(list, tests, I);
+  };
+  const T = `codeunit 50100 "T"\n{\n    Subtype = Test;\n    [Test]\n    procedure A()\n    begin\n        X := 1;\n    end;\n    [Test]\n    procedure B()\n    begin\n        X := 2;\n    end;\n}\n`;
+  const platform = (subtype: string, trigger: string) =>
+    `codeunit 50200 "Plat"\n{\n    Subtype = ${subtype};\n    trigger ${trigger}()\n    var\n        M: Codeunit "Setup Mgt";\n    begin\n        Message('t1');\n        M.Write();\n    end;\n}\n`;
+  const MGT = `codeunit 50201 "Setup Mgt"\n{\n    procedure Write()\n    begin\n        Message('w1');\n    end;\n    procedure Unused()\n    begin\n        Message('u1');\n    end;\n}\n`;
+  const Z = `codeunit 50999 "Zed"\n{\n    procedure Z()\n    begin\n        Message('z1');\n    end;\n}\n`;
+  const sub = (files: Files, path: string, from: string, to: string): Files => {
+    const text = files[path];
+    if (text === undefined || !text.includes(from)) throw new Error(`no ${from} in ${path}`);
+    return { ...files, [path]: text.replace(from, to) };
+  };
+  /** Every test's digest moves (A and B both). */
+  function allMove(a: Files, b: Files): void {
+    const x = both(a);
+    const y = both(b);
+    expect(Object.keys(x).sort()).toEqual(["50100::a", "50100::b"]);
+    for (const k of Object.keys(x)) expect(y[k]).not.toBe(x[k]);
+  }
+  function noneMove(a: Files, b: Files): void {
+    const x = both(a);
+    const y = both(b);
+    for (const k of Object.keys(x)) expect(y[k]).toBe(x[k]);
+  }
+
+  for (const [subtype, trigger] of [
+    ["Install", "OnInstallAppPerCompany"],
+    ["Install", "OnInstallAppPerDatabase"],
+    ["Upgrade", "OnUpgradePerCompany"],
+    ["Upgrade", "OnUpgradePerDatabase"],
+    ["Upgrade", "OnCheckPreconditionsPerCompany"],
+    ["Upgrade", "OnValidateUpgradePerDatabase"],
+    ["Upgrade", "OnCheckPreconditionsPerDatabase"],
+    ["Upgrade", "OnValidateUpgradePerCompany"],
+  ] as const) {
+    describe(`${subtype} codeunit ${trigger}`, () => {
+      const files: Files = {
+        "T.al": T,
+        "P.al": platform(subtype, trigger),
+        "M.al": MGT,
+        "Z.al": Z,
+      };
+      test("an edit to the trigger moves every digest", () => {
+        allMove(files, sub(files, "P.al", "'t1'", "'t2'"));
+      });
+      test("an edit to a procedure the trigger calls moves every digest", () => {
+        allMove(files, sub(files, "M.al", "'w1'", "'w2'"));
+      });
+      test("an unrelated edit, and a procedure the trigger never calls, move none", () => {
+        noneMove(files, sub(files, "Z.al", "'z1'", "'z2'"));
+        noneMove(files, sub(files, "M.al", "'u1'", "'u2'"));
+      });
+    });
+  }
+
+  test("a non-install codeunit's unreached procedure moves no digest", () => {
+    const files: Files = { "T.al": T, "M.al": MGT, "Z.al": Z };
+    noneMove(files, sub(files, "M.al", "'w1'", "'w2'"));
+  });
+
+  const PS = `permissionset 50300 "PS"\n{\n    Assignable = true;\n    Permissions = tabledata Customer = R;\n}\n`;
+  const PSX = `permissionsetextension 50301 "PSX" extends "PS"\n{\n    Permissions = tabledata Vendor = R;\n}\n`;
+  test("R701: an edit to a permission set moves every digest", () => {
+    const files: Files = { "T.al": T, "PS.al": PS, "Z.al": Z };
+    allMove(files, sub(files, "PS.al", "Customer = R", "Customer = RIMD"));
+    noneMove(files, sub(files, "Z.al", "'z1'", "'z2'"));
+  });
+  test("R701: an edit to a permission-set extension moves every digest", () => {
+    const files: Files = { "T.al": T, "PS.al": PS, "PSX.al": PSX, "Z.al": Z };
+    allMove(files, sub(files, "PSX.al", "Vendor = R", "Vendor = RIMD"));
+  });
+  test("R701: an app without permission sets keeps its digest from before the change", () => {
+    // Pinned from master before R700/R701: with no permission set there is no Q line.
+    expect(both({ "T.al": T, "Z.al": Z })["50100::a"]).toBe(
+      "v3:e4f2cfbc5536b8e1f50faa2fccd00924b8d8bd283336da98e11c53ca782b96de",
+    );
+  });
+});
