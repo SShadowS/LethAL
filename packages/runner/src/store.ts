@@ -1263,7 +1263,8 @@ export class ResultsStore {
   }
 
   /** R-371: the parts the run's test digests are made of, or `null` when it recorded none. Read
-   *  only to explain a too-many-new-tests refusal; a malformed value throws. */
+   *  to explain a too-many-new-tests refusal and (R600) by its closed-world tag to choose which
+   *  digests verify computes, never a verdict; a malformed value throws. */
   testDigestParts(runId: number): unknown {
     const row = this.db.query("SELECT test_digest_parts FROM runs WHERE id = ?").get(runId) as {
       test_digest_parts: string | null;

@@ -829,8 +829,8 @@ export async function planVerify(a: {
    *  digest-scheme check included), so `source-predates-verify` wins over `dependency-unreadable`
    *  and costs no download. */
   readonly dependencies: string | (() => Promise<string>);
-  /** R389: the closed-world guard (`closedWorldGuard`), asked once with the digest inputs. Absent
-   *  is `OPEN_WORLD`. A source run recorded under another answer has other digests: none carries. */
+  /** R389: the closed-world guard (`closedWorldGuard`), asked once with the digest inputs, unless
+   *  the source run's parts record tag `none` (R600: then never asked). Absent is `OPEN_WORLD`. A source run recorded under another answer has other digests: none carries. */
   readonly closedWorld?: () => Promise<ClosedWorld>;
   /** R-371: the cap: refuse above `maxNewTests x (S + 2)` extra test runs (R-384 counts runs, not
    *  tests). Default `DEFAULT_MAX_NEW_TESTS`. */
@@ -1055,7 +1055,7 @@ export async function planVerify(a: {
             ref,
             recorded: baselineKeys.has(testKeyOf(ref)) && recorded.has(testDigestKey(ref)),
           })),
-          parseDigestParts(a.sourceTestDigestParts ?? null),
+          recordedParts,
         ),
       ),
   };
