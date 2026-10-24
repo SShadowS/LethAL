@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**26 of 718 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**24 of 718 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -314,8 +314,8 @@ that ordering is the priority.
 - **R702** · Moved-walk refusal follows no callee from a Next loop's body, and does not cover temporary walks · [R702.md](docs/roadmap/R702.md) · done (d5054dba)
 - **R703** · After the release: read the platform's committed test result after a stop (R-204b Part B, a LethAL Control change), and measure BC's CPU-only cancel latency and a slow test's spread near its budget, to size and narrow R204's residual false timeout-killed window · [R703.md](docs/roadmap/R703.md) · open, filed 2026-10-24 — after the first release (orchestrator ruling)
 - **R710** · Transport durations were measured with the wall clock, so a clock step could record a stop row shorter than its budget (hang gate, bc3) · [R710.md](docs/roadmap/R710.md) · done (2502f82b)
-- **R717** · A callee's inserted copy kept ahead of a walk by a deleted statement (DC's Clone shape) is not refused · [R717.md](docs/roadmap/R717.md) · open, filed 2026-10-24 (measure if wanted)
-- **R718** · R696 refuses a walk's own Insert as a mover, but an own Insert ahead of the cursor was measured finite · [R718.md](docs/roadmap/R718.md) · open, filed 2026-10-24 (a loosening: needs its own measurement and review)
+- **R717** · A callee's inserted copy kept ahead of a walk by a deleted statement (DC's Clone shape) is not refused · [R717.md](docs/roadmap/R717.md) · done (e0d07d57)
+- **R718** · R696 refuses a walk's own Insert as a mover, but an own Insert ahead of the cursor was measured finite · [R718.md](docs/roadmap/R718.md) · closed 2026-10-24 — ruling: keep the over-refusal…
 - **R720** · Whole members in a `#if` right after the global `var` section parse INSIDE that section, so the symbol table never indexes them: 235 compiled-in members lose their typed sites, and lost R196's hang refusal (fixed) · [R720.md](docs/roadmap/R720.md) · open, deferred 2026-10-24 — the lost hang refusal is fixed…
 - **R721** · A global declared inside a var-section `#if` is not collected, so R196's hang refusal declined a loop write to it and deployed a mutant that can hang · [R721.md](docs/roadmap/R721.md) · done (bc0f9a8f)
 
