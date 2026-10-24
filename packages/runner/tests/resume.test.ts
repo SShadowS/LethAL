@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { join } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
@@ -56,6 +56,10 @@ import {
 import { removeScratchDir, scratchDirs } from "./helpers/scratch";
 import { testDbPath } from "./helpers/test-db";
 import { UNREAD } from "./helpers/unread";
+
+// R724: every test here takes under 0.1 s locally, but a Windows CI run (CI 40105067954) hit the 5 s
+// default in 27 of them when the runner was about twice as slow. A stall is not a regression.
+setDefaultTimeout(30_000);
 
 const scratch = scratchDirs();
 

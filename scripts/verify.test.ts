@@ -279,6 +279,38 @@ describe("parseTestSummary", () => {
     expect(step.code).toBe(1);
     expect(step.lines).toContain("  (fail) c.test.ts (worker crashed: SIGKILL)");
   });
+  test("R724: a failing test's error text is printed under its (fail) line, once, capped", async () => {
+    const out = [
+      "(pass) a [1ms]",
+      "error: expect(received).toBe(expected)",
+      "Expected: 1",
+      "Received: 2",
+      "(fail) t1 [2ms]",
+      "this test timed out after 5000ms.",
+      "(fail) t2 [5000ms]",
+      "",
+      "2 tests failed:",
+      "(fail) t1 [2ms]",
+      "(fail) t2 [5000ms]",
+      " 1 pass",
+      " 2 fail",
+      "Ran 3 tests across 1 file. [1.00s]",
+    ].join("\n");
+    const step = await testStep(FULL, {
+      exec: () => ({ code: 1, output: out }),
+      snapState: () => new Map(),
+      env: {},
+      log: () => "log",
+      junitPath: () => "/j.xml",
+      readJunit: () => "",
+      expectedTestFiles: () => ["a.test.ts"],
+    });
+    const text = step.lines.join("\n");
+    expect(text).toContain("  (fail) t1\n    | error: expect(received).toBe(expected)");
+    expect(text).toContain("    | Received: 2");
+    expect(text).toContain("  (fail) t2\n    | this test timed out after 5000ms.");
+    expect(text.match(/timed out after/g)?.length).toBe(1);
+  });
   test("bun exiting non-zero with `0 fail` and no crash line still fails (the exit-code backstop)", async () => {
     const step = await testStep(FULL, {
       exec: () => ({ code: 1, output: " 3 pass\n 0 fail\nRan 3 tests across 2 files. [1.00s]\n" }),

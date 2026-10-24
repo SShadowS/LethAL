@@ -241,6 +241,30 @@ export function parseTestSummary(output: string): TestSummary | null {
   };
 }
 
+/**
+ * R724: the error text bun prints just BEFORE each `(fail) <name>` line (the assertion or the
+ * "timed out after" message), so a CI console shows the cause, not only the log artifact. A test
+ * is reported once, at its first `(fail)` line (bun repeats the names in its closing summary, with
+ * no text before them). At most `maxLines` lines per test, each cut to 300 characters.
+ */
+export function failureDetails(output: string, maxLines = 12): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  let buf: string[] = [];
+  for (const raw of output.split(/\r?\n/)) {
+    const line = raw.trimEnd();
+    const failed = /^\(fail\) (.+?)(?: \[[\d.]+m?s\])?$/.exec(line);
+    if (failed?.[1] !== undefined) {
+      if (!out.has(failed[1])) out.set(failed[1], buf.slice(-maxLines));
+      buf = [];
+    } else if (/^\((pass|skip|todo)\) /.test(line)) {
+      buf = [];
+    } else if (line !== "") {
+      buf.push(line.length > 300 ? `${line.slice(0, 300)}...` : line);
+    }
+  }
+  return out;
+}
+
 export interface JunitCase {
   readonly file: string;
   readonly classname: string;
@@ -1126,7 +1150,11 @@ export async function testStep(
     lines.push(
       `test (${scope}): ${ok ? "ok" : "FAIL"} ${counts}, ${summary.files ?? "?"} files${ok ? "" : ` (exit ${t.code}), log ${io.log(t.output)}`}`,
     );
-    for (const name of summary.failing) lines.push(`  (fail) ${name}`);
+    const details = failureDetails(t.output);
+    for (const name of summary.failing) {
+      lines.push(`  (fail) ${name}`);
+      for (const d of details.get(name) ?? []) lines.push(`    | ${d}`);
+    }
     if (!ok) code = 1;
     if (plan.mode.kind === "full") {
       const junitFiles = [...new Set(parseJunit(io.readJunit(junit)).map((c) => c.file))];
