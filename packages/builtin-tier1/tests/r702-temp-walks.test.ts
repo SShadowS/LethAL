@@ -106,7 +106,9 @@ describe("R702: a temporary walk moved through a Copy(R, true) variable", () => 
   });
 
   it("2. T3c: a shared variable's Insert, bound inside the body, is refused", () => {
-    const p = project(files(proc("Filled", WALK("", `                R2.Copy(R, true);\n${INSERT_R2}`))));
+    const p = project(
+      files(proc("Filled", WALK("", `                R2.Copy(R, true);\n${INSERT_R2}`))),
+    );
     // revert: the mover's temporary skip kept for a shared variable
     expect(p.refused("cu.al", "R2.Insert()")).toBe(true);
     expect(p.refused("cu.al", "exit")).toBe(true);
@@ -120,7 +122,12 @@ describe("R702: a temporary walk moved through a Copy(R, true) variable", () => 
 });
 
 describe("R702: walkers temporary at run time, the implicit Rec, and sharing through a third variable", () => {
-  const SHARED_WALK = (r: string, sharer: string, bind: string, move: string): string => `        ${bind}
+  const SHARED_WALK = (
+    r: string,
+    sharer: string,
+    bind: string,
+    move: string,
+  ): string => `        ${bind}
         if ${r}.FindSet() then
             repeat
                 if ${r}.Note = 'X' then
@@ -167,7 +174,10 @@ ${body}
   it("9. the implicit Rec of a temporary-source page as the walker (review S2)", () => {
     const p = project({
       "line.al": LINE_TABLE,
-      "page.al": PAGE(SHARED_WALK("Rec", "R2", "R2.Copy(Rec, true);", "                R2.Modify();"), "        G: Integer;"),
+      "page.al": PAGE(
+        SHARED_WALK("Rec", "R2", "R2.Copy(Rec, true);", "                R2.Modify();"),
+        "        G: Integer;",
+      ),
     });
     // red when sharers are read only for a walker declared temporary
     expect(p.refused("page.al", "R2.Modify()")).toBe(true);
@@ -185,14 +195,15 @@ ${body}
     expect(p.refused("page.al", "Rec.Modify()")).toBe(true);
   });
 
-  it("11. R and R2 bound to one table through a third variable (review S4)", () => {
+  it("11. R and R2 joined through a third variable, in either Copy order: fails closed (review S4)", () => {
     const p = project(
       files(
         proc(
           "Third",
           SHARED_WALK("R", "R2", "R.Copy(R2, true);", "                R2.Modify();").replace(
             "R.Copy(R2, true);",
-            // R2's binding first, so one pass over the Copy calls cannot reach it (red-check N3)
+            // R2's binding first, so one pass over the Copy calls cannot reach it (red-check N3).
+            // In straight-line code this order may not truly share (not probed); refused anyway.
             `R2.Copy(Src, true);
         Src.Copy(R, true);`,
           ),

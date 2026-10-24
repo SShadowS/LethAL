@@ -3249,9 +3249,10 @@ function r696Keys(
 export const r702Seam = { on: true };
 
 /**
- * R702 gap 2. The variables that share a temporary R's rows: those joined to R by a chain of
- * `A.Copy(B, true)` calls (either direction, through any third variable) that run before the
- * walk, inside it, or inside a loop that encloses it, as `r696PreFilters` reads order (the share
+ * R702 gap 2. The variables that may share a temporary R's rows: those joined to R by a chain of
+ * `A.Copy(B, true)` calls (either direction, through any third variable, in any order: a later
+ * Copy can re-point a link, so this fails closed) that run before the walk, inside it, or inside
+ * a loop that encloses it, as `r696PreFilters` reads order (the share
  * argument read as true unless absent or a literal `false`; any argument when they are
  * unreadable). Measured on bc2 (R702 probe, run 3): such an X moving a row's key ahead of the
  * cursor, or inserting ahead of it, keeps a temporary walk going; a by-value copy holds none of
@@ -3282,12 +3283,14 @@ function r702Shared(
     )
       return;
     const recv = c.recv ?? (r531Implicit(n, ctx) ? "" : null);
-    if (recv === null) return;
+    // a literal or array-element key ("\u0001...", "\u0000") would chain unrelated variables
+    const plain = (k: string | null): k is string => k !== null && !/^[\u0000\u0001]/.test(k);
+    if (!plain(recv)) return;
     const share = c.args[1];
     if (!c.uncertain && (share === undefined || normalizeAlName(share.text) === "false")) return;
     for (const a of c.uncertain ? c.args : c.args.slice(0, 1)) {
       const k = r531Key(a);
-      if (k !== null) pairs.push([recv, k]);
+      if (plain(k)) pairs.push([recv, k]);
     }
   });
   out.add(rkey);

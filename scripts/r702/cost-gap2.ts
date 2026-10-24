@@ -24,7 +24,10 @@ if (a1 === "--one") {
   const off = await gen(false);
   const on = await gen(true);
   const files = Object.keys(off.perFile).filter((p) => off.perFile[p] !== on.perFile[p]);
-  writeFileSync(a3, JSON.stringify({ off: off.specs, on: on.specs, hangOff: off.hang, hangOn: on.hang, files }));
+  writeFileSync(
+    a3,
+    JSON.stringify({ off: off.specs, on: on.specs, hangOff: off.hang, hangOn: on.hang, files }),
+  );
   process.exit(0);
 }
 if (a1 === undefined || a2 === undefined) throw new Error("usage");
@@ -39,7 +42,11 @@ mkdirSync(a2, { recursive: true });
 const sum = { off: 0, on: 0, hangOff: 0, hangOn: 0, failed: 0, files: [] as string[] };
 for (const [i, p] of projs) {
   const out = join(a2, `${a1}-${i}.json`);
-  const r = Bun.spawnSync(["bun", import.meta.path, "--one", p, out], { cwd: tree, stdout: "pipe", stderr: "pipe" });
+  const r = Bun.spawnSync(["bun", import.meta.path, "--one", p, out], {
+    cwd: tree,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
   if (r.exitCode !== 0) {
     sum.failed++;
     console.log(`SKIP ${i}: ${r.stderr.toString().trim().split("\n").slice(-1)[0]?.slice(0, 160)}`);
@@ -53,6 +60,12 @@ for (const [i, p] of projs) {
   for (const f of j.files) sum.files.push(`${i}:${f}`);
 }
 const added = sum.off - sum.on;
-const res = { set: a1, projects: projs.length, ...sum, added, addedPct: sum.off === 0 ? 0 : Math.round((added / sum.off) * 10000) / 100 };
+const res = {
+  set: a1,
+  projects: projs.length,
+  ...sum,
+  added,
+  addedPct: sum.off === 0 ? 0 : Math.round((added / sum.off) * 10000) / 100,
+};
 writeFileSync(join(a2, `${a1}-total.json`), JSON.stringify(res));
 console.log(JSON.stringify(res));
