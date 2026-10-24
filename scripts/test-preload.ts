@@ -36,9 +36,11 @@ const redirected =
 if (!redirected) {
   // R704 (measured, CI run 40066648992): a reused Windows --parallel worker gets process.env restored
   // between files (USERPROFILE is the real home again), but os.homedir() still returns the previous
-  // file's fake. So on Windows the real home is read from USERPROFILE, the variable homedir() reads.
+  // file's fake. Bun's restore seems not to reach the OS env block homedir() reads, while a
+  // process.env assignment does (inferred, not measured). So on Windows the real home is read from
+  // USERPROFILE itself: do not simplify this back to homedir(). An empty value falls back too.
   process.env.LETHAL_TEST_REAL_HOME =
-    process.platform === "win32" ? (process.env.USERPROFILE ?? homedir()) : homedir();
+    process.platform === "win32" ? process.env.USERPROFILE || homedir() : homedir();
 } else if (process.env.LETHAL_TEST_REAL_HOME === undefined) {
   // homedir() is the earlier preload's fake here, so recording it would mislabel a fake as real.
   throw new Error(
