@@ -314,7 +314,7 @@ that ordering is the priority.
 - **R702** · Moved-walk refusal follows no callee from a Next loop's body, and does not cover temporary walks · [R702.md](docs/roadmap/R702.md) · done (d5054dba)
 - **R703** · After the release: read the platform's committed test result after a stop (R-204b Part B, a LethAL Control change), and measure BC's CPU-only cancel latency and a slow test's spread near its budget, to size and narrow R204's residual false timeout-killed window · [R703.md](docs/roadmap/R703.md) · open, filed 2026-10-24 — after the first release (orchestrator ruling)
 - **R710** · Transport durations were measured with the wall clock, so a clock step could record a stop row shorter than its budget (hang gate, bc3) · [R710.md](docs/roadmap/R710.md) · done (2502f82b)
-- **R717** · A callee's inserted copy kept ahead of a walk by a deleted statement (DC's Clone shape) is not refused · [R717.md](docs/roadmap/R717.md) · done (r717 head, set at submit)
+- **R717** · A callee's inserted copy kept ahead of a walk by a deleted statement (DC's Clone shape) is not refused · [R717.md](docs/roadmap/R717.md) · done (e0d07d57)
 - **R718** · R696 refuses a walk's own Insert as a mover, but an own Insert ahead of the cursor was measured finite · [R718.md](docs/roadmap/R718.md) · closed 2026-10-24 — ruling: keep the over-refusal…
 
 ## Product gaps a real project hits
