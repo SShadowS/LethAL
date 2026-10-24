@@ -549,6 +549,64 @@ describe("coverage: table trigger mutants run untargeted when coverage cannot se
     const m = entry({ objectType: "table", procedureName: "Post", triggerName: "OnInsert" });
     expect(coverageFilter([m], index, allGreen).untargetedTriggerCount).toBe(0);
   });
+
+  // R739: each of the three lines goes to `warn` with its code, and only when its condition holds.
+  test("the three lines reach `warn` with their codes, each only when its condition holds", () => {
+    const seen: Array<{ code: string; line: string }> = [];
+    const warn = (code: string, line: string) => seen.push({ code, line });
+    const noRefusals = new Map<string, string>();
+    // Unmatched trigger: fallback 2.
+    const trigger = entry({
+      mutantId: "M0001",
+      objectType: "table",
+      codeunitId: 99999,
+      procedureName: "",
+      originalText: "Original();",
+      mutatedText: "",
+      triggerName: "OnInsert",
+    });
+    const index = buildCoverageIndex(baseline);
+    coverageFilter([trigger], index, allGreen, undefined, false, noRefusals, warn);
+    expect(seen.map((s) => s.code)).toEqual(["coverage-triggers-unmatched"]);
+    // Nothing needs a line: silent.
+    seen.length = 0;
+    const ordinary = entry({ objectType: "table", procedureName: "Post", triggerName: "OnInsert" });
+    coverageFilter([ordinary], index, allGreen, undefined, false, noRefusals, warn);
+    expect(seen).toEqual([]);
+    // Unplaceable: a naming gap in the mutant's object.
+    const withGap = buildCoverageIndex([
+      {
+        ref: t1,
+        coverage: {
+          granularity: "procedure" as const,
+          entries: [{ objectType: "Codeunit", objectId: 70000, procedure: "ApplyAudit" }],
+          namingGaps: [{ objectType: "Codeunit", objectId: 70000 }],
+        },
+      },
+    ]);
+    const pub = entry({ procedureName: "TouchCount", procedureScope: "public" });
+    coverageFilter([pub], withGap, [t1], undefined, false, noRefusals, warn);
+    expect(seen.map((s) => s.code)).toEqual(["coverage-unplaceable"]);
+    // Refused object.
+    seen.length = 0;
+    const refusedMutant = entry({
+      objectType: "table",
+      codeunitId: 50110,
+      procedureName: "",
+      triggerName: "OnInsert",
+    });
+    coverageFilter(
+      [refusedMutant],
+      buildCoverageIndex([{ ref: t1, coverage: { granularity: "procedure", entries: [] } }]),
+      [t1, t2],
+      undefined,
+      false,
+      new Map([["table:50110", "coverage refused for Table:50110"]]),
+      warn,
+    );
+    expect(seen.map((s) => s.code)).toEqual(["coverage-refused-mutants"]);
+    expect(seen[0]?.line).toContain("coverage refused for Table:50110");
+  });
 });
 
 // R140. Fallback 2 runs an unplaceable table trigger mutant against every GREEN test. When the

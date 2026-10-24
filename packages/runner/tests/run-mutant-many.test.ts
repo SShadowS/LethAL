@@ -1742,9 +1742,12 @@ describe("runMany — R503: the watchdog's GetOperationStatus poll is bounded", 
         return { stopped: true, sessionId: 9 };
       },
     });
+    // R742: the margins are wide on purpose. A stalled CI runner once pushed the 40 ms poll past a
+    // 200 ms bound (clamped further by a 100 ms grace) and the call ended `deadline-exceeded`. What
+    // this pins is only that a poll SLOWER than the 5 ms interval but inside the bound is used.
     const r = await within(
-      tx(f.fetchFn, 200).runMany(
-        req({ stopHungSessions: true, watchdogPollMs: 5, requestCeilingMs: 400, stopGraceMs: 100 }),
+      tx(f.fetchFn, 2_000).runMany(
+        req({ stopHungSessions: true, watchdogPollMs: 5, requestCeilingMs: 400, stopGraceMs: 2_000 }),
       ),
       WAIT,
       "runMany",

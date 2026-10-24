@@ -251,16 +251,18 @@ describe("R-496: a refusal still pending at session teardown", () => {
     expect(backend.calls.filter((c) => c === "take")).toHaveLength(1);
   });
 
-  test("a session already failing keeps its own error; the refusal goes to console.warn", async () => {
+  test("a session already failing keeps its own error; the refusal becomes a warning event", async () => {
     const dirs = await project({ [GOOD]: GOOD_AL });
     const backend = new FailingLateRefusalBackend();
     const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const events: RunEvent[] = [];
     try {
       const err = await runSession({
         backend,
         store: new ResultsStore(":memory:"),
         ...dirs,
         selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+        emit: [(e) => events.push(e)],
       }).then(
         () => undefined,
         (e: unknown) => e,
@@ -269,7 +271,17 @@ describe("R-496: a refusal still pending at session teardown", () => {
       expect(err).not.toBeInstanceOf(UnfilteredExtensionsQueryError);
       expect((err as Error).message).toContain("earlier failure");
       expect(backend.calls).toContain("take");
-      expect(warn.mock.calls.flat().join("\n")).toContain("late refusal held at teardown");
+      // R739: an event with its code. It is the first refusal, so there is no "extra" event.
+      const late = events.flatMap((e) =>
+        e.type === "warning" && e.code === "late-refusal-while-failing" ? [e.message] : [],
+      );
+      expect(late).toHaveLength(1);
+      expect(late[0]).toContain("late refusal held at teardown");
+      expect(
+        events.filter((e) => e.type === "warning" && e.code === "lease-refusal-extra"),
+      ).toHaveLength(0);
+      // And it no longer reaches the console.
+      expect(warn.mock.calls.flat().join("\n")).not.toContain("late refusal held at teardown");
     } finally {
       warn.mockRestore();
     }

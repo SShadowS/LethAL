@@ -150,6 +150,7 @@ import {
   GROUP_SUITE_UNRESOLVED_HEAD,
   ONRUN_HINT,
   STALE_TEST_APP_REMEDY,
+  StaleTargetMemberError,
   StaleTestAppError,
   TestAppChangedError,
   TestCodeunitDiscoveryError,
@@ -1817,8 +1818,15 @@ ${TRIGGER_TABLE_AL}#endif
       const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
       const store = new ResultsStore(":memory:");
       const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+      const events: RunEvent[] = [];
       try {
-        const report = await runSession({ backend, store, ...dirs, selectorIds });
+        const report = await runSession({
+          backend,
+          store,
+          ...dirs,
+          selectorIds,
+          emit: [(e) => events.push(e)],
+        });
         const triggerMutants = report.mutants.filter((m) => m.file.includes("SandboxTable"));
         expect(triggerMutants.length).toBeGreaterThan(0);
         expect(report.untargetedTriggerCount).toBe(0);
@@ -1831,8 +1839,14 @@ ${TRIGGER_TABLE_AL}#endif
         // The plain codeunit is untouched: it still runs.
         expect(report.counts.survived).toBeGreaterThan(0);
         // Selection's refusal warning prints ONCE per batch, not again from the second split.
-        const said = warnSpy.mock.calls.map((c) => String(c[0]));
+        // R739: as an event with its code, and nothing of it on the console.
+        const said = events.flatMap((e) =>
+          e.type === "warning" && e.code === "coverage-refused-mutants" ? [e.message] : [],
+        );
         expect(said.filter((x) => x.includes("because coverage is refused"))).toHaveLength(1);
+        expect(warnSpy.mock.calls.map((c) => String(c[0])).join("\n")).not.toContain(
+          "because coverage is refused",
+        );
       } finally {
         warnSpy.mockRestore();
         store.close();
@@ -3050,6 +3064,83 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
   // ran" can actually fail. With a single missing test the no-green-baseline path already executes
   // nothing, and the assertion would pass whether or not the refusal exists.
   // ————————————————————————————————————————————————————————————————————————————————————————
+  // R738 — measured on bc2 (R-738): a run's own altool publish of a target that removes (or
+  // re-signs) a member the INSTALLED tests app calls is accepted, and that test then fails at the
+  // baseline with BC's "Function ID <n> was called. The object with ID <id> does not have a member
+  // with that ID." Before R738 it silently left the green set and its mutants read no-coverage.
+  describe("R738 — a tests app left stale against the target by this run's own publish", () => {
+    const staleOn = (objectId: number) =>
+      `Function ID 1105190687 was called. The object with ID ${objectId} does not have a member with that ID.\nSandbox Tests(CodeUnit 79100).UnsupportedTest line 2 - Sandbox Tests by LethAL version 1.0.0.1;`;
+    const failing = (failureMessage: string) => (method: string) =>
+      method === "UnsupportedTest"
+        ? { outcome: "fail" as const, procedure: "IsUnderBudget", failureMessage }
+        : { outcome: "pass" as const, procedure: "IsOverBudget" };
+
+    test("a stale member of a TARGET object refuses by name before any mutant runs", async () => {
+      const dirs = await qualProject();
+      const backend = new QualificationBackend(failing(staleOn(79000)));
+      const store = new ResultsStore(":memory:");
+      const events: RunEvent[] = [];
+      const err = await runSession({
+        backend,
+        store,
+        ...dirs,
+        selectorIds,
+        emit: [createEmitter([(e) => events.push(e)])],
+      }).then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      // red when the refusal comes after `select`: its coverage split is then already emitted
+      expect(events.some((e) => e.type === "coverage-split")).toBe(false);
+      // red when the stale-member failure is not read (it then leaves the green set silently)
+      expect(err).toBeInstanceOf(StaleTargetMemberError);
+      expect((err as StaleTargetMemberError).staleTests).toEqual(["Sandbox Tests.UnsupportedTest"]);
+      expect((err as Error).message).toContain("79000");
+      expect((err as Error).message).toContain("republish");
+      // the refusal is at the baseline: no mutant ran under activation
+      expect(backend.ranActive).toBe(0);
+    });
+
+    test("the same text naming a NON-target object does not refuse (another app's member)", async () => {
+      const dirs = await qualProject();
+      const backend = new QualificationBackend(failing(staleOn(130440)));
+      const store = new ResultsStore(":memory:");
+      // red when any object id refuses, not only the target's own
+      const report = await runSession({ backend, store, ...dirs, selectorIds });
+      expect(report.baselineGreen).toBe(false);
+    });
+
+    test("a target with an interface and a permissionset (no header objectHeadersOf reads) still runs", async () => {
+      const dirs = await qualProject();
+      await Bun.write(
+        join(dirs.projectDir, "IFoo.Interface.al"),
+        `interface "IFoo"\n{\n    procedure Bar(): Integer;\n}\n`,
+      );
+      await Bun.write(
+        join(dirs.projectDir, "Perms.PermissionSet.al"),
+        `permissionset 79010 "Sandbox Perms"\n{\n    Assignable = true;\n}\n`,
+      );
+      const backend = new QualificationBackend(
+        failing("genuine failure\nSandbox Tests(CodeUnit 79100).UnsupportedTest line 2"),
+      );
+      const store = new ResultsStore(":memory:");
+      // red when reading the target's object ids throws on a file with no codeunit/table/... header
+      const report = await runSession({ backend, store, ...dirs, selectorIds });
+      expect(report.baselineGreen).toBe(false);
+    });
+
+    test("a genuinely failing test still reads as failing, not stale", async () => {
+      const dirs = await qualProject();
+      const backend = new QualificationBackend(
+        failing("genuine failure\nSandbox Tests(CodeUnit 79100).UnsupportedTest line 2"),
+      );
+      const store = new ResultsStore(":memory:");
+      const report = await runSession({ backend, store, ...dirs, selectorIds });
+      expect(report.baselineGreen).toBe(false);
+    });
+  });
+
   describe("R139 — the published test app is missing a test the source declares", () => {
     const missingFor = (method: string) =>
       method === "UnsupportedTest"
@@ -6919,7 +7010,16 @@ describe("runSession — R734: isolate the breaking mutants, score the rest", ()
   type Seen = { site: string; id: string };
   /** Fails while the manifest still holds a boundary mutant of a `badProcs` procedure. Records each
    *  manifest it was shown, so the tests can read the compile count and the ids. */
-  function brokenBy(badProcs: ReadonlySet<string>, shown: Seen[][]) {
+  function brokenBy(
+    badProcs: ReadonlySet<string>,
+    shown: Seen[][],
+    // R735: where alc says the error is, given the line the bad text really is on.
+    point: (line: number, lines: readonly string[]) => number = (line) => line,
+    // R735: the emitted text that makes a procedure "bad" (default: the boundary mutant's).
+    needle: (nn: string) => string = (nn) => `A${nn} <= B${nn}`,
+    // R735 A2: print only the FIRST bad line per compile (alc stops early on some faults).
+    firstOnly = false,
+  ) {
     return (dir: string): Error | undefined => {
       const manifest = JSON.parse(readFileSync(join(dir, "mutant-manifest.json"), "utf8")) as {
         mutants: Array<{
@@ -6943,14 +7043,17 @@ describe("runSession — R734: isolate the breaking mutants, score the rest", ()
       const emitted = readdirSync(dir)
         .filter((f) => f.includes("Isolation") && f.endsWith(".al"))
         .map((f) => ({ f, lines: readFileSync(join(dir, f), "utf8").split("\n") }));
+      // R735: print EVERY bad line, as alc does, each at the position `point` gives.
+      const printed: string[] = [];
       for (const { f, lines } of emitted) {
         for (const p of badProcs) {
           const nn = p.slice(1);
-          const at = lines.findIndex((l) => l.includes(`A${nn} <= B${nn}`));
-          if (at >= 0) return new AlcCompileError(`${f}(${at + 1},9): error AL0123: broken`);
+          const at = lines.findIndex((l) => l.includes(needle(nn)));
+          if (at >= 0) printed.push(`${f}(${point(at + 1, lines)},9): error AL0123: broken`);
         }
       }
-      return undefined;
+      const kept = firstOnly ? printed.slice(0, 1) : printed;
+      return kept.length > 0 ? new AlcCompileError(kept.join("\n")) : undefined;
     };
   }
   const isCulprit = (
@@ -6964,7 +7067,13 @@ describe("runSession — R734: isolate the breaking mutants, score the rest", ()
   // P<i> is the third line of its block: block i starts at line 3 + 5 * i, exit() at +2.
   const lineOf = (i: number) => 3 + 5 * i + 2;
 
-  async function runIsolation(procedures: number, bad: readonly number[]) {
+  async function runIsolation(
+    procedures: number,
+    bad: readonly number[],
+    point?: (line: number, lines: readonly string[]) => number,
+    needle?: (nn: string) => string,
+    firstOnly?: boolean,
+  ) {
     const dirs = await isolationProject(procedures);
     const shown: Seen[][] = [];
     const badProcs = new Set(bad.map((i) => `P${String(i).padStart(2, "0")}`));
@@ -6975,14 +7084,32 @@ describe("runSession — R734: isolate the breaking mutants, score the rest", ()
         ["IsOverBudget"],
         undefined,
         undefined,
-        brokenBy(badProcs, shown),
+        brokenBy(badProcs, shown, point, needle, firstOnly),
       ),
     );
     const store = new ResultsStore(":memory:");
-    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      emit: [createEmitter([(e) => events.push(e)])],
+    });
     store.close();
     const lines = new Set(bad.map(lineOf));
-    return { report, shown, lines, backend };
+    return { report, shown, lines, backend, events, dirs };
+  }
+  /** The id the FIRST compile gave the boundary mutant of procedure P<i>. */
+  async function boundaryIdOf(shown: readonly Seen[][], dirs: { projectDir: string }, i: number) {
+    const source = readFileSync(join(dirs.projectDir, "Isolation.Codeunit.al"), "utf8");
+    const nn = String(i).padStart(2, "0");
+    const at = String(source.indexOf(`A${nn} < B${nn}`));
+    const hit = (shown[0] ?? []).find(
+      (s) => s.site.split("|")[1] === at && s.site.endsWith("lethal.conditional-boundary"),
+    );
+    if (hit === undefined) throw new Error(`no boundary mutant for P${nn}`);
+    return hit.id;
   }
 
   // Direction 1 (k=1): the culprit is never scored. Red on master: every mutant is `error`, so the
@@ -7315,14 +7442,111 @@ describe("runSession — R734: isolate the breaking mutants, score the rest", ()
     store.close();
   });
 
-  // Edge: the compile budget. Fail closed: with far more culprits than the budget isolates, nothing
-  // is scored, the compile count stays bounded, and the unresolved mutants carry the
+  // R735 O4 (replaces R734's "over the budget" test: alc's diagnostics now name all 30).
+  test("O4: 30 culprits named by alc are all isolated inside the budget, the rest is scored", async () => {
+    const n = 30;
+    const all = Array.from({ length: n }, (_, i) => i);
+    const { report, shown, lines } = await runIsolation(n, all);
+    expect(shown.length).toBeLessThanOrEqual(65);
+    const culprits = report.mutants.filter((m) => isCulprit(m, lines, m.line));
+    expect(culprits.length).toBe(n);
+    expect(culprits.every((m) => m.verdict === "error")).toBe(true);
+    expect(culprits.every((m) => m.failureNote?.includes("fails to compile on its own"))).toBe(
+      true,
+    );
+    expect(culprits.some((m) => m.failureNote?.includes("not attributable"))).toBe(false);
+    const others = report.mutants.filter((m) => !isCulprit(m, lines, m.line));
+    expect(others.length).toBeGreaterThan(0);
+    expect(others.filter((m) => m.verdict === "error")).toEqual([]);
+    expect(report.counts.errors).toBe(n);
+  });
+
+  // R735 O1: alc reports the line AFTER the bad text. That is the next member's guard line, so the
+  // search steps one line up. Without it the pointer is the neighbour and the culprit is found by
+  // halving, late.
+  test("O1: a pointer one line past the bad text still makes the culprit the first singleton", async () => {
+    // The bad text is the NEGATE mutant of P02, which has a successor in its chain: two lines past
+    // it is the next member's guard line.
+    const { shown } = await runIsolation(
+      4,
+      [2],
+      (line) => line + 2,
+      (nn) => `not (A${nn} < B${nn})`,
+    );
+    const first = new Set((shown[0] ?? []).map((s) => s.id));
+    const last = new Set((shown.at(-1) ?? []).map((s) => s.id));
+    const culprit = [...first].filter((id) => !last.has(id));
+    expect(culprit.length).toBe(1);
+    // compile 1 is the production one; then the empty set, the full set, then the first suspect.
+    expect(shown[1]?.length).toBe(0);
+    expect(shown[3]?.map((s) => s.id)).toEqual(culprit);
+  });
+
+  // R735 O2: a pointer into an innocent's branch costs a singleton compile and blames nobody.
+  test("O2: a pointer into an innocent mutant's branch scores it, and the culprit still errors", async () => {
+    const { report, shown, lines, dirs } = await runIsolation(4, [2], (_line, text) => {
+      const at = text.findIndex((l) => l.includes("A00 <= B00"));
+      return at + 1;
+    });
+    const innocent = await boundaryIdOf(shown, dirs, 0);
+    expect(shown.some((s) => s.length === 1 && s[0]?.id === innocent)).toBe(true);
+    const culprits = report.mutants.filter((m) => isCulprit(m, lines, m.line));
+    expect(culprits.map((m) => m.verdict)).toEqual(["error"]);
+    expect(culprits[0]?.failureNote).toContain("AL0123");
+    const p0 = report.mutants.filter((m) => isCulprit(m, new Set([lineOf(0)]), m.line));
+    expect(p0.map((m) => m.verdict)).toEqual(["survived"]);
+    expect(report.counts.errors).toBe(1);
+  });
+
+  // R735 O3: a pointer into no mutant's branch (line 1) falls back to R734's halving, same verdicts.
+  test("O3: a diagnostic that maps to no guard falls back to halving, with R734's verdicts", async () => {
+    const { report, lines, shown } = await runIsolation(4, [2], () => 1);
+    const culprits = report.mutants.filter((m) => isCulprit(m, lines, m.line));
+    expect(culprits.map((m) => m.verdict)).toEqual(["error"]);
+    expect(report.counts.errors).toBe(1);
+    expect(shown.length).toBeGreaterThan(5); // halving, not the 4-compile pointed path
+  });
+
+  // R735 A2: alc reports only the first error per compile. After culprit A is removed the narrowed
+  // file's lines move up, so the second culprit's line must be read from the JUST-compiled
+  // directory. Reading the first full compile's text points at an innocent branch: one wasted
+  // singleton compile, so the count differs.
+  test("A2: first-error-only alc, k=2: lines move after the first culprit; exact compile count", async () => {
+    const { report, shown, lines } = await runIsolation(6, [1, 4], undefined, undefined, true);
+    const culprits = report.mutants.filter((m) => isCulprit(m, lines, m.line));
+    expect(culprits.map((m) => m.verdict)).toEqual(["error", "error"]);
+    const others = report.mutants.filter((m) => !isCulprit(m, lines, m.line));
+    expect(others.filter((m) => m.verdict === "error")).toEqual([]);
+    expect(report.counts.errors).toBe(2);
+    // production, empty set, full set, A alone, recompile (B named), B alone, final recompile.
+    // Subset sizes: production 21, empty 0, full 21, A alone 1, rest 20 (names B), B alone 1,
+    // rest 19 (compiles), then the redeploy of the clean 19.
+    expect(shown.map((s) => s.length)).toEqual([21, 0, 21, 1, 20, 1, 19, 19]);
+  });
+
+  // R735 O6: the result event names what isolation cost.
+  test("O6: one compile-isolation-result warning carries N, K, G and U", async () => {
+    const { events } = await runIsolation(4, [2]);
+    const results = events.filter(
+      (e) => e.type === "warning" && e.code === "compile-isolation-result",
+    );
+    expect(results.length).toBe(1);
+    const first = results[0];
+    expect(first?.type === "warning" ? first.message : "").toMatch(
+      /batch 0: isolation used 4 of 64 compile-only runs: 1 culprit\(s\), 0 in pairs, 0 unresolved/,
+    );
+  });
+
+  // Edge: the compile budget, with diagnostics that map to nothing (R735 O5: R734's fail-closed
+  // assertions, unchanged). Fail closed: with far more culprits than halving isolates, nothing is
+  // scored, the compile count stays bounded, and the unresolved mutants carry the
   // not-attributable note.
-  test("over the compile budget: nothing is scored, the compile count is bounded", async () => {
+  test("O5: over the compile budget with unmapped diagnostics: nothing is scored, the count is bounded", async () => {
     const n = 30;
     const { report, shown } = await runIsolation(
       n,
       Array.from({ length: n }, (_, i) => i),
+      () => 1,
     );
     // 1 production compile + at most 64 isolation compiles
     expect(shown.length).toBeLessThanOrEqual(65);
@@ -12898,6 +13122,8 @@ describe("R507: a refused unfiltered extensions query on the lease path ends the
     expect(runs()).toBeLessThan(9);
     // Not lease loss: no lost batch is invalidated.
     expect(events.some((e) => e.type === "batch-invalidated")).toBe(false);
+    // R739: the session ended with the refusal itself, so it is not "already failing".
+    expect(warnings(events, "late-refusal-while-failing")).toHaveLength(0);
     // finish ran op-gated: a marker read at teardown, then the release over an idle marker.
     expect(calls.GetOperationStatus ?? 0).toBeGreaterThanOrEqual(2);
     expect(calls.ReleaseLease).toBe(1);
@@ -12988,6 +13214,9 @@ describe("R507: a refused unfiltered extensions query on the lease path ends the
     expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
     expect(warnings(events, "after-lease-acquired-uncertain")).toHaveLength(1);
     expect(warnings(events, "after-lease-acquired-refused")).toHaveLength(0);
+    // R739, the other direction: ONE refusal on the lease path latches and is thrown; it is not
+    // also an "extra" event.
+    expect(warnings(events, "lease-refusal-extra")).toHaveLength(0);
   });
 
   test("R9: an earlier error stays; a lease-path refusal recorded by the heartbeat is warned", async () => {
@@ -13000,16 +13229,19 @@ describe("R507: a refused unfiltered extensions query on the lease path ends the
         throw new Error("deploy boom");
       },
     });
-    const { out: err, warned } = await capturingWarn(() =>
-      runSessionForTest(backend, { quarantineDir: freshTmpDir(), lease }).catch((e: unknown) => e),
-    );
+    const events: RunEvent[] = [];
+    const err = await runSessionForTest(backend, {
+      quarantineDir: freshTmpDir(),
+      lease,
+      emit: [(e) => events.push(e)],
+    }).catch((e: unknown) => e);
     expect(err).not.toBeInstanceOf(UnfilteredExtensionsQueryError);
     expect(String(err)).toContain("deploy boom");
-    expect(
-      warned.some(
-        (w) => w.includes("while the session was already failing") && w.includes(REFUSAL_TEXT),
-      ),
-    ).toBe(true);
+    // R739: an event, not a console line.
+    const late = warnings(events, "late-refusal-while-failing");
+    expect(late).toHaveLength(1);
+    expect(late[0]).toContain("while the session was already failing");
+    expect(late[0]).toContain(REFUSAL_TEXT);
   });
 
   test("R10: a refusal noted after teardown took the refusals is warned, never dropped", async () => {
@@ -13032,13 +13264,26 @@ describe("R507: a refused unfiltered extensions query on the lease path ends the
         return pass(ref, opts);
       },
     });
-    const { warned } = await capturingWarn(async () => {
-      // The renew is still open, so the session ends normally and teardown takes nothing.
-      await runSessionForTest(backend, { quarantineDir: freshTmpDir(), lease });
+    const events: RunEvent[] = [];
+    // The renew is still open, so the session ends normally and teardown takes nothing.
+    await runSessionForTest(backend, {
+      quarantineDir: freshTmpDir(),
+      lease,
+      emit: [(e) => events.push(e)],
+    });
+    // Nothing yet: the refusal has not arrived.
+    expect(warnings(events, "lease-refusal-extra")).toHaveLength(0);
+    // R739: the session is over, so its subscribers may be closed (a `--progress-out` file): the
+    // late refusal goes to the console and emits no event.
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
       openGate(); // the renew is answered with the refusal only now, after takeRefusal()
       await tick;
-    });
-    expect(warned.some((w) => w.includes(REFUSAL_TEXT))).toBe(true);
+      expect(warnings(events, "lease-refusal-extra")).toHaveLength(0);
+      expect(warn.mock.calls.flat().join("\n")).toContain(REFUSAL_TEXT);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   test("R11: a lease refusal and a backend late refusal: the lease one is thrown, the other warned", async () => {
@@ -13048,12 +13293,19 @@ describe("R507: a refused unfiltered extensions query on the lease path ends the
     const { backend } = tickingBackend(timers);
     const late = new UnfilteredExtensionsQueryError("backend late refusal R499");
     Object.assign(backend, { takeLateRefusal: () => late });
-    const { out: err, warned } = await capturingWarn(() =>
-      runSessionForTest(backend, { quarantineDir: freshTmpDir(), lease }).catch((e: unknown) => e),
-    );
+    const events: RunEvent[] = [];
+    const err = await runSessionForTest(backend, {
+      quarantineDir: freshTmpDir(),
+      lease,
+      emit: [(e) => events.push(e)],
+    }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
     expect(String(err)).toContain(REFUSAL_TEXT);
-    expect(warned.some((w) => w.includes("backend late refusal R499"))).toBe(true);
+    // R739: the backend's late refusal is an event (the lease path may add its own further ones).
+    const extra = warnings(events, "lease-refusal-extra");
+    expect(extra.filter((m) => m.includes("backend late refusal R499"))).toHaveLength(1);
+    // During the session the lease path's own further refusal is an event too.
+    expect(extra.some((m) => m.includes(REFUSAL_TEXT))).toBe(true);
   });
 
   test("R12: a session latched for another reason that then meets a refusal throws it, after warning the latch reason", async () => {
@@ -13073,14 +13325,20 @@ describe("R507: a refused unfiltered extensions query on the lease path ends the
       20,
     );
     const { lease } = leaseCfg(client);
-    const { out: err, warned } = await capturingWarn(() =>
-      runSessionForTest(leaseBackend(), { quarantineDir: dir, lease }).catch((e: unknown) => e),
-    );
+    const events: RunEvent[] = [];
+    const err = await runSessionForTest(leaseBackend(), {
+      quarantineDir: dir,
+      lease,
+      emit: [(e) => events.push(e)],
+    }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
     expect((await new QuarantineStore(dir).read(TIER))?.opKind).toBe("container-needs-recycle");
-    const latched = warned.filter((w) => w.includes("the session was latched:"));
+    const latched = warnings(events, "session-latched");
     expect(latched).toHaveLength(1);
+    expect(latched[0]).toContain("the session was latched:");
     expect(latched[0]).not.toContain("refused unfiltered extensions query on the lease path");
+    // The refusal itself was thrown, so it is not also an extra.
+    expect(warnings(events, "lease-refusal-extra")).toHaveLength(0);
   });
 
   test("R508: a lease lost mid-batch, then a teardown that throws a lease-path refusal, still invalidates the batch in the store and the events", async () => {
@@ -13809,22 +14067,29 @@ describe("R508: a lease lost mid-batch, then --resume", () => {
     const { store, common } = await setup();
     breakableInvalidate(store).fail();
     const events: RunEvent[] = [];
-    const { out: err, warned } = await capturingWarn(() =>
-      runSession({
-        ...common,
-        backend: batchBackend(LOSE),
-        lease: leaseCfg(new FakeLeaseClient()).lease,
-        emit: [(e) => events.push(e)],
-      }).catch((e: unknown) => e),
-    );
+    const err = await runSession({
+      ...common,
+      backend: batchBackend(LOSE),
+      lease: leaseCfg(new FakeLeaseClient()).lease,
+      emit: [(e) => events.push(e)],
+    }).catch((e: unknown) => e);
     const run1 = lastRunId(store);
     expect(err).toBeInstanceOf(LostBatchNotStoredError);
     expect(String(err)).toContain(`run ${run1} batch 1:`);
     expect(String(err)).toContain(`do not --resume run ${run1}`);
     expect((err as Error).cause).toBe(FIXED);
     expect(events.some((e) => e.type === "batch-invalidated" && e.batchIndex === 1)).toBe(true);
+    // R739: an event with a code, not a console line.
+    const notCorrected = events.filter(
+      (e) => e.type === "warning" && e.code === "lease-loss-store-not-corrected",
+    );
+    expect(notCorrected).toHaveLength(1);
     expect(
-      warned.some((w) => w.includes(`could not correct run ${run1} batch 1 at the lease loss`)),
+      notCorrected.some(
+        (e) =>
+          e.type === "warning" &&
+          e.message.includes(`could not correct run ${run1} batch 1 at the lease loss`),
+      ),
     ).toBe(true);
   });
 
@@ -13834,15 +14099,20 @@ describe("R508: a lease lost mid-batch, then --resume", () => {
     const backend = batchBackend(LOSE);
     const late = new UnfilteredExtensionsQueryError("backend late refusal R508");
     Object.assign(backend, { takeLateRefusal: () => late });
-    const { out: err, warned } = await capturingWarn(() =>
-      runSession({
-        ...common,
-        backend,
-        lease: leaseCfg(new FakeLeaseClient()).lease,
-      }).catch((e: unknown) => e),
-    );
+    const events: RunEvent[] = [];
+    const err = await runSession({
+      ...common,
+      backend,
+      lease: leaseCfg(new FakeLeaseClient()).lease,
+      emit: [(e) => events.push(e)],
+    }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(LostBatchNotStoredError);
-    expect(warned.some((w) => w.includes("backend late refusal R508"))).toBe(true);
+    const replaced = events.filter(
+      (e) => e.type === "warning" && e.code === "lost-batch-error-replaced",
+    );
+    expect(
+      replaced.some((e) => e.type === "warning" && e.message.includes("backend late refusal R508")),
+    ).toBe(true);
   });
 
   test("a failed store write while the session is already failing warns that error, then throws LostBatchNotStoredError", async () => {
@@ -13854,15 +14124,20 @@ describe("R508: a lease lost mid-batch, then --resume", () => {
       if (row.batchIndex === 1 && row.verdict === "error") throw new Error("record boom R508");
       return realRecord(runId, row);
     };
-    const { out: err, warned } = await capturingWarn(() =>
-      runSession({
-        ...common,
-        backend: batchBackend(LOSE),
-        lease: leaseCfg(new FakeLeaseClient()).lease,
-      }).catch((e: unknown) => e),
-    );
+    const events: RunEvent[] = [];
+    const err = await runSession({
+      ...common,
+      backend: batchBackend(LOSE),
+      lease: leaseCfg(new FakeLeaseClient()).lease,
+      emit: [(e) => events.push(e)],
+    }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(LostBatchNotStoredError);
-    expect(warned.some((w) => w.includes("record boom R508"))).toBe(true);
+    const replaced = events.filter(
+      (e) => e.type === "warning" && e.code === "lost-batch-error-replaced",
+    );
+    expect(
+      replaced.some((e) => e.type === "warning" && e.message.includes("record boom R508")),
+    ).toBe(true);
   });
 
   test("crash stand-in: only onLost's write lands, and the resume still carries nothing of the lost batch", async () => {
@@ -13909,7 +14184,17 @@ describe("R508: a lease lost mid-batch, then --resume", () => {
         seen.push({ rows: rowsOf(store, id), snaps: snapsOf(store, id) });
       },
     });
-    await runSession({ ...common, backend, lease: leaseCfg(new FakeLeaseClient()).lease });
+    const events: RunEvent[] = [];
+    await runSession({
+      ...common,
+      backend,
+      lease: leaseCfg(new FakeLeaseClient()).lease,
+      emit: [(e) => events.push(e)],
+    });
+    // R739, the other direction: a store write that succeeds at the loss emits no warning for it.
+    expect(
+      events.filter((e) => e.type === "warning" && e.code === "lease-loss-store-not-corrected"),
+    ).toEqual([]);
     const atClose = seen.at(-1);
     expect(atClose).toBeDefined();
     const b1 = atClose?.rows.filter((r) => r.b === 1) ?? [];
@@ -18631,6 +18916,50 @@ describe("R536: runNamedMutants reads the installed artifact under the source ru
     await runNamedMutants({ ...fx.cfg, backend: withSymbolsTaker(fx, log) });
     expect(log.slice(0, 2)).toEqual(['symbols ["LETHALQ"]', "attach"]);
     expect(log.filter((l) => l.startsWith("symbols"))).toHaveLength(1);
+  });
+
+  // R739: runNamedMutants installs the session's notifier before status() and restores it at the end.
+  test("runNamedMutants installs a notifier that emits warning events, then restores the console", async () => {
+    const fx = await installedFixture();
+    const log: string[] = [];
+    let installed: ((code: string, message: string) => void) | undefined;
+    const backend = {
+      ...fx.cfg.backend,
+      setNotify: (n?: (code: string, message: string) => void) => {
+        log.push(n === undefined ? "restore" : "install");
+        installed = n;
+      },
+      status: async () => {
+        log.push("status");
+        return { ok: true, details: "stub" };
+      },
+    } as ExecutionBackend;
+    const events: RunEvent[] = [];
+    await runNamedMutants({
+      ...fx.cfg,
+      backend,
+      emit: [...(fx.cfg.emit ?? []), (e) => events.push(e)],
+    });
+    // Installed before the readiness probe, restored last.
+    expect(log).toEqual(["install", "status", "restore"]);
+    expect(installed).toBeUndefined();
+  });
+
+  test("the notifier runNamedMutants installs turns a backend notice into a warning event", async () => {
+    const fx = await installedFixture();
+    const events: RunEvent[] = [];
+    const backend = {
+      ...fx.cfg.backend,
+      setNotify: (n?: (code: string, message: string) => void) => {
+        if (n !== undefined) n("fake-notice", "said during runNamedMutants");
+      },
+    } as ExecutionBackend;
+    await runNamedMutants({
+      ...fx.cfg,
+      backend,
+      emit: [...(fx.cfg.emit ?? []), (e) => events.push(e)],
+    });
+    expect(events.filter((e) => e.type === "warning" && e.code === "fake-notice").length).toBe(1);
   });
 
   test("a source run that recorded no build symbols is refused before any backend call, never read as []", async () => {
