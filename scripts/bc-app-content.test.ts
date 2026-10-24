@@ -265,7 +265,7 @@ describe("changedEntries, compilerVersion, isInstrumented, headerPackageId", () 
   });
 });
 
-describe("decideApp: the nine rows, in order", () => {
+describe("decideApp: the rows, in order (row 6 removed by R623)", () => {
   test("row 1: nothing resident and no row: publish new", () => {
     const d = decideApp(base({ resident: null, rows: [] }));
     expect(d).toMatchObject({ action: "publish", how: "new" });
@@ -306,7 +306,7 @@ describe("decideApp: the nine rows, in order", () => {
 
   // R623 (measured on bc2, 2026-10-24): the old row 6 refused a same-version target under an
   // installed dependent; the in-place publish is safe, so a target takes row 7 like a test app.
-  test("row 6 (R623): same version, other content, a target: published in place, never refused", () => {
+  test("R623 (former row 6): same version, other content, a target: published in place, never refused", () => {
     const d = decideApp(base({ role: "target", local: fake({ src: "changed" }) }));
     expect(d).toMatchObject({ action: "publish", how: "in place" });
   });

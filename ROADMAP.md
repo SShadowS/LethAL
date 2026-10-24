@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**28 of 700 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**29 of 701 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -745,6 +745,7 @@ that ordering is the priority.
 - **R693** · Leg C's timeout-is-cpu flips with core-0 conditions; every v3 leg C and the daily update gate read gate-fail · [R693.md](docs/roadmap/R693.md) · done (b9942236)
 - **R694** · al-runner v3 marks a later failure after a refusal as not trusted but not a later timeout; LethAL now refuses such a timeout · [R694.md](docs/roadmap/R694.md) · done (aa970869)
 - **R704** · Test A7 (the preload moves HOME and TMPDIR in every --parallel worker) fails on CI's Windows runner; it skips there until the cause is read · [R704.md](docs/roadmap/R704.md) · done (208a85fb)
+- **R707** · What BC does with an installed dependent (a fixture tests app) when its target is republished with changed SIGNATURES is not measured; the worst case under-reports · [R707.md](docs/roadmap/R707.md) · open, filed 2026-10-24
 
 ---
 
