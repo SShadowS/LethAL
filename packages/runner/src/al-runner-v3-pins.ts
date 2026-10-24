@@ -7,7 +7,8 @@
  * S5: a pin for a build that is or was `current` is never removed (a later `--regate` needs it).
  * Pure: no IO. The one value import is the hub text, bound by `r586c-pins.test.ts`.
  */
-import { BC_HTTP_HUB_TEXT } from "../src/al-runner-v3-contract";
+import { type V3ContractResult, v3MuteKey } from "./al-runner-v3-contract";
+import { BC_HTTP_HUB_TEXT } from "./al-runner-v3-texts";
 
 const REPO = "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues";
 
@@ -169,6 +170,56 @@ export const V3_BUILD_PINS: readonly V3BuildPin[] = [
 /** The pin for this exact binary: the version line AND the sha256 must both be equal. */
 export function findV3Pin(version: string, binarySha256: string): V3BuildPin | undefined {
   return V3_BUILD_PINS.find((p) => p.version === version && p.binarySha256 === binarySha256);
+}
+
+/**
+ * Does a leg-C reading equal the pin's entry for its fact? The gate (`classifyLegC`) and the
+ * session's mute (`pinnedDefectCoverage`) both use this one function, so they cannot drift: the fact
+ * is an own property of the pin, the verdict equals the pinned one, and the measured text matches
+ * the pinned pattern (and its extra check, if any).
+ */
+export function pinnedFactMatches(
+  pin: V3BuildPin["legC"],
+  f: { readonly fact: string; readonly verdict: string; readonly measured?: string },
+): boolean {
+  if (!Object.hasOwn(pin, f.fact)) return false;
+  const p = pin[f.fact];
+  return (
+    p !== undefined &&
+    f.verdict === p.verdict &&
+    f.measured !== undefined &&
+    p.measured.test(f.measured) &&
+    (p.extra === undefined || p.extra(f.measured))
+  );
+}
+
+/**
+ * R719: which of a session's `gone` / `refused` defect facts the running build's pin already covers.
+ * A fact is covered only when the pin matches the binary (`findV3Pin`: version line AND sha256), the
+ * pin names that fact with that outcome AND that measured text (`pinnedFactMatches`). `undefined` when nothing is
+ * covered. `line` is the one summary a pinned session prints instead of the warnings.
+ */
+export function pinnedDefectCoverage(
+  r: V3ContractResult,
+  version: string,
+  binarySha256: string,
+): { readonly muted: ReadonlySet<string>; readonly line: string } | undefined {
+  const pin = findV3Pin(version, binarySha256);
+  if (pin === undefined) return undefined;
+  const muted = new Set<string>();
+  const issues = new Set<string>();
+  for (const f of r.facts) {
+    if (f.kind !== "defect" || (f.verdict !== "gone" && f.verdict !== "refused")) continue;
+    if (!pinnedFactMatches(pin.legC, f)) continue;
+    muted.add(v3MuteKey(f));
+    const n = pin.legC[f.fact]?.issue?.split("/").at(-1);
+    if (n !== undefined) issues.add(`#${n}`);
+  }
+  if (muted.size === 0) return undefined;
+  return {
+    muted,
+    line: `[lethal] al-runner-v3 pin ${pin.id} covers ${muted.size} facts (${[...[...issues].sort(), "R586c"].join(", ")})`,
+  };
 }
 
 /** The shape `applyTPin` reads and returns (the gate's normalized mutant, structurally). */

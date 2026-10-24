@@ -33,6 +33,7 @@ import {
   v3DependencySkipLines,
 } from "./al-runner-v3-backend";
 import { baseAppJson, probeV3PredefinedSymbols } from "./al-runner-v3-probe";
+import { BC_HTTP_HUB_TEXT } from "./al-runner-v3-texts";
 import { AlcCompileError, ArtifactCompiler, type ArtifactIo, defaultArtifactIo } from "./artifact";
 import { type SpawnFn, absToolPath, defaultSpawn } from "./publisher";
 
@@ -74,8 +75,7 @@ export const BC_HTTP_INTERNAL_TEXT =
  * `BC_HTTP_INTERNAL_TEXT` above is BC's web-service-path text (r639, R706); it is kept, and a build that
  * writes it now reads `unlike-bc`, as any text other than the hub's does.
  */
-export const BC_HTTP_HUB_TEXT =
-  "There was an error while executing the HTTP request, the connecting endpoint violates security requirements. Make sure you are connecting to a valid endpoint.";
+export { BC_HTTP_HUB_TEXT };
 /** Duplicate key at the end of a test: 92912's `DuplicateNamedKey`, 92913, and 92915's `raw`. */
 export const BC_END_OF_TEST_TEXT =
   "The record in table Probe Row already exists. Identification fields and values: Key='K1'";
@@ -1598,7 +1598,15 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
 /** Who runs the session: `candidate` only for the update gate's own legs (`cfg.candidate`). */
 export interface V3SessionKind {
   readonly candidate?: boolean;
+  /**
+   * R719: `<fact>=<verdict>` keys a per-build pin covers (`pinnedDefectCoverage`). Only the `gone`
+   * and `refused` warnings read it; every other line, and every key not in it, still prints.
+   */
+  readonly muted?: ReadonlySet<string> | undefined;
 }
+
+/** The key `V3SessionKind.muted` holds for a fact as read. */
+export const v3MuteKey = (f: { fact: string; verdict: string }): string => `${f.fact}=${f.verdict}`;
 
 /**
  * r9 §2: `unlike-bc` refuses a NORMAL session by name (a test that reads `GetLastErrorText` or
@@ -1628,9 +1636,9 @@ export function v3ContractRefusals(r: V3ContractResult, s: V3SessionKind = {}): 
 }
 
 /** The `al-runner-v3-defect-gone` lines; they change nothing until a human re-measures. */
-export function v3DefectsGone(r: V3ContractResult): string[] {
+export function v3DefectsGone(r: V3ContractResult, muted?: ReadonlySet<string>): string[] {
   return r.facts
-    .filter((f) => f.kind === "defect" && f.verdict === "gone")
+    .filter((f) => f.kind === "defect" && f.verdict === "gone" && !muted?.has(v3MuteKey(f)))
     .map(
       (f) =>
         `[lethal] al-runner-v3-defect-gone: ${f.fact}: re-measure before relying on it (measured ${f.measured.slice(0, 600)})`,
@@ -1645,12 +1653,14 @@ export function v3DefectsGone(r: V3ContractResult): string[] {
 export function v3DefectWarnings(r: V3ContractResult, s: V3SessionKind = {}): string[] {
   const defects = (v: string) => r.facts.filter((f) => f.kind === "defect" && f.verdict === v);
   return [
-    ...v3DefectsGone(r),
+    ...v3DefectsGone(r, s.muted),
     // r9 §6: v3 declines a case BC fails; held in the gate, never gone, never a refusal.
-    ...defects("refused").map(
-      (f) =>
-        `[lethal] al-runner-v3-defect-refused: ${f.fact}: v3 declines; not BC's reading (measured ${f.measured.slice(0, 600)})`,
-    ),
+    ...defects("refused")
+      .filter((f) => !s.muted?.has(v3MuteKey(f)))
+      .map(
+        (f) =>
+          `[lethal] al-runner-v3-defect-refused: ${f.fact}: v3 declines; not BC's reading (measured ${f.measured.slice(0, 600)})`,
+      ),
     // r9 §2: only a candidate session gets here (a normal one is refused); every leg prints it.
     ...(s.candidate === true ? defects("unlike-bc") : []).map(
       (f) =>

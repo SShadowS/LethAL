@@ -13,10 +13,10 @@ import {
   judgeLegT,
   recordRefusal,
 } from "../itest/al-runner-v3-gate";
-import { V3_BUILD_PINS, applyTPin, findV3Pin, pinPattern } from "../itest/al-runner-v3-pins";
 import { TABLES_KNOWN_DIFFERENCES } from "../itest/al-runner-v3-tables-known";
 import { type NormalizedMutant, compareMutants } from "../itest/mutant-equality";
 import { BC_END_OF_TEST_TEXT, BC_HTTP_HUB_TEXT } from "../src/al-runner-v3-contract";
+import { V3_BUILD_PINS, applyTPin, findV3Pin, pinPattern } from "../src/al-runner-v3-pins";
 
 const VERSION = "al-runner 3.0.0-alpha.5 (07342060e)";
 const SHA = "fd4d6d406a2f2170fccfe13413d51bbb1317b78b3ef5af3800ca9a6009b51db2";
