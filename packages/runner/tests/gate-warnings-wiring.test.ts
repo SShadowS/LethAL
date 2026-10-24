@@ -57,10 +57,21 @@ function scan(text: string): { callsRunSession: boolean; missing: string[]; bare
 
 describe("gate-warnings wiring", () => {
   const files = readdirSync(ITEST).filter((f) => f.endsWith(".itest.ts"));
-  const callers = files.filter((f) => scan(readFileSync(join(ITEST, f), "utf8")).callsRunSession);
+  /** Exempt by name: verify-scale is a measurement script (R270), not a gate; selectLegs never picks it. */
+  const EXEMPT = new Set(["verify-scale.itest.ts"]);
+  const callers = files
+    .filter((f) => !EXEMPT.has(f))
+    .filter((f) => scan(readFileSync(join(ITEST, f), "utf8")).callsRunSession);
 
   test("the scan finds the itests that call runSession", () => {
-    expect(callers.length).toBeGreaterThanOrEqual(14);
+    expect(callers.length).toBeGreaterThanOrEqual(13);
+  });
+
+  test("the exemption is real: verify-scale calls runSession and is the only one exempt", () => {
+    expect(scan(readFileSync(join(ITEST, "verify-scale.itest.ts"), "utf8")).callsRunSession).toBe(
+      true,
+    );
+    expect([...EXEMPT]).toEqual(["verify-scale.itest.ts"]);
   });
 
   for (const f of callers) {

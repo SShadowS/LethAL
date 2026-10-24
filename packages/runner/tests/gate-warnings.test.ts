@@ -193,4 +193,39 @@ describe("GATE_WARNINGS", () => {
   test("hang/baseline equals check 11's allow-list", () => {
     expect(GATE_WARNINGS["hang/baseline"]).toEqual([...HANG_BASELINE_WARNING_CODES]);
   });
+
+  test("every set is sorted and unique", () => {
+    for (const [key, codes] of Object.entries(GATE_WARNINGS)) {
+      expect([...codes], key).toEqual([...new Set(codes)].sort());
+    }
+  });
+
+  test("envtool is unrecorded on purpose (host-only, R683), so it refuses by name", () => {
+    expect(Object.keys(GATE_WARNINGS).filter((k) => k.startsWith("envtool"))).toEqual([]);
+    expect(() => assertGateWarnings("envtool", "run", [], GATE_WARNINGS["envtool/run"])).toThrow(
+      /envtool\/run: no committed warning set/,
+    );
+  });
+
+  test("every al-runner-v3 leg that runs a session is pinned, so the update gate never hits an unrecorded set", () => {
+    const v3 = [
+      "S1",
+      "N1",
+      "x-s1",
+      "L1",
+      "MO",
+      "K",
+      "xd-d",
+      "xd-e",
+      "xd-f1",
+      "xd-f2",
+      "xd-f3",
+      "Y-A",
+      "Y-B",
+      "WR",
+    ];
+    for (const leg of v3) expect(GATE_WARNINGS[`al-runner-v3/${leg}`], leg).toBeDefined();
+    // N1E throws by design and is never asserted.
+    expect(GATE_WARNINGS["al-runner-v3/N1E"]).toBeUndefined();
+  });
 });

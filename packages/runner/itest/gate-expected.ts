@@ -245,9 +245,61 @@ export const LEND_FIGURES = {
  * R736: the exact SORTED, unique warning codes a gate leg's run emits, keyed `"<gate>/<leg>"`.
  * An ABSENT key makes the gate refuse (or, with LETHAL_ITEST_OBSERVE_WARNINGS=1, print the set and
  * exit 3). Fill a set in only by a deliberate edit after an observe run whose codes were each
- * explained and pre-committed. The gate never writes this. Only `hang/baseline` is filled, equal to
- * check 11 of `hang-baseline-leg.ts` (a unit test keeps the two equal).
+ * explained and pre-committed. The gate never writes this.
+ *
+ * The sets below are those of docs/superpowers/specs/2026-10-24-r736-gate-warning-sets-precommitment.md
+ * (master 59225044). They change only through a NEW observe run, an explanation per code and a new
+ * pre-commitment. `hang/baseline` equals check 11 of `hang-baseline-leg.ts` (a unit test keeps the
+ * two equal). Left ABSENT on purpose: `envtool/run` (host-only, R683: it refuses by name until the
+ * owner's observe run), and the legs that throw by design (lend RN3, RN1d, RN2, RN4; v3 N1E).
+ * `verify-scale` is exempt (a measurement script, R270).
  */
+const COMPILED_OUT = ["compiled-out-sites"];
+const HARDEN_DEPENDENTS = ["installed-dependents"];
+const RESUME_REUSED = ["resume-baseline-reused", "resume-reusing-run"];
+const XD_NARROWED = ["only-narrowed-run", "tests-only-narrowed-baseline"];
+const TABLES = ["non-executable-sites-dropped", "not-instrumentable-files-skipped"];
 export const GATE_WARNINGS: Readonly<Record<string, readonly string[]>> = {
+  "bcdev/first": [],
+  "bcdev/second": [],
+  "bcdev-names/fenced": [],
+  "bcdev-wrapped/fenced": COMPILED_OUT,
+  "bcdev-wrapped/hub": COMPILED_OUT,
+  "tables/first": TABLES,
+  "tables/second": TABLES,
+  "chunked/control": ["only-narrowed-run"],
+  "chunked/chunked": ["only-narrowed-run"],
+  "harden/a": HARDEN_DEPENDENTS,
+  "harden/b": HARDEN_DEPENDENTS,
+  "lend/L0": [],
+  "lend/L1": [],
+  "lend/N0": [],
+  "lend/R1": RESUME_REUSED,
+  "lend/R2": RESUME_REUSED,
+  "lend/RP": RESUME_REUSED,
+  "lend/R3": ["resume-reusing-run", "snapshot-backend-build-changed"],
+  "lend/N1": ["history-backend-build-changed"],
+  "lend/N5": ["history-test-app-changed"],
+  "verify/run": [],
+  "testapp/run": [],
+  "agreement/a": HARDEN_DEPENDENTS,
+  "agreement/b": HARDEN_DEPENDENTS,
+  "hang/on": [],
+  "hang/single": [],
   "hang/baseline": ["operator-narrowed-run", "tests-only-narrowed-baseline"],
+  "hang/off": ["lost-ack-unreadable"],
+  "al-runner-v3/S1": [],
+  "al-runner-v3/N1": [],
+  "al-runner-v3/x-s1": [],
+  "al-runner-v3/L1": [],
+  "al-runner-v3/MO": [],
+  "al-runner-v3/K": [],
+  "al-runner-v3/xd-d": XD_NARROWED,
+  "al-runner-v3/xd-e": XD_NARROWED,
+  "al-runner-v3/xd-f1": XD_NARROWED,
+  "al-runner-v3/xd-f2": XD_NARROWED,
+  "al-runner-v3/xd-f3": XD_NARROWED,
+  "al-runner-v3/Y-A": COMPILED_OUT,
+  "al-runner-v3/Y-B": COMPILED_OUT,
+  "al-runner-v3/WR": COMPILED_OUT,
 };
