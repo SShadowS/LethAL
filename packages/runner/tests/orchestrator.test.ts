@@ -1942,10 +1942,11 @@ ${TRIGGER_TABLE_AL}#endif
       const logic = logicOf(r);
       expect(logic.length).toBeGreaterThan(0);
       for (const m of logic) {
-        expect(m.verdict).toBe("error");
+        // R609 is a note only: the verdict stays no-coverage (counts and frozen tables do not move).
+        expect(m.verdict).toBe("no-coverage");
         expect(m.failureNote).toContain(`Sandbox Tests.${REFUSED}`);
         expect(m.failureNote).toContain("al-runner v3 refused");
-        expect(m.failureNote).toContain("not a gap in your suite");
+        expect(m.failureNote).toContain("not evidence of a gap in your suite");
       }
     });
 

@@ -7360,7 +7360,42 @@ async function runSessionBody(
         unsupportedOnlyCandidates = [];
         for (const m of uncovered) {
           const covering = unsupportedCoverage.get(m.mutantId);
-          if (covering !== undefined && covering.length > 0) {
+          const coveringNames = (covering ?? []).map(qualifiedTestName);
+          if (coveringNames.length > 0 && coveringNames.every((n) => v3RefusedThisBatch.has(n))) {
+            // R609: every test that reaches it is one al-runner v3 refused. The verdict stays
+            // `no-coverage` (counts and frozen tables do not move); only the note is added, in the
+            // slot R298's refusal sentence uses.
+            record(
+              cfg.store,
+              runId,
+              m,
+              "no-coverage",
+              outcomes,
+              batchIdx,
+              emit,
+              undefined,
+              unsupportedCoverageNote(
+                [...new Set(coveringNames)].sort(),
+                refusedThisBatch,
+                testPageThisBatch,
+                v3RefusedThisBatch,
+              ),
+              undefined,
+              0,
+              [],
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              unplaceableIds.has(m.mutantId),
+            );
+          } else if (covering !== undefined && covering.length > 0) {
             unsupportedOnlyCandidates.push({ mutant: m, covering });
           } else {
             record(
@@ -8695,12 +8730,18 @@ export function unsupportedCoverageNote(
     );
   }
 
-  // R609: al-runner v3 refused the test, so this is v3's limit, not a gap in the reader's suite.
-  // The coverage is what the test reached before the refusal (the refused statement counts as hit),
-  // so it over-approximates: the test reaches this code, it does not prove it would catch the mutant.
+  // R609: al-runner v3 refused the test. The coverage is what the test reached before the refusal
+  // (the refused statement counts as hit), so it over-approximates: the test reaches this code (or,
+  // for a trigger mutant resolved at object level, its object); it does not prove it would catch the
+  // mutant. So the note says v3's refusal is the cause, not that the suite has a gap.
   const v3 = qualified.filter((n) => v3RefusedThisBatch.has(n));
   if (v3.length > 0) {
-    return `al-runner v3 refused test(s) at baseline (${v3.join(", ")}), and they reach this code before the refusal: not a gap in your suite, the mutant is not measured here${qualified.length > v3.length ? `; also covered by test(s) that did not pass for another reason (${qualified.filter((n) => !v3.includes(n)).join(", ")})` : ""}`;
+    return describe(
+      "al-runner v3 refusal",
+      v3,
+      "the test reaches this code (or its object, for a trigger mutant) before v3 refused it; v3 refused it, so the mutant is not measured here, and this is not evidence of a gap in your suite",
+      "al-runner v3 refused at baseline",
+    );
   }
 
   return `unsupported test type: mutant covered only by test(s) that did not pass at baseline (${qualified.join(", ")})`;

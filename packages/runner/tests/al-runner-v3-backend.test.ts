@@ -2151,6 +2151,21 @@ describe("R609: a test v3 refused MID-RUN keeps the coverage it reached before t
     expect(v.coverage).toBeUndefined();
   });
 
+  test("a PASSING row with no per-test entry still refuses (R586 §6)", async () => {
+    const none = (_id: string, _a: string, testDir: string) => ({
+      coverage: [],
+      perTestCoverage: [
+        {
+          test: `Codeunit${CU}.B`,
+          coverage: [
+            { file: join(testDir, "Tests.Codeunit.al"), statements: [{ line: 12, hits: 1 }] },
+          ],
+        },
+      ],
+    });
+    await expect(runA({ method: "A", status: "pass" }, none)).rejects.toThrow(/R586 §6/);
+  });
+
   test("a timeout notRun row stays without coverage", async () => {
     const v = await runA({
       method: "A",
