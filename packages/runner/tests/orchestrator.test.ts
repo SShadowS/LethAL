@@ -10691,13 +10691,22 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       const r = await envRun({ post: P2 });
       const recorded = r.store.testDigests(r.runId);
       expect(recorded).not.toBeNull();
-      const plan = () =>
+      const guard = { calls: 0 };
+      const plan = (closed = false) =>
         verifyDependencyFingerprint(
           { fetchPublishedAppPackage: onlyP(P2), microsoftMode: () => fakeMicrosoftMode() },
           r.dirs.testDir,
           r.dirs.projectDir,
         ).then((dependencies) =>
           planVerify({
+            ...(closed
+              ? {
+                  closedWorld: async () => {
+                    guard.calls++;
+                    return { public: true, internal: true };
+                  },
+                }
+              : {}),
             sourceTestDigestParts: r.store.testDigestParts(r.runId),
             coverage: "procedure",
             source: {
@@ -10757,6 +10766,9 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
           }),
         );
       expect((await plan()).newTests.map((t) => t.method)).toEqual([]);
+      // R600: the parts this run wrote say `none`, so a closed guard at verify is never asked.
+      expect((await plan(true)).newTests.map((t) => t.method)).toEqual([]);
+      expect(guard.calls).toBe(0);
       await Bun.write(
         join(r.dirs.testDir, "SandboxTests.Codeunit.al"),
         BODY_B.replace("B asserts", "B asserts more"),
