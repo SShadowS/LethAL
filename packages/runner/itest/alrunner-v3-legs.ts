@@ -53,15 +53,33 @@ export function v3ItestFailures(
   legs: Readonly<Record<string, string>>,
   candidate: boolean,
   selected: readonly string[],
+  /** R586c: K was asked to run on a candidate, so a skip is a failure there too. */
+  kRuns = false,
 ): string[] {
   const out: string[] = [];
   for (const leg of selected) if (!(leg in legs)) out.push(`${leg}=missing`);
   for (const [leg, v] of Object.entries(legs)) {
-    if (candidate && leg === V3_K_LEG && v === V3_K_CANDIDATE_SKIP) continue;
+    if (candidate && !kRuns && leg === V3_K_LEG && v === V3_K_CANDIDATE_SKIP) continue;
     if (v !== "pass") out.push(`${leg}=${v}`);
   }
   if (!Object.values(legs).includes("pass")) out.push("no leg passed");
   return out;
+}
+
+/**
+ * R586c: `LETHAL_ITEST_V3_K_ON_CANDIDATE=1` runs K on a candidate build (the CLI-built backend gets
+ * the test-only `alRunnerCandidate` seam). Unset: K is skipped there as before. Any other value is
+ * refused by name.
+ */
+export function v3KOnCandidate(env: Readonly<Record<string, string | undefined>>): boolean {
+  const v = env.LETHAL_ITEST_V3_K_ON_CANDIDATE;
+  if (v === undefined) return false;
+  if (v !== "1") {
+    throw new Error(
+      `al-runner-v3-itest-k-on-candidate-refused: LETHAL_ITEST_V3_K_ON_CANDIDATE=${JSON.stringify(v)}; allowed: 1 or unset (R586c)`,
+    );
+  }
+  return true;
 }
 
 /**
