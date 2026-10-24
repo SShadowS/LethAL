@@ -386,14 +386,17 @@ describe("R298: a refused file's hits never fall through to a shorter path endin
     // codeunit, 50107, whose line 6 is inside `R`. A fall-through credits 50107.R on both paths.
     // R602 (A4, flipped on purpose): the file used to be SKIPPED (the hit resolved to nothing); it
     // is indexed now, so the longest ending (`src/foo.codeunit.al`) must win over the root's.
-    // R407: a multi-object file's label must name a file inside the bundle, so here the labels are
-    // the bundle's own (relative to `labelBase`, and absolute).
+    // R407: a multi-object file's label must name a file inside the bundle, so the label here is
+    // the bundle's own, absolute. It ends in both `src/foo.codeunit.al` and `foo.codeunit.al`, so a
+    // shortest-ending match would credit 50107.R and go red.
     const two = `codeunit 50151 "Foo A"\n${R298_BODY("Reached")}codeunit 50152 "Foo B"\n${R298_BODY("Other")}`;
     const dir = await bundle({ "src/Foo.Codeunit.al": two, "Foo.Codeunit.al": R298_PLAIN });
-    const index = await buildAlRunnerCoverageIndex(dir);
-    expect(index.multiObjectFiles).toEqual(["src/Foo.Codeunit.al"]);
-    expect([...index.byFile.keys()].sort()).toEqual(["foo.codeunit.al", "src/foo.codeunit.al"]);
     const admittedIndex = await buildAlRunnerCoverageIndex(dir, { labelBase: dir });
+    expect(admittedIndex.multiObjectFiles).toEqual(["src/Foo.Codeunit.al"]);
+    expect([...admittedIndex.byFile.keys()].sort()).toEqual([
+      "foo.codeunit.al",
+      "src/foo.codeunit.al",
+    ]);
     const own = [{ objectType: "Codeunit", objectId: 50151, procedure: "Reached", line: 6 }];
     const absServer: ServerPerTestCoverage = {
       test: "Codeunit50140.T",

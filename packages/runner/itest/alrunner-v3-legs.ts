@@ -183,6 +183,38 @@ export const V3_WR_KILLERS: readonly V3Killer[] = [
   ["M0098", "src/WrappedYBandTwin.Report.al", 65, "return-value", "BandYRunTwin"],
 ];
 
+/**
+ * Leg WR's pre-committed `[v3-codeunit-state-possible]` notes, `<batchIndex>/<code>` sorted (#5611:
+ * BandYRun and BandYRunTwin run after BandYDirect and BandYDirectTwin in one codeunit call). They are
+ * kills that stay kills; the note changes no verdict. Measured on the pin and the edge build alike.
+ * Every other leg, MO included, pre-commits none.
+ */
+export const V3_WR_STATE_NOTES: readonly string[] = [
+  "0/M0071",
+  "0/M0072",
+  "0/M0078",
+  "0/M0085",
+  "0/M0086",
+  "0/M0092",
+];
+
+/** One line when the run's state notes are not exactly `want` (both as `batch/code`); else none. */
+export function judgeStateNotes(got: readonly string[], want: readonly string[]): string[] {
+  const g = [...got].sort().join(",");
+  const w = [...want].sort().join(",");
+  return g === w ? [] : [`state notes [${g}], pre-committed [${w}]`];
+}
+
+/** R602: MO and WR were measured one-shot only. A named refusal for another transport, else undefined. */
+export function moWrTransportRefusal(
+  leg: string,
+  transport: string | undefined,
+): string | undefined {
+  return transport === undefined || transport === "one-shot"
+    ? undefined
+    : `${leg}: al-runner-v3-itest-leg-transport-refused: legs MO and WR were measured on the one-shot transport only (R602), not ${transport}`;
+}
+
 /** The fields of a report row the judges read. */
 export interface V3RowFacts {
   readonly mutantCode: string;

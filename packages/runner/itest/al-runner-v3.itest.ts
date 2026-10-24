@@ -99,11 +99,14 @@ import {
   V3_K_LEG,
   V3_MO_KILLERS,
   V3_WR_KILLERS,
+  V3_WR_STATE_NOTES,
   isSessionTestCall,
   judgeKillers,
   judgeLegK,
+  judgeStateNotes,
   judgeWrArms,
   legKSection,
+  moWrTransportRefusal,
   v3DefaultLegs,
   v3ItestFailures,
   v3RecordRunFailures,
@@ -508,15 +511,20 @@ function asLegFailure(leg: string, check: () => void): void {
 }
 
 /** §1's checks every new leg makes: a clean baseline, no note, no refusal, Sleep index 0 + 0. */
-function assertCleanLeg(r: SessionReport, b: AlRunnerV3Backend, leg: string): void {
+function assertCleanLeg(
+  r: SessionReport,
+  b: AlRunnerV3Backend,
+  leg: string,
+  /** R602: the leg's pre-committed state notes (`batch/code`); every other leg pre-commits none. */
+  stateNotes: readonly string[] = [],
+): void {
   must(
     r.baselineGreen && r.unsupportedTests.length === 0,
     `${leg}: baseline not green or a refused test`,
   );
-  must(
-    tagged(r, V3_STATE_NOTE_TAG).length === 0 && tagged(r, V3_REFUSED_NEARBY_TAG).length === 0,
-    `${leg}: state or refused-nearby notes`,
-  );
+  const stateDiff = judgeStateNotes(tagged(r, V3_STATE_NOTE_TAG), stateNotes);
+  must(stateDiff.length === 0, `${leg}: ${stateDiff.join("; ")}`);
+  must(tagged(r, V3_REFUSED_NEARBY_TAG).length === 0, `${leg}: refused-nearby notes`);
   must(
     tagged(r, SLEEP_NOTE_TAG).length === 0 && refusedCause(r).length === 0,
     `${leg}: a §6 or runner refusal`,
@@ -623,6 +631,8 @@ function assertKillers(
  * index places. Pre-committed 6 / 1 / 5 over 12: the 5 no-coverage are in procedures no test calls.
  */
 async function legMO(scratch: string): Promise<SessionReport> {
+  const refused = moWrTransportRefusal("MO", TRANSPORT.transport);
+  if (refused !== undefined) throw new LegFailure(refused);
   const projectDir = fixture("sandbox-multiobject");
   const testDir = fixture("sandbox-multiobject-tests");
   const ids = { selectorId: 79849, controlId: 79848, tableId: 79847 };
@@ -650,6 +660,8 @@ async function legMO(scratch: string): Promise<SessionReport> {
  * That refusal costs 2 kills `none` finds (M0001, M0003), named, not hidden. Pre-committed 58 / 37 / 3.
  */
 async function legWR(scratch: string): Promise<SessionReport> {
+  const refused = moWrTransportRefusal("WR", TRANSPORT.transport);
+  if (refused !== undefined) throw new LegFailure(refused);
   const b = new AlRunnerV3Backend(
     backendCfg({
       instrumentedDir: join(scratch, "backend"),
@@ -672,7 +684,7 @@ async function legWR(scratch: string): Promise<SessionReport> {
   for (const l of arms) console.log(`    - ${l}`);
   must(arms.length === 0, `WR: the WrappedArms refusal differs: ${arms.join("; ")}`);
   assertCounts(r, "WR", 58, 37, 3, 98);
-  assertCleanLeg(r, b, "WR");
+  assertCleanLeg(r, b, "WR", V3_WR_STATE_NOTES);
   return r;
 }
 
@@ -1534,7 +1546,7 @@ async function main(): Promise<void> {
         }
         const msg = err instanceof Error ? err.message : String(err);
         // M2: by the error's TYPE only (legOutcomeOfError), never by its text.
-        legs[leg] = legOutcomeOfError(err);
+        legs[leg] = legOutcomeOfError(err, leg);
         if (err instanceof V3LegHeld) lines.push(...err.lines.map((l) => `${leg}: ${l}`));
         else lines.push(`${leg}: ${msg.slice(0, 1000)}`);
         console.log(`leg ${leg}: ${legs[leg]?.toUpperCase()} ${formatFailure(err).slice(0, 2000)}`);

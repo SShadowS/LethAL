@@ -78,7 +78,7 @@ describe("R654 I1 (a): the rule each backend kind gets, and what a v3 session re
     ).toBe(0);
   });
 
-  test("the pinned sentences of the retired rule still read as before (refuse-wrapped stays for bcdev without arms)", () => {
+  test("the retired rule's sentences, reached by its own name", () => {
     const refused = coverageRefusedObjects(
       files({ [W1_FILE]: W1, [BARE_FILE]: BARE_BEFORE }),
       "refuse-wrapped",

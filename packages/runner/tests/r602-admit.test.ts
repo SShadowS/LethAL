@@ -51,6 +51,41 @@ const WRAPPED_MULTI = `#if SYM\n${body(50605, "R602 WM", "Hit")}#endif\n${body(5
 const files = (src: Record<string, string>) =>
   Object.entries(src).map(([path, text]) => ({ path, root: wrapRoot(parseAL(text)) }));
 
+const FIXTURES = join(import.meta.dir, "..", "..", "..", "fixtures");
+
+describe("R602 build review M1: the guard on the REAL fixtures", () => {
+  test("sandbox-wrapped as a whole is OFF, and the warning names the WrappedArms file", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(await v3CoverageMode("al-runner", join(FIXTURES, "sandbox-wrapped"))).toBe("none");
+      expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([
+        '[lethal] al-runner-v3-coverage-off: coverage is turned OFF for this run (coverage "none"): the coverage index has no rule for the #if wrapper shape (two-arm, #elif, nested, or a multi-object file holding a wrapper) in src/WrappedArms.Codeunit.al (R602).',
+      ]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("sandbox-multiobject, and the fixtures no committed v3 figure may move on, stay ON with no warning", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      for (const f of [
+        "sandbox-multiobject",
+        "sandbox-app",
+        "sandbox-data",
+        "sandbox-layout",
+        "sandbox-symbols",
+        "sandbox-names",
+      ]) {
+        expect([f, await v3CoverageMode("al-runner", join(FIXTURES, f))]).toEqual([f, "al-runner"]);
+      }
+      expect(warn.mock.calls).toEqual([]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
 describe("R602 A3: the v3 CLI guard keeps coverage ON for a multi-object-only project", () => {
   test("a multi-object file and a single-wrapper file: coverage stays al-runner, no warning", async () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
