@@ -1142,7 +1142,7 @@ function argInfo(call: ALSyntaxNode): {
           ...(a.rawKind === "database_reference" ? {} : { qualified: true as const }),
         };
     } else if (a.rawKind === "integer") {
-      f = { k: "int", at, value: a.text.trim() };
+      f = { k: "int", at, value: intLiteral(a.text) };
     } else {
       const recv = toRecv(a);
       if (recv.k !== "value") f = { k: "expr", at, recv };
@@ -1184,6 +1184,20 @@ const NO_IDS: readonly string[] = Object.freeze([]);
 const ID_RUN_KINDS = ["report", "page", "xmlport", "query", "table"] as const;
 const ID_RUN_REF = /^\s*(report|page|xmlport|query|database)\s*::\s*([\s\S]+?)\s*$/i;
 const KINDED_REF = /^(report|page|xmlport|query|table)::([\s\S]+)$/;
+/** R685: the reference kinds `foldIdTargets` folds, so handing one out is no fallback. */
+const FOLDED_REF_KINDS: ReadonlySet<string> = new Set([
+  "codeunit",
+  "page",
+  "report",
+  "xmlport",
+  "query",
+  "database",
+]);
+
+/** R699: an integer literal as its number's text, so `01000` and `1000` are one id in every lookup. */
+function intLiteral(text: string): string {
+  return text.trim().replace(/^0+(?=\d)/, "");
+}
 
 /**
  * `Proc.idRefs`: `Codeunit::X` names (bare), integer literals of 1000 or more, and (R684) a
@@ -1204,7 +1218,10 @@ function idRefsIn(block: ALSyntaxNode): readonly string[] {
         if (kind !== undefined && o?.[2] !== undefined)
           v = `${kind === "database" ? "table" : kind}::${o[2]}`;
       }
-    } else if (n.rawKind === "integer" && n.text.trim().length >= 4) v = n.text.trim();
+    } else if (n.rawKind === "integer") {
+      const num = intLiteral(n.text);
+      if (num.length >= 4) v = num;
+    }
     if (v === undefined) return;
     out ??= [];
     out.push(v);
@@ -2031,6 +2048,11 @@ export class Scanner {
    * record, page or other object, or an Interface (its implementation may be a test-app
    * codeunit, which is not known here). An extension's object is not counted: every
    * test-app extension is in every digest already (`subscriberFold`).
+   *
+   * R685 narrows this: an id or reference of a test-app codeunit or `ID_RUN_KINDS` object is
+   * folded by `foldIdTargets` (no fallback here), and a plain `Codeunit X` or `Interface I`
+   * variable is folded as an entry in `argHolds`. `this`, a record, a page/report/xmlport/query
+   * variable, an array or collection element and a mixed `#if` declaration still fall back.
    */
   private passesTestApp(
     p: Proc,
@@ -2042,16 +2064,16 @@ export class Scanner {
   ): void {
     for (const f of facts) {
       if (skipAt.has(f.at)) continue;
-      // External review r1 #3: an external callee can run a codeunit by the id it is handed.
-      if (f.k === "int") {
-        const owner = refsOnly ? undefined : this.idOwner(f.value);
-        if (owner !== undefined)
-          fallBack(st, `${label} is handed ${f.value}, a test-app ${owner}'s id, by ${p.display}`);
-        continue;
-      }
+      // R685: an id of a test-app codeunit or `ID_RUN_KINDS` object (an `int` whose `idOwner` is
+      // defined, or a `ref` of an allow-listed kind) is no fallback: `foldIdTargets` folds every
+      // reached procedure's `idRefs`, which name it (`traceParam` keeps its own fallbacks).
+      if (f.k === "int") continue;
       let what: string | undefined;
       if (f.k === "ref") {
-        if (this.isTestAppObject(f.kind === "database" ? "table" : f.kind, f.name))
+        if (
+          !FOLDED_REF_KINDS.has(f.kind) &&
+          this.isTestAppObject(f.kind === "database" ? "table" : f.kind, f.name)
+        )
           what = `${f.kind}::${f.name}`;
       } else if (refsOnly) {
         this.builtinArg(p, f.recv, label, st);
@@ -2103,7 +2125,15 @@ export class Scanner {
             `${why}: an array or collection of Variant, whose elements the walk cannot see`,
           );
         else if (shapes.has("plain")) this.traceVariant(p, r.name, why, st, false, []);
-        const held = types?.find((t) => this.holdsTestApp(t));
+        const holding = types?.filter((t) => this.holdsTestApp(t)) ?? [];
+        // R685: a plain test-app codeunit or Interface variable is folded as an entry (what
+        // external code can call on it), not a fallback. Every type an `#if` arm declares must be
+        // one; a record, a page variable, an array or collection element and `this` fall back.
+        if (holding.length > 0 && holding.every((t) => this.plainEntryType(t))) {
+          for (const t of holding) this.builtinHolds(t, why, st, p.unit);
+          return undefined;
+        }
+        const held = holding[0];
         return held === undefined ? undefined : `${r.name} (${held.trim()})`;
       }
       case "index":
@@ -2382,6 +2412,12 @@ export class Scanner {
     }
     if (types.some((t) => VARIANT_TYPE.test(t))) this.traceValue(p, recv, why, st, []);
     for (const t of types) this.builtinHolds(t, why, st, p.unit);
+  }
+
+  /** R685: whether `t` is exactly `Codeunit <name>` or `Interface <name>` (not an array or
+   *  collection). A name `foldInterface` cannot resolve falls back there, in `outside`. */
+  private plainEntryType(t: string): boolean {
+    return INTERFACE_TYPE.test(t) || CODEUNIT_TYPE.test(t);
   }
 
   /** `builtinArg` for one non-Variant type: an Interface or a test-app codeunit is folded. */
