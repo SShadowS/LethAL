@@ -393,6 +393,20 @@ codeunit 50120 "Sub"
       );
       expect(onFallback(g)).toBe(false);
       expect(digestA(edit(g, "Rep.al", "Message('a');", "Message('b');"))).not.toBe(digestA(g));
+      // The trigger's callee moves it too: only `enterObject` walks a trigger's calls.
+      const h = {
+        ...edit(
+          f,
+          "Rep.al",
+          "    dataset",
+          '    trigger OnPreReport()\n    var\n        H: Codeunit "Rep Helper";\n    begin\n        H.Go();\n    end;\n\n    dataset',
+        ),
+        "Hlp.al":
+          "codeunit 50171 \"Rep Helper\"\n{\n    procedure Go()\n    begin\n        Message('h1');\n    end;\n}\n",
+      };
+      expect(onFallback(h)).toBe(false);
+      expect(digestA(edit(h, "Hlp.al", "'h1'", "'h2'"))).not.toBe(digestA(h));
+      expect(digestA(unrelated(h))).toBe(digestA(h));
     });
 
     test("(d) a record of a test-app table", () => {
