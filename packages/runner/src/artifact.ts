@@ -197,15 +197,43 @@ export async function buildPackageCacheCopy(
     }
     await linkOrCopy(fs, controlSymbolPath, join(copy, CONTROL_SYMBOL_FILE));
   } catch (e) {
-    await removePackageCacheCopy(copy).catch(() => {});
+    await removePackageCacheCopy(copy).catch((err) =>
+      console.warn(`[lethal] could not remove the package cache copy ${copy}: ${String(err)}`),
+    );
     throw e;
   }
   return copy;
 }
 
-/** R552: remove a `buildPackageCacheCopy` directory (Windows retry knobs, as elsewhere). */
+const RM_RETRY_CODES = new Set(["EBUSY", "EPERM", "ENOTEMPTY", "EACCES"]);
+
+/**
+ * R708: remove a just-written folder on Windows, where a virus scanner can hold a fresh file for
+ * seconds. Retries in our own loop (whether Bun honours `maxRetries` is unmeasured), waiting
+ * `delayMs * attempt` between tries (about 4.5 s in all by default), then throws the last error.
+ * Any other error code is thrown at once.
+ */
+export async function removeWithRetry(
+  path: string,
+  rmFn: typeof rm = rm,
+  tries = 10,
+  delayMs = 100,
+): Promise<void> {
+  for (let i = 1; ; i++) {
+    try {
+      await rmFn(path, { recursive: true, force: true });
+      return;
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code ?? "";
+      if (i >= tries || !RM_RETRY_CODES.has(code)) throw e;
+      await new Promise((r) => setTimeout(r, delayMs * i));
+    }
+  }
+}
+
+/** R552: remove a `buildPackageCacheCopy` directory (retries as `removeWithRetry`). */
 export async function removePackageCacheCopy(copy: string): Promise<void> {
-  await rm(copy, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  await removeWithRetry(copy);
 }
 
 async function linkOrCopy(fs: PackageCacheCopyFs, from: string, to: string): Promise<void> {

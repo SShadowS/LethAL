@@ -138,8 +138,12 @@
     "bc-republish.test.ts",
     "r594/cdo-publish.ts",
     "r623-probe/drive.ts",
+<<<<<<< HEAD
     "r706-client-probe/classify.ts",
     "r706-client-probe/classify.test.ts",
+=======
+    "r707-probe/drive.ts",
+>>>>>>> origin/master
     "bc-symbol-cache.ts",
     "bc-symbol-cache.test.ts",
     "bc-app-content.ts",

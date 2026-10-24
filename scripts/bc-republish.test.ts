@@ -3,9 +3,12 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ServerOutOfUseError } from "../packages/runner/itest/out-of-use.ts";
+import { buildFakeAppWithEntries } from "../packages/runner/tests/helpers/fake-app.ts";
 import type { AppManifest } from "./bc-linux-setup.ts";
 import {
+  againstBuilt,
   controlAction,
+  guardDependents,
   packageStatus,
   parseArgs,
   publishOrder,
@@ -114,6 +117,131 @@ describe("publishOrder and roleOf (R599: nothing is removed, so no dependent is 
   test("a PUBLISH_PLAN target with no dependent (sandbox-probes) is a target, so it is told --mint (M4)", () => {
     const probes = new Map<string, AppManifest>([["sandbox-probes", app("p")]]);
     expect(roleOf("sandbox-probes", probes)).toBe("target");
+  });
+});
+
+describe("R-707: guardDependents compiles unrequested dependents before anything is published", () => {
+  const all = new Map<string, AppManifest>([
+    ["tt", app("tt", ["t"])],
+    ["t", app("t")],
+  ]);
+  // `res`: the dependent "tt" is installed (default), and its resident compile throws `throws`.
+  const run = async (
+    requested: string[],
+    failing: string[],
+    res: { installed?: boolean; throws?: string } = {},
+  ) => {
+    const compiled: string[] = [];
+    const residentChecked: string[] = [];
+    const published: string[][] = [];
+    let error: Error | undefined;
+    try {
+      await guardDependents(
+        requested,
+        all,
+        async (dir) => {
+          compiled.push(dir);
+          if (failing.includes(dir))
+            throw new Error(
+              `alc failed on ${dir} (exit 1):\nsrc/Dep.al(7,21): error AL0135: no argument given`,
+            );
+        },
+        {
+          fetch: async () => (res.installed === false ? null : Buffer.from("resident")),
+          compile: async (pair) => {
+            residentChecked.push(pair.dependent.dir);
+            if (res.throws !== undefined) throw new Error(res.throws);
+          },
+        },
+        async () => void published.push(publishOrder(requested, all)),
+      );
+    } catch (e) {
+      error = e as Error;
+    }
+    return { compiled, residentChecked, published, error };
+  };
+  const AL_ERROR = "alc failed on tt (exit 1):\nsrc/Old.al(3,9): error AL0132: no definition";
+
+  test("(a) a breaking change is refused by name, and nothing is published", async () => {
+    const r = await run(["t"], ["tt"]);
+    expect(r.error?.message).toContain(
+      "refuse dependent-breaks: App tt (src/Dep.al(7,21): error AL0135",
+    );
+    expect(r.published.length).toBe(0);
+  });
+
+  test("(b) a compatible change publishes, after one compile per dependent", async () => {
+    const r = await run(["t"], []);
+    expect(r.error).toBeUndefined();
+    expect(r.compiled).toEqual(["tt"]);
+    expect(r.published).toEqual([["t"]]);
+  });
+
+  test("(c) a dependent requested with its target: its NEW source is not compiled a second time, its RESIDENT source is checked", async () => {
+    const r = await run(["tt", "t"], ["tt"]);
+    expect(r.error).toBeUndefined();
+    expect(r.compiled.length).toBe(0);
+    expect(r.residentChecked).toEqual(["tt"]);
+    expect(r.published).toEqual([["t", "tt"]]);
+  });
+
+  test("T-cochange: the NEW tests source is fine but the RESIDENT one breaks: refused, zero publishes", async () => {
+    const r = await run(["tt", "t"], [], { throws: AL_ERROR });
+    expect(r.error?.message).toContain(
+      "refuse resident-dependent-breaks: App tt (src/Old.al(3,9): error AL0132",
+    );
+    expect(r.error?.message).toContain("(1) uninstall and unpublish the dependent");
+    expect(r.error?.message).not.toContain("together");
+    expect(r.published.length).toBe(0);
+  });
+
+  test("T-resident-ok: the resident source compiles: published as before", async () => {
+    const r = await run(["tt", "t"], []);
+    expect(r.error).toBeUndefined();
+    expect(r.residentChecked).toEqual(["tt"]);
+    expect(r.published).toEqual([["t", "tt"]]);
+  });
+
+  test("T-not-installed: a dependent with no resident package is not checked", async () => {
+    const r = await run(["tt", "t"], [], { installed: false, throws: AL_ERROR });
+    expect(r.error).toBeUndefined();
+    expect(r.residentChecked.length).toBe(0);
+    expect(r.published).toEqual([["t", "tt"]]);
+  });
+
+  test("T-not-compile: a throw with no AL error line is not called a break, and nothing is published", async () => {
+    const r = await run(["t"], [], { throws: "the dev endpoint refused the login (HTTP 401)" });
+    expect(r.error?.message).toContain("dependent check failed (not a compile result)");
+    expect(r.error?.message).not.toContain("dependent-breaks");
+    expect(r.published.length).toBe(0);
+  });
+});
+
+describe("R-707: againstBuilt checks the resident dependent against the NEW local build", () => {
+  const pkgOf = (name: string, version: string) =>
+    buildFakeAppWithEntries({
+      "NavxManifest.xml": `<Package><App Id="${name}-id" Name="${name}" Publisher="LethAL" Version="${version}" /></Package>`,
+    });
+  test("the bytes reaching the compile are the items' local target, not the resident package; a pass is logged", async () => {
+    const local = pkgOf("T", "1.0.0.5");
+    const resident = pkgOf("TT", "1.0.0.1");
+    const seen: Buffer[] = [];
+    const lines: string[] = [];
+    const check = againstBuilt(
+      [{ dir: "t", local, role: "target", gateDeploys: false }],
+      async (target, pkg) => {
+        expect(target.name).toBe("T");
+        expect(pkg).toBe(resident);
+        seen.push(target.bytes);
+      },
+      (s) => lines.push(s),
+    );
+    await check(
+      { target: "t", dependent: { dir: "tt", name: "TT", publisher: "LethAL" } },
+      resident,
+    );
+    expect(seen).toEqual([local]);
+    expect(lines).toEqual(["  checked   TT (resident) against T 1.0.0.5: ok"]);
   });
 });
 

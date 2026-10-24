@@ -13,17 +13,20 @@ import {
   type ExtensionRow,
   type ServerOps,
   actAll,
+  appJsonFromManifest,
   changedEntries,
   compilerVersion,
   contentDigest,
   decideAll,
   decideApp,
   decideControl,
+  dependencyBytes,
   headerPackageId,
   isInstrumented,
   normaliseNavigation,
   realOps,
   refusals,
+  refuseDependent,
   residentPackage,
 } from "./bc-app-content.ts";
 
@@ -722,5 +725,71 @@ describe("R627: the two decoded entries refuse invalid UTF-8 and keep every vali
     expect(files).toEqual(Object.keys(pinned));
     for (const f of files)
       expect(contentDigest(pkgOf(f.replace(/\.app$/, "")))).toBe(pinned[f] ?? "unpinned");
+  });
+});
+
+describe("R-707: appJsonFromManifest rebuilds an app.json from a package manifest", () => {
+  test("keeps identity, runtime, dependencies and id ranges", () => {
+    const pkg = buildFakeAppWithEntries({
+      "NavxManifest.xml": `<Package><App Id="i1" Name="T" Publisher="P" Version="1.2.3.4" Runtime="17.0" Target="Cloud" Application="28.0.0.0" Platform="28.0.0.0" /><IdRanges><IdRange MinObjectId="70" MaxObjectId="79" /></IdRanges><Dependencies><Dependency Id="d1" Name="Tgt" Publisher="P" MinVersion="1.0.0.0" /></Dependencies></Package>`,
+    });
+    expect(appJsonFromManifest(pkg)).toMatchObject({
+      id: "i1",
+      name: "T",
+      version: "1.2.3.4",
+      runtime: "17.0",
+      application: "28.0.0.0",
+      dependencies: [{ id: "d1", name: "Tgt", publisher: "P", version: "1.0.0.0" }],
+      idRanges: [{ from: 70, to: 79 }],
+    });
+  });
+
+  test("M-2: PreprocessorSymbols with children is refused, an empty element is not", () => {
+    const withSyms = (inner: string) =>
+      buildFakeAppWithEntries({
+        "NavxManifest.xml": `<Package><App Id="i1" Name="T" Publisher="P" Version="1.2.3.4" /><PreprocessorSymbols>${inner}</PreprocessorSymbols></Package>`,
+      });
+    expect(() => appJsonFromManifest(withSyms("<Symbol>X</Symbol>"))).toThrow(
+      /PreprocessorSymbols/,
+    );
+    expect(appJsonFromManifest(withSyms(""))).toMatchObject({ id: "i1" });
+  });
+});
+
+describe("R-707: dependencyBytes maps the target's name to the given target bytes", () => {
+  const target = { name: "T", publisher: "P", bytes: Buffer.from("new") };
+  test("the target gets the new bytes and no lookup; anything else gets the lookup", async () => {
+    let lookups = 0;
+    const lookup = async () => {
+      lookups++;
+      return Buffer.from("resident");
+    };
+    expect((await dependencyBytes({ name: "T", publisher: "P" }, target, lookup))?.toString()).toBe(
+      "new",
+    );
+    expect(lookups).toBe(0);
+    expect((await dependencyBytes({ name: "U", publisher: "P" }, target, lookup))?.toString()).toBe(
+      "resident",
+    );
+    expect(lookups).toBe(1);
+  });
+});
+
+describe("R-707 M-3: a missing package is not a break", () => {
+  test("AL1022 and 'could not be found' lines are 'not a compile result'", () => {
+    for (const line of [
+      "x.json(1,1): error AL1022: The package 'A' could not be found",
+      "error AL1013: package P_A not found in the package cache",
+    ])
+      expect(refuseDependent("resident-dependent-breaks", "D", new Error(line)).message).toContain(
+        "not a compile result",
+      );
+  });
+  test("a real error line still names the label; the kept-target label has its own remedy", () => {
+    const e = new Error("src/a.al(7,21): error AL0135: no argument");
+    expect(refuseDependent("dependent-vs-kept-target", "D", e).message).toContain(
+      "refuse dependent-vs-kept-target: D (src/a.al(7,21): error AL0135",
+    );
+    expect(refuseDependent("dependent-vs-kept-target", "D", e).message).toContain("--mint");
   });
 });

@@ -605,6 +605,110 @@ function appIdOf(b: Buffer): string {
   return readAppIdentity(b).id;
 }
 
+// ---------------------------------------------------------------------------------------------
+// R-707: a target change must not break an installed dependent (measure.md: BC recompiles an installed
+// dependent at publish, refuses, and a refused UPGRADE can fail to restore, R709)
+
+/** A line alc prints for a real compile error (`...: error AL0135: ...`). */
+const COMPILE_ERROR = /\berror [A-Z]+\d+\b/;
+const NOT_FOUND = /\bAL1022\b|package\b.*\bnot found|could not be found/i;
+
+/**
+ * The refusal for a dependent check that threw. Only a throw that carries an alc error line is a
+ * compile result ("breaks"); any other (a symbol download, a missing alc, no source) is not, and says so.
+ */
+export function refuseDependent(
+  label: "dependent-breaks" | "resident-dependent-breaks" | "dependent-vs-kept-target",
+  name: string,
+  err: unknown,
+): Error {
+  const text = err instanceof Error ? err.message : String(err);
+  const lines = text.split(/\r?\n/);
+  // M-3: a missing package (AL1022 and its kin) is a dependency-resolution fault, not a code break.
+  const hit = lines.find((l) => COMPILE_ERROR.test(l) && !NOT_FOUND.test(l));
+  if (hit === undefined)
+    return new Error(
+      `refuse dependent check failed (not a compile result): ${name} (${lines[0]?.trim()})\nNOTHING was published.`,
+    );
+  const remedy =
+    label === "dependent-breaks"
+      ? "Fix the dependent's source, or change the target so it still compiles."
+      : label === "dependent-vs-kept-target"
+        ? "The new dependent build does not compile against the target the server keeps. The target must be published first, which after a gate run means --mint (R605)."
+        : "BC recompiles the installed dependent from its resident source, refuses, and can fail to restore (R709). Safe manual sequence: (1) uninstall and unpublish the dependent; (2) publish the target (after a gate run, with --mint, R605); (3) publish the new dependent build (R605: a same-version test-app republish is accepted after an unpublish).";
+  return new Error(`refuse ${label}: ${name} (${hit.trim()})\nNOTHING was published. ${remedy}`);
+}
+
+export interface ResidentPair {
+  readonly target: string;
+  readonly dependent: { readonly dir: string; readonly name: string; readonly publisher: string };
+}
+
+/**
+ * Before anything is sent: for each (target, dependent) pair, read the dependent's RESIDENT package
+ * and have `compile` check its resident source against the new target build. A dependent with no
+ * resident package is skipped (nothing installed, nothing to break). Chains: a dependent of a dependent
+ * compiles against the middle app's resident build, so at worst it refuses, the safe direction.
+ */
+export async function guardResident(
+  pairs: readonly ResidentPair[],
+  resident: (publisher: string, name: string) => Promise<Buffer | null>,
+  compile: (pair: ResidentPair, pkg: Buffer) => Promise<void>,
+): Promise<void> {
+  for (const pair of pairs) {
+    const { name, publisher } = pair.dependent;
+    try {
+      const pkg = await resident(publisher, name);
+      if (pkg !== null) await compile(pair, pkg);
+    } catch (err) {
+      throw refuseDependent("resident-dependent-breaks", name, err);
+    }
+  }
+}
+
+/** The package a resident-source compile puts in the symbols dir for one dependency: the new target build for the target, else `lookup`. */
+export async function dependencyBytes(
+  d: { readonly name: string; readonly publisher: string },
+  target: { readonly name: string; readonly publisher: string; readonly bytes: Buffer },
+  lookup: () => Promise<Buffer | null>,
+): Promise<Buffer | null> {
+  return d.name === target.name && d.publisher === target.publisher ? target.bytes : lookup();
+}
+
+/** An `app.json` for a resident package, from its `NavxManifest.xml` (the package carries no app.json). */
+export function appJsonFromManifest(pkg: Buffer): Record<string, unknown> {
+  const xml = readPackageEntry(pkg, "NavxManifest.xml")?.toString("utf8");
+  if (xml === undefined) throw new Error("resident package has no NavxManifest.xml");
+  const attrs = (tag: string): Record<string, string> =>
+    Object.fromEntries([...tag.matchAll(/(\w+)="([^"]*)"/g)].map((m) => [m[1], m[2]]));
+  const appTag = /<App\s[^>]*>/.exec(xml)?.[0];
+  if (appTag === undefined) throw new Error("resident package manifest has no <App> element");
+  // M-2: preprocessor symbols change what alc compiles; app.json cannot carry them, so refuse to guess.
+  if (/<PreprocessorSymbols\s*>\s*<\w/.test(xml))
+    throw new Error("resident package manifest has <PreprocessorSymbols> children; not rebuilt");
+  const a = attrs(appTag);
+  const opt = (k: string, v: string | undefined) => (v === undefined ? {} : { [k]: v });
+  return {
+    id: a.Id,
+    name: a.Name,
+    publisher: a.Publisher,
+    version: a.Version,
+    ...opt("runtime", a.Runtime),
+    ...opt("target", a.Target),
+    ...opt("application", a.Application),
+    ...opt("platform", a.Platform),
+    dependencies: [...xml.matchAll(/<Dependency\s[^>]*>/g)].map((m) => {
+      const d = attrs(m[0]);
+      return { id: d.Id, name: d.Name, publisher: d.Publisher, version: d.MinVersion };
+    }),
+    idRanges: [...xml.matchAll(/<IdRange\s[^>]*>/g)].map((m) => {
+      const r = attrs(m[0]);
+      return { from: Number(r.MinObjectId), to: Number(r.MaxObjectId) };
+    }),
+    features: [...xml.matchAll(/<Feature>([^<]*)<\/Feature>/g)].map((m) => m[1]),
+  };
+}
+
 /**
  * Decides every item against the server, printing each decision (with what the rows said).
  */

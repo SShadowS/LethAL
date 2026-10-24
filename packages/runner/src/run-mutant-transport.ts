@@ -103,6 +103,13 @@ function stampManyStop(
     : { ...r, verdicts: r.verdicts.map((v) => ({ ...v, stopState })) };
 }
 
+/**
+ * R710: the clock for every elapsed-time reading in this file. Monotonic, so a wall-clock step
+ * (WSL2 time sync) cannot shorten or lengthen a measured duration. `Date.now()` stays only for
+ * wall timestamps (trace `at:`, poll `sentAt`).
+ */
+const monoNow = (): number => Math.floor(performance.now());
+
 /** R-204b: the single path's stop, per call. `done` settles `state`; it never rejects. */
 interface StopTracker {
   fired: boolean;
@@ -122,7 +129,7 @@ async function settleStop(
   deadline: number,
 ): Promise<TestVerdict> {
   if (!stop.fired) return v;
-  const left = deadline - Date.now();
+  const left = deadline - monoNow();
   if (stop.state === "issued" && stop.done !== undefined && left > 0) {
     await bounded(stop.done, left, "the stop").catch(() => {});
   }
@@ -1107,7 +1114,7 @@ export class RunMutantTransport {
     };
     const firstMethod = methods[0];
     if (firstMethod === undefined) throw new Error("unreachable: methods is non-empty");
-    const started = Date.now();
+    const started = monoNow();
     const fencedOp = { attemptId, opSeq: lease.opSeq } as const;
     const pollMs = req.watchdogPollMs ?? WATCHDOG_POLL_MS;
     const call = this.callOf(methods);
@@ -1144,7 +1151,7 @@ export class RunMutantTransport {
       return call({
         ref: firstMethod.ref,
         outcome: "error",
-        durationMs: Date.now() - started,
+        durationMs: monoNow() - started,
         failureMessage: `RunMutantMany request construction failed: ${String(err)}`,
         operation: "pre-dispatch-rejected",
       });
@@ -1211,7 +1218,7 @@ export class RunMutantTransport {
         // poll that does not answer in time is a failed poll and the loop goes on.
         const pollBound = Math.max(
           0,
-          Math.min(this.pollBoundMs, hardCapMs - (Date.now() - started)),
+          Math.min(this.pollBoundMs, hardCapMs - (monoNow() - started)),
         );
         try {
           status = await bounded(
@@ -1226,7 +1233,7 @@ export class RunMutantTransport {
           continue; // a failed poll is "nothing yet"
         }
         pollsOk++;
-        lastPollOkAt = Date.now() - started;
+        lastPollOkAt = monoNow() - started;
         trace("poll-ok", {
           seq,
           sentAt,
@@ -1277,7 +1284,7 @@ export class RunMutantTransport {
         stopFired = true;
         stopDecision = { methodIndex: row.methodIndex, token: row.token, ref: entry.ref };
         let answer: StopAtAnswer;
-        stopSentAt = Date.now() - started;
+        stopSentAt = monoNow() - started;
         trace("stop-sent", { methodIndex: row.methodIndex });
         // R-204b: each stop ends in a state, inside the EARLIER of send time + grace and the call's
         // own hard cap, so a stop sent late cannot buy a fresh grace after the cap.
@@ -1293,14 +1300,14 @@ export class RunMutantTransport {
           });
         } catch (err) {
           stopAttempts[attempt] = "unknown";
-          stopAnsweredAt = Date.now() - started;
+          stopAnsweredAt = monoNow() - started;
           trace("stop-threw", { error: describeThrown(err) });
           refuseOnUnfiltered(err);
           stopHookError = err;
           continue;
         }
         stopAttempts[attempt] = answer.stopped ? "confirmed" : "refused";
-        stopAnsweredAt = Date.now() - started;
+        stopAnsweredAt = monoNow() - started;
         trace("stop-answered", { stopped: answer.stopped, reason: answer.reason });
         if (answer.stopped) {
           stopConfirmed = true;
@@ -1342,7 +1349,7 @@ export class RunMutantTransport {
       const verdict: TestVerdict = {
         ref: watchedRef,
         outcome: "deadline-exceeded",
-        durationMs: Date.now() - started,
+        durationMs: monoNow() - started,
         failureMessage: `${why}: ${String(err)}.${stopDetail()}`,
         operation: "in-flight-unknown",
         fencedOp,
@@ -1364,7 +1371,7 @@ export class RunMutantTransport {
         signal: controller.signal,
       });
     } catch (err) {
-      failedAt = Date.now() - started;
+      failedAt = monoNow() - started;
       settle();
       trace("settled", { how: controller.signal.aborted ? "aborted" : "connection-failed" });
       await watchdog;
@@ -1372,7 +1379,7 @@ export class RunMutantTransport {
       return call({
         ref: watchedRef,
         outcome: "error",
-        durationMs: Date.now() - started,
+        durationMs: monoNow() - started,
         failureMessage: `RunMutantMany connection failed after dispatch: ${String(err)}.${stopDetail()}`,
         operation: "in-flight-unknown",
         fencedOp,
@@ -1382,7 +1389,7 @@ export class RunMutantTransport {
     try {
       rawBody = await res.text();
     } catch (err) {
-      failedAt = Date.now() - started;
+      failedAt = monoNow() - started;
       settle();
       trace("settled", { how: controller.signal.aborted ? "aborted" : "body-failed" });
       await watchdog;
@@ -1390,7 +1397,7 @@ export class RunMutantTransport {
       return call(
         this.inFlightUnknown(
           watchedRef,
-          Date.now() - started,
+          monoNow() - started,
           `RunMutantMany 2xx body could not be read: ${String(err)}.${stopDetail()}`,
           fencedOp,
         ),
@@ -1399,7 +1406,7 @@ export class RunMutantTransport {
     settle();
     trace("settled", { how: "answer" });
     await watchdog;
-    const durationMs = Date.now() - started;
+    const durationMs = monoNow() - started;
 
     if (stopFired && isAlStopResponse(res.status, rawBody)) {
       const decision = stopDecision;
@@ -1757,7 +1764,7 @@ export class RunMutantTransport {
     const sink: { rows?: readonly FencedCoverageRow[]; stats?: FencedCoverageStats } = {};
     // R-204b: the grace ends at dispatch + budget + grace whatever happens in between, so an answer
     // arriving late in it cannot buy a fresh grace for the stop's reply.
-    const stopDeadline = Date.now() + req.timeoutMs + (req.stopGraceMs ?? 30_000);
+    const stopDeadline = monoNow() + req.timeoutMs + (req.stopGraceMs ?? 30_000);
     const stop: StopTracker = { fired: false };
     const first = await settleStop(
       await this.dispatch(req, collectCoverage, sink, stop),
@@ -1851,7 +1858,7 @@ export class RunMutantTransport {
     // worse: phase 1 would store a truncated id that phase 3 could never match, refusing with
     // `lease-invalid` while leaving `Op Kind = run` set, which quarantines the whole tier.
     assertAttemptId(attemptId);
-    const started = Date.now();
+    const started = monoNow();
     // Layer 5C-B2 (design §5): every exit below that can only say "the server's answer was
     // unreadable" carries these, so the orchestrator can ask the lease row what actually happened
     // to THIS attempt instead of quarantining the tier on an unreadable response. Terminal and
@@ -1894,7 +1901,7 @@ export class RunMutantTransport {
       return {
         ref,
         outcome: "error",
-        durationMs: Date.now() - started,
+        durationMs: monoNow() - started,
         failureMessage: `RunMutant request construction failed: ${String(err)}`,
         operation: "pre-dispatch-rejected",
       };
@@ -1962,7 +1969,7 @@ export class RunMutantTransport {
       return {
         ref,
         outcome: "deadline-exceeded",
-        durationMs: Date.now() - started,
+        durationMs: monoNow() - started,
         failureMessage: `RunMutant timed out ${phase}: ${String(err)}${stopDetail}`,
         operation: "in-flight-unknown",
         fencedOp,
@@ -1987,7 +1994,7 @@ export class RunMutantTransport {
       return {
         ref,
         outcome: "error",
-        durationMs: Date.now() - started,
+        durationMs: monoNow() - started,
         failureMessage: `RunMutant connection failed after dispatch: ${String(err)}`,
         operation: "in-flight-unknown",
         fencedOp,
@@ -2011,7 +2018,7 @@ export class RunMutantTransport {
           return {
             ref,
             outcome: "error",
-            durationMs: Date.now() - started,
+            durationMs: monoNow() - started,
             failureMessage: `RunMutant: BC answered our stop for ${ref.method} with its 408, but the method's own completion was recorded before the session died, so this run is not scored (R204)`,
             stopRefusal: "stopped-after-completion",
           };
@@ -2024,7 +2031,7 @@ export class RunMutantTransport {
         return {
           ref,
           outcome: "timeout",
-          durationMs: Date.now() - started,
+          durationMs: monoNow() - started,
           failureMessage:
             `RunMutant exceeded its ${timeoutMs} ms budget and was stopped server-side ${why}. ` +
             `BC's own words: ${JSON.stringify(body.slice(0, 400))}`,
@@ -2055,7 +2062,7 @@ export class RunMutantTransport {
       return {
         ref,
         outcome: "error",
-        durationMs: Date.now() - started,
+        durationMs: monoNow() - started,
         failureMessage: `RunMutant failed: HTTP ${res.status}${bodyNote}`,
         operation: "in-flight-unknown",
         fencedOp,
@@ -2076,7 +2083,7 @@ export class RunMutantTransport {
       if (controller.signal.aborted) return abortedVerdict(err, "after headers");
       return this.inFlightUnknown(
         ref,
-        Date.now() - started,
+        monoNow() - started,
         `RunMutant 2xx body could not be read: ${String(err)}`,
         fencedOp,
       );
@@ -2084,7 +2091,7 @@ export class RunMutantTransport {
     settleTimers();
     // R191: taken AFTER the body, so a stall between headers and body is in the number a reader
     // sees. The R175 re-run recorded 2,800 ms for a mutant whose body read took 272 s.
-    const durationMs = Date.now() - started;
+    const durationMs = monoNow() - started;
     let value: unknown;
     let parseError: string | undefined;
     try {

@@ -582,6 +582,30 @@ describe("runMany — the watchdog (R198 §3.2)", () => {
     expect(r.cause).toBeUndefined();
   });
 
+  test("R710: a wall-clock step back while the grouped call is held does not give the stop row a negative duration", async () => {
+    let stepped = false;
+    const realNow = Date.now;
+    const spy = spyOn(Date, "now").mockImplementation(() => realNow() - (stepped ? 5_000 : 0));
+    try {
+      const f = fakes({
+        many: "hold",
+        status: () => statusOf(),
+        stopAt: () => {
+          stepped = true; // the host corrects the clock while BC holds the request
+          setTimeout(() => f.release(new Response(AL_STOP_BODY, { status: 408 })), 5);
+          return { stopped: true, sessionId: 9 };
+        },
+      });
+      const r = await transport(f.fetchFn).runMany(req({ stopHungSessions: true }));
+      if (r.kind !== "call") throw new Error("expected a call-level answer");
+      expect(r.verdict.outcome).toBe("timeout");
+      expect(r.verdict.durationMs).toBeGreaterThanOrEqual(0);
+      expect(r.verdict.durationMs).toBeLessThan(30_000);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   // R658 (M2): the warm confirmation's replay is unmutated, so its 408 scores nothing.
   for (const [mutantId, text] of [
     ["", "so it would not strand the server"],
