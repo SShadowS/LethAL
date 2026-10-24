@@ -245,6 +245,26 @@ ${WALK(`${CLONE}
   });
 });
 
+describe("R717: filters copied into R from another variable", () => {
+  it("1e. X.CopyFilter(X.Ident, R.Ident) before the walk: R's filters are unknown, every field counts", () => {
+    const p = project(
+      files(
+        proc(
+          "Copied",
+          WALK(
+            `${CLONE}
+                T2.Note := NewNo;
+                T2.Modify();`,
+            'T3.SetRange(Ident, Id);\n        T3.CopyFilter(Ident, R.Ident);\n        R.SetCurrentKey("No.");',
+          ),
+        ),
+      ),
+    );
+    // red when only a bare R argument (not R.F) counts as R passed to a call (red-check N4)
+    expect(p.refused("cu.al", "T2.Modify()")).toBe(true);
+  });
+});
+
 describe("R717 twins: fix-ups that stay emitted", () => {
   it("4. a write of a field the walk does NOT filter on, then Modify", () => {
     const p = project(
@@ -293,7 +313,7 @@ describe("R717 twins: fix-ups that stay emitted", () => {
     expect(p.refused("cu.al", "O.Modify()")).toBe(false);
   });
 
-  it("8. a fix-up alone refuses no exit of the walk (the hazard is the deleted fix-up)", () => {
+  it("7. a fix-up alone refuses no exit of the walk (the hazard is the deleted fix-up)", () => {
     const p = project(
       files(
         proc(
@@ -311,7 +331,7 @@ ${CLONE}
     expect(p.refused("cu.al", "exit")).toBe(false);
   });
 
-  it("7. R's own filter write and Modify after a callee insert (moves R's own cursor) is not refused", () => {
+  it("8. R's own filter write and Modify after a callee insert (moves R's own cursor) is not refused", () => {
     const p = project(
       files(
         proc(

@@ -47,7 +47,7 @@ The legs:
   left with R705: a fixed build runs nothing in a request that does not compile. In serve-entries, a warm-up whose
   every entry refuses with one identical no-callee text now throws `al-runner-v3-entries-batch-refused`: the safe
   direction, opt-in and rare.
-  It must read `matches` on alpha.2, but any other reading (`diverged`, `unmeasurable`) only prints
+  It must read `matches` on alpha.2 and alpha.5, but any other reading (`diverged`, `unmeasurable`) only prints
   `al-runner-v3-serve-keep-reason-moved` in the log and the receipt `lines`: it is never a `gate-fail` or a `held`,
   because a moved reason only makes the daemon close (slower, never wrong). It is gate-only, as `timeout-is-cpu`
   is: the receipt's `warnFacts` carries the reading, the update script copies it into `.gated`, and a session
@@ -139,6 +139,7 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
   - **K is outside `V3_GATE_LEGS`, by the orchestrator's ruling**, because the CLI's config cannot name a candidate build. Two conditions hold it, both pinned in `tests/r654-v3-legs.test.ts`:
     1. On a candidate (`LETHAL_ALRUNNER_V3_CANDIDATE=1`), K does not run. Its value in the itest's leg summary is `"K":"skipped (candidate build)"`, and its reason goes into the log and the receipt lines. It is never silent.
     2. On a gated build, a K that is anything but a pass FAILS the itest, a skip included (`v3ItestFailures`). So K can never become an always-skipped leg.
+  - **R586c: K can run on a candidate** with `LETHAL_ITEST_V3_K_ON_CANDIDATE=1` (any other value is refused by name). The itest then passes the test-only `alRunnerCandidate` seam to `buildBackend` (no CLI flag, no config key; `alRunnerV3.candidate` is rejected). With the variable set, a K skip on a candidate fails the itest. K is still outside `V3_GATE_LEGS`, and its result is read from the log, not the receipt.
 
   The update gate's receipt outcome reads only `V3_GATE_LEGS` (which now holds MO and WR, below).
 
@@ -173,12 +174,27 @@ Both run as the other legs do (`runSession`, the v3 backend, one-shot, coverage 
 
 ## The pin and the update gate
 
-- The binary is pinned at `/work/tools/al-runner-v3/3.0.0-alpha.2-91253f2d6/`, and `current` points at it. Its
+- The binary is pinned at `/work/tools/al-runner-v3/3.0.0-alpha.5-07342060e/` (since 2026-10-24; alpha.2 was
+  `current` before), and `current` points at it. Its
   `.gated` file names the build, its sha256 and the LethAL commit that gated it. The backend refuses any build that
   `.gated` does not name (`AlRunnerV3UngatedBuildError`), unless `LETHAL_ALRUNNER_V3_CANDIDATE=1`.
 - The pin is never moved by hand. `bun scripts/al-runner-v3-update.ts` gates newer `v3.0.0-alpha.N` releases, and
   `--edge` gates the daily `edge` release by download. The version check accepts SemVer build metadata
   (`al-runner 3.0.0-alpha.4+edge.20261022 (57f1e4f98)`, R639 F1).
+- **Candidate order (R586d): newest first.** The alpha path lists the releases above `current`'s alpha number and
+  gates the NEWEST one first, with a full gate. A `pass` makes it `current` and ends the run: no older candidate is
+  downloaded or gated. Anything else (`gate-fail`, `held`, `infra-fail`, or a skip because `failed/<tag>@<this
+  commit>` exists) sends the run to the next older candidate, down to but not including `current`. If none passes,
+  `current` stays, and each candidate has its own record (`failed/`, `held/`, `infra/`). Versions compare by the
+  alpha number as a number, so alpha.10 is newer than alpha.9. `--edge` is unchanged: one candidate, no fallback.
+  Before R586d the order was oldest first, and a day with alpha.3 and alpha.4 both failing cost two gates before
+  alpha.5 ran.
+- **No longer measured (R586d).** Once a newer release passes, the older releases skipped that day get no daily
+  verdict. Their last record stays in `failed/` (or `held/`), if it was ever gated, and is not refreshed. A release
+  skipped that day is gated again only on a later day when every newer candidate fails to pass and it is still
+  above `current`; once a newer release is `current` it is never a candidate again, so its record is final. When
+  an older candidate passes after a newer one's `infra-fail`, the log says so (`<tag>: passed after <newer tag> was
+  not judged (infra-fail) today`): the newer release has no verdict yet.
 - `--edge-rejudge <edge sha>` (R639) re-gates a KEPT edge binary at `.gated`'s current commit, never a new
   download, and never reads or writes `edge.last-seen`.
   - It refuses by name (`al-runner-v3-edge-rejudge-refused`) when `failed/edge-<sha>@<commit>` exists at all, or a
@@ -256,6 +272,41 @@ Both run as the other legs do (`runSession`, the v3 backend, one-shot, coverage 
   the old record and needs `bun scripts/al-runner-v3-update.ts --regate <commit>`.
 - `.gated` names a commit on `lethal/r586`. The orchestrator merges with `--no-ff`, so that commit stays reachable
   from master.
+
+## Per-build pins (R586c)
+
+A build can have a PIN: the exact readings that differ from alpha.2's expectations and are known and accepted. Without a pin the gate runs as before.
+
+- **Where.** `packages/runner/itest/al-runner-v3-pins.ts` (`V3_BUILD_PINS`, `findV3Pin`). A pin is code, so it is tied to a gated commit. The key is the pair (exact `--version` line, binary sha256): both must be equal. The itest prints `PIN <id> applies (version and sha256 equal)` as its second line, only when a pin applies. The session-time contract probe is not changed: a user's session still prints its `defect-gone` warnings ([[R719]]).
+- **The rule (B1).** An entry passes only when the reading equals the pinned one. A pinned entry that does NOT match is never better than `held`: today's rule runs for it, and the result is forced to at least `held` (a `gate-fail` stays `gate-fail`). So alpha.2's old reading on a pinned build (the old defect, alpha.2's X (b) 7/1/1, all seven T rows `survived`) reads at least `held` (never `pass`), for a person to look at.
+- **Patterns.** `measured` texts are built by `pinPattern` from the logged text: every regex character escaped, `{n}` a number, anchored, no flags. Facts are looked up with `Object.hasOwn`.
+- **S5.** A pin for a build that is or was `current` is never removed: a later `--regate` of that build needs it.
+- **Records (M5).** A `LETHAL_ITEST_RECORD_BASELINE` request on a pinned or candidate build is refused by name, for every leg that records.
+- **Unpinned builds** (alpha.2, alpha.3, alpha.4, edge) are judged as before; the judges get no pin argument.
+
+**The alpha.5 pin (`alpha.5-07342060e`, sha256 `fd4d6d40...51db2`).**
+
+| Entry | Pinned reading | As BC? | Cost |
+|---|---|---|---|
+| leg C `none-selected-exit` | gone: `exit 6, stdout 0 rows` | a CLI shape (#5613 fix) | none |
+| leg C `quoted-name-unselectable` | gone: `exit 0` | a CLI selection fix (#5572); LethAL never selects by name | none |
+| leg C `refusal-cascade` | gone: the plain `fail` row `later`, exit 1 | yes (#5610 fix) | none |
+| leg C `sleep-is-noop` | gone: N=3 shape, no-flag wall under 1000 ms | verdict class only (r11 at 120 s); wall time is not BC's | none for verdicts, with the virtual-clock guard below |
+| leg C `upstream-compile-errors` | gone: `exit 3 null` | yes (#5602 fix) | none |
+| leg C `refusal-row-shape` | gone: BC's hub text, exit 1 | yes (R706, R712); #5700 stays open | none |
+| leg C `duplicate-key-insert-raises` | refused (the deferred duplicate-key text), exit 7 | NO: BC fails the test; issue #5788 | lost kills, never a wrong verdict |
+| leg T | seven rows (`Data Flag Ops` x3, `Data Key Probe` x4) `error` / `runner-refused`, counts 290 / 50 / 59 over 406 | NO: BC kills them; #5788 | 7 of 406 mutants read `error` where BC kills |
+| X (b) | exit 3, `passed` 0 and `notRun` 0 present, no rows, non-empty `compilationErrors` | yes | none |
+
+Leg T is judged against the committed alpha.2 baseline with the seven keys overridden (`applyTPin`, S4): if a pinned key is absent, repeated or not `survived`/`null`/`null` there, the leg reads `held`. On a pinned pass the alpha.2 baseline compare is skipped (the pinned compare has the same identity-scheme and R556 checks). Rows equal to the pin but with other counts are a `gate-fail`.
+
+**The virtual-clock guard (B2).** alpha.5 counts a Sleep toward `--test-timeout-secs` on a virtual clock, so a "3 s" stop can return after tens of ms. In the backend, when a MUTANT is active and a timeout row's `durationMs` is below its stop, the verdict is `error` / `runner-refused` ("stopped on v3's virtual clock", never scored). Baselines are unchanged. Upstream text: `/coord/handoff/R-586c/upstream-virtual-clock.md`.
+
+**K and serve on alpha.5** (measured at LethAL `81e7f1b4`, alpha.5 as a candidate under the pin):
+- L2, the full gate: 14 of 14 legs pass; K reads 3 / 12 / 4 over 19.
+- L3, `serve-entries` (receipts `measure/L3r-*`): S1 3 / 12 / 4 with 0 differences; T 290 / 50 / 59 with 7 errors, the pinned 7 rows; D1 51 / 12 / 0 with 0 differences.
+- L2b: alpha.3 and alpha.4 as candidates (no pin) both read `gate-fail` (D1 and D1c), as pre-committed in r18 table E.
+- **Leg N1 under `serve-entries` fails on alpha.5**: for a dotted test name, v3 writes a serve row without `codeunit` and `method` (upstream [#5798](https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/5798)). alpha.2 has no serve-entries path. The serve path is opt-in and fails closed. See [[R722]]. The virtual clock is upstream [#5793](https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/5793).
 
 ## Frozen figures
 

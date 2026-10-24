@@ -2973,7 +2973,8 @@ export const r696Seam = { on: true };
  *
  * LIMITS, accepted: shape B follows no callee for a mover (R passed to a call is not followed;
  * R702 measured the callee case and closed it by ruling; R717 reads only whether a one-hop callee
- * INSERTS, for `r717Fixups`) and does not read a guard in a helper; a bound set by
+ * or a bare same-object procedure INSERTS, for `r717Fixups`) and does not read a guard in a
+ * helper; a bound set by
  * a caller; an XMLport self-insert item (outside R530 and this). R696 roadmap item, "Done". A
  * walk declared temporary is refused only through a variable sharing its rows (`r702Shared`,
  * R702); any other walk is refused through such a sharer too, as well as by the movers above.
@@ -3322,10 +3323,13 @@ export const r717Seam = { on: true };
  * `r696Loop`, as R696's movers): the fix-up, its writes, the walk's pre-loop filters (deleting one
  * has the same effect) with their guards, and the feeds of all of these. The filtered fields are
  * R's pre-loop `SetRange`/`SetFilter` fields, or EVERY field when R is not a local (its caller set
- * the filters), when R is passed to a call before the walk (a helper may filter it), or when a
- * filter field is unreadable. A key write is R696's mover already. LIMITS: a fix-up made inside a
- * callee; an insert through a callee called on a temporary receiver. Cost by parse (R-717): DC 11
- * specs, BaseApp 19, DO and CDO 0.
+ * the filters), when R or a field of R is an argument of a call before the walk (a helper, an
+ * event subscriber or `X.CopyFilter(X.F, R.F)` may filter it), or when a filter field is
+ * unreadable. A key write is R696's mover already. LIMITS: a filter set outside this procedure
+ * (by a caller, helper or subscriber) is not itself refused, as R696 accepts a caller's bound; a
+ * fix-up made inside a callee; an insert through a callee on a temporary receiver, `this.P()`, or
+ * a tableextension's bare call to its base table. Cost by parse (R-717): DC 11 specs, BaseApp 19
+ * (all from the widening above, no real fix-up), DO and CDO 0.
  */
 function r717Fixups(
   body: ALSyntaxNode,
