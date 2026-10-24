@@ -1818,8 +1818,15 @@ ${TRIGGER_TABLE_AL}#endif
       const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
       const store = new ResultsStore(":memory:");
       const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+      const events: RunEvent[] = [];
       try {
-        const report = await runSession({ backend, store, ...dirs, selectorIds });
+        const report = await runSession({
+          backend,
+          store,
+          ...dirs,
+          selectorIds,
+          emit: [(e) => events.push(e)],
+        });
         const triggerMutants = report.mutants.filter((m) => m.file.includes("SandboxTable"));
         expect(triggerMutants.length).toBeGreaterThan(0);
         expect(report.untargetedTriggerCount).toBe(0);
@@ -1832,8 +1839,14 @@ ${TRIGGER_TABLE_AL}#endif
         // The plain codeunit is untouched: it still runs.
         expect(report.counts.survived).toBeGreaterThan(0);
         // Selection's refusal warning prints ONCE per batch, not again from the second split.
-        const said = warnSpy.mock.calls.map((c) => String(c[0]));
+        // R739: as an event with its code, and nothing of it on the console.
+        const said = events.flatMap((e) =>
+          e.type === "warning" && e.code === "coverage-refused-mutants" ? [e.message] : [],
+        );
         expect(said.filter((x) => x.includes("because coverage is refused"))).toHaveLength(1);
+        expect(warnSpy.mock.calls.map((c) => String(c[0])).join("\n")).not.toContain(
+          "because coverage is refused",
+        );
       } finally {
         warnSpy.mockRestore();
         store.close();
@@ -13109,6 +13122,8 @@ describe("R507: a refused unfiltered extensions query on the lease path ends the
     expect(runs()).toBeLessThan(9);
     // Not lease loss: no lost batch is invalidated.
     expect(events.some((e) => e.type === "batch-invalidated")).toBe(false);
+    // R739: the session ended with the refusal itself, so it is not "already failing".
+    expect(warnings(events, "late-refusal-while-failing")).toHaveLength(0);
     // finish ran op-gated: a marker read at teardown, then the release over an idle marker.
     expect(calls.GetOperationStatus ?? 0).toBeGreaterThanOrEqual(2);
     expect(calls.ReleaseLease).toBe(1);
@@ -13199,6 +13214,9 @@ describe("R507: a refused unfiltered extensions query on the lease path ends the
     expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
     expect(warnings(events, "after-lease-acquired-uncertain")).toHaveLength(1);
     expect(warnings(events, "after-lease-acquired-refused")).toHaveLength(0);
+    // R739, the other direction: ONE refusal on the lease path latches and is thrown; it is not
+    // also an "extra" event.
+    expect(warnings(events, "lease-refusal-extra")).toHaveLength(0);
   });
 
   test("R9: an earlier error stays; a lease-path refusal recorded by the heartbeat is warned", async () => {
@@ -13211,16 +13229,19 @@ describe("R507: a refused unfiltered extensions query on the lease path ends the
         throw new Error("deploy boom");
       },
     });
-    const { out: err, warned } = await capturingWarn(() =>
-      runSessionForTest(backend, { quarantineDir: freshTmpDir(), lease }).catch((e: unknown) => e),
-    );
+    const events: RunEvent[] = [];
+    const err = await runSessionForTest(backend, {
+      quarantineDir: freshTmpDir(),
+      lease,
+      emit: [(e) => events.push(e)],
+    }).catch((e: unknown) => e);
     expect(err).not.toBeInstanceOf(UnfilteredExtensionsQueryError);
     expect(String(err)).toContain("deploy boom");
-    expect(
-      warned.some(
-        (w) => w.includes("while the session was already failing") && w.includes(REFUSAL_TEXT),
-      ),
-    ).toBe(true);
+    // R739: an event, not a console line.
+    const late = warnings(events, "late-refusal-while-failing");
+    expect(late).toHaveLength(1);
+    expect(late[0]).toContain("while the session was already failing");
+    expect(late[0]).toContain(REFUSAL_TEXT);
   });
 
   test("R10: a refusal noted after teardown took the refusals is warned, never dropped", async () => {
@@ -13243,13 +13264,26 @@ describe("R507: a refused unfiltered extensions query on the lease path ends the
         return pass(ref, opts);
       },
     });
-    const { warned } = await capturingWarn(async () => {
-      // The renew is still open, so the session ends normally and teardown takes nothing.
-      await runSessionForTest(backend, { quarantineDir: freshTmpDir(), lease });
+    const events: RunEvent[] = [];
+    // The renew is still open, so the session ends normally and teardown takes nothing.
+    await runSessionForTest(backend, {
+      quarantineDir: freshTmpDir(),
+      lease,
+      emit: [(e) => events.push(e)],
+    });
+    // Nothing yet: the refusal has not arrived.
+    expect(warnings(events, "lease-refusal-extra")).toHaveLength(0);
+    // R739: the session is over, so its subscribers may be closed (a `--progress-out` file): the
+    // late refusal goes to the console and emits no event.
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
       openGate(); // the renew is answered with the refusal only now, after takeRefusal()
       await tick;
-    });
-    expect(warned.some((w) => w.includes(REFUSAL_TEXT))).toBe(true);
+      expect(warnings(events, "lease-refusal-extra")).toHaveLength(0);
+      expect(warn.mock.calls.flat().join("\n")).toContain(REFUSAL_TEXT);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   test("R11: a lease refusal and a backend late refusal: the lease one is thrown, the other warned", async () => {
@@ -13259,12 +13293,19 @@ describe("R507: a refused unfiltered extensions query on the lease path ends the
     const { backend } = tickingBackend(timers);
     const late = new UnfilteredExtensionsQueryError("backend late refusal R499");
     Object.assign(backend, { takeLateRefusal: () => late });
-    const { out: err, warned } = await capturingWarn(() =>
-      runSessionForTest(backend, { quarantineDir: freshTmpDir(), lease }).catch((e: unknown) => e),
-    );
+    const events: RunEvent[] = [];
+    const err = await runSessionForTest(backend, {
+      quarantineDir: freshTmpDir(),
+      lease,
+      emit: [(e) => events.push(e)],
+    }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
     expect(String(err)).toContain(REFUSAL_TEXT);
-    expect(warned.some((w) => w.includes("backend late refusal R499"))).toBe(true);
+    // R739: the backend's late refusal is an event (the lease path may add its own further ones).
+    const extra = warnings(events, "lease-refusal-extra");
+    expect(extra.filter((m) => m.includes("backend late refusal R499"))).toHaveLength(1);
+    // During the session the lease path's own further refusal is an event too.
+    expect(extra.some((m) => m.includes(REFUSAL_TEXT))).toBe(true);
   });
 
   test("R12: a session latched for another reason that then meets a refusal throws it, after warning the latch reason", async () => {
@@ -13284,14 +13325,20 @@ describe("R507: a refused unfiltered extensions query on the lease path ends the
       20,
     );
     const { lease } = leaseCfg(client);
-    const { out: err, warned } = await capturingWarn(() =>
-      runSessionForTest(leaseBackend(), { quarantineDir: dir, lease }).catch((e: unknown) => e),
-    );
+    const events: RunEvent[] = [];
+    const err = await runSessionForTest(leaseBackend(), {
+      quarantineDir: dir,
+      lease,
+      emit: [(e) => events.push(e)],
+    }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
     expect((await new QuarantineStore(dir).read(TIER))?.opKind).toBe("container-needs-recycle");
-    const latched = warned.filter((w) => w.includes("the session was latched:"));
+    const latched = warnings(events, "session-latched");
     expect(latched).toHaveLength(1);
+    expect(latched[0]).toContain("the session was latched:");
     expect(latched[0]).not.toContain("refused unfiltered extensions query on the lease path");
+    // The refusal itself was thrown, so it is not also an extra.
+    expect(warnings(events, "lease-refusal-extra")).toHaveLength(0);
   });
 
   test("R508: a lease lost mid-batch, then a teardown that throws a lease-path refusal, still invalidates the batch in the store and the events", async () => {
@@ -14020,22 +14067,29 @@ describe("R508: a lease lost mid-batch, then --resume", () => {
     const { store, common } = await setup();
     breakableInvalidate(store).fail();
     const events: RunEvent[] = [];
-    const { out: err, warned } = await capturingWarn(() =>
-      runSession({
-        ...common,
-        backend: batchBackend(LOSE),
-        lease: leaseCfg(new FakeLeaseClient()).lease,
-        emit: [(e) => events.push(e)],
-      }).catch((e: unknown) => e),
-    );
+    const err = await runSession({
+      ...common,
+      backend: batchBackend(LOSE),
+      lease: leaseCfg(new FakeLeaseClient()).lease,
+      emit: [(e) => events.push(e)],
+    }).catch((e: unknown) => e);
     const run1 = lastRunId(store);
     expect(err).toBeInstanceOf(LostBatchNotStoredError);
     expect(String(err)).toContain(`run ${run1} batch 1:`);
     expect(String(err)).toContain(`do not --resume run ${run1}`);
     expect((err as Error).cause).toBe(FIXED);
     expect(events.some((e) => e.type === "batch-invalidated" && e.batchIndex === 1)).toBe(true);
+    // R739: an event with a code, not a console line.
+    const notCorrected = events.filter(
+      (e) => e.type === "warning" && e.code === "lease-loss-store-not-corrected",
+    );
+    expect(notCorrected).toHaveLength(1);
     expect(
-      warned.some((w) => w.includes(`could not correct run ${run1} batch 1 at the lease loss`)),
+      notCorrected.some(
+        (e) =>
+          e.type === "warning" &&
+          e.message.includes(`could not correct run ${run1} batch 1 at the lease loss`),
+      ),
     ).toBe(true);
   });
 
@@ -14045,15 +14099,20 @@ describe("R508: a lease lost mid-batch, then --resume", () => {
     const backend = batchBackend(LOSE);
     const late = new UnfilteredExtensionsQueryError("backend late refusal R508");
     Object.assign(backend, { takeLateRefusal: () => late });
-    const { out: err, warned } = await capturingWarn(() =>
-      runSession({
-        ...common,
-        backend,
-        lease: leaseCfg(new FakeLeaseClient()).lease,
-      }).catch((e: unknown) => e),
-    );
+    const events: RunEvent[] = [];
+    const err = await runSession({
+      ...common,
+      backend,
+      lease: leaseCfg(new FakeLeaseClient()).lease,
+      emit: [(e) => events.push(e)],
+    }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(LostBatchNotStoredError);
-    expect(warned.some((w) => w.includes("backend late refusal R508"))).toBe(true);
+    const replaced = events.filter(
+      (e) => e.type === "warning" && e.code === "lost-batch-error-replaced",
+    );
+    expect(
+      replaced.some((e) => e.type === "warning" && e.message.includes("backend late refusal R508")),
+    ).toBe(true);
   });
 
   test("a failed store write while the session is already failing warns that error, then throws LostBatchNotStoredError", async () => {
@@ -14065,15 +14124,20 @@ describe("R508: a lease lost mid-batch, then --resume", () => {
       if (row.batchIndex === 1 && row.verdict === "error") throw new Error("record boom R508");
       return realRecord(runId, row);
     };
-    const { out: err, warned } = await capturingWarn(() =>
-      runSession({
-        ...common,
-        backend: batchBackend(LOSE),
-        lease: leaseCfg(new FakeLeaseClient()).lease,
-      }).catch((e: unknown) => e),
-    );
+    const events: RunEvent[] = [];
+    const err = await runSession({
+      ...common,
+      backend: batchBackend(LOSE),
+      lease: leaseCfg(new FakeLeaseClient()).lease,
+      emit: [(e) => events.push(e)],
+    }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(LostBatchNotStoredError);
-    expect(warned.some((w) => w.includes("record boom R508"))).toBe(true);
+    const replaced = events.filter(
+      (e) => e.type === "warning" && e.code === "lost-batch-error-replaced",
+    );
+    expect(
+      replaced.some((e) => e.type === "warning" && e.message.includes("record boom R508")),
+    ).toBe(true);
   });
 
   test("crash stand-in: only onLost's write lands, and the resume still carries nothing of the lost batch", async () => {
@@ -14120,7 +14184,17 @@ describe("R508: a lease lost mid-batch, then --resume", () => {
         seen.push({ rows: rowsOf(store, id), snaps: snapsOf(store, id) });
       },
     });
-    await runSession({ ...common, backend, lease: leaseCfg(new FakeLeaseClient()).lease });
+    const events: RunEvent[] = [];
+    await runSession({
+      ...common,
+      backend,
+      lease: leaseCfg(new FakeLeaseClient()).lease,
+      emit: [(e) => events.push(e)],
+    });
+    // R739, the other direction: a store write that succeeds at the loss emits no warning for it.
+    expect(
+      events.filter((e) => e.type === "warning" && e.code === "lease-loss-store-not-corrected"),
+    ).toEqual([]);
     const atClose = seen.at(-1);
     expect(atClose).toBeDefined();
     const b1 = atClose?.rows.filter((r) => r.b === 1) ?? [];
@@ -18842,6 +18916,50 @@ describe("R536: runNamedMutants reads the installed artifact under the source ru
     await runNamedMutants({ ...fx.cfg, backend: withSymbolsTaker(fx, log) });
     expect(log.slice(0, 2)).toEqual(['symbols ["LETHALQ"]', "attach"]);
     expect(log.filter((l) => l.startsWith("symbols"))).toHaveLength(1);
+  });
+
+  // R739: runNamedMutants installs the session's notifier before status() and restores it at the end.
+  test("runNamedMutants installs a notifier that emits warning events, then restores the console", async () => {
+    const fx = await installedFixture();
+    const log: string[] = [];
+    let installed: ((code: string, message: string) => void) | undefined;
+    const backend = {
+      ...fx.cfg.backend,
+      setNotify: (n?: (code: string, message: string) => void) => {
+        log.push(n === undefined ? "restore" : "install");
+        installed = n;
+      },
+      status: async () => {
+        log.push("status");
+        return { ok: true, details: "stub" };
+      },
+    } as ExecutionBackend;
+    const events: RunEvent[] = [];
+    await runNamedMutants({
+      ...fx.cfg,
+      backend,
+      emit: [...(fx.cfg.emit ?? []), (e) => events.push(e)],
+    });
+    // Installed before the readiness probe, restored last.
+    expect(log).toEqual(["install", "status", "restore"]);
+    expect(installed).toBeUndefined();
+  });
+
+  test("the notifier runNamedMutants installs turns a backend notice into a warning event", async () => {
+    const fx = await installedFixture();
+    const events: RunEvent[] = [];
+    const backend = {
+      ...fx.cfg.backend,
+      setNotify: (n?: (code: string, message: string) => void) => {
+        if (n !== undefined) n("fake-notice", "said during runNamedMutants");
+      },
+    } as ExecutionBackend;
+    await runNamedMutants({
+      ...fx.cfg,
+      backend,
+      emit: [...(fx.cfg.emit ?? []), (e) => events.push(e)],
+    });
+    expect(events.filter((e) => e.type === "warning" && e.code === "fake-notice").length).toBe(1);
   });
 
   test("a source run that recorded no build symbols is refused before any backend call, never read as []", async () => {

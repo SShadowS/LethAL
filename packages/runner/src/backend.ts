@@ -446,6 +446,14 @@ export interface ExecutionBackend {
    * rejection. No publish. Absent on al-runner, whose compile happens per test.
    */
   compilePlainCheck?(dir: string): Promise<void>;
+  /**
+   * R739, OPTIONAL: where the backend's user-facing notices go during a session. `runSession` and
+   * `runNamedMutants` install a function that emits a warning event (`code` is the event's code),
+   * and call this with `undefined` at the session's end. Installing a function also resets the
+   * backend's once-per-process notice flags, so every session sees its own notices. A backend
+   * with no notifier, or one that was never given one, prints to `console.warn`.
+   */
+  setNotify?(notify?: (code: string, message: string) => void): void;
   activate(mutantId: string | null): Promise<void>;
   run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict>;
   /**

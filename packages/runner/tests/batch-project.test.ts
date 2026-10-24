@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { FLAT_NAMES_FILENAME, flatNamesFor } from "@lethal/schemata";
+import type { RunEventInput } from "../src/events";
 import { prepareBatchProject } from "../src/orchestrator";
 
 /**
@@ -148,6 +149,76 @@ describe("prepareBatchProject — non-AL resources", () => {
       expect(await exists(join(batchDir, "src/B/Assets/x.js"))).toBe(true);
       expect(await exists(join(batchDir, "Assets/only-b.js"))).toBe(true);
     });
+  });
+
+  // R739: the same collision, with the session's emitter given: an event, not a console line.
+  it("with an emitter, a colliding tail is a resource-rebase-collision event, and a clean project emits nothing", async () => {
+    const collide = async (projectDir: string): Promise<void> => {
+      await write(projectDir, "app.json", JSON.stringify(manifest));
+      await write(projectDir, "src/A/AThing.Codeunit.al", "codeunit 1 A { }");
+      await write(projectDir, "src/B/BThing.Codeunit.al", "codeunit 2 B { }");
+      await write(projectDir, "src/A/Assets/x.js", "// A");
+      await write(projectDir, "src/B/Assets/x.js", "// B");
+    };
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await withDirs(async (projectDir, batchDir) => {
+        await collide(projectDir);
+        const events: RunEventInput[] = [];
+        await prepareBatchProject(
+          projectDir,
+          batchDir,
+          { ...manifest },
+          "1.0.2.0",
+          undefined,
+          [],
+          undefined,
+          undefined,
+          (e) => events.push(e),
+        );
+        expect(events).toHaveLength(1);
+        const [event] = events;
+        expect(event?.type).toBe("warning");
+        if (event?.type === "warning") {
+          expect(event.code).toBe("resource-rebase-collision");
+          expect(event.message).toContain(join("Assets", "x.js"));
+        }
+        // The batch is prepared again (the next batch): emitted every time, not once.
+        await prepareBatchProject(
+          projectDir,
+          batchDir,
+          { ...manifest },
+          "1.0.2.0",
+          undefined,
+          [],
+          undefined,
+          undefined,
+          (e) => events.push(e),
+        );
+        expect(events).toHaveLength(2);
+      });
+      await withDirs(async (projectDir, batchDir) => {
+        await write(projectDir, "app.json", JSON.stringify(manifest));
+        await write(projectDir, "src/A/AThing.Codeunit.al", "codeunit 1 A { }");
+        await write(projectDir, "src/A/Assets/x.js", "// A");
+        const events: RunEventInput[] = [];
+        await prepareBatchProject(
+          projectDir,
+          batchDir,
+          { ...manifest },
+          "1.0.2.0",
+          undefined,
+          [],
+          undefined,
+          undefined,
+          (e) => events.push(e),
+        );
+        expect(events).toEqual([]);
+      });
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("does not copy tool directories or built .app packages into the batch", async () => {
