@@ -29,7 +29,10 @@ if (a1 === "--one") {
     return {
       specs: set.files.reduce((a, f) => a + f.specs.length, 0),
       fixLoops: [...new Set<string>(lh.r717Fix)],
-      perFile: Object.fromEntries(set.files.map((f) => [f.path, f.specs.length])) as Record<string, number>,
+      perFile: Object.fromEntries(set.files.map((f) => [f.path, f.specs.length])) as Record<
+        string,
+        number
+      >,
       hits: [...lh.r717Hits],
       dropped: [...new Set<string>(lh.r718Seam.dropped)],
     };
@@ -88,7 +91,15 @@ for (const [i, p] of projs) {
   sum.r717w += j.r717w;
   sum.fix += j.fix;
   sum.fixLoops += j.fixLoops.length;
-  per.push({ i, fixLoops: j.fixLoops, r717wFiles: j.r717wFiles, r717Files: j.r717Files, r718Files: j.r718Files, r717Hits: j.r717Hits, r718Dropped: j.r718Dropped });
+  per.push({
+    i,
+    fixLoops: j.fixLoops,
+    r717wFiles: j.r717wFiles,
+    r717Files: j.r717Files,
+    r718Files: j.r718Files,
+    r717Hits: j.r717Hits,
+    r718Dropped: j.r718Dropped,
+  });
 }
 const pct = (x: number): number => (sum.base === 0 ? 0 : Math.round((x / sum.base) * 10000) / 100);
 const res = {

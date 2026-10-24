@@ -2971,8 +2971,9 @@ export const r696Seam = { on: true };
  * anywhere in the object and their feeds. The key is the item's SORTING, a `SetCurrentKey` on it,
  * and the primary key.
  *
- * LIMITS, accepted: shape B follows no callee (R passed to a call is not followed) and does not
- * read a guard in a helper (R702 measured the callee case and closed it by ruling); a bound set by
+ * LIMITS, accepted: shape B follows no callee for a mover (R passed to a call is not followed;
+ * R702 measured the callee case and closed it by ruling; R717 reads only whether a one-hop callee
+ * INSERTS, for `r717Fixups`) and does not read a guard in a helper; a bound set by
  * a caller; an XMLport self-insert item (outside R530 and this). R696 roadmap item, "Done". A
  * walk declared temporary is refused only through a variable sharing its rows (`r702Shared`,
  * R702); any other walk is refused through such a sharer too, as well as by the movers above.
@@ -3311,19 +3312,25 @@ function r702Shared(
 export const r717Seam = { on: true };
 
 /**
- * R717. A walk that INSERTS into its own table (an Insert among its movers, or a one-hop callee
- * that inserts: `r696CalleeInserts`) relies on a fix-up that moves the inserted row out of the
- * walk's FILTER: a second variable's Modify, Rename or ModifyAll after a write of a filtered field
- * (DC's `CDC Template.Clone` shape, read by parse in R-717's measure.md). A mutant deleting either
- * keeps the row in the walk, which can then meet its own copies forever; it is a deleted
- * statement, not a deleted exit, so R696's exit refusal does not take it, and a filter field is no
- * key field. Refused: those movers and their writes (with feeds). The filtered fields are R's
- * pre-loop `SetRange`/`SetFilter` fields, or EVERY field when R is not a local (its caller set the
- * filters) or a filter field is unreadable. A key write is R696's mover already. Cost by parse
- * (R-717): DC 3 specs, BaseApp, DO and CDO 0.
+ * R717. A walk that INSERTS into its own table (an Insert among its movers, a one-hop callee that
+ * inserts: `r696CalleeInserts`, or a bare procedure of the same object that does) relies on a
+ * fix-up that moves the inserted row out of the walk's FILTER: a second variable's Modify after a
+ * write of a filtered field, or its ModifyAll of a filtered field (DC's `CDC Template.Clone` shape,
+ * read by parse in R-717's measure.md). A mutant deleting the fix-up keeps the row in the walk,
+ * which can then meet its own copies forever; it is a deleted statement, not a deleted exit, so
+ * R696's exit refusal does not take it, and a filter field is no key field. Refused (by
+ * `r696Loop`, as R696's movers): the fix-up, its writes, the walk's pre-loop filters (deleting one
+ * has the same effect) with their guards, and the feeds of all of these. The filtered fields are
+ * R's pre-loop `SetRange`/`SetFilter` fields, or EVERY field when R is not a local (its caller set
+ * the filters), when R is passed to a call before the walk (a helper may filter it), or when a
+ * filter field is unreadable. A key write is R696's mover already. LIMITS: a fix-up made inside a
+ * callee; an insert through a callee called on a temporary receiver. Cost by parse (R-717): DC 11
+ * specs, BaseApp 19, DO and CDO 0.
  */
 function r717Fixups(
   body: ALSyntaxNode,
+  loop: ALSyntaxNode,
+  scope: ALSyntaxNode,
   w: R696Walk,
   movers: readonly R696Mover[],
   filters: readonly ALSyntaxNode[],
@@ -3333,9 +3340,18 @@ function r717Fixups(
   if (!r717Seam.on) return [];
   const inserts =
     movers.some((m) => r531Call(m.call)?.method === "insert") ||
-    r696CalleeInserts(body, w.table, ctx);
+    r696CalleeInserts(body, w.table, ctx) ||
+    r717BareInserts(body, w.table, ctx);
   if (!inserts) return [];
+  const [rkey = ""] = w.rkeys;
+  const namesR = (a: ALSyntaxNode): boolean =>
+    r531Key(a) === rkey ||
+    (a.rawKind === "member_expression" && r531Key(a.childForFieldName("object")) === rkey);
   let all = !rLocal;
+  visitAll(scope, (n) => {
+    if (!all && r696IsCall(n) && n.endIndex <= loop.startIndex && r531Call(n)?.args.some(namesR))
+      all = true;
+  });
   const fields = new Set<string>();
   for (const f of filters) {
     const c = r531Call(f);
@@ -3344,9 +3360,27 @@ function r717Fixups(
     if (fld === "*") all = true;
     else if (fld !== null) fields.add(fld);
   }
-  if (!all && fields.size === 0) return [];
   // an Insert found here is one of R696's movers already
   return r696Movers(body, { ...w, keys: all ? "all" : fields, self: false }, ctx);
+}
+
+/** R717: does code under `body` call, bare, a procedure of its own object that inserts into
+ *  `table`? (`callTargets` leaves a same-object call to the caller.) */
+function r717BareInserts(body: ALSyntaxNode, table: string, ctx: SemanticContext): boolean {
+  const obj = objectOf(body);
+  if (obj === null) return false;
+  const procs = r531ObjectProcs(body, ctx);
+  let found = false;
+  visitAll(body, (n) => {
+    if (found || !r696IsCall(n)) return;
+    const c = r531Call(n);
+    if (c === null || c.recv !== null || !procs.has(c.method)) return;
+    visitAll(obj, (p) => {
+      if (!found && isProcedureLike(p) && procNames(p).includes(c.method))
+        found = r696Inserts(p, obj, table, ctx);
+    });
+  });
+  return found;
 }
 
 function r696Loop(loop: ALSyntaxNode, ctx: SemanticContext, push: R696Push): void {
@@ -3375,18 +3409,10 @@ function r696Loop(loop: ALSyntaxNode, ctx: SemanticContext, push: R696Push): voi
     temp: rt.temporary,
   };
   const movers = r696Movers(body, walk, ctx);
-  const fixParts: ALSyntaxNode[] = [];
-  for (const m of r717Fixups(body, walk, movers, filters, rLocal, ctx)) {
-    push(m.call, loop);
-    for (const x of m.writes) {
-      push(x.node, loop);
-      fixParts.push(...x.reads);
-    }
-  }
-  for (const a of r531Feeds(scope, fixParts, ctx)) push(a, scope);
-  if (movers.length === 0) return;
+  const fixes = r717Fixups(body, loop, scope, walk, movers, filters, rLocal, ctx);
+  if (movers.length === 0 && fixes.length === 0) return;
   const parts: ALSyntaxNode[] = [];
-  for (const m of movers) {
+  for (const m of [...movers, ...fixes]) {
     push(m.call, loop);
     parts.push(...(r531Call(m.call)?.args ?? []));
     for (const x of m.writes) {
@@ -3394,14 +3420,17 @@ function r696Loop(loop: ALSyntaxNode, ctx: SemanticContext, push: R696Push): voi
       parts.push(...x.reads);
     }
   }
-  const isExit = (x: ALSyntaxNode): boolean =>
-    endsScope(x, scope) || (x.rawKind === "break_statement" && exitsLoop(x, loop));
-  visitAll(body, (x) => {
-    if (isExit(x)) push(x.parent !== null && r696IsCall(x.parent) ? x.parent : x, loop);
-  });
-  for (const g of exitGuards(body, loop, isExit)) {
-    push(g, loop);
-    parts.push(g);
+  // R717's fix-ups alone refuse no exit: the hazard there is the deleted fix-up, not an exit
+  if (movers.length > 0) {
+    const isExit = (x: ALSyntaxNode): boolean =>
+      endsScope(x, scope) || (x.rawKind === "break_statement" && exitsLoop(x, loop));
+    visitAll(body, (x) => {
+      if (isExit(x)) push(x.parent !== null && r696IsCall(x.parent) ? x.parent : x, loop);
+    });
+    for (const g of exitGuards(body, loop, isExit)) {
+      push(g, loop);
+      parts.push(g);
+    }
   }
   for (const f of filters) {
     push(f, scope);

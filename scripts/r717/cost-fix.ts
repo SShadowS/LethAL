@@ -15,7 +15,10 @@ if (a1 === "--one") {
   const gen = async (on: boolean) => {
     lh.r717Seam.on = on;
     const set = (await orch.generateMutationSet(a2, { emit: () => {} })) as Set_;
-    return Object.fromEntries(set.files.map((f) => [f.path, f.specs.length])) as Record<string, number>;
+    return Object.fromEntries(set.files.map((f) => [f.path, f.specs.length])) as Record<
+      string,
+      number
+    >;
   };
   const off = await gen(false);
   const on = await gen(true);

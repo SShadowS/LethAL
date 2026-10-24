@@ -135,6 +135,76 @@ describe("R717: the fix-up that moves an inserted row out of the walk's filter i
     expect(p.refused("cu.al", "T2.Modify()")).toBe(true);
     // red when the fix-up's writes are not pushed
     expect(p.refused("cu.al", "T2.Ident := NewNo")).toBe(true);
+    // red when the walk's own filter (whose deletion keeps the copies in the walk) is not refused (review B1)
+    expect(p.refused("cu.al", "R.SetRange(Ident, Id)")).toBe(true);
+  });
+
+  it("1b. the cloning helper is a bare procedure of the SAME object (review S1)", () => {
+    const local = `
+    local procedure LocalClone(var From: Record "R717 Tmpl"; NewNo: Code[20]): Code[20]
+    var
+        X: Record "R717 Tmpl";
+    begin
+        X := From;
+        X."No." := NewNo;
+        X.Insert(true);
+        exit(X."No.");
+    end;
+`;
+    const p = project(
+      files(
+        proc(
+          "Bare",
+          WALK(`                T2.Get(LocalClone(R, NewNo));
+                T2.Ident := NewNo;
+                T2.Modify();`),
+        ),
+        local,
+      ),
+    );
+    // red when a bare same-object callee is not read for an insert
+    expect(p.refused("cu.al", "T2.Modify()")).toBe(true);
+  });
+
+  it("1c. a ModifyAll fix-up: the value it writes is fed (review M1)", () => {
+    const p = project(
+      files(
+        proc(
+          "All",
+          `        Mid := NewNo;
+${WALK(`${CLONE}
+                T2.ModifyAll(Ident, Mid);`)}`,
+        ).replace("    begin", "        Mid: Code[20];\n    begin"),
+      ),
+    );
+    expect(p.refused("cu.al", "T2.ModifyAll(Ident, Mid)")).toBe(true);
+    // red when the fix-up movers' arguments are not traced to their feeds
+    expect(p.refused("cu.al", "Mid := NewNo")).toBe(true);
+  });
+
+  it("1d. a local R filtered by a helper call before the walk: every field counts (review S2)", () => {
+    const helper = `
+    local procedure ApplyFilters(var X: Record "R717 Tmpl"; Id: Code[20])
+    begin
+        X.SetRange(Ident, Id);
+    end;
+`;
+    const p = project(
+      files(
+        proc(
+          "Helper",
+          WALK(
+            `${CLONE}
+                T2.Note := NewNo;
+                T2.Modify();`,
+            'ApplyFilters(R, Id);\n        R.SetCurrentKey("No.");',
+          ),
+        ),
+        helper,
+      ),
+    );
+    // red when R passed to a call before the walk does not make its filters unknown
+    expect(p.refused("cu.al", "T2.Modify()")).toBe(true);
   });
 
   it("2. an insert in the walk's own body, with the same fix-up", () => {
@@ -176,7 +246,7 @@ describe("R717: the fix-up that moves an inserted row out of the walk's filter i
 });
 
 describe("R717 twins: fix-ups that stay emitted", () => {
-  it("5. a write of a field the walk does NOT filter on, then Modify", () => {
+  it("4. a write of a field the walk does NOT filter on, then Modify", () => {
     const p = project(
       files(
         proc(
@@ -192,7 +262,7 @@ describe("R717 twins: fix-ups that stay emitted", () => {
     expect(p.refused("cu.al", "T2.Note := NewNo")).toBe(false);
   });
 
-  it("6. a walk that inserts nothing: a filter-field fix-up is not refused", () => {
+  it("5. a walk that inserts nothing: a filter-field fix-up is not refused", () => {
     const p = project(
       files(
         proc(
@@ -207,7 +277,7 @@ describe("R717 twins: fix-ups that stay emitted", () => {
     expect(p.refused("cu.al", "T2.Modify()")).toBe(false);
   });
 
-  it("7. a fix-up on ANOTHER table is not refused", () => {
+  it("6. a fix-up on ANOTHER table is not refused", () => {
     const p = project(
       files(
         proc(
@@ -223,7 +293,25 @@ describe("R717 twins: fix-ups that stay emitted", () => {
     expect(p.refused("cu.al", "O.Modify()")).toBe(false);
   });
 
-  it("8. R's own filter write and Modify after a callee insert (moves R's own cursor) is not refused", () => {
+  it("8. a fix-up alone refuses no exit of the walk (the hazard is the deleted fix-up)", () => {
+    const p = project(
+      files(
+        proc(
+          "Exit",
+          WALK(`                if R.Note = Id then
+                    exit;
+${CLONE}
+                T2.Ident := NewNo;
+                T2.Modify();`),
+        ),
+      ),
+    );
+    expect(p.refused("cu.al", "T2.Modify()")).toBe(true);
+    // red when R696's exit refusal runs for fix-ups with no R696 mover
+    expect(p.refused("cu.al", "exit")).toBe(false);
+  });
+
+  it("7. R's own filter write and Modify after a callee insert (moves R's own cursor) is not refused", () => {
     const p = project(
       files(
         proc(
