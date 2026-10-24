@@ -3406,3 +3406,47 @@ describe("R653 pair", () => {
     });
   });
 });
+
+// R739: the backend's notices go to the session's notifier, not to the console, once `setNotify`
+// installed one. Each test goes red if its site reverts to `console.warn`.
+describe("R739: v3 notices reach setNotify, never the console", () => {
+  test("a dropped prefetch request is an al-runner-v3-entries-prefetch-dropped notice", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const r = await rig({
+        serve: {
+          answer: (q) => (q.ids[0] === "M0001|echo" ? { lines: [{ error: "boom" }] } : undefined),
+        },
+      });
+      const seen: Array<[string, string]> = [];
+      r.b.setNotify((c, m) => seen.push([c, m]));
+      await baseline(r.b, SUITE1);
+      await r.b.prefetchMutants(plans(["M0001"]));
+      expect(seen.map(([c]) => c)).toEqual(["al-runner-v3-entries-prefetch-dropped"]);
+      expect(seen[0]?.[1]).toContain("al-runner-v3-entries-prefetch-dropped");
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("an unexpected failure of the kill pair is an al-runner-v3-pair-skipped notice", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const r = await readyRig({ serve: { rows: killsM1 }, mutants: ["M0001"] });
+      const seen: Array<[string, string]> = [];
+      r.b.setNotify((c, m) => seen.push([c, m]));
+      await r.b.activate("M0001");
+      expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("fail");
+      (r.b as unknown as { request: () => Promise<never> }).request = async () => {
+        throw new Error("pair boom");
+      };
+      await r.b.sendKillPair("M0001", ref("A"));
+      expect(seen.map(([c]) => c)).toEqual(["al-runner-v3-pair-skipped"]);
+      expect(seen[0]?.[1]).toContain("pair boom");
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});

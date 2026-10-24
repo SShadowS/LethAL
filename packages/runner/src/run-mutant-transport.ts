@@ -476,6 +476,11 @@ const refusalScope = new AsyncLocalStorage<RefusalHolder>();
 export type ControlState = {
   readonly orphans: Map<Promise<Response>, string>;
   lateRefusal?: UnfilteredExtensionsQueryError | undefined;
+  /**
+   * R739: where a second-and-later late refusal is reported as a warning (`lease-refusal-extra`);
+   * the backend sets it for a session. Absent, it prints to `console.warn`.
+   */
+  notify?: ((code: string, message: string) => void) | undefined;
 };
 
 /** R499: a fresh, empty `ControlState`. */
@@ -689,9 +694,9 @@ export class RunMutantTransport {
       this.state.lateRefusal = err;
       return;
     }
-    console.warn(
-      `[lethal] a further refused unfiltered extensions query: ${lateRefusalError(err).message}`,
-    );
+    const message = `[lethal] a further refused unfiltered extensions query: ${lateRefusalError(err).message}`;
+    if (this.state.notify !== undefined) this.state.notify("lease-refusal-extra", message);
+    else console.warn(message);
   }
 
   /** One fenced mutant/baseline execution, no coverage collected — the unchanged Layer 5C-A path. */

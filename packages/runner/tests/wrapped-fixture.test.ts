@@ -16,6 +16,7 @@ import {
   type WrappedReport,
   assertBcWrappedRun,
   assertWrappedRun,
+  keepWarningMessages,
   twinDifferences,
 } from "../itest/wrapped-fixture";
 import { alRunnerCoverageFromServer, buildAlRunnerCoverageIndex } from "../src/al-runner-coverage";
@@ -361,5 +362,34 @@ describe("R497: sandbox-wrapped on bcdev (the itest:bcdev-wrapped table, offline
         "[lethal] coverage refused for Report:78913 (WrappedYBand.Report.al): ...",
       ]),
     ).toThrow("refusal");
+  });
+
+  // R739: the refusal sentences are warning EVENTS now, so the check must be fed from events.
+  it("an injected 789xx refusal EVENT, kept by keepWarningMessages, fails the check; a clean stream does not", () => {
+    const kept: string[] = [];
+    const subscriber = keepWarningMessages(kept);
+    subscriber({
+      seq: 1,
+      type: "warning",
+      code: "coverage-refused-object",
+      message: "[lethal] coverage refused for Codeunit:78905 (WrappedPairB.Codeunit.al): ...",
+    });
+    // The same code twice with another message: every message is kept, none de-duplicated.
+    subscriber({ seq: 2, type: "warning", code: "coverage-refused-object", message: "second" });
+    // Not a warning: ignored.
+    subscriber({ seq: 3, type: "stream-started", streamSchemaVersion: 1, runId: 1 });
+    expect(kept).toHaveLength(2);
+    expect(() => assertBcWrappedRun(bcReportOf(EXPECTED_WRAPPED_BC), "t", kept)).toThrow("refusal");
+    expect(() =>
+      assertBcWrappedRun(bcReportOf(EXPECTED_WRAPPED_BC), "t", ["unrelated notice"]),
+    ).not.toThrow();
+  });
+
+  it("bcdev-wrapped.itest.ts feeds that check from the events, not only from console.warn", async () => {
+    const source = await readFile(
+      join(import.meta.dir, "..", "itest", "bcdev-wrapped.itest.ts"),
+      "utf8",
+    );
+    expect(source).toContain("keepWarningMessages(warnings)");
   });
 });

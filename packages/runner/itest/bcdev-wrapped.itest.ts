@@ -56,6 +56,7 @@ import {
   WRAPPED_TEST_DIR,
   assertBcWrappedRun,
   assertWrappedLegsEqual,
+  keepWarningMessages,
   printWrappedTable,
 } from "./wrapped-fixture";
 
@@ -172,7 +173,9 @@ async function runLeg(
   try {
     const collected = collectWarnings();
     const report = await runSession({
-      emit: [collected.subscriber],
+      // R739: a refusal sentence is now a warning EVENT, not a console line, so the "no 789xx
+      // object refused" check is fed from every warning message of the events too.
+      emit: [collected.subscriber, keepWarningMessages(warnings)],
       backend,
       store,
       projectDir: WRAPPED_PROJECT_DIR,

@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**24 of 738 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**24 of 740 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -778,11 +778,13 @@ that ordering is the priority.
 - **R728** · BC's not-reinstalled list is measured only over a direct HTTP publish; through altool (a real run) it may never parse · [R728.md](docs/roadmap/R728.md) · closed 2026-10-24 — measured: no not-reinstalled list on altool's path (measure.md, pre-commitment 9f26ffac)
 - **R723** · The v3 update gate tried candidates oldest first, so two predicted fails ran before the newest release · [R723.md](docs/roadmap/R723.md) · done (3d805efe)
 - **R724** · `corpus-snapshot.ts` exits 2 for every refusal, so a retry loop cannot tell "heavy slot busy, try later" from "no master entry, never retry" · [R724.md](docs/roadmap/R724.md) · done (8d978cc9)
-- **R726** · A single-process I/O stall on the Windows CI job timed out 27 resume tests at 5 s, and verify's CI console named none of them · [R726.md](docs/roadmap/R726.md) · open, mitigated (8d978cc9): resume.test.ts has a 30 s per-test timeout, and verify prints each failure's…
+- **R726** · A single-process I/O stall on the Windows CI job timed out 27 resume tests at 5 s, and verify's CI console named none of them · [R726.md](docs/roadmap/R726.md) · open, mitigated (a02c868d): verify gives the Windows CI job a 60 s per-test timeout; the stall itself is not…
 - **R730** · Two readers do not refuse a retired `alRunner` config section: the live itests' fixture-config reader and kraken-secrets' pass-through · [R730.md](docs/roadmap/R730.md) · done (31557264)
 - **R736** · Most gates never see the warning events a run emits, so a new or lost warning passes unnoticed; only itest:hang pins its set · [R736.md](docs/roadmap/R736.md) · done (3281c66d)
 - **R744** · al-runner-v3 legs D1, D1c and T had no warning-code pins (R736's v3 proof did not run them) · [R744.md](docs/roadmap/R744.md) · done (e52b8f83)
-- **R739** · Warnings no gate can pin: `console.warn` lines inside a session, and the warning events of `runVerify` and `runNamedMutants` · [R739.md](docs/roadmap/R739.md) · open, filed 2026-10-24
+- **R739** · Warnings no gate can pin: `console.warn` lines inside a session, and the warning events of `runVerify` and `runNamedMutants` · [R739.md](docs/roadmap/R739.md) · done (c0f3dedb)
+- **R742** · run-mutant-many P6 is timing-dependent: a stalled Windows CI runner turns its expected `timeout` into `deadline-exceeded` · [R742.md](docs/roadmap/R742.md) · done (97f69cd3)
+- **R746** · `fenced-coverage-no-procedure-lines` fires for a test that runs no procedure at all (a Validate on a field with no OnValidate), not only on a real line-map frame fault · [R746.md](docs/roadmap/R746.md) · open, filed 2026-10-24 (from coord task R-739)
 
 ---
 
