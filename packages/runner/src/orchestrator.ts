@@ -2035,6 +2035,8 @@ async function prepareArtifactDir(args: {
   readonly excludeOutputs: readonly string[];
   /** R668: the run's `--config` file, never copied into the batch; see `prepareBatchProject`. */
   readonly configPath: string | undefined;
+  /** R739: the session's emitter, for the rebase-collision warning. */
+  readonly emit?: RunEmitter;
 }): Promise<readonly AppJsonPathChange[]> {
   await rm(args.targetDir, { recursive: true, force: true });
   const files =
@@ -2063,6 +2065,7 @@ async function prepareArtifactDir(args: {
     args.excludeOutputs,
     flatNames,
     args.configPath,
+    args.emit,
   );
 }
 
@@ -2082,6 +2085,8 @@ async function checkPlainBuild(args: {
   readonly excludeOutputs: readonly string[];
   readonly configPath: string | undefined;
   readonly compilePlainCheck: (dir: string) => Promise<void>;
+  /** R739: the session's emitter, for the rebase-collision warning. */
+  readonly emit?: RunEmitter;
 }): Promise<void> {
   await rm(args.scratchDir, { recursive: true, force: true });
   await mkdir(args.scratchDir, { recursive: true });
@@ -2095,6 +2100,7 @@ async function checkPlainBuild(args: {
       args.excludeOutputs,
       undefined,
       args.configPath,
+      args.emit,
     );
     try {
       await args.compilePlainCheck(args.scratchDir);
@@ -2199,6 +2205,8 @@ async function isolateAndNote(args: {
   readonly source: ReadonlyMap<string, Buffer> | undefined;
   readonly excludeOutputs: readonly string[];
   readonly configPath: string | undefined;
+  /** R739: the session's emitter, for the rebase-collision warning. */
+  readonly emit?: RunEmitter;
 }): Promise<IsolationPlan> {
   const fixedIds = fixedIdsOf(args.subsetMutants);
   const singletonText = new Map<MutantManifestEntry, string>();
@@ -2219,6 +2227,7 @@ async function isolateAndNote(args: {
           source: args.source,
           excludeOutputs: args.excludeOutputs,
           configPath: args.configPath,
+          ...(args.emit !== undefined ? { emit: args.emit } : {}),
         });
       } catch (err) {
         // NOT a compile answer — abort the search rather than feeding it a
@@ -3388,9 +3397,11 @@ class LeaseSession {
   private noteRefusal(err: unknown): void {
     if (!(err instanceof UnfilteredExtensionsQueryError)) return;
     if (this.#refusalTaken || this.#refusal !== undefined) {
-      console.warn(
-        `[lethal] another refused unfiltered extensions query on the lease path: ${err.message}`,
-      );
+      this.d.emit({
+        type: "warning",
+        code: "lease-refusal-extra",
+        message: `[lethal] another refused unfiltered extensions query on the lease path: ${err.message}`,
+      });
       return;
     }
     this.#refusal = err;
@@ -4546,6 +4557,17 @@ async function withBackendRefusals(
   return new Map([...(await r.coverageRefusals()), ...base]);
 }
 
+/**
+ * R739: hands the session's emitter to a backend that takes a notifier, so the backend's own
+ * user-facing notices become warning events (every occurrence, no dedupe). Returns the restore
+ * for the session's `finally`: after it, a notice goes back to the backend's default
+ * (`console.warn`). A backend with no `setNotify` is left alone.
+ */
+function handNotify(backend: ExecutionBackend, emit: RunEmitter): () => void {
+  backend.setNotify?.((code, message) => emit({ type: "warning", code, message }));
+  return () => backend.setNotify?.(undefined);
+}
+
 /** R-300b: hands the session's effective build symbols to a backend that takes them. */
 function handBuildSymbols(backend: ExecutionBackend, symbols: readonly string[]): void {
   const taker = backend as { useBuildSymbols?: (s: readonly string[]) => void };
@@ -4831,9 +4853,11 @@ async function openLeaseScope(a: {
           a.store.invalidateBatch(a.runId, batchIndex, note);
           a.store.dropBaselineSnapshot(a.runId, batchIndex);
         } catch (err) {
-          console.warn(
-            `[lethal] could not correct run ${a.runId} batch ${batchIndex} at the lease loss (${messageOf(err)}); the session's teardown tries again`,
-          );
+          a.emit({
+            type: "warning",
+            code: "lease-loss-store-not-corrected",
+            message: `[lethal] could not correct run ${a.runId} batch ${batchIndex} at the lease loss (${messageOf(err)}); the session's teardown tries again`,
+          });
         }
       },
     });
@@ -4892,7 +4916,11 @@ async function closeLeaseScope(a: {
   if (late !== undefined) refusals.push(late);
   const [first, ...rest] = refusals;
   for (const other of rest) {
-    console.warn(`[lethal] another refused unfiltered extensions query: ${other.message}`);
+    a.emit({
+      type: "warning",
+      code: "lease-refusal-extra",
+      message: `[lethal] another refused unfiltered extensions query: ${other.message}`,
+    });
   }
   return first;
 }
@@ -4907,17 +4935,24 @@ function surfaceLateRefusal(
   late: Error | undefined,
   alreadyFailing: boolean,
   safety: SessionSafety,
+  emit: RunEmitter,
 ): void {
   if (late === undefined) return;
   if (!alreadyFailing) {
     if (safety.isUnsafe) {
-      console.warn(`[lethal] the session was latched: ${safety.reason ?? "unknown"}`);
+      emit({
+        type: "warning",
+        code: "session-latched",
+        message: `[lethal] the session was latched: ${safety.reason ?? "unknown"}`,
+      });
     }
     throw late;
   }
-  console.warn(
-    `[lethal] a refused unfiltered extensions query (on the lease path, or after the session's last call) while the session was already failing: ${late.message}`,
-  );
+  emit({
+    type: "warning",
+    code: "late-refusal-while-failing",
+    message: `[lethal] a refused unfiltered extensions query (on the lease path, or after the session's last call) while the session was already failing: ${late.message}`,
+  });
 }
 
 /** The note a lease-lost batch's verdicts carry, in the report and in the store. */
@@ -4970,8 +5005,20 @@ function invalidateLostBatch(
     store.invalidateBatch(runId, lost, note);
     store.dropBaselineSnapshot(runId, lost);
   } catch (err) {
-    if (earlier !== undefined) console.warn(`[lethal] ${messageOf(earlier.error)}`);
-    if (late !== undefined) console.warn(`[lethal] ${late.message}`);
+    if (earlier !== undefined) {
+      emit({
+        type: "warning",
+        code: "lost-batch-error-replaced",
+        message: `[lethal] ${messageOf(earlier.error)}`,
+      });
+    }
+    if (late !== undefined) {
+      emit({
+        type: "warning",
+        code: "lost-batch-error-replaced",
+        message: `[lethal] ${late.message}`,
+      });
+    }
     throw new LostBatchNotStoredError(runId, lost, err);
   }
 }
@@ -5790,8 +5837,9 @@ async function runSessionBody(
     ...(cfg.quarantineStore !== undefined ? { quarantineStore: cfg.quarantineStore } : {}),
     emit,
   });
+  cleanups.push(handNotify(cfg.backend, emit));
   const status = await cfg.backend.status();
-  // R109: `status.details` is kept VERBATIM here — this call site knows only that string, so
+  // R109:`status.details` is kept VERBATIM here — this call site knows only that string, so
   // naming a SPECIFIC cause ("environment stopped") would be an invented plausible default, this
   // project's signature bug. It names the NEXT ACTION instead: `lethal doctor --config <path>`
   // runs every pre-flight check read-only and reports them all at once, rather than this
@@ -6811,6 +6859,7 @@ async function runSessionBody(
         source: sourceSnapshot,
         excludeOutputs: cfg.excludeOutputs ?? [],
         configPath: cfg.configPath,
+        emit,
       });
       if (pathChanges.length > 0 && !appJsonPathsWarned) {
         appJsonPathsWarned = true;
@@ -7231,6 +7280,7 @@ async function runSessionBody(
             excludeOutputs: cfg.excludeOutputs ?? [],
             configPath: cfg.configPath,
             compilePlainCheck,
+            emit,
           });
         }
         // 3c. Layer 4.3 put every mutant in one artifact (design spec §6): one
@@ -7270,6 +7320,7 @@ async function runSessionBody(
           source: sourceSnapshot,
           excludeOutputs: cfg.excludeOutputs ?? [],
           configPath: cfg.configPath,
+          emit,
         });
         // R734 A3: rows are written only once the redeploy's outcome is known, one per `execute`
         // mutant (a stranded skip was recorded already and gets no second row). Every edge below
@@ -7304,6 +7355,7 @@ async function runSessionBody(
                 source: sourceSnapshot,
                 excludeOutputs: cfg.excludeOutputs ?? [],
                 configPath: cfg.configPath,
+                emit,
               }),
             original: manifest.mutants,
             readManifest: async () =>
@@ -7599,6 +7651,7 @@ async function runSessionBody(
             // new source-parsing mode silently opted into the widening it must not have.
             isHubCoverageMode(caps.coverage),
             batchRefused,
+            (code, message) => emit({ type: "warning", code, message }),
           );
           perMutantTests = split.covered;
           refusedIds = split.refused;
@@ -7666,6 +7719,7 @@ async function runSessionBody(
                 undefined,
                 true,
                 batchRefused,
+                (code, message) => emit({ type: "warning", code, message }),
               ).covered;
         // R69 (closed): a mutant covered ONLY by a test this session cannot run is NAMED rather
         // than silently scored `no-coverage`. Recording is deferred until after the fenced mutant
@@ -8000,7 +8054,7 @@ async function runSessionBody(
       // run, even if this write throws.
       invalidateLostBatch(cfg.store, runId, leaseSession, safety, emit, late, failure);
     }
-    surfaceLateRefusal(late, failing, safety);
+    surfaceLateRefusal(late, failing, safety, emit);
   }
 
   // R391: one warning for every recorded verdict a key matched but `carryRecord` refused.
@@ -8364,6 +8418,18 @@ function unmutatedRun(
  * Does NOT finish `cfg.runId`: `priorSurvivorKeys` reads finished runs (see C02-06's notes).
  */
 export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMutantsResult> {
+  const cleanups: Array<() => void> = [];
+  try {
+    return await runNamedMutantsBody(cfg, cleanups);
+  } finally {
+    for (const c of cleanups) c();
+  }
+}
+
+async function runNamedMutantsBody(
+  cfg: NamedMutantsConfig,
+  cleanups: Array<() => void>,
+): Promise<NamedMutantsResult> {
   const who = "runNamedMutants";
   // The type requires it; this catches an untyped caller (run 002, review r1 #2).
   if (!(cfg.testPageRefused instanceof Map)) {
@@ -8451,6 +8517,7 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
     ...(cfg.quarantineDir !== undefined ? { quarantineDir: cfg.quarantineDir } : {}),
     emit,
   });
+  cleanups.push(handNotify(backend, emit));
   const status = await backend.status();
   if (!status.ok) {
     throw new Error(
@@ -8604,7 +8671,7 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
       // R508: the lost batch's event and store correction, as in `runSession`'s `finally`.
       invalidateLostBatch(store, runId, leaseSession, safety, emit, late, failure);
     }
-    surfaceLateRefusal(late, failing, safety);
+    surfaceLateRefusal(late, failing, safety, emit);
   }
   applyBatchInvalidations(outcomes, invalidations);
 
@@ -11907,6 +11974,8 @@ export async function prepareBatchProject(
   flatNamesIn?: FlatNames,
   /** R668: the run's `--config` file; a project file that is the same file is never copied. */
   configPath?: string,
+  /** R739: where the rebase-collision warning goes as an event; absent, it prints to the console. */
+  emit?: RunEmitter,
 ): Promise<readonly AppJsonPathChange[]> {
   const pathChanges = await writeStampedAppJson(batchDir, projectManifest, appVersion);
   // R363: the run's own output files (the results database and its sidecars, `--out`,
@@ -12005,9 +12074,9 @@ export async function prepareBatchProject(
   // the file, which is still loud.
   for (const { tail, owners } of rebased.values()) {
     if (owners.length > 1) {
-      console.warn(
-        `batch project: ${owners.map((o) => `"${o}"`).join(", ")} all rebase onto "${tail}", so none is copied there. A controladdin naming "${tail}" relative to its own .al file will fail to compile (AL0327); name it relative to the project root instead.`,
-      );
+      const message = `batch project: ${owners.map((o) => `"${o}"`).join(", ")} all rebase onto "${tail}", so none is copied there. A controladdin naming "${tail}" relative to its own .al file will fail to compile (AL0327); name it relative to the project root instead.`;
+      if (emit !== undefined) emit({ type: "warning", code: "resource-rebase-collision", message });
+      else console.warn(message);
       continue;
     }
     const [only] = owners;

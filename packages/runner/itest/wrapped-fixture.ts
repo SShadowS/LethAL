@@ -35,6 +35,18 @@
  * Kept out of `al-runner.itest.ts` because that script runs its gate at import (R186).
  */
 import { join } from "node:path";
+import type { EventSubscriber } from "../src/events";
+
+/**
+ * R739: a subscriber that keeps EVERY warning event's message (no de-duplication by code), for a
+ * check that reads message text, as `assertBcWrappedRun` reads the coverage-refusal sentences.
+ * Those sentences were console lines until R739 made them events.
+ */
+export function keepWarningMessages(into: string[]): EventSubscriber {
+  return (event) => {
+    if (event.type === "warning") into.push(event.message);
+  };
+}
 
 const FIXTURES = join(import.meta.dir, "..", "..", "..", "fixtures");
 export const WRAPPED_PROJECT_DIR = join(FIXTURES, "sandbox-wrapped");

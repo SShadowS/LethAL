@@ -229,8 +229,14 @@ export async function buildAlRunnerCoverageIndex(
      * al-runner's cwd. The one-shot transport sets none, so that is LethAL's own, the default.
      */
     readonly labelBase?: string;
+    /**
+     * R739: where a refusal sentence goes, with its warning code (`coverage-refused-object`). The
+     * v3 backend passes its session notifier; absent, the sentence prints to `console.warn`.
+     */
+    readonly notify?: (code: string, message: string) => void;
   } = {},
 ): Promise<AlRunnerCoverageIndex> {
+  const notify = options.notify ?? ((_code: string, message: string) => console.warn(message));
   await initParser();
   // ponytail: absent `symbols` means the bundle's own app.json symbols only (unit tests). The
   // backend always passes the session's set and refuses a coverage deploy without one.
@@ -278,7 +284,7 @@ export async function buildAlRunnerCoverageIndex(
       for (const [key, reason] of refusedObjectsOfFile(root, file, "al-runner-index")) {
         exempt.add(key);
         refusals.set(key, reason);
-        console.warn(`[lethal] ${reason}`);
+        notify("coverage-refused-object", `[lethal] ${reason}`);
       }
       continue;
     }
@@ -297,7 +303,7 @@ export async function buildAlRunnerCoverageIndex(
           const reason = undecidedArmsReason(e.objectType, e.objectId, file, arms.reason);
           exempt.add(key);
           refusals.set(key, reason);
-          console.warn(`[lethal] ${reason}`);
+          notify("coverage-refused-object", `[lethal] ${reason}`);
         }
         continue;
       }
@@ -332,7 +338,7 @@ export async function buildAlRunnerCoverageIndex(
   for (const [key, reason] of duplicates) {
     exempt.add(key);
     refusals.set(key, reason);
-    console.warn(`[lethal] ${reason}`);
+    notify("coverage-refused-object", `[lethal] ${reason}`);
   }
   for (const c of candidates) {
     const kept = c.entries.filter((e) => !duplicates.has(keyOfEntry(e)));
@@ -573,6 +579,8 @@ function indexedFile(
 export function alRunnerCoverageFromServer(
   entry: ServerPerTestCoverage,
   index: AlRunnerCoverageIndex,
+  /** R739: where the "position wins" line goes; absent, `console.warn`. */
+  notify: (code: string, message: string) => void = (_code, message) => console.warn(message),
 ): CoverageMap {
   const entries: CoverageEntry[] = [];
   const seen = new Set<string>();
@@ -623,7 +631,8 @@ export function alRunnerCoverageFromServer(
               );
             }
             if (st.scope?.toLowerCase() !== byPosition.toLowerCase()) {
-              console.warn(
+              notify(
+                "al-runner-v3-scope-disagreement",
                 `[lethal] al-runner --server named the covered statement at ${shownFile}:${st.line} "${st.scope ?? ""}", but that line is inside "${byPosition}"; the position wins (R383).`,
               );
             }

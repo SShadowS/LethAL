@@ -59,12 +59,15 @@ import {
 } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
+  type WarningCollector,
   checkGateWarnings,
   collectWarnings,
   finishGate,
   gateEndLine,
+  isGateWarningsError,
   nonPassExit,
   preflightObserve,
+  printObserved,
   settleThrown,
 } from "./gate-warnings";
 import { assertKillsReproduced } from "./kill-reproduction";
@@ -418,6 +421,8 @@ async function main(): Promise<void> {
       testDir: string,
       artifact: string,
       survivors: readonly string[],
+      /** R739: collects the warning events of this `runVerify`; one collector per step. */
+      collector: WarningCollector,
     ): Promise<{ code: number; out: VerifyOutput; acquired: number; reachLog: string[] }> => {
       let text = "";
       const reachLog: string[] = [];
@@ -431,6 +436,7 @@ async function main(): Promise<void> {
           runVerify: (args, deps) =>
             runVerify(args, {
               ...deps,
+              emit: [...(deps.emit ?? []), collector.subscriber],
               log: (line) => {
                 reachLog.push(line);
                 process.stderr.write(`${line}\n`);
@@ -507,6 +513,7 @@ async function main(): Promise<void> {
     // ---- 3. Verify with the new test. Step 4 runs whatever happens here.
     let verifyMs: number | undefined;
     let step3Err: unknown;
+    const step3Warnings = collectWarnings();
     try {
       const quarantineBefore = await quarantineRecords(defaultQuarantineDir());
       const { code, out, acquired, reachLog } = await verify(
@@ -514,6 +521,7 @@ async function main(): Promise<void> {
         newTestDir,
         lastArtifact.artifactId,
         [clampId, logAuditId],
+        step3Warnings,
       );
       assert.equal(code, VERIFY_EXIT.notAllKilled, "step 3: exit 5");
       assert.equal(out.quarantined, undefined, `step 3: no quarantine (${out.quarantined})`);
@@ -598,32 +606,44 @@ async function main(): Promise<void> {
         },
       });
       verifyMs = out.timings.totalMs;
+      // R739: last, so a warning mismatch never stops a check above. A throw is caught below and
+      // reported with the step; the restore in step 4 still runs.
+      checkGateWarnings("verify", "step3", step3Warnings);
       console.log(
         `step 3 PASS: ${NEW_TEST_QUALIFIED} stable (sessions ${b.sessionId}, ${r.sessionId}); ClampPercent killed by it (other), LogAudit survived without it (reach filter); reach lines as pre-committed; exit 5; read-back equal; lease free`,
       );
     } catch (err) {
       step3Err = err;
+      if (!isGateWarningsError(err)) settleThrown("verify", "step3", step3Warnings);
     }
 
     // ---- 4. Restore: the unchanged test project, also the "survived" leg. Always, once 3 began.
     let step4Err: unknown;
     let step4Run: { out: VerifyOutput; reachLog: string[] } | undefined;
+    const step4Warnings = collectWarnings();
     try {
-      const { code, out, reachLog } = await verify("step 4", TEST_DIR, lastArtifact.artifactId, [
-        clampId,
-        logAuditId,
-      ]);
+      const { code, out, reachLog } = await verify(
+        "step 4",
+        TEST_DIR,
+        lastArtifact.artifactId,
+        [clampId, logAuditId],
+        step4Warnings,
+      );
       assert.equal(code, VERIFY_EXIT.notAllKilled, "step 4: exit 5");
       assert.deepEqual(out.newTests, [], "step 4: no new tests");
       assert.equal(rowOf("step 4", out, clampId).verdict, "survived", "step 4: ClampPercent");
       assert.equal(rowOf("step 4", out, logAuditId).verdict, "survived", "step 4: LogAudit");
       await assertFreshReadBack("step 4", out);
       step4Run = { out, reachLog };
+      // R739: this step's warning set is checked with the reach pins below, not here, so a
+      // warning mismatch is never read as a failed restore.
       console.log(
         "step 4 PASS: restored; ClampPercent survived, so the new test is gone from the server",
       );
     } catch (err) {
       step4Err = err;
+      // The run's own error wins: its codes are printed, never asserted.
+      settleThrown("verify", "step4", step4Warnings);
     }
     // ---- 4 (R-384). The reach pins, apart from the restore proof: a wrong reach line is not a
     // failed restore, so it must neither claim the container is dirty nor stop step 4b.
@@ -640,6 +660,8 @@ async function main(): Promise<void> {
           filter: { state: "on" },
           rows: { [clampId]: { narrowed: false }, [logAuditId]: { narrowed: false } },
         });
+        // R739: the step's warning set is checked here, apart from the restore proof.
+        checkGateWarnings("verify", "step4", step4Warnings);
         console.log("step 4 PASS (R-384): testsRun and reach lines as pre-committed");
       } catch (err) {
         step4ReachErr = err;
@@ -647,11 +669,16 @@ async function main(): Promise<void> {
     }
     // ---- 4b (C02-09). One gap by id, with the repo's test app. Only once step 4 restored it.
     let step4bErr: unknown;
+    const step4bWarnings = collectWarnings();
     if (step4Err === undefined) {
       try {
-        const { code, out, acquired, reachLog } = await verify("step 4b", TEST_DIR, thenArtifact, [
-          thenGap.gapId,
-        ]);
+        const { code, out, acquired, reachLog } = await verify(
+          "step 4b",
+          TEST_DIR,
+          thenArtifact,
+          [thenGap.gapId],
+          step4bWarnings,
+        );
         assert.equal(code, VERIFY_EXIT.notAllKilled, "step 4b: exit 5");
         assert.equal(
           out.refused,
@@ -686,11 +713,13 @@ async function main(): Promise<void> {
           filter: { state: "on" },
           rows: Object.fromEntries(out.results.map((r) => [r.id, { narrowed: false }] as const)),
         });
+        checkGateWarnings("verify", "step4b", step4bWarnings);
         console.log(
           `step 4b PASS: verify --artifact ${thenArtifact} --survivors ${thenGap.gapId} ran ${out.results.map((r) => r.id).join(", ")}, both survived, exit 5, one lease acquire`,
         );
       } catch (err) {
         step4bErr = err;
+        if (!isGateWarningsError(err)) settleThrown("verify", "step4b", step4bWarnings);
       }
     }
     if (
@@ -715,13 +744,22 @@ async function main(): Promise<void> {
     }
 
     // ---- 5. Refusals against the real store: exit 6, no lease acquire, no verify run.
+    // R739: one collector for all four refusing steps; its codes are printed, never asserted (a
+    // refusal runs no verify, so no warning is expected, and a run that stops early is not a leg).
+    const refusalWarnings = collectWarnings();
     const refused = async (
       step: string,
       artifact: string,
       survivors: readonly string[],
       reason: string,
     ): Promise<void> => {
-      const { code, out, acquired, reachLog } = await verify(step, TEST_DIR, artifact, survivors);
+      const { code, out, acquired, reachLog } = await verify(
+        step,
+        TEST_DIR,
+        artifact,
+        survivors,
+        refusalWarnings,
+      );
       assert.equal(code, VERIFY_EXIT.refused, `${step}: exit 6`);
       // R-384 pre-commitment: a refusal comes before `narrow`, so no reach line is printed.
       assert.deepEqual(reachLog, [], `${step}: no reach line`);
@@ -740,6 +778,7 @@ async function main(): Promise<void> {
     );
     await refused("step 5c", lastArtifact.artifactId, [UNKNOWN_GAP_ID], "unknown-gap");
     await refused("step 5d", lastArtifact.artifactId, [overBudgetGapId], "gap-has-no-survivor");
+    printObserved("verify", "refusals", refusalWarnings);
 
     // ---- 6. The wall-time ratio. Recorded, not gated (plan decision 9, ruling 4).
     if (verifyMs === undefined) throw new Error("step 6: step 3 recorded no timing");

@@ -83,6 +83,17 @@ Every itest that calls `runSession` collects the run's `warning` events and comp
 CODES (never the messages) with a committed set in `GATE_WARNINGS` (`packages/runner/itest/gate-expected.ts`),
 keyed `"<gate>/<leg>"`. An extra or a missing code fails the gate, naming it. A key that is absent makes the gate
 refuse: a gate never records its own set (the same rule as R332's baselines).
+- **Other runs (R739):** `runVerify` and `runNamedMutants` emit warning events too. The verify, testapp and agreement
+  gates collect them per step, under their own keys: `verify/step3`, `verify/step4`, `verify/step4b`,
+  `testapp/step6`, `testapp/step7`, `agreement/verify`, `agreement/named`. A call that throws or refuses by design
+  (verify's refusals, testapp's two absence probes) has its own collector, printed and never asserted.
+  `gate-warnings-wiring.test.ts` checks that every `runNamedMutants(` and `runVerify(` call in an itest passes an
+  `emit`. The keys above are not pinned yet: each stays absent until an observe run has been explained and
+  pre-committed.
+- **What is an event:** since R739 the backends' notices (`setNotify`) and the orchestrator's lease and coverage
+  lines are warning events, not console lines. Only a few diagnostics stay on the console: the v3 contract lines,
+  the v3 close stats, staged-copy removal, the R289 trace, the store's WAL notice, the cache-removal notice, the
+  harness tenant line, and the lines around a session in `cli.ts`.
 - **Observe mode:** `LETHAL_ITEST_OBSERVE_WARNINGS=1` runs the gate as usual, asserts nothing about warnings, and
   prints `[gate-warnings] <gate>/<leg>: [codes]` plus one example message per code. It always ends as a non-pass: when
   nothing else failed, exit 3, a failed receipt and a closing line `OBSERVED (exit 3, not a pass)`; a leg that

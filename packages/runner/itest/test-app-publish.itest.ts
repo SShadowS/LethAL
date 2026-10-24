@@ -62,10 +62,12 @@ import {
 } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
+  type WarningCollector,
   checkGateWarnings,
   collectWarnings,
   finishGate,
   gateEndLine,
+  isGateWarningsError,
   nonPassExit,
   preflightObserve,
   settleThrown,
@@ -359,6 +361,8 @@ async function main(): Promise<void> {
     let lastNamedRunId = 0;
     const named = (
       requests: readonly NamedMutantRequest[],
+      /** R739: collects this call's warning events; one collector per step. */
+      collector: WarningCollector,
       inLease?: (fence: LeaseFence) => Promise<void>,
     ): Promise<NamedMutantsResult> => {
       const runId = store.createRun({
@@ -372,6 +376,7 @@ async function main(): Promise<void> {
       });
       lastNamedRunId = runId;
       return runNamedMutants({
+        emit: [collector.subscriber],
         backend,
         store,
         runId,
@@ -387,13 +392,17 @@ async function main(): Promise<void> {
     };
 
     // ---- 5 (and 7's repeat). The marker is ABSENT at runtime.
-    const assertMarkerAbsent = async (step: string): Promise<void> => {
+    const assertMarkerAbsent = async (step: string, probe: string): Promise<void> => {
       let err: unknown;
+      // R739: this call throws BY DESIGN (StaleTestAppError), so its codes are printed through
+      // `settleThrown` and never asserted.
+      const probeWarnings = collectWarnings();
       try {
-        await named([killWithMarker]);
+        await named([killWithMarker], probeWarnings);
       } catch (e) {
         err = e;
       }
+      settleThrown("testapp", probe, probeWarnings);
       if (!(err instanceof StaleTestAppError)) {
         throw new Error(
           `${step}: expected StaleTestAppError naming ${MARKER}, got ${err === undefined ? "no error" : String(err)}. The container carries a test app WITH the marker: restore it by hand (compile fixtures/sandbox-tests and publish it) before any gate.`,
@@ -406,16 +415,17 @@ async function main(): Promise<void> {
       );
       console.log(`${step} PASS: StaleTestAppError names only ${err.missingTests.join(", ")}`);
     };
-    await assertMarkerAbsent("step 5");
+    await assertMarkerAbsent("step 5", "step5-probe");
 
     // One publish under the lease, then the byte and version checks both legs make.
     const publishLeg = async (
       step: string,
       compiled: CompiledTestApp,
       requests: readonly NamedMutantRequest[],
+      collector: WarningCollector,
     ): Promise<{ res: NamedMutantsResult; runId: number }> => {
       let published: PublishedTestApp | undefined;
-      const res = await named(requests, async (fence) => {
+      const res = await named(requests, collector, async (fence) => {
         published = await backend.publishTestApp(fence, compiled);
       });
       const runId = lastNamedRunId;
@@ -446,16 +456,22 @@ async function main(): Promise<void> {
 
     // ---- 6. The marker build, published under the lease. Step 7 runs whatever happens here.
     let step6Err: unknown;
+    const step6Warnings = collectWarnings();
     try {
       const markerDir = await scratchTestProject(
         join(scratch, "marker"),
         `    [Test]\n    procedure ${MARKER}()\n    begin\n    end;`,
       );
       const compiled = await backend.compileTestApp(markerDir, artifact);
-      const { runId } = await publishLeg("step 6", compiled, [
-        killWithMarker,
-        { mutantId: survivor.mutantCode, methods: [...survivorMethods, method(MARKER)] },
-      ]);
+      const { runId } = await publishLeg(
+        "step 6",
+        compiled,
+        [
+          killWithMarker,
+          { mutantId: survivor.mutantCode, methods: [...survivorMethods, method(MARKER)] },
+        ],
+        step6Warnings,
+      );
       const markerRows = store.db
         .query(
           "SELECT outcome FROM test_results WHERE run_id = ? AND mutant_row_id IS NULL AND method = ?",
@@ -480,25 +496,46 @@ async function main(): Promise<void> {
         `step 6: a lease acquire right after must succeed: ${JSON.stringify(outcome.granted)}`,
       );
       await client.release(outcome.lease);
+      // R739: last, so a warning mismatch never stops a check above; step 7 still runs.
+      checkGateWarnings("testapp", "step6", step6Warnings);
       console.log(`step 6 PASS: ${MARKER} baseline pass, no quarantine, the lease was released`);
     } catch (err) {
       step6Err = err;
+      if (!isGateWarningsError(err)) settleThrown("testapp", "step6", step6Warnings);
     }
 
     // ---- 7. Restore the repo's test app, checked at runtime. Always, once step 6 started.
     let step7Err: unknown;
+    const step7Warnings = collectWarnings();
     try {
       const compiled = await backend.compileTestApp(TEST_DIR, artifact);
-      await publishLeg("step 7", compiled, [
-        { mutantId: kill.mutantCode, methods: [method("OverBudgetDetected")] },
-        { mutantId: survivor.mutantCode, methods: survivorMethods },
-      ]);
-      await assertMarkerAbsent("step 7 (repeated absence probe)");
+      await publishLeg(
+        "step 7",
+        compiled,
+        [
+          { mutantId: kill.mutantCode, methods: [method("OverBudgetDetected")] },
+          { mutantId: survivor.mutantCode, methods: survivorMethods },
+        ],
+        step7Warnings,
+      );
+      await assertMarkerAbsent("step 7 (repeated absence probe)", "step7-probe");
       console.log("step 7 PASS: restore published and verified, marker absent again");
     } catch (err) {
       step7Err = err;
     }
-    if (step6Err !== undefined || step7Err !== undefined) {
+    // R739: the restore leg's warning set is checked apart from the restore proof, so a mismatch
+    // is never reported as a failed restore (the "restore by hand" text below would be wrong).
+    let step7WarningsErr: unknown;
+    if (step7Err === undefined) {
+      try {
+        checkGateWarnings("testapp", "step7", step7Warnings);
+      } catch (err) {
+        step7WarningsErr = err;
+      }
+    } else {
+      settleThrown("testapp", "step7", step7Warnings);
+    }
+    if (step6Err !== undefined || step7Err !== undefined || step7WarningsErr !== undefined) {
       const describe = (e: unknown) => formatFailure(e);
       throw new Error(
         [
@@ -506,6 +543,9 @@ async function main(): Promise<void> {
           step7Err !== undefined
             ? `step 7 (restore) FAILED: ${describe(step7Err)}. The container may carry the marker build: restore fixtures/sandbox-tests by hand before any gate.`
             : "step 7 (restore) PASSED: the marker is absent at runtime again",
+          ...(step7WarningsErr !== undefined
+            ? [`step 7 (warning codes) FAILED: ${describe(step7WarningsErr)}`]
+            : []),
         ].join("\n"),
       );
     }

@@ -98,3 +98,77 @@ describe("gate-warnings wiring", () => {
     expect(fake.missing).toContain("collectWarnings");
   });
 });
+
+/**
+ * R739: the other runs that emit warning events. EVERY `runNamedMutants(` call, and every
+ * `runVerify(` call (the seam wrapper `verifyFromCli` is given), must hand the run an object with
+ * an `emit` property, so a gate cannot call one and leave its warnings uncollected. Per call, not
+ * per file: one wired call must not hide a bare one. The object must hold an `emit` property of its
+ * own; a spread of someone else's deps does not count.
+ */
+const EMITTING_RUNS = new Set(["runNamedMutants", "runVerify"]);
+
+/** The calls to `runNamedMutants` / `runVerify` in `text` that pass no object literal with `emit`. */
+function runsWithoutEmit(text: string): string[] {
+  const bare: string[] = [];
+  for (const { name, node } of callsOf(parse(text))) {
+    if (!EMITTING_RUNS.has(name)) continue;
+    const hasEmit = node.arguments.some(
+      (a) =>
+        ts.isObjectLiteralExpression(a) &&
+        a.properties.some(
+          (p) =>
+            (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) &&
+            ts.isIdentifier(p.name) &&
+            p.name.text === "emit",
+        ),
+    );
+    if (!hasEmit) {
+      const { line } = node.getSourceFile().getLineAndCharacterOfPosition(node.getStart());
+      bare.push(`${name} at line ${line + 1}`);
+    }
+  }
+  return bare;
+}
+
+describe("gate-warnings wiring: runNamedMutants and runVerify calls", () => {
+  const EXEMPT = new Set(["verify-scale.itest.ts"]);
+  const files = readdirSync(ITEST).filter((f) => f.endsWith(".itest.ts") && !EXEMPT.has(f));
+
+  test("the itests that call them are found", () => {
+    const callers = files.filter((f) => {
+      const text = readFileSync(join(ITEST, f), "utf8");
+      return callsOf(parse(text)).some((c) => EMITTING_RUNS.has(c.name));
+    });
+    expect(callers.sort()).toEqual([
+      "test-app-publish.itest.ts",
+      "verify-agreement.itest.ts",
+      "verify.itest.ts",
+    ]);
+  });
+
+  for (const f of files) {
+    test(`${f}: every runNamedMutants and runVerify call passes an object with emit`, () => {
+      expect(runsWithoutEmit(readFileSync(join(ITEST, f), "utf8"))).toEqual([]);
+    });
+  }
+
+  test("red, both ways: a bare call is flagged per call, and an emit property clears it", () => {
+    // Direction 1: no emit anywhere, or only a spread, or a name in a comment or string.
+    expect(runsWithoutEmit("runNamedMutants({ backend });")).toEqual(["runNamedMutants at line 1"]);
+    expect(runsWithoutEmit("runVerify(args, { ...deps, log });")).toEqual(["runVerify at line 1"]);
+    expect(runsWithoutEmit("runVerify(args, deps);")).toEqual(["runVerify at line 1"]);
+    // One wired call does not hide a bare one (per call, not per file).
+    expect(
+      runsWithoutEmit("runNamedMutants({ emit: [c.subscriber] });\nrunNamedMutants({ backend });"),
+    ).toEqual(["runNamedMutants at line 2"]);
+    // A comment or a string is not a call.
+    expect(runsWithoutEmit("// runNamedMutants({})\nconst s = 'runVerify(a, {})';")).toEqual([]);
+    // Direction 2: an emit property, written out or as a shorthand, clears the call.
+    expect(runsWithoutEmit("runNamedMutants({ emit: [c.subscriber], backend });")).toEqual([]);
+    expect(runsWithoutEmit("runVerify(args, { ...deps, emit: [...(deps.emit ?? [])] });")).toEqual(
+      [],
+    );
+    expect(runsWithoutEmit("runNamedMutants({ emit, backend });")).toEqual([]);
+  });
+});
