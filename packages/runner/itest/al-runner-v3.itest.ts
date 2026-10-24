@@ -85,13 +85,14 @@ import {
   classifyXb,
   dirtyFromStatus,
   failsClosedRefusal,
-  gateOutcome,
   judgeLegT,
   knownDifferencesRefusal,
   legCFactLine,
   legOutcomeOfError,
+  observeWithReceiptRefusal,
   recordRefusal,
   v3ItestTransport,
+  v3ReceiptOutcome,
   v3SplitLine,
   writeV3Receipt,
   xbHeldFirst,
@@ -130,7 +131,17 @@ import {
 } from "./baseline-guard";
 import { prepareFixtureSymbols } from "./fixture-symbols";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
-import { checkGateWarnings, collectWarnings, finishGate, nonPassExit } from "./gate-warnings";
+import {
+  checkGateWarnings,
+  collectWarnings,
+  finishGate,
+  gateEndLine,
+  isGateWarningsError,
+  nonPassExit,
+  observeRequested,
+  preflightObserve,
+  settleThrown,
+} from "./gate-warnings";
 import {
   LAYOUT_MAX_GUARDS,
   LAYOUT_PROJECT_DIR,
@@ -267,6 +278,10 @@ async function session(
         ...(onEvent !== undefined ? [onEvent] : []),
       ],
     });
+  } catch (e) {
+    // R736 rule: the session's own error wins; its codes are printed, never asserted.
+    settleThrown("al-runner-v3", basename(scratch), gateWarnings);
+    throw e;
   } finally {
     store.close();
     await backend.close();
@@ -543,6 +558,8 @@ async function legN1E(scratch: string, version: string): Promise<void> {
     });
     reading = { completed: true };
   } catch (e) {
+    // R736: the judge sees only the session's own error, never the warning check's.
+    if (isGateWarningsError(e)) throw e;
     reading = { threw: e instanceof Error ? e.message : String(e) };
   }
   const j = judgeN1Serve(reading, version);
@@ -841,15 +858,17 @@ async function sandboxBatch(scratch: string): Promise<string> {
       selectorObjectId: 79199,
     }),
   );
-  await session(join(scratch, "s1"), b, {
+  await session(join(scratch, "x-s1"), b, {
     projectDir: fixture("sandbox-app"),
     testDir: fixture("sandbox-tests"),
     selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
-  }).catch(async () => {
-    await mkdir(join(scratch, "s1"), { recursive: true });
+  }).catch(async (e: unknown) => {
+    // R736: a warning-set error is a gate failure, never swallowed with the session's own one.
+    if (isGateWarningsError(e)) throw e;
+    await mkdir(join(scratch, "x-s1"), { recursive: true });
     return undefined;
   });
-  const instr = join(scratch, "s1", "instr");
+  const instr = join(scratch, "x-s1", "instr");
   for (const e of await readdir(instr, { withFileTypes: true, recursive: true })) {
     if (e.isFile() && e.name === "mutant-manifest.json") return e.parentPath;
   }
@@ -857,7 +876,7 @@ async function sandboxBatch(scratch: string): Promise<string> {
 }
 
 async function legX(scratch: string, push: (line: string) => void): Promise<void> {
-  await mkdir(join(scratch, "s1"), { recursive: true });
+  await mkdir(join(scratch, "x-s1"), { recursive: true });
   const batch = await sandboxBatch(scratch);
   const sb = fixture("sandbox-tests");
   const deps = join(sb, ".alpackages");
@@ -1513,6 +1532,12 @@ async function legT(
 // ---------------------------------------------------------------------------------------------
 
 async function main(): Promise<void> {
+  preflightObserve();
+  const observeRefused = observeWithReceiptRefusal(
+    observeRequested(),
+    process.env.LETHAL_V3_GATE_RECEIPT,
+  );
+  if (observeRefused !== undefined) throw new Error(observeRefused);
   if (LEGS.includes("T")) preflightGateBaseline(TABLES_BASELINE_PATH, "al-runner-v3 itest leg T");
   // R654 S2: refused before any leg runs while a baseline is missing (R332).
   if (LEGS.includes("L1")) preflightGateBaseline(LAYOUT_BASELINE_PATH, "al-runner-v3 itest leg L1");
@@ -1687,8 +1712,10 @@ async function main(): Promise<void> {
   } finally {
     await rm(root, { recursive: true, force: true }).catch(() => {});
   }
-  const outcome = gateOutcome(legs);
-  console.log(`al-runner-v3 itest: legs ${JSON.stringify(legs)}; update-gate outcome ${outcome}`);
+  const outcome = v3ReceiptOutcome(legs, observeRequested());
+  console.log(
+    `al-runner-v3 itest: legs ${JSON.stringify(legs)}; ${observeRequested() ? `observe run, receipt outcome ${outcome}, not a pass` : `update-gate outcome ${outcome}`}`,
+  );
   const nonce = process.env.LETHAL_V3_GATE_NONCE;
   const receipt = process.env.LETHAL_V3_GATE_RECEIPT;
   if (nonce !== undefined && receipt !== undefined) {
@@ -1725,7 +1752,7 @@ async function main(): Promise<void> {
   // skip there fails); only a candidate's K may read `V3_K_CANDIDATE_SKIP` (`v3ItestFailures`).
   const bad = v3ItestFailures(legs, CANDIDATE, LEGS, K_ON_CANDIDATE);
   if (bad.length > 0) throw new Error(`al-runner-v3 itest: FAIL: ${bad.join(", ")}`);
-  console.log("al-runner-v3 itest: PASS");
+  console.log(gateEndLine("al-runner-v3"));
   // R654 S2: agentflow's receipt (only when challenged), naming every leg that ran and passed.
   await finishGate(() =>
     emitPassed("alrunner-v3", {

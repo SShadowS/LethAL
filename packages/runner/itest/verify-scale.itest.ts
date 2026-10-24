@@ -66,7 +66,15 @@ import {
   readFixtureConfig,
 } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
-import { checkGateWarnings, collectWarnings, finishGate, nonPassExit } from "./gate-warnings";
+import {
+  checkGateWarnings,
+  collectWarnings,
+  finishGate,
+  gateEndLine,
+  nonPassExit,
+  preflightObserve,
+  settleThrown,
+} from "./gate-warnings";
 import { assertKillsReproduced } from "./kill-reproduction";
 import { keyOf } from "./mutant-equality";
 import { assertFreshFullRun } from "./verify-agreement";
@@ -211,6 +219,7 @@ function lastRecorded(path: string): { artifactId: string; appId: string } | und
 }
 
 async function main(): Promise<void> {
+  preflightObserve();
   preflightReadOnlyBaseline(BASELINE_PATH, "verify-scale itest");
   const outPath = process.env.LETHAL_VERIFY_SCALE_OUT;
   if (outPath === undefined || outPath === "") {
@@ -339,6 +348,9 @@ async function main(): Promise<void> {
         resourceServer: bcdev.server,
         resourceServerInstance: bcdev.serverInstance,
         quarantineDir,
+      }).catch((e: unknown) => {
+        settleThrown("verify-scale", leg, warnings);
+        throw e;
       });
       // R582: every kill was re-run under the mutant, by marker and by its 2 killer rows.
       assertKillsReproduced(`verify-scale/${leg.toUpperCase()}`, report, store);
@@ -666,7 +678,9 @@ async function main(): Promise<void> {
     });
   }
 
-  console.log("verify-scale itest: PASS (measurement mode, the 0.20 line is recorded, not gated)");
+  console.log(
+    gateEndLine("verify-scale", " (measurement mode, the 0.20 line is recorded, not gated)"),
+  );
   await finishGate(() =>
     emitPassed("verify-scale", { sublegs: ["verify-scale"], artifacts: { reported: false } }),
   );

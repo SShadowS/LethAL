@@ -67,7 +67,15 @@ import {
   readFixtureConfig,
 } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
-import { checkGateWarnings, collectWarnings, finishGate, nonPassExit } from "./gate-warnings";
+import {
+  checkGateWarnings,
+  collectWarnings,
+  finishGate,
+  gateEndLine,
+  nonPassExit,
+  preflightObserve,
+  settleThrown,
+} from "./gate-warnings";
 import {
   ANSWER_KILLERS,
   EXPECTED,
@@ -220,6 +228,7 @@ BcDevMcpBackend.prototype.publishTestApp = function (
 };
 
 async function main(): Promise<void> {
+  preflightObserve();
   preflightReadOnlyBaseline(BASELINE_PATH, "agreement itest");
   const alpackages = join(TEST_DIR, ".alpackages");
   const symbols = await readdir(alpackages).catch(() => [] as string[]);
@@ -320,6 +329,9 @@ async function main(): Promise<void> {
         resourceServerInstance: bcdev.serverInstance,
         // A SCRATCH quarantine dir, never the real ~/.lethal store (see bcdev.itest.ts).
         quarantineDir: join(scratch, `quarantine-${leg}`),
+      }).catch((e: unknown) => {
+        settleThrown("agreement", leg, warnings);
+        throw e;
       });
       // R582: every kill was re-run under the mutant (verify's own kills are not evidenced:
       // `VerifyResult` carries no marker).
@@ -896,7 +908,7 @@ async function main(): Promise<void> {
     }
   }
 
-  console.log("agreement itest: PASS");
+  console.log(gateEndLine("agreement"));
   await finishGate(() =>
     emitPassed("agreement", { sublegs: ["agreement"], artifacts: { reported: false } }),
   );

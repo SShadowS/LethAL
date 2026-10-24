@@ -111,14 +111,35 @@ export function checkGateWarnings(
   assertGateWarnings(gate, leg, w.codes(), GATE_WARNINGS[`${gate}/${leg}`]);
 }
 
-/** Call after each runSession of a leg whose set is not pinned yet: prints in observe mode only. */
-export function observeGateWarnings(
-  gate: string,
-  leg: string,
-  w: WarningCollector,
+/**
+ * Call in a `catch` around a leg whose run threw. Rule: the run's OWN error always wins, so a
+ * throwing run never asserts its warnings (a warning error must not replace or hide it). Its codes
+ * are printed in both modes, so a failed observe or normal run still shows them.
+ */
+export function settleThrown(gate: string, leg: string, w: WarningCollector): void {
+  console.log(`[gate-warnings] ${gate}/${leg}: the run threw; codes below are NOT asserted`);
+  printObserved(gate, leg, w);
+}
+
+/** True for the two errors a gate must never swallow or reclassify as the run's own failure. */
+export function isGateWarningsError(err: unknown): boolean {
+  return err instanceof GateWarningsMismatchError || err instanceof GateWarningsUnrecordedError;
+}
+
+/** Call first in each gate's main: refuses a bad observe value before any server work. */
+export function preflightObserve(env: NodeJS.ProcessEnv = process.env): void {
+  observeRequested(env);
+}
+
+/** The gate's closing line: never says PASS in an observe run. */
+export function gateEndLine(
+  label: string,
+  suffix = "",
   env: NodeJS.ProcessEnv = process.env,
-): void {
-  if (observeRequested(env)) printObserved(gate, leg, w);
+): string {
+  return observeRequested(env)
+    ? `${label} itest: OBSERVED (exit 3, not a pass)`
+    : `${label} itest: PASS${suffix}`;
 }
 
 /**

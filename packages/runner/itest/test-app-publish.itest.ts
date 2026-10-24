@@ -61,7 +61,15 @@ import {
   readFixtureConfig,
 } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
-import { checkGateWarnings, collectWarnings, finishGate, nonPassExit } from "./gate-warnings";
+import {
+  checkGateWarnings,
+  collectWarnings,
+  finishGate,
+  gateEndLine,
+  nonPassExit,
+  preflightObserve,
+  settleThrown,
+} from "./gate-warnings";
 import { assertKillsReproduced } from "./kill-reproduction";
 import { diffMutants, keyOf, normalizeForComparison } from "./mutant-equality";
 import { expectedTestAppVersion } from "./test-app-version";
@@ -150,6 +158,7 @@ async function quarantineRecords(dir: string): Promise<string[]> {
 }
 
 async function main(): Promise<void> {
+  preflightObserve();
   preflightReadOnlyBaseline(BASELINE_PATH, "testapp itest");
   const alpackages = join(TEST_DIR, ".alpackages");
   const symbols = await readdir(alpackages).catch(() => [] as string[]);
@@ -257,6 +266,9 @@ async function main(): Promise<void> {
       instrumentedDir,
       selectorIds: SELECTOR_IDS,
       ...shared,
+    }).catch((e: unknown) => {
+      settleThrown("testapp", "run", warnings);
+      throw e;
     });
     // R582: every kill of the full run was re-run under the mutant.
     assertKillsReproduced("testapp", report, store);
@@ -503,7 +515,7 @@ async function main(): Promise<void> {
     await rm(scratch, { recursive: true, force: true }).catch(() => {});
   }
 
-  console.log("testapp itest: PASS");
+  console.log(gateEndLine("testapp"));
   await finishGate(() =>
     emitPassed("testapp", { sublegs: ["testapp"], artifacts: { reported: false } }),
   );

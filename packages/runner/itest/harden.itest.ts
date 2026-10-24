@@ -49,7 +49,15 @@ import {
 } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { HARDEN_SUBLEGS } from "./gate-sublegs";
-import { checkGateWarnings, collectWarnings, finishGate, nonPassExit } from "./gate-warnings";
+import {
+  checkGateWarnings,
+  collectWarnings,
+  finishGate,
+  gateEndLine,
+  nonPassExit,
+  preflightObserve,
+  settleThrown,
+} from "./gate-warnings";
 import {
   HardenGateError,
   assertHardenAnswers,
@@ -187,6 +195,9 @@ async function runLeg(
       resourceServerInstance: bcdev.serverInstance,
       // A SCRATCH quarantine dir, never the real ~/.lethal store (see bcdev.itest.ts).
       quarantineDir: join(scratchRoot, `quarantine-${leg}`),
+    }).catch((e: unknown) => {
+      settleThrown("harden", leg, warnings);
+      throw e;
     });
     // R582: every kill was re-run under the mutant, by marker and by its 2 killer rows.
     assertKillsReproduced(`harden/${leg === "a" ? "A" : "B"}`, report, store);
@@ -220,6 +231,7 @@ function assertBaselineGreen(label: string, report: SessionReport): void {
 }
 
 async function main(): Promise<void> {
+  preflightObserve();
   preflightGateBaseline(BASELINE_PATH, "harden itest");
   const scratchRoot = await mkdtemp(join(tmpdir(), "lethal-harden-itest-"));
   try {
@@ -247,7 +259,7 @@ async function main(): Promise<void> {
       BASELINE_PATH,
     );
 
-    console.log("harden itest: PASS");
+    console.log(gateEndLine("harden"));
     await finishGate(() =>
       emitPassed("harden", {
         sublegs: [...HARDEN_SUBLEGS],

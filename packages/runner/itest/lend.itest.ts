@@ -64,7 +64,15 @@ import {
 } from "./config-path";
 import { LEND_FIGURES, LEND_MUTANTS, type LendCode } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
-import { checkGateWarnings, collectWarnings, finishGate, nonPassExit } from "./gate-warnings";
+import {
+  checkGateWarnings,
+  collectWarnings,
+  finishGate,
+  gateEndLine,
+  nonPassExit,
+  preflightObserve,
+  settleThrown,
+} from "./gate-warnings";
 import { PENDING_SUFFIX, REVOKED_SUFFIX, seedRunFrom } from "./lend-seed";
 import { compareMutants, keyOf, normalizeForComparison } from "./mutant-equality";
 import type { NormalizedMutant } from "./mutant-equality";
@@ -217,6 +225,9 @@ async function session(
       quarantineDir: join(root, "quarantine"),
       emit: [(e) => events.push(e), warnings.subscriber],
       ...extra,
+    }).catch((e: unknown) => {
+      settleThrown("lend", label, warnings);
+      throw e;
     });
     checkGateWarnings("lend", label, warnings);
     return { report, events, runId: maxRunId(store) };
@@ -376,6 +387,7 @@ async function assertRefused(
 }
 
 async function main(): Promise<void> {
+  preflightObserve();
   preflightReadOnlyBaseline(BASELINE_PATH, "lend itest");
   const baseline = await readGateBaseline(BASELINE_PATH);
   const root = await mkdtemp(join(tmpdir(), "lethal-lend-"));
@@ -717,7 +729,7 @@ async function main(): Promise<void> {
     store.close();
     await rm(root, { recursive: true, force: true });
   }
-  console.log("lend itest: PASS");
+  console.log(gateEndLine("lend"));
   await finishGate(() => emitPassed("lend", { sublegs, artifacts: { reported: false } }));
 }
 

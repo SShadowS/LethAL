@@ -92,7 +92,15 @@ import {
 import { CHUNKED_FIGURES } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { CHUNKED_SUBLEGS } from "./gate-sublegs";
-import { checkGateWarnings, collectWarnings, finishGate, nonPassExit } from "./gate-warnings";
+import {
+  checkGateWarnings,
+  collectWarnings,
+  finishGate,
+  gateEndLine,
+  nonPassExit,
+  preflightObserve,
+  settleThrown,
+} from "./gate-warnings";
 import { killReproductionFailures, latestRunId } from "./kill-reproduction";
 import { assertReachEvidence, assertReachIdenticalAcrossLegs } from "./reach-evidence";
 
@@ -294,6 +302,9 @@ async function runLeg(scratchRoot: string, maxMethodsPerCall?: number): Promise<
       resourceServer: bcdev.server,
       resourceServerInstance: bcdev.serverInstance,
       quarantineDir: join(scratchRoot, "quarantine"),
+    }).catch((e: unknown) => {
+      settleThrown("chunked", maxMethodsPerCall === undefined ? "control" : "chunked", warnings);
+      throw e;
     });
     checkGateWarnings("chunked", maxMethodsPerCall === undefined ? "control" : "chunked", warnings);
 
@@ -373,6 +384,7 @@ function dump(leg: string, r: SessionReport): void {
 }
 
 async function main(): Promise<void> {
+  preflightObserve();
   const scratch = await mkdtemp(join(tmpdir(), "lethal-itest-chunked-"));
   try {
     console.log("chunked itest: leg 1 of 2 — unbounded (the control)");
@@ -519,7 +531,7 @@ async function main(): Promise<void> {
       `control: M0015's replay ran ${controlReplay.length} method(s), expected 4 (its killer is at ORDERED position 4 when nothing is chunked). If this is 2, the two legs are not actually running different chunkings and the gate proves nothing`,
     );
 
-    console.log("chunked itest: PASS");
+    console.log(gateEndLine("chunked"));
     await finishGate(() =>
       emitPassed("chunked", {
         sublegs: [...CHUNKED_SUBLEGS],

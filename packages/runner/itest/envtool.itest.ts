@@ -127,7 +127,15 @@ import { BaselineRecordedError, assertGateBaseline, preflightGateBaseline } from
 import { readFixtureConfig } from "./config-path";
 import { ENVTOOL_FIGURES } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
-import { checkGateWarnings, collectWarnings, finishGate, nonPassExit } from "./gate-warnings";
+import {
+  checkGateWarnings,
+  collectWarnings,
+  finishGate,
+  gateEndLine,
+  nonPassExit,
+  preflightObserve,
+  settleThrown,
+} from "./gate-warnings";
 import { assertKillsReproduced } from "./kill-reproduction";
 import { assertReachEvidence } from "./reach-evidence";
 
@@ -275,6 +283,9 @@ async function runOnce(scratchRoot: string): Promise<SessionReport> {
         // 2026-08-12 when the gate environment had to be recreated.
         ...afterLeaseAcquiredFor(envSession),
         quarantineDir: join(scratchRoot, "quarantine"),
+      }).catch((e: unknown) => {
+        settleThrown("envtool", "run", warnings);
+        throw e;
       });
       // R582 (UNMEASURED until the owner runs this gate): every kill was re-run under the
       // mutant. The fixture's store is persistent; the check reads only this run's rows. A re-run
@@ -397,6 +408,7 @@ function refuseSelfRecordWhileUnverified(): void {
 }
 
 async function main(): Promise<void> {
+  preflightObserve();
   refuseSelfRecordWhileUnverified();
   preflightGateBaseline(BASELINE_PATH, "envtool itest");
   const { files } = await generateMutationSet(join(PROJECT_DIR, "src"));
@@ -417,7 +429,7 @@ async function main(): Promise<void> {
     await rm(scratch, { recursive: true, force: true });
   }
 
-  console.log("envtool itest: PASS");
+  console.log(gateEndLine("envtool"));
   await finishGate(() =>
     emitPassed("envtool", { sublegs: ["envtool"], artifacts: { reported: false } }),
   );

@@ -39,7 +39,15 @@ import {
   readFixtureConfig,
 } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
-import { checkGateWarnings, collectWarnings, finishGate, nonPassExit } from "./gate-warnings";
+import {
+  checkGateWarnings,
+  collectWarnings,
+  finishGate,
+  gateEndLine,
+  nonPassExit,
+  preflightObserve,
+  settleThrown,
+} from "./gate-warnings";
 import { assertKillsReproduced } from "./kill-reproduction";
 import {
   WRAPPED_PROJECT_DIR,
@@ -180,6 +188,9 @@ async function runLeg(
       resourceServerInstance: bcdev.serverInstance,
       // A scratch quarantine dir, never the real store (see bcdev.itest.ts).
       quarantineDir: join(scratchRoot, "quarantine"),
+    }).catch((e: unknown) => {
+      settleThrown("bcdev-wrapped", coverageMode === "fenced" ? "fenced" : "hub", collected);
+      throw e;
     });
     // R582: every kill was re-run under the mutant, by marker and by its 2 killer rows.
     assertKillsReproduced(
@@ -197,6 +208,7 @@ async function runLeg(
 }
 
 async function main(): Promise<void> {
+  preflightObserve();
   preflightGateBaseline(BASELINE_PATH, "bcdev wrapped itest");
   const root = await mkdtemp(join(tmpdir(), "lethal-bcdev-wrapped-"));
   try {
@@ -229,7 +241,7 @@ async function main(): Promise<void> {
   } finally {
     await rm(root, { recursive: true, force: true });
   }
-  console.log("bcdev wrapped itest: PASS");
+  console.log(gateEndLine("bcdev wrapped"));
   await finishGate(() =>
     emitPassed("bcdev-wrapped", { sublegs: ["fenced", "hub"], artifacts: { reported: false } }),
   );

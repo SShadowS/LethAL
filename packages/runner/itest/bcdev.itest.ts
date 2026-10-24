@@ -49,7 +49,15 @@ import {
 } from "./config-path";
 import { BCDEV_FIGURES } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
-import { checkGateWarnings, collectWarnings, finishGate, nonPassExit } from "./gate-warnings";
+import {
+  checkGateWarnings,
+  collectWarnings,
+  finishGate,
+  gateEndLine,
+  nonPassExit,
+  preflightObserve,
+  settleThrown,
+} from "./gate-warnings";
 import { killReproductionFailures, latestRunId } from "./kill-reproduction";
 import { acquireProbeLease, odataReadRegisteredArtifact } from "./probe-lease";
 import { assertDirectTransportReach, assertReachEvidence } from "./reach-evidence";
@@ -180,7 +188,7 @@ interface RunOnceResult {
   readonly repro: readonly string[];
 }
 
-async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
+async function runOnce(scratchRoot: string, leg: "first" | "second"): Promise<RunOnceResult> {
   const launchLocal = await readJson<LaunchLocalConfig>(LAUNCH_LOCAL_PATH, "launch.local.json");
   const launchCfg = launchLocal.configurations[0];
   if (!launchCfg) {
@@ -287,8 +295,11 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
       // (observed live). The code path under test is identical either way — the store is
       // constructed from this path and nothing else — so do not "simplify" this back out.
       quarantineDir: join(scratchRoot, "quarantine"),
+    }).catch((e: unknown) => {
+      settleThrown("bcdev", leg, warnings);
+      throw e;
     });
-    checkGateWarnings("bcdev", "run", warnings);
+    checkGateWarnings("bcdev", leg, warnings);
     const runId = latestRunId(store);
     const sessionLiveness = store.sessionIdLiveness(runId);
     // R582: the fixture's store is persistent, so the run id scopes the killer rows.
@@ -699,6 +710,7 @@ function assertVerdictTable(report: SessionReport): void {
 }
 
 async function main(): Promise<void> {
+  preflightObserve();
   preflightGateBaseline(BASELINE_PATH, "bcdev itest");
   const { files } = await generateMutationSet(join(PROJECT_DIR, "src"));
   const total = files.reduce((n, f) => n + f.specs.length, 0);
@@ -711,7 +723,7 @@ async function main(): Promise<void> {
   const scratchA = await mkdtemp(join(tmpdir(), "lethal-itest-bcdev-a-"));
   const scratchB = await mkdtemp(join(tmpdir(), "lethal-itest-bcdev-b-"));
   try {
-    const first = await runOnce(scratchA);
+    const first = await runOnce(scratchA, "first");
     assertVerdictTable(first.report);
     assertSessionLiveness(first.report, first.sessionLiveness, 0);
     // Per-mutant regression guard against the committed baseline — in addition to the aggregate
@@ -720,7 +732,7 @@ async function main(): Promise<void> {
     await assertGateBaseline(first.report, BASELINE_PATH, "bcdev itest");
     assert.deepEqual(first.repro, [], first.repro.join("; "));
 
-    const second = await runOnce(scratchB);
+    const second = await runOnce(scratchB, "second");
     assertVerdictTable(second.report);
     assert.deepEqual(second.repro, [], second.repro.join("; "));
 
@@ -742,7 +754,7 @@ async function main(): Promise<void> {
     await rm(scratchB, { recursive: true, force: true });
   }
 
-  console.log("bcdev itest: PASS");
+  console.log(gateEndLine("bcdev"));
   await finishGate(() =>
     emitPassed("bcdev", { sublegs: ["bcdev"], artifacts: { reported: false } }),
   );
