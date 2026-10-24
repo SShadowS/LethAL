@@ -174,6 +174,11 @@ interface FakeRow {
   message?: string;
   notRun?: boolean;
 }
+/** R586c (B2): a real CPU stop takes at least its stop; the fake's stop rows say so. */
+const stopMsOf = (message: string | undefined): number => {
+  const m = /^Test exceeded (\d+)s timeout\./.exec(message ?? "");
+  return m?.[1] === undefined ? 0 : Number(m[1]) * 1000;
+};
 /** `n` is the request's index over the whole fake (every daemon); -1 for a one-shot call. */
 type RowsFn = (mutant: string, cu: number, daemon: number, n: number) => FakeRow[];
 type CoverageFn = (mutant: string, cu: number, active: string, testDir: string) => unknown;
@@ -395,7 +400,7 @@ function fakeServe(script: ServeScript = {}) {
             type: "test",
             name: `Codeunit${cu}.${r.method}`,
             status: r.status,
-            durationMs: 0,
+            durationMs: stopMsOf(r.message),
             ...(r.message !== undefined ? { message: r.message } : {}),
             ...(r.notRun === true ? { notRun: true } : {}),
             ...(entry !== undefined ? { entry } : {}),

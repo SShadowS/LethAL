@@ -38,6 +38,7 @@ import {
 } from "../src/al-runner-v3-backend";
 import { MESSAGE_PREFIX_REASON, type V3ContractResult } from "../src/al-runner-v3-contract";
 import { sha256OfFile } from "../src/al-runner-v3-pin";
+import * as pinsNs from "../src/al-runner-v3-pins";
 import { AlRunnerV3CoverageJoinError } from "../src/al-runner-v3-sleep";
 import { AlcCompileError, type ArtifactIo, ArtifactPrepareError } from "../src/artifact";
 import type { TestMethodRef } from "../src/backend";
@@ -180,7 +181,13 @@ interface FakeRow {
   status: "pass" | "fail" | "error";
   message?: string;
   notRun?: boolean;
+  /** R586c (B2): default 0, or the stop in ms for a "Test exceeded Ns timeout." row (a CPU stop); null omits it. */
+  durationMs?: number | null;
 }
+const stopMsOf = (message: string | undefined): number => {
+  const m = /^Test exceeded (\d+)s timeout\./.exec(message ?? "");
+  return m?.[1] === undefined ? 0 : Number(m[1]) * 1000;
+};
 
 /**
  * A fake v3: answers `test --codeunit <id>` with `rows(activeId, argv)` and writes `coverage` (or
@@ -212,7 +219,7 @@ function fakeV3(
     const tests = rows(activeId, argv).map((r) => ({
       codeunit: cu,
       codeunitName: "Tests",
-      durationMs: 0,
+      ...(r.durationMs === null ? {} : { durationMs: r.durationMs ?? stopMsOf(r.message) }),
       method: r.method,
       name: `Codeunit${cu}.${r.method}`,
       status: r.status,
@@ -424,7 +431,11 @@ describe("R639 r9 §2: status() passes candidate into the unlike-bc refusals and
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
       const s = await b.status();
-      return { s, warned: warn.mock.calls.map((c) => String(c[0])).join("\n") };
+      return {
+        s,
+        warned: warn.mock.calls.map((c) => String(c[0])).join("\n"),
+        sha: await sha256OfFile(bin),
+      };
     } finally {
       warn.mockRestore();
     }
@@ -433,6 +444,33 @@ describe("R639 r9 §2: status() passes candidate into the unlike-bc refusals and
     const { s, warned } = await statusOf(true);
     expect(s.ok).toBe(true);
     expect(warned).toMatch(/al-runner-v3-defect-unlike-bc: refusal-row-shape/);
+  });
+  test("R719: status() passes the pin's muted set to the warnings and prints the pin line", async () => {
+    const gone = (fact: string): V3ContractResult["facts"][number] => ({
+      fact,
+      kind: "defect",
+      verdict: "gone",
+      expected: "x",
+      measured: "m",
+    });
+    const contract: V3ContractResult = {
+      facts: [gone("refusal-row-shape"), gone("none-selected-exit")],
+    };
+    const spy = spyOn(pinsNs, "pinnedDefectCoverage").mockReturnValue({
+      muted: new Set(["refusal-row-shape=gone"]),
+      line: "PINLINE",
+    });
+    try {
+      const { s, warned, sha } = await statusOf(false, contract);
+      expect(s.ok).toBe(true);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy.mock.calls[0]).toEqual([contract, VERSION, sha]);
+      expect(warned).toContain("PINLINE");
+      expect(warned).toMatch(/defect-gone: none-selected-exit/);
+      expect(warned).not.toMatch(/defect-gone: refusal-row-shape/);
+    } finally {
+      spy.mockRestore();
+    }
   });
   test("a non-candidate backend refuses, naming refusal-row-shape", async () => {
     const { s, warned } = await statusOf(false);
@@ -1303,6 +1341,77 @@ describe("R-435 (B1): the artifact cache's apps folder", () => {
       join(resolve("rel-cache"), "artifacts", "28.0.46665.47126", "apps"),
     );
     expect(backendOf(l, spawn, fakeAlc().io).dependencyArtifactAppsDir()).toBeUndefined();
+  });
+});
+
+describe("R586c (B2): a timeout under a mutant whose wall time is under its stop ran on v3's virtual clock", () => {
+  const stopRow = (method: string, n: number, durationMs: number | null) => ({
+    method,
+    status: "error" as const,
+    notRun: true,
+    message: `Test exceeded ${n}s timeout.`,
+    durationMs,
+  });
+  async function verdictOf(rows: FakeRow[], ask: string, n: number, mutant = true) {
+    const l = await layout();
+    const b = backendOf(l, fakeV3(() => rows, { coverage: plainCoverage }).spawn, fakeAlc().io);
+    await b.deploy(l.batch);
+    if (mutant) {
+      await b.activate("M0001");
+      b.useCoveringBudgets(
+        "M0001",
+        rows.map((r) => ({ ref: ref(r.method), budgetMs: n * 1000 })),
+      );
+    } else await b.activate(null);
+    return b.run(ref(ask), { coverage: "none", timeoutMs: n * 1000 });
+  }
+  const outcomeAt = async (durationMs: number | null, n = 3) => {
+    const v = await verdictOf([stopRow("A", n, durationMs)], "A", n);
+    return [v.outcome, v.runnerRow] as const;
+  };
+
+  test("V-1: a stop whose wall time reached the stop (3006, 3009) is still a scored timeout", async () => {
+    expect(await outcomeAt(3006)).toEqual(["timeout", undefined]);
+    expect(await outcomeAt(3009)).toEqual(["timeout", undefined]);
+  });
+  test("V-2: durationMs 0 or 46 under a stop of 3 s is a runner-refused error naming the virtual clock", async () => {
+    for (const d of [0, 46]) {
+      const v = await verdictOf([stopRow("A", 3, d)], "A", 3);
+      expect([v.outcome, v.runnerRow]).toEqual(["error", "runner-refused"]);
+      expect(v.failureMessage).toContain("virtual clock");
+      expect(v.failureMessage).toContain("Test exceeded 3s timeout.");
+    }
+  });
+  test("V-3: the boundary: 2999 is refused, 3000 is scored", async () => {
+    expect(await outcomeAt(2999)).toEqual(["error", "runner-refused"]);
+    expect(await outcomeAt(3000)).toEqual(["timeout", undefined]);
+  });
+  test("V-4: no durationMs: scored as before", async () => {
+    expect(await outcomeAt(null)).toEqual(["timeout", undefined]);
+  });
+  test("V-5: timeout-is-cpu rows (limit 2: 2007 and 16038) stay timeouts", async () => {
+    expect(await outcomeAt(2007, 2)).toEqual(["timeout", undefined]);
+    expect(await outcomeAt(16038, 2)).toEqual(["timeout", undefined]);
+  });
+  test("V-6: the baseline call keeps reading a virtual stop as a timeout", async () => {
+    const v = await verdictOf([stopRow("A", 3, 0)], "A", 3, false);
+    expect(v.outcome).toBe("timeout");
+    expect(v.runnerRow).toBeUndefined();
+  });
+  test("V-6b: after a guarded mutant row, R639 and R-435 treat the sequence as pinned here", async () => {
+    const refusedB = {
+      method: "B",
+      status: "error" as const,
+      notRun: true,
+      message: "NotRun: out-of-scope: Commit",
+    };
+    const rows = [stopRow("A", 3, 0), refusedB, stopRow("D", 3, 3000)];
+    const a = await verdictOf(rows, "A", 3);
+    expect([a.runnerRow, a.refusedAfterStop]).toEqual(["runner-refused", undefined]);
+    const b = await verdictOf(rows, "B", 3);
+    expect([b.runnerRow, b.refusedAfterStop]).toEqual(["runner-refused", "A"]);
+    const d = await verdictOf(rows, "D", 3);
+    expect([d.outcome, d.runnerRow]).toEqual(["error", "runner-test-error"]);
   });
 });
 

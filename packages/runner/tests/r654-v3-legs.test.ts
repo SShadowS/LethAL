@@ -17,9 +17,13 @@ import {
   legKSection,
   v3DefaultLegs,
   v3ItestFailures,
+  v3KOnCandidate,
   v3RecordRunFailures,
 } from "../itest/alrunner-v3-legs";
-import { AL_RUNNER_V3_NOT_AUTHORITATIVE } from "../src/al-runner-v3-config";
+import {
+  AL_RUNNER_V3_NOT_AUTHORITATIVE,
+  validateAlRunnerV3Config,
+} from "../src/al-runner-v3-config";
 import { buildBackend } from "../src/cli";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
 
@@ -39,6 +43,7 @@ describe("R654 S2: the leg sets", () => {
       "S1",
       "S3",
       "N1",
+      "N1E", // R722: also in V3_GATE_LEGS (alpha.2 reads pass, not applicable)
       "X",
       "L1",
       "Y-A",
@@ -52,6 +57,7 @@ describe("R654 S2: the leg sets", () => {
       "S1",
       "S3",
       "N1",
+      "N1E",
       "X",
       "L1",
       "Y-A",
@@ -248,6 +254,99 @@ describe("R654 S2 leg K: the config it builds from, and what it judges", () => {
     expect(
       judgeLegK({ ...good, noCoverageFiles: [...good.noCoverageFiles.slice(1), "src/Other.al"] }),
     ).toHaveLength(1);
+  });
+});
+
+describe("R586c: K on a candidate build (an opt-in test seam)", () => {
+  const LINUX = process.platform === "linux";
+  const section = (dir: string, deps: string) =>
+    legKSection({
+      path: "/fake/al-runner",
+      packagesDir: deps,
+      bcVersion: BC,
+      alcPath: "/fake/alc",
+      cacheDir: join(dir, "cache"),
+    });
+  async function build(candidate: boolean) {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-r586c-k-"));
+    try {
+      await writeFile(
+        join(dir, "app.json"),
+        JSON.stringify({
+          id: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
+          idRanges: [{ from: 79000, to: 79199 }],
+          runtime: "17.0",
+        }),
+      );
+      const deps = join(dir, "deps");
+      await mkdir(deps);
+      await writeFile(
+        join(deps, "Microsoft_System Application.app"),
+        buildFakeAppWithEntries({
+          "NavxManifest.xml": `<?xml version="1.0"?><Package xmlns="http://schemas.microsoft.com/navx/2015/manifest"><App Id="1" Name="System Application" Publisher="Microsoft" Version="${BC}" /></Package>`,
+        }),
+      );
+      const warn = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const b = await buildBackend(
+          {
+            mode: "run",
+            projectDir: dir,
+            testDir: dir,
+            backendKind: "al-runner-v3",
+            dbPath: "db",
+            configPath: "cfg",
+            skipKnownSurvivors: false,
+            workers: 1,
+            keepEnv: false,
+            allowExpiringEnv: false,
+          } as Parameters<typeof buildBackend>[0],
+          { alRunnerV3: section(dir, deps) },
+          dir,
+          undefined,
+          candidate ? { alRunnerCandidate: true } : {},
+          { selectorId: 79199, controlId: 79198, tableId: 79197 },
+        );
+        return (b as unknown as { cfg: { candidate?: boolean } }).cfg.candidate;
+      } finally {
+        warn.mockRestore();
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  test("K-seam-1: the seam builds a backend with candidate: true; without it candidate is absent", async () => {
+    if (!LINUX) return;
+    expect(await build(true)).toBe(true);
+    expect(await build(false)).toBeUndefined();
+  });
+
+  test("K-seam-2: nothing a user can write reaches the seam: the config rejects a candidate key", () => {
+    expect(() =>
+      validateAlRunnerV3Config({
+        packagesDir: "/p",
+        bcVersion: BC,
+        candidate: true,
+      }),
+    ).toThrow(/unknown key\(s\): candidate/);
+  });
+
+  test("K-seam-3: the candidate K-skip tolerance holds unless K was asked to run", () => {
+    const legs = { K: V3_K_CANDIDATE_SKIP, C: "pass" };
+    expect(v3ItestFailures(legs, true, ["C", "K"])).toEqual([]);
+    expect(v3ItestFailures(legs, true, ["C", "K"], false)).toEqual([]);
+    expect(v3ItestFailures(legs, true, ["C", "K"], true)).toEqual([`K=${V3_K_CANDIDATE_SKIP}`]);
+    expect(v3ItestFailures({ K: "pass", C: "pass" }, true, ["C", "K"], true)).toEqual([]);
+  });
+
+  test("K-seam-4: LETHAL_ITEST_V3_K_ON_CANDIDATE takes 1 or unset; anything else is refused by name", () => {
+    expect(v3KOnCandidate({})).toBe(false);
+    expect(v3KOnCandidate({ LETHAL_ITEST_V3_K_ON_CANDIDATE: "1" })).toBe(true);
+    for (const v of ["2", "0", "", "true"])
+      expect(() => v3KOnCandidate({ LETHAL_ITEST_V3_K_ON_CANDIDATE: v })).toThrow(
+        /al-runner-v3-itest-k-on-candidate-refused/,
+      );
   });
 });
 

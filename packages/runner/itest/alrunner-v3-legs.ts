@@ -18,6 +18,67 @@ export const V3_K_LEG = "K";
 /** Condition 1: K's leg-summary value on a candidate build. */
 export const V3_K_CANDIDATE_SKIP = "skipped (candidate build)";
 
+/**
+ * R722: N1's dotted test name (`Dot.Step`) under serve-entries. A leg of the update gate
+ * (`V3_GATE_LEGS`), so a build that fixes #5798 reads `held` there, never silence. alpha.2 has no
+ * serve-entries path: `V3_NO_SERVE_ENTRIES` names it, and its refusal of `entries` is `pass`.
+ */
+export const V3_N1E_LEG = "N1E";
+
+/** The exact `--version` lines of builds that have no serve-entries path (alpha.2's `.gated`). */
+export const V3_NO_SERVE_ENTRIES: readonly string[] = ["alrunner 3.0.0-alpha.2 (91253f2d6)"];
+
+const UNKNOWN_ENTRIES_FIELD = 'the request was refused: "unknown field `entries` for runTests"';
+
+/** What the N1E session did: it finished, or it threw this message. */
+export type N1EReading = { readonly completed: true } | { readonly threw: string };
+
+/**
+ * R722, pre-committed (r19): on alpha.5 the serve request fails closed with `the entries answer is
+ * invalid: a test line without v3's row shape: {...}` for `Codeunit<n>.Dot.Step`, a line that has no
+ * `codeunit` and no `method` (upstream #5798). That is the only `pass`. A finished session, or a line
+ * that now has `codeunit` or `method`, is `held` (upstream may have fixed it: re-pre-commit). Any
+ * other error, or the refusal for another test, is `gate-fail`. One exception: a build in
+ * `V3_NO_SERVE_ENTRIES` that refuses the `entries` field by name is `pass` (not applicable); any
+ * other build refusing `entries` is `gate-fail`.
+ */
+export function judgeN1Serve(
+  r: N1EReading,
+  version: string,
+): {
+  readonly outcome: "pass" | "held" | "gate-fail";
+  readonly lines: string[];
+} {
+  const held = (why: string) => ({
+    outcome: "held" as const,
+    lines: [`re-pre-commit: upstream may have fixed #5798 (${why})`],
+  });
+  if ("completed" in r) return held("the serve-entries session completed");
+  if (V3_NO_SERVE_ENTRIES.includes(version) && r.threw.includes(UNKNOWN_ENTRIES_FIELD)) {
+    return {
+      outcome: "pass",
+      lines: ["N1E: not applicable: this build has no serve-entries path"],
+    };
+  }
+  const m = /the entries answer is invalid: a test line without v3's row shape: (\{.*\})/.exec(
+    r.threw,
+  );
+  const line = m?.[1];
+  if (line === undefined) {
+    return {
+      outcome: "gate-fail",
+      lines: [`N1E: not the pre-committed refusal (#5798): ${r.threw.slice(0, 300)}`],
+    };
+  }
+  if (/"codeunit"|"method"/.test(line)) {
+    return held(`the refused line now has codeunit or method: ${line}`);
+  }
+  if (!/Codeunit\d+\.Dot\.Step/.test(line)) {
+    return { outcome: "gate-fail", lines: [`N1E: the refused line is not Dot.Step's: ${line}`] };
+  }
+  return { outcome: "pass", lines: [`N1E: failed closed as pre-committed (#5798): ${line}`] };
+}
+
 /** The legs the itest runs when `LETHAL_ITEST_V3_LEGS` is unset, in run order. */
 export function v3DefaultLegs(o: { readonly cdo: boolean; readonly tables: boolean }): string[] {
   return [
@@ -25,6 +86,7 @@ export function v3DefaultLegs(o: { readonly cdo: boolean; readonly tables: boole
     "S1",
     "S3",
     "N1",
+    V3_N1E_LEG,
     "X",
     "L1",
     "Y-A",
@@ -53,15 +115,33 @@ export function v3ItestFailures(
   legs: Readonly<Record<string, string>>,
   candidate: boolean,
   selected: readonly string[],
+  /** R586c: K was asked to run on a candidate, so a skip is a failure there too. */
+  kRuns = false,
 ): string[] {
   const out: string[] = [];
   for (const leg of selected) if (!(leg in legs)) out.push(`${leg}=missing`);
   for (const [leg, v] of Object.entries(legs)) {
-    if (candidate && leg === V3_K_LEG && v === V3_K_CANDIDATE_SKIP) continue;
+    if (candidate && !kRuns && leg === V3_K_LEG && v === V3_K_CANDIDATE_SKIP) continue;
     if (v !== "pass") out.push(`${leg}=${v}`);
   }
   if (!Object.values(legs).includes("pass")) out.push("no leg passed");
   return out;
+}
+
+/**
+ * R586c: `LETHAL_ITEST_V3_K_ON_CANDIDATE=1` runs K on a candidate build (the CLI-built backend gets
+ * the test-only `alRunnerCandidate` seam). Unset: K is skipped there as before. Any other value is
+ * refused by name.
+ */
+export function v3KOnCandidate(env: Readonly<Record<string, string | undefined>>): boolean {
+  const v = env.LETHAL_ITEST_V3_K_ON_CANDIDATE;
+  if (v === undefined) return false;
+  if (v !== "1") {
+    throw new Error(
+      `al-runner-v3-itest-k-on-candidate-refused: LETHAL_ITEST_V3_K_ON_CANDIDATE=${JSON.stringify(v)}; allowed: 1 or unset (R586c)`,
+    );
+  }
+  return true;
 }
 
 /**

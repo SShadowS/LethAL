@@ -71,6 +71,7 @@ import {
   serveRow,
 } from "./al-runner-v3-entries";
 import { AlRunnerV3UngatedBuildError, checkGated } from "./al-runner-v3-pin";
+import { pinnedDefectCoverage } from "./al-runner-v3-pins";
 import {
   AlRunnerV3CoverageJoinError,
   type SleepIndex,
@@ -845,11 +846,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // §12: only a gated build runs (the update gate's candidate excepted).
     let gateRecord: string;
     let gatedWarnFacts: Readonly<Record<string, string>> | undefined;
+    let binarySha256: string;
     try {
       const gated = await checkGated(this.cfg.alRunnerPath, reported, {
         ...(this.cfg.candidate === true ? { candidate: true } : {}),
       });
       this.build = { version: reported, binarySha256: gated.binarySha256 };
+      binarySha256 = gated.binarySha256;
       gatedWarnFacts = gated.warnFacts;
       // M1: a session trusts leg C's gate-only facts from this record instead of re-measuring them.
       gateRecord =
@@ -875,7 +878,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     });
     // R639 r9 §2: `unlike-bc` refuses a normal session; a candidate (update-gate) session warns.
     const kind = { candidate: this.cfg.candidate === true };
-    for (const line of v3DefectWarnings(this.contract, kind)) console.warn(line);
+    // R719: a fact the running build's pin already covers (exact fact and outcome) is not warned
+    // about; the session prints one pin line instead, so a pinned build is never fully silent.
+    const covered = pinnedDefectCoverage(this.contract, reported, binarySha256);
+    if (covered !== undefined) console.warn(covered.line);
+    for (const line of v3DefectWarnings(this.contract, { ...kind, muted: covered?.muted }))
+      console.warn(line);
     const refusals = v3ContractRefusals(this.contract, kind);
     if (refusals.length > 0) return { ok: false, details: refusals.join("\n") };
     return {
@@ -1414,6 +1422,24 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     const verdict = v3RowVerdict(ref, row, call.stopSeconds, call.wallMs, coverage);
     if (this.lastActivated === null) return verdict;
+    // R586c (B2): alpha.5 counts a Sleep toward --test-timeout-secs on a VIRTUAL clock, so a test it
+    // "stopped at 3 s" returned after a few ms. A genuine CPU stop has a wall time of at least the
+    // stop (n x 1000 ms). Under a mutant, an earlier one is not a real timeout and must not kill:
+    // error, never scored. Here (mutant active), not in `v3RowVerdict`: baselines keep reading such
+    // a row as a timeout (X (d)'s 600 s Sleep siblings, R678's baseline symmetry).
+    if (
+      verdict.outcome === "timeout" &&
+      typeof row.durationMs === "number" &&
+      row.durationMs < (verdict.reportedStopMs ?? 0)
+    )
+      return {
+        ref,
+        outcome: "error",
+        durationMs: call.wallMs,
+        failureMessage: `${row.message ?? ""} [al-runner v3: stopped on v3's virtual clock; BC's real wait unknown; never scored]`,
+        operation: "completed-accepted",
+        runnerRow: "runner-refused",
+      };
     // R-435 (upstream #5776): v3 marks a later FAILURE after an unfinished test as not trusted, but
     // not a later TIMEOUT. A timeout after a row that was refused or stopped (or holds the refusal
     // marker) may come from that row's partial state. Outside entries mode a call runs the whole

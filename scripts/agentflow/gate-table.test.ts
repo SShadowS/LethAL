@@ -56,6 +56,10 @@ describe("R654 S2: the alrunner-v3 leg", () => {
     }
   });
 
+  test("R719: the pin table, now under src/, selects alrunner-v3", () => {
+    expect(selectLegs(["packages/runner/src/al-runner-v3-pins.ts"]).legs).toContain("alrunner-v3");
+  });
+
   test("docs still select no live leg", () => {
     expect(selectLegs(["docs/gates/alrunner-v3.md"]).legs).toEqual([]);
   });

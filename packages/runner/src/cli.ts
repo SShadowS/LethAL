@@ -2854,6 +2854,8 @@ async function buildAlRunnerV3Backend(
     readonly spawn?: SpawnFn;
     /** R635: the serve-entries daemon's spawn. */
     readonly serverSpawn?: ServerSpawnFn;
+    /** R586c: test seam, the update gate's leg K only. No flag, no config key. */
+    readonly candidate?: true;
     readonly selectorIds: SelectorConfig;
     readonly source?: ReadonlyMap<string, Buffer>;
     readonly preprocessorSymbols: readonly string[];
@@ -2882,6 +2884,7 @@ async function buildAlRunnerV3Backend(
       alcPath,
       coverage,
       sourceProjectDir: parsed.projectDir,
+      ...(deps.candidate === true ? { candidate: true } : {}),
       ...(c.cacheDir !== undefined ? { cacheDir: c.cacheDir } : {}),
       ...(deps.preprocessorSymbols.length > 0
         ? { preprocessorSymbols: deps.preprocessorSymbols }
@@ -2915,6 +2918,8 @@ export async function buildBackend(
     alToolPaths?: typeof defaultAlToolPaths;
     alRunnerSpawn?: SpawnFn;
     alRunnerServerSpawn?: ServerSpawnFn;
+    /** R586c: test seam for the update gate's leg K on a candidate build; never set by a user. */
+    alRunnerCandidate?: true;
   } = {},
   // R3: the resolved selector/control/table ids (`resolveSelectorIds`) — trailing, defaulted
   // param so every pre-existing positional call site (tests included) keeps behaving exactly as
@@ -2932,6 +2937,7 @@ export async function buildBackend(
       alToolPaths: deps.alToolPaths ?? defaultAlToolPaths,
       ...(deps.alRunnerSpawn !== undefined ? { spawn: deps.alRunnerSpawn } : {}),
       ...(deps.alRunnerServerSpawn !== undefined ? { serverSpawn: deps.alRunnerServerSpawn } : {}),
+      ...(deps.alRunnerCandidate === true ? { candidate: true as const } : {}),
       selectorIds,
       ...(source !== undefined ? { source } : {}),
       preprocessorSymbols,
