@@ -820,8 +820,8 @@ export async function planVerify(a: {
   /** R-278: the source run's recorded test digests (`store.testDigests`); `null` for a run that
    *  predates them, which is refused. */
   readonly sourceTestDigests: Readonly<Record<string, string>> | null;
-  /** R-371: the parts those digests are made of (`store.testDigestParts`); only explains a
-   *  too-many-new-tests refusal. */
+  /** R-371: the parts those digests are made of (`store.testDigestParts`); explains a
+   *  too-many-new-tests refusal. R600: tag `none` also skips the closed-world guard (never a verdict). */
   readonly sourceTestDigestParts?: unknown;
   readonly testDir: string;
   /** R-371: this verify's dependency fingerprint (`verifyDependencyFingerprint`), or a function
@@ -829,8 +829,8 @@ export async function planVerify(a: {
    *  digest-scheme check included), so `source-predates-verify` wins over `dependency-unreadable`
    *  and costs no download. */
   readonly dependencies: string | (() => Promise<string>);
-  /** R389: the closed-world guard (`closedWorldGuard`), asked once with the digest inputs. Absent
-   *  is `OPEN_WORLD`. A source run recorded under another answer has other digests: none carries. */
+  /** R389: the closed-world guard (`closedWorldGuard`), asked once with the digest inputs, unless
+   *  the source run's parts record tag `none` (R600: then never asked). Absent is `OPEN_WORLD`. A source run recorded under another answer has other digests: none carries. */
   readonly closedWorld?: () => Promise<ClosedWorld>;
   /** R-371: the cap: refuse above `maxNewTests x (S + 2)` extra test runs (R-384 counts runs, not
    *  tests). Default `DEFAULT_MAX_NEW_TESTS`. */
@@ -1007,10 +1007,15 @@ export async function planVerify(a: {
   // R-371: ONE parse serves the scan and the digests.
   const model = buildTestAppModel(await readTestAppSources(testDir));
   const refusedWhy = scanTestPageModel(model, discovered);
+  // R600: a source run recorded open-world (tag `none`) is digested open without asking the guard.
+  // Safety rests on the `W` line (an open and a closed digest never match), so a wrong tag can only
+  // re-run more. No parts keeps the old behaviour: ask the guard.
+  const recordedParts = parseDigestParts(a.sourceTestDigestParts ?? null);
+  const recordedOpen = recordedParts !== null && (recordedParts.closedWorld ?? "none") === "none";
   const inputs = {
     dependencies: typeof a.dependencies === "string" ? a.dependencies : await a.dependencies(),
     buildInputs: (await readAppJsonInputs(testDir)).buildInputs,
-    ...(a.closedWorld !== undefined ? { closedWorld: await a.closedWorld() } : {}),
+    ...(a.closedWorld !== undefined && !recordedOpen ? { closedWorld: await a.closedWorld() } : {}),
   };
   const digestsNow = testDigestsOfModel(model, discovered, inputs).digests;
   const recorded = new Map(Object.entries(sourceTestDigests));
@@ -1050,7 +1055,7 @@ export async function planVerify(a: {
             ref,
             recorded: baselineKeys.has(testKeyOf(ref)) && recorded.has(testDigestKey(ref)),
           })),
-          parseDigestParts(a.sourceTestDigestParts ?? null),
+          recordedParts,
         ),
       ),
   };

@@ -108,7 +108,8 @@ export function closedWorldTag(cw: ClosedWorld = OPEN_WORLD): string {
 
 /**
  * Every part a digest is made of, 16 hex characters each, recorded beside the digests so verify
- * can say WHAT changed when it refuses `too-many-new-tests`. Never read to decide a verdict.
+ * can say WHAT changed when it refuses `too-many-new-tests`. Never read to decide a verdict. R600:
+ * `closedWorld` also chooses which digests verify computes (open when `none`, else the guard's).
  */
 export interface TestDigestParts {
   /** `Proc.key` -> span hash, for every procedure and trigger in every codeunit. */
@@ -406,6 +407,12 @@ export function parseDigestParts(v: unknown): TestDigestParts | null {
     (o.closedWorld !== undefined && typeof o.closedWorld !== "string")
   ) {
     throw new Error("test-digest.ts: a recorded test_digest_parts value is not TestDigestParts");
+  }
+  // R600: the tag now chooses which digests verify computes, so an unknown one is never read as open.
+  if (!["none", "public", "public+internal"].includes(o.closedWorld ?? "none")) {
+    throw new Error(
+      `test-digest.ts: a recorded test_digest_parts value has an unknown closedWorld tag ${JSON.stringify(o.closedWorld)}`,
+    );
   }
   return v as TestDigestParts;
 }
