@@ -15,6 +15,7 @@ import type { ServerSpawnFn } from "../src/al-runner-server";
 import type { V3Row } from "../src/al-runner-v3-backend";
 import {
   BC_END_OF_TEST_TEXT,
+  BC_HTTP_HUB_TEXT,
   BC_HTTP_INTERNAL_TEXT,
   BURN_BUSY_LOOPS,
   BURN_GUARD_MS,
@@ -531,6 +532,15 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
         await serveFact({
           ...FIXED_ROWS,
           [http]: { status: "fail", notRun: false, message: "NotRun: out-of-scope: x" },
+        })
+      )?.verdict,
+    ).toBe("diverged");
+    // http as a plain fail with NO message.
+    expect(
+      (
+        await serveFact({
+          ...FIXED_ROWS,
+          [http]: { status: "fail", notRun: false },
         })
       )?.verdict,
     ).toBe("diverged");
@@ -1110,19 +1120,24 @@ describe("R639 (pre-commitment r9): leg C's BC readings", () => {
     r.facts.find((f) => f.fact === name)?.verdict;
   const RRS = "refusal-row-shape";
 
-  test("P1: refusal-row-shape reads gone on BC's exact text, fail, exit 1; leg C held; no refusal", async () => {
-    const r = await at50653(1, [http({ message: BC_HTTP_INTERNAL_TEXT }), LATER_FAIL]);
+  test("R705 ruling: the oracle is the test runner HUB text (a literal here, so the constant is checked)", () => {
+    expect(BC_HTTP_HUB_TEXT).toBe(EDGE_TEXT);
+  });
+
+  test("P1: refusal-row-shape reads gone on the hub's exact text, fail, exit 1; leg C held; no refusal", async () => {
+    const r = await at50653(1, [http({ message: EDGE_TEXT }), LATER_FAIL]);
     expect(r.facts.find((f) => f.fact === RRS)).toMatchObject({ kind: "defect", verdict: "gone" });
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("held");
     expect(v3ContractRefusals(r)).toEqual([]);
   });
 
-  test("P2 (text): BC's text changed by a trailing space, a cut, a suffix or its case is never gone: unlike-bc", async () => {
+  test("P2 (text): the hub text changed by a trailing space, a cut, a suffix or its case is never gone: unlike-bc; so is the web-service text (R705 ruling)", async () => {
     for (const m of [
-      `${BC_HTTP_INTERNAL_TEXT} `,
-      BC_HTTP_INTERNAL_TEXT.slice(0, -1),
-      `${BC_HTTP_INTERNAL_TEXT} more`,
-      BC_HTTP_INTERNAL_TEXT.toLowerCase(),
+      `${EDGE_TEXT} `,
+      EDGE_TEXT.slice(0, -1),
+      `${EDGE_TEXT} more`,
+      EDGE_TEXT.toLowerCase(),
+      BC_HTTP_INTERNAL_TEXT,
     ]) {
       const r = await at50653(1, [http({ message: m }), LATER_FAIL]);
       expect(verdictOf(r, RRS)).toBe("unlike-bc");
@@ -1131,10 +1146,10 @@ describe("R639 (pre-commitment r9): leg C's BC readings", () => {
 
   test("P2 (fields): status error, notRun without the prefix, exit 7, a second HttpGet row, or the prefix with notRun false read diverged", async () => {
     const cases: Array<[number, unknown[]]> = [
-      [1, [http({ message: BC_HTTP_INTERNAL_TEXT }, "error"), LATER_FAIL]],
-      [7, [http({ message: BC_HTTP_INTERNAL_TEXT, notRun: true }, "error"), LATER_FAIL]],
-      [7, [http({ message: BC_HTTP_INTERNAL_TEXT }), LATER_FAIL]],
-      [1, [http({ message: BC_HTTP_INTERNAL_TEXT }), http({ message: BC_HTTP_INTERNAL_TEXT })]],
+      [1, [http({ message: EDGE_TEXT }, "error"), LATER_FAIL]],
+      [7, [http({ message: EDGE_TEXT, notRun: true }, "error"), LATER_FAIL]],
+      [7, [http({ message: EDGE_TEXT }), LATER_FAIL]],
+      [1, [http({ message: EDGE_TEXT }), http({ message: EDGE_TEXT })]],
       [1, [http({ message: "NotRun: out-of-scope: an outbound HTTP request" }), LATER_FAIL]],
     ];
     for (const [exitCode, rows] of cases) {
@@ -1318,9 +1333,10 @@ describe("R639 (pre-commitment r9): leg C's BC readings", () => {
     );
   });
 
-  const EDGE_ROWS = [http({ message: EDGE_TEXT }), LATER_FAIL];
+  // R705 ruling: a build that writes BC's web-service text is not the hub's reading: unlike-bc.
+  const EDGE_ROWS = [http({ message: BC_HTTP_INTERNAL_TEXT }), LATER_FAIL];
 
-  test("P12: edge's row is unlike-bc: gate-fail in leg C (#5700); a CANDIDATE session warns and runs", async () => {
+  test("P12: a web-service-text row is unlike-bc: gate-fail in leg C (#5700); a CANDIDATE session warns and runs", async () => {
     const r = await at50653(1, EDGE_ROWS);
     expect(verdictOf(r, RRS)).toBe("unlike-bc");
     const c = classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS);

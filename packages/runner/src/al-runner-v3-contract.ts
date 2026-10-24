@@ -67,6 +67,15 @@ export type V3DefectVerdict = "defect-present" | "gone" | "unmeasurable" | "refu
  */
 export const BC_HTTP_INTERNAL_TEXT =
   "The request was blocked by the runtime to prevent accidental use of production services.";
+/**
+ * R705 (owner ruling 2026-10-24): the oracle for HTTP-in-test behaviour is BC's TEST RUNNER HUB path
+ * (VS Code, `bcdev_test_run`), not the web-service path. R706 measured the hub on bc1: this text, code
+ * `HttpRequest:Security`. `refusal-row-shape` reads `gone` on exactly this text.
+ * `BC_HTTP_INTERNAL_TEXT` above is BC's web-service-path text (r639, R706); it is kept, and a build that
+ * writes it now reads `unlike-bc`, as any text other than the hub's does.
+ */
+export const BC_HTTP_HUB_TEXT =
+  "There was an error while executing the HTTP request, the connecting endpoint violates security requirements. Make sure you are connecting to a valid endpoint.";
 /** Duplicate key at the end of a test: 92912's `DuplicateNamedKey`, 92913, and 92915's `raw`. */
 export const BC_END_OF_TEST_TEXT =
   "The record in table Probe Row already exists. Identification fields and values: Key='K1'";
@@ -99,7 +108,7 @@ function refusalRowShape(c: {
   if (isRefusalRow(h)) return "defect-present";
   const m = h.message ?? "";
   if (h.status !== "fail" || h.notRun || c.exitCode !== 1) return "diverged";
-  if (m === BC_HTTP_INTERNAL_TEXT) return "gone";
+  if (m === BC_HTTP_HUB_TEXT) return "gone";
   return isV3RefusalText(m) ? "diverged" : "unlike-bc";
 }
 
@@ -628,7 +637,9 @@ const DEP_SKIP_TESTS_AL = `codeunit 50662 "Probe DepSkip"
 `;
 
 /** R667: a plain failed row's message, or `undefined` when the row is not a plain `fail`. */
-const plainFailMessage = (r: V3Row | undefined): string | undefined =>
+const plainFailMessage = (
+  r: { readonly status: string; readonly notRun?: boolean; readonly message?: string } | undefined,
+): string | undefined =>
   r !== undefined && r.status === "fail" && r.notRun !== true ? r.message : undefined;
 
 /**
@@ -692,14 +703,10 @@ async function serveKeepReasons(env: V3ProbeEnv, app: string, root: string): Pro
       r.status === "error" &&
       r.message !== undefined &&
       V3_SERVE_SAFE_REFUSALS[entry]?.test(r.message) === true;
-    // R705: written out (not `r?.status`): no row must never read as fine.
+    // R705: never a negated optional-chain form (r?.x !== ...): no row would read as fine.
+    const pm = plainFailOk ? plainFailMessage(r) : undefined;
     const plainFail =
-      plainFailOk &&
-      r !== undefined &&
-      r.status === "fail" &&
-      r.notRun !== true &&
-      !isV3RefusalText(r.message) &&
-      (entry !== "cascade" || r.message === "later");
+      pm !== undefined && !isV3RefusalText(pm) && (entry !== "cascade" || pm === "later");
     if (refusal || plainFail) {
       how.push(`${entry}: ${refusal ? "refusal" : "plain fail"}`);
     } else {
@@ -1212,7 +1219,7 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         "refusal-row-shape",
         "defect",
         refusalRowShape(ref),
-        `HttpGet: a refusal row with the implied exit (#5608 present); its fix as BC (bc1): fail, notRun false, "${BC_HTTP_INTERNAL_TEXT}", exit 1`,
+        `HttpGet: a refusal row with the implied exit (#5608 present); its fix as BC's test runner hub (R706, owner ruling): fail, notRun false, "${BC_HTTP_HUB_TEXT}", exit 1`,
         rowsText(ref, "HttpGet"),
       ),
     );
