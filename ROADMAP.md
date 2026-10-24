@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**28 of 707 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**28 of 709 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -749,9 +749,11 @@ that ordering is the priority.
 - **R705** · v3 contract probe serve-keep-reasons is blind on #5602-fixed builds: its tests app holds a non-compiling codeunit (50674) · [R705.md](docs/roadmap/R705.md) · done (195f90ec)
 - **R707** · What BC does with an installed dependent (a fixture tests app) when its target is republished with changed SIGNATURES is not measured; the worst case under-reports · [R707.md](docs/roadmap/R707.md) · closed 2026-10-24 — measured on bc2 (R-707): BC recompiles installed dependents at publish and refuses a…
 - **R709** · A refused UPGRADE can fail to restore: BC leaves the target uninstalled and the dependent removed (the R605 version record blocks reinstalling the old target) · [R709.md](docs/roadmap/R709.md) · open, filed 2026-10-24
-- **R706** · Measure #5700's HTTP refusal text in a client session on a leased bc server (the only LethAL-side way to settle unlike-bc) · [R706.md](docs/roadmap/R706.md) · open, filed 2026-10-24
+- **R706** · Measure #5700's HTTP refusal text in a client session on a leased bc server (the only LethAL-side way to settle unlike-bc) · [R706.md](docs/roadmap/R706.md) · done (9c19550b)
 - **R708** · The Windows staged-copy cleanup gave up silently after a short retry, so a scanner-locked folder made a unit test flake (CI run 40072847202, attempt 1) · [R708.md](docs/roadmap/R708.md) · done (2502f82b)
 - **R711** · Option B: setup and bc-republish could remove an installed dependent first (uninstall, unpublish), publish the target, then republish the dependent, behind a flag · [R711.md](docs/roadmap/R711.md) · open, filed 2026-10-24 (build only if a lane needs it)
+- **R712** · Which BC path is the oracle for HTTP-in-test behaviour: the test runner hub or the web-service path · [R712.md](docs/roadmap/R712.md) · closed 2026-10-24 — owner ruling: the test runner hub path
+- **R713** · bcdev runs tests through the web-service path, so a test asserting on BC's HTTP error text reads a different text than VS Code or the hub (R706) · [R713.md](docs/roadmap/R713.md) · open, filed 2026-10-24
 
 ---
 
