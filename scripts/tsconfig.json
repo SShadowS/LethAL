@@ -192,6 +192,8 @@
     "r161-emit-proof.ts",
     "r216-classify-gained.test.ts",
     "r216-classify-gained.ts",
+    "r326-w8-memory.test.ts",
+    "r326-w8-memory.ts",
     "r402-shape-sweep.ts",
     "r546-bucket.test.ts",
     "r546-bucket.ts",
