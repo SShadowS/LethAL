@@ -15,6 +15,7 @@ import {
   buildPackageCacheCopy,
   isControlSymbolName,
   removePackageCacheCopy,
+  removeWithRetry,
 } from "./artifact";
 import type { ArtifactCompiler, CompileInput, CompiledArtifact } from "./artifact";
 import type {
@@ -410,6 +411,19 @@ export function unreadOfError(
   return { unread: `the request failed (${text})` };
 }
 
+/**
+ * R708: reclaim a staged compile copy with retries (Windows scanners hold fresh files). Never
+ * throws: the compile outcome is already decided and must not be masked. A copy that still
+ * cannot be removed is named in a warning, not swallowed.
+ */
+async function removeStagedCopy(staged: string): Promise<void> {
+  await removeWithRetry(staged).catch((e) =>
+    console.warn(
+      `[lethal] could not remove the staged compile copy ${staged}: ${describeThrown(e)}`,
+    ),
+  );
+}
+
 export class BcDevMcpBackend implements ExecutionBackend {
   /** R582: R577's "a kill must reproduce" rule, on for bcdev too (the re-run is one more fenced
    *  call under the mutant: a single `RunMutant` at position 1, the call's prefix at k > 1). */
@@ -787,7 +801,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
         console.warn(dangling);
       }
     } catch (e) {
-      await rm(staging, { recursive: true, force: true }).catch(() => {});
+      await removeStagedCopy(staging);
       throw e;
     }
     return staging;
@@ -966,9 +980,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
       // reads `artifact.appPath` (the compiled .app in outputDir). Best-effort, same idiom as
       // compileCheck()'s own cleanup — a compile already decided the outcome by here, so a
       // stray cleanup failure must never mask it.
-      await rm(staged, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch(
-        () => {},
-      );
+      await removeStagedCopy(staged);
     }
     // See `indexArtifact`'s doc comment: must happen before publish().
     await this.indexArtifact(artifact.appPath, instrumentedDir, artifact.mutantManifest);
@@ -1119,7 +1131,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
       const artifact = await this.compileStaged(deployment.compiler, staged);
       await rm(artifact.appPath, { force: true }).catch(() => {});
     } finally {
-      await rm(staged, { recursive: true, force: true }).catch(() => {});
+      await removeStagedCopy(staged);
     }
   }
 

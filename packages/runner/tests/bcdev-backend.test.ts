@@ -15,6 +15,7 @@ import {
   DeploymentError,
   InstalledArtifactError,
   defaultArtifactIo,
+  removeWithRetry,
 } from "../src/artifact";
 import type { ArtifactIo, CompileInput, CompiledArtifact } from "../src/artifact";
 import type { BoundArtifact, TestMethodRef } from "../src/backend";
@@ -179,7 +180,7 @@ function deploymentStub(): BcDevDeployment {
  * cleans its own staged copy internally — this helper is only needed after `deploy()`.)
  */
 async function rmStaged(instrumentedDir: string): Promise<void> {
-  await rm(`${instrumentedDir}-staged`, { recursive: true, force: true });
+  await removeWithRetry(`${instrumentedDir}-staged`);
 }
 
 /**

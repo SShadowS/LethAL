@@ -997,6 +997,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **The Windows staged compile copy is removed with a real retry, and a failure is named** ([R708](docs/roadmap/R708.md)).
+  A scanner-locked folder used to be left behind silently, which flaked one unit test. CI now uploads the verify logs
+  of a failed run.
+- **Transport durations use a monotonic clock** ([R709](docs/roadmap/R709.md)). A wall-clock step can no longer record
+  a stopped run shorter than its budget (a hang-gate duration failure on bc3).
+
 - **`al-runner-v3` projects with single-wrapper `#if` files no longer report killed mutants as no-coverage** ([R602](docs/roadmap/R602.md)).
   Before, the CLI kept coverage on for such a project while selection refused every wrapped object by name, so
   their mutants read `no-coverage` (32 of 98 on `sandbox-wrapped` were kills that `--mode none` finds). Selection now
