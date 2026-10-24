@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**24 of 726 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**26 of 728 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -126,6 +126,7 @@ that ordering is the priority.
 - **R729** · On DC/Cloud, 30 instrumented sites do not parse: a wrapped `if X then;` body loses its terminator (AL0111, 29), and a removed then-statement leaves `then ; else` (AL0110, 1) · [R729.md](docs/roadmap/R729.md) · done (f75d3874)
 - **R731** · toggle-blank-string turns a one-character text literal assigned to a Char (an element of a Text variable) into an empty Text, which alc rejects (AL0122); one such mutant fails the whole batch · [R731.md](docs/roadmap/R731.md) · open, filed 2026-10-24 (found by R-729's re-run of the DC/Cloud compile)
 - **R732** · shift-integer on a `case true of` label can duplicate another label's expression, which alc rejects (AL0402, 2 errors from one mutant) · [R732.md](docs/roadmap/R732.md) · open, filed 2026-10-24 (found by R-729's re-run of the DC/Cloud compile)
+- **R734** · A batch that fails to compile scores EVERY mutant `error`, even when bisection names the culprit; two or more culprits are called environmental · [R734.md](docs/roadmap/R734.md) · open, filed 2026-10-24 (built on lethal/r731-iso; tests written, implementation waits for the plan review)
 - **R306** · A mutant inside an arm the build's preprocessor symbols compile out gets a different fate depending on where the `#if` sits, and one of the three shapes is predicted, not measured · [R306.md](docs/roadmap/R306.md) · closed 2026-10-06 — case 1 closed by R214 (0 compiled-out mutants measured on BaseApp, CDO, DC, DO), case 3…
 - **R312** · A member whose `var` section ENDS in an `#if` block of declarations gets its reach latch written on the `#endif` line, and alc rejects the artifact (AL0631) · [R312.md](docs/roadmap/R312.md) · done (4001282)
 - **R313** · A member whose `var` section tree-sitter-al cannot parse gets no reach latch: it is refused by name, and its reach is not measured · [R313.md](docs/roadmap/R313.md) · closed 2026-10-06 — stated limit: 0 members refused in 510,291 across every corpus and fixture; the refusal…
@@ -414,6 +415,7 @@ that ordering is the priority.
 - **R299** · A file mixing an injectable object with a non-injectable one is refused outright, so a real project using that shape cannot be instrumented (Sentinel) · [R299.md](docs/roadmap/R299.md) · closed 2026-10-05 — stated limit: 0 mixed files and 0 sites lost across fixtures, unit fixtures, CDO and 203…
 - **R398** · The object-header scan is ASCII-only and line-anchored, so valid AL such as an unquoted non-ASCII object name or `namespace X; codeunit ...` on one line is refused whole (no-header) · [R398.md](docs/roadmap/R398.md) · closed 2026-10-05 — stated limit: 0 no-header refusals in 17,990 files; a widened pattern finds the same…
 - **R304** · Statements inside a block OPENED by a split `#if` if-header (`preproc_split_if_then_begin`, `preproc_split_if_begin_asymmetric`) are not in statement position, so they are not sites · [R304.md](docs/roadmap/R304.md) · closed 2026-10-06 — stated limit: 4 lost statements in all corpora…
+- **R735** · Isolating many breaking mutants costs about 540 compiles on DC; alc's own diagnostics can name the suspects first · [R735.md](docs/roadmap/R735.md) · open, filed 2026-10-24 (follow-on to R734; not built)
 - **R305** · An object whose HEADER is split by `#if` (`preproc_split_declaration`) is refused as a whole file, so none of its sites are instrumented · [R305.md](docs/roadmap/R305.md) · closed 2026-10-05 — stated limit: 593 sites lost in 2 BaseApp files (0.026%), 0 elsewhere (R-305 census)
 - **R444** · Eight more grammar containers can hold statements and `isStatementSlot` knows none of them: `preproc_guarded_statement` (two) and six split-directive kinds · [R444.md](docs/roadmap/R444.md) · closed 2026-10-06 — stated limit: 0 statements in any of the eight containers on BaseApp, CDO, DC, DO and the…
 - **R307** · One bad file still aborts the whole run: `assertNoOverlap`, the injector's unsupported-kind throw, the latch's no-owner throw and the line map's declared-but-unmapped throw all stay whole-run throws · [R307.md](docs/roadmap/R307.md) · done (cf354d51)

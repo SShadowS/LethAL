@@ -6856,6 +6856,214 @@ describe("runSession — Task 7: bisects the full manifest, not the history-filt
   });
 });
 
+// ————————————————————————————————————————————————————————————————————————
+// R734: a batch that fails to compile no longer scores EVERY mutant `error`. The mutants that break
+// the compile are isolated, scored `error` with a note, and the clean rest is redeployed with its
+// ORIGINAL ids and scored. Every edge fails closed: those mutants stay `error`, never scored.
+// ————————————————————————————————————————————————————————————————————————
+describe("runSession — R734: isolate the breaking mutants, score the rest", () => {
+  /** One boundary site per procedure, on its own line, in a file of its own. */
+  async function isolationProject(procedures: number) {
+    const dirs = await makeProject();
+    const body = Array.from(
+      { length: procedures },
+      (_, i) =>
+        `    procedure P${String(i).padStart(2, "0")}(A: Integer; B: Integer): Boolean\n    begin\n        exit(A < B);\n    end;\n`,
+    ).join("\n");
+    await Bun.write(
+      join(dirs.projectDir, "Isolation.Codeunit.al"),
+      `codeunit 79050 "Isolation Extras"\n{\n${body}}\n`,
+    );
+    return dirs;
+  }
+  type Seen = { site: string; id: string };
+  /** Fails while the manifest still holds a boundary mutant of a `badProcs` procedure. Records each
+   *  manifest it was shown, so the tests can read the compile count and the ids. */
+  function brokenBy(badProcs: ReadonlySet<string>, shown: Seen[][]) {
+    return (dir: string): Error | undefined => {
+      const manifest = JSON.parse(readFileSync(join(dir, "mutant-manifest.json"), "utf8")) as {
+        mutants: Array<{
+          mutantId: string;
+          file: string;
+          startIndex: number;
+          startLine: number;
+          operatorName: string;
+          procedureName: string;
+        }>;
+      };
+      shown.push(
+        manifest.mutants.map((m) => ({
+          site: [m.file, m.startIndex, m.operatorName].join("|"),
+          id: m.mutantId,
+        })),
+      );
+      const bad = manifest.mutants.filter(
+        (m) => m.operatorName === "lethal.conditional-boundary" && badProcs.has(m.procedureName),
+      );
+      const first = bad[0];
+      return first === undefined
+        ? undefined
+        : new AlcCompileError(`${first.file}(${first.startLine},9): error AL0123: broken`);
+    };
+  }
+  const isCulprit = (
+    m: { file: string; operatorName: string },
+    isolationLines: ReadonlySet<number>,
+    line: number,
+  ) =>
+    m.file.includes("Isolation") &&
+    m.operatorName === "lethal.conditional-boundary" &&
+    isolationLines.has(line);
+  // P<i> is the third line of its block: block i starts at line 3 + 5 * i, exit() at +2.
+  const lineOf = (i: number) => 3 + 5 * i + 2;
+
+  async function runIsolation(procedures: number, bad: readonly number[]) {
+    const dirs = await isolationProject(procedures);
+    const shown: Seen[][] = [];
+    const badProcs = new Set(bad.map((i) => `P${String(i).padStart(2, "0")}`));
+    const backend = new StubBackend(
+      CAPS_NST,
+      () => "pass",
+      ["IsOverBudget"],
+      undefined,
+      undefined,
+      brokenBy(badProcs, shown),
+    );
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    store.close();
+    const lines = new Set(bad.map(lineOf));
+    return { report, shown, lines, backend };
+  }
+
+  // Direction 1 (k=1): the culprit is never scored. Red on master: every mutant is `error`, so the
+  // NEXT test is the one that fails there; this one passes on master and pins the other direction.
+  test("k=1: the culprit is `error` with a note naming the alc code and line, never scored", async () => {
+    const { report, lines } = await runIsolation(4, [2]);
+    const culprits = report.mutants.filter((m) => isCulprit(m, lines, m.line));
+    expect(culprits.map((m) => m.verdict)).toEqual(["error"]);
+    expect(culprits[0]?.failureNote).toContain("AL0123");
+    expect(culprits[0]?.failureNote).toContain(String(lineOf(2)));
+    expect(culprits[0]?.failureNote).not.toContain("not attributable to any SINGLE");
+  });
+
+  // Direction 2 (k=1): everything else IS scored. Red on master (all `error`).
+  test("k=1: every other mutant is scored, not `error`", async () => {
+    const { report, lines } = await runIsolation(4, [2]);
+    const others = report.mutants.filter((m) => !isCulprit(m, lines, m.line));
+    expect(others.length).toBeGreaterThan(3);
+    expect(others.filter((m) => m.verdict === "error")).toEqual([]);
+    expect(report.counts.errors).toBe(1);
+  });
+
+  test("k=2: both culprits are `error`, with their own notes", async () => {
+    const { report, lines } = await runIsolation(6, [1, 4]);
+    const culprits = report.mutants.filter((m) => isCulprit(m, lines, m.line));
+    expect(culprits.map((m) => m.verdict)).toEqual(["error", "error"]);
+    expect(culprits.every((m) => m.failureNote?.includes("AL0123"))).toBe(true);
+    expect(culprits.map((m) => m.failureNote).join()).not.toContain(
+      "not attributable to any SINGLE",
+    );
+  });
+
+  test("k=2: every other mutant is scored", async () => {
+    const { report, lines } = await runIsolation(6, [1, 4]);
+    const others = report.mutants.filter((m) => !isCulprit(m, lines, m.line));
+    expect(others.filter((m) => m.verdict === "error")).toEqual([]);
+    expect(report.counts.errors).toBe(2);
+  });
+
+  // The redeploy keeps the ids the clean mutants had in the failed artifact (the manifest, the
+  // selector and the control state all name them), per identity site.
+  test("the redeployed manifest carries the ORIGINAL ids, per site", async () => {
+    const { shown } = await runIsolation(4, [2]);
+    const first = shown[0];
+    const last = shown.at(-1);
+    expect(first).toBeDefined();
+    expect(last).toBeDefined();
+    if (first === undefined || last === undefined) return;
+    expect(last.length).toBe(first.length - 1); // the culprit is gone, nothing else
+    const original = new Map(first.map((s) => [s.site, s.id]));
+    for (const s of last) expect(original.get(s.site)).toBe(s.id);
+  });
+
+  // Edge: the environment is at fault. Fail closed: all `error`, nobody blamed, the empty set was
+  // compiled.
+  test("an environmental failure (the empty set fails too): every mutant `error`, none named", async () => {
+    const dirs = await makeProject();
+    const sizes: number[] = [];
+    const backend = new StubBackend(
+      CAPS_NST,
+      () => "pass",
+      ["IsOverBudget"],
+      undefined,
+      undefined,
+      (dir: string) => {
+        const m = JSON.parse(readFileSync(join(dir, "mutant-manifest.json"), "utf8")) as {
+          mutants: unknown[];
+        };
+        sizes.push(m.mutants.length);
+        return new AlcCompileError("alc: AL0999 environment");
+      },
+    );
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    expect(sizes).toContain(0);
+    expect(report.mutants.length).toBeGreaterThan(0);
+    expect(report.mutants.every((m) => m.verdict === "error")).toBe(true);
+    expect(report.mutants.some((m) => m.failureNote?.includes("bisected to mutant"))).toBe(false);
+    store.close();
+  });
+
+  // Edge: the clean redeploy itself fails. Fail closed: all `error` with a note, nothing scored,
+  // nothing published.
+  test("a failed redeploy of the clean set leaves every mutant `error` with a note", async () => {
+    const dirs = await isolationProject(4);
+    const badProcs = new Set(["P02"]);
+    const shown: Seen[][] = [];
+    const inner = brokenBy(badProcs, shown);
+    // biome-ignore lint/style/useConst: the guard below reads it before it is assigned
+    let backend: CompilePublishVerifyBackend | undefined;
+    backend = new CompilePublishVerifyBackend((dir) =>
+      (backend?.compileViaDeployCalls ?? 0) >= 2
+        ? new AlcCompileError("Isolation.Codeunit.al(1,1): error AL9999: redeploy refused")
+        : inner(dir),
+    );
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    expect(backend.compileViaDeployCalls).toBe(2);
+    expect(backend.publisherCalls).toBe(0);
+    expect(report.mutants.every((m) => m.verdict === "error")).toBe(true);
+    expect(report.mutants.every((m) => (m.failureNote ?? "") !== "")).toBe(true);
+    store.close();
+  });
+
+  // Edge: the compile budget. Fail closed: with far more culprits than the budget isolates, nothing
+  // is scored, the compile count stays bounded, and the unresolved mutants carry the
+  // not-attributable note.
+  test("over the compile budget: nothing is scored, the compile count is bounded", async () => {
+    const n = 30;
+    const { report, shown } = await runIsolation(
+      n,
+      Array.from({ length: n }, (_, i) => i),
+    );
+    // 1 production compile + at most 64 isolation compiles
+    expect(shown.length).toBeLessThanOrEqual(65);
+    expect(report.mutants.every((m) => m.verdict === "error")).toBe(true);
+    expect(
+      report.mutants.some((m) => m.failureNote?.includes("not attributable to any SINGLE")),
+    ).toBe(true);
+    // The culprits found before the budget ran out keep their own note (red on master: one shared note).
+    expect(
+      report.mutants.some(
+        (m) =>
+          m.failureNote?.includes("AL0123") &&
+          !m.failureNote.includes("not attributable to any SINGLE"),
+      ),
+    ).toBe(true);
+  });
+});
+
 describe("runSession — Task 7: only a typed AlcCompileError may be bisected", () => {
   // Brief's literal test 3: a subset-preparation failure that is NOT a compiler verdict
   // (filesystem, not alc) must abort the search rather than be read as "this subset doesn't
