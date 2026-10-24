@@ -796,6 +796,8 @@ function altersBoundCall(node: ALSyntaxNode, ctx: SemanticContext): boolean {
  * never sets the flag the item's Break reads). R500 adds the one-hop callees, the outside filter
  * calls and the two LIMITS (header). It needs `ctx.files` and throws without it.
  *
+ * R-696 adds loops that move the record they walk through a second variable (`inMovedWalk`).
+ *
  * R-531 adds loops that end only by consuming their record set (`consumingLoopRefuses`). `op` is
  * the operator's name and is REQUIRED: that rule exempts `lethal.swap-find-direction` inside the
  * loop's own condition, and a caller that passes `undefined` gets no exemption (the safe default).

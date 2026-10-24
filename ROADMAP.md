@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**47 of 697 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**48 of 698 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -311,6 +311,7 @@ that ordering is the priority.
 - **R699** · lethal verify looks up an integer literal with leading zeros (01000) as text, so a test-app object's id written that way is neither folded nor a fallback · [R699.md](docs/roadmap/R699.md) · open, filed 2026-10-23
 - **R700** · lethal verify puts a test app's Install and Upgrade codeunits in no digest: an edit to the code the platform runs at install or upgrade leaves every test's digest unchanged · [R700.md](docs/roadmap/R700.md) · done (c2d51590)
 - **R701** · lethal verify puts no permission set in any digest: a test app's permission set (included through IncludedPermissionSets) can change a test's outcome without changing its digest · [R701.md](docs/roadmap/R701.md) · done (c2d51590)
+- **R702** · Moved-walk refusal follows no callee from a Next loop's body, and does not cover temporary walks · [R702.md](docs/roadmap/R702.md) · open, filed 2026-10-24
 
 ## Product gaps a real project hits
 
