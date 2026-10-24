@@ -59,7 +59,12 @@ import { scanTestPageTests } from "../src/testpage-scan";
 import { runVerify } from "../src/verify";
 import type { VerifyOutput } from "../src/verify";
 import { preflightReadOnlyBaseline, readGateBaseline } from "./baseline-guard";
-import { itestConfigName, itestConfigPath, printItestTarget } from "./config-path";
+import {
+  itestConfigName,
+  itestConfigPath,
+  printItestTarget,
+  readFixtureConfig,
+} from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { assertKillsReproduced } from "./kill-reproduction";
 import { keyOf } from "./mutant-equality";
@@ -215,7 +220,7 @@ async function main(): Promise<void> {
   // ---- 1. Setup.
   const configPath = itestConfigPath(PROJECT_DIR);
   printItestTarget(configPath);
-  const configFile = await readJson<LethalConfigFile>(configPath, itestConfigName());
+  const configFile = readFixtureConfig(configPath, itestConfigName());
   const bcdev = validateBcDevConfig(configFile.bcdev);
   const toolPaths = await defaultAlToolPaths();
   if (!toolPaths) {

@@ -21,7 +21,8 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { configuredOdataBaseUrl } from "../src/cli";
+import { type LethalConfigFile, configuredOdataBaseUrl } from "../src/cli";
+import { refuseRetiredV2ConfigSection } from "../src/v2-retired";
 import { ServerOutOfUseError, markedServerFor, outOfUseDir, outOfUseRefusal } from "./out-of-use";
 
 /** The `bcdev` fields the target line reads; nothing else of the config reaches it. */
@@ -140,6 +141,23 @@ export function itestConfigName(env: NodeJS.ProcessEnv = process.env): string {
 /** The config path for a fixture directory, honouring `LETHAL_ITEST_CONFIG`. */
 export function itestConfigPath(projectDir: string, env: NodeJS.ProcessEnv = process.env): string {
   return join(projectDir, itestConfigName(env));
+}
+
+/**
+ * R730: the one read of a fixture's lethal config for every live itest. Same refusal as
+ * `loadLethalConfigFile`: a retired `alRunner` section stops the gate by name (R654 F2).
+ */
+export function readFixtureConfig(path: string, what: string = basename(path)): LethalConfigFile {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf8"));
+  } catch (err) {
+    throw new Error(
+      `cannot read ${what} at ${path}: ${err instanceof Error ? err.message : String(err)}. See fixtures/README.md for the expected local-file setup.`,
+    );
+  }
+  refuseRetiredV2ConfigSection(parsed, path);
+  return parsed as LethalConfigFile;
 }
 
 /** The launch file every itest read before R589, and still reads when nothing is selected. */

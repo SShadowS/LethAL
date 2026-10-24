@@ -60,7 +60,12 @@ import { scanTestPageTests } from "../src/testpage-scan";
 import { VERIFY_EXIT, runVerify } from "../src/verify";
 import type { VerifyOutput, VerifyResult } from "../src/verify";
 import { preflightReadOnlyBaseline, readGateBaseline } from "./baseline-guard";
-import { itestConfigName, itestConfigPath, printItestTarget } from "./config-path";
+import {
+  itestConfigName,
+  itestConfigPath,
+  printItestTarget,
+  readFixtureConfig,
+} from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
   ANSWER_KILLERS,
@@ -222,7 +227,7 @@ async function main(): Promise<void> {
       `${alpackages} holds no .app symbols (it is gitignored). Copy them from a checkout that has them before running this gate.`,
     );
   }
-  const configFile = await readJson<LethalConfigFile>(CONFIG_LOCAL_PATH, itestConfigName());
+  const configFile = readFixtureConfig(CONFIG_LOCAL_PATH, itestConfigName());
   const bcdev = validateBcDevConfig(configFile.bcdev);
   assert.deepEqual(
     resolveSelectorIds({}, validateSelectorIdsConfig(configFile.selectorIds)),

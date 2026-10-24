@@ -87,6 +87,7 @@ import {
   itestConfigPath,
   itestLaunchPath,
   printItestTarget,
+  readFixtureConfig,
 } from "./config-path";
 import { CHUNKED_FIGURES } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
@@ -209,7 +210,7 @@ interface LegResult extends ChunkedFold {
 
 async function runLeg(scratchRoot: string, maxMethodsPerCall?: number): Promise<LegResult> {
   const launchCfg = await readOptionalLaunchConfig();
-  const configFile = await readJson<LethalConfigFile>(CONFIG_LOCAL_PATH, itestConfigName());
+  const configFile = readFixtureConfig(CONFIG_LOCAL_PATH, itestConfigName());
   const bcdev = validateBcDevConfig(configFile.bcdev);
   assertLaunchMatchesConfig(launchCfg, bcdev, LAUNCH_LOCAL_PATH);
   const toolPaths = await defaultAlToolPaths();

@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**24 of 724 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**23 of 724 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -768,7 +768,7 @@ that ordering is the priority.
 - **R723** · The v3 update gate tried candidates oldest first, so two predicted fails ran before the newest release · [R723.md](docs/roadmap/R723.md) · done (3d805efe)
 - **R724** · `corpus-snapshot.ts` exits 2 for every refusal, so a retry loop cannot tell "heavy slot busy, try later" from "no master entry, never retry" · [R724.md](docs/roadmap/R724.md) · done (8d978cc9)
 - **R726** · A single-process I/O stall on the Windows CI job timed out 27 resume tests at 5 s, and verify's CI console named none of them · [R726.md](docs/roadmap/R726.md) · open, mitigated (8d978cc9): resume.test.ts has a 30 s per-test timeout, and verify prints each failure's…
-- **R730** · Two readers do not refuse a retired `alRunner` config section: the live itests' fixture-config reader and kraken-secrets' pass-through · [R730.md](docs/roadmap/R730.md) · open, filed 2026-10-24
+- **R730** · Two readers do not refuse a retired `alRunner` config section: the live itests' fixture-config reader and kraken-secrets' pass-through · [R730.md](docs/roadmap/R730.md) · done (31557264)
 
 ---
 
