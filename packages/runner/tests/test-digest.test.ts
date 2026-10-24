@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, test } from "bun:test";
 import { initParser } from "@lethal/engine";
 import { testsInAlSource } from "../src/discovery";
 import { testDigestKey, testDigestsOfSources } from "../src/test-digest";
-import { buildTestAppModel } from "../src/testpage-scan";
+import { Scanner, buildTestAppModel, newReachState } from "../src/testpage-scan";
 
 beforeAll(async () => {
   await initParser();
@@ -1025,6 +1025,354 @@ ${procs}}
       expect(
         digestA(edit(files, "Runner.al", "Rec.Touch();", "Rec.Touch(); Rec.Touch();")),
       ).not.toBe(was);
+    });
+  });
+});
+
+describe("R697/R698: code named only in properties, and qualified object references", () => {
+  type Files = Record<string, string>;
+  const dg = (files: Files): string | undefined => {
+    const list = Object.entries(files).map(([path, text]) => ({ path, text }));
+    const tests = list.flatMap((f) => testsInAlSource(f.path, f.text));
+    return testDigestsOfSources(list, tests, I)["50100::a"];
+  };
+  const edit = (files: Files, path: string, from: string, to: string): Files => {
+    const text = files[path];
+    if (text === undefined || !text.includes(from)) throw new Error(`no ${from} in ${path}`);
+    return { ...files, [path]: text.replace(from, to) };
+  };
+  const TEST = (body: string, vars = "") =>
+    `codeunit 50100 "T"\n{\n    Subtype = Test;\n    [Test]\n    procedure A()\n    var\n${vars}    begin\n${body}    end;\n}\n`;
+  const Z = `codeunit 50999 "Zed"\n{\n    procedure Z()\n    begin\n        Message('z1');\n    end;\n}\n`;
+  const tbl = (id: number, name: string, extra = "") =>
+    `table ${id} "${name}"\n{\n${extra}    fields\n    {\n        field(1; F1; Integer)\n        {\n            trigger OnValidate()\n            begin\n                F1 := 1;\n            end;\n        }\n    }\n    trigger OnInsert()\n    begin\n        F1 := 1;\n    end;\n}\n`;
+  const pg = (id: number, name: string, props: string, actions = "") =>
+    `page ${id} "${name}"\n{\n${props}    layout { area(Content) { field(F1; Rec.F1) { } } }\n${actions}    trigger OnOpenPage()\n    begin\n        Message('p1');\n    end;\n}\n`;
+  const cu = (id: number, name: string) =>
+    `codeunit ${id} "${name}"\n{\n    trigger OnRun()\n    begin\n        Message('c1');\n    end;\n}\n`;
+  const openPage = (name: string) =>
+    TEST("        P.OpenEdit();\n        P.F1.SetValue(5);\n", `        P: TestPage "${name}";\n`);
+  const storedId = (ref: string) => TEST(`        Id := ${ref};\n`, "        Id: Integer;\n");
+
+  /** An edit of the target moves the digest; an edit of an unrelated object does not. */
+  function moves(files: Files, path: string, from: string, to: string): void {
+    const base = dg({ ...files, "Z.al": Z });
+    expect(base).toBeDefined();
+    expect(dg({ ...edit({ ...files, "Z.al": Z }, path, from, to) })).not.toBe(base);
+    expect(dg(edit({ ...files, "Z.al": Z }, "Z.al", "z1", "z2"))).toBe(base);
+  }
+
+  test("a TestPage test: the SourceTable's field OnValidate", () => {
+    moves(
+      {
+        "T.al": openPage("PA"),
+        "PA.al": pg(50400, "PA", '    SourceTable = "TA";\n'),
+        "TA.al": tbl(50300, "TA"),
+      },
+      "TA.al",
+      "F1 := 1;",
+      "F1 := 2;",
+    );
+  });
+
+  test("a TestPage test: the SourceTable's OnInsert", () => {
+    moves(
+      {
+        "T.al": openPage("PA"),
+        "PA.al": pg(50400, "PA", '    SourceTable = "TA";\n'),
+        "TA.al": tbl(50300, "TA"),
+      },
+      "TA.al",
+      "trigger OnInsert()\n    begin\n        F1 := 1;",
+      "trigger OnInsert()\n    begin\n        F1 := 3;",
+    );
+  });
+
+  test("an action's RunObject codeunit: its OnRun", () => {
+    moves(
+      {
+        "T.al": openPage("PB"),
+        "PB.al": pg(
+          50401,
+          "PB",
+          '    SourceTable = "TB";\n',
+          '    actions { area(Processing) { action(Go) { RunObject = codeunit "RB"; } } }\n',
+        ),
+        "TB.al": tbl(50301, "TB"),
+        "RB.al": cu(50501, "RB"),
+      },
+      "RB.al",
+      "'c1'",
+      "'c2'",
+    );
+  });
+
+  test("an action's RunObject page", () => {
+    moves(
+      {
+        "T.al": openPage("PB"),
+        "PB.al": pg(
+          50401,
+          "PB",
+          '    SourceTable = "TB";\n',
+          '    actions { area(Processing) { action(Go) { RunObject = page "PBT"; } } }\n',
+        ),
+        "TB.al": tbl(50301, "TB"),
+        "PBT.al": pg(50402, "PBT", '    SourceTable = "TB";\n'),
+      },
+      "PBT.al",
+      "'p1'",
+      "'p2'",
+    );
+  });
+
+  test("CardPageId", () => {
+    moves(
+      {
+        "T.al": openPage("PC"),
+        "PC.al": pg(50403, "PC", '    SourceTable = "TC";\n    CardPageId = "CardC";\n'),
+        "TC.al": tbl(50302, "TC"),
+        "CardC.al": pg(50404, "CardC", '    SourceTable = "TC";\n'),
+      },
+      "CardC.al",
+      "'p1'",
+      "'p2'",
+    );
+  });
+
+  test("a stored Database::TT: the table's LookupPageId page", () => {
+    moves(
+      {
+        "T.al": storedId("Database::TD"),
+        "TD.al": tbl(50303, "TD", '    LookupPageId = "LookD";\n'),
+        "LookD.al": pg(50405, "LookD", '    SourceTable = "TD";\n'),
+      },
+      "LookD.al",
+      "'p1'",
+      "'p2'",
+    );
+  });
+
+  test("a stored Database::TT: the table's DrillDownPageId page", () => {
+    moves(
+      {
+        "T.al": storedId("Database::TE"),
+        "TE.al": tbl(50304, "TE", '    DrillDownPageId = "DrillE";\n'),
+        "DrillE.al": pg(50406, "DrillE", '    SourceTable = "TE";\n'),
+      },
+      "DrillE.al",
+      "'p1'",
+      "'p2'",
+    );
+  });
+
+  test("a page field's LookupPageId", () => {
+    moves(
+      {
+        "T.al": openPage("PF"),
+        "PF.al": `page 50407 "PF"\n{\n    layout { area(Content) { field(F1; Rec.F1) { LookupPageId = "LookF"; } } }\n}\n`,
+        "LookF.al": pg(50408, "LookF", ""),
+      },
+      "LookF.al",
+      "'p1'",
+      "'p2'",
+    );
+  });
+
+  test("a report's request page SourceTable", () => {
+    moves(
+      {
+        "T.al": storedId("Report::RG"),
+        "RG.al": `report 50600 "RG"\n{\n    requestpage\n    {\n        SourceTable = "TG";\n    }\n}\n`,
+        "TG.al": tbl(50305, "TG"),
+      },
+      "TG.al",
+      "trigger OnInsert()\n    begin\n        F1 := 1;",
+      "trigger OnInsert()\n    begin\n        F1 := 3;",
+    );
+  });
+
+  test("an xmlport's tableelement table", () => {
+    moves(
+      {
+        "T.al": storedId("XmlPort::XH"),
+        "XH.al": `xmlport 50700 "XH"\n{\n    schema\n    {\n        textelement(Root)\n        {\n            tableelement(Item; "TH")\n            {\n            }\n        }\n    }\n}\n`,
+        "TH.al": tbl(50306, "TH"),
+      },
+      "TH.al",
+      "trigger OnInsert()\n    begin\n        F1 := 1;",
+      "trigger OnInsert()\n    begin\n        F1 := 3;",
+    );
+  });
+
+  test("a page whose SourceTable's LookupPageId is the same page terminates", () => {
+    moves(
+      {
+        "T.al": openPage("PR"),
+        "PR.al": pg(50409, "PR", '    SourceTable = "TR";\n'),
+        "TR.al": tbl(50307, "TR", '    LookupPageId = "PR";\n'),
+      },
+      "PR.al",
+      "'p1'",
+      "'p2'",
+    );
+  });
+
+  test("a property naming a dependency's object takes no fallback", () => {
+    const files = {
+      "T.al": openPage("PD"),
+      "PD.al": pg(50410, "PD", '    SourceTable = "Customer";\n'),
+      "Z.al": Z,
+    };
+    expect(dg(edit(files, "Z.al", "z1", "z2"))).toBe(dg(files));
+  });
+
+  describe("R698: a namespace-qualified object reference", () => {
+    const NS = (b: string) =>
+      `namespace My.Ns;\ncodeunit 50200 "CU"\n{\n    trigger OnRun()\n    begin\n        Message('${b}');\n    end;\n}\n`;
+    const USING = "using My.Ns;\n";
+    for (const ref of ["My.Ns.CU", 'My.Ns."CU"']) {
+      test(`stored Codeunit::${ref} folds`, () => {
+        moves(
+          { "T.al": USING + storedId(`Codeunit::${ref}`), "CU.al": NS("a") },
+          "CU.al",
+          "'a'",
+          "'b'",
+        );
+      });
+      test(`handed-out Codeunit::${ref} falls back`, () => {
+        const files = {
+          "T.al":
+            USING +
+            TEST(`        Ext.Foo(Codeunit::${ref});\n`, '        Ext: Codeunit "Dep Thing";\n'),
+          "CU.al": NS("a"),
+          "Z.al": Z,
+        };
+        expect(dg(edit(files, "Z.al", "z1", "z2"))).not.toBe(dg(files));
+      });
+    }
+
+    // A qualified reference in a run by id keeps the fallback it has on master (widening only).
+    const RUN_SHAPES: Array<[string, string]> = [
+      ["Codeunit.Run, test-app codeunit", "Codeunit.Run(Codeunit::My.Ns.CU);"],
+      ["Codeunit.Run, dependency codeunit", "Codeunit.Run(Codeunit::Other.Ns.Dep);"],
+      [
+        "TaskScheduler.CreateTask, test-app codeunit",
+        "TaskScheduler.CreateTask(Codeunit::My.Ns.CU, 0);",
+      ],
+      [
+        "TaskScheduler.CreateTask, dependency codeunit",
+        "TaskScheduler.CreateTask(Codeunit::Other.Ns.Dep, 0);",
+      ],
+      ["Page.Run, dependency page", "Page.Run(Page::Other.Ns.P);"],
+    ];
+    for (const [name, call] of RUN_SHAPES) {
+      test(`still falls back: ${name}`, () => {
+        const files = { "T.al": USING + TEST(`        ${call}\n`), "CU.al": NS("a"), "Z.al": Z };
+        expect(dg(edit(files, "Z.al", "z1", "z2"))).not.toBe(dg(files));
+      });
+    }
+
+    for (const call of ['Codeunit::"CU".ToText()', 'Codeunit::"CU".ToText']) {
+      test(`a member on a plain reference keeps its fold: ${call}`, () => {
+        moves(
+          {
+            "T.al": TEST(`        T := ${call};\n`, "        T: Text;\n"),
+            "CU.al": cu(50201, "CU"),
+          },
+          "CU.al",
+          "'c1'",
+          "'c2'",
+        );
+      });
+    }
+
+    test("a qualified reference split across lines still folds", () => {
+      moves(
+        { "T.al": USING + storedId("Codeunit::My.Ns\n            .CU"), "CU.al": NS("a") },
+        "CU.al",
+        "'a'",
+        "'b'",
+      );
+    });
+
+    test("a TableRelation names a table whose LookupPageId page runs", () => {
+      moves(
+        {
+          "T.al": openPage("PS"),
+          "PS.al": pg(50420, "PS", '    SourceTable = "TS";\n'),
+          "TS.al": `table 50320 "TS"\n{\n    fields\n    {\n        field(1; F1; Code[20])\n        {\n            TableRelation = "TU".F1;\n        }\n    }\n}\n`,
+          "TU.al": tbl(50321, "TU", '    LookupPageId = "LU";\n'),
+          "LU.al": pg(50421, "LU", '    SourceTable = "TU";\n'),
+        },
+        "LU.al",
+        "'p1'",
+        "'p2'",
+      );
+    });
+
+    test("a TableRelation with if/else alternatives folds the else table", () => {
+      moves(
+        {
+          "T.al": openPage("PS"),
+          "PS.al": pg(50420, "PS", '    SourceTable = "TS";\n'),
+          "TS.al": `table 50320 "TS"\n{\n    fields\n    {\n        field(1; F1; Code[20])\n        {\n            TableRelation = if (F1 = const('A')) "Other" else "TU";\n        }\n    }\n}\n`,
+          "TU.al": tbl(50321, "TU", '    LookupPageId = "LU";\n'),
+          "LU.al": pg(50421, "LU", '    SourceTable = "TU";\n'),
+        },
+        "LU.al",
+        "'p1'",
+        "'p2'",
+      );
+    });
+
+    test("a TableRelation name the test app lacks falls back when the app has parse damage", () => {
+      const rel = (name: string) =>
+        `table 50320 "TS"\n{\n    fields\n    {\n        field(1; F1; Code[20])\n        {\n            TableRelation = "${name}";\n        }\n    }\n}\n`;
+      const broken = `table 50330 "Broken"\n{\n    fields\n    {\n        field(1; "No."; Code[20]\n    }\n`;
+      const files = {
+        "T.al": openPage("PS"),
+        "PS.al": pg(50420, "PS", '    SourceTable = "TS";\n'),
+        "TS.al": rel("Missing"),
+        "B.al": broken,
+        "Z.al": Z,
+      };
+      // The digest already falls back on any damage, so read the scanner's own state.
+      const fallbackOf = (fs: Files): string | undefined => {
+        const model = buildTestAppModel(Object.entries(fs).map(([path, text]) => ({ path, text })));
+        const sc = new Scanner(model);
+        const st = newReachState();
+        const t = model.units.find((u) => u.id === 50100);
+        for (const p of t?.procs ?? []) sc.reach(p, st);
+        return st.fallback;
+      };
+      expect(fallbackOf(files)).toBeDefined();
+      // Control: the same damage with a relation to a declared table takes no fallback.
+      expect(fallbackOf({ ...files, "TS.al": rel("TS") })).toBeUndefined();
+    });
+
+    test("a split Report::My.Ns / .RQ reference folds", () => {
+      moves(
+        {
+          "T.al": USING + storedId("Report::My.Ns\n            .RQ"),
+          "RQ.al": `namespace My.Ns;\nreport 50601 "RQ"\n{\n    trigger OnPreReport()\n    begin\n        Message('a');\n    end;\n}\n`,
+        },
+        "RQ.al",
+        "'a'",
+        "'b'",
+      );
+    });
+
+    test("stored Report::My.Ns.RQ folds", () => {
+      moves(
+        {
+          "T.al": USING + storedId("Report::My.Ns.RQ"),
+          "RQ.al": `namespace My.Ns;\nreport 50601 "RQ"\n{\n    trigger OnPreReport()\n    begin\n        Message('a');\n    end;\n}\n`,
+        },
+        "RQ.al",
+        "'a'",
+        "'b'",
+      );
     });
   });
 });
