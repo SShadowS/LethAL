@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**35 of 698 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**34 of 699 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -681,7 +681,7 @@ that ordering is the priority.
 - **R598** · scripts/bc-linux-setup.ts takes its bc server lease in lane `code`'s name, whoever runs it · [R598.md](docs/roadmap/R598.md) · done (7dd00798)
 - **R602** · al-runner-v3 coverage for multi-object and single-wrapper #if files: measured correct, admitted (and a shipping lost-kill defect fixed) · [R602.md](docs/roadmap/R602.md) · done (SHA-PENDING) — v3 coverage is on for multi-object and single-wrapper #if projects; the gate legs MO and…
 - **R599** · scripts/bc-linux-setup.ts compares app versions, not contents, so a fixture rebuilt without a version bump keeps a stale build resident · [R599.md](docs/roadmap/R599.md) · done (d89d6eb4): decides by normalised content digest; live on bc3 twice (run 2 on this head)
-- **R603** · CI's Windows check job runs the unit suite serially; a parallel run there is unmeasured · [R603.md](docs/roadmap/R603.md) · open, filed 2026-10-21
+- **R603** · CI's Windows check job runs the unit suite serially; a parallel run there is unmeasured · [R603.md](docs/roadmap/R603.md) · done (6d3f654b)
 - **R605** · The dev endpoint refuses a publish below the installed-version record after an unpublish, so a minted gate version cannot be replaced by the app.json build on the Linux bc servers · [R605.md](docs/roadmap/R605.md) · open
 - **R606** · al-runner v3 serve: resources are in the warm compile key, so a changed resource file forces a full recompile although resources reach the VM only at run time (upstream #5635's first half; local build and measurement only, no PR) · [R606.md](docs/roadmap/R606.md) · closed 2026-10-22 — ruling (owner): implemented upstream…
 - **R607** · al-runner-v3: snapshot reuse and --resume drop the [v3-refused-test-nearby] note · [R607.md](docs/roadmap/R607.md) · closed 2026-10-23 — fixed by R678 (3d78e671)
@@ -709,7 +709,7 @@ that ordering is the priority.
 - **R639** · al-runner v3: when LethAL's first covering test is a not-trusted row after a timeout, the mutant ends as error and never reaches the hanging sibling's timeout kill · [R639.md](docs/roadmap/R639.md) · done (aa970869)
 - **R640** · R636's link-scan cap message blames the LAST link for a folder budget shared across the whole walk · [R640.md](docs/roadmap/R640.md) · done (8daecd3f)
 - **R642** · corpus-snapshot's heavy-job guard still allows two heavy jobs; the 32 GB container allows three, with BaseApp corpus jobs still capped at two · [R642.md](docs/roadmap/R642.md) · done (1e6d3b8a)
-- **R643** · Since R-646c, --resume deploys every fully scored batch (no whole-batch replay); a snapshot-confirmed whole carry could skip that deploy · [R643.md](docs/roadmap/R643.md) · open, filed 2026-10-22
+- **R643** · Since R-646c, --resume deploys every fully scored batch (no whole-batch replay); a snapshot-confirmed whole carry could skip that deploy · [R643.md](docs/roadmap/R643.md) · closed 2026-10-24 — measured 3 s per fully carried batch on itest:lend (R-643); resumes are rare…
 - **R645** · The al-runner v3 backend leaves coverage.cobertura.xml in the caller's working directory · [R645.md](docs/roadmap/R645.md) · done (86903c8b)
 - **R648** · two unit test files fail as "(unnamed)" just over 5 s when another verify overlaps: the default hook/test timeout under parallel load · [R648.md](docs/roadmap/R648.md) · done (9a372f98)
 - **R649** · measure BC's real Sleep behaviour (does Sleep(600000) wait, and hit the test timeout?), then re-cast the v3 gate's X (d) from it · [R649.md](docs/roadmap/R649.md) · done (5be9499a)
@@ -743,6 +743,7 @@ that ordering is the priority.
 - **R691** · hashAlFiles drops a file named like a LethAL control file at ANY folder depth, so such a user file is in no hash while v3 and alc still compile it · [R691.md](docs/roadmap/R691.md) · done (d43ed20c)
 - **R693** · Leg C's timeout-is-cpu flips with core-0 conditions; every v3 leg C and the daily update gate read gate-fail · [R693.md](docs/roadmap/R693.md) · done (b9942236)
 - **R694** · al-runner v3 marks a later failure after a refusal as not trusted but not a later timeout; LethAL now refuses such a timeout · [R694.md](docs/roadmap/R694.md) · done (aa970869)
+- **R704** · Test A7 (the preload moves HOME and TMPDIR in every --parallel worker) fails on CI's Windows runner; it skips there until the cause is read · [R704.md](docs/roadmap/R704.md) · open, filed 2026-10-24
 
 ---
 
