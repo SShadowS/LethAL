@@ -1,5 +1,12 @@
 import { beforeAll, describe, expect, it } from "bun:test";
-import { type ALSyntaxNode, caseLabelCollides, initParser, parseAL, visit, wrapRoot } from "../../src";
+import {
+  type ALSyntaxNode,
+  caseLabelCollides,
+  initParser,
+  parseAL,
+  visit,
+  wrapRoot,
+} from "../../src";
 
 /** Which spellings alc treats as the same case label was MEASURED offline (R732, 2026-10-24):
  *  alc compares the label's own text (comments and outer spacing ignored) and folds constants; it
@@ -70,19 +77,22 @@ describe("caseLabelCollides (R732)", () => {
   });
 
   it("folds integer constants in a value case (`1:` beside `0 + 1:`, `2 - 1:`)", () => {
-    const src = `codeunit 50732 R732 { procedure P(X: Integer) begin case X of 0: X := 1; 0 + 1: X := 2; 5: X := 3; end; end; }`;
+    const src =
+      "codeunit 50732 R732 { procedure P(X: Integer) begin case X of 0: X := 1; 0 + 1: X := 2; 5: X := 3; end; end; }";
     expect(caseLabelCollides(nodeWithText(src, "5"), "1")).toBe(true);
     expect(caseLabelCollides(nodeWithText(src, "5"), "(3 - 2)")).toBe(true);
     expect(caseLabelCollides(nodeWithText(src, "5"), "9")).toBe(false);
   });
 
   it("does not collide for a node outside any case label", () => {
-    const src = `codeunit 50732 R732 { procedure P(X: Integer) begin X := 0; case true of X = 0: X := 0; X = 1: X := 2; end; end; }`;
+    const src =
+      "codeunit 50732 R732 { procedure P(X: Integer) begin X := 0; case true of X = 0: X := 0; X = 1: X := 2; end; end; }";
     expect(caseLabelCollides(nodeWithText(src, "0", 0), "1")).toBe(false);
   });
 
   it("does not collide for a node in a branch BODY", () => {
-    const src = `codeunit 50732 R732 { procedure P(X: Integer) begin case true of X = 7: X := 0; X = 1: X := 2; end; end; }`;
+    const src =
+      "codeunit 50732 R732 { procedure P(X: Integer) begin case true of X = 7: X := 0; X = 1: X := 2; end; end; }";
     expect(caseLabelCollides(nodeWithText(src, "0"), "1")).toBe(false);
   });
 });

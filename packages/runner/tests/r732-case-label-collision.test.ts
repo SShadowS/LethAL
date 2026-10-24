@@ -45,7 +45,9 @@ async function generate(source: string) {
   }
 }
 
-const labelShifts = (specs: readonly { operatorName: string; before: { text: string }; after: { text: string } }[]) =>
+const labelShifts = (
+  specs: readonly { operatorName: string; before: { text: string }; after: { text: string } }[],
+) =>
   specs
     .filter((s) => s.operatorName === "lethal.shift-integer")
     .map((s) => `${s.before.text}->${s.after.text}`);
@@ -94,7 +96,9 @@ describe("R732: case label collisions are dropped, named, and not over-refused",
 }
 `;
     const { specs, warnings } = await generate(src);
-    const pairs = specs.map((s) => `${s.operatorName.replace("lethal.", "")}:${s.before.text}->${s.after.text}`);
+    const pairs = specs.map(
+      (s) => `${s.operatorName.replace("lethal.", "")}:${s.before.text}->${s.after.text}`,
+    );
     // `'' -> 'x'` equals the `T = 'x'` label; `X < 5` -> `X <= 5` equals the next label.
     expect(pairs).not.toContain("toggle-blank-string:''->'x'");
     expect(pairs.filter((p) => p.startsWith("conditional-boundary:<"))).toEqual([]);
