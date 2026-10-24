@@ -47,7 +47,7 @@ export function assertResourceSelectorRuntime(
   const shown =
     typeof appJson.runtime === "string" ? appJson.runtime : JSON.stringify(appJson.runtime);
   throw new ResourceSelectorRuntimeError(
-    `runtime ${shown} is below 14.0, which the resource selector needs (NavApp.GetResourceAsText, AL0666); set app.json runtime ≥ 17.0 or alRunner.selectorMode static`,
+    `runtime ${shown} is below 14.0, which the resource selector needs (NavApp.GetResourceAsText, AL0666); set app.json runtime ≥ 17.0`,
   );
 }
 

@@ -344,13 +344,10 @@ describe("R631 review L3: a dangling .app link in the package cache warns", () =
 });
 
 describe("R631 review H1: configured package caches", () => {
-  // R654: the retired .NET al-runner's `alRunner` section is no longer read (F2, its refusal, is
-  // held), so its cache path is not one.
-  test("configuredPackageCaches reads bcdev and alRunnerV3 cache paths, not the retired alRunner's", () => {
+  test("configuredPackageCaches reads bcdev and alRunnerV3 cache paths", () => {
     expect(
       configuredPackageCaches({
         bcdev: { packageCachePath: "a" },
-        alRunner: { packagesDir: "b" },
         alRunnerV3: { packagesDir: "c" },
       }),
     ).toEqual(["a", "c"]);

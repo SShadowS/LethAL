@@ -96,7 +96,7 @@ export function isLinkExcused(rel: string): boolean {
 const registeredCaches = new Set<string>();
 
 /**
- * The configured package-cache folders (`bcdev.packageCachePath`, `alRunner.packagesDir`, ...),
+ * The configured package-cache folders (`bcdev.packageCachePath`, `alRunnerV3.packagesDir`),
  * walked under the cache policy when they sit inside a refused root. `.alpackages` always is.
  * ponytail: process-wide, set once by the CLI from its config; a per-call option if one process
  * ever serves two configs.

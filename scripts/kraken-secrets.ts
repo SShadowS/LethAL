@@ -54,7 +54,6 @@ export interface PathMap {
 
 export const CONTAINER_MAP = (bcdevEntry: string): PathMap => ({
   fields: {
-    "alRunner.alRunnerPath": "/work/tools/al-runner/current/al-runner",
     "bcdev.alcPath": `${ALX}/bin/linux/alc`,
     "bcdev.altoolPath": `${ALX}/bin/linux/altool`,
     "bcdev.mcpCommand": ["node", bcdevEntry],

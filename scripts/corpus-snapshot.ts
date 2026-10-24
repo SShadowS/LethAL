@@ -25,7 +25,7 @@
  *
  * Heavy-job guard (owner rule R642: three heavy jobs container-wide, of which at most two BaseApp
  * (BC.History, set `bch`) corpus jobs; a BaseApp job counts against both caps), for every set but
- * `fixtures`, before a dump: the tool re-execs itself under `flock -n -E 75 <locks>/heavy.<n>`
+ * `fixtures`, before a dump: the tool re-execs itself under `flock -n -E 111 <locks>/heavy.<n>`
  * (slot 1, then 2, then 3;
  * `LETHAL_HEAVY_LOCK_DIR`, default /coord/locks). The kernel holds the lock for as long as any
  * process holds the fd, project children included, so SIGKILL needs no cleanup. Inside the slot, a
@@ -38,7 +38,9 @@
  * toward the BaseApp cap only while one of its processes names /work/src/BC.History; a job over a
  * COPY of the corpus counts toward the total cap only.
  *
- * Exit codes: 0 ok / identical, 1 different or a dump failure, 2 refused.
+ * Exit codes: 0 ok / identical, 1 different or a dump failure, 2 refused for good (no master entry,
+ * unknown set, error projects, bad flag: retrying never helps), 75 the heavy-job guard refused (no
+ * free slot: retry later; flock's own busy code is the private 111). A retry loop waits only on 75 (`until [ $rc != 75 ]`), never on 2 (R724).
  * The report prints paths, operators and counts only, never tuple text (it can carry source).
  */
 import { createHash } from "node:crypto";
@@ -59,10 +61,21 @@ import { FORMAT } from "./prod-identity-keys.ts";
 const REPO_ROOT = join(import.meta.dir, "..");
 
 export class RefusedError extends Error {
-  constructor(message: string) {
+  /** True only for the heavy-job guard: retrying later is right. Every other refusal is permanent. */
+  readonly transient: boolean;
+  constructor(message: string, transient = false) {
     super(message);
     this.name = "RefusedError";
+    this.transient = transient;
   }
+}
+
+/** Exit code of the heavy-job guard refusal (EX_TEMPFAIL); a retry loop may wait on it (R724). */
+export const HEAVY_GUARD_EXIT = 75;
+
+export function exitCodeOf(e: unknown): number {
+  if (!(e instanceof RefusedError)) return 1;
+  return e.transient ? HEAVY_GUARD_EXIT : 2;
 }
 
 export const EXTERNAL_SETS: Readonly<Record<string, string>> = {
@@ -670,11 +683,13 @@ export function heavyVerdict(
   return { refuse, foreign, message };
 }
 
-export const SLOT_BUSY = 75;
+/** flock's "slot busy" code. Private to the slot probe: it must never equal 0, 1, 2 or
+ *  HEAVY_GUARD_EXIT (75), or a child's own exit would read as a busy slot (R724). */
+export const SLOT_BUSY = 111;
 
 /**
- * N3: run `cmd(n)` under `flock -n -E 75 <lockDir>/heavy.<n>`, slot 1, then 2, then 3. Returns the
- * slot and the command's exit code, or null when every slot is held (each returned 75).
+ * N3: run `cmd(n)` under `flock -n -E 111 <lockDir>/heavy.<n>`, slot 1, then 2, then 3. Returns the
+ * slot and the command's exit code, or null when every slot is held (each returned 111).
  */
 export function trySlots(
   lockDir: string,
@@ -708,19 +723,23 @@ function lockDir(): string {
 }
 
 /** Inside slot `mine`: record our pid, then the ps scan. Throws RefusedError. */
-function guardInSlot(mine: number, baseApp: boolean, print: (l: string) => void): void {
+export function guardInSlot(
+  mine: number,
+  baseApp: boolean,
+  print: (l: string) => void,
+  // The ps seam: a test passes fixed rows, so its verdict never depends on a live process.
+  readPs: () => string = () =>
+    Bun.spawnSync(["ps", "-eo", "pid,ppid,pgid,args"], { stdout: "pipe" }).stdout.toString(),
+): void {
   const dir = lockDir();
   writeFileSync(join(dir, `heavy.${mine}`), `${process.pid}\n`);
   const held = SLOTS.filter((s) => s !== mine && slotHeld(dir, s));
   const pids = held
     .map((s) => Number(readFileSync(join(dir, `heavy.${s}`), "utf8").trim()))
     .filter((p) => !Number.isNaN(p));
-  const ps = Bun.spawnSync(["ps", "-eo", "pid,ppid,pgid,args"], {
-    stdout: "pipe",
-  }).stdout.toString();
-  const v = heavyVerdict(parsePs(ps), process.pid, pids, held.length, baseApp);
+  const v = heavyVerdict(parsePs(readPs()), process.pid, pids, held.length, baseApp);
   print(v.message);
-  if (v.refuse) throw new RefusedError(v.message);
+  if (v.refuse) throw new RefusedError(v.message, true);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -831,7 +850,7 @@ function depDirsEnv(): string[] {
 
 /** Re-exec under a heavy slot unless already in one or the set is fixtures. Returns the exit code
  *  of the slotted child, or undefined to go on in this process. */
-function slotted(
+export function slotted(
   set: string,
   argv: readonly string[],
   inSlot: number | undefined,
@@ -856,6 +875,7 @@ function slotted(
   if (r === null)
     throw new RefusedError(
       `heavy-job guard: all three heavy slots held (${lockDir()}/heavy.1, heavy.2, heavy.3)`,
+      true,
     );
   return r.code;
 }
@@ -1076,6 +1096,6 @@ if (import.meta.main) {
     process.exit(main(process.argv.slice(2)));
   } catch (e) {
     console.error(e instanceof Error ? e.message : String(e));
-    process.exit(e instanceof RefusedError ? 2 : 1);
+    process.exit(exitCodeOf(e));
   }
 }

@@ -67,7 +67,7 @@ const map = CONTAINER_MAP(ENTRY);
 const ALX = "/home/dev/.vscode/extensions/ms-dynamics-smb.al-current";
 
 describe("rewrite", () => {
-  test("a fixture config gets all four host-path fields replaced; credentials kept", () => {
+  test("a fixture config gets all three host-path fields replaced; credentials kept", () => {
     const { out, leftovers } = rewrite(
       {
         bcdev: {
@@ -77,7 +77,6 @@ describe("rewrite", () => {
           server: "http://cronus28",
           password: "synthetic",
         },
-        alRunner: { alRunnerPath: "H:/al-runner-builds/c39ad5de/al-runner.exe" },
       },
       map,
     );
@@ -89,7 +88,6 @@ describe("rewrite", () => {
         server: "http://cronus28",
         password: "synthetic",
       },
-      alRunner: { alRunnerPath: "/work/tools/al-runner/current/al-runner" },
     });
     expect(leftovers).toEqual([]);
   });
@@ -253,7 +251,7 @@ describe("CLI", () => {
   test("all inputs valid: every from-name is written, and the tar holds relative .alpackages entries", () => {
     const { repo, pkg } = makeRepo({
       "sandbox-app.local.json": JSON.stringify({
-        alRunner: { alRunnerPath: "H:/a/al-runner.exe" },
+        bcdev: { server: "http://cronus28" },
       }),
     });
     const out = join(temp(), "secrets");
@@ -266,7 +264,7 @@ describe("CLI", () => {
         .sort(),
     );
     expect(JSON.parse(readFileSync(join(out, "sandbox-app.local.json"), "utf8"))).toEqual({
-      alRunner: { alRunnerPath: "/work/tools/al-runner/current/al-runner" },
+      bcdev: { server: "http://cronus28" },
     });
     expect(readFileSync(join(out, "claude-settings.local.json"), "utf8")).toBe(
       readFileSync(join(repo, ".claude", "settings.local.json"), "utf8"),

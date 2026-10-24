@@ -118,6 +118,7 @@ import {
   AlRunnerV2RetiredError,
   RETIRED_V2_BACKEND,
   V2_RETIRED_BACKEND_FLAG,
+  refuseRetiredV2ConfigSection,
   refuseRetiredV2Report,
 } from "./v2-retired";
 import {
@@ -2210,12 +2211,6 @@ export interface BcDevConfigSection {
 
 export interface LethalConfigFile {
   readonly bcdev?: Partial<BcDevConfigSection>;
-  /**
-   * The retired .NET al-runner's section (R654). Nothing reads it. HELD (R654 S3, orchestrator
-   * ruling): its refusal by name (`al-runner-v2-retired`, plan F2) waits until the owner strips it
-   * from the provisioned config templates, so until then it is tolerated and ignored.
-   */
-  readonly alRunner?: unknown;
   /** R586: the al-runner-v3 section, validated by `validateAlRunnerV3Config`. */
   readonly alRunnerV3?: unknown;
   // Task 7: an environment tool (Task 6) resolves/provisions the bcdev section instead of it
@@ -2381,6 +2376,7 @@ async function loadLethalConfigFile(path: string): Promise<LethalConfigFile> {
       `config file at ${path} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
+  refuseRetiredV2ConfigSection(parsed, path);
   setPackageCacheDirs(configuredPackageCaches(parsed));
   return parsed;
 }
@@ -4446,7 +4442,7 @@ export async function buildDoctorDeps(
   // R586: an AL-RUNNER-V3-ONLY project: one check, the binary's version, its `.gated` pin and
   // `bcVersion` against the package folder. The session's contract probe is not run here. Decided
   // BEFORE `prepareBcdevReadOnly`, because that helper resolves a bcdev identity this config does
-  // not have. (An `alRunner` section, the retired .NET al-runner's, is ignored: R654 F2 is held.)
+  // not have. (An `alRunner` section is refused at load: R654 F2.)
   if (
     configFile.envTool === undefined &&
     configFile.bcdev === undefined &&

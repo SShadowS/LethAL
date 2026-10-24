@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**24 of 720 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**24 of 724 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -123,6 +123,7 @@ that ordering is the priority.
 - **R302** · Semantic resolution does not see inside a split-header procedure, so its type-dependent sites are lost · [R302.md](docs/roadmap/R302.md) · done (db641338..234cb4b1)
 - **R400** · R-307's per-file refusal raises Base Application's dry-run peak by 31% and its wall time by 18% against master · [R400.md](docs/roadmap/R400.md) · done (4bd4b66b)
 - **R303** · A procedure or trigger whose `var` section sits inside `#if` (`preproc_conditional_var_block`) gets a SECOND `var` section from the reach latch, and alc rejects the artifact · [R303.md](docs/roadmap/R303.md) · done (9a308e1)
+- **R729** · On DC/Cloud, 30 instrumented sites do not parse: a wrapped `if X then;` body loses its terminator (AL0111, 29), and a removed then-statement leaves `then ; else` (AL0110, 1) · [R729.md](docs/roadmap/R729.md) · open, filed 2026-10-24 (found by R-315b)
 - **R306** · A mutant inside an arm the build's preprocessor symbols compile out gets a different fate depending on where the `#if` sits, and one of the three shapes is predicted, not measured · [R306.md](docs/roadmap/R306.md) · closed 2026-10-06 — case 1 closed by R214 (0 compiled-out mutants measured on BaseApp, CDO, DC, DO), case 3…
 - **R312** · A member whose `var` section ENDS in an `#if` block of declarations gets its reach latch written on the `#endif` line, and alc rejects the artifact (AL0631) · [R312.md](docs/roadmap/R312.md) · done (4001282)
 - **R313** · A member whose `var` section tree-sitter-al cannot parse gets no reach latch: it is refused by name, and its reach is not measured · [R313.md](docs/roadmap/R313.md) · closed 2026-10-06 — stated limit: 0 members refused in 510,291 across every corpus and fixture; the refusal…
@@ -724,7 +725,7 @@ that ordering is the priority.
 - **R651** · al-runner v3 serve-entries: the itest has no per-phase timers (warm-up, prefetch, coverage pass, §5 windows), so the next CDO speed step cannot target a phase · [R651.md](docs/roadmap/R651.md) · done (e1cd0cd8)
 - **R652** · al-runner v3 serve-entries: assertBound re-hashes the whole tree on every run(), 527 times on CDO (86 s, 62% of the loop); check once per request sent · [R652.md](docs/roadmap/R652.md) · done (ad2d3269)
 - **R653** · al-runner v3 serve-entries: each kill's unmutated confirm is a live NONE request (51 on CDO, about 10 s); answer it from the warm-up's NONE rows · [R653.md](docs/roadmap/R653.md) · done (0dda9a84): one request [NONE, M] confirms a fail kill; final head 1b4706c6; CDO loop 83.5 -> 57.1 s
-- **R654** · Retire the .NET al-runner backend (v2): the Rust runtime (v3) replaces it · [R654.md](docs/roadmap/R654.md) · open, filed 2026-10-22
+- **R654** · Retire the .NET al-runner backend (v2): the Rust runtime (v3) replaces it · [R654.md](docs/roadmap/R654.md) · done (3bbe50b6)
 - **R655** · al-runner v3: the bound check hashes active/ with links skipped, so a link added under active/ mid-run is not seen (the test dir refuses one since R631) · [R655.md](docs/roadmap/R655.md) · done (d3867ec8)
 - **R656** · `--dry-run --backend al-runner-v3` reads bcdev's package cache, not `alRunnerV3.packagesDir` · [R656.md](docs/roadmap/R656.md) · done (0ea0a076)
 - **R659** · roadmap-next-id.ts reads remote branches without fetching them, so an id another lane pushed minutes ago looks free · [R659.md](docs/roadmap/R659.md) · done (3fc23858)
@@ -738,7 +739,7 @@ that ordering is the priority.
 - **R669** · bc-linux-setup and the BC itests should refuse a server that has an out-of-use marker (`/coord/machine/out-of-use/<server>.md`): today nothing reads it, so a held-dirty server is kept off only by the coord lease and by messages · [R669.md](docs/roadmap/R669.md) · done (9210ba70)
 - **R670** · the pinned fixture-symbols tar holds `LethAL Sandbox Data` 1.0.0.10 for `sandbox-data-tests`, older than the fixture (1.0.0.13), so `compile:fixtures` from the tar fails that project with AL0185 `Data Band Report` is missing · [R670.md](docs/roadmap/R670.md) · done (f95df377)
 - **R671** · after R654 no backend accepts `--workers` > 1, so `runSession`'s worker fan-out is unreachable and its unit tests are skipped · [R671.md](docs/roadmap/R671.md) · done (d43ed20c)
-- **R673** · the fixture-symbols tar has never held `.alpackages` for sandbox-names, sandbox-names-tests, sandbox-wrapped or sandbox-wrapped-tests, so `compile:fixtures` SKIPS all four in a fresh worktree and `--require-symbol-sets` fails on sandbox-wrapped · [R673.md](docs/roadmap/R673.md) · open, filed 2026-10-23; the repo half is prepared 2026-10-24 (lethal/r673-prep); done when the owner's…
+- **R673** · the fixture-symbols tar has never held `.alpackages` for sandbox-names, sandbox-names-tests, sandbox-wrapped or sandbox-wrapped-tests, so `compile:fixtures` SKIPS all four in a fresh worktree and `--require-symbol-sets` fails on sandbox-wrapped · [R673.md](docs/roadmap/R673.md) · done (4c37466d)
 - **R674** · `--backend al-runner-v3` ignores a configured `envTool` section without a word (R18's warning went with the .NET al-runner) · [R674.md](docs/roadmap/R674.md) · done (e1a8cee8)
 - **R676** · `--backend al-runner-v3 --dry-run` with an `envTool` section runs the env tool's `resolve` and prints a bcdev publish ceiling for a run that publishes nothing: `dryRunCeiling` is not told the backend · [R676.md](docs/roadmap/R676.md) · done (ddd8bab5)
 - **R677** · al-runner v3: baselineRefused is session-wide and never reset, so a test refused at batch 0's baseline still drives batch 1's nearby-refusal notes · [R677.md](docs/roadmap/R677.md) · closed 2026-10-23 — ruling: session-wide is correct…
@@ -754,7 +755,7 @@ that ordering is the priority.
 - **R704** · Test A7 (the preload moves HOME and TMPDIR in every --parallel worker) fails on CI's Windows runner; it skips there until the cause is read · [R704.md](docs/roadmap/R704.md) · done (208a85fb)
 - **R705** · v3 contract probe serve-keep-reasons is blind on #5602-fixed builds: its tests app holds a non-compiling codeunit (50674) · [R705.md](docs/roadmap/R705.md) · done (195f90ec)
 - **R707** · What BC does with an installed dependent (a fixture tests app) when its target is republished with changed SIGNATURES is not measured; the worst case under-reports · [R707.md](docs/roadmap/R707.md) · closed 2026-10-24 — measured on bc2 (R-707): BC recompiles installed dependents at publish and refuses a…
-- **R709** · A refused UPGRADE can fail to restore: BC leaves the target uninstalled and the dependent removed (the R605 version record blocks reinstalling the old target) · [R709.md](docs/roadmap/R709.md) · open, filed 2026-10-24 (part 1 built by R-709: a run refuses by name; the list parser waits on a probe)
+- **R709** · A refused UPGRADE can fail to restore: BC leaves the target uninstalled and the dependent removed (the R605 version record blocks reinstalling the old target) · [R709.md](docs/roadmap/R709.md) · done (e3df7ed4)
 - **R706** · Measure #5700's HTTP refusal text in a client session on a leased bc server (the only LethAL-side way to settle unlike-bc) · [R706.md](docs/roadmap/R706.md) · done (9c19550b)
 - **R708** · The Windows staged-copy cleanup gave up silently after a short retry, so a scanner-locked folder made a unit test flake (CI run 40072847202, attempt 1) · [R708.md](docs/roadmap/R708.md) · done (2502f82b)
 - **R711** · Option B: setup and bc-republish could remove an installed dependent first (uninstall, unpublish), publish the target, then republish the dependent, behind a flag · [R711.md](docs/roadmap/R711.md) · open, filed 2026-10-24 (build only if a lane needs it)
@@ -763,8 +764,11 @@ that ordering is the priority.
 - **R716** · r391-cross-file-twin.test.ts's two file-backed stores sat on disk, the one place R616's tmpfs move missed, so its R565 NULL-digest test timed out under a parallel verify · [R716.md](docs/roadmap/R716.md) · done (11c504df)
 - **R719** · mute al-runner-v3-defect-gone / -refused session warnings for facts a per-build pin covers · [R719.md](docs/roadmap/R719.md) · done (091e8df2)
 - **R722** · No committed v3 leg covers N1 (dotted test names) under serve-entries; alpha.5's serve rows drop codeunit and method for such names (#5798) · [R722.md](docs/roadmap/R722.md) · done (091e8df2)
+- **R728** · BC's not-reinstalled list is measured only over a direct HTTP publish; through altool (a real run) it may never parse · [R728.md](docs/roadmap/R728.md) · open, filed 2026-10-24 (a small bc2 measurement)
 - **R723** · The v3 update gate tried candidates oldest first, so two predicted fails ran before the newest release · [R723.md](docs/roadmap/R723.md) · done (3d805efe)
-- **R724** · `corpus-snapshot.ts` exits 2 for every refusal, so a retry loop cannot tell "heavy slot busy, try later" from "no master entry, never retry" · [R724.md](docs/roadmap/R724.md) · open, filed 2026-10-24
+- **R724** · `corpus-snapshot.ts` exits 2 for every refusal, so a retry loop cannot tell "heavy slot busy, try later" from "no master entry, never retry" · [R724.md](docs/roadmap/R724.md) · done (8d978cc9)
+- **R726** · A single-process I/O stall on the Windows CI job timed out 27 resume tests at 5 s, and verify's CI console named none of them · [R726.md](docs/roadmap/R726.md) · open, mitigated (8d978cc9): resume.test.ts has a 30 s per-test timeout, and verify prints each failure's…
+- **R730** · Two readers do not refuse a retired `alRunner` config section: the live itests' fixture-config reader and kraken-secrets' pass-through · [R730.md](docs/roadmap/R730.md) · open, filed 2026-10-24
 
 ---
 

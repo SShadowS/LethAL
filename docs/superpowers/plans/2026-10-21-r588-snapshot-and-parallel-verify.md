@@ -1,5 +1,7 @@
 # R-588 plan r3 — fixes N1 to N5 of adversary-r2 (roadmap R593)
 
+> Superseded by R724 (2026-10-24): the heavy-job guard refusal now exits 75, not 2. Permanent refusals still exit 2. flock's own "slot busy" code is now 111, not 75, so the plan's `flock -n -E 75` below reads `-E 111` today.
+
 ## Amendment (orchestrator, 2026-10-21, during the build): verify.ts exit codes
 | exit | verify.ts |
 |---|---|
