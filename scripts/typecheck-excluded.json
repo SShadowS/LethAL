@@ -55,7 +55,14 @@
   "scripts/r649-bc-probe/drive.ts": "live probe for R649 (open); run once on a leased bc server by docs/measurements/r649/README.md. It imports packages/runner/src by relative path, which a composite scripts project cannot reach (TS6059/TS6307)",
   "scripts/r658-bc-probe/drive.ts": "live probe for R658 (open); run once on bc3 by /coord/handoff/R-658/run-probe.sh under its pre-commitment. It imports packages/runner/src by relative path, which a composite scripts project cannot reach (TS6059/TS6307)",
   "scripts/r434-installed-probe/drive.ts": "spent probe for R434 (closed); run once per bc server by scripts/r434-installed-probe/run-probe.sh, cited by docs/measurements/r434/README.md. It imports packages/runner/src by relative path, which a composite scripts project cannot reach (TS6059/TS6307)",
+  "scripts/r702/census702.ts": "spent census for R702 gap 1 (callee movers, by parse); cited by R702.md; imports packages/*/src by computed path at run time, outside the scripts project",
+  "scripts/r702/cost-gap2.ts": "spent cost measurement for R702 gap 2 (the temp-walk rule on and off, by parse); cited by R702.md; imports packages/*/src by computed path at run time, outside the scripts project",
+  "scripts/r702/cost-set702.ts": "spent cost runner for R702 gap 1; cited by R702.md; spawns cost702.ts per project",
+  "scripts/r702/cost702.ts": "spent cost measurement for R702 gap 1 (ran on a scratch tree carrying a callee seam this tree does not have); cited by R702.md",
+  "scripts/r702/exitscan702.ts": "spent exit scan for R702 gap 1 (exits in callee-mover loop bodies, by parse); cited by R702.md",
+  "scripts/r702/summ702.ts": "spent summary of R702 gap 1's census output; cited by R702.md",
   "scripts/r661-hub-probe/drive.ts": "spent probe for R661 (closed); run once on bc3 by scripts/r661-hub-probe/run-probe.sh, cited by docs/measurements/r661/README.md. It imports packages/runner/src by relative path, which a composite scripts project cannot reach (TS6059/TS6307)",
+  "scripts/r706-client-probe/drive.ts": "live probe for R706; run once on bc1 by scripts/r706-client-probe/run-probe.sh under its pre-commitment. It imports @modelcontextprotocol/sdk, which the scripts project cannot resolve (TS2307, the same reason as probe-continia-env.ts), and packages/runner/src by relative path. Its classifier, classify.ts, and the classifier test ARE type-checked",
   "scripts/r72-probe/drive.ts": "spent probe for R72 (done); the folder's README gives its run line, and the folder is cited by R072.md, R169.md, docs/measurements/README.md and source comments",
   "scripts/r83-probe/drive.ts": "spent probe for R83 (done); the folder's README gives its run line, and the folder is cited by R083.md"
 }

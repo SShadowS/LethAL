@@ -40,8 +40,13 @@ The legs:
   false kill. A failure caused by a timed-out sibling's state must come back as v3's not-trusted `notRun` row,
   never as a plain `fail`.
   Since R612 (plan `docs/superpowers/plans/2026-10-22-r612-v3-serve-keep-rule.md`), 1 is a WARN fact
-  (`V3_WARN_FACTS`): `serve-keep-reasons` runs one `alrunner serve` daemon over five invented tests and checks each
-  row against its entry of `V3_SERVE_SAFE_REFUSALS`, the reasons after which the v3 serve rule keeps the daemon.
+  (`V3_WARN_FACTS`): `serve-keep-reasons` runs one `alrunner serve` daemon over four codeunits (five tests) and checks each
+  row against its entry of `V3_SERVE_SAFE_REFUSALS` (four entries: http, commit, cascade, onrun-failed), the reasons
+  after which the v3 serve rule keeps the daemon. Since R705, http and cascade (cascade only for the message
+  `later`) are also accepted as a plain trusted fail (a #5602-fixed build), and `measured` says which. no-callee
+  left with R705: a fixed build runs nothing in a request that does not compile. In serve-entries, a warm-up whose
+  every entry refuses with one identical no-callee text now throws `al-runner-v3-entries-batch-refused`: the safe
+  direction, opt-in and rare.
   It must read `matches` on alpha.2, but any other reading (`diverged`, `unmeasurable`) only prints
   `al-runner-v3-serve-keep-reason-moved` in the log and the receipt `lines`: it is never a `gate-fail` or a `held`,
   because a moved reason only makes the daemon close (slower, never wrong). It is gate-only, as `timeout-is-cpu`
@@ -49,9 +54,12 @@ The legs:
   shows that reading (`unmeasurable` when `.gated` predates R612), never a `matches` it did not see.
   Since r9 (`docs/superpowers/specs/2026-10-22-r586-alrunner-v3-precommitment-r9-bc-readings.md`, 4995b8f6, R639),
   two texts measured on bc1 (`docs/measurements/r639/`) are pinned byte for byte, `BC_HTTP_INTERNAL_TEXT` and
-  `BC_END_OF_TEST_TEXT`, and `r639-bc-readings.test.ts` binds them to that file:
-  - `refusal-row-shape` (#5608) is a DEFECT fact (9 in all). `gone` is exactly bc1's reading. A plain fail with
-    any other text reads `unlike-bc`: `gate-fail` in leg C ("#5700"), a refusal by name in a normal session, and
+  `BC_END_OF_TEST_TEXT`, and `r639-bc-readings.test.ts` binds them to that file. R705 adds `BC_HTTP_HUB_TEXT`:
+  - `refusal-row-shape` (#5608) is a DEFECT fact (9 in all). `gone` is exactly the test runner HUB's reading
+    (`BC_HTTP_HUB_TEXT`, "...the connecting endpoint violates security requirements...", code `HttpRequest:Security`;
+    owner ruling 2026-10-24, R712, measured by R706 in `docs/measurements/r706/`). BC's web-service-path text
+    (`BC_HTTP_INTERNAL_TEXT`, "...blocked by the runtime...") is not the oracle. A plain fail with
+    any other text, that one included, reads `unlike-bc`: `gate-fail` in leg C ("#5700"), a refusal by name in a normal session, and
     only a warning (`al-runner-v3-defect-unlike-bc`) in the update gate's own candidate legs, printed in every
     leg's receipt lines that ran under it.
   - The refusal row shape is now probed by the contract fact `refusal-row-shape-public` (codeunit 50654,

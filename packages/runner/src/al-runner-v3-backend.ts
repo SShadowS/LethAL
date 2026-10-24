@@ -393,6 +393,8 @@ export function v3RowVerdict(
       failureMessage: `${row.message ?? "<no message>"} ${V3_NOT_RUN_SUFFIX}`,
       operation: "completed-accepted",
       runnerRow: "runner-refused",
+      // R609: what the test reached before v3 refused it (a note only; see the orchestrator).
+      ...(coverage !== undefined ? { coverage } : {}),
     };
   }
   // R639 K1(a), r9 §1: a refusal written WITHOUT notRun (a plain `fail` or `pass` whose message
@@ -1389,10 +1391,20 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         call.wallMs,
       );
     }
-    const coverage =
-      row.status === "pass" && !row.notRun && this.isBaselineCall()
-        ? this.coverageOf(row.name, call.coverage)
+    // R609: a test v3 REFUSED mid-run (notRun, not a timeout) also has a per-test entry: the code it
+    // reached before the refusal. Recorded so a mutant only it reaches reads as v3's refusal, not a
+    // suite gap. A refusal before the test starts has no entry: no coverage, never the §6 throw.
+    const refusedMidRun =
+      row.notRun &&
+      row.status === "error" &&
+      !(row.message !== undefined && V3_TIMEOUT_MESSAGE.test(row.message));
+    let coverage =
+      (row.status === "pass" && !row.notRun) || refusedMidRun
+        ? this.isBaselineCall()
+          ? this.coverageOf(row.name, call.coverage)
+          : undefined
         : undefined;
+    if (refusedMidRun && coverage === "unavailable") coverage = undefined;
     if (coverage === "unavailable") {
       // A contract failure on an unmutated call: never read as "covered nothing" (which would
       // make its mutants no-coverage), so the session stops.

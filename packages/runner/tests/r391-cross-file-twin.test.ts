@@ -20,6 +20,7 @@ import { ResultsStore } from "../src/store";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
 import { servesTestApp, testAppJson } from "./helpers/proven-test-app";
 import { removeScratchDir } from "./helpers/scratch";
+import { testDbPath } from "./helpers/test-db";
 
 /**
  * R391: an identity key carries no file. Twins (one identity tuple: here a table and a codeunit
@@ -230,7 +231,9 @@ async function project(a: readonly string[], b: readonly string[]) {
   await Bun.write(join(testDir, "app.json"), testAppJson());
   return {
     dirs: { projectDir, testDir, instrumentedDir },
-    dbPath: join(root, "lethal.sqlite"),
+    // R714: the two file-backed stores here (the NULL-digest and NULL-columns tests) sat on disk,
+    // the one place R616's tmpfs move missed, and timed out under a parallel verify's disk load.
+    dbPath: testDbPath("lethal.sqlite"),
     writeA: (s: readonly string[]) => Bun.write(join(projectDir, A), TABLE_AL(s)),
     writeB: (s: readonly string[]) => Bun.write(join(projectDir, B), CODEUNIT_AL(s)),
   };
