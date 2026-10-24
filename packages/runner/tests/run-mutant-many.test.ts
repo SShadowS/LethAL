@@ -444,6 +444,16 @@ describe("runMany — refusals classify exactly as run's do (the shared classifi
     expect(r.verdict.failureMessage).toContain("artifact-mismatch");
   });
 
+  test("R692: a non-2xx message carries BC's body", async () => {
+    const r = await transport(
+      fakes({ many: new Response("The record Quux is locked", { status: 500 }) }).fetchFn,
+    ).runMany(req());
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r.verdict.failureMessage).toContain("HTTP 500");
+    expect(r.verdict.failureMessage).toContain("The record Quux is locked");
+    expect(r.verdict.operation).toBe("in-flight-unknown");
+  });
+
   test("a non-2xx is in-flight-unknown with the fenced op, and a 404 also asks for a session abort", async () => {
     const r500 = await transport(
       fakes({ many: new Response("boom", { status: 500 }) }).fetchFn,

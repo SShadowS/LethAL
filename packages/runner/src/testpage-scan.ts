@@ -1142,7 +1142,7 @@ function argInfo(call: ALSyntaxNode): {
           ...(a.rawKind === "database_reference" ? {} : { qualified: true as const }),
         };
     } else if (a.rawKind === "integer") {
-      f = { k: "int", at, value: a.text.trim() };
+      f = { k: "int", at, value: intLiteral(a.text) };
     } else {
       const recv = toRecv(a);
       if (recv.k !== "value") f = { k: "expr", at, recv };
@@ -1194,6 +1194,11 @@ const FOLDED_REF_KINDS: ReadonlySet<string> = new Set([
   "database",
 ]);
 
+/** R699: an integer literal as its number's text, so `01000` and `1000` are one id in every lookup. */
+function intLiteral(text: string): string {
+  return text.trim().replace(/^0+(?=\d)/, "");
+}
+
 /**
  * `Proc.idRefs`: `Codeunit::X` names (bare), integer literals of 1000 or more, and (R684) a
  * reference to another kind in `ID_RUN_KINDS` as `<kind>::<name>`, `Database::` read as `table`.
@@ -1213,7 +1218,10 @@ function idRefsIn(block: ALSyntaxNode): readonly string[] {
         if (kind !== undefined && o?.[2] !== undefined)
           v = `${kind === "database" ? "table" : kind}::${o[2]}`;
       }
-    } else if (n.rawKind === "integer" && n.text.trim().length >= 4) v = n.text.trim();
+    } else if (n.rawKind === "integer") {
+      const num = intLiteral(n.text);
+      if (num.length >= 4) v = num;
+    }
     if (v === undefined) return;
     out ??= [];
     out.push(v);
