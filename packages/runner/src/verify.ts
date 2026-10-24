@@ -1165,7 +1165,7 @@ const CAUSE_WORDS: Readonly<Record<NewTestCause, string>> = {
   object:
     "an object it reaches edited outside its procedures (header, properties, globals, triggers)",
   subscriber:
-    "a subscriber codeunit edited (every subscriber is in every test's digest, so every test is new)",
+    "a subscriber, install or upgrade codeunit, extension, enum implementation or permission set changed, or LethAL widened what these cover (every one is in every test's digest, so every test is new)",
   fallback:
     "a test-app edit, for a test whose reach has an edge the walk cannot follow (it covers the whole test-app source)",
   dependency: "a dependency changed",
