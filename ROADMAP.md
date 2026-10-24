@@ -757,7 +757,7 @@ that ordering is the priority.
 - **R712** · Which BC path is the oracle for HTTP-in-test behaviour: the test runner hub or the web-service path · [R712.md](docs/roadmap/R712.md) · closed 2026-10-24 — owner ruling: the test runner hub path
 - **R713** · bcdev runs tests through the web-service path, so a test asserting on BC's HTTP error text reads a different text than VS Code or the hub (R706) · [R713.md](docs/roadmap/R713.md) · open, filed 2026-10-24
 - **R716** · r391-cross-file-twin.test.ts's two file-backed stores sat on disk, the one place R616's tmpfs move missed, so its R565 NULL-digest test timed out under a parallel verify · [R716.md](docs/roadmap/R716.md) · done (11c504df)
-- **R719** · mute al-runner-v3-defect-gone / -refused session warnings for facts a per-build pin covers · [R719.md](docs/roadmap/R719.md) · done (dee9fe63)
+- **R719** · mute al-runner-v3-defect-gone / -refused session warnings for facts a per-build pin covers · [R719.md](docs/roadmap/R719.md) · done (091e8df2)
 - **R722** · No committed v3 leg covers N1 (dotted test names) under serve-entries; alpha.5's serve rows drop codeunit and method for such names (#5798) · [R722.md](docs/roadmap/R722.md) · done (dee9fe63)
 - **R723** · The v3 update gate tried candidates oldest first, so two predicted fails ran before the newest release · [R723.md](docs/roadmap/R723.md) · done (3d805efe)
 
