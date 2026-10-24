@@ -24,11 +24,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+// The SDK is a dependency of packages/runner only, so it is not resolvable by name from scripts/.
+// Imported by path into runner's node_modules (its package.json `exports` points at dist/esm).
+import { Client } from "../../packages/runner/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js";
 import {
   StdioClientTransport,
   getDefaultEnvironment,
-} from "@modelcontextprotocol/sdk/client/stdio.js";
+} from "../../packages/runner/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js";
 import { bcFetch } from "../../packages/runner/src/bc-fetch";
 import { HarnessVerifier } from "../../packages/runner/src/harness";
 import { type Lease, LeaseClient } from "../../packages/runner/src/lease";
@@ -44,16 +46,24 @@ import {
   rowVersion,
   rows,
 } from "../bc-app-content.ts";
-import { bcDevMcpCommand, errText, readSecretFile } from "../bc-linux-setup.ts";
+import {
+  SECRET_PATH,
+  bcDevMcpCommand,
+  describeLogin,
+  errText,
+  readSecretFile,
+} from "../bc-linux-setup.ts";
 import {
   NONE,
   type PathClass,
   type Reading,
   type RunClasses,
+  contradictsR639,
   outcomeOf,
   pathClass,
   readingOf,
 } from "./classify.ts";
+import { leaseOptions } from "./lease-options.ts";
 
 const REPO = join(import.meta.dir, "..", "..");
 const EVIDENCE = "/coord/handoff/R-705/probe";
@@ -63,7 +73,10 @@ const OUT_OF_USE = "/coord/machine/out-of-use/bc1.md";
 const PROJECT = join(REPO, "fixtures", "sandbox-hang");
 const MCP_COMMIT = "8371d0b";
 const WANT_BUILD = "28.4.53241.56590";
-const PLATFORM_APP = "8874ed3a-0643-4247-9ced-7a7002f7135d";
+// Ruling (2026-10-24): no platform app row exists on BC on Linux (8874ed3a read absent on bc1), so the
+// build check is Base and System Application only, as r639 read it. Deviates from spec §9 by ruling.
+const PLATFORM_NOTE =
+  "not readable by app id on BC Linux (8874ed3a absent); Base and System Application checked";
 const BASE_APP = "437dbf0e-84ff-417a-965d-ed2bb9650972";
 const SYSTEM_APP = "63ca2fa4-4f03-4f2b-a480-172fef340d3f";
 const ARTIFACT_ID = "d1618dd6c92c4a3982febac2e5339f21";
@@ -150,10 +163,52 @@ interface Call {
   method: string;
   reading: Reading;
   runner: string | null;
+  isError?: boolean;
   note?: string;
 }
 
+/** The pre-committed bytes: copied into the evidence folder, or a StopBeforePublish. */
+function checkApps(): { sha: Record<string, string>; bytes: Record<string, Buffer> } {
+  mkdirSync(join(EVIDENCE, "apps"), { recursive: true });
+  const sha: Record<string, string> = {};
+  const bytes: Record<string, Buffer> = {};
+  for (const a of [TARGET, TESTS]) {
+    const b = readFileSync(join(R639_BUILD, a.file));
+    sha[a.file] = new Bun.CryptoHasher("sha256").update(b).digest("hex");
+    if (sha[a.file] !== a.sha256)
+      throw new StopBeforePublish(`${a.file} sha256 ${sha[a.file]} is not ${a.sha256}`);
+    writeFileSync(join(EVIDENCE, "apps", a.file), b);
+    bytes[a.file] = b;
+  }
+  return { sha, bytes };
+}
+
+/** `--dry-run`: everything local, then exit 0. No server call, no lease check, no publish. */
+function dryRun(): number {
+  const mods = {
+    Client: typeof Client,
+    StdioClientTransport: typeof StdioClientTransport,
+    getDefaultEnvironment: typeof getDefaultEnvironment,
+    HarnessVerifier: typeof HarnessVerifier,
+    LeaseClient: typeof LeaseClient,
+    RunMutantTransport: typeof RunMutantTransport,
+  };
+  console.log(`modules loaded: ${JSON.stringify(mods)}`);
+  console.log(`app hashes ok: ${JSON.stringify(checkApps().sha)}`);
+  console.log(`bc-dev-mcp: ${JSON.stringify(mcpBuildFacts())}`);
+  console.log(`bc-dev-mcp command: ${JSON.stringify(bcDevMcpCommand())}`);
+  const login = readSecretFile();
+  console.log(`login file ${SECRET_PATH}: ${describeLogin(login)}`);
+  for (const k of CASES)
+    console.log(
+      `hub args ${k.codeunit}: ${JSON.stringify(hubArgs(k.codeunit, k.method, SERVERS.bc1))}`,
+    );
+  console.log("dry run ok: no server call, no lease check");
+  return 0;
+}
+
 async function main(): Promise<number> {
+  if (process.argv.includes("--dry-run")) return dryRun();
   let holder: string;
   try {
     if (existsSync(OUT_OF_USE)) throw new Error(`${OUT_OF_USE} exists`);
@@ -204,17 +259,7 @@ async function main(): Promise<number> {
   doc.runs = [];
   try {
     // Hashes first: the pre-committed bytes, copied into the evidence folder, or nothing.
-    mkdirSync(join(EVIDENCE, "apps"), { recursive: true });
-    const sha: Record<string, string> = {};
-    const bytes: Record<string, Buffer> = {};
-    for (const a of [TARGET, TESTS]) {
-      const b = readFileSync(join(R639_BUILD, a.file));
-      sha[a.file] = new Bun.CryptoHasher("sha256").update(b).digest("hex");
-      if (sha[a.file] !== a.sha256)
-        throw new StopBeforePublish(`${a.file} sha256 ${sha[a.file]} is not ${a.sha256}`);
-      writeFileSync(join(EVIDENCE, "apps", a.file), b);
-      bytes[a.file] = b;
-    }
+    const { sha, bytes } = checkApps();
     doc.appSha256 = sha;
     doc.bcDevMcp = mcpBuildFacts();
 
@@ -223,13 +268,13 @@ async function main(): Promise<number> {
     for (const [n, id] of [
       ["Base Application", BASE_APP],
       ["System Application", SYSTEM_APP],
-      ["Platform (System)", PLATFORM_APP],
     ] as const) {
       const rs = await rows(c, ext, id);
       build[n] = rs.map((r) => rowVersion(r)).join("; ") || "absent";
       log(`server build: ${n} ${build[n]}`);
     }
     doc.bcBuild = build;
+    doc.platform = PLATFORM_NOTE;
     for (const [n, v] of Object.entries(build))
       if (v !== WANT_BUILD) throw new StopBeforePublish(`${n} reads ${v}, not ${WANT_BUILD}`);
     const harness = new HarnessVerifier(odata);
@@ -278,9 +323,10 @@ async function main(): Promise<number> {
     let opSeq = 0;
     /** The web-service path: RunMutant baseline, one method per call, under a control-app lease. */
     const wsPass = async (): Promise<{ calls: Call[]; raw: unknown[] }> => {
+      const { ttlSeconds, heartbeatMs } = leaseOptions();
       const got = await leases.acquire(
         "r706-client-probe (lane bugs)",
-        120,
+        ttlSeconds,
         crypto.randomUUID(),
         info.serverGeneration,
       );
@@ -289,10 +335,23 @@ async function main(): Promise<number> {
       opSeq = Math.max(opSeq, lease.lastCompletedOpSeq);
       const calls: Call[] = [];
       const raw: unknown[] = [];
+      // The runner's heartbeat (orchestrator.ts): a single-flight renew every ttl/3 while the pass
+      // runs. Only `renewed: false` is loss; a thrown renew is a lost ack and the next tick retries.
+      let lost = false;
+      let ticking = false;
+      const beat = setInterval(async () => {
+        if (ticking) return;
+        ticking = true;
+        try {
+          if (!(await leases.renew(lease, ttlSeconds)).renewed) lost = true;
+        } catch {
+        } finally {
+          ticking = false;
+        }
+      }, heartbeatMs);
       try {
         for (const k of CASES) {
-          const r = await leases.renew(lease, 120);
-          if (!r.renewed) throw new Error("control-app lease renew refused");
+          if (lost) throw new Error("control-app lease lost (renew answered renewed:false)");
           opSeq += 1;
           const answerText = await postAction(odata, "LethALControl_RunMutant", {
             targetAppId: TARGET.id,
@@ -313,6 +372,7 @@ async function main(): Promise<number> {
           calls.push(wsCall(k.codeunit, answer.codeunitResults));
         }
       } finally {
+        clearInterval(beat);
         log(`control-app lease release: ${JSON.stringify(await leases.release(lease))}`);
       }
       return { calls, raw };
@@ -397,10 +457,16 @@ async function main(): Promise<number> {
     } else removal.note = "nothing published; nothing removed";
     doc.removal = removal;
     if (runs.length === ORDER.length) {
-      const o = outcomeOf(runs);
-      doc.outcomeRow = o.row;
-      doc.outcome = o.outcome;
-      log(`outcome: row ${o.row} ${o.outcome}`);
+      try {
+        const o = outcomeOf(runs);
+        doc.outcomeRow = o.row;
+        doc.outcome = o.outcome;
+        if (contradictsR639(o.row, runs)) doc.contradictsR639 = true;
+        log(`outcome: row ${o.row} ${o.outcome}`);
+      } catch (err) {
+        doc.outcomeError = errText(err);
+        log(`outcome FAILED: ${errText(err)}`);
+      }
     }
     try {
       mkdirSync(EVIDENCE, { recursive: true });
@@ -457,6 +523,20 @@ function wsCall(codeunit: number, codeunitResults: unknown): Call {
   };
 }
 
+/** The `bcdev_test_run` arguments (no secrets: the login travels in the child's env). */
+function hubArgs(codeunit: number, method: string, ports: { dev: number }) {
+  return {
+    codeunits: [{ id: codeunit, methods: [method] }],
+    coverage: "none",
+    project: PROJECT,
+    server: `${HOST}:${ports.dev}`,
+    serverInstance: "BC",
+    tenant: "default",
+    port: ports.dev,
+    company: COMPANY,
+  };
+}
+
 interface HubResult {
   call: Call;
   raw: unknown;
@@ -477,26 +557,24 @@ async function hubCall(
     BC_DEV_API_PORT: String(ports.api),
   };
   const client = new Client({ name: "lethal-r706", version: "0.0.0" });
-  const args = {
-    codeunits: [{ id: codeunit, methods: [method] }],
-    coverage: "none",
-    project: PROJECT,
-    server: `${HOST}:${ports.dev}`,
-    serverInstance: "BC",
-    tenant: "default",
-    port: ports.dev,
-    company: COMPANY,
-  };
+  const args = hubArgs(codeunit, method, ports);
   const none = (note: string, raw: unknown, overrun = false): HubResult => ({
     call: { codeunit, method, reading: NONE, runner: null, note },
     raw: { args, note, response: raw },
     overrun,
   });
+  // Once callTool has been sent, any failure may leave a running session: an overrun (HOLD).
+  let sent = false;
   try {
-    await client.connect(
-      new StdioClientTransport({ command: cmd[0] ?? "", args: cmd.slice(1), env }),
-    );
+    try {
+      await client.connect(
+        new StdioClientTransport({ command: cmd[0] ?? "", args: cmd.slice(1), env }),
+      );
+    } catch (err) {
+      return none(`connect failed: ${errText(err)}`, null);
+    }
     let timer: ReturnType<typeof setTimeout> | undefined;
+    sent = true;
     const call = client.callTool({ name: "bcdev_test_run", arguments: args }, undefined, {
       timeout: HUB_BUDGET_MS,
     });
@@ -510,8 +588,11 @@ async function hubCall(
     if (res === "timeout") return none("hub call outlived its budget", null, true);
     const content = (res as { content?: { type: string; text?: string }[] }).content ?? [];
     const text = content.find((x) => x.type === "text")?.text;
-    if ((res as { isError?: boolean }).isError === true || text === undefined)
-      return none("isError or no text", res);
+    const isError = (res as { isError?: boolean }).isError === true;
+    if (isError || text === undefined) {
+      const n = none("isError or no text", res);
+      return { ...n, call: { ...n.call, isError } };
+    }
     let payload: {
       results?: { codeunitId: number; method: string; status: string; output: string }[];
     };
@@ -530,14 +611,13 @@ async function hubCall(
         method,
         reading: readingOf(codeunit === 92911 ? 92911 : 92910, out),
         runner: frameOf(out),
+        isError,
       },
       raw: { args, response: res },
       overrun: false,
     };
   } catch (err) {
-    // A request timeout of the SDK is an overrun too: the session may still be running.
-    const overrun = /timed out|timeout/i.test(errText(err));
-    return none(`call threw: ${errText(err)}`, null, overrun);
+    return none(`call threw: ${errText(err)}`, null, sent);
   } finally {
     await client.close().catch(() => {});
   }
