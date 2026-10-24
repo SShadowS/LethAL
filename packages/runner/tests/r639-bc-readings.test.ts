@@ -3,7 +3,11 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { BC_END_OF_TEST_TEXT, BC_HTTP_INTERNAL_TEXT } from "../src/al-runner-v3-contract";
+import {
+  BC_END_OF_TEST_TEXT,
+  BC_HTTP_HUB_TEXT,
+  BC_HTTP_INTERNAL_TEXT,
+} from "../src/al-runner-v3-contract";
 
 const FILE = join(import.meta.dir, "../../../docs/measurements/r639/bc1-probe.json");
 
@@ -63,6 +67,22 @@ function bcReadingProblems(d: Probe): string[] {
 }
 
 const real = (): Probe => JSON.parse(readFileSync(FILE, "utf8")) as Probe;
+
+describe("R705: BC_HTTP_HUB_TEXT is the hub's text, measured by R706", () => {
+  test("it equals the first line of run 1, test 92910, hub `raw` in docs/measurements/r706/readings.json", () => {
+    const d = JSON.parse(
+      readFileSync(join(import.meta.dir, "../../../docs/measurements/r706/readings.json"), "utf8"),
+    ) as {
+      runs: {
+        run: number;
+        hub: { calls: { codeunit: number; reading: { raw: string | null } }[] };
+      }[];
+    };
+    const run1 = d.runs.find((r) => r.run === 1);
+    const raw = run1?.hub.calls.find((c) => c.codeunit === 92910)?.reading.raw;
+    expect(raw?.split("\n")[0]).toBe(BC_HTTP_HUB_TEXT);
+  });
+});
 
 describe("R639 P4: the pinned BC texts are bc1's measured texts", () => {
   test("P4: BC_HTTP_INTERNAL_TEXT and BC_END_OF_TEST_TEXT equal bc1-probe.json, which names its provenance", () => {

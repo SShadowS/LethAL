@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { BC_HTTP_INTERNAL_TEXT } from "../../packages/runner/src/al-runner-v3-contract";
+import {
+  BC_HTTP_HUB_TEXT,
+  BC_HTTP_INTERNAL_TEXT,
+} from "../../packages/runner/src/al-runner-v3-contract";
 import {
   BLOCKED,
   NONE,
@@ -27,6 +30,7 @@ const S = pc("SECURITY", SECURITY);
 
 describe("constants", () => {
   test("BLOCKED is the contract's text", () => expect(BLOCKED).toBe(BC_HTTP_INTERNAL_TEXT));
+  test("SECURITY equals BC_HTTP_HUB_TEXT (R705)", () => expect(SECURITY).toBe(BC_HTTP_HUB_TEXT));
   test("SECURITY is one line", () => expect(SECURITY.includes("\n")).toBe(false));
 });
 

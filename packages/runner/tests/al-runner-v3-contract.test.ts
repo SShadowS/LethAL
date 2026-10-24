@@ -1110,7 +1110,7 @@ describe("§8 the contract probe, continued", () => {
 });
 
 describe("R639 (pre-commitment r9): leg C's BC readings", () => {
-  const EDGE_TEXT =
+  const HUB_TEXT =
     "There was an error while executing the HTTP request, the connecting endpoint violates security requirements. Make sure you are connecting to a valid endpoint.";
   const LATER_FAIL = row(50653, "LaterFails", "fail", { message: "later" });
   const http = (o: Parameters<typeof row>[3], status = "fail") => row(50653, "HttpGet", status, o);
@@ -1121,11 +1121,11 @@ describe("R639 (pre-commitment r9): leg C's BC readings", () => {
   const RRS = "refusal-row-shape";
 
   test("R705 ruling: the oracle is the test runner HUB text (a literal here, so the constant is checked)", () => {
-    expect(BC_HTTP_HUB_TEXT).toBe(EDGE_TEXT);
+    expect(BC_HTTP_HUB_TEXT).toBe(HUB_TEXT);
   });
 
   test("P1: refusal-row-shape reads gone on the hub's exact text, fail, exit 1; leg C held; no refusal", async () => {
-    const r = await at50653(1, [http({ message: EDGE_TEXT }), LATER_FAIL]);
+    const r = await at50653(1, [http({ message: HUB_TEXT }), LATER_FAIL]);
     expect(r.facts.find((f) => f.fact === RRS)).toMatchObject({ kind: "defect", verdict: "gone" });
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("held");
     expect(v3ContractRefusals(r)).toEqual([]);
@@ -1133,10 +1133,10 @@ describe("R639 (pre-commitment r9): leg C's BC readings", () => {
 
   test("P2 (text): the hub text changed by a trailing space, a cut, a suffix or its case is never gone: unlike-bc; so is the web-service text (R705 ruling)", async () => {
     for (const m of [
-      `${EDGE_TEXT} `,
-      EDGE_TEXT.slice(0, -1),
-      `${EDGE_TEXT} more`,
-      EDGE_TEXT.toLowerCase(),
+      `${HUB_TEXT} `,
+      HUB_TEXT.slice(0, -1),
+      `${HUB_TEXT} more`,
+      HUB_TEXT.toLowerCase(),
       BC_HTTP_INTERNAL_TEXT,
     ]) {
       const r = await at50653(1, [http({ message: m }), LATER_FAIL]);
@@ -1146,10 +1146,10 @@ describe("R639 (pre-commitment r9): leg C's BC readings", () => {
 
   test("P2 (fields): status error, notRun without the prefix, exit 7, a second HttpGet row, or the prefix with notRun false read diverged", async () => {
     const cases: Array<[number, unknown[]]> = [
-      [1, [http({ message: EDGE_TEXT }, "error"), LATER_FAIL]],
-      [7, [http({ message: EDGE_TEXT, notRun: true }, "error"), LATER_FAIL]],
-      [7, [http({ message: EDGE_TEXT }), LATER_FAIL]],
-      [1, [http({ message: EDGE_TEXT }), http({ message: EDGE_TEXT })]],
+      [1, [http({ message: HUB_TEXT }, "error"), LATER_FAIL]],
+      [7, [http({ message: HUB_TEXT, notRun: true }, "error"), LATER_FAIL]],
+      [7, [http({ message: HUB_TEXT }), LATER_FAIL]],
+      [1, [http({ message: HUB_TEXT }), http({ message: HUB_TEXT })]],
       [1, [http({ message: "NotRun: out-of-scope: an outbound HTTP request" }), LATER_FAIL]],
     ];
     for (const [exitCode, rows] of cases) {
@@ -1180,7 +1180,7 @@ describe("R639 (pre-commitment r9): leg C's BC readings", () => {
     probe({
       cu50654: () => ({ exitCode, stdout: rows === "none" ? "" : doc(rows) }),
     });
-  const PUB_FAIL = row(50654, "HttpGetPublic", "fail", { message: EDGE_TEXT });
+  const PUB_FAIL = row(50654, "HttpGetPublic", "fail", { message: HUB_TEXT });
   const PUB_LATER_FAIL = row(50654, "LaterFails", "fail", { message: "later" });
   const PUB = "refusal-row-shape-public";
 
@@ -1334,10 +1334,10 @@ describe("R639 (pre-commitment r9): leg C's BC readings", () => {
   });
 
   // R705 ruling: a build that writes BC's web-service text is not the hub's reading: unlike-bc.
-  const EDGE_ROWS = [http({ message: BC_HTTP_INTERNAL_TEXT }), LATER_FAIL];
+  const WS_ROWS = [http({ message: BC_HTTP_INTERNAL_TEXT }), LATER_FAIL];
 
   test("P12: a web-service-text row is unlike-bc: gate-fail in leg C (#5700); a CANDIDATE session warns and runs", async () => {
-    const r = await at50653(1, EDGE_ROWS);
+    const r = await at50653(1, WS_ROWS);
     expect(verdictOf(r, RRS)).toBe("unlike-bc");
     const c = classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS);
     expect(c.outcome).toBe("gate-fail");
@@ -1351,7 +1351,7 @@ describe("R639 (pre-commitment r9): leg C's BC readings", () => {
   });
 
   test("P13: the same row refuses a NORMAL session, naming the fact, with no warning in its place", async () => {
-    const r = await at50653(1, EDGE_ROWS);
+    const r = await at50653(1, WS_ROWS);
     expect(v3ContractRefusals(r).join("\n")).toMatch(/UNLIKE-BC — refusal-row-shape/);
     expect(v3DefectWarnings(r).join("\n")).not.toMatch(/unlike-bc/);
   });
