@@ -61,3 +61,25 @@ has no quarantine record and clear any with `clear-quarantine`.
 bc2 keeps installed-version records for the target (at LethAL's minted version) and the tests (1.0.0.1) until a
 restart (R605), plus the control app's registry, op and progress rows for this run (fresh ids, harmless) until a
 restart.
+
+## Addendum 1 (2026-10-24, before run 2): the live proof on the BUILT head
+Run 1 (19:16:59Z) gave N1, N2 shape (a) and N3, as recorded in `/coord/handoff/R-738/measure.md`. The refusal was then
+built (`StaleTargetMemberError`, lethal/r738 7dd4a991). Run 2 repeats the same probe on the built head as the live
+proof, with the SECOND id set: target ed1d8576-28e2-4c30-bff1-827dd234b9b1, tests 2dcfea83-366b-4775-9b7f-003247b39755.
+bc2 holds run 1's records. Same AL, same object ids, rebuilt only for the ids:
+
+| build | sha256 |
+|---|---|
+| T1 | 4c5c282b0dd48365bf22cfa6e87040c57c3aafb3cb12d3da27b9517b94b5015c |
+| Q | 50600b6d4abb1623f327556c46d3b33b9ceb82d28c4578efd09d462fa9c1effe |
+| TS | f0385c811be415314908b4c4387657fbb3ec6443f2c5bd0bcee757b5c76cc58b |
+
+**Prediction (run 2):**
+- the publish is accepted (N1);
+- the `lethal run` REFUSES with `StaleTargetMemberError`, exit non-zero;
+- its message names `R738 Tests.TestAnswer` and `R738 Tests.TestScale`, and object 93790, and says to republish the
+  tests app;
+- `TestFails` is NOT named;
+- no report is written, no `coverage-split` event is emitted, and no mutant is scored.
+
+Anything else is a BLOCK on the build. Run 2 leaves records for the second id set on bc2 until a restart.
