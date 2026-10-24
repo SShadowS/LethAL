@@ -161,7 +161,8 @@ export function notReinstalledApps(
 function notReinstalledSentence(bcText: string): string {
   const apps = notReinstalledApps(bcText);
   return apps === null
-    ? "BC's list of the apps it could not reinstall could not be read; see BC's text below. "
+    ? "BC's text names no list of the apps it could not reinstall that LethAL can read; see BC's " +
+        "text below. "
     : `BC lists ${apps.length} apps it could not reinstall (name by publisher; BC gives no ` +
         `versions): ${apps.map((a) => `${a.name} by ${a.publisher}`).join("; ")}. `;
 }

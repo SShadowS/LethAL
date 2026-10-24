@@ -1,6 +1,8 @@
 # R709 probe: BC's full 422 body when an upgrade breaks installed dependents
 
-**Status: built and compiled offline only. It has run on NO server yet.**
+**Status: run once on bc2, 2026-10-24 16:00:37Z (R-709b, pre-commitment 95ce48db; every build's sha256 matched).
+Results: `/coord/handoff/R-709b/measure.md`. Do not re-run without rebuilding under a new pre-commitment: bc2 holds
+installed-version records for T and U at 1.0.0.2 until a restart (R605).**
 
 Question (R709): when an UPGRADE of a target breaks installed dependents and BC "could not restore", what is
 the exact format of BC's list of removed extensions, for ONE dependent and for TWO? R707's probe cut every body

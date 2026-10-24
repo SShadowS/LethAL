@@ -1,12 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import {
+  UpgradeNotRestoredError,
   VersionOverflowError,
   compareAppVersions,
   confirmedDowngradeRefusal,
   nextAbove,
-  parseVersionConflict,
-  UpgradeNotRestoredError,
   notReinstalledApps,
+  parseVersionConflict,
   reserveAppVersion,
   restoreFailed,
 } from "../src/app-version";
@@ -69,7 +69,7 @@ describe("notReinstalledApps (R709 part 2: BC's measured list)", () => {
     ).toBeNull();
   });
 
-  it("the refusal names every listed app, or says the list could not be read", () => {
+  it("the refusal names every listed app, or says it names no readable list", () => {
     const named = new UpgradeNotRestoredError(BODY_TWO).message;
     // red when the parsed names do not reach the message
     expect(named).toContain(
@@ -79,8 +79,26 @@ describe("notReinstalledApps (R709 part 2: BC's measured list)", () => {
     );
     const unread = new UpgradeNotRestoredError(R709_RESTORE_TEXT).message;
     // red when an unreadable list is silently omitted
-    expect(unread).toContain("BC's list of the apps it could not reinstall could not be read");
+    expect(unread).toContain(
+      "BC's text names no list of the apps it could not reinstall that LethAL can read",
+    );
     expect(unread).toContain(R709_RESTORE_TEXT); // BC's text stays, either way
+  });
+
+  it("fail-closed: a line not in the '<name> by <publisher>' form voids the whole list", () => {
+    const head = BODY_ONE.slice(0, BODY_ONE.indexOf("to do so: \n") + "to do so: \n".length);
+    const odd = `${head}Good App by Pub\nNOT AN ENTRY\n\n`;
+    // red when an odd line is skipped (a partial list would read as the complete one)
+    expect(notReinstalledApps(odd)).toBeNull();
+    expect(new UpgradeNotRestoredError(odd).message).toContain("names no list");
+  });
+
+  it("a name containing ' by ' splits at the LAST ' by '", () => {
+    const head = BODY_ONE.slice(0, BODY_ONE.indexOf("to do so: \n") + "to do so: \n".length);
+    // red when the first " by " splits the line
+    expect(notReinstalledApps(`${head}Built by Design Tools by Contoso\n\n`)).toEqual([
+      { name: "Built by Design Tools", publisher: "Contoso" },
+    ]);
   });
 });
 
