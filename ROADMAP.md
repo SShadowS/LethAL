@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**24 of 727 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**22 of 727 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -124,8 +124,8 @@ that ordering is the priority.
 - **R400** · R-307's per-file refusal raises Base Application's dry-run peak by 31% and its wall time by 18% against master · [R400.md](docs/roadmap/R400.md) · done (4bd4b66b)
 - **R303** · A procedure or trigger whose `var` section sits inside `#if` (`preproc_conditional_var_block`) gets a SECOND `var` section from the reach latch, and alc rejects the artifact · [R303.md](docs/roadmap/R303.md) · done (9a308e1)
 - **R729** · On DC/Cloud, 30 instrumented sites do not parse: a wrapped `if X then;` body loses its terminator (AL0111, 29), and a removed then-statement leaves `then ; else` (AL0110, 1) · [R729.md](docs/roadmap/R729.md) · done (f75d3874)
-- **R731** · toggle-blank-string turns a one-character text literal assigned to a Char (an element of a Text variable) into an empty Text, which alc rejects (AL0122); one such mutant fails the whole batch · [R731.md](docs/roadmap/R731.md) · open, filed 2026-10-24 (found by R-729's re-run of the DC/Cloud compile)
-- **R732** · shift-integer on a `case true of` label can duplicate another label's expression, which alc rejects (AL0402, 2 errors from one mutant) · [R732.md](docs/roadmap/R732.md) · open, filed 2026-10-24 (found by R-729's re-run of the DC/Cloud compile)
+- **R731** · toggle-blank-string turns a one-character text literal assigned to a Char (an element of a Text variable) into an empty Text, which alc rejects (AL0122); one such mutant fails the whole batch · [R731.md](docs/roadmap/R731.md) · done (b4bb3759)
+- **R732** · shift-integer on a `case true of` label can duplicate another label's expression, which alc rejects (AL0402, 2 errors from one mutant) · [R732.md](docs/roadmap/R732.md) · done (b4bb3759)
 - **R306** · A mutant inside an arm the build's preprocessor symbols compile out gets a different fate depending on where the `#if` sits, and one of the three shapes is predicted, not measured · [R306.md](docs/roadmap/R306.md) · closed 2026-10-06 — case 1 closed by R214 (0 compiled-out mutants measured on BaseApp, CDO, DC, DO), case 3…
 - **R312** · A member whose `var` section ENDS in an `#if` block of declarations gets its reach latch written on the `#endif` line, and alc rejects the artifact (AL0631) · [R312.md](docs/roadmap/R312.md) · done (4001282)
 - **R313** · A member whose `var` section tree-sitter-al cannot parse gets no reach latch: it is refused by name, and its reach is not measured · [R313.md](docs/roadmap/R313.md) · closed 2026-10-06 — stated limit: 0 members refused in 510,291 across every corpus and fixture; the refusal…

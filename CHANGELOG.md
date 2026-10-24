@@ -1012,11 +1012,18 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **Two kinds of mutant that alc rejects are no longer generated** ([R731](docs/roadmap/R731.md),
+  [R732](docs/roadmap/R732.md)). Found by the second offline compile of DC's `Cloud` target, one mutant each, and
+  each one fails the whole batch. `toggle-blank-string` no longer blanks a one-character text literal assigned to a
+  `Char`, to one element of a `Text` (`T[1] := 'x'`), or to a target whose type is unknown (AL0122); comparisons and
+  record fields are unchanged. And one central check now drops any mutant whose changed `case` label would equal a
+  sibling label of the same `case` (AL0402), for every operator, with a `case-label-collision` warning and a count per
+  file. Two new shapes in the R402 sweep. The cost is counted in the roadmap items.
 - **Two shapes of emitted AL that did not parse are fixed** ([R729](docs/roadmap/R729.md)). Found by the first offline
   compile of DC's `Cloud` target (30 syntax errors, AL0111 and AL0110). An `if X then;` as the whole body of an `if` or
   case branch lost its `;` when a mutant inside it was wrapped, and a comment between a removed call and its `else`
   made the removal emit `then ; else`. Three new shapes in the R402 sweep. Two more invalid-mutant classes appeared at
-  the next layer: R731, R732 (open).
+  the next layer: R731, R732 (fixed above).
 - **A recurring verify timeout in `r391-cross-file-twin.test.ts` is gone** ([R716](docs/roadmap/R716.md)). Its two
   file-backed test stores sat on disk, the one place R616's move to tmpfs missed, so the R565 NULL-digest test hit
   5 s under a parallel verify's disk load. They now use `testDbPath`. No timeout was raised.
