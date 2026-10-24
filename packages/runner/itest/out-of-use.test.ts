@@ -106,6 +106,19 @@ describe("outOfUseRefusal", () => {
     expect(r).toBeUndefined();
     expect(logged).toContain("!!! bc2 has an out-of-use marker");
     expect(logged).toContain("owned by this run");
+    // R-658 delta F1: the logged body keeps the reason but never the token.
+    expect(logged).toContain("SYNTH-REASON stranded op");
+    expect(logged).not.toContain(TOKEN);
+  });
+
+  test("no printed form of a marker carries its owner token (the refusal and the clearing log)", () => {
+    const files = { "bc2.md": `${MARKER}owner: ${TOKEN}\n` };
+    const refused = refusal(files, { LETHAL_OUT_OF_USE_OWNER: OTHER }, "owner").r;
+    expect(refused).toContain("SYNTH-REASON stranded op");
+    expect(refused).not.toContain(TOKEN);
+    const clearing = refusal(files, { LETHAL_OUT_OF_USE_CLEARING: "bc2" }, "clearing");
+    expect(clearing.logged).toContain("SYNTH-REASON stranded op");
+    expect(clearing.logged).not.toContain(TOKEN);
   });
 
   test("owner: a constant or non-hex-128 token refuses, even when the marker carries it", () => {

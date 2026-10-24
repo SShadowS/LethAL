@@ -9,6 +9,7 @@ import {
   DependencyUnreadableError,
   type MicrosoftMode,
   type PackageReader,
+  type SourceZipReader,
   appInputsOfAppJson,
   appInputsOfManifest,
   bcdevDependencyFingerprint,
@@ -16,6 +17,7 @@ import {
   packageFolderReader,
   publishedPackageReader,
   readAppJsonInputs,
+  sourceZipReader,
   targetOf,
 } from "../src/digest-inputs";
 import { CONTROL_APP_ID } from "../src/harness";
@@ -402,6 +404,181 @@ describe("R-385: Microsoft dependencies by the bytes the server holds", () => {
       await refusesNaming(fp(bytes({ control: controlWith("", "1.0.0.19") })), "1.0.0.19");
       await refusesNaming(fp(bytes({ controlVersion: "1.0.0.21" })), "1.0.0.21");
     });
+  });
+});
+
+/**
+ * R435: a backend that does not publish but is handed package folders (al-runner v3) hashes the
+ * Microsoft packages in those folders. No System, no control app, no installed check.
+ */
+describe("R435: Microsoft dependencies by the bytes in the package folder", () => {
+  const FOLDER: MicrosoftMode = { kind: "folder" };
+  /** A folder holding Application (which depends on `MS`) and `MS`, each at its own build. */
+  const folder =
+    (o: { app?: string; lib?: string; missing?: readonly string[] } = {}): PackageReader =>
+    async (d) => {
+      if (o.missing?.includes(d.id)) return UNREAD;
+      if (d.id === APPLICATION_APP_ID)
+        return [
+          pkg(
+            APPLICATION_APP_ID,
+            "Application",
+            "Microsoft",
+            o.app ?? "a",
+            depTag(MS, "Lib", "Microsoft"),
+          ),
+        ];
+      if (d.id === MS) return [pkg(MS, "Lib", "Microsoft", o.lib ?? "l")];
+      return UNREAD;
+    };
+  // The test app declares ONLY `application`, as a real suite's app.json does.
+  const appOnly = appInputsOfAppJson({ application: "28.0.0.0" });
+  const direct = root("Microsoft", MS);
+
+  test("Application swapped at the same version changes the fingerprint (the meta app is queued)", async () => {
+    const at = (app: string) => dependencyFingerprint(appOnly, folder({ app }), FOLDER);
+    expect(await at("one")).not.toBe(await at("two"));
+    expect(await at("one")).toBe(await at("one"));
+  });
+
+  test("a Microsoft app reached only through Application is read too", async () => {
+    const at = (lib: string) => dependencyFingerprint(appOnly, folder({ lib }), FOLDER);
+    expect(await at("one")).not.toBe(await at("two"));
+  });
+
+  test("a direct Microsoft dependency swapped at the same version changes it; the same bytes do not", async () => {
+    const at = (lib: string) => dependencyFingerprint(direct, folder({ lib }), FOLDER);
+    expect(await at("one")).not.toBe(await at("two"));
+    expect(await at("one")).toBe(await at("one"));
+  });
+
+  test("the folder fingerprint never equals the declared one", async () => {
+    expect(await dependencyFingerprint(direct, folder(), FOLDER)).not.toBe(
+      await dependencyFingerprint(direct, folder(), DECLARED),
+    );
+  });
+
+  test("a Microsoft dependency missing from the folder refuses by name, never falls back to declared", async () => {
+    await refusesNaming(dependencyFingerprint(direct, folder({ missing: [MS] }), FOLDER), MS);
+    await refusesNaming(
+      dependencyFingerprint(appOnly, folder({ missing: [APPLICATION_APP_ID] }), FOLDER),
+      "Application",
+    );
+  });
+
+  // B1 (build review): v3 also loads Microsoft test libraries from its artifact cache, as
+  // `<Name>.Source.zip`. The package folders win when both hold the app (measured: the CDO smoke
+  // loads Library Assert from the project's .alpackages, though the cache holds a copy too).
+  const zipOf = (id: string, build: string) =>
+    new Uint8Array(
+      buildFakeAppWithEntries({
+        "app.json": JSON.stringify({ id, name: "Lib", publisher: "Microsoft", version: "1.0.0.0" }),
+        "src/X.al": `// build ${build}`,
+      }),
+    );
+  const cache =
+    (id: string, build: string, inputs: AppInputs = appInputsOfAppJson({})): SourceZipReader =>
+    async (d) =>
+      d.id === id ? [{ bytes: zipOf(id, build), inputs }] : [];
+
+  test("a Microsoft dependency found only in the artifact cache zip is hashed; a changed zip moves the fingerprint", async () => {
+    const only = (build: string) =>
+      dependencyFingerprint(direct, folder({ missing: [MS] }), FOLDER, undefined, cache(MS, build));
+    expect(await only("one")).not.toBe(await only("two"));
+    expect(await only("one")).toBe(await only("one"));
+  });
+
+  test("a cache zip's own dependencies are walked", async () => {
+    // MS2 is in neither place: the walk reached it through the zip's dependencies and refuses on it.
+    await refusesNaming(
+      dependencyFingerprint(
+        direct,
+        folder({ missing: [MS, MS2] }),
+        FOLDER,
+        undefined,
+        cache(MS, "x", root("Microsoft", MS2)),
+      ),
+      MS2,
+    );
+  });
+
+  test("a dependency absent from the folders AND the cache still refuses by name", async () => {
+    await refusesNaming(
+      dependencyFingerprint(
+        direct,
+        folder({ missing: [MS] }),
+        FOLDER,
+        undefined,
+        cache(MS2, "one"),
+      ),
+      MS,
+    );
+    // D2: with the real reader the message also says where the cache was searched.
+    const dir = scratch("lethal-source-zips-empty-");
+    const err = await dependencyFingerprint(
+      direct,
+      folder({ missing: [MS] }),
+      FOLDER,
+      undefined,
+      sourceZipReader(dir),
+    ).catch((e: unknown) => e);
+    expect((err as Error).message).toContain(`no *.Source.zip for it in ${dir}`);
+  });
+
+  test("D1: two cache zips carrying the same app id are BOTH hashed (changing either moves the fingerprint)", async () => {
+    const dir = scratch("lethal-source-zips-dup-");
+    const write = (file: string, a: string, b: string) => {
+      writeFileSync(join(dir, "A.Source.zip"), zipOf(MS, a));
+      writeFileSync(join(dir, file), zipOf(MS, b));
+    };
+    const fp = () =>
+      dependencyFingerprint(
+        direct,
+        folder({ missing: [MS] }),
+        FOLDER,
+        undefined,
+        sourceZipReader(dir),
+      );
+    write("B.Source.zip", "a1", "b1");
+    const base = await fp();
+    write("B.Source.zip", "a2", "b1");
+    expect(await fp()).not.toBe(base);
+    write("B.Source.zip", "a1", "b2");
+    expect(await fp()).not.toBe(base);
+    write("B.Source.zip", "a1", "b1");
+    expect(await fp()).toBe(base);
+  });
+
+  test("a package folder copy wins over a cache zip of the same app", async () => {
+    const at = (build: string) =>
+      dependencyFingerprint(direct, folder(), FOLDER, undefined, cache(MS, build));
+    expect(await at("one")).toBe(await at("two"));
+  });
+
+  test("sourceZipReader indexes `*.Source.zip` by the id in the app.json inside, with its dependencies", async () => {
+    const dir = scratch("lethal-source-zips-");
+    const bytes = new Uint8Array(
+      buildFakeAppWithEntries({
+        "app.json": JSON.stringify({
+          id: MS.toUpperCase(),
+          name: "Lib",
+          publisher: "Microsoft",
+          version: "1.0.0.0",
+          dependencies: [{ id: MS2, name: "Other", publisher: "Microsoft", version: "1.0.0.0" }],
+        }),
+      }),
+    );
+    writeFileSync(join(dir, "Lib.Source.zip"), bytes);
+    writeFileSync(join(dir, "Lib.Source.zip.json"), "{}");
+    writeFileSync(join(dir, "System.app"), pkg(SYSTEM_ID, "System", "Microsoft", "s"));
+    const read = sourceZipReader(dir);
+    const ask = (id: string) => ({ id, name: "", publisher: "Microsoft", version: "" });
+    const hit = await read(ask(MS));
+    expect(hit).toHaveLength(1);
+    expect(hit[0]?.bytes).toEqual(bytes);
+    expect(hit[0]?.inputs.dependencies.map((d) => d.id)).toEqual([MS2]);
+    expect(await read(ask(SYSTEM_ID))).toEqual([]);
+    expect(await sourceZipReader(join(dir, "nope"))(ask(MS))).toEqual([]);
   });
 });
 

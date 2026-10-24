@@ -149,6 +149,51 @@ export function describeStaleTestApp(failureText: string | undefined): string | 
 }
 
 /**
+ * R686: the RunMutant found-0 form alone (`describeStaleTestApp`'s second arm, never
+ * `NO_RESULT_FOR_METHOD`). BC's suite discovery listed no such method: the published app lacks it,
+ * OR discovery could not list the codeunit's methods (measured on BC 28.4: an `OnRun` that raises).
+ */
+export function isRunMutantFoundNone(failureText: string | undefined): boolean {
+  return (
+    failureText !== undefined &&
+    failureText !== NO_RESULT_FOR_METHOD &&
+    describeStaleTestApp(failureText) !== undefined
+  );
+}
+
+/** R686: the start of the grouped transport's `suite-unresolved` message; its producer uses it. */
+export const GROUP_SUITE_UNRESOLVED_HEAD =
+  "RunMutantMany suite-unresolved: the server could not resolve this request's test methods to exactly one function line each, and ran nothing — ";
+
+/**
+ * R686: the grouped transport's found-0 form, `RunMany.Codeunit.al`'s `expected exactly one method
+ * %1 in codeunit %2, found %3` with %3 = 0, read from the end: AL names may hold spaces and commas.
+ * `found 2` and "resolve to the same function line" are other faults and read `undefined`.
+ */
+export function groupedFoundNone(
+  failureText: string | undefined,
+): { readonly method: string; readonly codeunitId: number } | undefined {
+  if (failureText === undefined || !failureText.startsWith(GROUP_SUITE_UNRESOLVED_HEAD))
+    return undefined;
+  const reason = failureText.slice(GROUP_SUITE_UNRESOLVED_HEAD.length);
+  if (!reason.startsWith(AL_MISSING_METHOD_PREFIX) || !reason.endsWith(AL_FOUND_NONE_SUFFIX))
+    return undefined;
+  const body = reason.slice(
+    AL_MISSING_METHOD_PREFIX.length,
+    reason.length - AL_FOUND_NONE_SUFFIX.length,
+  );
+  const at = body.lastIndexOf(" in codeunit ");
+  if (at <= 0) return undefined;
+  const codeunitId = Number(body.slice(at + " in codeunit ".length));
+  if (!Number.isInteger(codeunitId) || codeunitId <= 0) return undefined;
+  return { method: body.slice(0, at), codeunitId };
+}
+
+/** R686: what a found-0 answer also means, added to a stale-test-app refusal LethAL cannot narrow. */
+export const ONRUN_HINT =
+  "If the published app does declare these tests, a test codeunit whose OnRun raises an error gives the same answer: BC runs a test codeunit's OnRun while it builds the suite, and lists none of its methods when that fails.";
+
+/**
  * What to DO about it, in one place so the error and any future report text cannot drift into two
  * accounts of one fact.
  *
@@ -193,6 +238,8 @@ export class StaleTestAppError extends Error {
     override readonly cause: "unchanged-endpoints" | "identity-unverified",
     /** R630: why a package read failed, when one did and the server said. */
     unread?: string,
+    /** R686: `ONRUN_HINT`, when every finding is the found-0 form LethAL could not narrow. */
+    hint?: string,
   ) {
     const { head, names } = missingTestsHead(missing);
     const failed = unread !== undefined ? ` (the read failed: ${unread})` : "";
@@ -201,7 +248,7 @@ export class StaleTestAppError extends Error {
         ? "The published test app's package was the same at the start of this batch's baseline and at this refusal; a replace-and-restore between the two reads cannot be ruled out."
         : `LethAL could not compare the published test app's package at the start of this batch's baseline with the one at this refusal${failed}, so the app may be older than the source OR may have been replaced between the two.`;
     super(
-      `${head} ${identity} If no other session publishes to this server: ${STALE_TEST_APP_REMEDY}`,
+      `${head} ${identity} If no other session publishes to this server: ${STALE_TEST_APP_REMEDY}${hint !== undefined ? ` ${hint}` : ""}`,
     );
     this.name = "StaleTestAppError";
     this.missingTests = names;
@@ -240,13 +287,77 @@ export function testAppRefusal(
   after: string | undefined,
   /** R630: the cause of a read that failed, named in the refusal. */
   unread?: string,
+  /** R686: `ONRUN_HINT`, passed to a `StaleTestAppError`. */
+  hint?: string,
 ): StaleTestAppError | TestAppChangedError {
   if (before?.startsWith("package:") && after?.startsWith("package:")) {
     return before === after
-      ? new StaleTestAppError(missing, "unchanged-endpoints")
+      ? new StaleTestAppError(missing, "unchanged-endpoints", undefined, hint)
       : new TestAppChangedError(missing, before, after);
   }
-  return new StaleTestAppError(missing, "identity-unverified", unread);
+  return new StaleTestAppError(missing, "identity-unverified", unread, hint);
+}
+
+/** R686: a found-0 finding, with its test's codeunit and whether it is the RunMutant found-0 form. */
+export interface FoundNoneFinding extends StaleTestAppFinding {
+  readonly codeunit: string;
+  readonly foundNone: boolean;
+}
+
+/**
+ * R686: BC's suite discovery listed no methods for a test codeunit that the installed test app is
+ * PROVEN to compile. Measured on BC 28.4 (R-537): a test codeunit whose `OnRun` raises. Not a stale
+ * test app, so it carries no republish remedy. Extends `Error` directly.
+ */
+export class TestCodeunitDiscoveryError extends Error {
+  readonly missingTests: readonly string[];
+
+  constructor(missing: readonly FoundNoneFinding[]) {
+    const sorted = [...missing].sort((a, b) => a.name.localeCompare(b.name));
+    const codeunits = [...new Set(sorted.map((m) => m.codeunit))];
+    const evidence = sorted.map((m) => `  ${m.name}: ${m.description}`).join("\n");
+    super(
+      `BC's suite discovery listed no methods for test codeunit(s) ${codeunits.map((c) => `"${c}"`).join(", ")}, which the installed test app is proven to compile (the package read before and after the baseline is the proven installed one, and its compiled symbols declare these tests):\n${evidence}\nBC runs a test codeunit's OnRun while it builds the suite, and the measured cause of this answer is an OnRun that raises an error. Open the codeunit in BC's Test Tool to see it. Refusing to measure: every mutant covered only by these tests would be recorded no-coverage.`,
+    );
+    this.name = "TestCodeunitDiscoveryError";
+    this.missingTests = sorted.map((m) => m.name);
+  }
+}
+
+/**
+ * R686: which refusal a baseline's found-0 findings support. `TestCodeunitDiscoveryError` only when
+ * every finding is the RunMutant found-0 form, each of their codeunits is found-0 in EVERY in-scope
+ * test (an OnRun raise blanks the whole codeunit), the test app is PROVEN installed at the hash read
+ * before and after the baseline (a `dev/packages` read alone may serve a published-but-not-installed
+ * version), and R403's compiled membership of that package was the session's test-arm evidence.
+ * Anything else is `testAppRefusal`, with `ONRUN_HINT` when every finding is the found-0 form.
+ */
+export function baselineFoundNoneRefusal(a: {
+  readonly missing: readonly FoundNoneFinding[];
+  /** In-scope baseline tests per codeunit name. */
+  readonly testsPerCodeunit: ReadonlyMap<string, number>;
+  readonly proven: string | undefined;
+  readonly before: string | undefined;
+  readonly after: string | undefined;
+  readonly compiledInPublishedPackage: boolean;
+  readonly unread?: string;
+}): StaleTestAppError | TestAppChangedError | TestCodeunitDiscoveryError {
+  const allFoundNone = a.missing.length > 0 && a.missing.every((m) => m.foundNone);
+  const wholeCodeunits = [...new Set(a.missing.map((m) => m.codeunit))].every(
+    (c) => a.missing.filter((m) => m.codeunit === c).length === a.testsPerCodeunit.get(c),
+  );
+  const provenHere =
+    a.proven?.startsWith("package:") === true && a.proven === a.before && a.before === a.after;
+  if (allFoundNone && wholeCodeunits && provenHere && a.compiledInPublishedPackage) {
+    return new TestCodeunitDiscoveryError(a.missing);
+  }
+  return testAppRefusal(
+    a.missing,
+    a.before,
+    a.after,
+    a.unread,
+    allFoundNone ? ONRUN_HINT : undefined,
+  );
 }
 
 function missingTestsHead(missing: readonly StaleTestAppFinding[]): {

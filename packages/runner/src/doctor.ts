@@ -1,5 +1,5 @@
 import { compareAppVersions } from "./app-version";
-import { MIN_CONTROL_VERSION, UnfilteredExtensionsQueryError } from "./harness";
+import { ApiBaseUnsetError, MIN_CONTROL_VERSION, UnfilteredExtensionsQueryError } from "./harness";
 import type { LeaseSnapshot } from "./harness";
 
 /**
@@ -34,6 +34,9 @@ export interface DoctorCheck {
   readonly name: string;
   readonly ok: boolean;
   readonly detail: string;
+  /** R253: present (always `true`) when doctor could not ask at all, for a reason the config names
+   *  (`detail` says which, and the fix). `ok` is then `true`: nothing failed, nothing was verified. */
+  readonly skipped?: true;
 }
 
 export interface DoctorReport {
@@ -199,6 +202,11 @@ async function runCheck(name: string, fn: () => Promise<DoctorCheck>): Promise<D
     // R-496 review: a refused extensions query is a caller-contract violation inside LethAL, not
     // a statement about the server, so it rejects the whole run rather than reading as one failed check.
     if (err instanceof UnfilteredExtensionsQueryError) throw err;
+    // R253: the API is not at the base URL this config reads it from (no `bcdev.apiBaseUrl` on BC
+    // on Linux). Doctor could not ask, so it says so by name, and does not fail a healthy server.
+    if (err instanceof ApiBaseUnsetError) {
+      return { name, ok: true, skipped: true, detail: `not checked: ${err.message}` };
+    }
     return { name, ok: false, detail: err instanceof Error ? err.message : String(err) };
   }
 }
@@ -252,9 +260,16 @@ function checkLease(lease: LeaseSnapshot, now: Date): DoctorCheck {
     lease.expiresAt === ""
       ? ", no expiry recorded"
       : `, expires ${lease.expiresAt}${expired ? " — ALREADY EXPIRED" : ""}`;
+  const reset = "`lethal force-reset-lease --server <url> --instance <name> --config <path>`";
+  // R658 (M8): a `run` op may still be executing AL on the server (an abandoned test outlived its
+  // budget there by minutes, measured), and a reset under it lets the next session overlap it.
+  const recover =
+    lease.opKind === "run"
+      ? `restart the NST first (that is what ends a surviving session), then ${reset}`
+      : `recover it with ${reset}`;
   const advice = expired
-    ? "The holder is past its expiry, so this is an orphaned lease: recover it with `lethal force-reset-lease --server <url> --instance <name> --config <path>`."
-    : "If no session is actually running, recover it with `lethal force-reset-lease --server <url> --instance <name> --config <path>`.";
+    ? `The holder is past its expiry, so this is an orphaned lease: ${recover}.`
+    : `If no session is actually running, ${recover}.`;
   const credential = lease.tokenPresent ? "live token" : "no live token";
   return {
     name: "lease",

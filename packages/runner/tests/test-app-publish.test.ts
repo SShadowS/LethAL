@@ -466,6 +466,30 @@ test("publishTestApp refuses a local version below the resident one before the f
   expect(log).toEqual(["read"]);
 });
 
+// R597: the config carries no server-kind field, so the detail names both fixes, each labelled by
+// server kind. A Linux user must not be left with only a Windows-only command.
+async function belowResidentMessage(): Promise<string> {
+  const err = await publishTestApp(
+    loggingFence([]),
+    COMPILED,
+    deps([], [pkg(TESTS_ID, "LethAL Sandbox Tests", "1.0.0.5")]),
+  ).catch((e) => e);
+  return (err as Error).message;
+}
+
+test("R597: the version-below-resident detail names the Linux fix (Microsoft.NAV.uninstall, then Microsoft.NAV.unpublish)", async () => {
+  const msg = await belowResidentMessage();
+  expect(msg).toContain("on a BC server on Linux, call the automation API's");
+  expect(msg).toContain("Microsoft.NAV.uninstall, then Microsoft.NAV.unpublish");
+});
+
+test("R597: the version-below-resident detail names the Windows fix (Sync-NAVApp) labelled for a Windows container", async () => {
+  const msg = await belowResidentMessage();
+  expect(msg).toContain(
+    "on a Windows container, run UnPublish-BcContainerApp, then Sync-NAVApp -Mode Clean",
+  );
+});
+
 test("publishTestApp: a BC downgrade refusal inside the fence is publish-failed and names the installed version", async () => {
   const log: string[] = [];
   const err = await publishTestApp(

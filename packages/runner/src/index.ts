@@ -13,7 +13,6 @@ export * from "./discovery";
 export * from "./interpretation";
 export * from "./ms-inmemory-backend";
 export * from "./orchestrator";
-export * from "./pool";
 export * from "./publisher";
 export * from "./report";
 export * from "./selection";

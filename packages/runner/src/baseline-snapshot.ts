@@ -18,13 +18,13 @@
  * same lineage is not a different kind of risk; it is stated rather than measured away.
  *
  * The batch hash covers the `.al` files of the instrumented artifact directory EXCEPT the three
- * control files LethAL emits, because `MutationSelector.Codeunit.al` embeds the artifact id, which
+ * control files LethAL emits at the directory's root (a same-named file elsewhere is hashed), because `MutationSelector.Codeunit.al` embeds the artifact id, which
  * is random per artifact by design (`newArtifactId`), and it carries no target code whose lines a
  * coverage row could name. Two artifacts of one batch therefore hash the same, which is what makes
  * a prior run's fenced line-number coverage apply to this run's artifact.
  */
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import {
   CONTROL_REGISTER_FILENAME,
@@ -67,7 +67,7 @@ export interface BaselineSnapshot {
 
 /**
  * SHA-256 over every `.al` file under `dir` (recursively, sorted, path and bytes), skipping the
- * control files. Deterministic across two artifacts of the same batch, different for any change
+ * three control files at the root of `dir` only (R691). Deterministic across two artifacts of the same batch, different for any change
  * to any instrumented line.
  *
  * R655: under the R631 rule (`hashTestDir`), so a link refuses by name. Its callers hash
@@ -76,7 +76,9 @@ export interface BaselineSnapshot {
  * out of the hash.
  */
 export async function hashAlTree(dir: string): Promise<string> {
-  return hashTestDir(dir);
+  // R691: LethAL writes its control files at the ROOT of this tree only; a same-named file
+  // anywhere else is user AL and is hashed.
+  return hashWalked(dir, "refuse", true);
 }
 
 /**
@@ -85,16 +87,86 @@ export async function hashAlTree(dir: string): Promise<string> {
  * out AL that alc and al-runner would compile. `links` exists only so a test can force a skip.
  */
 export async function hashTestDir(dir: string, links: LinkPolicy = "refuse"): Promise<string> {
-  const walk = await walkFiles(dir, { links });
-  assertNoUnexcusedLinks(dir, walk.skippedLinks);
-  return hashAlFiles(dir, walk.files);
+  // R691: LethAL writes nothing here, so no file is left out.
+  return hashWalked(dir, links, false);
 }
 
-async function hashAlFiles(dir: string, all: readonly string[]): Promise<string> {
+async function hashWalked(
+  dir: string,
+  links: LinkPolicy,
+  skipRootControl: boolean,
+): Promise<string> {
+  const walk = await walkFiles(dir, { links });
+  assertNoUnexcusedLinks(dir, walk.skippedLinks);
+  return hashAlFiles(dir, walk.files, skipRootControl);
+}
+
+/** R608: one non-`.al` file of a bound folder, as the proof recorded it. */
+export interface OtherFile {
+  readonly size: number;
+  readonly mtimeMs: number;
+  readonly sha256: string;
+}
+
+/**
+ * R608: every NON-`.al` file under `dir` (resources, `.alpackages`, ...) except those `skip` names
+ * (root-relative, forward slashes), under the same walk and link refusal as `hashTestDir`.
+ * `withSha` hashes each file; without it `sha256` is "" (the cheap re-list).
+ */
+export async function listOtherFiles(
+  dir: string,
+  skip: (rel: string) => boolean,
+  withSha: boolean,
+): Promise<Map<string, OtherFile>> {
+  const walk = await walkFiles(dir, { links: "refuse" });
+  assertNoUnexcusedLinks(dir, walk.skippedLinks);
+  const out = new Map<string, OtherFile>();
+  for (const f of walk.files) {
+    const rel = f.replaceAll("\\", "/");
+    if (rel.toLowerCase().endsWith(".al") || skip(rel)) continue;
+    const p = join(dir, f);
+    const s = await stat(p);
+    out.set(rel, {
+      size: s.size,
+      mtimeMs: s.mtimeMs,
+      sha256: withSha ? hashPackage(new Uint8Array(await readFile(p))) : "",
+    });
+  }
+  return out;
+}
+
+/**
+ * R608: the first path (added, removed or changed) where `dir` no longer matches `was`, or
+ * `undefined`. A file whose size and mtime are unchanged is taken as unchanged; one that moved is
+ * re-hashed (the rule `<deps>` already uses).
+ * ponytail: a rewrite with the same size inside the same mtime tick is missed; hash every file if a
+ * measured case needs it.
+ */
+export async function otherFilesDrift(
+  dir: string,
+  skip: (rel: string) => boolean,
+  was: ReadonlyMap<string, OtherFile>,
+): Promise<string | undefined> {
+  const now = await listOtherFiles(dir, skip, false);
+  for (const rel of now.keys()) if (!was.has(rel)) return rel;
+  for (const [rel, w] of was) {
+    const n = now.get(rel);
+    if (n === undefined) return rel;
+    if (n.size === w.size && n.mtimeMs === w.mtimeMs) continue;
+    if (hashPackage(new Uint8Array(await readFile(join(dir, rel)))) !== w.sha256) return rel;
+  }
+  return undefined;
+}
+
+async function hashAlFiles(
+  dir: string,
+  all: readonly string[],
+  skipRootControl: boolean,
+): Promise<string> {
   const entries = all
     .map((f) => f.replaceAll("\\", "/"))
     .filter((f) => f.toLowerCase().endsWith(".al"))
-    .filter((f) => !CONTROL_FILES.has(f.split("/").at(-1) ?? ""))
+    .filter((f) => !(skipRootControl && CONTROL_FILES.has(f)))
     .sort();
   const h = createHash("sha256");
   for (const rel of entries) {

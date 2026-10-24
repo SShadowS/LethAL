@@ -43,6 +43,7 @@ import {
 } from "./baseline-guard";
 import { itestConfigName, itestConfigPath, printItestTarget } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import { HARDEN_SUBLEGS } from "./gate-sublegs";
 import {
   HardenGateError,
   assertHardenAnswers,
@@ -239,7 +240,7 @@ async function main(): Promise<void> {
 
     console.log("harden itest: PASS");
     await emitPassed("harden", {
-      sublegs: ["base-suite", "answer-key"],
+      sublegs: [...HARDEN_SUBLEGS],
       artifacts: { reported: false },
     });
   } finally {

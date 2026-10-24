@@ -47,7 +47,6 @@ import { homeDir } from "../packages/runner/src/home.ts";
 import { defaultAlToolPaths } from "../packages/runner/src/publisher.ts";
 import {
   type AppItem,
-  type AppManifest,
   type Conn,
   DEMO_PORTS,
   DEMO_SERVER,
@@ -55,7 +54,6 @@ import {
   type ServerOps,
   actAll,
   decideAll,
-  manifest,
   realOps,
   refusals,
   residentPackage,
@@ -363,12 +361,6 @@ export function laptopStartSteps(host: string): string[] {
   ];
 }
 
-function demoManifests(): Map<string, AppManifest> {
-  return new Map(
-    ["gift-card", ...STEP.dependents].map((d) => [d, manifest(join(EXAMPLES, d))] as const),
-  );
-}
-
 async function setup(deps: DemoDeps, dryRun: boolean, summary: string[]): Promise<number> {
   checkNotPooled(deps.allocation());
   const lap = deps.laptop;
@@ -426,7 +418,7 @@ async function setup(deps: DemoDeps, dryRun: boolean, summary: string[]): Promis
   ];
   const ops = deps.serverOps(c);
   const log = (s: string) => summary.push(s);
-  const decided = await decideAll(items, ops, "setup", demoManifests(), log);
+  const decided = await decideAll(items, ops, "setup", log);
   if (refusals(decided).length > 0) {
     summary.push(`  STOPPED   ${refusals(decided).length} app(s) refused: NOTHING was published`);
     return 1;

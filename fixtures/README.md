@@ -8,14 +8,14 @@ manual smoke-testing, and the env-gated integration scripts in
 
 | Object | Id | App | Purpose |
 |---|---|---|---|
-| `Sandbox Logic` | 79000 | `sandbox-app` | Mutation target — every Tier 1 operator finds ≥1 site here. Declared in `namespace LethAL.Sandbox.Logic` on purpose (GH-09, R212): with `Sandbox Pricing` left at the root the app is mixed, so `itest:bcdev` and `itest:alrunner` pin namespaced coverage attribution. |
+| `Sandbox Logic` | 79000 | `sandbox-app` | Mutation target — every Tier 1 operator finds ≥1 site here. Declared in `namespace LethAL.Sandbox.Logic` on purpose (GH-09, R212): with `Sandbox Pricing` left at the root the app is mixed, so `itest:bcdev` and `itest:alrunner-v3` (legs S1 and S3, per mutant equal to bcdev's table) pin namespaced coverage attribution. |
 | `Sandbox Pricing` | 79001 | `sandbox-app` | Mutation target, deliberately **untested** by any test method. |
 | `Sandbox Tests` | 79100 | `sandbox-tests` | `Subtype = Test` codeunit exercising `Sandbox Logic`. Asserts via `Error()` — no Library Assert dependency. Must NOT carry a `TestIsolation` property — `TestIsolation` is a **TestRunner**-codeunit property in real BC; setting it on a `Subtype = Test` codeunit is rejected by the AL compiler (`AL0223`). Isolation is chosen by whichever TestRunner codeunit invokes the tests and Layer 4 does not verify it — see the note below. |
 | `Harden Logic` | 79500 | `sandbox-harden` | Mutation target for C02's survivor loop: five procedures, one planted survivor each, plus one true equivalent. See "sandbox-harden (C02-03)" below. |
 | `Harden Entry` (table) | 79501 | `sandbox-harden` | The target's one table. Its `Amount` field's `OnValidate` gives `lethal.validate-to-assign` something to skip (S4). |
 | `Harden Tests` | 79550 | `sandbox-harden-tests` | `Subtype = Test` codeunit, `TestPermissions = Disabled;`. Asserts via `Error()`, no Library Assert. Kills every mutant except the five planted survivors. |
 | `Harden Answer Key` | 79575 | `sandbox-harden-answers` | Separate answer-key app: four tests that kill S1 to S4, plus one that tries and is expected to fail against the equivalent S5. |
-| `Symbol Logic` | 79600 | `sandbox-symbols` | R321 target: one procedure with an `#if LETHALA` / `#elif LETHALB` / `#else` split. `itest:alrunner` runs it under `[LETHALA]` and `[LETHALB]`. |
+| `Symbol Logic` | 79600 | `sandbox-symbols` | R321 target: one procedure with an `#if LETHALA` / `#elif LETHALB` / `#else` split. `itest:alrunner-v3` runs it under `[LETHALA]` and `[LETHALB]` (legs Y-A and Y-B). |
 | `Symbol Tests` | 79650 | `sandbox-symbols-tests` | One test, `RateSmall`, asserting each build's own value (11, 101, or 2 with no symbol). Asserts via `Error()`. |
 | `Layout Alpha` | 79700 | `sandbox-layout` | R353 target, batch 0 at `maxGuardsPerBatch` 7: one procedure, `IsBig`. |
 | `Layout Beta` | 79701 | `sandbox-layout` | R353 target, batch 1: `Grow`, then `Twice` behind a load-bearing 26-line header comment. See "sandbox-layout (R353)" below. |
@@ -30,7 +30,7 @@ manual smoke-testing, and the env-gated integration scripts in
 | `Wrapped Arms` | 78906 | `sandbox-wrapped` | R-300b refusal control: a two-arm wrapper. |
 | `Wrapped Tests` | 78950 | `sandbox-wrapped-tests` | One test per procedure, `Grow*`/`Twice*` per file and twin, `PairPick`, `ArmsPick`. Asserts via `Error()`. |
 | `Names Calc` | 78800 | `sandbox-names` | R557 target: twelve identical `exit(x + 1)` procedures, each reached and killed by exactly one test. See "sandbox-names (R557)" below. |
-| `Names Tests` | 78850 | `sandbox-names-tests` | One test per procedure, under AL names al-runner renames (`"Space Step"`, `"Dash-Step"`, `"Paren(Step)"`, `"Dot.Step"`, `"Slash/Step"`, `"Amp&Step"`, `"7Digit Step"`, unquoted `Default`, `"Blåbær Step"`, `"Twin Pair"`) and two unrenamed controls (`Twin_PairLong`, `PlainControl`). UTF-8. Asserts via `Error()`. |
+| `Names Tests` | 78850 | `sandbox-names-tests` | One test per procedure, under AL names the .NET al-runner renamed (`"Space Step"`, `"Dash-Step"`, `"Paren(Step)"`, `"Dot.Step"`, `"Slash/Step"`, `"Amp&Step"`, `"7Digit Step"`, unquoted `Default`, `"Blåbær Step"`, `"Twin Pair"`) and two unrenamed controls (`Twin_PairLong`, `PlainControl`). UTF-8. Asserts via `Error()`. |
 
 `sandbox-app/app.json` reserves `idRanges` 79000–79199; `sandbox-tests/app.json` depends on
 `sandbox-app` only (id `df1aa9ff-6539-4c86-a9d0-ad702b61ac9a`) and declares the same
@@ -104,8 +104,8 @@ The bcdev path requires this order on the container (Cronus281):
    with the `LethAL Control` dependency injected into the staged `app.json`. alc gets ONE
    `/packagecachepath:`: a LethAL-owned copy (`<temp>/lethal-pkgcache-<random>`, hard links where
    possible) of every package in the configured cache plus `lethal-control.app`, made once per
-   backend and removed when it closes (bcdev-only — al-runner shares the emit path and strips the
-   two control-registration codeunits, so it stays dependency-free). Since R552 the configured
+   backend and removed when it closes (bcdev-only — al-runner-v3 shares the emit path, drops the
+   two control-registration codeunits and swaps in a static selector, so it stays dependency-free). Since R552 the configured
    `packageCachePath` is only read: a `lethal-control.app` an older LethAL left there is left out of
    the copy, gets one warning, is never touched, and is safe to delete.
 3. **`sandbox-tests`**, then **`sandbox-probes`**.
@@ -251,8 +251,8 @@ property, not a `Subtype = Test` one — real BC rejects it on a Test codeunit w
 ("The Property 'TestIsolation' can only be used if the property 'Subtype' is set to 'TestRunner'").
 Isolation is therefore chosen by whichever TestRunner codeunit invokes the tests and cannot be
 verified by scanning test-codeunit sources. Layer 4 does not check it — it's an out-of-band concern,
-verified manually against the real backend instead (see `--test-isolation method` in
-`al-runner-backend.ts`'s `run()`, verified against the real al-runner CLI).
+verified manually against the real backend instead (at the time, against the .NET al-runner CLI's
+`--test-isolation method`; that backend was retired by R654).
 
 ## sandbox-harden (C02-03)
 
@@ -355,11 +355,13 @@ non-planted mutants the answer key does not target and so does not kill (`IsLarg
 A target and test app whose builds differ by preprocessor symbol: `#if LETHALA` / `#elif LETHALB` /
 `#else`. Each project lists its builds in `symbol-sets.json` (`[[], ["LETHALA"], ["LETHALB"]]`), and
 `compile:fixtures` compiles every one; `--require-symbol-sets` makes a missing `.alpackages` a
-failure for these two instead of a skip. `itest:alrunner` runs `[LETHALA]` and `[LETHALB]` through
-the one-shot, `--server` and server+resource transports. The `#else` build is what a transport that
-lost its defines would run, so it is compiled and pre-committed, but no gate leg runs it on purpose.
-Neither `app.json` defines a symbol: al-runner reads a bundle's own `app.json` symbols, which would
-define one on every transport.
+failure for these two instead of a skip. `itest:alrunner-v3` runs `[LETHALA]` and `[LETHALB]`
+one-shot (legs Y-A and Y-B; the symbols reach v3 as `--define`). Until R654 retired it,
+`itest:alrunner` ran them through the .NET al-runner's one-shot, `--server` and server+resource
+transports. The `#else` build is what a transport that lost its defines would run, so it is
+compiled and pre-committed, but no gate leg runs it on purpose. Neither `app.json` defines a
+symbol: the build's symbol set includes `app.json`'s own symbols, and the pre-committed tables
+assume there are none.
 
 Since R214 each build scores 5 killed / 4 survived / 0 no-coverage over 9 mutants: the seven
 outside the `#if` arms plus its own arm's two. Two builds share seven rows and disagree on 4 of
@@ -375,18 +377,23 @@ depending on that.
 `.alpackages` is gitignored. Copy `Microsoft_*.app` from `sandbox-tests/.alpackages` into both
 projects, and `alc` the target into `sandbox-symbols-tests/.alpackages`, from current source, before
 compiling. The test app compiles against that staged package, so its compile proves nothing about the
-package being fresh; re-stage before checking. al-runner compiles both from source and needs neither.
+package being fresh; re-stage before checking. al-runner-v3 compiles both from source with alc (the
+target, then the tests against it) and needs only the Microsoft apps in its `packagesDir`.
 
 ## sandbox-layout (R353)
 
 A target and test app that split into TWO batches at `maxGuardsPerBatch` 7: `Layout Alpha` (3
 mutants) is batch 0 and `Layout Beta` (7) is batch 1. Batch 0 copies `Layout Beta` verbatim, so the
 coverage index built during batch 0 knows its uninstrumented layout; batch 1 instruments it, and
-`Grow` then runs over lines that are `Twice`'s in the verbatim text. With R349's per-deploy reset,
-`AlRunnerBackend.deploy()` rebuilds the index for each batch and every covered line lands in its own
-procedure. Without it, the one-shot transport reads batch 1's coverage through batch 0's layout and
-`Twice`'s two mutants lose their own test, so they go from killed to survived. Every other al-runner
-leg runs one batch, which is why R349 passed every gate before its fix.
+`Grow` then runs over lines that are `Twice`'s in the verbatim text. On the .NET al-runner (retired
+by R654), R349's per-deploy reset made `deploy()` rebuild the index for each batch, so every covered
+line landed in its own procedure. Without it, the one-shot transport read batch 1's coverage through
+batch 0's layout and `Twice`'s two mutants lost their own test, going from killed to survived. Every
+other al-runner leg ran one batch, which is why R349 passed every gate before its fix.
+
+Today `itest:alrunner-v3`'s leg L1 runs this fixture, with the same table. L1 checks the
+multi-batch shape only: on v3 it stays green with the reset removed, so no live leg can see a stale
+layout any more ([R666](../docs/roadmap/R666.md)).
 
 `Layout Beta`'s header comment on `Twice` is load-bearing: its length sets the line spans the
 prediction rests on. Do not shorten it, move `Twice`, or add a procedure to that file without a new
@@ -396,13 +403,19 @@ pre-committed in `docs/superpowers/specs/2026-09-30-r353-stale-layout-precommitm
 
 `.alpackages` is gitignored. Create an `.alpackages` directory in `sandbox-layout` (it may stay
 empty: the target needs no symbols), and `alc` the target into `sandbox-layout-tests/.alpackages`
-from current source before compiling. al-runner compiles both from source and needs neither.
+from current source before compiling. al-runner-v3 compiles both from source with alc and needs
+only the Microsoft apps in its `packagesDir`.
 
 ## sandbox-wrapped (R-300b)
 
-`#if`-wrapped codeunits alone in their files, which al-runner scores by the original file's line
-numbers (R-300b), each with an unwrapped twin whose text sits on the same lines. `itest:alrunner`
-runs it one-shot, `--server` and resource, with `WRAPDEF` as the config symbol (`--define`) while
+**Since R654 (2026-10-22) the live gate for this fixture is `itest:bcdev-wrapped` (below).** The
+al-runner text in this section describes the .NET al-runner and its `itest:alrunner` wrapped leg,
+both retired, and is kept as history. The Rust al-runner turns coverage off for a wrapped file and
+runs no wrapped leg ([R602](../docs/roadmap/R602.md)).
+
+`#if`-wrapped codeunits alone in their files, which the .NET al-runner scored by the original file's
+line numbers (R-300b), each with an unwrapped twin whose text sits on the same lines. `itest:alrunner`
+ran it one-shot, `--server` and resource, with `WRAPDEF` as the config symbol (`--define`) while
 the target's `app.json` defines `WRAPAPP`. Each wrapped file must score exactly as its twin per
 mutant, in both directions: since R343 indexes a wrapped object in a compiled arm, the
 `swap-additive` mutant on `Grow` that only the twins carried before is in the wrapped files too.
@@ -419,7 +432,7 @@ in `docs/superpowers/specs/2026-10-08-r343-wrapped-leg-precommitment.md`.
 
 `.alpackages` is gitignored. The target compiles under `symbol-sets.json` (`[["WRAPDEF"]]`); `alc`
 it with `/define:WRAPDEF` into `sandbox-wrapped-tests/.alpackages` from current source before
-compiling the tests. al-runner compiles both from source and needs neither.
+compiling the tests.
 
 **On bcdev (R497), `itest:bcdev-wrapped`** runs the same fixture on Cronus28 through `fenced` and
 `procedure` (hub) coverage, with `sandbox-app`'s gitignored `lethal.config.local.json` and
@@ -471,32 +484,54 @@ single-object control, `MultiControl.Codeunit.al`. The tests reach only `Multi B
 control; `Multi A` and `Multi B.Unreached` are never called.
 
 On bcdev their mutants read `no-coverage`, measured 2026-10-02 against
-`docs/superpowers/specs/2026-10-02-r383-multiobject-precommitment.md`. On al-runner the file turns
-coverage off for the whole run: al-runner v2.12.0-main.c39ad5de reports every object after a
-file's first in a mixed source/instrumented frame (`Multi B`'s lines come back 17 too low, three of
-them inside `Multi A`; R383, `packages/runner/tests/r383-real-frame.test.ts`). So the
-`itest:alrunner` legs assert that refusal (one `al-runner-coverage-unsupported` warning naming
-`MultiPair.Codeunit.al`, `coverageMode: "none"`) and match
+`docs/superpowers/specs/2026-10-02-r383-multiobject-precommitment.md`. On the .NET al-runner
+(retired by R654) the file turned coverage off for the whole run: al-runner v2.12.0-main.c39ad5de
+reported every object after a file's first in a mixed source/instrumented frame (`Multi B`'s lines
+come back 17 too low, three of them inside `Multi A`; R383, `packages/runner/tests/r383-real-frame.test.ts`).
+So the `itest:alrunner` legs asserted that refusal (one `al-runner-coverage-unsupported` warning
+naming `MultiPair.Codeunit.al`, `coverageMode: "none"`) and matched
 `docs/superpowers/specs/2026-10-02-r383-multiobject-refusal-precommitment.md`, where those mutants
-read `survived`. The first table becomes al-runner's too once upstream fixes the frame (R407).
+read `survived`. On the Rust al-runner the CLI turns coverage off for this file too
+(`al-runner-v3-coverage-off`), and no gate leg runs the fixture; whether v3 has the same frame
+defect is not measured ([R602](../docs/roadmap/R602.md)). The fixture is kept for that measurement.
 
 `Unreached`'s declaration sits on the line right after `Reached`'s last statement (`exit(X); end;`),
 so in the SOURCE a base one line off moves that covered statement into `Unreached`. In the
 instrumented text the emitter's closing lines sit between them, so a live leg does not see a
 one-line error; `packages/runner/tests/line-map.test.ts` and `al-runner-coverage.test.ts` pin the
-exact conversion offline. `packages/runner/tests/multiobject-fixture.test.ts` fails offline if the
-twelve mutants or their owners move, or if the guard stops refusing the fixture.
+exact conversion offline. `packages/runner/tests/multiobject-fixture.test.ts`, which failed offline
+if the twelve mutants or their owners moved, was deleted with the .NET al-runner in R654 S3.
 
 `.alpackages` is gitignored. Create an empty `.alpackages` directory in `sandbox-multiobject`, and
 `alc` the target into `sandbox-multiobject-tests/.alpackages` from current source before compiling.
-al-runner compiles both from source and needs neither.
+
+## sandbox-codefree (R-579)
+
+v3-only: the fixture for R-579's coverage differential (`/coord/handoff/R-579/differential.sh`, run with
+`--backend al-runner-v3`). It is in no gate and needs no BC. Ids 79900-79949 (target) and 79950-79999
+(`sandbox-codefree-tests`, one test codeunit, `Error()` asserts). The app.json symbol is `CFACTIVE`, and the
+target is `"target": "OnPrem"` (see `dotnet` below).
+
+- `CFActive` / `CFInactive`: a codeunit after a pragma-only `#if` of three `#pragma` lines. `CFACTIVE` is defined
+  for the first, `CFINACTIVE` is not defined for the second. Short procedures, so a wrong base would cross one.
+- `CFSplit`: codeunit `CF First`, a pragma-only `#if`, then `CF Second` (both with mutants).
+- `CFPlain`: a plain codeunit the tests kill.
+- One `#if CFACTIVE` file per code-free kind: permissionset, permissionsetextension (with an `#else` arm, also
+  code-free), enum (with a nested `#if`), enumextension, interface, entitlement, controladdin, dotnet.
+- Of 43 mutants, 38 die. Five boundary mutants (`>`/`<`/`>=` edges, named in `CFTests`) survive on purpose.
+- Kind that needed a change: `dotnet` fails on a cloud target with `AL0296` ("has scope 'OnPrem' and cannot be
+  used for 'Extension' development"), so the target sets `"target": "OnPrem"`. An entitlement with `Type =
+  Implicit` takes no `RoleType` (`AL0223`). Every kind compiles.
+- `.alpackages` is gitignored: stage the five Microsoft packages into both projects, and `alc` the target into
+  `sandbox-codefree-tests/.alpackages` before compiling the tests.
 
 ## sandbox-names (R557)
 
 A target, `Names Calc` (78800), with twelve identical procedures, each `exit(x + 1)`, and a test
 codeunit, `Names Tests` (78850, UTF-8), with one test per procedure, each the ONLY test that reaches
-and kills its procedure (`if C.<P>(5) <> 6 then Error('<P>(5) must be 6')`). al-runner names a test
-row by BC's C# identifier for the AL method, and ten of the twelve AL names are renamed by it
+and kills its procedure (`if C.<P>(5) <> 6 then Error('<P>(5) must be 6')`). The .NET al-runner
+(retired by R654) named a test row by BC's C# identifier for the AL method, and ten of the twelve AL
+names were renamed by it
 (`"Dash-Step"` is `Codeunit78850.Dasha45Step`, unquoted `Default` is `_Default`, `"Blåbær Step"` is
 `Blåbær_Step`); `Twin_PairLong` and `PlainControl` are controls. `"Twin Pair"` and `Twin_PairLong`
 are the R488 look-alike pair, a unit-only trap (T5 in the plan): no live verdict depends on it.
@@ -507,9 +542,11 @@ Both apps declare runtime 17.0 (owner ruling, R-583). Pre-committed per mutant i
 `packages/runner/itest/names-fixture.ts`, and `packages/runner/tests/names-fixture.test.ts` fails
 offline if the table stops describing the fixture.
 
-**Frozen figures** (the per-gate pages `docs/gates/alrunner.md` and `docs/gates/bcdev-names.md`
-hold the pinned counts; the leg detail is here, with the spec):
-- `itest:alrunner`, four legs at one batch: A1 one-shot coverage `al-runner`, A2 one-shot `none`, A3
+**Frozen figures** (`docs/gates/bcdev-names.md` holds the pinned counts, and `docs/gates/alrunner.md`
+the retired .NET gate's; the leg detail is here, with the spec). Today `itest:bcdev-names` is this
+fixture's only live gate with a table. On the Rust al-runner the quoted names cannot be selected
+(upstream #5572), and `itest:alrunner-v3` checks the fixture only as leg N1.
+- History, `itest:alrunner` (retired by R654, 2026-10-22), four legs at one batch: A1 one-shot coverage `al-runner`, A2 one-shot `none`, A3
   `--server` `al-runner`, A4 `--server` `none`. Each: killed **36** / survived **0** / no-coverage
   **0**, every kill by its row's test with its row's text, a green baseline (12 of 12), no
   `al-runner-undecided-test-missing` warning. A1 and A3 cover each mutant by its one test; A2 and A4
@@ -524,8 +561,8 @@ hold the pinned counts; the leg detail is here, with the spec):
   v2.12.0-main.f06ee78c and on Cronus28; the two files are byte-identical, and
   `PENDING_FIRST_RECORD` is empty.
 
-A2 costs about 115 one-shot invocations (10-11 min), so the names legs add about 16-18 min to
-`itest:alrunner`.
+A2 cost about 115 one-shot invocations (10-11 min), so the names legs added about 16-18 min to
+`itest:alrunner`. (`al-runner.names.baseline.json` was deleted with that gate in R654 S3.)
 
 `.alpackages` is gitignored. Create an empty `.alpackages` directory in `sandbox-names`, and `alc`
 the target into `sandbox-names-tests/.alpackages` from current source before compiling. For bcdev,
@@ -640,6 +677,13 @@ Coverage is keyed on the **(objectType, objectId) pair** throughout, because a B
 unique only within its type.
 
 ### al-runner — measured 2026-07-25, and why it kills nothing here
+
+> **History: the .NET al-runner, retired 2026-10-22 (R654).** Everything in this subsection,
+> including R7's startup canary (`al-runner-canary.ts`) and R8's table-global finding, describes the
+> .NET al-runner (v1 and v2). That backend, its canary and `scripts/probe-alrunner-tables.ts` were
+> deleted in R654 S3, and none of this runs any more. The Rust al-runner runs this fixture in its
+> own gate (`itest:alrunner-v3`, baseline `al-runner-v3.tables.baseline.json`); its measured
+> differences from BC are on [docs/gates/alrunner-v3.md](../docs/gates/alrunner-v3.md).
 
 `bun run scripts/probe-alrunner-tables.ts` (same shape as the al-runner itest, pointed at this
 fixture) reports **0 killed / 7 survived / 0 no-coverage** against bcdev's 3 kills. Two separate
@@ -851,18 +895,21 @@ Two traps worth keeping written down, both hit while building this:
 The table was first worked out by hand, by walking `fixtures/sandbox-app/src/*.al` through every
 Tier 1 operator (`packages/builtin-tier1`) and reasoning through
 `fixtures/sandbox-tests/src/SandboxTests.Codeunit.al`. Its verdict columns are now copied from the
-committed frozen baselines (R243): `packages/runner/itest/bcdev.baseline.json`,
-`al-runner.baseline.json` (the gate's legs, which read al-runner's `--coverage`, R220) and
-`al-runner.cli-default.baseline.json` (`lethal run --backend al-runner` with no config keys:
-coverage `"none"` under R387, al-runner's `--coverage` since R394). Those files are the per-mutant truth; this table is their readable
-copy. If the fixture AL, its tests or an operator change, re-read the baselines and update this
-table and both itest scripts' `EXPECTED` in the same commit.
+committed frozen baselines (R243). The bcdev column is `packages/runner/itest/bcdev.baseline.json`,
+the per-mutant truth. `itest:alrunner-v3`'s legs S1 and K must equal that column per mutant.
+
+The two al-runner columns are HISTORY. They were copied from `al-runner.baseline.json` (the .NET
+gate's legs, which read al-runner's `--coverage`, R220) and `al-runner.cli-default.baseline.json`
+(`lethal run --backend al-runner` with no config keys: coverage `"none"` under R387, al-runner's
+`--coverage` since R394). Both files were deleted with the .NET al-runner in R654 S3 (2026-10-22).
+If the fixture AL, its tests or an operator change, re-read `bcdev.baseline.json` and update this
+table and the itests' `EXPECTED` in the same commit.
 
 `empty-block` targets **every** non-empty `begin...end` block whose parent is a procedure,
 trigger, or control-flow statement — including a procedure's own top-level body, not just
 nested `if`/`while` blocks (confirmed by `packages/builtin-tier1/tests/empty-block.test.ts`).
 
-| Procedure | Operator | Mutation | bcdev | al-runner (gate, `--coverage`; the CLI default since R394) | al-runner (`coverage:"none"`; the CLI default under R387) | Why |
+| Procedure | Operator | Mutation | bcdev | .NET al-runner, retired (gate, `--coverage`; the CLI default since R394) | .NET al-runner, retired (`coverage:"none"`; the CLI default under R387) | Why |
 |---|---|---|---|---|---|---|
 | `IsOverBudget` | conditional-boundary | `>` → `>=` | **killed** | **killed** | **killed** | `OverBudgetDetected`'s equal-amounts case (100 vs 100) distinguishes `>` from `>=`. |
 | `IsOverBudget` | return-value | `exit(Amount>Budget)` → `exit(not(...))` | **killed** | **killed** | **killed** | Negates every case; the 101-vs-100 assertion catches it. |
@@ -888,10 +935,11 @@ nested `if`/`while` blocks (confirmed by `packages/builtin-tier1/tests/empty-blo
 | Backend | killed | survived | no-coverage | mutation score |
 |---|---|---|---|---|
 | bcdev (`itest:bcdev`) | 3 | 12 | 4 | 3/15 = 20.0% |
-| al-runner, gate legs with `--coverage` (`itest:alrunner`), and the CLI default since R394 (the gate's CLI-default leg) | 3 | 12 | 4 | 3/15 = 20.0% |
-| al-runner, `coverage:"none"` (the CLI default under R387) | 3 | 16 | 0 | 3/19 = 15.8% |
+| al-runner-v3 (`itest:alrunner-v3` legs S1 and K; coverage on, the default) | 3 | 12 | 4 | 3/15 = 20.0% |
+| .NET al-runner (retired, R654), gate legs with `--coverage` (`itest:alrunner`), and the CLI default since R394 (the gate's CLI-default leg) | 3 | 12 | 4 | 3/15 = 20.0% |
+| .NET al-runner (retired, R654), `coverage:"none"` (the CLI default under R387) | 3 | 16 | 0 | 3/19 = 15.8% |
 
-The first two rows agree PER MUTANT, not only in their totals. Two consecutive runs against the
+The first two rows agree PER MUTANT, not only in their totals (the third did too, until it was retired). Two consecutive runs against the
 same backend must be 100% verdict-identical (the determinism exit criterion — design.md §13).
 
 History: this table listed 16 sites until R243. R159's operators added the three `LogAudit` and
@@ -1072,9 +1120,11 @@ it.
 - **`--keep-env`** — suppresses `deleteEnv` for an environment this run created. A no-op (with a
   console warning) when the config has no `envTool` section, or when `envId` came from config (a
   config-supplied environment is never deleted regardless of this flag). Refused outright at parse
-  time together with `--backend al-runner`, since al-runner has no environment to keep.
+  time together with `--backend al-runner-v3`, since a local runner has no environment to keep.
 - **`--allow-expiring-env`** — overrides the expiry refusal below. Also refused together with
-  `--backend al-runner`.
+  `--backend al-runner-v3`.
+- An `envTool` section itself is ignored on `--backend al-runner-v3`, and today without a warning
+  ([R674](../docs/roadmap/R674.md)).
 
 ### Lifecycle, in order (`startEnvToolSession`, `packages/runner/src/env-tool-session.ts`)
 
@@ -1271,6 +1321,8 @@ copy per mutant) and nowhere near the `2^depth` blowup the old nested-guard sche
 produced once two or more mutants shared a containing block — coalescing is emitting one
 dispatch chain per component, not one duplicated copy of the file per mutant.
 
+*(History: this limitation was the .NET al-runner's, retired by R654. `al-runner-v3` compiles the
+target with alc at deploy, and an `AlcCompileError` there goes to the orchestrator's bisection path.)*
 **Known limitation (final review I4, recorded, deliberately not fixed on this branch):
 compile-failure bisection can never trigger on the al-runner backend.** `AlRunnerBackend.
 deploy()` only copies the instrumented directory — al-runner compiles per `run()` call — so a
@@ -1368,7 +1420,7 @@ altool publishapp <tmp>\tests.app              --server ... --authentication Use
 **Put exactly ONE copy of the target in `<tests>/.alpackages`, and make it the one carrying source.**
 R148: this cache held two — an implementation package at the declared dependency version `1.0.0.0`
 (8 zip entries, `src/*.al` present) and a SYMBOL-ONLY stub at `1.0.0.999` (3 entries, no `src`, no
-DLL), both the same app id and name. al-runner resolves by version, so the `999` stub won every time
+DLL), both the same app id and name. The .NET al-runner resolved by version, so the `999` stub won every time
 and the runner said so on every gate run for months:
 
 ```
@@ -1380,7 +1432,8 @@ It was harmless here only because the run ALSO compiles the target from source a
 package wins at execution time — resolution named one package and execution used another. Nothing in
 LethAL writes a `999`: `reserveAppVersion` mints `<major>.<minor>.<daysSinceEpoch>.<secondsOfDay/2>`,
 never a hand-round number. The stub was placed by hand when the fixture was built and outlived its
-reason. Removing it changed nothing: `itest:alrunner` passes 3/14/0 without it.
+reason. Removing it changed nothing: `itest:alrunner` (the .NET al-runner's gate, since retired by
+R654) passed 3/14/0 without it.
 
 `.alpackages` is gitignored, so this is a note rather than a fix anyone inherits — if you repopulate
 symbols and see the `[dep]` line, that stub is back.
@@ -1627,20 +1680,23 @@ CLI flags:
       "BC_DEV_PASSWORD": "REPLACE_ME"
     }
   },
-  "alRunner": {
-    "alRunnerPath": "al-runner",
-    "packagesDir": "C:/path/to/.alpackages",
-    // R387: optional, shown with their defaults. Any other key is refused by name.
-    // serverMode false gives one process per test, and then selectorMode defaults to "static".
-    "serverMode": true,
-    "selectorMode": "resource",
-    // "al-runner" (the default since R394) reads al-runner's --coverage; turned off, with a
-    // warning, for a project holding a multi-object file the frame probe refuses or an #if-wrapped
-    // object. "none" turns it off.
-    "coverage": "al-runner"
+  // R586: the Rust al-runner (--backend al-runner-v3; Linux only). The .NET al-runner's
+  // "alRunner" section went with that backend (R654).
+  "alRunnerV3": {
+    // Required: the folder v3 and alc both read packages from, and a four-number BC build.
+    "packagesDir": "/path/to/.alpackages",
+    "bcVersion": "28.0.46665.47126",
+    // Optional, shown with their defaults. "serverMode", "selectorMode" and "alRunnerPath" are
+    // refused by name.
+    "path": "/work/tools/al-runner-v3/current/al-runner",
+    // "al-runner" reads v3's coverage; turned off, with the al-runner-v3-coverage-off warning,
+    // for a project holding an #if wrapper shape the index has no rule for (two-arm, #elif, nested,
+    // or a multi-object file holding a wrapper; R602). "none" turns it off.
+    "coverage": "al-runner",
+    "transport": "one-shot"
   },
   // R101(c): AL preprocessor symbols, TOP-LEVEL because they are a property of the PROJECT rather
-  // than of a backend. The same list reaches LethAL's own `alc` step (`/define:A,B`) and al-runner
+  // than of a backend. The same list reaches LethAL's own `alc` step (`/define:A,B`) and al-runner-v3
   // (`--define A --define B`); compiling the two paths with different symbols would produce two
   // different programs whose verdicts are not comparable.
   "preprocessorSymbols": ["DOSMTP"]
@@ -1726,10 +1782,10 @@ state one) differs from the config's. With the variable unset, `lethal.config.lo
 # Dry run — no deploy/run, just prints the batch/mutant table
 bun packages/runner/src/cli.ts run --project fixtures/sandbox-app --dry-run
 
-# Against al-runner (needs al-runner installed — see CI note below)
+# Against the Rust al-runner (Linux only; the config needs an "alRunnerV3" section, see above)
 bun packages/runner/src/cli.ts run \
   --project fixtures/sandbox-app --tests fixtures/sandbox-tests \
-  --backend al-runner --config fixtures/sandbox-app/lethal.config.local.json
+  --backend al-runner-v3 --config fixtures/sandbox-app/lethal.config.local.json
 
 # Against a live bc-dev dev server
 bun packages/runner/src/cli.ts run \
@@ -1739,11 +1795,15 @@ bun packages/runner/src/cli.ts run \
 
 ## Parallel execution
 
-`lethal run` accepts `--workers <n>` (default 1) and `--compile-concurrency <n>` (default
-`min(workers, 4)`), wired straight through to `SessionConfig.workers`/`compileConcurrency` —
-see `packages/runner/src/cli.ts`'s `parseCliConfig`/`buildBackend`/`runFromCli`. Each al-runner
-worker gets its own scratch directory (`<scratchRoot>/worker-<i>`), so its private copy of the
-batch's instrumented sources (`AlRunnerBackend.deploy`) never collides with another worker's.
+**Since R654 (2026-10-22) no backend accepts `--workers` > 1.** bcdev refuses it (below), and so does
+`al-runner-v3` (`al-runner-v3-workers-refused`). The .NET al-runner was the only backend that ran workers in
+parallel, and it was retired. `runSession`'s worker fan-out and `--compile-concurrency` were deleted with
+it ([R671](../docs/roadmap/R671.md)). Everything in this section about al-runner workers is history.
+
+`lethal run` accepts `--workers <n>` (default 1; above 1 is refused), wired through to
+`SessionConfig.workers` — see `packages/runner/src/cli.ts`'s `parseCliConfig`. Each .NET al-runner
+worker got its own scratch directory (`<scratchRoot>/worker-<i>`), so its private copy of the
+batch's instrumented sources (`AlRunnerBackend.deploy`) never collided with another worker's.
 
 **`--backend bcdev --workers > 1` is rejected outright**, not given per-worker isolation: mutant
 activation against a real BC server is a single server-side record (`MutationControl_SetActive`),
@@ -1759,6 +1819,8 @@ per-container isolation (deferred to the container-pool layer); `parseCliConfig`
 > record shared by all workers, so concurrent workers would overwrite each other's active mutant.
 > Parallel execution on a real BC server needs per-container isolation (deferred to the
 > container-pool layer).`
+
+History (the .NET al-runner; `--backend al-runner` is now refused by name, `al-runner-v2-retired`):
 
 ```bash
 bun packages/runner/src/cli.ts run \
@@ -1830,11 +1892,12 @@ determinism conclusion above.
 
 ## Integration scripts (`packages/runner/itest/`)
 
-`al-runner.itest.ts` and `bcdev.itest.ts` are standalone Bun scripts (not `bun:test` files —
-`bun test` never picks them up), run via the root `package.json` scripts:
+`al-runner-v3.itest.ts` and `bcdev.itest.ts` are standalone Bun scripts (not `bun:test` files —
+`bun test` never picks them up), run via the root `package.json` scripts. (`al-runner.itest.ts`, the
+.NET al-runner's gate, was deleted by R654.)
 
 ```bash
-bun run itest:alrunner   # needs LETHAL_ITEST_ALRUNNER=1 and LETHAL_ALRUNNER_PATH=<path to al-runner>
+bun run itest:alrunner-v3  # needs LETHAL_ITEST_ALRUNNER_V3=1; LETHAL_ALRUNNER_V3_PATH overrides the pinned binary
 bun run itest:bcdev      # needs LETHAL_ITEST_BCDEV=1, and the local files above populated
 bun run itest:tables     # needs LETHAL_ITEST_TABLES=1 and fixtures/sandbox-data/lethal.config.local.json
 ```
@@ -1861,7 +1924,7 @@ ran, because two runs of a silently-broken build can still agree with each other
 `mutant-equality.ts`'s `normalizeForComparison` (semantic-identity-keyed —
 astHash/codeunitName/operatorName/operatorMajor, immune to mutant renumbering) and diffs it
 against a **committed baseline file**
-(`packages/runner/itest/bcdev.baseline.json` / `al-runner.baseline.json`) via `diffMutants`. A
+(`packages/runner/itest/bcdev.baseline.json`, and `al-runner.baseline.json` until R654 deleted it) via `diffMutants`. A
 per-mutant difference — e.g. two mutants' verdicts silently swapped while the aggregate counts
 stay identical — fails the itest even though `assertVerdictTable`'s counts alone would not
 catch it. The first run ever recorded a baseline file writes it to disk (and logs that it needs
@@ -1870,8 +1933,8 @@ legitimately changes and the diff is expected, delete the baseline file, re-run,
 diff, and commit it.
 
 This mechanism is wired into both live itests but, being inside an env-gated script, is only
-actually exercised when `LETHAL_ITEST_BCDEV=1 bun run itest:bcdev` /
-`LETHAL_ITEST_ALRUNNER=1 bun run itest:alrunner` runs against real infrastructure — see
+actually exercised when `LETHAL_ITEST_BCDEV=1 bun run itest:bcdev` (and, before R654,
+`LETHAL_ITEST_ALRUNNER=1 bun run itest:alrunner`) runs against real infrastructure — see
 `packages/runner/tests/baseline-guard.test.ts` for the offline unit coverage of
 `assertMatchesBaseline` itself (records-on-first-run, matches-on-agreement, throws-on-diff,
 and the "aggregate counts identical, per-mutant swap" case that is this guard's whole reason to
@@ -1922,6 +1985,10 @@ wrong:
 `itest:bcdev` needs a live, reachable Business Central dev server plus credentials — it can
 only ever run manually or against a self-hosted runner with network access to that server;
 it is intentionally never a candidate for hosted CI.
+
+*(History: the rest of this section is about `itest:alrunner`, the .NET al-runner's gate, which R654
+retired on 2026-10-22. Its successor, `itest:alrunner-v3`, also needs no server, but it runs the
+pinned and gated Rust binary under `/work/tools/al-runner-v3/`, and it is not wired into CI either.)*
 
 `itest:alrunner` genuinely is CI-friendly (no server, no Docker — checked via a quick WebFetch
 of the [BusinessCentral.AL.Runner README](https://github.com/StefanMaron/BusinessCentral.AL.Runner)

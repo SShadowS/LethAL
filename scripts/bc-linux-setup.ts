@@ -60,7 +60,7 @@
  */
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { outOfUseDir, outOfUseRefusal } from "../packages/runner/itest/out-of-use.ts";
 import { compareAppVersions } from "../packages/runner/src/app-version.ts";
 import { appInputsOfPackage } from "../packages/runner/src/digest-inputs.ts";
@@ -79,7 +79,6 @@ import {
   actAll,
   contentDigest,
   decideAll,
-  fixtureManifests,
   headerPackageId,
   manifest,
   portsOf,
@@ -496,6 +495,16 @@ export class LaneUnknownError extends Error {}
  * (`KRAKEN_AGENT`, mapped as `scripts/coord-join-role.ts` maps it: `lane-<x>` is lane `<x>`,
  * `orchestrator` is `orchestrator`). With neither, or an identity that names no lane, it refuses.
  */
+/** R615: the lane goes into a file name, so it must be a plain word (no `/`, `..`, space). */
+function laneName(lane: string): string {
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(lane)) {
+    throw new LaneUnknownError(
+      `lane ${JSON.stringify(lane)} is not a lane name (lower-case letters, digits and "-", starting with a letter or digit)`,
+    );
+  }
+  return lane;
+}
+
 export function resolveLane(
   cliLane: string | undefined,
   env: Record<string, string | undefined>,
@@ -508,12 +517,12 @@ export function resolveLane(
         `--lane ${JSON.stringify(cliLane)} is an agent name, not a lane; pass --lane ${JSON.stringify(cliLane.slice("lane-".length))}`,
       );
     }
-    return cliLane;
+    return laneName(cliLane);
   }
   const agent = env.KRAKEN_AGENT;
   if (agent === "orchestrator") return "orchestrator";
   if (agent?.startsWith("lane-") && agent.length > "lane-".length)
-    return agent.slice("lane-".length);
+    return laneName(agent.slice("lane-".length));
   throw new LaneUnknownError(
     agent === undefined || agent === ""
       ? "no lane for the coord lease: pass --lane <lane>, or run as a kraken agent (KRAKEN_AGENT is not set)"
@@ -528,6 +537,7 @@ export class UnitTestCoordWriteError extends Error {}
 export function krakenLeaseFor(
   lane: string,
   run: (args: readonly string[]) => Promise<string> = kraken,
+  tokenDir: string = TOKEN_DIR,
 ): LeaseDeps {
   return {
     async take(server) {
@@ -541,12 +551,19 @@ export function krakenLeaseFor(
     recordToken(server, token) {
       // R617: the test preload sets LETHAL_TEST_FAKE_HOME. A unit test that reaches this writer
       // would overwrite a real token file wherever /coord exists, and fail only on CI.
-      if (process.env.LETHAL_TEST_FAKE_HOME !== undefined) {
+      // Any folder under the coord root is guarded; a test's own temp folder writes there.
+      const coordRoot = resolve(process.env.LETHAL_COORD_ROOT ?? "/coord");
+      const dir = resolve(tokenDir);
+      if (
+        process.env.LETHAL_TEST_FAKE_HOME !== undefined &&
+        (dir === coordRoot || dir.startsWith(`${coordRoot}${sep}`))
+      ) {
         throw new UnitTestCoordWriteError(
-          `a unit test reached the real recordToken for ${server}; stub recordToken (it writes ${TOKEN_DIR})`,
+          `a unit test reached the real recordToken for ${server}; stub recordToken (it writes ${dir})`,
         );
       }
-      writeFileSync(join(TOKEN_DIR, `lease-${server}.txt`), `${token}\n`, "utf8");
+      // R615: the lane is in the name, so two lanes on one server keep two records.
+      writeFileSync(join(tokenDir, `lease-${server}-${lane}.txt`), `${token}\n`, "utf8");
     },
     async heartbeat(server, token) {
       await run(["heartbeat", server, token]);
@@ -992,7 +1009,10 @@ export async function decideContinia(
   resident.set("System", await ops.residentVersion("Microsoft", "System"));
   summary.push(`  P1        Microsoft System: ${resident.get("System") ?? "absent"}`);
   if (!ok) {
-    summary.push(`  STOPPED   the Microsoft apps are not all ${want}: no Continia app published`);
+    // R679: name the way past, since a server on a newer build may be a deliberate new oracle (R594).
+    summary.push(
+      `  STOPPED   the Microsoft apps are not all ${want}: no Continia app published. If this server's build (Base Application ${resident.get("Base Application") ?? "absent"}) is a deliberate new oracle, rerun with --accept-build <that build> (R594)`,
+    );
     return { ok: false, toPublish: [] };
   }
   const pinned = new Map(
@@ -1076,7 +1096,6 @@ export interface RunDeps {
     symbols: string,
     log: string[],
   ) => Promise<AppItem[]>;
-  readonly fixtures: () => ReadonlyMap<string, AppManifest>;
   readonly doctor: (configPath: string, projectDir: string, testsDir: string) => Promise<boolean>;
   /** R669: where `<server>.md` out-of-use markers live (a test passes its own temp dir). */
   readonly outOfUseDir: string;
@@ -1130,7 +1149,6 @@ export const REAL_DEPS: RunDeps = {
   continiaFiles: () => CONTINIA_APPS.map((app) => ({ bytes: readContinia(app) })),
   controlBytes: pinnedControl,
   compile: realCompile,
-  fixtures: fixtureManifests,
   doctor,
   outOfUseDir: outOfUseDir(process.env),
 };
@@ -1268,7 +1286,7 @@ async function setupServer(
       ? await decideContinia(cops, deps.continiaFiles(), summary, args.acceptBuild)
       : { ok: true, toPublish: [] };
     const ops = deps.serverOps(conn);
-    const decided: Decided[] = await decideAll(items, ops, "setup", deps.fixtures(), log);
+    const decided: Decided[] = await decideAll(items, ops, "setup", log);
     const refused = refusals(decided);
     if (!compiled || refused.length > 0 || !continia.ok) {
       summary.push(

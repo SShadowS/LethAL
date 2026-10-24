@@ -11,7 +11,7 @@ import {
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
 import { compileSchemataForFile } from "../src/compile";
 import { emitFile } from "../src/compile-emit";
-import { planFile } from "../src/compile-plan";
+import { describeObjectKinds, planFile } from "../src/compile-plan";
 
 /**
  * R-307 O5 (plan amendment 2026-10-03). `planFile` is the PLAN half of `compileSchemataForFile`:
@@ -197,5 +197,56 @@ describe("R-307 O5 (I5): EMIT reads no node", () => {
     );
     expect(out).toContain("MutationSelector.Active('M0001')");
     expect(out).toContain("MutationSelector.Active('M0003')");
+  });
+});
+
+/** R308: `describeObjectKinds` names the objects a file holds, also when `#if` wraps them. */
+describe("describeObjectKinds", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  const kindsOf = (src: string) => describeObjectKinds(wrapRoot(parseAL(src)));
+  const CU = (id: number) => `codeunit ${id} "Made Up ${id}"\n{\n}\n`;
+  const TB = (id: number) => `table ${id} "Made Up ${id}"\n{\n}\n`;
+  const PG = (id: number) => `page ${id} "Made Up ${id}"\n{\n}\n`;
+
+  it("sees a codeunit inside #if", () => {
+    expect(kindsOf(`#if FOO\n${CU(50100)}#endif\n`)).toBe("codeunit_declaration");
+  });
+  it("sees one object per #if / #else arm", () => {
+    expect(kindsOf(`#if FOO\n${CU(50100)}#else\n${TB(50101)}#endif\n`)).toBe(
+      "codeunit_declaration, table_declaration",
+    );
+  });
+  it("sees through a nested #if", () => {
+    expect(kindsOf(`#if A\n#if B\n${CU(50100)}#endif\n#endif\n`)).toBe("codeunit_declaration");
+  });
+  it("names a wrapped codeunit beside a plain page", () => {
+    expect(kindsOf(`#if FOO\n${CU(50100)}#endif\n${PG(50101)}`)).toBe(
+      "codeunit_declaration, page_declaration",
+    );
+  });
+  it("sees an object that sits only in an #elif arm", () => {
+    expect(kindsOf(`#if A\n#elif B\n${CU(50100)}#endif\n`)).toBe("codeunit_declaration");
+  });
+  it("names a #if-split header, also inside a #if wrapper (R307 kept one level deeper)", () => {
+    const split = `#if not SYM\ncodeunit 50100 "Made Up A"\n#else\ncodeunit 50100 "Made Up B"\n#endif\n{\n}\n`;
+    expect(kindsOf(split)).toBe("preproc_split_declaration");
+    expect(kindsOf(`#if OUTER\n${split}#endif\n`)).toBe("preproc_split_declaration");
+  });
+  it("keeps the fallback when there is no object", () => {
+    const none = "no object declaration (root is source_file)";
+    expect(kindsOf("// only a comment\n")).toBe(none);
+    expect(kindsOf("#if X\n#endif\n")).toBe(none);
+  });
+  it("leaves a plain file unchanged", () => {
+    expect(kindsOf(CU(50100))).toBe("codeunit_declaration");
+    expect(kindsOf(PG(50101))).toBe("page_declaration");
+  });
+  it("answers with its own kind when handed a declaration node", () => {
+    const decl = wrapRoot(parseAL(CU(50100))).namedChildren[0];
+    if (decl === undefined) throw new Error("fixture drift");
+    expect(describeObjectKinds(decl)).toBe("codeunit_declaration");
   });
 });

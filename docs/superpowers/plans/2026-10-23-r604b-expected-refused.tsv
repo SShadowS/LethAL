@@ -1,0 +1,43 @@
+set	project	entry	kind	object	procedure	site	mutants_le
+dc	/work/src/DC/Cloud	procedure	codeunit	cdc pcd analyze invoices	assigninvoicegrouptocombinedgroup		23
+dc	/work/src/DC/Cloud	procedure	codeunit	cdc pcd analyze invoices	combineinvoicegroupsbyamounts		45
+dc	/work/src/DC/Cloud	procedure	codeunit	cdc pcd analyze invoices	linesetsdiffersonlybyamount		16
+dc	/work/src/DC/Cloud	guard-site	codeunit	cdc pcd analyze invoices	combineinvoicegroups	Modules/Purchase Contracts/Integration/src/Codeunits/CDCPCDAnalyzeInvoices.Codeunit.al:29819-29913	1
+dc	/work/src/DC/Cloud/Modules/Purchase Contracts/Integration	procedure	codeunit	cdc pcd analyze invoices	assigninvoicegrouptocombinedgroup		23
+dc	/work/src/DC/Cloud/Modules/Purchase Contracts/Integration	procedure	codeunit	cdc pcd analyze invoices	combineinvoicegroupsbyamounts		45
+dc	/work/src/DC/Cloud/Modules/Purchase Contracts/Integration	procedure	codeunit	cdc pcd analyze invoices	linesetsdiffersonlybyamount		16
+dc	/work/src/DC/Cloud/Modules/Purchase Contracts/Integration	guard-site	codeunit	cdc pcd analyze invoices	combineinvoicegroups	src/Codeunits/CDCPCDAnalyzeInvoices.Codeunit.al:29819-29913	1
+bch	/work/src/BC.History/BaseApp/Source/Base Application	procedure	codeunit	create prod. order from sale	createproductionorder		91
+bch	/work/src/BC.History/BaseApp/Source/Base Application	procedure	codeunit	create prod. order from sale	updatesaleslinereserve		10
+bch	/work/src/BC.History/BaseApp/Source/Base Application	procedure	codeunit	create prod. order lines	copyfromsalesorder		75
+bch	/work/src/BC.History/BaseApp/Source/Base Application	procedure	codeunit	create prod. order lines	createprodorderlinefromitem		17
+bch	/work/src/BC.History/BaseApp/Source/Base Application	procedure	codeunit	item tracking management	copyitemtracking3		40
+bch	/work/src/BC.History/BaseApp/Source/Base Application	procedure	codeunit	late binding management	makeconnection		61
+bch	/work/src/BC.History/BaseApp/Source/Base Application	procedure	codeunit	late binding management	reshufflereserventry		57
+bch	/work/src/BC.History/BaseApp/Source/Base Application	procedure	codeunit	reservation engine mgt.	modifyitemtrackingontemprec		150
+bch	/work/src/BC.History/BaseApp/Source/Base Application	procedure	codeunit	reservation engine mgt.	updatetempsurplusentry		7
+bch	/work/src/BC.History/BaseApp/Source/Base Application	procedure	codeunit	transfer line-reserve	updatetransferquantity		7
+bch	/work/src/BC.History/BaseApp/Source/Base Application	procedure	codeunit	undo posting management	updatetransferquantity		3
+bch	/work/src/BC.History/BaseApp/Source/Base Application	procedure	codeunit	whse.-activity-register	deletenonspecificreservationentries		31
+bch	/work/src/BC.History/BaseApp/Source/Base Application	procedure	page	item tracking summary	minvalueabs		4
+bch	/work/src/BC.History/BaseApp/Source/Base Application	procedure	pageextension	mfg. sales order planning	createorder		14
+bch	/work/src/BC.History/BaseApp/Source/Base Application	procedure	pageextension	mfg. sales order planning	oncreateordersonbeforecreateprodorder		0
+bch	/work/src/BC.History/BaseApp/Source/Base Application	procedure	table	entry summary	qtyavailabletoselectfrombin		6
+bch	/work/src/BC.History/BaseApp/Source/Base Application	guard-site	page	item tracking summary	autoselecttrackingno	Inventory/Tracking/ItemTrackingSummary.Page.al:10867-10897	0
+bch	/work/src/BC.History/BaseApp/Source/Base Application	guard-site	page	item tracking summary	autoselecttrackingno	Inventory/Tracking/ItemTrackingSummary.Page.al:10919-10935	1
+bch	/work/src/BC.History/BaseApp/Source/Base Application	guard-site	page	item tracking summary	autoselecttrackingno	Inventory/Tracking/ItemTrackingSummary.Page.al:10978-11056	0
+bch	/work/src/BC.History/BaseApp/Source/Base Application	guard-site	page	item tracking summary	autoselecttrackingno	Inventory/Tracking/ItemTrackingSummary.Page.al:11093-11125	0
+bch	/work/src/BC.History/BaseApp/Source/Base Application	guard-site	page	item tracking summary	autoselecttrackingno	Inventory/Tracking/ItemTrackingSummary.Page.al:11149-11165	1
+bch	/work/src/BC.History/BaseApp/Source/Base Application	guard-site	codeunit	late binding management	reshufflereserventry	Inventory/Tracking/LateBindingManagement.Codeunit.al:10154-10191	2
+bch	/work/src/BC.History/BaseApp/Source/Base Application	guard-site	codeunit	late binding management	reshufflereserventry	Inventory/Tracking/LateBindingManagement.Codeunit.al:10227-10272	1
+bch	/work/src/BC.History/BaseApp/Source/Base Application	guard-site	codeunit	late binding management	reshufflereserventry	Inventory/Tracking/LateBindingManagement.Codeunit.al:10436-10502	1
+bch	/work/src/BC.History/BaseApp/Source/Base Application	guard-site	codeunit	late binding management	reshufflereserventry	Inventory/Tracking/LateBindingManagement.Codeunit.al:10559-10600	0
+bch	/work/src/BC.History/BaseApp/Source/Base Application	guard-site	codeunit	late binding management	reshufflereserventry	Inventory/Tracking/LateBindingManagement.Codeunit.al:10682-10683	1
+bch	/work/src/BC.History/BaseApp/Source/Base Application	guard-site	codeunit	late binding management	reshufflereserventry	Inventory/Tracking/LateBindingManagement.Codeunit.al:10720-10742	0
+bch	/work/src/BC.History/BaseApp/Source/Base Application	guard-site	codeunit	late binding management	reshufflereserventry	Inventory/Tracking/LateBindingManagement.Codeunit.al:10795-10883	0
+bch	/work/src/BC.History/BaseApp/Source/Base Application	guard-site	codeunit	late binding management	reshufflereserventry	Inventory/Tracking/LateBindingManagement.Codeunit.al:10955-10986	1
+bch	/work/src/BC.History/BaseApp/Source/Base Application	guard-site	codeunit	late binding management	reshufflereserventry	Inventory/Tracking/LateBindingManagement.Codeunit.al:11100-11113	0
+bch	/work/src/BC.History/BaseApp/Source/Base Application	guard-site	codeunit	late binding management	reshufflereserventry	Inventory/Tracking/LateBindingManagement.Codeunit.al:11214-11302	0
+bch	/work/src/BC.History/BaseApp/Source/Base Application	guard-site	pageextension	mfg. sales order planning	createorders	Manufacturing/Sales/Document/MfgSalesOrderPlanning.PageExt.al:3558-3562	1
+bch	/work/src/BC.History/BaseApp/Source/Base Application	guard-site	pageextension	mfg. sales order planning	createorders	Manufacturing/Sales/Document/MfgSalesOrderPlanning.PageExt.al:3753-3765	1
+bch	/work/src/BC.History/BaseApp/Source/Base Application	guard-site	pageextension	mfg. sales order planning	createorders	Manufacturing/Sales/Document/MfgSalesOrderPlanning.PageExt.al:3791-3861	1

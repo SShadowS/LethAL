@@ -21,51 +21,80 @@
  *
  * Exits 0 for every other path, and for anything unexpected: a hook that breaks the session is
  * worse than a hook that misses one edit.
+ *
+ * R223 (owner, 2026-10-23): it runs compile-fixtures WITH `--inventory`. Without it, a Windows
+ * machine with no `alc` exits 0 without compiling, and this hook passed a fixture edit it never
+ * checked. With it, a missing `alc` exits 1, and the hook blocks.
  */
-let raw = "";
-try {
-  raw = await Bun.stdin.text();
-} catch {
-  process.exit(0);
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+/** The compile command. `--inventory` turns a missing `alc` into exit 1 (R223). */
+export function compileCommand(inventoryPath: string): string[] {
+  return ["bun", "run", "compile:fixtures", "--inventory", inventoryPath];
 }
 
-let file = "";
-try {
-  file = (JSON.parse(raw)?.tool_input?.file_path ?? "") as string;
-} catch {
-  process.exit(0);
+/** Exit 0 passes the edit; anything else blocks it (exit 2). */
+export function hookExit(compileExitCode: number | null): 0 | 2 {
+  return compileExitCode === 0 ? 0 : 2;
 }
 
-const normalized = file.replace(/\\/g, "/");
-const isFixtureAl = /\/fixtures\/.+\.al$/i.test(normalized);
-if (!isFixtureAl) process.exit(0);
+if (import.meta.main) await main();
 
-const cwd = process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
-const res = Bun.spawnSync(["bun", "run", "compile:fixtures"], {
-  cwd,
-  stdout: "pipe",
-  stderr: "pipe",
-});
+async function main(): Promise<void> {
+  let raw = "";
+  try {
+    raw = await Bun.stdin.text();
+  } catch {
+    process.exit(0);
+  }
 
-if (res.exitCode === 0) process.exit(0);
+  let file = "";
+  try {
+    file = (JSON.parse(raw)?.tool_input?.file_path ?? "") as string;
+  } catch {
+    process.exit(0);
+  }
 
-// alc's diagnostics land on stdout; keep stderr too so a spawn/tooling failure is not silently
-// reported as a compile failure (and vice versa — see the AlcCompileError vs ArtifactPrepareError
-// separation this project maintains everywhere else).
-const out = new TextDecoder().decode(res.stdout).trim();
-const err = new TextDecoder().decode(res.stderr).trim();
-console.error(
-  [
-    `fixture AL no longer compiles after editing ${normalized}.`,
-    "",
-    "This is R56's exact shape: the live gates publish the TARGET but not the TEST APP, so a broken",
-    "fixture leaves itest:tables / itest:bcdev happily measuring the previously published build.",
-    "Fix the AL before running any gate — a green gate over a broken fixture proves nothing.",
-    "",
-    out,
-    err,
-  ]
-    .filter((s) => s.length > 0)
-    .join("\n"),
-);
-process.exit(2);
+  const normalized = file.replace(/\\/g, "/");
+  const isFixtureAl = /\/fixtures\/.+\.al$/i.test(normalized);
+  if (!isFixtureAl) process.exit(0);
+
+  const cwd = process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
+  const scratch = mkdtempSync(join(tmpdir(), "lethal-hook-inventory-"));
+  let res: ReturnType<typeof Bun.spawnSync>;
+  try {
+    res = Bun.spawnSync(compileCommand(join(scratch, "inventory.json")), {
+      cwd,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+
+  if (hookExit(res.exitCode) === 0) process.exit(0);
+
+  // alc's diagnostics land on stdout; keep stderr too so a spawn/tooling failure is not silently
+  // reported as a compile failure (and vice versa — see the AlcCompileError vs ArtifactPrepareError
+  // separation this project maintains everywhere else). A missing `alc` lands here too (R223), and
+  // compile-fixtures' own stderr names it.
+  const out = new TextDecoder().decode(res.stdout).trim();
+  const err = new TextDecoder().decode(res.stderr).trim();
+  console.error(
+    [
+      `fixture AL was not shown to compile after editing ${normalized} (it fails, or alc is missing).`,
+      "",
+      "This is R56's exact shape: the live gates publish the TARGET but not the TEST APP, so a broken",
+      "fixture leaves itest:tables / itest:bcdev happily measuring the previously published build.",
+      "Fix the AL, or install alc, before running any gate — a green gate over a broken fixture proves nothing.",
+      "",
+      out,
+      err,
+    ]
+      .filter((s) => s.length > 0)
+      .join("\n"),
+  );
+  process.exit(hookExit(res.exitCode));
+}

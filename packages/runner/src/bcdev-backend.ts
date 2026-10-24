@@ -127,10 +127,10 @@ export interface BcDevConfig {
   // (schemata/selector.ts).
   readonly controlSymbolPath: string;
   /**
-   * R53 (`--stop-hung-sessions`), opt-in. When set, a RunMutant that exceeds its budget is HELD
-   * OPEN while `StopHungRun` is issued on a second connection, so BC's 408 can make the run
+   * R53 (`--stop-hung-sessions`), opt-in. When set, a MUTANT RunMutant that exceeds its budget is
+   * HELD OPEN while `StopHungRun` is issued on a second connection, so BC's 408 can make the run
    * scoreable instead of quarantining the tier. See `SessionConfig.stopHungSessions` for why this
-   * is opt-in rather than default.
+   * is opt-in rather than default. An UNMUTATED run gets the stop regardless (R658).
    */
   readonly stopHungSessions?: boolean;
   // The `ArtifactCompiler`'s own package-cache directory (mirrors
@@ -1229,7 +1229,8 @@ export class BcDevMcpBackend implements ExecutionBackend {
    * the call exactly as `run` does for one method: a chunk is an op. Refuses a baseline (no
    * mutant pending): the baseline needs coverage per test, and a group run of it would measure
    * the green set with no coverage at all. The R53 stop hook's ON/OFF choice travels as
-   * `stopHungSessions`; the watchdog inside the transport does the rest.
+   * `stopHungSessions` (always ON for the unmutated confirmation, R658); the watchdog inside the
+   * transport does the rest.
    */
   async runMany(opts: RunManyOpts): Promise<RunManyResult> {
     const transport = this.runMutantTransport;
@@ -1276,7 +1277,9 @@ export class BcDevMcpBackend implements ExecutionBackend {
       methods: opts.methods,
       requestCeilingMs: opts.requestCeilingMs,
       stopGraceMs: opts.stopGraceMs,
-      stopHungSessions: this.cfg.stopHungSessions === true,
+      // R658 (I5): the warm confirmation's unmutated replay always gets the stop, like any
+      // unmutated run; a mutant's group call only with `--stop-hung-sessions`.
+      stopHungSessions: this.cfg.stopHungSessions === true || opts.confirmation === true,
     });
     return result.kind === "verdicts" ? { ...result, fencedOp } : { ...result, fencedOp };
   }
@@ -1326,10 +1329,12 @@ export class BcDevMcpBackend implements ExecutionBackend {
       ...(this.coverageObjectIdFilter !== undefined
         ? { coverageObjectIdFilter: this.coverageObjectIdFilter }
         : {}),
-      // R53: wired ONLY for a mutant run. A BASELINE run (mutantId "") that overruns is not a
-      // hanging mutant — there is no mutation active to blame — so stopping its session would end
-      // a healthy run and score nothing. The hook's absence keeps that path byte-for-byte as it was.
-      ...(this.cfg.stopHungSessions === true && (this.pendingMutantId ?? "") !== ""
+      // R53, R658: an UNMUTATED run (mutantId "": the baseline, the R516 cold confirm, C02-06's
+      // second run) always gets the stop. Abandoned at its budget it keeps running on the server,
+      // its op stays `run`, the lease cannot be released and the server is unusable until an NST
+      // restart (R658, measured). Its 408 scores nothing about a mutant; it ends the op cleanly.
+      // A MUTANT run gets it only with `--stop-hung-sessions` (R53's opt-in).
+      ...((this.pendingMutantId ?? "") === "" || this.cfg.stopHungSessions === true
         ? {
             // A REFUSAL IS AN ANSWER, and since R-204b it RESOLVES as one (`stopped: false` with its
             // reason) instead of being thrown: a thrown hook now means the stop's outcome is

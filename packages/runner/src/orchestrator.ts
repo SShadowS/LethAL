@@ -77,6 +77,7 @@ import type {
   RunManyCause,
   RunManyOpts,
   RunManyResult,
+  StopState,
   TestMethodRef,
   TestVerdict,
 } from "./backend";
@@ -123,6 +124,7 @@ import {
   packageFolderReader,
   publishedPackageReader,
   readAppJsonInputs,
+  sourceZipReader,
   targetOf,
 } from "./digest-inputs";
 import { type ArmAwareDiscovery, discoverTests } from "./discovery";
@@ -174,7 +176,6 @@ import {
   describeTestPermissionsRefusal,
   permissionCanaryWarnings,
 } from "./permission-canary";
-import { Semaphore, shardEvenly } from "./pool";
 import {
   type BuildBackend,
   BuildSymbolsDivergedError,
@@ -241,9 +242,11 @@ import type {
 } from "./selection";
 import { SessionSafety, SessionUnsafeError } from "./session-safety";
 import {
+  baselineFoundNoneRefusal,
   describeStaleTestApp,
+  groupedFoundNone,
+  isRunMutantFoundNone,
   isRunMutantLineCountMessage,
-  testAppRefusal,
 } from "./stale-test-app";
 import { type LendingSession, sameHiddenFiles } from "./store";
 import type { ResultsStore } from "./store";
@@ -252,6 +255,7 @@ import { TestAppError } from "./test-app-publish";
 import { TestDigestError, type TestDigestParts, testDigestsOfModel } from "./test-digest";
 import {
   PublishAppUnreadableError,
+  ServerGenerationChangedError,
   TestAppDriftedError,
   TestAppRepublishedError,
   type TestArmEvidence,
@@ -772,7 +776,8 @@ export function resolveOperatorNames(
  *
  * R654 S1 (plan r1 I1, r2 D-m2): extracted from `runSession` unchanged, and keyed on the session's
  * `WrappedRule` instead of its backend kind. `bcArms` holds the build's arms per file on bcdev and
- * is empty otherwise, so a `"refuse-wrapped"` session (v3) bars no file: it admits none.
+ * is empty otherwise. R602: v3 now runs the `"al-runner-index"` rule, so it bars an admitted
+ * wrapped file from carry (the safe direction); a `"refuse-wrapped"` session would bar none.
  * Returns the barred files' paths, forward slashes.
  */
 export function carryBarredFiles(
@@ -1531,6 +1536,11 @@ export interface SessionConfig {
    * server-side tombstone check — but the id cannot be independently verified (`Active Session` is
    * unusable from a web-service session, measured), so accepting that residual risk is the user's
    * call, not the tool's.
+   *
+   * R658: the flag governs MUTANT runs only. An UNMUTATED run (a baseline test, a kill confirm, a
+   * warm replay) that overruns is stopped regardless: abandoned, it keeps running on the server
+   * and its op blocks the lease until an NST restart (measured), which is worse for the user than
+   * the same residual risk.
    */
   readonly stopHungSessions?: boolean;
   /**
@@ -1628,10 +1638,8 @@ export interface SessionConfig {
   // runSession falls back to the project's own app.json version for that case when unset (see
   // readAppVersionBestEffort) rather than the meaningless "0.0.0.0" default.
   readonly appVersion?: string;
-  readonly workers?: number; // default 1 — a pool of one IS the sequential path
-  readonly compileConcurrency?: number; // default min(workers, 4)
-  /** Required when workers > 1: each worker needs its own backend instance. */
-  readonly backendFactory?: (workerIndex: number) => ExecutionBackend;
+  /** Default 1. R671: more than 1 is refused by name for every backend (no fan-out exists). */
+  readonly workers?: number;
   /** Machine-local durable-quarantine base directory (spec §9). Defaults to
    *  `~/.lethal/quarantine` via `defaultQuarantineDir()` when omitted; tests inject a scratch dir
    *  so quarantine state never leaks across test runs or into the real user's home directory. */
@@ -2086,10 +2094,7 @@ class BisectPrepareError extends Error {
 /**
  * Bisects `subsetMutants` against a `deploy`-shaped compile check, reusing
  * `scratchDir` for every candidate via `prepareArtifactDir`. Shared by the
- * sequential deploy-failure path (step 3) and every worker shard's own
- * deploy-failure path (`workers > 1`, step 6) — same algorithm and the same
- * artifact-preparation helper, just a different mutant subset and a
- * different backend/compile-limit to deploy through.
+ * sequential deploy-failure path (step 3).
  *
  * `scratchDir` is removed once bisection finishes, win or lose — a failed
  * batch must not leave a scratch artifact behind on disk indefinitely.
@@ -2832,6 +2837,9 @@ interface CoveringStep {
   readonly chunkPrefix: readonly { readonly ref: TestMethodRef; readonly budgetMs: number }[];
   /** The ceiling and grace the call ran under; the replay runs under the same. */
   readonly callSettings: { readonly requestCeilingMs: number; readonly stopGraceMs: number };
+  /** R688: a group call BC refused whole with `suite-unresolved ... found 0`. Recorded only: the
+   *  generator then runs that chunk's methods one at a time. */
+  readonly discoveryRefused?: true;
 }
 
 /**
@@ -2922,6 +2930,12 @@ async function singleStep(
  *
  * The consumer breaks out of the iteration at the first non-pass step, exactly as it broke out of
  * the old `for` loop, and this generator is then never pulled again.
+ *
+ * R688: `skip` holds the test codeunits whose discovery the mutant blanked (the consumer adds one
+ * after a confirmed found-0, between pulls); their tests are not sent again. A group call BC
+ * refuses whole with `suite-unresolved ... found 0` is yielded once, marked `discoveryRefused`, and
+ * that chunk's methods are then run one at a time, in order, so every found-0 the consumer handles
+ * comes from a one-codeunit discovery and the first failure is met where sequential meets it.
  */
 async function* coveringRuns(args: {
   readonly backend: ExecutionBackend;
@@ -2933,19 +2947,24 @@ async function* coveringRuns(args: {
   readonly resyncOpSeq: (() => Promise<void>) | undefined;
   readonly group: GroupRunSettings | undefined;
   readonly mutantId: string;
+  readonly skip: ReadonlySet<number>;
 }): AsyncGenerator<CoveringStep, void, undefined> {
   const single = (ref: TestMethodRef): Promise<CoveringStep> =>
     singleStep(args, ref, args.budgetOf(ref));
+  const skipped = (ref: TestMethodRef) => args.skip.has(ref.codeunitId);
   const group = args.group;
   if (group === undefined || args.backend.runMany === undefined) {
-    for (const ref of args.ordered) yield await single(ref);
+    for (const ref of args.ordered) if (!skipped(ref)) yield await single(ref);
     return;
   }
   const fits = (ref: TestMethodRef) =>
     args.budgetOf(ref).ms + group.stopGraceMs <= group.requestCeilingMs;
+  let work: readonly TestMethodRef[] = args.ordered;
   let cursor = 0;
-  while (cursor < args.ordered.length) {
-    const head = args.ordered[cursor];
+  while (cursor < work.length) {
+    // R688: drop skipped codeunits' tests from the unvisited tail before a chunk is built.
+    work = [...work.slice(0, cursor), ...work.slice(cursor).filter((ref) => !skipped(ref))];
+    const head = work[cursor];
     if (head === undefined) return;
     if (!fits(head)) {
       yield await single(head);
@@ -2955,8 +2974,8 @@ async function* coveringRuns(args: {
     const methods: { ref: TestMethodRef; budgetMs: number }[] = [];
     // R516 (M2): each method's budget SOURCE beside the `budgetMs` it is sent, index for index.
     const sources: BudgetSource[] = [];
-    for (let i = cursor; i < args.ordered.length && methods.length < group.maxMethodsPerCall; i++) {
-      const ref = args.ordered[i];
+    for (let i = cursor; i < work.length && methods.length < group.maxMethodsPerCall; i++) {
+      const ref = work[i];
       if (ref === undefined || !fits(ref)) break;
       const b = args.budgetOf(ref);
       methods.push({ ref, budgetMs: b.ms });
@@ -3014,6 +3033,30 @@ async function* coveringRuns(args: {
     if (out.result.kind === "call") {
       const { verdict, cause, abortSession, methodIndex } = out.result;
       const position = Math.min(Math.max(methodIndex, 1), methods.length);
+      if (
+        cause === undefined &&
+        abortSession === undefined &&
+        verdict.operation === undefined &&
+        groupedFoundNone(verdict.failureMessage) !== undefined
+      ) {
+        // R688: BC refused the whole chunk because discovery listed no methods for one pair. Run
+        // the chunk one method at a time instead; the consumer confirms any single found-0.
+        yield {
+          ...provenance,
+          ref: verdict.ref,
+          verdict,
+          ...sentAt(position),
+          groupBudgetMs,
+          opKind: "many",
+          groupPosition: position,
+          chunkPrefix: methods.slice(0, position),
+          callSettings,
+          discoveryRefused: true,
+        };
+        for (const { ref } of methods) if (!skipped(ref)) yield await single(ref);
+        cursor += methods.length;
+        continue;
+      }
       yield {
         ...provenance,
         ref: verdict.ref,
@@ -3958,6 +4001,18 @@ interface PendingResumeCheck {
   readonly resourceKey: string | undefined;
   /** Why this session is open-world, when it is (`testAppIdentity`). */
   readonly openWorldWhy: string | undefined;
+  /** R680: this session's `serverGeneration`, `undefined` when it has no lease (no server). */
+  readonly serverGeneration?: string | undefined;
+}
+
+/**
+ * R680: a session with a server generation resumes only a run that recorded the same one. A run that
+ * recorded none (before R680) refuses too: no back-compat before the release. A session with no
+ * generation has no lease and no server; its prior has none either (the backend is in the key).
+ */
+function assertSameServerGeneration(row: RunRow, flag: string, current: string | undefined): void {
+  if (current === undefined || row.serverGeneration === current) return;
+  throw new ServerGenerationChangedError(flag, row.id, row.serverGeneration, current);
 }
 
 /** R601: why a pending prior is not resumed by this session, in one or two sentences. */
@@ -4035,6 +4090,8 @@ function resolveResume(
   | undefined {
   if (cfg.resume === undefined) return undefined;
   const sameTestApp = (row: RunRow, flag: string): void => {
+    // R680: first, and for a hook session too: the server's generation is fixed before any hook.
+    assertSameServerGeneration(row, flag, pending.serverGeneration);
     if (!testAppAfterHook) assertSameTestApp(row, flag, testAppHash, pending);
   };
   // R619: the one lend decision (`runMayLend`), called once in each branch below: step 1 (R586,
@@ -4410,6 +4467,9 @@ interface ScoreBatchInput {
   /** For the section G note only: `compiled?.artifactId`, or the bound artifact's id. */
   readonly artifactId: string | undefined;
   readonly tests: readonly TestMethodRef[];
+  /** R686: the session's test-arm evidence is R403's compiled membership of the PUBLISHED package
+   *  (`{kind: "compiled", from: "published-package"}`). Absent or false: not proven. */
+  readonly testsCompiledInPublishedPackage?: boolean;
   /** R192 snapshot reuse and recording, runSession only. Absent: always run, record nothing. */
   readonly snapshot?: {
     readonly batchDir: string;
@@ -4423,19 +4483,15 @@ interface ScoreBatchInput {
      *  read stops the session (`assertNoTestAppDrift`). R496: with its dependency fingerprint,
      *  which a reused snapshot's run must have recorded too. */
     readonly provenTestApp?: TestAppIdentity;
+    /** R680: the session's `serverGeneration`; with one, only a snapshot of a run on the same
+     *  generation is reused (a baseline from before a restart describes data that may be gone). */
+    readonly serverGeneration?: string;
     /** R586: `runMayLend` step 1's session side; a snapshot from another backend or v3 build is
      *  not reused. Absent: no v3 snapshot is reused. */
     readonly lendingSession?: LendingSession;
   };
   /** Called once, after the stale-test-app check. `undefined` = nothing left to run. */
   readonly select: (baseline: readonly BaselineRow[]) => CoveringPlan | undefined;
-  /** Replaces the sequential `runMutantsOnBackend` call. runSession's worker fan-out only.
-   *  R514: `baselineReused` is the batch's reused snapshot, forwarded to `runMutantsOnBackend`. */
-  readonly executeCovering?: (
-    plan: CoveringPlan,
-    attestation: AttestationLedger,
-    baselineReused: ReusedBaseline | undefined,
-  ) => Promise<void>;
 }
 /** R514: the run and batch whose stored baseline (R192) a batch reused. */
 interface ReusedBaseline {
@@ -4616,7 +4672,6 @@ async function openLeaseScope(a: {
 /** C02-04: the session's latch-gated teardown, ending with the op-gated lease release. */
 async function closeLeaseScope(a: {
   backend: ExecutionBackend;
-  workerBackends: readonly ExecutionBackend[];
   safety: SessionSafety;
   leaseSession: LeaseSession | undefined;
   emit: RunEmitter;
@@ -4632,16 +4687,9 @@ async function closeLeaseScope(a: {
   // itself a mutating op on the stranded tier (spec §8). Only local teardown runs.
   if (!a.safety.isUnsafe) {
     await a.backend.activate(null).catch(() => {});
-    for (const backend of a.workerBackends) {
-      await backend.activate(null).catch(() => {});
-      await closeIfSupported(backend).catch(() => {});
-    }
   } else {
     // local teardown only: close transports/children, never activate.
     await closeIfSupported(a.backend).catch(() => {});
-    for (const backend of a.workerBackends) {
-      await closeIfSupported(backend).catch(() => {});
-    }
   }
   // Layer 5C-B1 (design §6 step 5): stop the heartbeat and release the lease — op-gated, so a
   // tier with an unresolved operation marker is left held (and durably quarantined) rather than
@@ -4651,11 +4699,9 @@ async function closeLeaseScope(a: {
   // R499: one bounded wait for control requests still in flight (a stop or readback a non-scored
   // last call left behind), so a refusal landing on one is taken below rather than lost. Never
   // throws, so it never skips the release above; after the release, the server's lease fence decides.
-  for (const backend of [a.backend, ...a.workerBackends]) {
-    await (
-      backend as { drainControlRequests?: (ms: number) => Promise<void> }
-    ).drainControlRequests?.(CONTROL_DRAIN_MS);
-  }
+  await (
+    a.backend as { drainControlRequests?: (ms: number) => Promise<void> }
+  ).drainControlRequests?.(CONTROL_DRAIN_MS);
   a.emit({ type: "phase-left", phase: "teardown", elapsedMs: Date.now() - teardownStartedMs });
   // R-496: a redirect to an unfiltered extensions query that arrived after the last call returned
   // has no next call to throw it. R507: so has one a lease call met (taken after `finish()`, so a
@@ -4664,10 +4710,8 @@ async function closeLeaseScope(a: {
   const refusals: Error[] = [];
   const leaseRefusal = a.leaseSession?.takeRefusal();
   if (leaseRefusal !== undefined) refusals.push(leaseRefusal);
-  for (const backend of [a.backend, ...a.workerBackends]) {
-    const late = (backend as { takeLateRefusal?: () => Error | undefined }).takeLateRefusal?.();
-    if (late !== undefined) refusals.push(late);
-  }
+  const late = (a.backend as { takeLateRefusal?: () => Error | undefined }).takeLateRefusal?.();
+  if (late !== undefined) refusals.push(late);
   const [first, ...rest] = refusals;
   for (const other of rest) {
     console.warn(`[lethal] another refused unfiltered extensions query: ${other.message}`);
@@ -4846,16 +4890,18 @@ async function dispatchUnmutated(
     store.recordTestResult(runId, null, null, ref, "skip", 0, refused.failureMessage);
     return { verdict: refused, stop: false };
   }
-  const v = await runOnce(
-    backend,
-    safety,
-    ref,
-    {
-      coverage: caps.coverage,
-      timeoutMs: scope.baselineTimeoutMs,
-    },
-    scope.resyncOpSeq,
-    scope.emit,
+  const v = ownStopAsTimeout(
+    await runOnce(
+      backend,
+      safety,
+      ref,
+      {
+        coverage: caps.coverage,
+        timeoutMs: scope.baselineTimeoutMs,
+      },
+      scope.resyncOpSeq,
+      scope.emit,
+    ),
   );
   // Baseline test results are not tied to any mutant: mutant_row_id stays NULL. R206: the
   // session id rides along as data (the store's liveness check counts baseline rows too).
@@ -4896,11 +4942,45 @@ async function dispatchUnmutated(
       quarantineStore,
       resourceKey,
       nowIso,
-      detail: `baseline test in-flight-unknown running ${ref.method}: ${v.failureMessage ?? "no failure message"}`,
+      detail: `baseline test in-flight-unknown running ${ref.method}: ${v.failureMessage ?? "no failure message"}${tombstoneSentence(v.stopState)}`,
     });
     return { verdict: v, stop: true };
   }
   return { verdict: v, stop: false };
+}
+
+/**
+ * R658: OUR stop's two clean endings of an UNMUTATED run, read as the `timeout` they are: R204's
+ * `stopped-after-completion` (BC's 408 came, but the method had recorded its completion) and
+ * R203's `op-stopped` (the session finished and phase 3 refused an op our stop had tombstoned).
+ * Either way the op is over and the server is clean. `operation` and `leaseInvalidReason` are
+ * DROPPED (D3), or `classifyLeaseVerdict`/`requiresUnsafeLatch` would still read a lease loss or
+ * a strand. Only with a `stopState`: without one, no stop of ours was sent and nothing is ours.
+ * BC's own 408 (`outcome: "timeout"` with a `stopState`) needs no mapping.
+ */
+function ownStopAsTimeout(v: TestVerdict): TestVerdict {
+  if (v.stopState === undefined) return v;
+  if (v.stopRefusal !== "stopped-after-completion" && v.leaseInvalidReason !== "op-stopped") {
+    return v;
+  }
+  const { operation: _operation, leaseInvalidReason: _reason, ...kept } = v;
+  return { ...kept, outcome: "timeout" };
+}
+
+/** R658: an unmutated run that ran past its budget and that OUR stop ended. */
+function stoppedByUs(v: TestVerdict): boolean {
+  return v.outcome === "timeout" && v.stopState !== undefined;
+}
+
+/**
+ * R658 (M7): a stop LethAL sent that BC never answered with its 408. A `confirmed` stop
+ * tombstoned the op (an `unknown` one may have), so the control-app lease reads clean to the next
+ * session while the AL session may still run. Empty when no stop was sent or it was refused.
+ */
+function tombstoneSentence(s: StopState | undefined): string {
+  if (s !== "confirmed" && s !== "unknown") return "";
+  const did = s === "confirmed" ? "was confirmed and tombstoned" : "may have tombstoned";
+  return `. LethAL's stop ${did} the op, but BC never sent its 408; the control-app lease will read clean and must not be trusted until an NST restart (R658)`;
 }
 
 /**
@@ -5017,7 +5097,8 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   try {
     await activateOnce(backend, safety, null);
     if (input.snapshot !== undefined) {
-      const { batchDir, testDir, allowReuse, closedWorld, provenTestApp } = input.snapshot;
+      const { batchDir, testDir, allowReuse, closedWorld, provenTestApp, serverGeneration } =
+        input.snapshot;
       const batchHash = await hashAlTree(batchDir);
       hashTestApp = await batchTestAppReader(backend, testDir, closedWorld);
       const read = await hashTestApp();
@@ -5031,7 +5112,13 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       const runsWhatWasRead = provenTestApp !== undefined && testAppHash === provenTestApp.hash;
       const reusable =
         allowReuse && testAppHash !== undefined && runsWhatWasRead
-          ? store.findBaselineSnapshot(batchHash, testAppHash, provenTestApp.deps, caps.coverage)
+          ? store.findBaselineSnapshot(
+              batchHash,
+              testAppHash,
+              provenTestApp.deps,
+              caps.coverage,
+              serverGeneration,
+            )
           : null;
       reused = snapshotApplies(reusable, batchHash, testAppHash) ? reusable : undefined;
       // R619: the one lend decision (`runMayLend`), on the snapshot's OWN run, since
@@ -5108,6 +5195,9 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
             b.verdict.sessionId,
           );
         }
+        // R678: the reused verdicts stand in for this batch's baseline calls, so the backend
+        // records from them what a baseline call would have (v3: its refused tests).
+        backend.noteReusedBaseline?.(baseline);
       }
     }
     for (const ref of reused !== undefined ? [] : tests) {
@@ -5138,7 +5228,10 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     snapshotKey !== undefined &&
     reused === undefined &&
     testAppHash !== undefined &&
-    baseline.length === tests.length
+    baseline.length === tests.length &&
+    // R658 (D5): the key does not include --baseline-timeout-ms, so a snapshot holding a stopped
+    // test would bring it back stopped on a `--resume` that raised the budget.
+    !baseline.some((b) => stoppedByUs(b.verdict))
   ) {
     store.recordBaselineSnapshot({
       runId,
@@ -5176,6 +5269,11 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   emit({
     type: "baseline-batch-finished",
     batchIndex: batchIdx,
+    // R658: the budget a stopped test ran past, for the banner. Only with one, so older streams
+    // and every unstopped batch read as before.
+    ...(baseline.some((b) => stoppedByUs(b.verdict))
+      ? { stoppedBudgetMs: scope.baselineTimeoutMs }
+      : {}),
     verdicts: baseline.map((b) => {
       const classification: BaselineClassification[] = [];
       // R139: a line-count answer is the transport reporting that RunMutant did not return one
@@ -5206,6 +5304,8 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       if (isTestPageNotRunMessage(b.verdict.failureMessage)) {
         classification.push("tests-testpage-refused");
       }
+      // R658: ran past --baseline-timeout-ms and OUR stop ended it (`ownStopAsTimeout`).
+      if (stoppedByUs(b.verdict)) classification.push("baseline-test-stopped");
       const measured = b.verdict.measuredDurationMs;
       return {
         name: qualifiedTestName(b.ref),
@@ -5241,7 +5341,15 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     // matcher when the refusal is the only output the run produces.
     return described === undefined
       ? []
-      : [{ name: qualifiedTestName(b.ref), description: described }];
+      : [
+          {
+            name: qualifiedTestName(b.ref),
+            description: described,
+            // R686: whose codeunit, and whether it is the found-0 form an OnRun raise also gives.
+            codeunit: b.ref.codeunitName,
+            foundNone: isRunMutantFoundNone(b.verdict.failureMessage),
+          },
+        ];
   });
   if (missingFromServer.length > 0) {
     // R462: a failed re-read proves nothing, so it is `undefined`, never a guess.
@@ -5252,12 +5360,22 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     // nor its verdicts lend anything later.
     const proven = input.snapshot?.provenTestApp?.hash;
     if (proven !== undefined && after !== proven) store.setRunTestAppHash(runId, null, false, null);
-    throw testAppRefusal(
-      missingFromServer,
-      snapshotKey?.testAppHash,
+    // R686: a codeunit whose OnRun raises gives the same found-0 answer; named only when proven.
+    const unread = unreadOf(reread) ?? firstUnread;
+    const testsPerCodeunit = new Map<string, number>();
+    for (const b of baseline) {
+      const c = b.ref.codeunitName;
+      testsPerCodeunit.set(c, (testsPerCodeunit.get(c) ?? 0) + 1);
+    }
+    throw baselineFoundNoneRefusal({
+      missing: missingFromServer,
+      testsPerCodeunit,
+      proven,
+      before: snapshotKey?.testAppHash,
       after,
-      unreadOf(reread) ?? firstUnread,
-    );
+      compiledInPublishedPackage: input.testsCompiledInPublishedPackage === true,
+      ...(unread !== undefined ? { unread } : {}),
+    });
   }
 
   const plan = input.select(baseline);
@@ -5270,10 +5388,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     memberCountsByTest: memberCounts,
   } = plan;
 
-  // 6. per-mutant loop — sharded across workers when workers > 1. The
-  // baseline/coverage discovery above always runs once against
-  // scope.backend; only the kill-detection phase below fans out, since
-  // that's the part that's actually per-mutant work.
+  // 6. per-mutant loop, on scope.backend (R671: no fan-out).
   const fallbackTimeoutMs = scope.baselineTimeoutMs;
   // Layer 5C-A Task 8, Task 10 (design §G): per-ARTIFACT clean-attestation ledger. Declared
   // fresh for each batch (each batch republishes its own artifactId) — `clean` flips true the
@@ -5303,39 +5418,31 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   const mutantsStartedMs = Date.now();
   const baselineReused: ReusedBaseline | undefined =
     reused !== undefined ? { runId: reused.runId, batchIndex: reused.batchIndex } : undefined;
-  if (input.executeCovering !== undefined) {
-    await input.executeCovering(plan, attestation, baselineReused);
-  } else {
-    // Sequential IS the parallel path with a pool of one: this is the
-    // exact same runMutantsOnBackend call the caller's `executeCovering`
-    // makes per shard, just with all of `execute` as a single "shard" on
-    // the one backend already deployed in step 3.
-    await runMutantsOnBackend({
-      backend,
-      safety,
-      ...(leaseSession !== undefined ? { leaseSession } : {}),
-      mutants: toExecute,
-      perMutantTests,
-      coverageAttribution,
-      baselineDuration,
-      fallbackTimeoutMs,
-      minMutantBudgetMs,
-      store,
-      runId,
-      batchIndex: batchIdx,
-      outcomes,
-      quarantineStore,
-      resourceKey,
-      nowIso,
-      attestation,
-      emit,
-      killLedger,
-      memberCountsByTest: memberCounts,
-      groupRuns,
-      sessionReuse,
-      baselineReused,
-    });
-  }
+  await runMutantsOnBackend({
+    backend,
+    safety,
+    ...(leaseSession !== undefined ? { leaseSession } : {}),
+    mutants: toExecute,
+    perMutantTests,
+    coverageAttribution,
+    baselineDuration,
+    fallbackTimeoutMs,
+    minMutantBudgetMs,
+    store,
+    runId,
+    batchIndex: batchIdx,
+    outcomes,
+    quarantineStore,
+    resourceKey,
+    nowIso,
+    attestation,
+    emit,
+    killLedger,
+    memberCountsByTest: memberCounts,
+    groupRuns,
+    sessionReuse,
+    baselineReused,
+  });
   emit({ type: "phase-left", phase: "mutants", elapsedMs: Date.now() - mutantsStartedMs });
   // Layer 5C-A Task 8, Task 10 (design §G): per-artifact fail-closed attestation gate. A
   // batch "contributed verdicts" if any mutant it scheduled had >=1 covering test (a batch
@@ -5661,6 +5768,16 @@ async function runSessionBody(
   if (nestedWarning !== undefined) {
     emit({ type: "warning", code: "nested-project", message: nestedWarning });
   }
+  // R680: the server's generation, read ONCE, before the first guard ask. The run row records it, a
+  // resume compares it, and the lease is asked at it, so a restart after this read is refused by the
+  // server itself (`generation-changed`) before anything is deployed. No lease: no server, none.
+  const sessionGeneration =
+    cfg.lease !== undefined ? await cfg.lease.serverGeneration() : undefined;
+  if (sessionGeneration === "") {
+    throw new LeaseUnavailableError(
+      "the harness reported an empty serverGeneration, so this session cannot record which server generation it runs on, nor ask the lease at one (R680)",
+    );
+  }
   // R-372: the digests come from the same read, so they describe the body the server RUNS.
   const {
     testAppHash,
@@ -5794,7 +5911,7 @@ async function runSessionBody(
     testPageRefusedNames,
     envPublishes !== undefined,
     lendingSession,
-    { resourceKey, openWorldWhy },
+    { resourceKey, openWorldWhy, serverGeneration: sessionGeneration },
   );
 
   const runId = cfg.store.createRun({
@@ -5812,6 +5929,8 @@ async function runSessionBody(
     generationSourceSha256: sourceHashAtGeneration,
     // R360: the group `finishRun` prunes installed bundles within, with the run's app id.
     ...(resourceKey !== undefined ? { resourceKey } : {}),
+    // R680: the generation this session runs on (read before the guard ask, the lease asked at it).
+    ...(sessionGeneration !== undefined ? { serverGeneration: sessionGeneration } : {}),
     // R492: an env-tool session records its test app only once the read-back after the hook is
     // proven installed (below), never the pre-lease read, which can hold the OUTGOING one.
     // R495: any other session records it only when proven, and the flag with it.
@@ -6092,18 +6211,15 @@ async function runSessionBody(
   // A scan-refused test does not pass, even when every batch carries and no baseline runs (R-236c
   // run 002, review r1 #3); the report fold reads the same fact from `tests-testpage-refused`.
   let baselineGreenOverall = testPageRefusedNames.length === 0;
-  // Math.floor: a fractional workers value (e.g. 2.5) would otherwise reach
-  // shardEvenly's `Array.from({ length: n }, ...)`, which silently truncates
-  // to a shorter array than `i % n` can index into — mutants landing on the
-  // missing fractional index are dropped with no error (shardEvenly's own
-  // `if (target !== undefined)` guard swallows them).
+  // R671: the worker fan-out is gone; `workers > 1` is refused by name below. The floor lets a
+  // direct runSession caller pass 1.5 and run as 1; 2.5 is refused either way. The CLI only
+  // accepts integers.
   const workers = Math.max(1, Math.floor(cfg.workers ?? 1));
   // Layer 5C-A Task 8, Task 10 (design §G, preconditions): bcdev (authoritative) is single-flight
   // in 5C-A — the single `LC Mutation Active` row is not lease-protected against concurrent
   // RunMutant calls, so two workers racing activate()/run() against the same container could
   // silently cross-attribute a verdict to the wrong mutant. Cross-process safety (a real lease)
-  // is 5C-B; for now this must fail loudly rather than let it happen. al-runner (non-
-  // authoritative) has its own per-worker process/backend and is unaffected.
+  // is 5C-B; for now this must fail loudly rather than let it happen.
   if (isBcdev(caps.kind) && workers > 1) {
     throw new Error(
       `runSession: workers=${workers} > 1 is rejected for an authoritative (bcdev) backend in Layer 5C-A — the single LC Mutation Active row is not lease-protected against parallel RunMutant calls (cross-process safety is 5C-B).`,
@@ -6116,25 +6232,6 @@ async function runSessionBody(
       `runSession: workers=${workers} > 1 is refused for the al-runner-v3 backend (R586 v1 is sequential).`,
     );
   }
-  // Bounds compile-heavy deploy() calls independently of worker count: alc is
-  // CPU-bound, so worker count (mutant concurrency) must not silently become
-  // compile concurrency.
-  const compileLimit = new Semaphore(cfg.compileConcurrency ?? Math.min(workers, 4));
-  // Built ONCE for the whole session, never per batch: each worker owns one
-  // backend instance (its own instrumented dir and, for al-runner, its own
-  // server process) that is reused across every batch and disposed exactly
-  // once in the `finally` below. Constructing a fresh set per batch would
-  // leak batches × workers instances/processes instead of `workers`.
-  //
-  // Pushed one at a time rather than built via `Array.from` in one
-  // expression: a real factory (Task 7's) does directory/process setup that
-  // can throw partway through — e.g. factory(2) fails after factory(0) and
-  // factory(1) already spun up. Array.from would discard everything built so
-  // far along with the throw, leaking those already-constructed instances
-  // since the `finally` below only ever sees whatever `workerBackends` was
-  // last assigned. Pushing into a pre-declared array means the ones built
-  // before the failure are still visible to (and disposed by) the `finally`.
-  const workerBackends: ExecutionBackend[] = [];
   // Session-scoped: threads each reserved app version into the next reservation so versions
   // stay strictly increasing within one session even when the clock doesn't advance (or a
   // conflict retry re-stamped above something newer than the clock would produce).
@@ -6183,7 +6280,12 @@ async function runSessionBody(
    */
   let resyncSessionOpSeq: (() => Promise<void>) | undefined;
   ({ leaseSession, resyncOpSeq: resyncSessionOpSeq } = await openLeaseScope({
-    lease: cfg.lease,
+    // R680: the lease is asked at the generation recorded on the run row, never at a second read: the
+    // server grants only at the generation it holds, so a restart since is refused `generation-changed`.
+    lease:
+      cfg.lease !== undefined && sessionGeneration !== undefined
+        ? { ...cfg.lease, serverGeneration: async () => sessionGeneration }
+        : cfg.lease,
     backend: cfg.backend,
     safety,
     store: cfg.store,
@@ -6428,23 +6530,6 @@ async function runSessionBody(
       emit({ type: "permission-canary", result: permissionCanary });
       for (const line of permissionCanaryWarnings(permissionCanary)) {
         emit({ type: "warning", code: "permission-canary", message: line });
-      }
-    }
-    if (workers > 1) {
-      const factory = cfg.backendFactory;
-      if (factory === undefined) {
-        throw new Error("runSession: workers > 1 requires backendFactory");
-      }
-      for (let i = 0; i < workers; i++) {
-        const worker = factory(i);
-        handBuildSymbols(worker, buildSymbols);
-        // R488: each worker starts with an empty sibling cache, so it needs the list too.
-        worker.useDiscoveredTests?.(discovery.unfiltered);
-        // R557 (I3): and the session suite, so a worker stops (or carves out) exactly as the
-        // session backend does.
-        worker.useSessionTests?.(tests, undecidedKeptTests);
-        worker.useMutantBudgetFloor?.(minMutantBudgetMs, baselineTimeoutMs);
-        workerBackends.push(worker);
       }
     }
     // R197: one ledger for the whole session, so a kill in batch 0 orders batch 1's tests too.
@@ -6919,7 +7004,7 @@ async function runSessionBody(
         // sufficient to exclude both.
         if (!(deployErr instanceof AlcCompileError)) throw deployErr;
         // 3b'. R461: before blaming a mutant, does the UNMUTATED target compile? Sequential path
-        // only: bcdev, the one backend with the check, refuses `workers > 1`.
+        // only (the one session backend).
         const compilePlainCheck = cfg.backend.compilePlainCheck?.bind(cfg.backend);
         if (compilePlainCheck !== undefined) {
           await plainBuild({
@@ -7439,141 +7524,16 @@ async function runSessionBody(
           memberCountsByTest: memberCounts,
         };
       };
-      // The worker fan-out, used only when workers > 1. It stays here because it deploys to each
-      // worker, which needs this batch's directory and files.
-      const executeCovering = async (
-        plan: CoveringPlan,
-        attestation: AttestationLedger,
-        baselineReused: ReusedBaseline | undefined,
-      ): Promise<void> => {
-        const {
-          mutants: toExecute,
-          perMutantTests,
-          coverageAttribution,
-          baselineDuration,
-          memberCountsByTest: memberCounts,
-        } = plan;
-        const fallbackTimeoutMs = scope.baselineTimeoutMs;
-        const shards = shardEvenly(toExecute, workers);
-        // allSettled, not all: if one shard throws (e.g. the I7 two-
-        // consecutive-transport-errors abort), `Promise.all` would reject
-        // immediately and return control to the caller WHILE sibling shards
-        // are still mid-flight — they'd keep calling record()/
-        // recordTestResult() on a store the caller may already have closed.
-        // Waiting for every shard to settle first means the store is
-        // quiescent before the failure is ever rethrown below.
-        const settled = await Promise.allSettled(
-          shards.map(async (shard, i) => {
-            if (shard.length === 0) return;
-            const backend = workerBackends[i];
-            if (backend === undefined) return; // defensive: shards.length === workerBackends.length
-            // Mirror the sequential deploy try/catch above (step 3), but NOT
-            // verbatim: step 3 runs BEFORE step 5's coverage filter, so
-            // iterating all of `execute` there is correct — nothing has been
-            // recorded yet. This catch runs AFTER step 5, and `shard` (a
-            // slice of `execute`) still includes mutants step 5 already
-            // recorded as `no-coverage`. Skipping those here (same
-            // `perMutantTests.get(...) === undefined` guard
-            // `runMutantsOnBackend` uses) avoids double-recording an
-            // uncovered mutant as `error` too — `mutants` has no unique
-            // constraint on (run_id, mutant_code), so a duplicate INSERT
-            // would corrupt the report silently rather than fail loudly.
-            try {
-              // Latch-guarded like every other work-plane dispatch (design §6). No publish fence
-              // here: `workers > 1` is rejected outright for an authoritative backend (above), so
-              // a worker shard never publishes under a lease.
-              // C02-02: the returned CompiledArtifact is discarded on purpose. Every worker
-              // deploys this SAME batchDir, whose artifactId prepareArtifactDir already baked in,
-              // so this is a copy of the batch's one artifact, not a new identity. `artifacts[]`
-              // (recordArtifact / the batch-published event) records the primary publish per
-              // batch, which happens once above (step 3d), not once per worker here.
-              await compileLimit.run(() => {
-                safety.assertSafe(`deploy(${batchDir}) worker ${i}`);
-                return backend.deploy(batchDir);
-              });
-            } catch (err) {
-              // Same session-abort rule as the sequential path (3b): only a deterministic alc
-              // rejection (AlcCompileError) is bisectable. A DeploymentError, an
-              // ArtifactPrepareError, or anything else is never a compile verdict, so it must
-              // not be bisected or downgraded to per-mutant errors here either — it aborts the
-              // whole session.
-              if (!(err instanceof AlcCompileError)) throw err;
-              // Same "one bad mutant, uninformative errors" problem as the
-              // sequential path above applies here identically — bisect
-              // this worker's own deploy failure the same way. Searches the
-              // FULL manifest, not just `shard`: every worker deploys the
-              // SAME `batchDir` (the whole artifact, every mutant, not a
-              // shard-scoped subset — sharding only decides which worker
-              // EXECUTES which mutant's tests), so a compile failure any
-              // worker observes here is a property of the whole artifact,
-              // and the true culprit need not be one of THIS worker's own
-              // shard's mutants. Recording below still stays scoped to
-              // `shard` (this worker's own mutants) — only the SEARCH scope
-              // widened, not which mutants get marked "error". Each worker
-              // gets its own scratch dir (suffixed by `i`) so concurrently
-              // bisecting shards never race on the same directory.
-              const note = await bisectAndNote({
-                subsetMutants: manifest.mutants,
-                scratchDir: join(
-                  cfg.instrumentedDir,
-                  `run-${runId}-batch-${batchIdx}-bisect-worker-${i}`,
-                ),
-                batchFiles,
-                identityOrdinals,
-                selectorIds: cfg.selectorIds,
-                projectDir: cfg.projectDir,
-                projectManifest,
-                appVersion,
-                artifactId: newArtifactId(),
-                // Keep the compileLimit wrapper: it bounds concurrent alc processes, which is
-                // exactly what bisection candidates are — compileCheck doesn't change that.
-                compileCheck: (dir) => compileLimit.run(() => backend.compileCheck(dir)),
-                originalErr: err,
-                source: sourceSnapshot,
-                excludeOutputs: cfg.excludeOutputs ?? [],
-                configPath: cfg.configPath,
-              });
-              for (const m of shard) {
-                if (perMutantTests.get(m.mutantId) === undefined) continue; // already recorded no-coverage
-                record(cfg.store, runId, m, "error", outcomes, batchIdx, emit, undefined, note);
-              }
-              return;
-            }
-            await runMutantsOnBackend({
-              backend,
-              safety,
-              mutants: shard,
-              perMutantTests,
-              coverageAttribution,
-              baselineDuration,
-              fallbackTimeoutMs,
-              minMutantBudgetMs,
-              store: cfg.store,
-              runId,
-              batchIndex: batchIdx,
-              outcomes,
-              quarantineStore,
-              resourceKey,
-              nowIso,
-              attestation,
-              emit,
-              killLedger,
-              memberCountsByTest: memberCounts,
-              groupRuns,
-              sessionReuse,
-              baselineReused,
-            });
-          }),
-        );
-        const firstRejection = settled.find(
-          (r): r is PromiseRejectedResult => r.status === "rejected",
-        );
-        if (firstRejection !== undefined) throw firstRejection.reason;
-      };
       const scored = await scoreBatch(scope, {
         batchIndex: batchIdx,
         artifactId: compiled?.artifactId,
         tests,
+        // R686 (build review B1): a hook session's proven app is the read AFTER its hook, which the
+        // pre-lease membership check never saw; only a hook-free session's proof covers the check.
+        testsCompiledInPublishedPackage:
+          envPublishes === undefined &&
+          testArmEvidence.kind === "compiled" &&
+          testArmEvidence.from === "published-package",
         snapshot: {
           batchDir,
           testDir: cfg.testDir,
@@ -7586,10 +7546,10 @@ async function runSessionBody(
             !manifest.mutants.some((m) => m.coverageArmNames !== undefined),
           closedWorld: sessionClosedWorld,
           ...(historyTestApp !== undefined ? { provenTestApp: historyTestApp } : {}),
+          ...(sessionGeneration !== undefined ? { serverGeneration: sessionGeneration } : {}),
           lendingSession,
         },
         select,
-        ...(workers > 1 ? { executeCovering } : {}),
       });
       if (scored === "unsafe") break; // stop the whole session: no mutant scheduling, no next batch
       if (scored === "nothing-to-run") continue;
@@ -7644,7 +7604,6 @@ async function runSessionBody(
     try {
       late = await closeLeaseScope({
         backend: cfg.backend,
-        workerBackends,
         safety,
         leaseSession,
         emit,
@@ -8264,7 +8223,7 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
   } finally {
     let late: Error | undefined;
     try {
-      late = await closeLeaseScope({ backend, workerBackends: [], safety, leaseSession, emit });
+      late = await closeLeaseScope({ backend, safety, leaseSession, emit });
     } finally {
       // R508: the lost batch's event and store correction, as in `runSession`'s `finally`.
       invalidateLostBatch(store, runId, leaseSession, safety, emit, late, failure);
@@ -9165,8 +9124,20 @@ async function testAppDependencies(
       );
     }
     microsoft = cfg.backend.microsoftMode();
+  } else if (cfg.backend.dependencyPackageDirs !== undefined) {
+    // R435: no server to ask, but the package folders the backend runs against hold the bytes it
+    // loads (v3 reads Library Assert from `--package-cache`): hash Microsoft's from there too.
+    microsoft = { kind: "folder" };
   }
-  return dependencyFingerprint(inputs, read, microsoft, await targetOf(cfg.projectDir, source));
+  const zipsDir =
+    microsoft.kind === "folder" ? cfg.backend.dependencyArtifactAppsDir?.() : undefined;
+  return dependencyFingerprint(
+    inputs,
+    read,
+    microsoft,
+    await targetOf(cfg.projectDir, source),
+    zipsDir !== undefined ? sourceZipReader(zipsDir) : undefined,
+  );
 }
 
 /** R496: `testAppDependencies`, or why it could not be taken. */
@@ -9430,10 +9401,7 @@ async function proveReadBack(
 }
 
 /**
- * Worker backends are constructed by `backendFactory` inside `runSession`
- * (unlike `cfg.backend`, which the CALLER constructs and is responsible for
- * — see `cli.ts`'s `instanceof BcDevMcpBackend`/`AlRunnerBackend` close
- * calls), so `runSession` itself owns disposing them. `ExecutionBackend`
+ * `ExecutionBackend`
  * doesn't declare a `close()` method (not every backend needs one — the
  * in-memory ones don't), so this duck-types rather than importing concrete
  * backend classes, keeping the orchestrator decoupled from any specific
@@ -9637,6 +9605,23 @@ async function confirmWarm(p: {
       ...(verdict.sessionId !== undefined ? { sessionId: verdict.sessionId } : {}),
     });
     feedAttestation(args.attestation, verdict.attestation);
+    // R658 (I1 on the warm replay): our stop was sent, not refused, and BC never sent its 408. A
+    // `completed` reconcile then proves nothing, because our own stop writes that tombstone while
+    // the AL session may still run. Checked here, before `classifyNonVerdictStep`, so the note names
+    // the replay; since R665 that branch strands the same shape too.
+    if (verdict.operation === "in-flight-unknown" && !stopIsRetrySafe(verdict.stopState)) {
+      await quarantineInFlight({
+        safety: args.safety,
+        quarantineStore: args.quarantineStore,
+        resourceKey: args.resourceKey,
+        nowIso: args.nowIso,
+        detail: `warm replay stopped without BC's 408, ${what} (mutant ${m.mutantId})${verdict.failureMessage !== undefined ? `: ${verdict.failureMessage}` : ""}${tombstoneSentence(verdict.stopState)}`,
+      });
+      return error(
+        "stranded",
+        `${STRANDED_NOTE_PREFIX}${what}: the replay ran past its budget and LethAL stopped it, but BC never sent its 408, so the session may still run on the server — container may be stranded (R658)`,
+      );
+    }
     if (cause === "stopped-after-completion") {
       // G3(a): R204's narrowing fired on the REPLAY's own 408; the covering call's wording would
       // describe the mutated run. What it means here is that k's duration could not be established.
@@ -10002,6 +9987,99 @@ async function reproduceKill(p: Parameters<typeof confirmWarm>[0]): Promise<Repr
   );
 }
 
+/** R688: the note naming the test codeunits a mutant's covering loop skipped, or `undefined`. */
+function discoveryFailedNote(found: readonly TestMethodRef[]): string | undefined {
+  if (found.length === 0) return undefined;
+  const codeunits = found.map((r) => `"${r.codeunitName}" (${r.codeunitId})`).join(", ");
+  return `test codeunit(s) ${codeunits} were skipped under this mutant: BC's suite discovery listed none of their methods when asked for ${found.map((r) => qualifiedTestName(r)).join(", ")}, which passed with no mutant active`;
+}
+
+/** R688: how `confirmFoundNone` ended. `abort` is thrown only after the mutant is recorded. */
+type FoundNoneDecision =
+  | { readonly kind: "confirmed" }
+  | { readonly kind: "abort"; readonly message: string }
+  | KillErrorDecision;
+
+/**
+ * R688: BC's suite discovery listed no methods for `step.ref` (the single path's found-0 answer)
+ * under mutant `m`. Run the same test once more with NO mutant active, at the budget the mutated
+ * run was sent, as the kill confirm does. The row is an unmutated row (`mutantCode` null) and its
+ * duration is not added to `spent`.
+ *
+ * - A reused session proves nothing: `session-reused` (R206).
+ * - `pass`: confirmed. The test runs without the mutant, so the found-0 was the mutant's doing.
+ * - found-0 again, `fail`, `timeout` (or `skip`): the environment changed, not this mutant (the
+ *   test passed at this batch's baseline). An abort, thrown by the caller after recording.
+ * - Any other non-verdict keeps its own cause through `classifyNonVerdictStep`, side effects
+ *   included; with `transportError` it is today's generic abort.
+ */
+async function confirmFoundNone(p: Parameters<typeof confirmWarm>[0]): Promise<FoundNoneDecision> {
+  const { args, m, step, leaseSession, resyncOpSeq, testResultBuffer } = p;
+  const ref = step.ref;
+  const what = `confirming ${ref.method} with no mutant active after BC's suite discovery listed none of it under mutant ${m.mutantId}`;
+  await activateOnce(args.backend, args.safety, null);
+  const r = await singleStep(
+    { backend: args.backend, safety: args.safety, leaseSession, emit: args.emit, resyncOpSeq },
+    ref,
+    { ms: step.testBudgetMs, source: step.testBudgetSource },
+  );
+  const v = r.verdict;
+  testResultBuffer.push({
+    mutantCode: null,
+    ref,
+    outcome: v.outcome,
+    durationMs: v.durationMs,
+    failureMessage: v.failureMessage,
+    opKind: "single",
+    ...(v.sessionId !== undefined ? { sessionId: v.sessionId } : {}),
+  });
+  feedAttestation(args.attestation, v.attestation);
+  if (sessionWasReused(v)) {
+    return {
+      kind: "error",
+      cause: "session-reused",
+      failureNote: `session-reused ${what}: the server reported ${v.testRunsBefore} test method(s) had already run in session ${v.sessionId ?? "?"} before the confirm started, so it does not show the test runs without the mutant (R688)`,
+      transportError: false,
+    };
+  }
+  if (v.outcome === "pass") return { kind: "confirmed" };
+  const ended =
+    v.outcome === "fail"
+      ? "failed"
+      : v.outcome === "timeout"
+        ? "timed out"
+        : v.outcome === "skip"
+          ? "was skipped"
+          : r.cause === undefined &&
+              v.operation === undefined &&
+              isRunMutantFoundNone(v.failureMessage)
+            ? "was again not listed by BC's suite discovery (found 0)"
+            : undefined;
+  if (ended !== undefined) {
+    return {
+      kind: "abort",
+      message: `under mutant ${m.mutantId} (${m.operatorName} in ${m.file}), BC's suite discovery listed no methods for test codeunit "${ref.codeunitName}" (asked for ${qualifiedTestName(ref)}); with no mutant active ${qualifiedTestName(ref)} then ${ended}${v.failureMessage !== undefined ? ` (${v.failureMessage.split("\n")[0] ?? ""})` : ""}, though it passed at this batch's baseline: the published test app, the server or committed data changed; this is not mutant ${m.mutantId}'s verdict. Check the published test app and re-run; --resume keeps the verdicts already scored (R688).`,
+    };
+  }
+  const nv = await classifyNonVerdictStep(r, {
+    m,
+    leaseSession,
+    safety: args.safety,
+    quarantineStore: args.quarantineStore,
+    resourceKey: args.resourceKey,
+    nowIso: args.nowIso,
+    what,
+  });
+  const note = nv?.failureNote ?? `${what}: the confirm answered ${v.outcome}`;
+  return {
+    kind: "error",
+    cause: nv?.cause,
+    // Never in front of a strand's note, whose prefix `--resume` reads (`isStrandedNote`).
+    failureNote: nv?.cause === "stranded" || note.includes(what) ? note : `${what}: ${note}`,
+    transportError: nv?.transportError ?? true,
+  };
+}
+
 /**
  * R206: what the covering loop and the warm confirmation's replay do with a step that carries NO
  * verdict (a lease answer, a lost ack, the group call's own per-mutant causes, our own deadline,
@@ -10138,11 +10216,31 @@ async function classifyNonVerdictStep(
     // readable answer — it already reconciled, and (when the op was proven complete) already
     // spent its one fresh attempt on it. All that is left is which diagnosis to record.
     if (step.cause === "stop-outcome-unconfirmed") {
-      // R-204b (R202): the op reconciled clean, but LethAL had sent a stop for this run and it was
-      // not refused, so the retry was withheld: whether the stop or the test ended the run is not
-      // established. No verdict, no quarantine; `--resume` re-runs it.
-      note = `stop outcome unconfirmed ${what}: LethAL sent a stop for this run (${v.stopState ?? "unknown"}) and its answer could not be read${v.failureMessage !== undefined ? ` (${v.failureMessage})` : ""}; the operation reconciled ${lostAck}, but a run our stop may have ended is never retried, because a hang need not recur — no verdict (R202). Re-run with --resume`;
-      cause = step.cause;
+      // R-204b (R202) kept the retry withheld: a run our stop may have ended is never retried.
+      // R665 (R658's C1 on the mutant path): neither clean-looking read proves the server clean.
+      // `completed` may be our own stop's tombstone while the AL session still runs beside the
+      // next mutant on the same database (a false-kill door). `not-started` after an unrefused
+      // stop whose answer was lost means the original may still arrive, unretried, with the op
+      // counter one off. Both strand: no verdict, quarantine, stop scheduling.
+      const risk =
+        lostAck === "completed"
+          ? `the operation reconciled completed, which may be our own stop's tombstone while the session still runs${tombstoneSentence(v.stopState)}`
+          : "the attempt was never claimed when the marker was read, but the stop was sent and its answer was lost, so the original may still arrive; nothing was re-dispatched";
+      await quarantineInFlight({
+        safety: ctx.safety,
+        quarantineStore: ctx.quarantineStore,
+        resourceKey: ctx.resourceKey,
+        nowIso: ctx.nowIso,
+        detail: `stop outcome unconfirmed ${what} (mutant ${ctx.m.mutantId}), stop ${v.stopState ?? "unknown"}${v.failureMessage !== undefined ? `: ${v.failureMessage}` : ""}; ${risk}`,
+      });
+      note = `${STRANDED_NOTE_PREFIX}${ref.method}: LethAL sent a stop for this run (${v.stopState ?? "unknown"}) and its answer could not be read${v.failureMessage !== undefined ? ` (${v.failureMessage})` : ""}; ${risk} — container may be stranded, no verdict (R665)`;
+      cause = "stranded";
+      // R198, as in the generic strand below: an identity disagreement or a missing route still
+      // names itself and aborts the session.
+      if (step.abortSession !== undefined) {
+        note = `${note} — ${step.abortSession}`;
+        transportError = true;
+      }
       return { failureNote: note, cause, transportError };
     }
     if (lostAck === "completed") {
@@ -10160,6 +10258,11 @@ async function classifyNonVerdictStep(
     }
     // Unresolved: latch unsafe, record a durable tier quarantine, and stop — no further
     // work-plane call (spec §8, §12).
+    // R692: "raise the floor" is advice for a budget overrun only. A failure that came back inside
+    // the budget names itself instead (its HTTP status when the message has one).
+    const overran = v.outcome === "deadline-exceeded" || v.durationMs >= budget;
+    const status = /\bHTTP (\d{3})\b/.exec(v.failureMessage ?? "")?.[1];
+    const early = `${status !== undefined ? `HTTP ${status}` : "an error"} after ${v.durationMs} ms, inside its ${budget} ms budget`;
     await quarantineInFlight({
       safety: ctx.safety,
       quarantineStore: ctx.quarantineStore,
@@ -10168,12 +10271,12 @@ async function classifyNonVerdictStep(
       // Carry the transport's own failure message into the record. Without it the operator
       // is told to recycle a tier and clear a quarantine with no statement of what actually
       // went wrong — and this record outlives the process that wrote it.
-      detail: `test in-flight-unknown ${what} (mutant ${ctx.m.mutantId})${retried ? " — a first, proven-complete attempt had already been retried once" : ""}${v.failureMessage !== undefined ? `: ${v.failureMessage}` : ""} [budget was ${budget} ms; raise the floor with --mutant-timeout-ms and continue with --resume]`,
+      detail: `test in-flight-unknown ${what} (mutant ${ctx.m.mutantId})${retried ? " — a first, proven-complete attempt had already been retried once" : ""}${v.failureMessage !== undefined ? `: ${v.failureMessage}` : ""} [${overran ? `budget was ${budget} ms; raise the floor with --mutant-timeout-ms and continue with --resume` : `${early}; continue with --resume`}]`,
     });
     // R47: the two things the operator needs are the budget this run used and the fact that
     // the verdicts already measured are NOT lost. Both went unsaid until a real project hit
     // this at mutant 13 of 138 and discarded the first twelve.
-    note = `${STRANDED_NOTE_PREFIX}${ref.method} returned no readable result and its operation could not be confirmed complete — container may be stranded. Its budget was ${budget} ms; if the mutant was merely slow rather than stranded, raise the floor with --mutant-timeout-ms and re-run with --resume to keep this session's verdicts`;
+    note = `${STRANDED_NOTE_PREFIX}${ref.method} returned no readable result and its operation could not be confirmed complete — container may be stranded. ${overran ? `Its budget was ${budget} ms; if the mutant was merely slow rather than stranded, raise the floor with --mutant-timeout-ms and re-run with --resume to keep this session's verdicts` : `It failed with ${early}, so a longer budget will not help; re-run with --resume to keep this session's verdicts`}`;
     // R114: the machine value that goes with the prose above. Without it this outcome shipped
     // `cause: undefined`, so `lethal explain`'s R91 prescription — keyed on `cause`, which is
     // the right thing to key on — could never fire for the very case R91 measured. Deliberately
@@ -10221,17 +10324,7 @@ async function classifyNonVerdictStep(
 }
 
 /**
- * The per-mutant kill-detection loop, extracted so that `workers = 1` (one
- * shard containing every mutant, run on `cfg.backend`) and `workers > 1`
- * (N shards, each on its own backend from `backendFactory`) are the exact
- * same code path — there is one session implementation, not two that can
- * drift out of sync with each other.
- *
- * `outcomes` and `store` are shared across concurrent invocations when
- * `workers > 1`; that's safe because `Array.push` and the `bun:sqlite` calls
- * inside `record`/`recordTestResult` are all synchronous within this single
- * process, so interleaving different mutants' async awaits never races on
- * them.
+ * The per-mutant kill-detection loop, run on `cfg.backend` over every mutant of the batch.
  */
 async function runMutantsOnBackend(args: {
   readonly backend: ExecutionBackend;
@@ -10382,6 +10475,8 @@ async function runMutantsOnBackend(args: {
     // active; a later test that kills and reproduces makes it `killed`, a later error keeps that
     // error, and a loop that ends with no other verdict records this one.
     let notReproduced: KillErrorDecision | undefined;
+    // R639: the FIRST refusal flagged `refusedAfterStop` (its note); see the covering loop.
+    let refusedPending: string | undefined;
     // Fix round 2, residual 1 (events.ts doc comment): the exact instant the kill-confirmation
     // loop below decides `cause: "unstable"` because a HUB-green test failed on the FENCE is also
     // the exact instant it knows WHICH test disagreed — captured here so the eventual `record()`
@@ -10416,6 +10511,11 @@ async function runMutantsOnBackend(args: {
       sessionId?: number;
     }> = [];
     let transportErrorRef: TestMethodRef | undefined;
+    // R688: the test codeunits whose discovery this mutant blanked, confirmed with no mutant active
+    // (per mutant, never shared), the found-0 tests in order, and an abort to throw after recording.
+    const skip = new Set<number>();
+    const discoveryFailed: TestMethodRef[] = [];
+    let abortAfterRecord: string | undefined;
     // R197: tests that already killed in this procedure first, then the narrowest, then the
     // fastest. A cost heuristic only; see test-order.ts for the measurement behind it.
     const ordered = orderCoveringTests(covering, m, args.killLedger, args.memberCountsByTest);
@@ -10439,6 +10539,7 @@ async function runMutantsOnBackend(args: {
       resyncOpSeq,
       group: args.groupRuns,
       mutantId: m.mutantId,
+      skip,
     })) {
       // Layer 5C-B2: `runFenced` (or R198's `runFencedMany`), not `runOnce` — a lost ack that
       // reconciliation PROVES completed earns one fresh attempt, and `v` is then that attempt's
@@ -10467,6 +10568,8 @@ async function runMutantsOnBackend(args: {
       });
       if (v.outcome === "pass" || v.outcome === "fail") attempted.add(testKeyOf(ref));
       spent += v.durationMs;
+      // R688: a chunk refused whole for a found-0; the generator runs its methods singly next.
+      if (step.discoveryRefused === true) continue;
       // Layer 5C-A Task 8, Task 10 (design §G): this covering run went through the coverage:
       // "none" transport path (the only path that ever attests) — feed the artifact's ledger.
       feedAttestation(args.attestation, v.attestation);
@@ -10512,6 +10615,15 @@ async function runMutantsOnBackend(args: {
         if (r.transportError) transportErrorRef = ref;
         return false;
       };
+      // R639: v3's refusal that follows a timeout in the same call is a cascade of that stop. The
+      // next covering test's row is one it would get were it first in the order, so the loop goes
+      // on; the refusal stays pending and ends the mutant as an error if nothing else decides it.
+      // Here and not in `classifyNonVerdictStep`: a refused row in a reproduction or a confirm
+      // (which share it) must still end the mutant.
+      if (step.cause === "runner-refused" && v.refusedAfterStop !== undefined) {
+        refusedPending ??= v.failureMessage ?? `${step.cause} running ${ref.method}`;
+        continue;
+      }
       // R206: every non-verdict ending (a lease answer, a lost ack, a group cause, our own
       // deadline, a transport error) is classified by `classifyNonVerdictStep`, the same branches
       // the warm confirmation's replay is classified by. `null` means a real outcome, decided below.
@@ -10524,6 +10636,42 @@ async function runMutantsOnBackend(args: {
         nowIso: args.nowIso,
       });
       if (nonVerdict !== null) {
+        // R688: BC's suite discovery listed no methods for this test under the mutant. Confirm it
+        // with no mutant active; a pass makes it a non-run of that codeunit, and the loop goes on.
+        if (
+          step.opKind === "single" &&
+          nonVerdict.transportError &&
+          nonVerdict.cause === undefined &&
+          step.cause === undefined &&
+          v.operation === undefined &&
+          isRunMutantFoundNone(v.failureMessage)
+        ) {
+          const d = await confirmFoundNone({
+            args,
+            m,
+            step,
+            leaseSession,
+            resyncOpSeq,
+            testResultBuffer,
+          });
+          if (d.kind === "confirmed") {
+            skip.add(ref.codeunitId);
+            discoveryFailed.push(ref);
+            // MANDATORY, as in `reproduceKill`: the confirm cleared the activation.
+            await activateOnce(args.backend, args.safety, m.mutantId);
+            continue;
+          }
+          verdict = "error";
+          if (d.kind === "abort") {
+            failureNote = d.message;
+            abortAfterRecord = d.message;
+          } else {
+            cause = d.cause;
+            failureNote = d.failureNote;
+            if (d.transportError) transportErrorRef = ref;
+          }
+          break;
+        }
         verdict = "error";
         failureNote = nonVerdict.failureNote;
         cause = nonVerdict.cause;
@@ -10642,12 +10790,11 @@ async function runMutantsOnBackend(args: {
       // `timeout`, the only timeout that reaches here.
       if (v.outcome === "fail" || v.outcome === "timeout") {
         const timedOut = v.outcome === "timeout";
-        // R514: an unmutated run has no stop hook (bcdev wires R53's only for a pending mutant), so
-        // an overrun is an abort and a quarantine. A timeout's confirm runs at the baseline's
-        // deadline when that is longer, and judges the duration against the budget the timed-out
-        // run was SENT (`budget`, R516 M2) with R53's 2x margin. With the default floor (above the
-        // baseline deadline) it runs at the budget, and a test slower than that today is abandoned
-        // at that deadline: `in-flight-unknown`, a strand, the tier quarantined; never a kill.
+        // R514: a timeout's confirm runs at the baseline's deadline when that is longer, and judges
+        // the duration against the budget the timed-out run was SENT (`budget`, R516 M2) with R53's
+        // 2x margin. With the default floor (above the baseline deadline) it runs at the budget.
+        // R658: an unmutated run has the stop on bcdev, so a confirm slower than that is stopped:
+        // BC's 408 gives `confirm-stopped`, a stop with no 408 a strand; never a kill.
         const confirmMs = timedOut ? Math.max(budget, args.fallbackTimeoutMs) : budget;
         // R653: a fail kill's confirm and its R577 reproduction may travel as ONE request (al-runner
         // v3 serve-entries, confirm first); the two reads below are unchanged.
@@ -10664,7 +10811,7 @@ async function runMutantsOnBackend(args: {
         // attempt after a proven-complete lost ack, so an intermittent unreadable answer during
         // confirmation costs a kill verdict no more than it costs a covering run's.
         const {
-          verdict: confirm,
+          verdict: confirmRaw,
           lostAck: confirmLostAck,
           retried: confirmRetried,
           retryAfter: confirmRetryAfter,
@@ -10678,6 +10825,9 @@ async function runMutantsOnBackend(args: {
           args.emit,
           resyncOpSeq,
         );
+        // R658 (D6): our stop's `op-stopped` and `stopped-after-completion` on the confirm are the
+        // timeout they are, so they reach `confirm-stopped` below, never a lease branch.
+        const confirm = ownStopAsTimeout(confirmRaw);
         const confirmRefusal =
           classifyLeaseVerdict(confirm) === "lost" &&
           confirmRetryAfter === "not-started" &&
@@ -10726,8 +10876,9 @@ async function runMutantsOnBackend(args: {
             noteLeaseLostOrThrow(leaseSession, detail);
             failureNote = `lease-lost while ${detail} — the kill could not be confirmed under a provable lease`;
           } else if (confirmLease === "op-stopped") {
-            // R203 on the confirmation rerun (unreachable in practice: a null-activation run has
-            // no stop hook), scored the same way: no latch, no verdict, the kill unconfirmed.
+            // R203 on the confirmation rerun. Since R658 the confirm has the stop, and
+            // `ownStopAsTimeout` maps our own `op-stopped` (it carries a `stopState`) to
+            // `confirm-stopped`; this is left for an `op-stopped` with no stop state recorded.
             failureNote = `op-stopped while ${detail} — the fence refused to record the confirmation because our own stop had tombstoned its op; the kill could not be confirmed and the lease was NOT lost (R203)`;
             cause = "op-stopped";
           } else {
@@ -10753,7 +10904,22 @@ async function runMutantsOnBackend(args: {
           // either way (`error`, never `killed`); what differs is whether the tier is condemned.
           // The post-loop `safety.isUnsafe` check (below) stops scheduling only if it is.
           verdict = "error";
-          if (confirmLostAck === "completed") {
+          // Covers `runFenced`'s `stop-outcome-unconfirmed` (that cause is only ever set on such a
+          // verdict) and an unresolved reconcile after a stop, which gets the tombstone sentence.
+          if (confirm.operation === "in-flight-unknown" && !stopIsRetrySafe(confirm.stopState)) {
+            // R658 (I1, D4): our stop was sent, not refused, and BC never sent its 408. A
+            // `completed` reconciliation then proves nothing, because our own stop writes that
+            // tombstone while the AL session may still run. Before `result-lost`, never after it.
+            await quarantineInFlight({
+              safety: args.safety,
+              quarantineStore: args.quarantineStore,
+              resourceKey: args.resourceKey,
+              nowIso: args.nowIso,
+              detail: `confirm stopped without BC's 408, confirming ${ref.method} (mutant ${m.mutantId})${confirm.failureMessage !== undefined ? `: ${confirm.failureMessage}` : ""}${tombstoneSentence(confirm.stopState)}`,
+            });
+            failureNote = `${STRANDED_NOTE_PREFIX}${ref.method} confirm ran past its ${confirmMs} ms budget and LethAL stopped it, but BC never sent its 408, so the session may still run on the server — container may be stranded (R658)`;
+            cause = "stranded";
+          } else if (confirmLostAck === "completed") {
             failureNote = `lost ack confirming ${ref.method}: RunMutant's response was unreadable${confirm.failureMessage !== undefined ? ` (${confirm.failureMessage})` : ""}, but GetOperationStatus confirms the operation COMPLETED server-side — the confirmation was retried once and that attempt was unreadable too, so the kill could not be confirmed; the container is not stranded (design §5)`;
             // R122(b), confirmation-side twin — the op provably finished, only its answer was lost.
             cause = "result-lost";
@@ -10855,6 +11021,13 @@ async function runMutantsOnBackend(args: {
           verdict = "error";
           failureNote = `deadline exceeded confirming ${ref.method} (infrastructure, not a kill)`;
           cause = "deadline-exceeded";
+        } else if (stoppedByUs(confirm)) {
+          // R658 (I3): our stop ended the unmutated run cleanly (BC's 408, or phase 3 refused an op
+          // our stop had tombstoned). It says the test is slow or hangs with no mutant, which is not
+          // `unstable` and not a kill; no quarantine.
+          verdict = "error";
+          cause = "confirm-stopped";
+          failureNote = `confirming ${ref.method}: unmutated, the test also ran past its ${confirmMs} ms budget and LethAL stopped it (BC's 408, or the op was already tombstoned by that stop), so the ${v.outcome} under the mutant is not attributed to it (R658)`;
         } else {
           // Fails under the mutant AND at baseline: by construction this says nothing about the
           // mutant, so it stays `error cause=unstable` (the verdict is NOT reconsidered below).
@@ -10899,18 +11072,39 @@ async function runMutantsOnBackend(args: {
       verdict = "error";
       cause = notReproduced.cause;
       failureNote = notReproduced.failureNote;
+    } else if (verdict === "survived" && refusedPending !== undefined) {
+      // R639: no test decided the mutant past the refusal, so it is that refusal, as before.
+      verdict = "error";
+      cause = "runner-refused";
+      failureNote = refusedPending;
     }
     // R198: a survivor is a mutant EVERY covering test ran against. On the group path a chunking
     // bug could skip tests and still answer all-pass; on the sequential path the set is complete
     // by construction. Checked here, before anything is recorded.
+    // R688 (S5): the tests of a codeunit whose discovery the mutant blanked are not wanted, and no
+    // pass of theirs counts; every other covering test must still have been attempted.
+    const blanked = discoveryFailedNote(discoveryFailed);
     if (verdict === "survived") {
-      const wanted = new Set(ordered.map((ref) => testKeyOf(ref)));
+      const skippedKeys = new Set(
+        ordered.filter((ref) => skip.has(ref.codeunitId)).map((ref) => testKeyOf(ref)),
+      );
+      const wanted = new Set(
+        ordered.map((ref) => testKeyOf(ref)).filter((k) => !skippedKeys.has(k)),
+      );
       const missing = [...wanted].filter((k) => !attempted.has(k));
-      if (missing.length > 0 || attempted.size !== wanted.size) {
+      const counted = [...attempted].filter((k) => !skippedKeys.has(k)).length;
+      if (missing.length > 0 || counted !== wanted.size) {
         verdict = "error";
         cause = "group-coverage-incomplete";
         failureNote = `group-coverage-incomplete: every call answered and every returned method passed, but ${missing.length} of ${wanted.size} covering test(s) were never attempted (${missing.slice(0, 5).join(", ")}${missing.length > 5 ? ", …" : ""}) — not a survivor (R198)`;
+      } else if (blanked !== undefined) {
+        verdict = "error";
+        cause = "test-discovery-failed";
+        failureNote = `test-discovery-failed: ${blanked}; ${wanted.size > 0 ? `the other ${wanted.size} covering test(s) ran and none killed it` : "no other test covers it"}, so this is not a survivor (R688)`;
       }
+    } else if (blanked !== undefined && (verdict === "killed" || verdict === "timeout-killed")) {
+      // Q6: a kill elsewhere stands, and says which tests did not run against the mutant.
+      failureNote = failureNote !== undefined ? `${failureNote} ${blanked}` : blanked;
     }
     // R586 (I3): the backend's tagged note on a survivor (v3: a baseline refusal beside it).
     if (verdict === "survived") {
@@ -10970,6 +11164,8 @@ async function runMutantsOnBackend(args: {
         t.sessionId,
       );
     }
+    // R688 (S10): a discovery confirm that did not pass stops the session, after the record above.
+    if (abortAfterRecord !== undefined) throw new Error(abortAfterRecord);
     if (transportErrorRef !== undefined) {
       throw new Error(
         `backend transport error: two consecutive run() failures for mutant ${m.mutantId} ` +

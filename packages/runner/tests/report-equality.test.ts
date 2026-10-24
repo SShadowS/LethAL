@@ -195,7 +195,17 @@ function buildScenarioReport(): SessionReport {
     {
       type: "baseline-batch-finished",
       batchIndex: 0,
+      // R658: this batch holds a baseline test our stop ended, so the producer writes the budget.
+      stoppedBudgetMs: 120000,
       verdicts: [
+        // R658: ran past --baseline-timeout-ms and OUR stop ended it (the orchestrator's
+        // `stopState`, which reaches the stream as this classification). A `timeout`, so it is
+        // not in `unsupportedTests`; it becomes `baselineStopped` and its caveat.
+        {
+          name: "Sales Post Tests.PostBatchWaitsForLock",
+          outcome: "timeout",
+          classification: ["baseline-test-stopped"],
+        },
         {
           name: "Sales Permission Tests.WritesToAppTable",
           outcome: "fail",
@@ -387,6 +397,35 @@ function buildScenarioReport(): SessionReport {
       cause: "kill-not-reproduced",
       failureNote:
         "kill-not-reproduced LogInsertsOnApproval: failed under the mutant (Assert.IsTrue failed.), passed with no mutant active, then passed when LethAL re-ran it under the mutant; the failure did not repeat, so it is not attributed to the mutant (R577). Re-run with --resume to measure it again.",
+    },
+    {
+      // R658: a kill whose cold confirm (no mutant active) also ran past its budget and was
+      // stopped by BC's 408. Zero duration, so R54's `mutantsMs` oracle is unmoved.
+      type: "mutant-scored",
+      // The golden input has no M0015; M0010's site under a new id and hash.
+      mutant: { ...mutant("M0010"), mutantId: "M0015", astHash: "r658-m0015" },
+      verdict: "error",
+      batchIndex: 2,
+      durationMs: 0,
+      coveringTests: ["Sales Approval Tests.ApproveBatchSendsRequest"],
+      cause: "confirm-stopped",
+      failureNote:
+        "confirm-stopped ApproveBatchSendsRequest: timed out under the mutant, then ran past its budget with no mutant active and LethAL stopped it on the server (BC confirmed with its 408); not attributed to the mutant (R658).",
+    },
+    {
+      // R688: under the mutant BC's suite discovery listed no methods for a covering test
+      // codeunit; with no mutant active its test passed. Zero duration, so R54's `mutantsMs` oracle
+      // is unmoved.
+      type: "mutant-scored",
+      // The golden input has no M0016; M0011's site under a new id and hash.
+      mutant: { ...mutant("M0011"), mutantId: "M0016", astHash: "r688-m0016" },
+      verdict: "error",
+      batchIndex: 2,
+      durationMs: 0,
+      coveringTests: ["Sales Approval Tests.LogInsertsOnApproval"],
+      cause: "test-discovery-failed",
+      failureNote:
+        'test-discovery-failed: test codeunit(s) "Sales Approval Tests" (50100) were skipped under this mutant: BC\'s suite discovery listed none of their methods when asked for Sales Approval Tests.LogInsertsOnApproval, which passed with no mutant active; no other test covers it, so this is not a survivor (R688)',
     },
     // R53: two mutants a prior run stranded the tier on, skipped rather than retried —
     // `mutant-skipped-stranded`, never `mutant-scored`: the event's own type already implies

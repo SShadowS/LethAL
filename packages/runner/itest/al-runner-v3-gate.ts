@@ -12,6 +12,7 @@
  * (`runner-refused`, no killing test). Anything else is `gate-fail`.
  */
 import { writeFile } from "node:fs/promises";
+import { AlRunnerCoverageFrameError } from "../src/al-runner-coverage";
 import type { V3EntriesStats } from "../src/al-runner-v3-backend";
 import { AlRunnerV3CoverageJoinError } from "../src/al-runner-v3-sleep";
 import { bareHashRows } from "./mutant-equality";
@@ -146,7 +147,9 @@ export function cdoCheckoutRefusal(c: {
 }
 
 /** The exact leg set a `pass` must hold (r3 F6 d). R654 S2 adds L1, Y-A and Y-B (a candidate is
- *  judged on layout and symbol sets too); K is outside it by ruling (`alrunner-v3-legs.ts`). */
+ *  judged on layout and symbol sets too); K is outside it by ruling (`alrunner-v3-legs.ts`).
+ *  R602 (orchestrator ruling 2026-10-24) adds MO and WR: they are the only measurement of v3's
+ *  per-object frame, so a pin that breaks it must not move `current`. */
 export const V3_GATE_LEGS = [
   "C",
   "S1",
@@ -156,6 +159,8 @@ export const V3_GATE_LEGS = [
   "L1",
   "Y-A",
   "Y-B",
+  "MO",
+  "WR",
   "D1",
   "D1c",
   "T",
@@ -430,7 +435,7 @@ export function knownDifferencesRefusal(
 
 /**
  * Leg C's defect facts: each must read `defect-present` (r6; `none-selected-exit` since r7, R632;
- * `refusal-row-shape` since r9, R639). Every other fact of the 27 is a contract fact and must read
+ * `refusal-row-shape` since r9, R639). Every other fact of the 28 is a contract fact and must read
  * `matches`, except the warn facts.
  */
 export const V3_DEFECT_FACTS = [
@@ -447,10 +452,10 @@ export const V3_DEFECT_FACTS = [
 ] as const;
 
 /**
- * Leg C's pre-committed fact count: 9 defect, 17 contract, 1 warn (r12, R667: the contract fact
- * `message-has-no-type-prefix`; r9 had 26).
+ * Leg C's pre-committed fact count: 9 defect, 18 contract, 1 warn (r13, R590: the contract fact
+ * `dependency-skip-line`; r12 (R667, `message-has-no-type-prefix`) had 27, r9 had 26).
  */
-export const V3_LEG_C_FACTS = 27;
+export const V3_LEG_C_FACTS = 28;
 
 /** F4 (R639): leg C's per-fact log line, with `measured` whole. */
 export const legCFactLine = (f: {
@@ -648,12 +653,17 @@ export class V3LegHeld extends Error {
  * M2: a leg's outcome from its error, by TYPE only. Anything untyped is `infra-fail`. F4: inside
  * the update gate, `AlRunnerV3CoverageJoinError` is a real v3 behaviour change (the form of its
  * coverage paths moved), so it is `gate-fail`, kept under `failed/<tag>@<commit>`; in a user
- * session it stays a plain refusal.
+ * session it stays a plain refusal. R602: inside legs MO and WR, `AlRunnerCoverageFrameError` is
+ * `gate-fail` too: those legs are the measurement of v3's per-object frame, so the error IS the
+ * regression. In every other leg it stays `infra-fail`.
  */
-export function legOutcomeOfError(err: unknown): V3LegOutcome {
+export function legOutcomeOfError(err: unknown, leg?: string): V3LegOutcome {
   if (err instanceof V3LegHeld) return "held";
   if (err instanceof V3LegFailure) return "gate-fail";
   if (err instanceof AlRunnerV3CoverageJoinError) return "gate-fail";
+  if (err instanceof AlRunnerCoverageFrameError && (leg === "MO" || leg === "WR")) {
+    return "gate-fail";
+  }
   return "infra-fail";
 }
 

@@ -32,8 +32,12 @@
  * ORDER IS DELIBERATE: the ON leg runs FIRST, because it leaves the tier clean. The SINGLE leg
  * (R-204b) runs second: the ON leg's flag with `--no-group-runs`, so every covering test goes
  * through `RunMutant` alone, which is the only path R-204b's Part A changes and which the grouped
- * ON leg cannot reach. It also leaves the tier clean. The OFF leg quarantines by design and is
- * torn down afterwards.
+ * ON leg cannot reach. It also leaves the tier clean. The BASELINE leg (R-658) runs third: a short
+ * baseline budget over `HangBaselineTests.Codeunit.al`, so LethAL stops one UNMUTATED test on the
+ * server, on the coverage path. Any failure there is a STOP (exit 5, no further leg, no teardown,
+ * the server held), per `docs/superpowers/specs/2026-10-22-r658-hang-baseline-leg-precommitment.md`;
+ * its judgements live in `hang-baseline-leg.ts`. The OFF leg quarantines by design and is torn
+ * down afterwards.
  *
  * Connection details are never committed; this reads the gitignored
  *   fixtures/sandbox-hang/lethal.config.local.json
@@ -41,6 +45,7 @@
  * every run but treats publishing the TEST app as the user's own workflow — R56).
  */
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -51,10 +56,10 @@ import { BcDevMcpBackend } from "../src/bcdev-backend";
 import { devPortOf, odataUrlsOf, validateBcDevConfig } from "../src/cli";
 import type { LethalConfigFile } from "../src/cli";
 import { DeploymentVerifier } from "../src/deployment-verifier";
-import type { EventSubscriber } from "../src/events";
+import type { EventSubscriber, RunEvent } from "../src/events";
 import { formatFailure } from "../src/format-failure";
 import { HarnessVerifier } from "../src/harness";
-import { LeaseClient } from "../src/lease";
+import { LeaseClient, MAX_TTL_SECONDS } from "../src/lease";
 import { runSession } from "../src/orchestrator";
 import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "../src/publisher";
 import type { QuarantineRecord } from "../src/quarantine-store";
@@ -65,6 +70,19 @@ import { BaselineRecordedError, assertGateBaseline, preflightGateBaseline } from
 import { itestConfigName, itestConfigPath, printItestTarget } from "./config-path";
 import { HANG_FIGURES } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import { HANG_SUBLEGS } from "./gate-sublegs";
+import {
+  BASELINE_PROBE_OWNER,
+  type BaselineVerdictEvent,
+  type HangTestRow,
+  type LegState,
+  baselineLegFailures,
+  copyEvidence,
+  quarantineRecordsIn,
+  quarantineStopReasons,
+  stopHungSessionsFindings,
+  writeLegState,
+} from "./hang-baseline-leg";
 import {
   type QuarantineDiagnostic,
   type WarningDiagnostic,
@@ -89,6 +107,88 @@ const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-hang");
 const TEST_DIR = join(REPO_ROOT, "fixtures", "sandbox-hang-tests");
 const CONFIG_LOCAL_PATH = itestConfigPath(PROJECT_DIR);
 printItestTarget(CONFIG_LOCAL_PATH);
+
+/**
+ * R-658 §5: the STOP rule's in-process state. The wrapper passes the leg marker's path and the
+ * evidence dir; without them (a run by hand) the marker and the copy are skipped, never the rule.
+ */
+const LEG_STATE_PATH = process.env.LETHAL_ITEST_HANG_LEG_STATE;
+const EVIDENCE_DIR = process.env.LETHAL_ITEST_HANG_EVIDENCE_DIR;
+const LEG_MODES = ["on", "single", "baseline", "off"] as const;
+let legState: LegState | undefined;
+let stopReason: string | undefined;
+/** Set once `main()` made its scratch root, so a crash handler can copy the evidence. */
+let scratchRootForEvidence: string | undefined;
+
+function setLegState(state: LegState): void {
+  legState = state;
+  writeLegState(LEG_STATE_PATH, state);
+}
+
+/** A STOP raised on purpose (a D-C quarantine, a failed BASELINE assertion). */
+class HangStopError extends Error {
+  override readonly name = "HangStopError";
+}
+
+/** The STOP path. The marker is written FIRST, before any log line (§5). Idempotent. */
+function fireStop(reason: string): void {
+  if (stopReason !== undefined) return;
+  setLegState("stop");
+  stopReason = reason;
+}
+
+function printStopBanner(): void {
+  console.error(
+    [
+      `hang itest: STOP (${stopReason ?? "unknown"})`,
+      "  No further leg ran, and there was no teardown force-reset, RecoverOp or unpublish.",
+      "  If BC answered the stop, the control-app lease and `lethal doctor` may read this server",
+      "  CLEAN. Do NOT trust that until the owner has restarted it and bc-linux-setup ran clean.",
+    ].join("\n"),
+  );
+}
+
+/**
+ * Review I1: on any exit that is not yet a STOP, a quarantine record left by ON or SINGLE makes it
+ * one, because a throw in those legs skips their D-C check.
+ */
+function stopOnLeftoverQuarantine(scratchRoot: string | undefined): void {
+  if (stopReason !== undefined || scratchRoot === undefined) return;
+  const found = quarantineRecordsIn(scratchRoot);
+  if (found.length > 0) fireStop(`D-C quarantine found on the way out: ${found.join("; ")}`);
+}
+
+async function crashed(kind: string, err: unknown): Promise<void> {
+  if (legState === "armed") fireStop(`${kind} while the BASELINE leg was armed`);
+  else stopOnLeftoverQuarantine(scratchRootForEvidence);
+  console.error(`hang itest: ${kind}`);
+  console.error(formatFailure(err));
+  const msg = err instanceof Error ? err.message : String(err);
+  if (stopReason !== undefined) {
+    if (scratchRootForEvidence !== undefined) {
+      for (const l of copyEvidence(scratchRootForEvidence, EVIDENCE_DIR, LEG_MODES))
+        console.error(`  ${l}`);
+    }
+    printStopBanner();
+  } else {
+    // ponytail: no async teardown from a crash handler; it says what was skipped instead.
+    console.error(
+      "  No teardown force-reset ran. If the OFF leg had started, its stranded op marker blocks every later run on this server; see teardown() in hang.itest.ts for the recovery.",
+    );
+  }
+  // Review M3: a crash writes a failed receipt too, naming the STOP or the crash.
+  try {
+    await emitFailed(
+      "hang",
+      stopReason !== undefined ? `STOP (exit 5): ${stopReason}` : `${kind}: ${msg}`,
+    );
+  } catch (receiptErr) {
+    console.error(`  receipt write failed: ${formatFailure(receiptErr)}`);
+  }
+  process.exit(stopReason !== undefined ? 5 : 1);
+}
+process.on("uncaughtException", (err) => void crashed("uncaught exception", err));
+process.on("unhandledRejection", (err) => void crashed("unhandled rejection", err));
 /**
  * R-204b: the SINGLE leg's committed per-mutant baseline (R332: refused when missing, recorded
  * once with `LETHAL_ITEST_RECORD_BASELINE=hang.single.baseline.json`, exit 3, never a pass). The ON
@@ -324,18 +424,18 @@ async function readJson<T>(path: string, what: string): Promise<T> {
 
 interface LegResult {
   readonly report: SessionReport;
-  /** `test_results` rows for this run, so the gate can assert BC's own words, not just a verdict. */
-  readonly testRows: ReadonlyArray<{
-    readonly op_kind: string | null;
-    /** NULL on a confirm row (R514/R516's cold confirm, R206's replay). */
-    mutant_code: string | null;
-    /** R516: the mutant row a test row belongs to, a confirm row included. */
-    mutant_row_id: number | null;
-    method: string;
-    outcome: string;
-    duration_ms: number;
-    failure_message: string | null;
-  }>;
+  /**
+   * `test_results` rows for this run, so the gate can assert BC's own words, not just a verdict.
+   * `mutant_code` is NULL on a confirm row (R514/R516's cold confirm, R206's replay) and on a
+   * baseline row; `mutant_row_id` (R516) is NULL only on a baseline row.
+   */
+  readonly testRows: readonly HangTestRow[];
+  /** R-658: every `baseline-batch-finished` verdict, with its classification. */
+  readonly baselineVerdicts: readonly BaselineVerdictEvent[];
+  /** R-658: this run's `quarantined` events (D-C, assertion 10). */
+  readonly quarantinedEvents: number;
+  /** R-658: this run's `baseline_snapshots` rows (assertion 12; the ON leg's positive control). */
+  readonly baselineSnapshotRows: number;
   readonly odataCfg: ActivationConfig;
   readonly quarantineDir: string;
   /** R206: `ResultsStore.sessionIdLiveness` for this run, read before the store closes. */
@@ -351,11 +451,15 @@ interface LegResult {
   readonly repro: readonly string[];
 }
 
-/** `single` is R-204b's leg: `--stop-hung-sessions` with `--no-group-runs`. */
-type LegMode = "on" | "single" | "off";
+/**
+ * `single` is R-204b's leg: `--stop-hung-sessions` with `--no-group-runs`. `baseline` is R-658's:
+ * the flag absent, a 10 s baseline budget, `--tests-only` on the new codeunit, and
+ * `--operator conditional-boundary`.
+ */
+type LegMode = (typeof LEG_MODES)[number];
 
 async function runLeg(scratchRoot: string, mode: LegMode): Promise<LegResult> {
-  const stopHungSessions = mode !== "off";
+  const stopHungSessions = mode === "on" || mode === "single";
   const configFile = await readJson<LethalConfigFile>(CONFIG_LOCAL_PATH, itestConfigName());
   const bcdev = validateBcDevConfig(configFile.bcdev);
   const toolPaths = await defaultAlToolPaths();
@@ -389,20 +493,21 @@ async function runLeg(scratchRoot: string, mode: LegMode): Promise<LegResult> {
     ...(bcdev.tenant !== undefined ? { tenant: bcdev.tenant } : {}),
   };
   const harnessVerifier = new HarnessVerifier(odataCfg);
+  // R-658: named so assertion 19 can read it; `devPortOf` adds only the port, at the constructor.
+  const backendCfg = {
+    mcpCommand: bcdev.mcpCommand,
+    project: PROJECT_DIR,
+    server: bcdev.server,
+    serverInstance: bcdev.serverInstance,
+    company: bcdev.company,
+    packageCachePath: bcdev.packageCachePath,
+    controlSymbolPath: bcdev.controlSymbolPath,
+    ...(bcdev.tenant !== undefined ? { tenant: bcdev.tenant } : {}),
+    ...(bcdev.env !== undefined ? { env: bcdev.env } : {}),
+    ...(stopHungSessions ? { stopHungSessions: true } : {}),
+  };
   const backend = new BcDevMcpBackend(
-    {
-      mcpCommand: bcdev.mcpCommand,
-      project: PROJECT_DIR,
-      server: bcdev.server,
-      ...devPortOf(bcdev),
-      serverInstance: bcdev.serverInstance,
-      company: bcdev.company,
-      packageCachePath: bcdev.packageCachePath,
-      controlSymbolPath: bcdev.controlSymbolPath,
-      ...(bcdev.tenant !== undefined ? { tenant: bcdev.tenant } : {}),
-      ...(bcdev.env !== undefined ? { env: bcdev.env } : {}),
-      ...(stopHungSessions ? { stopHungSessions: true } : {}),
-    },
+    { ...backendCfg, ...devPortOf(bcdev) },
     undefined,
     {
       compiler,
@@ -413,46 +518,87 @@ async function runLeg(scratchRoot: string, mode: LegMode): Promise<LegResult> {
     (targetAppId, artifactId, controlState) =>
       new RunMutantTransport(odataCfg, targetAppId, artifactId, undefined, { controlState }),
   );
-
   // A SCRATCH quarantine dir: the OFF leg quarantines BY DESIGN, and one landing in the real
   // ~/.lethal store would poison every later gate run on this container until an operator deleted
   // it by hand. Same reasoning as bcdev.itest.ts, load-bearing here rather than defensive.
   const quarantineDir = join(scratchRoot, `quarantine-${mode}`);
   const store = new ResultsStore(join(scratchRoot, `hang-${mode}.sqlite`));
   const warnings: WarningDiagnostic[] = [];
-  const collectWarnings: EventSubscriber = (event) => {
+  const baselineVerdicts: BaselineVerdictEvent[] = [];
+  let quarantinedEvents = 0;
+  const collect: EventSubscriber = (event: RunEvent) => {
     if (event.type === "warning") warnings.push({ code: event.code, message: event.message });
+    if (event.type === "quarantined") quarantinedEvents += 1;
+    if (event.type === "baseline-batch-finished") {
+      for (const v of event.verdicts) {
+        baselineVerdicts.push({
+          name: v.name,
+          outcome: v.outcome,
+          classification: v.classification,
+        });
+      }
+    }
+  };
+  const sessionCfg = {
+    backend,
+    store,
+    projectDir: PROJECT_DIR,
+    testDir: TEST_DIR,
+    instrumentedDir: join(scratchRoot, `instr-${mode}`),
+    selectorIds: SELECTOR_IDS,
+    mutantTimeoutMs: BUDGET_MS,
+    ...(stopHungSessions ? { stopHungSessions: true } : {}),
+    // R-204b: the CLI's `--no-group-runs`, so every covering test is one `RunMutant` call.
+    ...(mode === "single" ? { groupRuns: { enabled: false } } : {}),
+    // R-658 §4: the BASELINE leg's narrowing and its short baseline budget; grouping at default.
+    ...(mode === "baseline"
+      ? {
+          baselineTimeoutMs: HANG_FIGURES.baselineBudgetMs,
+          testsOnly: ["**/HangBaselineTests.Codeunit.al"],
+          operators: ["lethal.conditional-boundary"],
+        }
+      : {}),
+    lease: {
+      client: new LeaseClient(odataCfg),
+      serverGeneration: async () => (await harnessVerifier.verify()).serverGeneration,
+    },
+    resourceServer: bcdev.server,
+    resourceServerInstance: bcdev.serverInstance,
+    quarantineDir,
+    emit: [collect],
   };
   try {
-    const report = await runSession({
-      backend,
-      store,
-      projectDir: PROJECT_DIR,
-      testDir: TEST_DIR,
-      instrumentedDir: join(scratchRoot, `instr-${mode}`),
-      selectorIds: SELECTOR_IDS,
-      mutantTimeoutMs: BUDGET_MS,
-      ...(stopHungSessions ? { stopHungSessions: true } : {}),
-      // R-204b: the CLI's `--no-group-runs`, so every covering test is one `RunMutant` call.
-      ...(mode === "single" ? { groupRuns: { enabled: false } } : {}),
-      lease: {
-        client: new LeaseClient(odataCfg),
-        serverGeneration: async () => (await harnessVerifier.verify()).serverGeneration,
-      },
-      resourceServer: bcdev.server,
-      resourceServerInstance: bcdev.serverInstance,
-      quarantineDir,
-      emit: [collectWarnings],
-    });
+    if (mode === "baseline") {
+      // Assertion 19 (M4), before the leg's first server call and before the marker is armed:
+      // a plain Error, so exit 1 and today's teardown. Nothing was sent.
+      const found = stopHungSessionsFindings(backendCfg, sessionCfg);
+      if (found.length > 0) throw new Error(found.join("; "));
+      setLegState("armed");
+    }
+    const report = await runSession(sessionCfg);
     const testRows = store.db
       .query(
-        "SELECT mutant_code, mutant_row_id, method, outcome, duration_ms, failure_message, op_kind FROM test_results ORDER BY id",
+        "SELECT mutant_code, mutant_row_id, codeunit_name, method, outcome, duration_ms, failure_message, op_kind FROM test_results ORDER BY id",
       )
-      .all() as LegResult["testRows"];
+      .all() as HangTestRow[];
     const runId = latestRunId(store);
     const sessionLiveness = store.sessionIdLiveness(runId);
     const repro = killReproductionFailures(`hang/${mode}`, report, store, runId);
-    return { report, testRows, odataCfg, quarantineDir, sessionLiveness, warnings, repro };
+    const snap = store.db
+      .query("SELECT COUNT(*) AS n FROM baseline_snapshots WHERE run_id = ?")
+      .get(runId) as { n: number };
+    return {
+      report,
+      testRows,
+      baselineVerdicts,
+      quarantinedEvents,
+      baselineSnapshotRows: snap.n,
+      odataCfg,
+      quarantineDir,
+      sessionLiveness,
+      warnings,
+      repro,
+    };
   } finally {
     store.close();
     // Without this the spawned bc-dev MCP child keeps the event loop alive and the script hangs —
@@ -724,6 +870,58 @@ function assertOnLeg(leg: LegResult): void {
   assertColdConfirms("ON", leg, EXPECTED_COLD_CONFIRMS_ON);
   assertTwoStops("ON", leg);
   assert.deepEqual(leg.repro, [], leg.repro.join("; "));
+  // R-658 §3: the positive control for the BASELINE leg's assertion 12 (no snapshot there). A
+  // green baseline at the default budget records one, so a store read that saw nothing fails here.
+  assert.ok(
+    leg.baselineSnapshotRows >= 1,
+    `[ON] R-658: the store must hold at least one baseline_snapshots row; got ${leg.baselineSnapshotRows}`,
+  );
+}
+
+/** R-658 §3 D-C: a quarantine in ON or SINGLE is a STOP, checked before the leg's assertions. */
+async function stopOnQuarantine(label: string, leg: LegResult): Promise<void> {
+  const reasons = quarantineStopReasons(label, {
+    report: leg.report,
+    quarantinedEvents: leg.quarantinedEvents,
+    quarantineRecords: (await readQuarantineRecords(leg.quarantineDir)).length,
+  });
+  if (reasons.length === 0) return;
+  fireStop(`D-C quarantine: ${reasons.join("; ")}`);
+  await printLegFailureDiagnostics(label, leg);
+  throw new HangStopError(reasons.join("; "));
+}
+
+/**
+ * R-658 §4 assertion 18: after the session, the control-app lease must be free to a fresh owner
+ * and give itself back. A throw here is a STOP too (the marker reads `armed`).
+ */
+async function probeAcquire(
+  odataCfg: ActivationConfig,
+): Promise<{ granted: boolean; released: boolean }> {
+  const generation = (await new HarnessVerifier(odataCfg).verify()).serverGeneration;
+  const client = new LeaseClient(odataCfg);
+  const got = await client.acquire(BASELINE_PROBE_OWNER, MAX_TTL_SECONDS, randomUUID(), generation);
+  if (!got.granted) {
+    console.error(`  probe acquire REFUSED: ${JSON.stringify(got)}`);
+    return { granted: false, released: false };
+  }
+  const rel = await client.release(got.lease);
+  if (!rel.released) console.error(`  probe release REFUSED: ${rel.reason}`);
+  return { granted: true, released: rel.released };
+}
+
+function dumpBaselineLeg(leg: LegResult): void {
+  dump("BASELINE (--baseline-timeout-ms 10000)", leg.report);
+  const r = leg.report;
+  // §4 "recorded, not asserted".
+  console.log(
+    `  [BASELINE] groupedCalls=${r.groupedCalls} warmKills=${r.warmKills} singleRows=${leg.sessionLiveness.singleRows} singleDistinct=${leg.sessionLiveness.singleDistinct} manyDistinct=${leg.sessionLiveness.manyDistinct} caveats=${JSON.stringify(r.validity.caveats)}`,
+  );
+  for (const row of leg.testRows.filter((t) => t.mutant_row_id === null)) {
+    console.log(
+      `    baseline ${row.codeunit_name}.${row.method} ${row.outcome} ${row.duration_ms} ms ${JSON.stringify((row.failure_message ?? "").slice(0, 160))}`,
+    );
+  }
 }
 
 /** R582: every `timeout-killed` mutant was stopped twice by BC, the first run and the re-run. */
@@ -739,8 +937,9 @@ function assertTwoStops(label: string, leg: LegResult): void {
  * scores the ON leg's verdict (`EXPECTED_ON`), every hang stays `timeout-killed` with BC's own stop
  * words on a single-call row, every kill sits at position 1 (one method per call, so the line-145
  * hang is no longer a position-2 warm kill), and NO mutant ends `stopped-after-completion` (Part A
- * must not swallow a real hang) or `stop-outcome-unconfirmed` (R202's 400; if it appears live it
- * is a gate failure to re-run once, never a baseline value). `main()` then checks the per-mutant
+ * must not swallow a real hang) or `stop-outcome-unconfirmed`. Since R665, R202's lost answer
+ * ends `stranded` with a quarantine record, which is a STOP (D-C), so R582's F3 one-rerun no
+ * longer applies to it. Never a baseline value. `main()` then checks the per-mutant
  * baseline.
  */
 function assertSingleLeg(leg: LegResult): void {
@@ -889,12 +1088,14 @@ async function main(): Promise<void> {
   // R332: refuse in seconds, before any live work, when the SINGLE leg's baseline is missing.
   preflightGateBaseline(SINGLE_BASELINE_PATH, "hang itest SINGLE leg");
   const scratchRoot = await mkdtemp(join(tmpdir(), "lethal-hang-itest-"));
+  scratchRootForEvidence = scratchRoot;
   let odataCfg: ActivationConfig | undefined;
   try {
     // ON first: it leaves the tier clean, so a failure here is not confounded by the OFF leg's
     // deliberate quarantine.
     const on = await runLeg(scratchRoot, "on");
     odataCfg = on.odataCfg;
+    await stopOnQuarantine("stop-hung-sessions ON", on);
     try {
       assertOnLeg(on);
     } catch (err) {
@@ -905,6 +1106,7 @@ async function main(): Promise<void> {
     // R-204b: the single path, second, because it too leaves the tier clean.
     const single = await runLeg(scratchRoot, "single");
     odataCfg = single.odataCfg;
+    await stopOnQuarantine("stop-hung-sessions SINGLE", single);
     try {
       assertSingleLeg(single);
     } catch (err) {
@@ -912,6 +1114,38 @@ async function main(): Promise<void> {
       throw err;
     }
     await assertGateBaseline(single.report, SINGLE_BASELINE_PATH, "hang itest SINGLE leg");
+
+    // R-658: the BASELINE leg, third. `runLeg` checks assertion 19 and then arms the marker; from
+    // there every failure and every throw is a STOP (D1).
+    const started = Date.now();
+    const baseline = await runLeg(scratchRoot, "baseline");
+    odataCfg = baseline.odataCfg;
+    const probe = await probeAcquire(baseline.odataCfg);
+    const elapsedMs = Date.now() - started;
+    const failures = baselineLegFailures({
+      report: baseline.report,
+      testRows: baseline.testRows,
+      baselineVerdicts: baseline.baselineVerdicts,
+      quarantinedEvents: baseline.quarantinedEvents,
+      quarantineRecords: (await readQuarantineRecords(baseline.quarantineDir)).length,
+      warnings: baseline.warnings,
+      baselineSnapshotRows: baseline.baselineSnapshotRows,
+      repro: baseline.repro,
+      sessionLiveness: baseline.sessionLiveness,
+      probe,
+      elapsedMs,
+    });
+    // The marker is written before any log line of a STOP (§5), so the judgement comes first.
+    if (failures.length > 0) fireStop(`BASELINE leg: ${failures.join("; ")}`);
+    dumpBaselineLeg(baseline);
+    console.log(
+      `  [BASELINE] probe granted=${probe.granted} released=${probe.released}; leg ${elapsedMs} ms`,
+    );
+    if (failures.length > 0) {
+      await printLegFailureDiagnostics("BASELINE", baseline);
+      throw new HangStopError(failures.join("; "));
+    }
+    setLegState("passed");
 
     const off = await runLeg(scratchRoot, "off");
     odataCfg = off.odataCfg;
@@ -924,11 +1158,27 @@ async function main(): Promise<void> {
 
     console.log("hang itest: PASS");
     await emitPassed("hang", {
-      sublegs: ["stop-hung-sessions-on", "stop-hung-sessions-single", "stop-hung-sessions-off"],
+      sublegs: [...HANG_SUBLEGS],
       artifacts: { reported: false },
     });
+  } catch (err) {
+    // §5 trigger 6: any throw once the marker reads `armed` (runSession, the probe, a store read).
+    if (legState === "armed") {
+      fireStop(
+        `throw while the BASELINE leg was armed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    throw err;
   } finally {
-    if (odataCfg !== undefined) await teardown(odataCfg);
+    // Review I1: a throw in ON or SINGLE skipped their D-C check; a record they left is a STOP.
+    stopOnLeftoverQuarantine(scratchRoot);
+    if (stopReason !== undefined) {
+      // A STOP: evidence first, before the scratch root goes, and NO teardown.
+      for (const l of copyEvidence(scratchRoot, EVIDENCE_DIR, LEG_MODES)) console.error(`  ${l}`);
+      printStopBanner();
+    } else if (odataCfg !== undefined) {
+      await teardown(odataCfg);
+    }
     await rm(scratchRoot, { recursive: true, force: true });
   }
 }
@@ -941,7 +1191,9 @@ try {
   // R346: print the reason before any await, as R332 does, so a kill during the receipt write
   // cannot hide it.
   console.error(formatFailure(err));
-  await emitFailed("hang", err instanceof Error ? err.message : String(err));
-  // R332: a record run wrote the SINGLE leg's baseline and is never a pass.
-  process.exit(err instanceof BaselineRecordedError ? 3 : 1);
+  const msg = err instanceof Error ? err.message : String(err);
+  await emitFailed("hang", stopReason !== undefined ? `STOP (exit 5): ${stopReason}` : msg);
+  // R-658: a STOP exits 5. R332: a record run wrote the SINGLE leg's baseline and is never a pass.
+  // The two never meet: a record run writes in SINGLE, after its D-C check and before BASELINE.
+  process.exit(err instanceof BaselineRecordedError ? 3 : stopReason !== undefined ? 5 : 1);
 }

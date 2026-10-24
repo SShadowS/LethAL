@@ -1903,7 +1903,13 @@ function gapsOf(files: Files): R572Gaps {
 describe("R604 census: one counter per gap master already has (not refusals)", () => {
   const ZERO: R572Gaps = {
     h2SplitQueue: 0,
-    m1TouchViaWrapper: 0,
+    m1Dropped: 0,
+    m1Refused: 0,
+    m1RefusedA0: 0,
+    m1RefusedVar: 0,
+    m1RefusedUnknown: 0,
+    m1RefusedGlobal: 0,
+    m1A0NoCursor: 0,
     m2ReachCutOff: 0,
     m3CopyShared: 0,
     m3RecRefByValue: 0,
@@ -1965,7 +1971,7 @@ describe("R604 census: one counter per gap master already has (not refusals)", (
     });
     expect(g).toEqual({ ...ZERO, h2SplitQueue: 1 });
   });
-  it("M1: a touching callee reached through a same-object wrapper under option D", () => {
+  it("M1: a touching callee reached through a same-object wrapper under option D is now REFUSED (R-604b)", () => {
     const g = gapsOf({
       "Buf.Table.al": BUF,
       [C]: RESET,
@@ -1994,7 +2000,8 @@ describe("R604 census: one counter per gap master already has (not refusals)", (
     end;
 }`,
     });
-    expect(g.m1TouchViaWrapper).toBeGreaterThan(0);
+    expect(g.m1Refused).toBeGreaterThan(0);
+    expect(g.m1RefusedVar).toBeGreaterThan(0);
   });
   it("M2: a writer reach cut off at the hop cap", () => {
     const deep = (n: number): string =>

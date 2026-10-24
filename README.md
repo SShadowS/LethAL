@@ -500,7 +500,7 @@ Cost and recovery:
 | `--resume` / `--resume-run <id>` | *(none)* | Continue an aborted run, reusing verdicts it already measured |
 | `--retry-stranded` | `false` | On resume, retry mutants that left the server stuck. Skipped by default: a mutant that never terminates blocks every mutant behind it |
 | `--allow-large-run` | `false` | Run more than 1,000 mutation sites |
-| `--workers <n>` | `1` | Parallel shards (rejected for the authoritative backend) |
+| `--workers <n>` | `1` | Must be 1; above 1 is refused for every backend |
 
 Environment and output:
 
@@ -721,8 +721,10 @@ a LethAL feature or a mode.
   Selecting one test runs its whole codeunit (#5611), so LethAL makes one call per test codeunit
   and notes a kill made after another covering test of that codeunit. Tests v3 does not run
   (`notRun`, for example `Commit()` under per-test isolation, #5607) are never killed and never
-  survived. Coverage is turned off for a project holding a multi-object or an `#if`-wrapped object
-  file (R602). One-shot only; `--workers > 1`, Windows, `serverMode`, `selectorMode` and
+  survived. Coverage is on for a project holding a multi-object file or a single-wrapper `#if` object
+  file (R602, measured); it is turned off, with a warning naming the file, only for a wrapper shape
+  the index has no rule for (two-arm `#if/#else`, `#elif`, nested, or a multi-object file holding a
+  wrapper). One-shot only; `--workers > 1`, Windows, `serverMode`, `selectorMode` and
   `campaign freeze` are refused by name.
 - **A mutant that never terminates is stepped over, not scored.** AL cannot preempt a running loop,
   so LethAL sees only its own abort and cannot tell it from "the server is still working". Such a
@@ -762,9 +764,12 @@ a LethAL feature or a mode.
   | Real (triggers, FlowFields, a `pageextension` writing on open) | **hangs; the session quarantines and the ENTIRE run scores nothing** | opens and passes in ~451 ms; run completes |
 
   Both rows are measured, repeatedly, on real containers. The hang is the severe case: one such test
-  at baseline takes every other test and every mutant down with it, not just its own. `--stop-hung-sessions`
-  does **not** rescue it: it makes the failure faster, not survivable, because the baseline loop
-  quarantines on the forced-stop result exactly as it does on a hang.
+  at baseline takes every other test and every mutant down with it, not just its own. Since R658,
+  LethAL stops a baseline test that runs past `--baseline-timeout-ms`, with or without
+  `--stop-hung-sessions` (that flag governs mutants only). When BC confirms the stop with its 408,
+  the test is reported as a stopped `timeout` (`baselineStopped`), it covers no mutant, and the run
+  goes on. A stop BC does not confirm still quarantines the run. The stop on a hung TestPage is not
+  yet measured live.
 
   **What is still not recovered:** a mutant reached only by a refused test is reported
   `no-coverage`, with the refused tests named in the report. See ROADMAP R69/R74/R75.

@@ -21,6 +21,11 @@
  * precision uncheckable and would destroy the corpus's value for any FUTURE rule. See
  * `docs/campaign/2026-08-08-r85-swap-population/README.md` for the full composition.
  *
+ * BC's own error text is kept by the same rule: a mutant's `failureNote` and a `quarantined.reason`
+ * can quote BC's answer (the stop 408's words, and since R692 up to 400 characters of a RunMutant
+ * HTTP error body), which may name record values of the target database. Whether those fields should
+ * go too is an open question for the owner (R-699, 2026-10-24); until then they are not touched.
+ *
  * WHAT THIS DOES NOT DO. It does not remove anything from git history. A report already pushed to a
  * public remote has been fetchable since the moment it landed; running this afterwards changes what a
  * fresh clone sees and nothing else. Run it BEFORE the commit.

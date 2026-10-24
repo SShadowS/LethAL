@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { renderDoctorReport } from "../src/cli";
 import type { DoctorConfig } from "../src/doctor";
 import { runDoctor } from "../src/doctor";
 // R110: the fixtures track MIN_CONTROL_VERSION rather than pinning a literal, so a version bump
 // cannot silently turn every green fixture red — it did exactly that when 1.0.0.15 landed.
 import {
+  ApiBaseUnsetError,
   HarnessVerificationError,
   MIN_CONTROL_VERSION,
   UnfilteredExtensionsQueryError,
@@ -265,6 +267,38 @@ describe("lethal doctor — the lease check (R110)", () => {
     expect(live.checks.find((c) => c.name === "lease")?.detail).not.toContain("orphaned");
   });
 
+  // R658 (M8): a `run` op may still be executing on the server; a reset under it lets the next
+  // session overlap it. Restart first.
+  const leaseDetail = async (opKind: string) => {
+    const r = await runDoctor(
+      { ...cfgFixture(), now: NOW },
+      {
+        ...green,
+        lease: async () => ({
+          owner: "x",
+          opKind,
+          expiresAt: "2026-08-07T11:00:00.000Z",
+          tokenPresent: true,
+        }),
+      },
+    );
+    return r.checks.find((c) => c.name === "lease")?.detail ?? "";
+  };
+
+  test("R658 D1: an op kind `run` says restart the NST first, then force-reset-lease", async () => {
+    const d = await leaseDetail("run");
+    expect(d).toContain("restart the NST first");
+    expect(d.indexOf("restart the NST")).toBeLessThan(d.indexOf("force-reset-lease"));
+  });
+
+  test("R658 D2: an op kind `publish` or `none` keeps today's text", async () => {
+    for (const kind of ["publish", "none"]) {
+      const d = await leaseDetail(kind);
+      expect(d).not.toContain("restart the NST");
+      expect(d).toContain("orphaned lease: recover it with `lethal force-reset-lease");
+    }
+  });
+
   test("an op marker with NO owner still fails — that is what a killed session leaves", async () => {
     // Green requires BOTH halves. Keying only on `owner` would pass the exact shape the recovery
     // tooling exists for.
@@ -377,6 +411,47 @@ describe("lethal doctor — the company check (R195)", () => {
   test("an absent dep means no check, not a vacuous pass", async () => {
     const r = await runDoctor(cfgFixture(), live);
     expect(r.checks.some((c) => c.name === "company")).toBe(false);
+  });
+
+  // R253: on BC on Linux with no `bcdev.apiBaseUrl` the API is not at the OData base URL. That is a
+  // config gap doctor names, never a failed check on a healthy server.
+  test("R253: an API not served at the configured base is a named skip, and the report does not fail", async () => {
+    const unset = new ApiBaseUnsetError("companies list", "http://bc:7048/BC");
+    const r = await runDoctor(cfgFixture(), {
+      ...live,
+      companies: async () => {
+        throw unset;
+      },
+      testApp: async () => {
+        throw unset;
+      },
+    });
+    for (const name of ["company", "test-app-present"]) {
+      const c = r.checks.find((x) => x.name === name);
+      expect(c?.skipped).toBe(true);
+      expect(c?.ok).toBe(true);
+      expect(c?.detail).toContain("bcdev.apiBaseUrl");
+    }
+    expect(r.ok).toBe(true);
+    const text = renderDoctorReport(r);
+    expect(text).toContain("[skip] company:");
+    expect(text).not.toContain("[FAIL]");
+    // The banner never says "every check passed" over a skip (build review M5).
+    expect(text).toContain("ok: no check failed, but 2 could not be checked");
+    expect(text).not.toContain("every check passed");
+  });
+
+  test("R253: any other failure of the same read still fails the check and the report", async () => {
+    const r = await runDoctor(cfgFixture(), {
+      ...live,
+      companies: async () => {
+        throw new HarnessVerificationError("companies list failed: HTTP 404: nope");
+      },
+    });
+    const c = r.checks.find((x) => x.name === "company");
+    expect(c?.ok).toBe(false);
+    expect(c?.skipped).toBeUndefined();
+    expect(r.ok).toBe(false);
   });
 });
 

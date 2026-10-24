@@ -107,8 +107,11 @@ export function outOfUseRefusal(server: string, opts: OutOfUseOptions): string |
   const path = join(opts.dir, `${server}.md`);
   if (!existsSync(path)) return undefined;
   const marker = readFileSync(path, "utf8").trimEnd();
+  // Every printed form of the marker (both overrides' logs and the refusal) drops `owner:` lines,
+  // so the owner token never reaches a log (R-658 delta F1). The owner check below reads `marker`.
   const body = marker
     .split(/\r?\n/)
+    .filter((l) => !/^owner:/i.test(l.trim()))
     .map((l) => `    ${l}`)
     .join("\n");
   const log = opts.log ?? console.error;

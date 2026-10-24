@@ -813,6 +813,9 @@
         "batchIndex": {
           "type": "number"
         },
+        "stoppedBudgetMs": {
+          "type": "number"
+        },
         "verdicts": {
           "type": "array",
           "items": {
@@ -846,7 +849,8 @@
                     "tests-permission-refused",
                     "tests-testpage-unsupported",
                     "tests-testpage-refused",
-                    "stale-test-app"
+                    "stale-test-app",
+                    "baseline-test-stopped"
                   ]
                 }
               },
@@ -1137,7 +1141,9 @@
             "timeout-unconfirmed",
             "runner-test-error",
             "runner-refused",
-            "kill-not-reproduced"
+            "kill-not-reproduced",
+            "confirm-stopped",
+            "test-discovery-failed"
           ]
         },
         "killingTestFailure": {

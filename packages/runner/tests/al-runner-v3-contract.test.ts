@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   V3_DEFECT_FACTS,
   V3_LEG_C_FACTS,
@@ -16,8 +16,13 @@ import type { V3Row } from "../src/al-runner-v3-backend";
 import {
   BC_END_OF_TEST_TEXT,
   BC_HTTP_INTERNAL_TEXT,
+  BURN_BUSY_LOOPS,
+  BURN_GUARD_MS,
+  BURN_HUGE,
+  BURN_RELATIVE_FACTOR,
   MESSAGE_PREFIX_REASON,
   type V3ContractResult,
+  burnerArgv,
   classifySleep,
   runV3ContractProbe,
   v3ContractRefusals,
@@ -59,6 +64,13 @@ const row = (
   ...(o.notRun === true ? { notRun: true } : {}),
 });
 const doc = (tests: unknown[]) => JSON.stringify({ tests });
+/** R693 r14b: the huge burn's row when v3 stopped it at the 2 s limit, after `durationMs`. */
+const burnRow = (durationMs: number) =>
+  row(50656, "CpuBurnLong", "error", {
+    notRun: true,
+    message: "Test exceeded 2s timeout.",
+    durationMs,
+  });
 const NOT_TRUSTED_MESSAGE =
   "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (HangsDirty: did not run (the test used more than the time limit of 3 s of CPU time and was stopped (--test-timeout-secs)): it can change the global variable Probe Cut.Dirty that this test reads, so the state it would have left is not BC's; this failure is not trusted: dirty";
 const CUT_TIMEOUT = row(50652, "HangsDirty", "error", {
@@ -85,9 +97,13 @@ const ASSERT_ROW = row(50661, "AssertAreEqual", "fail", {
     "Assert.AreEqual failed. Expected:<1> (Integer). Actual:<2> (Integer). R667 values differ.",
 });
 const LIBRARY_ASSERT = "/fake/ms/Microsoft_Library Assert_28.0.46665.49944.app";
+/** R590 (R-537): v3's skip line for the probe's absent dependency, in the shape R-537 measured. */
+const DEP_SKIP_STDERR =
+  "dependency skipped: dependency `LethAL R590 Absent` by LethAL (7a1c0e52-5b8e-4d3a-9f60-2c7b8e1d2590) version 1.0.0.0 or higher was not found; searched: /fake/pkgs; put its .app with AL source (or its source archive) in the project's .alpackages or pass --deps DIR\nalrunner 3.0.0-alpha.2 (91253f2d6)\n";
 
 /** A fake alpha.2 that answers every probe call as measured; `over` replaces one answer by key. */
 function fakeV3(over: Over = {}): SpawnFn {
+  let burnCalls = 0;
   return async (argv, _opts) => {
     const a = argv[0] === "/usr/bin/taskset" ? argv.slice(3) : argv;
     const has = (x: string) => a.includes(x);
@@ -102,6 +118,7 @@ function fakeV3(over: Over = {}): SpawnFn {
               ? "quoted"
               : "exact"
             : `cu${val("--codeunit")}${has("--define") ? "-def" : ""}${argv[0] === "/usr/bin/taskset" ? "-shared" : ""}${a.some((x) => x.includes("/broken/")) ? "-broken" : ""}${a.some((x) => x.includes("tests-pinned")) ? "-pinned" : ""}${has("--test-timeout-secs") ? `-n${val("--test-timeout-secs")}` : ""}`;
+    if (key === "cu50656-shared-n2") burnCalls += 1;
     const o = over[key]?.(a);
     if (o !== undefined) return { stderr: "", ...o };
     if (has("--coverage-json")) {
@@ -198,18 +215,10 @@ function fakeV3(over: Over = {}): SpawnFn {
           row(50651, "CpuHang", "error", { notRun: true, message: "Test exceeded 3s timeout." }),
         ]),
       },
-      "cu50656-n2": {
+      // R693 (r14b): call A (alone, stopped at about 2 s) then call B (beside 7 loops, stopped late).
+      "cu50656-shared-n2": {
         exitCode: 7,
-        stdout: doc([
-          row(50656, "CpuBurnLong", "error", {
-            notRun: true,
-            message: "Test exceeded 2s timeout.",
-          }),
-        ]),
-      },
-      "cu50658-shared-n2": {
-        exitCode: 0,
-        stdout: doc([row(50658, "CpuBurnShort", "pass", { durationMs: 3105 })]),
+        stdout: doc([burnRow(burnCalls === 1 ? 2010 : 16000)]),
       },
       cu50653: {
         exitCode: 7,
@@ -239,6 +248,8 @@ function fakeV3(over: Over = {}): SpawnFn {
       "cu50652-n3": { exitCode: 7, stdout: doc(cutRows) },
       // R667: the Assert.AreEqual text R657 measured on alpha.2 and edge (no `<Type>: ` prefix).
       cu50661: { exitCode: 1, stdout: doc([ASSERT_ROW]) },
+      // R590 (R-537): the shape alpha.2 and edge wrote for a dependency with no package (probe M).
+      cu50662: { exitCode: 0, stdout: doc([row(50662, "Runs", "pass")]), stderr: DEP_SKIP_STDERR },
       cu50655: { exitCode: 0, stdout: doc([row(50655, "DuplicateNamedKey", "pass")]) },
       "cu50660-n3": { exitCode: 1, stdout: doc(sleepRows) },
       cu50660: { exitCode: 1, stdout: doc(sleepRows) },
@@ -366,6 +377,43 @@ function fakeServe(
   return { spawn, argvs, requests };
 }
 
+describe("R645: the probe's v3 processes run in its scratch dir, not the caller's", () => {
+  test("every test call and the serve daemon get a cwd that is not process.cwd(); --version may stay", async () => {
+    const inner = fakeV3();
+    const seen: { argv: readonly string[]; cwd: string | undefined }[] = [];
+    const serveInner = fakeServe();
+    const serveCwds: (string | undefined)[] = [];
+    await runV3ContractProbe({
+      alRunnerPath: "/fake/alrunner",
+      expectedVersion: VERSION,
+      packagesDir: "/fake/deps",
+      bcVersion: BC,
+      alcPath: "/fake/alc",
+      alcIo: fakeAlcIo,
+      tasksetPath: "/usr/bin/taskset",
+      startBurner: () => ({ kill: () => {} }),
+      spawn: (argv, opts) => {
+        seen.push({ argv, cwd: opts?.cwd });
+        return inner(argv, opts);
+      },
+      serveSpawn: (argv, opts) => {
+        serveCwds.push(opts?.cwd);
+        return serveInner.spawn(argv, opts);
+      },
+      libraryAssertApp: LIBRARY_ASSERT,
+    });
+    const calls = seen.filter((s) => s.argv[1] === "test");
+    expect(calls.length).toBeGreaterThan(5);
+    for (const c of calls) {
+      expect(c.cwd).toBeDefined();
+      expect(c.cwd).not.toBe(process.cwd());
+    }
+    expect(serveCwds).toHaveLength(1);
+    expect(serveCwds[0]).toBeDefined();
+    expect(serveCwds[0]).not.toBe(process.cwd());
+  });
+});
+
 const probe = (over: Over = {}, serveSpawn = fakeServe().spawn): Promise<V3ContractResult> =>
   runV3ContractProbe({
     alRunnerPath: "/fake/alrunner",
@@ -387,7 +435,7 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     const r = await probe({}, s.spawn);
     const f = r.facts.find((x) => x.fact === "serve-keep-reasons");
     expect(f).toMatchObject({ kind: "warn", verdict: "matches" });
-    expect(s.argvs).toEqual([["/fake/alrunner", "serve", "--test-timeout", "3"]]);
+    expect(s.argvs).toEqual([[resolve("/fake/alrunner"), "serve", "--test-timeout", "3"]]);
     const run = s.requests.filter((q) => q.command === "runTests");
     expect(run.length).toBe(1);
     expect(run[0]?.testIsolation).toBe("test");
@@ -517,6 +565,7 @@ describe("§8 the contract probe", () => {
         "quoted-name-in-rows",
         "bc-build-pinned",
         "define-honoured",
+        "dependency-skip-line",
         "per-test-coverage",
         "codeunit-runs-whole",
         "codeunit-row-equals-exact-row",
@@ -553,39 +602,237 @@ describe("§8 the contract probe", () => {
     });
     expect(v3ContractRefusals(r).join("\n")).toMatch(/timeout-classified/);
   });
+});
 
-  test("timeout-is-cpu diverges when the shared-core run is ALSO stopped (a wall-time stop)", async () => {
-    const r = await probe({
-      "cu50658-shared-n2": () => ({
-        exitCode: 7,
-        stdout: doc([
-          row(50658, "CpuBurnShort", "error", {
-            notRun: true,
-            message: "Test exceeded 2s timeout.",
-          }),
-        ]),
-      }),
+describe("R693 r14b: timeout-is-cpu runs one huge burn alone, then beside busy loops", () => {
+  /** "hang-rows": killed by the process timeout, but its stdout already holds a late timeout row. */
+  type Ans = { exitCode: number; stdout: string } | "hang" | "hang-rows" | undefined;
+  /**
+   * Runs the probe; `a` and `b` answer the first (alone) and second (shared) call of codeunit 50656.
+   * "hang" waits for the call's process timeout and returns as a killed process does.
+   */
+  const run = async (a: Ans, b: Ans, burnerThrowsAt = 0) => {
+    const events: string[] = [];
+    const argvs: (readonly string[])[] = [];
+    const guards: (number | undefined)[] = [];
+    let starts = 0;
+    let n = 0;
+    const base = fakeV3({
+      "cu50656-shared-n2": () => {
+        const ans = n === 1 ? a : b;
+        return ans === "hang" || ans === "hang-rows" ? undefined : ans;
+      },
     });
-    expect(r.facts.find((f) => f.fact === "timeout-is-cpu")?.verdict).toBe("diverged");
+    const probeP = runV3ContractProbe({
+      alRunnerPath: "/fake/alrunner",
+      expectedVersion: VERSION,
+      packagesDir: "/fake/deps",
+      bcVersion: BC,
+      alcPath: "/fake/alc",
+      alcIo: fakeAlcIo,
+      tasksetPath: "/usr/bin/taskset",
+      startBurner: () => {
+        starts += 1;
+        if (starts === burnerThrowsAt) throw new Error("burner failed to start");
+        events.push("burner-start");
+        return { kill: () => events.push("burner-kill") };
+      },
+      burnGuardMs: 20,
+      spawn: async (argv, o) => {
+        const cu = argv.find((_, i) => argv[i - 1] === "--codeunit");
+        if (cu === "50656") {
+          n += 1;
+          argvs.push(argv);
+          guards.push(o?.signal !== undefined ? 1 : undefined);
+          events.push(`call-${n === 1 ? "A" : "B"}`);
+          const ans = n === 1 ? a : b;
+          if (ans === "hang" || ans === "hang-rows") {
+            // A process that never ends: only the call's process timeout (abort signal) stops it.
+            await new Promise<void>((resolve) => {
+              o?.signal?.addEventListener("abort", () => resolve());
+            });
+            return {
+              exitCode: -1,
+              stdout: ans === "hang-rows" ? doc([burnRow(16000)]) : "",
+              stderr: "",
+            };
+          }
+        }
+        return base(argv, o);
+      },
+      serveSpawn: fakeServe().spawn,
+      libraryAssertApp: LIBRARY_ASSERT,
+    });
+    if (burnerThrowsAt > 0) await probeP.catch(() => undefined);
+    const r = burnerThrowsAt > 0 ? undefined : await probeP;
+    return { r, events, argvs, guards, f: r?.facts.find((x) => x.fact === "timeout-is-cpu") };
+  };
+
+  const stopped = (ms: number) => ({ exitCode: 7, stdout: doc([burnRow(ms)]) });
+  const passed = {
+    exitCode: 0,
+    stdout: doc([row(50656, "CpuBurnLong", "pass", { durationMs: 900 })]),
+  };
+  const noRows = { exitCode: 7, stdout: doc([]) };
+  const D = BURN_HUGE;
+
+  test("the burn is one huge constant in the tests app source, and there are 7 busy loops", async () => {
+    expect(D).toBe(2_000_000_000);
+    expect(BURN_BUSY_LOOPS).toBe(7);
+    let src = "";
+    const base = fakeV3();
+    await runV3ContractProbe({
+      alRunnerPath: "/fake/alrunner",
+      expectedVersion: VERSION,
+      packagesDir: "/fake/deps",
+      bcVersion: BC,
+      alcPath: "/fake/alc",
+      alcIo: fakeAlcIo,
+      tasksetPath: "/usr/bin/taskset",
+      startBurner: () => ({ kill: () => {} }),
+      spawn: async (argv, o) => {
+        if (argv.includes("50656"))
+          src = await Bun.file(join(argv[argv.length - 1] ?? "", "src", "Burn.Codeunit.al")).text();
+        return base(argv, o);
+      },
+      serveSpawn: fakeServe().spawn,
+      libraryAssertApp: LIBRARY_ASSERT,
+    });
+    expect(src).toContain(`Logic.Burn(${D})`);
   });
 
-  test("timeout-is-cpu diverges when the alone run is NOT stopped (no CPU timeout at all)", async () => {
-    const r = await probe({
-      "cu50656-n2": () => ({ exitCode: 0, stdout: doc([row(50656, "CpuBurnLong", "pass")]) }),
-    });
-    expect(r.facts.find((f) => f.fact === "timeout-is-cpu")?.verdict).toBe("diverged");
+  test("matches: A stopped alone, B stopped late (over 3000 ms) beside 7 busy loops; both rows and walls shown", async () => {
+    const { f, events } = await run(stopped(2010), stopped(16000));
+    expect(f?.verdict).toBe("matches");
+    expect(events).toEqual([
+      "call-A",
+      ...Array(7).fill("burner-start"),
+      "call-B",
+      ...Array(7).fill("burner-kill"),
+    ]);
+    expect(f?.measured).toMatch(
+      /A .*"durationMs":2010.*wall \d+ ms\); B .*"durationMs":16000.*wall \d+ ms/,
+    );
+    expect(f?.measured).toContain("Test exceeded 2s timeout.");
   });
 
-  test("timeout-is-cpu diverges when the shared pass did not actually take over N of wall", async () => {
-    const r = await probe({
-      "cu50658-shared-n2": () => ({
-        exitCode: 0,
-        stdout: doc([row(50658, "CpuBurnShort", "pass", { durationMs: 1500 })]),
-      }),
-    });
-    expect(r.facts.find((f) => f.fact === "timeout-is-cpu")?.verdict).toBe("diverged");
+  test("both calls are pinned to core 0, limit 2, with a process timeout", async () => {
+    const { argvs, guards } = await run(stopped(2010), stopped(16000));
+    expect(argvs).toHaveLength(2);
+    for (const argv of argvs) {
+      expect(argv.slice(0, 3)).toEqual(["/usr/bin/taskset", "-c", "0"]);
+      expect(argv[argv.indexOf("--test-timeout-secs") + 1]).toBe("2");
+    }
+    expect(guards).toEqual([1, 1]);
   });
 
+  test("the default process timeout is 60 s (unset hook)", async () => {
+    const seen: (AbortSignal | undefined)[] = [];
+    const base = fakeV3();
+    await runV3ContractProbe({
+      alRunnerPath: "/fake/alrunner",
+      expectedVersion: VERSION,
+      packagesDir: "/fake/deps",
+      bcVersion: BC,
+      alcPath: "/fake/alc",
+      alcIo: fakeAlcIo,
+      tasksetPath: "/usr/bin/taskset",
+      startBurner: () => ({ kill: () => {} }),
+      spawn: async (argv, o) => {
+        if (argv.includes("50656")) seen.push(o?.signal);
+        return base(argv, o);
+      },
+      serveSpawn: fakeServe().spawn,
+      libraryAssertApp: LIBRARY_ASSERT,
+    });
+    expect(seen).toHaveLength(2);
+    for (const s of seen) expect(s).toBeDefined();
+    expect(BURN_GUARD_MS).toBe(60_000);
+  });
+
+  test("a busy loop is `taskset -c 0 timeout -s KILL 150 sh -c ...` so a killed bun cannot orphan it", () => {
+    expect(burnerArgv("/usr/bin/taskset")).toEqual([
+      "/usr/bin/taskset",
+      "-c",
+      "0",
+      "timeout",
+      "-s",
+      "KILL",
+      "150",
+      "sh",
+      "-c",
+      "while :; do :; done",
+    ]);
+  });
+
+  test("diverged: A is not stopped (it passed: no limit at all), and B never runs", async () => {
+    const { f, events } = await run(passed, stopped(16000));
+    expect(f?.verdict).toBe("diverged");
+    expect(events).toEqual(["call-A"]);
+  });
+
+  test("diverged: A killed by the process timeout (no limit stopped it), and B never runs", async () => {
+    const { f, events } = await run("hang", stopped(16000));
+    expect(f?.verdict).toBe("diverged");
+    expect(f?.measured).toMatch(/killed by the 20 ms process timeout/);
+    expect(events).toEqual(["call-A"]);
+  });
+
+  test("diverged: B stopped at durationMs 2050 (a wall-like stop)", async () => {
+    const { f } = await run(stopped(2010), stopped(2050));
+    expect(f?.verdict).toBe("diverged");
+  });
+
+  test("the 3000 ms line: 3000 diverges, 3001 matches (A short, so the relative rule is not the binding one)", async () => {
+    expect((await run(stopped(1000), stopped(3000))).f?.verdict).toBe("diverged");
+    expect((await run(stopped(1000), stopped(3001))).f?.verdict).toBe("matches");
+  });
+
+  test("diverged: a wall-time limit with slack stops both calls late (A 4000, B 4100)", async () => {
+    expect((await run(stopped(4000), stopped(4100))).f?.verdict).toBe("diverged");
+  });
+
+  test("the relative line: B exactly 2x A diverges, just over matches", async () => {
+    expect(BURN_RELATIVE_FACTOR).toBe(2);
+    expect((await run(stopped(4000), stopped(8000))).f?.verdict).toBe("diverged");
+    expect((await run(stopped(4000), stopped(8001))).f?.verdict).toBe("matches");
+  });
+
+  test("diverged: B passes (not stopped) although A was: the limit contract is broken", async () => {
+    const { f } = await run(stopped(2010), passed);
+    expect(f?.verdict).toBe("diverged");
+    // Even when it ran long (over 3000 ms), a pass is not a timeout row.
+    const long = {
+      exitCode: 0,
+      stdout: doc([row(50656, "CpuBurnLong", "pass", { durationMs: 9000 })]),
+    };
+    expect((await run(stopped(2010), long)).f?.verdict).toBe("diverged");
+  });
+
+  test("unmeasurable: B was killed by the process timeout even though its stdout holds a late timeout row", async () => {
+    const { f } = await run(stopped(2010), "hang-rows");
+    expect(f?.verdict).toBe("unmeasurable");
+  });
+
+  test("unmeasurable: B killed by the process timeout (cannot be read)", async () => {
+    const { f, events } = await run(stopped(2010), "hang");
+    expect(f?.verdict).toBe("unmeasurable");
+    expect(events.filter((e) => e === "burner-kill")).toHaveLength(7);
+  });
+
+  test("unmeasurable: A has no row, and B has no row", async () => {
+    expect((await run(noRows, stopped(16000))).f?.verdict).toBe("unmeasurable");
+    expect((await run(stopped(2010), noRows)).f?.verdict).toBe("unmeasurable");
+  });
+
+  test("a busy loop already started is killed when the next one fails to start (finally)", async () => {
+    const { events } = await run(stopped(2010), stopped(16000), 2);
+    expect(events.filter((e) => e === "burner-start").length).toBe(1);
+    expect(events.filter((e) => e === "burner-kill").length).toBe(1);
+  });
+});
+
+describe("§8 the contract probe, continued", () => {
   test("a predefined symbol diverges predefined-symbols", async () => {
     const r = await probe({
       cu50191: () => ({
@@ -670,7 +917,7 @@ describe("§8 the contract probe", () => {
       kind: "contract",
       verdict: "matches",
     });
-    expect(r.facts.length).toBe(27);
+    expect(r.facts.length).toBe(28);
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("pass");
   });
 
@@ -885,6 +1132,36 @@ describe("R639 (pre-commitment r9): leg C's BC readings", () => {
     expect(verdictOf(await at50657(0, []), CUC)).toBe("unmeasurable");
   });
 
+  // R672 (plan 2026-10-23-r672-v3-refusal-prefix.md §1a, S9 and S10): a one-word-prefixed refusal
+  // written as a plain fail reads as the unprefixed one does, never unlike-bc or gone.
+  // R675: the marker after ANY text (a spaced or `::` prefix, an Assert quoting it) reads diverged.
+  for (const p of [
+    "Error: ",
+    "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: ",
+    "Runtime error: ",
+    "a::b: ",
+    "Assert.AreEqual failed. Expected: ",
+  ]) {
+    test(`R672/R675 S9: refusal-row-shape reads a fail holding the marker after "${p}" as diverged`, async () => {
+      const m = `${p}NotRun: out-of-scope: an outbound HTTP request`;
+      expect(verdictOf(await at50653(1, [http({ message: m }), LATER_FAIL]), RRS)).toBe("diverged");
+    });
+    test(`R672/R675 S10: commit-under-test-isolation reads a fail holding the marker after "${p}" as diverged`, async () => {
+      const dressed = row(50657, "CommitCall", "fail", {
+        message: `${p}NotRun: out-of-scope: Commit`,
+      });
+      expect(verdictOf(await at50657(1, [dressed]), CUC)).toBe("diverged");
+    });
+  }
+  test("R675 S9/S10: a fail WITHOUT the marker keeps its reading (unlike-bc, gone)", async () => {
+    const other = "out-of-scope: an outbound HTTP request";
+    expect(verdictOf(await at50653(1, [http({ message: other }), LATER_FAIL]), RRS)).toBe(
+      "unlike-bc",
+    );
+    const plain = row(50657, "CommitCall", "fail", { message: "boom" });
+    expect(verdictOf(await at50657(1, [plain]), CUC)).toBe("gone");
+  });
+
   const at50655 = (exitCode: number, rows: unknown[]) =>
     probe({ cu50655: () => ({ exitCode, stdout: doc(rows) }) });
   const DUP = "duplicate-key-insert-raises";
@@ -931,14 +1208,14 @@ describe("R639 (pre-commitment r9): leg C's BC readings", () => {
     );
   });
 
-  test("P10 (R667): 27 facts, 9 defect, 17 contract, 1 warn; the old count of 26 is gate-fail", async () => {
+  test("P10 (R590, r13): 28 facts, 9 defect, 18 contract, 1 warn; the old count of 27 is gate-fail", async () => {
     const r = await probe();
     const kinds = (k: string) => r.facts.filter((f) => f.kind === k).length;
     expect([r.facts.length, kinds("defect"), kinds("contract"), kinds("warn")]).toEqual([
-      27, 9, 17, 1,
+      28, 9, 18, 1,
     ]);
-    expect(V3_LEG_C_FACTS).toBe(27);
-    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 26).outcome).toBe("gate-fail");
+    expect(V3_LEG_C_FACTS).toBe(28);
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 27).outcome).toBe("gate-fail");
     expect(
       r.facts
         .filter((f) => f.kind === "defect")
@@ -978,6 +1255,48 @@ describe("R639 (pre-commitment r9): leg C's BC readings", () => {
     const r = await at50653(1, EDGE_ROWS);
     expect(v3ContractRefusals(r).join("\n")).toMatch(/UNLIKE-BC — refusal-row-shape/);
     expect(v3DefectWarnings(r).join("\n")).not.toMatch(/unlike-bc/);
+  });
+});
+
+describe("R590 dependency-skip-line: v3 says when it leaves a dependency out", () => {
+  const F = "dependency-skip-line";
+  const runs =
+    (stderr: string, exitCode = 0) =>
+    () => ({
+      exitCode,
+      stdout: doc([row(50662, "Runs", "pass")]),
+      stderr,
+    });
+
+  test("as R-537 measured on alpha.2 and edge: matches, a contract fact; the probe app declares the absent dependency", async () => {
+    const r = await probe();
+    expect(r.facts.find((f) => f.fact === F)).toMatchObject({
+      kind: "contract",
+      verdict: "matches",
+    });
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("pass");
+  });
+
+  for (const [why, stderr] of [
+    ["no line (a build that logs it only with --verbose)", "alrunner 3.0.0-alpha.2 (91253f2d6)\n"],
+    ["a reworded line", "dependency missing: dependency `LethAL R590 Absent` by LethAL\n"],
+    [
+      "the words mid-line",
+      "warning: dependency skipped: dependency `LethAL R590 Absent` by LethAL\n",
+    ],
+    ["a skip line for another app", "dependency skipped: dependency `Other` by X\n"],
+  ] as const) {
+    test(`${why}: diverged, refuses a session, gate-fail`, async () => {
+      const r = await probe({ cu50662: runs(stderr) });
+      expect(r.facts.find((f) => f.fact === F)?.verdict).toBe("diverged");
+      expect(v3ContractRefusals(r).join("\n")).toMatch(/DIVERGED — dependency-skip-line/);
+      expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("gate-fail");
+    });
+  }
+
+  test("a call that did not run: unmeasurable, never matches", async () => {
+    const r = await probe({ cu50662: runs("spawn failed", -1) });
+    expect(r.facts.find((f) => f.fact === F)?.verdict).toBe("unmeasurable");
   });
 });
 
@@ -1036,6 +1355,85 @@ describe("R667 message-has-no-type-prefix: v3's failure message carries no `<Typ
     expect(r.facts.find((f) => f.fact === MSG)?.verdict).toBe("diverged");
     expect(v3ContractRefusals(r).join("\n")).toMatch(/DIVERGED — message-has-no-type-prefix/);
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("gate-fail");
+  });
+
+  // R675: the fact reads the exact expected start (`boom 5`), so ANY text before it diverges.
+  for (const p of [
+    "Runtime error: ",
+    "al_runtime::Error: ",
+    " ",
+    "[x] ",
+    "A: B: ",
+    "Error: ",
+    "X.Y: ",
+    "SomeException: ",
+  ]) {
+    const message = `${p}boom 5`;
+    test(`R675: Fails "${message}" reads diverged, names the prefix, refuses a session with the reason`, async () => {
+      const r = await probe({ cu50650: mainWith(row(50650, "Fails", "fail", { message })) });
+      const f = r.facts.find((x) => x.fact === MSG);
+      expect(f?.verdict).toBe("diverged");
+      expect(f?.measured.startsWith(`prefix ${JSON.stringify(p)}; Fails `)).toBe(true);
+      expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("gate-fail");
+      const text = v3ContractRefusals(r).join("\n");
+      expect(text).toMatch(/DIVERGED — message-has-no-type-prefix/);
+      expect(text).toContain(`\n    why: ${MESSAGE_PREFIX_REASON}\n`);
+    });
+  }
+  test("R675 (nit A): a Fails text without the expected start reads diverged as reworded, not prefix", async () => {
+    for (const message of ["Boom 5", "Error: Boom 5", "boom 6"]) {
+      const r = await probe({ cu50650: mainWith(row(50650, "Fails", "fail", { message })) });
+      const f = r.facts.find((x) => x.fact === MSG);
+      expect([message, f?.verdict, f?.measured.split("; Fails ")[0]]).toEqual([
+        message,
+        "diverged",
+        `reworded ${JSON.stringify(message)}`,
+      ]);
+    }
+  });
+  test("R675 (build review): a present fail row with an EMPTY message reads diverged (reworded), never matches", async () => {
+    const fails = await probe({ cu50650: mainWith(row(50650, "Fails", "fail", { message: "" })) });
+    const f = fails.facts.find((x) => x.fact === MSG);
+    expect([f?.verdict, f?.measured.split("; Fails ")[0]]).toEqual(["diverged", 'reworded ""']);
+    const asserted = await probe({
+      cu50661: () => ({
+        exitCode: 1,
+        stdout: doc([row(50661, "AssertAreEqual", "fail", { message: "" })]),
+      }),
+    });
+    const a = asserted.facts.find((x) => x.fact === MSG);
+    expect([a?.verdict, a?.measured.split("; Fails ")[0]]).toEqual(["diverged", 'reworded ""']);
+  });
+  test("R675: an Assert text with text before `Assert.AreEqual failed.` reads diverged, naming the prefix", async () => {
+    const r = await probe({
+      cu50661: () => ({
+        exitCode: 1,
+        stdout: doc([
+          row(50661, "AssertAreEqual", "fail", {
+            message:
+              "Runtime error: Assert.AreEqual failed. Expected:<1> (Integer). Actual:<2> (Integer). R667 values differ.",
+          }),
+        ]),
+      }),
+    });
+    const f = r.facts.find((x) => x.fact === MSG);
+    expect(f?.verdict).toBe("diverged");
+    expect(f?.measured.startsWith('prefix "Runtime error: "; Fails "boom 5"; ')).toBe(true);
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("gate-fail");
+  });
+  test("R672/R675: today's two probe texts (boom 5, an Assert.AreEqual text) read matches", async () => {
+    // The default fake writes R657's measured texts (`boom 5`, `Assert.AreEqual failed. Expected:<1> ...`).
+    const f = (await probe()).facts.find((x) => x.fact === MSG);
+    expect(f?.verdict).toBe("matches");
+    expect(f?.measured).toContain('Fails "boom 5"');
+    expect(f?.measured).toContain("Assert.AreEqual failed. Expected:<1>");
+    expect(f?.measured).not.toMatch(/^(prefix|reworded) /);
+  });
+  test("R675: boom 5 with an appended call stack still matches (startsWith, not equality)", async () => {
+    const r = await probe({
+      cu50650: mainWith(row(50650, "Fails", "fail", { message: "boom 5\n   at Fails line 3" })),
+    });
+    expect(r.facts.find((x) => x.fact === MSG)?.verdict).toBe("matches");
   });
 
   test("a prefixed plain Error() row (Fails) is broken: diverged, gate-fail", async () => {
@@ -1113,11 +1511,13 @@ describe("R667 message-has-no-type-prefix: v3's failure message carries no `<Typ
     // (This fake main call writes no coverage, so only per-test-coverage refuses here.)
     expect(v3ContractRefusals(ok).join("\n")).not.toContain(MSG);
     expect(calls.some((c) => c.includes("--codeunit 50661"))).toBe(false);
-    // A prefixed plain Error(), and a prefixed refusal written as a plain fail (the K1(a) hole):
-    // both refuse the session, naming the reason.
+    // A prefixed plain Error() (any shape, R675), and a prefixed refusal written as a plain fail:
+    // each refuses the session, naming the reason.
     for (const message of [
       PREFIXED,
       "SomeException: NotRun: out-of-scope: an outbound HTTP request",
+      "Runtime error: boom 5",
+      "al_runtime::Error: boom 5",
     ]) {
       const bad = await run(row(50650, "Fails", "fail", { message }));
       const text = v3ContractRefusals(bad).join("\n");
@@ -1128,7 +1528,7 @@ describe("R667 message-has-no-type-prefix: v3's failure message carries no `<Typ
 
   test("the refusal's reason text is pinned", () => {
     expect(MESSAGE_PREFIX_REASON).toBe(
-      "a `<Type>:` prefix would hide v3's not-trusted refusal from the K1(a) guard (`v3RowVerdict` reads `NotRun: out-of-scope:` at the start of the message, so a prefixed refusal written as a plain fail would score as a kill) (R667)",
+      "text before, or in place of, the expected start of v3's failure messages (a `<Type>:` prefix of any shape) would turn v3's timeouts into errors (`V3_TIMEOUT_MESSAGE` is anchored), close the serve daemon on every refusal (R612's keep list is anchored), and skew the R553 assertion screen. K1(a) and the serve-keep rule read v3's refusal marker anywhere in a message (R675), so a prefix cannot turn a refusal into a kill; the session still refuses, because v3 no longer writes what was measured",
     );
   });
 });

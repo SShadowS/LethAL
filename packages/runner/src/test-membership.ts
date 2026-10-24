@@ -140,6 +140,30 @@ export class TestAppRepublishedError extends Error {
   }
 }
 
+/**
+ * R680: a resume across a change of LethAL Control's `serverGeneration`. The generation is re-minted
+ * when the lease row is created (a BC server whose database was lost, as a restart loses an
+ * in-memory one) or by `ForceResetLease`. Either way the apps and data the resumed run measured may
+ * be gone, so none of its verdicts is carried. `recorded` is `null` for a run that recorded none
+ * (before R680, or a session with no lease).
+ */
+export class ServerGenerationChangedError extends Error {
+  readonly code = "server-generation-changed" as const;
+  readonly flag: string;
+  readonly recorded: string | null;
+  readonly current: string;
+
+  constructor(flag: string, runId: number, recorded: string | null, current: string) {
+    super(
+      `${flag}: run ${runId} ${recorded === null ? "has no server generation (none recorded)" : `recorded server generation ${recorded}`}, and the server now reports ${current}. The server was restarted or its lease force-reset since that run${recorded === null ? ", or the run predates R680" : ""}, so the apps and data its verdicts were measured against may be gone. None of its verdicts is carried (R680). Drop the flag to run from scratch.`,
+    );
+    this.name = "ServerGenerationChangedError";
+    this.flag = flag;
+    this.recorded = recorded;
+    this.current = current;
+  }
+}
+
 /** R495: a session that PROVED its test app read a different one at a batch. Its run's identity is
  *  cleared first (no later session borrows from it), and that batch records nothing: carrying a
  *  verdict, skipping a survivor or reusing a snapshot there would rest on the proven app, not the

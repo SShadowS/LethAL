@@ -1,0 +1,765 @@
+{
+  "server": "bc1",
+  "date": "2026-10-23",
+  "harness": "scripts/r434-installed-probe/drive.ts@7224e3b83c961c768c88a24f68f16bbc0af1d1dc",
+  "probeSourceSha": "118ffd9b8589969ee0c59a91e60c881c19767b6f",
+  "appSha256": "2c6a45ac3fdb9f5e27bdc511b90c4848d9170f743c01ea52580b8858fc0b1ef1",
+  "lease": {
+    "holder": {
+      "lane": "bugs",
+      "attempt": "109",
+      "at": 1792759814007
+    },
+    "releasedAt": null
+  },
+  "lethalControl": "1.0.0.23",
+  "calls": [
+    {
+      "httpMs": 132,
+      "alMs": 2,
+      "rows": 119,
+      "fingerprint": "fdd682fc90b8188d6fc06f51607125267f306639ef926a361ed38078466cf351",
+      "vsFirst": []
+    },
+    {
+      "httpMs": 64,
+      "alMs": 3,
+      "rows": 119,
+      "fingerprint": "fdd682fc90b8188d6fc06f51607125267f306639ef926a361ed38078466cf351",
+      "vsFirst": []
+    },
+    {
+      "httpMs": 65,
+      "alMs": 2,
+      "rows": 119,
+      "fingerprint": "fdd682fc90b8188d6fc06f51607125267f306639ef926a361ed38078466cf351",
+      "vsFirst": []
+    }
+  ],
+  "installed": [
+    {
+      "id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "publisher": "ALDirectCompile",
+      "name": "Test Runner Extension",
+      "version": "3.2.0.0"
+    },
+    {
+      "id": "94ec65e2-c527-41d0-8ba9-75feac54e6d8",
+      "publisher": "LethAL",
+      "name": "Credit Limit Demo",
+      "version": "1.0.20749.20848"
+    },
+    {
+      "id": "b98a0577-fef7-4c7b-a0cf-d6f335ac60f5",
+      "publisher": "LethAL",
+      "name": "Credit Limit Demo Tests",
+      "version": "1.0.0.1"
+    },
+    {
+      "id": "5e7a1c00-1111-4c00-8c00-1e7a1c000701",
+      "publisher": "LethAL",
+      "name": "LethAL Control",
+      "version": "1.0.0.23"
+    },
+    {
+      "id": "4c1e8a37-9d52-4f0b-b6e3-2a7d58c19f64",
+      "publisher": "LethAL",
+      "name": "LethAL R434 Installed Apps Probe",
+      "version": "1.0.0.0"
+    },
+    {
+      "id": "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
+      "publisher": "LethAL",
+      "name": "LethAL Sandbox App",
+      "version": "1.0.20749.22369"
+    },
+    {
+      "id": "aa2f0691-47c3-470e-a351-5bfe955d4f13",
+      "publisher": "LethAL",
+      "name": "LethAL Sandbox Data",
+      "version": "1.0.20749.22634"
+    },
+    {
+      "id": "ae4589f8-4376-41a5-acf3-8df73772fefd",
+      "publisher": "LethAL",
+      "name": "LethAL Sandbox Data Tests",
+      "version": "1.0.0.21"
+    },
+    {
+      "id": "3f9c1d84-2b77-4a10-9e63-5c8d0b41a7e2",
+      "publisher": "LethAL",
+      "name": "LethAL Sandbox Hang",
+      "version": "1.0.20748.42892"
+    },
+    {
+      "id": "8a41e7b0-6c25-4d93-b1f8-0d2e5a63c914",
+      "publisher": "LethAL",
+      "name": "LethAL Sandbox Hang Tests",
+      "version": "1.0.0.3"
+    },
+    {
+      "id": "9bc2014f-e12f-4571-9a00-4e7641d19702",
+      "publisher": "LethAL",
+      "name": "LethAL Sandbox Harden",
+      "version": "1.0.20749.12340"
+    },
+    {
+      "id": "5c09afdc-456d-432c-ae1f-afca0eb6e12e",
+      "publisher": "LethAL",
+      "name": "LethAL Sandbox Harden Answers",
+      "version": "1.0.0.1"
+    },
+    {
+      "id": "1102d75f-39f0-45d1-b8bf-23d2be28386f",
+      "publisher": "LethAL",
+      "name": "LethAL Sandbox Harden Tests",
+      "version": "1.0.0.1"
+    },
+    {
+      "id": "46788c97-2b68-4b89-8b1b-c23141cbd8ac",
+      "publisher": "LethAL",
+      "name": "LethAL Sandbox Names",
+      "version": "1.0.20749.11856"
+    },
+    {
+      "id": "b9c876b5-8c82-4ed9-879d-90b799667dfe",
+      "publisher": "LethAL",
+      "name": "LethAL Sandbox Names Tests",
+      "version": "1.0.0.0"
+    },
+    {
+      "id": "a3b1c2d4-7788-4a10-9f3e-0c1122334455",
+      "publisher": "LethAL",
+      "name": "LethAL Sandbox Probes",
+      "version": "1.0.12.1"
+    },
+    {
+      "id": "ff7935bb-9fe2-4f7a-adf3-aa7132a41fe7",
+      "publisher": "LethAL",
+      "name": "LethAL Sandbox Tests",
+      "version": "1.0.0.4"
+    },
+    {
+      "id": "4b0f3c1e-8d27-4a52-9e61-3c5d7a9b2f10",
+      "publisher": "LethAL",
+      "name": "LethAL Sandbox Wrapped",
+      "version": "1.0.20749.11922"
+    },
+    {
+      "id": "9d2e6a47-1c35-4f8b-b0a9-6e4c2d18f573",
+      "publisher": "LethAL",
+      "name": "LethAL Sandbox Wrapped Tests",
+      "version": "1.0.0.5"
+    },
+    {
+      "id": "8afe7b40-8c87-4beb-ada0-451d1761bf95",
+      "publisher": "Microsoft",
+      "name": "_Exclude_APIV1_",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "10cb69d9-bc8a-4d27-970a-9e110e9db2a5",
+      "publisher": "Microsoft",
+      "name": "_Exclude_APIV2_",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "7a129d06-5fd6-4fb6-b82b-0bf539c779d0",
+      "publisher": "Microsoft",
+      "name": "_Exclude_Bank Deposits",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "6f2c034f-5ebe-4eae-b34c-90a0d4e87687",
+      "publisher": "Microsoft",
+      "name": "_Exclude_Business_Events_",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "8b3609cf-3947-44c3-9f20-ce6edc6da33f",
+      "publisher": "Microsoft",
+      "name": "_Exclude_ClientAddIns_",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "16c26bda-5f9c-4a77-a17e-4835f06062c0",
+      "publisher": "Microsoft",
+      "name": "_Exclude_Connectivity Apps",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "114e4e19-182b-42e2-b5a9-91d8b8ee8ce1",
+      "publisher": "Microsoft",
+      "name": "_Exclude_Email Logging Using Graph API",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "a01864f8-9c3f-42f6-8328-8d7be1ce3e20",
+      "publisher": "Microsoft",
+      "name": "_Exclude_Master_Data_Management",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "e86e9234-8b95-459d-a9ba-4d901208ca38",
+      "publisher": "Microsoft",
+      "name": "_Exclude_Microsoft Dynamics 365 - SmartList",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "672777d5-ab26-4369-b334-6f04256efffd",
+      "publisher": "Microsoft",
+      "name": "_Exclude_Onboarding Signals",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "5f92e0d5-a60e-435f-ae85-71ec28dd3e41",
+      "publisher": "Microsoft",
+      "name": "_Exclude_PlanConfiguration_",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "b7174aae-753c-4e71-bacb-d973995dce5e",
+      "publisher": "Microsoft",
+      "name": "_Exclude_ReportLayouts",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "00155c68-8cdd-4d60-a451-2034ad094223",
+      "publisher": "Microsoft",
+      "name": "Agent Design Experience",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "698cfedb-66b9-44a8-b5ae-1ec18bd32fa7",
+      "publisher": "Microsoft",
+      "name": "Agent Samples",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "f1ede36c-2f5f-47f1-ba20-258b509c0238",
+      "publisher": "Microsoft",
+      "name": "Agent Samples Tests",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "5afe217e-507a-40b4-9aa5-f4325b6e8230",
+      "publisher": "Microsoft",
+      "name": "Agent Test Library",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "f2d0130c-4b0e-437a-bcfd-0dc9f84ac961",
+      "publisher": "Microsoft",
+      "name": "AI Development Toolkit",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "f78952ee-aed3-43bb-896e-6598f98a3a35",
+      "publisher": "Microsoft",
+      "name": "AI Development Toolkit - Design",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "517f890c-b49f-47de-8120-d0327974b89d",
+      "publisher": "Microsoft",
+      "name": "AI Development Toolkit - Evaluation",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "2156302a-872f-4568-be0b-60968696f0d5",
+      "publisher": "Microsoft",
+      "name": "AI Test Toolkit",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "e7320ebb-08b3-4406-b1ec-b4927d3e280b",
+      "publisher": "Microsoft",
+      "name": "Any",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "a190e87b-2f59-4e14-a727-421877802768",
+      "publisher": "Microsoft",
+      "name": "API - Cross Environment Intercompany",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "a2cc2ef8-949f-43d4-45b8-10bd6f8bc62c",
+      "publisher": "Microsoft",
+      "name": "API Reports - Finance",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "c1335042-3002-4257-bf8a-75c898ccb1b8",
+      "publisher": "Microsoft",
+      "name": "Application",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "d852d5d2-a39d-4179-baeb-f99a19e32510",
+      "publisher": "Microsoft",
+      "name": "Application Test Library",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "a41b0c3e-bf1c-4c97-ad1b-b430a3933ada",
+      "publisher": "Microsoft",
+      "name": "Audit File Export",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "63c9fbe6-d4f3-458c-8c25-644c90a0874a",
+      "publisher": "Microsoft",
+      "name": "Bank Account Reconciliation With AI",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "437dbf0e-84ff-417a-965d-ed2bb9650972",
+      "publisher": "Microsoft",
+      "name": "Base Application",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "f4e3d2c1-b0a9-4867-8765-432109876543",
+      "publisher": "Microsoft",
+      "name": "Business Central 14 Historical Data",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "6992416f-3f39-4d3c-8242-3fff61350bea",
+      "publisher": "Microsoft",
+      "name": "Business Central Cloud Migration - Previous Release",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "57623bfa-0559-4bc2-ae1c-0979c29fc8d1",
+      "publisher": "Microsoft",
+      "name": "Business Central Cloud Migration API",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "334ef79e-547e-4631-8ba1-7a7f18e14de6",
+      "publisher": "Microsoft",
+      "name": "Business Central Intelligent Cloud",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "f3552374-a1f2-4356-848e-196002525837",
+      "publisher": "Microsoft",
+      "name": "Business Foundation",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "bee8cf2f-494a-42f4-aabd-650e87934d39",
+      "publisher": "Microsoft",
+      "name": "Business Foundation Test Libraries",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "972624b9-849a-40cd-98b1-fd0924b0defe",
+      "publisher": "Microsoft",
+      "name": "Calculate Sustainability Emission with Copilot",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "c512d720-63b9-4b26-b062-a0c09b4ed322",
+      "publisher": "Microsoft",
+      "name": "Company Hub",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "5a0b41e9-7a42-4123-d521-2265186cfb31",
+      "publisher": "Microsoft",
+      "name": "Contoso Coffee Demo Dataset",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "93a71c5e-237e-47e8-835b-1a7f9e844f1b",
+      "publisher": "Microsoft",
+      "name": "Create Product Information With Copilot",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "7819d79d-feea-4f09-bbed-5bbaca4bf323",
+      "publisher": "Microsoft",
+      "name": "Data Archive",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "ac14293f-1eb7-4a7b-9936-b280da31970b",
+      "publisher": "Microsoft",
+      "name": "Data Search",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "2363a2b7-1018-4976-a32a-c77338dc9f16",
+      "publisher": "Microsoft",
+      "name": "Dynamics 365 Business Central v14 Reimplementation",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "cc11c22e-5ca3-423f-8804-88cac6d91983",
+      "publisher": "Microsoft",
+      "name": "Dynamics BC Excel Reports",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "ec6b3b0e-f983-408b-8476-bafb4368ecbc",
+      "publisher": "Microsoft",
+      "name": "E-Document Connector - Microsoft 365",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "e1d97edc-c239-46b4-8d84-6368bdf67c8b",
+      "publisher": "Microsoft",
+      "name": "E-Document Core",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "de0dddf3-9917-430d-8d20-6e7679a08500",
+      "publisher": "Microsoft",
+      "name": "E-Document Core Demo Data",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "08d69832-9231-429e-be2c-8bab2c96905b",
+      "publisher": "Microsoft",
+      "name": "Email - Current User Connector",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "aceb66c8-472e-437c-81d3-27e6c07d0f14",
+      "publisher": "Microsoft",
+      "name": "Email - Microsoft 365 Connector",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "e6328152-bb29-4664-9dae-3bc7eaae1fd8",
+      "publisher": "Microsoft",
+      "name": "Email - Outlook REST API",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "8fc50dfb-d338-4fd9-9499-5e44cc8cbf50",
+      "publisher": "Microsoft",
+      "name": "Email - SMTP API",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "68e13fa3-217a-4be0-9141-99e5bf0ca818",
+      "publisher": "Microsoft",
+      "name": "Email - SMTP Connector",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "e2ae191d-8829-44c3-a373-3749a2742d4e",
+      "publisher": "Microsoft",
+      "name": "Enforced Digital Vouchers",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "64c9d5e2-7744-4866-bc0e-5ebc2898e651",
+      "publisher": "Microsoft",
+      "name": "Error Messages with Recommendations",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "d196d21b-75c3-45da-831b-345055b9d25f",
+      "publisher": "Microsoft",
+      "name": "ESG Statistical Accounts Demo Tool",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "2a89f298-7ffd-44a5-a7ce-e08dac98abce",
+      "publisher": "Microsoft",
+      "name": "Essential Business Headlines",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "0a9a9ce1-6f98-4cf0-82e2-0b3e7cabb32a",
+      "publisher": "Microsoft",
+      "name": "EU 3-Party Trade Purchase",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "a7bd3b4e-5469-4185-88b5-06745dd4c153",
+      "publisher": "Microsoft",
+      "name": "Excise Taxes",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "c9ce86fe-cb70-4b79-be03-d21856b1a4ca",
+      "publisher": "Microsoft",
+      "name": "External File Storage - Azure Blob Service Connector",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "79447b11-8301-4d02-a546-2261eb811296",
+      "publisher": "Microsoft",
+      "name": "External File Storage - Azure File Service Connector",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "e0df20ef-75a2-4fae-8e3a-88140ab29507",
+      "publisher": "Microsoft",
+      "name": "External File Storage - SFTP Connector",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "34bfcef7-f8ed-449f-94be-74024cadba3b",
+      "publisher": "Microsoft",
+      "name": "External File Storage - SharePoint Connector",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "5f2e93a0-6083-4718-b05a-7ac89be5644d",
+      "publisher": "Microsoft",
+      "name": "External Storage - Document Attachments",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "58623bfa-0559-4bc2-ae1c-0979c29fd9e0",
+      "publisher": "Microsoft",
+      "name": "Intelligent Cloud Base",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "70912191-3c4c-49fc-a1de-bc6ea1ac9da6",
+      "publisher": "Microsoft",
+      "name": "Intrastat Core",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "ce295b13-0f47-4175-96f9-280f1e6734f2",
+      "publisher": "Microsoft",
+      "name": "Intrastat Core Demo Data",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "3d5b2137-efeb-4014-8489-41d37f8fd4c3",
+      "publisher": "Microsoft",
+      "name": "Late Payment Prediction",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "dd0be2ea-f733-4d65-bb34-a28f4624fb14",
+      "publisher": "Microsoft",
+      "name": "Library Assert",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "5095f467-0a01-4b99-99d1-9ff1237d286f",
+      "publisher": "Microsoft",
+      "name": "Library Variable Storage",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "4d6c453d-e61d-4872-b35d-6c731c0fd93e",
+      "publisher": "Microsoft",
+      "name": "Manufacturing",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "14aa1237-2f69-4c25-9a68-fa7d54e08613",
+      "publisher": "Microsoft",
+      "name": "Payables Agent",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "d09fa965-9a2a-424d-b704-69f3b54ed0ce",
+      "publisher": "Microsoft",
+      "name": "Payment Links to PayPal",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "64977288-facd-4b48-aaaa-bb0e288edfb3",
+      "publisher": "Microsoft",
+      "name": "Payment Practices",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "e1966889-b5fb-4fda-a84c-ea71b590e1a9",
+      "publisher": "Microsoft",
+      "name": "PEPPOL",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "40860557-a18d-42ad-aecb-22b7dd80dc80",
+      "publisher": "Microsoft",
+      "name": "Permissions Mock",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "e4e86220-cac0-4ec3-b853-7c2fa610399d",
+      "publisher": "Microsoft",
+      "name": "Power BI Report embeddings for Dynamics 365 Business Central",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "bc7b3891-f61b-4883-bbb3-384cdef88bec",
+      "publisher": "Microsoft",
+      "name": "Quality Management",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "40bf2bab-2a57-4c34-9002-c11d23fcbff6",
+      "publisher": "Microsoft",
+      "name": "Quality Management Contoso Coffee Demo Dataset",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "a53a4bb0-aa53-8ff8-77d6-fe3388db0eb8",
+      "publisher": "Microsoft",
+      "name": "Recommended Apps",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "87990153-0e35-4e5d-ba61-2e93077d1699",
+      "publisher": "Microsoft",
+      "name": "Review General Ledger Entries",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "milliseconds 4ce93371-6bd6-4027-a78f-021064ad250e",
+      "publisher": "Microsoft",
+      "name": "SAF-T",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "c526b3e9-b8ca-4683-81ba-fcd5f6b1472a",
+      "publisher": "Microsoft",
+      "name": "Sales and Inventory Forecast",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "dd3f226b-40bf-4b3c-9988-9b1e0f74edd8",
+      "publisher": "Microsoft",
+      "name": "Sales Lines Suggestions",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "23b1772f-b8b8-4e87-9339-9ff7cbb2364b",
+      "publisher": "Microsoft",
+      "name": "Sales Order Agent",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "e97bbbc7-16b6-470b-9428-376baa778970",
+      "publisher": "Microsoft",
+      "name": "Send remittance advice by email",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "8c972578-fe72-4aa5-ae51-cc5575fef2ea",
+      "publisher": "Microsoft",
+      "name": "Send To Email Printer",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "2fd9cbd8-c94a-46d6-8274-ea6ccb244f12",
+      "publisher": "Microsoft",
+      "name": "Service Management",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "ec255f57-31d0-4ca2-b751-f2fa7c745abb",
+      "publisher": "Microsoft",
+      "name": "Shopify Connector",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "79b1a79a-2f66-4736-bc1b-8abb3537eb51",
+      "publisher": "Microsoft",
+      "name": "Simplified Bank Statement Import",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "ea130081-c669-460f-a5f4-5dde14f03131",
+      "publisher": "Microsoft",
+      "name": "Statistical Accounts",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "3099ffc7-4cf7-4df6-9b96-7e4bc2bb587c",
+      "publisher": "Microsoft",
+      "name": "Subscription Billing",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "8a3db2bc-9378-4d0f-b89a-a7dea0555449",
+      "publisher": "Microsoft",
+      "name": "Subscription Billing Demo Data",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "b3780cd9-f8f8-4a83-a4d5-0c2ad87b28af",
+      "publisher": "Microsoft",
+      "name": "Sustainability",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "a0673989-48a4-48a0-9517-499c9f4037d3",
+      "publisher": "Microsoft",
+      "name": "Sustainability Contoso Coffee Demo Dataset",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "63ca2fa4-4f03-4f2b-a480-172fef340d3f",
+      "publisher": "Microsoft",
+      "name": "System Application",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "9856ae4f-d1a7-46ef-89bb-6ef056398228",
+      "publisher": "Microsoft",
+      "name": "System Application Test Library",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "23de40a6-dfe8-4f80-80db-d70f83ce8caf",
+      "publisher": "Microsoft",
+      "name": "Test Runner",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "5d86850b-0d76-4eca-bd7b-951ad998e997",
+      "publisher": "Microsoft",
+      "name": "Tests-TestLibraries",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "7961e9dc-a8e5-49b1-839b-3a78803a4cb8",
+      "publisher": "Microsoft",
+      "name": "Troubleshoot FA Ledger Entries",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "2654d7e7-9afd-4947-9e02-6bb8f3e0cd04",
+      "publisher": "Microsoft",
+      "name": "Universal Print Integration",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "c50a4bf0-db51-4ad2-88d5-fe2287da0eb8",
+      "publisher": "Microsoft",
+      "name": "VAT Group Management",
+      "version": "28.4.53241.56590"
+    },
+    {
+      "id": "c31ee575-3fc7-4388-98ee-d75aa2fc5f87",
+      "publisher": "Microsoft",
+      "name": "Withholding Tax",
+      "version": "28.4.53241.56590"
+    }
+  ],
+  "byPublisher": {
+    "Microsoft": 100,
+    "LethAL": 18,
+    "ALDirectCompile": 1
+  },
+  "removal": [
+    "uninstall HTTP 204",
+    "unpublish HTTP 204",
+    "read-back absent (0 rows)"
+  ]
+}

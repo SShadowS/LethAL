@@ -1,0 +1,20 @@
+{
+  "id": "5ea135b0-2061-4c4c-9be0-d3c8a17a9182",
+  "name": "R623 Probe Dependent",
+  "publisher": "LethAL Probe",
+  "version": "1.0.0.1",
+  "brief": "R623/R605 throwaway probe dependent: one codeunit calling the target's procedure.",
+  "platform": "28.0.0.0",
+  "runtime": "17.0",
+  "target": "OnPrem",
+  "idRanges": [{ "from": 91810, "to": 91819 }],
+  "dependencies": [
+    {
+      "id": "3543fecd-9a43-4256-a10d-8d6df316c223",
+      "name": "R623 Probe Target",
+      "publisher": "LethAL Probe",
+      "version": "1.0.0.1"
+    }
+  ],
+  "features": ["NoImplicitWith"]
+}

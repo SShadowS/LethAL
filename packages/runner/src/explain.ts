@@ -246,8 +246,14 @@ import { refuseRetiredV2Report } from "./v2-retired";
  *
  * 18: R631 added the caveat value `project-symlink-skipped` to `$.caveats[].caveat`. A new value,
  * so it bumps (R233); v17 is frozen.
+ *
+ * 19: R658 added the cause value `confirm-stopped` to `$.notMeasured[].cause` and the caveat value
+ * `baseline-test-stopped` to `$.caveats[].caveat`. New values, so it bumps (R233); v18 is frozen.
+ *
+ * 20: R688 added the cause value `test-discovery-failed` to `$.notMeasured[].cause`. A new value,
+ * so it bumps (R233); v19 is frozen.
  */
-export const EXPLAIN_SCHEMA_VERSION = 18;
+export const EXPLAIN_SCHEMA_VERSION = 20;
 
 /**
  * Thrown when the input is not an explainable `SessionReport` — a caller-contract violation, not a

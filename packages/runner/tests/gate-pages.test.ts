@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { IDENTITY_SCHEME } from "@lethal/schemata";
 import { GATE_BASELINES, PENDING_FIRST_RECORD, parseGateBaseline } from "../itest/baseline-guard";
 import {
   BCDEV_FIGURES,
@@ -350,6 +351,76 @@ describe("itest/gate-expected.ts (R-592)", () => {
       "const BUDGET_MS = 2",
       "does not read X_FIGURES from ./gate-expected",
     ]);
+  });
+});
+
+/**
+ * R682: a gate baseline recorded under an older `IDENTITY_SCHEME` is compared across a scheme change,
+ * where a byte-identical twin's text cannot be checked (`compareMutants`'s rule), so it prints
+ * text-UNVERIFIED. A change that bumps the scheme must therefore re-record its baselines in the same
+ * change, or list each one here with the item that re-records it. A listed file that has caught up
+ * fails too, so the list cannot go stale.
+ */
+const LAGGING_SCHEME: Readonly<Record<string, string>> = {
+  // A bare array (no scheme at all): the env tool is host-only.
+  "envtool.baseline.json": "R683",
+};
+
+/** R682: the baselines behind `current` that nothing lists, and listed ones that are not behind. */
+function schemeLag(
+  recorded: ReadonlyArray<{ readonly file: string; readonly scheme: number | undefined }>,
+  current: number,
+  lagging: Readonly<Record<string, string>>,
+): string[] {
+  const out: string[] = [];
+  for (const { file, scheme } of recorded) {
+    const behind = scheme === undefined || scheme < current;
+    const listed = lagging[file];
+    if (behind && listed === undefined) {
+      out.push(
+        `${file} records identity scheme ${scheme ?? "none"}, below ${current}: re-record it in the change that bumped the scheme (R332), or list it in LAGGING_SCHEME with the item that will (R682)`,
+      );
+    }
+    if (!behind && listed !== undefined) {
+      out.push(
+        `${file} records scheme ${scheme}, the current one; remove it from LAGGING_SCHEME (${listed})`,
+      );
+    }
+  }
+  return out;
+}
+
+describe("R682: a scheme bump re-records the gate baselines, or names the item that does", () => {
+  test("every committed gate baseline records the current scheme, or is listed with its item", () => {
+    const recorded = readdirSync(ITEST)
+      .filter((f) => f.endsWith(".baseline.json"))
+      .map((file) => {
+        const raw = JSON.parse(readFileSync(join(ITEST, file), "utf8")) as unknown;
+        const scheme = Array.isArray(raw)
+          ? undefined
+          : (raw as { identityScheme?: number }).identityScheme;
+        return { file, scheme };
+      });
+    expect(recorded.length).toBeGreaterThan(5);
+    expect(schemeLag(recorded, IDENTITY_SCHEME, LAGGING_SCHEME)).toEqual([]);
+  });
+
+  test("a bump with no re-record and no listing fails, naming the file", () => {
+    const out = schemeLag([{ file: "x.baseline.json", scheme: 41 }], 42, {});
+    expect(out).toHaveLength(1);
+    expect(out[0]).toContain("x.baseline.json records identity scheme 41, below 42");
+  });
+
+  test("a listed baseline that caught up fails too, and an unlisted current one passes", () => {
+    expect(
+      schemeLag([{ file: "x.baseline.json", scheme: 42 }], 42, { "x.baseline.json": "R1" }),
+    ).toEqual([
+      "x.baseline.json records scheme 42, the current one; remove it from LAGGING_SCHEME (R1)",
+    ]);
+    expect(schemeLag([{ file: "x.baseline.json", scheme: 42 }], 42, {})).toEqual([]);
+    expect(
+      schemeLag([{ file: "x.baseline.json", scheme: undefined }], 42, { "x.baseline.json": "R1" }),
+    ).toEqual([]);
   });
 });
 

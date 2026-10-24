@@ -101,8 +101,9 @@ and `--tests-only` gives `tests-narrowed`.
 
 **Backends.** `bcdev` is authoritative. `al-runner-v3` (the Rust al-runner, configured by the
 `alRunnerV3` section, Linux only, one worker) is offline and is NOT: its coverage is CONDITIONAL. A
-project holding a multi-object or an `#if`-wrapped object file runs with coverage off, with a
-warning naming the file, and without coverage an unreached mutant comes back survived rather than
+project holding an `#if`-wrapped object file of a shape the index has no rule for (two-arm,
+`#elif`, nested, or a multi-object file holding a wrapper) runs with coverage off, with a
+warning naming the file (multi-object and single-wrapper files keep coverage on, R602), and without coverage an unreached mutant comes back survived rather than
 no-coverage. Do not quote a score from it. Its gate is `itest:alrunner-v3`
 ([docs/gates/alrunner-v3.md](gates/alrunner-v3.md)).
 
@@ -250,7 +251,7 @@ code.
 Each surface below is versioned separately and has a published JSON Schema in [`../schemas/`](../schemas/):
 
 - the report: [../schemas/report-v3.schema.json](../schemas/report-v3.schema.json)
-- `lethal explain`: [../schemas/explain-v18.schema.json](../schemas/explain-v18.schema.json)
+- `lethal explain`: [../schemas/explain-v20.schema.json](../schemas/explain-v20.schema.json)
 - the event stream: [../schemas/stream-v1.schema.json](../schemas/stream-v1.schema.json)
 - `lethal doctor --json`: [../schemas/doctor-v1.schema.json](../schemas/doctor-v1.schema.json)
 
@@ -296,7 +297,7 @@ some mutants at all, and they read `no-coverage` rather than `survived`.
 
 ### `lethal explain report.json`: what it MEANS (checked)
 
-`explainSchemaVersion: 18`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
+`explainSchemaVersion: 20`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
 `survivorSelection` and `markIdentityScheme`. Each `survivors` row carries `executionProven`,
 `reach` and `markKey`. The top level can also carry `markKeysStale`. Each `survivors` row can
 also carry `mark`. Explain writes it for a report that records its numbering facts.
@@ -660,11 +661,11 @@ Mark an equivalent survivor in `<project>/lethal.equivalent.json`:
 5. Keep the mark's `"preprocessorSymbols"` as explain printed it: the report's `buildSymbols`, the
    build's effective set (for example `"preprocessorSymbols": ["CLEAN27"]`). A mark without the
    field means `[]`: it applies only to a build with no symbols. A key names a site within one
-   build, so a mark made under other symbols is reported stale and never applied (R214). A mark
-   for an AL-RUNNER run lists the run's whole effective set, which includes `CLEANSCHEMA1` to
-   `CLEANSCHEMA25` even when the project defines no symbols. Such a mark applies only to an
-   al-runner build; a mark without them applies only to a build with no symbols (for example
-   bcdev), so one mark cannot cover both backends. LethAL warns by name
+   build, so a mark made under other symbols is reported stale and never applied (R214). The
+   retired .NET al-runner added `CLEANSCHEMA1` to `CLEANSCHEMA25` to every build, so a mark from
+   one of its runs applies to no current build. `al-runner-v3` adds none: a session refuses a v3
+   build that predefines any symbol (its `predefined-symbols` contract fact), so a bcdev run and a
+   v3 run of the same project have the same effective set. LethAL warns by name
    (`equivalence-marks-build-symbols`) when a mark's set differs.
 
 A mark proves which mutant it names (R443). A key holds no file, and twins (mutants with the same
@@ -729,16 +730,21 @@ many tests new.
 
 What verify still does NOT see, so it reports the affected tests as OLD (not re-run, no cause) with
 no warning:
-- an installed app no test-app dependency reaches (for example one with a global event
-  subscriber), and a non-Microsoft dependency that is published but not the installed version
-  (R434);
+- an installed app that no test-app dependency reaches (R434, a stated limit). Installing,
+  upgrading or removing such an app leaves every test old, even when it changes what a test does,
+  for example through a global event subscriber, a setup change, or a test-runner extension.
+  Measured on LethAL's own servers (2026-10-23): each holds about 120 installed apps (100 Microsoft
+  ones), and one of them is outside every test app's dependencies: ALDirectCompile's "Test Runner
+  Extension". After you install or upgrade an app on the server, re-run `lethal run` before you
+  trust verify. (A partner dependency that is published but not the installed version IS seen
+  since R496: verify refuses `dependency-unreadable`, above.)
 - a body-only rebuild of a symbols-only package (no `.al` source inside): measured, that is
   `Application`, which is expected because it is a wrapper app whose dependencies carry the source,
   and the `LethAL Control` package, whose bytes are not hashed anyway;
 - a service-tier binary update with no new `System` package (unmeasured);
 - the control app's own changes: its bytes are not hashed, or every control-app upgrade would make
   every test new;
-- on al-runner, Microsoft apps are still read by declared version (R435; verify is bcdev only).
+- on al-runner-v3, Microsoft apps are still read by declared version (R435; verify is bcdev only).
 
 Under `fenced` coverage (bcdev's default) a new test is sent only to the survivors its own
 coverage reaches (R-384), read from the unmutated run verify already makes of it, so the filter
@@ -789,7 +795,7 @@ every app it published is installed at the version the server serves, and, when 
 file is the test app, the read-back has that file's name, publisher, version and `.al` sources.
 Where the run could not read that source or prove it (no dev endpoint, a failed or unproven
 read-back, a package without source) it records none and warns `test-digests-unavailable` once,
-naming why, and verify refuses that run as `source-predates-verify`. On al-runner the source on
+naming why, and verify refuses that run as `source-predates-verify`. On al-runner-v3 the source on
 disk is what runs, and that is what the run records.
 
 An env-tool session's `--resume` finds the run to resume before the lease, against the test app the
@@ -799,6 +805,21 @@ baseline (R486). `--skip-known-survivors` compares the read-back instead: after 
 an unreadable read-back, it skips nothing and warns `history-test-app-changed`. The run records the
 read-back's identity, or none when it could not be read.
 
+**A resume across a server restart is refused (R680).** On bcdev, each run records the server's
+generation (LethAL Control's `serverGeneration`), read once at the start of the session. The server
+mints a new generation when its lease row is created, as after a restart that lost an in-memory
+database, and on `ForceResetLease`.
+- **`--resume` and `--resume-run`** refuse with `ServerGenerationChangedError` (code
+  `server-generation-changed`) when the run they would resume recorded another generation, or none.
+  A run recorded before R680 has none, so it refuses too. The error names both values; drop the
+  flag to run from scratch.
+- **A saved baseline** is reused only from a run on the same generation.
+- **The lease** is asked at the generation the session recorded. A server that restarted since
+  refuses it (`generation-changed`) before anything is deployed.
+- **Not covered:** `--skip-known-survivors` still lends across a restart. It skips survivors only,
+  so a test that now kills one can be missed (an under-report). It never scores a false kill.
+- al-runner-v3 has no server and records no generation.
+
 **A run lends its test-app identity to a later session only when it PROVED it (R495).** `--resume`,
 `--resume-run`, `--skip-known-survivors` and the reuse of a saved baseline all require the earlier
 run to have proven that the test app it recorded is the one it ran. The proof, by backend:
@@ -807,7 +828,7 @@ run to have proven that the test app it recorded is the one it ran. The proof, b
   local `app.json`) has exactly one installed row on the server. A served package that is published
   but not installed, a backend that cannot read installed versions, or no package read at all (no
   dev-endpoint credentials: the source on disk is not what BC runs) proves nothing;
-- al-runner: it compiles the test source it hashed, so its identity is proven by construction.
+- al-runner-v3: it compiles the test source it hashed, so its identity is proven by construction.
 
 An unproven run records no identity. It still runs and reports normally, and it lends nothing: a
 later `--resume` of it is refused by name ("not proven installed"), and `--skip-known-survivors`
@@ -835,7 +856,8 @@ runs (same id and version, other bytes) carries nothing across. Where the finger
   its digests and warns `test-digests-unavailable` once; a fresh run then runs unproven, and a
   requested resume refuses with `TestAppRepublishedError`;
 - bcdev with a hook: from the read-back after the hook;
-- al-runner: from the test project's `app.json` and the `.app` files in its package folders.
+- al-runner-v3: from the test project's `app.json` and the `.app` files in its package folder
+  (`alRunnerV3.packagesDir`).
 
 A fingerprint that cannot be taken (a dependency not served, or not installed at the served
 version) leaves the run unproven, with a `test-app-dependencies-unproven` or
@@ -987,6 +1009,17 @@ into a transcript and do not copy it into an issue.
   infinite is ordinary on real code, and without the flag each one costs the mutant budget, a
   quarantine, and a full redeploy-and-baseline on `--resume` (measured 2026-09-02: about ten
   minutes per hang on a hosted sandbox). With it the mutant is stopped and scored `timeout-killed`.
+  The flag covers MUTANT runs only. A run with no mutant active (a baseline test, a kill confirm, a
+  warm replay) that runs past its budget is stopped either way, with no consent asked, because an
+  abandoned one keeps running on the server and blocks its lease until an NST restart (R658). Tell
+  the user this once. A stopped baseline test is named in `baselineStopped`; a stopped kill confirm
+  is `error` with cause `confirm-stopped`.
+- On bcdev a mutant can make BC's suite discovery list no methods for a test codeunit (BC runs the
+  codeunit's OnRun while it builds the suite). LethAL then runs that test once with no mutant
+  active. If it passes, the codeunit is skipped for this mutant only, the other covering tests still
+  run, and a mutant none of them kill is `error` with cause `test-discovery-failed` (R688). If that
+  unmutated run does not pass, or BC's answer also carries an identity mismatch, the session stops,
+  because then the server or the test app changed, not the mutant.
 - A report from a real project carries that project's source code in every mutant's `originalText`
   and `mutatedText`. Do not publish one, and run `bun scripts/redact-campaign-report.ts <report>`
   before committing one anywhere public.

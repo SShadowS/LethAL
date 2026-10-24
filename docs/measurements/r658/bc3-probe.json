@@ -1,0 +1,529 @@
+{
+  "server": "bc3",
+  "date": "2026-10-22",
+  "harness": "scripts/r658-bc-probe/drive.ts@586c78359866212bc1fc2c37b70e848bd7175d8c",
+  "probeSourceSha": "478fe49e4fc39b7a6762a4814ae67d164cc9145a",
+  "appSha256": {
+    "target.app": "2aa9991d29db0c02f763329bb9a46744dfc964deb202d864cacb80745d934ea5",
+    "tests.app": "aaf0d60cfc1eb6f0a80bd6028c68dba21eeb7dc3375f88a7c19de76c92b86116"
+  },
+  "runnerPath": "LethAL Control RunMutant through RunMutantTransport.run (mutantId \"\"). C, L, S: timeoutMs 20000, onBudgetExceeded -> stopHungRun as runViaTransport builds it, stopGraceMs unset = 30000, fetch tapped to hold the RunMutant request to 240000 ms, progress read at dispatch + 70000 ms after a stop. D: timeoutMs 10000, no stop hook, pass-through tap, reads at + 45000 and + 60000 ms, then a cleanup StopHungRun. Status reads on a second transport, polled every 5000 ms",
+  "lease": {
+    "holder": {
+      "lane": "bugs",
+      "attempt": "075",
+      "at": 1792694483719
+    },
+    "releasedAt": null
+  },
+  "apps": {
+    "target": {
+      "id": "d1d2d26c-a3b4-4a26-804f-903c1f1497f8",
+      "name": "LethAL R658 BC Baseline Stop Probe",
+      "file": "target.app"
+    },
+    "tests": {
+      "id": "c189159c-3fa4-4909-9c63-b4b65bafc1cd",
+      "name": "LethAL R658 BC Baseline Stop Probe Tests",
+      "file": "tests.app"
+    },
+    "artifactId": "46f0516107e9ecda24671e5c5ddbabd0"
+  },
+  "cases": [
+    "C 92950",
+    "L 92952",
+    "S 92951",
+    "D 92953"
+  ],
+  "bcBuild": {
+    "Base Application": "28.4.53241.56646 isInstalled=true",
+    "System Application": "28.4.53241.56646 isInstalled=true"
+  },
+  "lethalControl": "1.0.0.23",
+  "absentBefore": true,
+  "results": [
+    {
+      "role": "C",
+      "codeunit": 92950,
+      "method": "Sleep100",
+      "attemptId": "r658-92950-12950",
+      "opSeq": 12950,
+      "budgetMs": 20000,
+      "heartbeatProblems": [],
+      "stop": {
+        "fired": false,
+        "wired": true
+      },
+      "dispatchedAt": "2026-10-22T18:41:26.314Z",
+      "lethal": {
+        "wallMs": 207,
+        "verdict": {
+          "outcome": "pass",
+          "durationMs": 205,
+          "attestation": {
+            "observedAny": false,
+            "identityMismatch": false
+          },
+          "reachedActive": false,
+          "sessionId": 42702,
+          "testRunsBefore": 0
+        },
+        "baselineReading": "green"
+      },
+      "held": {
+        "passThrough": false,
+        "status": 200,
+        "atMs": 204,
+        "withinBudgetPlusGrace": true,
+        "alStop408": false,
+        "body": "{\"@odata.context\":\"http://192.168.2.157:7248/BC/ODataV4/$metadata#Edm.String\",\"value\":\"{\\\"status\\\":\\\"ran\\\",\\\"targetAppId\\\":\\\"d1d2d26c-a3b4-4a26-804f-903c1f1497f8\\\",\\\"artifactId\\\":\\\"46f0516107e9ecda24671e5c5ddbabd0\\\",\\\"attemptId\\\":\\\"r658-92950-12950\\\",\\\"mutantId\\\":\\\"\\\",\\\"codeunitId\\\":92950,\\\"method\\\":\\\"Sleep100\\\",\\\"codeunitResults\\\":\\\"{\\\\\\\"name\\\\\\\":\\\\\\\"R658 Control Sleep 100\\\\\\\",\\\\\\\"codeUnit\\\\\\\":92950,\\\\\\\"codeunitName\\\\\\\":\\\\\\\"R658 Control Sleep 100\\\\\\\",\\\\\\\"applicationID\\\\\\\":\\\\\\\"{C189159C-3FA4-4909-9C63-B4B65BAFC1CD}\\\\\\\",\\\\\\\"applicationName\\\\\\\":\\\\\\\"LethAL R658 BC Baseline Stop Probe Tests\\\\\\\",\\\\\\\"startTime\\\\\\\":\\\\\\\"2026-10-22T18:41:25.1900000Z\\\\\\\",\\\\\\\"finishTime\\\\\\\":\\\\\\\"2026-10-22T18:41:25.3000000Z\\\\\\\",\\\\\\\"result\\\\\\\":2,\\\\\\\"testResults\\\\\\\":[{\\\\\\\"method\\\\\\\":\\\\\\\"Sleep100\\\\\\\",\\\\\\\"startTime\\\\\\\":\\\\\\\"2026-10-22T18:41:25.1930000Z\\\\\\\",\\\\\\\"finishTime\\\\\\\":\\\\\\\"2026-10-22T18:41:25.2970000Z\\\\\\\",\\\\\\\"result\\\\\\\":2}]}\\\",\\\"observedAny\\\":false,\\\"observedActive\\\":false,\\\"identityMismatch\\\":false,\\\"testRunsBefore\\\":0,\\\"sessionId\\\":42702}\"}"
+      },
+      "status": {
+        "completed": true,
+        "completedAfterMs": 5000,
+        "snapshots": [
+          {
+            "atMs": 5000,
+            "opKind": "none",
+            "opAttemptId": "r658-92950-12950",
+            "opSeq": 12950,
+            "lastCompletedOpSeq": 12950,
+            "completed": true,
+            "opProgress": {
+              "attemptId": "r658-92950-12950",
+              "opSeq": 12950,
+              "methodIndex": 1,
+              "codeunitId": 92950,
+              "method": "Sleep100",
+              "token": "2DE4F1A9-32C2-4AFA-A239-355E43D1F9B8",
+              "startedAt": "2026-10-22T18:41:25.1700000Z",
+              "lastCompletedIndex": 1,
+              "state": "done"
+            },
+            "serverNow": "2026-10-22T18:41:30.3730000Z"
+          }
+        ]
+      },
+      "release": {
+        "released": true
+      },
+      "statusAfterRelease": {
+        "atMs": 10191,
+        "opKind": "none",
+        "opAttemptId": "r658-92950-12950",
+        "completed": true,
+        "progressState": "done",
+        "lastCompletedIndex": 1,
+        "status": {
+          "opKind": "none",
+          "opAttemptId": "r658-92950-12950",
+          "opSeq": 12950,
+          "lastCompletedOpSeq": 12950,
+          "completed": true,
+          "opProgress": {
+            "attemptId": "r658-92950-12950",
+            "opSeq": 12950,
+            "methodIndex": 1,
+            "codeunitId": 92950,
+            "method": "Sleep100",
+            "token": "2DE4F1A9-32C2-4AFA-A239-355E43D1F9B8",
+            "startedAt": "2026-10-22T18:41:25.1700000Z",
+            "lastCompletedIndex": 1,
+            "state": "done"
+          },
+          "serverNow": "2026-10-22T18:41:35.2960000Z"
+        }
+      },
+      "nextAcquire": {
+        "granted": true,
+        "epoch": 324,
+        "lastCompletedOpSeq": 12950
+      }
+    },
+    {
+      "role": "L",
+      "codeunit": 92952,
+      "method": "BusyLoop60s",
+      "attemptId": "r658-92952-12951",
+      "opSeq": 12951,
+      "budgetMs": 20000,
+      "heartbeatProblems": [],
+      "stop": {
+        "fired": true,
+        "wired": true,
+        "firedAtMs": 20000,
+        "boundMs": 30000,
+        "result": {
+          "stopped": true,
+          "sessionId": 42710
+        },
+        "answeredAtMs": 20073
+      },
+      "dispatchedAt": "2026-10-22T18:41:36.566Z",
+      "lethal": {
+        "wallMs": 20137,
+        "verdict": {
+          "outcome": "timeout",
+          "durationMs": 20137,
+          "failureMessage": "RunMutant exceeded its 20000 ms budget and was stopped server-side so it could be scored rather than strand the tier. BC's own words: \"{\\\"error\\\":{\\\"code\\\":\\\"Unknown\\\",\\\"message\\\":\\\"The server stopped the session (ID: 42710) because of a stop session request.\\\\r\\\\n\\\\r\\\\nThe session was stopped by an AL StopSession call.  CorrelationId:  3a55e23b-a06d-41a7-bbb7-66665d0c0599.\\\"}}\"",
+          "stopState": "confirmed"
+        },
+        "baselineReading": "not green: timeout, not a quarantine and not a did-not-pass-at-baseline outcome"
+      },
+      "held": {
+        "passThrough": false,
+        "status": 408,
+        "atMs": 20075,
+        "withinBudgetPlusGrace": true,
+        "alStop408": true,
+        "body": "{\"error\":{\"code\":\"Unknown\",\"message\":\"The server stopped the session (ID: 42710) because of a stop session request.\\r\\n\\r\\nThe session was stopped by an AL StopSession call.  CorrelationId:  3a55e23b-a06d-41a7-bbb7-66665d0c0599.\"}}"
+      },
+      "progressAfterSettle": {
+        "atMs": 70055,
+        "opKind": "none",
+        "opAttemptId": "r658-92952-12951",
+        "completed": true,
+        "progressState": "running",
+        "lastCompletedIndex": 0,
+        "status": {
+          "opKind": "none",
+          "opAttemptId": "r658-92952-12951",
+          "opSeq": 12951,
+          "lastCompletedOpSeq": 12951,
+          "completed": true,
+          "opProgress": {
+            "attemptId": "r658-92952-12951",
+            "opSeq": 12951,
+            "methodIndex": 1,
+            "codeunitId": 92952,
+            "method": "BusyLoop60s",
+            "token": "1A9206F4-EBCA-43DE-91F9-E9D46F2832C0",
+            "startedAt": "2026-10-22T18:41:35.4200000Z",
+            "lastCompletedIndex": 0,
+            "state": "running"
+          },
+          "serverNow": "2026-10-22T18:42:45.4120000Z"
+        }
+      },
+      "status": {
+        "completed": true,
+        "completedAfterMs": 5002,
+        "snapshots": [
+          {
+            "atMs": 5002,
+            "opKind": "none",
+            "opAttemptId": "r658-92952-12951",
+            "opSeq": 12951,
+            "lastCompletedOpSeq": 12951,
+            "completed": true,
+            "opProgress": {
+              "attemptId": "r658-92952-12951",
+              "opSeq": 12951,
+              "methodIndex": 1,
+              "codeunitId": 92952,
+              "method": "BusyLoop60s",
+              "token": "1A9206F4-EBCA-43DE-91F9-E9D46F2832C0",
+              "startedAt": "2026-10-22T18:41:35.4200000Z",
+              "lastCompletedIndex": 0,
+              "state": "running"
+            },
+            "serverNow": "2026-10-22T18:42:00.4190000Z"
+          }
+        ]
+      },
+      "release": {
+        "released": true
+      },
+      "statusAfterRelease": {
+        "atMs": 70957,
+        "opKind": "none",
+        "opAttemptId": "r658-92952-12951",
+        "completed": true,
+        "progressState": "running",
+        "lastCompletedIndex": 0,
+        "status": {
+          "opKind": "none",
+          "opAttemptId": "r658-92952-12951",
+          "opSeq": 12951,
+          "lastCompletedOpSeq": 12951,
+          "completed": true,
+          "opProgress": {
+            "attemptId": "r658-92952-12951",
+            "opSeq": 12951,
+            "methodIndex": 1,
+            "codeunitId": 92952,
+            "method": "BusyLoop60s",
+            "token": "1A9206F4-EBCA-43DE-91F9-E9D46F2832C0",
+            "startedAt": "2026-10-22T18:41:35.4200000Z",
+            "lastCompletedIndex": 0,
+            "state": "running"
+          },
+          "serverNow": "2026-10-22T18:42:46.3140000Z"
+        }
+      },
+      "nextAcquire": {
+        "granted": true,
+        "epoch": 326,
+        "lastCompletedOpSeq": 12951
+      }
+    },
+    {
+      "role": "S",
+      "codeunit": 92951,
+      "method": "Sleep60000",
+      "attemptId": "r658-92951-12952",
+      "opSeq": 12952,
+      "budgetMs": 20000,
+      "heartbeatProblems": [],
+      "stop": {
+        "fired": true,
+        "wired": true,
+        "firedAtMs": 19999,
+        "boundMs": 30000,
+        "result": {
+          "stopped": true,
+          "sessionId": 42745
+        },
+        "answeredAtMs": 20070
+      },
+      "dispatchedAt": "2026-10-22T18:42:47.583Z",
+      "lethal": {
+        "wallMs": 20149,
+        "verdict": {
+          "outcome": "timeout",
+          "durationMs": 20149,
+          "failureMessage": "RunMutant exceeded its 20000 ms budget and was stopped server-side so it could be scored rather than strand the tier. BC's own words: \"{\\\"error\\\":{\\\"code\\\":\\\"Unknown\\\",\\\"message\\\":\\\"The server stopped the session (ID: 42745) because of a stop session request.\\\\r\\\\n\\\\r\\\\nThe session was stopped by an AL StopSession call.  CorrelationId:  e909d7da-e01e-409a-8862-2257f9f9be72.\\\"}}\"",
+          "stopState": "confirmed"
+        },
+        "baselineReading": "not green: timeout, not a quarantine and not a did-not-pass-at-baseline outcome"
+      },
+      "held": {
+        "passThrough": false,
+        "status": 408,
+        "atMs": 20086,
+        "withinBudgetPlusGrace": true,
+        "alStop408": true,
+        "body": "{\"error\":{\"code\":\"Unknown\",\"message\":\"The server stopped the session (ID: 42745) because of a stop session request.\\r\\n\\r\\nThe session was stopped by an AL StopSession call.  CorrelationId:  e909d7da-e01e-409a-8862-2257f9f9be72.\"}}"
+      },
+      "progressAfterSettle": {
+        "atMs": 70065,
+        "opKind": "none",
+        "opAttemptId": "r658-92951-12952",
+        "completed": true,
+        "progressState": "running",
+        "lastCompletedIndex": 0,
+        "status": {
+          "opKind": "none",
+          "opAttemptId": "r658-92951-12952",
+          "opSeq": 12952,
+          "lastCompletedOpSeq": 12952,
+          "completed": true,
+          "opProgress": {
+            "attemptId": "r658-92951-12952",
+            "opSeq": 12952,
+            "methodIndex": 1,
+            "codeunitId": 92951,
+            "method": "Sleep60000",
+            "token": "9F8C9957-5472-47F7-B414-1E0085A964B3",
+            "startedAt": "2026-10-22T18:42:46.4370000Z",
+            "lastCompletedIndex": 0,
+            "state": "running"
+          },
+          "serverNow": "2026-10-22T18:43:56.4360000Z"
+        }
+      },
+      "status": {
+        "completed": true,
+        "completedAfterMs": 5003,
+        "snapshots": [
+          {
+            "atMs": 5003,
+            "opKind": "none",
+            "opAttemptId": "r658-92951-12952",
+            "opSeq": 12952,
+            "lastCompletedOpSeq": 12952,
+            "completed": true,
+            "opProgress": {
+              "attemptId": "r658-92951-12952",
+              "opSeq": 12952,
+              "methodIndex": 1,
+              "codeunitId": 92951,
+              "method": "Sleep60000",
+              "token": "9F8C9957-5472-47F7-B414-1E0085A964B3",
+              "startedAt": "2026-10-22T18:42:46.4370000Z",
+              "lastCompletedIndex": 0,
+              "state": "running"
+            },
+            "serverNow": "2026-10-22T18:43:11.4340000Z"
+          }
+        ]
+      },
+      "release": {
+        "released": true
+      },
+      "statusAfterRelease": {
+        "atMs": 70946,
+        "opKind": "none",
+        "opAttemptId": "r658-92951-12952",
+        "completed": true,
+        "progressState": "running",
+        "lastCompletedIndex": 0,
+        "status": {
+          "opKind": "none",
+          "opAttemptId": "r658-92951-12952",
+          "opSeq": 12952,
+          "lastCompletedOpSeq": 12952,
+          "completed": true,
+          "opProgress": {
+            "attemptId": "r658-92951-12952",
+            "opSeq": 12952,
+            "methodIndex": 1,
+            "codeunitId": 92951,
+            "method": "Sleep60000",
+            "token": "9F8C9957-5472-47F7-B414-1E0085A964B3",
+            "startedAt": "2026-10-22T18:42:46.4370000Z",
+            "lastCompletedIndex": 0,
+            "state": "running"
+          },
+          "serverNow": "2026-10-22T18:43:57.3200000Z"
+        }
+      },
+      "nextAcquire": {
+        "granted": true,
+        "epoch": 328,
+        "lastCompletedOpSeq": 12952
+      }
+    },
+    {
+      "role": "D",
+      "codeunit": 92953,
+      "method": "Sleep30000",
+      "attemptId": "r658-92953-12953",
+      "opSeq": 12953,
+      "budgetMs": 10000,
+      "heartbeatProblems": [],
+      "stop": {
+        "fired": false,
+        "wired": false
+      },
+      "dispatchedAt": "2026-10-22T18:43:58.600Z",
+      "lethal": {
+        "wallMs": 10073,
+        "verdict": {
+          "outcome": "deadline-exceeded",
+          "durationMs": 10002,
+          "failureMessage": "RunMutant timed out before headers: AbortError: The operation was aborted.; answer readback: the server holds no committed answer for r658-92953-12953/12953 (it holds r658-92950-12950/12950)",
+          "operation": "in-flight-unknown",
+          "fencedOp": {
+            "attemptId": "r658-92953-12953",
+            "opSeq": 12953
+          }
+        },
+        "baselineReading": "quarantine: baseline test in-flight-unknown, durable tier quarantine, baseline stops"
+      },
+      "held": {
+        "passThrough": true,
+        "status": null,
+        "atMs": 10002,
+        "withinBudgetPlusGrace": true,
+        "alStop408": false,
+        "body": "",
+        "error": "The operation was aborted."
+      },
+      "dReads": [
+        {
+          "atMs": 45055,
+          "opKind": "run",
+          "opAttemptId": "r658-92953-12953",
+          "completed": false,
+          "progressState": "running",
+          "lastCompletedIndex": 0,
+          "status": {
+            "opKind": "run",
+            "opAttemptId": "r658-92953-12953",
+            "opSeq": 12953,
+            "lastCompletedOpSeq": 12952,
+            "completed": false,
+            "opProgress": {
+              "attemptId": "r658-92953-12953",
+              "opSeq": 12953,
+              "methodIndex": 1,
+              "codeunitId": 92953,
+              "method": "Sleep30000",
+              "token": "82BED8F3-E27A-4013-A659-F1BE3DD46BFF",
+              "startedAt": "2026-10-22T18:43:57.4570000Z",
+              "lastCompletedIndex": 0,
+              "state": "running"
+            },
+            "serverNow": "2026-10-22T18:44:42.4430000Z"
+          }
+        },
+        {
+          "atMs": 60057,
+          "opKind": "run",
+          "opAttemptId": "r658-92953-12953",
+          "completed": false,
+          "progressState": "running",
+          "lastCompletedIndex": 0,
+          "status": {
+            "opKind": "run",
+            "opAttemptId": "r658-92953-12953",
+            "opSeq": 12953,
+            "lastCompletedOpSeq": 12952,
+            "completed": false,
+            "opProgress": {
+              "attemptId": "r658-92953-12953",
+              "opSeq": 12953,
+              "methodIndex": 1,
+              "codeunitId": 92953,
+              "method": "Sleep30000",
+              "token": "82BED8F3-E27A-4013-A659-F1BE3DD46BFF",
+              "startedAt": "2026-10-22T18:43:57.4570000Z",
+              "lastCompletedIndex": 0,
+              "state": "running"
+            },
+            "serverNow": "2026-10-22T18:44:57.4440000Z"
+          }
+        }
+      ],
+      "cleanupStop": {
+        "sentAtMs": 60057,
+        "result": {
+          "stopped": true,
+          "sessionId": 42780
+        }
+      },
+      "statusAfterCleanup": {
+        "atMs": 60171,
+        "opKind": "none",
+        "opAttemptId": "r658-92953-12953",
+        "completed": true,
+        "progressState": "running",
+        "lastCompletedIndex": 0,
+        "status": {
+          "opKind": "none",
+          "opAttemptId": "r658-92953-12953",
+          "opSeq": 12953,
+          "lastCompletedOpSeq": 12953,
+          "completed": true,
+          "opProgress": {
+            "attemptId": "r658-92953-12953",
+            "opSeq": 12953,
+            "methodIndex": 1,
+            "codeunitId": 92953,
+            "method": "Sleep30000",
+            "token": "82BED8F3-E27A-4013-A659-F1BE3DD46BFF",
+            "startedAt": "2026-10-22T18:43:57.4570000Z",
+            "lastCompletedIndex": 0,
+            "state": "running"
+          },
+          "serverNow": "2026-10-22T18:44:57.5610000Z"
+        }
+      }
+    }
+  ],
+  "stopRule": "D: op r658-92953-12953 was still marked running: the cleanup stop tombstoned a stranded marker; the session may still run",
+  "removal": {
+    "note": "STOP rule fired: nothing removed, the session may still be live"
+  }
+}

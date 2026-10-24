@@ -15,7 +15,7 @@ import { itestLaunchName } from "../packages/runner/itest/config-path.ts";
 import { MARKER_HOST, MARKER_SERVERS } from "../packages/runner/itest/out-of-use.ts";
 import type { FetchFn } from "../packages/runner/src/activation.ts";
 import { buildFakeAppWithEntries } from "../packages/runner/tests/helpers/fake-app.ts";
-import type { AppManifest, Conn, ServerOps } from "./bc-app-content.ts";
+import type { Conn, ServerOps } from "./bc-app-content.ts";
 import {
   GATE_FIXTURES,
   HOST,
@@ -411,6 +411,14 @@ describe("R598: the coord lease is taken in the caller's lane, never a fixed one
     expect(resolveLane("preproc", {})).toBe("preproc");
   });
 
+  test("R615: a lane that is not a plain word is refused by name (it becomes a file name)", () => {
+    for (const bad of ["../../x", "A B", "a/b"])
+      expect(() => resolveLane(bad, {})).toThrow(LaneUnknownError);
+    expect(() => resolveLane(undefined, { KRAKEN_AGENT: "lane-A B" })).toThrow(LaneUnknownError);
+    expect(resolveLane("code", {})).toBe("code");
+    expect(resolveLane("preproc", {})).toBe("preproc");
+  });
+
   test("no --lane and no kraken identity: refused by name, before any lease call", () => {
     expect(() => resolveLane(undefined, {})).toThrow(LaneUnknownError);
     expect(() => resolveLane(undefined, {})).toThrow(/--lane/);
@@ -533,16 +541,60 @@ describe("R617: --held-lease never takes or releases a lease", () => {
 
   test("under the unit-test preload, the real recordToken refuses by name and writes no /coord file", () => {
     expect(process.env.LETHAL_TEST_FAKE_HOME).toBeDefined();
-    const before = existsSync("/coord/handoff/R-589/lease-bc3.txt")
-      ? readFileSync("/coord/handoff/R-589/lease-bc3.txt", "utf8")
+    const before = existsSync("/coord/handoff/R-589/lease-bc3-preproc.txt")
+      ? readFileSync("/coord/handoff/R-589/lease-bc3-preproc.txt", "utf8")
       : undefined;
     expect(() => krakenLeaseFor("preproc", fakeKraken().run).recordToken("bc3", "t-unit")).toThrow(
       UnitTestCoordWriteError,
     );
-    const after = existsSync("/coord/handoff/R-589/lease-bc3.txt")
-      ? readFileSync("/coord/handoff/R-589/lease-bc3.txt", "utf8")
+    const after = existsSync("/coord/handoff/R-589/lease-bc3-preproc.txt")
+      ? readFileSync("/coord/handoff/R-589/lease-bc3-preproc.txt", "utf8")
       : undefined;
     expect(after).toBe(before);
+  });
+
+  test("R615: the record is per lane: two lanes on one server keep two files, a lane re-records its own", () => {
+    const dir = mkdtempSync(join(tmpdir(), "r615-"));
+    const k = fakeKraken();
+    krakenLeaseFor("preproc", k.run, dir).recordToken("bc1", "t-a");
+    krakenLeaseFor("bugs", k.run, dir).recordToken("bc1", "t-b");
+    expect(readdirSync(dir).sort()).toEqual(["lease-bc1-bugs.txt", "lease-bc1-preproc.txt"]);
+    expect(readFileSync(join(dir, "lease-bc1-preproc.txt"), "utf8")).toBe("t-a\n");
+    expect(readFileSync(join(dir, "lease-bc1-bugs.txt"), "utf8")).toBe("t-b\n");
+    krakenLeaseFor("preproc", k.run, dir).recordToken("bc1", "t-c");
+    expect(readdirSync(dir)).toHaveLength(2);
+    expect(readFileSync(join(dir, "lease-bc1-preproc.txt"), "utf8")).toBe("t-c\n");
+    expect(readFileSync(join(dir, "lease-bc1-bugs.txt"), "utf8")).toBe("t-b\n");
+  });
+
+  test("R615/B1: under the preload, any folder under /coord is refused (trailing slash too); a temp folder writes", () => {
+    const k = fakeKraken();
+    for (const d of ["/coord/handoff/R-589/", "/coord/handoff/other", "/coord"])
+      expect(() => krakenLeaseFor("x", k.run, d).recordToken("bc1", "t")).toThrow(
+        UnitTestCoordWriteError,
+      );
+    const tmp = mkdtempSync(join(tmpdir(), "r615b-"));
+    krakenLeaseFor("x", k.run, tmp).recordToken("bc1", "t");
+    expect(existsSync(join(tmp, "lease-bc1-x.txt"))).toBe(true);
+  });
+
+  test("R615/B1: the root is compared by path segment: a sibling sharing the prefix is not under it", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "r615c-"));
+    const sibling = `${tmp}x`;
+    mkdirSync(sibling);
+    const prev = process.env.LETHAL_COORD_ROOT;
+    process.env.LETHAL_COORD_ROOT = tmp;
+    try {
+      const k = fakeKraken();
+      expect(() => krakenLeaseFor("x", k.run, tmp).recordToken("bc1", "t")).toThrow(
+        UnitTestCoordWriteError,
+      );
+      krakenLeaseFor("x", k.run, sibling).recordToken("bc1", "t");
+      expect(existsSync(join(sibling, "lease-bc1-x.txt"))).toBe(true);
+    } finally {
+      if (prev === undefined) Reflect.deleteProperty(process.env, "LETHAL_COORD_ROOT");
+      else process.env.LETHAL_COORD_ROOT = prev;
+    }
   });
 
   test("parseArgs: one held token leases one server", () => {
@@ -605,7 +657,6 @@ describe("--write-config-only: configs from the secret file, no server call, no 
       continiaFiles: () => [],
       controlBytes: noServer("controlBytes"),
       compile: noServer("compile"),
-      fixtures: () => new Map(),
       doctor: noServer("doctor"),
       // R669: never the real /coord; a test plants markers here.
       outOfUseDir,
@@ -824,23 +875,11 @@ describe("--write-config-only: configs from the secret file, no server call, no 
     const calls = { publish: [] as string[], continiaReads: 0, doctor: 0, take: 0 };
     const local = new Map<string, Buffer>();
     const resident = new Map<string, { pkg: Buffer; version: string }>();
-    const fixtures = new Map<string, AppManifest>();
     const last = PUBLISH_PLAN.at(-1)?.dependents.at(-1);
     for (const step of PUBLISH_PLAN) {
       for (const dir of [step.target, ...step.dependents]) {
         const b = appPkg(dir, `${dir}-id`);
         local.set(dir, b);
-        fixtures.set(dir, {
-          id: `${dir}-id`,
-          name: dir,
-          publisher: "LethAL",
-          version: "1.0.0.0",
-          ...(dir === step.target
-            ? {}
-            : {
-                dependencies: [{ id: `${step.target}-id`, name: step.target, publisher: "LethAL" }],
-              }),
-        });
         if (dir === "sandbox-probes") continue;
         resident.set(
           dir,
@@ -899,7 +938,6 @@ describe("--write-config-only: configs from the secret file, no server call, no 
         },
       }),
       continiaFiles: () => [{ bytes: continia }],
-      fixtures: () => fixtures,
       doctor: async () => {
         calls.doctor++;
         return true;
@@ -1147,5 +1185,21 @@ describe("R624: a failed dev/packages read stops every reader by its status", ()
       "every Continia app's declared dependencies are satisfied",
     );
     expect(summary.join("\n")).not.toContain("publish   Continia Core");
+  });
+
+  test("decideContinia (R679): Microsoft on another build stops, naming that build and --accept-build", async () => {
+    const c = connBy((publisher, name) =>
+      publisher === "Microsoft"
+        ? new Response(pkgOf(name, "Microsoft", "28.4.53241.56646"), { status: 200 })
+        : new Response("not found", { status: 404 }),
+    );
+    const files = [{ bytes: pkgOf("Continia Core", "Continia Software", "28.5.0.1") }];
+    const summary: string[] = [];
+    const r = await decideContinia(realContiniaOps(c), files, summary, undefined);
+    expect(r.ok).toBe(false);
+    expect(r.toPublish).toEqual([]);
+    const stopped = summary.find((l) => l.includes("STOPPED"));
+    expect(stopped).toContain("Base Application 28.4.53241.56646");
+    expect(stopped).toContain("--accept-build");
   });
 });

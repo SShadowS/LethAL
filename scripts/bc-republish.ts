@@ -349,7 +349,7 @@ async function republish(args: Args): Promise<void> {
     }
     try {
       // 2. decide every app; 3. refuse before publishing anything
-      const decided = await decideAll(items, ops, "republish", all, log);
+      const decided = await decideAll(items, ops, "republish", log);
       const refused = refusals(decided);
       if (refused.length > 0)
         throw new Error(

@@ -50,7 +50,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
       "coverage_attribution": "exact",
       "covering_tests": "["Sandbox Tests.OverBudgetDetected"]",
       "duration_ms": 5,
-      "failure_note": "quarantined: OverBudgetDetected returned no readable result and its operation could not be confirmed complete — container may be stranded. Its budget was 180000 ms; if the mutant was merely slow rather than stranded, raise the floor with --mutant-timeout-ms and re-run with --resume to keep this session's verdicts",
+      "failure_note": "quarantined: OverBudgetDetected returned no readable result and its operation could not be confirmed complete — container may be stranded. It failed with an error after 5 ms, inside its 180000 ms budget, so a longer budget will not help; re-run with --resume to keep this session's verdicts",
       "kill_position": null,
       "killing_test": null,
       "killing_test_failure": null,

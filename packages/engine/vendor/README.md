@@ -650,8 +650,9 @@ all of this:
 
    Note `probe-grammar-corpus.ts` reads a FLAT directory (no recursion) while
    `census-operator-sites.ts` recurses. Stage a flat copy for the first.
-5. Run the live gate (`itest:bcdev`, `itest:alrunner`, `itest:lease`,
-   `itest:stale-publish`). Expect the per-mutant baselines to flag a difference
+5. Run the live gate (`itest:bcdev`, `itest:alrunner-v3`, `itest:lease`,
+   `itest:stale-publish`; `itest:alrunner`, named in the history above, was retired by R654).
+   Expect the per-mutant baselines to flag a difference
    if any operator's target subtree changed shape: `empty-block`'s identity hash
    moved in the v3 bump because its `before` node IS the `code_block`, and
    `astSubtreeHash` serializes named children recursively.

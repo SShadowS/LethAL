@@ -235,12 +235,15 @@ describe("R332: a frozen baseline never records itself", () => {
 
   // R654 S2: seventeen, with v3's layout and two symbol-set baselines (pre-committed 43115c78).
   // R654 S3: eleven, the six registered `al-runner.*` (v2) files gone with `itest:alrunner`.
-  test("the registry names eleven gate baselines and their record commands", () => {
+  // R602: thirteen, with v3's multi-object and wrapped legs (pending their record run).
+  test("the registry names thirteen gate baselines and their record commands", () => {
     expect(Object.keys(GATE_BASELINES).sort()).toEqual([
       "al-runner-v3.layout.baseline.json",
+      "al-runner-v3.multiobject.baseline.json",
       "al-runner-v3.symbols-lethala.baseline.json",
       "al-runner-v3.symbols-lethalb.baseline.json",
       "al-runner-v3.tables.baseline.json",
+      "al-runner-v3.wrapped.baseline.json",
       "bcdev.baseline.json",
       "bcdev.names.baseline.json",
       "bcdev.wrapped.baseline.json",
@@ -590,9 +593,10 @@ main().catch((err: unknown) => {
 });
 
 describe("R355: stage baselines, list form and moded form", () => {
-  // Every committed campaign stage baseline, as of R355. All six are the plain list form written
-  // before R355, so each must still read, with its coverage mode UNKNOWN rather than assumed.
-  // None is rewritten or re-frozen by R355.
+  // Every committed campaign stage baseline still in the plain list form written before R355. Each
+  // must still read, with its coverage mode UNKNOWN rather than assumed. None is rewritten by R355.
+  // R560: credit-limit was re-frozen in the moded form (below); the four DO and swap stages are
+  // retired by ruling and stay lists for good.
   const REPO = join(import.meta.dir, "..", "..", "..");
   const COMMITTED = [
     "docs/campaign/2026-08-03-do/rung1.baseline.json",
@@ -600,7 +604,6 @@ describe("R355: stage baselines, list form and moded form", () => {
     "docs/campaign/2026-08-03-do/rung2.baseline.json",
     "docs/campaign/2026-08-08-r85-swap-population/rung2.baseline.json",
     "docs/campaign/2026-08-16-gift-card/rehearsal.baseline.json",
-    "examples/credit-limit/demo.baseline.json",
   ];
 
   test.each(COMMITTED)("%s still reads, as a list with its mode unknown", async (rel) => {
@@ -608,6 +611,15 @@ describe("R355: stage baselines, list form and moded form", () => {
     const stage = parseStageBaseline(await readFile(path, "utf8"), path, "remedy");
     expect(stage.coverageMode).toBeUndefined();
     expect(stage.entries.length).toBeGreaterThan(0);
+  });
+
+  test("R560: examples/credit-limit/demo.baseline.json reads in the moded form, fenced, every row hashed", async () => {
+    const path = join(REPO, "examples/credit-limit/demo.baseline.json");
+    const stage = parseStageBaseline(await readFile(path, "utf8"), path, "remedy");
+    expect(stage.coverageMode).toBe("fenced");
+    expect(stage.identityScheme).toBe(41);
+    expect(stage.entries).toHaveLength(42);
+    expect(stage.entries.every((e) => e.mutatedTextSha256 !== undefined)).toBe(true);
   });
 
   test("the moded form reads its mode; an unknown mode or shape is refused, naming the file", () => {

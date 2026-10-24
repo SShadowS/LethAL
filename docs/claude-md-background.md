@@ -22,6 +22,16 @@ not about one gate (gate history is under `docs/gates/`). Moved here by R-592.
   unit test.
 - **Snapshots (R393).** A plain `bun test` lets a timed-out test write its snapshot under the NEXT
   test's name; `scripts/verify.ts` runs bun with `CI=true`, so new snapshots are refused.
+- **One verify at a time (R616b).** The test step of `scripts/verify.ts` takes a slot lock,
+  `verify-slot.lock`, in the ledger's folder (`/coord/locks/` by default; `LETHAL_VERIFY_LEDGER` moves
+  both). Another live verify holds it: yours waits (polls every 2 s, fails by name after 10 min, never
+  runs anyway). A lock is stale only when its pid is dead, never by age; verify then takes it over and
+  says so. It is released on every exit path (`finally`, SIGINT, SIGTERM, SIGHUP); after SIGKILL or a
+  crash the dead pid is the recovery. If the 10 min wait fails and the holder is gone, delete the file.
+  Skipped under CI. The receipt prints the `verify slot:` and `per-test timeout:` lines: the timeout is
+  raised to 15000 ms only when the io stall was >= 5% just before the tests (read after the slot wait). A run over 900 s is killed and
+  named. Known limit: SIGTERM or SIGHUP sent to verify alone releases the lock while an orphaned
+  `bun test` child may keep running. Unit tests give the lock a temp folder and never touch `/coord`.
 - **compile:fixtures (R56).** A docs-only commit deleted a procedure's body in a fixture, and
   `itest:tables` stayed green for days, because the gate kept measuring the previously published
   test app.
@@ -62,9 +72,15 @@ anyone who writes a new screen, a check that tags kills as suspect.
 
 ## al-runner builds
 
-The Windows host pins a source build of upstream main instead of the released global tool, because
-v2.12.0 crashed concurrent sessions (R345). The global tool stays installed as the fallback. The
+**The .NET al-runner (v2) was retired on 2026-10-22 (R654).** Its backend and its gate,
+`itest:alrunner`, are gone. While it was in use, the Windows host pinned a source build of upstream
+main instead of the released global tool, because v2.12.0 crashed concurrent sessions (R345); the
 paths and history are in `docs/gates/alrunner.md`.
+
+The Rust al-runner (v3) is pinned under `/work/tools/al-runner-v3/`, and its `.gated` file names the
+one build the backend will run. The pin moves only through `bun scripts/al-runner-v3-update.ts`,
+which runs `itest:alrunner-v3` on the new build first. Details: `docs/gates/alrunner-v3.md`, "The
+pin and the update gate".
 
 ## Editing files
 

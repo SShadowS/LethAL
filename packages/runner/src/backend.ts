@@ -220,6 +220,13 @@ export interface TestVerdict {
    * `failureNote`; it never moves a verdict. Internal only; absent on every backend but v3.
    */
   readonly backendNote?: string;
+  /**
+   * R639: on a `runner-refused` row under a mutant, the test whose timeout was the call's first
+   * not-run row and came before this one. The covering loop may then go on to the next test; a
+   * loop that finds nothing else ends the mutant as this refusal. Internal only (v3); never a
+   * `SessionReport` field.
+   */
+  readonly refusedAfterStop?: string;
 }
 
 /** R-204b: see `TestVerdict.stopState`. */
@@ -488,6 +495,13 @@ export interface ExecutionBackend {
   dependencyPackageDirs?(): readonly string[];
 
   /**
+   * R435, OPTIONAL: the folder of `*.Source.zip` apps the backend loads Microsoft test libraries
+   * from when no package folder holds them (al-runner v3's artifact cache), or `undefined` when
+   * the backend cannot name it. The dependency fingerprint hashes those zips too.
+   */
+  dependencyArtifactAppsDir?(): string | undefined;
+
+  /**
    * R-385, OPTIONAL: how a backend that PUBLISHES reads Microsoft dependencies for the dependency
    * fingerprint: the bytes the server holds (`System`, every Microsoft app in the closure, the
    * control app's dependencies) and each one's installed version. A run or verify on the
@@ -542,6 +556,15 @@ export interface ExecutionBackend {
    * (`[v3-refused-test-nearby] ...`), written into its `failureNote`. Never moves a verdict.
    */
   survivorNote?(covering: readonly TestMethodRef[]): string | undefined;
+
+  /**
+   * R678, OPTIONAL: a batch's baseline came from a reused `--resume` snapshot (R192), so no
+   * baseline call ran. Called once, inside the baseline bracket, with the reused verdicts, so the
+   * backend can record what a baseline call would have (v3: its refused tests, for `survivorNote`).
+   */
+  noteReusedBaseline?(
+    baseline: readonly { readonly ref: TestMethodRef; readonly verdict: TestVerdict }[],
+  ): void;
 
   /**
    * R635 §4, OPTIONAL: `true` right before a batch's baseline step (`activateOnce(null)`), `false`

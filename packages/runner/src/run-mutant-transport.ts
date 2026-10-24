@@ -7,7 +7,7 @@ import { describeThrown } from "./describe-error";
 import { UnfilteredExtensionsQueryError } from "./harness";
 import { assertAttemptId, parseOperationStatus } from "./lease";
 import type { LeaseTuple, OperationStatus } from "./lease";
-import { runMutantLineCountMessage } from "./stale-test-app";
+import { GROUP_SUITE_UNRESOLVED_HEAD, runMutantLineCountMessage } from "./stale-test-app";
 
 /**
  * OData client for the `LethALControl_RunMutant` action (Layer 5C-A). One call does
@@ -1433,9 +1433,10 @@ export class RunMutantTransport {
         ref: decision.ref,
         outcome: "timeout",
         durationMs,
+        // R658 (M2): the warm confirmation's unmutated replay (mutantId "") scores nothing.
         failureMessage:
-          `RunMutantMany: ${decision.ref.method} exceeded its ${decision.ref.method === watchedRef.method ? "" : ""}budget and was stopped server-side so it could ` +
-          `be scored rather than strand the tier. BC's own words: ${JSON.stringify(rawBody.slice(0, 400))}`,
+          `RunMutantMany: ${decision.ref.method} exceeded its ${decision.ref.method === watchedRef.method ? "" : ""}budget and was stopped server-side ${mutantId === "" ? "so it would not strand the server" : "so it could be scored rather than strand the tier"}. ` +
+          `BC's own words: ${JSON.stringify(rawBody.slice(0, 400))}`,
       });
     }
     if (!res.ok) {
@@ -1444,7 +1445,7 @@ export class RunMutantTransport {
         ref: watchedRef,
         outcome: "error",
         durationMs,
-        failureMessage: `RunMutantMany failed: HTTP ${res.status}${stopFired ? ` after our stop${stopConfirmed ? " (confirmed)" : ""}` : ""}.${stopDetail()}`,
+        failureMessage: `RunMutantMany failed: HTTP ${res.status}${stopFired ? ` after our stop${stopConfirmed ? " (confirmed)" : ""}` : ""}${rawBody === "" ? "" : ` — BC's body: ${JSON.stringify(rawBody.slice(0, 400))}`}.${stopDetail()}`,
         operation: "in-flight-unknown",
         fencedOp,
       };
@@ -1570,13 +1571,25 @@ export class RunMutantTransport {
       // lines, or two pairs matched one. Nothing ran; phase 3 tombstoned the op. A call-level
       // error with NO cause and NO operation, so the orchestrator's transport-error path aborts
       // the session with the server's words: a test app that does not resolve is not a
-      // per-mutant fact (R139/R56's channel).
+      // per-mutant fact (R139/R56's channel). R688: except a found-0 under a mutant, which the
+      // orchestrator re-runs one method at a time and confirms with no mutant active.
       const reason = typeof result.reason === "string" ? result.reason : "no reason given";
+      // R688 (S8): a wrong binary that also blanks discovery is the identity fault, never a found-0
+      // the orchestrator would confirm. The control app sends false here today.
+      if (result.identityMismatch === true) {
+        return call({
+          ref: firstMethod.ref,
+          outcome: "error",
+          durationMs,
+          failureMessage: `RunMutantMany attestation identity mismatch: a selector with a non-matching (targetAppId, artifactId) ran — wrong/stale binary (the server also answered suite-unresolved: ${reason})`,
+        });
+      }
       return call({
         ref: firstMethod.ref,
         outcome: "error",
         durationMs,
-        failureMessage: `RunMutantMany suite-unresolved: the server could not resolve this request's test methods to exactly one function line each, and ran nothing — ${reason}`,
+        // R686: `groupedFoundNone` reads this text back; the head lives beside it.
+        failureMessage: `${GROUP_SUITE_UNRESOLVED_HEAD}${reason}`,
       });
     }
     if (result.status !== "ran") {
@@ -2003,13 +2016,18 @@ export class RunMutantTransport {
             stopRefusal: "stopped-after-completion",
           };
         }
+        // R658 (M5): an unmutated run's stop scores nothing; it only keeps the op off the server.
+        const why =
+          mutantId === ""
+            ? "so it would not strand the server"
+            : "so it could be scored rather than strand the tier";
         return {
           ref,
           outcome: "timeout",
           durationMs: Date.now() - started,
           failureMessage:
-            `RunMutant exceeded its ${timeoutMs} ms budget and was stopped server-side so it could ` +
-            `be scored rather than strand the tier. BC's own words: ${JSON.stringify(body.slice(0, 400))}`,
+            `RunMutant exceeded its ${timeoutMs} ms budget and was stopped server-side ${why}. ` +
+            `BC's own words: ${JSON.stringify(body.slice(0, 400))}`,
         };
       }
       // A 408 that is NOT BC's AL-stop answer (a proxy timing the socket out looks like this).
@@ -2020,11 +2038,25 @@ export class RunMutantTransport {
       settleTimers();
       // Dispatched, then a non-2xx: RunMutant may have activated a mutant and not confirmed its
       // clear — the container could be left mutated. in-flight-unknown, never a verdict.
+      // R692: BC's error text is kept (diagnostic only, 400 characters). The timers are settled, so
+      // the read is bounded by hand (R191): a body that never ends adds a note and changes nothing.
+      let bodyNote = "";
+      try {
+        const text = await bounded(
+          res.text(),
+          Math.min(KEPT_ANSWER_READ_MS, timeoutMs),
+          "RunMutant error body",
+        );
+        if (text !== "") bodyNote = ` — BC's body: ${JSON.stringify(text.slice(0, 400))}`;
+      } catch (err) {
+        bodyNote = ` (body unread: ${describeThrown(err)})`;
+        void res.body?.cancel().catch(() => {}); // free the socket of a stream that never ended
+      }
       return {
         ref,
         outcome: "error",
         durationMs: Date.now() - started,
-        failureMessage: `RunMutant failed: HTTP ${res.status}`,
+        failureMessage: `RunMutant failed: HTTP ${res.status}${bodyNote}`,
         operation: "in-flight-unknown",
         fencedOp,
       };
@@ -2183,6 +2215,19 @@ export class RunMutantTransport {
       );
     }
     const lines = Array.isArray(parsed.testResults) ? parsed.testResults : [];
+    // Per-run binary-identity attestation (spec §G): identityMismatch=true means SOME instrumented
+    // site during this run presented a non-matching (targetAppId, artifactId), a wrong/stale binary
+    // is live. Reject it, never map it to a verdict. R688 (S8): read BEFORE the line count, so a
+    // wrong binary that also blanks discovery is never read as a found-0 answer.
+    if (result.identityMismatch === true) {
+      return {
+        ref,
+        outcome: "error",
+        durationMs,
+        failureMessage:
+          "RunMutant attestation identity mismatch: a selector with a non-matching (targetAppId, artifactId) ran — wrong/stale binary",
+      };
+    }
     // Fail closed: RunMutant selects exactly one method server-side, so exactly one line is the
     // only acceptable shape (spec §5.7). Zero or many is a protocol fault, never a verdict.
     if (lines.length !== 1) {
@@ -2222,23 +2267,9 @@ export class RunMutantTransport {
         failureMessage: `RunMutant unexpected result enum ${JSON.stringify(line.result)} for ${ref.method}`,
       };
     }
-    // Per-run binary-identity attestation (spec §G): observedAny=false is allowed (no
-    // instrumented site executed this run — coverage over-approximates); identityMismatch=true
-    // means SOME instrumented site during this run presented a non-matching (targetAppId,
-    // artifactId) — a wrong/stale binary is live. Reject it, never map it to a verdict.
-    const attestation = {
-      observedAny: result.observedAny === true,
-      identityMismatch: result.identityMismatch === true,
-    };
-    if (attestation.identityMismatch) {
-      return {
-        ref,
-        outcome: "error",
-        durationMs,
-        failureMessage:
-          "RunMutant attestation identity mismatch: a selector with a non-matching (targetAppId, artifactId) ran — wrong/stale binary",
-      };
-    }
+    // observedAny=false is allowed (no instrumented site executed this run — coverage
+    // over-approximates); identityMismatch=true was refused above.
+    const attestation = { observedAny: result.observedAny === true, identityMismatch: false };
     // GH-24: a `ran` answer must carry a boolean `observedActive` for THIS test method. Never
     // defaulted to `false` — a missing value is refused rather than read as "not reached".
     if (typeof result.observedActive !== "boolean") {

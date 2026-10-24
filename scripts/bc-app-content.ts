@@ -306,6 +306,21 @@ export function normaliseNavigation(text: string): string {
   return UNORDERED.reduce(sortRuns, text.replace(CONTROL_GUID, "$1$2"));
 }
 
+const UTF8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+
+/**
+ * R627: the entry as text, refusing invalid UTF-8 (the default decode swaps it for U+FFFD, so two
+ * different byte strings could re-encode to one). `ignoreBOM` keeps a BOM in the text, so the
+ * re-encode of a valid file gives the same bytes as before.
+ */
+function utf8Text(name: string, bytes: Buffer): string {
+  try {
+    return UTF8.decode(bytes);
+  } catch {
+    throw new ContentUnknownError(`${name} is not valid UTF-8`);
+  }
+}
+
 /** Each entry's bytes as the digest hashes them (the manifest without its build timestamp). */
 function normalisedEntries(pkg: Buffer): Map<string, Buffer> {
   let names: readonly string[];
@@ -325,7 +340,7 @@ function normalisedEntries(pkg: Buffer): Map<string, Buffer> {
   }
   const m = out.get(MANIFEST);
   if (m === undefined) throw new ContentUnknownError(`the package has no ${MANIFEST}`);
-  const text = m.toString("utf8");
+  const text = utf8Text(MANIFEST, m);
   const hits = text.match(TIMESTAMP)?.length ?? 0;
   // A future alc that moved the timestamp would otherwise make every app look changed, silently.
   if (hits !== 1)
@@ -333,7 +348,7 @@ function normalisedEntries(pkg: Buffer): Map<string, Buffer> {
   out.set(MANIFEST, Buffer.from(text.replace(TIMESTAMP, "$1"), "utf8"));
   const nav = out.get(NAVIGATION);
   if (nav !== undefined)
-    out.set(NAVIGATION, Buffer.from(normaliseNavigation(nav.toString("utf8")), "utf8"));
+    out.set(NAVIGATION, Buffer.from(normaliseNavigation(utf8Text(NAVIGATION, nav)), "utf8"));
   return out;
 }
 
@@ -400,8 +415,6 @@ export interface DecideInput {
   readonly role: "target" | "dependent";
   /** `PUBLISH_PLAN` marks the target as one a gate deploys itself. */
   readonly gateDeploys: boolean;
-  /** An installed fixture app that depends on this one, by name, or null. */
-  readonly installedDependent: string | null;
   readonly mode: Mode;
 }
 
@@ -417,7 +430,7 @@ export type Decision =
   | { readonly action: "keep"; readonly line: string; readonly residentVersion: string }
   | {
       readonly action: "refuse";
-      readonly why: "content-unknown" | "same-version-target" | "above-build";
+      readonly why: "content-unknown" | "above-build";
       readonly line: string;
     };
 
@@ -474,14 +487,8 @@ export function decideApp(i: DecideInput): Decision {
     };
   const changed = `content changed in ${changedEntries(i.resident, i.local).join(", ")} (resident digest ${short(residentDigest)}, compiler ${compilerVersion(i.resident)}; local ${short(localDigest)}, compiler ${compilerVersion(i.local)})`;
   if (cmp === 0) {
-    // 6
-    if (i.role === "target" && i.installedDependent !== null)
-      return {
-        action: "refuse",
-        why: "same-version-target",
-        line: `refuse    same-version-target ${name} ${residentVersion}: ${changed}; its dependent ${i.installedDependent} is installed, and an in-place publish of a target under an installed dependent is not measured; bump the target's app.json version, or the owner (${seen})`,
-      };
-    // 7
+    // 6 (gone) and 7: R623 measured the in-place publish of a target under an installed dependent
+    // as safe (/coord/handoff/R-623/measure.md, bc2, 2026-10-24), so no role-specific refusal.
     return {
       action: "publish",
       how: "in place",
@@ -600,14 +607,11 @@ function appIdOf(b: Buffer): string {
 
 /**
  * Decides every item against the server, printing each decision (with what the rows said).
- * `fixtures` is every fixture manifest: an installed app among them that depends on a target is
- * that target's installed dependent, in BOTH modes (F4), whether or not it is in the list.
  */
 export async function decideAll(
   items: readonly AppItem[],
   ops: ServerOps,
   mode: Mode,
-  fixtures: ReadonlyMap<string, AppManifest>,
   log: (s: string) => void,
 ): Promise<Decided[]> {
   const out: Decided[] = [];
@@ -617,19 +621,7 @@ export async function decideAll(
     const rs = await ops.rows(id.id);
     let decision: Decision;
     if (item.role === "control") decision = decideControl(item.local, resident, rs);
-    else {
-      let installedDependent: string | null = null;
-      if (item.role === "target") {
-        const me = fixtures.get(item.dir);
-        if (me === undefined) throw new Error(`unknown fixture ${JSON.stringify(item.dir)}`);
-        for (const [dir, m] of [...fixtures].sort(([a], [b]) => a.localeCompare(b))) {
-          if (dir === item.dir || m.id === undefined || !dependsOn(m, me)) continue;
-          const drs = await ops.rows(m.id);
-          log(`  dependent ${m.name} of ${id.name}: ${describeRows(drs)}`);
-          if (installedDependent === null && drs.some((r) => r.isInstalled))
-            installedDependent = m.name;
-        }
-      }
+    else
       decision = decideApp({
         dir: item.dir,
         local: item.local,
@@ -637,10 +629,8 @@ export async function decideAll(
         rows: rs,
         role: item.role,
         gateDeploys: item.gateDeploys,
-        installedDependent,
         mode,
       });
-    }
     log(`  ${decision.line}`);
     out.push({ item, decision });
   }
