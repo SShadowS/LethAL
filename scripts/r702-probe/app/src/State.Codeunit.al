@@ -14,6 +14,7 @@ codeunit 93722 "R702 State"
         Capped: Boolean;
         First: Text;
         FirstCount: Integer;
+        Misses: Integer;
 
     procedure Reset(N: Integer; NewMode: Text)
     begin
@@ -26,6 +27,7 @@ codeunit 93722 "R702 State"
         Capped := false;
         First := '';
         FirstCount := 0;
+        Misses := 0;
     end;
 
     procedure Visit(Id: Integer): Boolean
@@ -106,7 +108,12 @@ codeunit 93722 "R702 State"
     local procedure MoveByValue(X: Record "R702 Probe"; Id: Integer)
     begin
         X.Reset();
-        X.Get(Id);
+        // Run 2 (HTTP 404 on Get): a by-value copy of a TEMPORARY record holds none of the walker's rows. Count
+        // that as a miss (nothing to move) rather than an error, so the cell reports it.
+        if not X.Get(Id) then begin
+            Misses += 1;
+            exit;
+        end;
         X.SortKey += 1000000;
         X.Modify();
     end;
@@ -130,6 +137,6 @@ codeunit 93722 "R702 State"
         foreach V in Visits.Values do
             if V > MaxPer then
                 MaxPer := V;
-        exit(StrSubstNo('visits=%1;distinct=%2;maxPerId=%3;capped=%4;first20=%5', Total, Visits.Count, MaxPer, Capped, First));
+        exit(StrSubstNo('visits=%1;distinct=%2;maxPerId=%3;capped=%4;misses=%5;first20=%6', Total, Visits.Count, MaxPer, Capped, Misses, First));
     end;
 }
