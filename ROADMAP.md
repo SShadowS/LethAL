@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**32 of 699 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**32 of 700 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -252,7 +252,7 @@ that ordering is the priority.
 - **R529** · Self-inserting report items: an insert made from another object is not seen, so the item's own filter is not protected · [R529.md](docs/roadmap/R529.md) · closed 2026-10-23 — ruling: all 18 items read (BaseApp only), none consumes; the covering rule is the…
 - **R530** · Self-inserting report items: a bound set in a callee or in OnPreReport is not protected · [R530.md](docs/roadmap/R530.md) · done (191cd4be)
 - **R531** · A loop that ends only by consuming its record set (`while Rec.FindFirst() do ... Rec.Delete()`) is not hang-refused anywhere · [R531.md](docs/roadmap/R531.md) · done (129295cf): record-consuming loops hang-refused; BC.History 984, CDO 9, DC 39, DO 9; scheme 39
-- **R696** · Report-loop hang refusal does not see a report data item's own Rename, or a Modify after a key or filter field write, on the record it walks · [R696.md](docs/roadmap/R696.md) · open, filed 2026-10-24
+- **R696** · Report-loop hang refusal does not see a report data item's own Rename, or a Modify after a key or filter field write, on the record it walks · [R696.md](docs/roadmap/R696.md) · done (c101cedb)
 - **R532** · Preset report exit names: a value computed in another object, or passed through another variable, is not refused · [R532.md](docs/roadmap/R532.md) · done (a6b08d50): same-scope feeds refused, BaseApp -60, no scheme change; the cross-object part closed…
 - **R547** · A base-report procedure called bare from an open `reportextension` block is looked up on the data item's table, never on the base report, so its hang-capable mutants stay deployed · [R547.md](docs/roadmap/R547.md) · done (6ec70aac): bare and this. calls followed into the base report; 0 BaseApp sites today
 - **R548** · A base report's `protected var` written by a `reportextension` is not seen by loop-hazard's `writesPresetExitName` · [R548.md](docs/roadmap/R548.md) · done (6ec70aac): BaseApp 2 more hang-refused (MfgWhseSourceCreateDocument SetProdOrder); 0 keys moved
@@ -311,6 +311,7 @@ that ordering is the priority.
 - **R699** · lethal verify looks up an integer literal with leading zeros (01000) as text, so a test-app object's id written that way is neither folded nor a fallback · [R699.md](docs/roadmap/R699.md) · done (a7cbd81e)
 - **R700** · lethal verify puts a test app's Install and Upgrade codeunits in no digest: an edit to the code the platform runs at install or upgrade leaves every test's digest unchanged · [R700.md](docs/roadmap/R700.md) · done (c2d51590)
 - **R701** · lethal verify puts no permission set in any digest: a test app's permission set (included through IncludedPermissionSets) can change a test's outcome without changing its digest · [R701.md](docs/roadmap/R701.md) · done (c2d51590)
+- **R702** · Moved-walk refusal follows no callee from a Next loop's body, and does not cover temporary walks · [R702.md](docs/roadmap/R702.md) · open, filed 2026-10-24
 - **R703** · After the release: read the platform's committed test result after a stop (R-204b Part B, a LethAL Control change), and measure BC's CPU-only cancel latency and a slow test's spread near its budget, to size and narrow R204's residual false timeout-killed window · [R703.md](docs/roadmap/R703.md) · open, filed 2026-10-24 — after the first release (orchestrator ruling)
 
 ## Product gaps a real project hits

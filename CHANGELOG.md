@@ -13,6 +13,14 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **A loop that moves the record it walks is no longer mutated at its exit** (R696). A `repeat .. until R.Next()` or
+  `while R.Next()` loop, or a report or XMLport data item, whose code renames, inserts into, or changes the sort key
+  of its own table through any variable of its table (a Modify only through a second one) can revisit rows
+  (measured on bc2). Its exits and their guards, the mover and its writes, and the pre-loop filters are refused for
+  every operator. 5 forever stops are refused; at 3 of them no current operator deletes the exit. Cost, measured:
+  0.87% of BaseApp's mutants (6,501 of 743,985), 0.63% of DC's, 0.29% of DO's, 0.26% of CDO's. Limits are in R696
+  and R702.
+
 - **A report data item that inserts into its own table is no longer mutated inside its own code** (R530). Every
   site in its triggers and the helpers they reach, the writers of any name its exit guard reads, and an outside
   filter call on it are refused, for every operator. This is a refusal, not a new mutation: Date Compress and
