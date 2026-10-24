@@ -1,5 +1,5 @@
 {
-  "id": "e08e9874-95dd-4a77-b4d4-bb1fdee916d2",
+  "id": "2dcfea83-366b-4775-9b7f-003247b39755",
   "name": "R738 Probe Tests",
   "publisher": "LethAL Probe",
   "version": "1.0.0.1",
@@ -10,7 +10,7 @@
   "idRanges": [{ "from": 93800, "to": 93809 }],
   "dependencies": [
     {
-      "id": "9ab6e9c7-80ec-440d-b1d9-13bf0799890d",
+      "id": "ed1d8576-28e2-4c30-bff1-827dd234b9b1",
       "name": "R738 Probe Target",
       "publisher": "LethAL Probe",
       "version": "1.0.0.1"
