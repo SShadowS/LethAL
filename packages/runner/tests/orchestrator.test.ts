@@ -6926,6 +6926,8 @@ describe("runSession — R734: isolate the breaking mutants, score the rest", ()
     point: (line: number, lines: readonly string[]) => number = (line) => line,
     // R735: the emitted text that makes a procedure "bad" (default: the boundary mutant's).
     needle: (nn: string) => string = (nn) => `A${nn} <= B${nn}`,
+    // R735 A2: print only the FIRST bad line per compile (alc stops early on some faults).
+    firstOnly = false,
   ) {
     return (dir: string): Error | undefined => {
       const manifest = JSON.parse(readFileSync(join(dir, "mutant-manifest.json"), "utf8")) as {
@@ -6959,7 +6961,8 @@ describe("runSession — R734: isolate the breaking mutants, score the rest", ()
           if (at >= 0) printed.push(`${f}(${point(at + 1, lines)},9): error AL0123: broken`);
         }
       }
-      return printed.length > 0 ? new AlcCompileError(printed.join("\n")) : undefined;
+      const kept = firstOnly ? printed.slice(0, 1) : printed;
+      return kept.length > 0 ? new AlcCompileError(kept.join("\n")) : undefined;
     };
   }
   const isCulprit = (
@@ -6978,6 +6981,7 @@ describe("runSession — R734: isolate the breaking mutants, score the rest", ()
     bad: readonly number[],
     point?: (line: number, lines: readonly string[]) => number,
     needle?: (nn: string) => string,
+    firstOnly?: boolean,
   ) {
     const dirs = await isolationProject(procedures);
     const shown: Seen[][] = [];
@@ -6989,7 +6993,7 @@ describe("runSession — R734: isolate the breaking mutants, score the rest", ()
         ["IsOverBudget"],
         undefined,
         undefined,
-        brokenBy(badProcs, shown, point, needle),
+        brokenBy(badProcs, shown, point, needle, firstOnly),
       ),
     );
     const store = new ResultsStore(":memory:");
@@ -7410,6 +7414,23 @@ describe("runSession — R734: isolate the breaking mutants, score the rest", ()
     expect(culprits.map((m) => m.verdict)).toEqual(["error"]);
     expect(report.counts.errors).toBe(1);
     expect(shown.length).toBeGreaterThan(5); // halving, not the 4-compile pointed path
+  });
+
+  // R735 A2: alc reports only the first error per compile. After culprit A is removed the narrowed
+  // file's lines move up, so the second culprit's line must be read from the JUST-compiled
+  // directory. Reading the first full compile's text points at an innocent branch: one wasted
+  // singleton compile, so the count differs.
+  test("A2: first-error-only alc, k=2: lines move after the first culprit; exact compile count", async () => {
+    const { report, shown, lines } = await runIsolation(6, [1, 4], undefined, undefined, true);
+    const culprits = report.mutants.filter((m) => isCulprit(m, lines, m.line));
+    expect(culprits.map((m) => m.verdict)).toEqual(["error", "error"]);
+    const others = report.mutants.filter((m) => !isCulprit(m, lines, m.line));
+    expect(others.filter((m) => m.verdict === "error")).toEqual([]);
+    expect(report.counts.errors).toBe(2);
+    // production, empty set, full set, A alone, recompile (B named), B alone, final recompile.
+    // Subset sizes: production 21, empty 0, full 21, A alone 1, rest 20 (names B), B alone 1,
+    // rest 19 (compiles), then the redeploy of the clean 19.
+    expect(shown.map((s) => s.length)).toEqual([21, 0, 21, 1, 20, 1, 19, 19]);
   });
 
   // R735 O6: the result event names what isolation cost.
