@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**50 of 695 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**48 of 695 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -306,8 +306,8 @@ that ordering is the priority.
 - **R690** · Re-record the ten gate baselines that lag IDENTITY_SCHEME 42 (six BC gates and four al-runner-v3 legs), once, on master · [R690.md](docs/roadmap/R690.md) · done (fcfdd988)
 - **R692** · bcdev: RunMutant answered HTTP 500 while reproducing a kill (tables gate on bc1, M0232); the op could not be confirmed, so the session quarantined the tier and stopped · [R692.md](docs/roadmap/R692.md) · open, filed 2026-10-23
 - **R695** · `Fixed Asset - Projected Value`'s `GetNextDate` advances a loop's exit date but is not hang-refused: unverified by a read of the loop · [R695.md](docs/roadmap/R695.md) · closed 2026-10-23 — premise wrong: already refused by R487's inOpenItemCode scope
-- **R697** · lethal verify misses code a test-app page, report, xmlport or table runs through its properties (SourceTable, RunObject, CardPageId, LookupPageId, DrillDownPageId, tableelement): an edit there leaves the digest unchanged · [R697.md](docs/roadmap/R697.md) · open, filed 2026-10-23
-- **R698** · lethal verify reads a namespace-qualified object reference (Codeunit::My.Ns.CU) as a member chain: it is neither folded nor a fallback · [R698.md](docs/roadmap/R698.md) · open, filed 2026-10-23
+- **R697** · lethal verify misses code a test-app page, report, xmlport or table runs through its properties (SourceTable, RunObject, CardPageId, LookupPageId, DrillDownPageId, tableelement): an edit there leaves the digest unchanged · [R697.md](docs/roadmap/R697.md) · done (2e9e2d3a)
+- **R698** · lethal verify reads a namespace-qualified object reference (Codeunit::My.Ns.CU) as a member chain: it is neither folded nor a fallback · [R698.md](docs/roadmap/R698.md) · done (2e9e2d3a)
 - **R699** · lethal verify looks up an integer literal with leading zeros (01000) as text, so a test-app object's id written that way is neither folded nor a fallback · [R699.md](docs/roadmap/R699.md) · open, filed 2026-10-23
 
 ## Product gaps a real project hits
@@ -408,7 +408,7 @@ that ordering is the priority.
 - **R309** · A split-header procedure whose arms EACH have their own `var` section (`preproc_split_procedure_preamble`) has no single place for a reach latch, and is refused by name instead of throwing · [R309.md](docs/roadmap/R309.md) · done (24e7169..34f9780)
 - **R310** · R303's reach-latch refusal has no SessionReport field, so a mutant it refuses reads only as an unplaced reachGrain, never named as R303's · [R310.md](docs/roadmap/R310.md) · closed 2026-09-28, ruling: after R303's hoist, a member is refused only by R303's header-end predicate…
 - **R311** · Even past the parser's WASM heap limit, `writeInstrumentedProject` cannot serialize a whole-BaseApp manifest: `JSON.stringify` runs out of memory · [R311.md](docs/roadmap/R311.md) · done (054a9774)
-- **R315** · No offline alc compile of a real corpus's emitted target: dc's Continia dependencies are not staged at a compatible version on this machine · [R315.md](docs/roadmap/R315.md) · open, filed 2026-09-28
+- **R315** · No offline alc compile of a real corpus's emitted target: dc's Continia dependencies are not staged at a compatible version on this machine · [R315.md](docs/roadmap/R315.md) · open, filed 2026-09-28; blocked on an owner step (re-measured 2026-10-23, R-315)
 - **R333** · Low priority: the trigger-local rule drops four valid BaseApp mutants where the trigger local and the global it shadows have the same type · [R333.md](docs/roadmap/R333.md) · open, filed 2026-09-29
 - **R334** · Low priority: index `#if`-wrapped members under the every-arm rule, to recover the typed sites the R-302 fail-safe refuses · [R334.md](docs/roadmap/R334.md) · open, filed 2026-09-29
 - **R340** · Resolve trigger header names: a trigger's parameters, `var` locals and named return are unknown since R330 and R323, so no typed operator reaches them · [R340.md](docs/roadmap/R340.md) · done (e6c71f72)

@@ -965,6 +965,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **`lethal verify` digests widen: code a test-app object runs through its properties, and a namespace-qualified
+  object reference, now count** ([R697](docs/roadmap/R697.md), [R698](docs/roadmap/R698.md)). A page's
+  `SourceTable`, `CardPageId`, an action's `RunObject`, a table's `LookupPageId` / `DrillDownPageId`, a report's
+  request-page `SourceTable`, an xmlport's `tableelement` tables and a field's `TableRelation` are folded;
+  `Codeunit::My.Ns.CU` is read as one reference. Digests only widen (no test leaves the fallback, no fold is
+  dropped), so affected tests re-run once.
 - **The content digest refuses invalid UTF-8 in `NavxManifest.xml` and `navigation.xml`** ([R627](docs/roadmap/R627.md)).
   Before, two packages differing only in invalid bytes could get one digest. No valid package's digest changes.
 - **`bc-linux-setup.ts` keeps one lease-token record per lane** ([R615](docs/roadmap/R615.md)): `lease-<server>-<lane>.txt`,
