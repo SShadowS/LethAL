@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**46 of 697 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**44 of 697 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -598,8 +598,8 @@ that ordering is the priority.
 - **R317** · OData V4 throttling (event 705) was seen sharing a BC user with the gate; a per-user concurrency limit is not measured · [R317.md](docs/roadmap/R317.md) · open, filed 2026-09-28
 - **R320** · GitHub Actions in ci.yml and release.yml are pinned by mutable version tags, not commit SHAs · [R320.md](docs/roadmap/R320.md) · done (e413175)
 - **R321** · `itest:alrunner` has no fixture that defines a preprocessor symbol, so no frozen gate can catch a transport that measures the wrong build · [R321.md](docs/roadmap/R321.md) · done (a7105681..5ccd9a60)
-- **R326** · Stubbing out `astSubtreeHash` cuts about 1.8 GB from the W8 manifest-row transient, but a single-pass hash that builds no canonical string saves nothing; the real source of that 1.8 GB is unknown · [R326.md](docs/roadmap/R326.md) · open, filed 2026-09-29
-- **R328** · After RUST-03, the JSC heap still holds 2,230 MB of free capacity after a full GC at the peak of the W8 manifest-row phase, above the 2,000 MB RUST-03 pre-committed · [R328.md](docs/roadmap/R328.md) · open, filed 2026-09-29
+- **R326** · Stubbing out `astSubtreeHash` cuts about 1.8 GB from the W8 manifest-row transient, but a single-pass hash that builds no canonical string saves nothing; the real source of that 1.8 GB is unknown · [R326.md](docs/roadmap/R326.md) · closed 2026-10-24 — the writer's whole transient is now about 1.0-1.1 GB, below the 1.8 GB it hunted; the…
+- **R328** · After RUST-03, the JSC heap still holds 2,230 MB of free capacity after a full GC at the peak of the W8 manifest-row phase, above the 2,000 MB RUST-03 pre-committed · [R328.md](docs/roadmap/R328.md) · closed 2026-10-24 — F is under 1,000 MB at both phase boundaries (838-999 MB), below the 2,000 MB RUST-03…
 - **R329** · `lethal run --dry-run` on the Base Application takes a median 494 s on the final RUST-03 tree, about 104 s (27%) longer than the native median at RUST-03's S0 (390 s); the cause is not known · [R329.md](docs/roadmap/R329.md) · done (abab7785)
 - **R332** · A deleted live-gate baseline re-records itself on the next run and the gate passes, for every gate but R321's symbol legs · [R332.md](docs/roadmap/R332.md) · done (da1eff6a)
 - **R335** · Two spawning tests in `campaign-subcommands.test.ts` time out at Bun's 5 s default under a full `bun test` run and pass when the file runs alone · [R335.md](docs/roadmap/R335.md) · done (31d95e8a)
