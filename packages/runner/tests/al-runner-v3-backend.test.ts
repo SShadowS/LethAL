@@ -2085,3 +2085,101 @@ ${TARGET_AL}`;
     ).toEqual([]);
   });
 });
+
+describe("R609: a test v3 refused MID-RUN keeps the coverage it reached before the refusal", () => {
+  const LOGIC = `codeunit 79000 "Logic"
+{
+    procedure Twice(X: Integer): Integer
+    begin
+        Sleep(600000);
+        exit(X * 2);
+    end;
+}
+`;
+  // A has a per-test entry that hits Logic line 6; B has an entry that hits only its own test file.
+  const cov = (_id: string, active: string, testDir: string) => ({
+    coverage: [],
+    perTestCoverage: [
+      {
+        test: `Codeunit${CU}.A`,
+        coverage: [
+          { file: join(active, "Logic.Codeunit.al"), statements: [{ line: 6, hits: 1 }] },
+          { file: join(testDir, "Tests.Codeunit.al"), statements: [{ line: 7, hits: 1 }] },
+        ],
+      },
+      {
+        test: `Codeunit${CU}.B`,
+        coverage: [
+          { file: join(testDir, "Tests.Codeunit.al"), statements: [{ line: 12, hits: 1 }] },
+        ],
+      },
+    ],
+  });
+  const REFUSAL = "NotRun: out-of-scope: an outbound HTTP request";
+  const runA = async (rowA: FakeRow, coverageFn: typeof cov = cov) => {
+    const l = await layout(LOGIC);
+    const v3 = fakeV3(() => [rowA, { method: "B", status: "pass" as const }], {
+      coverage: coverageFn,
+    });
+    const b = backendOf(l, v3.spawn, fakeAlc().io, { coverage: "al-runner" });
+    b.useBuildSymbols([]);
+    await b.deploy(l.batch);
+    await b.activate(null);
+    return b.run(ref("A"), { coverage: "al-runner", timeoutMs: 1000 });
+  };
+
+  test("a refused notRun row with a per-test entry carries that coverage", async () => {
+    const v = await runA({ method: "A", status: "error", notRun: true, message: REFUSAL });
+    expect(v.runnerRow).toBe("runner-refused");
+    expect(v.coverage?.entries.length ?? 0).toBeGreaterThan(0);
+  });
+
+  test("a row refused BEFORE it starts (no per-test entry) does not throw and has no coverage", async () => {
+    const none = (_id: string, _a: string, testDir: string) => ({
+      coverage: [],
+      perTestCoverage: [
+        {
+          test: `Codeunit${CU}.B`,
+          coverage: [
+            { file: join(testDir, "Tests.Codeunit.al"), statements: [{ line: 12, hits: 1 }] },
+          ],
+        },
+      ],
+    });
+    const v = await runA({ method: "A", status: "error", notRun: true, message: REFUSAL }, none);
+    expect(v.runnerRow).toBe("runner-refused");
+    expect(v.coverage).toBeUndefined();
+  });
+
+  test("a PASSING row with no per-test entry still refuses (R586 §6)", async () => {
+    const none = (_id: string, _a: string, testDir: string) => ({
+      coverage: [],
+      perTestCoverage: [
+        {
+          test: `Codeunit${CU}.B`,
+          coverage: [
+            { file: join(testDir, "Tests.Codeunit.al"), statements: [{ line: 12, hits: 1 }] },
+          ],
+        },
+      ],
+    });
+    await expect(runA({ method: "A", status: "pass" }, none)).rejects.toThrow(/R586 §6/);
+  });
+
+  test("a timeout notRun row stays without coverage", async () => {
+    const v = await runA({
+      method: "A",
+      status: "error",
+      notRun: true,
+      message: "Test exceeded 1s timeout.",
+    });
+    expect(v.outcome).toBe("timeout");
+    expect(v.coverage).toBeUndefined();
+  });
+
+  test("a refusal-marker row (a fail, not notRun) stays without coverage", async () => {
+    const v = await runA({ method: "A", status: "fail", message: REFUSAL });
+    expect(v.runnerRow).toBe("runner-test-error");
+    expect(v.coverage).toBeUndefined();
+  });
+});

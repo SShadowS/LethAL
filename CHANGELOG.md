@@ -13,6 +13,11 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **A mutant that only a v3-refused test reaches now says so** (R609). When al-runner v3 refuses a test mid-run, the
+  code the test reached before the refusal is recorded and the mutant's note names v3's refusal, not evidence of a
+  gap in your suite. A note only: the verdict stays `no-coverage`, and selection and R140's fallback 2 are
+  unchanged. A test refused before it starts has no such record, so its mutants carry no note.
+
 - **A loop that moves the record it walks is no longer mutated at its exit** (R696). A `repeat .. until R.Next()` or
   `while R.Next()` loop, or a report or XMLport data item, whose code renames, inserts into, or changes the sort key
   of its own table through any variable of its table (a Modify only through a second one) can revisit rows

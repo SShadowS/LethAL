@@ -7139,6 +7139,7 @@ async function runSessionBody(
       }> = [];
       let refusedThisBatch = new Map<string, string>();
       let testPageThisBatch = new Map<string, string>();
+      let v3RefusedThisBatch = new Set<string>(); // R609
       // Sol run 001 (I): plus what THIS batch's deployed index refused by name, read after deploy
       // and before any mutant is scored. Selection read the original source, which can decide
       // where the instrumented text does not.
@@ -7226,6 +7227,22 @@ async function runSessionBody(
             ...(b.verdict.coverage !== undefined ? { coverage: b.verdict.coverage } : {}),
           })),
         );
+        // R609: a test al-runner-v3 refused mid-run carries the coverage it reached, for the NOTE
+        // only. Fallback 2 must not see it (its byObject would make a trigger mutant decline, which
+        // moves selection), so the split gets this index and only `unsupportedCoverage` the full one.
+        const isV3Refused = (b: { verdict: TestVerdict }) =>
+          b.verdict.runnerRow === "runner-refused";
+        const unsupportedIndexForSplit = buildCoverageIndex(
+          unsupportedBaseline
+            .filter((b) => !isV3Refused(b))
+            .map((b) => ({
+              ref: b.ref,
+              ...(b.verdict.coverage !== undefined ? { coverage: b.verdict.coverage } : {}),
+            })),
+        );
+        v3RefusedThisBatch = new Set(
+          unsupportedBaseline.filter(isV3Refused).map((b) => qualifiedTestName(b.ref)),
+        );
 
         // 5. coverage filter (capability-gated)
         let perMutantTests: ReadonlyMap<string, readonly TestMethodRef[]>;
@@ -7254,7 +7271,7 @@ async function runSessionBody(
             execute.filter((m) => !candidates.has(m.mutantId)),
             index,
             greenTests.map((b) => b.ref),
-            unsupportedIndex,
+            unsupportedIndexForSplit,
             // R175: only the HUB resolver is blind to locals. `fenced` names them by parsing the
             // source, measured, so there the widening would fire only on a naming FAILURE and would
             // hide it as object-level coverage.
@@ -7281,7 +7298,7 @@ async function runSessionBody(
               execute.filter((m) => candidates.has(m.mutantId)),
               index,
               greenTests.map((b) => b.ref),
-              unsupportedIndex,
+              unsupportedIndexForSplit,
               isHubCoverageMode(caps.coverage),
               batchRefused,
               () => {}, // emits nothing: the console lines count the first call's mutants only
@@ -7343,7 +7360,42 @@ async function runSessionBody(
         unsupportedOnlyCandidates = [];
         for (const m of uncovered) {
           const covering = unsupportedCoverage.get(m.mutantId);
-          if (covering !== undefined && covering.length > 0) {
+          const coveringNames = (covering ?? []).map(qualifiedTestName);
+          if (coveringNames.length > 0 && coveringNames.every((n) => v3RefusedThisBatch.has(n))) {
+            // R609: every test that reaches it is one al-runner v3 refused. The verdict stays
+            // `no-coverage` (counts and frozen tables do not move); only the note is added, in the
+            // slot R298's refusal sentence uses.
+            record(
+              cfg.store,
+              runId,
+              m,
+              "no-coverage",
+              outcomes,
+              batchIdx,
+              emit,
+              undefined,
+              unsupportedCoverageNote(
+                [...new Set(coveringNames)].sort(),
+                refusedThisBatch,
+                testPageThisBatch,
+                v3RefusedThisBatch,
+              ),
+              undefined,
+              0,
+              [],
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              unplaceableIds.has(m.mutantId),
+            );
+          } else if (covering !== undefined && covering.length > 0) {
             unsupportedOnlyCandidates.push({ mutant: m, covering });
           } else {
             record(
@@ -7578,7 +7630,12 @@ async function runSessionBody(
             batchIdx,
             emit,
             undefined,
-            unsupportedCoverageNote(qualified, refusedThisBatch, testPageThisBatch),
+            unsupportedCoverageNote(
+              qualified,
+              refusedThisBatch,
+              testPageThisBatch,
+              v3RefusedThisBatch,
+            ),
           );
         }
       }
@@ -8628,6 +8685,8 @@ export function unsupportedCoverageNote(
   qualified: readonly string[],
   refusedThisBatch: ReadonlyMap<string, string>,
   testPageThisBatch: ReadonlyMap<string, string> = new Map(),
+  /** R609: tests al-runner-v3 refused at baseline (qualified names). */
+  v3RefusedThisBatch: ReadonlySet<string> = new Set(),
 ): string {
   // "Covered by refused tests AND others" and "covered ONLY by refused tests" are different facts;
   // saying "only" in both cases contradicts the list that follows it. Shared by both named causes.
@@ -8668,6 +8727,20 @@ export function unsupportedCoverageNote(
       testPage,
       testPageText,
       "that cannot run on this session type",
+    );
+  }
+
+  // R609: al-runner v3 refused the test. The coverage is what the test reached before the refusal
+  // (the refused statement counts as hit), so it over-approximates: the test reaches this code (or,
+  // for a trigger mutant resolved at object level, its object); it does not prove it would catch the
+  // mutant. So the note says v3's refusal is the cause, not that the suite has a gap.
+  const v3 = qualified.filter((n) => v3RefusedThisBatch.has(n));
+  if (v3.length > 0) {
+    return describe(
+      "al-runner v3 refusal",
+      v3,
+      "the test reaches this code (or its object, for a trigger mutant) before v3 refused it; v3 refused it, so the mutant is not measured here, and this is not evidence of a gap in your suite",
+      "al-runner v3 refused at baseline",
     );
   }
 
