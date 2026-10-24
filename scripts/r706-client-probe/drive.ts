@@ -72,7 +72,10 @@ const OUT_OF_USE = "/coord/machine/out-of-use/bc1.md";
 const PROJECT = join(REPO, "fixtures", "sandbox-hang");
 const MCP_COMMIT = "8371d0b";
 const WANT_BUILD = "28.4.53241.56590";
-const PLATFORM_APP = "8874ed3a-0643-4247-9ced-7a7002f7135d";
+// Ruling (2026-10-24): no platform app row exists on BC on Linux (8874ed3a read absent on bc1), so the
+// build check is Base and System Application only, as r639 read it. Deviates from spec §9 by ruling.
+const PLATFORM_NOTE =
+  "not readable by app id on BC Linux (8874ed3a absent); Base and System Application checked";
 const BASE_APP = "437dbf0e-84ff-417a-965d-ed2bb9650972";
 const SYSTEM_APP = "63ca2fa4-4f03-4f2b-a480-172fef340d3f";
 const ARTIFACT_ID = "d1618dd6c92c4a3982febac2e5339f21";
@@ -264,13 +267,13 @@ async function main(): Promise<number> {
     for (const [n, id] of [
       ["Base Application", BASE_APP],
       ["System Application", SYSTEM_APP],
-      ["Platform (System)", PLATFORM_APP],
     ] as const) {
       const rs = await rows(c, ext, id);
       build[n] = rs.map((r) => rowVersion(r)).join("; ") || "absent";
       log(`server build: ${n} ${build[n]}`);
     }
     doc.bcBuild = build;
+    doc.platform = PLATFORM_NOTE;
     for (const [n, v] of Object.entries(build))
       if (v !== WANT_BUILD) throw new StopBeforePublish(`${n} reads ${v}, not ${WANT_BUILD}`);
     const harness = new HarnessVerifier(odata);
