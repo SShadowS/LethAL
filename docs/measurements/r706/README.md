@@ -16,4 +16,5 @@ connecting endpoint violates security requirements. Make sure you are connecting
 The committed first-line classifier read 92911 on the hub as OTHER, because the test's own `MEASURED [<text>] [<code>]`
 wrapper surrounds the text. So `readings.json` says row 1 "Unsettled". By substance it is outcome A of the
 pre-commitment (`docs/superpowers/specs/2026-10-24-r706-client-path-probe-precommitment.md` section 7).
-Owner ruling 2026-10-24: the hub path is the oracle (R712).
+Owner ruling 2026-10-24: the hub path is the oracle (R712). The bcdev side (a note and a warning when a baseline test
+fails with the web-service text) is R713.
