@@ -7009,10 +7009,12 @@ export function classifyHangCapable(
       const trigger = enclosingTrigger(node);
       const headerReceiver =
         trigger !== null && triggerLocalNames(trigger).has(normalizeAlName(parts.receiver.text));
-      // R720: a receiver the engine refuses to resolve ("unknown") is matched by name too.
-      const unknownReceiver = declarationStateAt(parts.receiver, ctx) === "unknown";
-      return (inUnindexedObject(node, ctx) || headerReceiver || unknownReceiver) &&
-        loopConditionReadsByName(node, byName, ctx)
+      // R720: a receiver the engine refuses to resolve ("unknown") is matched by name too. The
+      // cheap loop-name test runs first: `declarationStateAt` scans the whole object.
+      return loopConditionReadsByName(node, byName, ctx) &&
+        (inUnindexedObject(node, ctx) ||
+          headerReceiver ||
+          declarationStateAt(parts.receiver, ctx) === "unknown")
         ? "loop-condition-target"
         : byNameRefusal(node, byName, ctx, "none");
     }
@@ -7024,10 +7026,11 @@ export function classifyHangCapable(
   const byName = { receiver: null, member: target.text };
   const targetSym = resolveVarRef(target, ctx);
   if (targetSym === null) {
-    // R720: "unknown" (not provably absent) is matched by name too.
-    const unknown = declarationStateAt(target, ctx) === "unknown";
-    return ((inUnindexedObject(node, ctx) || unknown) &&
-      loopConditionReadsByName(node, byName, ctx)) ||
+    // R720: "unknown" (not provably absent) is matched by name too, including an enclosing `for`'s
+    // control variable (R480, `loopReadsNameAt`). The cheap loop-name test runs first:
+    // `declarationStateAt` scans the whole object.
+    return (loopReadsNameAt(node, target.text, ctx) &&
+      (inUnindexedObject(node, ctx) || declarationStateAt(target, ctx) === "unknown")) ||
       triggerHeaderLoopWrite(node, target.text, ctx)
       ? "loop-condition-target"
       : byNameRefusal(node, byName, ctx, "none");
