@@ -254,10 +254,8 @@ describe("R586c leg C: the pin", () => {
   });
   test("C-pin-5: duplicate-key read as gone (BC's fail text) is held, and not a pin pass", () => {
     const r = runC(
-      withFact(alpha5Facts(), "duplicate-key-insert-raises", {
-        verdict: "gone",
-        measured: "BC's fail text",
-      }),
+      // The pinned refusal text but read as `gone`: only the verdict compare can refuse it.
+      withFact(alpha5Facts(), "duplicate-key-insert-raises", { verdict: "gone" }),
     );
     expect(r.outcome).toBe("held");
     expect(r.lines.some((l) => l.startsWith("pinned: duplicate-key"))).toBe(false);
