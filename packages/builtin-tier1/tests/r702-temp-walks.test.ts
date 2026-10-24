@@ -119,6 +119,91 @@ describe("R702: a temporary walk moved through a Copy(R, true) variable", () => 
   });
 });
 
+describe("R702: walkers temporary at run time, the implicit Rec, and sharing through a third variable", () => {
+  const SHARED_WALK = (r: string, sharer: string, bind: string, move: string): string => `        ${bind}
+        if ${r}.FindSet() then
+            repeat
+                if ${r}.Note = 'X' then
+                    exit;
+                ${sharer}.Get(${r}."No.");
+                ${sharer}."No." := 'Z';
+${move}
+            until ${r}.Next() = 0;`;
+
+  it("8. a var parameter walker not declared temporary (Copy(R, true) proves it is)", () => {
+    const p = project({
+      "line.al": LINE_TABLE,
+      "cu.al": `codeunit 50212 "R702 Param"
+{
+    procedure P(var R: Record "R702 Line")
+    var
+        R2: Record "R702 Line" temporary;
+    begin
+${SHARED_WALK("R", "R2", "R2.Copy(R, true);", "                R2.Modify();")}
+    end;
+}`,
+    });
+    // red when sharers are read only for a walker declared temporary (review S1)
+    expect(p.refused("cu.al", "R2.Modify()")).toBe(true);
+    expect(p.refused("cu.al", "exit")).toBe(true);
+  });
+
+  const PAGE = (body: string, globals: string): string => `page 50213 "R702 Page"
+{
+    SourceTable = "R702 Line";
+    SourceTableTemporary = true;
+
+    var
+${globals}
+
+    procedure P()
+    var
+        R2: Record "R702 Line" temporary;
+    begin
+${body}
+    end;
+}`;
+
+  it("9. the implicit Rec of a temporary-source page as the walker (review S2)", () => {
+    const p = project({
+      "line.al": LINE_TABLE,
+      "page.al": PAGE(SHARED_WALK("Rec", "R2", "R2.Copy(Rec, true);", "                R2.Modify();"), "        G: Integer;"),
+    });
+    // red when sharers are read only for a walker declared temporary
+    expect(p.refused("page.al", "R2.Modify()")).toBe(true);
+  });
+
+  it("10. the implicit Rec as the sharer, with a GLOBAL walker (review S3)", () => {
+    const p = project({
+      "line.al": LINE_TABLE,
+      "page.al": PAGE(
+        SHARED_WALK("TempBuf", "Rec", "TempBuf.Copy(Rec, true);", "                Rec.Modify();"),
+        '        TempBuf: Record "R702 Line" temporary;',
+      ),
+    });
+    // red when a shared Rec's Modify is skipped as "the walked Rec" (recDistinct)
+    expect(p.refused("page.al", "Rec.Modify()")).toBe(true);
+  });
+
+  it("11. R and R2 bound to one table through a third variable (review S4)", () => {
+    const p = project(
+      files(
+        proc(
+          "Third",
+          SHARED_WALK("R", "R2", "R.Copy(R2, true);", "                R2.Modify();").replace(
+            "R.Copy(R2, true);",
+            // R2's binding first, so one pass over the Copy calls cannot reach it (red-check N3)
+            `R2.Copy(Src, true);
+        Src.Copy(R, true);`,
+          ),
+        ).replace("    begin", `        Src: Record "R702 Line" temporary;\n    begin`),
+      ),
+    );
+    // red when sharing is read only as a direct pair
+    expect(p.refused("cu.al", "R2.Modify()")).toBe(true);
+  });
+});
+
 describe("R702 twins: temporary walks that stay emitted", () => {
   it("4. no Copy, Copy without sharing, and Copy(R, false): R2 holds its own rows", () => {
     const p = project(
@@ -165,6 +250,16 @@ ${walk}
     expect(p.refused("cu.al", "R2.Insert()", 1)).toBe(false);
     // red when the enclosing-loop clause is dropped
     expect(p.refused("cu.al", "R2.Insert()", 2)).toBe(true);
+  });
+
+  it("12. a PERMANENT variable's move on a walk declared temporary (it cannot reach R's rows)", () => {
+    const body = WALK("R2.Copy(R, true);", MOVE_R2.replaceAll("R2", "P"));
+    const p = project(
+      files(proc("Perm", body).replace("    begin", `        P: Record "R702 Line";\n    begin`)),
+    );
+    // red when a declared-temporary walk also counts non-sharer movers (red-check N4)
+    expect(p.refused("cu.al", "P.Modify()")).toBe(false);
+    expect(p.refused("cu.al", "exit")).toBe(false);
   });
 
   it("6. a Copy(R, true) into a variable that never moves leaves the walk emitted", () => {

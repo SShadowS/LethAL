@@ -2974,7 +2974,8 @@ export const r696Seam = { on: true };
  * LIMITS, accepted: shape B follows no callee (R passed to a call is not followed) and does not
  * read a guard in a helper (R702 measured the callee case and closed it by ruling); a bound set by
  * a caller; an XMLport self-insert item (outside R530 and this). R696 roadmap item, "Done". A
- * temporary walk is refused only through a variable sharing its rows (`r702Shared`, R702).
+ * walk declared temporary is refused only through a variable sharing its rows (`r702Shared`,
+ * R702); any other walk is refused through such a sharer too, as well as by the movers above.
  */
 function inMovedWalk(node: ALSyntaxNode, ctx: SemanticContext): boolean {
   if (!r696Seam.on) return false;
@@ -3140,8 +3141,10 @@ interface R696Walk {
   readonly self: boolean;
   /** the implicit Rec is a variable other than the walked one */
   readonly recDistinct: boolean;
-  /** R702: a temporary walk; only these variables (sharing R's rows) move it */
+  /** R702: the variables sharing R's rows (`r702Shared`); a temporary one of them moves R too */
   readonly shared?: ReadonlySet<string>;
+  /** R702: R is declared temporary, so ONLY a sharer moves it (not R itself, not a permanent one) */
+  readonly temp?: boolean;
 }
 
 /** The movers under `body` (see `inMovedWalk`). */
@@ -3156,10 +3159,11 @@ function r696Movers(body: ALSyntaxNode, w: R696Walk, ctx: SemanticContext): R696
     if (vkey === null || vkey.startsWith("\u0001")) return;
     const t = r696Table(c, ctx);
     if (t === null || t.name !== w.table) return;
-    if (w.shared !== undefined ? !w.shared.has(vkey) : t.temporary) return;
+    const viaShare = w.shared?.has(vkey) ?? false;
+    if (!viaShare && (w.temp === true || t.temporary)) return;
     if (w.rkeys.has(vkey)) {
       if (!w.self || rc.method === "modify") return;
-    } else if (rc.method === "modify" && vkey === "" && !w.recDistinct) return;
+    } else if (rc.method === "modify" && vkey === "" && !w.recDistinct && !viaShare) return;
     if (rc.method === "rename") out.push({ call: c, writes: [] });
     else if (rc.method === "modifyall") {
       const f = r696Field(rc);
@@ -3245,14 +3249,16 @@ function r696Keys(
 export const r702Seam = { on: true };
 
 /**
- * R702 gap 2. The variables that share a temporary R's rows: `X.Copy(R, true)` or `R.Copy(X, true)`
- * before the walk, inside it, or inside a loop that encloses it, as `r696PreFilters` reads order
- * (the share argument read as true unless absent or a literal `false`; any argument when they are
- * unreadable). Measured on bc2 (R702 probe, run 3): such an X moving a
- * row's key ahead of the cursor, or inserting ahead of it, keeps a temporary walk going; a by-value
- * copy holds none of R's rows, and R's own Modify and Insert never revisit. LIMITS: the Copy and
- * the mover in one procedure (a callee is not followed, as R696 shape B); a global X bound in
- * another procedure; R's own Rename and ModifyAll on a temporary walk (not probed).
+ * R702 gap 2. The variables that share a temporary R's rows: those joined to R by a chain of
+ * `A.Copy(B, true)` calls (either direction, through any third variable) that run before the
+ * walk, inside it, or inside a loop that encloses it, as `r696PreFilters` reads order (the share
+ * argument read as true unless absent or a literal `false`; any argument when they are
+ * unreadable). Measured on bc2 (R702 probe, run 3): such an X moving a row's key ahead of the
+ * cursor, or inserting ahead of it, keeps a temporary walk going; a by-value copy holds none of
+ * R's rows, and R's own Modify and Insert never revisit. LIMITS: the Copy and the mover in one
+ * procedure (a callee is not followed, as R696 shape B); a global X bound in another procedure;
+ * an array element as sharer; R's own Rename and ModifyAll on a walk declared temporary (not
+ * probed, not refused).
  */
 function r702Shared(
   scope: ALSyntaxNode,
@@ -3262,6 +3268,7 @@ function r702Shared(
 ): Set<string> {
   const out = new Set<string>();
   if (!r702Seam.on) return out;
+  const pairs: [string, string][] = [];
   const enclosing: ALSyntaxNode[] = [];
   for (let a = loop.parent; a !== null && !samePos(a, scope); a = a.parent)
     if (BREAK_SCOPES.has(a.rawKind)) enclosing.push(a);
@@ -3278,11 +3285,21 @@ function r702Shared(
     if (recv === null) return;
     const share = c.args[1];
     if (!c.uncertain && (share === undefined || normalizeAlName(share.text) === "false")) return;
-    const named = (c.uncertain ? c.args : c.args.slice(0, 1)).map((a) => r531Key(a));
-    if (recv === rkey) {
-      for (const k of named) if (k !== null) out.add(k);
-    } else if (named.includes(rkey)) out.add(recv);
+    for (const a of c.uncertain ? c.args : c.args.slice(0, 1)) {
+      const k = r531Key(a);
+      if (k !== null) pairs.push([recv, k]);
+    }
   });
+  out.add(rkey);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const [a, b] of pairs)
+      if (out.has(a) !== out.has(b)) {
+        out.add(a);
+        out.add(b);
+        grew = true;
+      }
+  }
   out.delete(rkey);
   return out;
 }
@@ -3297,8 +3314,10 @@ function r696Loop(loop: ALSyntaxNode, ctx: SemanticContext, push: R696Push): voi
   if (rc === null || rkey.startsWith("\u0001")) return;
   const rt = r696Table(nc, ctx);
   if (rt === null) return;
-  const shared = rt.temporary ? r702Shared(scope, loop, rkey, ctx) : undefined;
-  if (shared !== undefined && shared.size === 0) return;
+  // R702: read for every walk, since a walker not declared temporary (a `var` parameter, a
+  // temporary-source Rec) can be one at run time; Copy(R, true) only runs when it is.
+  const shared = r702Shared(scope, loop, rkey, ctx);
+  if (rt.temporary && shared.size === 0) return;
   const rLocal = rkey !== "" && r531Declares(scope, rkey, false);
   const filters = r696PreFilters(scope, loop, rkey, ctx);
   const movers = r696Movers(
@@ -3309,7 +3328,8 @@ function r696Loop(loop: ALSyntaxNode, ctx: SemanticContext, push: R696Push): voi
       keys: r696Keys(rt.name, filters, !rLocal, ctx),
       self: true,
       recDistinct: rLocal,
-      ...(shared !== undefined ? { shared } : {}),
+      shared,
+      temp: rt.temporary,
     },
     ctx,
   );
