@@ -13,11 +13,9 @@
 import { join } from "node:path";
 import {
   type AppItem,
-  type AppManifest,
   type Conn,
   actAll,
   decideAll,
-  manifest,
   realOps,
   refusals,
   residentPackage,
@@ -103,15 +101,12 @@ async function main(): Promise<number> {
     { dir: "lethal-control", local: pinnedControl(), role: "control", gateDeploys: false },
     ...(await realCompile(c, STEP, symbols, log, EXAMPLES)),
   ];
-  const manifests = new Map<string, AppManifest>(
-    [STEP.target, ...STEP.dependents].map((d) => [d, manifest(join(EXAMPLES, d))] as const),
-  );
   const ops = realOps(c);
   const say = (s: string) => {
     log.push(s);
     console.log(s);
   };
-  const decided = await decideAll(items, ops, "setup", manifests, say);
+  const decided = await decideAll(items, ops, "setup", say);
   if (refusals(decided).length > 0) {
     console.log(`STOPPED: ${refusals(decided).length} app(s) refused; NOTHING was published`);
     return 1;
