@@ -1,5 +1,5 @@
 /**
- * R586 (plan r2 §9, T16, T17): the `alRunnerV3` section of `lethal.config.json`, beside `alRunner`,
+ * R586 (plan r2 §9, T16, T17): the `alRunnerV3` section of `lethal.config.json` (v2's `alRunner` is refused, R654 F2),
  * and the refusals by name that keep v1 of the backend to what was measured:
  *
  *   "alRunnerV3": {

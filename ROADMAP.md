@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**24 of 722 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**24 of 723 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -725,7 +725,7 @@ that ordering is the priority.
 - **R651** · al-runner v3 serve-entries: the itest has no per-phase timers (warm-up, prefetch, coverage pass, §5 windows), so the next CDO speed step cannot target a phase · [R651.md](docs/roadmap/R651.md) · done (e1cd0cd8)
 - **R652** · al-runner v3 serve-entries: assertBound re-hashes the whole tree on every run(), 527 times on CDO (86 s, 62% of the loop); check once per request sent · [R652.md](docs/roadmap/R652.md) · done (ad2d3269)
 - **R653** · al-runner v3 serve-entries: each kill's unmutated confirm is a live NONE request (51 on CDO, about 10 s); answer it from the warm-up's NONE rows · [R653.md](docs/roadmap/R653.md) · done (0dda9a84): one request [NONE, M] confirms a fail kill; final head 1b4706c6; CDO loop 83.5 -> 57.1 s
-- **R654** · Retire the .NET al-runner backend (v2): the Rust runtime (v3) replaces it · [R654.md](docs/roadmap/R654.md) · open, filed 2026-10-22
+- **R654** · Retire the .NET al-runner backend (v2): the Rust runtime (v3) replaces it · [R654.md](docs/roadmap/R654.md) · done (3bbe50b6)
 - **R655** · al-runner v3: the bound check hashes active/ with links skipped, so a link added under active/ mid-run is not seen (the test dir refuses one since R631) · [R655.md](docs/roadmap/R655.md) · done (d3867ec8)
 - **R656** · `--dry-run --backend al-runner-v3` reads bcdev's package cache, not `alRunnerV3.packagesDir` · [R656.md](docs/roadmap/R656.md) · done (0ea0a076)
 - **R659** · roadmap-next-id.ts reads remote branches without fetching them, so an id another lane pushed minutes ago looks free · [R659.md](docs/roadmap/R659.md) · done (3fc23858)
@@ -767,6 +767,7 @@ that ordering is the priority.
 - **R723** · The v3 update gate tried candidates oldest first, so two predicted fails ran before the newest release · [R723.md](docs/roadmap/R723.md) · done (3d805efe)
 - **R724** · `corpus-snapshot.ts` exits 2 for every refusal, so a retry loop cannot tell "heavy slot busy, try later" from "no master entry, never retry" · [R724.md](docs/roadmap/R724.md) · done (8d978cc9)
 - **R726** · A single-process I/O stall on the Windows CI job timed out 27 resume tests at 5 s, and verify's CI console named none of them · [R726.md](docs/roadmap/R726.md) · open, mitigated (8d978cc9): resume.test.ts has a 30 s per-test timeout, and verify prints each failure's…
+- **R730** · Two readers do not refuse a retired `alRunner` config section: the live itests' fixture-config reader and kraken-secrets' pass-through · [R730.md](docs/roadmap/R730.md) · open, filed 2026-10-24
 
 ---
 

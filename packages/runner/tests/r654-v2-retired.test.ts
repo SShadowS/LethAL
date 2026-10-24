@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import { freezeStageTo } from "../src/campaign-freeze";
-import { exportFromCli, parseCliConfig } from "../src/cli";
+import { exportFromCli, loadDryRunConfig, parseCliConfig } from "../src/cli";
 import { assertExplainableReport } from "../src/explain";
 import { ResultsStore, backendBuildRefusal } from "../src/store";
 import { AlRunnerV2RetiredError } from "../src/v2-retired";
@@ -191,5 +191,44 @@ describe("R654 F3: a v2 SessionReport is refused by name by its readers", () => 
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("R654 F2: a config alRunner section is refused by name", () => {
+  const load = async (config: unknown) => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-r654f2-"));
+    const path = join(dir, "lethal.config.json");
+    try {
+      await writeFile(path, JSON.stringify(config));
+      return {
+        path,
+        result: await loadDryRunConfig(path, true).then(
+          () => "",
+          (e: Error) => e,
+        ),
+      };
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  };
+  const bcdev = { bcdev: { server: "http://x" } };
+
+  test("an alRunner section is refused, naming the section, the file, R654 and al-runner-v3", async () => {
+    const { path, result } = await load({ alRunner: { alRunnerPath: "x" }, ...bcdev });
+    expect(result).toBeInstanceOf(AlRunnerV2RetiredError);
+    const msg = (result as Error).message;
+    for (const part of ['"alRunner"', path, "R654", "--backend al-runner-v3", '"alRunnerV3"']) {
+      expect(msg).toContain(part);
+    }
+  });
+
+  test("an empty alRunner: {} is refused too (the key is the trigger)", async () => {
+    const { result } = await load({ alRunner: {} });
+    expect(result).toBeInstanceOf(AlRunnerV2RetiredError);
+  });
+
+  test("the same config without the section loads", async () => {
+    const { result } = await load(bcdev);
+    expect(result).toBe("");
   });
 });
