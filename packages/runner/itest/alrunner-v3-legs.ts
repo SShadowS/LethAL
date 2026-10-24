@@ -18,6 +18,51 @@ export const V3_K_LEG = "K";
 /** Condition 1: K's leg-summary value on a candidate build. */
 export const V3_K_CANDIDATE_SKIP = "skipped (candidate build)";
 
+/**
+ * R722: N1's dotted test name (`Dot.Step`) under serve-entries. Outside `V3_GATE_LEGS` on purpose:
+ * alpha.2 has no serve-entries path, so the update gate's leg list (and its `--regate` of an old
+ * build) stays as it was; the itest still fails on anything but a pass, so `held` is never silent.
+ */
+export const V3_N1E_LEG = "N1E";
+
+/** What the N1E session did: it finished, or it threw this message. */
+export type N1EReading = { readonly completed: true } | { readonly threw: string };
+
+/**
+ * R722, pre-committed (r19): on alpha.5 the serve request fails closed with `the entries answer is
+ * invalid: a test line without v3's row shape: {...}` for `Codeunit<n>.Dot.Step`, a line that has no
+ * `codeunit` and no `method` (upstream #5798). That is the only `pass`. A finished session, or a line
+ * that now has `codeunit` or `method`, is `held` (upstream may have fixed it: re-pre-commit). Any
+ * other error, or the refusal for another test, is `gate-fail`.
+ */
+export function judgeN1Serve(r: N1EReading): {
+  readonly outcome: "pass" | "held" | "gate-fail";
+  readonly lines: string[];
+} {
+  const held = (why: string) => ({
+    outcome: "held" as const,
+    lines: [`re-pre-commit: upstream may have fixed #5798 (${why})`],
+  });
+  if ("completed" in r) return held("the serve-entries session completed");
+  const m = /the entries answer is invalid: a test line without v3's row shape: (\{.*\})/.exec(
+    r.threw,
+  );
+  const line = m?.[1];
+  if (line === undefined) {
+    return {
+      outcome: "gate-fail",
+      lines: [`N1E: not the pre-committed refusal (#5798): ${r.threw.slice(0, 300)}`],
+    };
+  }
+  if (/"codeunit"|"method"/.test(line)) {
+    return held(`the refused line now has codeunit or method: ${line}`);
+  }
+  if (!/Codeunit\d+\.Dot\.Step/.test(line)) {
+    return { outcome: "gate-fail", lines: [`N1E: the refused line is not Dot.Step's: ${line}`] };
+  }
+  return { outcome: "pass", lines: [`N1E: failed closed as pre-committed (#5798): ${line}`] };
+}
+
 /** The legs the itest runs when `LETHAL_ITEST_V3_LEGS` is unset, in run order. */
 export function v3DefaultLegs(o: { readonly cdo: boolean; readonly tables: boolean }): string[] {
   return [
@@ -25,6 +70,7 @@ export function v3DefaultLegs(o: { readonly cdo: boolean; readonly tables: boole
     "S1",
     "S3",
     "N1",
+    V3_N1E_LEG,
     "X",
     "L1",
     "Y-A",

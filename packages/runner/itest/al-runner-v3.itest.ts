@@ -58,6 +58,7 @@ import {
 import { AL_RUNNER_V3_NOT_AUTHORITATIVE } from "../src/al-runner-v3-config";
 import { runV3ContractProbe, v3DefectWarnings } from "../src/al-runner-v3-contract";
 import { AL_RUNNER_V3_DEFAULT_PATH, sha256OfFile } from "../src/al-runner-v3-pin";
+import { type V3BuildPin, findV3Pin } from "../src/al-runner-v3-pins";
 import { SLEEP_NOTE_TAG } from "../src/al-runner-v3-sleep";
 import { AlcCompileError, ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import { buildBackend } from "../src/cli";
@@ -97,18 +98,20 @@ import {
   xdBaselineLine,
   xdFailure,
 } from "./al-runner-v3-gate";
-import { type V3BuildPin, findV3Pin } from "./al-runner-v3-pins";
 import { TABLES_KNOWN_DIFFERENCES } from "./al-runner-v3-tables-known";
 import {
+  type N1EReading,
   type V3RowFacts,
   V3_K_CANDIDATE_SKIP,
   V3_K_LEG,
   V3_MO_KILLERS,
+  V3_N1E_LEG,
   V3_WR_KILLERS,
   V3_WR_STATE_NOTES,
   isSessionTestCall,
   judgeKillers,
   judgeLegK,
+  judgeN1Serve,
   judgeStateNotes,
   judgeWrArms,
   legKSection,
@@ -508,6 +511,40 @@ async function legN1(scratch: string): Promise<void> {
   );
   assertIndex(b, "N1", 0, 0);
   assertReproduced(r, "N1");
+}
+
+/**
+ * R722 (pre-commitment r19): N1's project under serve-entries, whatever the run's own transport is.
+ * The reading is `judgeN1Serve`'s: on alpha.5 the session fails closed by name (#5798); anything
+ * else is `held` (re-pre-commit) or `gate-fail`, never a silent pass.
+ */
+async function legN1E(scratch: string): Promise<void> {
+  const deps = await microsoftDeps(scratch);
+  const b = new AlRunnerV3Backend(
+    backendCfg({
+      instrumentedDir: join(scratch, "backend"),
+      testDir: fixture("sandbox-names-tests"),
+      packagesDir: deps,
+      bcVersion: SANDBOX_BC,
+      selectorObjectId: 78849,
+      transport: "serve-entries",
+    }),
+  );
+  let reading: N1EReading;
+  try {
+    await session(scratch, b, {
+      projectDir: fixture("sandbox-names"),
+      testDir: fixture("sandbox-names-tests"),
+      selectorIds: { selectorId: 78849, controlId: 78848, tableId: 78847 },
+    });
+    reading = { completed: true };
+  } catch (e) {
+    reading = { threw: e instanceof Error ? e.message : String(e) };
+  }
+  const j = judgeN1Serve(reading);
+  for (const l of j.lines) console.log(`  N1E: ${l}`);
+  if (j.outcome === "held") throw new V3LegHeld(j.lines);
+  if (j.outcome === "gate-fail") throw new LegFailure(j.lines.join("; "));
 }
 
 // --- R654 S2: L1, Y-A, Y-B and K (pre-commitment docs/superpowers/specs/2026-10-22-r654-v3-gate-legs-precommitment.md, 43115c78)
@@ -1551,6 +1588,7 @@ async function main(): Promise<void> {
         else if (leg === "S1") await legS1(scratch);
         else if (leg === "S3") await legS3(scratch);
         else if (leg === "N1") await legN1(scratch);
+        else if (leg === V3_N1E_LEG) await legN1E(scratch);
         else if (leg === "X") await legX(scratch, (l) => lines.push(l));
         else if (leg === "D1" || leg === "D1c") await legD(scratch, leg);
         // R654 S2: each leg checks its pre-committed table FIRST (gate-fail on a difference, and

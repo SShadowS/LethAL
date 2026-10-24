@@ -14,9 +14,9 @@
 import { writeFile } from "node:fs/promises";
 import { AlRunnerCoverageFrameError } from "../src/al-runner-coverage";
 import type { V3EntriesStats } from "../src/al-runner-v3-backend";
+import { applyTPin } from "../src/al-runner-v3-pins";
+import type { V3BuildPin, XbPin } from "../src/al-runner-v3-pins";
 import { AlRunnerV3CoverageJoinError } from "../src/al-runner-v3-sleep";
-import { applyTPin } from "./al-runner-v3-pins";
-import type { V3BuildPin, XbPin } from "./al-runner-v3-pins";
 import { bareHashRows, compareMutants } from "./mutant-equality";
 import type { MutantComparison, NormalizedMutant } from "./mutant-equality";
 

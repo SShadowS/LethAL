@@ -43,6 +43,7 @@ describe("R654 S2: the leg sets", () => {
       "S1",
       "S3",
       "N1",
+      "N1E", // R722: outside V3_GATE_LEGS (alpha.2 has no serve-entries path)
       "X",
       "L1",
       "Y-A",
@@ -56,6 +57,7 @@ describe("R654 S2: the leg sets", () => {
       "S1",
       "S3",
       "N1",
+      "N1E",
       "X",
       "L1",
       "Y-A",
@@ -114,6 +116,7 @@ describe("R654 S2, condition (1): on a candidate K is skipped with its summary, 
   const SELECTED = v3DefaultLegs({ cdo: true, tables: true });
   const candidateLegs = (k: string | undefined) => ({
     ...Object.fromEntries(V3_GATE_LEGS.map((l) => [l, "pass"])),
+    N1E: "pass", // R722: a default itest leg that is outside V3_GATE_LEGS
     ...(k !== undefined ? { K: k } : {}),
   });
 
