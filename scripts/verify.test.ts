@@ -34,7 +34,9 @@ import {
   ledgerAppend,
   ledgerLine,
   parallelism,
+  parentTable,
   parseArgs,
+  parseCimParents,
   parseJunit,
   parseLedger,
   parseSnapState,
@@ -617,16 +619,31 @@ describe("R622 the per-file watchdog", () => {
       stderr: "ignore",
     });
     try {
-      expect(isChildOf(child.pid, process.pid)).toBe(true);
+      // One OS read for both pids (one PowerShell call on Windows).
+      const table = parentTable([child.pid, process.pid]);
+      expect(table.get(child.pid)).toBe(process.pid);
       // The direction that keeps the kill off a process verify did not start (a reused pid).
-      expect(isChildOf(process.pid, process.pid)).toBe(false);
+      expect(table.get(process.pid)).not.toBe(process.pid);
+      expect(table.get(child.pid)).not.toBe(child.pid);
+      // A live pid with the wrong parent is not a child (isChildOf must compare the parent).
       expect(isChildOf(child.pid, child.pid)).toBe(false);
     } finally {
       child.kill();
       await child.exited;
     }
     expect(isChildOf(child.pid, process.pid)).toBe(false);
-  }, 30_000); // three PowerShell calls on Windows, 1 to 3 s each when cold
+  }, 30_000); // three PowerShell calls on Windows (was four), 1 to 3 s each when cold
+
+  test("parseCimParents: reads `pid ppid` lines, ignores the rest", () => {
+    expect(parseCimParents("10 1\r\n  20   10  \n")).toEqual(
+      new Map([
+        [10, 1],
+        [20, 10],
+      ]),
+    );
+    expect(parseCimParents("\n10 1\nProcessId x\n7\n3 4 5\n")).toEqual(new Map([[10, 1]]));
+    expect(parseCimParents("")).toEqual(new Map());
+  });
 
   const OK = 'import { test } from "bun:test";\ntest("ok", () => {});\n';
   // Synchronous, so bun's per-test timeout cannot fire; it ends ITSELF after 25 s, so a broken
