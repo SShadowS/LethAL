@@ -15,8 +15,9 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 - **Tests with their own short timeout get 60 s on the Windows CI job** (R726c): `ownTimeout()` in
   `@lethal/engine/own-timeout` raises a test's own timeout to at least verify's shared 60 s there, because a test's own
-  timeout wins over `--timeout`. Linux and local runs are unchanged. A guard test fails on a new bare literal under
-  60 s. R726 records the ruling: no Defender exclusion and no diagnostic step.
+  timeout wins over `--timeout`. Verify tells the test child through `LETHAL_VERIFY_OWN_TIMEOUT_FLOOR`, set only on
+  Windows CI (the child's `CI` is always true, so it cannot tell by itself). Linux and local runs are unchanged. A
+  guard test fails on a short own timeout left unwrapped, whether a literal, a constant or a computed value. R726 records the ruling: no Defender exclusion and no diagnostic step.
 - **Verify's console names every test that timed out in one line** (R726b): `timed out (N): <file> > <test>; ...`,
   after the failure list. Hook timeouts count too, and each test is named under its own file. A run with no timeout
   prints no such line. R726 also records two more Windows CI stalls since
