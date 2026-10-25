@@ -166,6 +166,10 @@ describe("RunMutantTransport.run — terminal mapping", () => {
       frame: '"R689 Throwing Tests"(CodeUnit 93890).OnRun(Trigger) line 2',
     });
     expect(v.failureMessage).toBe(runMutantLineCountMessage(0, error));
+    // Also a LITERAL, so a change to the helper cannot move both sides together.
+    expect(v.failureMessage).toBe(
+      "RunMutant returned 0 test lines, expected exactly 1; server: expected exactly one method OverBudgetDetected, found 0",
+    );
   });
 
   test("R689: found 0 without the fields: no discoveryError", async () => {

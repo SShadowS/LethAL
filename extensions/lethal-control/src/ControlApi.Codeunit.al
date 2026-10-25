@@ -296,7 +296,7 @@ codeunit 91003 "LC Control API"
                     Row.Add('id', LowerCase(DelChr(Format(Installed."App ID"), '=', '{}')));
                     Row.Add('name', Installed.Name);
                     Row.Add('publisher', Installed.Publisher);
-                    Row.Add('version', StrSubstNo('%1.%2.%3.%4', Installed."Version Major", Installed."Version Minor", Installed."Version Build", Installed."Version Revision"));
+                    Row.Add('version', StrSubstNo('%1.%2.%3.%4', Format(Installed."Version Major", 0, 9), Format(Installed."Version Minor", 0, 9), Format(Installed."Version Build", 0, 9), Format(Installed."Version Revision", 0, 9)));
                     Rows.Add(Row);
                 end;
             until Dep.Next() = 0;

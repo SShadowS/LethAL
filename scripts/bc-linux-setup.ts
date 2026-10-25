@@ -120,7 +120,7 @@ export const EXPECTED_KEYS = ["BC_DEV_USER", "BC_DEV_PASSWORD"] as const;
 // R-689b: the 1.0.0.24 build (R689 discovery error, R733 `InstalledDependents`), compiled clean with alc.
 export const CONTROL_APP =
   "/coord/handoff/R-689b/control-1.0.0.24/LethAL_LethAL Control_1.0.0.24.app";
-export const CONTROL_SHA256 = "664772920c574c88027034151e2c8b66fdb39c7fb3018f7c552cf8c5584c90a4";
+export const CONTROL_SHA256 = "58fad5173d8de27e576b4a3e6f74ec38b8021cff7cc3b3c4323960a59eee0f1d";
 const TOKEN_DIR = "/coord/handoff/R-589";
 const STATE_ROOT = join(REPO, ".kraken-local", "bc-linux");
 const BC_DEV_MCP = "/home/dev/src/bc-dev-mcp";

@@ -133,7 +133,7 @@ codeunit 91007 "LC Run Method"
                 Frame := DiscoveryStack;
                 if StrPos(Frame, '\') > 0 then
                     Frame := CopyStr(Frame, 1, StrPos(Frame, '\') - 1);
-                if (DiscoveryText <> '') and (StrPos(Frame, StrSubstNo('(CodeUnit %1)', RunTestCodeunitId)) > 0) then begin
+                if (DiscoveryText <> '') and (StrPos(Frame, StrSubstNo('(CodeUnit %1)', Format(RunTestCodeunitId, 0, 9))) > 0) then begin
                     ErrObj.Add('discoveryError', DiscoveryText);
                     ErrObj.Add('discoveryErrorFrame', Frame);
                 end;
