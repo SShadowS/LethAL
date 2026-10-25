@@ -865,6 +865,31 @@ export function bareFieldAssignable(
 }
 
 /**
+ * R752: is `node` a BARE identifier that provably names a field of a PROJECT table, in the
+ * innermost record scope (table, tableextension on a project table, page with a project
+ * SourceTable, TableNo codeunit's OnRun, report data item, `with`)? Then it is not a `Char` (a
+ * table field cannot be, AL0156). AL's name order is kept: a local, parameter, return value or
+ * object global of that name wins (`bareFieldAssignable`, every `#if` arm read by text; unknown
+ * refuses), and in a tableextension so does a global of the base table (protected `var`).
+ * Anything unresolvable (no table, a dependency table, an unindexed member) is `false`.
+ */
+export function bareProjectFieldAt(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+  if (!isIdentifierLike(node)) return false;
+  const symbols = ctx.symbols;
+  const [scope] = recordScopesAt(node, symbols);
+  if (scope === undefined || scope.table === null) return false;
+  const table = resolveTable(symbols, scope.table);
+  if (table === null) return false;
+  const name = stripQuotes(node.text.trim());
+  if (!symbols.fieldsOf(table.name).some((f) => equalsIgnoreCase(f.name, name))) return false;
+  if (!bareFieldAssignable(node, name, ctx)) return false;
+  // ponytail: a base-table global is refused unmeasured; measure with alc to admit it
+  return (
+    scope.kind !== "tableextension" || !declaresName(visibleDeclarationText(null, table.node), name)
+  );
+}
+
+/**
  * R-464: the declaration a bare `name` binds to at `node`, in three states: `null` only when
  * PROVABLY absent; `"unknown"` for any refusal that is not absence (`lookupDeclaredState`), and
  * also whenever the visible source text declares `name` where the index does not show it (inside
