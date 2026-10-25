@@ -2297,6 +2297,21 @@ describe("R609: a test v3 refused MID-RUN keeps the coverage it reached before t
     expect(v3.calls[0]).not.toContain("--coverage-json");
   });
 
+  test("R762 A: a coverage-none confirm, then a coverage-wanting call on the same codeunit, re-calls with --coverage-json and joins coverage", async () => {
+    const l = await layout(LOGIC);
+    const v3 = fakeV3(allPass, { coverage: cov });
+    const b = backendOf(l, v3.spawn, fakeAlc().io, { coverage: "al-runner" });
+    b.useBuildSymbols([]);
+    await b.deploy(l.batch);
+    await b.activate(null);
+    await b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
+    const v = await b.run(ref("A"), { coverage: "al-runner", timeoutMs: 1000 });
+    expect(v3.calls).toHaveLength(2);
+    expect(v3.calls[0]).not.toContain("--coverage-json");
+    expect(v3.calls[1]).toContain("--coverage-json");
+    expect(v.coverage?.entries.length ?? 0).toBeGreaterThan(0);
+  });
+
   test("R762 A: the baseline call (coverage al-runner) still passes --coverage-json and still throws on unavailable coverage", async () => {
     const l = await layout(LOGIC);
     const v3 = fakeV3(allPass, { coverage: () => undefined });

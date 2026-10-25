@@ -226,6 +226,16 @@ export class AlRunnerV3RowMissingError extends Error {
   }
 }
 
+/** R764: a call made without `--coverage-json` was handed to a caller that wants coverage. */
+export class AlRunnerV3NoCoverageCallReusedError extends Error {
+  constructor(readonly ref: TestMethodRef) {
+    super(
+      `al-runner-v3: a call made without coverage was reused for ${ref.codeunitName}.${ref.method}, which wants coverage; refusing rather than reading it as "covered nothing" (R764)`,
+    );
+    this.name = "AlRunnerV3NoCoverageCallReusedError";
+  }
+}
+
 /** S3: `selectorMode: "resource"` on v3 is refused by name (#5604 was a serve defect; v1 is one-shot). */
 export class AlRunnerV3ResourceSelectorRefusedError extends Error {
   constructor() {
@@ -1399,6 +1409,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           : await this.callCodeunit(ref, opts.timeoutMs, opts.coverage !== "none");
       if ("verdict" in made) return made.verdict;
       call = made.call;
+    }
+    // R764: a call made without coverage must never serve a caller who wants it (its coverage
+    // would read as undefined, so mutants would read no-coverage). Fail loudly.
+    if (call.noCoverage === true && opts.coverage !== "none") {
+      throw new AlRunnerV3NoCoverageCallReusedError(ref);
     }
     if (call.refusal !== undefined) return refusalVerdict(ref, call.refusal, call.wallMs);
     if (call.missing !== undefined) return this.rowMissing(ref, call.missing, call.wallMs);
