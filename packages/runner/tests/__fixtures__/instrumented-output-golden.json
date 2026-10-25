@@ -125,7 +125,7 @@
       "mutants": 5
     },
     "fixtures/sandbox-data/src/DataMainListExt.PageExt.al": {
-      "sha256": "4959871aab7a5a536eb8e1c717331b4023a20a1fab9ac9a07b533ef94c60d347",
+      "sha256": "a5a8c27220ae2f080c11c287301a5b7590afb304ccaddbce2e3d84f3c4e4e865",
       "mutants": 7
     },
     "fixtures/sandbox-data/src/DataNoTrigger.Table.al": {

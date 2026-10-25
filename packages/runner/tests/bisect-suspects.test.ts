@@ -225,7 +225,8 @@ describe("isolateBreakingMutants: a cascade of innocent suspects (R743)", () => 
     const out = await isolateBreakingMutants(ids(128), f.compile, 64);
     expect(out).toEqual({ kind: "isolated", culprits: [culprit], groupErrors: [], unresolved: [] });
     // red when the cap allows more than 8 cleared: the 9th suspect, the culprit, is tried alone
-    expect(single(f.calls, culprit)).toBe(1); // halving's confirm, not a suspect compile
+    expect(single(f.calls, culprit)).toBe(1);
+    // the culprit is not the round's 9th suspect compile; the exact count below is halving's
     expect(f.calls[10]).not.toEqual([culprit]);
     expect(f.calls.length).toBe(2 + 8 + Math.ceil(Math.log2(128)) + 2);
   });

@@ -102,8 +102,10 @@ const PINNED: Record<
       "DataLoader.Codeunit.al": "1df7ee23504f75e9f58cc2b2c2413d0809d352148264c4a8ef9b7db00462d34d",
       "DataMain.Table.al": "397e4ce9557e060287efc322c53bcf8db5986f7a2d0c4a7fed59034fe2da1fc4",
       "DataMainExt.TableExt.al": "36d5d31c3912e9beb94492bf6cf5bf97f70f19a4128d148533cfd331dbe09659",
+      // R750: re-pinned (was c5e2fd4c...30acf, ruling orchestrator 2026-10-25): its header
+      // comment, rewritten at the same length.
       "DataMainListExt.PageExt.al":
-        "c5e2fd4c0d9b4d13a8ab21be34f1a2e6d2ef4121e2723e6af9be222537230acf",
+        "f05ff067531ef4c2d6ce403f36108f042cbabb3cad6cd30a1f6dffb1c8a461a6",
       "DataNoTrigger.Table.al": "e01beb62030b536feb44b8042dce37412838e09091c3cfaff71d75034cbdfd21",
       "DataOps.Codeunit.al": "0092f7e5e289c9ce1c8e41a409e2f53dd4919c880074f86f010402ba57447f74",
       "DataReachOps.Codeunit.al":
