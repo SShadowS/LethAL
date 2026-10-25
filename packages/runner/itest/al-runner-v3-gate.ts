@@ -757,6 +757,23 @@ export function v3ItestTransport(env: Readonly<Record<string, string | undefined
 }
 
 /**
+ * R788: the gate's big legs run serve-entries, the users' default since R761; every other leg
+ * keeps one-shot (S1, N1, MO and WR cover it). `LETHAL_ITEST_V3_TRANSPORT`, when set, still names
+ * the transport for every leg (so `one-shot` reproduces the old gate).
+ */
+export const V3_GATE_SERVE_LEGS: readonly string[] = ["D1", "D1c", "T"];
+
+/** R788: the transport for one leg: the flags (`v3ItestTransport`), else serve for the big legs. */
+export function v3ItestLegTransport(
+  leg: string,
+  env: Readonly<Record<string, string | undefined>>,
+): ReturnType<typeof v3ItestTransport> {
+  const flagged = v3ItestTransport(env);
+  if (env.LETHAL_ITEST_V3_TRANSPORT !== undefined) return flagged;
+  return V3_GATE_SERVE_LEGS.includes(leg) ? { transport: "serve-entries" } : flagged;
+}
+
+/**
  * G5: the gate worktree is dirty when `git status --porcelain --untracked-files=all` shows any
  * tracked change, or an UNTRACKED file under `fixtures/` or `packages/` (it would compile into a
  * leg). Other untracked files are the gate's own outputs.

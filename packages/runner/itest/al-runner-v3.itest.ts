@@ -95,6 +95,7 @@ import {
   legOutcomeOfError,
   observeWithReceiptRefusal,
   recordRefusal,
+  v3ItestLegTransport,
   v3ItestTransport,
   v3ReceiptOutcome,
   v3SplitLine,
@@ -320,14 +321,15 @@ async function session(
         ),
       );
   }
-  // R635: all of it only when a flag asks, so the unflagged gate is unchanged.
+  // R635: all of it only when a flag asks or the leg runs serve (R788).
   const leg = basename(scratch);
   checkGateWarnings("al-runner-v3", leg, gateWarnings);
-  if (TRANSPORT.transport !== undefined) {
+  const serveLeg = v3ItestLegTransport(leg, process.env).transport !== undefined;
+  if (serveLeg) {
     console.log(`  ${leg}: entries ${JSON.stringify(backend.entriesStats())}`);
     console.log(`  ${leg}: ${v3SplitLine(phases, backend.entriesStats())}`);
   }
-  if (TRANSPORT.transport !== undefined || REPORT_DIR !== undefined) {
+  if (serveLeg || REPORT_DIR !== undefined) {
     console.log(`  ${leg}: timings ${JSON.stringify(r.timings)}`);
   }
   if (REPORT_DIR !== undefined) {
@@ -1631,6 +1633,7 @@ async function legD(scratch: string, leg: "D1" | "D1c"): Promise<void> {
       bcVersion: CDO_BC,
       selectorObjectId: 6175460,
       coverage: leg === "D1" ? "none" : "al-runner",
+      ...v3ItestLegTransport(leg, process.env),
     }),
   );
   const r = await session(scratch, b, {
@@ -1699,6 +1702,7 @@ async function legT(
       packagesDir: join(fixture("sandbox-data-tests"), ".alpackages"),
       bcVersion: SANDBOX_BC,
       selectorObjectId: 79399,
+      ...v3ItestLegTransport("T", process.env),
     }),
   );
   const r = await session(scratch, b, {
