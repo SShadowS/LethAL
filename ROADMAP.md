@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**26 of 781 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**25 of 781 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -810,7 +810,7 @@ that ordering is the priority.
 - **R767** · al-runner-v3's per-send bound check (`assertBound`) spent 0.35 s per send on Bun's async fs, not on hashing · [R767.md](docs/roadmap/R767.md) · open, built and gated 2026-10-25 (coord task R-767); awaiting merge
 - **R769** · al-runner-v3's alc proof is still needed on #5602-fixed builds: the pinned edge build runs some AL that alc rejects · [R769.md](docs/roadmap/R769.md) · closed 2026-10-25 — measured (coord task R-769): the alc proof stays on every build (orchestrator ruling)…
 - **R779** · No run says whether R768 retired the Sleep rule: only the gate's leg X reads it, so a run's output gives no sign which §6 behaviour applied · [R779.md](docs/roadmap/R779.md) · done (1ed5c2ae)
-- **R771** · Pin the edge build al-runner 3.0.0-alpha.5+edge.20261025 (a157b2d34), then re-gate it · [R771.md](docs/roadmap/R771.md) · open, pin built 2026-10-25 (coord task R-771); pre-committed in the same branch; awaiting merge, regate and…
+- **R771** · Pin the edge build al-runner 3.0.0-alpha.5+edge.20261025 (a157b2d34), then re-gate it · [R771.md](docs/roadmap/R771.md) · done 2026-10-25 (coord task R-771): current is edge-a157b2d34; the rejudge and the K run passed as…
 - **R774** · A repeatable v3 timing run (`scripts/v3-timing.ts`): the gift card and D1, with the per-phase table and the machine load beside every figure · [R774.md](docs/roadmap/R774.md) · done (6545a85a)
 - **R775** · `lethal run --backend al-runner-v3` never calls the backend's `close()`: no serve-entries counters, the serve daemon dies by process exit, and the coverage scratch stays · [R775.md](docs/roadmap/R775.md) · done (6545a85a)
 - **R776** · The v3 probe-cache key fingerprints the package folder by file mtime, so a fresh checkout or a copied .alpackages always misses once (about 10 s); a content hash costs about 0.1 s · [R776.md](docs/roadmap/R776.md) · done (1a6dc21b)
