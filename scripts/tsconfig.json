@@ -149,6 +149,7 @@
     "r728-probe/drive.ts",
     "r738-probe/drive.ts",
     "r740-probe/drive.ts",
+    "r741-probe/drive.ts",
     "r706-client-probe/classify.ts",
     "r706-client-probe/classify.test.ts",
     "r706-client-probe/lease-options.ts",
