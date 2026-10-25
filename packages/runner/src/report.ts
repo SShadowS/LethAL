@@ -604,8 +604,9 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "The al-runner-v3 session started on the serve-entries default, met a warm-up row that R612 " +
       "refuses by name (a Company read, a missing DotNet sidecar), and was run again from the start " +
       "on one-shot, as an explicit one-shot run is. Every verdict in this report was measured on " +
-      "one-shot; nothing of the serve attempt was kept. The `al-runner-v3-serve-default-fallback-warmup` " +
-      "warning names the row and its reason (R786).",
+      "one-shot; nothing of the serve attempt is kept in this report. Its run row stays in the store, " +
+      "marked so --resume skips it. The `al-runner-v3-serve-default-fallback-warmup` " +
+      "warning names the row, its reason and that run (R786).",
     entailedNegative:
       "Not a statement about any mutant. Not a wrong verdict: one-shot is the transport the " +
       "serve-entries default is proven against.",

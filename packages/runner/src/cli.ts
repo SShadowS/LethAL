@@ -4027,9 +4027,11 @@ export async function runFromCli(
             );
           }
           console.warn(
-            `[lethal] ${err.message}. The serve attempt is discarded; the session starts again on one-shot.`,
+            `[lethal] ${err.message}. The serve attempt is dropped from this report; the session starts again on one-shot.`,
           );
-          return await attempt(`${err.row}: ${err.rowReason}`);
+          return await attempt(
+            `${err.row}: ${err.rowReason}${err.abandonedRunId !== undefined ? `; the serve attempt's run ${err.abandonedRunId} stays in the store, marked so --resume skips it` : ""}`,
+          );
         }
       },
       deps.quarantineDir ?? defaultQuarantineDir(),

@@ -175,6 +175,40 @@ describe("T14 at the store sites", () => {
     expect(store.findResumableRun({ ...q, runnerBuild: B2 })).toBe(id);
     expect(() => store.findResumableRun(q)).toThrow(/must name its runner build/);
   });
+
+  test("R786: an abandoned serve attempt (abandonRun) is never resumed; a finished or other run is untouched", () => {
+    const store = new ResultsStore(":memory:");
+    const make = () =>
+      store.createRun({
+        testScope: [],
+        projectPath: "P",
+        backend: "al-runner-v3",
+        appVersion: "1.0.0.0",
+        configFingerprint: "F",
+        identityScheme: IDENTITY_SCHEME,
+        buildSymbols: [],
+        coverageMode: "al-runner",
+        runnerBuild: B2,
+      });
+    const q = {
+      projectPath: "P",
+      backend: "al-runner-v3",
+      configFingerprint: "F",
+      carryableVerdicts: [...CARRYABLE_VERDICTS],
+      runnerBuild: B2,
+    };
+    const older = make();
+    store.recordMutant(older, mutantRow("killed"));
+    const abandoned = make();
+    store.recordMutant(abandoned, mutantRow("killed"));
+    // Control: before the mark, the newer run is the one a resume finds.
+    expect(store.findResumableRun(q)).toBe(abandoned);
+    store.abandonRun(abandoned);
+    store.abandonRun(abandoned); // idempotent: no second suffix
+    expect(store.findResumableRun(q)).toBe(older);
+    expect(store.getRun(abandoned)?.configFingerprint).toBe("F|abandoned");
+    expect(store.getRun(abandoned)?.finished).toBe(false);
+  });
 });
 
 describe("campaign freeze is refused for v3 by name", () => {

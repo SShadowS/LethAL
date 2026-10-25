@@ -300,14 +300,16 @@ export class AlRunnerV3TransportFrozenError extends Error {
  * (`isNamedRefusalRow`). One-shot scores that test per test, so the session is to be re-run as
  * one-shot. The backend that threw it has closed its daemon and is thrown away by the caller; the
  * one-shot session gets a NEW backend that carries only `reason` (for the warning and the status).
+ * `abandonedRunId` is set by `runSession`, which marks that run so `--resume` skips it.
  */
 export class AlRunnerV3ServeFallbackWarmupError extends Error {
+  abandonedRunId?: number;
   constructor(
     readonly row: string,
     readonly rowReason: string,
   ) {
     super(
-      `al-runner-v3-serve-default-fallback-warmup: the serve-entries default met the warm-up row ${row}, which R612 refuses by name (${rowReason}); the session is re-run one-shot (R786)`,
+      `al-runner-v3-serve-default-fallback-warmup: the serve-entries default met the warm-up row ${row}, which R612 refuses by name (${rowReason}). \`lethal run\` (runFromCli) re-runs the session on one-shot; a caller of runSession directly gets this refusal and must do the same (R786)`,
     );
     this.name = "AlRunnerV3ServeFallbackWarmupError";
   }
@@ -1395,7 +1397,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (warmupFallback !== undefined) {
       this.notify(
         "al-runner-v3-serve-default-fallback-warmup",
-        `[lethal] al-runner-v3-serve-default-fallback-warmup: the serve-entries default stopped at the warm-up (${warmupFallback}), so this session was re-run one-shot, as an explicit "one-shot" run is. Nothing of the serve attempt is kept. Set "alRunnerV3.transport" to choose a transport yourself (R786).`,
+        `[lethal] al-runner-v3-serve-default-fallback-warmup: the serve-entries default stopped at the warm-up (${warmupFallback}), so this session was re-run one-shot, as an explicit "one-shot" run is. Nothing of the serve attempt is kept in this report; its run row stays in the store, marked so --resume skips it (the run id, if known, is in the parenthesis above). Set "alRunnerV3.transport" to choose a transport yourself (R786).`,
       );
     }
     if (reasons.length > 0) {
@@ -2686,21 +2688,34 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       // Build review r1 M1: a warm-up row R612 does not keep (a union test that times out under
       // NONE) would leave every later request on an untrusted daemon, and every fresh daemon repeats
       // it, so re-sending cannot help: refused by name before any mutant entry is sent.
+      const unkept: { readonly e: SentEntry; readonly bad: V3Row | undefined }[] = [];
       for (const e of sent) {
         const mine = rows.get(e.id) ?? [];
         if (serveDaemonReusable(serveLines(mine), "v3")) continue;
-        const bad = mine.find((r) => !serveDaemonReusable(serveLines([r]), "v3"));
+        const bad = mine.filter((r) => !serveDaemonReusable(serveLines([r]), "v3"));
+        if (bad.length === 0) unkept.push({ e, bad: undefined });
+        for (const b of bad) unkept.push({ e, bad: b });
+      }
+      const first = unkept[0];
+      if (first !== undefined) {
         // R786: the disagreement check above passed, so one-shot's baseline held the same rows. On
-        // the default transport a named refusal means "run one-shot"; anything else still refuses.
-        if (this.cfg.transportSource === "default" && bad !== undefined && isNamedRefusalRow(bad)) {
+        // the default transport "run one-shot" is right only when EVERY unkept row, in every entry,
+        // is a named refusal; one timeout or other unkept kind among them still refuses.
+        if (
+          this.cfg.transportSource === "default" &&
+          first.bad !== undefined &&
+          unkept.every((u) => u.bad !== undefined && isNamedRefusalRow(u.bad))
+        ) {
           throw new AlRunnerV3ServeFallbackWarmupError(
-            `${bad.name} (codeunit ${e.codeunit})`,
-            bad.message ?? "?",
+            `${first.bad.name} (codeunit ${first.e.codeunit})`,
+            first.bad.message ?? "?",
           );
         }
+        // Name the row that blocks the fallback when there is one, else the first unkept row.
+        const named = unkept.find((u) => u.bad === undefined || !isNamedRefusalRow(u.bad)) ?? first;
         throw new AlRunnerV3EntriesRefusedError(
           "al-runner-v3-entries-warmup-dirty",
-          `the warm-up row ${bad?.name ?? e.id} (codeunit ${e.codeunit}) is ${r672Unkept(bad) ?? "one R612 does not keep"} (${bad?.message ?? bad?.status ?? "?"}); every daemon repeats it, so no entry is trusted on any`,
+          `the warm-up row ${named.bad?.name ?? named.e.id} (codeunit ${named.e.codeunit}) is ${r672Unkept(named.bad) ?? "one R612 does not keep"} (${named.bad?.message ?? named.bad?.status ?? "?"}); every daemon repeats it, so no entry is trusted on any`,
         );
       }
     } catch (err) {

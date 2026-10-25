@@ -1514,6 +1514,20 @@ export class ResultsStore {
   }
 
   /**
+   * R786: marks an unfinished run so `findResumableRun` (and `--resume-run`, which compares the
+   * fingerprint) never picks it: the serve attempt that fell back to one-shot. Column-free: the run
+   * stays unfinished (so history never reads it as a completed run) and its config fingerprint gets
+   * a suffix no real fingerprint has. A finished run is left alone.
+   */
+  abandonRun(runId: number): void {
+    this.db
+      .query(
+        "UPDATE runs SET config_fingerprint = config_fingerprint || '|abandoned' WHERE id = ? AND finished_at IS NULL AND config_fingerprint NOT LIKE '%|abandoned'",
+      )
+      .run(runId);
+  }
+
+  /**
    * Stamps the run finished and, in the same transaction, prunes installed bundles (R360 I1) in
    * the finishing run's group, the runs with its `app_id` and `resource_key` (`IS`, so NULL groups
    * with NULL). The group's most recently PUBLISHED bundle (highest `installed_bundles` rowid, i.e.

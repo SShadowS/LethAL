@@ -41,7 +41,7 @@ generate types rather than discover a shape change by crashing on it. Draft 2020
 **Of the thirty-two files, twenty-seven are hand-written and five were generated, and the split is about SIZE
 rather than principle.** `explain` (a few dozen leaves; v21 and the kept v20, v19, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5 and v4), `doctor` (8) and
 `verify` (small, like `doctor`; v8 and the kept v7, v6, v5, v4, v3, v2 and v1) are hand-written; explain v21, `doctor` and
-verify v8 are pinned against their declarations, and explain v19, explain v18, explain v17, explain v16, explain v15, explain v14, explain v13, explain v12, explain v11, explain v10, explain v9, explain v8, explain v7, explain v6, explain v5, explain v4,
+verify v8 are pinned against their declarations, and explain v20, explain v19, explain v18, explain v17, explain v16, explain v15, explain v14, explain v13, explain v12, explain v11, explain v10, explain v9, explain v8, explain v7, explain v6, explain v5, explain v4,
 verify v7, verify v6, verify v5, verify v4, verify v3, verify v2 and verify v1 are frozen as they were published.
 Verify v5 bumped for two ADDED fields, which this page's rule alone would not do: their absence
 means "not decided" only from v5 on, while in a v4 document it means the document predates the

@@ -3506,6 +3506,43 @@ describe("R786: the serve-entries DEFAULT falls back on a warm-up row R612 refus
     expect(String(err)).toContain("al-runner-v3-entries-warmup-dirty");
   });
 
+  test("default + a named refusal FIRST and a timeout row after it (same entry): still refuses, naming the timeout", async () => {
+    const mixed: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        m !== "NONE"
+          ? x
+          : x.method === "A"
+            ? { ...x, status: "error" as const, notRun: true, message: COMPANY }
+            : x.method === "B"
+              ? { ...x, status: "error" as const, notRun: true, message: TIMEOUT_1S }
+              : x,
+      );
+    const r = asDefault(await rig({ serve: { rows: mixed } }));
+    await baseline(r.b, SUITE1);
+    const err = await prefetch(r);
+    expect(err).toBeInstanceOf(AlRunnerV3EntriesRefusedError);
+    expect(String(err)).toContain(`Codeunit${CU}.B`);
+    expect(String(err)).toContain(TIMEOUT_1S);
+  });
+
+  test("default + a named refusal in one codeunit and a timeout in another: still refuses", async () => {
+    const mixed: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        m !== "NONE"
+          ? x
+          : cu === CU && x.method === "A"
+            ? { ...x, status: "error" as const, notRun: true, message: COMPANY }
+            : cu === CU2
+              ? { ...x, status: "error" as const, notRun: true, message: TIMEOUT_1S }
+              : x,
+      );
+    const r = asDefault(await rig({ suite: SUITE2, serve: { rows: mixed } }));
+    await baseline(r.b, SUITE2);
+    const err = await r.b.prefetchMutants(plans(["M0001"], SUITE2)).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AlRunnerV3EntriesRefusedError);
+    expect(String(err)).toContain(TIMEOUT_1S);
+  });
+
   test("default + a timeout row (dirty, but not a refusal by name): still refuses", async () => {
     const r = asDefault(await rig({ serve: { rows: underNone(TIMEOUT_1S) } }));
     await baseline(r.b, SUITE1);
