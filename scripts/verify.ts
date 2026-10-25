@@ -254,6 +254,8 @@ export interface FailureScan {
   readonly fileOf: Map<string, string>;
   /** Per file: its passing tests that took 1 s or more (`name [ms]`), the stall's neighbours. */
   readonly slow: Map<string, string[]>;
+  /** R726b: the failing tests that timed out, in output order, as `file > name` (name alone if no file is known). */
+  readonly timedOut: string[];
 }
 
 /**
@@ -266,6 +268,7 @@ export function scanFailures(output: string, maxLines = 12): FailureScan {
   const details = new Map<string, string[]>();
   const fileOf = new Map<string, string>();
   const slow = new Map<string, string[]>();
+  const timedOut: string[] = [];
   let buf: string[] = [];
   let lastFail: string | undefined;
   let file = "";
@@ -302,15 +305,17 @@ export function scanFailures(output: string, maxLines = 12): FailureScan {
       }
       continue;
     }
-    if (/^\s*\^ this test timed out after /.test(line)) {
+    // R726b: a hook timeout reads `^ a beforeEach/afterEach/beforeAll hook timed out for this test.`
+    if (/^\s*\^ (this test|a .* hook) timed out/.test(line)) {
       const d = lastFail === undefined ? undefined : details.get(lastFail);
       if (d !== undefined) d.push(line.trim());
+      if (lastFail !== undefined) timedOut.push(file === "" ? lastFail : `${file} > ${lastFail}`);
       continue;
     }
     lastFail = undefined;
     buf.push(line.length > 300 ? `${line.slice(0, 300)}...` : line);
   }
-  return { details, fileOf, slow };
+  return { details, fileOf, slow, timedOut };
 }
 
 /** Failing tests whose detail verify prints to the console; the log file has the rest. */
@@ -405,13 +410,19 @@ export function completeness(
 /**
  * The env for the `bun test` child: `CI=true` unless the opt-out is set. The opt-out also REMOVES
  * an inherited `CI`, so "guard off" really means bun may create a snapshot.
+ * R726c: the child's `CI` is always true, so it cannot tell the Windows CI job from a local run.
+ * `ownFloorMs` (set by `testTimeout` on Windows CI only) goes to the child as OWN_TIMEOUT_FLOOR_ENV
+ * for `ownTimeout`; an inherited value is always dropped, so only verify can set it.
  */
-export function testChildEnv(base: Env): Env {
-  if (base[ALLOW_SNAPSHOT_CREATE] === "1") {
-    const { CI: _ci, ...rest } = base;
-    return rest;
+export const OWN_TIMEOUT_FLOOR_ENV = "LETHAL_VERIFY_OWN_TIMEOUT_FLOOR";
+export function testChildEnv(base: Env, ownFloorMs?: number): Env {
+  const { [OWN_TIMEOUT_FLOOR_ENV]: _floor, ...clean } = base;
+  const floor = ownFloorMs !== undefined ? { [OWN_TIMEOUT_FLOOR_ENV]: String(ownFloorMs) } : {};
+  if (clean[ALLOW_SNAPSHOT_CREATE] === "1") {
+    const { CI: _ci, ...rest } = clean;
+    return { ...rest, ...floor };
   }
-  return { ...base, CI: "true" };
+  return { ...clean, CI: "true", ...floor };
 }
 
 /**
@@ -1012,10 +1023,11 @@ export function testTimeout(
   pressure: string | undefined,
   platform: string,
   ci: boolean,
-): { ms: number; line: string } {
+): { ms: number; line: string; ownFloorMs?: number } {
   if (platform === "win32" && ci) {
     return {
       ms: WINDOWS_CI_TIMEOUT_MS,
+      ownFloorMs: WINDOWS_CI_TIMEOUT_MS, // R726c: also the floor for tests' own timeouts (OWN_TIMEOUT_FLOOR_ENV)
       line: `per-test timeout: ${WINDOWS_CI_TIMEOUT_MS} ms (Windows CI, R726: single-worker I/O stalls on the runner)`,
     };
   }
@@ -1202,6 +1214,8 @@ export interface TestStepPlan {
   readonly changedSha?: string;
   /** R616b: bun's `--timeout`, only when raised (`testTimeout`); none keeps bun's 5000 ms. */
   readonly timeoutMs?: number;
+  /** R726c: floor for tests' own timeouts, from `testTimeout` (Windows CI only). */
+  readonly ownFloorMs?: number;
 }
 
 /** The scope a line names. `all` is produced only for mode `full`. */
@@ -1232,7 +1246,7 @@ export async function testStep(
   const before = io.snapState();
   const t = await io.exec(
     testCommand(plan.mode, plan.p, plan.changedSha, junit, plan.timeoutMs),
-    testChildEnv(io.env),
+    testChildEnv(io.env, plan.ownFloorMs),
   );
   const after = io.snapState();
   const summary = parseTestSummary(t.output);
@@ -1266,6 +1280,9 @@ export async function testStep(
         `  ... error text shown for the first ${DETAIL_CAP} of ${summary.failing.length} failing tests; the log has the rest`,
       );
     if (!ok) code = 1;
+    // R726b: one line naming every timed-out test, so the CI console shows them without the log.
+    if (scan.timedOut.length > 0)
+      lines.push(`timed out (${scan.timedOut.length}): ${scan.timedOut.join("; ")}`);
     if (plan.mode.kind === "full") {
       const junitFiles = [...new Set(parseJunit(io.readJunit(junit)).map((c) => c.file))];
       const gap = completeness(io.expectedTestFiles(), summary.files, junitFiles);
@@ -1473,7 +1490,11 @@ export async function runVerify(
   let step: Awaited<ReturnType<typeof testStep>>;
   try {
     step = await testStep(
-      { ...plan, ...(timeout.ms !== DEFAULT_TIMEOUT_MS ? { timeoutMs: timeout.ms } : {}) },
+      {
+        ...plan,
+        ...(timeout.ms !== DEFAULT_TIMEOUT_MS ? { timeoutMs: timeout.ms } : {}),
+        ...(timeout.ownFloorMs !== undefined ? { ownFloorMs: timeout.ownFloorMs } : {}),
+      },
       io,
     );
   } finally {

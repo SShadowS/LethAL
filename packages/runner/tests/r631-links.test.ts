@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { initParser } from "@lethal/engine";
+import { ownTimeout } from "@lethal/engine/own-timeout";
 import { alRunnerCoverageSupport } from "../src/al-runner-coverage";
 import { buildPackageCacheCopy } from "../src/artifact";
 import {
@@ -577,34 +578,38 @@ describe("R631 review r2 N3: the reaches-a-.al scan", () => {
   // R636 test 2: the visited set, not the cap, ends a link cycle. Revert (drop the visited set):
   // the cycle runs to the folder cap and refuses, so the no-.al case goes red (bounded by the
   // test's own timeout).
-  test("R636: a 2-link cycle with no .al finishes, admitted, in 2 folders; the same cycle holding a .al refuses", async () => {
-    for (const withAl of [false, true]) {
-      const cyc = scratch("lethal-r636-");
-      put(cyc, "src/A.al", CODEUNIT);
-      mkdirSync(join(cyc, "node_modules", "a"), { recursive: true });
-      mkdirSync(join(cyc, "node_modules", "b"), { recursive: true });
-      if (withAl) put(cyc, join("node_modules", "b", "B.al"), CODEUNIT);
-      symlinkSync(
-        join(cyc, "node_modules", "b"),
-        join(cyc, "node_modules", "a", "to-b"),
-        "junction",
-      );
-      symlinkSync(
-        join(cyc, "node_modules", "a"),
-        join(cyc, "node_modules", "b", "to-a"),
-        "junction",
-      );
-      const before = reachStats.foldersScanned;
-      const e = await refusalOf(refuseProjectLinks([cyc]));
-      if (withAl) {
-        expect(e).toBeInstanceOf(ProjectSymlinkRefusedError);
-        expect((e as Error).message).toContain("reaches a .al file");
-      } else {
-        expect(e).toBeUndefined();
-        expect(reachStats.foldersScanned - before).toBe(2);
+  test(
+    "R636: a 2-link cycle with no .al finishes, admitted, in 2 folders; the same cycle holding a .al refuses",
+    async () => {
+      for (const withAl of [false, true]) {
+        const cyc = scratch("lethal-r636-");
+        put(cyc, "src/A.al", CODEUNIT);
+        mkdirSync(join(cyc, "node_modules", "a"), { recursive: true });
+        mkdirSync(join(cyc, "node_modules", "b"), { recursive: true });
+        if (withAl) put(cyc, join("node_modules", "b", "B.al"), CODEUNIT);
+        symlinkSync(
+          join(cyc, "node_modules", "b"),
+          join(cyc, "node_modules", "a", "to-b"),
+          "junction",
+        );
+        symlinkSync(
+          join(cyc, "node_modules", "a"),
+          join(cyc, "node_modules", "b", "to-a"),
+          "junction",
+        );
+        const before = reachStats.foldersScanned;
+        const e = await refusalOf(refuseProjectLinks([cyc]));
+        if (withAl) {
+          expect(e).toBeInstanceOf(ProjectSymlinkRefusedError);
+          expect((e as Error).message).toContain("reaches a .al file");
+        } else {
+          expect(e).toBeUndefined();
+          expect(reachStats.foldersScanned - before).toBe(2);
+        }
       }
-    }
-  }, 20_000);
+    },
+    ownTimeout(20_000),
+  );
 
   test("many links to one store scan each store folder once per walk", async () => {
     const base = scratch("lethal-r631-");

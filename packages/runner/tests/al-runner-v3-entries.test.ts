@@ -3,13 +3,18 @@
 // docs/superpowers/plans/2026-10-22-r635-v3-serve-entries.md (r3) §9, tests 1-13 and 16-21; the
 // orchestrator's seams (tests 14, 15) are in orchestrator.test.ts. Call counters, no wall clock.
 import { afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
-import { appendFileSync } from "node:fs";
-import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFileSync, existsSync } from "node:fs";
+import { appendFile, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { initParser } from "@lethal/engine";
 import { emitResourceSelector, emitStaticSelector } from "@lethal/schemata";
-import { v3ItestTransport, v3SplitLine } from "../itest/al-runner-v3-gate";
+import {
+  V3_GATE_SERVE_LEGS,
+  v3ItestLegTransport,
+  v3ItestTransport,
+  v3SplitLine,
+} from "../itest/al-runner-v3-gate";
 import {
   AlRunnerServer,
   AlRunnerServerRequestError,
@@ -41,7 +46,7 @@ import {
   encodeGroups,
   assertEntriesWellFormed as wellFormed,
 } from "../src/al-runner-v3-entries";
-import type { ArtifactIo } from "../src/artifact";
+import { AlcCompileError, type ArtifactIo, ArtifactPrepareError } from "../src/artifact";
 import type { RunOpts, TestMethodRef, TestVerdict } from "../src/backend";
 import { buildBackend } from "../src/cli";
 import type { SpawnFn } from "../src/publisher";
@@ -481,6 +486,8 @@ interface RigOpts {
   now?: () => number;
   /** R778: the kill-pair batch after the prefetch; off unless a test asks, so R653's tests see today's pair. */
   pairBatch?: boolean;
+  /** R790: backend test seams, set before the deploy. */
+  seams?: AlRunnerV3Backend["seams"];
 }
 
 async function rig(opts: RigOpts = {}): Promise<Rig> {
@@ -511,6 +518,7 @@ async function rig(opts: RigOpts = {}): Promise<Rig> {
   b.useDiscoveredTests(suite);
   b.useSessionTests(suite);
   if (opts.floor !== false) b.useMutantBudgetFloor(...(opts.floor ?? [1000, 1000]));
+  Object.assign(b.seams, opts.seams ?? {});
   await b.deploy(l.batch);
   return { l, b, serve, one };
 }
@@ -2213,6 +2221,39 @@ describe("the gate's transport flags (itest:alrunner-v3 harness)", () => {
       /SECOND_ECHO is set without/,
     );
   });
+  test("R788: unflagged, exactly D1, D1c and T run serve-entries; a flag names every leg's transport", () => {
+    const serve = { transport: "serve-entries" } as const;
+    for (const leg of ["D1", "D1c", "T"]) expect(v3ItestLegTransport(leg, {})).toEqual(serve);
+    for (const leg of [
+      "C",
+      "S1",
+      "S1E",
+      "S3",
+      "N1",
+      "N1E",
+      "N1S",
+      "O1",
+      "X",
+      "L1",
+      "Y-A",
+      "Y-B",
+      "MO",
+      "WR",
+      "K",
+    ])
+      expect(v3ItestLegTransport(leg, {})).toEqual({});
+    expect(V3_GATE_SERVE_LEGS).toEqual(["D1", "D1c", "T"]);
+    expect(v3ItestLegTransport("D1", { LETHAL_ITEST_V3_TRANSPORT: "one-shot" })).toEqual({});
+    expect(
+      v3ItestLegTransport("S1", {
+        LETHAL_ITEST_V3_TRANSPORT: "serve-entries",
+        LETHAL_ITEST_V3_SECOND_ECHO: "0",
+      }),
+    ).toEqual({ transport: "serve-entries", secondEcho: false });
+    expect(() => v3ItestLegTransport("D1", { LETHAL_ITEST_V3_SECOND_ECHO: "0" })).toThrow(
+      /SECOND_ECHO is set without/,
+    );
+  });
 });
 
 describe("R651: per-phase wall timers, timing only", () => {
@@ -2291,6 +2332,16 @@ describe("R651: per-phase wall timers, timing only", () => {
       boundMs: 0,
       boundChecks: 4,
     });
+  });
+
+  test("R785: the lane rule's warm-up is lane 0's LATEST daemon start, not the session total", async () => {
+    const { r, clock } = await clockedRig();
+    await scenario(r, clock);
+    expect([r.b.laneWarmupMs(), r.b.laneDaemonStarts()]).toEqual([1, 1]);
+    await r.b.deploy(r.l.batch); // closes the daemon: the next batch warms a new one
+    await scenario(r, clock);
+    expect(r.b.entriesStats().warmupMs).toBe(2); // the session total grew ...
+    expect([r.b.laneWarmupMs(), r.b.laneDaemonStarts()]).toEqual([1, 2]); // ... the rule's figure did not
   });
 
   test("boundMs counts only the check: under a clock that moves 1 per read, 1 per check", async () => {
@@ -3627,7 +3678,8 @@ describe("R761: a real first spawn freezes the transport decision", () => {
   });
 
   test("a daemon start (startDaemon) freezes it", async () => {
-    const r = await rig();
+    // R790: no speculative baseline, whose one-shot calls in deploy() would freeze it first.
+    const r = await rig({ seams: { noSpeculativeBaseline: true } });
     // The one-shot baseline spawn would freeze it; a daemon start alone must too.
     const priv = r.b as unknown as { startDaemon(lane: unknown): Promise<unknown>; lane: unknown };
     await priv.startDaemon(priv.lane);
@@ -4092,6 +4144,346 @@ describe("R778: kill pairs batched after the prefetch", () => {
       expect(r.serve.requests.length).toBe(n0 + 3);
       expect(batchStats(r)).toMatchObject({ served: 0, refused: 0 });
       expect(r.b.entriesStats().pairRequests).toBe(2);
+    });
+  });
+});
+
+// R790 (A1, the owner's Design A): deploy() runs the baseline's one-shot calls while alc proves the
+// batch, keeps their answers private, still waits for alc, and serves them once only when every byte
+// they read is a byte the proof records. Call counters on the fakes, no wall clock.
+describe("R790: the speculative baseline", () => {
+  /** alc that rejects (or cannot start) the BATCH compile only; the test-app compile passes. */
+  const batchAlc = (how: "reject" | "spawn"): ArtifactIo => {
+    const ok = fakeAlc();
+    return {
+      ...ok,
+      spawn: async (argv, o) => {
+        const out = (argv.find((a) => a.startsWith("/out:")) ?? "").slice(5);
+        if (!out.includes("v3-batch")) return ok.spawn(argv, o);
+        if (how === "spawn") throw new Error("alc could not be started");
+        const project = (argv.find((a) => a.startsWith("/project:")) ?? "").slice(9);
+        return {
+          exitCode: 1,
+          stdout: `${project}/src/Logic.al(1,1): error AL0118: boom`,
+          stderr: "",
+        };
+      },
+    };
+  };
+  /** alc that passes, after `write(project, isBatch)` ran inside the compile's project dir. */
+  const writingAlc = (write: (project: string, isBatch: boolean) => Promise<void>): ArtifactIo => {
+    const ok = fakeAlc();
+    return {
+      ...ok,
+      spawn: async (argv, o) => {
+        const out = (argv.find((a) => a.startsWith("/out:")) ?? "").slice(5);
+        await write(
+          (argv.find((a) => a.startsWith("/project:")) ?? "").slice(9),
+          out.includes("v3-batch"),
+        );
+        return ok.spawn(argv, o);
+      },
+    };
+  };
+  async function deployWith(
+    alc: ArtifactIo | undefined,
+    speculate: boolean,
+    o: {
+      rows?: RowsFn;
+      floor?: readonly [number, number];
+      seams?: (l: Layout) => AlRunnerV3Backend["seams"];
+      /** Option 4: a cache dir shared by deploys. */
+      cacheDir?: string;
+    } = {},
+  ) {
+    const l = await layout(TARGET_AL, SUITE1);
+    const one = fakeOneShot(o.rows ?? allPass);
+    const serve = fakeServe();
+    const b = new AlRunnerV3Backend(
+      {
+        alRunnerPath: "/fake/al-runner",
+        instrumentedDir: l.scratch,
+        testDir: l.testDir,
+        packagesDir: l.deps,
+        bcVersion: "28.0.46665.47126",
+        selectorObjectId: SELECTOR_ID,
+        alcPath: "/fake/alc",
+        coverage: "none",
+        transport: "serve-entries",
+        ...(o.cacheDir !== undefined ? { cacheDir: o.cacheDir } : {}),
+      },
+      one.spawn,
+      alc ?? fakeAlc(),
+      serve.spawn,
+    );
+    b.useBuildSymbols([]);
+    b.useDiscoveredTests(SUITE1);
+    b.useSessionTests(SUITE1);
+    b.useMutantBudgetFloor(...(o.floor ?? [1000, 1000]));
+    if (!speculate) b.seams.noSpeculativeBaseline = true;
+    Object.assign(b.seams, o.seams?.(l) ?? {});
+    const err = await b.deploy(l.batch).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    return { l, b, one, err };
+  }
+  const speculative = (b: AlRunnerV3Backend) =>
+    (b as unknown as { speculative: unknown }).speculative;
+  // Both separator forms: on Windows the message holds forward slashes, the root backslashes.
+  const fwd = (s: string) => s.replaceAll("\\", "/");
+  const shape = (e: unknown, root: string) =>
+    e instanceof Error
+      ? [e.constructor.name, fwd(e.message).split(fwd(root)).join("<root>")]
+      : [String(e)];
+  /** A write alc made, with an mtime clearly after the staging (coarse clocks would hide it). */
+  const alcWrite = async (path: string, text: string) => {
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, text);
+    const later = new Date(Date.now() + 60_000);
+    await utimes(path, later, later);
+  };
+
+  test("alc passes: the baseline is served from the calls deploy() made, equal to the sequential baseline", async () => {
+    const spec = await deployWith(undefined, true);
+    const seq = await deployWith(undefined, false);
+    expect([spec.err, seq.err]).toEqual([undefined, undefined]);
+    // The speculative calls ran inside deploy(): one per suite codeunit; the sequential deploy made none.
+    expect(spec.one.calls).toHaveLength(1);
+    expect(seq.one.calls).toHaveLength(0);
+    const a = await baseline(spec.b, SUITE1);
+    const s = await baseline(seq.b, SUITE1);
+    // Served, not re-run: no new one-shot call in the baseline; the sequential one made its call there.
+    expect(spec.one.calls).toHaveLength(1);
+    expect(seq.one.calls).toHaveLength(1);
+    const plain = (vs: TestVerdict[]) => vs.map((v) => ({ ...v, durationMs: 0 }));
+    expect(plain(a)).toEqual(plain(s));
+  });
+
+  test("served once: a second baseline runs live", async () => {
+    const r = await deployWith(undefined, true);
+    await baseline(r.b, SUITE1);
+    expect(r.one.calls).toHaveLength(1);
+    await baseline(r.b, SUITE1);
+    expect(r.one.calls).toHaveLength(2);
+  });
+
+  test("alc rejects: deploy() throws today's AlcCompileError, with the batch's own path, and nothing is kept", async () => {
+    const spec = await deployWith(batchAlc("reject"), true);
+    const seq = await deployWith(batchAlc("reject"), false);
+    expect(spec.err).toBeInstanceOf(AlcCompileError);
+    expect(shape(spec.err, spec.l.root)).toEqual(shape(seq.err, seq.l.root));
+    expect((spec.err as Error).message).not.toContain("alc-src");
+    expect(speculative(spec.b)).toBeUndefined();
+    // Nothing can reach a baseline or a store: there is no deployed batch.
+    await expect(spec.b.activate(null)).rejects.toThrow("before a successful deploy");
+  });
+
+  test("alc cannot start: ArtifactPrepareError aborts as today, and nothing is kept", async () => {
+    const spec = await deployWith(batchAlc("spawn"), true);
+    const seq = await deployWith(batchAlc("spawn"), false);
+    expect(spec.err).toBeInstanceOf(ArtifactPrepareError);
+    expect(spec.err).not.toBeInstanceOf(AlcCompileError);
+    expect(shape(spec.err, spec.l.root)).toEqual(shape(seq.err, seq.l.root));
+    expect(speculative(spec.b)).toBeUndefined();
+  });
+
+  test("a byte that changes while the calls run: never served, the baseline runs live", async () => {
+    const l = await layout(TARGET_AL, SUITE1);
+    const one = fakeOneShot(allPass);
+    const b = new AlRunnerV3Backend(
+      {
+        alRunnerPath: "/fake/al-runner",
+        instrumentedDir: l.scratch,
+        testDir: l.testDir,
+        packagesDir: l.deps,
+        bcVersion: "28.0.46665.47126",
+        selectorObjectId: SELECTOR_ID,
+        alcPath: "/fake/alc",
+        coverage: "none",
+        transport: "serve-entries",
+      },
+      one.spawn,
+      fakeAlc(),
+      fakeServe().spawn,
+    );
+    b.useBuildSymbols([]);
+    b.useDiscoveredTests(SUITE1);
+    b.useSessionTests(SUITE1);
+    b.useMutantBudgetFloor(1000, 1000);
+    // The test dir changes after the speculative calls read it (and before the proof reads it).
+    b.seams.afterSpeculation = async () => {
+      await writeFile(join(l.testDir, "Late.Codeunit.al"), 'codeunit 79999 "Late" { }');
+    };
+    await b.deploy(l.batch);
+    expect(one.calls).toHaveLength(1);
+    expect(speculative(b)).toBeUndefined();
+    await baseline(b, SUITE1);
+    expect(one.calls).toHaveLength(2);
+  });
+
+  // Review 1: a NON-.al file the proof records (the test-app compile's Translations/*.g.xlf), written
+  // after the calls joined: before and after agree, only the proof differs. Red if the key drops the
+  // other files (a Map serialises as "{}").
+  test("an .xlf the test-app compile writes into the test dir: never served", async () => {
+    const r = await deployWith(
+      writingAlc(async (project, isBatch) => {
+        if (isBatch) return;
+        await mkdir(join(project, "Translations"), { recursive: true });
+        await writeFile(join(project, "Translations", "Tests.g.xlf"), "<xliff/>");
+      }),
+      true,
+    );
+    expect(r.err).toBeUndefined();
+    expect(speculative(r.b)).toBeUndefined();
+    await baseline(r.b, SUITE1);
+    expect(r.one.calls).toHaveLength(2);
+  });
+
+  // The "after" check alone: a change while the calls ran, undone before the proof read.
+  test("a byte that changes during the calls and changes back before the proof: never served", async () => {
+    const late = (l: Layout) => join(l.testDir, "Late.Codeunit.al");
+    let at = "";
+    const r = await deployWith(
+      writingAlc(async (_p, isBatch) => {
+        if (!isBatch && at !== "") await rm(at, { force: true });
+      }),
+      true,
+      {
+        seams: (l) => ({
+          afterSpeculation: async () => {
+            at = late(l);
+            await writeFile(at, 'codeunit 79999 "Late" { }');
+          },
+        }),
+      },
+    );
+    expect(r.err).toBeUndefined();
+    expect(speculative(r.b)).toBeUndefined();
+    await baseline(r.b, SUITE1);
+    expect(r.one.calls).toHaveLength(2);
+  });
+
+  // Review 2: a call that ran out of time beside alc may not be what a live call answers.
+  test("a speculative call with a timeout row is not kept: that baseline call runs live", async () => {
+    const timesOutA: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        x.method === "A" ? { ...x, status: "error" as const, message: TIMEOUT_1S } : x,
+      );
+    const r = await deployWith(undefined, true, { rows: timesOutA });
+    expect(r.one.calls).toHaveLength(1);
+    await baseline(r.b, SUITE1);
+    expect(r.one.calls).toHaveLength(2);
+  });
+
+  // Review r2 #1: a served duration must not be able to move a mutant budget (max(2 x d, floor)).
+  test("a call whose duration the floor would not cover is not kept: that baseline call runs live", async () => {
+    // A 0 ms floor: twice any wall time (the fake's can be 0 ms) reaches it, so the duration would
+    // decide the budget.
+    const r = await deployWith(undefined, true, { floor: [0, 1000] });
+    expect(r.one.calls).toHaveLength(1);
+    expect(speculative(r.b)).not.toBeUndefined(); // bound, but the call itself was not kept
+    await baseline(r.b, SUITE1);
+    expect(r.one.calls).toHaveLength(2);
+  });
+
+  test("a baseline call at another stop than the speculative one: not served", async () => {
+    // The floor's baseline timeout (5 s) is not the baseline's run budget (OPTS: 1 s).
+    const r = await deployWith(undefined, true, { floor: [1000, 5000] });
+    expect(r.one.calls).toHaveLength(1);
+    await baseline(r.b, SUITE1);
+    expect(r.one.calls).toHaveLength(2);
+  });
+
+  // Review 4: what alc writes into its project still reaches the batch v3 reads, as before R790.
+  test("a file alc writes into the copy it compiles is copied into the batch", async () => {
+    const r = await deployWith(
+      writingAlc(async (project, isBatch) => {
+        if (!isBatch) return;
+        await alcWrite(join(project, "Translations", "T.g.xlf"), "<xliff/>");
+      }),
+      true,
+    );
+    expect(r.err).toBeUndefined();
+    const active = (r.b as unknown as { lane: { activeDir(): string } }).lane.activeDir();
+    expect(await readFile(join(active, "Translations", "T.g.xlf"), "utf8")).toBe("<xliff/>");
+    // The calls read the batch without it, so they are not served.
+    expect(speculative(r.b)).toBeUndefined();
+  });
+
+  // Option 4 (ruling): alc's writes are cached by the batch's .al hash and app.json, and placed into
+  // the next identical batch before the calls; alc's real output is the judge.
+  describe("option 4: alc's writes from an identical batch, placed before the calls", () => {
+    const xlfAlc = (content: () => string | undefined) =>
+      writingAlc(async (project, isBatch) => {
+        const c = content();
+        if (!isBatch || c === undefined) return;
+        await alcWrite(join(project, "Translations", "T.g.xlf"), c);
+      });
+    const activeOf = (b: AlRunnerV3Backend) =>
+      (b as unknown as { lane: { activeDir(): string } }).lane.activeDir();
+    const cacheDir = async () => {
+      const d = await mkdtemp(join(tmpdir(), "lethal-r790-cache-"));
+      roots.push(d);
+      return d;
+    };
+
+    test("a cached .xlf equal to alc's output: the warm run is served", async () => {
+      const cache = await cacheDir();
+      const cold = await deployWith(
+        xlfAlc(() => "<xliff a/>"),
+        true,
+        { cacheDir: cache },
+      );
+      expect(speculative(cold.b)).toBeUndefined(); // cold: nothing cached yet
+      const warm = await deployWith(
+        xlfAlc(() => "<xliff a/>"),
+        true,
+        { cacheDir: cache },
+      );
+      expect(warm.err).toBeUndefined();
+      expect(speculative(warm.b)).not.toBeUndefined();
+      await baseline(warm.b, SUITE1);
+      expect(warm.one.calls).toHaveLength(1); // served: no live call in the baseline
+      expect(await readFile(join(activeOf(warm.b), "Translations", "T.g.xlf"), "utf8")).toBe(
+        "<xliff a/>",
+      );
+    });
+
+    test("a cached .xlf that differs from alc's output: not served, and the batch holds alc's bytes", async () => {
+      const cache = await cacheDir();
+      await deployWith(
+        xlfAlc(() => "<xliff a/>"),
+        true,
+        { cacheDir: cache },
+      );
+      const warm = await deployWith(
+        xlfAlc(() => "<xliff b/>"),
+        true,
+        { cacheDir: cache },
+      );
+      expect(speculative(warm.b)).toBeUndefined();
+      expect(await readFile(join(activeOf(warm.b), "Translations", "T.g.xlf"), "utf8")).toBe(
+        "<xliff b/>",
+      );
+      await baseline(warm.b, SUITE1);
+      expect(warm.one.calls).toHaveLength(2);
+    });
+
+    test("a cached file alc does not write this time: removed from the batch, not served", async () => {
+      const cache = await cacheDir();
+      await deployWith(
+        xlfAlc(() => "<xliff a/>"),
+        true,
+        { cacheDir: cache },
+      );
+      const warm = await deployWith(
+        xlfAlc(() => undefined),
+        true,
+        { cacheDir: cache },
+      );
+      expect(speculative(warm.b)).toBeUndefined();
+      expect(existsSync(join(activeOf(warm.b), "Translations", "T.g.xlf"))).toBe(false);
     });
   });
 });

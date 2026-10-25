@@ -32,8 +32,8 @@ scripts/r289-probe/sidecar-creds.*.json
 # Local MCP server config — contains credentials
 .mcp.json
 
-# AL symbol packages (large, machine-local)
-.alpackages/
+# AL symbol packages (large, machine-local). No trailing slash (R787): a symlinked .alpackages is ignored too.
+.alpackages
 # R614: which symbol tar a worktree's fixture .alpackages match (written by prepareFixtureSymbols)
 /.fixture-symbols.sha256
 

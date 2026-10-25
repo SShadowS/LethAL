@@ -22,6 +22,7 @@ import {
   applyTPin,
   findV3Pin,
   pinPattern,
+  serveRowFieldsFor,
   sleepRuleRetiredFor,
 } from "../src/al-runner-v3-pins";
 
@@ -729,15 +730,22 @@ describe("R771: the edge build a157b2d34 (alpha.5's readings plus N1E)", () => {
     expect(now.lines.filter((l) => l.startsWith("pinned: ")).length).toBe(7);
     const old = run(need(ALPHA5["duplicate-key-insert-raises"]).measured);
     expect(old.outcome).toBe("held");
-    expect(old.lines).toContain("pin-mismatch: duplicate-key-insert-raises: pinned refused, read refused");
+    expect(old.lines).toContain(
+      "pin-mismatch: duplicate-key-insert-raises: pinned refused, read refused",
+    );
     // The alpha.5 and dcdf9e821 pins keep the old text.
     expect(need(need(pin).legC["duplicate-key-insert-raises"]).measured.test(NEW)).toBe(false);
   });
-  test("only this pin carries n1e", () => {
-    expect(need(aPin).n1e?.issue).toMatch(/\/5798$/);
-    expect(V3_BUILD_PINS.filter((p) => p.n1e !== undefined).map((p) => p.id)).toEqual([
+  test("only this pin carries serveRowFields (#5798 fixed), and the lookup keys on version AND sha", () => {
+    expect(need(aPin).serveRowFields?.issue).toMatch(/\/5798$/);
+    expect(V3_BUILD_PINS.filter((p) => p.serveRowFields !== undefined).map((p) => p.id)).toEqual([
       "edge-a157b2d34",
     ]);
+    expect(serveRowFieldsFor(A_VERSION, A_SHA)).toBe(true);
+    expect(serveRowFieldsFor(A_VERSION, flip(A_SHA))).toBe(false);
+    expect(serveRowFieldsFor("al-runner 3.0.0-alpha.5 (x)", A_SHA)).toBe(false);
+    expect(serveRowFieldsFor(need(pin).version, need(pin).binarySha256)).toBe(false);
+    expect(serveRowFieldsFor(EDGE_VERSION, EDGE_SHA)).toBe(false);
   });
   test("the session's sleep rule is retired for it when the probe reads gone", () => {
     const probe = (verdict: "gone" | "defect-present"): V3ContractResult => ({

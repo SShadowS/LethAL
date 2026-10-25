@@ -222,10 +222,26 @@ function countsOf(rows: readonly V3Row[]): Counts {
   };
 }
 
-/** One serve test line as a `V3Row` (`Codeunit<n>.<method>`), or why it is not one. */
-export function serveRow(line: Readonly<Record<string, unknown>>): V3Row | string {
+/**
+ * One serve test line as a `V3Row` (`Codeunit<n>.<method>`), or why it is not one. R782: with
+ * `fields` (a build whose pin records #5798 fixed) the codeunit and method come from the row's own
+ * `codeunit` and `method`, both required, and `name` must equal `Codeunit<codeunit>.<method>`;
+ * without it the name is parsed and a dotted method never matches (today's refusal).
+ */
+export function serveRow(line: Readonly<Record<string, unknown>>, fields = false): V3Row | string {
   const { name, status, message, notRun, durationMs } = line;
-  const m = typeof name === "string" ? /^Codeunit(\d+)\.([^.]+)$/.exec(name) : null;
+  let m: RegExpExecArray | string[] | null = null;
+  if (fields) {
+    const { codeunit, method } = line;
+    if (typeof codeunit === "number" && Number.isInteger(codeunit) && typeof method === "string") {
+      if (name !== `Codeunit${codeunit}.${method}`) {
+        return `a test line whose codeunit/method disagree with its name (R782): ${JSON.stringify(line).slice(0, 200)}`;
+      }
+      m = [String(name), String(codeunit), method];
+    }
+  } else if (typeof name === "string") {
+    m = /^Codeunit(\d+)\.([^.]+)$/.exec(name);
+  }
   if (
     m === null ||
     (status !== "pass" && status !== "fail" && status !== "error") ||
@@ -255,6 +271,7 @@ export function serveRow(line: Readonly<Record<string, unknown>>): V3Row | strin
 export function decodeEntriesAnswer(
   sent: readonly SentEntry[],
   answer: EntriesAnswer,
+  fields = false,
 ): { readonly rows: ReadonlyMap<string, readonly V3Row[]> } | { readonly why: string } {
   const ids = answer.entrySummaries.map((s) => String(s.entry));
   if (ids.join("\n") !== sent.map((e) => e.id).join("\n")) {
@@ -266,7 +283,7 @@ export function decodeEntriesAnswer(
     const id = String(t.entry);
     const e = byId.get(id);
     if (e === undefined) return { why: `a row names entry ${id}, which was not sent` };
-    const r = serveRow(t);
+    const r = serveRow(t, fields);
     if (typeof r === "string") return { why: r };
     if (r.codeunit !== e.codeunit) {
       return { why: `entry ${id} holds ${r.name}, not a row of codeunit ${e.codeunit}` };

@@ -13,6 +13,20 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **Tests with their own short timeout get 60 s on the Windows CI job** (R726c): `ownTimeout()` in
+  `@lethal/engine/own-timeout` raises a test's own timeout to at least verify's shared 60 s there, because a test's own
+  timeout wins over `--timeout`. Verify tells the test child through `LETHAL_VERIFY_OWN_TIMEOUT_FLOOR`, set only on
+  Windows CI (the child's `CI` is always true, so it cannot tell by itself). Linux and local runs are unchanged. A
+  guard test fails on a short own timeout left unwrapped, whether a literal, a constant or a computed value. R726 records the ruling: no Defender exclusion and no diagnostic step.
+- **Verify's console names every test that timed out in one line** (R726b): `timed out (N): <file> > <test>; ...`,
+  after the failure list. Hook timeouts count too, and each test is named under its own file. A run with no timeout
+  prints no such line. R726 also records two more Windows CI stalls since
+  its mitigation, and no proven cause.
+
+- **Leg C's `timeout-is-cpu` no longer reads `diverged` on a correct build when the machine is busy** (R789). It now
+  pins both calls and the busy loops to the least busy core (two `/proc/stat` samples; core 0 if unreadable), and a
+  stopped run A that took over 3000 ms reads `unmeasurable` (core contended), not `diverged`. A build that counts
+  wall time still reads `diverged`.
 - **The serve order probe is leg O1 of the al-runner-v3 update gate** (R784). One serve daemon takes Writer and
   Reader entries in five request shapes; any state a Reader entry sees from a Writer entry fails the gate, so a build
   that stops isolating entries cannot become `current`. R778's kill-pair batching rests on that isolation.

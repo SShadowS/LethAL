@@ -115,6 +115,15 @@ The legs:
   (`al-runner-v3-resource-selector-refused`).
 - N1: the names fixture (R557's tests are unselectable on v3, upstream #5572).
 - X (a) to (f): the compile proof, the binding checks and the Sleep rule (§6) on `scripts/r586-probe`.
+- **Transport per leg (R788; pre-commitment `docs/superpowers/specs/2026-10-25-r788-serve-big-legs-precommitment.md`,
+  master 1d6474bb).** Unflagged: D1, D1c and T run serve-entries (`V3_GATE_SERVE_LEGS`, `v3ItestLegTransport`); S1E,
+  N1E, N1S and O1 run serve-entries by construction; K runs the CLI's own default (serve-entries for sandbox-app since
+  R761); C, S1, S3, N1, X, L1, Y-A, Y-B, MO and WR run one-shot, so S1, N1, MO and WR keep the one-shot path gated.
+  `LETHAL_ITEST_V3_TRANSPORT` still names one transport for the flag-following legs (`one-shot` reproduces the
+  pre-R788 gate). On serve, D1 532 -> 32 s, D1c 462 -> 31 s, T 161 -> 30 s, with every count, per-mutant row, note and
+  warning identical to one-shot. Each serve leg asserts `pairRequests` = killed and zero echo mismatches, fallbacks
+  and refused batches (`assertServeCounters`). A T re-record now records from a serve session unless
+  `LETHAL_ITEST_V3_TRANSPORT=one-shot` is set (the rows were measured identical on both transports).
 - D1, D1c: the Continia Document Output slice, compared per mutant with R594's BC oracle
   (`docs/measurements/r594/bc3-A.report.json`, `bc3-B.report.json`). No source text is committed.
   - `LETHAL_ITEST_V3_CDO` names the checkout. It is `/work/lethal-wt/cdo-r396`, the read-only measurement checkout,
@@ -233,7 +242,7 @@ leg uses it: every figure on this page is N = 1 (no `--workers`). A run refuses 
 transport is not serve-entries, under `--resume`, when the build's pin does not retire the §6 Sleep rule (R768's
 `sleepRuleRetired`), or above 8; a new build needs its own pin before it is allowed. **Parallel pays on large
 projects; each lane pays its own warm-up** (R781: four lanes' warm-ups cost about 62 s against 7 s for one, so a
-small run is slower at N = 4; whole apps such as CDO and DC have thousands of procedure scopes and spread fully). A lane beyond lane 0 starts only with 10 GB available, and the run starts the largest n of the N lanes with n x 2.3 GB + 10 GB available (one serve daemon peaks about 2.2 GB RSS on D1), saying so once. Under N > 1 the first latch
+small run is slower at N = 4; whole apps such as CDO and DC have thousands of procedure scopes and spread fully). Since R785 `--workers N` is an upper bound: after each finished unit one more lane starts only while the queued live mutants (prefetched ones do not count) times lane 0's wall per live mutant exceed lane 0's own warm-up, and one `al-runner-v3-lanes-started` notice says how many of N started and why. A lane beyond lane 0 starts only with 10 GB available, and the run starts the largest n of the N lanes with n x 2.3 GB + 10 GB available (one serve daemon peaks about 2.2 GB RSS on D1), saying so once. Under N > 1 the first latch
 (`batchBlind`, `entriesRefused`) or session-stopping error ends the session with an error that names the cause and
 the discarded mutants. Recorded: mutants that finished before the stop and come before the stopping one in manifest
 order, and the stopping mutant only if N = 1 would have recorded it (a throw before its record discards it).

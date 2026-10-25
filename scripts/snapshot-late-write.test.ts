@@ -18,6 +18,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ownTimeout } from "../packages/engine/src/own-timeout";
 
 const FIXTURE = join(import.meta.dir, "fixtures", "r393", "late-write.fixture.ts");
 const KEY = "B has no snapshot 1";
@@ -30,7 +31,7 @@ const roots: string[] = [];
  * a hook in this file ("(unnamed)") hit bun's 5 s default at 5.07 s. 30 s is over 8x the worst
  * measured test and well under verify's 180 s per-file watchdog, so a real hang still fails.
  */
-const DISK_BOUND_MS = 30_000;
+const DISK_BOUND_MS = ownTimeout(30_000);
 
 function runLate(opts: { ci: boolean; seed?: string }) {
   const dir = mkdtempSync(join(tmpdir(), "r393-late-"));

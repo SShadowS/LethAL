@@ -26,7 +26,8 @@
  * - `LETHAL_ITEST_V3_CDO=<Continia Document Output checkout at 5f2a71d>`: the D legs (a corpus job).
  * - `LETHAL_ITEST_V3_TABLES=1`: leg T (the update gate's tables leg).
  * - `LETHAL_V3_GATE_NONCE` + `LETHAL_V3_GATE_RECEIPT`: write the update gate's receipt.
- * - R635 (all unset: the gate is unchanged): `LETHAL_ITEST_V3_TRANSPORT=one-shot|serve-entries`,
+ * - R635 (all unset: D1, D1c and T run serve-entries since R788, the other flag-following legs
+ *   one-shot): `LETHAL_ITEST_V3_TRANSPORT=one-shot|serve-entries`,
  *   `LETHAL_ITEST_V3_SECOND_ECHO=0|1` (serve-entries only), refused by name otherwise
  *   (`v3ItestTransport`); `LETHAL_ITEST_V3_REPORT_DIR=<dir>` writes each session's report as
  *   `<dir>/<leg>.report.json` before any assertion; `LETHAL_ITEST_V3_CONTROL_DIR=<dir>` first
@@ -96,6 +97,7 @@ import {
   legOutcomeOfError,
   observeWithReceiptRefusal,
   recordRefusal,
+  v3ItestLegTransport,
   v3ItestTransport,
   v3ReceiptOutcome,
   v3SplitLine,
@@ -131,6 +133,7 @@ import {
   judgeWrArms,
   legKSection,
   moWrTransportRefusal,
+  o1LoginWorkDate,
   v3DefaultLegs,
   v3ItestFailures,
   v3KOnCandidate,
@@ -145,7 +148,9 @@ import {
 } from "./baseline-guard";
 import { prepareFixtureSymbols } from "./fixture-symbols";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import { GATE_WARNINGS } from "./gate-expected";
 import {
+  assertGateWarnings,
   checkGateWarnings,
   collectWarnings,
   finishGate,
@@ -327,14 +332,25 @@ async function session(
         ),
       );
   }
-  // R635: all of it only when a flag asks, so the unflagged gate is unchanged.
+  // R635: all of it only when a flag asks or the leg runs serve (R788).
   const leg = basename(scratch);
-  checkGateWarnings("al-runner-v3", leg, gateWarnings);
-  if (TRANSPORT.transport !== undefined) {
+  // R785: a `LETHAL_ITEST_V3_WORKERS > 1` D-leg run also says how many lanes started; that one code is
+  // expected on top of the leg's N = 1 set. Unset (the gate), the pinned set is checked unchanged.
+  const pinned = GATE_WARNINGS[`al-runner-v3/${leg}`];
+  if (V3_WORKERS > 1 && cfg.workers !== undefined && !observeRequested())
+    assertGateWarnings(
+      "al-runner-v3",
+      leg,
+      gateWarnings.codes(),
+      pinned === undefined ? undefined : [...pinned, "al-runner-v3-lanes-started"],
+    );
+  else checkGateWarnings("al-runner-v3", leg, gateWarnings);
+  const serveLeg = v3ItestLegTransport(leg, process.env).transport !== undefined;
+  if (serveLeg) {
     console.log(`  ${leg}: entries ${JSON.stringify(backend.entriesStats())}`);
     console.log(`  ${leg}: ${v3SplitLine(phases, backend.entriesStats())}`);
   }
-  if (TRANSPORT.transport !== undefined || REPORT_DIR !== undefined) {
+  if (serveLeg || REPORT_DIR !== undefined) {
     console.log(`  ${leg}: timings ${JSON.stringify(r.timings)}`);
   }
   if (REPORT_DIR !== undefined) {
@@ -429,6 +445,34 @@ function assertIndex(b: AlRunnerV3Backend, leg: string, target: number, test: nu
     s?.target === target && s.test === test,
     `${leg}: Sleep index ${JSON.stringify(s)}, pre-committed ${target} + ${test}`,
   );
+}
+
+/**
+ * R788: a serve leg's counters that follow from its verdicts (one kill pair per killed mutant, no
+ * echo mismatch, no fallback, no refused batch). Lane- and timing-dependent counters are only printed.
+ */
+function assertServeCounters(b: AlRunnerV3Backend, leg: string, killed: number): void {
+  if (v3ItestLegTransport(leg, process.env).transport === undefined) return;
+  const s = b.entriesStats();
+  const got = {
+    pairRequests: s.pairRequests,
+    echoMismatches: s.echoMismatches,
+    pairFallbacks1: s.pairFallbacks1,
+    pairFallbacks2: s.pairFallbacks2,
+    pairBatchRefused: s.pairBatchRefused,
+  };
+  const want = {
+    pairRequests: killed,
+    echoMismatches: 0,
+    pairFallbacks1: 0,
+    pairFallbacks2: 0,
+    pairBatchRefused: 0,
+  };
+  console.log(`  ${leg}: serve counters ${JSON.stringify(got)}`);
+  for (const [k, v] of Object.entries(want)) {
+    const g = got[k as keyof typeof got];
+    must(g === v, `${leg}: ${k} ${g}, pre-committed ${v} (R788)`);
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -630,7 +674,8 @@ async function legN1(scratch: string): Promise<void> {
 /**
  * R722 (pre-commitment r19): N1's project under serve-entries, whatever the run's own transport is.
  * The reading is `judgeN1Serve`'s: on alpha.5 the session fails closed by name (#5798); anything
- * else is `held` (re-pre-commit) or `gate-fail`, never a silent pass.
+ * else is `held` (re-pre-commit) or `gate-fail`, never a silent pass. R782: on a build whose pin
+ * records #5798 fixed the session must COMPLETE, 36/0/0 over 36, per mutant equal to N1's baseline.
  */
 async function legN1E(scratch: string, version: string): Promise<void> {
   const deps = await microsoftDeps(scratch);
@@ -645,8 +690,9 @@ async function legN1E(scratch: string, version: string): Promise<void> {
     }),
   );
   let reading: N1EReading;
+  let lastReport: SessionReport | undefined;
   try {
-    await session(scratch, b, {
+    lastReport = await session(scratch, b, {
       projectDir: fixture("sandbox-names"),
       testDir: fixture("sandbox-names-tests"),
       selectorIds: { selectorId: 78849, controlId: 78848, tableId: 78847 },
@@ -657,10 +703,20 @@ async function legN1E(scratch: string, version: string): Promise<void> {
     if (isGateWarningsError(e)) throw e;
     reading = { threw: e instanceof Error ? e.message : String(e) };
   }
-  const j = judgeN1Serve(reading, version, activePin?.n1e);
+  const flagged = activePin?.serveRowFields !== undefined;
+  const j = judgeN1Serve(reading, version, flagged);
   for (const l of j.lines) console.log(`  N1E: ${l}`);
   if (j.outcome === "held") throw new V3LegHeld(j.lines);
   if (j.outcome === "gate-fail") throw new LegFailure(j.lines.join("; "));
+  // R782: a flagged build completed the dotted test; it must read exactly as N1 (one-shot, bcdev).
+  if (flagged && "completed" in reading && lastReport !== undefined) {
+    must(b.isServeRowFields(), "N1E: a flagged pin, but the backend did not read the row fields");
+    assertCounts(lastReport, "N1E", 36, 0, 0, 36);
+    await assertPerMutant(lastReport, join(HERE, "bcdev.names.baseline.json"), "N1E");
+    const s = b.entriesStats();
+    console.log(`  N1E: serve counters ${JSON.stringify({ ...s })}`);
+    must(s.echoMismatches === 0, `N1E: ${s.echoMismatches} echo mismatches, pre-committed 0`);
+  }
 }
 
 /**
@@ -898,7 +954,13 @@ async function legO1(scratch: string, version: string): Promise<void> {
         });
       console.log(`  O1: ${rq.label}: ${reads.join(" | ")}`);
     }
-    const j = judgeOrderProbe(done, [...dates]);
+    // R771 addendum 2: a pinned build's login WorkDate, for the CDO set only (it holds Base Application).
+    const login = o1LoginWorkDate(set.name, activePin);
+    if (login !== undefined)
+      console.log(
+        `  O1: ${set.name} set: WorkDate pinned ${login} (pin ${activePin?.id}, ${activePin?.o1?.issue})`,
+      );
+    const j = judgeOrderProbe(done, [...dates], login);
     console.log(`  O1: ${set.name} set: ${j.outcome} (${done.length} requests, one daemon)`);
     if (j.outcome === "gate-fail") throw new LegFailure(`O1: ${j.lines.join("; ")}`);
   }
@@ -1782,6 +1844,7 @@ async function legD(scratch: string, leg: "D1" | "D1c"): Promise<void> {
       bcVersion: CDO_BC,
       selectorObjectId: 6175460,
       coverage: leg === "D1" ? "none" : "al-runner",
+      ...v3ItestLegTransport(leg, process.env),
     }),
   );
   const r = await session(scratch, b, {
@@ -1826,6 +1889,7 @@ async function legD(scratch: string, leg: "D1" | "D1c"): Promise<void> {
   must(r.baselineGreen && r.unsupportedTests.length === 0, `${leg}: baseline not green`);
   assertIndex(b, leg, 3, 0);
   assertReproduced(r, leg);
+  assertServeCounters(b, leg, 51);
 }
 
 /**
@@ -1850,6 +1914,7 @@ async function legT(
       packagesDir: join(fixture("sandbox-data-tests"), ".alpackages"),
       bcVersion: SANDBOX_BC,
       selectorObjectId: 79399,
+      ...v3ItestLegTransport("T", process.env),
     }),
   );
   const r = await session(scratch, b, {
@@ -1909,6 +1974,8 @@ async function legT(
   }
   notes();
   if (j.outcome === "gate-fail") throw new LegFailure(j.failure ?? "T: gate-fail");
+  // R788: only on a pass, so a held T keeps its own outcome (on a pass killed is the pinned 290).
+  if (j.outcome === "pass") assertServeCounters(b, "T", r.counts.killed);
   return { outcome: j.outcome, r, ...(j.pinned === true ? { pinned: true as const } : {}) };
 }
 

@@ -21,8 +21,14 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import { BcHostMismatchError, bcHostMismatch } from "../src/bc-host";
 import { type LethalConfigFile, configuredOdataBaseUrl } from "../src/cli";
 import { refuseRetiredV2ConfigSection } from "../src/v2-retired";
+import {
+  SymlinkedAlpackagesError,
+  symlinkedAlpackages,
+  symlinkedAlpackagesRefusal,
+} from "./fixture-symbols";
 import { ServerOutOfUseError, markedServerFor, outOfUseDir, outOfUseRefusal } from "./out-of-use";
 
 /** The `bcdev` fields the target line reads; nothing else of the config reaches it. */
@@ -67,7 +73,8 @@ function withoutUserinfo(url: string): string {
 /**
  * Prints `itestTargetLine` for a config file, reading only its `bcdev` target fields. R669: it
  * first throws `ServerOutOfUseError` when that server (bc1-bc3 only) has an out-of-use marker,
- * BEFORE the line is printed, so a script that greps for the line fails closed even if it ignores
+ * BEFORE the line is printed (R783: and `BcHostMismatchError` for a config on the other known BC
+ * on Linux host), so a script that greps for the line fails closed even if it ignores
  * the exit status. Every BC itest calls this right after it picks its config, so the refusal comes
  * before any lease or server call. `outOfUse` is a test seam; a unit test passes its own temp dir
  * and never reads `/coord`.
@@ -75,11 +82,23 @@ function withoutUserinfo(url: string): string {
 export function printItestTarget(
   configPath: string,
   read: (p: string) => string = (p) => readFileSync(p, "utf8"),
-  outOfUse: { readonly dir: string; readonly env: NodeJS.ProcessEnv } = {
+  outOfUse: {
+    readonly dir: string;
+    readonly env: NodeJS.ProcessEnv;
+    /** R787: the worktree whose fixture `.alpackages` must not be symlinks; unset checks none. */
+    readonly repoRoot?: string;
+  } = {
     dir: outOfUseDir(process.env),
     env: process.env,
+    repoRoot: join(import.meta.dir, "..", "..", ".."),
   },
 ): void {
+  // R787: first, so a gate writing symbols never writes through a link into another worktree.
+  if (outOfUse.repoRoot !== undefined) {
+    const root = outOfUse.repoRoot;
+    const refusal = symlinkedAlpackagesRefusal(root, symlinkedAlpackages(root));
+    if (refusal !== undefined) throw new SymlinkedAlpackagesError(refusal);
+  }
   let bcdev: Partial<TargetFields> | undefined;
   try {
     bcdev = (JSON.parse(read(configPath)) as { bcdev?: Partial<TargetFields> }).bcdev;
@@ -95,7 +114,10 @@ export function printItestTarget(
   const { port, baseUrl, apiBaseUrl } = bcdev ?? {};
   const u = new URL(server);
   const devPort = port ?? (u.port !== "" ? Number(u.port) : DEFAULT_DEV_PORT);
-  const name = markedServerFor(u.hostname, devPort);
+  // R783: a config left on the other known host would skip the marker check below; refuse it.
+  const mismatch = bcHostMismatch(u.hostname, outOfUse.env);
+  if (mismatch !== undefined) throw new BcHostMismatchError(mismatch);
+  const name = markedServerFor(u.hostname, devPort, outOfUse.env);
   // Not bc1-bc3: such a server has no marker (Cronus28, envtool), so it is not checked.
   if (name !== undefined) {
     const refusal = outOfUseRefusal(name, { ...outOfUse, override: "owner" });

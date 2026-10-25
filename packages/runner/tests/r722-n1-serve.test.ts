@@ -103,36 +103,104 @@ const A157_LINE =
 const A157 = "al-runner 3.0.0-alpha.5+edge.20261025 (a157b2d34)";
 const A157_SHA = "d9429e53a6938dbafb58108f61ce5408f65389bd9604ff94b4788ef26c8d17fb";
 
-describe("R771: judgeN1Serve with the build's n1e pin", () => {
-  const n1e = findV3Pin(A157, A157_SHA)?.n1e;
-  test("the pin exists", () => {
-    expect(n1e).toBeDefined();
+describe("R782: judgeN1Serve on a flagged build (its pin records #5798 fixed)", () => {
+  const flagged = findV3Pin(A157, A157_SHA)?.serveRowFields !== undefined;
+  test("the a157b2d34 pin is flagged", () => {
+    expect(flagged).toBe(true);
   });
-  test("the receipt's exact line with the pin is a pass", () => {
-    const j = judgeN1Serve({ threw: wrap(A157_LINE) }, A157, n1e);
-    expect(j.outcome).toBe("pass");
-    expect(j.lines.join(" ")).toMatch(/^N1E: pinned: #5798 fixed upstream/);
+  test("g: a completed session is a pass when flagged, held when not", () => {
+    expect(judgeN1Serve({ completed: true }, A157, flagged).outcome).toBe("pass");
+    expect(judgeN1Serve({ completed: true }, A157).outcome).toBe("held");
+    expect(judgeN1Serve({ completed: true }, A157, false).outcome).toBe("held");
   });
-  test("the same line without a pin is held", () => {
-    expect(judgeN1Serve({ threw: wrap(A157_LINE) }, A157).outcome).toBe("held");
-  });
-  test("a line with codeunit and method that the pin does not match is held", () => {
-    const other = A157_LINE.replace('"Dot.Step"', '"Other.Step"');
-    expect(judgeN1Serve({ threw: wrap(other) }, A157, n1e).outcome).toBe("held");
-  });
-  test("the pinned line with a status other than pass is held", () => {
-    for (const s of ["fail", "error"]) {
-      const moved = A157_LINE.replace('"status":"pass"', `"status":"${s}"`);
-      expect(moved).not.toBe(A157_LINE);
-      expect(judgeN1Serve({ threw: wrap(moved) }, A157, n1e).outcome).toBe("held");
+  test("g: on a flagged build any error is a gate-fail, even the old pinned refusal", () => {
+    for (const m of [wrap(A157_LINE), wrap(ALPHA5_LINE), "boom"]) {
+      expect(judgeN1Serve({ threw: m }, A157, true).outcome).toBe("gate-fail");
     }
   });
-  test("the alpha.5 refusal passes as today, with or without the pin", () => {
-    expect(judgeN1Serve({ threw: wrap(ALPHA5_LINE) }, A157, n1e).outcome).toBe("pass");
+  test("an unflagged build keeps its reading: the receipt line is held, the alpha.5 refusal a pass", () => {
+    expect(judgeN1Serve({ threw: wrap(A157_LINE) }, A157).outcome).toBe("held");
     expect(judgeN1Serve({ threw: wrap(ALPHA5_LINE) }, A157).outcome).toBe("pass");
   });
-  test("a completed session is held even with the pin", () => {
-    expect(judgeN1Serve({ completed: true }, A157, n1e).outcome).toBe("held");
+});
+
+describe("R782: serveRow reads codeunit and method from the row's fields on a flagged build", () => {
+  const dotted = JSON.parse(A157_LINE) as Record<string, unknown>;
+  const row = (patch: Record<string, unknown>, drop: string[] = []): Record<string, unknown> => {
+    const o = { ...dotted, ...patch };
+    for (const k of drop) delete o[k];
+    return o;
+  };
+  test("a: a flagged build scores the dotted row with the right codeunit and method", () => {
+    const r = serveRow(dotted, true);
+    expect(r).toMatchObject({
+      codeunit: 78850,
+      method: "Dot.Step",
+      name: "Codeunit78850.Dot.Step",
+      status: "pass",
+      notRun: false,
+    });
+  });
+  test("b: an unflagged build still refuses the dotted row by name", () => {
+    for (const f of [undefined, false]) {
+      const r = f === undefined ? serveRow(dotted) : serveRow(dotted, f);
+      expect(typeof r).toBe("string");
+      expect(r).toMatch(/^a test line without v3's row shape: /);
+    }
+  });
+  test("b: an unflagged build ignores the fields, flagged or not a plain row reads the same", () => {
+    const plain = row({ codeunit: 50100, method: "A", name: "Codeunit50100.A" });
+    expect(serveRow(plain)).toEqual(serveRow(plain, true));
+  });
+  test("c: a row whose fields disagree with its name is refused on a flagged build", () => {
+    for (const patch of [
+      { codeunit: 78851 },
+      { method: "Other.Step" },
+      { name: "Codeunit78850.Dot" },
+      { name: "Codeunit78850.Dot.Step " },
+    ]) {
+      const r = serveRow(row(patch), true);
+      expect(typeof r).toBe("string");
+      expect(r).toMatch(/disagree with its name \(R782\)/);
+    }
+  });
+  test("d: a row missing method or codeunit, or with a wrong type, is refused on a flagged build", () => {
+    for (const r of [
+      serveRow(row({}, ["method"]), true),
+      serveRow(row({}, ["codeunit"]), true),
+      serveRow(row({ codeunit: "78850" }), true),
+      serveRow(row({ codeunit: 1.5 }), true),
+      serveRow(row({ method: 7 }), true),
+    ]) {
+      expect(typeof r).toBe("string");
+      expect(r).toMatch(/^a test line without v3's row shape: /);
+    }
+  });
+  test("a flagged row with a bad status is still refused", () => {
+    expect(typeof serveRow(row({ status: "weird" }), true)).toBe("string");
+  });
+  test("decodeEntriesAnswer passes the flag through: the dotted row decodes only when flagged", () => {
+    const sent = [
+      {
+        id: "NONE|78850",
+        mutantId: "NONE",
+        key: "NONE",
+        codeunit: 78850,
+        echo: false,
+        resources: {},
+        test: "",
+      },
+    ];
+    const answer = {
+      entrySummaries: [
+        { entry: "NONE|78850", passed: 1, failed: 0, errors: 0, notRun: 0, total: 1 },
+      ],
+      tests: [dotted],
+      summary: { passed: 1, failed: 0, errors: 0, notRun: 0, total: 1 },
+    } as never;
+    expect("why" in decodeEntriesAnswer(sent, answer)).toBe(true);
+    const ok = decodeEntriesAnswer(sent, answer, true);
+    expect("rows" in ok && ok.rows.get("NONE|78850")?.[0]?.method).toBe("Dot.Step");
   });
 });
 

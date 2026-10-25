@@ -70,12 +70,21 @@ export interface V3BuildPin {
   };
   readonly xb: XbPin;
   /**
-   * R771: the pinned N1E reading for a build where #5798 is fixed upstream (the serve row for the
-   * dotted method carries `codeunit` and `method`) but LethAL's `serveRow` still refuses a dotted
-   * method by name, so the session fails closed. `refusedLine` must match the refused line exactly.
+   * R782: #5798 is fixed upstream on this build: a serve test row carries `codeunit` and `method`
+   * beside `name`, also for a dotted method. Only a pin with this flag lets serve-entries read the
+   * row's own fields (`serveRowFieldsFor`); every other build keeps the name-only parse.
    */
-  readonly n1e?: {
-    readonly refusedLine: RegExp;
+  readonly serveRowFields?: {
+    readonly issue: string;
+    readonly evidence: string;
+  };
+  /**
+   * R771 addendum 2: the WorkDate O1's CDO set reads on a build that runs Base Application's login
+   * code (`LogInManagement.GetDefaultWorkDate`, the last G/L entry's date in the restored CRONUS demo
+   * company of the CDO set's BC build). Every CDO Reader entry must read exactly it.
+   */
+  readonly o1?: {
+    readonly cdoWorkDate: string;
     readonly issue: string;
     readonly evidence: string;
   };
@@ -178,6 +187,11 @@ const ALPHA5_READINGS: Pick<V3BuildPin, "legC" | "legT" | "xb"> = {
   xb: { exitCode: 3, passed: 0, notRun: 0 },
 };
 
+// R771 addendum 1: the a157b2d34 pin overrides this fact's measured text only.
+const { "duplicate-key-insert-raises": ALPHA5_DUPLICATE_KEY } = ALPHA5_READINGS.legC;
+if (ALPHA5_DUPLICATE_KEY === undefined)
+  throw new Error("al-runner-v3-pins: ALPHA5_READINGS has no duplicate-key-insert-raises fact");
+
 export const V3_BUILD_PINS: readonly V3BuildPin[] = [
   {
     id: "alpha.5-07342060e",
@@ -202,19 +216,22 @@ export const V3_BUILD_PINS: readonly V3BuildPin[] = [
     legC: {
       ...ALPHA5_READINGS.legC,
       "duplicate-key-insert-raises": {
-        ...ALPHA5_READINGS.legC["duplicate-key-insert-raises"]!,
+        ...ALPHA5_DUPLICATE_KEY,
         measured: pinPattern(
           `[${ROW(50655, "DuplicateNamedKey")},"status":"error","durationMs":{n},"message":"NotRun: out-of-scope: the test ends while the error of a duplicate-key Insert into table Probe Row is deferred: whether the test runner raises it at the end of the test is measured only for TestIsolation = Codeunit and the default TransactionModel","notRun":true}] exit 7`,
         ),
       },
     },
-    n1e: {
-      refusedLine: pinPattern(
-        '{"codeunit":78850,"codeunitName":"Names Tests","durationMs":{n},"entry":"NONE|78850","method":"Dot.Step","name":"Codeunit78850.Dot.Step","status":"pass","type":"test"}',
-      ),
+    serveRowFields: {
       issue: `${REPO}/5798`,
       evidence:
-        "#5798 fixed upstream (the Dot.Step row carries codeunit and method); LethAL's serveRow still refuses a dotted method by name, so the session fails closed",
+        "#5798 fixed upstream: the Dot.Step serve row carries codeunit 78850 and method Dot.Step beside its name (R771 receipt, leg N1E on a157b2d34)",
+    },
+    o1: {
+      cdoWorkDate: "2026-08-01",
+      issue: `${REPO}/5743`,
+      evidence:
+        "upstream 5e1db1c7 runs LogInManagement.GetDefaultWorkDate at session open (as BC); BC 28.4.53241.53758's CRONUS demo company has 4178 G/L entries, the last on 2026-08-01 (R771 addendum 2 probe)",
     },
   },
 ];
@@ -237,6 +254,34 @@ export function sleepRuleRetiredFor(
 ): boolean {
   if (findV3Pin(version, binarySha256)?.legC["sleep-is-noop"]?.verdict !== "gone") return false;
   return contract?.facts.find((f) => f.fact === "sleep-is-noop")?.verdict === "gone";
+}
+
+/** R782: does this exact build's pin record #5798 as fixed (version line AND sha256)? */
+export function serveRowFieldsFor(version: string, binarySha256: string): boolean {
+  return findV3Pin(version, binarySha256)?.serveRowFields !== undefined;
+}
+
+/**
+ * R779: the receipt line `status()` prints once per session, for the decision it made (`retired`,
+ * from `sleepRuleRetiredFor`), with the reason. The word comes from `retired` itself, so the line
+ * cannot disagree with the behaviour; only the reason is looked up here.
+ */
+export function sleepRuleLine(
+  retired: boolean,
+  contract: V3ContractResult | undefined,
+  version: string,
+  binarySha256: string,
+): string {
+  const pin = findV3Pin(version, binarySha256);
+  const pinned = pin?.legC["sleep-is-noop"]?.verdict;
+  const probed = contract?.facts.find((f) => f.fact === "sleep-is-noop")?.verdict;
+  let why: string;
+  if (pin === undefined) why = "no pin names this build";
+  else if (pinned !== "gone") why = `pin ${pin.id} reads sleep-is-noop ${pinned ?? "unrecorded"}`;
+  else if (probed !== "gone")
+    why = `pin ${pin.id} reads sleep-is-noop gone, but this session's probe read it ${probed ?? "unmeasured"}`;
+  else why = `pin ${pin.id} and this session's probe read sleep-is-noop gone`;
+  return `[lethal] al-runner-v3 §6 Sleep rule ${retired ? "retired" : "applies"} (${why}) (R768, R779)`;
 }
 
 /**

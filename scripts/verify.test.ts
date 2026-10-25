@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ownTimeout } from "../packages/engine/src/own-timeout";
 import {
   type Env,
   type Heartbeat,
@@ -357,6 +358,91 @@ describe("parseTestSummary", () => {
     expect(text).not.toContain("error: boom 20");
     expect(text).toContain("first 20 of 22 failing tests");
   });
+  const stepOf = (out: string, code: number) =>
+    testStep(FULL, {
+      exec: () => ({ code, output: out }),
+      snapState: () => new Map(),
+      env: {},
+      log: () => "log",
+      junitPath: () => "/j.xml",
+      readJunit: () => "",
+      expectedTestFiles: () => ["a.test.ts"],
+    });
+  test("R726b: timed-out tests are named by file and test in one summary line; other failures are not", async () => {
+    // Two files (CI ::group:: headers), two timeouts in one, one in the other, and a plain failure.
+    const out = [
+      "bun test v1.4.4 (38afee6c8) 4x PARALLEL",
+      "::group::packages\\runner\\tests\\resume.test.ts:",
+      "(fail) R389 > M-8: pending elsewhere [60001.00ms]",
+      "  ^ this test timed out after 60000ms.",
+      "(pass) fine [1.00ms]",
+      "(fail) R389 > M2: resumed then revoked [60002.00ms]",
+      "  ^ this test timed out after 60000ms.",
+      "::endgroup::",
+      "::group::scripts\\verify.test.ts:",
+      "error: expect(received).toBe(expected)",
+      "(fail) plain assertion failure [2.00ms]",
+      "(fail) watchdog > isChildOf [30001.00ms]",
+      "  ^ this test timed out after 30000ms.",
+      "::endgroup::",
+      "",
+      "4 tests failed:",
+      "(fail) R389 > M-8: pending elsewhere [60001.00ms]",
+      "  ^ this test timed out after 60000ms.",
+      " 1 pass",
+      " 4 fail",
+      "Ran 5 tests across 2 files. [1.00s]",
+    ].join("\n");
+    const step = await stepOf(out, 1);
+    const hit = step.lines.filter((l) => l.startsWith("timed out ("));
+    expect(hit).toEqual([
+      "timed out (3): packages/runner/tests/resume.test.ts > R389 > M-8: pending elsewhere; packages/runner/tests/resume.test.ts > R389 > M2: resumed then revoked; scripts/verify.test.ts > watchdog > isChildOf",
+    ]);
+    expect(hit[0]).not.toContain("plain assertion failure");
+  });
+  test("R726b S1: the same test name timing out in two files is listed under each file", async () => {
+    const out = [
+      "a.test.ts:",
+      "(fail) same name [60001.00ms]",
+      "  ^ this test timed out after 60000ms.",
+      "b.test.ts:",
+      "(fail) same name [60002.00ms]",
+      "  ^ this test timed out after 60000ms.",
+      " 0 pass",
+      " 2 fail",
+      "Ran 2 tests across 2 files. [1.00s]",
+    ].join("\n");
+    const step = await stepOf(out, 1);
+    expect(step.lines.filter((l) => l.startsWith("timed out ("))).toEqual([
+      "timed out (2): a.test.ts > same name; b.test.ts > same name",
+    ]);
+  });
+  test("R726b S2: a hook timeout is listed, and its line stays out of the next failure's text", async () => {
+    const out = [
+      "a.test.ts:",
+      "(fail) hooked [5001.00ms]",
+      "  ^ a beforeEach/afterEach hook timed out for this test.",
+      "error: expect(received).toBe(expected)",
+      "(fail) next one [1.00ms]",
+      " 0 pass",
+      " 2 fail",
+      "Ran 2 tests across 1 file. [1.00s]",
+    ].join("\n");
+    const step = await stepOf(out, 1);
+    expect(step.lines.filter((l) => l.startsWith("timed out ("))).toEqual([
+      "timed out (1): a.test.ts > hooked",
+    ]);
+    const text = step.lines.join("\n");
+    expect(text).toContain("  (fail) next one\n    | error: expect(received).toBe(expected)");
+    expect(text).not.toContain("  (fail) next one\n    | ^ a beforeEach");
+    expect(text.match(/hook timed out/g)?.length).toBe(1);
+  });
+  test("R726b: a run with no timeout prints no timed-out line", async () => {
+    const out =
+      "error: boom\n(fail) plain [2.00ms]\n 1 pass\n 1 fail\nRan 2 tests across 1 file. [1.00s]\n";
+    const step = await stepOf(out, 1);
+    expect(step.lines.some((l) => l.startsWith("timed out ("))).toBe(false);
+  });
   test("bun exiting non-zero with `0 fail` and no crash line still fails (the exit-code backstop)", async () => {
     const step = await testStep(FULL, {
       exec: () => ({ code: 1, output: " 3 pass\n 0 fail\nRan 3 tests across 2 files. [1.00s]\n" }),
@@ -613,26 +699,30 @@ describe("R622 the per-file watchdog", () => {
     expect(stuckWorkers([beat(10, 99, 0)], 5000, 2000, 10, 1)).toEqual([]);
   });
 
-  test("isChildOf: a live child of this process is one; this process and a dead child are not", async () => {
-    const child = Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 30000)"], {
-      stdout: "ignore",
-      stderr: "ignore",
-    });
-    try {
-      // One OS read for both pids (one PowerShell call on Windows).
-      const table = parentTable([child.pid, process.pid]);
-      expect(table.get(child.pid)).toBe(process.pid);
-      // The direction that keeps the kill off a process verify did not start (a reused pid).
-      expect(table.get(process.pid)).not.toBe(process.pid);
-      expect(table.get(child.pid)).not.toBe(child.pid);
-      // A live pid with the wrong parent is not a child (isChildOf must compare the parent).
-      expect(isChildOf(child.pid, child.pid)).toBe(false);
-    } finally {
-      child.kill();
-      await child.exited;
-    }
-    expect(isChildOf(child.pid, process.pid)).toBe(false);
-  }, 30_000); // three PowerShell calls on Windows (was four), 1 to 3 s each when cold
+  test(
+    "isChildOf: a live child of this process is one; this process and a dead child are not",
+    async () => {
+      const child = Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 30000)"], {
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+      try {
+        // One OS read for both pids (one PowerShell call on Windows).
+        const table = parentTable([child.pid, process.pid]);
+        expect(table.get(child.pid)).toBe(process.pid);
+        // The direction that keeps the kill off a process verify did not start (a reused pid).
+        expect(table.get(process.pid)).not.toBe(process.pid);
+        expect(table.get(child.pid)).not.toBe(child.pid);
+        // A live pid with the wrong parent is not a child (isChildOf must compare the parent).
+        expect(isChildOf(child.pid, child.pid)).toBe(false);
+      } finally {
+        child.kill();
+        await child.exited;
+      }
+      expect(isChildOf(child.pid, process.pid)).toBe(false);
+    },
+    ownTimeout(30_000),
+  ); // three PowerShell calls on Windows (was four), 1 to 3 s each when cold
 
   test("parseCimParents: reads `pid ppid` lines, ignores the rest", () => {
     expect(parseCimParents("10 1\r\n  20   10  \n")).toEqual(
@@ -761,12 +851,16 @@ describe("R622 the per-file watchdog", () => {
     40_000,
   );
 
-  test("serial: a file that spins past the limit stops the run in seconds, named once", async () => {
-    const r = await watched({ "ok.test.ts": OK, "spin.test.ts": SPIN }, 1, 2);
-    expect(r.code, r.text).toBe(1);
-    expect(failLines(r.text, "spin.test.ts", 2), r.text).toBe(1);
-    expect(r.seconds, r.text).toBeLessThan(15);
-  }, 40_000);
+  test(
+    "serial: a file that spins past the limit stops the run in seconds, named once",
+    async () => {
+      const r = await watched({ "ok.test.ts": OK, "spin.test.ts": SPIN }, 1, 2);
+      expect(r.code, r.text).toBe(1);
+      expect(failLines(r.text, "spin.test.ts", 2), r.text).toBe(1);
+      expect(r.seconds, r.text).toBeLessThan(15);
+    },
+    ownTimeout(40_000),
+  );
 
   posixSignals(
     "review I-A: a file deaf to SIGTERM is SIGKILLed after the grace; the FAIL line is printed while it still runs",
@@ -786,13 +880,17 @@ describe("R622 the per-file watchdog", () => {
     40_000,
   );
 
-  test("review I-A: a worker that cannot be confirmed as ours stops the whole run through the backstop", async () => {
-    const r = await watched({ "spin.test.ts": SPIN }, 1, 2, { isChild: () => false });
-    expect(r.code, r.text).toBe(1);
-    expect(failLines(r.text, "spin.test.ts", 2), r.text).toBe(1);
-    expect(r.text).toContain("watchdog: backstop");
-    expect(r.seconds, r.text).toBeLessThan(15);
-  }, 40_000);
+  test(
+    "review I-A: a worker that cannot be confirmed as ours stops the whole run through the backstop",
+    async () => {
+      const r = await watched({ "spin.test.ts": SPIN }, 1, 2, { isChild: () => false });
+      expect(r.code, r.text).toBe(1);
+      expect(failLines(r.text, "spin.test.ts", 2), r.text).toBe(1);
+      expect(r.text).toContain("watchdog: backstop");
+      expect(r.seconds, r.text).toBeLessThan(15);
+    },
+    ownTimeout(40_000),
+  );
 
   parallelOs(
     "review I-A: --parallel=2, the backstop ends the run though the unconfirmed worker may live on",
@@ -809,12 +907,16 @@ describe("R622 the per-file watchdog", () => {
     40_000,
   );
 
-  test("review I1: a file that prints 20 MB is drained while it runs, so it is neither killed nor hung", async () => {
-    const r = await watched({ "loud.test.ts": LOUD }, 1, 3);
-    expect(r.code, r.text).toBe(0);
-    expect(r.text).toContain("watchdog: ok");
-    expect(r.output.length).toBeGreaterThan(20_000_000);
-  }, 40_000);
+  test(
+    "review I1: a file that prints 20 MB is drained while it runs, so it is neither killed nor hung",
+    async () => {
+      const r = await watched({ "loud.test.ts": LOUD }, 1, 3);
+      expect(r.code, r.text).toBe(0);
+      expect(r.text).toContain("watchdog: ok");
+      expect(r.output.length).toBeGreaterThan(20_000_000);
+    },
+    ownTimeout(40_000),
+  );
 
   // R616: the real preload in a child run reports where its DBs went, and removes its tmpfs folder.
   const SHM = process.platform === "linux" && existsSync("/dev/shm");
@@ -829,15 +931,19 @@ describe("R622 the per-file watchdog", () => {
       const left = readdirSync("/dev/shm").filter((e) => e.startsWith(`lethal-unit-db-${pid}-`));
       expect(left).toEqual([]);
     },
-    40_000,
+    ownTimeout(40_000),
   );
-  test("R616: with LETHAL_TEST_DB_ON_DISK=1 a child run's DBs stay on disk, named", async () => {
-    const r = await watched({ "ok.test.ts": OK }, 1, 30, {}, { LETHAL_TEST_DB_ON_DISK: "1" });
-    expect(r.code, r.text).toBe(0);
-    expect(r.text).toContain(
-      "test DBs: on disk (fallback: LETHAL_TEST_DB_ON_DISK=1) in all 1 worker",
-    );
-  }, 40_000);
+  test(
+    "R616: with LETHAL_TEST_DB_ON_DISK=1 a child run's DBs stay on disk, named",
+    async () => {
+      const r = await watched({ "ok.test.ts": OK }, 1, 30, {}, { LETHAL_TEST_DB_ON_DISK: "1" });
+      expect(r.code, r.text).toBe(0);
+      expect(r.text).toContain(
+        "test DBs: on disk (fallback: LETHAL_TEST_DB_ON_DISK=1) in all 1 worker",
+      );
+    },
+    ownTimeout(40_000),
+  );
 });
 
 describe("R616 where each worker's test DBs went", () => {
@@ -1109,33 +1215,37 @@ describe("R622 the verify ledger", () => {
     }
   });
 
-  test("atomicity: 20 processes appending at once write 20 x 50 whole lines, none interleaved", async () => {
-    const dir = tempDir("ledger");
-    try {
-      const path = join(dir, "ledger.tsv");
-      const verifyTs = JSON.stringify(join(REPO_ROOT, "scripts", "verify.ts"));
-      const go = Date.now() + 1500; // every child waits for the same moment, then writes
-      const script = (n: number): string =>
-        [
-          `const { ledgerAppend } = await import(${verifyTs});`,
-          `while (Date.now() < ${go}) {}`,
-          `for (let i = 0; i < 50; i++) ledgerAppend(${JSON.stringify(path)}, \`${n}\\t\${i}\\t\${"x".repeat(3000)}\\n\`);`,
-        ].join("\n");
-      const kids = Array.from({ length: 20 }, (_, n) =>
-        Bun.spawn([process.execPath, "-e", script(n)], { stdout: "ignore", stderr: "pipe" }),
-      );
-      const codes = await Promise.all(kids.map((k) => k.exited));
-      expect(codes.every((c) => c === 0)).toBe(true);
-      const lines = readFileSync(path, "utf8").split("\n");
-      expect(lines.pop()).toBe("");
-      expect(lines).toHaveLength(1000);
-      const bad = lines.filter((l) => !/^\d+\t\d+\tx{3000}$/.test(l));
-      expect(bad.length, `${bad.length} lines not whole`).toBe(0);
-      expect(new Set(lines.map((l) => l.split("\t").slice(0, 2).join(" "))).size).toBe(1000);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  }, 30_000);
+  test(
+    "atomicity: 20 processes appending at once write 20 x 50 whole lines, none interleaved",
+    async () => {
+      const dir = tempDir("ledger");
+      try {
+        const path = join(dir, "ledger.tsv");
+        const verifyTs = JSON.stringify(join(REPO_ROOT, "scripts", "verify.ts"));
+        const go = Date.now() + 1500; // every child waits for the same moment, then writes
+        const script = (n: number): string =>
+          [
+            `const { ledgerAppend } = await import(${verifyTs});`,
+            `while (Date.now() < ${go}) {}`,
+            `for (let i = 0; i < 50; i++) ledgerAppend(${JSON.stringify(path)}, \`${n}\\t\${i}\\t\${"x".repeat(3000)}\\n\`);`,
+          ].join("\n");
+        const kids = Array.from({ length: 20 }, (_, n) =>
+          Bun.spawn([process.execPath, "-e", script(n)], { stdout: "ignore", stderr: "pipe" }),
+        );
+        const codes = await Promise.all(kids.map((k) => k.exited));
+        expect(codes.every((c) => c === 0)).toBe(true);
+        const lines = readFileSync(path, "utf8").split("\n");
+        expect(lines.pop()).toBe("");
+        expect(lines).toHaveLength(1000);
+        const bad = lines.filter((l) => !/^\d+\t\d+\tx{3000}$/.test(l));
+        expect(bad.length, `${bad.length} lines not whole`).toBe(0);
+        expect(new Set(lines.map((l) => l.split("\t").slice(0, 2).join(" "))).size).toBe(1000);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+    ownTimeout(30_000),
+  );
 
   test("ledgerAppend throws on a bad path (the caller turns it into the warning)", () => {
     expect(() => ledgerAppend(join(tmpdir(), "no-such-dir-r622", "x.tsv"), "a\n")).toThrow();
@@ -1546,21 +1656,25 @@ describe("R616b the whole-run limit", () => {
     "-e",
     'Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 8000)"], { stdout: "inherit", stderr: "inherit" }); setTimeout(() => {}, 30000)',
   ];
-  test("a child that never exits is killed at the run limit and fails by name, once", async () => {
-    const printed: string[] = [];
-    const t0 = Date.now();
-    const r = await execWatched(HANG, process.env, tmpdir(), 180, {
-      runLimitS: 2,
-      graceMs: 4000,
-      print: (l) => void printed.push(l),
-    });
-    expect(Date.now() - t0).toBeLessThan(15_000);
-    expect(r.watchdog?.fails.join("\n")).toContain(
-      "watchdog: FAIL, this run went over 2 s (no file was over its limit)",
-    );
-    expect(printed.filter((l) => l.includes("went over 2 s")).length).toBe(1);
-    expect(r.code).not.toBe(0);
-  }, 40_000);
+  test(
+    "a child that never exits is killed at the run limit and fails by name, once",
+    async () => {
+      const printed: string[] = [];
+      const t0 = Date.now();
+      const r = await execWatched(HANG, process.env, tmpdir(), 180, {
+        runLimitS: 2,
+        graceMs: 4000,
+        print: (l) => void printed.push(l),
+      });
+      expect(Date.now() - t0).toBeLessThan(15_000);
+      expect(r.watchdog?.fails.join("\n")).toContain(
+        "watchdog: FAIL, this run went over 2 s (no file was over its limit)",
+      );
+      expect(printed.filter((l) => l.includes("went over 2 s")).length).toBe(1);
+      expect(r.code).not.toBe(0);
+    },
+    ownTimeout(40_000),
+  );
   test("a normal run prints no run-limit line", async () => {
     const printed: string[] = [];
     const r = await execWatched([process.execPath, "-e", "0"], process.env, tmpdir(), 180, {

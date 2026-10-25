@@ -699,43 +699,73 @@ describe("R-762 B: the §6 Sleep rule is retired only on a pinned build whose pr
         ),
       ).toBe(false);
     });
+
+    // R779: the receipt line names the decision and its reason.
+    test("R779: sleepRuleLine says retired with both readings, or applies with the reason", () => {
+      const v = pin?.version ?? "";
+      const sha = pin?.binarySha256 ?? "";
+      expect(pinsNs.sleepRuleLine(true, probe("gone"), v, sha)).toBe(
+        `[lethal] al-runner-v3 §6 Sleep rule retired (pin ${pin?.id} and this session's probe read sleep-is-noop gone) (R768, R779)`,
+      );
+      expect(pinsNs.sleepRuleLine(false, probe("defect-present"), v, sha)).toBe(
+        `[lethal] al-runner-v3 §6 Sleep rule applies (pin ${pin?.id} reads sleep-is-noop gone, but this session's probe read it defect-present) (R768, R779)`,
+      );
+      expect(pinsNs.sleepRuleLine(false, undefined, v, sha)).toContain("probe read it unmeasured");
+      expect(pinsNs.sleepRuleLine(false, probe("gone"), v, "0".repeat(64))).toBe(
+        "[lethal] al-runner-v3 §6 Sleep rule applies (no pin names this build) (R768, R779)",
+      );
+    });
   });
 
-  test("status() sets the switch from sleepRuleRetiredFor with the session's probe, version and sha", async () => {
-    const VERSION = "al-runner 3.0.0-alpha.5+edge.20261024 (dcdf9e821)";
-    const versionOnly: SpawnFn = async () => ({ exitCode: 0, stdout: `${VERSION}\n`, stderr: "" });
-    const l = await layout();
-    const NS = 'xmlns="http://schemas.microsoft.com/navx/2015/manifest"';
-    await writeFile(
-      join(l.deps, "Microsoft_System Application.app"),
-      buildFakeAppWithEntries({
-        "NavxManifest.xml": `<?xml version="1.0"?><Package ${NS}><App Id="1" Name="System Application" Publisher="Microsoft" Version="28.0.46665.47126" /></Package>`,
-      }),
-    );
-    const bin = join(l.root, "al-runner");
-    await writeFile(bin, "binary");
-    await writeFile(
-      join(l.root, ".gated"),
-      JSON.stringify({
-        version: VERSION,
-        binarySha256: await sha256OfFile(bin),
-        lethalCommit: "a".repeat(40),
-      }),
-    );
-    const b = backendOf(l, versionOnly, fakeAlc().io, { alRunnerPath: bin });
-    const contract: V3ContractResult = { facts: [] };
-    (b as unknown as { contract: V3ContractResult }).contract = contract;
-    const spy = spyOn(pinsNs, "sleepRuleRetiredFor").mockReturnValue(true);
-    const warn = spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      await b.status();
-      expect(spy.mock.calls[0]).toEqual([contract, VERSION, await sha256OfFile(bin)]);
-      expect(b.isSleepRuleRetired()).toBe(true);
-    } finally {
-      spy.mockRestore();
-      warn.mockRestore();
-    }
-  });
+  for (const decided of [true, false])
+    test(`status() sets the switch from sleepRuleRetiredFor (${decided}) and prints it once (R779)`, async () => {
+      const VERSION = "al-runner 3.0.0-alpha.5+edge.20261024 (dcdf9e821)";
+      const versionOnly: SpawnFn = async () => ({
+        exitCode: 0,
+        stdout: `${VERSION}\n`,
+        stderr: "",
+      });
+      const l = await layout();
+      const NS = 'xmlns="http://schemas.microsoft.com/navx/2015/manifest"';
+      await writeFile(
+        join(l.deps, "Microsoft_System Application.app"),
+        buildFakeAppWithEntries({
+          "NavxManifest.xml": `<?xml version="1.0"?><Package ${NS}><App Id="1" Name="System Application" Publisher="Microsoft" Version="28.0.46665.47126" /></Package>`,
+        }),
+      );
+      const bin = join(l.root, "al-runner");
+      await writeFile(bin, "binary");
+      await writeFile(
+        join(l.root, ".gated"),
+        JSON.stringify({
+          version: VERSION,
+          binarySha256: await sha256OfFile(bin),
+          lethalCommit: "a".repeat(40),
+        }),
+      );
+      const b = backendOf(l, versionOnly, fakeAlc().io, { alRunnerPath: bin });
+      const contract: V3ContractResult = { facts: [] };
+      (b as unknown as { contract: V3ContractResult }).contract = contract;
+      const spy = spyOn(pinsNs, "sleepRuleRetiredFor").mockReturnValue(decided);
+      const warns: string[] = [];
+      const warn = spyOn(console, "warn").mockImplementation((...a: unknown[]) => {
+        warns.push(a.map(String).join(" "));
+      });
+      try {
+        const s = await b.status();
+        expect(spy.mock.calls[0]).toEqual([contract, VERSION, await sha256OfFile(bin)]);
+        expect(b.isSleepRuleRetired()).toBe(decided);
+        const word = decided ? "retired" : "applies";
+        // red when the line is missing or does not follow the decision, in either direction
+        const lines = warns.filter((w) => w.includes("§6 Sleep rule"));
+        expect(lines).toHaveLength(1);
+        expect(lines[0]).toContain(`[lethal] al-runner-v3 §6 Sleep rule ${word} (`);
+        expect(s.details).toContain(`§6 Sleep rule ${word} (R779)`);
+      } finally {
+        spy.mockRestore();
+        warn.mockRestore();
+      }
+    });
 });
 
 describe("T3, T4, T23", () => {
