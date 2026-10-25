@@ -16,9 +16,9 @@ import {
   B,
   type FakeRow,
   OPTS,
+  type RowsFn,
   SLEEPER_AL,
   SUITE,
-  type RowsFn,
   allPass,
   cleanRigs,
   laneBaseline,
@@ -129,8 +129,7 @@ describe("lane trees and daemons", () => {
   test("a lane never touches another's tree: every request of a daemon names one tree, the lane's own", async () => {
     const r = await lanesRig({ lanes: 3 });
     await laneBaseline(r);
-    const real = async (k: number) =>
-      realpath(join(r.scratch, k === 0 ? "active" : `active.${k}`));
+    const real = async (k: number) => realpath(join(r.scratch, k === 0 ? "active" : `active.${k}`));
     for (const v of r.views) {
       await v.activate("M0002");
       await v.run(A, OPTS);
@@ -181,7 +180,9 @@ describe("lane trees and daemons", () => {
 describe("per-lane state", () => {
   test("`plan` is per lane: lane 1's covering budgets do not change lane 0's state note", async () => {
     const rows: RowsFn = (m, _cu, _d, _n) =>
-      m === "M0001" || m === "M0002" ? failing(allPass(m, 0, 0, 0), "B", "boom") : allPass(m, 0, 0, 0);
+      m === "M0001" || m === "M0002"
+        ? failing(allPass(m, 0, 0, 0), "B", "boom")
+        : allPass(m, 0, 0, 0);
     const r = await lanesRig({ lanes: 2, rows });
     await laneBaseline(r);
     const [v0, v1] = r.views;
@@ -229,7 +230,8 @@ describe("per-lane state", () => {
   });
 
   test("a kill pair is the lane's own: another lane's activity does not drop it", async () => {
-    const rows: RowsFn = (m) => (m === "M0001" ? failing(allPass(m, 0, 0, 0), "A", "boom") : allPass(m, 0, 0, 0));
+    const rows: RowsFn = (m) =>
+      m === "M0001" ? failing(allPass(m, 0, 0, 0), "A", "boom") : allPass(m, 0, 0, 0);
     const r = await lanesRig({ lanes: 2, rows });
     await laneBaseline(r);
     const [v0, v1] = r.views;
@@ -251,12 +253,15 @@ describe("per-lane state", () => {
   });
 
   test("a lane-scoped server error: lane 0's pair verdict is served to lane 0 only", async () => {
-    const rows: RowsFn = (m) => (m === "M0001" ? failing(allPass(m, 0, 0, 0), "A", "boom") : allPass(m, 0, 0, 0));
+    const rows: RowsFn = (m) =>
+      m === "M0001" ? failing(allPass(m, 0, 0, 0), "A", "boom") : allPass(m, 0, 0, 0);
     const r = await lanesRig({
       lanes: 2,
       rows,
       // The pair request (NONE's echo and M0001's echo in one request) gets an end of stream.
-      serve: { eofAt: (_n, req) => req.ids.includes("NONE|echo") && req.ids.includes("M0001|echo") },
+      serve: {
+        eofAt: (_n, req) => req.ids.includes("NONE|echo") && req.ids.includes("M0001|echo"),
+      },
     });
     await laneBaseline(r);
     const [v0, v1] = r.views;
@@ -278,7 +283,9 @@ describe("per-lane state", () => {
   test("a latch names the mutant on the lane that hit it; the first latch stands", async () => {
     // Lane 1's daemon (the second one started) disagrees with the baseline on NONE: its warm-up is refused.
     const rows: RowsFn = (m, _cu, d) =>
-      m === "NONE" && d === 1 ? failing(allPass(m, 0, 0, 0), "B", "disagrees") : allPass(m, 0, 0, 0);
+      m === "NONE" && d === 1
+        ? failing(allPass(m, 0, 0, 0), "B", "disagrees")
+        : allPass(m, 0, 0, 0);
     const r = await lanesRig({ lanes: 2, rows });
     await laneBaseline(r);
     const [v0, v1] = r.views;
@@ -303,7 +310,9 @@ describe("per-lane state", () => {
     const v1 = r.views[1];
     if (v1 === undefined) throw new Error("lanes");
     await v1.activate("M0001");
-    await expect(v1.run(A, OPTS)).rejects.toThrow(/lane-misuse: a pass under a mutant reached the §6/);
+    await expect(v1.run(A, OPTS)).rejects.toThrow(
+      /lane-misuse: a pass under a mutant reached the §6/,
+    );
   });
 });
 
@@ -362,7 +371,9 @@ describe("the parallel gate: refusals and the memory hold", () => {
     const b = mk("one-shot");
     for (const retired of [false, true]) {
       b.seams.sleepRuleRetired = retired;
-      expect(b.parallelRefusal()).toMatch(/al-runner-v3-workers-refused: --workers > 1 needs the serve-entries transport/);
+      expect(b.parallelRefusal()).toMatch(
+        /al-runner-v3-workers-refused: --workers > 1 needs the serve-entries transport/,
+      );
     }
   });
 

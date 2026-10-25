@@ -434,12 +434,13 @@ describe("R586 C1: runSession keys on kind, not on authoritative", () => {
     });
   });
 
-  test("workers > 1 is refused for v3 by name", async () => {
+  // R766 (b): the v3 backend runs lanes; a v3-kind backend that cannot is still refused by name.
+  test("workers > 1 is refused by name for a v3-kind backend that cannot run lanes", async () => {
     await inProject(async (root) => {
       const store = new ResultsStore(":memory:");
       const mk = () => withProbe(new V3KindStub([]), []);
       await expect(v3Session(root, store, mk(), { workers: 2 })).rejects.toThrow(
-        /refused for the al-runner-v3 backend/,
+        /al-runner-v3-workers-refused: --workers 2 > 1 needs a v3 backend that can run lanes/,
       );
     });
   });

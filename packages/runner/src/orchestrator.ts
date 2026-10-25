@@ -183,11 +183,6 @@ import {
 import { nestedProjectWarning } from "./nested-project";
 import { isRetrySafe, requiresUnsafeLatch } from "./operation-outcome";
 import {
-  type PermissionCanaryResult,
-  describeTestPermissionsRefusal,
-  permissionCanaryWarnings,
-} from "./permission-canary";
-import {
   type LaneSink,
   type Latch,
   MAX_V3_WORKERS,
@@ -196,6 +191,11 @@ import {
   runScopeQueue,
   splitBackend,
 } from "./parallel-queue";
+import {
+  type PermissionCanaryResult,
+  describeTestPermissionsRefusal,
+  permissionCanaryWarnings,
+} from "./permission-canary";
 import {
   type BuildBackend,
   BuildSymbolsDivergedError,
@@ -4661,7 +4661,10 @@ function handBuildSymbols(backend: ExecutionBackend, symbols: readonly string[])
 interface BatchScope {
   readonly backend: ExecutionBackend;
   /** R766 (b): `--workers > 1` on al-runner v3: the owner backend and its lane views. */
-  readonly parallel?: { readonly owner: ExecutionBackend; readonly lanes: readonly ExecutionBackend[] };
+  readonly parallel?: {
+    readonly owner: ExecutionBackend;
+    readonly lanes: readonly ExecutionBackend[];
+  };
   readonly caps: BackendCapabilities;
   readonly safety: SessionSafety;
   readonly leaseSession: LeaseSession | undefined;

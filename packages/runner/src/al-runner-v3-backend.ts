@@ -644,6 +644,13 @@ export interface V3LaneView extends ExecutionBackend {
   latched(): { readonly mutantId: string; readonly why: string } | undefined;
   useBuildSymbols(symbols: readonly string[]): void;
   close(): Promise<void>;
+  /** The per-mutant calls a lane view always has (optional on `ExecutionBackend`). */
+  sendKillPair(mutantId: string, ref: TestMethodRef): Promise<void>;
+  useCoveringBudgets(
+    mutantId: string,
+    budgets: readonly { readonly ref: TestMethodRef; readonly budgetMs: number }[],
+  ): void;
+  survivorNote(covering: readonly TestMethodRef[]): string | undefined;
 }
 
 /** R766 (b): a lane beyond lane 0 starts only while this much memory is available (10 GB). */
@@ -1565,7 +1572,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       throw new Error(`al-runner-v3-lane-misuse: lanes(${n}): N must be an integer of 2 or more`);
     }
     if (this.proof !== undefined) {
-      throw new Error("al-runner-v3-lane-misuse: lanes(N) must be called before the first deploy()");
+      throw new Error(
+        "al-runner-v3-lane-misuse: lanes(N) must be called before the first deploy()",
+      );
     }
     for (let k = 1; k < n; k++) this.laneList.push(this.makeLane(k));
     for (const l of this.laneList) {
@@ -1642,7 +1651,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    */
   parallelRefusal(): string | undefined {
     if (!this.entries) {
-      return "al-runner-v3-workers-refused: --workers > 1 needs the serve-entries transport; this session runs one-shot (set \"alRunnerV3.transport\" to \"serve-entries\", or see the al-runner-v3-serve-default-fallback warning for why the default fell back) (R766)";
+      return 'al-runner-v3-workers-refused: --workers > 1 needs the serve-entries transport; this session runs one-shot (set "alRunnerV3.transport" to "serve-entries", or see the al-runner-v3-serve-default-fallback warning for why the default fell back) (R766)';
     }
     if (!this.sleepRuleRetiredForParallel()) {
       return "al-runner-v3-workers-refused: parallel v3 needs a build whose pin retires the §6 Sleep rule (R766, R768)";
