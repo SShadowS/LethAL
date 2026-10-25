@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**24 of 743 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**23 of 746 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -323,9 +323,11 @@ that ordering is the priority.
 - **R720** · Whole members in a `#if` right after the global `var` section parse INSIDE that section, so the symbol table never indexes them: 235 compiled-in members lose their typed sites, and lost R196's hang refusal (fixed) · [R720.md](docs/roadmap/R720.md) · open, deferred 2026-10-24 — the lost hang refusal is fixed…
 - **R721** · A global declared inside a var-section `#if` is not collected, so R196's hang refusal declined a loop write to it and deployed a mutant that can hang · [R721.md](docs/roadmap/R721.md) · done (bc0f9a8f)
 - **R725** · Hang readers that treat a null `resolveVarRef` as "absent": the r531/R696 write collectors read it as the implicit Rec, and R572 drops a var-out flag, inside swallowed members, `#if` globals and ambiguous names · [R725.md](docs/roadmap/R725.md) · done (e07c78ec)
-- **R737** · A callee receiver declared inside a var-section `#if` (or every-arm-ambiguous) is never followed: `declaredType`'s text fallback skips preprocessor nodes · [R737.md](docs/roadmap/R737.md) · open, filed 2026-10-24 (found by R-725's review; not built)
+- **R737** · A callee receiver declared inside a var-section `#if` (or every-arm-ambiguous) is never followed: `declaredType`'s text fallback skips preprocessor nodes · [R737.md](docs/roadmap/R737.md) · done (2cd47ee7)
 - **R738** · Silent under-report risk: an altool publish that removes a member an installed tests app calls is accepted, and the tests then fail at run time instead of being refused as a stale tests app · [R738.md](docs/roadmap/R738.md) · done (dab2d844)
+- **R752** · The R402 shape sweep reports 2 problems on master: `w6_var_swallowed_table` emits 28 specs, expected 29 · [R752.md](docs/roadmap/R752.md) · open, filed 2026-10-24 (found by R-737; not investigated)
 - **R740** · Silent under-report risk: a stale member of a DEPENDENCY app (upgraded under an unchanged tests app) drops tests from the green set the way R738 did for the target · [R740.md](docs/roadmap/R740.md) · done (f5991df3)
+- **R751** · `r737Partial` counts only a type that names no project object: a two-type receiver where one arm is a project object lacking the called member still looks complete · [R751.md](docs/roadmap/R751.md) · open, filed 2026-10-24 (found by the R-737 delta review; reach 0 today)
 - **R741** · Unmeasured: a stale member the target adds through a tableextension or pageextension may be named by its BASE object's id, which R738 does not read as the target's · [R741.md](docs/roadmap/R741.md) · done (3c264a7c)
 - **R749** · Silent under-report: a stale member whose BC function id is NEGATIVE matched neither R738's nor R740's refusal, so its tests left the green set silently · [R749.md](docs/roadmap/R749.md) · done (3c264a7c)
 
@@ -421,7 +423,7 @@ that ordering is the priority.
 - **R398** · The object-header scan is ASCII-only and line-anchored, so valid AL such as an unquoted non-ASCII object name or `namespace X; codeunit ...` on one line is refused whole (no-header) · [R398.md](docs/roadmap/R398.md) · closed 2026-10-05 — stated limit: 0 no-header refusals in 17,990 files; a widened pattern finds the same…
 - **R304** · Statements inside a block OPENED by a split `#if` if-header (`preproc_split_if_then_begin`, `preproc_split_if_begin_asymmetric`) are not in statement position, so they are not sites · [R304.md](docs/roadmap/R304.md) · closed 2026-10-06 — stated limit: 4 lost statements in all corpora…
 - **R735** · Isolating many breaking mutants costs about 540 compiles on DC; alc's own diagnostics can name the suspects first · [R735.md](docs/roadmap/R735.md) · done (4c4cfb0e)
-- **R743** · A diagnostic cascade can spend the isolation budget on innocent suspects · [R743.md](docs/roadmap/R743.md) · open
+- **R743** · A diagnostic cascade can spend the isolation budget on innocent suspects · [R743.md](docs/roadmap/R743.md) · done (5a2f4338)
 - **R305** · An object whose HEADER is split by `#if` (`preproc_split_declaration`) is refused as a whole file, so none of its sites are instrumented · [R305.md](docs/roadmap/R305.md) · closed 2026-10-05 — stated limit: 593 sites lost in 2 BaseApp files (0.026%), 0 elsewhere (R-305 census)
 - **R444** · Eight more grammar containers can hold statements and `isStatementSlot` knows none of them: `preproc_guarded_statement` (two) and six split-directive kinds · [R444.md](docs/roadmap/R444.md) · closed 2026-10-06 — stated limit: 0 statements in any of the eight containers on BaseApp, CDO, DC, DO and the…
 - **R307** · One bad file still aborts the whole run: `assertNoOverlap`, the injector's unsupported-kind throw, the latch's no-owner throw and the line map's declared-but-unmapped throw all stay whole-run throws · [R307.md](docs/roadmap/R307.md) · done (cf354d51)
@@ -786,8 +788,9 @@ that ordering is the priority.
 - **R739** · Warnings no gate can pin: `console.warn` lines inside a session, and the warning events of `runVerify` and `runNamedMutants` · [R739.md](docs/roadmap/R739.md) · done (c0f3dedb)
 - **R742** · run-mutant-many P6 is timing-dependent: a stalled Windows CI runner turns its expected `timeout` into `deadline-exceeded` · [R742.md](docs/roadmap/R742.md) · done (97f69cd3)
 - **R746** · `fenced-coverage-no-procedure-lines` fires for a test that runs only a trigger body (a field's OnValidate), not only on a real line-map frame fault · [R746.md](docs/roadmap/R746.md) · done (eed3d729)
-- **R747** · The generated selector codeunit gives almost every non-narrowed test a member entry, so a base-line fault on target objects cannot raise `fenced-coverage-no-procedure-lines` · [R747.md](docs/roadmap/R747.md) · open, filed 2026-10-24 (from coord task R-746)
-- **R750** · Wrong comment in a tables-gate fixture: a pageextension's procedures ARE callable from a test codeunit (measured on BC 28.4) · [R750.md](docs/roadmap/R750.md) · open, filed 2026-10-24 (found by R-741's probe)
+- **R747** · The generated selector codeunit gives almost every non-narrowed test a member entry, so a base-line fault on target objects cannot raise `fenced-coverage-no-procedure-lines` · [R747.md](docs/roadmap/R747.md) · done (83741bbf)
+- **R748** · A naming gap in an object that also has member rows raises no warning · [R748.md](docs/roadmap/R748.md) · open, filed 2026-10-24 (from coord task R-747)
+- **R750** · Wrong comment in a tables-gate fixture: a pageextension's procedures ARE callable from a test codeunit (measured on BC 28.4) · [R750.md](docs/roadmap/R750.md) · done (a3ae069b)
 
 ---
 

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { mkdir, readFile, readdir, rm, stat, utimes } from "node:fs/promises";
 import { join } from "node:path";
 import { initParser, parseAL, wrapRoot } from "@lethal/engine";
+import { CONTROL_SELECTOR_FILENAME, emitMutationSelector } from "@lethal/schemata";
 import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -3319,12 +3320,24 @@ describe("fenced coverage — the thin-coverage diagnostic", () => {
 }
 `;
 
-  async function deployed(inner: unknown): Promise<{
+  // R747: extra objects a test wants declared (source files plus their symbol entries).
+  interface ExtraObjects {
+    files?: Record<string, string>;
+    codeunits?: { Id: number; Name: string }[];
+    tables?: { Id: number; Name: string }[];
+  }
+  async function deployed(
+    inner: unknown,
+    extra: ExtraObjects = {},
+  ): Promise<{
     backend: BcDevMcpBackend;
     cleanup: () => Promise<void>;
   }> {
     const outputDir = scratch("lethal-thin-");
     await writeDeployInputs(outputDir);
+    for (const [name, text] of Object.entries(extra.files ?? {})) {
+      await Bun.write(join(outputDir, name), text);
+    }
     const appJsonPath = join(outputDir, "app.json");
     const app = JSON.parse(await readFile(appJsonPath, "utf8")) as Record<string, unknown>;
     await Bun.write(
@@ -3346,8 +3359,8 @@ describe("fenced coverage — the thin-coverage diagnostic", () => {
         throw new Error("bc-dev-mcp must not be contacted in fenced mode");
       },
       makeDeployment(outputDir, {
-        Codeunits: [{ Id: 79100, Name: "Ours" }],
-        Tables: [{ Id: 79150, Name: "Data No Trigger" }],
+        Codeunits: [{ Id: 79100, Name: "Ours" }, ...(extra.codeunits ?? [])],
+        Tables: [{ Id: 79150, Name: "Data No Trigger" }, ...(extra.tables ?? [])],
       }),
       factory([], inner),
     );
@@ -3400,7 +3413,8 @@ describe("fenced coverage — the thin-coverage diagnostic", () => {
     try {
       await backend.run(ref, { coverage: "fenced", timeoutMs: 1000 });
       const said = warn.mock.calls.map((c) => String(c[0])).join("\n");
-      expect(said).toContain("NOT ONE line fell inside a known procedure");
+      expect(said).toContain("no row of Codeunit:79100");
+      expect(said).toContain("fell inside a known procedure");
       expect(said).toContain("base-line frame");
     } finally {
       warn.mockRestore();
@@ -3409,9 +3423,9 @@ describe("fenced coverage — the thin-coverage diagnostic", () => {
   });
 
   // R746: through the REAL line map. Each runs one test and returns what it said.
-  async function saidFor(coverage: unknown[]): Promise<string> {
+  async function saidFor(coverage: unknown[], extra: ExtraObjects = {}): Promise<string> {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
-    const { backend, cleanup } = await deployed({ coverage });
+    const { backend, cleanup } = await deployed({ coverage }, extra);
     try {
       await backend.run(ref, { coverage: "fenced", timeoutMs: 1000 });
       return warn.mock.calls.map((c) => String(c[0])).join("\n");
@@ -3430,22 +3444,116 @@ describe("fenced coverage — the thin-coverage diagnostic", () => {
   test("R746: a row on a gap line (the field declaration, or past the end) warns", async () => {
     for (const line of [7, 999]) {
       const said = await saidFor([T(line)]);
-      expect(said).toContain("NOT ONE line fell inside a known procedure");
+      expect(said).toContain("no row of Table:79150");
       expect(said).toContain("only object-level matching (triggers and local procedures) remains");
     }
   });
 
   test("R746: trigger row FIRST, then a gap row in the same object, warns", async () => {
     const said = await saidFor([T(11), T(7)]);
-    expect(said).toContain("NOT ONE line fell inside a known procedure");
+    expect(said).toContain("no row of Table:79150");
   });
 
   test("R746: only line-0 rows are silent (pinned)", async () => {
     expect(await saidFor([T(0), C(0)])).not.toContain("fenced coverage for");
   });
 
-  test("R746: a procedure row is silent (unchanged)", async () => {
-    expect(await saidFor([T(7), C(4)])).not.toContain("fenced coverage for");
+  test("R747: a member row on codeunit 79100 does not hide table 79150's gap row", async () => {
+    const said = await saidFor([T(7), C(4)]);
+    expect(said).toContain("no row of Table:79150");
+    expect(said).not.toContain("Codeunit:79100");
+  });
+
+  // R747: LethAL's own selector, written by the real emitter. Its `Active` row is a member row of
+  // an object that is not the target; it must not mask the target.
+  const SELECTOR_ID = 79399;
+  const selectorText = emitMutationSelector({
+    selectorId: SELECTOR_ID,
+    controlId: SELECTOR_ID + 1,
+    tableId: SELECTOR_ID + 2,
+    artifactId: "a".repeat(32),
+    targetAppId: "00000000-0000-0000-0000-000000000001",
+  });
+  const ACTIVE_LINE =
+    selectorText.split("\n").findIndex((l) => l.includes("exit(ControlState.IsActive(")) + 1;
+  const SEL: ExtraObjects = {
+    files: { [CONTROL_SELECTOR_FILENAME]: selectorText },
+    codeunits: [{ Id: SELECTOR_ID, Name: "Mutation Selector" }],
+  };
+  const S = () => ({ objectType: 5, objectId: SELECTOR_ID, lineNo: ACTIVE_LINE, hits: 1 });
+
+  test("R747: the selector's Active row exists on a member line (test premise)", async () => {
+    expect(ACTIVE_LINE).toBeGreaterThan(0);
+    // Selector row alone: a member row, no gap, quiet.
+    expect(await saidFor([S()], SEL)).not.toContain("fenced coverage for");
+  });
+
+  test("R747: selector Active row plus a target gap row warns, naming the target only", async () => {
+    const said = await saidFor([S(), T(7)], SEL);
+    expect(said).toContain("no row of Table:79150");
+    expect(said).not.toContain(`Codeunit:${SELECTOR_ID}`);
+  });
+
+  test("R747: selector row plus target member rows is quiet", async () => {
+    expect(await saidFor([S(), C(4), T(11)], SEL)).not.toContain("fenced coverage for");
+  });
+
+  test("R747: selector row plus target trigger-only rows is quiet (R746 unchanged)", async () => {
+    expect(await saidFor([S(), T(11)], SEL)).not.toContain("fenced coverage for");
+  });
+
+  test("R747: two targets, one with a member row, one with only gap rows: names the second only", async () => {
+    const said = await saidFor([S(), C(4), T(7)], SEL);
+    expect(said).toContain("no row of Table:79150");
+    expect(said).not.toContain("Codeunit:79100");
+  });
+
+  test("R747: one object with a member row AND a gap row is quiet (known blind spot)", async () => {
+    const said = await saidFor([S(), C(4), C(999)], SEL);
+    expect(said).not.toContain("fenced coverage for");
+  });
+
+  test("R747: a table and a codeunit with the same id are told apart", async () => {
+    const said = await saidFor(
+      [
+        { objectType: 5, objectId: 79101, lineNo: 4, hits: 1 },
+        { objectType: 1, objectId: 79101, lineNo: 7, hits: 1 },
+      ],
+      {
+        files: {
+          "SameCu.Codeunit.al": OURS_AL.replace("79100", "79101").replace('"Ours"', '"Same Cu"'),
+          "SameTab.Table.al": TRIG_AL.replace("79150", "79101").replace(
+            '"Data No Trigger"',
+            '"Same Tab"',
+          ),
+        },
+        codeunits: [{ Id: 79101, Name: "Same Cu" }],
+        tables: [{ Id: 79101, Name: "Same Tab" }],
+      },
+    );
+    expect(said).toContain("no row of Table:79101");
+    expect(said).not.toContain("Codeunit:79101");
+  });
+
+  test("R747: more than 5 flagged objects are capped with '+N more', sorted, not in row order", async () => {
+    const ids = [79160, 79161, 79162, 79163, 79164, 79165, 79166];
+    const said = await saidFor(
+      // Rows arrive in reverse id order: the cap must still show the lowest five.
+      [...ids].reverse().map((id) => ({ objectType: 1, objectId: id, lineNo: 7, hits: 1 })),
+      {
+        files: Object.fromEntries(
+          ids.map((id) => [
+            `T${id}.Table.al`,
+            TRIG_AL.replace("79150", String(id)).replace('"Data No Trigger"', `"T ${id}"`),
+          ]),
+        ),
+        tables: ids.map((id) => ({ Id: id, Name: `T ${id}` })),
+      },
+    );
+    expect(said).toContain("Table:79160");
+    expect(said).toContain("Table:79164");
+    expect(said).not.toContain("Table:79165");
+    expect(said).toContain("+2 more");
   });
 
   test("silent when even one line resolves to a member", async () => {
