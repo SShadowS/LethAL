@@ -14,6 +14,7 @@ The leg-by-leg tables live in those pre-commitments and are asserted by the ites
 
 The legs:
 
+- R790/R798: the speculative baseline (the baseline's one-shot calls run while alc proves the batch) is OFF by default and opt-in (`LETHAL_V3_SPECULATE_BASELINE=1`). No leg sets it, so every figure below is the sequential path's; the measured wash is in `docs/roadmap/R790.md`.
 - R762: a normal SESSION may replay a cached, fully passing probe (`.probe-cache-<digest>.json` beside `.gated`),
   keyed by the binary sha256, LethAL's probe code, bcVersion, the packages folder, alc, the cache dir and the `.gated`
   commit. This gate never does: it sets `LETHAL_V3_FRESH_PROBE=1` for every session it starts, and leg C calls
