@@ -7,6 +7,11 @@
       "reason": "The gift card demo app, written for this repository and published under its MIT licence. Kept unredacted on purpose: it is the sample report the docs point at, so `lethal explain report.json --top 10` can be run with no server, and the survivors' originalText/mutatedText are the whole point of showing it."
     },
     {
+      "path": "packages/runner/tests/__fixtures__/gift-card-scheme3.report.json",
+      "projectDir": "examples/gift-card",
+      "reason": "R758: a byte-identical frozen copy of the gift card report above as it stood at identity scheme 3 (master, 2026-10-25), the sample of an OLDER report that five tests need. The same first-party MIT source as the gift card entry; kept unredacted so the copy stays byte-identical to the report those tests were written against."
+    },
+    {
       "path": "examples/credit-limit/demo.report.json",
       "projectDir": "examples/credit-limit",
       "reason": "The credit limit demo app, written for this repository and published under its MIT licence. Kept unredacted for the same reason as the gift card demo: it is the report its README quotes mutant by mutant (M0015, M0019, M0025), and redacting the originalText those ids refer to would leave the README pointing at nothing."

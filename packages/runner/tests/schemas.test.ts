@@ -1091,8 +1091,10 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
   test("R252: coverageMode is additive under v3: a report without it validates, and with it", () => {
     // v3 was edited in place, which is sound only while the field stays OPTIONAL: required, it
     // would reject every report written before R252.
+    // R758: a frozen copy of the scheme-3 gift-card report, so a re-freeze of the live campaign
+    // cannot take away this test's sample of an older report.
     const raw = readFileSync(
-      join(REPO_ROOT, "docs/campaign/2026-08-16-gift-card/rehearsal.report.json"),
+      join(REPO_ROOT, "packages/runner/tests/__fixtures__/gift-card-scheme3.report.json"),
       "utf8",
     );
     expect(raw).not.toContain("coverageMode");
@@ -1147,8 +1149,10 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
   test("R577: killReproduced and reproducedFailure are additive under v3: without them, with them, and killReproduced only as true", () => {
     // Optional, so R157's rule keeps v3 and the committed reports (bcdev, where the rule is off)
     // are not regenerated.
+    // R758: a frozen copy of the scheme-3 gift-card report, so a re-freeze of the live campaign
+    // cannot take away this test's sample of an older report.
     const raw = readFileSync(
-      join(REPO_ROOT, "docs/campaign/2026-08-16-gift-card/rehearsal.report.json"),
+      join(REPO_ROOT, "packages/runner/tests/__fixtures__/gift-card-scheme3.report.json"),
       "utf8",
     );
     expect(raw).not.toContain("killReproduced");
@@ -1171,9 +1175,11 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
   });
 
   test("R381: buildSymbols is additive under v3: optional, a report without it validates, and with it, [] included", () => {
+    // R758: a frozen copy of the scheme-3 gift-card report, so a re-freeze of the live campaign
+    // cannot take away this test's sample of an older report.
     const without = JSON.parse(
       readFileSync(
-        join(REPO_ROOT, "docs/campaign/2026-08-16-gift-card/rehearsal.report.json"),
+        join(REPO_ROOT, "packages/runner/tests/__fixtures__/gift-card-scheme3.report.json"),
         "utf8",
       ),
     ) as Record<string, unknown>;
