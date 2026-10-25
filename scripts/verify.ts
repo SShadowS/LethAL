@@ -528,35 +528,65 @@ export function stuckWorkers(
 /**
  * Whether `pid` is alive now with `parent` as its parent, asked of the OS just before a signal, so
  * on Linux a pid reused by another process is never hit (the check and the kill are microseconds
- * apart, and pids are handed out in sequence). Windows asks CIM through PowerShell, about a second
- * before the kill, and reuses pids quickly, so there the window is small but not zero. Any other OS,
- * or any failure to ask, answers false, and `execWatched` then uses its backstop.
+ * apart, and pids are handed out in sequence). Windows asks CIM through PowerShell (`parentTable`),
+ * about a second before the kill, and reuses pids quickly, so there the window is small but not zero.
+ * Any other OS, or any failure to ask, answers false, and `execWatched` then uses its backstop.
  */
 export function isChildOf(pid: number, parent: number): boolean {
+  return parentTable([pid]).get(pid) === parent;
+}
+
+/**
+ * Parses the Windows table text: one `ProcessId ParentProcessId` pair per line. A line that is not
+ * two whole numbers is ignored.
+ */
+export function parseCimParents(stdout: string): Map<number, number> {
+  const out = new Map<number, number>();
+  for (const line of stdout.split(/\r?\n/)) {
+    const m = /^\s*(\d+)\s+(\d+)\s*$/.exec(line);
+    if (m) out.set(Number(m[1]), Number(m[2]));
+  }
+  return out;
+}
+
+/**
+ * Reads the OS ONCE for all of `pids` and maps each LIVE one to its parent pid (a pid that is gone,
+ * or a zombie, is absent). One PowerShell call on Windows, so the cost does not grow with the count.
+ * Any other OS, or any failure to ask, gives an empty map.
+ */
+export function parentTable(pids: readonly number[]): Map<number, number> {
   try {
     if (process.platform === "linux") {
-      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-      // `pid (comm) state ppid ...`; comm may hold spaces and parentheses, so split after the LAST ")".
-      const [state, ppid] = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
-      return state !== "Z" && Number(ppid) === parent; // a zombie has already ended
+      const out = new Map<number, number>();
+      for (const pid of pids) {
+        try {
+          const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+          // `pid (comm) state ppid ...`; comm may hold spaces and parentheses, so split after the LAST ")".
+          const [state, ppid] = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+          if (state !== "Z") out.set(pid, Number(ppid)); // a zombie has already ended
+        } catch {
+          // no such process
+        }
+      }
+      return out;
     }
-    if (process.platform === "win32") {
+    if (process.platform === "win32" && pids.length > 0) {
+      const filter = pids.map((p) => `ProcessId=${p}`).join(" OR ");
       const r = Bun.spawnSync(
         [
           "powershell",
           "-NoProfile",
           "-Command",
-          `(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').ParentProcessId`,
+          `Get-CimInstance Win32_Process -Filter '${filter}' | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId)" }`,
         ],
         { stdout: "pipe", stderr: "pipe" },
       );
-      const out = r.stdout.toString().trim();
-      return r.exitCode === 0 && out !== "" && Number(out) === parent;
+      return r.exitCode === 0 ? parseCimParents(r.stdout.toString()) : new Map();
     }
   } catch {
-    // no such process
+    // could not ask
   }
-  return false;
+  return new Map();
 }
 
 export interface ExecResult {
