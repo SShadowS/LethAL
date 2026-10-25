@@ -26,6 +26,7 @@ import {
   type V3ContractResult,
   burnerArgv,
   classifySleep,
+  leastBusyCore,
   runV3ContractProbe,
   v3ContractRefusals,
   v3DefectWarnings,
@@ -704,8 +705,10 @@ describe("R693 r14b: timeout-is-cpu runs one huge burn alone, then beside busy l
    * Runs the probe; `a` and `b` answer the first (alone) and second (shared) call of codeunit 50656.
    * "hang" waits for the call's process timeout and returns as a killed process does.
    */
-  const run = async (a: Ans, b: Ans, burnerThrowsAt = 0) => {
+  const run = async (a: Ans, b: Ans, burnerThrowsAt = 0, stat?: string[]) => {
     const events: string[] = [];
+    const cores: number[] = [];
+    let statReads = 0;
     const argvs: (readonly string[])[] = [];
     const guards: (number | undefined)[] = [];
     let starts = 0;
@@ -724,8 +727,10 @@ describe("R693 r14b: timeout-is-cpu runs one huge burn alone, then beside busy l
       alcPath: "/fake/alc",
       alcIo: fakeAlcIo,
       tasksetPath: "/usr/bin/taskset",
-      startBurner: () => {
+      ...(stat !== undefined ? { readProcStat: async () => stat[statReads++] } : {}),
+      startBurner: (core) => {
         starts += 1;
+        cores.push(core);
         if (starts === burnerThrowsAt) throw new Error("burner failed to start");
         events.push("burner-start");
         return { kill: () => events.push("burner-kill") };
@@ -758,8 +763,93 @@ describe("R693 r14b: timeout-is-cpu runs one huge burn alone, then beside busy l
     });
     if (burnerThrowsAt > 0) await probeP.catch(() => undefined);
     const r = burnerThrowsAt > 0 ? undefined : await probeP;
-    return { r, events, argvs, guards, f: r?.facts.find((x) => x.fact === "timeout-is-cpu") };
+    return {
+      r,
+      events,
+      argvs,
+      guards,
+      cores,
+      f: r?.facts.find((x) => x.fact === "timeout-is-cpu"),
+    };
   };
+
+  /** Fake /proc/stat: cpu0 busy (+900 ticks), cpu1 nearly idle (+10), cpu2 busy (+500). */
+  const statLine = (n: number, user: number, idle: number) => `cpu${n} ${user} 0 0 ${idle} 0 0 0 0`;
+  const snap = (c0: number, c1: number, c2: number, idle = 1000) =>
+    [
+      "cpu 0 0 0 0 0 0 0 0",
+      statLine(0, c0, idle),
+      statLine(1, c1, idle),
+      statLine(2, c2, idle),
+    ].join("\n");
+  const BUSY0 = [snap(100, 100, 100), snap(1000, 110, 600)];
+  const wallBuild = [snap(100, 100, 100), snap(1000, 110, 600)];
+
+  test("R789 (a): a correct build under contention (A stopped at 16000 ms) is unmeasurable, never diverged; B not run", async () => {
+    const { f, events } = await run(stopped(16000), stopped(16000), 0, BUSY0);
+    expect(f?.verdict).toBe("unmeasurable");
+    expect(f?.measured).toContain("A late: core 1 contended");
+    expect(events).toEqual(["call-A"]);
+  });
+
+  test("R789 (b)+(i): a wall-time build reads diverged, loaded or not (A and B both stop at about 2000 ms)", async () => {
+    for (const stat of [undefined, wallBuild]) {
+      const { f, events } = await run(stopped(2005), stopped(2010), 0, stat);
+      expect(f?.verdict).toBe("diverged");
+      expect(events).toContain("call-B");
+    }
+  });
+
+  test("R789 (c): a correct quiet build (A 2000, B 16000) matches, on the chosen core", async () => {
+    const { f } = await run(stopped(2000), stopped(16000), 0, BUSY0);
+    expect(f?.verdict).toBe("matches");
+    expect(f?.measured).toContain("core 1;");
+  });
+
+  test("R789 (ii): the same fake over two probe runs: loaded then quiet reads unmeasurable then matches; a wall-time build diverged both times", async () => {
+    const correct = [
+      await run(stopped(16000), stopped(16000)),
+      await run(stopped(2000), stopped(16000)),
+    ];
+    expect(correct.map((x) => x.f?.verdict)).toEqual(["unmeasurable", "matches"]);
+    const wall = [await run(stopped(2000), stopped(2000)), await run(stopped(2000), stopped(2000))];
+    expect(wall.map((x) => x.f?.verdict)).toEqual(["diverged", "diverged"]);
+  });
+
+  test("R789 (iii): A at exactly 3000 ms is not late (B runs); 3001 is late", async () => {
+    const edge = await run(stopped(3000), stopped(16000));
+    expect(edge.events).toContain("call-B");
+    expect(edge.f?.verdict).toBe("matches");
+    const over = await run(stopped(3001), stopped(16000));
+    expect(over.f?.verdict).toBe("unmeasurable");
+    expect(over.events).not.toContain("call-B");
+  });
+
+  test("R789 (d): the picker takes the least busy core from two snapshots, ties to the lowest, and falls back to 0", () => {
+    expect(leastBusyCore(snap(100, 100, 100), snap(1000, 110, 600))).toBe(1);
+    expect(leastBusyCore(snap(100, 100, 100), snap(1000, 1000, 110))).toBe(2);
+    // iowait and idle do not count as busy: cpu1 only waits, so it is the quietest.
+    expect(
+      leastBusyCore(
+        "cpu0 0 0 0 0 0 0 0 0\ncpu1 0 0 0 0 0 0 0 0",
+        "cpu0 50 0 0 0 0 0 0 0\ncpu1 0 0 0 40 60 0 0 0",
+      ),
+    ).toBe(1);
+    expect(leastBusyCore(snap(1, 1, 1), snap(1, 1, 1))).toBe(0);
+    expect(leastBusyCore(undefined, snap(1, 1, 1))).toBe(0);
+    expect(leastBusyCore("garbage", "")).toBe(0);
+  });
+
+  test("R789 (e): both calls and every busy loop use the chosen core; unreadable stat means core 0", async () => {
+    const { argvs, cores, f } = await run(stopped(2010), stopped(16000), 0, BUSY0);
+    expect(cores).toEqual(Array(7).fill(1));
+    for (const argv of argvs) expect(argv.slice(0, 3)).toEqual(["/usr/bin/taskset", "-c", "1"]);
+    expect(f?.measured).toContain("core 1;");
+    const none = await run(stopped(2010), stopped(16000), 0, []);
+    expect(none.cores).toEqual(Array(7).fill(0));
+    expect(none.argvs[0]?.slice(0, 3)).toEqual(["/usr/bin/taskset", "-c", "0"]);
+    expect(burnerArgv("/usr/bin/taskset", 5).slice(0, 3)).toEqual(["/usr/bin/taskset", "-c", "5"]);
+  });
 
   const stopped = (ms: number) => ({ exitCode: 7, stdout: doc([burnRow(ms)]) });
   const passed = {
@@ -881,14 +971,14 @@ describe("R693 r14b: timeout-is-cpu runs one huge burn alone, then beside busy l
     expect((await run(stopped(1000), stopped(3001))).f?.verdict).toBe("matches");
   });
 
-  test("diverged: a wall-time limit with slack stops both calls late (A 4000, B 4100)", async () => {
-    expect((await run(stopped(4000), stopped(4100))).f?.verdict).toBe("diverged");
+  test("diverged: a wall-time limit with slack stops both calls late (A 2900, B 3100; R789: a slower A is a contended core)", async () => {
+    expect((await run(stopped(2900), stopped(3100))).f?.verdict).toBe("diverged");
   });
 
   test("the relative line: B exactly 2x A diverges, just over matches", async () => {
     expect(BURN_RELATIVE_FACTOR).toBe(2);
-    expect((await run(stopped(4000), stopped(8000))).f?.verdict).toBe("diverged");
-    expect((await run(stopped(4000), stopped(8001))).f?.verdict).toBe("matches");
+    expect((await run(stopped(2500), stopped(5000))).f?.verdict).toBe("diverged");
+    expect((await run(stopped(2500), stopped(5001))).f?.verdict).toBe("matches");
   });
 
   test("diverged: B passes (not stopped) although A was: the limit contract is broken", async () => {

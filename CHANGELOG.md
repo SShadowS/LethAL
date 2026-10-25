@@ -13,6 +13,10 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **Leg C's `timeout-is-cpu` no longer reads `diverged` on a correct build when the machine is busy** (R789). It now
+  pins both calls and the busy loops to the least busy core (two `/proc/stat` samples; core 0 if unreadable), and a
+  stopped run A that took over 3000 ms reads `unmeasurable` (core contended), not `diverged`. A build that counts
+  wall time still reads `diverged`.
 - **The serve order probe is leg O1 of the al-runner-v3 update gate** (R784). One serve daemon takes Writer and
   Reader entries in five request shapes; any state a Reader entry sees from a Writer entry fails the gate, so a build
   that stops isolating entries cannot become `current`. R778's kill-pair batching rests on that isolation.
