@@ -644,6 +644,8 @@ export interface V3EntriesStats {
    * found but refused (another codeunit, or a kill that did not come from the prefetch, or a pair that
    * did not run after it). `liveRequests = pairBatchRequests +` the old per-kill formula over the
    * kills that took today's path; a served pair adds no live request and no bound check of its own.
+   * That old formula (and `pairRequests` above) holds only over kills that took today's path:
+   * `pairRequests` also counts reproductions served from the batch.
    */
   pairBatchRequests: number;
   pairBatchStored: number;
@@ -2858,10 +2860,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       try {
         out = await this.request(this.lane, groups, "liveMs");
       } catch (err) {
-        if (err instanceof AlRunnerV3DependencySkippedError) throw err;
+        // Like `prefetchMutants`: only a request error is absorbed; a refusal, an unproven batch
+        // or a skipped dependency stops the session (S1: never serve stored pairs after one).
+        if (!(err instanceof AlRunnerServerRequestError)) throw err;
         this.notify(
           "al-runner-v3-pair-batch-skipped",
-          `[lethal] al-runner-v3-pair-batch-skipped: a batch of ${chunk.length} kill pair(s) gave no usable answer (${err instanceof Error ? `${err.name}: ${err.message.slice(0, 300)}` : String(err)}); nothing of it is stored, and each kill sends its own pair (R778).`,
+          `[lethal] al-runner-v3-pair-batch-skipped: a batch of ${chunk.length} kill pair(s) gave no usable answer (${err.kind}: ${err.message.slice(0, 300)}); nothing of it is stored, and each kill sends its own pair (R778).`,
         );
         return;
       } finally {

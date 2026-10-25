@@ -3866,6 +3866,67 @@ describe("R778: kill pairs batched after the prefetch", () => {
     }
   });
 
+  describe("S1: only a request error is absorbed (as the prefetch does); every other error stops the session", () => {
+    test("(a) an .al changed before chunk 2: the unproven error propagates, no notice, pairs are not served", async () => {
+      const notices: string[] = [];
+      const holder: { dir?: string } = {};
+      let tampered = false;
+      const mutants = Array.from({ length: 65 }, (_, i) => `M${String(i + 1).padStart(4, "0")}`);
+      let reqs: readonly Req[] = [];
+      const r = await rig({
+        serve: {
+          rows: (m, cu, d, n) => {
+            // The first batch request answers; then the tree changes before the second chunk.
+            if (!tampered && (reqs[n]?.ids[0] ?? "").startsWith("NONE#") && holder.dir) {
+              tampered = true;
+              appendFileSync(join(holder.dir, "Logic.Codeunit.al"), " ");
+            }
+            return killsAll(m, cu, d, n);
+          },
+        },
+        oneShotRows: allPass,
+        suite: SUITE1,
+        pairBatch: true,
+      });
+      reqs = r.serve.requests;
+      holder.dir = join(r.l.scratch, "active");
+      r.b.setNotify((c) => notices.push(c));
+      await baseline(r.b, SUITE1);
+      const err = await r.b.prefetchMutants(plans(mutants)).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(AlRunnerV3UnprovenBatchError);
+      expect(notices).not.toContain("al-runner-v3-pair-batch-skipped");
+      expect(r.b.entriesStats().pairBatchRequests).toBe(1);
+    });
+
+    test("(b) a fresh daemon's warm-up disagrees while re-sending after a cut: the refusal propagates, no notice", async () => {
+      const notices: string[] = [];
+      let reqs: readonly Req[] = [];
+      const isBatch = (n: number) => (reqs[n]?.ids[0] ?? "").startsWith("NONE#");
+      const r = await rig({
+        serve: {
+          rows: (m, cu, d, n, seen) =>
+            d === 0 && isBatch(n) && m === "NONE" && seen === 1
+              ? [...failA(allPass(m, cu, d, n), "flaky-cut").slice(0, 1), unkept()]
+              : d >= 1 && !isBatch(n) && m === "NONE"
+                ? failA(allPass(m, cu, d, n), "disagrees")
+                : killsAll(m, cu, d, n),
+        },
+        oneShotRows: allPass,
+        suite: SUITE1,
+        pairBatch: true,
+      });
+      reqs = r.serve.requests;
+      r.b.setNotify((c) => notices.push(c));
+      await baseline(r.b, SUITE1);
+      const err = await r.b
+        .prefetchMutants(plans(["M0001", "M0002", "M0003"]))
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(AlRunnerV3EntriesRefusedError);
+      expect(String(err)).toContain("al-runner-v3-entries-warmup-disagrees");
+      expect(notices).not.toContain("al-runner-v3-pair-batch-skipped");
+    });
+  });
+
   test("7: only a FAIL row is a kill candidate: survivors and timeouts send no batch", async () => {
     const { r } = await batchRig(
       () => ({
