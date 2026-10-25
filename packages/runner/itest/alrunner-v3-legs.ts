@@ -30,6 +30,14 @@ export const V3_NO_SERVE_ENTRIES: readonly string[] = ["alrunner 3.0.0-alpha.2 (
 
 const UNKNOWN_ENTRIES_FIELD = 'the request was refused: "unknown field `entries` for runTests"';
 
+/** R761: S1's project under serve-entries (`legS1E`); serve by construction, whatever the run's transport. */
+export const V3_S1E_LEG = "S1E";
+
+/** True when a build with no serve-entries path refused the `entries` field by name (N1E and S1E: not applicable). */
+export function isNoServeRefusal(version: string, threw: string): boolean {
+  return V3_NO_SERVE_ENTRIES.includes(version) && threw.includes(UNKNOWN_ENTRIES_FIELD);
+}
+
 /** What the N1E session did: it finished, or it threw this message. */
 export type N1EReading = { readonly completed: true } | { readonly threw: string };
 
@@ -54,7 +62,7 @@ export function judgeN1Serve(
     lines: [`re-pre-commit: upstream may have fixed #5798 (${why})`],
   });
   if ("completed" in r) return held("the serve-entries session completed");
-  if (V3_NO_SERVE_ENTRIES.includes(version) && r.threw.includes(UNKNOWN_ENTRIES_FIELD)) {
+  if (isNoServeRefusal(version, r.threw)) {
     return {
       outcome: "pass",
       lines: ["N1E: not applicable: this build has no serve-entries path"],
@@ -84,6 +92,7 @@ export function v3DefaultLegs(o: { readonly cdo: boolean; readonly tables: boole
   return [
     "C",
     "S1",
+    V3_S1E_LEG,
     "S3",
     "N1",
     V3_N1E_LEG,

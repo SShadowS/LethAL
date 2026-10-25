@@ -41,6 +41,7 @@ describe("R654 S2: the leg sets", () => {
     expect(v3DefaultLegs({ cdo: false, tables: false })).toEqual([
       "C",
       "S1",
+      "S1E", // R761: also in V3_GATE_LEGS (alpha.2 reads pass, not applicable)
       "S3",
       "N1",
       "N1E", // R722: also in V3_GATE_LEGS (alpha.2 reads pass, not applicable)
@@ -55,6 +56,7 @@ describe("R654 S2: the leg sets", () => {
     expect(v3DefaultLegs({ cdo: true, tables: true })).toEqual([
       "C",
       "S1",
+      "S1E",
       "S3",
       "N1",
       "N1E",
