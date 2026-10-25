@@ -76,8 +76,9 @@ interface ObjectLines {
   readonly shared: ReadonlySet<number>;
   /**
    * R753: the spans of SPLIT procedure nodes (`preproc_split_procedure[_preamble]`) with no name.
-   * A subset of the `unnamed` list that feeds `shared`: an error-recovered nameless PLAIN
-   * `procedure` is not here, so its rows stay gap rows for the warnings.
+   * A subset of the `unnamed` list that feeds `shared`: a nameless PLAIN `procedure` (named
+   * `""`, a clean parse; or with its name missing, error recovery) is not here, so its rows stay
+   * gap rows for the warnings.
    */
   readonly unnamedSplit: readonly ProcedureSpan[];
 }
@@ -489,7 +490,7 @@ export class LineMap {
    * R753: is `lineNo` inside a SPLIT procedure with no coverage name (R318, ruling A)? The line is
    * placed, in a member the map declines to name. Used by the fenced warnings ONLY: `isNamingGap`
    * is unchanged, because it feeds `namingGaps` and `unplaceable` (R318's 2026-10-06 ruling), and
-   * a nameless plain `procedure` (error recovery) is not in this list.
+   * a nameless plain `procedure` (named `""`, or name missing) is not in this list.
    */
   inUnnamedSpan(objectType: string, objectId: number, lineNo: number): boolean {
     const entry = this.byObject.get(keyOf(objectType, objectId));

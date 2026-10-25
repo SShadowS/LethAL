@@ -1171,7 +1171,12 @@ codeunit 50102 ProbeC
 });
 
 describe("R753: inUnnamedSpan is true only inside a SPLIT procedure with no coverage name", () => {
-  const DECLARED = new Set(["codeunit:79120", "codeunit:79121", "codeunit:79122"]);
+  const DECLARED = new Set([
+    "codeunit:79120",
+    "codeunit:79121",
+    "codeunit:79122",
+    "codeunit:79123",
+  ]);
   // Split member 3-10 with both arm names taken (no coverage name); gap line 11; Pick(T) 12-15.
   const NAMELESS_SPLIT = `codeunit 79120 "A"
 {
@@ -1208,6 +1213,11 @@ describe("R753: inUnnamedSpan is true only inside a SPLIT procedure with no cove
     end;
 }
 `;
+  // A plain procedure with its name MISSING: a parse error (error recovery), same lines.
+  const NAMELESS_MISSING = NAMELESS_PLAIN.replace("79121", "79123").replace(
+    'procedure ""(',
+    "procedure (",
+  );
   // A renamed split member that HAS a coverage name (`Pick`, `Choose`, `Third` are free).
   const NAMED_SPLIT = `codeunit 79122 "C"
 {
@@ -1227,6 +1237,7 @@ describe("R753: inUnnamedSpan is true only inside a SPLIT procedure with no cove
       [
         { path: "A.Codeunit.al", text: NAMELESS_SPLIT },
         { path: "B.Codeunit.al", text: NAMELESS_PLAIN },
+        { path: "D.Codeunit.al", text: NAMELESS_MISSING },
         { path: "C.Codeunit.al", text: NAMED_SPLIT },
       ],
       DECLARED,
@@ -1253,6 +1264,10 @@ describe("R753: inUnnamedSpan is true only inside a SPLIT procedure with no cove
     const m = await mapOf();
     expect([4, 5].map((n) => m.inUnnamedSpan("Codeunit", 79121, n))).toEqual([false, false]);
     expect([4, 5].map((n) => m.isNamingGap("Codeunit", 79121, n))).toEqual([true, true]);
+    // The name-missing shape (error recovery) is the same.
+    expect(wrapRoot(parseAL(NAMELESS_MISSING)).hasError).toBe(true);
+    expect([4, 5].map((n) => m.inUnnamedSpan("Codeunit", 79123, n))).toEqual([false, false]);
+    expect([4, 5].map((n) => m.isNamingGap("Codeunit", 79123, n))).toEqual([true, true]);
   });
 
   test("a split member WITH a coverage name, an undeclared object and a bare line are false", async () => {

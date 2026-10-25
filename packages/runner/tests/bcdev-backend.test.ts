@@ -3731,16 +3731,24 @@ codeunit 79191 "Second"
     end;
 }
 `;
+  // R753: a PLAIN procedure with its name MISSING is a parse error (error recovery): the node is a
+  // plain `procedure` with a zero-width identifier. Same lines as above.
+  const NAMELESS_MISSING = NAMELESS_PLAIN.replace("79121", "79123")
+    .replace('"Nameless Plain"', '"Nameless Missing"')
+    .replace('procedure ""(', "procedure (");
   const NAMELESS: ExtraObjects = {
     files: {
       "NamelessSplit.Codeunit.al": NAMELESS_SPLIT,
       "NamelessPlain.Codeunit.al": NAMELESS_PLAIN,
+      "NamelessMissing.Codeunit.al": NAMELESS_MISSING,
     },
     codeunits: [
       { Id: 79120, Name: "Nameless Split" },
       { Id: 79121, Name: "Nameless Plain" },
+      { Id: 79123, Name: "Nameless Missing" },
     ],
   };
+  const NM = (lineNo: number) => ({ objectType: 5, objectId: 79123, lineNo, hits: 1 });
   const NS = (lineNo: number) => ({ objectType: 5, objectId: 79120, lineNo, hits: 1 });
   const NP = (lineNo: number) => ({ objectType: 5, objectId: 79121, lineNo, hits: 1 });
 
@@ -3775,9 +3783,12 @@ codeunit 79191 "Second"
     }
   });
 
-  test("R753: a nameless PLAIN procedure (error recovery shape) stays a gap for the warnings", async () => {
-    expect(codesOf(await notesFor([NP(9), NP(4)], NAMELESS))).toEqual([BESIDE]);
-    expect(codesOf(await notesFor([NP(4), NP(5)], NAMELESS))).toEqual([NO_PROC]);
+  test('R753: a nameless PLAIN procedure (named `""`, a clean parse; or name missing, error recovery) stays a gap for the warnings', async () => {
+    expect(NAMELESS_MISSING).toContain("procedure (A: Integer)");
+    for (const row of [NP, NM]) {
+      expect(codesOf(await notesFor([row(9), row(4)], NAMELESS))).toEqual([BESIDE]);
+      expect(codesOf(await notesFor([row(4), row(5)], NAMELESS))).toEqual([NO_PROC]);
+    }
   });
 
   test("R753: the dump marks rows in an unnamed split member, and only those", async () => {
