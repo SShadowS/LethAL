@@ -215,6 +215,16 @@ const GIFT_CARD = join(
   "2026-08-16-gift-card",
   "rehearsal.report.json",
 );
+/** R758: a frozen copy of the scheme-3 gift-card report, for a test that needs a report written
+ *  before R443; a re-freeze of the live campaign must not take that sample away. */
+const GIFT_CARD_SCHEME3 = join(
+  REPO_ROOT,
+  "packages",
+  "runner",
+  "tests",
+  "__fixtures__",
+  "gift-card-scheme3.report.json",
+);
 
 /** Shell words, honouring "..." and '...'. The documents' examples use no variables or
  *  substitutions on purpose: an example must work exactly as a reader copies it. */
@@ -1130,7 +1140,7 @@ describe("C02-07: the hardening loop, run from the documents", () => {
     // The committed report predates R443, so it records no numbering facts and explain prints no
     // mark. Regenerating it needs a live run; the facts are added here instead, as a report from
     // this build carries them (a digest and no twins or hidden sites).
-    const committed = JSON.parse(read(GIFT_CARD)) as SessionReport;
+    const committed = JSON.parse(read(GIFT_CARD_SCHEME3)) as SessionReport;
     expect(explain(committed).survivors.every((s) => s.mark === undefined)).toBe(true);
     const digest = "0".repeat(64);
     const report: SessionReport = {
