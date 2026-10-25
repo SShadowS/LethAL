@@ -24,6 +24,11 @@ import { basename, join } from "node:path";
 import { BcHostMismatchError, bcHostMismatch } from "../src/bc-host";
 import { type LethalConfigFile, configuredOdataBaseUrl } from "../src/cli";
 import { refuseRetiredV2ConfigSection } from "../src/v2-retired";
+import {
+  SymlinkedAlpackagesError,
+  symlinkedAlpackages,
+  symlinkedAlpackagesRefusal,
+} from "./fixture-symbols";
 import { ServerOutOfUseError, markedServerFor, outOfUseDir, outOfUseRefusal } from "./out-of-use";
 
 /** The `bcdev` fields the target line reads; nothing else of the config reaches it. */
@@ -77,11 +82,23 @@ function withoutUserinfo(url: string): string {
 export function printItestTarget(
   configPath: string,
   read: (p: string) => string = (p) => readFileSync(p, "utf8"),
-  outOfUse: { readonly dir: string; readonly env: NodeJS.ProcessEnv } = {
+  outOfUse: {
+    readonly dir: string;
+    readonly env: NodeJS.ProcessEnv;
+    /** R787: the worktree whose fixture `.alpackages` must not be symlinks; unset checks none. */
+    readonly repoRoot?: string;
+  } = {
     dir: outOfUseDir(process.env),
     env: process.env,
+    repoRoot: join(import.meta.dir, "..", "..", ".."),
   },
 ): void {
+  // R787: first, so a gate writing symbols never writes through a link into another worktree.
+  if (outOfUse.repoRoot !== undefined) {
+    const root = outOfUse.repoRoot;
+    const refusal = symlinkedAlpackagesRefusal(root, symlinkedAlpackages(root));
+    if (refusal !== undefined) throw new SymlinkedAlpackagesError(refusal);
+  }
   let bcdev: Partial<TargetFields> | undefined;
   try {
     bcdev = (JSON.parse(read(configPath)) as { bcdev?: Partial<TargetFields> }).bcdev;
