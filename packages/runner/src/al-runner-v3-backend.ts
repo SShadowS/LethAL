@@ -789,34 +789,6 @@ function errorAsIfIn(err: unknown, copy: string, active: string): unknown {
     : new ArtifactPrepareError(mapped);
 }
 
-/** R790: the first part of two binding keys that differs, by name (for the receipt line). */
-function keyDifference(a: string, b: string): string {
-  const names = [
-    "the batch's .al files",
-    "the batch's app.json",
-    "the batch's other files",
-    "the test dir's .al files",
-    "the test dir's other files",
-    "the test app.json",
-    "<deps>",
-  ];
-  const x = JSON.parse(a) as unknown[];
-  const y = JSON.parse(b) as unknown[];
-  const i = names.findIndex((_, k) => JSON.stringify(x[k]) !== JSON.stringify(y[k]));
-  if (i < 0) return "no part differs";
-  if (i === 2 || i === 4) {
-    const files = (v: unknown) =>
-      new Map((v as [string, ...unknown[]][]).map((e) => [e[0], JSON.stringify(e)]));
-    const fx = files(x[i]);
-    const fy = files(y[i]);
-    const first = [...new Set([...fx.keys(), ...fy.keys()])]
-      .sort()
-      .find((p) => fx.get(p) !== fy.get(p));
-    return `${names[i]}: ${first ?? "?"}`;
-  }
-  return names[i] ?? "?";
-}
-
 /** R790 (review 1): a `listOtherFiles` map as a key. `JSON.stringify` of a Map is always "{}". */
 function otherFilesKey(
   m: ReadonlyMap<
@@ -1825,25 +1797,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // R790 (b): kept only when the bytes were the proved bytes both before and after the calls ran,
     // and they read the same real paths a live call reads; any mismatch leaves the baseline live.
     const proof = this.proof;
-    const why = !speculate
-      ? undefined
-      : specDone === undefined || proof === undefined
-        ? "the calls did not complete"
-        : specDone.before !== this.proofKey(proof)
-          ? `the bytes they read are not the proof's (${keyDifference(specDone.before, this.proofKey(proof))})`
-          : specDone.after !== specDone.before
-            ? `the bytes changed while they ran (${keyDifference(specDone.before, specDone.after)})`
-            : specDone.realActive !== realActive || specDone.realTest !== realTest
-              ? "they read other real paths"
-              : "";
-    // R790: one receipt line per deploy, so a run says whether its baseline was served or why not.
-    if (why !== undefined && why !== "") {
-      console.warn(`[lethal] al-runner-v3 speculative baseline not used: ${why} (R790)`);
-    }
-    if (why === "" && specDone !== undefined) {
-      console.warn(
-        `[lethal] al-runner-v3 speculative baseline: ${specDone.calls.size} call(s) kept, bound to the proof (R790)`,
-      );
+    if (
+      specDone !== undefined &&
+      proof !== undefined &&
+      specDone.before === this.proofKey(proof) &&
+      specDone.after === specDone.before &&
+      specDone.realActive === realActive &&
+      specDone.realTest === realTest
+    ) {
       this.speculative = { dir: active, calls: specDone.calls };
     }
     return null;
