@@ -4160,9 +4160,32 @@ describe("R790: the speculative baseline", () => {
       },
     };
   };
-  async function deployWith(alc: ArtifactIo | undefined, speculate: boolean) {
+  /** alc that passes, after `write(project, isBatch)` ran inside the compile's project dir. */
+  const writingAlc = (write: (project: string, isBatch: boolean) => Promise<void>): ArtifactIo => {
+    const ok = fakeAlc();
+    return {
+      ...ok,
+      spawn: async (argv, o) => {
+        const out = (argv.find((a) => a.startsWith("/out:")) ?? "").slice(5);
+        await write(
+          (argv.find((a) => a.startsWith("/project:")) ?? "").slice(9),
+          out.includes("v3-batch"),
+        );
+        return ok.spawn(argv, o);
+      },
+    };
+  };
+  async function deployWith(
+    alc: ArtifactIo | undefined,
+    speculate: boolean,
+    o: {
+      rows?: RowsFn;
+      floor?: readonly [number, number];
+      seams?: (l: Layout) => AlRunnerV3Backend["seams"];
+    } = {},
+  ) {
     const l = await layout(TARGET_AL, SUITE1);
-    const one = fakeOneShot(allPass);
+    const one = fakeOneShot(o.rows ?? allPass);
     const serve = fakeServe();
     const b = new AlRunnerV3Backend(
       {
@@ -4183,8 +4206,9 @@ describe("R790: the speculative baseline", () => {
     b.useBuildSymbols([]);
     b.useDiscoveredTests(SUITE1);
     b.useSessionTests(SUITE1);
-    b.useMutantBudgetFloor(1000, 1000);
+    b.useMutantBudgetFloor(...(o.floor ?? [1000, 1000]));
     if (!speculate) b.seams.noSpeculativeBaseline = true;
+    Object.assign(b.seams, o.seams?.(l) ?? {});
     const err = await b.deploy(l.batch).then(
       () => undefined,
       (e: unknown) => e,
@@ -4272,5 +4296,84 @@ describe("R790: the speculative baseline", () => {
     expect(speculative(b)).toBeUndefined();
     await baseline(b, SUITE1);
     expect(one.calls).toHaveLength(2);
+  });
+
+  // Review 1: a NON-.al file the proof records (the test-app compile's Translations/*.g.xlf), written
+  // after the calls joined: before and after agree, only the proof differs. Red if the key drops the
+  // other files (a Map serialises as "{}").
+  test("an .xlf the test-app compile writes into the test dir: never served", async () => {
+    const r = await deployWith(
+      writingAlc(async (project, isBatch) => {
+        if (isBatch) return;
+        await mkdir(join(project, "Translations"), { recursive: true });
+        await writeFile(join(project, "Translations", "Tests.g.xlf"), "<xliff/>");
+      }),
+      true,
+    );
+    expect(r.err).toBeUndefined();
+    expect(speculative(r.b)).toBeUndefined();
+    await baseline(r.b, SUITE1);
+    expect(r.one.calls).toHaveLength(2);
+  });
+
+  // The "after" check alone: a change while the calls ran, undone before the proof read.
+  test("a byte that changes during the calls and changes back before the proof: never served", async () => {
+    const late = (l: Layout) => join(l.testDir, "Late.Codeunit.al");
+    let at = "";
+    const r = await deployWith(
+      writingAlc(async (_p, isBatch) => {
+        if (!isBatch && at !== "") await rm(at, { force: true });
+      }),
+      true,
+      {
+        seams: (l) => ({
+          afterSpeculation: async () => {
+            at = late(l);
+            await writeFile(at, 'codeunit 79999 "Late" { }');
+          },
+        }),
+      },
+    );
+    expect(r.err).toBeUndefined();
+    expect(speculative(r.b)).toBeUndefined();
+    await baseline(r.b, SUITE1);
+    expect(r.one.calls).toHaveLength(2);
+  });
+
+  // Review 2: a call that ran out of time beside alc may not be what a live call answers.
+  test("a speculative call with a timeout row is not kept: that baseline call runs live", async () => {
+    const timesOutA: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        x.method === "A" ? { ...x, status: "error" as const, message: TIMEOUT_1S } : x,
+      );
+    const r = await deployWith(undefined, true, { rows: timesOutA });
+    expect(r.one.calls).toHaveLength(1);
+    await baseline(r.b, SUITE1);
+    expect(r.one.calls).toHaveLength(2);
+  });
+
+  test("a baseline call at another stop than the speculative one: not served", async () => {
+    // The floor's baseline timeout (5 s) is not the baseline's run budget (OPTS: 1 s).
+    const r = await deployWith(undefined, true, { floor: [1000, 5000] });
+    expect(r.one.calls).toHaveLength(1);
+    await baseline(r.b, SUITE1);
+    expect(r.one.calls).toHaveLength(2);
+  });
+
+  // Review 4: what alc writes into its project still reaches the batch v3 reads, as before R790.
+  test("a file alc writes into the copy it compiles is copied into the batch", async () => {
+    const r = await deployWith(
+      writingAlc(async (project, isBatch) => {
+        if (!isBatch) return;
+        await mkdir(join(project, "Translations"), { recursive: true });
+        await writeFile(join(project, "Translations", "T.g.xlf"), "<xliff/>");
+      }),
+      true,
+    );
+    expect(r.err).toBeUndefined();
+    const active = (r.b as unknown as { lane: { activeDir(): string } }).lane.activeDir();
+    expect(await readFile(join(active, "Translations", "T.g.xlf"), "utf8")).toBe("<xliff/>");
+    // The calls read the batch without it, so they are not served.
+    expect(speculative(r.b)).toBeUndefined();
   });
 });

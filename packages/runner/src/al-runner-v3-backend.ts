@@ -25,7 +25,7 @@
 import { createHash } from "node:crypto";
 import { cp, mkdir, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { freemem } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import {
   CONTROL_REGISTER_FILENAME,
   CONTROL_SELECTOR_FILENAME,
@@ -785,6 +785,28 @@ function errorAsIfIn(err: unknown, copy: string, active: string): unknown {
   return err instanceof AlcCompileError
     ? new AlcCompileError(mapped)
     : new ArtifactPrepareError(mapped);
+}
+
+/** R790 (review 1): a `listOtherFiles` map as a key. `JSON.stringify` of a Map is always "{}". */
+function otherFilesKey(
+  m: ReadonlyMap<
+    string,
+    { readonly size: number; readonly mtimeMs: number; readonly sha256: string }
+  >,
+): unknown {
+  return [...m]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([p, f]) => [p, f.size, f.mtimeMs, f.sha256]);
+}
+
+/** R790 (review 4): every file under `dir` (relative path) with its size and mtime. */
+async function fileStates(dir: string): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  for (const rel of await readdir(dir, { recursive: true })) {
+    const s = await stat(join(dir, rel));
+    if (s.isFile()) out.set(relative(dir, join(dir, rel)), `${s.size}:${s.mtimeMs}`);
+  }
+  return out;
 }
 
 /** R780: one read of the test dir: the .al hash, the non-.al files, and the app.json (bytes + text). */
@@ -1784,11 +1806,22 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const copy = join(this.cfg.instrumentedDir, "alc-src");
     await rm(copy, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     await cp(active, copy, { recursive: true, preserveTimestamps: true });
+    const states = await fileStates(copy);
+    let out: { appPath: string; sha256: string };
     try {
-      return await this.compileTarget(copy);
+      out = await this.compileTarget(copy);
     } catch (err) {
       throw errorAsIfIn(err, copy, active);
     }
+    // Review 4: whatever alc wrote into its project (Translations/*.g.xlf) goes into the batch too,
+    // so v3 reads the bytes it read before R790. The calls read the batch without it, so their key
+    // no longer equals the proof's and they are not served.
+    for (const [rel, state] of await fileStates(copy)) {
+      if (states.get(rel) === state) continue;
+      await mkdir(dirname(join(active, rel)), { recursive: true });
+      await cp(join(copy, rel), join(active, rel), { preserveTimestamps: true });
+    }
+    return out;
   }
 
   /** R790: the bytes v3 reads, as the proof records them (§3): the batch, the test dir, `<deps>`. */
@@ -1797,9 +1830,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     return JSON.stringify([
       await linkIsUnproven(hashAlTree(active), "the staged batch"),
       await fileSha256(join(active, "app.json")),
-      await listOtherFiles(active, OTHER_FILES_UNBOUND, true),
+      otherFilesKey(await listOtherFiles(active, OTHER_FILES_UNBOUND, true)),
       t.testScan.hash,
-      t.testOther,
+      otherFilesKey(t.testOther),
       t.testAppJsonSha256,
       await listDeps(this.cfg.packagesDir, true),
     ]);
@@ -1809,9 +1842,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     return JSON.stringify([
       p.activeHashExceptSelector,
       p.activeAppJsonSha256,
-      p.activeOther,
+      otherFilesKey(p.activeOther),
       p.testDirHash,
-      p.testOther,
+      otherFilesKey(p.testOther),
       p.testAppJsonSha256,
       p.deps,
     ]);
@@ -1871,6 +1904,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         await rm(covPath, { force: true }).catch(() => {});
         // A spawn that failed is not kept: that codeunit's baseline call runs live.
         if ("spawnError" in made) continue;
+        // Review 2: a call that ran out of time ran beside alc's CPU, so it may not be what a live
+        // baseline call would answer: not kept, that codeunit's call runs live.
+        if (made.timedOut) continue;
+        const decoded = decodeV3Rows(made.res.stdout, id);
+        if (
+          !("why" in decoded) &&
+          decoded.rows.some((r) => r.message !== undefined && V3_TIMEOUT_MESSAGE.test(r.message))
+        )
+          continue;
         calls.set(id, {
           ...made,
           ...(covText !== undefined ? { covText } : {}),
@@ -1925,6 +1967,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       testDir: o.testDir,
     });
     await o.beforeSpawn?.();
+    // Review 5: an abort before the listener below exists would never reach the process.
+    if (o.signal?.aborted === true) return { spawnError: "aborted before the spawn", wallMs: 0 };
     const deadlineMs = v3CallDeadlineMs(o.stopSeconds, this.testsPerCodeunit.get(o.id) ?? 1);
     const controller = new AbortController();
     const onAbort = () => controller.abort();
