@@ -168,6 +168,69 @@ describe("isolateBreakingMutants: suspects from alc's diagnostics (R735)", () =>
   });
 });
 
+// R743: a cascade (one culprit whose error alc reports on many INNOCENT branches) must not spend the
+// budget on singleton compiles of innocents. At most MAX_CLEARED_SUSPECTS_PER_ROUND suspects may
+// compile fine alone in one round; then that round falls back to halving. A suspect that FAILS
+// alone (a culprit) does not count, so a round that names many real culprits is unchanged (R735's
+// DC run: 15 culprits named at once, none cleared).
+describe("isolateBreakingMutants: a cascade of innocent suspects (R743)", () => {
+  test("B11: one culprit, alc points at 60 innocents: isolated by halving after 8 of them", async () => {
+    const culprit = m(1500);
+    const innocents = ids(60);
+    const f = fake(
+      (s) => s.includes(culprit),
+      (s) => innocents.filter((x) => s.includes(x)),
+    );
+    const out = await isolateBreakingMutants(ids(2000), f.compile, 64);
+    // red when every pointed innocent gets its singleton: 62 compiles, then the early stop
+    expect(out).toEqual({ kind: "isolated", culprits: [culprit], groupErrors: [], unresolved: [] });
+    expect(innocents.filter((x) => single(f.calls, x) === 1).length).toBe(8);
+    expect(f.calls.length).toBeLessThanOrEqual(2 + 8 + Math.ceil(Math.log2(2000)) + 2);
+  });
+
+  test("B12: 20 culprits named at once: all tried alone in one round (culprits do not count)", async () => {
+    const bad = new Set(ids(200).filter((_, i) => i % 10 === 0));
+    expect(bad.size).toBe(20);
+    const f = fake(
+      (s) => s.some((x) => bad.has(x)),
+      (s) => s.filter((x) => bad.has(x)),
+    );
+    const out = await isolateBreakingMutants(ids(200), f.compile, 64);
+    if (out.kind !== "isolated") throw new Error("expected isolated");
+    expect(new Set(out.culprits)).toEqual(bad);
+    // red when the cap counts culprits too: rounds of 8 add a recompile each (25 compiles)
+    expect(f.calls.length).toBe(23); // empty, full, 20 singletons, the recompile
+  });
+
+  test("B13: 7 innocents then the culprit: the culprit is still a suspect (no halving)", async () => {
+    const culprit = m(100);
+    const pointed = [...ids(7), culprit];
+    const f = fake(
+      (s) => s.includes(culprit),
+      (s) => pointed.filter((x) => s.includes(x)),
+    );
+    const out = await isolateBreakingMutants(ids(128), f.compile, 64);
+    expect(out).toEqual({ kind: "isolated", culprits: [culprit], groupErrors: [], unresolved: [] });
+    // red when the cap stops at fewer than 8 cleared: the culprit is then found by halving
+    expect(f.calls.length).toBe(11); // empty, full, 7 innocents, the culprit, the recompile
+  });
+
+  test("B14: 8 innocents then the culprit: the round stops at the cap and halves", async () => {
+    const culprit = m(100);
+    const pointed = [...ids(8), culprit];
+    const f = fake(
+      (s) => s.includes(culprit),
+      (s) => pointed.filter((x) => s.includes(x)),
+    );
+    const out = await isolateBreakingMutants(ids(128), f.compile, 64);
+    expect(out).toEqual({ kind: "isolated", culprits: [culprit], groupErrors: [], unresolved: [] });
+    // red when the cap allows more than 8 cleared: the 9th suspect, the culprit, is tried alone
+    expect(single(f.calls, culprit)).toBe(1); // halving's confirm, not a suspect compile
+    expect(f.calls[10]).not.toEqual([culprit]);
+    expect(f.calls.length).toBe(2 + 8 + Math.ceil(Math.log2(128)) + 2);
+  });
+});
+
 describe("parseAlcErrors (moved from the R315 script)", () => {
   test("keeps code, file name and line only", () => {
     expect(parseAlcErrors("/a/b/Foo.al(12,5): error AL0185: secret text\nnoise")).toEqual([
