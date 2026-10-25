@@ -1428,7 +1428,8 @@ export class BcDevMcpBackend implements ExecutionBackend {
     const { verdict, coverageRows, coverageStats } = await transport.runWithCoverage(req);
     if (coverageRows === undefined) return verdict; // non-`ran`: a refusal carries no coverage
     // R748: the dump now carries the gap rows the map builder classified, so it is written after
-    // the build, and in `finally` so a build that throws still leaves its record.
+    // the build, in `finally`. A build that throws (only the no-line-map guard can, here) still
+    // leaves its rows, but with `gaps: []`, since the gap rows are filled after the loop.
     const gaps: DumpGap[] = [];
     try {
       return {
@@ -1610,10 +1611,10 @@ export class BcDevMcpBackend implements ExecutionBackend {
    *
    * R748: `besideMembers` holds the objects with a naming gap AND a member row (the likeliest
    * real 1-2 line shift looks like that); they raise `fenced-coverage-gap-beside-members`. The
-   * two lists never share an object. Remaining blind spots: (ii) an R318 renamed split member
-   * with no coverage name sits in `unnamed`, which `isNamingGap` does not consult; so a row on it
-   * counts as NO member, and a gap row beside one named member now gives a FALSE new warning
-   * (R318); (iii) report column, page field and property rows are unmeasured on real projects.
+   * two lists never share an object. Remaining blind spots: (i) an R318 renamed split member
+   * with no coverage name sits in `unnamed`, which `isNamingGap` does not consult, so every row on
+   * it is a gap row, and beside a named member's row it gives a FALSE new warning (R753); (ii)
+   * report column, page field and property rows are unmeasured on real projects.
    * A shift landing every row in trigger spans stays quiet too.
    */
   private warnOnThinFencedCoverage(
