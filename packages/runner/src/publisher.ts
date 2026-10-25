@@ -8,7 +8,15 @@ import { canonicalContainerKey, serializePublish } from "./publish-serializer";
 export type SpawnFn = (
   argv: readonly string[],
   opts?: { signal?: AbortSignal; env?: Record<string, string>; cwd?: string },
-) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
+) => Promise<{
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  /** R789: the child's own CPU time (user + system) after exit; absent when unknown. */
+  cpuMs?: number;
+  /** R789 test hook: a wall time that replaces the caller's own clock for the call. */
+  wallMs?: number;
+}>;
 
 /**
  * R237: `Bun.spawn` threw, so no process was ever created. Measured on Windows (Bun 1.3.14, see
@@ -47,7 +55,10 @@ const bunSpawn: SpawnFn = async (argv, opts) => {
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
   ]);
-  return { exitCode: await proc.exited, stdout, stderr };
+  const exitCode = await proc.exited;
+  // `taskset` execs into its command (same pid), so the child's CPU time is the command's.
+  const cpu = proc.resourceUsage()?.cpuTime.total;
+  return { exitCode, stdout, stderr, ...(cpu !== undefined ? { cpuMs: Number(cpu) / 1000 } : {}) };
 };
 
 export const defaultSpawn = bunSpawn;
