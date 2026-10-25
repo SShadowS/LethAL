@@ -174,8 +174,9 @@ Both run as the other legs do (`runSession`, the v3 backend, one-shot, coverage 
 
 ## The pin and the update gate
 
-- The binary is pinned at `/work/tools/al-runner-v3/3.0.0-alpha.5-07342060e/` (since 2026-10-24; alpha.2 was
-  `current` before), and `current` points at it. Its
+- The binary is pinned at `/work/tools/al-runner-v3/edge-dcdf9e821-dcdf9e821/` (`al-runner
+  3.0.0-alpha.5+edge.20261024 (dcdf9e821)`, since 2026-10-25 by `--edge-rejudge` at 6529c3cc, R756; alpha.5
+  `3.0.0-alpha.5-07342060e/` from 2026-10-24, alpha.2 before), and `current` points at it. Its
   `.gated` file names the build, its sha256 and the LethAL commit that gated it. The backend refuses any build that
   `.gated` does not name (`AlRunnerV3UngatedBuildError`), unless `LETHAL_ALRUNNER_V3_CANDIDATE=1`.
 - The pin is never moved by hand. `bun scripts/al-runner-v3-update.ts` gates newer `v3.0.0-alpha.N` releases, and
@@ -466,5 +467,9 @@ Leg T is judged against the committed alpha.2 baseline with the seven keys overr
 - 2026-10-25: the daily update gate HELD the edge build `3.0.0-alpha.5+edge.20261024 (dcdf9e821)` (sha256
   `0e313935...03890`) at 82a73bd1, as an unpinned candidate. Its readings are identical to alpha.5's pinned readings
   (leg C's seven facts, X (b), and leg T's seven rows with counts 290 / 50 / 59 over 406, errors 7); every other leg
-  passed; K is skipped on a candidate by design. [[R756]] pins it as `edge-dcdf9e821` with those same readings. The
-  re-gate (`--regate`, then `--edge-rejudge dcdf9e821`) is pending; `current` has not moved.
+  passed; K is skipped on a candidate by design. [[R756]] pins it as `edge-dcdf9e821` with those same readings
+  (merged 6529c3cc). Re-gated as pre-committed (b8fcfeb7): `--regate 6529c3cc` of alpha.5 passed (every leg, K
+  included); `--edge-rejudge dcdf9e821` at 6529c3cc passed (`PIN edge-dcdf9e821 applies`, the seven C facts and the
+  seven T rows pinned, K skipped as a candidate), and `current` moved to `edge-dcdf9e821-dcdf9e821/`. Right after,
+  `itest:alrunner-v3` on the new `current` passed every leg, K 3 / 12 / 4 over 19 with 0 differences from
+  `bcdev.baseline.json`. Logs: `/coord/handoff/R-756/` (`regate.out`, `edge-rejudge.out`, `k-run.log`).
