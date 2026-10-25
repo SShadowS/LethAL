@@ -524,9 +524,9 @@ const EDGE_VERSION = "al-runner 3.0.0-alpha.5+edge.20261024 (dcdf9e821)";
 const EDGE_SHA = "0e3139359b37a7dd9c51377b64c0ae1acdcb208545f79075e4194571bbe03890";
 const edgePin = findV3Pin(EDGE_VERSION, EDGE_SHA);
 
-// The edge readings, byte for byte from the edge gate.log (R756, 82a73bd1). One exception: leg C's
-// own "held:" text for duplicate-key-insert-raises is cut at 300 characters in that log, so its
-// FULL text is taken from the session warning line `al-runner-v3-defect-refused: duplicate-key-...`.
+// The edge readings, byte for byte from the edge gate.log (R756, 82a73bd1). For
+// duplicate-key-insert-raises the "held:" line is cut at 300 characters; the full text is the leg C
+// fact line (`C: duplicate-key-insert-raises = refused | ...`), also in the session warning line.
 const EDGE: Record<string, { verdict: string; measured: string }> = {
   "none-selected-exit": { verdict: "gone", measured: "exit 6, stdout 0 rows" },
   "quoted-name-unselectable": { verdict: "gone", measured: "exit 0" },
