@@ -20,7 +20,7 @@
  * with `tar --format=ustar`.
  */
 import { createHash } from "node:crypto";
-import { createReadStream, existsSync, lstatSync, readdirSync } from "node:fs";
+import { createReadStream, existsSync, lstatSync, readdirSync, realpathSync } from "node:fs";
 import { type FileHandle, mkdir, open, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 
@@ -125,12 +125,15 @@ export class FixtureSymbolsRefusedError extends Error {
 
 /**
  * R787: every `fixtures/<dir>/.alpackages` and `examples/<dir>/.alpackages` under `root` that is a
- * symlink, relative to `root`. Such a link (a `cp -r` of another worktree's link copies the link)
- * points into another lane's worktree, so a gate that fills or rewrites symbols writes THERE, and
- * git does not ignore it unless `.gitignore` matches non-directories too.
+ * symlink, or whose real path leaves `root` (a linked `<dir>` or `fixtures`), relative to `root`.
+ * Such a link (a `cp -r` of another worktree's link copies the link) points into another lane's
+ * worktree, so a gate that fills or rewrites symbols writes THERE, and git does not ignore it
+ * unless `.gitignore` matches non-directories too.
  */
 export function symlinkedAlpackages(root: string): string[] {
   const out: string[] = [];
+  const realRoot = realpathSync(root);
+  const inside = (p: string) => p === realRoot || p.startsWith(realRoot + sep);
   for (const top of ["fixtures", "examples"]) {
     let dirs: string[];
     try {
@@ -141,8 +144,9 @@ export function symlinkedAlpackages(root: string): string[] {
     for (const d of dirs.sort()) {
       const rel = join(top, d, ".alpackages");
       try {
-        if (lstatSync(join(root, rel)).isSymbolicLink()) out.push(rel);
-      } catch {}
+        const p = join(root, rel);
+        if (lstatSync(p).isSymbolicLink() || !inside(realpathSync(p))) out.push(rel);
+      } catch {} // no .alpackages there
     }
   }
   return out;
@@ -154,11 +158,13 @@ export function symlinkedAlpackagesRefusal(
   links: readonly string[],
 ): string | undefined {
   if (links.length === 0) return undefined;
-  return `fixture-alpackages-symlink: ${links.join(", ")} under ${root} ${links.length === 1 ? "is a symlink" : "are symlinks"}. A link points into another worktree, so a gate writing symbols would change that worktree's files, and git does not ignore a link. Replace each with a real copy: \`t=$(readlink -f <link>) && rm <link> && cp -r "$t" <link>\` (R787).`;
+  return `fixture-alpackages-symlink: ${links.join(", ")} under ${root} ${links.length === 1 ? "is a symlink or lies under one" : "are symlinks or lie under one"}. A link points into another worktree, so a gate writing symbols would change that worktree's files, and git does not ignore a link. Replace each link with a real copy: \`t=$(readlink -f <link>) && rm <link> && cp -r "$t" <link>\` (R787).`;
 }
 
 /** R787: a BC gate refuses a symlinked fixture `.alpackages` by name before any lease or call. */
-export class SymlinkedAlpackagesError extends Error {}
+export class SymlinkedAlpackagesError extends Error {
+  override readonly name = "SymlinkedAlpackagesError";
+}
 
 export async function prepareFixtureSymbols(s: {
   readonly worktree: string;

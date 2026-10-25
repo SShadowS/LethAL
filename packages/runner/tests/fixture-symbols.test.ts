@@ -426,9 +426,24 @@ describe("R787: a symlinked fixture .alpackages", () => {
     await mkdir(other, { recursive: true });
     await writeFile(join(other, "Theirs.app"), "theirs");
     await mkdir(dirname(join(worktree, rel)), { recursive: true });
-    await symlink(other, join(worktree, rel));
+    // A junction on Windows needs no privilege; elsewhere the type is ignored.
+    await symlink(other, join(worktree, rel), "junction");
     return other;
   }
+
+  test("a real .alpackages under a LINKED fixture folder is listed too (its real path leaves the worktree)", async () => {
+    await setup();
+    const other = join(root, "other-lane", "fixtures", "sandbox-tests");
+    await mkdir(join(other, ".alpackages"), { recursive: true });
+    await mkdir(join(worktree, "fixtures"), { recursive: true });
+    await symlink(other, join(worktree, "fixtures", "sandbox-tests"), "junction");
+    expect(symlinkedAlpackages(worktree)).toEqual([
+      join("fixtures", "sandbox-tests", ".alpackages"),
+    ]);
+    const err = await refusal(prepare());
+    expect(err.message).toContain("fixture-alpackages-symlink");
+    expect(readdirSync(join(other, ".alpackages"))).toEqual([]);
+  });
 
   test("symlinkedAlpackages lists exactly the links under fixtures/ and examples/", async () => {
     await setup();
