@@ -403,6 +403,22 @@ describe("R762: forced fresh and never-cached sessions", () => {
     await statusOf(e);
     expect(probe).toHaveBeenCalledTimes(2);
   });
+  test("R770: a forced run on an empty folder writes no entry (config flag and env var)", async () => {
+    const e = await env();
+    await statusOf(e, { freshProbe: true });
+    expect(await entries(e)).toEqual([]);
+    expect(warns.join("\n")).toMatch(/forced; not cached/);
+    process.env[FRESH_PROBE_ENV] = "1";
+    await statusOf(e);
+    expect(await entries(e)).toEqual([]);
+  });
+  test("R770 other direction: a normal miss still writes, and the next normal run hits", async () => {
+    const e = await env();
+    await statusOf(e);
+    expect((await entries(e)).length).toBe(1);
+    await statusOf(e);
+    expect(probe).toHaveBeenCalledTimes(1);
+  });
   test("other direction: the env var set to 0 does not force it", async () => {
     const e = await env();
     await statusOf(e);
