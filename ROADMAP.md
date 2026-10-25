@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**22 of 761 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**21 of 762 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -801,11 +801,12 @@ that ordering is the priority.
 - **R760** · al-runner-v3 one-shot campaigns spend their time on per-call compile, dependency-cache reads and coverage, not on tests (D1: 667 s one-shot, 193 s serve) · [R760.md](docs/roadmap/R760.md) · open, measured 2026-10-25 (coord task R-760); changes await a ruling
 - **R761** · serve-entries is the default v3 transport where it is proven; one-shot (with a named warning) where it is not · [R761.md](docs/roadmap/R761.md) · done (dc855ac3; S1E f53ec5d4; pins 7405f270)
 - **R765** · al-runner-v3 contract-probe cache: a session replays a fully passing probe of the same inputs (coord R-762 item 1) · [R765.md](docs/roadmap/R765.md) · done (87f784cd)
-- **R763** · Prove serve-entries for test METHOD names that are not plain identifiers (spaces, - ( ) / & å æ, a leading digit), so R761's default can serve them · [R763.md](docs/roadmap/R763.md) · open, filed 2026-10-25 (from R-761; orchestrator ruling)
+- **R763** · Prove serve-entries for test METHOD names that are not plain identifiers (spaces, - ( ) / & å æ, a leading digit), so R761's default can serve them · [R763.md](docs/roadmap/R763.md) · done (417feab0)
 - **R764** · al-runner-v3 one-shot ignored RunOpts.coverage: kill confirms still sent --coverage-json and joined coverage · [R764.md](docs/roadmap/R764.md) · done (3f37aacb)
 - **R768** · al-runner-v3: retire the §6 Sleep coverage rule on builds whose pin records sleep-is-noop gone (R-762 item B) · [R768.md](docs/roadmap/R768.md) · done (6488d833)
 - **R766** · Parallel al-runner-v3 mutants: N serve lanes in one backend (--workers N) · [R766.md](docs/roadmap/R766.md) · open, filed 2026-10-25 (from coord task R-766)
 - **R767** · al-runner-v3's per-send bound check (`assertBound`) spent 0.35 s per send on Bun's async fs, not on hashing · [R767.md](docs/roadmap/R767.md) · open, built and gated 2026-10-25 (coord task R-767); awaiting merge
+- **R769** · al-runner-v3's alc proof is still needed on #5602-fixed builds: the pinned edge build runs some AL that alc rejects · [R769.md](docs/roadmap/R769.md) · closed 2026-10-25 — measured (coord task R-769): the alc proof stays on every build (orchestrator ruling)…
 
 ---
 
