@@ -2,7 +2,7 @@
 // guard has a test per direction; the probe is stubbed with a call counter (never wall-clock).
 // Nothing here touches /coord or /work/tools: every pinned build lives in a temp folder.
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AlRunnerV3Backend } from "../src/al-runner-v3-backend";
@@ -85,7 +85,17 @@ async function gate(e: Env): Promise<void> {
     }),
   );
 }
-function statusOf(e: Env, extra: { candidate?: boolean; freshProbe?: boolean } = {}) {
+function statusOf(
+  e: Env,
+  extra: {
+    candidate?: boolean;
+    freshProbe?: boolean;
+    bcVersion?: string;
+    cacheDir?: string;
+    spawn?: SpawnFn;
+  } = {},
+) {
+  const { spawn, ...cfgExtra } = extra;
   const b = new AlRunnerV3Backend(
     {
       alRunnerPath: e.bin,
@@ -96,9 +106,9 @@ function statusOf(e: Env, extra: { candidate?: boolean; freshProbe?: boolean } =
       selectorObjectId: 79199,
       alcPath: e.alc,
       coverage: "none",
-      ...extra,
+      ...cfgExtra,
     },
-    versionOnly,
+    spawn ?? versionOnly,
   );
   return b.status();
 }
@@ -153,6 +163,75 @@ describe("R762: each key part re-runs the probe", () => {
     await statusOf(e);
     await writeFile(e.alc, "alc-v2");
     await statusOf(e);
+    expect(probe).toHaveBeenCalledTimes(2);
+  });
+  test("bcVersion", async () => {
+    const e = await env();
+    // Same name, size and mtime (a whole second, so it round-trips exactly): the packages
+    // fingerprint does not move, only bcVersion does.
+    const app = join(e.deps, "Microsoft_System Application.app");
+    await utimes(app, 1_700_000_000, 1_700_000_000);
+    await statusOf(e);
+    const bytes = Buffer.from(await readFile(app));
+    const at = bytes.indexOf("28.0.46665.47126");
+    expect(at).toBeGreaterThan(0);
+    bytes.write("28.0.46665.47127", at);
+    await writeFile(app, bytes);
+    await utimes(app, 1_700_000_000, 1_700_000_000);
+    await statusOf(e, { bcVersion: "28.0.46665.47127" });
+    expect(probe).toHaveBeenCalledTimes(2);
+  });
+  test("cacheDir", async () => {
+    const e = await env();
+    await statusOf(e);
+    await statusOf(e, { cacheDir: join(e.root, "cache") });
+    expect(probe).toHaveBeenCalledTimes(2);
+  });
+  test("gate record (.gated text)", async () => {
+    const e = await env();
+    await statusOf(e);
+    await writeFile(
+      join(e.root, ".gated"),
+      JSON.stringify({
+        version: VERSION,
+        binarySha256: await sha256OfFile(e.bin),
+        lethalCommit: "b".repeat(40),
+      }),
+    );
+    await statusOf(e);
+    expect(probe).toHaveBeenCalledTimes(2);
+  });
+  test("taskset present", async () => {
+    const e = await env();
+    const real = Bun.which;
+    let present = true;
+    const w = spyOn(Bun, "which").mockImplementation((c: string, o?: never) =>
+      c === "taskset" ? (present ? "/usr/bin/taskset" : null) : real(c, o),
+    );
+    try {
+      await statusOf(e);
+      present = false;
+      await statusOf(e);
+    } finally {
+      w.mockRestore();
+    }
+    expect(probe).toHaveBeenCalledTimes(2);
+  });
+  test("version", async () => {
+    const e = await env();
+    await statusOf(e);
+    const V2 = "al-runner 3.0.0-alpha.5+edge.20261023 (57f1e4f99)";
+    await writeFile(
+      join(e.root, ".gated"),
+      JSON.stringify({
+        version: V2,
+        binarySha256: await sha256OfFile(e.bin),
+        lethalCommit: "a".repeat(40),
+      }),
+    );
+    await statusOf(e, {
+      spawn: async () => ({ exitCode: 0, stdout: `${V2}\n`, stderr: "" }),
+    });
     expect(probe).toHaveBeenCalledTimes(2);
   });
   test("other direction: a file that is not an .app does not move the fingerprint", async () => {
