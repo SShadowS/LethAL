@@ -13,6 +13,10 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **The serve order probe is leg O1 of the al-runner-v3 update gate** (R784). One serve daemon takes Writer and
+  Reader entries in five request shapes; any state a Reader entry sees from a Writer entry fails the gate, so a build
+  that stops isolating entries cannot become `current`. R778's kill-pair batching rests on that isolation.
+  New fixtures `fixtures/sandbox-order` and `fixtures/sandbox-order-tests`.
 - **al-runner-v3 serve-entries sends the kill pairs in a few batched requests** (R778). Each kill's NONE confirm and
   mutant reproduction used to cost one request (about 0.6 s on the CDO slice, 82% to 85% of its mutant loop). Now
   they travel in chunks right after the prefetch, and a stored pair is used only for a kill that came from the

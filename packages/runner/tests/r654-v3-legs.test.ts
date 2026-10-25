@@ -46,6 +46,7 @@ describe("R654 S2: the leg sets", () => {
       "N1",
       "N1E", // R722: also in V3_GATE_LEGS (alpha.2 reads pass, not applicable)
       "N1S", // R763: also in V3_GATE_LEGS (alpha.2 reads pass, not applicable)
+      "O1", // R784: also in V3_GATE_LEGS (alpha.2 reads pass, not applicable)
       "X",
       "L1",
       "Y-A",
@@ -62,6 +63,7 @@ describe("R654 S2: the leg sets", () => {
       "N1",
       "N1E",
       "N1S",
+      "O1",
       "X",
       "L1",
       "Y-A",

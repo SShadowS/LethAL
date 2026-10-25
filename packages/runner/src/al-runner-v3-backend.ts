@@ -169,6 +169,8 @@ export class AlRunnerV3ReusedBaselineUnclassifiedError extends Error {
 }
 
 /** The four note tags (plan §4, §6), in `failureNote`; the gate and any count read them by tag. */
+/** The `testIsolation` every serve request sends (`requestBase`); leg O1 sends the same. */
+export const SERVE_TEST_ISOLATION = "test";
 export const V3_STATE_NOTE_TAG = "[v3-codeunit-state-possible]";
 export const V3_REFUSED_NEARBY_TAG = "[v3-refused-test-nearby]";
 /**
@@ -904,7 +906,7 @@ class Lane {
     return {
       command: "runTests",
       sourcePaths: [this.realActive ?? resolve(this.activeDir()), this.where.testSource()],
-      testIsolation: "test",
+      testIsolation: SERVE_TEST_ISOLATION,
     };
   }
 

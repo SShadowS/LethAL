@@ -154,7 +154,9 @@ export function cdoCheckoutRefusal(c: {
  *  R602 (orchestrator ruling 2026-10-24) adds MO and WR: they are the only measurement of v3's
  *  per-object frame, so a pin that breaks it must not move `current`.
  *  R722 adds N1E (N1 under serve-entries): a build that fixes #5798 reads `held`; alpha.2, which has
- *  no serve-entries path, reads `pass` (not applicable, `V3_NO_SERVE_ENTRIES`). */
+ *  no serve-entries path, reads `pass` (not applicable, `V3_NO_SERVE_ENTRIES`).
+ *  R784 adds O1 (the serve order probe): a build whose entries carry state over cannot become
+ *  `current`, because R778's kill-pair batching rests on per-entry isolation. */
 export const V3_GATE_LEGS = [
   "C",
   "S1",
@@ -163,6 +165,7 @@ export const V3_GATE_LEGS = [
   "N1",
   "N1E",
   "N1S",
+  "O1",
   "X",
   "L1",
   "Y-A",
