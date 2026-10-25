@@ -3508,13 +3508,170 @@ describe("fenced coverage — the thin-coverage diagnostic", () => {
     expect(said).not.toContain("Codeunit:79100");
   });
 
-  test("R747: one object with a member row AND a gap row is quiet (known blind spot)", async () => {
-    const said = await saidFor([S(), C(4), C(999)], SEL);
-    expect(said).not.toContain("fenced coverage for");
+  // R748: every notice of one test, as [code, message], through the real line map.
+  async function notesFor(
+    coverage: unknown[],
+    extra: ExtraObjects = {},
+  ): Promise<Array<[string, string]>> {
+    const { backend, cleanup } = await deployed({ coverage }, extra);
+    const seen: Array<[string, string]> = [];
+    backend.setNotify((c, m) => seen.push([c, m]));
+    try {
+      await backend.run(ref, { coverage: "fenced", timeoutMs: 1000 });
+      return seen;
+    } finally {
+      await cleanup();
+    }
+  }
+  const codesOf = (notes: Array<[string, string]>) => notes.map(([c]) => c);
+  const BESIDE = "fenced-coverage-gap-beside-members";
+  const NO_PROC = "fenced-coverage-no-procedure-lines";
+
+  test("R748: one object with a member row AND a gap row warns beside-members, not no-procedure-lines", async () => {
+    const notes = await notesFor([S(), C(4), C(999)], SEL);
+    expect(codesOf(notes)).toEqual([BESIDE]);
+    const msg = notes[0]?.[1] ?? "";
+    expect(msg).toContain("Codeunit:79100 line(s) 999 fell in no known span, beside 1 row(s)");
+    expect(msg).toContain("object-relative, in the instrumented source");
+    expect(msg).not.toContain(`Codeunit:${SELECTOR_ID}`);
+  });
+
+  test("R748: a member row plus a trigger-span row, or a line-0 row, is quiet", async () => {
+    const mixed = `table 79180 "Mixed"
+{
+    fields
+    {
+        field(1; "No."; Code[20])
+        {
+            trigger OnValidate()
+            begin
+                Message('x');
+            end;
+        }
+    }
+
+    procedure P()
+    begin
+    end;
+}
+`;
+    const extra: ExtraObjects = {
+      files: { "Mixed.Table.al": mixed },
+      tables: [{ Id: 79180, Name: "Mixed" }],
+    };
+    const M = (lineNo: number) => ({ objectType: 1, objectId: 79180, lineNo, hits: 1 });
+    expect(codesOf(await notesFor([M(15), M(9)], extra))).toEqual([]);
+    expect(codesOf(await notesFor([M(15), M(0)], extra))).toEqual([]);
+    // Premise: the same object with a true gap row does warn.
+    expect(codesOf(await notesFor([M(15), M(999)], extra))).toEqual([BESIDE]);
+  });
+
+  test("R748: object A with member rows only, object B with gap rows only: only no-procedure-lines, naming B", async () => {
+    const notes = await notesFor([C(4), T(7)]);
+    expect(codesOf(notes)).toEqual([NO_PROC]);
+    expect(notes[0]?.[1]).toContain("Table:79150");
+    expect(notes[0]?.[1]).not.toContain("Codeunit:79100");
+  });
+
+  test("R748: gap lines are sorted numerically (9, 10, 100), not as text", async () => {
+    const notes = await notesFor([C(4), C(100), C(10), C(9)]);
+    expect(codesOf(notes)).toEqual([BESIDE]);
+    expect(notes[0]?.[1]).toContain("line(s) 9, 10, 100 fell");
+  });
+
+  test("R748: more than 8 gap lines show the first 8 and '+N more'", async () => {
+    const gaps = [111, 110, 109, 108, 107, 106, 105, 104, 103, 102, 101].map(C);
+    const notes = await notesFor([C(4), ...gaps]);
+    expect(codesOf(notes)).toEqual([BESIDE]);
+    expect(notes[0]?.[1]).toContain("line(s) 101, 102, 103, 104, 105, 106, 107, 108 +3 more fell");
+  });
+
+  test("R748: more than 5 beside-members objects show the first 5 sorted and '+N more object(s)'", async () => {
+    const ids = [79170, 79171, 79172, 79173, 79174, 79175, 79176];
+    const cu = (id: number, lineNo: number) => ({
+      objectType: 5,
+      objectId: id,
+      lineNo,
+      hits: 1,
+    });
+    const notes = await notesFor(
+      // Reverse id order: the cap must still show the lowest five.
+      [...ids]
+        .reverse()
+        .flatMap((id) => [cu(id, 4), cu(id, 999)]),
+      {
+        files: Object.fromEntries(
+          ids.map((id) => [
+            `Cu${id}.Codeunit.al`,
+            OURS_AL.replace("79100", String(id)).replace('"Ours"', `"Cu ${id}"`),
+          ]),
+        ),
+        codeunits: ids.map((id) => ({ Id: id, Name: `Cu ${id}` })),
+      },
+    );
+    expect(codesOf(notes)).toEqual([BESIDE]);
+    const msg = notes[0]?.[1] ?? "";
+    expect(msg).toContain("Codeunit:79170");
+    expect(msg).toContain("Codeunit:79174");
+    expect(msg).not.toContain("Codeunit:79175");
+    expect(msg).toContain("+2 more object(s)");
+  });
+
+  test("R748: a 2-line shift on the LAST procedure of a second codeunit warns on the second only", async () => {
+    const two = `codeunit 79190 "First"
+{
+    procedure One()
+    begin
+    end;
+}
+
+codeunit 79191 "Second"
+{
+    procedure Two()
+    begin
+    end;
+}
+`;
+    const extra: ExtraObjects = {
+      files: { "Two.Codeunit.al": two },
+      codeunits: [
+        { Id: 79190, Name: "First" },
+        { Id: 79191, Name: "Second" },
+      ],
+    };
+    const row = (id: number, lineNo: number) => ({ objectType: 5, objectId: id, lineNo, hits: 1 });
+    // True lines of Two are 3-5 (object-relative); the rows arrive 2 lines late, so 7 is past its end.
+    const notes = await notesFor([row(79190, 4), row(79191, 4), row(79191, 7)], extra);
+    expect(codesOf(notes)).toEqual([BESIDE]);
+    expect(notes[0]?.[1]).toContain("Codeunit:79191 line(s) 7");
+    expect(notes[0]?.[1]).not.toContain("Codeunit:79190");
+  });
+
+  test("R748: LETHAL_FENCED_COVERAGE_DUMP records every gap row, with besideMembers", async () => {
+    const dir = scratch("lethal-dump-");
+    const path = join(dir, "dump.jsonl");
+    const before = process.env.LETHAL_FENCED_COVERAGE_DUMP;
+    process.env.LETHAL_FENCED_COVERAGE_DUMP = path;
+    try {
+      // Codeunit 79100: a member row and two gap rows (one repeated line). Table 79150: a gap row only.
+      await notesFor([C(4), C(999), C(999), T(7), T(0)]);
+    } finally {
+      if (before === undefined) Reflect.deleteProperty(process.env, "LETHAL_FENCED_COVERAGE_DUMP");
+      else process.env.LETHAL_FENCED_COVERAGE_DUMP = before;
+    }
+    const lines = (await readFile(path, "utf8")).trim().split("\n");
+    expect(lines).toHaveLength(1);
+    const rec = JSON.parse(lines[0] ?? "") as { rows: unknown[]; gaps: unknown[] };
+    expect(rec.rows).toHaveLength(5);
+    expect(rec.gaps).toEqual([
+      { objectType: "Codeunit", objectId: 79100, lineNo: 999, besideMembers: true },
+      { objectType: "Codeunit", objectId: 79100, lineNo: 999, besideMembers: true },
+      { objectType: "Table", objectId: 79150, lineNo: 7, besideMembers: false },
+    ]);
   });
 
   test("R747: a table and a codeunit with the same id are told apart", async () => {
-    const said = await saidFor(
+    const notes = await notesFor(
       [
         { objectType: 5, objectId: 79101, lineNo: 4, hits: 1 },
         { objectType: 1, objectId: 79101, lineNo: 7, hits: 1 },
@@ -3531,8 +3688,11 @@ describe("fenced coverage — the thin-coverage diagnostic", () => {
         tables: [{ Id: 79101, Name: "Same Tab" }],
       },
     );
-    expect(said).toContain("no row of Table:79101");
-    expect(said).not.toContain("Codeunit:79101");
+    // R748: the codeunit's member row must not count for the table (keyed by type AND id): the
+    // table is a no-member object, so only no-procedure-lines fires.
+    expect(codesOf(notes)).toEqual([NO_PROC]);
+    expect(notes[0]?.[1]).toContain("no row of Table:79101");
+    expect(notes[0]?.[1]).not.toContain("Codeunit:79101");
   });
 
   test("R747: more than 5 flagged objects are capped with '+N more', sorted, not in row order", async () => {
