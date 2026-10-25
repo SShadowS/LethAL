@@ -182,10 +182,10 @@ export const BURN_GUARD_MS = 60_000;
  * A busy loop on core 0. `timeout -s KILL` (coreutils) ends it on its own after 150 s, so a killed bun
  * cannot leave it spinning for good.
  */
-export const burnerArgv = (taskset: string): string[] => [
+export const burnerArgv = (taskset: string, core = 0): string[] => [
   taskset,
   "-c",
-  "0",
+  String(core),
   "timeout",
   "-s",
   "KILL",
@@ -194,6 +194,66 @@ export const burnerArgv = (taskset: string): string[] => [
   "-c",
   "while :; do :; done",
 ];
+
+/**
+ * Addendum 1: the cores in `Cpus_allowed_list` of `/proc/self/status` text (ranges like `0-3,8,10-11`).
+ * No such line or an unreadable list: `undefined`.
+ */
+export function parseAllowedCores(status: string | undefined): number[] | undefined {
+  const m = /^Cpus_allowed_list:\s*(\S+)\s*$/m.exec(status ?? "");
+  if (m === null) return undefined;
+  const cores: number[] = [];
+  for (const part of (m[1] ?? "").split(",")) {
+    const r = /^(\d+)(?:-(\d+))?$/.exec(part);
+    if (r === null) return undefined;
+    const lo = Number(r[1]);
+    const hi = r[2] === undefined ? lo : Number(r[2]);
+    if (hi < lo) return undefined;
+    for (let c = lo; c <= hi; c++) cores.push(c);
+  }
+  return cores.length > 0 ? cores : undefined;
+}
+
+/** Addendum 1: a stopped A over the late line is contention only when its CPU is under this share of its wall. */
+export const BURN_CPU_SHARE = 0.75;
+
+/**
+ * R789: the least busy core from two `/proc/stat` snapshots (busy = total - idle - iowait, as a
+ * delta). Ties go to the lowest core. Either snapshot unreadable or no `cpuN` line in both: core 0.
+ */
+export function leastBusyCore(
+  before: string | undefined,
+  after: string | undefined,
+  /** Addendum 1: only these cores may be picked (the process's `Cpus_allowed_list`); absent: all. */
+  allowed?: readonly number[],
+): number {
+  const busy = (text: string | undefined): Map<number, number> => {
+    const m = new Map<number, number>();
+    for (const line of (text ?? "").split("\n")) {
+      const f = /^cpu(\d+)\s+(.*)$/.exec(line);
+      if (f === null) continue;
+      const n = (f[2] ?? "").trim().split(/\s+/).slice(0, 8).map(Number);
+      if (n.length < 5 || n.some((x) => !Number.isFinite(x))) continue;
+      const total = n.reduce((s, x) => s + x, 0);
+      m.set(Number(f[1]), total - (n[3] ?? 0) - (n[4] ?? 0));
+    }
+    return m;
+  };
+  const b = busy(before);
+  const a = busy(after);
+  let best = 0;
+  let bestDelta = Number.POSITIVE_INFINITY;
+  for (const core of [...a.keys()].sort((x, y) => x - y)) {
+    const prev = b.get(core);
+    if (prev === undefined || (allowed !== undefined && !allowed.includes(core))) continue;
+    const d = (a.get(core) ?? 0) - prev;
+    if (d < bestDelta) {
+      best = core;
+      bestDelta = d;
+    }
+  }
+  return best;
+}
 
 /** Probe First: its lines are what `per-test-coverage` checks (5 `if`, 6 `exit(1)`, 7 `exit(0)`). */
 const FIRST_AL = `codeunit 50601 "Probe First"
@@ -742,7 +802,19 @@ export interface V3ProbeEnv {
    * Test hook: starts ONE of the competing busy loops on core 0; `timeout-is-cpu` calls it
    * `BURN_BUSY_LOOPS` times (default: `burnerArgv`, `taskset -c 0 timeout -s KILL 150 sh -c ...`).
    */
-  readonly startBurner?: () => { kill(): void };
+  readonly startBurner?: (core: number) => { kill(): void };
+  /**
+   * R789 test hook: returns `/proc/stat` text (called twice, before A). With neither this nor
+   * `startBurner` set, the real file is read (two samples 200 ms apart); a test that sets only
+   * `startBurner` gets core 0 and never reads the real file.
+   */
+  readonly readProcStat?: () => Promise<string | undefined>;
+  /**
+   * Addendum 1 test hook: returns `/proc/self/status` text. With neither this nor `readProcStat` nor
+   * `startBurner` set, the real file is read; a test that sets one of the others gets all cores allowed
+   * unless it sets this.
+   */
+  readonly readSelfStatus?: () => Promise<string | undefined>;
   /** Test hook: `timeout-is-cpu`'s per-call hard process timeout (default 60 s). */
   readonly burnGuardMs?: number;
   /**
@@ -771,6 +843,8 @@ interface Call {
   readonly wallMs: number;
   /** The call's `guardMs` timeout fired (the process was killed by it). */
   readonly timedOut: boolean;
+  /** The process's own CPU time, when the spawn gave it. */
+  readonly cpuMs: number | undefined;
   readonly rows: readonly V3Row[] | undefined;
   readonly coverage: unknown;
 }
@@ -884,8 +958,14 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
       const res = await spawn(argv, {
         ...(cacheDir !== undefined ? { env: { ALRUNNER_CACHE: cacheDir } } : {}),
         ...(signal !== undefined ? { signal } : {}),
-      }).catch((e: unknown) => ({ exitCode: -1, stdout: "", stderr: String(e) }));
-      const wallMs = Date.now() - t0;
+      }).catch(
+        (e: unknown): Awaited<ReturnType<SpawnFn>> => ({
+          exitCode: -1,
+          stdout: "",
+          stderr: String(e),
+        }),
+      );
+      const wallMs = res.wallMs ?? Date.now() - t0;
       const decoded = o.codeunit !== undefined ? decodeV3Rows(res.stdout, o.codeunit) : undefined;
       let coverage: unknown;
       if (o.coverage === true) {
@@ -899,6 +979,7 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         ...res,
         wallMs,
         timedOut: signal?.aborted === true,
+        cpuMs: res.cpuMs,
         rows: decoded !== undefined && "rows" in decoded ? decoded.rows : undefined,
         coverage,
       };
@@ -1159,20 +1240,43 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         ),
       );
     } else {
-      const pin = [env.tasksetPath, "-c", "0"];
+      // R789: the least busy core, from two samples just before A.
+      const readStat =
+        env.readProcStat ??
+        (env.startBurner !== undefined
+          ? undefined
+          : async () => readFile("/proc/stat", "utf8").catch(() => undefined));
+      // Addendum 1: only the cores this process may use. A hook-driven test without `readSelfStatus`
+      // allows all cores; the real read that fails or does not parse means core 0.
+      const readStatus =
+        env.readSelfStatus ??
+        (readStat !== undefined && env.readProcStat === undefined
+          ? async () => readFile("/proc/self/status", "utf8").catch(() => undefined)
+          : undefined);
+      let core = 0;
+      if (readStat !== undefined) {
+        const statusText = readStatus !== undefined ? await readStatus() : undefined;
+        const allowed = readStatus !== undefined ? parseAllowedCores(statusText) : undefined;
+        if (readStatus === undefined || allowed !== undefined) {
+          const s1 = await readStat();
+          if (env.readProcStat === undefined) await new Promise((r) => setTimeout(r, 200));
+          core = leastBusyCore(s1, await readStat(), allowed);
+        }
+      }
+      const pin = [env.tasksetPath, "-c", String(core)];
       const lateMs = BURN_LIMIT_SECS * 1000 * BURN_WALL_FACTOR;
-      const expected = `at N=${BURN_LIMIT_SECS}: a huge burn on core 0 alone is a timeout row (A); the same burn beside ${BURN_BUSY_LOOPS} busy loops on core 0 is ALSO a timeout row, with durationMs over ${lateMs} AND over ${BURN_RELATIVE_FACTOR}x A's (B: a CPU-time stop is late in wall time; a wall-time limit stops both at the same time)`;
+      const expected = `at N=${BURN_LIMIT_SECS}: a huge burn on one core alone is a timeout row (A, on time: a wall-clock-late A means the core was contended); the same burn beside ${BURN_BUSY_LOOPS} busy loops on that core is ALSO a timeout row, with durationMs over ${lateMs} AND over ${BURN_RELATIVE_FACTOR}x A's (B: a CPU-time stop is late in wall time; a wall-time limit stops both at the same time)`;
       const guardMs = env.burnGuardMs ?? BURN_GUARD_MS;
       const burnArgs = ["--test-timeout-secs", String(BURN_LIMIT_SECS), "--codeunit", "50656"];
       const stopped = (r: V3Row | undefined) =>
         r?.notRun === true && r.message === `Test exceeded ${BURN_LIMIT_SECS}s timeout.`;
       const callText = (c: Call, r: V3Row | undefined) =>
-        `${JSON.stringify(r ?? null)} (wall ${c.wallMs} ms${c.timedOut ? `, killed by the ${guardMs} ms process timeout` : ""})`;
+        `${JSON.stringify(r ?? null)} (wall ${c.wallMs} ms${c.cpuMs !== undefined ? `, cpu ${Math.round(c.cpuMs)} ms` : ""}${c.timedOut ? `, killed by the ${guardMs} ms process timeout` : ""})`;
       // A: pinned, alone.
       const alone = await call(burnArgs, { codeunit: 50656, wrap: pin, guardMs });
       const a = rowOf(alone, "CpuBurnLong");
       let verdict: V3Fact["verdict"];
-      let measured = `A ${callText(alone, a)}`;
+      let measured = `core ${core}; A ${callText(alone, a)}`;
       if (alone.timedOut) {
         // No limit at all: a build that never stops the burn.
         verdict = "diverged";
@@ -1180,6 +1284,17 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         verdict = "unmeasurable";
       } else if (!stopped(a)) {
         verdict = "diverged";
+      } else if ((a.durationMs ?? 0) > lateMs && alone.cpuMs === undefined) {
+        // Addendum 1: a late A is told apart by its CPU time; without it nothing can be said.
+        verdict = "unmeasurable";
+        measured += `; A late (over ${lateMs} ms) and the process CPU time was not read, B not run`;
+      } else if (
+        (a.durationMs ?? 0) > lateMs &&
+        (alone.cpuMs ?? 0) < BURN_CPU_SHARE * alone.wallMs
+      ) {
+        // Addendum 1: a pinned process alone on its core uses about all of it; a shared core gives a share.
+        verdict = "unmeasurable";
+        measured += `; A late: core ${core} contended, cpu ${Math.round(alone.cpuMs ?? 0)} of wall ${alone.wallMs} ms, B not run`;
       } else {
         // B: the same burn beside busy loops, started before and killed after (in a finally).
         const burners: { kill(): void }[] = [];
@@ -1187,8 +1302,8 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         try {
           for (let i = 0; i < BURN_BUSY_LOOPS; i++)
             burners.push(
-              env.startBurner?.() ??
-                Bun.spawn(burnerArgv(env.tasksetPath), {
+              env.startBurner?.(core) ??
+                Bun.spawn(burnerArgv(env.tasksetPath, core), {
                   stdout: "ignore",
                   stderr: "ignore",
                 }),

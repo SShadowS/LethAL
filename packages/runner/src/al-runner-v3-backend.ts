@@ -77,7 +77,12 @@ import {
   serveRow,
 } from "./al-runner-v3-entries";
 import { AlRunnerV3UngatedBuildError, V3_NO_SERVE_ENTRIES, checkGated } from "./al-runner-v3-pin";
-import { pinnedDefectCoverage, sleepRuleRetiredFor } from "./al-runner-v3-pins";
+import {
+  pinnedDefectCoverage,
+  serveRowFieldsFor,
+  sleepRuleLine,
+  sleepRuleRetiredFor,
+} from "./al-runner-v3-pins";
 import {
   FRESH_PROBE_ENV,
   type ProbeCacheKey,
@@ -1289,6 +1294,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // R719: a fact the running build's pin already covers (exact fact and outcome) is not warned
     // about; the session prints one pin line instead, so a pinned build is never fully silent.
     this.sleepRuleRetired = sleepRuleRetiredFor(this.contract, reported, binarySha256);
+    this.serveRowFields = serveRowFieldsFor(reported, binarySha256); // R782
+    // R779: say which §6 behaviour this session runs, once, beside the probe line.
+    console.warn(sleepRuleLine(this.sleepRuleRetired, this.contract, reported, binarySha256));
     const covered = pinnedDefectCoverage(this.contract, reported, binarySha256);
     if (covered !== undefined) console.warn(covered.line);
     for (const line of v3DefectWarnings(this.contract, { ...kind, muted: covered?.muted }))
@@ -1297,7 +1305,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (refusals.length > 0) return { ok: false, details: refusals.join("\n") };
     return {
       ok: true,
-      details: `${reported}; ${v3ContractSummary(this.contract)}${probeNote !== "" ? `; ${probeNote}` : ""}${this.entries ? `; transport serve-entries (R635), secondEcho ${this.cfg.secondEcho !== false}` : ""}${this.cfg.serveFallbackWarmup !== undefined ? `; transport one-shot (the serve-entries default fell back at the warm-up: ${this.cfg.serveFallbackWarmup}; R786)` : ""}`,
+      details: `${reported}; ${v3ContractSummary(this.contract)}${probeNote !== "" ? `; ${probeNote}` : ""}; §6 Sleep rule ${this.sleepRuleRetired ? "retired" : "applies"} (R779)${this.entries ? `; transport serve-entries (R635), secondEcho ${this.cfg.secondEcho !== false}` : ""}${this.cfg.serveFallbackWarmup !== undefined ? `; transport one-shot (the serve-entries default fell back at the warm-up: ${this.cfg.serveFallbackWarmup}; R786)` : ""}`,
     };
   }
 
@@ -1342,6 +1350,17 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    */
   private sleepRuleRetired = false;
 
+  /**
+   * R782: set by `status()`. True when the build's pin records #5798 fixed: serve rows are read from
+   * their own `codeunit` and `method` fields, and a dotted test method may run under serve-entries.
+   */
+  private serveRowFields = false;
+
+  /** R782: the switch, as the last `status()` decided it (read by tests and the gate). */
+  isServeRowFields(): boolean {
+    return this.serveRowFields;
+  }
+
   /** R-762 B: the switch, as the last `status()` decided it (the gate's X legs read it). */
   isSleepRuleRetired(): boolean {
     return this.sleepRuleRetired;
@@ -1380,7 +1399,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * in hand then. After this, or after any v3 process started, `entries` is frozen.
    *
    * Explicit transport: unchanged, except that an explicit serve-entries (config key present) with a
-   * "." in a test method name refuses by name (#5798). Default: serve-entries unless a fallback
+   * "." in a test method name refuses by name (#5798), UNLESS the build's pin records #5798 fixed
+   * (R782). Default: serve-entries unless a fallback
    * reason holds; then one-shot and ONE warning naming every reason.
    */
   async decideTransport(facts: { readonly resume: boolean }): Promise<void> {
@@ -1391,7 +1411,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         const dotted = this.discovered
           .filter((t) => t.method.includes("."))
           .map((t) => `${t.codeunitName}.${t.method}`);
-        if (dotted.length > 0) throw new AlRunnerV3ServeDottedTestNameError(dotted);
+        // R782: a build whose pin records #5798 fixed reads a dotted method from the row's fields.
+        if (dotted.length > 0) {
+          const b = await this.runnerBuild();
+          this.serveRowFields = serveRowFieldsFor(b.version, b.binarySha256);
+          if (!this.serveRowFields) throw new AlRunnerV3ServeDottedTestNameError(dotted);
+        }
       }
       return;
     }
@@ -1413,10 +1438,17 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         `multi-object-or-wrapped: ${shaped.slice(0, 5).join(", ")}${shaped.length > 5 ? ", ..." : ""} (measured on one-shot only)`,
       );
     }
+    const { version, binarySha256 } = await this.runnerBuild();
+    this.serveRowFields = serveRowFieldsFor(version, binarySha256);
+    // R782: where #5798 is fixed, an inner "." is read like any proven inner character (the row's
+    // own fields carry the method). Only the measured shape: exactly ONE "." with an ASCII letter or
+    // digit on both sides (`Dot.Step`); any other dot shape stays unproven.
+    const methodShape = (m: string): boolean =>
+      V3_SERVE_PROVEN_NAME_SHAPES.method.test(
+        this.serveRowFields ? m.replace(/^([^.]*[A-Za-z0-9])\.([A-Za-z0-9][^.]*)$/, "$1_$2") : m,
+      );
     const odd = this.discovered.filter(
-      (t) =>
-        !V3_SERVE_PROVEN_NAME_SHAPES.method.test(t.method) ||
-        !V3_SERVE_PROVEN_NAME_SHAPES.codeunit.test(t.codeunitName),
+      (t) => !methodShape(t.method) || !V3_SERVE_PROVEN_NAME_SHAPES.codeunit.test(t.codeunitName),
     );
     if (odd.length > 0) {
       reasons.push(
@@ -1428,7 +1460,6 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           )}${odd.length > 5 ? ", ..." : ""} (name shapes not yet measured under serve-entries; "." in a method name is upstream #5798)`,
       );
     }
-    const { version } = await this.runnerBuild();
     if (V3_NO_SERVE_ENTRIES.includes(version)) {
       reasons.push(`no-serve-build: ${version} has no serve-entries path`);
     }
@@ -2848,7 +2879,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     await this.refuseDaemonDependencySkip(lane, daemon);
     if (answer.summary.cached === false) this.stats.cachedFalse += 1;
-    const decoded = decodeEntriesAnswer(sent, answer);
+    const decoded = decodeEntriesAnswer(sent, answer, this.serveRowFields);
     if ("why" in decoded) {
       await lane.closeDaemon();
       throw new AlRunnerServerRequestError(
@@ -3417,7 +3448,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (answer.summary.cached === false) this.stats.cachedFalse += 1;
     const rows: V3Row[] = [];
     for (const t of answer.tests) {
-      const r = serveRow(t);
+      const r = serveRow(t, this.serveRowFields);
       if (typeof r === "string" || r.codeunit !== cu) {
         await lane.closeDaemon();
         throw new AlRunnerServerRequestError(

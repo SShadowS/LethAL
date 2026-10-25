@@ -133,6 +133,7 @@ import {
   judgeWrArms,
   legKSection,
   moWrTransportRefusal,
+  o1LoginWorkDate,
   v3DefaultLegs,
   v3ItestFailures,
   v3KOnCandidate,
@@ -673,7 +674,8 @@ async function legN1(scratch: string): Promise<void> {
 /**
  * R722 (pre-commitment r19): N1's project under serve-entries, whatever the run's own transport is.
  * The reading is `judgeN1Serve`'s: on alpha.5 the session fails closed by name (#5798); anything
- * else is `held` (re-pre-commit) or `gate-fail`, never a silent pass.
+ * else is `held` (re-pre-commit) or `gate-fail`, never a silent pass. R782: on a build whose pin
+ * records #5798 fixed the session must COMPLETE, 36/0/0 over 36, per mutant equal to N1's baseline.
  */
 async function legN1E(scratch: string, version: string): Promise<void> {
   const deps = await microsoftDeps(scratch);
@@ -688,8 +690,9 @@ async function legN1E(scratch: string, version: string): Promise<void> {
     }),
   );
   let reading: N1EReading;
+  let lastReport: SessionReport | undefined;
   try {
-    await session(scratch, b, {
+    lastReport = await session(scratch, b, {
       projectDir: fixture("sandbox-names"),
       testDir: fixture("sandbox-names-tests"),
       selectorIds: { selectorId: 78849, controlId: 78848, tableId: 78847 },
@@ -700,10 +703,20 @@ async function legN1E(scratch: string, version: string): Promise<void> {
     if (isGateWarningsError(e)) throw e;
     reading = { threw: e instanceof Error ? e.message : String(e) };
   }
-  const j = judgeN1Serve(reading, version, activePin?.n1e);
+  const flagged = activePin?.serveRowFields !== undefined;
+  const j = judgeN1Serve(reading, version, flagged);
   for (const l of j.lines) console.log(`  N1E: ${l}`);
   if (j.outcome === "held") throw new V3LegHeld(j.lines);
   if (j.outcome === "gate-fail") throw new LegFailure(j.lines.join("; "));
+  // R782: a flagged build completed the dotted test; it must read exactly as N1 (one-shot, bcdev).
+  if (flagged && "completed" in reading && lastReport !== undefined) {
+    must(b.isServeRowFields(), "N1E: a flagged pin, but the backend did not read the row fields");
+    assertCounts(lastReport, "N1E", 36, 0, 0, 36);
+    await assertPerMutant(lastReport, join(HERE, "bcdev.names.baseline.json"), "N1E");
+    const s = b.entriesStats();
+    console.log(`  N1E: serve counters ${JSON.stringify({ ...s })}`);
+    must(s.echoMismatches === 0, `N1E: ${s.echoMismatches} echo mismatches, pre-committed 0`);
+  }
 }
 
 /**
@@ -941,7 +954,13 @@ async function legO1(scratch: string, version: string): Promise<void> {
         });
       console.log(`  O1: ${rq.label}: ${reads.join(" | ")}`);
     }
-    const j = judgeOrderProbe(done, [...dates]);
+    // R771 addendum 2: a pinned build's login WorkDate, for the CDO set only (it holds Base Application).
+    const login = o1LoginWorkDate(set.name, activePin);
+    if (login !== undefined)
+      console.log(
+        `  O1: ${set.name} set: WorkDate pinned ${login} (pin ${activePin?.id}, ${activePin?.o1?.issue})`,
+      );
+    const j = judgeOrderProbe(done, [...dates], login);
     console.log(`  O1: ${set.name} set: ${j.outcome} (${done.length} requests, one daemon)`);
     if (j.outcome === "gate-fail") throw new LegFailure(`O1: ${j.lines.join("; ")}`);
   }

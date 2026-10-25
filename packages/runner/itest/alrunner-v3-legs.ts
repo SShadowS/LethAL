@@ -95,16 +95,36 @@ export interface O1Request {
   }[];
 }
 
+/** R771: the login WorkDate O1 judges a set against: the pin's, for the CDO set only (it holds Base Application). */
+export function o1LoginWorkDate(
+  set: string,
+  pin: { readonly o1?: { readonly cdoWorkDate: string } } | undefined,
+): string | undefined {
+  return set === "cdo" ? pin?.o1?.cdoWorkDate : undefined;
+}
+
 /**
  * R784, pre-committed (master 6aa7700c): `gate-fail` when a Reader entry reads a writer value, reads
  * anything but the default, or lacks a row; or a Writer test does not pass (the state was never set,
  * so the leg proves nothing). `today` lists the dates the clock may show (WorkDate defaults to it).
+ * R771: `loginWorkDate`, from a build pin, replaces the clock for WorkDate: the build runs Base
+ * Application's login code, so in a demo company every Reader entry starts at that one date (R0.0 on
+ * the fresh daemon included). A writer value still fails, and a pin naming a writer value is refused.
  */
 export function judgeOrderProbe(
   requests: readonly O1Request[],
   today: readonly string[],
+  loginWorkDate?: string,
 ): { readonly outcome: "pass" | "gate-fail"; readonly lines: string[] } {
   const bad: string[] = [];
+  if (
+    loginWorkDate !== undefined &&
+    O1_WRITER_VALUES.some((v) => `WORKDATE=${loginWorkDate}`.includes(v))
+  )
+    bad.push(`the pinned login WorkDate ${loginWorkDate} is a writer value`);
+  if (loginWorkDate !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(loginWorkDate))
+    bad.push(`the pinned login WorkDate ${JSON.stringify(loginWorkDate)} is not YYYY-MM-DD`);
+  const dates = loginWorkDate !== undefined ? [loginWorkDate] : today;
   // N3: the requests must be the plan's, else an empty or short list would "match" (empty-vs-empty).
   if (requests.length !== O1_PLAN.length)
     bad.push(`${requests.length} requests, pre-committed ${O1_PLAN.length}`);
@@ -145,11 +165,11 @@ export function judgeOrderProbe(
           continue;
         }
         const got = l.message ?? "";
-        const ok = t === "ReadWorkDate" ? today.some((d) => got === want(d)) : got === want("");
+        const ok = t === "ReadWorkDate" ? dates.some((d) => got === want(d)) : got === want("");
         if (ok) continue;
         const carried = O1_WRITER_VALUES.some((v) => got.includes(v));
         bad.push(
-          `${at}: ${t} read ${JSON.stringify(got)}${carried ? " (a writer value: CARRY-OVER)" : ""}, pre-committed ${JSON.stringify(want(today[0] ?? ""))}`,
+          `${at}: ${t} read ${JSON.stringify(got)}${carried ? " (a writer value: CARRY-OVER)" : ""}, pre-committed ${JSON.stringify(want(dates[0] ?? ""))}`,
         );
       }
     }
@@ -177,8 +197,10 @@ export type N1EReading = { readonly completed: true } | { readonly threw: string
  * R722, pre-committed (r19): on alpha.5 the serve request fails closed with `the entries answer is
  * invalid: a test line without v3's row shape: {...}` for `Codeunit<n>.Dot.Step`, a line that has no
  * `codeunit` and no `method` (upstream #5798). That is a `pass`. A finished session, or a line that
- * now has `codeunit` or `method`, is `held` (upstream may have fixed it: re-pre-commit), except (R771)
- * a line the build's pin records as its `n1e.refusedLine`, which is a `pass`. Any
+ * now has `codeunit` or `method`, is `held` (upstream may have fixed it: re-pre-commit).
+ * R782: on a FLAGGED build (its pin records #5798 fixed, so serveRow reads the
+ * row's own fields) the reading flips: a completed session is `pass` (the leg then asserts 36/0/0,
+ * per-mutant equality and 0 echo mismatches) and any error is `gate-fail`. Any
  * other error, or the refusal for another test, is `gate-fail`. One exception: a build in
  * `V3_NO_SERVE_ENTRIES` that refuses the `entries` field by name is `pass` (not applicable); any
  * other build refusing `entries` is `gate-fail`.
@@ -186,7 +208,7 @@ export type N1EReading = { readonly completed: true } | { readonly threw: string
 export function judgeN1Serve(
   r: N1EReading,
   version: string,
-  pin?: { readonly refusedLine: RegExp },
+  flagged = false,
 ): {
   readonly outcome: "pass" | "held" | "gate-fail";
   readonly lines: string[];
@@ -195,6 +217,21 @@ export function judgeN1Serve(
     outcome: "held" as const,
     lines: [`re-pre-commit: upstream may have fixed #5798 (${why})`],
   });
+  if (flagged) {
+    return "completed" in r
+      ? {
+          outcome: "pass",
+          lines: [
+            "N1E: completed: #5798 fixed upstream, serveRow reads the row's codeunit and method (R782)",
+          ],
+        }
+      : {
+          outcome: "gate-fail",
+          lines: [
+            `N1E: a flagged build must complete the dotted test (R782): ${r.threw.slice(0, 300)}`,
+          ],
+        };
+  }
   if ("completed" in r) return held("the serve-entries session completed");
   if (isNoServeRefusal(version, r.threw)) {
     return {
@@ -213,16 +250,6 @@ export function judgeN1Serve(
     };
   }
   if (/"codeunit"|"method"/.test(line)) {
-    // R771: a build whose pin names this exact line has #5798 fixed upstream; serveRow still refuses
-    // the dotted name, so the session fails closed (safe, no row scored).
-    if (pin?.refusedLine.test(line) === true) {
-      return {
-        outcome: "pass",
-        lines: [
-          "N1E: pinned: #5798 fixed upstream (the Dot.Step row carries codeunit and method); LethAL's serveRow still refuses a dotted method by name, so the session fails closed",
-        ],
-      };
-    }
     return held(`the refused line now has codeunit or method: ${line}`);
   }
   if (!/Codeunit\d+\.Dot\.Step/.test(line)) {

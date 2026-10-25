@@ -357,6 +357,91 @@ describe("parseTestSummary", () => {
     expect(text).not.toContain("error: boom 20");
     expect(text).toContain("first 20 of 22 failing tests");
   });
+  const stepOf = (out: string, code: number) =>
+    testStep(FULL, {
+      exec: () => ({ code, output: out }),
+      snapState: () => new Map(),
+      env: {},
+      log: () => "log",
+      junitPath: () => "/j.xml",
+      readJunit: () => "",
+      expectedTestFiles: () => ["a.test.ts"],
+    });
+  test("R726b: timed-out tests are named by file and test in one summary line; other failures are not", async () => {
+    // Two files (CI ::group:: headers), two timeouts in one, one in the other, and a plain failure.
+    const out = [
+      "bun test v1.4.4 (38afee6c8) 4x PARALLEL",
+      "::group::packages\\runner\\tests\\resume.test.ts:",
+      "(fail) R389 > M-8: pending elsewhere [60001.00ms]",
+      "  ^ this test timed out after 60000ms.",
+      "(pass) fine [1.00ms]",
+      "(fail) R389 > M2: resumed then revoked [60002.00ms]",
+      "  ^ this test timed out after 60000ms.",
+      "::endgroup::",
+      "::group::scripts\\verify.test.ts:",
+      "error: expect(received).toBe(expected)",
+      "(fail) plain assertion failure [2.00ms]",
+      "(fail) watchdog > isChildOf [30001.00ms]",
+      "  ^ this test timed out after 30000ms.",
+      "::endgroup::",
+      "",
+      "4 tests failed:",
+      "(fail) R389 > M-8: pending elsewhere [60001.00ms]",
+      "  ^ this test timed out after 60000ms.",
+      " 1 pass",
+      " 4 fail",
+      "Ran 5 tests across 2 files. [1.00s]",
+    ].join("\n");
+    const step = await stepOf(out, 1);
+    const hit = step.lines.filter((l) => l.startsWith("timed out ("));
+    expect(hit).toEqual([
+      "timed out (3): packages/runner/tests/resume.test.ts > R389 > M-8: pending elsewhere; packages/runner/tests/resume.test.ts > R389 > M2: resumed then revoked; scripts/verify.test.ts > watchdog > isChildOf",
+    ]);
+    expect(hit[0]).not.toContain("plain assertion failure");
+  });
+  test("R726b S1: the same test name timing out in two files is listed under each file", async () => {
+    const out = [
+      "a.test.ts:",
+      "(fail) same name [60001.00ms]",
+      "  ^ this test timed out after 60000ms.",
+      "b.test.ts:",
+      "(fail) same name [60002.00ms]",
+      "  ^ this test timed out after 60000ms.",
+      " 0 pass",
+      " 2 fail",
+      "Ran 2 tests across 2 files. [1.00s]",
+    ].join("\n");
+    const step = await stepOf(out, 1);
+    expect(step.lines.filter((l) => l.startsWith("timed out ("))).toEqual([
+      "timed out (2): a.test.ts > same name; b.test.ts > same name",
+    ]);
+  });
+  test("R726b S2: a hook timeout is listed, and its line stays out of the next failure's text", async () => {
+    const out = [
+      "a.test.ts:",
+      "(fail) hooked [5001.00ms]",
+      "  ^ a beforeEach/afterEach hook timed out for this test.",
+      "error: expect(received).toBe(expected)",
+      "(fail) next one [1.00ms]",
+      " 0 pass",
+      " 2 fail",
+      "Ran 2 tests across 1 file. [1.00s]",
+    ].join("\n");
+    const step = await stepOf(out, 1);
+    expect(step.lines.filter((l) => l.startsWith("timed out ("))).toEqual([
+      "timed out (1): a.test.ts > hooked",
+    ]);
+    const text = step.lines.join("\n");
+    expect(text).toContain("  (fail) next one\n    | error: expect(received).toBe(expected)");
+    expect(text).not.toContain("  (fail) next one\n    | ^ a beforeEach");
+    expect(text.match(/hook timed out/g)?.length).toBe(1);
+  });
+  test("R726b: a run with no timeout prints no timed-out line", async () => {
+    const out =
+      "error: boom\n(fail) plain [2.00ms]\n 1 pass\n 1 fail\nRan 2 tests across 1 file. [1.00s]\n";
+    const step = await stepOf(out, 1);
+    expect(step.lines.some((l) => l.startsWith("timed out ("))).toBe(false);
+  });
   test("bun exiting non-zero with `0 fail` and no crash line still fails (the exit-code backstop)", async () => {
     const step = await testStep(FULL, {
       exec: () => ({ code: 1, output: " 3 pass\n 0 fail\nRan 3 tests across 2 files. [1.00s]\n" }),
