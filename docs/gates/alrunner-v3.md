@@ -318,14 +318,15 @@ Both run as the other legs do (`runSession`, the v3 backend, one-shot, coverage 
 A build can have a PIN: the exact readings that differ from alpha.2's expectations and are known and accepted. Without a pin the gate runs as before.
 
 - **Where.** `packages/runner/src/al-runner-v3-pins.ts` (`V3_BUILD_PINS`, `findV3Pin`; moved from `itest/` by [[R719]], because a session reads it too). A pin is code, so it is tied to a gated commit. The key is the pair (exact `--version` line, binary sha256): both must be equal. The itest prints `PIN <id> applies (version and sha256 equal)` as its second line, only when a pin applies.
-- **Muting a session warning (R719).** A session mutes an `al-runner-v3-defect-gone` or `al-runner-v3-defect-refused` warning only when ALL four hold: the running binary's version line AND sha256 equal a pin (`findV3Pin`), that pin names the fact in leg C, the pin's outcome for it equals the outcome just read (`gone` for the six, `refused` for `duplicate-key-insert-raises`), and the fact's measured text matches the pin's pattern (and its extra check). The last three are one function, `pinnedFactMatches`, which the update gate's leg C uses too, so the mute is never wider than the gate's own pin match. Any other fact, another outcome, another measured text, another sha or no pin still warns. A pinned session prints one line instead, so it is never fully silent: `[lethal] al-runner-v3 pin alpha.5-07342060e covers 7 facts (#5700, #5788, R586c)`. The rule is `pinnedDefectCoverage`; it only changes what is printed, never a verdict, and no gate figure moves. Tests: `r719-pin-warnings.test.ts`.
+- **Muting a session warning (R719).** A session mutes an `al-runner-v3-defect-gone` or `al-runner-v3-defect-refused` warning only when ALL four hold: the running binary's version line AND sha256 equal a pin (`findV3Pin`), that pin names the fact in leg C, the pin's outcome for it equals the outcome just read (`gone` for the six, `refused` for `duplicate-key-insert-raises`), and the fact's measured text matches the pin's pattern (and its extra check). The last three are one function, `pinnedFactMatches`, which the update gate's leg C uses too, so the mute is never wider than the gate's own pin match. Any other fact, another outcome, another measured text, another sha or no pin still warns. A pinned session prints one line instead, so it is never fully silent: `[lethal] al-runner-v3 pin alpha.5-07342060e covers 7 facts (#5700, #5788, R586c)` (or `pin edge-dcdf9e821` for the edge build; same facts, same issues). The rule is `pinnedDefectCoverage`; it only changes what is printed, never a verdict, and no gate figure moves. Tests: `r719-pin-warnings.test.ts`.
 - **The rule (B1).** An entry passes only when the reading equals the pinned one. A pinned entry that does NOT match is never better than `held`: today's rule runs for it, and the result is forced to at least `held` (a `gate-fail` stays `gate-fail`). So alpha.2's old reading on a pinned build (the old defect, alpha.2's X (b) 7/1/1, all seven T rows `survived`) reads at least `held` (never `pass`), for a person to look at.
 - **Patterns.** `measured` texts are built by `pinPattern` from the logged text: every regex character escaped, `{n}` a number, anchored, no flags. Facts are looked up with `Object.hasOwn`.
 - **S5.** A pin for a build that is or was `current` is never removed: a later `--regate` of that build needs it.
 - **Records (M5).** A `LETHAL_ITEST_RECORD_BASELINE` request on a pinned or candidate build is refused by name, for every leg that records.
-- **Unpinned builds** (alpha.2, alpha.3, alpha.4, edge) are judged as before; the judges get no pin argument.
+- **Two pins** (R756): `alpha.5-07342060e` and `edge-dcdf9e821` (`al-runner 3.0.0-alpha.5+edge.20261024 (dcdf9e821)`, sha256 `0e313935...03890`). They share ONE readings object in `al-runner-v3-pins.ts`, because the edge build was measured identical to alpha.5 on every pinned reading. A later difference for either build must split that object first, never edit it in place.
+- **Unpinned builds** (alpha.2, alpha.3, alpha.4, and any other edge build) are judged as before; the judges get no pin argument.
 
-**The alpha.5 pin (`alpha.5-07342060e`, sha256 `fd4d6d40...51db2`).**
+**The pin table (both pins: alpha.5 `alpha.5-07342060e`, sha256 `fd4d6d40...51db2`; edge `edge-dcdf9e821`, sha256 `0e313935...03890`).**
 
 | Entry | Pinned reading | As BC? | Cost |
 |---|---|---|---|
@@ -462,3 +463,8 @@ Leg T is judged against the committed alpha.2 baseline with the seven keys overr
   loop is `taskset -c 0 timeout -s KILL 150 sh -c ...`, so a killed bun cannot orphan it. Measured offline on
   alpha.2 in five back-to-back leg C runs: A 2.0-2.05 s, B 16.0-16.1 s (about 8x A), all `matches`. Fact count unchanged (28).
   Predicted `matches` on alpha.2 and edge.
+- 2026-10-25: the daily update gate HELD the edge build `3.0.0-alpha.5+edge.20261024 (dcdf9e821)` (sha256
+  `0e313935...03890`) at 82a73bd1, as an unpinned candidate. Its readings are identical to alpha.5's pinned readings
+  (leg C's seven facts, X (b), and leg T's seven rows with counts 290 / 50 / 59 over 406, errors 7); every other leg
+  passed; K is skipped on a candidate by design. [[R756]] pins it as `edge-dcdf9e821` with those same readings. The
+  re-gate (`--regate`, then `--edge-rejudge dcdf9e821`) is pending; `current` has not moved.

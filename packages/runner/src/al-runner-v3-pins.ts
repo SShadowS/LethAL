@@ -89,81 +89,98 @@ const T_KEYS = [
   "0121538c88a9342b484d6597b43bf7bc9d138149790fb204378e0afae2086339|Data Key Probe|OnInsert|lethal.remove-assignment|1",
 ];
 
+/**
+ * The readings of alpha.5 (07342060e). The edge build `3.0.0-alpha.5+edge.20261024 (dcdf9e821)` was
+ * measured IDENTICAL on every pinned reading (R756, evidence in /coord/handoff/R-756/), so both pins
+ * share this one object and cannot drift. A later delta for either build must SPLIT this constant
+ * into two first; never edit it in place (that would change the other build's pin).
+ */
+const ALPHA5_READINGS: Pick<V3BuildPin, "legC" | "legT" | "xb"> = {
+  legC: {
+    "none-selected-exit": {
+      verdict: "gone",
+      measured: pinPattern("exit 6, stdout 0 rows"),
+      bc: "matches",
+      evidence: "r7: the fix LethAL asked for in #5613 (a CLI shape, not a BC question)",
+    },
+    "quoted-name-unselectable": {
+      verdict: "gone",
+      measured: pinPattern("exit 0"),
+      bc: "matches",
+      evidence: "#5572 closed; LethAL selects by codeunit, never by name (design 2.1, S1)",
+    },
+    "refusal-cascade": {
+      verdict: "gone",
+      measured: pinPattern(
+        `[${ROW(50654, "LaterFails")},"status":"fail","durationMs":{n},"message":"later","notRun":false}] exit 1`,
+      ),
+      bc: "matches",
+      evidence: "#5610 closed: a plain Error() test fails with its own text, as BC does (r9 §4)",
+    },
+    "sleep-is-noop": {
+      verdict: "gone",
+      measured: pinPattern(
+        `N=3: {n} ms [${ROW(50660, "ShortSleep")},"status":"pass","durationMs":{n},"notRun":false},${ROW(50660, "LongSleepA")},"status":"error","durationMs":{n},"message":"Test e{cut}; no flag: {n} ms`,
+        { cut: true },
+      ),
+      extra: noFlagUnderASecond,
+      bc: "matches",
+      evidence:
+        "verdict class only (r11 at 120 s); wall time and durationMs are not BC's (virtual clock; the backend guard keeps a virtual stop from being scored)",
+    },
+    "upstream-compile-errors": {
+      verdict: "gone",
+      measured: pinPattern("exit 3 null"),
+      bc: "matches",
+      evidence: "#5602 closed: BC never runs an app that does not compile (X (a), X (b))",
+    },
+    "refusal-row-shape": {
+      verdict: "gone",
+      measured: pinPattern(
+        `[${ROW(50653, "HttpGet")},"status":"fail","durationMs":{n},"message":"${BC_HTTP_HUB_TEXT}","notRun":false}] exit 1`,
+      ),
+      bc: "matches",
+      issue: `${REPO}/5700`,
+      evidence: "R706 on bc1, owner ruling R712: the hub path is the oracle",
+    },
+    "duplicate-key-insert-raises": {
+      verdict: "refused",
+      measured: pinPattern(
+        `[${ROW(50655, "DuplicateNamedKey")},"status":"error","durationMs":{n},"message":"NotRun: out-of-scope: the test ends while the error of a duplicate-key Insert into table Probe Row is deferred: whether the test runner raises it at the end of the test is not pinned","notRun":true}] exit 7`,
+      ),
+      bc: "differs",
+      issue: `${REPO}/5788`,
+      evidence:
+        "BC fails the test at its end (r639 bc1 probe); v3 declines it: lost kills, never a wrong verdict",
+    },
+  },
+  legT: {
+    rows: T_KEYS.map((key) => ({
+      key,
+      verdict: "error" as const,
+      errorClass: "runner-refused" as const,
+      killingTest: null,
+      issue: `${REPO}/5788`,
+    })),
+    counts: { killed: 290, survived: 50, noCoverage: 59 },
+    total: 406,
+  },
+  xb: { exitCode: 3, passed: 0, notRun: 0 },
+};
+
 export const V3_BUILD_PINS: readonly V3BuildPin[] = [
   {
     id: "alpha.5-07342060e",
     version: "al-runner 3.0.0-alpha.5 (07342060e)",
     binarySha256: "fd4d6d406a2f2170fccfe13413d51bbb1317b78b3ef5af3800ca9a6009b51db2",
-    legC: {
-      "none-selected-exit": {
-        verdict: "gone",
-        measured: pinPattern("exit 6, stdout 0 rows"),
-        bc: "matches",
-        evidence: "r7: the fix LethAL asked for in #5613 (a CLI shape, not a BC question)",
-      },
-      "quoted-name-unselectable": {
-        verdict: "gone",
-        measured: pinPattern("exit 0"),
-        bc: "matches",
-        evidence: "#5572 closed; LethAL selects by codeunit, never by name (design 2.1, S1)",
-      },
-      "refusal-cascade": {
-        verdict: "gone",
-        measured: pinPattern(
-          `[${ROW(50654, "LaterFails")},"status":"fail","durationMs":{n},"message":"later","notRun":false}] exit 1`,
-        ),
-        bc: "matches",
-        evidence: "#5610 closed: a plain Error() test fails with its own text, as BC does (r9 §4)",
-      },
-      "sleep-is-noop": {
-        verdict: "gone",
-        measured: pinPattern(
-          `N=3: {n} ms [${ROW(50660, "ShortSleep")},"status":"pass","durationMs":{n},"notRun":false},${ROW(50660, "LongSleepA")},"status":"error","durationMs":{n},"message":"Test e{cut}; no flag: {n} ms`,
-          { cut: true },
-        ),
-        extra: noFlagUnderASecond,
-        bc: "matches",
-        evidence:
-          "verdict class only (r11 at 120 s); wall time and durationMs are not BC's (virtual clock; the backend guard keeps a virtual stop from being scored)",
-      },
-      "upstream-compile-errors": {
-        verdict: "gone",
-        measured: pinPattern("exit 3 null"),
-        bc: "matches",
-        evidence: "#5602 closed: BC never runs an app that does not compile (X (a), X (b))",
-      },
-      "refusal-row-shape": {
-        verdict: "gone",
-        measured: pinPattern(
-          `[${ROW(50653, "HttpGet")},"status":"fail","durationMs":{n},"message":"${BC_HTTP_HUB_TEXT}","notRun":false}] exit 1`,
-        ),
-        bc: "matches",
-        issue: `${REPO}/5700`,
-        evidence: "R706 on bc1, owner ruling R712: the hub path is the oracle",
-      },
-      "duplicate-key-insert-raises": {
-        verdict: "refused",
-        measured: pinPattern(
-          `[${ROW(50655, "DuplicateNamedKey")},"status":"error","durationMs":{n},"message":"NotRun: out-of-scope: the test ends while the error of a duplicate-key Insert into table Probe Row is deferred: whether the test runner raises it at the end of the test is not pinned","notRun":true}] exit 7`,
-        ),
-        bc: "differs",
-        issue: `${REPO}/5788`,
-        evidence:
-          "BC fails the test at its end (r639 bc1 probe); v3 declines it: lost kills, never a wrong verdict",
-      },
-    },
-    legT: {
-      rows: T_KEYS.map((key) => ({
-        key,
-        verdict: "error" as const,
-        errorClass: "runner-refused" as const,
-        killingTest: null,
-        issue: `${REPO}/5788`,
-      })),
-      counts: { killed: 290, survived: 50, noCoverage: 59 },
-      total: 406,
-    },
-    xb: { exitCode: 3, passed: 0, notRun: 0 },
+    ...ALPHA5_READINGS,
+  },
+  {
+    // Measured identical to alpha.5 on edge (R756). S5: a pin of a current build is never removed.
+    id: "edge-dcdf9e821",
+    version: "al-runner 3.0.0-alpha.5+edge.20261024 (dcdf9e821)",
+    binarySha256: "0e3139359b37a7dd9c51377b64c0ae1acdcb208545f79075e4194571bbe03890",
+    ...ALPHA5_READINGS,
   },
 ];
 

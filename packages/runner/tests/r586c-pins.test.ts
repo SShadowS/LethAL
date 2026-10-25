@@ -516,6 +516,172 @@ describe("R586c itest wiring", () => {
   });
 });
 
+// ---------------------------------------------------------------------------------------------
+// R756: the edge build 3.0.0-alpha.5+edge.20261024 (dcdf9e821), measured identical to alpha.5
+// ---------------------------------------------------------------------------------------------
+
+const EDGE_VERSION = "al-runner 3.0.0-alpha.5+edge.20261024 (dcdf9e821)";
+const EDGE_SHA = "0e3139359b37a7dd9c51377b64c0ae1acdcb208545f79075e4194571bbe03890";
+const edgePin = findV3Pin(EDGE_VERSION, EDGE_SHA);
+
+// The edge readings, byte for byte from the edge gate.log (R756, 82a73bd1). One exception: leg C's
+// own "held:" text for duplicate-key-insert-raises is cut at 300 characters in that log, so its
+// FULL text is taken from the session warning line `al-runner-v3-defect-refused: duplicate-key-...`.
+const EDGE: Record<string, { verdict: string; measured: string }> = {
+  "none-selected-exit": { verdict: "gone", measured: "exit 6, stdout 0 rows" },
+  "quoted-name-unselectable": { verdict: "gone", measured: "exit 0" },
+  "refusal-cascade": {
+    verdict: "gone",
+    measured:
+      '[{"codeunit":50654,"method":"LaterFails","name":"Codeunit50654.LaterFails","status":"fail","durationMs":0,"message":"later","notRun":false}] exit 1',
+  },
+  "sleep-is-noop": {
+    verdict: "gone",
+    measured:
+      'N=3: 27 ms [{"codeunit":50660,"method":"ShortSleep","name":"Codeunit50660.ShortSleep","status":"pass","durationMs":0,"notRun":false},{"codeunit":50660,"method":"LongSleepA","name":"Codeunit50660.LongSleepA","status":"error","durationMs":0,"message":"Test exceed; no flag: 27 ms',
+  },
+  "upstream-compile-errors": { verdict: "gone", measured: "exit 3 null" },
+  "refusal-row-shape": {
+    verdict: "gone",
+    measured:
+      '[{"codeunit":50653,"method":"HttpGet","name":"Codeunit50653.HttpGet","status":"fail","durationMs":0,"message":"There was an error while executing the HTTP request, the connecting endpoint violates security requirements. Make sure you are connecting to a valid endpoint.","notRun":false}] exit 1',
+  },
+  "duplicate-key-insert-raises": {
+    verdict: "refused",
+    measured:
+      '[{"codeunit":50655,"method":"DuplicateNamedKey","name":"Codeunit50655.DuplicateNamedKey","status":"error","durationMs":0,"message":"NotRun: out-of-scope: the test ends while the error of a duplicate-key Insert into table Probe Row is deferred: whether the test runner raises it at the end of the test is not pinned","notRun":true}] exit 7',
+  },
+};
+// The seven leg-T keys the edge gate held (all survived -> error/runner-refused).
+const EDGE_T_KEYS = [
+  "0121538c88a9342b484d6597b43bf7bc9d138149790fb204378e0afae2086339|Data Key Probe|OnInsert|lethal.remove-assignment|1",
+  "2d119c2ec73ab1ae52dbba9a46ff0f4bc4d1489684b7064c985ef4a94112ee7e|Data Key Probe|OnInsert|lethal.negate-conditional|1",
+  "a811b46c95a74b761966dc4d0fd260793ba4c503b9cc6c7efd6e554acb7563d8|Data Flag Ops|InsertTwiceWithKeyTrigger|lethal.remove-assignment|1",
+  "c88702df06dca2c0edbdf144edf99c2682ad63278023dbd7e46f42c9875e0364|Data Flag Ops|InsertTwiceWithKeyTrigger|lethal.toggle-blank-string|1",
+  "c88702df06dca2c0edbdf144edf99c2682ad63278023dbd7e46f42c9875e0364|Data Key Probe|OnInsert|lethal.toggle-blank-string|1",
+  "dd3aa023aa7fb2b7893efe181ccbf517d3ca97cbfacec07f3818c25c45c127dc|Data Key Probe|OnInsert|lethal.empty-block|1",
+  "e75f9a0967677be80d3659fdc47e601d3764ac75077fb4d25c54b5f1322b2a8a|Data Flag Ops|InsertTwiceWithKeyTrigger|lethal.swap-modify-flag|1",
+];
+
+describe("R756 edge pin: the key", () => {
+  test("E-key-1: the edge version and sha find the edge pin", () => {
+    expect(edgePin?.id).toBe("edge-dcdf9e821");
+  });
+  test("E-key-2: mixed or changed keys find nothing; alpha.5's key still finds alpha.5", () => {
+    expect(findV3Pin(EDGE_VERSION, SHA)).toBeUndefined();
+    expect(findV3Pin(VERSION, EDGE_SHA)).toBeUndefined();
+    expect(findV3Pin(EDGE_VERSION, flip(EDGE_SHA))).toBeUndefined();
+    expect(findV3Pin(EDGE_VERSION.replace("dcdf9e821", "dcdf9e822"), EDGE_SHA)).toBeUndefined();
+    expect(findV3Pin(VERSION, SHA)?.id).toBe("alpha.5-07342060e");
+  });
+  test("E-share: the two pins share one readings object (they cannot drift)", () => {
+    const a = need(pin);
+    const e = need(edgePin);
+    expect(e.legC).toBe(a.legC);
+    expect(e.legT).toBe(a.legT);
+    expect(e.xb).toBe(a.xb);
+    expect(e.legT.rows.map((r) => r.key).sort()).toEqual([...EDGE_T_KEYS].sort());
+  });
+});
+
+describe("R756 edge pin: the edge readings are pinned and pass", () => {
+  const edgeFacts = (): { fact: string; verdict: string; measured?: string }[] => {
+    const facts: { fact: string; verdict: string; measured?: string }[] = [];
+    for (const d of V3_DEFECT_FACTS) {
+      const e = EDGE[d];
+      facts.push(
+        e !== undefined ? { fact: d, ...e } : { fact: d, verdict: "defect-present", measured: "x" },
+      );
+    }
+    for (let i = 1; i <= 18; i++)
+      facts.push({ fact: `contract-${i}`, verdict: "matches", measured: "ok" });
+    facts.push({ fact: "serve-keep-reasons", verdict: "matches", measured: "ok" });
+    return facts;
+  };
+  const runEdge = (withPin: boolean) =>
+    classifyLegC(
+      edgeFacts(),
+      V3_DEFECT_FACTS,
+      V3_LEG_C_FACTS,
+      V3_WARN_FACTS,
+      withPin ? need(edgePin).legC : undefined,
+    );
+
+  test("E-C: leg C passes with seven pinned lines under the edge pin, and is held without it", () => {
+    const r = runEdge(true);
+    expect(r.outcome).toBe("pass");
+    expect(r.lines.filter((l) => l.startsWith("pinned: ")).length).toBe(7);
+    expect(r.lines.some((l) => l.startsWith("held:") || l.includes("pin-mismatch"))).toBe(false);
+    expect(runEdge(false).outcome).toBe("held");
+  });
+
+  test("E-X: X (b) exit 3, passed 0, notRun 0 passes under the edge pin", () => {
+    const xb = {
+      exitCode: 3,
+      passed: 0,
+      notRun: 0,
+      parsed: true,
+      compileError: true,
+      passedPresent: true,
+      notRunPresent: true,
+      failed: 0,
+      rowCount: 0,
+      compilationErrorsCount: 1,
+    };
+    expect(classifyXb(xb, need(edgePin).xb)).toBe("pass");
+    expect(classifyXb(xb)).toBe("held");
+  });
+
+  test("E-T: the seven held rows, counts 290/50/59 over 406 (errors 7): pass, pinned, edge pin named", () => {
+    const e = need(edgePin);
+    const hash = (k: string) => `h-${k.slice(0, 8)}-${k.length}`;
+    const row = (key: string, verdict: string, killingTest: string | null): NormalizedMutant => ({
+      key,
+      verdict,
+      killingTest,
+      coverageFiltered: verdict === "no-coverage",
+      errorClass: null,
+      mutatedTextSha256: hash(key),
+    });
+    const ownRows = [
+      ...EDGE_T_KEYS.map((k) => row(k, "survived", null)),
+      row("K2", "killed", "T2"),
+    ];
+    const bcRows = [
+      ...EDGE_T_KEYS.map((k) => row(k, "killed", "DoubleInsertWithoutKeyTriggerRaises")),
+      row("K2", "killed", "T2"),
+    ];
+    const refused = (r: NormalizedMutant): NormalizedMutant => ({
+      ...r,
+      verdict: "error",
+      errorClass: "runner-refused",
+      killingTest: null,
+    });
+    const now = ownRows.map((r) => (EDGE_T_KEYS.includes(r.key) ? refused(r) : r));
+    const input = {
+      classification: classifyLegT(ownRows, now, bcRows),
+      compare: compareMutants(ownRows, now, { sameScheme: true }),
+      own: ownRows,
+      now,
+      counts: { killed: 290, survived: 50, noCoverage: 59 },
+      total: 406,
+      unsupportedTests: 3,
+      sleepIndex: { target: 0, test: 0 },
+      knownRefusal: undefined,
+      codes: new Map(ownRows.map((r, i) => [r.key, `M${i}`])),
+    };
+    expect(applyTPin(ownRows, e.legT)).toBeDefined();
+    const j = judgeLegT({
+      ...input,
+      pin: { id: e.id, legT: e.legT, bc: bcRows, sameScheme: true },
+    });
+    expect(j.outcome).toBe("pass");
+    expect(j.pinned).toBe(true);
+    expect(j.lines).toEqual(["T: pinned 7 rows (pin edge-dcdf9e821, #5788)"]);
+    expect(judgeLegT(input).outcome).toBe("held");
+  });
+});
+
 describe("R586c M5: a record request on a pinned or candidate build is refused", () => {
   test("a pinned build refuses a request for any leg's baseline", () => {
     expect(recordRefusal(true, false, ["al-runner-v3.layout.baseline.json"])).toMatch(
