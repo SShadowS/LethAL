@@ -4,7 +4,7 @@
 // Fakes follow al-runner-v3-entries.test.ts (a scripted `serve` daemon, a fake one-shot v3, a fake alc).
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { initParser } from "@lethal/engine";
 import type { ServerProcessHandle, ServerSpawnFn } from "../../src/al-runner-server";
 import { AlRunnerV3Backend } from "../../src/al-runner-v3-backend";
@@ -317,10 +317,19 @@ export async function runV3LaneTrace(): Promise<V3LaneTrace> {
     const real = await realpath(root);
     // Windows: the root has `\` separators, doubled inside JSON.stringify'd bodies; replace every form, then
     // write the separators after `<ROOT>` as `/`, so the trace is the same on every OS.
-    const forms = [real, root].flatMap((p) => [JSON.stringify(p).slice(1, -1), p]);
+    // The Sleep index writes the root with `/` separators (`D:/a/...`): that form too.
+    const forms = [real, root].flatMap((p) => [
+      JSON.stringify(p).slice(1, -1),
+      p,
+      p.replace(/\\/g, "/"),
+    ]);
+    // The backend resolves the fake binary path, which on Windows reads `D:\fake\al-runner`.
+    const fakeBin = resolve("/fake/al-runner");
     const norm = (s: string): string =>
       forms
         .reduce((acc, p) => acc.split(p).join("<ROOT>"), s)
+        .split(fakeBin)
+        .join("/fake/al-runner")
         .replace(/<ROOT>[^"\s]*/g, (m) => m.replace(/\\\\|\\/g, "/"));
     const batch = join(root, "batch");
     const testDir = join(root, "tests");
