@@ -19,6 +19,7 @@ import { readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { V3ContractResult, V3Fact } from "./al-runner-v3-contract";
 import { v3ContractRefusals } from "./al-runner-v3-contract";
+import { findV3Pin, pinnedFactMatches } from "./al-runner-v3-pins";
 
 /** The env var that forces a fresh probe (the `--fresh-probe` flag sets the same thing). */
 export const FRESH_PROBE_ENV = "LETHAL_V3_FRESH_PROBE";
@@ -100,17 +101,34 @@ export interface ProbeCacheKey {
 export const keyDigest = (k: ProbeCacheKey): string =>
   createHash("sha256").update(JSON.stringify(k)).digest("hex");
 
-/** Fully passing: nothing a normal session would refuse, no unmeasurable and no diverged fact. */
-export function isCacheable(r: V3ContractResult): boolean {
-  if (v3ContractRefusals(r, { candidate: false }).length > 0) return false;
-  return r.facts.every((f) =>
-    f.kind === "contract"
-      ? f.verdict === "matches"
-      : f.kind === "defect"
-        ? f.verdict === "defect-present" || f.verdict === "gone"
-        : true,
-  );
+/**
+ * Why a result must not be cached, or `undefined` when it may be. Cacheable: a normal session would
+ * accept it, and every fact either passes (contract `matches`, defect `defect-present`/`gone`, warn)
+ * or equals THIS build's pinned reading (`findV3Pin` + `pinnedFactMatches`; the pinned build's
+ * `refused` duplicate-key fact, #5788). Any other non-passing fact is never stored.
+ */
+export function uncacheableReason(
+  r: V3ContractResult,
+  version: string,
+  binarySha256: string,
+): string | undefined {
+  if (v3ContractRefusals(r, { candidate: false }).length > 0) return "a normal session refuses it";
+  const pin = findV3Pin(version, binarySha256);
+  for (const f of r.facts) {
+    const passes =
+      f.kind === "contract"
+        ? f.verdict === "matches"
+        : f.kind === "defect"
+          ? f.verdict === "defect-present" || f.verdict === "gone"
+          : true;
+    if (passes || (pin !== undefined && pinnedFactMatches(pin.legC, f))) continue;
+    return `${f.fact} = ${f.verdict}, not the pinned reading`;
+  }
+  return undefined;
 }
+
+export const isCacheable = (r: V3ContractResult, version: string, binarySha256: string): boolean =>
+  uncacheableReason(r, version, binarySha256) === undefined;
 
 export class ProbeCacheCorruptError extends Error {
   constructor(file: string, why: string) {
@@ -166,7 +184,8 @@ export async function readProbeCache(
     throw new ProbeCacheCorruptError(file, "its result is malformed");
   }
   const result: V3ContractResult = { facts };
-  if (!isCacheable(result)) throw new ProbeCacheCorruptError(file, "its result is not a pass");
+  if (!isCacheable(result, key.version, key.binarySha256))
+    throw new ProbeCacheCorruptError(file, "its result is not a pass");
   return result;
 }
 

@@ -76,11 +76,11 @@ import {
   FRESH_PROBE_ENV,
   type ProbeCacheKey,
   alcIdentity,
-  isCacheable,
   keyDigest,
   packagesFingerprint,
   probeCodeHash,
   readProbeCache,
+  uncacheableReason,
   writeProbeCache,
 } from "./al-runner-v3-probe-cache";
 import {
@@ -931,11 +931,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         } else {
           this.contract = await run();
           probeNote = `probe ran fresh (key ${digest}; ${why})`;
-          if (key !== undefined && isCacheable(this.contract)) {
-            try {
-              await writeProbeCache(this.cfg.alRunnerPath, key, this.contract);
-            } catch (err) {
-              console.warn(`[lethal] al-runner-v3 probe cache not written: ${String(err)}`);
+          if (key !== undefined) {
+            const no = uncacheableReason(this.contract, key.version, key.binarySha256);
+            if (no !== undefined) {
+              probeNote += `; not cached: ${no}`;
+            } else {
+              try {
+                await writeProbeCache(this.cfg.alRunnerPath, key, this.contract);
+              } catch (err) {
+                console.warn(`[lethal] al-runner-v3 probe cache not written: ${String(err)}`);
+              }
             }
           }
         }

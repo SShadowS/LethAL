@@ -9,6 +9,8 @@ import { AlRunnerV3Backend } from "../src/al-runner-v3-backend";
 import * as contractNs from "../src/al-runner-v3-contract";
 import type { V3ContractResult, V3Fact } from "../src/al-runner-v3-contract";
 import { sha256OfFile } from "../src/al-runner-v3-pin";
+import * as pinsNs from "../src/al-runner-v3-pins";
+import { V3_BUILD_PINS } from "../src/al-runner-v3-pins";
 import * as cacheNs from "../src/al-runner-v3-probe-cache";
 import { FRESH_PROBE_ENV, isCacheable, probeCodeHash } from "../src/al-runner-v3-probe-cache";
 import { buildBackend, parseCliConfig } from "../src/cli";
@@ -24,6 +26,11 @@ const fact = (verdict: V3Fact["verdict"], kind: V3Fact["kind"] = "contract"): V3
   expected: "x",
   measured: "m",
 });
+const EDGE_PIN = (() => {
+  const p = V3_BUILD_PINS.find((x) => x.id === "edge-dcdf9e821");
+  if (p === undefined) throw new Error("edge pin missing");
+  return p;
+})();
 const PASS: V3ContractResult = { facts: [fact("matches"), fact("gone", "defect")] };
 
 interface Env {
@@ -280,21 +287,90 @@ describe("R762: a bad entry or a bad result means run the probe", () => {
   for (const [label, r] of [
     ["a diverged contract fact", { facts: [fact("diverged")] }],
     ["a diverged defect fact", { facts: [fact("matches"), fact("diverged", "defect")] }],
-    ["a refused defect fact", { facts: [fact("matches"), fact("refused", "defect")] }],
     ["an unlike-bc fact", { facts: [fact("matches"), fact("unlike-bc", "defect")] }],
     ["an unmeasurable fact", { facts: [fact("unmeasurable")] }],
   ] as const) {
     test(`${label} is not cached; the probe runs each time`, async () => {
       result = r;
       const e = await env();
-      // A `refused` defect fact only warns; the others refuse. Neither is stored.
-      const ok = label === "a refused defect fact";
-      expect((await statusOf(e)).ok).toBe(ok);
-      expect((await statusOf(e)).ok).toBe(ok);
+      expect((await statusOf(e)).ok).toBe(false);
+      expect((await statusOf(e)).ok).toBe(false);
       expect(probe).toHaveBeenCalledTimes(2);
       expect(await entries(e)).toEqual([]);
     });
   }
+  describe("a refused defect fact (the pinned build's own reading, #5788)", () => {
+    const REFUSED: V3ContractResult = { facts: [fact("matches"), fact("refused", "defect")] };
+    // A pin that names fact "f" as refused with measured text "m".
+    const fakePin = {
+      legC: { f: { verdict: "refused", measured: /^m$/ } },
+    } as unknown as ReturnType<typeof pinsNs.findV3Pin>;
+    let pinSpy: ReturnType<typeof spyOn<typeof pinsNs, "findV3Pin">>;
+    afterEach(() => pinSpy?.mockRestore());
+
+    test("equal to the build's pin: cached, and read back as a hit", async () => {
+      pinSpy = spyOn(pinsNs, "findV3Pin").mockImplementation(() => fakePin);
+      result = REFUSED;
+      const e = await env();
+      expect((await statusOf(e)).ok).toBe(true);
+      expect(await entries(e)).toHaveLength(1);
+      const second = await statusOf(e);
+      expect(second.ok).toBe(true);
+      expect(second.details).toMatch(/probe from cache/);
+      expect(probe).toHaveBeenCalledTimes(1);
+    });
+    test("with no pin entry: not cached, and the receipt names the fact", async () => {
+      result = REFUSED;
+      const e = await env();
+      const s = await statusOf(e);
+      expect(s.ok).toBe(true);
+      expect(s.details).toContain("not cached: f = refused, not the pinned reading");
+      await statusOf(e);
+      expect(probe).toHaveBeenCalledTimes(2);
+      expect(await entries(e)).toEqual([]);
+    });
+    test("on a build whose pin says something else: not cached", async () => {
+      pinSpy = spyOn(pinsNs, "findV3Pin").mockImplementation(
+        () =>
+          ({ legC: { f: { verdict: "gone", measured: /^m$/ } } }) as unknown as ReturnType<
+            typeof pinsNs.findV3Pin
+          >,
+      );
+      result = REFUSED;
+      const e = await env();
+      await statusOf(e);
+      await statusOf(e);
+      expect(probe).toHaveBeenCalledTimes(2);
+      expect(await entries(e)).toEqual([]);
+    });
+    test("a diverged contract fact is never cached, even when a pin names another fact", () => {
+      expect(
+        isCacheable(
+          { facts: [fact("diverged"), fact("refused", "defect")] },
+          EDGE_PIN.version,
+          EDGE_PIN.binarySha256,
+        ),
+      ).toBe(false);
+    });
+    test("the real edge pin: its duplicate-key reading is cacheable, other readings are not", () => {
+      const dup = (verdict: V3Fact["verdict"], measured: string): V3ContractResult => ({
+        facts: [
+          {
+            fact: "duplicate-key-insert-raises",
+            kind: "defect",
+            verdict,
+            expected: "x",
+            measured,
+          },
+        ],
+      });
+      const pinned = `[{"codeunit":50655,"method":"DuplicateNamedKey","name":"Codeunit50655.DuplicateNamedKey","status":"error","durationMs":0,"message":"NotRun: out-of-scope: the test ends while the error of a duplicate-key Insert into table Probe Row is deferred: whether the test runner raises it at the end of the test is not pinned","notRun":true}] exit 7`;
+      const { version: v, binarySha256: s } = EDGE_PIN;
+      expect(isCacheable(dup("refused", pinned), v, s)).toBe(true);
+      expect(isCacheable(dup("refused", "exit 9"), v, s)).toBe(false);
+      expect(isCacheable(dup("refused", pinned), v, "0".repeat(64))).toBe(false);
+    });
+  });
   test("a hand-written entry holding a diverged result is never read as a pass", async () => {
     const e = await env();
     await statusOf(e);
@@ -308,8 +384,8 @@ describe("R762: a bad entry or a bad result means run the probe", () => {
     expect(probe).toHaveBeenCalledTimes(2);
   });
   test("isCacheable: a pass is cacheable, a diverged one is not", () => {
-    expect(isCacheable(PASS)).toBe(true);
-    expect(isCacheable({ facts: [fact("diverged")] })).toBe(false);
+    expect(isCacheable(PASS, VERSION, "0".repeat(64))).toBe(true);
+    expect(isCacheable({ facts: [fact("diverged")] }, VERSION, "0".repeat(64))).toBe(false);
   });
 });
 
