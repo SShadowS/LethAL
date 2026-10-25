@@ -929,7 +929,13 @@ async function legO1(scratch: string, version: string): Promise<void> {
         });
       console.log(`  O1: ${rq.label}: ${reads.join(" | ")}`);
     }
-    const j = judgeOrderProbe(done, [...dates]);
+    // R771 addendum 2: a pinned build's login WorkDate, for the CDO set only (it holds Base Application).
+    const login = set.name === "cdo" ? activePin?.o1 : undefined;
+    if (login !== undefined)
+      console.log(
+        `  O1: ${set.name} set: WorkDate pinned ${login.cdoWorkDate} (pin ${activePin?.id}, ${login.issue})`,
+      );
+    const j = judgeOrderProbe(done, [...dates], login?.cdoWorkDate);
     console.log(`  O1: ${set.name} set: ${j.outcome} (${done.length} requests, one daemon)`);
     if (j.outcome === "gate-fail") throw new LegFailure(`O1: ${j.lines.join("; ")}`);
   }

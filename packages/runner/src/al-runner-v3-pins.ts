@@ -79,6 +79,16 @@ export interface V3BuildPin {
     readonly issue: string;
     readonly evidence: string;
   };
+  /**
+   * R771 addendum 2: the WorkDate O1's CDO set reads on a build that runs Base Application's login
+   * code (`LogInManagement.GetDefaultWorkDate`, the last G/L entry's date in the restored CRONUS demo
+   * company of the CDO set's BC build). Every CDO Reader entry must read exactly it.
+   */
+  readonly o1?: {
+    readonly cdoWorkDate: string;
+    readonly issue: string;
+    readonly evidence: string;
+  };
 }
 
 const ROW = (cu: number, method: string) =>
@@ -215,6 +225,12 @@ export const V3_BUILD_PINS: readonly V3BuildPin[] = [
       issue: `${REPO}/5798`,
       evidence:
         "#5798 fixed upstream (the Dot.Step row carries codeunit and method); LethAL's serveRow still refuses a dotted method by name, so the session fails closed",
+    },
+    o1: {
+      cdoWorkDate: "2026-08-01",
+      issue: `${REPO}/5743`,
+      evidence:
+        "upstream 5e1db1c7 runs LogInManagement.GetDefaultWorkDate at session open (as BC); BC 28.4.53241.53758's CRONUS demo company has 4178 G/L entries, the last on 2026-08-01 (R771 addendum 2 probe)",
     },
   },
 ];

@@ -99,12 +99,22 @@ export interface O1Request {
  * R784, pre-committed (master 6aa7700c): `gate-fail` when a Reader entry reads a writer value, reads
  * anything but the default, or lacks a row; or a Writer test does not pass (the state was never set,
  * so the leg proves nothing). `today` lists the dates the clock may show (WorkDate defaults to it).
+ * R771: `loginWorkDate`, from a build pin, replaces the clock for WorkDate: the build runs Base
+ * Application's login code, so in a demo company every Reader entry starts at that one date (R0.0 on
+ * the fresh daemon included). A writer value still fails, and a pin naming a writer value is refused.
  */
 export function judgeOrderProbe(
   requests: readonly O1Request[],
   today: readonly string[],
+  loginWorkDate?: string,
 ): { readonly outcome: "pass" | "gate-fail"; readonly lines: string[] } {
   const bad: string[] = [];
+  if (
+    loginWorkDate !== undefined &&
+    O1_WRITER_VALUES.some((v) => `WORKDATE=${loginWorkDate}`.includes(v))
+  )
+    bad.push(`the pinned login WorkDate ${loginWorkDate} is a writer value`);
+  const dates = loginWorkDate !== undefined ? [loginWorkDate] : today;
   // N3: the requests must be the plan's, else an empty or short list would "match" (empty-vs-empty).
   if (requests.length !== O1_PLAN.length)
     bad.push(`${requests.length} requests, pre-committed ${O1_PLAN.length}`);
@@ -145,11 +155,11 @@ export function judgeOrderProbe(
           continue;
         }
         const got = l.message ?? "";
-        const ok = t === "ReadWorkDate" ? today.some((d) => got === want(d)) : got === want("");
+        const ok = t === "ReadWorkDate" ? dates.some((d) => got === want(d)) : got === want("");
         if (ok) continue;
         const carried = O1_WRITER_VALUES.some((v) => got.includes(v));
         bad.push(
-          `${at}: ${t} read ${JSON.stringify(got)}${carried ? " (a writer value: CARRY-OVER)" : ""}, pre-committed ${JSON.stringify(want(today[0] ?? ""))}`,
+          `${at}: ${t} read ${JSON.stringify(got)}${carried ? " (a writer value: CARRY-OVER)" : ""}, pre-committed ${JSON.stringify(want(dates[0] ?? ""))}`,
         );
       }
     }

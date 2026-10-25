@@ -3,6 +3,7 @@
 import { describe, expect, test } from "bun:test";
 import { V3_GATE_LEGS, gateOutcome } from "../itest/al-runner-v3-gate";
 import { type O1Request, judgeOrderProbe, v3DefaultLegs } from "../itest/alrunner-v3-legs";
+import { V3_BUILD_PINS } from "../src/al-runner-v3-pins";
 
 const TODAY = ["2026-10-25"];
 const READS: Record<string, string> = {
@@ -144,5 +145,60 @@ describe("R784: judgeOrderProbe", () => {
   test("WorkDate is judged against the clock's dates, not a fixed one", () => {
     expect(judgeOrderProbe(answers(), ["2030-01-01"]).outcome).toBe("gate-fail");
     expect(judgeOrderProbe(answers(), ["2030-01-01", "2026-10-25"]).outcome).toBe("pass");
+  });
+});
+
+describe("R771 addendum 2: a pinned login WorkDate (O1's CDO set on edge-a157b2d34)", () => {
+  const LOGIN = "2026-08-01";
+  const atLogin = (l: O1Request["lines"][number]) =>
+    l.name.endsWith(".ReadWorkDate") ? { ...l, message: `WORKDATE=${LOGIN}` } : l;
+  test("every Reader entry at the pinned date passes; without the pin it is a gate-fail", () => {
+    expect(judgeOrderProbe(answers(atLogin), TODAY, LOGIN)).toEqual({ outcome: "pass", lines: [] });
+    expect(judgeOrderProbe(answers(atLogin), TODAY).outcome).toBe("gate-fail");
+  });
+  test("under the pin, the clock's date is no longer accepted (the fresh R0.0 included)", () => {
+    const j = judgeOrderProbe(answers(), TODAY, LOGIN);
+    expect(j.outcome).toBe("gate-fail");
+    expect(j.lines.join("\n")).toContain("request 1 entry R0.0");
+  });
+  test("under the pin, one Reader entry with another date is a gate-fail", () => {
+    const j = judgeOrderProbe(
+      answers((l) =>
+        l.entry === "R3.3" && l.name.endsWith(".ReadWorkDate")
+          ? { ...l, message: "WORKDATE=2026-10-25" }
+          : atLogin(l),
+      ),
+      TODAY,
+      LOGIN,
+    );
+    expect(j.outcome).toBe("gate-fail");
+    expect(j.lines).toHaveLength(1);
+    expect(j.lines[0]).toContain("R3.3");
+  });
+  test("under the pin, a carried-over writer WorkDate after a W entry is still a gate-fail", () => {
+    const j = judgeOrderProbe(
+      answers((l) =>
+        l.entry === "R1.1" && l.name.endsWith(".ReadWorkDate")
+          ? { ...l, message: "WORKDATE=2001-01-01" }
+          : atLogin(l),
+      ),
+      TODAY,
+      LOGIN,
+    );
+    expect(j.outcome).toBe("gate-fail");
+    expect(j.lines.join("\n")).toContain("CARRY-OVER");
+  });
+  test("a pin that names the writer's WorkDate is refused", () => {
+    const writer = (l: O1Request["lines"][number]) =>
+      l.name.endsWith(".ReadWorkDate") ? { ...l, message: "WORKDATE=2001-01-01" } : l;
+    const j = judgeOrderProbe(answers(writer), TODAY, "2001-01-01");
+    expect(j.outcome).toBe("gate-fail");
+    expect(j.lines.join("\n")).toContain("is a writer value");
+  });
+  test("only the edge-a157b2d34 pin carries o1, at 2026-08-01 (#5743)", () => {
+    const withO1 = V3_BUILD_PINS.filter((p) => p.o1 !== undefined);
+    expect(withO1.map((p) => p.id)).toEqual(["edge-a157b2d34"]);
+    expect(withO1[0]?.o1?.cdoWorkDate).toBe(LOGIN);
+    expect(withO1[0]?.o1?.issue).toMatch(/\/5743$/);
   });
 });
