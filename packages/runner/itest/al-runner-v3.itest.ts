@@ -1363,6 +1363,8 @@ async function legX(scratch: string, push: (line: string) => void): Promise<void
   await so.close();
   const sa = mkSpec("xa2", true);
   const errA2 = await sa.deploy(broken).catch((e: unknown) => e);
+  // The field must exist, or a rename would read "nothing kept" forever.
+  must("speculative" in sa, "X (a'): AlRunnerV3Backend has no `speculative` field");
   const kept = (sa as unknown as { speculative: unknown }).speculative;
   const baselineRefused = await sa.activate(null).then(
     () => false,
