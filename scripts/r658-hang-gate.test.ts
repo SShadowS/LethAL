@@ -44,11 +44,12 @@ function setup() {
   const check = `import { outOfUseRefusal } from ${JSON.stringify(outOfUseModule)}; const r = outOfUseRefusal("bc2", { dir: ${JSON.stringify(join(coord, "machine", "out-of-use"))}, env: process.env, override: "owner" }); if (r) { console.error(r); process.exit(1); }`;
   fake(
     "bun",
-    `if [ "$1" = -e ]; then echo "bun-e ${envTag}" >> "${calls}"; [ "\${FAKE_OFFLINE_FAIL:-}" = bare ] && exit 1; echo "${TARGET}"; [ -n "\${FAKE_OFFLINE_FAIL:-}" ] && exit 1; exit 0; fi
+    `case "$1" in *bc-host.ts) exec ${JSON.stringify(process.execPath)} "$@" ;; esac
+if [ "$1" = -e ]; then echo "bun-e ${envTag}" >> "${calls}"; [ "\${FAKE_OFFLINE_FAIL:-}" = bare ] && exit 1; echo "\${FAKE_TARGET:-${TARGET}}"; [ -n "\${FAKE_OFFLINE_FAIL:-}" ] && exit 1; exit 0; fi
 printf '%s' "\${LETHAL_OUT_OF_USE_OWNER:-}" > "${ownerSeen}"
 cp "${oou}" "${markerSeen}" 2>/dev/null
 ${JSON.stringify(process.execPath)} -e '${check}' || exit 1
-echo "${TARGET}"
+echo "\${FAKE_TARGET:-${TARGET}}"
 [ -n "\${FAKE_LEG:-}" ] && echo "$FAKE_LEG" > "$LETHAL_ITEST_HANG_LEG_STATE"
 exit "\${FAKE_GATE:-0}"`,
     "",
@@ -110,6 +111,40 @@ for (const mode of ["bare", "line"])
     expect(t.log()).not.toContain("kraken");
     expect(existsSync(t.oou)).toBe(false);
   });
+
+test("R783: WANT follows LETHAL_BC_HOST, in each direction, before any lease", () => {
+  const docker1 =
+    "[itest target] config=lethal.config.bc2.json server=192.168.2.77:7149 odata=7148 api=7148";
+  // docker1 set, the config on docker1: the target check passes and the lease is taken.
+  const a = setup();
+  const ok = a.run({
+    LETHAL_BC_HOST: "http://192.168.2.77",
+    FAKE_TARGET: docker1,
+    FAKE_GATE: "0",
+    FAKE_LEG: "passed",
+  });
+  expect(ok.out).not.toContain("does not name");
+  expect(a.log()).toContain("kraken coord lease bc2");
+  // docker1 set, the config still on server1: refused by name, no lease.
+  const b = setup();
+  const bad = b.run({ LETHAL_BC_HOST: "http://192.168.2.77" });
+  expect(bad.code).toBe(2);
+  expect(bad.out).toContain("refused: target line does not name server=192.168.2.77:7149");
+  expect(b.log()).not.toContain("kraken");
+  // unset, a config on docker1: refused too (the default is server1).
+  const c = setup();
+  const def = c.run({ FAKE_TARGET: docker1 });
+  expect(def.code).toBe(2);
+  expect(def.out).toContain("refused: target line does not name server=192.168.2.157:7149");
+});
+
+test("R783: a malformed LETHAL_BC_HOST refuses by name, before any lease", () => {
+  const t = setup();
+  const r = t.run({ LETHAL_BC_HOST: "http://192.168.2.77:7049" });
+  expect(r.code).toBe(2);
+  expect(r.out).toContain("refused: the BC host is not readable");
+  expect(t.log()).not.toContain("kraken");
+});
 
 test("a missing <root>/machine refuses before any lease", () => {
   const t = setup();

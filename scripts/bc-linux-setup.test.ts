@@ -1244,6 +1244,31 @@ describe("--write-config-only: configs from the secret file, no server call, no 
     });
   });
 
+  test("R783: HOST, MARKER_HOST and the written launch file follow LETHAL_BC_HOST; unset is server1", () => {
+    // Both constants are read at import, so each case is a fresh process.
+    const read = (host: string | undefined): string => {
+      const env: Record<string, string> = Object.fromEntries(
+        Object.entries(process.env).filter(
+          (e): e is [string, string] => e[0] !== "LETHAL_BC_HOST" && e[1] !== undefined,
+        ),
+      );
+      if (host !== undefined) env.LETHAL_BC_HOST = host;
+      const r = Bun.spawnSync(
+        [
+          process.execPath,
+          "-e",
+          'import { HOST } from "./scripts/bc-app-content.ts"; import { MARKER_HOST } from "./packages/runner/itest/out-of-use.ts"; import { buildLaunch } from "./scripts/bc-linux-setup.ts"; console.log([HOST, MARKER_HOST, buildLaunch("bc3").configurations[0].server].join(" "));',
+        ],
+        { cwd: join(import.meta.dir, ".."), env },
+      );
+      return r.stdout.toString().trim();
+    };
+    expect(read(undefined)).toBe("http://192.168.2.157 192.168.2.157 http://192.168.2.157");
+    expect(read("http://192.168.2.77")).toBe(
+      "http://192.168.2.77 192.168.2.77 http://192.168.2.77",
+    );
+  });
+
   test("R669: out-of-use.ts's host and dev ports mirror HOST and SERVERS", () => {
     expect(`http://${MARKER_HOST}`).toBe(HOST);
     expect(MARKER_SERVERS).toEqual(
