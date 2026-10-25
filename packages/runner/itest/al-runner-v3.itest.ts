@@ -20,7 +20,7 @@
  *   measured; lane ruling 2026-10-21. `/work/tools/al-runner-v3/cache` is unused).
  * - `LETHAL_ALC_DIR`: the folder holding `alc`.
  * - `LETHAL_ITEST_V3_LEGS=C,S1,...`: a subset (default every leg that is configured: C, S1, S1E,
- *   S3, N1, N1E, X, L1, Y-A, Y-B, MO, WR, K, then D1, D1c and T when configured). R761: S1E is S1's
+ *   S3, N1, N1E, N1S, X, L1, Y-A, Y-B, MO, WR, K, then D1, D1c and T when configured). R761: S1E is S1's
  *   project and assertions under serve-entries by construction; on a build with no serve path it
  *   reads "not applicable" (pass). Its serve counters are printed, pinned after the R-761 observe run.
  * - `LETHAL_ITEST_V3_CDO=<Continia Document Output checkout at 5f2a71d>`: the D legs (a corpus job).
@@ -111,6 +111,7 @@ import {
   V3_K_LEG,
   V3_MO_KILLERS,
   V3_N1E_LEG,
+  V3_N1S_LEG,
   V3_S1E_LEG,
   V3_WR_KILLERS,
   V3_WR_STATE_NOTES,
@@ -625,6 +626,108 @@ async function legN1E(scratch: string, version: string): Promise<void> {
   if (j.outcome === "held") throw new V3LegHeld(j.lines);
   if (j.outcome === "gate-fail") throw new LegFailure(j.lines.join("; "));
 }
+
+/**
+ * R763: N1's non-plain test METHOD names other than the dot (#5798) under serve-entries. A copy of
+ * `sandbox-names-tests` without the `Dot.Step` test runs twice, one-shot then serve-entries; each
+ * mutant of the serve report must equal the one-shot report's, with 0 echo mismatches.
+ */
+async function legN1S(scratch: string, version: string): Promise<void> {
+  const deps = await microsoftDeps(scratch);
+  const tests = join(scratch, "names-tests-reduced");
+  await cp(fixture("sandbox-names-tests"), tests, { recursive: true });
+  const al = join(tests, "src", "NamesTests.Codeunit.al");
+  const text = await readFile(al, "utf8");
+  const at = text.indexOf('procedure "Dot.Step"()');
+  must(
+    at >= 0 && text.indexOf('procedure "Dot.Step"()', at + 1) < 0,
+    "N1S: the fixture no longer has exactly one `Dot.Step` procedure",
+  );
+  const from = text.lastIndexOf("[Test]", at);
+  const next = text.indexOf("[Test]", at);
+  // Cut whole lines: from the start of the [Test] line to the start of the next [Test] line.
+  const cutFrom = text.lastIndexOf("\n", from) + 1;
+  const cutTo = next < 0 ? text.length : text.lastIndexOf("\n", next) + 1;
+  must(from >= 0 && cutFrom <= from && cutTo > at, "N1S: could not place the Dot.Step cut");
+  const reduced = text.slice(0, cutFrom) + text.slice(cutTo);
+  must(!reduced.includes("Dot.Step"), "N1S: `Dot.Step` still present after the cut");
+  must(
+    text.split("[Test]").length - reduced.split("[Test]").length === 1,
+    "N1S: the cut removed other than exactly one [Test]",
+  );
+  await writeFile(al, reduced);
+
+  const run = async (mode: "one-shot" | "serve-entries") => {
+    const b = new AlRunnerV3Backend(
+      backendCfg({
+        instrumentedDir: join(scratch, `backend-${mode}`),
+        testDir: tests,
+        packagesDir: deps,
+        bcVersion: SANDBOX_BC,
+        selectorObjectId: 78849,
+        transport: mode,
+      }),
+    );
+    const r = await session(scratch, b, {
+      projectDir: fixture("sandbox-names"),
+      testDir: tests,
+      selectorIds: { selectorId: 78849, controlId: 78848, tableId: 78847 },
+    });
+    // `session` keys its store and instr off the scratch it is given: clear them for the next run.
+    await rm(join(scratch, "lethal.sqlite"), { force: true });
+    await rm(join(scratch, "instr"), { recursive: true, force: true });
+    return { r, b };
+  };
+  const one = await run("one-shot");
+  console.log(`  N1S: one-shot ${counts(one.r)} over ${one.r.mutants.length}`);
+  const oneReport = join(scratch, "one-shot.report.json");
+  await writeFile(oneReport, `${JSON.stringify(one.r, null, 2)}\n`);
+  let serve: Awaited<ReturnType<typeof run>>;
+  try {
+    serve = await run("serve-entries");
+  } catch (e) {
+    if (!isGateWarningsError(e) && isNoServeRefusal(version, String(e))) {
+      console.log("  N1S: not applicable: this build has no serve-entries path");
+      return;
+    }
+    console.log(
+      `  N1S: serve-entries session FAILED: ${e instanceof Error ? e.message : String(e)}`,
+    );
+    throw e;
+  }
+  console.log(`  N1S: serve-entries ${counts(serve.r)} over ${serve.r.mutants.length}`);
+  must(
+    one.r.mutants.length === serve.r.mutants.length &&
+      one.r.counts.killed === serve.r.counts.killed &&
+      one.r.counts.survived === serve.r.counts.survived &&
+      one.r.counts.noCoverage === serve.r.counts.noCoverage,
+    "N1S: counts differ between one-shot and serve-entries",
+  );
+  await assertPerMutant(serve.r, oneReport, "N1S serve vs one-shot");
+  must(
+    serve.r.baselineGreen && serve.r.unsupportedTests.length === 0,
+    "N1S: serve baseline not green or a refused test",
+  );
+  // R763 (pre-commitment docs/superpowers/specs/2026-10-25-r763-n1s-precommitment.md): both sessions
+  // 33 / 0 / 3 over 36 (the 3 mutants only Dot.Step covered read no-coverage), and these counters.
+  assertCounts(serve.r, "N1S", 33, 0, 3, 36);
+  const s = serve.b.entriesStats();
+  console.log(`  N1S: serve counters ${JSON.stringify({ ...s })}`);
+  for (const [k, v] of Object.entries(N1S_PINS)) {
+    const g = s[k as keyof typeof N1S_PINS];
+    must(g === v, `N1S: ${k} ${g}, pre-committed ${v} (R763)`);
+  }
+  must(s.echoMismatches === 0, `N1S: ${s.echoMismatches} echo mismatches, expected 0`);
+}
+
+/** R763: N1S's serve counters from the observe run (`/coord/handoff/R-763/observe-N1S.log`). */
+const N1S_PINS = {
+  pairRequests: 33,
+  liveRequests: 33,
+  boundChecks: 35,
+  warmups: 1,
+  entriesSent: 200,
+} as const;
 
 // --- R654 S2: L1, Y-A, Y-B and K (pre-commitment docs/superpowers/specs/2026-10-22-r654-v3-gate-legs-precommitment.md, 43115c78)
 
@@ -1677,6 +1780,7 @@ async function main(): Promise<void> {
         else if (leg === "S3") await legS3(scratch);
         else if (leg === "N1") await legN1(scratch);
         else if (leg === V3_N1E_LEG) await legN1E(scratch, version);
+        else if (leg === V3_N1S_LEG) await legN1S(scratch, version);
         else if (leg === "X") await legX(scratch, (l) => lines.push(l));
         else if (leg === "D1" || leg === "D1c") await legD(scratch, leg);
         // R654 S2: each leg checks its pre-committed table FIRST (gate-fail on a difference, and

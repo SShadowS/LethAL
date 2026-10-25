@@ -83,6 +83,14 @@ The legs:
     echo mismatches 0. Warning set `[]`.
   - It is in `V3_GATE_LEGS`, so `current` cannot move to a build whose serve path breaks the default.
   - On a build with no serve path (alpha.2) it reads "not applicable", as N1E does.
+- N1S (R763; pre-commitment `docs/superpowers/specs/2026-10-25-r763-n1s-precommitment.md`, master b965aa13):
+  - What it runs: N1's names fixture with the `Dot.Step` test cut (a scratch copy; the leg fails closed unless exactly
+    one test is cut), first one-shot, then serve-entries. The two are compared per mutant: 33 / 0 / 3 over 36 each.
+  - Serve counters: pairRequests 33, liveRequests 33, boundChecks 35, warmups 1, entriesSent 200, echo mismatches 0.
+    Warning set `[]`.
+  - It proves the method-name shape `V3_SERVE_PROVEN_NAME_SHAPES.method` allows: letters, digits, `_`, space, `-`,
+    `(`, `)`, `/`, `&`, `å`, `æ`. The dot stays out (#5798, N1E).
+  - It is in `V3_GATE_LEGS`. On a build with no serve path (alpha.2) it reads "not applicable".
 - S3: runs no session. It checks that `selectorMode: "resource"` is refused by name
   (`al-runner-v3-resource-selector-refused`).
 - N1: the names fixture (R557's tests are unselectable on v3, upstream #5572).

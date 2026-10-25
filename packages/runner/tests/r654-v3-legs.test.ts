@@ -45,6 +45,7 @@ describe("R654 S2: the leg sets", () => {
       "S3",
       "N1",
       "N1E", // R722: also in V3_GATE_LEGS (alpha.2 reads pass, not applicable)
+      "N1S", // R763: default only, not in V3_GATE_LEGS yet
       "X",
       "L1",
       "Y-A",
@@ -60,6 +61,7 @@ describe("R654 S2: the leg sets", () => {
       "S3",
       "N1",
       "N1E",
+      "N1S",
       "X",
       "L1",
       "Y-A",
@@ -115,7 +117,8 @@ describe("R654 S2, condition (2): K fails the itest on a gated build", () => {
 });
 
 describe("R654 S2, condition (1): on a candidate K is skipped with its summary, never silently", () => {
-  const SELECTED = v3DefaultLegs({ cdo: true, tables: true });
+  // R763: N1S is a default leg outside V3_GATE_LEGS, so these update-gate cases do not select it.
+  const SELECTED = v3DefaultLegs({ cdo: true, tables: true }).filter((l) => l !== "N1S");
   const candidateLegs = (k: string | undefined) => ({
     ...Object.fromEntries(V3_GATE_LEGS.map((l) => [l, "pass"])),
     ...(k !== undefined ? { K: k } : {}),
