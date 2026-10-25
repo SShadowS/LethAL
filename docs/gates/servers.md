@@ -252,10 +252,19 @@ version the server held during that proof, read by `lethal doctor`'s `control-ve
 each server's queue. A proof holds only for the control version it ran under, because control
 builds take different paths in some gates.
 
-**As of 2026-10-22, every BC gate is proven on every bc server under the LethAL Control build master
-requires** (the build `extensions/lethal-control/app.json` and `CONTROL_SHA256` in
-`scripts/bc-linux-setup.ts` pin): 14 gates on each of bc1, bc2 and bc3, 42 pairs. R618's `itest:lend`
-was added on 2026-10-22 and passed on all three. The rest of this paragraph is R-604's history. bc2 was moved to
+**As of 2026-10-25, every BC gate is proven on bc1, bc2 and bc3 under LethAL Control 1.0.0.24** (R-689b;
+the build `extensions/lethal-control/app.json` and `CONTROL_SHA256` in `scripts/bc-linux-setup.ts` pin; logs
+under `/coord/handoff/R-689b/`). The rows that read 1.0.0.24 below passed there, the exceptions being the two
+hang rows (bc1 and bc2), which stay as they read (hang runs on bc3 only, R-658). On bc1 the first
+`itest:verify-scale` hit a BC `System.OutOfMemoryException` and left a lease orphaned; the owner restarted
+the NST, setup was re-run, and `verify-scale`, `testapp` and `agreement` passed after it (`bc1b/`). The
+sha256 of the control app and the content digests of all 14 fixture apps were identical before and after
+the restart (`bc1/setup-bc1.log`, `bc1-restart/setup-bc1.log`), so bc1's earlier 11 passes stand
+(orchestrator ruling). On bc3, `verify`, `verify-scale`, `testapp` and `agreement` were re-run
+(`bc3b/`) after a missing-symbols setup slip.
+
+R-604's history (2026-10-22: 14 gates on each server, 42 pairs, under 1.0.0.23): R618's `itest:lend`
+was added on 2026-10-22 and passed on all three. bc2 was moved to
 that build first, measured 2026-10-21 by `bc-republish.ts control` as an upgrade with nothing removed,
 read back with the pinned sha256 (`/coord/handoff/R-604/control-bc2.log`), and its 13 gates were
 re-proven after it. bc1's 9 gates proven earlier under the older build were re-proven too. On bc1
@@ -267,48 +276,48 @@ fixture apps change.
 
 | server | gate | LethAL Control | proof (log) |
 |---|---|---|---|
-| `bc1` | `itest:bcdev` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-bcdev.c23.log` |
-| `bc1` | `itest:bcdev-wrapped` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-bcdev-wrapped.c23.log` |
-| `bc1` | `itest:bcdev-names` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-bcdev-names.c23.log` |
-| `bc1` | `itest:tables` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-tables.c23.log` |
-| `bc1` | `itest:verify` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-verify.c23.log` |
-| `bc1` | `itest:verify-scale` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-verify-scale.c23.log` |
-| `bc1` | `itest:stale-publish` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-stale-publish.c23.log` |
-| `bc1` | `itest:testapp` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-testapp.c23.log` |
-| `bc1` | `itest:lease` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-lease.c23.log` |
-| `bc1` | `itest:chunked` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-chunked.log` |
+| `bc1` | `itest:bcdev` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc1/bcdev-bc1.log` |
+| `bc1` | `itest:bcdev-wrapped` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc1/bcdev-wrapped-bc1.log` |
+| `bc1` | `itest:bcdev-names` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc1/bcdev-names-bc1.log` |
+| `bc1` | `itest:tables` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc1/tables-bc1.log` |
+| `bc1` | `itest:verify` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc1/verify-bc1.log` |
+| `bc1` | `itest:verify-scale` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc1b/verify-scale-bc1.log` (after the NST restart; see the paragraph above) |
+| `bc1` | `itest:stale-publish` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc1/stale-publish-bc1.log` |
+| `bc1` | `itest:testapp` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc1b/testapp-bc1.log` |
+| `bc1` | `itest:lease` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc1/lease-bc1.log` |
+| `bc1` | `itest:chunked` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc1/chunked-bc1.log` |
 | `bc1` | `itest:hang` | 1.0.0.23 | not re-proven at 1.0.0.4; hang does not run on bc1 (R-658). Was R-604, `/coord/handoff/R-604/bc1-hang.log` |
-| `bc1` | `itest:harden` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-harden.log` |
-| `bc1` | `itest:agreement` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-agreement.log` |
-| `bc2` | `itest:bcdev` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-bcdev.c23.log` |
-| `bc2` | `itest:bcdev-wrapped` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-bcdev-wrapped.c23.log` |
-| `bc2` | `itest:bcdev-names` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-bcdev-names.c23.log` |
-| `bc2` | `itest:tables` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-tables.c23.log` |
-| `bc2` | `itest:verify` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-verify.c23.log` |
-| `bc2` | `itest:verify-scale` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-verify-scale.c23.log` |
-| `bc2` | `itest:stale-publish` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-stale-publish.c23.log` |
-| `bc2` | `itest:testapp` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-testapp.c23.log` |
-| `bc2` | `itest:lease` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-lease.c23.log` |
-| `bc2` | `itest:chunked` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-chunked.c23.log` |
+| `bc1` | `itest:harden` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc1/harden-bc1.log` |
+| `bc1` | `itest:agreement` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc1b/agreement-bc1.log` |
+| `bc2` | `itest:bcdev` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc2/bcdev-bc2.log` |
+| `bc2` | `itest:bcdev-wrapped` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc2/bcdev-wrapped-bc2.log` |
+| `bc2` | `itest:bcdev-names` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc2/bcdev-names-bc2.log` |
+| `bc2` | `itest:tables` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc2/tables-bc2.log` |
+| `bc2` | `itest:verify` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc2/verify-bc2.log` |
+| `bc2` | `itest:verify-scale` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc2/verify-scale-bc2.log` |
+| `bc2` | `itest:stale-publish` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc2/stale-publish-bc2.log` |
+| `bc2` | `itest:testapp` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc2/testapp-bc2.log` |
+| `bc2` | `itest:lease` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc2/lease-bc2.log` |
+| `bc2` | `itest:chunked` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc2/chunked-bc2.log` |
 | `bc2` | `itest:hang` | 1.0.0.23 | unproven (tests app 1.0.0.4, R-658). Was R-604, `/coord/handoff/R-604/bc2-hang.c23.log` |
-| `bc2` | `itest:harden` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-harden.c23.log` |
-| `bc2` | `itest:agreement` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-agreement.c23.log` |
-| `bc3` | `itest:hang` | 1.0.0.23 | R-658 (tests app 1.0.0.4, with the BASELINE leg; 2026-10-23 at 84c7d4f6), `/coord/handoff/R-658/hang-bc3/hang.log` |
-| `bc3` | `itest:bcdev` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-bcdev.log` |
-| `bc3` | `itest:bcdev-wrapped` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-bcdev-wrapped.log` |
-| `bc3` | `itest:bcdev-names` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-bcdev-names.log` |
-| `bc3` | `itest:tables` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-tables.log` |
-| `bc3` | `itest:verify` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-verify.log` |
-| `bc3` | `itest:verify-scale` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-verify-scale.log` |
-| `bc3` | `itest:stale-publish` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-stale-publish.log` |
-| `bc3` | `itest:testapp` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-testapp.log` |
-| `bc3` | `itest:lease` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-lease.log` |
-| `bc3` | `itest:chunked` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-chunked.log` |
-| `bc3` | `itest:harden` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-harden.log` |
-| `bc3` | `itest:agreement` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-agreement.log` |
-| `bc1` | `itest:lend` | 1.0.0.23 | R618, 2026-10-22, `/coord/handoff/R-618/lend-bc1-run2.log` (run 1 BLOCKED at R2, see docs/gates/lend.md) |
-| `bc2` | `itest:lend` | 1.0.0.23 | R618, 2026-10-22, `/coord/handoff/R-618/lend-bc2.log` |
-| `bc3` | `itest:lend` | 1.0.0.23 | R618, 2026-10-22, `/coord/handoff/R-618/lend-bc3.log` |
+| `bc2` | `itest:harden` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc2/harden-bc2.log` |
+| `bc2` | `itest:agreement` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc2/agreement-bc2.log` |
+| `bc3` | `itest:hang` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc3/hang-bc3.log` (supersedes R-658's run at 1.0.0.23, `/coord/handoff/R-658/hang-bc3/hang.log`) |
+| `bc3` | `itest:bcdev` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc3/bcdev-bc3.log` |
+| `bc3` | `itest:bcdev-wrapped` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc3/bcdev-wrapped-bc3.log` |
+| `bc3` | `itest:bcdev-names` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc3/bcdev-names-bc3.log` |
+| `bc3` | `itest:tables` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc3/tables-bc3.log` |
+| `bc3` | `itest:verify` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc3b/verify-bc3.log` |
+| `bc3` | `itest:verify-scale` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc3b/verify-scale-bc3.log` |
+| `bc3` | `itest:stale-publish` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc3/stale-publish-bc3.log` |
+| `bc3` | `itest:testapp` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc3b/testapp-bc3.log` |
+| `bc3` | `itest:lease` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc3/lease-bc3.log` |
+| `bc3` | `itest:chunked` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc3/chunked-bc3.log` |
+| `bc3` | `itest:harden` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc3/harden-bc3.log` |
+| `bc3` | `itest:agreement` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc3b/agreement-bc3.log` |
+| `bc1` | `itest:lend` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc1/lend-bc1.log` |
+| `bc2` | `itest:lend` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc2/lend-bc2.log` |
+| `bc3` | `itest:lend` | 1.0.0.24 | R-689b, `/coord/handoff/R-689b/bc3/lend-bc3.log` |
 
 **R582's run (2026-10-22, build 7a8ff82c, LethAL Control 1.0.0.23).** R582 switched R577's "a kill
 must reproduce" rule on for bcdev, which moved some counters. Each of the 13 BC gates ran ONCE, on
