@@ -15,7 +15,7 @@ import type {
 import { FLAG_OWNERS, parseCliConfig } from "../src/cli";
 import type { RunEvent } from "../src/events";
 import { type SessionConfig, runSession } from "../src/orchestrator";
-import { CAVEAT_INTERPRETATIONS, type SessionReport } from "../src/report";
+import { CAVEAT_INTERPRETATIONS, type SessionReport, renderConsole } from "../src/report";
 import { sessionFingerprint } from "../src/resume";
 import { ResultsStore } from "../src/store";
 import { servesTestApp } from "./helpers/proven-test-app";
@@ -203,6 +203,9 @@ describe("R745 T1: an excluded test never runs and is named", () => {
     ]);
     expect(r.validity.caveats).toContain("tests-narrowed");
     expect(r.validity.reliability).toBe("narrowed");
+    const banner = renderConsole(r);
+    expect(banner).toContain("TESTS EXCLUDED: 1 test(s)");
+    expect(banner).toContain("Excl Tests.Killer");
     const w = events.find(
       (e) => e.type === "warning" && e.code === "exclude-test-narrowed-baseline",
     );

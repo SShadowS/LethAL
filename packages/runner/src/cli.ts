@@ -975,7 +975,7 @@ RUN — scope. These bound cost. --tests-only can change a verdict; the others c
                              a name that matches no test is refused). CAN CHANGE A VERDICT like
                              --tests-only; the report flags 'tests-narrowed' and lists it in
                              excludedTests
-  --skip-known-survivors    skip mutants a prior finished run recorded as survivors
+  --skip-known-survivors     skip mutants a prior finished run recorded as survivors
   --allow-large-run          run more than ${LARGE_RUN_MUTANT_THRESHOLD} mutation sites (refused by default — a whole
                              real app costs days and usually cannot publish at all)
   --dry-run                  list what would be mutated; execute no tests. Reports both the raw

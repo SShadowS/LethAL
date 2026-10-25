@@ -337,7 +337,7 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "change a verdict — a mutant whose killing test was left out is reported `survived` or " +
       "`no-coverage`.",
     entailedNegative:
-      "This is the one narrowing that can manufacture a survivor; unlike `narrowed` (`--only`), " +
+      "These two flags (`--tests-only` and `--exclude-test`) are the narrowings that can manufacture a survivor; unlike `narrowed` (`--only`), " +
       "which selects which mutants run and cannot change a verdict.",
     basis: "R45",
   },
