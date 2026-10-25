@@ -254,6 +254,8 @@ export interface FailureScan {
   readonly fileOf: Map<string, string>;
   /** Per file: its passing tests that took 1 s or more (`name [ms]`), the stall's neighbours. */
   readonly slow: Map<string, string[]>;
+  /** R726b: the failing tests that timed out, in output order, as `file > name` (name alone if no file is known). */
+  readonly timedOut: string[];
 }
 
 /**
@@ -266,6 +268,7 @@ export function scanFailures(output: string, maxLines = 12): FailureScan {
   const details = new Map<string, string[]>();
   const fileOf = new Map<string, string>();
   const slow = new Map<string, string[]>();
+  const timedOut: string[] = [];
   let buf: string[] = [];
   let lastFail: string | undefined;
   let file = "";
@@ -302,15 +305,17 @@ export function scanFailures(output: string, maxLines = 12): FailureScan {
       }
       continue;
     }
-    if (/^\s*\^ this test timed out after /.test(line)) {
+    // R726b: a hook timeout reads `^ a beforeEach/afterEach/beforeAll hook timed out for this test.`
+    if (/^\s*\^ (this test|a .* hook) timed out/.test(line)) {
       const d = lastFail === undefined ? undefined : details.get(lastFail);
       if (d !== undefined) d.push(line.trim());
+      if (lastFail !== undefined) timedOut.push(file === "" ? lastFail : `${file} > ${lastFail}`);
       continue;
     }
     lastFail = undefined;
     buf.push(line.length > 300 ? `${line.slice(0, 300)}...` : line);
   }
-  return { details, fileOf, slow };
+  return { details, fileOf, slow, timedOut };
 }
 
 /** Failing tests whose detail verify prints to the console; the log file has the rest. */
@@ -1266,6 +1271,9 @@ export async function testStep(
         `  ... error text shown for the first ${DETAIL_CAP} of ${summary.failing.length} failing tests; the log has the rest`,
       );
     if (!ok) code = 1;
+    // R726b: one line naming every timed-out test, so the CI console shows them without the log.
+    if (scan.timedOut.length > 0)
+      lines.push(`timed out (${scan.timedOut.length}): ${scan.timedOut.join("; ")}`);
     if (plan.mode.kind === "full") {
       const junitFiles = [...new Set(parseJunit(io.readJunit(junit)).map((c) => c.file))];
       const gap = completeness(io.expectedTestFiles(), summary.files, junitFiles);
