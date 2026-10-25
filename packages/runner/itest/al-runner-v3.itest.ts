@@ -471,13 +471,20 @@ async function legC(scratch: string): Promise<readonly string[]> {
  * `docs/superpowers/specs/2026-10-25-r761-serve-default-precommitment.md` (master a86927e1) from the
  * R-761 observe run, equal to what R-653 E1 recorded for S1 under entries (P 3; live 3 = 6 - 3;
  * bound 5 = 8 - 3; warm-ups 1; entriesSent 44). Echo mismatches 0.
+ * R778: the kill pairs go in one batched `live` request, so live 3 becomes 1 and bound 5 becomes 3,
+ * and the pair-batch counters are new; pre-committed in
+ * `docs/superpowers/specs/2026-10-25-r778-kill-pair-batch-precommitment.md` (master ca4c5179).
  */
 const S1E_PINS = {
   pairRequests: 3,
-  liveRequests: 3,
-  boundChecks: 5,
+  liveRequests: 1,
+  boundChecks: 3,
   warmups: 1,
   entriesSent: 44,
+  pairBatchRequests: 1,
+  pairBatchStored: 3,
+  pairBatchServed: 3,
+  pairBatchRefused: 0,
 } as const;
 
 /** S1 one-shot (`entries` off) or S1E (same project and assertions under serve-entries). */
@@ -539,13 +546,17 @@ async function legS1(scratch: string, leg: "S1" | "S1E" = "S1", version = ""): P
       boundChecks: s.boundChecks,
       warmups: s.warmups,
       entriesSent: s.entriesSent,
+      pairBatchRequests: s.pairBatchRequests,
+      pairBatchStored: s.pairBatchStored,
+      pairBatchServed: s.pairBatchServed,
+      pairBatchRefused: s.pairBatchRefused,
     };
     console.log(
       `  S1E: serve counters ${JSON.stringify({ ...got, echoMismatches: s.echoMismatches })}`,
     );
     for (const [k, v] of Object.entries(S1E_PINS)) {
       const g = got[k as keyof typeof got];
-      must(g === v, `S1E: ${k} ${g}, pre-committed ${v} (R761)`);
+      must(g === v, `S1E: ${k} ${g}, pre-committed ${v} (R761, R778)`);
     }
     must(s.echoMismatches === 0, `S1E: ${s.echoMismatches} echo mismatches, pre-committed 0`);
   }
@@ -737,18 +748,27 @@ async function legN1S(scratch: string, version: string): Promise<void> {
   console.log(`  N1S: serve counters ${JSON.stringify({ ...s })}`);
   for (const [k, v] of Object.entries(N1S_PINS)) {
     const g = s[k as keyof typeof N1S_PINS];
-    must(g === v, `N1S: ${k} ${g}, pre-committed ${v} (R763)`);
+    must(g === v, `N1S: ${k} ${g}, pre-committed ${v} (R763, R778)`);
   }
   must(s.echoMismatches === 0, `N1S: ${s.echoMismatches} echo mismatches, expected 0`);
 }
 
-/** R763: N1S's serve counters from the observe run (`/coord/handoff/R-763/observe-N1S.log`). */
+/**
+ * R763: N1S's serve counters from the observe run (`/coord/handoff/R-763/observe-N1S.log`).
+ * R778: the 33 kill pairs go in one batched `live` request (live 33 becomes 1, bound 35 becomes 3);
+ * pre-committed in `docs/superpowers/specs/2026-10-25-r778-kill-pair-batch-precommitment.md`
+ * (master ca4c5179).
+ */
 const N1S_PINS = {
   pairRequests: 33,
-  liveRequests: 33,
-  boundChecks: 35,
+  liveRequests: 1,
+  boundChecks: 3,
   warmups: 1,
   entriesSent: 200,
+  pairBatchRequests: 1,
+  pairBatchStored: 33,
+  pairBatchServed: 33,
+  pairBatchRefused: 0,
 } as const;
 
 // --- R654 S2: L1, Y-A, Y-B and K (pre-commitment docs/superpowers/specs/2026-10-22-r654-v3-gate-legs-precommitment.md, 43115c78)
