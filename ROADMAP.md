@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**22 of 743 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**23 of 745 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -323,9 +323,11 @@ that ordering is the priority.
 - **R720** · Whole members in a `#if` right after the global `var` section parse INSIDE that section, so the symbol table never indexes them: 235 compiled-in members lose their typed sites, and lost R196's hang refusal (fixed) · [R720.md](docs/roadmap/R720.md) · open, deferred 2026-10-24 — the lost hang refusal is fixed…
 - **R721** · A global declared inside a var-section `#if` is not collected, so R196's hang refusal declined a loop write to it and deployed a mutant that can hang · [R721.md](docs/roadmap/R721.md) · done (bc0f9a8f)
 - **R725** · Hang readers that treat a null `resolveVarRef` as "absent": the r531/R696 write collectors read it as the implicit Rec, and R572 drops a var-out flag, inside swallowed members, `#if` globals and ambiguous names · [R725.md](docs/roadmap/R725.md) · done (e07c78ec)
-- **R737** · A callee receiver declared inside a var-section `#if` (or every-arm-ambiguous) is never followed: `declaredType`'s text fallback skips preprocessor nodes · [R737.md](docs/roadmap/R737.md) · open, filed 2026-10-24 (found by R-725's review; not built)
+- **R737** · A callee receiver declared inside a var-section `#if` (or every-arm-ambiguous) is never followed: `declaredType`'s text fallback skips preprocessor nodes · [R737.md](docs/roadmap/R737.md) · done (2cd47ee7)
 - **R738** · Silent under-report risk: an altool publish that removes a member an installed tests app calls is accepted, and the tests then fail at run time instead of being refused as a stale tests app · [R738.md](docs/roadmap/R738.md) · done (dab2d844)
+- **R752** · The R402 shape sweep reports 2 problems on master: `w6_var_swallowed_table` emits 28 specs, expected 29 · [R752.md](docs/roadmap/R752.md) · open, filed 2026-10-24 (found by R-737; not investigated)
 - **R740** · Silent under-report risk: a stale member of a DEPENDENCY app (upgraded under an unchanged tests app) drops tests from the green set the way R738 did for the target · [R740.md](docs/roadmap/R740.md) · done (f5991df3)
+- **R751** · `r737Partial` counts only a type that names no project object: a two-type receiver where one arm is a project object lacking the called member still looks complete · [R751.md](docs/roadmap/R751.md) · open, filed 2026-10-24 (found by the R-737 delta review; reach 0 today)
 - **R741** · Unmeasured: a stale member the target adds through a tableextension or pageextension may be named by its BASE object's id, which R738 does not read as the target's · [R741.md](docs/roadmap/R741.md) · done (3c264a7c)
 - **R749** · Silent under-report: a stale member whose BC function id is NEGATIVE matched neither R738's nor R740's refusal, so its tests left the green set silently · [R749.md](docs/roadmap/R749.md) · done (3c264a7c)
 
