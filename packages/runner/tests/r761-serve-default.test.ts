@@ -149,7 +149,17 @@ describe("R761: the default transport", () => {
     expect(r.b.inRunStopIsBudget).toBe(false);
     expect(r.warnings).toEqual([]);
     // the dot is read like an inner character only: edge dots and other unseen characters still fall back
-    for (const method of [".Step", "Step.", "A..B", "Ø.Step", "Colon:Step"]) {
+    for (const method of [
+      ".Step",
+      "Step.",
+      "A..B",
+      "Ø.Step",
+      "Colon:Step",
+      "A.B.C",
+      "A .B",
+      "A. B",
+      "Ab.(C)",
+    ]) {
       const o = await rig(DEFAULT, { tests: [...PLAIN, ref(method)], ...fixed });
       await o.b.decideTransport({ resume: false });
       expect([method, o.b.inRunStopIsBudget]).toEqual([method, true]);

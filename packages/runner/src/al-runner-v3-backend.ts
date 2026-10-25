@@ -1395,7 +1395,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * in hand then. After this, or after any v3 process started, `entries` is frozen.
    *
    * Explicit transport: unchanged, except that an explicit serve-entries (config key present) with a
-   * "." in a test method name refuses by name (#5798). Default: serve-entries unless a fallback
+   * "." in a test method name refuses by name (#5798), UNLESS the build's pin records #5798 fixed
+   * (R782). Default: serve-entries unless a fallback
    * reason holds; then one-shot and ONE warning naming every reason.
    */
   async decideTransport(facts: { readonly resume: boolean }): Promise<void> {
@@ -1436,10 +1437,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const { version, binarySha256 } = await this.runnerBuild();
     this.serveRowFields = serveRowFieldsFor(version, binarySha256);
     // R782: where #5798 is fixed, an inner "." is read like any proven inner character (the row's
-    // own fields carry the method); a leading, trailing or doubled "." stays unproven.
+    // own fields carry the method). Only the measured shape: exactly ONE "." with an ASCII letter or
+    // digit on both sides (`Dot.Step`); any other dot shape stays unproven.
     const methodShape = (m: string): boolean =>
       V3_SERVE_PROVEN_NAME_SHAPES.method.test(
-        this.serveRowFields ? m.replace(/(?<=[^.])\.(?=[^.])/g, "_") : m,
+        this.serveRowFields ? m.replace(/^([^.]*[A-Za-z0-9])\.([A-Za-z0-9][^.]*)$/, "$1_$2") : m,
       );
     const odd = this.discovered.filter(
       (t) => !methodShape(t.method) || !V3_SERVE_PROVEN_NAME_SHAPES.codeunit.test(t.codeunitName),
