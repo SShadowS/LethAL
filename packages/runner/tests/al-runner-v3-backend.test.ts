@@ -7,6 +7,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readdir,
   realpath,
   rm,
   stat,
@@ -41,6 +42,7 @@ import { MESSAGE_PREFIX_REASON, type V3ContractResult } from "../src/al-runner-v
 import { sha256OfFile } from "../src/al-runner-v3-pin";
 import * as pinsNs from "../src/al-runner-v3-pins";
 import { AlRunnerV3CoverageJoinError } from "../src/al-runner-v3-sleep";
+import { TestAppProofStore, testAppCacheKey } from "../src/al-runner-v3-testapp-cache";
 import { AlcCompileError, type ArtifactIo, ArtifactPrepareError } from "../src/artifact";
 import type { TestMethodRef } from "../src/backend";
 import type { SpawnFn } from "../src/publisher";
@@ -77,10 +79,10 @@ const TEST_AL = `codeunit ${CU} "Tests"
 }
 `;
 
-function fakeApp(id: string): Buffer {
+function fakeApp(id: string, version = "1.0.0.0"): Buffer {
   const NS = 'xmlns="http://schemas.microsoft.com/navx/2015/manifest"';
   return buildFakeAppWithEntries({
-    "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${id}" Name="X" Publisher="LethAL" Version="1.0.0.0" /></Package>`,
+    "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${id}" Name="X" Publisher="LethAL" Version="${version}" /></Package>`,
   });
 }
 
@@ -149,7 +151,11 @@ async function layout(targetAl = TARGET_AL, testAl = TEST_AL): Promise<Layout> {
 }
 
 /** A fake alc: records each call, writes a dummy .app, or fails when `fail(project)` says so. */
-function fakeAlc(fail: (project: string) => boolean = () => false) {
+function fakeAlc(
+  fail: (project: string) => boolean = () => false,
+  /** R780: the bytes of a project's .app (default: a text stand-in, not a zip). */
+  body: (project: string) => Buffer | undefined = () => undefined,
+) {
   const calls: { project: string; cache: string; staged: string[] }[] = [];
   const io: ArtifactIo = {
     spawn: async (argv) => {
@@ -165,7 +171,7 @@ function fakeAlc(fail: (project: string) => boolean = () => false) {
       const { readdir } = await import("node:fs/promises");
       calls.push({ project, cache, staged: (await readdir(cache)).sort() });
       if (fail(project)) return { exitCode: 1, stdout: "error AL0118: NoSuchVar", stderr: "" };
-      await writeFile(out, `app of ${project}`);
+      await writeFile(out, body(project) ?? `app of ${project}`);
       return { exitCode: 0, stdout: "", stderr: "" };
     },
     readArtifact: async (p) => new Uint8Array(await readFile(p)),
@@ -354,6 +360,27 @@ describe("§3 the compile proof", () => {
     expect(err).toBeInstanceOf(TestAppError);
     expect(err).not.toBeInstanceOf(AlcCompileError);
     expect(String(err)).toMatch(/test app does not compile against this batch/);
+  });
+
+  test("R780: an unreadable test dir keeps today's order: the test-app alc runs first, so its TestAppError wins over the read error", async () => {
+    const l = await layout();
+    await rm(join(l.testDir, "app.json"));
+    const alc = fakeAlc((p) => p === l.testDir);
+    const b = backendOf(l, fakeV3(allPass).spawn, alc.io);
+    const err = await b.deploy(l.batch).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(TestAppError);
+    expect(alc.calls.map((c) => c.project)).toEqual([join(l.scratch, "active"), l.testDir]);
+  });
+
+  test("R780: an unreadable test dir with a compiling test app still surfaces the read error, after the live compile", async () => {
+    const l = await layout();
+    await rm(join(l.testDir, "app.json"));
+    const alc = fakeAlc();
+    const b = backendOf(l, fakeV3(allPass).spawn, alc.io);
+    const err = await b.deploy(l.batch).catch((e: unknown) => e);
+    expect(err).not.toBeInstanceOf(TestAppError);
+    expect(String(err)).toMatch(/ENOENT/);
+    expect(alc.calls.map((c) => c.project)).toEqual([join(l.scratch, "active"), l.testDir]);
   });
 
   test("compileCheck runs alc alone on a copy, never v3, and never touches the deployed batch", async () => {
@@ -2671,5 +2698,332 @@ describe("R739: v3 notices reach setNotify, never the console", () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe("R780: the cross-session test-app compile cache", () => {
+  /** What the target .app's SymbolReference.json holds: `mutated` objects carry the selector globals. */
+  function symDoc(o: { version: string; mutated: number[]; extraProc?: boolean }) {
+    const cu = (id: number) => ({
+      Id: id,
+      Name: `C${id}`,
+      Methods: [
+        { Id: 1, Name: "Twice" },
+        ...(o.extraProc === true && id === 79000 ? [{ Id: 2, Name: "Thrice" }] : []),
+      ],
+      ...(o.mutated.includes(id)
+        ? { Variables: [{ Name: "MutationSelector" }, { Name: `MutationSelector${id}` }] }
+        : {}),
+    });
+    return { Version: o.version, Codeunits: [79000, 79001].map(cu) };
+  }
+  type Sym = ReturnType<typeof symDoc>;
+
+  async function env() {
+    const l = await layout();
+    const cacheDir = join(l.root, "cache");
+    const alcBin = join(l.root, "alc.bin");
+    await writeFile(alcBin, "alc-1");
+    return { l, cacheDir, alcBin };
+  }
+  type Env = Awaited<ReturnType<typeof env>>;
+
+  async function deployWith(
+    e: Env,
+    sym: Sym,
+    opts: { failTest?: boolean; cfg?: Partial<AlRunnerV3Config> } = {},
+  ) {
+    const alc = fakeAlc(
+      (p) => opts.failTest === true && p === e.l.testDir,
+      (p) =>
+        p.endsWith("active")
+          ? buildFakeAppWithEntries({ "SymbolReference.json": JSON.stringify(sym) })
+          : undefined,
+    );
+    const b = backendOf(e.l, fakeV3(allPass, { coverage: plainCoverage }).spawn, alc.io, {
+      cacheDir: e.cacheDir,
+      alcPath: e.alcBin,
+      ...opts.cfg,
+    });
+    const err = await b.deploy(e.l.batch).then(
+      () => undefined,
+      (x: unknown) => x,
+    );
+    return {
+      b,
+      err,
+      alc,
+      testCompiles: alc.calls.filter((c) => c.project === e.l.testDir).length,
+    };
+  }
+  const base = () => symDoc({ version: "1.0.1.1", mutated: [79000] });
+  const markers = (e: Env) => readdir(join(e.cacheDir, "testapp-proof")).catch(() => []);
+
+  test("cold deploy compiles the test app and writes a marker; an identical second deploy (new instance) skips the test-app alc and passes", async () => {
+    const e = await env();
+    const cold = await deployWith(e, base());
+    expect(cold.err).toBeUndefined();
+    expect(cold.testCompiles).toBe(1);
+    expect(await markers(e)).toHaveLength(1);
+    expect(cold.b.testAppCacheStats()).toEqual({ hits: 0, misses: 1 });
+    const warm = await deployWith(e, base());
+    expect(warm.err).toBeUndefined();
+    expect(warm.testCompiles).toBe(0);
+    expect(warm.alc.calls).toHaveLength(1); // the target only
+    expect(warm.b.testAppCacheStats()).toEqual({ hits: 1, misses: 0 });
+    await warm.b.activate("M0002");
+    expect((await warm.b.run(ref("A"), { coverage: "none", timeoutMs: 1000 })).outcome).toBe(
+      "pass",
+    );
+  });
+
+  test("no cacheDir: nothing is cached, the test app is compiled every time", async () => {
+    const e = await env();
+    const a = await deployWith(e, base(), { cfg: { cacheDir: undefined as never } });
+    const b = await deployWith(e, base(), { cfg: { cacheDir: undefined as never } });
+    expect([a.testCompiles, b.testCompiles]).toEqual([1, 1]);
+    expect(await markers(e)).toHaveLength(0);
+  });
+
+  test("a different mutant subset touching the same objects (new minted version) is a hit", async () => {
+    const e = await env();
+    await deployWith(e, base());
+    await writeFile(
+      join(e.l.batch, "app.json"),
+      JSON.stringify({ id: TARGET_ID, name: "T", version: "1.0.9.9" }),
+    );
+    const second = await deployWith(e, symDoc({ version: "1.0.9.9", mutated: [79000] }));
+    expect(second.testCompiles).toBe(0);
+  });
+
+  test("a subset touching a NEW object (a new MutationSelector global), no test extension object: hit", async () => {
+    const e = await env();
+    await deployWith(e, base());
+    const second = await deployWith(e, symDoc({ version: "1.0.2.2", mutated: [79000, 79001] }));
+    expect(second.testCompiles).toBe(0);
+  });
+
+  test("the same, but the test dir declares a reportextension: miss (a duplicate global is AL0155)", async () => {
+    const e = await env();
+    await writeFile(
+      join(e.l.testDir, "Ext.ReportExtension.al"),
+      'reportextension 79500 "X" extends "Y"\n{\n}\n',
+    );
+    await deployWith(e, base());
+    const same = await deployWith(e, base());
+    expect(same.testCompiles).toBe(0); // the control: unchanged inputs still hit
+    const second = await deployWith(e, symDoc({ version: "1.0.2.2", mutated: [79000, 79001] }));
+    expect(second.testCompiles).toBe(1);
+  });
+
+  const misses: [string, (e: Env) => Promise<{ sym?: Sym; cfg?: Partial<AlRunnerV3Config> }>][] = [
+    [
+      "a changed test .al byte",
+      async (e) => {
+        await appendFile(join(e.l.testDir, "Tests.Codeunit.al"), " ");
+        return {};
+      },
+    ],
+    [
+      "a changed test app.json",
+      async (e) => {
+        await writeFile(
+          join(e.l.testDir, "app.json"),
+          JSON.stringify({ id: "ff7935bb-9fe2-4f7a-adf3-aa7132a41fe7", name: "Tests2" }),
+        );
+        return {};
+      },
+    ],
+    [
+      "a changed dependency package sha",
+      async (e) => {
+        await writeFile(
+          join(e.l.deps, "Microsoft_System.app"),
+          fakeApp("8874ed3a-0643-4247-9ced-7a7002f7135d", "2.0.0.0"),
+        );
+        return {};
+      },
+    ],
+    [
+      "a changed alc binary sha",
+      async (e) => {
+        // A different size too, so the binary's mtime/size memo cannot hide the change.
+        await writeFile(e.alcBin, "alc-22");
+        return {};
+      },
+    ],
+    [
+      "a changed symbol interface (a new procedure in the target)",
+      async () => ({ sym: symDoc({ version: "1.0.1.1", mutated: [79000], extraProc: true }) }),
+    ],
+    [
+      "a changed preprocessor symbol set",
+      async () => ({ cfg: { preprocessorSymbols: ["CLEAN"] } }),
+    ],
+  ];
+  for (const [name, change] of misses) {
+    test(`${name}: miss`, async () => {
+      const e = await env();
+      await deployWith(e, base());
+      const c = await change(e);
+      const second = await deployWith(
+        e,
+        c.sym ?? base(),
+        c.cfg === undefined ? {} : { cfg: c.cfg },
+      );
+      expect(second.err).toBeUndefined();
+      expect(second.testCompiles).toBe(1);
+    });
+  }
+
+  test("the key itself: the transport alone changes it (serve-entries also rewrites app.json when staged, so the deploy test below cannot isolate it)", () => {
+    const k = (transport: "one-shot" | "serve-entries") =>
+      testAppCacheKey({
+        testDirHash: "a",
+        testOtherSha: new Map([["app.json", "b"]]),
+        testAppJsonSha256: "b",
+        activeAppJson: "{}",
+        symbolInterface: "{}",
+        testHasExtensionObject: false,
+        deps: [{ name: "x.app", sha256: "c" }],
+        alcPath: "/alc",
+        alcSha256: "d",
+        preprocessorSymbols: [],
+        transport,
+      });
+    expect(k("one-shot")).toBe(k("one-shot"));
+    expect(k("one-shot")).not.toBe(k("serve-entries"));
+  });
+
+  test("a changed transport (one-shot, then serve-entries over the same batch inputs): miss", async () => {
+    const e = await env();
+    // Both transports can stage this batch, so nothing but the transport differs between the runs.
+    await writeFile(
+      join(e.l.batch, "app.json"),
+      JSON.stringify({ id: TARGET_ID, name: "T", version: "1.0.0.0", runtime: "17.0" }),
+    );
+    await writeFile(
+      join(e.l.batch, "mutant-manifest.json"),
+      JSON.stringify({
+        selectorIds: { selectorId: SELECTOR_ID, controlId: 79198, tableId: 79197 },
+        artifactId: ARTIFACT,
+        mutants: [{ mutantId: "M0001", objectType: "Codeunit", codeunitId: 79000 }],
+      }),
+    );
+    await deployWith(e, base());
+    expect((await deployWith(e, base())).testCompiles).toBe(0);
+    const entries = await deployWith(e, base(), { cfg: { transport: "serve-entries" } });
+    expect(entries.err).toBeUndefined();
+    expect(entries.testCompiles).toBe(1);
+  });
+
+  test("a minted version below the test app's declared minimum is a miss; at or above it, a hit", async () => {
+    const e = await env();
+    const dep = (version: string) =>
+      writeFile(
+        join(e.l.testDir, "app.json"),
+        JSON.stringify({
+          id: "ff7935bb-9fe2-4f7a-adf3-aa7132a41fe7",
+          name: "Tests",
+          dependencies: [{ id: TARGET_ID, name: "T", publisher: "P", version }],
+        }),
+      );
+    await dep("1.0.0.0");
+    await deployWith(e, base());
+    expect((await deployWith(e, base())).testCompiles).toBe(0);
+    // The same test app.json would be a different key, so keep the bytes and raise the batch's
+    // version instead: the key ignores it, the minimum check does not.
+    await dep("2.0.0.0");
+    await deployWith(e, base()); // cold for the new app.json: minted 1.0.0.0 < 2.0.0.0, runs live
+    const low = await deployWith(e, base());
+    expect(low.testCompiles).toBe(1);
+    await writeFile(
+      join(e.l.batch, "app.json"),
+      JSON.stringify({ id: TARGET_ID, name: "T", version: "2.0.0.1" }),
+    );
+    await deployWith(e, base()); // satisfies the minimum: live, writes the marker
+    expect((await deployWith(e, base())).testCompiles).toBe(0);
+    await writeFile(
+      join(e.l.batch, "app.json"),
+      JSON.stringify({ id: TARGET_ID, name: "T", version: "1.0.0.5" }),
+    );
+    expect((await deployWith(e, base())).testCompiles).toBe(1);
+  });
+
+  test("an alc test-app FAILURE is never cached: the next identical deploy runs alc again and fails the same way", async () => {
+    const e = await env();
+    const first = await deployWith(e, base(), { failTest: true });
+    expect(first.err).toBeInstanceOf(TestAppError);
+    expect(await markers(e)).toHaveLength(0);
+    const second = await deployWith(e, base(), { failTest: true });
+    expect(second.testCompiles).toBe(1);
+    expect(second.err).toBeInstanceOf(TestAppError);
+    expect(String(second.err)).toBe(String(first.err));
+  });
+
+  const corrupt: [string, (marker: string) => Promise<void>][] = [
+    ["wrong content", (m) => writeFile(m, "garbage")],
+    [
+      "a directory where the file should be",
+      async (m) => {
+        await rm(m, { force: true });
+        await mkdir(m);
+      },
+    ],
+    [
+      "a link (not a plain file)",
+      async (m) => {
+        const real = `${m}.real`;
+        await writeFile(real, await readFile(m, "utf8"));
+        await rm(m, { force: true });
+        await symlink(real, m);
+      },
+    ],
+    ["an empty file", (m) => writeFile(m, "")],
+  ];
+  for (const [name, spoil] of corrupt) {
+    test(`a corrupt marker (${name}) is a miss`, async () => {
+      const e = await env();
+      await deployWith(e, base());
+      const [only] = await markers(e);
+      await spoil(join(e.cacheDir, "testapp-proof", only ?? ""));
+      const second = await deployWith(e, base());
+      expect(second.err).toBeUndefined();
+      expect(second.testCompiles).toBe(1);
+    });
+  }
+
+  test("after a hit, a byte changed in active/ or in the test dir is still refused at the next send", async () => {
+    for (const file of ["active", "test"] as const) {
+      const e = await env();
+      await deployWith(e, base());
+      const warm = await deployWith(e, base());
+      expect(warm.testCompiles).toBe(0);
+      await warm.b.activate("M0002");
+      await appendFile(
+        file === "active"
+          ? join(e.l.scratch, "active", "Logic.Codeunit.al")
+          : join(e.l.testDir, "Tests.Codeunit.al"),
+        " ",
+      );
+      await expect(
+        warm.b.run(ref("A"), { coverage: "none", timeoutMs: 1000 }),
+      ).rejects.toBeInstanceOf(AlRunnerV3UnprovenBatchError);
+    }
+  });
+
+  test("the store caps its markers and evicts the oldest by mtime", async () => {
+    const e = await env();
+    const dir = join(e.cacheDir, "testapp-proof");
+    const store = new TestAppProofStore(dir, 3);
+    const key = (n: number) => String(n).padStart(64, "0");
+    for (const n of [1, 2, 3]) {
+      await store.put(key(n));
+      await utimes(join(dir, key(n)), 1000 * n, 1000 * n);
+    }
+    await store.put(key(4)); // newest by mtime: key 1 is the oldest
+    expect((await readdir(dir)).sort()).toEqual([2, 3, 4].map(key));
+    expect(await store.has(key(1))).toBe(false);
+    expect(await store.has(key(2))).toBe(true);
   });
 });

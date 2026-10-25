@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**21 of 764 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**22 of 765 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -809,6 +809,7 @@ that ordering is the priority.
 - **R766** · Parallel al-runner-v3 mutants: N serve lanes in one backend (--workers N) · [R766.md](docs/roadmap/R766.md) · open, filed 2026-10-25 (from coord task R-766)
 - **R767** · al-runner-v3's per-send bound check (`assertBound`) spent 0.35 s per send on Bun's async fs, not on hashing · [R767.md](docs/roadmap/R767.md) · open, built and gated 2026-10-25 (coord task R-767); awaiting merge
 - **R769** · al-runner-v3's alc proof is still needed on #5602-fixed builds: the pinned edge build runs some AL that alc rejects · [R769.md](docs/roadmap/R769.md) · closed 2026-10-25 — measured (coord task R-769): the alc proof stays on every build (orchestrator ruling)…
+- **R780** · al-runner-v3: a cross-session cache of the test-app alc compile (about 11 s per deploy on the D1 slice) · [R780.md](docs/roadmap/R780.md) · open, built 2026-10-25 (coord task R-772); awaiting the v3 gate and merge
 
 ---
 
