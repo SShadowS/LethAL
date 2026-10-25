@@ -16,7 +16,7 @@
  */
 import { createHash, randomBytes } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { V3ContractResult, V3Fact } from "./al-runner-v3-contract";
 import { v3ContractRefusals } from "./al-runner-v3-contract";
@@ -68,15 +68,19 @@ export async function probeCodeHash(
 /**
  * File names and BYTES of every `.app` in the package folder (v3 and alc read symbols there).
  * R776: content, not mtime, so a copied, re-downloaded or touched folder with the same bytes still
- * hits; about 0.1 s for 70 MB. Throws when a file cannot be read (the caller then runs the probe).
+ * hits; about 0.1 s for 70 MB. Throws when a file cannot be read, or is not a regular file (a FIFO
+ * would block, a device read forever); the caller then runs the probe. Each file is hashed on its
+ * own and fed in as `name\0<hex>\n`, so one file's bytes can never read as a file boundary.
  */
 export async function packagesFingerprint(packagesDir: string): Promise<string> {
   const h = createHash("sha256");
   for (const name of (await readdir(packagesDir)).sort()) {
     if (!name.toLowerCase().endsWith(".app")) continue;
-    h.update(`${name}\0`);
-    for await (const chunk of createReadStream(join(packagesDir, name))) h.update(chunk as Buffer);
-    h.update("\0");
+    const path = join(packagesDir, name);
+    if (!(await stat(path)).isFile()) throw new Error(`${path} is not a regular file`);
+    const f = createHash("sha256");
+    for await (const chunk of createReadStream(path)) f.update(chunk as Buffer);
+    h.update(`${name}\0${f.digest("hex")}\n`);
   }
   return h.digest("hex");
 }

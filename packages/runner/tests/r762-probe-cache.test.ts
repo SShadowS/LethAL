@@ -293,6 +293,29 @@ describe("R762: each key part re-runs the probe", () => {
     expect(warns.join("\n")).toMatch(/probe ran fresh \(key none; key unavailable\)/);
     expect(await entries(e)).toEqual([]);
   });
+  test("R776: one file's bytes cannot pose as a file boundary", async () => {
+    const root = await mkdtemp(join(tmpdir(), "lethal-r776-"));
+    roots.push(root);
+    const one = join(root, "one");
+    const two = join(root, "two");
+    await mkdir(one);
+    await mkdir(two);
+    await writeFile(join(one, "A.app"), "abc\0B.app\0def");
+    await writeFile(join(two, "A.app"), "abc");
+    await writeFile(join(two, "B.app"), "def");
+    expect(await cacheNs.packagesFingerprint(one)).not.toBe(await cacheNs.packagesFingerprint(two));
+  });
+  test.skipIf(process.platform === "win32")(
+    "R776: the fingerprint refuses an .app that is not a regular file (a FIFO) instead of blocking",
+    async () => {
+      // On the fingerprint itself: a session already blocks earlier on such a file, since
+      // assertBcVersionMatchesPackages (and v3, and alc) read every .app in the folder.
+      const root = await mkdtemp(join(tmpdir(), "lethal-r776-"));
+      roots.push(root);
+      expect(Bun.spawnSync(["mkfifo", join(root, "Pipe.app")]).exitCode).toBe(0);
+      await expect(cacheNs.packagesFingerprint(root)).rejects.toThrow("is not a regular file");
+    },
+  );
 });
 
 describe("R762: a bad entry or a bad result means run the probe", () => {
