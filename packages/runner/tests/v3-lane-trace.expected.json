@@ -291,7 +291,9 @@
   "pairBatchRequests": 0,
   "pairBatchStored": 0,
   "pairBatchServed": 0,
-  "pairBatchRefused": 0
+  "pairBatchRefused": 0,
+  "speculativeKept": 1,
+  "speculativeDropped": 0
  },
  "notices": []
 }

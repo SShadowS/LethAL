@@ -34,7 +34,7 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { freemem } from "node:os";
+import { freemem, setPriority } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
   CONTROL_REGISTER_FILENAME,
@@ -720,6 +720,13 @@ export interface V3EntriesStats {
   pairBatchStored: number;
   pairBatchServed: number;
   pairBatchRefused: number;
+  /**
+   * R798: speculative baseline calls (R790) served-eligible vs dropped (timed out, crashed, too slow,
+   * spawn failed, or the whole set discarded because the bound keys differed): each dropped call's
+   * codeunit ran live. A rising `speculativeDropped` shows the speed-up shrinking.
+   */
+  speculativeKept: number;
+  speculativeDropped: number;
 }
 
 /** R651: the phase timers of `V3EntriesStats`. */
@@ -1200,7 +1207,24 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     noSpeculativeBaseline?: true;
     /** R790: runs once the speculative calls ended, before their second binding read. */
     afterSpeculation?: () => Promise<void>;
+    /** R798: replaces `os.setPriority` for the speculative call (a test counts and may throw). */
+    setPriority?: (pid: number, priority: number) => void;
   } = {};
+  private niceNoticed = false;
+
+  /** R798: the speculative call yields CPU to alc. Best effort: a failure is noted once, never thrown. */
+  private lowerPriority(pid: number): void {
+    try {
+      (this.seams.setPriority ?? setPriority)(pid, 19);
+    } catch (err) {
+      if (this.niceNoticed) return;
+      this.niceNoticed = true;
+      this.notify(
+        "al-runner-v3-speculative-nice-failed",
+        `[lethal] al-runner-v3-speculative-nice-failed: could not lower the speculative baseline call's CPU priority (${err instanceof Error ? err.message : String(err)}); it runs at normal priority (R798).`,
+      );
+    }
+  }
   private memoryHoldNoticed = false;
   private fitNoticed = false;
   /** R766 (b): the `resume` fact `decideTransport` was given. */
@@ -1235,6 +1259,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     pairBatchStored: 0,
     pairBatchServed: 0,
     pairBatchRefused: 0,
+    speculativeKept: 0,
+    speculativeDropped: 0,
   };
 
   private proof: BatchProof | undefined;
@@ -1826,13 +1852,19 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const cached = speculate
       ? await this.placeCachedAlcWrites(active)
       : { placed: new Set<string>(), key: undefined };
+    // R798: alc starts first (its copy is complete before it runs); only then the sync binding read
+    // and the calls. The "before" key is still taken before any call reads the batch.
+    const copy = speculate ? await this.prepareAlcCopy(active) : undefined;
+    const compiling =
+      copy !== undefined
+        ? this.compileTargetCopy(copy, active, cached.placed, cached.key)
+        : this.compileTarget(active);
+    compiling.catch(() => {}); // awaited below; no unhandled rejection while the calls start
     const spec = speculate ? this.speculateBaseline(active, abort.signal) : undefined;
     // Step 1: the target. AlcCompileError goes to the orchestrator's R461 / bisection path.
     let target: { appPath: string; sha256: string };
     try {
-      target = speculate
-        ? await this.compileTargetCopy(active, cached.placed, cached.key)
-        : await this.compileTarget(active);
+      target = await compiling;
     } catch (err) {
       abort.abort();
       await spec; // settled, then dropped: nothing from it is kept
@@ -1922,23 +1954,43 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       specDone.realTest === realTest
     ) {
       this.speculative = { dir: active, calls: specDone.calls };
+      this.stats.speculativeKept += specDone.calls.size;
+    } else if (specDone !== undefined) {
+      this.stats.speculativeDropped += specDone.calls.size; // R798: the bound keys differed
     }
     return null;
   }
 
-  /** R790 (c): alc on a COPY of the batch, so it never writes (Translations/*.g.xlf) where a v3 call reads. */
+  /** R798: the copy alc will compile, made and listed, and alc's output dir made: alc can start at once. */
+  private async prepareAlcCopy(
+    active: string,
+  ): Promise<{ readonly dir: string; readonly states: Map<string, string> }> {
+    const dir = join(this.cfg.instrumentedDir, "alc-src");
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    await cp(active, dir, { recursive: true, preserveTimestamps: true });
+    const states = await fileStates(dir);
+    await mkdir(join(this.cfg.instrumentedDir, "alc-out"), { recursive: true });
+    return { dir, states };
+  }
+
+  /**
+   * R790 (c): alc on a COPY of the batch, so it never writes (Translations/*.g.xlf) where a v3 call
+   * reads. R798: the alc spawn happens in the synchronous part of this call (no await before it).
+   */
   private async compileTargetCopy(
+    prepared: { readonly dir: string; readonly states: Map<string, string> },
     active: string,
     placed: ReadonlySet<string>,
     cacheKey: string | undefined,
   ): Promise<{ appPath: string; sha256: string }> {
-    const copy = join(this.cfg.instrumentedDir, "alc-src");
-    await rm(copy, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
-    await cp(active, copy, { recursive: true, preserveTimestamps: true });
-    const states = await fileStates(copy);
+    const { dir: copy, states } = prepared;
     let out: { appPath: string; sha256: string };
     try {
-      out = await this.compileTarget(copy);
+      out = await this.compiler.compileProject({
+        projectDir: copy,
+        packageCachePath: this.cfg.packagesDir,
+        name: "v3-batch",
+      });
     } catch (err) {
       throw errorAsIfIn(err, copy, active);
     }
@@ -2080,6 +2132,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           activeDir: realActive,
           testDir: realTest,
           signal,
+          nice: true,
         });
         if (signal.aborted) return undefined;
         let covText: string | undefined;
@@ -2090,22 +2143,45 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         }
         await rm(covPath, { force: true }).catch(() => {});
         // A spawn that failed is not kept: that codeunit's baseline call runs live.
-        if ("spawnError" in made) continue;
+        const drop = () => {
+          this.stats.speculativeDropped += 1; // R798: that codeunit's baseline call runs live
+        };
+        if ("spawnError" in made) {
+          drop();
+          continue;
+        }
         // Review 2: a call that ran out of time ran beside alc's CPU, so it may not be what a live
         // baseline call would answer: not kept, that codeunit's call runs live.
-        if (made.timedOut) continue;
+        if (made.timedOut) {
+          drop();
+          continue;
+        }
         // Review r2 #2: only a clean answer (an exit code `callCodeunit` reads as rows, rows that
         // decode) is kept; a crash or garbage beside alc runs live.
-        if (![0, 1, 7, 8].includes(made.res.exitCode)) continue;
-        const decoded = decodeV3Rows(made.res.stdout, id);
-        if ("why" in decoded) continue;
-        if (decoded.rows.some((r) => r.message !== undefined && V3_TIMEOUT_MESSAGE.test(r.message)))
+        if (![0, 1, 7, 8].includes(made.res.exitCode)) {
+          drop();
           continue;
-        // Review r2 #1: the durations were measured beside alc's CPU. A budget is
-        // max(2 x duration, floor), so a call is kept only when the floor decides every budget it
-        // feeds: then a served duration cannot move a budget (the default floor is 180 s).
+        }
+        const decoded = decodeV3Rows(made.res.stdout, id);
+        if ("why" in decoded) {
+          drop();
+          continue;
+        }
+        if (
+          decoded.rows.some((r) => r.message !== undefined && V3_TIMEOUT_MESSAGE.test(r.message))
+        ) {
+          drop();
+          continue;
+        }
+        // Review r2 #1: the durations were measured beside alc's CPU (R798: at the lowest CPU
+        // priority). A budget is max(2 x duration, floor), so a call is kept only when the floor
+        // decides every budget it feeds: then a served duration cannot move a budget (the default
+        // floor is 180 s). The budget's duration is LethAL's wall clock, not al-runner's own figure.
         const tooSlow = (ms: number) => 2 * ms >= f.floorMs;
-        if (tooSlow(made.wallMs) || decoded.rows.some((r) => tooSlow(r.durationMs ?? 0))) continue;
+        if (tooSlow(made.wallMs) || decoded.rows.some((r) => tooSlow(r.durationMs ?? 0))) {
+          drop();
+          continue;
+        }
         calls.set(id, {
           ...made,
           ...(covText !== undefined ? { covText } : {}),
@@ -2147,6 +2223,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     readonly testDir: string;
     readonly beforeSpawn?: () => Promise<void>;
     readonly signal?: AbortSignal;
+    /** R798: lower the child's CPU priority once it started (the speculative call only). */
+    readonly nice?: boolean;
   }): Promise<SpawnedCall | { readonly spawnError: string; readonly wallMs: number }> {
     const argv = v3CallArgv({
       alRunnerPath: absToolPath(this.cfg.alRunnerPath),
@@ -2179,6 +2257,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         signal: controller.signal,
         // R645: v3 writes coverage.cobertura.xml into its cwd; never the caller's.
         cwd: o.cwd,
+        ...(o.nice === true ? { onStart: (pid: number) => this.lowerPriority(pid) } : {}),
         ...this.cacheEnv(),
       });
       return { res, wallMs: Date.now() - started, timedOut, deadlineMs };

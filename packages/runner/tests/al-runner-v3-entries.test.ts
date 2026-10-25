@@ -4194,10 +4194,14 @@ describe("R790: the speculative baseline", () => {
       seams?: (l: Layout) => AlRunnerV3Backend["seams"];
       /** Option 4: a cache dir shared by deploys. */
       cacheDir?: string;
+      /** R798: wraps the one-shot spawn (to log order, or to report a pid). */
+      wrapSpawn?: (s: SpawnFn) => SpawnFn;
+      notify?: (code: string, message: string) => void;
     } = {},
   ) {
     const l = await layout(TARGET_AL, SUITE1);
     const one = fakeOneShot(o.rows ?? allPass);
+    const oneSpawn = (o.wrapSpawn ?? ((s: SpawnFn) => s))(one.spawn);
     const serve = fakeServe();
     const b = new AlRunnerV3Backend(
       {
@@ -4212,10 +4216,11 @@ describe("R790: the speculative baseline", () => {
         transport: "serve-entries",
         ...(o.cacheDir !== undefined ? { cacheDir: o.cacheDir } : {}),
       },
-      one.spawn,
+      oneSpawn,
       alc ?? fakeAlc(),
       serve.spawn,
     );
+    if (o.notify !== undefined) b.setNotify(o.notify);
     b.useBuildSymbols([]);
     b.useDiscoveredTests(SUITE1);
     b.useSessionTests(SUITE1);
@@ -4258,6 +4263,82 @@ describe("R790: the speculative baseline", () => {
     expect(seq.one.calls).toHaveLength(1);
     const plain = (vs: TestVerdict[]) => vs.map((v) => ({ ...v, durationMs: 0 }));
     expect(plain(a)).toEqual(plain(s));
+  });
+
+  // R798: alc starts first, then the binding read, then the speculative call (call order, no clock).
+  test("R798: order is alc start, then boundKey, then the speculative spawn", async () => {
+    const order: string[] = [];
+    const proto = AlRunnerV3Backend.prototype as unknown as {
+      boundKey: (a: string) => Promise<string>;
+    };
+    const real = proto.boundKey;
+    proto.boundKey = function (this: unknown, a: string) {
+      order.push("boundKey");
+      return real.call(this, a);
+    };
+    try {
+      const ok = fakeAlc();
+      const alc: ArtifactIo = {
+        ...ok,
+        spawn: async (argv, o) => {
+          if ((argv.find((a) => a.startsWith("/out:")) ?? "").includes("v3-batch")) {
+            order.push("alc");
+          }
+          return ok.spawn(argv, o);
+        },
+      };
+      const r = await deployWith(alc, true, {
+        wrapSpawn: (s) => (argv, o) => {
+          order.push("call");
+          return s(argv, o);
+        },
+      });
+      expect(r.err).toBeUndefined();
+      expect(order).toEqual(["alc", "boundKey", "call", "boundKey"]);
+    } finally {
+      proto.boundKey = real;
+    }
+  });
+
+  test("R798: the speculative call's priority is lowered once, on its pid; a throwing setPriority never fails deploy", async () => {
+    const seen: Array<[number, number]> = [];
+    const wrapSpawn =
+      (s: SpawnFn): SpawnFn =>
+      (argv, o) => {
+        o?.onStart?.(4242);
+        return s(argv, o);
+      };
+    const ok = await deployWith(undefined, true, {
+      wrapSpawn,
+      seams: () => ({ setPriority: (pid, p) => void seen.push([pid, p]) }),
+    });
+    expect(ok.err).toBeUndefined();
+    expect(seen).toEqual([[4242, 19]]);
+
+    const notes: string[] = [];
+    const bad = await deployWith(undefined, true, {
+      wrapSpawn,
+      notify: (code) => void notes.push(code),
+      seams: () => ({
+        setPriority: () => {
+          throw new Error("EPERM");
+        },
+      }),
+    });
+    expect(bad.err).toBeUndefined();
+    expect(notes).toEqual(["al-runner-v3-speculative-nice-failed"]);
+    expect(speculative(bad.b)).not.toBeUndefined();
+  });
+
+  test("R798: kept and dropped speculative calls are counted", async () => {
+    const kept = await deployWith(undefined, true);
+    expect(kept.b.entriesStats()).toMatchObject({ speculativeKept: 1, speculativeDropped: 0 });
+    const timesOutA: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        x.method === "A" ? { ...x, status: "error" as const, message: TIMEOUT_1S } : x,
+      );
+    const dropped = await deployWith(undefined, true, { rows: timesOutA });
+    expect(dropped.b.entriesStats()).toMatchObject({ speculativeKept: 0, speculativeDropped: 1 });
   });
 
   test("served once: a second baseline runs live", async () => {

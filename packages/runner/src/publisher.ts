@@ -7,7 +7,13 @@ import { canonicalContainerKey, serializePublish } from "./publish-serializer";
 
 export type SpawnFn = (
   argv: readonly string[],
-  opts?: { signal?: AbortSignal; env?: Record<string, string>; cwd?: string },
+  opts?: {
+    signal?: AbortSignal;
+    env?: Record<string, string>;
+    cwd?: string;
+    /** R798: called with the child's pid right after it started, before any output is read. */
+    onStart?: (pid: number) => void;
+  },
 ) => Promise<{
   exitCode: number;
   stdout: string;
@@ -50,6 +56,11 @@ const bunSpawn: SpawnFn = async (argv, opts) => {
     });
   } catch (err) {
     throw new ProcessNotStartedError(err);
+  }
+  try {
+    opts?.onStart?.(proc.pid);
+  } catch {
+    // a hook never fails the spawn
   }
   const [stdout, stderr] = await Promise.all([
     new Response(proc.stdout).text(),
