@@ -24,6 +24,7 @@ import {
   AlRunnerV3DependencySkippedError,
   AlRunnerV3RowMissingError,
   AlRunnerV3ServeStopUnsetError,
+  AlRunnerV3TransportFrozenError,
   AlRunnerV3UnprovenBatchError,
   WINDOW_BOUND_CAVEAT,
   v3CallDeadlineMs,
@@ -3449,5 +3450,34 @@ describe("R739: v3 notices reach setNotify, never the console", () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe("R761: a real first spawn freezes the transport decision", () => {
+  const decided = (r: Rig) => {
+    // A default-source backend, as the CLI builds it; the build is as `status()` would record it.
+    (r.b as unknown as { cfg: { transportSource: string } }).cfg.transportSource = "default";
+    (r.b as unknown as { build: unknown }).build = {
+      version: "alrunner 3.0.0-alpha.5 (abcdef012)",
+      binarySha256: "0",
+    };
+    return r.b.decideTransport({ resume: false }).catch((e: unknown) => e);
+  };
+
+  test("a one-shot call (callCodeunit) freezes it", async () => {
+    const r = await rig({ extra: { transport: "one-shot" } });
+    expect(r.one.calls).toHaveLength(0);
+    await baseline(r.b, SUITE1);
+    expect(r.one.calls.length).toBeGreaterThan(0);
+    expect(await decided(r)).toBeInstanceOf(AlRunnerV3TransportFrozenError);
+  });
+
+  test("a daemon start (startDaemon) freezes it", async () => {
+    const r = await rig();
+    // The one-shot baseline spawn would freeze it; a daemon start alone must too.
+    await (r.b as unknown as { startDaemon(): Promise<unknown> }).startDaemon();
+    expect(r.one.calls).toHaveLength(0);
+    expect(r.serve.daemons.length).toBeGreaterThan(0);
+    expect(await decided(r)).toBeInstanceOf(AlRunnerV3TransportFrozenError);
   });
 });
