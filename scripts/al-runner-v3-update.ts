@@ -21,7 +21,8 @@
  *    `LETHAL_ALRUNNER_V3_CANDIDATE=1`, the CDO corpus and leg T. Its receipt is deleted before the
  *    run and accepted only with this run's nonce AND the candidate's binary sha256. R777: when that
  *    commit predates a leg of this script's `V3_GATE_LEGS`, `current` is first re-gated at this
- *    script's own commit (logged `stale-gated`); if that does not pass, no candidate is gated.
+ *    script's own commit (logged `stale-gated`); if that does not pass, `current` stays and the
+ *    candidate is judged at the script's commit. A script commit off origin/master is refused.
  * 4. Outcomes: `pass` -> installed, `.gated` written, `current` moved (unless a v3 process is
  *    running: "deferred: in use"); `gate-fail` -> `failed/` for good; `held` (every difference a
  *    move toward BC or a named refusal; read the receipt's lines) -> `held/`, never blacklisted, a
@@ -110,13 +111,17 @@ export interface UpdateDeps {
   legsAt(commit: string): Promise<readonly string[]>;
   /** R777: the full sha of the LethAL commit this script runs from. */
   selfCommit(): Promise<string>;
+  /** R777: `git merge-base --is-ancestor a b` (a commit is its own ancestor). */
+  isAncestor(a: string, b: string): Promise<boolean>;
 }
 
 /** R777: the leg names of the `V3_GATE_LEGS` literal in a gate module's source; throws when absent. */
 export function parseGateLegs(src: string): string[] {
-  const m = /export const V3_GATE_LEGS = \[([^\]]*)\]/.exec(src);
-  if (m === null) throw new Error("no `export const V3_GATE_LEGS = [...]` in the gate module");
-  return [...(m[1] ?? "").matchAll(/"([^"]+)"/g)].map((x) => x[1] ?? "");
+  const m = /export const V3_GATE_LEGS = \[([\s\S]*?)\] as const;/.exec(src);
+  if (m === null)
+    throw new Error("no `export const V3_GATE_LEGS = [...] as const;` in the gate module");
+  const body = (m[1] ?? "").replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\//g, "");
+  return [...body.matchAll(/"([^"]+)"/g)].map((x) => x[1] ?? "");
 }
 
 /** `v3.0.0-alpha.N` -> N; anything else (edge, other lines) -> undefined. */
@@ -257,8 +262,10 @@ async function readCurrentGated(root: string): Promise<GatedBuild & { readonly d
 /**
  * R777: a candidate is never judged on fewer legs than `V3_GATE_LEGS` requires. When `.gated`'s
  * commit predates some of them, `current` is first re-gated at this script's own commit, under the
- * caller's lock. Returns the `.gated` to judge against, or undefined (logged) when that re-gate did
- * not pass, or this script's commit lacks the legs too.
+ * caller's lock. Returns the `.gated` to judge against: the re-gated one on a pass; otherwise
+ * `current`'s with this script's commit, so the candidate is still judged on every leg while
+ * `current` stays put. Undefined (logged) when this script's commit cannot serve: it lacks the legs
+ * too, is not on origin/master, or is older than `.gated`'s.
  */
 async function gatedWithAllLegs(
   deps: UpdateDeps,
@@ -271,21 +278,26 @@ async function gatedWithAllLegs(
   const self = await deps.selfCommit();
   const selfHas = new Set(await deps.legsAt(self));
   const stale = `${deps.now()} ${what}: stale-gated: .gated's lethalCommit ${current.lethalCommit} predates leg(s) ${missing.join(",")} of V3_GATE_LEGS`;
-  if (V3_GATE_LEGS.some((l) => !selfHas.has(l))) {
+  const cannot = V3_GATE_LEGS.some((l) => !selfHas.has(l))
+    ? "lacks them too (uncommitted legs?)"
+    : !(await deps.isAncestor(self, "origin/master"))
+      ? "is not on origin/master"
+      : await deps.isAncestor(self, current.lethalCommit)
+        ? "is not newer than .gated's (an old checkout?)"
+        : undefined;
+  if (cannot !== undefined) {
     await deps.log(
-      `${stale}; this script's commit ${self} lacks them too (uncommitted legs?): not gated; commit them, then \`--regate <commit>\``,
+      `${stale}; this script's commit ${self} ${cannot}: not gated; run it from a current master checkout, or \`--regate <master commit>\``,
     );
     return undefined;
   }
   await deps.log(`${stale}; re-gating current at ${self} first`);
   const o = await gateOne(deps, "regate", current, { regateAt: self });
-  if (o !== "pass") {
-    await deps.log(
-      `${deps.now()} ${what}: the re-gate of current at ${self} gave ${o}: current does not pass this commit's legs; no candidate gated`,
-    );
-    return undefined;
-  }
-  return readCurrentGated(deps.root);
+  if (o === "pass") return readCurrentGated(deps.root);
+  await deps.log(
+    `${deps.now()} ${what}: the re-gate of current at ${self} gave ${o}: current stays at ${current.lethalCommit}; the candidate is judged at ${self}`,
+  );
+  return { ...current, lethalCommit: self };
 }
 
 async function infraCount(root: string, name: string, bump: boolean): Promise<number> {
@@ -700,22 +712,6 @@ export async function edgeRejudge(deps: UpdateDeps, arg: string): Promise<Outcom
   try {
     const { root } = deps;
     const tag = `edge-${arg}`;
-    const current = await gatedWithAllLegs(deps, "edge-rejudge");
-    if (current === undefined) return "skipped";
-    const commit = current.lethalCommit;
-    // I5: at the same commit a verdict is final, whether or not its folder holds a receipt.
-    const judged = () =>
-      refuse(`${tag} already judged at ${commit}; --regate to a new commit first`);
-    if (existsSync(join(root, "failed", `${tag}@${commit}`))) judged();
-    for (const r of [
-      join(root, "rejudge", `${tag}@${commit}`, "receipt.json"),
-      join(root, "held", tag, "receipt.json"),
-    ]) {
-      const k = existsSync(r)
-        ? (JSON.parse(await readFile(r, "utf8")) as { lethalCommit?: unknown; outcome?: unknown })
-        : undefined;
-      if (k?.lethalCommit === commit && k.outcome !== "infra-fail") judged();
-    }
     // Custody: every kept copy is the bytes its receipt names, and all are one build.
     const folders = await keptFolders(root, tag);
     if (folders.length === 0)
@@ -743,6 +739,23 @@ export async function edgeRejudge(deps: UpdateDeps, arg: string): Promise<Outcom
     const v = /\(([0-9a-f]+)\)$/.exec((await deps.versionOf(binary)).trim())?.[1] ?? "";
     if (v.length < 7 || !(v.startsWith(arg) || arg.startsWith(v)))
       refuse(`${binary} reports commit "${v}", not ${arg}`);
+    // R777: after the cheap refusals, since a stale `.gated` costs a re-gate first.
+    const current = await gatedWithAllLegs(deps, "edge-rejudge");
+    if (current === undefined) return "skipped";
+    const commit = current.lethalCommit;
+    // I5: at the same commit a verdict is final, whether or not its folder holds a receipt.
+    const judged = () =>
+      refuse(`${tag} already judged at ${commit}; --regate to a new commit first`);
+    if (existsSync(join(root, "failed", `${tag}@${commit}`))) judged();
+    for (const r of [
+      join(root, "rejudge", `${tag}@${commit}`, "receipt.json"),
+      join(root, "held", tag, "receipt.json"),
+    ]) {
+      const k = existsSync(r)
+        ? (JSON.parse(await readFile(r, "utf8")) as { lethalCommit?: unknown; outcome?: unknown })
+        : undefined;
+      if (k?.lethalCommit === commit && k.outcome !== "infra-fail") judged();
+    }
     const outcome = await gateOne(deps, tag, current, {
       binary,
       binarySha256: sha,
@@ -959,6 +972,13 @@ export function realDeps(root = ROOT): UpdateDeps {
       ),
     selfCommit: async () =>
       (await run(["git", "-C", dirname(import.meta.dir), "rev-parse", "HEAD"])).trim(),
+    isAncestor: async (a, b) =>
+      (
+        await Bun.spawn(
+          ["git", "-C", dirname(import.meta.dir), "merge-base", "--is-ancestor", a, b],
+          { stdout: "ignore", stderr: "ignore" },
+        ).exited
+      ) === 0,
   };
 }
 

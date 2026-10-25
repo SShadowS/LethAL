@@ -286,8 +286,11 @@ N > 1 must equal N = 1: R766's proof found D1 and the gift card identical at N =
 - A new leg needs no manual regate ([[R777]]). Before the alpha path, `--edge` or `--edge-rejudge` gates a candidate,
   the script reads `V3_GATE_LEGS` at `.gated`'s commit (`git show`). If that commit lacks any of this script's legs,
   the log says `stale-gated` and names them, and `current` is first re-gated at the script's own commit, under the
-  same lock. If that re-gate does not pass, or the script's commit lacks the legs too, no candidate is gated and
-  the run reads `skipped`: `--edge-rejudge` exits 2, and `--edge` does not mark the commit seen.
+  same lock. If that re-gate does not pass, `current` stays, and the candidate is judged at the script's commit (so
+  on every leg). The script's commit must have the legs, be on `origin/master` (as the local ref knows it: the
+  script does not fetch) and be newer than `.gated`'s; otherwise no candidate is gated and the run reads `skipped`:
+  `--edge-rejudge` exits 2, and `--edge` does not mark the commit seen. `--edge-rejudge` runs its custody checks
+  before any re-gate.
 - Every gate path (the alpha path, `--regate`, `--edge`, `--edge-rejudge`) holds `<root>/.gate.lock`. A holder is
   live only when its `/proc/<pid>/cmdline` names `al-runner-v3-update`; a dead, reused, empty or unreadable lock is
   taken over unless a process still runs under the gate worktree. A skip is logged with the lock, its holder and
