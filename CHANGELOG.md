@@ -1035,6 +1035,11 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **A hang check now follows a call through a receiver declared inside a `#if`** (R737). A callee receiver declared
+  in a var-section `#if` got no type, so the callee was never followed and a hang-capable site in it could be mutated.
+  The type is now read from the live arm (every arm when the file's `#if` cannot be decided); a receiver with two types
+  follows both. On BaseApp 2 mutants are no longer generated, on DC 7; DO, CDO and the fixtures do not change.
+
 - **Two kinds of mutant that alc rejects are no longer generated** ([R731](docs/roadmap/R731.md),
   [R732](docs/roadmap/R732.md)). Found by the second offline compile of DC's `Cloud` target, one mutant each, and
   each one fails the whole batch. `toggle-blank-string` no longer blanks a one-character text literal assigned to a

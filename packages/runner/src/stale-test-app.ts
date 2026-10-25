@@ -264,11 +264,14 @@ export class StaleTestAppError extends Error {
  * line only (BC's sentence, never the call stack), anchored to its measured start: "Function ID
  * <n> was called. The object with ID <id> does not have a member". Returns that id only when it is
  * one of `targetIds` (the target's own declared objects); another app's object is R740's
- * (`staleDependencyMember`). LIMITS: English text only; the fenced (RunMutant) path's layout only,
- * as measured; the line-count wrapper and the legacy hub path are not read.
+ * (`staleDependencyMember`). The function id is SIGNED (R749, measured on bc2 by R-741: "Function
+ * ID -935096164"). A member the target added through a tableextension or pageextension is named by
+ * the extension's own id (R741, measured), which `objectHeadersOf` reads. LIMITS: English text
+ * only; the fenced (RunMutant) path's layout only, as measured; the line-count wrapper and the
+ * legacy hub path are not read.
  */
 const STALE_MEMBER =
-  /^Function ID \d+ was called\. The object with ID (\d+) does not have a member\b/;
+  /^Function ID -?\d+ was called\. The object with ID (\d+) does not have a member\b/;
 /** The object id BC's stale-member sentence names, read from the first line only, anchored. */
 function staleMemberObject(failureText: string | undefined): number | undefined {
   const first = failureText?.split("\n", 1)[0];
