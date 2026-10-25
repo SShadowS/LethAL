@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { outOfUseRefusal } from "../packages/runner/itest/out-of-use";
+import { DEFAULT_BC_HOST } from "../packages/runner/src/bc-host";
 
 // scripts/r658-hang-gate.sh with fake kraken, bun, git and openssl on PATH and a temp coord root.
 // Nothing here touches /coord. Linux only, like al-runner-update.test.ts.
@@ -10,8 +11,10 @@ const script = resolve(import.meta.dir, "r658-hang-gate.sh");
 const outOfUseModule = resolve(import.meta.dir, "../packages/runner/itest/out-of-use.ts");
 const test = process.platform === "win32" ? bunTest.skip : bunTest;
 const LEASE = "12345678-aaaa-bbbb-cccc-1234567890ab";
-const TARGET =
-  "[itest target] config=lethal.config.bc2.json server=192.168.2.157:7149 odata=7148 api=7148";
+// R783: on the host in use (the default: no test sets LETHAL_BC_HOST unless it says so).
+const lineOn = (host: string) =>
+  `[itest target] config=lethal.config.bc2.json server=${host}:7149 odata=7148 api=7148`;
+const TARGET = lineOn(DEFAULT_BC_HOST);
 
 function setup() {
   const root = mkdtempSync(join(tmpdir(), "r658-hang-gate-"));
@@ -113,8 +116,8 @@ for (const mode of ["bare", "line"])
   });
 
 test("R783: WANT follows LETHAL_BC_HOST, in each direction, before any lease", () => {
-  const docker1 =
-    "[itest target] config=lethal.config.bc2.json server=192.168.2.77:7149 odata=7148 api=7148";
+  const docker1 = lineOn("192.168.2.77");
+  const server1 = lineOn("192.168.2.157");
   // docker1 set, the config on docker1: the target check passes and the lease is taken.
   const a = setup();
   const ok = a.run({
@@ -127,15 +130,16 @@ test("R783: WANT follows LETHAL_BC_HOST, in each direction, before any lease", (
   expect(a.log()).toContain("kraken coord lease bc2");
   // docker1 set, the config still on server1: refused by name, no lease.
   const b = setup();
-  const bad = b.run({ LETHAL_BC_HOST: "http://192.168.2.77" });
+  const bad = b.run({ LETHAL_BC_HOST: "http://192.168.2.77", FAKE_TARGET: server1 });
   expect(bad.code).toBe(2);
   expect(bad.out).toContain("refused: target line does not name server=192.168.2.77:7149");
   expect(b.log()).not.toContain("kraken");
-  // unset, a config on docker1: refused too (the default is server1).
+  // server1 set, a config on docker1: refused the other way.
   const c = setup();
-  const def = c.run({ FAKE_TARGET: docker1 });
-  expect(def.code).toBe(2);
-  expect(def.out).toContain("refused: target line does not name server=192.168.2.157:7149");
+  const back = c.run({ LETHAL_BC_HOST: "http://192.168.2.157", FAKE_TARGET: docker1 });
+  expect(back.code).toBe(2);
+  expect(back.out).toContain("refused: target line does not name server=192.168.2.157:7149");
+  expect(c.log()).not.toContain("kraken");
 });
 
 test("R783: a malformed LETHAL_BC_HOST refuses by name, before any lease", () => {

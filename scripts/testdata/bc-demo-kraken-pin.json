@@ -24,12 +24,12 @@
         },
         "bcdev": {
           "mcpCommand": ["node", "/x/bc-dev-mcp.js"],
-          "server": "http://192.168.2.157:7349",
+          "server": "http://192.168.2.77:7349",
           "serverInstance": "BC",
           "tenant": "default",
           "port": 7349,
-          "baseUrl": "http://192.168.2.157:7348/BC",
-          "apiBaseUrl": "http://192.168.2.157:7352/BC",
+          "baseUrl": "http://192.168.2.77:7348/BC",
+          "apiBaseUrl": "http://192.168.2.77:7352/BC",
           "company": "CRONUS International Ltd.",
           "username": "BCRUNNER",
           "password": "s3cret-not-printed!",
@@ -47,7 +47,7 @@
   "dry": {
     "code": 0,
     "out": [
-      "\nbc-demo-setup (dry run):\nbc-demo (OData 7348, dev 7349, API 7352; not a gate server, no lease)\n  would probe http://192.168.2.157:7349, fill or reuse /coord/cache/bc-symbols/bc-demo/<build>-<hash8>, write <REPO>/examples/gift-card/lethal.config.demo.json, publish LethAL Control, gift-card and gift-card-tests, run doctor",
+      "\nbc-demo-setup (dry run):\nbc-demo (OData 7348, dev 7349, API 7352; not a gate server, no lease)\n  would probe http://192.168.2.77:7349, fill or reuse /coord/cache/bc-symbols/bc-demo/<build>-<hash8>, write <REPO>/examples/gift-card/lethal.config.demo.json, publish LethAL Control, gift-card and gift-card-tests, run doctor",
       "\nok"
     ],
     "calls": ["allocation"],
@@ -56,7 +56,7 @@
   "down": {
     "code": 2,
     "out": [
-      "\nbc-demo-setup:\nbc-demo (OData 7348, dev 7349, API 7352; not a gate server, no lease)\n  bc-demo does not answer on http://192.168.2.157:7349. Only the owner can start it:\n    1. On server1, check `free -g`: one more BC instance needs a few GB.\n    2. Start a fourth BC on Linux instance the way bc3 runs (BC 28.4 W1, tenant default, instance BC, company CRONUS International Ltd.), with its OData, dev and API ports on host ports 7348, 7349 and 7352, and a restart policy.\n    3. Open 7348, 7349 and 7352 in server1's firewall to the laptop.\n    4. Login: create the same user as on bc1-bc3 (/coord/secrets/bc-linux.env), or write /coord/secrets/bc-demo.env with exactly BC_DEV_USER=... and BC_DEV_PASSWORD=...\n    5. Do NOT add bc-demo to /coord/machine/allocation.json: it is outside every lease pool.\n    6. Re-run: bun scripts/bc-demo-setup.ts",
+      "\nbc-demo-setup:\nbc-demo (OData 7348, dev 7349, API 7352; not a gate server, no lease)\n  bc-demo does not answer on http://192.168.2.77:7349. Only the owner can start it:\n    1. On server1, check `free -g`: one more BC instance needs a few GB.\n    2. Start a fourth BC on Linux instance the way bc3 runs (BC 28.4 W1, tenant default, instance BC, company CRONUS International Ltd.), with its OData, dev and API ports on host ports 7348, 7349 and 7352, and a restart policy.\n    3. Open 7348, 7349 and 7352 in server1's firewall to the laptop.\n    4. Login: create the same user as on bc1-bc3 (/coord/secrets/bc-linux.env), or write /coord/secrets/bc-demo.env with exactly BC_DEV_USER=... and BC_DEV_PASSWORD=...\n    5. Do NOT add bc-demo to /coord/machine/allocation.json: it is outside every lease pool.\n    6. Re-run: bun scripts/bc-demo-setup.ts",
       "\nNOT UP: owner steps above"
     ],
     "calls": ["allocation"],

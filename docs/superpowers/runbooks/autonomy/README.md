@@ -184,7 +184,8 @@ containers assigned to this project can be leased. A missing `allocation.json` t
   `extensions/lethal-control/app.json`. Cronus28 has stalled on TestPage tests (R236,
   `docs/measurements/2026-09-27-nst-wedge-incidents.md`); an unrecoverable container goes to the
   owner.
-- **The BC on Linux servers (R589).** BC 28.4 on server1 (192.168.2.157), reachable from the kraken
+- **The BC on Linux servers (R589).** BC 28.4 on docker1 (192.168.2.77; server1, 192.168.2.157, until
+  2026-10-26, R783; the host comes from `packages/runner/src/bc-host.ts`), reachable from the kraken
   container. W1 localization, company `CRONUS International Ltd.`, tenant `default`, instance `BC`,
   Basic authentication.
 
@@ -194,7 +195,7 @@ containers assigned to this project can be leased. A missing `allocation.json` t
   | `bc2` | 7148 | 7149 | 7152 |
   | `bc3` | 7248 | 7249 | 7252 |
 
-  - **Their databases are in memory.** A container restart or a server1 reboot resets each one to
+  - **Their databases are in memory.** A container restart or a docker1 reboot resets each one to
     a fresh CRONUS, with no LethAL app on it. The fix is to re-run the setup script:
     `bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all` (add `--dry-run` to see the plan). It
     takes and releases the coord lease itself, in your lane (`--lane`, else `KRAKEN_AGENT`; it refuses
