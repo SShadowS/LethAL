@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**20 of 751 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**20 of 752 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -747,7 +747,7 @@ that ordering is the priority.
 - **R660** · ci.yml has no workflow_dispatch trigger: when GitHub drops a push event, a submit head can get no CI run, and nothing can start one by hand · [R660.md](docs/roadmap/R660.md) · done (0ea6960c)
 - **R662** · talk-cut script: tag a given commit and make a DRAFT release with lethal-control.app attached, never publishing it · [R662.md](docs/roadmap/R662.md) · done (03448305)
 - **R663** · bc-demo: a fourth BC on Linux instance on server1 for the talk, outside every lease pool, with an idempotent setup that is also the offline demo reset · [R663.md](docs/roadmap/R663.md) · done (a9bb3ffe)
-- **R664** · gift-card re-freeze script on bc-demo: three agreeing runs, a new frozen baseline at identity scheme 41, and the talk runbook's numbers · [R664.md](docs/roadmap/R664.md) · open, filed 2026-10-22
+- **R664** · gift-card re-freeze script on bc-demo: three agreeing runs, a new frozen baseline at the build's identity scheme (42 on master), and the talk runbook's numbers · [R664.md](docs/roadmap/R664.md) · open, filed 2026-10-22
 - **R667** · al-runner v3: nothing live would catch a future build that prefixes failure messages, which would skew the R553 assertion screen · [R667.md](docs/roadmap/R667.md) · done (44a198d5; review fixes in merge 0ea0a076)
 - **R668** · The batch project copies every non-AL file of the target as a resource, so a lethal.config*.json holding a login is copied into every staged batch dir · [R668.md](docs/roadmap/R668.md) · done (3424c3f0)
 - **R669** · bc-linux-setup and the BC itests should refuse a server that has an out-of-use marker (`/coord/machine/out-of-use/<server>.md`): today nothing reads it, so a held-dirty server is kept off only by the coord lease and by messages · [R669.md](docs/roadmap/R669.md) · done (9210ba70)
@@ -796,6 +796,7 @@ that ordering is the priority.
 - **R755** · Audit of every roadmap item closed 2026-10-23..25 against its evidence, before the talk commit is picked · [R755.md](docs/roadmap/R755.md) · done (cf343e2a, f6ed2dd2)
 - **R756** · Pin the edge build al-runner 3.0.0-alpha.5+edge.20261024 (dcdf9e821), then re-gate it · [R756.md](docs/roadmap/R756.md) · done (b2a2f166)
 - **R757** · `scripts/verify.test.ts`'s `isChildOf` test can time out at 30 s on the Windows CI job (four PowerShell calls) · [R757.md](docs/roadmap/R757.md) · done (f74db9b3)
+- **R758** · Five unit tests used the LIVE gift-card campaign files as their sample of an old report, so re-freezing the talk demo broke verify · [R758.md](docs/roadmap/R758.md) · done (23dcc701)
 
 ---
 
