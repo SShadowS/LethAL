@@ -48,7 +48,12 @@ interface Rig {
 
 async function rig(
   cfg: Partial<AlRunnerV3Config>,
-  opts: { src?: string; tests?: readonly TestMethodRef[]; version?: string } = {},
+  opts: {
+    src?: string;
+    tests?: readonly TestMethodRef[];
+    version?: string;
+    sha?: string;
+  } = {},
 ): Promise<Rig> {
   const root = await mkdtemp(join(tmpdir(), "r761-"));
   roots.push(root);
@@ -83,12 +88,15 @@ async function rig(
   // The pinned build, as `status()` would have recorded it (no process is started here).
   (b as unknown as { build: unknown }).build = {
     version: opts.version ?? GOOD_VERSION,
-    binarySha256: "0",
+    binarySha256: opts.sha ?? "0",
   };
   b.useDiscoveredTests(opts.tests ?? PLAIN);
   return { b, spawns, warnings };
 }
 
+// R782: edge a157b2d34, the one pin that records #5798 fixed.
+const FIXED_VERSION = "al-runner 3.0.0-alpha.5+edge.20261025 (a157b2d34)";
+const FIXED_SHA = "d9429e53a6938dbafb58108f61ce5408f65389bd9604ff94b4788ef26c8d17fb";
 const DEFAULT = { transportSource: "default" } as const;
 const FALLBACK = "al-runner-v3-serve-default-fallback";
 
@@ -131,6 +139,31 @@ describe("R761: the default transport", () => {
       expect(r.b.inRunStopIsBudget).toBe(true);
       expect(r.warnings).toHaveLength(1);
       expect(r.warnings[0]?.message).toContain("unproven-test-name-shape");
+    }
+  });
+
+  test("R782: on a #5798-fixed build a dotted method no longer falls back; an unproven shape still does", async () => {
+    const fixed = { version: FIXED_VERSION, sha: FIXED_SHA };
+    const r = await rig(DEFAULT, { tests: [...PLAIN, ref("Dot.Step")], ...fixed });
+    await r.b.decideTransport({ resume: false });
+    expect(r.b.inRunStopIsBudget).toBe(false);
+    expect(r.warnings).toEqual([]);
+    // the dot is read like an inner character only: edge dots and other unseen characters still fall back
+    for (const method of [
+      ".Step",
+      "Step.",
+      "A..B",
+      "Ø.Step",
+      "Colon:Step",
+      "A.B.C",
+      "A .B",
+      "A. B",
+      "Ab.(C)",
+    ]) {
+      const o = await rig(DEFAULT, { tests: [...PLAIN, ref(method)], ...fixed });
+      await o.b.decideTransport({ resume: false });
+      expect([method, o.b.inRunStopIsBudget]).toEqual([method, true]);
+      expect(o.warnings[0]?.message).toContain("unproven-test-name-shape");
     }
   });
 
@@ -251,6 +284,34 @@ describe("R761: explicit keys", () => {
     expect((err as Error).message).toContain('"one-shot"');
     expect(r.spawns).toEqual([]);
     expect(r.b.spawnCount).toBe(0);
+  });
+
+  test("R782: explicit serve with a dotted name is NOT refused on a build whose pin records #5798 fixed", async () => {
+    const r = await rig(
+      { transportSource: "explicit" },
+      { tests: [...PLAIN, ref("Dot.Step")], version: FIXED_VERSION, sha: FIXED_SHA },
+    );
+    await r.b.decideTransport({ resume: false });
+    expect(r.b.inRunStopIsBudget).toBe(false);
+    expect(r.b.isServeRowFields()).toBe(true);
+  });
+
+  test("R782: the same sha under another version line, and the dcdf9e821 pin, still refuse", async () => {
+    for (const [version, sha] of [
+      ["al-runner 3.0.0-alpha.5+edge.20261025 (other)", FIXED_SHA],
+      [
+        "al-runner 3.0.0-alpha.5+edge.20261024 (dcdf9e821)",
+        "0e3139359b37a7dd9c51377b64c0ae1acdcb208545f79075e4194571bbe03890",
+      ],
+    ] as const) {
+      const r = await rig(
+        { transportSource: "explicit" },
+        { tests: [ref("Dot.Step")], version, sha },
+      );
+      const err = await r.b.decideTransport({ resume: false }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(AlRunnerV3ServeDottedTestNameError);
+      expect(r.b.isServeRowFields()).toBe(false);
+    }
   });
 
   test("explicit one-shot with a dotted name is not refused", async () => {

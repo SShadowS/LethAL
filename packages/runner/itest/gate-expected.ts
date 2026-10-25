@@ -325,6 +325,9 @@ export const GATE_WARNINGS: Readonly<Record<string, readonly string[]>> = {
   "al-runner-v3/K": [],
   "al-runner-v3/S1E": [],
   "al-runner-v3/N1S": [],
+  // R782: N1E now completes on a #5798-fixed build; its set is empty (precommitment addendum 5587b588,
+  // docs/superpowers/specs/2026-10-25-r782-serve-row-fields-precommitment-addendum-1.md).
+  "al-runner-v3/N1E": [],
   "al-runner-v3/xd-d": XD_NARROWED,
   "al-runner-v3/xd-e": XD_NARROWED,
   "al-runner-v3/xd-f1": XD_NARROWED,

@@ -70,12 +70,11 @@ export interface V3BuildPin {
   };
   readonly xb: XbPin;
   /**
-   * R771: the pinned N1E reading for a build where #5798 is fixed upstream (the serve row for the
-   * dotted method carries `codeunit` and `method`) but LethAL's `serveRow` still refuses a dotted
-   * method by name, so the session fails closed. `refusedLine` must match the refused line exactly.
+   * R782: #5798 is fixed upstream on this build: a serve test row carries `codeunit` and `method`
+   * beside `name`, also for a dotted method. Only a pin with this flag lets serve-entries read the
+   * row's own fields (`serveRowFieldsFor`); every other build keeps the name-only parse.
    */
-  readonly n1e?: {
-    readonly refusedLine: RegExp;
+  readonly serveRowFields?: {
     readonly issue: string;
     readonly evidence: string;
   };
@@ -223,13 +222,10 @@ export const V3_BUILD_PINS: readonly V3BuildPin[] = [
         ),
       },
     },
-    n1e: {
-      refusedLine: pinPattern(
-        '{"codeunit":78850,"codeunitName":"Names Tests","durationMs":{n},"entry":"NONE|78850","method":"Dot.Step","name":"Codeunit78850.Dot.Step","status":"pass","type":"test"}',
-      ),
+    serveRowFields: {
       issue: `${REPO}/5798`,
       evidence:
-        "#5798 fixed upstream (the Dot.Step row carries codeunit and method); LethAL's serveRow still refuses a dotted method by name, so the session fails closed",
+        "#5798 fixed upstream: the Dot.Step serve row carries codeunit 78850 and method Dot.Step beside its name (R771 receipt, leg N1E on a157b2d34)",
     },
     o1: {
       cdoWorkDate: "2026-08-01",
@@ -258,6 +254,11 @@ export function sleepRuleRetiredFor(
 ): boolean {
   if (findV3Pin(version, binarySha256)?.legC["sleep-is-noop"]?.verdict !== "gone") return false;
   return contract?.facts.find((f) => f.fact === "sleep-is-noop")?.verdict === "gone";
+}
+
+/** R782: does this exact build's pin record #5798 as fixed (version line AND sha256)? */
+export function serveRowFieldsFor(version: string, binarySha256: string): boolean {
+  return findV3Pin(version, binarySha256)?.serveRowFields !== undefined;
 }
 
 /**

@@ -13,6 +13,11 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **Verify's console names every test that timed out in one line** (R726b): `timed out (N): <file> > <test>; ...`,
+  after the failure list. Hook timeouts count too, and each test is named under its own file. A run with no timeout
+  prints no such line. R726 also records two more Windows CI stalls since
+  its mitigation, and no proven cause.
+
 - **Leg C's `timeout-is-cpu` no longer reads `diverged` on a correct build when the machine is busy** (R789). It now
   pins both calls and the busy loops to the least busy core (two `/proc/stat` samples; core 0 if unreadable), and a
   stopped run A that took over 3000 ms reads `unmeasurable` (core contended), not `diverged`. A build that counts
