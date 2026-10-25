@@ -534,6 +534,7 @@ nothing.
 | `newTests[].state` | `stable`, `flaky`, `red`, `flaky-unknown`, `infra-error`, `not-rerun` |
 | `newTests[].runs[].outcome` | `pass`, `fail`, `skip`, `timeout`, `deadline-exceeded`, `error`, `not-run` |
 | `results[].killedBy` | `assertion`, `runtime-error`, `other` |
+| `excludedTests[].reason` | `tests-only`, `exclude-test` |
 | `reachFilter.state` | `on`, `off` |
 | `reachFilter.reason` | `no-reach-filter`, `coverage-mode-none`, `coverage-mode-procedure`, `coverage-mode-line`, `coverage-mode-al-runner` |
 
@@ -543,6 +544,14 @@ Every result names its `gapId`, whether the survivor was named directly or throu
 run whose build predates gap ids leaves it out.
 
 #### Verify result notes (guidance)
+
+`excludedTests` (R759) lists the tests the source run left out of its own suite, from the
+`--tests-only` globs and `--exclude-test` names that run recorded in its database. Verify does not
+treat them as new: it does not run them, rerun them, or count them toward `--max-new-tests`. It
+takes no `--tests-only` or `--exclude-test` itself. The field is absent when the run left nothing
+out, and for a run made before R759 (such a run recorded no narrowing, so a test it left out still
+reads as new: run `lethal run` again). It is present on a refusal too, such as `no-tests-to-run`.
+A glob the run recorded that now matches no test file stops verify with an error (exit 1).
 
 A kill by a runtime error is still a kill, and says only that no assertion caught it.
 `killedByNewTest` says whether the killing test is one your edit added. A row's `invalidBaseline`

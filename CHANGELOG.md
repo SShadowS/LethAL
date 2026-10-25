@@ -13,6 +13,11 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **`lethal verify` honours the source run's `--tests-only` and `--exclude-test`** (R759). A run now records what it
+  left out (`runs.test_narrowing`), and verify reads it: those tests are not new, so they are not planned, rerun or
+  counted toward `--max-new-tests`, and the JSON lists them in `excludedTests` (reasons `tests-only`,
+  `exclude-test`; additive to verify schema 8, no bump). Runs made before this change recorded nothing and verify as
+  before. The live proof is pre-committed and recorded after it runs.
 - **`--exclude-test <Codeunit.Method>` leaves single test methods out of a run** (R745). Repeatable, `lethal run` only,
   bcdev only (al-runner-v3 runs whole codeunits, so it refuses the flag by name). A name that matches no test is
   refused before any deploy. The report names each left-out test in `excludedTests` (reason `exclude-test`), raises
