@@ -67,6 +67,8 @@ describe("staleDependencyMember (R740)", () => {
     expect(err.message).toContain("93820");
     expect(err.message).toContain("R740 Tests(CodeUnit 93840).TestLib line 2");
     expect(err.message).toContain("--tests-only");
+    // R745: single tests can be left out by name; red when the remedy still says files only
+    expect(err.message).toContain('--exclude-test "R740 Tests.TestLib"');
     // red when the remedy blames the target (that is R738's case, not this one)
     expect(err.message).not.toContain("target build");
   });

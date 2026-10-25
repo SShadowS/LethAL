@@ -11,8 +11,21 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ## [Unreleased]
 
+### Changed
+
+- **al-runner-v3 one-shot kill confirms no longer ask v3 for coverage** (R764). The orchestrator already sends confirms
+  with coverage `none`; the backend ignored it and sent `--coverage-json` and joined the result. Now an unmutated
+  call that asked for `none` sends neither. The real baseline and every mutant call are unchanged. No verdict can
+  move: a confirm's coverage fed nothing scored.
+
 ### Added
 
+- **`--exclude-test <Codeunit.Method>` leaves single test methods out of a run** (R745). Repeatable, `lethal run` only,
+  bcdev only (al-runner-v3 runs whole codeunits, so it refuses the flag by name). A name that matches no test is
+  refused before any deploy. The report names each left-out test in `excludedTests` (reason `exclude-test`), raises
+  `tests-narrowed` and prints a `TESTS EXCLUDED` line. A mutant only those tests kill reads survived or no-coverage.
+  R740's stale-dependency refusal now names the flag as the way out. The live proof is pre-committed and recorded
+  after it runs.
 - **Many breaking mutants are now isolated inside the compile budget** (R735). When a batch fails to compile, alc's own
   error lines are mapped to the mutant whose branch holds each line, and those mutants are compiled alone first. A
   suspect is blamed only if it fails alone; a line that maps to nothing falls back to the halving search of R734. On
@@ -277,6 +290,10 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **LethAL Control 1.0.0.24 is the minimum** (R689, R733). A test codeunit whose `OnRun` raises now has BC's own error
+  text quoted in `TestCodeunitDiscoveryError`, and the installed-dependents warning names each extra app. An older
+  control app is refused by name; republish it (`bun scripts/bc-demo-setup.ts`, or the envtool config's
+  `controlSymbolPath`). Every BC gate is proven on bc1-bc3 under it.
 - **Session notices are warning events, so stderr changes** (R739). The lines a session used to print with
   `console.warn` (the lease-path refusals, a failed store correction at a lease loss, the coverage lines about
   unmatched triggers, unplaceable and refused mutants, the resource-rebase collision, and the backends' notices:

@@ -1,5 +1,5 @@
-import { appendFile, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { appendFile, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { MutantManifest } from "@lethal/schemata";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -42,7 +42,7 @@ import type { DeploymentVerifier } from "./deployment-verifier";
 import { describeThrown } from "./describe-error";
 import { DependencyUnreadableError, type MicrosoftMode } from "./digest-inputs";
 import { UnfilteredExtensionsQueryError, injectControlDependency } from "./harness";
-import type { HarnessVerifier } from "./harness";
+import type { HarnessVerifier, InstalledDependent } from "./harness";
 import type { Lease } from "./lease";
 import {
   type AlSource,
@@ -621,6 +621,15 @@ export class BcDevMcpBackend implements ExecutionBackend {
       throw new Error("this bcdev backend has no harness verifier (no BcDevDeployment)");
     }
     return verifier.fetchDependentCount(appId);
+  }
+
+  /** R733: `ExecutionBackend.installedDependents`, through the deployment's harness verifier. */
+  async installedDependents(appId: string): Promise<readonly InstalledDependent[]> {
+    const verifier = this.deployment?.harnessVerifier;
+    if (verifier === undefined) {
+      throw new Error("this bcdev backend has no harness verifier (no BcDevDeployment)");
+    }
+    return verifier.fetchInstalledDependents(appId);
   }
 
   private async connect(): Promise<Client> {

@@ -94,10 +94,12 @@ mutated, executes nothing, and reports both the raw site count and the deployed 
 
 **Know which flags can move a verdict.** `--only`, `--exclude`, `--operator`, `--lines` and
 `--changed-since` select which
-MUTANTS run and cannot change a verdict. `--tests-only` selects which TESTS run at baseline and CAN: exclude a
-killing test and its mutant is reported survived. `--only` and `--exclude` give the `narrowed`
+MUTANTS run and cannot change a verdict. `--tests-only` (whole test files) and `--exclude-test <Codeunit.Method>`
+(single test methods; repeatable; bcdev only; a name that matches no test is refused) select which TESTS run
+and CAN: leave out a killing test and its mutant is reported survived or no-coverage. `--only` and `--exclude` give the `narrowed`
 caveat, `--operator` gives `operator-narrowed`, `--lines` and `--changed-since` give `line-narrowed`,
-and `--tests-only` gives `tests-narrowed`.
+and `--tests-only` and `--exclude-test` give `tests-narrowed`. `--exclude-test` also lists each test it left out in
+`excludedTests` (reason `exclude-test`) and prints a `TESTS EXCLUDED` banner line.
 
 **Backends.** `bcdev` is authoritative. `al-runner-v3` (the Rust al-runner, configured by the
 `alRunnerV3` section, Linux only, one worker) is offline and is NOT: its coverage is CONDITIONAL. A
@@ -113,7 +115,7 @@ no-coverage. Do not quote a score from it. Its gate is `itest:alrunner-v3`
 
 **Cost.** On `bcdev` a mutant's covering tests run in ONE call to the server (one per mutant, not
 one per test), stopping at the first failure, so a survivor with forty covering tests costs one
-round trip instead of forty. This needs LethAL Control 1.0.0.22 or newer on the server; an older
+round trip instead of forty. This needs LethAL Control 1.0.0.24 or newer on the server; an older
 one is refused before any test runs. The report's `groupedCalls` says how many such calls were
 made. Three flags touch it and you should not need them: `--max-methods-per-call <n>` caps one
 call, `--request-ceiling-ms <n>` bounds one call (keep it under the hosting gateway's idle
@@ -147,6 +149,7 @@ has the complete set.
 | `--only` | `run` |
 | `--exclude` | `run` |
 | `--tests-only` | `run` |
+| `--exclude-test` | `run` |
 | `--operator` | `run` |
 | `--artifact` | `verify` |
 | `--survivors` | `verify` |

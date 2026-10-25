@@ -2215,7 +2215,12 @@ export class RunMutantTransport {
         fencedOp,
       );
     }
-    let parsed: { testResults?: unknown; error?: unknown };
+    let parsed: {
+      testResults?: unknown;
+      error?: unknown;
+      discoveryError?: unknown;
+      discoveryErrorFrame?: unknown;
+    };
     try {
       parsed = JSON.parse(result.codeunitResults) as { testResults?: unknown };
     } catch {
@@ -2249,11 +2254,24 @@ export class RunMutantTransport {
       // terminal error — so "zero lines" alone cannot tell a stale published test app from a lock
       // timeout. `runMutantLineCountMessage` appends the text verbatim when there is one and leaves
       // the message byte-identical when there is not.
+      // R689: the optional discovery error (control 1.0.0.24). Both fields or neither, both strings;
+      // anything else is a broken contract, thrown, never a quote built from half an answer.
+      const { discoveryError: text, discoveryErrorFrame: frame } = parsed;
+      if (text !== undefined || frame !== undefined) {
+        if (typeof text !== "string" || typeof frame !== "string") {
+          throw new Error(
+            `RunMutant found-0 answer carries a malformed discovery error (discoveryError ${JSON.stringify(text)}, discoveryErrorFrame ${JSON.stringify(frame)}): both must be strings`,
+          );
+        }
+      }
       return {
         ref,
         outcome: "error",
         durationMs,
         failureMessage: runMutantLineCountMessage(lines.length, parsed.error),
+        ...(typeof text === "string" && typeof frame === "string"
+          ? { discoveryError: { text, frame } }
+          : {}),
       };
     }
     const line = lines[0] as {

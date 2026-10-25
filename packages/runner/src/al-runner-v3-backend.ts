@@ -226,6 +226,16 @@ export class AlRunnerV3RowMissingError extends Error {
   }
 }
 
+/** R764: a call made without `--coverage-json` was handed to a caller that wants coverage. */
+export class AlRunnerV3NoCoverageCallReusedError extends Error {
+  constructor(readonly ref: TestMethodRef) {
+    super(
+      `al-runner-v3: a call made without coverage was reused for ${ref.codeunitName}.${ref.method}, which wants coverage; refusing rather than reading it as "covered nothing" (R764)`,
+    );
+    this.name = "AlRunnerV3NoCoverageCallReusedError";
+  }
+}
+
 /** S3: `selectorMode: "resource"` on v3 is refused by name (#5604 was a serve defect; v1 is one-shot). */
 export class AlRunnerV3ResourceSelectorRefusedError extends Error {
   constructor() {
@@ -425,7 +435,8 @@ export function v3RowVerdict(
   );
 }
 
-/** The argv of one call (T5): one `--codeunit`, `--coverage-json` always, no name selection. */
+/** The argv of one call (T5): one `--codeunit`, `--coverage-json` unless `coverageJson` is absent
+ *  (R762 A: an unmutated call that asked for no coverage), no name selection. */
 export function v3CallArgv(a: {
   readonly alRunnerPath: string;
   readonly codeunitId: number;
@@ -433,7 +444,7 @@ export function v3CallArgv(a: {
   readonly packagesDir: string;
   readonly bcVersion: string;
   readonly symbols: readonly string[];
-  readonly coverageJson: string;
+  readonly coverageJson?: string;
   readonly activeDir: string;
   readonly testDir: string;
 }): string[] {
@@ -453,8 +464,7 @@ export function v3CallArgv(a: {
     a.bcVersion,
     "--no-download",
     ...a.symbols.flatMap((s) => ["--define", s]),
-    "--coverage-json",
-    a.coverageJson,
+    ...(a.coverageJson !== undefined ? ["--coverage-json", a.coverageJson] : []),
     a.activeDir,
     a.testDir,
   ];
@@ -507,6 +517,8 @@ interface CallRows {
   readonly missing?: string;
   /** R635 §5: the coverage window already ran for this (mutant, codeunit). */
   readonly windowed?: boolean;
+  /** R762 A: sent without `--coverage-json`; a caller that wants coverage must not reuse it. */
+  readonly noCoverage?: boolean;
 }
 
 /** R635: what the serve-entries transport did, for `status()`, the close line and the gate. */
@@ -1388,14 +1400,20 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       return { ...served, ref };
     }
     let call = this.rowsByCodeunit.get(ref.codeunitId);
+    if (call?.noCoverage === true && opts.coverage !== "none") call = undefined;
     if (call === undefined) {
       // R635 §4: outside the bracket, serve-entries sends a LIVE one-group request.
       const made =
         this.entries && !this.inBaseline
           ? await this.liveCall(ref)
-          : await this.callCodeunit(ref, opts.timeoutMs);
+          : await this.callCodeunit(ref, opts.timeoutMs, opts.coverage !== "none");
       if ("verdict" in made) return made.verdict;
       call = made.call;
+    }
+    // R764: a call made without coverage must never serve a caller who wants it (its coverage
+    // would read as undefined, so mutants would read no-coverage). Fail loudly.
+    if (call.noCoverage === true && opts.coverage !== "none") {
+      throw new AlRunnerV3NoCoverageCallReusedError(ref);
     }
     if (call.refusal !== undefined) return refusalVerdict(ref, call.refusal, call.wallMs);
     if (call.missing !== undefined) return this.rowMissing(ref, call.missing, call.wallMs);
@@ -1421,7 +1439,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       !(row.message !== undefined && V3_TIMEOUT_MESSAGE.test(row.message));
     let coverage =
       (row.status === "pass" && !row.notRun) || refusedMidRun
-        ? this.isBaselineCall()
+        ? this.isBaselineCall() && call.noCoverage !== true
           ? this.coverageOf(row.name, call.coverage)
           : undefined
         : undefined;
@@ -1625,8 +1643,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private async callCodeunit(
     ref: TestMethodRef,
     timeoutMs: number,
+    wantCoverage: boolean,
   ): Promise<{ readonly call: CallRows } | { readonly verdict: TestVerdict }> {
     const id = ref.codeunitId;
+    // R762 A: an UNMUTATED call that asked for no coverage (a kill confirm) needs none: no flag and
+    // no join. A mutant call keeps it whatever it asked: the Sleep rule (§6) reads it.
+    // In serve-entries the baseline bracket (`inBaseline`) alone says what the baseline is (R635 §4).
+    const noCoverage = !wantCoverage && this.lastActivated === null && !this.inBaseline;
     // F5: the largest budget of any ref of this codeunit the loop will send for this mutant.
     let budget = timeoutMs;
     const plan = this.plan;
@@ -1647,7 +1670,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       packagesDir: resolve(this.cfg.packagesDir),
       bcVersion: this.cfg.bcVersion,
       symbols: this.cfg.preprocessorSymbols ?? [],
-      coverageJson: resolve(covPath),
+      ...(noCoverage ? {} : { coverageJson: resolve(covPath) }),
       // I-1: the same real paths the Sleep index is keyed by.
       activeDir: this.realDirs?.active ?? resolve(this.activeDir()),
       testDir: this.realDirs?.test ?? resolve(this.cfg.testDir),
@@ -1747,6 +1770,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       stopSeconds,
       wallMs,
       coverage: decodeV3Coverage(covText),
+      ...(noCoverage ? { noCoverage: true } : {}),
     };
     this.noteBaselineRows(id, decoded.rows);
     this.rowsByCodeunit.set(id, call);

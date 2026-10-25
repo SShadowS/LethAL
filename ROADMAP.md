@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**20 of 751 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**20 of 756 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -436,7 +436,7 @@ that ordering is the priority.
 - **R334** · Low priority: index `#if`-wrapped members under the every-arm rule, to recover the typed sites the R-302 fail-safe refuses · [R334.md](docs/roadmap/R334.md) · closed 2026-10-24 — fixed for the build's arm by R405 (a) (bd5ce769), not R340: 47 of the 49 pinned rows…
 - **R340** · Resolve trigger header names: a trigger's parameters, `var` locals and named return are unknown since R330 and R323, so no typed operator reaches them · [R340.md](docs/roadmap/R340.md) · done (e6c71f72)
 - **R376** · A `#if` in a single-statement slot is not lifted by R214, so its arm statements are still not sites (exclusion `slot`) · [R376.md](docs/roadmap/R376.md) · closed 2026-10-05 — 0 lost sites in every corpus; unit repro only (R-364 census)
-- **R380** · Upstream: tree-sitter-al scopes `not` over a following `and` or `or` in a `#if` condition · [R380.md](docs/roadmap/R380.md) · open, filed 2026-10-01
+- **R380** · Upstream: tree-sitter-al scopes `not` over a following `and` or `or` in a `#if` condition · [R380.md](docs/roadmap/R380.md) · open, filed upstream (https://github.com/SShadowS/tree-sitter-al/issues/37); waits on a tree-sitter-al release
 - **R357** · campaign compare --json has no published JSON Schema · [R357.md](docs/roadmap/R357.md) · done (861f4cfd)
 - **R381** · `SessionReport` records the config symbols but not the effective build symbols; `excludedSites` carries them only when a site was compiled out · [R381.md](docs/roadmap/R381.md) · done (68a72cd3)
 - **R365** · `dup-arm-typing`: a semantic operator in a member declared in more than one `#if` arm emits nothing there · [R365.md](docs/roadmap/R365.md) · closed 2026-10-05 — its own shape is fixed by R-405a liveMembers; the residue is R369, R305 and R343 shapes…
@@ -453,7 +453,7 @@ that ordering is the priority.
 - **R388** · No way to run Microsoft's own tests against the code an app customizes (the base objects it extends and the events it subscribes to) · [R388.md](docs/roadmap/R388.md) · closed 2026-10-01: out of scope (owner ruling). Selecting and running Microsoft's tests belongs to al-runner…
 - **R394** · Turn al-runner coverage on by default in `lethal run` (R387 left it off): needs R383 re-measured on 2.12.0 and a pre-commitment · [R394.md](docs/roadmap/R394.md) · done (3659db57)
 - **R405** · The symbol table, receiver checks and structural readers read #if declarations without arms, so they refuse sites the build has · [R405.md](docs/roadmap/R405.md) · closed 2026-10-05 — part (a) done (bd5ce769, scheme bump e91b94b6); part (b) no change: the latch reader…
-- **R408** · tree-sitter-al misparses a #if tail on a repeat-until condition as a separate statement; LethAL refuses the file (directive-continues-statement) until the grammar owns the tail · [R408.md](docs/roadmap/R408.md) · open, filed 2026-10-02
+- **R408** · tree-sitter-al misparses a #if tail on a repeat-until condition as a separate statement; LethAL refuses the file (directive-continues-statement) until the grammar owns the tail · [R408.md](docs/roadmap/R408.md) · open, filed upstream (https://github.com/SShadowS/tree-sitter-al/issues/38); waits on a tree-sitter-al release
 - **R420** · Test discovery silently drops a [Test] whose attributes are split by a #if line (e.g. around [HandlerFunctions]); the R79 net does not fire · [R420.md](docs/roadmap/R420.md) · done (aba9278b)
 - **R422** · A Windows-made project whose app.json names a path with `\` (e.g. `"logo": "Images\\Logo.png"`) fails the Linux `alc` with AL1001, so LethAL in a Linux container cannot compile it · [R422.md](docs/roadmap/R422.md) · done (d69655b3)
 - **R424** · A test whose procedure HEADER is split by #if/#else (one name per arm, one body) is not discovered; the TestPage-scan and digest models have no split member · [R424.md](docs/roadmap/R424.md) · done (82a730f3)
@@ -481,8 +481,9 @@ that ordering is the priority.
 - **R620** · A crashed or interrupted closed-world run is never resumable: its test-app identity stays |pending, so --resume refuses the very run it exists for · [R620.md](docs/roadmap/R620.md) · closed 2026-10-22 — a duplicate of R601 (orchestrator ruling Q2); closed with R601 (92d23854)
 - **R685** · a bare `Kind::X` id handed to an unfollowed call puts the test on verify's whole-source fallback, where folding the object would do: since R684 this takes a whole Microsoft test app (Guided Experience) to the fallback · [R685.md](docs/roadmap/R685.md) · done (65a9bc10, 6fc09568; test follow-up e2cd0992)
 - **R727** · A run publishes the target over installed dependents other than the tests app without a word; on a customer server a refused upgrade removes them (R709) · [R727.md](docs/roadmap/R727.md) · done (b2ce2cc4)
-- **R745** · After the release: exclude single test METHODS from a run (today --tests-only narrows test FILES only); R740's refusal is its first user · [R745.md](docs/roadmap/R745.md) · open, filed 2026-10-24 (after the release)
-- **R733** · Name the installed dependents before the first publish: LethAL Control 1.0.0.24 `InstalledDependents(AppId)` (after the Directions talk) · [R733.md](docs/roadmap/R733.md) · open, filed 2026-10-24 (after the Directions talk)
+- **R745** · After the release: exclude single test METHODS from a run (today --tests-only narrows test FILES only); R740's refusal is its first user · [R745.md](docs/roadmap/R745.md) · done (f43a9308)
+- **R733** · Name the installed dependents before the first publish: LethAL Control 1.0.0.24 `InstalledDependents(AppId)` (after the Directions talk) · [R733.md](docs/roadmap/R733.md) · done (29874b65)
+- **R759** · `lethal verify` does not honour `--exclude-test` or `--tests-only`: it re-discovers every test · [R759.md](docs/roadmap/R759.md) · open, filed 2026-10-25
 
 ## Backends and tooling
 
@@ -747,7 +748,7 @@ that ordering is the priority.
 - **R660** · ci.yml has no workflow_dispatch trigger: when GitHub drops a push event, a submit head can get no CI run, and nothing can start one by hand · [R660.md](docs/roadmap/R660.md) · done (0ea6960c)
 - **R662** · talk-cut script: tag a given commit and make a DRAFT release with lethal-control.app attached, never publishing it · [R662.md](docs/roadmap/R662.md) · done (03448305)
 - **R663** · bc-demo: a fourth BC on Linux instance on server1 for the talk, outside every lease pool, with an idempotent setup that is also the offline demo reset · [R663.md](docs/roadmap/R663.md) · done (a9bb3ffe)
-- **R664** · gift-card re-freeze script on bc-demo: three agreeing runs, a new frozen baseline at identity scheme 41, and the talk runbook's numbers · [R664.md](docs/roadmap/R664.md) · open, filed 2026-10-22
+- **R664** · gift-card re-freeze script on bc-demo: three agreeing runs, a new frozen baseline at the build's identity scheme (42 on master), and the talk runbook's numbers · [R664.md](docs/roadmap/R664.md) · open, filed 2026-10-22
 - **R667** · al-runner v3: nothing live would catch a future build that prefixes failure messages, which would skew the R553 assertion screen · [R667.md](docs/roadmap/R667.md) · done (44a198d5; review fixes in merge 0ea0a076)
 - **R668** · The batch project copies every non-AL file of the target as a resource, so a lethal.config*.json holding a login is copied into every staged batch dir · [R668.md](docs/roadmap/R668.md) · done (3424c3f0)
 - **R669** · bc-linux-setup and the BC itests should refuse a server that has an out-of-use marker (`/coord/machine/out-of-use/<server>.md`): today nothing reads it, so a held-dirty server is kept off only by the coord lease and by messages · [R669.md](docs/roadmap/R669.md) · done (9210ba70)
@@ -762,7 +763,7 @@ that ordering is the priority.
 - **R683** · Host step: re-record `envtool.baseline.json` at the current identity scheme on the next live envtool run (it is the last gate baseline with no scheme and no mutated-text hash) · [R683.md](docs/roadmap/R683.md) · open, filed 2026-10-23 — a HOST step for the owner (the env tool is host-only)
 - **R686** · bcdev: a test codeunit whose OnRun raises an error gets no method lines on BC, and LethAL reports it as a stale test app and stops the run · [R686.md](docs/roadmap/R686.md) · done (d74f25e3, 388ea7c9)
 - **R688** · bcdev: a mutant that makes a test codeunit's OnRun raise stops the whole session; score it per mutant instead (an unmutated confirm, then error test-discovery-failed) · [R688.md](docs/roadmap/R688.md) · done (24652eaa; earlier step 918f9222)
-- **R689** · LethAL Control could report a test codeunit's own OnRun error when suite discovery lists none of its methods (today LethAL can only name the likely cause) · [R689.md](docs/roadmap/R689.md) · open, measured 2026-10-25 (R-689 phase 1); build after the talk
+- **R689** · LethAL Control could report a test codeunit's own OnRun error when suite discovery lists none of its methods (today LethAL can only name the likely cause) · [R689.md](docs/roadmap/R689.md) · done (29874b65)
 - **R691** · hashAlFiles drops a file named like a LethAL control file at ANY folder depth, so such a user file is in no hash while v3 and alc still compile it · [R691.md](docs/roadmap/R691.md) · done (1aa37186; review d43ed20c)
 - **R693** · Leg C's timeout-is-cpu flips with core-0 conditions; every v3 leg C and the daily update gate read gate-fail · [R693.md](docs/roadmap/R693.md) · done (0e5a76d9; review b9942236)
 - **R694** · al-runner v3 marks a later failure after a refusal as not trusted but not a later timeout; LethAL now refuses such a timeout · [R694.md](docs/roadmap/R694.md) · done (aa970869)
@@ -796,6 +797,10 @@ that ordering is the priority.
 - **R755** · Audit of every roadmap item closed 2026-10-23..25 against its evidence, before the talk commit is picked · [R755.md](docs/roadmap/R755.md) · done (cf343e2a, f6ed2dd2)
 - **R756** · Pin the edge build al-runner 3.0.0-alpha.5+edge.20261024 (dcdf9e821), then re-gate it · [R756.md](docs/roadmap/R756.md) · done (b2a2f166)
 - **R757** · `scripts/verify.test.ts`'s `isChildOf` test can time out at 30 s on the Windows CI job (four PowerShell calls) · [R757.md](docs/roadmap/R757.md) · done (f74db9b3)
+- **R758** · Five unit tests used the LIVE gift-card campaign files as their sample of an old report, so re-freezing the talk demo broke verify · [R758.md](docs/roadmap/R758.md) · done (23dcc701)
+- **R760** · al-runner-v3 one-shot campaigns spend their time on per-call compile, dependency-cache reads and coverage, not on tests (D1: 667 s one-shot, 193 s serve) · [R760.md](docs/roadmap/R760.md) · open, measured 2026-10-25 (coord task R-760); changes await a ruling
+- **R763** · Prove serve-entries for test METHOD names that are not plain identifiers (spaces, - ( ) / & å æ, a leading digit), so R761's default can serve them · [R763.md](docs/roadmap/R763.md) · open, filed 2026-10-25 (from R-761; orchestrator ruling)
+- **R764** · al-runner-v3 one-shot ignored RunOpts.coverage: kill confirms still sent --coverage-json and joined coverage · [R764.md](docs/roadmap/R764.md) · done (3f37aacb)
 
 ---
 
