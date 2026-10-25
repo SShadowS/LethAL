@@ -28,13 +28,19 @@ describe("T16: refused by name for v3, and not for v2", () => {
     const c = parseCliConfig(["run", ...base]);
     expect(c.mode === "run" && c.backendKind).toBe("al-runner-v3");
   });
-  // R654 S3: the "not for v2" direction went with the .NET al-runner; the direction that must not
-  // fire is now v3 at one worker.
-  test("--workers > 1 is refused for v3, and --workers 1 is not", () => {
-    expect(() => parseCliConfig(["run", ...base, "--workers", "2"])).toThrow(
-      LINUX ? /al-runner-v3-workers-refused/ : PLATFORM_REFUSED,
+  // R766 (b): the CLI lifts the v3 refusal up to the cap of 8; the run refuses by name later, once
+  // the transport and the build are known (the orchestrator tests in r766-parallel-v3.test.ts).
+  test("--workers 2..8 parse for v3, 9 is refused by name, and --workers 1 is unchanged", () => {
+    if (!LINUX) {
+      expect(() => parseCliConfig(["run", ...base, "--workers", "2"])).toThrow(PLATFORM_REFUSED);
+      return;
+    }
+    for (const n of ["1", "2", "8"]) {
+      expect(() => parseCliConfig(["run", ...base, "--workers", n])).not.toThrow();
+    }
+    expect(() => parseCliConfig(["run", ...base, "--workers", "9"])).toThrow(
+      /al-runner-v3-workers-cap/,
     );
-    if (LINUX) expect(() => parseCliConfig(["run", ...base, "--workers", "1"])).not.toThrow();
   });
   test("--keep-env is refused for v3 (no environment)", () => {
     expect(() => parseCliConfig(["run", ...base, "--keep-env"])).toThrow(

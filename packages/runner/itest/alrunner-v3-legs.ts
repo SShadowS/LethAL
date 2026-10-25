@@ -47,8 +47,9 @@ export type N1EReading = { readonly completed: true } | { readonly threw: string
 /**
  * R722, pre-committed (r19): on alpha.5 the serve request fails closed with `the entries answer is
  * invalid: a test line without v3's row shape: {...}` for `Codeunit<n>.Dot.Step`, a line that has no
- * `codeunit` and no `method` (upstream #5798). That is the only `pass`. A finished session, or a line
- * that now has `codeunit` or `method`, is `held` (upstream may have fixed it: re-pre-commit). Any
+ * `codeunit` and no `method` (upstream #5798). That is a `pass`. A finished session, or a line that
+ * now has `codeunit` or `method`, is `held` (upstream may have fixed it: re-pre-commit), except (R771)
+ * a line the build's pin records as its `n1e.refusedLine`, which is a `pass`. Any
  * other error, or the refusal for another test, is `gate-fail`. One exception: a build in
  * `V3_NO_SERVE_ENTRIES` that refuses the `entries` field by name is `pass` (not applicable); any
  * other build refusing `entries` is `gate-fail`.
@@ -56,6 +57,7 @@ export type N1EReading = { readonly completed: true } | { readonly threw: string
 export function judgeN1Serve(
   r: N1EReading,
   version: string,
+  pin?: { readonly refusedLine: RegExp },
 ): {
   readonly outcome: "pass" | "held" | "gate-fail";
   readonly lines: string[];
@@ -82,6 +84,16 @@ export function judgeN1Serve(
     };
   }
   if (/"codeunit"|"method"/.test(line)) {
+    // R771: a build whose pin names this exact line has #5798 fixed upstream; serveRow still refuses
+    // the dotted name, so the session fails closed (safe, no row scored).
+    if (pin?.refusedLine.test(line) === true) {
+      return {
+        outcome: "pass",
+        lines: [
+          "N1E: pinned: #5798 fixed upstream (the Dot.Step row carries codeunit and method); LethAL's serveRow still refuses a dotted method by name, so the session fails closed",
+        ],
+      };
+    }
     return held(`the refused line now has codeunit or method: ${line}`);
   }
   if (!/Codeunit\d+\.Dot\.Step/.test(line)) {

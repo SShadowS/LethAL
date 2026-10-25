@@ -58,7 +58,12 @@ import {
 import { effectiveBuildSymbols, sameBuildSymbols } from "./preprocessor-symbols";
 import { type SessionOutcome, mutantRef } from "./report";
 import { identityKeyOf, memberGroupNameOf, serializeKey, testKeyOf } from "./selection";
-import { type CarryHidden, DuplicateArtifactRecordError, type ResultsStore } from "./store";
+import {
+  type CarryHidden,
+  DuplicateArtifactRecordError,
+  type ResultsStore,
+  type TestNarrowing,
+} from "./store";
 import {
   type CompiledTestApp,
   type PublishedTestApp,
@@ -309,6 +314,9 @@ export interface VerifySource {
   readonly numberingDigest: string | null;
   /** R565: the source run's dependency source digest, copied with the generation hash. */
   readonly dependencySourceSha256: string | null;
+  /** R759: what the source run left out of its own suite (`--tests-only`, `--exclude-test`).
+   *  `null` or absent: recorded before R759, so nothing is known to be left out. */
+  readonly testNarrowing?: TestNarrowing | null;
   readonly targets: ReadonlyArray<{
     readonly batchIndex: number;
     readonly mutantCode: string;
@@ -643,6 +651,7 @@ export function resolveVerifySource(store: ResultsStore, req: VerifyRequest): Ve
     twinTuples: run.twinTuples,
     numberingDigest: run.numberingDigest,
     dependencySourceSha256: run.dependencySourceSha256,
+    testNarrowing: run.testNarrowing,
     targets,
     rows: [...rows.values()].map((r) => ({
       mutantCode: r.mutantCode,
@@ -810,6 +819,64 @@ export interface CapNumbers {
   readonly editClasses: () => { readonly classes: string; readonly helpers: string };
 }
 
+/** R759: why a test is in `excludedTests`: outside the source run's `--tests-only` globs, or named
+ *  by its `--exclude-test`. */
+export const VERIFY_EXCLUSION_REASONS = ["tests-only", "exclude-test"] as const;
+export type VerifyExclusionReason = (typeof VERIFY_EXCLUSION_REASONS)[number];
+
+/** R759: one test the source run left out of its own suite. */
+export interface VerifyExcludedTest {
+  readonly test: string;
+  readonly reason: VerifyExclusionReason;
+}
+
+/**
+ * R759: the tests the source run left out, as they are in the test project NOW: `testKeyOf` to the
+ * listing. Empty when the run recorded no narrowing (`null`: before R759; or both lists empty), so
+ * today's behaviour is unchanged. A recorded `--exclude-test` key that no longer exists leaves
+ * nothing out. Throws when a recorded glob now matches no test file.
+ * ponytail: the whole suite is discovered twice (all, then inside the globs); fine for a verify.
+ */
+export async function leftOutBySource(
+  testDir: string,
+  narrowing: TestNarrowing | null | undefined,
+  runId: number,
+  buildSymbols: readonly string[],
+): Promise<ReadonlyMap<string, VerifyExcludedTest>> {
+  const out = new Map<string, VerifyExcludedTest>();
+  if (
+    narrowing === null ||
+    narrowing === undefined ||
+    (narrowing.testsOnly.length === 0 && narrowing.excludeTests.length === 0)
+  ) {
+    return out;
+  }
+  await initParser();
+  const whole = (await discoverTests(testDir, { buildSymbols })).filtered;
+  let inside = whole;
+  if (narrowing.testsOnly.length > 0) {
+    try {
+      inside = (await discoverTests(testDir, { buildSymbols, only: narrowing.testsOnly })).filtered;
+    } catch (e) {
+      if (!(e instanceof Error)) throw e;
+      throw new Error(
+        `verify: run ${runId} recorded --tests-only ${narrowing.testsOnly.map((g) => `"${g}"`).join(", ")}, which now match no test file in ${testDir} (${e.message}); run lethal run again, then verify`,
+      );
+    }
+  }
+  const insideKeys = new Set(inside.map(testKeyOf));
+  const excluded = new Set(narrowing.excludeTests);
+  for (const ref of whole) {
+    const key = testKeyOf(ref);
+    if (!insideKeys.has(key)) {
+      out.set(key, { test: qualifiedTestName(ref), reason: "tests-only" });
+    } else if (excluded.has(key)) {
+      out.set(key, { test: qualifiedTestName(ref), reason: "exclude-test" });
+    }
+  }
+  return out;
+}
+
 /**
  * Decisions 5 and 6. `manifest` is the one `loadInstalledArtifact` matched. Reads the project's
  * CURRENT marks file and the test project's `.al` files; never a server.
@@ -844,6 +911,9 @@ export async function planVerify(a: {
   /** R403: the test app's derived symbol set (`effectiveBuildSymbols(testDir, ...)`), under which
    *  discovery evaluates the test files' arms. Absent means `[]`. */
   readonly testBuildSymbols?: readonly string[];
+  /** R759: `testKeyOf` of each test the source run left out (`leftOutBySource`). None is new,
+   *  refused-new, requested or counted. A covering test is matched on the whole discovery. */
+  readonly leftOut?: ReadonlySet<string>;
   /** R-384: verify's coverage mode (`backend.capabilities().coverage`), which with
    *  `noReachFilter` decides whether the reach filter is on, and so which cap check runs here. */
   readonly coverage: CoverageMode;
@@ -1034,8 +1104,11 @@ export async function planVerify(a: {
       was !== digestsNow[testDigestKey(ref)]
     );
   };
+  // R759: the suite the source run actually had. `discovered` stays whole for the covering match
+  // and the digests: a covering test is in the measured suite by construction.
+  const suite = discovered.filter((ref) => a.leftOut?.has(testKeyOf(ref)) !== true);
   const testPageRefused = new Map(
-    discovered.flatMap((ref) => {
+    suite.flatMap((ref) => {
       const reason = refusedWhy.get(testKeyOf(ref));
       return reason === undefined
         ? []
@@ -1043,8 +1116,8 @@ export async function planVerify(a: {
     }),
   );
   const isRefused = (ref: TestMethodRef) => testPageRefused.has(testKeyOf(ref));
-  const newTests = discovered.filter((ref) => isNew(ref) && !isRefused(ref));
-  const refusedNew = discovered.filter((ref) => isNew(ref) && isRefused(ref));
+  const newTests = suite.filter((ref) => isNew(ref) && !isRefused(ref));
+  const refusedNew = suite.filter((ref) => isNew(ref) && isRefused(ref));
   // R-384 The cap (R4): EXTRA TEST RUNS against a budget, S fixed here, before any filtering.
   // Built only when a check refuses, so a passing run pays no `explainNewTests`.
   const cap: CapNumbers = {
@@ -1468,6 +1541,10 @@ export interface VerifyOutput {
   /** R-236c: every discovered test not sent because it has a reachable call that may open a
    *  TestPage. Absent when none was refused. */
   readonly testPageRefused?: { readonly tests: readonly string[]; readonly diagnosis: string };
+  /** R759: tests the source run left out of its own suite (its recorded `--tests-only` and
+   *  `--exclude-test`), so not new. Sorted by test. Absent when none, or when the source run
+   *  predates R759. Present on any output that got past the source-unchanged check. */
+  readonly excludedTests?: readonly VerifyExcludedTest[];
   readonly timings: {
     readonly totalMs: number;
     readonly compileMs?: number;
@@ -1647,8 +1724,13 @@ export async function runVerify(
   let decided: ReachState | undefined;
   // R389: the guard's closed answer the plan used, rechecked after execution.
   let firstGuard: ClosedWorldResult | undefined;
+  // R759: the tests the source run left out, set after the source-unchanged check.
+  let leftOut: ReadonlyMap<string, VerifyExcludedTest> = new Map();
   const header = () => ({
     verifySchemaVersion: VERIFY_SCHEMA_VERSION,
+    ...(leftOut.size > 0
+      ? { excludedTests: [...leftOut.values()].sort((x, y) => x.test.localeCompare(y.test)) }
+      : {}),
     ...(decided !== undefined ? { reachFilter: verifyReachFilterOf(decided) } : {}),
     ...(source !== undefined && artifactId !== undefined
       ? {
@@ -1714,12 +1796,37 @@ export async function runVerify(
       );
     }
     await assertSourceUnchanged(source, deps.preprocessorSymbols, args.testDir);
+    // R403: verify runs on bcdev only, so alc's set: the config's symbols plus the test app.json's.
+    const testBuildSymbols = await effectiveBuildSymbols(
+      args.testDir,
+      deps.preprocessorSymbols,
+      undefined,
+      { kind: "bcdev" },
+    );
+    const sourceBaseline = store.baselineTests(source.runId);
+    // A test the source run measured was never left out, even if its file is now outside the globs.
+    const measured = new Set(sourceBaseline.map((r) => `${r.codeunitId}::${r.method}`));
+    leftOut = new Map(
+      [
+        ...(await leftOutBySource(
+          args.testDir,
+          source.testNarrowing,
+          source.runId,
+          testBuildSymbols,
+        )),
+      ].filter(([k]) => !measured.has(k)),
+    );
+    if (leftOut.size > 0) {
+      (deps.log ?? ((line: string) => process.stderr.write(`${line}\n`)))(
+        `[lethal] verify: run ${source.runId} left out ${leftOut.size} test(s) (its --tests-only / --exclude-test), so they are not new and not run: ${[...leftOut.values()].map((l) => l.test).join(", ")}.`,
+      );
+    }
     const { artifact, manifest } = await loadInstalledArtifact(store, source.installed);
     const { projectPath } = source;
     const plan = await planVerify({
       source,
       manifest,
-      sourceBaseline: store.baselineTests(source.runId),
+      sourceBaseline,
       sourceTestDigests: store.testDigests(source.runId),
       sourceTestDigestParts: store.testDigestParts(source.runId),
       testDir: args.testDir,
@@ -1733,13 +1840,8 @@ export async function runVerify(
       // R-384: the filter state decides which cap check runs before the lease.
       coverage: coverageMode,
       ...(args.noReachFilter !== undefined ? { noReachFilter: args.noReachFilter } : {}),
-      // R403: verify runs on bcdev only, so alc's set: the config's symbols plus the test app.json's.
-      testBuildSymbols: await effectiveBuildSymbols(
-        args.testDir,
-        deps.preprocessorSymbols,
-        undefined,
-        { kind: "bcdev" },
-      ),
+      testBuildSymbols,
+      leftOut: new Set(leftOut.keys()),
     });
     const skippedBy = new Map(plan.skipped.map((s) => [s.entry.mutantId, s] as const));
     const marksWarning = marksSchemeWarning(
@@ -1892,6 +1994,7 @@ export async function runVerify(
         // R585: verify sends named (mutant, test) pairs, not a baseline suite, so it records no
         // test scope; it lends no history (it records no proven test app either).
         testScope: null,
+        // R759: and no narrowing (absent): a verify run is never a verify source.
       });
       res = await (deps.runNamed ?? runNamedMutants)({
         backend,
