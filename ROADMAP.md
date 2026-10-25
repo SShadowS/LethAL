@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**26 of 775 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**27 of 776 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -820,6 +820,7 @@ that ordering is the priority.
 - **R782** · With #5798 fixed upstream (edge a157b2d34), serve-entries could read a dotted test method from the row's own codeunit/method fields and lift R722's refusal · [R782.md](docs/roadmap/R782.md) · open, filed 2026-10-25 (coord task R-771)
 - **R785** · Parallel v3: start an extra lane only when the queued live work is long enough to pay for its warm-up · [R785.md](docs/roadmap/R785.md) · open, filed 2026-10-25 (from coord task R-766; R781's follow-up)
 - **R786** · PRIORITY: a default v3 run (serve-entries by default, R761) FAILS at the warm-up when a test is one R612 refuses, where the same run on one-shot completes · [R786.md](docs/roadmap/R786.md) · open, filed 2026-10-25 (from coord task R-766, R781's live runs)
+- **R787** · A fixture `.alpackages` that is a symlink into another worktree is neither ignored by git nor safe from a gate's writes · [R787.md](docs/roadmap/R787.md) · open, filed 2026-10-25 (from coord task R-783)
 
 ---
 
