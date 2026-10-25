@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**23 of 743 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**22 of 743 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -421,7 +421,7 @@ that ordering is the priority.
 - **R398** · The object-header scan is ASCII-only and line-anchored, so valid AL such as an unquoted non-ASCII object name or `namespace X; codeunit ...` on one line is refused whole (no-header) · [R398.md](docs/roadmap/R398.md) · closed 2026-10-05 — stated limit: 0 no-header refusals in 17,990 files; a widened pattern finds the same…
 - **R304** · Statements inside a block OPENED by a split `#if` if-header (`preproc_split_if_then_begin`, `preproc_split_if_begin_asymmetric`) are not in statement position, so they are not sites · [R304.md](docs/roadmap/R304.md) · closed 2026-10-06 — stated limit: 4 lost statements in all corpora…
 - **R735** · Isolating many breaking mutants costs about 540 compiles on DC; alc's own diagnostics can name the suspects first · [R735.md](docs/roadmap/R735.md) · done (4c4cfb0e)
-- **R743** · A diagnostic cascade can spend the isolation budget on innocent suspects · [R743.md](docs/roadmap/R743.md) · open
+- **R743** · A diagnostic cascade can spend the isolation budget on innocent suspects · [R743.md](docs/roadmap/R743.md) · done (5a2f4338)
 - **R305** · An object whose HEADER is split by `#if` (`preproc_split_declaration`) is refused as a whole file, so none of its sites are instrumented · [R305.md](docs/roadmap/R305.md) · closed 2026-10-05 — stated limit: 593 sites lost in 2 BaseApp files (0.026%), 0 elsewhere (R-305 census)
 - **R444** · Eight more grammar containers can hold statements and `isStatementSlot` knows none of them: `preproc_guarded_statement` (two) and six split-directive kinds · [R444.md](docs/roadmap/R444.md) · closed 2026-10-06 — stated limit: 0 statements in any of the eight containers on BaseApp, CDO, DC, DO and the…
 - **R307** · One bad file still aborts the whole run: `assertNoOverlap`, the injector's unsupported-kind throw, the latch's no-owner throw and the line map's declared-but-unmapped throw all stay whole-run throws · [R307.md](docs/roadmap/R307.md) · done (cf354d51)
