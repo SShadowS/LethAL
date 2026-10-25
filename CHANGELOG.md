@@ -13,6 +13,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **al-runner-v3 serve-entries sends the kill pairs in a few batched requests** (R778). Each kill's NONE confirm and
+  mutant reproduction used to cost one request (about 0.6 s on the CDO slice, 82% to 85% of its mutant loop). Now
+  they travel in chunks right after the prefetch, and a stored pair is used only for a kill that came from the
+  prefetch and a pair that ran after it; anything else sends today's pair. Verdicts are meant to be identical (the gate
+  decides). New counters `pairBatchRequests`, `pairBatchStored`, `pairBatchServed`, `pairBatchRefused` in the
+  serve-entries close line.
 - **A forced fresh probe no longer writes the probe cache** (R770). `--fresh-probe`, `LETHAL_V3_FRESH_PROBE=1` and the
   gates' sessions skip the write (the receipt says "forced; not cached"), so the pinned build folder stops filling with
   entries no later session can match. A normal miss still writes.

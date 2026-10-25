@@ -44,14 +44,24 @@ export const ENTRIES_CHUNK_CAP = 256;
 
 /** One mutant (or `NONE`) and the covering codeunits it needs, in one request. */
 export interface EntryGroup {
+  /** The override text: `NONE` or a mutant id. */
   readonly mutantId: string;
+  /**
+   * R778 (A1): the group's own key, when one request holds several groups with one override (a kill
+   * pair's `NONE` groups). It is the override itself, or the override, `#` and a suffix. Ids,
+   * results and re-sends go by key; the override text never changes. Default: `mutantId`.
+   */
+  readonly key?: string;
   readonly codeunits: readonly number[];
 }
 
 /** One sent entry, as the decoder's table holds it. */
 export interface SentEntry {
   readonly id: string;
+  /** The override text (`NONE` or a mutant id). */
   readonly mutantId: string;
+  /** R778: the group's key (`mutantId` unless the group set one). */
+  readonly key: string;
   /** The codeunit the entry selects; for the echo, the echo codeunit. */
   readonly codeunit: number;
   readonly echo: boolean;
@@ -87,9 +97,11 @@ export function encodeGroups(groups: readonly EntryGroup[], echoCodeunit: number
   const out: SentEntry[] = [];
   for (const g of groups) {
     const resources = { [SELECTOR_RESOURCE_NAME]: g.mutantId };
+    const key = g.key ?? g.mutantId;
     out.push({
-      id: `${g.mutantId}|echo`,
+      id: `${key}|echo`,
       mutantId: g.mutantId,
+      key,
       codeunit: echoCodeunit,
       echo: true,
       resources,
@@ -97,8 +109,9 @@ export function encodeGroups(groups: readonly EntryGroup[], echoCodeunit: number
     });
     for (const cu of g.codeunits) {
       out.push({
-        id: `${g.mutantId}|${cu}`,
+        id: `${key}|${cu}`,
         mutantId: g.mutantId,
+        key,
         codeunit: cu,
         echo: false,
         resources,
@@ -112,13 +125,14 @@ export function encodeGroups(groups: readonly EntryGroup[], echoCodeunit: number
 
 /**
  * §3: throws unless every entry has a string `test` (#5702 ignores an array), a list
- * `excludeTests` if any, a unique id (#5703), an id prefix equal to its override text, and every
- * mutant exactly one echo entry (`test` = `echoTest`), first in its one contiguous group (review
- * r1 item 2).
+ * `excludeTests` if any, a unique id (#5703), an id prefix (the group key, R778) that is its override
+ * text or that text, `#` and a suffix, one override per key, and every key exactly one echo entry
+ * (`test` = `echoTest`), first in its one contiguous group (review r1 item 2).
  */
 export function assertEntriesWellFormed(entries: readonly object[], echoTest: string): void {
   const ids = new Set<string>();
   const closed = new Set<string>();
+  const overrideOf = new Map<string, string>();
   let current: string | undefined;
   for (const x of entries) {
     const e = x as Readonly<Record<string, unknown>>;
@@ -134,11 +148,18 @@ export function assertEntriesWellFormed(entries: readonly object[], echoTest: st
     const bar = id.indexOf("|");
     const prefix = bar < 0 ? id : id.slice(0, bar);
     const override = (e.resources as Record<string, unknown> | undefined)?.[SELECTOR_RESOURCE_NAME];
-    if (override !== prefix) {
+    // R778 (A1): the id prefix is the group's KEY: the override itself, or the override, `#` and a
+    // suffix; every entry of a key has the one override.
+    if (
+      typeof override !== "string" ||
+      !(override === prefix || prefix.startsWith(`${override}#`)) ||
+      (overrideOf.get(prefix) ?? override) !== override
+    ) {
       throw new AlRunnerV3EntriesEncodeError(
-        `entry ${id}'s override text ${JSON.stringify(override)} is not its id prefix ${prefix}`,
+        `entry ${id}'s override text ${JSON.stringify(override)} does not belong to its group key ${prefix}`,
       );
     }
+    overrideOf.set(prefix, override);
     const isEcho = e.test === echoTest;
     if (prefix !== current) {
       if (current !== undefined) closed.add(current);

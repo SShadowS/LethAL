@@ -291,6 +291,8 @@ export async function lanesRig(
     targetAl?: string;
     mutants?: readonly string[];
     afterLaneCopy?: (dir: string) => Promise<void>;
+    /** R778: turn the kill-pair batch ON (default off: these tests measure today's per-kill pair). */
+    pairBatch?: boolean;
   } = {},
 ): Promise<LanesRig> {
   await initParser();
@@ -354,6 +356,8 @@ export async function lanesRig(
   const notices: string[] = [];
   b.setNotify((code, message) => notices.push(`${code}: ${message}`));
   b.seams.sleepRuleRetired = true;
+  // R778: these tests measure today's per-kill pair; the batch has its own tests.
+  (b as unknown as { pairBatch: boolean }).pairBatch = o.pairBatch === true;
   if (o.afterLaneCopy !== undefined) b.seams.afterLaneCopy = o.afterLaneCopy;
   b.useBuildSymbols([]);
   b.useDiscoveredTests(SUITE);
