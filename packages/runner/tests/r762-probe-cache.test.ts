@@ -205,8 +205,8 @@ describe("R762: each key part re-runs the probe", () => {
     const e = await env();
     const real = Bun.which;
     let present = true;
-    const w = spyOn(Bun, "which").mockImplementation((c: string, o?: never) =>
-      c === "taskset" ? (present ? "/usr/bin/taskset" : null) : real(c, o),
+    const w = spyOn(Bun, "which").mockImplementation((c: string) =>
+      c === "taskset" ? (present ? "/usr/bin/taskset" : null) : real(c),
     );
     try {
       await statusOf(e);
