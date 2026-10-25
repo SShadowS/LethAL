@@ -1,422 +1,486 @@
-[
-  {
-    "key": "0cd56f4baccb05aa031327082dff149977f2af506479054d7f9ebf148eaae72e|Gift Card Mgt|PostEntry|lethal.remove-assignment|1",
-    "verdict": "survived",
-    "killingTest": null,
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "10c5f5c2f1e5312c72e342f8edf2dcb52a4a18d7425bacc1af6aa9bdf8dc7404|Gift Card Mgt|PostEntry|lethal.remove-assignment|1",
-    "verdict": "survived",
-    "killingTest": null,
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "14a357af1c6b23cb854420e140f21f235f47687bae984d21432654a5e9721bde|Gift Card Mgt|BlockExpiredCards|lethal.flip-filter-literal|1",
-    "verdict": "no-coverage",
-    "killingTest": null,
-    "coverageFiltered": true,
-    "errorClass": null
-  },
-  {
-    "key": "14a357af1c6b23cb854420e140f21f235f47687bae984d21432654a5e9721bde|Gift Card Mgt|BlockExpiredCards|lethal.void-method-call|1",
-    "verdict": "no-coverage",
-    "killingTest": null,
-    "coverageFiltered": true,
-    "errorClass": null
-  },
-  {
-    "key": "1da41b373cdc3cddf07c393c4ed8afd7ff646640807c6d41eed2d2068ea09dc9|Gift Card Mgt|GetBalance|lethal.return-value|1",
-    "verdict": "killed",
-    "killingTest": "RedeemReducesBalance",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "1eb419c4cc1f5ca0ab95cd792c1f2c5f01eb2c70ed59518e4985c9415d365d69|Gift Card Mgt|Issue|lethal.conditional-boundary|1",
-    "verdict": "survived",
-    "killingTest": null,
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "21b9d09e6b335a9ea96efe2e73caa285daff8086160ab3e20da1f26d24269d6f|Gift Card Mgt|Issue|lethal.void-method-call|1",
-    "verdict": "survived",
-    "killingTest": null,
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "21b9d09e6b335a9ea96efe2e73caa285daff8086160ab3e20da1f26d24269d6f|Gift Card Mgt|PostEntry|lethal.void-method-call|1",
-    "verdict": "survived",
-    "killingTest": null,
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "27d4b1e7e0e133fc29d5f4322c0b6e8a9df70fd149a684de4b58c077eb76ac2d|Gift Card Mgt|PostEntry|lethal.empty-block|1",
-    "verdict": "killed",
-    "killingTest": "RedeemReducesBalance",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "2ae1e72ce458b4ca8ca0c07ba68e016980151aed9f4bab24c6ea2f48cc0657ae|Gift Card Mgt|PostEntry|lethal.remove-assignment|1",
-    "verdict": "killed",
-    "killingTest": "RedeemReducesBalance",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "31185ec9f5a5a27a1e776c7cfe1a506bab659c6621d0d45a11270bad71853d24|Gift Card Mgt|GetBalance|lethal.empty-block|1",
-    "verdict": "killed",
-    "killingTest": "RedeemReducesBalance",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "31c85a76e65c13426a668219969e39a8142b616aa307306f94a35e771add3abe|Gift Card Mgt|BlockExpiredCards|lethal.flip-boolean-literal|1",
-    "verdict": "no-coverage",
-    "killingTest": null,
-    "coverageFiltered": true,
-    "errorClass": null
-  },
-  {
-    "key": "326ca9cd3469e1153a4f205d61792250557d6cb3f1540f8114c6501db9ff3dea|Gift Card Mgt|Redeem|lethal.empty-block|1",
-    "verdict": "killed",
-    "killingTest": "RedeemBlockedCardFails",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "32982752766eef997aa5f09f9a732c094add4f7d45273fa4ddeaa6a7d9e223ec|Gift Card Mgt|Redeem|lethal.conditional-boundary|1",
-    "verdict": "survived",
-    "killingTest": null,
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "37868ab01f21ad6485deb19c758efb5b907aa749b147ecc8937b4049d4803af4|Gift Card Mgt|Issue|lethal.remove-testfield|1",
-    "verdict": "killed",
-    "killingTest": "IssueRequiresExpiryDate",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "4650354ebe38f5989ecbd1dce5eaec6ea4913495121151000954685ba2d9d116|Gift Card Mgt|BlockExpiredCards|lethal.negate-guard|1",
-    "verdict": "no-coverage",
-    "killingTest": null,
-    "coverageFiltered": true,
-    "errorClass": null
-  },
-  {
-    "key": "4b04bd489a844285260fdf0c924b7c5f8240de69e14368a414713fa8505f90aa|Gift Card Mgt|PostEntry|lethal.remove-assignment|1",
-    "verdict": "survived",
-    "killingTest": null,
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "4d3fee8b8146e7387e3ae807c8ca19657cc63bb0dbdca3ab5bf05f5e899bb483|Gift Card Mgt|Issue|lethal.empty-block|1",
-    "verdict": "killed",
-    "killingTest": "IssueRejectsNegativeAmount",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "5045ee0445aace851a91f71813455376d4a9308d22864fcb6911044401e39d64|Gift Card Mgt|BlockExpiredCards|lethal.remove-assignment|1",
-    "verdict": "no-coverage",
-    "killingTest": null,
-    "coverageFiltered": true,
-    "errorClass": null
-  },
-  {
-    "key": "586587a3782ebd0e3b9725b66bc812d0c6676a9ab2da3767b1b7e3ab918bcf35|Gift Card Mgt|Redeem|lethal.void-method-call|1",
-    "verdict": "killed",
-    "killingTest": "RedeemReducesBalance",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "58fa94914c77e2437889264f9d1e7ec008676b4ec403401264f39c7cecf851a9|Gift Card Mgt|Redeem|lethal.remove-assignment|1",
-    "verdict": "killed",
-    "killingTest": "RedeemReducesBalance",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "5a8456c0f88ea8a372330df3eda97de19959c7ede14aca3155567c307b52763c|Gift Card Mgt|BlockExpiredCards|lethal.remove-setrange|1",
-    "verdict": "no-coverage",
-    "killingTest": null,
-    "coverageFiltered": true,
-    "errorClass": null
-  },
-  {
-    "key": "637aa2af14e55ecf9861ea851a23f1ede61feeb72f8de7759d4fe738d201f242|Gift Card Mgt|BlockExpiredCards|lethal.flip-boolean-literal|1",
-    "verdict": "no-coverage",
-    "killingTest": null,
-    "coverageFiltered": true,
-    "errorClass": null
-  },
-  {
-    "key": "76db29d927954316a7b0fc30e574c27484bd443eb1050f73e3e54757ef41c569|Gift Card Mgt|Issue|lethal.remove-assignment|1",
-    "verdict": "survived",
-    "killingTest": null,
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "7b2fac453fb75225a880674663bc0fa8436edfe82495703749d444ad5e1ab496|Gift Card|OnInsert|lethal.empty-block|1",
-    "verdict": "killed",
-    "killingTest": "IssueCreatesCard",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "835565180cc5c8787adf0255e105ebb308eeb1338b48576812c5b5c9fdebb0d3|Gift Card Mgt|Issue|lethal.remove-assignment|1",
-    "verdict": "killed",
-    "killingTest": "IssueCreatesCard",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "874b2243d7853bd15f267f33138ff89c80f4cb724cfadca92ef32368b78bb712|Gift Card Mgt|Issue|lethal.swap-enum-member|1",
-    "verdict": "survived",
-    "killingTest": null,
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "874b2243d7853bd15f267f33138ff89c80f4cb724cfadca92ef32368b78bb712|Gift Card Mgt|Redeem|lethal.swap-enum-member|1",
-    "verdict": "survived",
-    "killingTest": null,
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "894d5fa69ed6d9ff26ba707e4ee48e88df7cbe094fbac157f9b5c35b456824e2|Gift Card Mgt|PostEntry|lethal.remove-assignment|1",
-    "verdict": "killed",
-    "killingTest": "RedeemReducesBalance",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "8cae6c38d1bfe9b3cc464037e4247740f6ff78013e90549717a723e545b90503|Gift Card|OnValidate|lethal.empty-block|1",
-    "verdict": "killed",
-    "killingTest": "IssueRequiresCustomer",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "9d67cbe796e0d7569d635745e8b679828e21f8cbde4fbbb7625c4e702ff51363|Gift Card Mgt|Issue|lethal.swap-call-arguments|1",
-    "verdict": "killed",
-    "killingTest": "RedeemReducesBalance",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "9d67cbe796e0d7569d635745e8b679828e21f8cbde4fbbb7625c4e702ff51363|Gift Card Mgt|Issue|lethal.void-method-call|1",
-    "verdict": "killed",
-    "killingTest": "RedeemReducesBalance",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "9eaf0ecbdaac839f6fe5312085551c1475b6d3012805cae24d5328dedbf22602|Gift Card Mgt|Redeem|lethal.conditional-boundary|1",
-    "verdict": "survived",
-    "killingTest": null,
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "a04daf56d57a253ce4f374b9074c62b50fe27cf227ac4c04715c4ad51d7335df|Gift Card Mgt|BlockExpiredCards|lethal.loop-truncate|1",
-    "verdict": "no-coverage",
-    "killingTest": null,
-    "coverageFiltered": true,
-    "errorClass": null
-  },
-  {
-    "key": "a275fe20137ef5ad5bea08f160ab863171b9e2d36325a4626715710d6c50335e|Gift Card Mgt|GetBalance|lethal.void-method-call|1",
-    "verdict": "killed",
-    "killingTest": "RedeemReducesBalance",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "aa4da0895605cf93565f634d6fb7968894fb26fc3101f0cb7f9fcdc985324314|Gift Card Mgt|GetBalance|lethal.remove-setrange|1",
-    "verdict": "survived",
-    "killingTest": null,
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "b04e487445048916babb452565103832a228650bd62f8a874cb800c89016a0a9|Gift Card Mgt|Issue|lethal.validate-to-assign|1",
-    "verdict": "killed",
-    "killingTest": "IssueRequiresCustomer",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "b04e487445048916babb452565103832a228650bd62f8a874cb800c89016a0a9|Gift Card Mgt|Issue|lethal.void-method-call|1",
-    "verdict": "killed",
-    "killingTest": "IssueRequiresCustomer",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "b30a803f6f39a7aec035c068e9c9fbd567353c298bb8062e57168a43afd03886|Gift Card Mgt|Redeem|lethal.void-method-call|1",
-    "verdict": "killed",
-    "killingTest": "RedeemReducesBalance",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "b97905ee5069b01c297e45e36f9b2aac7e015ad01e10ea24b9b37102255c2fb9|Gift Card Mgt|Issue|lethal.void-method-call|1",
-    "verdict": "killed",
-    "killingTest": "IssueRejectsNegativeAmount",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "b97905ee5069b01c297e45e36f9b2aac7e015ad01e10ea24b9b37102255c2fb9|Gift Card|OnValidate|lethal.void-method-call|1",
-    "verdict": "killed",
-    "killingTest": "IssueRequiresCustomer",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "bdec37d4052c878ce5601cc795e22f6f12cf9a46e2b35be15c82192ffed4758e|Gift Card|OnInsert|lethal.remove-assignment|1",
-    "verdict": "killed",
-    "killingTest": "IssueCreatesCard",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "c88702df06dca2c0edbdf144edf99c2682ad63278023dbd7e46f42c9875e0364|Gift Card|OnValidate|lethal.toggle-blank-string|1",
-    "verdict": "killed",
-    "killingTest": "IssueRequiresCustomer",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "cd233fd463e30202221e72233e674d398fcb7dd9fd9c5cb0345f61d84401a819|Gift Card Mgt|Issue|lethal.remove-assignment|1",
-    "verdict": "killed",
-    "killingTest": "IssueCreatesCard",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "d578e237b9dfa492542098da67aa512b2faff73b13279086a9436f9b0f79e0e6|Gift Card Mgt|BlockExpiredCards|lethal.swap-modify-flag|1",
-    "verdict": "no-coverage",
-    "killingTest": null,
-    "coverageFiltered": true,
-    "errorClass": null
-  },
-  {
-    "key": "d578e237b9dfa492542098da67aa512b2faff73b13279086a9436f9b0f79e0e6|Gift Card Mgt|BlockExpiredCards|lethal.void-method-call|1",
-    "verdict": "no-coverage",
-    "killingTest": null,
-    "coverageFiltered": true,
-    "errorClass": null
-  },
-  {
-    "key": "d578e237b9dfa492542098da67aa512b2faff73b13279086a9436f9b0f79e0e6|Gift Card Mgt|Redeem|lethal.swap-modify-flag|1",
-    "verdict": "survived",
-    "killingTest": null,
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "d578e237b9dfa492542098da67aa512b2faff73b13279086a9436f9b0f79e0e6|Gift Card Mgt|Redeem|lethal.void-method-call|1",
-    "verdict": "killed",
-    "killingTest": "RedeemReducesBalance",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "d756d8caf231db9901369e33ee609ae2614f4094f7a804227b1dea6f1d9cb676|Gift Card Mgt|Redeem|lethal.negate-guard|1",
-    "verdict": "killed",
-    "killingTest": "RedeemBlockedCardFails",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "d888e09ae498f95ebb97b2d2fd735e438b169dc25f97a37e76a2c673cc2b8275|Gift Card Mgt|Redeem|lethal.void-method-call|1",
-    "verdict": "killed",
-    "killingTest": "RedeemBlockedCardFails",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "d888e09ae498f95ebb97b2d2fd735e438b169dc25f97a37e76a2c673cc2b8275|Gift Card Mgt|Redeem|lethal.void-method-call|1|1",
-    "verdict": "killed",
-    "killingTest": "RedeemExpiredCardFails",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "d888e09ae498f95ebb97b2d2fd735e438b169dc25f97a37e76a2c673cc2b8275|Gift Card Mgt|Redeem|lethal.void-method-call|1|2",
-    "verdict": "killed",
-    "killingTest": "RedeemMoreThanBalanceFails",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "da0999f3c086dc0fdeb93fd6e76baf091ac96c7023a7d65de5fe03a7c800275b|Gift Card Mgt|Issue|lethal.remove-assignment|1",
-    "verdict": "killed",
-    "killingTest": "IssueCreatesCard",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "e75f9a0967677be80d3659fdc47e601d3764ac75077fb4d25c54b5f1322b2a8a|Gift Card Mgt|Issue|lethal.swap-modify-flag|1",
-    "verdict": "killed",
-    "killingTest": "IssueCreatesCard",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "e75f9a0967677be80d3659fdc47e601d3764ac75077fb4d25c54b5f1322b2a8a|Gift Card Mgt|Issue|lethal.void-method-call|1",
-    "verdict": "killed",
-    "killingTest": "IssueCreatesCard",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "e75f9a0967677be80d3659fdc47e601d3764ac75077fb4d25c54b5f1322b2a8a|Gift Card Mgt|PostEntry|lethal.swap-modify-flag|1",
-    "verdict": "survived",
-    "killingTest": null,
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "e75f9a0967677be80d3659fdc47e601d3764ac75077fb4d25c54b5f1322b2a8a|Gift Card Mgt|PostEntry|lethal.void-method-call|1",
-    "verdict": "killed",
-    "killingTest": "RedeemReducesBalance",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "ebf6b0d98b6959b4f6dda571cd8616ecaa384910613f0414bfb759c4b2ca682e|Gift Card|OnValidate|lethal.negate-conditional|1",
-    "verdict": "killed",
-    "killingTest": "IssueRequiresCustomer",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "f03c06e74967f033e67a1fd0b94754b66f7c256b8da38b520e6d51e8dd57826a|Gift Card Mgt|BlockExpiredCards|lethal.empty-block|1",
-    "verdict": "no-coverage",
-    "killingTest": null,
-    "coverageFiltered": true,
-    "errorClass": null
-  },
-  {
-    "key": "fc5d70dd67ebb5677fc5dd842b1f204a8cdc673745e8c3fa6e014ffbcd345980|Gift Card|OnInsert|lethal.remove-testfield|1",
-    "verdict": "survived",
-    "killingTest": null,
-    "coverageFiltered": false,
-    "errorClass": null
-  }
-]
+{
+  "coverageMode": "fenced",
+  "identityScheme": 42,
+  "entries": [
+    {
+      "key": "0cd56f4baccb05aa031327082dff149977f2af506479054d7f9ebf148eaae72e|Gift Card Mgt|PostEntry|lethal.remove-assignment|1",
+      "verdict": "survived",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "10c5f5c2f1e5312c72e342f8edf2dcb52a4a18d7425bacc1af6aa9bdf8dc7404|Gift Card Mgt|PostEntry|lethal.remove-assignment|1",
+      "verdict": "survived",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "14a357af1c6b23cb854420e140f21f235f47687bae984d21432654a5e9721bde|Gift Card Mgt|BlockExpiredCards|lethal.flip-filter-literal|1",
+      "verdict": "no-coverage",
+      "killingTest": null,
+      "coverageFiltered": true,
+      "errorClass": null,
+      "mutatedTextSha256": "00a7b261ed3310efe6477015c061420fb8e58f2c1a540960cc4ec0ad56b60b60"
+    },
+    {
+      "key": "14a357af1c6b23cb854420e140f21f235f47687bae984d21432654a5e9721bde|Gift Card Mgt|BlockExpiredCards|lethal.void-method-call|1",
+      "verdict": "no-coverage",
+      "killingTest": null,
+      "coverageFiltered": true,
+      "errorClass": null,
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "1da41b373cdc3cddf07c393c4ed8afd7ff646640807c6d41eed2d2068ea09dc9|Gift Card Mgt|GetBalance|lethal.return-value|1",
+      "verdict": "killed",
+      "killingTest": "RedeemReducesBalance",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "03c41bb4749c464d7556b8ddb24f5e8f773e6968cfa173f563be77011bf9ba00"
+    },
+    {
+      "key": "1eb419c4cc1f5ca0ab95cd792c1f2c5f01eb2c70ed59518e4985c9415d365d69|Gift Card Mgt|Issue|lethal.conditional-boundary|1",
+      "verdict": "survived",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "9dc6e8f5217813be856e908d9f18162f2469597c5610d287d30a25e68323f0f7"
+    },
+    {
+      "key": "21b9d09e6b335a9ea96efe2e73caa285daff8086160ab3e20da1f26d24269d6f|Gift Card Mgt|Issue|lethal.void-method-call|1",
+      "verdict": "survived",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "21b9d09e6b335a9ea96efe2e73caa285daff8086160ab3e20da1f26d24269d6f|Gift Card Mgt|PostEntry|lethal.void-method-call|1",
+      "verdict": "survived",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "27d4b1e7e0e133fc29d5f4322c0b6e8a9df70fd149a684de4b58c077eb76ac2d|Gift Card Mgt|PostEntry|lethal.empty-block|1",
+      "verdict": "killed",
+      "killingTest": "RedeemReducesBalance",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "2ae1e72ce458b4ca8ca0c07ba68e016980151aed9f4bab24c6ea2f48cc0657ae|Gift Card Mgt|PostEntry|lethal.remove-assignment|1",
+      "verdict": "killed",
+      "killingTest": "RedeemReducesBalance",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "31185ec9f5a5a27a1e776c7cfe1a506bab659c6621d0d45a11270bad71853d24|Gift Card Mgt|GetBalance|lethal.empty-block|1",
+      "verdict": "killed",
+      "killingTest": "RedeemReducesBalance",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "31c85a76e65c13426a668219969e39a8142b616aa307306f94a35e771add3abe|Gift Card Mgt|BlockExpiredCards|lethal.flip-boolean-literal|1",
+      "verdict": "no-coverage",
+      "killingTest": null,
+      "coverageFiltered": true,
+      "errorClass": null,
+      "mutatedTextSha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    },
+    {
+      "key": "326ca9cd3469e1153a4f205d61792250557d6cb3f1540f8114c6501db9ff3dea|Gift Card Mgt|Redeem|lethal.empty-block|1",
+      "verdict": "killed",
+      "killingTest": "RedeemBlockedCardFails",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "32982752766eef997aa5f09f9a732c094add4f7d45273fa4ddeaa6a7d9e223ec|Gift Card Mgt|Redeem|lethal.conditional-boundary|1",
+      "verdict": "survived",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "6d8512d48126b55ee2cff4de0c5563c78df13acc93cbc5ca39fabdc79afbc918"
+    },
+    {
+      "key": "37868ab01f21ad6485deb19c758efb5b907aa749b147ecc8937b4049d4803af4|Gift Card Mgt|Issue|lethal.remove-testfield|1",
+      "verdict": "killed",
+      "killingTest": "IssueRequiresExpiryDate",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "4650354ebe38f5989ecbd1dce5eaec6ea4913495121151000954685ba2d9d116|Gift Card Mgt|BlockExpiredCards|lethal.negate-guard|1",
+      "verdict": "no-coverage",
+      "killingTest": null,
+      "coverageFiltered": true,
+      "errorClass": null,
+      "mutatedTextSha256": "4dc24a11393b175a2b9a8205c0fafe057f29af8509e3d3e3566a023ace503270"
+    },
+    {
+      "key": "4b04bd489a844285260fdf0c924b7c5f8240de69e14368a414713fa8505f90aa|Gift Card Mgt|PostEntry|lethal.remove-assignment|1",
+      "verdict": "survived",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "4d3fee8b8146e7387e3ae807c8ca19657cc63bb0dbdca3ab5bf05f5e899bb483|Gift Card Mgt|Issue|lethal.empty-block|1",
+      "verdict": "killed",
+      "killingTest": "IssueRejectsNegativeAmount",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "5045ee0445aace851a91f71813455376d4a9308d22864fcb6911044401e39d64|Gift Card Mgt|BlockExpiredCards|lethal.remove-assignment|1",
+      "verdict": "no-coverage",
+      "killingTest": null,
+      "coverageFiltered": true,
+      "errorClass": null,
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "586587a3782ebd0e3b9725b66bc812d0c6676a9ab2da3767b1b7e3ab918bcf35|Gift Card Mgt|Redeem|lethal.void-method-call|1",
+      "verdict": "killed",
+      "killingTest": "RedeemReducesBalance",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "58fa94914c77e2437889264f9d1e7ec008676b4ec403401264f39c7cecf851a9|Gift Card Mgt|Redeem|lethal.remove-assignment|1",
+      "verdict": "killed",
+      "killingTest": "RedeemReducesBalance",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "5a8456c0f88ea8a372330df3eda97de19959c7ede14aca3155567c307b52763c|Gift Card Mgt|BlockExpiredCards|lethal.remove-setrange|1",
+      "verdict": "no-coverage",
+      "killingTest": null,
+      "coverageFiltered": true,
+      "errorClass": null,
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "637aa2af14e55ecf9861ea851a23f1ede61feeb72f8de7759d4fe738d201f242|Gift Card Mgt|BlockExpiredCards|lethal.flip-boolean-literal|1",
+      "verdict": "no-coverage",
+      "killingTest": null,
+      "coverageFiltered": true,
+      "errorClass": null,
+      "mutatedTextSha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+    },
+    {
+      "key": "76db29d927954316a7b0fc30e574c27484bd443eb1050f73e3e54757ef41c569|Gift Card Mgt|Issue|lethal.remove-assignment|1",
+      "verdict": "survived",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "7b2fac453fb75225a880674663bc0fa8436edfe82495703749d444ad5e1ab496|Gift Card|OnInsert|lethal.empty-block|1",
+      "verdict": "killed",
+      "killingTest": "IssueCreatesCard",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "835565180cc5c8787adf0255e105ebb308eeb1338b48576812c5b5c9fdebb0d3|Gift Card Mgt|Issue|lethal.remove-assignment|1",
+      "verdict": "killed",
+      "killingTest": "IssueCreatesCard",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "874b2243d7853bd15f267f33138ff89c80f4cb724cfadca92ef32368b78bb712|Gift Card Mgt|Issue|lethal.swap-enum-member|1",
+      "verdict": "survived",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "62d7e51ba0573bd9f5beeff4969e5b0761499b37678f66e515c5a5c1850d95b6"
+    },
+    {
+      "key": "874b2243d7853bd15f267f33138ff89c80f4cb724cfadca92ef32368b78bb712|Gift Card Mgt|Redeem|lethal.swap-enum-member|1",
+      "verdict": "survived",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "5dd14732f495af952bef526b066b18b1025b13cf5bd62cb3a66d6795ab5ff60f"
+    },
+    {
+      "key": "894d5fa69ed6d9ff26ba707e4ee48e88df7cbe094fbac157f9b5c35b456824e2|Gift Card Mgt|PostEntry|lethal.remove-assignment|1",
+      "verdict": "killed",
+      "killingTest": "RedeemReducesBalance",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "8cae6c38d1bfe9b3cc464037e4247740f6ff78013e90549717a723e545b90503|Gift Card|OnValidate|lethal.empty-block|1",
+      "verdict": "killed",
+      "killingTest": "IssueRequiresCustomer",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "9d67cbe796e0d7569d635745e8b679828e21f8cbde4fbbb7625c4e702ff51363|Gift Card Mgt|Issue|lethal.swap-call-arguments|1",
+      "verdict": "killed",
+      "killingTest": "RedeemReducesBalance",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "eb524879a9369c2acea3da025ab49a338bf7590756081a22724a08638fba23bf"
+    },
+    {
+      "key": "9d67cbe796e0d7569d635745e8b679828e21f8cbde4fbbb7625c4e702ff51363|Gift Card Mgt|Issue|lethal.void-method-call|1",
+      "verdict": "killed",
+      "killingTest": "RedeemReducesBalance",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "9eaf0ecbdaac839f6fe5312085551c1475b6d3012805cae24d5328dedbf22602|Gift Card Mgt|Redeem|lethal.conditional-boundary|1",
+      "verdict": "survived",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "6670970dd3a27004fc5743682bba9edc25aa0c4b7e099beb93d0be24a109e438"
+    },
+    {
+      "key": "a04daf56d57a253ce4f374b9074c62b50fe27cf227ac4c04715c4ad51d7335df|Gift Card Mgt|BlockExpiredCards|lethal.loop-truncate|1",
+      "verdict": "no-coverage",
+      "killingTest": null,
+      "coverageFiltered": true,
+      "errorClass": null,
+      "mutatedTextSha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    },
+    {
+      "key": "a275fe20137ef5ad5bea08f160ab863171b9e2d36325a4626715710d6c50335e|Gift Card Mgt|GetBalance|lethal.void-method-call|1",
+      "verdict": "killed",
+      "killingTest": "RedeemReducesBalance",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "aa4da0895605cf93565f634d6fb7968894fb26fc3101f0cb7f9fcdc985324314|Gift Card Mgt|GetBalance|lethal.remove-setrange|1",
+      "verdict": "survived",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "b04e487445048916babb452565103832a228650bd62f8a874cb800c89016a0a9|Gift Card Mgt|Issue|lethal.validate-to-assign|1",
+      "verdict": "killed",
+      "killingTest": "IssueRequiresCustomer",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "6fac9d003b3e65bf67839bb2888630fc0ed066321ae081372534a3e8eccf3e0f"
+    },
+    {
+      "key": "b04e487445048916babb452565103832a228650bd62f8a874cb800c89016a0a9|Gift Card Mgt|Issue|lethal.void-method-call|1",
+      "verdict": "killed",
+      "killingTest": "IssueRequiresCustomer",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "b30a803f6f39a7aec035c068e9c9fbd567353c298bb8062e57168a43afd03886|Gift Card Mgt|Redeem|lethal.void-method-call|1",
+      "verdict": "killed",
+      "killingTest": "RedeemReducesBalance",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "b97905ee5069b01c297e45e36f9b2aac7e015ad01e10ea24b9b37102255c2fb9|Gift Card Mgt|Issue|lethal.void-method-call|1",
+      "verdict": "killed",
+      "killingTest": "IssueRejectsNegativeAmount",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "b97905ee5069b01c297e45e36f9b2aac7e015ad01e10ea24b9b37102255c2fb9|Gift Card|OnValidate|lethal.void-method-call|1",
+      "verdict": "killed",
+      "killingTest": "IssueRequiresCustomer",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "bdec37d4052c878ce5601cc795e22f6f12cf9a46e2b35be15c82192ffed4758e|Gift Card|OnInsert|lethal.remove-assignment|1",
+      "verdict": "killed",
+      "killingTest": "IssueCreatesCard",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "c88702df06dca2c0edbdf144edf99c2682ad63278023dbd7e46f42c9875e0364|Gift Card|OnValidate|lethal.toggle-blank-string|1",
+      "verdict": "killed",
+      "killingTest": "IssueRequiresCustomer",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "4755bd1b01771ffabd88f76b2c68a47c68ae3f94aab0eb85a5ffd1f47780e249"
+    },
+    {
+      "key": "cd233fd463e30202221e72233e674d398fcb7dd9fd9c5cb0345f61d84401a819|Gift Card Mgt|Issue|lethal.remove-assignment|1",
+      "verdict": "killed",
+      "killingTest": "IssueCreatesCard",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "d578e237b9dfa492542098da67aa512b2faff73b13279086a9436f9b0f79e0e6|Gift Card Mgt|BlockExpiredCards|lethal.swap-modify-flag|1",
+      "verdict": "no-coverage",
+      "killingTest": null,
+      "coverageFiltered": true,
+      "errorClass": null,
+      "mutatedTextSha256": "e207a2a564c17a09bce5d88560c5fbd8234f2f3140e5795b90672ffbf20ef5e8"
+    },
+    {
+      "key": "d578e237b9dfa492542098da67aa512b2faff73b13279086a9436f9b0f79e0e6|Gift Card Mgt|BlockExpiredCards|lethal.void-method-call|1",
+      "verdict": "no-coverage",
+      "killingTest": null,
+      "coverageFiltered": true,
+      "errorClass": null,
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "d578e237b9dfa492542098da67aa512b2faff73b13279086a9436f9b0f79e0e6|Gift Card Mgt|Redeem|lethal.swap-modify-flag|1",
+      "verdict": "survived",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "e207a2a564c17a09bce5d88560c5fbd8234f2f3140e5795b90672ffbf20ef5e8"
+    },
+    {
+      "key": "d578e237b9dfa492542098da67aa512b2faff73b13279086a9436f9b0f79e0e6|Gift Card Mgt|Redeem|lethal.void-method-call|1",
+      "verdict": "killed",
+      "killingTest": "RedeemReducesBalance",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "d756d8caf231db9901369e33ee609ae2614f4094f7a804227b1dea6f1d9cb676|Gift Card Mgt|Redeem|lethal.negate-guard|1",
+      "verdict": "killed",
+      "killingTest": "RedeemBlockedCardFails",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "07ed29a600ee2ebc80119b2a28eced36372c55b6616c5ccdf730d03c4140ee38"
+    },
+    {
+      "key": "d888e09ae498f95ebb97b2d2fd735e438b169dc25f97a37e76a2c673cc2b8275|Gift Card Mgt|Redeem|lethal.void-method-call|1",
+      "verdict": "killed",
+      "killingTest": "RedeemBlockedCardFails",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "d888e09ae498f95ebb97b2d2fd735e438b169dc25f97a37e76a2c673cc2b8275|Gift Card Mgt|Redeem|lethal.void-method-call|1|1",
+      "verdict": "killed",
+      "killingTest": "RedeemExpiredCardFails",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "d888e09ae498f95ebb97b2d2fd735e438b169dc25f97a37e76a2c673cc2b8275|Gift Card Mgt|Redeem|lethal.void-method-call|1|2",
+      "verdict": "killed",
+      "killingTest": "RedeemMoreThanBalanceFails",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "da0999f3c086dc0fdeb93fd6e76baf091ac96c7023a7d65de5fe03a7c800275b|Gift Card Mgt|Issue|lethal.remove-assignment|1",
+      "verdict": "killed",
+      "killingTest": "IssueCreatesCard",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "e75f9a0967677be80d3659fdc47e601d3764ac75077fb4d25c54b5f1322b2a8a|Gift Card Mgt|Issue|lethal.swap-modify-flag|1",
+      "verdict": "killed",
+      "killingTest": "IssueCreatesCard",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "0dcf5bb7fee905b2f9697443dc2808918170e9af81692787d92741563423be9f"
+    },
+    {
+      "key": "e75f9a0967677be80d3659fdc47e601d3764ac75077fb4d25c54b5f1322b2a8a|Gift Card Mgt|Issue|lethal.void-method-call|1",
+      "verdict": "killed",
+      "killingTest": "IssueCreatesCard",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "e75f9a0967677be80d3659fdc47e601d3764ac75077fb4d25c54b5f1322b2a8a|Gift Card Mgt|PostEntry|lethal.swap-modify-flag|1",
+      "verdict": "survived",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "721af7e07e1ee190433e5dc5d10aa4ae991fc3d5cb15d88d71c9f2820c6f9587"
+    },
+    {
+      "key": "e75f9a0967677be80d3659fdc47e601d3764ac75077fb4d25c54b5f1322b2a8a|Gift Card Mgt|PostEntry|lethal.void-method-call|1",
+      "verdict": "killed",
+      "killingTest": "RedeemReducesBalance",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "ebf6b0d98b6959b4f6dda571cd8616ecaa384910613f0414bfb759c4b2ca682e|Gift Card|OnValidate|lethal.negate-conditional|1",
+      "verdict": "killed",
+      "killingTest": "IssueRequiresCustomer",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "e5bbdb1bb346e229690ff4a86eebb3c9909d9b93c70655b41bd949c01000363e"
+    },
+    {
+      "key": "f03c06e74967f033e67a1fd0b94754b66f7c256b8da38b520e6d51e8dd57826a|Gift Card Mgt|BlockExpiredCards|lethal.empty-block|1",
+      "verdict": "no-coverage",
+      "killingTest": null,
+      "coverageFiltered": true,
+      "errorClass": null,
+      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "fc5d70dd67ebb5677fc5dd842b1f204a8cdc673745e8c3fa6e014ffbcd345980|Gift Card|OnInsert|lethal.remove-testfield|1",
+      "verdict": "survived",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ]
+}
