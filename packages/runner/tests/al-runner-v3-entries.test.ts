@@ -4,9 +4,9 @@
 // orchestrator's seams (tests 14, 15) are in orchestrator.test.ts. Call counters, no wall clock.
 import { afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { appendFileSync, existsSync } from "node:fs";
-import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { initParser } from "@lethal/engine";
 import { emitResourceSelector, emitStaticSelector } from "@lethal/schemata";
 import {
@@ -4220,8 +4220,19 @@ describe("R790: the speculative baseline", () => {
   }
   const speculative = (b: AlRunnerV3Backend) =>
     (b as unknown as { speculative: unknown }).speculative;
+  // Both separator forms: on Windows the message holds forward slashes, the root backslashes.
+  const fwd = (s: string) => s.replaceAll("\\", "/");
   const shape = (e: unknown, root: string) =>
-    e instanceof Error ? [e.constructor.name, e.message.split(root).join("<root>")] : [String(e)];
+    e instanceof Error
+      ? [e.constructor.name, fwd(e.message).split(fwd(root)).join("<root>")]
+      : [String(e)];
+  /** A write alc made, with an mtime clearly after the staging (coarse clocks would hide it). */
+  const alcWrite = async (path: string, text: string) => {
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, text);
+    const later = new Date(Date.now() + 60_000);
+    await utimes(path, later, later);
+  };
 
   test("alc passes: the baseline is served from the calls deploy() made, equal to the sequential baseline", async () => {
     const spec = await deployWith(undefined, true);
@@ -4355,6 +4366,17 @@ describe("R790: the speculative baseline", () => {
     expect(r.one.calls).toHaveLength(2);
   });
 
+  // Review r2 #1: a served duration must not be able to move a mutant budget (max(2 x d, floor)).
+  test("a call whose duration the floor would not cover is not kept: that baseline call runs live", async () => {
+    // A 0 ms floor: twice any wall time (the fake's can be 0 ms) reaches it, so the duration would
+    // decide the budget.
+    const r = await deployWith(undefined, true, { floor: [0, 1000] });
+    expect(r.one.calls).toHaveLength(1);
+    expect(speculative(r.b)).not.toBeUndefined(); // bound, but the call itself was not kept
+    await baseline(r.b, SUITE1);
+    expect(r.one.calls).toHaveLength(2);
+  });
+
   test("a baseline call at another stop than the speculative one: not served", async () => {
     // The floor's baseline timeout (5 s) is not the baseline's run budget (OPTS: 1 s).
     const r = await deployWith(undefined, true, { floor: [1000, 5000] });
@@ -4368,8 +4390,7 @@ describe("R790: the speculative baseline", () => {
     const r = await deployWith(
       writingAlc(async (project, isBatch) => {
         if (!isBatch) return;
-        await mkdir(join(project, "Translations"), { recursive: true });
-        await writeFile(join(project, "Translations", "T.g.xlf"), "<xliff/>");
+        await alcWrite(join(project, "Translations", "T.g.xlf"), "<xliff/>");
       }),
       true,
     );
@@ -4387,8 +4408,7 @@ describe("R790: the speculative baseline", () => {
       writingAlc(async (project, isBatch) => {
         const c = content();
         if (!isBatch || c === undefined) return;
-        await mkdir(join(project, "Translations"), { recursive: true });
-        await writeFile(join(project, "Translations", "T.g.xlf"), c);
+        await alcWrite(join(project, "Translations", "T.g.xlf"), c);
       });
     const activeOf = (b: AlRunnerV3Backend) =>
       (b as unknown as { lane: { activeDir(): string } }).lane.activeDir();

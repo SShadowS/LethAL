@@ -849,8 +849,15 @@ async function readAlcWrites(dir: string, key: string): Promise<Map<string, Buff
     if (j.v !== 1 || !Array.isArray(j.files)) return out;
     for (const f of j.files) {
       if (typeof f.rel !== "string" || typeof f.b64 !== "string") return new Map();
-      // Only a plain relative path inside the batch.
-      if (f.rel.startsWith("/") || f.rel.split(/[\\/]/).includes("..")) return new Map();
+      // Only a plain relative path inside the batch, never source (review r2 #3): no root, drive,
+      // stream (":") or "..", and no .al file.
+      if (
+        /^[\\/]/.test(f.rel) ||
+        f.rel.includes(":") ||
+        f.rel.split(/[\\/]/).includes("..") ||
+        f.rel.toLowerCase().endsWith(".al")
+      )
+        return new Map();
       out.set(f.rel, Buffer.from(f.b64, "base64"));
     }
   } catch {
@@ -1934,16 +1941,39 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   ): Promise<{ readonly placed: Set<string>; readonly key: string | undefined }> {
     const placed = new Set<string>();
     if (this.cfg.cacheDir === undefined) return { placed, key: undefined };
-    const key = sha256Of(
-      `${await hashAlTree(active)}\u0000${await fileSha256(join(active, "app.json"))}`,
-    );
+    // The project's app.json without the version LethAL stamps per build (the .al hash and the
+    // version differ every run; alc's .xlf, measured on D1, does not). A weak key only costs a hit:
+    // alc's real output decides.
+    let key: string;
+    try {
+      const app = JSON.parse(await readFile(join(active, "app.json"), "utf8")) as Record<
+        string,
+        unknown
+      >;
+      const { version: _stamped, ...rest } = app;
+      key = sha256Of(
+        JSON.stringify(
+          Object.keys(rest)
+            .sort()
+            .map((k) => [k, rest[k]]),
+        ),
+      );
+    } catch {
+      return { placed, key: undefined };
+    }
     const files = await readAlcWrites(join(resolve(this.cfg.cacheDir), "alc-writes"), key);
-    for (const [rel, bytes] of files) {
-      const to = join(active, rel);
-      if ((await stat(to).catch(() => undefined)) !== undefined) continue;
-      await mkdir(dirname(to), { recursive: true });
-      await writeFile(to, new Uint8Array(bytes));
-      placed.add(rel);
+    try {
+      for (const [rel, bytes] of files) {
+        const to = join(active, rel);
+        if ((await stat(to).catch(() => undefined)) !== undefined) continue;
+        await mkdir(dirname(to), { recursive: true });
+        await writeFile(to, new Uint8Array(bytes));
+        placed.add(rel);
+      }
+    } catch {
+      // A hint only (review r2 #3): a placement that fails is undone and is a miss.
+      for (const rel of placed) await rm(join(active, rel), { force: true }).catch(() => {});
+      placed.clear();
     }
     return { placed, key };
   }
@@ -2031,12 +2061,18 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         // Review 2: a call that ran out of time ran beside alc's CPU, so it may not be what a live
         // baseline call would answer: not kept, that codeunit's call runs live.
         if (made.timedOut) continue;
+        // Review r2 #2: only a clean answer (an exit code `callCodeunit` reads as rows, rows that
+        // decode) is kept; a crash or garbage beside alc runs live.
+        if (![0, 1, 7, 8].includes(made.res.exitCode)) continue;
         const decoded = decodeV3Rows(made.res.stdout, id);
-        if (
-          !("why" in decoded) &&
-          decoded.rows.some((r) => r.message !== undefined && V3_TIMEOUT_MESSAGE.test(r.message))
-        )
+        if ("why" in decoded) continue;
+        if (decoded.rows.some((r) => r.message !== undefined && V3_TIMEOUT_MESSAGE.test(r.message)))
           continue;
+        // Review r2 #1: the durations were measured beside alc's CPU. A budget is
+        // max(2 x duration, floor), so a call is kept only when the floor decides every budget it
+        // feeds: then a served duration cannot move a budget (the default floor is 180 s).
+        const tooSlow = (ms: number) => 2 * ms >= f.floorMs;
+        if (tooSlow(made.wallMs) || decoded.rows.some((r) => tooSlow(r.durationMs ?? 0))) continue;
         calls.set(id, {
           ...made,
           ...(covText !== undefined ? { covText } : {}),
