@@ -19,7 +19,10 @@
  *   cache every R586 measurement used, so the gate runs on the artifacts the pre-commitment
  *   measured; lane ruling 2026-10-21. `/work/tools/al-runner-v3/cache` is unused).
  * - `LETHAL_ALC_DIR`: the folder holding `alc`.
- * - `LETHAL_ITEST_V3_LEGS=C,S1,...`: a subset (default every leg that is configured).
+ * - `LETHAL_ITEST_V3_LEGS=C,S1,...`: a subset (default every leg that is configured: C, S1, S1E,
+ *   S3, N1, N1E, N1S, X, L1, Y-A, Y-B, MO, WR, K, then D1, D1c and T when configured). R761: S1E is S1's
+ *   project and assertions under serve-entries by construction; on a build with no serve path it
+ *   reads "not applicable" (pass). Its serve counters are printed, pinned after the R-761 observe run.
  * - `LETHAL_ITEST_V3_CDO=<Continia Document Output checkout at 5f2a71d>`: the D legs (a corpus job).
  * - `LETHAL_ITEST_V3_TABLES=1`: leg T (the update gate's tables leg).
  * - `LETHAL_V3_GATE_NONCE` + `LETHAL_V3_GATE_RECEIPT`: write the update gate's receipt.
@@ -59,6 +62,7 @@ import { AL_RUNNER_V3_NOT_AUTHORITATIVE } from "../src/al-runner-v3-config";
 import { runV3ContractProbe, v3DefectWarnings } from "../src/al-runner-v3-contract";
 import { AL_RUNNER_V3_DEFAULT_PATH, sha256OfFile } from "../src/al-runner-v3-pin";
 import { type V3BuildPin, findV3Pin } from "../src/al-runner-v3-pins";
+import { FRESH_PROBE_ENV } from "../src/al-runner-v3-probe-cache";
 import { SLEEP_NOTE_TAG } from "../src/al-runner-v3-sleep";
 import { AlcCompileError, ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import { buildBackend } from "../src/cli";
@@ -107,8 +111,11 @@ import {
   V3_K_LEG,
   V3_MO_KILLERS,
   V3_N1E_LEG,
+  V3_N1S_LEG,
+  V3_S1E_LEG,
   V3_WR_KILLERS,
   V3_WR_STATE_NOTES,
+  isNoServeRefusal,
   isSessionTestCall,
   judgeKillers,
   judgeLegK,
@@ -167,6 +174,10 @@ if (!process.env.LETHAL_ITEST_ALRUNNER_V3) {
   process.exit(challenged ? 1 : 0);
 }
 
+// R762: this gate (and the update gate, which runs it) measures the probe, never replays it: every
+// session it starts, `buildBackend`'s included, runs the contract probe fresh.
+process.env[FRESH_PROBE_ENV] = "1";
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "..", "..", "..");
 const TABLES_BASELINE_PATH = join(HERE, "al-runner-v3.tables.baseline.json");
@@ -186,6 +197,19 @@ let activePin: V3BuildPin | undefined;
 const CACHE = process.env.LETHAL_ALRUNNER_V3_CACHE ?? "/work/tools/al-runtime-rs/cache";
 const ALC = join(process.env.LETHAL_ALC_DIR ?? "", "alc");
 const CDO = process.env.LETHAL_ITEST_V3_CDO;
+/**
+ * R766 (c): `LETHAL_ITEST_V3_WORKERS=<1..8>` runs the D legs with that many serve lanes (the N = 1 vs N = 4
+ * proof). Unset: 1, so the gate is unchanged. Any other value is refused by name.
+ */
+const V3_WORKERS = ((raw) => {
+  if (raw === undefined || raw === "") return 1;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > 8)
+    throw new Error(
+      `al-runner-v3-itest-workers-refused: LETHAL_ITEST_V3_WORKERS=${JSON.stringify(raw)}; allowed: 1..8`,
+    );
+  return n;
+})(process.env.LETHAL_ITEST_V3_WORKERS);
 const TABLES = process.env.LETHAL_ITEST_V3_TABLES === "1";
 /** R635: `{}` unless the transport flags are set (`v3ItestTransport`). */
 const TRANSPORT = v3ItestTransport(process.env);
@@ -208,6 +232,7 @@ const LEGS = (process.env.LETHAL_ITEST_V3_LEGS ?? configured.join(","))
 /** Oracle server BC builds, recorded beside v3's `--bc-version` (F8). */
 const ORACLE_BC_BUILD: Record<string, string> = {
   S1: "bc1 BC 28.4.53241.56590 W1 (bcdev.baseline.json reproduced live, cited)",
+  S1E: "bc1 BC 28.4.53241.56590 W1 (bcdev.baseline.json reproduced live, cited)",
   N1: "bc1 BC 28.4.53241.56590 W1 (bcdev.names.baseline.json reproduced live, cited)",
   D1: "bc3 BC 28.4 W1, Microsoft apps 28.4.53241.56646 (docs/measurements/r594/bc3-A)",
   D1c: "bc3 BC 28.4 W1, Microsoft apps 28.4.53241.56646 (docs/measurements/r594/bc3-B)",
@@ -342,7 +367,11 @@ function assertReproduced(r: SessionReport, leg: string): void {
 }
 
 /** Per mutant against an oracle (gate baseline or report): 0 differences. */
-async function assertPerMutant(r: SessionReport, oraclePath: string, leg: string): Promise<void> {
+async function assertPerMutant(
+  r: SessionReport,
+  oraclePath: string,
+  leg: string,
+): Promise<ReturnType<typeof compareMutants>> {
   const raw = JSON.parse(await readFile(oraclePath, "utf8")) as { mutants?: unknown };
   const now = normalizeForComparison(r);
   let cmp: ReturnType<typeof compareMutants>;
@@ -365,6 +394,7 @@ async function assertPerMutant(r: SessionReport, oraclePath: string, leg: string
     cmp.differences.length === 0,
     `${leg}: ${cmp.differences.length} per-mutant difference(s) from ${oraclePath}`,
   );
+  return cmp;
 }
 
 function assertCounts(
@@ -436,7 +466,23 @@ async function legC(scratch: string): Promise<readonly string[]> {
   return c.lines;
 }
 
-async function legS1(scratch: string): Promise<void> {
+/**
+ * R761: S1E's serve counters, pre-committed in
+ * `docs/superpowers/specs/2026-10-25-r761-serve-default-precommitment.md` (master a86927e1) from the
+ * R-761 observe run, equal to what R-653 E1 recorded for S1 under entries (P 3; live 3 = 6 - 3;
+ * bound 5 = 8 - 3; warm-ups 1; entriesSent 44). Echo mismatches 0.
+ */
+const S1E_PINS = {
+  pairRequests: 3,
+  liveRequests: 3,
+  boundChecks: 5,
+  warmups: 1,
+  entriesSent: 44,
+} as const;
+
+/** S1 one-shot (`entries` off) or S1E (same project and assertions under serve-entries). */
+async function legS1(scratch: string, leg: "S1" | "S1E" = "S1", version = ""): Promise<void> {
+  const serve = leg === "S1E";
   const b = new AlRunnerV3Backend(
     backendCfg({
       instrumentedDir: join(scratch, "backend"),
@@ -444,34 +490,65 @@ async function legS1(scratch: string): Promise<void> {
       packagesDir: join(fixture("sandbox-tests"), ".alpackages"),
       bcVersion: SANDBOX_BC,
       selectorObjectId: 79199,
+      ...(serve ? { transport: "serve-entries" as const } : {}),
     }),
   );
-  const r = await session(scratch, b, {
-    projectDir: fixture("sandbox-app"),
-    testDir: fixture("sandbox-tests"),
-    selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
-  });
-  assertCounts(r, "S1", 3, 12, 4, 19);
-  await assertPerMutant(r, join(HERE, "bcdev.baseline.json"), "S1");
+  let r: SessionReport;
+  try {
+    r = await session(scratch, b, {
+      projectDir: fixture("sandbox-app"),
+      testDir: fixture("sandbox-tests"),
+      selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
+    });
+  } catch (e) {
+    // A build with no serve path refuses `entries` by name: not applicable, as N1E reads it.
+    if (serve && !isGateWarningsError(e) && isNoServeRefusal(version, String(e))) {
+      console.log("  S1E: not applicable: this build has no serve-entries path");
+      return;
+    }
+    throw e;
+  }
+  assertCounts(r, leg, 3, 12, 4, 19);
+  await assertPerMutant(r, join(HERE, "bcdev.baseline.json"), leg);
   must(
     r.baselineGreen && r.unsupportedTests.length === 0,
-    "S1: baseline not green or a refused test",
+    `${leg}: baseline not green or a refused test`,
   );
   must(
     tagged(r, V3_STATE_NOTE_TAG).length === 0,
-    `S1: state notes ${tagged(r, V3_STATE_NOTE_TAG)}`,
+    `${leg}: state notes ${tagged(r, V3_STATE_NOTE_TAG)}`,
   );
-  must(tagged(r, V3_REFUSED_NEARBY_TAG).length === 0, "S1: refused-nearby notes");
+  must(tagged(r, V3_REFUSED_NEARBY_TAG).length === 0, `${leg}: refused-nearby notes`);
   must(
     tagged(r, SLEEP_NOTE_TAG).length === 0 && refusedCause(r).length === 0,
-    "S1: a §6 or runner refusal",
+    `${leg}: a §6 or runner refusal`,
   );
-  assertIndex(b, "S1", 0, 0);
-  assertReproduced(r, "S1");
+  // The Sleep index is built from the deployed source text, not by the transport, so 0 + 0 holds
+  // under serve-entries too (backend `deploy` -> `buildSleepIndex`).
+  assertIndex(b, leg, 0, 0);
+  assertReproduced(r, leg);
   must(
     r.validity.executionContexts.some((c) => c.runnerBuild !== undefined),
-    "S1: no runnerBuild recorded",
+    `${leg}: no runnerBuild recorded`,
   );
+  if (serve) {
+    const s = b.entriesStats();
+    const got = {
+      pairRequests: s.pairRequests,
+      liveRequests: s.liveRequests,
+      boundChecks: s.boundChecks,
+      warmups: s.warmups,
+      entriesSent: s.entriesSent,
+    };
+    console.log(
+      `  S1E: serve counters ${JSON.stringify({ ...got, echoMismatches: s.echoMismatches })}`,
+    );
+    for (const [k, v] of Object.entries(S1E_PINS)) {
+      const g = got[k as keyof typeof got];
+      must(g === v, `S1E: ${k} ${g}, pre-committed ${v} (R761)`);
+    }
+    must(s.echoMismatches === 0, `S1E: ${s.echoMismatches} echo mismatches, pre-committed 0`);
+  }
 }
 
 async function legS3(scratch: string): Promise<void> {
@@ -567,6 +644,112 @@ async function legN1E(scratch: string, version: string): Promise<void> {
   if (j.outcome === "held") throw new V3LegHeld(j.lines);
   if (j.outcome === "gate-fail") throw new LegFailure(j.lines.join("; "));
 }
+
+/**
+ * R763: N1's non-plain test METHOD names other than the dot (#5798) under serve-entries. A copy of
+ * `sandbox-names-tests` without the `Dot.Step` test runs twice, one-shot then serve-entries; each
+ * mutant of the serve report must equal the one-shot report's, with 0 echo mismatches.
+ */
+async function legN1S(scratch: string, version: string): Promise<void> {
+  const deps = await microsoftDeps(scratch);
+  const tests = join(scratch, "names-tests-reduced");
+  await cp(fixture("sandbox-names-tests"), tests, { recursive: true });
+  const al = join(tests, "src", "NamesTests.Codeunit.al");
+  const text = await readFile(al, "utf8");
+  const at = text.indexOf('procedure "Dot.Step"()');
+  must(
+    at >= 0 && text.indexOf('procedure "Dot.Step"()', at + 1) < 0,
+    "N1S: the fixture no longer has exactly one `Dot.Step` procedure",
+  );
+  const from = text.lastIndexOf("[Test]", at);
+  const next = text.indexOf("[Test]", at);
+  // Cut whole lines: from the start of the [Test] line to the start of the next [Test] line.
+  const cutFrom = text.lastIndexOf("\n", from) + 1;
+  const cutTo = next < 0 ? text.length : text.lastIndexOf("\n", next) + 1;
+  must(from >= 0 && cutFrom <= from && cutTo > at, "N1S: could not place the Dot.Step cut");
+  const reduced = text.slice(0, cutFrom) + text.slice(cutTo);
+  must(!reduced.includes("Dot.Step"), "N1S: `Dot.Step` still present after the cut");
+  must(
+    text.split("[Test]").length - reduced.split("[Test]").length === 1,
+    "N1S: the cut removed other than exactly one [Test]",
+  );
+  await writeFile(al, reduced);
+
+  const run = async (mode: "one-shot" | "serve-entries") => {
+    const b = new AlRunnerV3Backend(
+      backendCfg({
+        instrumentedDir: join(scratch, `backend-${mode}`),
+        testDir: tests,
+        packagesDir: deps,
+        bcVersion: SANDBOX_BC,
+        selectorObjectId: 78849,
+        transport: mode,
+      }),
+    );
+    const r = await session(scratch, b, {
+      projectDir: fixture("sandbox-names"),
+      testDir: tests,
+      selectorIds: { selectorId: 78849, controlId: 78848, tableId: 78847 },
+    });
+    // `session` keys its store and instr off the scratch it is given: clear them for the next run.
+    await rm(join(scratch, "lethal.sqlite"), { force: true });
+    await rm(join(scratch, "instr"), { recursive: true, force: true });
+    return { r, b };
+  };
+  const one = await run("one-shot");
+  console.log(`  N1S: one-shot ${counts(one.r)} over ${one.r.mutants.length}`);
+  const oneReport = join(scratch, "one-shot.report.json");
+  await writeFile(oneReport, `${JSON.stringify(one.r, null, 2)}\n`);
+  let serve: Awaited<ReturnType<typeof run>>;
+  try {
+    serve = await run("serve-entries");
+  } catch (e) {
+    if (!isGateWarningsError(e) && isNoServeRefusal(version, String(e))) {
+      console.log("  N1S: not applicable: this build has no serve-entries path");
+      return;
+    }
+    console.log(
+      `  N1S: serve-entries session FAILED: ${e instanceof Error ? e.message : String(e)}`,
+    );
+    throw e;
+  }
+  console.log(`  N1S: serve-entries ${counts(serve.r)} over ${serve.r.mutants.length}`);
+  must(
+    one.r.mutants.length === serve.r.mutants.length &&
+      one.r.counts.killed === serve.r.counts.killed &&
+      one.r.counts.survived === serve.r.counts.survived &&
+      one.r.counts.noCoverage === serve.r.counts.noCoverage,
+    "N1S: counts differ between one-shot and serve-entries",
+  );
+  const cmp = await assertPerMutant(serve.r, oneReport, "N1S serve vs one-shot");
+  must(
+    cmp.textVerified === 36 && cmp.textUnverified === 0,
+    `N1S: text verified ${cmp.textVerified}, unverified ${cmp.textUnverified}; pre-committed 36 and 0 (R763)`,
+  );
+  must(
+    serve.r.baselineGreen && serve.r.unsupportedTests.length === 0,
+    "N1S: serve baseline not green or a refused test",
+  );
+  // R763 (pre-commitment docs/superpowers/specs/2026-10-25-r763-n1s-precommitment.md): both sessions
+  // 33 / 0 / 3 over 36 (the 3 mutants only Dot.Step covered read no-coverage), and these counters.
+  assertCounts(serve.r, "N1S", 33, 0, 3, 36);
+  const s = serve.b.entriesStats();
+  console.log(`  N1S: serve counters ${JSON.stringify({ ...s })}`);
+  for (const [k, v] of Object.entries(N1S_PINS)) {
+    const g = s[k as keyof typeof N1S_PINS];
+    must(g === v, `N1S: ${k} ${g}, pre-committed ${v} (R763)`);
+  }
+  must(s.echoMismatches === 0, `N1S: ${s.echoMismatches} echo mismatches, expected 0`);
+}
+
+/** R763: N1S's serve counters from the observe run (`/coord/handoff/R-763/observe-N1S.log`). */
+const N1S_PINS = {
+  pairRequests: 33,
+  liveRequests: 33,
+  boundChecks: 35,
+  warmups: 1,
+  entriesSent: 200,
+} as const;
 
 // --- R654 S2: L1, Y-A, Y-B and K (pre-commitment docs/superpowers/specs/2026-10-22-r654-v3-gate-legs-precommitment.md, 43115c78)
 
@@ -1228,6 +1411,13 @@ async function legXSleep(scratch: string): Promise<void> {
   };
   const SLEEP_LINES = [25, 31, 37, 43];
   const { r, b, sleeper } = await run("d", recordHits);
+  // R-762 B: a pinned build whose pin and session probe read sleep-is-noop gone runs without the
+  // §6 rule: M0003 and M0004 survive, no mutant call writes a coverage document, (e)/(f) have
+  // nothing to tamper with. Unpinned builds keep the r5 table.
+  const retired = b.isSleepRuleRetired();
+  console.log(
+    `  X (d): Sleep rule ${retired ? "RETIRED (pinned gone build, R-762 B)" : "applies"}`,
+  );
   // r10 (c), I4/M7: the baseline facts, printed before any (d) check. No verdict rule changes.
   console.log(`  ${xdBaselineLine(sleeper)}`);
   console.log(`  X (d): baselineGreen ${r.baselineGreen}`);
@@ -1250,8 +1440,12 @@ async function legXSleep(scratch: string): Promise<void> {
   const R5: Record<string, { code: string; verdict: string; line?: number }> = {
     "lethal.empty-block": { code: "M0001", verdict: "killed" },
     "lethal.void-method-call": { code: "M0002", verdict: "survived" },
-    "lethal.remove-assignment": { code: "M0003", verdict: "error", line: 25 },
-    "lethal.shift-integer": { code: "M0004", verdict: "error", line: 37 },
+    "lethal.remove-assignment": {
+      code: "M0003",
+      verdict: retired ? "survived" : "error",
+      line: 25,
+    },
+    "lethal.shift-integer": { code: "M0004", verdict: retired ? "survived" : "error", line: 37 },
     "lethal.return-value": { code: "M0005", verdict: "killed" },
   };
   mustD(r.mutants.length === 5, `X (d): ${r.mutants.length} mutants, r5 5`);
@@ -1287,6 +1481,23 @@ async function legXSleep(scratch: string): Promise<void> {
       );
   }
   // The negative twin: no hit on any indexed Sleep line, a passing row, survived, no note.
+  if (retired) {
+    // R-762 B: counts 2 / 3 / 0; no raw-hit check (no mutant call writes a coverage document).
+    const n = (v: string) => r.mutants.filter((m) => m.verdict === v).length;
+    mustD(
+      n("killed") === 2 && n("survived") === 3 && n("error") === 0,
+      `X (d): killed ${n("killed")} / survived ${n("survived")} / error ${n("error")}, R-762 B 2 / 3 / 0`,
+    );
+    must(
+      hitsByMutant.size === 0,
+      "X (d): a mutant call wrote a coverage document on a retired-rule build",
+    );
+    for (const leg of ["X (e)", "X (f1)", "X (f2)", "X (f3)"])
+      console.log(
+        `  ${leg}: not applicable on a pinned-gone build (R-762 B: no mutant call writes a coverage document)`,
+      );
+    return;
+  }
   const twin = hitsByMutant.get("M0002");
   must(
     twin !== undefined && [...twin.values()].every((h) => h === 0),
@@ -1409,6 +1620,7 @@ async function legD(scratch: string, leg: "D1" | "D1c"): Promise<void> {
     only: [".dependencies/CDO/Codeunit/CDORecipientMgt.Codeunit.al"],
     testsOnly: ["Src/Recipients/CDORecipientMgtTests.Codeunit.al"],
     dependencyPackageDirs: [join(CDO, "Test", ".alpackages")],
+    ...(V3_WORKERS > 1 ? { workers: V3_WORKERS } : {}),
   });
   if (leg === "D1") assertCounts(r, leg, 51, 12, 0, 63);
   else assertCounts(r, leg, 51, 8, 4, 63);
@@ -1615,9 +1827,11 @@ async function main(): Promise<void> {
       try {
         if (leg === "C") lines.push(...(await legC(scratch)).map((l) => `C: ${l}`));
         else if (leg === "S1") await legS1(scratch);
+        else if (leg === V3_S1E_LEG) await legS1(scratch, V3_S1E_LEG, version);
         else if (leg === "S3") await legS3(scratch);
         else if (leg === "N1") await legN1(scratch);
         else if (leg === V3_N1E_LEG) await legN1E(scratch, version);
+        else if (leg === V3_N1S_LEG) await legN1S(scratch, version);
         else if (leg === "X") await legX(scratch, (l) => lines.push(l));
         else if (leg === "D1" || leg === "D1c") await legD(scratch, leg);
         // R654 S2: each leg checks its pre-committed table FIRST (gate-fail on a difference, and

@@ -116,7 +116,15 @@ next free id right before writing).
     `/coord/handoff/<task>/` or `/coord/cache/`. A gate's log that is evidence for a submit is
     written to `/coord/handoff/<task>/` as it runs.
   - **Wait for at most one OTHER heavy job, not zero.** A driver that waits for an empty container
-    can starve for hours. The limit stays two heavy jobs container-wide.
+    can starve for hours. The limit is two heavy jobs container-wide, with one exception: **v3 jobs
+    (owner, 2026-10-25)**. al-runner-v3 gates, campaigns and measurements may run three at once,
+    one per heavy slot (`heavy.1`-`heavy.3`), because they fit (measured 2026-10-25: about 0.1-0.2 GB per bun
+    process; a serve-entries daemon on D1 peaks near 2.2 GB, R766; 5 of 39 GB in use with two
+    running). A run with `--workers N` is one heavy job, but it holds N daemons: count about 2.3 GB
+    each against the 10 GB floor. Not while a BaseApp (BC.History) corpus job runs:
+    then the limit stays two in all. Never start a heavy job under 10 GB available (`free -g`). A
+    timing run whose figures will be quoted runs on a quiet machine, or reports the load beside its
+    figures (R760: load inflated times 1.4-2.3x).
   - **Check before any status line (owner, 2026-10-21).** Before you report the state of background
     work (a gate, a driver, a queue), read its log and the running processes with their working
     directory. Never repeat the last state you remember: R-577 reported a confirm as "still waiting for

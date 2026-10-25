@@ -1,0 +1,293 @@
+{
+ "steps": [
+  {
+   "label": "baseline A",
+   "outcome": "pass",
+   "runnerRow": null,
+   "operation": null,
+   "failureMessage": null,
+   "backendNote": null,
+   "reportedStopMs": null,
+   "refusedAfterStop": null
+  },
+  {
+   "label": "baseline B",
+   "outcome": "pass",
+   "runnerRow": null,
+   "operation": null,
+   "failureMessage": null,
+   "backendNote": null,
+   "reportedStopMs": null,
+   "refusedAfterStop": null
+  },
+  {
+   "label": "prefetch M0001-M0006"
+  },
+  {
+   "label": "M0001 A",
+   "outcome": "pass",
+   "runnerRow": null,
+   "operation": null,
+   "failureMessage": null,
+   "backendNote": null,
+   "reportedStopMs": null,
+   "refusedAfterStop": null
+  },
+  {
+   "label": "M0001 B",
+   "outcome": "fail",
+   "runnerRow": null,
+   "operation": null,
+   "failureMessage": "boom1",
+   "backendNote": "[v3-codeunit-state-possible] B ran after covering test(s) A (pass) in the same v3 codeunit run (#5611), so their state may have reached it",
+   "reportedStopMs": null,
+   "refusedAfterStop": null
+  },
+  {
+   "label": "M0001 confirm B",
+   "outcome": "pass",
+   "runnerRow": null,
+   "operation": null,
+   "failureMessage": null,
+   "backendNote": null,
+   "reportedStopMs": null,
+   "refusedAfterStop": null
+  },
+  {
+   "label": "M0001 reproduce B",
+   "outcome": "fail",
+   "runnerRow": null,
+   "operation": null,
+   "failureMessage": "boom1",
+   "backendNote": "[v3-codeunit-state-possible] B ran after covering test(s) A (pass) in the same v3 codeunit run (#5611), so their state may have reached it",
+   "reportedStopMs": null,
+   "refusedAfterStop": null
+  },
+  {
+   "label": "M0002 A",
+   "outcome": "fail",
+   "runnerRow": null,
+   "operation": null,
+   "failureMessage": "boom2",
+   "backendNote": null,
+   "reportedStopMs": null,
+   "refusedAfterStop": null
+  },
+  {
+   "label": "M0002 confirm A",
+   "outcome": "pass",
+   "runnerRow": null,
+   "operation": null,
+   "failureMessage": null,
+   "backendNote": null,
+   "reportedStopMs": null,
+   "refusedAfterStop": null
+  },
+  {
+   "label": "M0002 reproduce A",
+   "outcome": "fail",
+   "runnerRow": null,
+   "operation": null,
+   "failureMessage": "boom2",
+   "backendNote": null,
+   "reportedStopMs": null,
+   "refusedAfterStop": null
+  },
+  {
+   "label": "M0003 A",
+   "outcome": "timeout",
+   "runnerRow": null,
+   "operation": null,
+   "failureMessage": "Test exceeded 1s timeout.",
+   "backendNote": null,
+   "reportedStopMs": 1000,
+   "refusedAfterStop": null
+  },
+  {
+   "label": "M0004 A",
+   "outcome": "pass",
+   "runnerRow": null,
+   "operation": null,
+   "failureMessage": null,
+   "backendNote": null,
+   "reportedStopMs": null,
+   "refusedAfterStop": null
+  },
+  {
+   "label": "M0005 A",
+   "outcome": "fail",
+   "runnerRow": null,
+   "operation": null,
+   "failureMessage": "boom5",
+   "backendNote": null,
+   "reportedStopMs": null,
+   "refusedAfterStop": null
+  },
+  {
+   "label": "M0005 confirm A",
+   "outcome": "pass",
+   "runnerRow": null,
+   "operation": null,
+   "failureMessage": null,
+   "backendNote": null,
+   "reportedStopMs": null,
+   "refusedAfterStop": null
+  },
+  {
+   "label": "M0005 reproduce A",
+   "outcome": "fail",
+   "runnerRow": null,
+   "operation": null,
+   "failureMessage": "boom5",
+   "backendNote": null,
+   "reportedStopMs": null,
+   "refusedAfterStop": null
+  },
+  {
+   "label": "M0006 A",
+   "outcome": "error",
+   "runnerRow": "runner-refused",
+   "operation": "completed-accepted",
+   "failureMessage": "[v3-sleep-noop] indexed Sleep <ROOT>/scratch/active/Logic.Codeunit.al:5 not in v3's coverage; a bound-tree change since a window's bound check (R652) is a possible cause",
+   "backendNote": null,
+   "reportedStopMs": null,
+   "refusedAfterStop": null
+  },
+  {
+   "label": "M0007 A",
+   "outcome": "error",
+   "runnerRow": "runner-refused",
+   "operation": "completed-accepted",
+   "failureMessage": "[v3-sleep-noop] indexed Sleep <ROOT>/scratch/active/Logic.Codeunit.al:5 not in v3's coverage; a bound-tree change since a window's bound check (R652) is a possible cause",
+   "backendNote": null,
+   "reportedStopMs": null,
+   "refusedAfterStop": null
+  },
+  {
+   "label": "M0008 A",
+   "outcome": "timeout",
+   "runnerRow": null,
+   "operation": null,
+   "failureMessage": "Test exceeded 1s timeout.",
+   "backendNote": null,
+   "reportedStopMs": 1000,
+   "refusedAfterStop": null
+  },
+  {
+   "label": "latched confirm A",
+   "outcome": "error",
+   "runnerRow": null,
+   "operation": "pre-dispatch-rejected",
+   "failureMessage": "al-runner-v3 transport failure: al-runner-v3-entries-warmup-disagrees: the daemon's NONE rows are not this batch's one-shot baseline (codeunit 79100: serve [a=pass, b=fail], one-shot [a=pass, b=pass]), so no entry on it is trusted (R635 plan §3, §6); never read as \"all passed\" (R586 §5)",
+   "backendNote": null,
+   "reportedStopMs": null,
+   "refusedAfterStop": null
+  },
+  {
+   "label": "latched M0007 B",
+   "outcome": "error",
+   "runnerRow": null,
+   "operation": "pre-dispatch-rejected",
+   "failureMessage": "al-runner-v3 transport failure: al-runner-v3-entries-warmup-disagrees: the daemon's NONE rows are not this batch's one-shot baseline (codeunit 79100: serve [a=pass, b=fail], one-shot [a=pass, b=pass]), so no entry on it is trusted (R635 plan §3, §6); never read as \"all passed\" (R586 §5)",
+   "backendNote": null,
+   "reportedStopMs": null,
+   "refusedAfterStop": null
+  }
+ ],
+ "requests": [
+  "{\"daemon\":0,\"onDisk\":\"NONE\",\"body\":{\"command\":\"runTests\",\"sourcePaths\":[\"<ROOT>/scratch/active\",\"<ROOT>/tests\"],\"testIsolation\":\"test\",\"entries\":[\"NONE|echo {\\\"active-mutant.txt\\\":\\\"NONE\\\"} Codeunit79198.\",\"NONE|79100 {\\\"active-mutant.txt\\\":\\\"NONE\\\"} Codeunit79100.\"]}}",
+  "{\"daemon\":0,\"onDisk\":\"NONE\",\"body\":{\"command\":\"runTests\",\"sourcePaths\":[\"<ROOT>/scratch/active\",\"<ROOT>/tests\"],\"testIsolation\":\"test\",\"entries\":[\"M0001|echo {\\\"active-mutant.txt\\\":\\\"M0001\\\"} Codeunit79198.\",\"M0001|79100 {\\\"active-mutant.txt\\\":\\\"M0001\\\"} Codeunit79100.\",\"M0002|echo {\\\"active-mutant.txt\\\":\\\"M0002\\\"} Codeunit79198.\",\"M0002|79100 {\\\"active-mutant.txt\\\":\\\"M0002\\\"} Codeunit79100.\",\"M0003|echo {\\\"active-mutant.txt\\\":\\\"M0003\\\"} Codeunit79198.\",\"M0003|79100 {\\\"active-mutant.txt\\\":\\\"M0003\\\"} Codeunit79100.\",\"M0004|echo {\\\"active-mutant.txt\\\":\\\"M0004\\\"} Codeunit79198.\",\"M0004|79100 {\\\"active-mutant.txt\\\":\\\"M0004\\\"} Codeunit79100.\",\"M0005|echo {\\\"active-mutant.txt\\\":\\\"M0005\\\"} Codeunit79198.\",\"M0005|79100 {\\\"active-mutant.txt\\\":\\\"M0005\\\"} Codeunit79100.\",\"M0006|echo {\\\"active-mutant.txt\\\":\\\"M0006\\\"} Codeunit79198.\",\"M0006|79100 {\\\"active-mutant.txt\\\":\\\"M0006\\\"} Codeunit79100.\"]}}",
+  "{\"daemon\":1,\"onDisk\":\"NONE\",\"body\":{\"command\":\"runTests\",\"sourcePaths\":[\"<ROOT>/scratch/active\",\"<ROOT>/tests\"],\"testIsolation\":\"test\",\"entries\":[\"NONE|echo {\\\"active-mutant.txt\\\":\\\"NONE\\\"} Codeunit79198.\",\"NONE|79100 {\\\"active-mutant.txt\\\":\\\"NONE\\\"} Codeunit79100.\"]}}",
+  "{\"daemon\":1,\"onDisk\":\"NONE\",\"body\":{\"command\":\"runTests\",\"sourcePaths\":[\"<ROOT>/scratch/active\",\"<ROOT>/tests\"],\"testIsolation\":\"test\",\"entries\":[\"M0004|echo {\\\"active-mutant.txt\\\":\\\"M0004\\\"} Codeunit79198.\",\"M0004|79100 {\\\"active-mutant.txt\\\":\\\"M0004\\\"} Codeunit79100.\",\"M0005|echo {\\\"active-mutant.txt\\\":\\\"M0005\\\"} Codeunit79198.\",\"M0005|79100 {\\\"active-mutant.txt\\\":\\\"M0005\\\"} Codeunit79100.\",\"M0006|echo {\\\"active-mutant.txt\\\":\\\"M0006\\\"} Codeunit79198.\",\"M0006|79100 {\\\"active-mutant.txt\\\":\\\"M0006\\\"} Codeunit79100.\"]}}",
+  "{\"daemon\":1,\"onDisk\":\"M0001\",\"body\":{\"command\":\"runTests\",\"sourcePaths\":[\"<ROOT>/scratch/active\",\"<ROOT>/tests\"],\"testIsolation\":\"test\",\"test\":\"Codeunit79198.\"}}",
+  "{\"daemon\":1,\"onDisk\":\"M0001\",\"body\":{\"command\":\"runTests\",\"sourcePaths\":[\"<ROOT>/scratch/active\",\"<ROOT>/tests\"],\"testIsolation\":\"test\",\"test\":\"Codeunit79100.\",\"coverage\":true,\"perTestCoverage\":true}}",
+  "{\"daemon\":1,\"onDisk\":\"M0001\",\"body\":{\"command\":\"runTests\",\"sourcePaths\":[\"<ROOT>/scratch/active\",\"<ROOT>/tests\"],\"testIsolation\":\"test\",\"test\":\"Codeunit79198.\"}}",
+  "{\"daemon\":1,\"onDisk\":\"NONE\",\"body\":{\"command\":\"runTests\",\"sourcePaths\":[\"<ROOT>/scratch/active\",\"<ROOT>/tests\"],\"testIsolation\":\"test\",\"entries\":[\"NONE|echo {\\\"active-mutant.txt\\\":\\\"NONE\\\"} Codeunit79198.\",\"NONE|79100 {\\\"active-mutant.txt\\\":\\\"NONE\\\"} Codeunit79100.\",\"M0001|echo {\\\"active-mutant.txt\\\":\\\"M0001\\\"} Codeunit79198.\",\"M0001|79100 {\\\"active-mutant.txt\\\":\\\"M0001\\\"} Codeunit79100.\"]}}",
+  "{\"daemon\":1,\"onDisk\":\"NONE\",\"body\":{\"command\":\"runTests\",\"sourcePaths\":[\"<ROOT>/scratch/active\",\"<ROOT>/tests\"],\"testIsolation\":\"test\",\"entries\":[\"NONE|echo {\\\"active-mutant.txt\\\":\\\"NONE\\\"} Codeunit79198.\",\"NONE|79100 {\\\"active-mutant.txt\\\":\\\"NONE\\\"} Codeunit79100.\",\"M0002|echo {\\\"active-mutant.txt\\\":\\\"M0002\\\"} Codeunit79198.\",\"M0002|79100 {\\\"active-mutant.txt\\\":\\\"M0002\\\"} Codeunit79100.\"]}}",
+  "{\"daemon\":2,\"onDisk\":\"NONE\",\"body\":{\"command\":\"runTests\",\"sourcePaths\":[\"<ROOT>/scratch/active\",\"<ROOT>/tests\"],\"testIsolation\":\"test\",\"entries\":[\"NONE|echo {\\\"active-mutant.txt\\\":\\\"NONE\\\"} Codeunit79198.\",\"NONE|79100 {\\\"active-mutant.txt\\\":\\\"NONE\\\"} Codeunit79100.\"]}}",
+  "{\"daemon\":2,\"onDisk\":\"NONE\",\"body\":{\"command\":\"runTests\",\"sourcePaths\":[\"<ROOT>/scratch/active\",\"<ROOT>/tests\"],\"testIsolation\":\"test\",\"entries\":[\"M0002|echo {\\\"active-mutant.txt\\\":\\\"M0002\\\"} Codeunit79198.\",\"M0002|79100 {\\\"active-mutant.txt\\\":\\\"M0002\\\"} Codeunit79100.\"]}}",
+  "{\"daemon\":2,\"onDisk\":\"M0004\",\"body\":{\"command\":\"runTests\",\"sourcePaths\":[\"<ROOT>/scratch/active\",\"<ROOT>/tests\"],\"testIsolation\":\"test\",\"test\":\"Codeunit79198.\"}}",
+  "{\"daemon\":2,\"onDisk\":\"M0004\",\"body\":{\"command\":\"runTests\",\"sourcePaths\":[\"<ROOT>/scratch/active\",\"<ROOT>/tests\"],\"testIsolation\":\"test\",\"test\":\"Codeunit79100.\",\"coverage\":true,\"perTestCoverage\":true}}",
+  "{\"daemon\":2,\"onDisk\":\"M0004\",\"body\":{\"command\":\"runTests\",\"sourcePaths\":[\"<ROOT>/scratch/active\",\"<ROOT>/tests\"],\"testIsolation\":\"test\",\"test\":\"Codeunit79198.\"}}",
+  "{\"daemon\":2,\"onDisk\":\"NONE\",\"body\":{\"command\":\"runTests\",\"sourcePaths\":[\"<ROOT>/scratch/active\",\"<ROOT>/tests\"],\"testIsolation\":\"test\",\"entries\":[\"NONE|echo {\\\"active-mutant.txt\\\":\\\"NONE\\\"} Codeunit79198.\",\"NONE|79100 {\\\"active-mutant.txt\\\":\\\"NONE\\\"} Codeunit79100.\",\"M0005|echo {\\\"active-mutant.txt\\\":\\\"M0005\\\"} Codeunit79198.\",\"M0005|79100 {\\\"active-mutant.txt\\\":\\\"M0005\\\"} Codeunit79100.\"]}}",
+  "{\"daemon\":3,\"onDisk\":\"NONE\",\"body\":{\"command\":\"runTests\",\"sourcePaths\":[\"<ROOT>/scratch/active\",\"<ROOT>/tests\"],\"testIsolation\":\"test\",\"entries\":[\"NONE|echo {\\\"active-mutant.txt\\\":\\\"NONE\\\"} Codeunit79198.\",\"NONE|79100 {\\\"active-mutant.txt\\\":\\\"NONE\\\"} Codeunit79100.\"]}}",
+  "{\"daemon\":3,\"onDisk\":\"NONE\",\"body\":{\"command\":\"runTests\",\"sourcePaths\":[\"<ROOT>/scratch/active\",\"<ROOT>/tests\"],\"testIsolation\":\"test\",\"entries\":[\"NONE|echo {\\\"active-mutant.txt\\\":\\\"NONE\\\"} Codeunit79198.\",\"NONE|79100 {\\\"active-mutant.txt\\\":\\\"NONE\\\"} Codeunit79100.\"]}}",
+  "{\"daemon\":3,\"onDisk\":\"NONE\",\"body\":{\"command\":\"runTests\",\"sourcePaths\":[\"<ROOT>/scratch/active\",\"<ROOT>/tests\"],\"testIsolation\":\"test\",\"entries\":[\"M0005|echo {\\\"active-mutant.txt\\\":\\\"M0005\\\"} Codeunit79198.\",\"M0005|79100 {\\\"active-mutant.txt\\\":\\\"M0005\\\"} Codeunit79100.\"]}}",
+  "{\"daemon\":3,\"onDisk\":\"M0006\",\"body\":{\"command\":\"runTests\",\"sourcePaths\":[\"<ROOT>/scratch/active\",\"<ROOT>/tests\"],\"testIsolation\":\"test\",\"test\":\"Codeunit79198.\"}}",
+  "{\"daemon\":3,\"onDisk\":\"M0006\",\"body\":{\"command\":\"runTests\",\"sourcePaths\":[\"<ROOT>/scratch/active\",\"<ROOT>/tests\"],\"testIsolation\":\"test\",\"test\":\"Codeunit79100.\",\"coverage\":true,\"perTestCoverage\":true}}",
+  "{\"daemon\":3,\"onDisk\":\"M0006\",\"body\":{\"command\":\"runTests\",\"sourcePaths\":[\"<ROOT>/scratch/active\",\"<ROOT>/tests\"],\"testIsolation\":\"test\",\"test\":\"Codeunit79198.\"}}",
+  "{\"daemon\":3,\"onDisk\":\"NONE\",\"body\":{\"command\":\"runTests\",\"sourcePaths\":[\"<ROOT>/scratch/active\",\"<ROOT>/tests\"],\"testIsolation\":\"test\",\"entries\":[\"M0007|echo {\\\"active-mutant.txt\\\":\\\"M0007\\\"} Codeunit79198.\",\"M0007|79100 {\\\"active-mutant.txt\\\":\\\"M0007\\\"} Codeunit79100.\"]}}",
+  "{\"daemon\":3,\"onDisk\":\"M0007\",\"body\":{\"command\":\"runTests\",\"sourcePaths\":[\"<ROOT>/scratch/active\",\"<ROOT>/tests\"],\"testIsolation\":\"test\",\"test\":\"Codeunit79198.\"}}",
+  "{\"daemon\":3,\"onDisk\":\"M0007\",\"body\":{\"command\":\"runTests\",\"sourcePaths\":[\"<ROOT>/scratch/active\",\"<ROOT>/tests\"],\"testIsolation\":\"test\",\"test\":\"Codeunit79100.\",\"coverage\":true,\"perTestCoverage\":true}}",
+  "{\"daemon\":3,\"onDisk\":\"M0007\",\"body\":{\"command\":\"runTests\",\"sourcePaths\":[\"<ROOT>/scratch/active\",\"<ROOT>/tests\"],\"testIsolation\":\"test\",\"test\":\"Codeunit79198.\"}}",
+  "{\"daemon\":3,\"onDisk\":\"NONE\",\"body\":{\"command\":\"runTests\",\"sourcePaths\":[\"<ROOT>/scratch/active\",\"<ROOT>/tests\"],\"testIsolation\":\"test\",\"entries\":[\"M0008|echo {\\\"active-mutant.txt\\\":\\\"M0008\\\"} Codeunit79198.\",\"M0008|79100 {\\\"active-mutant.txt\\\":\\\"M0008\\\"} Codeunit79100.\"]}}",
+  "{\"daemon\":4,\"onDisk\":\"NONE\",\"body\":{\"command\":\"runTests\",\"sourcePaths\":[\"<ROOT>/scratch/active\",\"<ROOT>/tests\"],\"testIsolation\":\"test\",\"entries\":[\"NONE|echo {\\\"active-mutant.txt\\\":\\\"NONE\\\"} Codeunit79198.\",\"NONE|79100 {\\\"active-mutant.txt\\\":\\\"NONE\\\"} Codeunit79100.\"]}}"
+ ],
+ "closes": [
+  {
+   "daemon": 0,
+   "afterRequests": 2
+  },
+  {
+   "daemon": 1,
+   "afterRequests": 9
+  },
+  {
+   "daemon": 2,
+   "afterRequests": 15
+  },
+  {
+   "daemon": 3,
+   "afterRequests": 26
+  },
+  {
+   "daemon": 4,
+   "afterRequests": 27
+  }
+ ],
+ "daemonArgv": [
+  "/fake/al-runner serve --package-cache <ROOT>/deps --test-timeout 1 --bc-version 28.0.46665.47126 --no-download",
+  "/fake/al-runner serve --package-cache <ROOT>/deps --test-timeout 1 --bc-version 28.0.46665.47126 --no-download",
+  "/fake/al-runner serve --package-cache <ROOT>/deps --test-timeout 1 --bc-version 28.0.46665.47126 --no-download",
+  "/fake/al-runner serve --package-cache <ROOT>/deps --test-timeout 1 --bc-version 28.0.46665.47126 --no-download",
+  "/fake/al-runner serve --package-cache <ROOT>/deps --test-timeout 1 --bc-version 28.0.46665.47126 --no-download"
+ ],
+ "daemonCwds": [
+  "<ROOT>/scratch",
+  "<ROOT>/scratch",
+  "<ROOT>/scratch",
+  "<ROOT>/scratch",
+  "<ROOT>/scratch"
+ ],
+ "oneShotCalls": [
+  "/fake/al-runner test --output-json --isolation test --test-timeout-secs 1 --codeunit 79100 --package-cache <ROOT>/deps --bc-version 28.0.46665.47126 --no-download --coverage-json <ROOT>/scratch/cov/call-1.json <ROOT>/scratch/active <ROOT>/tests"
+ ],
+ "spawnCount": 1,
+ "stats": {
+  "daemons": 5,
+  "cachedFalse": 5,
+  "warmups": 5,
+  "prefetchRequests": 2,
+  "liveRequests": 8,
+  "coverageRequests": 4,
+  "echoRequests": 8,
+  "echoMismatches": 2,
+  "secondEchoMismatches": 0,
+  "prefetchDropped": 0,
+  "entriesSent": 50,
+  "warmupMs": 10,
+  "prefetchMs": 4,
+  "liveMs": 16,
+  "windowMs": 28,
+  "coverageMs": 4,
+  "echoMs": 8,
+  "boundChecks": 19,
+  "boundMs": 19,
+  "pairRequests": 3,
+  "pairFallbacks1": 1,
+  "pairFallbacks2": 1,
+  "pairFallbacks1Passed": 1,
+  "pairFallbacks2Passed": 1
+ },
+ "notices": []
+}

@@ -401,6 +401,8 @@ export const isUnread = (r: PublishedPackageRead): r is PackageUnread =>
 
 export interface ExecutionBackend {
   capabilities(): BackendCapabilities;
+  /** Releases what the backend holds open (bcdev's MCP child, v3's serve daemon). R775: the CLI calls it. */
+  close?(): Promise<void>;
   /**
    * R516 I1: true when the run's own in-run stop is the budget it was sent (bcdev; al-runner
    * one-shot, static or resource selector), so a larger budget really lets the test run longer.
@@ -544,6 +546,13 @@ export interface ExecutionBackend {
    * excludes the look-alikes up front with it.
    */
   useDiscoveredTests?(tests: readonly TestMethodRef[]): void;
+
+  /**
+   * R761, OPTIONAL: called once, right after `useDiscoveredTests` and before the first deploy.
+   * al-runner v3 picks its transport here (serve-entries by default where proven). `resume` is true
+   * for a `--resume` / `--resume-run` session (the only sessions that reuse a baseline snapshot).
+   */
+  decideTransport?(facts: { readonly resume: boolean }): Promise<void>;
 
   /**
    * R557, OPTIONAL: the session's test suite (`chooseTestSuite`'s `tests`) and the tests kept in

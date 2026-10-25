@@ -183,6 +183,15 @@ import {
 import { nestedProjectWarning } from "./nested-project";
 import { isRetrySafe, requiresUnsafeLatch } from "./operation-outcome";
 import {
+  type LaneSink,
+  type Latch,
+  MAX_V3_WORKERS,
+  OrderedCommit,
+  asParallelOwner,
+  runScopeQueue,
+  splitBackend,
+} from "./parallel-queue";
+import {
   type PermissionCanaryResult,
   describeTestPermissionsRefusal,
   permissionCanaryWarnings,
@@ -285,6 +294,7 @@ import {
   memberCountsByTest,
   newKillLedger,
   orderCoveringTests,
+  procedureScopeOf,
   recordKill,
 } from "./test-order";
 import {
@@ -4650,6 +4660,11 @@ function handBuildSymbols(backend: ExecutionBackend, symbols: readonly string[])
  */
 interface BatchScope {
   readonly backend: ExecutionBackend;
+  /** R766 (b): `--workers > 1` on al-runner v3: the owner backend and its lane views. */
+  readonly parallel?: {
+    readonly owner: ExecutionBackend;
+    readonly lanes: readonly ExecutionBackend[];
+  };
   readonly caps: BackendCapabilities;
   readonly safety: SessionSafety;
   readonly leaseSession: LeaseSession | undefined;
@@ -5740,8 +5755,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   const mutantsStartedMs = Date.now();
   const baselineReused: ReusedBaseline | undefined =
     reused !== undefined ? { runId: reused.runId, batchIndex: reused.batchIndex } : undefined;
-  await runMutantsOnBackend({
-    backend,
+  const mutantLoopArgs = {
     safety,
     ...(leaseSession !== undefined ? { leaseSession } : {}),
     mutants: toExecute,
@@ -5764,7 +5778,12 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     groupRuns,
     sessionReuse,
     baselineReused,
-  });
+  };
+  if (scope.parallel !== undefined) {
+    await runMutantsParallel({ ...mutantLoopArgs, ...scope.parallel });
+  } else {
+    await runMutantsOnBackend({ ...mutantLoopArgs, backend });
+  }
   emit({ type: "phase-left", phase: "mutants", elapsedMs: Date.now() - mutantsStartedMs });
   // Layer 5C-A Task 8, Task 10 (design §G): per-artifact fail-closed attestation gate. A
   // batch "contributed verdicts" if any mutant it scheduled had >=1 covering test (a batch
@@ -6051,6 +6070,8 @@ async function runSessionBody(
   // R488: the UNFILTERED list, every arm read: a look-alike al-runner would also select must be
   // excluded whether or not this session runs it. Given again to every worker below.
   cfg.backend.useDiscoveredTests?.(discovery.unfiltered);
+  // R761: the transport is decided here, before the first deploy and the first backend process.
+  await cfg.backend.decideTransport?.({ resume: cfg.resume !== undefined });
   // R557 (I3): the suite this session runs, and the tests kept in an `#if` arm discovery could not
   // decide: al-runner stops on a session-suite test it has no row for, except one of those. Given
   // again to every worker below.
@@ -6603,12 +6624,25 @@ async function runSessionBody(
       `runSession: workers=${workers} > 1 is rejected for an authoritative (bcdev) backend in Layer 5C-A — the single LC Mutation Active row is not lease-protected against parallel RunMutant calls (cross-process safety is 5C-B).`,
     );
   }
-  // R586: v1 of the v3 backend is sequential: its compile proof and selector binding are one
-  // backend's state, and `compilePlainCheck` (R461) runs on the session backend only.
+  // R766 (b): the v3 backend runs `--workers N` as N serve lanes of ONE backend: the compile proof, the
+  // selector binding and `compilePlainCheck` (R461) stay the owner's, once. Asked here, after
+  // `decideTransport` (above): the transport and the §6 Sleep rule decide whether it may run.
+  let v3Lanes: readonly ExecutionBackend[] | undefined;
   if (caps.kind === "al-runner-v3" && workers > 1) {
-    throw new Error(
-      `runSession: workers=${workers} > 1 is refused for the al-runner-v3 backend (R586 v1 is sequential).`,
-    );
+    if (workers > MAX_V3_WORKERS) {
+      throw new Error(
+        `al-runner-v3-workers-cap: --workers ${workers} is above the cap of ${MAX_V3_WORKERS} (R766).`,
+      );
+    }
+    const parallel = asParallelOwner(cfg.backend);
+    if (parallel === undefined) {
+      throw new Error(
+        `al-runner-v3-workers-refused: --workers ${workers} > 1 needs a v3 backend that can run lanes (R766).`,
+      );
+    }
+    const why = parallel.parallelRefusal();
+    if (why !== undefined) throw new Error(why);
+    v3Lanes = parallel.lanes(workers);
   }
   // Session-scoped: threads each reserved app version into the next reservation so versions
   // stay strictly increasing within one session even when the clock doesn't advance (or a
@@ -6919,8 +6953,11 @@ async function runSessionBody(
     // R206 §2.1: the session-reuse warning fires once per session, whichever batch or shard sees it.
     const sessionReuse = { warned: false };
     // C02-04: the session-level values every batch's `scoreBatch` call shares.
+    const lane0 = v3Lanes?.[0];
     const scope: BatchScope = {
-      backend: cfg.backend,
+      // R766 (b): under lanes the baseline runs on lane 0 (its N = 1 baseline), the rest on the owner.
+      backend: lane0 !== undefined ? splitBackend(cfg.backend, lane0) : cfg.backend,
+      ...(v3Lanes !== undefined ? { parallel: { owner: cfg.backend, lanes: v3Lanes } } : {}),
       caps,
       safety,
       leaseSession,
@@ -10965,11 +11002,17 @@ async function classifyNonVerdictStep(
   return null;
 }
 
-/**
- * The per-mutant kill-detection loop, run on `cfg.backend` over every mutant of the batch.
- */
-async function runMutantsOnBackend(args: {
+/** What `runMutantsOnBackend` takes; `runMutantsParallel` builds one per procedure scope. */
+interface RunMutantsArgs {
   readonly backend: ExecutionBackend;
+  /**
+   * R766 (b), `--workers > 1` only: the lane's face of the ordered commit. With it the loop does not
+   * record a finished mutant at once; it hands the record to the sink, which keeps it or discards it
+   * by the stop rule. Absent (every N = 1 run): the loop records at once, as before.
+   */
+  readonly sink?: LaneSink | undefined;
+  /** R766 (b): the owner already prefetched the whole batch once, so this call does not. */
+  readonly skipPrefetch?: boolean;
   readonly safety: SessionSafety;
   readonly mutants: readonly MutantManifestEntry[];
   readonly perMutantTests: ReadonlyMap<string, readonly TestMethodRef[]>;
@@ -11025,7 +11068,12 @@ async function runMutantsOnBackend(args: {
    *  an unconfirmed one: `reused-budget-stale` when the budget came from the snapshot, otherwise
    *  `timeout-unconfirmed`. `undefined` for a baseline measured in this run. */
   readonly baselineReused: ReusedBaseline | undefined;
-}): Promise<void> {
+}
+
+/**
+ * The per-mutant kill-detection loop, run on `cfg.backend` over every mutant of the batch.
+ */
+async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
   const leaseSession = args.leaseSession;
   const resyncOpSeq =
     leaseSession !== undefined ? () => leaseSession.resyncOpSeq(args.backend) : undefined;
@@ -11057,21 +11105,22 @@ async function runMutantsOnBackend(args: {
     if (prev === undefined || ms > prev.ms) measuredToday.set(key, { ms, byMutant });
   };
   // R635 §4: once per mutant-loop call, every covered mutant of this shard and its covering refs.
-  await args.backend.prefetchMutants?.(
-    args.mutants.flatMap((m) => {
-      const refs = args.perMutantTests.get(m.mutantId);
-      return refs === undefined || refs.length === 0 ? [] : [{ mutantId: m.mutantId, refs }];
-    }),
-  );
+  if (args.skipPrefetch !== true) await args.backend.prefetchMutants?.(prefetchPlans(args));
   for (const m of args.mutants) {
+    // R766 (b): the queue closed (a latch or a stop elsewhere) or the session latched unsafe: take no more.
+    if (args.sink !== undefined && (args.sink.closed || args.safety.isUnsafe)) break;
     const covering = args.perMutantTests.get(m.mutantId);
     if (covering === undefined) continue; // uncovered, already recorded above
+    args.sink?.begin(m.mutantId);
     if (covering.length === 0) {
       // Defensive: the covering-test list resolved to zero refs (e.g. a
       // coverage index key whose tests no longer exist in `greenTests`).
       // Treat it the same as "no coverage" rather than silently
       // reporting "survived" for a mutant nothing actually ran against.
-      record(args.store, args.runId, m, "no-coverage", args.outcomes, args.batchIndex, args.emit);
+      const noCoverage = () =>
+        record(args.store, args.runId, m, "no-coverage", args.outcomes, args.batchIndex, args.emit);
+      if (args.sink === undefined) noCoverage();
+      else args.sink.finish(m.mutantId, () => void noCoverage());
       continue;
     }
     await activateOnce(args.backend, args.safety, m.mutantId);
@@ -11762,66 +11811,137 @@ async function runMutantsOnBackend(args: {
           : reachAnswered && !reachUnanswered
             ? { guardReached: false, reachedBy: [] }
             : undefined;
-    const mutantRowId = record(
-      args.store,
-      args.runId,
-      m,
-      verdict,
-      args.outcomes,
-      args.batchIndex,
-      args.emit,
-      killingTest,
-      failureNote,
-      cause,
-      spent,
-      // `covering` is exactly what this loop just ran the mutant against, so a survivor's report
-      // entry names the tests that failed to notice it — see `SessionOutcome.coveringTests`.
-      covering.map((ref) => qualifiedTestName(ref)),
-      args.coverageAttribution.get(m.mutantId),
-      guardObserved,
-      undefined, // carried
-      undefined, // strandedSkip
-      undefined, // runner — every call site in this loop predates client-services routing
-      runnerDisagreement,
-      runnerDisagreementTest,
-      undefined, // fromRunId — not a carried verdict
-      permissionRefusedTest,
-      killingTestFailure,
-      undefined, // unplaceable
-      killPosition,
-      reach,
-      killingTestRef,
-      reproduction,
-    );
-    for (const t of testResultBuffer) {
-      args.store.recordTestResult(
+    const commitRecord = (): void => {
+      const mutantRowId = record(
+        args.store,
         args.runId,
-        mutantRowId,
-        t.mutantCode,
-        t.ref,
-        t.outcome,
-        t.durationMs,
-        t.failureMessage,
-        t.opKind,
-        t.sessionId,
+        m,
+        verdict,
+        args.outcomes,
+        args.batchIndex,
+        args.emit,
+        killingTest,
+        failureNote,
+        cause,
+        spent,
+        // `covering` is exactly what this loop just ran the mutant against, so a survivor's report
+        // entry names the tests that failed to notice it — see `SessionOutcome.coveringTests`.
+        covering.map((ref) => qualifiedTestName(ref)),
+        args.coverageAttribution.get(m.mutantId),
+        guardObserved,
+        undefined, // carried
+        undefined, // strandedSkip
+        undefined, // runner — every call site in this loop predates client-services routing
+        runnerDisagreement,
+        runnerDisagreementTest,
+        undefined, // fromRunId — not a carried verdict
+        permissionRefusedTest,
+        killingTestFailure,
+        undefined, // unplaceable
+        killPosition,
+        reach,
+        killingTestRef,
+        reproduction,
       );
-    }
+      for (const t of testResultBuffer) {
+        args.store.recordTestResult(
+          args.runId,
+          mutantRowId,
+          t.mutantCode,
+          t.ref,
+          t.outcome,
+          t.durationMs,
+          t.failureMessage,
+          t.opKind,
+          t.sessionId,
+        );
+      }
+    };
     // R688 (S10): a discovery confirm that did not pass stops the session, after the record above.
-    if (abortAfterRecord !== undefined) throw new Error(abortAfterRecord);
-    if (transportErrorRef !== undefined) {
-      throw new Error(
-        `backend transport error: two consecutive run() failures for mutant ${m.mutantId} ` +
-          `(test ${transportErrorRef.method}) — aborting session per spec §11: ${failureNote ?? ""}`,
-      );
-    }
+    // The error is built before the record so a parallel run's sink can apply its stop rule to it.
+    const stopAfterRecord =
+      abortAfterRecord !== undefined
+        ? new Error(abortAfterRecord)
+        : transportErrorRef !== undefined
+          ? new Error(
+              `backend transport error: two consecutive run() failures for mutant ${m.mutantId} ` +
+                `(test ${transportErrorRef.method}) — aborting session per spec §11: ${failureNote ?? ""}`,
+            )
+          : undefined;
+    if (args.sink === undefined) commitRecord();
+    else args.sink.finish(m.mutantId, commitRecord, stopAfterRecord);
+    if (stopAfterRecord !== undefined) throw stopAfterRecord;
     // Task 12 (spec §8/§12): the in-flight-unknown branch above just latched `safety` — stop
     // scheduling further mutants in THIS shard rather than letting the next iteration's
     // `activateOnce` discover the latch by throwing `SessionUnsafeError`. Checked here (after
     // this mutant's own record/flush completed) rather than relying on that throw so the shard
     // returns normally and `runSession` can still assemble a `quarantined` report instead of
     // rejecting.
-    if (args.safety.isUnsafe) break;
+    if (args.safety.isUnsafe) {
+      args.sink?.unsafeBreak(m.mutantId);
+      break;
+    }
   }
+}
+
+/** R635 §4: every covered mutant of the call, with its covering refs, in manifest order. */
+function prefetchPlans(
+  args: Pick<RunMutantsArgs, "mutants" | "perMutantTests">,
+): { mutantId: string; refs: readonly TestMethodRef[] }[] {
+  return args.mutants.flatMap((m) => {
+    const refs = args.perMutantTests.get(m.mutantId);
+    return refs === undefined || refs.length === 0 ? [] : [{ mutantId: m.mutantId, refs }];
+  });
+}
+
+/**
+ * R766 (b): the batch's mutants on N lanes (`--workers N`, al-runner v3 only). The owner prefetches the
+ * whole batch once, with the N = 1 grouping; then a pull queue hands out procedure scopes (see
+ * `parallel-queue.ts`), each scope's mutants in manifest order on one lane, through the ordinary loop
+ * (`runMutantsOnBackend`) with a sink that applies the stop rule.
+ */
+async function runMutantsParallel(
+  args: Omit<RunMutantsArgs, "backend" | "sink" | "skipPrefetch"> & {
+    readonly owner: ExecutionBackend & {
+      latched?: Latch;
+      laneMayStart?: (k: number) => boolean;
+      affordableLanes?: (n: number) => number;
+    };
+    readonly lanes: readonly ExecutionBackend[];
+  },
+): Promise<void> {
+  const { owner, lanes, ...rest } = args;
+  await owner.prefetchMutants?.(prefetchPlans(args));
+  // The latch is shared by every lane: the owner's is the one to read.
+  const probe: Latch = () => owner.latched?.();
+  const commit = new OrderedCommit(
+    args.mutants.map((m) => m.mutantId),
+    probe,
+    lanes.length,
+  );
+  const units = new Map<string, MutantManifestEntry[]>();
+  for (const m of args.mutants) {
+    if (args.perMutantTests.get(m.mutantId) === undefined) {
+      commit.markDone(m.mutantId); // uncovered, already recorded above
+      continue;
+    }
+    const scope = procedureScopeOf(m);
+    const unit = units.get(scope) ?? [];
+    unit.push(m);
+    units.set(scope, unit);
+  }
+  await runScopeQueue({
+    units: [...units.values()],
+    lanes: owner.affordableLanes?.(lanes.length) ?? lanes.length,
+    mayStart: (k) => owner.laneMayStart?.(k) ?? true,
+    commit,
+    isUnsafe: () => args.safety.isUnsafe,
+    runUnit: async (k, unit, sink) => {
+      const backend = lanes[k];
+      if (backend === undefined) throw new Error(`runMutantsParallel: no lane ${k}`);
+      await runMutantsOnBackend({ ...rest, backend, mutants: unit, sink, skipPrefetch: true });
+    },
+  });
 }
 
 /**

@@ -13,6 +13,13 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **A forced fresh probe no longer writes the probe cache** (R770). `--fresh-probe`, `LETHAL_V3_FRESH_PROBE=1` and the
+  gates' sessions skip the write (the receipt says "forced; not cached"), so the pinned build folder stops filling with
+  entries no later session can match. A normal miss still writes.
+- **al-runner-v3: the Sleep coverage rule (§6) is retired on pinned builds that fixed Sleep** (R768, R-762 B). When
+  the build's pin and the session's own probe both read `sleep-is-noop` gone, a covering pass under a mutant is no
+  longer refused, mutant calls ask for no `--coverage-json`, and serve-entries opens no coverage window. Unpinned
+  builds keep the rule. Gate leg X (d) moves to 2 killed / 3 survived / 0 error there; X (e) and (f) are not applicable.
 - **al-runner-v3 one-shot kill confirms no longer ask v3 for coverage** (R764). The orchestrator already sends confirms
   with coverage `none`; the backend ignored it and sent `--coverage-json` and joined the result. Now an unmutated
   call that asked for `none` sends neither. The real baseline and every mutant call are unchanged. No verdict can
@@ -20,6 +27,13 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **al-runner-v3 sessions replay a cached contract probe** (R765, coord R-762). The probe costs about 10 s per session
+  (60% of a small project's serve start-up). A fully passing result is now stored beside the pinned build's `.gated`
+  and replayed when the binary sha256, LethAL's probe code, bcVersion, the packages folder, alc, the cache dir and the
+  `.gated` commit all match. A failed, diverged or refused result is never stored; a missing, unreadable or corrupt
+  entry runs the probe. Each session prints `probe from cache (key ...)` or `probe ran fresh (key ...; why)`.
+  `lethal run --fresh-probe` or `LETHAL_V3_FRESH_PROBE=1` forces a fresh probe; the v3 itest and the update gate always
+  do, and a candidate build never uses the cache.
 - **`--exclude-test <Codeunit.Method>` leaves single test methods out of a run** (R745). Repeatable, `lethal run` only,
   bcdev only (al-runner-v3 runs whole codeunits, so it refuses the flag by name). A name that matches no test is
   refused before any deploy. The report names each left-out test in `excludedTests` (reason `exclude-test`), raises

@@ -92,6 +92,7 @@ import {
   runSession,
 } from "./orchestrator";
 import type { SessionConfig } from "./orchestrator";
+import { MAX_V3_WORKERS } from "./parallel-queue";
 import { PermissionCanaryClient, runPermissionCanary } from "./permission-canary";
 import { type BuildBackend, validateSymbolList } from "./preprocessor-symbols";
 import { createNdjsonSink } from "./progress-ndjson";
@@ -368,6 +369,7 @@ export const DRY_RUN_REFUSED = [
   "retry-stranded",
   "stop-hung-sessions",
   "allow-large-run",
+  "fresh-probe",
 ] as const;
 
 export interface DryRunCliConfig {
@@ -523,6 +525,8 @@ export interface RunCliConfig {
    * session on the user's server — see `SessionConfig.stopHungSessions`.
    */
   readonly stopHungSessions?: boolean;
+  /** R762: `--fresh-probe`, al-runner-v3 only: run the contract probe instead of replaying a cached pass. */
+  readonly freshProbe?: boolean;
   /**
    * R47: `--resume` (most recent unfinished run) or `--resume-run <id>` (a named one). Absent means
    * a fresh run. See `SessionConfig.resume`.
@@ -1001,6 +1005,9 @@ RUN — cost and recovery
   --request-ceiling-ms <n>   bound one RunMutantMany call (default ${REQUEST_CEILING_MS} ms; keep it under the
                              gateway's idle timeout). A method that cannot fit runs alone
   --no-group-runs            run covering tests one RunMutant call each, as before R198
+  --fresh-probe              al-runner-v3 only: run its contract probe now instead of replaying a
+                             cached pass for the same build, packages and alc (R762). Same as
+                             LETHAL_V3_FRESH_PROBE=1. A failed or forced probe is never cached
   --resume                   continue the most recent unfinished run in --db, reusing its verdicts
   --resume-run <id>          resume a specific run id
   --retry-stranded           on resume, retry mutants that left the server stuck (skipped by default:
@@ -1012,7 +1019,11 @@ RUN — cost and recovery
                              the lease fence, but that id cannot be independently verified.
                              A baseline test, kill confirm or warm replay with NO mutant active
                              is stopped at its budget regardless of this flag (R658)
-  --workers <n>              parallel workers (every backend is limited to 1)
+  --workers <n>              parallel workers. al-runner-v3 only, 2 to 8: N serve lanes of one
+                             backend, with serve-entries and a build whose pin retires the §6
+                             Sleep rule (else refused by name). The first latch or stop ends the
+                             session with an error naming the mutants it discarded. bcdev is
+                             limited to 1
   --progress-out <path>      stream events to this file as NDJSON, one JSON object per line,
                              flushed as each event arrives — a crash diagnostic and a structured
                              feed for agents/CI. VERDICT LINES ARE PROVISIONAL UNTIL
@@ -1277,6 +1288,8 @@ export const RUN_FLAGS = {
   "stop-hung-sessions": { type: "boolean", default: false },
   // R48: see `RunCliConfig.allowLargeRun`.
   "allow-large-run": { type: "boolean", default: false },
+  // R762: see `RunCliConfig.freshProbe`.
+  "fresh-probe": { type: "boolean", default: false },
   // Task 6 (event-stream refactor): see `RunCliConfig.progressOutPath`.
   "progress-out": { type: "string" },
   // `lethal campaign` (subsystem D): the campaign manifest, the stage whose committed records this
@@ -1338,6 +1351,7 @@ const RUN_ONLY_FLAGS = [
   "retry-stranded",
   "stop-hung-sessions",
   "allow-large-run",
+  "fresh-probe",
   "progress-out",
 ] as const;
 
@@ -2117,12 +2131,14 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       `--allow-expiring-env applies to the bcdev backend's environment tool; ${backendArg} has no environment`,
     );
   }
-  // R586 (T16): v1 of the v3 backend is sequential and not measured on Windows.
+  // R586 (T16): v3 is not measured on Windows.
   if (backendArg === "al-runner-v3") {
     refuseV3Platform();
-    if (workers > 1) {
+    // R766 (b): N serve lanes in one backend. The run refuses by name, after the transport is
+    // decided, unless the transport is serve-entries and the build retires the §6 Sleep rule.
+    if (workers > MAX_V3_WORKERS) {
       throw new Error(
-        "al-runner-v3-workers-refused: --workers > 1 is refused with --backend al-runner-v3 (R586 v1 is sequential).",
+        `al-runner-v3-workers-cap: --workers ${workers} is above the cap of ${MAX_V3_WORKERS} (R766).`,
       );
     }
   }
@@ -2153,6 +2169,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     ...(values["allow-large-run"] === true ? { allowLargeRun: true } : {}),
     ...(values["retry-stranded"] === true ? { retryStranded: true } : {}),
     ...(values["stop-hung-sessions"] === true ? { stopHungSessions: true } : {}),
+    ...(values["fresh-probe"] === true ? { freshProbe: true } : {}),
     ...(values["progress-out"] !== undefined ? { progressOutPath: values["progress-out"] } : {}),
   };
 }
@@ -2842,6 +2859,7 @@ export type BackendInputs = Pick<
   RunCliConfig,
   "backendKind" | "projectDir" | "testDir" | "stopHungSessions"
 > &
+  Partial<Pick<RunCliConfig, "freshProbe">> &
   // R505: the run's own output files, which the source-drift watch must not count.
   Partial<Pick<RunCliConfig, "dbPath" | "outPath" | "progressOutPath">>;
 
@@ -2866,8 +2884,9 @@ export async function v3CoverageMode(
 }
 
 /**
- * R586 (plan r2 §9): the al-runner-v3 backend from the `alRunnerV3` section. One-shot, static
- * selector, sequential. Coverage is turned off (with a warning) by `v3CoverageMode`.
+ * R586 (plan r2 §9): the al-runner-v3 backend from the `alRunnerV3` section. Sequential. The
+ * transport is serve-entries where proven and one-shot otherwise (R761), unless the config names
+ * one. Coverage is turned off (with a warning) by `v3CoverageMode`.
  */
 async function buildAlRunnerV3Backend(
   parsed: BackendInputs,
@@ -2909,14 +2928,16 @@ async function buildAlRunnerV3Backend(
       coverage,
       sourceProjectDir: parsed.projectDir,
       ...(deps.candidate === true ? { candidate: true } : {}),
+      ...(parsed.freshProbe === true ? { freshProbe: true } : {}),
       ...(c.cacheDir !== undefined ? { cacheDir: c.cacheDir } : {}),
       ...(deps.preprocessorSymbols.length > 0
         ? { preprocessorSymbols: deps.preprocessorSymbols }
         : {}),
-      // R635: one-shot unless the config opts in.
-      ...(c.transport === "serve-entries"
-        ? { transport: c.transport, secondEcho: c.secondEcho }
-        : {}),
+      // R635, R761: serve-entries is the default where proven; the session decides it
+      // (`decideTransport`) when the config names no transport. An explicit key is used as written.
+      transport: c.transport,
+      transportSource: c.transportSource,
+      ...(c.transport === "serve-entries" ? { secondEcho: c.secondEcho } : {}),
     },
     deps.spawn,
     undefined,
@@ -3927,10 +3948,10 @@ export async function runFromCli(
             }
           }
           // Release whatever the backend is holding open: the spawned bc-dev MCP
-          // child. The `process.exit(0)` below would paper over a leak here, but only for this
-          // entry point — anything else embedding the backend would hang or leak a
-          // process instead.
-          if (backend instanceof BcDevMcpBackend) {
+          // child, v3's serve daemon (R775: whose close also prints the serve-entries counters). The
+          // `process.exit(0)` below would paper over a leak here, but only for this entry point —
+          // anything else embedding the backend would hang or leak a process instead.
+          if (backend?.close !== undefined) {
             try {
               await backend.close();
             } catch (err) {
@@ -4495,7 +4516,7 @@ export async function buildDoctorDeps(
             await assertBcVersionMatchesPackages(c.packagesDir, c.bcVersion);
             return {
               ok: true,
-              details: `${version}; gated at LethAL ${gated.lethalCommit}; bcVersion ${c.bcVersion}`,
+              details: `${version}; gated at LethAL ${gated.lethalCommit}; bcVersion ${c.bcVersion}; transport ${c.transportSource === "explicit" ? c.transport : "default (serve-entries where proven, else one-shot; R761)"}`,
             };
           } catch (err) {
             return { ok: false, details: err instanceof Error ? err.message : String(err) };
@@ -5151,7 +5172,7 @@ export async function verifyFromCli(
         );
       }
     }
-    if (backend instanceof BcDevMcpBackend) {
+    if (backend?.close !== undefined) {
       try {
         await backend.close();
       } catch (err) {

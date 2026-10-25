@@ -1198,3 +1198,26 @@ describe("R658: a baseline test LethAL stopped", () => {
     expect(() => buildWithBaseline([STOPPED])).toThrow(/stoppedBudgetMs \(R658\)/);
   });
 });
+
+describe("foldEvents: R766 (b), the mutant code is the last tie-break of the report order", () => {
+  const scored = (id: string): RunEventInput => ({
+    type: "mutant-scored",
+    mutant: mutant(id, { startIndex: 100 }),
+    verdict: "survived",
+    batchIndex: 0,
+    durationMs: 1,
+    coveringTests: [],
+  });
+  const order = (ids: string[]): string[] =>
+    foldEvents(
+      STATICS,
+      seq([...baseEvents(), ...ids.map(scored), { type: "session-finished", elapsedMs: 1 }]),
+    ).outcomes.map((o) => o.mutant.mutantId);
+
+  test("same file and start offset: the order does not follow the arrival order, and is by code point", () => {
+    // "Z" (0x5A) sorts before "a" (0x61) by code point; localeCompare would put "a" first.
+    const want = ["M0001", "M0002", "Z0001", "a0001"];
+    expect(order(["a0001", "M0002", "Z0001", "M0001"])).toEqual(want);
+    expect(order(["M0001", "Z0001", "a0001", "M0002"])).toEqual(want);
+  });
+});
