@@ -1495,7 +1495,13 @@ export class BcDevMcpBackend implements ExecutionBackend {
     // member, and the object-relative lines that fell in no known span.
     const memberRows = new Map<string, number>();
     const gapLines = new Map<string, Set<number>>();
-    const gapRows: { key: string; objectType: string; objectId: number; lineNo: number }[] = [];
+    const gapRows: {
+      key: string;
+      objectType: string;
+      objectId: number;
+      lineNo: number;
+      inUnnamedMember: boolean;
+    }[] = [];
     for (const row of rows) {
       const objectType = objectTypeName(row.objectType);
       if (!lineMap.declares(objectType, row.objectId)) continue; // rule 1
@@ -1513,10 +1519,22 @@ export class BcDevMcpBackend implements ExecutionBackend {
       const procedure = lineMap.lookup(objectType, row.objectId, row.lineNo);
       if (procedure !== undefined) memberRows.set(objKey, (memberRows.get(objKey) ?? 0) + 1);
       if (procedure === undefined && lineMap.isNamingGap(objectType, row.objectId, row.lineNo)) {
-        const lines = gapLines.get(objKey) ?? new Set<number>();
-        lines.add(row.lineNo);
-        gapLines.set(objKey, lines);
-        gapRows.push({ key: objKey, objectType, objectId: row.objectId, lineNo: row.lineNo });
+        // R753: a row inside an R318 split member with no coverage name is a gap for attribution
+        // (`namingGaps` and `unplaceable` stay as R318 ruled) but not for the WARNINGS: the line is
+        // placed, in a member the map declines to name. Not a suspect base-line shift.
+        const inUnnamedMember = lineMap.inUnnamedSpan(objectType, row.objectId, row.lineNo);
+        if (!inUnnamedMember) {
+          const lines = gapLines.get(objKey) ?? new Set<number>();
+          lines.add(row.lineNo);
+          gapLines.set(objKey, lines);
+        }
+        gapRows.push({
+          key: objKey,
+          objectType,
+          objectId: row.objectId,
+          lineNo: row.lineNo,
+          inUnnamedMember,
+        });
         const gapKey = objKey;
         if (!namingGapKeys.has(gapKey)) {
           namingGapKeys.add(gapKey);
@@ -1538,8 +1556,8 @@ export class BcDevMcpBackend implements ExecutionBackend {
     // R747: judged per object. An object with a naming gap and no member row in this test.
     // R748: ONE has-member set splits the gap objects in two, so no object is in both lists.
     const hasMember = (key: string) => (memberRows.get(key) ?? 0) > 0;
-    const flagged = namingGaps
-      .map((g) => `${g.objectType}:${g.objectId}`)
+    // R753: built from `gapLines` (rows outside unnamed split members), not from `namingGaps`.
+    const flagged = [...gapLines.keys()]
       .filter((key) => !hasMember(key))
       .map((key) => `${key} (${rowsPerObject.get(key) ?? 0} row(s))`)
       // Sorted, so the message (and which objects the cap shows) does not follow the server's row order.
@@ -1559,6 +1577,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
           objectId: g.objectId,
           lineNo: g.lineNo,
           besideMembers: hasMember(g.key),
+          inUnnamedMember: g.inUnnamedMember,
         });
       }
     }
@@ -1611,9 +1630,9 @@ export class BcDevMcpBackend implements ExecutionBackend {
    *
    * R748: `besideMembers` holds the objects with a naming gap AND a member row (the likeliest
    * real 1-2 line shift looks like that); they raise `fenced-coverage-gap-beside-members`. The
-   * two lists never share an object. Remaining blind spots: (i) an R318 renamed split member
-   * with no coverage name sits in `unnamed`, which `isNamingGap` does not consult, so every row on
-   * it is a gap row, and beside a named member's row it gives a FALSE new warning (R753); (ii)
+   * two lists never share an object. R753: a row inside an R318 split member with no coverage
+   * name is still a naming gap for attribution (`namingGaps`, `unplaceable`: R318's ruling) but
+   * is left out of both lists here, so it cannot raise a false warning. Remaining blind spot:
    * report column, page field and property rows are unmeasured on real projects.
    * A shift landing every row in trigger spans stays quiet too.
    */
@@ -1923,6 +1942,8 @@ interface DumpGap {
   objectId: number;
   lineNo: number;
   besideMembers: boolean;
+  /** R753: the row is inside an R318 split member with no coverage name (not counted by the warnings). */
+  inUnnamedMember: boolean;
 }
 
 /** R748: an object with naming-gap lines (sorted, distinct) and at least one member row. */

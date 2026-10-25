@@ -257,7 +257,8 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
       // R-463: re-recorded for R-463's DataBandExt arm, ruling orchestrator 2026-10-09 (was
       // c83bdd08...23eb); 4 new arm entries, ids +4 after DataBandExt, proven in id-shift-proof.txt.
       // R731: toggle-blank-string's operatorVersion 1.1.0 is the only change (was dc2c1f19...da48).
-      "a7dba8bc19cf696a66651ee2446a6409a2a73918dbc2e055cd66669f99fd0835",
+      // R752: toggle-blank-string's operatorVersion 1.1.1 is the only change (was a7dba8bc...0835).
+      "cf442b39ef79109a5787274d2ab243b538837e97bf3527129c06ce2d04c073d4",
     );
     const all = createHash("sha256");
     for (const f of (await readdir(dir)).sort()) {
@@ -278,9 +279,11 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
     // id-shift-proof.txt (/coord/handoff/R-463/).
     // R731: only the manifest moved it, by toggle-blank-string's operatorVersion 1.1.0 (was 0e1a6cbb...2166).
     // R750: re-pinned (was 6a1f8e80...eacf, ruling orchestrator 2026-10-25): DataMainListExt.PageExt.al's
-    // header comment, rewritten at the same length; the manifest pin above is unchanged.
+    // header comment, rewritten at the same length.
+    // R752: then only the manifest moved it, by toggle-blank-string's operatorVersion 1.1.1
+    // (was 80c0b0be...d369 on master, the R750 pin).
     expect(all.digest("hex")).toBe(
-      "80c0b0be535cdf0bfa6fff1a5c42eb728f4e89038cfb28e718ee4efa6c0fd369",
+      "3cc7757fd353445b1d079e15a856dd57b6fe3be3959a30c1fe0fcbd775c89e48",
     );
   }, 60_000);
 });

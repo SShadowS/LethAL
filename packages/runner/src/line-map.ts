@@ -74,6 +74,13 @@ interface ObjectLines {
    * triggers. Such a line names nobody: neither `lookup` nor the re-key may pick a side.
    */
   readonly shared: ReadonlySet<number>;
+  /**
+   * R753: the spans of SPLIT procedure nodes (`preproc_split_procedure[_preamble]`) with no name.
+   * A subset of the `unnamed` list that feeds `shared`: a nameless PLAIN `procedure` (named
+   * `""`, a clean parse; or with its name missing, error recovery) is not here, so its rows stay
+   * gap rows for the warnings.
+   */
+  readonly unnamedSplit: readonly ProcedureSpan[];
 }
 
 /**
@@ -478,6 +485,18 @@ export class LineMap {
     if (entry === undefined || entry.renamed.length === 0) return false;
     return entry.renamed.some((p) => lineNo >= p.firstLine && lineNo <= p.lastLine);
   }
+
+  /**
+   * R753: is `lineNo` inside a SPLIT procedure with no coverage name (R318, ruling A)? The line is
+   * placed, in a member the map declines to name. Used by the fenced warnings ONLY: `isNamingGap`
+   * is unchanged, because it feeds `namingGaps` and `unplaceable` (R318's 2026-10-06 ruling), and
+   * a nameless plain `procedure` (named `""`, or name missing) is not in this list.
+   */
+  inUnnamedSpan(objectType: string, objectId: number, lineNo: number): boolean {
+    const entry = this.byObject.get(keyOf(objectType, objectId));
+    if (entry === undefined || lineNo <= 0) return false;
+    return entry.unnamedSplit.some((p) => lineNo >= p.firstLine && lineNo <= p.lastLine);
+  }
 }
 
 /**
@@ -498,6 +517,7 @@ function spansOf(
   const triggers: ProcedureSpan[] = [];
   /** R318 ruling A: renamed split members with no coverage name. Never named, but counted for `shared`. */
   const unnamed: ProcedureSpan[] = [];
+  const unnamedSplit: ProcedureSpan[] = [];
   const span = (n: ALSyntaxNode, name: string): ProcedureSpan => ({
     name,
     firstLine: n.startPosition.row + 1 - baseLine + 1,
@@ -531,6 +551,7 @@ function spansOf(
         // Ruling A. A bare `procedure` keyword token is also procedure-like (no children, not a
         // declaration): it spans nothing.
         unnamed.push(span(n, ""));
+        if (isSplitProcedureKind(n.rawKind)) unnamedSplit.push(span(n, ""));
       }
       return; // do not descend: a nested construct belongs to this procedure, not its own span
     }
@@ -542,7 +563,13 @@ function spansOf(
     triggers,
     renamed: procedures.filter((p) => p.arms !== undefined),
     shared: linesInTwoSpans([...procedures, ...unnamed, ...triggers]),
+    unnamedSplit,
   };
+}
+
+/** R753: the two split-header procedure shapes (R301, R316). */
+function isSplitProcedureKind(rawKind: string): boolean {
+  return rawKind === "preproc_split_procedure" || rawKind === "preproc_split_procedure_preamble";
 }
 
 /**
