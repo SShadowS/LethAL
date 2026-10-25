@@ -305,13 +305,11 @@ export function scanFailures(output: string, maxLines = 12): FailureScan {
       }
       continue;
     }
-    if (/^\s*\^ this test timed out after /.test(line)) {
+    // R726b: a hook timeout reads `^ a beforeEach/afterEach/beforeAll hook timed out for this test.`
+    if (/^\s*\^ (this test|a .* hook) timed out/.test(line)) {
       const d = lastFail === undefined ? undefined : details.get(lastFail);
       if (d !== undefined) d.push(line.trim());
-      if (lastFail !== undefined) {
-        const f = fileOf.get(lastFail);
-        timedOut.push(f === undefined ? lastFail : `${f} > ${lastFail}`);
-      }
+      if (lastFail !== undefined) timedOut.push(file === "" ? lastFail : `${file} > ${lastFail}`);
       continue;
     }
     lastFail = undefined;

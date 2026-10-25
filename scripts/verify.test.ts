@@ -399,6 +399,43 @@ describe("parseTestSummary", () => {
     ]);
     expect(hit[0]).not.toContain("plain assertion failure");
   });
+  test("R726b S1: the same test name timing out in two files is listed under each file", async () => {
+    const out = [
+      "a.test.ts:",
+      "(fail) same name [60001.00ms]",
+      "  ^ this test timed out after 60000ms.",
+      "b.test.ts:",
+      "(fail) same name [60002.00ms]",
+      "  ^ this test timed out after 60000ms.",
+      " 0 pass",
+      " 2 fail",
+      "Ran 2 tests across 2 files. [1.00s]",
+    ].join("\n");
+    const step = await stepOf(out, 1);
+    expect(step.lines.filter((l) => l.startsWith("timed out ("))).toEqual([
+      "timed out (2): a.test.ts > same name; b.test.ts > same name",
+    ]);
+  });
+  test("R726b S2: a hook timeout is listed, and its line stays out of the next failure's text", async () => {
+    const out = [
+      "a.test.ts:",
+      "(fail) hooked [5001.00ms]",
+      "  ^ a beforeEach/afterEach hook timed out for this test.",
+      "error: expect(received).toBe(expected)",
+      "(fail) next one [1.00ms]",
+      " 0 pass",
+      " 2 fail",
+      "Ran 2 tests across 1 file. [1.00s]",
+    ].join("\n");
+    const step = await stepOf(out, 1);
+    expect(step.lines.filter((l) => l.startsWith("timed out ("))).toEqual([
+      "timed out (1): a.test.ts > hooked",
+    ]);
+    const text = step.lines.join("\n");
+    expect(text).toContain("  (fail) next one\n    | error: expect(received).toBe(expected)");
+    expect(text).not.toContain("  (fail) next one\n    | ^ a beforeEach");
+    expect(text.match(/hook timed out/g)?.length).toBe(1);
+  });
   test("R726b: a run with no timeout prints no timed-out line", async () => {
     const out =
       "error: boom\n(fail) plain [2.00ms]\n 1 pass\n 1 fail\nRan 2 tests across 1 file. [1.00s]\n";
