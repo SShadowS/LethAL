@@ -9,7 +9,12 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { initParser } from "@lethal/engine";
 import { emitResourceSelector, emitStaticSelector } from "@lethal/schemata";
-import { v3ItestTransport, v3SplitLine } from "../itest/al-runner-v3-gate";
+import {
+  V3_GATE_SERVE_LEGS,
+  v3ItestLegTransport,
+  v3ItestTransport,
+  v3SplitLine,
+} from "../itest/al-runner-v3-gate";
 import {
   AlRunnerServer,
   AlRunnerServerRequestError,
@@ -2210,6 +2215,39 @@ describe("the gate's transport flags (itest:alrunner-v3 harness)", () => {
       }),
     ).toThrow(/al-runner-v3-itest-transport-refused: LETHAL_ITEST_V3_SECOND_ECHO=/);
     expect(() => v3ItestTransport({ LETHAL_ITEST_V3_SECOND_ECHO: "0" })).toThrow(
+      /SECOND_ECHO is set without/,
+    );
+  });
+  test("R788: unflagged, exactly D1, D1c and T run serve-entries; a flag names every leg's transport", () => {
+    const serve = { transport: "serve-entries" } as const;
+    for (const leg of ["D1", "D1c", "T"]) expect(v3ItestLegTransport(leg, {})).toEqual(serve);
+    for (const leg of [
+      "C",
+      "S1",
+      "S1E",
+      "S3",
+      "N1",
+      "N1E",
+      "N1S",
+      "O1",
+      "X",
+      "L1",
+      "Y-A",
+      "Y-B",
+      "MO",
+      "WR",
+      "K",
+    ])
+      expect(v3ItestLegTransport(leg, {})).toEqual({});
+    expect(V3_GATE_SERVE_LEGS).toEqual(["D1", "D1c", "T"]);
+    expect(v3ItestLegTransport("D1", { LETHAL_ITEST_V3_TRANSPORT: "one-shot" })).toEqual({});
+    expect(
+      v3ItestLegTransport("S1", {
+        LETHAL_ITEST_V3_TRANSPORT: "serve-entries",
+        LETHAL_ITEST_V3_SECOND_ECHO: "0",
+      }),
+    ).toEqual({ transport: "serve-entries", secondEcho: false });
+    expect(() => v3ItestLegTransport("D1", { LETHAL_ITEST_V3_SECOND_ECHO: "0" })).toThrow(
       /SECOND_ECHO is set without/,
     );
   });
