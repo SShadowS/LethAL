@@ -5646,6 +5646,10 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
             // R686: whose codeunit, and whether it is the found-0 form an OnRun raise also gives.
             codeunit: b.ref.codeunitName,
             foundNone: isRunMutantFoundNone(b.verdict.failureMessage),
+            // R689: BC's own OnRun error text, when the control app proved it is this codeunit's.
+            ...(b.verdict.discoveryError !== undefined
+              ? { discoveryError: b.verdict.discoveryError }
+              : {}),
           },
         ];
   });
@@ -6050,6 +6054,8 @@ async function runSessionBody(
   // R488: the UNFILTERED list, every arm read: a look-alike al-runner would also select must be
   // excluded whether or not this session runs it. Given again to every worker below.
   cfg.backend.useDiscoveredTests?.(discovery.unfiltered);
+  // R761: the transport is decided here, before the first deploy and the first backend process.
+  await cfg.backend.decideTransport?.({ resume: cfg.resume !== undefined });
   // R557 (I3): the suite this session runs, and the tests kept in an `#if` arm discovery could not
   // decide: al-runner stops on a session-suite test it has no row for, except one of those. Given
   // again to every worker below.

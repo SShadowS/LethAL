@@ -129,6 +129,12 @@ export interface TestVerdict {
    */
   readonly timeoutWordingUnknown?: boolean;
   readonly failureMessage?: string;
+  /**
+   * R689 (control 1.0.0.24): on a found-0 line-count answer, the test codeunit's own OnRun error as
+   * BC's discovery caught it, and the stack's first frame. Set only when the control app proved the
+   * frame names the requested codeunit. `failureMessage` is unchanged by it.
+   */
+  readonly discoveryError?: { readonly text: string; readonly frame: string };
   readonly coverage?: CoverageMap;
   /**
    * The dispatch/effect state of this run (spec §7/§11). Absent ⇒ a terminal test outcome
@@ -395,6 +401,8 @@ export const isUnread = (r: PublishedPackageRead): r is PackageUnread =>
 
 export interface ExecutionBackend {
   capabilities(): BackendCapabilities;
+  /** Releases what the backend holds open (bcdev's MCP child, v3's serve daemon). R775: the CLI calls it. */
+  close?(): Promise<void>;
   /**
    * R516 I1: true when the run's own in-run stop is the budget it was sent (bcdev; al-runner
    * one-shot, static or resource selector), so a larger budget really lets the test run longer.
@@ -526,11 +534,25 @@ export interface ExecutionBackend {
   dependentCount?(appId: string): Promise<number>;
 
   /**
+   * R733, OPTIONAL: the INSTALLED apps on the server that declare `appId` as a dependency, by name
+   * (the control app's `InstalledDependents`, 1.0.0.24). Present on bcdev only; absent means R727's
+   * dependents warning makes no call.
+   */
+  installedDependents?(appId: string): Promise<readonly import("./harness").InstalledDependent[]>;
+
+  /**
    * R488, OPTIONAL: every test the session discovered, every arm read, given before the baseline
    * and to every worker. A backend whose test selector is a substring match (al-runner one-shot)
    * excludes the look-alikes up front with it.
    */
   useDiscoveredTests?(tests: readonly TestMethodRef[]): void;
+
+  /**
+   * R761, OPTIONAL: called once, right after `useDiscoveredTests` and before the first deploy.
+   * al-runner v3 picks its transport here (serve-entries by default where proven). `resume` is true
+   * for a `--resume` / `--resume-run` session (the only sessions that reuse a baseline snapshot).
+   */
+  decideTransport?(facts: { readonly resume: boolean }): Promise<void>;
 
   /**
    * R557, OPTIONAL: the session's test suite (`chooseTestSuite`'s `tests`) and the tests kept in

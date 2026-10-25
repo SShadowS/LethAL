@@ -9,6 +9,10 @@
  * included, and the test dir), keyed by the absolute path v3 reports, and matched against RAW
  * `--coverage-json` lines: never through the line map, the coverage index or its multi-object and
  * wrapped refusals (those are the safe direction for selection and the unsafe one here).
+ *
+ * R-762 B: the rule is OFF on a pinned build whose pin and session probe both read `sleep-is-noop`
+ * gone (`sleepRuleRetiredFor`, alpha.5 and edge): there the backend never calls the refusals below.
+ * The index is still built for every batch (its sizes are pre-committed figures).
  */
 import { readFile, realpath } from "node:fs/promises";
 import { join, resolve } from "node:path";
