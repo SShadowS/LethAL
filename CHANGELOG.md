@@ -11,6 +11,13 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ## [Unreleased]
 
+### Changed
+
+- **al-runner-v3 one-shot kill confirms no longer ask v3 for coverage** (R764). The orchestrator already sends confirms
+  with coverage `none`; the backend ignored it and sent `--coverage-json` and joined the result. Now an unmutated
+  call that asked for `none` sends neither. The real baseline and every mutant call are unchanged. No verdict can
+  move: a confirm's coverage fed nothing scored.
+
 ### Added
 
 - **`--exclude-test <Codeunit.Method>` leaves single test methods out of a run** (R745). Repeatable, `lethal run` only,
