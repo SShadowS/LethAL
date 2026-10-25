@@ -426,6 +426,34 @@ function assertIndex(b: AlRunnerV3Backend, leg: string, target: number, test: nu
   );
 }
 
+/**
+ * R788: a serve leg's counters that follow from its verdicts (one kill pair per killed mutant, no
+ * echo mismatch, no fallback, no refused batch). Lane- and timing-dependent counters are only printed.
+ */
+function assertServeCounters(b: AlRunnerV3Backend, leg: string, killed: number): void {
+  if (v3ItestLegTransport(leg, process.env).transport === undefined) return;
+  const s = b.entriesStats();
+  const got = {
+    pairRequests: s.pairRequests,
+    echoMismatches: s.echoMismatches,
+    pairFallbacks1: s.pairFallbacks1,
+    pairFallbacks2: s.pairFallbacks2,
+    pairBatchRefused: s.pairBatchRefused,
+  };
+  const want = {
+    pairRequests: killed,
+    echoMismatches: 0,
+    pairFallbacks1: 0,
+    pairFallbacks2: 0,
+    pairBatchRefused: 0,
+  };
+  console.log(`  ${leg}: serve counters ${JSON.stringify(got)}`);
+  for (const [k, v] of Object.entries(want)) {
+    const g = got[k as keyof typeof got];
+    must(g === v, `${leg}: ${k} ${g}, pre-committed ${v} (R788)`);
+  }
+}
+
 // ---------------------------------------------------------------------------------------------
 
 /** R612 M-2: leg C's warn-fact readings, for the receipt. */
@@ -1678,6 +1706,7 @@ async function legD(scratch: string, leg: "D1" | "D1c"): Promise<void> {
   must(r.baselineGreen && r.unsupportedTests.length === 0, `${leg}: baseline not green`);
   assertIndex(b, leg, 3, 0);
   assertReproduced(r, leg);
+  assertServeCounters(b, leg, 51);
 }
 
 /**
@@ -1762,6 +1791,8 @@ async function legT(
   }
   notes();
   if (j.outcome === "gate-fail") throw new LegFailure(j.failure ?? "T: gate-fail");
+  // R788: only on a pass, so a held T keeps its own outcome (on a pass killed is the pinned 290).
+  if (j.outcome === "pass") assertServeCounters(b, "T", r.counts.killed);
   return { outcome: j.outcome, r, ...(j.pinned === true ? { pinned: true as const } : {}) };
 }
 
