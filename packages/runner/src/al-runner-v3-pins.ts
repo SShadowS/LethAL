@@ -198,6 +198,16 @@ export const V3_BUILD_PINS: readonly V3BuildPin[] = [
     version: "al-runner 3.0.0-alpha.5+edge.20261025 (a157b2d34)",
     binarySha256: "d9429e53a6938dbafb58108f61ce5408f65389bd9604ff94b4788ef26c8d17fb",
     ...ALPHA5_READINGS,
+    // R771 addendum 1: a157b2d34 reads the same verdict with a new refusal message text.
+    legC: {
+      ...ALPHA5_READINGS.legC,
+      "duplicate-key-insert-raises": {
+        ...ALPHA5_READINGS.legC["duplicate-key-insert-raises"]!,
+        measured: pinPattern(
+          `[${ROW(50655, "DuplicateNamedKey")},"status":"error","durationMs":{n},"message":"NotRun: out-of-scope: the test ends while the error of a duplicate-key Insert into table Probe Row is deferred: whether the test runner raises it at the end of the test is measured only for TestIsolation = Codeunit and the default TransactionModel","notRun":true}] exit 7`,
+        ),
+      },
+    },
     n1e: {
       refusedLine: pinPattern(
         '{"codeunit":78850,"codeunitName":"Names Tests","durationMs":{n},"entry":"NONE|78850","method":"Dot.Step","name":"Codeunit78850.Dot.Step","status":"pass","type":"test"}',
