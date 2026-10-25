@@ -3941,10 +3941,10 @@ export async function runFromCli(
             }
           }
           // Release whatever the backend is holding open: the spawned bc-dev MCP
-          // child. The `process.exit(0)` below would paper over a leak here, but only for this
-          // entry point — anything else embedding the backend would hang or leak a
-          // process instead.
-          if (backend instanceof BcDevMcpBackend) {
+          // child, v3's serve daemon (R775: whose close also prints the serve-entries counters). The
+          // `process.exit(0)` below would paper over a leak here, but only for this entry point —
+          // anything else embedding the backend would hang or leak a process instead.
+          if (backend?.close !== undefined) {
             try {
               await backend.close();
             } catch (err) {
@@ -5165,7 +5165,7 @@ export async function verifyFromCli(
         );
       }
     }
-    if (backend instanceof BcDevMcpBackend) {
+    if (backend?.close !== undefined) {
       try {
         await backend.close();
       } catch (err) {

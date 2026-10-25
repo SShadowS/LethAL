@@ -401,6 +401,8 @@ export const isUnread = (r: PublishedPackageRead): r is PackageUnread =>
 
 export interface ExecutionBackend {
   capabilities(): BackendCapabilities;
+  /** Releases what the backend holds open (bcdev's MCP child, v3's serve daemon). R775: the CLI calls it. */
+  close?(): Promise<void>;
   /**
    * R516 I1: true when the run's own in-run stop is the budget it was sent (bcdev; al-runner
    * one-shot, static or resource selector), so a larger budget really lets the test run longer.

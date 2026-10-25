@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**21 of 761 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**23 of 763 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -806,6 +806,8 @@ that ordering is the priority.
 - **R766** · Parallel al-runner-v3 mutants: N serve lanes in one backend (--workers N) · [R766.md](docs/roadmap/R766.md) · open, filed 2026-10-25 (from coord task R-766)
 - **R767** · al-runner-v3's per-send bound check (`assertBound`) spent 0.35 s per send on Bun's async fs, not on hashing · [R767.md](docs/roadmap/R767.md) · open, built and gated 2026-10-25 (coord task R-767); awaiting merge
 - **R769** · al-runner-v3's alc proof is still needed on #5602-fixed builds: the pinned edge build runs some AL that alc rejects · [R769.md](docs/roadmap/R769.md) · closed 2026-10-25 — measured (coord task R-769): the alc proof stays on every build (orchestrator ruling)…
+- **R774** · A repeatable v3 timing run (`scripts/v3-timing.ts`): the gift card and D1, with the per-phase table and the machine load beside every figure · [R774.md](docs/roadmap/R774.md) · open, filed 2026-10-25 (coord task R-773)
+- **R775** · `lethal run --backend al-runner-v3` never calls the backend's `close()`: no serve-entries counters, the serve daemon dies by process exit, and the coverage scratch stays · [R775.md](docs/roadmap/R775.md) · open, filed 2026-10-25 (from coord task R-773)
 
 ---
 
