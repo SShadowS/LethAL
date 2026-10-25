@@ -12,21 +12,19 @@
 // per build, measured on master). Exit 1 on a source or artifact compile failure, an unexpected
 // refusal or admission, a spec count that differs (a missing mutant), a shape with no expectation,
 // or a shape filter that matches nothing.
+// The generate-and-judge half (builds, expected.json, shape list, source project, runShape,
+// judgeShape) is shared with scripts/r402-shapes.ts and pinned by scripts/r402-shapes.test.ts
+// (R754, spec counts and refusals, no alc). This script adds the two alc compiles.
 // alc: $ALC, else the AL extension's bin/alc.exe (newest ms-dynamics-smb.al-*, both layouts).
 // Symbols come from fixtures/sandbox-symbols/.alpackages (source) and fixtures/sandbox-app's
 // (artifact, which also needs LethAL Control).
-// Not in `bun run typecheck`, and type-only casts (`as typeof import(...)`) do not fix that (tried
-// 2026-10-05, R440). The casts expose four errors that need code changes, not casts: the mutable
-// `unknown[]` / `{...}[]` annotations on `res.files` and `res.preprocExcluded` are not assignable
-// from the readonly package types; `res.identityOrdinals` does not exist on the current
-// `MutationSetResult`; and, once typed, `writeInstrumentedProject` requires `identityOrdinals`, which
-// the tolerant `--repo` form (older trees may lack `identityOrdinalsOf`) makes optional. Typing it
-// means dropping `--repo` support for old trees, a decision for the owner, not a cast.
+// Type-checked (scripts/tsconfig.json). The `--repo` modules are imported dynamically and stay
+// loosely typed; `res.identityOrdinals` is read through a cast because only trees between R374 and
+// R400 return it on the set.
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
   existsSync,
-  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -35,6 +33,15 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  R402_BUILDS,
+  R402_SHAPES_DIR,
+  judgeShape,
+  r402Expected,
+  r402ShapeNames,
+  runShape,
+  writeShapeProject,
+} from "./r402-shapes.ts";
 
 const args = process.argv.slice(2);
 const repoAt = args.indexOf("--repo");
@@ -83,23 +90,10 @@ const compiles = (dir: string, set: readonly string[]): string => {
 
 await initParser();
 const appJson = readFileSync(join(here, "fixtures/sandbox-symbols/app.json"), "utf8");
-const shapesDir = join(here, "scripts/fixtures/r402");
-const builds: readonly (readonly string[])[] = [
-  [],
-  ["LETHALX"],
-  ["LETHALY"],
-  ["LETHALX", "LETHALY"],
-];
-type Expected = { readonly refused?: string; readonly specs?: readonly number[] };
-const expected = JSON.parse(readFileSync(join(shapesDir, "expected.json"), "utf8")) as Record<
-  string,
-  Expected
->;
-const shapeFiles = readdirSync(shapesDir)
-  .filter((n) => n.endsWith(".al"))
-  .sort()
-  .filter((f) => only.length === 0 || only.includes(f.replace(/\.al$/, "")));
-if (shapeFiles.length === 0) {
+const builds = R402_BUILDS;
+const expected = r402Expected();
+const shapeNames = r402ShapeNames().filter((n) => only.length === 0 || only.includes(n));
+if (shapeNames.length === 0) {
   console.error(`r402-shape-sweep: no shape matches ${only.join(", ")}`);
   process.exit(1);
 }
@@ -109,33 +103,18 @@ let cases = 0;
 let artifacts = 0;
 let refusedCases = 0;
 try {
-  for (const f of shapeFiles) {
-    const name = f.replace(/\.al$/, "");
+  for (const name of shapeNames) {
     const want = expected[name];
     if (want === undefined) {
       problems.push(`${name}: no entry in expected.json`);
       continue;
     }
-    const text = readFileSync(join(shapesDir, f), "utf8");
+    const text = readFileSync(join(R402_SHAPES_DIR, `${name}.al`), "utf8");
     console.log(`=== ${name}`);
     for (const [bi, set] of builds.entries()) {
       const src = join(scratch, "src");
-      rmSync(src, { recursive: true, force: true });
-      mkdirSync(join(src, "src"), { recursive: true });
-      writeFileSync(join(src, "app.json"), appJson);
-      writeFileSync(join(src, "src", "Shape.Codeunit.al"), text);
-      cpSync(join(here, "fixtures/sandbox-symbols/.alpackages"), join(src, ".alpackages"), {
-        recursive: true,
-      });
-      const res = await generateMutationSet(src, { preprocessorSymbols: set, emit: () => {} });
-      const specs = res.files.flatMap((x: { specs: unknown[] }) => x.specs) as {
-        operatorName: string;
-        hangCapable?: string;
-        before: { text: string };
-      }[];
-      const undecided = (res.preprocExcluded as { reason: string; detail?: string }[])
-        .filter((e) => e.reason === "preproc-undecided")
-        .map((e) => e.detail ?? "");
+      writeShapeProject(src, appJson, text, join(here, "fixtures/sandbox-symbols/.alpackages"));
+      const { res, specs, undecided } = await runShape(generateMutationSet, src, set);
       const tags = specs
         .filter((s) => s.operatorName === "lethal.remove-assignment")
         .map((s) => `${s.before.text.split(":=")[0]?.trim()}:${s.hangCapable ? "H" : "-"}`)
@@ -151,7 +130,8 @@ try {
         // R-307 made run-wide `identityOrdinals` a required input (numbered by `identityOrdinalsOf`,
         // the call `runSession` makes). `--repo` may point at an older tree: one between R374 and
         // R400 returns them on the set, and one without R374 has neither (same as r214-capture.ts).
-        const identityOrdinals = identityOrdinalsOf?.(res) ?? res.identityOrdinals;
+        const identityOrdinals =
+          identityOrdinalsOf?.(res) ?? (res as { identityOrdinals?: unknown }).identityOrdinals;
         await writeInstrumentedProject({
           targetDir: out,
           files: res.files,
@@ -176,23 +156,8 @@ try {
       const srcResult = compiles(src, set);
       if (srcResult !== "ok") problems.push(`${name} [${set.join(",")}]: source ${srcResult}`);
       const label = `${name} [${set.join(",")}]`;
-      if (want.refused !== undefined) {
-        refusedCases++;
-        if (undecided.length !== 1 || !(undecided[0] ?? "").startsWith(want.refused)) {
-          problems.push(
-            `${label}: expected refusal "${want.refused}", got ${JSON.stringify(undecided)}`,
-          );
-        }
-        if (specs.length !== 0)
-          problems.push(`${label}: refused shape emitted ${specs.length} specs`);
-      } else {
-        if (undecided.length > 0)
-          problems.push(`${label}: unexpected refusal ${JSON.stringify(undecided)}`);
-        const n = want.specs?.[bi];
-        if (n === undefined) problems.push(`${label}: expected.json has no spec count`);
-        else if (specs.length !== n)
-          problems.push(`${label}: ${specs.length} specs, expected ${n}`);
-      }
+      if (want.refused !== undefined) refusedCases++;
+      problems.push(...judgeShape(label, want, bi, specs.length, undecided));
       console.log(
         `  [${set.join(",")}] src=${srcResult} specs=${specs.length} ${undecided.length > 0 ? `UNDECIDED(${undecided.join(";")}) ` : ""}tags{${tags}} calls{${calls}} artifact=${art}`,
       );
