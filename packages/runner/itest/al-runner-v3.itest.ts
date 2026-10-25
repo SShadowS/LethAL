@@ -1237,7 +1237,9 @@ async function legXSleep(scratch: string): Promise<void> {
   // §6 rule: M0003 and M0004 survive, no mutant call writes a coverage document, (e)/(f) have
   // nothing to tamper with. Unpinned builds keep the r5 table.
   const retired = b.isSleepRuleRetired();
-  console.log(`  X (d): Sleep rule ${retired ? "RETIRED (pinned gone build, R-762 B)" : "applies"}`);
+  console.log(
+    `  X (d): Sleep rule ${retired ? "RETIRED (pinned gone build, R-762 B)" : "applies"}`,
+  );
   // r10 (c), I4/M7: the baseline facts, printed before any (d) check. No verdict rule changes.
   console.log(`  ${xdBaselineLine(sleeper)}`);
   console.log(`  X (d): baselineGreen ${r.baselineGreen}`);
@@ -1260,7 +1262,11 @@ async function legXSleep(scratch: string): Promise<void> {
   const R5: Record<string, { code: string; verdict: string; line?: number }> = {
     "lethal.empty-block": { code: "M0001", verdict: "killed" },
     "lethal.void-method-call": { code: "M0002", verdict: "survived" },
-    "lethal.remove-assignment": { code: "M0003", verdict: retired ? "survived" : "error", line: 25 },
+    "lethal.remove-assignment": {
+      code: "M0003",
+      verdict: retired ? "survived" : "error",
+      line: 25,
+    },
     "lethal.shift-integer": { code: "M0004", verdict: retired ? "survived" : "error", line: 37 },
     "lethal.return-value": { code: "M0005", verdict: "killed" },
   };

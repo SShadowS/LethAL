@@ -118,6 +118,12 @@ The legs:
     v3 build that counts Sleep. r5's table is the one pass on alpha.2 and on edge (edge: predicted by r11 (d3));
     on edge the leg reads `held` only through X (b). The three 600 s sibling tests stay; on edge they are
     baseline `timeout` rows, not refusals.
+  - X (d), (e), (f), since R-762 B ([[R768]], pre-commitment `2026-10-25-r762-b-retire-sleep-rule-precommitment.md`):
+    on a build whose pin and session probe both read `sleep-is-noop` gone (`alpha.5-07342060e`, `edge-dcdf9e821`) the
+    Sleep rule is off. X (d) reads M0003 and M0004 `survived`, no note: 2 killed / 3 survived / 0 error, Sleep index
+    still 4 + 5, and no raw-hit check (no mutant call writes a coverage document). X (e) and (f1)-(f3) print "not
+    applicable on a pinned-gone build" and do not run. On an unpinned build (alpha.2 and others) r5's table and the
+    fail-closed (e)/(f) legs are unchanged. `GATE_WARNINGS` for the `xd-*` keys is unchanged.
 
 ### Legs L1, Y-A, Y-B and K (R654 S2)
 

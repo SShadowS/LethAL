@@ -559,7 +559,8 @@ describe("R-762 B: the §6 Sleep rule is retired only on a pinned build whose pr
     await b.deploy(l.batch);
     return { b, v3 };
   }
-  const runA = (b: AlRunnerV3Backend) => b.run(ref("A"), { coverage: "al-runner", timeoutMs: 1000 });
+  const runA = (b: AlRunnerV3Backend) =>
+    b.run(ref("A"), { coverage: "al-runner", timeoutMs: 1000 });
 
   test("retired: a covering pass with a Sleep hit under a mutant is a pass; its call has no --coverage-json", async () => {
     const { b, v3 } = await setup(true);
@@ -627,13 +628,17 @@ describe("R-762 B: the §6 Sleep rule is retired only on a pinned build whose pr
     });
     test("a pinned binary whose probe reads defect-present keeps the rule", () => {
       expect(
-        pinsNs.sleepRuleRetiredFor(probe("defect-present"), pin?.version ?? "", pin?.binarySha256 ?? ""),
+        pinsNs.sleepRuleRetiredFor(
+          probe("defect-present"),
+          pin?.version ?? "",
+          pin?.binarySha256 ?? "",
+        ),
       ).toBe(false);
     });
     test("a pinned binary with no probe result or no sleep fact keeps the rule", () => {
-      expect(pinsNs.sleepRuleRetiredFor(undefined, pin?.version ?? "", pin?.binarySha256 ?? "")).toBe(
-        false,
-      );
+      expect(
+        pinsNs.sleepRuleRetiredFor(undefined, pin?.version ?? "", pin?.binarySha256 ?? ""),
+      ).toBe(false);
       expect(
         pinsNs.sleepRuleRetiredFor({ facts: [] }, pin?.version ?? "", pin?.binarySha256 ?? ""),
       ).toBe(false);
@@ -643,7 +648,11 @@ describe("R-762 B: the §6 Sleep rule is retired only on a pinned build whose pr
         false,
       );
       expect(
-        pinsNs.sleepRuleRetiredFor(probe("gone"), "alrunner 3.0.0-alpha.2 (91253f2d6)", "0".repeat(64)),
+        pinsNs.sleepRuleRetiredFor(
+          probe("gone"),
+          "alrunner 3.0.0-alpha.2 (91253f2d6)",
+          "0".repeat(64),
+        ),
       ).toBe(false);
     });
   });
