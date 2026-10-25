@@ -950,6 +950,30 @@ describe("R775: runFromCli closes the al-runner-v3 backend", () => {
     }
   });
 
+  it("R786: --workers > 1 plus a fallback is refused by name BEFORE a second backend is built", async () => {
+    const parsed = { ...(await v3Parsed()), workers: 3 };
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    let builds = 0;
+    try {
+      const err = await runFromCli(parsed, {
+        validateSelectorIdsForProject: async () => {},
+        resolveEnvToolSession: noEnv,
+        buildBackend: async () => {
+          builds += 1;
+          return {} as ExecutionBackend;
+        },
+        runSession: async () => {
+          throw new AlRunnerV3ServeFallbackWarmupError("Codeunit1.T", "Company");
+        },
+      }).catch((e: unknown) => e);
+      expect(String(err)).toContain("al-runner-v3-workers-refused");
+      expect(String(err)).toContain("Codeunit1.T: Company");
+      expect(builds).toBe(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("R786: any other error of the first session is not re-run", async () => {
     const parsed = await v3Parsed();
     const warn = spyOn(console, "warn").mockImplementation(() => {});

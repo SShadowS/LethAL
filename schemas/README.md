@@ -5,7 +5,8 @@ generate types rather than discover a shape change by crashing on it. Draft 2020
 
 | File | Describes | Version constant |
 |---|---|---|
-| [`explain-v20.schema.json`](explain-v20.schema.json) | `lethal explain <report.json>` on stdout | `EXPLAIN_SCHEMA_VERSION` = 20 |
+| [`explain-v21.schema.json`](explain-v21.schema.json) | `lethal explain <report.json>` on stdout | `EXPLAIN_SCHEMA_VERSION` = 21 |
+| [`explain-v20.schema.json`](explain-v20.schema.json) | the same, from builds before R786; kept so a stored v20 document stays checkable (v21 added the caveat `al-runner-v3-serve-default-fallback-warmup`) | `EXPLAIN_SCHEMA_VERSION` = 20 |
 | [`explain-v19.schema.json`](explain-v19.schema.json) | the same, from builds before R688; kept so a stored v19 document stays checkable (v20 added the cause `test-discovery-failed`) | `EXPLAIN_SCHEMA_VERSION` = 19 |
 | [`explain-v18.schema.json`](explain-v18.schema.json) | the same, from builds before R658; kept so a stored v18 document stays checkable (v19 added the cause `confirm-stopped` and the caveat `baseline-test-stopped`) | `EXPLAIN_SCHEMA_VERSION` = 18 |
 | [`explain-v17.schema.json`](explain-v17.schema.json) | the same, from builds before R631; kept so a stored v17 document stays checkable (v18 added the caveat `project-symlink-skipped`) | `EXPLAIN_SCHEMA_VERSION` = 17 |
@@ -37,9 +38,9 @@ generate types rather than discover a shape change by crashing on it. Draft 2020
 | [`report-v2.schema.json`](report-v2.schema.json) | the same, from builds before R231; frozen so an archived v2 report stays checkable (v3 writes each run-level mutant list entry as `<batchIndex>/<mutantCode>` and adds `batchIndex` to reader-mark entries, because mutant codes restart per batch) | `REPORT_SCHEMA_VERSION` = 2 |
 | [`stream-v1.schema.json`](stream-v1.schema.json) | one line of the NDJSON stream written with `--progress-out` | `STREAM_SCHEMA_VERSION` = 1 |
 
-**Of the thirty-one files, twenty-six are hand-written and five were generated, and the split is about SIZE
-rather than principle.** `explain` (a few dozen leaves; v20 and the kept v19, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5 and v4), `doctor` (8) and
-`verify` (small, like `doctor`; v8 and the kept v7, v6, v5, v4, v3, v2 and v1) are hand-written; explain v20, `doctor` and
+**Of the thirty-two files, twenty-seven are hand-written and five were generated, and the split is about SIZE
+rather than principle.** `explain` (a few dozen leaves; v21 and the kept v20, v19, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5 and v4), `doctor` (8) and
+`verify` (small, like `doctor`; v8 and the kept v7, v6, v5, v4, v3, v2 and v1) are hand-written; explain v21, `doctor` and
 verify v8 are pinned against their declarations, and explain v19, explain v18, explain v17, explain v16, explain v15, explain v14, explain v13, explain v12, explain v11, explain v10, explain v9, explain v8, explain v7, explain v6, explain v5, explain v4,
 verify v7, verify v6, verify v5, verify v4, verify v3, verify v2 and verify v1 are frozen as they were published.
 Verify v5 bumped for two ADDED fields, which this page's rule alone would not do: their absence
@@ -75,7 +76,7 @@ worse than no schema at all — it calls a correct document invalid, at every co
    current explain schema is ALSO pinned against a literal list (R233), so a value added without a
    version bump fails.
 3. **Real data.** The projection of a committed campaign report is validated against
-   `explain-v20.schema.json`, capped and uncapped.
+   `explain-v21.schema.json`, capped and uncapped.
 
 The validator in that test is small on purpose — type, const, enum, required, properties,
 additionalProperties, items, minItems, local `$ref`. It is not a JSON Schema implementation and must
