@@ -2287,12 +2287,13 @@ describe("R651: per-phase wall timers, timing only", () => {
 
   test("R652 T8: a check nested inside a phase (the warm-up, a request) is not counted in that phase", async () => {
     const { r, clock } = await clockedRig();
-    const b = r.b as unknown as { assertBound: () => Promise<void> };
+    // R766 (b): assertBound takes the lane it checks.
+    const b = r.b as unknown as { assertBound: (lane: unknown) => Promise<void> };
     const orig = b.assertBound.bind(r.b);
     // Each check takes 7 on the fake clock; the requests' amounts are unchanged.
-    spyOn(b, "assertBound").mockImplementation(async () => {
+    spyOn(b, "assertBound").mockImplementation(async (lane: unknown) => {
       clock.t += 7;
-      await orig();
+      await orig(lane);
     });
     await scenario(r, clock);
     const s = r.b.entriesStats();
@@ -3487,7 +3488,8 @@ describe("R761: a real first spawn freezes the transport decision", () => {
   test("a daemon start (startDaemon) freezes it", async () => {
     const r = await rig();
     // The one-shot baseline spawn would freeze it; a daemon start alone must too.
-    await (r.b as unknown as { startDaemon(): Promise<unknown> }).startDaemon();
+    const priv = r.b as unknown as { startDaemon(lane: unknown): Promise<unknown>; lane: unknown };
+    await priv.startDaemon(priv.lane);
     expect(r.one.calls).toHaveLength(0);
     expect(r.serve.daemons.length).toBeGreaterThan(0);
     expect(await decided(r)).toBeInstanceOf(AlRunnerV3TransportFrozenError);
