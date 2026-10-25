@@ -389,3 +389,27 @@ describe("R745: the tests-narrowed interpretation covers excluded methods", () =
     expect(m).toContain("excludedTests");
   });
 });
+
+// R759: the run records what it was narrowed by, so `lethal verify` can tell a test the run left
+// out from a new one. A run with no narrowing records empty lists (NULL means "before R759").
+describe("R759 T7: runSession records the narrowing", () => {
+  const narrowingOf = (store: ResultsStore) => store.getRun(1)?.testNarrowing;
+  test("no flags: empty lists", async () => {
+    const root = await project();
+    const store = new ResultsStore(":memory:");
+    await session(root, store, new Stub("bcdev"));
+    expect(narrowingOf(store)).toEqual({ testsOnly: [], excludeTests: [] });
+  });
+  test("--exclude-test: the testKeyOf of the test left out", async () => {
+    const root = await project();
+    const store = new ResultsStore(":memory:");
+    await session(root, store, new Stub("bcdev"), { excludeTests: ["Excl Tests.Killer"] });
+    expect(narrowingOf(store)).toEqual({ testsOnly: [], excludeTests: ["79100::Killer"] });
+  });
+  test("--tests-only: the globs", async () => {
+    const root = await project(true);
+    const store = new ResultsStore(":memory:");
+    await session(root, store, new Stub("bcdev"), { testsOnly: ["Side/**"] });
+    expect(narrowingOf(store)).toEqual({ testsOnly: ["Side/**"], excludeTests: [] });
+  });
+});

@@ -27,6 +27,11 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **`lethal verify` honours the source run's `--tests-only` and `--exclude-test`** (R759). A run now records what it
+  left out (`runs.test_narrowing`), and verify reads it: those tests are not new, so they are not planned, rerun or
+  counted toward `--max-new-tests`, and the JSON lists them in `excludedTests` (reasons `tests-only`,
+  `exclude-test`; additive to verify schema 8, no bump). Runs made before this change recorded nothing and verify as
+  before. The live proof is pre-committed and recorded after it runs.
 - **al-runner-v3 sessions replay a cached contract probe** (R765, coord R-762). The probe costs about 10 s per session
   (60% of a small project's serve start-up). A fully passing result is now stored beside the pinned build's `.gated`
   and replayed when the binary sha256, LethAL's probe code, bcVersion, the packages folder, alc, the cache dir and the

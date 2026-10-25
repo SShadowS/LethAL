@@ -307,6 +307,15 @@ export interface RunRow {
   /** R585: the sorted keys (`testKeyOf`) of the tests the run's baseline was given. `null` on a
    *  row recorded before the column: unknown, so it lends no history. */
   readonly testScope: readonly string[] | null;
+  /** R759: what the run was narrowed by. `null` on a row recorded before the column, or by a
+   *  caller that did not say (a verify run): unknown, never "nothing left out". */
+  readonly testNarrowing: TestNarrowing | null;
+}
+
+/** R759: `--tests-only` globs and the `testKeyOf` of each test `--exclude-test` left out. */
+export interface TestNarrowing {
+  readonly testsOnly: readonly string[];
+  readonly excludeTests: readonly string[];
 }
 
 /** R586: the session side of `runMayLend` step 1: its backend and, on v3, its build. */
@@ -454,6 +463,26 @@ function parseTestScope(value: string | null, runId: number): readonly string[] 
     );
   }
   return parsed as string[];
+}
+
+/** R759: `runs.test_narrowing`. NULL reads as unknown; anything but the two string lists throws. */
+function parseTestNarrowing(value: string | null, runId: number): TestNarrowing | null {
+  if (value === null) return null;
+  const parsed: unknown = JSON.parse(value);
+  const strings = (v: unknown): v is string[] =>
+    Array.isArray(v) && v.every((s) => typeof s === "string");
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    !strings((parsed as Record<string, unknown>).testsOnly) ||
+    !strings((parsed as Record<string, unknown>).excludeTests)
+  ) {
+    throw new Error(
+      `store.ts: run ${runId} has a corrupt "test_narrowing" column value ${JSON.stringify(value)}`,
+    );
+  }
+  const { testsOnly, excludeTests } = parsed as TestNarrowing;
+  return { testsOnly, excludeTests };
 }
 
 /** Verdicts `invalidateBatch` leaves as they are (and so does the R513 read-time rewrite). */
@@ -812,6 +841,8 @@ export class ResultsStore {
       ["runs", "runner_build TEXT", runCols],
       // R585: NULL on an older row, read as "test scope unknown": it lends no history.
       ["runs", "test_scope TEXT", runCols],
+      // R759: JSON `{testsOnly, excludeTests}`; NULL on an older row, read as "unknown".
+      ["runs", "test_narrowing TEXT", runCols],
     ] as const) {
       const name = col.split(" ")[0] ?? "";
       if (!known.some((c) => c.name === name)) {
@@ -883,6 +914,9 @@ export class ResultsStore {
      *  is recorded without saying; `null` writes NULL ("unknown", which lends no history): only a
      *  caller copying an older run's NULL passes it. Stored sorted and de-duplicated. */
     testScope: readonly string[] | null;
+    /** R759: the run's `--tests-only` globs and the keys of the tests `--exclude-test` left out.
+     *  Absent writes NULL ("unknown"); `runSession` always passes it. */
+    testNarrowing?: TestNarrowing;
   }): number {
     // R325: every run records the identity scheme its keys are made under, so no later session
     // can read them as keys of another scheme.
@@ -893,8 +927,8 @@ export class ResultsStore {
       info.testAppDeps !== undefined;
     const r = this.db
       .query(
-        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, resource_key, server_generation, test_app_hash, test_app_proven, test_app_deps, test_digests, test_digest_parts, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, runner_build, test_scope) " +
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, resource_key, server_generation, test_app_hash, test_app_proven, test_app_deps, test_digests, test_digest_parts, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, runner_build, test_scope, test_narrowing) " +
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
       )
       .get(
         info.projectPath,
@@ -918,6 +952,12 @@ export class ResultsStore {
         info.dependencySourceSha256 ?? null,
         info.runnerBuild ?? null,
         info.testScope === null ? null : JSON.stringify([...new Set(info.testScope)].sort()),
+        info.testNarrowing === undefined
+          ? null
+          : JSON.stringify({
+              testsOnly: info.testNarrowing.testsOnly,
+              excludeTests: [...new Set(info.testNarrowing.excludeTests)].sort(),
+            }),
       ) as {
       id: number;
     };
@@ -1279,10 +1319,11 @@ export class ResultsStore {
   getRun(runId: number): RunRow | null {
     const row = this.db
       .query(
-        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, runner_build, resource_key, server_generation, test_scope FROM runs WHERE id = ?",
+        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, runner_build, resource_key, server_generation, test_scope, test_narrowing FROM runs WHERE id = ?",
       )
       .get(runId) as {
       test_scope: string | null;
+      test_narrowing: string | null;
       resource_key: string | null;
       server_generation: string | null;
       dependency_source_sha256: string | null;
@@ -1325,6 +1366,7 @@ export class ResultsStore {
       resourceKey: row.resource_key,
       serverGeneration: row.server_generation,
       testScope: parseTestScope(row.test_scope, row.id),
+      testNarrowing: parseTestNarrowing(row.test_narrowing, row.id),
     };
   }
 

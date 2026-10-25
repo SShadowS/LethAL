@@ -92,6 +92,7 @@ import {
   runSession,
 } from "./orchestrator";
 import type { SessionConfig } from "./orchestrator";
+import { MAX_V3_WORKERS } from "./parallel-queue";
 import { PermissionCanaryClient, runPermissionCanary } from "./permission-canary";
 import { type BuildBackend, validateSymbolList } from "./preprocessor-symbols";
 import { createNdjsonSink } from "./progress-ndjson";
@@ -1018,7 +1019,11 @@ RUN — cost and recovery
                              the lease fence, but that id cannot be independently verified.
                              A baseline test, kill confirm or warm replay with NO mutant active
                              is stopped at its budget regardless of this flag (R658)
-  --workers <n>              parallel workers (every backend is limited to 1)
+  --workers <n>              parallel workers. al-runner-v3 only, 2 to 8: N serve lanes of one
+                             backend, with serve-entries and a build whose pin retires the §6
+                             Sleep rule (else refused by name). The first latch or stop ends the
+                             session with an error naming the mutants it discarded. bcdev is
+                             limited to 1
   --progress-out <path>      stream events to this file as NDJSON, one JSON object per line,
                              flushed as each event arrives — a crash diagnostic and a structured
                              feed for agents/CI. VERDICT LINES ARE PROVISIONAL UNTIL
@@ -1188,6 +1193,8 @@ VERIFY — prove named survivors are now killed, on the build the run left insta
   --no-reach-filter          send every new test to every survivor. By default, under fenced
                              coverage, a new test runs only against the survivors its own
                              coverage reaches; one stderr line says whether the filter was on
+  Tests the source run left out (its --tests-only and --exclude-test, recorded in the database)
+  are not new: verify applies that narrowing itself and lists them as excludedTests in its JSON.
   Every other flag is refused, --out included: the JSON always goes to stdout.
   Exit codes: 0 every survivor killed and every new test stable or not-rerun; 3 quarantined; 4
   nothing measured (every survivor error); 5 some survivor survived or errored, or a new test is
@@ -1334,8 +1341,6 @@ const RUN_ONLY_FLAGS = [
   "operator",
   "lines",
   "changed-since",
-  "tests-only",
-  "exclude-test",
   "max-guards-per-batch",
   "mutant-timeout-ms",
   "max-methods-per-call",
@@ -1464,6 +1469,13 @@ export const FLAG_OWNERS: ReadonlyArray<{
     owners: ["verify"],
     instead: "It turns off lethal verify's coverage reach filter.",
   },
+  // R759: run flags that narrow the suite; verify takes the source run's own recorded narrowing.
+  ...["tests-only", "exclude-test"].map((flag) => ({
+    flag,
+    owners: ["run"] as const,
+    instead:
+      "It is a `lethal run` flag; `lethal verify` applies the source run's own recorded --tests-only and --exclude-test (its JSON's `excludedTests`).",
+  })),
   ...RUN_ONLY_FLAGS.map((flag) => ({
     flag,
     owners: ["run"] as const,
@@ -2126,12 +2138,14 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       `--allow-expiring-env applies to the bcdev backend's environment tool; ${backendArg} has no environment`,
     );
   }
-  // R586 (T16): v1 of the v3 backend is sequential and not measured on Windows.
+  // R586 (T16): v3 is not measured on Windows.
   if (backendArg === "al-runner-v3") {
     refuseV3Platform();
-    if (workers > 1) {
+    // R766 (b): N serve lanes in one backend. The run refuses by name, after the transport is
+    // decided, unless the transport is serve-entries and the build retires the §6 Sleep rule.
+    if (workers > MAX_V3_WORKERS) {
       throw new Error(
-        "al-runner-v3-workers-refused: --workers > 1 is refused with --backend al-runner-v3 (R586 v1 is sequential).",
+        `al-runner-v3-workers-cap: --workers ${workers} is above the cap of ${MAX_V3_WORKERS} (R766).`,
       );
     }
   }

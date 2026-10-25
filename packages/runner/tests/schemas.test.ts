@@ -39,6 +39,7 @@ import {
   KILLED_BY,
   NEW_TEST_STATES,
   UNMUTATED_OUTCOMES,
+  VERIFY_EXCLUSION_REASONS,
   VERIFY_REFUSALS,
   VERIFY_SCHEMA_VERSION,
   VERIFY_VERDICTS,
@@ -816,6 +817,7 @@ describe("published JSON Schema - verify (C02-06 Task 6)", () => {
         "VerifyRefusal",
         "ReachFilterState",
         "ReachFilterOffReason",
+        "VerifyExclusionReason",
       ],
     });
     expect([...schemaLeafPaths(verifySchema)].sort()).toEqual([...fromType].sort());
@@ -829,6 +831,24 @@ describe("published JSON Schema - verify (C02-06 Task 6)", () => {
     expect(enumAt(verifySchema, "$.newTests[].runs[].outcome")).toEqual([...UNMUTATED_OUTCOMES]);
     expect(enumAt(verifySchema, "$.reachFilter.state")).toEqual([...REACH_FILTER_STATES]);
     expect(enumAt(verifySchema, "$.reachFilter.reason")).toEqual([...REACH_FILTER_OFF_REASONS]);
+    // R759: the new optional field's reason domain, against the constant and a literal; a document
+    // with it conforms, and one with an unknown reason does not.
+    expect(enumAt(verifySchema, "$.excludedTests[].reason")).toEqual([...VERIFY_EXCLUSION_REASONS]);
+    expect([...VERIFY_EXCLUSION_REASONS]).toEqual(["tests-only", "exclude-test"]);
+    const withExcluded = {
+      verifySchemaVersion: VERIFY_SCHEMA_VERSION,
+      ok: false,
+      exitCode: 6,
+      newTests: [],
+      results: [],
+      counts: { killed: 0, survived: 0, error: 0, skipped: 0 },
+      timings: { totalMs: 1 },
+      excludedTests: [{ test: "A.B", reason: "exclude-test" }],
+    };
+    expect(conformsTo(verifySchema, withExcluded)).toEqual([]);
+    expect(
+      conformsTo(verifySchema, { ...withExcluded, excludedTests: [{ test: "A.B", reason: "x" }] }),
+    ).not.toEqual([]);
     // R-425: literal pins, for the same reason as the two below.
     expect([...REACH_FILTER_STATES]).toEqual(["on", "off"]);
     expect([...REACH_FILTER_OFF_REASONS]).toEqual([
