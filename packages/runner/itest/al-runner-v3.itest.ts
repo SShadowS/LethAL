@@ -1341,13 +1341,13 @@ async function legX(scratch: string, push: (line: string) => void): Promise<void
         bcVersion: SANDBOX_BC,
         selectorObjectId: 79199,
         transport: "serve-entries",
+        speculateBaseline: speculate, // R-798: off by default; set either way, so the env cannot move it
       }),
     );
     b.useBuildSymbols([]);
     b.useDiscoveredTests(suite);
     b.useSessionTests(suite);
     b.useMutantBudgetFloor(180_000, 120_000);
-    if (!speculate) b.seams.noSpeculativeBaseline = true;
     return b;
   };
   const errText = (e: unknown, dir: string) =>
