@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**22 of 757 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**23 of 758 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -802,6 +802,7 @@ that ordering is the priority.
 - **R761** · serve-entries is the default v3 transport where it is proven; one-shot (with a named warning) where it is not · [R761.md](docs/roadmap/R761.md) · done (dc855ac3; S1E f53ec5d4; pins 7405f270)
 - **R763** · Prove serve-entries for test METHOD names that are not plain identifiers (spaces, - ( ) / & å æ, a leading digit), so R761's default can serve them · [R763.md](docs/roadmap/R763.md) · open, filed 2026-10-25 (from R-761; orchestrator ruling)
 - **R764** · al-runner-v3 one-shot ignored RunOpts.coverage: kill confirms still sent --coverage-json and joined coverage · [R764.md](docs/roadmap/R764.md) · done (3f37aacb)
+- **R766** · Parallel al-runner-v3 mutants: N serve lanes in one backend (--workers N) · [R766.md](docs/roadmap/R766.md) · open, filed 2026-10-25 (from coord task R-766)
 
 ---
 
