@@ -168,9 +168,24 @@ describe("al-runner-v3 gate and observe mode (R736)", () => {
 
   test("observe mode never yields a pass receipt outcome", () => {
     const legs = Object.fromEntries(
-      ["C", "S1", "S3", "N1", "N1E", "X", "D1", "D1c", "L1", "Y-A", "Y-B", "MO", "WR", "T"].map(
-        (l) => [l, "pass"],
-      ),
+      [
+        "C",
+        "S1",
+        "S1E",
+        "S3",
+        "N1",
+        "N1E",
+        "N1S",
+        "X",
+        "D1",
+        "D1c",
+        "L1",
+        "Y-A",
+        "Y-B",
+        "MO",
+        "WR",
+        "T",
+      ].map((l) => [l, "pass"]),
     ) as never;
     expect(v3ReceiptOutcome(legs, true)).toBe("gate-fail");
     expect(v3ReceiptOutcome(allPass, true)).not.toBe("pass");
@@ -230,5 +245,7 @@ describe("GATE_WARNINGS", () => {
     for (const leg of v3) expect(GATE_WARNINGS[`al-runner-v3/${leg}`], leg).toBeDefined();
     // N1E throws by design and is never asserted.
     expect(GATE_WARNINGS["al-runner-v3/N1E"]).toBeUndefined();
+    // R761: S1E's set is pre-committed empty (master a86927e1, from the R-761 observe run).
+    expect(GATE_WARNINGS["al-runner-v3/S1E"]).toEqual([]);
   });
 });

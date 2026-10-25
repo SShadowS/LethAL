@@ -546,6 +546,13 @@ export interface ExecutionBackend {
   useDiscoveredTests?(tests: readonly TestMethodRef[]): void;
 
   /**
+   * R761, OPTIONAL: called once, right after `useDiscoveredTests` and before the first deploy.
+   * al-runner v3 picks its transport here (serve-entries by default where proven). `resume` is true
+   * for a `--resume` / `--resume-run` session (the only sessions that reuse a baseline snapshot).
+   */
+  decideTransport?(facts: { readonly resume: boolean }): Promise<void>;
+
+  /**
    * R557, OPTIONAL: the session's test suite (`chooseTestSuite`'s `tests`) and the tests kept in
    * an `#if` arm discovery could not decide (`preproc-undecided-kept`, R403), given next to
    * `useDiscoveredTests` and to every worker. al-runner reads them when a test has no row: an

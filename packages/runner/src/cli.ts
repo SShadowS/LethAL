@@ -2877,8 +2877,9 @@ export async function v3CoverageMode(
 }
 
 /**
- * R586 (plan r2 §9): the al-runner-v3 backend from the `alRunnerV3` section. One-shot, static
- * selector, sequential. Coverage is turned off (with a warning) by `v3CoverageMode`.
+ * R586 (plan r2 §9): the al-runner-v3 backend from the `alRunnerV3` section. Sequential. The
+ * transport is serve-entries where proven and one-shot otherwise (R761), unless the config names
+ * one. Coverage is turned off (with a warning) by `v3CoverageMode`.
  */
 async function buildAlRunnerV3Backend(
   parsed: BackendInputs,
@@ -2925,10 +2926,11 @@ async function buildAlRunnerV3Backend(
       ...(deps.preprocessorSymbols.length > 0
         ? { preprocessorSymbols: deps.preprocessorSymbols }
         : {}),
-      // R635: one-shot unless the config opts in.
-      ...(c.transport === "serve-entries"
-        ? { transport: c.transport, secondEcho: c.secondEcho }
-        : {}),
+      // R635, R761: serve-entries is the default where proven; the session decides it
+      // (`decideTransport`) when the config names no transport. An explicit key is used as written.
+      transport: c.transport,
+      transportSource: c.transportSource,
+      ...(c.transport === "serve-entries" ? { secondEcho: c.secondEcho } : {}),
     },
     deps.spawn,
     undefined,
@@ -4507,7 +4509,7 @@ export async function buildDoctorDeps(
             await assertBcVersionMatchesPackages(c.packagesDir, c.bcVersion);
             return {
               ok: true,
-              details: `${version}; gated at LethAL ${gated.lethalCommit}; bcVersion ${c.bcVersion}`,
+              details: `${version}; gated at LethAL ${gated.lethalCommit}; bcVersion ${c.bcVersion}; transport ${c.transportSource === "explicit" ? c.transport : "default (serve-entries where proven, else one-shot; R761)"}`,
             };
           } catch (err) {
             return { ok: false, details: err instanceof Error ? err.message : String(err) };

@@ -25,10 +25,21 @@ export const V3_K_CANDIDATE_SKIP = "skipped (candidate build)";
  */
 export const V3_N1E_LEG = "N1E";
 
+/** R763: N1's project without `Dot.Step`, one-shot then serve-entries (`legN1S`); in `V3_GATE_LEGS`. */
+export const V3_N1S_LEG = "N1S";
+
 /** The exact `--version` lines of builds that have no serve-entries path (alpha.2's `.gated`). */
 export const V3_NO_SERVE_ENTRIES: readonly string[] = ["alrunner 3.0.0-alpha.2 (91253f2d6)"];
 
 const UNKNOWN_ENTRIES_FIELD = 'the request was refused: "unknown field `entries` for runTests"';
+
+/** R761: S1's project under serve-entries (`legS1E`); serve by construction, whatever the run's transport. */
+export const V3_S1E_LEG = "S1E";
+
+/** True when a build with no serve-entries path refused the `entries` field by name (N1E and S1E: not applicable). */
+export function isNoServeRefusal(version: string, threw: string): boolean {
+  return V3_NO_SERVE_ENTRIES.includes(version) && threw.includes(UNKNOWN_ENTRIES_FIELD);
+}
 
 /** What the N1E session did: it finished, or it threw this message. */
 export type N1EReading = { readonly completed: true } | { readonly threw: string };
@@ -54,7 +65,7 @@ export function judgeN1Serve(
     lines: [`re-pre-commit: upstream may have fixed #5798 (${why})`],
   });
   if ("completed" in r) return held("the serve-entries session completed");
-  if (V3_NO_SERVE_ENTRIES.includes(version) && r.threw.includes(UNKNOWN_ENTRIES_FIELD)) {
+  if (isNoServeRefusal(version, r.threw)) {
     return {
       outcome: "pass",
       lines: ["N1E: not applicable: this build has no serve-entries path"],
@@ -84,9 +95,11 @@ export function v3DefaultLegs(o: { readonly cdo: boolean; readonly tables: boole
   return [
     "C",
     "S1",
+    V3_S1E_LEG,
     "S3",
     "N1",
     V3_N1E_LEG,
+    V3_N1S_LEG,
     "X",
     "L1",
     "Y-A",
@@ -403,10 +416,14 @@ export function judgeLegK(f: LegKFacts): string[] {
   const out: string[] = [];
   if (f.coverage !== "al-runner")
     out.push(`K: coverage ${JSON.stringify(f.coverage)} by default, pre-committed "al-runner"`);
-  if (f.inRunStopIsBudget !== true)
-    out.push("K: the default transport is not one-shot (inRunStopIsBudget is not true)");
-  if (f.serveSpawns !== 0) out.push(`K: ${f.serveSpawns} serve daemon(s) spawned, pre-committed 0`);
-  if (f.oneShotTestCalls < 1) out.push("K: no one-shot test call was spawned");
+  // R761 (pre-commitment master a86927e1): the default is serve-entries where proven, and K's
+  // sandbox-app is proven (plain names, no MO/WR shapes, no resume), so K serves: one daemon, and
+  // one one-shot call (the baseline, which serve-entries keeps one-shot).
+  if (f.inRunStopIsBudget !== false)
+    out.push("K: the default transport is not serve-entries (inRunStopIsBudget is not false)");
+  if (f.serveSpawns !== 1) out.push(`K: ${f.serveSpawns} serve daemon(s) spawned, pre-committed 1`);
+  if (f.oneShotTestCalls !== 1)
+    out.push(`K: ${f.oneShotTestCalls} one-shot test call(s), pre-committed 1 (the baseline)`);
   if (!f.warned) out.push("K: AL_RUNNER_V3_NOT_AUTHORITATIVE was not printed");
   const off = f.noCoverageFiles.filter((p) => !p.replace(/\\/g, "/").endsWith(NO_COVERAGE_FILE));
   if (f.noCoverageFiles.length !== 4 || off.length > 0)

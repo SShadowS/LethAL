@@ -725,7 +725,7 @@ a LethAL feature or a mode.
     early: with a mutant active, a timeout row that returns before its stop reads `error` /
     `runner-refused`, never scored. A covering pass that reaches a `Sleep` in the project reads
     `error`; one in a dependency is not caught.
-  - `serve-entries` (opt-in) fails closed on alpha.5 for a dotted test name (#5798, R722).
+  - `serve-entries` is the default transport where it is proven (R761). A config with no `"transport"` key falls back to one-shot, with the warning `al-runner-v3-serve-default-fallback`, for a `--resume` session, a multi-object or `#if`-wrapped file, a test name shape not yet proven under serve, or a build with no serve path. An explicit `"transport"` is always honoured, except that an explicit `serve-entries` with a dotted test method name is refused before any test runs (#5798, R722).
 
   Selecting one test runs its whole codeunit (#5611), so LethAL makes one call per test codeunit
   and notes a kill made after another covering test of that codeunit. Tests v3 does not run
