@@ -235,8 +235,9 @@ describe("Caveat union", () => {
       "test-symbols-unverified": true,
       "project-symlink-skipped": true,
       "baseline-test-stopped": true,
+      "al-runner-v3-serve-default-fallback-warmup": true,
     };
-    expect(Object.keys(all).length).toBe(26);
+    expect(Object.keys(all).length).toBe(27);
   });
 });
 
@@ -344,6 +345,36 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
     expect(
       buildReport(STATICS, seq([warn("something-else"), ...base])).validity.caveats,
     ).not.toContain("project-symlink-skipped");
+  });
+
+  test("R786: the serve warm-up fallback warning raises its caveat; no warning, or R761's other fallback warning, does not", () => {
+    const base: RunEventInput[] = [
+      {
+        type: "mutation-set-generated",
+        siteCount: 0,
+        deployedCount: 0,
+        hangCapableCount: 0,
+        totalFiles: 0,
+        instrumentableFiles: 0,
+        notInstrumentedFiles: [],
+        declarativeSiteFiles: [],
+        preprocExcludedFiles: [],
+        excludedByOnly: 0,
+        excludedByExclude: 0,
+        excludedByOperator: 0,
+      },
+      { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
+      { type: "session-finished", elapsedMs: 1 },
+    ];
+    const code = "al-runner-v3-serve-default-fallback-warmup";
+    const warn = (c: string): RunEventInput => ({ type: "warning", code: c, message: "m" });
+    expect(buildReport(STATICS, seq([warn(code), ...base])).validity.caveats).toContain(code);
+    // A normal default session and an explicit one-shot session emit no such warning.
+    expect(buildReport(STATICS, seq(base)).validity.caveats).not.toContain(code);
+    expect(
+      buildReport(STATICS, seq([warn("al-runner-v3-serve-default-fallback"), ...base])).validity
+        .caveats,
+    ).not.toContain(code);
   });
 
   test("an outcome built from a manifest entry without hangCapable omits the key entirely", () => {

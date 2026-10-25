@@ -299,6 +299,35 @@ export class AlRunnerV3TransportFrozenError extends Error {
 }
 
 /**
+ * R786: on the DEFAULT transport only, the serve-entries warm-up met a row that R612 refuses by name
+ * (`isNamedRefusalRow`). One-shot scores that test per test, so the session is to be re-run as
+ * one-shot. The backend that threw it has closed its daemon and is thrown away by the caller; the
+ * one-shot session gets a NEW backend that carries only `reason` (for the warning and the status).
+ * `abandonedRunId` is set by `runSession`, which marks that run so `--resume` skips it.
+ */
+export class AlRunnerV3ServeFallbackWarmupError extends Error {
+  abandonedRunId?: number;
+  constructor(
+    readonly row: string,
+    readonly rowReason: string,
+  ) {
+    super(
+      `al-runner-v3-serve-default-fallback-warmup: the serve-entries default met the warm-up row ${row}, which R612 refuses by name (${rowReason}). \`lethal run\` (runFromCli) re-runs the session on one-shot; a caller of runSession directly gets this refusal and must do the same (R786)`,
+    );
+    this.name = "AlRunnerV3ServeFallbackWarmupError";
+  }
+}
+
+/** R612's named refusal: a `notRun` error row that is not a timeout (the rule `noteBaselineRows` applies). */
+function isNamedRefusalRow(r: V3Row): boolean {
+  return (
+    r.notRun === true &&
+    r.status === "error" &&
+    !(r.message !== undefined && V3_TIMEOUT_MESSAGE.test(r.message))
+  );
+}
+
+/**
  * R761: the test-name shapes proven under serve-entries. Inventoried with `discoverTests` on D1, S1
  * and the gift card: plain method names, and codeunit names of letters, digits, `_`, space and `.`
  * (D1's "CDO Recipient Mgt. Tests", 21 tests).
@@ -350,6 +379,12 @@ export interface AlRunnerV3Config {
   readonly transport?: "one-shot" | "serve-entries";
   /** R635 §5 step 2: the echo before the coverage request. Absent: on. */
   readonly secondEcho?: boolean;
+  /**
+   * R786: set only on the NEW backend of a session re-run after `AlRunnerV3ServeFallbackWarmupError`:
+   * the row and its reason. `decideTransport` then picks one-shot, says so in one warning, and
+   * `status()` records it. Nothing else of the failed serve attempt is carried.
+   */
+  readonly serveFallbackWarmup?: string;
   /**
    * R761: `"default"` = the config named no transport, so `transport` is a starting value and
    * `decideTransport` picks it. Absent or `"explicit"`: `transport` is used as given, byte for byte as
@@ -1258,7 +1293,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (refusals.length > 0) return { ok: false, details: refusals.join("\n") };
     return {
       ok: true,
-      details: `${reported}; ${v3ContractSummary(this.contract)}${probeNote !== "" ? `; ${probeNote}` : ""}${this.entries ? `; transport serve-entries (R635), secondEcho ${this.cfg.secondEcho !== false}` : ""}`,
+      details: `${reported}; ${v3ContractSummary(this.contract)}${probeNote !== "" ? `; ${probeNote}` : ""}${this.entries ? `; transport serve-entries (R635), secondEcho ${this.cfg.secondEcho !== false}` : ""}${this.cfg.serveFallbackWarmup !== undefined ? `; transport one-shot (the serve-entries default fell back at the warm-up: ${this.cfg.serveFallbackWarmup}; R786)` : ""}`,
     };
   }
 
@@ -1393,8 +1428,18 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (V3_NO_SERVE_ENTRIES.includes(version)) {
       reasons.push(`no-serve-build: ${version} has no serve-entries path`);
     }
-    this.entries = this.cfg.transport === "serve-entries" && reasons.length === 0;
+    const warmupFallback = this.cfg.serveFallbackWarmup;
+    this.entries =
+      this.cfg.transport === "serve-entries" &&
+      reasons.length === 0 &&
+      warmupFallback === undefined;
     this.transportFrozen = true;
+    if (warmupFallback !== undefined) {
+      this.notify(
+        "al-runner-v3-serve-default-fallback-warmup",
+        `[lethal] al-runner-v3-serve-default-fallback-warmup: the serve-entries default stopped at the warm-up (${warmupFallback}), so this session was re-run one-shot, as an explicit "one-shot" run is. Nothing of the serve attempt is kept in this report; its run row stays in the store, marked so --resume skips it (the run id, if known, is in the parenthesis above). Set "alRunnerV3.transport" to choose a transport yourself (R786).`,
+      );
+    }
     if (reasons.length > 0) {
       this.notify(
         "al-runner-v3-serve-default-fallback",
@@ -2591,13 +2636,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     for (const r of rows) {
       // R678: exactly `v3RowVerdict`'s refusal branch (a notRun with another status is a contract
       // error), so a reused snapshot's verdicts give the same set (`noteReusedBaseline`).
-      if (
-        r.notRun &&
-        r.status === "error" &&
-        !(r.message !== undefined && V3_TIMEOUT_MESSAGE.test(r.message))
-      ) {
-        this.noteRefused(id, r.method);
-      }
+      if (isNamedRefusalRow(r)) this.noteRefused(id, r.method);
     }
   }
 
@@ -2691,13 +2730,34 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       // Build review r1 M1: a warm-up row R612 does not keep (a union test that times out under
       // NONE) would leave every later request on an untrusted daemon, and every fresh daemon repeats
       // it, so re-sending cannot help: refused by name before any mutant entry is sent.
+      const unkept: { readonly e: SentEntry; readonly bad: V3Row | undefined }[] = [];
       for (const e of sent) {
         const mine = rows.get(e.id) ?? [];
         if (serveDaemonReusable(serveLines(mine), "v3")) continue;
-        const bad = mine.find((r) => !serveDaemonReusable(serveLines([r]), "v3"));
+        const bad = mine.filter((r) => !serveDaemonReusable(serveLines([r]), "v3"));
+        if (bad.length === 0) unkept.push({ e, bad: undefined });
+        for (const b of bad) unkept.push({ e, bad: b });
+      }
+      const first = unkept[0];
+      if (first !== undefined) {
+        // R786: the disagreement check above passed, so one-shot's baseline held the same rows. On
+        // the default transport "run one-shot" is right only when EVERY unkept row, in every entry,
+        // is a named refusal; one timeout or other unkept kind among them still refuses.
+        if (
+          this.cfg.transportSource === "default" &&
+          first.bad !== undefined &&
+          unkept.every((u) => u.bad !== undefined && isNamedRefusalRow(u.bad))
+        ) {
+          throw new AlRunnerV3ServeFallbackWarmupError(
+            `${first.bad.name} (codeunit ${first.e.codeunit})`,
+            first.bad.message ?? "?",
+          );
+        }
+        // Name the row that blocks the fallback when there is one, else the first unkept row.
+        const named = unkept.find((u) => u.bad === undefined || !isNamedRefusalRow(u.bad)) ?? first;
         throw new AlRunnerV3EntriesRefusedError(
           "al-runner-v3-entries-warmup-dirty",
-          `the warm-up row ${bad?.name ?? e.id} (codeunit ${e.codeunit}) is ${r672Unkept(bad) ?? "one R612 does not keep"} (${bad?.message ?? bad?.status ?? "?"}); every daemon repeats it, so no entry is trusted on any`,
+          `the warm-up row ${named.bad?.name ?? named.e.id} (codeunit ${named.e.codeunit}) is ${r672Unkept(named.bad) ?? "one R612 does not keep"} (${named.bad?.message ?? named.bad?.status ?? "?"}); every daemon repeats it, so no entry is trusted on any`,
         );
       }
     } catch (err) {
@@ -3114,7 +3174,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         lane.pair = { mutantId, ref, noneVerdict, next: "null" };
         return;
       }
-      if (err instanceof AlRunnerV3DependencySkippedError) throw err;
+      if (
+        err instanceof AlRunnerV3DependencySkippedError ||
+        err instanceof AlRunnerV3ServeFallbackWarmupError
+      )
+        throw err;
       this.notify(
         "al-runner-v3-pair-skipped",
         `[lethal] al-runner-v3-pair-skipped: the kill pair for ${mutantId} was not sent (${err instanceof Error ? `${err.name}: ${err.message.slice(0, 300)}` : String(err)}); the confirm and the reproduction run as live requests (R653).`,
