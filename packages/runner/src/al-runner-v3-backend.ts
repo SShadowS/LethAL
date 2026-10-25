@@ -721,9 +721,11 @@ export interface V3EntriesStats {
   pairBatchServed: number;
   pairBatchRefused: number;
   /**
-   * R798: speculative baseline calls (R790) served-eligible vs dropped (timed out, crashed, too slow,
-   * spawn failed, or the whole set discarded because the bound keys differed): each dropped call's
-   * codeunit ran live. A rising `speculativeDropped` shows the speed-up shrinking.
+   * R798: speculative baseline calls (R790) kept (accepted at deploy and not yet found unusable) vs
+   * dropped (timed out, crashed, too slow, spawn failed, the whole set lost to a failure or to
+   * differing bound keys, or kept but asked for at another stop or coverage flag): each dropped
+   * call's codeunit ran live. A kept call never asked for stays kept. A rising `speculativeDropped`
+   * shows the speed-up shrinking.
    */
   speculativeKept: number;
   speculativeDropped: number;
@@ -1209,8 +1211,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     afterSpeculation?: () => Promise<void>;
     /** R798: replaces `os.setPriority` for the speculative call (a test counts and may throw). */
     setPriority?: (pid: number, priority: number) => void;
+    /** R798: replaces the `nice` lookup (null: none, so the setPriority fallback runs). */
+    niceBinary?: () => string | null;
   } = {};
   private niceNoticed = false;
+
+  /** R798: the `nice` program, or undefined (Windows, or none on PATH). `seams.niceBinary` replaces the lookup. */
+  private niceBinary(): string | undefined {
+    if (this.seams.niceBinary !== undefined) return this.seams.niceBinary() ?? undefined;
+    return process.platform === "win32" ? undefined : (Bun.which("nice") ?? undefined);
+  }
 
   /** R798: the speculative call yields CPU to alc. Best effort: a failure is noted once, never thrown. */
   private lowerPriority(pid: number): void {
@@ -2107,6 +2117,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
     | undefined
   > {
+    let droppedHere = 0;
     try {
       const f = this.budgetFloor;
       if (f === undefined) return undefined;
@@ -2121,7 +2132,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       for (const id of [...this.suitePerCodeunit.keys()].sort((a, b) => a - b)) {
         if (signal.aborted) return undefined;
         this.callSeq += 1;
-        // Named as a live call's file is, so the call's argv is the live call's argv.
+        // Named as a live call's file is, so the call's argv is the live call's argv (R798: behind `nice -n 19`).
         const covPath = join(covDir, `call-${this.callSeq}.json`);
         await rm(covPath, { force: true });
         const made = await this.spawnCodeunit({
@@ -2145,6 +2156,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         // A spawn that failed is not kept: that codeunit's baseline call runs live.
         const drop = () => {
           this.stats.speculativeDropped += 1; // R798: that codeunit's baseline call runs live
+          droppedHere += 1;
         };
         if ("spawnError" in made) {
           drop();
@@ -2193,6 +2205,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       const after = await this.boundKey(active);
       return { before, after, realActive, realTest, calls };
     } catch {
+      // R798: nothing is kept, so every codeunit not yet counted as dropped runs live: dropped.
+      this.stats.speculativeDropped += Math.max(0, this.suitePerCodeunit.size - droppedHere);
       return undefined;
     }
   }
@@ -2210,7 +2224,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const c = s.calls.get(id);
     if (c === undefined) return undefined;
     s.calls.delete(id);
-    return c.stopSeconds === stopSeconds && c.coverage === coverage ? c : undefined;
+    if (c.stopSeconds === stopSeconds && c.coverage === coverage) return c;
+    // R798: kept at deploy, but this call is another stop or coverage flag: it runs live, so dropped.
+    this.stats.speculativeKept -= 1;
+    this.stats.speculativeDropped += 1;
+    return undefined;
   }
 
   /** R790: one v3 process for codeunit `id`; `beforeSpawn` is the last await before it starts. */
@@ -2226,7 +2244,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     /** R798: lower the child's CPU priority once it started (the speculative call only). */
     readonly nice?: boolean;
   }): Promise<SpawnedCall | { readonly spawnError: string; readonly wallMs: number }> {
-    const argv = v3CallArgv({
+    const plain = v3CallArgv({
       alRunnerPath: absToolPath(this.cfg.alRunnerPath),
       codeunitId: o.id,
       stopSeconds: o.stopSeconds,
@@ -2237,6 +2255,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       activeDir: o.activeDir,
       testDir: o.testDir,
     });
+    // R798: the speculative call runs under `nice -n 19` from its first instruction (every thread and
+    // child inherits it). Without `nice` (Windows), setPriority on the pid after it started, best effort.
+    const niceBin = o.nice === true ? this.niceBinary() : undefined;
+    const argv = niceBin !== undefined ? [niceBin, "-n", "19", ...plain] : plain;
     await o.beforeSpawn?.();
     // Review 5: an abort before the listener below exists would never reach the process.
     if (o.signal?.aborted === true) return { spawnError: "aborted before the spawn", wallMs: 0 };
@@ -2257,7 +2279,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         signal: controller.signal,
         // R645: v3 writes coverage.cobertura.xml into its cwd; never the caller's.
         cwd: o.cwd,
-        ...(o.nice === true ? { onStart: (pid: number) => this.lowerPriority(pid) } : {}),
+        ...(o.nice === true && niceBin === undefined
+          ? { onStart: (pid: number) => this.lowerPriority(pid) }
+          : {}),
         ...this.cacheEnv(),
       });
       return { res, wallMs: Date.now() - started, timedOut, deadlineMs };
@@ -4006,7 +4030,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (this.entries) {
       const s = this.entriesStats();
       console.warn(
-        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}; batched pairs: requests ${s.pairBatchRequests}, stored ${s.pairBatchStored}, served ${s.pairBatchServed}, refused ${s.pairBatchRefused}); wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks; test-app compile cache (R780) hits ${this.testAppCache.hits} / misses ${this.testAppCache.misses}.`,
+        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}; batched pairs: requests ${s.pairBatchRequests}, stored ${s.pairBatchStored}, served ${s.pairBatchServed}, refused ${s.pairBatchRefused}); wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks; speculative baseline calls (R798) kept ${s.speculativeKept} / dropped ${s.speculativeDropped}; test-app compile cache (R780) hits ${this.testAppCache.hits} / misses ${this.testAppCache.misses}.`,
       );
     }
     await rm(join(this.cfg.instrumentedDir, "cov"), { recursive: true, force: true }).catch(

@@ -4310,16 +4310,22 @@ describe("R790: the speculative baseline", () => {
       };
     const ok = await deployWith(undefined, true, {
       wrapSpawn,
-      seams: () => ({ setPriority: (pid, p) => void seen.push([pid, p]) }),
+      seams: () => ({
+        niceBinary: () => null,
+        setPriority: (pid, p) => void seen.push([pid, p]),
+      }),
     });
     expect(ok.err).toBeUndefined();
     expect(seen).toEqual([[4242, 19]]);
+    // No `nice`: the argv is the plain one.
+    expect(ok.one.calls[0]?.[0]).toBe("/fake/al-runner");
 
     const notes: string[] = [];
     const bad = await deployWith(undefined, true, {
       wrapSpawn,
       notify: (code) => void notes.push(code),
       seams: () => ({
+        niceBinary: () => null,
         setPriority: () => {
           throw new Error("EPERM");
         },
@@ -4339,6 +4345,83 @@ describe("R790: the speculative baseline", () => {
       );
     const dropped = await deployWith(undefined, true, { rows: timesOutA });
     expect(dropped.b.entriesStats()).toMatchObject({ speculativeKept: 0, speculativeDropped: 1 });
+  });
+
+  test("R798: the speculative argv starts with nice -n 19; live calls never do, and setPriority is not used beside nice", async () => {
+    let pids = 0;
+    const r = await deployWith(undefined, true, {
+      wrapSpawn: (s) => (argv, o) => {
+        o?.onStart?.(1);
+        return s(argv, o);
+      },
+      seams: () => ({
+        niceBinary: () => "/bin/nice",
+        setPriority: () => {
+          pids += 1;
+        },
+      }),
+    });
+    expect(r.one.calls[0]?.slice(0, 4)).toEqual(["/bin/nice", "-n", "19", "/fake/al-runner"]);
+    // The speculative call is served once; the second baseline runs live, plain.
+    await baseline(r.b, SUITE1);
+    await baseline(r.b, SUITE1);
+    expect(r.one.calls).toHaveLength(2);
+    expect(r.one.calls.filter((c) => c[0] === "/bin/nice")).toHaveLength(1);
+    expect(r.one.calls[1]?.[0]).toBe("/fake/al-runner");
+    // Not applied at all beside nice (the fake reports a pid to every call; none was used).
+    expect(pids).toBe(0);
+  });
+
+  test("R798: the fallback is noted once, however many calls fail", async () => {
+    const notes: string[] = [];
+    const r = await deployWith(undefined, true, {
+      notify: (code) => void notes.push(code),
+      seams: () => ({
+        niceBinary: () => null,
+        setPriority: () => {
+          throw new Error("EPERM");
+        },
+      }),
+    });
+    const low = (r.b as unknown as { lowerPriority: (pid: number) => void }).lowerPriority.bind(
+      r.b,
+    );
+    low(1);
+    low(2);
+    expect(notes).toEqual(["al-runner-v3-speculative-nice-failed"]);
+  });
+
+  test("R798: a failure inside the speculation counts every codeunit as dropped", async () => {
+    const r = await deployWith(undefined, true, {
+      seams: () => ({
+        afterSpeculation: async () => {
+          throw new Error("boom");
+        },
+      }),
+    });
+    expect(r.err).toBeUndefined();
+    expect(r.b.entriesStats()).toMatchObject({ speculativeKept: 0, speculativeDropped: 1 });
+    await baseline(r.b, SUITE1);
+    expect(r.one.calls).toHaveLength(2);
+  });
+
+  test("R798: bound keys that differ count the calls as dropped", async () => {
+    const r = await deployWith(undefined, true, {
+      seams: (l) => ({
+        afterSpeculation: async () => {
+          await writeFile(join(l.testDir, "Late.Codeunit.al"), 'codeunit 79999 "Late" { }');
+        },
+      }),
+    });
+    expect(speculative(r.b)).toBeUndefined();
+    expect(r.b.entriesStats()).toMatchObject({ speculativeKept: 0, speculativeDropped: 1 });
+  });
+
+  test("R798: a kept call asked for at another stop becomes dropped", async () => {
+    const r = await deployWith(undefined, true, { floor: [1000, 5000] });
+    expect(r.b.entriesStats()).toMatchObject({ speculativeKept: 1, speculativeDropped: 0 });
+    await baseline(r.b, SUITE1);
+    expect(r.b.entriesStats()).toMatchObject({ speculativeKept: 0, speculativeDropped: 1 });
   });
 
   test("served once: a second baseline runs live", async () => {

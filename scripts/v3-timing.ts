@@ -82,6 +82,9 @@ export interface ServeStats {
   readonly echoMs: number;
   readonly boundMs: number;
   readonly boundChecks: number;
+  /** R798: speculative baseline calls kept / dropped; absent in a line from before R798. */
+  readonly speculativeKept?: number;
+  readonly speculativeDropped?: number;
 }
 
 export interface ProcSpan {
@@ -132,7 +135,11 @@ export function parseServeStats(stderr: string): ServeStats | undefined {
   const m = SERVE_LINE.exec(stderr);
   if (m === null) return undefined;
   const n = (i: number) => Number(m[i]);
+  const spec = /speculative baseline calls \(R798\) kept (\d+) \/ dropped (\d+)/.exec(stderr);
   return {
+    ...(spec !== null
+      ? { speculativeKept: Number(spec[1]), speculativeDropped: Number(spec[2]) }
+      : {}),
     daemons: n(1),
     warmups: n(2),
     liveRequests: n(3),
@@ -257,6 +264,7 @@ export function buildTimingMarkdown(meta: TimingMeta, runs: readonly RunTiming[]
     "windows s (coverage / echo)",
     "bound s (n)",
     "kill pairs",
+    "spec kept / dropped",
     "loop other s",
     "per mutant median / p90 ms (n)",
     "transport",
@@ -285,6 +293,7 @@ export function buildTimingMarkdown(meta: TimingMeta, runs: readonly RunTiming[]
       s === undefined ? "-" : `${s1(s.windowMs)} (${s1(s.coverageMs)} / ${s1(s.echoMs)})`,
       s === undefined ? "-" : `${s1(s.boundMs)} (${s.boundChecks})`,
       s === undefined ? "-" : String(s.pairRequests),
+      s?.speculativeKept === undefined ? "-" : `${s.speculativeKept} / ${s.speculativeDropped}`,
       loop === undefined || named === undefined ? "-" : s1(loop - named),
       `${r.perMutant.medianMs} / ${r.perMutant.p90Ms} (${r.perMutant.n})`,
       r.transport,

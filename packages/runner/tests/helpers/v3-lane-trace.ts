@@ -399,6 +399,8 @@ export async function runV3LaneTrace(): Promise<V3LaneTrace> {
     b.setNotify((code, message) => notices.push(`${code}: ${norm(message)}`));
     // R778: this trace is today's per-kill pair; the batch has its own tests.
     (b as unknown as { pairBatch: boolean }).pairBatch = false;
+    // R798: the speculative call's argv starts with `nice -n 19`; a fixed name keeps the trace machine-independent.
+    b.seams.niceBinary = () => "nice";
     b.useBuildSymbols([]);
     b.useDiscoveredTests(SUITE);
     b.useSessionTests(SUITE);

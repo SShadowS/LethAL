@@ -52,6 +52,14 @@ describe("R774 v3-timing", () => {
     expect(parseServeStats("phase: mutants done in 1.1s")).toBeUndefined();
   });
 
+  test("parseServeStats reads the R798 speculative counters when the line has them", () => {
+    const line = SERVE.replace(
+      " checks.",
+      " checks; speculative baseline calls (R798) kept 2 / dropped 1; test-app compile cache (R780) hits 0 / misses 1.",
+    );
+    expect(parseServeStats(line)).toMatchObject({ speculativeKept: 2, speculativeDropped: 1 });
+  });
+
   test("parseProbe: cache, fresh, and no line", () => {
     expect(
       parseProbe("[lethal] al-runner-v3 contract probe from cache (key 0a1b) (R762)").kind,
@@ -185,8 +193,8 @@ describe("R774 v3-timing", () => {
     const rows = lines.filter((l) => l.startsWith("| d1") || l.startsWith("| gc"));
     expect(rows).toEqual([
       // loop other = 80.0 - (9.1 + 0.3 + 61.0 + 7.0 + 1.7) = 0.9
-      "| d1 #1 | 0 | 95.4 | cache | 0.4 | 12.3 | 1.4 / 2.1 / 2.4 (4) | 3.1 | 80.0 | 9.1 | 61.0 (51) | 7.0 (5.0 / 2.0) | 1.7 (57) | 40 | 0.9 | 1200 / 2100 (63) | serve-entries | load 2.0/1.5, 32 GB free, 1 other heavy | load 3.0/1.5, 32 GB free, 0 other heavy |",
-      "| gc #2 | 1 | 95.4 | fresh 4.3 s | 0.4 | 12.3 | 1.4 / 2.1 / 2.4 (4) + other 0.5 | 3.1 | 80.0 | - | - | - | - | - | - | 1200 / 2100 (63) | one-shot (fallback: resume) | load 2.0/1.5, 32 GB free, 1 other heavy | load 3.0/1.5, 32 GB free, 0 other heavy |",
+      "| d1 #1 | 0 | 95.4 | cache | 0.4 | 12.3 | 1.4 / 2.1 / 2.4 (4) | 3.1 | 80.0 | 9.1 | 61.0 (51) | 7.0 (5.0 / 2.0) | 1.7 (57) | 40 | - | 0.9 | 1200 / 2100 (63) | serve-entries | load 2.0/1.5, 32 GB free, 1 other heavy | load 3.0/1.5, 32 GB free, 0 other heavy |",
+      "| gc #2 | 1 | 95.4 | fresh 4.3 s | 0.4 | 12.3 | 1.4 / 2.1 / 2.4 (4) + other 0.5 | 3.1 | 80.0 | - | - | - | - | - | - | - | 1200 / 2100 (63) | one-shot (fallback: resume) | load 2.0/1.5, 32 GB free, 1 other heavy | load 3.0/1.5, 32 GB free, 0 other heavy |",
     ]);
     const header = lines.find((l) => l.startsWith("| run"));
     expect(header?.split("|").length).toBe(rows[0]?.split("|").length);
