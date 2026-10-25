@@ -444,10 +444,13 @@ describe("R762: forced fresh and never-cached sessions", () => {
 describe("R762: --fresh-probe reaches the backend", () => {
   const argv = ["run", "--project", "p", "--tests", "t", "--backend", "al-runner-v3"];
   // v3 is refused off Linux (M9) already at parse time, so the argv cannot parse on the Windows CI job.
-  test.skipIf(process.platform !== "linux")("the flag parses to freshProbe, and is absent without it", () => {
-    expect(parseCliConfig([...argv, "--fresh-probe"])).toMatchObject({ freshProbe: true });
-    expect(parseCliConfig(argv)).not.toHaveProperty("freshProbe");
-  });
+  test.skipIf(process.platform !== "linux")(
+    "the flag parses to freshProbe, and is absent without it",
+    () => {
+      expect(parseCliConfig([...argv, "--fresh-probe"])).toMatchObject({ freshProbe: true });
+      expect(parseCliConfig(argv)).not.toHaveProperty("freshProbe");
+    },
+  );
   test("buildBackend threads it into the al-runner-v3 config, and only when set", async () => {
     if (process.platform !== "linux") return; // v3 is refused off Linux (M9)
     const build = async (freshProbe: boolean) => {

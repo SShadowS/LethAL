@@ -13,6 +13,9 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **A forced fresh probe no longer writes the probe cache** (R770). `--fresh-probe`, `LETHAL_V3_FRESH_PROBE=1` and the
+  gates' sessions skip the write (the receipt says "forced; not cached"), so the pinned build folder stops filling with
+  entries no later session can match. A normal miss still writes.
 - **al-runner-v3 one-shot kill confirms no longer ask v3 for coverage** (R764). The orchestrator already sends confirms
   with coverage `none`; the backend ignored it and sent `--coverage-json` and joined the result. Now an unmutated
   call that asked for `none` sends neither. The real baseline and every mutant call are unchanged. No verdict can
