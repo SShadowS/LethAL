@@ -164,6 +164,36 @@ describe("R295: a #if between two names of one declaration", () => {
       ["lethal.empty-block", "lethal.remove-assignment", "lethal.shift-integer"],
     ]);
   });
+
+  // R796 (review S1): B exists only under X, so it is conditionally declared and unknown; it must
+  // not resolve to the same-named global, whose type may differ from the local's in the X build.
+  test("a conditionally declared name does not resolve to the same-named global: no swap on it", async () => {
+    const { set } = await instrument({
+      "P3.Codeunit.al": `codeunit 92652 "R295 Cond Names"
+{
+    var
+        B: Integer;
+
+    procedure TakeInts(P: Integer; Q: Integer)
+    begin
+    end;
+
+    procedure P()
+    var
+        A,
+#if X
+        B,
+#endif
+        C: Integer;
+    begin
+        TakeInts(A, B);
+    end;
+}
+`,
+    });
+    const ops = set.files.flatMap((f) => f.specs.map((s) => s.operatorName));
+    expect(ops).not.toContain("lethal.swap-call-arguments");
+  });
 });
 
 test("R295/R294: the identity scheme is 43 (11 for R295/R294, 13 R455, 14 R454, 16 R-364, 17 R254, 18 R-458, 19 R468, 20, 23 and 31 unused, 21 R459, 22 R-464, 24 R475, 25 R446, 26 R477, 27 R480, 28 R484, 29 R-300b, 30 R487, 32 R509, 33 R501, 34 R343, 35 R500, 36 R497, 37 R340, 38 R555, 39 R-531, 40 R565, 41 R572, 42 R-604b, 43 R796)", () => {

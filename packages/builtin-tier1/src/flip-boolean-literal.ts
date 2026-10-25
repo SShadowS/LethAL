@@ -428,6 +428,8 @@ const CONDITION_WRAPPERS: ReadonlySet<string> = new Set([
   ALNodeKind.comparison_expression,
   CONDITION_TAIL,
   CONDITION_PREFIX,
+  // R796: an operand chosen by `#if` (`(A < 10) or` `#if X false #else Done #endif`).
+  "preproc_conditional_operand",
 ]);
 
 /** A case LABEL, not a boolean in a branch body — see `CASE_LABEL_PARENTS`. */

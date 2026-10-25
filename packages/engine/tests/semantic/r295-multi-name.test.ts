@@ -253,4 +253,29 @@ ${header}
     expect(errors).toBe(0);
     expect(conditionalNames).toBe(1);
   });
+
+  // R796 (review S1): B exists only when X is defined, so a use of B must not fall through to a
+  // same-named global of ANOTHER type. It is conditionally declared, hence unknown (null).
+  it("a name declared under a #if inside A, #if B, #endif C: T is unknown, not the global's type", () => {
+    const src = `codeunit 50100 X
+{
+    var
+        B: Decimal;
+
+    procedure P()
+    var
+        A,
+#if X
+        B,
+#endif
+        C: Integer;
+    begin
+        C := B;
+    end;
+}
+`;
+    expect(typeAt(src, "B")).toBeNull();
+    // control: a name that is not conditional still types by the local
+    expect(typeAt(src, "C")).toBe("Integer");
+  });
 });

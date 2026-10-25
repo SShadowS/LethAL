@@ -23,6 +23,8 @@ const wrap = (body: string) => `codeunit 79600 "R402 Shape"
         B: Integer;
         C: Integer;
         Arr: array[20] of Integer;
+        I: Integer;
+        Done: Boolean;
     begin
 ${body}
     end;
@@ -84,6 +86,19 @@ const SHAPES = {
   s8: `        while\n#if LETHALX\n            (B < 5) and\n#endif\n            (A < 10)\n${LOOP_BODY}`,
   // R796: a boolean literal in the PREFIX of a loop condition is never flipped (it reaches the exit).
   t3: `        while\n#if LETHALX\n            false or\n#endif\n            (A < 10)\n${LOOP_BODY}`,
+  // R801 (addendum 0b929aed): readers other than the loop condition must follow a PREFIX like a tail.
+  a_prefix:
+    "        while I < 10 do\n            I :=\n#if LETHALX\n                (I + 1) +\n#endif\n                0;",
+  v_prefix:
+    "        while not Done do begin\n            I += 1;\n            Done :=\n#if LETHALX\n                true and\n#endif\n                (I >= 3);\n        end;",
+  g_prefix:
+    "        while true do begin\n            I += 1;\n            if\n#if LETHALX\n                (I >= 3) or\n#endif\n                false then\n                break;\n        end;",
+  exit_prefix:
+    "        while true do begin\n            I += 1;\n            if\n#if LETHALX\n                (I >= 3) or\n#endif\n                false then\n                exit;\n        end;",
+  f_prefix:
+    "        while true do begin\n            I += 1;\n            Done :=\n#if LETHALX\n                (I >= 3) or\n#endif\n                false;\n            if Done then\n                break;\n        end;",
+  or_operand:
+    "        while (A < 10) or\n#if LETHALX\n            false\n#else\n            Done\n#endif\n            do\n            A := A + 1;",
   s8or: `        while\n#if LETHALX\n            (B < 5) or\n#endif\n            (A < 10)\n${LOOP_BODY}`,
   s12: `        while (A < 10)\n#if LETHALX\n            and (B < 5)\n#if LETHALY\n            and (C < 7)\n#endif\n#endif\n${LOOP_BODY}`,
   s13: `#if LETHALX\n        while (B < 5)\n#else\n        while (A < 10)\n#endif\n${LOOP_BODY}`,
@@ -114,6 +129,8 @@ type Result = {
   undecided: string[];
   /** Every generated spec, to check an admitted shape keeps all its sites. */
   specs: number;
+  /** R796: every generated spec's operator name. */
+  ops: string[];
 };
 const results = new Map<string, Result>();
 
@@ -145,6 +162,7 @@ async function run(shape: Shape, build: Build): Promise<Result> {
         .filter((e) => e.reason === "preproc-undecided")
         .map((e) => e.detail ?? ""),
       specs: specs.length,
+      ops: specs.map((x) => x.operatorName),
     };
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -352,6 +370,39 @@ describe("R402: a repeat's `#if` tail (once misparsed as a continuing statement)
         expect(get(s, b).undecided, `${s}/${b}`).toEqual([]);
       }
     }
+  });
+});
+
+// R801 (addendum 0b929aed): each reader that follows a `#if` tail also follows a PREFIX (4.5.0's
+// `preproc_operand_prefix`). In the builds that compile the prefix every shape below is admitted,
+// and its hang-capable site is refused or tagged: an untagged one hangs the run.
+describe("R801: a #if PREFIX is followed by every reader that follows a tail", () => {
+  const compiled = ["X", "XY"] as const;
+  const noOp = (s: Shape, b: Build, op: string) =>
+    expect(get(s, b).ops, `${s}/${b}: ${op}`).not.toContain(op);
+
+  test("a_prefix: hangCapableForMutatedNode's value side refuses swap-additive on `(I + 1)`", () => {
+    for (const b of compiled) noOp("a_prefix", b, "lethal.swap-additive");
+  });
+  test("v_prefix: the value side refuses flip-boolean-literal on `true and`", () => {
+    for (const b of compiled) expect(get("v_prefix", b).flips, `v_prefix/${b}`).toEqual([]);
+  });
+  test("g_prefix and exit_prefix: guardPartsOf follows the prefix, so the step is refused", () => {
+    for (const s of ["g_prefix", "exit_prefix"] as const)
+      for (const b of compiled) {
+        expect(get(s, b).assigns.has("I"), `${s}/${b}: I += 1`).toBe(false);
+        noOp(s, b, "lethal.shift-integer");
+      }
+  });
+  test("f_prefix: indirectFeeds/exprTails follow the prefix, so the step is refused", () => {
+    for (const b of compiled) {
+      expect(get("f_prefix", b).assigns.has("I"), `f_prefix/${b}: I += 1`).toBe(false);
+      noOp("f_prefix", b, "lethal.shift-integer");
+    }
+  });
+  test("or_operand: a #if-chosen operand of a loop condition is never flipped", () => {
+    for (const b of Object.keys(BUILDS) as Build[])
+      expect(get("or_operand", b).flips, `or_operand/${b}`).toEqual([]);
   });
 });
 

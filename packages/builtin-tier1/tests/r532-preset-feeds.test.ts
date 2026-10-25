@@ -152,6 +152,36 @@ const REP = `report 50532 "Feed Rep"
         Continue := V;
     end;
 
+    // R801: the same two shapes with a #if PREFIX (tree-sitter-al 4.5.0) instead of a tail.
+    procedure CaseWritePrefix()
+    var
+        T: Boolean;
+        U: Boolean;
+    begin
+        T := Limit > 191;
+        U := Limit > 192;
+        Continue :=
+#if not CLEAN25
+            U or
+#endif
+            T;
+    end;
+
+    procedure CaseFeedPrefix()
+    var
+        V: Boolean;
+        W: Boolean;
+        X: Boolean;
+    begin
+        X := Limit > 193;
+        V :=
+#if not CLEAN25
+            X or
+#endif
+            W;
+        Continue := V;
+    end;
+
     procedure CaseClear()
     var
         Tmp: Boolean;
@@ -494,6 +524,17 @@ describe("R532: same-scope feeds of a preset exit name", () => {
   it("a feed read only in an `#if` tail of another feed is refused", () => {
     refusedByFeeds("lethal.remove-assignment @ X := Limit > 93");
     refusedByFeeds("lethal.conditional-boundary @ Limit > 93");
+  });
+
+  // R801 red: `exprTails` reads tails only (drop the prefix from `sideParts`), each seed above
+  it("a feed read only in an `#if` PREFIX of the preset write is refused", () => {
+    refusedByFeeds("lethal.remove-assignment @ U := Limit > 192");
+    refusedByFeeds("lethal.conditional-boundary @ Limit > 192");
+  });
+
+  it("a feed read only in an `#if` PREFIX of another feed is refused", () => {
+    refusedByFeeds("lethal.remove-assignment @ X := Limit > 193");
+    refusedByFeeds("lethal.conditional-boundary @ Limit > 193");
   });
 
   // red: drop the `directWrite(n, feeds.names, ctx)` half of `isFeed`

@@ -2310,9 +2310,21 @@ function writerFedArgs(
   };
 }
 
-/** An assignment's `#if` expression tails (R480 `indirectFeeds` follows them). */
-const exprTails = (a: ALSyntaxNode): ALSyntaxNode[] =>
-  a.namedChildren.filter((c) => c.rawKind === "preproc_conditional_expression_tail");
+/**
+ * R796: the `#if` parts the grammar puts BESIDE a statement's expression field: a TAIL
+ * (`preproc_conditional_expression_tail`) or, since tree-sitter-al 4.5.0, a PREFIX
+ * (`preproc_operand_prefix`). Every reader that follows tails must follow prefixes too, or a
+ * hang-capable site in a newly admitted file goes untagged (R801).
+ */
+export function sideParts(n: ALSyntaxNode): ALSyntaxNode[] {
+  return n.namedChildren.filter(
+    (c) =>
+      c.rawKind === "preproc_conditional_expression_tail" || c.rawKind === "preproc_operand_prefix",
+  );
+}
+
+/** An assignment's `#if` expression tails and prefixes (R480 `indirectFeeds` follows them). */
+const exprTails = (a: ALSyntaxNode): ALSyntaxNode[] => sideParts(a);
 
 /** R500 shape 1's direct write of a name in `names`: an assignment to it, or a call that passes it
  *  to a `var` parameter (an unresolved callee counts as writing, the safe direction on this side). */
@@ -6856,10 +6868,7 @@ function indirectFeeds(
         continue;
       }
       used.add(a);
-      const fed = [
-        right,
-        ...a.namedChildren.filter((c) => c.rawKind === "preproc_conditional_expression_tail"),
-      ];
+      const fed = [right, ...sideParts(a)];
       for (const f of fed) {
         out.push(f);
         collect(f);
@@ -6986,8 +6995,7 @@ function guardPartsOf(a: ALSyntaxNode): ALSyntaxNode[] {
       out.push(a.childForFieldName("iterable"));
       break;
   }
-  for (const t of a.namedChildren)
-    if (t.rawKind === "preproc_conditional_expression_tail") out.push(t);
+  out.push(...sideParts(a));
   return out.filter((x): x is ALSyntaxNode => x !== null);
 }
 
@@ -6999,13 +7007,8 @@ export function loopConditionParts(loop: ALSyntaxNode): ALSyntaxNode[] {
   const cond = conditionOf(loop);
   return [
     ...(cond !== null ? [cond] : []),
-    // R796: tree-sitter-al 4.5.0 also puts a `#if` PREFIX of the condition (`while` `#if X (B < 5) or
-    // #endif` `(A < 10)`) beside it, as `preproc_operand_prefix`; 4.4.1 refused such a file whole.
-    ...loop.namedChildren.filter(
-      (c) =>
-        c.rawKind === "preproc_conditional_expression_tail" ||
-        c.rawKind === "preproc_operand_prefix",
-    ),
+    // R796: tails AND prefixes (`while` `#if X (B < 5) or #endif` `(A < 10)`); 4.4.1 refused a prefix whole.
+    ...sideParts(loop),
   ];
 }
 
@@ -7493,10 +7496,7 @@ export function hangCapableForMutatedNode(
       if (right === null) return null;
       // A `#if` tail of the value (`Done := Go` `#if X and true #endif` `;`) sits BESIDE `right`,
       // the shape `conditionIdentifiers` reads for a loop condition, so it is value side too.
-      const valueParts = [
-        right,
-        ...cur.namedChildren.filter((c) => c.rawKind === "preproc_conditional_expression_tail"),
-      ];
+      const valueParts = [right, ...sideParts(cur)];
       const insideValueSide = valueParts.some(
         (v) => node.startIndex >= v.startIndex && node.endIndex <= v.endIndex,
       );
