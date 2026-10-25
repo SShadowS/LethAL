@@ -13,8 +13,9 @@
  * - A not-run row is never killed and never survived; a timeout row is a CPU-time stop (§5).
  * - `Sleep` does nothing (#5605): a covering pass that reaches a project Sleep reads `error` (§6,
  *   `al-runner-v3-sleep.ts`).
- * One-shot with the static selector by default (`selectorMode: "resource"` is refused by name).
- * R635 adds an opt-in transport, `transport: "serve-entries"` (plan
+ * The static selector is one-shot's (`selectorMode: "resource"` is refused by name).
+ * R635 adds the transport `transport: "serve-entries"`, the default since R761 where it is proven
+ * (else one-shot, with a named warning; an explicit key is honoured; see `decideTransport`) (plan
  * `docs/superpowers/plans/2026-10-22-r635-v3-serve-entries.md`, r3): the baseline stays one-shot,
  * every other run goes to a warm `serve` daemon as entries with a per-entry resource override,
  * each mutant's group vouched for by an echo test (`al-runner-v3-entries.ts`).
@@ -35,6 +36,7 @@ import {
 import {
   type AlRunnerCoverageIndex,
   alRunnerCoverageFromServer,
+  alRunnerMoOrWrappedFiles,
   buildAlRunnerCoverageIndex,
   normalizeFileKey,
 } from "./al-runner-coverage";
@@ -70,7 +72,7 @@ import {
   encodeGroups,
   serveRow,
 } from "./al-runner-v3-entries";
-import { AlRunnerV3UngatedBuildError, checkGated } from "./al-runner-v3-pin";
+import { AlRunnerV3UngatedBuildError, V3_NO_SERVE_ENTRIES, checkGated } from "./al-runner-v3-pin";
 import { pinnedDefectCoverage } from "./al-runner-v3-pins";
 import {
   FRESH_PROBE_ENV,
@@ -257,6 +259,42 @@ export class AlRunnerV3ResourceSelectorRefusedError extends Error {
   }
 }
 
+/**
+ * R761: an explicit `"transport": "serve-entries"` with a test METHOD name holding "." (upstream
+ * #5798: the entries answer for it has no `codeunit`/`method`, measured on N1E). Refused before any
+ * test runs, by name, instead of failing mid-session.
+ */
+export class AlRunnerV3ServeDottedTestNameError extends Error {
+  constructor(readonly tests: readonly string[]) {
+    super(
+      `al-runner-v3-serve-dotted-test-name: "alRunnerV3.transport" is "serve-entries", but ${tests.length} discovered test(s) have a "." in the method name (${tests.slice(0, 5).join(", ")}${tests.length > 5 ? ", ..." : ""}). al-runner v3 returns no usable row for such a test under serve (upstream #5798), so the session would fail closed part-way (R761, R722). Set "alRunnerV3.transport": "one-shot" (or drop the key: it then falls back to one-shot for this project by itself).`,
+    );
+    this.name = "AlRunnerV3ServeDottedTestNameError";
+  }
+}
+
+/** R761: the transport was decided (or a v3 process had started) and a later decision was asked for. */
+export class AlRunnerV3TransportFrozenError extends Error {
+  constructor(why: string) {
+    super(
+      `al-runner-v3-transport-frozen: the transport cannot be decided now: ${why}. It is decided once, before the first al-runner process of the session (R761).`,
+    );
+    this.name = "AlRunnerV3TransportFrozenError";
+  }
+}
+
+/**
+ * R761: the test-name shapes proven under serve-entries. Inventoried with `discoverTests` on D1, S1
+ * and the gift card: every test METHOD name was a plain identifier, and every test CODEUNIT name used
+ * only letters, digits, `_`, space and `.` (D1's "CDO Recipient Mgt. Tests", 21 tests). N1's shapes
+ * (" - ( ) . / & å æ" and a leading digit) are NOT proven. A name outside these falls the default back
+ * to one-shot (`unproven-test-name-shape`).
+ */
+export const V3_SERVE_PROVEN_NAME_SHAPES = {
+  method: /^[A-Za-z_][A-Za-z0-9_]*$/,
+  codeunit: /^[A-Za-z0-9_ .]+$/,
+} as const;
+
 /** R635 §3: the serve daemon was asked to start before `useMutantBudgetFloor` gave it a stop. */
 export class AlRunnerV3ServeStopUnsetError extends Error {
   constructor() {
@@ -293,6 +331,12 @@ export interface AlRunnerV3Config {
   readonly transport?: "one-shot" | "serve-entries";
   /** R635 §5 step 2: the echo before the coverage request. Absent: on. */
   readonly secondEcho?: boolean;
+  /**
+   * R761: `"default"` = the config named no transport, so `transport` is a starting value and
+   * `decideTransport` picks it. Absent or `"explicit"`: `transport` is used as given, byte for byte as
+   * before R761 (the itest's `backendCfg` sets none).
+   */
+  readonly transportSource?: "default" | "explicit";
   /** R762: run the contract probe fresh instead of replaying a cached pass (`--fresh-probe`). */
   readonly freshProbe?: boolean;
 }
@@ -701,7 +745,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
 
   // R635: the serve-entries state. Unused (and untouched) one-shot.
-  private readonly entries: boolean;
+  private entries: boolean;
+  /** R761: true once `decideTransport` ran or a v3 process started; `entries` never changes after. */
+  private transportFrozen = false;
+  private discovered: readonly TestMethodRef[] = [];
   /** §4: set ONLY by the orchestrator's `baselinePhase` bracket. */
   private inBaseline = false;
   /** §3 (N1): the one-shot baseline's rows per codeunit, recorded inside the bracket. */
@@ -829,7 +876,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     private readonly now: () => number = Date.now,
   ) {
     if (cfg.selectorMode === "resource") throw new AlRunnerV3ResourceSelectorRefusedError();
-    this.entries = cfg.transport === "serve-entries";
+    // R761: a default transport starts one-shot-safe; `decideTransport` turns serve on, before the
+    // first deploy (the staged batch differs by transport) and the first v3 process.
+    this.entries = cfg.transport === "serve-entries" && cfg.transportSource !== "default";
     this.compiler = new ArtifactCompiler(
       {
         alcPath: cfg.alcPath,
@@ -1030,6 +1079,76 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const m = new Map<number, number>();
     for (const t of tests) m.set(t.codeunitId, (m.get(t.codeunitId) ?? 0) + 1);
     this.testsPerCodeunit = m;
+    this.discovered = [...tests];
+  }
+
+  /**
+   * R761: decides the transport ONCE, after `useDiscoveredTests` and before the first deploy and
+   * the first v3 process. Why here: the staged batch differs by transport (resource selector and
+   * echo vs static selector), so the choice must precede `deploy`; and a `--resume` is known at
+   * session start (a baseline snapshot is reused only on a resume, `allowReuse`), so every fact is
+   * in hand then. After this, or after any v3 process started, `entries` is frozen.
+   *
+   * Explicit transport: unchanged, except that an explicit serve-entries (config key present) with a
+   * "." in a test method name refuses by name (#5798). Default: serve-entries unless a fallback
+   * reason holds; then one-shot and ONE warning naming every reason.
+   */
+  async decideTransport(facts: { readonly resume: boolean }): Promise<void> {
+    if (this.cfg.transportSource === undefined) return; // an internal caller's own transport
+    if (this.cfg.transportSource === "explicit") {
+      if (this.cfg.transport === "serve-entries") {
+        const dotted = this.discovered
+          .filter((t) => t.method.includes("."))
+          .map((t) => `${t.codeunitName}.${t.method}`);
+        if (dotted.length > 0) throw new AlRunnerV3ServeDottedTestNameError(dotted);
+      }
+      return;
+    }
+    if (this.transportFrozen)
+      throw new AlRunnerV3TransportFrozenError("it was already decided or a v3 process started");
+    const reasons: string[] = [];
+    if (facts.resume) {
+      reasons.push(
+        "resume: a --resume / --resume-run session (a reused baseline has no rows for the serve warm-up, and the transport is not in the run's fingerprint)",
+      );
+    }
+    const shapeDirs = [
+      ...(this.cfg.sourceProjectDir !== undefined ? [this.cfg.sourceProjectDir] : []),
+      this.cfg.testDir,
+    ];
+    const shaped = await alRunnerMoOrWrappedFiles(shapeDirs);
+    if (shaped.length > 0) {
+      reasons.push(
+        `multi-object-or-wrapped: ${shaped.slice(0, 5).join(", ")}${shaped.length > 5 ? ", ..." : ""} (measured on one-shot only)`,
+      );
+    }
+    const odd = this.discovered.filter(
+      (t) =>
+        !V3_SERVE_PROVEN_NAME_SHAPES.method.test(t.method) ||
+        !V3_SERVE_PROVEN_NAME_SHAPES.codeunit.test(t.codeunitName),
+    );
+    if (odd.length > 0) {
+      reasons.push(
+        `unproven-test-name-shape: ${odd
+          .slice(0, 5)
+          .map((t) => `${t.codeunitName}.${t.method}`)
+          .join(
+            ", ",
+          )}${odd.length > 5 ? ", ..." : ""} (name shapes not yet measured under serve-entries; "." in a method name is upstream #5798)`,
+      );
+    }
+    const { version } = await this.runnerBuild();
+    if (V3_NO_SERVE_ENTRIES.includes(version)) {
+      reasons.push(`no-serve-build: ${version} has no serve-entries path`);
+    }
+    this.entries = this.cfg.transport === "serve-entries" && reasons.length === 0;
+    this.transportFrozen = true;
+    if (reasons.length > 0) {
+      this.notify(
+        "al-runner-v3-serve-default-fallback",
+        `[lethal] al-runner-v3-serve-default-fallback: this session runs one-shot, not the serve-entries default, because ${reasons.join("; ")}. Set "alRunnerV3.transport" in the config to choose a transport yourself (R761).`,
+      );
+    }
   }
 
   useSessionTests(suite: readonly TestMethodRef[]): void {
@@ -1772,6 +1891,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const started = Date.now();
     let res: { exitCode: number; stdout: string; stderr: string };
     this.spawnCount += 1;
+    this.transportFrozen = true; // R761
     try {
       res = await this.spawn(argv, {
         signal: controller.signal,
@@ -1949,6 +2069,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private async startDaemon(): Promise<Daemon> {
     const s = this.serveStopSeconds();
     if (s === undefined) throw new AlRunnerV3ServeStopUnsetError();
+    this.transportFrozen = true; // R761
     const union = [...this.union].sort((a, b) => a - b);
     const none = union.filter((cu) => !this.baselineRows.has(cu));
     if (none.length > 0) {

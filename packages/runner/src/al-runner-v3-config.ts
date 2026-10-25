@@ -9,11 +9,11 @@
  *     "coverage": "al-runner",                                 // or "none"; default "al-runner"
  *     "alcPath": "<optional; else the AL extension's alc>",
  *     "cacheDir": "<optional ALRUNNER_CACHE>",
- *     "transport": "one-shot",                                 // or "serve-entries" (R635)
+ *     "transport": "serve-entries",                            // or "one-shot"; absent: serve-entries where proven, else one-shot (R761)
  *     "secondEcho": true                                       // R635 §5, serve-entries only
  *   }
  *
- * `serverMode` and `selectorMode` are refused by name (one-shot, static selector only).
+ * `serverMode` and `selectorMode` are refused by name (the static selector only, and no v2-style serve).
  */
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -27,8 +27,14 @@ export interface AlRunnerV3ConfigSection {
   readonly coverage: "al-runner" | "none";
   readonly alcPath?: string;
   readonly cacheDir?: string;
-  /** R635: `"one-shot"` (default) or `"serve-entries"`. */
+  /** R635, R761: `"serve-entries"` (default) or `"one-shot"`. */
   readonly transport: "one-shot" | "serve-entries";
+  /**
+   * R761: `"default"` when the config names no `transport`. Then the session picks serve-entries
+   * where it is proven and one-shot otherwise, with a named warning (`AlRunnerV3Backend.decideTransport`).
+   * `"explicit"`: the named transport is used as written.
+   */
+  readonly transportSource: "default" | "explicit";
   /** R635 §5: the echo before the coverage request (default on; serve-entries only). */
   readonly secondEcho: boolean;
 }
@@ -59,7 +65,7 @@ export function validateAlRunnerV3Config(raw: unknown): AlRunnerV3ConfigSection 
       throw new Error(
         k === "selectorMode"
           ? 'al-runner-v3-resource-selector-refused: "alRunnerV3.selectorMode" is refused: v1 of the al-runner-v3 backend runs the static selector only (R586).'
-          : `al-runner-v3-config-refused: "alRunnerV3.${k}" is refused: ${k === "serverMode" ? "v1 runs one-shot only (no serve)" : 'the v3 binary is "path"'} (R586).`,
+          : `al-runner-v3-config-refused: "alRunnerV3.${k}" is refused: ${k === "serverMode" ? 'v3 has no v2-style serve; set "alRunnerV3.transport" instead (R635)' : 'the v3 binary is "path"'} (R586).`,
       );
     }
   }
@@ -103,7 +109,8 @@ export function validateAlRunnerV3Config(raw: unknown): AlRunnerV3ConfigSection 
     path: (r.path as string | undefined) ?? AL_RUNNER_V3_DEFAULT_PATH,
     packagesDir: r.packagesDir,
     bcVersion: r.bcVersion,
-    transport: r.transport ?? "one-shot",
+    transport: r.transport ?? "serve-entries",
+    transportSource: r.transport === undefined ? "default" : "explicit",
     secondEcho: r.secondEcho ?? true,
     coverage: (r.coverage as "al-runner" | "none" | undefined) ?? "al-runner",
     ...(typeof r.alcPath === "string" ? { alcPath: r.alcPath } : {}),

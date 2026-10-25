@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**21 of 758 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**21 of 759 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -799,6 +799,7 @@ that ordering is the priority.
 - **R757** · `scripts/verify.test.ts`'s `isChildOf` test can time out at 30 s on the Windows CI job (four PowerShell calls) · [R757.md](docs/roadmap/R757.md) · done (f74db9b3)
 - **R758** · Five unit tests used the LIVE gift-card campaign files as their sample of an old report, so re-freezing the talk demo broke verify · [R758.md](docs/roadmap/R758.md) · done (23dcc701)
 - **R760** · al-runner-v3 one-shot campaigns spend their time on per-call compile, dependency-cache reads and coverage, not on tests (D1: 667 s one-shot, 193 s serve) · [R760.md](docs/roadmap/R760.md) · open, measured 2026-10-25 (coord task R-760); changes await a ruling
+- **R761** · serve-entries is the default v3 transport where it is proven; one-shot (with a named warning) where it is not · [R761.md](docs/roadmap/R761.md) · done (dc855ac3; S1E f53ec5d4; pins 7405f270)
 - **R765** · al-runner-v3 contract-probe cache: a session replays a fully passing probe of the same inputs (coord R-762 item 1) · [R765.md](docs/roadmap/R765.md) · done (87f784cd)
 - **R763** · Prove serve-entries for test METHOD names that are not plain identifiers (spaces, - ( ) / & å æ, a leading digit), so R761's default can serve them · [R763.md](docs/roadmap/R763.md) · open, filed 2026-10-25 (from R-761; orchestrator ruling)
 - **R764** · al-runner-v3 one-shot ignored RunOpts.coverage: kill confirms still sent --coverage-json and joined coverage · [R764.md](docs/roadmap/R764.md) · done (3f37aacb)

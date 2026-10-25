@@ -252,6 +252,7 @@ export const LEND_FIGURES = {
  * pre-commitment. `hang/baseline` equals check 11 of `hang-baseline-leg.ts` (a unit test keeps the
  * two equal). Left ABSENT on purpose: `envtool/run` (host-only, R683: it refuses by name until the
  * owner's observe run), and the legs that throw by design (lend RN3, RN1d, RN2, RN4; v3 N1E).
+ * v3 S1E (R761) is `[]`, from the R-761 observe run (pre-commitment master a86927e1).
  * `verify-scale` is exempt (a measurement script, R270).
  *
  * R739 (pre-commitment docs/superpowers/specs/2026-10-24-r739-warning-sets-precommitment.md, master
@@ -322,6 +323,7 @@ export const GATE_WARNINGS: Readonly<Record<string, readonly string[]>> = {
   "al-runner-v3/L1": [],
   "al-runner-v3/MO": [],
   "al-runner-v3/K": [],
+  "al-runner-v3/S1E": [],
   "al-runner-v3/xd-d": XD_NARROWED,
   "al-runner-v3/xd-e": XD_NARROWED,
   "al-runner-v3/xd-f1": XD_NARROWED,

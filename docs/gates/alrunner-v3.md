@@ -76,6 +76,13 @@ The legs:
   - In every session, a row whose message holds `NotRun: out-of-scope:` anywhere (R675) but has no `notRun`
     scores `error` (`runner-test-error`), never a kill, survive or pass (K1(a)).
 - S1: `fixtures/sandbox-app`, one-shot, per mutant equal to `bcdev.baseline.json` (`itest:bcdev`'s table).
+- S1E (R761; pre-commitment `docs/superpowers/specs/2026-10-25-r761-serve-default-precommitment.md`, master a86927e1):
+  - What it runs: S1's project and assertions under `transport: "serve-entries"`, per mutant equal to
+    `bcdev.baseline.json` (3 / 12 / 4 over 19).
+  - Serve counters, equal to R-653 E1's: pairRequests 3, liveRequests 3, boundChecks 5, warmups 1, entriesSent 44,
+    echo mismatches 0. Warning set `[]`.
+  - It is in `V3_GATE_LEGS`, so `current` cannot move to a build whose serve path breaks the default.
+  - On a build with no serve path (alpha.2) it reads "not applicable", as N1E does.
 - S3: runs no session. It checks that `selectorMode: "resource"` is refused by name
   (`al-runner-v3-resource-selector-refused`).
 - N1: the names fixture (R557's tests are unselectable on v3, upstream #5572).
@@ -138,7 +145,14 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
   - Each checks `EXPECTED_BY_SET` (`symbol-fixture.ts`).
   - Predicted 5 / 4 / 0 over 9 each. Baselines: `al-runner-v3.symbols-lethala.baseline.json` and `-lethalb`.
 - **K** (R387, R394): the backend that `cli.ts`'s `buildBackend` builds from an `alRunnerV3` section with no `coverage` and no `transport` key.
-  - It asserts coverage on by default, a one-shot transport (0 serve spawns), and the `AL_RUNNER_V3_NOT_AUTHORITATIVE` warning.
+  - It asserts:
+    - coverage on by default;
+    - since R761 (pre-commitment master a86927e1), the serve-entries default, because sandbox-app has plain test names,
+      no MO/WR shapes and no resume: 1 serve daemon, 1 one-shot call (the baseline), `inRunStopIsBudget` false, and no
+      `al-runner-v3-serve-default-fallback` warning (K's warning set stays `[]`);
+    - the `AL_RUNNER_V3_NOT_AUTHORITATIVE` warning.
+
+    Before R761 it asserted a one-shot transport (0 serve spawns).
   - Its result is 3 / 12 / 4 over 19, equal per mutant to `bcdev.baseline.json`. It records no baseline of its own.
   - **K is outside `V3_GATE_LEGS`, by the orchestrator's ruling**, because the CLI's config cannot name a candidate build. Two conditions hold it, both pinned in `tests/r654-v3-legs.test.ts`:
     1. On a candidate (`LETHAL_ALRUNNER_V3_CANDIDATE=1`), K does not run. Its value in the itest's leg summary is `"K":"skipped (candidate build)"`, and its reason goes into the log and the receipt lines. It is never silent.
@@ -151,7 +165,7 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
 
 Pre-committed on master (`docs/superpowers/specs/2026-10-24-r602-alrunner-v3-mo-wr-precommitment.md`, c2f67f0a) and recorded once under R332 on 2026-10-24 on the pin (alpha.2 91253f2d6), equal to the pre-commitment per mutant (MO 12/12 rows, WR 98/98). The gate REFUSES to start MO or WR without their baselines (R332). Both are default legs AND in `V3_GATE_LEGS` (orchestrator ruling 2026-10-24): they are the only measurement of v3's per-object frame, so a build that breaks it must not move `current`. Inside these two legs an `AlRunnerCoverageFrameError` is `gate-fail` (`legOutcomeOfError(err, leg)`); in every other leg it stays `infra-fail`. `scripts/al-runner-v3-update.ts` needs no change: it judges the receipt by `gateOutcome` over `V3_GATE_LEGS`, so an older receipt without MO and WR reads `infra-fail` ("missing legs MO,WR").
 
-Both legs are one-shot only (the measurement was one-shot): `LETHAL_ITEST_V3_TRANSPORT=serve-entries` makes them fail by name, `al-runner-v3-itest-leg-transport-refused`.
+Both legs are one-shot only (the measurement was one-shot): `LETHAL_ITEST_V3_TRANSPORT=serve-entries` makes them fail by name, `al-runner-v3-itest-leg-transport-refused`. For the same reason, since R761 a USER project with a multi-object or single-wrapper `#if` file does not take the serve-entries default. It falls back to one-shot with `al-runner-v3-serve-default-fallback` (`multi-object-or-wrapped`).
 
 Both run as the other legs do (`runSession`, the v3 backend, one-shot, coverage `"al-runner"`, a packages folder of the Microsoft apps), not through the CLI guard. Each makes a **durable killer check** before it compares with its baseline: every mutant that `--mode none` kills (a constant in `alrunner-v3-legs.ts`, `V3_MO_KILLERS` and `V3_WR_KILLERS`, built from the measured `none` runs) must be killed by the same test. The constants are code, so a re-record of a baseline cannot absorb a lost kill.
 
@@ -165,7 +179,7 @@ Both run as the other legs do (`runSession`, the v3 backend, one-shot, coverage 
   - As a whole the project is OFF from the CLI (the two-arm file), with the warning naming `WrappedArms`' file; the leg measures the index, which the CLI guard does not reach.
 
 **Legs ruled out:**
-- **The server and resource variants.** v3 one-shot uses the static selector, and serve-entries (R635) is opt-in. S3 pins that the resource selector is refused on one-shot.
+- **The server and resource variants.** v3 one-shot uses the static selector. Since R761, serve-entries (R635) is the default where proven, and one-shot otherwise; S1E and K cover it. S3 pins that the resource selector is refused on one-shot.
 - **Names.** Quoted test names are unselectable on v3 (#5572), and N1 covers the fixture.
 
 **Recording (R332).** Run `LETHAL_ITEST_ALRUNNER_V3=1 LETHAL_ITEST_V3_LEGS=L1,Y-A,Y-B LETHAL_ITEST_RECORD_BASELINE=al-runner-v3.layout.baseline.json,al-runner-v3.symbols-lethala.baseline.json,al-runner-v3.symbols-lethalb.baseline.json bun run itest:alrunner-v3`. It exits 3 by design. Then confirm with every leg.
@@ -353,7 +367,7 @@ Leg T is judged against the committed alpha.2 baseline with the seven keys overr
 - L2, the full gate: 14 of 14 legs pass; K reads 3 / 12 / 4 over 19.
 - L3, `serve-entries` (receipts `measure/L3r-*`): S1 3 / 12 / 4 with 0 differences; T 290 / 50 / 59 with 7 errors, the pinned 7 rows; D1 51 / 12 / 0 with 0 differences.
 - L2b: alpha.3 and alpha.4 as candidates (no pin) both read `gate-fail` (D1 and D1c), as pre-committed in r18 table E.
-- **Leg N1 under `serve-entries` fails on alpha.5**: for a dotted test name, v3 writes a serve row without `codeunit` and `method` (upstream [#5798](https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/5798)). alpha.2 has no serve-entries path. The serve path is opt-in and fails closed. See [[R722]]. **Leg N1E (R722)** now runs exactly that case: the names fixture under `serve-entries`, whatever transport the run uses. Pre-committed reading on alpha.5: the session fails closed, and the error carries `the entries answer is invalid: a test line without v3's row shape: {...Codeunit<n>.Dot.Step...}` with no `codeunit` and no `method` in the line. That is `pass`. A session that completes, or a line that now has `codeunit` or `method`, is `held` ("re-pre-commit: upstream may have fixed #5798"). Any other error is `gate-fail`. N1E is a default itest leg (and so an agentflow sub-leg) but NOT in `V3_GATE_LEGS`: alpha.2 has no serve-entries path, so the update gate's leg list and a `--regate` of an old build stay as they were. The itest still fails on anything but a pass, so `held` is never silent (`judgeN1Serve`, `r722-n1-serve.test.ts`). The virtual clock is upstream [#5793](https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/5793).
+- **Leg N1 under `serve-entries` fails on alpha.5**: for a dotted test name, v3 writes a serve row without `codeunit` and `method` (upstream [#5798](https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/5798)). alpha.2 has no serve-entries path. The serve path fails closed. It was opt-in until R761: since then it is the default where proven, an explicit serve-entries with a dotted test method name refuses by name before any test call (`AlRunnerV3ServeDottedTestNameError`), and the default falls back to one-shot for such names (re-measured on dcdf9e821, still unfixed). See [[R722]]. **Leg N1E (R722)** now runs exactly that case: the names fixture under `serve-entries`, whatever transport the run uses. Pre-committed reading on alpha.5: the session fails closed, and the error carries `the entries answer is invalid: a test line without v3's row shape: {...Codeunit<n>.Dot.Step...}` with no `codeunit` and no `method` in the line. That is `pass`. A session that completes, or a line that now has `codeunit` or `method`, is `held` ("re-pre-commit: upstream may have fixed #5798"). Any other error is `gate-fail`. N1E is a default itest leg (and so an agentflow sub-leg), and it is in `V3_GATE_LEGS` (alpha.2, with no serve-entries path, reads "not applicable"; S1E, R761, does the same). The itest still fails on anything but a pass, so `held` is never silent (`judgeN1Serve`, `r722-n1-serve.test.ts`). The virtual clock is upstream [#5793](https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/5793).
 
 ## Frozen figures
 
