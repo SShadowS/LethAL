@@ -252,8 +252,11 @@ import { refuseRetiredV2Report } from "./v2-retired";
  *
  * 20: R688 added the cause value `test-discovery-failed` to `$.notMeasured[].cause`. A new value,
  * so it bumps (R233); v19 is frozen.
+ *
+ * 21: R786 added the caveat value `al-runner-v3-serve-default-fallback-warmup` to
+ * `$.caveats[].caveat`. A new value, so it bumps (R233); v20 is frozen.
  */
-export const EXPLAIN_SCHEMA_VERSION = 20;
+export const EXPLAIN_SCHEMA_VERSION = 21;
 
 /**
  * Thrown when the input is not an explainable `SessionReport` — a caller-contract violation, not a

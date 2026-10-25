@@ -106,8 +106,25 @@ async function hashWalked(
 ): Promise<string> {
   const walk = walkFilesSync(dir, { links });
   assertNoUnexcusedLinks(dir, walk.skippedLinks);
-  return hashAlFiles(dir, walk.files, skipRootControl);
+  return (await hashAlFiles(dir, walk.files, skipRootControl)).hash;
 }
+
+/**
+ * R780: `hashTestDir` plus whether ANY `.al` file declares an extension object, from the SAME read
+ * of the files (so the hash and the flag cannot describe two different trees). Conservative: a
+ * match anywhere in the text counts (a comment or string too), and what the object extends is not
+ * resolved. A false "yes" costs a cache miss; a false "no" could hide an AL0155.
+ */
+export async function scanTestDir(
+  dir: string,
+): Promise<{ hash: string; hasExtensionObject: boolean }> {
+  const walk = walkFilesSync(dir, { links: "refuse" });
+  assertNoUnexcusedLinks(dir, walk.skippedLinks);
+  return hashAlFiles(dir, walk.files, false, true);
+}
+
+/** `tableextension`, `reportextension`, any `<kind>extension` word (the id may sit on the next line). */
+const EXTENSION_OBJECT = /\b[a-z]*extension\b/i;
 
 /** R608: one non-`.al` file of a bound folder, as the proof recorded it. */
 export interface OtherFile {
@@ -170,19 +187,25 @@ async function hashAlFiles(
   dir: string,
   all: readonly string[],
   skipRootControl: boolean,
-): Promise<string> {
+  detectExtension = false,
+): Promise<{ hash: string; hasExtensionObject: boolean }> {
   const entries = all
     .map((f) => f.replaceAll("\\", "/"))
     .filter((f) => f.toLowerCase().endsWith(".al"))
     .filter((f) => !(skipRootControl && CONTROL_FILES.has(f)))
     .sort();
   const h = createHash("sha256");
+  let hasExtensionObject = false;
   for (const rel of entries) {
+    const bytes = readFileSync(join(dir, rel));
     h.update(`${rel}\n`);
-    h.update(readFileSync(join(dir, rel)));
+    h.update(bytes);
     h.update("\n");
+    if (detectExtension && !hasExtensionObject) {
+      hasExtensionObject = EXTENSION_OBJECT.test(bytes.toString("utf8"));
+    }
   }
-  return h.digest("hex");
+  return { hash: h.digest("hex"), hasExtensionObject };
 }
 
 /**

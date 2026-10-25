@@ -154,7 +154,9 @@ export function cdoCheckoutRefusal(c: {
  *  R602 (orchestrator ruling 2026-10-24) adds MO and WR: they are the only measurement of v3's
  *  per-object frame, so a pin that breaks it must not move `current`.
  *  R722 adds N1E (N1 under serve-entries): a build that fixes #5798 reads `held`; alpha.2, which has
- *  no serve-entries path, reads `pass` (not applicable, `V3_NO_SERVE_ENTRIES`). */
+ *  no serve-entries path, reads `pass` (not applicable, `V3_NO_SERVE_ENTRIES`).
+ *  R784 adds O1 (the serve order probe): a build whose entries carry state over cannot become
+ *  `current`, because R778's kill-pair batching rests on per-entry isolation. */
 export const V3_GATE_LEGS = [
   "C",
   "S1",
@@ -163,6 +165,7 @@ export const V3_GATE_LEGS = [
   "N1",
   "N1E",
   "N1S",
+  "O1",
   "X",
   "L1",
   "Y-A",
@@ -754,6 +757,25 @@ export function v3ItestTransport(env: Readonly<Record<string, string | undefined
   return t === "serve-entries"
     ? { transport: "serve-entries", ...(e !== undefined ? { secondEcho: e === "1" } : {}) }
     : {};
+}
+
+/**
+ * R788: the gate's big legs run serve-entries, the users' default since R761; the other
+ * flag-following legs keep one-shot (S1, N1, MO and WR cover it). `LETHAL_ITEST_V3_TRANSPORT`, when
+ * set, still names the transport for every flag-following leg (so `one-shot` reproduces the old
+ * gate). S1E, N1E, N1S and O1 are serve by construction, K takes the CLI default, and MO and WR
+ * refuse serve.
+ */
+export const V3_GATE_SERVE_LEGS: readonly string[] = ["D1", "D1c", "T"];
+
+/** R788: the transport for one leg: the flags (`v3ItestTransport`), else serve for the big legs. */
+export function v3ItestLegTransport(
+  leg: string,
+  env: Readonly<Record<string, string | undefined>>,
+): ReturnType<typeof v3ItestTransport> {
+  const flagged = v3ItestTransport(env);
+  if (env.LETHAL_ITEST_V3_TRANSPORT !== undefined) return flagged;
+  return V3_GATE_SERVE_LEGS.includes(leg) ? { transport: "serve-entries" } : flagged;
 }
 
 /**

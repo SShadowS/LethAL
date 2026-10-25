@@ -1,0 +1,35 @@
+{
+  "id": "6d0b2f61-3c4e-4a7b-8e12-5f9a0c3d8d02",
+  "name": "LethAL Sandbox Order Tests",
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "brief": "LethAL R784 fixture: a Writer and a Reader test codeunit for the serve order probe (leg O1).",
+  "description": "The Writer sets seven kinds of state; the Reader reports each as an Error() message. No test commits (al-runner refuses Commit under TestIsolation = Function). Asserts via Error(), no Library Assert. Not for production use, see fixtures/README.md.",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "dependencies": [
+    {
+      "id": "6d0b2f61-3c4e-4a7b-8e12-5f9a0c3d8d01",
+      "name": "LethAL Sandbox Order",
+      "publisher": "LethAL",
+      "version": "1.0.0.0"
+    }
+  ],
+  "screenshots": [],
+  "idRanges": [
+    {
+      "from": 77050,
+      "to": 77099
+    }
+  ],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "17.0",
+  "features": []
+}

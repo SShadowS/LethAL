@@ -28,6 +28,7 @@ import type { FetchFn } from "../packages/runner/src/activation.ts";
 import { listPackageEntries, readPackageEntry } from "../packages/runner/src/app-package.ts";
 import { compareAppVersions, parseVersionConflict } from "../packages/runner/src/app-version.ts";
 import { bcFetch } from "../packages/runner/src/bc-fetch.ts";
+import { bcLinuxHost } from "../packages/runner/src/bc-host.ts";
 import { devPackagesUrl } from "../packages/runner/src/bcdev-backend.ts";
 import { readAppIdentity } from "../packages/runner/src/published-test-app.ts";
 import { CONTROL_SELECTOR_FILENAME } from "../packages/schemata/src/project.ts";
@@ -39,7 +40,8 @@ export const COMPANY = "CRONUS International Ltd.";
 // ---------------------------------------------------------------------------------------------
 // the servers (moved from bc-linux-setup.ts)
 
-export const HOST = "http://192.168.2.157";
+/** The BC on Linux host in use (`bcLinuxHost`, R783: `LETHAL_BC_HOST`, else server1). */
+export const HOST = `http://${bcLinuxHost()}`;
 
 export const SERVERS = {
   bc1: { odata: 7048, dev: 7049, api: 7052 },

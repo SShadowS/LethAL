@@ -92,10 +92,38 @@ The legs:
     `(`, `)`, `/`, `&`, `å`, `æ`, in the positions N1S ran them: a letter or digit first, spaces single and inner.
     The dot stays out (#5798, N1E).
   - It is in `V3_GATE_LEGS`. On a build with no serve path (alpha.2) it reads "not applicable".
+- O1 (R784; pre-commitment `docs/superpowers/specs/2026-10-25-r784-order-probe-leg-precommitment.md`, master 6aa7700c):
+  - What it runs: ONE `al-runner serve` daemon takes five requests, each entry one codeunit of
+    `fixtures/sandbox-order-tests` (Writer sets, Reader reports): `[R]`, `[W,R]`, `[R,W]`, `[W1,R1,W2,R2,R3]`, then a
+    new `[R]`. Kinds (7): WorkDate, GlobalLanguage, uncommitted rows, a SingleInstance codeunit in the test app and
+    one in the dependency app (`fixtures/sandbox-order`), NumberSequence, IsolatedStorage. No test commits
+    (al-runner refuses `Commit` under `TestIsolation = Function`), so commit-based state stays unmeasured.
+  - Package sets: the fixture's own (the Microsoft symbols of `sandbox-tests`), and, with `LETHAL_ITEST_V3_CDO`, the
+    CDO `Test/.alpackages` as a read-only package cache (skipped without it, as D1 is). For the CDO set the leg
+    copies the fixture into its scratch dir and adds to the tests app.json the dependencies the CDO Test
+    `app.json` declares (read at run time, Document Output left out), then runs the daemon with `--verbose` and
+    requires exactly 17 distinct `dependency:` lines; any other count is `infra-fail`, so the set cannot pass
+    without the 17-app install.
+  - Figures: every Reader entry reads the defaults (WorkDate = the clock's date, language 1033, rows 0, both marks
+    DEFAULT, number sequence ABSENT, isolated storage ABSENT); every Writer test passes. A writer value in a Reader
+    entry, or a Writer test that does not pass, is `gate-fail`; a daemon that cannot run is `infra-fail`
+    (`judgeOrderProbe`, `r784-order-probe.test.ts`). R778's kill-pair batching rests on this.
+  - O1 does not probe the per-entry `resources` override (the active-mutant file); N1S's per-mutant comparison of batched kill pairs against one-shot covers it indirectly. The judge reads the ANSWER order (execution order is inferred from it) and fails when it differs from the sent order, or when a request does not match the plan.
+  - It is in `V3_GATE_LEGS`. On a build with no serve path (alpha.2) it reads "not applicable". Per R777 the update
+    gate reads `infra-fail` for `current` until it is regated at a commit that has O1.
 - S3: runs no session. It checks that `selectorMode: "resource"` is refused by name
   (`al-runner-v3-resource-selector-refused`).
 - N1: the names fixture (R557's tests are unselectable on v3, upstream #5572).
 - X (a) to (f): the compile proof, the binding checks and the Sleep rule (§6) on `scripts/r586-probe`.
+- **Transport per leg (R788; pre-commitment `docs/superpowers/specs/2026-10-25-r788-serve-big-legs-precommitment.md`,
+  master 1d6474bb).** Unflagged: D1, D1c and T run serve-entries (`V3_GATE_SERVE_LEGS`, `v3ItestLegTransport`); S1E,
+  N1E, N1S and O1 run serve-entries by construction; K runs the CLI's own default (serve-entries for sandbox-app since
+  R761); C, S1, S3, N1, X, L1, Y-A, Y-B, MO and WR run one-shot, so S1, N1, MO and WR keep the one-shot path gated.
+  `LETHAL_ITEST_V3_TRANSPORT` still names one transport for the flag-following legs (`one-shot` reproduces the
+  pre-R788 gate). On serve, D1 532 -> 32 s, D1c 462 -> 31 s, T 161 -> 30 s, with every count, per-mutant row, note and
+  warning identical to one-shot. Each serve leg asserts `pairRequests` = killed and zero echo mismatches, fallbacks
+  and refused batches (`assertServeCounters`). A T re-record now records from a serve session unless
+  `LETHAL_ITEST_V3_TRANSPORT=one-shot` is set (the rows were measured identical on both transports).
 - D1, D1c: the Continia Document Output slice, compared per mutant with R594's BC oracle
   (`docs/measurements/r594/bc3-A.report.json`, `bc3-B.report.json`). No source text is committed.
   - `LETHAL_ITEST_V3_CDO` names the checkout. It is `/work/lethal-wt/cdo-r396`, the read-only measurement checkout,
@@ -182,6 +210,8 @@ Pre-committed on master (`docs/superpowers/specs/2026-10-24-r602-alrunner-v3-mo-
 
 Both legs are one-shot only (the measurement was one-shot): `LETHAL_ITEST_V3_TRANSPORT=serve-entries` makes them fail by name, `al-runner-v3-itest-leg-transport-refused`. For the same reason, since R761 a USER project with a multi-object or single-wrapper `#if` file does not take the serve-entries default. It falls back to one-shot with `al-runner-v3-serve-default-fallback` (`multi-object-or-wrapped`).
 
+Since R786, the serve-entries DEFAULT also falls back when the serve warm-up meets a row R612 refuses by name (a Company read, a missing DotNet sidecar). `lethal run` closes the serve attempt, builds a new one-shot backend, and re-runs the whole session with one `al-runner-v3-serve-default-fallback-warmup` warning that names the row. Nothing of the serve attempt is kept in the report; its run row stays in the store, marked (its config fingerprint gets an `|abandoned` suffix) so `--resume` skips it, and the warning names that run id. A fallback needs EVERY unkept warm-up row to be a named refusal. An explicit `serve-entries` still refuses (`al-runner-v3-entries-warmup-dirty`), and so does any other warm-up cause (a timeout, rows that differ from the baseline, a wrong echo). `--workers > 1` after a fallback is refused by name, before a second backend is built. The report carries the caveat `al-runner-v3-serve-default-fallback-warmup`.
+
 Both run as the other legs do (`runSession`, the v3 backend, one-shot, coverage `"al-runner"`, a packages folder of the Microsoft apps), not through the CLI guard. Each makes a **durable killer check** before it compares with its baseline: every mutant that `--mode none` kills (a constant in `alrunner-v3-legs.ts`, `V3_MO_KILLERS` and `V3_WR_KILLERS`, built from the measured `none` runs) must be killed by the same test. The constants are code, so a re-record of a baseline cannot absorb a lost kill.
 
 - **MO** (R383's fixture): `fixtures/sandbox-multiobject`. `MultiPair.Codeunit.al` holds two codeunits, so the index places the second object's lines by position.
@@ -209,14 +239,15 @@ Both run as the other legs do (`runSession`, the v3 backend, one-shot, coverage 
 
 `lethal run --backend al-runner-v3 --workers N` (N 2 to 8) runs the mutants on N serve lanes of one backend. No gate
 leg uses it: every figure on this page is N = 1 (no `--workers`). A run refuses `--workers > 1` by name when the
-transport is not serve-entries, when the build's pin does not retire the §6 Sleep rule, or above 8. On master the
-Sleep-rule check always refuses (R768 wires it), so `--workers > 1` runs nowhere yet; a new build needs its own pin
-before it is allowed. A lane beyond lane 0 starts only with 10 GB available, and the run starts the largest n of the N lanes with n x 2.3 GB + 10 GB available (one serve daemon peaks about 2.2 GB RSS on D1), saying so once. Under N > 1 the first latch
+transport is not serve-entries, under `--resume`, when the build's pin does not retire the §6 Sleep rule (R768's
+`sleepRuleRetired`), or above 8; a new build needs its own pin before it is allowed. **Parallel pays on large
+projects; each lane pays its own warm-up** (R781: four lanes' warm-ups cost about 62 s against 7 s for one, so a
+small run is slower at N = 4; whole apps such as CDO and DC have thousands of procedure scopes and spread fully). A lane beyond lane 0 starts only with 10 GB available, and the run starts the largest n of the N lanes with n x 2.3 GB + 10 GB available (one serve daemon peaks about 2.2 GB RSS on D1), saying so once. Under N > 1 the first latch
 (`batchBlind`, `entriesRefused`) or session-stopping error ends the session with an error that names the cause and
 the discarded mutants. Recorded: mutants that finished before the stop and come before the stopping one in manifest
 order, and the stopping mutant only if N = 1 would have recorded it (a throw before its record discards it).
 Earlier-index mutants still in flight at the stop are discarded too. Which stop comes first can depend on timing. The per-mutant table at
-N > 1 must equal N = 1; that proof is step (c) in R766.
+N > 1 must equal N = 1: R766's proof found D1 and the gift card identical at N = 4.
 
 ## The pin and the update gate
 

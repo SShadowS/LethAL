@@ -20,13 +20,14 @@
  *   measured; lane ruling 2026-10-21. `/work/tools/al-runner-v3/cache` is unused).
  * - `LETHAL_ALC_DIR`: the folder holding `alc`.
  * - `LETHAL_ITEST_V3_LEGS=C,S1,...`: a subset (default every leg that is configured: C, S1, S1E,
- *   S3, N1, N1E, N1S, X, L1, Y-A, Y-B, MO, WR, K, then D1, D1c and T when configured). R761: S1E is S1's
+ *   S3, N1, N1E, N1S, O1, X, L1, Y-A, Y-B, MO, WR, K, then D1, D1c and T when configured). R761: S1E is S1's
  *   project and assertions under serve-entries by construction; on a build with no serve path it
  *   reads "not applicable" (pass). Its serve counters are printed, pinned after the R-761 observe run.
  * - `LETHAL_ITEST_V3_CDO=<Continia Document Output checkout at 5f2a71d>`: the D legs (a corpus job).
  * - `LETHAL_ITEST_V3_TABLES=1`: leg T (the update gate's tables leg).
  * - `LETHAL_V3_GATE_NONCE` + `LETHAL_V3_GATE_RECEIPT`: write the update gate's receipt.
- * - R635 (all unset: the gate is unchanged): `LETHAL_ITEST_V3_TRANSPORT=one-shot|serve-entries`,
+ * - R635 (all unset: D1, D1c and T run serve-entries since R788, the other flag-following legs
+ *   one-shot): `LETHAL_ITEST_V3_TRANSPORT=one-shot|serve-entries`,
  *   `LETHAL_ITEST_V3_SECOND_ECHO=0|1` (serve-entries only), refused by name otherwise
  *   (`v3ItestTransport`); `LETHAL_ITEST_V3_REPORT_DIR=<dir>` writes each session's report as
  *   `<dir>/<leg>.report.json` before any assertion; `LETHAL_ITEST_V3_CONTROL_DIR=<dir>` first
@@ -49,12 +50,13 @@ import {
   IDENTITY_SCHEME,
   emitStaticSelector,
 } from "@lethal/schemata";
-import { type ServerSpawnFn, defaultServerSpawn } from "../src/al-runner-server";
+import { AlRunnerServer, type ServerSpawnFn, defaultServerSpawn } from "../src/al-runner-server";
 import {
   AlRunnerV3Backend,
   type AlRunnerV3Config,
   AlRunnerV3ResourceSelectorRefusedError,
   AlRunnerV3UnprovenBatchError,
+  SERVE_TEST_ISOLATION,
   V3_REFUSED_NEARBY_TAG,
   V3_STATE_NOTE_TAG,
 } from "../src/al-runner-v3-backend";
@@ -95,6 +97,7 @@ import {
   legOutcomeOfError,
   observeWithReceiptRefusal,
   recordRefusal,
+  v3ItestLegTransport,
   v3ItestTransport,
   v3ReceiptOutcome,
   v3SplitLine,
@@ -106,12 +109,17 @@ import {
 import { TABLES_KNOWN_DIFFERENCES } from "./al-runner-v3-tables-known";
 import {
   type N1EReading,
+  type O1Request,
+  O1_PLAN,
+  O1_READER_CODEUNIT,
+  O1_WRITER_CODEUNIT,
   type V3RowFacts,
   V3_K_CANDIDATE_SKIP,
   V3_K_LEG,
   V3_MO_KILLERS,
   V3_N1E_LEG,
   V3_N1S_LEG,
+  V3_O1_LEG,
   V3_S1E_LEG,
   V3_WR_KILLERS,
   V3_WR_STATE_NOTES,
@@ -120,6 +128,7 @@ import {
   judgeKillers,
   judgeLegK,
   judgeN1Serve,
+  judgeOrderProbe,
   judgeStateNotes,
   judgeWrArms,
   legKSection,
@@ -320,14 +329,15 @@ async function session(
         ),
       );
   }
-  // R635: all of it only when a flag asks, so the unflagged gate is unchanged.
+  // R635: all of it only when a flag asks or the leg runs serve (R788).
   const leg = basename(scratch);
   checkGateWarnings("al-runner-v3", leg, gateWarnings);
-  if (TRANSPORT.transport !== undefined) {
+  const serveLeg = v3ItestLegTransport(leg, process.env).transport !== undefined;
+  if (serveLeg) {
     console.log(`  ${leg}: entries ${JSON.stringify(backend.entriesStats())}`);
     console.log(`  ${leg}: ${v3SplitLine(phases, backend.entriesStats())}`);
   }
-  if (TRANSPORT.transport !== undefined || REPORT_DIR !== undefined) {
+  if (serveLeg || REPORT_DIR !== undefined) {
     console.log(`  ${leg}: timings ${JSON.stringify(r.timings)}`);
   }
   if (REPORT_DIR !== undefined) {
@@ -424,6 +434,34 @@ function assertIndex(b: AlRunnerV3Backend, leg: string, target: number, test: nu
   );
 }
 
+/**
+ * R788: a serve leg's counters that follow from its verdicts (one kill pair per killed mutant, no
+ * echo mismatch, no fallback, no refused batch). Lane- and timing-dependent counters are only printed.
+ */
+function assertServeCounters(b: AlRunnerV3Backend, leg: string, killed: number): void {
+  if (v3ItestLegTransport(leg, process.env).transport === undefined) return;
+  const s = b.entriesStats();
+  const got = {
+    pairRequests: s.pairRequests,
+    echoMismatches: s.echoMismatches,
+    pairFallbacks1: s.pairFallbacks1,
+    pairFallbacks2: s.pairFallbacks2,
+    pairBatchRefused: s.pairBatchRefused,
+  };
+  const want = {
+    pairRequests: killed,
+    echoMismatches: 0,
+    pairFallbacks1: 0,
+    pairFallbacks2: 0,
+    pairBatchRefused: 0,
+  };
+  console.log(`  ${leg}: serve counters ${JSON.stringify(got)}`);
+  for (const [k, v] of Object.entries(want)) {
+    const g = got[k as keyof typeof got];
+    must(g === v, `${leg}: ${k} ${g}, pre-committed ${v} (R788)`);
+  }
+}
+
 // ---------------------------------------------------------------------------------------------
 
 /** R612 M-2: leg C's warn-fact readings, for the receipt. */
@@ -471,13 +509,20 @@ async function legC(scratch: string): Promise<readonly string[]> {
  * `docs/superpowers/specs/2026-10-25-r761-serve-default-precommitment.md` (master a86927e1) from the
  * R-761 observe run, equal to what R-653 E1 recorded for S1 under entries (P 3; live 3 = 6 - 3;
  * bound 5 = 8 - 3; warm-ups 1; entriesSent 44). Echo mismatches 0.
+ * R778: the kill pairs go in one batched `live` request, so live 3 becomes 1 and bound 5 becomes 3,
+ * and the pair-batch counters are new; pre-committed in
+ * `docs/superpowers/specs/2026-10-25-r778-kill-pair-batch-precommitment.md` (master ca4c5179).
  */
 const S1E_PINS = {
   pairRequests: 3,
-  liveRequests: 3,
-  boundChecks: 5,
+  liveRequests: 1,
+  boundChecks: 3,
   warmups: 1,
   entriesSent: 44,
+  pairBatchRequests: 1,
+  pairBatchStored: 3,
+  pairBatchServed: 3,
+  pairBatchRefused: 0,
 } as const;
 
 /** S1 one-shot (`entries` off) or S1E (same project and assertions under serve-entries). */
@@ -539,13 +584,17 @@ async function legS1(scratch: string, leg: "S1" | "S1E" = "S1", version = ""): P
       boundChecks: s.boundChecks,
       warmups: s.warmups,
       entriesSent: s.entriesSent,
+      pairBatchRequests: s.pairBatchRequests,
+      pairBatchStored: s.pairBatchStored,
+      pairBatchServed: s.pairBatchServed,
+      pairBatchRefused: s.pairBatchRefused,
     };
     console.log(
       `  S1E: serve counters ${JSON.stringify({ ...got, echoMismatches: s.echoMismatches })}`,
     );
     for (const [k, v] of Object.entries(S1E_PINS)) {
       const g = got[k as keyof typeof got];
-      must(g === v, `S1E: ${k} ${g}, pre-committed ${v} (R761)`);
+      must(g === v, `S1E: ${k} ${g}, pre-committed ${v} (R761, R778)`);
     }
     must(s.echoMismatches === 0, `S1E: ${s.echoMismatches} echo mismatches, pre-committed 0`);
   }
@@ -737,18 +786,171 @@ async function legN1S(scratch: string, version: string): Promise<void> {
   console.log(`  N1S: serve counters ${JSON.stringify({ ...s })}`);
   for (const [k, v] of Object.entries(N1S_PINS)) {
     const g = s[k as keyof typeof N1S_PINS];
-    must(g === v, `N1S: ${k} ${g}, pre-committed ${v} (R763)`);
+    must(g === v, `N1S: ${k} ${g}, pre-committed ${v} (R763, R778)`);
   }
   must(s.echoMismatches === 0, `N1S: ${s.echoMismatches} echo mismatches, expected 0`);
 }
 
-/** R763: N1S's serve counters from the observe run (`/coord/handoff/R-763/observe-N1S.log`). */
+const localDate = (d: Date): string =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+/**
+ * R784: leg O1. ONE serve daemon per package set takes the five requests of `O1_PLAN`; each entry is
+ * one whole codeunit of `fixtures/sandbox-order-tests` (Writer sets seven kinds of state, Reader
+ * reports them). `judgeOrderProbe` fails the leg on any carry-over. A daemon that cannot run is the
+ * environment (infra). The second package set is the CDO's `Test/.alpackages` (read-only), only when
+ * `LETHAL_ITEST_V3_CDO` is set, as D1 does.
+ */
+async function legO1(scratch: string, version: string): Promise<void> {
+  const sets: {
+    name: string;
+    cache: string;
+    bc: string;
+    sources: string[];
+    /** The package apps `--verbose` must list as loaded (`dependency: <name> ... from <path>.app`). */
+    apps?: number;
+  }[] = [
+    {
+      name: "own",
+      cache: await microsoftDeps(scratch),
+      bc: SANDBOX_BC,
+      sources: [fixture("sandbox-order"), fixture("sandbox-order-tests")],
+    },
+  ];
+  if (CDO !== undefined) {
+    // The CDO set is real only if al-runner loads the CDO's 17 apps, which it does for the
+    // dependencies the tests app declares: a scratch copy declares the CDO Test app's (read at run time).
+    const dep = join(scratch, "cdo-src", "sandbox-order");
+    const tests = join(scratch, "cdo-src", "sandbox-order-tests");
+    await cp(fixture("sandbox-order"), dep, { recursive: true });
+    await cp(fixture("sandbox-order-tests"), tests, { recursive: true });
+    const cdoApp = JSON.parse(await readFile(join(CDO, "Test", "app.json"), "utf8")) as {
+      dependencies?: { id: string; name: string; publisher: string; version: string }[];
+    };
+    const mine = JSON.parse(await readFile(join(tests, "app.json"), "utf8")) as {
+      dependencies: unknown[];
+    };
+    const extra = (cdoApp.dependencies ?? [])
+      .filter((d) => d.name !== "Continia Document Output") // source in D1, not a package
+      .map(({ id, name, publisher, version }) => ({ id, name, publisher, version }));
+    if (extra.length === 0)
+      throw new V3LegEnvironment("O1: the CDO Test app.json declares no dependencies to copy");
+    mine.dependencies = [...mine.dependencies, ...extra];
+    await writeFile(join(tests, "app.json"), `${JSON.stringify(mine, null, 2)}\n`);
+    sets.push({
+      name: "cdo",
+      cache: join(CDO, "Test", ".alpackages"),
+      bc: CDO_BC,
+      sources: [dep, tests],
+      apps: 17,
+    });
+  } else console.log("  O1: LETHAL_ITEST_V3_CDO unset: the CDO package set is skipped, as D1 is");
+  // WorkDate defaults to the clock's date, so the date at the start and end of the leg both count.
+  const stamp = () => {
+    const d = new Date();
+    return [d.toISOString().slice(0, 10), localDate(d)];
+  };
+  const dates = new Set(stamp());
+  for (const set of sets) {
+    const cwd = join(scratch, set.name);
+    await mkdir(cwd, { recursive: true });
+    const server = new AlRunnerServer(
+      BIN,
+      (argv) => defaultServerSpawn(argv, { cwd, env: { ALRUNNER_CACHE: resolve(CACHE) } }),
+      [],
+      "serve",
+    );
+    const done: O1Request[] = [];
+    try {
+      try {
+        await server.start(300_000, [resolve(set.cache)], 60, [
+          "--bc-version",
+          set.bc,
+          "--no-download",
+          // The "building layers of the 17 dependency apps" line appears only on a cold compile cache;
+          // --verbose lists every loaded package app on any run.
+          ...(set.apps !== undefined ? ["--verbose"] : []),
+        ]);
+        for (const [i, shape] of O1_PLAN.entries()) {
+          const entries = shape.map((kind, j) => ({ id: `${kind}${i}.${j}`, kind }));
+          const body = {
+            command: "runTests",
+            sourcePaths: set.sources,
+            testIsolation: SERVE_TEST_ISOLATION,
+            entries: entries.map((e) => ({
+              id: e.id,
+              test: `Codeunit${e.kind === "R" ? O1_READER_CODEUNIT : O1_WRITER_CODEUNIT}.`,
+            })),
+          };
+          const a = await server.runEntries(body, 600_000);
+          const cErr = a.summary.compilationErrors;
+          if (Array.isArray(cErr) && cErr.length > 0)
+            throw new V3LegEnvironment(
+              `O1: the fixture did not compile in the daemon: ${JSON.stringify(cErr).slice(0, 300)}`,
+            );
+          done.push({
+            label: `${set.name} request ${i + 1} [${shape.join(",")}]`,
+            entries,
+            lines: a.tests as unknown as O1Request["lines"],
+          });
+        }
+      } catch (e) {
+        if (e instanceof V3LegEnvironment) throw e;
+        const msg = e instanceof Error ? e.message : String(e);
+        if (isNoServeRefusal(version, msg)) {
+          console.log("  O1: not applicable: this build has no serve-entries path");
+          return;
+        }
+        throw new V3LegEnvironment(
+          `O1: the ${set.name} daemon could not run: ${msg.slice(0, 600)}`,
+        );
+      }
+    } finally {
+      await server.close();
+    }
+    const loaded = new Set(
+      [...server.stderrSoFar().matchAll(/^dependency: (.+) \(\d+ files\)/gm)].map((m) => m[1]),
+    );
+    if (set.apps !== undefined && loaded.size !== set.apps)
+      throw new V3LegEnvironment(
+        `O1: the ${set.name} daemon loaded ${loaded.size} package app(s), pre-committed ${set.apps}, so the set is not the ${set.apps}-app install; loaded: ${[...loaded].join("; ")}; dependency lines: ${(server.stderrSoFar().match(/^dependency: .*$/gm) ?? []).map((l) => l.replace(/ from .*/, "")).join(" | ")}`,
+      );
+    if (set.apps !== undefined)
+      console.log(
+        `  O1: ${set.name} set: the daemon loaded ${loaded.size} package apps (--verbose)`,
+      );
+    for (const d of stamp()) dates.add(d);
+    for (const rq of done) {
+      const reads = rq.entries
+        .filter((e) => e.kind === "R")
+        .map((e) => {
+          const msgs = rq.lines.filter((l) => l.entry === e.id).map((l) => l.message ?? l.status);
+          return `${e.id}: ${msgs.join(" ")}`;
+        });
+      console.log(`  O1: ${rq.label}: ${reads.join(" | ")}`);
+    }
+    const j = judgeOrderProbe(done, [...dates]);
+    console.log(`  O1: ${set.name} set: ${j.outcome} (${done.length} requests, one daemon)`);
+    if (j.outcome === "gate-fail") throw new LegFailure(`O1: ${j.lines.join("; ")}`);
+  }
+}
+
+/**
+ * R763: N1S's serve counters from the observe run (`/coord/handoff/R-763/observe-N1S.log`).
+ * R778: the 33 kill pairs go in one batched `live` request (live 33 becomes 1, bound 35 becomes 3);
+ * pre-committed in `docs/superpowers/specs/2026-10-25-r778-kill-pair-batch-precommitment.md`
+ * (master ca4c5179).
+ */
 const N1S_PINS = {
   pairRequests: 33,
-  liveRequests: 33,
-  boundChecks: 35,
+  liveRequests: 1,
+  boundChecks: 3,
   warmups: 1,
   entriesSent: 200,
+  pairBatchRequests: 1,
+  pairBatchStored: 33,
+  pairBatchServed: 33,
+  pairBatchRefused: 0,
 } as const;
 
 // --- R654 S2: L1, Y-A, Y-B and K (pre-commitment docs/superpowers/specs/2026-10-22-r654-v3-gate-legs-precommitment.md, 43115c78)
@@ -1611,6 +1813,7 @@ async function legD(scratch: string, leg: "D1" | "D1c"): Promise<void> {
       bcVersion: CDO_BC,
       selectorObjectId: 6175460,
       coverage: leg === "D1" ? "none" : "al-runner",
+      ...v3ItestLegTransport(leg, process.env),
     }),
   );
   const r = await session(scratch, b, {
@@ -1655,6 +1858,7 @@ async function legD(scratch: string, leg: "D1" | "D1c"): Promise<void> {
   must(r.baselineGreen && r.unsupportedTests.length === 0, `${leg}: baseline not green`);
   assertIndex(b, leg, 3, 0);
   assertReproduced(r, leg);
+  assertServeCounters(b, leg, 51);
 }
 
 /**
@@ -1679,6 +1883,7 @@ async function legT(
       packagesDir: join(fixture("sandbox-data-tests"), ".alpackages"),
       bcVersion: SANDBOX_BC,
       selectorObjectId: 79399,
+      ...v3ItestLegTransport("T", process.env),
     }),
   );
   const r = await session(scratch, b, {
@@ -1738,6 +1943,8 @@ async function legT(
   }
   notes();
   if (j.outcome === "gate-fail") throw new LegFailure(j.failure ?? "T: gate-fail");
+  // R788: only on a pass, so a held T keeps its own outcome (on a pass killed is the pinned 290).
+  if (j.outcome === "pass") assertServeCounters(b, "T", r.counts.killed);
   return { outcome: j.outcome, r, ...(j.pinned === true ? { pinned: true as const } : {}) };
 }
 
@@ -1832,6 +2039,7 @@ async function main(): Promise<void> {
         else if (leg === "N1") await legN1(scratch);
         else if (leg === V3_N1E_LEG) await legN1E(scratch, version);
         else if (leg === V3_N1S_LEG) await legN1S(scratch, version);
+        else if (leg === V3_O1_LEG) await legO1(scratch, version);
         else if (leg === "X") await legX(scratch, (l) => lines.push(l));
         else if (leg === "D1" || leg === "D1c") await legD(scratch, leg);
         // R654 S2: each leg checks its pre-committed table FIRST (gate-fail on a difference, and

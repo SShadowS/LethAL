@@ -198,6 +198,16 @@ export const V3_BUILD_PINS: readonly V3BuildPin[] = [
     version: "al-runner 3.0.0-alpha.5+edge.20261025 (a157b2d34)",
     binarySha256: "d9429e53a6938dbafb58108f61ce5408f65389bd9604ff94b4788ef26c8d17fb",
     ...ALPHA5_READINGS,
+    // R771 addendum 1: a157b2d34 reads the same verdict with a new refusal message text.
+    legC: {
+      ...ALPHA5_READINGS.legC,
+      "duplicate-key-insert-raises": {
+        ...ALPHA5_READINGS.legC["duplicate-key-insert-raises"]!,
+        measured: pinPattern(
+          `[${ROW(50655, "DuplicateNamedKey")},"status":"error","durationMs":{n},"message":"NotRun: out-of-scope: the test ends while the error of a duplicate-key Insert into table Probe Row is deferred: whether the test runner raises it at the end of the test is measured only for TestIsolation = Codeunit and the default TransactionModel","notRun":true}] exit 7`,
+        ),
+      },
+    },
     n1e: {
       refusedLine: pinPattern(
         '{"codeunit":78850,"codeunitName":"Names Tests","durationMs":{n},"entry":"NONE|78850","method":"Dot.Step","name":"Codeunit78850.Dot.Step","status":"pass","type":"test"}',
@@ -227,6 +237,29 @@ export function sleepRuleRetiredFor(
 ): boolean {
   if (findV3Pin(version, binarySha256)?.legC["sleep-is-noop"]?.verdict !== "gone") return false;
   return contract?.facts.find((f) => f.fact === "sleep-is-noop")?.verdict === "gone";
+}
+
+/**
+ * R779: the receipt line `status()` prints once per session, for the decision it made (`retired`,
+ * from `sleepRuleRetiredFor`), with the reason. The word comes from `retired` itself, so the line
+ * cannot disagree with the behaviour; only the reason is looked up here.
+ */
+export function sleepRuleLine(
+  retired: boolean,
+  contract: V3ContractResult | undefined,
+  version: string,
+  binarySha256: string,
+): string {
+  const pin = findV3Pin(version, binarySha256);
+  const pinned = pin?.legC["sleep-is-noop"]?.verdict;
+  const probed = contract?.facts.find((f) => f.fact === "sleep-is-noop")?.verdict;
+  let why: string;
+  if (pin === undefined) why = "no pin names this build";
+  else if (pinned !== "gone") why = `pin ${pin.id} reads sleep-is-noop ${pinned ?? "unrecorded"}`;
+  else if (probed !== "gone")
+    why = `pin ${pin.id} reads sleep-is-noop gone, but this session's probe read it ${probed ?? "unmeasured"}`;
+  else why = `pin ${pin.id} and this session's probe read sleep-is-noop gone`;
+  return `[lethal] al-runner-v3 §6 Sleep rule ${retired ? "retired" : "applies"} (${why}) (R768, R779)`;
 }
 
 /**

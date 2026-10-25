@@ -5298,7 +5298,7 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
     expect(stale).toHaveLength(1);
     expect(renderConsole(report)).toContain(", reused-budget-stale 1])");
     const out = explain(report);
-    expect(out.explainSchemaVersion).toBe(20);
+    expect(out.explainSchemaVersion).toBe(21);
     const rows = out.notMeasured.filter((n) => n.cause === "reused-budget-stale");
     expect(rows).toHaveLength(1);
     for (const r of rows) {
