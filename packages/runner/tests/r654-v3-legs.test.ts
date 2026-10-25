@@ -210,6 +210,12 @@ describe("build review M3: K counts the session's own test calls, not the probes
     expect(isSessionTestCall(["/bin/al-runner", "--version"], TESTS)).toBe(false);
     expect(isSessionTestCall(["/bin/al-runner", "serve", TESTS[0] ?? ""], TESTS)).toBe(false);
   });
+
+  test("R798: the speculative baseline call under a `nice -n 19` prefix still counts; a bare nice does not", () => {
+    expect(isSessionTestCall(["/usr/bin/nice", "-n", "19", ...call(TESTS[0] ?? "")], TESTS)).toBe(true);
+    expect(isSessionTestCall(["nice", "-n", "19", ...call(TESTS[0] ?? "")], TESTS)).toBe(true);
+    expect(isSessionTestCall(["/usr/bin/nice", "-n", "19", "/bin/al-runner", "--version"], TESTS)).toBe(false);
+  });
 });
 
 describe("R654 S2 leg K: the config it builds from, and what it judges", () => {

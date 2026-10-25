@@ -350,8 +350,10 @@ export function v3RecordRunFailures(
  * session's test folder as given and as resolved (the backend runs the real path).
  */
 export function isSessionTestCall(argv: readonly string[], testDirs: readonly string[]): boolean {
-  const last = argv.at(-1);
-  return argv[1] === "test" && last !== undefined && testDirs.includes(last);
+  // R798: the speculative baseline call runs under a `nice -n <k>` prefix; read the call behind it.
+  const run = /(^|[\\/])nice$/.test(argv[0] ?? "") && argv[1] === "-n" ? argv.slice(3) : argv;
+  const last = run.at(-1);
+  return run[1] === "test" && last !== undefined && testDirs.includes(last);
 }
 
 /**
