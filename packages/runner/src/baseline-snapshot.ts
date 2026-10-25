@@ -24,7 +24,8 @@
  * a prior run's fenced line-number coverage apply to this run's artifact.
  */
 import { createHash } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
+import { readFileSync, statSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   CONTROL_REGISTER_FILENAME,
@@ -43,6 +44,7 @@ import {
   ProjectSymlinkRefusedError,
   assertNoUnexcusedLinks,
   walkFiles,
+  walkFilesSync,
 } from "./walk";
 
 const CONTROL_FILES: ReadonlySet<string> = new Set([
@@ -91,12 +93,18 @@ export async function hashTestDir(dir: string, links: LinkPolicy = "refuse"): Pr
   return hashWalked(dir, links, false);
 }
 
+/*
+ * R767: the bound-tree helpers below walk, stat and read SYNCHRONOUSLY. al-runner v3 runs them
+ * before every send (`assertBound`), and on D1's 554-file tree Bun's per-call cost of async fs was
+ * the whole 0.35 s (walk 108 ms async vs 6 ms sync; reading and hashing every .al 95 ms vs 16 ms).
+ * Same walk, same bytes, same hash: only the calls block.
+ */
 async function hashWalked(
   dir: string,
   links: LinkPolicy,
   skipRootControl: boolean,
 ): Promise<string> {
-  const walk = await walkFiles(dir, { links });
+  const walk = walkFilesSync(dir, { links });
   assertNoUnexcusedLinks(dir, walk.skippedLinks);
   return hashAlFiles(dir, walk.files, skipRootControl);
 }
@@ -118,18 +126,18 @@ export async function listOtherFiles(
   skip: (rel: string) => boolean,
   withSha: boolean,
 ): Promise<Map<string, OtherFile>> {
-  const walk = await walkFiles(dir, { links: "refuse" });
+  const walk = walkFilesSync(dir, { links: "refuse" });
   assertNoUnexcusedLinks(dir, walk.skippedLinks);
   const out = new Map<string, OtherFile>();
   for (const f of walk.files) {
     const rel = f.replaceAll("\\", "/");
     if (rel.toLowerCase().endsWith(".al") || skip(rel)) continue;
     const p = join(dir, f);
-    const s = await stat(p);
+    const s = statSync(p);
     out.set(rel, {
       size: s.size,
       mtimeMs: s.mtimeMs,
-      sha256: withSha ? hashPackage(new Uint8Array(await readFile(p))) : "",
+      sha256: withSha ? hashPackage(new Uint8Array(readFileSync(p))) : "",
     });
   }
   return out;
@@ -153,7 +161,7 @@ export async function otherFilesDrift(
     const n = now.get(rel);
     if (n === undefined) return rel;
     if (n.size === w.size && n.mtimeMs === w.mtimeMs) continue;
-    if (hashPackage(new Uint8Array(await readFile(join(dir, rel)))) !== w.sha256) return rel;
+    if (hashPackage(new Uint8Array(readFileSync(join(dir, rel)))) !== w.sha256) return rel;
   }
   return undefined;
 }
@@ -171,7 +179,7 @@ async function hashAlFiles(
   const h = createHash("sha256");
   for (const rel of entries) {
     h.update(`${rel}\n`);
-    h.update(await readFile(join(dir, rel)));
+    h.update(readFileSync(join(dir, rel)));
     h.update("\n");
   }
   return h.digest("hex");

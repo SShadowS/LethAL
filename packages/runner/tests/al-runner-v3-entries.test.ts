@@ -24,6 +24,7 @@ import {
   AlRunnerV3DependencySkippedError,
   AlRunnerV3RowMissingError,
   AlRunnerV3ServeStopUnsetError,
+  AlRunnerV3TransportFrozenError,
   AlRunnerV3UnprovenBatchError,
   WINDOW_BOUND_CAVEAT,
   v3CallDeadlineMs,
@@ -579,9 +580,10 @@ describe("1, 2, 3: the option, its default, the version line", () => {
     expect(one.calls[1]?.slice(1, 3)).toEqual(["test", "--output-json"]);
   });
 
-  test("1: the config's default transport is one-shot and secondEcho defaults on", () => {
+  test("1: the config's default transport is serve-entries (R761, source default) and secondEcho defaults on", () => {
     const c = validateAlRunnerV3Config({ packagesDir: "/p", bcVersion: "28.0.1.2" });
-    expect(c.transport).toBe("one-shot");
+    expect(c.transport).toBe("serve-entries");
+    expect(c.transportSource).toBe("default");
     expect(c.secondEcho).toBe(true);
   });
 
@@ -2049,7 +2051,7 @@ describe("the CLI threads the option through (wiring)", () => {
       { selectorId: SELECTOR_ID, controlId: ECHO, tableId: 79197 },
     );
   };
-  test("no transport builds the one-shot backend; transport serve-entries builds serve-entries", async () => {
+  test("no transport builds a backend that is one-shot until the session decides (R761); transport serve-entries builds serve-entries", async () => {
     if (!LINUX) {
       await expect(build({})).rejects.toThrow(/al-runner-v3-(windows|platform)-unsupported/);
       return;
@@ -3460,5 +3462,34 @@ describe("R739: v3 notices reach setNotify, never the console", () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe("R761: a real first spawn freezes the transport decision", () => {
+  const decided = (r: Rig) => {
+    // A default-source backend, as the CLI builds it; the build is as `status()` would record it.
+    (r.b as unknown as { cfg: { transportSource: string } }).cfg.transportSource = "default";
+    (r.b as unknown as { build: unknown }).build = {
+      version: "alrunner 3.0.0-alpha.5 (abcdef012)",
+      binarySha256: "0",
+    };
+    return r.b.decideTransport({ resume: false }).catch((e: unknown) => e);
+  };
+
+  test("a one-shot call (callCodeunit) freezes it", async () => {
+    const r = await rig({ extra: { transport: "one-shot" } });
+    expect(r.one.calls).toHaveLength(0);
+    await baseline(r.b, SUITE1);
+    expect(r.one.calls.length).toBeGreaterThan(0);
+    expect(await decided(r)).toBeInstanceOf(AlRunnerV3TransportFrozenError);
+  });
+
+  test("a daemon start (startDaemon) freezes it", async () => {
+    const r = await rig();
+    // The one-shot baseline spawn would freeze it; a daemon start alone must too.
+    await (r.b as unknown as { startDaemon(): Promise<unknown> }).startDaemon();
+    expect(r.one.calls).toHaveLength(0);
+    expect(r.serve.daemons.length).toBeGreaterThan(0);
+    expect(await decided(r)).toBeInstanceOf(AlRunnerV3TransportFrozenError);
   });
 });
