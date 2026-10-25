@@ -488,6 +488,7 @@ this build returns.
 | `--backend` | *(required)* | `bcdev` or `al-runner-v3` (`al-runner`, the retired .NET al-runner, is refused by name: `al-runner-v2-retired`, R654) |
 | `--only <glob>` | *(all files)* | Only these files contribute mutants. Repeatable. Cannot change a verdict, because every file is still parsed, compiled and published |
 | `--tests-only <glob>` | *(whole suite)* | Only these test files run at baseline. Repeatable. **Can change a verdict**: excluding a killing test manufactures a survivor. Flagged `tests-narrowed` in the report |
+| `--exclude-test <Codeunit.Method>` | *(none)* | Leave one test method out of the run (bcdev only; al-runner-v3 runs whole codeunits and refuses). Repeatable. A name that matches no test is refused. **Can change a verdict**: a mutant only that test kills reads survived or no-coverage. Flagged `tests-narrowed`; the report lists it in `excludedTests` |
 | `--skip-known-survivors` | `false` | Skip mutants a prior finished run recorded as survivors |
 | `--dry-run` | `false` | Plan mutants without executing them |
 
@@ -724,7 +725,7 @@ a LethAL feature or a mode.
     early: with a mutant active, a timeout row that returns before its stop reads `error` /
     `runner-refused`, never scored. A covering pass that reaches a `Sleep` in the project reads
     `error`; one in a dependency is not caught.
-  - `serve-entries` (opt-in) fails closed on alpha.5 for a dotted test name (#5798, R722).
+  - `serve-entries` is the default transport where it is proven (R761). A config with no `"transport"` key falls back to one-shot, with the warning `al-runner-v3-serve-default-fallback`, for a `--resume` session, a multi-object or `#if`-wrapped file, a test name shape not yet proven under serve, or a build with no serve path. An explicit `"transport"` is always honoured, except that an explicit `serve-entries` with a dotted test method name is refused before any test runs (#5798, R722).
 
   Selecting one test runs its whole codeunit (#5611), so LethAL makes one call per test codeunit
   and notes a kill made after another covering test of that codeunit. Tests v3 does not run

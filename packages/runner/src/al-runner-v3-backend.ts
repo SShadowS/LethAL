@@ -13,8 +13,9 @@
  * - A not-run row is never killed and never survived; a timeout row is a CPU-time stop (§5).
  * - `Sleep` does nothing (#5605): a covering pass that reaches a project Sleep reads `error` (§6,
  *   `al-runner-v3-sleep.ts`).
- * One-shot with the static selector by default (`selectorMode: "resource"` is refused by name).
- * R635 adds an opt-in transport, `transport: "serve-entries"` (plan
+ * The static selector is one-shot's (`selectorMode: "resource"` is refused by name).
+ * R635 adds the transport `transport: "serve-entries"`, the default since R761 where it is proven
+ * (else one-shot, with a named warning; an explicit key is honoured; see `decideTransport`) (plan
  * `docs/superpowers/plans/2026-10-22-r635-v3-serve-entries.md`, r3): the baseline stays one-shot,
  * every other run goes to a warm `serve` daemon as entries with a per-entry resource override,
  * each mutant's group vouched for by an echo test (`al-runner-v3-entries.ts`).
@@ -35,6 +36,7 @@ import {
 import {
   type AlRunnerCoverageIndex,
   alRunnerCoverageFromServer,
+  alRunnerMoOrWrappedFiles,
   buildAlRunnerCoverageIndex,
   normalizeFileKey,
 } from "./al-runner-coverage";
@@ -70,8 +72,19 @@ import {
   encodeGroups,
   serveRow,
 } from "./al-runner-v3-entries";
-import { AlRunnerV3UngatedBuildError, checkGated } from "./al-runner-v3-pin";
+import { AlRunnerV3UngatedBuildError, V3_NO_SERVE_ENTRIES, checkGated } from "./al-runner-v3-pin";
 import { pinnedDefectCoverage } from "./al-runner-v3-pins";
+import {
+  FRESH_PROBE_ENV,
+  type ProbeCacheKey,
+  alcIdentity,
+  keyDigest,
+  packagesFingerprint,
+  probeCodeHash,
+  readProbeCache,
+  uncacheableReason,
+  writeProbeCache,
+} from "./al-runner-v3-probe-cache";
 import {
   AlRunnerV3CoverageJoinError,
   type SleepIndex,
@@ -226,6 +239,16 @@ export class AlRunnerV3RowMissingError extends Error {
   }
 }
 
+/** R764: a call made without `--coverage-json` was handed to a caller that wants coverage. */
+export class AlRunnerV3NoCoverageCallReusedError extends Error {
+  constructor(readonly ref: TestMethodRef) {
+    super(
+      `al-runner-v3: a call made without coverage was reused for ${ref.codeunitName}.${ref.method}, which wants coverage; refusing rather than reading it as "covered nothing" (R764)`,
+    );
+    this.name = "AlRunnerV3NoCoverageCallReusedError";
+  }
+}
+
 /** S3: `selectorMode: "resource"` on v3 is refused by name (#5604 was a serve defect; v1 is one-shot). */
 export class AlRunnerV3ResourceSelectorRefusedError extends Error {
   constructor() {
@@ -235,6 +258,42 @@ export class AlRunnerV3ResourceSelectorRefusedError extends Error {
     this.name = "AlRunnerV3ResourceSelectorRefusedError";
   }
 }
+
+/**
+ * R761: an explicit `"transport": "serve-entries"` with a test METHOD name holding "." (upstream
+ * #5798: the entries answer for it has no `codeunit`/`method`, measured on N1E). Refused before any
+ * test runs, by name, instead of failing mid-session.
+ */
+export class AlRunnerV3ServeDottedTestNameError extends Error {
+  constructor(readonly tests: readonly string[]) {
+    super(
+      `al-runner-v3-serve-dotted-test-name: "alRunnerV3.transport" is "serve-entries", but ${tests.length} discovered test(s) have a "." in the method name (${tests.slice(0, 5).join(", ")}${tests.length > 5 ? ", ..." : ""}). al-runner v3 returns no usable row for such a test under serve (upstream #5798), so the session would fail closed part-way (R761, R722). Set "alRunnerV3.transport": "one-shot" (or drop the key: it then falls back to one-shot for this project by itself).`,
+    );
+    this.name = "AlRunnerV3ServeDottedTestNameError";
+  }
+}
+
+/** R761: the transport was decided (or a v3 process had started) and a later decision was asked for. */
+export class AlRunnerV3TransportFrozenError extends Error {
+  constructor(why: string) {
+    super(
+      `al-runner-v3-transport-frozen: the transport cannot be decided now: ${why}. It is decided once, before the first al-runner process of the session (R761).`,
+    );
+    this.name = "AlRunnerV3TransportFrozenError";
+  }
+}
+
+/**
+ * R761: the test-name shapes proven under serve-entries. Inventoried with `discoverTests` on D1, S1
+ * and the gift card: every test METHOD name was a plain identifier, and every test CODEUNIT name used
+ * only letters, digits, `_`, space and `.` (D1's "CDO Recipient Mgt. Tests", 21 tests). N1's shapes
+ * (" - ( ) . / & å æ" and a leading digit) are NOT proven. A name outside these falls the default back
+ * to one-shot (`unproven-test-name-shape`).
+ */
+export const V3_SERVE_PROVEN_NAME_SHAPES = {
+  method: /^[A-Za-z_][A-Za-z0-9_]*$/,
+  codeunit: /^[A-Za-z0-9_ .]+$/,
+} as const;
 
 /** R635 §3: the serve daemon was asked to start before `useMutantBudgetFloor` gave it a stop. */
 export class AlRunnerV3ServeStopUnsetError extends Error {
@@ -272,6 +331,14 @@ export interface AlRunnerV3Config {
   readonly transport?: "one-shot" | "serve-entries";
   /** R635 §5 step 2: the echo before the coverage request. Absent: on. */
   readonly secondEcho?: boolean;
+  /**
+   * R761: `"default"` = the config named no transport, so `transport` is a starting value and
+   * `decideTransport` picks it. Absent or `"explicit"`: `transport` is used as given, byte for byte as
+   * before R761 (the itest's `backendCfg` sets none).
+   */
+  readonly transportSource?: "default" | "explicit";
+  /** R762: run the contract probe fresh instead of replaying a cached pass (`--fresh-probe`). */
+  readonly freshProbe?: boolean;
 }
 
 /** One row of v3's `--output-json` `tests[]`, decoded. */
@@ -425,7 +492,8 @@ export function v3RowVerdict(
   );
 }
 
-/** The argv of one call (T5): one `--codeunit`, `--coverage-json` always, no name selection. */
+/** The argv of one call (T5): one `--codeunit`, `--coverage-json` unless `coverageJson` is absent
+ *  (R762 A: an unmutated call that asked for no coverage), no name selection. */
 export function v3CallArgv(a: {
   readonly alRunnerPath: string;
   readonly codeunitId: number;
@@ -433,7 +501,7 @@ export function v3CallArgv(a: {
   readonly packagesDir: string;
   readonly bcVersion: string;
   readonly symbols: readonly string[];
-  readonly coverageJson: string;
+  readonly coverageJson?: string;
   readonly activeDir: string;
   readonly testDir: string;
 }): string[] {
@@ -453,8 +521,7 @@ export function v3CallArgv(a: {
     a.bcVersion,
     "--no-download",
     ...a.symbols.flatMap((s) => ["--define", s]),
-    "--coverage-json",
-    a.coverageJson,
+    ...(a.coverageJson !== undefined ? ["--coverage-json", a.coverageJson] : []),
     a.activeDir,
     a.testDir,
   ];
@@ -507,6 +574,8 @@ interface CallRows {
   readonly missing?: string;
   /** R635 §5: the coverage window already ran for this (mutant, codeunit). */
   readonly windowed?: boolean;
+  /** R762 A: sent without `--coverage-json`; a caller that wants coverage must not reuse it. */
+  readonly noCoverage?: boolean;
 }
 
 /** R635: what the serve-entries transport did, for `status()`, the close line and the gate. */
@@ -676,7 +745,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
 
   // R635: the serve-entries state. Unused (and untouched) one-shot.
-  private readonly entries: boolean;
+  private entries: boolean;
+  /** R761: true once `decideTransport` ran or a v3 process started; `entries` never changes after. */
+  private transportFrozen = false;
+  private discovered: readonly TestMethodRef[] = [];
   /** §4: set ONLY by the orchestrator's `baselinePhase` bracket. */
   private inBaseline = false;
   /** §3 (N1): the one-shot baseline's rows per codeunit, recorded inside the bracket. */
@@ -804,7 +876,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     private readonly now: () => number = Date.now,
   ) {
     if (cfg.selectorMode === "resource") throw new AlRunnerV3ResourceSelectorRefusedError();
-    this.entries = cfg.transport === "serve-entries";
+    // R761: a default transport starts one-shot-safe; `decideTransport` turns serve on, before the
+    // first deploy (the staged batch differs by transport) and the first v3 process.
+    this.entries = cfg.transport === "serve-entries" && cfg.transportSource !== "default";
     this.compiler = new ArtifactCompiler(
       {
         alcPath: cfg.alcPath,
@@ -876,18 +950,64 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       throw err;
     }
     // §8: the contract probe, once per backend (one session), after the version and pin checks.
-    this.contract ??= await runV3ContractProbe({
-      alRunnerPath: this.cfg.alRunnerPath,
-      expectedVersion: reported,
-      packagesDir: resolve(this.cfg.packagesDir),
-      bcVersion: this.cfg.bcVersion,
-      alcPath: this.cfg.alcPath,
-      ...(this.cfg.cacheDir !== undefined ? { cacheDir: this.cfg.cacheDir } : {}),
-      ...(Bun.which("taskset") !== null ? { tasksetPath: Bun.which("taskset") ?? "" } : {}),
-      gateOnlyTrusted: gateRecord,
-      ...(gatedWarnFacts !== undefined ? { gatedWarnFacts } : {}),
-      spawn: this.spawn,
-    });
+    // R762: a fully passing probe of the same inputs is replayed from the cache (see its module).
+    let probeNote = "";
+    if (this.contract === undefined) {
+      const run = (): Promise<V3ContractResult> =>
+        runV3ContractProbe({
+          alRunnerPath: this.cfg.alRunnerPath,
+          expectedVersion: reported,
+          packagesDir: resolve(this.cfg.packagesDir),
+          bcVersion: this.cfg.bcVersion,
+          alcPath: this.cfg.alcPath,
+          ...(this.cfg.cacheDir !== undefined ? { cacheDir: this.cfg.cacheDir } : {}),
+          ...(Bun.which("taskset") !== null ? { tasksetPath: Bun.which("taskset") ?? "" } : {}),
+          gateOnlyTrusted: gateRecord,
+          ...(gatedWarnFacts !== undefined ? { gatedWarnFacts } : {}),
+          spawn: this.spawn,
+        });
+      if (this.cfg.candidate === true) {
+        // The update gate's candidate is never read from or written to the cache.
+        this.contract = await run();
+        probeNote = "probe ran fresh (candidate build)";
+      } else {
+        const forced = this.cfg.freshProbe === true || process.env[FRESH_PROBE_ENV] === "1";
+        const key = await this.probeKey(reported, binarySha256, gateRecord);
+        const digest = key === undefined ? "none" : keyDigest(key).slice(0, 12);
+        let why = forced ? "forced" : key === undefined ? "key unavailable" : "no entry";
+        let cached: V3ContractResult | undefined;
+        if (key !== undefined && !forced) {
+          try {
+            cached = await readProbeCache(this.cfg.alRunnerPath, key);
+          } catch (err) {
+            why = "entry unusable";
+            console.warn(
+              `[lethal] ${err instanceof Error ? err.message : String(err)}; running the probe`,
+            );
+          }
+        }
+        if (cached !== undefined) {
+          this.contract = cached;
+          probeNote = `probe from cache (key ${digest})`;
+        } else {
+          this.contract = await run();
+          probeNote = `probe ran fresh (key ${digest}; ${why})`;
+          if (key !== undefined) {
+            const no = uncacheableReason(this.contract, key.version, key.binarySha256);
+            if (no !== undefined) {
+              probeNote += `; not cached: ${no}`;
+            } else {
+              try {
+                await writeProbeCache(this.cfg.alRunnerPath, key, this.contract);
+              } catch (err) {
+                console.warn(`[lethal] al-runner-v3 probe cache not written: ${String(err)}`);
+              }
+            }
+          }
+        }
+      }
+      console.warn(`[lethal] al-runner-v3 contract ${probeNote} (R762)`);
+    }
     // R639 r9 §2: `unlike-bc` refuses a normal session; a candidate (update-gate) session warns.
     const kind = { candidate: this.cfg.candidate === true };
     // R719: a fact the running build's pin already covers (exact fact and outcome) is not warned
@@ -900,8 +1020,34 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (refusals.length > 0) return { ok: false, details: refusals.join("\n") };
     return {
       ok: true,
-      details: `${reported}; ${v3ContractSummary(this.contract)}${this.entries ? `; transport serve-entries (R635), secondEcho ${this.cfg.secondEcho !== false}` : ""}`,
+      details: `${reported}; ${v3ContractSummary(this.contract)}${probeNote !== "" ? `; ${probeNote}` : ""}${this.entries ? `; transport serve-entries (R635), secondEcho ${this.cfg.secondEcho !== false}` : ""}`,
     };
+  }
+
+  /** R762: every input the probe's facts depend on; `undefined` (run the probe, cache nothing) when one cannot be read. */
+  private async probeKey(
+    version: string,
+    binarySha256: string,
+    gateRecord: string,
+  ): Promise<ProbeCacheKey | undefined> {
+    try {
+      const code = await probeCodeHash();
+      if (code === undefined) return undefined;
+      return {
+        binarySha256,
+        version,
+        probeCodeHash: code,
+        bcVersion: this.cfg.bcVersion,
+        packages: await packagesFingerprint(this.cfg.packagesDir),
+        alc: await alcIdentity(this.cfg.alcPath),
+        cacheDir: this.cfg.cacheDir ?? null,
+        gateRecord,
+        tasksetPresent: Bun.which("taskset") !== null,
+        libraryAssertApp: false,
+      };
+    } catch {
+      return undefined;
+    }
   }
 
   /** §8: the measured contract, for the gate's leg C and the report line. */
@@ -933,6 +1079,76 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const m = new Map<number, number>();
     for (const t of tests) m.set(t.codeunitId, (m.get(t.codeunitId) ?? 0) + 1);
     this.testsPerCodeunit = m;
+    this.discovered = [...tests];
+  }
+
+  /**
+   * R761: decides the transport ONCE, after `useDiscoveredTests` and before the first deploy and
+   * the first v3 process. Why here: the staged batch differs by transport (resource selector and
+   * echo vs static selector), so the choice must precede `deploy`; and a `--resume` is known at
+   * session start (a baseline snapshot is reused only on a resume, `allowReuse`), so every fact is
+   * in hand then. After this, or after any v3 process started, `entries` is frozen.
+   *
+   * Explicit transport: unchanged, except that an explicit serve-entries (config key present) with a
+   * "." in a test method name refuses by name (#5798). Default: serve-entries unless a fallback
+   * reason holds; then one-shot and ONE warning naming every reason.
+   */
+  async decideTransport(facts: { readonly resume: boolean }): Promise<void> {
+    if (this.cfg.transportSource === undefined) return; // an internal caller's own transport
+    if (this.cfg.transportSource === "explicit") {
+      if (this.cfg.transport === "serve-entries") {
+        const dotted = this.discovered
+          .filter((t) => t.method.includes("."))
+          .map((t) => `${t.codeunitName}.${t.method}`);
+        if (dotted.length > 0) throw new AlRunnerV3ServeDottedTestNameError(dotted);
+      }
+      return;
+    }
+    if (this.transportFrozen)
+      throw new AlRunnerV3TransportFrozenError("it was already decided or a v3 process started");
+    const reasons: string[] = [];
+    if (facts.resume) {
+      reasons.push(
+        "resume: a --resume / --resume-run session (a reused baseline has no rows for the serve warm-up, and the transport is not in the run's fingerprint)",
+      );
+    }
+    const shapeDirs = [
+      ...(this.cfg.sourceProjectDir !== undefined ? [this.cfg.sourceProjectDir] : []),
+      this.cfg.testDir,
+    ];
+    const shaped = await alRunnerMoOrWrappedFiles(shapeDirs);
+    if (shaped.length > 0) {
+      reasons.push(
+        `multi-object-or-wrapped: ${shaped.slice(0, 5).join(", ")}${shaped.length > 5 ? ", ..." : ""} (measured on one-shot only)`,
+      );
+    }
+    const odd = this.discovered.filter(
+      (t) =>
+        !V3_SERVE_PROVEN_NAME_SHAPES.method.test(t.method) ||
+        !V3_SERVE_PROVEN_NAME_SHAPES.codeunit.test(t.codeunitName),
+    );
+    if (odd.length > 0) {
+      reasons.push(
+        `unproven-test-name-shape: ${odd
+          .slice(0, 5)
+          .map((t) => `${t.codeunitName}.${t.method}`)
+          .join(
+            ", ",
+          )}${odd.length > 5 ? ", ..." : ""} (name shapes not yet measured under serve-entries; "." in a method name is upstream #5798)`,
+      );
+    }
+    const { version } = await this.runnerBuild();
+    if (V3_NO_SERVE_ENTRIES.includes(version)) {
+      reasons.push(`no-serve-build: ${version} has no serve-entries path`);
+    }
+    this.entries = this.cfg.transport === "serve-entries" && reasons.length === 0;
+    this.transportFrozen = true;
+    if (reasons.length > 0) {
+      this.notify(
+        "al-runner-v3-serve-default-fallback",
+        `[lethal] al-runner-v3-serve-default-fallback: this session runs one-shot, not the serve-entries default, because ${reasons.join("; ")}. Set "alRunnerV3.transport" in the config to choose a transport yourself (R761).`,
+      );
+    }
   }
 
   useSessionTests(suite: readonly TestMethodRef[]): void {
@@ -1388,14 +1604,20 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       return { ...served, ref };
     }
     let call = this.rowsByCodeunit.get(ref.codeunitId);
+    if (call?.noCoverage === true && opts.coverage !== "none") call = undefined;
     if (call === undefined) {
       // R635 §4: outside the bracket, serve-entries sends a LIVE one-group request.
       const made =
         this.entries && !this.inBaseline
           ? await this.liveCall(ref)
-          : await this.callCodeunit(ref, opts.timeoutMs);
+          : await this.callCodeunit(ref, opts.timeoutMs, opts.coverage !== "none");
       if ("verdict" in made) return made.verdict;
       call = made.call;
+    }
+    // R764: a call made without coverage must never serve a caller who wants it (its coverage
+    // would read as undefined, so mutants would read no-coverage). Fail loudly.
+    if (call.noCoverage === true && opts.coverage !== "none") {
+      throw new AlRunnerV3NoCoverageCallReusedError(ref);
     }
     if (call.refusal !== undefined) return refusalVerdict(ref, call.refusal, call.wallMs);
     if (call.missing !== undefined) return this.rowMissing(ref, call.missing, call.wallMs);
@@ -1421,7 +1643,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       !(row.message !== undefined && V3_TIMEOUT_MESSAGE.test(row.message));
     let coverage =
       (row.status === "pass" && !row.notRun) || refusedMidRun
-        ? this.isBaselineCall()
+        ? this.isBaselineCall() && call.noCoverage !== true
           ? this.coverageOf(row.name, call.coverage)
           : undefined
         : undefined;
@@ -1625,8 +1847,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private async callCodeunit(
     ref: TestMethodRef,
     timeoutMs: number,
+    wantCoverage: boolean,
   ): Promise<{ readonly call: CallRows } | { readonly verdict: TestVerdict }> {
     const id = ref.codeunitId;
+    // R762 A: an UNMUTATED call that asked for no coverage (a kill confirm) needs none: no flag and
+    // no join. A mutant call keeps it whatever it asked: the Sleep rule (§6) reads it.
+    // In serve-entries the baseline bracket (`inBaseline`) alone says what the baseline is (R635 §4).
+    const noCoverage = !wantCoverage && this.lastActivated === null && !this.inBaseline;
     // F5: the largest budget of any ref of this codeunit the loop will send for this mutant.
     let budget = timeoutMs;
     const plan = this.plan;
@@ -1647,7 +1874,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       packagesDir: resolve(this.cfg.packagesDir),
       bcVersion: this.cfg.bcVersion,
       symbols: this.cfg.preprocessorSymbols ?? [],
-      coverageJson: resolve(covPath),
+      ...(noCoverage ? {} : { coverageJson: resolve(covPath) }),
       // I-1: the same real paths the Sleep index is keyed by.
       activeDir: this.realDirs?.active ?? resolve(this.activeDir()),
       testDir: this.realDirs?.test ?? resolve(this.cfg.testDir),
@@ -1664,6 +1891,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const started = Date.now();
     let res: { exitCode: number; stdout: string; stderr: string };
     this.spawnCount += 1;
+    this.transportFrozen = true; // R761
     try {
       res = await this.spawn(argv, {
         signal: controller.signal,
@@ -1747,6 +1975,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       stopSeconds,
       wallMs,
       coverage: decodeV3Coverage(covText),
+      ...(noCoverage ? { noCoverage: true } : {}),
     };
     this.noteBaselineRows(id, decoded.rows);
     this.rowsByCodeunit.set(id, call);
@@ -1840,6 +2069,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private async startDaemon(): Promise<Daemon> {
     const s = this.serveStopSeconds();
     if (s === undefined) throw new AlRunnerV3ServeStopUnsetError();
+    this.transportFrozen = true; // R761
     const union = [...this.union].sort((a, b) => a - b);
     const none = union.filter((cu) => !this.baselineRows.has(cu));
     if (none.length > 0) {

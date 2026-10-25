@@ -195,6 +195,29 @@ export async function alRunnerCoverageSupport(
 }
 
 /**
+ * R761: the `.al` files under `dirs` that are multi-object (`refusedAsMultiObject`) or hold an `#if`
+ * wrapper (`fileHoldsWrappedObject`, admitted or not): the MO and WR shapes, which were measured on
+ * one-shot only. Same walk and predicates as `alRunnerCoverageSupport`; project-relative paths.
+ */
+export async function alRunnerMoOrWrappedFiles(dirs: readonly string[]): Promise<string[]> {
+  await initParser();
+  const out: string[] = [];
+  for (const dir of dirs) {
+    const rels = (await walkFiles(dir, { links: "refuse" })).files
+      .map((e) => e.toString())
+      .filter((e) => e.toLowerCase().endsWith(".al"))
+      .sort();
+    for (const rel of rels) {
+      const root = wrapRoot(parseAL(await readFile(join(dir, rel), "utf8")));
+      if (fileHoldsWrappedObject(root) || refusedAsMultiObject(root)) {
+        out.push(normalizeSlashes(rel));
+      }
+    }
+  }
+  return out;
+}
+
+/**
  * Builds the index from the instrumented bundle al-runner was handed.
  *
  * `declared` for the `LineMap` is every object found in that directory, which is sound HERE for a

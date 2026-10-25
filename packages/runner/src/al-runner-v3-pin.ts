@@ -13,6 +13,13 @@ import { dirname, join } from "node:path";
 export const AL_RUNNER_V3_ROOT = "/work/tools/al-runner-v3";
 export const AL_RUNNER_V3_DEFAULT_PATH = `${AL_RUNNER_V3_ROOT}/current/al-runner`;
 
+/**
+ * The exact `--version` lines of builds that have no serve-entries path (alpha.2's `.gated`). R761
+ * reads it for the transport default. `itest/alrunner-v3-legs.ts` keeps its own copy (it is pure,
+ * with no `src` import); `r761-serve-default.test.ts` pins the two equal.
+ */
+export const V3_NO_SERVE_ENTRIES: readonly string[] = ["alrunner 3.0.0-alpha.2 (91253f2d6)"];
+
 /** `.gated`, as the update script writes it when every leg passed. */
 export interface GatedBuild {
   readonly version: string;

@@ -9,6 +9,7 @@ import {
   readFile,
   realpath,
   rm,
+  stat,
   symlink,
   utimes,
   writeFile,
@@ -213,9 +214,11 @@ function fakeV3(
     const sel = await readFile(join(active, "MutationSelector.Codeunit.al"), "utf8");
     const activeId = /MutantId = '([^']+)'/.exec(sel)?.[1] ?? "";
     const cu = Number(argv[argv.indexOf("--codeunit") + 1]);
-    const covPath = argv[argv.indexOf("--coverage-json") + 1] ?? "";
+    const covAt = argv.indexOf("--coverage-json");
     const cov = opts.coverage?.(activeId, active, testDir);
-    if (cov !== undefined) await writeFile(covPath, JSON.stringify(cov));
+    // R762 A: a call without the flag has nowhere to write it.
+    if (cov !== undefined && covAt >= 0)
+      await writeFile(argv[covAt + 1] ?? "", JSON.stringify(cov));
     const tests = rows(activeId, argv).map((r) => ({
       codeunit: cu,
       codeunitName: "Tests",
@@ -611,6 +614,31 @@ describe("T22: the proof is bound to the bytes v3 reads (c1-c5)", () => {
       (l) => appendFile(join(l.deps, "Microsoft_System.app"), "x"),
     ],
     ["the test app's app.json changed", (l) => appendFile(join(l.testDir, "app.json"), " ")],
+    [
+      // R767: every send re-hashes every .al byte, so a stat check can never be fooled.
+      "R767: a target .al rewritten at the same size with its mtime restored",
+      async (l) => {
+        const p = join(active(l), "Logic.Codeunit.al");
+        const s = await stat(p);
+        const text = await readFile(p, "utf8");
+        const i = text.search(/[A-Za-z]/);
+        const c = text[i] === "X" ? "Y" : "X";
+        await writeFile(p, text.slice(0, i) + c + text.slice(i + 1));
+        expect((await stat(p)).size).toBe(s.size);
+        // Seconds as a number keep sub-millisecond precision (a Date keeps only whole ms).
+        await utimes(p, s.atimeMs / 1000, s.mtimeMs / 1000);
+        expect((await stat(p)).mtimeMs).toBe(s.mtimeMs);
+      },
+    ],
+    [
+      "R767: an .al file added to active/",
+      (l) => writeFile(join(active(l), "Extra.Codeunit.al"), "codeunit 79151 Extra { }"),
+    ],
+    ["R767: a target .al removed from active/", (l) => rm(join(active(l), "Logic.Codeunit.al"))],
+    [
+      "R767: a test .al added to the test dir",
+      (l) => writeFile(join(l.testDir, "Extra.Codeunit.al"), "codeunit 79152 Extra { }"),
+    ],
     [
       // R631 review L1: drift, never ProjectSymlinkRefusedError (asserted by the class below).
       "R631: a test-dir junction holding an .al appears mid-run",
@@ -2267,6 +2295,60 @@ describe("R609: a test v3 refused MID-RUN keeps the coverage it reached before t
     const v = await runA({ method: "A", status: "error", notRun: true, message: REFUSAL }, none);
     expect(v.runnerRow).toBe("runner-refused");
     expect(v.coverage).toBeUndefined();
+  });
+
+  test("R762 A: a coverage-none call on the unmutated selector (a kill confirm) omits --coverage-json and joins no coverage", async () => {
+    const noEntry = (_id: string, _a: string, testDir: string) => ({
+      coverage: [],
+      perTestCoverage: [
+        {
+          test: `Codeunit${CU}.B`,
+          coverage: [
+            { file: join(testDir, "Tests.Codeunit.al"), statements: [{ line: 12, hits: 1 }] },
+          ],
+        },
+      ],
+    });
+    const l = await layout(LOGIC);
+    const v3 = fakeV3(allPass, { coverage: noEntry });
+    const b = backendOf(l, v3.spawn, fakeAlc().io, { coverage: "al-runner" });
+    b.useBuildSymbols([]);
+    await b.deploy(l.batch);
+    await b.activate(null);
+    // Master reads the missing entry as unavailable and throws; honoured "none" never looks.
+    const v = await b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
+    expect(v.outcome).toBe("pass");
+    expect(v.coverage).toBeUndefined();
+    expect(v3.calls).toHaveLength(1);
+    expect(v3.calls[0]).not.toContain("--coverage-json");
+  });
+
+  test("R762 A: a coverage-none confirm, then a coverage-wanting call on the same codeunit, re-calls with --coverage-json and joins coverage", async () => {
+    const l = await layout(LOGIC);
+    const v3 = fakeV3(allPass, { coverage: cov });
+    const b = backendOf(l, v3.spawn, fakeAlc().io, { coverage: "al-runner" });
+    b.useBuildSymbols([]);
+    await b.deploy(l.batch);
+    await b.activate(null);
+    await b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
+    const v = await b.run(ref("A"), { coverage: "al-runner", timeoutMs: 1000 });
+    expect(v3.calls).toHaveLength(2);
+    expect(v3.calls[0]).not.toContain("--coverage-json");
+    expect(v3.calls[1]).toContain("--coverage-json");
+    expect(v.coverage?.entries.length ?? 0).toBeGreaterThan(0);
+  });
+
+  test("R762 A: the baseline call (coverage al-runner) still passes --coverage-json and still throws on unavailable coverage", async () => {
+    const l = await layout(LOGIC);
+    const v3 = fakeV3(allPass, { coverage: () => undefined });
+    const b = backendOf(l, v3.spawn, fakeAlc().io, { coverage: "al-runner" });
+    b.useBuildSymbols([]);
+    await b.deploy(l.batch);
+    await b.activate(null);
+    await expect(b.run(ref("A"), { coverage: "al-runner", timeoutMs: 1000 })).rejects.toThrow(
+      /R586 §6/,
+    );
+    expect(v3.calls[0]).toContain("--coverage-json");
   });
 
   test("a PASSING row with no per-test entry still refuses (R586 §6)", async () => {

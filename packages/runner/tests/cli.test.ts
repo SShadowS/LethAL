@@ -3272,7 +3272,7 @@ describe("C02-07: flags are read or refused, never ignored", () => {
       ];
       expect(() => parseCliConfig(argv), flag).toThrow(`--${flag} has no effect with --dry-run`);
     }
-    expect(DRY_RUN_REFUSED.length).toBe(16);
+    expect(DRY_RUN_REFUSED.length).toBe(17);
   });
 
   test("R377: --dry-run reads an optional --backend, validated as run validates it", () => {

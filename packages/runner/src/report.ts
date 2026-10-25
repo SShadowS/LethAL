@@ -259,7 +259,8 @@ export type Caveat =
 export interface ExcludedTestRecord {
   readonly test: string;
   readonly file: string;
-  readonly reason: "compiled-out" | "preproc-undecided-kept";
+  /** R745: `exclude-test` = left out by `--exclude-test`, never run; raises `tests-narrowed`. */
+  readonly reason: "compiled-out" | "preproc-undecided-kept" | "exclude-test";
 }
 
 /**
@@ -331,10 +332,12 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
   },
   "tests-narrowed": {
     meaning:
-      "The `--tests-only` narrowing selects which TESTS run, and it CAN change a verdict — a " +
-      "mutant whose killing test was excluded is reported `survived`.",
+      "The `--tests-only` narrowing (whole test files) or `--exclude-test` (single test methods, " +
+      "named in `excludedTests` with reason `exclude-test`) selects which TESTS run, and it CAN " +
+      "change a verdict — a mutant whose killing test was left out is reported `survived` or " +
+      "`no-coverage`.",
     entailedNegative:
-      "This is the one narrowing that can manufacture a survivor; unlike `narrowed` (`--only`), " +
+      "These two flags (`--tests-only` and `--exclude-test`) are the narrowings that can manufacture a survivor; unlike `narrowed` (`--only`), " +
       "which selects which mutants run and cannot change a verdict.",
     basis: "R45",
   },
@@ -1607,7 +1610,8 @@ export interface SessionReport {
   /**
    * R403 phase C: tests the arm filter excluded (`compiled-out`) or kept because their `#if` could
    * not be evaluated exactly as alc does (`preproc-undecided-kept`). Present only when non-empty.
-   * Only `compiled-out` raises the `tests-compiled-out` caveat.
+   * Only `compiled-out` raises the `tests-compiled-out` caveat. R745: `exclude-test` lists a test
+   * `--exclude-test` left out (never run) and raises `tests-narrowed` instead.
    */
   readonly excludedTests?: readonly ExcludedTestRecord[];
   /**
@@ -2777,7 +2781,10 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   if (input.operators !== undefined) caveats.push("operator-narrowed");
   if (input.lines !== undefined) caveats.push("line-narrowed");
   // See CAVEAT_INTERPRETATIONS["tests-narrowed"] for what this caveat means to a reader.
-  if (input.testsOnly !== undefined && input.testsOnly.length > 0) caveats.push("tests-narrowed");
+  // R745: also raised by any test `--exclude-test` left out.
+  const testsExcludedByName = (input.excludedTests ?? []).some((t) => t.reason === "exclude-test");
+  if ((input.testsOnly !== undefined && input.testsOnly.length > 0) || testsExcludedByName)
+    caveats.push("tests-narrowed");
   if (notInstrumented.files.length > 0) caveats.push("uninstrumentable-files");
   // R307: files refused whole by the instrumentation trial. See CAVEAT_INTERPRETATIONS["files-refused"].
   const refusedRows = input.excludedSites.files.filter(
@@ -2956,6 +2963,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     input.operators !== undefined ||
     input.lines !== undefined ||
     (input.testsOnly !== undefined && input.testsOnly.length > 0) ||
+    testsExcludedByName ||
     // R307: a refused file's sites were never mutated, so the score is not a whole-project score.
     refusedRows.length > 0 ||
     // R399: the same holds for a file left out because its `#if` is undecided (R214) or its
@@ -3396,6 +3404,12 @@ export function renderConsole(r: SessionReport): string {
   const beyondConfig = (r.buildSymbols ?? []).filter((s) => !r.preprocessorSymbols.includes(s));
   if (beyondConfig.length > 0) {
     lines.push(`build symbols beyond config: [${collapseNumberedRuns(beyondConfig).join(", ")}]`);
+  }
+  const testsLeftOut = (r.excludedTests ?? []).filter((t) => t.reason === "exclude-test");
+  if (testsLeftOut.length > 0) {
+    lines.push(
+      `TESTS EXCLUDED: ${testsLeftOut.length} test(s) left out by --exclude-test and never run: ${testsLeftOut.map((t) => t.test).join(", ")}. A mutant only they kill reads survived or no-coverage. See excludedTests.`,
+    );
   }
   const testsCompiledOut = (r.excludedTests ?? []).filter((t) => t.reason === "compiled-out");
   if (testsCompiledOut.length > 0) {

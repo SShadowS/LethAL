@@ -19,7 +19,10 @@
  *   cache every R586 measurement used, so the gate runs on the artifacts the pre-commitment
  *   measured; lane ruling 2026-10-21. `/work/tools/al-runner-v3/cache` is unused).
  * - `LETHAL_ALC_DIR`: the folder holding `alc`.
- * - `LETHAL_ITEST_V3_LEGS=C,S1,...`: a subset (default every leg that is configured).
+ * - `LETHAL_ITEST_V3_LEGS=C,S1,...`: a subset (default every leg that is configured: C, S1, S1E,
+ *   S3, N1, N1E, X, L1, Y-A, Y-B, MO, WR, K, then D1, D1c and T when configured). R761: S1E is S1's
+ *   project and assertions under serve-entries by construction; on a build with no serve path it
+ *   reads "not applicable" (pass). Its serve counters are printed, pinned after the R-761 observe run.
  * - `LETHAL_ITEST_V3_CDO=<Continia Document Output checkout at 5f2a71d>`: the D legs (a corpus job).
  * - `LETHAL_ITEST_V3_TABLES=1`: leg T (the update gate's tables leg).
  * - `LETHAL_V3_GATE_NONCE` + `LETHAL_V3_GATE_RECEIPT`: write the update gate's receipt.
@@ -59,6 +62,7 @@ import { AL_RUNNER_V3_NOT_AUTHORITATIVE } from "../src/al-runner-v3-config";
 import { runV3ContractProbe, v3DefectWarnings } from "../src/al-runner-v3-contract";
 import { AL_RUNNER_V3_DEFAULT_PATH, sha256OfFile } from "../src/al-runner-v3-pin";
 import { type V3BuildPin, findV3Pin } from "../src/al-runner-v3-pins";
+import { FRESH_PROBE_ENV } from "../src/al-runner-v3-probe-cache";
 import { SLEEP_NOTE_TAG } from "../src/al-runner-v3-sleep";
 import { AlcCompileError, ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import { buildBackend } from "../src/cli";
@@ -107,8 +111,10 @@ import {
   V3_K_LEG,
   V3_MO_KILLERS,
   V3_N1E_LEG,
+  V3_S1E_LEG,
   V3_WR_KILLERS,
   V3_WR_STATE_NOTES,
+  isNoServeRefusal,
   isSessionTestCall,
   judgeKillers,
   judgeLegK,
@@ -167,6 +173,10 @@ if (!process.env.LETHAL_ITEST_ALRUNNER_V3) {
   process.exit(challenged ? 1 : 0);
 }
 
+// R762: this gate (and the update gate, which runs it) measures the probe, never replays it: every
+// session it starts, `buildBackend`'s included, runs the contract probe fresh.
+process.env[FRESH_PROBE_ENV] = "1";
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "..", "..", "..");
 const TABLES_BASELINE_PATH = join(HERE, "al-runner-v3.tables.baseline.json");
@@ -208,6 +218,7 @@ const LEGS = (process.env.LETHAL_ITEST_V3_LEGS ?? configured.join(","))
 /** Oracle server BC builds, recorded beside v3's `--bc-version` (F8). */
 const ORACLE_BC_BUILD: Record<string, string> = {
   S1: "bc1 BC 28.4.53241.56590 W1 (bcdev.baseline.json reproduced live, cited)",
+  S1E: "bc1 BC 28.4.53241.56590 W1 (bcdev.baseline.json reproduced live, cited)",
   N1: "bc1 BC 28.4.53241.56590 W1 (bcdev.names.baseline.json reproduced live, cited)",
   D1: "bc3 BC 28.4 W1, Microsoft apps 28.4.53241.56646 (docs/measurements/r594/bc3-A)",
   D1c: "bc3 BC 28.4 W1, Microsoft apps 28.4.53241.56646 (docs/measurements/r594/bc3-B)",
@@ -436,7 +447,23 @@ async function legC(scratch: string): Promise<readonly string[]> {
   return c.lines;
 }
 
-async function legS1(scratch: string): Promise<void> {
+/**
+ * R761: S1E's serve counters, pre-committed in
+ * `docs/superpowers/specs/2026-10-25-r761-serve-default-precommitment.md` (master a86927e1) from the
+ * R-761 observe run, equal to what R-653 E1 recorded for S1 under entries (P 3; live 3 = 6 - 3;
+ * bound 5 = 8 - 3; warm-ups 1; entriesSent 44). Echo mismatches 0.
+ */
+const S1E_PINS = {
+  pairRequests: 3,
+  liveRequests: 3,
+  boundChecks: 5,
+  warmups: 1,
+  entriesSent: 44,
+} as const;
+
+/** S1 one-shot (`entries` off) or S1E (same project and assertions under serve-entries). */
+async function legS1(scratch: string, leg: "S1" | "S1E" = "S1", version = ""): Promise<void> {
+  const serve = leg === "S1E";
   const b = new AlRunnerV3Backend(
     backendCfg({
       instrumentedDir: join(scratch, "backend"),
@@ -444,34 +471,65 @@ async function legS1(scratch: string): Promise<void> {
       packagesDir: join(fixture("sandbox-tests"), ".alpackages"),
       bcVersion: SANDBOX_BC,
       selectorObjectId: 79199,
+      ...(serve ? { transport: "serve-entries" as const } : {}),
     }),
   );
-  const r = await session(scratch, b, {
-    projectDir: fixture("sandbox-app"),
-    testDir: fixture("sandbox-tests"),
-    selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
-  });
-  assertCounts(r, "S1", 3, 12, 4, 19);
-  await assertPerMutant(r, join(HERE, "bcdev.baseline.json"), "S1");
+  let r: SessionReport;
+  try {
+    r = await session(scratch, b, {
+      projectDir: fixture("sandbox-app"),
+      testDir: fixture("sandbox-tests"),
+      selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
+    });
+  } catch (e) {
+    // A build with no serve path refuses `entries` by name: not applicable, as N1E reads it.
+    if (serve && !isGateWarningsError(e) && isNoServeRefusal(version, String(e))) {
+      console.log("  S1E: not applicable: this build has no serve-entries path");
+      return;
+    }
+    throw e;
+  }
+  assertCounts(r, leg, 3, 12, 4, 19);
+  await assertPerMutant(r, join(HERE, "bcdev.baseline.json"), leg);
   must(
     r.baselineGreen && r.unsupportedTests.length === 0,
-    "S1: baseline not green or a refused test",
+    `${leg}: baseline not green or a refused test`,
   );
   must(
     tagged(r, V3_STATE_NOTE_TAG).length === 0,
-    `S1: state notes ${tagged(r, V3_STATE_NOTE_TAG)}`,
+    `${leg}: state notes ${tagged(r, V3_STATE_NOTE_TAG)}`,
   );
-  must(tagged(r, V3_REFUSED_NEARBY_TAG).length === 0, "S1: refused-nearby notes");
+  must(tagged(r, V3_REFUSED_NEARBY_TAG).length === 0, `${leg}: refused-nearby notes`);
   must(
     tagged(r, SLEEP_NOTE_TAG).length === 0 && refusedCause(r).length === 0,
-    "S1: a §6 or runner refusal",
+    `${leg}: a §6 or runner refusal`,
   );
-  assertIndex(b, "S1", 0, 0);
-  assertReproduced(r, "S1");
+  // The Sleep index is built from the deployed source text, not by the transport, so 0 + 0 holds
+  // under serve-entries too (backend `deploy` -> `buildSleepIndex`).
+  assertIndex(b, leg, 0, 0);
+  assertReproduced(r, leg);
   must(
     r.validity.executionContexts.some((c) => c.runnerBuild !== undefined),
-    "S1: no runnerBuild recorded",
+    `${leg}: no runnerBuild recorded`,
   );
+  if (serve) {
+    const s = b.entriesStats();
+    const got = {
+      pairRequests: s.pairRequests,
+      liveRequests: s.liveRequests,
+      boundChecks: s.boundChecks,
+      warmups: s.warmups,
+      entriesSent: s.entriesSent,
+    };
+    console.log(
+      `  S1E: serve counters ${JSON.stringify({ ...got, echoMismatches: s.echoMismatches })}`,
+    );
+    for (const [k, v] of Object.entries(S1E_PINS)) {
+      const g = got[k as keyof typeof got];
+      must(g === v, `S1E: ${k} ${g}, pre-committed ${v} (R761)`);
+    }
+    must(s.echoMismatches === 0, `S1E: ${s.echoMismatches} echo mismatches, pre-committed 0`);
+  }
 }
 
 async function legS3(scratch: string): Promise<void> {
@@ -1615,6 +1673,7 @@ async function main(): Promise<void> {
       try {
         if (leg === "C") lines.push(...(await legC(scratch)).map((l) => `C: ${l}`));
         else if (leg === "S1") await legS1(scratch);
+        else if (leg === V3_S1E_LEG) await legS1(scratch, V3_S1E_LEG, version);
         else if (leg === "S3") await legS3(scratch);
         else if (leg === "N1") await legN1(scratch);
         else if (leg === V3_N1E_LEG) await legN1E(scratch, version);

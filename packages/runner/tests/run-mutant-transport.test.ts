@@ -149,6 +149,54 @@ describe("RunMutantTransport.run — terminal mapping", () => {
     expect(describeStaleTestApp(v.failureMessage)).toBeDefined();
   });
 
+  // R689 (control 1.0.0.24): the found-0 answer may also carry BC's discovery error. It rides on its
+  // own verdict field; `failureMessage` stays byte-identical so every found-0 matcher is unmoved.
+  test("R689: found 0 with discoveryError and discoveryErrorFrame: carried on the verdict, failureMessage unchanged", async () => {
+    const error = "expected exactly one method OverBudgetDetected, found 0";
+    const withFields = echo({
+      codeunitResults: JSON.stringify({
+        error,
+        discoveryError: "R689 onrun boom 93890",
+        discoveryErrorFrame: '"R689 Throwing Tests"(CodeUnit 93890).OnRun(Trigger) line 2',
+      }),
+    });
+    const v = await transport(okFetch(withFields)).run(REQ);
+    expect(v.discoveryError).toEqual({
+      text: "R689 onrun boom 93890",
+      frame: '"R689 Throwing Tests"(CodeUnit 93890).OnRun(Trigger) line 2',
+    });
+    expect(v.failureMessage).toBe(runMutantLineCountMessage(0, error));
+    // Also a LITERAL, so a change to the helper cannot move both sides together.
+    expect(v.failureMessage).toBe(
+      "RunMutant returned 0 test lines, expected exactly 1; server: expected exactly one method OverBudgetDetected, found 0",
+    );
+  });
+
+  test("R689: found 0 without the fields: no discoveryError", async () => {
+    const v = await transport(
+      okFetch(
+        echo({
+          codeunitResults: JSON.stringify({
+            error: "expected exactly one method OverBudgetDetected, found 0",
+          }),
+        }),
+      ),
+    ).run(REQ);
+    expect("discoveryError" in v).toBe(false);
+  });
+
+  test("R689: a non-string or half-present discovery field is a contract error, thrown", async () => {
+    const error = "expected exactly one method OverBudgetDetected, found 0";
+    for (const extra of [
+      { discoveryError: 7, discoveryErrorFrame: "f" },
+      { discoveryError: "t", discoveryErrorFrame: null },
+      { discoveryError: "t" },
+    ]) {
+      const inner = echo({ codeunitResults: JSON.stringify({ error, ...extra }) });
+      await expect(transport(okFetch(inner)).run(REQ)).rejects.toThrow(/malformed discovery error/);
+    }
+  });
+
   // R688 (T1, S8): a wrong or stale binary that also blanks discovery must read as the identity
   // fault, never as a found-0 answer the orchestrator would confirm and score per mutant.
   test("R688 T1: zero test lines with identityMismatch true is the identity fault, not found 0", async () => {

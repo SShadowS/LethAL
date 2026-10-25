@@ -97,12 +97,20 @@ codeunit 91007 "LC Run Method"
         ErrObj: JsonObject;
         ErrJson: Text;
         MatchCount: Integer;
+        DiscoveryText: Text;
+        DiscoveryStack: Text;
+        Frame: Text;
     begin
         if ALTestSuite.Get(RunSuiteName) then
             ALTestSuite.Delete(true);
         Mgt.CreateTestSuite(RunSuiteName);
         ALTestSuite.Get(RunSuiteName);
+        // R689: BC's discovery catches a test codeunit's OnRun error and lists no methods. The error
+        // survives only as the session's last error, so clear it first and copy it straight after.
+        ClearLastError();
         Mgt.SelectTestMethodsByRange(ALTestSuite, Format(RunTestCodeunitId));
+        DiscoveryText := GetLastErrorText();
+        DiscoveryStack := GetLastErrorCallStack();
 
         Line.SetRange("Test Suite", RunSuiteName);
         Line.SetRange("Line Type", Line."Line Type"::"Function");
@@ -119,6 +127,17 @@ codeunit 91007 "LC Run Method"
         MatchCount := Line.Count();
         if MatchCount <> 1 then begin
             ErrObj.Add('error', StrSubstNo('expected exactly one method %1, found %2', RunTestMethod, MatchCount));
+            // R689: quote the OnRun error only when the stack's FIRST frame names the requested
+            // codeunit, so no other error is passed off as this codeunit's.
+            if MatchCount = 0 then begin
+                Frame := DiscoveryStack;
+                if StrPos(Frame, '\') > 0 then
+                    Frame := CopyStr(Frame, 1, StrPos(Frame, '\') - 1);
+                if (DiscoveryText <> '') and (StrPos(Frame, StrSubstNo('(CodeUnit %1)', Format(RunTestCodeunitId, 0, 9))) > 0) then begin
+                    ErrObj.Add('discoveryError', DiscoveryText);
+                    ErrObj.Add('discoveryErrorFrame', Frame);
+                end;
+            end;
             ErrObj.WriteTo(ErrJson);
             exit(ErrJson);
         end;

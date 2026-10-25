@@ -158,6 +158,7 @@ export function cdoCheckoutRefusal(c: {
 export const V3_GATE_LEGS = [
   "C",
   "S1",
+  "S1E",
   "S3",
   "N1",
   "N1E",

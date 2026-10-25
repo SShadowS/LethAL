@@ -15,7 +15,7 @@ import {
   sameClosedWorld,
 } from "../src/closed-world";
 import { testsInAlSource } from "../src/discovery";
-import { DependentCountUnavailableError, HarnessVerifier } from "../src/harness";
+import { HarnessVerifier } from "../src/harness";
 import { explainNewTests, testDigestsOfModel } from "../src/test-digest";
 import { buildTestAppModel } from "../src/testpage-scan";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
@@ -85,18 +85,61 @@ describe("R389 HarnessVerifier.fetchDependentCount", () => {
     }
   });
 
-  test("a control app without the action (404) is DependentCountUnavailableError; a server error is not", async () => {
-    const missing = fakeFetch(404, "No HTTP resource was found that matches the request URI");
-    await expect(
-      new HarnessVerifier(CFG, missing.fetchFn).fetchDependentCount(TEST_APP),
-    ).rejects.toBeInstanceOf(DependentCountUnavailableError);
-    const failed = fakeFetch(500, "DependentCount: boom");
-    const err = await new HarnessVerifier(CFG, failed.fetchFn).fetchDependentCount(TEST_APP).then(
-      () => undefined,
-      (e: unknown) => e,
-    );
-    expect(err).toBeInstanceOf(Error);
-    expect(err).not.toBeInstanceOf(DependentCountUnavailableError);
+  test("a 404 or a server error is a plain failure (the 1.0.0.24 minimum leaves no older control app to fall back from)", async () => {
+    for (const status of [404, 500]) {
+      const failed = fakeFetch(status, "DependentCount: boom");
+      const err = await new HarnessVerifier(CFG, failed.fetchFn).fetchDependentCount(TEST_APP).then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toContain(`HTTP ${status}`);
+      expect((err as Error).name).toBe("HarnessVerificationError");
+    }
+  });
+
+  describe("R733 fetchInstalledDependents", () => {
+    const row = { id: OTHER_APP, name: "Ext", publisher: "P", version: "1.0.0.7" };
+    test("posts the app id to InstalledDependents and reads the rows", async () => {
+      const f = fakeFetch(200, answer({ appId: TEST_APP, installedDependents: [row] }));
+      expect(await new HarnessVerifier(CFG, f.fetchFn).fetchInstalledDependents(TEST_APP)).toEqual([
+        row,
+      ]);
+      expect(f.calls[0]?.url).toBe(
+        "http://bc:7048/BC/ODataV4/LethALControl_InstalledDependents?company=CRONUS+Danmark+A%2FS&tenant=default",
+      );
+      expect(JSON.parse(f.calls[0]?.body ?? "")).toEqual({ appId: TEST_APP });
+      const empty = fakeFetch(200, answer({ appId: TEST_APP, installedDependents: [] }));
+      expect(
+        await new HarnessVerifier(CFG, empty.fetchFn).fetchInstalledDependents(TEST_APP),
+      ).toEqual([]);
+    });
+
+    test("another app's echo, a missing list or a malformed row throws, never an empty list", async () => {
+      for (const inner of [
+        { appId: OTHER_APP, installedDependents: [] },
+        { appId: TEST_APP },
+        { appId: TEST_APP, installedDependents: [{ ...row, version: 7 }] },
+        { appId: TEST_APP, installedDependents: [{ id: OTHER_APP }] },
+      ]) {
+        const f = fakeFetch(200, answer(inner));
+        await expect(
+          new HarnessVerifier(CFG, f.fetchFn).fetchInstalledDependents(TEST_APP),
+        ).rejects.toThrow(/InstalledDependents answered/);
+      }
+    });
+
+    test("bad JSON throws; a non-GUID is refused before any request", async () => {
+      const bad = fakeFetch(200, { value: "not json" });
+      await expect(
+        new HarnessVerifier(CFG, bad.fetchFn).fetchInstalledDependents(TEST_APP),
+      ).rejects.toThrow(/not JSON/);
+      const f = fakeFetch(200, answer({}));
+      await expect(
+        new HarnessVerifier(CFG, f.fetchFn).fetchInstalledDependents("x"),
+      ).rejects.toThrow(/not a bare GUID/);
+      expect(f.calls).toHaveLength(0);
+    });
   });
 
   // Sol's review: headers arrive, then the body stalls. The timeout must still fire.
@@ -194,18 +237,6 @@ describe("R389 closedWorldOf: the guard", () => {
     const r = await closedWorldOf({ id: TEST_APP }, D, counting(async () => 1).backend);
     expect(r.closedWorld).toEqual({ public: false, internal: false });
     expect(r.why).toContain("1 published app");
-  });
-
-  test("an older control app (no action): falls back, quietly", async () => {
-    const r = await closedWorldOf(
-      { id: TEST_APP },
-      D,
-      counting(async () => {
-        throw new DependentCountUnavailableError("404");
-      }).backend,
-    );
-    expect(r.closedWorld).toEqual({ public: false, internal: false });
-    expect(r.warn).toBe(false);
   });
 
   test("the action errors: falls back, with a warning", async () => {

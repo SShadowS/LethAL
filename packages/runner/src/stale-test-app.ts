@@ -332,8 +332,10 @@ export class StaleDependencyMemberError extends Error {
         `no longer has (BC: "... does not have a member with that ID"; the object is not one this project ` +
         `declares): ${each}. LethAL refused rather than drop them from the green set, which would score every ` +
         "mutant they cover no-coverage. Recompile and republish the calling app (usually the tests app) against " +
-        "the dependencies installed now, then re-run. If it cannot be rebuilt, run only the other test files with " +
-        "--tests-only <glob> (it selects whole files, not single tests; the report then flags 'tests-narrowed').",
+        "the dependencies installed now, then re-run. If it cannot be rebuilt, leave those tests out with " +
+        `${names.map((n) => `--exclude-test "${n}"`).join(" ")} (single tests), or leave out their whole files with ` +
+        "--tests-only <glob>. Either way the report flags 'tests-narrowed' and names what was left out, and a " +
+        "mutant only those tests kill reads survived or no-coverage.",
     );
     this.name = "StaleDependencyMemberError";
     this.staleTests = names;
@@ -419,6 +421,19 @@ export function testAppRefusal(
 export interface FoundNoneFinding extends StaleTestAppFinding {
   readonly codeunit: string;
   readonly foundNone: boolean;
+  /** R689: BC's discovery error for this test's codeunit, when control 1.0.0.24 proved it. */
+  readonly discoveryError?: { readonly text: string; readonly frame: string };
+}
+
+/** R689: `BC's discovery error: <text> (at <frame>)`, one per distinct quote; "" when none. */
+function discoveryQuotes(missing: readonly FoundNoneFinding[]): string {
+  const quotes = new Set<string>();
+  for (const m of missing) {
+    if (m.discoveryError !== undefined) {
+      quotes.add(`BC's discovery error: ${m.discoveryError.text} (at ${m.discoveryError.frame})`);
+    }
+  }
+  return [...quotes].join("\n");
 }
 
 /**
@@ -433,8 +448,9 @@ export class TestCodeunitDiscoveryError extends Error {
     const sorted = [...missing].sort((a, b) => a.name.localeCompare(b.name));
     const codeunits = [...new Set(sorted.map((m) => m.codeunit))];
     const evidence = sorted.map((m) => `  ${m.name}: ${m.description}`).join("\n");
+    const quote = discoveryQuotes(sorted);
     super(
-      `BC's suite discovery listed no methods for test codeunit(s) ${codeunits.map((c) => `"${c}"`).join(", ")}, which the installed test app is proven to compile (the package read before and after the baseline is the proven installed one, and its compiled symbols declare these tests):\n${evidence}\nBC runs a test codeunit's OnRun while it builds the suite, and the measured cause of this answer is an OnRun that raises an error. Open the codeunit in BC's Test Tool to see it. Refusing to measure: every mutant covered only by these tests would be recorded no-coverage.`,
+      `BC's suite discovery listed no methods for test codeunit(s) ${codeunits.map((c) => `"${c}"`).join(", ")}, which the installed test app is proven to compile (the package read before and after the baseline is the proven installed one, and its compiled symbols declare these tests):\n${evidence}\n${quote === "" ? "" : `${quote}\n`}BC runs a test codeunit's OnRun while it builds the suite, and the measured cause of this answer is an OnRun that raises an error. Open the codeunit in BC's Test Tool to see it. Refusing to measure: every mutant covered only by these tests would be recorded no-coverage.`,
     );
     this.name = "TestCodeunitDiscoveryError";
     this.missingTests = sorted.map((m) => m.name);
@@ -468,12 +484,17 @@ export function baselineFoundNoneRefusal(a: {
   if (allFoundNone && wholeCodeunits && provenHere && a.compiledInPublishedPackage) {
     return new TestCodeunitDiscoveryError(a.missing);
   }
+  const quote = discoveryQuotes(a.missing);
   return testAppRefusal(
     a.missing,
     a.before,
     a.after,
     a.unread,
-    allFoundNone ? ONRUN_HINT : undefined,
+    allFoundNone
+      ? quote === ""
+        ? ONRUN_HINT
+        : `${ONRUN_HINT} ${quote.replaceAll("\n", " ")}`
+      : undefined,
   );
 }
 
