@@ -5639,6 +5639,10 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
             // R686: whose codeunit, and whether it is the found-0 form an OnRun raise also gives.
             codeunit: b.ref.codeunitName,
             foundNone: isRunMutantFoundNone(b.verdict.failureMessage),
+            // R689: BC's own OnRun error text, when the control app proved it is this codeunit's.
+            ...(b.verdict.discoveryError !== undefined
+              ? { discoveryError: b.verdict.discoveryError }
+              : {}),
           },
         ];
   });

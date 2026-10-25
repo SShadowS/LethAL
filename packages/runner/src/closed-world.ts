@@ -10,7 +10,7 @@
  * It is asked for the app whose source is DIGESTED (the published package on bcdev), and only when
  * that id equals the test project's app.json id (sol's review: a disk id naming another app would
  * count that app's dependents). Every other case falls back (`OPEN_WORLD`): al-runner, an older
- * control app, an error, a count above 0, an unknown or mismatched id.
+ * error, a count above 0, an unknown or mismatched id.
  *
  * Zero is a point-in-time observation: callers ask again after execution (`sameClosedWorld`) and
  * keep the open-world digests unless the second answer is the same closed one.
@@ -19,7 +19,6 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { readPackageEntry } from "./app-package";
 import type { ExecutionBackend } from "./backend";
-import { DependentCountUnavailableError } from "./harness";
 import { type ClosedWorld, OPEN_WORLD } from "./testpage-scan";
 
 export interface ClosedWorldResult {
@@ -81,8 +80,6 @@ export async function closedWorldOf(
   try {
     count = await backend.dependentCount(digested.appId);
   } catch (err) {
-    if (err instanceof DependentCountUnavailableError)
-      return open("the deployed LethAL Control predates DependentCount (1.0.0.23)");
     return open(`DependentCount failed: ${err instanceof Error ? err.message : String(err)}`, true);
   }
   if (count > 0) return open(`${count} published app(s) declare the test app as a dependency`);
