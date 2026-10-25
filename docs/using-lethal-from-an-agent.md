@@ -94,10 +94,12 @@ mutated, executes nothing, and reports both the raw site count and the deployed 
 
 **Know which flags can move a verdict.** `--only`, `--exclude`, `--operator`, `--lines` and
 `--changed-since` select which
-MUTANTS run and cannot change a verdict. `--tests-only` selects which TESTS run at baseline and CAN: exclude a
-killing test and its mutant is reported survived. `--only` and `--exclude` give the `narrowed`
+MUTANTS run and cannot change a verdict. `--tests-only` (whole test files) and `--exclude-test <Codeunit.Method>`
+(single test methods; repeatable; bcdev only; a name that matches no test is refused) select which TESTS run
+and CAN: leave out a killing test and its mutant is reported survived or no-coverage. `--only` and `--exclude` give the `narrowed`
 caveat, `--operator` gives `operator-narrowed`, `--lines` and `--changed-since` give `line-narrowed`,
-and `--tests-only` gives `tests-narrowed`.
+and `--tests-only` and `--exclude-test` give `tests-narrowed`. `--exclude-test` also lists each test it left out in
+`excludedTests` (reason `exclude-test`) and prints a `TESTS EXCLUDED` banner line.
 
 **Backends.** `bcdev` is authoritative. `al-runner-v3` (the Rust al-runner, configured by the
 `alRunnerV3` section, Linux only, one worker) is offline and is NOT: its coverage is CONDITIONAL. A
@@ -147,6 +149,7 @@ has the complete set.
 | `--only` | `run` |
 | `--exclude` | `run` |
 | `--tests-only` | `run` |
+| `--exclude-test` | `run` |
 | `--operator` | `run` |
 | `--artifact` | `verify` |
 | `--survivors` | `verify` |

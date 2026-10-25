@@ -138,7 +138,7 @@ import {
   sourceZipReader,
   targetOf,
 } from "./digest-inputs";
-import { type ArmAwareDiscovery, discoverTests } from "./discovery";
+import { type ArmAwareDiscovery, discoverTests, excludeNamedTests } from "./discovery";
 import { EnvToolError, EnvToolNotStartedError } from "./env-tool";
 import {
   type EquivalenceMark,
@@ -214,6 +214,7 @@ import { buildReport } from "./report";
 import type {
   Caveat,
   DeclarativeSiteFile,
+  ExcludedTestRecord,
   MutantErrorCause,
   NotInstrumentedFile,
   SessionOutcome,
@@ -1531,6 +1532,12 @@ export interface SessionConfig {
    * time goes. See `DiscoverOptions.only` for why this one can change verdicts and `only` cannot.
    */
   readonly testsOnly?: readonly string[];
+  /**
+   * R745: `Codeunit.Method` names of single tests to leave out of the run (`--exclude-test`), bcdev
+   * only. They never run, at baseline or against a mutant, so a mutant only they kill reads
+   * `survived` or `no-coverage`; the report says so (`tests-narrowed`, `excludedTests`).
+   */
+  readonly excludeTests?: readonly string[];
   /**
    * R44: maximum injected guards per published artifact — see `PlanOptions.maxGuardsPerBatch`.
    * Absent means one artifact for everything, which is not publishable for a real app.
@@ -4503,7 +4510,7 @@ function resolveResume(
       assertSameBuildSymbols(row, `--resume-run ${id}`, buildSymbols);
       if (row.configFingerprint !== configFingerprint) {
         throw new Error(
-          `--resume-run ${id} was scoped differently from this session (--only/--tests-only/--skip-known-survivors/selector ids/preprocessor symbols). Carrying its verdicts would report one scope's measurements as another's${
+          `--resume-run ${id} was scoped differently from this session (--only/--tests-only/--exclude-test/--skip-known-survivors/selector ids/preprocessor symbols). Carrying its verdicts would report one scope's measurements as another's${
             row.configFingerprint === null
               ? " — that run predates configuration fingerprinting and cannot prove its scope at all"
               : ""
@@ -5899,6 +5906,14 @@ async function runSessionBody(
   // in-memory authoritative stubs the unit suite drives carry no fence at all and legitimately
   // have no lease to take; a real bcdev session always does.
   assertLeaseConfigured(caps, cfg.lease, cfg.backend, "runSession");
+  // R745: bcdev runs exactly one test method per call, so an excluded method never executes.
+  // al-runner-v3 runs a whole codeunit, so the method would still run and could change what the
+  // kept tests see. Refused before any backend call rather than reported as excluded.
+  if (cfg.excludeTests !== undefined && cfg.excludeTests.length > 0 && !isBcdev(caps.kind)) {
+    throw new Error(
+      `--exclude-test is refused on backend ${caps.kind}: al-runner-v3 runs whole codeunits, so an excluded test method would still run (and could change what the kept tests see) while the report called it excluded. Use --backend bcdev, or leave out whole test files with --tests-only <glob>.`,
+    );
+  }
   // Quarantine consult (spec §8/§9): a tier a PRIOR session marked stranded must refuse this
   // session outright, before even a non-mutating status() probe. Only meaningful for an
   // authoritative backend with a known tier identity — see SessionConfig.resourceServer's doc
@@ -5998,7 +6013,37 @@ async function runSessionBody(
     discovery,
     envPublishes?.testApp,
   );
-  const { tests, armPolicyApplied } = chooseTestSuite(discovery, testArmEvidence);
+  const chosen = chooseTestSuite(discovery, testArmEvidence);
+  const { armPolicyApplied } = chosen;
+  // R745: `--exclude-test`, at this ONE point: after the suite is chosen (R403's membership check
+  // reads `discovery`, so filtering earlier would trip TestAppDiffersError) and before everything
+  // that reads the suite (`useSessionTests`, `tests-discovered`, the TestPage scan, the test scope,
+  // the test-app identity). A name matching no test in THIS run's suite is refused here, before the
+  // lease and any deploy.
+  let tests = chosen.tests;
+  const excludeTestRecords: { test: string; file: string; reason: "exclude-test" }[] = [];
+  if (cfg.excludeTests !== undefined && cfg.excludeTests.length > 0) {
+    const split = excludeNamedTests(chosen.tests, cfg.excludeTests);
+    if (split.unmatched.length > 0) {
+      throw new Error(
+        `--exclude-test matched no test for ${split.unmatched.map((n) => `"${n}"`).join(", ")}. A name is Codeunit.Method (the codeunit's AL name, as the report lists tests), compared whole, ignoring case and double quotes, against the tests THIS run has: after --tests-only and the #if arm filter. Refusing rather than running with nothing excluded.`,
+      );
+    }
+    if (split.kept.length === 0) {
+      throw new Error(
+        "every test in this run's suite was excluded by --exclude-test; nothing would run. Refusing rather than reporting every mutant as no-coverage.",
+      );
+    }
+    tests = split.kept;
+    for (const t of split.excluded) {
+      if (t.file === undefined) {
+        throw new Error(
+          `--exclude-test: discovery gave no file for ${qualifiedTestName(t)}; refusing to record an exclusion without one.`,
+        );
+      }
+      excludeTestRecords.push({ test: qualifiedTestName(t), file: t.file, reason: "exclude-test" });
+    }
+  }
   // R488: the UNFILTERED list, every arm read: a look-alike al-runner would also select must be
   // excluded whether or not this session runs it. Given again to every worker below.
   cfg.backend.useDiscoveredTests?.(discovery.unfiltered);
@@ -6014,9 +6059,11 @@ async function runSessionBody(
   // R403 phase C. With no compiled evidence the unfiltered suite runs, so a `compiled-out` record
   // would claim a test was dropped that was in fact sent: only the undecided records are listed.
   // Each field rides the event only when non-empty, so an ordinary session's stream is unchanged.
-  const excludedTests = discovery.excluded
+  const excludedTests: ExcludedTestRecord[] = discovery.excluded
     .filter((x) => armPolicyApplied || x.reason === "preproc-undecided-kept")
     .map((x) => ({ test: qualifiedTestName(x.test), file: x.file, reason: x.reason }));
+  // R745: the tests `--exclude-test` left out ride the same list, reason `exclude-test`.
+  excludedTests.push(...excludeTestRecords);
   const unverifiedTestFiles = testArmEvidence.kind === "none" ? [...testArmEvidence.files] : [];
   emit({
     type: "tests-discovered",
@@ -6030,6 +6077,13 @@ async function runSessionBody(
       type: "warning",
       code: "tests-only-narrowed-baseline",
       message: `[lethal] --tests-only narrowed the baseline to ${tests.length} test(s) from ${cfg.testsOnly.length} pattern(s). A mutant whose killing test was excluded is reported SURVIVED — narrowing tests trades accuracy for speed, unlike --only.`,
+    });
+  }
+  if (excludeTestRecords.length > 0) {
+    emit({
+      type: "warning",
+      code: "exclude-test-narrowed-baseline",
+      message: `[lethal] --exclude-test left ${excludeTestRecords.length} test(s) out of the run and they never run: ${excludeTestRecords.map((r) => r.test).join(", ")}. A mutant only they kill is reported SURVIVED or NO-COVERAGE.`,
     });
   }
   if (tests.length === 0) throw new Error("no tests discovered");
@@ -6197,6 +6251,10 @@ async function runSessionBody(
     // Issue #19: a different line scope deployed a different mutant set.
     ...(cfg.lines !== undefined ? { lines: cfg.lines } : {}),
     ...(cfg.testsOnly !== undefined ? { testsOnly: cfg.testsOnly } : {}),
+    // R745: the tests actually left out (matched, discovered spelling), only when non-empty.
+    ...(excludeTestRecords.length > 0
+      ? { excludeTests: excludeTestRecords.map((r) => r.test) }
+      : {}),
     // C02-06, R214: the EFFECTIVE symbols (config plus app.json), so an app.json change also
     // breaks a resume.
     ...(buildSymbols.length > 0 ? { preprocessorSymbols: buildSymbols } : {}),
@@ -7134,7 +7192,7 @@ async function runSessionBody(
             emit({
               type: "warning",
               code: "history-test-scope-changed",
-              message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, ${what}. A survivor there may be killed by a test it did not run (a --tests-only run, say), so no survivor from it is skipped: every mutant is executed (R585).`,
+              message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, ${what}. A survivor there may be killed by a test it did not run (a --tests-only or --exclude-test run, say), so no survivor from it is skipped: every mutant is executed (R585).`,
             });
           },
           backendBuildRefused: (old) => {
