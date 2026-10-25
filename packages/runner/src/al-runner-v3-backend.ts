@@ -1849,7 +1849,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       for (const id of [...this.suitePerCodeunit.keys()].sort((a, b) => a - b)) {
         if (signal.aborted) return undefined;
         this.callSeq += 1;
-        const covPath = join(covDir, `spec-${this.callSeq}.json`);
+        // Named as a live call's file is, so the call's argv is the live call's argv.
+        const covPath = join(covDir, `call-${this.callSeq}.json`);
         await rm(covPath, { force: true });
         const made = await this.spawnCodeunit({
           id,
