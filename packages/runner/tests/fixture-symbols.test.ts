@@ -8,6 +8,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { printItestTarget } from "../itest/config-path";
 import {
   FIXTURE_SYMBOLS_MANIFEST,
   FIXTURE_SYMBOLS_TAR,
@@ -16,8 +17,10 @@ import {
   FixtureSymbolsRefusedError,
   GATE_ALPACKAGES,
   SYMBOLS_MARKER,
+  SymlinkedAlpackagesError,
   prepareFixtureSymbols,
   symbolTarDrift,
+  symlinkedAlpackages,
 } from "../itest/fixture-symbols";
 
 const A = "fx/a/.alpackages";
@@ -413,4 +416,106 @@ describe("R670: symbolTarDrift", () => {
       expect(r.stdout.split("\n").filter((l) => l !== "" && !l.endsWith("/"))).toEqual(members);
     },
   );
+});
+
+// R787: a fixture .alpackages that is a symlink into another worktree is refused by name.
+describe("R787: a symlinked fixture .alpackages", () => {
+  /** `fixtures/<dir>/.alpackages` in the worktree as a link to a folder outside it ("another lane"). */
+  async function linkInto(rel: string): Promise<string> {
+    const other = join(root, "other-lane", rel);
+    await mkdir(other, { recursive: true });
+    await writeFile(join(other, "Theirs.app"), "theirs");
+    await mkdir(dirname(join(worktree, rel)), { recursive: true });
+    // A junction on Windows needs no privilege; elsewhere the type is ignored.
+    await symlink(other, join(worktree, rel), "junction");
+    return other;
+  }
+
+  test("a real .alpackages under a LINKED fixture folder is listed too (its real path leaves the worktree)", async () => {
+    await setup();
+    const other = join(root, "other-lane", "fixtures", "sandbox-tests");
+    await mkdir(join(other, ".alpackages"), { recursive: true });
+    await mkdir(join(worktree, "fixtures"), { recursive: true });
+    await symlink(other, join(worktree, "fixtures", "sandbox-tests"), "junction");
+    expect(symlinkedAlpackages(worktree)).toEqual([
+      join("fixtures", "sandbox-tests", ".alpackages"),
+    ]);
+    const err = await refusal(prepare());
+    expect(err.message).toContain("fixture-alpackages-symlink");
+    expect(readdirSync(join(other, ".alpackages"))).toEqual([]);
+  });
+
+  test("symlinkedAlpackages lists exactly the links under fixtures/ and examples/", async () => {
+    await setup();
+    await mkdir(join(worktree, "fixtures", "real", ".alpackages"), { recursive: true });
+    expect(symlinkedAlpackages(worktree)).toEqual([]);
+    await linkInto("fixtures/linked/.alpackages");
+    await linkInto("examples/ex/.alpackages");
+    expect(symlinkedAlpackages(worktree)).toEqual([
+      join("fixtures", "linked", ".alpackages"),
+      join("examples", "ex", ".alpackages"),
+    ]);
+  });
+
+  test("prepareFixtureSymbols refuses by name before it writes anything, through the link or elsewhere", async () => {
+    await setup();
+    const other = await linkInto("fixtures/sandbox-tests/.alpackages");
+    const err = await refusal(prepare());
+    expect(err.message).toContain("fixture-alpackages-symlink");
+    expect(err.message).toContain(join("fixtures", "sandbox-tests", ".alpackages"));
+    expect(readdirSync(other)).toEqual(["Theirs.app"]);
+    expect(existsSync(marker())).toBe(false);
+    expect(existsSync(join(worktree, A))).toBe(false);
+  });
+
+  test("other direction: real folders extract as before", async () => {
+    await setup();
+    await mkdir(join(worktree, "fixtures", "sandbox-tests", ".alpackages"), { recursive: true });
+    expect(await prepare()).toBe("extracted");
+  });
+
+  test("printItestTarget refuses a worktree with a link, before any line; a real folder prints", async () => {
+    await setup();
+    const cfg = join(root, "lethal.config.x.json");
+    // Not a bc1-bc3 host, so no out-of-use marker is read.
+    await writeFile(
+      cfg,
+      JSON.stringify({ bcdev: { server: "http://cronus28:7049", serverInstance: "BC" } }),
+    );
+    const lines: string[] = [];
+    const log = console.log;
+    console.log = (...a: unknown[]) => lines.push(a.join(" "));
+    try {
+      await mkdir(join(worktree, "fixtures", "sandbox-app", ".alpackages"), { recursive: true });
+      printItestTarget(cfg, undefined, { dir: join(root, "markers"), env: {}, repoRoot: worktree });
+      expect(lines.filter((l) => l.includes("[itest target]"))).toHaveLength(1);
+      lines.length = 0;
+      await linkInto("fixtures/sandbox-harden-tests/.alpackages");
+      expect(() =>
+        printItestTarget(cfg, undefined, {
+          dir: join(root, "markers"),
+          env: {},
+          repoRoot: worktree,
+        }),
+      ).toThrow(SymlinkedAlpackagesError);
+      expect(lines).toEqual([]);
+    } finally {
+      console.log = log;
+    }
+  });
+
+  test(".gitignore ignores an .alpackages that is not a directory (a link)", () => {
+    const repo = join(import.meta.dir, "..", "..", "..");
+    // --no-index: the path need not exist; a non-existing path is matched as a non-directory,
+    // which a trailing-slash pattern would not match.
+    const r = spawnSync("git", [
+      "-C",
+      repo,
+      "check-ignore",
+      "--no-index",
+      "-q",
+      "fixtures/zz-r787/.alpackages",
+    ]);
+    expect(r.status).toBe(0);
+  });
 });
