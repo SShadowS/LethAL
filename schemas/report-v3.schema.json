@@ -1230,7 +1230,8 @@
             "type": "string",
             "enum": [
               "compiled-out",
-              "preproc-undecided-kept"
+              "preproc-undecided-kept",
+              "exclude-test"
             ]
           }
         }

@@ -161,6 +161,34 @@ function admittedTestFiles(
   return admitted;
 }
 
+/** R745: the comparison form of a test name: quotes dropped, lower case. */
+const nameKey = (s: string): string => s.replaceAll('"', "").toLowerCase();
+
+/**
+ * R745: `--exclude-test`. Splits `suite` into the tests the named `Codeunit.Method` entries leave
+ * out and the rest. The whole string is matched against `codeunitName.method`, ignoring case and
+ * `"`. `unmatched` lists every name (as given) that matched no test in `suite`; the caller refuses
+ * on it, so a typo cannot silently exclude nothing.
+ */
+export function excludeNamedTests(
+  suite: readonly TestMethodRef[],
+  names: readonly string[],
+): { kept: TestMethodRef[]; excluded: TestMethodRef[]; unmatched: string[] } {
+  const wanted = new Map(names.map((n) => [nameKey(n), n]));
+  const hit = new Set<string>();
+  const kept: TestMethodRef[] = [];
+  const excluded: TestMethodRef[] = [];
+  for (const t of suite) {
+    const key = nameKey(`${t.codeunitName}.${t.method}`);
+    if (wanted.has(key)) {
+      hit.add(key);
+      excluded.push(t);
+    } else kept.push(t);
+  }
+  const unmatched = [...wanted].filter(([k]) => !hit.has(k)).map(([, n]) => n);
+  return { kept, excluded, unmatched };
+}
+
 /**
  * Every `[Test]` one AL SOURCE STRING declares, attributed to its codeunit.
  *

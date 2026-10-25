@@ -313,6 +313,14 @@ async function lethalRun(server: ServerName) {
     join(OUT, "report.json"),
     "--progress-out",
     join(OUT, "events.ndjson"),
+    // R745: `--exclude-test <name>` (repeatable) is passed through to `lethal run`.
+    ...process.argv.flatMap((a, i, all) => {
+      if (a !== "--exclude-test") return [];
+      const name = all[i + 1];
+      if (name === undefined || name.startsWith("--"))
+        throw new Refused("--exclude-test needs a test name");
+      return ["--exclude-test", name];
+    }),
   ];
   const p = Bun.spawn(argv, {
     cwd: REPO,

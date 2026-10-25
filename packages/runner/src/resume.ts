@@ -384,6 +384,9 @@ export interface SessionFingerprintInput {
   readonly operators?: readonly string[];
   readonly lines?: readonly LineRange[];
   readonly testsOnly?: readonly string[];
+  /** R745: the discovered `Codeunit.Method` names `--exclude-test` left out. In the digest only
+   *  when non-empty, so every run without the flag keeps its digest. Sorted: order selects nothing. */
+  readonly excludeTests?: readonly string[];
   /** C02-06, R214: the EFFECTIVE `alc` preprocessor symbols (config plus app.json), so an app.json
    *  change also breaks a resume. `#if` branches compile differently under other symbols, and
    *  R192's baseline key hashes AL bytes only, so a resume across a symbol change would carry
@@ -477,6 +480,10 @@ export function sessionFingerprint(input: SessionFingerprintInput): string {
       ? { lines: [...input.lines].map((r) => `${r.file}:${r.start}-${r.end}`).sort() }
       : {}),
     testsOnly: input.testsOnly === undefined ? null : [...input.testsOnly].sort(),
+    // R745: conditional and only when non-empty.
+    ...(input.excludeTests !== undefined && input.excludeTests.length > 0
+      ? { excludeTests: [...input.excludeTests].sort() }
+      : {}),
     // C02-06: conditional and only when non-empty, like `exclude`, so a run with no symbols keeps
     // the digest every store recorded before this key existed. Sorted: order selects nothing.
     ...(input.preprocessorSymbols !== undefined && input.preprocessorSymbols.length > 0

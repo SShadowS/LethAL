@@ -1046,6 +1046,14 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     ]);
   });
 
+  test("R745: excludedTests[].reason names the --exclude-test reason", () => {
+    expect(enumAt(reportSchema, "$.excludedTests[].reason")).toEqual([
+      "compiled-out",
+      "preproc-undecided-kept",
+      "exclude-test",
+    ]);
+  });
+
   test("a report written by THIS build validates against the report schema", () => {
     // Real data, and redacted data: redaction replaces two string fields, so a report that stopped
     // validating afterwards would mean the schema disagrees with the redactor.
