@@ -196,9 +196,11 @@ Both run as the other legs do (`runSession`, the v3 backend, one-shot, coverage 
 leg uses it: every figure on this page is N = 1 (no `--workers`). A run refuses `--workers > 1` by name when the
 transport is not serve-entries, when the build's pin does not retire the §6 Sleep rule, or above 8. On master the
 Sleep-rule check always refuses (R768 wires it), so `--workers > 1` runs nowhere yet; a new build needs its own pin
-before it is allowed. A lane beyond lane 0 starts only with 10 GB available. Under N > 1 the first latch
+before it is allowed. A lane beyond lane 0 starts only with 10 GB available, and the run starts the largest n of the N lanes with n x 2.3 GB + 10 GB available (one serve daemon peaks about 2.2 GB RSS on D1), saying so once. Under N > 1 the first latch
 (`batchBlind`, `entriesRefused`) or session-stopping error ends the session with an error that names the cause and
-the discarded mutants; only the mutants before it in manifest order, and it, are recorded. The per-mutant table at
+the discarded mutants. Recorded: mutants that finished before the stop and come before the stopping one in manifest
+order, and the stopping mutant only if N = 1 would have recorded it (a throw before its record discards it).
+Earlier-index mutants still in flight at the stop are discarded too. Which stop comes first can depend on timing. The per-mutant table at
 N > 1 must equal N = 1; that proof is step (c) in R766.
 
 ## The pin and the update gate

@@ -158,6 +158,59 @@ describe("OrderedCommit: the stop rule", () => {
       expect(err.message).toContain("Also seen: Error: second cause");
     }
   });
+
+  test("a latch is the cause even when its mutant then throws before its record", () => {
+    const { commit, latch } = setup();
+    const a = commit.laneSink();
+    a.sink.begin("M1");
+    latch.value = { mutantId: "M1", why: "entriesRefused: scripted" };
+    commit.fail(a.current(), new Error("the latcher then threw"));
+    try {
+      commit.conclude();
+      throw new Error("conclude did not throw");
+    } catch (e) {
+      const msg = (e as ParallelStopError).message;
+      expect(msg).toContain("the batch latched on M1: entriesRefused: scripted");
+      expect(msg).toContain("Also seen: Error: the latcher then threw");
+    }
+  });
+
+  test("an error that closes the latch stop in finish() is named once, not again by fail()", () => {
+    const { commit, latch, rec } = setup();
+    const a = commit.laneSink();
+    a.sink.begin("M0");
+    latch.value = { mutantId: "M0", why: "batchBlind: scripted" };
+    const err = new Error("transport abort");
+    a.sink.finish("M0", rec("M0"), err);
+    commit.fail(a.current(), err);
+    try {
+      commit.conclude();
+      throw new Error("conclude did not throw");
+    } catch (e) {
+      const msg = (e as ParallelStopError).message;
+      expect(msg.split("transport abort").length - 1).toBe(1);
+    }
+  });
+});
+
+describe("OrderedCommit: a session with no stop must have recorded every mutant", () => {
+  test("a mutant that never finished makes conclude() throw by name, naming it", () => {
+    const { commit, rec } = setup();
+    const a = commit.laneSink().sink;
+    for (const c of CODES) if (c !== "M2") commit.markDone(c);
+    a.begin("M0"); // never finishes
+    expect(() => commit.conclude()).toThrow(/never finished or recorded: M2/);
+  });
+
+  test("all recorded: conclude() is quiet", () => {
+    const { commit, rec } = setup();
+    const a = commit.laneSink().sink;
+    for (const c of CODES) {
+      a.begin(c);
+      a.finish(c, rec(c));
+    }
+    expect(() => commit.conclude()).not.toThrow();
+  });
 });
 
 describe("runScopeQueue: the pull queue", () => {

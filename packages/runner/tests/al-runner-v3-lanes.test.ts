@@ -9,6 +9,7 @@ import {
   AlRunnerV3Backend,
   AlRunnerV3UnprovenBatchError,
   LANE_MIN_AVAILABLE_BYTES,
+  LANE_RSS_BYTES,
 } from "../src/al-runner-v3-backend";
 import { hashAlTree } from "../src/baseline-snapshot";
 import {
@@ -243,6 +244,10 @@ describe("per-lane state", () => {
     // Lane 1 works in between (activate(null) and a run both reach `dropPair`).
     await v1.activate(null);
     expect((await v1.run(B, OPTS)).outcome).toBe("pass");
+    // ... and so do useCoveringBudgets and sendKillPair for another mutant (each drops a pair first).
+    await v1.activate("M0002");
+    v1.useCoveringBudgets("M0002", [{ ref: A, budgetMs: 1000 }]);
+    await v1.sendKillPair("M0002", A);
     const n1 = r.serve.requests.length;
     await v0.activate(null);
     expect((await v0.run(A, OPTS)).outcome).toBe("pass"); // the confirm, from the pair
@@ -367,6 +372,19 @@ describe("the parallel gate: refusals and the memory hold", () => {
     expect(b.parallelRefusal()).toBeUndefined();
   });
 
+  test("a resume session is refused by name, even with an explicit serve-entries transport", async () => {
+    const b = mk("serve-entries");
+    b.seams.sleepRuleRetired = true;
+    await b.decideTransport({ resume: false });
+    expect(b.parallelRefusal()).toBeUndefined();
+    await b.decideTransport({ resume: true });
+    expect(b.parallelRefusal()).toMatch(/refused with --resume/);
+  });
+
+  test("lanes() needs the serve-entries transport (R515's re-budget is per scope under lanes)", () => {
+    expect(() => mk("one-shot").lanes(2)).toThrow(/needs the serve-entries transport/);
+  });
+
   test("any transport but serve-entries is refused by name, retired or not", () => {
     const b = mk("one-shot");
     for (const retired of [false, true]) {
@@ -390,5 +408,30 @@ describe("the parallel gate: refusals and the memory hold", () => {
     avail = LANE_MIN_AVAILABLE_BYTES;
     expect(b.laneMayStart(1)).toBe(true);
     expect(notices).toHaveLength(1);
+  });
+
+  test("the fit check: N lanes start when N x 2.3 GB + 10 GB is available", () => {
+    const b = mk("serve-entries");
+    b.seams.availableBytes = () => 4 * LANE_RSS_BYTES + LANE_MIN_AVAILABLE_BYTES;
+    const notices: string[] = [];
+    b.setNotify((code, message) => notices.push(`${code}: ${message}`));
+    expect(b.affordableLanes(4)).toBe(4);
+    expect(notices).toEqual([]);
+  });
+
+  test("the fit check: fewer lanes start when they do not fit, one notice names N asked, n started and the GB", () => {
+    const b = mk("serve-entries");
+    b.seams.availableBytes = () => 3 * LANE_RSS_BYTES + LANE_MIN_AVAILABLE_BYTES + 1;
+    const notices: string[] = [];
+    b.setNotify((code, message) => notices.push(`${code}: ${message}`));
+    expect(b.affordableLanes(5)).toBe(3);
+    expect(b.affordableLanes(5)).toBe(3);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain("al-runner-v3-lane-memory-fit");
+    expect(notices[0]).toContain("5 lanes asked, 3 started");
+    expect(notices[0]).toContain("16.9 GB available");
+    // Not even two fit: one lane (lane 0 is never held by the fit check).
+    b.seams.availableBytes = () => 0;
+    expect(b.affordableLanes(5)).toBe(1);
   });
 });

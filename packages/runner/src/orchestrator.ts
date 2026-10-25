@@ -11902,19 +11902,18 @@ function prefetchPlans(
  */
 async function runMutantsParallel(
   args: Omit<RunMutantsArgs, "backend" | "sink" | "skipPrefetch"> & {
-    readonly owner: ExecutionBackend & { latched?: Latch; laneMayStart?: (k: number) => boolean };
+    readonly owner: ExecutionBackend & {
+      latched?: Latch;
+      laneMayStart?: (k: number) => boolean;
+      affordableLanes?: (n: number) => number;
+    };
     readonly lanes: readonly ExecutionBackend[];
   },
 ): Promise<void> {
   const { owner, lanes, ...rest } = args;
   await owner.prefetchMutants?.(prefetchPlans(args));
-  const probe: Latch = () => {
-    for (const l of lanes) {
-      const got = (l as { latched?: Latch }).latched?.();
-      if (got !== undefined) return got;
-    }
-    return undefined;
-  };
+  // The latch is shared by every lane: the owner's is the one to read.
+  const probe: Latch = () => owner.latched?.();
   const commit = new OrderedCommit(
     args.mutants.map((m) => m.mutantId),
     probe,
@@ -11933,7 +11932,7 @@ async function runMutantsParallel(
   }
   await runScopeQueue({
     units: [...units.values()],
-    lanes: lanes.length,
+    lanes: owner.affordableLanes?.(lanes.length) ?? lanes.length,
     mayStart: (k) => owner.laneMayStart?.(k) ?? true,
     commit,
     isUnsafe: () => args.safety.isUnsafe,

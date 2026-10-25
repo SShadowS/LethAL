@@ -101,7 +101,7 @@ export class ParallelStopError extends Error {
         discarded.length === 0
           ? "No mutant was discarded."
           : `${discarded.length} mutant(s) were in flight or finished after the stop and are NOT scored (their results are discarded, never recorded): ${discarded.join(", ")}.`
-      }${alsoSeen.length > 0 ? ` Also seen: ${alsoSeen.join(" | ")}.` : ""} Mutants before the stopping one in manifest order are kept. Re-run with --workers 1 to see the same stop in manifest order.`,
+      }${alsoSeen.length > 0 ? ` Also seen: ${alsoSeen.join(" | ")}.` : ""} Only mutants that finished before the stop and come before the stopping one in manifest order are kept. Which stop comes first can depend on timing; --workers 1 runs in manifest order.`,
       cause !== undefined ? { cause } : undefined,
     );
     this.name = "ParallelStopError";
@@ -221,13 +221,7 @@ export class OrderedCommit {
     if (this.stopInfo === undefined) {
       const l = this.latch();
       if (l !== undefined) {
-        const li = this.index.get(l.mutantId) ?? -1;
-        this.closeWith({
-          selfIdx: li,
-          selfKept: li >= 0,
-          cause: `the batch latched on ${l.mutantId}: ${l.why}`,
-        });
-        if (stop !== undefined) this.also.push(messageOf(stop));
+        this.latchStop(l, stop);
       } else if (stop !== undefined) {
         this.closeWith({ selfIdx: i, selfKept: true, cause: messageOf(stop), error: stop });
       } else {
@@ -261,6 +255,12 @@ export class OrderedCommit {
       if (s.error !== err) this.also.push(messageOf(err));
       return;
     }
+    // A latch already set is the cause (the ruling names it), even if its mutant then throws.
+    const l = this.latch();
+    if (l !== undefined) {
+      this.latchStop(l, err);
+      return;
+    }
     this.closeWith({
       selfIdx: code === undefined ? 0 : this.idx(code),
       selfKept: false,
@@ -269,11 +269,30 @@ export class OrderedCommit {
     });
   }
 
+  private latchStop(l: { readonly mutantId: string; readonly why: string }, err?: unknown): void {
+    const li = this.index.get(l.mutantId) ?? -1;
+    this.closeWith({
+      selfIdx: li,
+      selfKept: li >= 0,
+      cause: `the batch latched on ${l.mutantId}: ${l.why}`,
+      ...(err instanceof Error ? { error: err } : {}),
+    });
+    // The error that follows is named once: `fail()` skips an error equal to the stop's own.
+    if (err !== undefined) this.also.push(messageOf(err));
+  }
+
   /** After every lane ended: nothing, or the stop as an error. */
   conclude(): void {
     const s = this.stopInfo;
     if (s === undefined) {
       this.flush();
+      // A mutant that never reached finish/markDone would block every later record and read green.
+      if (this.next !== this.codes.length) {
+        const missing = this.codes.filter((_, i) => i >= this.next && !this.committed.has(i));
+        throw new Error(
+          `al-runner-v3 --workers ${this.workers}: ${missing.length} mutant(s) were never finished or recorded: ${missing.join(", ")}; refusing to read the session as complete (R766)`,
+        );
+      }
       return;
     }
     if (s.benign === true) return;

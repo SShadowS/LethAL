@@ -655,6 +655,8 @@ export interface V3LaneView extends ExecutionBackend {
 
 /** R766 (b): a lane beyond lane 0 starts only while this much memory is available (10 GB). */
 export const LANE_MIN_AVAILABLE_BYTES = 10 * 2 ** 30;
+/** R766 (b): one serve daemon peaks about 2.2 GB RSS on D1 (measured); 2.3 GB is budgeted per lane. */
+export const LANE_RSS_BYTES = 2.3 * 2 ** 30;
 
 /** A started serve daemon; `dirty` closes it after the §5 window in flight (R612 on a plain request). */
 interface Daemon {
@@ -930,6 +932,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     afterLaneCopy?: (dir: string) => Promise<void>;
   } = {};
   private memoryHoldNoticed = false;
+  private fitNoticed = false;
+  /** R766 (b): the `resume` fact `decideTransport` was given. */
+  private resumeSession = false;
   /** §3 (N2): a live warm-up refusal; every later run is a transport failure. */
   private entriesRefused: string | undefined;
   /** §2: the echo codeunit, `selectorIds.controlId` of the deployed manifest. */
@@ -1243,6 +1248,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * reason holds; then one-shot and ONE warning naming every reason.
    */
   async decideTransport(facts: { readonly resume: boolean }): Promise<void> {
+    this.resumeSession = facts.resume; // R766 (b): `parallelRefusal` reads it, whatever the transport
     if (this.cfg.transportSource === undefined) return; // an internal caller's own transport
     if (this.cfg.transportSource === "explicit") {
       if (this.cfg.transport === "serve-entries") {
@@ -1571,6 +1577,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (!Number.isInteger(n) || n < 2) {
       throw new Error(`al-runner-v3-lane-misuse: lanes(${n}): N must be an integer of 2 or more`);
     }
+    // R515's re-budget (`measuredToday`) is per scope under lanes; it is off only while the in-run stop
+    // is not the budget, which is true exactly in serve-entries.
+    if (this.inRunStopIsBudget) {
+      throw new Error(
+        "al-runner-v3-lane-misuse: lanes(N) needs the serve-entries transport (inRunStopIsBudget must be false)",
+      );
+    }
     if (this.proof !== undefined) {
       throw new Error(
         "al-runner-v3-lane-misuse: lanes(N) must be called before the first deploy()",
@@ -1627,6 +1640,25 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
 
   /**
+   * R766 (b): how many of `n` lanes to start. The largest k with k x 2.3 GB + 10 GB <= available, at
+   * least 1 (lane 0's own floor is the per-lane hold's business). One notice names N asked, k started
+   * and the available GB. The per-lane hold (`laneMayStart`) still applies to each lane.
+   */
+  affordableLanes(n: number): number {
+    const avail = (this.seams.availableBytes ?? freemem)();
+    let k = n;
+    while (k > 1 && k * LANE_RSS_BYTES + LANE_MIN_AVAILABLE_BYTES > avail) k -= 1;
+    if (k < n && !this.fitNoticed) {
+      this.fitNoticed = true;
+      this.notify(
+        "al-runner-v3-lane-memory-fit",
+        `[lethal] al-runner-v3-lane-memory-fit: ${(avail / 2 ** 30).toFixed(1)} GB available; ${n} lanes asked, ${k} started (each lane needs ${(LANE_RSS_BYTES / 2 ** 30).toFixed(1)} GB, and ${LANE_MIN_AVAILABLE_BYTES / 2 ** 30} GB must stay free) (R766).`,
+      );
+    }
+    return k;
+  }
+
+  /**
    * R766 (b): the memory hold. A lane beyond lane 0 may start only while at least 10 GB is available;
    * under that the caller stays at the lanes it has, and one notice says so. `os.freemem()` is the
    * kernel's available figure on Linux (libuv reads MemAvailable).
@@ -1650,6 +1682,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * parallel. Asked after `decideTransport`.
    */
   parallelRefusal(): string | undefined {
+    if (this.resumeSession) {
+      return "al-runner-v3-workers-refused: --workers > 1 is refused with --resume / --resume-run: a reused baseline has no rows for the lanes' serve warm-up (R766)";
+    }
     if (!this.entries) {
       return 'al-runner-v3-workers-refused: --workers > 1 needs the serve-entries transport; this session runs one-shot (set "alRunnerV3.transport" to "serve-entries", or see the al-runner-v3-serve-default-fallback warning for why the default fell back) (R766)';
     }
