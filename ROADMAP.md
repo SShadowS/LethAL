@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**23 of 747 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**23 of 748 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -762,7 +762,7 @@ that ordering is the priority.
 - **R683** · Host step: re-record `envtool.baseline.json` at the current identity scheme on the next live envtool run (it is the last gate baseline with no scheme and no mutated-text hash) · [R683.md](docs/roadmap/R683.md) · open, filed 2026-10-23 — a HOST step for the owner (the env tool is host-only)
 - **R686** · bcdev: a test codeunit whose OnRun raises an error gets no method lines on BC, and LethAL reports it as a stale test app and stops the run · [R686.md](docs/roadmap/R686.md) · done (388ea7c9)
 - **R688** · bcdev: a mutant that makes a test codeunit's OnRun raise stops the whole session; score it per mutant instead (an unmutated confirm, then error test-discovery-failed) · [R688.md](docs/roadmap/R688.md) · done (918f9222)
-- **R689** · LethAL Control could report a test codeunit's own OnRun error when suite discovery lists none of its methods (today LethAL can only name the likely cause) · [R689.md](docs/roadmap/R689.md) · open, filed 2026-10-23
+- **R689** · LethAL Control could report a test codeunit's own OnRun error when suite discovery lists none of its methods (today LethAL can only name the likely cause) · [R689.md](docs/roadmap/R689.md) · open, measured 2026-10-25 (R-689 phase 1); build after the talk
 - **R691** · hashAlFiles drops a file named like a LethAL control file at ANY folder depth, so such a user file is in no hash while v3 and alc still compile it · [R691.md](docs/roadmap/R691.md) · done (d43ed20c)
 - **R693** · Leg C's timeout-is-cpu flips with core-0 conditions; every v3 leg C and the daily update gate read gate-fail · [R693.md](docs/roadmap/R693.md) · done (b9942236)
 - **R694** · al-runner v3 marks a later failure after a refusal as not trusted but not a later timeout; LethAL now refuses such a timeout · [R694.md](docs/roadmap/R694.md) · done (aa970869)
@@ -789,8 +789,9 @@ that ordering is the priority.
 - **R742** · run-mutant-many P6 is timing-dependent: a stalled Windows CI runner turns its expected `timeout` into `deadline-exceeded` · [R742.md](docs/roadmap/R742.md) · done (97f69cd3)
 - **R746** · `fenced-coverage-no-procedure-lines` fires for a test that runs only a trigger body (a field's OnValidate), not only on a real line-map frame fault · [R746.md](docs/roadmap/R746.md) · done (eed3d729)
 - **R747** · The generated selector codeunit gives almost every non-narrowed test a member entry, so a base-line fault on target objects cannot raise `fenced-coverage-no-procedure-lines` · [R747.md](docs/roadmap/R747.md) · done (83741bbf)
-- **R748** · A naming gap in an object that also has member rows raises no warning · [R748.md](docs/roadmap/R748.md) · open, filed 2026-10-24 (from coord task R-747)
+- **R748** · A naming gap in an object that also has member rows raises no warning · [R748.md](docs/roadmap/R748.md) · done (037fc880)
 - **R750** · Wrong comment in a tables-gate fixture: a pageextension's procedures ARE callable from a test codeunit (measured on BC 28.4) · [R750.md](docs/roadmap/R750.md) · done (a3ae069b)
+- **R753** · A row inside an R318 renamed split member with no coverage name counts as a naming gap, so beside a named member it raises a false `fenced-coverage-gap-beside-members` · [R753.md](docs/roadmap/R753.md) · open, filed 2026-10-25 (from coord task R-748)
 - **R754** · The R402 shape sweep ran only by hand, so a reader change dropped a mutant unnoticed (R752); its spec counts are now pinned in the unit suite · [R754.md](docs/roadmap/R754.md) · done (1a01935c)
 
 ---
