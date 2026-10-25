@@ -13,6 +13,11 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **tree-sitter-al 4.4.1 to 4.5.0, built on a branch and held for the merge window** (R796, R801). Members that 4.4.1 swallowed
+  into a global `var` section (R720, R327) are direct members; seven new statement containers are classified (none adds a
+  slot); `IDENTITY_SCHEME` 43. A loop condition's `#if` prefix is now read by the hang check (`loop-hazard.ts`), because 4.5.0
+  admits shapes 4.4.1 refused. Predicted corpus moves: BC.History +98 -14 and 2 ordinals, DC +3, fixtures, CDO and DO identical.
+  The vendored WASM reference is the v4.5.0 release asset.
 - **Tests with their own short timeout get 60 s on the Windows CI job** (R726c): `ownTimeout()` in
   `@lethal/engine/own-timeout` raises a test's own timeout to at least verify's shared 60 s there, because a test's own
   timeout wins over `--timeout`. Verify tells the test child through `LETHAL_VERIFY_OWN_TIMEOUT_FLOOR`, set only on

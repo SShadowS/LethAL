@@ -179,7 +179,8 @@ const TABLE_D = `table 50305 "D Tab"
 }
 `;
 
-// R405 (a): `#if and` cannot be evaluated (R214: unparsed-condition), so this FILE is undecided. A
+// R405 (a): a directive line inside a block comment cannot be evaluated (R214: marker-mismatch; R796:
+// the old `#if and` no longer parses cleanly under tree-sitter-al 4.5.0), so this FILE is undecided. A
 // direct trigger in an undecided file is found, as before; a trigger INSIDE the undecided `#if` is
 // not, because the first arm in the text would otherwise win (plan r2 point 2).
 const TABLE_UD = `table 50307 "UD Tab"
@@ -196,7 +197,10 @@ const TABLE_UD = `table 50307 "UD Tab"
     begin
         Error('m');
     end;
-#if and
+/*
+#if Z
+*/
+#if X
     trigger OnDelete()
     begin
         Error('d');

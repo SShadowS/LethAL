@@ -369,9 +369,11 @@ const GOLDEN: Readonly<Record<string, string>> = {
     "772a4d1539c6fd4f292d7fa00385a9c2429c70929393e419579bc4865e47d7fd",
   "generic wasm lone surrogate literal":
     "772a4d1539c6fd4f292d7fa00385a9c2429c70929393e419579bc4865e47d7fd",
-  "flat ERROR": "d1f9bd2de56688c7dde33bfde9b5eeb50ce1f7d0680ef7dd49c6ff239d731474",
-  "generic mirror ERROR": "d1f9bd2de56688c7dde33bfde9b5eeb50ce1f7d0680ef7dd49c6ff239d731474",
-  "generic wasm ERROR": "d1f9bd2de56688c7dde33bfde9b5eeb50ce1f7d0680ef7dd49c6ff239d731474",
+  // R796: tree-sitter-al 4.5.0 recovers `X := (A + ;` with a different ERROR tree; native, mirror and
+  // the 4.5.0 WASM agree on the new hash (4.4.1: d1f9bd2d...).
+  "flat ERROR": "19f44db7781b167669ef2e9a7452a17fbdcb93be31604d0f6cde2a54646e72c0",
+  "generic mirror ERROR": "19f44db7781b167669ef2e9a7452a17fbdcb93be31604d0f6cde2a54646e72c0",
+  "generic wasm ERROR": "19f44db7781b167669ef2e9a7452a17fbdcb93be31604d0f6cde2a54646e72c0",
   "flat MISSING": "72dd10f1f80a7c728da5ff18c3146d8b16180244025c9e91124f8abd1c584158",
   "generic mirror MISSING": "72dd10f1f80a7c728da5ff18c3146d8b16180244025c9e91124f8abd1c584158",
   "generic wasm MISSING": "72dd10f1f80a7c728da5ff18c3146d8b16180244025c9e91124f8abd1c584158",

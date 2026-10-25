@@ -140,7 +140,7 @@ describe("R295 + with-scope: the deployed manifest", () => {
 });
 
 describe("R295: a #if between two names of one declaration", () => {
-  test("is not half-read: the file is excluded as undecided, as before", async () => {
+  test("is read as one declaration under 4.5.0: the file is admitted (4.4.1 excluded it as undecided)", async () => {
     const { set } = await instrument({
       "P2.Codeunit.al": `codeunit 92651 "R295 Split Names"
 {
@@ -157,13 +157,15 @@ describe("R295: a #if between two names of one declaration", () => {
 }
 `,
     });
-    expect(set.files).toEqual([]);
-    expect(set.preprocExcluded.map((e) => [e.file, e.reason])).toEqual([
-      ["P2.Codeunit.al", "preproc-undecided"],
+    // R796: tree-sitter-al 4.5.0 reads the shape as one declaration (A, a conditional B, and C share
+    // the type), so the file is ADMITTED, not excluded (4.4.1: ERROR nodes, preproc-undecided).
+    expect(set.preprocExcluded).toEqual([]);
+    expect(set.files.map((f) => f.specs.map((s) => s.operatorName))).toEqual([
+      ["lethal.empty-block", "lethal.remove-assignment", "lethal.shift-integer"],
     ]);
   });
 });
 
-test("R295/R294: the identity scheme is 42 (11 for R295/R294, 13 R455, 14 R454, 16 R-364, 17 R254, 18 R-458, 19 R468, 20, 23 and 31 unused, 21 R459, 22 R-464, 24 R475, 25 R446, 26 R477, 27 R480, 28 R484, 29 R-300b, 30 R487, 32 R509, 33 R501, 34 R343, 35 R500, 36 R497, 37 R340, 38 R555, 39 R-531, 40 R565, 41 R572, 42 R-604b)", () => {
-  expect(IDENTITY_SCHEME).toBe(42);
+test("R295/R294: the identity scheme is 43 (11 for R295/R294, 13 R455, 14 R454, 16 R-364, 17 R254, 18 R-458, 19 R468, 20, 23 and 31 unused, 21 R459, 22 R-464, 24 R475, 25 R446, 26 R477, 27 R480, 28 R484, 29 R-300b, 30 R487, 32 R509, 33 R501, 34 R343, 35 R500, 36 R497, 37 R340, 38 R555, 39 R-531, 40 R565, 41 R572, 42 R-604b, 43 R796)", () => {
+  expect(IDENTITY_SCHEME).toBe(43);
 });

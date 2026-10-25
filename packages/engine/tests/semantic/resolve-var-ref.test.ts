@@ -205,14 +205,15 @@ describe("resolveVarRef: split members (R302)", () => {
   });
 });
 
-// R327: a split member swallowed by the global var section is not indexed; its own names resolve
-// to nothing, never to a global of the same name.
-describe("resolveVarRef: a swallowed split member (R327)", () => {
+// R327: a split member after the global var section. R796 (tree-sitter-al 4.5.0): it is now a direct
+// member of the object body, no longer swallowed by the var section, so its own names resolve to its
+// own declaration, never to a global of the same name (4.4.1 parsed it inside the var section: null).
+describe("resolveVarRef: a split member after the global var section (R327)", () => {
   beforeAll(async () => {
     await initParser();
   });
 
-  it("a name in the swallowed member resolves to null, not to the global", () => {
+  it("a name in the split member resolves to its own parameter, not to the global", () => {
     const { root, ctx } = load(`codeunit 50203 "R"
 {
     var
@@ -228,7 +229,7 @@ describe("resolveVarRef: a swallowed split member (R327)", () => {
     end;
 }
 `);
-    expect(resolveVarRef(useOf(root, "Amount"), ctx)).toBeNull();
+    expect(resolveVarRef(useOf(root, "Amount"), ctx)?.typeText).toBe("Decimal");
   });
 });
 

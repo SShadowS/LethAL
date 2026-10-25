@@ -1594,6 +1594,18 @@ describe("R297: the selector var is inserted after the leading declarations", ()
     return n.namedChildren.some((c) => c.rawKind === rawKind);
   }
 
+  /** R796: does the tree hold a node of this raw kind anywhere? */
+  function hasRaw(n: ALSyntaxNode, rawKind: string): boolean {
+    return n.rawKind === rawKind || n.namedChildren.some((c) => hasRaw(c, rawKind));
+  }
+
+  /**
+   * R796: tree-sitter-al 4.5.0 no longer swallows a `#if` procedure, attribute or split procedure
+   * into the object's `var_body` (4.4.1 did, as `preproc_conditional_var` / `preproc_split_procedure`
+   * children): the var section keeps its declarations and the `#if` is a SIBLING member. The tests
+   * below pin that shape; the injector's assertions (one selector, after the declarations, before the
+   * `#if`) are unchanged and now hold by the plain path.
+   */
   function assignment(root: ALSyntaxNode, text: string): ALSyntaxNode {
     const a = findAll(root, ALNodeKind.assignment_statement).find((n) => n.text === text);
     if (a === undefined) throw new Error(`fixture drift: no assignment ${text}`);
@@ -1630,10 +1642,8 @@ describe("R297: the selector var is inserted after the leading declarations", ()
 `;
     const root = wrapRoot(parseAL(src));
     const body = objectVarBody(root);
-    expect(body.map((c) => c.rawKind)).toEqual(["variable_declaration", "preproc_conditional_var"]);
-    const [, cond] = body;
-    if (cond === undefined) throw new Error("fixture drift");
-    expect(holds(cond, "procedure")).toBe(true);
+    expect(body.map((c) => c.rawKind)).toEqual(["variable_declaration"]);
+    expect(holds(root, "preproc_conditional") || hasRaw(root, "preproc_conditional")).toBe(true);
     const out = compileSchemataForFile(src, root, [
       spec(assignment(root, "L := 1"), "L := 2", "lethal.op"),
     ]);
@@ -1666,16 +1676,13 @@ describe("R297: the selector var is inserted after the leading declarations", ()
 }
 `;
     const root = wrapRoot(parseAL(src));
-    const body = objectVarBody(root);
-    expect(body.map((c) => c.rawKind)).toEqual(["preproc_conditional_var"]);
-    const [cond] = body;
-    if (cond === undefined) throw new Error("fixture drift");
-    expect(holds(cond, "procedure")).toBe(true);
-    const out = compileSchemataForFile(src, root, [
-      spec(assignment(root, "L := 1"), "L := 2", "lethal.op"),
-    ]);
-    const at = selectorAt(out);
-    expect(out.slice(0, at)).toMatch(/\{\s*var\s*$/);
+    // R796: under tree-sitter-al 4.5.0 an EMPTY `var` followed by a `#if` procedure no longer parses
+    // (4.4.1 swallowed the procedure into the var section): the tree has ERROR nodes, so the
+    // pipeline refuses the file as undecided (R214, pinned end to end by `a-only-swallow` in
+    // `packages/runner/tests/preproc-instrumentation.test.ts`) and this injector never sees it.
+    expect(hasRaw(root, "ERROR")).toBe(true);
+    const section = findFirst(root, ALNodeKind.var_section);
+    expect(section?.children.some((c) => c.rawKind === "var_body")).toBe(false);
   });
 
   it("a-mixed: a #if holding a declaration AND a procedure ends the run, so the selector precedes it", () => {
@@ -1705,10 +1712,9 @@ describe("R297: the selector var is inserted after the leading declarations", ()
 `;
     const root = wrapRoot(parseAL(src));
     const body = objectVarBody(root);
-    expect(body.map((c) => c.rawKind)).toEqual(["variable_declaration", "preproc_conditional_var"]);
-    const [, cond] = body;
-    if (cond === undefined) throw new Error("fixture drift");
-    expect(holds(cond, "variable_declaration") && holds(cond, "procedure")).toBe(true);
+    expect(body.map((c) => c.rawKind)).toEqual(["variable_declaration"]);
+    // R796: a `#if` holding a declaration AND a procedure is `preproc_split_var_section_tail`, a sibling.
+    expect(hasRaw(root, "preproc_split_var_section_tail")).toBe(true);
     const out = compileSchemataForFile(src, root, [
       spec(assignment(root, "L := 1"), "L := 2", "lethal.op"),
     ]);
@@ -1744,10 +1750,8 @@ describe("R297: the selector var is inserted after the leading declarations", ()
 `;
     const root = wrapRoot(parseAL(src));
     const body = objectVarBody(root);
-    expect(body.map((c) => c.rawKind)).toEqual(["variable_declaration", "preproc_conditional_var"]);
-    const [, cond] = body;
-    if (cond === undefined) throw new Error("fixture drift");
-    expect(holds(cond, "attribute_item")).toBe(true);
+    expect(body.map((c) => c.rawKind)).toEqual(["variable_declaration"]);
+    expect(hasRaw(root, "attribute_item")).toBe(true);
     const out = compileSchemataForFile(src, root, [
       spec(assignment(root, "L := 1"), "L := 2", "lethal.op"),
     ]);
@@ -1781,10 +1785,8 @@ describe("R297: the selector var is inserted after the leading declarations", ()
 `;
     const root = wrapRoot(parseAL(src));
     const body = objectVarBody(root);
-    expect(body.map((c) => c.rawKind)).toEqual(["variable_declaration", "preproc_conditional_var"]);
-    const [, cond] = body;
-    if (cond === undefined) throw new Error("fixture drift");
-    expect(holds(cond, "attribute_item") && holds(cond, "procedure")).toBe(true);
+    expect(body.map((c) => c.rawKind)).toEqual(["variable_declaration"]);
+    expect(hasRaw(root, "attribute_item") && hasRaw(root, "procedure")).toBe(true);
     const out = compileSchemataForFile(src, root, [
       spec(assignment(root, "L := 1"), "L := 2", "lethal.op"),
     ]);
@@ -1819,10 +1821,8 @@ describe("R297: the selector var is inserted after the leading declarations", ()
 }
 `;
     const root = wrapRoot(parseAL(src));
-    expect(objectVarBody(root).map((c) => c.rawKind)).toEqual([
-      "variable_declaration",
-      "preproc_split_procedure",
-    ]);
+    expect(objectVarBody(root).map((c) => c.rawKind)).toEqual(["variable_declaration"]);
+    expect(hasRaw(root, "preproc_split_procedure")).toBe(true); // a sibling member, R796
     // The spec sits in B; a spec inside the split procedure is R301's test below.
     const out = compileSchemataForFile(src, root, [
       spec(assignment(root, "G := 2"), "G := 3", "lethal.op"),
@@ -2124,7 +2124,7 @@ const R303_SRC = `codeunit 50100 "Repro D"
 
 /** tree-sitter-al's ERROR count for one nested `#if` inside an ordinary var section's `#if`: a
  *  grammar gap, filed upstream as SShadowS/tree-sitter-al #30. */
-const NESTED_IF_IN_VAR_ERRORS = 3;
+const NESTED_IF_IN_VAR_ERRORS = 2; // R796: 4.5.0 gives 2 ERROR nodes for this gap (4.4.1: 3); still a gap
 
 /** Re-parsed emitted text: declarations named `latch` directly in a var section, those nested
  *  deeper (inside an #if), and how many split var blocks are left. */

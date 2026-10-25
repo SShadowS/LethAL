@@ -1352,10 +1352,25 @@ describe("R297: the selector var through the real pipeline", () => {
     });
   }
 
+  // R796: tree-sitter-al 4.5.0 reads these four shapes differently (the marker cross-check now
+  // refuses the file as undecided, R214), so the file gets no selector and no mutant and is not written. A refusal is safe; the selector placement is no longer exercised for them (4.4.1
+  // instrumented them and the oracle checked the placement).
+  const REFUSED_UNDER_450 = new Set([
+    "a-only-swallow",
+    "h-elif",
+    "h-else-decl-then-proc",
+    "h-varattr-dangling",
+  ]);
   for (const name of Object.keys(REPRO)) {
     test(`${name}: the selector sits in the object's var section, after no attribute and no member`, async () => {
-      const { emitted } = await instrument({ "Repro.Codeunit.al": REPRO[name] ?? "" });
-      assertSelectorPlacement(emitted.get("Repro.Codeunit.al") ?? "");
+      const { manifest, emitted } = await instrument({ "Repro.Codeunit.al": REPRO[name] ?? "" });
+      const text = emitted.get("Repro.Codeunit.al") ?? "";
+      if (REFUSED_UNDER_450.has(name)) {
+        expect(text).toBe(""); // a refused file is not written (R214)
+        expect(manifest.mutants).toEqual([]);
+        return;
+      }
+      assertSelectorPlacement(text);
     });
   }
 
@@ -1941,8 +1956,9 @@ describe("R316: a split-header procedure whose arms each have their own var sect
         [
           "Twin.Codeunit.al",
           "preproc-undecided",
-          "marker-mismatch (7 directive lines, 5 markers)",
-          3,
+          // R796: tree-sitter-al 4.5.0 marks one more directive (4.4.1: 5 markers, 3 sites).
+          "marker-mismatch (7 directive lines, 6 markers)",
+          4,
         ],
       ]);
     } finally {
@@ -2519,12 +2535,16 @@ describe("R327: a split member swallowed by the global var section gets no site 
 
   // The whole-body `empty-block` (L15) needs no type, so Task 2's body walks admit it; `alc`
   // passes on it in both builds (scratch, logged in the R-302 task report).
-  test("swallow: no swap at Show(X, Y), no swap-additive on X + 1", async () => {
+  // R796: tree-sitter-al 4.5.0 parses the split member as a DIRECT member, so its names are typed by
+  // its OWN parameters: Show(X, Y) still has no swap (X Integer, Y Text differ), and `X + 1` now has
+  // a swap-additive (X is the Integer parameter; 4.4.1 swallowed the member and emitted none).
+  test("former swallow: no swap at Show(X, Y); swap-additive on X + 1, typed by the parameter", async () => {
     const { manifest } = await instrument({ "Repro.Codeunit.al": R327_SWALLOW });
     expect(sites(manifest)).toEqual([
       "Repro.Codeunit.al L15 lethal.empty-block",
       "Repro.Codeunit.al L16 lethal.void-method-call",
       "Repro.Codeunit.al L17 lethal.remove-assignment",
+      "Repro.Codeunit.al L17 lethal.swap-additive",
       "Repro.Codeunit.al L18 lethal.return-value",
       "Repro.Codeunit.al L22 lethal.empty-block",
       "Repro.Codeunit.al L23 lethal.remove-assignment",

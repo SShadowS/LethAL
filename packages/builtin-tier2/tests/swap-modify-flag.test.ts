@@ -717,7 +717,9 @@ describe("swap-modify-flag Delete mechanism (R281)", () => {
   // Revert: drop the R378 undecided-file check. In an undecided file `liveMembers` does not find a
   // trigger inside `#if`, so without the check the table reads as "no OnDelete" and loses the tag.
   it("#if: an UNDECIDED table file tags", () => {
-    const t = par(`#if and\n${onDelete(KID_VAR, "Kid.DeleteAll();")}#endif\n`);
+    // R796: a directive line inside a block comment makes the file undecided (marker mismatch); the old
+    // `#if and` no longer parses cleanly under tree-sitter-al 4.5.0.
+    const t = par(`/*\n#if Z\n*/\n#if X\n${onDelete(KID_VAR, "Kid.DeleteAll();")}#endif\n`);
     expect(deleteTag({ "P.al": t, "K.al": KID, "O.al": CALLER }, ["X"])).toBe(
       "run-trigger-skipped-delete",
     );
@@ -901,7 +903,7 @@ describe("swap-modify-flag Modify mechanism (R-452)", () => {
     expect(tag({ "P.al": armed, "K.al": KID, "O.al": CALLER }, ["X"])).toBe(MOD);
   });
   it("#if: an UNDECIDED table file tags", () => {
-    const t = par(`#if and\n${onModify(KID_VAR, "Kid.DeleteAll();")}#endif\n`);
+    const t = par(`/*\n#if Z\n*/\n#if X\n${onModify(KID_VAR, "Kid.DeleteAll();")}#endif\n`);
     expect(tag({ "P.al": t, "K.al": KID, "O.al": CALLER }, ["X"])).toBe(MOD);
   });
 

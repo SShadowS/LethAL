@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 use std::cell::RefCell;
 use tree_sitter::{Language, Node, Parser, Tree};
 
-pub const GRAMMAR_VERSION: &str = "4.4.1";
+pub const GRAMMAR_VERSION: &str = "4.5.0";
 pub const TREE_SITTER_VERSION: &str = "0.25.10";
 
 pub const FLAG_NAMED: u8 = 1;

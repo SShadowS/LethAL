@@ -490,9 +490,12 @@ describe("buildTypeTable: a split member swallowed by the global var section (R3
 }
 `;
 
-  it("a name in the swallowed member types as nothing, not as the global", () => {
-    expect(typeAt(SWALLOWED, "X")).toBeNull();
-    expect(typeAt(SWALLOWED, "Y")).toBeNull();
+  // R796 (tree-sitter-al 4.5.0): the member is now a direct member, not swallowed by the var
+  // section, so its names type as its own parameters (4.4.1: both null). `Y` is Text here, the
+  // parameter, not the global Integer.
+  it("a name in the split member types as its own parameter, not as the global", () => {
+    expect(typeAt(SWALLOWED, "X")).toBe("Integer");
+    expect(typeAt(SWALLOWED, "Y")).toBe("Text");
   });
 
   it("R324: a call to a name a swallowed member also declares is untyped", () => {

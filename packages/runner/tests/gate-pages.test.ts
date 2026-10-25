@@ -364,6 +364,20 @@ describe("itest/gate-expected.ts (R-592)", () => {
 const LAGGING_SCHEME: Readonly<Record<string, string>> = {
   // A bare array (no scheme at all): the env tool is host-only.
   "envtool.baseline.json": "R683",
+  // R796 (scheme 43): fixtures, CDO and DO are identical under tree-sitter-al 4.5.0, so no verdict
+  // moves; each file below is re-recorded in the merge window (R332's procedure).
+  "al-runner-v3.layout.baseline.json": "R796",
+  "al-runner-v3.multiobject.baseline.json": "R796",
+  "al-runner-v3.symbols-lethala.baseline.json": "R796",
+  "al-runner-v3.symbols-lethalb.baseline.json": "R796",
+  "al-runner-v3.tables.baseline.json": "R796",
+  "al-runner-v3.wrapped.baseline.json": "R796",
+  "bcdev.baseline.json": "R796",
+  "bcdev.names.baseline.json": "R796",
+  "bcdev.wrapped.baseline.json": "R796",
+  "hang.single.baseline.json": "R796",
+  "harden.baseline.json": "R796",
+  "tables.baseline.json": "R796",
 };
 
 /** R682: the baselines behind `current` that nothing lists, and listed ones that are not behind. */

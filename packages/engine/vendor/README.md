@@ -14,7 +14,7 @@ The engine's parse entry point (`src/ast/parser.ts`) is `src/ast/native-parser.t
 which loads a napi-rs addon, `vendor/native/lethal-parser.<platform>-<arch>.node`.
 
 **The crate and its pins.** `packages/engine/native/` (`lethal-parser`, `src/lib.rs`,
-`build.rs`). `Cargo.toml` pins `tree-sitter = "=0.25.10"` and `tree-sitter-al = "=4.4.1"`
+`build.rs`). `Cargo.toml` pins `tree-sitter = "=0.25.10"` and `tree-sitter-al = "=4.5.0"`
 exactly; `napi` 3 (feature `napi4`), `napi-derive` 3 and `sha2` 0.10 resolve through the
 committed `Cargo.lock`, and every build passes `--locked`. The release profile is
 `lto = true`, `codegen-units = 1`; on Windows `.cargo/config.toml` adds `/Brepro` to the
@@ -61,8 +61,8 @@ LLVM 23.1.2 ships no macOS x64 build, so darwin-x64 is cross-built on the arm64 
 `cc`.
 
 **The grammar check.** `scripts/check-native-grammar.ts` reads the `tree-sitter-al` package
-cargo resolves, requires version 4.4.1, and requires its `src/parser.c` and `src/scanner.c`
-to hash to upstream's `tree-sitter-al.wasm.inputs.sha256` at tag v4.4.1, the inputs the
+cargo resolves, requires version 4.5.0, and requires its `src/parser.c` and `src/scanner.c`
+to hash to upstream's `tree-sitter-al.wasm.inputs.sha256` at tag v4.5.0, the inputs the
 vendored WASM was built from. The build runs it first and passes the result to `build.rs`,
 which embeds it. At init the loader checks the addon's `nativeInfo()` against `GRAMMAR_PIN`
 in `native-parser.ts` (grammar version, tree-sitter version, language ABI 15, kind-table
@@ -128,15 +128,20 @@ vendored `.wasm` is the owner's decision.
 
 - Repository: <https://github.com/SShadowS/tree-sitter-al>
 - License: MIT
-- Version: `4.4.1`
-- Commit: `7819df5` "chore: regenerate parser.c and rebuild tree-sitter-al.wasm
-  for v4.4.1", tag `v4.4.1`
-- Provenance: the RELEASED `tree-sitter-al.wasm` asset of GitHub release v4.4.1,
-  downloaded with `gh release download`, SHA-256 verified. It equals the wasm
-  checked in at the tag. A local build (tree-sitter CLI 0.27.0, detached
-  worktree at the tag) was made only to compare: identical.
-- Artifact: 11,496,302 bytes,
-  `sha256:cd6e347e8bf4171c4bd4302543bdb543451be307a34fd0c7f95ca56a085ed099`
+- Version: `4.5.0` (R796b)
+- Commit: `91a5db6`, tag `v4.5.0`
+- Provenance: the RELEASED `tree-sitter-al.wasm` asset of GitHub release v4.5.0,
+  downloaded straight to this path with `gh release download v4.5.0 -R SShadowS/tree-sitter-al
+  -p tree-sitter-al.wasm -O packages/engine/vendor/tree-sitter-al.wasm`; its sha256 equals the
+  digest GitHub lists for the asset. No local build was made. The tag's
+  `tree-sitter-al.wasm.inputs.sha256` (parser.c `7f2becdd...c3eb`, scanner.c `dece4630...1b`)
+  equals the crate's, so native and WASM share one set of grammar sources.
+- Artifact: 27,287,512 bytes (the 4.4.1 one was 11.5 MB; this is the release asset's size),
+  `sha256:9884c21617c7d47299dff1c783b4633179f1fd6964d5d23b8028a4442fcbd509`
+
+Previously `4.4.1` at commit `7819df5` (11,496,302 bytes,
+`sha256:cd6e347e8bf4171c4bd4302543bdb543451be307a34fd0c7f95ca56a085ed099`), the released
+asset of v4.4.1.
 
 Previously `4.3.0` at commit `f7af22a` (10,428,350 bytes,
 `sha256:c6e7fedb0002f0ca902bd0fc36a10ef492f543aa4bdd2e4f465b1e258bf9f4d4`), built

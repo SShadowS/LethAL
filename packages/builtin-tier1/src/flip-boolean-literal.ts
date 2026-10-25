@@ -401,7 +401,7 @@ function isLoopCondition(node: ALSyntaxNode): boolean {
       LOOP_STATEMENTS.has(p.kind) ||
       (p.kind === ALNodeKind.if_statement && hasEnclosingLoop(p))
     ) {
-      if (current.rawKind === CONDITION_TAIL) return true;
+      if (current.rawKind === CONDITION_TAIL || current.rawKind === CONDITION_PREFIX) return true;
       const condition = p.childForFieldName("condition");
       return (
         condition !== null &&
@@ -418,12 +418,16 @@ function isLoopCondition(node: ALSyntaxNode): boolean {
 /** R239: what `isLoopCondition` walks up through from a literal towards its condition. R454 adds
  *  the comparison: `until X.Next() = false` -> `= true` removes or inverts the exit just the same. */
 const CONDITION_TAIL = "preproc_conditional_expression_tail";
+/** R796: tree-sitter-al 4.5.0 puts a `#if` PREFIX of a loop condition (`while` `#if X (B < 5) or
+ *  #endif` `(A < 10)`) beside the `condition` field too; 4.4.1 refused such a file whole. */
+const CONDITION_PREFIX = "preproc_operand_prefix";
 const CONDITION_WRAPPERS: ReadonlySet<string> = new Set([
   ALNodeKind.parenthesized_expression,
   ALNodeKind.unary_expression,
   ALNodeKind.logical_expression,
   ALNodeKind.comparison_expression,
   CONDITION_TAIL,
+  CONDITION_PREFIX,
 ]);
 
 /** A case LABEL, not a boolean in a branch body — see `CASE_LABEL_PARENTS`. */

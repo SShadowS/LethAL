@@ -121,7 +121,10 @@ const SYM = `codeunit 50400 "S Ops"
 
 const SYM_UNDECIDED = `codeunit 50401 "U Ops"
 {
-#if and
+/*
+#if Z
+*/
+#if X
     procedure Inside(): Integer
     begin
         exit(1);
@@ -185,7 +188,9 @@ ${arms}
 const ONE_ARM = '#if X\n    var\n        R: Record "D Tab";\n#endif\n';
 const TWO_ARMS =
   '#if X\n    var\n        R: Record "D Tab";\n#else\n    var\n        R: Integer;\n#endif\n';
-const UNDECIDED_ARM = '#if and\n    var\n        R: Record "D Tab";\n#endif\n';
+// R796: the file is undecided through a directive line inside a block comment (marker mismatch);
+// tree-sitter-al 4.5.0 no longer parses `#if and` cleanly.
+const UNDECIDED_ARM = '/*\n#if Z\n*/\n#if X\n    var\n        R: Record "D Tab";\n#endif\n';
 
 describe("R405 a: a var section inside a member-level #if gives globals by arm", () => {
   const owner = objectScopeKey("codeunit", "G Ops");
@@ -311,8 +316,10 @@ describe("R405 a: findTableTrigger (forward swap-modify-flag) inside a member-le
   });
 
   it("undecided file: a trigger inside #if is NOT found, a direct one IS (as before)", () => {
-    expect(forced(`#if and\n${ON_MODIFY}#endif\n`, ["X"])).toBeNull();
-    expect(forced(`${ON_MODIFY}#if and\n${ON_INSERT}#endif\n`, ["X"])).toBe("OnModify");
+    expect(forced(`/*\n#if Z\n*/\n#if X\n${ON_MODIFY}#endif\n`, ["X"])).toBeNull();
+    expect(forced(`${ON_MODIFY}/*\n#if Z\n*/\n#if X\n${ON_INSERT}#endif\n`, ["X"])).toBe(
+      "OnModify",
+    );
   });
 });
 
@@ -369,8 +376,8 @@ describe("R405 a: a procedure declared only in an inactive arm does not shadow a
   });
 
   it("undecided: the namesake inside #if still shadows (refused)", () => {
-    expect(commit(`#if and\n${COMMIT_PROC}#endif\n`, ["X"])).toBe(false);
-    expect(modify(`#if and\n${MOD_PROC}#endif\n`, ["X"])).toBe(false);
+    expect(commit(`/*\n#if Z\n*/\n#if X\n${COMMIT_PROC}#endif\n`, ["X"])).toBe(false);
+    expect(modify(`/*\n#if Z\n*/\n#if X\n${MOD_PROC}#endif\n`, ["X"])).toBe(false);
   });
 
   // R327: a split member after the global var section is swallowed into it; it still shadows.

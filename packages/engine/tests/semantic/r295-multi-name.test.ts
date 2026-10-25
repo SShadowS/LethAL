@@ -224,9 +224,10 @@ ${header}
     });
   });
 
-  it("a #if BETWEEN two names of one declaration is not this rule's shape: the parse has errors", () => {
-    // Pinned as it is today: the grammar does not read it as one declaration, so the file carries
-    // ERROR nodes and the pipeline refuses it (see the runner's R295 test for the deployed side).
+  it("a #if BETWEEN two names of one declaration parses as ONE declaration with a conditional-names node", () => {
+    // R796: tree-sitter-al 4.5.0 reads this shape as one `variable_declaration` whose names A, B
+    // (inside `preproc_conditional_var_names`) and C share the type. 4.4.1 gave ERROR nodes here
+    // and the pipeline refused the file (see the runner's R295 test for the deployed side).
     const root = wrapRoot(
       parseAL(`codeunit 50100 X
 {
@@ -244,9 +245,12 @@ ${header}
 `),
     );
     let errors = 0;
+    let conditionalNames = 0;
     visit(root, (n) => {
       if (n.rawKind === "ERROR") errors++;
+      if (n.rawKind === "preproc_conditional_var_names") conditionalNames++;
     });
-    expect(errors).toBeGreaterThan(0);
+    expect(errors).toBe(0);
+    expect(conditionalNames).toBe(1);
   });
 });

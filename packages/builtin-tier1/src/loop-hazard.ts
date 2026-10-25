@@ -6999,7 +6999,13 @@ export function loopConditionParts(loop: ALSyntaxNode): ALSyntaxNode[] {
   const cond = conditionOf(loop);
   return [
     ...(cond !== null ? [cond] : []),
-    ...loop.namedChildren.filter((c) => c.rawKind === "preproc_conditional_expression_tail"),
+    // R796: tree-sitter-al 4.5.0 also puts a `#if` PREFIX of the condition (`while` `#if X (B < 5) or
+    // #endif` `(A < 10)`) beside it, as `preproc_operand_prefix`; 4.4.1 refused such a file whole.
+    ...loop.namedChildren.filter(
+      (c) =>
+        c.rawKind === "preproc_conditional_expression_tail" ||
+        c.rawKind === "preproc_operand_prefix",
+    ),
   ];
 }
 
