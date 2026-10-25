@@ -244,7 +244,7 @@ describe("GATE_WARNINGS", () => {
     for (const leg of v3) expect(GATE_WARNINGS[`al-runner-v3/${leg}`], leg).toBeDefined();
     // N1E throws by design and is never asserted.
     expect(GATE_WARNINGS["al-runner-v3/N1E"]).toBeUndefined();
-    // R761: S1E is PENDING, absent until the R-761 observe run's codes are explained and pre-committed.
-    expect(GATE_WARNINGS["al-runner-v3/S1E"]).toBeUndefined();
+    // R761: S1E's set is pre-committed empty (master a86927e1, from the R-761 observe run).
+    expect(GATE_WARNINGS["al-runner-v3/S1E"]).toEqual([]);
   });
 });

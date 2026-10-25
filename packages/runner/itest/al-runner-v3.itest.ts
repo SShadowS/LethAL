@@ -443,11 +443,12 @@ async function legC(scratch: string): Promise<readonly string[]> {
 }
 
 /**
- * R761: the serve counters R-653 E1 recorded for S1 under entries (P 3; live 3 = 6 - 3; bound 5 =
- * 8 - 3; warm-ups 1; entriesSent 44). NOT asserted yet: S1E prints them, and the numbers below are
- * pinned after the R-761 observe run. Echo mismatches 0 IS asserted (a mismatch is a verdict risk).
+ * R761: S1E's serve counters, pre-committed in
+ * `docs/superpowers/specs/2026-10-25-r761-serve-default-precommitment.md` (master a86927e1) from the
+ * R-761 observe run, equal to what R-653 E1 recorded for S1 under entries (P 3; live 3 = 6 - 3;
+ * bound 5 = 8 - 3; warm-ups 1; entriesSent 44). Echo mismatches 0.
  */
-const S1E_PENDING_PINS = {
+const S1E_PINS = {
   pairRequests: 3,
   liveRequests: 3,
   boundChecks: 5,
@@ -508,17 +509,20 @@ async function legS1(scratch: string, leg: "S1" | "S1E" = "S1", version = ""): P
   );
   if (serve) {
     const s = b.entriesStats();
-    // Printed for the R-761 observe run; the pins are not asserted until it has reported them.
+    const got = {
+      pairRequests: s.pairRequests,
+      liveRequests: s.liveRequests,
+      boundChecks: s.boundChecks,
+      warmups: s.warmups,
+      entriesSent: s.entriesSent,
+    };
     console.log(
-      `  S1E: serve counters ${JSON.stringify({
-        pairRequests: s.pairRequests,
-        liveRequests: s.liveRequests,
-        boundChecks: s.boundChecks,
-        warmups: s.warmups,
-        entriesSent: s.entriesSent,
-        echoMismatches: s.echoMismatches,
-      })}; E1 (R-653) recorded ${JSON.stringify(S1E_PENDING_PINS)}`,
+      `  S1E: serve counters ${JSON.stringify({ ...got, echoMismatches: s.echoMismatches })}`,
     );
+    for (const [k, v] of Object.entries(S1E_PINS)) {
+      const g = got[k as keyof typeof got];
+      must(g === v, `S1E: ${k} ${g}, pre-committed ${v} (R761)`);
+    }
     must(s.echoMismatches === 0, `S1E: ${s.echoMismatches} echo mismatches, pre-committed 0`);
   }
 }

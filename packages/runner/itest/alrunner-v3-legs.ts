@@ -412,10 +412,14 @@ export function judgeLegK(f: LegKFacts): string[] {
   const out: string[] = [];
   if (f.coverage !== "al-runner")
     out.push(`K: coverage ${JSON.stringify(f.coverage)} by default, pre-committed "al-runner"`);
-  if (f.inRunStopIsBudget !== true)
-    out.push("K: the default transport is not one-shot (inRunStopIsBudget is not true)");
-  if (f.serveSpawns !== 0) out.push(`K: ${f.serveSpawns} serve daemon(s) spawned, pre-committed 0`);
-  if (f.oneShotTestCalls < 1) out.push("K: no one-shot test call was spawned");
+  // R761 (pre-commitment master a86927e1): the default is serve-entries where proven, and K's
+  // sandbox-app is proven (plain names, no MO/WR shapes, no resume), so K serves: one daemon, and
+  // one one-shot call (the baseline, which serve-entries keeps one-shot).
+  if (f.inRunStopIsBudget !== false)
+    out.push("K: the default transport is not serve-entries (inRunStopIsBudget is not false)");
+  if (f.serveSpawns !== 1) out.push(`K: ${f.serveSpawns} serve daemon(s) spawned, pre-committed 1`);
+  if (f.oneShotTestCalls !== 1)
+    out.push(`K: ${f.oneShotTestCalls} one-shot test call(s), pre-committed 1 (the baseline)`);
   if (!f.warned) out.push("K: AL_RUNNER_V3_NOT_AUTHORITATIVE was not printed");
   const off = f.noCoverageFiles.filter((p) => !p.replace(/\\/g, "/").endsWith(NO_COVERAGE_FILE));
   if (f.noCoverageFiles.length !== 4 || off.length > 0)

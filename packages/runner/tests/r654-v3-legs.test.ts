@@ -230,9 +230,10 @@ describe("R654 S2 leg K: the config it builds from, and what it judges", () => {
 
   const good = {
     coverage: "al-runner",
-    inRunStopIsBudget: true,
-    serveSpawns: 0,
-    oneShotTestCalls: 12,
+    // R761: K takes the serve-entries default (pre-commitment master a86927e1).
+    inRunStopIsBudget: false,
+    serveSpawns: 1,
+    oneShotTestCalls: 1,
     warned: true,
     noCoverageFiles: [
       "src/SandboxPricing.Codeunit.al",
@@ -248,9 +249,11 @@ describe("R654 S2 leg K: the config it builds from, and what it judges", () => {
 
   test("each fact that moves is named", () => {
     expect(judgeLegK({ ...good, coverage: "none" })).toHaveLength(1);
-    expect(judgeLegK({ ...good, inRunStopIsBudget: false })).toHaveLength(1);
-    expect(judgeLegK({ ...good, serveSpawns: 1 })).toHaveLength(1);
+    expect(judgeLegK({ ...good, inRunStopIsBudget: true })).toHaveLength(1);
+    expect(judgeLegK({ ...good, serveSpawns: 0 })).toHaveLength(1);
+    expect(judgeLegK({ ...good, serveSpawns: 2 })).toHaveLength(1);
     expect(judgeLegK({ ...good, oneShotTestCalls: 0 })).toHaveLength(1);
+    expect(judgeLegK({ ...good, oneShotTestCalls: 12 })).toHaveLength(1);
     expect(judgeLegK({ ...good, warned: false })).toHaveLength(1);
     expect(judgeLegK({ ...good, noCoverageFiles: [] })).toHaveLength(1);
     expect(
