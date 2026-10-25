@@ -189,6 +189,7 @@ import {
   MAX_V3_WORKERS,
   OrderedCommit,
   asParallelOwner,
+  lanesNotice,
   runScopeQueue,
   splitBackend,
 } from "./parallel-queue";
@@ -11919,6 +11920,10 @@ async function runMutantsParallel(
       latched?: Latch;
       laneMayStart?: (k: number) => boolean;
       affordableLanes?: (n: number) => number;
+      laneWarmupMs?: () => number;
+      needsLiveCall?: (mutantId: string) => boolean;
+      laneDaemonStarts?: () => number;
+      noteLanes?: (message: string) => void;
     };
     readonly lanes: readonly ExecutionBackend[];
   },
@@ -11943,9 +11948,32 @@ async function runMutantsParallel(
     unit.push(m);
     units.set(scope, unit);
   }
-  await runScopeQueue({
+  const asked = lanes.length;
+  const cap = owner.affordableLanes?.(asked) ?? asked;
+  const { laneWarmupMs, needsLiveCall } = owner;
+  const paced = laneWarmupMs !== undefined && needsLiveCall !== undefined;
+  const { started, warmupMs, reason } = await runScopeQueue({
     units: [...units.values()],
-    lanes: owner.affordableLanes?.(lanes.length) ?? lanes.length,
+    lanes: cap,
+    // R785: `--workers N` is an upper bound; an owner that cannot say its warm-up starts all lanes.
+    ...(paced
+      ? {
+          pace: {
+            warmupMs: () => laneWarmupMs.call(owner),
+            // A prefetched mutant (its answer is already held) is about 0 ms: not live work.
+            weight: (unit: readonly MutantManifestEntry[]) =>
+              unit.filter(
+                (m) =>
+                  (args.perMutantTests.get(m.mutantId)?.length ?? 0) > 0 &&
+                  needsLiveCall.call(owner, m.mutantId),
+              ).length,
+            now: () => performance.now(),
+            ...(owner.laneDaemonStarts !== undefined
+              ? { epoch: () => owner.laneDaemonStarts?.() ?? 0 }
+              : {}),
+          },
+        }
+      : {}),
     mayStart: (k) => owner.laneMayStart?.(k) ?? true,
     commit,
     isUnsafe: () => args.safety.isUnsafe,
@@ -11955,6 +11983,7 @@ async function runMutantsParallel(
       await runMutantsOnBackend({ ...rest, backend, mutants: unit, sink, skipPrefetch: true });
     },
   });
+  if (paced) owner.noteLanes?.(lanesNotice(started, asked, cap, reason, warmupMs));
 }
 
 /**

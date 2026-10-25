@@ -148,7 +148,9 @@ import {
 } from "./baseline-guard";
 import { prepareFixtureSymbols } from "./fixture-symbols";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import { GATE_WARNINGS } from "./gate-expected";
 import {
+  assertGateWarnings,
   checkGateWarnings,
   collectWarnings,
   finishGate,
@@ -332,7 +334,17 @@ async function session(
   }
   // R635: all of it only when a flag asks or the leg runs serve (R788).
   const leg = basename(scratch);
-  checkGateWarnings("al-runner-v3", leg, gateWarnings);
+  // R785: a `LETHAL_ITEST_V3_WORKERS > 1` D-leg run also says how many lanes started; that one code is
+  // expected on top of the leg's N = 1 set. Unset (the gate), the pinned set is checked unchanged.
+  const pinned = GATE_WARNINGS[`al-runner-v3/${leg}`];
+  if (V3_WORKERS > 1 && cfg.workers !== undefined && !observeRequested())
+    assertGateWarnings(
+      "al-runner-v3",
+      leg,
+      gateWarnings.codes(),
+      pinned === undefined ? undefined : [...pinned, "al-runner-v3-lanes-started"],
+    );
+  else checkGateWarnings("al-runner-v3", leg, gateWarnings);
   const serveLeg = v3ItestLegTransport(leg, process.env).transport !== undefined;
   if (serveLeg) {
     console.log(`  ${leg}: entries ${JSON.stringify(backend.entriesStats())}`);

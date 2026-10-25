@@ -2,6 +2,7 @@ import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { mkdir, readFile, readdir, rm, stat, utimes } from "node:fs/promises";
 import { join } from "node:path";
 import { initParser, parseAL, wrapRoot } from "@lethal/engine";
+import { ownTimeout } from "@lethal/engine/own-timeout";
 import { CONTROL_SELECTOR_FILENAME, emitMutationSelector } from "@lethal/schemata";
 import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -1490,84 +1491,92 @@ describe("BcDevMcpBackend.deploy", () => {
     }
   });
 
-  test("reclaims the staged compile copy even when compile() throws", async () => {
-    const dir = scratch("lethal-bcdev-deploy-stage-cleanup-throws-");
-    try {
-      await writeDeployInputs(dir);
-      const fakeCompiler = {
-        compile: async () => {
-          throw new AlcCompileError("boom");
-        },
-      } as unknown as ArtifactCompiler;
-      const backend = new BcDevMcpBackend(
-        {
-          mcpCommand: ["unused"],
-          project: "/al",
-          server: "http://bc",
-          serverInstance: "BC",
-          ...(await controlStaging(dir)),
-        },
-        undefined,
-        {
-          compiler: fakeCompiler,
-          deployer: {} as ContainerDeployer,
-          verifier: {} as DeploymentVerifier,
-          harnessVerifier: fakeHarnessVerifier(),
-        },
-      );
-      await expect(backend.deploy(dir)).rejects.toBeInstanceOf(AlcCompileError);
-      // Even on a compile failure, the staged copy must not linger — same `finally` cleanup as
-      // the success path above.
-      await expect(stat(`${dir}-staged`)).rejects.toThrow();
-    } finally {
-      await rmStaged(dir);
-      await rm(dir, { recursive: true, force: true });
-    }
-    // R708: a long lock costs 4.5 s in deploy() and 4.5 s more in rmStaged: past Bun's 5 s default.
-  }, 15_000);
+  test(
+    "reclaims the staged compile copy even when compile() throws",
+    async () => {
+      const dir = scratch("lethal-bcdev-deploy-stage-cleanup-throws-");
+      try {
+        await writeDeployInputs(dir);
+        const fakeCompiler = {
+          compile: async () => {
+            throw new AlcCompileError("boom");
+          },
+        } as unknown as ArtifactCompiler;
+        const backend = new BcDevMcpBackend(
+          {
+            mcpCommand: ["unused"],
+            project: "/al",
+            server: "http://bc",
+            serverInstance: "BC",
+            ...(await controlStaging(dir)),
+          },
+          undefined,
+          {
+            compiler: fakeCompiler,
+            deployer: {} as ContainerDeployer,
+            verifier: {} as DeploymentVerifier,
+            harnessVerifier: fakeHarnessVerifier(),
+          },
+        );
+        await expect(backend.deploy(dir)).rejects.toBeInstanceOf(AlcCompileError);
+        // Even on a compile failure, the staged copy must not linger — same `finally` cleanup as
+        // the success path above.
+        await expect(stat(`${dir}-staged`)).rejects.toThrow();
+      } finally {
+        await rmStaged(dir);
+        await rm(dir, { recursive: true, force: true });
+      }
+      // R708: a long lock costs 4.5 s in deploy() and 4.5 s more in rmStaged: past Bun's 5 s default.
+    },
+    ownTimeout(15_000),
+  );
 
-  test("R734: an alc rejection in deploy() happens before any publish or verify call", async () => {
-    const dir = scratch("lethal-bcdev-deploy-alc-before-publish-");
-    try {
-      await writeDeployInputs(dir);
-      const calls = { compile: 0, publish: 0, verify: 0 };
-      const backend = new BcDevMcpBackend(
-        {
-          mcpCommand: ["unused"],
-          project: "/al",
-          server: "http://bc",
-          serverInstance: "BC",
-          ...(await controlStaging(dir)),
-        },
-        undefined,
-        {
-          compiler: {
-            compile: async () => {
-              calls.compile++;
-              throw new AlcCompileError("Sandbox.al(5,9): error AL0001: boom");
-            },
-          } as unknown as ArtifactCompiler,
-          deployer: {
-            publish: async () => {
-              calls.publish++;
-            },
-          } as unknown as ContainerDeployer,
-          verifier: {
-            verify: async () => {
-              calls.verify++;
-              return { kind: "absent" };
-            },
-          } as unknown as DeploymentVerifier,
-          harnessVerifier: fakeHarnessVerifier(),
-        },
-      );
-      await expect(backend.deploy(dir)).rejects.toBeInstanceOf(AlcCompileError);
-      expect(calls).toEqual({ compile: 1, publish: 0, verify: 0 });
-    } finally {
-      await rmStaged(dir);
-      await rm(dir, { recursive: true, force: true });
-    }
-  }, 15_000);
+  test(
+    "R734: an alc rejection in deploy() happens before any publish or verify call",
+    async () => {
+      const dir = scratch("lethal-bcdev-deploy-alc-before-publish-");
+      try {
+        await writeDeployInputs(dir);
+        const calls = { compile: 0, publish: 0, verify: 0 };
+        const backend = new BcDevMcpBackend(
+          {
+            mcpCommand: ["unused"],
+            project: "/al",
+            server: "http://bc",
+            serverInstance: "BC",
+            ...(await controlStaging(dir)),
+          },
+          undefined,
+          {
+            compiler: {
+              compile: async () => {
+                calls.compile++;
+                throw new AlcCompileError("Sandbox.al(5,9): error AL0001: boom");
+              },
+            } as unknown as ArtifactCompiler,
+            deployer: {
+              publish: async () => {
+                calls.publish++;
+              },
+            } as unknown as ContainerDeployer,
+            verifier: {
+              verify: async () => {
+                calls.verify++;
+                return { kind: "absent" };
+              },
+            } as unknown as DeploymentVerifier,
+            harnessVerifier: fakeHarnessVerifier(),
+          },
+        );
+        await expect(backend.deploy(dir)).rejects.toBeInstanceOf(AlcCompileError);
+        expect(calls).toEqual({ compile: 1, publish: 0, verify: 0 });
+      } finally {
+        await rmStaged(dir);
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+    ownTimeout(15_000),
+  );
 
   /** R708: a deployment whose compile throws and whose staged-copy removal is the given fake. */
   async function stagedCleanupBackend(
@@ -3858,7 +3867,9 @@ codeunit 79191 "Second"
     const ids = [79160, 79161, 79162, 79163, 79164, 79165, 79166];
     const said = await saidFor(
       // Rows arrive in reverse id order: the cap must still show the lowest five.
-      [...ids].reverse().map((id) => ({ objectType: 1, objectId: id, lineNo: 7, hits: 1 })),
+      [...ids]
+        .reverse()
+        .map((id) => ({ objectType: 1, objectId: id, lineNo: 7, hits: 1 })),
       {
         files: Object.fromEntries(
           ids.map((id) => [
