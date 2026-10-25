@@ -35,6 +35,14 @@ export type IsolationOutcome<T> =
  */
 export const MAX_ISOLATION_COMPILES = 64;
 
+/**
+ * R743: how many of one round's suspects may compile fine ALONE (innocents) before that round stops
+ * trying suspects and halves instead. A cascade (one culprit whose error alc reports on many later
+ * branches) would otherwise spend the budget on innocents. A suspect that fails alone does not
+ * count, so a round naming many real culprits is unchanged.
+ */
+export const MAX_CLEARED_SUSPECTS_PER_ROUND = 8;
+
 class BudgetSpent extends Error {}
 
 export interface AlcDiag {
@@ -128,16 +136,21 @@ export async function isolateBreakingMutants<T>(
     // Invariant: `remaining` fails to compile, and the empty set compiles.
     // `pointed`: what alc named in the last failing compile of `remaining`. `cleared`: compiled
     // alone and fine, so never tried alone again (it may still be half of a pair).
-    // ponytail: a diagnostic that cascades onto innocent mutants costs one compile each.
+    // A diagnostic that cascades onto innocent mutants costs one compile each, up to
+    // MAX_CLEARED_SUSPECTS_PER_ROUND per round (R743); then the round halves.
     let pointed = lastSuspects;
     const cleared = new Set<T>();
     for (;;) {
       // Suspects first, BEFORE the early stop below (which guards only halving).
       let found = false;
+      let clearedThisRound = 0;
       for (const s of pointed) {
+        if (clearedThisRound >= MAX_CLEARED_SUSPECTS_PER_ROUND) break;
         if (!remaining.includes(s) || cleared.has(s)) continue;
-        if (await probe([s])) cleared.add(s);
-        else {
+        if (await probe([s])) {
+          cleared.add(s);
+          clearedThisRound++;
+        } else {
           culprits.push(s);
           remaining = remaining.filter((x) => x !== s);
           found = true;

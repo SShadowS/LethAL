@@ -278,9 +278,12 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
     // d77b17a3...49ea); DataBandExt gains 4 mutants, ids +4 after DataBandExt, proven in
     // id-shift-proof.txt (/coord/handoff/R-463/).
     // R731: only the manifest moved it, by toggle-blank-string's operatorVersion 1.1.0 (was 0e1a6cbb...2166).
-    // R752: only the manifest moved it, by toggle-blank-string's operatorVersion 1.1.1 (was 6a1f8e80...facf).
+    // R750: re-pinned (was 6a1f8e80...eacf, ruling orchestrator 2026-10-25): DataMainListExt.PageExt.al's
+    // header comment, rewritten at the same length.
+    // R752: then only the manifest moved it, by toggle-blank-string's operatorVersion 1.1.1
+    // (was 80c0b0be...d369 on master, the R750 pin).
     expect(all.digest("hex")).toBe(
-      "274994b7a3325982974e6aa25c93ea3a64f33858df68c75c246a6c3c2d788e6a",
+      "3cc7757fd353445b1d079e15a856dd57b6fe3be3959a30c1fe0fcbd775c89e48",
     );
   }, 60_000);
 });
