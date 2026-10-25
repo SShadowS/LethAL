@@ -815,7 +815,7 @@ that ordering is the priority.
 - **R775** · `lethal run --backend al-runner-v3` never calls the backend's `close()`: no serve-entries counters, the serve daemon dies by process exit, and the coverage scratch stays · [R775.md](docs/roadmap/R775.md) · done (6545a85a)
 - **R776** · The v3 probe-cache key fingerprints the package folder by file mtime, so a fresh checkout or a copied .alpackages always misses once (about 10 s); a content hash costs about 0.1 s · [R776.md](docs/roadmap/R776.md) · open, filed 2026-10-25 (from coord task R-773)
 - **R777** · The al-runner-v3 update gate infra-fails a good candidate when master adds a gate leg before `current` is re-gated · [R777.md](docs/roadmap/R777.md) · open, filed 2026-10-25 (coord task R-771)
-- **R780** · al-runner-v3: a cross-session cache of the test-app alc compile (about 11 s per deploy on the D1 slice) · [R780.md](docs/roadmap/R780.md) · open, built 2026-10-25 (coord task R-772); awaiting the v3 gate and merge
+- **R780** · al-runner-v3: a cross-session cache of the test-app alc compile (5.1 s per deploy measured on the D1 slice) · [R780.md](docs/roadmap/R780.md) · open, built and gated 2026-10-25 (coord task R-772); awaiting merge
 - **R782** · With #5798 fixed upstream (edge a157b2d34), serve-entries could read a dotted test method from the row's own codeunit/method fields and lift R722's refusal · [R782.md](docs/roadmap/R782.md) · open, filed 2026-10-25 (coord task R-771)
 
 ---
