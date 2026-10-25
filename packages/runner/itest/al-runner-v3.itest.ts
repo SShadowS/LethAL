@@ -1228,6 +1228,11 @@ async function legXSleep(scratch: string): Promise<void> {
   };
   const SLEEP_LINES = [25, 31, 37, 43];
   const { r, b, sleeper } = await run("d", recordHits);
+  // R-762 B: a pinned build whose pin and session probe read sleep-is-noop gone runs without the
+  // §6 rule: M0003 and M0004 survive, no mutant call writes a coverage document, (e)/(f) have
+  // nothing to tamper with. Unpinned builds keep the r5 table.
+  const retired = b.isSleepRuleRetired();
+  console.log(`  X (d): Sleep rule ${retired ? "RETIRED (pinned gone build, R-762 B)" : "applies"}`);
   // r10 (c), I4/M7: the baseline facts, printed before any (d) check. No verdict rule changes.
   console.log(`  ${xdBaselineLine(sleeper)}`);
   console.log(`  X (d): baselineGreen ${r.baselineGreen}`);
@@ -1250,8 +1255,8 @@ async function legXSleep(scratch: string): Promise<void> {
   const R5: Record<string, { code: string; verdict: string; line?: number }> = {
     "lethal.empty-block": { code: "M0001", verdict: "killed" },
     "lethal.void-method-call": { code: "M0002", verdict: "survived" },
-    "lethal.remove-assignment": { code: "M0003", verdict: "error", line: 25 },
-    "lethal.shift-integer": { code: "M0004", verdict: "error", line: 37 },
+    "lethal.remove-assignment": { code: "M0003", verdict: retired ? "survived" : "error", line: 25 },
+    "lethal.shift-integer": { code: "M0004", verdict: retired ? "survived" : "error", line: 37 },
     "lethal.return-value": { code: "M0005", verdict: "killed" },
   };
   mustD(r.mutants.length === 5, `X (d): ${r.mutants.length} mutants, r5 5`);
@@ -1287,6 +1292,23 @@ async function legXSleep(scratch: string): Promise<void> {
       );
   }
   // The negative twin: no hit on any indexed Sleep line, a passing row, survived, no note.
+  if (retired) {
+    // R-762 B: counts 2 / 3 / 0; no raw-hit check (no mutant call writes a coverage document).
+    const n = (v: string) => r.mutants.filter((m) => m.verdict === v).length;
+    mustD(
+      n("killed") === 2 && n("survived") === 3 && n("error") === 0,
+      `X (d): killed ${n("killed")} / survived ${n("survived")} / error ${n("error")}, R-762 B 2 / 3 / 0`,
+    );
+    must(
+      hitsByMutant.size === 0,
+      "X (d): a mutant call wrote a coverage document on a retired-rule build",
+    );
+    for (const leg of ["X (e)", "X (f1)", "X (f2)", "X (f3)"])
+      console.log(
+        `  ${leg}: not applicable on a pinned-gone build (R-762 B: no mutant call writes a coverage document)`,
+      );
+    return;
+  }
   const twin = hitsByMutant.get("M0002");
   must(
     twin !== undefined && [...twin.values()].every((h) => h === 0),

@@ -1725,6 +1725,18 @@ describe("13: §5, the coverage window for a pass under a mutant when the Sleep 
     expect(v.failureMessage).toContain("[v3-sleep-noop] covered Sleep");
   });
 
+  test("R-762 B retired (pinned-gone build): a covered Sleep is a pass; no window, no coverage request, no second echo", async () => {
+    const { r, n0 } = await windowOf({ serve: { coverage: sleepCoverage(true) } });
+    (r.b as unknown as { sleepRuleRetired: boolean }).sleepRuleRetired = true;
+    await r.b.activate("M0001");
+    const v = await r.b.run(ref("A"), OPTS);
+    expect([v.outcome, v.failureMessage]).toEqual(["pass", undefined]);
+    expect(since(r, n0)).toEqual([]);
+    expect(r.b.entriesStats().coverageRequests).toBe(0);
+    expect(r.b.entriesStats().echoRequests).toBe(0);
+    expect(await onDisk(r)).toBe("NONE");
+  });
+
   test("an empty Sleep index opens no window", async () => {
     const r = await readyRig({ mutants: ["M0001"] });
     const n0 = r.serve.requests.length;
