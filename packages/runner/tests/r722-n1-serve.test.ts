@@ -12,6 +12,7 @@ import {
   v3DefaultLegs,
 } from "../itest/alrunner-v3-legs";
 import { decodeEntriesAnswer, serveRow } from "../src/al-runner-v3-entries";
+import { findV3Pin } from "../src/al-runner-v3-pins";
 
 const ALPHA5 = "al-runner 3.0.0-alpha.5 (07342060e)";
 const ALPHA2 = "alrunner 3.0.0-alpha.2 (91253f2d6)";
@@ -85,6 +86,45 @@ describe("R722: judgeN1Serve", () => {
   test("N1E is a default itest leg, after N1", () => {
     const legs = v3DefaultLegs({ cdo: false, tables: false });
     expect(legs.indexOf(V3_N1E_LEG)).toBe(legs.indexOf("N1") + 1);
+  });
+});
+
+// R771: byte for byte from the receipt of the held edge build a157b2d34 (/work/tools/al-runner-v3/held).
+const A157_LINE =
+  '{"codeunit":78850,"codeunitName":"Names Tests","durationMs":0,"entry":"NONE|78850","method":"Dot.Step","name":"Codeunit78850.Dot.Step","status":"pass","type":"test"}';
+const A157 = "al-runner 3.0.0-alpha.5+edge.20261025 (a157b2d34)";
+const A157_SHA = "d9429e53a6938dbafb58108f61ce5408f65389bd9604ff94b4788ef26c8d17fb";
+
+describe("R771: judgeN1Serve with the build's n1e pin", () => {
+  const n1e = findV3Pin(A157, A157_SHA)?.n1e;
+  test("the pin exists", () => {
+    expect(n1e).toBeDefined();
+  });
+  test("the receipt's exact line with the pin is a pass", () => {
+    const j = judgeN1Serve({ threw: wrap(A157_LINE) }, A157, n1e);
+    expect(j.outcome).toBe("pass");
+    expect(j.lines.join(" ")).toMatch(/^N1E: pinned: #5798 fixed upstream/);
+  });
+  test("the same line without a pin is held", () => {
+    expect(judgeN1Serve({ threw: wrap(A157_LINE) }, A157).outcome).toBe("held");
+  });
+  test("a line with codeunit and method that the pin does not match is held", () => {
+    const other = A157_LINE.replace('"Dot.Step"', '"Other.Step"');
+    expect(judgeN1Serve({ threw: wrap(other) }, A157, n1e).outcome).toBe("held");
+  });
+  test("the pinned line with a status other than pass is held", () => {
+    for (const s of ["fail", "error"]) {
+      const moved = A157_LINE.replace('"status":"pass"', `"status":"${s}"`);
+      expect(moved).not.toBe(A157_LINE);
+      expect(judgeN1Serve({ threw: wrap(moved) }, A157, n1e).outcome).toBe("held");
+    }
+  });
+  test("the alpha.5 refusal passes as today, with or without the pin", () => {
+    expect(judgeN1Serve({ threw: wrap(ALPHA5_LINE) }, A157, n1e).outcome).toBe("pass");
+    expect(judgeN1Serve({ threw: wrap(ALPHA5_LINE) }, A157).outcome).toBe("pass");
+  });
+  test("a completed session is held even with the pin", () => {
+    expect(judgeN1Serve({ completed: true }, A157, n1e).outcome).toBe("held");
   });
 });
 
