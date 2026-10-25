@@ -59,14 +59,13 @@ const SYMBOL_ROOT = "/coord/cache/bc-symbols";
 const FIXTURE_DIR = join(REPO, "fixtures", "sandbox-app");
 
 const mkApp = (id: string, name: string) => ({ id, publisher: "LethAL Probe", name });
-// Set 1. Set 2 (NOT built; replace the ids in the app.json files and here, and the tests' dependency
-// block): L edbf191d-45cd-45dd-bd38-f9910c0d60a7, P ef6468b3-8053-4383-a69a-8114dd06fd12,
-// Q a3014e4e-2f3e-4185-8fce-0519bd133e3a.
-// Run 2 (the live proof on the built head, addendum 1): the SECOND id set; bc2 keeps run 1's
-// records (916727ff… L at 1.0.0.2, 157d4738… P at LethAL's minted version, a2a9b0bb… Q at 1.0.0.1).
-const L = mkApp("edbf191d-45cd-45dd-bd38-f9910c0d60a7", "R740 Probe Lib");
-const P = mkApp("ef6468b3-8053-4383-a69a-8114dd06fd12", "R740 Probe Target");
-const Q = mkApp("a3014e4e-2f3e-4185-8fce-0519bd133e3a", "R740 Probe Tests");
+// Set 1. Set 2 (replace the ids in the app.json files and here, and the tests' dependency block):
+// L edbf191d-45cd-45dd-bd38-f9910c0d60a7, P ef6468b3-8053-4383-a69a-8114dd06fd12,
+// Q a3014e4e-2f3e-4185-8fce-0519bd133e3a. bc2 holds both sets' records from R745's runs.
+// R759 (the live proof on bc1): set 1 again, fresh on bc1.
+const L = mkApp("916727ff-fac6-40f5-bc66-38800422d6d6", "R740 Probe Lib");
+const P = mkApp("157d4738-4e4d-410b-b1be-743a3ba29106", "R740 Probe Target");
+const Q = mkApp("a2a9b0bb-7274-42ae-8eee-89f12b23a6f2", "R740 Probe Tests");
 type App = typeof P;
 
 /** Build -> source dir; `against` lists the builds (and their names) a dependent compiles against. */

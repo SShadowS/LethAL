@@ -1193,6 +1193,8 @@ VERIFY — prove named survivors are now killed, on the build the run left insta
   --no-reach-filter          send every new test to every survivor. By default, under fenced
                              coverage, a new test runs only against the survivors its own
                              coverage reaches; one stderr line says whether the filter was on
+  Tests the source run left out (its --tests-only and --exclude-test, recorded in the database)
+  are not new: verify applies that narrowing itself and lists them as excludedTests in its JSON.
   Every other flag is refused, --out included: the JSON always goes to stdout.
   Exit codes: 0 every survivor killed and every new test stable or not-rerun; 3 quarantined; 4
   nothing measured (every survivor error); 5 some survivor survived or errored, or a new test is
@@ -1339,8 +1341,6 @@ const RUN_ONLY_FLAGS = [
   "operator",
   "lines",
   "changed-since",
-  "tests-only",
-  "exclude-test",
   "max-guards-per-batch",
   "mutant-timeout-ms",
   "max-methods-per-call",
@@ -1469,6 +1469,13 @@ export const FLAG_OWNERS: ReadonlyArray<{
     owners: ["verify"],
     instead: "It turns off lethal verify's coverage reach filter.",
   },
+  // R759: run flags that narrow the suite; verify takes the source run's own recorded narrowing.
+  ...["tests-only", "exclude-test"].map((flag) => ({
+    flag,
+    owners: ["run"] as const,
+    instead:
+      "It is a `lethal run` flag; `lethal verify` applies the source run's own recorded --tests-only and --exclude-test (its JSON's `excludedTests`).",
+  })),
   ...RUN_ONLY_FLAGS.map((flag) => ({
     flag,
     owners: ["run"] as const,

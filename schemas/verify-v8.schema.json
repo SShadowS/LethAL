@@ -322,6 +322,19 @@
         "detail": { "type": "string" }
       }
     },
+    "excludedTests": {
+      "type": "array",
+      "description": "R759: tests the SOURCE run left out of its own suite (its recorded --tests-only and --exclude-test), which verify therefore does not treat as new: none is planned, rerun or counted toward --max-new-tests. `reason` is tests-only (outside the recorded globs) or exclude-test (named by --exclude-test). Sorted by test. Absent when the source run left nothing out, or was recorded before R759 (then every test not in its baseline reads as new, as before). Present on every output that got past the source-unchanged check, refusals included.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["test", "reason"],
+        "properties": {
+          "test": { "type": "string" },
+          "reason": { "type": "string", "enum": ["tests-only", "exclude-test"] }
+        }
+      }
+    },
     "testPageRefused": {
       "type": "object",
       "description": "R-236c: every discovered test not sent because it has a reachable call that may open a TestPage. Absent when none was refused.",
