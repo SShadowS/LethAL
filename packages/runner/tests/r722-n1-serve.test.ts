@@ -112,6 +112,13 @@ describe("R771: judgeN1Serve with the build's n1e pin", () => {
     const other = A157_LINE.replace('"Dot.Step"', '"Other.Step"');
     expect(judgeN1Serve({ threw: wrap(other) }, A157, n1e).outcome).toBe("held");
   });
+  test("the pinned line with a status other than pass is held", () => {
+    for (const s of ["fail", "error"]) {
+      const moved = A157_LINE.replace('"status":"pass"', `"status":"${s}"`);
+      expect(moved).not.toBe(A157_LINE);
+      expect(judgeN1Serve({ threw: wrap(moved) }, A157, n1e).outcome).toBe("held");
+    }
+  });
   test("the alpha.5 refusal passes as today, with or without the pin", () => {
     expect(judgeN1Serve({ threw: wrap(ALPHA5_LINE) }, A157, n1e).outcome).toBe("pass");
     expect(judgeN1Serve({ threw: wrap(ALPHA5_LINE) }, A157).outcome).toBe("pass");
