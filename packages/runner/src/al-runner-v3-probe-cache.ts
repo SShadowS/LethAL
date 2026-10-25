@@ -15,7 +15,8 @@
  * part (e.g. another bcVersion) gets its own file instead of thrashing one shared file.
  */
 import { createHash, randomBytes } from "node:crypto";
-import { readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { V3ContractResult, V3Fact } from "./al-runner-v3-contract";
 import { v3ContractRefusals } from "./al-runner-v3-contract";
@@ -64,13 +65,18 @@ export async function probeCodeHash(
   return h.digest("hex");
 }
 
-/** File names, sizes and mtimes of every `.app` in the package folder (v3 and alc read symbols there). */
+/**
+ * File names and BYTES of every `.app` in the package folder (v3 and alc read symbols there).
+ * R776: content, not mtime, so a copied, re-downloaded or touched folder with the same bytes still
+ * hits; about 0.1 s for 70 MB. Throws when a file cannot be read (the caller then runs the probe).
+ */
 export async function packagesFingerprint(packagesDir: string): Promise<string> {
   const h = createHash("sha256");
   for (const name of (await readdir(packagesDir)).sort()) {
     if (!name.toLowerCase().endsWith(".app")) continue;
-    const s = await stat(join(packagesDir, name));
-    h.update(`${name}\0${s.size}\0${s.mtimeMs}\n`);
+    h.update(`${name}\0`);
+    for await (const chunk of createReadStream(join(packagesDir, name))) h.update(chunk as Buffer);
+    h.update("\0");
   }
   return h.digest("hex");
 }

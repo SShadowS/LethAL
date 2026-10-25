@@ -99,6 +99,7 @@ function statusOf(
     freshProbe?: boolean;
     bcVersion?: string;
     cacheDir?: string;
+    packagesDir?: string;
     spawn?: SpawnFn;
   } = {},
 ) {
@@ -174,18 +175,34 @@ describe("R762: each key part re-runs the probe", () => {
   });
   test("bcVersion", async () => {
     const e = await env();
-    // Same name, size and mtime (a whole second, so it round-trips exactly): the packages
-    // fingerprint does not move, only bcVersion does.
+    // The backend requires the System Application to equal bcVersion, so changing bcVersion
+    // changes the app's bytes too. The packages fingerprint is held still, so only bcVersion moves.
+    const fp = spyOn(cacheNs, "packagesFingerprint").mockResolvedValue("same");
+    try {
+      const app = join(e.deps, "Microsoft_System Application.app");
+      await statusOf(e);
+      const bytes = Buffer.from(await readFile(app));
+      const at = bytes.indexOf("28.0.46665.47126");
+      expect(at).toBeGreaterThan(0);
+      bytes.write("28.0.46665.47127", at);
+      await writeFile(app, bytes);
+      await statusOf(e, { bcVersion: "28.0.46665.47127" });
+    } finally {
+      fp.mockRestore();
+    }
+    expect(probe).toHaveBeenCalledTimes(2);
+  });
+  test("R776: one changed byte (same name, size and mtime) re-runs it", async () => {
+    const e = await env();
     const app = join(e.deps, "Microsoft_System Application.app");
     await utimes(app, 1_700_000_000, 1_700_000_000);
     await statusOf(e);
     const bytes = Buffer.from(await readFile(app));
-    const at = bytes.indexOf("28.0.46665.47126");
-    expect(at).toBeGreaterThan(0);
-    bytes.write("28.0.46665.47127", at);
+    const last = bytes.length - 1;
+    bytes[last] = (bytes[last] ?? 0) ^ 0xff;
     await writeFile(app, bytes);
     await utimes(app, 1_700_000_000, 1_700_000_000);
-    await statusOf(e, { bcVersion: "28.0.46665.47127" });
+    await statusOf(e);
     expect(probe).toHaveBeenCalledTimes(2);
   });
   test("cacheDir", async () => {
@@ -247,6 +264,34 @@ describe("R762: each key part re-runs the probe", () => {
     await writeFile(join(e.deps, "notes.txt"), "x");
     await statusOf(e);
     expect(probe).toHaveBeenCalledTimes(1);
+  });
+  test("R776 other direction: the same bytes, touched and rewritten, still hit", async () => {
+    const e = await env();
+    const app = join(e.deps, "Microsoft_System Application.app");
+    await statusOf(e);
+    await writeFile(app, await readFile(app));
+    await utimes(app, 1_800_000_000, 1_800_000_000);
+    await statusOf(e);
+    expect(probe).toHaveBeenCalledTimes(1);
+  });
+  test("R776 other direction: a copied folder with the same bytes hits", async () => {
+    const e = await env();
+    await statusOf(e);
+    const copy = join(e.root, "deps-copy");
+    await mkdir(copy);
+    for (const f of await readdir(e.deps))
+      await writeFile(join(copy, f), await readFile(join(e.deps, f)));
+    await statusOf(e, { packagesDir: copy });
+    expect(probe).toHaveBeenCalledTimes(1);
+  });
+  test("R776: an .app that cannot be read means run the probe, never a cached pass", async () => {
+    const e = await env();
+    await mkdir(join(e.deps, "Unreadable.app"));
+    await statusOf(e);
+    await statusOf(e);
+    expect(probe).toHaveBeenCalledTimes(2);
+    expect(warns.join("\n")).toMatch(/probe ran fresh \(key none; key unavailable\)/);
+    expect(await entries(e)).toEqual([]);
   });
 });
 
