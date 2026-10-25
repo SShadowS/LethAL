@@ -2218,7 +2218,7 @@ describe("the gate's transport flags (itest:alrunner-v3 harness)", () => {
     );
   });
   test("R788: unflagged, exactly D1, D1c and T run serve-entries; a flag names every leg's transport", () => {
-    const serve = { transport: "serve-entries" };
+    const serve = { transport: "serve-entries" } as const;
     for (const leg of ["D1", "D1c", "T"]) expect(v3ItestLegTransport(leg, {})).toEqual(serve);
     for (const leg of ["C", "S1", "S1E", "S3", "N1", "N1E", "N1S", "X", "L1", "Y-A", "Y-B", "MO", "WR", "K"])
       expect(v3ItestLegTransport(leg, {})).toEqual({});
