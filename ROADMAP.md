@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**25 of 781 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**21 of 781 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -807,7 +807,7 @@ that ordering is the priority.
 - **R764** · al-runner-v3 one-shot ignored RunOpts.coverage: kill confirms still sent --coverage-json and joined coverage · [R764.md](docs/roadmap/R764.md) · done (3f37aacb)
 - **R768** · al-runner-v3: retire the §6 Sleep coverage rule on builds whose pin records sleep-is-noop gone (R-762 item B) · [R768.md](docs/roadmap/R768.md) · done (6488d833)
 - **R766** · Parallel al-runner-v3 mutants: N serve lanes in one backend (--workers N) · [R766.md](docs/roadmap/R766.md) · done (79b437f2)
-- **R767** · al-runner-v3's per-send bound check (`assertBound`) spent 0.35 s per send on Bun's async fs, not on hashing · [R767.md](docs/roadmap/R767.md) · open, built and gated 2026-10-25 (coord task R-767); awaiting merge
+- **R767** · al-runner-v3's per-send bound check (`assertBound`) spent 0.35 s per send on Bun's async fs, not on hashing · [R767.md](docs/roadmap/R767.md) · done (5caf38f4)
 - **R769** · al-runner-v3's alc proof is still needed on #5602-fixed builds: the pinned edge build runs some AL that alc rejects · [R769.md](docs/roadmap/R769.md) · closed 2026-10-25 — measured (coord task R-769): the alc proof stays on every build (orchestrator ruling)…
 - **R779** · No run says whether R768 retired the Sleep rule: only the gate's leg X reads it, so a run's output gives no sign which §6 behaviour applied · [R779.md](docs/roadmap/R779.md) · done (1ed5c2ae)
 - **R771** · Pin the edge build al-runner 3.0.0-alpha.5+edge.20261025 (a157b2d34), then re-gate it · [R771.md](docs/roadmap/R771.md) · done 2026-10-25 (coord task R-771): current is edge-a157b2d34; the rejudge and the K run passed as…
@@ -816,15 +816,15 @@ that ordering is the priority.
 - **R776** · The v3 probe-cache key fingerprints the package folder by file mtime, so a fresh checkout or a copied .alpackages always misses once (about 10 s); a content hash costs about 0.1 s · [R776.md](docs/roadmap/R776.md) · done (1a6dc21b)
 - **R777** · The al-runner-v3 update gate infra-fails a good candidate when master adds a gate leg before `current` is re-gated · [R777.md](docs/roadmap/R777.md) · open, filed 2026-10-25 (coord task R-771)
 - **R781** · Parallel v3 (`--workers N`) cannot spread a project whose mutants sit in a few procedures: D1 at N = 4 started 3 daemons and ran 92 s against 93 s · [R781.md](docs/roadmap/R781.md) · closed 2026-10-25 — measured limit (orchestrator ruling): scopes stay whole; parallel pays on large projects…
-- **R780** · al-runner-v3: a cross-session cache of the test-app alc compile (5.1 s per deploy measured on the D1 slice) · [R780.md](docs/roadmap/R780.md) · open, built and gated 2026-10-25 (coord task R-772); awaiting merge
-- **R782** · With #5798 fixed upstream (edge a157b2d34), serve-entries could read a dotted test method from the row's own codeunit/method fields and lift R722's refusal · [R782.md](docs/roadmap/R782.md) · open, filed 2026-10-25 (coord task R-771)
+- **R780** · al-runner-v3: a cross-session cache of the test-app alc compile (5.1 s per deploy measured on the D1 slice) · [R780.md](docs/roadmap/R780.md) · done (496d1360)
+- **R782** · With #5798 fixed upstream (edge a157b2d34), serve-entries could read a dotted test method from the row's own codeunit/method fields and lift R722's refusal · [R782.md](docs/roadmap/R782.md) · done (0ef82e1d)
 - **R778** · al-runner-v3 serve-entries: one kill-pair request per kill is 82-85% of D1's mutant loop; batch the pairs · [R778.md](docs/roadmap/R778.md) · done (de183776)
 - **R783** · SPIKE: do LethAL's BC gates work on docker1 (192.168.2.77), the copy of bc1-bc3, before server1 goes off? · [R783.md](docs/roadmap/R783.md) · open, filed 2026-10-25 (coord task R-783, owner request)
 - **R785** · Parallel v3: start an extra lane only when the queued live work is long enough to pay for its warm-up · [R785.md](docs/roadmap/R785.md) · open, filed 2026-10-25 (from coord task R-766; R781's follow-up)
 - **R784** · The R-653 order probe as a gated update-gate leg (every pin), plus a non-transactional kind and a dependency-app SingleInstance · [R784.md](docs/roadmap/R784.md) · done (4730432c)
 - **R786** · PRIORITY: a default v3 run (serve-entries by default, R761) FAILS at the warm-up when a test is one R612 refuses, where the same run on one-shot completes · [R786.md](docs/roadmap/R786.md) · done (07f89eb3)
 - **R787** · A fixture `.alpackages` that is a symlink into another worktree is neither ignored by git nor safe from a gate's writes · [R787.md](docs/roadmap/R787.md) · done (f8ddceee)
-- **R788** · The v3 gate's big legs (D1, D1c, T) run serve-entries, so a gate run takes minutes, not half an hour · [R788.md](docs/roadmap/R788.md) · open, built and gated 2026-10-25 (coord task R-788); awaiting merge, then the R777 regate of current
+- **R788** · The v3 gate's big legs (D1, D1c, T) run serve-entries, so a gate run takes minutes, not half an hour · [R788.md](docs/roadmap/R788.md) · done (5841b90a)
 - **R789** · The v3 gate's `timeout-is-cpu` fact reads `diverged` on a correct build when other jobs load core 0 · [R789.md](docs/roadmap/R789.md) · done (494082ea, 3ea559ca)
 
 ---
