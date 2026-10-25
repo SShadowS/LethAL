@@ -1,10 +1,11 @@
 import { describe, expect, it, spyOn } from "bun:test";
 import { randomBytes } from "node:crypto";
-import { readdirSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { existsSync, readdirSync } from "node:fs";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
+import { AlRunnerV3Backend } from "../src/al-runner-v3-backend";
 import type { ExecutionBackend } from "../src/backend";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
 import type { BcDevConfigSection, LethalConfigFile, RunCliConfig } from "../src/cli";
@@ -838,6 +839,114 @@ describe("runFromCli (Task 7 review wiring)", () => {
       expect(closes).toBe(1);
     } finally {
       BcDevMcpBackend.prototype.close = originalClose;
+    }
+  });
+});
+
+// R775: `lethal run` closed only a bcdev backend, so a v3 run never shut its serve daemon down,
+// never removed `<instrumentedDir>/cov`, and never printed the serve-entries counters line.
+describe("R775: runFromCli closes the al-runner-v3 backend", () => {
+  const v3Parsed = async (): Promise<RunCliConfig> => ({
+    ...RUN_CONFIG_BCDEV,
+    backendKind: "al-runner-v3",
+    configPath: await writeTempConfig(),
+    dbPath: ":memory:",
+  });
+  const noEnv = async () => ({ effectiveConfig: {} });
+
+  /** A v3 backend over the real prototype whose `close` only counts (and may throw). */
+  async function countingClose<T>(
+    fail: boolean,
+    body: (b: AlRunnerV3Backend) => Promise<T>,
+  ): Promise<{ closes: number; out: T }> {
+    const original = AlRunnerV3Backend.prototype.close;
+    let closes = 0;
+    AlRunnerV3Backend.prototype.close = async () => {
+      closes += 1;
+      if (fail) throw new Error("v3 close boom");
+    };
+    try {
+      const out = await body(Object.create(AlRunnerV3Backend.prototype) as AlRunnerV3Backend);
+      return { closes, out };
+    } finally {
+      AlRunnerV3Backend.prototype.close = original;
+    }
+  }
+
+  it("closes it after a run that succeeds", async () => {
+    const parsed = await v3Parsed();
+    const { closes, out } = await countingClose(false, (b) =>
+      runFromCli(parsed, {
+        validateSelectorIdsForProject: async () => {},
+        resolveEnvToolSession: noEnv,
+        buildBackend: async () => b,
+        runSession: async () => FAKE_REPORT,
+      }),
+    );
+    expect(out).toBe(FAKE_REPORT);
+    expect(closes).toBe(1);
+  });
+
+  it("closes it after a run that throws, and a failing close never replaces the run's error", async () => {
+    const parsed = await v3Parsed();
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { closes, out } = await countingClose(true, (b) =>
+        runFromCli(parsed, {
+          validateSelectorIdsForProject: async () => {},
+          resolveEnvToolSession: noEnv,
+          buildBackend: async () => b,
+          runSession: async () => {
+            throw new Error("run boom");
+          },
+        }).then(
+          () => "resolved",
+          (e: unknown) => (e instanceof Error ? e.message : String(e)),
+        ),
+      );
+      expect(out).toBe("run boom");
+      expect(closes).toBe(1);
+      expect(warn.mock.calls.some((a) => String(a[0]).includes("v3 close boom"))).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("a real serve-entries backend's close prints the counters line and removes cov/", async () => {
+    const parsed = await v3Parsed();
+    const root = await mkdtemp(join(tmpdir(), "r775-"));
+    const instrumentedDir = join(root, "scratch");
+    await mkdir(join(instrumentedDir, "cov"), { recursive: true });
+    const b = new AlRunnerV3Backend(
+      {
+        alRunnerPath: "/fake/al-runner",
+        instrumentedDir,
+        testDir: join(root, "test"),
+        packagesDir: join(root, "deps"),
+        bcVersion: "28.0.46665.47126",
+        selectorObjectId: 50001,
+        alcPath: "/fake/alc",
+        coverage: "none",
+        transport: "serve-entries",
+        transportSource: "explicit",
+      },
+      async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+    );
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await runFromCli(parsed, {
+        validateSelectorIdsForProject: async () => {},
+        resolveEnvToolSession: noEnv,
+        buildBackend: async () => b,
+        runSession: async () => FAKE_REPORT,
+      });
+      expect(
+        warn.mock.calls.some((a) => String(a[0]).includes("al-runner-v3 serve-entries (R635)")),
+      ).toBe(true);
+      expect(existsSync(join(instrumentedDir, "cov"))).toBe(false);
+    } finally {
+      warn.mockRestore();
+      await rm(root, { recursive: true, force: true });
     }
   });
 });

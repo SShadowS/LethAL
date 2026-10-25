@@ -190,6 +190,21 @@ export function findV3Pin(version: string, binarySha256: string): V3BuildPin | u
 }
 
 /**
+ * R-762 B: is the §6 Sleep coverage rule retired for this session? True only when the build's pin
+ * (`findV3Pin`: version line AND sha256) records `sleep-is-noop` as `gone` AND this session's own
+ * probe reads it `gone` too. No pin, a pin that records anything else, a probe that did not run or
+ * reads anything else: the rule stays.
+ */
+export function sleepRuleRetiredFor(
+  contract: V3ContractResult | undefined,
+  version: string,
+  binarySha256: string,
+): boolean {
+  if (findV3Pin(version, binarySha256)?.legC["sleep-is-noop"]?.verdict !== "gone") return false;
+  return contract?.facts.find((f) => f.fact === "sleep-is-noop")?.verdict === "gone";
+}
+
+/**
  * Does a leg-C reading equal the pin's entry for its fact? The gate (`classifyLegC`) and the
  * session's mute (`pinnedDefectCoverage`) both use this one function, so they cannot drift: the fact
  * is an own property of the pin, the verdict equals the pinned one, and the measured text matches
