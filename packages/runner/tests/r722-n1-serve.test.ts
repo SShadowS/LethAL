@@ -6,6 +6,7 @@ import { describe, expect, test } from "bun:test";
 import { V3_GATE_LEGS, gateOutcome } from "../itest/al-runner-v3-gate";
 import {
   V3_N1E_LEG,
+  V3_N1S_LEG,
   V3_NO_SERVE_ENTRIES,
   judgeN1Serve,
   v3DefaultLegs,
@@ -95,6 +96,9 @@ describe("R722: N1E is read by the update gate", () => {
     >;
   test("N1E is in V3_GATE_LEGS", () => {
     expect((V3_GATE_LEGS as readonly string[]).includes(V3_N1E_LEG)).toBe(true);
+  });
+  test("N1S is in V3_GATE_LEGS (R763: the widened method shape rests on it)", () => {
+    expect((V3_GATE_LEGS as readonly string[]).includes(V3_N1S_LEG)).toBe(true);
   });
   test("N1E held with every other leg passing is held", () => {
     expect(gateOutcome(legs("held"))).toBe("held");

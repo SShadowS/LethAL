@@ -625,9 +625,11 @@ describe("T22: the proof is bound to the bytes v3 reads (c1-c5)", () => {
         const c = text[i] === "X" ? "Y" : "X";
         await writeFile(p, text.slice(0, i) + c + text.slice(i + 1));
         expect((await stat(p)).size).toBe(s.size);
-        // Seconds as a number keep sub-millisecond precision (a Date keeps only whole ms).
+        // Seconds as a number keep sub-millisecond precision (a Date keeps only whole ms). The fs
+        // rounds what it stores (NTFS: 100 ns ticks, master CI 40198892198), so "restored" is to
+        // under 1 µs: closer than any stat check could tell apart.
         await utimes(p, s.atimeMs / 1000, s.mtimeMs / 1000);
-        expect((await stat(p)).mtimeMs).toBe(s.mtimeMs);
+        expect(Math.abs((await stat(p)).mtimeMs - s.mtimeMs)).toBeLessThan(0.001);
       },
     ],
     [
