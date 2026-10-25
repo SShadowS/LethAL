@@ -155,6 +155,8 @@ function fakeAlc(
   fail: (project: string) => boolean = () => false,
   /** R780: the bytes of a project's .app (default: a text stand-in, not a zip). */
   body: (project: string) => Buffer | undefined = () => undefined,
+  /** R780: runs inside the compile, before the .app is written (real alc can write into the project). */
+  during: (project: string) => Promise<void> = async () => {},
 ) {
   const calls: { project: string; cache: string; staged: string[] }[] = [];
   const io: ArtifactIo = {
@@ -171,6 +173,7 @@ function fakeAlc(
       const { readdir } = await import("node:fs/promises");
       calls.push({ project, cache, staged: (await readdir(cache)).sort() });
       if (fail(project)) return { exitCode: 1, stdout: "error AL0118: NoSuchVar", stderr: "" };
+      await during(project);
       await writeFile(out, body(project) ?? `app of ${project}`);
       return { exitCode: 0, stdout: "", stderr: "" };
     },
@@ -2731,7 +2734,12 @@ describe("R780: the cross-session test-app compile cache", () => {
   async function deployWith(
     e: Env,
     sym: Sym,
-    opts: { failTest?: boolean; cfg?: Partial<AlRunnerV3Config> } = {},
+    opts: {
+      failTest?: boolean;
+      cfg?: Partial<AlRunnerV3Config>;
+      /** Runs inside the TEST-app compile only. */
+      duringTest?: () => Promise<void>;
+    } = {},
   ) {
     const alc = fakeAlc(
       (p) => opts.failTest === true && p === e.l.testDir,
@@ -2739,6 +2747,9 @@ describe("R780: the cross-session test-app compile cache", () => {
         p.endsWith("active")
           ? buildFakeAppWithEntries({ "SymbolReference.json": JSON.stringify(sym) })
           : undefined,
+      async (p) => {
+        if (p === e.l.testDir) await opts.duringTest?.();
+      },
     );
     const b = backendOf(e.l, fakeV3(allPass, { coverage: plainCoverage }).spawn, alc.io, {
       cacheDir: e.cacheDir,
@@ -2941,13 +2952,78 @@ describe("R780: the cross-session test-app compile cache", () => {
       join(e.l.batch, "app.json"),
       JSON.stringify({ id: TARGET_ID, name: "T", version: "2.0.0.1" }),
     );
-    await deployWith(e, base()); // satisfies the minimum: live, writes the marker
+    await deployWith(e, base()); // satisfies the minimum: a hit already (the cold deploy above wrote the marker)
     expect((await deployWith(e, base())).testCompiles).toBe(0);
     await writeFile(
       join(e.l.batch, "app.json"),
       JSON.stringify({ id: TARGET_ID, name: "T", version: "1.0.0.5" }),
     );
     expect((await deployWith(e, base())).testCompiles).toBe(1);
+  });
+
+  test("B1: alc writes a new file into the test dir (TranslationFile): the first send is not refused, no marker is written; the repeat writes it; the third is a hit", async () => {
+    const e = await env();
+    const xlf = join(e.l.testDir, "Translations", "T.g.xlf");
+    const duringTest = async () => {
+      await mkdir(join(e.l.testDir, "Translations"), { recursive: true });
+      await writeFile(xlf, "<xliff/>");
+    };
+    const first = await deployWith(e, base(), { duringTest });
+    expect(first.err).toBeUndefined();
+    await first.b.activate("M0002");
+    expect((await first.b.run(ref("A"), { coverage: "none", timeoutMs: 1000 })).outcome).toBe(
+      "pass",
+    );
+    expect(await markers(e)).toHaveLength(0); // pre != post
+    const second = await deployWith(e, base(), { duringTest });
+    expect(second.testCompiles).toBe(1);
+    expect(await markers(e)).toHaveLength(1); // the file now exists and is rewritten identically
+    const third = await deployWith(e, base(), { duringTest });
+    expect(third.testCompiles).toBe(0);
+  });
+
+  test("FIX 2: a test .al byte changes during the compile: no marker, and the restored original runs alc again", async () => {
+    const e = await env();
+    const file = join(e.l.testDir, "Tests.Codeunit.al");
+    const original = await readFile(file, "utf8");
+    const first = await deployWith(e, base(), { duringTest: () => appendFile(file, " ") });
+    expect(first.err).toBeUndefined();
+    expect(await markers(e)).toHaveLength(0);
+    await writeFile(file, original); // back to the state the first key described
+    const second = await deployWith(e, base());
+    expect(second.testCompiles).toBe(1);
+  });
+
+  test("FIX 3: a test app.json with a non-UTF-8 byte deploys and its first send is not refused", async () => {
+    const e = await env();
+    await writeFile(
+      join(e.l.testDir, "app.json"),
+      Buffer.concat([
+        Buffer.from('{"id":"ff7935bb-9fe2-4f7a-adf3-aa7132a41fe7","name":"Tests","publisher":"'),
+        Buffer.from([0xf8]),
+        Buffer.from('"}'),
+      ]),
+    );
+    const d = await deployWith(e, base());
+    expect(d.err).toBeUndefined();
+    await d.b.activate("M0002");
+    expect((await d.b.run(ref("A"), { coverage: "none", timeoutMs: 1000 })).outcome).toBe("pass");
+  });
+
+  test("FIX 1: the key keeps major.minor of the batch version: a different major.minor is a miss, only build/revision differing is a hit", async () => {
+    const e = await env();
+    const version = (v: string) =>
+      writeFile(
+        join(e.l.batch, "app.json"),
+        JSON.stringify({ id: TARGET_ID, name: "T", version: v }),
+      );
+    await deployWith(e, base()); // 1.0.0.0
+    await version("1.1.0.0");
+    expect((await deployWith(e, base())).testCompiles).toBe(1);
+    await version("1.1.7.9");
+    expect((await deployWith(e, base())).testCompiles).toBe(0);
+    await version("1.0.5.5");
+    expect((await deployWith(e, base())).testCompiles).toBe(0);
   });
 
   test("an alc test-app FAILURE is never cached: the next identical deploy runs alc again and fails the same way", async () => {
@@ -3010,6 +3086,19 @@ describe("R780: the cross-session test-app compile cache", () => {
         warm.b.run(ref("A"), { coverage: "none", timeoutMs: 1000 }),
       ).rejects.toBeInstanceOf(AlRunnerV3UnprovenBatchError);
     }
+  });
+
+  test("eviction removes orphaned .tmp files older than an hour, and keeps fresh ones", async () => {
+    const e = await env();
+    const dir = join(e.cacheDir, "testapp-proof");
+    await mkdir(dir, { recursive: true });
+    const old = join(dir, `${"a".repeat(64)}.x.tmp`);
+    const fresh = join(dir, `${"b".repeat(64)}.y.tmp`);
+    await writeFile(old, "");
+    await writeFile(fresh, "");
+    await utimes(old, 1000, 1000);
+    await new TestAppProofStore(dir).put("c".repeat(64));
+    expect((await readdir(dir)).sort()).toEqual([`${"b".repeat(64)}.y.tmp`, "c".repeat(64)]);
   });
 
   test("the store caps its markers and evicts the oldest by mtime", async () => {

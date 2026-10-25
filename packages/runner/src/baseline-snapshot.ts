@@ -123,8 +123,8 @@ export async function scanTestDir(
   return hashAlFiles(dir, walk.files, false, true);
 }
 
-/** `tableextension 50100`, `reportextension 50100`, any `<kind>extension <id>`. */
-const EXTENSION_OBJECT = /\b[a-z]*extension\s+\d/i;
+/** `tableextension`, `reportextension`, any `<kind>extension` word (the id may sit on the next line). */
+const EXTENSION_OBJECT = /\b[a-z]*extension\b/i;
 
 /** R608: one non-`.al` file of a bound folder, as the proof recorded it. */
 export interface OtherFile {

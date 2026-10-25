@@ -86,13 +86,21 @@ export function symbolInterfaceForKey(
   }
 }
 
-/** The staged `active/app.json` without `version`, canonical; `undefined` when it does not parse. */
+/**
+ * The staged `active/app.json`, canonical, with `version` cut to `major.minor`; `undefined` when it
+ * does not parse. Why `major.minor` stays: a staged dependency's own minimum version for the target
+ * (and the test app's) is compared against this version, so a different major.minor can change
+ * whether alc accepts the compile. The build and revision parts are minted per batch and are
+ * dropped, or no two batches would ever share a key.
+ */
 export function appJsonForKey(text: string): string | undefined {
   try {
     const parsed = JSON.parse(text.replace(/^﻿/, "")) as unknown;
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
-    const { version: _version, ...rest } = parsed as Record<string, unknown>;
-    return canonicalJson(rest);
+    const { version, ...rest } = parsed as Record<string, unknown>;
+    const majorMinor =
+      typeof version === "string" ? version.split(".").slice(0, 2).join(".") : (version ?? null);
+    return canonicalJson({ ...rest, version: majorMinor });
   } catch {
     return undefined;
   }
@@ -248,7 +256,15 @@ export class TestAppProofStore {
 
   private async evict(): Promise<void> {
     try {
-      const names = (await readdir(this.dir)).filter((n) => KEY.test(n));
+      const all = await readdir(this.dir);
+      // Orphaned temp files (a crash between write and rename) older than an hour.
+      for (const n of all.filter((n) => n.endsWith(".tmp"))) {
+        const s = await lstat(join(this.dir, n)).catch(() => undefined);
+        if (s !== undefined && Date.now() - s.mtimeMs > 3_600_000) {
+          await rm(join(this.dir, n), { force: true }).catch(() => {});
+        }
+      }
+      const names = all.filter((n) => KEY.test(n));
       if (names.length <= this.max) return;
       const aged: { name: string; mtimeMs: number }[] = [];
       for (const name of names) {
