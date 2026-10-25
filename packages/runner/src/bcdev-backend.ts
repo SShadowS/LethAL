@@ -1427,8 +1427,17 @@ export class BcDevMcpBackend implements ExecutionBackend {
     if (!collectCoverage) return transport.run(req);
     const { verdict, coverageRows, coverageStats } = await transport.runWithCoverage(req);
     if (coverageRows === undefined) return verdict; // non-`ran`: a refusal carries no coverage
-    await dumpFencedCoverage(ref, coverageRows, coverageStats);
-    return { ...verdict, coverage: this.buildFencedCoverageMap(coverageRows, ref, coverageStats) };
+    // R748: the dump now carries the gap rows the map builder classified, so it is written after
+    // the build, and in `finally` so a build that throws still leaves its record.
+    const gaps: DumpGap[] = [];
+    try {
+      return {
+        ...verdict,
+        coverage: this.buildFencedCoverageMap(coverageRows, ref, coverageStats, gaps),
+      };
+    } finally {
+      await dumpFencedCoverage(ref, coverageRows, coverageStats, gaps);
+    }
   }
 
   /**
@@ -1462,6 +1471,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
     rows: readonly FencedCoverageRow[],
     ref: TestMethodRef,
     stats?: FencedCoverageStats,
+    gapsOut?: DumpGap[],
   ): CoverageMap {
     const lineMap = this.lineMap;
     if (lineMap === undefined) {
@@ -1480,6 +1490,11 @@ export class BcDevMcpBackend implements ExecutionBackend {
     // and until now it was indistinguishable from a trigger line the map declines to name.
     const namingGapKeys = new Set<string>();
     const namingGaps: NamingGap[] = [];
+    // R748: per declared, unrefused object (keyed `Type:id`, never id alone): rows that named a
+    // member, and the object-relative lines that fell in no known span.
+    const memberRows = new Map<string, number>();
+    const gapLines = new Map<string, Set<number>>();
+    const gapRows: { key: string; objectType: string; objectId: number; lineNo: number }[] = [];
     for (const row of rows) {
       const objectType = objectTypeName(row.objectType);
       if (!lineMap.declares(objectType, row.objectId)) continue; // rule 1
@@ -1495,8 +1510,13 @@ export class BcDevMcpBackend implements ExecutionBackend {
       const objKey = `${objectType}:${row.objectId}`;
       rowsPerObject.set(objKey, (rowsPerObject.get(objKey) ?? 0) + 1);
       const procedure = lineMap.lookup(objectType, row.objectId, row.lineNo);
+      if (procedure !== undefined) memberRows.set(objKey, (memberRows.get(objKey) ?? 0) + 1);
       if (procedure === undefined && lineMap.isNamingGap(objectType, row.objectId, row.lineNo)) {
-        const gapKey = `${objectType}:${row.objectId}`;
+        const lines = gapLines.get(objKey) ?? new Set<number>();
+        lines.add(row.lineNo);
+        gapLines.set(objKey, lines);
+        gapRows.push({ key: objKey, objectType, objectId: row.objectId, lineNo: row.lineNo });
+        const gapKey = objKey;
         if (!namingGapKeys.has(gapKey)) {
           namingGapKeys.add(gapKey);
           namingGaps.push({ objectType, objectId: row.objectId });
@@ -1515,28 +1535,39 @@ export class BcDevMcpBackend implements ExecutionBackend {
     // comparison that failed rather than only naming the two suspects.
     const rowKeys = [...new Set(rows.map((r) => `${objectTypeName(r.objectType)}:${r.objectId}`))];
     // R747: judged per object. An object with a naming gap and no member row in this test.
+    // R748: ONE has-member set splits the gap objects in two, so no object is in both lists.
+    const hasMember = (key: string) => (memberRows.get(key) ?? 0) > 0;
     const flagged = namingGaps
-      .filter(
-        (g) =>
-          !entries.some(
-            (e) =>
-              e.objectType === g.objectType &&
-              e.objectId === g.objectId &&
-              e.procedure !== undefined,
-          ),
-      )
-      .map((g) => {
-        const key = `${g.objectType}:${g.objectId}`;
-        return `${key} (${rowsPerObject.get(key) ?? 0} row(s))`;
-      })
+      .map((g) => `${g.objectType}:${g.objectId}`)
+      .filter((key) => !hasMember(key))
+      .map((key) => `${key} (${rowsPerObject.get(key) ?? 0} row(s))`)
       // Sorted, so the message (and which objects the cap shows) does not follow the server's row order.
       .sort();
+    const besideMembers: BesideMembers[] = [...gapLines.entries()]
+      .filter(([key]) => hasMember(key))
+      .map(([key, lines]) => ({
+        key,
+        lines: [...lines].sort((a, b) => a - b),
+        memberRows: memberRows.get(key) ?? 0,
+      }))
+      .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+    if (gapsOut !== undefined) {
+      for (const g of gapRows) {
+        gapsOut.push({
+          objectType: g.objectType,
+          objectId: g.objectId,
+          lineNo: g.lineNo,
+          besideMembers: hasMember(g.key),
+        });
+      }
+    }
     this.warnOnThinFencedCoverage(
       ref,
       rows.length,
       declaredRows,
       refusedRows,
       flagged,
+      besideMembers,
       rowKeys,
       stats,
     );
@@ -1575,11 +1606,15 @@ export class BcDevMcpBackend implements ExecutionBackend {
    *
    * R747: judged PER OBJECT, not per test. `flaggedObjects` holds the objects with a naming gap
    * and no member row in this test. A per-test count was masked by LethAL's own selector
-   * codeunit, whose `Active` member runs in nearly every test. Blind spots: (i) an object with
-   * member rows AND gap rows stays quiet (the likeliest real 1-2 line shift looks like that);
-   * (ii) an R318 renamed split member with no coverage name sits in `unnamed`, which
-   * `isNamingGap` does not consult; (iii) report column, page field and property rows are
-   * unmeasured on real projects. A shift landing every row in trigger spans stays quiet too.
+   * codeunit, whose `Active` member runs in nearly every test.
+   *
+   * R748: `besideMembers` holds the objects with a naming gap AND a member row (the likeliest
+   * real 1-2 line shift looks like that); they raise `fenced-coverage-gap-beside-members`. The
+   * two lists never share an object. Remaining blind spots: (ii) an R318 renamed split member
+   * with no coverage name sits in `unnamed`, which `isNamingGap` does not consult; so a row on it
+   * counts as NO member, and a gap row beside one named member now gives a FALSE new warning
+   * (R318); (iii) report column, page field and property rows are unmeasured on real projects.
+   * A shift landing every row in trigger spans stays quiet too.
    */
   private warnOnThinFencedCoverage(
     ref: TestMethodRef,
@@ -1587,6 +1622,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
     declaredRows: number,
     refusedRows: number,
     flaggedObjects: readonly string[],
+    besideMembers: readonly BesideMembers[],
     rowKeys: readonly string[],
     stats?: FencedCoverageStats,
   ): void {
@@ -1613,18 +1649,35 @@ export class BcDevMcpBackend implements ExecutionBackend {
       );
       return;
     }
-    if (flaggedObjects.length === 0) return; // R746/R747: no object with a gap and no member
-    const shown = flaggedObjects.slice(0, 5).join(", ");
-    const more = flaggedObjects.length > 5 ? ` +${flaggedObjects.length - 5} more` : "";
-    const blame =
-      "Suspect the line map's base-line frame — a shifted range degrades every observation " +
-      "to object level instead of naming a member.";
-    const lost =
-      "Member attribution is lost for these objects in this test; only object-level matching (triggers and local procedures) remains.";
-    this.notify(
-      "fenced-coverage-no-procedure-lines",
-      `[lethal] fenced coverage for ${where}: no row of ${shown}${more} fell inside a known procedure${server}. ${lost} ${blame}`,
-    );
+    if (flaggedObjects.length > 0) {
+      const shown = flaggedObjects.slice(0, 5).join(", ");
+      const more = flaggedObjects.length > 5 ? ` +${flaggedObjects.length - 5} more` : "";
+      const blame =
+        "Suspect the line map's base-line frame — a shifted range degrades every observation " +
+        "to object level instead of naming a member.";
+      const lost =
+        "Member attribution is lost for these objects in this test; only object-level matching (triggers and local procedures) remains.";
+      this.notify(
+        "fenced-coverage-no-procedure-lines",
+        `[lethal] fenced coverage for ${where}: no row of ${shown}${more} fell inside a known procedure${server}. ${lost} ${blame}`,
+      );
+    }
+    // R748: no early return above this, or an empty no-member list would silence this code.
+    if (besideMembers.length > 0) {
+      const shown = besideMembers
+        .slice(0, 5)
+        .map((o) => {
+          const lines = o.lines.slice(0, 8).join(", ");
+          const moreLines = o.lines.length > 8 ? ` +${o.lines.length - 8} more` : "";
+          return `${o.key} line(s) ${lines}${moreLines} fell in no known span, beside ${o.memberRows} row(s) that named a member`;
+        })
+        .join("; ");
+      const more = besideMembers.length > 5 ? ` +${besideMembers.length - 5} more object(s)` : "";
+      this.notify(
+        "fenced-coverage-gap-beside-members",
+        `[lethal] fenced coverage for ${where}: ${shown}${more}${server}. Line numbers are object-relative, in the instrumented source. These lines are attributed at object level only. Suspect a 1-2 line base-line shift, or a line kind the map does not index.`,
+      );
+    }
   }
 
   private async runOnHub(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
@@ -1863,6 +1916,21 @@ function coverageObjectIdFilterFromText(text: string, appJsonPath: string): stri
   return parts.join("|");
 }
 
+/** R748: one naming-gap row in the dump. `besideMembers`: its object also had a member row in this test. */
+interface DumpGap {
+  objectType: string;
+  objectId: number;
+  lineNo: number;
+  besideMembers: boolean;
+}
+
+/** R748: an object with naming-gap lines (sorted, distinct) and at least one member row. */
+interface BesideMembers {
+  key: string;
+  lines: readonly number[];
+  memberRows: number;
+}
+
 /**
  * Spec decision 3: keep the RAW line rows as a diagnostic artifact, not only their collapsed
  * `CoverageMap` form. Opt-in via `LETHAL_FENCED_COVERAGE_DUMP=<path>` (JSONL, one object per test).
@@ -1880,13 +1948,17 @@ async function dumpFencedCoverage(
   ref: TestMethodRef,
   rows: readonly FencedCoverageRow[],
   stats: FencedCoverageStats | undefined,
+  gaps: readonly DumpGap[],
 ): Promise<void> {
   const path = process.env.LETHAL_FENCED_COVERAGE_DUMP;
   if (path === undefined || path === "") return;
+  // R748: `gaps` is every naming-gap row the line map classified (uncapped); lines are
+  // object-relative, in the instrumented frame.
   const record = {
     test: `${ref.codeunitName}.${ref.method}`,
     ...(stats !== undefined ? { stats } : {}),
     rows,
+    gaps,
   };
   await appendFile(
     path,
