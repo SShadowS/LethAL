@@ -285,13 +285,17 @@ export class AlRunnerV3TransportFrozenError extends Error {
 
 /**
  * R761: the test-name shapes proven under serve-entries. Inventoried with `discoverTests` on D1, S1
- * and the gift card: every test METHOD name was a plain identifier, and every test CODEUNIT name used
- * only letters, digits, `_`, space and `.` (D1's "CDO Recipient Mgt. Tests", 21 tests). N1's shapes
- * (" - ( ) . / & å æ" and a leading digit) are NOT proven. A name outside these falls the default back
- * to one-shot (`unproven-test-name-shape`).
+ * and the gift card: plain method names, and codeunit names of letters, digits, `_`, space and `.`
+ * (D1's "CDO Recipient Mgt. Tests", 21 tests).
+ * R763: leg N1S ran fixtures/sandbox-names-tests WITHOUT `Dot.Step` under serve-entries, per mutant
+ * equal to one-shot (0 differences over 36): it proves method names of letters, digits, `_`, space,
+ * `-`, `(`, `)`, `/`, `&`, `å`, `æ`, with a leading digit allowed ("7Digit Step"). Exactly those: the
+ * dot stays out (#5798), and any character N1S never ran (`ø`, `'`, `:`, ...) falls back.
+ * Positions too: N1S's names start with a letter or digit and hold only single, inner spaces.
+ * A name outside these falls the default back to one-shot (`unproven-test-name-shape`).
  */
 export const V3_SERVE_PROVEN_NAME_SHAPES = {
-  method: /^[A-Za-z_][A-Za-z0-9_]*$/,
+  method: /^[A-Za-z0-9](?:[A-Za-z0-9_()/&åæ-]| (?=[^ ]))*$/,
   codeunit: /^[A-Za-z0-9_ .]+$/,
 } as const;
 

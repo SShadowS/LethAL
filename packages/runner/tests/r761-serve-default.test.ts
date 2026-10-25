@@ -123,13 +123,24 @@ describe("R761: the default transport", () => {
     }
   });
 
-  test("reason unproven-test-name-shape (method): a dotted or digit-first method name falls back", async () => {
-    for (const method of ["Dot.Step", "1st", "has space"]) {
+  test("reason unproven-test-name-shape (method): a dotted or unseen-character method name falls back", async () => {
+    // R763: "1st" and "has space" are proven since leg N1S; the dot and `ø` are not.
+    for (const method of ["Dot.Step", "Ø Step", "Colon:Step"]) {
       const r = await rig(DEFAULT, { tests: [...PLAIN, ref(method)] });
       await r.b.decideTransport({ resume: false });
       expect(r.b.inRunStopIsBudget).toBe(true);
       expect(r.warnings).toHaveLength(1);
       expect(r.warnings[0]?.message).toContain("unproven-test-name-shape");
+    }
+  });
+
+  test("R763: a method name N1S proved under serve ('Slash/Step', '7Digit Step') no longer falls back", async () => {
+    // red when the widening is missing: these method shapes fell back before R763
+    for (const method of ["Slash/Step", "7Digit Step", "Blåbær Step"]) {
+      const r = await rig(DEFAULT, { tests: [...PLAIN, ref(method)] });
+      await r.b.decideTransport({ resume: false });
+      expect([method, r.b.inRunStopIsBudget]).toEqual([method, false]);
+      expect(r.warnings).toEqual([]);
     }
   });
 
@@ -146,9 +157,34 @@ describe("R761: the default transport", () => {
 
   test("the name shapes are the measured ones", () => {
     expect(V3_SERVE_PROVEN_NAME_SHAPES.method.test("Plain_1")).toBe(true);
-    expect(V3_SERVE_PROVEN_NAME_SHAPES.method.test("a b")).toBe(false);
     expect(V3_SERVE_PROVEN_NAME_SHAPES.codeunit.test("CDO Recipient Mgt. Tests")).toBe(true);
     expect(V3_SERVE_PROVEN_NAME_SHAPES.codeunit.test("A - B")).toBe(false);
+  });
+
+  // R763: leg N1S proved every non-dot method shape in fixtures/sandbox-names-tests under serve.
+  test("R763: N1's measured method shapes are proven; the dot and unseen characters are not", () => {
+    // red when the widening is missing: each of these is a name N1S ran under serve with 0 differences
+    for (const name of [
+      "Space Step",
+      "Dash-Step",
+      "Paren(Step)",
+      "Slash/Step",
+      "Amp&Step",
+      "7Digit Step",
+      "Blåbær Step",
+      "Twin Pair",
+      "Twin_PairLong",
+    ]) {
+      expect([name, V3_SERVE_PROVEN_NAME_SHAPES.method.test(name)]).toEqual([name, true]);
+    }
+    // red when the widening is too loose: the dot is #5798, and characters N1S never ran stay unproven
+    for (const name of ["Dot.Step", "Ø Step", "Å Step", "Quote'Step", "Colon:Step", "Plus+Step", "Tab\tStep", ""]) {
+      expect([name, V3_SERVE_PROVEN_NAME_SHAPES.method.test(name)]).toEqual([name, false]);
+    }
+    // red when only the character set is checked: N1S never ran these positions
+    for (const name of [" Step", "Step ", "Two  Spaces", "-Step", "(Step)", "()", "   "]) {
+      expect([name, V3_SERVE_PROVEN_NAME_SHAPES.method.test(name)]).toEqual([name, false]);
+    }
   });
 
   test("reason no-serve-build: alpha.2 falls back", async () => {

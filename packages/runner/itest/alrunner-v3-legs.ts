@@ -25,6 +25,9 @@ export const V3_K_CANDIDATE_SKIP = "skipped (candidate build)";
  */
 export const V3_N1E_LEG = "N1E";
 
+/** R763: N1's project without `Dot.Step`, one-shot then serve-entries (`legN1S`); in `V3_GATE_LEGS`. */
+export const V3_N1S_LEG = "N1S";
+
 /** The exact `--version` lines of builds that have no serve-entries path (alpha.2's `.gated`). */
 export const V3_NO_SERVE_ENTRIES: readonly string[] = ["alrunner 3.0.0-alpha.2 (91253f2d6)"];
 
@@ -96,6 +99,7 @@ export function v3DefaultLegs(o: { readonly cdo: boolean; readonly tables: boole
     "S3",
     "N1",
     V3_N1E_LEG,
+    V3_N1S_LEG,
     "X",
     "L1",
     "Y-A",

@@ -324,6 +324,7 @@ export const GATE_WARNINGS: Readonly<Record<string, readonly string[]>> = {
   "al-runner-v3/MO": [],
   "al-runner-v3/K": [],
   "al-runner-v3/S1E": [],
+  "al-runner-v3/N1S": [],
   "al-runner-v3/xd-d": XD_NARROWED,
   "al-runner-v3/xd-e": XD_NARROWED,
   "al-runner-v3/xd-f1": XD_NARROWED,
