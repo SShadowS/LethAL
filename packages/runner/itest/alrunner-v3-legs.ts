@@ -28,6 +28,106 @@ export const V3_N1E_LEG = "N1E";
 /** R763: N1's project without `Dot.Step`, one-shot then serve-entries (`legN1S`); in `V3_GATE_LEGS`. */
 export const V3_N1S_LEG = "N1S";
 
+/**
+ * R784: the serve order probe. One daemon, five requests, Writer and Reader codeunits; every Reader
+ * entry must read the defaults (no state carried over from a Writer entry, within or across requests).
+ * R778's kill-pair batching rests on that. In `V3_GATE_LEGS`.
+ */
+export const V3_O1_LEG = "O1";
+
+/** O1's Reader codeunit (`fixtures/sandbox-order-tests`). */
+export const O1_READER_CODEUNIT = 77051;
+/** O1's Writer codeunit. */
+export const O1_WRITER_CODEUNIT = 77052;
+
+/** The seven kinds (eight Reader tests): method, then the message it must give with no carry-over. */
+const O1_READ_DEFAULTS: readonly (readonly [string, (today: string) => string])[] = [
+  ["ReadWorkDate", (d) => `WORKDATE=${d}`],
+  ["ReadLanguage", () => "LANGUAGE=1033"],
+  ["ReadRows", () => "ROWS=0"],
+  ["ReadMark", () => "MARK=DEFAULT"],
+  ["ReadDepMark", () => "DEPMARK=DEFAULT"],
+  ["ReadDepRows", () => "DEPROWS=0"],
+  ["ReadNumSeq", () => "NUMSEQ=ABSENT"],
+  ["ReadIso", () => "ISO=ABSENT"],
+];
+
+/** What the Writer entries set; a Reader message that holds one of these is a carry-over. */
+const O1_WRITER_VALUES = [
+  "2001-01-01",
+  "=1030",
+  "ROWS=1",
+  "=WRITER",
+  "DEPWRITER",
+  "PRESENT",
+  "WRITERISO",
+];
+
+const O1_WRITE_TESTS: readonly string[] = [
+  "SetWorkDate",
+  "SetLanguage",
+  "InsertRow",
+  "SetMark",
+  "SetDepMark",
+  "InsertDepRow",
+  "AdvanceNumSeq",
+  "SetIso",
+];
+
+/** One request of the probe: its entries in order, and the `test` lines the daemon answered. */
+export interface O1Request {
+  readonly label: string;
+  readonly entries: readonly { readonly id: string; readonly kind: "R" | "W" }[];
+  readonly lines: readonly {
+    readonly entry?: string;
+    readonly name: string;
+    readonly status: string;
+    readonly message?: string;
+  }[];
+}
+
+/**
+ * R784, pre-committed (master 6aa7700c): `gate-fail` when a Reader entry reads a writer value, reads
+ * anything but the default, or lacks a row; or a Writer test does not pass (the state was never set,
+ * so the leg proves nothing). `today` lists the dates the clock may show (WorkDate defaults to it).
+ */
+export function judgeOrderProbe(
+  requests: readonly O1Request[],
+  today: readonly string[],
+): { readonly outcome: "pass" | "gate-fail"; readonly lines: string[] } {
+  const bad: string[] = [];
+  for (const rq of requests) {
+    for (const e of rq.entries) {
+      const mine = rq.lines.filter((l) => l.entry === e.id);
+      const at = `${rq.label} entry ${e.id} (${e.kind})`;
+      if (e.kind === "W") {
+        for (const t of O1_WRITE_TESTS) {
+          const l = mine.find((x) => x.name.endsWith(`.${t}`));
+          if (l === undefined) bad.push(`${at}: no row for ${t}`);
+          else if (l.status !== "pass")
+            bad.push(`${at}: ${t} is ${l.status} (${l.message ?? ""}), pre-committed pass`);
+        }
+        continue;
+      }
+      for (const [t, want] of O1_READ_DEFAULTS) {
+        const l = mine.find((x) => x.name.endsWith(`.${t}`));
+        if (l === undefined) {
+          bad.push(`${at}: no row for ${t}`);
+          continue;
+        }
+        const got = l.message ?? "";
+        const ok = t === "ReadWorkDate" ? today.some((d) => got === want(d)) : got === want("");
+        if (ok) continue;
+        const carried = O1_WRITER_VALUES.some((v) => got.includes(v));
+        bad.push(
+          `${at}: ${t} read ${JSON.stringify(got)}${carried ? " (a writer value: CARRY-OVER)" : ""}, pre-committed ${JSON.stringify(want(today[0] ?? ""))}`,
+        );
+      }
+    }
+  }
+  return { outcome: bad.length === 0 ? "pass" : "gate-fail", lines: bad };
+}
+
 /** The exact `--version` lines of builds that have no serve-entries path (alpha.2's `.gated`). */
 export const V3_NO_SERVE_ENTRIES: readonly string[] = ["alrunner 3.0.0-alpha.2 (91253f2d6)"];
 
@@ -112,6 +212,7 @@ export function v3DefaultLegs(o: { readonly cdo: boolean; readonly tables: boole
     "N1",
     V3_N1E_LEG,
     V3_N1S_LEG,
+    V3_O1_LEG,
     "X",
     "L1",
     "Y-A",

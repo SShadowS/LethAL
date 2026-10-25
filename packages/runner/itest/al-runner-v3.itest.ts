@@ -20,7 +20,7 @@
  *   measured; lane ruling 2026-10-21. `/work/tools/al-runner-v3/cache` is unused).
  * - `LETHAL_ALC_DIR`: the folder holding `alc`.
  * - `LETHAL_ITEST_V3_LEGS=C,S1,...`: a subset (default every leg that is configured: C, S1, S1E,
- *   S3, N1, N1E, N1S, X, L1, Y-A, Y-B, MO, WR, K, then D1, D1c and T when configured). R761: S1E is S1's
+ *   S3, N1, N1E, N1S, O1, X, L1, Y-A, Y-B, MO, WR, K, then D1, D1c and T when configured). R761: S1E is S1's
  *   project and assertions under serve-entries by construction; on a build with no serve path it
  *   reads "not applicable" (pass). Its serve counters are printed, pinned after the R-761 observe run.
  * - `LETHAL_ITEST_V3_CDO=<Continia Document Output checkout at 5f2a71d>`: the D legs (a corpus job).
@@ -49,7 +49,7 @@ import {
   IDENTITY_SCHEME,
   emitStaticSelector,
 } from "@lethal/schemata";
-import { type ServerSpawnFn, defaultServerSpawn } from "../src/al-runner-server";
+import { AlRunnerServer, type ServerSpawnFn, defaultServerSpawn } from "../src/al-runner-server";
 import {
   AlRunnerV3Backend,
   type AlRunnerV3Config,
@@ -106,12 +106,16 @@ import {
 import { TABLES_KNOWN_DIFFERENCES } from "./al-runner-v3-tables-known";
 import {
   type N1EReading,
+  type O1Request,
+  O1_READER_CODEUNIT,
+  O1_WRITER_CODEUNIT,
   type V3RowFacts,
   V3_K_CANDIDATE_SKIP,
   V3_K_LEG,
   V3_MO_KILLERS,
   V3_N1E_LEG,
   V3_N1S_LEG,
+  V3_O1_LEG,
   V3_S1E_LEG,
   V3_WR_KILLERS,
   V3_WR_STATE_NOTES,
@@ -120,6 +124,7 @@ import {
   judgeKillers,
   judgeLegK,
   judgeN1Serve,
+  judgeOrderProbe,
   judgeStateNotes,
   judgeWrArms,
   legKSection,
@@ -751,6 +756,108 @@ async function legN1S(scratch: string, version: string): Promise<void> {
     must(g === v, `N1S: ${k} ${g}, pre-committed ${v} (R763, R778)`);
   }
   must(s.echoMismatches === 0, `N1S: ${s.echoMismatches} echo mismatches, expected 0`);
+}
+
+/** R784: the five requests of the order probe, in order (pre-commitment 6aa7700c). */
+const O1_PLAN: readonly (readonly ("R" | "W")[])[] = [
+  ["R"],
+  ["W", "R"],
+  ["R", "W"],
+  ["W", "R", "W", "R", "R"],
+  ["R"],
+];
+
+const localDate = (d: Date): string =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+/**
+ * R784: leg O1. ONE serve daemon per package set takes the five requests of `O1_PLAN`; each entry is
+ * one whole codeunit of `fixtures/sandbox-order-tests` (Writer sets seven kinds of state, Reader
+ * reports them). `judgeOrderProbe` fails the leg on any carry-over. A daemon that cannot run is the
+ * environment (infra). The second package set is the CDO's `Test/.alpackages` (read-only), only when
+ * `LETHAL_ITEST_V3_CDO` is set, as D1 does.
+ */
+async function legO1(scratch: string, version: string): Promise<void> {
+  const sets: { name: string; cache: string; bc: string }[] = [
+    { name: "own", cache: await microsoftDeps(scratch), bc: SANDBOX_BC },
+  ];
+  if (CDO !== undefined) {
+    sets.push({ name: "cdo", cache: join(CDO, "Test", ".alpackages"), bc: CDO_BC });
+  } else console.log("  O1: LETHAL_ITEST_V3_CDO unset: the CDO package set is skipped, as D1 is");
+  // WorkDate defaults to the clock's date, so the date at the start and end of the leg both count.
+  const stamp = () => {
+    const d = new Date();
+    return [d.toISOString().slice(0, 10), localDate(d)];
+  };
+  const dates = new Set(stamp());
+  for (const set of sets) {
+    const cwd = join(scratch, set.name);
+    await mkdir(cwd, { recursive: true });
+    const server = new AlRunnerServer(
+      BIN,
+      (argv) => defaultServerSpawn(argv, { cwd, env: { ALRUNNER_CACHE: resolve(CACHE) } }),
+      [],
+      "serve",
+    );
+    const done: O1Request[] = [];
+    try {
+      try {
+        await server.start(300_000, [resolve(set.cache)], 60, [
+          "--bc-version",
+          set.bc,
+          "--no-download",
+        ]);
+        for (const [i, shape] of O1_PLAN.entries()) {
+          const entries = shape.map((kind, j) => ({ id: `${kind}${i}.${j}`, kind }));
+          const body = {
+            command: "runTests",
+            sourcePaths: [fixture("sandbox-order"), fixture("sandbox-order-tests")],
+            testIsolation: "test",
+            entries: entries.map((e) => ({
+              id: e.id,
+              test: `Codeunit${e.kind === "R" ? O1_READER_CODEUNIT : O1_WRITER_CODEUNIT}.`,
+            })),
+          };
+          const a = await server.runEntries(body, 600_000);
+          const cErr = a.summary.compilationErrors;
+          if (Array.isArray(cErr) && cErr.length > 0)
+            throw new V3LegEnvironment(
+              `O1: the fixture did not compile in the daemon: ${JSON.stringify(cErr).slice(0, 300)}`,
+            );
+          done.push({
+            label: `${set.name} request ${i + 1} [${shape.join(",")}]`,
+            entries,
+            lines: a.tests as unknown as O1Request["lines"],
+          });
+        }
+      } catch (e) {
+        if (e instanceof V3LegEnvironment) throw e;
+        const msg = e instanceof Error ? e.message : String(e);
+        if (isNoServeRefusal(version, msg)) {
+          console.log("  O1: not applicable: this build has no serve-entries path");
+          return;
+        }
+        throw new V3LegEnvironment(
+          `O1: the ${set.name} daemon could not run: ${msg.slice(0, 600)}`,
+        );
+      }
+    } finally {
+      await server.close();
+    }
+    for (const d of stamp()) dates.add(d);
+    for (const rq of done) {
+      const reads = rq.entries
+        .filter((e) => e.kind === "R")
+        .map((e) => {
+          const msgs = rq.lines.filter((l) => l.entry === e.id).map((l) => l.message ?? l.status);
+          return `${e.id}: ${msgs.join(" ")}`;
+        });
+      console.log(`  O1: ${rq.label}: ${reads.join(" | ")}`);
+    }
+    const j = judgeOrderProbe(done, [...dates]);
+    console.log(`  O1: ${set.name} set: ${j.outcome} (${done.length} requests, one daemon)`);
+    if (j.outcome === "gate-fail") throw new LegFailure(`O1: ${j.lines.join("; ")}`);
+  }
 }
 
 /**
@@ -1852,6 +1959,7 @@ async function main(): Promise<void> {
         else if (leg === "N1") await legN1(scratch);
         else if (leg === V3_N1E_LEG) await legN1E(scratch, version);
         else if (leg === V3_N1S_LEG) await legN1S(scratch, version);
+        else if (leg === V3_O1_LEG) await legO1(scratch, version);
         else if (leg === "X") await legX(scratch, (l) => lines.push(l));
         else if (leg === "D1" || leg === "D1c") await legD(scratch, leg);
         // R654 S2: each leg checks its pre-committed table FIRST (gate-fail on a difference, and

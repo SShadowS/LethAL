@@ -1,0 +1,28 @@
+{
+  "id": "6d0b2f61-3c4e-4a7b-8e12-5f9a0c3d8d01",
+  "name": "LethAL Sandbox Order",
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "brief": "LethAL R784 fixture: the dependency app of the serve order probe (leg O1).",
+  "description": "A table and a SingleInstance codeunit that fixtures/sandbox-order-tests writes and reads, to prove each serve entry starts from fresh state. Nothing to mutate. Not for production use, see fixtures/README.md.",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "dependencies": [],
+  "screenshots": [],
+  "idRanges": [
+    {
+      "from": 77000,
+      "to": 77049
+    }
+  ],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "17.0",
+  "features": []
+}
