@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**26 of 781 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**27 of 782 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -826,6 +826,7 @@ that ordering is the priority.
 - **R787** · A fixture `.alpackages` that is a symlink into another worktree is neither ignored by git nor safe from a gate's writes · [R787.md](docs/roadmap/R787.md) · done (f8ddceee)
 - **R788** · The v3 gate's big legs (D1, D1c, T) run serve-entries, so a gate run takes minutes, not half an hour · [R788.md](docs/roadmap/R788.md) · open, built and gated 2026-10-25 (coord task R-788); awaiting merge, then the R777 regate of current
 - **R789** · The v3 gate's `timeout-is-cpu` fact reads `diverged` on a correct build when other jobs load core 0 · [R789.md](docs/roadmap/R789.md) · done (494082ea, 3ea559ca)
+- **R790** · v3: run the alc proof alongside the baseline and the mutant loop, and discard the results if alc rejects (the owner's Design A) · [R790.md](docs/roadmap/R790.md) · open, filed 2026-10-25 (coord task R-790, owner idea)
 
 ---
 
