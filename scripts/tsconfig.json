@@ -232,6 +232,8 @@
     "snapshot-late-write.test.ts",
     "statement-containers.ts",
     "test-preload.ts",
+    "v3-timing.test.ts",
+    "v3-timing.ts",
     "verify-equivalence.test.ts",
     "verify-equivalence.ts",
     "census-hang-capable.ts",
