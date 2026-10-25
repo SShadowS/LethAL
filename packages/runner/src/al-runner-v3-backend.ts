@@ -22,10 +22,20 @@
  * every other run goes to a warm `serve` daemon as entries with a per-entry resource override,
  * each mutant's group vouched for by an echo test (`al-runner-v3-entries.ts`).
  */
-import { createHash } from "node:crypto";
-import { cp, mkdir, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import {
+  cp,
+  mkdir,
+  readFile,
+  readdir,
+  realpath,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { freemem } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import {
   CONTROL_REGISTER_FILENAME,
   CONTROL_SELECTOR_FILENAME,
@@ -112,7 +122,13 @@ import {
   symbolInterfaceForKey,
   testAppCacheKey,
 } from "./al-runner-v3-testapp-cache";
-import { AlcCompileError, ArtifactCompiler, type ArtifactIo, defaultArtifactIo } from "./artifact";
+import {
+  AlcCompileError,
+  ArtifactCompiler,
+  type ArtifactIo,
+  ArtifactPrepareError,
+  defaultArtifactIo,
+} from "./artifact";
 import type {
   BackendCapabilities,
   BackendStatus,
@@ -134,7 +150,7 @@ import { assertManifestObjectsDeclared, readManifestObjectKeys } from "./line-ma
 import { type SpawnFn, absToolPath, defaultSpawn } from "./publisher";
 import { assertResourceSelectorRuntime, installResourceSelector } from "./resource-selector";
 import { TestAppError, symbolPackageId } from "./test-app-publish";
-import { LINK_EXCUSED_DIRS, ProjectSymlinkRefusedError } from "./walk";
+import { LINK_EXCUSED_DIRS, ProjectSymlinkRefusedError, walkFilesSync } from "./walk";
 
 /**
  * `--version` of a v3 build: `alrunner 3.0.0-alpha.2 (91253f2d6)` (alpha.3 renamed it `al-runner`).
@@ -753,6 +769,137 @@ async function fileSha256(path: string): Promise<string> {
   return sha256Of(new Uint8Array(await readFile(path)));
 }
 
+/**
+ * R790: one one-shot v3 process's answer, before any decode. A speculative baseline call (A1) is
+ * stored in this form and later handed to `callCodeunit`'s own decode, so a served row is read
+ * exactly as a live one.
+ */
+interface SpawnedCall {
+  readonly res: { readonly exitCode: number; readonly stdout: string; readonly stderr: string };
+  readonly wallMs: number;
+  readonly timedOut: boolean;
+  readonly deadlineMs: number;
+  /** The `--coverage-json` text, read when a speculative call ended. */
+  readonly covText?: string;
+}
+
+/** R790: a speculative baseline call, with the two inputs that must match the call it stands in for. */
+interface SpeculativeCall extends SpawnedCall {
+  readonly stopSeconds: number;
+  readonly coverage: boolean;
+}
+
+/**
+ * R790 (c): alc compiled a COPY of the staged batch; its error names the copy's path. Mapped back to
+ * the batch's own path, keeping the class, so the session's error and report read as before.
+ */
+function errorAsIfIn(err: unknown, copy: string, active: string): unknown {
+  if (!(err instanceof AlcCompileError || err instanceof ArtifactPrepareError)) return err;
+  // Both separator forms: alc (and Windows) may print the path with either.
+  const fwd = (p: string) => p.replaceAll("\\", "/");
+  const mapped = err.message.split(copy).join(active).split(fwd(copy)).join(fwd(active));
+  if (mapped === err.message) return err;
+  return err instanceof AlcCompileError
+    ? new AlcCompileError(mapped)
+    : new ArtifactPrepareError(mapped);
+}
+
+/** R790 (review 1): a `listOtherFiles` map as a key. `JSON.stringify` of a Map is always "{}". */
+function otherFilesKey(
+  m: ReadonlyMap<
+    string,
+    { readonly size: number; readonly mtimeMs: number; readonly sha256: string }
+  >,
+): unknown {
+  return [...m]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([p, f]) => [p, f.size, f.mtimeMs, f.sha256]);
+}
+
+/**
+ * R790 (review 4): every file under LethAL's copy `dir` (relative path) with its size and mtime.
+ * The copy is made from active/, which holds no link (R655); one refuses, by the walk's rule.
+ */
+async function fileStates(dir: string): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const walk = walkFilesSync(dir, { links: "refuse" });
+  if (walk.skippedLinks.length > 0) {
+    throw new AlRunnerV3UnprovenBatchError(`a link in alc's copy ${dir}: ${walk.skippedLinks[0]}`);
+  }
+  for (const rel of walk.files) {
+    const s = await stat(join(dir, rel));
+    out.set(rel, `${s.size}:${s.mtimeMs}`);
+  }
+  return out;
+}
+
+/** R790 (option 4): how many batches' alc writes the cache keeps (oldest evicted). */
+const ALC_WRITES_MAX = 16;
+const ALC_WRITES_KEY = /^[0-9a-f]{64}$/;
+
+/**
+ * R790 (option 4): the files alc wrote into a batch it compiled (Translations/*.g.xlf), cached by
+ * the batch's `.al` hash and app.json. A HINT only: placed into the next identical batch before the
+ * speculative calls, then checked against what alc really writes. A missing or unreadable entry is
+ * a miss; a write failure is swallowed.
+ */
+async function readAlcWrites(dir: string, key: string): Promise<Map<string, Buffer>> {
+  const out = new Map<string, Buffer>();
+  if (!ALC_WRITES_KEY.test(key)) return out;
+  try {
+    const j = JSON.parse(await readFile(join(dir, `${key}.json`), "utf8")) as {
+      v?: unknown;
+      files?: { rel?: unknown; b64?: unknown }[];
+    };
+    if (j.v !== 1 || !Array.isArray(j.files)) return out;
+    for (const f of j.files) {
+      if (typeof f.rel !== "string" || typeof f.b64 !== "string") return new Map();
+      // Only a plain relative path inside the batch, never source (review r2 #3): no root, drive,
+      // stream (":") or "..", and no .al file.
+      if (
+        /^[\\/]/.test(f.rel) ||
+        f.rel.includes(":") ||
+        f.rel.split(/[\\/]/).includes("..") ||
+        f.rel.toLowerCase().endsWith(".al")
+      )
+        return new Map();
+      out.set(f.rel, Buffer.from(f.b64, "base64"));
+    }
+  } catch {
+    return new Map();
+  }
+  return out;
+}
+
+async function writeAlcWrites(
+  dir: string,
+  key: string,
+  files: ReadonlyMap<string, Buffer>,
+): Promise<void> {
+  if (!ALC_WRITES_KEY.test(key)) return;
+  const tmp = join(dir, `${key}.${randomUUID()}.tmp`);
+  try {
+    await mkdir(dir, { recursive: true });
+    const body = {
+      v: 1,
+      files: [...files].map(([rel, b]) => ({ rel, b64: b.toString("base64") })),
+    };
+    await writeFile(tmp, JSON.stringify(body), "utf8");
+    await rename(tmp, join(dir, `${key}.json`));
+    const entries = (await readdir(dir)).filter((n) => n.endsWith(".json"));
+    if (entries.length > ALC_WRITES_MAX) {
+      const aged = await Promise.all(
+        entries.map(async (n) => ({ n, t: (await stat(join(dir, n))).mtimeMs })),
+      );
+      aged.sort((a, b) => a.t - b.t);
+      for (const { n } of aged.slice(0, entries.length - ALC_WRITES_MAX))
+        await rm(join(dir, n), { force: true });
+    }
+  } catch {
+    await rm(tmp, { force: true }).catch(() => {});
+  }
+}
+
 /** R780: one read of the test dir: the .al hash, the non-.al files, and the app.json (bytes + text). */
 interface TestDirRead {
   readonly testScan: { readonly hash: string; readonly hasExtensionObject: boolean };
@@ -1045,6 +1192,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     availableBytes?: () => number;
     /** Runs on each lane copy right after it was made, before it is checked against the proof. */
     afterLaneCopy?: (dir: string) => Promise<void>;
+    /** R790: turns the speculative baseline off, for a test that counts the first spawn. */
+    noSpeculativeBaseline?: true;
+    /** R790: runs once the speculative calls ended, before their second binding read. */
+    afterSpeculation?: () => Promise<void>;
   } = {};
   private memoryHoldNoticed = false;
   private fitNoticed = false;
@@ -1083,6 +1234,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   };
 
   private proof: BatchProof | undefined;
+  /** R790 (A1): the baseline calls deploy() ran while alc proved the batch, bound to `dir`'s proof. */
+  private speculative:
+    | { readonly dir: string; readonly calls: Map<number, SpeculativeCall> }
+    | undefined;
   private coverageIndex: AlRunnerCoverageIndex | undefined;
   private sleepIndex: SleepIndex | undefined;
   /** I-1: the test dir under `realpath`, the form the index and the argv both use (the lane holds `active`'s). */
@@ -1598,6 +1753,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.baselineRows = new Map();
     this.union = new Set();
     this.echoId = undefined;
+    this.speculative = undefined; // R790: never served across deploys
   }
 
   /** A batch as v3 reads it: control files dropped, the static selector at the baseline. R635: in
@@ -1653,8 +1809,33 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const artifactId = await this.stage(instrumentedDir, active);
     if (this.entries) this.echoId = await readEchoId(active);
     const { ids } = await readManifestIds(active);
+    // R790 (A1): while alc proves the batch, its one-shot baseline calls run on the same bytes. Their
+    // answers stay private: deploy() still waits for alc and throws exactly its error, and they are
+    // served (once each) only if every byte they read is a byte the proof below records.
+    const speculate =
+      this.entries &&
+      this.budgetFloor !== undefined &&
+      this.suitePerCodeunit.size > 0 &&
+      this.seams.noSpeculativeBaseline !== true;
+    const abort = new AbortController();
+    // Option 4: alc's writes from an identical batch, placed first, so the calls read what alc leaves.
+    const cached = speculate
+      ? await this.placeCachedAlcWrites(active)
+      : { placed: new Set<string>(), key: undefined };
+    const spec = speculate ? this.speculateBaseline(active, abort.signal) : undefined;
     // Step 1: the target. AlcCompileError goes to the orchestrator's R461 / bisection path.
-    const target = await this.compileTarget(active);
+    let target: { appPath: string; sha256: string };
+    try {
+      target = speculate
+        ? await this.compileTargetCopy(active, cached.placed, cached.key)
+        : await this.compileTarget(active);
+    } catch (err) {
+      abort.abort();
+      await spec; // settled, then dropped: nothing from it is kept
+      throw err;
+    }
+    // R790 (c): joined BEFORE the test-app compile, which may write into the test dir (R780).
+    const specDone = await spec;
     try {
       // R780: `pre` (read BEFORE the compile) feeds ONLY the cache key and the hit decision. The
       // proof below comes from a read AFTER a live compile, because real alc can write into the
@@ -1725,7 +1906,287 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.lane.realActive = realActive;
     this.realTestDir = realTest;
     await this.copyLanes(active);
+    // R790 (b): kept only when the bytes were the proved bytes both before and after the calls ran,
+    // and they read the same real paths a live call reads; any mismatch leaves the baseline live.
+    const proof = this.proof;
+    if (
+      specDone !== undefined &&
+      proof !== undefined &&
+      specDone.before === this.proofKey(proof) &&
+      specDone.after === specDone.before &&
+      specDone.realActive === realActive &&
+      specDone.realTest === realTest
+    ) {
+      this.speculative = { dir: active, calls: specDone.calls };
+    }
     return null;
+  }
+
+  /** R790 (c): alc on a COPY of the batch, so it never writes (Translations/*.g.xlf) where a v3 call reads. */
+  private async compileTargetCopy(
+    active: string,
+    placed: ReadonlySet<string>,
+    cacheKey: string | undefined,
+  ): Promise<{ appPath: string; sha256: string }> {
+    const copy = join(this.cfg.instrumentedDir, "alc-src");
+    await rm(copy, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    await cp(active, copy, { recursive: true, preserveTimestamps: true });
+    const states = await fileStates(copy);
+    let out: { appPath: string; sha256: string };
+    try {
+      out = await this.compileTarget(copy);
+    } catch (err) {
+      throw errorAsIfIn(err, copy, active);
+    }
+    // Review 4: whatever alc wrote into its project (Translations/*.g.xlf) goes into the batch too,
+    // so v3 reads the bytes it read before R790. A file already there with the SAME bytes (option 4's
+    // placed copy) is left as it is, so the calls' key still matches; different bytes are copied over,
+    // and then the key differs and nothing is served.
+    const written = new Map<string, Buffer>();
+    for (const [rel, state] of await fileStates(copy)) {
+      if (states.get(rel) === state) continue;
+      const bytes = await readFile(join(copy, rel));
+      written.set(rel, bytes);
+      const there = await readFile(join(active, rel)).catch(() => undefined);
+      if (there?.equals(bytes) === true) continue;
+      await mkdir(dirname(join(active, rel)), { recursive: true });
+      await cp(join(copy, rel), join(active, rel), { preserveTimestamps: true });
+    }
+    // Option 4: a placed file alc did not write is not one v3 would read without R790: removed.
+    for (const rel of placed) if (!written.has(rel)) await rm(join(active, rel), { force: true });
+    if (cacheKey !== undefined && written.size > 0 && this.cfg.cacheDir !== undefined) {
+      await writeAlcWrites(join(resolve(this.cfg.cacheDir), "alc-writes"), cacheKey, written);
+    }
+    return out;
+  }
+
+  /**
+   * R790 (option 4): before the speculative calls, the files alc wrote into an identical batch last
+   * time (keyed by its `.al` hash and app.json) are placed into it, so the calls read the batch as
+   * alc will leave it. Only files the batch does not hold yet. Returns what was placed and the key.
+   */
+  private async placeCachedAlcWrites(
+    active: string,
+  ): Promise<{ readonly placed: Set<string>; readonly key: string | undefined }> {
+    const placed = new Set<string>();
+    if (this.cfg.cacheDir === undefined) return { placed, key: undefined };
+    // The project's app.json without the version LethAL stamps per build (the .al hash and the
+    // version differ every run; alc's .xlf, measured on D1, does not). A weak key only costs a hit:
+    // alc's real output decides.
+    let key: string;
+    try {
+      const app = JSON.parse(await readFile(join(active, "app.json"), "utf8")) as Record<
+        string,
+        unknown
+      >;
+      const { version: _stamped, ...rest } = app;
+      key = sha256Of(
+        JSON.stringify(
+          Object.keys(rest)
+            .sort()
+            .map((k) => [k, rest[k]]),
+        ),
+      );
+    } catch {
+      return { placed, key: undefined };
+    }
+    const files = await readAlcWrites(join(resolve(this.cfg.cacheDir), "alc-writes"), key);
+    try {
+      for (const [rel, bytes] of files) {
+        const to = join(active, rel);
+        if ((await stat(to).catch(() => undefined)) !== undefined) continue;
+        await mkdir(dirname(to), { recursive: true });
+        await writeFile(to, new Uint8Array(bytes));
+        placed.add(rel);
+      }
+    } catch {
+      // A hint only (review r2 #3): a placement that fails is undone and is a miss.
+      for (const rel of placed) await rm(join(active, rel), { force: true }).catch(() => {});
+      placed.clear();
+    }
+    return { placed, key };
+  }
+
+  /** R790: the bytes v3 reads, as the proof records them (§3): the batch, the test dir, `<deps>`. */
+  private async boundKey(active: string): Promise<string> {
+    const t = await this.readTestDir();
+    return JSON.stringify([
+      await linkIsUnproven(hashAlTree(active), "the staged batch"),
+      await fileSha256(join(active, "app.json")),
+      otherFilesKey(await listOtherFiles(active, OTHER_FILES_UNBOUND, true)),
+      t.testScan.hash,
+      otherFilesKey(t.testOther),
+      t.testAppJsonSha256,
+      await listDeps(this.cfg.packagesDir, true),
+    ]);
+  }
+
+  private proofKey(p: BatchProof): string {
+    return JSON.stringify([
+      p.activeHashExceptSelector,
+      p.activeAppJsonSha256,
+      otherFilesKey(p.activeOther),
+      p.testDirHash,
+      otherFilesKey(p.testOther),
+      p.testAppJsonSha256,
+      p.deps,
+    ]);
+  }
+
+  /**
+   * R790 (A1): the baseline's one-shot calls (one per suite codeunit, at the baseline's stop, with
+   * coverage, exactly as `callCodeunit` makes them inside the baseline bracket), run while alc proves
+   * the batch. `undefined` when anything fails or alc failed (`signal`): the baseline then runs live.
+   */
+  private async speculateBaseline(
+    active: string,
+    signal: AbortSignal,
+  ): Promise<
+    | {
+        readonly before: string;
+        readonly after: string;
+        readonly realActive: string;
+        readonly realTest: string;
+        readonly calls: Map<number, SpeculativeCall>;
+      }
+    | undefined
+  > {
+    try {
+      const f = this.budgetFloor;
+      if (f === undefined) return undefined;
+      const stopSeconds = stopSecondsOf(f.baselineTimeoutMs);
+      const before = await this.boundKey(active);
+      const realActive = await realpath(active);
+      const realTest = await realpath(this.cfg.testDir);
+      const covDir = join(this.cfg.instrumentedDir, "cov");
+      await mkdir(covDir, { recursive: true });
+      await mkdir(this.lane.scratchCwd(), { recursive: true });
+      const calls = new Map<number, SpeculativeCall>();
+      for (const id of [...this.suitePerCodeunit.keys()].sort((a, b) => a - b)) {
+        if (signal.aborted) return undefined;
+        this.callSeq += 1;
+        // Named as a live call's file is, so the call's argv is the live call's argv.
+        const covPath = join(covDir, `call-${this.callSeq}.json`);
+        await rm(covPath, { force: true });
+        const made = await this.spawnCodeunit({
+          id,
+          stopSeconds,
+          coverageJson: covPath,
+          cwd: this.lane.scratchCwd(),
+          activeDir: realActive,
+          testDir: realTest,
+          signal,
+        });
+        if (signal.aborted) return undefined;
+        let covText: string | undefined;
+        try {
+          covText = await readFile(covPath, "utf8");
+        } catch {
+          covText = undefined;
+        }
+        await rm(covPath, { force: true }).catch(() => {});
+        // A spawn that failed is not kept: that codeunit's baseline call runs live.
+        if ("spawnError" in made) continue;
+        // Review 2: a call that ran out of time ran beside alc's CPU, so it may not be what a live
+        // baseline call would answer: not kept, that codeunit's call runs live.
+        if (made.timedOut) continue;
+        // Review r2 #2: only a clean answer (an exit code `callCodeunit` reads as rows, rows that
+        // decode) is kept; a crash or garbage beside alc runs live.
+        if (![0, 1, 7, 8].includes(made.res.exitCode)) continue;
+        const decoded = decodeV3Rows(made.res.stdout, id);
+        if ("why" in decoded) continue;
+        if (decoded.rows.some((r) => r.message !== undefined && V3_TIMEOUT_MESSAGE.test(r.message)))
+          continue;
+        // Review r2 #1: the durations were measured beside alc's CPU. A budget is
+        // max(2 x duration, floor), so a call is kept only when the floor decides every budget it
+        // feeds: then a served duration cannot move a budget (the default floor is 180 s).
+        const tooSlow = (ms: number) => 2 * ms >= f.floorMs;
+        if (tooSlow(made.wallMs) || decoded.rows.some((r) => tooSlow(r.durationMs ?? 0))) continue;
+        calls.set(id, {
+          ...made,
+          ...(covText !== undefined ? { covText } : {}),
+          stopSeconds,
+          coverage: true,
+        });
+      }
+      await this.seams.afterSpeculation?.();
+      const after = await this.boundKey(active);
+      return { before, after, realActive, realTest, calls };
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** R790: a speculative baseline call for codeunit `id`, taken (once) when it matches this call. */
+  private takeSpeculative(
+    lane: Lane,
+    id: number,
+    stopSeconds: number,
+    coverage: boolean,
+  ): SpawnedCall | undefined {
+    const s = this.speculative;
+    if (s === undefined || !this.inBaseline || lane.lastActivated !== null) return undefined;
+    if (lane.deployedDir !== s.dir) return undefined;
+    const c = s.calls.get(id);
+    if (c === undefined) return undefined;
+    s.calls.delete(id);
+    return c.stopSeconds === stopSeconds && c.coverage === coverage ? c : undefined;
+  }
+
+  /** R790: one v3 process for codeunit `id`; `beforeSpawn` is the last await before it starts. */
+  private async spawnCodeunit(o: {
+    readonly id: number;
+    readonly stopSeconds: number;
+    readonly coverageJson: string | undefined;
+    readonly cwd: string;
+    readonly activeDir: string;
+    readonly testDir: string;
+    readonly beforeSpawn?: () => Promise<void>;
+    readonly signal?: AbortSignal;
+  }): Promise<SpawnedCall | { readonly spawnError: string; readonly wallMs: number }> {
+    const argv = v3CallArgv({
+      alRunnerPath: absToolPath(this.cfg.alRunnerPath),
+      codeunitId: o.id,
+      stopSeconds: o.stopSeconds,
+      packagesDir: resolve(this.cfg.packagesDir),
+      bcVersion: this.cfg.bcVersion,
+      symbols: this.cfg.preprocessorSymbols ?? [],
+      ...(o.coverageJson !== undefined ? { coverageJson: resolve(o.coverageJson) } : {}),
+      activeDir: o.activeDir,
+      testDir: o.testDir,
+    });
+    await o.beforeSpawn?.();
+    // Review 5: an abort before the listener below exists would never reach the process.
+    if (o.signal?.aborted === true) return { spawnError: "aborted before the spawn", wallMs: 0 };
+    const deadlineMs = v3CallDeadlineMs(o.stopSeconds, this.testsPerCodeunit.get(o.id) ?? 1);
+    const controller = new AbortController();
+    const onAbort = () => controller.abort();
+    o.signal?.addEventListener("abort", onAbort);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, deadlineMs);
+    const started = Date.now();
+    this.spawnCount += 1;
+    this.transportFrozen = true; // R761
+    try {
+      const res = await this.spawn(argv, {
+        signal: controller.signal,
+        // R645: v3 writes coverage.cobertura.xml into its cwd; never the caller's.
+        cwd: o.cwd,
+        ...this.cacheEnv(),
+      });
+      return { res, wallMs: Date.now() - started, timedOut, deadlineMs };
+    } catch (err) {
+      return {
+        spawnError: err instanceof Error ? err.message : String(err),
+        wallMs: Date.now() - started,
+      };
+    } finally {
+      clearTimeout(timer);
+      o.signal?.removeEventListener("abort", onAbort);
+    }
   }
 
   /**
@@ -2544,50 +3005,34 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // R-762 B: a mutant call on a pinned-gone build asks for no coverage (nothing reads it). The
     // baseline test is `isBaselineCall` (as in the verdict path), so one-shot and serve-entries agree.
     const coverageRequested = !noCoverage && !(this.sleepRuleRetired && !this.isBaselineCall(lane));
-    const argv = v3CallArgv({
-      alRunnerPath: absToolPath(this.cfg.alRunnerPath),
-      codeunitId: id,
-      stopSeconds,
-      packagesDir: resolve(this.cfg.packagesDir),
-      bcVersion: this.cfg.bcVersion,
-      symbols: this.cfg.preprocessorSymbols ?? [],
-      ...(coverageRequested ? { coverageJson: resolve(covPath) } : {}),
-      // I-1: the same real paths the Sleep index is keyed by.
-      activeDir: lane.realActive ?? resolve(lane.activeDir()),
-      testDir: this.realTestDir ?? resolve(this.cfg.testDir),
-    });
-    // R652: the last await before the spawn; nothing below reads the disk before v3 does.
-    await this.checkBound(lane);
-    const deadlineMs = v3CallDeadlineMs(stopSeconds, this.testsPerCodeunit.get(id) ?? 1);
-    const controller = new AbortController();
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-    }, deadlineMs);
-    const started = Date.now();
-    let res: { exitCode: number; stdout: string; stderr: string };
-    this.spawnCount += 1;
-    this.transportFrozen = true; // R761
-    try {
-      res = await this.spawn(argv, {
-        signal: controller.signal,
-        // R645: v3 writes coverage.cobertura.xml into its cwd; never the caller's.
+    // R790 (A1): a baseline call deploy() already ran, on the proved bytes, is served once instead of
+    // a spawn; everything below reads its raw answer exactly as a live one's.
+    const spec = this.takeSpeculative(lane, id, stopSeconds, coverageRequested);
+    let raw: SpawnedCall;
+    if (spec !== undefined) {
+      // R652: still checked, as before a send: the bytes now are the proved bytes.
+      await this.checkBound(lane);
+      raw = spec;
+    } else {
+      const made = await this.spawnCodeunit({
+        id,
+        stopSeconds,
+        coverageJson: coverageRequested ? covPath : undefined,
         cwd: lane.scratchCwd(),
-        ...this.cacheEnv(),
+        // I-1: the same real paths the Sleep index is keyed by.
+        activeDir: lane.realActive ?? resolve(lane.activeDir()),
+        testDir: this.realTestDir ?? resolve(this.cfg.testDir),
+        // R652: the last await before the spawn; nothing below reads the disk before v3 does.
+        beforeSpawn: () => this.checkBound(lane),
       });
-    } catch (err) {
-      clearTimeout(timer);
-      return {
-        verdict: transportFailure(
-          ref,
-          `could not run v3: ${err instanceof Error ? err.message : String(err)}`,
-          Date.now() - started,
-        ),
-      };
+      if ("spawnError" in made) {
+        return {
+          verdict: transportFailure(ref, `could not run v3: ${made.spawnError}`, made.wallMs),
+        };
+      }
+      raw = made;
     }
-    clearTimeout(timer);
-    const wallMs = Date.now() - started;
+    const { res, wallMs, timedOut, deadlineMs } = raw;
     // R590: first, so a skipped dependency is named as the cause, not a later symptom.
     refuseDependencySkip(res.stderr);
     if (timedOut) {
@@ -2642,12 +3087,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       await this.coverageTamper(covPath);
     }
     let covText: string | undefined;
-    try {
-      covText = await readFile(covPath, "utf8");
-    } catch {
-      covText = undefined;
+    if (spec !== undefined) {
+      covText = spec.covText; // read when its call ended, before deploy() returned
+    } else {
+      try {
+        covText = await readFile(covPath, "utf8");
+      } catch {
+        covText = undefined;
+      }
+      await rm(covPath, { force: true }).catch(() => {});
     }
-    await rm(covPath, { force: true }).catch(() => {});
     const call: CallRows = {
       rows: decoded.rows,
       stopSeconds,
