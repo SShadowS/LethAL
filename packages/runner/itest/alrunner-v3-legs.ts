@@ -74,6 +74,15 @@ const O1_WRITE_TESTS: readonly string[] = [
   "SetIso",
 ];
 
+/** R784: the five requests of the order probe, in order (pre-commitment 6aa7700c). */
+export const O1_PLAN: readonly (readonly ("R" | "W")[])[] = [
+  ["R"],
+  ["W", "R"],
+  ["R", "W"],
+  ["W", "R", "W", "R", "R"],
+  ["R"],
+];
+
 /** One request of the probe: its entries in order, and the `test` lines the daemon answered. */
 export interface O1Request {
   readonly label: string;
@@ -96,7 +105,27 @@ export function judgeOrderProbe(
   today: readonly string[],
 ): { readonly outcome: "pass" | "gate-fail"; readonly lines: string[] } {
   const bad: string[] = [];
-  for (const rq of requests) {
+  // N3: the requests must be the plan's, else an empty or short list would "match" (empty-vs-empty).
+  if (requests.length !== O1_PLAN.length)
+    bad.push(`${requests.length} requests, pre-committed ${O1_PLAN.length}`);
+  for (const [i, rq] of requests.entries()) {
+    const shape = O1_PLAN[i];
+    if (shape !== undefined && rq.entries.map((e) => e.kind).join() !== shape.join())
+      bad.push(
+        `${rq.label}: entries [${rq.entries.map((e) => e.kind).join(",")}], pre-committed [${shape.join(",")}]`,
+      );
+    // S1: we observe the ANSWER order; execution order is inferred from it. Each entry's rows must be
+    // one block, and the blocks must follow the order sent.
+    const seen: string[] = [];
+    for (const l of rq.lines) {
+      if (l.entry === undefined) bad.push(`${rq.label}: a row without an entry id (${l.name})`);
+      else if (seen[seen.length - 1] !== l.entry) seen.push(l.entry);
+    }
+    const sent = rq.entries.map((e) => e.id);
+    if (seen.join() !== sent.join())
+      bad.push(
+        `${rq.label}: answer order differs from sent order: sent [${sent.join(",")}], answered blocks [${seen.join(",")}]`,
+      );
     for (const e of rq.entries) {
       const mine = rq.lines.filter((l) => l.entry === e.id);
       const at = `${rq.label} entry ${e.id} (${e.kind})`;

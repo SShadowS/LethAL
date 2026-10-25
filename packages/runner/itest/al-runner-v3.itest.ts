@@ -55,6 +55,7 @@ import {
   type AlRunnerV3Config,
   AlRunnerV3ResourceSelectorRefusedError,
   AlRunnerV3UnprovenBatchError,
+  SERVE_TEST_ISOLATION,
   V3_REFUSED_NEARBY_TAG,
   V3_STATE_NOTE_TAG,
 } from "../src/al-runner-v3-backend";
@@ -107,6 +108,7 @@ import { TABLES_KNOWN_DIFFERENCES } from "./al-runner-v3-tables-known";
 import {
   type N1EReading,
   type O1Request,
+  O1_PLAN,
   O1_READER_CODEUNIT,
   O1_WRITER_CODEUNIT,
   type V3RowFacts,
@@ -758,15 +760,6 @@ async function legN1S(scratch: string, version: string): Promise<void> {
   must(s.echoMismatches === 0, `N1S: ${s.echoMismatches} echo mismatches, expected 0`);
 }
 
-/** R784: the five requests of the order probe, in order (pre-commitment 6aa7700c). */
-const O1_PLAN: readonly (readonly ("R" | "W")[])[] = [
-  ["R"],
-  ["W", "R"],
-  ["R", "W"],
-  ["W", "R", "W", "R", "R"],
-  ["R"],
-];
-
 const localDate = (d: Date): string =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
@@ -852,7 +845,7 @@ async function legO1(scratch: string, version: string): Promise<void> {
           const body = {
             command: "runTests",
             sourcePaths: set.sources,
-            testIsolation: "test",
+            testIsolation: SERVE_TEST_ISOLATION,
             entries: entries.map((e) => ({
               id: e.id,
               test: `Codeunit${e.kind === "R" ? O1_READER_CODEUNIT : O1_WRITER_CODEUNIT}.`,

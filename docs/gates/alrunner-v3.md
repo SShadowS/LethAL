@@ -108,6 +108,7 @@ The legs:
     DEFAULT, number sequence ABSENT, isolated storage ABSENT); every Writer test passes. A writer value in a Reader
     entry, or a Writer test that does not pass, is `gate-fail`; a daemon that cannot run is `infra-fail`
     (`judgeOrderProbe`, `r784-order-probe.test.ts`). R778's kill-pair batching rests on this.
+  - O1 does not probe the per-entry `resources` override (the active-mutant file); N1S's per-mutant comparison of batched kill pairs against one-shot covers it indirectly. The judge reads the ANSWER order (execution order is inferred from it) and fails when it differs from the sent order, or when a request does not match the plan.
   - It is in `V3_GATE_LEGS`. On a build with no serve path (alpha.2) it reads "not applicable". Per R777 the update
     gate reads `infra-fail` for `current` until it is regated at a commit that has O1.
 - S3: runs no session. It checks that `selectorMode: "resource"` is refused by name

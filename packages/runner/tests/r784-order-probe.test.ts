@@ -102,6 +102,45 @@ describe("R784: judgeOrderProbe", () => {
     const cut = [{ ...first, lines: [] }, ...rs.slice(1)];
     expect(judgeOrderProbe(cut, TODAY).outcome).toBe("gate-fail");
   });
+  test("rows in a swapped block order are a gate-fail (answer order differs from sent order)", () => {
+    const rs = answers();
+    const r2 = rs[1];
+    if (r2 === undefined) throw new Error("no request");
+    const w = r2.lines.filter((l) => l.entry === "W1.0");
+    const r = r2.lines.filter((l) => l.entry === "R1.1");
+    const j = judgeOrderProbe(
+      [rs[0] as O1Request, { ...r2, lines: [...r, ...w] }, ...rs.slice(2)],
+      TODAY,
+    );
+    expect(j.outcome).toBe("gate-fail");
+    expect(j.lines.join("\n")).toContain("answer order differs from sent order");
+  });
+  test("interleaved rows of two entries are a gate-fail", () => {
+    const rs = answers();
+    const r4 = rs[3];
+    if (r4 === undefined) throw new Error("no request");
+    const [a, b] = [
+      r4.lines.filter((l) => l.entry === "W3.0"),
+      r4.lines.filter((l) => l.entry === "R3.1"),
+    ];
+    const mixed = [...a.slice(0, 1), ...b.slice(0, 1), ...a.slice(1), ...b.slice(1)];
+    const rest = r4.lines.filter((l) => l.entry !== "W3.0" && l.entry !== "R3.1");
+    const j = judgeOrderProbe(
+      [...rs.slice(0, 3), { ...r4, lines: [...mixed, ...rest] }, ...rs.slice(4)],
+      TODAY,
+    );
+    expect(j.outcome).toBe("gate-fail");
+    expect(j.lines.join("\n")).toContain("answer order differs from sent order");
+  });
+  test("a request count or entry shape that differs from the plan is a gate-fail", () => {
+    expect(judgeOrderProbe([], TODAY).outcome).toBe("gate-fail");
+    expect(judgeOrderProbe(answers().slice(0, 4), TODAY).outcome).toBe("gate-fail");
+    const rs = answers();
+    const first = rs[0];
+    if (first === undefined) throw new Error("no request");
+    const w = { ...first, entries: [{ id: "R0.0", kind: "W" as const }] };
+    expect(judgeOrderProbe([w, ...rs.slice(1)], TODAY).outcome).toBe("gate-fail");
+  });
   test("WorkDate is judged against the clock's dates, not a fixed one", () => {
     expect(judgeOrderProbe(answers(), ["2030-01-01"]).outcome).toBe("gate-fail");
     expect(judgeOrderProbe(answers(), ["2030-01-01", "2026-10-25"]).outcome).toBe("pass");
