@@ -1084,7 +1084,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         } else {
           this.contract = await run();
           probeNote = `probe ran fresh (key ${digest}; ${why})`;
-          if (key !== undefined) {
+          if (forced) {
+            // R770: a forced run does not trust the cache, and the gates' throwaway dirs never match again.
+            probeNote += "; forced; not cached";
+          } else if (key !== undefined) {
             const no = uncacheableReason(this.contract, key.version, key.binarySha256);
             if (no !== undefined) {
               probeNote += `; not cached: ${no}`;

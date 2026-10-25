@@ -13,6 +13,9 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **A forced fresh probe no longer writes the probe cache** (R770). `--fresh-probe`, `LETHAL_V3_FRESH_PROBE=1` and the
+  gates' sessions skip the write (the receipt says "forced; not cached"), so the pinned build folder stops filling with
+  entries no later session can match. A normal miss still writes.
 - **al-runner-v3: the Sleep coverage rule (§6) is retired on pinned builds that fixed Sleep** (R768, R-762 B). When
   the build's pin and the session's own probe both read `sleep-is-noop` gone, a covering pass under a mutant is no
   longer refused, mutant calls ask for no `--coverage-json`, and serve-entries opens no coverage window. Unpinned
