@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
+import { ownTimeout } from "@lethal/engine/own-timeout";
 import ts from "@typescript/typescript6";
 import { GATE_BASELINES, PENDING_FIRST_RECORD } from "../itest/baseline-guard";
 
@@ -463,37 +464,41 @@ describe("R332 wiring: real call sites, not text", () => {
     }
   });
 
-  test("no non-test source under packages/*/src, packages/*/itest, packages/*/scripts or scripts writes a baseline, except the guard and campaign freeze", () => {
-    const roots = scanRoots();
-    const files: string[] = [];
-    for (const root of roots) {
-      const seen = scannedFiles(root);
-      const known = KNOWN[repoPath(root)];
-      expect({
-        root: repoPath(root),
-        visited: seen.length > 0,
-        known: known === undefined || seen.includes(join(root, known)),
-      }).toEqual({ root: repoPath(root), visited: true, known: true });
-      files.push(...seen);
-    }
-    expect(Object.keys(KNOWN).filter((k) => !roots.map(repoPath).includes(k))).toEqual([]);
-    const { checker, file } = analyse(
-      Object.fromEntries(files.map((f) => [slash(f), readFileSync(f, "utf8")])),
-    );
-    const found = files.flatMap((f) =>
-      writeViolations(
-        file(slash(f)),
-        checker,
-        repoPath(f) === "packages/runner/src/campaign-freeze.ts",
-      ),
-    );
-    expect(found).toEqual([]);
-    // R648: it parses and checks ALL of the repo's source, so it grows with the repo. Measured
-    // (R-648): 2.2 s alone on Linux, 3.6 to 5.4 s beside a second full verify (it failed once at
-    // 5.4 s), and 6.66 s on master CI's Windows `check` (run 39778141456). A text pre-filter would
-    // halve that but could let the guard stop guarding, so the scan stays whole (orchestrator
-    // ruling) and gets 30 s: about 4.5x the Windows time, well under verify's 180 s watchdog.
-  }, 30_000);
+  test(
+    "no non-test source under packages/*/src, packages/*/itest, packages/*/scripts or scripts writes a baseline, except the guard and campaign freeze",
+    () => {
+      const roots = scanRoots();
+      const files: string[] = [];
+      for (const root of roots) {
+        const seen = scannedFiles(root);
+        const known = KNOWN[repoPath(root)];
+        expect({
+          root: repoPath(root),
+          visited: seen.length > 0,
+          known: known === undefined || seen.includes(join(root, known)),
+        }).toEqual({ root: repoPath(root), visited: true, known: true });
+        files.push(...seen);
+      }
+      expect(Object.keys(KNOWN).filter((k) => !roots.map(repoPath).includes(k))).toEqual([]);
+      const { checker, file } = analyse(
+        Object.fromEntries(files.map((f) => [slash(f), readFileSync(f, "utf8")])),
+      );
+      const found = files.flatMap((f) =>
+        writeViolations(
+          file(slash(f)),
+          checker,
+          repoPath(f) === "packages/runner/src/campaign-freeze.ts",
+        ),
+      );
+      expect(found).toEqual([]);
+      // R648: it parses and checks ALL of the repo's source, so it grows with the repo. Measured
+      // (R-648): 2.2 s alone on Linux, 3.6 to 5.4 s beside a second full verify (it failed once at
+      // 5.4 s), and 6.66 s on master CI's Windows `check` (run 39778141456). A text pre-filter would
+      // halve that but could let the guard stop guarding, so the scan stays whole (orchestrator
+      // ruling) and gets 30 s: about 4.5x the Windows time, well under verify's 180 s watchdog.
+    },
+    ownTimeout(30_000),
+  );
 });
 
 describe("R332 wiring: the checker catches alternate writers (negative tests)", () => {

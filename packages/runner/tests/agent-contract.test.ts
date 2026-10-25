@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join, normalize } from "node:path";
+import { ownTimeout } from "@lethal/engine/own-timeout";
 import { IDENTITY_SCHEME, type MutantManifestEntry } from "@lethal/schemata";
 import {
   DOCTOR_CAVEAT_KINDS,
@@ -676,28 +677,32 @@ describe("C02-07: the documents' commands and tables are the code's", () => {
     });
   });
 
-  test("the run exit sentences are exitCodeForReport's and main's", () => {
-    const own = flowed(ownText(read(REFERENCE), "Exit codes (checked)"));
-    const nothing = Object.keys(CAVEAT_INTERPRETATIONS).filter(
-      (c) => exitCodeForReport({ validity: { caveats: [c] } }) === NOTHING_SCORED_EXIT_CODE,
-    );
-    expect(nothing.length).toBe(1);
-    expect(own).toContain(
-      `\`${NOTHING_SCORED_EXIT_CODE}\` is returned when \`validity.caveats\` carries \`${nothing[0]}\`.`,
-    );
-    // Row 1: an argv the parse refuses exits 1 with its message on stderr. The trap is the one the
-    // Traps table shows for run.
-    const trap = tableRows(section(read(REFERENCE), "Traps (checked)"))
-      .map(([c = ""]) => shellWords(ticks(c)[0] ?? "").slice(1))
-      .find((argv) => argv[0] === "run");
-    if (trap === undefined) throw new Error("no run trap");
-    const r = runCli(trap);
-    expect(r.code).toBe(1);
-    expect(r.stderr).toContain("--report is only accepted by");
-    expect(own).toContain(
-      "| `1` | Error, including an argv the parse refuses. The message is on stderr. |",
-    );
-  }, 30_000);
+  test(
+    "the run exit sentences are exitCodeForReport's and main's",
+    () => {
+      const own = flowed(ownText(read(REFERENCE), "Exit codes (checked)"));
+      const nothing = Object.keys(CAVEAT_INTERPRETATIONS).filter(
+        (c) => exitCodeForReport({ validity: { caveats: [c] } }) === NOTHING_SCORED_EXIT_CODE,
+      );
+      expect(nothing.length).toBe(1);
+      expect(own).toContain(
+        `\`${NOTHING_SCORED_EXIT_CODE}\` is returned when \`validity.caveats\` carries \`${nothing[0]}\`.`,
+      );
+      // Row 1: an argv the parse refuses exits 1 with its message on stderr. The trap is the one the
+      // Traps table shows for run.
+      const trap = tableRows(section(read(REFERENCE), "Traps (checked)"))
+        .map(([c = ""]) => shellWords(ticks(c)[0] ?? "").slice(1))
+        .find((argv) => argv[0] === "run");
+      if (trap === undefined) throw new Error("no run trap");
+      const r = runCli(trap);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("--report is only accepted by");
+      expect(own).toContain(
+        "| `1` | Error, including an argv the parse refuses. The message is on stderr. |",
+      );
+    },
+    ownTimeout(30_000),
+  );
 
   test("the result sections name fields and values the schemas define", () => {
     const text = read(REFERENCE);
@@ -1371,36 +1376,40 @@ describe("C02-07: the hardening loop, run from the documents", () => {
     }
   });
 
-  test("verify exit 1 is an argv refusal on stderr with no JSON", () => {
-    const rows = tableRows(section(read(REFERENCE), "Traps (checked)"));
-    const verifyRow = rows.find(([c = ""]) => shellWords(ticks(c)[0] ?? "")[1] === "verify");
-    const argv = shellWords(ticks(verifyRow?.[0] ?? "")[0] ?? "").slice(1);
-    const r = runCli(argv);
-    expect(r.code).toBe(1);
-    expect(r.stdout).toBe("");
-    expect(r.stderr).toContain("--out");
-    // A missing flag is refused at parse, before verify prints anything.
-    const noTests = argv.filter(
-      (a, i) =>
-        a !== "--tests" && argv[i - 1] !== "--tests" && a !== "--out" && argv[i - 1] !== "--out",
-    );
-    expect(() => parseCliConfig(noTests)).toThrow(/--tests/);
-    const row1 = tableRows(section(read(REFERENCE), "Verify exit codes (checked)")).find(
-      ([c = ""]) => ticks(c)[0] === "1",
-    );
-    expect(row1?.[1]).toContain("The message is on stderr and there is no JSON.");
-    // Row 6 names `refused.reason`: it must be where the verify schema puts it.
-    const verifySchema = JSON.parse(
-      read(join(REPO_ROOT, "schemas", `verify-v${VERIFY_SCHEMA_VERSION}.schema.json`)),
-    ) as SchemaNode;
-    const row6 = tableRows(section(read(REFERENCE), "Verify exit codes (checked)")).find(
-      ([c = ""]) => ticks(c)[0] === String(VERIFY_EXIT.refused),
-    );
-    for (const path of ticks(row6?.[1] ?? "").filter((t) => t.includes(".")))
-      expect(() =>
-        nodesAt(verifySchema, variantsOf(verifySchema, verifySchema), path),
-      ).not.toThrow();
-  }, 30_000);
+  test(
+    "verify exit 1 is an argv refusal on stderr with no JSON",
+    () => {
+      const rows = tableRows(section(read(REFERENCE), "Traps (checked)"));
+      const verifyRow = rows.find(([c = ""]) => shellWords(ticks(c)[0] ?? "")[1] === "verify");
+      const argv = shellWords(ticks(verifyRow?.[0] ?? "")[0] ?? "").slice(1);
+      const r = runCli(argv);
+      expect(r.code).toBe(1);
+      expect(r.stdout).toBe("");
+      expect(r.stderr).toContain("--out");
+      // A missing flag is refused at parse, before verify prints anything.
+      const noTests = argv.filter(
+        (a, i) =>
+          a !== "--tests" && argv[i - 1] !== "--tests" && a !== "--out" && argv[i - 1] !== "--out",
+      );
+      expect(() => parseCliConfig(noTests)).toThrow(/--tests/);
+      const row1 = tableRows(section(read(REFERENCE), "Verify exit codes (checked)")).find(
+        ([c = ""]) => ticks(c)[0] === "1",
+      );
+      expect(row1?.[1]).toContain("The message is on stderr and there is no JSON.");
+      // Row 6 names `refused.reason`: it must be where the verify schema puts it.
+      const verifySchema = JSON.parse(
+        read(join(REPO_ROOT, "schemas", `verify-v${VERIFY_SCHEMA_VERSION}.schema.json`)),
+      ) as SchemaNode;
+      const row6 = tableRows(section(read(REFERENCE), "Verify exit codes (checked)")).find(
+        ([c = ""]) => ticks(c)[0] === String(VERIFY_EXIT.refused),
+      );
+      for (const path of ticks(row6?.[1] ?? "").filter((t) => t.includes(".")))
+        expect(() =>
+          nodesAt(verifySchema, variantsOf(verifySchema, verifySchema), path),
+        ).not.toThrow();
+    },
+    ownTimeout(30_000),
+  );
 
   test("verify --out is a documented, refused trap", () => {
     const rows = tableRows(section(read(REFERENCE), "Traps (checked)"));

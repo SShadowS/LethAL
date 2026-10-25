@@ -99,6 +99,7 @@ const scratch = scratchDirs();
 async function v3RunnerBuild(): Promise<{ version: string; binarySha256: string }> {
   return { version: "alrunner 3.0.0-alpha.2 (91253f2d6)", binarySha256: "b".repeat(64) };
 }
+import { ownTimeout } from "@lethal/engine/own-timeout";
 import { UpgradeNotRestoredError } from "../src/app-version";
 import {
   DependencyUnreadableError,
@@ -4473,30 +4474,34 @@ describe("runSession — per-mutant budget floor (Tier 6B Phase 0 Task 6)", () =
 });
 
 describe("runSession — I7 second consecutive transport error aborts the session", () => {
-  test("stub backend erroring on every active-mutant run throws, persists partial results", async () => {
-    const dbPath = testDbPath("results.sqlite");
-    const dirs = await makeProject();
-    const backend = new StubBackend(CAPS_NST, (mutant) => (mutant === null ? "pass" : "error"), [
-      "IsOverBudget",
-    ]);
-    const store = new ResultsStore(dbPath);
-    await expect(runSession({ backend, store, ...dirs, selectorIds })).rejects.toThrow(
-      /transport error/i,
-    );
-    store.close();
-    expect(backend.activations.at(-1)).toBeNull(); // finally: still deactivated
+  test(
+    "stub backend erroring on every active-mutant run throws, persists partial results",
+    async () => {
+      const dbPath = testDbPath("results.sqlite");
+      const dirs = await makeProject();
+      const backend = new StubBackend(CAPS_NST, (mutant) => (mutant === null ? "pass" : "error"), [
+        "IsOverBudget",
+      ]);
+      const store = new ResultsStore(dbPath);
+      await expect(runSession({ backend, store, ...dirs, selectorIds })).rejects.toThrow(
+        /transport error/i,
+      );
+      store.close();
+      expect(backend.activations.at(-1)).toBeNull(); // finally: still deactivated
 
-    // Reopen the same on-disk (WAL-mode) db from a second connection to
-    // confirm the errored mutant's row was persisted before the throw —
-    // recordMutant auto-commits per statement, so it survives the abort.
-    const raw = new Database(dbPath, { readonly: true });
-    const rows = raw.query("SELECT verdict FROM mutants").all() as Array<{ verdict: string }>;
-    raw.close();
-    expect(rows.length).toBeGreaterThan(0);
-    expect(rows.some((r) => r.verdict === "error")).toBe(true);
-    // R439: 30 s, not bun's 5 s default. About 0.16 s inside this file normally, but measured at
-    // 6.04 s in a full verify under load on the kraken container.
-  }, 30_000);
+      // Reopen the same on-disk (WAL-mode) db from a second connection to
+      // confirm the errored mutant's row was persisted before the throw —
+      // recordMutant auto-commits per statement, so it survives the abort.
+      const raw = new Database(dbPath, { readonly: true });
+      const rows = raw.query("SELECT verdict FROM mutants").all() as Array<{ verdict: string }>;
+      raw.close();
+      expect(rows.length).toBeGreaterThan(0);
+      expect(rows.some((r) => r.verdict === "error")).toBe(true);
+      // R439: 30 s, not bun's 5 s default. About 0.16 s inside this file normally, but measured at
+      // 6.04 s in a full verify under load on the kraken container.
+    },
+    ownTimeout(30_000),
+  );
 });
 
 // R671: the worker fan-out and its tests are deleted. The `workers > 1` refusals keep their tests:
