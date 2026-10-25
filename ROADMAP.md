@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**24 of 740 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**25 of 746 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -323,10 +323,13 @@ that ordering is the priority.
 - **R720** · Whole members in a `#if` right after the global `var` section parse INSIDE that section, so the symbol table never indexes them: 235 compiled-in members lose their typed sites, and lost R196's hang refusal (fixed) · [R720.md](docs/roadmap/R720.md) · open, deferred 2026-10-24 — the lost hang refusal is fixed…
 - **R721** · A global declared inside a var-section `#if` is not collected, so R196's hang refusal declined a loop write to it and deployed a mutant that can hang · [R721.md](docs/roadmap/R721.md) · done (bc0f9a8f)
 - **R725** · Hang readers that treat a null `resolveVarRef` as "absent": the r531/R696 write collectors read it as the implicit Rec, and R572 drops a var-out flag, inside swallowed members, `#if` globals and ambiguous names · [R725.md](docs/roadmap/R725.md) · done (e07c78ec)
-- **R737** · A callee receiver declared inside a var-section `#if` (or every-arm-ambiguous) is never followed: `declaredType`'s text fallback skips preprocessor nodes · [R737.md](docs/roadmap/R737.md) · open, filed 2026-10-24 (found by R-725's review; not built)
+- **R737** · A callee receiver declared inside a var-section `#if` (or every-arm-ambiguous) is never followed: `declaredType`'s text fallback skips preprocessor nodes · [R737.md](docs/roadmap/R737.md) · done (2cd47ee7)
 - **R738** · Silent under-report risk: an altool publish that removes a member an installed tests app calls is accepted, and the tests then fail at run time instead of being refused as a stale tests app · [R738.md](docs/roadmap/R738.md) · done (dab2d844)
-- **R740** · Silent under-report risk: a stale member of a DEPENDENCY app (upgraded under an unchanged tests app) drops tests from the green set the way R738 did for the target · [R740.md](docs/roadmap/R740.md) · open, filed 2026-10-24 (found by R-738's build review; not measured)
-- **R741** · Unmeasured: a stale member the target adds through a tableextension or pageextension may be named by its BASE object's id, which R738 does not read as the target's · [R741.md](docs/roadmap/R741.md) · open, filed 2026-10-24 (found by R-738's build review; measure first)
+- **R752** · The R402 shape sweep reports 2 problems on master: `w6_var_swallowed_table` emits 28 specs, expected 29 · [R752.md](docs/roadmap/R752.md) · open, filed 2026-10-24 (found by R-737; not investigated)
+- **R740** · Silent under-report risk: a stale member of a DEPENDENCY app (upgraded under an unchanged tests app) drops tests from the green set the way R738 did for the target · [R740.md](docs/roadmap/R740.md) · done (f5991df3)
+- **R751** · `r737Partial` counts only a type that names no project object: a two-type receiver where one arm is a project object lacking the called member still looks complete · [R751.md](docs/roadmap/R751.md) · open, filed 2026-10-24 (found by the R-737 delta review; reach 0 today)
+- **R741** · Unmeasured: a stale member the target adds through a tableextension or pageextension may be named by its BASE object's id, which R738 does not read as the target's · [R741.md](docs/roadmap/R741.md) · done (3c264a7c)
+- **R749** · Silent under-report: a stale member whose BC function id is NEGATIVE matched neither R738's nor R740's refusal, so its tests left the green set silently · [R749.md](docs/roadmap/R749.md) · done (3c264a7c)
 
 ## Product gaps a real project hits
 
@@ -478,6 +481,7 @@ that ordering is the priority.
 - **R620** · A crashed or interrupted closed-world run is never resumable: its test-app identity stays |pending, so --resume refuses the very run it exists for · [R620.md](docs/roadmap/R620.md) · closed 2026-10-22 — a duplicate of R601 (orchestrator ruling Q2); closed with R601 (92d23854)
 - **R685** · a bare `Kind::X` id handed to an unfollowed call puts the test on verify's whole-source fallback, where folding the object would do: since R684 this takes a whole Microsoft test app (Guided Experience) to the fallback · [R685.md](docs/roadmap/R685.md) · done (e2cd0992)
 - **R727** · A run publishes the target over installed dependents other than the tests app without a word; on a customer server a refused upgrade removes them (R709) · [R727.md](docs/roadmap/R727.md) · done (b2ce2cc4)
+- **R745** · After the release: exclude single test METHODS from a run (today --tests-only narrows test FILES only); R740's refusal is its first user · [R745.md](docs/roadmap/R745.md) · open, filed 2026-10-24 (after the release)
 - **R733** · Name the installed dependents before the first publish: LethAL Control 1.0.0.24 `InstalledDependents(AppId)` (after the Directions talk) · [R733.md](docs/roadmap/R733.md) · open, filed 2026-10-24 (after the Directions talk)
 
 ## Backends and tooling
@@ -784,7 +788,9 @@ that ordering is the priority.
 - **R739** · Warnings no gate can pin: `console.warn` lines inside a session, and the warning events of `runVerify` and `runNamedMutants` · [R739.md](docs/roadmap/R739.md) · done (c0f3dedb)
 - **R742** · run-mutant-many P6 is timing-dependent: a stalled Windows CI runner turns its expected `timeout` into `deadline-exceeded` · [R742.md](docs/roadmap/R742.md) · done (97f69cd3)
 - **R746** · `fenced-coverage-no-procedure-lines` fires for a test that runs only a trigger body (a field's OnValidate), not only on a real line-map frame fault · [R746.md](docs/roadmap/R746.md) · done (eed3d729)
-- **R747** · The generated selector codeunit gives almost every non-narrowed test a member entry, so a base-line fault on target objects cannot raise `fenced-coverage-no-procedure-lines` · [R747.md](docs/roadmap/R747.md) · open, filed 2026-10-24 (from coord task R-746)
+- **R747** · The generated selector codeunit gives almost every non-narrowed test a member entry, so a base-line fault on target objects cannot raise `fenced-coverage-no-procedure-lines` · [R747.md](docs/roadmap/R747.md) · done (83741bbf)
+- **R748** · A naming gap in an object that also has member rows raises no warning · [R748.md](docs/roadmap/R748.md) · open, filed 2026-10-24 (from coord task R-747)
+- **R750** · Wrong comment in a tables-gate fixture: a pageextension's procedures ARE callable from a test codeunit (measured on BC 28.4) · [R750.md](docs/roadmap/R750.md) · open, filed 2026-10-24 (found by R-741's probe)
 
 ---
 

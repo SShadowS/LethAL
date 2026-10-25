@@ -253,12 +253,14 @@ import type {
 } from "./selection";
 import { SessionSafety, SessionUnsafeError } from "./session-safety";
 import {
+  StaleDependencyMemberError,
   StaleTargetMemberError,
   baselineFoundNoneRefusal,
   describeStaleTestApp,
   groupedFoundNone,
   isRunMutantFoundNone,
   isRunMutantLineCountMessage,
+  staleDependencyMember,
   staleTargetMember,
 } from "./stale-test-app";
 import { type LendingSession, sameHiddenFiles } from "./store";
@@ -5678,6 +5680,13 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       return objectId === undefined ? [] : [{ name: qualifiedTestName(b.ref), objectId }];
     });
     if (stale.length > 0) throw new StaleTargetMemberError(stale);
+    // R740: the same sentence naming an object the target does not declare: a stale DEPENDENCY
+    // member, which drops the test just as silently (measured). After R738's, before `select`.
+    const dependency = baseline.flatMap((b) => {
+      const found = staleDependencyMember(b.verdict.failureMessage, targetIds);
+      return found === undefined ? [] : [{ name: qualifiedTestName(b.ref), ...found }];
+    });
+    if (dependency.length > 0) throw new StaleDependencyMemberError(dependency);
   }
 
   const plan = input.select(baseline);

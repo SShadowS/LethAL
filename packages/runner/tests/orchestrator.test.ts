@@ -150,6 +150,7 @@ import {
   GROUP_SUITE_UNRESOLVED_HEAD,
   ONRUN_HINT,
   STALE_TEST_APP_REMEDY,
+  StaleDependencyMemberError,
   StaleTargetMemberError,
   StaleTestAppError,
   TestAppChangedError,
@@ -3069,8 +3070,8 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
   // baseline with BC's "Function ID <n> was called. The object with ID <id> does not have a member
   // with that ID." Before R738 it silently left the green set and its mutants read no-coverage.
   describe("R738 — a tests app left stale against the target by this run's own publish", () => {
-    const staleOn = (objectId: number) =>
-      `Function ID 1105190687 was called. The object with ID ${objectId} does not have a member with that ID.\nSandbox Tests(CodeUnit 79100).UnsupportedTest line 2 - Sandbox Tests by LethAL version 1.0.0.1;`;
+    const staleOn = (objectId: number, functionId = 1105190687) =>
+      `Function ID ${functionId} was called. The object with ID ${objectId} does not have a member with that ID.\nSandbox Tests(CodeUnit 79100).UnsupportedTest line 2 - Sandbox Tests by LethAL version 1.0.0.1;`;
     const failing = (failureMessage: string) => (method: string) =>
       method === "UnsupportedTest"
         ? { outcome: "fail" as const, procedure: "IsUnderBudget", failureMessage }
@@ -3102,13 +3103,69 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
       expect(backend.ranActive).toBe(0);
     });
 
-    test("the same text naming a NON-target object does not refuse (another app's member)", async () => {
+    test("R740: the same text naming a NON-target object refuses as a stale DEPENDENCY member", async () => {
       const dirs = await qualProject();
       const backend = new QualificationBackend(failing(staleOn(130440)));
       const store = new ResultsStore(":memory:");
-      // red when any object id refuses, not only the target's own
-      const report = await runSession({ backend, store, ...dirs, selectorIds });
-      expect(report.baselineGreen).toBe(false);
+      const err = await runSession({ backend, store, ...dirs, selectorIds }).then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      // red when a non-target object reaches R738's error (its remedy blames the target)
+      expect(err).not.toBeInstanceOf(StaleTargetMemberError);
+      // red when a non-target stale member is left as an ordinary failure (the silent drop)
+      expect(err).toBeInstanceOf(StaleDependencyMemberError);
+      expect((err as Error).message).toContain("130440");
+      expect(backend.ranActive).toBe(0);
+    });
+
+    // R749 — measured on bc2 (R-741): BC's function id is signed ("Function ID -935096164 was
+    // called. ..."); before R749 a negative one matched neither refusal and the test dropped silently.
+    test("R749: a NEGATIVE function id on a target object refuses as R738's", async () => {
+      const dirs = await qualProject();
+      const backend = new QualificationBackend(failing(staleOn(79000, -935096164)));
+      const store = new ResultsStore(":memory:");
+      const err = await runSession({ backend, store, ...dirs, selectorIds }).then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      // red when the anchor reads only unsigned function ids (the silent drop)
+      expect(err).toBeInstanceOf(StaleTargetMemberError);
+      expect((err as Error).message).toContain("79000");
+      expect(backend.ranActive).toBe(0);
+    });
+
+    test("R749: a NEGATIVE function id on a non-target object refuses as R740's", async () => {
+      const dirs = await qualProject();
+      const backend = new QualificationBackend(failing(staleOn(130440, -935096164)));
+      const store = new ResultsStore(":memory:");
+      const err = await runSession({ backend, store, ...dirs, selectorIds }).then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      // red when the anchor reads only unsigned function ids (the silent drop)
+      expect(err).toBeInstanceOf(StaleDependencyMemberError);
+      expect((err as Error).message).toContain("130440");
+      expect(backend.ranActive).toBe(0);
+    });
+
+    // R741 — measured on bc2 (R-741): a member the target added through a tableextension or a
+    // pageextension is named by the EXTENSION's own id (93860, 93861 there), not the base object's.
+    test("R741: a stale member named by the target's tableextension id refuses as R738's", async () => {
+      const dirs = await qualProject();
+      await Bun.write(
+        join(dirs.projectDir, "CustExt.TableExt.al"),
+        `tableextension 79020 "Sandbox Cust Ext" extends Customer\n{\n}\n`,
+      );
+      const backend = new QualificationBackend(failing(staleOn(79020)));
+      const store = new ResultsStore(":memory:");
+      const err = await runSession({ backend, store, ...dirs, selectorIds }).then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      // red when an extension's id is not read as one of the target's objects
+      expect(err).toBeInstanceOf(StaleTargetMemberError);
+      expect((err as Error).message).toContain("79020");
     });
 
     test("a target with an interface and a permissionset (no header objectHeadersOf reads) still runs", async () => {
