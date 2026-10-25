@@ -2,7 +2,12 @@
 // Pre-commitment: docs/superpowers/specs/2026-10-25-r784-order-probe-leg-precommitment.md (6aa7700c).
 import { describe, expect, test } from "bun:test";
 import { V3_GATE_LEGS, gateOutcome } from "../itest/al-runner-v3-gate";
-import { type O1Request, judgeOrderProbe, v3DefaultLegs } from "../itest/alrunner-v3-legs";
+import {
+  type O1Request,
+  judgeOrderProbe,
+  o1LoginWorkDate,
+  v3DefaultLegs,
+} from "../itest/alrunner-v3-legs";
 import { V3_BUILD_PINS } from "../src/al-runner-v3-pins";
 
 const TODAY = ["2026-10-25"];
@@ -194,6 +199,26 @@ describe("R771 addendum 2: a pinned login WorkDate (O1's CDO set on edge-a157b2d
     const j = judgeOrderProbe(answers(writer), TODAY, "2001-01-01");
     expect(j.outcome).toBe("gate-fail");
     expect(j.lines.join("\n")).toContain("is a writer value");
+  });
+  test("a pin value that is not YYYY-MM-DD is refused", () => {
+    for (const bad of ["2026-8-1", "01-08-2026", "2026-08-01 ", ""]) {
+      const j = judgeOrderProbe(answers(atLogin), TODAY, bad);
+      expect(j.outcome, JSON.stringify(bad)).toBe("gate-fail");
+      expect(j.lines.join("\n")).toContain("is not YYYY-MM-DD");
+    }
+  });
+  test("the itest's set choice: the CDO set takes the pin's date, the own set always the clock", () => {
+    const aPin = V3_BUILD_PINS.find((p) => p.id === "edge-a157b2d34");
+    expect(o1LoginWorkDate("cdo", aPin)).toBe(LOGIN);
+    expect(o1LoginWorkDate("own", aPin)).toBeUndefined();
+    for (const p of V3_BUILD_PINS.filter((x) => x.id !== "edge-a157b2d34"))
+      expect(o1LoginWorkDate("cdo", p)).toBeUndefined();
+    expect(o1LoginWorkDate("cdo", undefined)).toBeUndefined();
+    // The own set on the a157b2d34 pin is judged against the clock: the login date fails there.
+    expect(judgeOrderProbe(answers(), TODAY, o1LoginWorkDate("own", aPin)).outcome).toBe("pass");
+    expect(judgeOrderProbe(answers(atLogin), TODAY, o1LoginWorkDate("own", aPin)).outcome).toBe(
+      "gate-fail",
+    );
   });
   test("only the edge-a157b2d34 pin carries o1, at 2026-08-01 (#5743)", () => {
     const withO1 = V3_BUILD_PINS.filter((p) => p.o1 !== undefined);

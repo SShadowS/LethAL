@@ -95,6 +95,14 @@ export interface O1Request {
   }[];
 }
 
+/** R771: the login WorkDate O1 judges a set against: the pin's, for the CDO set only (it holds Base Application). */
+export function o1LoginWorkDate(
+  set: string,
+  pin: { readonly o1?: { readonly cdoWorkDate: string } } | undefined,
+): string | undefined {
+  return set === "cdo" ? pin?.o1?.cdoWorkDate : undefined;
+}
+
 /**
  * R784, pre-committed (master 6aa7700c): `gate-fail` when a Reader entry reads a writer value, reads
  * anything but the default, or lacks a row; or a Writer test does not pass (the state was never set,
@@ -114,6 +122,8 @@ export function judgeOrderProbe(
     O1_WRITER_VALUES.some((v) => `WORKDATE=${loginWorkDate}`.includes(v))
   )
     bad.push(`the pinned login WorkDate ${loginWorkDate} is a writer value`);
+  if (loginWorkDate !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(loginWorkDate))
+    bad.push(`the pinned login WorkDate ${JSON.stringify(loginWorkDate)} is not YYYY-MM-DD`);
   const dates = loginWorkDate !== undefined ? [loginWorkDate] : today;
   // N3: the requests must be the plan's, else an empty or short list would "match" (empty-vs-empty).
   if (requests.length !== O1_PLAN.length)
