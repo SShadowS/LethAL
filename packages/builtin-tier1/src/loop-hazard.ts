@@ -1342,7 +1342,7 @@ function r562FilterHop(
     for (const p of r531TableProcs(n, c.method, arity, ctx))
       targets.push({ proc: p, key: "", r: c.recv });
     // ponytail: R_amb = 0 on every corpus (R737 census); add a red test if the census ever finds an ambiguous receiver here
-    unresolved = !targets.some((t) => bodyOf(t.proc) !== null) || r737Partial(n, ctx);
+    unresolved = !targets.some((t) => bodyOf(t.proc) !== null) || r737Partial(n, c, arity, ctx);
   } else if (bareRec.length > 0) {
     for (const p of bareRec) targets.push({ proc: p, key: "", r: "" });
   } else if (c.recv === null && r531ObjectProcs(n, ctx).has(c.method)) {
@@ -6186,8 +6186,8 @@ function r570Targets(
   complete = false,
 ): ALSyntaxNode[] {
   // R737: `complete` readers (an empty list means unresolved, strict) get [] for a partial union
-  if (complete && r737Partial(n, ctx)) return [];
   const arity = r531CallArity(c);
+  if (complete && r737Partial(n, c, arity, ctx)) return [];
   const own = objectOf(n);
   const same = bareCallee(n);
   let procs: ALSyntaxNode[];
@@ -6432,12 +6432,25 @@ function projectObjects(ctx: SemanticContext): ALSyntaxNode[] {
  *  project object (a dependency codeunit)? Its target union is then PARTIAL: follow readers use it
  *  (they follow what exists), but a reader that takes an empty list as "unresolved, strict" must not
  *  see a partial list as complete (`r570Targets(..., true)`). */
-function r737Partial(n: ALSyntaxNode, ctx: SemanticContext): boolean {
+function r737Partial(
+  n: ALSyntaxNode,
+  c: R531Call,
+  arity: number | null,
+  ctx: SemanticContext,
+): boolean {
   const fn = n.rawKind === "call_expression" ? n.childForFieldName("function") : n;
   const recv = fn?.rawKind === "member_expression" ? fn.childForFieldName("object") : null;
   if (recv === null || recv === undefined || !isIdentifierLike(recv)) return false;
   const ts = declaredTypes(recv, ctx);
-  return ts.length > 1 && ts.some((t) => objectsOfType(t, ctx).length === 0);
+  // R751: a type counts as lacking when it yields no procedure for the called member (and arity),
+  // not only when it names no project object; a paren-less `CU.P` has arity 0.
+  const at = n.rawKind === "call_expression" ? arity : 0;
+  return (
+    ts.length > 1 &&
+    ts.some(
+      (t) => !objectsOfType(t, ctx).some((o) => r531ProcsIn(o, c.method, at, n, ctx).length > 0),
+    )
+  );
 }
 
 /** The project objects a declared type names: a codeunit; a table plus its tableextensions; or every

@@ -673,6 +673,10 @@ describe("R737 review MUST 1: a two-type receiver where one type has no project 
     "Buf.Table.al": BUF,
     "Callee.Codeunit.al": FEED,
     "Q.Codeunit.al": Q,
+    "Q2.Codeunit.al": Q.replace("57203", "57204")
+      .replace('"R572 Q"', '"R572 Q2"')
+      .replace("Touch", "Other"),
+    "Q3.Codeunit.al": Q.replace("57203", "57205").replace('"R572 Q"', '"R572 Q3"'),
     "Loop.Codeunit.al": `codeunit 57201 "R572 Loop"
 {
     procedure Run()
@@ -713,6 +717,27 @@ ${qdecl}
     // red when the union keeps only the resolving type: Touch(Step) by value looks complete
     expect(refusedWith(amb, true)).toBe(true);
     expect(refusedWith(amb, false)).toBe(true);
+  });
+
+  // R751: both types name a project codeunit, but one has no `Touch`: the union is partial.
+  it("B1: two project codeunits where one lacks the called member: refused", () => {
+    const lacks = `#if CLEAN27 && Q
+        Qv: Codeunit "R572 Q2";
+#else
+        Qv: Codeunit "R572 Q";
+#endif`;
+    const src = files(lacks)["Loop.Codeunit.al"];
+    expect(evaluateArms(wrapRoot(parseAL(src)), src, []).kind).toBe("undecided");
+    expect(refusedWith(lacks, true)).toBe(true);
+  });
+
+  it("B2: two project codeunits that both have the member: complete, admitted", () => {
+    const both = `#if CLEAN27 && Q
+        Qv: Codeunit "R572 Q3";
+#else
+        Qv: Codeunit "R572 Q";
+#endif`;
+    expect(refusedWith(both, true)).toBe(false);
   });
 
   it("controls: plain absent refuses, plain project by-value skips", () => {
