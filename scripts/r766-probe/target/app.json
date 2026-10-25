@@ -1,0 +1,12 @@
+{
+  "id": "6f2d1a40-7c1e-4b0a-9a51-3c5e8d760001",
+  "name": "R766 Probe Target",
+  "publisher": "LethAL Probe",
+  "version": "1.0.0.1",
+  "brief": "R766 throwaway probe app, no tables.",
+  "platform": "28.0.0.0",
+  "runtime": "17.0",
+  "target": "OnPrem",
+  "idRanges": [{ "from": 50760, "to": 50769 }],
+  "features": ["NoImplicitWith"]
+}
