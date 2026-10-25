@@ -733,6 +733,121 @@ async function readManifestIds(
   return { artifactId: m.artifactId, ids };
 }
 
+/** R653: a fail kill's answers from `sendKillPair`; see `AlRunnerV3Backend.sendKillPair`. */
+interface KillPair {
+  readonly mutantId: string;
+  readonly ref: TestMethodRef;
+  readonly none?: CallRows;
+  readonly noneVerdict?: TestVerdict;
+  readonly m?: CallRows;
+  /** Which R612 fallback this pair was: 1 (M cut), 2 (NONE cut). */
+  readonly fallback?: 1 | 2;
+  readonly next: "null" | "mutant";
+}
+
+/**
+ * R766 step (a): the state that belongs to ONE serve daemon and the tree it reads. The backend holds
+ * exactly one Lane today; a later step holds N, each with its own daemon and its own `active` dir.
+ * What is session-wide (the proof, the latches, the prefetch map, the baseline rows, ...) stays on the
+ * backend. The coverage window flag and the second-echo state stay there too, for now.
+ */
+class Lane {
+  daemon: Daemon | undefined;
+  /** F3: the id the last `activate()` wrote; `null` is the baseline selector. */
+  lastActivated: string | null = null;
+  rowsByCodeunit = new Map<number, CallRows>();
+  /**
+   * R653: a fail kill's answers from `sendKillPair`, for the next `activate(null)` (the confirm:
+   * its rows `none`, or the verdict a server error maps to) and then `activate(mutantId)` (the
+   * reproduction's rows `m`). No rows at all when the NONE entry did not stand. Every public method
+   * that works drops it, except the consuming `activate` and the confirm's own `run`.
+   */
+  pair: KillPair | undefined;
+  /** R653: the confirm's verdict from the pair, for ONE `run`. */
+  pairVerdict: TestVerdict | undefined;
+  /** F5: per mutant, the budgets the covering loop will send each ref (`useCoveringBudgets`). */
+  plan: { readonly mutantId: string; readonly budgets: ReadonlyMap<string, number> } | undefined;
+  /** The `active/` dir this lane's daemon reads, once deployed and proved. */
+  deployedDir: string | undefined;
+  /** I-1: `deployedDir` under `realpath`, the form the Sleep index and the argv both use. */
+  realActive: string | undefined;
+  /** R651: wall ms per phase of this lane. TIMING ONLY: no verdict reads them. */
+  readonly timers: Record<V3PhaseTimer, number> = {
+    warmupMs: 0,
+    prefetchMs: 0,
+    liveMs: 0,
+    windowMs: 0,
+    coverageMs: 0,
+    echoMs: 0,
+    boundMs: 0,
+  };
+
+  constructor(
+    private readonly where: {
+      readonly activeDir: string;
+      readonly scratchCwd: string;
+      /** The test dir as v3 reads it (`realpath`, else absolute). */
+      readonly testSource: () => string;
+      readonly now: () => number;
+    },
+  ) {}
+
+  activeDir(): string {
+    return this.where.activeDir;
+  }
+
+  /** R645: the working directory of every v3 process of the session (absolute, never the caller's). */
+  scratchCwd(): string {
+    return this.where.scratchCwd;
+  }
+
+  resourcePath(): string {
+    return join(this.activeDir(), SELECTOR_RESOURCE_FOLDER, SELECTOR_RESOURCE_NAME);
+  }
+
+  /** R635 §3: `{ command, sourcePaths, testIsolation }`, the same two roots one-shot passes. */
+  requestBase(): Record<string, unknown> {
+    return {
+      command: "runTests",
+      sourcePaths: [this.realActive ?? resolve(this.activeDir()), this.where.testSource()],
+      testIsolation: "test",
+    };
+  }
+
+  dropPair(): void {
+    this.pair = undefined;
+    this.pairVerdict = undefined;
+  }
+
+  async closeDaemon(): Promise<void> {
+    // R653 C5: at most a lost saving; a pair is stored only after its request() returned.
+    this.dropPair();
+    const d = this.daemon;
+    this.daemon = undefined;
+    await d?.server.close();
+  }
+
+  /** C2 and R349: every field derived from the deployed layout or the active mutant. */
+  resetLayout(): void {
+    this.rowsByCodeunit = new Map();
+    this.deployedDir = undefined;
+    this.lastActivated = null;
+  }
+
+  /** R651: `f`'s wall time into `timers[k]`, thrown or not. TIMING ONLY: no verdict reads it. */
+  async timed<T>(k: V3PhaseTimer, f: () => Promise<T>): Promise<T> {
+    const t0 = this.where.now();
+    const bound0 = this.timers.boundMs;
+    try {
+      return await f();
+    } finally {
+      // R652: a bound check nested inside this phase (the warm-up's, a request's) is `boundMs`.
+      const nested = k === "boundMs" ? 0 : this.timers.boundMs - bound0;
+      this.timers[k] += this.where.now() - t0 - nested;
+    }
+  }
+}
+
 export class AlRunnerV3Backend implements ExecutionBackend {
   /** R577 with C2: every activate/deploy clears the rows, so a reproduction really re-runs. */
   readonly killsMustReproduce = true;
@@ -760,7 +875,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private prefetched = new Map<string, Map<number, CallRows>>();
   /** §3: the covering codeunits of the batch: the warm-up's union. */
   private union = new Set<number>();
-  private daemon: Daemon | undefined;
+  /** R766: the per-daemon state; exactly one lane today. */
+  private readonly lane: Lane;
   /** §3 (N2): a live warm-up refusal; every later run is a transport failure. */
   private entriesRefused: string | undefined;
   /** §2: the echo codeunit, `selectorIds.controlId` of the deployed manifest. */
@@ -768,7 +884,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** §5: true while `active-mutant.txt` legitimately holds a mutant id. */
   private inWindow = false;
   private budgetFloor: { readonly floorMs: number; readonly baselineTimeoutMs: number } | undefined;
-  private readonly stats: V3EntriesStats = {
+  /** The counters; the phase timers are per lane and summed in `entriesStats()`. */
+  private readonly stats: Omit<V3EntriesStats, V3PhaseTimer> = {
     daemons: 0,
     cachedFalse: 0,
     warmups: 0,
@@ -780,14 +897,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     secondEchoMismatches: 0,
     prefetchDropped: 0,
     entriesSent: 0,
-    warmupMs: 0,
-    prefetchMs: 0,
-    liveMs: 0,
-    windowMs: 0,
-    coverageMs: 0,
-    echoMs: 0,
     boundChecks: 0,
-    boundMs: 0,
     pairRequests: 0,
     pairFallbacks1: 0,
     pairFallbacks2: 0,
@@ -795,23 +905,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     pairFallbacks2Passed: 0,
   };
 
-  private deployedDir: string | undefined;
   private proof: BatchProof | undefined;
-  /** F3: the id the last `activate()` wrote; `null` is the baseline selector. */
-  private lastActivated: string | null = null;
-  private rowsByCodeunit = new Map<number, CallRows>();
   private coverageIndex: AlRunnerCoverageIndex | undefined;
   private sleepIndex: SleepIndex | undefined;
-  /** I-1: `active/` and the test dir under `realpath`, the form the index and the argv both use. */
-  private realDirs: { readonly active: string; readonly test: string } | undefined;
+  /** I-1: the test dir under `realpath`, the form the index and the argv both use (the lane holds `active`'s). */
+  private realTestDir: string | undefined;
   /** §6 case 2: a mutant call showed v3 cannot see an indexed Sleep line: every later pass errors. */
   private batchBlind: string | undefined;
   private buildSymbols: readonly string[] | undefined;
   private callSeq = 0;
-  /** F5: per mutant, the budgets the covering loop will send each ref (`useCoveringBudgets`). */
-  private plan:
-    | { readonly mutantId: string; readonly budgets: ReadonlyMap<string, number> }
-    | undefined;
   /** Every discovered test, per codeunit (the outer bound counts a codeunit's tests). */
   private testsPerCodeunit = new Map<number, number>();
   /** The session suite, per codeunit: the tests a call must have exactly one row for. */
@@ -843,30 +945,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   coverageTamper?: (path: string) => Promise<void>;
   /** How many v3 processes this backend started (legs X (a), (c)). */
   spawnCount = 0;
-  /**
-   * R653: a fail kill's answers from `sendKillPair`, for the next `activate(null)` (the confirm:
-   * its rows `none`, or the verdict a server error maps to) and then `activate(mutantId)` (the
-   * reproduction's rows `m`). No rows at all when the NONE entry did not stand. Every public method
-   * that works drops it, except the consuming `activate` and the confirm's own `run`.
-   */
-  private pair:
-    | {
-        readonly mutantId: string;
-        readonly ref: TestMethodRef;
-        readonly none?: CallRows;
-        readonly noneVerdict?: TestVerdict;
-        readonly m?: CallRows;
-        /** Which R612 fallback this pair was: 1 (M cut), 2 (NONE cut). */
-        readonly fallback?: 1 | 2;
-        readonly next: "null" | "mutant";
-      }
-    | undefined;
-  /** R653: the confirm's verdict from the pair, for ONE `run`. */
-  private pairVerdict: TestVerdict | undefined;
-
   private dropPair(): void {
-    this.pair = undefined;
-    this.pairVerdict = undefined;
+    this.lane.dropPair();
   }
 
   constructor(
@@ -882,6 +962,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // R761: a default transport starts one-shot-safe; `decideTransport` turns serve on, before the
     // first deploy (the staged batch differs by transport) and the first v3 process.
     this.entries = cfg.transport === "serve-entries" && cfg.transportSource !== "default";
+    this.lane = new Lane({
+      activeDir: join(cfg.instrumentedDir, "active"),
+      scratchCwd: resolve(cfg.instrumentedDir),
+      testSource: () => this.realTestDir ?? resolve(cfg.testDir),
+      now,
+    });
     this.compiler = new ArtifactCompiler(
       {
         alcPath: cfg.alcPath,
@@ -1167,7 +1253,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     budgets: readonly { readonly ref: TestMethodRef; readonly budgetMs: number }[],
   ): void {
     this.dropPair();
-    this.plan = {
+    this.lane.plan = {
       mutantId,
       budgets: new Map(budgets.map((b) => [refKey(b.ref), b.budgetMs])),
     };
@@ -1204,12 +1290,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
 
   /** R635: the transport's counters (serve-entries). */
   entriesStats(): Readonly<V3EntriesStats> {
-    return { ...this.stats };
+    // R766: the counters are the backend's; the phase timers are the lanes' (one lane: its own).
+    return { ...this.stats, ...this.lane.timers };
   }
 
   /** R635 §4: one-shot keeps `lastActivated === null`; serve-entries reads the bracket only. */
   private isBaselineCall(): boolean {
-    return this.entries ? this.inBaseline : this.lastActivated === null;
+    return this.entries ? this.inBaseline : this.lane.lastActivated === null;
   }
 
   /** Index-only refusals, merged into selection by `runSession` after each deploy (as v2). */
@@ -1222,11 +1309,6 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     return this.sleepIndex?.sizes;
   }
 
-  /** R645: the working directory of every v3 process of the session (absolute, never the caller's). */
-  private scratchCwd(): string {
-    return resolve(this.cfg.instrumentedDir);
-  }
-
   /** R645: `ALRUNNER_CACHE`, absolute, because v3 now runs in another cwd. */
   private cacheEnv(): { env: Record<string, string> } | Record<string, never> {
     return this.cfg.cacheDir !== undefined
@@ -1234,19 +1316,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       : {};
   }
 
-  private activeDir(): string {
-    return join(this.cfg.instrumentedDir, "active");
-  }
-
   /** C2 and R349: every field derived from the deployed layout or the active mutant. */
   private resetLayoutState(): void {
-    this.rowsByCodeunit = new Map();
+    this.lane.resetLayout();
     this.coverageIndex = undefined;
     this.sleepIndex = undefined;
     this.proof = undefined;
     this.batchBlind = undefined;
-    this.deployedDir = undefined;
-    this.lastActivated = null;
     this.prefetched = new Map();
     this.baselineRows = new Map();
     this.union = new Set();
@@ -1302,7 +1378,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   async deploy(instrumentedDir: string): Promise<null> {
     await this.closeDaemon();
     this.resetLayoutState();
-    const active = this.activeDir();
+    const active = this.lane.activeDir();
     const artifactId = await this.stage(instrumentedDir, active);
     if (this.entries) this.echoId = await readEchoId(active);
     const { ids } = await readManifestIds(active);
@@ -1331,7 +1407,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     } finally {
       await rm(target.appPath, { force: true }).catch(() => {});
     }
-    this.deployedDir = active;
+    this.lane.deployedDir = active;
     if ((this.cfg.coverage ?? "none") !== "none") {
       const symbols = this.buildSymbols;
       if (symbols === undefined) {
@@ -1356,7 +1432,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     // §6 (I-1 (1)): from the text v3 reads, rebuilt with every deploy.
     this.sleepIndex = await buildSleepIndex(active, this.cfg.testDir);
-    this.realDirs = { active: await realpath(active), test: await realpath(this.cfg.testDir) };
+    const realActive = await realpath(active);
+    const realTest = await realpath(this.cfg.testDir);
+    this.lane.realActive = realActive;
+    this.realTestDir = realTest;
     return null;
   }
 
@@ -1431,13 +1510,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
 
   async activate(mutantId: string | null): Promise<void> {
+    const lane = this.lane;
     // C2: the rows describe the selector as it was; dropped BEFORE the write.
-    this.rowsByCodeunit = new Map();
+    lane.rowsByCodeunit = new Map();
     // R653: the pair is taken out here; only the expected next activation puts anything back.
-    const pair = this.pair;
+    const pair = lane.pair;
     this.dropPair();
     const proof = this.proof;
-    const dir = this.deployedDir;
+    const dir = lane.deployedDir;
     if (proof === undefined || dir === undefined) {
       throw new Error("al-runner-v3: activate() before a successful deploy()");
     }
@@ -1457,21 +1537,21 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       const pre = mutantId === null ? undefined : this.prefetched.get(mutantId);
       if (mutantId !== null && pre !== undefined) {
         this.prefetched.delete(mutantId);
-        this.rowsByCodeunit = pre;
+        lane.rowsByCodeunit = pre;
       }
       if (pair?.next === "null" && mutantId === null) {
         // The kill's confirm: its rows, or the verdict its server error maps to.
-        if (pair.none !== undefined) this.rowsByCodeunit.set(pair.ref.codeunitId, pair.none);
-        else if (pair.noneVerdict !== undefined) this.pairVerdict = pair.noneVerdict;
-        this.pair = { ...pair, next: "mutant" };
+        if (pair.none !== undefined) lane.rowsByCodeunit.set(pair.ref.codeunitId, pair.none);
+        else if (pair.noneVerdict !== undefined) lane.pairVerdict = pair.noneVerdict;
+        lane.pair = { ...pair, next: "mutant" };
       } else if (pair?.next === "mutant" && mutantId === pair.mutantId) {
         // The reproduction, asked for only after the confirm passed (R577).
         this.stats.pairRequests += 1;
         if (pair.fallback === 1) this.stats.pairFallbacks1Passed += 1;
         if (pair.fallback === 2) this.stats.pairFallbacks2Passed += 1;
-        if (pair.m !== undefined) this.rowsByCodeunit.set(pair.ref.codeunitId, pair.m);
+        if (pair.m !== undefined) lane.rowsByCodeunit.set(pair.ref.codeunitId, pair.m);
       }
-      this.lastActivated = mutantId;
+      lane.lastActivated = mutantId;
       return;
     }
     // The plan is NOT dropped here: keyed by mutant id and read only while that mutant is active,
@@ -1481,7 +1561,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       this.selectorText(proof.artifactId, mutantId),
       "utf8",
     );
-    this.lastActivated = mutantId;
+    lane.lastActivated = mutantId;
   }
 
   /**
@@ -1494,15 +1574,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * goes unreported (build review L1). R651's timer outside the bracket.
    */
   private async checkBound(): Promise<void> {
+    const lane = this.lane;
     if (this.inBaseline) return this.assertBound();
     this.stats.boundChecks += 1;
-    await this.timed("boundMs", () => this.assertBound());
+    await lane.timed("boundMs", () => this.assertBound());
   }
 
-  /** §3 step 3: the bytes v3 will read are the bytes alc proved. */
-  private async assertBound(): Promise<void> {
+  /** §3 step 3: the bytes v3 will read (the lane's dir and the test dir) are the bytes alc proved. */
+  private async assertBound(lane: Lane = this.lane): Promise<void> {
     const proof = this.proof;
-    const dir = this.deployedDir;
+    const dir = lane.deployedDir;
     if (proof === undefined || dir === undefined) {
       throw new AlRunnerV3UnprovenBatchError("no batch was deployed and proved");
     }
@@ -1523,7 +1604,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if ((await fileSha256(join(dir, "app.json"))) !== proof.activeAppJsonSha256) {
       throw new AlRunnerV3UnprovenBatchError(`${dir}/app.json changed after the alc proof`);
     }
-    const id = this.lastActivated;
+    const id = lane.lastActivated;
     if (id !== null && !proof.manifestIds.has(id)) {
       throw new AlRunnerV3UnprovenBatchError(`the last activated id ${id} is not in the manifest`);
     }
@@ -1541,7 +1622,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           "the selector is not the resource selector for this artifact",
         );
       }
-      const onDisk = await readFile(this.resourcePath(), "utf8").catch(() => "<missing>");
+      const onDisk = await readFile(lane.resourcePath(), "utf8").catch(() => "<missing>");
       if (!this.inWindow && onDisk !== SELECTOR_RESOURCE_NONE) {
         throw new AlRunnerV3UnprovenBatchError(
           `${SELECTOR_RESOURCE_NAME} holds ${JSON.stringify(onDisk.slice(0, 40))}, not ${SELECTOR_RESOURCE_NONE}, outside the coverage window`,
@@ -1594,19 +1675,20 @@ export class AlRunnerV3Backend implements ExecutionBackend {
 
   async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
     // R652: no bound check here; each send checks (`checkBound`).
-    if (this.proof === undefined || this.deployedDir === undefined) {
+    const lane = this.lane;
+    if (this.proof === undefined || lane.deployedDir === undefined) {
       throw new AlRunnerV3UnprovenBatchError("no batch was deployed and proved");
     }
     // R653: only the pair's own confirm (after its activate(null)) keeps the pair for the
     // reproduction; any other run drops it. A stored confirm verdict is returned once.
-    const pair = this.pair;
+    const pair = lane.pair;
     if (!(pair?.next === "mutant" && refKey(pair.ref) === refKey(ref))) this.dropPair();
-    const served = this.pairVerdict;
+    const served = lane.pairVerdict;
     if (served !== undefined) {
-      this.pairVerdict = undefined;
+      lane.pairVerdict = undefined;
       return { ...served, ref };
     }
-    let call = this.rowsByCodeunit.get(ref.codeunitId);
+    let call = lane.rowsByCodeunit.get(ref.codeunitId);
     if (call?.noCoverage === true && opts.coverage !== "none") call = undefined;
     if (call === undefined) {
       // R635 §4: outside the bracket, serve-entries sends a LIVE one-group request.
@@ -1659,7 +1741,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       );
     }
     const verdict = v3RowVerdict(ref, row, call.stopSeconds, call.wallMs, coverage);
-    if (this.lastActivated === null) return verdict;
+    if (lane.lastActivated === null) return verdict;
     // R586c (B2): alpha.5 counts a Sleep toward --test-timeout-secs on a VIRTUAL clock, so a test it
     // "stopped at 3 s" returned after a few ms. A genuine CPU stop has a wall time of at least the
     // stop (n x 1000 ms). Under a mutant, an earlier one is not a real timeout and must not kill:
@@ -1762,8 +1844,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
 
   /** I1 (T24): a covering test of the killer's codeunit ran before it in v3's row order. */
   private stateNote(killer: TestMethodRef, row: V3Row, rows: readonly V3Row[]): string | undefined {
-    const plan = this.plan;
-    if (plan === undefined || plan.mutantId !== this.lastActivated) return undefined;
+    const plan = this.lane.plan;
+    if (plan === undefined || plan.mutantId !== this.lane.lastActivated) return undefined;
     const k = rows.indexOf(row);
     const before = rows
       .slice(0, k)
@@ -1804,7 +1886,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // file the coverage index knows (indexed or deliberately skipped). One that is neither means v3
     // names our files in another form, and the empty join would make its mutants no-coverage. An
     // uncovered mutant is never activated, so this is checked here, per test, not at `activate`.
-    const real = this.realDirs?.active;
+    const real = this.lane.realActive;
     if (real !== undefined) {
       const root = `${normalizeFileKey(real).replace(/\/+$/, "")}/`;
       const control = new Set(
@@ -1835,7 +1917,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
 
   private rowMissing(ref: TestMethodRef, why: string, wallMs: number): TestVerdict {
     const err = new AlRunnerV3RowMissingError(why);
-    if (this.lastActivated === null) throw err;
+    if (this.lane.lastActivated === null) throw err;
     return {
       ref,
       outcome: "error",
@@ -1853,14 +1935,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     wantCoverage: boolean,
   ): Promise<{ readonly call: CallRows } | { readonly verdict: TestVerdict }> {
     const id = ref.codeunitId;
+    const lane = this.lane;
     // R762 A: an UNMUTATED call that asked for no coverage (a kill confirm) needs none: no flag and
     // no join. A mutant call keeps it whatever it asked: the Sleep rule (§6) reads it.
     // In serve-entries the baseline bracket (`inBaseline`) alone says what the baseline is (R635 §4).
-    const noCoverage = !wantCoverage && this.lastActivated === null && !this.inBaseline;
+    const noCoverage = !wantCoverage && lane.lastActivated === null && !this.inBaseline;
     // F5: the largest budget of any ref of this codeunit the loop will send for this mutant.
     let budget = timeoutMs;
-    const plan = this.plan;
-    if (plan !== undefined && plan.mutantId === this.lastActivated) {
+    const plan = lane.plan;
+    if (plan !== undefined && plan.mutantId === lane.lastActivated) {
       for (const [k, ms] of plan.budgets)
         if (k.startsWith(`${id}\u0000`) && ms > budget) budget = ms;
     }
@@ -1879,8 +1962,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       symbols: this.cfg.preprocessorSymbols ?? [],
       ...(noCoverage ? {} : { coverageJson: resolve(covPath) }),
       // I-1: the same real paths the Sleep index is keyed by.
-      activeDir: this.realDirs?.active ?? resolve(this.activeDir()),
-      testDir: this.realDirs?.test ?? resolve(this.cfg.testDir),
+      activeDir: lane.realActive ?? resolve(lane.activeDir()),
+      testDir: this.realTestDir ?? resolve(this.cfg.testDir),
     });
     // R652: the last await before the spawn; nothing below reads the disk before v3 does.
     await this.checkBound();
@@ -1899,7 +1982,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       res = await this.spawn(argv, {
         signal: controller.signal,
         // R645: v3 writes coverage.cobertura.xml into its cwd; never the caller's.
-        cwd: this.scratchCwd(),
+        cwd: lane.scratchCwd(),
         ...this.cacheEnv(),
       });
     } catch (err) {
@@ -1963,7 +2046,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         };
       }
     }
-    if (this.coverageTamper !== undefined && this.lastActivated !== null) {
+    if (this.coverageTamper !== undefined && lane.lastActivated !== null) {
       await this.coverageTamper(covPath);
     }
     let covText: string | undefined;
@@ -1981,7 +2064,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       ...(noCoverage ? { noCoverage: true } : {}),
     };
     this.noteBaselineRows(id, decoded.rows);
-    this.rowsByCodeunit.set(id, call);
+    lane.rowsByCodeunit.set(id, call);
     return { call };
   }
 
@@ -2024,22 +2107,6 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.baselineRefused.set(id, set);
   }
 
-  private resourcePath(): string {
-    return join(this.activeDir(), SELECTOR_RESOURCE_FOLDER, SELECTOR_RESOURCE_NAME);
-  }
-
-  /** R635 §3: `{ command, sourcePaths, testIsolation }`, the same two roots one-shot passes. */
-  private requestBase(): Record<string, unknown> {
-    return {
-      command: "runTests",
-      sourcePaths: [
-        this.realDirs?.active ?? resolve(this.activeDir()),
-        this.realDirs?.test ?? resolve(this.cfg.testDir),
-      ],
-      testIsolation: "test",
-    };
-  }
-
   private requireEchoId(): number {
     const id = this.echoId;
     if (id === undefined) throw new Error("al-runner-v3: serve-entries before a deploy()");
@@ -2052,21 +2119,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * `AlRunnerServerRequestError`; either way no daemon is left behind.
    */
   private async ensureDaemon(): Promise<Daemon> {
-    if (this.daemon !== undefined) return this.daemon;
-    return this.timed("warmupMs", () => this.startDaemon());
-  }
-
-  /** R651: `f`'s wall time into `stats[k]`, thrown or not. TIMING ONLY: no verdict reads it. */
-  private async timed<T>(k: V3PhaseTimer, f: () => Promise<T>): Promise<T> {
-    const t0 = this.now();
-    const bound0 = this.stats.boundMs;
-    try {
-      return await f();
-    } finally {
-      // R652: a bound check nested inside this phase (the warm-up's, a request's) is `boundMs`.
-      const nested = k === "boundMs" ? 0 : this.stats.boundMs - bound0;
-      this.stats[k] += this.now() - t0 - nested;
-    }
+    const lane = this.lane;
+    if (lane.daemon !== undefined) return lane.daemon;
+    return lane.timed("warmupMs", () => this.startDaemon());
   }
 
   private async startDaemon(): Promise<Daemon> {
@@ -2083,7 +2138,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     const server = new AlRunnerServer(
       absToolPath(this.cfg.alRunnerPath),
-      (argv) => this.serverSpawn(argv, { cwd: this.scratchCwd(), ...this.cacheEnv() }),
+      (argv) => this.serverSpawn(argv, { cwd: this.lane.scratchCwd(), ...this.cacheEnv() }),
       this.cfg.preprocessorSymbols ?? [],
       "serve",
     );
@@ -2094,7 +2149,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     ]);
     this.stats.daemons += 1;
     const daemon: Daemon = { server, dirty: false };
-    this.daemon = daemon;
+    this.lane.daemon = daemon;
     try {
       this.stats.warmups += 1;
       const { sent, rows } = await this.send(
@@ -2137,11 +2192,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
 
   private async closeDaemon(): Promise<void> {
-    // R653 C5: at most a lost saving; a pair is stored only after its request() returned.
-    this.dropPair();
-    const d = this.daemon;
-    this.daemon = undefined;
-    await d?.server.close();
+    await this.lane.closeDaemon();
   }
 
   /**
@@ -2158,7 +2209,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     readonly sent: readonly SentEntry[];
     readonly rows: ReadonlyMap<string, readonly V3Row[]>;
   }> {
-    const daemon = this.daemon;
+    const lane = this.lane;
+    const daemon = lane.daemon;
     const s = this.serveStopSeconds();
     if (daemon === undefined || s === undefined)
       throw new Error("al-runner-v3: send() without a daemon");
@@ -2168,7 +2220,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       0,
     );
     const body = {
-      ...this.requestBase(),
+      ...lane.requestBase(),
       entries: sent.map((e) => ({ id: e.id, resources: e.resources, test: e.test })),
     };
     await this.checkBound();
@@ -2233,7 +2285,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }> {
     const daemon = await this.ensureDaemon();
     const started = Date.now();
-    const { sent, rows } = await this.timed(phase, () =>
+    const { sent, rows } = await this.lane.timed(phase, () =>
       this.send(groups, phase === "prefetchMs" ? "prefetch" : "live"),
     );
     const wallMs = Date.now() - started;
@@ -2371,7 +2423,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       !this.entries ||
       this.entriesRefused !== undefined ||
       this.inBaseline ||
-      this.lastActivated !== mutantId
+      this.lane.lastActivated !== mutantId
     ) {
       return;
     }
@@ -2394,7 +2446,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       ) {
         // As `liveCall` maps the same throw (a refusal latches).
         const noneVerdict = this.liveFailure(ref, err, Date.now() - started);
-        this.pair = { mutantId, ref, noneVerdict, next: "null" };
+        this.lane.pair = { mutantId, ref, noneVerdict, next: "null" };
         return;
       }
       if (err instanceof AlRunnerV3DependencySkippedError) throw err;
@@ -2410,7 +2462,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const fallback = none === undefined ? 2 : m === undefined ? 1 : undefined;
     if (fallback === 2) this.stats.pairFallbacks2 += 1;
     if (fallback === 1) this.stats.pairFallbacks1 += 1;
-    this.pair = {
+    this.lane.pair = {
       mutantId,
       ref,
       ...(none !== undefined ? { none } : {}),
@@ -2428,7 +2480,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (this.entriesRefused !== undefined) {
       return { verdict: transportFailure(ref, this.entriesRefused, 0) };
     }
-    const m = this.lastActivated ?? SELECTOR_RESOURCE_NONE;
+    const m = this.lane.lastActivated ?? SELECTOR_RESOURCE_NONE;
     this.union.add(ref.codeunitId);
     try {
       const out = await this.request([{ mutantId: m, codeunits: [ref.codeunitId] }], "liveMs");
@@ -2445,7 +2497,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         };
       }
       this.noteBaselineRows(ref.codeunitId, call.rows);
-      this.rowsByCodeunit.set(ref.codeunitId, call);
+      this.lane.rowsByCodeunit.set(ref.codeunitId, call);
       return { call };
     } catch (err) {
       return { verdict: this.liveFailure(ref, err, Date.now() - started) };
@@ -2485,7 +2537,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (this.entriesRefused !== undefined) {
       return { verdict: transportFailure(ref, this.entriesRefused, 0) };
     }
-    const m = this.lastActivated ?? SELECTOR_RESOURCE_NONE;
+    const lane = this.lane;
+    const m = lane.lastActivated ?? SELECTOR_RESOURCE_NONE;
     const echoId = this.requireEchoId();
     const started = Date.now();
     let next: CallRows;
@@ -2500,11 +2553,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       const windowT0 = this.now();
       this.inWindow = true;
       try {
-        await writeFile(this.resourcePath(), m, "utf8");
+        await writeFile(lane.resourcePath(), m, "utf8");
         const echoOk = async (): Promise<string | undefined> => {
           this.stats.echoRequests += 1;
           const why = echoMismatch(
-            (await this.timed("echoMs", () => this.plain(daemon, echoId, false))).rows,
+            (await lane.timed("echoMs", () => this.plain(daemon, echoId, false))).rows,
             m,
           );
           if (why !== undefined) this.stats.echoMismatches += 1;
@@ -2512,7 +2565,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         };
         const before = this.cfg.secondEcho === false ? undefined : await echoOk();
         if (before !== undefined) this.stats.secondEchoMismatches += 1;
-        const cov = await this.timed("coverageMs", () => this.plain(daemon, ref.codeunitId, true));
+        const cov = await lane.timed("coverageMs", () => this.plain(daemon, ref.codeunitId, true));
         const after = await echoOk();
         const echoWhy = before ?? after;
         const differ = rowsClass(cov.rows) !== rowsClass(call.rows);
@@ -2535,10 +2588,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
               : {}),
         };
       } finally {
-        await writeFile(this.resourcePath(), SELECTOR_RESOURCE_NONE, "utf8");
+        await writeFile(lane.resourcePath(), SELECTOR_RESOURCE_NONE, "utf8");
         this.inWindow = false;
         if (daemon.dirty) await this.closeDaemon();
-        this.stats.windowMs += this.now() - windowT0;
+        lane.timers.windowMs += this.now() - windowT0;
       }
     } catch (err) {
       const v = this.liveFailure(ref, err, Date.now() - started);
@@ -2549,7 +2602,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
             : v,
       };
     }
-    this.rowsByCodeunit.set(ref.codeunitId, next);
+    lane.rowsByCodeunit.set(ref.codeunitId, next);
     return { call: next };
   }
 
@@ -2577,7 +2630,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   ): Promise<{ readonly rows: readonly V3Row[]; readonly coverage: V3CoverageRead }> {
     const s = this.serveStopSeconds() ?? 1;
     const body = {
-      ...this.requestBase(),
+      ...this.lane.requestBase(),
       test: `Codeunit${cu}.`,
       ...(coverage ? { coverage: true, perTestCoverage: true } : {}),
     };
@@ -2622,7 +2675,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   async close(): Promise<void> {
     if (this.entries) {
       await this.closeDaemon();
-      const s = this.stats;
+      const s = this.entriesStats();
       console.warn(
         `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}); wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks.`,
       );
