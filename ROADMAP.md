@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**20 of 751 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**21 of 752 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -796,6 +796,7 @@ that ordering is the priority.
 - **R755** · Audit of every roadmap item closed 2026-10-23..25 against its evidence, before the talk commit is picked · [R755.md](docs/roadmap/R755.md) · done (cf343e2a, f6ed2dd2)
 - **R756** · Pin the edge build al-runner 3.0.0-alpha.5+edge.20261024 (dcdf9e821), then re-gate it · [R756.md](docs/roadmap/R756.md) · done (b2a2f166)
 - **R757** · `scripts/verify.test.ts`'s `isChildOf` test can time out at 30 s on the Windows CI job (four PowerShell calls) · [R757.md](docs/roadmap/R757.md) · done (f74db9b3)
+- **R760** · al-runner-v3 one-shot campaigns spend their time on per-call compile, dependency-cache reads and coverage, not on tests (D1: 667 s one-shot, 193 s serve) · [R760.md](docs/roadmap/R760.md) · open, measured 2026-10-25 (coord task R-760); changes await a ruling
 
 ---
 
