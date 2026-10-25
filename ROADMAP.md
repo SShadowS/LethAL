@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**23 of 745 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**23 of 746 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -788,7 +788,8 @@ that ordering is the priority.
 - **R739** · Warnings no gate can pin: `console.warn` lines inside a session, and the warning events of `runVerify` and `runNamedMutants` · [R739.md](docs/roadmap/R739.md) · done (c0f3dedb)
 - **R742** · run-mutant-many P6 is timing-dependent: a stalled Windows CI runner turns its expected `timeout` into `deadline-exceeded` · [R742.md](docs/roadmap/R742.md) · done (97f69cd3)
 - **R746** · `fenced-coverage-no-procedure-lines` fires for a test that runs only a trigger body (a field's OnValidate), not only on a real line-map frame fault · [R746.md](docs/roadmap/R746.md) · done (eed3d729)
-- **R747** · The generated selector codeunit gives almost every non-narrowed test a member entry, so a base-line fault on target objects cannot raise `fenced-coverage-no-procedure-lines` · [R747.md](docs/roadmap/R747.md) · open, filed 2026-10-24 (from coord task R-746)
+- **R747** · The generated selector codeunit gives almost every non-narrowed test a member entry, so a base-line fault on target objects cannot raise `fenced-coverage-no-procedure-lines` · [R747.md](docs/roadmap/R747.md) · done (83741bbf)
+- **R748** · A naming gap in an object that also has member rows raises no warning · [R748.md](docs/roadmap/R748.md) · open, filed 2026-10-24 (from coord task R-747)
 - **R750** · Wrong comment in a tables-gate fixture: a pageextension's procedures ARE callable from a test codeunit (measured on BC 28.4) · [R750.md](docs/roadmap/R750.md) · done (a3ae069b)
 
 ---
