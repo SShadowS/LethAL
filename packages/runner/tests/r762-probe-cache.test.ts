@@ -10,8 +10,8 @@ import * as contractNs from "../src/al-runner-v3-contract";
 import type { V3ContractResult, V3Fact } from "../src/al-runner-v3-contract";
 import { sha256OfFile } from "../src/al-runner-v3-pin";
 import * as cacheNs from "../src/al-runner-v3-probe-cache";
-import { buildBackend, parseCliConfig } from "../src/cli";
 import { FRESH_PROBE_ENV, isCacheable, probeCodeHash } from "../src/al-runner-v3-probe-cache";
+import { buildBackend, parseCliConfig } from "../src/cli";
 import type { SpawnFn } from "../src/publisher";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
 
@@ -49,7 +49,7 @@ beforeEach(() => {
 afterEach(async () => {
   probe.mockRestore();
   warn.mockRestore();
-  // biome-ignore lint/performance/noDelete: an env var set to undefined becomes the string "undefined"
+  // An env var set to undefined becomes the string "undefined", so it is deleted.
   delete process.env[FRESH_PROBE_ENV];
   for (const r of roots) await rm(r, { recursive: true, force: true });
   roots = [];

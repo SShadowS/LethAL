@@ -52,7 +52,10 @@ export async function probeCodeHash(
   const h = createHash("sha256");
   try {
     for (const f of files) {
-      h.update(f).update("\0").update(new Uint8Array(await readFile(join(dir, f)))).update("\0");
+      h.update(f)
+        .update("\0")
+        .update(new Uint8Array(await readFile(join(dir, f))))
+        .update("\0");
     }
   } catch {
     return undefined;

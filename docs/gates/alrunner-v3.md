@@ -14,6 +14,10 @@ The leg-by-leg tables live in those pre-commitments and are asserted by the ites
 
 The legs:
 
+- R762: a normal SESSION may replay a cached, fully passing probe (`.probe-cache-<digest>.json` beside `.gated`),
+  keyed by the binary sha256, LethAL's probe code, bcVersion, the packages folder, alc, the cache dir and the `.gated`
+  commit. This gate never does: it sets `LETHAL_V3_FRESH_PROBE=1` for every session it starts, and leg C calls
+  `runV3ContractProbe` directly, so the figures below are always measured fresh. The update gate runs this gate.
 - C: the contract probe, 28 facts (`runV3ContractProbe`, `V3_LEG_C_FACTS`) of three kinds: 9 defect, 18 contract
   and 1 warn (r9, below). Since r13
   (`docs/superpowers/specs/2026-10-23-r586-alrunner-v3-precommitment-r13-dependency-skip.md`, [[R590]]), the 18th

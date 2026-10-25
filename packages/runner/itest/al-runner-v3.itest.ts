@@ -58,8 +58,8 @@ import {
 import { AL_RUNNER_V3_NOT_AUTHORITATIVE } from "../src/al-runner-v3-config";
 import { runV3ContractProbe, v3DefectWarnings } from "../src/al-runner-v3-contract";
 import { AL_RUNNER_V3_DEFAULT_PATH, sha256OfFile } from "../src/al-runner-v3-pin";
-import { FRESH_PROBE_ENV } from "../src/al-runner-v3-probe-cache";
 import { type V3BuildPin, findV3Pin } from "../src/al-runner-v3-pins";
+import { FRESH_PROBE_ENV } from "../src/al-runner-v3-probe-cache";
 import { SLEEP_NOTE_TAG } from "../src/al-runner-v3-sleep";
 import { AlcCompileError, ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import { buildBackend } from "../src/cli";

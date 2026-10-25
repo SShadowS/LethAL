@@ -13,6 +13,13 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **al-runner-v3 sessions replay a cached contract probe** (R765, coord R-762). The probe costs about 10 s per session
+  (60% of a small project's serve start-up). A fully passing result is now stored beside the pinned build's `.gated`
+  and replayed when the binary sha256, LethAL's probe code, bcVersion, the packages folder, alc, the cache dir and the
+  `.gated` commit all match. A failed, diverged or refused result is never stored; a missing, unreadable or corrupt
+  entry runs the probe. Each session prints `probe from cache (key ...)` or `probe ran fresh (key ...; why)`.
+  `lethal run --fresh-probe` or `LETHAL_V3_FRESH_PROBE=1` forces a fresh probe; the v3 itest and the update gate always
+  do, and a candidate build never uses the cache.
 - **`--exclude-test <Codeunit.Method>` leaves single test methods out of a run** (R745). Repeatable, `lethal run` only,
   bcdev only (al-runner-v3 runs whole codeunits, so it refuses the flag by name). A name that matches no test is
   refused before any deploy. The report names each left-out test in `excludedTests` (reason `exclude-test`), raises
