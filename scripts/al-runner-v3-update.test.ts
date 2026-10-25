@@ -18,6 +18,7 @@ import {
   edgeRejudge,
   expectedSha,
   gateOne,
+  parseGateLegs,
   readReceipt,
   runToLog,
   updateExitCode,
@@ -90,6 +91,13 @@ function fake(o: {
   prepLine?: string;
   /** R586d: the gate's outcome per candidate tag (falls back to `outcome`). */
   byTag?: Record<string, Outcome>;
+  /** R777: the legs per LethAL commit (absent: all of `V3_GATE_LEGS`), and the script's commit. */
+  legsByCommit?: Record<string, readonly string[]>;
+  self?: string;
+  /** R777: outcomes per gate call, in order, before `byTag` and `outcome`. */
+  seq?: Outcome[];
+  /** R777: the receipt names the sha256 of the binary actually gated. */
+  realSha?: boolean;
 }) {
   let lastTag = "";
   const seen = {
@@ -126,7 +134,11 @@ function fake(o: {
     versionOf: async () => o.version ?? "al-runner 3.0.0-alpha.3 (c893e3633)",
     runGate: async (commit, env, log) => {
       seen.tagsGated.push(lastTag);
-      const outcome = o.byTag?.[lastTag] ?? o.outcome;
+      const outcome = o.seq?.shift() ?? o.byTag?.[lastTag] ?? o.outcome;
+      const gatedSha =
+        o.realSha === true
+          ? sha(await readFile(env.LETHAL_ALRUNNER_V3_PATH ?? "", "utf8"))
+          : undefined;
       seen.gates.push(commit);
       seen.envs.push(env);
       if (o.prepLine !== undefined) await log(o.prepLine);
@@ -142,7 +154,8 @@ function fake(o: {
         env.LETHAL_V3_GATE_RECEIPT ?? "",
         JSON.stringify({
           nonce: o.badNonce === true ? "stale" : env.LETHAL_V3_GATE_NONCE,
-          binarySha256: o.receiptSha ?? (o.badSha === true ? sha("other") : sha("alpha3")),
+          binarySha256:
+            gatedSha ?? o.receiptSha ?? (o.badSha === true ? sha("other") : sha("alpha3")),
           lethalCommit: o.receiptCommit ?? commit,
           dirty: false,
           outcome,
@@ -158,6 +171,8 @@ function fake(o: {
       seen.logs.push(l);
     },
     now: () => "2026-10-21T00:00:00Z",
+    legsAt: async (c) => o.legsByCommit?.[c] ?? V3_GATE_LEGS,
+    selfCommit: async () => o.self ?? FIXED_COMMIT,
   };
   return { deps, seen };
 }
@@ -987,5 +1002,108 @@ linuxOnly("R639 --edge-rejudge (R1-R9)", () => {
       await expect(edgeRejudge(rj().deps, bad)).rejects.toThrow(
         /al-runner-v3-edge-rejudge-refused/,
       );
+  });
+
+  test("R777: a stale .gated is re-gated at the script's commit first; a failing re-gate skips (exit 2) and rejudges nothing", async () => {
+    const stale = { [GATED_COMMIT]: V3_GATE_LEGS.filter((l) => l !== "O1") };
+    await setupKept();
+    const a = rj({ legsByCommit: stale, realSha: true, seq: ["pass", "gate-fail"] });
+    expect(await edgeRejudge(a.deps, EDGE)).toBe("gate-fail");
+    expect(a.seen.gates).toEqual([FIXED_COMMIT, FIXED_COMMIT]);
+    await setupKept();
+    const before = await tree();
+    const b = rj({ legsByCommit: stale, realSha: true, seq: ["gate-fail"] });
+    const out = await edgeRejudge(b.deps, EDGE);
+    expect(out).toBe("skipped");
+    expect(updateExitCode(true, [out])).toBe(2);
+    expect(b.seen.gates).toEqual([FIXED_COMMIT]);
+    expect(await tree()).toEqual(before);
+  });
+});
+
+// R777: a candidate is never judged on fewer legs than this script's V3_GATE_LEGS.
+linuxOnly("R777: .gated's commit predates a leg", () => {
+  const STALE = { [GATED_COMMIT]: V3_GATE_LEGS.filter((l) => l !== "O1" && l !== "N1S") };
+  const gatedCommit = async () =>
+    JSON.parse(await readFile(join(await current(), ".gated"), "utf8")).lethalCommit;
+
+  test("alpha: current is re-gated at the script's commit, then the candidate is judged there", async () => {
+    await setup();
+    const { deps, seen } = fake({
+      legsByCommit: STALE,
+      realSha: true,
+      outcome: "pass",
+      tags: ["v3.0.0-alpha.4"],
+    });
+    expect(await updateOnce(deps)).toEqual(["pass"]);
+    expect(seen.gates).toEqual([FIXED_COMMIT, FIXED_COMMIT]);
+    expect(seen.envs[0]?.LETHAL_ALRUNNER_V3_CANDIDATE).toBeUndefined();
+    expect(seen.envs[1]?.LETHAL_ALRUNNER_V3_CANDIDATE).toBe("1");
+    expect(await current()).toBe(join(root, "3.0.0-alpha.4-c893e3633"));
+    expect(await gatedCommit()).toBe(FIXED_COMMIT);
+    expect(existsSync(join(root, "regate", `${FIXED_COMMIT}.receipt.json`))).toBe(true);
+    expect(seen.logs.join("\n")).toContain(
+      `alpha: stale-gated: .gated's lethalCommit ${GATED_COMMIT} predates leg(s) N1S,O1 of V3_GATE_LEGS; re-gating current at ${FIXED_COMMIT} first`,
+    );
+  });
+
+  test("alpha: a failing re-gate stops the run: no candidate downloaded, current and .gated unchanged", async () => {
+    await setup();
+    const { deps, seen } = fake({ legsByCommit: STALE, realSha: true, seq: ["gate-fail"] });
+    expect(await updateOnce(deps)).toEqual(["skipped"]);
+    expect(seen.gates).toEqual([FIXED_COMMIT]);
+    expect(seen.downloads).toBe(0);
+    expect(await current()).toBe(join(root, "3.0.0-alpha.2-91253f2d6"));
+    expect(await gatedCommit()).toBe(GATED_COMMIT);
+    expect(seen.logs.join("\n")).toContain(
+      `the re-gate of current at ${FIXED_COMMIT} gave gate-fail`,
+    );
+  });
+
+  test("the script's own commit lacks the legs too: nothing is gated, the log says to commit them", async () => {
+    await setup();
+    const { deps, seen } = fake({
+      legsByCommit: { ...STALE, [FIXED_COMMIT]: STALE[GATED_COMMIT] ?? [] },
+      outcome: "pass",
+    });
+    expect(await updateOnce(deps)).toEqual(["skipped"]);
+    expect(seen.gates).toEqual([]);
+    expect(seen.logs.join("\n")).toContain(`this script's commit ${FIXED_COMMIT} lacks them too`);
+  });
+
+  test("not stale: a receipt missing a leg the gated commit itself has is still infra-fail, with no re-gate", async () => {
+    await setup();
+    const legs = Object.fromEntries(V3_GATE_LEGS.filter((l) => l !== "T").map((l) => [l, "pass"]));
+    const { deps, seen } = fake({ outcome: "pass", legs, tags: ["v3.0.0-alpha.3"] });
+    expect(await updateOnce(deps)).toEqual(["infra-fail"]);
+    expect(seen.gates).toEqual([GATED_COMMIT]);
+    expect(seen.logs.join("\n")).not.toContain("stale-gated");
+  });
+
+  test("edge: re-gated first, then gated; a failing re-gate skips and leaves edge.last-seen alone", async () => {
+    const edgeDeps = (o: Parameters<typeof fake>[0]) => {
+      const f = fake(o);
+      return { ...f, deps: { ...f.deps, edgeCommit: async () => "c893e3633" } };
+    };
+    await setup();
+    const a = edgeDeps({ legsByCommit: STALE, realSha: true, outcome: "pass" });
+    expect(await edgeOnce(a.deps)).toBe("pass");
+    expect(a.seen.gates).toEqual([FIXED_COMMIT, FIXED_COMMIT]);
+    await setup();
+    const b = edgeDeps({ legsByCommit: STALE, realSha: true, seq: ["gate-fail"] });
+    expect(await edgeOnce(b.deps)).toBe("skipped");
+    expect(b.seen.gates).toEqual([FIXED_COMMIT]);
+    expect(existsSync(join(root, "edge.last-seen"))).toBe(false);
+  });
+});
+
+describe("R777: parseGateLegs", () => {
+  test("reads the real gate module's V3_GATE_LEGS; a module without it throws", async () => {
+    const src = await readFile(
+      join(import.meta.dir, "../packages/runner/itest/al-runner-v3-gate.ts"),
+      "utf8",
+    );
+    expect(parseGateLegs(src)).toEqual([...V3_GATE_LEGS]);
+    expect(() => parseGateLegs("export const OTHER = [];")).toThrow(/V3_GATE_LEGS/);
   });
 });
