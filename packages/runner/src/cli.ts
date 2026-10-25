@@ -368,6 +368,7 @@ export const DRY_RUN_REFUSED = [
   "retry-stranded",
   "stop-hung-sessions",
   "allow-large-run",
+  "fresh-probe",
 ] as const;
 
 export interface DryRunCliConfig {
@@ -523,6 +524,8 @@ export interface RunCliConfig {
    * session on the user's server — see `SessionConfig.stopHungSessions`.
    */
   readonly stopHungSessions?: boolean;
+  /** R762: `--fresh-probe`, al-runner-v3 only: run the contract probe instead of replaying a cached pass. */
+  readonly freshProbe?: boolean;
   /**
    * R47: `--resume` (most recent unfinished run) or `--resume-run <id>` (a named one). Absent means
    * a fresh run. See `SessionConfig.resume`.
@@ -1001,6 +1004,9 @@ RUN — cost and recovery
   --request-ceiling-ms <n>   bound one RunMutantMany call (default ${REQUEST_CEILING_MS} ms; keep it under the
                              gateway's idle timeout). A method that cannot fit runs alone
   --no-group-runs            run covering tests one RunMutant call each, as before R198
+  --fresh-probe              al-runner-v3 only: run its contract probe now instead of replaying a
+                             cached pass for the same build, packages and alc (R762). Same as
+                             LETHAL_V3_FRESH_PROBE=1. A failed probe is never cached
   --resume                   continue the most recent unfinished run in --db, reusing its verdicts
   --resume-run <id>          resume a specific run id
   --retry-stranded           on resume, retry mutants that left the server stuck (skipped by default:
@@ -1277,6 +1283,8 @@ export const RUN_FLAGS = {
   "stop-hung-sessions": { type: "boolean", default: false },
   // R48: see `RunCliConfig.allowLargeRun`.
   "allow-large-run": { type: "boolean", default: false },
+  // R762: see `RunCliConfig.freshProbe`.
+  "fresh-probe": { type: "boolean", default: false },
   // Task 6 (event-stream refactor): see `RunCliConfig.progressOutPath`.
   "progress-out": { type: "string" },
   // `lethal campaign` (subsystem D): the campaign manifest, the stage whose committed records this
@@ -1338,6 +1346,7 @@ const RUN_ONLY_FLAGS = [
   "retry-stranded",
   "stop-hung-sessions",
   "allow-large-run",
+  "fresh-probe",
   "progress-out",
 ] as const;
 
@@ -2153,6 +2162,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     ...(values["allow-large-run"] === true ? { allowLargeRun: true } : {}),
     ...(values["retry-stranded"] === true ? { retryStranded: true } : {}),
     ...(values["stop-hung-sessions"] === true ? { stopHungSessions: true } : {}),
+    ...(values["fresh-probe"] === true ? { freshProbe: true } : {}),
     ...(values["progress-out"] !== undefined ? { progressOutPath: values["progress-out"] } : {}),
   };
 }
@@ -2842,6 +2852,7 @@ export type BackendInputs = Pick<
   RunCliConfig,
   "backendKind" | "projectDir" | "testDir" | "stopHungSessions"
 > &
+  Partial<Pick<RunCliConfig, "freshProbe">> &
   // R505: the run's own output files, which the source-drift watch must not count.
   Partial<Pick<RunCliConfig, "dbPath" | "outPath" | "progressOutPath">>;
 
@@ -2910,6 +2921,7 @@ async function buildAlRunnerV3Backend(
       coverage,
       sourceProjectDir: parsed.projectDir,
       ...(deps.candidate === true ? { candidate: true } : {}),
+      ...(parsed.freshProbe === true ? { freshProbe: true } : {}),
       ...(c.cacheDir !== undefined ? { cacheDir: c.cacheDir } : {}),
       ...(deps.preprocessorSymbols.length > 0
         ? { preprocessorSymbols: deps.preprocessorSymbols }

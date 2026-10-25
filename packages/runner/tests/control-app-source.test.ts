@@ -298,3 +298,38 @@ describe("R236b: RunMutant is a thin wrapper over RunMutantCore, ran answers are
     expect(keepAt).toBeGreaterThan(ifRanAt);
   });
 });
+
+describe("R689: the discovery error is read from a cleared last error (RunOneMethod only)", () => {
+  const anchor = "Mgt.SelectTestMethodsByRange(ALTestSuite, Format(RunTestCodeunitId));";
+  test("ClearLastError() is the statement immediately before SelectTestMethodsByRange", () => {
+    expect(statementsBefore(read("RunMethod.Codeunit.al"), anchor, 1)).toEqual([
+      "ClearLastError();",
+    ]);
+  });
+  test("the last error text and stack are copied straight after the select", () => {
+    expect(statementsAfter(read("RunMethod.Codeunit.al"), anchor, 2)).toEqual([
+      "DiscoveryText := GetLastErrorText();",
+      "DiscoveryStack := GetLastErrorCallStack();",
+    ]);
+  });
+  test("InstalledDependents (R733) raises on a bad GUID and keeps DependentCount", () => {
+    const api = codeOnly(read("ControlApi.Codeunit.al"));
+    expect(procedureBody(api, "InstalledDependents")).toContain(
+      "Error('InstalledDependents: %1 is not a GUID', AppId);",
+    );
+    expect(api).toContain("procedure DependentCount(AppId: Text)");
+    expect(api).toContain('tabledata "NAV App Installed App" = R');
+  });
+  // AL's standard Format of an Integer may add a thousands separator ("93,890"), which would never
+  // match BC's stack text "(CodeUnit 93890)": every id of 1000 or more would silently quote nothing.
+  test("Integers go into those StrSubstNo calls as Format(..., 0, 9), never bare", () => {
+    expect(codeOnly(read("RunMethod.Codeunit.al"))).toContain(
+      "StrSubstNo('(CodeUnit %1)', Format(RunTestCodeunitId, 0, 9))",
+    );
+    expect(
+      procedureBody(codeOnly(read("ControlApi.Codeunit.al")), "InstalledDependents"),
+    ).toContain(
+      'StrSubstNo(\'%1.%2.%3.%4\', Format(Installed."Version Major", 0, 9), Format(Installed."Version Minor", 0, 9), Format(Installed."Version Build", 0, 9), Format(Installed."Version Revision", 0, 9))',
+    );
+  });
+});
