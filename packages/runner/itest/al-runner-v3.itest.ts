@@ -778,11 +778,48 @@ const localDate = (d: Date): string =>
  * `LETHAL_ITEST_V3_CDO` is set, as D1 does.
  */
 async function legO1(scratch: string, version: string): Promise<void> {
-  const sets: { name: string; cache: string; bc: string }[] = [
-    { name: "own", cache: await microsoftDeps(scratch), bc: SANDBOX_BC },
+  const sets: {
+    name: string;
+    cache: string;
+    bc: string;
+    sources: string[];
+    /** The package apps `--verbose` must list as loaded (`dependency: <name> ... from <path>.app`). */
+    apps?: number;
+  }[] = [
+    {
+      name: "own",
+      cache: await microsoftDeps(scratch),
+      bc: SANDBOX_BC,
+      sources: [fixture("sandbox-order"), fixture("sandbox-order-tests")],
+    },
   ];
   if (CDO !== undefined) {
-    sets.push({ name: "cdo", cache: join(CDO, "Test", ".alpackages"), bc: CDO_BC });
+    // The CDO set is real only if al-runner loads the CDO's 17 apps, which it does for the
+    // dependencies the tests app declares: a scratch copy declares the CDO Test app's (read at run time).
+    const dep = join(scratch, "cdo-src", "sandbox-order");
+    const tests = join(scratch, "cdo-src", "sandbox-order-tests");
+    await cp(fixture("sandbox-order"), dep, { recursive: true });
+    await cp(fixture("sandbox-order-tests"), tests, { recursive: true });
+    const cdoApp = JSON.parse(await readFile(join(CDO, "Test", "app.json"), "utf8")) as {
+      dependencies?: { id: string; name: string; publisher: string; version: string }[];
+    };
+    const mine = JSON.parse(await readFile(join(tests, "app.json"), "utf8")) as {
+      dependencies: unknown[];
+    };
+    const extra = (cdoApp.dependencies ?? [])
+      .filter((d) => d.name !== "Continia Document Output") // source in D1, not a package
+      .map(({ id, name, publisher, version }) => ({ id, name, publisher, version }));
+    if (extra.length === 0)
+      throw new V3LegEnvironment("O1: the CDO Test app.json declares no dependencies to copy");
+    mine.dependencies = [...mine.dependencies, ...extra];
+    await writeFile(join(tests, "app.json"), `${JSON.stringify(mine, null, 2)}\n`);
+    sets.push({
+      name: "cdo",
+      cache: join(CDO, "Test", ".alpackages"),
+      bc: CDO_BC,
+      sources: [dep, tests],
+      apps: 17,
+    });
   } else console.log("  O1: LETHAL_ITEST_V3_CDO unset: the CDO package set is skipped, as D1 is");
   // WorkDate defaults to the clock's date, so the date at the start and end of the leg both count.
   const stamp = () => {
@@ -806,12 +843,15 @@ async function legO1(scratch: string, version: string): Promise<void> {
           "--bc-version",
           set.bc,
           "--no-download",
+          // The "building layers of the 17 dependency apps" line appears only on a cold compile cache;
+          // --verbose lists every loaded package app on any run.
+          ...(set.apps !== undefined ? ["--verbose"] : []),
         ]);
         for (const [i, shape] of O1_PLAN.entries()) {
           const entries = shape.map((kind, j) => ({ id: `${kind}${i}.${j}`, kind }));
           const body = {
             command: "runTests",
-            sourcePaths: [fixture("sandbox-order"), fixture("sandbox-order-tests")],
+            sourcePaths: set.sources,
             testIsolation: "test",
             entries: entries.map((e) => ({
               id: e.id,
@@ -844,6 +884,17 @@ async function legO1(scratch: string, version: string): Promise<void> {
     } finally {
       await server.close();
     }
+    const loaded = new Set(
+      [...server.stderrSoFar().matchAll(/^dependency: (.+) \(\d+ files\)/gm)].map((m) => m[1]),
+    );
+    if (set.apps !== undefined && loaded.size !== set.apps)
+      throw new V3LegEnvironment(
+        `O1: the ${set.name} daemon loaded ${loaded.size} package app(s), pre-committed ${set.apps}, so the set is not the ${set.apps}-app install; loaded: ${[...loaded].join("; ")}; dependency lines: ${(server.stderrSoFar().match(/^dependency: .*$/gm) ?? []).map((l) => l.replace(/ from .*/, "")).join(" | ")}`,
+      );
+    if (set.apps !== undefined)
+      console.log(
+        `  O1: ${set.name} set: the daemon loaded ${loaded.size} package apps (--verbose)`,
+      );
     for (const d of stamp()) dates.add(d);
     for (const rq of done) {
       const reads = rq.entries
