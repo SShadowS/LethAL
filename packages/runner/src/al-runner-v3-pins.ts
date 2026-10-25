@@ -69,6 +69,16 @@ export interface V3BuildPin {
     readonly total: number;
   };
   readonly xb: XbPin;
+  /**
+   * R771: the pinned N1E reading for a build where #5798 is fixed upstream (the serve row for the
+   * dotted method carries `codeunit` and `method`) but LethAL's `serveRow` still refuses a dotted
+   * method by name, so the session fails closed. `refusedLine` must match the refused line exactly.
+   */
+  readonly n1e?: {
+    readonly refusedLine: RegExp;
+    readonly issue: string;
+    readonly evidence: string;
+  };
 }
 
 const ROW = (cu: number, method: string) =>
@@ -181,6 +191,21 @@ export const V3_BUILD_PINS: readonly V3BuildPin[] = [
     version: "al-runner 3.0.0-alpha.5+edge.20261024 (dcdf9e821)",
     binarySha256: "0e3139359b37a7dd9c51377b64c0ae1acdcb208545f79075e4194571bbe03890",
     ...ALPHA5_READINGS,
+  },
+  {
+    // Measured on the R-771 update gate at 55a1466b: alpha.5's readings plus N1E (#5798 fixed upstream).
+    id: "edge-a157b2d34",
+    version: "al-runner 3.0.0-alpha.5+edge.20261025 (a157b2d34)",
+    binarySha256: "d9429e53a6938dbafb58108f61ce5408f65389bd9604ff94b4788ef26c8d17fb",
+    ...ALPHA5_READINGS,
+    n1e: {
+      refusedLine: pinPattern(
+        '{"codeunit":78850,"codeunitName":"Names Tests","durationMs":{n},"entry":"NONE|78850","method":"Dot.Step","name":"Codeunit78850.Dot.Step","status":"pass","type":"test"}',
+      ),
+      issue: `${REPO}/5798`,
+      evidence:
+        "#5798 fixed upstream (the Dot.Step row carries codeunit and method); LethAL's serveRow still refuses a dotted method by name, so the session fails closed",
+    },
   },
 ];
 

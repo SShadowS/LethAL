@@ -56,6 +56,7 @@ export type N1EReading = { readonly completed: true } | { readonly threw: string
 export function judgeN1Serve(
   r: N1EReading,
   version: string,
+  pin?: { readonly refusedLine: RegExp },
 ): {
   readonly outcome: "pass" | "held" | "gate-fail";
   readonly lines: string[];
@@ -82,6 +83,16 @@ export function judgeN1Serve(
     };
   }
   if (/"codeunit"|"method"/.test(line)) {
+    // R771: a build whose pin names this exact line has #5798 fixed upstream; serveRow still refuses
+    // the dotted name, so the session fails closed (safe, no row scored).
+    if (pin?.refusedLine.test(line) === true) {
+      return {
+        outcome: "pass",
+        lines: [
+          "N1E: pinned: #5798 fixed upstream (the Dot.Step row carries codeunit and method); LethAL's serveRow still refuses a dotted method by name, so the session fails closed",
+        ],
+      };
+    }
     return held(`the refused line now has codeunit or method: ${line}`);
   }
   if (!/Codeunit\d+\.Dot\.Step/.test(line)) {

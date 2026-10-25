@@ -626,7 +626,7 @@ async function legN1E(scratch: string, version: string): Promise<void> {
     if (isGateWarningsError(e)) throw e;
     reading = { threw: e instanceof Error ? e.message : String(e) };
   }
-  const j = judgeN1Serve(reading, version);
+  const j = judgeN1Serve(reading, version, activePin?.n1e);
   for (const l of j.lines) console.log(`  N1E: ${l}`);
   if (j.outcome === "held") throw new V3LegHeld(j.lines);
   if (j.outcome === "gate-fail") throw new LegFailure(j.lines.join("; "));
