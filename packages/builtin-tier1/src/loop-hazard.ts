@@ -21,6 +21,7 @@ import {
   objectDeclarationsOf,
   procedureLikeArmNames,
   qualifiedObjectName,
+  rawArmOf,
   recordTableObjectOfName,
   resolveReceiverTable,
   resolveVarRef,
@@ -1165,13 +1166,16 @@ function r531TableProcs(
   if (n.rawKind !== "call_expression") return [];
   const fn = n.childForFieldName("function");
   const recv = fn?.rawKind === "member_expression" ? fn.childForFieldName("object") : null;
-  let t = recv !== null && recv !== undefined ? declaredType(recv, ctx) : null;
-  if (t === null) {
+  // R737: an ambiguous receiver follows every table type
+  let ts = recv !== null && recv !== undefined ? declaredTypes(recv, ctx) : [];
+  if (ts.length === 0) {
     const table = resolveReceiverTable(n, ctx);
-    if (table !== null) t = { kind: "table", name: normalizeAlName(table), temporary: false };
+    if (table !== null) ts = [{ kind: "table", name: normalizeAlName(table), temporary: false }];
   }
-  if (t === null || t.kind !== "table") return [];
-  return objectsOfType(t, ctx).flatMap((o) => r531ProcsIn(o, method, arity, n, ctx));
+  return ts
+    .filter((t) => t.kind === "table")
+    .flatMap((t) => objectsOfType(t, ctx))
+    .flatMap((o) => r531ProcsIn(o, method, arity, n, ctx));
 }
 
 /** The arity a call's candidates must have: null (any) for an uncertain call (R567). */
@@ -1337,7 +1341,8 @@ function r562FilterHop(
     if (r562NotAProc(c.method) || n.rawKind !== "call_expression") return none;
     for (const p of r531TableProcs(n, c.method, arity, ctx))
       targets.push({ proc: p, key: "", r: c.recv });
-    unresolved = !targets.some((t) => bodyOf(t.proc) !== null);
+    // ponytail: R_amb = 0 on every corpus (R737 census); add a red test if the census ever finds an ambiguous receiver here
+    unresolved = !targets.some((t) => bodyOf(t.proc) !== null) || r737Partial(n, ctx);
   } else if (bareRec.length > 0) {
     for (const p of bareRec) targets.push({ proc: p, key: "", r: "" });
   } else if (c.recv === null && r531ObjectProcs(n, ctx).has(c.method)) {
@@ -1436,6 +1441,9 @@ function r568StopsAt(c: ALSyntaxNode, ctx: SemanticContext): boolean {
   const f = c.childForFieldName("function");
   const recv = f?.rawKind === "member_expression" ? f.childForFieldName("object") : null;
   if (recv === null || recv === undefined || !isIdentifierLike(recv)) return false;
+  // ponytail: R737 guard for an ambiguous receiver (never stops: its arguments feed). The census
+  // found no such receiver on any corpus (R_amb = 0), so it has no test; add one if it ever fires.
+  if (declaredTypes(recv, ctx).length > 1) return false;
   const t = declaredType(recv, ctx);
   if (t !== null && t.kind !== "table") return true;
   const tg = callTargets(c, ctx);
@@ -2612,6 +2620,11 @@ function argWritten(c: ALSyntaxNode, i: number, ctx: SemanticContext, unknown: b
     return answers.size === 1 ? answers.has(true) : unknown;
   } else if (isIdentifierLike(f)) return WRITING_BUILTINS.has(normalizeAlName(f.text)) && i === 0;
   else {
+    // ponytail: R737 guard, an ambiguous receiver reads `unknown`; R_amb = 0 on every corpus, so
+    // no test; add one if the census ever finds one.
+    const ambRecv = f.rawKind === "member_expression" ? f.childForFieldName("object") : null;
+    if (ambRecv !== null && isIdentifierLike(ambRecv) && declaredTypes(ambRecv, ctx).length > 1)
+      return unknown;
     const t = callTargets(c, ctx);
     if (t === null) {
       // a record method on a record receiver writes no argument; anything else is unknown
@@ -3101,6 +3114,9 @@ function r696Table(call: ALSyntaxNode, ctx: SemanticContext): DeclaredType | nul
 
 /** R725: a test-only seam, as `r696Seam`; off restores reading an "unknown" name as absent. */
 export const r725Seam = { on: true };
+/** R737: a test-only seam; off restores `declaredType` as master read it (no descent into a var
+ *  section's `#if`, first match only). */
+export const r737Seam = { on: true };
 /** R725: the table of a receiver whose declaration is "unknown"; it matches every table. */
 const R725_ANY_TABLE = "\u0000unknown";
 const sameTable = (a: string, b: string): boolean =>
@@ -4491,7 +4507,7 @@ function r572WritesName(
     if (c === null) return;
     c.args.forEach((a, i) => {
       if (hit || !isIdentifierLike(a) || normalizeAlName(a.text) !== k) return;
-      const ts = c.uncertain ? [] : r570Targets(x, c, ctx);
+      const ts = c.uncertain ? [] : r570Targets(x, c, ctx, true);
       if (ts.length === 0) hit = true;
       for (const t of ts) {
         const p = r531Param(t, i);
@@ -4519,7 +4535,8 @@ function r572HelperKeys(
   const c = r531Call(call);
   const obj = objectOf(frame.loop);
   if (c === null || obj === null) return [];
-  const ts = r570Targets(call, c, ctx);
+  // ponytail: R_amb = 0 on every corpus (R737 census); add a red test if the census ever finds an ambiguous receiver here
+  const ts = r570Targets(call, c, ctx, true);
   if (ts.length === 0) return [];
   let common: Set<string> | null = null;
   for (const t of ts) {
@@ -4606,7 +4623,8 @@ function r572HelperKeeps(
     }
     c.args.forEach((a, i) => {
       if (moved || !isIdentifierLike(a) || r531Key(a) !== key) return;
-      const ts = c.uncertain ? [] : r570Targets(n, c, ctx);
+      // ponytail: R_amb = 0 on every corpus (R737 census); add a red test if the census ever finds an ambiguous receiver here
+      const ts = c.uncertain ? [] : r570Targets(n, c, ctx, true);
       if (ts.length === 0) {
         if (!(c.recv === null && R531_PURE.has(c.method) && c.method !== "clear")) moved = true;
         return;
@@ -5462,24 +5480,25 @@ const r572RootIds = new Map<ALSyntaxNode, number>();
 /** The `OnRun` triggers a `Codeunit.Run(Codeunit::X)` or `CU.Run()` call starts, or []. */
 function r572RunTargets(n: ALSyntaxNode, c: R531Call, ctx: SemanticContext): ALSyntaxNode[] {
   if (c.method !== "run") return [];
-  let name: string | null = null;
+  const names: string[] = [];
   if (c.recv === "codeunit" || c.recv === "\u0001codeunit") {
     const ref = c.args[0];
     const tn = ref?.rawKind === "database_reference" ? ref.childForFieldName("table_name") : null;
-    if (tn !== null && tn !== undefined) name = normalizeAlName(tn.text);
+    if (tn !== null && tn !== undefined) names.push(normalizeAlName(tn.text));
   } else {
     const recv = r572Receiver(n);
-    const t = recv === null ? null : declaredType(recv, ctx);
-    if (t !== null && t.kind === "codeunit") name = t.name;
+    // R737: an ambiguous receiver starts every codeunit type's OnRun
+    for (const t of recv === null ? [] : declaredTypes(recv, ctx))
+      if (t.kind === "codeunit") names.push(t.name);
   }
-  if (name === null) return [];
   const out: ALSyntaxNode[] = [];
-  for (const o of objectsOfType({ kind: "codeunit", name, temporary: false }, ctx))
-    visitAll(o, (x) => {
-      if (x.rawKind !== "trigger_declaration") return;
-      const nm = x.childForFieldName("name") ?? x.namedChildren.find((y) => isIdentifierLike(y));
-      if (nm !== undefined && nm !== null && normalizeAlName(nm.text) === "onrun") out.push(x);
-    });
+  for (const name of names)
+    for (const o of objectsOfType({ kind: "codeunit", name, temporary: false }, ctx))
+      visitAll(o, (x) => {
+        if (x.rawKind !== "trigger_declaration") return;
+        const nm = x.childForFieldName("name") ?? x.namedChildren.find((y) => isIdentifierLike(y));
+        if (nm !== undefined && nm !== null && normalizeAlName(nm.text) === "onrun") out.push(x);
+      });
   return out;
 }
 
@@ -5545,7 +5564,8 @@ function r572StatefulOnce(p: ALSyntaxNode, hops: number, ctx: SemanticContext): 
           hit = true;
         if (hit) return;
       }
-      const ts = r570Targets(n, c, ctx);
+      // ponytail: R_amb = 0 on every corpus (R737 census); add a red test if the census ever finds an ambiguous receiver here
+      const ts = r570Targets(n, c, ctx, true);
       if (ts.length === 0) {
         // UNKNOWN (plan r2 review 7): no target and no resolved built-in
         if (c.recv === null) {
@@ -5735,7 +5755,8 @@ function r572WritesNode(
       hit = true;
       return;
     }
-    const ts = r570Targets(n, c, ctx);
+    // ponytail: R_amb = 0 on every corpus (R737 census); add a red test if the census ever finds an ambiguous receiver here
+    const ts = r570Targets(n, c, ctx, true);
     if (ts.length === 0) {
       if (!(c.recv === null && R572_NO_WRITE.has(c.method))) hit = true;
       return;
@@ -5897,7 +5918,8 @@ function r570LoopFilters(
         else if (!R531_BUILTIN.has(c.method)) {
           // a table procedure on the cursor: the filters it sets on its implicit Rec, one level
           // (ponytail: a deeper call, or none resolved, reads as any field)
-          const ts = r570Targets(n, c, ctx);
+          // ponytail: R_amb = 0 on every corpus (R737 census); add a red test if the census ever finds an ambiguous receiver here
+          const ts = r570Targets(n, c, ctx, true);
           if (ts.length === 0) out.add("*");
           for (const t of ts) {
             const own = r531ObjectProcs(t, ctx);
@@ -6103,7 +6125,8 @@ function r570Scan(
       // `R.M(...)` (or `Rec.M(...)` for the implicit Rec)
       if (recMethod(c)) direct = true;
       else if (c.method !== "modify" && c.method !== "modifyall" && !R531_BUILTIN.has(c.method)) {
-        const ts = r570Targets(n, c, ctx);
+        // viaRec reads [] as direct, so ask for the strict (complete) list
+        const ts = r570Targets(n, c, ctx, true);
         // a paren-less `R.X` that names no procedure is a field read
         if (c.uncertain) direct = true;
         else if (n.rawKind !== "member_expression" || ts.length > 0) viaRec(ts);
@@ -6114,7 +6137,8 @@ function r570Scan(
       } else if (r531Implicit(n, ctx)) {
         if (recMethod(c)) direct = true;
         else if (c.method !== "modify" && c.method !== "modifyall" && !R531_BUILTIN.has(c.method)) {
-          const ts = r570Targets(n, c, ctx);
+          // ponytail: R_amb = 0 on every corpus (R737 census); add a red test if the census ever finds an ambiguous receiver here
+          const ts = r570Targets(n, c, ctx, true);
           if (ts.length > 0) viaRec(ts);
           else if (!r570ProjectRec(p, ctx)) direct = true; // maybe the base table's procedure
         }
@@ -6133,7 +6157,8 @@ function r570Scan(
       if (normalizeAlName(c.args[1]?.text ?? "") !== "false") direct = true;
       return;
     }
-    const ts = r570Targets(n, c, ctx);
+    // ponytail: R_amb = 0 on every corpus (R737 census); add a red test if the census ever finds an ambiguous receiver here
+    const ts = r570Targets(n, c, ctx, true);
     if (ts.length === 0) {
       const readOnly =
         c.recv !== null &&
@@ -6154,7 +6179,14 @@ function r570Scan(
 }
 
 /** The project procedures (with a body) that call `n` names, in any object. */
-function r570Targets(n: ALSyntaxNode, c: R531Call, ctx: SemanticContext): ALSyntaxNode[] {
+function r570Targets(
+  n: ALSyntaxNode,
+  c: R531Call,
+  ctx: SemanticContext,
+  complete = false,
+): ALSyntaxNode[] {
+  // R737: `complete` readers (an empty list means unresolved, strict) get [] for a partial union
+  if (complete && r737Partial(n, ctx)) return [];
   const arity = r531CallArity(c);
   const own = objectOf(n);
   const same = bareCallee(n);
@@ -6164,9 +6196,10 @@ function r570Targets(n: ALSyntaxNode, c: R531Call, ctx: SemanticContext): ALSynt
   } else if (n.rawKind === "member_expression") {
     // a paren-less member call `CU.P`
     const recv = n.childForFieldName("object");
-    const t = recv !== null && isIdentifierLike(recv) ? declaredType(recv, ctx) : null;
-    procs =
-      t === null ? [] : objectsOfType(t, ctx).flatMap((o) => r531ProcsIn(o, c.method, 0, n, ctx));
+    const ts = recv !== null && isIdentifierLike(recv) ? declaredTypes(recv, ctx) : [];
+    procs = ts
+      .flatMap((t) => objectsOfType(t, ctx))
+      .flatMap((o) => r531ProcsIn(o, c.method, 0, n, ctx));
   } else {
     const t = n.rawKind === "call_expression" ? callTargets(n, ctx) : null;
     procs = t === null ? [] : t.objs.flatMap((o) => r531ProcsIn(o, t.member, arity, n, ctx));
@@ -6276,31 +6309,88 @@ export function resetObjectNameCalls(): void {
  * the object. Null when not found: the call is not followed.
  */
 function declaredType(recv: ALSyntaxNode, ctx: SemanticContext): DeclaredType | null {
-  let decl: ALSyntaxNode | null = resolveVarRef(recv, ctx)?.node ?? null;
-  if (decl === null) {
-    const name = normalizeAlName(recv.text);
-    const find = (holder: ALSyntaxNode): ALSyntaxNode | null => {
-      let t: ALSyntaxNode | null = null;
-      const walk = (n: ALSyntaxNode): void => {
-        for (const c of n.namedChildren) {
-          if (t !== null) return;
-          if (c.rawKind === "variable_declaration") {
-            // R521: any name of a multi-name declaration (PEPPOL's `A, B: Interface X`)
-            if (declaredNames(c).some((nm) => normalizeAlName(nm) === name)) t = c;
-          } else if (c.rawKind === "var_section" || c.rawKind === "var_body") {
-            walk(c);
-          }
-        }
-      };
-      walk(holder);
-      return t;
-    };
-    const scope = codeScope(recv);
-    decl = scope === null ? null : find(scope);
-    const body = objectOf(recv)?.childForFieldName("body") ?? null;
-    if (decl === null && body !== null) decl = find(body);
+  const all = declaredTypes(recv, ctx);
+  const [one] = all;
+  return all.length === 1 && one !== undefined ? one : null;
+}
+
+/**
+ * R737: every type the receiver may have. One for a name the symbol table resolves, or a plain
+ * declaration. The text fallback also descends a var section's `#if` (`preproc_*`, never a
+ * split-header procedure, whose locals are another procedure's): a decided file reads only the live
+ * arm; an undecided file (or a context with no arm map) reads every arm. A declaration under no
+ * `#if`, or in a live arm of a decided file, is CERTAIN. Scope order: a certain local wins alone;
+ * else the local's uncertain declarations join the object's (certain ones alone, else uncertain).
+ * Two or more types is ambiguous: `declaredType` answers null, the follow readers use the union.
+ * Seam off: master (no descent, first match).
+ */
+function declaredTypes(recv: ALSyntaxNode, ctx: SemanticContext): DeclaredType[] {
+  const resolved = resolveVarRef(recv, ctx)?.node ?? null;
+  if (resolved !== null) {
+    const t = typeOfDecl(resolved);
+    return t === null ? [] : [t];
   }
-  const typeNode = decl?.childForFieldName("type") ?? null;
+  const name = normalizeAlName(recv.text);
+  const hasMap = rawArmOf(ctx) !== undefined;
+  const find = (holder: ALSyntaxNode): { decl: ALSyntaxNode; certain: boolean }[] => {
+    const hits: { decl: ALSyntaxNode; certain: boolean }[] = [];
+    const walk = (n: ALSyntaxNode, underIf: boolean): void => {
+      for (const c of n.namedChildren) {
+        if (c.rawKind === "variable_declaration") {
+          // R521: any name of a multi-name declaration (PEPPOL's `A, B: Interface X`)
+          // the `#if` node itself is not inside an inactive range; its compiled-out arm's body is
+          if (
+            (!r737Seam.on || armOfNode(ctx, c) !== "inactive") &&
+            declaredNames(c).some((nm) => normalizeAlName(nm) === name)
+          )
+            hits.push({
+              decl: c,
+              certain: !underIf || (hasMap && armOfNode(ctx, c) === "active"),
+            });
+        } else if (c.rawKind === "var_section" || c.rawKind === "var_body") {
+          walk(c, underIf);
+        } else if (
+          r737Seam.on &&
+          c.rawKind.startsWith("preproc_") &&
+          !isProcedureLike(c) &&
+          armOfNode(ctx, c) !== "inactive"
+        ) {
+          walk(c, true);
+        }
+      }
+    };
+    walk(holder, false);
+    return hits;
+  };
+  const scope = codeScope(recv);
+  const body = objectOf(recv)?.childForFieldName("body") ?? null;
+  const local = scope === null ? [] : find(scope);
+  const globals = body === null ? [] : find(body);
+  let picked: { decl: ALSyntaxNode; certain: boolean }[];
+  if (!r737Seam.on) {
+    const [first] = local.length > 0 ? local : globals;
+    picked = first === undefined ? [] : [first];
+  } else if (local.some((h) => h.certain)) {
+    picked = local.filter((h) => h.certain);
+  } else {
+    const certainGlobals = globals.filter((h) => h.certain);
+    picked = [...local, ...(certainGlobals.length > 0 ? certainGlobals : globals)];
+  }
+  const seen = new Set<string>();
+  const out: DeclaredType[] = [];
+  for (const h of picked) {
+    const t = typeOfDecl(h.decl);
+    if (t === null) continue;
+    const key = `${t.kind}|${t.name}|${t.temporary}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(t);
+  }
+  return out;
+}
+
+function typeOfDecl(decl: ALSyntaxNode): DeclaredType | null {
+  const typeNode = decl.childForFieldName("type");
   if (typeNode === null) return null;
   for (const c of typeNode.namedChildren) {
     const ref = normalizeAlName(lastFieldChild(c, "reference")?.text ?? "");
@@ -6336,6 +6426,18 @@ function projectObjects(ctx: SemanticContext): ALSyntaxNode[] {
   const objs = files.flatMap((f) => objectDeclarationsOf(f.root));
   projectObjectsMemo.set(ctx, objs);
   return objs;
+}
+
+/** R737 (build review MUST 1): is `n`'s receiver typed two or more ways with ANY type naming no
+ *  project object (a dependency codeunit)? Its target union is then PARTIAL: follow readers use it
+ *  (they follow what exists), but a reader that takes an empty list as "unresolved, strict" must not
+ *  see a partial list as complete (`r570Targets(..., true)`). */
+function r737Partial(n: ALSyntaxNode, ctx: SemanticContext): boolean {
+  const fn = n.rawKind === "call_expression" ? n.childForFieldName("function") : n;
+  const recv = fn?.rawKind === "member_expression" ? fn.childForFieldName("object") : null;
+  if (recv === null || recv === undefined || !isIdentifierLike(recv)) return false;
+  const ts = declaredTypes(recv, ctx);
+  return ts.length > 1 && ts.some((t) => objectsOfType(t, ctx).length === 0);
 }
 
 /** The project objects a declared type names: a codeunit; a table plus its tableextensions; or every
@@ -6440,9 +6542,17 @@ function callTargets(
       const bases = baseProceduresOwners(obj, member, ctx);
       return bases.length === 0 ? null : { objs: bases, member, kind: "report" };
     }
-    const t = declaredType(recv, ctx);
-    if (t !== null) {
-      return { objs: objectsOfType(t, ctx), member, kind: t.kind === "table" ? "record" : t.kind };
+    // R737: an ambiguous receiver follows every type's objects; kind "ambiguous" when they differ
+    const ts = declaredTypes(recv, ctx);
+    const [t0] = ts;
+    if (t0 !== undefined) {
+      const kinds = new Set(ts.map((t) => (t.kind === "table" ? "record" : t.kind)));
+      const [k0] = kinds;
+      return {
+        objs: ts.flatMap((t) => objectsOfType(t, ctx)),
+        member,
+        kind: kinds.size === 1 && k0 !== undefined ? k0 : "ambiguous",
+      };
     }
     return onTable(resolveReceiverTable(c, ctx), member);
   }
