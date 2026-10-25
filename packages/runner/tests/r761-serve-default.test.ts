@@ -178,7 +178,16 @@ describe("R761: the default transport", () => {
       expect([name, V3_SERVE_PROVEN_NAME_SHAPES.method.test(name)]).toEqual([name, true]);
     }
     // red when the widening is too loose: the dot is #5798, and characters N1S never ran stay unproven
-    for (const name of ["Dot.Step", "Ø Step", "Å Step", "Quote'Step", "Colon:Step", "Plus+Step", "Tab\tStep", ""]) {
+    for (const name of [
+      "Dot.Step",
+      "Ø Step",
+      "Å Step",
+      "Quote'Step",
+      "Colon:Step",
+      "Plus+Step",
+      "Tab\tStep",
+      "",
+    ]) {
       expect([name, V3_SERVE_PROVEN_NAME_SHAPES.method.test(name)]).toEqual([name, false]);
     }
     // red when only the character set is checked: N1S never ran these positions
@@ -257,6 +266,50 @@ describe("R761: explicit keys", () => {
     const r = await rig({}, { tests: [ref("Dot.Step")], src: MULTI_AL });
     await r.b.decideTransport({ resume: true });
     expect(r.b.inRunStopIsBudget).toBe(false);
+    expect(r.warnings).toEqual([]);
+  });
+});
+
+describe("R786: the one-shot re-run after a serve warm-up fallback", () => {
+  const WHY =
+    "Codeunit50100.B (codeunit 50100): NotRun: out-of-scope: FindSet on the Company table";
+
+  test("one-shot, ONE named warning that names the row and its reason, no process started", async () => {
+    const r = await rig({ ...DEFAULT, serveFallbackWarmup: WHY });
+    await r.b.decideTransport({ resume: false });
+    expect(r.b.inRunStopIsBudget).toBe(true); // one-shot
+    expect(r.warnings).toHaveLength(1);
+    expect(r.warnings[0]?.code).toBe("al-runner-v3-serve-default-fallback-warmup");
+    expect(r.warnings[0]?.message).toContain(WHY);
+    expect(r.spawns).toEqual([]);
+    // Nothing of a serve attempt: this backend never sent an entry, started a daemon or prefetched.
+    const s = r.b.entriesStats();
+    expect([s.daemons, s.warmups, s.entriesSent, s.prefetchRequests, s.liveRequests]).toEqual([
+      0, 0, 0, 0, 0,
+    ]);
+  });
+
+  test("without the fact, the default still picks serve-entries and says nothing", async () => {
+    const r = await rig(DEFAULT);
+    await r.b.decideTransport({ resume: false });
+    expect(r.b.inRunStopIsBudget).toBe(false);
+    expect(r.warnings).toEqual([]);
+  });
+
+  test("--workers > 1 after a fallback is refused by name (parallel needs serve-entries)", async () => {
+    const r = await rig({ ...DEFAULT, serveFallbackWarmup: WHY });
+    await r.b.decideTransport({ resume: false });
+    expect(r.b.parallelRefusal()).toStartWith("al-runner-v3-workers-refused:");
+    expect(r.b.parallelRefusal()).toContain("needs the serve-entries transport");
+  });
+
+  test("an explicit transport ignores the fact (the fallback is for the default only)", async () => {
+    const r = await rig({
+      transport: "serve-entries",
+      transportSource: "explicit",
+      serveFallbackWarmup: WHY,
+    });
+    await r.b.decideTransport({ resume: false });
     expect(r.warnings).toEqual([]);
   });
 });

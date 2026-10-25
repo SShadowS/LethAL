@@ -29,7 +29,7 @@ import rootPackageJson from "../../../package.json" with { type: "json" };
 import type { ActivationConfig, FetchFn } from "./activation";
 import { alRunnerCoverageSupport } from "./al-runner-coverage";
 import type { ServerSpawnFn } from "./al-runner-server";
-import { AlRunnerV3Backend } from "./al-runner-v3-backend";
+import { AlRunnerV3Backend, AlRunnerV3ServeFallbackWarmupError } from "./al-runner-v3-backend";
 import {
   AL_RUNNER_V3_NOT_AUTHORITATIVE,
   assertBcVersionMatchesPackages,
@@ -2906,6 +2906,8 @@ async function buildAlRunnerV3Backend(
     readonly serverSpawn?: ServerSpawnFn;
     /** R586c: test seam, the update gate's leg K only. No flag, no config key. */
     readonly candidate?: true;
+    /** R786: see `AlRunnerV3Config.serveFallbackWarmup`. */
+    readonly serveFallbackWarmup?: string;
     readonly selectorIds: SelectorConfig;
     readonly source?: ReadonlyMap<string, Buffer>;
     readonly preprocessorSymbols: readonly string[];
@@ -2935,6 +2937,9 @@ async function buildAlRunnerV3Backend(
       coverage,
       sourceProjectDir: parsed.projectDir,
       ...(deps.candidate === true ? { candidate: true } : {}),
+      ...(deps.serveFallbackWarmup !== undefined
+        ? { serveFallbackWarmup: deps.serveFallbackWarmup }
+        : {}),
       ...(parsed.freshProbe === true ? { freshProbe: true } : {}),
       ...(c.cacheDir !== undefined ? { cacheDir: c.cacheDir } : {}),
       ...(deps.preprocessorSymbols.length > 0
@@ -2972,6 +2977,8 @@ export async function buildBackend(
     alRunnerServerSpawn?: ServerSpawnFn;
     /** R586c: test seam for the update gate's leg K on a candidate build; never set by a user. */
     alRunnerCandidate?: true;
+    /** R786: set by `runFromCli`'s one-shot re-run after a serve warm-up fallback; never by a user. */
+    alRunnerServeFallbackWarmup?: string;
   } = {},
   // R3: the resolved selector/control/table ids (`resolveSelectorIds`) — trailing, defaulted
   // param so every pre-existing positional call site (tests included) keeps behaving exactly as
@@ -2990,6 +2997,9 @@ export async function buildBackend(
       ...(deps.alRunnerSpawn !== undefined ? { spawn: deps.alRunnerSpawn } : {}),
       ...(deps.alRunnerServerSpawn !== undefined ? { serverSpawn: deps.alRunnerServerSpawn } : {}),
       ...(deps.alRunnerCandidate === true ? { candidate: true as const } : {}),
+      ...(deps.alRunnerServeFallbackWarmup !== undefined
+        ? { serveFallbackWarmup: deps.alRunnerServeFallbackWarmup }
+        : {}),
       selectorIds,
       ...(source !== undefined ? { source } : {}),
       preprocessorSymbols,
@@ -3809,194 +3819,212 @@ export async function runFromCli(
       envSession,
       parsed.keepEnv,
       async () => {
-        let backend: ExecutionBackend | undefined;
-        let store: ResultsStore | undefined;
-        // Task 6: opened before `runTheSession` (below) so a killed process still leaves whatever was
-        // written to the OS. Closed in the `finally` below, best-effort, same posture as `store`/
-        // `backend`.
-        let progressOutFd: number | undefined;
-        // Issue #22: the highest version an instrumented build was published under this run.
-        let highestPublished: string | undefined;
-        // Task 7 review, wave 2 (Important — the restructure itself introduced this): `report` MUST be
-        // captured in a local BEFORE the `finally` runs, and returned AFTER it — never
-        // `return await runSession(...)` directly inside the `try`. Per JS `try/finally` semantics, a
-        // throw from `finally` silently DISCARDS the `try`'s pending return value and replaces it with
-        // the `finally`'s own error; a `store.close()`/`backend.close()` failure would then look
-        // identical to `runSession` itself throwing — `withEnvTeardown`'s `report` would stay
-        // `undefined`, `quarantined` would evaluate `false` even for an actually-quarantined report,
-        // and `envSession.teardown` would take the DELETE branch on the environment the quarantine
-        // exists to preserve for investigation. `main()` would also exit 1 instead of the quarantine
-        // code 3, and the report would never be printed/written.
-        let report: SessionReport | undefined;
-        try {
-          backend = await build(
-            parsed,
-            effectiveConfig,
-            scratchRoot,
-            deploy,
-            {},
-            selectorIds,
-            source,
-          );
-          store = new ResultsStore(parsed.dbPath);
-          // Task 5 (event-stream refactor, spec 2026-08-05 §A): a run this long (a baseline alone
-          // can run for minutes with zero prior output) needs a live indication it hasn't stalled.
-          // Writes to STDERR — never stdout, which is where the final report goes
-          // (`renderConsole`/`writeJsonReport` below) — because mixing progress into the report's
-          // own stream already cost a real session a swallowed error, twice, behind a `grep` on the
-          // combined output.
-          const progress = createProgressRenderer((line) => process.stderr.write(`${line}\n`), {
-            heartbeatMs: PROGRESS_HEARTBEAT_MS,
-          });
-          // Task 6 (event-stream refactor, spec 2026-08-05 §A): `--progress-out <path>` streams the
-          // SAME events to an NDJSON file, one JSON object per line, flushed synchronously per event
-          // so a killed process still leaves whatever was written to the OS — see progress-ndjson.ts's
-          // module doc, including the header-line and provisional-verdict contract. `fs.writeSync`
-          // (not a `WriteStream`) because a buffered stream can lose whatever sits in its in-process
-          // buffer when the process is killed rather than exiting cleanly, which is exactly the case
-          // this flag exists to survive.
-          // R172 proposal 3. Loaded here, once, before the session starts: a malformed marks file must
-          // stop the run BEFORE hours of execution, not after, and it must fail rather than load
-          // partially — a ruling that silently went missing looks exactly like a survivor nobody has
-          // examined yet.
-          const equivalenceMarks = await loadEquivalenceMarks(parsed.projectDir);
-          const emitSubscribers: EventSubscriber[] = [
-            progress,
-            (e) => {
-              if (e.type !== "batch-published" || e.appVersion === undefined) return;
-              if (
-                highestPublished === undefined ||
-                compareAppVersions(e.appVersion, highestPublished) > 0
-              ) {
-                highestPublished = e.appVersion;
+        // R786: one attempt = a whole session on its own backend, store handle and event files. After
+        // `AlRunnerV3ServeFallbackWarmupError` (the serve-entries DEFAULT met a warm-up row R612
+        // refuses by name) the first attempt's backend is closed in its `finally` and thrown away;
+        // the second is built one-shot and is exactly what an explicit one-shot run is. It carries
+        // the row's name for the warning and the status, and nothing else.
+        const attempt = async (serveFallbackWarmup: string | undefined): Promise<SessionReport> => {
+          let backend: ExecutionBackend | undefined;
+          let store: ResultsStore | undefined;
+          // Task 6: opened before `runTheSession` (below) so a killed process still leaves whatever was
+          // written to the OS. Closed in the `finally` below, best-effort, same posture as `store`/
+          // `backend`.
+          let progressOutFd: number | undefined;
+          // Issue #22: the highest version an instrumented build was published under this run.
+          let highestPublished: string | undefined;
+          // Task 7 review, wave 2 (Important — the restructure itself introduced this): `report` MUST be
+          // captured in a local BEFORE the `finally` runs, and returned AFTER it — never
+          // `return await runSession(...)` directly inside the `try`. Per JS `try/finally` semantics, a
+          // throw from `finally` silently DISCARDS the `try`'s pending return value and replaces it with
+          // the `finally`'s own error; a `store.close()`/`backend.close()` failure would then look
+          // identical to `runSession` itself throwing — `withEnvTeardown`'s `report` would stay
+          // `undefined`, `quarantined` would evaluate `false` even for an actually-quarantined report,
+          // and `envSession.teardown` would take the DELETE branch on the environment the quarantine
+          // exists to preserve for investigation. `main()` would also exit 1 instead of the quarantine
+          // code 3, and the report would never be printed/written.
+          let report: SessionReport | undefined;
+          try {
+            backend = await build(
+              parsed,
+              effectiveConfig,
+              scratchRoot,
+              deploy,
+              serveFallbackWarmup !== undefined
+                ? { alRunnerServeFallbackWarmup: serveFallbackWarmup }
+                : {},
+              selectorIds,
+              source,
+            );
+            store = new ResultsStore(parsed.dbPath);
+            // Task 5 (event-stream refactor, spec 2026-08-05 §A): a run this long (a baseline alone
+            // can run for minutes with zero prior output) needs a live indication it hasn't stalled.
+            // Writes to STDERR — never stdout, which is where the final report goes
+            // (`renderConsole`/`writeJsonReport` below) — because mixing progress into the report's
+            // own stream already cost a real session a swallowed error, twice, behind a `grep` on the
+            // combined output.
+            const progress = createProgressRenderer((line) => process.stderr.write(`${line}\n`), {
+              heartbeatMs: PROGRESS_HEARTBEAT_MS,
+            });
+            // Task 6 (event-stream refactor, spec 2026-08-05 §A): `--progress-out <path>` streams the
+            // SAME events to an NDJSON file, one JSON object per line, flushed synchronously per event
+            // so a killed process still leaves whatever was written to the OS — see progress-ndjson.ts's
+            // module doc, including the header-line and provisional-verdict contract. `fs.writeSync`
+            // (not a `WriteStream`) because a buffered stream can lose whatever sits in its in-process
+            // buffer when the process is killed rather than exiting cleanly, which is exactly the case
+            // this flag exists to survive.
+            // R172 proposal 3. Loaded here, once, before the session starts: a malformed marks file must
+            // stop the run BEFORE hours of execution, not after, and it must fail rather than load
+            // partially — a ruling that silently went missing looks exactly like a survivor nobody has
+            // examined yet.
+            const equivalenceMarks = await loadEquivalenceMarks(parsed.projectDir);
+            const emitSubscribers: EventSubscriber[] = [
+              progress,
+              (e) => {
+                if (e.type !== "batch-published" || e.appVersion === undefined) return;
+                if (
+                  highestPublished === undefined ||
+                  compareAppVersions(e.appVersion, highestPublished) > 0
+                ) {
+                  highestPublished = e.appVersion;
+                }
+              },
+            ];
+            if (parsed.progressOutPath !== undefined) {
+              progressOutFd = openSync(parsed.progressOutPath, "w");
+              const fd = progressOutFd;
+              emitSubscribers.push(createNdjsonSink((chunk) => writeSync(fd, chunk)));
+            }
+            // R360: kept for the scratch-folder decision after the session, see above.
+            tier = resourceIdentityFor(parsed, effectiveConfig);
+            report = await runTheSession({
+              backend,
+              store,
+              projectDir: parsed.projectDir,
+              source,
+              testDir: parsed.testDir,
+              instrumentedDir: join(scratchRoot, "instrumented"),
+              excludeOutputs: runOutputPaths(parsed),
+              configPath: parsed.configPath,
+              selectorIds,
+              skipKnownSurvivors: parsed.skipKnownSurvivors,
+              workers: parsed.workers,
+              // `SessionConfig.emit` is typed `readonly EventSubscriber[]` (events.ts) precisely
+              // because `runSession` splices them into its own canonical, seq-stamped stream — every
+              // event these receive IS a full `RunEvent`, no cast required. Handed over as the list
+              // (R104): `runSession`'s `createEmitter` is the one fan-out, and it already isolates each
+              // subscriber from a throw in its siblings, so there is nothing to pre-combine here.
+              emit: emitSubscribers,
+              ...(parsed.only !== undefined ? { only: parsed.only } : {}),
+              ...(mergedExclude.length > 0 ? { exclude: mergedExclude } : {}),
+              ...(parsed.operators !== undefined ? { operators: parsed.operators } : {}),
+              ...(lineRanges !== undefined
+                ? {
+                    lines: lineRanges.ranges,
+                    ...(lineRanges.changedSince !== undefined
+                      ? { changedSince: lineRanges.changedSince }
+                      : {}),
+                  }
+                : {}),
+              ...(parsed.testsOnly !== undefined ? { testsOnly: parsed.testsOnly } : {}),
+              ...(parsed.excludeTests !== undefined ? { excludeTests: parsed.excludeTests } : {}),
+              ...(parsed.maxGuardsPerBatch !== undefined
+                ? { maxGuardsPerBatch: parsed.maxGuardsPerBatch }
+                : {}),
+              ...(parsed.mutantTimeoutMs !== undefined
+                ? { mutantTimeoutMs: parsed.mutantTimeoutMs }
+                : {}),
+              ...(parsed.groupRuns !== undefined ? { groupRuns: parsed.groupRuns } : {}),
+              ...(parsed.resume !== undefined ? { resume: parsed.resume } : {}),
+              ...(parsed.retryStranded === true ? { retryStranded: true } : {}),
+              ...(parsed.stopHungSessions === true ? { stopHungSessions: true } : {}),
+              ...(equivalenceMarks !== undefined ? { equivalenceMarks } : {}),
+              // R565: bcdev and envtool read dependency reports from the package cache alc compiles
+              // against; al-runner's folders come from the backend and its provisioning.
+              ...(parsed.backendKind === "bcdev"
+                ? {
+                    dependencyPackageDirs: [
+                      resolve(packageCachePathDefault(effectiveConfig.bcdev, parsed.projectDir)),
+                    ],
+                  }
+                : {}),
+              // C02-06: the symbols the target compiler was built with (see `buildBackend`), so the
+              // recorded source hash covers them. Also what `SessionReport.preprocessorSymbols` reports.
+              preprocessorSymbols: validatePreprocessorSymbols(effectiveConfig.preprocessorSymbols),
+              ...afterLeaseAcquiredFor(envSession),
+              ...(parsed.allowLargeRun === true ? { allowLargeRun: true } : {}),
+              ...tier,
+              ...leaseSessionFor(parsed, effectiveConfig),
+              ...permissionCanaryFor(parsed, effectiveConfig),
+            });
+          } finally {
+            // Best-effort cleanup — mirrors orchestrator.ts's own posture (~line 2056: "deliberately
+            // swallow errors here... a failure here must not mask/replace whatever real error is already
+            // propagating"). Each close is independently guarded so one failing never skips the others,
+            // and none of them can replace `report` (captured above) or a real error already unwinding
+            // through this `finally`.
+            if (store !== undefined) {
+              try {
+                store.close();
+              } catch (err) {
+                console.warn(
+                  `[lethal] store.close() failed during cleanup (best-effort; the session's report/exit code is unaffected): ${err instanceof Error ? err.message : String(err)}`,
+                );
               }
-            },
-          ];
-          if (parsed.progressOutPath !== undefined) {
-            progressOutFd = openSync(parsed.progressOutPath, "w");
-            const fd = progressOutFd;
-            emitSubscribers.push(createNdjsonSink((chunk) => writeSync(fd, chunk)));
-          }
-          // R360: kept for the scratch-folder decision after the session, see above.
-          tier = resourceIdentityFor(parsed, effectiveConfig);
-          report = await runTheSession({
-            backend,
-            store,
-            projectDir: parsed.projectDir,
-            source,
-            testDir: parsed.testDir,
-            instrumentedDir: join(scratchRoot, "instrumented"),
-            excludeOutputs: runOutputPaths(parsed),
-            configPath: parsed.configPath,
-            selectorIds,
-            skipKnownSurvivors: parsed.skipKnownSurvivors,
-            workers: parsed.workers,
-            // `SessionConfig.emit` is typed `readonly EventSubscriber[]` (events.ts) precisely
-            // because `runSession` splices them into its own canonical, seq-stamped stream — every
-            // event these receive IS a full `RunEvent`, no cast required. Handed over as the list
-            // (R104): `runSession`'s `createEmitter` is the one fan-out, and it already isolates each
-            // subscriber from a throw in its siblings, so there is nothing to pre-combine here.
-            emit: emitSubscribers,
-            ...(parsed.only !== undefined ? { only: parsed.only } : {}),
-            ...(mergedExclude.length > 0 ? { exclude: mergedExclude } : {}),
-            ...(parsed.operators !== undefined ? { operators: parsed.operators } : {}),
-            ...(lineRanges !== undefined
-              ? {
-                  lines: lineRanges.ranges,
-                  ...(lineRanges.changedSince !== undefined
-                    ? { changedSince: lineRanges.changedSince }
-                    : {}),
-                }
-              : {}),
-            ...(parsed.testsOnly !== undefined ? { testsOnly: parsed.testsOnly } : {}),
-            ...(parsed.excludeTests !== undefined ? { excludeTests: parsed.excludeTests } : {}),
-            ...(parsed.maxGuardsPerBatch !== undefined
-              ? { maxGuardsPerBatch: parsed.maxGuardsPerBatch }
-              : {}),
-            ...(parsed.mutantTimeoutMs !== undefined
-              ? { mutantTimeoutMs: parsed.mutantTimeoutMs }
-              : {}),
-            ...(parsed.groupRuns !== undefined ? { groupRuns: parsed.groupRuns } : {}),
-            ...(parsed.resume !== undefined ? { resume: parsed.resume } : {}),
-            ...(parsed.retryStranded === true ? { retryStranded: true } : {}),
-            ...(parsed.stopHungSessions === true ? { stopHungSessions: true } : {}),
-            ...(equivalenceMarks !== undefined ? { equivalenceMarks } : {}),
-            // R565: bcdev and envtool read dependency reports from the package cache alc compiles
-            // against; al-runner's folders come from the backend and its provisioning.
-            ...(parsed.backendKind === "bcdev"
-              ? {
-                  dependencyPackageDirs: [
-                    resolve(packageCachePathDefault(effectiveConfig.bcdev, parsed.projectDir)),
-                  ],
-                }
-              : {}),
-            // C02-06: the symbols the target compiler was built with (see `buildBackend`), so the
-            // recorded source hash covers them. Also what `SessionReport.preprocessorSymbols` reports.
-            preprocessorSymbols: validatePreprocessorSymbols(effectiveConfig.preprocessorSymbols),
-            ...afterLeaseAcquiredFor(envSession),
-            ...(parsed.allowLargeRun === true ? { allowLargeRun: true } : {}),
-            ...tier,
-            ...leaseSessionFor(parsed, effectiveConfig),
-            ...permissionCanaryFor(parsed, effectiveConfig),
-          });
-        } finally {
-          // Best-effort cleanup — mirrors orchestrator.ts's own posture (~line 2056: "deliberately
-          // swallow errors here... a failure here must not mask/replace whatever real error is already
-          // propagating"). Each close is independently guarded so one failing never skips the others,
-          // and none of them can replace `report` (captured above) or a real error already unwinding
-          // through this `finally`.
-          if (store !== undefined) {
-            try {
-              store.close();
-            } catch (err) {
-              console.warn(
-                `[lethal] store.close() failed during cleanup (best-effort; the session's report/exit code is unaffected): ${err instanceof Error ? err.message : String(err)}`,
-              );
+            }
+            // Release whatever the backend is holding open: the spawned bc-dev MCP
+            // child, v3's serve daemon (R775: whose close also prints the serve-entries counters). The
+            // `process.exit(0)` below would paper over a leak here, but only for this entry point —
+            // anything else embedding the backend would hang or leak a process instead.
+            if (backend?.close !== undefined) {
+              try {
+                await backend.close();
+              } catch (err) {
+                console.warn(
+                  `[lethal] backend.close() failed during cleanup (best-effort; the session's report/exit code is unaffected): ${err instanceof Error ? err.message : String(err)}`,
+                );
+              }
+            }
+            // Task 6: closes the `--progress-out` file descriptor, if one was opened. Best-effort, same
+            // posture as `store`/`backend` above — a close failure here must not mask a real error
+            // already unwinding through this `finally`, and every event that mattered was already
+            // flushed synchronously by `writeSync` at emit time, not buffered here waiting for a close.
+            if (progressOutFd !== undefined) {
+              try {
+                closeSync(progressOutFd);
+              } catch (err) {
+                console.warn(
+                  `[lethal] closing --progress-out file failed during cleanup (best-effort; the session's report/exit code is unaffected): ${err instanceof Error ? err.message : String(err)}`,
+                );
+              }
+            }
+            // Issue #22: in the `finally`, because a run that fails AFTER publishing leaves the
+            // instrumented build on the server just the same, and that is when the user needs this most.
+            if (highestPublished !== undefined && parsed.backendKind === "bcdev") {
+              process.stderr.write(`${restoreNotice(highestPublished)}\n`);
             }
           }
-          // Release whatever the backend is holding open: the spawned bc-dev MCP
-          // child, v3's serve daemon (R775: whose close also prints the serve-entries counters). The
-          // `process.exit(0)` below would paper over a leak here, but only for this entry point —
-          // anything else embedding the backend would hang or leak a process instead.
-          if (backend?.close !== undefined) {
-            try {
-              await backend.close();
-            } catch (err) {
-              console.warn(
-                `[lethal] backend.close() failed during cleanup (best-effort; the session's report/exit code is unaffected): ${err instanceof Error ? err.message : String(err)}`,
-              );
-            }
+          // Reached only when the `try` above completed WITHOUT throwing, so `runSession` resolved and
+          // `report` is set — a throw from `runSession` (or from `build`/`ResultsStore`) propagates
+          // through this `finally` and out of this function instead of falling through to here. Guarded
+          // explicitly (never a `!` assertion — biome forbids them) rather than trusted, matching this
+          // project's "fail loudly on a caller-contract violation" rule.
+          if (report === undefined) {
+            throw new Error(
+              "runFromCli: the try block completed without throwing but produced no report — this is a bug in runFromCli, not a session failure",
+            );
           }
-          // Task 6: closes the `--progress-out` file descriptor, if one was opened. Best-effort, same
-          // posture as `store`/`backend` above — a close failure here must not mask a real error
-          // already unwinding through this `finally`, and every event that mattered was already
-          // flushed synchronously by `writeSync` at emit time, not buffered here waiting for a close.
-          if (progressOutFd !== undefined) {
-            try {
-              closeSync(progressOutFd);
-            } catch (err) {
-              console.warn(
-                `[lethal] closing --progress-out file failed during cleanup (best-effort; the session's report/exit code is unaffected): ${err instanceof Error ? err.message : String(err)}`,
-              );
-            }
-          }
-          // Issue #22: in the `finally`, because a run that fails AFTER publishing leaves the
-          // instrumented build on the server just the same, and that is when the user needs this most.
-          if (highestPublished !== undefined && parsed.backendKind === "bcdev") {
-            process.stderr.write(`${restoreNotice(highestPublished)}\n`);
-          }
-        }
-        // Reached only when the `try` above completed WITHOUT throwing, so `runSession` resolved and
-        // `report` is set — a throw from `runSession` (or from `build`/`ResultsStore`) propagates
-        // through this `finally` and out of this function instead of falling through to here. Guarded
-        // explicitly (never a `!` assertion — biome forbids them) rather than trusted, matching this
-        // project's "fail loudly on a caller-contract violation" rule.
-        if (report === undefined) {
-          throw new Error(
-            "runFromCli: the try block completed without throwing but produced no report — this is a bug in runFromCli, not a session failure",
+          return report;
+        };
+        try {
+          return await attempt(undefined);
+        } catch (err) {
+          if (!(err instanceof AlRunnerV3ServeFallbackWarmupError)) throw err;
+          console.warn(
+            `[lethal] ${err.message}. The serve attempt is discarded; the session starts again on one-shot.`,
           );
+          return await attempt(`${err.row}: ${err.rowReason}`);
         }
-        return report;
       },
       deps.quarantineDir ?? defaultQuarantineDir(),
       // R360 I-1: a deleted environment can never verify a bundle installed on it again.

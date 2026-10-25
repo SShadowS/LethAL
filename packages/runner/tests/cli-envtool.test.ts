@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
-import { AlRunnerV3Backend } from "../src/al-runner-v3-backend";
+import { AlRunnerV3Backend, AlRunnerV3ServeFallbackWarmupError } from "../src/al-runner-v3-backend";
 import type { ExecutionBackend } from "../src/backend";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
 import type { BcDevConfigSection, LethalConfigFile, RunCliConfig } from "../src/cli";
@@ -907,6 +907,67 @@ describe("R775: runFromCli closes the al-runner-v3 backend", () => {
       expect(out).toBe("run boom");
       expect(closes).toBe(1);
       expect(warn.mock.calls.some((a) => String(a[0]).includes("v3 close boom"))).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  // R786: the serve-entries default met a warm-up row R612 refuses by name; the session is run again
+  // on a NEW one-shot backend, and the first backend is closed before the second is built.
+  it("R786: a serve warm-up fallback closes the first backend, then re-runs on a new one that is told why", async () => {
+    const parsed = await v3Parsed();
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const log: string[] = [];
+    const builds: unknown[] = [];
+    let sessions = 0;
+    const original = AlRunnerV3Backend.prototype.close;
+    AlRunnerV3Backend.prototype.close = async () => {
+      log.push("close");
+    };
+    try {
+      const out = await runFromCli(parsed, {
+        validateSelectorIdsForProject: async () => {},
+        resolveEnvToolSession: noEnv,
+        buildBackend: async (_p, _c, _s, _d, deps) => {
+          builds.push(deps);
+          log.push("build");
+          return Object.create(AlRunnerV3Backend.prototype) as AlRunnerV3Backend;
+        },
+        runSession: async () => {
+          sessions += 1;
+          log.push("session");
+          if (sessions === 1)
+            throw new AlRunnerV3ServeFallbackWarmupError("Codeunit1.T", "Company");
+          return FAKE_REPORT;
+        },
+      });
+      expect(out).toBe(FAKE_REPORT);
+      expect(log).toEqual(["build", "session", "close", "build", "session", "close"]);
+      expect(builds).toEqual([{}, { alRunnerServeFallbackWarmup: "Codeunit1.T: Company" }]);
+    } finally {
+      AlRunnerV3Backend.prototype.close = original;
+      warn.mockRestore();
+    }
+  });
+
+  it("R786: any other error of the first session is not re-run", async () => {
+    const parsed = await v3Parsed();
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    let builds = 0;
+    try {
+      const err = await runFromCli(parsed, {
+        validateSelectorIdsForProject: async () => {},
+        resolveEnvToolSession: noEnv,
+        buildBackend: async () => {
+          builds += 1;
+          return {} as ExecutionBackend;
+        },
+        runSession: async () => {
+          throw new Error("some other failure");
+        },
+      }).catch((e: unknown) => e);
+      expect(String(err)).toContain("some other failure");
+      expect(builds).toBe(1);
     } finally {
       warn.mockRestore();
     }

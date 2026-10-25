@@ -23,6 +23,7 @@ import {
   type AlRunnerV3Config,
   AlRunnerV3DependencySkippedError,
   AlRunnerV3RowMissingError,
+  AlRunnerV3ServeFallbackWarmupError,
   AlRunnerV3ServeStopUnsetError,
   AlRunnerV3TransportFrozenError,
   AlRunnerV3UnprovenBatchError,
@@ -3463,6 +3464,94 @@ describe("R739: v3 notices reach setNotify, never the console", () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe("R786: the serve-entries DEFAULT falls back on a warm-up row R612 refuses by name", () => {
+  const COMPANY =
+    "NotRun: out-of-scope: FindSet on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)";
+  const PLAIN_REFUSAL = "NotRun: out-of-scope: runtime panic (bug): x";
+  const underNone =
+    (message: string, status: "error" | "fail" = "error"): RowsFn =>
+    (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        m === "NONE" && x.method === "B"
+          ? { ...x, status, ...(status === "error" ? { notRun: true } : {}), message }
+          : x,
+      );
+  /** As the CLI builds a default backend: the source is "default" (the rig's entries are already on). */
+  const asDefault = (r: Rig, source: "default" | "explicit" = "default") => {
+    (r.b as unknown as { cfg: { transportSource: string } }).cfg.transportSource = source;
+    return r;
+  };
+  const prefetch = (r: Rig) => r.b.prefetchMutants(plans(["M0001"])).catch((e: unknown) => e);
+
+  test("default + a named refusal at the warm-up: the typed fallback signal, the daemon closed, no mutant entry sent", async () => {
+    const r = asDefault(await rig({ serve: { rows: underNone(COMPANY) } }));
+    await baseline(r.b, SUITE1);
+    const err = await prefetch(r);
+    expect(err).toBeInstanceOf(AlRunnerV3ServeFallbackWarmupError);
+    expect(String(err)).toContain(`Codeunit${CU}.B`);
+    expect(String(err)).toContain(COMPANY);
+    expect(r.serve.requests.map((q) => q.ids[0])).toEqual(["NONE|echo"]);
+    expect(r.serve.daemons).toHaveLength(1);
+    expect(r.serve.closes).toEqual([{ daemon: 0, afterRequests: 1 }]);
+  });
+
+  test("explicit serve-entries + the same row: refuses warmup-dirty as before", async () => {
+    const r = asDefault(await rig({ serve: { rows: underNone(COMPANY) } }), "explicit");
+    await baseline(r.b, SUITE1);
+    const err = await prefetch(r);
+    expect(err).toBeInstanceOf(AlRunnerV3EntriesRefusedError);
+    expect(String(err)).toContain("al-runner-v3-entries-warmup-dirty");
+  });
+
+  test("default + a timeout row (dirty, but not a refusal by name): still refuses", async () => {
+    const r = asDefault(await rig({ serve: { rows: underNone(TIMEOUT_1S) } }));
+    await baseline(r.b, SUITE1);
+    const err = await prefetch(r);
+    expect(err).toBeInstanceOf(AlRunnerV3EntriesRefusedError);
+    expect(String(err)).toContain("al-runner-v3-entries-warmup-dirty");
+  });
+
+  test("default + a plain fail that holds v3's refusal marker (R672): still refuses", async () => {
+    const r = asDefault(await rig({ serve: { rows: underNone(PLAIN_REFUSAL, "fail") } }));
+    await baseline(r.b, SUITE1);
+    const err = await prefetch(r);
+    expect(err).toBeInstanceOf(AlRunnerV3EntriesRefusedError);
+    expect(String(err)).toContain("al-runner-v3-entries-warmup-dirty");
+  });
+
+  test("default + warm-up rows that disagree with the baseline rows: still refuses (never a fallback)", async () => {
+    // The baseline (one-shot) rows are clean; the daemon's NONE row for B is the named refusal.
+    const r = asDefault(await rig({ serve: { rows: underNone(COMPANY) }, oneShotRows: allPass }));
+    await baseline(r.b, SUITE1);
+    const err = await prefetch(r);
+    expect(err).toBeInstanceOf(AlRunnerV3EntriesRefusedError);
+    expect(String(err)).toContain("al-runner-v3-entries-warmup-disagrees");
+  });
+
+  test("default + a wrong echo at the warm-up: still refuses (never a fallback)", async () => {
+    const r = asDefault(
+      await rig({
+        serve: { rows: underNone(COMPANY), echo: () => ({ method: "Echo", status: "pass" }) },
+      }),
+    );
+    await baseline(r.b, SUITE1);
+    const err = await prefetch(r);
+    expect(err).toBeInstanceOf(AlRunnerV3EntriesRefusedError);
+  });
+
+  test("a fallback while a kill pair starts the daemon is not swallowed as pair-skipped", async () => {
+    const r = asDefault(await rig({ serve: { rows: underNone(COMPANY) } }));
+    await baseline(r.b, SUITE1);
+    // The pair needs an activated mutant outside the baseline and no prefetch (so the daemon starts here).
+    await r.b.activate("M0001");
+    const seen: string[] = [];
+    r.b.setNotify((c) => seen.push(c));
+    const err = await r.b.sendKillPair("M0001", ref("A")).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AlRunnerV3ServeFallbackWarmupError);
+    expect(seen).toEqual([]);
   });
 });
 
