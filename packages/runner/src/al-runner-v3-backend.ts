@@ -98,6 +98,14 @@ import {
   sleepJoinRefusal,
   sleepPassRefusal,
 } from "./al-runner-v3-sleep";
+import {
+  TestAppProofStore,
+  alcSha256,
+  appJsonForKey,
+  mintedVersionSatisfiesTestApp,
+  symbolInterfaceForKey,
+  testAppCacheKey,
+} from "./al-runner-v3-testapp-cache";
 import { AlcCompileError, ArtifactCompiler, type ArtifactIo, defaultArtifactIo } from "./artifact";
 import type {
   BackendCapabilities,
@@ -114,6 +122,7 @@ import {
   hashTestDir,
   listOtherFiles,
   otherFilesDrift,
+  scanTestDir,
 } from "./baseline-snapshot";
 import { assertManifestObjectsDeclared, readManifestObjectKeys } from "./line-map";
 import { type SpawnFn, absToolPath, defaultSpawn } from "./publisher";
@@ -566,6 +575,8 @@ interface BatchProof {
   readonly artifactId: string;
   readonly manifestIds: ReadonlySet<string>;
   readonly targetAppSha256: string;
+  /** INFORMATIONAL: nothing reads it. R780: `cached:<key>` when the test-app compile was skipped on a
+   *  cache hit (no .app was built), else the built .app's sha256. */
   readonly testAppSha256: string;
 }
 
@@ -678,6 +689,27 @@ const sha256Of = (bytes: Uint8Array | string): string =>
 
 async function fileSha256(path: string): Promise<string> {
   return sha256Of(new Uint8Array(await readFile(path)));
+}
+
+/** R780: one read of the test dir: the .al hash, the non-.al files, and the app.json (bytes + text). */
+interface TestDirRead {
+  readonly testScan: { readonly hash: string; readonly hasExtensionObject: boolean };
+  readonly testOther: ReadonlyMap<string, OtherFile>;
+  /** sha256 of the app.json BYTES (what `assertBound` checks per run), not of decoded text. */
+  readonly testAppJsonSha256: string;
+  readonly testAppJsonText: string;
+}
+
+/** R780: the two reads agree on the .al hash, every non-.al file's sha256 (not mtime) and app.json. */
+function sameTestDirRead(a: TestDirRead, b: TestDirRead): boolean {
+  if (a.testScan.hash !== b.testScan.hash || a.testAppJsonSha256 !== b.testAppJsonSha256) {
+    return false;
+  }
+  if (a.testOther.size !== b.testOther.size) return false;
+  for (const [rel, f] of a.testOther) {
+    if (b.testOther.get(rel)?.sha256 !== f.sha256) return false;
+  }
+  return true;
 }
 
 /**
@@ -912,6 +944,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private discovered: readonly TestMethodRef[] = [];
   /** §4: set ONLY by the orchestrator's `baselinePhase` bracket. */
   private inBaseline = false;
+  /** R780: the test-app compile cache's counters (this instance). */
+  private readonly testAppCache = { hits: 0, misses: 0 };
   /** §3 (N1): the one-shot baseline's rows per codeunit, recorded inside the bracket. */
   private baselineRows = new Map<number, readonly V3Row[]>();
   /** §4: per mutant, the rows a fully valid prefetch answer gave; consumed by `activate`. */
@@ -1504,25 +1538,42 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // Step 1: the target. AlcCompileError goes to the orchestrator's R461 / bisection path.
     const target = await this.compileTarget(active);
     try {
+      // R780: `pre` (read BEFORE the compile) feeds ONLY the cache key and the hit decision. The
+      // proof below comes from a read AFTER a live compile, because real alc can write into the
+      // test dir (`features: ["TranslationFile"]` writes Translations/<App>.g.xlf). On a hit no
+      // alc ran, so `pre` is the proof's read too.
+      const pre = await this.readTestDir().catch((err: unknown) => ({ err }));
+      if ("err" in pre) {
+        // R780: the read that today ran AFTER the test-app compile failed. Keep today's order: alc
+        // runs live first (so a TestAppError wins, as before), then the read's own error surfaces.
+        await this.compileTestAppAgainst(target.appPath, active, undefined);
+        throw pre.err;
+      }
       // Step 2: the test app, against the batch's .app plus `<deps>` without any copy of the target.
-      const testAppSha256 = await this.compileTestAppAgainst(target.appPath, active);
+      const compiled = await this.compileTestAppAgainst(target.appPath, active, pre);
+      const testAppSha256 = compiled.sha256;
+      const post = compiled.live ? await this.readTestDir() : pre;
+      const { testScan, testOther, testAppJsonSha256 } = post;
       // Step 3: the proof, every <deps> file hashed now (m-2), and the per-run checks' baseline.
       this.proof = {
         // R655: active/ is LethAL's copy and holds no link; one refuses here, by path.
         activeHashExceptSelector: await linkIsUnproven(hashAlTree(active), "the staged batch"),
         activeAppJsonSha256: await fileSha256(join(active, "app.json")),
-        // R631: the test dir is a USER root: a link refuses rather than hashing a partial tree.
-        testDirHash: await hashTestDir(this.cfg.testDir),
-        // R608: the same two folders' non-.al files (resources, `.alpackages`).
+        testDirHash: testScan.hash,
         activeOther: await listOtherFiles(active, OTHER_FILES_UNBOUND, true),
-        testOther: await listOtherFiles(this.cfg.testDir, OTHER_FILES_UNBOUND, true),
-        testAppJsonSha256: await fileSha256(join(this.cfg.testDir, "app.json")),
+        testOther,
+        testAppJsonSha256,
         deps: await listDeps(this.cfg.packagesDir, true),
         artifactId,
         manifestIds: ids,
         targetAppSha256: target.sha256,
         testAppSha256,
       };
+      // R780: a passing LIVE compile writes its marker only if the test dir did not change across
+      // it (the key came from `pre`; a different `post` would cache state B under key(A)).
+      if (compiled.live && compiled.key !== undefined && sameTestDirRead(pre, post)) {
+        await this.proofStore()?.put(compiled.key);
+      }
     } finally {
       await rm(target.appPath, { force: true }).catch(() => {});
     }
@@ -1735,12 +1786,45 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.latchBy ??= { mutantId: lane.lastMutant ?? "<baseline>", why };
   }
 
-  /** §3 step 2. A failure stops the session: the test app does not compile against this batch. */
-  private async compileTestAppAgainst(batchApp: string, active: string): Promise<string> {
-    const targetId = String(
-      (JSON.parse(await readFile(join(active, "app.json"), "utf8")) as { id?: unknown }).id ?? "",
-    ).toLowerCase();
+  /**
+   * R780: one read of the test dir. R631: it is a USER root: a link refuses rather than hashing a
+   * partial tree. R608: the non-.al files of the same two folders (resources, `.alpackages`).
+   */
+  private async readTestDir(): Promise<TestDirRead> {
+    const testScan = await scanTestDir(this.cfg.testDir);
+    const testOther = await listOtherFiles(this.cfg.testDir, OTHER_FILES_UNBOUND, true);
+    const bytes = await readFile(join(this.cfg.testDir, "app.json"));
+    return {
+      testScan,
+      testOther,
+      testAppJsonSha256: sha256Of(new Uint8Array(bytes)),
+      testAppJsonText: bytes.toString("utf8"),
+    };
+  }
+
+  private proofStore(): TestAppProofStore | undefined {
+    return this.cfg.cacheDir === undefined
+      ? undefined
+      : new TestAppProofStore(join(resolve(this.cfg.cacheDir), "testapp-proof"));
+  }
+
+  /**
+   * §3 step 2. A failure stops the session: the test app does not compile against this batch.
+   * R780: with a `cacheDir`, a compile that alc already passed for the same key (see
+   * `testAppCacheKey`) is skipped (`live: false`, sha256 `cached:<key>`, informational). A live,
+   * passing compile returns its `key` for the CALLER to store, once it has re-read the test dir
+   * and found it unchanged. A failure is never cached. No `cacheDir`: no caching at all.
+   */
+  private async compileTestAppAgainst(
+    batchApp: string,
+    active: string,
+    snap: TestDirRead | undefined,
+  ): Promise<{ sha256: string; live: boolean; key: string | undefined }> {
+    const activeAppJsonText = await readFile(join(active, "app.json"), "utf8");
+    const activeApp = JSON.parse(activeAppJsonText) as Record<string, unknown>;
+    const targetId = String(activeApp.id ?? "").toLowerCase();
     if (targetId === "") throw new Error(`al-runner-v3: ${active}/app.json has no id`);
+    const usedDeps: { name: string; sha256: string }[] = [];
     const staged = join(this.cfg.instrumentedDir, "alc-test-pkgs");
     await rm(staged, { recursive: true, force: true });
     await mkdir(staged, { recursive: true });
@@ -1759,9 +1843,33 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           );
         }
         if (id === targetId) continue;
+        usedDeps.push({ name, sha256: sha256Of(bytes) });
         await writeFile(join(staged, name), bytes);
       }
-      await writeFile(join(staged, "lethal-v3-batch.app"), await readFile(batchApp));
+      const batchBytes = await readFile(batchApp);
+      await writeFile(join(staged, "lethal-v3-batch.app"), batchBytes);
+      // No snapshot (the test dir could not be read before the compile): no key, alc runs live.
+      const key =
+        snap === undefined
+          ? undefined
+          : await this.testAppKey(snap, activeAppJsonText, batchBytes, usedDeps);
+      const store = this.proofStore();
+      const mintedOk =
+        snap !== undefined &&
+        mintedVersionSatisfiesTestApp(
+          snap.testAppJsonText,
+          {
+            id: targetId,
+            name: String(activeApp.name ?? ""),
+            publisher: String(activeApp.publisher ?? ""),
+          },
+          String(activeApp.version ?? ""),
+        );
+      if (store !== undefined && key !== undefined && mintedOk && (await store.has(key))) {
+        this.testAppCache.hits++;
+        return { sha256: `cached:${key}`, live: false, key: undefined };
+      }
+      this.testAppCache.misses++;
       let out: { appPath: string; sha256: string };
       try {
         out = await this.compiler.compileProject({
@@ -1779,10 +1887,44 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         throw err;
       }
       await rm(out.appPath, { force: true }).catch(() => {});
-      return out.sha256;
+      // Only a PASSING compile reaches here; the caller stores the key (see above).
+      return { sha256: out.sha256, live: true, key: store === undefined ? undefined : key };
     } finally {
       await rm(staged, { recursive: true, force: true }).catch(() => {});
     }
+  }
+
+  /** R780: the key, or `undefined` when any part cannot be read (then nothing is cached or hit). */
+  private async testAppKey(
+    snap: TestDirRead,
+    activeAppJsonText: string,
+    targetApp: Buffer,
+    deps: readonly { name: string; sha256: string }[],
+  ): Promise<string | undefined> {
+    const activeAppJson = appJsonForKey(activeAppJsonText);
+    const symbolInterface = symbolInterfaceForKey(targetApp, !snap.testScan.hasExtensionObject);
+    const alcSha = await alcSha256(this.cfg.alcPath);
+    if (activeAppJson === undefined || symbolInterface === undefined || alcSha === undefined) {
+      return undefined;
+    }
+    return testAppCacheKey({
+      testDirHash: snap.testScan.hash,
+      testOtherSha: new Map([...snap.testOther].map(([rel, f]) => [rel, f.sha256])),
+      testAppJsonSha256: snap.testAppJsonSha256,
+      activeAppJson,
+      symbolInterface,
+      testHasExtensionObject: snap.testScan.hasExtensionObject,
+      deps,
+      alcPath: this.cfg.alcPath,
+      alcSha256: alcSha,
+      preprocessorSymbols: this.cfg.preprocessorSymbols ?? [],
+      transport: this.entries ? "serve-entries" : "one-shot",
+    });
+  }
+
+  /** R780: how many deploys skipped the test-app compile (`hits`) and how many ran it live. */
+  testAppCacheStats(): Readonly<{ hits: number; misses: number }> {
+    return { ...this.testAppCache };
   }
 
   /** §3 step 4: alc alone on a copy of `dir` (bisection's question). Never starts v3. */
@@ -3028,7 +3170,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (this.entries) {
       const s = this.entriesStats();
       console.warn(
-        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}); wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks.`,
+        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}); wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks; test-app compile cache (R780) hits ${this.testAppCache.hits} / misses ${this.testAppCache.misses}.`,
       );
     }
     await rm(join(this.cfg.instrumentedDir, "cov"), { recursive: true, force: true }).catch(

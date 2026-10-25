@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**24 of 772 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**26 of 775 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -815,8 +815,11 @@ that ordering is the priority.
 - **R775** · `lethal run --backend al-runner-v3` never calls the backend's `close()`: no serve-entries counters, the serve daemon dies by process exit, and the coverage scratch stays · [R775.md](docs/roadmap/R775.md) · done (6545a85a)
 - **R776** · The v3 probe-cache key fingerprints the package folder by file mtime, so a fresh checkout or a copied .alpackages always misses once (about 10 s); a content hash costs about 0.1 s · [R776.md](docs/roadmap/R776.md) · done (1a6dc21b)
 - **R777** · The al-runner-v3 update gate infra-fails a good candidate when master adds a gate leg before `current` is re-gated · [R777.md](docs/roadmap/R777.md) · open, filed 2026-10-25 (coord task R-771)
-- **R781** · Parallel v3 (`--workers N`) cannot spread a project whose mutants sit in a few procedures: D1 at N = 4 started 3 daemons and ran 92 s against 93 s · [R781.md](docs/roadmap/R781.md) · open, filed 2026-10-25 (from coord task R-766)
+- **R781** · Parallel v3 (`--workers N`) cannot spread a project whose mutants sit in a few procedures: D1 at N = 4 started 3 daemons and ran 92 s against 93 s · [R781.md](docs/roadmap/R781.md) · closed 2026-10-25 — measured limit (orchestrator ruling): scopes stay whole; parallel pays on large projects…
+- **R780** · al-runner-v3: a cross-session cache of the test-app alc compile (5.1 s per deploy measured on the D1 slice) · [R780.md](docs/roadmap/R780.md) · open, built and gated 2026-10-25 (coord task R-772); awaiting merge
 - **R782** · With #5798 fixed upstream (edge a157b2d34), serve-entries could read a dotted test method from the row's own codeunit/method fields and lift R722's refusal · [R782.md](docs/roadmap/R782.md) · open, filed 2026-10-25 (coord task R-771)
+- **R785** · Parallel v3: start an extra lane only when the queued live work is long enough to pay for its warm-up · [R785.md](docs/roadmap/R785.md) · open, filed 2026-10-25 (from coord task R-766; R781's follow-up)
+- **R786** · PRIORITY: a default v3 run (serve-entries by default, R761) FAILS at the warm-up when a test is one R612 refuses, where the same run on one-shot completes · [R786.md](docs/roadmap/R786.md) · open, filed 2026-10-25 (from coord task R-766, R781's live runs)
 
 ---
 
