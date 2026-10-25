@@ -22,8 +22,18 @@
  * every other run goes to a warm `serve` daemon as entries with a per-entry resource override,
  * each mutant's group vouched for by an echo test (`al-runner-v3-entries.ts`).
  */
-import { createHash } from "node:crypto";
-import { cp, mkdir, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import {
+  cp,
+  mkdir,
+  readFile,
+  readdir,
+  realpath,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { freemem } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
@@ -816,6 +826,66 @@ async function fileStates(dir: string): Promise<Map<string, string>> {
     out.set(rel, `${s.size}:${s.mtimeMs}`);
   }
   return out;
+}
+
+/** R790 (option 4): how many batches' alc writes the cache keeps (oldest evicted). */
+const ALC_WRITES_MAX = 16;
+const ALC_WRITES_KEY = /^[0-9a-f]{64}$/;
+
+/**
+ * R790 (option 4): the files alc wrote into a batch it compiled (Translations/*.g.xlf), cached by
+ * the batch's `.al` hash and app.json. A HINT only: placed into the next identical batch before the
+ * speculative calls, then checked against what alc really writes. A missing or unreadable entry is
+ * a miss; a write failure is swallowed.
+ */
+async function readAlcWrites(dir: string, key: string): Promise<Map<string, Buffer>> {
+  const out = new Map<string, Buffer>();
+  if (!ALC_WRITES_KEY.test(key)) return out;
+  try {
+    const j = JSON.parse(await readFile(join(dir, `${key}.json`), "utf8")) as {
+      v?: unknown;
+      files?: { rel?: unknown; b64?: unknown }[];
+    };
+    if (j.v !== 1 || !Array.isArray(j.files)) return out;
+    for (const f of j.files) {
+      if (typeof f.rel !== "string" || typeof f.b64 !== "string") return new Map();
+      // Only a plain relative path inside the batch.
+      if (f.rel.startsWith("/") || f.rel.split(/[\\/]/).includes("..")) return new Map();
+      out.set(f.rel, Buffer.from(f.b64, "base64"));
+    }
+  } catch {
+    return new Map();
+  }
+  return out;
+}
+
+async function writeAlcWrites(
+  dir: string,
+  key: string,
+  files: ReadonlyMap<string, Buffer>,
+): Promise<void> {
+  if (!ALC_WRITES_KEY.test(key)) return;
+  const tmp = join(dir, `${key}.${randomUUID()}.tmp`);
+  try {
+    await mkdir(dir, { recursive: true });
+    const body = {
+      v: 1,
+      files: [...files].map(([rel, b]) => ({ rel, b64: b.toString("base64") })),
+    };
+    await writeFile(tmp, JSON.stringify(body), "utf8");
+    await rename(tmp, join(dir, `${key}.json`));
+    const entries = (await readdir(dir)).filter((n) => n.endsWith(".json"));
+    if (entries.length > ALC_WRITES_MAX) {
+      const aged = await Promise.all(
+        entries.map(async (n) => ({ n, t: (await stat(join(dir, n))).mtimeMs })),
+      );
+      aged.sort((a, b) => a.t - b.t);
+      for (const { n } of aged.slice(0, entries.length - ALC_WRITES_MAX))
+        await rm(join(dir, n), { force: true });
+    }
+  } catch {
+    await rm(tmp, { force: true }).catch(() => {});
+  }
 }
 
 /** R780: one read of the test dir: the .al hash, the non-.al files, and the app.json (bytes + text). */
@@ -1712,11 +1782,17 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       this.suitePerCodeunit.size > 0 &&
       this.seams.noSpeculativeBaseline !== true;
     const abort = new AbortController();
+    // Option 4: alc's writes from an identical batch, placed first, so the calls read what alc leaves.
+    const cached = speculate
+      ? await this.placeCachedAlcWrites(active)
+      : { placed: new Set<string>(), key: undefined };
     const spec = speculate ? this.speculateBaseline(active, abort.signal) : undefined;
     // Step 1: the target. AlcCompileError goes to the orchestrator's R461 / bisection path.
     let target: { appPath: string; sha256: string };
     try {
-      target = speculate ? await this.compileTargetCopy(active) : await this.compileTarget(active);
+      target = speculate
+        ? await this.compileTargetCopy(active, cached.placed, cached.key)
+        : await this.compileTarget(active);
     } catch (err) {
       abort.abort();
       await spec; // settled, then dropped: nothing from it is kept
@@ -1811,7 +1887,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
 
   /** R790 (c): alc on a COPY of the batch, so it never writes (Translations/*.g.xlf) where a v3 call reads. */
-  private async compileTargetCopy(active: string): Promise<{ appPath: string; sha256: string }> {
+  private async compileTargetCopy(
+    active: string,
+    placed: ReadonlySet<string>,
+    cacheKey: string | undefined,
+  ): Promise<{ appPath: string; sha256: string }> {
     const copy = join(this.cfg.instrumentedDir, "alc-src");
     await rm(copy, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     await cp(active, copy, { recursive: true, preserveTimestamps: true });
@@ -1823,14 +1903,49 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       throw errorAsIfIn(err, copy, active);
     }
     // Review 4: whatever alc wrote into its project (Translations/*.g.xlf) goes into the batch too,
-    // so v3 reads the bytes it read before R790. The calls read the batch without it, so their key
-    // no longer equals the proof's and they are not served.
+    // so v3 reads the bytes it read before R790. A file already there with the SAME bytes (option 4's
+    // placed copy) is left as it is, so the calls' key still matches; different bytes are copied over,
+    // and then the key differs and nothing is served.
+    const written = new Map<string, Buffer>();
     for (const [rel, state] of await fileStates(copy)) {
       if (states.get(rel) === state) continue;
+      const bytes = await readFile(join(copy, rel));
+      written.set(rel, bytes);
+      const there = await readFile(join(active, rel)).catch(() => undefined);
+      if (there?.equals(bytes) === true) continue;
       await mkdir(dirname(join(active, rel)), { recursive: true });
       await cp(join(copy, rel), join(active, rel), { preserveTimestamps: true });
     }
+    // Option 4: a placed file alc did not write is not one v3 would read without R790: removed.
+    for (const rel of placed) if (!written.has(rel)) await rm(join(active, rel), { force: true });
+    if (cacheKey !== undefined && written.size > 0 && this.cfg.cacheDir !== undefined) {
+      await writeAlcWrites(join(resolve(this.cfg.cacheDir), "alc-writes"), cacheKey, written);
+    }
     return out;
+  }
+
+  /**
+   * R790 (option 4): before the speculative calls, the files alc wrote into an identical batch last
+   * time (keyed by its `.al` hash and app.json) are placed into it, so the calls read the batch as
+   * alc will leave it. Only files the batch does not hold yet. Returns what was placed and the key.
+   */
+  private async placeCachedAlcWrites(
+    active: string,
+  ): Promise<{ readonly placed: Set<string>; readonly key: string | undefined }> {
+    const placed = new Set<string>();
+    if (this.cfg.cacheDir === undefined) return { placed, key: undefined };
+    const key = sha256Of(
+      `${await hashAlTree(active)}\u0000${await fileSha256(join(active, "app.json"))}`,
+    );
+    const files = await readAlcWrites(join(resolve(this.cfg.cacheDir), "alc-writes"), key);
+    for (const [rel, bytes] of files) {
+      const to = join(active, rel);
+      if ((await stat(to).catch(() => undefined)) !== undefined) continue;
+      await mkdir(dirname(to), { recursive: true });
+      await writeFile(to, new Uint8Array(bytes));
+      placed.add(rel);
+    }
+    return { placed, key };
   }
 
   /** R790: the bytes v3 reads, as the proof records them (§3): the batch, the test dir, `<deps>`. */

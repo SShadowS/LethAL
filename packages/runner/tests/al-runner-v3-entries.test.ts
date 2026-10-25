@@ -3,7 +3,7 @@
 // docs/superpowers/plans/2026-10-22-r635-v3-serve-entries.md (r3) §9, tests 1-13 and 16-21; the
 // orchestrator's seams (tests 14, 15) are in orchestrator.test.ts. Call counters, no wall clock.
 import { afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync } from "node:fs";
 import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -4182,6 +4182,8 @@ describe("R790: the speculative baseline", () => {
       rows?: RowsFn;
       floor?: readonly [number, number];
       seams?: (l: Layout) => AlRunnerV3Backend["seams"];
+      /** Option 4: a cache dir shared by deploys. */
+      cacheDir?: string;
     } = {},
   ) {
     const l = await layout(TARGET_AL, SUITE1);
@@ -4198,6 +4200,7 @@ describe("R790: the speculative baseline", () => {
         alcPath: "/fake/alc",
         coverage: "none",
         transport: "serve-entries",
+        ...(o.cacheDir !== undefined ? { cacheDir: o.cacheDir } : {}),
       },
       one.spawn,
       alc ?? fakeAlc(),
@@ -4375,5 +4378,82 @@ describe("R790: the speculative baseline", () => {
     expect(await readFile(join(active, "Translations", "T.g.xlf"), "utf8")).toBe("<xliff/>");
     // The calls read the batch without it, so they are not served.
     expect(speculative(r.b)).toBeUndefined();
+  });
+
+  // Option 4 (ruling): alc's writes are cached by the batch's .al hash and app.json, and placed into
+  // the next identical batch before the calls; alc's real output is the judge.
+  describe("option 4: alc's writes from an identical batch, placed before the calls", () => {
+    const xlfAlc = (content: () => string | undefined) =>
+      writingAlc(async (project, isBatch) => {
+        const c = content();
+        if (!isBatch || c === undefined) return;
+        await mkdir(join(project, "Translations"), { recursive: true });
+        await writeFile(join(project, "Translations", "T.g.xlf"), c);
+      });
+    const activeOf = (b: AlRunnerV3Backend) =>
+      (b as unknown as { lane: { activeDir(): string } }).lane.activeDir();
+    const cacheDir = async () => {
+      const d = await mkdtemp(join(tmpdir(), "lethal-r790-cache-"));
+      roots.push(d);
+      return d;
+    };
+
+    test("a cached .xlf equal to alc's output: the warm run is served", async () => {
+      const cache = await cacheDir();
+      const cold = await deployWith(
+        xlfAlc(() => "<xliff a/>"),
+        true,
+        { cacheDir: cache },
+      );
+      expect(speculative(cold.b)).toBeUndefined(); // cold: nothing cached yet
+      const warm = await deployWith(
+        xlfAlc(() => "<xliff a/>"),
+        true,
+        { cacheDir: cache },
+      );
+      expect(warm.err).toBeUndefined();
+      expect(speculative(warm.b)).not.toBeUndefined();
+      await baseline(warm.b, SUITE1);
+      expect(warm.one.calls).toHaveLength(1); // served: no live call in the baseline
+      expect(await readFile(join(activeOf(warm.b), "Translations", "T.g.xlf"), "utf8")).toBe(
+        "<xliff a/>",
+      );
+    });
+
+    test("a cached .xlf that differs from alc's output: not served, and the batch holds alc's bytes", async () => {
+      const cache = await cacheDir();
+      await deployWith(
+        xlfAlc(() => "<xliff a/>"),
+        true,
+        { cacheDir: cache },
+      );
+      const warm = await deployWith(
+        xlfAlc(() => "<xliff b/>"),
+        true,
+        { cacheDir: cache },
+      );
+      expect(speculative(warm.b)).toBeUndefined();
+      expect(await readFile(join(activeOf(warm.b), "Translations", "T.g.xlf"), "utf8")).toBe(
+        "<xliff b/>",
+      );
+      await baseline(warm.b, SUITE1);
+      expect(warm.one.calls).toHaveLength(2);
+    });
+
+    test("a cached file alc does not write this time: removed from the batch, not served", async () => {
+      const cache = await cacheDir();
+      await deployWith(
+        xlfAlc(() => "<xliff a/>"),
+        true,
+        { cacheDir: cache },
+      );
+      const warm = await deployWith(
+        xlfAlc(() => undefined),
+        true,
+        { cacheDir: cache },
+      );
+      expect(speculative(warm.b)).toBeUndefined();
+      expect(existsSync(join(activeOf(warm.b), "Translations", "T.g.xlf"))).toBe(false);
+    });
   });
 });
