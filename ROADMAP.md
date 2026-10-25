@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**21 of 753 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**22 of 755 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -481,8 +481,9 @@ that ordering is the priority.
 - **R620** · A crashed or interrupted closed-world run is never resumable: its test-app identity stays |pending, so --resume refuses the very run it exists for · [R620.md](docs/roadmap/R620.md) · closed 2026-10-22 — a duplicate of R601 (orchestrator ruling Q2); closed with R601 (92d23854)
 - **R685** · a bare `Kind::X` id handed to an unfollowed call puts the test on verify's whole-source fallback, where folding the object would do: since R684 this takes a whole Microsoft test app (Guided Experience) to the fallback · [R685.md](docs/roadmap/R685.md) · done (65a9bc10, 6fc09568; test follow-up e2cd0992)
 - **R727** · A run publishes the target over installed dependents other than the tests app without a word; on a customer server a refused upgrade removes them (R709) · [R727.md](docs/roadmap/R727.md) · done (b2ce2cc4)
-- **R745** · After the release: exclude single test METHODS from a run (today --tests-only narrows test FILES only); R740's refusal is its first user · [R745.md](docs/roadmap/R745.md) · open, filed 2026-10-24 (after the release)
+- **R745** · After the release: exclude single test METHODS from a run (today --tests-only narrows test FILES only); R740's refusal is its first user · [R745.md](docs/roadmap/R745.md) · done (f43a9308)
 - **R733** · Name the installed dependents before the first publish: LethAL Control 1.0.0.24 `InstalledDependents(AppId)` (after the Directions talk) · [R733.md](docs/roadmap/R733.md) · open, filed 2026-10-24 (after the Directions talk)
+- **R759** · `lethal verify` does not honour `--exclude-test` or `--tests-only`: it re-discovers every test · [R759.md](docs/roadmap/R759.md) · open, filed 2026-10-25
 
 ## Backends and tooling
 
@@ -798,6 +799,7 @@ that ordering is the priority.
 - **R757** · `scripts/verify.test.ts`'s `isChildOf` test can time out at 30 s on the Windows CI job (four PowerShell calls) · [R757.md](docs/roadmap/R757.md) · done (f74db9b3)
 - **R758** · Five unit tests used the LIVE gift-card campaign files as their sample of an old report, so re-freezing the talk demo broke verify · [R758.md](docs/roadmap/R758.md) · done (23dcc701)
 - **R760** · al-runner-v3 one-shot campaigns spend their time on per-call compile, dependency-cache reads and coverage, not on tests (D1: 667 s one-shot, 193 s serve) · [R760.md](docs/roadmap/R760.md) · open, measured 2026-10-25 (coord task R-760); changes await a ruling
+- **R763** · Prove serve-entries for test METHOD names that are not plain identifiers (spaces, - ( ) / & å æ, a leading digit), so R761's default can serve them · [R763.md](docs/roadmap/R763.md) · open, filed 2026-10-25 (from R-761; orchestrator ruling)
 
 ---
 

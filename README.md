@@ -488,6 +488,7 @@ this build returns.
 | `--backend` | *(required)* | `bcdev` or `al-runner-v3` (`al-runner`, the retired .NET al-runner, is refused by name: `al-runner-v2-retired`, R654) |
 | `--only <glob>` | *(all files)* | Only these files contribute mutants. Repeatable. Cannot change a verdict, because every file is still parsed, compiled and published |
 | `--tests-only <glob>` | *(whole suite)* | Only these test files run at baseline. Repeatable. **Can change a verdict**: excluding a killing test manufactures a survivor. Flagged `tests-narrowed` in the report |
+| `--exclude-test <Codeunit.Method>` | *(none)* | Leave one test method out of the run (bcdev only; al-runner-v3 runs whole codeunits and refuses). Repeatable. A name that matches no test is refused. **Can change a verdict**: a mutant only that test kills reads survived or no-coverage. Flagged `tests-narrowed`; the report lists it in `excludedTests` |
 | `--skip-known-survivors` | `false` | Skip mutants a prior finished run recorded as survivors |
 | `--dry-run` | `false` | Plan mutants without executing them |
 

@@ -33,6 +33,9 @@ It refuses (exit 2) unless `kraken coord holder bc2` names `--lane`. Apps are re
 call times out at 120 s. Each step prints one JSON line. Nothing is truncated: long texts go whole to files in
 `.kraken-local/r740-probe/`.
 
+R745: step 3 passes every `--exclude-test <Codeunit.Method>` given to `drive.ts` on to `lethal run`, e.g.
+`--step 3 --exclude-test "R740 Tests.TestLib"`.
+
 ## Steps
 
 1. Publish L1, P, Q directly; read back installed 1.0.0.1.

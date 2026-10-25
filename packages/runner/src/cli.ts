@@ -480,6 +480,12 @@ export interface RunCliConfig {
    */
   readonly testsOnly?: readonly string[];
   /**
+   * R745: `--exclude-test <Codeunit.Method>` (repeatable) leaves single test methods out of the
+   * run. bcdev only (al-runner-v3 runs whole codeunits). Like `testsOnly` it CAN change a verdict
+   * and raises `tests-narrowed`; the report names each test in `excludedTests`.
+   */
+  readonly excludeTests?: readonly string[];
+  /**
    * R44: `--max-guards-per-batch <n>` bounds how many injected guards go into one published
    * artifact. Absent means no limit.
    *
@@ -965,6 +971,10 @@ RUN — scope. These bound cost. --tests-only can change a verdict; the others c
   --tests-only <glob>        only these test files run at baseline (repeatable). CAN CHANGE A
                              VERDICT: exclude a killing test and its mutant is reported survived.
                              The report flags it 'tests-narrowed'
+  --exclude-test <name>      leave one test method out, as Codeunit.Method (repeatable; bcdev only;
+                             a name that matches no test is refused). CAN CHANGE A VERDICT like
+                             --tests-only; the report flags 'tests-narrowed' and lists it in
+                             excludedTests
   --skip-known-survivors     skip mutants a prior finished run recorded as survivors
   --allow-large-run          run more than ${LARGE_RUN_MUTANT_THRESHOLD} mutation sites (refused by default — a whole
                              real app costs days and usually cannot publish at all)
@@ -1249,6 +1259,8 @@ export const RUN_FLAGS = {
   "changed-since": { type: "string" },
   // R45: repeatable — see `RunCliConfig.testsOnly`.
   "tests-only": { type: "string", multiple: true },
+  // R745: repeatable — see `RunCliConfig.excludeTests`.
+  "exclude-test": { type: "string", multiple: true },
   // R44: see `RunCliConfig.maxGuardsPerBatch`.
   "max-guards-per-batch": { type: "string" },
   // R47: see `RunCliConfig.mutantTimeoutMs` / `resume`.
@@ -1315,6 +1327,7 @@ const RUN_ONLY_FLAGS = [
   "lines",
   "changed-since",
   "tests-only",
+  "exclude-test",
   "max-guards-per-batch",
   "mutant-timeout-ms",
   "max-methods-per-call",
@@ -1918,6 +1931,17 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
   const testsOnly =
     testsOnlyRaw !== undefined && testsOnlyRaw.length > 0 ? { testsOnly: testsOnlyRaw } : {};
 
+  const excludeTestRaw = values["exclude-test"];
+  if (excludeTestRaw?.some((p) => p.trim() === "") === true) {
+    throw new Error(
+      '--exclude-test requires a non-empty test name as Codeunit.Method (e.g. --exclude-test "My Tests.CheckTotal")',
+    );
+  }
+  const excludeTests =
+    excludeTestRaw !== undefined && excludeTestRaw.length > 0
+      ? { excludeTests: excludeTestRaw }
+      : {};
+
   const maxGuardsRaw = values["max-guards-per-batch"];
   const maxGuardsPerBatch = maxGuardsRaw === undefined ? undefined : Number(maxGuardsRaw);
   if (
@@ -2000,6 +2024,9 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     // silently would imply it had scoped something.
     if (testsOnlyRaw !== undefined && testsOnlyRaw.length > 0) {
       throw new Error("--tests-only has no effect with --dry-run (a dry run executes no tests)");
+    }
+    if (excludeTestRaw !== undefined && excludeTestRaw.length > 0) {
+      throw new Error("--exclude-test has no effect with --dry-run (a dry run executes no tests)");
     }
     // R266: every execution flag is refused, by name, rather than accepted and ignored. `--out` is
     // the one exception: it writes the dry-run listing.
@@ -2118,6 +2145,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     ...operators,
     ...lineFilter,
     ...testsOnly,
+    ...excludeTests,
     ...(maxGuardsPerBatch !== undefined ? { maxGuardsPerBatch } : {}),
     ...(mutantTimeoutMs !== undefined ? { mutantTimeoutMs } : {}),
     ...groupRuns,
@@ -3855,6 +3883,7 @@ export async function runFromCli(
                 }
               : {}),
             ...(parsed.testsOnly !== undefined ? { testsOnly: parsed.testsOnly } : {}),
+            ...(parsed.excludeTests !== undefined ? { excludeTests: parsed.excludeTests } : {}),
             ...(parsed.maxGuardsPerBatch !== undefined
               ? { maxGuardsPerBatch: parsed.maxGuardsPerBatch }
               : {}),
