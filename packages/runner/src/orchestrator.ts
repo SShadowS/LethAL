@@ -6022,6 +6022,8 @@ async function runSessionBody(
   // lease and any deploy.
   let tests = chosen.tests;
   const excludeTestRecords: { test: string; file: string; reason: "exclude-test" }[] = [];
+  // R759: the same tests by `testKeyOf`, recorded on the run row for `lethal verify`.
+  const excludeTestKeys: string[] = [];
   if (cfg.excludeTests !== undefined && cfg.excludeTests.length > 0) {
     const split = excludeNamedTests(chosen.tests, cfg.excludeTests);
     if (split.unmatched.length > 0) {
@@ -6042,6 +6044,7 @@ async function runSessionBody(
         );
       }
       excludeTestRecords.push({ test: qualifiedTestName(t), file: t.file, reason: "exclude-test" });
+      excludeTestKeys.push(testKeyOf(t));
     }
   }
   // R488: the UNFILTERED list, every arm read: a look-alike al-runner would also select must be
@@ -6294,6 +6297,9 @@ async function runSessionBody(
     // R585: the tests this session's baseline is given; history lends only to a session whose
     // tests are all in it.
     testScope: sessionTestScope,
+    // R759: and what it was narrowed by, always written (empty lists mean "nothing left out"), so
+    // `lethal verify` can tell a test this run left out from a new one.
+    testNarrowing: { testsOnly: cfg.testsOnly ?? [], excludeTests: excludeTestKeys },
     // R586: a v3 run records its build; `runMayLend` lends it only to that build.
     ...(lendingSession.runnerBuild !== undefined
       ? { runnerBuild: lendingSession.runnerBuild }
