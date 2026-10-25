@@ -1169,3 +1169,96 @@ codeunit 50102 ProbeC
     expect([2, 4, 5].map((n) => resolveFileLine(e, n))).toEqual([undefined, undefined, undefined]);
   });
 });
+
+describe("R753: inUnnamedSpan is true only inside a SPLIT procedure with no coverage name", () => {
+  const DECLARED = new Set(["codeunit:79120", "codeunit:79121", "codeunit:79122"]);
+  // Split member 3-10 with both arm names taken (no coverage name); gap line 11; Pick(T) 12-15.
+  const NAMELESS_SPLIT = `codeunit 79120 "A"
+{
+#if R318A
+    procedure Pick(X: Integer): Integer
+#else
+    procedure Choose(X: Integer): Integer
+#endif
+    begin
+        exit(X + 1);
+    end;
+
+    procedure Pick(T: Text): Integer
+    begin
+        exit(StrLen(T));
+    end;
+
+    procedure Choose(T: Text): Integer
+    begin
+        exit(StrLen(T) + 1);
+    end;
+}
+`;
+  // A plain procedure named `""`: no name, with children, and not a split node.
+  const NAMELESS_PLAIN = `codeunit 79121 "B"
+{
+    procedure ""(A: Integer): Integer
+    begin
+        exit(A + 1);
+    end;
+
+    procedure Named()
+    begin
+    end;
+}
+`;
+  // A renamed split member that HAS a coverage name (`Pick`, `Choose`, `Third` are free).
+  const NAMED_SPLIT = `codeunit 79122 "C"
+{
+#if R318A
+    procedure Pick(X: Integer): Integer
+#else
+    procedure Choose(X: Integer): Integer
+#endif
+    begin
+        exit(X + 1);
+    end;
+}
+`;
+
+  async function mapOf(): Promise<LineMap> {
+    return await lineMapFromSources(
+      [
+        { path: "A.Codeunit.al", text: NAMELESS_SPLIT },
+        { path: "B.Codeunit.al", text: NAMELESS_PLAIN },
+        { path: "C.Codeunit.al", text: NAMED_SPLIT },
+      ],
+      DECLARED,
+    );
+  }
+
+  test("inside the nameless split member: true; outside it, and line 0: false", async () => {
+    const m = await mapOf();
+    expect([0, 2, 3, 8, 9, 10, 11, 13].map((n) => m.inUnnamedSpan("Codeunit", 79120, n))).toEqual([
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+    ]);
+    // isNamingGap is NOT changed: the unnamed member's rows are still gaps for attribution.
+    expect([9, 11].map((n) => m.isNamingGap("Codeunit", 79120, n))).toEqual([true, true]);
+  });
+
+  test("a nameless PLAIN procedure is not an unnamed split span (its rows stay gaps)", async () => {
+    const m = await mapOf();
+    expect([4, 5].map((n) => m.inUnnamedSpan("Codeunit", 79121, n))).toEqual([false, false]);
+    expect([4, 5].map((n) => m.isNamingGap("Codeunit", 79121, n))).toEqual([true, true]);
+  });
+
+  test("a split member WITH a coverage name, an undeclared object and a bare line are false", async () => {
+    const m = await mapOf();
+    expect(m.lookup("Codeunit", 79122, 8)).toBe("Pick");
+    expect(m.inUnnamedSpan("Codeunit", 79122, 8)).toBe(false);
+    expect(m.inUnnamedSpan("Codeunit", 99999, 8)).toBe(false);
+  });
+});

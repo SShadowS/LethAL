@@ -3664,9 +3664,157 @@ codeunit 79191 "Second"
     const rec = JSON.parse(lines[0] ?? "") as { rows: unknown[]; gaps: unknown[] };
     expect(rec.rows).toHaveLength(5);
     expect(rec.gaps).toEqual([
-      { objectType: "Codeunit", objectId: 79100, lineNo: 999, besideMembers: true },
-      { objectType: "Codeunit", objectId: 79100, lineNo: 999, besideMembers: true },
-      { objectType: "Table", objectId: 79150, lineNo: 7, besideMembers: false },
+      {
+        objectType: "Codeunit",
+        objectId: 79100,
+        lineNo: 999,
+        besideMembers: true,
+        inUnnamedMember: false,
+      },
+      {
+        objectType: "Codeunit",
+        objectId: 79100,
+        lineNo: 999,
+        besideMembers: true,
+        inUnnamedMember: false,
+      },
+      {
+        objectType: "Table",
+        objectId: 79150,
+        lineNo: 7,
+        besideMembers: false,
+        inUnnamedMember: false,
+      },
+    ]);
+  });
+
+  // R753: the "NAMELESS renamed member" source of preproc-instrumentation.test.ts, moved to id 79120,
+  // with a named `Solo` added. Lines: the split member 3-10 (both arm names are taken, so it has no
+  // coverage name), a blank gap line 11, Pick(T) 12-15, Choose(T) 17-20, Solo 22-24.
+  const NAMELESS_SPLIT = `codeunit 79120 "Nameless Split"
+{
+#if R318A
+    procedure Pick(X: Integer): Integer
+#else
+    procedure Choose(X: Integer): Integer
+#endif
+    begin
+        exit(X + 1);
+    end;
+
+    procedure Pick(T: Text): Integer
+    begin
+        exit(StrLen(T));
+    end;
+
+    procedure Choose(T: Text): Integer
+    begin
+        exit(StrLen(T) + 1);
+    end;
+
+    procedure Solo()
+    begin
+    end;
+}
+`;
+  // R753: a PLAIN procedure whose name is the empty quoted identifier parses cleanly with no name
+  // (probed): lines 3-6, and `Named` 8-10. It must stay a gap for the warnings.
+  const NAMELESS_PLAIN = `codeunit 79121 "Nameless Plain"
+{
+    procedure ""(A: Integer): Integer
+    begin
+        exit(A + 1);
+    end;
+
+    procedure Named()
+    begin
+    end;
+}
+`;
+  const NAMELESS: ExtraObjects = {
+    files: {
+      "NamelessSplit.Codeunit.al": NAMELESS_SPLIT,
+      "NamelessPlain.Codeunit.al": NAMELESS_PLAIN,
+    },
+    codeunits: [
+      { Id: 79120, Name: "Nameless Split" },
+      { Id: 79121, Name: "Nameless Plain" },
+    ],
+  };
+  const NS = (lineNo: number) => ({ objectType: 5, objectId: 79120, lineNo, hits: 1 });
+  const NP = (lineNo: number) => ({ objectType: 5, objectId: 79121, lineNo, hits: 1 });
+
+  test("R753: a row in a nameless split member beside a named member's row is quiet", async () => {
+    expect(codesOf(await notesFor([NS(22), NS(9)], NAMELESS))).toEqual([]);
+    expect(codesOf(await notesFor([NS(22), NS(8), NS(9)], NAMELESS))).toEqual([]);
+  });
+
+  test("R753: rows only in a nameless split member are quiet (no no-procedure-lines)", async () => {
+    expect(codesOf(await notesFor([NS(8), NS(9)], NAMELESS))).toEqual([]);
+  });
+
+  test("R753: a real gap line in the SAME object still warns, and names only that line", async () => {
+    const notes = await notesFor([NS(22), NS(9), NS(11)], NAMELESS);
+    expect(codesOf(notes)).toEqual([BESIDE]);
+    expect(notes[0]?.[1]).toContain("Codeunit:79120 line(s) 11 fell in no known span");
+    // With no named member row, the gap row alone still raises no-procedure-lines.
+    expect(codesOf(await notesFor([NS(9), NS(11)], NAMELESS))).toEqual([NO_PROC]);
+  });
+
+  test("R753: attribution is unchanged: namingGaps still holds the object for an unnamed-member row", async () => {
+    const { backend, cleanup } = await deployed({ coverage: [NS(22), NS(9)] }, NAMELESS);
+    try {
+      const v = await backend.run(ref, { coverage: "fenced", timeoutMs: 1000 });
+      expect(v.coverage?.namingGaps).toEqual([{ objectType: "Codeunit", objectId: 79120 }]);
+      expect(v.coverage?.entries).toEqual([
+        { objectType: "Codeunit", objectId: 79120, procedure: "Solo" },
+        { objectType: "Codeunit", objectId: 79120 },
+      ]);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("R753: a nameless PLAIN procedure (error recovery shape) stays a gap for the warnings", async () => {
+    expect(codesOf(await notesFor([NP(9), NP(4)], NAMELESS))).toEqual([BESIDE]);
+    expect(codesOf(await notesFor([NP(4), NP(5)], NAMELESS))).toEqual([NO_PROC]);
+  });
+
+  test("R753: the dump marks rows in an unnamed split member, and only those", async () => {
+    const dir = scratch("lethal-dump-");
+    const path = join(dir, "dump.jsonl");
+    const before = process.env.LETHAL_FENCED_COVERAGE_DUMP;
+    process.env.LETHAL_FENCED_COVERAGE_DUMP = path;
+    try {
+      await notesFor([NS(22), NS(9), NS(11), NP(4)], NAMELESS);
+    } finally {
+      if (before === undefined) Reflect.deleteProperty(process.env, "LETHAL_FENCED_COVERAGE_DUMP");
+      else process.env.LETHAL_FENCED_COVERAGE_DUMP = before;
+    }
+    const lines = (await readFile(path, "utf8")).trim().split("\n");
+    const rec = JSON.parse(lines[0] ?? "") as { gaps: unknown[] };
+    expect(rec.gaps).toEqual([
+      {
+        objectType: "Codeunit",
+        objectId: 79120,
+        lineNo: 9,
+        besideMembers: true,
+        inUnnamedMember: true,
+      },
+      {
+        objectType: "Codeunit",
+        objectId: 79120,
+        lineNo: 11,
+        besideMembers: true,
+        inUnnamedMember: false,
+      },
+      {
+        objectType: "Codeunit",
+        objectId: 79121,
+        lineNo: 4,
+        besideMembers: false,
+        inUnnamedMember: false,
+      },
     ]);
   });
 
