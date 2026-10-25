@@ -215,6 +215,8 @@
     "r386-fallback-census.test.ts",
     "r386-fallback-census.ts",
     "r402-shape-sweep.ts",
+    "r402-shapes.ts",
+    "r402-shapes.test.ts",
     "r546-bucket.test.ts",
     "r546-bucket.ts",
     "r658-hang-gate.test.ts",
