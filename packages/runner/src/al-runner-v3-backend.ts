@@ -1633,7 +1633,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const id = ref.codeunitId;
     // R762 A: an UNMUTATED call that asked for no coverage (a kill confirm) needs none: no flag and
     // no join. A mutant call keeps it whatever it asked: the Sleep rule (§6) reads it.
-    const noCoverage = !wantCoverage && this.lastActivated === null;
+    // In serve-entries the baseline bracket (`inBaseline`) alone says what the baseline is (R635 §4).
+    const noCoverage = !wantCoverage && this.lastActivated === null && !this.inBaseline;
     // F5: the largest budget of any ref of this codeunit the loop will send for this mutant.
     let budget = timeoutMs;
     const plan = this.plan;

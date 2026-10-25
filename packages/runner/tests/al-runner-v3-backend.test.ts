@@ -216,7 +216,8 @@ function fakeV3(
     const covAt = argv.indexOf("--coverage-json");
     const cov = opts.coverage?.(activeId, active, testDir);
     // R762 A: a call without the flag has nowhere to write it.
-    if (cov !== undefined && covAt >= 0) await writeFile(argv[covAt + 1] ?? "", JSON.stringify(cov));
+    if (cov !== undefined && covAt >= 0)
+      await writeFile(argv[covAt + 1] ?? "", JSON.stringify(cov));
     const tests = rows(activeId, argv).map((r) => ({
       codeunit: cu,
       codeunitName: "Tests",
