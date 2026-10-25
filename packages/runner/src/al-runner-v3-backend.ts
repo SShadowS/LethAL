@@ -291,10 +291,11 @@ export class AlRunnerV3TransportFrozenError extends Error {
  * equal to one-shot (0 differences over 36): it proves method names of letters, digits, `_`, space,
  * `-`, `(`, `)`, `/`, `&`, `å`, `æ`, with a leading digit allowed ("7Digit Step"). Exactly those: the
  * dot stays out (#5798), and any character N1S never ran (`ø`, `'`, `:`, ...) falls back.
+ * Positions too: N1S's names start with a letter or digit and hold only single, inner spaces.
  * A name outside these falls the default back to one-shot (`unproven-test-name-shape`).
  */
 export const V3_SERVE_PROVEN_NAME_SHAPES = {
-  method: /^[A-Za-z0-9_ ()/&åæ-]+$/,
+  method: /^[A-Za-z0-9](?:[A-Za-z0-9_()/&åæ-]| (?=[^ ]))*$/,
   codeunit: /^[A-Za-z0-9_ .]+$/,
 } as const;
 

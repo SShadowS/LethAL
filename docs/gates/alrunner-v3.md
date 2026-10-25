@@ -89,7 +89,8 @@ The legs:
   - Serve counters: pairRequests 33, liveRequests 33, boundChecks 35, warmups 1, entriesSent 200, echo mismatches 0.
     Warning set `[]`.
   - It proves the method-name shape `V3_SERVE_PROVEN_NAME_SHAPES.method` allows: letters, digits, `_`, space, `-`,
-    `(`, `)`, `/`, `&`, `å`, `æ`. The dot stays out (#5798, N1E).
+    `(`, `)`, `/`, `&`, `å`, `æ`, in the positions N1S ran them: a letter or digit first, spaces single and inner.
+    The dot stays out (#5798, N1E).
   - It is in `V3_GATE_LEGS`. On a build with no serve path (alpha.2) it reads "not applicable".
 - S3: runs no session. It checks that `selectorMode: "resource"` is refused by name
   (`al-runner-v3-resource-selector-refused`).

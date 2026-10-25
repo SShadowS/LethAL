@@ -178,7 +178,11 @@ describe("R761: the default transport", () => {
       expect([name, V3_SERVE_PROVEN_NAME_SHAPES.method.test(name)]).toEqual([name, true]);
     }
     // red when the widening is too loose: the dot is #5798, and characters N1S never ran stay unproven
-    for (const name of ["Dot.Step", "Ø Step", "Quote'Step", "Colon:Step", "Plus+Step", "Tab\tStep", ""]) {
+    for (const name of ["Dot.Step", "Ø Step", "Å Step", "Quote'Step", "Colon:Step", "Plus+Step", "Tab\tStep", ""]) {
+      expect([name, V3_SERVE_PROVEN_NAME_SHAPES.method.test(name)]).toEqual([name, false]);
+    }
+    // red when only the character set is checked: N1S never ran these positions
+    for (const name of [" Step", "Step ", "Two  Spaces", "-Step", "(Step)", "()", "   "]) {
       expect([name, V3_SERVE_PROVEN_NAME_SHAPES.method.test(name)]).toEqual([name, false]);
     }
   });

@@ -25,7 +25,7 @@ export const V3_K_CANDIDATE_SKIP = "skipped (candidate build)";
  */
 export const V3_N1E_LEG = "N1E";
 
-/** R763: N1's project without `Dot.Step`, one-shot then serve-entries (`legN1S`); not an update-gate leg yet. */
+/** R763: N1's project without `Dot.Step`, one-shot then serve-entries (`legN1S`); in `V3_GATE_LEGS`. */
 export const V3_N1S_LEG = "N1S";
 
 /** The exact `--version` lines of builds that have no serve-entries path (alpha.2's `.gated`). */

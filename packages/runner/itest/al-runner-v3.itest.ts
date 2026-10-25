@@ -354,7 +354,11 @@ function assertReproduced(r: SessionReport, leg: string): void {
 }
 
 /** Per mutant against an oracle (gate baseline or report): 0 differences. */
-async function assertPerMutant(r: SessionReport, oraclePath: string, leg: string): Promise<void> {
+async function assertPerMutant(
+  r: SessionReport,
+  oraclePath: string,
+  leg: string,
+): Promise<ReturnType<typeof compareMutants>> {
   const raw = JSON.parse(await readFile(oraclePath, "utf8")) as { mutants?: unknown };
   const now = normalizeForComparison(r);
   let cmp: ReturnType<typeof compareMutants>;
@@ -377,6 +381,7 @@ async function assertPerMutant(r: SessionReport, oraclePath: string, leg: string
     cmp.differences.length === 0,
     `${leg}: ${cmp.differences.length} per-mutant difference(s) from ${oraclePath}`,
   );
+  return cmp;
 }
 
 function assertCounts(
@@ -703,7 +708,11 @@ async function legN1S(scratch: string, version: string): Promise<void> {
       one.r.counts.noCoverage === serve.r.counts.noCoverage,
     "N1S: counts differ between one-shot and serve-entries",
   );
-  await assertPerMutant(serve.r, oneReport, "N1S serve vs one-shot");
+  const cmp = await assertPerMutant(serve.r, oneReport, "N1S serve vs one-shot");
+  must(
+    cmp.textVerified === 36 && cmp.textUnverified === 0,
+    `N1S: text verified ${cmp.textVerified}, unverified ${cmp.textUnverified}; pre-committed 36 and 0 (R763)`,
+  );
   must(
     serve.r.baselineGreen && serve.r.unsupportedTests.length === 0,
     "N1S: serve baseline not green or a refused test",
