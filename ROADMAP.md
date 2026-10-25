@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**20 of 756 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**21 of 757 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -801,6 +801,7 @@ that ordering is the priority.
 - **R760** · al-runner-v3 one-shot campaigns spend their time on per-call compile, dependency-cache reads and coverage, not on tests (D1: 667 s one-shot, 193 s serve) · [R760.md](docs/roadmap/R760.md) · open, measured 2026-10-25 (coord task R-760); changes await a ruling
 - **R763** · Prove serve-entries for test METHOD names that are not plain identifiers (spaces, - ( ) / & å æ, a leading digit), so R761's default can serve them · [R763.md](docs/roadmap/R763.md) · open, filed 2026-10-25 (from R-761; orchestrator ruling)
 - **R764** · al-runner-v3 one-shot ignored RunOpts.coverage: kill confirms still sent --coverage-json and joined coverage · [R764.md](docs/roadmap/R764.md) · done (3f37aacb)
+- **R767** · al-runner-v3's per-send bound check (`assertBound`) spent 0.35 s per send on Bun's async fs, not on hashing · [R767.md](docs/roadmap/R767.md) · open, built 2026-10-25 (coord task R-767); awaiting the v3 gate and merge
 
 ---
 
