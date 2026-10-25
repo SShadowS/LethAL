@@ -118,7 +118,8 @@ function unwrappedTimeouts(file: string, text: string): string[] {
       ts.isConditionalExpression(e) ||
       ts.isParenthesizedExpression(e)
     ) {
-      if (ALLOWED[`${file}|${e.getText()}`] === undefined)
+      // Bun.Glob gives `\` paths on Windows; ALLOWED keys use `/`.
+      if (ALLOWED[`${file.replaceAll("\\", "/")}|${e.getText()}`] === undefined)
         found.push(`${where} computed: ${e.getText()}`);
     }
   };
@@ -162,6 +163,13 @@ describe("R726 guard: no unit test leaves a short own timeout unwrapped", () => 
     expect(
       unwrappedTimeouts(
         "packages/runner/tests/r214-history.test.ts",
+        "afterAll(f, ownTimeout(15_000) + 15_000);",
+      ),
+    ).toEqual([]);
+    // The same allowed site under a Windows glob path (CI run 40235606454 flagged it).
+    expect(
+      unwrappedTimeouts(
+        "packages\\runner\\tests\\r214-history.test.ts",
         "afterAll(f, ownTimeout(15_000) + 15_000);",
       ),
     ).toEqual([]);
