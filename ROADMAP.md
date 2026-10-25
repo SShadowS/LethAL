@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**23 of 748 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**22 of 748 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -791,7 +791,7 @@ that ordering is the priority.
 - **R747** · The generated selector codeunit gives almost every non-narrowed test a member entry, so a base-line fault on target objects cannot raise `fenced-coverage-no-procedure-lines` · [R747.md](docs/roadmap/R747.md) · done (83741bbf)
 - **R748** · A naming gap in an object that also has member rows raises no warning · [R748.md](docs/roadmap/R748.md) · done (037fc880)
 - **R750** · Wrong comment in a tables-gate fixture: a pageextension's procedures ARE callable from a test codeunit (measured on BC 28.4) · [R750.md](docs/roadmap/R750.md) · done (a3ae069b)
-- **R753** · A row inside an R318 renamed split member with no coverage name counts as a naming gap, so beside a named member it raises a false `fenced-coverage-gap-beside-members` · [R753.md](docs/roadmap/R753.md) · open, filed 2026-10-25 (from coord task R-748)
+- **R753** · A row inside an R318 renamed split member with no coverage name counts as a naming gap, so beside a named member it raises a false `fenced-coverage-gap-beside-members` · [R753.md](docs/roadmap/R753.md) · done (98d6aa3a)
 - **R754** · The R402 shape sweep ran only by hand, so a reader change dropped a mutant unnoticed (R752); its spec counts are now pinned in the unit suite · [R754.md](docs/roadmap/R754.md) · done (1a01935c)
 
 ---
