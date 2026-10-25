@@ -801,6 +801,7 @@ that ordering is the priority.
 - **R760** · al-runner-v3 one-shot campaigns spend their time on per-call compile, dependency-cache reads and coverage, not on tests (D1: 667 s one-shot, 193 s serve) · [R760.md](docs/roadmap/R760.md) · open, measured 2026-10-25 (coord task R-760); changes await a ruling
 - **R765** · al-runner-v3 contract-probe cache: a session replays a fully passing probe of the same inputs (coord R-762 item 1) · [R765.md](docs/roadmap/R765.md) · done (87f784cd)
 - **R763** · Prove serve-entries for test METHOD names that are not plain identifiers (spaces, - ( ) / & å æ, a leading digit), so R761's default can serve them · [R763.md](docs/roadmap/R763.md) · open, filed 2026-10-25 (from R-761; orchestrator ruling)
+- **R764** · al-runner-v3 one-shot ignored RunOpts.coverage: kill confirms still sent --coverage-json and joined coverage · [R764.md](docs/roadmap/R764.md) · done (3f37aacb)
 
 ---
 
