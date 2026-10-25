@@ -1716,12 +1716,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
 
   /**
    * R766 (b): true when the running build's pin and the session probe say the §6 Sleep rule is retired,
-   * so `run()` never opens a coverage window. R768 wires this to `sleepRuleRetired`; until it merges
-   * this is false on every build. A NEW al-runner build needs its own pin before `--workers > 1` is
-   * allowed on it.
+   * so `run()` never opens a coverage window: R768's `sleepRuleRetired`, set by `status()`. A NEW
+   * al-runner build needs its own pin before `--workers > 1` is allowed on it.
    */
   sleepRuleRetiredForParallel(): boolean {
-    return this.seams.sleepRuleRetired ?? false;
+    return this.seams.sleepRuleRetired ?? this.sleepRuleRetired;
   }
 
   /** R766 (b): the first latch of this batch and the mutant behind it, or `undefined`. */
@@ -2281,7 +2280,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     await rm(covPath, { force: true });
     // R-762 B: a mutant call on a pinned-gone build asks for no coverage (nothing reads it). The
     // baseline test is `isBaselineCall` (as in the verdict path), so one-shot and serve-entries agree.
-    const coverageRequested = !noCoverage && !(this.sleepRuleRetired && !this.isBaselineCall());
+    const coverageRequested = !noCoverage && !(this.sleepRuleRetired && !this.isBaselineCall(lane));
     const argv = v3CallArgv({
       alRunnerPath: absToolPath(this.cfg.alRunnerPath),
       codeunitId: id,
