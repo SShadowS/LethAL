@@ -130,6 +130,7 @@ import {
   judgeN1Serve,
   judgeOrderProbe,
   judgeStateNotes,
+  o1LoginWorkDate,
   judgeWrArms,
   legKSection,
   moWrTransportRefusal,
@@ -929,7 +930,13 @@ async function legO1(scratch: string, version: string): Promise<void> {
         });
       console.log(`  O1: ${rq.label}: ${reads.join(" | ")}`);
     }
-    const j = judgeOrderProbe(done, [...dates]);
+    // R771 addendum 2: a pinned build's login WorkDate, for the CDO set only (it holds Base Application).
+    const login = o1LoginWorkDate(set.name, activePin);
+    if (login !== undefined)
+      console.log(
+        `  O1: ${set.name} set: WorkDate pinned ${login} (pin ${activePin?.id}, ${activePin?.o1?.issue})`,
+      );
+    const j = judgeOrderProbe(done, [...dates], login);
     console.log(`  O1: ${set.name} set: ${j.outcome} (${done.length} requests, one daemon)`);
     if (j.outcome === "gate-fail") throw new LegFailure(`O1: ${j.lines.join("; ")}`);
   }

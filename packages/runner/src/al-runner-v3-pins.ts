@@ -79,6 +79,16 @@ export interface V3BuildPin {
     readonly issue: string;
     readonly evidence: string;
   };
+  /**
+   * R771 addendum 2: the WorkDate O1's CDO set reads on a build that runs Base Application's login
+   * code (`LogInManagement.GetDefaultWorkDate`, the last G/L entry's date in the restored CRONUS demo
+   * company of the CDO set's BC build). Every CDO Reader entry must read exactly it.
+   */
+  readonly o1?: {
+    readonly cdoWorkDate: string;
+    readonly issue: string;
+    readonly evidence: string;
+  };
 }
 
 const ROW = (cu: number, method: string) =>
@@ -178,6 +188,11 @@ const ALPHA5_READINGS: Pick<V3BuildPin, "legC" | "legT" | "xb"> = {
   xb: { exitCode: 3, passed: 0, notRun: 0 },
 };
 
+// R771 addendum 1: the a157b2d34 pin overrides this fact's measured text only.
+const { "duplicate-key-insert-raises": ALPHA5_DUPLICATE_KEY } = ALPHA5_READINGS.legC;
+if (ALPHA5_DUPLICATE_KEY === undefined)
+  throw new Error("al-runner-v3-pins: ALPHA5_READINGS has no duplicate-key-insert-raises fact");
+
 export const V3_BUILD_PINS: readonly V3BuildPin[] = [
   {
     id: "alpha.5-07342060e",
@@ -202,7 +217,7 @@ export const V3_BUILD_PINS: readonly V3BuildPin[] = [
     legC: {
       ...ALPHA5_READINGS.legC,
       "duplicate-key-insert-raises": {
-        ...ALPHA5_READINGS.legC["duplicate-key-insert-raises"]!,
+        ...ALPHA5_DUPLICATE_KEY,
         measured: pinPattern(
           `[${ROW(50655, "DuplicateNamedKey")},"status":"error","durationMs":{n},"message":"NotRun: out-of-scope: the test ends while the error of a duplicate-key Insert into table Probe Row is deferred: whether the test runner raises it at the end of the test is measured only for TestIsolation = Codeunit and the default TransactionModel","notRun":true}] exit 7`,
         ),
@@ -215,6 +230,12 @@ export const V3_BUILD_PINS: readonly V3BuildPin[] = [
       issue: `${REPO}/5798`,
       evidence:
         "#5798 fixed upstream (the Dot.Step row carries codeunit and method); LethAL's serveRow still refuses a dotted method by name, so the session fails closed",
+    },
+    o1: {
+      cdoWorkDate: "2026-08-01",
+      issue: `${REPO}/5743`,
+      evidence:
+        "upstream 5e1db1c7 runs LogInManagement.GetDefaultWorkDate at session open (as BC); BC 28.4.53241.53758's CRONUS demo company has 4178 G/L entries, the last on 2026-08-01 (R771 addendum 2 probe)",
     },
   },
 ];
