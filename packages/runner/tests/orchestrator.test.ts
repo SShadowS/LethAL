@@ -2521,6 +2521,8 @@ class QualificationBackend implements ExecutionBackend {
       failureMessage?: string;
       /** Defaults to the single-carrier fixture's codeunit; set it when a test spans two files. */
       objectId?: number;
+      /** R689: BC's discovery error for a found-0 baseline answer. */
+      discoveryError?: { text: string; frame: string };
     },
   ) {}
   capabilities() {
@@ -2558,6 +2560,7 @@ class QualificationBackend implements ExecutionBackend {
       outcome: b.outcome,
       durationMs: 5,
       ...(b.failureMessage !== undefined ? { failureMessage: b.failureMessage } : {}),
+      ...(b.discoveryError !== undefined ? { discoveryError: b.discoveryError } : {}),
       // Baseline coverage is attached regardless of pass/fail — mirrors bcdev
       // runOnHub, which builds the coverage map whenever coverage !== "none".
       coverage: {
@@ -3387,10 +3390,17 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
             `expected exactly one method ${method}, found 0`,
           ),
         });
-        const baselineRun = async (pkg: Uint8Array) => {
+        const quote = {
+          text: "R689 onrun boom 79100",
+          frame: "Sandbox Tests(CodeUnit 79100).OnRun",
+        };
+        const baselineRun = async (pkg: Uint8Array, quoted = false) => {
           const dirs = await qualProject();
           await Bun.write(join(dirs.testDir, "app.json"), testAppJson());
-          const backend = new QualificationBackend(allFound0);
+          const backend = new QualificationBackend((method) => ({
+            ...allFound0(method),
+            ...(quoted ? { discoveryError: quote } : {}),
+          }));
           return runSession({
             backend: Object.assign(backend, servesTestApp(pkg)),
             store: new ResultsStore(":memory:"),
@@ -3404,9 +3414,18 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
         const named = await baselineRun(compiled);
         expect(named).toBeInstanceOf(TestCodeunitDiscoveryError);
         expect((named as Error).message).toContain('"Sandbox Tests"');
+        expect((named as Error).message).not.toContain("discovery error:");
+        // R689: the verdict's discoveryError reaches the refusal text, on both refusal paths.
+        const quotedLine = `BC's discovery error: ${quote.text} (at ${quote.frame})`;
+        const quotedNamed = await baselineRun(compiled, true);
+        expect(quotedNamed).toBeInstanceOf(TestCodeunitDiscoveryError);
+        expect((quotedNamed as Error).message).toContain(quotedLine);
         const unproven = await baselineRun(testAppPackage());
         expect(unproven).toBeInstanceOf(StaleTestAppError);
         expect((unproven as Error).message).toContain(ONRUN_HINT);
+        expect((unproven as Error).message).not.toContain("discovery error:");
+        const unprovenQuoted = await baselineRun(testAppPackage(), true);
+        expect((unprovenQuoted as Error).message).toContain(quotedLine);
       });
 
       // Build review S2: the kill's unmutated confirm answering found-0 is not the mutant's doing.

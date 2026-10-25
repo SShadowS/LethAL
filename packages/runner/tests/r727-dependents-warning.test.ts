@@ -10,87 +10,100 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
-import { accountedFor, checkDependents, dependentsWarning } from "../src/dependents-warning";
+import { checkDependents, dependentsWarning, testsAppIdOf } from "../src/dependents-warning";
 import { createEmitter } from "../src/events";
 import type { RunEvent } from "../src/events";
-import { DependentCountUnavailableError } from "../src/harness";
+import type { InstalledDependent } from "../src/harness";
 import { runSession } from "../src/orchestrator";
 import { ResultsStore } from "../src/store";
 import { removeScratchDirs } from "./helpers/scratch";
 
-/** R727: warn (never refuse) before the first target publish when published apps beyond the run's
- *  tests app depend on the target. Fakes count calls; nothing reads a clock. */
+/** R727, R733: warn (never refuse) before the first target publish, NAMING the installed apps
+ *  beyond the run's tests app that depend on the target. Fakes count calls; nothing reads a clock. */
 
 const TARGET = { name: "Target App", id: "AAAAAAAA-1111-2222-3333-444444444444" };
 const TESTS_ID = "bbbbbbbb-1111-2222-3333-444444444444";
+const dep = (id: string, name: string): InstalledDependent => ({
+  id,
+  name,
+  publisher: "Pub",
+  version: "1.2.3.4",
+});
+const TESTS_DEP = dep(TESTS_ID, "The Tests");
+const OTHER_DEP = dep("cccccccc-1111-2222-3333-444444444444", "Customer Extension");
 
-describe("R727 dependentsWarning (pure)", () => {
-  test("N=2, K=1: warns, naming N, K, the target and R709", () => {
-    const m = dependentsWarning(2, 1, TARGET);
-    expect(m).toContain("2 published app(s) depend on the target Target App");
+describe("R733 dependentsWarning (pure)", () => {
+  test("another installed dependent: warns, naming it, its version and publisher, the target and R709", () => {
+    const m = dependentsWarning([TESTS_DEP, OTHER_DEP], TESTS_ID, TARGET);
+    expect(m).toContain("1 installed app(s) other than this run's tests app");
+    expect(m).toContain("Customer Extension 1.2.3.4 by Pub (cccccccc-1111-2222-3333-444444444444)");
+    expect(m).toContain("Target App");
     expect(m).toContain(TARGET.id);
-    expect(m).toContain("accounts for 1");
     expect(m).toContain("R709");
+    expect(m).not.toContain("The Tests");
   });
-  test("N=1, K=1 and N=0, K=0: silent", () => {
-    expect(dependentsWarning(1, 1, TARGET)).toBeNull();
-    expect(dependentsWarning(0, 0, TARGET)).toBeNull();
+  test("only the tests app, or nothing: silent", () => {
+    expect(dependentsWarning([TESTS_DEP], TESTS_ID, TARGET)).toBeNull();
+    expect(dependentsWarning([], TESTS_ID, TARGET)).toBeNull();
   });
-  test("N=1, K=0: warns", () => {
-    expect(dependentsWarning(1, 0, TARGET)).toContain("1 published app(s)");
+  test("the tests app is excluded by id, case-insensitively; an unknown tests id excludes nothing", () => {
+    expect(dependentsWarning([dep(TESTS_ID.toUpperCase(), "T")], TESTS_ID, TARGET)).toBeNull();
+    expect(dependentsWarning([TESTS_DEP], undefined, TARGET)).toContain("The Tests");
   });
   test("a read failure warns 'could not check', with the reason", () => {
-    for (const error of [new DependentCountUnavailableError("too old"), new Error("boom")]) {
-      const m = dependentsWarning({ error }, 0, TARGET);
-      expect(m).toContain("could not check");
-      expect(m).toContain(error.message);
-      expect(m).toContain("R709");
-    }
+    const error = new Error("boom");
+    const m = dependentsWarning({ error }, TESTS_ID, TARGET);
+    expect(m).toContain("could not check");
+    expect(m).toContain("boom");
+    expect(m).toContain("R709");
   });
-  test("accountedFor compares ids case-insensitively", () => {
-    expect(accountedFor({ dependencies: [{ id: TARGET.id.toLowerCase() }] }, TARGET.id)).toBe(1);
-    expect(accountedFor({ dependencies: [{ id: TESTS_ID }] }, TARGET.id)).toBe(0);
-    expect(accountedFor({}, TARGET.id)).toBe(0);
+  test("testsAppIdOf lowercases the id and reads nothing else", () => {
+    expect(testsAppIdOf({ id: "ABC" })).toBe("abc");
+    expect(testsAppIdOf({})).toBeUndefined();
+    expect(testsAppIdOf(null)).toBeUndefined();
   });
 });
 
-describe("R727 checkDependents", () => {
+describe("R733 checkDependents", () => {
   const dirs: string[] = [];
   afterEach(() => removeScratchDirs(dirs.splice(0)));
-  async function testDir(deps: unknown[]): Promise<string> {
+  async function testDir(): Promise<string> {
     const d = await mkdtemp(join(tmpdir(), "lethal-r727-"));
     dirs.push(d);
-    await Bun.write(join(d, "app.json"), JSON.stringify({ id: TESTS_ID, dependencies: deps }));
+    await Bun.write(join(d, "app.json"), JSON.stringify({ id: TESTS_ID.toUpperCase() }));
     return d;
   }
 
-  test("reads K from the tests app.json: N=2 warns when it depends on the target, N=1 does not", async () => {
-    const dir = await testDir([{ id: TARGET.id.toLowerCase() }]);
-    expect(await checkDependents({ dependentCount: async () => 2 }, dir, TARGET)).toContain("R709");
-    expect(await checkDependents({ dependentCount: async () => 1 }, dir, TARGET)).toBeNull();
-    const none = await testDir([]);
-    expect(await checkDependents({ dependentCount: async () => 1 }, none, TARGET)).not.toBeNull();
+  test("names the other dependent and leaves the tests app (by its app.json id) out", async () => {
+    const dir = await testDir();
+    const m = await checkDependents(
+      { installedDependents: async () => [TESTS_DEP, OTHER_DEP] },
+      dir,
+      TARGET,
+    );
+    expect(m).toContain("Customer Extension");
+    expect(m).not.toContain("The Tests");
+    expect(
+      await checkDependents({ installedDependents: async () => [TESTS_DEP] }, dir, TARGET),
+    ).toBeNull();
   });
 
   test("a failed read warns and does not throw", async () => {
-    const dir = await testDir([]);
-    for (const error of [new DependentCountUnavailableError("old"), new Error("down")]) {
-      const m = await checkDependents(
-        {
-          dependentCount: async () => {
-            throw error;
-          },
+    const m = await checkDependents(
+      {
+        installedDependents: async () => {
+          throw new Error("down");
         },
-        dir,
-        TARGET,
-      );
-      expect(m).toContain("could not check");
-      expect(m).toContain(error.message);
-    }
+      },
+      await testDir(),
+      TARGET,
+    );
+    expect(m).toContain("could not check");
+    expect(m).toContain("down");
   });
 
-  test("a backend without dependentCount: no message", async () => {
-    expect(await checkDependents({}, await testDir([]), TARGET)).toBeNull();
+  test("a backend without installedDependents: no message", async () => {
+    expect(await checkDependents({}, await testDir(), TARGET)).toBeNull();
   });
 });
 
@@ -113,19 +126,19 @@ const TEST_AL = `codeunit 50014 "R727 Tests"
 }
 `;
 
-/** A bcdev-like stub that logs every deploy and every dependentCount call, in order. */
+/** A bcdev-like stub that logs every deploy and every installedDependents call, in order. */
 class StubBackend implements ExecutionBackend {
   readonly calls: string[] = [];
   private active: string | null = null;
   constructor(
-    readonly count: (() => Promise<number>) | undefined,
+    readonly list: (() => Promise<readonly InstalledDependent[]>) | undefined,
     readonly authoritative = true,
   ) {
-    if (count !== undefined) {
+    if (list !== undefined) {
       Object.assign(this, {
-        dependentCount: (id: string) => {
-          this.calls.push(`dependentCount:${id}`);
-          return count();
+        installedDependents: (id: string) => {
+          this.calls.push(`installedDependents:${id}`);
+          return list();
         },
       });
     }
@@ -170,14 +183,14 @@ class StubBackend implements ExecutionBackend {
   }
 }
 
-describe("R727 through runSession", () => {
+describe("R733 through runSession", () => {
   beforeAll(async () => {
     await initParser();
   });
   const roots: string[] = [];
   afterEach(() => removeScratchDirs(roots.splice(0)));
 
-  async function run(backend: StubBackend, testsDependOnTarget: boolean) {
+  async function run(backend: StubBackend) {
     const root = await mkdtemp(join(tmpdir(), "lethal-r727-"));
     roots.push(root);
     const targetJson = { id: TARGET.id, name: TARGET.name, publisher: "x", version: "1.0.0.0" };
@@ -190,7 +203,7 @@ describe("R727 through runSession", () => {
         name: "t",
         publisher: "x",
         version: "1.0.0.0",
-        dependencies: testsDependOnTarget ? [{ id: TARGET.id }] : [],
+        dependencies: [{ id: TARGET.id }],
       }),
     );
     await Bun.write(join(root, "tests", "R727.Codeunit.al"), TEST_AL);
@@ -216,44 +229,41 @@ describe("R727 through runSession", () => {
     return events;
   }
 
-  test("asks once, for the TARGET id, and warns before the first deploy", async () => {
-    const backend = new StubBackend(async () => 2);
-    const events = await run(backend, true);
-    // The closed-world guard also asks, for the TESTS app id; only the target's asks are ours.
-    const asked = backend.calls.filter((c) => c === `dependentCount:${TARGET.id}`);
-    expect(asked).toHaveLength(1);
-    expect(backend.calls).toContain(`dependentCount:${TESTS_ID}`);
+  test("asks once, for the TARGET id, and warns before the first deploy, naming the other app", async () => {
+    const backend = new StubBackend(async () => [TESTS_DEP, OTHER_DEP]);
+    const events = await run(backend);
+    expect(backend.calls.filter((c) => c === `installedDependents:${TARGET.id}`)).toHaveLength(1);
     expect(backend.calls.filter((c) => c === "warning")).toHaveLength(1);
     expect(backend.calls.indexOf("deploy")).toBeGreaterThan(backend.calls.indexOf("warning"));
     expect(backend.calls.indexOf("warning")).toBeGreaterThan(
-      backend.calls.indexOf(`dependentCount:${TARGET.id}`),
+      backend.calls.indexOf(`installedDependents:${TARGET.id}`),
     );
     const w = events.find((e) => e.type === "warning" && e.code === "installed-dependents");
-    expect(w).toBeDefined();
+    expect(w?.type === "warning" ? w.message : "").toContain("Customer Extension");
   });
 
-  test("N=1 with the tests app depending on the target: asked, silent", async () => {
-    const backend = new StubBackend(async () => 1);
-    await run(backend, true);
+  test("only the tests app installed: asked, silent", async () => {
+    const backend = new StubBackend(async () => [TESTS_DEP]);
+    await run(backend);
     expect(backend.calls).not.toContain("warning");
-    expect(backend.calls.filter((c) => c === `dependentCount:${TARGET.id}`)).toHaveLength(1);
+    expect(backend.calls.filter((c) => c === `installedDependents:${TARGET.id}`)).toHaveLength(1);
   });
 
   test("a failed read warns before the deploy, and the run still deploys", async () => {
     const backend = new StubBackend(async () => {
-      throw new DependentCountUnavailableError("old control app");
+      throw new Error("InstalledDependents failed: HTTP 404");
     });
-    const events = await run(backend, true);
+    const events = await run(backend);
     const w = events.find((e) => e.type === "warning" && e.code === "installed-dependents");
     expect(w?.type === "warning" ? w.message : "").toContain("could not check");
     expect(backend.calls.indexOf("deploy")).toBeGreaterThan(backend.calls.indexOf("warning"));
   });
 
-  test("a backend without dependentCount: no call, no warning", async () => {
+  test("a backend without installedDependents: no call, no warning", async () => {
     const backend = new StubBackend(undefined);
-    await run(backend, true);
+    await run(backend);
     expect(backend.calls).not.toContain("warning");
-    expect(backend.calls.some((c) => c.startsWith("dependentCount"))).toBe(false);
+    expect(backend.calls.some((c) => c.startsWith("installedDependents"))).toBe(false);
     expect(backend.calls).toContain("deploy");
   });
 });

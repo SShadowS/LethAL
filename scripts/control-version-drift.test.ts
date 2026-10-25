@@ -100,7 +100,7 @@ describe("R348: no doc states the current control-app version as a literal", () 
     const files = scannedFiles();
     expect(files.length).toBeGreaterThan(5);
     // R389: the pinned guide states the MINIMUM (agent-contract.test.ts pins it to
-    // MIN_CONTROL_VERSION), which may lag app.json for an optional action.
+    // MIN_CONTROL_VERSION), which equals app.json since R-689b (1.0.0.24).
     const hits = files
       .flatMap((f) => findDrift(relative(ROOT, f).replaceAll("\\", "/"), readFileSync(f, "utf8")))
       .filter(

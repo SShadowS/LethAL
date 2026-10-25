@@ -16,7 +16,9 @@ codeunit 91003 "LC Control API"
 {
     // R389: DependentCount reads the system table "Application Dependency". Declared so a gate
     // user without SUPER is not refused; the probe measured SUPER only.
-    Permissions = tabledata "Application Dependency" = R;
+    // R733: InstalledDependents also reads "NAV App Installed App".
+    Permissions = tabledata "Application Dependency" = R,
+                  tabledata "NAV App Installed App" = R;
 
     /// <summary>Identity + capabilities the client verifies before any execution. PROTOCOL V2 (design
     /// §7, R4 sol#8): ClientProtocol is a REQUIRED argument, not an optional one with a default — a v1
@@ -266,6 +268,40 @@ codeunit 91003 "LC Control API"
         Dep.SetRange("Dependency App ID", Id);
         Obj.Add('appId', AppId);
         Obj.Add('publishedDependents', Dep.Count());
+        Obj.WriteTo(ResultJson);
+    end;
+
+    /// <summary>R733 (1.0.0.24): the INSTALLED apps that declare AppId as a dependency, with names. Joins
+    /// "Application Dependency" (Dependency App ID = AppId) to "NAV App Installed App" on Package ID,
+    /// so only installed versions appear (DependentCount counts every published version). A bad GUID
+    /// raises an error: never a plausible empty list.
+    /// JSON: {appId, installedDependents: [{id, name, publisher, version}]}.</summary>
+    procedure InstalledDependents(AppId: Text) ResultJson: Text
+    var
+        Dep: Record "Application Dependency";
+        Installed: Record "NAV App Installed App";
+        Id: Guid;
+        Obj: JsonObject;
+        Rows: JsonArray;
+        Row: JsonObject;
+    begin
+        if not Evaluate(Id, AppId) then
+            Error('InstalledDependents: %1 is not a GUID', AppId);
+        Dep.SetRange("Dependency App ID", Id);
+        if Dep.FindSet() then
+            repeat
+                Installed.SetRange("Package ID", Dep."Package ID");
+                if Installed.FindFirst() then begin
+                    Clear(Row);
+                    Row.Add('id', LowerCase(DelChr(Format(Installed."App ID"), '=', '{}')));
+                    Row.Add('name', Installed.Name);
+                    Row.Add('publisher', Installed.Publisher);
+                    Row.Add('version', StrSubstNo('%1.%2.%3.%4', Format(Installed."Version Major", 0, 9), Format(Installed."Version Minor", 0, 9), Format(Installed."Version Build", 0, 9), Format(Installed."Version Revision", 0, 9)));
+                    Rows.Add(Row);
+                end;
+            until Dep.Next() = 0;
+        Obj.Add('appId', AppId);
+        Obj.Add('installedDependents', Rows);
         Obj.WriteTo(ResultJson);
     end;
 
