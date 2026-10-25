@@ -115,6 +115,14 @@ The legs:
   (`al-runner-v3-resource-selector-refused`).
 - N1: the names fixture (R557's tests are unselectable on v3, upstream #5572).
 - X (a) to (f): the compile proof, the binding checks and the Sleep rule (§6) on `scripts/r586-probe`.
+- **Transport per leg (R788; pre-commitment `docs/superpowers/specs/2026-10-25-r788-serve-big-legs-precommitment.md`,
+  master 1d6474bb).** Unflagged: D1, D1c and T run serve-entries (`V3_GATE_SERVE_LEGS`, `v3ItestLegTransport`); S1E,
+  N1E, N1S and O1 run serve-entries by construction; K runs the CLI's own default (serve-entries for sandbox-app since
+  R761); C, S1, S3, N1, X, L1, Y-A, Y-B, MO and WR run one-shot, so S1, N1, MO and WR keep the one-shot path gated.
+  `LETHAL_ITEST_V3_TRANSPORT` still names one transport for the flag-following legs (`one-shot` reproduces the
+  pre-R788 gate). On serve, D1 532 -> 32 s, D1c 462 -> 31 s, T 161 -> 30 s, with every count, per-mutant row, note and
+  warning identical to one-shot. Each serve leg asserts `pairRequests` = killed and zero echo mismatches, fallbacks
+  and refused batches (`assertServeCounters`).
 - D1, D1c: the Continia Document Output slice, compared per mutant with R594's BC oracle
   (`docs/measurements/r594/bc3-A.report.json`, `bc3-B.report.json`). No source text is committed.
   - `LETHAL_ITEST_V3_CDO` names the checkout. It is `/work/lethal-wt/cdo-r396`, the read-only measurement checkout,
