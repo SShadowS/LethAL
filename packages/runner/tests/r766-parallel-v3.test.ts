@@ -422,6 +422,50 @@ describe("R766 (b): the pull queue over procedure scopes", () => {
   });
 });
 
+describe("R785: the orchestrator feeds the start rule", () => {
+  /** An owner that can say its warm-up and which mutants need a live call, and records the notice. */
+  function paced(stub: ParStub, o: { warm: number; live: boolean }) {
+    const asked: string[] = [];
+    const notices: string[] = [];
+    Object.assign(stub, {
+      laneWarmupMs: () => o.warm,
+      laneDaemonStarts: () => 1,
+      needsLiveCall: (id: string) => {
+        asked.push(id);
+        return o.live;
+      },
+      noteLanes: (m: string) => notices.push(m),
+    });
+    return { asked, notices };
+  }
+
+  test("prefetched mutants are not live work: no cost is learned, one lane runs, the notice says why", async () => {
+    const root = await project();
+    const { procOf, report: one } = await learn(root);
+    const stub = new ParStub({ procOf });
+    const { asked, notices } = paced(stub, { warm: 1000, live: false });
+    const par = await session(root, stub, { workers: 3 });
+    expect(table(par)).toEqual(table(one));
+    expect(asked.length).toBeGreaterThan(0); // the weight filter asked the owner
+    expect(new Set(stub.activations.map((a) => a.lane))).toEqual(new Set([0]));
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatch(/^1 of 3 lanes started: no lane 0 live unit finished/);
+  });
+
+  test("live units give a cost: a warm-up far longer than the queued work keeps one lane, reason cost", async () => {
+    const root = await project();
+    const { procOf, report: one } = await learn(root);
+    const stub = new ParStub({ procOf });
+    const { notices } = paced(stub, { warm: 1e12, live: true });
+    const par = await session(root, stub, { workers: 3 });
+    expect(table(par)).toEqual(table(one));
+    expect(new Set(stub.activations.map((a) => a.lane))).toEqual(new Set([0]));
+    expect(notices).toEqual([
+      "1 of 3 lanes started: the queued live work was not longer than one warm-up (lane 0's warm-up 1000000000.0 s)",
+    ]);
+  });
+});
+
 describe("R766 (b): the stop rule, through a session", () => {
   const scoredCodes = (events: readonly RunEvent[]): string[] =>
     events.flatMap((e) => (e.type === "mutant-scored" ? [e.mutant.mutantId] : []));

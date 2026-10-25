@@ -2,6 +2,7 @@ import { afterAll, test as bunTest, describe, expect } from "bun:test";
 import { cp, mkdtemp, readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { ownTimeout } from "@lethal/engine/own-timeout";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import type {
   BackendCapabilities,
@@ -39,7 +40,7 @@ const test = (name: string, fn: () => Promise<void> | void) =>
       inflight.add(whole);
       return whole;
     },
-    15_000,
+    ownTimeout(15_000),
   );
 
 const HERE = import.meta.dir;
@@ -110,7 +111,7 @@ afterAll(async () => {
   // 30 s: must outlast the 15 s per-test guard. Bun gives a hook only 5 s by default, and the wait
   // above can last as long as a starved test body still has to run; if the hook timed out, the rm
   // and the sweep would never run and the folders would leak.
-}, 30_000);
+}, ownTimeout(15_000) + 15_000); // outlasts the per-test guard, also when that is raised (R726)
 
 /** A private copy of the R321 fixture pair, so a run never writes next to the committed one. */
 // Every caller is a test body, so the wrapper's whole-test promise already covers this setup; it

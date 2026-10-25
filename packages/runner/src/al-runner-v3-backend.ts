@@ -414,6 +414,30 @@ export interface AlRunnerV3Config {
   readonly transportSource?: "default" | "explicit";
   /** R762: run the contract probe fresh instead of replaying a cached pass (`--fresh-probe`). */
   readonly freshProbe?: boolean;
+  /**
+   * R790/R798: run the baseline's one-shot calls while alc proves the batch. Internal, not a config
+   * key. Unset: read at construction from `LETHAL_V3_SPECULATE_BASELINE` ("1" = on; unset or empty = off).
+   */
+  readonly speculateBaseline?: boolean;
+}
+
+/** R798: the env var that turns R790's speculative baseline on (it is off by default). */
+export const SPECULATE_BASELINE_ENV = "LETHAL_V3_SPECULATE_BASELINE";
+
+export class AlRunnerV3SpeculateBaselineRefusedError extends Error {
+  constructor(value: string) {
+    super(
+      `al-runner-v3-speculate-baseline-refused: ${SPECULATE_BASELINE_ENV} is "${value}"; use 1 to turn it on, or leave it unset`,
+    );
+    this.name = "AlRunnerV3SpeculateBaselineRefusedError";
+  }
+}
+
+function readSpeculateBaseline(): boolean {
+  const v = process.env[SPECULATE_BASELINE_ENV];
+  if (v === undefined || v === "") return false;
+  if (v === "1") return true;
+  throw new AlRunnerV3SpeculateBaselineRefusedError(v);
 }
 
 /** One row of v3's `--output-json` `tests[]`, decoded. */
@@ -1037,6 +1061,10 @@ class Lane {
   deployedDir: string | undefined;
   /** I-1: `deployedDir` under `realpath`, the form the Sleep index and the argv both use. */
   realActive: string | undefined;
+  /** R785: the LATEST single daemon start plus warm-up of this lane, in ms; 0 before the first. */
+  lastWarmupMs = 0;
+  /** R785: how many daemons this lane has started (a restart changes it). */
+  daemonStarts = 0;
   /** R651: wall ms per phase of this lane. TIMING ONLY: no verdict reads them. */
   readonly timers: Record<V3PhaseTimer, number> = {
     warmupMs: 0,
@@ -1197,6 +1225,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     /** R790: runs once the speculative calls ended, before their second binding read. */
     afterSpeculation?: () => Promise<void>;
   } = {};
+  /** R798: R790's speculative baseline is opt-in (option or env, read at construction). */
+  private readonly speculateOn: boolean;
   private memoryHoldNoticed = false;
   private fitNoticed = false;
   /** R766 (b): the `resume` fact `decideTransport` was given. */
@@ -1292,6 +1322,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     private readonly now: () => number = Date.now,
   ) {
     if (cfg.selectorMode === "resource") throw new AlRunnerV3ResourceSelectorRefusedError();
+    this.speculateOn = cfg.speculateBaseline ?? readSpeculateBaseline();
     // R761: a default transport starts one-shot-safe; `decideTransport` turns serve on, before the
     // first deploy (the staged batch differs by transport) and the first v3 process.
     this.entries = cfg.transport === "serve-entries" && cfg.transportSource !== "default";
@@ -1813,6 +1844,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // answers stay private: deploy() still waits for alc and throws exactly its error, and they are
     // served (once each) only if every byte they read is a byte the proof below records.
     const speculate =
+      this.speculateOn &&
       this.entries &&
       this.budgetFloor !== undefined &&
       this.suitePerCodeunit.size > 0 &&
@@ -2309,6 +2341,29 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       );
     }
     return k;
+  }
+
+  /** R785: lane 0's LATEST single daemon start plus warm-up request, in ms; 0 until it ran. */
+  laneWarmupMs(): number {
+    return this.lane.lastWarmupMs;
+  }
+
+  /** R785: lane 0's daemon starts so far; a change during a unit means the unit carried a warm-up. */
+  laneDaemonStarts(): number {
+    return this.lane.daemonStarts;
+  }
+
+  /** R785: false when the shared prefetch already holds this mutant's answer (about 0 ms of live work). */
+  needsLiveCall(mutantId: string): boolean {
+    return !this.prefetched.has(mutantId);
+  }
+
+  /** R785: the one-line notice of how many lanes started. */
+  noteLanes(message: string): void {
+    this.notify(
+      "al-runner-v3-lanes-started",
+      `[lethal] al-runner-v3-lanes-started: ${message} (R785).`,
+    );
   }
 
   /**
@@ -3155,7 +3210,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    */
   private async ensureDaemon(lane: Lane): Promise<Daemon> {
     if (lane.daemon !== undefined) return lane.daemon;
-    return lane.timed("warmupMs", () => this.startDaemon(lane));
+    const before = lane.timers.warmupMs;
+    const d = await lane.timed("warmupMs", () => this.startDaemon(lane));
+    lane.lastWarmupMs = lane.timers.warmupMs - before; // this start alone, not the session total
+    lane.daemonStarts += 1;
+    return d;
   }
 
   private async startDaemon(lane: Lane): Promise<Daemon> {

@@ -148,7 +148,9 @@ import {
 } from "./baseline-guard";
 import { prepareFixtureSymbols } from "./fixture-symbols";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import { GATE_WARNINGS } from "./gate-expected";
 import {
+  assertGateWarnings,
   checkGateWarnings,
   collectWarnings,
   finishGate,
@@ -332,7 +334,17 @@ async function session(
   }
   // R635: all of it only when a flag asks or the leg runs serve (R788).
   const leg = basename(scratch);
-  checkGateWarnings("al-runner-v3", leg, gateWarnings);
+  // R785: a `LETHAL_ITEST_V3_WORKERS > 1` D-leg run also says how many lanes started; that one code is
+  // expected on top of the leg's N = 1 set. Unset (the gate), the pinned set is checked unchanged.
+  const pinned = GATE_WARNINGS[`al-runner-v3/${leg}`];
+  if (V3_WORKERS > 1 && cfg.workers !== undefined && !observeRequested())
+    assertGateWarnings(
+      "al-runner-v3",
+      leg,
+      gateWarnings.codes(),
+      pinned === undefined ? undefined : [...pinned, "al-runner-v3-lanes-started"],
+    );
+  else checkGateWarnings("al-runner-v3", leg, gateWarnings);
   const serveLeg = v3ItestLegTransport(leg, process.env).transport !== undefined;
   if (serveLeg) {
     console.log(`  ${leg}: entries ${JSON.stringify(backend.entriesStats())}`);
@@ -1309,6 +1321,80 @@ async function legX(scratch: string, push: (line: string) => void): Promise<void
   must(
     errA instanceof AlcCompileError && /AL0118/.test(errA.message) && ba.spawnCount === 0,
     "X (a)",
+  );
+  // (a') R790b: the same broken batch with the speculative baseline ON (serve-entries, the session's
+  // tests, a budget floor). v3 RAN beside the failing alc proof, yet deploy() throws the error the
+  // same backend throws with it OFF, keeps nothing, and leaves no batch a baseline could run on.
+  // The reference is serve-entries too (it stages one more file than X (a)), and alc's start time is
+  // masked, so only the speculation differs.
+  const suite = ["OverBudgetDetected", "ClampPercentRuns"].map((method) => ({
+    codeunitId: 79100,
+    codeunitName: "Sandbox Tests",
+    method,
+  }));
+  const mkSpec = (dir: string, speculate: boolean) => {
+    const b = new AlRunnerV3Backend(
+      backendCfg({
+        instrumentedDir: join(scratch, dir),
+        testDir: sb,
+        packagesDir: deps,
+        bcVersion: SANDBOX_BC,
+        selectorObjectId: 79199,
+        transport: "serve-entries",
+        speculateBaseline: speculate, // R-798: off by default; set either way, so the env cannot move it
+      }),
+    );
+    b.useBuildSymbols([]);
+    b.useDiscoveredTests(suite);
+    b.useSessionTests(suite);
+    b.useMutantBudgetFloor(180_000, 120_000);
+    return b;
+  };
+  const errText = (e: unknown, dir: string) =>
+    e instanceof Error
+      ? e.message
+          .split(join(scratch, dir))
+          .join("<scratch>")
+          .replace(/ at '\d\d:\d\d:\d\d\.\d+'/g, " at '<time>'")
+      : undefined;
+  const so = mkSpec("xa1", false);
+  const errOff = await so.deploy(broken).catch((e: unknown) => e);
+  const offSpawns = so.spawnCount;
+  await so.close();
+  const sa = mkSpec("xa2", true);
+  const errA2 = await sa.deploy(broken).catch((e: unknown) => e);
+  // The field must exist, or a rename would read "nothing kept" forever.
+  must("speculative" in sa, "X (a'): AlRunnerV3Backend has no `speculative` field");
+  const kept = (sa as unknown as { speculative: unknown }).speculative;
+  const baselineRefused = await sa.activate(null).then(
+    () => false,
+    (e: unknown) => e instanceof Error && /before a successful deploy/.test(e.message),
+  );
+  const offText = errText(errOff, "xa1");
+  const onText = errText(errA2, "xa2");
+  const sameError =
+    errOff instanceof AlcCompileError && offText !== undefined && onText === offText;
+  console.log(
+    `  X (a'): ${errA2 instanceof AlcCompileError ? "AlcCompileError" : String(errA2)}${sameError ? ", the speculation-off text" : ", NOT the speculation-off text"}; speculative v3 spawns ${sa.spawnCount} (off: ${offSpawns}); kept ${kept === undefined ? "none" : "SOME"}; a baseline after it ${baselineRefused ? "refused" : "ALLOWED"}`,
+  );
+  if (!sameError && offText !== undefined && onText !== undefined) {
+    const a = offText.split("\n");
+    const b = onText.split("\n");
+    const i = a.findIndex((l, n) => l !== b[n]);
+    console.log(
+      `  X (a') first differing line ${i}:\n    off ${a[i] ?? "<none>"}\n    on  ${b[i] ?? "<none>"}`,
+    );
+  }
+  await sa.close();
+  must(
+    errA2 instanceof AlcCompileError &&
+      sameError &&
+      /AL0118/.test(offText ?? "") &&
+      offSpawns === 0 &&
+      sa.spawnCount === 1 &&
+      kept === undefined &&
+      baselineRefused,
+    "X (a') (R790b: speculative rows from an alc-rejected batch are discarded)",
   );
   // (b) v3 alone on that folder: exit 7, 1 pass, 1 not run.
   const bDir = join(scratch, "xb");
