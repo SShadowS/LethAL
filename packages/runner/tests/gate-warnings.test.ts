@@ -176,6 +176,7 @@ describe("al-runner-v3 gate and observe mode (R736)", () => {
         "N1",
         "N1E",
         "N1S",
+        "O1",
         "X",
         "D1",
         "D1c",

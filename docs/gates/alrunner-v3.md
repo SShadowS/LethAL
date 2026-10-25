@@ -92,6 +92,25 @@ The legs:
     `(`, `)`, `/`, `&`, `å`, `æ`, in the positions N1S ran them: a letter or digit first, spaces single and inner.
     The dot stays out (#5798, N1E).
   - It is in `V3_GATE_LEGS`. On a build with no serve path (alpha.2) it reads "not applicable".
+- O1 (R784; pre-commitment `docs/superpowers/specs/2026-10-25-r784-order-probe-leg-precommitment.md`, master 6aa7700c):
+  - What it runs: ONE `al-runner serve` daemon takes five requests, each entry one codeunit of
+    `fixtures/sandbox-order-tests` (Writer sets, Reader reports): `[R]`, `[W,R]`, `[R,W]`, `[W1,R1,W2,R2,R3]`, then a
+    new `[R]`. Kinds (7): WorkDate, GlobalLanguage, uncommitted rows, a SingleInstance codeunit in the test app and
+    one in the dependency app (`fixtures/sandbox-order`), NumberSequence, IsolatedStorage. No test commits
+    (al-runner refuses `Commit` under `TestIsolation = Function`), so commit-based state stays unmeasured.
+  - Package sets: the fixture's own (the Microsoft symbols of `sandbox-tests`), and, with `LETHAL_ITEST_V3_CDO`, the
+    CDO `Test/.alpackages` as a read-only package cache (skipped without it, as D1 is). For the CDO set the leg
+    copies the fixture into its scratch dir and adds to the tests app.json the dependencies the CDO Test
+    `app.json` declares (read at run time, Document Output left out), then runs the daemon with `--verbose` and
+    requires exactly 17 distinct `dependency:` lines; any other count is `infra-fail`, so the set cannot pass
+    without the 17-app install.
+  - Figures: every Reader entry reads the defaults (WorkDate = the clock's date, language 1033, rows 0, both marks
+    DEFAULT, number sequence ABSENT, isolated storage ABSENT); every Writer test passes. A writer value in a Reader
+    entry, or a Writer test that does not pass, is `gate-fail`; a daemon that cannot run is `infra-fail`
+    (`judgeOrderProbe`, `r784-order-probe.test.ts`). R778's kill-pair batching rests on this.
+  - O1 does not probe the per-entry `resources` override (the active-mutant file); N1S's per-mutant comparison of batched kill pairs against one-shot covers it indirectly. The judge reads the ANSWER order (execution order is inferred from it) and fails when it differs from the sent order, or when a request does not match the plan.
+  - It is in `V3_GATE_LEGS`. On a build with no serve path (alpha.2) it reads "not applicable". Per R777 the update
+    gate reads `infra-fail` for `current` until it is regated at a commit that has O1.
 - S3: runs no session. It checks that `selectorMode: "resource"` is refused by name
   (`al-runner-v3-resource-selector-refused`).
 - N1: the names fixture (R557's tests are unselectable on v3, upstream #5572).
