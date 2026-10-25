@@ -99,7 +99,11 @@ The legs:
     one in the dependency app (`fixtures/sandbox-order`), NumberSequence, IsolatedStorage. No test commits
     (al-runner refuses `Commit` under `TestIsolation = Function`), so commit-based state stays unmeasured.
   - Package sets: the fixture's own (the Microsoft symbols of `sandbox-tests`), and, with `LETHAL_ITEST_V3_CDO`, the
-    CDO `Test/.alpackages` as a read-only package cache (skipped without it, as D1 is).
+    CDO `Test/.alpackages` as a read-only package cache (skipped without it, as D1 is). For the CDO set the leg
+    copies the fixture into its scratch dir and adds to the tests app.json the dependencies the CDO Test
+    `app.json` declares (read at run time, Document Output left out), then runs the daemon with `--verbose` and
+    requires exactly 17 distinct `dependency:` lines; any other count is `infra-fail`, so the set cannot pass
+    without the 17-app install.
   - Figures: every Reader entry reads the defaults (WorkDate = the clock's date, language 1033, rows 0, both marks
     DEFAULT, number sequence ABSENT, isolated storage ABSENT); every Writer test passes. A writer value in a Reader
     entry, or a Writer test that does not pass, is `gate-fail`; a daemon that cannot run is `infra-fail`
