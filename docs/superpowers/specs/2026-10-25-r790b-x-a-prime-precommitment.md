@@ -25,3 +25,21 @@ X (a′) is a sub-check of leg X, which is already in `V3_GATE_LEGS`. No leg is 
 
 ## The red check (before the submit)
 With the discard disabled (the alc-failure path keeps the speculative calls), leg X must read gate-fail.
+
+## Amendment 1 (2026-10-25, 23:05 UTC): the first live run failed on the error-text pin
+The first live run of leg X at fc8bc677 (`/coord/handoff/R-790b/legX-r790b.log`, `legX-r790b-diag.log`) read: an
+`AlcCompileError`, 1 spawn, nothing kept, a baseline refused. That matches every pin except the text. The text
+differed from X (a)'s in alc's banner line, `Compilation started for project ... containing '3' files at
+'<time>'` (X (a)) against `'4' files` (X (a′)), for two reasons that have nothing to do with the speculation:
+- alc prints its start time, so no two compiles' texts are equal byte for byte. The pin above was wrong.
+- X (a) uses the default transport, and X (a′) uses `serve-entries`, which stages one more file.
+
+The amended pin replaces the first bullet above:
+- X (a′) also runs a REFERENCE backend, identical to X (a′)'s (serve-entries, the same suite and floor) except that
+  speculation is off (today the `noSpeculativeBaseline` seam; once R-798 lands, `speculateBaseline: false`). The
+  reference spawns v3 **0** times, and its error names AL0118.
+- X (a′)'s deploy() throws `AlcCompileError`, and its text equals the reference's once both scratch folders read
+  `<scratch>` and alc's ` at 'hh:mm:ss.fff'` start time reads ` at '<time>'`. Nothing else is masked.
+
+The other pins (1 spawn, nothing kept, a baseline refused) and the red check do not change. When R-798 makes
+speculation opt-in, X (a′) passes `speculateBaseline: true`, with the same pins.
