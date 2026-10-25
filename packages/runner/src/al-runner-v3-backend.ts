@@ -1037,6 +1037,10 @@ class Lane {
   deployedDir: string | undefined;
   /** I-1: `deployedDir` under `realpath`, the form the Sleep index and the argv both use. */
   realActive: string | undefined;
+  /** R785: the LATEST single daemon start plus warm-up of this lane, in ms; 0 before the first. */
+  lastWarmupMs = 0;
+  /** R785: how many daemons this lane has started (a restart changes it). */
+  daemonStarts = 0;
   /** R651: wall ms per phase of this lane. TIMING ONLY: no verdict reads them. */
   readonly timers: Record<V3PhaseTimer, number> = {
     warmupMs: 0,
@@ -2311,6 +2315,29 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     return k;
   }
 
+  /** R785: lane 0's LATEST single daemon start plus warm-up request, in ms; 0 until it ran. */
+  laneWarmupMs(): number {
+    return this.lane.lastWarmupMs;
+  }
+
+  /** R785: lane 0's daemon starts so far; a change during a unit means the unit carried a warm-up. */
+  laneDaemonStarts(): number {
+    return this.lane.daemonStarts;
+  }
+
+  /** R785: false when the shared prefetch already holds this mutant's answer (about 0 ms of live work). */
+  needsLiveCall(mutantId: string): boolean {
+    return !this.prefetched.has(mutantId);
+  }
+
+  /** R785: the one-line notice of how many lanes started. */
+  noteLanes(message: string): void {
+    this.notify(
+      "al-runner-v3-lanes-started",
+      `[lethal] al-runner-v3-lanes-started: ${message} (R785).`,
+    );
+  }
+
   /**
    * R766 (b): the memory hold. A lane beyond lane 0 may start only while at least 10 GB is available;
    * under that the caller stays at the lanes it has, and one notice says so. `os.freemem()` is the
@@ -3155,7 +3182,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    */
   private async ensureDaemon(lane: Lane): Promise<Daemon> {
     if (lane.daemon !== undefined) return lane.daemon;
-    return lane.timed("warmupMs", () => this.startDaemon(lane));
+    const before = lane.timers.warmupMs;
+    const d = await lane.timed("warmupMs", () => this.startDaemon(lane));
+    lane.lastWarmupMs = lane.timers.warmupMs - before; // this start alone, not the session total
+    lane.daemonStarts += 1;
+    return d;
   }
 
   private async startDaemon(lane: Lane): Promise<Daemon> {
