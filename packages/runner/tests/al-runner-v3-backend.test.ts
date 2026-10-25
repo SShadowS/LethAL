@@ -9,6 +9,7 @@ import {
   readFile,
   realpath,
   rm,
+  stat,
   symlink,
   utimes,
   writeFile,
@@ -613,6 +614,31 @@ describe("T22: the proof is bound to the bytes v3 reads (c1-c5)", () => {
       (l) => appendFile(join(l.deps, "Microsoft_System.app"), "x"),
     ],
     ["the test app's app.json changed", (l) => appendFile(join(l.testDir, "app.json"), " ")],
+    [
+      // R767: every send re-hashes every .al byte, so a stat check can never be fooled.
+      "R767: a target .al rewritten at the same size with its mtime restored",
+      async (l) => {
+        const p = join(active(l), "Logic.Codeunit.al");
+        const s = await stat(p);
+        const text = await readFile(p, "utf8");
+        const i = text.search(/[A-Za-z]/);
+        const c = text[i] === "X" ? "Y" : "X";
+        await writeFile(p, text.slice(0, i) + c + text.slice(i + 1));
+        expect((await stat(p)).size).toBe(s.size);
+        // Seconds as a number keep sub-millisecond precision (a Date keeps only whole ms).
+        await utimes(p, s.atimeMs / 1000, s.mtimeMs / 1000);
+        expect((await stat(p)).mtimeMs).toBe(s.mtimeMs);
+      },
+    ],
+    [
+      "R767: an .al file added to active/",
+      (l) => writeFile(join(active(l), "Extra.Codeunit.al"), "codeunit 79151 Extra { }"),
+    ],
+    ["R767: a target .al removed from active/", (l) => rm(join(active(l), "Logic.Codeunit.al"))],
+    [
+      "R767: a test .al added to the test dir",
+      (l) => writeFile(join(l.testDir, "Extra.Codeunit.al"), "codeunit 79152 Extra { }"),
+    ],
     [
       // R631 review L1: drift, never ProjectSymlinkRefusedError (asserted by the class below).
       "R631: a test-dir junction holding an .al appears mid-run",
