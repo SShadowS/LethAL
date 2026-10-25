@@ -197,6 +197,19 @@ let activePin: V3BuildPin | undefined;
 const CACHE = process.env.LETHAL_ALRUNNER_V3_CACHE ?? "/work/tools/al-runtime-rs/cache";
 const ALC = join(process.env.LETHAL_ALC_DIR ?? "", "alc");
 const CDO = process.env.LETHAL_ITEST_V3_CDO;
+/**
+ * R766 (c): `LETHAL_ITEST_V3_WORKERS=<1..8>` runs the D legs with that many serve lanes (the N = 1 vs N = 4
+ * proof). Unset: 1, so the gate is unchanged. Any other value is refused by name.
+ */
+const V3_WORKERS = ((raw) => {
+  if (raw === undefined || raw === "") return 1;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > 8)
+    throw new Error(
+      `al-runner-v3-itest-workers-refused: LETHAL_ITEST_V3_WORKERS=${JSON.stringify(raw)}; allowed: 1..8`,
+    );
+  return n;
+})(process.env.LETHAL_ITEST_V3_WORKERS);
 const TABLES = process.env.LETHAL_ITEST_V3_TABLES === "1";
 /** R635: `{}` unless the transport flags are set (`v3ItestTransport`). */
 const TRANSPORT = v3ItestTransport(process.env);
@@ -626,7 +639,7 @@ async function legN1E(scratch: string, version: string): Promise<void> {
     if (isGateWarningsError(e)) throw e;
     reading = { threw: e instanceof Error ? e.message : String(e) };
   }
-  const j = judgeN1Serve(reading, version);
+  const j = judgeN1Serve(reading, version, activePin?.n1e);
   for (const l of j.lines) console.log(`  N1E: ${l}`);
   if (j.outcome === "held") throw new V3LegHeld(j.lines);
   if (j.outcome === "gate-fail") throw new LegFailure(j.lines.join("; "));
@@ -1607,6 +1620,7 @@ async function legD(scratch: string, leg: "D1" | "D1c"): Promise<void> {
     only: [".dependencies/CDO/Codeunit/CDORecipientMgt.Codeunit.al"],
     testsOnly: ["Src/Recipients/CDORecipientMgtTests.Codeunit.al"],
     dependencyPackageDirs: [join(CDO, "Test", ".alpackages")],
+    ...(V3_WORKERS > 1 ? { workers: V3_WORKERS } : {}),
   });
   if (leg === "D1") assertCounts(r, leg, 51, 12, 0, 63);
   else assertCounts(r, leg, 51, 8, 4, 63);

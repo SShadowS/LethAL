@@ -16,7 +16,14 @@ import {
 import { TABLES_KNOWN_DIFFERENCES } from "../itest/al-runner-v3-tables-known";
 import { type NormalizedMutant, compareMutants } from "../itest/mutant-equality";
 import { BC_END_OF_TEST_TEXT, BC_HTTP_HUB_TEXT } from "../src/al-runner-v3-contract";
-import { V3_BUILD_PINS, applyTPin, findV3Pin, pinPattern } from "../src/al-runner-v3-pins";
+import type { V3ContractResult } from "../src/al-runner-v3-contract";
+import {
+  V3_BUILD_PINS,
+  applyTPin,
+  findV3Pin,
+  pinPattern,
+  sleepRuleRetiredFor,
+} from "../src/al-runner-v3-pins";
 
 const VERSION = "al-runner 3.0.0-alpha.5 (07342060e)";
 const SHA = "fd4d6d406a2f2170fccfe13413d51bbb1317b78b3ef5af3800ca9a6009b51db2";
@@ -679,6 +686,38 @@ describe("R756 edge pin: the edge readings are pinned and pass", () => {
     expect(j.pinned).toBe(true);
     expect(j.lines).toEqual(["T: pinned 7 rows (pin edge-dcdf9e821, #5788)"]);
     expect(judgeLegT(input).outcome).toBe("held");
+  });
+});
+
+describe("R771: the edge build a157b2d34 (alpha.5's readings plus N1E)", () => {
+  const A_VERSION = "al-runner 3.0.0-alpha.5+edge.20261025 (a157b2d34)";
+  const A_SHA = "d9429e53a6938dbafb58108f61ce5408f65389bd9604ff94b4788ef26c8d17fb";
+  const aPin = findV3Pin(A_VERSION, A_SHA);
+  test("version and sha find it; the version with another sha does not", () => {
+    expect(aPin?.id).toBe("edge-a157b2d34");
+    expect(findV3Pin(A_VERSION, flip(A_SHA))).toBeUndefined();
+    expect(findV3Pin(A_VERSION, EDGE_SHA)).toBeUndefined();
+  });
+  test("it shares alpha.5's readings, and sleep-is-noop reads gone", () => {
+    const a = need(pin);
+    const p = need(aPin);
+    expect(p.legC).toBe(a.legC);
+    expect(p.legT).toBe(a.legT);
+    expect(p.xb).toBe(a.xb);
+    expect(p.legC["sleep-is-noop"]?.verdict).toBe("gone");
+  });
+  test("only this pin carries n1e", () => {
+    expect(need(aPin).n1e?.issue).toMatch(/\/5798$/);
+    expect(V3_BUILD_PINS.filter((p) => p.n1e !== undefined).map((p) => p.id)).toEqual([
+      "edge-a157b2d34",
+    ]);
+  });
+  test("the session's sleep rule is retired for it when the probe reads gone", () => {
+    const probe = (verdict: "gone" | "defect-present"): V3ContractResult => ({
+      facts: [{ fact: "sleep-is-noop", kind: "defect", verdict, expected: "x", measured: "m" }],
+    });
+    expect(sleepRuleRetiredFor(probe("gone"), A_VERSION, A_SHA)).toBe(true);
+    expect(sleepRuleRetiredFor(probe("defect-present"), A_VERSION, A_SHA)).toBe(false);
   });
 });
 
