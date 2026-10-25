@@ -21,11 +21,8 @@ import {
 } from "./r402-shapes.ts";
 
 // A shape whose current count differs from expected.json on master, filed as a roadmap item.
-// When R752 lands the counts return to 29 and this goes red until the entry is removed. Do not
-// edit expected.json to hide it.
-const KNOWN_DRIFT: Record<string, { item: string; specs: readonly number[] }> = {
-  w6_var_swallowed_table: { item: "R752", specs: [28, 15, 28, 15] },
-};
+// Do not edit expected.json to hide it. (w6 was held here at 28 until R752 restored 29.)
+const KNOWN_DRIFT: Record<string, { item: string; specs: readonly number[] }> = {};
 
 const names = r402ShapeNames();
 const expected = r402Expected();

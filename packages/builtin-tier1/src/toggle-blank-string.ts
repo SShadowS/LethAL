@@ -1,4 +1,4 @@
-import { inMemberBody } from "@lethal/engine";
+import { bareProjectFieldAt, inMemberBody } from "@lethal/engine";
 import {
   ALNodeKind,
   type ALSyntaxNode,
@@ -11,7 +11,9 @@ import { synthesizeAfter } from "./mutate-helpers";
 const OPERATOR_NAME = "lethal.toggle-blank-string";
 /** R731: 1.1.0, MINOR. A one-character literal assigned to a Char (or an untyped target) is no longer
  *  claimed; no replacement text changes, and the identity tuple reads the major only. */
-const OPERATOR_VERSION = "1.1.0";
+const OPERATOR_VERSION = "1.1.1";
+// R752: 1.1.1, PATCH. A bare field of a project table's implicit record is claimed again (R731
+// refused it as untyped); it can never be a Char.
 
 /**
  * The non-blank stand-in. ONE character, deliberately.
@@ -187,6 +189,7 @@ function oneCharacterMayBeChar(
   if (target === null || target.startIndex === literal.startIndex) return false;
   if (target.rawKind === ALNodeKind.field_access) return false;
   const type = ctx.types.typeOf(target);
+  if (type === null && bareProjectFieldAt(target, ctx)) return false;
   return type === null || /^char$/i.test(type);
 }
 

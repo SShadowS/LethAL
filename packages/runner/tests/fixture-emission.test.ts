@@ -134,7 +134,7 @@ const PINNED: Record<
         "10f84b6c16637b24e3ab5ce39dad281d9ceeaef74f9033d9ec5872a34e135842",
       "MutationUpgrade.Codeunit.al":
         "eb4fb1455bd9f0a1bbc15dda24fd1c61669959332c36c8861d66a56daf44ebe8",
-      "mutant-manifest.json": "d479a04e04213dbbe923edc06278d935fe04b952a7dc8dc98771435f6f834144",
+      "mutant-manifest.json": "ba517a9f9c971e8c762ab2d617d181c7abb5a00efd6c2019576a52ecad5536d4",
     },
   },
   "sandbox-hang": {
@@ -178,7 +178,7 @@ const PINNED: Record<
       "MutationUpgrade.Codeunit.al":
         "42b5f8d119d822359366db5b0c776be4c7c03690f9ab04ae8d5ebfa219370dd1",
       "TwoObjects.Codeunit.al": "7f36f6c33258728c6dfdec37e742730e48627e4f0e92cd325184a1c444b2f740",
-      "mutant-manifest.json": "9865de9f30592a56291a008ec8d0ce766578c6d55797ad66f357c0c329fe7783",
+      "mutant-manifest.json": "22fc823657a020d97521bed837e726f2c1c70f6bddb5fa8acdde31833742659a",
     },
   },
 };

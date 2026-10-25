@@ -673,6 +673,10 @@ describe("R737 review MUST 1: a two-type receiver where one type has no project 
     "Buf.Table.al": BUF,
     "Callee.Codeunit.al": FEED,
     "Q.Codeunit.al": Q,
+    "Q2.Codeunit.al": Q.replace("57203", "57204")
+      .replace('"R572 Q"', '"R572 Q2"')
+      .replace("Touch", "Other"),
+    "Q3.Codeunit.al": Q.replace("57203", "57205").replace('"R572 Q"', '"R572 Q3"'),
     "Loop.Codeunit.al": `codeunit 57201 "R572 Loop"
 {
     procedure Run()
@@ -715,8 +719,128 @@ ${qdecl}
     expect(refusedWith(amb, false)).toBe(true);
   });
 
+  // R751: both types name a project codeunit, but one has no `Touch`: the union is partial.
+  it("B1: two project codeunits where one lacks the called member: refused", () => {
+    const lacks = `#if CLEAN27 && Q
+        Qv: Codeunit "R572 Q2";
+#else
+        Qv: Codeunit "R572 Q";
+#endif`;
+    const src = files(lacks)["Loop.Codeunit.al"];
+    expect(evaluateArms(wrapRoot(parseAL(src)), src, []).kind).toBe("undecided");
+    expect(refusedWith(lacks, true)).toBe(true);
+  });
+
+  it("B2: two project codeunits that both have the member: complete, admitted", () => {
+    const both = `#if CLEAN27 && Q
+        Qv: Codeunit "R572 Q3";
+#else
+        Qv: Codeunit "R572 Q";
+#endif`;
+    expect(refusedWith(both, true)).toBe(false);
+  });
+
   it("controls: plain absent refuses, plain project by-value skips", () => {
     expect(refusedWith(`        Qv: Codeunit "Absent X";`, true)).toBe(true);
     expect(refusedWith(`        Qv: Codeunit "R572 Q";`, true)).toBe(false);
   });
+});
+
+// R752 (build review SHOULD 1): R751 made a two-type union with a type lacking the member PARTIAL
+// (strict reads get []). A PAREN-LESS `Qv.X` was then read as a field read, though T1 has a
+// procedure X (master followed it). T2 has only a FIELD X.
+describe("R752: a paren-less member call on a partial two-type record receiver", () => {
+  const T1 = (body: string) => `table 57210 "R752 T1"
+{
+    fields { field(1; "No."; Integer) { } }
+    var
+        Counter: Integer;
+
+    procedure X(): Integer
+    begin
+${body}
+    end;
+}`;
+  const T2 = (xField: string) => `table 57211 "R752 T2"
+{
+    fields
+    {
+        field(1; "No."; Integer) { }
+${xField}
+    }
+}`;
+  const UNION = `#if CLEAN27 && Q
+        Qv: Record "R752 T2";
+#else
+        Qv: Record "R752 T1";
+#endif`;
+  const withSeam = <T>(seam: boolean, f: () => T): T => {
+    const was = r737Seam.on;
+    r737Seam.on = seam;
+    try {
+      return f();
+    } finally {
+      r737Seam.on = was;
+    }
+  };
+  const XFIELD = "        field(2; X; Integer) { }";
+
+  // (b) r572Stateful: the callee reads `Qv.X`; T1.X touches a table global (stateful)
+  const stateful = (t1: string, t2: string) => ({
+    "T1.al": T1(t1),
+    "T2.al": T2(t2),
+    "Cap.al": `codeunit 57222 "R752 Step"
+{
+    procedure Step(): Boolean
+    var
+        Tag: Text;
+${UNION}
+    begin
+        Tag := 'PL';
+        Tag := Format(Qv.X);
+        exit(Tag = '');
+    end;
+}`,
+    "Loop.al": `codeunit 57221 "R752 StepLoop"
+{
+    procedure Run()
+    var
+        Cap: Codeunit "R752 Step";
+        Done: Boolean;
+    begin
+        repeat
+            Done := Cap.Step();
+        until Done;
+    end;
+}`,
+  });
+  const statefulRefused = (t1: string, t2: string, seam: boolean) =>
+    withSeam(seam, () => project(stateful(t1, t2)).refused("Cap.al", "'PL'"));
+
+  it("(b) r572Stateful: T1.X stateful, T2 only a field X: refused (seam on; off reads one arm)", () => {
+    const src = stateful("        Counter += 1;\n        exit(Counter);", XFIELD)["Cap.al"];
+    expect(evaluateArms(wrapRoot(parseAL(src)), src, []).kind).toBe("undecided");
+    expect(project(stateful("", XFIELD)).state("Cap.al", "Qv")).toBe("unknown");
+    // red when the paren-less branch of r572StatefulOnce reads the partial union as a field read
+    expect(statefulRefused("        Counter += 1;\n        exit(Counter);", XFIELD, true)).toBe(
+      true,
+    );
+  });
+
+  it("(b) control: both types have a FIELD X and no procedure: a field read, not refused (as master)", () => {
+    const files = stateful("", XFIELD);
+    // T1 with a field X and no procedure X
+    files["T1.al"] = `table 57210 "R752 T1"
+{
+    fields
+    {
+        field(1; "No."; Integer) { }
+        field(2; X; Integer) { }
+    }
+}`;
+    for (const seam of [true, false])
+      expect(withSeam(seam, () => project(files).refused("Cap.al", "'PL'"))).toBe(false);
+  });
+
+  // (a) the R570 writer search (r570Scan's viaRec) has no twin here: see the ponytail note there.
 });
