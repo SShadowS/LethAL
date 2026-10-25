@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**22 of 784 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**23 of 785 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -828,6 +828,7 @@ that ordering is the priority.
 - **R789** · The v3 gate's `timeout-is-cpu` fact reads `diverged` on a correct build when other jobs load core 0 · [R789.md](docs/roadmap/R789.md) · done (494082ea, 3ea559ca)
 - **R791** · al-runner edge a157b2d34 is not slower in LethAL's runs; a warm `al-runner test` spends ~4 s more in compile (upstream #5872) · [R791.md](docs/roadmap/R791.md) · done 2026-10-25 (coord task R-791): measured; upstream #5872 filed, waiting on upstream
 - **R792** · v3 "deferred proof" (Design A2): overlap the alc proof with the baseline and the mutant loop, journaling writes until alc joins · [R792.md](docs/roadmap/R792.md) · planned, build after the talk (Tue 27 Oct), after A1 (R790) lands (coord tasks R-793, R-794: taint rate 0/10)
+- **R796** · Upgrade tree-sitter-al from 4.4.1 to 4.5.0: fixes R720's and R327's swallowed members at the root; needs pins, 7 container classifications, 10 test re-pins and a pre-committed identity bump · [R796.md](docs/roadmap/R796.md) · planned, after the talk (Tue 27 Oct)
 - **R790** · v3: run the alc proof alongside the baseline and the mutant loop, and discard the results if alc rejects (the owner's Design A) · [R790.md](docs/roadmap/R790.md) · open, filed 2026-10-25 (coord task R-790, owner idea)
 
 ---

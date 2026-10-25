@@ -202,6 +202,7 @@
     "talk-cut.ts",
     "talk-cut.test.ts",
     "operator-tables.test.ts",
+    "own-timeout.test.ts",
     "operator-tables.ts",
     "probe-fixture-hashes.ts",
     "probe-grammar-crosscheck.test.ts",

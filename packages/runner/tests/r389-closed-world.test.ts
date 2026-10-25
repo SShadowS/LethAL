@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser } from "@lethal/engine";
+import { ownTimeout } from "@lethal/engine/own-timeout";
 import type { ActivationConfig } from "../src/activation";
 import { AlRunnerV3Backend } from "../src/al-runner-v3-backend";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
@@ -143,32 +144,36 @@ describe("R389 HarnessVerifier.fetchDependentCount", () => {
   });
 
   // Sol's review: headers arrive, then the body stalls. The timeout must still fire.
-  test("a body that stalls after the headers times out; the same body delivered is read", async () => {
-    const stalled = (async (_u: unknown, _i?: RequestInit) =>
-      new Response(new ReadableStream({ start() {} }), { status: 200 })) as typeof fetch;
-    await expect(
-      new HarnessVerifier({ ...CFG, timeoutMs: 20 }, stalled).fetchDependentCount(TEST_APP),
-    ).rejects.toThrow(/timed out/);
-    const delivered = (async (_u: unknown, _i?: RequestInit) =>
-      new Response(
-        new ReadableStream({
-          start(c) {
-            c.enqueue(
-              new TextEncoder().encode(
-                JSON.stringify(answer({ appId: TEST_APP, publishedDependents: 0 })),
-              ),
-            );
-            c.close();
-          },
-        }),
-        { status: 200 },
-      )) as typeof fetch;
-    expect(
-      await new HarnessVerifier({ ...CFG, timeoutMs: 20_000 }, delivered).fetchDependentCount(
-        TEST_APP,
-      ),
-    ).toBe(0);
-  }, 2_000);
+  test(
+    "a body that stalls after the headers times out; the same body delivered is read",
+    async () => {
+      const stalled = (async (_u: unknown, _i?: RequestInit) =>
+        new Response(new ReadableStream({ start() {} }), { status: 200 })) as typeof fetch;
+      await expect(
+        new HarnessVerifier({ ...CFG, timeoutMs: 20 }, stalled).fetchDependentCount(TEST_APP),
+      ).rejects.toThrow(/timed out/);
+      const delivered = (async (_u: unknown, _i?: RequestInit) =>
+        new Response(
+          new ReadableStream({
+            start(c) {
+              c.enqueue(
+                new TextEncoder().encode(
+                  JSON.stringify(answer({ appId: TEST_APP, publishedDependents: 0 })),
+                ),
+              );
+              c.close();
+            },
+          }),
+          { status: 200 },
+        )) as typeof fetch;
+      expect(
+        await new HarnessVerifier({ ...CFG, timeoutMs: 20_000 }, delivered).fetchDependentCount(
+          TEST_APP,
+        ),
+      ).toBe(0);
+    },
+    ownTimeout(2_000),
+  );
 });
 
 /** A backend with the optional action, counting its calls. */
