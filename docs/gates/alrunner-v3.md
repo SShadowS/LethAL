@@ -110,8 +110,7 @@ The legs:
     entry, or a Writer test that does not pass, is `gate-fail`; a daemon that cannot run is `infra-fail`
     (`judgeOrderProbe`, `r784-order-probe.test.ts`). R778's kill-pair batching rests on this.
   - O1 does not probe the per-entry `resources` override (the active-mutant file); N1S's per-mutant comparison of batched kill pairs against one-shot covers it indirectly. The judge reads the ANSWER order (execution order is inferred from it) and fails when it differs from the sent order, or when a request does not match the plan.
-  - It is in `V3_GATE_LEGS`. On a build with no serve path (alpha.2) it reads "not applicable". Per R777 the update
-    gate reads `infra-fail` for `current` until it is regated at a commit that has O1.
+  - It is in `V3_GATE_LEGS`. On a build with no serve path (alpha.2) it reads "not applicable".
 - S3: runs no session. It checks that `selectorMode: "resource"` is refused by name
   (`al-runner-v3-resource-selector-refused`).
 - N1: the names fixture (R557's tests are unselectable on v3, upstream #5572).
@@ -284,6 +283,14 @@ N > 1 must equal N = 1: R766's proof found D1 and the gift card identical at N =
   - Outcomes are `--edge`'s at this commit, under new keys only: nothing that already exists under `failed/` or
     `held/` is moved or rewritten. The receipt and `gate.log` are also kept in `rejudge/edge-<sha>@<commit>/`. A
     pass writes `.gated` with `rejudgedFrom` and no `tarballSha256`.
+- A new leg needs no manual regate ([[R777]]). Before the alpha path, `--edge` or `--edge-rejudge` gates a candidate,
+  the script reads `V3_GATE_LEGS` at `.gated`'s commit (`git show`). If that commit lacks any of this script's legs,
+  the log says `stale-gated` and names them, and `current` is first re-gated at the script's own commit, under the
+  same lock. If that re-gate does not pass, `current` stays, and the candidate is judged at the script's commit (so
+  on every leg). The script's commit must have the legs, be on `origin/master` (as the local ref knows it: the
+  script does not fetch) and be newer than `.gated`'s; otherwise no candidate is gated and the run reads `skipped`:
+  `--edge-rejudge` exits 2, and `--edge` does not mark the commit seen. `--edge-rejudge` runs its custody checks
+  before any re-gate.
 - Every gate path (the alpha path, `--regate`, `--edge`, `--edge-rejudge`) holds `<root>/.gate.lock`. A holder is
   live only when its `/proc/<pid>/cmdline` names `al-runner-v3-update`; a dead, reused, empty or unreadable lock is
   taken over unless a process still runs under the gate worktree. A skip is logged with the lock, its holder and
