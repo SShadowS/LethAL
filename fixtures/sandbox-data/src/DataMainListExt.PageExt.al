@@ -10,9 +10,9 @@
 // `SourceTable`, declared on the EXTENDED page, which in a real project is routinely a dependency
 // the source cannot see. Zero of Document Output's 93 pageextensions extend a page it declares.
 //
-// WHY THE WORK HAPPENS IN `OnOpenPage`: a pageextension's procedures are not callable from a test
-// codeunit — nothing outside the page can name them. A trigger is reachable, through a `TestPage`.
-// That is the only way this object's code can execute at all, and whether it executes in LethAL's
+// WHY THE WORK HAPPENS IN `OnOpenPage`: this fixture measures a TRIGGER, reached through a `TestPage`.
+// (A pageextension's procedures ARE callable from a test codeunit through a `Page` variable,
+// measured live on BC 28.4 W1 (bc2) by R-741, R750.) Whether a trigger's code executes in LethAL's
 // `GuiAllowed=No` / `ClientType=ODataV4` session (R57/R60) is what `PageExtCountsMatchingRelated`
 // answers on the live gate.
 pageextension 79321 "Data Main List Ext" extends "Data Main List"
