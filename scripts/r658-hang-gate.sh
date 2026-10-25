@@ -20,11 +20,13 @@ set -u
 unset LETHAL_OUT_OF_USE_OWNER
 SRV=${1:-}
 case "$SRV" in
-  bc2) WANT="server=192.168.2.157:7149" ;;
-  bc3) WANT="server=192.168.2.157:7249" ;;
+  bc2) PORT=7149 ;;
+  bc3) PORT=7249 ;;
   bc1) echo "refused: bc1 is never used for this gate"; exit 2 ;;
   *) echo "refused: server must be bc2 or bc3, got '$SRV'"; exit 2 ;;
 esac
+# This wrapper's own folder, read before any cd: R783's host module is found from it.
+HERE=$(cd "$(dirname "$0")" && pwd)
 # The coord root, as outOfUseDir() resolves it: inside kraken a LETHAL_COORD_ROOT that differs from
 # CG_COORD_ROOT refuses, and a missing <root>/machine refuses (never read as "no marker").
 if [ -n "${KRAKEN_PROJECT:-}" ] && [ -n "${LETHAL_COORD_ROOT:-}" ] && [ "$LETHAL_COORD_ROOT" != "${CG_COORD_ROOT:-}" ]; then
@@ -63,6 +65,11 @@ TL=$(LETHAL_ITEST_CONFIG="$CFG" bun -e 'import { itestConfigPath, printItestTarg
   || { echo "refused: the offline target check failed: $TL"; exit 2; }
 echo "$TL"
 case "$TL" in *":7049"*) echo "refused: the config names bc1 (:7049)"; exit 2 ;; esac
+# R783: the host comes from packages/runner/src/bc-host.ts (LETHAL_BC_HOST, else its default), never
+# a copy here, so a switch of hosts cannot leave this wrapper on the old one.
+BCH=$(bun "$HERE/../packages/runner/src/bc-host.ts" 2>&1) && [[ "$BCH" =~ ^[A-Za-z0-9.-]+$ ]] \
+  || { echo "refused: the BC host is not readable: $BCH"; exit 2; }
+WANT="server=$BCH:$PORT"
 case "$TL" in *"$WANT "*) ;; *) echo "refused: target line does not name $WANT"; exit 2 ;; esac
 # (c) A fresh owner token per run: never printed, never in lease.txt, never exported.
 OWNER=$(openssl rand -hex 16 2>/dev/null)
