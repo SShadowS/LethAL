@@ -107,7 +107,13 @@ import {
   symbolInterfaceForKey,
   testAppCacheKey,
 } from "./al-runner-v3-testapp-cache";
-import { AlcCompileError, ArtifactCompiler, type ArtifactIo, defaultArtifactIo } from "./artifact";
+import {
+  AlcCompileError,
+  ArtifactCompiler,
+  type ArtifactIo,
+  ArtifactPrepareError,
+  defaultArtifactIo,
+} from "./artifact";
 import type {
   BackendCapabilities,
   BackendStatus,
@@ -748,6 +754,39 @@ async function fileSha256(path: string): Promise<string> {
   return sha256Of(new Uint8Array(await readFile(path)));
 }
 
+/**
+ * R790: one one-shot v3 process's answer, before any decode. A speculative baseline call (A1) is
+ * stored in this form and later handed to `callCodeunit`'s own decode, so a served row is read
+ * exactly as a live one.
+ */
+interface SpawnedCall {
+  readonly res: { readonly exitCode: number; readonly stdout: string; readonly stderr: string };
+  readonly wallMs: number;
+  readonly timedOut: boolean;
+  readonly deadlineMs: number;
+  /** The `--coverage-json` text, read when a speculative call ended. */
+  readonly covText?: string;
+}
+
+/** R790: a speculative baseline call, with the two inputs that must match the call it stands in for. */
+interface SpeculativeCall extends SpawnedCall {
+  readonly stopSeconds: number;
+  readonly coverage: boolean;
+}
+
+/**
+ * R790 (c): alc compiled a COPY of the staged batch; its error names the copy's path. Mapped back to
+ * the batch's own path, keeping the class, so the session's error and report read as before.
+ */
+function errorAsIfIn(err: unknown, copy: string, active: string): unknown {
+  if (!(err instanceof AlcCompileError || err instanceof ArtifactPrepareError)) return err;
+  const mapped = err.message.split(copy).join(active);
+  if (mapped === err.message) return err;
+  return err instanceof AlcCompileError
+    ? new AlcCompileError(mapped)
+    : new ArtifactPrepareError(mapped);
+}
+
 /** R780: one read of the test dir: the .al hash, the non-.al files, and the app.json (bytes + text). */
 interface TestDirRead {
   readonly testScan: { readonly hash: string; readonly hasExtensionObject: boolean };
@@ -1040,6 +1079,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     availableBytes?: () => number;
     /** Runs on each lane copy right after it was made, before it is checked against the proof. */
     afterLaneCopy?: (dir: string) => Promise<void>;
+    /** R790: turns the speculative baseline off, for a test that counts the first spawn. */
+    noSpeculativeBaseline?: true;
+    /** R790: runs once the speculative calls ended, before their second binding read. */
+    afterSpeculation?: () => Promise<void>;
   } = {};
   private memoryHoldNoticed = false;
   private fitNoticed = false;
@@ -1078,6 +1121,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   };
 
   private proof: BatchProof | undefined;
+  /** R790 (A1): the baseline calls deploy() ran while alc proved the batch, bound to `dir`'s proof. */
+  private speculative:
+    | { readonly dir: string; readonly calls: Map<number, SpeculativeCall> }
+    | undefined;
   private coverageIndex: AlRunnerCoverageIndex | undefined;
   private sleepIndex: SleepIndex | undefined;
   /** I-1: the test dir under `realpath`, the form the index and the argv both use (the lane holds `active`'s). */
@@ -1569,6 +1616,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.baselineRows = new Map();
     this.union = new Set();
     this.echoId = undefined;
+    this.speculative = undefined; // R790: never served across deploys
   }
 
   /** A batch as v3 reads it: control files dropped, the static selector at the baseline. R635: in
@@ -1624,8 +1672,27 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const artifactId = await this.stage(instrumentedDir, active);
     if (this.entries) this.echoId = await readEchoId(active);
     const { ids } = await readManifestIds(active);
+    // R790 (A1): while alc proves the batch, its one-shot baseline calls run on the same bytes. Their
+    // answers stay private: deploy() still waits for alc and throws exactly its error, and they are
+    // served (once each) only if every byte they read is a byte the proof below records.
+    const speculate =
+      this.entries &&
+      this.budgetFloor !== undefined &&
+      this.suitePerCodeunit.size > 0 &&
+      this.seams.noSpeculativeBaseline !== true;
+    const abort = new AbortController();
+    const spec = speculate ? this.speculateBaseline(active, abort.signal) : undefined;
     // Step 1: the target. AlcCompileError goes to the orchestrator's R461 / bisection path.
-    const target = await this.compileTarget(active);
+    let target: { appPath: string; sha256: string };
+    try {
+      target = speculate ? await this.compileTargetCopy(active) : await this.compileTarget(active);
+    } catch (err) {
+      abort.abort();
+      await spec; // settled, then dropped: nothing from it is kept
+      throw err;
+    }
+    // R790 (c): joined BEFORE the test-app compile, which may write into the test dir (R780).
+    const specDone = await spec;
     try {
       // R780: `pre` (read BEFORE the compile) feeds ONLY the cache key and the hit decision. The
       // proof below comes from a read AFTER a live compile, because real alc can write into the
@@ -1696,7 +1763,196 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.lane.realActive = realActive;
     this.realTestDir = realTest;
     await this.copyLanes(active);
+    // R790 (b): kept only when the bytes were the proved bytes both before and after the calls ran,
+    // and they read the same real paths a live call reads; any mismatch leaves the baseline live.
+    const proof = this.proof;
+    if (
+      specDone !== undefined &&
+      proof !== undefined &&
+      specDone.before === this.proofKey(proof) &&
+      specDone.after === specDone.before &&
+      specDone.realActive === realActive &&
+      specDone.realTest === realTest
+    ) {
+      this.speculative = { dir: active, calls: specDone.calls };
+    }
     return null;
+  }
+
+  /** R790 (c): alc on a COPY of the batch, so it never writes (Translations/*.g.xlf) where a v3 call reads. */
+  private async compileTargetCopy(active: string): Promise<{ appPath: string; sha256: string }> {
+    const copy = join(this.cfg.instrumentedDir, "alc-src");
+    await rm(copy, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    await cp(active, copy, { recursive: true, preserveTimestamps: true });
+    try {
+      return await this.compileTarget(copy);
+    } catch (err) {
+      throw errorAsIfIn(err, copy, active);
+    }
+  }
+
+  /** R790: the bytes v3 reads, as the proof records them (§3): the batch, the test dir, `<deps>`. */
+  private async boundKey(active: string): Promise<string> {
+    const t = await this.readTestDir();
+    return JSON.stringify([
+      await linkIsUnproven(hashAlTree(active), "the staged batch"),
+      await fileSha256(join(active, "app.json")),
+      await listOtherFiles(active, OTHER_FILES_UNBOUND, true),
+      t.testScan.hash,
+      t.testOther,
+      t.testAppJsonSha256,
+      await listDeps(this.cfg.packagesDir, true),
+    ]);
+  }
+
+  private proofKey(p: BatchProof): string {
+    return JSON.stringify([
+      p.activeHashExceptSelector,
+      p.activeAppJsonSha256,
+      p.activeOther,
+      p.testDirHash,
+      p.testOther,
+      p.testAppJsonSha256,
+      p.deps,
+    ]);
+  }
+
+  /**
+   * R790 (A1): the baseline's one-shot calls (one per suite codeunit, at the baseline's stop, with
+   * coverage, exactly as `callCodeunit` makes them inside the baseline bracket), run while alc proves
+   * the batch. `undefined` when anything fails or alc failed (`signal`): the baseline then runs live.
+   */
+  private async speculateBaseline(
+    active: string,
+    signal: AbortSignal,
+  ): Promise<
+    | {
+        readonly before: string;
+        readonly after: string;
+        readonly realActive: string;
+        readonly realTest: string;
+        readonly calls: Map<number, SpeculativeCall>;
+      }
+    | undefined
+  > {
+    try {
+      const f = this.budgetFloor;
+      if (f === undefined) return undefined;
+      const stopSeconds = stopSecondsOf(f.baselineTimeoutMs);
+      const before = await this.boundKey(active);
+      const realActive = await realpath(active);
+      const realTest = await realpath(this.cfg.testDir);
+      const covDir = join(this.cfg.instrumentedDir, "cov");
+      await mkdir(covDir, { recursive: true });
+      await mkdir(this.lane.scratchCwd(), { recursive: true });
+      const calls = new Map<number, SpeculativeCall>();
+      for (const id of [...this.suitePerCodeunit.keys()].sort((a, b) => a - b)) {
+        if (signal.aborted) return undefined;
+        this.callSeq += 1;
+        const covPath = join(covDir, `spec-${this.callSeq}.json`);
+        await rm(covPath, { force: true });
+        const made = await this.spawnCodeunit({
+          id,
+          stopSeconds,
+          coverageJson: covPath,
+          cwd: this.lane.scratchCwd(),
+          activeDir: realActive,
+          testDir: realTest,
+          signal,
+        });
+        if (signal.aborted) return undefined;
+        let covText: string | undefined;
+        try {
+          covText = await readFile(covPath, "utf8");
+        } catch {
+          covText = undefined;
+        }
+        await rm(covPath, { force: true }).catch(() => {});
+        // A spawn that failed is not kept: that codeunit's baseline call runs live.
+        if ("spawnError" in made) continue;
+        calls.set(id, {
+          ...made,
+          ...(covText !== undefined ? { covText } : {}),
+          stopSeconds,
+          coverage: true,
+        });
+      }
+      await this.seams.afterSpeculation?.();
+      const after = await this.boundKey(active);
+      return { before, after, realActive, realTest, calls };
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** R790: a speculative baseline call for codeunit `id`, taken (once) when it matches this call. */
+  private takeSpeculative(
+    lane: Lane,
+    id: number,
+    stopSeconds: number,
+    coverage: boolean,
+  ): SpawnedCall | undefined {
+    const s = this.speculative;
+    if (s === undefined || !this.inBaseline || lane.lastActivated !== null) return undefined;
+    if (lane.deployedDir !== s.dir) return undefined;
+    const c = s.calls.get(id);
+    if (c === undefined) return undefined;
+    s.calls.delete(id);
+    return c.stopSeconds === stopSeconds && c.coverage === coverage ? c : undefined;
+  }
+
+  /** R790: one v3 process for codeunit `id`; `beforeSpawn` is the last await before it starts. */
+  private async spawnCodeunit(o: {
+    readonly id: number;
+    readonly stopSeconds: number;
+    readonly coverageJson: string | undefined;
+    readonly cwd: string;
+    readonly activeDir: string;
+    readonly testDir: string;
+    readonly beforeSpawn?: () => Promise<void>;
+    readonly signal?: AbortSignal;
+  }): Promise<SpawnedCall | { readonly spawnError: string; readonly wallMs: number }> {
+    const argv = v3CallArgv({
+      alRunnerPath: absToolPath(this.cfg.alRunnerPath),
+      codeunitId: o.id,
+      stopSeconds: o.stopSeconds,
+      packagesDir: resolve(this.cfg.packagesDir),
+      bcVersion: this.cfg.bcVersion,
+      symbols: this.cfg.preprocessorSymbols ?? [],
+      ...(o.coverageJson !== undefined ? { coverageJson: resolve(o.coverageJson) } : {}),
+      activeDir: o.activeDir,
+      testDir: o.testDir,
+    });
+    await o.beforeSpawn?.();
+    const deadlineMs = v3CallDeadlineMs(o.stopSeconds, this.testsPerCodeunit.get(o.id) ?? 1);
+    const controller = new AbortController();
+    const onAbort = () => controller.abort();
+    o.signal?.addEventListener("abort", onAbort);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, deadlineMs);
+    const started = Date.now();
+    this.spawnCount += 1;
+    this.transportFrozen = true; // R761
+    try {
+      const res = await this.spawn(argv, {
+        signal: controller.signal,
+        // R645: v3 writes coverage.cobertura.xml into its cwd; never the caller's.
+        cwd: o.cwd,
+        ...this.cacheEnv(),
+      });
+      return { res, wallMs: Date.now() - started, timedOut, deadlineMs };
+    } catch (err) {
+      return {
+        spawnError: err instanceof Error ? err.message : String(err),
+        wallMs: Date.now() - started,
+      };
+    } finally {
+      clearTimeout(timer);
+      o.signal?.removeEventListener("abort", onAbort);
+    }
   }
 
   /**
@@ -2515,50 +2771,34 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // R-762 B: a mutant call on a pinned-gone build asks for no coverage (nothing reads it). The
     // baseline test is `isBaselineCall` (as in the verdict path), so one-shot and serve-entries agree.
     const coverageRequested = !noCoverage && !(this.sleepRuleRetired && !this.isBaselineCall(lane));
-    const argv = v3CallArgv({
-      alRunnerPath: absToolPath(this.cfg.alRunnerPath),
-      codeunitId: id,
-      stopSeconds,
-      packagesDir: resolve(this.cfg.packagesDir),
-      bcVersion: this.cfg.bcVersion,
-      symbols: this.cfg.preprocessorSymbols ?? [],
-      ...(coverageRequested ? { coverageJson: resolve(covPath) } : {}),
-      // I-1: the same real paths the Sleep index is keyed by.
-      activeDir: lane.realActive ?? resolve(lane.activeDir()),
-      testDir: this.realTestDir ?? resolve(this.cfg.testDir),
-    });
-    // R652: the last await before the spawn; nothing below reads the disk before v3 does.
-    await this.checkBound(lane);
-    const deadlineMs = v3CallDeadlineMs(stopSeconds, this.testsPerCodeunit.get(id) ?? 1);
-    const controller = new AbortController();
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-    }, deadlineMs);
-    const started = Date.now();
-    let res: { exitCode: number; stdout: string; stderr: string };
-    this.spawnCount += 1;
-    this.transportFrozen = true; // R761
-    try {
-      res = await this.spawn(argv, {
-        signal: controller.signal,
-        // R645: v3 writes coverage.cobertura.xml into its cwd; never the caller's.
+    // R790 (A1): a baseline call deploy() already ran, on the proved bytes, is served once instead of
+    // a spawn; everything below reads its raw answer exactly as a live one's.
+    const spec = this.takeSpeculative(lane, id, stopSeconds, coverageRequested);
+    let raw: SpawnedCall;
+    if (spec !== undefined) {
+      // R652: still checked, as before a send: the bytes now are the proved bytes.
+      await this.checkBound(lane);
+      raw = spec;
+    } else {
+      const made = await this.spawnCodeunit({
+        id,
+        stopSeconds,
+        coverageJson: coverageRequested ? covPath : undefined,
         cwd: lane.scratchCwd(),
-        ...this.cacheEnv(),
+        // I-1: the same real paths the Sleep index is keyed by.
+        activeDir: lane.realActive ?? resolve(lane.activeDir()),
+        testDir: this.realTestDir ?? resolve(this.cfg.testDir),
+        // R652: the last await before the spawn; nothing below reads the disk before v3 does.
+        beforeSpawn: () => this.checkBound(lane),
       });
-    } catch (err) {
-      clearTimeout(timer);
-      return {
-        verdict: transportFailure(
-          ref,
-          `could not run v3: ${err instanceof Error ? err.message : String(err)}`,
-          Date.now() - started,
-        ),
-      };
+      if ("spawnError" in made) {
+        return {
+          verdict: transportFailure(ref, `could not run v3: ${made.spawnError}`, made.wallMs),
+        };
+      }
+      raw = made;
     }
-    clearTimeout(timer);
-    const wallMs = Date.now() - started;
+    const { res, wallMs, timedOut, deadlineMs } = raw;
     // R590: first, so a skipped dependency is named as the cause, not a later symptom.
     refuseDependencySkip(res.stderr);
     if (timedOut) {
@@ -2613,12 +2853,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       await this.coverageTamper(covPath);
     }
     let covText: string | undefined;
-    try {
-      covText = await readFile(covPath, "utf8");
-    } catch {
-      covText = undefined;
+    if (spec !== undefined) {
+      covText = spec.covText; // read when its call ended, before deploy() returned
+    } else {
+      try {
+        covText = await readFile(covPath, "utf8");
+      } catch {
+        covText = undefined;
+      }
+      await rm(covPath, { force: true }).catch(() => {});
     }
-    await rm(covPath, { force: true }).catch(() => {});
     const call: CallRows = {
       rows: decoded.rows,
       stopSeconds,

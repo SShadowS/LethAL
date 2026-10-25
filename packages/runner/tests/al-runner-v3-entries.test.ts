@@ -46,7 +46,7 @@ import {
   encodeGroups,
   assertEntriesWellFormed as wellFormed,
 } from "../src/al-runner-v3-entries";
-import type { ArtifactIo } from "../src/artifact";
+import { AlcCompileError, type ArtifactIo, ArtifactPrepareError } from "../src/artifact";
 import type { RunOpts, TestMethodRef, TestVerdict } from "../src/backend";
 import { buildBackend } from "../src/cli";
 import type { SpawnFn } from "../src/publisher";
@@ -486,6 +486,8 @@ interface RigOpts {
   now?: () => number;
   /** R778: the kill-pair batch after the prefetch; off unless a test asks, so R653's tests see today's pair. */
   pairBatch?: boolean;
+  /** R790: backend test seams, set before the deploy. */
+  seams?: AlRunnerV3Backend["seams"];
 }
 
 async function rig(opts: RigOpts = {}): Promise<Rig> {
@@ -516,6 +518,7 @@ async function rig(opts: RigOpts = {}): Promise<Rig> {
   b.useDiscoveredTests(suite);
   b.useSessionTests(suite);
   if (opts.floor !== false) b.useMutantBudgetFloor(...(opts.floor ?? [1000, 1000]));
+  Object.assign(b.seams, opts.seams ?? {});
   await b.deploy(l.batch);
   return { l, b, serve, one };
 }
@@ -3665,7 +3668,8 @@ describe("R761: a real first spawn freezes the transport decision", () => {
   });
 
   test("a daemon start (startDaemon) freezes it", async () => {
-    const r = await rig();
+    // R790: no speculative baseline, whose one-shot calls in deploy() would freeze it first.
+    const r = await rig({ seams: { noSpeculativeBaseline: true } });
     // The one-shot baseline spawn would freeze it; a daemon start alone must too.
     const priv = r.b as unknown as { startDaemon(lane: unknown): Promise<unknown>; lane: unknown };
     await priv.startDaemon(priv.lane);
@@ -4131,5 +4135,142 @@ describe("R778: kill pairs batched after the prefetch", () => {
       expect(batchStats(r)).toMatchObject({ served: 0, refused: 0 });
       expect(r.b.entriesStats().pairRequests).toBe(2);
     });
+  });
+});
+
+// R790 (A1, the owner's Design A): deploy() runs the baseline's one-shot calls while alc proves the
+// batch, keeps their answers private, still waits for alc, and serves them once only when every byte
+// they read is a byte the proof records. Call counters on the fakes, no wall clock.
+describe("R790: the speculative baseline", () => {
+  /** alc that rejects (or cannot start) the BATCH compile only; the test-app compile passes. */
+  const batchAlc = (how: "reject" | "spawn"): ArtifactIo => {
+    const ok = fakeAlc();
+    return {
+      ...ok,
+      spawn: async (argv, o) => {
+        const out = (argv.find((a) => a.startsWith("/out:")) ?? "").slice(5);
+        if (!out.includes("v3-batch")) return ok.spawn(argv, o);
+        if (how === "spawn") throw new Error("alc could not be started");
+        const project = (argv.find((a) => a.startsWith("/project:")) ?? "").slice(9);
+        return {
+          exitCode: 1,
+          stdout: `${project}/src/Logic.al(1,1): error AL0118: boom`,
+          stderr: "",
+        };
+      },
+    };
+  };
+  async function deployWith(alc: ArtifactIo | undefined, speculate: boolean) {
+    const l = await layout(TARGET_AL, SUITE1);
+    const one = fakeOneShot(allPass);
+    const serve = fakeServe();
+    const b = new AlRunnerV3Backend(
+      {
+        alRunnerPath: "/fake/al-runner",
+        instrumentedDir: l.scratch,
+        testDir: l.testDir,
+        packagesDir: l.deps,
+        bcVersion: "28.0.46665.47126",
+        selectorObjectId: SELECTOR_ID,
+        alcPath: "/fake/alc",
+        coverage: "none",
+        transport: "serve-entries",
+      },
+      one.spawn,
+      alc ?? fakeAlc(),
+      serve.spawn,
+    );
+    b.useBuildSymbols([]);
+    b.useDiscoveredTests(SUITE1);
+    b.useSessionTests(SUITE1);
+    b.useMutantBudgetFloor(1000, 1000);
+    if (!speculate) b.seams.noSpeculativeBaseline = true;
+    const err = await b.deploy(l.batch).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    return { l, b, one, err };
+  }
+  const speculative = (b: AlRunnerV3Backend) =>
+    (b as unknown as { speculative: unknown }).speculative;
+  const shape = (e: unknown, root: string) =>
+    e instanceof Error ? [e.constructor.name, e.message.split(root).join("<root>")] : [String(e)];
+
+  test("alc passes: the baseline is served from the calls deploy() made, equal to the sequential baseline", async () => {
+    const spec = await deployWith(undefined, true);
+    const seq = await deployWith(undefined, false);
+    expect([spec.err, seq.err]).toEqual([undefined, undefined]);
+    // The speculative calls ran inside deploy(): one per suite codeunit; the sequential deploy made none.
+    expect(spec.one.calls).toHaveLength(1);
+    expect(seq.one.calls).toHaveLength(0);
+    const a = await baseline(spec.b, SUITE1);
+    const s = await baseline(seq.b, SUITE1);
+    // Served, not re-run: no new one-shot call in the baseline; the sequential one made its call there.
+    expect(spec.one.calls).toHaveLength(1);
+    expect(seq.one.calls).toHaveLength(1);
+    const plain = (vs: TestVerdict[]) => vs.map((v) => ({ ...v, durationMs: 0 }));
+    expect(plain(a)).toEqual(plain(s));
+  });
+
+  test("served once: a second baseline runs live", async () => {
+    const r = await deployWith(undefined, true);
+    await baseline(r.b, SUITE1);
+    expect(r.one.calls).toHaveLength(1);
+    await baseline(r.b, SUITE1);
+    expect(r.one.calls).toHaveLength(2);
+  });
+
+  test("alc rejects: deploy() throws today's AlcCompileError, with the batch's own path, and nothing is kept", async () => {
+    const spec = await deployWith(batchAlc("reject"), true);
+    const seq = await deployWith(batchAlc("reject"), false);
+    expect(spec.err).toBeInstanceOf(AlcCompileError);
+    expect(shape(spec.err, spec.l.root)).toEqual(shape(seq.err, seq.l.root));
+    expect((spec.err as Error).message).not.toContain("alc-src");
+    expect(speculative(spec.b)).toBeUndefined();
+    // Nothing can reach a baseline or a store: there is no deployed batch.
+    await expect(spec.b.activate(null)).rejects.toThrow("before a successful deploy");
+  });
+
+  test("alc cannot start: ArtifactPrepareError aborts as today, and nothing is kept", async () => {
+    const spec = await deployWith(batchAlc("spawn"), true);
+    const seq = await deployWith(batchAlc("spawn"), false);
+    expect(spec.err).toBeInstanceOf(ArtifactPrepareError);
+    expect(spec.err).not.toBeInstanceOf(AlcCompileError);
+    expect(shape(spec.err, spec.l.root)).toEqual(shape(seq.err, seq.l.root));
+    expect(speculative(spec.b)).toBeUndefined();
+  });
+
+  test("a byte that changes while the calls run: never served, the baseline runs live", async () => {
+    const l = await layout(TARGET_AL, SUITE1);
+    const one = fakeOneShot(allPass);
+    const b = new AlRunnerV3Backend(
+      {
+        alRunnerPath: "/fake/al-runner",
+        instrumentedDir: l.scratch,
+        testDir: l.testDir,
+        packagesDir: l.deps,
+        bcVersion: "28.0.46665.47126",
+        selectorObjectId: SELECTOR_ID,
+        alcPath: "/fake/alc",
+        coverage: "none",
+        transport: "serve-entries",
+      },
+      one.spawn,
+      fakeAlc(),
+      fakeServe().spawn,
+    );
+    b.useBuildSymbols([]);
+    b.useDiscoveredTests(SUITE1);
+    b.useSessionTests(SUITE1);
+    b.useMutantBudgetFloor(1000, 1000);
+    // The test dir changes after the speculative calls read it (and before the proof reads it).
+    b.seams.afterSpeculation = async () => {
+      await writeFile(join(l.testDir, "Late.Codeunit.al"), 'codeunit 79999 "Late" { }');
+    };
+    await b.deploy(l.batch);
+    expect(one.calls).toHaveLength(1);
+    expect(speculative(b)).toBeUndefined();
+    await baseline(b, SUITE1);
+    expect(one.calls).toHaveLength(2);
   });
 });
