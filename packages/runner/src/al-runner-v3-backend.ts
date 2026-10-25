@@ -12,7 +12,9 @@
  *   (#5572). So one call per test codeunit, `--codeunit <id>`, rows read by `codeunit` + `method`.
  * - A not-run row is never killed and never survived; a timeout row is a CPU-time stop (§5).
  * - `Sleep` does nothing (#5605): a covering pass that reaches a project Sleep reads `error` (§6,
- *   `al-runner-v3-sleep.ts`).
+ *   `al-runner-v3-sleep.ts`). EXCEPT (R-762 B) on a pinned build whose pin and session probe both
+ *   read `sleep-is-noop` gone (`sleepRuleRetiredFor`): there §6 is off, a mutant call passes no
+ *   `--coverage-json`, and serve-entries opens no coverage window.
  * The static selector is one-shot's (`selectorMode: "resource"` is refused by name).
  * R635 adds the transport `transport: "serve-entries"`, the default since R761 where it is proven
  * (else one-shot, with a named warning; an explicit key is honoured; see `decideTransport`) (plan
@@ -73,7 +75,7 @@ import {
   serveRow,
 } from "./al-runner-v3-entries";
 import { AlRunnerV3UngatedBuildError, V3_NO_SERVE_ENTRIES, checkGated } from "./al-runner-v3-pin";
-import { pinnedDefectCoverage } from "./al-runner-v3-pins";
+import { pinnedDefectCoverage, sleepRuleRetiredFor } from "./al-runner-v3-pins";
 import {
   FRESH_PROBE_ENV,
   type ProbeCacheKey,
@@ -1102,6 +1104,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const kind = { candidate: this.cfg.candidate === true };
     // R719: a fact the running build's pin already covers (exact fact and outcome) is not warned
     // about; the session prints one pin line instead, so a pinned build is never fully silent.
+    this.sleepRuleRetired = sleepRuleRetiredFor(this.contract, reported, binarySha256);
     const covered = pinnedDefectCoverage(this.contract, reported, binarySha256);
     if (covered !== undefined) console.warn(covered.line);
     for (const line of v3DefectWarnings(this.contract, { ...kind, muted: covered?.muted }))
@@ -1145,6 +1148,19 @@ export class AlRunnerV3Backend implements ExecutionBackend {
 
   contractResult(): V3ContractResult | undefined {
     return this.contract;
+  }
+
+  /**
+   * R-762 B: decided once per `status()`. True only for a pinned build whose pin AND this session's
+   * probe both read `sleep-is-noop` gone: then no covering pass under a mutant meets §6, no mutant
+   * call asks for `--coverage-json`, and serve-entries opens no coverage window. The baseline keeps
+   * its coverage. Default false (the rule applies).
+   */
+  private sleepRuleRetired = false;
+
+  /** R-762 B: the switch, as the last `status()` decided it (the gate's X legs read it). */
+  isSleepRuleRetired(): boolean {
+    return this.sleepRuleRetired;
   }
 
   private build: { readonly version: string; readonly binarySha256: string } | undefined;
@@ -1799,6 +1815,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // §6 on RAW lines whatever the session's coverage mode (none, or refused for a multi-object
     // or wrapped file): every call requested --coverage-json (`v3CallArgv`).
     if (verdict.outcome === "pass") {
+      // R-762 B: on a pinned-gone build a Sleep costs its real (virtual) time, so a covering pass
+      // is a pass; no join, no window, no second echo. B2's virtual-clock guard above stays.
+      if (this.sleepRuleRetired) return verdict;
       const index = this.sleepIndex;
       if (index === undefined)
         throw new Error("al-runner-v3: no Sleep index for the deployed batch");
@@ -1954,6 +1973,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.callSeq += 1;
     const covPath = join(covDir, `call-${this.callSeq}.json`);
     await rm(covPath, { force: true });
+    // R-762 B: a mutant call on a pinned-gone build asks for no coverage (nothing reads it). The
+    // baseline test is `isBaselineCall` (as in the verdict path), so one-shot and serve-entries agree.
+    const coverageRequested = !noCoverage && !(this.sleepRuleRetired && !this.isBaselineCall());
     const argv = v3CallArgv({
       alRunnerPath: absToolPath(this.cfg.alRunnerPath),
       codeunitId: id,
@@ -1961,7 +1983,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       packagesDir: resolve(this.cfg.packagesDir),
       bcVersion: this.cfg.bcVersion,
       symbols: this.cfg.preprocessorSymbols ?? [],
-      ...(noCoverage ? {} : { coverageJson: resolve(covPath) }),
+      ...(coverageRequested ? { coverageJson: resolve(covPath) } : {}),
       // I-1: the same real paths the Sleep index is keyed by.
       activeDir: lane.realActive ?? resolve(lane.activeDir()),
       testDir: this.realTestDir ?? resolve(this.cfg.testDir),
@@ -2047,7 +2069,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         };
       }
     }
-    if (this.coverageTamper !== undefined && lane.lastActivated !== null) {
+    if (this.coverageTamper !== undefined && coverageRequested && lane.lastActivated !== null) {
       await this.coverageTamper(covPath);
     }
     let covText: string | undefined;

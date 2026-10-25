@@ -510,6 +510,204 @@ describe("R639 r9 §2: status() passes candidate into the unlike-bc refusals and
   });
 });
 
+describe("R-762 B: the §6 Sleep rule is retired only on a pinned build whose probe reads sleep-is-noop gone", () => {
+  const LOGIC = `codeunit 79000 "Logic"
+{
+    procedure Twice(X: Integer): Integer
+    begin
+        Sleep(600000);
+        exit(X * 2);
+    end;
+}
+`;
+  // A covers the Sleep on line 5 of Logic (a covering pass with a Sleep hit).
+  const hitCov = (_id: string, active: string, testDir: string) => ({
+    coverage: [
+      { file: join(testDir, "Tests.Codeunit.al"), statements: [{ line: 7, hits: 1 }] },
+      {
+        file: join(active, "Logic.Codeunit.al"),
+        statements: [
+          { line: 5, hits: 1 },
+          { line: 6, hits: 1 },
+        ],
+      },
+    ],
+    perTestCoverage: ["A", "B"].map((m) => ({
+      test: `Codeunit${CU}.${m}`,
+      coverage: [
+        { file: join(testDir, "Tests.Codeunit.al"), statements: [{ line: 7, hits: 1 }] },
+        ...(m === "A"
+          ? [
+              {
+                file: join(active, "Logic.Codeunit.al"),
+                statements: [
+                  { line: 5, hits: 1 },
+                  { line: 6, hits: 1 },
+                ],
+              },
+            ]
+          : []),
+      ],
+    })),
+  });
+  async function setup(retired: boolean, rows: () => FakeRow[] = allPass) {
+    const l = await layout(LOGIC);
+    const v3 = fakeV3(rows, { coverage: hitCov });
+    const b = backendOf(l, v3.spawn, fakeAlc().io, { coverage: "al-runner" });
+    b.useBuildSymbols([]);
+    // The probe is tested elsewhere; seed the switch as status() decides it.
+    (b as unknown as { sleepRuleRetired: boolean }).sleepRuleRetired = retired;
+    await b.deploy(l.batch);
+    return { b, v3 };
+  }
+  const runA = (b: AlRunnerV3Backend) =>
+    b.run(ref("A"), { coverage: "al-runner", timeoutMs: 1000 });
+
+  test("retired: a covering pass with a Sleep hit under a mutant is a pass; its call has no --coverage-json", async () => {
+    const { b, v3 } = await setup(true);
+    expect(b.sleepIndexSize()).toEqual({ target: 1, test: 0 });
+    await b.activate("M0001");
+    const v = await runA(b);
+    expect([v.outcome, v.runnerRow, v.failureMessage]).toEqual(["pass", undefined, undefined]);
+    expect(v3.calls).toHaveLength(1);
+    expect(v3.calls[0]).not.toContain("--coverage-json");
+  });
+
+  test("retired: the baseline call keeps --coverage-json and its coverage", async () => {
+    const { b, v3 } = await setup(true);
+    await b.activate(null);
+    const v = await runA(b);
+    expect(v.outcome).toBe("pass");
+    expect(v3.calls[0]).toContain("--coverage-json");
+    expect(v.coverage?.entries.length ?? 0).toBeGreaterThan(0);
+  });
+
+  test("not retired: the same input reads error/runner-refused with the note, and the call has the flag", async () => {
+    const { b, v3 } = await setup(false);
+    await b.activate("M0001");
+    const v = await runA(b);
+    expect([v.outcome, v.runnerRow]).toEqual(["error", "runner-refused"]);
+    expect(v.failureMessage?.startsWith("[v3-sleep-noop] covered Sleep at")).toBe(true);
+    expect(v3.calls[0]).toContain("--coverage-json");
+  });
+
+  test("retired: a mutant call does not call the coverageTamper hook (no file to tamper); unpinned still does, on an existing file", async () => {
+    for (const retired of [true, false]) {
+      const { b } = await setup(retired);
+      const seen: boolean[] = [];
+      b.coverageTamper = async (p) => {
+        seen.push(await Bun.file(p).exists());
+      };
+      await b.activate("M0001");
+      await runA(b);
+      expect(seen).toEqual(retired ? [] : [true]);
+    }
+  });
+
+  test("retired: B2's virtual-clock guard still refuses a timeout shorter than its stop", async () => {
+    const stop = () => [
+      {
+        method: "A",
+        status: "error" as const,
+        notRun: true,
+        message: "Test exceeded 3s timeout.",
+        durationMs: 40,
+      },
+      { method: "B", status: "pass" as const },
+    ];
+    const { b } = await setup(true, stop);
+    await b.activate("M0001");
+    b.useCoveringBudgets("M0001", [{ ref: ref("A"), budgetMs: 3000 }]);
+    const v = await b.run(ref("A"), { coverage: "al-runner", timeoutMs: 3000 });
+    expect([v.outcome, v.runnerRow]).toEqual(["error", "runner-refused"]);
+    expect(v.failureMessage).toContain("virtual clock");
+  });
+
+  describe("sleepRuleRetiredFor: the pin AND the session probe", () => {
+    const pin = pinsNs.V3_BUILD_PINS[pinsNs.V3_BUILD_PINS.length - 1];
+    const probe = (verdict: string): V3ContractResult => ({
+      facts: [
+        {
+          fact: "sleep-is-noop",
+          kind: "defect",
+          verdict: verdict as "gone",
+          expected: "x",
+          measured: "m",
+        },
+      ],
+    });
+    test("every pinned-gone build with a gone probe retires the rule", () => {
+      for (const p of pinsNs.V3_BUILD_PINS)
+        expect(pinsNs.sleepRuleRetiredFor(probe("gone"), p.version, p.binarySha256)).toBe(true);
+    });
+    test("a pinned binary whose probe reads defect-present keeps the rule", () => {
+      expect(
+        pinsNs.sleepRuleRetiredFor(
+          probe("defect-present"),
+          pin?.version ?? "",
+          pin?.binarySha256 ?? "",
+        ),
+      ).toBe(false);
+    });
+    test("a pinned binary with no probe result or no sleep fact keeps the rule", () => {
+      expect(
+        pinsNs.sleepRuleRetiredFor(undefined, pin?.version ?? "", pin?.binarySha256 ?? ""),
+      ).toBe(false);
+      expect(
+        pinsNs.sleepRuleRetiredFor({ facts: [] }, pin?.version ?? "", pin?.binarySha256 ?? ""),
+      ).toBe(false);
+    });
+    test("an unpinned build (right version, wrong sha; unknown version) keeps the rule", () => {
+      expect(pinsNs.sleepRuleRetiredFor(probe("gone"), pin?.version ?? "", "0".repeat(64))).toBe(
+        false,
+      );
+      expect(
+        pinsNs.sleepRuleRetiredFor(
+          probe("gone"),
+          "alrunner 3.0.0-alpha.2 (91253f2d6)",
+          "0".repeat(64),
+        ),
+      ).toBe(false);
+    });
+  });
+
+  test("status() sets the switch from sleepRuleRetiredFor with the session's probe, version and sha", async () => {
+    const VERSION = "al-runner 3.0.0-alpha.5+edge.20261024 (dcdf9e821)";
+    const versionOnly: SpawnFn = async () => ({ exitCode: 0, stdout: `${VERSION}\n`, stderr: "" });
+    const l = await layout();
+    const NS = 'xmlns="http://schemas.microsoft.com/navx/2015/manifest"';
+    await writeFile(
+      join(l.deps, "Microsoft_System Application.app"),
+      buildFakeAppWithEntries({
+        "NavxManifest.xml": `<?xml version="1.0"?><Package ${NS}><App Id="1" Name="System Application" Publisher="Microsoft" Version="28.0.46665.47126" /></Package>`,
+      }),
+    );
+    const bin = join(l.root, "al-runner");
+    await writeFile(bin, "binary");
+    await writeFile(
+      join(l.root, ".gated"),
+      JSON.stringify({
+        version: VERSION,
+        binarySha256: await sha256OfFile(bin),
+        lethalCommit: "a".repeat(40),
+      }),
+    );
+    const b = backendOf(l, versionOnly, fakeAlc().io, { alRunnerPath: bin });
+    const contract: V3ContractResult = { facts: [] };
+    (b as unknown as { contract: V3ContractResult }).contract = contract;
+    const spy = spyOn(pinsNs, "sleepRuleRetiredFor").mockReturnValue(true);
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await b.status();
+      expect(spy.mock.calls[0]).toEqual([contract, VERSION, await sha256OfFile(bin)]);
+      expect(b.isSleepRuleRetired()).toBe(true);
+    } finally {
+      spy.mockRestore();
+      warn.mockRestore();
+    }
+  });
+});
+
 describe("T3, T4, T23", () => {
   test("T3: two static selectors differ only in the id literal", () => {
     const a = emitStaticSelector({
