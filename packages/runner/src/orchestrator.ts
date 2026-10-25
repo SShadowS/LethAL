@@ -189,6 +189,7 @@ import {
   MAX_V3_WORKERS,
   OrderedCommit,
   asParallelOwner,
+  lanesNotice,
   runScopeQueue,
   splitBackend,
 } from "./parallel-queue";
@@ -11921,6 +11922,7 @@ async function runMutantsParallel(
       affordableLanes?: (n: number) => number;
       laneWarmupMs?: () => number;
       needsLiveCall?: (mutantId: string) => boolean;
+      laneDaemonStarts?: () => number;
       noteLanes?: (message: string) => void;
     };
     readonly lanes: readonly ExecutionBackend[];
@@ -11950,7 +11952,7 @@ async function runMutantsParallel(
   const cap = owner.affordableLanes?.(asked) ?? asked;
   const { laneWarmupMs, needsLiveCall } = owner;
   const paced = laneWarmupMs !== undefined && needsLiveCall !== undefined;
-  const { started, warmupMs } = await runScopeQueue({
+  const { started, warmupMs, reason } = await runScopeQueue({
     units: [...units.values()],
     lanes: cap,
     // R785: `--workers N` is an upper bound; an owner that cannot say its warm-up starts all lanes.
@@ -11966,6 +11968,9 @@ async function runMutantsParallel(
                   needsLiveCall.call(owner, m.mutantId),
               ).length,
             now: () => performance.now(),
+            ...(owner.laneDaemonStarts !== undefined
+              ? { epoch: () => owner.laneDaemonStarts?.() ?? 0 }
+              : {}),
           },
         }
       : {}),
@@ -11978,15 +11983,7 @@ async function runMutantsParallel(
       await runMutantsOnBackend({ ...rest, backend, mutants: unit, sink, skipPrefetch: true });
     },
   });
-  if (paced) {
-    const why =
-      started >= cap
-        ? "queued live work stayed longer than one warm-up"
-        : "no more queued live work than one warm-up";
-    owner.noteLanes?.(
-      `${started} of ${asked} lanes started: ${why}, after lane 0's warm-up of ${(warmupMs / 1000).toFixed(1)} s${cap < asked ? `; memory allowed ${cap}` : ""}`,
-    );
-  }
+  if (paced) owner.noteLanes?.(lanesNotice(started, asked, cap, reason, warmupMs));
 }
 
 /**

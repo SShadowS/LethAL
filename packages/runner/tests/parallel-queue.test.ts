@@ -1,7 +1,14 @@
 // R766 step (b): the ordered commit, the stop rule and the pull queue of `--workers N` on al-runner v3.
 // Pure fakes: the "lanes" are scripted calls, so the order of events is the test's, never a clock's.
 import { describe, expect, test } from "bun:test";
-import { type Latch, OrderedCommit, ParallelStopError, runScopeQueue } from "../src/parallel-queue";
+import {
+  type LaneReason,
+  type Latch,
+  OrderedCommit,
+  ParallelStopError,
+  lanesNotice,
+  runScopeQueue,
+} from "../src/parallel-queue";
 
 const CODES = ["M0", "M1", "M2", "M3", "M4", "M5"];
 
@@ -319,7 +326,22 @@ describe("runScopeQueue: R785 lanes start by the queued live work", () => {
   };
   const COST = 100;
   /** `live[i]` = live mutants of unit i (0 = prefetched, about 0 ms). */
-  async function run(o: { live: number[]; lanes: number; warm: number; mayStart?: boolean }) {
+  async function run(o: {
+    live: number[];
+    lanes: number;
+    warm: number;
+    mayStart?: boolean;
+    /** Unit indexes during which lane 0 restarts its daemon (epoch moves, the clock jumps 5000). */
+    restarts?: number[];
+    /** The clock moves this much per live mutant on lanes above 0 (default 0). */
+    otherMs?: number;
+    /** isUnsafe turns true once this many units have finished (the flag only: the run then rejects). */
+    unsafeAfter?: number;
+    /** After this many units the lane ends the commit with `unsafeBreak`, as the loop's safety break does. */
+    breakAfter?: number;
+    /** Event-loop turns a lane-0 mutant takes (others take 1). */
+    slow0?: number;
+  }) {
     const units = o.live.map((n, i) =>
       Array.from({ length: Math.max(n, 1) }, (_, j) => ({
         mutantId: `U${String(i).padStart(3, "0")}.${j}`,
@@ -332,6 +354,7 @@ describe("runScopeQueue: R785 lanes start by the queued live work", () => {
     let finished = 0;
     const finishedAtAsk: number[] = [];
     const used = new Set<number>();
+    let epoch = 0;
     const res = await runScopeQueue({
       units,
       lanes: o.lanes,
@@ -340,24 +363,40 @@ describe("runScopeQueue: R785 lanes start by the queued live work", () => {
         return o.mayStart ?? k > 0;
       },
       commit,
-      isUnsafe: () => false,
+      isUnsafe: () => o.unsafeAfter !== undefined && finished >= o.unsafeAfter,
       pace: {
         warmupMs: () => o.warm,
         weight: (u) => u.filter((m) => m.live).length,
         now: () => clock,
+        epoch: () => epoch,
       },
       runUnit: async (lane, unit, sink) => {
         used.add(lane);
+        const idx = Number(unit[0]?.mutantId.slice(1, 4));
+        if (lane === 0 && o.restarts?.includes(idx)) {
+          epoch += 1;
+          clock += 5000;
+        }
         for (const m of unit) {
           sink.begin(m.mutantId);
-          if (lane === 0 && m.live) clock += COST;
-          await ticks(1);
+          if (m.live) clock += lane === 0 ? COST : (o.otherMs ?? 0);
+          await ticks(lane === 0 ? (o.slow0 ?? 1) : 1);
           sink.finish(m.mutantId, () => {});
+          if (o.breakAfter !== undefined && finished + 1 >= o.breakAfter) {
+            finished += 1;
+            sink.unsafeBreak(m.mutantId); // the loop's safety `break`
+            return;
+          }
         }
         finished += 1;
       },
+    }).catch((e: unknown) => {
+      // An unsafe flag with no break leaves mutants unfinished: the queue refuses to read green.
+      if (o.unsafeAfter === undefined) throw e;
+      return { started: -1, warmupMs: 0, reason: "closed" as const };
     });
-    expect(commit.committedCodes).toEqual(codes); // every mutant recorded, in manifest order
+    if (o.unsafeAfter === undefined && o.breakAfter === undefined)
+      expect(commit.committedCodes).toEqual(codes); // all recorded, in manifest order
     return { ...res, used, finishedAtAsk };
   }
 
@@ -400,5 +439,80 @@ describe("runScopeQueue: R785 lanes start by the queued live work", () => {
     const r = await run({ live: Array(60).fill(1), lanes: 1, warm: 1000 });
     expect(r.started).toBe(1);
     expect(r.finishedAtAsk).toEqual([]);
+  });
+
+  test("(i) every unit prefetched (weight 0): no cost, one lane, never a NaN start", async () => {
+    const r = await run({ live: Array(20).fill(0), lanes: 4, warm: 1000 });
+    expect(r.started).toBe(1);
+    expect(r.finishedAtAsk).toEqual([]);
+    expect(r.reason).toBe("unmeasured");
+  });
+
+  test("(ii) a warm-up that is not measured (0): no extra lane", async () => {
+    const r = await run({ live: Array(60).fill(1), lanes: 4, warm: 0 });
+    expect(r.started).toBe(1);
+    expect(r.reason).toBe("unmeasured");
+  });
+
+  test("(iii) only lane 0's units feed the cost", async () => {
+    // Lane 0 is slow; the other lanes finish many units at no clock time. Fed in, they would pull the
+    // cost down and stop the ramp at 3 lanes. Lane 0 alone: 16 queued units spread over all 4.
+    const r = await run({ live: Array(16).fill(1), lanes: 4, warm: 1000, slow0: 6 });
+    expect(r.started).toBe(4);
+  });
+
+  test("(iv) the rule follows the queue as it drains: a medium queue starts some lanes, not all", async () => {
+    const r = await run({ live: Array(13).fill(1), lanes: 4, warm: 1000 });
+    expect(r.started).toBe(2);
+    expect(r.reason).toBe("cost");
+  });
+
+  test("(v) a closed queue or an unsafe session asks no mayStart and starts no lane", async () => {
+    // The unsafe flag alone (no break yet): the queue hands out nothing more and starts no lane.
+    const unsafe = await run({ live: Array(60).fill(1), lanes: 4, warm: 1000, unsafeAfter: 1 });
+    expect(unsafe.finishedAtAsk).toEqual([]);
+    expect([...unsafe.used]).toEqual([0]);
+    // A closed commit (the loop's safety break), the unsafe flag still false.
+    const closed = await run({ live: Array(60).fill(1), lanes: 4, warm: 1000, breakAfter: 1 });
+    expect(closed.finishedAtAsk).toEqual([]);
+    expect(closed.started).toBe(1);
+    expect(closed.reason).toBe("closed");
+  });
+
+  test("(vii) the boundary: queued work equal to one warm-up starts no lane", async () => {
+    // After unit 0, 10 units x 100 ms = 1000 ms = the warm-up: not longer, so no start. One more unit starts one.
+    const eq = await run({ live: Array(11).fill(1), lanes: 4, warm: 1000 });
+    expect(eq.started).toBe(1);
+    const over = await run({ live: Array(12).fill(1), lanes: 4, warm: 1000 });
+    expect(over.started).toBeGreaterThan(1);
+  });
+
+  test("(viii) a lane-0 unit that restarted its daemon gives no cost (it carries a warm-up)", async () => {
+    // Unit 0 restarts lane 0 (+5000 ms on the clock). Counted, its cost would be 5100 ms per mutant
+    // and the 5 queued units would start a lane; skipped, the next unit's 100 ms keeps one lane.
+    const r = await run({ live: Array(6).fill(1), lanes: 4, warm: 1000, restarts: [0] });
+    expect(r.started).toBe(1);
+    expect(r.reason).toBe("cost");
+  });
+
+  test("the notice names the reason that ended the starts", () => {
+    const t = (reason: LaneReason, started = 2, cap = 4) =>
+      lanesNotice(started, 4, cap, reason, 7100);
+    expect(t("cap")).toBe(
+      "2 of 4 lanes started: all asked lanes started: queued live work stayed longer than one warm-up (lane 0's warm-up 7.1 s)",
+    );
+    expect(t("cap", 2, 2)).toContain("memory allowed only 2 lanes and all of them started");
+    expect(t("memory")).toContain("the memory hold refused the next lane");
+    expect(t("cost")).toContain("the queued live work was not longer than one warm-up");
+    expect(t("drained")).toContain("the queue had no live work left");
+    expect(t("closed")).toContain("the queue closed (a stop or an unsafe session)");
+    expect(t("unmeasured")).toContain("no lane 0 live unit finished with a measured warm-up");
+  });
+
+  test("the reason is memory when the hold refuses, and cost survives a drained queue", async () => {
+    const held = await run({ live: Array(60).fill(1), lanes: 4, warm: 1000, mayStart: false });
+    expect(held.reason).toBe("memory");
+    const short = await run({ live: [1, 1, 1], lanes: 4, warm: 1000 });
+    expect(short.reason).toBe("cost"); // the queue then drained, but cost was the cause
   });
 });

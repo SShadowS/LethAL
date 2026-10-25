@@ -323,7 +323,11 @@ export async function runScopeQueue<M extends { readonly mutantId: string }>(o: 
   readonly runUnit: (lane: number, unit: readonly M[], sink: LaneSink) => Promise<void>;
   /** R785: when set, `lanes` is an upper bound and extra lanes start by `LanePace`'s rule. */
   readonly pace?: LanePace<M>;
-}): Promise<{ readonly started: number; readonly warmupMs: number }> {
+}): Promise<{
+  readonly started: number;
+  readonly warmupMs: number;
+  readonly reason: LaneReason;
+}> {
   const pace = o.pace;
   const weights = o.units.map((u) => pace?.weight(u) ?? 0);
   let nextUnit = 0;
@@ -340,15 +344,41 @@ export async function runScopeQueue<M extends { readonly mutantId: string }>(o: 
   let costW = 0;
   let nextLane = 1;
   let started = 0;
+  // Why the last evaluation started nothing more (the notice says it).
+  let reason: LaneReason = o.lanes <= 1 ? "cap" : "unmeasured";
+  // A real block (cost, memory, closed) stays the reason when the queue then drains.
+  const because = (r: LaneReason): void => {
+    if (reason !== "cost" && reason !== "memory" && reason !== "closed") reason = r;
+  };
   /** R785: at most one extra lane per call, only while the queued live work is longer than one warm-up. */
   const evaluate = (): void => {
-    if (pace === undefined || nextLane >= o.lanes || o.commit.closed || o.isUnsafe()) return;
+    if (pace === undefined) return;
+    if (nextLane >= o.lanes) {
+      reason = reason === "memory" ? reason : "cap";
+      return;
+    }
+    if (o.commit.closed || o.isUnsafe()) {
+      because("closed");
+      return;
+    }
     const warm = pace.warmupMs();
-    if (costW === 0 || warm <= 0 || queuedW * (costMs / costW) <= warm) return;
+    if (costW === 0 || warm <= 0) {
+      because("unmeasured");
+      return;
+    }
+    if (queuedW <= 0) {
+      because("drained");
+      return;
+    }
+    if (queuedW * (costMs / costW) <= warm) {
+      because("cost");
+      return;
+    }
     const k = nextLane++;
-    if (!o.mayStart(k))
+    if (!o.mayStart(k)) {
       nextLane = o.lanes; // the memory hold: stay at the lanes running
-    else launch(k);
+      reason = "memory";
+    } else launch(k);
   };
   const launch = (k: number): void => {
     started += 1;
@@ -358,13 +388,15 @@ export async function runScopeQueue<M extends { readonly mutantId: string }>(o: 
         for (let unit = take(); unit !== undefined; unit = take()) {
           const t0 = pace?.now() ?? 0;
           const w = pace?.weight(unit) ?? 0;
+          const epoch0 = pace?.epoch?.();
           try {
             await o.runUnit(k, unit, sink);
           } catch (err) {
             o.commit.fail(current() ?? unit[0]?.mutantId, err);
             throw err;
           }
-          if (pace !== undefined && k === 0 && w > 0) {
+          // A unit that restarted lane 0's daemon carries a warm-up: it does not measure the work.
+          if (pace !== undefined && k === 0 && w > 0 && pace.epoch?.() === epoch0) {
             costMs += pace.now() - t0;
             costW += w;
           }
@@ -384,7 +416,33 @@ export async function runScopeQueue<M extends { readonly mutantId: string }>(o: 
   }
   o.commit.conclude();
   for (const s of settled) if (s.status === "rejected") throw s.reason;
-  return { started, warmupMs: pace?.warmupMs() ?? 0 };
+  if (pace === undefined) reason = "cap";
+  return { started, warmupMs: pace?.warmupMs() ?? 0, reason };
+}
+
+/** R785: why no more lanes started. */
+export type LaneReason = "cap" | "memory" | "cost" | "drained" | "closed" | "unmeasured";
+
+/** R785: the one-line notice text (without the code prefix). */
+export function lanesNotice(
+  started: number,
+  asked: number,
+  cap: number,
+  reason: LaneReason,
+  warmupMs: number,
+): string {
+  const why: Record<LaneReason, string> = {
+    cap:
+      cap < asked
+        ? `memory allowed only ${cap} lanes and all of them started`
+        : "all asked lanes started: queued live work stayed longer than one warm-up",
+    memory: "the memory hold refused the next lane",
+    cost: "the queued live work was not longer than one warm-up",
+    drained: "the queue had no live work left",
+    closed: "the queue closed (a stop or an unsafe session)",
+    unmeasured: "no lane 0 live unit finished with a measured warm-up to give a cost",
+  };
+  return `${started} of ${asked} lanes started: ${why[reason]} (lane 0's warm-up ${(warmupMs / 1000).toFixed(1)} s)`;
 }
 
 /** R785: what `runScopeQueue` needs to decide when an extra lane pays. */
@@ -394,4 +452,6 @@ export interface LanePace<M> {
   /** Live calls a unit still needs: a prefetched mutant counts 0. */
   readonly weight: (unit: readonly M[]) => number;
   readonly now: () => number;
+  /** Lane 0's daemon-start count: a unit during which it changes carried a warm-up and gives no cost. */
+  readonly epoch?: () => number;
 }

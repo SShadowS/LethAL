@@ -2293,6 +2293,16 @@ describe("R651: per-phase wall timers, timing only", () => {
     });
   });
 
+  test("R785: the lane rule's warm-up is lane 0's LATEST daemon start, not the session total", async () => {
+    const { r, clock } = await clockedRig();
+    await scenario(r, clock);
+    expect([r.b.laneWarmupMs(), r.b.laneDaemonStarts()]).toEqual([1, 1]);
+    await r.b.deploy(r.l.batch); // closes the daemon: the next batch warms a new one
+    await scenario(r, clock);
+    expect(r.b.entriesStats().warmupMs).toBe(2); // the session total grew ...
+    expect([r.b.laneWarmupMs(), r.b.laneDaemonStarts()]).toEqual([1, 2]); // ... the rule's figure did not
+  });
+
   test("boundMs counts only the check: under a clock that moves 1 per read, 1 per check", async () => {
     let n = 0;
     const { r, clock } = await clockedRig(() => n++);
