@@ -706,10 +706,12 @@ a LethAL feature or a mode.
   `campaign` refuse a report of it. Its gate (`itest:alrunner`) is gone; its frozen figures are kept
   on [docs/gates/alrunner.md](docs/gates/alrunner.md).
 - **`al-runner-v3` (the Rust al-runner, R586) is not authoritative.** It is pinned
-  (`alrunner 3.0.0-alpha.5 (07342060e)` since 2026-10-24, `/work/tools/al-runner-v3/current`,
-  `.gated`, under a per-build pin of its known readings, R586c) and configured in an
+  (`al-runner 3.0.0-alpha.5+edge.20261024 (dcdf9e821)` since 2026-10-25, before it alpha.5
+  `07342060e`; `/work/tools/al-runner-v3/current`, `.gated`, under a per-build pin of its known
+  readings, R586c, R756) and configured in an
   `alRunnerV3` section (`packagesDir` and `bcVersion` required; `coverage`, `path`, `alcPath`,
-  `cacheDir`). Measured on alpha.2 and re-read on alpha.5, it differs from BC in ways that change
+  `cacheDir`). Measured on alpha.2 and re-read on alpha.5 and its edge build (the same readings), it
+  differs from BC in ways that change
   verdicts:
   - It runs code that does not compile (#5602; alpha.5 refuses it). LethAL compiles every batch and
     the test app with alc first, and refuses to run bytes alc did not see.

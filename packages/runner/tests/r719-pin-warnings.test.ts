@@ -93,6 +93,17 @@ describe("R719: pin-covered defect warnings", () => {
     const r = { facts: [fact("sleep-is-noop", "gone", slow)] };
     expect(warns(warnings(r, VERSION, SHA))).toHaveLength(1);
   });
+  test("R756: the edge build's pin mutes the same seven facts and the line names the edge pin", () => {
+    const edgeVersion = "al-runner 3.0.0-alpha.5+edge.20261024 (dcdf9e821)";
+    const edgeSha = "0e3139359b37a7dd9c51377b64c0ae1acdcb208545f79075e4194571bbe03890";
+    const lines = warnings(PINNED, edgeVersion, edgeSha);
+    expect(warns(lines)).toEqual([]);
+    expect(lines).toEqual([
+      "[lethal] al-runner-v3 pin edge-dcdf9e821 covers 7 facts (#5700, #5788, R586c)",
+    ]);
+    // alpha.5's sha under the edge version line is no pin at all.
+    expect(warns(warnings(PINNED, edgeVersion, SHA))).toHaveLength(7);
+  });
   test("no pin: all seven warn", () => {
     expect(warns(warnings(PINNED, "al-runner 3.0.0-alpha.4 (x)", SHA))).toHaveLength(7);
   });
