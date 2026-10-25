@@ -4297,6 +4297,20 @@ describe("R790: the speculative baseline", () => {
     expect(on.one.calls).toHaveLength(1);
   });
 
+  test("R798: the env is read at construction, not at deploy(): setting it after construction does not speculate", async () => {
+    const r = await withEnv(undefined, () =>
+      deployWith(undefined, undefined, {
+        // Runs after construction, before deploy().
+        seams: () => {
+          process.env[SPECULATE_BASELINE_ENV] = "1";
+          return {};
+        },
+      }),
+    );
+    expect(r.err).toBeUndefined();
+    expect(r.one.calls).toHaveLength(0);
+  });
+
   test("R798: any other env value throws by name at construction", async () => {
     for (const v of ["0", "true", "yes"]) {
       await expect(withEnv(v, () => deployWith(undefined, undefined))).rejects.toThrow(
