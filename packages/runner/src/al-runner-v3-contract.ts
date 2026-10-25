@@ -196,10 +196,37 @@ export const burnerArgv = (taskset: string, core = 0): string[] => [
 ];
 
 /**
+ * Addendum 1: the cores in `Cpus_allowed_list` of `/proc/self/status` text (ranges like `0-3,8,10-11`).
+ * No such line or an unreadable list: `undefined`.
+ */
+export function parseAllowedCores(status: string | undefined): number[] | undefined {
+  const m = /^Cpus_allowed_list:\s*(\S+)\s*$/m.exec(status ?? "");
+  if (m === null) return undefined;
+  const cores: number[] = [];
+  for (const part of (m[1] ?? "").split(",")) {
+    const r = /^(\d+)(?:-(\d+))?$/.exec(part);
+    if (r === null) return undefined;
+    const lo = Number(r[1]);
+    const hi = r[2] === undefined ? lo : Number(r[2]);
+    if (hi < lo) return undefined;
+    for (let c = lo; c <= hi; c++) cores.push(c);
+  }
+  return cores.length > 0 ? cores : undefined;
+}
+
+/** Addendum 1: a stopped A over the late line is contention only when its CPU is under this share of its wall. */
+export const BURN_CPU_SHARE = 0.75;
+
+/**
  * R789: the least busy core from two `/proc/stat` snapshots (busy = total - idle - iowait, as a
  * delta). Ties go to the lowest core. Either snapshot unreadable or no `cpuN` line in both: core 0.
  */
-export function leastBusyCore(before: string | undefined, after: string | undefined): number {
+export function leastBusyCore(
+  before: string | undefined,
+  after: string | undefined,
+  /** Addendum 1: only these cores may be picked (the process's `Cpus_allowed_list`); absent: all. */
+  allowed?: readonly number[],
+): number {
   const busy = (text: string | undefined): Map<number, number> => {
     const m = new Map<number, number>();
     for (const line of (text ?? "").split("\n")) {
@@ -218,7 +245,7 @@ export function leastBusyCore(before: string | undefined, after: string | undefi
   let bestDelta = Number.POSITIVE_INFINITY;
   for (const core of [...a.keys()].sort((x, y) => x - y)) {
     const prev = b.get(core);
-    if (prev === undefined) continue;
+    if (prev === undefined || (allowed !== undefined && !allowed.includes(core))) continue;
     const d = (a.get(core) ?? 0) - prev;
     if (d < bestDelta) {
       best = core;
@@ -782,6 +809,12 @@ export interface V3ProbeEnv {
    * `startBurner` gets core 0 and never reads the real file.
    */
   readonly readProcStat?: () => Promise<string | undefined>;
+  /**
+   * Addendum 1 test hook: returns `/proc/self/status` text. With neither this nor `readProcStat` nor
+   * `startBurner` set, the real file is read; a test that sets one of the others gets all cores allowed
+   * unless it sets this.
+   */
+  readonly readSelfStatus?: () => Promise<string | undefined>;
   /** Test hook: `timeout-is-cpu`'s per-call hard process timeout (default 60 s). */
   readonly burnGuardMs?: number;
   /**
@@ -810,6 +843,8 @@ interface Call {
   readonly wallMs: number;
   /** The call's `guardMs` timeout fired (the process was killed by it). */
   readonly timedOut: boolean;
+  /** The process's own CPU time, when the spawn gave it. */
+  readonly cpuMs: number | undefined;
   readonly rows: readonly V3Row[] | undefined;
   readonly coverage: unknown;
 }
@@ -923,8 +958,14 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
       const res = await spawn(argv, {
         ...(cacheDir !== undefined ? { env: { ALRUNNER_CACHE: cacheDir } } : {}),
         ...(signal !== undefined ? { signal } : {}),
-      }).catch((e: unknown) => ({ exitCode: -1, stdout: "", stderr: String(e) }));
-      const wallMs = Date.now() - t0;
+      }).catch(
+        (e: unknown): Awaited<ReturnType<SpawnFn>> => ({
+          exitCode: -1,
+          stdout: "",
+          stderr: String(e),
+        }),
+      );
+      const wallMs = res.wallMs ?? Date.now() - t0;
       const decoded = o.codeunit !== undefined ? decodeV3Rows(res.stdout, o.codeunit) : undefined;
       let coverage: unknown;
       if (o.coverage === true) {
@@ -938,6 +979,7 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         ...res,
         wallMs,
         timedOut: signal?.aborted === true,
+        cpuMs: res.cpuMs,
         rows: decoded !== undefined && "rows" in decoded ? decoded.rows : undefined,
         coverage,
       };
@@ -1204,11 +1246,22 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         (env.startBurner !== undefined
           ? undefined
           : async () => readFile("/proc/stat", "utf8").catch(() => undefined));
+      // Addendum 1: only the cores this process may use. A hook-driven test without `readSelfStatus`
+      // allows all cores; the real read that fails or does not parse means core 0.
+      const readStatus =
+        env.readSelfStatus ??
+        (readStat !== undefined && env.readProcStat === undefined
+          ? async () => readFile("/proc/self/status", "utf8").catch(() => undefined)
+          : undefined);
       let core = 0;
       if (readStat !== undefined) {
-        const s1 = await readStat();
-        if (env.readProcStat === undefined) await new Promise((r) => setTimeout(r, 200));
-        core = leastBusyCore(s1, await readStat());
+        const statusText = readStatus !== undefined ? await readStatus() : undefined;
+        const allowed = readStatus !== undefined ? parseAllowedCores(statusText) : undefined;
+        if (readStatus === undefined || allowed !== undefined) {
+          const s1 = await readStat();
+          if (env.readProcStat === undefined) await new Promise((r) => setTimeout(r, 200));
+          core = leastBusyCore(s1, await readStat(), allowed);
+        }
       }
       const pin = [env.tasksetPath, "-c", String(core)];
       const lateMs = BURN_LIMIT_SECS * 1000 * BURN_WALL_FACTOR;
@@ -1218,7 +1271,7 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
       const stopped = (r: V3Row | undefined) =>
         r?.notRun === true && r.message === `Test exceeded ${BURN_LIMIT_SECS}s timeout.`;
       const callText = (c: Call, r: V3Row | undefined) =>
-        `${JSON.stringify(r ?? null)} (wall ${c.wallMs} ms${c.timedOut ? `, killed by the ${guardMs} ms process timeout` : ""})`;
+        `${JSON.stringify(r ?? null)} (wall ${c.wallMs} ms${c.cpuMs !== undefined ? `, cpu ${Math.round(c.cpuMs)} ms` : ""}${c.timedOut ? `, killed by the ${guardMs} ms process timeout` : ""})`;
       // A: pinned, alone.
       const alone = await call(burnArgs, { codeunit: 50656, wrap: pin, guardMs });
       const a = rowOf(alone, "CpuBurnLong");
@@ -1231,10 +1284,17 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         verdict = "unmeasurable";
       } else if (!stopped(a)) {
         verdict = "diverged";
-      } else if ((a.durationMs ?? 0) > lateMs) {
-        // R789: a wall-time limit stops A on time whatever the load, so a late A is a shared core.
+      } else if ((a.durationMs ?? 0) > lateMs && alone.cpuMs === undefined) {
+        // Addendum 1: a late A is told apart by its CPU time; without it nothing can be said.
         verdict = "unmeasurable";
-        measured += `; A late: core ${core} contended (over ${lateMs} ms), B not run`;
+        measured += `; A late (over ${lateMs} ms) and the process CPU time was not read, B not run`;
+      } else if (
+        (a.durationMs ?? 0) > lateMs &&
+        (alone.cpuMs ?? 0) < BURN_CPU_SHARE * alone.wallMs
+      ) {
+        // Addendum 1: a pinned process alone on its core uses about all of it; a shared core gives a share.
+        verdict = "unmeasurable";
+        measured += `; A late: core ${core} contended, cpu ${Math.round(alone.cpuMs ?? 0)} of wall ${alone.wallMs} ms, B not run`;
       } else {
         // B: the same burn beside busy loops, started before and killed after (in a finally).
         const burners: { kill(): void }[] = [];

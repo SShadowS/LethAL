@@ -27,6 +27,7 @@ import {
   burnerArgv,
   classifySleep,
   leastBusyCore,
+  parseAllowedCores,
   runV3ContractProbe,
   v3ContractRefusals,
   v3DefectWarnings,
@@ -48,7 +49,11 @@ const BC = "28.0.46665.47126";
 type Over = Partial<
   Record<
     string,
-    (argv: readonly string[]) => { exitCode: number; stdout: string; stderr?: string } | undefined
+    (
+      argv: readonly string[],
+    ) =>
+      | { exitCode: number; stdout: string; stderr?: string; cpuMs?: number; wallMs?: number }
+      | undefined
   >
 >;
 
@@ -700,12 +705,16 @@ describe("§8 the contract probe", () => {
 
 describe("R693 r14b: timeout-is-cpu runs one huge burn alone, then beside busy loops", () => {
   /** "hang-rows": killed by the process timeout, but its stdout already holds a late timeout row. */
-  type Ans = { exitCode: number; stdout: string } | "hang" | "hang-rows" | undefined;
+  type Ans =
+    | { exitCode: number; stdout: string; cpuMs?: number; wallMs?: number }
+    | "hang"
+    | "hang-rows"
+    | undefined;
   /**
    * Runs the probe; `a` and `b` answer the first (alone) and second (shared) call of codeunit 50656.
    * "hang" waits for the call's process timeout and returns as a killed process does.
    */
-  const run = async (a: Ans, b: Ans, burnerThrowsAt = 0, stat?: string[]) => {
+  const run = async (a: Ans, b: Ans, burnerThrowsAt = 0, stat?: string[], status?: string) => {
     const events: string[] = [];
     const cores: number[] = [];
     let statReads = 0;
@@ -728,6 +737,7 @@ describe("R693 r14b: timeout-is-cpu runs one huge burn alone, then beside busy l
       alcIo: fakeAlcIo,
       tasksetPath: "/usr/bin/taskset",
       ...(stat !== undefined ? { readProcStat: async () => stat[statReads++] } : {}),
+      ...(status !== undefined ? { readSelfStatus: async () => status } : {}),
       startBurner: (core) => {
         starts += 1;
         cores.push(core);
@@ -786,10 +796,58 @@ describe("R693 r14b: timeout-is-cpu runs one huge burn alone, then beside busy l
   const wallBuild = [snap(100, 100, 100), snap(1000, 110, 600)];
 
   test("R789 (a): a correct build under contention (A stopped at 16000 ms) is unmeasurable, never diverged; B not run", async () => {
-    const { f, events } = await run(stopped(16000), stopped(16000), 0, BUSY0);
+    const { f, events } = await run(stopped(16000, 2000), stopped(16100), 0, BUSY0);
     expect(f?.verdict).toBe("unmeasurable");
-    expect(f?.measured).toContain("A late: core 1 contended");
+    expect(f?.measured).toContain("A late: core 1 contended, cpu 2000 of wall 16000 ms");
     expect(events).toEqual(["call-A"]);
+  });
+
+  test("addendum 1: a wall-slack build on a free core (A 3500 with cpu 3450, B 3600) reads diverged", async () => {
+    const { f, events } = await run(stopped(3500, 3450), stopped(3600));
+    expect(f?.verdict).toBe("diverged");
+    expect(events).toContain("call-B");
+  });
+
+  test("addendum 1: A late with its CPU time unknown is unmeasurable, naming the missing reading; B not run", async () => {
+    const { f, events } = await run(stopped(3500, null), stopped(3600));
+    expect(f?.verdict).toBe("unmeasurable");
+    expect(f?.measured).toContain("CPU time was not read");
+    expect(events).toEqual(["call-A"]);
+  });
+
+  test("addendum 1: cpu at exactly 0.75 x wall is not contended (B runs); just under is", async () => {
+    const edge = await run(stopped(16000, 12000), stopped(40000));
+    expect(edge.events).toContain("call-B");
+    expect(edge.f?.verdict).toBe("matches");
+    const under = await run(stopped(16000, 11999), stopped(16100));
+    expect(under.events).not.toContain("call-B");
+    expect(under.f?.verdict).toBe("unmeasurable");
+  });
+
+  test("addendum 1: the picker stays inside the allowed list, and the list parses ranges", async () => {
+    // cores 0-1 busy, 2-9 idle in /proc/stat; allowed 0-1 -> picks core 1 (less busy), never an idle core 2+.
+    const line = (n: number, user: number) => `cpu${n} ${user} 0 0 1000 0 0 0 0`;
+    const many = (busy: (n: number) => number) =>
+      Array.from({ length: 10 }, (_, n) => line(n, busy(n))).join("\n");
+    const before = many(() => 100);
+    const after = many((n) => (n === 0 ? 900 : n === 1 ? 300 : 100));
+    const status = "Name:\tbun\nCpus_allowed_list:\t0-1\nMems_allowed:\t1\n";
+    expect(leastBusyCore(before, after, [0, 1])).toBe(1);
+    expect(leastBusyCore(before, after)).toBe(2);
+    const { cores, f } = await run(stopped(2010), stopped(16000), 0, [before, after], status);
+    expect(cores).toEqual(Array(7).fill(1));
+    expect(f?.measured).toContain("core 1;");
+    expect(parseAllowedCores("Cpus_allowed_list:\t0-3,8,10-11\n")).toEqual([0, 1, 2, 3, 8, 10, 11]);
+    expect(parseAllowedCores("Cpus_allowed_list:\t5\n")).toEqual([5]);
+    expect(parseAllowedCores("Cpus_allowed_list:\tx-y\n")).toBeUndefined();
+    expect(parseAllowedCores("Name: bun\n")).toBeUndefined();
+    expect(parseAllowedCores(undefined)).toBeUndefined();
+  });
+
+  test("addendum 1: an unreadable allowed list means core 0", async () => {
+    const { cores, argvs } = await run(stopped(2010), stopped(16000), 0, BUSY0, "garbage");
+    expect(cores).toEqual(Array(7).fill(0));
+    expect(argvs[0]?.slice(0, 3)).toEqual(["/usr/bin/taskset", "-c", "0"]);
   });
 
   test("R789 (b)+(i): a wall-time build reads diverged, loaded or not (A and B both stop at about 2000 ms)", async () => {
@@ -808,7 +866,7 @@ describe("R693 r14b: timeout-is-cpu runs one huge burn alone, then beside busy l
 
   test("R789 (ii): the same fake over two probe runs: loaded then quiet reads unmeasurable then matches; a wall-time build diverged both times", async () => {
     const correct = [
-      await run(stopped(16000), stopped(16000)),
+      await run(stopped(16000, 2000), stopped(16000)),
       await run(stopped(2000), stopped(16000)),
     ];
     expect(correct.map((x) => x.f?.verdict)).toEqual(["unmeasurable", "matches"]);
@@ -820,7 +878,7 @@ describe("R693 r14b: timeout-is-cpu runs one huge burn alone, then beside busy l
     const edge = await run(stopped(3000), stopped(16000));
     expect(edge.events).toContain("call-B");
     expect(edge.f?.verdict).toBe("matches");
-    const over = await run(stopped(3001), stopped(16000));
+    const over = await run(stopped(3001, 100), stopped(16000));
     expect(over.f?.verdict).toBe("unmeasurable");
     expect(over.events).not.toContain("call-B");
   });
@@ -851,7 +909,13 @@ describe("R693 r14b: timeout-is-cpu runs one huge burn alone, then beside busy l
     expect(burnerArgv("/usr/bin/taskset", 5).slice(0, 3)).toEqual(["/usr/bin/taskset", "-c", "5"]);
   });
 
-  const stopped = (ms: number) => ({ exitCode: 7, stdout: doc([burnRow(ms)]) });
+  /** A timeout row of `ms`; the process used `cpu` ms of CPU (default: all of it) over a wall of `ms`. */
+  const stopped = (ms: number, cpu: number | null = ms) => ({
+    exitCode: 7,
+    stdout: doc([burnRow(ms)]),
+    wallMs: ms,
+    ...(cpu !== null ? { cpuMs: cpu } : {}),
+  });
   const passed = {
     exitCode: 0,
     stdout: doc([row(50656, "CpuBurnLong", "pass", { durationMs: 900 })]),
@@ -894,7 +958,7 @@ describe("R693 r14b: timeout-is-cpu runs one huge burn alone, then beside busy l
       ...Array(7).fill("burner-kill"),
     ]);
     expect(f?.measured).toMatch(
-      /A .*"durationMs":2010.*wall \d+ ms\); B .*"durationMs":16000.*wall \d+ ms/,
+      /A .*"durationMs":2010.*wall \d+ ms, cpu \d+ ms\); B .*"durationMs":16000.*wall \d+ ms, cpu \d+ ms/,
     );
     expect(f?.measured).toContain("Test exceeded 2s timeout.");
   });
@@ -971,7 +1035,8 @@ describe("R693 r14b: timeout-is-cpu runs one huge burn alone, then beside busy l
     expect((await run(stopped(1000), stopped(3001))).f?.verdict).toBe("matches");
   });
 
-  test("diverged: a wall-time limit with slack stops both calls late (A 2900, B 3100; R789: a slower A is a contended core)", async () => {
+  test("diverged: a wall-time limit with slack stops both calls late (A 4000, B 4100)", async () => {
+    expect((await run(stopped(4000), stopped(4100))).f?.verdict).toBe("diverged");
     expect((await run(stopped(2900), stopped(3100))).f?.verdict).toBe("diverged");
   });
 
