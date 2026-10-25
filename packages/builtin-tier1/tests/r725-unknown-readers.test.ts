@@ -822,7 +822,9 @@ ${UNION}
     expect(evaluateArms(wrapRoot(parseAL(src)), src, []).kind).toBe("undecided");
     expect(project(stateful("", XFIELD)).state("Cap.al", "Qv")).toBe("unknown");
     // red when the paren-less branch of r572StatefulOnce reads the partial union as a field read
-    expect(statefulRefused("        Counter += 1;\n        exit(Counter);", XFIELD, true)).toBe(true);
+    expect(statefulRefused("        Counter += 1;\n        exit(Counter);", XFIELD, true)).toBe(
+      true,
+    );
   });
 
   it("(b) control: both types have a FIELD X and no procedure: a field read, not refused (as master)", () => {
