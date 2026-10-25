@@ -1006,7 +1006,7 @@ RUN — cost and recovery
   --no-group-runs            run covering tests one RunMutant call each, as before R198
   --fresh-probe              al-runner-v3 only: run its contract probe now instead of replaying a
                              cached pass for the same build, packages and alc (R762). Same as
-                             LETHAL_V3_FRESH_PROBE=1. A failed probe is never cached
+                             LETHAL_V3_FRESH_PROBE=1. A failed or forced probe is never cached
   --resume                   continue the most recent unfinished run in --db, reusing its verdicts
   --resume-run <id>          resume a specific run id
   --retry-stranded           on resume, retry mutants that left the server stuck (skipped by default:
