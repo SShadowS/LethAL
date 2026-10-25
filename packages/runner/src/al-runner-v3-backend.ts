@@ -77,7 +77,7 @@ import {
   serveRow,
 } from "./al-runner-v3-entries";
 import { AlRunnerV3UngatedBuildError, V3_NO_SERVE_ENTRIES, checkGated } from "./al-runner-v3-pin";
-import { pinnedDefectCoverage, sleepRuleRetiredFor } from "./al-runner-v3-pins";
+import { pinnedDefectCoverage, sleepRuleLine, sleepRuleRetiredFor } from "./al-runner-v3-pins";
 import {
   FRESH_PROBE_ENV,
   type ProbeCacheKey,
@@ -1285,6 +1285,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // R719: a fact the running build's pin already covers (exact fact and outcome) is not warned
     // about; the session prints one pin line instead, so a pinned build is never fully silent.
     this.sleepRuleRetired = sleepRuleRetiredFor(this.contract, reported, binarySha256);
+    // R779: say which §6 behaviour this session runs, once, beside the probe line.
+    console.warn(sleepRuleLine(this.sleepRuleRetired, this.contract, reported, binarySha256));
     const covered = pinnedDefectCoverage(this.contract, reported, binarySha256);
     if (covered !== undefined) console.warn(covered.line);
     for (const line of v3DefectWarnings(this.contract, { ...kind, muted: covered?.muted }))
@@ -1293,7 +1295,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (refusals.length > 0) return { ok: false, details: refusals.join("\n") };
     return {
       ok: true,
-      details: `${reported}; ${v3ContractSummary(this.contract)}${probeNote !== "" ? `; ${probeNote}` : ""}${this.entries ? `; transport serve-entries (R635), secondEcho ${this.cfg.secondEcho !== false}` : ""}${this.cfg.serveFallbackWarmup !== undefined ? `; transport one-shot (the serve-entries default fell back at the warm-up: ${this.cfg.serveFallbackWarmup}; R786)` : ""}`,
+      details: `${reported}; ${v3ContractSummary(this.contract)}${probeNote !== "" ? `; ${probeNote}` : ""}; §6 Sleep rule ${this.sleepRuleRetired ? "retired" : "applies"} (R779)${this.entries ? `; transport serve-entries (R635), secondEcho ${this.cfg.secondEcho !== false}` : ""}${this.cfg.serveFallbackWarmup !== undefined ? `; transport one-shot (the serve-entries default fell back at the warm-up: ${this.cfg.serveFallbackWarmup}; R786)` : ""}`,
     };
   }
 

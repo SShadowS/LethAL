@@ -240,6 +240,29 @@ export function sleepRuleRetiredFor(
 }
 
 /**
+ * R779: the receipt line `status()` prints once per session, for the decision it made (`retired`,
+ * from `sleepRuleRetiredFor`), with the reason. The word comes from `retired` itself, so the line
+ * cannot disagree with the behaviour; only the reason is looked up here.
+ */
+export function sleepRuleLine(
+  retired: boolean,
+  contract: V3ContractResult | undefined,
+  version: string,
+  binarySha256: string,
+): string {
+  const pin = findV3Pin(version, binarySha256);
+  const pinned = pin?.legC["sleep-is-noop"]?.verdict;
+  const probed = contract?.facts.find((f) => f.fact === "sleep-is-noop")?.verdict;
+  let why: string;
+  if (pin === undefined) why = "no pin names this build";
+  else if (pinned !== "gone") why = `pin ${pin.id} reads sleep-is-noop ${pinned ?? "unrecorded"}`;
+  else if (probed !== "gone")
+    why = `pin ${pin.id} reads sleep-is-noop gone, but this session's probe read it ${probed ?? "unmeasured"}`;
+  else why = `pin ${pin.id} and this session's probe read sleep-is-noop gone`;
+  return `[lethal] al-runner-v3 §6 Sleep rule ${retired ? "retired" : "applies"} (${why}) (R768, R779)`;
+}
+
+/**
  * Does a leg-C reading equal the pin's entry for its fact? The gate (`classifyLegC`) and the
  * session's mute (`pinnedDefectCoverage`) both use this one function, so they cannot drift: the fact
  * is an own property of the pin, the verdict equals the pinned one, and the measured text matches
