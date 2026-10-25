@@ -25,7 +25,7 @@
 import { createHash } from "node:crypto";
 import { cp, mkdir, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { freemem } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import {
   CONTROL_REGISTER_FILENAME,
   CONTROL_SELECTOR_FILENAME,
@@ -135,7 +135,7 @@ import { assertManifestObjectsDeclared, readManifestObjectKeys } from "./line-ma
 import { type SpawnFn, absToolPath, defaultSpawn } from "./publisher";
 import { assertResourceSelectorRuntime, installResourceSelector } from "./resource-selector";
 import { TestAppError, symbolPackageId } from "./test-app-publish";
-import { LINK_EXCUSED_DIRS, ProjectSymlinkRefusedError } from "./walk";
+import { LINK_EXCUSED_DIRS, ProjectSymlinkRefusedError, walkFilesSync } from "./walk";
 
 /**
  * `--version` of a v3 build: `alrunner 3.0.0-alpha.2 (91253f2d6)` (alpha.3 renamed it `al-runner`).
@@ -799,12 +799,19 @@ function otherFilesKey(
     .map(([p, f]) => [p, f.size, f.mtimeMs, f.sha256]);
 }
 
-/** R790 (review 4): every file under `dir` (relative path) with its size and mtime. */
+/**
+ * R790 (review 4): every file under LethAL's copy `dir` (relative path) with its size and mtime.
+ * The copy is made from active/, which holds no link (R655); one refuses, by the walk's rule.
+ */
 async function fileStates(dir: string): Promise<Map<string, string>> {
   const out = new Map<string, string>();
-  for (const rel of await readdir(dir, { recursive: true })) {
+  const walk = walkFilesSync(dir, { links: "refuse" });
+  if (walk.skippedLinks.length > 0) {
+    throw new AlRunnerV3UnprovenBatchError(`a link in alc's copy ${dir}: ${walk.skippedLinks[0]}`);
+  }
+  for (const rel of walk.files) {
     const s = await stat(join(dir, rel));
-    if (s.isFile()) out.set(relative(dir, join(dir, rel)), `${s.size}:${s.mtimeMs}`);
+    out.set(rel, `${s.size}:${s.mtimeMs}`);
   }
   return out;
 }
