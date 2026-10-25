@@ -397,6 +397,8 @@ export async function runV3LaneTrace(): Promise<V3LaneTrace> {
     );
     const notices: string[] = [];
     b.setNotify((code, message) => notices.push(`${code}: ${norm(message)}`));
+    // R778: this trace is today's per-kill pair; the batch has its own tests.
+    (b as unknown as { pairBatch: boolean }).pairBatch = false;
     b.useBuildSymbols([]);
     b.useDiscoveredTests(SUITE);
     b.useSessionTests(SUITE);

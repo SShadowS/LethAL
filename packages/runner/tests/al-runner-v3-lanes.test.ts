@@ -257,6 +257,38 @@ describe("per-lane state", () => {
     expect(r.b.entriesStats().pairRequests).toBe(1);
   });
 
+  test("R778 batch ON: a prefetch-tagged kill on lane 1 is served from lane 0's batch; a live kill on lane 1 is refused and sends today's pair", async () => {
+    const rows: RowsFn = (m) =>
+      m === "M0001" || m === "M0002"
+        ? failing(allPass(m, 0, 0, 0), "A", "boom")
+        : allPass(m, 0, 0, 0);
+    const r = await lanesRig({ lanes: 2, rows, pairBatch: true });
+    await laneBaseline(r);
+    const [v0, v1] = r.views;
+    if (v0 === undefined || v1 === undefined) throw new Error("lanes");
+    await r.b.prefetchMutants(plans(["M0001", "M0002"]));
+    expect(r.b.entriesStats().pairBatchStored).toBe(2);
+    // M0001: killed on lane 1 from lane 0's prefetch; its pair comes from lane 0's batch, no send.
+    const n0 = r.serve.requests.length;
+    await v1.activate("M0001");
+    expect((await v1.run(A, OPTS)).outcome).toBe("fail");
+    await v1.sendKillPair("M0001", A);
+    expect(r.serve.requests.length).toBe(n0);
+    expect(r.b.entriesStats()).toMatchObject({ pairBatchServed: 1, pairBatchRefused: 0 });
+    // M0002: lane 0 consumes its prefetched rows, so lane 1's kill is a LIVE one: refused.
+    await v0.activate("M0002");
+    expect((await v0.run(A, OPTS)).outcome).toBe("fail");
+    const n1 = r.serve.requests.length;
+    await v1.activate("M0002");
+    expect((await v1.run(A, OPTS)).outcome).toBe("fail");
+    expect(r.serve.requests.length).toBeGreaterThan(n1); // the live kill (and lane 1's warm-up)
+    const n2 = r.serve.requests.length;
+    await v1.sendKillPair("M0002", A);
+    expect(r.serve.requests.length).toBe(n2 + 1); // today's pair
+    expect(r.serve.requests.at(-1)?.ids).toContain("NONE|echo");
+    expect(r.b.entriesStats()).toMatchObject({ pairBatchServed: 1, pairBatchRefused: 1 });
+  });
+
   test("a lane-scoped server error: lane 0's pair verdict is served to lane 0 only", async () => {
     const rows: RowsFn = (m) =>
       m === "M0001" ? failing(allPass(m, 0, 0, 0), "A", "boom") : allPass(m, 0, 0, 0);
