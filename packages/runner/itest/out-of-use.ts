@@ -22,12 +22,14 @@
  * Entry points honouring the clearing override: `scripts/bc-linux-setup.ts` and
  * `scripts/bc-republish.ts`. The owner override: `printItestTarget` only.
  *
- * This package cannot import `scripts/`, so the host and dev ports below mirror `HOST` and
- * `SERVERS` in `scripts/bc-app-content.ts`; `scripts/bc-linux-setup.test.ts` pins the two equal.
+ * The host comes from `src/bc-host.ts` (R783), as `HOST` in `scripts/bc-app-content.ts` does. This
+ * package cannot import `scripts/`, so the dev ports below mirror `SERVERS` there;
+ * `scripts/bc-linux-setup.test.ts` pins the two equal.
  */
 
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { bcLinuxHost } from "../src/bc-host";
 
 /** A server that has an out-of-use marker, refused before any lease or server call. */
 export class ServerOutOfUseError extends Error {}
@@ -37,8 +39,8 @@ type Env = Readonly<Record<string, string | undefined>>;
 export const CLEARING_ENV = "LETHAL_OUT_OF_USE_CLEARING";
 export const OWNER_ENV = "LETHAL_OUT_OF_USE_OWNER";
 
-/** The BC on Linux host, as a URL hostname (mirrors `HOST`). */
-export const MARKER_HOST = "192.168.2.157";
+/** The BC on Linux host in use, as a URL hostname (`bcLinuxHost`, R783). */
+export const MARKER_HOST = bcLinuxHost();
 /** Dev port to server name (mirrors `SERVERS[*].dev`). */
 export const MARKER_SERVERS: Readonly<Record<number, string>> = {
   7049: "bc1",
@@ -49,10 +51,15 @@ export const MARKER_SERVERS: Readonly<Record<number, string>> = {
 /**
  * The server name a config's host and dev port name, or `undefined`. Only bc1-bc3 can have a
  * marker: a config naming any other server (the parked Cronus28, an envtool environment, a
- * Windows container) is not checked, so it is never refused here.
+ * Windows container) is not checked, so it is never refused here. The host is the one in use
+ * (`bcLinuxHost(env)`); a config on the OTHER known host is refused earlier (`bcHostMismatch`).
  */
-export function markedServerFor(host: string, devPort: number): string | undefined {
-  return host.toLowerCase() === MARKER_HOST ? MARKER_SERVERS[devPort] : undefined;
+export function markedServerFor(
+  host: string,
+  devPort: number,
+  env: Env = process.env,
+): string | undefined {
+  return host.toLowerCase() === bcLinuxHost(env) ? MARKER_SERVERS[devPort] : undefined;
 }
 
 /** The coord root is wrong for this check: its `machine` dir is missing, or the env disagrees. */

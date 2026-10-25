@@ -15,7 +15,6 @@ import { itestLaunchName } from "../packages/runner/itest/config-path.ts";
 import { MARKER_HOST, MARKER_SERVERS } from "../packages/runner/itest/out-of-use.ts";
 import type { FetchFn } from "../packages/runner/src/activation.ts";
 import { readAppIdentity } from "../packages/runner/src/published-test-app.ts";
-import { hostFrom } from "./bc-app-content.ts";
 import { buildFakeAppWithEntries } from "../packages/runner/tests/helpers/fake-app.ts";
 import { CONTROL_SELECTOR_FILENAME } from "../packages/schemata/src/project.ts";
 import { type Conn, type ServerOps, sha256Of } from "./bc-app-content.ts";
@@ -1245,16 +1244,29 @@ describe("--write-config-only: configs from the secret file, no server call, no 
     });
   });
 
-  test("R783: LETHAL_BC_HOST overrides the host; unset is server1; a port or path is refused", () => {
-    expect(hostFrom(undefined)).toBe("http://192.168.2.157");
-    expect(hostFrom("http://192.168.2.77")).toBe("http://192.168.2.77");
-    for (const bad of [
-      "http://192.168.2.77:7049",
-      "http://192.168.2.77/",
-      "192.168.2.77",
-      "https://x",
-    ])
-      expect(() => hostFrom(bad)).toThrow("LETHAL_BC_HOST must be");
+  test("R783: HOST, MARKER_HOST and the written launch file follow LETHAL_BC_HOST; unset is server1", () => {
+    // Both constants are read at import, so each case is a fresh process.
+    const read = (host: string | undefined): string => {
+      const env: Record<string, string> = Object.fromEntries(
+        Object.entries(process.env).filter(
+          (e): e is [string, string] => e[0] !== "LETHAL_BC_HOST" && e[1] !== undefined,
+        ),
+      );
+      if (host !== undefined) env.LETHAL_BC_HOST = host;
+      const r = Bun.spawnSync(
+        [
+          process.execPath,
+          "-e",
+          'import { HOST } from "./scripts/bc-app-content.ts"; import { MARKER_HOST } from "./packages/runner/itest/out-of-use.ts"; import { buildLaunch } from "./scripts/bc-linux-setup.ts"; console.log([HOST, MARKER_HOST, buildLaunch("bc3").configurations[0].server].join(" "));',
+        ],
+        { cwd: join(import.meta.dir, ".."), env },
+      );
+      return r.stdout.toString().trim();
+    };
+    expect(read(undefined)).toBe("http://192.168.2.157 192.168.2.157 http://192.168.2.157");
+    expect(read("http://192.168.2.77")).toBe(
+      "http://192.168.2.77 192.168.2.77 http://192.168.2.77",
+    );
   });
 
   test("R669: out-of-use.ts's host and dev ports mirror HOST and SERVERS", () => {
