@@ -5588,7 +5588,11 @@ function r572StatefulOnce(p: ALSyntaxNode, hops: number, ctx: SemanticContext): 
           else if (paren && R572_RUNNABLE_KINDS.has(t.kind)) hit = true; // a page/report's code
           return;
         }
-        if (!paren) return; // a field read (`R.Field`), not a call
+        if (!paren) {
+          // a field read (`R.Field`), not a call; R752: unless a partial union hides a procedure
+          if (r570Targets(n, c, ctx).length > 0) hit = true;
+          return;
+        }
         const f = n.childForFieldName("function");
         const o = f?.rawKind === "member_expression" ? f.childForFieldName("object") : null;
         if (o === null || o === undefined) return;
@@ -6129,7 +6133,14 @@ function r570Scan(
         const ts = r570Targets(n, c, ctx, true);
         // a paren-less `R.X` that names no procedure is a field read
         if (c.uncertain) direct = true;
-        else if (n.rawKind !== "member_expression" || ts.length > 0) viaRec(ts);
+        // R752: a partial union gives [] above, but if the non-strict list has a target the paren-less form is a call (as on master)
+        // ponytail: no unit test reaches this site with a union: its key is a callee parameter (never a union) or a global cursor, and a #if-typed global is no resolvable cursor; red check = the (b) twin only
+        else if (
+          n.rawKind !== "member_expression" ||
+          ts.length > 0 ||
+          r570Targets(n, c, ctx).length > 0
+        )
+          viaRec(ts);
       }
     } else if (key === "" && c.recv === null && n.rawKind !== "member_expression") {
       if (own.has(c.method)) {

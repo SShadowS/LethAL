@@ -1044,7 +1044,8 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   version 1.1.1.
 - **A hang check no longer reads a partly resolved receiver as complete** ([R751](docs/roadmap/R751.md)). A receiver
   typed two ways, where one type names a project codeunit that has no procedure of the called name, is now treated as
-  partial, like one naming a dependency. No corpus is affected (R737's census: 0 such receivers).
+  partial, like one naming a dependency. No corpus is affected (R737's census: 0 such receivers). A paren-less call
+  (`Qv.X`) on such a receiver, where one type has a procedure `X`, is still followed, as before.
 - **A hang check now follows a call through a receiver declared inside a `#if`** (R737). A callee receiver declared
   in a var-section `#if` got no type, so the callee was never followed and a hang-capable site in it could be mutated.
   The type is now read from the live arm (every arm when the file's `#if` cannot be decided); a receiver with two types
