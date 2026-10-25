@@ -115,6 +115,10 @@ The legs:
   (`al-runner-v3-resource-selector-refused`).
 - N1: the names fixture (R557's tests are unselectable on v3, upstream #5572).
 - X (a) to (f): the compile proof, the binding checks and the Sleep rule (§6) on `scripts/r586-probe`.
+  - X (a′) (R790b; pre-commitment `docs/superpowers/specs/2026-10-25-r790b-x-a-prime-precommitment.md`, master
+    bee9b026): X (a)'s alc-rejected batch with the speculative baseline ON (serve-entries, the session's tests, a
+    budget floor). v3 spawns exactly 1 time beside the failing alc, yet deploy() throws X (a)'s `AlcCompileError`
+    text (scratch path mapped), keeps nothing, and a baseline after it is refused.
 - **Transport per leg (R788; pre-commitment `docs/superpowers/specs/2026-10-25-r788-serve-big-legs-precommitment.md`,
   master 1d6474bb).** Unflagged: D1, D1c and T run serve-entries (`V3_GATE_SERVE_LEGS`, `v3ItestLegTransport`); S1E,
   N1E, N1S and O1 run serve-entries by construction; K runs the CLI's own default (serve-entries for sandbox-app since

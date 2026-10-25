@@ -1310,6 +1310,50 @@ async function legX(scratch: string, push: (line: string) => void): Promise<void
     errA instanceof AlcCompileError && /AL0118/.test(errA.message) && ba.spawnCount === 0,
     "X (a)",
   );
+  // (a') R790b: the same broken batch with the speculative baseline ON (serve-entries, the session's
+  // tests, a budget floor). v3 RAN beside the failing alc proof, yet deploy() throws X (a)'s error
+  // (its scratch path aside), keeps nothing, and leaves no batch a baseline could run on.
+  const suite = ["OverBudgetDetected", "ClampPercentRuns"].map((method) => ({
+    codeunitId: 79100,
+    codeunitName: "Sandbox Tests",
+    method,
+  }));
+  const sa = new AlRunnerV3Backend(
+    backendCfg({
+      instrumentedDir: join(scratch, "xa2"),
+      testDir: sb,
+      packagesDir: deps,
+      bcVersion: SANDBOX_BC,
+      selectorObjectId: 79199,
+      transport: "serve-entries",
+    }),
+  );
+  sa.useBuildSymbols([]);
+  sa.useDiscoveredTests(suite);
+  sa.useSessionTests(suite);
+  sa.useMutantBudgetFloor(180_000, 120_000);
+  const errA2 = await sa.deploy(broken).catch((e: unknown) => e);
+  const kept = (sa as unknown as { speculative: unknown }).speculative;
+  const baselineRefused = await sa.activate(null).then(
+    () => false,
+    (e: unknown) => e instanceof Error && /before a successful deploy/.test(e.message),
+  );
+  const sameError =
+    errA instanceof Error &&
+    errA2 instanceof Error &&
+    errA2.message.split(join(scratch, "xa2")).join(join(scratch, "xa")) === errA.message;
+  console.log(
+    `  X (a'): ${errA2 instanceof AlcCompileError ? "AlcCompileError" : String(errA2)}${sameError ? ", X (a)'s text" : ", NOT X (a)'s text"}; speculative v3 spawns ${sa.spawnCount}; kept ${kept === undefined ? "none" : "SOME"}; a baseline after it ${baselineRefused ? "refused" : "ALLOWED"}`,
+  );
+  await sa.close();
+  must(
+    errA2 instanceof AlcCompileError &&
+      sameError &&
+      sa.spawnCount === 1 &&
+      kept === undefined &&
+      baselineRefused,
+    "X (a') (R790b: speculative rows from an alc-rejected batch are discarded)",
+  );
   // (b) v3 alone on that folder: exit 7, 1 pass, 1 not run.
   const bDir = join(scratch, "xb");
   await cp(broken, bDir, { recursive: true });
