@@ -1819,6 +1819,24 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     return k;
   }
 
+  /** R785: lane 0's measured daemon start plus warm-up request, in ms; 0 until it ran. */
+  laneWarmupMs(): number {
+    return this.lane.timers.warmupMs;
+  }
+
+  /** R785: false when the shared prefetch already holds this mutant's answer (about 0 ms of live work). */
+  needsLiveCall(mutantId: string): boolean {
+    return !this.prefetched.has(mutantId);
+  }
+
+  /** R785: the one-line notice of how many lanes started. */
+  noteLanes(message: string): void {
+    this.notify(
+      "al-runner-v3-lanes-started",
+      `[lethal] al-runner-v3-lanes-started: ${message} (R785).`,
+    );
+  }
+
   /**
    * R766 (b): the memory hold. A lane beyond lane 0 may start only while at least 10 GB is available;
    * under that the caller stays at the lanes it has, and one notice says so. `os.freemem()` is the

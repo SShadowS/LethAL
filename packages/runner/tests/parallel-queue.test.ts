@@ -309,3 +309,96 @@ describe("runScopeQueue: the pull queue", () => {
     expect(ended).toEqual([1]);
   });
 });
+
+// R785: `--workers N` is an upper bound; an extra lane starts only while the queued live work is longer
+// than lane 0's warm-up. A fake clock that only lane 0 moves (COST ms per live mutant): call counters
+// and ids, never wall-clock time.
+describe("runScopeQueue: R785 lanes start by the queued live work", () => {
+  const ticks = async (n: number) => {
+    for (let i = 0; i < n; i++) await new Promise<void>((r) => setImmediate(r));
+  };
+  const COST = 100;
+  /** `live[i]` = live mutants of unit i (0 = prefetched, about 0 ms). */
+  async function run(o: { live: number[]; lanes: number; warm: number; mayStart?: boolean }) {
+    const units = o.live.map((n, i) =>
+      Array.from({ length: Math.max(n, 1) }, (_, j) => ({
+        mutantId: `U${String(i).padStart(3, "0")}.${j}`,
+        live: n > 0,
+      })),
+    );
+    const codes = units.flat().map((m) => m.mutantId);
+    const commit = new OrderedCommit(codes, () => undefined, o.lanes);
+    let clock = 0;
+    let finished = 0;
+    const finishedAtAsk: number[] = [];
+    const used = new Set<number>();
+    const res = await runScopeQueue({
+      units,
+      lanes: o.lanes,
+      mayStart: (k) => {
+        finishedAtAsk.push(finished);
+        return o.mayStart ?? k > 0;
+      },
+      commit,
+      isUnsafe: () => false,
+      pace: {
+        warmupMs: () => o.warm,
+        weight: (u) => u.filter((m) => m.live).length,
+        now: () => clock,
+      },
+      runUnit: async (lane, unit, sink) => {
+        used.add(lane);
+        for (const m of unit) {
+          sink.begin(m.mutantId);
+          if (lane === 0 && m.live) clock += COST;
+          await ticks(1);
+          sink.finish(m.mutantId, () => {});
+        }
+        finished += 1;
+      },
+    });
+    expect(commit.committedCodes).toEqual(codes); // every mutant recorded, in manifest order
+    return { ...res, used, finishedAtAsk };
+  }
+
+  test("(a) short queued work: no extra lane starts", async () => {
+    // 1 + 2 queued units x 100 ms = 200 ms is under a 1000 ms warm-up.
+    const r = await run({ live: [1, 1, 1], lanes: 4, warm: 1000 });
+    expect(r.started).toBe(1);
+    expect([...r.used]).toEqual([0]);
+  });
+
+  test("(b) long queued work: an extra lane starts, and more while work remains; none at queue start", async () => {
+    const r = await run({ live: Array(60).fill(1), lanes: 4, warm: 1000 });
+    expect(r.started).toBe(4);
+    expect(r.used.size).toBe(4);
+    // Every start was asked only after a unit had finished (the cost was known).
+    expect(Math.min(...r.finishedAtAsk)).toBeGreaterThanOrEqual(1);
+  });
+
+  test("(c) never past N, never past the memory hold", async () => {
+    const two = await run({ live: Array(60).fill(1), lanes: 2, warm: 1000 });
+    expect(two.started).toBe(2);
+    const held = await run({ live: Array(60).fill(1), lanes: 4, warm: 1000, mayStart: false });
+    expect(held.started).toBe(1);
+    expect(held.finishedAtAsk).toHaveLength(1); // asked once, then it stays at the lanes it has
+  });
+
+  test("(d) units with no live work (prefetched) do not count", async () => {
+    const live = Array<number>(60).fill(0);
+    live[0] = 1;
+    live[1] = 1;
+    const r = await run({ live, lanes: 4, warm: 1000 });
+    expect(r.started).toBe(1); // 58 queued units, but only a little live work
+    // The control: the same 60 units, all live, do spread.
+    expect((await run({ live: Array(60).fill(1), lanes: 4, warm: 1000 })).started).toBeGreaterThan(
+      1,
+    );
+  });
+
+  test("(e) N = 1 is unchanged: one lane, no start decision", async () => {
+    const r = await run({ live: Array(60).fill(1), lanes: 1, warm: 1000 });
+    expect(r.started).toBe(1);
+    expect(r.finishedAtAsk).toEqual([]);
+  });
+});
