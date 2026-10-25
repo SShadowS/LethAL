@@ -1007,7 +1007,7 @@ RUN — cost and recovery
   --no-group-runs            run covering tests one RunMutant call each, as before R198
   --fresh-probe              al-runner-v3 only: run its contract probe now instead of replaying a
                              cached pass for the same build, packages and alc (R762). Same as
-                             LETHAL_V3_FRESH_PROBE=1. A failed probe is never cached
+                             LETHAL_V3_FRESH_PROBE=1. A failed or forced probe is never cached
   --resume                   continue the most recent unfinished run in --db, reusing its verdicts
   --resume-run <id>          resume a specific run id
   --retry-stranded           on resume, retry mutants that left the server stuck (skipped by default:
@@ -3948,10 +3948,10 @@ export async function runFromCli(
             }
           }
           // Release whatever the backend is holding open: the spawned bc-dev MCP
-          // child. The `process.exit(0)` below would paper over a leak here, but only for this
-          // entry point — anything else embedding the backend would hang or leak a
-          // process instead.
-          if (backend instanceof BcDevMcpBackend) {
+          // child, v3's serve daemon (R775: whose close also prints the serve-entries counters). The
+          // `process.exit(0)` below would paper over a leak here, but only for this entry point —
+          // anything else embedding the backend would hang or leak a process instead.
+          if (backend?.close !== undefined) {
             try {
               await backend.close();
             } catch (err) {
@@ -5172,7 +5172,7 @@ export async function verifyFromCli(
         );
       }
     }
-    if (backend instanceof BcDevMcpBackend) {
+    if (backend?.close !== undefined) {
       try {
         await backend.close();
       } catch (err) {
