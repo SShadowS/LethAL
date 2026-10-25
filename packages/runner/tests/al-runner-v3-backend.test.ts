@@ -625,7 +625,9 @@ describe("T22: the proof is bound to the bytes v3 reads (c1-c5)", () => {
         const c = text[i] === "X" ? "Y" : "X";
         await writeFile(p, text.slice(0, i) + c + text.slice(i + 1));
         expect((await stat(p)).size).toBe(s.size);
-        await utimes(p, s.atime, s.mtime);
+        // Seconds as a number keep sub-millisecond precision (a Date keeps only whole ms).
+        await utimes(p, s.atimeMs / 1000, s.mtimeMs / 1000);
+        expect((await stat(p)).mtimeMs).toBe(s.mtimeMs);
       },
     ],
     [

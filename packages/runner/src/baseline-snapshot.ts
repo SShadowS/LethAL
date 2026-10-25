@@ -95,7 +95,7 @@ export async function hashTestDir(dir: string, links: LinkPolicy = "refuse"): Pr
 
 /*
  * R767: the bound-tree helpers below walk, stat and read SYNCHRONOUSLY. al-runner v3 runs them
- * before every send (`assertBound`), and on D1's 555-file tree Bun's per-call cost of async fs was
+ * before every send (`assertBound`), and on D1's 554-file tree Bun's per-call cost of async fs was
  * the whole 0.35 s (walk 108 ms async vs 6 ms sync; reading and hashing every .al 95 ms vs 16 ms).
  * Same walk, same bytes, same hash: only the calls block.
  */
