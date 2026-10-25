@@ -162,6 +162,7 @@ export const V3_GATE_LEGS = [
   "S3",
   "N1",
   "N1E",
+  "N1S",
   "X",
   "L1",
   "Y-A",
