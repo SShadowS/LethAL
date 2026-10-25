@@ -92,6 +92,25 @@ The legs:
     `(`, `)`, `/`, `&`, `å`, `æ`, in the positions N1S ran them: a letter or digit first, spaces single and inner.
     The dot stays out (#5798, N1E).
   - It is in `V3_GATE_LEGS`. On a build with no serve path (alpha.2) it reads "not applicable".
+- O1 (R784; pre-commitment `docs/superpowers/specs/2026-10-25-r784-order-probe-leg-precommitment.md`, master 6aa7700c):
+  - What it runs: ONE `al-runner serve` daemon takes five requests, each entry one codeunit of
+    `fixtures/sandbox-order-tests` (Writer sets, Reader reports): `[R]`, `[W,R]`, `[R,W]`, `[W1,R1,W2,R2,R3]`, then a
+    new `[R]`. Kinds (7): WorkDate, GlobalLanguage, uncommitted rows, a SingleInstance codeunit in the test app and
+    one in the dependency app (`fixtures/sandbox-order`), NumberSequence, IsolatedStorage. No test commits
+    (al-runner refuses `Commit` under `TestIsolation = Function`), so commit-based state stays unmeasured.
+  - Package sets: the fixture's own (the Microsoft symbols of `sandbox-tests`), and, with `LETHAL_ITEST_V3_CDO`, the
+    CDO `Test/.alpackages` as a read-only package cache (skipped without it, as D1 is). For the CDO set the leg
+    copies the fixture into its scratch dir and adds to the tests app.json the dependencies the CDO Test
+    `app.json` declares (read at run time, Document Output left out), then runs the daemon with `--verbose` and
+    requires exactly 17 distinct `dependency:` lines; any other count is `infra-fail`, so the set cannot pass
+    without the 17-app install.
+  - Figures: every Reader entry reads the defaults (WorkDate = the clock's date, language 1033, rows 0, both marks
+    DEFAULT, number sequence ABSENT, isolated storage ABSENT); every Writer test passes. A writer value in a Reader
+    entry, or a Writer test that does not pass, is `gate-fail`; a daemon that cannot run is `infra-fail`
+    (`judgeOrderProbe`, `r784-order-probe.test.ts`). R778's kill-pair batching rests on this.
+  - O1 does not probe the per-entry `resources` override (the active-mutant file); N1S's per-mutant comparison of batched kill pairs against one-shot covers it indirectly. The judge reads the ANSWER order (execution order is inferred from it) and fails when it differs from the sent order, or when a request does not match the plan.
+  - It is in `V3_GATE_LEGS`. On a build with no serve path (alpha.2) it reads "not applicable". Per R777 the update
+    gate reads `infra-fail` for `current` until it is regated at a commit that has O1.
 - S3: runs no session. It checks that `selectorMode: "resource"` is refused by name
   (`al-runner-v3-resource-selector-refused`).
 - N1: the names fixture (R557's tests are unselectable on v3, upstream #5572).
@@ -181,6 +200,8 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
 Pre-committed on master (`docs/superpowers/specs/2026-10-24-r602-alrunner-v3-mo-wr-precommitment.md`, c2f67f0a) and recorded once under R332 on 2026-10-24 on the pin (alpha.2 91253f2d6), equal to the pre-commitment per mutant (MO 12/12 rows, WR 98/98). The gate REFUSES to start MO or WR without their baselines (R332). Both are default legs AND in `V3_GATE_LEGS` (orchestrator ruling 2026-10-24): they are the only measurement of v3's per-object frame, so a build that breaks it must not move `current`. Inside these two legs an `AlRunnerCoverageFrameError` is `gate-fail` (`legOutcomeOfError(err, leg)`); in every other leg it stays `infra-fail`. `scripts/al-runner-v3-update.ts` needs no change: it judges the receipt by `gateOutcome` over `V3_GATE_LEGS`, so an older receipt without MO and WR reads `infra-fail` ("missing legs MO,WR").
 
 Both legs are one-shot only (the measurement was one-shot): `LETHAL_ITEST_V3_TRANSPORT=serve-entries` makes them fail by name, `al-runner-v3-itest-leg-transport-refused`. For the same reason, since R761 a USER project with a multi-object or single-wrapper `#if` file does not take the serve-entries default. It falls back to one-shot with `al-runner-v3-serve-default-fallback` (`multi-object-or-wrapped`).
+
+Since R786, the serve-entries DEFAULT also falls back when the serve warm-up meets a row R612 refuses by name (a Company read, a missing DotNet sidecar). `lethal run` closes the serve attempt, builds a new one-shot backend, and re-runs the whole session with one `al-runner-v3-serve-default-fallback-warmup` warning that names the row. Nothing of the serve attempt is kept in the report; its run row stays in the store, marked (its config fingerprint gets an `|abandoned` suffix) so `--resume` skips it, and the warning names that run id. A fallback needs EVERY unkept warm-up row to be a named refusal. An explicit `serve-entries` still refuses (`al-runner-v3-entries-warmup-dirty`), and so does any other warm-up cause (a timeout, rows that differ from the baseline, a wrong echo). `--workers > 1` after a fallback is refused by name, before a second backend is built. The report carries the caveat `al-runner-v3-serve-default-fallback-warmup`.
 
 Both run as the other legs do (`runSession`, the v3 backend, one-shot, coverage `"al-runner"`, a packages folder of the Microsoft apps), not through the CLI guard. Each makes a **durable killer check** before it compares with its baseline: every mutant that `--mode none` kills (a constant in `alrunner-v3-legs.ts`, `V3_MO_KILLERS` and `V3_WR_KILLERS`, built from the measured `none` runs) must be killed by the same test. The constants are code, so a re-record of a baseline cannot absorb a lost kill.
 

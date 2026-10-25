@@ -249,7 +249,8 @@ export type Caveat =
   | "tests-compiled-out"
   | "test-symbols-unverified"
   | "project-symlink-skipped"
-  | "baseline-test-stopped";
+  | "baseline-test-stopped"
+  | "al-runner-v3-serve-default-fallback-warmup";
 
 /**
  * R403 phase C: one test the arm filter dealt with, as `SessionReport.excludedTests` lists it.
@@ -597,6 +598,19 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "Not a quarantine: a stop BC never answers quarantines the run instead, at the baseline, " +
       "the cold kill confirm and the warm replay alike.",
     basis: "R658",
+  },
+  "al-runner-v3-serve-default-fallback-warmup": {
+    meaning:
+      "The al-runner-v3 session started on the serve-entries default, met a warm-up row that R612 " +
+      "refuses by name (a Company read, a missing DotNet sidecar), and was run again from the start " +
+      "on one-shot, as an explicit one-shot run is. Every verdict in this report was measured on " +
+      "one-shot; nothing of the serve attempt is kept in this report. Its run row stays in the store, " +
+      "marked so --resume skips it. The `al-runner-v3-serve-default-fallback-warmup` " +
+      "warning names the row, its reason and that run (R786).",
+    entailedNegative:
+      "Not a statement about any mutant. Not a wrong verdict: one-shot is the transport the " +
+      "serve-entries default is proven against.",
+    basis: "R786",
   },
 };
 
@@ -2832,6 +2846,13 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   // R631 - see CAVEAT_INTERPRETATIONS["project-symlink-skipped"]. From the warning itself: no field.
   if (events.some((e) => e.type === "warning" && e.code === "project-symlink-skipped"))
     caveats.push("project-symlink-skipped");
+  // R786 - see CAVEAT_INTERPRETATIONS["al-runner-v3-serve-default-fallback-warmup"]. From the warning itself: no field.
+  if (
+    events.some(
+      (e) => e.type === "warning" && e.code === "al-runner-v3-serve-default-fallback-warmup",
+    )
+  )
+    caveats.push("al-runner-v3-serve-default-fallback-warmup");
   // See CAVEAT_INTERPRETATIONS["runner-disagreement"] for what this caveat means to a reader.
   const runnerDisagreementTests = input.runnerDisagreementTests ?? [];
   if (runnerDisagreementTests.length > 0) caveats.push("runner-disagreement");

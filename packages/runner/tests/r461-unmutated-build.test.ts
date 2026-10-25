@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { symlinkSync } from "node:fs";
 import { mkdir, readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { AlRunnerV3ServeFallbackWarmupError } from "../src/al-runner-v3-backend";
 import { AlcCompileError, ArtifactCompiler, UnmutatedBuildFailedError } from "../src/artifact";
 import type { CompiledArtifact } from "../src/artifact";
 import type {
@@ -737,5 +738,71 @@ describe("R631 review H1: the package cache is governed by the cache policy, not
     const err = await runs(dirs);
     expect(err).toBeInstanceOf(ProjectSymlinkRefusedError);
     expect((err as Error).message).toContain(join(dirs.projectDir, "README.md"));
+  });
+});
+
+// R786: through runSession, on a fake backend that behaves as the v3 backend does around the fallback.
+describe("R786: the serve warm-up fallback through runSession", () => {
+  const CODE = "al-runner-v3-serve-default-fallback-warmup";
+  class FallbackBackend extends R461Backend {
+    private notify: ((code: string, message: string) => void) | undefined;
+    constructor(
+      dir: string,
+      private readonly mode: "second-attempt" | "serve-attempt" | "plain",
+    ) {
+      super(
+        dir,
+        () => OK,
+        () => OK,
+      );
+    }
+    setNotify(n?: (code: string, message: string) => void): void {
+      this.notify = n;
+    }
+    async decideTransport(): Promise<void> {
+      if (this.mode === "second-attempt") this.notify?.(CODE, "[lethal] fell back (row: reason)");
+    }
+    async prefetchMutants(): Promise<void> {
+      if (this.mode === "serve-attempt")
+        throw new AlRunnerV3ServeFallbackWarmupError("Codeunit1.T", "Company");
+    }
+  }
+
+  test("the one-shot re-run's report carries the caveat; a plain session's does not", async () => {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    const fell = await runSession({
+      backend: new FallbackBackend(dirs.root, "second-attempt"),
+      store,
+      ...dirs,
+      selectorIds,
+    });
+    expect(fell.validity.caveats).toContain(CODE);
+    const plain = await runSession({
+      backend: new FallbackBackend(dirs.root, "plain"),
+      store,
+      ...dirs,
+      selectorIds,
+    });
+    expect(plain.validity.caveats).not.toContain(CODE);
+    store.close();
+  });
+
+  test("the serve attempt's run is marked abandoned and named on the error", async () => {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    const err = await settle(
+      runSession({
+        backend: new FallbackBackend(dirs.root, "serve-attempt"),
+        store,
+        ...dirs,
+        selectorIds,
+      }),
+    );
+    expect(err).toBeInstanceOf(AlRunnerV3ServeFallbackWarmupError);
+    const id = (err as AlRunnerV3ServeFallbackWarmupError).abandonedRunId;
+    expect(typeof id).toBe("number");
+    expect(store.getRun(id ?? -1)?.configFingerprint?.endsWith("|abandoned")).toBe(true);
+    store.close();
   });
 });

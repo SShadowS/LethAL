@@ -82,7 +82,8 @@
               "tests-compiled-out",
               "test-symbols-unverified",
               "project-symlink-skipped",
-              "baseline-test-stopped"
+              "baseline-test-stopped",
+              "al-runner-v3-serve-default-fallback-warmup"
             ]
           }
         },

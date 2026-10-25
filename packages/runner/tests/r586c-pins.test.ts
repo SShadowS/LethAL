@@ -698,13 +698,40 @@ describe("R771: the edge build a157b2d34 (alpha.5's readings plus N1E)", () => {
     expect(findV3Pin(A_VERSION, flip(A_SHA))).toBeUndefined();
     expect(findV3Pin(A_VERSION, EDGE_SHA)).toBeUndefined();
   });
-  test("it shares alpha.5's readings, and sleep-is-noop reads gone", () => {
+  test("it shares alpha.5's readings except one message text, and sleep-is-noop reads gone", () => {
     const a = need(pin);
     const p = need(aPin);
-    expect(p.legC).toBe(a.legC);
     expect(p.legT).toBe(a.legT);
     expect(p.xb).toBe(a.xb);
+    for (const k of SEVEN.filter((s) => s !== "duplicate-key-insert-raises"))
+      expect(p.legC[k]).toBe(need(a.legC[k]));
+    const { measured: _m, ...dk } = need(p.legC["duplicate-key-insert-raises"]);
+    const { measured: _a, ...adk } = need(a.legC["duplicate-key-insert-raises"]);
+    expect(dk).toEqual(adk);
     expect(p.legC["sleep-is-noop"]?.verdict).toBe("gone");
+  });
+  test("addendum 1: duplicate-key's new message text is pinned; alpha.5's old text is held on it", () => {
+    const NEW = need(ALPHA5["duplicate-key-insert-raises"]).measured.replace(
+      "is not pinned",
+      "is measured only for TestIsolation = Codeunit and the default TransactionModel",
+    );
+    const legC = need(aPin).legC;
+    const run = (measured: string) =>
+      classifyLegC(
+        withFact(alpha5Facts(), "duplicate-key-insert-raises", { measured }),
+        V3_DEFECT_FACTS,
+        V3_LEG_C_FACTS,
+        V3_WARN_FACTS,
+        legC,
+      );
+    const now = run(NEW);
+    expect(now.outcome).toBe("pass");
+    expect(now.lines.filter((l) => l.startsWith("pinned: ")).length).toBe(7);
+    const old = run(need(ALPHA5["duplicate-key-insert-raises"]).measured);
+    expect(old.outcome).toBe("held");
+    expect(old.lines).toContain("pin-mismatch: duplicate-key-insert-raises: pinned refused, read refused");
+    // The alpha.5 and dcdf9e821 pins keep the old text.
+    expect(need(need(pin).legC["duplicate-key-insert-raises"]).measured.test(NEW)).toBe(false);
   });
   test("only this pin carries n1e", () => {
     expect(need(aPin).n1e?.issue).toMatch(/\/5798$/);

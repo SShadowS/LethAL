@@ -287,7 +287,11 @@
   "pairFallbacks1": 1,
   "pairFallbacks2": 1,
   "pairFallbacks1Passed": 1,
-  "pairFallbacks2Passed": 1
+  "pairFallbacks2Passed": 1,
+  "pairBatchRequests": 0,
+  "pairBatchStored": 0,
+  "pairBatchServed": 0,
+  "pairBatchRefused": 0
  },
  "notices": []
 }

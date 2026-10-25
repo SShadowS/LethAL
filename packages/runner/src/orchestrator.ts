@@ -86,6 +86,7 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "./backend";
+import { AlRunnerV3ServeFallbackWarmupError } from "./al-runner-v3-backend";
 import { isBcdev, isLocalRunner, isUnread, stopIsRetrySafe } from "./backend";
 import {
   decodeSource,
@@ -8232,6 +8233,12 @@ async function runSessionBody(
     if (!(err instanceof SessionUnsafeError)) {
       failing = true;
       failure = { error: err };
+      // R786: the serve attempt falls back to one-shot in a NEW run; this one is marked so a later
+      // `--resume` never picks it up, and the error names it.
+      if (err instanceof AlRunnerV3ServeFallbackWarmupError) {
+        cfg.store.abandonRun(runId);
+        err.abandonedRunId = runId;
+      }
       throw err;
     }
   } finally {
