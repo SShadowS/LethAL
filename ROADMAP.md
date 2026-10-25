@@ -824,7 +824,7 @@ that ordering is the priority.
 - **R784** · The R-653 order probe as a gated update-gate leg (every pin), plus a non-transactional kind and a dependency-app SingleInstance · [R784.md](docs/roadmap/R784.md) · done (4730432c)
 - **R786** · PRIORITY: a default v3 run (serve-entries by default, R761) FAILS at the warm-up when a test is one R612 refuses, where the same run on one-shot completes · [R786.md](docs/roadmap/R786.md) · done (07f89eb3)
 - **R787** · A fixture `.alpackages` that is a symlink into another worktree is neither ignored by git nor safe from a gate's writes · [R787.md](docs/roadmap/R787.md) · open, filed 2026-10-25 (from coord task R-783)
-- **R789** · The v3 gate's `timeout-is-cpu` fact reads `diverged` on a correct build when other jobs load core 0 · [R789.md](docs/roadmap/R789.md) · done (494082ea)
+- **R789** · The v3 gate's `timeout-is-cpu` fact reads `diverged` on a correct build when other jobs load core 0 · [R789.md](docs/roadmap/R789.md) · done (494082ea, 3ea559ca)
 
 ---
 
