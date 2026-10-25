@@ -315,7 +315,13 @@ export async function runV3LaneTrace(): Promise<V3LaneTrace> {
   const root = await mkdtemp(join(tmpdir(), "lethal-v3lane-"));
   try {
     const real = await realpath(root);
-    const norm = (s: string): string => s.split(real).join("<ROOT>").split(root).join("<ROOT>");
+    // Windows: the root has `\` separators, doubled inside JSON.stringify'd bodies; replace every form, then
+    // write the separators after `<ROOT>` as `/`, so the trace is the same on every OS.
+    const forms = [real, root].flatMap((p) => [JSON.stringify(p).slice(1, -1), p]);
+    const norm = (s: string): string =>
+      forms
+        .reduce((acc, p) => acc.split(p).join("<ROOT>"), s)
+        .replace(/<ROOT>[^"\s]*/g, (m) => m.replace(/\\\\|\\/g, "/"));
     const batch = join(root, "batch");
     const testDir = join(root, "tests");
     const deps = join(root, "deps");
