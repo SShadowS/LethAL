@@ -297,6 +297,10 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **LethAL Control 1.0.0.24 is the minimum** (R689, R733). A test codeunit whose `OnRun` raises now has BC's own error
+  text quoted in `TestCodeunitDiscoveryError`, and the installed-dependents warning names each extra app. An older
+  control app is refused by name; republish it (`bun scripts/bc-demo-setup.ts`, or the envtool config's
+  `controlSymbolPath`). Every BC gate is proven on bc1-bc3 under it.
 - **Session notices are warning events, so stderr changes** (R739). The lines a session used to print with
   `console.warn` (the lease-path refusals, a failed store correction at a lease loss, the coverage lines about
   unmatched triggers, unplaceable and refused mutants, the resource-rebase collision, and the backends' notices:

@@ -235,6 +235,35 @@ describe("R686: a test codeunit whose OnRun raises is named, not called a stale 
     expect((err as TestCodeunitDiscoveryError).missingTests).toEqual(both.map((f) => f.name));
   });
 
+  const quote = {
+    text: "R689 onrun boom 93890",
+    frame: '"R689 Throwing Tests"(CodeUnit 93890).OnRun',
+  };
+  const quoted = both.map((f) => ({ ...f, discoveryError: quote }));
+  const QUOTE_LINE = `BC's discovery error: ${quote.text} (at ${quote.frame})`;
+
+  test("R689: a proven refusal quotes BC's discovery error once; without it the message is unchanged", () => {
+    const withQuote = baselineFoundNoneRefusal({ ...proven, missing: quoted });
+    expect(withQuote).toBeInstanceOf(TestCodeunitDiscoveryError);
+    expect(withQuote.message).toContain(QUOTE_LINE);
+    expect(withQuote.message.split(QUOTE_LINE)).toHaveLength(2);
+    const without = baselineFoundNoneRefusal(proven);
+    expect(without.message).not.toContain("discovery error:");
+    expect(withQuote.message.replace(`${QUOTE_LINE}\n`, "")).toBe(without.message);
+  });
+
+  test("R689: the StaleTestAppError + ONRUN_HINT path quotes it too, and only when present", () => {
+    const err = baselineFoundNoneRefusal({
+      ...proven,
+      missing: quoted,
+      compiledInPublishedPackage: false,
+    });
+    expect(err).toBeInstanceOf(StaleTestAppError);
+    expect(err.message).toContain(QUOTE_LINE);
+    const plain = baselineFoundNoneRefusal({ ...proven, compiledInPublishedPackage: false });
+    expect(plain.message).not.toContain("discovery error:");
+  });
+
   test("A2: evidence not compiled -> StaleTestAppError, with the OnRun sentence", () => {
     const err = baselineFoundNoneRefusal({ ...proven, compiledInPublishedPackage: false });
     expect(err).toBeInstanceOf(StaleTestAppError);
