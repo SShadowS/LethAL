@@ -39,7 +39,18 @@ export const COMPANY = "CRONUS International Ltd.";
 // ---------------------------------------------------------------------------------------------
 // the servers (moved from bc-linux-setup.ts)
 
-export const HOST = "http://192.168.2.157";
+/** `http://<host>` with no port or path; anything else is refused by name. */
+export function hostFrom(v: string | undefined): string {
+  if (v === undefined) return "http://192.168.2.157";
+  if (!/^http:\/\/[A-Za-z0-9.-]+$/.test(v))
+    throw new Error(
+      `LETHAL_BC_HOST must be http://<host> with no port or path, got ${JSON.stringify(v)}`,
+    );
+  return v;
+}
+
+/** R783 spike: `LETHAL_BC_HOST` (e.g. `http://192.168.2.77`, docker1) names another host; default server1. */
+export const HOST = hostFrom(process.env.LETHAL_BC_HOST);
 
 export const SERVERS = {
   bc1: { odata: 7048, dev: 7049, api: 7052 },

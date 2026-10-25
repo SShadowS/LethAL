@@ -15,6 +15,7 @@ import { itestLaunchName } from "../packages/runner/itest/config-path.ts";
 import { MARKER_HOST, MARKER_SERVERS } from "../packages/runner/itest/out-of-use.ts";
 import type { FetchFn } from "../packages/runner/src/activation.ts";
 import { readAppIdentity } from "../packages/runner/src/published-test-app.ts";
+import { hostFrom } from "./bc-app-content.ts";
 import { buildFakeAppWithEntries } from "../packages/runner/tests/helpers/fake-app.ts";
 import { CONTROL_SELECTOR_FILENAME } from "../packages/schemata/src/project.ts";
 import { type Conn, type ServerOps, sha256Of } from "./bc-app-content.ts";
@@ -1242,6 +1243,18 @@ describe("--write-config-only: configs from the secret file, no server call, no 
       writeFileSync(join(h.outOfUseDir, "bc3.md"), `${MARKER}owner: ${t}\n`);
       expectRefused(f, h, await h.go(["--server", "bc3", "--lane", "bugs"]));
     });
+  });
+
+  test("R783: LETHAL_BC_HOST overrides the host; unset is server1; a port or path is refused", () => {
+    expect(hostFrom(undefined)).toBe("http://192.168.2.157");
+    expect(hostFrom("http://192.168.2.77")).toBe("http://192.168.2.77");
+    for (const bad of [
+      "http://192.168.2.77:7049",
+      "http://192.168.2.77/",
+      "192.168.2.77",
+      "https://x",
+    ])
+      expect(() => hostFrom(bad)).toThrow("LETHAL_BC_HOST must be");
   });
 
   test("R669: out-of-use.ts's host and dev ports mirror HOST and SERVERS", () => {
