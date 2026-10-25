@@ -58,6 +58,7 @@ import {
 import { AL_RUNNER_V3_NOT_AUTHORITATIVE } from "../src/al-runner-v3-config";
 import { runV3ContractProbe, v3DefectWarnings } from "../src/al-runner-v3-contract";
 import { AL_RUNNER_V3_DEFAULT_PATH, sha256OfFile } from "../src/al-runner-v3-pin";
+import { FRESH_PROBE_ENV } from "../src/al-runner-v3-probe-cache";
 import { type V3BuildPin, findV3Pin } from "../src/al-runner-v3-pins";
 import { SLEEP_NOTE_TAG } from "../src/al-runner-v3-sleep";
 import { AlcCompileError, ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
@@ -166,6 +167,10 @@ if (!process.env.LETHAL_ITEST_ALRUNNER_V3) {
   const challenged = await emitSkipped("alrunner-v3", "the leg's env var is unset");
   process.exit(challenged ? 1 : 0);
 }
+
+// R762: this gate (and the update gate, which runs it) measures the probe, never replays it: every
+// session it starts, `buildBackend`'s included, runs the contract probe fresh.
+process.env[FRESH_PROBE_ENV] = "1";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "..", "..", "..");
