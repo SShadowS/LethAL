@@ -1803,11 +1803,18 @@ export async function runVerify(
       undefined,
       { kind: "bcdev" },
     );
-    leftOut = await leftOutBySource(
-      args.testDir,
-      source.testNarrowing,
-      source.runId,
-      testBuildSymbols,
+    const sourceBaseline = store.baselineTests(source.runId);
+    // A test the source run measured was never left out, even if its file is now outside the globs.
+    const measured = new Set(sourceBaseline.map((r) => `${r.codeunitId}::${r.method}`));
+    leftOut = new Map(
+      [
+        ...(await leftOutBySource(
+          args.testDir,
+          source.testNarrowing,
+          source.runId,
+          testBuildSymbols,
+        )),
+      ].filter(([k]) => !measured.has(k)),
     );
     if (leftOut.size > 0) {
       (deps.log ?? ((line: string) => process.stderr.write(`${line}\n`)))(
@@ -1819,7 +1826,7 @@ export async function runVerify(
     const plan = await planVerify({
       source,
       manifest,
-      sourceBaseline: store.baselineTests(source.runId),
+      sourceBaseline,
       sourceTestDigests: store.testDigests(source.runId),
       sourceTestDigestParts: store.testDigestParts(source.runId),
       testDir: args.testDir,

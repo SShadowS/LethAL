@@ -2587,6 +2587,33 @@ describe("C02-09: gap ids", () => {
     w.store.close();
   });
 
+  test("R759: a source-baseline test outside the recorded globs is not listed in excludedTests", async () => {
+    const { w } = await narrowWorld('{"testsOnly":["{50101,50102}.*"],"excludeTests":[]}');
+    const out = await w.verify(["0/M0001"]);
+    expect("excludedTests" in out).toBe(false);
+    w.store.close();
+  });
+
+  test("R759: a covering TestPage test outside the recorded globs is still refused, never sent", async () => {
+    const w = await verifyWorld([seed("M0001", undefined, "survived")], [], {
+      testDir: pageTestDir(false),
+      baseline: [OLD_P],
+      coveringTests: ["Old.P"],
+      runNamed: async () => {
+        throw new Error("runNamed must not be called when every test is refused");
+      },
+    });
+    w.store.db.run("UPDATE runs SET test_narrowing = ?", [
+      '{"testsOnly":["50101.*"],"excludeTests":[]}',
+    ]);
+    const out = await w.verify(["0/M0001"]);
+    const [r] = out.results;
+    expect(r?.notRun).toContain("Old.P");
+    expect(out.testPageRefused?.tests).toContain("Old.P");
+    expect(JSON.stringify(out.excludedTests ?? [])).not.toContain("Old.P");
+    w.store.close();
+  });
+
   test("R759: a recorded glob that now matches no test file fails loudly, naming the run", async () => {
     const { w } = await narrowWorld('{"testsOnly":["nowhere/**"],"excludeTests":[]}');
     await expect(w.verify(["0/M0001"])).rejects.toThrow(/run \d+ recorded --tests-only/);
