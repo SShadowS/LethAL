@@ -708,9 +708,13 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   // (file, startIndex) as (string, number), not a colon-joined string: localeCompare on "file:1000"
   // vs "file:99" sorts ":1000" before ":99" (lexical compare of the numeric suffix), scrambling
   // report order for any file with 100+ mutable start offsets.
+  // R766 (b): the mutant code is the last tie-break (two mutants may share a start offset), by code
+  // point (R481), so the order does not depend on the order the events arrived in.
   outcomes.sort(
     (a, b) =>
-      a.mutant.file.localeCompare(b.mutant.file) || a.mutant.startIndex - b.mutant.startIndex,
+      a.mutant.file.localeCompare(b.mutant.file) ||
+      a.mutant.startIndex - b.mutant.startIndex ||
+      (a.mutant.mutantId < b.mutant.mutantId ? -1 : a.mutant.mutantId > b.mutant.mutantId ? 1 : 0),
   );
 
   return {

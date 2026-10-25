@@ -92,6 +92,7 @@ import {
   runSession,
 } from "./orchestrator";
 import type { SessionConfig } from "./orchestrator";
+import { MAX_V3_WORKERS } from "./parallel-queue";
 import { PermissionCanaryClient, runPermissionCanary } from "./permission-canary";
 import { type BuildBackend, validateSymbolList } from "./preprocessor-symbols";
 import { createNdjsonSink } from "./progress-ndjson";
@@ -1018,7 +1019,11 @@ RUN — cost and recovery
                              the lease fence, but that id cannot be independently verified.
                              A baseline test, kill confirm or warm replay with NO mutant active
                              is stopped at its budget regardless of this flag (R658)
-  --workers <n>              parallel workers (every backend is limited to 1)
+  --workers <n>              parallel workers. al-runner-v3 only, 2 to 8: N serve lanes of one
+                             backend, with serve-entries and a build whose pin retires the §6
+                             Sleep rule (else refused by name). The first latch or stop ends the
+                             session with an error naming the mutants it discarded. bcdev is
+                             limited to 1
   --progress-out <path>      stream events to this file as NDJSON, one JSON object per line,
                              flushed as each event arrives — a crash diagnostic and a structured
                              feed for agents/CI. VERDICT LINES ARE PROVISIONAL UNTIL
@@ -2126,12 +2131,14 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       `--allow-expiring-env applies to the bcdev backend's environment tool; ${backendArg} has no environment`,
     );
   }
-  // R586 (T16): v1 of the v3 backend is sequential and not measured on Windows.
+  // R586 (T16): v3 is not measured on Windows.
   if (backendArg === "al-runner-v3") {
     refuseV3Platform();
-    if (workers > 1) {
+    // R766 (b): N serve lanes in one backend. The run refuses by name, after the transport is
+    // decided, unless the transport is serve-entries and the build retires the §6 Sleep rule.
+    if (workers > MAX_V3_WORKERS) {
       throw new Error(
-        "al-runner-v3-workers-refused: --workers > 1 is refused with --backend al-runner-v3 (R586 v1 is sequential).",
+        `al-runner-v3-workers-cap: --workers ${workers} is above the cap of ${MAX_V3_WORKERS} (R766).`,
       );
     }
   }

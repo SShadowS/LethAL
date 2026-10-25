@@ -22,6 +22,7 @@
  */
 import { createHash } from "node:crypto";
 import { cp, mkdir, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { freemem } from "node:os";
 import { join, resolve } from "node:path";
 import {
   CONTROL_REGISTER_FILENAME,
@@ -636,6 +637,18 @@ type V3PhaseTimer =
   | "echoMs"
   | "boundMs";
 
+/** R766 (b): one lane's view of the backend; see `AlRunnerV3Backend.lanes`. */
+export interface V3LaneView extends ExecutionBackend {
+  readonly laneIndex: number;
+  /** The first latch of the batch (shared by all lanes) and the mutant behind it. */
+  latched(): { readonly mutantId: string; readonly why: string } | undefined;
+  useBuildSymbols(symbols: readonly string[]): void;
+  close(): Promise<void>;
+}
+
+/** R766 (b): a lane beyond lane 0 starts only while this much memory is available (10 GB). */
+export const LANE_MIN_AVAILABLE_BYTES = 10 * 2 ** 30;
+
 /** A started serve daemon; `dirty` closes it after the §5 window in flight (R612 on a plain request). */
 interface Daemon {
   readonly server: AlRunnerServer;
@@ -779,15 +792,27 @@ class Lane {
     boundMs: 0,
   };
 
+  /** R766 (b): the last mutant (not NONE) this lane activated; names the mutant behind a latch. */
+  lastMutant: string | undefined;
+  private cwd: string;
+
   constructor(
     private readonly where: {
+      /** 0 for the backend's own lane (`active/`), k for the copy `active.<k>/`. */
+      readonly index: number;
       readonly activeDir: string;
       readonly scratchCwd: string;
       /** The test dir as v3 reads it (`realpath`, else absolute). */
       readonly testSource: () => string;
       readonly now: () => number;
     },
-  ) {}
+  ) {
+    this.cwd = where.scratchCwd;
+  }
+
+  get index(): number {
+    return this.where.index;
+  }
 
   activeDir(): string {
     return this.where.activeDir;
@@ -795,7 +820,12 @@ class Lane {
 
   /** R645: the working directory of every v3 process of the session (absolute, never the caller's). */
   scratchCwd(): string {
-    return this.where.scratchCwd;
+    return this.cwd;
+  }
+
+  /** R766 (b): once lanes exist, each lane has its own cwd (`daemon-<k>/`). */
+  setScratchCwd(dir: string): void {
+    this.cwd = dir;
   }
 
   resourcePath(): string {
@@ -829,6 +859,7 @@ class Lane {
     this.rowsByCodeunit = new Map();
     this.deployedDir = undefined;
     this.lastActivated = null;
+    this.lastMutant = undefined;
   }
 
   /** R651: `f`'s wall time into `timers[k]`, thrown or not. TIMING ONLY: no verdict reads it. */
@@ -872,8 +903,26 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private prefetched = new Map<string, Map<number, CallRows>>();
   /** §3: the covering codeunits of the batch: the warm-up's union. */
   private union = new Set<number>();
-  /** R766: the per-daemon state; exactly one lane today. */
+  /** R766: the per-daemon state. `lane` is lane 0 (`active/`); `lanes(N)` adds `active.<k>/` lanes. */
   private readonly lane: Lane;
+  private readonly laneList: Lane[];
+  /** R766 (b): true once `lanes(N)` ran; the root backend's per-mutant methods then throw by name. */
+  private lanesBuilt = false;
+  /**
+   * R766 (b): the first latch of the batch (`batchBlind` or `entriesRefused`) and the mutant behind
+   * it, first wins. The orchestrator's stop rule under `--workers > 1` reads it (`latched()`).
+   */
+  private latchBy: { readonly mutantId: string; readonly why: string } | undefined;
+  /** R766 (b): test seams only; production leaves it empty. */
+  readonly seams: {
+    /** Forces `sleepRuleRetiredForParallel()`. */
+    sleepRuleRetired?: boolean;
+    /** Replaces `os.freemem()` for the lane memory hold. */
+    availableBytes?: () => number;
+    /** Runs on each lane copy right after it was made, before it is checked against the proof. */
+    afterLaneCopy?: (dir: string) => Promise<void>;
+  } = {};
+  private memoryHoldNoticed = false;
   /** §3 (N2): a live warm-up refusal; every later run is a transport failure. */
   private entriesRefused: string | undefined;
   /** §2: the echo codeunit, `selectorIds.controlId` of the deployed manifest. */
@@ -942,8 +991,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   coverageTamper?: (path: string) => Promise<void>;
   /** How many v3 processes this backend started (legs X (a), (c)). */
   spawnCount = 0;
+  /** Owner methods drop every lane's pair; a lane's own methods drop only its own (`lane.dropPair()`). */
   private dropPair(): void {
-    this.lane.dropPair();
+    for (const l of this.laneList) l.dropPair();
   }
 
   constructor(
@@ -959,12 +1009,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // R761: a default transport starts one-shot-safe; `decideTransport` turns serve on, before the
     // first deploy (the staged batch differs by transport) and the first v3 process.
     this.entries = cfg.transport === "serve-entries" && cfg.transportSource !== "default";
-    this.lane = new Lane({
-      activeDir: join(cfg.instrumentedDir, "active"),
-      scratchCwd: resolve(cfg.instrumentedDir),
-      testSource: () => this.realTestDir ?? resolve(cfg.testDir),
-      now,
-    });
+    this.lane = this.makeLane(0);
+    this.laneList = [this.lane];
     this.compiler = new ArtifactCompiler(
       {
         alcPath: cfg.alcPath,
@@ -976,6 +1022,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       },
       alcIo,
     );
+  }
+
+  private makeLane(k: number): Lane {
+    return new Lane({
+      index: k,
+      activeDir: join(this.cfg.instrumentedDir, k === 0 ? "active" : `active.${k}`),
+      scratchCwd: resolve(this.cfg.instrumentedDir),
+      testSource: () => this.realTestDir ?? resolve(this.cfg.testDir),
+      now: this.now,
+    });
   }
 
   capabilities(): BackendCapabilities {
@@ -1249,11 +1305,36 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     mutantId: string,
     budgets: readonly { readonly ref: TestMethodRef; readonly budgetMs: number }[],
   ): void {
-    this.dropPair();
-    this.lane.plan = {
+    this.useCoveringBudgetsOn(this.soleLane("useCoveringBudgets"), mutantId, budgets);
+  }
+
+  private useCoveringBudgetsOn(
+    lane: Lane,
+    mutantId: string,
+    budgets: readonly { readonly ref: TestMethodRef; readonly budgetMs: number }[],
+  ): void {
+    lane.dropPair();
+    lane.plan = {
       mutantId,
       budgets: new Map(budgets.map((b) => [refKey(b.ref), b.budgetMs])),
     };
+  }
+
+  /** R766 (b): the one lane of a backend that never built lanes; once it did, a per-mutant call on the root is a bug. */
+  private soleLane(method: string): Lane {
+    if (this.lanesBuilt) {
+      throw new Error(
+        `al-runner-v3-lane-misuse: ${method}() was called on the root backend after lanes(N) built ${this.laneList.length} lanes; per-mutant calls go through a lane view (R766)`,
+      );
+    }
+    return this.lane;
+  }
+
+  /** R766 (b): an owner-only method asked of a lane view. */
+  private ownerOnly(method: string): never {
+    throw new Error(
+      `al-runner-v3-lane-misuse: ${method}() is owner-only; it was called on a lane view (R766)`,
+    );
   }
 
   dependencyPackageDirs(): readonly string[] {
@@ -1287,13 +1368,17 @@ export class AlRunnerV3Backend implements ExecutionBackend {
 
   /** R635: the transport's counters (serve-entries). */
   entriesStats(): Readonly<V3EntriesStats> {
-    // R766: the counters are the backend's; the phase timers are the lanes' (one lane: its own).
-    return { ...this.stats, ...this.lane.timers };
+    // R766: the counters are the backend's; the phase timers are the lanes', summed.
+    const timers = { ...this.lane.timers };
+    for (const l of this.laneList.slice(1)) {
+      for (const k of Object.keys(timers) as V3PhaseTimer[]) timers[k] += l.timers[k];
+    }
+    return { ...this.stats, ...timers };
   }
 
   /** R635 §4: one-shot keeps `lastActivated === null`; serve-entries reads the bracket only. */
-  private isBaselineCall(): boolean {
-    return this.entries ? this.inBaseline : this.lane.lastActivated === null;
+  private isBaselineCall(lane: Lane): boolean {
+    return this.entries ? this.inBaseline : lane.lastActivated === null;
   }
 
   /** Index-only refusals, merged into selection by `runSession` after each deploy (as v2). */
@@ -1315,11 +1400,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
 
   /** C2 and R349: every field derived from the deployed layout or the active mutant. */
   private resetLayoutState(): void {
-    this.lane.resetLayout();
+    for (const l of this.laneList) l.resetLayout();
     this.coverageIndex = undefined;
     this.sleepIndex = undefined;
     this.proof = undefined;
     this.batchBlind = undefined;
+    this.latchBy = undefined;
     this.prefetched = new Map();
     this.baselineRows = new Map();
     this.union = new Set();
@@ -1373,7 +1459,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
 
   async deploy(instrumentedDir: string): Promise<null> {
-    await this.closeDaemon();
+    await this.closeAllDaemons();
     this.resetLayoutState();
     const active = this.lane.activeDir();
     const artifactId = await this.stage(instrumentedDir, active);
@@ -1433,7 +1519,154 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const realTest = await realpath(this.cfg.testDir);
     this.lane.realActive = realActive;
     this.realTestDir = realTest;
+    await this.copyLanes(active);
     return null;
+  }
+
+  /**
+   * R766 (b): lanes 1..N-1 read their own copy `active.<k>/` of the proved tree (timestamps kept, so
+   * the "other files" proof sees the same mtimes). Each copy is checked once against the proof, by
+   * `assertBound(lane)` (the .al hash, the other files, `app.json`, the selector, the resource file):
+   * a copy that differs refuses by name. Every lane also gets its own cwd `daemon-<k>/`.
+   */
+  private async copyLanes(active: string): Promise<void> {
+    if (!this.lanesBuilt) return;
+    for (const l of this.laneList) {
+      await mkdir(l.scratchCwd(), { recursive: true });
+      if (l.index === 0) continue;
+      const dir = l.activeDir();
+      await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      await cp(active, dir, { recursive: true, preserveTimestamps: true });
+      await this.seams.afterLaneCopy?.(dir);
+      l.deployedDir = dir;
+      l.realActive = await realpath(dir);
+      try {
+        await this.assertBound(l);
+      } catch (err) {
+        if (err instanceof AlRunnerV3UnprovenBatchError) {
+          throw new AlRunnerV3UnprovenBatchError(
+            `lane ${l.index}'s copy ${dir} is not the tree alc proved (${err.message})`,
+          );
+        }
+        throw err;
+      }
+    }
+  }
+
+  /**
+   * R766 (b): builds `n` lanes (2..8 is the caller's range; the cap is the orchestrator's) and returns
+   * one view of the backend per lane, in lane order. Lane 0 is the backend's own lane. The views run
+   * the per-mutant calls; the owner (this object) keeps deploy, the proof, the prefetch and `close`.
+   * Called once, before the first `deploy()`: every deploy copies the proved tree into `active.<k>/`.
+   */
+  lanes(n: number): V3LaneView[] {
+    if (this.lanesBuilt) throw new Error("al-runner-v3-lane-misuse: lanes(N) was already called");
+    if (!Number.isInteger(n) || n < 2) {
+      throw new Error(`al-runner-v3-lane-misuse: lanes(${n}): N must be an integer of 2 or more`);
+    }
+    if (this.proof !== undefined) {
+      throw new Error("al-runner-v3-lane-misuse: lanes(N) must be called before the first deploy()");
+    }
+    for (let k = 1; k < n; k++) this.laneList.push(this.makeLane(k));
+    for (const l of this.laneList) {
+      l.setScratchCwd(join(resolve(this.cfg.instrumentedDir), `daemon-${l.index}`));
+    }
+    this.lanesBuilt = true;
+    return this.laneList.map((l) => this.laneView(l));
+  }
+
+  /**
+   * R766 (b): the per-mutant face of one lane. Per-mutant calls act on the lane; the delegated getters
+   * and capabilities read the shared backend; every owner-only method throws by name.
+   */
+  private laneView(lane: Lane): V3LaneView {
+    const b = this;
+    const no = (name: string) => (): never => b.ownerOnly(name);
+    return {
+      laneIndex: lane.index,
+      killsMustReproduce: true,
+      get inRunStopIsBudget(): boolean {
+        return b.inRunStopIsBudget;
+      },
+      get inRunStopMs(): number | undefined {
+        return b.inRunStopMs;
+      },
+      capabilities: () => b.capabilities(),
+      dependencyPackageDirs: () => b.dependencyPackageDirs(),
+      dependencyArtifactAppsDir: () => b.dependencyArtifactAppsDir(),
+      latched: () => b.latched(),
+      activate: (id) => b.activateOn(lane, id),
+      run: (ref, opts) => b.runOn(lane, ref, opts),
+      sendKillPair: (id, ref) => b.sendKillPairOn(lane, id, ref),
+      useCoveringBudgets: (id, budgets) => b.useCoveringBudgetsOn(lane, id, budgets),
+      survivorNote: (covering) => b.survivorNoteShared(covering),
+      deploy: no("deploy"),
+      compileCheck: no("compileCheck"),
+      compilePlainCheck: no("compilePlainCheck"),
+      setNotify: no("setNotify"),
+      decideTransport: no("decideTransport"),
+      useDiscoveredTests: no("useDiscoveredTests"),
+      useSessionTests: no("useSessionTests"),
+      useMutantBudgetFloor: no("useMutantBudgetFloor"),
+      useBuildSymbols: no("useBuildSymbols"),
+      baselinePhase: no("baselinePhase"),
+      noteReusedBaseline: no("noteReusedBaseline"),
+      prefetchMutants: no("prefetchMutants"),
+      status: no("status"),
+      close: no("close"),
+    };
+  }
+
+  /**
+   * R766 (b): the memory hold. A lane beyond lane 0 may start only while at least 10 GB is available;
+   * under that the caller stays at the lanes it has, and one notice says so. `os.freemem()` is the
+   * kernel's available figure on Linux (libuv reads MemAvailable).
+   */
+  laneMayStart(k: number): boolean {
+    if (k === 0) return true;
+    const avail = (this.seams.availableBytes ?? freemem)();
+    if (avail >= LANE_MIN_AVAILABLE_BYTES) return true;
+    if (!this.memoryHoldNoticed) {
+      this.memoryHoldNoticed = true;
+      this.notify(
+        "al-runner-v3-lane-memory-hold",
+        `[lethal] al-runner-v3-lane-memory-hold: ${(avail / 2 ** 30).toFixed(1)} GB available, under the ${LANE_MIN_AVAILABLE_BYTES / 2 ** 30} GB needed to start lane ${k}; this session stays at the lanes already running (R766).`,
+      );
+    }
+    return false;
+  }
+
+  /**
+   * R766 (b): why `--workers > 1` is refused on this backend now, or `undefined` when it may run in
+   * parallel. Asked after `decideTransport`.
+   */
+  parallelRefusal(): string | undefined {
+    if (!this.entries) {
+      return "al-runner-v3-workers-refused: --workers > 1 needs the serve-entries transport; this session runs one-shot (set \"alRunnerV3.transport\" to \"serve-entries\", or see the al-runner-v3-serve-default-fallback warning for why the default fell back) (R766)";
+    }
+    if (!this.sleepRuleRetiredForParallel()) {
+      return "al-runner-v3-workers-refused: parallel v3 needs a build whose pin retires the §6 Sleep rule (R766, R768)";
+    }
+    return undefined;
+  }
+
+  /**
+   * R766 (b): true when the running build's pin and the session probe say the §6 Sleep rule is retired,
+   * so `run()` never opens a coverage window. R768 wires this to `sleepRuleRetired`; until it merges
+   * this is false on every build. A NEW al-runner build needs its own pin before `--workers > 1` is
+   * allowed on it.
+   */
+  sleepRuleRetiredForParallel(): boolean {
+    return this.seams.sleepRuleRetired ?? false;
+  }
+
+  /** R766 (b): the first latch of this batch and the mutant behind it, or `undefined`. */
+  latched(): { readonly mutantId: string; readonly why: string } | undefined {
+    return this.latchBy;
+  }
+
+  private noteLatch(lane: Lane, why: string): void {
+    this.latchBy ??= { mutantId: lane.lastMutant ?? "<baseline>", why };
   }
 
   /** §3 step 2. A failure stops the session: the test app does not compile against this batch. */
@@ -1507,12 +1740,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
 
   async activate(mutantId: string | null): Promise<void> {
-    const lane = this.lane;
+    return this.activateOn(this.soleLane("activate"), mutantId);
+  }
+
+  private async activateOn(lane: Lane, mutantId: string | null): Promise<void> {
     // C2: the rows describe the selector as it was; dropped BEFORE the write.
     lane.rowsByCodeunit = new Map();
     // R653: the pair is taken out here; only the expected next activation puts anything back.
     const pair = lane.pair;
-    this.dropPair();
+    lane.dropPair();
     const proof = this.proof;
     const dir = lane.deployedDir;
     if (proof === undefined || dir === undefined) {
@@ -1536,6 +1772,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         this.prefetched.delete(mutantId);
         lane.rowsByCodeunit = pre;
       }
+      if (mutantId !== null) lane.lastMutant = mutantId;
       if (pair?.next === "null" && mutantId === null) {
         // The kill's confirm: its rows, or the verdict its server error maps to.
         if (pair.none !== undefined) lane.rowsByCodeunit.set(pair.ref.codeunitId, pair.none);
@@ -1553,6 +1790,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     // The plan is NOT dropped here: keyed by mutant id and read only while that mutant is active,
     // so the R577 reproduction (after the unmutated confirm) runs at the killing call's stop.
+    if (mutantId !== null) lane.lastMutant = mutantId;
     await writeFile(
       join(dir, CONTROL_SELECTOR_FILENAME),
       this.selectorText(proof.artifactId, mutantId),
@@ -1570,15 +1808,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * R577 off for v3 would reopen the gap. A lasting change in the LAST send's gap (now the pair)
    * goes unreported (build review L1). R651's timer outside the bracket.
    */
-  private async checkBound(): Promise<void> {
-    const lane = this.lane;
-    if (this.inBaseline) return this.assertBound();
+  private async checkBound(lane: Lane): Promise<void> {
+    if (this.inBaseline) return this.assertBound(lane);
     this.stats.boundChecks += 1;
-    await lane.timed("boundMs", () => this.assertBound());
+    await lane.timed("boundMs", () => this.assertBound(lane));
   }
 
   /** §3 step 3: the bytes v3 will read (the lane's dir and the test dir) are the bytes alc proved. */
-  private async assertBound(lane: Lane = this.lane): Promise<void> {
+  private async assertBound(lane: Lane): Promise<void> {
     const proof = this.proof;
     const dir = lane.deployedDir;
     if (proof === undefined || dir === undefined) {
@@ -1671,15 +1908,18 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
 
   async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+    return this.runOn(this.soleLane("run"), ref, opts);
+  }
+
+  private async runOn(lane: Lane, ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
     // R652: no bound check here; each send checks (`checkBound`).
-    const lane = this.lane;
     if (this.proof === undefined || lane.deployedDir === undefined) {
       throw new AlRunnerV3UnprovenBatchError("no batch was deployed and proved");
     }
     // R653: only the pair's own confirm (after its activate(null)) keeps the pair for the
     // reproduction; any other run drops it. A stored confirm verdict is returned once.
     const pair = lane.pair;
-    if (!(pair?.next === "mutant" && refKey(pair.ref) === refKey(ref))) this.dropPair();
+    if (!(pair?.next === "mutant" && refKey(pair.ref) === refKey(ref))) lane.dropPair();
     const served = lane.pairVerdict;
     if (served !== undefined) {
       lane.pairVerdict = undefined;
@@ -1691,8 +1931,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       // R635 §4: outside the bracket, serve-entries sends a LIVE one-group request.
       const made =
         this.entries && !this.inBaseline
-          ? await this.liveCall(ref)
-          : await this.callCodeunit(ref, opts.timeoutMs, opts.coverage !== "none");
+          ? await this.liveCall(lane, ref)
+          : await this.callCodeunit(lane, ref, opts.timeoutMs, opts.coverage !== "none");
       if ("verdict" in made) return made.verdict;
       call = made.call;
     }
@@ -1702,7 +1942,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       throw new AlRunnerV3NoCoverageCallReusedError(ref);
     }
     if (call.refusal !== undefined) return refusalVerdict(ref, call.refusal, call.wallMs);
-    if (call.missing !== undefined) return this.rowMissing(ref, call.missing, call.wallMs);
+    if (call.missing !== undefined) return this.rowMissing(lane, ref, call.missing, call.wallMs);
     const mine = call.rows.filter(
       (r) => r.codeunit === ref.codeunitId && r.method.toLowerCase() === ref.method.toLowerCase(),
     );
@@ -1711,6 +1951,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       // Cached only when every suite test of the codeunit had one row, so this is a ref outside
       // the suite: never a verdict.
       return this.rowMissing(
+        lane,
         ref,
         `${mine.length} row(s) for ${ref.codeunitName}.${ref.method}`,
         call.wallMs,
@@ -1725,8 +1966,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       !(row.message !== undefined && V3_TIMEOUT_MESSAGE.test(row.message));
     let coverage =
       (row.status === "pass" && !row.notRun) || refusedMidRun
-        ? this.isBaselineCall() && call.noCoverage !== true
-          ? this.coverageOf(row.name, call.coverage)
+        ? this.isBaselineCall(lane) && call.noCoverage !== true
+          ? this.coverageOf(lane, row.name, call.coverage)
           : undefined
         : undefined;
     if (refusedMidRun && coverage === "unavailable") coverage = undefined;
@@ -1802,8 +2043,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         // R635 §5: an entry carries no coverage. An empty index has nothing to find; otherwise
         // the window gives this (mutant, codeunit) a coverage read, once.
         if (index.sizes.target + index.sizes.test === 0) return verdict;
+        if (this.lanesBuilt) {
+          // R766 (b): a window needs the §6 Sleep index, keyed to lane 0's tree; under --workers > 1
+          // the session may run only on a build that retires the rule (R768), so this is a bug.
+          throw new Error(
+            "al-runner-v3-lane-misuse: a pass under a mutant reached the §6 Sleep coverage window under --workers > 1; parallel v3 needs a build whose pin retires the §6 Sleep rule (R766)",
+          );
+        }
         if (call.windowed !== true) {
-          const w = await this.coverageWindow(ref, call);
+          const w = await this.coverageWindow(lane, ref, call);
           if ("verdict" in w) return w.verdict;
           call = w.call;
           if (call.refusal !== undefined) return refusalVerdict(ref, call.refusal, call.wallMs);
@@ -1816,7 +2064,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       if (joinWhy !== undefined) throw new AlRunnerV3CoverageJoinError(caveat(joinWhy));
       if (this.batchBlind === undefined) {
         const blind = blindNote(call.coverage, index);
-        if (blind !== undefined) this.batchBlind = caveat(blind);
+        if (blind !== undefined) {
+          this.batchBlind = caveat(blind);
+          this.noteLatch(lane, this.batchBlind);
+        }
       }
       const passNote = sleepPassRefusal(call.coverage, index, row.name);
       const note = this.batchBlind ?? (passNote === undefined ? undefined : caveat(passNote));
@@ -1833,16 +2084,21 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       return verdict;
     }
     if (verdict.outcome === "fail" || verdict.outcome === "timeout") {
-      const note = this.stateNote(ref, row, call.rows);
+      const note = this.stateNote(lane, ref, row, call.rows);
       return note === undefined ? verdict : { ...verdict, backendNote: note };
     }
     return verdict;
   }
 
   /** I1 (T24): a covering test of the killer's codeunit ran before it in v3's row order. */
-  private stateNote(killer: TestMethodRef, row: V3Row, rows: readonly V3Row[]): string | undefined {
-    const plan = this.lane.plan;
-    if (plan === undefined || plan.mutantId !== this.lane.lastActivated) return undefined;
+  private stateNote(
+    lane: Lane,
+    killer: TestMethodRef,
+    row: V3Row,
+    rows: readonly V3Row[],
+  ): string | undefined {
+    const plan = lane.plan;
+    if (plan === undefined || plan.mutantId !== lane.lastActivated) return undefined;
     const k = rows.indexOf(row);
     const before = rows
       .slice(0, k)
@@ -1859,6 +2115,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
 
   /** I3 (branch b): a survivor whose covering codeunit had a test v3 refused at baseline. */
   survivorNote(covering: readonly TestMethodRef[]): string | undefined {
+    this.soleLane("survivorNote");
+    return this.survivorNoteShared(covering);
+  }
+
+  private survivorNoteShared(covering: readonly TestMethodRef[]): string | undefined {
     const near = [...new Set(covering.map((r) => r.codeunitId))].flatMap((id) =>
       [...(this.baselineRefused.get(id) ?? [])].map(
         (m) => `${covering.find((c) => c.codeunitId === id)?.codeunitName ?? id}.${m}`,
@@ -1870,6 +2131,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
 
   private coverageOf(
+    lane: Lane,
     rowName: string,
     doc: V3CoverageRead,
   ): CoverageMap | undefined | "unavailable" {
@@ -1883,7 +2145,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // file the coverage index knows (indexed or deliberately skipped). One that is neither means v3
     // names our files in another form, and the empty join would make its mutants no-coverage. An
     // uncovered mutant is never activated, so this is checked here, per test, not at `activate`.
-    const real = this.lane.realActive;
+    const real = lane.realActive;
     if (real !== undefined) {
       const root = `${normalizeFileKey(real).replace(/\/+$/, "")}/`;
       const control = new Set(
@@ -1912,9 +2174,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     );
   }
 
-  private rowMissing(ref: TestMethodRef, why: string, wallMs: number): TestVerdict {
+  private rowMissing(lane: Lane, ref: TestMethodRef, why: string, wallMs: number): TestVerdict {
     const err = new AlRunnerV3RowMissingError(why);
-    if (this.lane.lastActivated === null) throw err;
+    if (lane.lastActivated === null) throw err;
     return {
       ref,
       outcome: "error",
@@ -1927,12 +2189,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
 
   /** One v3 process for `ref`'s codeunit; its rows are cached only after a full valid decode. */
   private async callCodeunit(
+    lane: Lane,
     ref: TestMethodRef,
     timeoutMs: number,
     wantCoverage: boolean,
   ): Promise<{ readonly call: CallRows } | { readonly verdict: TestVerdict }> {
     const id = ref.codeunitId;
-    const lane = this.lane;
     // R762 A: an UNMUTATED call that asked for no coverage (a kill confirm) needs none: no flag and
     // no join. A mutant call keeps it whatever it asked: the Sleep rule (§6) reads it.
     // In serve-entries the baseline bracket (`inBaseline`) alone says what the baseline is (R635 §4).
@@ -1963,7 +2225,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       testDir: this.realTestDir ?? resolve(this.cfg.testDir),
     });
     // R652: the last await before the spawn; nothing below reads the disk before v3 does.
-    await this.checkBound();
+    await this.checkBound(lane);
     const deadlineMs = v3CallDeadlineMs(stopSeconds, this.testsPerCodeunit.get(id) ?? 1);
     const controller = new AbortController();
     let timedOut = false;
@@ -2036,6 +2298,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       if (n !== 1) {
         return {
           verdict: this.rowMissing(
+            lane,
             ref,
             `codeunit ${id}'s call has ${n} row(s) for ${t.codeunitName}.${t.method}`,
             wallMs,
@@ -2060,14 +2323,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       coverage: decodeV3Coverage(covText),
       ...(noCoverage ? { noCoverage: true } : {}),
     };
-    this.noteBaselineRows(id, decoded.rows);
+    this.noteBaselineRows(lane, id, decoded.rows);
     lane.rowsByCodeunit.set(id, call);
     return { call };
   }
 
   /** I3, and R635 §3 (N1): a baseline call's refusals, and in serve-entries its rows. */
-  private noteBaselineRows(id: number, rows: readonly V3Row[]): void {
-    if (!this.isBaselineCall()) return;
+  private noteBaselineRows(lane: Lane, id: number, rows: readonly V3Row[]): void {
+    if (!this.isBaselineCall(lane)) return;
     if (this.entries) this.baselineRows.set(id, rows);
     for (const r of rows) {
       // R678: exactly `v3RowVerdict`'s refusal branch (a notRun with another status is a contract
@@ -2115,13 +2378,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * `AlRunnerV3EntriesRefusedError` (N1 before anything is sent, then N3, then disagreement) or
    * `AlRunnerServerRequestError`; either way no daemon is left behind.
    */
-  private async ensureDaemon(): Promise<Daemon> {
-    const lane = this.lane;
+  private async ensureDaemon(lane: Lane): Promise<Daemon> {
     if (lane.daemon !== undefined) return lane.daemon;
-    return lane.timed("warmupMs", () => this.startDaemon());
+    return lane.timed("warmupMs", () => this.startDaemon(lane));
   }
 
-  private async startDaemon(): Promise<Daemon> {
+  private async startDaemon(lane: Lane): Promise<Daemon> {
     const s = this.serveStopSeconds();
     if (s === undefined) throw new AlRunnerV3ServeStopUnsetError();
     this.transportFrozen = true; // R761
@@ -2135,7 +2397,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     const server = new AlRunnerServer(
       absToolPath(this.cfg.alRunnerPath),
-      (argv) => this.serverSpawn(argv, { cwd: this.lane.scratchCwd(), ...this.cacheEnv() }),
+      (argv) => this.serverSpawn(argv, { cwd: lane.scratchCwd(), ...this.cacheEnv() }),
       this.cfg.preprocessorSymbols ?? [],
       "serve",
     );
@@ -2146,10 +2408,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     ]);
     this.stats.daemons += 1;
     const daemon: Daemon = { server, dirty: false };
-    this.lane.daemon = daemon;
+    lane.daemon = daemon;
     try {
       this.stats.warmups += 1;
       const { sent, rows } = await this.send(
+        lane,
         [{ mutantId: SELECTOR_RESOURCE_NONE, codeunits: union }],
         "warmup",
       );
@@ -2182,14 +2445,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         );
       }
     } catch (err) {
-      await this.closeDaemon();
+      await lane.closeDaemon();
       throw err;
     }
     return daemon;
   }
 
-  private async closeDaemon(): Promise<void> {
-    await this.lane.closeDaemon();
+  /** R766 (b): every lane's daemon; all are tried even if one close fails, then the first failure is thrown. */
+  private async closeAllDaemons(): Promise<void> {
+    const done = await Promise.allSettled(this.laneList.map((l) => l.closeDaemon()));
+    for (const d of done) if (d.status === "rejected") throw d.reason;
   }
 
   /**
@@ -2200,13 +2465,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * R652: the bound is checked here, the last await before the bytes leave, for every kind.
    */
   private async send(
+    lane: Lane,
     groups: readonly EntryGroup[],
     kind: "warmup" | "prefetch" | "live",
   ): Promise<{
     readonly sent: readonly SentEntry[];
     readonly rows: ReadonlyMap<string, readonly V3Row[]>;
   }> {
-    const lane = this.lane;
     const daemon = lane.daemon;
     const s = this.serveStopSeconds();
     if (daemon === undefined || s === undefined)
@@ -2220,7 +2485,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       ...lane.requestBase(),
       entries: sent.map((e) => ({ id: e.id, resources: e.resources, test: e.test })),
     };
-    await this.checkBound();
+    await this.checkBound(lane);
     // R652 (review r1 #2): counted with the check, so `boundChecks = warmups + prefetchRequests +
     // liveRequests + coverageRequests` holds whatever fails (a daemon start, a request). Build
     // review L3: a send the check refuses sends no entries.
@@ -2231,14 +2496,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     try {
       answer = await daemon.server.runEntries(body, v3CallDeadlineMs(s, tests));
     } catch (err) {
-      await this.closeDaemon();
+      await lane.closeDaemon();
       throw err;
     }
-    await this.refuseDaemonDependencySkip(daemon);
+    await this.refuseDaemonDependencySkip(lane, daemon);
     if (answer.summary.cached === false) this.stats.cachedFalse += 1;
     const decoded = decodeEntriesAnswer(sent, answer);
     if ("why" in decoded) {
-      await this.closeDaemon();
+      await lane.closeDaemon();
       throw new AlRunnerServerRequestError(
         "protocol",
         `the entries answer is invalid: ${decoded.why}`,
@@ -2256,7 +2521,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           )
         : undefined;
     if (refused !== undefined) {
-      await this.closeDaemon();
+      await lane.closeDaemon();
       throw new AlRunnerV3EntriesRefusedError(
         "al-runner-v3-entries-batch-refused",
         `every entry of the request was refused with one reason outside V3_SERVE_SAFE_REFUSALS: ${refused}. Nothing is re-sent`,
@@ -2272,6 +2537,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * unkept ECHO's whole group too). A group's rows are `refusal`s when its echo is wrong.
    */
   private async request(
+    lane: Lane,
     groups: readonly EntryGroup[],
     phase: "prefetchMs" | "liveMs",
   ): Promise<{
@@ -2280,10 +2546,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     /** The first row R612 did not keep, at the cut. */
     readonly cutWhy?: string;
   }> {
-    const daemon = await this.ensureDaemon();
+    const daemon = await this.ensureDaemon(lane);
     const started = Date.now();
-    const { sent, rows } = await this.lane.timed(phase, () =>
-      this.send(groups, phase === "prefetchMs" ? "prefetch" : "live"),
+    const { sent, rows } = await lane.timed(phase, () =>
+      this.send(lane, groups, phase === "prefetchMs" ? "prefetch" : "live"),
     );
     const wallMs = Date.now() - started;
     const s = this.serveStopSeconds() ?? 1;
@@ -2294,7 +2560,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         break;
       }
     }
-    if (cut < sent.length || daemon.dirty) await this.closeDaemon();
+    if (cut < sent.length || daemon.dirty) await lane.closeDaemon();
     // An unkept ECHO stands like any entry, but its group's codeunit entries come after it, so the
     // whole group is re-sent (§7).
     const standing = sent.slice(0, cut + 1);
@@ -2382,7 +2648,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     for (let chunk = queue.shift(); chunk !== undefined; chunk = queue.shift()) {
       let out: Awaited<ReturnType<AlRunnerV3Backend["request"]>>;
       try {
-        out = await this.request(chunk, "prefetchMs");
+        // R766 (b): the shared prefetch runs on lane 0 with the N = 1 grouping; any lane consumes it.
+        out = await this.request(this.lane, chunk, "prefetchMs");
       } catch (err) {
         if (err instanceof AlRunnerServerRequestError) {
           // Never silent: its mutants run live, so a cause like a timer overflow shows.
@@ -2415,12 +2682,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * NONE answer alone (`pairFallbacks1`), or nothing (`pairFallbacks2`).
    */
   async sendKillPair(mutantId: string, ref: TestMethodRef): Promise<void> {
-    this.dropPair();
+    return this.sendKillPairOn(this.soleLane("sendKillPair"), mutantId, ref);
+  }
+
+  private async sendKillPairOn(lane: Lane, mutantId: string, ref: TestMethodRef): Promise<void> {
+    lane.dropPair();
     if (
       !this.entries ||
       this.entriesRefused !== undefined ||
       this.inBaseline ||
-      this.lane.lastActivated !== mutantId
+      lane.lastActivated !== mutantId
     ) {
       return;
     }
@@ -2430,6 +2701,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     let out: Awaited<ReturnType<AlRunnerV3Backend["request"]>>;
     try {
       out = await this.request(
+        lane,
         [
           { mutantId: SELECTOR_RESOURCE_NONE, codeunits: [cu] },
           { mutantId, codeunits: [cu] },
@@ -2442,8 +2714,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         err instanceof AlRunnerServerRequestError
       ) {
         // As `liveCall` maps the same throw (a refusal latches).
-        const noneVerdict = this.liveFailure(ref, err, Date.now() - started);
-        this.lane.pair = { mutantId, ref, noneVerdict, next: "null" };
+        const noneVerdict = this.liveFailure(lane, ref, err, Date.now() - started);
+        lane.pair = { mutantId, ref, noneVerdict, next: "null" };
         return;
       }
       if (err instanceof AlRunnerV3DependencySkippedError) throw err;
@@ -2459,7 +2731,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const fallback = none === undefined ? 2 : m === undefined ? 1 : undefined;
     if (fallback === 2) this.stats.pairFallbacks2 += 1;
     if (fallback === 1) this.stats.pairFallbacks1 += 1;
-    this.lane.pair = {
+    lane.pair = {
       mutantId,
       ref,
       ...(none !== undefined ? { none } : {}),
@@ -2471,16 +2743,21 @@ export class AlRunnerV3Backend implements ExecutionBackend {
 
   /** R635 §4: one group (the echo + `ref`'s codeunit) under `lastActivated ?? NONE`. */
   private async liveCall(
+    lane: Lane,
     ref: TestMethodRef,
   ): Promise<{ readonly call: CallRows } | { readonly verdict: TestVerdict }> {
     const started = Date.now();
     if (this.entriesRefused !== undefined) {
       return { verdict: transportFailure(ref, this.entriesRefused, 0) };
     }
-    const m = this.lane.lastActivated ?? SELECTOR_RESOURCE_NONE;
+    const m = lane.lastActivated ?? SELECTOR_RESOURCE_NONE;
     this.union.add(ref.codeunitId);
     try {
-      const out = await this.request([{ mutantId: m, codeunits: [ref.codeunitId] }], "liveMs");
+      const out = await this.request(
+        lane,
+        [{ mutantId: m, codeunits: [ref.codeunitId] }],
+        "liveMs",
+      );
       const call = out.results.get(m)?.get(ref.codeunitId);
       if (call === undefined) {
         // Its echo was the unkept entry, so nothing of the group stands: this mutant's `error`
@@ -2493,19 +2770,20 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           ),
         };
       }
-      this.noteBaselineRows(ref.codeunitId, call.rows);
-      this.lane.rowsByCodeunit.set(ref.codeunitId, call);
+      this.noteBaselineRows(lane, ref.codeunitId, call.rows);
+      lane.rowsByCodeunit.set(ref.codeunitId, call);
       return { call };
     } catch (err) {
-      return { verdict: this.liveFailure(ref, err, Date.now() - started) };
+      return { verdict: this.liveFailure(lane, ref, err, Date.now() - started) };
     }
   }
 
   /** A live request's throw: a refusal latches (N2: the session stops), a request error is one
    *  transport failure, the deadline is `deadline-exceeded`; anything else propagates. */
-  private liveFailure(ref: TestMethodRef, err: unknown, wallMs: number): TestVerdict {
+  private liveFailure(lane: Lane, ref: TestMethodRef, err: unknown, wallMs: number): TestVerdict {
     if (err instanceof AlRunnerV3EntriesRefusedError) {
       this.entriesRefused = err.message;
+      this.noteLatch(lane, err.message);
       return transportFailure(ref, err.message, wallMs);
     }
     if (err instanceof AlRunnerServerRequestError) {
@@ -2528,23 +2806,23 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * a `finally`. The window's rows must equal the entry's, and each echo must read the mutant.
    */
   private async coverageWindow(
+    lane: Lane,
     ref: TestMethodRef,
     call: CallRows,
   ): Promise<{ readonly call: CallRows } | { readonly verdict: TestVerdict }> {
     if (this.entriesRefused !== undefined) {
       return { verdict: transportFailure(ref, this.entriesRefused, 0) };
     }
-    const lane = this.lane;
     const m = lane.lastActivated ?? SELECTOR_RESOURCE_NONE;
     const echoId = this.requireEchoId();
     const started = Date.now();
     let next: CallRows;
     let checked = false;
     try {
-      const daemon = await this.ensureDaemon();
+      const daemon = await this.ensureDaemon(lane);
       // R652 Rule A: ONE check for the window's 2-3 plain sends, BEFORE `inWindow` (review r1 #1),
       // so it still requires the resource file to read NONE. Counted with its coverage request.
-      await this.checkBound();
+      await this.checkBound(lane);
       this.stats.coverageRequests += 1;
       checked = true;
       const windowT0 = this.now();
@@ -2554,7 +2832,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         const echoOk = async (): Promise<string | undefined> => {
           this.stats.echoRequests += 1;
           const why = echoMismatch(
-            (await lane.timed("echoMs", () => this.plain(daemon, echoId, false))).rows,
+            (await lane.timed("echoMs", () => this.plain(lane, daemon, echoId, false))).rows,
             m,
           );
           if (why !== undefined) this.stats.echoMismatches += 1;
@@ -2562,7 +2840,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         };
         const before = this.cfg.secondEcho === false ? undefined : await echoOk();
         if (before !== undefined) this.stats.secondEchoMismatches += 1;
-        const cov = await lane.timed("coverageMs", () => this.plain(daemon, ref.codeunitId, true));
+        const cov = await lane.timed("coverageMs", () =>
+          this.plain(lane, daemon, ref.codeunitId, true),
+        );
         const after = await echoOk();
         const echoWhy = before ?? after;
         const differ = rowsClass(cov.rows) !== rowsClass(call.rows);
@@ -2587,11 +2867,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       } finally {
         await writeFile(lane.resourcePath(), SELECTOR_RESOURCE_NONE, "utf8");
         this.inWindow = false;
-        if (daemon.dirty) await this.closeDaemon();
+        if (daemon.dirty) await lane.closeDaemon();
         lane.timers.windowMs += this.now() - windowT0;
       }
     } catch (err) {
-      const v = this.liveFailure(ref, err, Date.now() - started);
+      const v = this.liveFailure(lane, ref, err, Date.now() - started);
       return {
         verdict:
           checked && v.failureMessage !== undefined
@@ -2611,23 +2891,24 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * line when it loads dependencies, long before the answer, but a line later than that turn is seen
    * only by the next request.
    */
-  private async refuseDaemonDependencySkip(daemon: Daemon): Promise<void> {
+  private async refuseDaemonDependencySkip(lane: Lane, daemon: Daemon): Promise<void> {
     await new Promise<void>((r) => setImmediate(r));
     const lines = v3DependencySkipLines(daemon.server.stderrSoFar());
     if (lines.length === 0) return;
-    await this.closeDaemon();
+    await lane.closeDaemon();
     throw new AlRunnerV3DependencySkippedError(lines);
   }
 
   /** R635 §5: a plain request for one codeunit (the echo, or `cu` with coverage) on `daemon`. */
   private async plain(
+    lane: Lane,
     daemon: Daemon,
     cu: number,
     coverage: boolean,
   ): Promise<{ readonly rows: readonly V3Row[]; readonly coverage: V3CoverageRead }> {
     const s = this.serveStopSeconds() ?? 1;
     const body = {
-      ...this.lane.requestBase(),
+      ...lane.requestBase(),
       test: `Codeunit${cu}.`,
       ...(coverage ? { coverage: true, perTestCoverage: true } : {}),
     };
@@ -2638,16 +2919,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         v3CallDeadlineMs(s, this.testsPerCodeunit.get(cu) ?? 1),
       );
     } catch (err) {
-      await this.closeDaemon();
+      await lane.closeDaemon();
       throw err;
     }
-    await this.refuseDaemonDependencySkip(daemon);
+    await this.refuseDaemonDependencySkip(lane, daemon);
     if (answer.summary.cached === false) this.stats.cachedFalse += 1;
     const rows: V3Row[] = [];
     for (const t of answer.tests) {
       const r = serveRow(t);
       if (typeof r === "string" || r.codeunit !== cu) {
-        await this.closeDaemon();
+        await lane.closeDaemon();
         throw new AlRunnerServerRequestError(
           "protocol",
           `the plain request for codeunit ${cu} answered ${typeof r === "string" ? r : r.name}`,
@@ -2670,8 +2951,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
 
   async close(): Promise<void> {
+    // R766 (b): every lane's daemon, whether or not the transport is serve-entries.
+    await this.closeAllDaemons();
     if (this.entries) {
-      await this.closeDaemon();
       const s = this.entriesStats();
       console.warn(
         `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}); wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks.`,
