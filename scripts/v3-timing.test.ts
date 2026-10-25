@@ -60,6 +60,12 @@ describe("R774 v3-timing", () => {
       parseProbe("[lethal] al-runner-v3 contract probe ran fresh (key 0a1b; no entry) (R762)"),
     ).toEqual({ kind: "fresh", note: "probe ran fresh (key 0a1b; no entry)" });
     expect(parseProbe("").kind).toBe("unknown");
+    // The backend appends why a fresh probe was not cached; that note does not end in ")".
+    expect(
+      parseProbe(
+        "[lethal] al-runner-v3 contract probe ran fresh (key 0a1b; no entry); not cached: a normal session refuses it (R762)",
+      ).kind,
+    ).toBe("fresh");
   });
 
   test("percentile is nearest-rank on a sorted copy", () => {
@@ -77,6 +83,8 @@ describe("R774 v3-timing", () => {
       { type: "phase-left", phase: "mutants", elapsedMs: 25 },
       { type: "mutant-scored", verdict: "killed", durationMs: 7 },
       { type: "mutant-scored", verdict: "no-coverage", durationMs: 0 },
+      { type: "mutant-scored", verdict: "error", durationMs: 1 },
+      { type: "mutant-scored", verdict: "timeout-killed", durationMs: 9 },
       { type: "warning", code: "al-runner-v3-serve-default-fallback", message: "resume" },
       { type: "session-finished", elapsedMs: 200 },
     ]
@@ -84,7 +92,7 @@ describe("R774 v3-timing", () => {
       .join("\n");
     expect(summarizeEvents(ev)).toEqual({
       phases: { deploy: 100, mutants: 75, session: 200 },
-      durations: [7],
+      durations: [7, 9],
       fallback: "resume",
     });
   });

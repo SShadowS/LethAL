@@ -15,7 +15,12 @@
  * Every run goes through the CLI with the default transport (serve-entries where proven, R761).
  *
  * It is a heavy job: it re-runs itself under `flock` on the first free /coord/locks/heavy.N, and
- * waits while none is free or under 10 GB is available. `--no-lock` skips that (never in /coord use).
+ * waits while none is free, under 10 GB is available, or corpus-snapshot's heavy-job count
+ * (`heavyVerdict`: held slots plus runner and corpus jobs that take none) is already at the cap.
+ * `--no-lock` skips that (a one-off the orchestrator rules on).
+ *
+ * The cache dir defaults to the v3 gate's (`LETHAL_ALRUNNER_V3_CACHE`, else
+ * /work/tools/al-runtime-rs/cache), so d1 matches leg D1 and shares its probe-cache entry.
  *
  * Per run it reads:
  *   - the report's `timings` and the events stream (phase walls, per-mutant durations);
@@ -44,12 +49,20 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { AL_RUNNER_V3_DEFAULT_PATH } from "../packages/runner/src/al-runner-v3-pin.ts";
+import {
+  HEAVY_GUARD_EXIT,
+  SLOTS,
+  heavyVerdict,
+  parsePs,
+  slotHeld,
+  trySlots,
+} from "./corpus-snapshot.ts";
 
 export interface LoadSample {
   readonly availGb: number;
   readonly load1: number;
   readonly load5: number;
-  /** Heavy slots held by someone else (ours excluded). */
+  /** Heavy jobs besides this run: slots held by others plus runner/corpus jobs in no slot. */
   readonly otherHeavy: number;
 }
 
@@ -153,7 +166,10 @@ export function percentile(xs: readonly number[], p: number): number {
   return s[Math.min(s.length - 1, Math.max(0, Math.ceil((p / 100) * s.length) - 1))] ?? 0;
 }
 
-/** Phase walls (summed per phase), per-mutant durations of scored-with-coverage mutants, and the fallback warning. */
+/** Verdicts that ran tests against the mutant: their durations are the per-mutant figures. */
+const RAN = new Set(["killed", "survived", "timeout-killed"]);
+
+/** Phase walls (summed per phase), per-mutant durations of mutants that ran (`RAN`), and the fallback warning. */
 export function summarizeEvents(ndjson: string): {
   phases: Record<string, number>;
   durations: number[];
@@ -179,7 +195,8 @@ export function summarizeEvents(ndjson: string): {
       phases.session = e.elapsedMs;
     else if (
       e.type === "mutant-scored" &&
-      e.verdict !== "no-coverage" &&
+      typeof e.verdict === "string" &&
+      RAN.has(e.verdict) &&
       e.durationMs !== undefined
     )
       durations.push(e.durationMs);
@@ -293,25 +310,28 @@ export function buildTimingMarkdown(meta: TimingMeta, runs: readonly RunTiming[]
 // The run itself (not unit-tested: it spawns al-runner, alc and flock).
 
 const REPO = resolve(dirname(import.meta.path), "..");
-const HEAVY = [1, 2, 3].map((n) => `/coord/locks/heavy.${n}`);
+const LOCKS = "/coord/locks";
+const MY_SLOT = Number(process.env.V3_TIMING_SLOT ?? 0);
 
 function availGb(): number {
   const m = /MemAvailable:\s+(\d+) kB/.exec(readFileSync("/proc/meminfo", "utf8"));
   return m === null ? 0 : Number(m[1]) / 1024 / 1024;
 }
 
+/** corpus-snapshot's count: other held slots plus runner/corpus jobs in no slot (ours excluded). */
+function otherHeavy(): { n: number; refuse: boolean } {
+  const held = SLOTS.filter((s) => s !== MY_SLOT && slotHeld(LOCKS, s));
+  const pids = held
+    .map((s) => Number(readFileSync(join(LOCKS, `heavy.${s}`), "utf8").trim()))
+    .filter((p) => !Number.isNaN(p));
+  const ps = spawnSync("ps", ["-eo", "pid,ppid,pgid,args"], { encoding: "utf8" }).stdout;
+  const v = heavyVerdict(parsePs(ps), process.pid, pids, held.length);
+  return { n: held.length + v.foreign.length, refuse: v.refuse };
+}
+
 function sampleLoad(): LoadSample {
   const [l1, l5] = readFileSync("/proc/loadavg", "utf8").split(" ").map(Number);
-  const held = HEAVY.filter(
-    (f) => existsSync(f) && spawnSync("flock", ["-n", f, "true"]).status !== 0,
-  ).length;
-  const mine = process.env.V3_TIMING_SLOT !== undefined ? 1 : 0;
-  return {
-    availGb: availGb(),
-    load1: l1 ?? 0,
-    load5: l5 ?? 0,
-    otherHeavy: Math.max(0, held - mine),
-  };
+  return { availGb: availGb(), load1: l1 ?? 0, load5: l5 ?? 0, otherHeavy: otherHeavy().n };
 }
 
 function procStat(pid: number): { ppid: number; comm: string } | undefined {
@@ -473,7 +493,7 @@ async function runOne(s: Subject, rep: number, out: string, scratch: string): Pr
       serve !== undefined
         ? "serve-entries"
         : p.serveDaemons > 0
-          ? "serve-entries (no counters: the CLI never closes the v3 backend)"
+          ? "serve-entries (no counters line: a build before R775, or close() failed)"
           : `one-shot${ev?.fallback !== undefined ? ` (fallback: ${ev.fallback.slice(0, 120)})` : ""}`,
     phases: ev?.phases ?? {},
     alc: p.alc,
@@ -489,30 +509,23 @@ async function runOne(s: Subject, rep: number, out: string, scratch: string): Pr
   };
 }
 
-/** Runs this script again under `flock` on the first free heavy slot; waits while none is free. */
+/**
+ * Runs this script again under `flock` on the first free heavy slot (corpus-snapshot's `trySlots`).
+ * Waits while none is free, under 10 GB is available, or the in-slot guard exits HEAVY_GUARD_EXIT.
+ */
 async function underHeavySlot(argv: readonly string[]): Promise<never> {
   for (;;) {
     if (availGb() >= 10) {
-      for (const [i, f] of HEAVY.entries()) {
-        const r = spawnSync(
-          "flock",
-          [
-            "-n",
-            "-E",
-            "111",
-            f,
-            "env",
-            `V3_TIMING_SLOT=${i + 1}`,
-            process.execPath,
-            import.meta.path,
-            ...argv,
-          ],
-          { stdio: "inherit" },
-        );
-        if (r.status !== 111) process.exit(r.status ?? 1);
-      }
+      const r = trySlots(
+        LOCKS,
+        (slot) => ["env", `V3_TIMING_SLOT=${slot}`, process.execPath, import.meta.path, ...argv],
+        true,
+      );
+      if (r !== null && r.code !== HEAVY_GUARD_EXIT) process.exit(r.code);
     }
-    console.error("v3-timing: no free heavy slot or under 10 GB available; waiting 30 s");
+    console.error(
+      "v3-timing: no free heavy slot, under 10 GB available, or the heavy-job cap reached; waiting 30 s",
+    );
     await Bun.sleep(30_000);
   }
 }
@@ -526,7 +539,10 @@ async function main(argv: readonly string[]): Promise<void> {
       subjects: { type: "string", default: "gc,d1" },
       cdo: { type: "string", default: "/work/lethal-wt/cdo-r396" },
       "gc-packages": { type: "string" },
-      "cache-dir": { type: "string" },
+      "cache-dir": {
+        type: "string",
+        default: process.env.LETHAL_ALRUNNER_V3_CACHE ?? "/work/tools/al-runtime-rs/cache",
+      },
       "no-lock": { type: "boolean", default: false },
     },
     strict: true,
@@ -538,7 +554,17 @@ async function main(argv: readonly string[]): Promise<void> {
   const which = values.subjects.split(",");
   for (const w of which)
     if (w !== "gc" && w !== "d1") throw new Error(`v3-timing: unknown subject "${w}" (gc, d1)`);
-  if (!values["no-lock"] && process.env.V3_TIMING_SLOT === undefined) await underHeavySlot(argv);
+  if (!values["no-lock"]) {
+    if (process.env.V3_TIMING_SLOT === undefined) await underHeavySlot(argv);
+    // In the slot: an inherited V3_TIMING_SLOT names a slot we do not hold, so refuse it.
+    if (!SLOTS.some((s) => s === MY_SLOT) || !slotHeld(LOCKS, MY_SLOT))
+      throw new Error(`v3-timing: V3_TIMING_SLOT=${process.env.V3_TIMING_SLOT} is not a held slot`);
+    const g = otherHeavy();
+    if (g.refuse) {
+      console.error(`v3-timing: ${g.n} other heavy job(s), at the cap; giving the slot back`);
+      process.exit(HEAVY_GUARD_EXIT);
+    }
+  }
 
   const out = resolve(values.out);
   mkdirSync(out, { recursive: true });
@@ -551,10 +577,9 @@ async function main(argv: readonly string[]): Promise<void> {
       throw new Error(
         `v3-timing: ${src} is missing (gitignored): pass --gc-packages <a gift-card .alpackages>`,
       );
-    // A fixed folder with the source mtimes: the probe-cache key hashes each app's size and mtime
-    // (packagesFingerprint), so a fresh copy per run would never hit the cache.
-    gcPackages = join(tmpdir(), "v3-timing-gc-packages");
-    rmSync(gcPackages, { recursive: true, force: true });
+    // Copied with the source mtimes: the probe-cache key hashes each app's name, size and mtime,
+    // not the folder's path (packagesFingerprint, R776), so this per-run copy still hits.
+    gcPackages = join(scratch, "gc-packages");
     mkdirSync(gcPackages);
     for (const f of readdirSync(src).filter((n) => n.startsWith("Microsoft_"))) {
       copyFileSync(join(src, f), join(gcPackages, f));
@@ -574,9 +599,12 @@ async function main(argv: readonly string[]): Promise<void> {
     );
   }
   notes.push(
-    `heavy slot ${process.env.V3_TIMING_SLOT ?? "none (--no-lock)"}; cache dir ${values["cache-dir"] ?? "CLI default"}`,
+    `heavy slot ${values["no-lock"] ? "none (--no-lock)" : MY_SLOT}; cache dir ${values["cache-dir"]}`,
   );
   notes.push("alc and probe process times are polled every 25 ms: a lower bound");
+  notes.push(
+    "per-mutant ms are the report's durations; under serve-entries they overlap (they sum past the loop wall), so read the mutant-loop wall for cost",
+  );
   const meta: TimingMeta = {
     gitSha: spawnSync("git", ["-C", REPO, "rev-parse", "--short", "HEAD"], {
       encoding: "utf8",
