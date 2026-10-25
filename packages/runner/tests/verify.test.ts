@@ -1716,6 +1716,28 @@ describe("planVerify", () => {
     expect([...plan.allRefused]).toEqual(["M0001"]);
     expect(plan.notRun.get("M0001")).toEqual(["Old.P", "New.NP"]);
   });
+
+  // R759: a test the source run left out (`leftOut`, by testKeyOf) is not new: it is in no request,
+  // not in newTests, and not counted in the cap.
+  test("R759: a left-out test is not new, not requested, and not counted in the cap", async () => {
+    const dir = testDir([
+      { id: 50100, name: "Old", methods: ["A"] },
+      { id: 50101, name: "New", methods: ["N1", "N2"] },
+    ]);
+    const args = {
+      source: source(project(), [{ mutantCode: "M0001", coveringTests: ["Old.A"] }]),
+      manifest: manifest([entry("M0001")]),
+      sourceBaseline: [row(50100, "Old", "A")],
+      testDir: dir,
+    };
+    const control = await planUnchanged(args);
+    expect(keys(control.newTests)).toEqual(["50101::N1", "50101::N2"]);
+    expect(control.cap.n).toBe(2);
+    const plan = await planUnchanged({ ...args, leftOut: new Set(["50101::N1"]) });
+    expect(keys(plan.newTests)).toEqual(["50101::N2"]);
+    expect(keys(plan.requests[0]?.methods ?? [])).toEqual(["50100::A", "50101::N2"]);
+    expect(plan.cap.n).toBe(1);
+  });
 });
 
 describe("verifyRefusalOf (carried item 2)", () => {
@@ -2470,6 +2492,147 @@ describe("C02-09: gap ids", () => {
     expect(r?.notRun).toEqual(["Old.P", "New.NP"]);
     expect(out.newTests).toEqual([]);
     expect(out.testPageRefused?.tests).toEqual(["New.NP", "Old.P"]);
+    w.store.close();
+  });
+
+  // R759: the source run's recorded --tests-only / --exclude-test (`runs.test_narrowing`) is what
+  // tells a test the run LEFT OUT from a genuinely new one.
+  /** 50100 T.M (the baseline), 50101 Excl.X and Excl.Y, 50102 In.I. */
+  function narrowDir(): string {
+    const dir = scratch("lethal-verify-narrow-");
+    writeFileSync(join(dir, "app.json"), TEST_APP_JSON);
+    const cu = (id: number, name: string, methods: string[]) =>
+      writeFileSync(
+        join(dir, `${id}.Codeunit.al`),
+        `codeunit ${id} "${name}"\n{\n    Subtype = Test;\n\n${methods
+          .map((m) => `    [Test]\n    procedure ${m}()\n    begin\n    end;\n`)
+          .join("\n")}}\n`,
+      );
+    cu(50100, "T", ["M"]);
+    cu(50101, "Excl", ["X", "Y"]);
+    cu(50102, "In", ["I"]);
+    return dir;
+  }
+  const BASE_T = [{ codeunitId: 50100, codeunitName: "T", method: "M" }];
+  const narrowWorld = async (
+    narrowing: string | null,
+    over: { coveringTests?: readonly string[] } = {},
+  ) => {
+    const seen: NamedMutantsConfig[] = [];
+    const w = await verifyWorld([seed("M0001", undefined, "survived")], [], {
+      testDir: narrowDir(),
+      baseline: BASE_T,
+      ...over,
+      runNamed: async (cfg) => {
+        seen.push(cfg);
+        // Every new test answers with a fresh green baseline run and rerun, as verify requires.
+        const runs = (cfg.rerunOnUnmutated ?? []).map((ref) => ({
+          ref,
+          outcome: "pass" as const,
+          fresh: true,
+        }));
+        return {
+          outcomes: [{ mutant: entry("M0001"), verdict: "survived", batchIndex: 0 }],
+          baseline: runs,
+          rerun: runs,
+        };
+      },
+    });
+    w.store.db.run("UPDATE runs SET test_narrowing = ?", [narrowing]);
+    return { w, seen };
+  };
+  const sentKeys = (cfg: NamedMutantsConfig | undefined) =>
+    (cfg?.requests ?? []).map((r) => r.methods.map(testKeyOf));
+  const NONE = '{"testsOnly":[],"excludeTests":[]}';
+
+  test("R759: a test the source run excluded is not planned, not rerun, and is listed", async () => {
+    const { w, seen } = await narrowWorld('{"testsOnly":[],"excludeTests":["50101::X"]}');
+    const out = await w.verify(["0/M0001"]);
+    expect(out.refused).toBeUndefined();
+    expect(sentKeys(seen[0])).toEqual([["50100::M", "50101::Y", "50102::I"]]);
+    expect((seen[0]?.rerunOnUnmutated ?? []).map(testKeyOf)).toEqual(["50101::Y", "50102::I"]);
+    expect(out.excludedTests).toEqual([{ test: "Excl.X", reason: "exclude-test" }]);
+    w.store.close();
+  });
+
+  test("R759: a source run with no narrowing (empty lists, or a NULL column) plans every new test and lists nothing", async () => {
+    const all = [["50100::M", "50101::X", "50101::Y", "50102::I"]];
+    for (const narrowing of [NONE, null]) {
+      const { w, seen } = await narrowWorld(narrowing);
+      const out = await w.verify(["0/M0001"]);
+      expect(sentKeys(seen[0])).toEqual(all);
+      expect("excludedTests" in out).toBe(false);
+      w.store.close();
+    }
+  });
+
+  test("R759: --tests-only recorded: a new test outside the globs is listed tests-only, one inside is still new", async () => {
+    const { w, seen } = await narrowWorld(
+      '{"testsOnly":["{50100,50102}.*"],"excludeTests":["50101::X"]}',
+    );
+    const out = await w.verify(["0/M0001"]);
+    expect(sentKeys(seen[0])).toEqual([["50100::M", "50102::I"]]);
+    expect(out.excludedTests).toEqual([
+      { test: "Excl.X", reason: "tests-only" },
+      { test: "Excl.Y", reason: "tests-only" },
+    ]);
+    w.store.close();
+  });
+
+  test("R759: a covering test whose file is now outside the recorded globs still runs", async () => {
+    const { w, seen } = await narrowWorld('{"testsOnly":["{50101,50102}.*"],"excludeTests":[]}');
+    const out = await w.verify(["0/M0001"]);
+    expect(out.refused).toBeUndefined();
+    expect(sentKeys(seen[0])).toEqual([["50100::M", "50101::X", "50101::Y", "50102::I"]]);
+    w.store.close();
+  });
+
+  test("R759: a source-baseline test outside the recorded globs is not listed in excludedTests", async () => {
+    const { w } = await narrowWorld('{"testsOnly":["{50101,50102}.*"],"excludeTests":[]}');
+    const out = await w.verify(["0/M0001"]);
+    expect("excludedTests" in out).toBe(false);
+    w.store.close();
+  });
+
+  test("R759: a covering TestPage test outside the recorded globs is still refused, never sent", async () => {
+    const w = await verifyWorld([seed("M0001", undefined, "survived")], [], {
+      testDir: pageTestDir(false),
+      baseline: [OLD_P],
+      coveringTests: ["Old.P"],
+      runNamed: async () => {
+        throw new Error("runNamed must not be called when every test is refused");
+      },
+    });
+    w.store.db.run("UPDATE runs SET test_narrowing = ?", [
+      '{"testsOnly":["50101.*"],"excludeTests":[]}',
+    ]);
+    const out = await w.verify(["0/M0001"]);
+    const [r] = out.results;
+    expect(r?.notRun).toContain("Old.P");
+    expect(out.testPageRefused?.tests).toContain("Old.P");
+    expect(JSON.stringify(out.excludedTests ?? [])).not.toContain("Old.P");
+    w.store.close();
+  });
+
+  test("R759: a recorded glob that now matches no test file fails loudly, naming the run", async () => {
+    const { w } = await narrowWorld('{"testsOnly":["nowhere/**"],"excludeTests":[]}');
+    await expect(w.verify(["0/M0001"])).rejects.toThrow(/run \d+ recorded --tests-only/);
+    w.store.close();
+  });
+
+  test("R759: every new test left out: the no-tests-to-run refusal still carries excludedTests", async () => {
+    const { w, seen } = await narrowWorld(
+      '{"testsOnly":[],"excludeTests":["50101::X","50101::Y","50102::I"]}',
+      { coveringTests: [] },
+    );
+    const out = await w.verify(["0/M0001"]);
+    expect(out.refused?.reason).toBe("no-tests-to-run");
+    expect(seen).toEqual([]);
+    expect(out.excludedTests).toEqual([
+      { test: "Excl.X", reason: "exclude-test" },
+      { test: "Excl.Y", reason: "exclude-test" },
+      { test: "In.I", reason: "exclude-test" },
+    ]);
     w.store.close();
   });
 
