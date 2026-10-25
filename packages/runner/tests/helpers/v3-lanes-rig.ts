@@ -354,6 +354,8 @@ export async function lanesRig(
   const notices: string[] = [];
   b.setNotify((code, message) => notices.push(`${code}: ${message}`));
   b.seams.sleepRuleRetired = true;
+  // R778: these tests measure today's per-kill pair; the batch has its own tests.
+  (b as unknown as { pairBatch: boolean }).pairBatch = false;
   if (o.afterLaneCopy !== undefined) b.seams.afterLaneCopy = o.afterLaneCopy;
   b.useBuildSymbols([]);
   b.useDiscoveredTests(SUITE);

@@ -33,7 +33,15 @@ describe("R722: judgeN1Serve", () => {
     const why = serveRow(JSON.parse(ALPHA5_LINE));
     expect(typeof why).toBe("string");
     const sent = [
-      { id: "NONE|78850", mutantId: "NONE", codeunit: 78850, echo: false, resources: {}, test: "" },
+      {
+        id: "NONE|78850",
+        mutantId: "NONE",
+        key: "NONE",
+        codeunit: 78850,
+        echo: false,
+        resources: {},
+        test: "",
+      },
     ];
     const d = decodeEntriesAnswer(sent, {
       entrySummaries: [{ entry: "NONE|78850" }],

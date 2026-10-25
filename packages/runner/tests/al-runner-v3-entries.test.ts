@@ -181,7 +181,14 @@ const stopMsOf = (message: string | undefined): number => {
   return m?.[1] === undefined ? 0 : Number(m[1]) * 1000;
 };
 /** `n` is the request's index over the whole fake (every daemon); -1 for a one-shot call. */
-type RowsFn = (mutant: string, cu: number, daemon: number, n: number) => FakeRow[];
+type RowsFn = (
+  mutant: string,
+  cu: number,
+  daemon: number,
+  n: number,
+  /** R778: how many codeunit entries (not echoes) of this override the request had before this one. */
+  seen?: number,
+) => FakeRow[];
 type CoverageFn = (mutant: string, cu: number, active: string, testDir: string) => unknown;
 
 const SUITE_METHODS: Record<number, string[]> = { [CU]: ["A", "B"], [CU2]: ["C"] };
@@ -379,8 +386,13 @@ function fakeServe(script: ServeScript = {}) {
           const errLine = script.stderr?.(req, n);
           if (errLine !== undefined) err.push(errLine);
           const cuOf = (t: unknown) => Number(/^Codeunit(\d+)\.$/.exec(String(t))?.[1]);
+          const seenBy = new Map<string, number>();
           const rowsOf = (m: string, cu: number): FakeRow[] => {
-            if (cu !== ECHO) return rows(m, cu, daemon, n);
+            if (cu !== ECHO) {
+              const seen = seenBy.get(m) ?? 0;
+              seenBy.set(m, seen + 1);
+              return rows(m, cu, daemon, n, seen);
+            }
             const e = echo(m, daemon, n);
             return e === "none" ? [] : Array.isArray(e) ? e : [e];
           };
@@ -466,6 +478,8 @@ interface RigOpts {
   floor?: readonly [number, number] | false;
   /** R651: the phase timers' clock. */
   now?: () => number;
+  /** R778: the kill-pair batch after the prefetch; off unless a test asks, so R653's tests see today's pair. */
+  pairBatch?: boolean;
 }
 
 async function rig(opts: RigOpts = {}): Promise<Rig> {
@@ -491,6 +505,7 @@ async function rig(opts: RigOpts = {}): Promise<Rig> {
     serve.spawn,
     opts.now,
   );
+  (b as unknown as { pairBatch: boolean }).pairBatch = opts.pairBatch === true;
   b.useBuildSymbols([]);
   b.useDiscoveredTests(suite);
   b.useSessionTests(suite);
@@ -3493,5 +3508,403 @@ describe("R761: a real first spawn freezes the transport decision", () => {
     expect(r.one.calls).toHaveLength(0);
     expect(r.serve.daemons.length).toBeGreaterThan(0);
     expect(await decided(r)).toBeInstanceOf(AlRunnerV3TransportFrozenError);
+  });
+});
+
+// R778: after the prefetch, the NONE confirm and the mutant reproduction of every kill travel in a
+// few chunked requests (each kill's NONE group directly before its M group), and the orchestrator's
+// sendKillPair uses a stored pair only when the kill came from the prefetch and the pair ran after it.
+describe("R778: kill pairs batched after the prefetch", () => {
+  const A = ref("A");
+  /** A fails under every mutant; NONE passes everything. */
+  const killsAll: RowsFn = (m, cu, d, n) =>
+    allPass(m, cu, d, n).map((r) =>
+      m !== "NONE" && r.method === "A" ? { ...r, status: "fail" as const, message: "boom" } : r,
+    );
+  const failA = (rs: FakeRow[], message: string): FakeRow[] =>
+    rs.map((x) => (x.method === "A" ? { ...x, status: "fail" as const, message } : x));
+  const unkept = (): FakeRow => ({
+    method: "B",
+    status: "error",
+    notRun: true,
+    message: TIMEOUT_1S,
+  });
+  /** Deployed, baseline, prefetch (and the batch). `before` is the counters just before the prefetch. */
+  const batchRig = async (
+    mk: (isBatch: (n: number) => boolean) => ServeScript,
+    mutants: readonly string[],
+    notices: string[] = [],
+    suite: readonly TestMethodRef[] = SUITE1,
+  ) => {
+    let reqs: readonly Req[] = [];
+    /** Request `n` is a batch: its first entry is a NONE pair group. */
+    const isBatch = (n: number) => (reqs[n]?.ids[0] ?? "").startsWith("NONE#");
+    const r = await rig({ serve: mk(isBatch), oneShotRows: allPass, suite, pairBatch: true });
+    reqs = r.serve.requests;
+    r.b.setNotify((c) => notices.push(c));
+    await baseline(r.b, suite);
+    const before = r.b.entriesStats();
+    await r.b.prefetchMutants(plans(mutants, suite));
+    return { r, before };
+  };
+  const kill = async (r: Rig, m: string) => {
+    await r.b.activate(m);
+    expect((await r.b.run(A, OPTS)).outcome).toBe("fail");
+  };
+  /** The orchestrator's order after a kill: the pair, the confirm, the reproduction. */
+  const confirmAndRepro = async (r: Rig, m: string) => {
+    await r.b.sendKillPair(m, A);
+    await r.b.activate(null);
+    const confirm = await r.b.run(A, OPTS);
+    await r.b.activate(m);
+    const repro = await r.b.run(A, OPTS);
+    return { confirm: confirm.outcome, repro: repro.outcome, reproMessage: repro.failureMessage };
+  };
+  const batchStats = (r: Rig) => {
+    const s = r.b.entriesStats();
+    return {
+      requests: s.pairBatchRequests,
+      stored: s.pairBatchStored,
+      served: s.pairBatchServed,
+      refused: s.pairBatchRefused,
+    };
+  };
+
+  describe("1: two NONE groups for one codeunit keep their own answers", () => {
+    for (const flaky of [0, 1]) {
+      test(`the ${flaky === 0 ? "first" : "second"} kill's NONE fails, the other passes: each confirms with ITS OWN NONE row`, async () => {
+        const { r } = await batchRig(
+          (isBatch) => ({
+            rows: (m, cu, d, n, seen) =>
+              m === "NONE" && isBatch(n) && seen === flaky
+                ? failA(allPass(m, cu, d, n), "flaky")
+                : killsAll(m, cu, d, n),
+          }),
+          ["M0001", "M0002"],
+        );
+        const batch = r.serve.requests.at(-1)?.ids;
+        expect(batch).toEqual([
+          "NONE#M0001|echo",
+          `NONE#M0001|${CU}`,
+          "M0001#m|echo",
+          `M0001#m|${CU}`,
+          "NONE#M0002|echo",
+          `NONE#M0002|${CU}`,
+          "M0002#m|echo",
+          `M0002#m|${CU}`,
+        ]);
+        const n0 = r.serve.requests.length;
+        const got: string[] = [];
+        for (const m of ["M0001", "M0002"]) {
+          await kill(r, m);
+          got.push((await confirmAndRepro(r, m)).confirm);
+        }
+        expect(got).toEqual(flaky === 0 ? ["fail", "pass"] : ["pass", "fail"]);
+        expect(r.serve.requests.length).toBe(n0);
+        expect(batchStats(r)).toEqual({ requests: 1, stored: 2, served: 2, refused: 0 });
+      });
+    }
+  });
+
+  describe("2: a pair is used only for a kill that came from the prefetch, and only if it ran after it", () => {
+    test("a kill served by liveCall (the prefetched rows dropped) sends today's pair; the stored one is refused", async () => {
+      const { r } = await batchRig(() => ({ rows: killsAll }), ["M0001"]);
+      (r.b as unknown as { prefetched: Map<string, unknown> }).prefetched = new Map();
+      await kill(r, "M0001");
+      const n0 = r.serve.requests.length;
+      await r.b.sendKillPair("M0001", A);
+      expect(r.serve.requests.length).toBe(n0 + 1);
+      expect(r.serve.requests.at(-1)?.ids).toEqual([
+        "NONE|echo",
+        `NONE|${CU}`,
+        "M0001|echo",
+        `M0001|${CU}`,
+      ]);
+      expect(batchStats(r)).toMatchObject({ served: 0, refused: 1 });
+    });
+
+    test("a kill from the prefetch but a pair that did not run after it: today's pair", async () => {
+      const { r } = await batchRig(() => ({ rows: killsAll }), ["M0001"]);
+      const store = (r.b as unknown as { pairStore: Map<string, { seq: number }> }).pairStore;
+      for (const [k, v] of store) store.set(k, { ...v, seq: 0 });
+      await kill(r, "M0001");
+      const n0 = r.serve.requests.length;
+      await r.b.sendKillPair("M0001", A);
+      expect(r.serve.requests.length).toBe(n0 + 1);
+      expect(batchStats(r)).toMatchObject({ served: 0, refused: 1 });
+    });
+
+    test("a kill in another codeunit than the stored pair's: today's pair, with the actual codeunit", async () => {
+      const { r } = await batchRig(() => ({ rows: killsAll }), ["M0001"], [], SUITE2);
+      await kill(r, "M0001");
+      const n0 = r.serve.requests.length;
+      await r.b.sendKillPair("M0001", ref("C", CU2));
+      expect(r.serve.requests.length).toBe(n0 + 1);
+      expect(r.serve.requests.at(-1)?.ids).toEqual([
+        "NONE|echo",
+        `NONE|${CU2}`,
+        "M0001|echo",
+        `M0001|${CU2}`,
+      ]);
+      expect(batchStats(r)).toMatchObject({ served: 0, refused: 1 });
+    });
+
+    test("a hit sets the pair's ref to the actual killer: its confirm and its reproduction are served", async () => {
+      const { r } = await batchRig(() => ({ rows: killsAll }), ["M0001"]);
+      await kill(r, "M0001");
+      const n0 = r.serve.requests.length;
+      // The prefetch predicted A; the kill was by B (the same codeunit).
+      await r.b.sendKillPair("M0001", ref("B"));
+      await r.b.activate(null);
+      expect((await r.b.run(ref("B"), OPTS)).outcome).toBe("pass");
+      await r.b.activate("M0001");
+      expect((await r.b.run(ref("B"), OPTS)).outcome).toBe("pass");
+      expect(r.serve.requests.length).toBe(n0);
+      expect(r.b.entriesStats().pairRequests).toBe(1);
+    });
+
+    test("the reproduction before the confirm is live, and so is the confirm", async () => {
+      const { r } = await batchRig(() => ({ rows: killsAll }), ["M0001"]);
+      await kill(r, "M0001");
+      await r.b.sendKillPair("M0001", A);
+      expect(batchStats(r)).toMatchObject({ served: 1 });
+      const n0 = r.serve.requests.length;
+      // Wrong order: M first. The pair is not consumed by it; both runs are live.
+      await r.b.activate("M0001");
+      expect((await r.b.run(A, OPTS)).outcome).toBe("fail");
+      await r.b.activate(null);
+      expect((await r.b.run(A, OPTS)).outcome).toBe("pass");
+      expect(r.serve.requests.length).toBe(n0 + 2);
+      expect(r.b.entriesStats().pairRequests).toBe(0);
+    });
+  });
+
+  describe("3: the encoder keeps groups apart by key", () => {
+    const e = (id: string, m: string, t: unknown = `Codeunit${CU}.`) => ({
+      id,
+      resources: { "active-mutant.txt": m },
+      test: t,
+    });
+    const echoOf = (id: string, m: string) => e(`${id}|echo`, m, `Codeunit${ECHO}.`);
+    const ok = (xs: readonly object[]) => wellFormed(xs, `Codeunit${ECHO}.`);
+    const pair = [
+      { mutantId: "NONE", key: "NONE#a", codeunits: [CU] },
+      { mutantId: "a", key: "a#m", codeunits: [CU] },
+    ];
+
+    test("ids carry the key, the override stays exactly the override", () => {
+      const sent = encodeGroups(pair, ECHO);
+      expect(sent.map((x) => x.id)).toEqual([
+        "NONE#a|echo",
+        `NONE#a|${CU}`,
+        "a#m|echo",
+        `a#m|${CU}`,
+      ]);
+      expect(sent.map((x) => x.resources["active-mutant.txt"])).toEqual(["NONE", "NONE", "a", "a"]);
+      expect(sent.map((x) => x.mutantId)).toEqual(["NONE", "NONE", "a", "a"]);
+    });
+    test("a duplicate key is refused", () => {
+      expect(() => encodeGroups([...pair, ...pair], ECHO)).toThrow(AlRunnerV3EntriesEncodeError);
+    });
+    test("two groups of one key apart (reordered) are refused", () => {
+      expect(() =>
+        ok([
+          echoOf("NONE#a", "NONE"),
+          e("NONE#a|1", "NONE"),
+          echoOf("a#m", "a"),
+          e("NONE#a|2", "NONE"),
+        ]),
+      ).toThrow(/two groups/);
+    });
+    test("a swapped id (the key of one override, the override of another) is refused", () => {
+      expect(() => ok([echoOf("NONE#a", "NONE"), e("a#m|1", "NONE")])).toThrow(/override/);
+      expect(() => ok([echoOf("a#m", "a"), e("NONE#a|1", "a")])).toThrow(/override/);
+    });
+    test("NONE's override is exact: not a longer text, not two overrides in one group", () => {
+      expect(() => ok([echoOf("NONE#a", "NONEX")])).toThrow(/override/);
+      expect(() => ok([echoOf("NONE#a", "NONE"), e("NONE#a|1", "NONE#a")])).toThrow(/override/);
+    });
+  });
+
+  describe("4: a stored pair is single-use and bound to its deploy", () => {
+    test("redeploy with the same mutant id: nothing is served", async () => {
+      const { r } = await batchRig(() => ({ rows: killsAll }), ["M0001"]);
+      const store = (r.b as unknown as { pairStore: Map<string, unknown> }).pairStore;
+      expect(store.size).toBe(1);
+      await r.b.deploy(r.l.batch);
+      // The deploy alone empties it (the baseline bracket and a prefetch would too).
+      expect(store.size).toBe(0);
+      await baseline(r.b, SUITE1);
+      await kill(r, "M0001");
+      const n0 = r.serve.requests.length;
+      await r.b.sendKillPair("M0001", A);
+      expect(r.serve.requests.length).toBe(n0 + 1);
+      expect(batchStats(r)).toMatchObject({ served: 0 });
+    });
+    test("a pair stored under another artifact id is not served", async () => {
+      const { r } = await batchRig(() => ({ rows: killsAll }), ["M0001"]);
+      // The batch now in force has another artifact id (a store the deploy did not clear).
+      // (The bound check would refuse the send of another artifact; it is not what this test is about.)
+      const priv = r.b as unknown as { proof: { artifactId: string }; checkBound: () => unknown };
+      priv.proof = { ...priv.proof, artifactId: "ffffffffffffffffffffffffffffffff" };
+      priv.checkBound = async () => {};
+      await kill(r, "M0001");
+      const n0 = r.serve.requests.length;
+      await r.b.sendKillPair("M0001", A);
+      expect(r.serve.requests.length).toBe(n0 + 1);
+      expect(batchStats(r)).toMatchObject({ served: 0 });
+    });
+    test("a second lookup serves nothing", async () => {
+      const { r } = await batchRig(() => ({ rows: killsAll }), ["M0001"]);
+      await kill(r, "M0001");
+      await confirmAndRepro(r, "M0001");
+      expect(batchStats(r)).toMatchObject({ served: 1 });
+      await r.b.activate("M0001");
+      const n0 = r.serve.requests.length;
+      await r.b.sendKillPair("M0001", A);
+      expect(r.serve.requests.length).toBe(n0 + 1);
+      expect(batchStats(r)).toMatchObject({ served: 1 });
+    });
+    test("a lookup that does not match still deletes the entry", async () => {
+      const { r } = await batchRig(() => ({ rows: killsAll }), ["M0001"], [], SUITE2);
+      await kill(r, "M0001");
+      await r.b.sendKillPair("M0001", ref("C", CU2));
+      expect(batchStats(r)).toMatchObject({ served: 0, refused: 1 });
+      await r.b.activate("M0001");
+      const n0 = r.serve.requests.length;
+      await r.b.sendKillPair("M0001", A);
+      expect(r.serve.requests.length).toBe(n0 + 1);
+      expect(batchStats(r)).toMatchObject({ served: 0, refused: 1 });
+    });
+    test("a new prefetch, the baseline bracket and status() each clear the store", async () => {
+      for (const clear of [
+        (r: Rig) => r.b.prefetchMutants([]),
+        async (r: Rig) => {
+          r.b.baselinePhase(true);
+          r.b.baselinePhase(false);
+        },
+        async (r: Rig) => {
+          await r.b.status().catch(() => undefined);
+        },
+      ]) {
+        const { r } = await batchRig(() => ({ rows: killsAll }), ["M0001"]);
+        const store = (r.b as unknown as { pairStore: Map<string, unknown> }).pairStore;
+        expect(store.size).toBe(1);
+        await clear(r);
+        expect(store.size).toBe(0);
+      }
+    });
+  });
+
+  describe("5: a cut inside the batch", () => {
+    const cases: Array<[string, (isBatch: (n: number) => boolean) => ServeScript]> = [
+      [
+        "at NONE_2's codeunit entry",
+        (isBatch) => ({
+          rows: (m, cu, d, n, seen) =>
+            d === 0 && isBatch(n) && m === "NONE" && seen === 1
+              ? [...failA(allPass(m, cu, d, n), "flaky-cut").slice(0, 1), unkept()]
+              : killsAll(m, cu, d, n),
+        }),
+      ],
+      [
+        "at M_2's echo",
+        (isBatch) => ({
+          rows: (m, cu, d, n) =>
+            d === 0 && isBatch(n) && m === "M0002"
+              ? failA(allPass(m, cu, d, n), "from-cut-batch")
+              : killsAll(m, cu, d, n),
+          echo: (m, d, n) =>
+            d === 0 && isBatch(n) && m === "M0002"
+              ? { method: "Echo", status: "error", notRun: true, message: TIMEOUT_1S }
+              : goodEcho(m, d, n),
+        }),
+      ],
+      [
+        "at M_2's codeunit entry (both its entries stand, M's last row is the cut)",
+        (isBatch) => ({
+          rows: (m, cu, d, n) =>
+            d === 0 && isBatch(n) && m === "M0002"
+              ? [...failA(allPass(m, cu, d, n), "boom").slice(0, 1), unkept()]
+              : killsAll(m, cu, d, n),
+        }),
+      ],
+    ];
+    for (const [i, [name, mk]] of cases.entries()) {
+      // Cases 0 and 1 leave kill 2 without both entries: it takes today's pair. Case 2 keeps it.
+      const own = i < 2 ? 1 : 0;
+      test(`${name}: earlier kills stand, the cut kill ${own === 1 ? "takes today's pair" : "stands as it is"}, later kills are re-sent`, async () => {
+        const { r, before } = await batchRig(mk, ["M0001", "M0002", "M0003"]);
+        // The first request (daemon 0) was cut; the kills after the cut were re-sent on a fresh daemon.
+        expect(batchStats(r)).toEqual({ requests: 2, stored: 3 - own, served: 0, refused: 0 });
+        const got: Record<string, unknown> = {};
+        const sPre = r.b.entriesStats();
+        for (const m of ["M0001", "M0002", "M0003"]) {
+          await kill(r, m);
+          got[m] = await confirmAndRepro(r, m);
+        }
+        for (const m of ["M0001", "M0002", "M0003"]) {
+          expect(got[m]).toEqual({ confirm: "pass", repro: "fail", reproMessage: "boom" });
+        }
+        expect(batchStats(r)).toEqual({
+          requests: 2,
+          stored: 3 - own,
+          served: 3 - own,
+          refused: 0,
+        });
+        const s = r.b.entriesStats();
+        const d = (k: keyof typeof s) => s[k] - before[k];
+        // A kill that took today's path sent one pair of its own (its confirm passed).
+        expect(s.liveRequests - sPre.liveRequests).toBe(own);
+        expect([s.pairRequests, s.pairFallbacks1, s.pairFallbacks2]).toEqual([3, 0, 0]);
+        // liveRequests = the batch requests + (2 - pairRequests) for each kill that took today's path.
+        expect(d("liveRequests")).toBe(d("pairBatchRequests") + own);
+        expect(d("boundChecks")).toBe(
+          d("warmups") + d("prefetchRequests") + d("liveRequests") + d("coverageRequests"),
+        );
+      });
+    }
+  });
+
+  test("7: only a FAIL row is a kill candidate: survivors and timeouts send no batch", async () => {
+    const { r } = await batchRig(
+      () => ({
+        rows: (m, cu, d, n) =>
+          m === "M0002"
+            ? allPass(m, cu, d, n).map((x) => (x.method === "A" ? { ...x, status: "pass" } : x))
+            : allPass(m, cu, d, n),
+      }),
+      ["M0001", "M0002"],
+    );
+    expect(batchStats(r)).toEqual({ requests: 0, stored: 0, served: 0, refused: 0 });
+  });
+
+  describe("6: a chunk that throws stores nothing; every kill takes today's path", () => {
+    test("no pair stored, a named notice, kind live (no batch refusal), each kill has its own pair", async () => {
+      const notices: string[] = [];
+      const { r } = await batchRig(
+        (isBatch) => ({
+          rows: killsAll,
+          answer: (_req, n) => (isBatch(n) ? { lines: [], eof: true } : undefined),
+        }),
+        ["M0001", "M0002"],
+        notices,
+      );
+      expect(batchStats(r)).toEqual({ requests: 1, stored: 0, served: 0, refused: 0 });
+      expect(notices).toEqual(["al-runner-v3-pair-batch-skipped"]);
+      const n0 = r.serve.requests.length;
+      for (const m of ["M0001", "M0002"]) {
+        await kill(r, m);
+        expect(await confirmAndRepro(r, m)).toEqual({
+          confirm: "pass",
+          repro: "fail",
+          reproMessage: "boom",
+        });
+      }
+      // Per kill: its pair; the first kill's pair also restarts the closed daemon (a warm-up).
+      expect(r.serve.requests.length).toBe(n0 + 3);
+      expect(batchStats(r)).toMatchObject({ served: 0, refused: 0 });
+      expect(r.b.entriesStats().pairRequests).toBe(2);
+    });
   });
 });

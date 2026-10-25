@@ -64,6 +64,7 @@ import {
 } from "./al-runner-v3-contract";
 import {
   AlRunnerV3EntriesRefusedError,
+  ENTRIES_CHUNK_CAP,
   type EntryGroup,
   SELECTOR_ECHO_FILENAME,
   type SentEntry,
@@ -583,6 +584,11 @@ interface CallRows {
   readonly windowed?: boolean;
   /** R762 A: sent without `--coverage-json`; a caller that wants coverage must not reuse it. */
   readonly noCoverage?: boolean;
+  /**
+   * R778 (A2): the backend-wide sequence number of the PREFETCH request these rows came from. Only
+   * prefetched rows carry it; a stored kill pair is used only for a kill served from such rows.
+   */
+  readonly prefetchSeq?: number;
 }
 
 /** R635: what the serve-entries transport did, for `status()`, the close line and the gate. */
@@ -631,6 +637,18 @@ export interface V3EntriesStats {
    *  kill, `liveRequests = old − pairRequests + pairFallbacks1Passed + pairFallbacks2 +
    *  pairFallbacks2Passed`, where old is 1 + (1 if the confirm passed). */
   pairFallbacks2Passed: number;
+  /**
+   * R778: kill-pair BATCHES, sent right after the prefetch (kind `live`, so each also counts in
+   * `liveRequests` and `boundChecks`): requests sent (a chunk that threw counts, if its bound check
+   * passed), pairs stored (both entries stood), pairs a `sendKillPair` used, and stored pairs it
+   * found but refused (another codeunit, or a kill that did not come from the prefetch, or a pair that
+   * did not run after it). `liveRequests = pairBatchRequests +` the old per-kill formula over the
+   * kills that took today's path; a served pair adds no live request and no bound check of its own.
+   */
+  pairBatchRequests: number;
+  pairBatchStored: number;
+  pairBatchServed: number;
+  pairBatchRefused: number;
 }
 
 /** R651: the phase timers of `V3EntriesStats`. */
@@ -916,6 +934,19 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private baselineRows = new Map<number, readonly V3Row[]>();
   /** §4: per mutant, the rows a fully valid prefetch answer gave; consumed by `activate`. */
   private prefetched = new Map<string, Map<number, CallRows>>();
+  /**
+   * R778: the kill pairs `batchKillPairs` sent after the prefetch, per `<artifactId>|<mutantId>`.
+   * Single-use (deleted at the first lookup, match or not) and cleared by a deploy, a prefetch, the
+   * baseline bracket and `status()`. `seq` is the pair request's backend-wide sequence number.
+   */
+  private pairStore = new Map<
+    string,
+    { readonly cu: number; readonly seq: number; readonly none: CallRows; readonly m: CallRows }
+  >();
+  /** R778: false only in tests that measure today's per-kill pair on its own. */
+  private pairBatch = true;
+  /** R778 (A2): the backend-wide count of `request()` calls (every lane); see `CallRows.prefetchSeq`. */
+  private requestSeq = 0;
   /** §3: the covering codeunits of the batch: the warm-up's union. */
   private union = new Set<number>();
   /** R766: the per-daemon state. `lane` is lane 0 (`active/`); `lanes(N)` adds `active.<k>/` lanes. */
@@ -967,6 +998,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     pairFallbacks2: 0,
     pairFallbacks1Passed: 0,
     pairFallbacks2Passed: 0,
+    pairBatchRequests: 0,
+    pairBatchStored: 0,
+    pairBatchServed: 0,
+    pairBatchRefused: 0,
   };
 
   private proof: BatchProof | undefined;
@@ -1068,6 +1103,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** `--version` must be a v3 build and, when pinned, the binary must be the pinned bytes. */
   async status(): Promise<BackendStatus> {
     this.dropPair();
+    this.pairStore.clear();
     const res = await this.spawn([this.cfg.alRunnerPath, "--version"]).catch((e) => ({
       exitCode: -1,
       stdout: "",
@@ -1399,6 +1435,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** R635 §4: the orchestrator's bracket around its baseline step. The ONLY source of `inBaseline`. */
   baselinePhase(on: boolean): void {
     this.dropPair();
+    this.pairStore.clear();
     this.inBaseline = on;
   }
 
@@ -1443,6 +1480,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.batchBlind = undefined;
     this.latchBy = undefined;
     this.prefetched = new Map();
+    this.pairStore.clear();
     this.baselineRows = new Map();
     this.union = new Set();
     this.echoId = undefined;
@@ -2613,11 +2651,17 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     groups: readonly EntryGroup[],
     phase: "prefetchMs" | "liveMs",
   ): Promise<{
+    /** Per GROUP KEY (the mutant id unless the group set a key, R778 A1). */
     readonly results: ReadonlyMap<string, Map<number, CallRows>>;
     readonly resend: readonly EntryGroup[];
     /** The first row R612 did not keep, at the cut. */
     readonly cutWhy?: string;
+    /** R778 (A2): this request's number in the backend-wide count. */
+    readonly seq: number;
+    /** R778: the keys with at least one standing entry, an echo too (the others lie after a cut). */
+    readonly reached: ReadonlySet<string>;
   }> {
+    const seq = ++this.requestSeq;
     const daemon = await this.ensureDaemon(lane);
     const started = Date.now();
     const { sent, rows } = await lane.timed(phase, () =>
@@ -2638,7 +2682,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const standing = sent.slice(0, cut + 1);
     const results = new Map<string, Map<number, CallRows>>();
     let echoWhy: string | undefined;
+    const reached = new Set<string>();
     for (const e of standing) {
+      reached.add(e.key);
       const mine = rows.get(e.id) ?? [];
       if (e.echo) {
         echoWhy = echoMismatch(mine, e.mutantId);
@@ -2658,20 +2704,22 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           : {}),
         ...(missing !== undefined ? { missing } : {}),
       };
-      const m = results.get(e.mutantId) ?? new Map<number, CallRows>();
+      const m = results.get(e.key) ?? new Map<number, CallRows>();
       m.set(e.codeunit, call);
-      results.set(e.mutantId, m);
+      results.set(e.key, m);
     }
     const resend: EntryGroup[] = [];
+    const keyed = (e: SentEntry) => (e.key === e.mutantId ? {} : { key: e.key });
     for (const e of sent.slice(standing.length)) {
       if (e.echo) continue;
       const last = resend.at(-1);
-      if (last !== undefined && last.mutantId === e.mutantId) {
+      if (last !== undefined && (last.key ?? last.mutantId) === e.key) {
         resend[resend.length - 1] = {
           mutantId: e.mutantId,
+          ...keyed(e),
           codeunits: [...last.codeunits, e.codeunit],
         };
-      } else resend.push({ mutantId: e.mutantId, codeunits: [e.codeunit] });
+      } else resend.push({ mutantId: e.mutantId, ...keyed(e), codeunits: [e.codeunit] });
     }
     const cutRow = (rows.get(sent[cut]?.id ?? "") ?? []).find(
       (r) => !serveDaemonReusable(serveLines([r]), "v3"),
@@ -2680,6 +2728,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     return {
       results,
       resend,
+      seq,
+      reached,
       ...(cutRow !== undefined
         ? {
             cutWhy: `${cutRow.name}: ${cutRow.message ?? cutRow.status}${r672 !== undefined ? ` (${r672})` : ""}`,
@@ -2708,6 +2758,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     plans: readonly { readonly mutantId: string; readonly refs: readonly TestMethodRef[] }[],
   ): Promise<void> {
     this.dropPair();
+    this.pairStore.clear();
     if (!this.entries) return;
     this.prefetched = new Map();
     const groups: EntryGroup[] = plans.map((p) => ({
@@ -2736,13 +2787,131 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
       for (const [m, rows] of out.results) {
         const had = this.prefetched.get(m) ?? new Map<number, CallRows>();
-        for (const [cu, c] of rows) had.set(cu, c);
+        for (const [cu, c] of rows) had.set(cu, { ...c, prefetchSeq: out.seq });
         this.prefetched.set(m, had);
       }
       const again = out.resend.filter((g) => !resent.has(g.mutantId));
       for (const g of again) resent.add(g.mutantId);
       queue.push(...chunkGroups(again));
     }
+    await this.batchKillPairs(plans);
+  }
+
+  /**
+   * R778: the kills the prefetch's rows show (per mutant, the first covering test that FAILED, as
+   * the orchestrator's cold loop will see it) get their NONE confirm and mutant reproduction in a
+   * few chunked requests, each kill's NONE group directly before its M group (so per kill the order
+   * is: the kill, in the prefetch; NONE; M). Kind `live`: a refusal of one of these costs a kill's
+   * saving, never the session (build review A5). The pairs wait in `pairStore` for `sendKillPair`.
+   * A chunk that throws stores nothing and ends the batch (each kill then takes today's path); an
+   * R612 cut keeps the pairs whose two entries both stood, leaves the cut kill to today's path and
+   * re-sends the kills after it once, on a fresh daemon.
+   */
+  private async batchKillPairs(
+    plans: readonly { readonly mutantId: string; readonly refs: readonly TestMethodRef[] }[],
+  ): Promise<void> {
+    const proof = this.proof;
+    if (
+      !this.pairBatch ||
+      this.entriesRefused !== undefined ||
+      this.inBaseline ||
+      proof === undefined
+    )
+      return;
+    type Kill = { readonly mutantId: string; readonly cu: number };
+    const kills: Kill[] = [];
+    for (const p of plans) {
+      for (const r of p.refs) {
+        const call = this.prefetched.get(p.mutantId)?.get(r.codeunitId);
+        if (call === undefined || call.refusal !== undefined || call.missing !== undefined)
+          continue;
+        const mine = call.rows.filter(
+          (x) => x.codeunit === r.codeunitId && x.method.toLowerCase() === r.method.toLowerCase(),
+        );
+        const row = mine[0];
+        if (mine.length === 1 && row?.status === "fail" && row.notRun !== true) {
+          kills.push({ mutantId: p.mutantId, cu: r.codeunitId });
+          break;
+        }
+      }
+    }
+    // A kill is 4 entries (two groups of echo + codeunit); a pair is never split across chunks.
+    const perChunk = Math.max(1, Math.floor(ENTRIES_CHUNK_CAP / 4));
+    const chunksOf = (ks: readonly Kill[]): Kill[][] => {
+      const out: Kill[][] = [];
+      for (let i = 0; i < ks.length; i += perChunk) out.push(ks.slice(i, i + perChunk));
+      return out;
+    };
+    const queue = chunksOf(kills);
+    const resent = new Set<string>();
+    for (let chunk = queue.shift(); chunk !== undefined; chunk = queue.shift()) {
+      const groups: EntryGroup[] = chunk.flatMap((k) => [
+        {
+          mutantId: SELECTOR_RESOURCE_NONE,
+          key: `${SELECTOR_RESOURCE_NONE}#${k.mutantId}`,
+          codeunits: [k.cu],
+        },
+        { mutantId: k.mutantId, key: `${k.mutantId}#m`, codeunits: [k.cu] },
+      ]);
+      const liveBefore = this.stats.liveRequests;
+      let out: Awaited<ReturnType<AlRunnerV3Backend["request"]>>;
+      try {
+        out = await this.request(this.lane, groups, "liveMs");
+      } catch (err) {
+        if (err instanceof AlRunnerV3DependencySkippedError) throw err;
+        this.notify(
+          "al-runner-v3-pair-batch-skipped",
+          `[lethal] al-runner-v3-pair-batch-skipped: a batch of ${chunk.length} kill pair(s) gave no usable answer (${err instanceof Error ? `${err.name}: ${err.message.slice(0, 300)}` : String(err)}); nothing of it is stored, and each kill sends its own pair (R778).`,
+        );
+        return;
+      } finally {
+        this.stats.pairBatchRequests += this.stats.liveRequests - liveBefore;
+      }
+      const after: Kill[] = [];
+      for (const k of chunk) {
+        const noneKey = `${SELECTOR_RESOURCE_NONE}#${k.mutantId}`;
+        const none = out.results.get(noneKey)?.get(k.cu);
+        const m = out.results.get(`${k.mutantId}#m`)?.get(k.cu);
+        if (none !== undefined && m !== undefined) {
+          this.pairStore.set(`${proof.artifactId}|${k.mutantId}`, {
+            cu: k.cu,
+            seq: out.seq,
+            none,
+            m,
+          });
+          this.stats.pairBatchStored += 1;
+        } else if (!out.reached.has(noneKey) && !resent.has(k.mutantId)) {
+          // Nothing of it stood: it lies after the cut. Re-sent once, whole, on a fresh daemon.
+          // (A kill with something standing but not both entries is the cut kill: whatever stood
+          // is dropped and it takes today's path, so a M row never stands without its NONE row.)
+          resent.add(k.mutantId);
+          after.push(k);
+        }
+      }
+      queue.push(...chunksOf(after));
+    }
+  }
+
+  /**
+   * R778 (A2, A4, A6): the stored pair for this kill, or `undefined`. The entry is deleted at the
+   * first lookup, match or not. It serves only a kill whose run came from PREFETCHED rows of the
+   * codeunit, and only if the pair's request came after that prefetch request; its `ref` is the
+   * actual killer (the rows cover the whole codeunit).
+   */
+  private takeStoredPair(lane: Lane, mutantId: string, ref: TestMethodRef): KillPair | undefined {
+    const proof = this.proof;
+    if (proof === undefined) return undefined;
+    const key = `${proof.artifactId}|${mutantId}`;
+    const stored = this.pairStore.get(key);
+    if (stored === undefined) return undefined;
+    this.pairStore.delete(key);
+    const killSeq = lane.rowsByCodeunit.get(ref.codeunitId)?.prefetchSeq;
+    if (stored.cu !== ref.codeunitId || killSeq === undefined || stored.seq <= killSeq) {
+      this.stats.pairBatchRefused += 1;
+      return undefined;
+    }
+    this.stats.pairBatchServed += 1;
+    return { mutantId, ref, none: stored.none, m: stored.m, next: "null" };
   }
 
   /**
@@ -2752,6 +2921,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * sends and stores nothing (today's two live calls) unless serve-entries is live and unlatched,
    * outside the baseline, right after the kill under `mutantId`. An R612 cut keeps what stood: the
    * NONE answer alone (`pairFallbacks1`), or nothing (`pairFallbacks2`).
+   * R778: first a pair `batchKillPairs` stored after the prefetch is used (see `takeStoredPair`),
+   * which sends nothing.
    */
   async sendKillPair(mutantId: string, ref: TestMethodRef): Promise<void> {
     return this.sendKillPairOn(this.soleLane("sendKillPair"), mutantId, ref);
@@ -2765,6 +2936,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       this.inBaseline ||
       lane.lastActivated !== mutantId
     ) {
+      return;
+    }
+    const stored = this.takeStoredPair(lane, mutantId, ref);
+    if (stored !== undefined) {
+      lane.pair = stored;
       return;
     }
     const cu = ref.codeunitId;
@@ -3028,7 +3204,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (this.entries) {
       const s = this.entriesStats();
       console.warn(
-        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}); wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks.`,
+        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}; batched pairs: requests ${s.pairBatchRequests}, stored ${s.pairBatchStored}, served ${s.pairBatchServed}, refused ${s.pairBatchRefused}); wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks.`,
       );
     }
     await rm(join(this.cfg.instrumentedDir, "cov"), { recursive: true, force: true }).catch(
