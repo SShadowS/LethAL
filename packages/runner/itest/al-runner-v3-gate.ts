@@ -760,9 +760,11 @@ export function v3ItestTransport(env: Readonly<Record<string, string | undefined
 }
 
 /**
- * R788: the gate's big legs run serve-entries, the users' default since R761; every other leg
- * keeps one-shot (S1, N1, MO and WR cover it). `LETHAL_ITEST_V3_TRANSPORT`, when set, still names
- * the transport for every leg (so `one-shot` reproduces the old gate).
+ * R788: the gate's big legs run serve-entries, the users' default since R761; the other
+ * flag-following legs keep one-shot (S1, N1, MO and WR cover it). `LETHAL_ITEST_V3_TRANSPORT`, when
+ * set, still names the transport for every flag-following leg (so `one-shot` reproduces the old
+ * gate). S1E, N1E, N1S and O1 are serve by construction, K takes the CLI default, and MO and WR
+ * refuse serve.
  */
 export const V3_GATE_SERVE_LEGS: readonly string[] = ["D1", "D1c", "T"];
 

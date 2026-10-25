@@ -26,7 +26,8 @@
  * - `LETHAL_ITEST_V3_CDO=<Continia Document Output checkout at 5f2a71d>`: the D legs (a corpus job).
  * - `LETHAL_ITEST_V3_TABLES=1`: leg T (the update gate's tables leg).
  * - `LETHAL_V3_GATE_NONCE` + `LETHAL_V3_GATE_RECEIPT`: write the update gate's receipt.
- * - R635 (all unset: the gate is unchanged): `LETHAL_ITEST_V3_TRANSPORT=one-shot|serve-entries`,
+ * - R635 (all unset: D1, D1c and T run serve-entries since R788, the other flag-following legs
+ *   one-shot): `LETHAL_ITEST_V3_TRANSPORT=one-shot|serve-entries`,
  *   `LETHAL_ITEST_V3_SECOND_ECHO=0|1` (serve-entries only), refused by name otherwise
  *   (`v3ItestTransport`); `LETHAL_ITEST_V3_REPORT_DIR=<dir>` writes each session's report as
  *   `<dir>/<leg>.report.json` before any assertion; `LETHAL_ITEST_V3_CONTROL_DIR=<dir>` first

@@ -122,7 +122,8 @@ The legs:
   `LETHAL_ITEST_V3_TRANSPORT` still names one transport for the flag-following legs (`one-shot` reproduces the
   pre-R788 gate). On serve, D1 532 -> 32 s, D1c 462 -> 31 s, T 161 -> 30 s, with every count, per-mutant row, note and
   warning identical to one-shot. Each serve leg asserts `pairRequests` = killed and zero echo mismatches, fallbacks
-  and refused batches (`assertServeCounters`).
+  and refused batches (`assertServeCounters`). A T re-record now records from a serve session unless
+  `LETHAL_ITEST_V3_TRANSPORT=one-shot` is set (the rows were measured identical on both transports).
 - D1, D1c: the Continia Document Output slice, compared per mutant with R594's BC oracle
   (`docs/measurements/r594/bc3-A.report.json`, `bc3-B.report.json`). No source text is committed.
   - `LETHAL_ITEST_V3_CDO` names the checkout. It is `/work/lethal-wt/cdo-r396`, the read-only measurement checkout,
