@@ -1767,6 +1767,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.callSeq += 1;
     const covPath = join(covDir, `call-${this.callSeq}.json`);
     await rm(covPath, { force: true });
+    // R-762 B: a mutant call on a pinned-gone build asks for no coverage (nothing reads it). The
+    // baseline test is `isBaselineCall` (as in the verdict path), so one-shot and serve-entries agree.
+    const coverageRequested = !noCoverage && !(this.sleepRuleRetired && !this.isBaselineCall());
     const argv = v3CallArgv({
       alRunnerPath: absToolPath(this.cfg.alRunnerPath),
       codeunitId: id,
@@ -1774,10 +1777,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       packagesDir: resolve(this.cfg.packagesDir),
       bcVersion: this.cfg.bcVersion,
       symbols: this.cfg.preprocessorSymbols ?? [],
-      // R-762 B: a mutant call on a pinned-gone build asks for no coverage (nothing reads it).
-      ...(noCoverage || (this.sleepRuleRetired && this.lastActivated !== null)
-        ? {}
-        : { coverageJson: resolve(covPath) }),
+      ...(coverageRequested ? { coverageJson: resolve(covPath) } : {}),
       // I-1: the same real paths the Sleep index is keyed by.
       activeDir: this.realDirs?.active ?? resolve(this.activeDir()),
       testDir: this.realDirs?.test ?? resolve(this.cfg.testDir),
@@ -1862,7 +1862,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         };
       }
     }
-    if (this.coverageTamper !== undefined && this.lastActivated !== null) {
+    if (this.coverageTamper !== undefined && coverageRequested && this.lastActivated !== null) {
       await this.coverageTamper(covPath);
     }
     let covText: string | undefined;

@@ -590,6 +590,19 @@ describe("R-762 B: the §6 Sleep rule is retired only on a pinned build whose pr
     expect(v3.calls[0]).toContain("--coverage-json");
   });
 
+  test("retired: a mutant call does not call the coverageTamper hook (no file to tamper); unpinned still does, on an existing file", async () => {
+    for (const retired of [true, false]) {
+      const { b } = await setup(retired);
+      const seen: boolean[] = [];
+      b.coverageTamper = async (p) => {
+        seen.push(await Bun.file(p).exists());
+      };
+      await b.activate("M0001");
+      await runA(b);
+      expect(seen).toEqual(retired ? [] : [true]);
+    }
+  });
+
   test("retired: B2's virtual-clock guard still refuses a timeout shorter than its stop", async () => {
     const stop = () => [
       {
