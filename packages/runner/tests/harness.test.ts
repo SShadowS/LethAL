@@ -308,7 +308,12 @@ describe("HarnessVerifier control-app version gate (R28)", () => {
   test("GH-24: refuses 1.0.0.18", async () => {
     const message = await messageFrom(info({ semver: "1.0.0.18" }));
     expect(message).toContain("1.0.0.18");
-    expect(message).toContain("1.0.0.22");
+    expect(message).toContain("1.0.0.24");
+  });
+
+  test("R-689b: refuses 1.0.0.23, the build before the discovery error and InstalledDependents", async () => {
+    const message = await messageFrom(info({ semver: "1.0.0.23" }));
+    expect(message).toContain("reports version 1.0.0.23, older than the 1.0.0.24");
   });
 
   test("refuses a payload with no semver at all rather than assuming it is current", async () => {
@@ -389,10 +394,9 @@ describe("HarnessVerifier control-app version gate (R28)", () => {
    * telling the operator to rebuild something they just rebuilt — and nothing else in this repo
    * connects the two files.
    *
-   * R389: app.json MAY be ahead of the minimum. 1.0.0.23 adds `DependentCount`, an action the
-   * client treats as optional (an older control app means "fall back"), so the minimum stays at
-   * 1.0.0.22 and no gate waits for the republish. The hazard is only the other direction. The
-   * minimum MUST be raised when a client path requires a new control action and has no fallback.
+   * app.json MAY be ahead of the minimum, for an action the client treats as optional (none now:
+   * R-689b raised the minimum to 1.0.0.24). The hazard is only the other direction. The minimum
+   * MUST be raised when a client path requires a new control action and has no fallback.
    */
   test("MIN_CONTROL_VERSION is not ahead of extensions/lethal-control/app.json's version", async () => {
     const appJsonPath = fileURLToPath(
@@ -554,7 +558,7 @@ describe("parseLeaseSnapshot (R110)", () => {
     // The failure that matters: this is what an un-republished container answers, and defaulting
     // here would report it as "no lease held".
     expect(() => parseLeaseSnapshot({})).toThrow(HarnessVerificationError);
-    expect(() => parseLeaseSnapshot({})).toThrow(/1\.0\.0\.22/);
+    expect(() => parseLeaseSnapshot({})).toThrow(MIN_CONTROL_VERSION);
     expect(() => parseLeaseSnapshot({})).toThrow(/republish/);
   });
 
