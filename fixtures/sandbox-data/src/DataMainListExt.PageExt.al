@@ -12,7 +12,7 @@
 //
 // WHY THE WORK HAPPENS IN `OnOpenPage`: this fixture measures a TRIGGER, reached through a `TestPage`.
 // (A pageextension's procedures ARE callable from a test codeunit through a `Page` variable,
-// measured on BC 28.4 by R-741, R750.) Whether a trigger's code executes in LethAL's
+// measured live on BC 28.4 W1 (bc2) by R-741, R750.) Whether a trigger's code executes in LethAL's
 // `GuiAllowed=No` / `ClientType=ODataV4` session (R57/R60) is what `PageExtCountsMatchingRelated`
 // answers on the live gate.
 pageextension 79321 "Data Main List Ext" extends "Data Main List"
