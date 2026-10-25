@@ -579,9 +579,10 @@ describe("1, 2, 3: the option, its default, the version line", () => {
     expect(one.calls[1]?.slice(1, 3)).toEqual(["test", "--output-json"]);
   });
 
-  test("1: the config's default transport is one-shot and secondEcho defaults on", () => {
+  test("1: the config's default transport is serve-entries (R761, source default) and secondEcho defaults on", () => {
     const c = validateAlRunnerV3Config({ packagesDir: "/p", bcVersion: "28.0.1.2" });
-    expect(c.transport).toBe("one-shot");
+    expect(c.transport).toBe("serve-entries");
+    expect(c.transportSource).toBe("default");
     expect(c.secondEcho).toBe(true);
   });
 
@@ -2037,7 +2038,7 @@ describe("the CLI threads the option through (wiring)", () => {
       { selectorId: SELECTOR_ID, controlId: ECHO, tableId: 79197 },
     );
   };
-  test("no transport builds the one-shot backend; transport serve-entries builds serve-entries", async () => {
+  test("no transport builds a backend that is one-shot until the session decides (R761); transport serve-entries builds serve-entries", async () => {
     if (!LINUX) {
       await expect(build({})).rejects.toThrow(/al-runner-v3-(windows|platform)-unsupported/);
       return;
