@@ -73,6 +73,17 @@ import {
 import { AlRunnerV3UngatedBuildError, checkGated } from "./al-runner-v3-pin";
 import { pinnedDefectCoverage } from "./al-runner-v3-pins";
 import {
+  FRESH_PROBE_ENV,
+  type ProbeCacheKey,
+  alcIdentity,
+  keyDigest,
+  packagesFingerprint,
+  probeCodeHash,
+  readProbeCache,
+  uncacheableReason,
+  writeProbeCache,
+} from "./al-runner-v3-probe-cache";
+import {
   AlRunnerV3CoverageJoinError,
   type SleepIndex,
   type V3CoverageRead,
@@ -282,6 +293,8 @@ export interface AlRunnerV3Config {
   readonly transport?: "one-shot" | "serve-entries";
   /** R635 §5 step 2: the echo before the coverage request. Absent: on. */
   readonly secondEcho?: boolean;
+  /** R762: run the contract probe fresh instead of replaying a cached pass (`--fresh-probe`). */
+  readonly freshProbe?: boolean;
 }
 
 /** One row of v3's `--output-json` `tests[]`, decoded. */
@@ -888,18 +901,64 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       throw err;
     }
     // §8: the contract probe, once per backend (one session), after the version and pin checks.
-    this.contract ??= await runV3ContractProbe({
-      alRunnerPath: this.cfg.alRunnerPath,
-      expectedVersion: reported,
-      packagesDir: resolve(this.cfg.packagesDir),
-      bcVersion: this.cfg.bcVersion,
-      alcPath: this.cfg.alcPath,
-      ...(this.cfg.cacheDir !== undefined ? { cacheDir: this.cfg.cacheDir } : {}),
-      ...(Bun.which("taskset") !== null ? { tasksetPath: Bun.which("taskset") ?? "" } : {}),
-      gateOnlyTrusted: gateRecord,
-      ...(gatedWarnFacts !== undefined ? { gatedWarnFacts } : {}),
-      spawn: this.spawn,
-    });
+    // R762: a fully passing probe of the same inputs is replayed from the cache (see its module).
+    let probeNote = "";
+    if (this.contract === undefined) {
+      const run = (): Promise<V3ContractResult> =>
+        runV3ContractProbe({
+          alRunnerPath: this.cfg.alRunnerPath,
+          expectedVersion: reported,
+          packagesDir: resolve(this.cfg.packagesDir),
+          bcVersion: this.cfg.bcVersion,
+          alcPath: this.cfg.alcPath,
+          ...(this.cfg.cacheDir !== undefined ? { cacheDir: this.cfg.cacheDir } : {}),
+          ...(Bun.which("taskset") !== null ? { tasksetPath: Bun.which("taskset") ?? "" } : {}),
+          gateOnlyTrusted: gateRecord,
+          ...(gatedWarnFacts !== undefined ? { gatedWarnFacts } : {}),
+          spawn: this.spawn,
+        });
+      if (this.cfg.candidate === true) {
+        // The update gate's candidate is never read from or written to the cache.
+        this.contract = await run();
+        probeNote = "probe ran fresh (candidate build)";
+      } else {
+        const forced = this.cfg.freshProbe === true || process.env[FRESH_PROBE_ENV] === "1";
+        const key = await this.probeKey(reported, binarySha256, gateRecord);
+        const digest = key === undefined ? "none" : keyDigest(key).slice(0, 12);
+        let why = forced ? "forced" : key === undefined ? "key unavailable" : "no entry";
+        let cached: V3ContractResult | undefined;
+        if (key !== undefined && !forced) {
+          try {
+            cached = await readProbeCache(this.cfg.alRunnerPath, key);
+          } catch (err) {
+            why = "entry unusable";
+            console.warn(
+              `[lethal] ${err instanceof Error ? err.message : String(err)}; running the probe`,
+            );
+          }
+        }
+        if (cached !== undefined) {
+          this.contract = cached;
+          probeNote = `probe from cache (key ${digest})`;
+        } else {
+          this.contract = await run();
+          probeNote = `probe ran fresh (key ${digest}; ${why})`;
+          if (key !== undefined) {
+            const no = uncacheableReason(this.contract, key.version, key.binarySha256);
+            if (no !== undefined) {
+              probeNote += `; not cached: ${no}`;
+            } else {
+              try {
+                await writeProbeCache(this.cfg.alRunnerPath, key, this.contract);
+              } catch (err) {
+                console.warn(`[lethal] al-runner-v3 probe cache not written: ${String(err)}`);
+              }
+            }
+          }
+        }
+      }
+      console.warn(`[lethal] al-runner-v3 contract ${probeNote} (R762)`);
+    }
     // R639 r9 §2: `unlike-bc` refuses a normal session; a candidate (update-gate) session warns.
     const kind = { candidate: this.cfg.candidate === true };
     // R719: a fact the running build's pin already covers (exact fact and outcome) is not warned
@@ -912,8 +971,34 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (refusals.length > 0) return { ok: false, details: refusals.join("\n") };
     return {
       ok: true,
-      details: `${reported}; ${v3ContractSummary(this.contract)}${this.entries ? `; transport serve-entries (R635), secondEcho ${this.cfg.secondEcho !== false}` : ""}`,
+      details: `${reported}; ${v3ContractSummary(this.contract)}${probeNote !== "" ? `; ${probeNote}` : ""}${this.entries ? `; transport serve-entries (R635), secondEcho ${this.cfg.secondEcho !== false}` : ""}`,
     };
+  }
+
+  /** R762: every input the probe's facts depend on; `undefined` (run the probe, cache nothing) when one cannot be read. */
+  private async probeKey(
+    version: string,
+    binarySha256: string,
+    gateRecord: string,
+  ): Promise<ProbeCacheKey | undefined> {
+    try {
+      const code = await probeCodeHash();
+      if (code === undefined) return undefined;
+      return {
+        binarySha256,
+        version,
+        probeCodeHash: code,
+        bcVersion: this.cfg.bcVersion,
+        packages: await packagesFingerprint(this.cfg.packagesDir),
+        alc: await alcIdentity(this.cfg.alcPath),
+        cacheDir: this.cfg.cacheDir ?? null,
+        gateRecord,
+        tasksetPresent: Bun.which("taskset") !== null,
+        libraryAssertApp: false,
+      };
+    } catch {
+      return undefined;
+    }
   }
 
   /** §8: the measured contract, for the gate's leg C and the report line. */
