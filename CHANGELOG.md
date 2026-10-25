@@ -13,6 +13,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **`--exclude-test <Codeunit.Method>` leaves single test methods out of a run** (R745). Repeatable, `lethal run` only,
+  bcdev only (al-runner-v3 runs whole codeunits, so it refuses the flag by name). A name that matches no test is
+  refused before any deploy. The report names each left-out test in `excludedTests` (reason `exclude-test`), raises
+  `tests-narrowed` and prints a `TESTS EXCLUDED` line. A mutant only those tests kill reads survived or no-coverage.
+  R740's stale-dependency refusal now names the flag as the way out. The live proof is pre-committed and recorded
+  after it runs.
 - **Many breaking mutants are now isolated inside the compile budget** (R735). When a batch fails to compile, alc's own
   error lines are mapped to the mutant whose branch holds each line, and those mutants are compiled alone first. A
   suspect is blamed only if it fails alone; a line that maps to nothing falls back to the halving search of R734. On

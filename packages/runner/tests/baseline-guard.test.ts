@@ -603,7 +603,9 @@ describe("R355: stage baselines, list form and moded form", () => {
     "docs/campaign/2026-08-03-do/rung1.resumed-run.baseline.json",
     "docs/campaign/2026-08-03-do/rung2.baseline.json",
     "docs/campaign/2026-08-08-r85-swap-population/rung2.baseline.json",
-    "docs/campaign/2026-08-16-gift-card/rehearsal.baseline.json",
+    // R758: the gift-card stage is re-frozen in the moded form for the talk, so the list form is
+    // read from a frozen copy of its scheme-3 baseline instead of the live campaign file.
+    "packages/runner/tests/__fixtures__/gift-card-scheme3.baseline.json",
   ];
 
   test.each(COMMITTED)("%s still reads, as a list with its mode unknown", async (rel) => {

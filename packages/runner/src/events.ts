@@ -227,6 +227,7 @@ export type RunEventInput =
        * `testBuildSymbols` is the DERIVED test-app symbol set (not observed). `excludedTests` lists
        * the tests the applied filter dropped (`compiled-out`) and the ones kept as undecided; with
        * no compiled evidence the unfiltered suite runs, so only the undecided ones are listed.
+       * R745: it also lists the tests `--exclude-test` left out, with reason `exclude-test`.
        * `unverifiedTestFiles` names, on bcdev with no compiled evidence, the test files with a `#if`
        * around a `[Test]`. Optional on the wire, so a stream written before R403 still folds.
        */
