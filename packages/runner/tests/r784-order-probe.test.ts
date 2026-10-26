@@ -4,7 +4,10 @@ import { describe, expect, test } from "bun:test";
 import { V3_GATE_LEGS, gateOutcome } from "../itest/al-runner-v3-gate";
 import {
   type O1Request,
+  O1_PLAN,
+  combineO1Sets,
   judgeOrderProbe,
+  o1CommitRuns,
   o1LoginWorkDate,
   v3DefaultLegs,
 } from "../itest/alrunner-v3-legs";
@@ -32,20 +35,42 @@ const WRITES = [
   "SetIso",
 ];
 
-/** The pre-committed answers for the five requests, with `tweak` applied to each line. */
+const COMMITS = [
+  "CommitLocalRow",
+  "CommitDepRow",
+  "CommitMark",
+  "CommitDepMark",
+  "CommitNumSeq",
+  "CommitIso",
+];
+const COMMIT_REFUSAL =
+  "NotRun: out-of-scope: Commit inside a test under TestIsolation = Function: what the runner keeps is not pinned";
+
+/**
+ * The pre-committed answers for the nine requests, with `tweak` applied to each line. `flagged`: the
+ * build is pinned commit-isolated, so CommitWriter tests pass; else they are refused (R804).
+ */
 function answers(
   tweak?: (l: O1Request["lines"][number]) => O1Request["lines"][number],
+  flagged = false,
 ): O1Request[] {
   const t = tweak ?? ((l) => l);
-  const plan = [["R"], ["W", "R"], ["R", "W"], ["W", "R", "W", "R", "R"], ["R"]] as const;
-  return plan.map((shape, i) => {
+  return O1_PLAN.map((shape, i) => {
     const entries = shape.map((kind, j) => ({ id: `${kind}${i}.${j}`, kind }));
     const lines = entries.flatMap((e) =>
       e.kind === "R"
         ? Object.entries(READS).map(([m, msg]) =>
             t({ entry: e.id, name: `Codeunit77051.${m}`, status: "fail", message: msg }),
           )
-        : WRITES.map((m) => t({ entry: e.id, name: `Codeunit77052.${m}`, status: "pass" })),
+        : e.kind === "C"
+          ? COMMITS.map((m) =>
+              t({
+                entry: e.id,
+                name: `Codeunit77054.${m}`,
+                ...(flagged ? { status: "pass" } : { status: "error", message: COMMIT_REFUSAL }),
+              }),
+            )
+          : WRITES.map((m) => t({ entry: e.id, name: `Codeunit77052.${m}`, status: "pass" })),
     );
     return { label: `request ${i + 1}`, entries, lines };
   });
@@ -140,7 +165,7 @@ describe("R784: judgeOrderProbe", () => {
   });
   test("a request count or entry shape that differs from the plan is a gate-fail", () => {
     expect(judgeOrderProbe([], TODAY).outcome).toBe("gate-fail");
-    expect(judgeOrderProbe(answers().slice(0, 4), TODAY).outcome).toBe("gate-fail");
+    expect(judgeOrderProbe(answers().slice(0, 5), TODAY).outcome).toBe("gate-fail");
     const rs = answers();
     const first = rs[0];
     if (first === undefined) throw new Error("no request");
@@ -229,5 +254,163 @@ describe("R771 addendum 2: a pinned login WorkDate (O1's CDO set on edge-a157b2d
       expect(p.o1?.cdoWorkDate).toBe(LOGIN);
       expect(p.o1?.issue).toMatch(/\/5743$/);
     }
+  });
+});
+
+// R804 part 2: the commit kind. Pre-commitment docs/superpowers/specs/2026-10-26-r804-o1-commit-kind-precommitment.md (3185d706).
+describe("R804 S1: O1's sets are combined after every set ran", () => {
+  const pass = { outcome: "pass" as const, lines: [] };
+  const held = { outcome: "held" as const, lines: ["x passes"] };
+  const fail = { outcome: "gate-fail" as const, lines: ["y carried"] };
+  test("a held own set and a failed CDO set is a gate-fail naming the CDO set", () => {
+    const j = combineO1Sets([
+      { set: "own", ...held },
+      { set: "cdo", ...fail },
+    ]);
+    expect(j.outcome).toBe("gate-fail");
+    expect(j.lines).toEqual(["cdo set: y carried"]);
+  });
+  test("held beats pass, all pass is pass, a failed own set still fails", () => {
+    expect(
+      combineO1Sets([
+        { set: "own", ...pass },
+        { set: "cdo", ...held },
+      ]).outcome,
+    ).toBe("held");
+    expect(
+      combineO1Sets([
+        { set: "own", ...pass },
+        { set: "cdo", ...pass },
+      ]).outcome,
+    ).toBe("pass");
+    expect(
+      combineO1Sets([
+        { set: "own", ...fail },
+        { set: "cdo", ...held },
+      ]).outcome,
+    ).toBe("gate-fail");
+  });
+});
+
+describe("R804: O1's commit requests", () => {
+  const isCommit = (n: string) => n.startsWith("Codeunit77054.");
+  test("the plan is the five requests, then [C,R] [R,C] [C,R,C,R] [R]", () => {
+    expect(O1_PLAN.map((s) => s.join(""))).toEqual([
+      "R",
+      "WR",
+      "RW",
+      "WRWRR",
+      "R",
+      "CR",
+      "RC",
+      "CRCR",
+      "R",
+    ]);
+  });
+  test("a request list without the commit requests is a gate-fail, a wrong commit shape too", () => {
+    expect(judgeOrderProbe(answers().slice(0, 5), TODAY, undefined, true).outcome).toBe(
+      "gate-fail",
+    );
+    const rs = answers(undefined, true);
+    const sixth = rs[5];
+    if (sixth === undefined) throw new Error("no request");
+    const wrong = { ...sixth, entries: [{ id: "R5.0", kind: "R" as const }] };
+    expect(
+      judgeOrderProbe([...rs.slice(0, 5), wrong, ...rs.slice(6)], TODAY, undefined, true).outcome,
+    ).toBe("gate-fail");
+  });
+  test("(a) flagged: every CommitWriter test passes and the Readers read the defaults: pass", () => {
+    expect(judgeOrderProbe(answers(undefined, true), TODAY, undefined, true)).toEqual({
+      outcome: "pass",
+      lines: [],
+    });
+  });
+  test("(b) flagged: a commit-carried writer value in a later Reader is a gate-fail", () => {
+    const rs = answers(undefined, true);
+    const r = rs[6]; // [R, C]: not the carry within [C, R] only
+    const c = rs[5];
+    if (r === undefined || c === undefined) throw new Error("no request");
+    const carried = (rq: O1Request) => ({
+      ...rq,
+      lines: rq.lines.map((l) => (l.name.endsWith(".ReadRows") ? { ...l, message: "ROWS=1" } : l)),
+    });
+    for (const rq of [c, r]) {
+      const j = judgeOrderProbe(
+        rs.map((x) => (x === rq ? carried(x) : x)),
+        TODAY,
+        undefined,
+        true,
+      );
+      expect([rq.label, j.outcome]).toEqual([rq.label, "gate-fail"]);
+      expect(j.lines.join("\n")).toContain("CARRY-OVER");
+    }
+  });
+  test("(c) flagged: a refused CommitWriter test is a gate-fail", () => {
+    const j = judgeOrderProbe(
+      answers(
+        (l) =>
+          l.name.endsWith(".CommitIso") ? { ...l, status: "error", message: COMMIT_REFUSAL } : l,
+        true,
+      ),
+      TODAY,
+      undefined,
+      true,
+    );
+    expect(j.outcome).toBe("gate-fail");
+    expect(j.lines.join("\n")).toContain("CommitIso is error");
+  });
+  test("(d) unflagged: every CommitWriter test refused with the commit text: pass", () => {
+    expect(judgeOrderProbe(answers(), TODAY)).toEqual({ outcome: "pass", lines: [] });
+    // the edge build's wording is accepted too
+    const edge =
+      "NotRun: out-of-scope: Commit inside a test under TestIsolation = Function is not supported yet: no corpus test pins whether BC keeps the committed rows for the next test (corpus issue 645). Run this codeunit with TestIsolation = Codeunit (al-runner: --isolation codeunit, the default)";
+    expect(
+      judgeOrderProbe(
+        answers((l) => (isCommit(l.name) ? { ...l, message: edge } : l)),
+        TODAY,
+      ).outcome,
+    ).toBe("pass");
+  });
+  test("(d2) unflagged: a CommitWriter test failing with some other text is a gate-fail", () => {
+    const j = judgeOrderProbe(
+      answers((l) => (isCommit(l.name) ? { ...l, message: "Test exceeded 60s timeout." } : l)),
+      TODAY,
+    );
+    expect(j.outcome).toBe("gate-fail");
+  });
+  test("(e) unflagged: a passing CommitWriter test is held", () => {
+    const j = judgeOrderProbe(
+      answers((l) => (l.name.endsWith(".CommitMark") ? { ...l, status: "pass" } : l)),
+      TODAY,
+    );
+    expect(j.outcome).toBe("held");
+    expect(j.lines.join("\n")).toContain("re-pre-commit");
+  });
+  test("an unflagged build's carried writer value is still a gate-fail, ahead of held", () => {
+    const j = judgeOrderProbe(
+      answers((l) =>
+        l.name.endsWith(".CommitMark")
+          ? { ...l, status: "pass" }
+          : l.name.endsWith(".ReadRows")
+            ? { ...l, message: "ROWS=1" }
+            : l,
+      ),
+      TODAY,
+    );
+    expect(j.outcome).toBe("gate-fail");
+  });
+  test("(f) the flag is the pin's commit-under-test-isolation verdict, gone", () => {
+    const pin = (verdict: string) => ({ legC: { "commit-under-test-isolation": { verdict } } });
+    expect(o1CommitRuns(pin("gone"))).toBe(true);
+    expect(o1CommitRuns(pin("present"))).toBe(false);
+    expect(o1CommitRuns({ legC: { "sleep-is-noop": { verdict: "gone" } } })).toBe(false);
+    expect(o1CommitRuns({ legC: {} })).toBe(false);
+    expect(o1CommitRuns(undefined)).toBe(false);
+    // Real pins: only a pin that records the fact as gone is flagged (none, or edge-8078bcf49 once merged).
+    for (const p of V3_BUILD_PINS)
+      expect([p.id, o1CommitRuns(p)]).toEqual([
+        p.id,
+        p.legC["commit-under-test-isolation"]?.verdict === "gone",
+      ]);
   });
 });

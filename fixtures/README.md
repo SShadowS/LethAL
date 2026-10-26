@@ -31,7 +31,7 @@ manual smoke-testing, and the env-gated integration scripts in
 | `Wrapped Tests` | 78950 | `sandbox-wrapped-tests` | One test per procedure, `Grow*`/`Twice*` per file and twin, `PairPick`, `ArmsPick`. Asserts via `Error()`. |
 | `Names Calc` | 78800 | `sandbox-names` | R557 target: twelve identical `exit(x + 1)` procedures, each reached and killed by exactly one test. See "sandbox-names (R557)" below. |
 | `Order Dep Row` / `Order Dep State` | 77000 / 77001 | `sandbox-order` | R784 (leg O1 of `itest:alrunner-v3`): the dependency app of the serve order probe, a table and a SingleInstance codeunit. Nothing to mutate. |
-| `Order Reader` / `Order Writer` | 77051 / 77052 | `sandbox-order-tests` | R784: the Writer sets seven kinds of state, the Reader reports each as an `Error()` message (also table 77050 and SingleInstance codeunit 77053). No test commits. Run by leg O1 only; no mutation run uses them. |
+| `Order Reader` / `Order Writer` | 77051 / 77052 | `sandbox-order-tests` | R784: the Writer sets seven kinds of state, the Reader reports each as an `Error()` message (also table 77050 and SingleInstance codeunit 77053). Only `Order Commit Writer` (77054, R804) commits, one test per kind. Run by leg O1 only; no mutation run uses them. |
 | `Names Tests` | 78850 | `sandbox-names-tests` | One test per procedure, under AL names the .NET al-runner renamed (`"Space Step"`, `"Dash-Step"`, `"Paren(Step)"`, `"Dot.Step"`, `"Slash/Step"`, `"Amp&Step"`, `"7Digit Step"`, unquoted `Default`, `"Blåbær Step"`, `"Twin Pair"`) and two unrenamed controls (`Twin_PairLong`, `PlainControl`). UTF-8. Asserts via `Error()`. |
 
 `sandbox-app/app.json` reserves `idRanges` 79000–79199; `sandbox-tests/app.json` depends on

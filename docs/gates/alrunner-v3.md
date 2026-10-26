@@ -97,8 +97,22 @@ The legs:
   - What it runs: ONE `al-runner serve` daemon takes five requests, each entry one codeunit of
     `fixtures/sandbox-order-tests` (Writer sets, Reader reports): `[R]`, `[W,R]`, `[R,W]`, `[W1,R1,W2,R2,R3]`, then a
     new `[R]`. Kinds (7): WorkDate, GlobalLanguage, uncommitted rows, a SingleInstance codeunit in the test app and
-    one in the dependency app (`fixtures/sandbox-order`), NumberSequence, IsolatedStorage. No test commits
-    (al-runner refuses `Commit` under `TestIsolation = Function`), so commit-based state stays unmeasured.
+    one in the dependency app (`fixtures/sandbox-order`), NumberSequence, IsolatedStorage. Writer does not commit.
+  - Commit kind (R804 part 2; pre-commitment `docs/superpowers/specs/2026-10-26-r804-o1-commit-kind-precommitment.md`,
+    master 3185d706): four more requests go to the SAME daemon, after the five: `[C,R]`, `[R,C]`, `[C1,R1,C2,R2]`, then
+    a new `[R]` (`C` = codeunit `Order Commit Writer`, 77054, separate from Writer because a refused Commit cascades
+    to the rest of its codeunit). Its 6 tests each write one kind (local row, dependency-app row, local and
+    dependency-app SingleInstance, NumberSequence, IsolatedStorage), call `Commit()`, and re-read their own value.
+    The verdict keys off the build's pin: `commit-under-test-isolation` pinned `gone` in the leg-C facts (`o1CommitRuns`).
+    - Flagged build: every CommitWriter test passes, and every Reader entry reads the defaults. A writer value is
+      CARRY-OVER (`gate-fail`); a CommitWriter test that does not pass is `gate-fail`.
+    - Any other build: every CommitWriter test is refused with text matching `V3_SERVE_SAFE_REFUSALS.commit`, and the
+      Readers read the defaults. A CommitWriter test that passes is `held` (re-pre-commit: upstream may have fixed it);
+      any other row is `gate-fail`.
+    - Measured 2026-10-26 on `edge-a157b2d34` (unflagged): O1 passes on both package sets; all six CommitWriter tests
+      are refused in each of the four requests; every Reader reads the defaults. The flagged reading
+      (`edge-8078bcf49`) is predicted from the probe (`/coord/handoff/R-804/commit-probe/result.md`) and not yet run
+      through the gate: its pin was not on master when this was built.
   - Package sets: the fixture's own (the Microsoft symbols of `sandbox-tests`), and, with `LETHAL_ITEST_V3_CDO`, the
     CDO `Test/.alpackages` as a read-only package cache (skipped without it, as D1 is). For the CDO set the leg
     copies the fixture into its scratch dir and adds to the tests app.json the dependencies the CDO Test

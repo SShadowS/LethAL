@@ -4,7 +4,7 @@
   "publisher": "LethAL",
   "version": "1.0.0.0",
   "brief": "LethAL R784 fixture: a Writer and a Reader test codeunit for the serve order probe (leg O1).",
-  "description": "The Writer sets seven kinds of state; the Reader reports each as an Error() message. No test commits (al-runner refuses Commit under TestIsolation = Function). Asserts via Error(), no Library Assert. Not for production use, see fixtures/README.md.",
+  "description": "The Writer sets seven kinds of state; the Reader reports each as an Error() message. Only Order Commit Writer commits (R804; a build may refuse a Commit under TestIsolation = Function). Asserts via Error(), no Library Assert. Not for production use, see fixtures/README.md.",
   "privacyStatement": "",
   "EULA": "",
   "help": "",
