@@ -180,6 +180,8 @@ describe("R784: judgeOrderProbe", () => {
 
 describe("R771 addendum 2: a pinned login WorkDate (O1's CDO set on edge-a157b2d34)", () => {
   const LOGIN = "2026-08-01";
+  /** The pins of builds that run Base Application's login code (#5743). */
+  const LOGIN_PINS: readonly string[] = ["edge-a157b2d34", "edge-8078bcf49"];
   const atLogin = (l: O1Request["lines"][number]) =>
     l.name.endsWith(".ReadWorkDate") ? { ...l, message: `WORKDATE=${LOGIN}` } : l;
   test("every Reader entry at the pinned date passes; without the pin it is a gate-fail", () => {
@@ -236,7 +238,7 @@ describe("R771 addendum 2: a pinned login WorkDate (O1's CDO set on edge-a157b2d
     const aPin = V3_BUILD_PINS.find((p) => p.id === "edge-a157b2d34");
     expect(o1LoginWorkDate("cdo", aPin)).toBe(LOGIN);
     expect(o1LoginWorkDate("own", aPin)).toBeUndefined();
-    for (const p of V3_BUILD_PINS.filter((x) => x.id !== "edge-a157b2d34"))
+    for (const p of V3_BUILD_PINS.filter((x) => !LOGIN_PINS.includes(x.id)))
       expect(o1LoginWorkDate("cdo", p)).toBeUndefined();
     expect(o1LoginWorkDate("cdo", undefined)).toBeUndefined();
     // The own set on the a157b2d34 pin is judged against the clock: the login date fails there.
@@ -245,11 +247,13 @@ describe("R771 addendum 2: a pinned login WorkDate (O1's CDO set on edge-a157b2d
       "gate-fail",
     );
   });
-  test("only the edge-a157b2d34 pin carries o1, at 2026-08-01 (#5743)", () => {
+  test("only the edge-a157b2d34 and edge-8078bcf49 pins carry o1, at 2026-08-01 (#5743)", () => {
     const withO1 = V3_BUILD_PINS.filter((p) => p.o1 !== undefined);
-    expect(withO1.map((p) => p.id)).toEqual(["edge-a157b2d34"]);
-    expect(withO1[0]?.o1?.cdoWorkDate).toBe(LOGIN);
-    expect(withO1[0]?.o1?.issue).toMatch(/\/5743$/);
+    expect(withO1.map((p) => p.id)).toEqual([...LOGIN_PINS]);
+    for (const p of withO1) {
+      expect(p.o1?.cdoWorkDate).toBe(LOGIN);
+      expect(p.o1?.issue).toMatch(/\/5743$/);
+    }
   });
 });
 

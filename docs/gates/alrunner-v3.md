@@ -446,7 +446,16 @@ A build can have a PIN: the exact readings that differ from alpha.2's expectatio
 | leg T | seven rows (`Data Flag Ops` x3, `Data Key Probe` x4) `error` / `runner-refused`, counts 290 / 50 / 59 over 406 | NO: BC kills them; #5788 | 7 of 406 mutants read `error` where BC kills |
 | X (b) | exit 3, `passed` 0 and `notRun` 0 present, no rows, non-empty `compilationErrors` | yes | none |
 
-Leg T is judged against the committed alpha.2 baseline with the seven keys overridden (`applyTPin`, S4): if a pinned key is absent, repeated or not `survived`/`null`/`null` there, the leg reads `held`. On a pinned pass the alpha.2 baseline compare is skipped (the pinned compare has the same identity-scheme and R556 checks). Rows equal to the pin but with other counts are a `gate-fail`.
+Leg T is judged against the committed alpha.2 baseline with the pinned keys overridden (`applyTPin`, S4).
+- If a pinned key is absent, repeated, or its committed row is not the pin's `from`, the leg reads at least `held`.
+  The default `from` is `survived`/`null`/`null`. Since R804 a row may name another `from`: edge-8078bcf49's
+  Commit rows leave `no-coverage`. `coverageFiltered` follows the pinned verdict.
+- On a pinned pass the alpha.2 baseline compare is skipped; the pinned compare has the same identity-scheme and R556
+  checks.
+- Rows equal to the pin but with other figures are a `gate-fail`. The figures are the counts and, since R804, the
+  refused-test count: a pin may name `refusedTests`, default 3, and edge-8078bcf49's is 0.
+- A pin miss names `T: pin-mismatch: <reason>` as its failure, with the unpinned judgement in brackets. On a build
+  whose pin moves a figure, the unpinned judgement always fails on that figure.
 
 **The virtual-clock guard (B2).** alpha.5 counts a Sleep toward `--test-timeout-secs` on a virtual clock, so a "3 s" stop can return after tens of ms. In the backend, when a MUTANT is active and a timeout row's `durationMs` is below its stop, the verdict is `error` / `runner-refused` ("stopped on v3's virtual clock", never scored). Baselines are unchanged. Upstream text: `/coord/handoff/R-586c/upstream-virtual-clock.md`.
 

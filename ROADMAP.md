@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**19 of 787 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**20 of 788 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -831,6 +831,7 @@ that ordering is the priority.
 - **R796** · Upgrade tree-sitter-al from 4.4.1 to 4.5.0: fixes R720's and R327's swallowed members at the root; needs pins, 7 container classifications, 10 test re-pins and a pre-committed identity bump · [R796.md](docs/roadmap/R796.md) · planned, after the talk (Tue 27 Oct)
 - **R790** · v3: run the alc proof alongside the baseline and the mutant loop, and discard the results if alc rejects (the owner's Design A) · [R790.md](docs/roadmap/R790.md) · done (8c6a9fe8)
 - **R800** · v3: alc runs 1.5-2 s slower beside a concurrent al-runner call, even with free cores (memory bandwidth or cache contention, not CPU scheduling) · [R800.md](docs/roadmap/R800.md) · open, filed 2026-10-25 (coord task R-798)
+- **R804** · Pin al-runner edge 8078bcf49 (3.0.0-alpha.5+edge.20261026): every pinned defect gone, 48 known table differences at BC's verdict · [R804.md](docs/roadmap/R804.md) · open, pin built 2026-10-26 (coord task R-804, lethal-bugs; pin code lethal-spare); awaiting merge, regate and…
 - **R798** · v3: where R790's extra 2-3 s in D1's deploy goes; ruling: speculative baseline is opt-in, no nice or reorder · [R798.md](docs/roadmap/R798.md) · done (b04d6427)
 
 ---

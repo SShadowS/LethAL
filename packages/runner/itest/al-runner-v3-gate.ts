@@ -324,15 +324,19 @@ const WORSENESS = { pass: 0, held: 1, "gate-fail": 2 } as const;
  */
 function judgeLegTPinned(i: LegTInput, pin: LegTPinInput): LegTJudgement {
   const today = judgeLegTCore(i, { killed: 290, survived: 57, noCoverage: 59, total: 406 });
+  // The headline names the pin miss; today's (unpinned) failure is context only, because on a build whose
+  // pin moves a figure (edge-8078bcf49's 0 refused tests) today's judgement always fails on that figure.
   const mismatch = (reason: string): LegTJudgement => ({
     outcome: WORSENESS[today.outcome] >= WORSENESS.held ? today.outcome : "held",
     lines: [...today.lines, `T: pin-mismatch: ${reason}`],
-    ...(today.failure !== undefined ? { failure: today.failure } : {}),
+    ...(today.failure !== undefined
+      ? { failure: `T: pin-mismatch: ${reason} (unpinned: ${today.failure})` }
+      : {}),
   });
   const ownPinned = applyTPin(i.own, pin.legT);
   if (ownPinned === undefined)
     return mismatch(
-      "a pinned key is absent, repeated, or not survived/-/- in the committed baseline",
+      "a pinned key is absent, repeated, or not the pin's `from` row in the committed baseline",
     );
   const run = judgeLegTCore(
     {
@@ -341,7 +345,11 @@ function judgeLegTPinned(i: LegTInput, pin: LegTPinInput): LegTJudgement {
       classification: classifyLegT(ownPinned, i.now, pin.bc),
       compare: compareMutants(ownPinned, i.now, { sameScheme: pin.sameScheme }),
     },
-    { ...pin.legT.counts, total: pin.legT.total },
+    {
+      ...pin.legT.counts,
+      total: pin.legT.total,
+      ...(pin.legT.refusedTests !== undefined ? { refusedTests: pin.legT.refusedTests } : {}),
+    },
   );
   // The rows are exactly the pinned ones but the figures are not: a real difference, not a pin miss.
   if (run.countMismatch === true)
@@ -357,9 +365,10 @@ function judgeLegTPinned(i: LegTInput, pin: LegTPinInput): LegTJudgement {
     return mismatch(
       `${bare.length} mutant(s) of this run have no mutated-text hash (R556), first ${bare[0]?.key}`,
     );
+  const issues = [...new Set(pin.legT.rows.map((r) => `#${r.issue.split("/").at(-1)}`))].sort();
   return {
     outcome: "pass",
-    lines: [`T: pinned ${pin.legT.rows.length} rows (pin ${pin.id}, #5788)`],
+    lines: [`T: pinned ${pin.legT.rows.length} rows (pin ${pin.id}, ${issues.join(", ")})`],
     pinned: true,
   };
 }
@@ -397,6 +406,8 @@ function judgeLegTCore(
     readonly survived: number;
     readonly noCoverage: number;
     readonly total: number;
+    /** The refused tests (`unsupportedTests`): 3 unless a build pin says otherwise (edge-8078bcf49). */
+    readonly refusedTests?: number;
   } = { killed: 290, survived: 57, noCoverage: 59, total: 406 },
 ): LegTJudgement {
   const { rows } = i.classification;
@@ -416,8 +427,13 @@ function judgeLegTCore(
   const s = i.sleepIndex;
   if (s?.target !== 0 || s.test !== 0)
     return fail(`T: Sleep index ${JSON.stringify(s)}, pre-committed 0 + 0`);
-  if (i.unsupportedTests !== 3)
-    return fail(`T: ${i.unsupportedTests} refused tests, pre-committed 3`);
+  const refused = want.refusedTests ?? 3;
+  // A figure, like the counts below: a pinned run that differs only here is a gate-fail, never held.
+  if (i.unsupportedTests !== refused)
+    return {
+      ...fail(`T: ${i.unsupportedTests} refused tests, pre-committed ${refused}`),
+      countMismatch: true,
+    };
   if (i.knownRefusal !== undefined) return fail(`T: v3's own baseline: ${i.knownRefusal}`);
   const c = i.classification.outcome;
   if (c === "gate-fail")
