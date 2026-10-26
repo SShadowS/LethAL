@@ -2,7 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BcHostMismatchError } from "../src/bc-host";
+import { BC_HOSTS, BcHostMismatchError, DEFAULT_BC_HOST } from "../src/bc-host";
+
+/** R783: the host in use with no LETHAL_BC_HOST; the tests below that mean "the host" use it. */
+const H = DEFAULT_BC_HOST;
+const ON_SERVER1 = { LETHAL_BC_HOST: `http://${BC_HOSTS.server1}` };
+const ON_DOCKER1 = { LETHAL_BC_HOST: `http://${BC_HOSTS.docker1}` };
 import { printItestTarget } from "./config-path";
 import {
   OutOfUseRootError,
@@ -203,23 +208,23 @@ describe("outOfUseRefusal", () => {
 
 describe("markedServerFor: the dev port names the server, on the BC on Linux host only", () => {
   test("7049, 7149 and 7249 are bc1, bc2 and bc3", () => {
-    expect(markedServerFor("192.168.2.157", 7049)).toBe("bc1");
-    expect(markedServerFor("192.168.2.157", 7149)).toBe("bc2");
-    expect(markedServerFor("192.168.2.157", 7249)).toBe("bc3");
+    expect(markedServerFor(H, 7049)).toBe("bc1");
+    expect(markedServerFor(H, 7149)).toBe("bc2");
+    expect(markedServerFor(H, 7249)).toBe("bc3");
   });
 
   test("an unknown port, or another host on a bc port, has no marker check", () => {
-    expect(markedServerFor("192.168.2.157", 7349)).toBeUndefined(); // the talk's demo port
+    expect(markedServerFor(H, 7349)).toBeUndefined(); // the talk's demo port
     expect(markedServerFor("cronus28", 7049)).toBeUndefined();
     expect(markedServerFor("10.0.0.1", 7249)).toBeUndefined();
   });
 
-  test("R783: the host follows LETHAL_BC_HOST; server1 is then not the marked host", () => {
-    const env = { LETHAL_BC_HOST: "http://192.168.2.77" };
-    expect(markedServerFor("192.168.2.77", 7249, env)).toBe("bc3");
-    expect(markedServerFor("192.168.2.77", 7049, env)).toBe("bc1");
-    expect(markedServerFor("192.168.2.157", 7249, env)).toBeUndefined();
-    expect(markedServerFor("192.168.2.77", 7249, {})).toBeUndefined();
+  test("R783: the host follows LETHAL_BC_HOST; the other host is then not the marked one", () => {
+    expect(markedServerFor("192.168.2.77", 7249, ON_DOCKER1)).toBe("bc3");
+    expect(markedServerFor("192.168.2.77", 7049, ON_DOCKER1)).toBe("bc1");
+    expect(markedServerFor("192.168.2.157", 7249, ON_DOCKER1)).toBeUndefined();
+    expect(markedServerFor("192.168.2.157", 7249, ON_SERVER1)).toBe("bc3");
+    expect(markedServerFor("192.168.2.77", 7249, ON_SERVER1)).toBeUndefined();
   });
 });
 
@@ -266,7 +271,7 @@ describe("printItestTarget refuses a marked server BEFORE it prints its target l
       console.error = err;
     }
   }
-  const BC2 = { server: "http://192.168.2.157:7149", port: 7149 };
+  const BC2 = { server: `http://${H}:7149`, port: 7149 };
   const targetLines = (lines: string[]) => lines.filter((l) => l.includes("[itest target]"));
 
   test("no marker: no throw, and the target line is printed", () => {
@@ -284,22 +289,27 @@ describe("printItestTarget refuses a marked server BEFORE it prints its target l
   });
 
   // R783: the host in use follows LETHAL_BC_HOST, and the marker check follows it.
-  const DOCKER1 = { LETHAL_BC_HOST: "http://192.168.2.77" };
+  const BC2_SERVER1 = { server: "http://192.168.2.157:7149", port: 7149 };
   const BC2_DOCKER1 = { server: "http://192.168.2.77:7149", port: 7149 };
 
-  test("R783: with LETHAL_BC_HOST=docker1, docker1's marked bc2 refuses too", () => {
-    const { thrown, lines } = print(BC2_DOCKER1, dirWith({ "bc2.md": MARKER }), DOCKER1);
-    expect(thrown).toBeInstanceOf(ServerOutOfUseError);
-    expect(targetLines(lines)).toEqual([]);
-    const clean = print(BC2_DOCKER1, dirWith({ "bc3.md": MARKER }), DOCKER1);
-    expect(clean.thrown).toBeUndefined();
-    expect(targetLines(clean.lines)).toHaveLength(1);
+  test("R783: on either host, that host's marked bc2 refuses and a clean one prints", () => {
+    for (const [cfg, env] of [
+      [BC2_DOCKER1, ON_DOCKER1],
+      [BC2_SERVER1, ON_SERVER1],
+    ] as const) {
+      const { thrown, lines } = print(cfg, dirWith({ "bc2.md": MARKER }), env);
+      expect(thrown).toBeInstanceOf(ServerOutOfUseError);
+      expect(targetLines(lines)).toEqual([]);
+      const clean = print(cfg, dirWith({ "bc3.md": MARKER }), env);
+      expect(clean.thrown).toBeUndefined();
+      expect(targetLines(clean.lines)).toHaveLength(1);
+    }
   });
 
   test("R783: a config on the OTHER known host refuses by name, before any marker read or line", () => {
     for (const [cfg, env] of [
-      [BC2, DOCKER1],
-      [BC2_DOCKER1, {}],
+      [BC2_SERVER1, ON_DOCKER1],
+      [BC2_DOCKER1, ON_SERVER1],
     ] as const) {
       const { thrown, lines } = print(cfg, dirWith({}), env);
       expect(thrown).toBeInstanceOf(BcHostMismatchError);
@@ -312,17 +322,14 @@ describe("printItestTarget refuses a marked server BEFORE it prints its target l
     const { thrown, lines } = print(
       { server: "http://10.0.0.1:7149", port: 7149 },
       dirWith({}),
-      DOCKER1,
+      ON_DOCKER1,
     );
     expect(thrown).toBeUndefined();
     expect(targetLines(lines)).toHaveLength(1);
   });
 
   test("a config with no port at all is the default 7049, so bc1's marker refuses it", () => {
-    const { thrown, lines } = print(
-      { server: "http://192.168.2.157" },
-      dirWith({ "bc1.md": MARKER }),
-    );
+    const { thrown, lines } = print({ server: `http://${H}` }, dirWith({ "bc1.md": MARKER }));
     expect(thrown).toBeInstanceOf(ServerOutOfUseError);
     expect(targetLines(lines)).toEqual([]);
   });

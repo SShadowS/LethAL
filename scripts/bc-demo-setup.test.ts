@@ -11,7 +11,7 @@ import {
   type ServerOps,
   portsOf,
 } from "./bc-app-content.ts";
-import { sha256Of } from "./bc-app-content.ts";
+import { HOST, sha256Of } from "./bc-app-content.ts";
 import {
   DEMO_CONFIG,
   type DemoDeps,
@@ -219,8 +219,8 @@ describe("R663: bc-demo-setup", () => {
     };
     expect(cfg.selectorIds).toEqual({ selectorId: 90199, controlId: 90198, tableId: 90197 });
     expect(cfg.bcdev.port).toBe(7349);
-    expect(cfg.bcdev.baseUrl).toBe("http://192.168.2.157:7348/BC");
-    expect(cfg.bcdev.apiBaseUrl).toBe("http://192.168.2.157:7352/BC");
+    expect(cfg.bcdev.baseUrl).toBe(`${HOST}:7348/BC`);
+    expect(cfg.bcdev.apiBaseUrl).toBe(`${HOST}:7352/BC`);
     expect(cfg.bcdev.packageCachePath).toBe("/cache/bc-demo/28.4-abcd1234");
     expect(calls.at(-1)).toBe(`doctor ${DEMO_CONFIG}`);
     expect(out.join("\n")).not.toContain(PASSWORD);

@@ -1737,7 +1737,8 @@ routed through the CLI.
 
 ### The BC on Linux servers: `lethal.config.bc1.json`, `bc2`, `bc3` (R589)
 
-Three BC 28.4 servers run on server1 (192.168.2.157), on BC on Linux, so the BC gates can run in
+Three BC 28.4 servers run on docker1 (192.168.2.77; on server1, 192.168.2.157, until 2026-10-26, R783), on
+BC on Linux, so the BC gates can run in
 parallel instead of queueing for Cronus28. They are W1: the company is `CRONUS International Ltd.`
 (not Cronus28's DK `CRONUS Danmark A/S`), the tenant `default`, the instance `BC`, with Basic
 authentication.
@@ -1764,11 +1765,11 @@ server: the itest refuses when the file is missing, or when its host (or its dev
 state one) differs from the config's. With the variable unset, `lethal.config.local.json` and
 `launch.local.json` work as before.
 
-- **The databases are in memory.** A restart of a server's container, or of server1, resets it to
+- **The databases are in memory.** A restart of a server's container, or of docker1, resets it to
   a fresh CRONUS with none of LethAL's apps. Re-run the setup script; it is safe to run again.
 - The login is in the gitignored fixture config and in `/coord/secrets/bc-linux.env` (written by
   the owner). It is never in this repository, which is public.
-- `server` in these configs carries the dev port (`http://192.168.2.157:7149` for `bc2`) and
+- `server` in these configs carries the dev port (`http://192.168.2.77:7149` for `bc2`) and
   `baseUrl` the OData root, because the three servers share one host: without the port they would
   be one server to LethAL's quarantine and publish queue.
 - The itests take both ports from the config (R591, folded into R589): OData from `baseUrl`
