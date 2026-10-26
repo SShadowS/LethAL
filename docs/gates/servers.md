@@ -281,9 +281,52 @@ first.
 | `bc1` | `itest:bcdev` | 1.0.0.24 | `/coord/handoff/R-783/bc1/bcdev.log` |
 | `bc2` | setup | 1.0.0.24 | `/coord/handoff/R-783/bc2/setup.log` |
 | `bc2` | `itest:bcdev` | 1.0.0.24 | `/coord/handoff/R-783/bc2/bcdev.log` |
+| `bc1` | `itest:bcdev-names` | 1.0.0.24 | R-783b, `/coord/handoff/R-783b/bc1/bcdev-names.log` |
+| `bc1` | `itest:bcdev-wrapped` | 1.0.0.24 | R-783b, `/coord/handoff/R-783b/bc1/bcdev-wrapped.log` |
+| `bc1` | `itest:tables` | 1.0.0.24 | R-783b, `/coord/handoff/R-783b/bc1/tables.log` |
+| `bc1` | `itest:chunked` | 1.0.0.24 | R-783b, `/coord/handoff/R-783b/bc1/chunked.log` |
+| `bc1` | `itest:harden` | 1.0.0.24 | R-783b, `/coord/handoff/R-783b/bc1/harden.log` |
+| `bc1` | `itest:lend` | 1.0.0.24 | R-783b, `/coord/handoff/R-783b/bc1/lend.log` |
+| `bc1` | `itest:lease` | 1.0.0.24 | R-783b, `/coord/handoff/R-783b/bc1/lease.log` |
+| `bc1` | `itest:verify` | 1.0.0.24 | R-783b, `/coord/handoff/R-783b/bc1/verify.log` |
+| `bc1` | `itest:testapp` | 1.0.0.24 | R-783b, `/coord/handoff/R-783b/bc1/testapp.log` |
+| `bc1` | `itest:agreement` | 1.0.0.24 | R-783b, `/coord/handoff/R-783b/bc1/agreement.log` |
+| `bc1` | `itest:verify-scale` | 1.0.0.24 | R-783b, `/coord/handoff/R-783b/bc1/verify-scale.log` (+ `verify-scale.json`) |
+| `bc2` | `itest:bcdev-names` | 1.0.0.24 | R-783c, `/coord/handoff/R-783c/bc2/bcdev-names.log` |
+| `bc2` | `itest:bcdev-wrapped` | 1.0.0.24 | R-783c, `/coord/handoff/R-783c/bc2/bcdev-wrapped.log` |
+| `bc2` | `itest:tables` | 1.0.0.24 | R-783c, `/coord/handoff/R-783c/bc2/tables.log` |
+| `bc2` | `itest:chunked` | 1.0.0.24 | R-783c, `/coord/handoff/R-783c/bc2/chunked.log` |
+| `bc2` | `itest:harden` | 1.0.0.24 | R-783c, `/coord/handoff/R-783c/bc2/harden.log` |
+| `bc2` | `itest:lend` | 1.0.0.24 | R-783c, `/coord/handoff/R-783c/bc2/lend.log` |
+| `bc2` | `itest:lease` | 1.0.0.24 | R-783c, `/coord/handoff/R-783c/bc2/lease.log` |
+| `bc2` | `itest:verify` | 1.0.0.24 | R-783c, `/coord/handoff/R-783c/bc2/verify.log` |
+| `bc2` | `itest:testapp` | 1.0.0.24 | R-783c, `/coord/handoff/R-783c/bc2/testapp.log` |
+| `bc2` | `itest:agreement` | 1.0.0.24 | R-783c, `/coord/handoff/R-783c/bc2/agreement.log` |
+| `bc2` | `itest:verify-scale` | 1.0.0.24 | R-783c, `/coord/handoff/R-783c/bc2/verify-scale.log` (+ `verify-scale.json`) |
+| `bc3` | `itest:stale-publish` | 1.0.0.24 | R-783d, `/coord/handoff/R-783d/stale-publish-bc3.log` |
+| `bc3` | R-759b's proof leg (the R740 probe, id set 1; V1 and V0) | 1.0.0.24 | R-783d, `/coord/handoff/R-783d/proof/` (driver `run-proof.sh`; exits are in `v1.json` and `v0.json`, both 6, not in `driver.log`) |
+| `bc3` | Continia stack, `--predict --with-continia --accept-build 28.4.53241.56646` (read-only) | 1.0.0.24 | R-783d, `/coord/handoff/R-783d/continia-predict-bc3.log` (all 5 apps resident and equal) |
 
-**Unproven on docker1:** every other gate on `bc1` and `bc2`; `itest:stale-publish` and R-759b's proof leg on
-every server. A docker1 restart starts each server from a fresh CRONUS: rerun the setup script before a gate.
+**Added 2026-10-26 (R-783b, R-783c, R-783d).**
+- **One lease per gate.** Every row above was run under its own coord lease, released at once.
+- **The right server.** Every itest's first line names 192.168.2.77 and the server's port (bc1 7049, bc2 7149,
+  bc3 7249).
+- **Compared with server1.** The bc1, bc2 and bc3 rows were compared with server1's R-689b pass of the same gate.
+  Times, hosts, ids and scratch names were masked. No verdict, count, note or check differed, with one exception:
+  `verify-scale` on today's build prints extra `mutants: N, median` progress lines. It is measurement mode, so it
+  is never gated.
+- **Masked diffs** are beside each bc1 log as `<gate>.diff`.
+- **Two bc1 gates first stopped before any server call** in a fresh worktree:
+  - `verify` lacked the `sandbox-tests` `.alpackages`;
+  - `verify-scale` lacked `LETHAL_VERIFY_SCALE_OUT`.
+
+  Before the rest ran, `bc-republish.ts alpackages --server bc1` filled `sandbox-tests`, `sandbox-harden-tests`
+  and `sandbox-data-tests` (`alpackages*.log`). Each gate then ran under its own lease.
+- **The bc3 proof leg** is a probe plus the CLI, not an itest, so it has no first line. Its config was written by
+  `--write-config-only`, so it names docker1.
+
+**Unproven on docker1:** `itest:stale-publish` and R-759b's proof leg on `bc1` and `bc2`; `itest:hang` runs on
+`bc3` only (R-658). A docker1 restart starts each server from a fresh CRONUS: rerun the setup script before a gate.
 
 ### server1 (192.168.2.157), history: the servers before 2026-10-26
 
