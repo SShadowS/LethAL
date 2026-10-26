@@ -736,11 +736,13 @@ describe("R771: the edge build a157b2d34 (alpha.5's readings plus N1E)", () => {
     // The alpha.5 and dcdf9e821 pins keep the old text.
     expect(need(need(pin).legC["duplicate-key-insert-raises"]).measured.test(NEW)).toBe(false);
   });
-  test("only this pin and edge-8078bcf49 carry serveRowFields (#5798 fixed), keyed on version AND sha", () => {
+  test("only this pin and the later edge pins carry serveRowFields (#5798 fixed), keyed on version AND sha", () => {
     expect(need(aPin).serveRowFields?.issue).toMatch(/\/5798$/);
     expect(V3_BUILD_PINS.filter((p) => p.serveRowFields !== undefined).map((p) => p.id)).toEqual([
       "edge-a157b2d34",
       "edge-8078bcf49",
+      "edge-db0296678",
+      "alpha.6-db0296678",
     ]);
     expect(serveRowFieldsFor(A_VERSION, A_SHA)).toBe(true);
     expect(serveRowFieldsFor(A_VERSION, flip(A_SHA))).toBe(false);
@@ -754,6 +756,46 @@ describe("R771: the edge build a157b2d34 (alpha.5's readings plus N1E)", () => {
     });
     expect(sleepRuleRetiredFor(probe("gone"), A_VERSION, A_SHA)).toBe(true);
     expect(sleepRuleRetiredFor(probe("defect-present"), A_VERSION, A_SHA)).toBe(false);
+  });
+});
+
+describe("edge-db0296678 (3.0.0-alpha.6): edge-8078bcf49's readings, shared", () => {
+  const D_VERSION = "al-runner 3.0.0-alpha.6+edge.20261026 (db0296678)";
+  const D_SHA = "4f9596510ececcfa5e5b235350e2b2658264abceb2d54d5fa01131e8ffab07db";
+  const dPin = findV3Pin(D_VERSION, D_SHA);
+  const bPin = findV3Pin(
+    "al-runner 3.0.0-alpha.5+edge.20261026 (8078bcf49)",
+    "614dc78c8513c6d5899fb402a121c2c6f910cbe255f56ab66a59f1a8f8d852d7",
+  );
+  test("version and sha find it; another sha, or 8078bcf49's version with its sha, do not", () => {
+    expect(dPin?.id).toBe("edge-db0296678");
+    expect(findV3Pin(D_VERSION, flip(D_SHA))).toBeUndefined();
+    expect(findV3Pin(need(bPin).version, D_SHA)).toBeUndefined();
+  });
+  test("it shares 8078bcf49's readings object by object (one source, no drift)", () => {
+    const d = need(dPin);
+    const b = need(bPin);
+    expect(d.legC).toBe(b.legC);
+    expect(d.legT).toBe(b.legT);
+    expect(d.xb).toBe(b.xb);
+    expect(d.serveRowFields).toBe(b.serveRowFields);
+    expect(d.o1).toBe(b.o1);
+    expect(serveRowFieldsFor(D_VERSION, D_SHA)).toBe(true);
+  });
+  test("the alpha.6 release: its own version line and sha, the same shared readings", () => {
+    const R_VERSION = "al-runner 3.0.0-alpha.6 (db0296678)";
+    const R_SHA = "92effe64d64dddcae98f80cc0e2e17a6429f977781ffe7b6b0f5eea6a231778d";
+    const r = need(findV3Pin(R_VERSION, R_SHA));
+    expect(r.id).toBe("alpha.6-db0296678");
+    // Another binary than the edge one: neither key finds the other's pin.
+    expect(findV3Pin(R_VERSION, D_SHA)).toBeUndefined();
+    expect(findV3Pin(D_VERSION, R_SHA)).toBeUndefined();
+    const b = need(bPin);
+    expect(r.legC).toBe(b.legC);
+    expect(r.legT).toBe(b.legT);
+    expect(r.xb).toBe(b.xb);
+    expect(r.serveRowFields).toBe(b.serveRowFields);
+    expect(r.o1).toBe(b.o1);
   });
 });
 
@@ -920,7 +962,7 @@ describe("edge-8078bcf49: every pinned defect gone, 48 known differences at BC's
     expect(tally(need(b))).toEqual({ ...need(bPin).legT.counts, error: 0 });
     // The flag the normalizer derives from the verdict still agrees on every row after pinning.
     expect(need(b).filter((r) => r.coverageFiltered !== (r.verdict === "no-coverage"))).toEqual([]);
-    for (const p of V3_BUILD_PINS.filter((x) => x.id !== "edge-8078bcf49")) {
+    for (const p of V3_BUILD_PINS.filter((x) => x.legT !== need(bPin).legT)) {
       const out = applyTPin(committed.entries, p.legT);
       expect(tally(need(out)), p.id).toEqual({
         killed: 290,

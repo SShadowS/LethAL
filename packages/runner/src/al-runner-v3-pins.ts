@@ -595,6 +595,54 @@ const T_ROWS_8078BCF49: readonly TRowPin[] = [
   },
 ];
 
+/**
+ * The readings of edge-8078bcf49 (R804). edge-db0296678 was measured IDENTICAL on every pinned reading, so both
+ * pins share this one object and cannot drift. A later delta for either build must SPLIT it first.
+ */
+const READINGS_8078BCF49: Omit<V3BuildPin, "id" | "version" | "binarySha256"> = {
+  legC: {
+    ...ALPHA5_READINGS.legC,
+    "duplicate-key-insert-raises": {
+      verdict: "gone",
+      measured: pinPattern(
+        // BC_END_OF_TEST_TEXT (al-runner-v3-contract imports this module, so it is written out; a test binds the two).
+        `[${ROW(50655, "DuplicateNamedKey")},"status":"fail","durationMs":{n},"message":"The record in table Probe Row already exists. Identification fields and values: Key='K1'","notRun":false}] exit 1`,
+      ),
+      bc: "matches",
+      issue: `${REPO}/5788`,
+      evidence:
+        "the duplicate-key Insert fails the test with BC's own end-of-test text (r639 bc1 probe)",
+    },
+    "commit-under-test-isolation": {
+      verdict: "gone",
+      measured: pinPattern(
+        `[${ROW(50657, "CommitCall")},"status":"pass","durationMs":{n},"notRun":false}] exit 0`,
+      ),
+      bc: "matches",
+      issue: `${REPO}/5607`,
+      evidence: "a Commit under TestIsolation passes, as on BC (#5607 fixed upstream)",
+    },
+  },
+  legT: {
+    rows: T_ROWS_8078BCF49,
+    counts: { killed: 318, survived: 70, noCoverage: 18 },
+    total: 406,
+    refusedTests: 0,
+  },
+  xb: { exitCode: 3, passed: 0, notRun: 0 },
+  serveRowFields: {
+    issue: `${REPO}/5798`,
+    evidence:
+      "#5798 fixed upstream: the Dot.Step serve row carries codeunit 78850 and method Dot.Step (8078bcf49 receipt, leg N1E at 4aa6ca6d)",
+  },
+  o1: {
+    cdoWorkDate: "2026-08-01",
+    issue: `${REPO}/5743`,
+    evidence:
+      "O1's CDO set reads the login WorkDate 2026-08-01 in every Reader entry, as on a157b2d34 (8078bcf49 receipt at 4aa6ca6d)",
+  },
+};
+
 export const V3_BUILD_PINS: readonly V3BuildPin[] = [
   {
     id: "alpha.5-07342060e",
@@ -644,47 +692,24 @@ export const V3_BUILD_PINS: readonly V3BuildPin[] = [
     id: "edge-8078bcf49",
     version: "al-runner 3.0.0-alpha.5+edge.20261026 (8078bcf49)",
     binarySha256: "614dc78c8513c6d5899fb402a121c2c6f910cbe255f56ab66a59f1a8f8d852d7",
-    legC: {
-      ...ALPHA5_READINGS.legC,
-      "duplicate-key-insert-raises": {
-        verdict: "gone",
-        measured: pinPattern(
-          // BC_END_OF_TEST_TEXT (al-runner-v3-contract imports this module, so it is written out; a test binds the two).
-          `[${ROW(50655, "DuplicateNamedKey")},"status":"fail","durationMs":{n},"message":"The record in table Probe Row already exists. Identification fields and values: Key='K1'","notRun":false}] exit 1`,
-        ),
-        bc: "matches",
-        issue: `${REPO}/5788`,
-        evidence:
-          "the duplicate-key Insert fails the test with BC's own end-of-test text (r639 bc1 probe)",
-      },
-      "commit-under-test-isolation": {
-        verdict: "gone",
-        measured: pinPattern(
-          `[${ROW(50657, "CommitCall")},"status":"pass","durationMs":{n},"notRun":false}] exit 0`,
-        ),
-        bc: "matches",
-        issue: `${REPO}/5607`,
-        evidence: "a Commit under TestIsolation passes, as on BC (#5607 fixed upstream)",
-      },
-    },
-    legT: {
-      rows: T_ROWS_8078BCF49,
-      counts: { killed: 318, survived: 70, noCoverage: 18 },
-      total: 406,
-      refusedTests: 0,
-    },
-    xb: { exitCode: 3, passed: 0, notRun: 0 },
-    serveRowFields: {
-      issue: `${REPO}/5798`,
-      evidence:
-        "#5798 fixed upstream: the Dot.Step serve row carries codeunit 78850 and method Dot.Step (8078bcf49 receipt, leg N1E at 4aa6ca6d)",
-    },
-    o1: {
-      cdoWorkDate: "2026-08-01",
-      issue: `${REPO}/5743`,
-      evidence:
-        "O1's CDO set reads the login WorkDate 2026-08-01 in every Reader entry, as on a157b2d34 (8078bcf49 receipt at 4aa6ca6d)",
-    },
+    ...READINGS_8078BCF49,
+  },
+  {
+    // Measured on the update gate at 242d770b, 2026-10-26 11:23Z: identical to edge-8078bcf49 on every
+    // pinned reading (only the version line, timeout-is-cpu's text and O1's request count differ).
+    id: "edge-db0296678",
+    version: "al-runner 3.0.0-alpha.6+edge.20261026 (db0296678)",
+    binarySha256: "4f9596510ececcfa5e5b235350e2b2658264abceb2d54d5fa01131e8ffab07db",
+    ...READINGS_8078BCF49,
+  },
+  {
+    // The v3.0.0-alpha.6 RELEASE (published 2026-10-26 10:36:50Z): the same commit as edge-db0296678, but another
+    // binary (its own version line and sha256). Pinned on the same readings, as owner-ruled; its own update-gate
+    // run is the measurement, and any reading off this table is a BLOCK (R804 addendum).
+    id: "alpha.6-db0296678",
+    version: "al-runner 3.0.0-alpha.6 (db0296678)",
+    binarySha256: "92effe64d64dddcae98f80cc0e2e17a6429f977781ffe7b6b0f5eea6a231778d",
+    ...READINGS_8078BCF49,
   },
 ];
 
