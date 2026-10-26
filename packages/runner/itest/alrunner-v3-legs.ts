@@ -14,6 +14,8 @@
  *    (`v3ItestFailures`), so K can never become an always-skipped leg.
  */
 
+import { V3_SERVE_SAFE_REFUSALS } from "../src/al-runner-server"; // R804: the one commit-refusal regex (a constant; no IO at import)
+
 export const V3_K_LEG = "K";
 /** Condition 1: K's leg-summary value on a candidate build. */
 export const V3_K_CANDIDATE_SKIP = "skipped (candidate build)";
@@ -74,19 +76,56 @@ const O1_WRITE_TESTS: readonly string[] = [
   "SetIso",
 ];
 
-/** R784: the five requests of the order probe, in order (pre-commitment 6aa7700c). */
-export const O1_PLAN: readonly (readonly ("R" | "W")[])[] = [
+/** R804: O1's CommitWriter codeunit (`C` entries), one test per kind. */
+export const O1_COMMIT_CODEUNIT = 77054;
+const O1_COMMIT_TESTS: readonly string[] = [
+  "CommitLocalRow",
+  "CommitDepRow",
+  "CommitMark",
+  "CommitDepMark",
+  "CommitNumSeq",
+  "CommitIso",
+];
+
+type O1Kind = "R" | "W" | "C";
+
+/**
+ * The requests of the order probe, in order: R784's five (pre-commitment 6aa7700c), then R804's four
+ * commit requests (`C` = CommitWriter; pre-commitment master 3185d706).
+ */
+export const O1_PLAN: readonly (readonly O1Kind[])[] = [
   ["R"],
   ["W", "R"],
   ["R", "W"],
   ["W", "R", "W", "R", "R"],
   ["R"],
+  ["C", "R"],
+  ["R", "C"],
+  ["C", "R", "C", "R"],
+  ["R"],
 ];
+
+/** The test codeunit an entry kind runs. */
+export const O1_KIND_CODEUNIT: Readonly<Record<O1Kind, number>> = {
+  R: O1_READER_CODEUNIT,
+  W: O1_WRITER_CODEUNIT,
+  C: O1_COMMIT_CODEUNIT,
+};
+
+/**
+ * R804: true when the build's pin records `commit-under-test-isolation` as `gone` (a Commit under
+ * TestIsolation = Function passes and leaves nothing behind). Read from the pin's leg-C entry.
+ */
+export function o1CommitIsolated(
+  pin: { readonly legC: Readonly<Record<string, { readonly verdict: string }>> } | undefined,
+): boolean {
+  return pin?.legC["commit-under-test-isolation"]?.verdict === "gone";
+}
 
 /** One request of the probe: its entries in order, and the `test` lines the daemon answered. */
 export interface O1Request {
   readonly label: string;
-  readonly entries: readonly { readonly id: string; readonly kind: "R" | "W" }[];
+  readonly entries: readonly { readonly id: string; readonly kind: O1Kind }[];
   readonly lines: readonly {
     readonly entry?: string;
     readonly name: string;
@@ -115,8 +154,10 @@ export function judgeOrderProbe(
   requests: readonly O1Request[],
   today: readonly string[],
   loginWorkDate?: string,
-): { readonly outcome: "pass" | "gate-fail"; readonly lines: string[] } {
+  commitIsolated = false,
+): { readonly outcome: "pass" | "held" | "gate-fail"; readonly lines: string[] } {
   const bad: string[] = [];
+  const held: string[] = [];
   if (
     loginWorkDate !== undefined &&
     O1_WRITER_VALUES.some((v) => `WORKDATE=${loginWorkDate}`.includes(v))
@@ -149,6 +190,23 @@ export function judgeOrderProbe(
     for (const e of rq.entries) {
       const mine = rq.lines.filter((l) => l.entry === e.id);
       const at = `${rq.label} entry ${e.id} (${e.kind})`;
+      if (e.kind === "C") {
+        // R804: a flagged build runs every Commit and keeps nothing; any other build refuses it by name.
+        for (const t of O1_COMMIT_TESTS) {
+          const l = mine.find((x) => x.name.endsWith(`.${t}`));
+          if (l === undefined) bad.push(`${at}: no row for ${t}`);
+          else if (commitIsolated) {
+            if (l.status !== "pass")
+              bad.push(`${at}: ${t} is ${l.status} (${l.message ?? ""}), pre-committed pass`);
+          } else if (l.status === "pass")
+            held.push(`${at}: ${t} passes on a build not pinned commit-isolated: re-pre-commit`);
+          else if (!V3_SERVE_SAFE_REFUSALS.commit?.test(l.message ?? ""))
+            bad.push(
+              `${at}: ${t} is ${l.status} (${l.message ?? ""}), pre-committed the commit refusal`,
+            );
+        }
+        continue;
+      }
       if (e.kind === "W") {
         for (const t of O1_WRITE_TESTS) {
           const l = mine.find((x) => x.name.endsWith(`.${t}`));
@@ -174,7 +232,8 @@ export function judgeOrderProbe(
       }
     }
   }
-  return { outcome: bad.length === 0 ? "pass" : "gate-fail", lines: bad };
+  if (bad.length > 0) return { outcome: "gate-fail", lines: bad };
+  return held.length > 0 ? { outcome: "held", lines: held } : { outcome: "pass", lines: [] };
 }
 
 /** The exact `--version` lines of builds that have no serve-entries path (alpha.2's `.gated`). */
