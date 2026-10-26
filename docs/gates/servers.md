@@ -5,9 +5,18 @@ The BC gates run on the three BC on Linux servers, `bc1`, `bc2` and `bc3` (R589)
 
 ## The servers
 
-They are BC 28.4 on server1 (`192.168.2.157`), reachable from the kraken container. Localization is
+They are BC 28.4 on docker1 (`192.168.2.77`), reachable from the kraken container. Localization is
 W1, so the company is `CRONUS International Ltd.` (not the DK `CRONUS Danmark A/S` that Cronus28
 had). Tenant `default`, instance `BC`, Basic authentication.
+
+**The host moved from server1 to docker1** on 2026-10-26 at 03:00 UTC (owner ruling; R783). Server1
+(`192.168.2.157`) went off at 04:00 CET. docker1 runs the same compose, image digests, ports, logins and
+BC builds (bc1 28.4.53241.56590, bc2 and bc3 .56646). It has 4 vCPU against server1's 22 cores, so gates that
+run many mutants take about 1.5 to 2.2 times as long; gates bound by fixed waits (hang, lease, verify) take
+about the same. The host comes from one place, `packages/runner/src/bc-host.ts` (`DEFAULT_BC_HOST`, or
+`LETHAL_BC_HOST=http://<host>` for every process). The setup script's configs, the out-of-use marker check and
+`scripts/r658-hang-gate.sh` all read it. A gate refuses a config that still names the other known host
+(`BcHostMismatchError`); rerun the setup script in that worktree. R783 holds the switch runbook.
 
 | server | OData | dev endpoint | API |
 |---|---|---|---|
@@ -161,7 +170,7 @@ cache (dir 0555, files 0444) with no error (`/coord/handoff/R-599/symcache/alc-r
 - What it holds: `System` plus every Microsoft dependency of a `PUBLISH_PLAN` target (today `System`
   alone). A dependent's own symbols are not put there.
 
-The databases are in memory. A container restart or a server1 reboot resets each server to a fresh
+The databases are in memory. A container restart or a docker1 reboot resets each server to a fresh
 CRONUS with no LethAL app on it. The script is idempotent, so re-running it is the fix.
 - **bc3's Continia stack is lost too.** Republish it with `--with-continia --accept-build 28.4.53241.56646` (R594's
   accepted build). The 22-23 Oct restart needed this; R679's stop message now names the flag.
@@ -243,6 +252,42 @@ frozen figures have reproduced per mutant on THAT server, under the current fixt
 difference is a BLOCK. A proof on `bc1` does not admit `bc2`: the servers can differ in app builds
 and in what else is installed (`bc3` carries the Continia stack). Admitting a new (gate, server)
 pair is one ordinary run of the gate there; add the pair to this table when it passes.
+
+### docker1 (192.168.2.77), the servers in use since 2026-10-26
+
+Proven on 2026-10-25 by R-783, under LethAL Control 1.0.0.24, under each server's coord lease. Each log was
+compared with server1's pass of the same gate from that day (R-689b), with times, the host and random ids
+masked: no verdict, count, note or check differed. Only times, run counters, scratch names and BC session ids
+did. Logs are under `/coord/handoff/R-783/`. **Only these pairs run on docker1.** Prove any other pair there
+first.
+
+| server | gate | LethAL Control | proof (log) |
+|---|---|---|---|
+| `bc3` | setup (`--with-continia --accept-build 28.4.53241.56646`) | 1.0.0.24 | `/coord/handoff/R-783/setup-bc3.log` |
+| `bc3` | `itest:bcdev` | 1.0.0.24 | `/coord/handoff/R-783/bcdev-bc3.log` |
+| `bc3` | `itest:hang` | 1.0.0.24 | `/coord/handoff/R-783/hang-bc3.log` (identical to R-759b's server1 log once masked) |
+| `bc3` | `itest:bcdev-names` | 1.0.0.24 | `/coord/handoff/R-783/bc3/bcdev-names.log` |
+| `bc3` | `itest:bcdev-wrapped` | 1.0.0.24 | `/coord/handoff/R-783/bc3/bcdev-wrapped.log` |
+| `bc3` | `itest:tables` | 1.0.0.24 | `/coord/handoff/R-783/bc3/tables.log` |
+| `bc3` | `itest:chunked` | 1.0.0.24 | `/coord/handoff/R-783/bc3/chunked.log` |
+| `bc3` | `itest:harden` | 1.0.0.24 | `/coord/handoff/R-783/bc3/harden.log` |
+| `bc3` | `itest:lend` | 1.0.0.24 | `/coord/handoff/R-783/bc3/lend.log` |
+| `bc3` | `itest:lease` | 1.0.0.24 | `/coord/handoff/R-783/bc3/lease.log` |
+| `bc3` | `itest:verify` | 1.0.0.24 | `/coord/handoff/R-783/bc3/verify.log` |
+| `bc3` | `itest:testapp` | 1.0.0.24 | `/coord/handoff/R-783/bc3/testapp.log` |
+| `bc3` | `itest:agreement` | 1.0.0.24 | `/coord/handoff/R-783/bc3/agreement.log` |
+| `bc3` | `itest:verify-scale` | 1.0.0.24 | `/coord/handoff/R-783/bc3/verify-scale.log` |
+| `bc1` | setup | 1.0.0.24 | `/coord/handoff/R-783/bc1/setup.log` |
+| `bc1` | `itest:bcdev` | 1.0.0.24 | `/coord/handoff/R-783/bc1/bcdev.log` |
+| `bc2` | setup | 1.0.0.24 | `/coord/handoff/R-783/bc2/setup.log` |
+| `bc2` | `itest:bcdev` | 1.0.0.24 | `/coord/handoff/R-783/bc2/bcdev.log` |
+
+**Unproven on docker1:** every other gate on `bc1` and `bc2`; `itest:stale-publish` and R-759b's proof leg on
+every server. A docker1 restart starts each server from a fresh CRONUS: rerun the setup script before a gate.
+
+### server1 (192.168.2.157), history: the servers before 2026-10-26
+
+Server1 is off. The table below is the record of what was proven there, kept as history.
 
 This table is the record. It lists the pairs exactly as the autonomy runbook
 (`docs/superpowers/runbooks/autonomy/README.md`, "Proof is PER SERVER") does. Each pair below
@@ -367,6 +412,11 @@ testapp, lease), in `/coord/handoff/R-604/bc2-<gate>.log`. Every one of them pas
 (`/coord/handoff/R-583/gates.md`).
 
 ## bc-demo: not a gate server (R663)
+
+**docker1 has no bc-demo (R783).** It copies bc1-bc3 only, and server1, where bc-demo ran, is off.
+`bc-demo-setup.ts` takes its host from the same setting as the gate servers, so it now probes docker1's port
+7349, finds nothing and prints the owner steps. Moving bc-demo, or naming its own host with `LETHAL_DEMO_HOST`,
+is the owner's to decide.
 
 `bc-demo` is a fourth BC on Linux instance on server1 that belongs to the Directions EMEA talk. It
 uses the next port block after bc3: OData 7348, dev 7349, API 7352. It is in no lease pool and no

@@ -14,7 +14,7 @@
 export const BC_HOSTS = { server1: "192.168.2.157", docker1: "192.168.2.77" } as const;
 
 /** The host in use when `LETHAL_BC_HOST` is unset. */
-export const DEFAULT_BC_HOST: string = BC_HOSTS.server1;
+export const DEFAULT_BC_HOST: string = BC_HOSTS.docker1;
 
 export class BcHostError extends Error {}
 

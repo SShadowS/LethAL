@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { SessionReport } from "../packages/runner/src/report";
 import { scratchDirs } from "../packages/runner/tests/helpers/scratch";
 import { IDENTITY_SCHEME } from "../packages/schemata/src/project";
+import { HOST } from "./bc-app-content";
 import {
   EXPECTED_DEPLOYED,
   FROZEN_REPORT,
@@ -249,7 +250,7 @@ describe("gift-card-refreeze (R664)", () => {
   test("R663b: kraken mode (no laptop fields) still prints the owner steps", async () => {
     const h = harness([], false);
     const { out } = await h.go();
-    expect(out).toContain("does not answer on http://192.168.2.157:7349");
+    expect(out).toContain(`does not answer on ${HOST}:7349`);
     expect(out).toContain("Only the owner can start it");
   });
 

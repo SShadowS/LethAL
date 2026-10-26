@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**21 of 787 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**19 of 787 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -611,7 +611,7 @@ that ordering is the priority.
 - **R242** · On the al-runner `--server` and resource legs, `executionContexts[].platformAppsDir` records a pin the daemon never receives · [R242.md](docs/roadmap/R242.md) · done (f7c46702)
 - **R243** · fixtures/README.md's hand-computed sandbox-app verdict table lists 16 mutant sites; the fixture has 19 on both backends · [R243.md](docs/roadmap/R243.md) · done (409fc467)
 - **R255** · The al-runner warning `lethal run` prints still says al-runner reports `pass` for an `asserterror` that raised no error, a v1 finding fixed in v2 · [R255.md](docs/roadmap/R255.md) · done (cba033cc)
-- **R257** · The EMEA runbook's explain rank and executionProven claims were measured on a pre-GH-24 report and need a new one · [R257.md](docs/roadmap/R257.md) · open
+- **R257** · The EMEA runbook's explain rank and executionProven claims were measured on a pre-GH-24 report and need a new one · [R257.md](docs/roadmap/R257.md) · done (3f6d8b09)
 - **R263** · The TestPage baseline reply was lost in 6 of 7 Cronus28 smoke sessions but only 6 of 60 counted sessions on a fresh Cronus284; the cause of the difference is unknown · [R263.md](docs/roadmap/R263.md) · closed 2026-10-24 — unmeasurable (Cronus28 parked, Cronus284 not ours) and moot since R-236c refuses TestPage…
 - **R264** · Unit tests read the machine's REAL al-runner secondary cache, so `doctor-cli.test.ts`, `doctor-al-runner.test.ts` and `al-runner-cache.test.ts` time out once it grows (30 fail at 5 s on a 5.4 GB cache) · [R264.md](docs/roadmap/R264.md) · done (7e27b0b, a3d961f)
 - **R267** · Two stale al-runner claims outside the agent docs: the run-time warning still describes the v1 `asserterror` bug, and `fixtures/README.md` still quotes `itest:alrunner` at 3 / 16 / 0 · [R267.md](docs/roadmap/R267.md) · done (cba033cc)
@@ -819,7 +819,7 @@ that ordering is the priority.
 - **R780** · al-runner-v3: a cross-session cache of the test-app alc compile (5.1 s per deploy measured on the D1 slice) · [R780.md](docs/roadmap/R780.md) · done (496d1360)
 - **R782** · With #5798 fixed upstream (edge a157b2d34), serve-entries could read a dotted test method from the row's own codeunit/method fields and lift R722's refusal · [R782.md](docs/roadmap/R782.md) · done (0ef82e1d)
 - **R778** · al-runner-v3 serve-entries: one kill-pair request per kill is 82-85% of D1's mutant loop; batch the pairs · [R778.md](docs/roadmap/R778.md) · done (de183776)
-- **R783** · SPIKE: do LethAL's BC gates work on docker1 (192.168.2.77), the copy of bc1-bc3, before server1 goes off? · [R783.md](docs/roadmap/R783.md) · open, filed 2026-10-25 (coord task R-783, owner request)
+- **R783** · SPIKE: do LethAL's BC gates work on docker1 (192.168.2.77), the copy of bc1-bc3, before server1 goes off? · [R783.md](docs/roadmap/R783.md) · closed 2026-10-26 — the owner's ruling switched the BC servers to docker1…
 - **R785** · Parallel v3: start an extra lane only when the queued live work is long enough to pay for its warm-up · [R785.md](docs/roadmap/R785.md) · done (8a284c2a)
 - **R784** · The R-653 order probe as a gated update-gate leg (every pin), plus a non-transactional kind and a dependency-app SingleInstance · [R784.md](docs/roadmap/R784.md) · done (4730432c)
 - **R786** · PRIORITY: a default v3 run (serve-entries by default, R761) FAILS at the warm-up when a test is one R612 refuses, where the same run on one-shot completes · [R786.md](docs/roadmap/R786.md) · done (07f89eb3)
