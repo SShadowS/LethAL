@@ -867,12 +867,12 @@ describe("edge-8078bcf49: every pinned defect gone, 48 known differences at BC's
       total: 2,
       refusedTests: 0,
     };
-    const judge = (unsupportedTests: number) =>
+    const judge = (unsupportedTests: number, read: NormalizedMutant[] = now) =>
       judgeLegT({
-        classification: classifyLegT(own, now, now),
-        compare: compareMutants(own, now, { sameScheme: true }),
+        classification: classifyLegT(own, read, now),
+        compare: compareMutants(own, read, { sameScheme: true }),
         own,
-        now,
+        now: read,
         counts: { killed: 2, survived: 0, noCoverage: 0 },
         total: 2,
         unsupportedTests,
@@ -888,8 +888,47 @@ describe("edge-8078bcf49: every pinned defect gone, 48 known differences at BC's
     expect(ok.outcome).toBe("pass");
     expect(ok.lines).toEqual(["T: pinned 1 rows (pin edge-8078bcf49, #5607)"]);
     const three = judge(3);
-    expect(three.outcome).not.toBe("pass");
-    expect(three.lines.join("\n")).toContain("3 refused tests, pre-committed 0");
+    // A figure miss, like a count miss: gate-fail, never held, and the headline names it.
+    expect(three.outcome).toBe("gate-fail");
+    expect(three.failure).toBe("T: 3 refused tests, pre-committed 0");
+    // A row miss (A back at no-coverage) names the pin miss first, not today's refused-test figure.
+    const back = judge(0, [base("A", "no-coverage", null), base("B", "killed", "T2")]);
+    expect(back.outcome).not.toBe("pass");
+    expect(back.failure).toMatch(/^T: pin-mismatch: /);
+  });
+  test("the real pin on the real committed tables baseline gives its counts; the earlier pins do not move", () => {
+    const committed = JSON.parse(
+      readFileSync(
+        join(import.meta.dir, "..", "itest", "al-runner-v3.tables.baseline.json"),
+        "utf8",
+      ),
+    ) as { entries: NormalizedMutant[] };
+    const tally = (rs: readonly NormalizedMutant[]) => ({
+      killed: rs.filter((r) => r.verdict === "killed").length,
+      survived: rs.filter((r) => r.verdict === "survived").length,
+      noCoverage: rs.filter((r) => r.verdict === "no-coverage").length,
+      error: rs.filter((r) => r.verdict === "error").length,
+    });
+    expect(tally(committed.entries)).toEqual({
+      killed: 290,
+      survived: 57,
+      noCoverage: 59,
+      error: 0,
+    });
+    const b = applyTPin(committed.entries, need(bPin).legT);
+    expect(b).toBeDefined();
+    expect(tally(need(b))).toEqual({ ...need(bPin).legT.counts, error: 0 });
+    // The flag the normalizer derives from the verdict still agrees on every row after pinning.
+    expect(need(b).filter((r) => r.coverageFiltered !== (r.verdict === "no-coverage"))).toEqual([]);
+    for (const p of V3_BUILD_PINS.filter((x) => x.id !== "edge-8078bcf49")) {
+      const out = applyTPin(committed.entries, p.legT);
+      expect(tally(need(out)), p.id).toEqual({
+        killed: 290,
+        survived: 50,
+        noCoverage: 59,
+        error: 7,
+      });
+    }
   });
 });
 

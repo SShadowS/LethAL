@@ -324,10 +324,14 @@ const WORSENESS = { pass: 0, held: 1, "gate-fail": 2 } as const;
  */
 function judgeLegTPinned(i: LegTInput, pin: LegTPinInput): LegTJudgement {
   const today = judgeLegTCore(i, { killed: 290, survived: 57, noCoverage: 59, total: 406 });
+  // The headline names the pin miss; today's (unpinned) failure is context only, because on a build whose
+  // pin moves a figure (edge-8078bcf49's 0 refused tests) today's judgement always fails on that figure.
   const mismatch = (reason: string): LegTJudgement => ({
     outcome: WORSENESS[today.outcome] >= WORSENESS.held ? today.outcome : "held",
     lines: [...today.lines, `T: pin-mismatch: ${reason}`],
-    ...(today.failure !== undefined ? { failure: today.failure } : {}),
+    ...(today.failure !== undefined
+      ? { failure: `T: pin-mismatch: ${reason} (unpinned: ${today.failure})` }
+      : {}),
   });
   const ownPinned = applyTPin(i.own, pin.legT);
   if (ownPinned === undefined)
@@ -424,8 +428,12 @@ function judgeLegTCore(
   if (s?.target !== 0 || s.test !== 0)
     return fail(`T: Sleep index ${JSON.stringify(s)}, pre-committed 0 + 0`);
   const refused = want.refusedTests ?? 3;
+  // A figure, like the counts below: a pinned run that differs only here is a gate-fail, never held.
   if (i.unsupportedTests !== refused)
-    return fail(`T: ${i.unsupportedTests} refused tests, pre-committed ${refused}`);
+    return {
+      ...fail(`T: ${i.unsupportedTests} refused tests, pre-committed ${refused}`),
+      countMismatch: true,
+    };
   if (i.knownRefusal !== undefined) return fail(`T: v3's own baseline: ${i.knownRefusal}`);
   const c = i.classification.outcome;
   if (c === "gate-fail")
