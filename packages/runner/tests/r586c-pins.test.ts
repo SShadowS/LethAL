@@ -743,6 +743,8 @@ describe("R771: the edge build a157b2d34 (alpha.5's readings plus N1E)", () => {
       "edge-8078bcf49",
       "edge-db0296678",
       "alpha.6-db0296678",
+      "alpha.7-2c63a382e",
+      "edge-2c63a382e",
     ]);
     expect(serveRowFieldsFor(A_VERSION, A_SHA)).toBe(true);
     expect(serveRowFieldsFor(A_VERSION, flip(A_SHA))).toBe(false);
@@ -796,6 +798,31 @@ describe("edge-db0296678 (3.0.0-alpha.6): edge-8078bcf49's readings, shared", ()
     expect(r.xb).toBe(b.xb);
     expect(r.serveRowFields).toBe(b.serveRowFields);
     expect(r.o1).toBe(b.o1);
+  });
+  test("alpha.7 (release and edge 2c63a382e): each its own key, the same shared readings", () => {
+    const b = need(bPin);
+    const keys = [
+      [
+        "alpha.7-2c63a382e",
+        "al-runner 3.0.0-alpha.7 (2c63a382e)",
+        "af19368ded0c3f809877f6042bba1c40175c70fe418733178cbfb96ac7fcbb2d",
+      ],
+      [
+        "edge-2c63a382e",
+        "al-runner 3.0.0-alpha.7+edge.20261026 (2c63a382e)",
+        "31d2cf1fee463515c9bab5ba7a60d24845abacc5bb9709d89bb687b84423bbc6",
+      ],
+    ] as const;
+    for (const [id, version, sha] of keys) {
+      const p = need(findV3Pin(version, sha));
+      expect(p.id).toBe(id);
+      expect(findV3Pin(version, flip(sha))).toBeUndefined();
+      for (const f of ["legC", "legT", "xb", "serveRowFields", "o1"] as const)
+        expect(p[f], `${id} ${f}`).toBe(b[f]);
+    }
+    // The release and the edge are different binaries: neither sha opens the other's version line.
+    expect(findV3Pin(keys[0][1], keys[1][2])).toBeUndefined();
+    expect(findV3Pin(keys[1][1], keys[0][2])).toBeUndefined();
   });
 });
 
