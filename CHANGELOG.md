@@ -17,7 +17,7 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   (`[C,R]`, `[R,C]`, `[C1,R1,C2,R2]`, `[R]`) run a new `Order Commit Writer` codeunit, whose six tests each write one
   kind of state and call `Commit()`. A build whose pin records `commit-under-test-isolation` as `gone` must pass them
   all and leave the Readers at the defaults; any other build must refuse each with the commit refusal text. A build that
-  passes them without the pin is `held`. Judged by `judgeOrderProbe`; the pin lookup is `o1CommitIsolated`.
+  passes them without the pin is `held`. Judged by `judgeOrderProbe`; the pin lookup is `o1CommitRuns`.
 - **Tests with their own short timeout get 60 s on the Windows CI job** (R726c): `ownTimeout()` in
   `@lethal/engine/own-timeout` raises a test's own timeout to at least verify's shared 60 s there, because a test's own
   timeout wins over `--timeout`. Verify tells the test child through `LETHAL_VERIFY_OWN_TIMEOUT_FLOOR`, set only on

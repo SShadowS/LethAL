@@ -132,7 +132,8 @@ import {
   judgeWrArms,
   legKSection,
   moWrTransportRefusal,
-  o1CommitIsolated,
+  combineO1Sets,
+  o1CommitRuns,
   o1LoginWorkDate,
   v3DefaultLegs,
   v3ItestFailures,
@@ -876,6 +877,7 @@ async function legO1(scratch: string, version: string): Promise<void> {
     return [d.toISOString().slice(0, 10), localDate(d)];
   };
   const dates = new Set(stamp());
+  const results: { set: string; outcome: "pass" | "held" | "gate-fail"; lines: string[] }[] = [];
   for (const set of sets) {
     const cwd = join(scratch, set.name);
     await mkdir(cwd, { recursive: true });
@@ -951,7 +953,11 @@ async function legO1(scratch: string, version: string): Promise<void> {
         .map((e) => {
           const msgs = rq.lines
             .filter((l) => l.entry === e.id)
-            .map((l) => (e.kind === "C" ? l.status : (l.message ?? l.status)));
+            .map((l) =>
+              e.kind === "C"
+                ? `${l.status}${l.message ? ` (${l.message})` : ""}`
+                : (l.message ?? l.status),
+            );
           return `${e.id}: ${msgs.join(" ")}`;
         });
       console.log(`  O1: ${rq.label}: ${reads.join(" | ")}`);
@@ -962,15 +968,18 @@ async function legO1(scratch: string, version: string): Promise<void> {
       console.log(
         `  O1: ${set.name} set: WorkDate pinned ${login} (pin ${activePin?.id}, ${activePin?.o1?.issue})`,
       );
-    const isolated = o1CommitIsolated(activePin);
+    const runs = o1CommitRuns(activePin);
     console.log(
-      `  O1: ${set.name} set: commit kind judged as ${isolated ? "isolated (pin: commit-under-test-isolation gone)" : "refused (build not pinned commit-isolated)"}`,
+      `  O1: ${set.name} set: commit kind judged as ${runs ? "runs (pin: commit-under-test-isolation gone)" : "refused (pin does not record commit-under-test-isolation gone)"}`,
     );
-    const j = judgeOrderProbe(done, [...dates], login, isolated);
+    const j = judgeOrderProbe(done, [...dates], login, runs);
     console.log(`  O1: ${set.name} set: ${j.outcome} (${done.length} requests, one daemon)`);
-    if (j.outcome === "gate-fail") throw new LegFailure(`O1: ${j.lines.join("; ")}`);
-    if (j.outcome === "held") throw new V3LegHeld(j.lines);
+    results.push({ set: set.name, ...j });
   }
+  // S1: every set runs before the verdict, so a later set's gate-fail is never hidden by an earlier hold.
+  const all = combineO1Sets(results);
+  if (all.outcome === "gate-fail") throw new LegFailure(`O1: ${all.lines.join("; ")}`);
+  if (all.outcome === "held") throw new V3LegHeld(all.lines);
 }
 
 /**

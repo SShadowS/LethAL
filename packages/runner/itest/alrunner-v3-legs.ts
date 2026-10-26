@@ -1,6 +1,7 @@
 /**
  * R654 S2: the pure leg lists and judges of `itest:alrunner-v3`'s new legs. Pure on purpose: no IO
- * and no `src` import, so `scripts/agentflow` can import the leg list (as it does `alrunner-legs.ts`).
+ * and no `src` import except `V3_SERVE_SAFE_REFUSALS` (R804, a constant table), so `scripts/agentflow`
+ * can import the leg list (as it does `alrunner-legs.ts`).
  *
  * Plan `docs/superpowers/plans/2026-10-22-r654-retire-dotnet-alrunner.md` §S2; pre-commitment
  * `docs/superpowers/specs/2026-10-22-r654-v3-gate-legs-precommitment.md` (43115c78).
@@ -31,7 +32,8 @@ export const V3_N1E_LEG = "N1E";
 export const V3_N1S_LEG = "N1S";
 
 /**
- * R784: the serve order probe. One daemon, five requests, Writer and Reader codeunits; every Reader
+ * R784: the serve order probe. One daemon, nine requests (five, then R804's four commit requests),
+ * Writer, CommitWriter and Reader codeunits; every Reader
  * entry must read the defaults (no state carried over from a Writer entry, within or across requests).
  * R778's kill-pair batching rests on that. In `V3_GATE_LEGS`.
  */
@@ -113,13 +115,33 @@ export const O1_KIND_CODEUNIT: Readonly<Record<O1Kind, number>> = {
 };
 
 /**
- * R804: true when the build's pin records `commit-under-test-isolation` as `gone` (a Commit under
- * TestIsolation = Function passes and leaves nothing behind). Read from the pin's leg-C entry.
+ * R804: true when the build's pin records `commit-under-test-isolation` as `gone`, i.e. the build no
+ * longer refuses a Commit under TestIsolation = Function. Read from the pin's leg-C entry. The pin
+ * says only that Commit runs; that nothing it wrote is carried over is proved by O1's Readers.
  */
-export function o1CommitIsolated(
+export function o1CommitRuns(
   pin: { readonly legC: Readonly<Record<string, { readonly verdict: string }>> } | undefined,
 ): boolean {
   return pin?.legC["commit-under-test-isolation"]?.verdict === "gone";
+}
+
+/**
+ * S1: the verdict over all package sets, after every set ran: any gate-fail wins, then any held.
+ * Lines carry the set name.
+ */
+export function combineO1Sets(
+  results: readonly {
+    readonly set: string;
+    readonly outcome: "pass" | "held" | "gate-fail";
+    readonly lines: readonly string[];
+  }[],
+): { readonly outcome: "pass" | "held" | "gate-fail"; readonly lines: string[] } {
+  const lines = (o: string) =>
+    results.filter((r) => r.outcome === o).flatMap((r) => r.lines.map((l) => `${r.set} set: ${l}`));
+  if (results.some((r) => r.outcome === "gate-fail"))
+    return { outcome: "gate-fail", lines: lines("gate-fail") };
+  if (results.some((r) => r.outcome === "held")) return { outcome: "held", lines: lines("held") };
+  return { outcome: "pass", lines: [] };
 }
 
 /** One request of the probe: its entries in order, and the `test` lines the daemon answered. */
@@ -154,7 +176,7 @@ export function judgeOrderProbe(
   requests: readonly O1Request[],
   today: readonly string[],
   loginWorkDate?: string,
-  commitIsolated = false,
+  commitRuns = false,
 ): { readonly outcome: "pass" | "held" | "gate-fail"; readonly lines: string[] } {
   const bad: string[] = [];
   const held: string[] = [];
@@ -195,11 +217,13 @@ export function judgeOrderProbe(
         for (const t of O1_COMMIT_TESTS) {
           const l = mine.find((x) => x.name.endsWith(`.${t}`));
           if (l === undefined) bad.push(`${at}: no row for ${t}`);
-          else if (commitIsolated) {
+          else if (commitRuns) {
             if (l.status !== "pass")
               bad.push(`${at}: ${t} is ${l.status} (${l.message ?? ""}), pre-committed pass`);
           } else if (l.status === "pass")
-            held.push(`${at}: ${t} passes on a build not pinned commit-isolated: re-pre-commit`);
+            held.push(
+              `${at}: ${t} passes on a build whose pin does not record commit-under-test-isolation gone: re-pre-commit`,
+            );
           else if (!V3_SERVE_SAFE_REFUSALS.commit?.test(l.message ?? ""))
             bad.push(
               `${at}: ${t} is ${l.status} (${l.message ?? ""}), pre-committed the commit refusal`,

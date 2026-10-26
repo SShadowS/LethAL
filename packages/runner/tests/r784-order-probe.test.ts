@@ -5,8 +5,9 @@ import { V3_GATE_LEGS, gateOutcome } from "../itest/al-runner-v3-gate";
 import {
   type O1Request,
   O1_PLAN,
+  combineO1Sets,
   judgeOrderProbe,
-  o1CommitIsolated,
+  o1CommitRuns,
   o1LoginWorkDate,
   v3DefaultLegs,
 } from "../itest/alrunner-v3-legs";
@@ -253,6 +254,40 @@ describe("R771 addendum 2: a pinned login WorkDate (O1's CDO set on edge-a157b2d
 });
 
 // R804 part 2: the commit kind. Pre-commitment docs/superpowers/specs/2026-10-26-r804-o1-commit-kind-precommitment.md (3185d706).
+describe("R804 S1: O1's sets are combined after every set ran", () => {
+  const pass = { outcome: "pass" as const, lines: [] };
+  const held = { outcome: "held" as const, lines: ["x passes"] };
+  const fail = { outcome: "gate-fail" as const, lines: ["y carried"] };
+  test("a held own set and a failed CDO set is a gate-fail naming the CDO set", () => {
+    const j = combineO1Sets([
+      { set: "own", ...held },
+      { set: "cdo", ...fail },
+    ]);
+    expect(j.outcome).toBe("gate-fail");
+    expect(j.lines).toEqual(["cdo set: y carried"]);
+  });
+  test("held beats pass, all pass is pass, a failed own set still fails", () => {
+    expect(
+      combineO1Sets([
+        { set: "own", ...pass },
+        { set: "cdo", ...held },
+      ]).outcome,
+    ).toBe("held");
+    expect(
+      combineO1Sets([
+        { set: "own", ...pass },
+        { set: "cdo", ...pass },
+      ]).outcome,
+    ).toBe("pass");
+    expect(
+      combineO1Sets([
+        { set: "own", ...fail },
+        { set: "cdo", ...held },
+      ]).outcome,
+    ).toBe("gate-fail");
+  });
+});
+
 describe("R804: O1's commit requests", () => {
   const isCommit = (n: string) => n.startsWith("Codeunit77054.");
   test("the plan is the five requests, then [C,R] [R,C] [C,R,C,R] [R]", () => {
@@ -362,14 +397,14 @@ describe("R804: O1's commit requests", () => {
   });
   test("(f) the flag is the pin's commit-under-test-isolation verdict, gone", () => {
     const pin = (verdict: string) => ({ legC: { "commit-under-test-isolation": { verdict } } });
-    expect(o1CommitIsolated(pin("gone"))).toBe(true);
-    expect(o1CommitIsolated(pin("present"))).toBe(false);
-    expect(o1CommitIsolated({ legC: { "sleep-is-noop": { verdict: "gone" } } })).toBe(false);
-    expect(o1CommitIsolated({ legC: {} })).toBe(false);
-    expect(o1CommitIsolated(undefined)).toBe(false);
+    expect(o1CommitRuns(pin("gone"))).toBe(true);
+    expect(o1CommitRuns(pin("present"))).toBe(false);
+    expect(o1CommitRuns({ legC: { "sleep-is-noop": { verdict: "gone" } } })).toBe(false);
+    expect(o1CommitRuns({ legC: {} })).toBe(false);
+    expect(o1CommitRuns(undefined)).toBe(false);
     // Real pins: only a pin that records the fact as gone is flagged (none, or edge-8078bcf49 once merged).
     for (const p of V3_BUILD_PINS)
-      expect([p.id, o1CommitIsolated(p)]).toEqual([
+      expect([p.id, o1CommitRuns(p)]).toEqual([
         p.id,
         p.legC["commit-under-test-isolation"]?.verdict === "gone",
       ]);

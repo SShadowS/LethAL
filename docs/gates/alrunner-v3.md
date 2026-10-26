@@ -103,7 +103,7 @@ The legs:
     a new `[R]` (`C` = codeunit `Order Commit Writer`, 77054, separate from Writer because a refused Commit cascades
     to the rest of its codeunit). Its 6 tests each write one kind (local row, dependency-app row, local and
     dependency-app SingleInstance, NumberSequence, IsolatedStorage), call `Commit()`, and re-read their own value.
-    The verdict keys off the build's pin: `commit-under-test-isolation` pinned `gone` in the leg-C facts (`o1CommitIsolated`).
+    The verdict keys off the build's pin: `commit-under-test-isolation` pinned `gone` in the leg-C facts (`o1CommitRuns`).
     - Flagged build: every CommitWriter test passes, and every Reader entry reads the defaults. A writer value is
       CARRY-OVER (`gate-fail`); a CommitWriter test that does not pass is `gate-fail`.
     - Any other build: every CommitWriter test is refused with text matching `V3_SERVE_SAFE_REFUSALS.commit`, and the
