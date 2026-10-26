@@ -742,6 +742,7 @@ describe("R771: the edge build a157b2d34 (alpha.5's readings plus N1E)", () => {
       "edge-a157b2d34",
       "edge-8078bcf49",
       "edge-db0296678",
+      "alpha.6-db0296678",
     ]);
     expect(serveRowFieldsFor(A_VERSION, A_SHA)).toBe(true);
     expect(serveRowFieldsFor(A_VERSION, flip(A_SHA))).toBe(false);
@@ -780,6 +781,21 @@ describe("edge-db0296678 (3.0.0-alpha.6): edge-8078bcf49's readings, shared", ()
     expect(d.serveRowFields).toBe(b.serveRowFields);
     expect(d.o1).toBe(b.o1);
     expect(serveRowFieldsFor(D_VERSION, D_SHA)).toBe(true);
+  });
+  test("the alpha.6 release: its own version line and sha, the same shared readings", () => {
+    const R_VERSION = "al-runner 3.0.0-alpha.6 (db0296678)";
+    const R_SHA = "92effe64d64dddcae98f80cc0e2e17a6429f977781ffe7b6b0f5eea6a231778d";
+    const r = need(findV3Pin(R_VERSION, R_SHA));
+    expect(r.id).toBe("alpha.6-db0296678");
+    // Another binary than the edge one: neither key finds the other's pin.
+    expect(findV3Pin(R_VERSION, D_SHA)).toBeUndefined();
+    expect(findV3Pin(D_VERSION, R_SHA)).toBeUndefined();
+    const b = need(bPin);
+    expect(r.legC).toBe(b.legC);
+    expect(r.legT).toBe(b.legT);
+    expect(r.xb).toBe(b.xb);
+    expect(r.serveRowFields).toBe(b.serveRowFields);
+    expect(r.o1).toBe(b.o1);
   });
 });
 

@@ -702,6 +702,15 @@ export const V3_BUILD_PINS: readonly V3BuildPin[] = [
     binarySha256: "4f9596510ececcfa5e5b235350e2b2658264abceb2d54d5fa01131e8ffab07db",
     ...READINGS_8078BCF49,
   },
+  {
+    // The v3.0.0-alpha.6 RELEASE (published 2026-10-26 10:36:50Z): the same commit as edge-db0296678, but another
+    // binary (its own version line and sha256). Pinned on the same readings, as owner-ruled; its own update-gate
+    // run is the measurement, and any reading off this table is a BLOCK (R804 addendum).
+    id: "alpha.6-db0296678",
+    version: "al-runner 3.0.0-alpha.6 (db0296678)",
+    binarySha256: "92effe64d64dddcae98f80cc0e2e17a6429f977781ffe7b6b0f5eea6a231778d",
+    ...READINGS_8078BCF49,
+  },
 ];
 
 /** The pin for this exact binary: the version line AND the sha256 must both be equal. */

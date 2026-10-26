@@ -181,7 +181,12 @@ describe("R784: judgeOrderProbe", () => {
 describe("R771 addendum 2: a pinned login WorkDate (O1's CDO set on edge-a157b2d34)", () => {
   const LOGIN = "2026-08-01";
   /** The pins of builds that run Base Application's login code (#5743). */
-  const LOGIN_PINS: readonly string[] = ["edge-a157b2d34", "edge-8078bcf49", "edge-db0296678"];
+  const LOGIN_PINS: readonly string[] = [
+    "edge-a157b2d34",
+    "edge-8078bcf49",
+    "edge-db0296678",
+    "alpha.6-db0296678",
+  ];
   const atLogin = (l: O1Request["lines"][number]) =>
     l.name.endsWith(".ReadWorkDate") ? { ...l, message: `WORKDATE=${LOGIN}` } : l;
   test("every Reader entry at the pinned date passes; without the pin it is a gate-fail", () => {
