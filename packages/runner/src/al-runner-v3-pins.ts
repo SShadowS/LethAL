@@ -711,6 +711,21 @@ export const V3_BUILD_PINS: readonly V3BuildPin[] = [
     binarySha256: "92effe64d64dddcae98f80cc0e2e17a6429f977781ffe7b6b0f5eea6a231778d",
     ...READINGS_8078BCF49,
   },
+  {
+    // The v3.0.0-alpha.7 RELEASE (2026-10-26 20:55:26Z), gate-failed unpinned at 68568a19 with readings identical
+    // to alpha.6 (only the version line and timeout-is-cpu's core number differ). Owner: "adopt if identical".
+    id: "alpha.7-2c63a382e",
+    version: "al-runner 3.0.0-alpha.7 (2c63a382e)",
+    binarySha256: "af19368ded0c3f809877f6042bba1c40175c70fe418733178cbfb96ac7fcbb2d",
+    ...READINGS_8078BCF49,
+  },
+  {
+    // Edge 2c63a382e (20:53:56Z): the same commit as alpha.7, another binary; the same readings.
+    id: "edge-2c63a382e",
+    version: "al-runner 3.0.0-alpha.7+edge.20261026 (2c63a382e)",
+    binarySha256: "31d2cf1fee463515c9bab5ba7a60d24845abacc5bb9709d89bb687b84423bbc6",
+    ...READINGS_8078BCF49,
+  },
 ];
 
 /** The pin for this exact binary: the version line AND the sha256 must both be equal. */
