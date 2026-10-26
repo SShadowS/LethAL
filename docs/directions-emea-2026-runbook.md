@@ -167,19 +167,22 @@ re-freeze writes a new report; read the rank again on it.
   is **ninth of fifteen**, and the top survivor is M0009 (`Issue`, `lethal.conditional-boundary`). If you show a v3
   report, do not use the 1:20 `reach` line. Say `executionProven: true` (a test entered `GetBalance`) instead.
 - **The talk's timing figures (QUOTED; owner-authorised re-measure, 2026-10-26).** On al-runner-v3, best of 5:
-  - **Gift card: 1.6 s** (median 1.6 s).
-  - **D1: 17.1 s** (median 18.3 s).
-  - Measured 2026-10-26 11:54-11:57Z on the **v3.0.0-alpha.6 release**: `al-runner 3.0.0-alpha.6 (db0296678)`, current
-    since 11:50Z through the normal release path, with LethAL master 68568a19.
-  - Machine: `scripts/v3-timing.ts --repeat 5 --subjects gc,d1`, quiet (load 2.0, 0 other heavy jobs, other lanes
-    holding). Evidence: `/coord/handoff/lethal-spare-edge/a6/timing/timing.md`.
+  - **Gift card: 1.5 s** (median 1.6 s).
+  - **D1: 17.2 s** (median 17.2 s).
+  - Measured 2026-10-26 22:12-22:15Z on the **v3.0.0-alpha.7 release**: `al-runner 3.0.0-alpha.7 (2c63a382e)`, current
+    since 22:08Z through the normal release path, with LethAL master 10f9f63a. Owner: "adopt if identical"; its gate
+    readings equal alpha.6's (R804 addendum 3).
+  - Machine: `scripts/v3-timing.ts --repeat 5 --subjects gc,d1`, quiet (load 1.8-2.5, 0 other heavy jobs, other lanes
+    holding). Evidence: `/coord/handoff/lethal-spare-edge/a7run/timing/timing.md`.
   - **Every verdict and killing test is identical to the earlier quoted run** (6aa7700c), in all 5 runs of each subject
     (60 and 63 mutants).
-  - D1's cached runs: deploy 7.2-8.2 s, alc 5.8-6.7 s, baseline 2.1-2.2 s, mutant loop 3.6-3.7 s, warm-up 1.8 s,
-    live 1.0 s.
-  - Say "about 17 to 18 seconds" for D1 if it runs live.
+  - D1's cached runs: deploy 7.1-7.5 s, alc 5.7-6.2 s, baseline 2.1-2.2 s, mutant loop 3.6-3.7 s, warm-up 1.7-1.8 s,
+    live 1.0-1.1 s. The four cached runs are within 0.2 s of each other.
+  - Say "about 17 seconds" for D1 if it runs live.
   - The 27.2 s above is one bcdev run, not a talk figure.
 - **Previously quoted (dated):**
+  - 2026-10-26 11:54Z, the v3.0.0-alpha.6 release (`al-runner 3.0.0-alpha.6 (db0296678)`), master 68568a19: gift card
+    1.6 s and D1 17.1 s best (medians 1.6 and 18.3 s), from `/coord/handoff/lethal-spare-edge/a6/timing/timing.md`.
   - 2026-10-25, 6aa7700c on edge-dcdf9e821: gift card 1.7 s and D1 20.8 s best (medians 1.8 and 21.5 s), from
     `/coord/handoff/final-timing/6aa7700c`.
   - Measured since, not quoted: edge-a157b2d34 D1 22.0 s best (R-802, 03:08Z); edge-8078bcf49 D1 19.9 s best (R804,
