@@ -168,14 +168,15 @@ re-freeze writes a new report; read the rank again on it.
   report, do not use the 1:20 `reach` line. Say `executionProven: true` (a test entered `GetBalance`) instead.
 - The timing claims elsewhere stay as they are (gift card 1.7 s and D1 20.8 s on v3, from
   `/coord/handoff/final-timing/6aa7700c`). The 27.2 s above is one bcdev run, not a talk figure.
-- **What the demo shows (measured 2026-10-26 03:08Z, R-802; `/coord/handoff/R-802/talk/timing.md`).**
-  - Setup: master e02b4d75 (R790's speculation off, the default), `current` edge-a157b2d34, best-of-5 on a quiet
-    machine.
-  - **Gift card:** 1.7 s best, 1.7 s median, the same as the quoted figure.
-  - **D1:** 22.0 s best, 22.2 s median, about 1.2 s above the quoted 20.8 s. About 0.5 s of that is this build's
-    login WorkDate lookup (#5743, as BC does it; filed as #5884).
+- **What the demo shows (measured 2026-10-26 08:49Z, R804; `/coord/handoff/lethal-spare-edge/timing/timing.md`).**
+  - Setup: master 2136daf0, `current` edge-8078bcf49 (switched 08:43Z), best-of-5 on a quiet machine with 0 other
+    heavy jobs.
+  - **Gift card:** 1.7 s best, 1.8 s median, the same as the quoted figure.
+  - **D1:** 19.9 s best, 21.1 s median, at or below the quoted 20.8 s. This build's serve phases are faster: live
+    about 1.1 s against 2.3 s, mutant loop about 4.6 s against 6.3 s.
   - Every verdict and killing test is identical to the quoted run.
-  - Say "about 21 to 22 seconds" for D1 if it runs live.
+  - Say "about 20 seconds" for D1 if it runs live.
+  - Previously (edge-a157b2d34, 03:08Z, R-802): D1 22.0 s best.
 
 ### The agent loop (D5)
 
