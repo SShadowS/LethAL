@@ -14,6 +14,7 @@ The leg-by-leg tables live in those pre-commitments and are asserted by the ites
 
 The legs:
 
+- R790/R798: the speculative baseline (the baseline's one-shot calls run while alc proves the batch) is OFF by default and opt-in (`LETHAL_V3_SPECULATE_BASELINE=1`). No leg sets it, so every figure below is the sequential path's; the measured wash is in `docs/roadmap/R790.md`.
 - R762: a normal SESSION may replay a cached, fully passing probe (`.probe-cache-<digest>.json` beside `.gated`),
   keyed by the binary sha256, LethAL's probe code, bcVersion, the packages folder, alc, the cache dir and the `.gated`
   commit. This gate never does: it sets `LETHAL_V3_FRESH_PROBE=1` for every session it starts, and leg C calls
@@ -109,12 +110,17 @@ The legs:
     entry, or a Writer test that does not pass, is `gate-fail`; a daemon that cannot run is `infra-fail`
     (`judgeOrderProbe`, `r784-order-probe.test.ts`). R778's kill-pair batching rests on this.
   - O1 does not probe the per-entry `resources` override (the active-mutant file); N1S's per-mutant comparison of batched kill pairs against one-shot covers it indirectly. The judge reads the ANSWER order (execution order is inferred from it) and fails when it differs from the sent order, or when a request does not match the plan.
-  - It is in `V3_GATE_LEGS`. On a build with no serve path (alpha.2) it reads "not applicable". Per R777 the update
-    gate reads `infra-fail` for `current` until it is regated at a commit that has O1.
+  - It is in `V3_GATE_LEGS`. On a build with no serve path (alpha.2) it reads "not applicable".
 - S3: runs no session. It checks that `selectorMode: "resource"` is refused by name
   (`al-runner-v3-resource-selector-refused`).
 - N1: the names fixture (R557's tests are unselectable on v3, upstream #5572).
 - X (a) to (f): the compile proof, the binding checks and the Sleep rule (§6) on `scripts/r586-probe`.
+  - X (a′) (R790b; pre-commitment `docs/superpowers/specs/2026-10-25-r790b-x-a-prime-precommitment.md`, master
+    bee9b026, amendment 1 f43c499e): X (a)'s alc-rejected batch with the speculative baseline opted in
+    (`speculateBaseline: true`, serve-entries, the session's tests, a budget floor). v3 spawns exactly 1 time beside
+    the failing alc, yet deploy() throws the `AlcCompileError` text of the same backend with `speculateBaseline:
+    false` (which spawns 0 times; scratch paths and alc's start time masked), keeps nothing, and a baseline after it
+    is refused.
 - **Transport per leg (R788; pre-commitment `docs/superpowers/specs/2026-10-25-r788-serve-big-legs-precommitment.md`,
   master 1d6474bb).** Unflagged: D1, D1c and T run serve-entries (`V3_GATE_SERVE_LEGS`, `v3ItestLegTransport`); S1E,
   N1E, N1S and O1 run serve-entries by construction; K runs the CLI's own default (serve-entries for sandbox-app since
@@ -283,6 +289,14 @@ N > 1 must equal N = 1: R766's proof found D1 and the gift card identical at N =
   - Outcomes are `--edge`'s at this commit, under new keys only: nothing that already exists under `failed/` or
     `held/` is moved or rewritten. The receipt and `gate.log` are also kept in `rejudge/edge-<sha>@<commit>/`. A
     pass writes `.gated` with `rejudgedFrom` and no `tarballSha256`.
+- A new leg needs no manual regate ([[R777]]). Before the alpha path, `--edge` or `--edge-rejudge` gates a candidate,
+  the script reads `V3_GATE_LEGS` at `.gated`'s commit (`git show`). If that commit lacks any of this script's legs,
+  the log says `stale-gated` and names them, and `current` is first re-gated at the script's own commit, under the
+  same lock. If that re-gate does not pass, `current` stays, and the candidate is judged at the script's commit (so
+  on every leg). The script's commit must have the legs, be on `origin/master` (as the local ref knows it: the
+  script does not fetch) and be newer than `.gated`'s; otherwise no candidate is gated and the run reads `skipped`:
+  `--edge-rejudge` exits 2, and `--edge` does not mark the commit seen. `--edge-rejudge` runs its custody checks
+  before any re-gate.
 - Every gate path (the alpha path, `--regate`, `--edge`, `--edge-rejudge`) holds `<root>/.gate.lock`. A holder is
   live only when its `/proc/<pid>/cmdline` names `al-runner-v3-update`; a dead, reused, empty or unreadable lock is
   taken over unless a process still runs under the gate worktree. A skip is logged with the lock, its holder and

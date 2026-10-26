@@ -178,12 +178,12 @@ describe("config writer", () => {
     expect(buildConfig("bc2", login, paths, "sandbox-app")).toEqual({
       bcdev: {
         mcpCommand: paths.mcpCommand,
-        server: "http://192.168.2.157:7149",
+        server: `${HOST}:7149`,
         serverInstance: "BC",
         tenant: "default",
         port: 7149,
-        baseUrl: "http://192.168.2.157:7148/BC",
-        apiBaseUrl: "http://192.168.2.157:7152/BC",
+        baseUrl: `${HOST}:7148/BC`,
+        apiBaseUrl: `${HOST}:7152/BC`,
         company: "CRONUS International Ltd.",
         username: "BCRUNNER",
         password: SECRET,
@@ -252,7 +252,7 @@ describe("config writer", () => {
       configurations: [
         {
           environmentType: "OnPrem",
-          server: "http://192.168.2.157",
+          server: HOST,
           port: 7149,
           tenant: "default",
         },
@@ -720,10 +720,10 @@ describe("--write-config-only: configs from the secret file, no server call, no 
       readFileSync(join(h.repo, "fixtures", "sandbox-app", "lethal.config.bc3.json"), "utf8"),
     ) as { bcdev: Record<string, unknown> };
     expect(cfg.bcdev).toMatchObject({
-      server: "http://192.168.2.157:7249",
+      server: `${HOST}:7249`,
       port: 7249,
-      baseUrl: "http://192.168.2.157:7248/BC",
-      apiBaseUrl: "http://192.168.2.157:7252/BC",
+      baseUrl: `${HOST}:7248/BC`,
+      apiBaseUrl: `${HOST}:7252/BC`,
       company: "CRONUS International Ltd.",
       packageCachePath: join(h.cacheRoot, "bc3", "unfilled-run-setup-first"),
       username: "BCRUNNER",
@@ -1244,7 +1244,7 @@ describe("--write-config-only: configs from the secret file, no server call, no 
     });
   });
 
-  test("R783: HOST, MARKER_HOST and the written launch file follow LETHAL_BC_HOST; unset is server1", () => {
+  test("R783: HOST, MARKER_HOST and the written launch file follow LETHAL_BC_HOST; unset is the default", () => {
     // Both constants are read at import, so each case is a fresh process.
     const read = (host: string | undefined): string => {
       const env: Record<string, string> = Object.fromEntries(
@@ -1263,7 +1263,10 @@ describe("--write-config-only: configs from the secret file, no server call, no 
       );
       return r.stdout.toString().trim();
     };
-    expect(read(undefined)).toBe("http://192.168.2.157 192.168.2.157 http://192.168.2.157");
+    expect(read(undefined)).toBe(`${HOST} ${HOST.slice("http://".length)} ${HOST}`);
+    expect(read("http://192.168.2.157")).toBe(
+      "http://192.168.2.157 192.168.2.157 http://192.168.2.157",
+    );
     expect(read("http://192.168.2.77")).toBe(
       "http://192.168.2.77 192.168.2.77 http://192.168.2.77",
     );

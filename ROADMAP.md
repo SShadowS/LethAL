@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**22 of 785 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**19 of 787 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -611,7 +611,7 @@ that ordering is the priority.
 - **R242** · On the al-runner `--server` and resource legs, `executionContexts[].platformAppsDir` records a pin the daemon never receives · [R242.md](docs/roadmap/R242.md) · done (f7c46702)
 - **R243** · fixtures/README.md's hand-computed sandbox-app verdict table lists 16 mutant sites; the fixture has 19 on both backends · [R243.md](docs/roadmap/R243.md) · done (409fc467)
 - **R255** · The al-runner warning `lethal run` prints still says al-runner reports `pass` for an `asserterror` that raised no error, a v1 finding fixed in v2 · [R255.md](docs/roadmap/R255.md) · done (cba033cc)
-- **R257** · The EMEA runbook's explain rank and executionProven claims were measured on a pre-GH-24 report and need a new one · [R257.md](docs/roadmap/R257.md) · open
+- **R257** · The EMEA runbook's explain rank and executionProven claims were measured on a pre-GH-24 report and need a new one · [R257.md](docs/roadmap/R257.md) · done (3f6d8b09)
 - **R263** · The TestPage baseline reply was lost in 6 of 7 Cronus28 smoke sessions but only 6 of 60 counted sessions on a fresh Cronus284; the cause of the difference is unknown · [R263.md](docs/roadmap/R263.md) · closed 2026-10-24 — unmeasurable (Cronus28 parked, Cronus284 not ours) and moot since R-236c refuses TestPage…
 - **R264** · Unit tests read the machine's REAL al-runner secondary cache, so `doctor-cli.test.ts`, `doctor-al-runner.test.ts` and `al-runner-cache.test.ts` time out once it grows (30 fail at 5 s on a 5.4 GB cache) · [R264.md](docs/roadmap/R264.md) · done (7e27b0b, a3d961f)
 - **R267** · Two stale al-runner claims outside the agent docs: the run-time warning still describes the v1 `asserterror` bug, and `fixtures/README.md` still quotes `itest:alrunner` at 3 / 16 / 0 · [R267.md](docs/roadmap/R267.md) · done (cba033cc)
@@ -814,12 +814,12 @@ that ordering is the priority.
 - **R774** · A repeatable v3 timing run (`scripts/v3-timing.ts`): the gift card and D1, with the per-phase table and the machine load beside every figure · [R774.md](docs/roadmap/R774.md) · done (6545a85a)
 - **R775** · `lethal run --backend al-runner-v3` never calls the backend's `close()`: no serve-entries counters, the serve daemon dies by process exit, and the coverage scratch stays · [R775.md](docs/roadmap/R775.md) · done (6545a85a)
 - **R776** · The v3 probe-cache key fingerprints the package folder by file mtime, so a fresh checkout or a copied .alpackages always misses once (about 10 s); a content hash costs about 0.1 s · [R776.md](docs/roadmap/R776.md) · done (1a6dc21b)
-- **R777** · The al-runner-v3 update gate infra-fails a good candidate when master adds a gate leg before `current` is re-gated · [R777.md](docs/roadmap/R777.md) · open, filed 2026-10-25 (coord task R-771)
+- **R777** · The al-runner-v3 update gate infra-fails a good candidate when master adds a gate leg before `current` is re-gated · [R777.md](docs/roadmap/R777.md) · done (9fa5dd5f)
 - **R781** · Parallel v3 (`--workers N`) cannot spread a project whose mutants sit in a few procedures: D1 at N = 4 started 3 daemons and ran 92 s against 93 s · [R781.md](docs/roadmap/R781.md) · closed 2026-10-25 — measured limit (orchestrator ruling): scopes stay whole; parallel pays on large projects…
 - **R780** · al-runner-v3: a cross-session cache of the test-app alc compile (5.1 s per deploy measured on the D1 slice) · [R780.md](docs/roadmap/R780.md) · done (496d1360)
 - **R782** · With #5798 fixed upstream (edge a157b2d34), serve-entries could read a dotted test method from the row's own codeunit/method fields and lift R722's refusal · [R782.md](docs/roadmap/R782.md) · done (0ef82e1d)
 - **R778** · al-runner-v3 serve-entries: one kill-pair request per kill is 82-85% of D1's mutant loop; batch the pairs · [R778.md](docs/roadmap/R778.md) · done (de183776)
-- **R783** · SPIKE: do LethAL's BC gates work on docker1 (192.168.2.77), the copy of bc1-bc3, before server1 goes off? · [R783.md](docs/roadmap/R783.md) · open, filed 2026-10-25 (coord task R-783, owner request)
+- **R783** · SPIKE: do LethAL's BC gates work on docker1 (192.168.2.77), the copy of bc1-bc3, before server1 goes off? · [R783.md](docs/roadmap/R783.md) · closed 2026-10-26 — the owner's ruling switched the BC servers to docker1…
 - **R785** · Parallel v3: start an extra lane only when the queued live work is long enough to pay for its warm-up · [R785.md](docs/roadmap/R785.md) · done (8a284c2a)
 - **R784** · The R-653 order probe as a gated update-gate leg (every pin), plus a non-transactional kind and a dependency-app SingleInstance · [R784.md](docs/roadmap/R784.md) · done (4730432c)
 - **R786** · PRIORITY: a default v3 run (serve-entries by default, R761) FAILS at the warm-up when a test is one R612 refuses, where the same run on one-shot completes · [R786.md](docs/roadmap/R786.md) · done (07f89eb3)
@@ -827,9 +827,11 @@ that ordering is the priority.
 - **R788** · The v3 gate's big legs (D1, D1c, T) run serve-entries, so a gate run takes minutes, not half an hour · [R788.md](docs/roadmap/R788.md) · done (5841b90a)
 - **R789** · The v3 gate's `timeout-is-cpu` fact reads `diverged` on a correct build when other jobs load core 0 · [R789.md](docs/roadmap/R789.md) · done (494082ea, 3ea559ca)
 - **R791** · al-runner edge a157b2d34 is not slower in LethAL's runs; a warm `al-runner test` spends ~4 s more in compile (upstream #5872) · [R791.md](docs/roadmap/R791.md) · done 2026-10-25 (coord task R-791): measured; upstream #5872 filed, waiting on upstream
-- **R792** · v3 "deferred proof" (Design A2): overlap the alc proof with the baseline and the mutant loop, journaling writes until alc joins · [R792.md](docs/roadmap/R792.md) · planned, build after the talk (Tue 27 Oct), after A1 (R790) lands (coord tasks R-793, R-794: taint rate 0/10)
+- **R792** · v3 "deferred proof" (Design A2): overlap the alc proof with the baseline and the mutant loop, journaling writes until alc joins · [R792.md](docs/roadmap/R792.md) · planned, BUILD after the talk (Tue 27 Oct); A1 (R790) is in; gates met: taint 0/10 (R-794), alc 31-34% of a…
 - **R796** · Upgrade tree-sitter-al from 4.4.1 to 4.5.0: fixes R720's and R327's swallowed members at the root; needs pins, 7 container classifications, 10 test re-pins and a pre-committed identity bump · [R796.md](docs/roadmap/R796.md) · planned, after the talk (Tue 27 Oct)
-- **R790** · v3: run the alc proof alongside the baseline and the mutant loop, and discard the results if alc rejects (the owner's Design A) · [R790.md](docs/roadmap/R790.md) · open, filed 2026-10-25 (coord task R-790, owner idea)
+- **R790** · v3: run the alc proof alongside the baseline and the mutant loop, and discard the results if alc rejects (the owner's Design A) · [R790.md](docs/roadmap/R790.md) · done (8c6a9fe8)
+- **R800** · v3: alc runs 1.5-2 s slower beside a concurrent al-runner call, even with free cores (memory bandwidth or cache contention, not CPU scheduling) · [R800.md](docs/roadmap/R800.md) · open, filed 2026-10-25 (coord task R-798)
+- **R798** · v3: where R790's extra 2-3 s in D1's deploy goes; ruling: speculative baseline is opt-in, no nice or reorder · [R798.md](docs/roadmap/R798.md) · done (b04d6427)
 
 ---
 
