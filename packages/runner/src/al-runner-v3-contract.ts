@@ -1331,8 +1331,8 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         (x.row?.durationMs ?? 0) > lateMs &&
         x.call_.cpuMs !== undefined &&
         x.call_.cpuMs < BURN_CPU_SHARE * x.call_.wallMs;
-      // R822: only that reading retries, on a core picked afresh. A wall-time build stops on time, so
-      // it never gets here, and no `diverged` path retries; B is judged as ever, against the last A.
+      // R822: only that reading retries, on a core picked afresh. No `diverged` path retries, and B is
+      // judged as ever, against the last A, so a retry cannot turn a wall-time build into `matches`.
       let tried = await runA();
       const earlier: string[] = [];
       while (earlier.length < BURN_TRIES - 1 && contended(tried)) {

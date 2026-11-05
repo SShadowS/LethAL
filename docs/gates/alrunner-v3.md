@@ -470,8 +470,8 @@ N > 1 must equal N = 1: R766's proof found D1 and the gift card identical at N =
   the least busy core (R789): alone it must be stopped, and beside seven busy loops it must ALSO be stopped, with a durationMs over
   3000 ms AND over twice A's (a CPU-time stop is late in wall time; a wall-time limit with slack stops both calls
   together). A late A with under 75% of the CPU means the core was busy (R789): since R822 the fact picks the least
-  busy core again and re-runs A, at most three runs of A in all, and reads `unmeasurable` only if all three were
-  contended. No other reading retries, and B never does. It takes about 20 s and loads a core, so only leg C measures it, and a session trusts the gated build's record instead of re-burning (M1). That trust is per v3
+  busy core again and re-runs A, at most three runs of A in all, and a contended A reads `unmeasurable` only if all three
+  were contended. No other reading retries, and B never does. It takes about 20 s (about a minute if A retries) and loads a core, so only leg C measures it, and a session trusts the gated build's record instead of re-burning (M1). That trust is per v3
   BUILD: a later LethAL change to how a call's timeout is sent (`v3CallArgv`, `stopSecondsOf`) is not covered by
   the old record and needs `bun scripts/al-runner-v3-update.ts --regate <commit>`.
 - `.gated` names a commit on `lethal/r586`. The orchestrator merges with `--no-ff`, so that commit stays reachable

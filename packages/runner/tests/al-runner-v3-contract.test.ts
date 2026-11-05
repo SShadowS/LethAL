@@ -935,17 +935,25 @@ describe("R693 r14b: timeout-is-cpu runs one huge burn alone, then beside busy l
   });
 
   test("R822: B is judged against the last A, not the contended one", async () => {
-    const { f } = await run([stopped(16000, 2000), stopped(10000)], stopped(16000));
+    // B is over twice the contended A but not over twice the last one.
+    const { f } = await run([stopped(5000, 1000), stopped(10000)], stopped(16000));
     expect(f?.verdict).toBe("diverged");
   });
 
   test("R822: only a contended A retries: a wall-time build, a killed A and a late A with no CPU reading do not", async () => {
+    // Count every call: a retried A past the rig's list takes B's answer and is labelled call-B.
     const wall = await run(stopped(2005), stopped(2010));
     expect(wall.f?.verdict).toBe("diverged");
-    expect(wall.events.filter((e) => e === "call-A")).toHaveLength(1);
+    expect(wall.argvs).toHaveLength(2);
     const fullShare = await run(stopped(3500, 3450), stopped(3600));
     expect(fullShare.f?.verdict).toBe("diverged");
-    expect(fullShare.events.filter((e) => e === "call-A")).toHaveLength(1);
+    expect(fullShare.argvs).toHaveLength(2);
+    // On time with a low share of the CPU: a wall-time build on a loaded core.
+    const onTimeLoaded = await run(stopped(2005, 500), stopped(2010));
+    expect(onTimeLoaded.f?.verdict).toBe("diverged");
+    expect(onTimeLoaded.argvs).toHaveLength(2);
+    const atTheLine = await run(stopped(3000, 100), stopped(16000));
+    expect(atTheLine.argvs).toHaveLength(2);
     const killed = await run("hang", stopped(16000));
     expect(killed.f?.verdict).toBe("diverged");
     expect(killed.events).toEqual(["call-A"]);
