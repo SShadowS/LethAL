@@ -713,18 +713,17 @@ export function classifyXb(
 }
 
 /**
- * R586c (M5): a record request on a pinned or candidate build is refused by name, for every leg
- * that records. A baseline is recorded from the build `current` is gated on, never from a build
- * the pin or the candidate flag stands in for. `requested` is the selected legs' baseline paths
+ * R586c (M5): a record request on a candidate build is refused by name, for every leg that
+ * records. R810: a pinned build is no longer refused here; it may write only the rows already
+ * committed (`assertGateBaseline`'s pinned path). `requested` is the selected legs' baseline paths
  * whose record variable is set.
  */
 export function recordRefusal(
-  pinned: boolean,
   candidate: boolean,
   requested: readonly string[],
 ): string | undefined {
-  if ((!pinned && !candidate) || requested.length === 0) return undefined;
-  return `al-runner-v3-itest-record-refused: a record run refuses a ${pinned ? "pinned" : "candidate"} build (${requested.join(", ")}): record from the build current is gated on`;
+  if (!candidate || requested.length === 0) return undefined;
+  return `al-runner-v3-itest-record-refused: a record run refuses a candidate build (${requested.join(", ")}): record from the build current is gated on`;
 }
 
 /**

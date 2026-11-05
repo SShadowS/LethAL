@@ -847,7 +847,7 @@ that ordering is the priority.
 - **R806** · The BC on Linux host moves back to server1: the default, and proving the gates there · [R806.md](docs/roadmap/R806.md) · closed 2026-11-05 — the default moved to server1 (R-806), and every gate is proven there on bc1-bc3 (R-813)
 - **R807** · One run seed (ALRUNNER_SEED=1) for every al-runner process, a read-back guard, O1's seed sub-check, and the alpha.12 pin · [R807.md](docs/roadmap/R807.md) · done (b94f31a8)
 - **R808** · v3 serve keep rule: the http entry misses alpha.7's text, and serve-keep-reasons reads diverged from edge 8078bcf49 on · [R808.md](docs/roadmap/R808.md) · done (ac4c2be8)
-- **R810** · Re-record the 12 gate baselines still at identity scheme 42, after R796 raised it to 43 · [R810.md](docs/roadmap/R810.md) · open, filed 2026-11-05 (coord task R-796c)
+- **R810** · Re-record the 12 gate baselines still at identity scheme 42, after R796 raised it to 43 · [R810.md](docs/roadmap/R810.md) · open: the record rule is built (coord task R-824); the 12 records wait for R-818's scheme 44
 - **R813** · Plan: which al-runner to gate. Track edge, build from main, or keep numbered releases? (the owner's question) · [R813.md](docs/roadmap/R813.md) · closed 2026-11-05 — the owner ruled: `current` always follows edge; users install gated numbered releases…
 - **R815** · A mutant that makes a test codeunit's OnRun fail stops a one-shot session (exit 6 reads as "selected no test") · [R815.md](docs/roadmap/R815.md) · done (369451d1)
 - **R816** · `current` follows edge: pin edge d72d3197d (alpha.13+edge) on alpha.12's readings, and run the daily update from a lane's timer · [R816.md](docs/roadmap/R816.md) · done (c5264ee7)
