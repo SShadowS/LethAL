@@ -1,16 +1,18 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import {
   BaselineRecordedError,
   GATE_BASELINES,
+  PinnedRecordRefusedError,
   RECORD_BASELINE_ENV,
   assertGateBaseline,
   assertMatchesBaseline,
+  gitShowHead,
   parseStageBaseline,
   preflightFrozenBaseline,
   preflightGateBaseline,
@@ -18,7 +20,7 @@ import {
   readGateBaseline,
   recordRequested,
 } from "../itest/baseline-guard";
-import { mutatedTextSha256 } from "../itest/mutant-equality";
+import { type NormalizedMutant, mutatedTextSha256 } from "../itest/mutant-equality";
 import { REDACTION_MARKER } from "../src/explain";
 import type { MutantOutcome, SessionReport } from "../src/report";
 import { removeScratchDir } from "./helpers/scratch";
@@ -658,5 +660,169 @@ describe("R355: stage baselines, list form and moded form", () => {
     expect(() =>
       parseStageBaseline(JSON.stringify({ identityScheme: 37, entries: rows }), "p.json", "r"),
     ).toThrow(/p\.json is neither/);
+  });
+});
+
+describe("R810: gitShowHead", () => {
+  const real = join(import.meta.dir, "..", "itest", "bcdev.baseline.json");
+  test("a file committed at HEAD returns its bytes", () => {
+    const text = gitShowHead(real);
+    expect(typeof text).toBe("string");
+    expect(JSON.parse(text ?? "").entries.length).toBeGreaterThan(0);
+  });
+  test("a path not at HEAD is undefined", () => {
+    expect(gitShowHead(join(import.meta.dir, "..", "itest", "no-such-file.baseline.json"))).toBe(
+      undefined,
+    );
+  });
+  test("a git failure (not a repository) throws and is not read as a missing file", () => {
+    expect(() => gitShowHead(join(dir, "x.baseline.json"))).toThrow(/git show .* failed/);
+  });
+});
+
+describe("R810: a record on a pinned build writes only the rows already committed", () => {
+  const NAME = "al-runner-v3.layout.baseline.json";
+  const arm: NodeJS.ProcessEnv = { [RECORD_BASELINE_ENV]: NAME };
+  const mutants = (verdictOfB: "survived" | "killed" = "survived") =>
+    report([
+      outcome({ mutantCode: "M0001", astHash: "hash-A", verdict: "killed", killingTest: "T1" }),
+      outcome({ mutantCode: "M0002", astHash: "hash-B", verdict: verdictOfB }),
+      outcome({ mutantCode: "M0003", astHash: "hash-C", verdict: "survived" }),
+    ]);
+  /** The committed file as HEAD holds it: the same rows at an older scheme. */
+  async function committed(): Promise<{ raw: string; entries: Record<string, unknown>[] }> {
+    const ref = join(dir, "ref", NAME);
+    await mkdir(join(dir, "ref"));
+    await assertGateBaseline(mutants(), ref, "ref", arm).catch((e: unknown) => {
+      if (!(e instanceof BaselineRecordedError)) throw e;
+    });
+    const parsed = JSON.parse(await readFile(ref, "utf8"));
+    parsed.identityScheme = IDENTITY_SCHEME - 1;
+    return { raw: JSON.stringify(parsed, null, 2), entries: parsed.entries };
+  }
+  const head = (raw: string | undefined, calls: { n: number } = { n: 0 }) => ({
+    readCommitted: () => {
+      calls.n++;
+      return raw;
+    },
+  });
+  const refused = async (run: Promise<void>, text: RegExp) => {
+    const err = await run.catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(PinnedRecordRefusedError);
+    expect(err).not.toBeInstanceOf(BaselineRecordedError);
+    expect((err as Error).message).toMatch(text);
+    expect(existsSync(join(dir, NAME))).toBe(false);
+  };
+
+  test("equal rows: written at the current scheme, then BaselineRecordedError", async () => {
+    const { raw, entries } = await committed();
+    const p = join(dir, NAME);
+    const err = await assertGateBaseline(mutants(), p, "t", arm, head(raw)).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(BaselineRecordedError);
+    expect(JSON.parse(await readFile(p, "utf8"))).toEqual({
+      identityScheme: IDENTITY_SCHEME,
+      entries,
+    });
+  });
+
+  test("a moved row is refused, naming the key and field and the count", async () => {
+    const { raw } = await committed();
+    await refused(
+      assertGateBaseline(mutants("killed"), join(dir, NAME), "t", arm, head(raw)),
+      /1 row\(s\) differ, first row 1 \(hash-B\|[^)]*\), field verdict: committed "survived", run "killed"/,
+    );
+  });
+
+  test("a changed order is refused even when every verdict is equal", async () => {
+    const { entries } = await committed();
+    const swapped = { identityScheme: IDENTITY_SCHEME - 1, entries: [...entries].reverse() };
+    await refused(
+      assertGateBaseline(mutants(), join(dir, NAME), "t", arm, head(JSON.stringify(swapped))),
+      /2 row\(s\) differ, first row 0 \(hash-C\|[^)]*\), field key/,
+    );
+  });
+
+  test("a different row count is refused", async () => {
+    const { entries } = await committed();
+    const short = { identityScheme: IDENTITY_SCHEME - 1, entries: entries.slice(0, 2) };
+    await refused(
+      assertGateBaseline(mutants(), join(dir, NAME), "t", arm, head(JSON.stringify(short))),
+      /1 row\(s\) differ, first row count 2 committed, 3 in this run/,
+    );
+  });
+
+  test("a changed field order inside a row is refused", async () => {
+    const { entries } = await committed();
+    const flipped = entries.map((e) => Object.fromEntries(Object.entries(e).reverse()));
+    await refused(
+      assertGateBaseline(
+        mutants(),
+        join(dir, NAME),
+        "t",
+        arm,
+        head(JSON.stringify({ identityScheme: 1, entries: flipped })),
+      ),
+      /3 row\(s\) differ, first row 0 .*field /,
+    );
+  });
+
+  test("no file at HEAD is refused by name", async () => {
+    await refused(
+      assertGateBaseline(mutants(), join(dir, NAME), "t", arm, head(undefined)),
+      /no committed file at HEAD/,
+    );
+  });
+
+  test("undo: runs before the compare; a row not reading the pin is refused", async () => {
+    const { raw } = await committed();
+    // The run reads B killed (the pin); undo puts it back to survived, which is the committed row.
+    const undo = (rows: NormalizedMutant[]) =>
+      rows.map((r) => (r.key.startsWith("hash-B") ? { ...r, verdict: "survived" } : r));
+    const p = join(dir, NAME);
+    const ok = await assertGateBaseline(mutants("killed"), p, "t", arm, {
+      ...head(raw),
+      undo,
+    }).catch((e: unknown) => e);
+    expect(ok).toBeInstanceOf(BaselineRecordedError);
+    const written = JSON.parse(await readFile(p, "utf8"));
+    expect(written.entries[1].verdict).toBe("survived");
+    await rm(p);
+    await refused(
+      assertGateBaseline(mutants("killed"), p, "t", arm, { ...head(raw), undo: () => undefined }),
+      /a pinned key is absent, repeated, or does not read the pin/,
+    );
+  });
+
+  test("an undo that leaves a verdict moved is still refused by the compare", async () => {
+    const { raw } = await committed();
+    await refused(
+      assertGateBaseline(mutants("killed"), join(dir, NAME), "t", arm, {
+        ...head(raw),
+        undo: (rows) => rows,
+      }),
+      /field verdict/,
+    );
+  });
+
+  test("record off: the pinned source is never read", async () => {
+    const { raw } = await committed();
+    const calls = { n: 0 };
+    const p = join(dir, NAME);
+    await writeFile(p, "sentinel\n", "utf8");
+    await assertGateBaseline(mutants(), p, "t", {}, head(raw, calls)).catch(() => undefined);
+    expect(calls.n).toBe(0);
+  });
+
+  test("an unpinned record is unchanged and the module calls git only in gitShowHead", async () => {
+    const p = join(dir, NAME);
+    const err = await assertGateBaseline(mutants(), p, "t", arm).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(BaselineRecordedError);
+    expect(JSON.parse(await readFile(p, "utf8")).identityScheme).toBe(IDENTITY_SCHEME);
+    const src = await readFile(new URL("../itest/baseline-guard.ts", import.meta.url), "utf8");
+    expect(src.match(/execFileSync\(/g)?.length).toBe(1);
+    const fn = src.indexOf("export function gitShowHead");
+    expect(src.indexOf("execFileSync(")).toBeGreaterThan(fn);
   });
 });

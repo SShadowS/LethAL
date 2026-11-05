@@ -18,12 +18,14 @@ import { type NormalizedMutant, compareMutants } from "../itest/mutant-equality"
 import { BC_END_OF_TEST_TEXT, BC_HTTP_HUB_TEXT } from "../src/al-runner-v3-contract";
 import type { V3ContractResult } from "../src/al-runner-v3-contract";
 import {
+  type V3BuildPin,
   V3_BUILD_PINS,
   applyTPin,
   findV3Pin,
   pinPattern,
   serveRowFieldsFor,
   sleepRuleRetiredFor,
+  undoTPin,
 } from "../src/al-runner-v3-pins";
 
 const VERSION = "al-runner 3.0.0-alpha.5 (07342060e)";
@@ -501,7 +503,7 @@ describe("R586c itest wiring", () => {
     expect(ITEST).toContain("activePin?.xb");
     expect(ITEST).toContain("activePin?.legT");
     expect(ITEST).toMatch(
-      /if \(!t\.pinned\) \{\s*try \{\s*await assertGateBaseline\(t\.r, TABLES_BASELINE_PATH/,
+      /if \(!t\.pinned\) \{\s*try \{\s*await assertGateBaseline\(\s*t\.r,\s*TABLES_BASELINE_PATH/,
     );
     const call = ITEST.indexOf("recordRefusal(");
     expect(call).toBeGreaterThan(0);
@@ -1022,18 +1024,84 @@ describe("edge-8078bcf49: every pinned defect gone, 48 known differences at BC's
   });
 });
 
-describe("R586c M5: a record request on a pinned or candidate build is refused", () => {
-  test("a pinned build refuses a request for any leg's baseline", () => {
-    expect(recordRefusal(true, false, ["al-runner-v3.layout.baseline.json"])).toMatch(
-      /^al-runner-v3-itest-record-refused: .*refuses/,
+describe("R586c M5 / R810: a record request on a candidate build is refused", () => {
+  test("a candidate build refuses a request for any leg's baseline", () => {
+    expect(recordRefusal(true, ["al-runner-v3.layout.baseline.json"])).toMatch(
+      /^al-runner-v3-itest-record-refused: .*refuses a candidate build/,
     );
+    expect(recordRefusal(true, ["al-runner-v3.tables.baseline.json"])).toMatch(/refuses/);
   });
-  test("a candidate build refuses it too", () => {
-    expect(recordRefusal(false, true, ["al-runner-v3.tables.baseline.json"])).toMatch(/refuses/);
+  test("a gated build (pinned or not) and an empty request are not refused here", () => {
+    expect(recordRefusal(false, ["anything"])).toBeUndefined();
+    expect(recordRefusal(true, [])).toBeUndefined();
   });
-  test("an unpinned gated build and an empty request are not refused", () => {
-    expect(recordRefusal(false, false, ["anything"])).toBeUndefined();
-    expect(recordRefusal(true, false, [])).toBeUndefined();
-    expect(recordRefusal(true, true, [])).toBeUndefined();
+});
+
+describe("R810: undoTPin on the real committed tables baseline", () => {
+  test("for every pin, undoTPin(applyTPin(rows)) equals the committed rows", () => {
+    const committed = JSON.parse(
+      readFileSync(
+        join(import.meta.dir, "..", "itest", "al-runner-v3.tables.baseline.json"),
+        "utf8",
+      ),
+    ) as { entries: NormalizedMutant[] };
+    expect(V3_BUILD_PINS.length).toBeGreaterThan(0);
+    for (const p of V3_BUILD_PINS) {
+      const pinned = need(applyTPin(committed.entries, p.legT));
+      expect(pinned).not.toEqual(committed.entries);
+      expect(undoTPin(pinned, p.legT), p.id).toEqual(committed.entries);
+    }
+  });
+});
+
+describe("R810: undoTPin is the inverse of applyTPin", () => {
+  const mk = (from?: { verdict: string; errorClass: string | null; killingTest: string | null }) =>
+    ({
+      rows: [
+        {
+          key: "k1",
+          ...(from !== undefined ? { from } : {}),
+          verdict: "killed" as const,
+          errorClass: null,
+          killingTest: "T.One",
+          issue: "x",
+        },
+      ],
+      counts: { killed: 0, survived: 0, noCoverage: 0 },
+      total: 0,
+    }) satisfies V3BuildPin["legT"];
+  const row = (key: string, verdict: string, killingTest: string | null) => ({
+    key,
+    verdict,
+    killingTest,
+    errorClass: null,
+    coverageFiltered: verdict === "no-coverage",
+  });
+  test("round trip: undo(apply(rows)) equals rows, for the default and for a no-coverage from", () => {
+    const def = mk();
+    const own = [row("k0", "survived", null), row("k1", "survived", null)];
+    expect(undoTPin(need(applyTPin(own, def)), def)).toEqual(own);
+    const nc = mk({ verdict: "no-coverage", errorClass: null, killingTest: null });
+    const own2 = [row("k1", "no-coverage", null), row("k2", "killed", "T.Two")];
+    const pinned = need(applyTPin(own2, nc));
+    expect(pinned[0]?.coverageFiltered).toBe(false);
+    const back = need(undoTPin(pinned, nc));
+    expect(back).toEqual(own2);
+    expect(back[0]?.coverageFiltered).toBe(true);
+  });
+  test("a pinned key that does not read the pin is refused (verdict, killingTest, errorClass)", () => {
+    const t = mk();
+    expect(undoTPin([row("k1", "survived", null)], t)).toBeUndefined();
+    // Each field alone, the other two reading the pin.
+    expect(undoTPin([row("k1", "survived", "T.One")], t)).toBeUndefined();
+    expect(undoTPin([row("k1", "killed", "T.Other")], t)).toBeUndefined();
+    expect(undoTPin([{ ...row("k1", "killed", "T.One"), errorClass: "e" }], t)).toBeUndefined();
+    expect(undoTPin([row("k1", "killed", "T.One")], t)?.[0]?.verdict).toBe("survived");
+  });
+  test("a pinned key that is absent or repeated is refused", () => {
+    const t = mk();
+    expect(undoTPin([row("k0", "survived", null)], t)).toBeUndefined();
+    const k1 = row("k1", "killed", "T.One");
+    expect(undoTPin([k1, k1], t)).toBeUndefined();
   });
 });

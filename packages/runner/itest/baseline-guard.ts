@@ -18,9 +18,10 @@
  * (`wx`), so nothing is ever overwritten; a record run always fails, with exit 3 in the gate.
  * `assertMatchesBaseline` still records an absent file, which is `campaign freeze`'s job alone.
  */
+import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
-import { basename } from "node:path";
+import { basename, dirname } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import type { CoverageMode } from "../src/backend";
 import type { SessionReport } from "../src/report";
@@ -538,12 +539,117 @@ async function compareWithCommitted(
   if (identity !== undefined) console.log(identity);
 }
 
-/** R332: compare, or (record mode naming this file) write once and throw BaselineRecordedError. */
+/**
+ * R810: a record on a pinned build. `readCommitted` returns the file as committed at HEAD (the
+ * working copy is deleted before a record), or undefined when HEAD has none. `undo` takes the run's
+ * rows back out of the pin (leg T only); undefined from it means the rows do not read the pin.
+ * Only an itest running under an active pin passes this; without it nothing here is reachable.
+ */
+export interface PinnedRecord {
+  readonly readCommitted: (baselinePath: string) => string | undefined;
+  readonly undo?: (rows: NormalizedMutant[]) => NormalizedMutant[] | undefined;
+}
+
+/** R810: a pinned record refused. Not a BaselineRecordedError: it is a failure, nothing was written. */
+export class PinnedRecordRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PinnedRecordRefusedError";
+  }
+}
+
+/**
+ * R810: `git show HEAD:<file>` for a committed baseline. Undefined when HEAD has no such file; any
+ * other git failure (no repository, no HEAD) throws, so it is not mistaken for a missing file.
+ */
+export function gitShowHead(baselinePath: string): string | undefined {
+  try {
+    return execFileSync(
+      "git",
+      ["-C", dirname(baselinePath), "show", `HEAD:./${basename(baselinePath)}`],
+      {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        maxBuffer: 256 * 1024 * 1024,
+      },
+    );
+  } catch (err) {
+    const stderr = String((err as { stderr?: unknown }).stderr ?? "");
+    if (/does not exist in|exists on disk, but not in/.test(stderr)) return undefined;
+    throw new Error(
+      `git show HEAD:./${basename(baselinePath)} failed: ${stderr.trim() || String(err)}`,
+    );
+  }
+}
+
+/**
+ * R810: the rows a pinned record may write are the committed rows, exactly: every field of every
+ * row, in order. Returns the refusal text, or undefined when they are equal.
+ */
+export function pinnedRowsDifference(
+  committed: readonly NormalizedMutant[],
+  rows: readonly NormalizedMutant[],
+): string | undefined {
+  const disk = (r: NormalizedMutant) => JSON.parse(JSON.stringify(r)) as Record<string, unknown>;
+  let differing = Math.abs(committed.length - rows.length);
+  let first: string | undefined;
+  if (differing > 0) first = `row count ${committed.length} committed, ${rows.length} in this run`;
+  for (let i = 0; i < Math.min(committed.length, rows.length); i++) {
+    const c = disk(committed[i] as NormalizedMutant);
+    const a = disk(rows[i] as NormalizedMutant);
+    if (JSON.stringify(c) === JSON.stringify(a)) continue;
+    differing++;
+    if (first !== undefined) continue;
+    const ck = Object.keys(c);
+    const ak = Object.keys(a);
+    const field =
+      [...new Set([...ck, ...ak])].find((k) => JSON.stringify(c[k]) !== JSON.stringify(a[k])) ??
+      "field order";
+    first = `row ${i} (${String(c.key)}), field ${field}: committed ${JSON.stringify(c[field])}, run ${JSON.stringify(a[field])}`;
+  }
+  if (differing === 0) return undefined;
+  return `${differing} row(s) differ, first ${first ?? "?"}`;
+}
+
+async function pinnedRecordRows(
+  actual: NormalizedMutant[],
+  baselinePath: string,
+  label: string,
+  pinned: PinnedRecord,
+): Promise<NormalizedMutant[]> {
+  const refuse = (why: string) =>
+    withStack(
+      new PinnedRecordRefusedError(
+        `${label}: a record on a pinned build may write only the rows already committed; ${why}. Nothing was written.`,
+      ),
+    );
+  const raw = pinned.readCommitted(baselinePath);
+  if (raw === undefined) throw refuse(`no committed file at HEAD for ${baselinePath}`);
+  const committed = parseGateBaseline(
+    raw,
+    baselinePath,
+    "A pinned record needs a valid file at HEAD.",
+  );
+  const rows = pinned.undo === undefined ? actual : pinned.undo(actual);
+  if (rows === undefined) {
+    throw refuse("a pinned key is absent, repeated, or does not read the pin");
+  }
+  const why = pinnedRowsDifference(committed.entries, rows);
+  if (why !== undefined) throw refuse(why);
+  return rows;
+}
+
+/**
+ * R332: compare, or (record mode naming this file) write once and throw BaselineRecordedError.
+ * R810: with `pinned` (an active build pin), the record first proves the rows equal the committed
+ * ones. Without it the record is unchanged and never calls git.
+ */
 export async function assertGateBaseline(
   report: SessionReport,
   baselinePath: string,
   label: string,
   env: NodeJS.ProcessEnv = process.env,
+  pinned?: PinnedRecord,
 ): Promise<void> {
   recordHowFor(baselinePath);
   const actual = sortedForDisk(normalizeForComparison(report));
@@ -551,7 +657,9 @@ export async function assertGateBaseline(
     await compareWithCommitted(actual, baselinePath, label);
     return;
   }
-  await writeBaselineOnce(actual, baselinePath, label);
+  const toWrite =
+    pinned === undefined ? actual : await pinnedRecordRows(actual, baselinePath, label, pinned);
+  await writeBaselineOnce(toWrite, baselinePath, label);
   throw new BaselineRecordedError(
     `${label}: RECORDED ${baselinePath}; NOT a pass. Review it against the pre-commitment, re-run without ${RECORD_BASELINE_ENV} to confirm it passes, then commit it.`,
   );
