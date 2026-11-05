@@ -13,6 +13,9 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **A test codeunit whose OnRun fails no longer reads as "selected no test" on one-shot v3** (R815). A mutant that makes
+  OnRun fail reads `error`, and the session goes on. On the unmutated build the run stops with
+  `al-runner-v3-codeunit-ran-no-test`, naming OnRun. A real selection miss reads as before.
 - **LethAL's own al-runner follows edge; users install a listed release** (R813, R814). The daily update gate has two
   tracks: `edge` moves `current`, only forward, and a numbered release only joins a gate manifest that ships with LethAL.
   A build whose readings equal `current`'s committed pin passes with no person, as a row that names that pin and holds no
