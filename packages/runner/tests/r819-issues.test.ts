@@ -3,15 +3,16 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { assertBcVersionMatchesPackages } from "../src/al-runner-v3-config";
-import { parseCliConfig } from "../src/cli";
+import type { ExecutionBackend } from "../src/backend";
+import { type RunCliConfig, parseCliConfig, runFromCli } from "../src/cli";
 import {
   type MicrosoftMode,
   dependencyFingerprint,
   packageFolderReader,
 } from "../src/digest-inputs";
-import { BASELINE_TIMEOUT_DEFAULT } from "../src/orchestrator";
+import { BASELINE_TIMEOUT_DEFAULT, type SessionConfig } from "../src/orchestrator";
 import { symbolPackageIdentity, unwrapSymbolPackage } from "../src/published-test-app";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
 
@@ -89,11 +90,15 @@ describe("#47: a Ready-to-Run wrapper's identity", () => {
     expect(String(err)).toContain("Ready-to-Run");
   });
 
-  test("no System Application at all reads as before", async () => {
-    const d = await folder({ "Other.app": plain(SYSTEM_APP, "Base Application", "29.0.0.0") });
+  test("no System Application at all reads as before, and a package that is no wrapper is not listed", async () => {
+    const d = await folder({
+      "Other.app": plain(SYSTEM_APP, "Base Application", "29.0.0.0"),
+      "Garbage.app": Buffer.from("not a package"),
+    });
     const err = await assertBcVersionMatchesPackages(d, "29.0.0.0").catch((e: unknown) => e);
     expect(String(err)).toContain("al-runner-v3-system-application-not-found");
     expect(String(err)).not.toContain("Ready-to-Run");
+    expect(String(err)).not.toContain("Unreadable:");
   });
 
   test("the package folder finds a dependency held as a wrapper, and hashes the file's own bytes", async () => {
@@ -140,7 +145,59 @@ describe("#46: the flag the report names", () => {
   });
 
   test("--dry-run refuses it: a dry run runs no baseline", () => {
-    expect(() => parsed("--dry-run", "--baseline-timeout-ms", "300000")).toThrow(/--dry-run/);
+    // No --tests here: that has its own --dry-run refusal, which would pass this for the wrong reason.
+    const argv = ["run", "--project", "p", "--backend", "bcdev", "--dry-run"];
+    expect(() => parseCliConfig(argv)).not.toThrow();
+    expect(() => parseCliConfig([...argv, "--baseline-timeout-ms", "300000"])).toThrow(
+      "--baseline-timeout-ms has no effect with --dry-run",
+    );
+  });
+
+  test("the value reaches the session: a flag that parses and does nothing would be #46 again", async () => {
+    const dir = await folder({
+      "app.json": Buffer.from(
+        JSON.stringify({
+          id: "0f2b7c5e-4d3a-4917-8a1c-3b4a8d9f1027",
+          name: "Fixture",
+          publisher: "LethAL",
+          version: "1.0.0.0",
+          idRanges: [{ from: 79000, to: 79199 }],
+        }),
+      ),
+      "lethal.config.json": Buffer.from("{}"),
+    });
+    const run = async (extra: { baselineTimeoutMs?: number }) => {
+      const cfg: RunCliConfig = {
+        mode: "run",
+        projectDir: dir,
+        testDir: join(dir, "tests"),
+        backendKind: "al-runner-v3",
+        dbPath: ":memory:",
+        configPath: join(dir, "lethal.config.json"),
+        skipKnownSurvivors: false,
+        workers: 1,
+        keepEnv: false,
+        allowExpiringEnv: false,
+        ...extra,
+      };
+      let captured: SessionConfig | undefined;
+      const stop = new Error("captured");
+      await expect(
+        runFromCli(cfg, {
+          validateSelectorIdsForProject: async () => {},
+          buildBackend: async () => ({}) as ExecutionBackend,
+          runSession: async (c) => {
+            captured = c;
+            // A failed run keeps its scratch folder, on purpose: this one is the test's to remove.
+            dirs.push(dirname(c.instrumentedDir));
+            throw stop;
+          },
+        }),
+      ).rejects.toBe(stop);
+      return captured;
+    };
+    expect((await run({ baselineTimeoutMs: 300_000 }))?.baselineTimeoutMs).toBe(300_000);
+    expect("baselineTimeoutMs" in ((await run({})) ?? {})).toBe(false);
   });
 
   test("every flag a report tells a user to raise really parses", async () => {

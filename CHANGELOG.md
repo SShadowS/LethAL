@@ -13,6 +13,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **`--baseline-timeout-ms` is a real flag now** (R821, GitHub #46). The reports have told users to raise it since R658, but
+  `run` refused it. Default 120000; refused with `--dry-run`.
+- **BC 29 Ready-to-Run wrappers are read as the apps they hold** (R820, GitHub #47). System Application, Base Application
+  and Business Foundation from a BC 29 dev endpoint no longer read as missing or unreadable, in the v3 version check and in
+  the dependency digest. A wrapper that does not fit the exact shape still refuses. Synthetic wrappers only: not run on a
+  real BC 29 package.
 - **A test codeunit whose OnRun fails no longer reads as "selected no test" on one-shot v3** (R815). A mutant that makes
   OnRun fail reads `error`, and the session goes on. On the unmutated build the run stops with
   `al-runner-v3-codeunit-ran-no-test`, naming OnRun. A real selection miss reads as before.

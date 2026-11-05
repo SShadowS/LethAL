@@ -45,12 +45,7 @@ import { join } from "node:path";
 import { readPackageEntry } from "./app-package";
 import { type PackageUnread, type PublishedPackageRead, isUnread } from "./backend";
 import { CONTROL_APP_ID, UnfilteredExtensionsQueryError } from "./harness";
-import {
-  type readAppIdentity,
-  symbolPackageId,
-  symbolPackageIdentity,
-  unwrapSymbolPackage,
-} from "./published-test-app";
+import { readAppIdentity, symbolPackageId, unwrapSymbolPackage } from "./published-test-app";
 
 export interface AppDependency {
   /** Lowercase GUID. */
@@ -290,8 +285,9 @@ function openPackage(
   const buf = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   try {
     // R820: a Ready-to-Run wrapper reads as its embedded app. The caller still hashes the file's bytes.
-    const identity = symbolPackageIdentity(buf);
-    const manifest = readPackageEntry(unwrapSymbolPackage(buf), "NavxManifest.xml");
+    const app = unwrapSymbolPackage(buf);
+    const identity = readAppIdentity(app);
+    const manifest = readPackageEntry(app, "NavxManifest.xml");
     if (manifest === null) throw new Error("no NavxManifest.xml");
     return { bytes, identity, manifest: manifest.toString("utf8") };
   } catch (err) {

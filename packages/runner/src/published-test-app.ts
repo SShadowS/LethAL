@@ -175,7 +175,7 @@ export function unwrapSymbolPackage(bytes: Buffer): Buffer {
   if (r2r === null || readPackageEntry(bytes, MANIFEST_ENTRY) !== null) return bytes;
   let embeddedId: unknown;
   try {
-    const parsed = JSON.parse(r2r.toString("utf8").replace(/^﻿/, "")) as {
+    const parsed = JSON.parse(r2r.toString("utf8").replace(/^\u{FEFF}/u, "")) as {
       EmbeddedAppId?: unknown;
     } | null;
     embeddedId = parsed?.EmbeddedAppId;

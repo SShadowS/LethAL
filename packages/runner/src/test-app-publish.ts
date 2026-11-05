@@ -1,7 +1,6 @@
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { listPackageEntries, readPackageEntry } from "./app-package";
 import { compareAppVersions, confirmedDowngradeRefusal } from "./app-version";
 import type { PublishIdentity } from "./app-version";
 import { AlcCompileError, type ArtifactCompiler } from "./artifact";
