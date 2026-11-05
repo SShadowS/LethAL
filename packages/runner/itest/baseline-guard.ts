@@ -540,7 +540,7 @@ async function compareWithCommitted(
 }
 
 /**
- * R824: a record on a pinned build. `readCommitted` returns the file as committed at HEAD (the
+ * R810: a record on a pinned build. `readCommitted` returns the file as committed at HEAD (the
  * working copy is deleted before a record), or undefined when HEAD has none. `undo` takes the run's
  * rows back out of the pin (leg T only); undefined from it means the rows do not read the pin.
  * Only an itest running under an active pin passes this; without it nothing here is reachable.
@@ -550,7 +550,7 @@ export interface PinnedRecord {
   readonly undo?: (rows: NormalizedMutant[]) => NormalizedMutant[] | undefined;
 }
 
-/** R824: a pinned record refused. Not a BaselineRecordedError: it is a failure, nothing was written. */
+/** R810: a pinned record refused. Not a BaselineRecordedError: it is a failure, nothing was written. */
 export class PinnedRecordRefusedError extends Error {
   constructor(message: string) {
     super(message);
@@ -558,7 +558,10 @@ export class PinnedRecordRefusedError extends Error {
   }
 }
 
-/** R824: `git show HEAD:<file>` for a committed baseline, or undefined when HEAD has no such file. */
+/**
+ * R810: `git show HEAD:<file>` for a committed baseline. Undefined when HEAD has no such file; any
+ * other git failure (no repository, no HEAD) throws, so it is not mistaken for a missing file.
+ */
 export function gitShowHead(baselinePath: string): string | undefined {
   try {
     return execFileSync(
@@ -566,17 +569,21 @@ export function gitShowHead(baselinePath: string): string | undefined {
       ["-C", dirname(baselinePath), "show", `HEAD:./${basename(baselinePath)}`],
       {
         encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
+        stdio: ["ignore", "pipe", "pipe"],
         maxBuffer: 256 * 1024 * 1024,
       },
     );
-  } catch {
-    return undefined;
+  } catch (err) {
+    const stderr = String((err as { stderr?: unknown }).stderr ?? "");
+    if (/does not exist in|exists on disk, but not in/.test(stderr)) return undefined;
+    throw new Error(
+      `git show HEAD:./${basename(baselinePath)} failed: ${stderr.trim() || String(err)}`,
+    );
   }
 }
 
 /**
- * R824: the rows a pinned record may write are the committed rows, exactly: every field of every
+ * R810: the rows a pinned record may write are the committed rows, exactly: every field of every
  * row, in order. Returns the refusal text, or undefined when they are equal.
  */
 export function pinnedRowsDifference(
@@ -634,7 +641,7 @@ async function pinnedRecordRows(
 
 /**
  * R332: compare, or (record mode naming this file) write once and throw BaselineRecordedError.
- * R824: with `pinned` (an active build pin), the record first proves the rows equal the committed
+ * R810: with `pinned` (an active build pin), the record first proves the rows equal the committed
  * ones. Without it the record is unchanged and never calls git.
  */
 export async function assertGateBaseline(

@@ -1078,7 +1078,7 @@ export function applyTPin<T extends TRow>(
 }
 
 /**
- * R824: the inverse of `applyTPin`. A pinned run's rows go back to the pin's `from` rows (default
+ * R810: the inverse of `applyTPin`. A pinned run's rows go back to the pin's `from` rows (default
  * survived/null/null), with `coverageFiltered` following the restored verdict. `undefined` when a
  * pinned key is absent, repeated, or does not read the pin's verdict, errorClass and killingTest.
  */

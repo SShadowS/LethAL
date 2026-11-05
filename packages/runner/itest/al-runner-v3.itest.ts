@@ -228,7 +228,7 @@ const K_ON_CANDIDATE = v3KOnCandidate(process.env);
 /** R586c: the per-build pin of the binary under test, set in `main` once its version and sha are known. */
 let activePin: V3BuildPin | undefined;
 
-/** R824: a record on a pinned build proves its rows equal HEAD's; undefined (unchanged record) with no pin. */
+/** R810: a record on a pinned build proves its rows equal HEAD's; undefined (unchanged record) with no pin. */
 function pinnedRecord(undoT = false): PinnedRecord | undefined {
   const pin = activePin;
   if (pin === undefined) return undefined;
@@ -2104,7 +2104,9 @@ async function legD(scratch: string, leg: "D1" | "D1c"): Promise<void> {
 /**
  * r10 (a) (R647): leg T runs its session, prints, and throws; `judgeLegT` judges. Outside record
  * mode the rows are classified, compared and printed (each its own receipt line) BEFORE any check.
- * The record branch keeps the counts first: a baseline is recorded only from a run matching them.
+ * On an unpinned build the record branch keeps the counts first: a baseline is recorded only from a
+ * run matching them. On a pinned build (R810) it checks no figures here: `main` writes only rows
+ * equal to the committed file, with the pin undone.
  * `main` then runs `assertGateBaseline` on a `pass` (R332's wiring test reads that call in main).
  */
 async function legT(
@@ -2138,7 +2140,7 @@ async function legT(
       `  T: notes state ${tagged(r, V3_STATE_NOTE_TAG).length}, refused-nearby ${tagged(r, V3_REFUSED_NEARBY_TAG).length}, §6 ${tagged(r, SLEEP_NOTE_TAG).length} (recorded, not predicted)`,
     );
   if (recordRequested(TABLES_BASELINE_PATH)) {
-    // R824: a pinned record needs no figures; `main` proves the rows (pin undone) equal the committed ones.
+    // R810: a pinned record needs no figures; `main` proves the rows (pin undone) equal the committed ones.
     if (activePin !== undefined) return { outcome: "pass", r };
     assertCounts(r, "T", 290, 57, 59, 406);
     must(
@@ -2240,7 +2242,7 @@ async function main(): Promise<void> {
   activePin = PIN;
   if (PIN !== undefined)
     console.log(`al-runner-v3 itest: PIN ${PIN.id} applies (version and sha256 equal)`);
-  // M5: no leg records a baseline from a candidate build; a pinned build records only HEAD's rows (R824).
+  // M5: no leg records a baseline from a candidate build; a pinned build records only HEAD's rows (R810).
   const recordBaselines = new Map<string, string>([
     ["T", TABLES_BASELINE_PATH],
     ["L1", LAYOUT_BASELINE_PATH],

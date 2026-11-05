@@ -12,6 +12,7 @@ import {
   RECORD_BASELINE_ENV,
   assertGateBaseline,
   assertMatchesBaseline,
+  gitShowHead,
   parseStageBaseline,
   preflightFrozenBaseline,
   preflightGateBaseline,
@@ -662,7 +663,24 @@ describe("R355: stage baselines, list form and moded form", () => {
   });
 });
 
-describe("R824: a record on a pinned build writes only the rows already committed", () => {
+describe("R810: gitShowHead", () => {
+  const real = join(import.meta.dir, "..", "itest", "bcdev.baseline.json");
+  test("a file committed at HEAD returns its bytes", () => {
+    const text = gitShowHead(real);
+    expect(typeof text).toBe("string");
+    expect(JSON.parse(text ?? "").entries.length).toBeGreaterThan(0);
+  });
+  test("a path not at HEAD is undefined", () => {
+    expect(gitShowHead(join(import.meta.dir, "..", "itest", "no-such-file.baseline.json"))).toBe(
+      undefined,
+    );
+  });
+  test("a git failure (not a repository) throws and is not read as a missing file", () => {
+    expect(() => gitShowHead(join(dir, "x.baseline.json"))).toThrow(/git show .* failed/);
+  });
+});
+
+describe("R810: a record on a pinned build writes only the rows already committed", () => {
   const NAME = "al-runner-v3.layout.baseline.json";
   const arm: NodeJS.ProcessEnv = { [RECORD_BASELINE_ENV]: NAME };
   const mutants = (verdictOfB: "survived" | "killed" = "survived") =>

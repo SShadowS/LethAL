@@ -1024,7 +1024,7 @@ describe("edge-8078bcf49: every pinned defect gone, 48 known differences at BC's
   });
 });
 
-describe("R586c M5 / R824: a record request on a candidate build is refused", () => {
+describe("R586c M5 / R810: a record request on a candidate build is refused", () => {
   test("a candidate build refuses a request for any leg's baseline", () => {
     expect(recordRefusal(true, ["al-runner-v3.layout.baseline.json"])).toMatch(
       /^al-runner-v3-itest-record-refused: .*refuses a candidate build/,
@@ -1037,7 +1037,24 @@ describe("R586c M5 / R824: a record request on a candidate build is refused", ()
   });
 });
 
-describe("R824: undoTPin is the inverse of applyTPin", () => {
+describe("R810: undoTPin on the real committed tables baseline", () => {
+  test("for every pin, undoTPin(applyTPin(rows)) equals the committed rows", () => {
+    const committed = JSON.parse(
+      readFileSync(
+        join(import.meta.dir, "..", "itest", "al-runner-v3.tables.baseline.json"),
+        "utf8",
+      ),
+    ) as { entries: NormalizedMutant[] };
+    expect(V3_BUILD_PINS.length).toBeGreaterThan(0);
+    for (const p of V3_BUILD_PINS) {
+      const pinned = need(applyTPin(committed.entries, p.legT));
+      expect(pinned).not.toEqual(committed.entries);
+      expect(undoTPin(pinned, p.legT), p.id).toEqual(committed.entries);
+    }
+  });
+});
+
+describe("R810: undoTPin is the inverse of applyTPin", () => {
   const mk = (from?: { verdict: string; errorClass: string | null; killingTest: string | null }) =>
     ({
       rows: [

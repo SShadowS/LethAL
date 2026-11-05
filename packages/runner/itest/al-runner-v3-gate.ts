@@ -714,7 +714,7 @@ export function classifyXb(
 
 /**
  * R586c (M5): a record request on a candidate build is refused by name, for every leg that
- * records. R824: a pinned build is no longer refused here; it may write only the rows already
+ * records. R810: a pinned build is no longer refused here; it may write only the rows already
  * committed (`assertGateBaseline`'s pinned path). `requested` is the selected legs' baseline paths
  * whose record variable is set.
  */
