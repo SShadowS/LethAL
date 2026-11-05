@@ -62,7 +62,13 @@ import {
 } from "../src/al-runner-v3-backend";
 import { AL_RUNNER_V3_NOT_AUTHORITATIVE } from "../src/al-runner-v3-config";
 import { runV3ContractProbe, v3DefectWarnings } from "../src/al-runner-v3-contract";
-import { AL_RUNNER_V3_DEFAULT_PATH, sha256OfFile } from "../src/al-runner-v3-pin";
+import {
+  AL_RUNNER_V3_DEFAULT_PATH,
+  AlRunnerV3UngatedBuildError,
+  checkGated,
+  resolveV3Binary,
+  sha256OfFile,
+} from "../src/al-runner-v3-pin";
 import { type V3BuildPin, findV3Pin } from "../src/al-runner-v3-pins";
 import { FRESH_PROBE_ENV } from "../src/al-runner-v3-probe-cache";
 import {
@@ -212,7 +218,8 @@ const SYMBOLS_B_BASELINE_PATH = join(HERE, "al-runner-v3.symbols-lethalb.baselin
 // R602: legs MO (multi-object files) and WR (`#if`-wrapped files), each recorded once under R332.
 const MULTIOBJECT_BASELINE_PATH = join(HERE, "al-runner-v3.multiobject.baseline.json");
 const WRAPPED_BASELINE_PATH = join(HERE, "al-runner-v3.wrapped.baseline.json");
-const BIN = process.env.LETHAL_ALRUNNER_V3_PATH ?? AL_RUNNER_V3_DEFAULT_PATH;
+// R814: resolved once, so `current` moving during a gate cannot swap the binary under it.
+const BIN = resolveV3Binary(process.env.LETHAL_ALRUNNER_V3_PATH ?? AL_RUNNER_V3_DEFAULT_PATH);
 const CANDIDATE = process.env.LETHAL_ALRUNNER_V3_CANDIDATE === "1";
 /** R586c: run K on a candidate build too (the CLI-built backend gets the test-only seam). */
 const K_ON_CANDIDATE = v3KOnCandidate(process.env);
@@ -2209,6 +2216,11 @@ async function main(): Promise<void> {
   console.log(
     `al-runner-v3 itest: ${version} sha256 ${sha} (${BIN})${CANDIDATE ? " CANDIDATE" : ""}; legs ${LEGS.join(",")}`,
   );
+  // R814: a mechanical pin is adopted here, from `.gated` or a candidate's LETHAL_V3_PIN_FROM. An
+  // ungated build is the backend's refusal to make, as before.
+  await checkGated(BIN, version, { candidate: CANDIDATE }).catch((err: unknown) => {
+    if (!(err instanceof AlRunnerV3UngatedBuildError)) throw err;
+  });
   // R586c: a per-build pin applies only when the version line AND the sha256 are both equal.
   const PIN = findV3Pin(version, sha);
   activePin = PIN;
@@ -2375,6 +2387,7 @@ async function main(): Promise<void> {
       legs,
       lines,
       ...(legCWarnFacts !== undefined ? { warnFacts: legCWarnFacts } : {}),
+      ...(PIN !== undefined ? { pinApplied: PIN.id } : {}),
       oracleBcBuild: ORACLE_BC_BUILD,
       writtenAt: new Date().toISOString(),
     });

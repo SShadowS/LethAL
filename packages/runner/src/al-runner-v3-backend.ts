@@ -86,7 +86,13 @@ import {
   encodeGroups,
   serveRow,
 } from "./al-runner-v3-entries";
-import { AlRunnerV3UngatedBuildError, V3_NO_SERVE_ENTRIES, checkGated } from "./al-runner-v3-pin";
+import {
+  AlRunnerV3UngatedBuildError,
+  V3_NO_SERVE_ENTRIES,
+  checkGated,
+  resolveV3Binary,
+  v3InstallHint,
+} from "./al-runner-v3-pin";
 import {
   pinnedDefectCoverage,
   serveRowFieldsFor,
@@ -1315,8 +1321,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     for (const l of this.laneList) l.dropPair();
   }
 
+  private readonly cfg: AlRunnerV3Config;
+
   constructor(
-    private readonly cfg: AlRunnerV3Config,
+    cfg: AlRunnerV3Config,
     private readonly spawn: SpawnFn = defaultSpawn,
     alcIo: ArtifactIo = defaultArtifactIo,
     /** R635: the serve daemon's spawn (serve-entries only). */
@@ -1325,6 +1333,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     private readonly now: () => number = Date.now,
   ) {
     if (cfg.selectorMode === "resource") throw new AlRunnerV3ResourceSelectorRefusedError();
+    this.cfg = { ...cfg, alRunnerPath: resolveV3Binary(cfg.alRunnerPath) };
     this.speculateOn = cfg.speculateBaseline ?? readSpeculateBaseline();
     // R761: a default transport starts one-shot-safe; `decideTransport` turns serve on, before the
     // first deploy (the staged batch differs by transport) and the first v3 process.
@@ -1380,7 +1389,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     );
     const reported = (res.stdout || res.stderr).trim();
     if (res.exitCode !== 0) {
-      return { ok: false, details: `al-runner v3 not runnable: ${reported.slice(0, 300)}` };
+      return {
+        ok: false,
+        details: `al-runner v3 not runnable: ${reported.slice(0, 300)}. ${v3InstallHint()}`,
+      };
     }
     if (!AL_RUNNER_V3_VERSION.test(reported)) {
       return {
@@ -1409,7 +1421,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       gateRecord =
         this.cfg.candidate === true
           ? "this update gate's own leg C (a candidate build)"
-          : `the gated build's leg C (.gated lethalCommit ${gated.lethalCommit})`;
+          : gated.source === "manifest"
+            ? `the gated release's leg C (gate manifest, lethalCommit ${gated.lethalCommit})`
+            : `the gated build's leg C (.gated lethalCommit ${gated.lethalCommit})`;
     } catch (err) {
       if (err instanceof AlRunnerV3UngatedBuildError) return { ok: false, details: err.message };
       throw err;

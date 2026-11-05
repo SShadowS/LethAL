@@ -3,18 +3,24 @@
  * F6 and r4's I-3): the al-runner v3 update gate, the only al-runner update path since the .NET
  * al-runner (v2) and its update script were retired (R654). Daily, or by hand:
  *
- *   bun scripts/al-runner-v3-update.ts [--regate <lethal commit>]
- *   bun scripts/al-runner-v3-update.ts --edge        (the daily edge-by-download path, `edgeOnce`)
+ *   bun scripts/al-runner-v3-update.ts               (the daily run, both tracks, `dailyOnce`)
+ *   bun scripts/al-runner-v3-update.ts --regate <lethal commit>
+ *   bun scripts/al-runner-v3-update.ts --edge        (the edge track only, `edgeOnce`)
  *   bun scripts/al-runner-v3-update.ts --edge-rejudge <edge sha>   (R639: a KEPT edge binary,
  *                                                     re-gated at `.gated`'s commit, `edgeRejudge`)
  *
  * Every gate path holds `<root>/.gate.lock` (R639 I3); a run skipped by it exits 2 on `--regate`
  * and `--edge-rejudge`.
  *
- * 1. Candidates: `v3.0.0-alpha.N` releases of aldevtools/BusinessCentral.AL.Runner with N above the
- *    gated build's, tried NEWEST first (R586d): the first pass becomes `current` and ends the run;
- *    anything else falls back to the next older one. `edge` only through `--edge`, never as an
- *    alpha candidate.
+ * R813/R814 (owner): two tracks. EDGE moves `current`, only forward (`commitOrder`). A numbered
+ * RELEASE never moves `current`: its pass adds it to the gate manifest, which is what users install.
+ * R814: a candidate is judged against `current`'s hand pin (`LETHAL_V3_PIN_FROM`, the prediction,
+ * committed before the run), so a build whose readings did not move passes with no person. Anything
+ * that moved fails the same judges a hand pin fails, and stops here until someone pre-commits it.
+ *
+ * 1. Release candidates: `v3.0.0-alpha.N` releases of aldevtools/BusinessCentral.AL.Runner with N
+ *    above the newest listed one, tried NEWEST first (R586d): the first pass ends the run; anything
+ *    else falls back to the next older one.
  * 2. The linux-x64 tarball and SHA256SUMS go into a NEW empty folder; a checksum mismatch is
  *    `infra-fail` and the tarball is NEVER extracted. Extraction goes into another new folder.
  * 3. The gate runs in a detached worktree at `.gated`'s `lethalCommit` (never a moving master), with
@@ -23,13 +29,14 @@
  *    commit predates a leg of this script's `V3_GATE_LEGS`, `current` is first re-gated at this
  *    script's own commit (logged `stale-gated`); if that does not pass, `current` stays and the
  *    candidate is judged at the script's commit. A script commit off origin/master is refused.
- * 4. Outcomes: `pass` -> installed, `.gated` written, `current` moved (unless a v3 process is
- *    running: "deferred: in use"); `gate-fail` -> `failed/` for good; `held` (every difference a
- *    move toward BC or a named refusal; read the receipt's lines) -> `held/`, never blacklisted, a
- *    line for the orchestrator to re-pre-commit;
+ * 4. Outcomes: `pass` -> installed, `.gated` written, its row in the ledger, and on the edge track
+ *    `current` moved (unless a v3 process is running: "deferred: in use"); `gate-fail` -> `failed/`
+ *    for good; `held` (every difference a move toward BC or a named refusal; read the receipt's
+ *    lines) -> `held/`, never blacklisted, a line for the orchestrator to re-pre-commit;
  *    `infra-fail` -> nothing kept, retried next run, a line after 3 in a row.
  * `--regate <commit>`: gate the CURRENT build at a new LethAL commit; on pass `.gated` takes it.
- * The script never commits.
+ * The script's ONE commit: `publishToMaster` adds ledger rows to the gated-builds data file (R814),
+ * from its own worktree, never forced. A row holds no reading, so it cannot move a verdict.
  * To-do (not v1; serve is out of v1): capture `serve`'s full summary for one edit in the CDO
  * 18-dependency workspace, the measurement #5614 lacks (R586's defect table, row 14).
  */
@@ -59,10 +66,20 @@ import {
 import { prepareFixtureSymbols } from "../packages/runner/itest/fixture-symbols";
 import {
   type GatedBuild,
+  V3_PIN_FROM_ENV,
   parseGated,
   sha256OfFile,
   warnFactReadings,
 } from "../packages/runner/src/al-runner-v3-pin";
+import {
+  type GatedBuildEntry,
+  alphaOfEntry,
+  findV3Pin,
+  gatedBuilds,
+  handV3Pin,
+  parseGatedBuilds,
+  v3ReadingsDigest,
+} from "../packages/runner/src/al-runner-v3-pins";
 
 export const ROOT = "/work/tools/al-runner-v3";
 export const REPO = "aldevtools/BusinessCentral.AL.Runner";
@@ -73,8 +90,14 @@ export const LOG = "/coord/handoff/R-586/v3-updates.log";
  * gate runs no D leg, and the receipt is an infra-fail every day (alpha.3, 2026-10-22).
  */
 export const V3_CDO_DEFAULT = "/work/lethal-wt/cdo-r396";
+/** R814: the scratch worktree `publishToMaster` commits from; never a lane's checkout. */
+export const PIN_WORKTREE = "/work/lethal-wt/al-runner-v3-pins";
+export const GATED_BUILDS_FILE = "packages/runner/src/al-runner-v3-gated-builds.json";
+const PINS_FILE = "packages/runner/src/al-runner-v3-pins.ts";
 
 export type Outcome = "pass" | "held" | "gate-fail" | "infra-fail";
+/** R814: GitHub's compare of two upstream commits. */
+export type CommitOrder = "ahead" | "behind" | "identical" | "diverged";
 
 /** Everything with a side effect, injected so the test drives every branch (T19). */
 export interface UpdateDeps {
@@ -113,6 +136,20 @@ export interface UpdateDeps {
   selfCommit(): Promise<string>;
   /** R777: `git merge-base --is-ancestor a b` (a commit is its own ancestor). */
   isAncestor(a: string, b: string): Promise<boolean>;
+  /** R814: does LethAL `commit`'s gate read `LETHAL_V3_PIN_FROM`? An older one ignores it. */
+  pinFromAt(commit: string): Promise<boolean>;
+  /** R814: where upstream's `head` stands against `base`. Throws when it cannot tell. */
+  commitOrder(base: string, head: string): Promise<CommitOrder>;
+  /** R814: adds these rows to master's gated-builds file (`publishToMaster`). */
+  publishEntries(entries: readonly GatedBuildEntry[]): Promise<PublishResult>;
+  /** R814: the committed gated builds this checkout ships (`gatedBuilds`). */
+  listedBuilds(): readonly GatedBuildEntry[];
+}
+
+/** R814: what `publishEntries` did: ids now on master, and rows refused, each by name. */
+export interface PublishResult {
+  readonly published: readonly string[];
+  readonly refused: readonly { readonly id: string; readonly why: string }[];
 }
 
 /** R777: the leg names of the `V3_GATE_LEGS` literal in a gate module's source; throws when absent. */
@@ -156,13 +193,17 @@ export function expectedSha(sums: string, file: string): string | undefined {
  * Reads the receipt: valid only with this nonce, this binary's sha256 and the LethAL commit the gate
  * was asked to run at (M3); and its `legs` must give its `outcome` by `gateOutcome` over the exact
  * leg set (a `pass` needs EVERY leg passed). Anything else is infra-fail, never a pass.
+ * R814, for a candidate (`expect`): K is outside the leg set, so its pass is required here (a release
+ * never becomes `current`, so K is the only normal session it gets), and a run asked to judge by a
+ * pin must say it applied one.
  */
 export async function readReceipt(
   path: string,
   nonce: string,
   sha: string,
   commit: string,
-): Promise<{ outcome: Outcome; why: string }> {
+  expect: { readonly candidate?: boolean; readonly pinFrom?: string } = {},
+): Promise<{ outcome: Outcome; why: string; pinApplied?: string }> {
   let raw: unknown;
   try {
     raw = JSON.parse(await readFile(path, "utf8"));
@@ -176,6 +217,7 @@ export async function readReceipt(
     dirty?: unknown;
     outcome?: unknown;
     legs?: unknown;
+    pinApplied?: unknown;
   };
   if (r.nonce !== nonce) return { outcome: "infra-fail", why: "a receipt of another run (nonce)" };
   if (r.binarySha256 !== sha)
@@ -211,11 +253,23 @@ export async function readReceipt(
       outcome: "infra-fail",
       why: `a pass from a gate worktree that was not clean (dirty: ${JSON.stringify(r.dirty)})`,
     };
+  const pinApplied = typeof r.pinApplied === "string" ? r.pinApplied : undefined;
+  if (r.outcome === "pass" && expect.candidate === true && legs.K !== "pass")
+    return {
+      outcome: "infra-fail",
+      why: `a candidate's pass with K ${JSON.stringify(legs.K)}: K is the only normal session it gets`,
+    };
+  if (r.outcome === "pass" && expect.pinFrom !== undefined && pinApplied === undefined)
+    return {
+      outcome: "infra-fail",
+      why: `a pass that applied no pin, asked to judge by ${expect.pinFrom}`,
+    };
   // R632 A: name the legs that never ran (D1 and D1c need LETHAL_ITEST_V3_CDO).
   const missing = V3_GATE_LEGS.filter((l) => !(l in legs));
   return {
     outcome: r.outcome,
     why: `receipt legs ${JSON.stringify(legs)}${missing.length > 0 ? `; missing legs ${missing.join(",")}` : ""}`,
+    ...(pinApplied !== undefined ? { pinApplied } : {}),
   };
 }
 
@@ -273,18 +327,24 @@ async function gatedWithAllLegs(
 ): Promise<(GatedBuild & { readonly dir: string }) | undefined> {
   const current = await readCurrentGated(deps.root);
   const has = new Set(await deps.legsAt(current.lethalCommit));
-  const missing = V3_GATE_LEGS.filter((l) => !has.has(l));
+  const missing = [
+    ...V3_GATE_LEGS.filter((l) => !has.has(l)),
+    // R814: a gate that ignores the pin would judge a candidate on the default tables: a false gate-fail.
+    ...((await deps.pinFromAt(current.lethalCommit)) ? [] : [V3_PIN_FROM_ENV]),
+  ];
   if (missing.length === 0) return current;
   const self = await deps.selfCommit();
   const selfHas = new Set(await deps.legsAt(self));
+  const selfHasPinFrom = await deps.pinFromAt(self);
   const stale = `${deps.now()} ${what}: stale-gated: .gated's lethalCommit ${current.lethalCommit} predates leg(s) ${missing.join(",")} of V3_GATE_LEGS`;
-  const cannot = V3_GATE_LEGS.some((l) => !selfHas.has(l))
-    ? "lacks them too (uncommitted legs?)"
-    : !(await deps.isAncestor(self, "origin/master"))
-      ? "is not on origin/master"
-      : await deps.isAncestor(self, current.lethalCommit)
-        ? "is not newer than .gated's (an old checkout?)"
-        : undefined;
+  const cannot =
+    V3_GATE_LEGS.some((l) => !selfHas.has(l)) || !selfHasPinFrom
+      ? "lacks them too (uncommitted legs?)"
+      : !(await deps.isAncestor(self, "origin/master"))
+        ? "is not on origin/master"
+        : (await deps.isAncestor(self, current.lethalCommit))
+          ? "is not newer than .gated's (an old checkout?)"
+          : undefined;
   if (cannot !== undefined) {
     await deps.log(
       `${stale}; this script's commit ${self} ${cannot}: not gated; run it from a current master checkout, or \`--regate <master commit>\``,
@@ -317,6 +377,54 @@ export interface GateOneOpts {
   readonly binarySha256?: string;
   /** R639 M5: the kept folder the binary came from, written into `.gated` on a pass. */
   readonly rejudgedFrom?: string;
+  /** R814: a numbered release: its pass joins the manifest and never moves `current`. */
+  readonly release?: boolean;
+}
+
+/** The `(commit)` of a `--version` line. */
+function commitOfVersion(version: string): string {
+  const c = /\(([0-9a-f]+)\)/.exec(version)?.[1];
+  if (c === undefined) throw new Error(`no commit in the version line "${version}"`);
+  return c;
+}
+
+/** R814: the hand pin behind a build, its own or its readings' (undefined: no pin at all). */
+export function pinRootOf(g: GatedBuild): string | undefined {
+  return g.readingsFrom ?? findV3Pin(g.version, g.binarySha256)?.id;
+}
+
+const ledgerPath = (root: string) => join(root, "gated-builds.jsonl");
+const publishedPath = (root: string) => join(root, "gated-builds.published");
+
+async function textLines(path: string): Promise<string[]> {
+  return existsSync(path)
+    ? (await readFile(path, "utf8")).split("\n").filter((l) => l.trim() !== "")
+    : [];
+}
+
+async function readLedger(root: string): Promise<GatedBuildEntry[]> {
+  return (await textLines(ledgerPath(root))).map((l) => JSON.parse(l) as GatedBuildEntry);
+}
+
+/**
+ * R814: ledger rows not yet published go to master, once. An id is published at most once, so a row
+ * a person recalled from master is not put back. A refused row stays pending, and does not block the
+ * rest. A failure is logged and retried by the next run: `.gated` already carries the readings.
+ */
+export async function publishPending(deps: UpdateDeps): Promise<void> {
+  const done = new Set(await textLines(publishedPath(deps.root)));
+  const pending = (await readLedger(deps.root)).filter((e) => !done.has(e.id));
+  if (pending.length === 0) return;
+  try {
+    const r = await deps.publishEntries(pending);
+    if (r.published.length > 0)
+      await writeFile(publishedPath(deps.root), `${r.published.join("\n")}\n`, { flag: "a" });
+    for (const id of r.published) await deps.log(`${deps.now()} ${id}: gated-builds row on master`);
+    for (const x of r.refused)
+      await deps.log(`${deps.now()} ${x.id}: gated-builds row REFUSED: ${x.why}; a person decides`);
+  } catch (err) {
+    await deps.log(`${deps.now()} gated-builds publish failed, next run retries: ${String(err)}`);
+  }
 }
 
 /** One candidate (or the current build, on `--regate`) through the gate. */
@@ -325,7 +433,7 @@ export async function gateOne(
   tag: string,
   gated: GatedBuild,
   opts: GateOneOpts = {},
-): Promise<Outcome> {
+): Promise<Outcome | "not-ahead"> {
   const { root } = deps;
   const work = await mkdtemp(join(root, ".work-"));
   try {
@@ -377,6 +485,27 @@ export async function gateOne(
         `al-runner-v3-edge-rejudge-refused: ${binary} has sha256 ${sha} now, not the custody-checked ${opts.binarySha256}`,
       );
     const version = await deps.versionOf(binary);
+    const candidate = opts.regateAt === undefined;
+    // R814: only an edge candidate moves `current`, and only forward. The commit is the DOWNLOADED
+    // binary's: edge can be replaced between reading the tag and the download.
+    let movesCurrent = candidate && opts.release !== true;
+    if (movesCurrent) {
+      let order: CommitOrder;
+      try {
+        order = await deps.commitOrder(commitOfVersion(gated.version), commitOfVersion(version));
+      } catch (err) {
+        await deps.log(`${deps.now()} ${tag}: infra-fail: commit order: ${String(err)}`);
+        return infra(deps, name);
+      }
+      if (order === "behind" || order === "diverged") {
+        await deps.log(
+          `${deps.now()} ${tag}: ${order} current (${gated.version}): current never moves backwards; a person decides`,
+        );
+        if (opts.binary === undefined) return "not-ahead";
+        movesCurrent = false; // A rejudge still measures the kept build.
+      }
+    }
+    const pinFrom = candidate ? pinRootOf(gated) : undefined;
     const nonce = randomUUID();
     const receipt = join(work, "receipt.json");
     await rm(receipt, { force: true });
@@ -386,7 +515,11 @@ export async function gateOne(
         {
           LETHAL_ITEST_ALRUNNER_V3: "1",
           LETHAL_ALRUNNER_V3_PATH: binary,
-          ...(opts.regateAt === undefined ? { LETHAL_ALRUNNER_V3_CANDIDATE: "1" } : {}),
+          // R814: K on every candidate, the only normal session a release ever gets.
+          ...(candidate
+            ? { LETHAL_ALRUNNER_V3_CANDIDATE: "1", LETHAL_ITEST_V3_K_ON_CANDIDATE: "1" }
+            : {}),
+          ...(pinFrom !== undefined ? { [V3_PIN_FROM_ENV]: pinFrom } : {}),
           LETHAL_ITEST_V3_TABLES: "1",
           LETHAL_ITEST_V3_CDO: process.env.LETHAL_ITEST_V3_CDO ?? V3_CDO_DEFAULT,
           LETHAL_V3_GATE_NONCE: nonce,
@@ -400,7 +533,10 @@ export async function gateOne(
         `${deps.now()} ${tag}: the gate exited with an error: ${String(err).slice(0, 1000)}`,
       );
     }
-    const { outcome, why } = await readReceipt(receipt, nonce, sha, commit);
+    const { outcome, why, pinApplied } = await readReceipt(receipt, nonce, sha, commit, {
+      candidate,
+      ...(pinFrom !== undefined ? { pinFrom } : {}),
+    });
     const lines = await receiptLines(receipt);
     await deps.log(
       `${deps.now()} ${tag} (${version}, ${sha}) at ${commit}: ${outcome}: ${why}${lines.length > 0 ? `; lines: ${lines.join(" | ")}` : ""}`,
@@ -487,10 +623,44 @@ export async function gateOne(
         : opts.regateAt !== undefined && gated.rejudgedFrom !== undefined
           ? { rejudgedFrom: gated.rejudgedFrom }
           : {}),
+      // R814: the hand pin it passed on; a regate keeps what a mechanical `current` had.
+      ...(pinApplied !== undefined
+        ? { readingsFrom: pinApplied }
+        : opts.regateAt !== undefined && gated.readingsFrom !== undefined
+          ? { readingsFrom: gated.readingsFrom }
+          : {}),
       gatedAt: deps.now(),
     };
     await writeFile(join(dest, ".gated"), `${JSON.stringify(next, null, 2)}\n`);
     if (dirName !== undefined) {
+      // R814: the row goes to the ledger before `current` moves; `publishPending` commits it.
+      const handPin = pinApplied !== undefined ? handV3Pin(pinApplied) : undefined;
+      if (handPin !== undefined) {
+        const row: GatedBuildEntry = {
+          id:
+            opts.release === true
+              ? `${tag.replace(/^v3\.0\.0-/, "")}-${commitOfVersion(version)}`
+              : `edge-${commitOfVersion(version)}`,
+          track: opts.release === true ? "release" : "edge",
+          ...(opts.release === true ? { tag } : {}),
+          version,
+          binarySha256: sha,
+          readingsFrom: handPin.id,
+          readingsDigest: v3ReadingsDigest(handPin),
+          lethalCommit: commit,
+          gatedAt: next.gatedAt ?? deps.now(),
+          ...(warnFacts !== undefined ? { warnFacts } : {}),
+        };
+        await writeFile(ledgerPath(root), `${JSON.stringify(row)}\n`, { flag: "a" });
+      } else if (pinApplied !== undefined) {
+        await deps.log(
+          `${deps.now()} ${tag}: no gated-builds row: this script's checkout has no pin ${pinApplied}`,
+        );
+      }
+      if (!movesCurrent) {
+        await deps.log(`${deps.now()} ${tag}: passed; current stays`);
+        return "pass";
+      }
       if (await deps.inUse()) {
         await deps.log(`${deps.now()} ${tag}: passed; deferred: in use (current not moved)`);
         return "pass";
@@ -514,14 +684,15 @@ async function infra(deps: UpdateDeps, name: string): Promise<Outcome> {
 }
 
 /**
- * The daily run: the candidates above the gated alpha, newest first, until one passes (R586d). A
- * candidate that does not pass (gate-fail, held, infra-fail, or already in `failed/`) sends the run
- * to the next older one. Older releases skipped after a pass get no verdict that day.
+ * The release track: the candidates above the newest listed release, newest first, until one passes
+ * (R586d). A candidate that does not pass (gate-fail, held, infra-fail, or already in `failed/`)
+ * sends the run to the next older one. Older releases skipped after a pass get no verdict that day.
+ * R814: a release never moves `current`, whatever its outcome.
  */
 export async function updateOnce(
   deps: UpdateDeps,
   opts: { readonly regateAt?: string } = {},
-): Promise<(Outcome | "skipped")[]> {
+): Promise<(Outcome | "skipped" | "not-ahead")[]> {
   // R632 D: the D legs make every gate a corpus job, on this path too.
   const what = opts.regateAt !== undefined ? "regate" : "alpha";
   if (await skippedForTheDay(deps, what)) return ["skipped"];
@@ -534,21 +705,33 @@ export async function updateOnce(
   }
 }
 
+/** R814: the newest listed release: the committed file plus the ledger, so an unpublished pass counts. */
+async function newestListedAlpha(deps: UpdateDeps): Promise<number> {
+  const rows = [...deps.listedBuilds(), ...(await readLedger(deps.root))];
+  return rows.reduce((n, e) => (e.track === "release" ? Math.max(n, alphaOfEntry(e)) : n), -1);
+}
+
 async function updateLocked(
   deps: UpdateDeps,
   opts: { readonly regateAt?: string },
-): Promise<(Outcome | "skipped")[]> {
+): Promise<(Outcome | "skipped" | "not-ahead")[]> {
   if (opts.regateAt !== undefined)
     return [await gateOne(deps, "regate", await readCurrentGated(deps.root), opts)];
   const current = await gatedWithAllLegs(deps, "alpha");
   if (current === undefined) return ["skipped"];
-  const gatedAlpha = /3\.0\.0-alpha\.(\d+)/.exec(current.version)?.[1];
-  if (gatedAlpha === undefined)
-    throw new Error(`the gated build "${current.version}" is not a v3 alpha`);
-  const out: Outcome[] = [];
+  const tags = await deps.listReleases();
+  for (const t of tags)
+    if (t !== "edge" && t.startsWith("v3") && alphaOf(t) === undefined)
+      await deps.log(`${deps.now()} ${t}: a release tag this script cannot read; not gated`);
+  const out: (Outcome | "skipped" | "not-ahead")[] = [];
   const unjudged: string[] = [];
-  for (const tag of candidates(await deps.listReleases(), Number(gatedAlpha))) {
-    const o = await gateOne(deps, tag, current);
+  for (const tag of candidates(tags, await newestListedAlpha(deps))) {
+    // R632 D, per gate: a daily run can hold several.
+    if (out.length > 0 && (await skippedForTheDay(deps, "alpha"))) {
+      out.push("skipped");
+      break;
+    }
+    const o = await gateOne(deps, tag, current, { release: true });
     out.push(o);
     if (o === "infra-fail") unjudged.push(tag);
     if (o === "pass") {
@@ -764,6 +947,7 @@ export async function edgeRejudge(deps: UpdateDeps, arg: string): Promise<Outcom
       binarySha256: sha,
       rejudgedFrom: from,
     });
+    if (outcome === "not-ahead") return "skipped"; // Unreachable: a rejudge always measures.
     const same = before.every((b) => b.startsWith(`${outcome}@`));
     await deps.log(
       `${deps.now()} edge-rejudge ${tag} (${sha}) at ${commit}: ${outcome}; before: ${before.join(", ")}; ${same ? "same" : "different"}`,
@@ -797,9 +981,36 @@ async function edgeLocked(deps: UpdateDeps & EdgeDeps): Promise<EdgeResult> {
   // Not marked seen when skipped here: the edge is retried once current re-gates.
   const current = await gatedWithAllLegs(deps, "edge");
   if (current === undefined) return "skipped";
+  const before = await readlink(join(deps.root, "current"));
   const outcome = await gateOne(deps, `edge-${commit}`, current);
-  if (outcome !== "infra-fail") await writeFile(seenFile, `${commit}\n`);
+  // Not seen either way: behind or diverged waits for a person; a pass deferred by "in use" retries.
+  if (outcome === "not-ahead") return "skipped";
+  const deferred = outcome === "pass" && (await readlink(join(deps.root, "current"))) === before;
+  if (outcome !== "infra-fail" && !deferred) await writeFile(seenFile, `${commit}\n`);
   return outcome;
+}
+
+/**
+ * R813/R814: the daily run, both tracks under one lock. Edge first, so a release is judged by the
+ * newest pin. A release only joins the manifest, so its outcome never touches `current`.
+ */
+export async function dailyOnce(
+  deps: UpdateDeps & EdgeDeps,
+): Promise<{ edge: EdgeResult; releases: readonly string[] }> {
+  if (await skippedForTheDay(deps, "daily")) return { edge: "skipped", releases: [] };
+  const lock = await takeGateLock(deps, "daily");
+  if (lock === undefined) return { edge: "skipped", releases: [] };
+  try {
+    await publishPending(deps);
+    const edge = await edgeLocked(deps);
+    const releases = (await skippedForTheDay(deps, "alpha"))
+      ? ["skipped"]
+      : await updateLocked(deps, {});
+    await publishPending(deps);
+    return { edge, releases };
+  } finally {
+    await lock.release();
+  }
 }
 
 /**
@@ -976,13 +1187,89 @@ export function realDeps(root = ROOT): UpdateDeps {
     selfCommit: async () =>
       (await run(["git", "-C", dirname(import.meta.dir), "rev-parse", "HEAD"])).trim(),
     isAncestor: async (a, b) =>
+      (await Bun.spawn(
+        ["git", "-C", dirname(import.meta.dir), "merge-base", "--is-ancestor", a, b],
+        { stdout: "ignore", stderr: "ignore" },
+      ).exited) === 0,
+    pinFromAt: async (commit) =>
       (
-        await Bun.spawn(
-          ["git", "-C", dirname(import.meta.dir), "merge-base", "--is-ancestor", a, b],
-          { stdout: "ignore", stderr: "ignore" },
-        ).exited
-      ) === 0,
+        await run(["git", "-C", dirname(import.meta.dir), "show", `${commit}:${PIN_FILE}`])
+      ).includes(V3_PIN_FROM_ENV_NAME),
+    commitOrder: async (base, head) => {
+      const s = (
+        await run(["gh", "api", `repos/${REPO}/compare/${base}...${head}`, "--jq", ".status"])
+      ).trim();
+      if (s !== "ahead" && s !== "behind" && s !== "identical" && s !== "diverged")
+        throw new Error(`compare ${base}...${head}: "${s}"`);
+      return s;
+    },
+    publishEntries: (entries) =>
+      publishToMaster(entries, { repo: dirname(import.meta.dir), worktree: PIN_WORKTREE }),
+    listedBuilds: gatedBuilds,
   };
+}
+
+/** R814: the file and literal `pinFromAt` looks for; the literal is checked by a test. */
+const PIN_FILE = "packages/runner/src/al-runner-v3-pin.ts";
+const V3_PIN_FROM_ENV_NAME = `export const V3_PIN_FROM_ENV = "${V3_PIN_FROM_ENV}"`;
+
+/**
+ * R814: adds `entries` to origin/master's gated-builds file, from its own worktree, and pushes. It
+ * checks each row against MASTER's pins, not this checkout's, so a row whose hand pin is unmerged is
+ * refused alone. The commit touches that one file or nothing. Never forced: a rejected push refetches
+ * and tries again, twice.
+ */
+export async function publishToMaster(
+  entries: readonly GatedBuildEntry[],
+  o: { readonly repo: string; readonly worktree: string },
+): Promise<PublishResult> {
+  const git = (...a: string[]) => runToLog(["git", "-C", o.worktree, ...a]);
+  if (!existsSync(o.worktree))
+    await runToLog(["git", "-C", o.repo, "worktree", "add", "--detach", o.worktree, "HEAD"]);
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await git("fetch", "origin", "master");
+    await git("checkout", "--detach", "--force", "FETCH_HEAD");
+    const file = join(o.worktree, GATED_BUILDS_FILE);
+    const rows = JSON.parse(await readFile(file, "utf8")) as GatedBuildEntry[];
+    const pins = await readFile(join(o.worktree, PINS_FILE), "utf8");
+    const handIds = new Set([...pins.matchAll(/^\s+id: "([^"]+)",$/gm)].map((m) => m[1] ?? ""));
+    const published: string[] = [];
+    const refused: { id: string; why: string }[] = [];
+    const fresh: GatedBuildEntry[] = [];
+    for (const e of entries) {
+      if (rows.some((r) => r.id === e.id)) {
+        published.push(e.id);
+        continue;
+      }
+      try {
+        parseGatedBuilds([...rows, ...fresh, e], handIds);
+        fresh.push(e);
+      } catch (err) {
+        refused.push({ id: e.id, why: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    if (fresh.length === 0) return { published, refused };
+    const next = [...rows, ...fresh].sort((a, b) => a.id.localeCompare(b.id));
+    await writeFile(file, `${JSON.stringify(next, null, 2)}\n`);
+    await git("add", GATED_BUILDS_FILE);
+    const touched = (await git("diff", "--cached", "--name-only")).trim();
+    if (touched !== GATED_BUILDS_FILE)
+      throw new Error(`gated-builds publish refused: the commit would touch ${touched}`);
+    await git(
+      "commit",
+      "-q",
+      "-m",
+      `R814: gated build${fresh.length > 1 ? "s" : ""} ${fresh.map((e) => e.id).join(", ")} [skip ci]`,
+    );
+    try {
+      await git("push", "-q", "origin", "HEAD:master");
+      return { published: [...published, ...fresh.map((e) => e.id)], refused };
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError;
 }
 
 /** The edge path's real side effects, with the per-day log. */
@@ -1030,7 +1317,14 @@ if (import.meta.main && process.argv.includes("--edge")) {
   if (i >= 0 && (regateAt === undefined || !/^[0-9a-f]{40}$/.test(regateAt))) {
     throw new Error("--regate needs a full 40-character LethAL commit sha (F6)");
   }
-  const out = await updateOnce(realDeps(), regateAt !== undefined ? { regateAt } : {});
-  console.log(`al-runner-v3-update: ${out.join(", ") || "no candidate"}`);
-  process.exitCode = updateExitCode(regateAt !== undefined, out);
+  if (regateAt !== undefined) {
+    const out = await updateOnce(realDeps(), { regateAt });
+    console.log(`al-runner-v3-update: ${out.join(", ")}`);
+    process.exitCode = updateExitCode(true, out);
+  } else {
+    const r = await dailyOnce(realEdgeDeps());
+    console.log(
+      `al-runner-v3-update: edge ${r.edge}; releases ${r.releases.join(", ") || "no candidate"}`,
+    );
+  }
 }
