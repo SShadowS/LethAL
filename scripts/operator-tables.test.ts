@@ -3,9 +3,11 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tier1Operators } from "../packages/builtin-tier1/src/index";
 import { tier2Operators } from "../packages/builtin-tier2/src/index";
-import { expectedContent, renderInto, staleTargets } from "./operator-tables";
+import { renderInto, staleTargets } from "./operator-tables";
 
 const REPO_ROOT = join(import.meta.dir, "..");
+const expectedSummary = (): string =>
+  `${tier1Operators.length + tier2Operators.length} operators, in two tiers`;
 const read = (f: string): string => readFileSync(join(REPO_ROOT, f), "utf8");
 
 describe("operator tables", () => {
@@ -73,11 +75,12 @@ describe("operator tables", () => {
     );
   });
 
-  it("a hand-edited prose count is reported as drift", () => {
+  it("regenerating a hand-edited prose count restores the committed file", () => {
     const readme = read("README.md");
-    const stale = readme.replace(/(<!-- operators: summary -->)\d+/, "$1 15");
+    const stale = readme.replace(/(<!-- operators: summary -->)\d+/, "$115");
     expect(stale).not.toBe(readme);
-    expect(expectedContent("README.md", ["summary", "limits"])).not.toBe(stale);
+    // The generator's own output for the stale text is the committed README again.
+    expect(renderInto(stale, "summary", expectedSummary())).toBe(readme);
   });
 
   it("an inline marker adds no new lines", () => {

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { closeSync, existsSync, openSync, writeSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -56,7 +56,13 @@ import {
 } from "./campaign-subcommands";
 import { DeploymentVerifier } from "./deployment-verifier";
 import { ENV_STATUS_REACHABLE_NO_VENDOR_STATUS, runDoctor } from "./doctor";
-import type { DoctorCheck, DoctorConfig, DoctorDeps, DoctorReport } from "./doctor";
+import type {
+  DependenciesProbe,
+  DoctorCheck,
+  DoctorConfig,
+  DoctorDeps,
+  DoctorReport,
+} from "./doctor";
 import { EnvToolClient, EnvToolError, READS_KEYS, validateEnvToolConfig } from "./env-tool";
 import type { EnvToolBlock, EnvToolConfigSection } from "./env-tool";
 import { EnvToolPublisher } from "./env-tool-publisher";
@@ -1701,8 +1707,15 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
 
   if (subcommand === "clear-quarantine") {
     // Issue #29: the same pair-or-config rule as `clear-ceiling` below (R112).
-    const server = values.server === "" ? undefined : values.server;
-    const serverInstance = values.instance === "" ? undefined : values.instance;
+    // Unlike `clear-ceiling`, an EMPTY value stays an error (as it was before --config): `--server
+    // "$S"` with an unset variable must not quietly fall back to the config's tier.
+    if (values.server === "" || values.instance === "") {
+      throw new Error(
+        "--server or --instance was given as an empty string; give a value, or omit both and pass --config",
+      );
+    }
+    const server = values.server;
+    const serverInstance = values.instance;
     if ((server === undefined) !== (serverInstance === undefined)) {
       throw new Error(
         "--server and --instance must be given together (or both omitted, with --config, to " +
@@ -4157,6 +4170,10 @@ export async function clearQuarantine(
  */
 export async function clearQuarantineFromCli(parsed: ClearQuarantineCliConfig): Promise<number> {
   const key = quarantineResourceKey(await resolveTierIdentity(parsed, "clear-quarantine"));
+  if (parsed.server === undefined) {
+    // As `clear-ceiling` does: a tier the operator did not type is shown before it is cleared.
+    console.log(`resolved tier from ${parsed.configPath}: ${key}`);
+  }
   const store = new QuarantineStore(defaultQuarantineDir());
   const result = await clearQuarantine(store, key);
   console.log(result); // "cleared" | "stale" | "not-quarantined"
@@ -4789,49 +4806,72 @@ export async function buildDoctorDeps(
   // identified by their manifest (`symbolPackageIdentity` reads Ready-to-Run wrappers), never by
   // file name; a file that is not a readable package is listed, not fatal.
   const projectDirForDeps = opts.projectDir;
-  const dependencies =
-    projectDirForDeps === undefined || cachePath === undefined || cachePath === ""
-      ? undefined
-      : async () => {
-          const appJsonPath = join(projectDirForDeps, "app.json");
-          const manifest = JSON.parse(await readFile(appJsonPath, "utf8")) as {
-            dependencies?: unknown;
-          };
-          const declared = manifest.dependencies ?? [];
-          if (!Array.isArray(declared)) {
-            throw new Error(`${appJsonPath}: "dependencies" is not an array`);
-          }
-          const deps = declared.map((d: Record<string, unknown>, i) => {
-            const id = d.id ?? d.appId; // `appId` is the older spelling of `id`
-            if (typeof id !== "string" || typeof d.version !== "string") {
-              throw new Error(`${appJsonPath}: dependencies[${i}] has no string id and version`);
-            }
-            return {
-              id,
-              name: typeof d.name === "string" ? d.name : id,
-              publisher: typeof d.publisher === "string" ? d.publisher : "",
-              version: d.version,
-            };
-          });
-          const packages: { id: string; version: string }[] = [];
-          const unread: string[] = [];
-          let files: string[] = [];
-          try {
-            files = await readdir(cachePath);
-          } catch {
-            // an absent cache folder: every dependency then reads as missing
-          }
-          for (const file of files.sort()) {
-            if (!file.toLowerCase().endsWith(".app")) continue;
-            try {
-              const { id, version } = symbolPackageIdentity(await readFile(join(cachePath, file)));
-              packages.push({ id, version });
-            } catch {
-              unread.push(file);
-            }
-          }
-          return { cachePath, dependencies: deps, packages, unread };
-        };
+  // The probe is always present: with no `--project` or no cache path it answers `skip`, so the
+  // report says the check was not made instead of printing "every check passed" in silence.
+  const downloadsSymbols = configFile.envTool?.downloadSymbols !== undefined;
+  const dependencies = async (): Promise<DependenciesProbe> => {
+    if (projectDirForDeps === undefined) {
+      return {
+        skip: "pass --project <dir> to compare the target's app.json dependencies with the package cache",
+      };
+    }
+    if (cachePath === undefined || cachePath === "") {
+      return { skip: 'the config names no "bcdev.packageCachePath" to look for packages in' };
+    }
+    const appJsonPath = join(projectDirForDeps, "app.json");
+    let manifest: { dependencies?: unknown };
+    try {
+      manifest = JSON.parse((await readFile(appJsonPath, "utf8")).replace(/^﻿/, ""));
+    } catch (err) {
+      throw new Error(`${appJsonPath}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    const declared = manifest.dependencies ?? [];
+    if (!Array.isArray(declared)) {
+      throw new Error(`${appJsonPath}: "dependencies" is not an array`);
+    }
+    const deps = declared.map((d: Record<string, unknown>, i) => {
+      const id = d.id ?? d.appId; // `appId` is the older spelling of `id`
+      if (typeof id !== "string" || typeof d.version !== "string") {
+        throw new Error(`${appJsonPath}: dependencies[${i}] has no string id and version`);
+      }
+      const label = typeof d.name === "string" ? d.name : id;
+      if (!/^\d+(\.\d+){3}$/.test(d.version)) {
+        throw new Error(
+          `${appJsonPath}: dependency ${JSON.stringify(label)} has version ${JSON.stringify(d.version)}, which doctor cannot compare (it needs four parts, like 1.2.0.0)`,
+        );
+      }
+      return {
+        id,
+        name: label,
+        publisher: typeof d.publisher === "string" ? d.publisher : "",
+        version: d.version,
+      };
+    });
+    const packages: { id: string; version: string }[] = [];
+    const unread: string[] = [];
+    // Nothing to compare: read no package at all.
+    if (deps.length > 0) {
+      // Subfolders count: alc searches them, and `buildPackageCacheCopy` walks them the same way.
+      let walked: Awaited<ReturnType<typeof walkFiles>> | undefined;
+      try {
+        walked = await walkFiles(cachePath, { links: "yield-files" });
+      } catch (err) {
+        // Only an absent cache folder reads as "no packages"; any other failure surfaces.
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      }
+      for (const rel of walked?.files ?? []) {
+        if (!rel.toLowerCase().endsWith(".app")) continue;
+        try {
+          const bytes = await readFile(walked?.resolved.get(rel) ?? join(cachePath, rel));
+          const { id, version } = symbolPackageIdentity(bytes);
+          packages.push({ id, version });
+        } catch {
+          unread.push(rel);
+        }
+      }
+    }
+    return { cachePath, downloadsSymbols, dependencies: deps, packages, unread };
+  };
 
   // Issue #23: the test app's id from its own app.json, looked up read-only on the server.
   const testsDir = opts.testsDir;
@@ -4870,7 +4910,7 @@ export async function buildDoctorDeps(
       ...(isCreateMode || testApp === undefined ? {} : { testApp }),
       toolPaths,
       ...(alcRuntime !== undefined ? { alcRuntime } : {}),
-      ...(dependencies !== undefined ? { dependencies } : {}),
+      dependencies,
     },
     ...(isCreateMode ? { caveat: DOCTOR_CREATE_MODE_CAVEAT } : {}),
   };

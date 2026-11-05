@@ -127,8 +127,8 @@ warns (`group-runs-inert`) when that happens.
 
 Every subcommand refuses a flag it does not read; none but the one exception below accepts one
 and ignores it. "Read" means the parse stores it: a stored flag can still be overridden by a
-precedence rule (`clear-ceiling --config` under an explicit `--server`/`--instance` pair, listed
-in `cli.test.ts`).
+precedence rule (`clear-ceiling --config` and `clear-quarantine --config` under an explicit
+`--server`/`--instance` pair, listed in `cli.test.ts`).
 
 The table lists only the flags an agent is most likely to reach for. A listed flag is refused
 outside its listed owners, with a message naming the subcommands that do read it. `lethal --help`

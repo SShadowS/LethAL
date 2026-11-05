@@ -1,8 +1,8 @@
 // Issue #29, part 1: `lethal doctor` reports app.json dependencies with no package in the cache.
 import { describe, expect, test } from "bun:test";
-import { writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { buildDoctorDeps } from "../src/cli";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { buildDoctorDeps, renderDoctorReport } from "../src/cli";
 import { checkDependencies, runDoctor } from "../src/doctor";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
 import { scratchDirs } from "./helpers/scratch";
@@ -20,7 +20,8 @@ const probe = (
   dependencies: ReturnType<typeof dep>[],
   packages: { id: string; version: string }[],
   unread: string[] = [],
-) => checkDependencies({ cachePath: "/cache", dependencies, packages, unread });
+  downloadsSymbols = false,
+) => checkDependencies({ cachePath: "/cache", downloadsSymbols, dependencies, packages, unread });
 
 describe("checkDependencies", () => {
   test("a dependency with a matching package reads ok", () => {
@@ -74,6 +75,23 @@ describe("checkDependencies", () => {
   test("unreadable cache files are listed when something is missing", () => {
     const c = probe([dep("1.0.0.0")], [], ["broken.app"]);
     expect(c.detail).toContain("broken.app");
+    expect(c.detail).toContain("may fail");
+    expect(probe([dep("1.0.0.0")], []).detail).toContain("will fail");
+  });
+
+  test("downloadSymbols: a gap is skipped; a clean cache is still plainly ok", () => {
+    const gap = probe([dep("1.0.0.0")], [], [], true);
+    expect(gap.skipped).toBe(true);
+    expect(gap.ok).toBe(true);
+    expect(
+      probe([dep("1.0.0.0")], [{ id: DEP_ID, version: "1.0.0.0" }], [], true).skipped,
+    ).toBeUndefined();
+  });
+
+  test("a skip reason is reported as a skipped check", () => {
+    const c = checkDependencies({ skip: "because" });
+    expect(c).toMatchObject({ ok: true, skipped: true });
+    expect(c.detail).toContain("because");
   });
 });
 
@@ -88,29 +106,66 @@ const wrapper = (id: string, name: string, version: string) =>
   });
 
 describe("lethal doctor reads the target's dependencies from the real cache folder", () => {
+  interface Over {
+    /** Raw app.json text, in place of `appJson` (a BOM test). */
+    readonly rawAppJson?: string;
+    readonly noProject?: boolean;
+    /** A cache path that is a regular file: reading it fails with something other than ENOENT. */
+    readonly cacheIsFile?: boolean;
+    /** A cache path that does not exist. */
+    readonly absentCache?: boolean;
+    /** `null`: the config names no packageCachePath at all. */
+    readonly noCachePath?: boolean;
+    /** Declares envTool.downloadSymbols. */
+    readonly downloadSymbols?: boolean;
+  }
+
   async function setup(
     appJson: Record<string, unknown>,
     cache: Record<string, Buffer | string>,
+    over: Over = {},
   ): Promise<Awaited<ReturnType<typeof buildDoctorDeps>>> {
     const project = scratch("lethal-doctor-deps-proj-");
-    const cacheDir = scratch("lethal-doctor-deps-cache-");
-    await writeFile(join(project, "app.json"), JSON.stringify(appJson));
-    for (const [name, bytes] of Object.entries(cache)) await writeFile(join(cacheDir, name), bytes);
+    const cacheDir =
+      over.absentCache || over.cacheIsFile
+        ? join(scratch("lethal-doctor-deps-cache-"), "not-there")
+        : scratch("lethal-doctor-deps-cache-");
+    if (over.cacheIsFile) await writeFile(cacheDir, "i am a file, not a folder");
+    await writeFile(join(project, "app.json"), over.rawAppJson ?? JSON.stringify(appJson));
+    for (const [name, bytes] of Object.entries(cache)) {
+      await mkdir(dirname(join(cacheDir, name)), { recursive: true });
+      await writeFile(join(cacheDir, name), bytes);
+    }
+    const bcdev = {
+      mcpCommand: ["bun", "mcp"],
+      company: "CRONUS",
+      controlSymbolPath: "C:/lethal-control.app",
+      // Connection fields come from the env tool's resolve steps when one is declared.
+      ...(over.downloadSymbols
+        ? {}
+        : { server: "https://host", serverInstance: "BC", username: "u", password: "p" }),
+      ...(over.noCachePath ? {} : { packageCachePath: cacheDir }),
+    };
     return buildDoctorDeps(
       {
-        bcdev: {
-          mcpCommand: ["bun", "mcp"],
-          company: "CRONUS",
-          controlSymbolPath: "C:/lethal-control.app",
-          packageCachePath: cacheDir,
-          server: "https://host",
-          serverInstance: "BC",
-          username: "u",
-          password: "p",
-        },
+        bcdev,
+        ...(over.downloadSymbols
+          ? {
+              envTool: {
+                toolPath: "tool.exe",
+                envId: "env-4711",
+                resolve: [
+                  { command: ["env", "get", "{envId}"], reads: { baseUrl: "url" } },
+                  { command: ["env", "users", "{envId}"], reads: { username: "u", password: "p" } },
+                ],
+                publish: { command: ["publish", "{envId}", "{appFile}"] },
+                downloadSymbols: { command: ["env", "download-symbols", "{envId}"] },
+              },
+            }
+          : {}),
       },
       {
-        projectDir: project,
+        ...(over.noProject ? {} : { projectDir: project }),
         alToolPaths: async () => ({ alcPath: "alc", altoolPath: "altool" }),
         alcSpawn: async () => ({
           exitCode: 0,
@@ -168,22 +223,110 @@ describe("lethal doctor reads the target's dependencies from the real cache fold
     expect(c?.detail).toContain("no string id");
   });
 
-  test("without --project there is no dependencies check", async () => {
-    const { deps } = await buildDoctorDeps(
-      {
-        bcdev: {
-          mcpCommand: ["bun", "mcp"],
-          company: "CRONUS",
-          controlSymbolPath: "C:/lethal-control.app",
-          packageCachePath: scratch("lethal-doctor-deps-cache-"),
-          server: "https://host",
-          serverInstance: "BC",
-          username: "u",
-          password: "p",
-        },
-      },
-      { alToolPaths: async () => ({ alcPath: "alc", altoolPath: "altool" }) },
+  test("without --project the check is SKIPPED, by name, never silent", async () => {
+    const c = await check(setup(app, {}, { noProject: true }));
+    expect(c?.skipped).toBe(true);
+    expect(c?.ok).toBe(true);
+    expect(c?.detail).toContain("--project");
+  });
+
+  test("a config with no packageCachePath is SKIPPED, by name", async () => {
+    const c = await check(setup(app, {}, { noCachePath: true, downloadSymbols: true }));
+    expect(c?.skipped).toBe(true);
+    expect(c?.detail).toContain("packageCachePath");
+  });
+
+  test("the issue's command (no --project) renders a skipped line in the banner", async () => {
+    const { deps } = await setup(app, {}, { noProject: true });
+    const dependencies = deps.dependencies;
+    if (dependencies === undefined) throw new Error("buildDoctorDeps gave no dependencies probe");
+    const report = await runDoctor(
+      {},
+      { dependencies, toolPaths: async () => ({ alc: "a", altool: "b" }) },
     );
-    expect(deps.dependencies).toBeUndefined();
+    expect(renderDoctorReport(report)).toContain("[skip] dependencies");
+  });
+
+  test("a package in a SUBFOLDER of the cache counts (alc searches subfolders)", async () => {
+    const c = await check(setup(app, { "deep/er/d.app": plain(DEP_ID, "MDep", "1.2.0.0") }));
+    expect(c?.ok).toBe(true);
+  });
+
+  test("a cache folder that does not exist fails the dependency", async () => {
+    const c = await check(setup(app, {}, { absentCache: true }));
+    expect(c?.ok).toBe(false);
+    expect(c?.skipped).toBeUndefined();
+    // Failed because the dependency is MISSING, not because reading the folder threw.
+    expect(c?.detail).toContain("no compatible package");
+  });
+
+  test("the older `appId` spelling is read", async () => {
+    const old = {
+      dependencies: [{ appId: DEP_ID, name: "MDep", publisher: "MP", version: "1.2.0.0" }],
+    };
+    expect((await check(setup(old, { "d.app": plain(DEP_ID, "MDep", "1.2.0.0") })))?.ok).toBe(true);
+    expect((await check(setup(old, {})))?.ok).toBe(false);
+  });
+
+  test("a broken .app beside a good one: the good one counts and the broken one is listed", async () => {
+    const files = { "good.app": plain(DEP_ID, "MDep", "1.2.0.0"), "broken.app": "not a package" };
+    expect((await check(setup(app, files)))?.ok).toBe(true);
+    const other = "55555555-5555-5555-5555-555555555555";
+    const c = await check(
+      setup(app, { "good.app": plain(other, "X", "1.0.0.0"), "broken.app": "not a package" }),
+    );
+    expect(c?.ok).toBe(false);
+    expect(c?.detail).toContain("broken.app");
+    expect(c?.detail).toContain("may fail");
+  });
+
+  test("with envTool.downloadSymbols a gap is skipped, not failed; with nothing missing it is ok", async () => {
+    const gap = await check(setup(app, {}, { downloadSymbols: true }));
+    expect(gap?.skipped).toBe(true);
+    expect(gap?.ok).toBe(true);
+    expect(gap?.detail).toContain("run doctor again");
+    const full = await check(
+      setup(app, { "d.app": plain(DEP_ID, "MDep", "1.2.0.0") }, { downloadSymbols: true }),
+    );
+    expect(full?.ok).toBe(true);
+    expect(full?.skipped).toBeUndefined();
+  });
+
+  test("a UTF-8 BOM at the start of app.json is read", async () => {
+    const raw = `﻿${JSON.stringify(app)}`;
+    const c = await check(
+      setup(app, { "d.app": plain(DEP_ID, "MDep", "1.2.0.0") }, { rawAppJson: raw }),
+    );
+    expect(c?.ok).toBe(true);
+  });
+
+  test("a two-part dependency version names the dependency and the file", async () => {
+    const two = { dependencies: [{ id: DEP_ID, name: "MDep", publisher: "MP", version: "1.2" }] };
+    const c = await check(setup(two, {}));
+    expect(c?.ok).toBe(false);
+    expect(c?.detail).toContain('"MDep"');
+    expect(c?.detail).toContain("app.json");
+  });
+
+  test("no dependencies: ok, and no package is read (a broken .app does not matter)", async () => {
+    const c = await check(setup({ dependencies: [] }, { "broken.app": "not a package" }));
+    expect(c?.ok).toBe(true);
+    expect(c?.detail).toContain("no dependencies");
+  });
+
+  test("no dependencies reads nothing, so even an unreadable cache path is ok", async () => {
+    const c = await check(setup({ dependencies: [] }, {}, { cacheIsFile: true }));
+    expect(c?.ok).toBe(true);
+  });
+
+  test("only an ABSENT cache folder reads as empty; any other read failure surfaces", async () => {
+    const c = await check(setup(app, {}, { cacheIsFile: true }));
+    expect(c?.ok).toBe(false);
+    expect(c?.detail).not.toContain("no compatible package");
+  });
+
+  test("the ok line says only direct dependencies were checked", async () => {
+    const c = await check(setup(app, { "d.app": plain(DEP_ID, "MDep", "1.2.0.0") }));
+    expect(c?.detail).toContain("direct");
   });
 });

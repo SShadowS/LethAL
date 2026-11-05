@@ -952,6 +952,25 @@ describe("parseCliConfig — clear-quarantine subcommand (Task 13)", () => {
     });
     expect(() => parseCliConfig(["clear-quarantine"])).toThrow("name the tier with --server");
   });
+
+  test("an EMPTY --server/--instance stays an error even with --config", () => {
+    const empty = ["clear-quarantine", "--server", "", "--instance", "", "--config", "c.json"];
+    expect(() => parseCliConfig(empty)).toThrow("empty string");
+    expect(() =>
+      parseCliConfig([
+        "clear-quarantine",
+        "--server",
+        "",
+        "--instance",
+        "BC",
+        "--config",
+        "c.json",
+      ]),
+    ).toThrow("empty string");
+    expect(() =>
+      parseCliConfig(["clear-quarantine", "--server", "S", "--instance", "", "--config", "c.json"]),
+    ).toThrow("empty string");
+  });
 });
 
 // ————————————————————————————————————————————————————————————————————————
@@ -1226,6 +1245,8 @@ describe("clearQuarantine (Task 13)", () => {
     try {
       expect(await clearQuarantineFromCli({ mode: "clear-quarantine", configPath })).toBe(0);
       expect(log).toHaveBeenCalledWith("cleared");
+      // The tier the operator did not type is shown, as clear-ceiling does.
+      expect(log).toHaveBeenCalledWith(`resolved tier from ${configPath}: ${resolvedKey}`);
       expect(await store.read(resolvedKey)).toBeNull();
       expect(await store.read(otherKey)).not.toBeNull();
     } finally {
@@ -1248,6 +1269,8 @@ describe("clearQuarantine (Task 13)", () => {
         configPath,
       });
       expect(log).toHaveBeenCalledWith("not-quarantined");
+      expect(log).not.toHaveBeenCalledWith(`resolved tier from ${configPath}: ${resolvedKey}`);
+      expect(log.mock.calls.flat().join("\n")).not.toContain("resolved tier");
       expect(await store.read(resolvedKey)).not.toBeNull();
     } finally {
       log.mockRestore();

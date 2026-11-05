@@ -144,21 +144,29 @@ export interface DoctorDeps {
   /**
    * Issue #29: the target's app.json dependencies beside the packages in `packageCachePath`, each
    * package read through its manifest (Ready-to-Run wrappers included), never by file name.
-   * `unread` names cache files that are not readable as packages. Present only when doctor is
-   * given `--project` and the config names a package cache.
+   * `unread` names cache files (in any subfolder) that are not readable as packages. `skip` (a
+   * reason, reported as a skipped check) replaces the whole answer when doctor could not ask: no
+   * `--project`, or no `packageCachePath`. `downloadsSymbols` is true when the config declares
+   * `envTool.downloadSymbols`, which fills the cache during a run, so a gap is not yet a failure.
    */
-  readonly dependencies?: () => Promise<{
-    readonly cachePath: string;
-    readonly dependencies: readonly {
-      readonly id: string;
-      readonly name: string;
-      readonly publisher: string;
-      readonly version: string;
-    }[];
-    readonly packages: readonly { readonly id: string; readonly version: string }[];
-    readonly unread: readonly string[];
-  }>;
+  readonly dependencies?: () => Promise<DependenciesProbe>;
 }
+
+export type DependenciesProbe =
+  | { readonly skip: string }
+  | {
+      readonly skip?: undefined;
+      readonly cachePath: string;
+      readonly downloadsSymbols: boolean;
+      readonly dependencies: readonly {
+        readonly id: string;
+        readonly name: string;
+        readonly publisher: string;
+        readonly version: string;
+      }[];
+      readonly packages: readonly { readonly id: string; readonly version: string }[];
+      readonly unread: readonly string[];
+    };
 
 /**
  * Sentinel `DoctorDeps.envStatus()` returns meaning "reachability confirmed, but this backend has
@@ -463,20 +471,17 @@ export function checkTestApp(probe: {
  *    compiled, a wrong id gave AL1022);
  *  - it is compatible when its version is equal to or higher than the declared one, compared part
  *    by part as numbers. The major part is not held fixed: 2.0.0.0 satisfied a 1.2.0.0 dependency.
- * Not covered: the implicit `application`/`platform` dependencies of app.json.
+ * Not covered: the implicit `application`/`platform` dependencies of app.json, and the
+ * dependencies OF the cached packages: only the target's own direct dependencies are checked.
+ *
+ * With `envTool.downloadSymbols` declared, a run fills the cache before any compile, so a gap is
+ * reported as skipped (not failed), as `checkAlcRuntime` does for a cache without System yet.
  */
-export function checkDependencies(probe: {
-  readonly cachePath: string;
-  readonly dependencies: readonly {
-    readonly id: string;
-    readonly name: string;
-    readonly publisher: string;
-    readonly version: string;
-  }[];
-  readonly packages: readonly { readonly id: string; readonly version: string }[];
-  readonly unread: readonly string[];
-}): DoctorCheck {
+export function checkDependencies(probe: DependenciesProbe): DoctorCheck {
   const name = "dependencies";
+  if (probe.skip !== undefined) {
+    return { name, ok: true, skipped: true, detail: `not checked: ${probe.skip}` };
+  }
   if (probe.dependencies.length === 0) {
     return { name, ok: true, detail: "the target's app.json declares no dependencies" };
   }
@@ -496,15 +501,25 @@ export function checkDependencies(probe: {
     return {
       name,
       ok: true,
-      detail: `all ${probe.dependencies.length} dependencies have a compatible package in ${probe.cachePath} (${rule})`,
+      detail: `all ${probe.dependencies.length} direct dependencies have a compatible package in ${probe.cachePath} (${rule}); the dependencies of those packages were not checked`,
     };
   }
-  const unread =
+  if (probe.downloadsSymbols) {
+    return {
+      name,
+      ok: true,
+      skipped: true,
+      detail: `not checked: no compatible package yet in ${probe.cachePath} for: ${missing.join("; ")}. envTool.downloadSymbols fills the cache during a run; run doctor again after.`,
+    };
+  }
+  const unreadNote =
     probe.unread.length === 0 ? "" : ` Not readable as packages: ${probe.unread.join(", ")}.`;
+  // With an unreadable file in the cache, the missing package may be that file: "may", not "will".
+  const verb = probe.unread.length === 0 ? "will" : "may";
   return {
     name,
     ok: false,
-    detail: `no compatible package in ${probe.cachePath} for: ${missing.join("; ")} (${rule}). The first local compile will fail with AL1022; add the .app files to the cache.${unread}`,
+    detail: `no compatible package in ${probe.cachePath} for: ${missing.join("; ")} (${rule}). The first local compile ${verb} fail with AL1022; add the .app files to the cache.${unreadNote}`,
   };
 }
 
