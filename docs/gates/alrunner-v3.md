@@ -309,18 +309,22 @@ N > 1 must equal N = 1: R766's proof found D1 and the gift card identical at N =
     `packages/runner/src/al-runner-v3-gated-builds.json`.
   - **A row cannot move a verdict.** Its strict parse refuses any key but the fixed few, and `readingsFrom` must name a
     hand pin. `readingsDigest` binds the row to that pin: editing a hand pin fails `r814-gated-builds.test.ts` until
-    a person re-gates.
+    a person deals with its rows (a release can be re-gated; an old edge row can only be removed, because that binary is gone).
+  - **A pin that moved is caught twice.** R777's check re-gates `current` first when the pin file differs from `.gated`'s
+    commit. And the receipt carries the digest the gate judged by: if that differs from this checkout's, the pass reads
+    `infra-fail`, with no row and no move.
   - **What still stops it, unchanged:** a `held` row, a moved verdict, count or killing test, a new refusal or warning
     code, any `infra-fail`. A figure that moves still needs a pre-commitment first.
   - **The limit:** "new text" means text a pin holds. A contract fact's unpinned text is not compared, and no person now
     diffs the logs of a build that passes. The receipt and `gate.log` stay beside `.gated` (R805).
   - A pass records `pinApplied` in its receipt. A candidate that asked for a pin and applied none reads `infra-fail`.
-- **Every candidate runs K**, and a candidate's pass needs `K: pass`. A release never becomes `current`, so K is the only
-  normal session it gets.
+- **Every candidate runs K**, and a candidate's pass needs `K: pass`. A release never becomes `current`, so K is the
+  closest it gets to a normal session. K's `gate-fail` or `held` is kept like any verdict. K runs in candidate mode, which
+  relaxes only `unlike-bc`; a pin cannot hold that verdict, so such a build fails leg C and cannot pass.
 - **The script's one commit.** `publishToMaster` adds ledger rows (`<root>/gated-builds.jsonl`) to the data file, from its
   own worktree (`/work/lethal-wt/al-runner-v3-pins`), `[skip ci]`, never forced. Each id goes once
-  (`gated-builds.published`), so a row a person recalled is not put back. It checks each row against master's pins and
-  refuses a bad row alone. `current` does not wait for it, because `.gated` already carries the readings; that is also
+  (`gated-builds.published`), so a row a person recalled is not put back. It checks each row against master's pins, by
+  digest, as master's own script computes them (`--pin-digests`), and refuses a bad row alone. `current` does not wait for it, because `.gated` already carries the readings; that is also
   why a lane behind master still reads a new build.
 - **A session resolves `current` once**, at its start (`resolveV3Binary`), so the move cannot swap the binary under it.
 - **Users ([[R814]]).** The gate manifest is the `track: "release"` rows. A user installs the newest listed release, and
