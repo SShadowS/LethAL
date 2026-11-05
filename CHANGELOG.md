@@ -13,6 +13,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **LethAL's own al-runner follows edge; users install a listed release** (R813, R814). The daily update gate has two
+  tracks: `edge` moves `current`, only forward, and a numbered release only joins a gate manifest that ships with LethAL.
+  A build whose readings equal `current`'s committed pin passes with no person, as a row that names that pin and holds no
+  reading; anything that moved still needs a pre-commitment first. The `al-runner-v3` backend now accepts a listed
+  release's exact binary with no local `.gated`, and any other binary is refused with the install command. That is a
+  **sibling build** of the commit LethAL tracks: edge's files are replaced in place, so an old edge build cannot be fetched.
 - **The v3 serve keep rule takes today's http refusal, and `serve-keep-reasons` reads `matches` again** (R808): the
   `http` entry of `V3_SERVE_SAFE_REFUSALS` also keeps the serve daemon on alpha.7 and alpha.12's wording ("... that a test
   handler does not answer ..."), exact at both ends; alpha.2's wording still keeps. A project whose test hits that refusal

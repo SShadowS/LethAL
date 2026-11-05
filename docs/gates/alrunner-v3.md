@@ -290,20 +290,56 @@ N > 1 must equal N = 1: R766's proof found D1 and the gift card identical at N =
 
 ## The pin and the update gate
 
-- The binary is pinned at `/work/tools/al-runner-v3/edge-dcdf9e821-dcdf9e821/` (`al-runner
-  3.0.0-alpha.5+edge.20261024 (dcdf9e821)`, since 2026-10-25 by `--edge-rejudge` at 6529c3cc, R756; alpha.5
-  `3.0.0-alpha.5-07342060e/` from 2026-10-24, alpha.2 before), and `current` points at it. Its
-  `.gated` file names the build, its sha256 and the LethAL commit that gated it. The backend refuses any build that
-  `.gated` does not name (`AlRunnerV3UngatedBuildError`), unless `LETHAL_ALRUNNER_V3_CANDIDATE=1`.
-- The pin is never moved by hand. `bun scripts/al-runner-v3-update.ts` gates newer `v3.0.0-alpha.N` releases, and
-  `--edge` gates the daily `edge` release by download. The version check accepts SemVer build metadata
-  (`al-runner 3.0.0-alpha.4+edge.20261022 (57f1e4f98)`, R639 F1).
-- **Candidate order (R586d): newest first.** The alpha path lists the releases above `current`'s alpha number and
-  gates the NEWEST one first, with a full gate. A `pass` makes it `current` and ends the run: no older candidate is
-  downloaded or gated. Anything else (`gate-fail`, `held`, `infra-fail`, or a skip because `failed/<tag>@<this
-  commit>` exists) sends the run to the next older candidate, down to but not including `current`. If none passes,
-  `current` stays, and each candidate has its own record (`failed/`, `held/`, `infra/`). Versions compare by the
-  alpha number as a number, so alpha.10 is newer than alpha.9. `--edge` is unchanged: one candidate, no fallback.
+- `/work/tools/al-runner-v3/current` points at the gated build; read `current/.gated` for which one. That file names
+  the build, its sha256, the LethAL commit that gated it and, for a mechanical pin, `readingsFrom`. The backend refuses
+  any build `.gated` does not name, and any build with no `.gated` that the gate manifest does not list
+  (`AlRunnerV3UngatedBuildError`), unless `LETHAL_ALRUNNER_V3_CANDIDATE=1`.
+- **Two tracks (the owner's rulings on [[R813]] and [[R814]]).** A plain `bun scripts/al-runner-v3-update.ts` is the
+  daily run, under one lock:
+  - **Edge moves `current`.** `current` follows edge, and only forward. The downloaded binary's commit must be `ahead`
+    of `current`'s, or `identical` (GitHub's compare). `behind` or `diverged` is not gated and is logged for a person.
+    A compare that fails is `infra-fail`, never "ahead". `--edge` runs this track alone.
+  - **A release only joins the manifest.** A numbered release never moves `current`, whatever its outcome. Edge runs
+    first, so a release is judged by the newest pin.
+  - The version check accepts SemVer build metadata (`al-runner 3.0.0-alpha.4+edge.20261022 (57f1e4f98)`, R639 F1).
+- **The mechanical pin ([[R814]]).** Every candidate is judged by `current`'s hand pin (`LETHAL_V3_PIN_FROM`), which is
+  the prediction, committed before the run.
+  - **It needs no masks.** The judges read only pin data, so this is exactly what a hand pin on shared readings gets.
+  - **A pass needs no person.** `.gated` records `readingsFrom`, and one row goes into
+    `packages/runner/src/al-runner-v3-gated-builds.json`.
+  - **A row cannot move a verdict.** Its strict parse refuses any key but the fixed few, and `readingsFrom` must name a
+    hand pin. `readingsDigest` binds the row to that pin: editing a hand pin fails `r814-gated-builds.test.ts` until
+    a person deals with its rows (a release can be re-gated; an old edge row can only be removed, because that binary is gone).
+  - **A pin that moved is caught twice.** R777's check re-gates `current` first when the pin file differs from `.gated`'s
+    commit. And the receipt carries the digest the gate judged by: if that differs from this checkout's, the pass reads
+    `infra-fail`, with no row and no move.
+  - **What still stops it, unchanged:** a `held` row, a moved verdict, count or killing test, a new refusal or warning
+    code, any `infra-fail`. A figure that moves still needs a pre-commitment first.
+  - **The limit:** "new text" means text a pin holds. A contract fact's unpinned text is not compared, and no person now
+    diffs the logs of a build that passes. The receipt and `gate.log` stay beside `.gated` (R805).
+  - A pass records `pinApplied` in its receipt. A candidate that asked for a pin and applied none reads `infra-fail`.
+- **Every candidate runs K**, and a candidate's pass needs `K: pass`. A release never becomes `current`, so K is the
+  closest it gets to a normal session. K's `gate-fail` or `held` is kept like any verdict. K runs in candidate mode, which
+  relaxes only `unlike-bc`; a pin cannot hold that verdict, so such a build fails leg C and cannot pass.
+- **The script's one commit.** `publishToMaster` adds ledger rows (`<root>/gated-builds.jsonl`) to the data file, from its
+  own worktree (`/work/lethal-wt/al-runner-v3-pins`), `[skip ci]`, never forced. Each id goes once
+  (`gated-builds.published`), so a row a person recalled is not put back. It checks each row against master's pins, by
+  digest, as master's own script computes them (`--pin-digests`), and refuses a bad row alone. `current` does not wait for it, because `.gated` already carries the readings; that is also
+  why a lane behind master still reads a new build.
+- **A session resolves `current` once**, at its start (`resolveV3Binary`), so the move cannot swap the binary under it.
+- **Users ([[R814]]).** The gate manifest is the `track: "release"` rows. A user installs the newest listed release, and
+  `checkGated` accepts that exact binary (version line AND sha256) with no `.gated`. Anything else is refused, naming
+  the install command. **That is a sibling build of the commit LethAL tracks:** its own binary, with its own gate run,
+  usually at a different commit. Edge builds are not listed for users, because upstream replaces edge's assets in place
+  and an old one cannot be fetched (`/coord/handoff/R-814/edge-fetch.md`). Only the linux x64 binary is gated.
+- **First run after a change of the gate's reading of the pin:** R777's check re-gates `current` first when `.gated`'s
+  commit does not read `LETHAL_V3_PIN_FROM`.
+- **Candidate order (R586d): newest first.** The release track lists the releases above the newest listed one (the
+  committed rows plus the ledger) and gates the NEWEST first, with a full gate. A `pass` ends the run: no older
+  candidate is downloaded or gated. Anything else (`gate-fail`, `held`, `infra-fail`, or a skip because `failed/<tag>@<this
+  commit>` exists) sends the run to the next older candidate. Each has its own record (`failed/`, `held/`, `infra/`).
+  Versions compare by the alpha number as a number, so alpha.10 is newer than alpha.9. The heavy-job and memory limits
+  are read before each gate. A `v3` tag the script cannot read is logged. `--edge` is one candidate, no fallback.
   Before R586d the order was oldest first, and a day with alpha.3 and alpha.4 both failing cost two gates before
   alpha.5 ran.
 - **No longer measured (R586d).** Once a newer release passes, the older releases skipped that day get no daily
