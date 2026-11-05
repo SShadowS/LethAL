@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**22 of 791 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**22 of 792 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -834,8 +834,9 @@ that ordering is the priority.
 - **R804** · Pin al-runner edge 8078bcf49 (3.0.0-alpha.5+edge.20261026): every pinned defect gone, 48 known table differences at BC's verdict · [R804.md](docs/roadmap/R804.md) · 8078bcf49 current since 2026-10-26 08:43Z (regate, rejudge, K pass); edge-db0296678 (alpha.6) pinned on the…
 - **R798** · v3: where R790's extra 2-3 s in D1's deploy goes; ruling: speculative baseline is opt-in, no nice or reorder · [R798.md](docs/roadmap/R798.md) · done (b04d6427)
 - **R805** · The update gate keeps a PASS's gate.log beside .gated, so a switch can be audited from its own run · [R805.md](docs/roadmap/R805.md) · done (d73f6974)
-- **R803** · After the talk: relax LethAL's own v3 refusals that only guarded upstream defects edge 8078bcf49 fixed (#5788 duplicate key, commit under isolation, and the rest leg C reads gone) · [R803.md](docs/roadmap/R803.md) · open, filed 2026-10-26 (8078bcf49 pin work; owner and orchestrator ruling: after the talk)
+- **R803** · After the talk: relax LethAL's own v3 refusals that only guarded upstream defects edge 8078bcf49 fixed (#5788 duplicate key, commit under isolation, and the rest leg C reads gone) · [R803.md](docs/roadmap/R803.md) · closed 2026-11-05 — inventory: no runtime guard is provably dead, none retired, no figure moves; warning text…
 - **R806** · The BC on Linux host moves back to server1: the default, and proving the gates there · [R806.md](docs/roadmap/R806.md) · open, filed 2026-11-05 (coord task R-806)
+- **R808** · v3 serve keep rule: the http entry misses alpha.7's text, and serve-keep-reasons reads diverged on every gate · [R808.md](docs/roadmap/R808.md) · open, filed 2026-11-05 (found by R-803)
 
 ---
 
