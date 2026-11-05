@@ -710,10 +710,10 @@ end; }`;
     ]);
   });
 
-  // R818 ruling INVERTS R480's B1: a name-reading condition that names no cursor method gets feeds
+  // R829 ruling INVERTS R480's B1: a name-reading condition that names no cursor method gets feeds
   // too, by name and to a fixpoint. A false negative is a hang that ends a run; an over-refusal is
   // one lost mutant. Here `I += 1` feeds `Done`, which the guard reads: refused.
-  it("shape 2 (R818, was B1): a name-reading condition gets feeds as well as guards (revert: feeds only for a name-free condition)", () => {
+  it("shape 2 (R829, was B1): a name-reading condition gets feeds as well as guards (revert: feeds only for a name-free condition)", () => {
     for (const head of ["while Go do begin", "while Ready() do begin"]) {
       const src = [
         `        ${head}`,
@@ -901,14 +901,14 @@ end; }`;
 });
 
 /**
- * R818 (GitHub #50): a loop whose condition READS a name used to get body-exit guards but no feeds,
+ * R829 (GitHub #50, coord task R-818): a loop whose condition READS a name used to get body-exit guards but no feeds,
  * so `while Pos > 0 do begin Text := Text.Substring(Pos + 2); Pos := Text.IndexOf('{{'); end` left
  * `Text :=` a mutant, and removing it is a real hang. Now the feeds of the condition, the guards and
  * the guards above each followed feed are parts too, by name, to a fixpoint. A cursor-method
  * condition keeps its R480 exclusion. Synthetic names only; each refusal has a control in the same
  * loop that must stay claimed.
  */
-describe("R818: a name-reading loop condition gets feeds too", () => {
+describe("R829: a name-reading loop condition gets feeds too", () => {
   const V =
     "Text: Text; Pos: Integer; Result: Text; A: Integer; B: Integer; Done: Boolean; Go: Boolean; Mark: Text; Line: Text; Step: Integer; Total: Integer; Q: Integer; Amount: Integer; Rec: Record Customer; R: Record Customer; C: Record Customer;";
   const claims = (
@@ -1004,7 +1004,7 @@ describe("R818: a name-reading loop condition gets feeds too", () => {
     expect(claims(removeAssignment, src).map((s) => s.split("|")[0])).toEqual(["9", "10"]);
   });
 
-  it("f: an implicit record: `Rec.Amount` read, a bare `Step` feeds `Amount` (revert: drop the feeds call)", () => {
+  it("f: a declared record `Rec.Amount` read, a bare `Step` feeds `Amount` (revert: drop the feeds call)", () => {
     const src = [
       "        while Rec.Amount < 10 do begin",
       "            Amount := Step;", // claimed: the R294 rule keys by declaration, `Amount` is not `Rec.Amount`
@@ -1071,7 +1071,7 @@ describe("R818: a name-reading loop condition gets feeds too", () => {
         "{",
         "    procedure Go2()",
         "    var",
-        "        Done: Boolean; Go: Boolean; X: Integer; Y: Integer; P: Integer; Q: Integer;",
+        "        Done: Boolean; Go: Boolean; X: Integer; Y: Integer; P: Integer; Q: Integer; U: Integer; W: Integer; Other: Boolean;",
         "    begin",
         ...lines,
         "    end;",
@@ -1085,11 +1085,79 @@ describe("R818: a name-reading loop condition gets feeds too", () => {
       "        while Go do begin", // 7
       "            Done := Cmp(X, Y);", // 8 refused: Done feeds the guard
       "            Go := Cmp(P, Q);", // 9 refused: the condition
+      "            Other := Cmp(U, W);", // 10 control, in the same loop: nothing reads U or W
       "            if Done then exit;",
       "        end;",
-      "        Done := Cmp(P, Q);", // 12 control, outside any loop
+      "        Done := Cmp(P, Q);", // 13 control, outside any loop
     ]);
-    expect(claimedSites(swapCallArguments, src).map((s) => s.split("|")[0])).toEqual(["12"]);
+    expect(claimedSites(swapCallArguments, src).map((s) => s.split("|")[0])).toEqual(["10", "13"]);
+  });
+
+  it("an INACTIVE assignment cannot bring its active guards in: `Line :=` stays claimed with X off, refused with X on", () => {
+    const src = [
+      "        while Go do begin", // 7
+      "            Line := Text.Substring(1, 1);", // 8
+      "            if Line = Mark then begin",
+      "#if LETHALX",
+      "                Go := false;",
+      "#endif",
+      "            end;",
+      "            Total := Total + 1;", // 14
+      "        end;",
+    ];
+    const lines = (b: string[] | "undecided") =>
+      claims(removeAssignment, src, b).map((s) => s.split("|")[0]);
+    expect(lines([])).toEqual(["8", "14"]);
+    expect(lines(["LETHALX"])).toEqual(["14"]);
+    expect(lines("undecided")).toEqual(["14"]);
+  });
+
+  it("the guard walk stops at the loop: a guard ABOVE the loop is not a part (revert: drop `!samePos(g, loop)`)", () => {
+    const src = [
+      "        if Line = Mark then", // 7
+      "            while Go do begin", // 8
+      "                Go := false;", // 9 refused: the condition
+      "                Line := 'x';", // 10 claimed: only the outer guard reads Line
+      "            end;",
+    ];
+    expect(claims(removeAssignment, src)).toEqual(["10|Line := 'x'"]);
+  });
+
+  it("a `case` branch pattern with a name is a guard name (revert: drop `withGuards`)", () => {
+    const src = [
+      "        while not Done do begin", // 7
+      "            case A of", // 8
+      "                B:", // 9
+      "                    Done := true;",
+      "            end;",
+      "            B := B + 1;", // 12 refused: the pattern reads B
+      "            Total := Total + 1;", // 13 control
+      "        end;",
+    ];
+    expect(claims(removeAssignment, src)).toEqual(["13|Total := Total + 1"]);
+  });
+
+  it("an implicit record: a bare field in a table's procedure; its feed `Step :=` is refused (revert: drop the feeds call)", () => {
+    const table = [
+      "table 50000 T",
+      "{",
+      "    fields",
+      "    {",
+      "        field(1; Amount; Integer) { }",
+      "    }",
+      "    procedure Go2()",
+      "    var",
+      "        Step: Integer; Total: Integer;",
+      "    begin",
+      "        while Amount < 10 do begin", // 11
+      "            Step := Step + 1;", // 12 refused: Step feeds Amount below
+      "            Amount := Step;", // 13
+      "            Total := Total + 1;", // 14 control
+      "        end;",
+      "    end;",
+      "}",
+    ].join("\n");
+    expect(claimedSites(removeAssignment, table)).toEqual(["14|Total := Total + 1"]);
   });
 
   // j: no test for the memo. Tried an `armOf` call count over 10 vs 40 sites in one loop: it stays
@@ -1123,9 +1191,9 @@ describe("R818: a name-reading loop condition gets feeds too", () => {
       "#if LETHALX",
       "                (A >= 3) or",
       "#endif",
-      "                false;", // 11
-      "            A := A + B;", // 12
-      "            Total := Total + 1;", // 13
+      "                false;", // 12
+      "            A := A + B;", // 13
+      "            Total := Total + 1;", // 14
       "            if Done then exit;",
       "        end;",
     ];

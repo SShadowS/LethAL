@@ -676,7 +676,7 @@ describe("sessionFingerprint (R47)", () => {
   // under scheme 40. It moved again for R-604b (scheme 42, a same-object callee that inserts into
   // the iterated table or touches a `var` cursor is refused); it was c49d72bc...773a under scheme 41.
   // It moved again for R796 (scheme 43, tree-sitter-al 4.5.0); it was cbd5ae2c...5fba under scheme 42.
-  // It moved again for R818 (scheme 44, a name-reading loop condition gets feeds); it was ca9b1eaa...1e96 under scheme 43.
+  // It moved again for R829 (scheme 44, a name-reading loop condition gets feeds); it was ca9b1eaa...1e96 under scheme 43.
   const PINNED = "7afe4a79aab251389d09b22bad559d5c807f0105e1ff919940d34947f80a5f98";
   test("a run with no exclusions adds nothing to the digest", () => {
     expect(sessionFingerprint(base)).toBe(PINNED);
@@ -2481,7 +2481,7 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
     // ends only by consuming its record set: its consumers are hang-refused). 40 is R565 (an
     // outside report's preset writers are read from the dependency packages). 41 is R572 (a guard
     // refused as a single site renumbers its procedure's same-tuple twins). 42 is R-604b (a
-    // same-object callee that inserts into the iterated table or touches a `var` cursor is refused). 43 is R796 (tree-sitter-al 4.5.0 parses shapes 4.4.1 swallowed or broke). 44 is R818 (a name-reading loop condition gets feeds: sites leave the set).
+    // same-object callee that inserts into the iterated table or touches a `var` cursor is refused). 43 is R796 (tree-sitter-al 4.5.0 parses shapes 4.4.1 swallowed or broke). 44 is R829 (a name-reading loop condition gets feeds: sites leave the set).
     expect(IDENTITY_SCHEME).toBe(44);
     expect(report.identityScheme).toBe(IDENTITY_SCHEME);
   });

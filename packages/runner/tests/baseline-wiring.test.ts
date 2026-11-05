@@ -434,6 +434,45 @@ describe("R332 wiring: real call sites, not text", () => {
     ).toBe(true);
   });
 
+  // R810: `pinned` is optional, so a call that drops it records unchecked on a pinned build,
+  // which is what M5 stopped. Every record path of the v3 gate must pass it.
+  test("R810: every v3 assertGateBaseline call passes pinnedRecord(), leg T pinnedRecord(true), one per recordBaselines path", () => {
+    const sf = parse(join(ITEST, "al-runner-v3.itest.ts"));
+    const main = mainOf(sf);
+    const recorded: string[] = [];
+    const visit = (n: ts.Node): void => {
+      if (
+        ts.isVariableDeclaration(n) &&
+        ts.isIdentifier(n.name) &&
+        n.name.text === "recordBaselines" &&
+        n.initializer !== undefined &&
+        ts.isNewExpression(n.initializer)
+      ) {
+        const list = n.initializer.arguments?.[0];
+        if (list !== undefined && ts.isArrayLiteralExpression(list)) {
+          for (const e of list.elements) {
+            if (ts.isArrayLiteralExpression(e)) recorded.push(e.elements[1]?.getText(sf) ?? "?");
+          }
+        }
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(main);
+    const asserts = calls(main, sf, "assertGateBaseline");
+    const seen = asserts.map((c) => ({
+      path: c.arguments[1]?.getText(sf),
+      pinned: c.arguments[4]?.getText(sf),
+    }));
+    expect(recorded.length).toBe(6);
+    expect(seen.map((s) => s.path).sort()).toEqual([...recorded].sort());
+    for (const s of seen) {
+      expect(s).toEqual({
+        path: s.path,
+        pinned: s.path === "TABLES_BASELINE_PATH" ? "pinnedRecord(true)" : "pinnedRecord()",
+      });
+    }
+  });
+
   test("R337: envtool writes a receipt on skip, pass and failure, and prints the failure before any await", () => {
     const sf = parse(join(ITEST, "envtool.itest.ts"));
     const R = "./gate-receipt";

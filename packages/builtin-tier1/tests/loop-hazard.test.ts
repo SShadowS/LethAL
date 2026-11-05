@@ -372,7 +372,7 @@ describe("R294: a member receiver in the loop condition", () => {
     );
   });
 
-  // R818 re-pin. The feed walk is by NAME, so a local `Amount` is followed when a part reads
+  // R829 re-pin. The feed walk is by NAME, so a local `Amount` is followed when a part reads
   // `R.Amount`, and the old body `Amount := Amount + 1` became refused (its right side is now a
   // part). The control keeps its point, that the declaration-keyed rule does not match a member
   // name to a local, with a body that reads nothing.

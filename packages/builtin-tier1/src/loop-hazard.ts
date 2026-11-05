@@ -46,7 +46,7 @@ import {
  * `CurrReport.Quit`/`Break`, a `break` of that loop) count as its condition (`loopExitParts`), so a
  * write ANY such guard reads is refused. R446 did this for a condition that reads no name and calls
  * nothing (`while true`, `until false`); R480 extends it to every other condition that does not
- * name a cursor method (`namesCursorMethod`). R818: for every such condition (not only a name- and
+ * name a cursor method (`namesCursorMethod`). R829: for every such condition (not only a name- and
  * call-free one), a write that FEEDS a condition or guard name is refused too, by name and to a
  * fixpoint with no hop limit (`indirectFeeds`: `I += 1; Done := I >= 3; if Done then exit`; `Text :=
  * Text.Substring(Pos + 2); Pos := Text.IndexOf('{{')` under `while Pos > 0`). The guards above a
@@ -57,8 +57,9 @@ import {
  * none shown safe: a condition naming a cursor method (`Next`, `Read`, `EOS`, `MoveNext`), which by
  * name also covers a user procedure or field named `Next` and a mixed condition (`(C.Next() <> 0)
  * or KeepGoing`); a write to a `for` loop's end bound; a `foreach` (its list); `asserterror` as the
- * only exit; `CurrReport.Skip`. R818 known, not seen: an array-element target (`A[I] := ...`), a feed
- * through a by-`var` call argument, a `for`/`foreach` body's feeds, and a `with` body's bare names.
+ * only exit; `CurrReport.Skip`. R829 known, not seen: an array-element target (`A[I] := ...`), a feed
+ * through a by-`var` call argument, and a `for`/`foreach` loop's own feeds. A `with` body is seen: a
+ * bare name there matches by name, like any other.
  *
  * R484: a report data item over the virtual `Integer` table is a loop too (BC calls its
  * `OnAfterGetRecord` once per record), unless a narrow certificate bounds it (`dataItemOpen`).
@@ -6837,10 +6838,10 @@ function namesCursorMethod(parts: ALSyntaxNode[], ctx: SemanticContext): boolean
  * included, whose target is a name `parts` read, to a fixpoint (`I += 1; Done := I >= 3; if Done
  * then exit` makes `I >= 3` a part, then `1`). By NAME, the safe direction for a refusal: every
  * identifier counts, member halves included, and a bare target `X` or a member target `R.X` matches
- * a read of `X`. An assignment in an inactive arm adds nothing, because no name or reader reads an
- * inactive node; an undecided one is followed.
+ * a read of `X`. An assignment in an inactive arm is skipped whole (so it cannot bring the guards
+ * above it in either); an undecided one is followed.
  *
- * R818 `withGuards` (only `loopExitParts` sets it): a followed assignment also feeds the guard parts
+ * R829 `withGuards` (only `loopExitParts` sets it): a followed assignment also feeds the guard parts
  * (`guardPartsOf`) of every statement between it and the loop, so `if Line = Mark then Done := true`
  * makes `Line` a part. Same by-name rule, no member/bare split, no hop limit. The other callers keep
  * the plain walk, so their figures do not move.
@@ -6871,7 +6872,7 @@ function indirectFeeds(
   for (let changed = true; changed; ) {
     changed = false;
     for (const a of assignments) {
-      if (used.has(a)) continue;
+      if (used.has(a) || armOfNode(ctx, a) === "inactive") continue;
       const left = a.childForFieldName("left");
       const right = a.childForFieldName("right");
       if (left === null || right === null) continue;
