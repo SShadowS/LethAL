@@ -435,6 +435,8 @@ lethal force-reset-lease --server http://YourContainer --instance BC --config le
 
 # clears the LOCAL durable quarantine record
 lethal clear-quarantine --server http://YourContainer --instance BC
+# or take the server and instance from the config, as clear-ceiling does
+lethal clear-quarantine --config lethal.config.json
 ```
 
 If a publish failed once for a reason that had nothing to do with size (a container restarting,
@@ -566,7 +568,7 @@ Design detail for all of the above lives in [`design.md`](design.md).
 
 ## The changes it makes
 
-Fifteen operators, in two tiers. **Tier 1** is the conservative set the mutation-testing literature
+<!-- operators: summary -->26 operators, in two tiers<!-- /operators: summary -->. **Tier 1** is the conservative set the mutation-testing literature
 has evidence for; **Tier 2** exploits AL and Business Central semantics to plant bugs a generic tool
 cannot express. Where both claim the same site, Tier 2 wins.
 
@@ -755,9 +757,9 @@ a LethAL feature or a mode.
   project could make never-ending. A loop in ANOTHER installed app that depends on yours, and calls into it,
   is not seen. Measured on three ISV corpora (R-634): adding each dependent's source to the analysis
   refused 0 more mutants on all 25 pairs.
-- **The advanced operator set is not built.** Twelve operators today, in two groups: six generic
-  ones (Tier-1: comparisons, return values, empty blocks) and six AL-specific ones (Tier-2:
-  `TestField`, `SetRange`, `CalcFields`, `Commit` and friends). A third, more aggressive group is
+- **The advanced operator set is not built.** <!-- operators: limits -->26 operators today, in two groups: 16 generic ones (Tier 1) and 10 AL-specific ones (Tier 2)<!-- /operators: limits -->.
+  Tier 1 covers comparisons, return values and empty blocks, among others; Tier 2 covers
+  `TestField`, `SetRange`, `CalcFields`, `Commit` and friends. A third, more aggressive group is
   designed only.
   (Tier-2 operators *do* now claim sites inside `tableextension` and `pageextension` bodies; that
   limit was closed. A `pageextension`'s implicit `Rec` is still refused deliberately: it resolves to
