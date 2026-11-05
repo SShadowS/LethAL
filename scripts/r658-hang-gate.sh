@@ -2,7 +2,8 @@
 # R-658: itest:hang with the BASELINE leg, on bc2 or bc3 only, under the caller's own coord lease.
 # Usage: r658-hang-gate.sh bc2|bc3 [--lane <lane>]. It runs the worktree it lives in (R823).
 # The lane is `--lane`, else KRAKEN_AGENT (`lane-<x>` is `<x>`), else it refuses (R598's rule, as
-# `resolveLane` in bc-linux-setup.ts), so a lease is never held in another lane's name.
+# `resolveLane` in bc-linux-setup.ts). Each run gets its own evidence folder: another run must not
+# overwrite the hang.log a proof table cites, or a held STOP's evidence.
 # Release the coord lease ONLY on gate exit 0 or 1 with the leg marker `passed` or absent, and the
 # [itest target] line naming the leased server. HOLD on everything else (5 = STOP, 3, 130, 137, ...),
 # whenever the leg marker reads `armed` or `stop`, and on any INT/TERM while the gate runs.
@@ -63,7 +64,7 @@ for k in R658_HOLD_MAX_BEATS R658_WORKTREE; do
     echo "refused: $k is test-only and needs R658_EVIDENCE_DIR"; exit 2
   fi
 done
-H=${R658_EVIDENCE_DIR:-$ROOT/handoff/R-658/hang-$SRV}
+H=${R658_EVIDENCE_DIR:-$ROOT/handoff/R-658/hang-$SRV-$(date -u +%Y%m%dT%H%M%SZ)-$$}
 WT=${R658_WORKTREE:-$(cd "$HERE/.." && pwd)}
 OOU=$ROOT/machine/out-of-use/$SRV.md
 BEAT=${R658_BEAT_SECS:-60}

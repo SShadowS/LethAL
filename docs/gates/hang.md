@@ -39,8 +39,9 @@ runs under a mutant (plan test F1 in `test-order.test.ts`). They add one baselin
 per leg, and about 25 s per leg.
 
 The BASELINE leg runs only on `bc2` or `bc3`, never on `bc1`, and only through the wrapper
-`scripts/r658-hang-gate.sh bc2|bc3 [--lane <lane>]`, which runs the worktree it lives in, in the caller's lane, and
-holds the lease and writes the out-of-use marker on a STOP (R823). Before R823 it could run only from lane `bugs`, so
+`bash scripts/r658-hang-gate.sh bc2|bc3 [--lane <lane>]`, which runs the worktree it lives in, in the caller's lane,
+and holds the lease and writes the out-of-use marker on a STOP (R823). Its evidence goes to a new folder per run,
+`/coord/handoff/R-658/hang-<server>-<time>-<pid>/`. Before R823 it could run only from lane `bugs`, so
 R-783 and R-813 ran `itest:hang` directly under their own lease.
 
 The ON and OFF legs guard against different faults. One fault is minting a kill from LethAL's own

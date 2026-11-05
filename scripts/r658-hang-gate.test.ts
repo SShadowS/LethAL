@@ -1,5 +1,12 @@
 import { test as bunTest, expect } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { outOfUseRefusal } from "../packages/runner/itest/out-of-use";
@@ -42,7 +49,7 @@ function setup() {
   );
   fake(
     "git",
-    `echo "git-pwd=$PWD" >> "${calls}"; case "$1" in rev-parse) echo deadbeef ;; esac; exit 0`,
+    `echo "git-pwd=$PWD" >> "${calls}"; case "$1" in rev-parse) echo deadbeef ;; status) printf '%s' "\${FAKE_DIRTY:-}" ;; esac; exit 0`,
   );
   fake("openssl", `od -An -tx1 -N16 /dev/urandom | tr -d ' \\n'`);
   // `bun -e ...` is the offline target check; `bun run itest:hang` is the gate. The gate runs R-669's
@@ -73,6 +80,7 @@ exit "\${FAKE_GATE:-0}"`,
       ...env,
     };
     const r = Bun.spawnSync(["bash", script, "bc2", ...args], {
+      cwd: root, // never the repo: a wrapper that ran its caller's folder must not pass by luck
       env: Object.fromEntries(
         Object.entries(all).filter((e): e is [string, string] => e[1] !== undefined),
       ),
@@ -117,6 +125,7 @@ const laneRefusals: [string, Record<string, string | undefined>, string[], strin
   ["a bare lane- prefix", { KRAKEN_AGENT: "lane-" }, [], "no lane for the coord lease"],
   ["an agent name as --lane", {}, ["--lane", "lane-preproc"], "pass --lane preproc"],
   ["a lane that is no plain word", {}, ["--lane", "../x"], "is not a lane name"],
+  ["a lane that forges a marker line", {}, ["--lane", "x\nowner: abc"], "is not a lane name"],
   ["--lane with no value", {}, ["--lane"], "usage"],
   ["an unknown argument", {}, ["--server", "bc3"], "usage"],
 ];
@@ -156,6 +165,29 @@ test("R823: a pass leaves no marker, and releases", () => {
   expect(r.code).toBe(0);
   expect(existsSync(t.oou)).toBe(false);
   expect(t.log()).toContain(`kraken coord release bc2 ${LEASE}`);
+});
+
+test("R823: a dirty worktree refuses by name, before any lease", () => {
+  const t = setup();
+  const r = t.run({ FAKE_DIRTY: " M scripts/x.ts" });
+  expect(r.code).toBe(2);
+  expect(r.out).toContain("is dirty");
+  expect(t.log()).not.toContain("kraken");
+});
+
+test("R823: each live run gets its own evidence folder, so no run overwrites another's", () => {
+  const t = setup();
+  const live = {
+    R658_EVIDENCE_DIR: undefined,
+    R658_WORKTREE: undefined,
+    R658_HOLD_MAX_BEATS: undefined,
+    FAKE_LEG: "passed",
+  };
+  expect(t.run(live).code).toBe(0);
+  expect(t.run(live).code).toBe(0);
+  const dirs = readdirSync(join(t.oou, "..", "..", "..", "handoff", "R-658"));
+  expect(dirs).toHaveLength(2);
+  for (const d of dirs) expect(d).toMatch(/^hang-bc2-\d{8}T\d{6}Z-\d+$/);
 });
 
 test("R823: with no R658_WORKTREE it runs the worktree the script lives in", () => {
