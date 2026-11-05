@@ -69,7 +69,7 @@ import {
   resolveV3Binary,
   sha256OfFile,
 } from "../src/al-runner-v3-pin";
-import { type V3BuildPin, findV3Pin, v3ReadingsDigest } from "../src/al-runner-v3-pins";
+import { type V3BuildPin, findV3Pin, undoTPin, v3ReadingsDigest } from "../src/al-runner-v3-pins";
 import { FRESH_PROBE_ENV } from "../src/al-runner-v3-probe-cache";
 import {
   AlRunnerV3SeedError,
@@ -159,7 +159,9 @@ import {
 } from "./alrunner-v3-legs";
 import {
   BaselineRecordedError,
+  type PinnedRecord,
   assertGateBaseline,
+  gitShowHead,
   preflightGateBaseline,
   readGateBaseline,
   recordRequested,
@@ -225,6 +227,16 @@ const CANDIDATE = process.env.LETHAL_ALRUNNER_V3_CANDIDATE === "1";
 const K_ON_CANDIDATE = v3KOnCandidate(process.env);
 /** R586c: the per-build pin of the binary under test, set in `main` once its version and sha are known. */
 let activePin: V3BuildPin | undefined;
+
+/** R824: a record on a pinned build proves its rows equal HEAD's; undefined (unchanged record) with no pin. */
+function pinnedRecord(undoT = false): PinnedRecord | undefined {
+  const pin = activePin;
+  if (pin === undefined) return undefined;
+  return {
+    readCommitted: gitShowHead,
+    ...(undoT ? { undo: (rows) => undoTPin(rows, pin.legT) } : {}),
+  };
+}
 const CACHE = process.env.LETHAL_ALRUNNER_V3_CACHE ?? "/work/tools/al-runtime-rs/cache";
 const ALC = join(process.env.LETHAL_ALC_DIR ?? "", "alc");
 const CDO = process.env.LETHAL_ITEST_V3_CDO;
@@ -2126,6 +2138,8 @@ async function legT(
       `  T: notes state ${tagged(r, V3_STATE_NOTE_TAG).length}, refused-nearby ${tagged(r, V3_REFUSED_NEARBY_TAG).length}, §6 ${tagged(r, SLEEP_NOTE_TAG).length} (recorded, not predicted)`,
     );
   if (recordRequested(TABLES_BASELINE_PATH)) {
+    // R824: a pinned record needs no figures; `main` proves the rows (pin undone) equal the committed ones.
+    if (activePin !== undefined) return { outcome: "pass", r };
     assertCounts(r, "T", 290, 57, 59, 406);
     must(
       r.unsupportedTests.length === 3,
@@ -2226,7 +2240,7 @@ async function main(): Promise<void> {
   activePin = PIN;
   if (PIN !== undefined)
     console.log(`al-runner-v3 itest: PIN ${PIN.id} applies (version and sha256 equal)`);
-  // M5: no leg records a baseline from a pinned or candidate build.
+  // M5: no leg records a baseline from a candidate build; a pinned build records only HEAD's rows (R824).
   const recordBaselines = new Map<string, string>([
     ["T", TABLES_BASELINE_PATH],
     ["L1", LAYOUT_BASELINE_PATH],
@@ -2236,7 +2250,6 @@ async function main(): Promise<void> {
     ["WR", WRAPPED_BASELINE_PATH],
   ]);
   const refusedRecord = recordRefusal(
-    PIN !== undefined,
     CANDIDATE,
     LEGS.flatMap((l) => {
       const p = recordBaselines.get(l);
@@ -2280,7 +2293,13 @@ async function main(): Promise<void> {
         else if (leg === "L1") {
           const r = await legL1(scratch);
           try {
-            await assertGateBaseline(r, LAYOUT_BASELINE_PATH, "al-runner-v3 itest leg L1");
+            await assertGateBaseline(
+              r,
+              LAYOUT_BASELINE_PATH,
+              "al-runner-v3 itest leg L1",
+              process.env,
+              pinnedRecord(),
+            );
           } catch (e) {
             if (e instanceof BaselineRecordedError) throw e;
             throw new LegFailure(`L1: ${e instanceof Error ? e.message : String(e)}`);
@@ -2288,7 +2307,13 @@ async function main(): Promise<void> {
         } else if (leg === "Y-A") {
           const r = await legY(scratch, leg);
           try {
-            await assertGateBaseline(r, SYMBOLS_A_BASELINE_PATH, "al-runner-v3 itest leg Y-A");
+            await assertGateBaseline(
+              r,
+              SYMBOLS_A_BASELINE_PATH,
+              "al-runner-v3 itest leg Y-A",
+              process.env,
+              pinnedRecord(),
+            );
           } catch (e) {
             if (e instanceof BaselineRecordedError) throw e;
             throw new LegFailure(`Y-A: ${e instanceof Error ? e.message : String(e)}`);
@@ -2296,7 +2321,13 @@ async function main(): Promise<void> {
         } else if (leg === "Y-B") {
           const r = await legY(scratch, leg);
           try {
-            await assertGateBaseline(r, SYMBOLS_B_BASELINE_PATH, "al-runner-v3 itest leg Y-B");
+            await assertGateBaseline(
+              r,
+              SYMBOLS_B_BASELINE_PATH,
+              "al-runner-v3 itest leg Y-B",
+              process.env,
+              pinnedRecord(),
+            );
           } catch (e) {
             if (e instanceof BaselineRecordedError) throw e;
             throw new LegFailure(`Y-B: ${e instanceof Error ? e.message : String(e)}`);
@@ -2306,7 +2337,13 @@ async function main(): Promise<void> {
           // difference); then the own-baseline compare, which a record run writes (R332).
           const r = await legMO(scratch);
           try {
-            await assertGateBaseline(r, MULTIOBJECT_BASELINE_PATH, "al-runner-v3 itest leg MO");
+            await assertGateBaseline(
+              r,
+              MULTIOBJECT_BASELINE_PATH,
+              "al-runner-v3 itest leg MO",
+              process.env,
+              pinnedRecord(),
+            );
           } catch (e) {
             if (e instanceof BaselineRecordedError) throw e;
             throw new LegFailure(`MO: ${e instanceof Error ? e.message : String(e)}`);
@@ -2314,7 +2351,13 @@ async function main(): Promise<void> {
         } else if (leg === "WR") {
           const r = await legWR(scratch);
           try {
-            await assertGateBaseline(r, WRAPPED_BASELINE_PATH, "al-runner-v3 itest leg WR");
+            await assertGateBaseline(
+              r,
+              WRAPPED_BASELINE_PATH,
+              "al-runner-v3 itest leg WR",
+              process.env,
+              pinnedRecord(),
+            );
           } catch (e) {
             if (e instanceof BaselineRecordedError) throw e;
             throw new LegFailure(`WR: ${e instanceof Error ? e.message : String(e)}`);
@@ -2333,7 +2376,13 @@ async function main(): Promise<void> {
           // check) in `judgeLegT`; alpha.2's baseline would fail on the seven moved rows.
           if (!t.pinned) {
             try {
-              await assertGateBaseline(t.r, TABLES_BASELINE_PATH, "al-runner-v3 itest leg T");
+              await assertGateBaseline(
+                t.r,
+                TABLES_BASELINE_PATH,
+                "al-runner-v3 itest leg T",
+                process.env,
+                pinnedRecord(true),
+              );
             } catch (e) {
               if (e instanceof BaselineRecordedError) throw e;
               throw new LegFailure(`T: ${e instanceof Error ? e.message : String(e)}`);

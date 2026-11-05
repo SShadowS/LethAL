@@ -1076,3 +1076,37 @@ export function applyTPin<T extends TRow>(
   }
   return seen.size === pinned.size ? out : undefined;
 }
+
+/**
+ * R824: the inverse of `applyTPin`. A pinned run's rows go back to the pin's `from` rows (default
+ * survived/null/null), with `coverageFiltered` following the restored verdict. `undefined` when a
+ * pinned key is absent, repeated, or does not read the pin's verdict, errorClass and killingTest.
+ */
+export function undoTPin<T extends TRow>(
+  rows: readonly T[],
+  pin: V3BuildPin["legT"],
+): T[] | undefined {
+  const pinned = new Map(pin.rows.map((r) => [r.key, r]));
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const r of rows) {
+    const p = pinned.get(r.key);
+    if (p === undefined) {
+      out.push(r);
+      continue;
+    }
+    if (seen.has(r.key)) return undefined;
+    seen.add(r.key);
+    if (r.verdict !== p.verdict || r.killingTest !== p.killingTest || r.errorClass !== p.errorClass)
+      return undefined;
+    const from = p.from ?? { verdict: "survived", errorClass: null, killingTest: null };
+    out.push({
+      ...r,
+      verdict: from.verdict,
+      errorClass: from.errorClass,
+      killingTest: from.killingTest,
+      ...("coverageFiltered" in r ? { coverageFiltered: from.verdict === "no-coverage" } : {}),
+    });
+  }
+  return seen.size === pinned.size ? out : undefined;
+}
