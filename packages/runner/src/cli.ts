@@ -36,7 +36,7 @@ import {
   refuseV3Platform,
   validateAlRunnerV3Config,
 } from "./al-runner-v3-config";
-import { checkGated } from "./al-runner-v3-pin";
+import { checkGated, v3InstallHint } from "./al-runner-v3-pin";
 import { v3ChildEnv } from "./al-runner-v3-seed";
 import { readSystemRuntime } from "./app-package";
 import { compareAppVersions, nextAbove } from "./app-version";
@@ -4557,13 +4557,17 @@ export async function buildDoctorDeps(
             }),
           );
           const version = (v.stdout || v.stderr).trim();
-          if (v.exitCode !== 0) return { ok: false, details: `${c.path} not runnable: ${version}` };
+          if (v.exitCode !== 0)
+            return {
+              ok: false,
+              details: `${c.path} not runnable: ${version}. ${v3InstallHint()}`,
+            };
           try {
             const gated = await checkGated(c.path, version);
             await assertBcVersionMatchesPackages(c.packagesDir, c.bcVersion);
             return {
               ok: true,
-              details: `${version}; gated at LethAL ${gated.lethalCommit}; bcVersion ${c.bcVersion}; transport ${c.transportSource === "explicit" ? c.transport : "default (serve-entries where proven, else one-shot; R761)"}`,
+              details: `${version}; ${gated.source === "manifest" ? "listed in the gate manifest, gated" : "gated"} at LethAL ${gated.lethalCommit}; bcVersion ${c.bcVersion}; transport ${c.transportSource === "explicit" ? c.transport : "default (serve-entries where proven, else one-shot; R761)"}`,
             };
           } catch (err) {
             return { ok: false, details: err instanceof Error ? err.message : String(err) };
