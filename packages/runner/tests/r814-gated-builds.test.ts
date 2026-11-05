@@ -1,7 +1,7 @@
 // R814: the committed gated builds, the mechanical pin, and the manifest path of `checkGated`.
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -264,7 +264,8 @@ describe("R814: a session resolves `current` once", () => {
     await writeFile(join(dir, "build-a", "al-runner"), "a");
     await symlink(join(dir, "build-a"), join(dir, "current"));
     const real = resolveV3Binary(join(dir, "current", "al-runner"));
-    expect(real.endsWith("/build-a/al-runner")).toBe(true);
+    expect(real).toBe(await realpath(join(dir, "build-a", "al-runner")));
+    expect(real).not.toContain("current");
     expect(resolveV3Binary("/no/such/path")).toBe("/no/such/path");
   });
 });
