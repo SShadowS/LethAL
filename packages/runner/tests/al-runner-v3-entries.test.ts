@@ -819,6 +819,17 @@ describe("5: the decoder never trusts the answer's grouping: every miss is error
     expect(v.failureMessage).toContain("0 row(s)");
   });
 
+  test("R808 (g): an entry with NO row at all (an OnRun that raised, #5859) stops the session at baseline", async () => {
+    const r = await rig({
+      serve: { rows: (m, cu, d, n) => (n === 0 ? allPass(m, cu, d, n) : []) },
+      oneShotRows: allPass,
+    });
+    await baseline(r.b, SUITE1);
+    await r.b.prefetchMutants(plans([]));
+    await r.b.activate(null);
+    await expect(r.b.run(ref("A"), OPTS)).rejects.toBeInstanceOf(AlRunnerV3RowMissingError);
+  });
+
   test("an entry without a suite test's row is rowMissing; outside a mutant it stops the session", async () => {
     // Request 0 is the warm-up (all rows); request 1, the confirm, lacks B.
     const r = await rig({

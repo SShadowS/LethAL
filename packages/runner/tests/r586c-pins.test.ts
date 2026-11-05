@@ -592,6 +592,24 @@ describe("R756 edge pin: the key", () => {
   });
 });
 
+describe("R808: the serve-keep pin field", () => {
+  test("(f) present for 8078bcf49, alpha.6, alpha.7 and alpha.12; absent on alpha.5 and its edge builds", () => {
+    const has = (id: string): boolean =>
+      need(V3_BUILD_PINS.find((x) => x.id === id)).serveKeepMoved !== undefined;
+    for (const id of [
+      "edge-8078bcf49",
+      "alpha.6-db0296678",
+      "alpha.7-2c63a382e",
+      "alpha.12-d4bc8d3a5",
+    ])
+      expect([id, has(id)]).toEqual([id, true]);
+    for (const id of ["alpha.5-07342060e", "edge-dcdf9e821", "edge-a157b2d34"])
+      expect([id, has(id)]).toEqual([id, false]);
+    const a12 = need(V3_BUILD_PINS.find((x) => x.id === "alpha.12-d4bc8d3a5"));
+    expect(a12.serveKeepMoved).toMatchObject({ commit: "plain pass", onrunFailed: "no row" });
+  });
+});
+
 describe("R756 edge pin: the edge readings are pinned and pass", () => {
   const edgeFacts = (): { fact: string; verdict: string; measured?: string }[] => {
     const facts: { fact: string; verdict: string; measured?: string }[] = [];

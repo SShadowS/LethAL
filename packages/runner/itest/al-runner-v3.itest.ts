@@ -509,6 +509,7 @@ async function legC(scratch: string): Promise<readonly string[]> {
     alcPath: ALC,
     cacheDir: CACHE,
     tasksetPath: "/usr/bin/taskset",
+    ...(activePin?.serveKeepMoved !== undefined ? { serveKeepMoved: true } : {}),
     ...(assertApps.length === 1 && libraryAssert !== undefined
       ? { libraryAssertApp: join(dataPkgs, libraryAssert) }
       : {}),

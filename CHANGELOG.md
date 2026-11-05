@@ -13,6 +13,14 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **The v3 serve keep rule takes today's http refusal, and `serve-keep-reasons` reads `matches` again** (R808): the
+  `http` entry of `V3_SERVE_SAFE_REFUSALS` also keeps the serve daemon on alpha.7 and alpha.12's wording ("... that a test
+  handler does not answer ..."), exact at both ends; alpha.2's wording still keeps. A project whose test hits that refusal
+  no longer closes the daemon. The update gate's `serve-keep-reasons` fact now runs a public-host http test, and a build's
+  pin can record that `commit` is a plain pass and `onrun-failed` has no row (since #5859 a test codeunit whose OnRun
+  raises gives no row, as BC's Test Runner app does), so the fact reads `matches` on alpha.6, alpha.7 and alpha.12 instead
+  of a standing `diverged`. Speed and a warn fact only: no verdict moved.
+
 - **One run seed for every al-runner v3 process** (R807): LethAL sets `ALRUNNER_SEED=1` in the environment of every
   al-runner process it starts (one helper, `v3ChildEnv`), so `Random`, `CreateGuid` and SystemIds draw the same values in
   every request and run (al-runner 3.0.0-alpha.11 and later draw a fresh seed otherwise). An answer that reports another
