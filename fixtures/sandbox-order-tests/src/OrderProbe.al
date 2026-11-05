@@ -90,6 +90,79 @@ codeunit 77051 "Order Reader"
     end;
 }
 
+// R804: a separate codeunit, because a build that refuses a Commit cascades the refusal to the rest of its codeunit.
+codeunit 77054 "Order Commit Writer"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure CommitLocalRow()
+    var
+        R: Record "Order Local Row";
+    begin
+        R.Id := 2;
+        R.Insert();
+        Commit();
+        if R.Count() <> 1 then Error('ROWS not 1 after commit: %1', R.Count());
+    end;
+
+    [Test]
+    procedure CommitDepRow()
+    var
+        R: Record "Order Dep Row";
+    begin
+        R.Id := 7;
+        R.Insert();
+        Commit();
+        if R.Count() <> 1 then Error('DEPROWS not 1 after commit: %1', R.Count());
+    end;
+
+    [Test]
+    procedure CommitMark()
+    var
+        S: Codeunit "Order Local State";
+    begin
+        S.SetMark('WRITER');
+        Commit();
+        if S.GetMark() <> 'WRITER' then Error('MARK not set after commit');
+    end;
+
+    [Test]
+    procedure CommitDepMark()
+    var
+        S: Codeunit "Order Dep State";
+    begin
+        S.SetMark('DEPWRITER');
+        Commit();
+        if S.GetMark() <> 'DEPWRITER' then Error('DEPMARK not set after commit');
+    end;
+
+    [Test]
+    procedure CommitNumSeq()
+    var
+        N: BigInteger;
+    begin
+        if not NumberSequence.Exists('ORDERSEQ') then
+            NumberSequence.Insert('ORDERSEQ', 1000, 1);
+        N := NumberSequence.Next('ORDERSEQ');
+        N := NumberSequence.Next('ORDERSEQ');
+        Commit();
+        if not NumberSequence.Exists('ORDERSEQ') then Error('NUMSEQ gone after commit');
+        if NumberSequence.Current('ORDERSEQ') < 1001 then Error('NUMSEQ not advanced after commit: %1', NumberSequence.Current('ORDERSEQ'));
+    end;
+
+    [Test]
+    procedure CommitIso()
+    var
+        V: Text;
+    begin
+        IsolatedStorage.Set('ORDERKEY', 'WRITERISO', DataScope::Module);
+        Commit();
+        if not IsolatedStorage.Get('ORDERKEY', DataScope::Module, V) then Error('ISO not set after commit');
+        if V <> 'WRITERISO' then Error('ISO wrong after commit: %1', V);
+    end;
+}
+
 codeunit 77052 "Order Writer"
 {
     Subtype = Test;

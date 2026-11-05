@@ -31,7 +31,7 @@ manual smoke-testing, and the env-gated integration scripts in
 | `Wrapped Tests` | 78950 | `sandbox-wrapped-tests` | One test per procedure, `Grow*`/`Twice*` per file and twin, `PairPick`, `ArmsPick`. Asserts via `Error()`. |
 | `Names Calc` | 78800 | `sandbox-names` | R557 target: twelve identical `exit(x + 1)` procedures, each reached and killed by exactly one test. See "sandbox-names (R557)" below. |
 | `Order Dep Row` / `Order Dep State` | 77000 / 77001 | `sandbox-order` | R784 (leg O1 of `itest:alrunner-v3`): the dependency app of the serve order probe, a table and a SingleInstance codeunit. Nothing to mutate. |
-| `Order Reader` / `Order Writer` | 77051 / 77052 | `sandbox-order-tests` | R784: the Writer sets seven kinds of state, the Reader reports each as an `Error()` message (also table 77050 and SingleInstance codeunit 77053). No test commits. Run by leg O1 only; no mutation run uses them. |
+| `Order Reader` / `Order Writer` | 77051 / 77052 | `sandbox-order-tests` | R784: the Writer sets seven kinds of state, the Reader reports each as an `Error()` message (also table 77050 and SingleInstance codeunit 77053). Only `Order Commit Writer` (77054, R804) commits, one test per kind. Run by leg O1 only; no mutation run uses them. |
 | `Names Tests` | 78850 | `sandbox-names-tests` | One test per procedure, under AL names the .NET al-runner renamed (`"Space Step"`, `"Dash-Step"`, `"Paren(Step)"`, `"Dot.Step"`, `"Slash/Step"`, `"Amp&Step"`, `"7Digit Step"`, unquoted `Default`, `"Blåbær Step"`, `"Twin Pair"`) and two unrenamed controls (`Twin_PairLong`, `PlainControl`). UTF-8. Asserts via `Error()`. |
 
 `sandbox-app/app.json` reserves `idRanges` 79000–79199; `sandbox-tests/app.json` depends on
@@ -1737,7 +1737,8 @@ routed through the CLI.
 
 ### The BC on Linux servers: `lethal.config.bc1.json`, `bc2`, `bc3` (R589)
 
-Three BC 28.4 servers run on server1 (192.168.2.157), on BC on Linux, so the BC gates can run in
+Three BC 28.4 servers run on docker1 (192.168.2.77; on server1, 192.168.2.157, until 2026-10-26, R783), on
+BC on Linux, so the BC gates can run in
 parallel instead of queueing for Cronus28. They are W1: the company is `CRONUS International Ltd.`
 (not Cronus28's DK `CRONUS Danmark A/S`), the tenant `default`, the instance `BC`, with Basic
 authentication.
@@ -1764,11 +1765,11 @@ server: the itest refuses when the file is missing, or when its host (or its dev
 state one) differs from the config's. With the variable unset, `lethal.config.local.json` and
 `launch.local.json` work as before.
 
-- **The databases are in memory.** A restart of a server's container, or of server1, resets it to
+- **The databases are in memory.** A restart of a server's container, or of docker1, resets it to
   a fresh CRONUS with none of LethAL's apps. Re-run the setup script; it is safe to run again.
 - The login is in the gitignored fixture config and in `/coord/secrets/bc-linux.env` (written by
   the owner). It is never in this repository, which is public.
-- `server` in these configs carries the dev port (`http://192.168.2.157:7149` for `bc2`) and
+- `server` in these configs carries the dev port (`http://192.168.2.77:7149` for `bc2`) and
   `baseUrl` the OData root, because the three servers share one host: without the port they would
   be one server to LethAL's quarantine and publish queue.
 - The itests take both ports from the config (R591, folded into R589): OData from `baseUrl`

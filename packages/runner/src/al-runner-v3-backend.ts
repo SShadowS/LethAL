@@ -414,6 +414,30 @@ export interface AlRunnerV3Config {
   readonly transportSource?: "default" | "explicit";
   /** R762: run the contract probe fresh instead of replaying a cached pass (`--fresh-probe`). */
   readonly freshProbe?: boolean;
+  /**
+   * R790/R798: run the baseline's one-shot calls while alc proves the batch. Internal, not a config
+   * key. Unset: read at construction from `LETHAL_V3_SPECULATE_BASELINE` ("1" = on; unset or empty = off).
+   */
+  readonly speculateBaseline?: boolean;
+}
+
+/** R798: the env var that turns R790's speculative baseline on (it is off by default). */
+export const SPECULATE_BASELINE_ENV = "LETHAL_V3_SPECULATE_BASELINE";
+
+export class AlRunnerV3SpeculateBaselineRefusedError extends Error {
+  constructor(value: string) {
+    super(
+      `al-runner-v3-speculate-baseline-refused: ${SPECULATE_BASELINE_ENV} is "${value}"; use 1 to turn it on, or leave it unset`,
+    );
+    this.name = "AlRunnerV3SpeculateBaselineRefusedError";
+  }
+}
+
+function readSpeculateBaseline(): boolean {
+  const v = process.env[SPECULATE_BASELINE_ENV];
+  if (v === undefined || v === "") return false;
+  if (v === "1") return true;
+  throw new AlRunnerV3SpeculateBaselineRefusedError(v);
 }
 
 /** One row of v3's `--output-json` `tests[]`, decoded. */
@@ -1201,6 +1225,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     /** R790: runs once the speculative calls ended, before their second binding read. */
     afterSpeculation?: () => Promise<void>;
   } = {};
+  /** R798: R790's speculative baseline is opt-in (option or env, read at construction). */
+  private readonly speculateOn: boolean;
   private memoryHoldNoticed = false;
   private fitNoticed = false;
   /** R766 (b): the `resume` fact `decideTransport` was given. */
@@ -1296,6 +1322,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     private readonly now: () => number = Date.now,
   ) {
     if (cfg.selectorMode === "resource") throw new AlRunnerV3ResourceSelectorRefusedError();
+    this.speculateOn = cfg.speculateBaseline ?? readSpeculateBaseline();
     // R761: a default transport starts one-shot-safe; `decideTransport` turns serve on, before the
     // first deploy (the staged batch differs by transport) and the first v3 process.
     this.entries = cfg.transport === "serve-entries" && cfg.transportSource !== "default";
@@ -1817,6 +1844,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // answers stay private: deploy() still waits for alc and throws exactly its error, and they are
     // served (once each) only if every byte they read is a byte the proof below records.
     const speculate =
+      this.speculateOn &&
       this.entries &&
       this.budgetFloor !== undefined &&
       this.suitePerCodeunit.size > 0 &&

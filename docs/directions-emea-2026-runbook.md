@@ -134,8 +134,8 @@ middle, not the tool.
 | 0:00 | One slide: three objects, eight tests, all green. **Start the run immediately.** | "You have all written this app. Eight tests, all passing. Would you ship it?" |
 | 0:20 | The run streams verdicts while you walk the test list | Name the tests: error paths, a trigger assertion, an audit-trail check. Let them believe the suite. |
 | 0:40 | Run finishes. Read the summary. | "34 killed, 15 survived, 11 no-coverage. Coverage on `GetBalance` was 100% the whole time." |
-| 1:00 | `lethal explain report.json --top 10` | **Use `--top 10`, not `--top 5`**: on the frozen report the planted bug ranks tenth of fifteen, so `--top 10` only just includes it and any smaller cap cuts it (see the note below the table). |
-| 1:20 | The planted survivor: the deleted `SetRange` | "One line gone, every test green. This function now returns the whole store's outstanding balance instead of this card's. `executionProven: true`: a test provably ran `GetBalance`, the procedure this line is in, and did not notice." |
+| 1:00 | `lethal explain report.json --top 10` | **Use `--top 10`, not `--top 5`**: on bcdev the planted bug ranks tenth of fifteen (measured 2026-10-25 on a fresh bc-demo run and on the frozen report), so `--top 10` only just includes it and any smaller cap cuts it (see the note below the table). |
+| 1:20 | The planted survivor: the deleted `SetRange` | "One line gone, every test green. This function now returns the whole store's outstanding balance instead of this card's. `reach: reached-unnoticed`: `RedeemReducesBalance` provably ran this exact statement, and still passed." (bcdev only: see the note.) |
 | 2:10 | The `no-coverage` cluster: `BlockExpiredCards` | "11 mutants, no test executed any of them. That is the nightly job. Expiry *is* tested — at redeem time, which is different code." |
 | 2:40 | The honest beat: the expiry boundary survivor | "Is a card valid ON its expiry date? Nobody wrote that down, so the tool will not tell you it is a bug. A survivor is a lead, not a verdict." |
 | 3:10 | The agent loop (§ below), or its recording | "The output was built for this: an agent reads the report, writes the test, re-runs." |
@@ -152,6 +152,42 @@ Re-read 2026-10-22 (R664) with the current build's `explain --top 10` on the sam
 the planted bug now ranks **tenth of fifteen** survivors, which is what the 1:00 row says. The R664
 re-freeze writes a new report; read the rank again on it.
 
+**Measured 2026-10-25 (R257), master 8c6a9fe8.** Evidence: `/coord/handoff/R-257/`.
+- **bcdev on bc-demo (the demo's backend).** A fresh run took 27.2 s, and `campaign compare` matched all 60
+  mutants against the frozen stage.
+  - Under `explain --top 10` the planted survivor M0038 (`GetBalance`, `lethal.remove-setrange`, line 53) ranks
+    **tenth of fifteen**.
+  - Its `reach` is `reached-unnoticed` at statement grain, and `reachedBy` is `Gift Card Tests.RedeemReducesBalance`
+    alone. That is the 1:20 line: a test ran the deleted `SetRange` statement itself and passed.
+  - The frozen `rehearsal.report.json` gives the same rank and reach, so the §5 backup tells the same story.
+  - "The top survivor" is M0006 (`lethal.remove-testfield` in table `Gift Card`, line 57), not the planted bug.
+    So the agent prompt must keep naming its lead.
+- **al-runner-v3 (not the demo's backend).** One gift-card run gave verdicts identical to bcdev's on all 60
+  mutants (`report-diff`). But every survivor's `reach` is `not-decided`, so the ranking differs: the planted bug
+  is **ninth of fifteen**, and the top survivor is M0009 (`Issue`, `lethal.conditional-boundary`). If you show a v3
+  report, do not use the 1:20 `reach` line. Say `executionProven: true` (a test entered `GetBalance`) instead.
+- **The talk's timing figures (QUOTED; owner-authorised re-measure, 2026-10-26).** On al-runner-v3, best of 5:
+  - **Gift card: 1.5 s** (median 1.6 s).
+  - **D1: 17.2 s** (median 17.2 s).
+  - Measured 2026-10-26 22:12-22:15Z on the **v3.0.0-alpha.7 release**: `al-runner 3.0.0-alpha.7 (2c63a382e)`, current
+    since 22:08Z through the normal release path, with LethAL master 10f9f63a. Owner: "adopt if identical"; its gate
+    readings equal alpha.6's (R804 addendum 3).
+  - Machine: `scripts/v3-timing.ts --repeat 5 --subjects gc,d1`, quiet (load 1.8-2.5, 0 other heavy jobs, other lanes
+    holding). Evidence: `/coord/handoff/lethal-spare-edge/a7run/timing/timing.md`.
+  - **Every verdict and killing test is identical to the earlier quoted run** (6aa7700c), in all 5 runs of each subject
+    (60 and 63 mutants).
+  - D1's cached runs: deploy 7.1-7.5 s, alc 5.7-6.2 s, baseline 2.1-2.2 s, mutant loop 3.6-3.7 s, warm-up 1.7-1.8 s,
+    live 1.0-1.1 s. The four cached runs are within 0.2 s of each other.
+  - Say "about 17 seconds" for D1 if it runs live.
+  - The 27.2 s above is one bcdev run, not a talk figure.
+- **Previously quoted (dated):**
+  - 2026-10-26 11:54Z, the v3.0.0-alpha.6 release (`al-runner 3.0.0-alpha.6 (db0296678)`), master 68568a19: gift card
+    1.6 s and D1 17.1 s best (medians 1.6 and 18.3 s), from `/coord/handoff/lethal-spare-edge/a6/timing/timing.md`.
+  - 2026-10-25, 6aa7700c on edge-dcdf9e821: gift card 1.7 s and D1 20.8 s best (medians 1.8 and 21.5 s), from
+    `/coord/handoff/final-timing/6aa7700c`.
+  - Measured since, not quoted: edge-a157b2d34 D1 22.0 s best (R-802, 03:08Z); edge-8078bcf49 D1 19.9 s best (R804,
+    08:49Z).
+
 ### The agent loop (D5)
 
 Prompt the agent with the shipped skill and one instruction:
@@ -161,6 +197,8 @@ Prompt the agent with the shipped skill and one instruction:
 
 You pick the lead on stage, so the prompt names it: the planted bug ranks tenth of fifteen
 survivors, so "the top survivor" would send the agent to a different one than the talk shows (R664).
+Re-measured 2026-10-25 (R257): "the top survivor" is M0006, the removed `TestField` in table `Gift Card`, on bcdev,
+and M0009 in `Issue` on v3.
 
 The kill it should write is a **second gift card**: issue two, redeem against one, assert each
 balance separately. That makes the missing `SetRange` load-bearing for the first time.

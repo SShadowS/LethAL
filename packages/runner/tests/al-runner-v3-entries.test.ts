@@ -32,6 +32,7 @@ import {
   AlRunnerV3ServeStopUnsetError,
   AlRunnerV3TransportFrozenError,
   AlRunnerV3UnprovenBatchError,
+  SPECULATE_BASELINE_ENV,
   WINDOW_BOUND_CAVEAT,
   v3CallDeadlineMs,
 } from "../src/al-runner-v3-backend";
@@ -4187,7 +4188,7 @@ describe("R790: the speculative baseline", () => {
   };
   async function deployWith(
     alc: ArtifactIo | undefined,
-    speculate: boolean,
+    speculate: boolean | undefined,
     o: {
       rows?: RowsFn;
       floor?: readonly [number, number];
@@ -4210,6 +4211,8 @@ describe("R790: the speculative baseline", () => {
         alcPath: "/fake/alc",
         coverage: "none",
         transport: "serve-entries",
+        // R798: opt-in. undefined leaves the option unset, so the env decides.
+        ...(speculate !== undefined ? { speculateBaseline: speculate } : {}),
         ...(o.cacheDir !== undefined ? { cacheDir: o.cacheDir } : {}),
       },
       one.spawn,
@@ -4220,7 +4223,6 @@ describe("R790: the speculative baseline", () => {
     b.useDiscoveredTests(SUITE1);
     b.useSessionTests(SUITE1);
     b.useMutantBudgetFloor(...(o.floor ?? [1000, 1000]));
-    if (!speculate) b.seams.noSpeculativeBaseline = true;
     Object.assign(b.seams, o.seams?.(l) ?? {});
     const err = await b.deploy(l.batch).then(
       () => undefined,
@@ -4258,6 +4260,63 @@ describe("R790: the speculative baseline", () => {
     expect(seq.one.calls).toHaveLength(1);
     const plain = (vs: TestVerdict[]) => vs.map((v) => ({ ...v, durationMs: 0 }));
     expect(plain(a)).toEqual(plain(s));
+  });
+
+  /** Runs `fn` with LETHAL_V3_SPECULATE_BASELINE set to `v` (unset when undefined), then restores it. */
+  async function withEnv<T>(v: string | undefined, fn: () => Promise<T>): Promise<T> {
+    const was = process.env[SPECULATE_BASELINE_ENV];
+    if (v === undefined) delete process.env[SPECULATE_BASELINE_ENV];
+    else process.env[SPECULATE_BASELINE_ENV] = v;
+    try {
+      return await fn();
+    } finally {
+      if (was === undefined) delete process.env[SPECULATE_BASELINE_ENV];
+      else process.env[SPECULATE_BASELINE_ENV] = was;
+    }
+  }
+
+  test("R798 default: option and env unset (or empty) make no speculative call in deploy()", async () => {
+    for (const v of [undefined, ""]) {
+      const r = await withEnv(v, () => deployWith(undefined, undefined));
+      expect(r.err).toBeUndefined();
+      expect(r.one.calls).toHaveLength(0);
+      expect(speculative(r.b)).toBeUndefined();
+    }
+  });
+
+  test("R798 opt-in by env: LETHAL_V3_SPECULATE_BASELINE=1 speculates", async () => {
+    const r = await withEnv("1", () => deployWith(undefined, undefined));
+    expect(r.err).toBeUndefined();
+    expect(r.one.calls).toHaveLength(1);
+  });
+
+  test("R798: the option beats the env in both directions", async () => {
+    const off = await withEnv("1", () => deployWith(undefined, false));
+    expect(off.one.calls).toHaveLength(0);
+    const on = await withEnv(undefined, () => deployWith(undefined, true));
+    expect(on.one.calls).toHaveLength(1);
+  });
+
+  test("R798: the env is read at construction, not at deploy(): setting it after construction does not speculate", async () => {
+    const r = await withEnv(undefined, () =>
+      deployWith(undefined, undefined, {
+        // Runs after construction, before deploy().
+        seams: () => {
+          process.env[SPECULATE_BASELINE_ENV] = "1";
+          return {};
+        },
+      }),
+    );
+    expect(r.err).toBeUndefined();
+    expect(r.one.calls).toHaveLength(0);
+  });
+
+  test("R798: any other env value throws by name at construction", async () => {
+    for (const v of ["0", "true", "yes"]) {
+      await expect(withEnv(v, () => deployWith(undefined, undefined))).rejects.toThrow(
+        "al-runner-v3-speculate-baseline-refused",
+      );
+    }
   });
 
   test("served once: a second baseline runs live", async () => {
@@ -4302,6 +4361,7 @@ describe("R790: the speculative baseline", () => {
         alcPath: "/fake/alc",
         coverage: "none",
         transport: "serve-entries",
+        speculateBaseline: true, // R798: opt-in
       },
       one.spawn,
       fakeAlc(),

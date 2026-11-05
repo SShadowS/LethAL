@@ -14,6 +14,7 @@ The leg-by-leg tables live in those pre-commitments and are asserted by the ites
 
 The legs:
 
+- R790/R798: the speculative baseline (the baseline's one-shot calls run while alc proves the batch) is OFF by default and opt-in (`LETHAL_V3_SPECULATE_BASELINE=1`). No leg sets it, so every figure below is the sequential path's; the measured wash is in `docs/roadmap/R790.md`.
 - R762: a normal SESSION may replay a cached, fully passing probe (`.probe-cache-<digest>.json` beside `.gated`),
   keyed by the binary sha256, LethAL's probe code, bcVersion, the packages folder, alc, the cache dir and the `.gated`
   commit. This gate never does: it sets `LETHAL_V3_FRESH_PROBE=1` for every session it starts, and leg C calls
@@ -96,8 +97,22 @@ The legs:
   - What it runs: ONE `al-runner serve` daemon takes five requests, each entry one codeunit of
     `fixtures/sandbox-order-tests` (Writer sets, Reader reports): `[R]`, `[W,R]`, `[R,W]`, `[W1,R1,W2,R2,R3]`, then a
     new `[R]`. Kinds (7): WorkDate, GlobalLanguage, uncommitted rows, a SingleInstance codeunit in the test app and
-    one in the dependency app (`fixtures/sandbox-order`), NumberSequence, IsolatedStorage. No test commits
-    (al-runner refuses `Commit` under `TestIsolation = Function`), so commit-based state stays unmeasured.
+    one in the dependency app (`fixtures/sandbox-order`), NumberSequence, IsolatedStorage. Writer does not commit.
+  - Commit kind (R804 part 2; pre-commitment `docs/superpowers/specs/2026-10-26-r804-o1-commit-kind-precommitment.md`,
+    master 3185d706): four more requests go to the SAME daemon, after the five: `[C,R]`, `[R,C]`, `[C1,R1,C2,R2]`, then
+    a new `[R]` (`C` = codeunit `Order Commit Writer`, 77054, separate from Writer because a refused Commit cascades
+    to the rest of its codeunit). Its 6 tests each write one kind (local row, dependency-app row, local and
+    dependency-app SingleInstance, NumberSequence, IsolatedStorage), call `Commit()`, and re-read their own value.
+    The verdict keys off the build's pin: `commit-under-test-isolation` pinned `gone` in the leg-C facts (`o1CommitRuns`).
+    - Flagged build: every CommitWriter test passes, and every Reader entry reads the defaults. A writer value is
+      CARRY-OVER (`gate-fail`); a CommitWriter test that does not pass is `gate-fail`.
+    - Any other build: every CommitWriter test is refused with text matching `V3_SERVE_SAFE_REFUSALS.commit`, and the
+      Readers read the defaults. A CommitWriter test that passes is `held` (re-pre-commit: upstream may have fixed it);
+      any other row is `gate-fail`.
+    - Measured 2026-10-26 on `edge-a157b2d34` (unflagged): O1 passes on both package sets; all six CommitWriter tests
+      are refused in each of the four requests; every Reader reads the defaults. The flagged reading
+      (`edge-8078bcf49`) is predicted from the probe (`/coord/handoff/R-804/commit-probe/result.md`) and not yet run
+      through the gate: its pin was not on master when this was built.
   - Package sets: the fixture's own (the Microsoft symbols of `sandbox-tests`), and, with `LETHAL_ITEST_V3_CDO`, the
     CDO `Test/.alpackages` as a read-only package cache (skipped without it, as D1 is). For the CDO set the leg
     copies the fixture into its scratch dir and adds to the tests app.json the dependencies the CDO Test
@@ -109,12 +124,17 @@ The legs:
     entry, or a Writer test that does not pass, is `gate-fail`; a daemon that cannot run is `infra-fail`
     (`judgeOrderProbe`, `r784-order-probe.test.ts`). R778's kill-pair batching rests on this.
   - O1 does not probe the per-entry `resources` override (the active-mutant file); N1S's per-mutant comparison of batched kill pairs against one-shot covers it indirectly. The judge reads the ANSWER order (execution order is inferred from it) and fails when it differs from the sent order, or when a request does not match the plan.
-  - It is in `V3_GATE_LEGS`. On a build with no serve path (alpha.2) it reads "not applicable". Per R777 the update
-    gate reads `infra-fail` for `current` until it is regated at a commit that has O1.
+  - It is in `V3_GATE_LEGS`. On a build with no serve path (alpha.2) it reads "not applicable".
 - S3: runs no session. It checks that `selectorMode: "resource"` is refused by name
   (`al-runner-v3-resource-selector-refused`).
 - N1: the names fixture (R557's tests are unselectable on v3, upstream #5572).
 - X (a) to (f): the compile proof, the binding checks and the Sleep rule (§6) on `scripts/r586-probe`.
+  - X (a′) (R790b; pre-commitment `docs/superpowers/specs/2026-10-25-r790b-x-a-prime-precommitment.md`, master
+    bee9b026, amendment 1 f43c499e): X (a)'s alc-rejected batch with the speculative baseline opted in
+    (`speculateBaseline: true`, serve-entries, the session's tests, a budget floor). v3 spawns exactly 1 time beside
+    the failing alc, yet deploy() throws the `AlcCompileError` text of the same backend with `speculateBaseline:
+    false` (which spawns 0 times; scratch paths and alc's start time masked), keeps nothing, and a baseline after it
+    is refused.
 - **Transport per leg (R788; pre-commitment `docs/superpowers/specs/2026-10-25-r788-serve-big-legs-precommitment.md`,
   master 1d6474bb).** Unflagged: D1, D1c and T run serve-entries (`V3_GATE_SERVE_LEGS`, `v3ItestLegTransport`); S1E,
   N1E, N1S and O1 run serve-entries by construction; K runs the CLI's own default (serve-entries for sandbox-app since
@@ -283,6 +303,14 @@ N > 1 must equal N = 1: R766's proof found D1 and the gift card identical at N =
   - Outcomes are `--edge`'s at this commit, under new keys only: nothing that already exists under `failed/` or
     `held/` is moved or rewritten. The receipt and `gate.log` are also kept in `rejudge/edge-<sha>@<commit>/`. A
     pass writes `.gated` with `rejudgedFrom` and no `tarballSha256`.
+- A new leg needs no manual regate ([[R777]]). Before the alpha path, `--edge` or `--edge-rejudge` gates a candidate,
+  the script reads `V3_GATE_LEGS` at `.gated`'s commit (`git show`). If that commit lacks any of this script's legs,
+  the log says `stale-gated` and names them, and `current` is first re-gated at the script's own commit, under the
+  same lock. If that re-gate does not pass, `current` stays, and the candidate is judged at the script's commit (so
+  on every leg). The script's commit must have the legs, be on `origin/master` (as the local ref knows it: the
+  script does not fetch) and be newer than `.gated`'s; otherwise no candidate is gated and the run reads `skipped`:
+  `--edge-rejudge` exits 2, and `--edge` does not mark the commit seen. `--edge-rejudge` runs its custody checks
+  before any re-gate.
 - Every gate path (the alpha path, `--regate`, `--edge`, `--edge-rejudge`) holds `<root>/.gate.lock`. A holder is
   live only when its `/proc/<pid>/cmdline` names `al-runner-v3-update`; a dead, reused, empty or unreadable lock is
   taken over unless a process still runs under the gate worktree. A skip is logged with the lock, its holder and
@@ -297,8 +325,9 @@ N > 1 must equal N = 1: R766's proof found D1 and the gift card identical at N =
   skipped `--regate` or `--edge-rejudge` exits 2, so a `&&` chain after it stops.
 - The evidence is kept. The gate's stdout and stderr go to `gate.log` beside the receipt, on every exit. Both are
   copied beside the outcome they gave: `failed/<tag>@<commit>/`, `held/<tag>/`, `infra/<tag>.receipt.json` and
-  `infra/<tag>.gate.log`, and `regate/<commit>.receipt.json` and `regate/<commit>.gate.log`, each file when it
-  exists. A failed copy is logged and never blocks the verdict, `.gated` or the count. The log line carries the
+  `infra/<tag>.gate.log`, `regate/<commit>.receipt.json` and `regate/<commit>.gate.log`, and on a candidate's pass
+  beside `.gated` in the new build folder (R805; the latest candidate pass of that build: a later regate's evidence is in `regate/`, so read the receipt's `lethalCommit`), each file when it exists. A failed
+  copy is logged and never blocks the verdict, `.gated` or the count. The log line carries the
   receipt's `lines`, and leg C's lines carry each non-passing fact's measured value. A `failed/` hit that skips the
   gate is logged too, with the `--regate` hint.
 - In both, the checksum is checked before anything is extracted, and the gate runs at `.gated`'s commit, in a
@@ -418,7 +447,16 @@ A build can have a PIN: the exact readings that differ from alpha.2's expectatio
 | leg T | seven rows (`Data Flag Ops` x3, `Data Key Probe` x4) `error` / `runner-refused`, counts 290 / 50 / 59 over 406 | NO: BC kills them; #5788 | 7 of 406 mutants read `error` where BC kills |
 | X (b) | exit 3, `passed` 0 and `notRun` 0 present, no rows, non-empty `compilationErrors` | yes | none |
 
-Leg T is judged against the committed alpha.2 baseline with the seven keys overridden (`applyTPin`, S4): if a pinned key is absent, repeated or not `survived`/`null`/`null` there, the leg reads `held`. On a pinned pass the alpha.2 baseline compare is skipped (the pinned compare has the same identity-scheme and R556 checks). Rows equal to the pin but with other counts are a `gate-fail`.
+Leg T is judged against the committed alpha.2 baseline with the pinned keys overridden (`applyTPin`, S4).
+- If a pinned key is absent, repeated, or its committed row is not the pin's `from`, the leg reads at least `held`.
+  The default `from` is `survived`/`null`/`null`. Since R804 a row may name another `from`: edge-8078bcf49's
+  Commit rows leave `no-coverage`. `coverageFiltered` follows the pinned verdict.
+- On a pinned pass the alpha.2 baseline compare is skipped; the pinned compare has the same identity-scheme and R556
+  checks.
+- Rows equal to the pin but with other figures are a `gate-fail`. The figures are the counts and, since R804, the
+  refused-test count: a pin may name `refusedTests`, default 3, and edge-8078bcf49's is 0.
+- A pin miss names `T: pin-mismatch: <reason>` as its failure, with the unpinned judgement in brackets. On a build
+  whose pin moves a figure, the unpinned judgement always fails on that figure.
 
 **The virtual-clock guard (B2).** alpha.5 counts a Sleep toward `--test-timeout-secs` on a virtual clock, so a "3 s" stop can return after tens of ms. In the backend, when a MUTANT is active and a timeout row's `durationMs` is below its stop, the verdict is `error` / `runner-refused` ("stopped on v3's virtual clock", never scored). Baselines are unchanged. Upstream text: `/coord/handoff/R-586c/upstream-virtual-clock.md`.
 

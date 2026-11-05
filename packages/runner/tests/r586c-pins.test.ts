@@ -736,10 +736,15 @@ describe("R771: the edge build a157b2d34 (alpha.5's readings plus N1E)", () => {
     // The alpha.5 and dcdf9e821 pins keep the old text.
     expect(need(need(pin).legC["duplicate-key-insert-raises"]).measured.test(NEW)).toBe(false);
   });
-  test("only this pin carries serveRowFields (#5798 fixed), and the lookup keys on version AND sha", () => {
+  test("only this pin and the later edge pins carry serveRowFields (#5798 fixed), keyed on version AND sha", () => {
     expect(need(aPin).serveRowFields?.issue).toMatch(/\/5798$/);
     expect(V3_BUILD_PINS.filter((p) => p.serveRowFields !== undefined).map((p) => p.id)).toEqual([
       "edge-a157b2d34",
+      "edge-8078bcf49",
+      "edge-db0296678",
+      "alpha.6-db0296678",
+      "alpha.7-2c63a382e",
+      "edge-2c63a382e",
     ]);
     expect(serveRowFieldsFor(A_VERSION, A_SHA)).toBe(true);
     expect(serveRowFieldsFor(A_VERSION, flip(A_SHA))).toBe(false);
@@ -753,6 +758,246 @@ describe("R771: the edge build a157b2d34 (alpha.5's readings plus N1E)", () => {
     });
     expect(sleepRuleRetiredFor(probe("gone"), A_VERSION, A_SHA)).toBe(true);
     expect(sleepRuleRetiredFor(probe("defect-present"), A_VERSION, A_SHA)).toBe(false);
+  });
+});
+
+describe("edge-db0296678 (3.0.0-alpha.6): edge-8078bcf49's readings, shared", () => {
+  const D_VERSION = "al-runner 3.0.0-alpha.6+edge.20261026 (db0296678)";
+  const D_SHA = "4f9596510ececcfa5e5b235350e2b2658264abceb2d54d5fa01131e8ffab07db";
+  const dPin = findV3Pin(D_VERSION, D_SHA);
+  const bPin = findV3Pin(
+    "al-runner 3.0.0-alpha.5+edge.20261026 (8078bcf49)",
+    "614dc78c8513c6d5899fb402a121c2c6f910cbe255f56ab66a59f1a8f8d852d7",
+  );
+  test("version and sha find it; another sha, or 8078bcf49's version with its sha, do not", () => {
+    expect(dPin?.id).toBe("edge-db0296678");
+    expect(findV3Pin(D_VERSION, flip(D_SHA))).toBeUndefined();
+    expect(findV3Pin(need(bPin).version, D_SHA)).toBeUndefined();
+  });
+  test("it shares 8078bcf49's readings object by object (one source, no drift)", () => {
+    const d = need(dPin);
+    const b = need(bPin);
+    expect(d.legC).toBe(b.legC);
+    expect(d.legT).toBe(b.legT);
+    expect(d.xb).toBe(b.xb);
+    expect(d.serveRowFields).toBe(b.serveRowFields);
+    expect(d.o1).toBe(b.o1);
+    expect(serveRowFieldsFor(D_VERSION, D_SHA)).toBe(true);
+  });
+  test("the alpha.6 release: its own version line and sha, the same shared readings", () => {
+    const R_VERSION = "al-runner 3.0.0-alpha.6 (db0296678)";
+    const R_SHA = "92effe64d64dddcae98f80cc0e2e17a6429f977781ffe7b6b0f5eea6a231778d";
+    const r = need(findV3Pin(R_VERSION, R_SHA));
+    expect(r.id).toBe("alpha.6-db0296678");
+    // Another binary than the edge one: neither key finds the other's pin.
+    expect(findV3Pin(R_VERSION, D_SHA)).toBeUndefined();
+    expect(findV3Pin(D_VERSION, R_SHA)).toBeUndefined();
+    const b = need(bPin);
+    expect(r.legC).toBe(b.legC);
+    expect(r.legT).toBe(b.legT);
+    expect(r.xb).toBe(b.xb);
+    expect(r.serveRowFields).toBe(b.serveRowFields);
+    expect(r.o1).toBe(b.o1);
+  });
+  test("alpha.7 (release and edge 2c63a382e): each its own key, the same shared readings", () => {
+    const b = need(bPin);
+    const keys = [
+      [
+        "alpha.7-2c63a382e",
+        "al-runner 3.0.0-alpha.7 (2c63a382e)",
+        "af19368ded0c3f809877f6042bba1c40175c70fe418733178cbfb96ac7fcbb2d",
+      ],
+      [
+        "edge-2c63a382e",
+        "al-runner 3.0.0-alpha.7+edge.20261026 (2c63a382e)",
+        "31d2cf1fee463515c9bab5ba7a60d24845abacc5bb9709d89bb687b84423bbc6",
+      ],
+    ] as const;
+    for (const [id, version, sha] of keys) {
+      const p = need(findV3Pin(version, sha));
+      expect(p.id).toBe(id);
+      expect(findV3Pin(version, flip(sha))).toBeUndefined();
+      for (const f of ["legC", "legT", "xb", "serveRowFields", "o1"] as const)
+        expect(p[f], `${id} ${f}`).toBe(b[f]);
+    }
+    // The release and the edge are different binaries: neither sha opens the other's version line.
+    expect(findV3Pin(keys[0][1], keys[1][2])).toBeUndefined();
+    expect(findV3Pin(keys[1][1], keys[0][2])).toBeUndefined();
+  });
+});
+
+describe("edge-8078bcf49: every pinned defect gone, 48 known differences at BC's verdict", () => {
+  const B_VERSION = "al-runner 3.0.0-alpha.5+edge.20261026 (8078bcf49)";
+  const B_SHA = "614dc78c8513c6d5899fb402a121c2c6f910cbe255f56ab66a59f1a8f8d852d7";
+  const bPin = findV3Pin(B_VERSION, B_SHA);
+  // Byte for byte from the update gate's gate.log at 4aa6ca6d (2026-10-26 08:05Z).
+  const DUP =
+    '[{"codeunit":50655,"method":"DuplicateNamedKey","name":"Codeunit50655.DuplicateNamedKey","status":"fail","durationMs":0,"message":"The record in table Probe Row already exists. Identification fields and values: Key=\'K1\'","notRun":false}] exit 1';
+  const COMMIT =
+    '[{"codeunit":50657,"method":"CommitCall","name":"Codeunit50657.CommitCall","status":"pass","durationMs":0,"notRun":false}] exit 0';
+  test("version and sha find it; another sha does not", () => {
+    expect(bPin?.id).toBe("edge-8078bcf49");
+    expect(findV3Pin(B_VERSION, flip(B_SHA))).toBeUndefined();
+  });
+  test("the duplicate-key text it pins is BC's own end-of-test text", () => {
+    expect(DUP).toContain(`"message":"${BC_END_OF_TEST_TEXT}"`);
+    const swapped = DUP.replace(BC_END_OF_TEST_TEXT, `${BC_END_OF_TEST_TEXT}.`);
+    expect(need(need(bPin).legC["duplicate-key-insert-raises"]).measured.test(swapped)).toBe(false);
+  });
+  test("leg C: the seven alpha.5 facts unchanged, duplicate-key and commit gone with today's texts", () => {
+    const c = need(bPin).legC;
+    expect(Object.keys(c).sort()).toEqual([...SEVEN, "commit-under-test-isolation"].sort());
+    for (const k of SEVEN.filter((s) => s !== "duplicate-key-insert-raises"))
+      expect(c[k]).toBe(need(need(pin).legC[k]));
+    for (const [k, text] of [
+      ["duplicate-key-insert-raises", DUP],
+      ["commit-under-test-isolation", COMMIT],
+    ] as const) {
+      const p = need(c[k]);
+      expect(p.verdict).toBe("gone");
+      expect(p.measured.test(text)).toBe(true);
+      expect(p.measured.test(`${text}!`)).toBe(false);
+    }
+    // a157b2d34's deferred refusal is no reading of this build.
+    expect(
+      need(c["duplicate-key-insert-raises"]).measured.test(
+        need(ALPHA5["duplicate-key-insert-raises"]).measured,
+      ),
+    ).toBe(false);
+    expect(Object.hasOwn(c, "codeunit-runs-whole")).toBe(false);
+  });
+  test("leg T: 48 distinct rows, each a known difference moving from v3's verdict to BC's", () => {
+    const rows = need(bPin).legT.rows;
+    expect(rows.length).toBe(48);
+    expect(new Set(rows.map((r) => r.key)).size).toBe(48);
+    for (const r of rows) {
+      const d = TABLES_KNOWN_DIFFERENCES.find((x) => x[0] === r.key);
+      expect(d, r.key).toBeDefined();
+      // [key, BC verdict, v3 verdict, BC killing test, v3 killing test]
+      const [, bcVerdict, v3Verdict, bcTest, v3Test] = need(d);
+      expect(r.from?.verdict).toBe(v3Verdict);
+      expect(r.from?.killingTest ?? null).toBe(v3Test);
+      expect(r.from?.errorClass).toBeNull();
+      expect(r.verdict as string).toBe(bcVerdict);
+      expect(r.killingTest).toBe(bcTest);
+      expect(r.errorClass).toBeNull();
+      expect(r.issue).toMatch(r.key.includes("|Data Commit ") ? /\/5607$/ : /\/5603$/);
+    }
+  });
+  test("leg T: the counts are the committed baseline's 290/57/59 plus exactly these moves", () => {
+    const rows = need(bPin).legT.rows;
+    const n = (v: string) =>
+      rows.filter((r) => r.verdict === v).length - rows.filter((r) => r.from?.verdict === v).length;
+    expect(need(bPin).legT.counts).toEqual({
+      killed: 290 + n("killed"),
+      survived: 57 + n("survived"),
+      noCoverage: 59 + n("no-coverage"),
+    });
+    expect(need(bPin).legT.counts).toEqual({ killed: 318, survived: 70, noCoverage: 18 });
+    expect(need(bPin).legT.total).toBe(406);
+    expect(need(bPin).legT.refusedTests).toBe(0);
+  });
+  test("applyTPin: a row's `from` must equal the committed row exactly", () => {
+    const one = { ...need(bPin).legT, rows: [need(need(bPin).legT.rows[0])] };
+    const row = (verdict: string) => ({
+      key: need(one.rows[0]).key,
+      verdict,
+      killingTest: null,
+      errorClass: null,
+    });
+    expect(applyTPin([row("survived")], one)?.[0]?.verdict).toBe("killed");
+    expect(applyTPin([row("no-coverage")], one)).toBeUndefined();
+    // Without `from` the old shape (survived/-/-) still holds for the earlier pins.
+    expect(need(pin).legT.rows.every((r) => r.from === undefined)).toBe(true);
+  });
+  test("judgeLegT: the pin's refusedTests replaces the 3; any other count is never a pinned pass", () => {
+    const base = (key: string, verdict: string, killingTest: string | null): NormalizedMutant => ({
+      key,
+      verdict,
+      killingTest,
+      coverageFiltered: verdict === "no-coverage",
+      errorClass: null,
+      mutatedTextSha256: `h-${key}`,
+    });
+    const own = [base("A", "no-coverage", null), base("B", "killed", "T2")];
+    const now = [base("A", "killed", "T1"), base("B", "killed", "T2")];
+    const legT = {
+      rows: [
+        {
+          key: "A",
+          from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+          verdict: "killed" as const,
+          errorClass: null,
+          killingTest: "T1",
+          issue: "x/5607",
+        },
+      ],
+      counts: { killed: 2, survived: 0, noCoverage: 0 },
+      total: 2,
+      refusedTests: 0,
+    };
+    const judge = (unsupportedTests: number, read: NormalizedMutant[] = now) =>
+      judgeLegT({
+        classification: classifyLegT(own, read, now),
+        compare: compareMutants(own, read, { sameScheme: true }),
+        own,
+        now: read,
+        counts: { killed: 2, survived: 0, noCoverage: 0 },
+        total: 2,
+        unsupportedTests,
+        sleepIndex: { target: 0, test: 0 },
+        knownRefusal: undefined,
+        codes: new Map([
+          ["A", "M1"],
+          ["B", "M2"],
+        ]),
+        pin: { id: "edge-8078bcf49", legT, bc: now, sameScheme: true },
+      });
+    const ok = judge(0);
+    expect(ok.outcome).toBe("pass");
+    expect(ok.lines).toEqual(["T: pinned 1 rows (pin edge-8078bcf49, #5607)"]);
+    const three = judge(3);
+    // A figure miss, like a count miss: gate-fail, never held, and the headline names it.
+    expect(three.outcome).toBe("gate-fail");
+    expect(three.failure).toBe("T: 3 refused tests, pre-committed 0");
+    // A row miss (A back at no-coverage) names the pin miss first, not today's refused-test figure.
+    const back = judge(0, [base("A", "no-coverage", null), base("B", "killed", "T2")]);
+    expect(back.outcome).not.toBe("pass");
+    expect(back.failure).toMatch(/^T: pin-mismatch: /);
+  });
+  test("the real pin on the real committed tables baseline gives its counts; the earlier pins do not move", () => {
+    const committed = JSON.parse(
+      readFileSync(
+        join(import.meta.dir, "..", "itest", "al-runner-v3.tables.baseline.json"),
+        "utf8",
+      ),
+    ) as { entries: NormalizedMutant[] };
+    const tally = (rs: readonly NormalizedMutant[]) => ({
+      killed: rs.filter((r) => r.verdict === "killed").length,
+      survived: rs.filter((r) => r.verdict === "survived").length,
+      noCoverage: rs.filter((r) => r.verdict === "no-coverage").length,
+      error: rs.filter((r) => r.verdict === "error").length,
+    });
+    expect(tally(committed.entries)).toEqual({
+      killed: 290,
+      survived: 57,
+      noCoverage: 59,
+      error: 0,
+    });
+    const b = applyTPin(committed.entries, need(bPin).legT);
+    expect(b).toBeDefined();
+    expect(tally(need(b))).toEqual({ ...need(bPin).legT.counts, error: 0 });
+    // The flag the normalizer derives from the verdict still agrees on every row after pinning.
+    expect(need(b).filter((r) => r.coverageFiltered !== (r.verdict === "no-coverage"))).toEqual([]);
+    for (const p of V3_BUILD_PINS.filter((x) => x.legT !== need(bPin).legT)) {
+      const out = applyTPin(committed.entries, p.legT);
+      expect(tally(need(out)), p.id).toEqual({
+        killed: 290,
+        survived: 50,
+        noCoverage: 59,
+        error: 7,
+      });
+    }
   });
 });
 

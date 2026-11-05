@@ -110,9 +110,8 @@ import { TABLES_KNOWN_DIFFERENCES } from "./al-runner-v3-tables-known";
 import {
   type N1EReading,
   type O1Request,
+  O1_KIND_CODEUNIT,
   O1_PLAN,
-  O1_READER_CODEUNIT,
-  O1_WRITER_CODEUNIT,
   type V3RowFacts,
   V3_K_CANDIDATE_SKIP,
   V3_K_LEG,
@@ -123,6 +122,7 @@ import {
   V3_S1E_LEG,
   V3_WR_KILLERS,
   V3_WR_STATE_NOTES,
+  combineO1Sets,
   isNoServeRefusal,
   isSessionTestCall,
   judgeKillers,
@@ -133,6 +133,7 @@ import {
   judgeWrArms,
   legKSection,
   moWrTransportRefusal,
+  o1CommitRuns,
   o1LoginWorkDate,
   v3DefaultLegs,
   v3ItestFailures,
@@ -820,9 +821,9 @@ const localDate = (d: Date): string =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
 /**
- * R784: leg O1. ONE serve daemon per package set takes the five requests of `O1_PLAN`; each entry is
- * one whole codeunit of `fixtures/sandbox-order-tests` (Writer sets seven kinds of state, Reader
- * reports them). `judgeOrderProbe` fails the leg on any carry-over. A daemon that cannot run is the
+ * R784: leg O1. ONE serve daemon per package set takes the requests of `O1_PLAN` (five, then R804's
+ * four commit requests); each entry is one whole codeunit of `fixtures/sandbox-order-tests` (Writer
+ * sets seven kinds of state, CommitWriter sets six and commits, Reader reports them). `judgeOrderProbe` fails the leg on any carry-over. A daemon that cannot run is the
  * environment (infra). The second package set is the CDO's `Test/.alpackages` (read-only), only when
  * `LETHAL_ITEST_V3_CDO` is set, as D1 does.
  */
@@ -876,6 +877,7 @@ async function legO1(scratch: string, version: string): Promise<void> {
     return [d.toISOString().slice(0, 10), localDate(d)];
   };
   const dates = new Set(stamp());
+  const results: { set: string; outcome: "pass" | "held" | "gate-fail"; lines: string[] }[] = [];
   for (const set of sets) {
     const cwd = join(scratch, set.name);
     await mkdir(cwd, { recursive: true });
@@ -904,7 +906,7 @@ async function legO1(scratch: string, version: string): Promise<void> {
             testIsolation: SERVE_TEST_ISOLATION,
             entries: entries.map((e) => ({
               id: e.id,
-              test: `Codeunit${e.kind === "R" ? O1_READER_CODEUNIT : O1_WRITER_CODEUNIT}.`,
+              test: `Codeunit${O1_KIND_CODEUNIT[e.kind]}.`,
             })),
           };
           const a = await server.runEntries(body, 600_000);
@@ -947,9 +949,15 @@ async function legO1(scratch: string, version: string): Promise<void> {
     for (const d of stamp()) dates.add(d);
     for (const rq of done) {
       const reads = rq.entries
-        .filter((e) => e.kind === "R")
+        .filter((e) => e.kind !== "W")
         .map((e) => {
-          const msgs = rq.lines.filter((l) => l.entry === e.id).map((l) => l.message ?? l.status);
+          const msgs = rq.lines
+            .filter((l) => l.entry === e.id)
+            .map((l) =>
+              e.kind === "C"
+                ? `${l.status}${l.message ? ` (${l.message})` : ""}`
+                : (l.message ?? l.status),
+            );
           return `${e.id}: ${msgs.join(" ")}`;
         });
       console.log(`  O1: ${rq.label}: ${reads.join(" | ")}`);
@@ -960,10 +968,18 @@ async function legO1(scratch: string, version: string): Promise<void> {
       console.log(
         `  O1: ${set.name} set: WorkDate pinned ${login} (pin ${activePin?.id}, ${activePin?.o1?.issue})`,
       );
-    const j = judgeOrderProbe(done, [...dates], login);
+    const runs = o1CommitRuns(activePin);
+    console.log(
+      `  O1: ${set.name} set: commit kind judged as ${runs ? "runs (pin: commit-under-test-isolation gone)" : "refused (pin does not record commit-under-test-isolation gone)"}`,
+    );
+    const j = judgeOrderProbe(done, [...dates], login, runs);
     console.log(`  O1: ${set.name} set: ${j.outcome} (${done.length} requests, one daemon)`);
-    if (j.outcome === "gate-fail") throw new LegFailure(`O1: ${j.lines.join("; ")}`);
+    results.push({ set: set.name, ...j });
   }
+  // S1: every set runs before the verdict, so a later set's gate-fail is never hidden by an earlier hold.
+  const all = combineO1Sets(results);
+  if (all.outcome === "gate-fail") throw new LegFailure(`O1: ${all.lines.join("; ")}`);
+  if (all.outcome === "held") throw new V3LegHeld(all.lines);
 }
 
 /**
@@ -1321,6 +1337,80 @@ async function legX(scratch: string, push: (line: string) => void): Promise<void
   must(
     errA instanceof AlcCompileError && /AL0118/.test(errA.message) && ba.spawnCount === 0,
     "X (a)",
+  );
+  // (a') R790b: the same broken batch with the speculative baseline ON (serve-entries, the session's
+  // tests, a budget floor). v3 RAN beside the failing alc proof, yet deploy() throws the error the
+  // same backend throws with it OFF, keeps nothing, and leaves no batch a baseline could run on.
+  // The reference is serve-entries too (it stages one more file than X (a)), and alc's start time is
+  // masked, so only the speculation differs.
+  const suite = ["OverBudgetDetected", "ClampPercentRuns"].map((method) => ({
+    codeunitId: 79100,
+    codeunitName: "Sandbox Tests",
+    method,
+  }));
+  const mkSpec = (dir: string, speculate: boolean) => {
+    const b = new AlRunnerV3Backend(
+      backendCfg({
+        instrumentedDir: join(scratch, dir),
+        testDir: sb,
+        packagesDir: deps,
+        bcVersion: SANDBOX_BC,
+        selectorObjectId: 79199,
+        transport: "serve-entries",
+        speculateBaseline: speculate, // R-798: off by default; set either way, so the env cannot move it
+      }),
+    );
+    b.useBuildSymbols([]);
+    b.useDiscoveredTests(suite);
+    b.useSessionTests(suite);
+    b.useMutantBudgetFloor(180_000, 120_000);
+    return b;
+  };
+  const errText = (e: unknown, dir: string) =>
+    e instanceof Error
+      ? e.message
+          .split(join(scratch, dir))
+          .join("<scratch>")
+          .replace(/ at '\d\d:\d\d:\d\d\.\d+'/g, " at '<time>'")
+      : undefined;
+  const so = mkSpec("xa1", false);
+  const errOff = await so.deploy(broken).catch((e: unknown) => e);
+  const offSpawns = so.spawnCount;
+  await so.close();
+  const sa = mkSpec("xa2", true);
+  const errA2 = await sa.deploy(broken).catch((e: unknown) => e);
+  // The field must exist, or a rename would read "nothing kept" forever.
+  must("speculative" in sa, "X (a'): AlRunnerV3Backend has no `speculative` field");
+  const kept = (sa as unknown as { speculative: unknown }).speculative;
+  const baselineRefused = await sa.activate(null).then(
+    () => false,
+    (e: unknown) => e instanceof Error && /before a successful deploy/.test(e.message),
+  );
+  const offText = errText(errOff, "xa1");
+  const onText = errText(errA2, "xa2");
+  const sameError =
+    errOff instanceof AlcCompileError && offText !== undefined && onText === offText;
+  console.log(
+    `  X (a'): ${errA2 instanceof AlcCompileError ? "AlcCompileError" : String(errA2)}${sameError ? ", the speculation-off text" : ", NOT the speculation-off text"}; speculative v3 spawns ${sa.spawnCount} (off: ${offSpawns}); kept ${kept === undefined ? "none" : "SOME"}; a baseline after it ${baselineRefused ? "refused" : "ALLOWED"}`,
+  );
+  if (!sameError && offText !== undefined && onText !== undefined) {
+    const a = offText.split("\n");
+    const b = onText.split("\n");
+    const i = a.findIndex((l, n) => l !== b[n]);
+    console.log(
+      `  X (a') first differing line ${i}:\n    off ${a[i] ?? "<none>"}\n    on  ${b[i] ?? "<none>"}`,
+    );
+  }
+  await sa.close();
+  must(
+    errA2 instanceof AlcCompileError &&
+      sameError &&
+      /AL0118/.test(offText ?? "") &&
+      offSpawns === 0 &&
+      sa.spawnCount === 1 &&
+      kept === undefined &&
+      baselineRefused,
+    "X (a') (R790b: speculative rows from an alc-rejected batch are discarded)",
   );
   // (b) v3 alone on that folder: exit 7, 1 pass, 1 not run.
   const bDir = join(scratch, "xb");

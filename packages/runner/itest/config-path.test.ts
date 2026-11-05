@@ -213,7 +213,11 @@ describe("the target line an itest prints first (R589)", () => {
     const log = console.log;
     console.log = (...a: unknown[]) => lines.push(a.join(" "));
     try {
-      printItestTarget(path, undefined, { dir: join(tmp, "no-markers"), env: {} });
+      // R783: the config names server1, so the env names it too (the default host moved).
+      printItestTarget(path, undefined, {
+        dir: join(tmp, "no-markers"),
+        env: { LETHAL_BC_HOST: "http://192.168.2.157" },
+      });
     } finally {
       console.log = log;
     }

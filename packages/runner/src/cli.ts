@@ -1008,6 +1008,7 @@ RUN — cost and recovery
   --fresh-probe              al-runner-v3 only: run its contract probe now instead of replaying a
                              cached pass for the same build, packages and alc (R762). Same as
                              LETHAL_V3_FRESH_PROBE=1. A failed or forced probe is never cached
+                             (env LETHAL_V3_SPECULATE_BASELINE=1: run the baseline while alc proves the batch, R790; off by default)
   --resume                   continue the most recent unfinished run in --db, reusing its verdicts
   --resume-run <id>          resume a specific run id
   --retry-stranded           on resume, retry mutants that left the server stuck (skipped by default:
