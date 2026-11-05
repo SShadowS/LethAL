@@ -72,6 +72,28 @@ describe("serveDaemonReusable, the rule alone", () => {
       ]);
     }
   });
+  // R808: today's http wording (alpha.7, alpha.12), exact (`/coord/handoff/R-808/probe.md`).
+  const HTTP_TODAY =
+    "NotRun: out-of-scope: an outbound HTTP request that a test handler does not answer: the runtime never opens a connection (ADR-027). To run the test, bind an [HttpClientHandler] that answers the request, or set TestHttpRequestPolicy = BlockOutboundRequests on the test codeunit to get BC's error for it";
+  const keeps = (m: string, notRun = true): boolean =>
+    serveDaemonReusable([r("error", { notRun, message: m })], "v3");
+  test("R808 (a): v3 keeps on today's exact http text", () => {
+    expect(keeps(HTTP_TODAY)).toBe(true);
+  });
+  test("R808 (c): alpha.2's http wording still keeps", () => {
+    expect(keeps(HTTP)).toBe(true);
+  });
+  test("R808 (b): v3 closes on today's text plus a tail, a prefix of it, a reworded sentence, notRun false, or an unknown text", () => {
+    const cases: [string, string, boolean][] = [
+      ["tail", `${HTTP_TODAY} after a timeout`, true],
+      ["tail with a newline", `${HTTP_TODAY}\nx`, true],
+      ["prefix of it", HTTP_TODAY.slice(0, HTTP_TODAY.indexOf(" To run the test")), true],
+      ["reworded", HTTP_TODAY.replace("does not answer", "answers"), true],
+      ["notRun false", HTTP_TODAY, false],
+      ["unknown", "NotRun: out-of-scope: an outbound HTTP request that nobody knows", true],
+    ];
+    for (const [what, m, notRun] of cases) expect([what, keeps(m, notRun)]).toEqual([what, false]);
+  });
   test("v3 closes on a timeout row and both panic wordings", () => {
     for (const m of ["Test exceeded 3s timeout.", PANIC_TEST, PANIC_CASCADE]) {
       expect([m, serveDaemonReusable([r("error", { notRun: true, message: m })], "v3")]).toEqual([

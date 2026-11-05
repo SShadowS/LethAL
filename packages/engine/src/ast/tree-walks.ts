@@ -151,8 +151,47 @@ export const NOT_A_SLOT: Readonly<Record<string, NotASlot>> = {
   "preproc_conditional_layout_mixed.children": declarationContainer,
   "preproc_conditional_query.children": declarationContainer,
   "preproc_conditional_report.children": declarationContainer,
-  "preproc_conditional_var.children": declarationContainer,
   "preproc_conditional_xmlport.children": declarationContainer,
+  // R796 (tree-sitter-al 4.5.0). `preproc_conditional_var` is no longer a container: it now holds
+  // declarations only. The seven new containers below are classified so the pin adds no slot: each
+  // statement keeps the slot (or lack of one) its 4.4.1 parse gave it.
+  "preproc_split_var_section_tail.children": declarationContainer,
+  "preproc_conditional_case.children": {
+    kind: "not-executable",
+    reason:
+      "holds case arms, a case-else and the arm's lone `;` (`empty_statement`); arm bodies are `case_branch.body` slots",
+    item: null,
+  },
+  "preproc_split_case_extended.children": {
+    kind: "not-executable",
+    reason:
+      "holds case arms and a lone `;` (`empty_statement`); the shared body stays the `preproc_split_case_extended.body` slot",
+    item: null,
+  },
+  "case_body.children": unsupported(
+    "4.4.1 gave a case body's arms their slots through `case_branch.body`; the only new direct child that is a statement kind is `preproc_split_open_statement`, a split wrapper that was ERROR before and is classified under its own keys",
+    "R796",
+  ),
+  "preproc_split_block_close_after_endif.children": unsupported(
+    "a block closed after `#endif`; 4.4.1 flattened these statements into a `#if` or an ERROR, never a slot; same as `preproc_split_code_block_end`",
+    "R796",
+  ),
+  "preproc_split_block_end_in_else.children": unsupported(
+    "a block whose `end` sits in the `#else`; 4.4.1 flattened these statements into a `#if` or an ERROR, never a slot; same as `preproc_split_code_block_end`",
+    "R796",
+  ),
+  "preproc_split_open_statement.children": unsupported(
+    "a split `#if` whose arms end in an open statement prefix; 4.4.1 had no such node (ERROR or flattened), so no slot to keep",
+    "R796",
+  ),
+  "preproc_split_open_statement.continuation": unsupported(
+    "the statement that completes the open prefix after `#endif`; 4.4.1 had no such node, so no slot to keep",
+    "R796",
+  ),
+  "preproc_split_open_statement.then_branch": unsupported(
+    "a then-branch of the open prefix; 4.4.1 had no such node, so no slot to keep",
+    "R796",
+  ),
   "query_body.children": declarationContainer,
   "report_body.children": declarationContainer,
   "xmlport_body.children": declarationContainer,

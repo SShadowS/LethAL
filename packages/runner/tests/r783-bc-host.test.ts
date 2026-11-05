@@ -16,8 +16,8 @@ const ON_SERVER1 = { LETHAL_BC_HOST: `http://${BC_HOSTS.server1}` };
 const ON_DOCKER1 = { LETHAL_BC_HOST: `http://${BC_HOSTS.docker1}` };
 
 describe("R783: bcLinuxHost", () => {
-  test("unset or empty is the committed default: docker1 since the switch (owner ruling, 2026-10-25)", () => {
-    expect(DEFAULT_BC_HOST).toBe(BC_HOSTS.docker1);
+  test("unset or empty is the committed default: server1 again since the owner's restart (R806, 2026-11-05)", () => {
+    expect(DEFAULT_BC_HOST).toBe(BC_HOSTS.server1);
     expect(bcLinuxHost({})).toBe(DEFAULT_BC_HOST);
     expect(bcLinuxHost({ LETHAL_BC_HOST: "" })).toBe(DEFAULT_BC_HOST);
   });

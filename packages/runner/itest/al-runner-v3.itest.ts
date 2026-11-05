@@ -62,9 +62,21 @@ import {
 } from "../src/al-runner-v3-backend";
 import { AL_RUNNER_V3_NOT_AUTHORITATIVE } from "../src/al-runner-v3-config";
 import { runV3ContractProbe, v3DefectWarnings } from "../src/al-runner-v3-contract";
-import { AL_RUNNER_V3_DEFAULT_PATH, sha256OfFile } from "../src/al-runner-v3-pin";
-import { type V3BuildPin, findV3Pin } from "../src/al-runner-v3-pins";
+import {
+  AL_RUNNER_V3_DEFAULT_PATH,
+  AlRunnerV3UngatedBuildError,
+  checkGated,
+  resolveV3Binary,
+  sha256OfFile,
+} from "../src/al-runner-v3-pin";
+import { type V3BuildPin, findV3Pin, v3ReadingsDigest } from "../src/al-runner-v3-pins";
 import { FRESH_PROBE_ENV } from "../src/al-runner-v3-probe-cache";
+import {
+  AlRunnerV3SeedError,
+  mergeChildEnv,
+  v3ChildEnv,
+  v3UnpinnedEnv,
+} from "../src/al-runner-v3-seed";
 import { SLEEP_NOTE_TAG } from "../src/al-runner-v3-sleep";
 import { AlcCompileError, ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import { buildBackend } from "../src/cli";
@@ -110,9 +122,11 @@ import { TABLES_KNOWN_DIFFERENCES } from "./al-runner-v3-tables-known";
 import {
   type N1EReading,
   type O1Request,
+  type O1SeedRequest,
+  O1_KIND_CODEUNIT,
   O1_PLAN,
-  O1_READER_CODEUNIT,
-  O1_WRITER_CODEUNIT,
+  O1_SEED_CODEUNIT,
+  O1_SEED_TEST,
   type V3RowFacts,
   V3_K_CANDIDATE_SKIP,
   V3_K_LEG,
@@ -123,16 +137,20 @@ import {
   V3_S1E_LEG,
   V3_WR_KILLERS,
   V3_WR_STATE_NOTES,
+  combineO1Sets,
   isNoServeRefusal,
   isSessionTestCall,
   judgeKillers,
   judgeLegK,
   judgeN1Serve,
+  judgeO1Seed,
   judgeOrderProbe,
   judgeStateNotes,
   judgeWrArms,
   legKSection,
   moWrTransportRefusal,
+  o1CdoApps,
+  o1CommitRuns,
   o1LoginWorkDate,
   v3DefaultLegs,
   v3ItestFailures,
@@ -147,8 +165,8 @@ import {
   recordRequested,
 } from "./baseline-guard";
 import { prepareFixtureSymbols } from "./fixture-symbols";
-import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { GATE_WARNINGS } from "./gate-expected";
+import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
   assertGateWarnings,
   checkGateWarnings,
@@ -200,7 +218,8 @@ const SYMBOLS_B_BASELINE_PATH = join(HERE, "al-runner-v3.symbols-lethalb.baselin
 // R602: legs MO (multi-object files) and WR (`#if`-wrapped files), each recorded once under R332.
 const MULTIOBJECT_BASELINE_PATH = join(HERE, "al-runner-v3.multiobject.baseline.json");
 const WRAPPED_BASELINE_PATH = join(HERE, "al-runner-v3.wrapped.baseline.json");
-const BIN = process.env.LETHAL_ALRUNNER_V3_PATH ?? AL_RUNNER_V3_DEFAULT_PATH;
+// R814: resolved once, so `current` moving during a gate cannot swap the binary under it.
+const BIN = resolveV3Binary(process.env.LETHAL_ALRUNNER_V3_PATH ?? AL_RUNNER_V3_DEFAULT_PATH);
 const CANDIDATE = process.env.LETHAL_ALRUNNER_V3_CANDIDATE === "1";
 /** R586c: run K on a candidate build too (the CLI-built backend gets the test-only seam). */
 const K_ON_CANDIDATE = v3KOnCandidate(process.env);
@@ -497,6 +516,7 @@ async function legC(scratch: string): Promise<readonly string[]> {
     alcPath: ALC,
     cacheDir: CACHE,
     tasksetPath: "/usr/bin/taskset",
+    ...(activePin?.serveKeepMoved !== undefined ? { serveKeepMoved: true } : {}),
     ...(assertApps.length === 1 && libraryAssert !== undefined
       ? { libraryAssertApp: join(dataPkgs, libraryAssert) }
       : {}),
@@ -820,9 +840,90 @@ const localDate = (d: Date): string =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
 /**
- * R784: leg O1. ONE serve daemon per package set takes the five requests of `O1_PLAN`; each entry is
- * one whole codeunit of `fixtures/sandbox-order-tests` (Writer sets seven kinds of state, Reader
- * reports them). `judgeOrderProbe` fails the leg on any carry-over. A daemon that cannot run is the
+ * R807: O1's run-seed sub-check (pre-commitment master 94b3337d), on the OWN package set only: the
+ * seed does not depend on the package set, and a second daemon pair on the CDO set would cost
+ * minutes of cold start for no extra proof. Two daemons, two separate requests each: one with
+ * LethAL's spawn environment (pinned), one with `ALRUNNER_SEED` removed (sensitivity). `judgeO1Seed`
+ * decides. A pinned daemon whose answer reads another seed trips the session's own read-back guard,
+ * which is also a gate-fail here.
+ */
+async function o1SeedCheck(
+  scratch: string,
+  set: { cache: string; bc: string; sources: string[] },
+): Promise<{ outcome: "pass" | "gate-fail"; lines: string[] }> {
+  const readTwo = async (unpinned: boolean): Promise<O1SeedRequest[]> => {
+    const cwd = join(scratch, unpinned ? "seed-unpinned" : "seed-pinned");
+    await mkdir(cwd, { recursive: true });
+    const server = new AlRunnerServer(
+      BIN,
+      (argv) =>
+        defaultServerSpawn(argv, {
+          cwd,
+          env: unpinned
+            ? v3UnpinnedEnv({ ALRUNNER_CACHE: resolve(CACHE) })
+            : v3ChildEnv({ ALRUNNER_CACHE: resolve(CACHE) }),
+        }),
+      [],
+      "serve",
+    );
+    server.enforceRunSeed = !unpinned;
+    const out: O1SeedRequest[] = [];
+    try {
+      await server.start(300_000, [resolve(set.cache)], 60, [
+        "--bc-version",
+        set.bc,
+        "--no-download",
+      ]);
+      for (let i = 0; i < 2; i++) {
+        const a = await server.runEntries(
+          {
+            command: "runTests",
+            sourcePaths: set.sources,
+            testIsolation: SERVE_TEST_ISOLATION,
+            entries: [{ id: `S${i}`, test: `Codeunit${O1_SEED_CODEUNIT}.` }],
+          },
+          600_000,
+        );
+        const cErr = a.summary.compilationErrors;
+        if (Array.isArray(cErr) && cErr.length > 0)
+          throw new V3LegEnvironment(
+            `O1: the seed fixture did not compile in the daemon: ${JSON.stringify(cErr).slice(0, 300)}`,
+          );
+        const row = a.tests.find((l) => String(l.name).endsWith(`.${O1_SEED_TEST}`));
+        const seen = server.lastRunSeed;
+        out.push({
+          message: typeof row?.message === "string" ? row.message : undefined,
+          ...(seen !== undefined ? { seed: seen.seed, seedSource: seen.seedSource } : {}),
+        });
+      }
+    } finally {
+      await server.close();
+    }
+    return out;
+  };
+  try {
+    const pinned = await readTwo(false);
+    const sensitive = await readTwo(true);
+    for (const [n, qs] of [
+      ["pinned", pinned],
+      ["no variable", sensitive],
+    ] as const)
+      for (const q of qs)
+        console.log(
+          `  O1: seed ${n}: ${q.message} (seed ${JSON.stringify(q.seed)}, source ${JSON.stringify(q.seedSource)})`,
+        );
+    return judgeO1Seed({ pinned, sensitive });
+  } catch (e) {
+    if (e instanceof AlRunnerV3SeedError)
+      return { outcome: "gate-fail", lines: [`seed read-back refused: ${e.message}`] };
+    throw e;
+  }
+}
+
+/**
+ * R784: leg O1. ONE serve daemon per package set takes the requests of `O1_PLAN` (five, then R804's
+ * four commit requests); each entry is one whole codeunit of `fixtures/sandbox-order-tests` (Writer
+ * sets seven kinds of state, CommitWriter sets six and commits, Reader reports them). `judgeOrderProbe` fails the leg on any carry-over. A daemon that cannot run is the
  * environment (infra). The second package set is the CDO's `Test/.alpackages` (read-only), only when
  * `LETHAL_ITEST_V3_CDO` is set, as D1 does.
  */
@@ -867,7 +968,7 @@ async function legO1(scratch: string, version: string): Promise<void> {
       cache: join(CDO, "Test", ".alpackages"),
       bc: CDO_BC,
       sources: [dep, tests],
-      apps: 17,
+      apps: o1CdoApps(activePin),
     });
   } else console.log("  O1: LETHAL_ITEST_V3_CDO unset: the CDO package set is skipped, as D1 is");
   // WorkDate defaults to the clock's date, so the date at the start and end of the leg both count.
@@ -876,12 +977,14 @@ async function legO1(scratch: string, version: string): Promise<void> {
     return [d.toISOString().slice(0, 10), localDate(d)];
   };
   const dates = new Set(stamp());
+  const results: { set: string; outcome: "pass" | "held" | "gate-fail"; lines: string[] }[] = [];
   for (const set of sets) {
     const cwd = join(scratch, set.name);
     await mkdir(cwd, { recursive: true });
     const server = new AlRunnerServer(
       BIN,
-      (argv) => defaultServerSpawn(argv, { cwd, env: { ALRUNNER_CACHE: resolve(CACHE) } }),
+      (argv) =>
+        defaultServerSpawn(argv, { cwd, env: v3ChildEnv({ ALRUNNER_CACHE: resolve(CACHE) }) }),
       [],
       "serve",
     );
@@ -904,7 +1007,7 @@ async function legO1(scratch: string, version: string): Promise<void> {
             testIsolation: SERVE_TEST_ISOLATION,
             entries: entries.map((e) => ({
               id: e.id,
-              test: `Codeunit${e.kind === "R" ? O1_READER_CODEUNIT : O1_WRITER_CODEUNIT}.`,
+              test: `Codeunit${O1_KIND_CODEUNIT[e.kind]}.`,
             })),
           };
           const a = await server.runEntries(body, 600_000);
@@ -947,9 +1050,15 @@ async function legO1(scratch: string, version: string): Promise<void> {
     for (const d of stamp()) dates.add(d);
     for (const rq of done) {
       const reads = rq.entries
-        .filter((e) => e.kind === "R")
+        .filter((e) => e.kind !== "W")
         .map((e) => {
-          const msgs = rq.lines.filter((l) => l.entry === e.id).map((l) => l.message ?? l.status);
+          const msgs = rq.lines
+            .filter((l) => l.entry === e.id)
+            .map((l) =>
+              e.kind === "C"
+                ? `${l.status}${l.message ? ` (${l.message})` : ""}`
+                : (l.message ?? l.status),
+            );
           return `${e.id}: ${msgs.join(" ")}`;
         });
       console.log(`  O1: ${rq.label}: ${reads.join(" | ")}`);
@@ -960,10 +1069,24 @@ async function legO1(scratch: string, version: string): Promise<void> {
       console.log(
         `  O1: ${set.name} set: WorkDate pinned ${login} (pin ${activePin?.id}, ${activePin?.o1?.issue})`,
       );
-    const j = judgeOrderProbe(done, [...dates], login);
+    const runs = o1CommitRuns(activePin);
+    console.log(
+      `  O1: ${set.name} set: commit kind judged as ${runs ? "runs (pin: commit-under-test-isolation gone)" : "refused (pin does not record commit-under-test-isolation gone)"}`,
+    );
+    const j = judgeOrderProbe(done, [...dates], login, runs);
     console.log(`  O1: ${set.name} set: ${j.outcome} (${done.length} requests, one daemon)`);
-    if (j.outcome === "gate-fail") throw new LegFailure(`O1: ${j.lines.join("; ")}`);
+    results.push({ set: set.name, ...j });
   }
+  const own = sets[0];
+  if (own !== undefined) {
+    const sj = await o1SeedCheck(scratch, own);
+    console.log(`  O1: run seed sub-check (own set): ${sj.outcome}`);
+    results.push({ set: "own seed", ...sj });
+  }
+  // S1: every set runs before the verdict, so a later set's gate-fail is never hidden by an earlier hold.
+  const all = combineO1Sets(results);
+  if (all.outcome === "gate-fail") throw new LegFailure(`O1: ${all.lines.join("; ")}`);
+  if (all.outcome === "held") throw new V3LegHeld(all.lines);
 }
 
 /**
@@ -1439,7 +1562,7 @@ async function legX(scratch: string, push: (line: string) => void): Promise<void
       ],
       {
         encoding: "utf8",
-        env: { ...process.env, ALRUNNER_CACHE: CACHE },
+        env: mergeChildEnv(v3ChildEnv({ ALRUNNER_CACHE: CACHE })), // R807: the pinned run seed
       },
     );
     b7 = "exit 0";
@@ -2093,6 +2216,11 @@ async function main(): Promise<void> {
   console.log(
     `al-runner-v3 itest: ${version} sha256 ${sha} (${BIN})${CANDIDATE ? " CANDIDATE" : ""}; legs ${LEGS.join(",")}`,
   );
+  // R814: a mechanical pin is adopted here, from `.gated` or a candidate's LETHAL_V3_PIN_FROM. An
+  // ungated build is the backend's refusal to make, as before.
+  await checkGated(BIN, version, { candidate: CANDIDATE }).catch((err: unknown) => {
+    if (!(err instanceof AlRunnerV3UngatedBuildError)) throw err;
+  });
   // R586c: a per-build pin applies only when the version line AND the sha256 are both equal.
   const PIN = findV3Pin(version, sha);
   activePin = PIN;
@@ -2259,6 +2387,7 @@ async function main(): Promise<void> {
       legs,
       lines,
       ...(legCWarnFacts !== undefined ? { warnFacts: legCWarnFacts } : {}),
+      ...(PIN !== undefined ? { pinApplied: PIN.id, pinDigest: v3ReadingsDigest(PIN) } : {}),
       oracleBcBuild: ORACLE_BC_BUILD,
       writtenAt: new Date().toISOString(),
     });

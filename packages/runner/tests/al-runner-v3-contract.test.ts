@@ -326,9 +326,20 @@ const SERVE_ROWS: Record<string, { status: string; notRun?: boolean; message?: s
     message:
       "NotRun: out-of-scope: OnRun failed (runner behaviour not pinned): Arithmetic operation resulted in an overflow.",
   },
+  // R808: the public-host test; alpha.2's wording.
+  "Codeunit50674.HttpGetPublic": {
+    status: "error",
+    notRun: true,
+    message:
+      "NotRun: out-of-scope: an outbound HTTP request with no [HttpClientHandler] bound to the test: the runtime never opens a connection (ADR-027)",
+  },
 };
 
 type ServeRow = { status: string; notRun?: boolean; message?: string };
+
+/** R808: today's wording of the http refusal (alpha.7, alpha.12; leg C `refusal-row-shape-public`). */
+const HTTP_TODAY =
+  "NotRun: out-of-scope: an outbound HTTP request that a test handler does not answer: the runtime never opens a connection (ADR-027). To run the test, bind an [HttpClientHandler] that answers the request, or set TestHttpRequestPolicy = BlockOutboundRequests on the test codeunit to get BC's error for it";
 
 /** R705: a #5602-fixed build: http and cascade come back as plain trusted fails. */
 const FIXED_ROWS: Record<string, ServeRow> = {
@@ -339,6 +350,15 @@ const FIXED_ROWS: Record<string, ServeRow> = {
     message: "There was an error while executing the HTTP request, connection refused",
   },
   "Codeunit50672.LaterFails": { status: "fail", notRun: false, message: "later" },
+};
+
+/** R808: alpha.12's serve rows: localhost a plain fail, a public host today's refusal, commit a
+ *  plain pass, and NO row for `Codeunit50673.Never` (since #5859). */
+const { "Codeunit50673.Never": _noOnRunRow, ...FIXED_WITHOUT_NEVER } = FIXED_ROWS;
+const TODAY_ROWS: Record<string, ServeRow> = {
+  ...FIXED_WITHOUT_NEVER,
+  "Codeunit50671.CommitCall": { status: "pass", notRun: false },
+  "Codeunit50674.HttpGetPublic": { status: "error", notRun: true, message: HTTP_TODAY },
 };
 
 /** A fake `alrunner serve`: answers every runTests with `rows`; records each argv and request. */
@@ -429,8 +449,13 @@ describe("R645: the probe's v3 processes run in its scratch dir, not the caller'
   });
 });
 
-const probe = (over: Over = {}, serveSpawn = fakeServe().spawn): Promise<V3ContractResult> =>
+const probe = (
+  over: Over = {},
+  serveSpawn = fakeServe().spawn,
+  serveKeepMoved = false,
+): Promise<V3ContractResult> =>
   runV3ContractProbe({
+    ...(serveKeepMoved ? { serveKeepMoved: true } : {}),
     alRunnerPath: "/fake/alrunner",
     expectedVersion: VERSION,
     packagesDir: "/fake/deps",
@@ -450,7 +475,7 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     const r = await probe({}, s.spawn);
     const f = r.facts.find((x) => x.fact === "serve-keep-reasons");
     expect(f).toMatchObject({ kind: "warn", verdict: "matches" });
-    expect(f?.measured).toContain("the keep rule accepts every row of all 4 entries");
+    expect(f?.measured).toContain("the keep rule accepts every row of all 5 entries");
     expect(f?.measured).toContain("http: refusal");
     expect(f?.measured).toContain("cascade: refusal");
     expect(s.argvs).toEqual([[resolve("/fake/alrunner"), "serve", "--test-timeout", "3"]]);
@@ -468,6 +493,7 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     ["commit", "Codeunit50671.CommitCall"],
     ["cascade", "Codeunit50672.LaterFails"],
     ["onrun-failed", "Codeunit50673.Never"],
+    ["http", "Codeunit50674.HttpGetPublic"],
   ] as const) {
     test(`a reworded ${entry} reason is diverged, names the entry, never refuses, and leg C still passes with the warning`, async () => {
       const rows = {
@@ -505,7 +531,72 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
 
   test("R705 guard: the probe's tests app has no uncompilable test", () => {
     expect(SERVE_TESTS_AL).not.toContain("NoSuchProcedure");
-    expect(SERVE_TESTS_AL.match(/^codeunit 5067\d /gm)).toHaveLength(4);
+    expect(SERVE_TESTS_AL.match(/^codeunit 5067\d /gm)).toHaveLength(5);
+  });
+
+  // R808 (d): pinned (the build's pin has serveKeepMoved), the fact expects commit a plain pass and
+  // no row for Never; every other reading of those two is diverged.
+  const pinnedFact = async (rows: Record<string, ServeRow>) =>
+    (await probe({}, fakeServe(rows).spawn, true)).facts.find(
+      (x) => x.fact === "serve-keep-reasons",
+    );
+
+  test("R808 pinned: today's rows read matches", async () => {
+    const f = await pinnedFact(TODAY_ROWS);
+    expect(f?.verdict).toBe("matches");
+    expect(f?.measured).toContain("commit: plain pass (pinned)");
+    expect(f?.measured).toContain("onrun-failed: no row (pinned)");
+    expect(f?.measured).toContain("http: plain fail");
+    expect(f?.measured).toContain("http: refusal");
+    expect(f?.expected).toContain("this build's pin (R808)");
+  });
+
+  test("R808 pinned: a commit refusal reads diverged", async () => {
+    const f = await pinnedFact({
+      ...TODAY_ROWS,
+      "Codeunit50671.CommitCall": SERVE_ROWS["Codeunit50671.CommitCall"] as ServeRow,
+    });
+    expect(f?.verdict).toBe("diverged");
+    expect(f?.measured).toContain("commit: MOVED");
+  });
+
+  test("R808 pinned: a pass row flagged notRun, or a plain fail, for commit reads diverged", async () => {
+    for (const row of [
+      { status: "pass", notRun: true },
+      { status: "fail", notRun: false, message: "x" },
+    ])
+      expect((await pinnedFact({ ...TODAY_ROWS, "Codeunit50671.CommitCall": row }))?.verdict).toBe(
+        "diverged",
+      );
+  });
+
+  test("R808 pinned: a row for Never (a refusal or a plain fail) reads diverged", async () => {
+    for (const row of [
+      SERVE_ROWS["Codeunit50673.Never"] as ServeRow,
+      { status: "fail", notRun: false, message: "Codeunit50673.OnRun failed" },
+    ]) {
+      const f = await pinnedFact({ ...TODAY_ROWS, "Codeunit50673.Never": row });
+      expect(f?.verdict).toBe("diverged");
+      expect(f?.measured).toContain("onrun-failed: MOVED");
+    }
+  });
+
+  test("R808: the public-host row as a plain fail reads diverged, pinned or not", async () => {
+    const row = { status: "fail", notRun: false, message: "boom" };
+    expect((await pinnedFact({ ...TODAY_ROWS, "Codeunit50674.HttpGetPublic": row }))?.verdict).toBe(
+      "diverged",
+    );
+    expect((await serveFact({ ...FIXED_ROWS, "Codeunit50674.HttpGetPublic": row }))?.verdict).toBe(
+      "diverged",
+    );
+  });
+
+  test("R808 (e): unpinned, today's rows still read diverged for commit and onrun-failed", async () => {
+    const f = await serveFact(TODAY_ROWS);
+    expect(f?.verdict).toBe("diverged");
+    expect(f?.measured).toContain("commit: MOVED pass");
+    expect(f?.measured).toContain("onrun-failed: MOVED no row");
+    expect(f?.measured).not.toContain("http: MOVED");
   });
 
   test("R705: the tolerance is narrow", async () => {

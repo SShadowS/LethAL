@@ -1074,6 +1074,12 @@ export interface ExecutionContext {
   readonly runnerBuild?: string;
   /** R586: the sha256 of that v3 binary, on the same terms as `runnerBuild`. */
   readonly binarySha256?: string;
+  /**
+   * R807: the run seed LethAL pinned (`ALRUNNER_SEED`) and the build reported back, so a run can be
+   * replayed with `--seed`. Absent when the build reports none (alpha.7 and older), on every other
+   * backend and on carried entries. Optional, so an older report stays valid.
+   */
+  readonly runSeed?: number;
 }
 
 /** R272: one discovered test method — see `SessionReport.testMethods`. */
@@ -2377,7 +2383,11 @@ function buildExecutionContexts(
   caps: BackendCapabilities,
   resumedFrom: { readonly runId: number } | undefined,
   // R586 — see `ExecutionContext.runnerBuild`. On a v3 backend only, directly measured entries.
-  runnerBuild?: { readonly version: string; readonly binarySha256: string },
+  runnerBuild?: {
+    readonly version: string;
+    readonly binarySha256: string;
+    readonly runSeed?: number;
+  },
 ): ExecutionContext[] {
   const groups = new Map<string, { runner: RunnerKind; carried: boolean; verdictCount: number }>();
   for (const o of outcomes) {
@@ -2396,7 +2406,11 @@ function buildExecutionContexts(
   // session this one never made.
   const bcFields = {
     ...(runnerBuild !== undefined && caps.kind === "al-runner-v3"
-      ? { runnerBuild: runnerBuild.version, binarySha256: runnerBuild.binarySha256 }
+      ? {
+          runnerBuild: runnerBuild.version,
+          binarySha256: runnerBuild.binarySha256,
+          ...(runnerBuild.runSeed !== undefined ? { runSeed: runnerBuild.runSeed } : {}),
+        }
       : {}),
   };
   return [...groups.values()].map((g) => {

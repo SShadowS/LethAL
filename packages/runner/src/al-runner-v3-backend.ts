@@ -86,7 +86,13 @@ import {
   encodeGroups,
   serveRow,
 } from "./al-runner-v3-entries";
-import { AlRunnerV3UngatedBuildError, V3_NO_SERVE_ENTRIES, checkGated } from "./al-runner-v3-pin";
+import {
+  AlRunnerV3UngatedBuildError,
+  V3_NO_SERVE_ENTRIES,
+  checkGated,
+  resolveV3Binary,
+  v3InstallHint,
+} from "./al-runner-v3-pin";
 import {
   pinnedDefectCoverage,
   serveRowFieldsFor,
@@ -104,6 +110,7 @@ import {
   uncacheableReason,
   writeProbeCache,
 } from "./al-runner-v3-probe-cache";
+import { AlRunnerV3SeedError, checkRunSeed, v3ChildEnv } from "./al-runner-v3-seed";
 import {
   AlRunnerV3CoverageJoinError,
   type SleepIndex,
@@ -149,7 +156,7 @@ import {
 import { assertManifestObjectsDeclared, readManifestObjectKeys } from "./line-map";
 import { type SpawnFn, absToolPath, defaultSpawn } from "./publisher";
 import { assertResourceSelectorRuntime, installResourceSelector } from "./resource-selector";
-import { TestAppError, symbolPackageId } from "./test-app-publish";
+import { TestAppError, symbolPackageId, testAppBackslashHint } from "./test-app-publish";
 import { LINK_EXCUSED_DIRS, ProjectSymlinkRefusedError, walkFilesSync } from "./walk";
 
 /**
@@ -224,13 +231,41 @@ async function linkIsUnproven(hash: Promise<string>, where: string): Promise<str
   });
 }
 
-/** §5, #5613: exit 6, "the selection matched no test", with no document. Stops the session. */
+/** §5, #5613: exit 6, "the selection matched no test" (no document before the #5622 fix, 0 rows since). Stops the session. */
 export class AlRunnerV3SelectionError extends Error {
   constructor(codeunitId: number, stderr: string) {
     super(
-      `al-runner-v3: --codeunit ${codeunitId} selected no test (exit 6, no document, #5613). stderr: ${stderr.slice(-400)}`,
+      `al-runner-v3: --codeunit ${codeunitId} selected no test (exit 6, #5613). stderr: ${stderr.slice(-400)}`,
     );
     this.name = "AlRunnerV3SelectionError";
+  }
+}
+
+/**
+ * R815: exit 6 has two meanings, told apart only by v3's words (measured on alpha.12 and alpha.13+edge,
+ * `/coord/handoff/R-817/`). `error: the selection matches no test`: v3 stopped at the selection. A
+ * `Result: NOTHING SELECTED (exit 6)` line: v3 RAN, and the codeunit gave no test row, which since
+ * #5859 is what a raising OnRun does. Any other text is `unknown` and stops as a selection miss.
+ */
+export function exit6Kind(stderr: string): "selection-miss" | "ran-no-test" | "unknown" {
+  if (/^error: the selection matches no test\r?$/m.test(stderr)) return "selection-miss";
+  return /^Result: NOTHING SELECTED \(exit 6\)\r?$/m.test(stderr) ? "ran-no-test" : "unknown";
+}
+
+/** R815: why a codeunit ran and gave no test row, for the baseline's stop and a mutant's `error`. */
+const ranNoTestWhy = (id: number): string =>
+  `codeunit ${id} ran and gave no test row; its OnRun probably raised, and al-runner then runs none of its tests and reports nothing (upstream #5859)`;
+
+/**
+ * R815: on an unmutated build, a test codeunit ran and gave no test row. It is the user's suite, not a
+ * selection miss, so it stops the session under its own name. Under a mutant the same exit reads `error`.
+ */
+export class AlRunnerV3NoTestRanError extends Error {
+  constructor(codeunitId: number) {
+    super(
+      `al-runner-v3-codeunit-ran-no-test: ${ranNoTestWhy(codeunitId)}. This call scored no verdict. Run the codeunit on its own, and fix its OnRun or move that code out of it.`,
+    );
+    this.name = "AlRunnerV3NoTestRanError";
   }
 }
 
@@ -459,7 +494,7 @@ export interface V3Row {
 export function decodeV3Rows(
   stdout: string,
   codeunitId: number,
-): { readonly rows: readonly V3Row[] } | { readonly why: string } {
+): { readonly rows: readonly V3Row[]; readonly seed?: number } | { readonly why: string } {
   let raw: unknown;
   try {
     raw = JSON.parse(stdout);
@@ -468,6 +503,8 @@ export function decodeV3Rows(
   }
   const tests = (raw as { tests?: unknown } | null)?.tests;
   if (!Array.isArray(tests)) return { why: "the --output-json document has no tests[]" };
+  // R807: the read-back guard; throws AlRunnerV3SeedError on a seed other than the pinned one.
+  const seed = checkRunSeed(raw as { seed?: unknown; seedSource?: unknown }, "one-shot envelope");
   const rows: V3Row[] = [];
   for (const [i, t] of tests.entries()) {
     const r = (t ?? {}) as Record<string, unknown>;
@@ -505,7 +542,7 @@ export function decodeV3Rows(
       notRun: notRun === true,
     });
   }
-  return { rows };
+  return { rows, ...(seed !== undefined ? { seed } : {}) };
 }
 
 /**
@@ -1312,8 +1349,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     for (const l of this.laneList) l.dropPair();
   }
 
+  private readonly cfg: AlRunnerV3Config;
+
   constructor(
-    private readonly cfg: AlRunnerV3Config,
+    cfg: AlRunnerV3Config,
     private readonly spawn: SpawnFn = defaultSpawn,
     alcIo: ArtifactIo = defaultArtifactIo,
     /** R635: the serve daemon's spawn (serve-entries only). */
@@ -1322,6 +1361,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     private readonly now: () => number = Date.now,
   ) {
     if (cfg.selectorMode === "resource") throw new AlRunnerV3ResourceSelectorRefusedError();
+    this.cfg = { ...cfg, alRunnerPath: resolveV3Binary(cfg.alRunnerPath) };
     this.speculateOn = cfg.speculateBaseline ?? readSpeculateBaseline();
     // R761: a default transport starts one-shot-safe; `decideTransport` turns serve on, before the
     // first deploy (the staged batch differs by transport) and the first v3 process.
@@ -1359,7 +1399,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       // Read by nothing today; `--isolation test` rolls the database back per test, while the
       // codeunit's variables are kept (plan §2).
       isolation: "session",
-      // Until #5602, #5603 and #5605 are measured gone (plan §7).
+      // Until the verdict-changing defects are measured gone (plan §7): #5611 is still present.
       authoritative: false,
     };
   }
@@ -1368,14 +1408,19 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   async status(): Promise<BackendStatus> {
     this.dropPair();
     this.pairStore.clear();
-    const res = await this.spawn([this.cfg.alRunnerPath, "--version"]).catch((e) => ({
-      exitCode: -1,
-      stdout: "",
-      stderr: String(e),
-    }));
+    const res = await this.spawn([this.cfg.alRunnerPath, "--version"], this.cacheEnv()).catch(
+      (e) => ({
+        exitCode: -1,
+        stdout: "",
+        stderr: String(e),
+      }),
+    );
     const reported = (res.stdout || res.stderr).trim();
     if (res.exitCode !== 0) {
-      return { ok: false, details: `al-runner v3 not runnable: ${reported.slice(0, 300)}` };
+      return {
+        ok: false,
+        details: `al-runner v3 not runnable: ${reported.slice(0, 300)}. ${v3InstallHint()}`,
+      };
     }
     if (!AL_RUNNER_V3_VERSION.test(reported)) {
       return {
@@ -1404,7 +1449,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       gateRecord =
         this.cfg.candidate === true
           ? "this update gate's own leg C (a candidate build)"
-          : `the gated build's leg C (.gated lethalCommit ${gated.lethalCommit})`;
+          : gated.source === "manifest"
+            ? `the gated release's leg C (gate manifest, lethalCommit ${gated.lethalCommit})`
+            : `the gated build's leg C (.gated lethalCommit ${gated.lethalCommit})`;
     } catch (err) {
       if (err instanceof AlRunnerV3UngatedBuildError) return { ok: false, details: err.message };
       throw err;
@@ -1764,11 +1811,24 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     return this.sleepIndex?.sizes;
   }
 
-  /** R645: `ALRUNNER_CACHE`, absolute, because v3 now runs in another cwd. */
-  private cacheEnv(): { env: Record<string, string> } | Record<string, never> {
-    return this.cfg.cacheDir !== undefined
-      ? { env: { ALRUNNER_CACHE: resolve(this.cfg.cacheDir) } }
-      : {};
+  /**
+   * The environment of EVERY al-runner process this backend starts. R645: `ALRUNNER_CACHE`,
+   * absolute, because v3 now runs in another cwd. R807: plus the pinned run seed, always.
+   */
+  private cacheEnv(): { env: Record<string, string> } {
+    return {
+      env: v3ChildEnv(
+        this.cfg.cacheDir !== undefined
+          ? { ALRUNNER_CACHE: resolve(this.cfg.cacheDir) }
+          : undefined,
+      ),
+    };
+  }
+
+  /** R807: the seed the build reported (already checked to be the pinned one); absent when none. */
+  private observedSeed: number | undefined;
+  observedRunSeed(): number | undefined {
+    return this.observedSeed;
   }
 
   /** C2 and R349: every field derived from the deployed layout or the active mutant. */
@@ -2127,6 +2187,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         if (![0, 1, 7, 8].includes(made.res.exitCode)) continue;
         const decoded = decodeV3Rows(made.res.stdout, id);
         if ("why" in decoded) continue;
+        this.observedSeed = decoded.seed ?? this.observedSeed;
         if (decoded.rows.some((r) => r.message !== undefined && V3_TIMEOUT_MESSAGE.test(r.message)))
           continue;
         // Review r2 #1: the durations were measured beside alc's CPU. A budget is
@@ -2515,7 +2576,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         if (err instanceof AlcCompileError) {
           throw new TestAppError(
             "compile-failed",
-            `al-runner-v3: the test app does not compile against this batch, so no test of it can be trusted (R586 §3 step 2): ${err.message}`,
+            `al-runner-v3: the test app does not compile against this batch, so no test of it can be trusted (R586 §3 step 2): ${err.message}${testAppBackslashHint(err.message)}`,
           );
         }
         throw err;
@@ -3100,7 +3161,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         },
       };
     }
-    if (res.exitCode === 6) throw new AlRunnerV3SelectionError(id, res.stderr);
+    if (res.exitCode === 6) {
+      if (exit6Kind(res.stderr) !== "ran-no-test")
+        throw new AlRunnerV3SelectionError(id, res.stderr);
+      if (lane.lastActivated === null) throw new AlRunnerV3NoTestRanError(id);
+      return { verdict: this.rowMissing(lane, ref, ranNoTestWhy(id), wallMs) };
+    }
     if (![0, 1, 7, 8].includes(res.exitCode)) {
       return {
         verdict: transportFailure(
@@ -3121,6 +3187,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if ("why" in decoded) {
       return { verdict: transportFailure(ref, `codeunit ${id}: ${decoded.why}`, wallMs) };
     }
+    this.observedSeed = decoded.seed ?? this.observedSeed;
     // Every suite test of this codeunit (and the asking ref) has exactly one row, or nothing is cached.
     const needed = [...(this.suitePerCodeunit.get(id) ?? []), ref];
     for (const t of needed) {
@@ -3355,6 +3422,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       throw err;
     }
     await this.refuseDaemonDependencySkip(lane, daemon);
+    if (typeof answer.summary.seed === "number") this.observedSeed = answer.summary.seed; // R807: AlRunnerServer already checked it
     if (answer.summary.cached === false) this.stats.cachedFalse += 1;
     const decoded = decodeEntriesAnswer(sent, answer, this.serveRowFields);
     if ("why" in decoded) {
@@ -3715,6 +3783,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
       if (
         err instanceof AlRunnerV3DependencySkippedError ||
+        err instanceof AlRunnerV3SeedError ||
         err instanceof AlRunnerV3ServeFallbackWarmupError
       )
         throw err;
@@ -3922,6 +3991,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       throw err;
     }
     await this.refuseDaemonDependencySkip(lane, daemon);
+    if (typeof answer.summary.seed === "number") this.observedSeed = answer.summary.seed; // R807: AlRunnerServer already checked it
     if (answer.summary.cached === false) this.stats.cachedFalse += 1;
     const rows: V3Row[] = [];
     for (const t of answer.tests) {

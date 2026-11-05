@@ -13,6 +13,43 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **A test codeunit whose OnRun fails no longer reads as "selected no test" on one-shot v3** (R815). A mutant that makes
+  OnRun fail reads `error`, and the session goes on. On the unmutated build the run stops with
+  `al-runner-v3-codeunit-ran-no-test`, naming OnRun. A real selection miss reads as before.
+- **LethAL's own al-runner follows edge; users install a listed release** (R813, R814). The daily update gate has two
+  tracks: `edge` moves `current`, only forward, and a numbered release only joins a gate manifest that ships with LethAL.
+  A build whose readings equal `current`'s committed pin passes with no person, as a row that names that pin and holds no
+  reading; anything that moved still needs a pre-commitment first. The `al-runner-v3` backend now accepts a listed
+  release's exact binary with no local `.gated`, and any other binary is refused with the install command. That is a
+  **sibling build** of the commit LethAL tracks: edge's files are replaced in place, so an old edge build cannot be fetched.
+- **The v3 serve keep rule takes today's http refusal, and `serve-keep-reasons` reads `matches` again** (R808): the
+  `http` entry of `V3_SERVE_SAFE_REFUSALS` also keeps the serve daemon on alpha.7 and alpha.12's wording ("... that a test
+  handler does not answer ..."), exact at both ends; alpha.2's wording still keeps. A project whose test hits that refusal
+  no longer closes the daemon. The update gate's `serve-keep-reasons` fact now runs a public-host http test, and a build's
+  pin can record that `commit` is a plain pass and `onrun-failed` has no row for the test method (alpha.7 gives a
+  `Codeunit<n>.OnRun` fail row, alpha.12 no row at all), so the fact reads `matches` on alpha.6, alpha.7 and alpha.12
+  instead of a standing `diverged`. Speed and a warn fact only: no verdict moved.
+
+- **tree-sitter-al 4.4.1 to 4.5.0** (R796, R801). Members that 4.4.1 swallowed
+  into a global `var` section (R720, R327) are direct members; seven new statement containers are classified (none adds a
+  slot); `IDENTITY_SCHEME` 43. A loop condition's `#if` prefix is now read by the hang check (`loop-hazard.ts`), because 4.5.0
+  admits shapes 4.4.1 refused. Measured corpus moves: BC.History +98 -14 and 2 ordinals, DC +3, fixtures, CDO and DO identical.
+  The vendored WASM reference is the v4.5.0 release asset. Review fixes (addendum 0b929aed): every reader that follows a
+  `#if` tail now follows a prefix too (one `sideParts` helper), and a name declared under a `#if` inside `A, #if B, #endif
+  C: T` is conditionally declared (unknown); both only refuse or tag sites. The 12 gate baselines still at scheme 42 are
+  re-recorded under R810.
+- **One run seed for every al-runner v3 process** (R807): LethAL sets `ALRUNNER_SEED=1` in the environment of every
+  al-runner process it starts (one helper, `v3ChildEnv`), so `Random`, `CreateGuid` and SystemIds draw the same values in
+  every request and run (al-runner 3.0.0-alpha.11 and later draw a fresh seed otherwise). An answer that reports another
+  seed refuses the session by name (`AlRunnerV3SeedError`); an answer with no seed is accepted. The seed is recorded in the
+  report as the optional `runSeed` of the v3 execution context. A test that depends on those values now reads the same every
+  time, so v3 cannot report it as flaky. Leg O1 gains a seed sub-check, and `alpha.12-d4bc8d3a5` is pinned (O1's CDO set
+  lists 18 package apps there).
+- **Update-gate leg O1 now probes Commit isolation** (R804 part 2): four more requests to the same serve daemon
+  (`[C,R]`, `[R,C]`, `[C1,R1,C2,R2]`, `[R]`) run a new `Order Commit Writer` codeunit, whose six tests each write one
+  kind of state and call `Commit()`. A build whose pin records `commit-under-test-isolation` as `gone` must pass them
+  all and leave the Readers at the defaults; any other build must refuse each with the commit refusal text. A build that
+  passes them without the pin is `held`. Judged by `judgeOrderProbe`; the pin lookup is `o1CommitRuns`.
 - **Tests with their own short timeout get 60 s on the Windows CI job** (R726c): `ownTimeout()` in
   `@lethal/engine/own-timeout` raises a test's own timeout to at least verify's shared 60 s there, because a test's own
   timeout wins over `--timeout`. Verify tells the test child through `LETHAL_VERIFY_OWN_TIMEOUT_FLOOR`, set only on

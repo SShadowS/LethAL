@@ -1,7 +1,7 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "outDir": "dist" },
-  "include": ["src/**/*", "tests/**/*", "itest/**/*"],
+  "compilerOptions": { "outDir": "dist", "resolveJsonModule": true },
+  "include": ["src/**/*", "src/**/*.json", "tests/**/*", "itest/**/*"],
   "references": [
     { "path": "../engine" },
     { "path": "../schemata" },

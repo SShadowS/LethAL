@@ -110,8 +110,13 @@ describe("R214: evaluateArms follows alc's measured grammar", () => {
       expect(built(cond, ["A", "B"])).toMatch(/^undecided: /);
     // These the grammar parses (measured: `and` gives 3 markers; r1: && and || parse), so the
     // refusal must come from the condition parser itself.
-    for (const cond of ["and", "A && B", "A || B"])
+    for (const cond of ["A && B", "A || B"])
       expect(built(cond, ["A", "B"])).toBe("undecided: unparsed-condition at line 5");
+    // R796: tree-sitter-al 4.5.0 no longer marks the bare `and` condition (3 directive lines, 2
+    // markers), so the marker cross-check refuses it first; 4.4.1 reached the condition parser.
+    expect(built("and", ["A", "B"])).toBe(
+      "undecided: marker-mismatch (3 directive lines, 2 markers)",
+    );
   });
 
   test("#if / #elif / #elif / #else: the first true arm is built, and only it (row 28)", () => {
@@ -142,8 +147,10 @@ describe("R214: evaluateArms follows alc's measured grammar", () => {
         ["B"],
       ),
     ).toBe("undecided: marker-mismatch (4 directive lines, 3 markers)");
+    // R796: tree-sitter-al 4.5.0 emits a marker for a stray #endif, so the walk (not the marker
+    // cross-check) refuses it as unbalanced (4.4.1: marker-mismatch (1 directive lines, 0 markers)).
     expect(inactiveLines(body("        X := 1;\n#endif"), [])).toBe(
-      "undecided: marker-mismatch (1 directive lines, 0 markers)",
+      "undecided: unbalanced at line 6",
     );
     // An #if never closed reaches the walk. body() puts its first directive on line 5.
     expect(inactiveLines(body("#if A\n        X := 1;"), [])).toBe(
@@ -264,8 +271,9 @@ describe("R214: directive spelling the regexes must keep accepting", () => {
     expect(armOf(crlf, ["A"])).toBe("ARM1");
   });
   test("an empty #if is refused by the marker mismatch (row 26)", () => {
+    // R796: tree-sitter-al 4.5.0 marks the `#endif` of an empty `#if` (4.4.1: 0 markers).
     expect(inactiveLines(body("#if\n        X := 1;\n#endif"), [])).toBe(
-      "undecided: marker-mismatch (2 directive lines, 0 markers)",
+      "undecided: marker-mismatch (2 directive lines, 1 markers)",
     );
   });
 });

@@ -1,5 +1,6 @@
 import { access, readFile, readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { mergeChildEnv } from "./al-runner-v3-seed";
 import type { CompiledArtifact } from "./artifact";
 import { describeThrown } from "./describe-error";
 import { homeDir } from "./home";
@@ -45,7 +46,7 @@ const bunSpawn: SpawnFn = async (argv, opts) => {
       // Bun.spawn's `env`, when given, REPLACES the child's environment rather than merging
       // with process.env (unlike leaving it unset, which fully inherits) — merge explicitly so
       // adding credentials for altool doesn't drop PATH/SystemRoot/etc. that alc/altool need.
-      ...(opts?.env !== undefined ? { env: { ...process.env, ...opts.env } } : {}),
+      ...(opts?.env !== undefined ? { env: mergeChildEnv(opts.env) } : {}),
       ...(opts?.cwd !== undefined ? { cwd: opts.cwd } : {}),
     });
   } catch (err) {

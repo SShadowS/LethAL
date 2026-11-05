@@ -222,8 +222,14 @@ describe("R214: every drop is named and counted", () => {
       const set = await generateMutationSet(dir);
       expect(set.files.flatMap((f) => f.specs)).toHaveLength(0);
       const rows = set.preprocExcluded.map((f) => [norm(f.file), f.reason, f.detail]);
+      // R796: 4.5.0 marks one directive fewer for a bare `#if and`, so the marker cross-check
+      // refuses it first (4.4.1: unparsed-condition at line 5).
       expect(rows).toEqual([
-        ["src/BareAnd.Codeunit.al", "preproc-undecided", "unparsed-condition at line 5"],
+        [
+          "src/BareAnd.Codeunit.al",
+          "preproc-undecided",
+          "marker-mismatch (3 directive lines, 2 markers)",
+        ],
       ]);
       expect(set.preprocExcluded[0]?.sites).toBeGreaterThan(0);
     } finally {
@@ -335,7 +341,12 @@ describe("R214: the report counts compiled-out and refused files (Task 7)", () =
       await Bun.write(join(dir, "src", "Empty.Codeunit.al"), EMPTY_REFUSED);
     });
     expect(rowsOf(report)).toEqual([
-      ["src/BareAnd.Codeunit.al", "preproc-undecided", "unparsed-condition at line 5"],
+      // R796: marker-mismatch under 4.5.0 (4.4.1: unparsed-condition at line 5).
+      [
+        "src/BareAnd.Codeunit.al",
+        "preproc-undecided",
+        "marker-mismatch (3 directive lines, 2 markers)",
+      ],
       [
         "src/Empty.Codeunit.al",
         "preproc-undecided",

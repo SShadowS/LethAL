@@ -65,6 +65,7 @@
 
 import { isV3RefusalText } from "./al-runner-rows";
 import type { EntriesAnswer } from "./al-runner-v3-entries";
+import { checkRunSeed, mergeChildEnv } from "./al-runner-v3-seed";
 
 /** One `compilationErrors` entry, from the one-shot envelope or the `--server` summary. Moved
  *  here from `al-runner-transport.ts` by R654 S1, because the daemon (which v3 keeps) decodes it. */
@@ -127,7 +128,10 @@ export interface ServerProcessHandle {
  *  (added to the inherited one) by R612's `serve-keep-reasons` only, for `ALRUNNER_CACHE`. */
 export type ServerSpawnFn = (
   argv: readonly string[],
-  opts?: { readonly cwd?: string; readonly env?: Readonly<Record<string, string>> },
+  opts?: {
+    readonly cwd?: string;
+    readonly env?: Readonly<Record<string, string | undefined>>;
+  },
 ) => ServerProcessHandle;
 
 /** One test as the server streams it. */
@@ -287,6 +291,18 @@ export class AlRunnerServer {
    * the work is done and invisible.
    */
   private stderrIt: AsyncIterator<Uint8Array> | undefined;
+
+  /** R807: refuse a summary that reports a seed other than the pinned one. O1's sensitivity daemon
+   *  (variable absent) turns this off; nothing else does. */
+  enforceRunSeed = true;
+  /** R807: the seed and its source the last summary reported; absent when it reported none. */
+  lastRunSeed: { readonly seed: unknown; readonly seedSource: unknown } | undefined;
+
+  private readSeed(msg: Record<string, unknown>): void {
+    this.lastRunSeed =
+      msg.seed === undefined ? undefined : { seed: msg.seed, seedSource: msg.seedSource };
+    if (this.enforceRunSeed) checkRunSeed(msg, "serve summary");
+  }
 
   constructor(
     private readonly alRunnerPath: string,
@@ -463,6 +479,7 @@ export class AlRunnerServer {
         continue;
       }
       if (msg.type !== "summary") continue; // forward-compatible with new line types
+      this.readSeed(msg);
       const rawPtc = Array.isArray(msg.perTestCoverage) ? msg.perTestCoverage : [];
       return {
         tests,
@@ -515,7 +532,10 @@ export class AlRunnerServer {
       }
       if (msg.type === "test") tests.push(msg);
       else if (msg.type === "entrySummary") entrySummaries.push(msg);
-      else if (msg.type === "summary") return { tests, entrySummaries, summary: msg };
+      else if (msg.type === "summary") {
+        this.readSeed(msg);
+        return { tests, entrySummaries, summary: msg };
+      }
     }
   }
 
@@ -568,7 +588,7 @@ export const defaultServerSpawn: ServerSpawnFn = (argv, opts) => {
     stdout: "pipe",
     stderr: "pipe",
     ...(opts?.cwd !== undefined ? { cwd: opts.cwd } : {}),
-    ...(opts?.env !== undefined ? { env: { ...process.env, ...opts.env } } : {}),
+    ...(opts?.env !== undefined ? { env: mergeChildEnv(opts.env) } : {}),
   });
   const handle: ServerProcessHandle = {
     write: (line) => {
@@ -620,9 +640,13 @@ const SAFE_TAIL = `(?!.*(?:${V3_TAIL_UNSAFE_WORDS.map(anyCase).join("|")}))`;
  * rows), so the row cannot exist there and no gate pinned it. On alpha.2 such a row now closes the
  * daemon. In serve-entries, a warm-up whose every entry refuses with one identical no-callee text
  * now throws `al-runner-v3-entries-batch-refused`: the safe direction, opt-in and rare.
+ * R808: `http` also takes today's wording (alpha.7 and alpha.12: "... that a test handler does not
+ * answer ..."), one exact text with no variable part, measured by R-808's probe (`/coord/handoff/R-808/probe.md`):
+ * about 60 requests per daemon on both builds, every Reader answer equal to a cold daemon's, the pid
+ * unchanged. alpha.2's wording stays.
  */
 export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
-  http: /^NotRun: out-of-scope: an outbound HTTP request with no \[HttpClientHandler\] bound to the test: the runtime never opens a connection \(ADR-027\)$/,
+  http: /^NotRun: out-of-scope: (?:an outbound HTTP request with no \[HttpClientHandler\] bound to the test: the runtime never opens a connection \(ADR-027\)|an outbound HTTP request that a test handler does not answer: the runtime never opens a connection \(ADR-027\)\. To run the test, bind an \[HttpClientHandler\] that answers the request, or set TestHttpRequestPolicy = BlockOutboundRequests on the test codeunit to get BC's error for it)$/,
   commit:
     /^NotRun: out-of-scope: Commit inside a test under TestIsolation = Function(?:: what the runner keeps is not pinned| is not supported yet: no corpus test pins whether BC keeps the committed rows for the next test \(corpus issue 645\)\. Run this codeunit with TestIsolation = Codeunit \(al-runner: --isolation codeunit, the default\))$/,
   cascade: new RegExp(

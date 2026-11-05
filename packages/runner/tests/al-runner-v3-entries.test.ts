@@ -27,6 +27,7 @@ import {
   AlRunnerV3Backend,
   type AlRunnerV3Config,
   AlRunnerV3DependencySkippedError,
+  AlRunnerV3NoTestRanError,
   AlRunnerV3RowMissingError,
   AlRunnerV3ServeFallbackWarmupError,
   AlRunnerV3ServeStopUnsetError,
@@ -47,6 +48,7 @@ import {
   encodeGroups,
   assertEntriesWellFormed as wellFormed,
 } from "../src/al-runner-v3-entries";
+import { AlRunnerV3SeedError } from "../src/al-runner-v3-seed";
 import { AlcCompileError, type ArtifactIo, ArtifactPrepareError } from "../src/artifact";
 import type { RunOpts, TestMethodRef, TestVerdict } from "../src/backend";
 import { buildBackend } from "../src/cli";
@@ -258,7 +260,11 @@ const sleepCoverage =
   };
 
 /** The one-shot v3 (`test --codeunit`): reads the active id from the resource file on disk. */
-function fakeOneShot(rows: RowsFn, coverage?: CoverageFn) {
+function fakeOneShot(
+  rows: RowsFn,
+  coverage?: CoverageFn,
+  answer?: { readonly exitCode: number; readonly stderr: string },
+) {
   const calls: string[][] = [];
   const spawn: SpawnFn = async (argv) => {
     calls.push([...argv]);
@@ -278,7 +284,7 @@ function fakeOneShot(rows: RowsFn, coverage?: CoverageFn) {
       ...(r.message !== undefined ? { message: r.message } : {}),
       ...(r.notRun === true ? { notRun: true } : {}),
     }));
-    return { exitCode: 0, stdout: JSON.stringify({ tests }), stderr: "" };
+    return { exitCode: 0, stdout: JSON.stringify({ tests }), stderr: "", ...answer };
   };
   return { spawn, calls };
 }
@@ -479,6 +485,7 @@ interface RigOpts {
   serve?: ServeScript;
   oneShotRows?: RowsFn;
   oneShotCoverage?: CoverageFn;
+  oneShotAnswer?: { readonly exitCode: number; readonly stderr: string };
   extra?: Partial<AlRunnerV3Config>;
   targetAl?: string;
   suite?: readonly TestMethodRef[];
@@ -495,7 +502,11 @@ async function rig(opts: RigOpts = {}): Promise<Rig> {
   const suite = opts.suite ?? SUITE1;
   const l = await layout(opts.targetAl ?? TARGET_AL, suite);
   const serve = fakeServe(opts.serve);
-  const one = fakeOneShot(opts.oneShotRows ?? opts.serve?.rows ?? allPass, opts.oneShotCoverage);
+  const one = fakeOneShot(
+    opts.oneShotRows ?? opts.serve?.rows ?? allPass,
+    opts.oneShotCoverage,
+    opts.oneShotAnswer,
+  );
   const b = new AlRunnerV3Backend(
     {
       alRunnerPath: "/fake/al-runner",
@@ -816,6 +827,24 @@ describe("5: the decoder never trusts the answer's grouping: every miss is error
     const v = await r.b.run(ref("A"), OPTS);
     expect(outcome(v)).toEqual(["error", "runner-test-error"]);
     expect(v.failureMessage).toContain("0 row(s)");
+  });
+
+  test("R808 (g): a NONE live call after the prefetch that returns no row at all (an OnRun that raised, #5859) stops the session", async () => {
+    const r = await rig({
+      serve: { rows: (m, cu, d, n) => (n === 0 ? allPass(m, cu, d, n) : []) },
+      oneShotRows: allPass,
+    });
+    await baseline(r.b, SUITE1);
+    await r.b.prefetchMutants(plans([]));
+    await r.b.activate(null);
+    await expect(r.b.run(ref("A"), OPTS)).rejects.toBeInstanceOf(AlRunnerV3RowMissingError);
+  });
+
+  test("R815: a serve session's baseline call is one-shot, so a failing OnRun stops by the same name", async () => {
+    const r = await rig({
+      oneShotAnswer: { exitCode: 6, stderr: "Result: NOTHING SELECTED (exit 6)\n" },
+    });
+    await expect(baseline(r.b, SUITE1)).rejects.toBeInstanceOf(AlRunnerV3NoTestRanError);
   });
 
   test("an entry without a suite test's row is rowMissing; outside a mutant it stops the session", async () => {
@@ -3531,6 +3560,55 @@ describe("R739: v3 notices reach setNotify, never the console", () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+// R807: a seed refusal is not a skipped pair, and the observed seed is read on every serve path.
+describe("R807: the kill pair rethrows a seed refusal; observedRunSeed reads each serve path", () => {
+  const seeded = (when: (q: Req) => boolean): ServeScript => ({
+    answer: (q, _n, lines) =>
+      when(q)
+        ? {
+            lines: lines.map((x) =>
+              x.type === "summary" ? { ...x, seed: 1, seedSource: "env" } : x,
+            ),
+          }
+        : undefined,
+  });
+  const isPlain = (q: Req) => q.ids[0]?.startsWith("plain:") === true;
+
+  test("N1: a seed refusal in the kill pair is rethrown, not filed as al-runner-v3-pair-skipped", async () => {
+    const r = await readyRig({ serve: { rows: killsM1 }, mutants: ["M0001"] });
+    const seen: Array<[string, string]> = [];
+    r.b.setNotify((c, m) => seen.push([c, m]));
+    await r.b.activate("M0001");
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("fail");
+    (r.b as unknown as { request: () => Promise<never> }).request = async () => {
+      throw new AlRunnerV3SeedError("seed 2");
+    };
+    await expect(r.b.sendKillPair("M0001", ref("A"))).rejects.toBeInstanceOf(AlRunnerV3SeedError);
+    expect(seen).toEqual([]);
+  });
+
+  test("S2: a warm-up (send) answer reporting seed 1 is observed; none reported leaves it absent", async () => {
+    const none = await readyRig({ mutants: ["M0001"] });
+    expect(none.serve.requests.length).toBeGreaterThan(0);
+    expect(none.b.observedRunSeed()).toBeUndefined();
+    const r = await readyRig({ serve: seeded((q) => !isPlain(q)), mutants: ["M0001"] });
+    expect(r.serve.requests.length).toBeGreaterThan(0);
+    expect(r.b.observedRunSeed()).toBe(1);
+  });
+
+  test("S2: a plain request (the coverage window) reporting seed 1 is observed", async () => {
+    const r = await readyRig({
+      targetAl: SLEEPER_AL,
+      mutants: ["M0001"],
+      serve: { coverage: sleepCoverage(), ...seeded(isPlain) },
+    });
+    expect(r.b.observedRunSeed()).toBeUndefined(); // the entries sends reported none
+    await r.b.activate("M0001");
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("pass");
+    expect(r.b.observedRunSeed()).toBe(1);
   });
 });
 

@@ -80,6 +80,8 @@ export interface LegacyBuildReportInput {
   readonly baselineTests: readonly { readonly codeunitName: string; readonly file?: string }[];
   /** R101(c) — see `SessionReport.preprocessorSymbols`. */
   readonly preprocessorSymbols?: readonly string[];
+  /** R807: the v3 build (and its run seed) stamped on directly measured contexts. */
+  readonly runnerBuild?: FoldStatics["runnerBuild"];
   readonly untargetedTriggerCount: number;
   readonly quarantined?: { readonly reason: string };
   readonly permissionCanary?: PermissionCanaryResult;
@@ -337,6 +339,7 @@ export function legacyBuildReport(input: LegacyBuildReportInput): SessionReport 
     // `preprocessorSymbols` is a required field precisely because "no symbol was defined" is an
     // answer.
     preprocessorSymbols: input.preprocessorSymbols ?? [],
+    ...(input.runnerBuild !== undefined ? { runnerBuild: input.runnerBuild } : {}),
   };
   return buildReport(statics, stamped);
 }

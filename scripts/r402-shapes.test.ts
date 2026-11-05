@@ -42,8 +42,8 @@ afterAll(() => {
 });
 
 describe("R402 shape coverage", () => {
-  test("pins: 47 shapes, 4 builds, one spec count per build", () => {
-    expect(names.length).toBe(47);
+  test("pins: 53 shapes, 4 builds, one spec count per build", () => {
+    expect(names.length).toBe(53); // R796: 47 + u1..u6
     expect(R402_BUILDS.length).toBe(4);
     for (const [name, e] of Object.entries(expected))
       if (e.specs !== undefined) expect([name, e.specs.length]).toEqual([name, R402_BUILDS.length]);
@@ -83,7 +83,7 @@ describe("R402 shapes", () => {
 });
 
 describe("R402 totals", () => {
-  test("188 cases ran (47 shapes x 4 builds)", () => {
-    expect(casesRun).toBe(188);
+  test("212 cases ran (53 shapes x 4 builds)", () => {
+    expect(casesRun).toBe(212);
   });
 });

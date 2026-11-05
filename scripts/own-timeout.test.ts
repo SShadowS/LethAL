@@ -197,5 +197,6 @@ describe("R726 guard: no unit test leaves a short own timeout unwrapped", () => 
       bad,
       `wrap in ownTimeout(): import it from "@lethal/engine/own-timeout" in a package, or from "../packages/engine/src/own-timeout" in scripts/:\n${bad.join("\n")}`,
     ).toEqual([]);
-  });
+    // It parses every test file: past the default 5 s at a host load of about 490 (a red verify on load costs a merge).
+  }, 60_000);
 });

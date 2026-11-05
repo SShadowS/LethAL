@@ -5,9 +5,14 @@
  * one; nothing outside the table is covered; a build with no pin is judged as before.
  *
  * S5: a pin for a build that is or was `current` is never removed (a later `--regate` needs it).
- * Pure: no IO. The one value import is the hub text, bound by `r586c-pins.test.ts`.
+ * No IO. The value imports are the hub text, bound by `r586c-pins.test.ts`, and the gated-builds data.
+ * R814: a mechanical pin is an entry of `al-runner-v3-gated-builds.json` that names one hand pin here
+ * as its readings; it holds no reading of its own. The one piece of state is the adopted-pin map,
+ * set only by `checkGated` (`adoptV3Pin`).
  */
+import { createHash } from "node:crypto";
 import { type V3ContractResult, v3MuteKey } from "./al-runner-v3-contract";
+import RAW_GATED_BUILDS from "./al-runner-v3-gated-builds.json";
 import { BC_HTTP_HUB_TEXT } from "./al-runner-v3-texts";
 
 const REPO = "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues";
@@ -41,9 +46,18 @@ export interface LegCPin {
 
 export interface TRowPin {
   readonly key: string;
-  readonly verdict: "error";
-  readonly errorClass: "runner-refused";
-  readonly killingTest: null;
+  /**
+   * The committed baseline's row this pin replaces, compared exactly. Absent: survived/null/null
+   * (R586c S4, the only shape before edge-8078bcf49, whose rows move from no-coverage too).
+   */
+  readonly from?: {
+    readonly verdict: string;
+    readonly errorClass: string | null;
+    readonly killingTest: string | null;
+  };
+  readonly verdict: "error" | "killed" | "survived" | "no-coverage";
+  readonly errorClass: string | null;
+  readonly killingTest: string | null;
   readonly issue: string;
 }
 
@@ -67,6 +81,8 @@ export interface V3BuildPin {
       readonly noCoverage: number;
     };
     readonly total: number;
+    /** The refused tests leg T must read; absent: 3 (alpha.5's). */
+    readonly refusedTests?: number;
   };
   readonly xb: XbPin;
   /**
@@ -79,11 +95,24 @@ export interface V3BuildPin {
     readonly evidence: string;
   };
   /**
+   * R808: what `serve-keep-reasons` reads for the two entries that moved from edge 8078bcf49 on:
+   * `commit` is a plain pass (no `notRun`), and on these builds `onrun-failed` has no row for the
+   * test method `Codeunit50673.Never` (alpha.7 gives a `Codeunit<n>.OnRun` fail row, alpha.12 no
+   * row at all; since #5859 a raising OnRun gives no row, as BC's Test Runner app does). Absent (alpha.2, alpha.5, older edges): the fact judges as before.
+   */
+  readonly serveKeepMoved?: {
+    readonly commit: "plain pass";
+    readonly onrunFailed: "no row";
+    readonly evidence: string;
+  };
+  /**
    * R771 addendum 2: the WorkDate O1's CDO set reads on a build that runs Base Application's login
    * code (`LogInManagement.GetDefaultWorkDate`, the last G/L entry's date in the restored CRONUS demo
    * company of the CDO set's BC build). Every CDO Reader entry must read exactly it.
    */
   readonly o1?: {
+    /** R807: how many package apps O1's CDO set must load; absent: 17 (alpha.12 also lists `Application`: 18). */
+    readonly cdoApps?: number;
     readonly cdoWorkDate: string;
     readonly issue: string;
     readonly evidence: string;
@@ -192,6 +221,454 @@ const { "duplicate-key-insert-raises": ALPHA5_DUPLICATE_KEY } = ALPHA5_READINGS.
 if (ALPHA5_DUPLICATE_KEY === undefined)
   throw new Error("al-runner-v3-pins: ALPHA5_READINGS has no duplicate-key-insert-raises fact");
 
+/**
+ * edge-8078bcf49's leg T: the 48 known differences (`TABLES_KNOWN_DIFFERENCES`) that now read BC's verdict.
+ * 41 Commit rows (#5607) leave no-coverage; 7 duplicate-key rows (#5603) leave survived. From the update
+ * gate's receipt at 4aa6ca6d, 2026-10-26 08:05Z (`/work/tools/al-runner-v3/failed/edge-8078bcf49@4aa6ca6d…`).
+ */
+const T_ROWS_8078BCF49: readonly TRowPin[] = [
+  {
+    key: "0121538c88a9342b484d6597b43bf7bc9d138149790fb204378e0afae2086339|Data Key Probe|OnInsert|lethal.remove-assignment|1",
+    from: { verdict: "survived", errorClass: null, killingTest: null },
+    verdict: "killed",
+    errorClass: null,
+    killingTest: "DoubleInsertWithoutKeyTriggerRaises",
+    issue: `${REPO}/5603`,
+  },
+  {
+    key: "1b3e248d3e7bc05c1fdde76d54b76a1e545569932aa0ab4c88fc7b712b46c56c|Data Commit Ops|CommitThenFail|lethal.toggle-blank-string|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "survived",
+    errorClass: null,
+    killingTest: null,
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "1b3e248d3e7bc05c1fdde76d54b76a1e545569932aa0ab4c88fc7b712b46c56c|Data Commit Ops|CommitThenRunValueForm|lethal.toggle-blank-string|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "survived",
+    errorClass: null,
+    killingTest: null,
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "1b3e248d3e7bc05c1fdde76d54b76a1e545569932aa0ab4c88fc7b712b46c56c|Data Commit Ops|CommitThenRun|lethal.toggle-blank-string|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "survived",
+    errorClass: null,
+    killingTest: null,
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "21b9d09e6b335a9ea96efe2e73caa285daff8086160ab3e20da1f26d24269d6f|Data Commit Ops|CommitThenFail|lethal.void-method-call|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "survived",
+    errorClass: null,
+    killingTest: null,
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "21b9d09e6b335a9ea96efe2e73caa285daff8086160ab3e20da1f26d24269d6f|Data Commit Ops|CommitThenRunValueForm|lethal.void-method-call|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "survived",
+    errorClass: null,
+    killingTest: null,
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "21b9d09e6b335a9ea96efe2e73caa285daff8086160ab3e20da1f26d24269d6f|Data Commit Ops|CommitThenRun|lethal.void-method-call|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "survived",
+    errorClass: null,
+    killingTest: null,
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "251dd6161cf958c3f6113c2cd5b026ef28eea56795fffeae72fb0e4012b6bffe|Data Commit Ops|CommitThenFail|lethal.remove-assignment|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "survived",
+    errorClass: null,
+    killingTest: null,
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "251dd6161cf958c3f6113c2cd5b026ef28eea56795fffeae72fb0e4012b6bffe|Data Commit Ops|CommitThenRunValueForm|lethal.remove-assignment|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "survived",
+    errorClass: null,
+    killingTest: null,
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "251dd6161cf958c3f6113c2cd5b026ef28eea56795fffeae72fb0e4012b6bffe|Data Commit Ops|CommitThenRun|lethal.remove-assignment|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "survived",
+    errorClass: null,
+    killingTest: null,
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "2c803bfacb04b831e6e6f26b4d200a42bad5b7cdb0014239df7d51bbeeb65aad|Data Commit Ops|CommitThenFail|lethal.remove-commit|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "killed",
+    errorClass: null,
+    killingTest: "CommittedWriteSurvivesFailure",
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "2c803bfacb04b831e6e6f26b4d200a42bad5b7cdb0014239df7d51bbeeb65aad|Data Commit Ops|CommitThenRunValueForm|lethal.remove-commit|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "killed",
+    errorClass: null,
+    killingTest: "CommitBeforeValueFormCodeunitRunSucceeds",
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "2c803bfacb04b831e6e6f26b4d200a42bad5b7cdb0014239df7d51bbeeb65aad|Data Commit Ops|CommitThenRun|lethal.remove-commit|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "survived",
+    errorClass: null,
+    killingTest: null,
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "2d119c2ec73ab1ae52dbba9a46ff0f4bc4d1489684b7064c985ef4a94112ee7e|Data Key Probe|OnInsert|lethal.negate-conditional|1",
+    from: { verdict: "survived", errorClass: null, killingTest: null },
+    verdict: "killed",
+    errorClass: null,
+    killingTest: "DoubleInsertWithoutKeyTriggerRaises",
+    issue: `${REPO}/5603`,
+  },
+  {
+    key: "31c85a76e65c13426a668219969e39a8142b616aa307306f94a35e771add3abe|Data Commit Ops|CommitThenFail|lethal.flip-boolean-literal|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "survived",
+    errorClass: null,
+    killingTest: null,
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "31c85a76e65c13426a668219969e39a8142b616aa307306f94a35e771add3abe|Data Commit Ops|CommitThenRunValueForm|lethal.flip-boolean-literal|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "survived",
+    errorClass: null,
+    killingTest: null,
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "31c85a76e65c13426a668219969e39a8142b616aa307306f94a35e771add3abe|Data Commit Ops|CommitThenRun|lethal.flip-boolean-literal|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "survived",
+    errorClass: null,
+    killingTest: null,
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "31c85a76e65c13426a668219969e39a8142b616aa307306f94a35e771add3abe|Data Commit Target|OnRun|lethal.flip-boolean-literal|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "survived",
+    errorClass: null,
+    killingTest: null,
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "36aa6c656ce535d1f8e169d85419fcc897eec77e830ec1df81f4fe55b0704890|Data Commit Ops|CommitThenRunValueForm|lethal.remove-assignment|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "killed",
+    errorClass: null,
+    killingTest: "CommitBeforeValueFormCodeunitRunSucceeds",
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Data Commit Ops|CommitThenRunValueForm|lethal.return-value|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "killed",
+    errorClass: null,
+    killingTest: "CommitBeforeValueFormCodeunitRunSucceeds",
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "4361e50c375e40305819b2dc3eae9e1dc245b3115684696da23bf724133c00aa|Data Commit Ops|CommitThenRun|lethal.empty-block|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "killed",
+    errorClass: null,
+    killingTest: "CommitBeforeCodeunitRunSucceeds",
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "51c6e78adf06c3aa8581ffef24239e94d80d1bba49338f443290f9c3c885d01c|Data Commit Ops|CommitThenRunValueForm|lethal.remove-assignment|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "survived",
+    errorClass: null,
+    killingTest: null,
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "62c04a6be11a180cf46d6c011b0700a891749b44dca1780ff2e501c6de19acb1|Data Commit Ops|CommitThenRun|lethal.remove-assignment|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "survived",
+    errorClass: null,
+    killingTest: null,
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "637aa2af14e55ecf9861ea851a23f1ede61feeb72f8de7759d4fe738d201f242|Data Commit Target|OnRun|lethal.flip-boolean-literal|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "killed",
+    errorClass: null,
+    killingTest: "CommitBeforeCodeunitRunSucceeds",
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "68807988b56909e3568b38e2441cfed9a27441ece816cf15fd358ffb9231098e|Data Commit Ops|CommitThenRun|lethal.shift-integer|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "survived",
+    errorClass: null,
+    killingTest: null,
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "69ab2635d97b4a033d6979b89c9577ff9099ed31bfcdea22e425161990f85c56|Data Commit Ops|CommitThenFail|lethal.void-method-call|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "killed",
+    errorClass: null,
+    killingTest: "CommittedWriteSurvivesFailure",
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "69ab2635d97b4a033d6979b89c9577ff9099ed31bfcdea22e425161990f85c56|Data Commit Ops|CommitThenRunValueForm|lethal.void-method-call|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "killed",
+    errorClass: null,
+    killingTest: "CommitBeforeValueFormCodeunitRunSucceeds",
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "69ab2635d97b4a033d6979b89c9577ff9099ed31bfcdea22e425161990f85c56|Data Commit Ops|CommitThenRun|lethal.void-method-call|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "killed",
+    errorClass: null,
+    killingTest: "CommitBeforeCodeunitRunSucceeds",
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "82190937ce0dbddcf71b05b35fd9eb0f09f2a141e69489fc6a34db4db510a3b7|Data Commit Ops|CommitThenRunValueForm|lethal.shift-integer|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "survived",
+    errorClass: null,
+    killingTest: null,
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "835565180cc5c8787adf0255e105ebb308eeb1338b48576812c5b5c9fdebb0d3|Data Commit Ops|CommitThenFail|lethal.remove-assignment|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "killed",
+    errorClass: null,
+    killingTest: "CommittedWriteSurvivesFailure",
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "84c847b650bf8648e34378707b482a1468e5cc8759ea3b61e0c8b3057312314d|Data Commit Ops|CommitThenRunValueForm|lethal.empty-block|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "killed",
+    errorClass: null,
+    killingTest: "CommitBeforeValueFormCodeunitRunSucceeds",
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "89a8f14203bc6c1a5b29130d054755d7cefe81df70216cb61972f009ff752f23|Data Commit Ops|CommitThenFail|lethal.void-method-call|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "killed",
+    errorClass: null,
+    killingTest: "CommittedWriteSurvivesFailure",
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "93bd96d69f211dd205aecc3b89564e852d93da1caa1d6eda69f4f3421b07c7a6|Data Commit Target|OnRun|lethal.empty-block|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "killed",
+    errorClass: null,
+    killingTest: "CommitBeforeCodeunitRunSucceeds",
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "a811b46c95a74b761966dc4d0fd260793ba4c503b9cc6c7efd6e554acb7563d8|Data Flag Ops|InsertTwiceWithKeyTrigger|lethal.remove-assignment|1",
+    from: { verdict: "survived", errorClass: null, killingTest: null },
+    verdict: "killed",
+    errorClass: null,
+    killingTest: "DoubleInsertWithoutKeyTriggerRaises",
+    issue: `${REPO}/5603`,
+  },
+  {
+    key: "b473f0f8762594047a5f52777f0ab590b94174b0b7816a51a572d18cad81f853|Data Commit Ops|CommitThenFail|lethal.empty-block|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "killed",
+    errorClass: null,
+    killingTest: "CommittedWriteSurvivesFailure",
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "b7639fc5337117f99a11c177444ce8ba186aec121acbabc26086c752caa4f696|Data Commit Ops|CommitThenFail|lethal.shift-integer|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "survived",
+    errorClass: null,
+    killingTest: null,
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "c26a0352dd867ea75f70b4b0bf99771e3bc838482b57fa9794099fafe15799ad|Data Commit Ops|CommitThenRunValueForm|lethal.remove-assignment|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "killed",
+    errorClass: null,
+    killingTest: "CommitBeforeValueFormCodeunitRunSucceeds",
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "c26a0352dd867ea75f70b4b0bf99771e3bc838482b57fa9794099fafe15799ad|Data Commit Ops|CommitThenRun|lethal.remove-assignment|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "killed",
+    errorClass: null,
+    killingTest: "CommitBeforeCodeunitRunSucceeds",
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "c3ad0133a594bdcda453d6356d7f363351bede0c37c658750a3a22e227ba75fc|Data Commit Target|OnRun|lethal.void-method-call|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "killed",
+    errorClass: null,
+    killingTest: "CommitBeforeCodeunitRunSucceeds",
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "c88702df06dca2c0edbdf144edf99c2682ad63278023dbd7e46f42c9875e0364|Data Flag Ops|InsertTwiceWithKeyTrigger|lethal.toggle-blank-string|1",
+    from: { verdict: "survived", errorClass: null, killingTest: null },
+    verdict: "killed",
+    errorClass: null,
+    killingTest: "DoubleInsertWithoutKeyTriggerRaises",
+    issue: `${REPO}/5603`,
+  },
+  {
+    key: "c88702df06dca2c0edbdf144edf99c2682ad63278023dbd7e46f42c9875e0364|Data Key Probe|OnInsert|lethal.toggle-blank-string|1",
+    from: { verdict: "survived", errorClass: null, killingTest: null },
+    verdict: "killed",
+    errorClass: null,
+    killingTest: "DoubleInsertWithoutKeyTriggerRaises",
+    issue: `${REPO}/5603`,
+  },
+  {
+    key: "ca03e7de5d868e018e122d4dac889646e338f75ed2cc3e073bed40be863c7bee|Data Commit Target|OnRun|lethal.remove-assignment|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "killed",
+    errorClass: null,
+    killingTest: "CommitBeforeCodeunitRunSucceeds",
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "cc8317f3018759ab8d5178fa9aff18f1c4de59a37d62241236cb641c95e55eca|Data Commit Ops|CommitThenRun|lethal.void-method-call|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "killed",
+    errorClass: null,
+    killingTest: "CommitBeforeCodeunitRunSucceeds",
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "d15e08235aa3c09dd4023cff2d05ecdf0ddfad254da6c0f01337975c78c26724|Data Commit Ops|CommitThenFail|lethal.remove-assignment|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "survived",
+    errorClass: null,
+    killingTest: null,
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "d36581a980ee091d62faf54b2a4512ee7cb1db33aea2a4f417a5edde7ef9d79f|Data Commit Target|CommitRunNo|lethal.empty-block|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "killed",
+    errorClass: null,
+    killingTest: "CommitBeforeCodeunitRunSucceeds",
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "dd3aa023aa7fb2b7893efe181ccbf517d3ca97cbfacec07f3818c25c45c127dc|Data Key Probe|OnInsert|lethal.empty-block|1",
+    from: { verdict: "survived", errorClass: null, killingTest: null },
+    verdict: "killed",
+    errorClass: null,
+    killingTest: "DoubleInsertWithoutKeyTriggerRaises",
+    issue: `${REPO}/5603`,
+  },
+  {
+    key: "e315168a52168bfbb4fcedaf685fb51f456c87a33eb1879f610f29a75cfaebed|Data Commit Target|OnRun|lethal.remove-not|1",
+    from: { verdict: "no-coverage", errorClass: null, killingTest: null },
+    verdict: "killed",
+    errorClass: null,
+    killingTest: "CommitBeforeCodeunitRunSucceeds",
+    issue: `${REPO}/5607`,
+  },
+  {
+    key: "e75f9a0967677be80d3659fdc47e601d3764ac75077fb4d25c54b5f1322b2a8a|Data Flag Ops|InsertTwiceWithKeyTrigger|lethal.swap-modify-flag|1",
+    from: { verdict: "survived", errorClass: null, killingTest: null },
+    verdict: "killed",
+    errorClass: null,
+    killingTest: "DoubleInsertWithoutKeyTriggerRaises",
+    issue: `${REPO}/5603`,
+  },
+];
+
+const O1_8078BCF49 = {
+  cdoWorkDate: "2026-08-01",
+  issue: `${REPO}/5743`,
+  evidence:
+    "O1's CDO set reads the login WorkDate 2026-08-01 in every Reader entry, as on a157b2d34 (8078bcf49 receipt at 4aa6ca6d)",
+};
+
+/**
+ * The readings of edge-8078bcf49 (R804). edge-db0296678 was measured IDENTICAL on every pinned reading, so both
+ * pins share this one object and cannot drift. A later delta for either build must SPLIT it first.
+ */
+const READINGS_8078BCF49: Omit<V3BuildPin, "id" | "version" | "binarySha256"> = {
+  legC: {
+    ...ALPHA5_READINGS.legC,
+    "duplicate-key-insert-raises": {
+      verdict: "gone",
+      measured: pinPattern(
+        // BC_END_OF_TEST_TEXT (al-runner-v3-contract imports this module, so it is written out; a test binds the two).
+        `[${ROW(50655, "DuplicateNamedKey")},"status":"fail","durationMs":{n},"message":"The record in table Probe Row already exists. Identification fields and values: Key='K1'","notRun":false}] exit 1`,
+      ),
+      bc: "matches",
+      issue: `${REPO}/5788`,
+      evidence:
+        "the duplicate-key Insert fails the test with BC's own end-of-test text (r639 bc1 probe)",
+    },
+    "commit-under-test-isolation": {
+      verdict: "gone",
+      measured: pinPattern(
+        `[${ROW(50657, "CommitCall")},"status":"pass","durationMs":{n},"notRun":false}] exit 0`,
+      ),
+      bc: "matches",
+      issue: `${REPO}/5607`,
+      evidence: "a Commit under TestIsolation passes, as on BC (#5607 fixed upstream)",
+    },
+  },
+  legT: {
+    rows: T_ROWS_8078BCF49,
+    counts: { killed: 318, survived: 70, noCoverage: 18 },
+    total: 406,
+    refusedTests: 0,
+  },
+  xb: { exitCode: 3, passed: 0, notRun: 0 },
+  serveRowFields: {
+    issue: `${REPO}/5798`,
+    evidence:
+      "#5798 fixed upstream: the Dot.Step serve row carries codeunit 78850 and method Dot.Step (8078bcf49 receipt, leg N1E at 4aa6ca6d)",
+  },
+  o1: O1_8078BCF49,
+  serveKeepMoved: {
+    commit: "plain pass",
+    onrunFailed: "no row",
+    evidence:
+      "R808: the commit test is a plain pass (#5607 fixed) and there is no row for the test method of a codeunit whose OnRun raises (alpha.7 gives a Codeunit<n>.OnRun fail row, alpha.12 no row at all; #5859); /coord/handoff/R-808/probe.md",
+  },
+};
+
 export const V3_BUILD_PINS: readonly V3BuildPin[] = [
   {
     id: "alpha.5-07342060e",
@@ -234,11 +711,229 @@ export const V3_BUILD_PINS: readonly V3BuildPin[] = [
         "upstream 5e1db1c7 runs LogInManagement.GetDefaultWorkDate at session open (as BC); BC 28.4.53241.53758's CRONUS demo company has 4178 G/L entries, the last on 2026-08-01 (R771 addendum 2 probe)",
     },
   },
+  {
+    // Measured on the update gate at 4aa6ca6d, 2026-10-26 08:05Z: every pinned defect fact reads gone
+    // (duplicate-key as BC's end-of-test error, Commit under test isolation passes), and 48 of leg T's
+    // known differences read BC's verdict. codeunit-runs-whole is still defect-present (as expected).
+    id: "edge-8078bcf49",
+    version: "al-runner 3.0.0-alpha.5+edge.20261026 (8078bcf49)",
+    binarySha256: "614dc78c8513c6d5899fb402a121c2c6f910cbe255f56ab66a59f1a8f8d852d7",
+    ...READINGS_8078BCF49,
+  },
+  {
+    // Measured on the update gate at 242d770b, 2026-10-26 11:23Z: identical to edge-8078bcf49 on every
+    // pinned reading (only the version line, timeout-is-cpu's text and O1's request count differ).
+    id: "edge-db0296678",
+    version: "al-runner 3.0.0-alpha.6+edge.20261026 (db0296678)",
+    binarySha256: "4f9596510ececcfa5e5b235350e2b2658264abceb2d54d5fa01131e8ffab07db",
+    ...READINGS_8078BCF49,
+  },
+  {
+    // The v3.0.0-alpha.6 RELEASE (published 2026-10-26 10:36:50Z): the same commit as edge-db0296678, but another
+    // binary (its own version line and sha256). Pinned on the same readings, as owner-ruled; its own update-gate
+    // run is the measurement, and any reading off this table is a BLOCK (R804 addendum).
+    id: "alpha.6-db0296678",
+    version: "al-runner 3.0.0-alpha.6 (db0296678)",
+    binarySha256: "92effe64d64dddcae98f80cc0e2e17a6429f977781ffe7b6b0f5eea6a231778d",
+    ...READINGS_8078BCF49,
+  },
+  {
+    // The v3.0.0-alpha.7 RELEASE (2026-10-26 20:55:26Z), gate-failed unpinned at 68568a19 with readings identical
+    // to alpha.6 (only the version line and timeout-is-cpu's core number differ). Owner: "adopt if identical".
+    id: "alpha.7-2c63a382e",
+    version: "al-runner 3.0.0-alpha.7 (2c63a382e)",
+    binarySha256: "af19368ded0c3f809877f6042bba1c40175c70fe418733178cbfb96ac7fcbb2d",
+    ...READINGS_8078BCF49,
+  },
+  {
+    // Edge 2c63a382e (20:53:56Z): the same commit as alpha.7, another binary; the same readings.
+    id: "edge-2c63a382e",
+    version: "al-runner 3.0.0-alpha.7+edge.20261026 (2c63a382e)",
+    binarySha256: "31d2cf1fee463515c9bab5ba7a60d24845abacc5bb9709d89bb687b84423bbc6",
+    ...READINGS_8078BCF49,
+  },
+  {
+    // The v3.0.0-alpha.12 build (R807 pre-commitment, master 94b3337d): the same readings as alpha.7 (a masked diff of
+    // the gate logs moved no verdict), except O1's CDO set lists 18 package apps: alpha.12 adds `Application` (0 files,
+    // from the folder). The update gate's own run is the measurement; any reading off this table is a BLOCK.
+    id: "alpha.12-d4bc8d3a5",
+    version: "al-runner 3.0.0-alpha.12 (d4bc8d3a5)",
+    binarySha256: "c406b57f178066ebbca3a66d7f6436730b2a1956292a7ccb6120479a93ec12cf",
+    ...READINGS_8078BCF49,
+    o1: { ...O1_8078BCF49, cdoApps: 18 },
+  },
+  {
+    // Edge d72d3197d (R-815 pre-commitment, master 7071d5c2): alpha.12's readings, by a masked diff of the two unpinned
+    // gate logs. `current` follows edge (owner, 2026-11-05). The rejudge is the measurement of O1's CDO set and its seed
+    // sub-check, which the unpinned run never reached; any reading off this table is a BLOCK.
+    id: "edge-d72d3197d",
+    version: "al-runner 3.0.0-alpha.13+edge.20261105 (d72d3197d)",
+    binarySha256: "3e19dbec34826e2d057304d9e85859c04e87d69a5846bb738fe9567a00c22be4",
+    ...READINGS_8078BCF49,
+    o1: { ...O1_8078BCF49, cdoApps: 18 },
+  },
 ];
 
-/** The pin for this exact binary: the version line AND the sha256 must both be equal. */
+/**
+ * R814: one gated build. `readingsFrom` names a hand pin in `V3_BUILD_PINS`, never another entry, and
+ * the strict parse refuses any other key: an entry cannot carry a reading, so it cannot move a verdict.
+ * `readingsDigest` binds it to that pin's readings as they were gated: an edit of the hand pin fails
+ * `r814-gated-builds.test.ts` until a person re-gates (a mechanical entry never moves with no run).
+ * `track: "release"` is the manifest: what a user may install (`tag` names it). `track: "edge"` is
+ * the record of what `current` was; a user cannot fetch one once edge moves.
+ */
+export interface GatedBuildEntry {
+  readonly id: string;
+  readonly track: "edge" | "release";
+  readonly tag?: string;
+  readonly version: string;
+  readonly binarySha256: string;
+  readonly readingsFrom: string;
+  readonly readingsDigest: string;
+  readonly lethalCommit: string;
+  readonly gatedAt: string;
+  readonly warnFacts?: Readonly<Record<string, string>>;
+}
+
+const GATED_BUILD_KEYS = new Set([
+  "id",
+  "track",
+  "tag",
+  "version",
+  "binarySha256",
+  "readingsFrom",
+  "readingsDigest",
+  "lethalCommit",
+  "gatedAt",
+  "warnFacts",
+]);
+
+/** A digest of what a pin judges and changes, so an edit of a root pin cannot pass unseen. */
+export function v3ReadingsDigest(pin: V3BuildPin): string {
+  const { id: _id, version: _version, binarySha256: _sha, ...readings } = pin;
+  const text = JSON.stringify(readings, (_k, v: unknown) =>
+    v instanceof RegExp || typeof v === "function" ? String(v) : v,
+  );
+  return createHash("sha256").update(text).digest("hex");
+}
+
+/** The fault in one raw entry, or undefined. */
+function gatedBuildFault(e: Record<string, unknown>): string | undefined {
+  for (const k of Object.keys(e)) if (!GATED_BUILD_KEYS.has(k)) return `unknown key "${k}"`;
+  for (const k of ["id", "version", "readingsFrom", "gatedAt"])
+    if (typeof e[k] !== "string" || e[k] === "") return `no ${k}`;
+  if (e.track !== "edge" && e.track !== "release") return "track must be edge or release";
+  if (e.track === "release" && typeof e.tag !== "string") return "a release needs its tag";
+  if (typeof e.binarySha256 !== "string" || !/^[0-9a-f]{64}$/.test(e.binarySha256))
+    return "no binarySha256";
+  if (typeof e.readingsDigest !== "string" || !/^[0-9a-f]{64}$/.test(e.readingsDigest))
+    return "no readingsDigest";
+  if (typeof e.lethalCommit !== "string" || !/^[0-9a-f]{40}$/.test(e.lethalCommit))
+    return "no lethalCommit";
+  const wf = e.warnFacts;
+  if (
+    wf !== undefined &&
+    (typeof wf !== "object" || wf === null || Object.values(wf).some((v) => typeof v !== "string"))
+  )
+    return "warnFacts must map names to strings";
+  return undefined;
+}
+
+/**
+ * The strict parse of the gated-builds data; any fault throws by name. `handPinIds`: the hand pins
+ * this checkout knows, so `readingsFrom` can never name an entry or nothing.
+ */
+export function parseGatedBuilds(
+  raw: unknown,
+  handPinIds: ReadonlySet<string>,
+): readonly GatedBuildEntry[] {
+  if (!Array.isArray(raw)) throw new Error("al-runner-v3-gated-builds: not an array");
+  const ids = new Set<string>();
+  const builds = new Set<string>();
+  return raw.map((x: unknown) => {
+    const e = (typeof x === "object" && x !== null ? x : {}) as Record<string, unknown>;
+    const fault = gatedBuildFault(e);
+    if (fault !== undefined)
+      throw new Error(`al-runner-v3-gated-builds: ${String(e.id)}: ${fault}`);
+    const entry = e as unknown as GatedBuildEntry;
+    if (!handPinIds.has(entry.readingsFrom))
+      throw new Error(
+        `al-runner-v3-gated-builds: ${entry.id}: readingsFrom "${entry.readingsFrom}" is no hand pin`,
+      );
+    const build = `${entry.version}|${entry.binarySha256}`;
+    if (ids.has(entry.id) || builds.has(build))
+      throw new Error(`al-runner-v3-gated-builds: ${entry.id}: a duplicate`);
+    ids.add(entry.id);
+    builds.add(build);
+    return entry;
+  });
+}
+
+/** Parsed on first use, so a bad row refuses on the v3 path, never at every importer's load. */
+let gatedBuildsMemo: readonly GatedBuildEntry[] | undefined;
+export function gatedBuilds(): readonly GatedBuildEntry[] {
+  gatedBuildsMemo ??= parseGatedBuilds(RAW_GATED_BUILDS, new Set(V3_BUILD_PINS.map((p) => p.id)));
+  return gatedBuildsMemo;
+}
+
+/** The hand pin with this id, or undefined. */
+export function handV3Pin(id: string): V3BuildPin | undefined {
+  return V3_BUILD_PINS.find((p) => p.id === id);
+}
+
+/** R814: this build's entry in the committed gated builds (version line AND sha256). */
+export function findGatedBuild(version: string, binarySha256: string): GatedBuildEntry | undefined {
+  return gatedBuilds().find((e) => e.version === version && e.binarySha256 === binarySha256);
+}
+
+/** The alpha number of a release tag, or -1. */
+export function alphaOfEntry(e: { readonly tag?: string }): number {
+  return Number(/^v3\.0\.0-alpha\.(\d+)$/.exec(e.tag ?? "")?.[1] ?? -1);
+}
+
+/** The newest gated release: what a user is told to install. */
+export function newestGatedRelease(): GatedBuildEntry | undefined {
+  return gatedBuilds()
+    .filter((e) => e.track === "release")
+    .reduce<GatedBuildEntry | undefined>(
+      (best, e) => (best === undefined || alphaOfEntry(e) > alphaOfEntry(best) ? e : best),
+      undefined,
+    );
+}
+
+const adoptedPins = new Map<string, string>();
+
+/**
+ * R814: for this process, read this exact build by hand pin `from`. `checkGated` is the only caller:
+ * a `.gated` that names `readingsFrom`, or a candidate with `LETHAL_V3_PIN_FROM`. It is why a lane
+ * behind master still reads a build its checkout has no entry for. An unknown id throws by name.
+ */
+export function adoptV3Pin(version: string, binarySha256: string, from: string): void {
+  if (handV3Pin(from) === undefined)
+    throw new Error(
+      `al-runner-v3-unknown-readings: "${from}" is no pin in this checkout; merge master`,
+    );
+  adoptedPins.set(`${version}|${binarySha256}`, from);
+}
+
+/** Tests only: `adoptV3Pin` is process state. */
+export function resetAdoptedV3Pins(): void {
+  adoptedPins.clear();
+}
+
+/**
+ * The pin for this exact binary: the version line AND the sha256 must both be equal. A hand pin wins,
+ * then a committed gated build, then an adopted one (R814). Those two answer with the hand pin's
+ * readings, the same objects, under that hand pin's id.
+ */
 export function findV3Pin(version: string, binarySha256: string): V3BuildPin | undefined {
-  return V3_BUILD_PINS.find((p) => p.version === version && p.binarySha256 === binarySha256);
+  const hand = V3_BUILD_PINS.find((p) => p.version === version && p.binarySha256 === binarySha256);
+  if (hand !== undefined) return hand;
+  const from =
+    findGatedBuild(version, binarySha256)?.readingsFrom ??
+    adoptedPins.get(`${version}|${binarySha256}`);
+  const root = from === undefined ? undefined : handV3Pin(from);
+  return root === undefined ? undefined : { ...root, version, binarySha256 };
 }
 
 /**
@@ -344,7 +1039,8 @@ interface TRow {
 
 /**
  * Leg T's pinned expectation: the committed baseline's rows with exactly the pinned keys overridden.
- * `undefined` when a pinned key is absent, repeated, or its baseline row is not survived/null/null (S4).
+ * `undefined` when a pinned key is absent, repeated, or its baseline row is not the pin's `from`
+ * (default survived/null/null, S4).
  */
 export function applyTPin<T extends TRow>(
   own: readonly T[],
@@ -361,9 +1057,22 @@ export function applyTPin<T extends TRow>(
     }
     if (seen.has(r.key)) return undefined;
     seen.add(r.key);
-    if (r.verdict !== "survived" || r.killingTest !== null || r.errorClass !== null)
+    const from = p.from ?? { verdict: "survived", errorClass: null, killingTest: null };
+    if (
+      r.verdict !== from.verdict ||
+      r.killingTest !== from.killingTest ||
+      r.errorClass !== from.errorClass
+    )
       return undefined;
-    out.push({ ...r, verdict: p.verdict, errorClass: p.errorClass, killingTest: p.killingTest });
+    out.push({
+      ...r,
+      verdict: p.verdict,
+      errorClass: p.errorClass,
+      killingTest: p.killingTest,
+      // edge-8078bcf49: a row pinned out of no-coverage must not keep the flag the normalizer derives
+      // from the verdict (mutant-equality.ts), or the pinned compare differs on it alone.
+      ...("coverageFiltered" in r ? { coverageFiltered: p.verdict === "no-coverage" } : {}),
+    });
   }
   return seen.size === pinned.size ? out : undefined;
 }

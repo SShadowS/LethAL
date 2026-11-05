@@ -1,0 +1,16 @@
+[
+  {
+    "id": "alpha.12-d4bc8d3a5",
+    "track": "release",
+    "tag": "v3.0.0-alpha.12",
+    "version": "al-runner 3.0.0-alpha.12 (d4bc8d3a5)",
+    "binarySha256": "c406b57f178066ebbca3a66d7f6436730b2a1956292a7ccb6120479a93ec12cf",
+    "readingsFrom": "alpha.12-d4bc8d3a5",
+    "readingsDigest": "18793d7f161dba8071a394cab44b98dd3f59fb15e47cb1b057a4fa227030ccef",
+    "lethalCommit": "a7ac7f500c1e5fcf9e9c049f2a3324105ad62ed8",
+    "gatedAt": "2026-11-05T20:02:21.056Z",
+    "warnFacts": {
+      "serve-keep-reasons": "matches"
+    }
+  }
+]

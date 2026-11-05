@@ -24,6 +24,7 @@ import {
   AlRunnerV3Backend,
   type AlRunnerV3Config,
   AlRunnerV3DependencySkippedError,
+  AlRunnerV3NoTestRanError,
   AlRunnerV3ResourceSelectorRefusedError,
   AlRunnerV3ReusedBaselineUnclassifiedError,
   AlRunnerV3RowMissingError,
@@ -33,6 +34,7 @@ import {
   V3_STATE_NOTE_TAG,
   WINDOW_BOUND_CAVEAT,
   decodeV3Rows,
+  exit6Kind,
   stopSecondsOf,
   v3CallArgv,
   v3CallDeadlineMs,
@@ -157,6 +159,8 @@ function fakeAlc(
   body: (project: string) => Buffer | undefined = () => undefined,
   /** R780: runs inside the compile, before the .app is written (real alc can write into the project). */
   during: (project: string) => Promise<void> = async () => {},
+  /** R811: what alc prints when `fail` says so. */
+  failText = "error AL0118: NoSuchVar",
 ) {
   const calls: { project: string; cache: string; staged: string[] }[] = [];
   const io: ArtifactIo = {
@@ -172,7 +176,7 @@ function fakeAlc(
       const out = (argv.find((a) => a.startsWith("/out:")) ?? "").slice(5);
       const { readdir } = await import("node:fs/promises");
       calls.push({ project, cache, staged: (await readdir(cache)).sort() });
-      if (fail(project)) return { exitCode: 1, stdout: "error AL0118: NoSuchVar", stderr: "" };
+      if (fail(project)) return { exitCode: 1, stdout: failText, stderr: "" };
       await during(project);
       await writeFile(out, body(project) ?? `app of ${project}`);
       return { exitCode: 0, stdout: "", stderr: "" };
@@ -363,6 +367,22 @@ describe("§3 the compile proof", () => {
     expect(err).toBeInstanceOf(TestAppError);
     expect(err).not.toBeInstanceOf(AlcCompileError);
     expect(String(err)).toMatch(/test app does not compile against this batch/);
+    expect(String(err)).not.toContain('Write "/" there');
+  });
+
+  test("R811: a test app whose app.json names a path with a backslash is told so", async () => {
+    const l = await layout();
+    const alc = fakeAlc(
+      (p) => p === l.testDir,
+      undefined,
+      undefined,
+      "app.json(12,3): error AL1001: Source file 'Images\\Logo.png' could not be found",
+    );
+    const err = await backendOf(l, fakeV3(allPass).spawn, alc.io)
+      .deploy(l.batch)
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(TestAppError);
+    expect(String(err).includes('Write "/" there')).toBe(process.platform !== "win32");
   });
 
   test("R780: an unreadable test dir keeps today's order: the test-app alc runs first, so its TestAppError wins over the read error", async () => {
@@ -1282,6 +1302,95 @@ describe("§4 selection, the cache and T5 / T21 / T28 / T29", () => {
     const v = await b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
     expect(v.outcome).toBe("error");
     expect(v.runnerRow).toBe("runner-test-error");
+  });
+
+  // R808 (g), one-shot. alpha.12 gives NO row for a test codeunit whose OnRun raises (since #5859,
+  // as BC's Test Runner app does) and prints "NOTHING SELECTED" with exit 6; an empty answer with
+  // another exit reads no row either. Neither may score a survive.
+  test("R808 (g) one-shot: a call with zero rows is rowMissing: the baseline stops, a mutant is an error, never a survive", async () => {
+    const l = await layout();
+    const none = () => [] as { method: string; status: "pass" }[];
+    const b = backendOf(l, fakeV3(none, { coverage: plainCoverage }).spawn, fakeAlc().io);
+    b.useSessionTests([ref("A")]);
+    await b.deploy(l.batch);
+    await b.activate(null);
+    await expect(b.run(ref("A"), { coverage: "none", timeoutMs: 1000 })).rejects.toBeInstanceOf(
+      AlRunnerV3RowMissingError,
+    );
+    await b.activate("M0001");
+    const v = await b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
+    expect([v.outcome, v.runnerRow]).toEqual(["error", "runner-test-error"]);
+    expect(v.failureMessage).toContain("0 row(s)");
+  });
+
+  test("R808 (g) one-shot: exit 6 with no rows stops the session, also under a mutant (no row, no survive)", async () => {
+    const l = await layout();
+    const b = backendOf(l, fakeV3(allPass, { exit: 6, stdout: "" }).spawn, fakeAlc().io);
+    await b.deploy(l.batch);
+    await b.activate("M0001");
+    await expect(b.run(ref("A"), { coverage: "none", timeoutMs: 1000 })).rejects.toBeInstanceOf(
+      AlRunnerV3SelectionError,
+    );
+  });
+
+  // R815: v3's own words, captured from alpha.12 and alpha.13+edge (/coord/handoff/R-817/).
+  const RAN_NO_TEST =
+    "al-runner 3.0.0-alpha.13+edge.20261105 (d72d3197d)\nSeed: 1\nTests: 0 total, 0 passed, 0 failed, 0 not run\nSeed: 1\nResult: NOTHING SELECTED (exit 6)\n";
+  const SELECTION_MISS = "error: the selection matches no test\n";
+  const exit6 = async (stderr: string, activated: string | null) => {
+    const l = await layout();
+    const b = backendOf(
+      l,
+      fakeV3(allPass, { exit: 6, stdout: "", stderr: () => stderr }).spawn,
+      fakeAlc().io,
+    );
+    await b.deploy(l.batch);
+    await b.activate(activated);
+    return b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
+  };
+
+  test("R815: exit6Kind reads v3's words; anything else is unknown, never a guess", () => {
+    expect(exit6Kind(RAN_NO_TEST)).toBe("ran-no-test");
+    expect(exit6Kind(SELECTION_MISS)).toBe("selection-miss");
+    expect(exit6Kind(`${SELECTION_MISS}Result: NOTHING SELECTED (exit 6)\n`)).toBe(
+      "selection-miss",
+    );
+    expect(exit6Kind("")).toBe("unknown");
+    expect(exit6Kind("something new\n")).toBe("unknown");
+    expect(exit6Kind("a test printed Result: NOTHING SELECTED (exit 6) mid-line\n")).toBe(
+      "unknown",
+    );
+  });
+
+  test("R815: a mutant that makes OnRun fail reads error, not survived, and the session goes on", async () => {
+    const v = await exit6(RAN_NO_TEST, "M0001");
+    expect([v.outcome, v.runnerRow]).toEqual(["error", "runner-test-error"]);
+    expect(v.failureMessage).toContain("OnRun");
+    expect(v.failureMessage).not.toContain("selected no test");
+  });
+
+  test("R815: on the baseline a failing OnRun stops by its own name, and says it is not a selection miss", async () => {
+    const err = await exit6(RAN_NO_TEST, null).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AlRunnerV3NoTestRanError);
+    expect(err).not.toBeInstanceOf(AlRunnerV3SelectionError);
+    expect(String(err)).toContain("al-runner-v3-codeunit-ran-no-test");
+    expect(String(err)).toContain("OnRun");
+    expect(String(err)).toContain("This call scored no verdict");
+    expect(String(err)).not.toContain("selected no test");
+  });
+
+  test("R815: a real selection miss reads as today, on the baseline and under a mutant", async () => {
+    for (const activated of [null, "M0001"]) {
+      const err = await exit6(SELECTION_MISS, activated).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(AlRunnerV3SelectionError);
+      expect(String(err)).toContain("selected no test");
+    }
+  });
+
+  test("R815: exit 6 with words v3 never used stops as today, also under a mutant", async () => {
+    await expect(exit6("something new\n", "M0001")).rejects.toBeInstanceOf(
+      AlRunnerV3SelectionError,
+    );
   });
 
   test("exit 6 stops the session; exit 2 is a transport failure; exit 7 reads its rows", async () => {

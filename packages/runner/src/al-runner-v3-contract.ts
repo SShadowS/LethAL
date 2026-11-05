@@ -33,6 +33,7 @@ import {
   v3DependencySkipLines,
 } from "./al-runner-v3-backend";
 import { baseAppJson, probeV3PredefinedSymbols } from "./al-runner-v3-probe";
+import { v3ChildEnv } from "./al-runner-v3-seed";
 import { BC_HTTP_HUB_TEXT } from "./al-runner-v3-texts";
 import { AlcCompileError, ArtifactCompiler, type ArtifactIo, defaultArtifactIo } from "./artifact";
 import { type SpawnFn, absToolPath, defaultSpawn } from "./publisher";
@@ -650,6 +651,20 @@ codeunit 50673 "Serve OnRun"
     begin
     end;
 }
+
+codeunit 50674 "Serve Http Public"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure HttpGetPublic()
+    var
+        Client: HttpClient;
+        Response: HttpResponseMessage;
+    begin
+        Client.Get('http://example.com/x', Response);
+    end;
+}
 `;
 
 /** R667: one `Assert.AreEqual` failure, in its own tests app (only it depends on Library Assert). */
@@ -712,6 +727,9 @@ const SERVE_CASES: ReadonlyArray<readonly [string, string, boolean]> = [
   ["commit", "Codeunit50671.CommitCall", false],
   ["cascade", "Codeunit50672.LaterFails", true],
   ["onrun-failed", "Codeunit50673.Never", false],
+  // R808: a public host reaches the runtime's own refusal (localhost is a plain fail on alpha.7+),
+  // so the `http` entry's current wording is exercised. No plain-fail fallback.
+  ["http", "Codeunit50674.HttpGetPublic", false],
 ];
 
 /** R612: the stop the update gate's serve daemon runs with (leg C's `timeout-classified` N). */
@@ -738,10 +756,11 @@ async function serveKeepReasons(env: V3ProbeEnv, app: string, root: string): Pro
   const spawn: ServerSpawnFn = (argv) =>
     (env.serveSpawn ?? defaultServerSpawn)(argv, {
       cwd: root,
-      ...(cache !== undefined ? { env: cache } : {}),
+      env: v3ChildEnv(cache),
     });
   const server = new AlRunnerServer(absToolPath(env.alRunnerPath), spawn, [], "serve");
-  const expected = `one serve daemon (--test-timeout ${SERVE_TEST_TIMEOUT_S}, testIsolation test): four codeunits (five tests), each row notRun, error, and its V3_SERVE_SAFE_REFUSALS entry (${SERVE_CASES.map(([e]) => e).join(", ")}); http and cascade also accepted as a plain trusted fail (R705)`;
+  const pinned = env.serveKeepMoved === true;
+  const expected = `one serve daemon (--test-timeout ${SERVE_TEST_TIMEOUT_S}, testIsolation test): five codeunits (six tests), each row notRun, error, and its V3_SERVE_SAFE_REFUSALS entry (${SERVE_CASES.map(([e]) => e).join(", ")}); the localhost http test and cascade also accepted as a plain trusted fail (R705); the public-host http test must be a refusal (R808)${pinned ? "; this build's pin (R808): commit a plain pass, and no row at all for Codeunit50673.Never (onrun-failed: since #5859 a test codeunit whose OnRun raises gives no row)" : ""}`;
   let rows: readonly ServerTestLine[];
   try {
     await server.start(SERVE_DEADLINE_MS, [], SERVE_TEST_TIMEOUT_S);
@@ -757,6 +776,19 @@ async function serveKeepReasons(env: V3ProbeEnv, app: string, root: string): Pro
   const how: string[] = [];
   for (const [entry, name, plainFailOk] of SERVE_CASES) {
     const r = rows.find((t) => t.name === name);
+    if (pinned && (entry === "commit" || entry === "onrun-failed")) {
+      // R808: the pin says what this build gives instead of a refusal. Any other reading is a move.
+      const ok =
+        entry === "commit"
+          ? r !== undefined && r.status === "pass" && r.notRun !== true
+          : r === undefined;
+      if (ok) how.push(`${entry}: ${entry === "commit" ? "plain pass" : "no row"} (pinned)`);
+      else
+        moved.push(
+          `${entry}: MOVED ${r === undefined ? `no row ${name}` : `${r.status} notRun=${String(r.notRun)} ${r.message ?? ""}`}`,
+        );
+      continue;
+    }
     const refusal =
       r !== undefined &&
       r.notRun === true &&
@@ -826,6 +858,12 @@ export interface V3ProbeEnv {
   readonly gateOnlyTrusted?: string;
   /** R612 test hook: the `serve` daemon for `serve-keep-reasons` (default: the real binary). */
   readonly serveSpawn?: ServerSpawnFn;
+  /**
+   * R808: the build's pin (`V3BuildPin.serveKeepMoved`) is present, so `serve-keep-reasons` expects
+   * `commit` as a plain pass and NO row for `onrun-failed`. The caller reads it from the pin; this
+   * module does not import the pins module (that imports this one).
+   */
+  readonly serveKeepMoved?: boolean;
   /** R612 M-2: `.gated`'s warn-fact readings (what the gate's leg C read), shown by a session. */
   readonly gatedWarnFacts?: Readonly<Record<string, string>>;
   /**
@@ -914,7 +952,9 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
   // R645: every v3 process the probe starts runs in `root` (v3 writes coverage.cobertura.xml into
   // its cwd). Paths handed to v3 are made absolute below.
   const spawnIn = env.spawn ?? defaultSpawn;
-  const spawn: SpawnFn = (argv, opts) => spawnIn(argv, { ...opts, cwd: root });
+  // R807: every process this probe starts (the binary only; the burner uses Bun.spawn) gets the pinned seed.
+  const spawn: SpawnFn = (argv, opts) =>
+    spawnIn(argv, { ...opts, env: { ...v3ChildEnv(), ...opts?.env }, cwd: root });
   const alRunnerPath = absToolPath(env.alRunnerPath);
   const packagesDir = resolve(env.packagesDir);
   const cacheDir = env.cacheDir !== undefined ? resolve(env.cacheDir) : undefined;

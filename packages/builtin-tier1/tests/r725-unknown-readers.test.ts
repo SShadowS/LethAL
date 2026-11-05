@@ -75,7 +75,9 @@ const forms = (decl: string): Form[] => {
       wrapClose: "",
     },
     {
-      name: "swallowed member",
+      // R796: tree-sitter-al 4.5.0 parses this member as a DIRECT member, so its local is declared
+      // (4.4.1 swallowed it into the var section: 'unknown'). Kept as a control: still refused.
+      name: "former swallowed member (declared under 4.5.0)",
       globals: "",
       locals: `        ${decl}`,
       wrapOpen: "#if not LETHALX",
@@ -83,6 +85,9 @@ const forms = (decl: string): Form[] => {
     },
   ];
 };
+
+/** A form whose name the engine reports 'unknown' (not a plain declared one, nor the former swallowed member). */
+const isUnknownForm = (f: Form): boolean => f.name !== "declared" && !f.name.startsWith("former");
 
 describe("R572: a var-out flag whose declaration is unknown", () => {
   const CALLEE = `codeunit 57202 "R725 Cap"
@@ -117,7 +122,7 @@ ${f.locals}
 ${f.wrapClose}
 }`,
       });
-      if (f.name !== "declared") expect(p.state("Loop.al", "Bottom")).toBe("unknown");
+      if (isUnknownForm(f)) expect(p.state("Loop.al", "Bottom")).toBe("unknown");
       expect(p.refused("Cap.al", "'T4'")).toBe(true);
     });
 });
@@ -160,7 +165,7 @@ ${f.locals}
 ${f.wrapClose}
 }`,
       });
-      if (f.name !== "declared") expect(p.state("Cu.al", "Del")).toBe("unknown");
+      if (isUnknownForm(f)) expect(p.state("Cu.al", "Del")).toBe("unknown");
       expect(p.refused("Cu.al", "Del.Delete()")).toBe(true);
     });
 });
@@ -194,7 +199,7 @@ ${f.locals}
 ${f.wrapClose}
 }`,
       });
-      if (f.name !== "declared") expect(p.state("Cu.al", "R2")).toBe("unknown");
+      if (isUnknownForm(f)) expect(p.state("Cu.al", "R2")).toBe("unknown");
       expect(p.refused("Cu.al", "R2.Modify()")).toBe(true);
       expect(p.refused("Cu.al", "exit")).toBe(true);
     });
@@ -263,7 +268,7 @@ ${f.locals}
 ${f.wrapClose}
 }`,
       });
-      if (f.name !== "declared") expect(p.state("Cu.al", "R")).toBe("unknown");
+      if (isUnknownForm(f)) expect(p.state("Cu.al", "R")).toBe("unknown");
       expect(p.refused("Cu.al", "R2.Modify()")).toBe(true);
       expect(p.refused("Cu.al", "exit")).toBe(true);
     });
