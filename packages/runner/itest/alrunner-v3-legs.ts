@@ -164,6 +164,13 @@ export function o1LoginWorkDate(
   return set === "cdo" ? pin?.o1?.cdoWorkDate : undefined;
 }
 
+/** R807: how many package apps O1's CDO set must load: the pin's `cdoApps`, else 17 (alpha.7 to alpha.11). */
+export function o1CdoApps(
+  pin: { readonly o1?: { readonly cdoApps?: number } } | undefined,
+): number {
+  return pin?.o1?.cdoApps ?? 17;
+}
+
 /**
  * R784, pre-committed (master 6aa7700c): `gate-fail` when a Reader entry reads a writer value, reads
  * anything but the default, or lacks a row; or a Writer test does not pass (the state was never set,
@@ -258,6 +265,80 @@ export function judgeOrderProbe(
   }
   if (bad.length > 0) return { outcome: "gate-fail", lines: bad };
   return held.length > 0 ? { outcome: "held", lines: held } : { outcome: "pass", lines: [] };
+}
+
+/** R807: O1's seed sub-check codeunit (`fixtures/sandbox-order-tests`): one test that reports Random, CreateGuid and a SystemId. */
+export const O1_SEED_CODEUNIT = 77055;
+export const O1_SEED_TEST = "ReadSeedValues";
+
+/** One request of the seed sub-check: the test's message, and the seed and source the summary reported (absent: none). */
+export interface O1SeedRequest {
+  readonly message: string | undefined;
+  readonly seed?: unknown;
+  readonly seedSource?: unknown;
+}
+
+/**
+ * R807, pre-committed (master 94b3337d): the seed sub-check of leg O1. `pinned` is two separate requests to
+ * a daemon started with LethAL's environment, `sensitive` two to a daemon with `ALRUNNER_SEED` removed.
+ * - Pinned values must be identical (and a real `SEEDVALUES=` message: empty-vs-empty proves nothing).
+ * - A build that reports `seed` (in any of the four answers; they must agree): the sensitive values must
+ *   DIFFER, else the check could not see a difference (hollow); the pinned answers must read seed 1,
+ *   `seedSource` `env`.
+ * - A build that reports none: the sensitive values must be identical (its values are fixed).
+ * Any failure is `gate-fail`.
+ */
+export function judgeO1Seed(r: {
+  readonly pinned: readonly O1SeedRequest[];
+  readonly sensitive: readonly O1SeedRequest[];
+}): { readonly outcome: "pass" | "gate-fail"; readonly lines: string[] } {
+  const bad: string[] = [];
+  if (r.pinned.length !== 2 || r.sensitive.length !== 2)
+    return {
+      outcome: "gate-fail",
+      lines: [
+        `seed: ${r.pinned.length} pinned and ${r.sensitive.length} sensitive requests, pre-committed 2 and 2`,
+      ],
+    };
+  const [p0, p1] = r.pinned;
+  const [s0, s1] = r.sensitive;
+  if (p0 === undefined || p1 === undefined || s0 === undefined || s1 === undefined)
+    return { outcome: "gate-fail", lines: ["seed: a request is missing"] };
+  for (const [name, q] of [
+    ["pinned 1", p0],
+    ["pinned 2", p1],
+    ["sensitive 1", s0],
+    ["sensitive 2", s1],
+  ] as const)
+    if (q.message === undefined || !q.message.startsWith("SEEDVALUES="))
+      bad.push(`seed: ${name} has no SEEDVALUES message (${JSON.stringify(q.message)})`);
+  if (bad.length > 0) return { outcome: "gate-fail", lines: bad };
+  if (p0.message !== p1.message)
+    bad.push(
+      `seed: the pinned daemon's two requests read different values (${p0.message} | ${p1.message}): the pin does not hold`,
+    );
+  const reports = [p0, p1, s0, s1].map((q) => q.seed !== undefined);
+  const reporting = reports[0] === true;
+  if (reports.some((x) => x !== reporting))
+    bad.push("seed: only some answers report a seed; the build must report it in all or none");
+  if (reporting) {
+    if (s0.message === s1.message)
+      bad.push(
+        `seed: the unpinned daemon's two requests read the same values (${s0.message}) on a build that reports a seed: the check cannot see a difference`,
+      );
+    for (const [name, q] of [
+      ["pinned 1", p0],
+      ["pinned 2", p1],
+    ] as const)
+      if (q.seed !== 1 || q.seedSource !== "env")
+        bad.push(
+          `seed: ${name} read seed ${JSON.stringify(q.seed)} source ${JSON.stringify(q.seedSource)}, pre-committed 1 and "env"`,
+        );
+  } else if (s0.message !== s1.message)
+    bad.push(
+      `seed: a build that reports no seed read different values without the variable (${s0.message} | ${s1.message})`,
+    );
+  return bad.length > 0 ? { outcome: "gate-fail", lines: bad } : { outcome: "pass", lines: [] };
 }
 
 /** The exact `--version` lines of builds that have no serve-entries path (alpha.2's `.gated`). */

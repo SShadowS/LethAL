@@ -252,6 +252,10 @@
       "sha256": "09b61cadc12252be8fa6fd1b910c2f95bb22183575b99720e7bf1ae74f8259e5",
       "mutants": 118
     },
+    "fixtures/sandbox-order-tests/src/SeedProbe.al": {
+      "sha256": "99ea550b587e6b46cd2d78156a887cf0b33c32dc0ffe670b167cb7ce5f63a4cd",
+      "mutants": 5
+    },
     "fixtures/sandbox-order/src/OrderDep.al": {
       "sha256": "f59b075e45c167096984511e336ceb8a87b9dc7668b20a793efde59d048f1e49",
       "mutants": 5
