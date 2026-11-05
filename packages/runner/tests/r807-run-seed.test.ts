@@ -92,7 +92,10 @@ describe("(a) every spawn path sets the variable, and an ambient value does not 
     const m = mergeChildEnv({ ALRUNNER_SEED: undefined, LETHAL_R807_X: "x" });
     expect("ALRUNNER_SEED" in m).toBe(false);
     expect(m.LETHAL_R807_X).toBe("x");
-    expect(m.PATH).toBe(process.env.PATH);
+    // A key taken from the environment: Windows spells PATH `Path`, and only process.env ignores case.
+    const kept = Object.keys(process.env).find((k) => k !== "ALRUNNER_SEED") ?? "";
+    expect(kept).not.toBe("");
+    expect(m[kept]).toBe(process.env[kept]);
   });
 
   test("the contract-free probe (predefined symbols) starts v3 with the seed", async () => {
