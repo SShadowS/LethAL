@@ -157,6 +157,8 @@ function fakeAlc(
   body: (project: string) => Buffer | undefined = () => undefined,
   /** R780: runs inside the compile, before the .app is written (real alc can write into the project). */
   during: (project: string) => Promise<void> = async () => {},
+  /** R811: what alc prints when `fail` says so. */
+  failText = "error AL0118: NoSuchVar",
 ) {
   const calls: { project: string; cache: string; staged: string[] }[] = [];
   const io: ArtifactIo = {
@@ -172,7 +174,7 @@ function fakeAlc(
       const out = (argv.find((a) => a.startsWith("/out:")) ?? "").slice(5);
       const { readdir } = await import("node:fs/promises");
       calls.push({ project, cache, staged: (await readdir(cache)).sort() });
-      if (fail(project)) return { exitCode: 1, stdout: "error AL0118: NoSuchVar", stderr: "" };
+      if (fail(project)) return { exitCode: 1, stdout: failText, stderr: "" };
       await during(project);
       await writeFile(out, body(project) ?? `app of ${project}`);
       return { exitCode: 0, stdout: "", stderr: "" };
@@ -363,6 +365,22 @@ describe("§3 the compile proof", () => {
     expect(err).toBeInstanceOf(TestAppError);
     expect(err).not.toBeInstanceOf(AlcCompileError);
     expect(String(err)).toMatch(/test app does not compile against this batch/);
+    expect(String(err)).not.toContain('Write "/" there');
+  });
+
+  test("R811: a test app whose app.json names a path with a backslash is told so", async () => {
+    const l = await layout();
+    const alc = fakeAlc(
+      (p) => p === l.testDir,
+      undefined,
+      undefined,
+      "app.json(12,3): error AL1001: Source file 'Images\\Logo.png' could not be found",
+    );
+    const err = await backendOf(l, fakeV3(allPass).spawn, alc.io)
+      .deploy(l.batch)
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(TestAppError);
+    expect(String(err).includes('Write "/" there')).toBe(process.platform !== "win32");
   });
 
   test("R780: an unreadable test dir keeps today's order: the test-app alc runs first, so its TestAppError wins over the read error", async () => {

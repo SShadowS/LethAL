@@ -15,6 +15,7 @@ import {
   decideTestAppOutcome,
   publishTestApp,
   symbolPackageId,
+  testAppBackslashHint,
 } from "../src/test-app-publish";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
 import { removeScratchDirs } from "./helpers/scratch";
@@ -175,6 +176,47 @@ test("compileTestApp: an alc rejection is TestAppError compile-failed, never Alc
   expect(err).not.toBeInstanceOf(AlcCompileError);
   expect((err as TestAppError).reason).toBe("compile-failed");
   expect((err as TestAppError).message).toContain("AL0132");
+});
+
+// R811: alc 18.1's own texts on Linux, measured. Pinned to "linux": CI's check job runs on Windows.
+const AL1001 = `app.json(12,3): error AL1001: Source file 'Images\\Logo.png' could not be found`;
+const AL0863 = `app.json(35,3): error AL0863: The folder 'Res\\Sub' does not exist.`;
+
+test("R811: the hint names a backslash path alc refused, and nothing else", () => {
+  expect(testAppBackslashHint(AL1001, "linux")).toContain('Write "/" there');
+  expect(testAppBackslashHint(AL0863, "linux")).toContain('Write "/" there');
+  // The same two errors with no `\`: a file that really is missing.
+  expect(
+    testAppBackslashHint("error AL1001: Source file 'Images/Logo.png' could not be found", "linux"),
+  ).toBe("");
+  expect(testAppBackslashHint("error AL0863: The folder 'Res/Sub' does not exist.", "linux")).toBe(
+    "",
+  );
+  // A `\` in another error, or on another line of the same output.
+  expect(testAppBackslashHint("error AL0132: 'a\\b' has no such member", "linux")).toBe("");
+  expect(
+    testAppBackslashHint("error AL1001: Source file 'a/b' could not be found\nC:\\x", "linux"),
+  ).toBe("");
+  // The Windows alc takes `\`, so a miss there is a missing file.
+  expect(testAppBackslashHint(AL1001, "win32")).toBe("");
+});
+
+test("R811: compileTestApp adds the hint to alc's refusal, and only there", async () => {
+  const run = async (message: string) => {
+    const fx = await fixture({});
+    const err = await compileTestApp({
+      testDir: fx.dir,
+      target: fx.target,
+      controlSymbolPath: fx.controlPath,
+      compiler: watchingCompiler(fx.out, [], 1, message),
+    }).catch((e) => e);
+    expect((err as TestAppError).reason).toBe("compile-failed");
+    return (err as TestAppError).message;
+  };
+  const hinted = await run(AL1001);
+  expect(hinted).toContain("AL1001");
+  expect(hinted.includes('Write "/" there')).toBe(process.platform !== "win32");
+  expect(await run("error AL0132: nope")).not.toContain('Write "/" there');
 });
 
 test("compileTestApp refuses an .alpackages entry it cannot identify, naming the file", async () => {
