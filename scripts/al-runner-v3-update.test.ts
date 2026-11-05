@@ -2,7 +2,16 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readlink,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { V3_GATE_LEGS } from "../packages/runner/itest/al-runner-v3-gate";
@@ -1550,7 +1559,42 @@ describe("R814: publishToMaster, on real git repositories", () => {
     expect(onMaster(clone)).toEqual(["b"]);
   });
 
-  test("master moving between the fetch and the push is retried, and nothing is forced", async () => {
+  /** Origin refuses a push while its counter is under `rejects`; the file holds the tries seen. */
+  async function rejectPushes(origin: string, rejects: number): Promise<string> {
+    const count = join(top, "pushes");
+    await writeFile(count, "0");
+    const hook = join(origin, "hooks", "pre-receive");
+    await writeFile(
+      hook,
+      `#!/bin/sh\nn=$(cat "${count}")\necho $((n + 1)) > "${count}"\n[ "$n" -ge ${rejects} ]\n`,
+    );
+    await chmod(hook, 0o755);
+    return count;
+  }
+
+  test("a rejected push fetches again and retries, and the row lands", async () => {
+    const { origin, clone, worktree } = await repos();
+    const count = await rejectPushes(origin, 2);
+    const r = await publishToMaster([row("b") as unknown as GatedBuildEntry], {
+      repo: clone,
+      worktree,
+    });
+    expect(r.published).toEqual(["b"]);
+    expect(onMaster(clone)).toEqual(["b"]);
+    expect((await readFile(count, "utf8")).trim()).toBe("3");
+  });
+
+  test("three rejected pushes throw, so the next run retries; nothing lands", async () => {
+    const { origin, clone, worktree } = await repos();
+    const count = await rejectPushes(origin, 99);
+    await expect(
+      publishToMaster([row("b") as unknown as GatedBuildEntry], { repo: clone, worktree }),
+    ).rejects.toThrow();
+    expect((await readFile(count, "utf8")).trim()).toBe("3");
+    expect(onMaster(clone)).toEqual([]);
+  });
+
+  test("a lane's commit already on master is built on, never overwritten", async () => {
     const { clone, worktree } = await repos();
     await publishToMaster([row("b") as unknown as GatedBuildEntry], { repo: clone, worktree });
     const other = join(top, "other");
