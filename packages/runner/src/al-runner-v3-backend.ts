@@ -156,7 +156,13 @@ import {
 import { assertManifestObjectsDeclared, readManifestObjectKeys } from "./line-map";
 import { type SpawnFn, absToolPath, defaultSpawn } from "./publisher";
 import { assertResourceSelectorRuntime, installResourceSelector } from "./resource-selector";
-import { TestAppError, symbolPackageId, testAppBackslashHint } from "./test-app-publish";
+import {
+  TestAppError,
+  stageTestProject,
+  symbolPackageId,
+  testAppPathRewrite,
+  testAppPathWarning,
+} from "./test-app-publish";
 import { LINK_EXCUSED_DIRS, ProjectSymlinkRefusedError, walkFilesSync } from "./walk";
 
 /**
@@ -1327,6 +1333,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    */
   private baselineRefused = new Map<number, Set<string>>();
   private dotnetHelperWarned = false;
+  private testPathsWarned = false; // R811
   /** R739: where this backend's notices go. Default: the console, until a session installs one. */
   private notify: (code: string, message: string) => void = (_code, message) =>
     console.warn(message);
@@ -1337,7 +1344,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    */
   setNotify(notify?: (code: string, message: string) => void): void {
     this.notify = notify ?? ((_code, message) => console.warn(message));
-    if (notify !== undefined) this.dotnetHelperWarned = false;
+    if (notify !== undefined) {
+      this.dotnetHelperWarned = false;
+      this.testPathsWarned = false;
+    }
   }
   private readonly compiler: ArtifactCompiler;
   /** Test hook (legs X (e), (f)): rewrites a mutant call's coverage file before it is read. */
@@ -1944,6 +1954,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       const compiled = await this.compileTestAppAgainst(target.appPath, active, pre);
       const testAppSha256 = compiled.sha256;
       const post = compiled.live ? await this.readTestDir() : pre;
+      // R811: alc read a copy, so nothing it did can move the test dir: any change is a change it
+      // did not see, and the proof below would name bytes it never compiled.
+      if (compiled.copied && !sameTestDirRead(pre, post)) {
+        throw new TestAppError(
+          "compile-failed",
+          `al-runner-v3: the test dir changed while its copy was compiled, so no test of it can be trusted (R811): ${this.cfg.testDir}`,
+        );
+      }
       const { testScan, testOther, testAppJsonSha256 } = post;
       // Step 3: the proof, every <deps> file hashed now (m-2), and the per-run checks' baseline.
       this.proof = {
@@ -2514,14 +2532,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     batchApp: string,
     active: string,
     snap: TestDirRead | undefined,
-  ): Promise<{ sha256: string; live: boolean; key: string | undefined }> {
+  ): Promise<{ sha256: string; live: boolean; key: string | undefined; copied: boolean }> {
     const activeAppJsonText = await readFile(join(active, "app.json"), "utf8");
     const activeApp = JSON.parse(activeAppJsonText) as Record<string, unknown>;
     const targetId = String(activeApp.id ?? "").toLowerCase();
     if (targetId === "") throw new Error(`al-runner-v3: ${active}/app.json has no id`);
     const usedDeps: { name: string; sha256: string }[] = [];
     const staged = join(this.cfg.instrumentedDir, "alc-test-pkgs");
+    const copy = join(this.cfg.instrumentedDir, "alc-test-src");
     await rm(staged, { recursive: true, force: true });
+    await rm(copy, { recursive: true, force: true });
     await mkdir(staged, { recursive: true });
     try {
       for (const name of await readdir(this.cfg.packagesDir)) {
@@ -2548,6 +2568,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         snap === undefined
           ? undefined
           : await this.testAppKey(snap, activeAppJsonText, batchBytes, usedDeps);
+      // R811: before the cache check, so a run that hits still warns, as R422 does.
+      const pathChanges =
+        snap === undefined ? [] : testAppPathRewrite(snap.testAppJsonText).changes;
+      if (pathChanges.length > 0 && !this.testPathsWarned) {
+        this.testPathsWarned = true;
+        this.notify("app-json-backslash-path", `[lethal] ${testAppPathWarning(pathChanges)}`);
+      }
       const store = this.proofStore();
       const mintedOk =
         snap !== undefined &&
@@ -2562,13 +2589,18 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         );
       if (store !== undefined && key !== undefined && mintedOk && (await store.has(key))) {
         this.testAppCache.hits++;
-        return { sha256: `cached:${key}`, live: false, key: undefined };
+        return { sha256: `cached:${key}`, live: false, key: undefined, copied: false };
       }
       this.testAppCache.misses++;
+      // R811: alc reads a copy only when app.json names a path with `\`. No snapshot: in place, as above.
+      const { projectDir } =
+        snap === undefined
+          ? { projectDir: this.cfg.testDir }
+          : await stageTestProject(this.cfg.testDir, snap.testAppJsonText, copy);
       let out: { appPath: string; sha256: string };
       try {
         out = await this.compiler.compileProject({
-          projectDir: this.cfg.testDir,
+          projectDir,
           packageCachePath: staged,
           name: "v3-testapp",
         });
@@ -2576,16 +2608,22 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         if (err instanceof AlcCompileError) {
           throw new TestAppError(
             "compile-failed",
-            `al-runner-v3: the test app does not compile against this batch, so no test of it can be trusted (R586 §3 step 2): ${err.message}${testAppBackslashHint(err.message)}`,
+            `al-runner-v3: the test app does not compile against this batch, so no test of it can be trusted (R586 §3 step 2): ${err.message}`,
           );
         }
         throw err;
       }
       await rm(out.appPath, { force: true }).catch(() => {});
       // Only a PASSING compile reaches here; the caller stores the key (see above).
-      return { sha256: out.sha256, live: true, key: store === undefined ? undefined : key };
+      return {
+        sha256: out.sha256,
+        live: true,
+        key: store === undefined ? undefined : key,
+        copied: projectDir !== this.cfg.testDir,
+      };
     } finally {
       await rm(staged, { recursive: true, force: true }).catch(() => {});
+      await rm(copy, { recursive: true, force: true }).catch(() => {});
     }
   }
 
