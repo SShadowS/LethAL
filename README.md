@@ -716,14 +716,16 @@ a LethAL feature or a mode.
   verdicts:
   - It runs code that does not compile (#5602; alpha.5 refuses it). LethAL compiles every batch and
     the test app with alc first, and refuses to run bytes alc did not see.
-  - A statement-form duplicate-key `Insert` does not raise (#5603, #5788). On alpha.2 kills through
-    that error read `survived` (7 on the tables fixture). On alpha.5 v3 refuses it, so those 7 of 406
+  - A statement-form duplicate-key `Insert` (#5603, #5788). From edge 8078bcf49 on it fails with
+    BC's text. On alpha.2 it does not raise, and kills through that error read `survived` (7 on the
+    tables fixture). On alpha.5 and the edge builds before 8078bcf49 v3 refuses it, so those 7 of 406
     mutants read `error` / `runner-refused` where BC kills them.
   - `Sleep` returns at once and moves v3's virtual AL clock forward by the requested time (#5605):
     a test that reads the clock after a Sleep behaves as on BC, but a wait costs no time and is
-    never stopped. On alpha.5 the clock also counts toward the time limit (#5793), so a stop can come
-    early: with a mutant active, a timeout row that returns before its stop reads `error` /
-    `runner-refused`, never scored. A covering pass that reaches a `Sleep` in the project reads
+    never stopped. On the pinned builds the clock also counts toward the time limit (#5793), so a stop
+    can come early: with a mutant active, a timeout row that returns before its stop reads `error` /
+    `runner-refused`, never scored. Only where that is not proven (an unpinned build, or a session
+    whose own probe does not read it) a covering pass that reaches a `Sleep` in the project reads
     `error`; one in a dependency is not caught.
   - `serve-entries` is the default transport where it is proven (R761). A config with no `"transport"` key falls back to one-shot, with the warning `al-runner-v3-serve-default-fallback`, for a `--resume` session, a multi-object or `#if`-wrapped file, a test name shape not yet proven under serve, or a build with no serve path. An explicit `"transport"` is always honoured, except that an explicit `serve-entries` with a dotted test method name is refused before any test runs (#5798, R722).
 
