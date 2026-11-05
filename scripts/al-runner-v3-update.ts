@@ -464,6 +464,8 @@ export async function gateOne(
       await mkdir(dest, { recursive: true });
       await cp(binary, join(dest, "al-runner"));
       await chmod(join(dest, "al-runner"), 0o755);
+      // R805: one folder per build, so this is always the latest pass's evidence.
+      await keep(dest);
     }
     // R612 M-2: this gate's warn-fact readings, so a session shows what the gate read.
     const warnFacts = await receiptWarnFacts(receipt);
