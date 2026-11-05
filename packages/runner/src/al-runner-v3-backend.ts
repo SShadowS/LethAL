@@ -263,7 +263,7 @@ const ranNoTestWhy = (id: number): string =>
 export class AlRunnerV3NoTestRanError extends Error {
   constructor(codeunitId: number) {
     super(
-      `al-runner-v3-codeunit-ran-no-test: ${ranNoTestWhy(codeunitId)}. No verdict was scored. Run the codeunit on its own, and fix its OnRun or move that code out of it.`,
+      `al-runner-v3-codeunit-ran-no-test: ${ranNoTestWhy(codeunitId)}. This call scored no verdict. Run the codeunit on its own, and fix its OnRun or move that code out of it.`,
     );
     this.name = "AlRunnerV3NoTestRanError";
   }

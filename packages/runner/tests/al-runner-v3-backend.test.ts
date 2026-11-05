@@ -1375,7 +1375,7 @@ describe("§4 selection, the cache and T5 / T21 / T28 / T29", () => {
     expect(err).not.toBeInstanceOf(AlRunnerV3SelectionError);
     expect(String(err)).toContain("al-runner-v3-codeunit-ran-no-test");
     expect(String(err)).toContain("OnRun");
-    expect(String(err)).toContain("No verdict was scored");
+    expect(String(err)).toContain("This call scored no verdict");
     expect(String(err)).not.toContain("selected no test");
   });
 
