@@ -72,7 +72,7 @@ function withoutUserinfo(url: string): string {
 
 /**
  * Prints `itestTargetLine` for a config file, reading only its `bcdev` target fields. R669: it
- * first throws `ServerOutOfUseError` when that server (bc1-bc3 only) has an out-of-use marker,
+ * first throws `ServerOutOfUseError` when that server (bc1-bc4 only) has an out-of-use marker,
  * BEFORE the line is printed (R783: and `BcHostMismatchError` for a config on the other known BC
  * on Linux host), so a script that greps for the line fails closed even if it ignores
  * the exit status. Every BC itest calls this right after it picks its config, so the refusal comes
@@ -118,7 +118,7 @@ export function printItestTarget(
   const mismatch = bcHostMismatch(u.hostname, outOfUse.env);
   if (mismatch !== undefined) throw new BcHostMismatchError(mismatch);
   const name = markedServerFor(u.hostname, devPort, outOfUse.env);
-  // Not bc1-bc3: such a server has no marker (Cronus28, envtool), so it is not checked.
+  // Not bc1-bc4: such a server has no marker (Cronus28, envtool), so it is not checked.
   if (name !== undefined) {
     const refusal = outOfUseRefusal(name, { ...outOfUse, override: "owner" });
     if (refusal !== undefined) throw new ServerOutOfUseError(refusal);

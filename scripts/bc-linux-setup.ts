@@ -1,10 +1,11 @@
 /**
- * R589: bring one or more of the BC on Linux servers on server1 (bc1, bc2, bc3) to the state the
- * LethAL BC gates need, and check it with `lethal doctor`.
+ * R589: bring one or more of the BC on Linux servers on server1 (bc1, bc2, bc3 on BC 28.4; bc4 on
+ * BC 29) to the state the LethAL BC gates need, and check it with `lethal doctor`. `all` means
+ * bc1-bc3 only: bc4 is always named on its own.
  *
- *   bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all [--lane <lane>] [--dry-run | --predict]
+ *   bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|bc4|all [--lane <lane>] [--dry-run | --predict]
  *                                 [--with-continia] [--accept-build <v>] [--held-lease <token>]
- *   bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all --write-config-only
+ *   bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|bc4|all --write-config-only
  *
  * `--predict` (R599) runs (a) to (d) under the lease and stops: it may fill the shared symbol cache
  * (a read from the server into the write-once cache, ruling (b)), and it writes no config or launch
@@ -811,9 +812,16 @@ export interface SetupArgs {
   readonly predict?: boolean;
 }
 
+/** What `--server all` means: the BC 28.4 servers. bc4 (BC 29) is never reached by `all`. */
+export const ALL_SERVERS: readonly ServerName[] = ["bc1", "bc2", "bc3"];
+
+const isServerName = (s: string | undefined): s is ServerName =>
+  s !== undefined && Object.hasOwn(SERVERS, s);
+
 const USAGE =
-  "usage: bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all [--lane <lane>] [--dry-run | --predict] [--with-continia [--accept-build <version>]] [--held-lease <token>]\n" +
-  "       bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all --write-config-only";
+  "usage: bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|bc4|all [--lane <lane>] [--dry-run | --predict] [--with-continia [--accept-build <version>]] [--held-lease <token>]\n" +
+  "       bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|bc4|all --write-config-only\n" +
+  "       `all` is bc1, bc2 and bc3 (BC 28.4). bc4 (BC 29) is named on its own; --with-continia is bc3 only.";
 
 export function parseArgs(argv: readonly string[]): SetupArgs {
   let server: string | undefined;
@@ -852,12 +860,12 @@ export function parseArgs(argv: readonly string[]): SetupArgs {
   )
     throw new Error(`--write-config-only takes only --server\n${USAGE}`);
   if (predict && dryRun) throw new Error(`--predict and --dry-run exclude each other\n${USAGE}`);
-  if (
-    writeConfigOnly &&
-    (server === "bc1" || server === "bc2" || server === "bc3" || server === "all")
-  )
+  // bc3's Continia stack is 28.x only: bc4 (BC 29) takes no `--with-continia`.
+  if (withContinia && server === "bc4")
+    throw new Error(`--with-continia is for bc3 only (bc4 is BC 29)\n${USAGE}`);
+  if (writeConfigOnly && (isServerName(server) || server === "all"))
     return {
-      servers: server === "all" ? ["bc1", "bc2", "bc3"] : [server],
+      servers: server === "all" ? [...ALL_SERVERS] : [server],
       dryRun,
       withContinia,
       writeConfigOnly,
@@ -870,11 +878,9 @@ export function parseArgs(argv: readonly string[]): SetupArgs {
     ...(acceptBuild !== undefined ? { acceptBuild } : {}),
     ...(predict ? { predict } : {}),
   };
-  if (server === "bc1" || server === "bc2" || server === "bc3")
-    return { servers: [server], ...rest };
+  if (isServerName(server)) return { servers: [server], ...rest };
   // One token leases one server.
-  if (server === "all" && heldLease === undefined)
-    return { servers: ["bc1", "bc2", "bc3"], ...rest };
+  if (server === "all" && heldLease === undefined) return { servers: [...ALL_SERVERS], ...rest };
   throw new Error(USAGE);
 }
 
