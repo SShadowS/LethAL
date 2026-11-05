@@ -95,6 +95,8 @@ export interface V3BuildPin {
    * company of the CDO set's BC build). Every CDO Reader entry must read exactly it.
    */
   readonly o1?: {
+    /** R807: how many package apps O1's CDO set must load; absent: 17 (alpha.12 also lists `Application`: 18). */
+    readonly cdoApps?: number;
     readonly cdoWorkDate: string;
     readonly issue: string;
     readonly evidence: string;
@@ -595,6 +597,13 @@ const T_ROWS_8078BCF49: readonly TRowPin[] = [
   },
 ];
 
+const O1_8078BCF49 = {
+  cdoWorkDate: "2026-08-01",
+  issue: `${REPO}/5743`,
+  evidence:
+    "O1's CDO set reads the login WorkDate 2026-08-01 in every Reader entry, as on a157b2d34 (8078bcf49 receipt at 4aa6ca6d)",
+};
+
 /**
  * The readings of edge-8078bcf49 (R804). edge-db0296678 was measured IDENTICAL on every pinned reading, so both
  * pins share this one object and cannot drift. A later delta for either build must SPLIT it first.
@@ -635,12 +644,7 @@ const READINGS_8078BCF49: Omit<V3BuildPin, "id" | "version" | "binarySha256"> = 
     evidence:
       "#5798 fixed upstream: the Dot.Step serve row carries codeunit 78850 and method Dot.Step (8078bcf49 receipt, leg N1E at 4aa6ca6d)",
   },
-  o1: {
-    cdoWorkDate: "2026-08-01",
-    issue: `${REPO}/5743`,
-    evidence:
-      "O1's CDO set reads the login WorkDate 2026-08-01 in every Reader entry, as on a157b2d34 (8078bcf49 receipt at 4aa6ca6d)",
-  },
+  o1: O1_8078BCF49,
 };
 
 export const V3_BUILD_PINS: readonly V3BuildPin[] = [
@@ -725,6 +729,16 @@ export const V3_BUILD_PINS: readonly V3BuildPin[] = [
     version: "al-runner 3.0.0-alpha.7+edge.20261026 (2c63a382e)",
     binarySha256: "31d2cf1fee463515c9bab5ba7a60d24845abacc5bb9709d89bb687b84423bbc6",
     ...READINGS_8078BCF49,
+  },
+  {
+    // The v3.0.0-alpha.12 build (R807 pre-commitment, master 94b3337d): the same readings as alpha.7 (a masked diff of
+    // the gate logs moved no verdict), except O1's CDO set lists 18 package apps: alpha.12 adds `Application` (0 files,
+    // from the folder). The update gate's own run is the measurement; any reading off this table is a BLOCK.
+    id: "alpha.12-d4bc8d3a5",
+    version: "al-runner 3.0.0-alpha.12 (d4bc8d3a5)",
+    binarySha256: "c406b57f178066ebbca3a66d7f6436730b2a1956292a7ccb6120479a93ec12cf",
+    ...READINGS_8078BCF49,
+    o1: { ...O1_8078BCF49, cdoApps: 18 },
   },
 ];
 

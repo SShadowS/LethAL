@@ -74,8 +74,8 @@ compared across a scheme change. There a byte-identical twin's mutated text cann
   roadmap item that will re-record it.
 - **The check:** `gate-pages.test.ts`, "R682". Every committed `itest/*.baseline.json` must record the current
   scheme or appear in its `LAGGING_SCHEME` list with an item. A listed file that has caught up fails too.
-- **Today's list:** R690 re-recorded ten baselines at scheme 42 (figures unchanged). Only
-  `envtool.baseline.json` still lags; it waits on R683 (host only).
+- **Today's list:** R796 raised the scheme to 43, and 12 baselines at 42 wait on R810 (no verdict moves).
+  `envtool.baseline.json` waits on R683 (host only).
 
 ## Warning sets: `GATE_WARNINGS` and observe mode (R736)
 

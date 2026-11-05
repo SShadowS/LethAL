@@ -47,6 +47,7 @@ import {
   encodeGroups,
   assertEntriesWellFormed as wellFormed,
 } from "../src/al-runner-v3-entries";
+import { AlRunnerV3SeedError } from "../src/al-runner-v3-seed";
 import { AlcCompileError, type ArtifactIo, ArtifactPrepareError } from "../src/artifact";
 import type { RunOpts, TestMethodRef, TestVerdict } from "../src/backend";
 import { buildBackend } from "../src/cli";
@@ -3531,6 +3532,55 @@ describe("R739: v3 notices reach setNotify, never the console", () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+// R807: a seed refusal is not a skipped pair, and the observed seed is read on every serve path.
+describe("R807: the kill pair rethrows a seed refusal; observedRunSeed reads each serve path", () => {
+  const seeded = (when: (q: Req) => boolean): ServeScript => ({
+    answer: (q, _n, lines) =>
+      when(q)
+        ? {
+            lines: lines.map((x) =>
+              x.type === "summary" ? { ...x, seed: 1, seedSource: "env" } : x,
+            ),
+          }
+        : undefined,
+  });
+  const isPlain = (q: Req) => q.ids[0]?.startsWith("plain:") === true;
+
+  test("N1: a seed refusal in the kill pair is rethrown, not filed as al-runner-v3-pair-skipped", async () => {
+    const r = await readyRig({ serve: { rows: killsM1 }, mutants: ["M0001"] });
+    const seen: Array<[string, string]> = [];
+    r.b.setNotify((c, m) => seen.push([c, m]));
+    await r.b.activate("M0001");
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("fail");
+    (r.b as unknown as { request: () => Promise<never> }).request = async () => {
+      throw new AlRunnerV3SeedError("seed 2");
+    };
+    await expect(r.b.sendKillPair("M0001", ref("A"))).rejects.toBeInstanceOf(AlRunnerV3SeedError);
+    expect(seen).toEqual([]);
+  });
+
+  test("S2: a warm-up (send) answer reporting seed 1 is observed; none reported leaves it absent", async () => {
+    const none = await readyRig({ mutants: ["M0001"] });
+    expect(none.serve.requests.length).toBeGreaterThan(0);
+    expect(none.b.observedRunSeed()).toBeUndefined();
+    const r = await readyRig({ serve: seeded((q) => !isPlain(q)), mutants: ["M0001"] });
+    expect(r.serve.requests.length).toBeGreaterThan(0);
+    expect(r.b.observedRunSeed()).toBe(1);
+  });
+
+  test("S2: a plain request (the coverage window) reporting seed 1 is observed", async () => {
+    const r = await readyRig({
+      targetAl: SLEEPER_AL,
+      mutants: ["M0001"],
+      serve: { coverage: sleepCoverage(), ...seeded(isPlain) },
+    });
+    expect(r.b.observedRunSeed()).toBeUndefined(); // the entries sends reported none
+    await r.b.activate("M0001");
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("pass");
+    expect(r.b.observedRunSeed()).toBe(1);
   });
 });
 

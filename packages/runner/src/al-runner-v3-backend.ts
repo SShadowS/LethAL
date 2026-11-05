@@ -104,6 +104,7 @@ import {
   uncacheableReason,
   writeProbeCache,
 } from "./al-runner-v3-probe-cache";
+import { AlRunnerV3SeedError, checkRunSeed, v3ChildEnv } from "./al-runner-v3-seed";
 import {
   AlRunnerV3CoverageJoinError,
   type SleepIndex,
@@ -459,7 +460,7 @@ export interface V3Row {
 export function decodeV3Rows(
   stdout: string,
   codeunitId: number,
-): { readonly rows: readonly V3Row[] } | { readonly why: string } {
+): { readonly rows: readonly V3Row[]; readonly seed?: number } | { readonly why: string } {
   let raw: unknown;
   try {
     raw = JSON.parse(stdout);
@@ -468,6 +469,8 @@ export function decodeV3Rows(
   }
   const tests = (raw as { tests?: unknown } | null)?.tests;
   if (!Array.isArray(tests)) return { why: "the --output-json document has no tests[]" };
+  // R807: the read-back guard; throws AlRunnerV3SeedError on a seed other than the pinned one.
+  const seed = checkRunSeed(raw as { seed?: unknown; seedSource?: unknown }, "one-shot envelope");
   const rows: V3Row[] = [];
   for (const [i, t] of tests.entries()) {
     const r = (t ?? {}) as Record<string, unknown>;
@@ -505,7 +508,7 @@ export function decodeV3Rows(
       notRun: notRun === true,
     });
   }
-  return { rows };
+  return { rows, ...(seed !== undefined ? { seed } : {}) };
 }
 
 /**
@@ -1368,11 +1371,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   async status(): Promise<BackendStatus> {
     this.dropPair();
     this.pairStore.clear();
-    const res = await this.spawn([this.cfg.alRunnerPath, "--version"]).catch((e) => ({
-      exitCode: -1,
-      stdout: "",
-      stderr: String(e),
-    }));
+    const res = await this.spawn([this.cfg.alRunnerPath, "--version"], this.cacheEnv()).catch(
+      (e) => ({
+        exitCode: -1,
+        stdout: "",
+        stderr: String(e),
+      }),
+    );
     const reported = (res.stdout || res.stderr).trim();
     if (res.exitCode !== 0) {
       return { ok: false, details: `al-runner v3 not runnable: ${reported.slice(0, 300)}` };
@@ -1764,11 +1769,24 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     return this.sleepIndex?.sizes;
   }
 
-  /** R645: `ALRUNNER_CACHE`, absolute, because v3 now runs in another cwd. */
-  private cacheEnv(): { env: Record<string, string> } | Record<string, never> {
-    return this.cfg.cacheDir !== undefined
-      ? { env: { ALRUNNER_CACHE: resolve(this.cfg.cacheDir) } }
-      : {};
+  /**
+   * The environment of EVERY al-runner process this backend starts. R645: `ALRUNNER_CACHE`,
+   * absolute, because v3 now runs in another cwd. R807: plus the pinned run seed, always.
+   */
+  private cacheEnv(): { env: Record<string, string> } {
+    return {
+      env: v3ChildEnv(
+        this.cfg.cacheDir !== undefined
+          ? { ALRUNNER_CACHE: resolve(this.cfg.cacheDir) }
+          : undefined,
+      ),
+    };
+  }
+
+  /** R807: the seed the build reported (already checked to be the pinned one); absent when none. */
+  private observedSeed: number | undefined;
+  observedRunSeed(): number | undefined {
+    return this.observedSeed;
   }
 
   /** C2 and R349: every field derived from the deployed layout or the active mutant. */
@@ -2127,6 +2145,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         if (![0, 1, 7, 8].includes(made.res.exitCode)) continue;
         const decoded = decodeV3Rows(made.res.stdout, id);
         if ("why" in decoded) continue;
+        this.observedSeed = decoded.seed ?? this.observedSeed;
         if (decoded.rows.some((r) => r.message !== undefined && V3_TIMEOUT_MESSAGE.test(r.message)))
           continue;
         // Review r2 #1: the durations were measured beside alc's CPU. A budget is
@@ -3121,6 +3140,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if ("why" in decoded) {
       return { verdict: transportFailure(ref, `codeunit ${id}: ${decoded.why}`, wallMs) };
     }
+    this.observedSeed = decoded.seed ?? this.observedSeed;
     // Every suite test of this codeunit (and the asking ref) has exactly one row, or nothing is cached.
     const needed = [...(this.suitePerCodeunit.get(id) ?? []), ref];
     for (const t of needed) {
@@ -3355,6 +3375,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       throw err;
     }
     await this.refuseDaemonDependencySkip(lane, daemon);
+    if (typeof answer.summary.seed === "number") this.observedSeed = answer.summary.seed; // R807: AlRunnerServer already checked it
     if (answer.summary.cached === false) this.stats.cachedFalse += 1;
     const decoded = decodeEntriesAnswer(sent, answer, this.serveRowFields);
     if ("why" in decoded) {
@@ -3715,6 +3736,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
       if (
         err instanceof AlRunnerV3DependencySkippedError ||
+        err instanceof AlRunnerV3SeedError ||
         err instanceof AlRunnerV3ServeFallbackWarmupError
       )
         throw err;
@@ -3922,6 +3944,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       throw err;
     }
     await this.refuseDaemonDependencySkip(lane, daemon);
+    if (typeof answer.summary.seed === "number") this.observedSeed = answer.summary.seed; // R807: AlRunnerServer already checked it
     if (answer.summary.cached === false) this.stats.cachedFalse += 1;
     const rows: V3Row[] = [];
     for (const t of answer.tests) {

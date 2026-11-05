@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**23 of 793 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**24 of 795 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -837,7 +837,9 @@ that ordering is the priority.
 - **R805** · The update gate keeps a PASS's gate.log beside .gated, so a switch can be audited from its own run · [R805.md](docs/roadmap/R805.md) · done (d73f6974)
 - **R803** · After the talk: relax LethAL's own v3 refusals that only guarded upstream defects edge 8078bcf49 fixed (#5788 duplicate key, commit under isolation, and the rest leg C reads gone) · [R803.md](docs/roadmap/R803.md) · closed 2026-11-05 — inventory: no defect guard is provably dead, none retired, no figure moves; text…
 - **R806** · The BC on Linux host moves back to server1: the default, and proving the gates there · [R806.md](docs/roadmap/R806.md) · open, filed 2026-11-05 (coord task R-806)
+- **R807** · One run seed (ALRUNNER_SEED=1) for every al-runner process, a read-back guard, O1's seed sub-check, and the alpha.12 pin · [R807.md](docs/roadmap/R807.md) · done (b94f31a8)
 - **R808** · v3 serve keep rule: the http entry misses alpha.7's text, and serve-keep-reasons reads diverged from edge 8078bcf49 on · [R808.md](docs/roadmap/R808.md) · open, filed 2026-11-05 (found by R-803)
+- **R810** · Re-record the 12 gate baselines still at identity scheme 42, after R796 raised it to 43 · [R810.md](docs/roadmap/R810.md) · open, filed 2026-11-05 (coord task R-796c)
 
 ---
 

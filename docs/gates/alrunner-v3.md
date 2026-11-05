@@ -117,8 +117,21 @@ The legs:
     CDO `Test/.alpackages` as a read-only package cache (skipped without it, as D1 is). For the CDO set the leg
     copies the fixture into its scratch dir and adds to the tests app.json the dependencies the CDO Test
     `app.json` declares (read at run time, Document Output left out), then runs the daemon with `--verbose` and
-    requires exactly 17 distinct `dependency:` lines; any other count is `infra-fail`, so the set cannot pass
-    without the 17-app install.
+    requires exactly 17 distinct `dependency:` lines (R807: the pin's `o1.cdoApps` when it has one; alpha.12 lists 18,
+    adding `Application` with 0 files); any other count is `infra-fail`, so the set cannot pass without the full install.
+  - Run seed sub-check (R807; pre-commitment `docs/superpowers/specs/2026-11-05-r807-alpha12-run-seed-precommitment.md`,
+    master 94b3337d), own package set only (the seed does not depend on the package set; a second daemon pair on the CDO
+    set would cost minutes of cold start for no extra proof). A test in `fixtures/sandbox-order-tests` (`Order Seed
+    Reader`, 77055) reads `Random`, `CreateGuid` and a new row's SystemId and reports them in its failure message.
+    Two daemons, two separate requests each. Pinned (LethAL's spawn environment, `ALRUNNER_SEED=1`): identical values.
+    Sensitivity (the variable removed): on a build that reports `seed` the two requests differ (else the check is hollow,
+    `gate-fail`); on a build that reports none they are identical (alpha.7). Read-back: on a seed-reporting build the pinned
+    answers read seed 1, `seedSource` `env`. Any failure is `gate-fail` (`judgeO1Seed`, `r807-run-seed.test.ts`).
+    Read 2026-11-05 at b94f31a8: alpha.7 identical with and without the variable, no `seed` reported; alpha.12 (by path)
+    pinned values identical with seed 1 / `env`, unpinned values differ (`fresh`).
+  - What a constant seed costs (owner-ruled): under seed 1 a test that depends on `Random`, `CreateGuid` or a SystemId
+    reads the same values every time, whichever way it goes. So v3 cannot report such a test as flaky, the way real BC may.
+    The baseline decides it.
   - Figures: every Reader entry reads the defaults (WorkDate = the clock's date, language 1033, rows 0, both marks
     DEFAULT, number sequence ABSENT, isolated storage ABSENT); every Writer test passes. A writer value in a Reader
     entry, or a Writer test that does not pass, is `gate-fail`; a daemon that cannot run is `infra-fail`
