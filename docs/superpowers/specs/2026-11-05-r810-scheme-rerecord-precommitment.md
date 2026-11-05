@@ -66,3 +66,17 @@ commit that records it. `envtool.baseline.json` stays listed: it is host-only (R
 Red tests each way for the rule above: a moved row refused, an unknown pinned key refused, a pinned key reading something else
 refused, no file at `HEAD` refused, a candidate still refused, an unpinned record unchanged, and equal rows written with the new
 scheme. One opus build review, CI on the final head, the full v3 gate on the final head.
+
+## Addendum 1, 2026-11-05: what the build review found
+
+Written before any record run. The rule does not change.
+
+- **The twins' first real check is the record, not the confirm run.** The record's exact compare already holds every row's hash
+  equal, twins included. The confirm run then repeats that under `sameScheme`. On the v3 six, a twin that moved fails at the
+  record, with nothing written.
+- **A future scheme change that really moves keys cannot be recorded on a pinned build.** The rows will differ, so the record
+  refuses. That is the safe direction and no worse than M5, but such a change needs its own design.
+- **`undoTPin` changes `al-runner-v3-pins.ts`, so the next al-runner update re-gates `current` once** (`pinsMovedSince`). The
+  readings digest does not move. It costs one gate run.
+- **The BC six stay on BC 28.4, on `bc1`-`bc3`.** Since 2026-11-05 a worktree's default configs name `bc4`, BC 29. Each BC record
+  and confirm run names its `lethal.config.bcN.json`, and its first line is read before the run counts.
