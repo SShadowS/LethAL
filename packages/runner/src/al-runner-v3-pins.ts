@@ -762,6 +762,16 @@ export const V3_BUILD_PINS: readonly V3BuildPin[] = [
     ...READINGS_8078BCF49,
     o1: { ...O1_8078BCF49, cdoApps: 18 },
   },
+  {
+    // Edge d72d3197d (R-815 pre-commitment, master 7071d5c2): alpha.12's readings, by a masked diff of the two unpinned
+    // gate logs. `current` follows edge (owner, 2026-11-05). The rejudge is the measurement of O1's CDO set and its seed
+    // sub-check, which the unpinned run never reached; any reading off this table is a BLOCK.
+    id: "edge-d72d3197d",
+    version: "al-runner 3.0.0-alpha.13+edge.20261105 (d72d3197d)",
+    binarySha256: "3e19dbec34826e2d057304d9e85859c04e87d69a5846bb738fe9567a00c22be4",
+    ...READINGS_8078BCF49,
+    o1: { ...O1_8078BCF49, cdoApps: 18 },
+  },
 ];
 
 /**

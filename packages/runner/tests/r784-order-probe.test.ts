@@ -189,6 +189,7 @@ describe("R771 addendum 2: a pinned login WorkDate (O1's CDO set on edge-a157b2d
     "alpha.7-2c63a382e",
     "edge-2c63a382e",
     "alpha.12-d4bc8d3a5", // R807
+    "edge-d72d3197d", // R-815
   ];
   const atLogin = (l: O1Request["lines"][number]) =>
     l.name.endsWith(".ReadWorkDate") ? { ...l, message: `WORKDATE=${LOGIN}` } : l;

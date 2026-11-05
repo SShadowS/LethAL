@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**22 of 799 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**23 of 800 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -844,6 +844,7 @@ that ordering is the priority.
 - **R810** · Re-record the 12 gate baselines still at identity scheme 42, after R796 raised it to 43 · [R810.md](docs/roadmap/R810.md) · open, filed 2026-11-05 (coord task R-796c)
 - **R813** · Plan: which al-runner to gate. Track edge, build from main, or keep numbered releases? (the owner's question) · [R813.md](docs/roadmap/R813.md) · closed 2026-11-05 — the owner ruled: `current` always follows edge; users install gated numbered releases…
 - **R815** · A mutant that makes a test codeunit's OnRun fail stops a one-shot session (exit 6 reads as "selected no test") · [R815.md](docs/roadmap/R815.md) · open, filed 2026-11-05 (found by the opus review of R-808); nothing built
+- **R816** · `current` follows edge: pin edge d72d3197d (alpha.13+edge) on alpha.12's readings, and run the daily update from a lane's timer · [R816.md](docs/roadmap/R816.md) · open, pin built 2026-11-05 (coord task R-815); awaiting merge, regate, rejudge and the K run
 
 ---
 
