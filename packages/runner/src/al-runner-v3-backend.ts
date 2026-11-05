@@ -150,7 +150,7 @@ import {
 import { assertManifestObjectsDeclared, readManifestObjectKeys } from "./line-map";
 import { type SpawnFn, absToolPath, defaultSpawn } from "./publisher";
 import { assertResourceSelectorRuntime, installResourceSelector } from "./resource-selector";
-import { TestAppError, symbolPackageId } from "./test-app-publish";
+import { TestAppError, symbolPackageId, testAppBackslashHint } from "./test-app-publish";
 import { LINK_EXCUSED_DIRS, ProjectSymlinkRefusedError, walkFilesSync } from "./walk";
 
 /**
@@ -2534,7 +2534,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         if (err instanceof AlcCompileError) {
           throw new TestAppError(
             "compile-failed",
-            `al-runner-v3: the test app does not compile against this batch, so no test of it can be trusted (R586 §3 step 2): ${err.message}`,
+            `al-runner-v3: the test app does not compile against this batch, so no test of it can be trusted (R586 §3 step 2): ${err.message}${testAppBackslashHint(err.message)}`,
           );
         }
         throw err;

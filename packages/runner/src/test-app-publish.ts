@@ -82,6 +82,19 @@ export interface CompiledTestApp {
   readonly compiledAgainst: { readonly artifactId: string; readonly sha256: string };
 }
 
+/**
+ * R811: why alc refused a test project whose app.json names a path with `\`, or `""`. R422 rewrites
+ * those paths for the TARGET's batch, but a test project compiles where it stands, and LethAL never
+ * changes the user's project. Read from alc's own text, so only that failure gets it.
+ */
+export function testAppBackslashHint(
+  alcMessage: string,
+  platform: string = process.platform,
+): string {
+  if (platform === "win32" || !/error AL(?:1001|0863): [^\n]*\\/.test(alcMessage)) return "";
+  return ' The test project\'s app.json names a path with "\\", which the Linux alc reads as part of the name (LethAL rewrites this for the target, R422, but compiles a test project where it stands). Write "/" there: the Windows alc accepts it too.';
+}
+
 async function readTestManifest(testDir: string) {
   const path = join(testDir, "app.json");
   let parsed: unknown;
@@ -225,7 +238,12 @@ export async function compileTestApp(a: {
         name: `testapp-${manifest.id}`,
       });
     } catch (err) {
-      if (err instanceof AlcCompileError) throw new TestAppError("compile-failed", err.message);
+      if (err instanceof AlcCompileError) {
+        throw new TestAppError(
+          "compile-failed",
+          `${err.message}${testAppBackslashHint(err.message)}`,
+        );
+      }
       throw err;
     }
     return {
