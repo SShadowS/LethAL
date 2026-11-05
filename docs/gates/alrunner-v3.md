@@ -326,7 +326,7 @@ N > 1 must equal N = 1: R766's proof found D1 and the gift card identical at N =
 - The evidence is kept. The gate's stdout and stderr go to `gate.log` beside the receipt, on every exit. Both are
   copied beside the outcome they gave: `failed/<tag>@<commit>/`, `held/<tag>/`, `infra/<tag>.receipt.json` and
   `infra/<tag>.gate.log`, `regate/<commit>.receipt.json` and `regate/<commit>.gate.log`, and on a candidate's pass
-  beside `.gated` in the new build folder (R805; the latest pass of that build), each file when it exists. A failed
+  beside `.gated` in the new build folder (R805; the latest candidate pass of that build: a later regate's evidence is in `regate/`, so read the receipt's `lethalCommit`), each file when it exists. A failed
   copy is logged and never blocks the verdict, `.gated` or the count. The log line carries the
   receipt's `lines`, and leg C's lines carry each non-passing fact's measured value. A `failed/` hit that skips the
   gate is logged too, with the `--regate` hint.
