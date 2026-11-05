@@ -6792,12 +6792,29 @@ function rangeCallOf(n: ALSyntaxNode, item: string): { readonly literal: boolean
  * heuristic, not a proof that no mutant hangs: see the known exclusions in the header.
  */
 function loopExitParts(loop: ALSyntaxNode, ctx: SemanticContext): ALSyntaxNode[] {
+  return cached(ctx, loop, "exitParts", () => loopExitPartsOnce(loop, ctx));
+}
+
+function loopExitPartsOnce(loop: ALSyntaxNode, ctx: SemanticContext): ALSyntaxNode[] {
   const own = loopConditionParts(loop);
   if (conditionIsNameAndCallFree(own, ctx)) {
     const parts = [...own, ...bodyExitGuards(loop)];
     return [...parts, ...indirectFeeds(loop, parts, ctx)];
   }
-  return namesCursorMethod(own, ctx) ? own : [...own, ...bodyExitGuards(loop)];
+  if (namesCursorMethod(own, ctx)) return own;
+  const parts = [...own, ...bodyExitGuards(loop)];
+  // R818 PROTOTYPE (env LETHAL_R818 = A | C | B | BG): hops of feeding assignments for named conditions.
+  // Letters: first A (1 hop) | C (2 hops) | B (fixpoint); then G (guards of feeders), P (member
+  // halves kept apart), Q (member targets match receiver+member pairs), K (no feeds when a fed
+  // part names a cursor method).
+  const full = process.env.LETHAL_R818 ?? "";
+  if (full === "") return parts;
+  const first = full.charAt(0);
+  const flags = full.slice(1);
+  const hops = first === "A" ? 1 : first === "C" ? 2 : Number.POSITIVE_INFINITY;
+  const feeds = indirectFeeds(loop, parts, ctx, hops, flags.includes("G"), flags.includes("Q") ? "Q" : flags.includes("P") ? "P" : "");
+  if (flags.includes("K") && namesCursorMethod(feeds, ctx)) return parts;
+  return [...parts, ...feeds];
 }
 
 /** R480: a method whose name says it steps a cursor or a stream. By NAME, any receiver. */
@@ -6838,13 +6855,31 @@ function indirectFeeds(
   loop: ALSyntaxNode,
   parts: ALSyntaxNode[],
   ctx: SemanticContext,
+  hops = Number.POSITIVE_INFINITY,
+  withGuards = false,
+  precise: "" | "P" | "Q" = "",
 ): ALSyntaxNode[] {
   const body = loop.childForFieldName("body");
   if (body === null) return [];
   const names = new Set<string>();
+  const memberNames = new Set<string>();
+  const pairs = new Set<string>();
   const collect = (n: ALSyntaxNode): void => {
     if (DIRECTIVE_MARKERS.has(n.rawKind) || armOfNode(ctx, n) === "inactive") return;
-    if (isIdentifierLike(n)) names.add(normalizeAlName(n.text));
+    if (precise === "Q" && n.kind === ALNodeKind.field_access) {
+      const o = n.childForFieldName("object");
+      const m = n.childForFieldName("member");
+      if (m !== null && isIdentifierLike(m)) {
+        if (o !== null && isIdentifierLike(o)) {
+          pairs.add(`${normalizeAlName(o.text)}|${normalizeAlName(m.text)}`);
+        } else memberNames.add(normalizeAlName(m.text));
+      }
+    }
+    if (isIdentifierLike(n)) {
+      if (precise !== "" && n.fieldName === "member") {
+        if (precise === "P") memberNames.add(normalizeAlName(n.text));
+      } else names.add(normalizeAlName(n.text));
+    }
     for (const c of n.namedChildren) collect(c);
   };
   for (const p of parts) collect(p);
@@ -6856,19 +6891,34 @@ function indirectFeeds(
   find(body);
   const out: ALSyntaxNode[] = [];
   const used = new Set<ALSyntaxNode>();
-  for (let changed = true; changed; ) {
+  for (let changed = true, round = 0; changed && round < hops; round++) {
     changed = false;
+    // Unlimited hops keep the live set (a forward chain converges in one pass); limited hops
+    // match against the names known when the round began.
+    const live = hops === Number.POSITIVE_INFINITY;
+    const known = live ? names : new Set(names);
+    const knownMembers = live ? memberNames : new Set(memberNames);
     for (const a of assignments) {
       if (used.has(a)) continue;
       const left = a.childForFieldName("left");
       const right = a.childForFieldName("right");
       if (left === null || right === null) continue;
-      const name = left.kind === ALNodeKind.field_access ? left.childForFieldName("member") : left;
-      if (name === null || !isIdentifierLike(name) || !names.has(normalizeAlName(name.text))) {
-        continue;
-      }
+      const isMember = left.kind === ALNodeKind.field_access;
+      const name = isMember ? left.childForFieldName("member") : left;
+      if (name === null || !isIdentifierLike(name)) continue;
+      const norm = normalizeAlName(name.text);
+      if (precise === "Q" && isMember) {
+        const o = left.childForFieldName("object");
+        const key = o !== null && isIdentifierLike(o) ? `${normalizeAlName(o.text)}|${norm}` : "";
+        if (!pairs.has(key) && !knownMembers.has(norm)) continue;
+      } else if (!known.has(norm) && !(isMember && knownMembers.has(norm))) continue;
       used.add(a);
       const fed = [right, ...sideParts(a)];
+      if (withGuards) {
+        for (let p = a.parent; p !== null && !samePos(p, loop); p = p.parent) {
+          fed.push(...guardPartsOf(p));
+        }
+      }
       for (const f of fed) {
         out.push(f);
         collect(f);
