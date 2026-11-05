@@ -1,7 +1,7 @@
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, cp, lstat, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { listPackageEntries, readPackageEntry } from "./app-package";
+import { join, relative, sep } from "node:path";
+import { type AppJsonPathChange, normaliseAppJsonPaths } from "./app-json-paths";
 import { compareAppVersions, confirmedDowngradeRefusal } from "./app-version";
 import type { PublishIdentity } from "./app-version";
 import { AlcCompileError, type ArtifactCompiler } from "./artifact";
@@ -14,7 +14,7 @@ import {
 } from "./deployment-verifier";
 import { describeThrown } from "./describe-error";
 import type { LeaseFence } from "./orchestrator";
-import { readAppIdentity } from "./published-test-app";
+import { readAppIdentity, symbolPackageId } from "./published-test-app";
 import type { AppPublisher } from "./publisher";
 
 /**
@@ -80,19 +80,75 @@ export interface CompiledTestApp {
   readonly version: string;
   /** The installed guarded build it was compiled against. */
   readonly compiledAgainst: { readonly artifactId: string; readonly sha256: string };
+  /** R811: what `stageTestProject` rewrote, for the caller's warning. Absent when nothing was. */
+  readonly pathChanges?: readonly AppJsonPathChange[];
+}
+
+/** R811: R422's rewrite of a test app.json's text; no changes when it does not parse as an object. */
+export function testAppPathRewrite(appJsonText: string): ReturnType<typeof normaliseAppJsonPaths> {
+  let parsed: unknown;
+  try {
+    const noBom = appJsonText.charCodeAt(0) === 0xfeff ? appJsonText.slice(1) : appJsonText;
+    parsed = JSON.parse(noBom);
+  } catch {
+    return { manifest: {}, changes: [] };
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { manifest: {}, changes: [] };
+  }
+  return normaliseAppJsonPaths(parsed as Record<string, unknown>);
 }
 
 /**
- * R811: why alc refused a test project whose app.json names a path with `\`, or `""`. R422 rewrites
- * those paths for the TARGET's batch, but a test project compiles where it stands, and LethAL never
- * changes the user's project. Read from alc's own text, so only that failure gets it.
+ * R811: where alc should compile a test project. With no `\` in app.json's path fields, the test
+ * dir itself (`changes` is empty): today's path, byte for byte. With one, a copy at `copyTo` whose
+ * app.json is R422's rewrite of `appJsonText`, so the user's project is never written. An app.json
+ * that does not parse stays in place, for alc to name. The copy drops only what lies under
+ * `.alpackages` and `.git`, and never an `.al` file: alc compiles those wherever they are, and the
+ * key and proof hash them, so a dropped one would be a byte they name and alc never saw. `cp` keeps
+ * modes, so the copy is made writable: a read-only project must still compile, and go away after.
  */
-export function testAppBackslashHint(
-  alcMessage: string,
-  platform: string = process.platform,
-): string {
-  if (platform === "win32" || !/error AL(?:1001|0863): [^\n]*\\/.test(alcMessage)) return "";
-  return ' The test project\'s app.json names a path with "\\", which the Linux alc reads as part of the name (LethAL rewrites this for the target, R422, but compiles a test project where it stands). Write "/" there: the Windows alc accepts it too.';
+export async function stageTestProject(
+  testDir: string,
+  appJsonText: string,
+  copyTo: string,
+): Promise<{ readonly projectDir: string; readonly changes: readonly AppJsonPathChange[] }> {
+  const { manifest, changes } = testAppPathRewrite(appJsonText);
+  if (changes.length === 0) return { projectDir: testDir, changes };
+  const dropped = new Set([".alpackages", ".git"]);
+  const modes: { readonly path: string; readonly mode: number }[] = [];
+  try {
+    await cp(testDir, copyTo, {
+      recursive: true,
+      filter: async (src, dest) => {
+        const st = await lstat(src);
+        const keep =
+          st.isDirectory() ||
+          src.toLowerCase().endsWith(".al") ||
+          !relative(testDir, src)
+            .split(sep)
+            .some((s) => dropped.has(s));
+        if (keep && !st.isSymbolicLink()) {
+          modes.push({ path: dest, mode: st.mode | (st.isDirectory() ? 0o700 : 0o600) });
+        }
+        return keep;
+      },
+    });
+    for (const { path, mode } of modes) await chmod(path, mode); // parents first, as cp walks
+    await writeFile(join(copyTo, "app.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  } catch (err) {
+    throw new TestAppError(
+      "compile-failed",
+      `could not copy ${testDir} to rewrite its app.json paths (R811): ${describeThrown(err)}`,
+    );
+  }
+  return { projectDir: copyTo, changes };
+}
+
+/** R811: the warning for the rewrite `stageTestProject` made, once per session. */
+export function testAppPathWarning(changes: readonly AppJsonPathChange[]): string {
+  const parts = changes.map((c) => `${c.field} "${c.from}" -> "${c.to}"`).join("; ");
+  return `the test project's app.json names a path with "\\": ${parts}. LethAL compiled a copy with "/", because the Linux alc reads "\\" as part of the name and fails with AL1001 or AL0863. Your project's own app.json was not changed; write "/" there to remove this warning.`;
 }
 
 async function readTestManifest(testDir: string) {
@@ -119,55 +175,7 @@ async function readTestManifest(testDir: string) {
   return { id, name, publisher, version };
 }
 
-const READY_TO_RUN_MANIFEST = "readytorunappmanifest.json";
-
-/**
- * R268: the app id of a symbol package. A plain package carries `NavxManifest.xml` at its root. A
- * Ready-to-Run wrapper, which Microsoft ships for some builds and alc accepts, does not: it holds a
- * `readytorunappmanifest.json` naming `EmbeddedAppId` and the real app as ONE embedded `.app`. Only
- * that exact shape is unwrapped, and the embedded app's own manifest must agree with
- * `EmbeddedAppId`. Anything else throws, never a guess: an unidentified package could be the target.
- */
-export function symbolPackageId(bytes: Buffer): string {
-  const r2r = readPackageEntry(bytes, READY_TO_RUN_MANIFEST);
-  if (r2r === null || readPackageEntry(bytes, "NavxManifest.xml") !== null) {
-    return readAppIdentity(bytes).id;
-  }
-  let embeddedId: unknown;
-  try {
-    const parsed = JSON.parse(r2r.toString("utf8").replace(/^\uFEFF/, "")) as {
-      EmbeddedAppId?: unknown;
-    } | null;
-    embeddedId = parsed?.EmbeddedAppId;
-  } catch (err) {
-    throw new Error(`Ready-to-Run ${READY_TO_RUN_MANIFEST} is not JSON: ${describeThrown(err)}`);
-  }
-  if (typeof embeddedId !== "string") {
-    throw new Error(`Ready-to-Run ${READY_TO_RUN_MANIFEST} carries no string EmbeddedAppId`);
-  }
-  const inner = listPackageEntries(bytes).filter((e) => e.toLowerCase().endsWith(".app"));
-  const [only] = inner;
-  if (inner.length !== 1 || only === undefined) {
-    throw new Error(
-      `Ready-to-Run package must hold exactly one embedded .app, found ${inner.length}`,
-    );
-  }
-  const innerBytes = readPackageEntry(bytes, only);
-  if (innerBytes === null) throw new Error(`Ready-to-Run package lost its entry ${only}`);
-  let id: string;
-  try {
-    id = readAppIdentity(innerBytes).id;
-  } catch (err) {
-    // Named by entry, so a refusal from the inner app is distinguishable from the outer one's.
-    throw new Error(`Ready-to-Run embedded ${only}: ${describeThrown(err)}`);
-  }
-  if (id.toLowerCase() !== embeddedId.toLowerCase()) {
-    throw new Error(
-      `Ready-to-Run embedded app ${only} has Id ${id}, which does not match EmbeddedAppId ${embeddedId}`,
-    );
-  }
-  return id;
-}
+export { symbolPackageId } from "./published-test-app";
 
 function identityOf(bytes: Buffer, what: string): string {
   try {
@@ -199,6 +207,7 @@ export async function compileTestApp(a: {
   const controlId = identityOf(controlBytes, a.controlSymbolPath);
 
   const scratch = await mkdtemp(join(tmpdir(), "lethal-testapp-symbols-"));
+  const sourceCopy = await mkdtemp(join(tmpdir(), "lethal-testapp-source-"));
   try {
     const alpackages = join(a.testDir, ".alpackages");
     let names: string[] = [];
@@ -230,20 +239,20 @@ export async function compileTestApp(a: {
     await writeFile(join(scratch, `lethal-bound-${a.target.appId}.app`), a.target.appBytes);
     await writeFile(join(scratch, `lethal-control-${controlId}.app`), controlBytes);
 
+    const { projectDir, changes } = await stageTestProject(
+      a.testDir,
+      await readFile(join(a.testDir, "app.json"), "utf8"),
+      join(sourceCopy, "project"),
+    );
     let out: { readonly appPath: string; readonly sha256: string };
     try {
       out = await a.compiler.compileProject({
-        projectDir: a.testDir,
+        projectDir,
         packageCachePath: scratch,
         name: `testapp-${manifest.id}`,
       });
     } catch (err) {
-      if (err instanceof AlcCompileError) {
-        throw new TestAppError(
-          "compile-failed",
-          `${err.message}${testAppBackslashHint(err.message)}`,
-        );
-      }
+      if (err instanceof AlcCompileError) throw new TestAppError("compile-failed", err.message);
       throw err;
     }
     return {
@@ -254,9 +263,11 @@ export async function compileTestApp(a: {
       publisher: manifest.publisher,
       version: manifest.version,
       compiledAgainst: { artifactId: a.target.artifactId, sha256: a.target.sha256 },
+      ...(changes.length > 0 ? { pathChanges: changes } : {}),
     };
   } finally {
     await rm(scratch, { recursive: true, force: true }).catch(() => {});
+    await rm(sourceCopy, { recursive: true, force: true }).catch(() => {});
   }
 }
 

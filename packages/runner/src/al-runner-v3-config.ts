@@ -18,7 +18,7 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { AL_RUNNER_V3_DEFAULT_PATH } from "./al-runner-v3-pin";
-import { readAppIdentity } from "./published-test-app";
+import { symbolPackageIdentity } from "./published-test-app";
 
 export interface AlRunnerV3ConfigSection {
   readonly path: string;
@@ -129,13 +129,18 @@ export async function assertBcVersionMatchesPackages(
   bcVersion: string,
 ): Promise<void> {
   let found = 0;
+  const unread: string[] = [];
   for (const name of (await readdir(packagesDir)).sort()) {
     if (!name.toLowerCase().endsWith(".app")) continue;
-    let id: ReturnType<typeof readAppIdentity>;
+    let id: ReturnType<typeof symbolPackageIdentity>;
     try {
-      id = readAppIdentity(await readFile(join(packagesDir, name)));
-    } catch {
-      continue; // not a manifest package (a Ready-to-Run wrapper or the platform): not this check
+      // R820: a BC 29 dev endpoint serves System Application as a Ready-to-Run wrapper.
+      id = symbolPackageIdentity(await readFile(join(packagesDir, name)));
+    } catch (err) {
+      // Not a package this check can read (the platform has its own shape). A broken wrapper is
+      // named below, so the refusal does not send anyone looking for a missing file.
+      if (/Ready-to-Run/.test(String(err))) unread.push(`${name}: ${String(err)}`);
+      continue;
     }
     if (id.publisher !== "Microsoft" || id.name !== "System Application") continue;
     found += 1;
@@ -147,7 +152,7 @@ export async function assertBcVersionMatchesPackages(
   }
   if (found === 0) {
     throw new Error(
-      `al-runner-v3-system-application-not-found: no readable Microsoft System Application .app in ${packagesDir}, so "alRunnerV3.bcVersion" ${bcVersion} cannot be checked against it (R586 M8).`,
+      `al-runner-v3-system-application-not-found: no readable Microsoft System Application .app in ${packagesDir}, so "alRunnerV3.bcVersion" ${bcVersion} cannot be checked against it (R586 M8).${unread.length > 0 ? ` Unreadable: ${unread.join("; ")}` : ""}`,
     );
   }
 }

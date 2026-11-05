@@ -1,4 +1,5 @@
 import { listPackageEntries, readPackageEntry } from "./app-package";
+import { describeThrown } from "./describe-error";
 import { armFilteredTestsInAlSource, testsInAlSource } from "./discovery";
 import { STALE_TEST_APP_REMEDY } from "./stale-test-app";
 
@@ -156,6 +157,66 @@ export function readAppIdentity(pkg: Buffer): {
     publisher: attr("Publisher"),
     version: attr("Version"),
   };
+}
+
+const READY_TO_RUN_MANIFEST = "readytorunappmanifest.json";
+
+/**
+ * R268: a symbol package's real app. A plain package carries `NavxManifest.xml` at its root and is
+ * returned as it is. A Ready-to-Run wrapper, which Microsoft ships for some builds and alc accepts
+ * (R820: a BC 29 dev endpoint serves System Application, Base Application and Business Foundation
+ * this way), does not: it holds a `readytorunappmanifest.json` naming `EmbeddedAppId` and the real
+ * app as ONE embedded `.app`. Only that exact shape is unwrapped, and the embedded app's own manifest
+ * must agree with `EmbeddedAppId`. Anything else throws, never a guess: an unidentified package could
+ * be the target.
+ */
+export function unwrapSymbolPackage(bytes: Buffer): Buffer {
+  const r2r = readPackageEntry(bytes, READY_TO_RUN_MANIFEST);
+  if (r2r === null || readPackageEntry(bytes, MANIFEST_ENTRY) !== null) return bytes;
+  let embeddedId: unknown;
+  try {
+    const parsed = JSON.parse(r2r.toString("utf8").replace(/^\u{FEFF}/u, "")) as {
+      EmbeddedAppId?: unknown;
+    } | null;
+    embeddedId = parsed?.EmbeddedAppId;
+  } catch (err) {
+    throw new Error(`Ready-to-Run ${READY_TO_RUN_MANIFEST} is not JSON: ${describeThrown(err)}`);
+  }
+  if (typeof embeddedId !== "string") {
+    throw new Error(`Ready-to-Run ${READY_TO_RUN_MANIFEST} carries no string EmbeddedAppId`);
+  }
+  const inner = listPackageEntries(bytes).filter((e) => e.toLowerCase().endsWith(".app"));
+  const [only] = inner;
+  if (inner.length !== 1 || only === undefined) {
+    throw new Error(
+      `Ready-to-Run package must hold exactly one embedded .app, found ${inner.length}`,
+    );
+  }
+  const innerBytes = readPackageEntry(bytes, only);
+  if (innerBytes === null) throw new Error(`Ready-to-Run package lost its entry ${only}`);
+  let id: string;
+  try {
+    id = readAppIdentity(innerBytes).id;
+  } catch (err) {
+    // Named by entry, so a refusal from the inner app is distinguishable from the outer one's.
+    throw new Error(`Ready-to-Run embedded ${only}: ${describeThrown(err)}`);
+  }
+  if (id.toLowerCase() !== embeddedId.toLowerCase()) {
+    throw new Error(
+      `Ready-to-Run embedded app ${only} has Id ${id}, which does not match EmbeddedAppId ${embeddedId}`,
+    );
+  }
+  return innerBytes;
+}
+
+/** A symbol package's identity, through a Ready-to-Run wrapper when it is one. */
+export function symbolPackageIdentity(bytes: Buffer): ReturnType<typeof readAppIdentity> {
+  return readAppIdentity(unwrapSymbolPackage(bytes));
+}
+
+/** R268: the app id of a symbol package. */
+export function symbolPackageId(bytes: Buffer): string {
+  return symbolPackageIdentity(bytes).id;
 }
 
 export function comparePublishedTestApp(
