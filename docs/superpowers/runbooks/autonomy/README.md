@@ -185,8 +185,8 @@ containers assigned to this project can be leased. A missing `allocation.json` t
   `docs/measurements/2026-09-27-nst-wedge-incidents.md`); an unrecoverable container goes to the
   owner.
 - **The BC on Linux servers (R589).** BC 28.4 on server1 (192.168.2.157; docker1, 192.168.2.77, from
-  2026-10-26 to 2026-11-05, R783 and R806; the host comes from `packages/runner/src/bc-host.ts`). No gate is
-  proven there under today's fixtures: see `docs/gates/servers.md`.
+  2026-10-26 to 2026-11-05, R783 and R806; the host comes from `packages/runner/src/bc-host.ts`). Every gate is
+  proven there (R-813): see `docs/gates/servers.md`.
   W1 localization, company `CRONUS International Ltd.`, tenant `default`, instance `BC`,
   Basic authentication.
 
@@ -217,8 +217,8 @@ containers assigned to this project can be leased. A missing `allocation.json` t
     admit bc2: the servers can differ in app builds, in what else is installed (bc3 carries the
     Continia stack) and in the control build, and a proof holds only for the control build it ran
     under. Admitting a new (gate, server) pair is one ordinary run of the gate there.
-    **History, not proof for today (R806): proofs are per host, and no pair is proven on server1
-    under today's fixtures; `docs/gates/servers.md` is the record.**
+    **History: proofs are per host. For today's, on server1 (R-813), `docs/gates/servers.md` is the
+    record.**
     **As of 2026-10-21 (R-604), every BC gate is proven on every bc server under the control
     build master requires**: bcdev, bcdev-wrapped, bcdev-names, tables, verify, verify-scale,
     stale-publish, testapp, lease, chunked, hang, harden and agreement, on bc1, bc2 and bc3.

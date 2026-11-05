@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**22 of 801 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**22 of 802 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -838,7 +838,7 @@ that ordering is the priority.
 - **R798** · v3: where R790's extra 2-3 s in D1's deploy goes; ruling: speculative baseline is opt-in, no nice or reorder · [R798.md](docs/roadmap/R798.md) · done (b04d6427)
 - **R805** · The update gate keeps a PASS's gate.log beside .gated, so a switch can be audited from its own run · [R805.md](docs/roadmap/R805.md) · done (d73f6974)
 - **R803** · After the talk: relax LethAL's own v3 refusals that only guarded upstream defects edge 8078bcf49 fixed (#5788 duplicate key, commit under isolation, and the rest leg C reads gone) · [R803.md](docs/roadmap/R803.md) · closed 2026-11-05 — inventory: no defect guard is provably dead, none retired, no figure moves; text…
-- **R806** · The BC on Linux host moves back to server1: the default, and proving the gates there · [R806.md](docs/roadmap/R806.md) · open, filed 2026-11-05 (coord task R-806)
+- **R806** · The BC on Linux host moves back to server1: the default, and proving the gates there · [R806.md](docs/roadmap/R806.md) · closed 2026-11-05 — the default moved to server1 (R-806), and every gate is proven there on bc1-bc3 (R-813)
 - **R807** · One run seed (ALRUNNER_SEED=1) for every al-runner process, a read-back guard, O1's seed sub-check, and the alpha.12 pin · [R807.md](docs/roadmap/R807.md) · done (b94f31a8)
 - **R808** · v3 serve keep rule: the http entry misses alpha.7's text, and serve-keep-reasons reads diverged from edge 8078bcf49 on · [R808.md](docs/roadmap/R808.md) · done (ac4c2be8)
 - **R810** · Re-record the 12 gate baselines still at identity scheme 42, after R796 raised it to 43 · [R810.md](docs/roadmap/R810.md) · open, filed 2026-11-05 (coord task R-796c)
@@ -846,6 +846,7 @@ that ordering is the priority.
 - **R815** · A mutant that makes a test codeunit's OnRun fail stops a one-shot session (exit 6 reads as "selected no test") · [R815.md](docs/roadmap/R815.md) · done (369451d1)
 - **R816** · `current` follows edge: pin edge d72d3197d (alpha.13+edge) on alpha.12's readings, and run the daily update from a lane's timer · [R816.md](docs/roadmap/R816.md) · done (c5264ee7)
 - **R822** · One contended moment in leg C costs a whole v3 gate: retry `timeout-is-cpu` before reading it as `infra-fail` · [R822.md](docs/roadmap/R822.md) · open, filed 2026-11-05 (coord task R-819); nothing built
+- **R823** · scripts/r658-hang-gate.sh hard-codes lane bugs and the r658 worktree, so another lane cannot use it · [R823.md](docs/roadmap/R823.md) · open, filed 2026-11-05 (found by R-813)
 
 ---
 
