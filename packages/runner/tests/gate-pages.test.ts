@@ -364,7 +364,7 @@ describe("itest/gate-expected.ts (R-592)", () => {
 const LAGGING_SCHEME: Readonly<Record<string, string>> = {
   // A bare array (no scheme at all): the env tool is host-only.
   "envtool.baseline.json": "R683",
-  // R796 raised the scheme to 43: fixtures, CDO and DO are identical under tree-sitter-al 4.5.0, so
+  // R796 raised the scheme to 43 and R818 to 44 (the re-record targets 44): fixtures, CDO and DO are identical under tree-sitter-al 4.5.0, so
   // no verdict moves; R810 re-records each file below by R332's procedure.
   "al-runner-v3.layout.baseline.json": "R810",
   "al-runner-v3.multiobject.baseline.json": "R810",

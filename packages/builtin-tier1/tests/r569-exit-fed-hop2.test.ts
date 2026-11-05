@@ -184,6 +184,26 @@ describe("R569 T1: a hop-2 call feeding the hop-1 return that a same-object help
   });
 });
 
+// R818: the open-item path asks `loopExitParts`, so a report loop's feeds and the guards above a
+// followed feed are seen: `Go` is the condition, `Go := false` its feed, and the guard above that
+// feed (`Line = 0`) now reads `Line`, fed by the hop-1 call.
+const GUARDED = report(
+  `                while Go do begin
+                    Line := Mgt.NextRecord(1);
+                    if Line = 0 then
+                        Go := false;
+                end;`,
+  "",
+).replace("Lines: Integer;", "Lines: Integer; Go: Boolean; Line: Integer;");
+describe("R818: an open item's loop feeds reach the hop-2 walk through loopExitParts", () => {
+  // Red: make `loopExitParts` return the condition and body guards only (no `indirectFeeds` call),
+  // or drop its `withGuards` argument.
+  it("NextDate's step is refused when only a guard above a feed reads the hop-1 value", () => {
+    const files = { "r.al": GUARDED, "m.al": MGT, "p.al": PERIOD, "l.al": LOG, "f.al": FMT };
+    expect(emits(true, files, "p.al", "Moved := Steps - 1")).toBe(false);
+  });
+});
+
 describe("R569 T2: a hop-2 call in the hop-1 callee that feeds nothing", () => {
   // Red: follow every hop-2 call of a hop-1 callee.
   it("Log's write stays emitted", () => {

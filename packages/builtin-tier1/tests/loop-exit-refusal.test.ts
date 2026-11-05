@@ -13,6 +13,7 @@ import { flipBooleanLiteral } from "../src/flip-boolean-literal";
 import { removeAssignment } from "../src/remove-assignment";
 import { shiftInteger } from "../src/shift-integer";
 import { swapAdditive } from "../src/swap-additive";
+import { swapCallArguments } from "../src/swap-call-arguments";
 
 /**
  * R196 and R239: a value operator REFUSES a site that governs a loop's exit. No live gate can prove
@@ -709,17 +710,20 @@ end; }`;
     ]);
   });
 
-  it("shape 2 boundary (B1): a name-reading condition gets guards but no feeds (revert: close feeds for every loop)", () => {
+  // R818 ruling INVERTS R480's B1: a name-reading condition that names no cursor method gets feeds
+  // too, by name and to a fixpoint. A false negative is a hang that ends a run; an over-refusal is
+  // one lost mutant. Here `I += 1` feeds `Done`, which the guard reads: refused.
+  it("shape 2 (R818, was B1): a name-reading condition gets feeds as well as guards (revert: feeds only for a name-free condition)", () => {
     for (const head of ["while Go do begin", "while Ready() do begin"]) {
       const src = [
         `        ${head}`,
-        "            I += 1;", // 8 claimed: it only feeds Done
+        "            I += 1;", // 8 refused: it feeds Done
         "            Done := I >= 3;", // 9 refused through shape 1 / 3n
         "            Total += 1;", // 10 claimed
         "            if Done then exit;",
         "        end;",
       ];
-      expect(claims(removeAssignment, src), head).toEqual(["8|I += 1", "10|Total += 1"]);
+      expect(claims(removeAssignment, src), head).toEqual(["10|Total += 1"]);
     }
   });
 
@@ -893,6 +897,262 @@ end; }`;
       "        end;",
     ];
     expect(claims(removeAssignment, src)).toEqual(["8|J := 0", "12|Total += 1"]);
+  });
+});
+
+/**
+ * R818 (GitHub #50): a loop whose condition READS a name used to get body-exit guards but no feeds,
+ * so `while Pos > 0 do begin Text := Text.Substring(Pos + 2); Pos := Text.IndexOf('{{'); end` left
+ * `Text :=` a mutant, and removing it is a real hang. Now the feeds of the condition, the guards and
+ * the guards above each followed feed are parts too, by name, to a fixpoint. A cursor-method
+ * condition keeps its R480 exclusion. Synthetic names only; each refusal has a control in the same
+ * loop that must stay claimed.
+ */
+describe("R818: a name-reading loop condition gets feeds too", () => {
+  const V =
+    "Text: Text; Pos: Integer; Result: Text; A: Integer; B: Integer; Done: Boolean; Go: Boolean; Mark: Text; Line: Text; Step: Integer; Total: Integer; Q: Integer; Amount: Integer; Rec: Record Customer; R: Record Customer; C: Record Customer;";
+  const claims = (
+    op: MutationOperator,
+    lines: string[],
+    symbols?: string[] | "undecided",
+    vars = V,
+  ) => claimedSites(op, unit(lines.join("\n"), vars), symbols);
+  /** Does `op` refuse (claimable shape, hang-capable) the node whose text is `text`? */
+  const refuses = (op: MutationOperator, lines: string[], text: string): boolean => {
+    const src = unit(lines.join("\n"), V);
+    const root = wrapRoot(parseAL(src));
+    const ctx = buildSemanticContext([{ path: "fixture.al", root }]);
+    let out: boolean | undefined;
+    visit(root, (n: ALSyntaxNode) => {
+      if (out === undefined && n.text === text) out = op.refusesHangCapable?.(n, ctx);
+    });
+    expect(out, `no node ${text}`).not.toBeUndefined();
+    return out === true;
+  };
+
+  const ISSUE = [
+    "        Pos := Text.IndexOf('{{');", // 7
+    "        while Pos > 0 do begin", // 8
+    "            Result += Text.Substring(1, Pos - 1);", // 9 nothing reads Result
+    "            Text := Text.Substring(Pos + 2);", // 10 refused: the step reads Text
+    "            Pos := Text.IndexOf('{{');", // 11 refused: the condition
+    "            Total := Total + 1;", // 12 control
+    "        end;",
+  ];
+
+  it("a: the issue's shape: `Text :=` is refused by remove-assignment and by refusesHangCapable (revert: drop the feeds call)", () => {
+    expect(claims(removeAssignment, ISSUE).map((s) => s.split("|")[0])).toEqual(["7", "9", "12"]);
+    expect(refuses(removeAssignment, ISSUE, "Text := Text.Substring(Pos + 2)")).toBe(true);
+    expect(refuses(removeAssignment, ISSUE, "Total := Total + 1")).toBe(false);
+  });
+
+  it("b: two hops: `A := B + 1; Pos := A` refuses `B :=` too (revert: follow one hop)", () => {
+    const src = [
+      "        while Pos > 0 do begin", // 7
+      "            B := B - 1;", // 8 refused
+      "            A := B + 1;", // 9 refused
+      "            Pos := A;", // 10 refused
+      "            Total := Total + 1;", // 11 control
+      "        end;",
+    ];
+    expect(claims(removeAssignment, src)).toEqual(["11|Total := Total + 1"]);
+  });
+
+  const FLAG = [
+    "        while not Done do begin", // 7
+    "            Line := Text.Substring(1, 1);", // 8 refused: the guard reads Line
+    "            if Line = Mark then",
+    "                Done := true;",
+    "            Text := Text.Substring(2);", // 11 refused: feeds Line
+    "            Total := Total + 1;", // 12 control
+    "        end;",
+  ];
+  it("c: a flag set under a guard: the guard's names and their feeds are refused (revert: drop `withGuards`)", () => {
+    expect(claims(removeAssignment, FLAG).map((s) => s.split("|")[0])).toEqual(["12"]);
+    const kase = [
+      "        while not Done do begin",
+      "            Line := Text.Substring(1, 1);",
+      "            case A of",
+      "                1:",
+      "                    Done := true;",
+      "            end;",
+      "            A := A + 1;", // 13 refused: feeds the case selector
+      "            Total := Total + 1;", // 14 control
+      "        end;",
+    ];
+    expect(claims(removeAssignment, kase).map((s) => s.split("|")[0])).toEqual(["8", "14"]);
+  });
+
+  it("d: control: a write no condition, guard or feed reads stays a mutant", () => {
+    const src = [
+      "        while Pos > 0 do begin",
+      "            Pos := Pos - 1;", // refused
+      "            Total := Total + 1;", // claimed
+      "        end;",
+    ];
+    expect(claims(removeAssignment, src)).toEqual(["9|Total := Total + 1"]);
+  });
+
+  it("e: a cursor-method condition gets no feeds (pinned as before)", () => {
+    const src = [
+      "        while C.Next() <> Pos do begin",
+      "            Pos := Step;", // 8 refused: the condition reads Pos
+      "            Step := Step + 1;", // 9 claimed: it only feeds Pos, and a cursor condition gets no feeds
+      "            Total := Total + 1;", // 10 claimed
+      "        end;",
+    ];
+    expect(claims(removeAssignment, src).map((s) => s.split("|")[0])).toEqual(["9", "10"]);
+  });
+
+  it("f: an implicit record: `Rec.Amount` read, a bare `Step` feeds `Amount` (revert: drop the feeds call)", () => {
+    const src = [
+      "        while Rec.Amount < 10 do begin",
+      "            Amount := Step;", // claimed: the R294 rule keys by declaration, `Amount` is not `Rec.Amount`
+      "            Step := Step + 1;", // 9 refused: feeds Amount
+      "            Total := Total + 1;", // control
+      "        end;",
+    ];
+    expect(claims(removeAssignment, src)).toEqual(["8|Amount := Step", "10|Total := Total + 1"]);
+  });
+  it("f: the same under `with R do`", () => {
+    const src = [
+      "        while R.Amount < 10 do",
+      "            with R do begin",
+      "                Amount := Step;",
+      "                Step := Step + 1;", // refused: feeds Amount
+      "                Total := Total + 1;", // control
+      "            end;",
+    ];
+    // `Amount :=` under `with R` is refused by name already (R-458); `Step :=` is the new refusal.
+    expect(claims(removeAssignment, src).map((s) => s.split("|")[1])).toEqual([
+      "Total := Total + 1",
+    ]);
+  });
+
+  // g: one operator each, a site in the feed chain and a control outside it.
+  it("g: flip-boolean-literal: a literal in a feed is refused", () => {
+    const src = [
+      "        while Go do begin",
+      "            Done := Q;", // 8 feed hop 1: Done is read by the guard
+      "            Q := Ready(true);", // 9 feed hop 2: refused
+      "            Total := Total + Delta(true);", // 10 control
+      "            if Done then exit;",
+      "        end;",
+    ];
+    expect(claims(flipBooleanLiteral, src)).toEqual(["10|true"]);
+    expect(refuses(flipBooleanLiteral, src, "true")).toBe(true);
+  });
+  it("g: shift-integer: an integer in a feed is refused", () => {
+    const src = [
+      "        while Go do begin",
+      "            Done := Q > 0;", // 8 feed hop 1
+      "            Q := 3;", // 9 feed hop 2: refused
+      "            Total := 7;", // 10 control
+      "            if Done then exit;",
+      "        end;",
+    ];
+    expect(claims(shiftInteger, src)).toEqual(["10|7"]);
+  });
+  it("g: swap-additive: an addition in a feed is refused", () => {
+    const src = [
+      "        while Go do begin",
+      "            Done := Q > 3;", // 8 feed hop 1
+      "            Q := A + 1;", // 9 feed hop 2: refused
+      "            Total := Total + 1;", // 10 control
+      "            if Done then exit;",
+      "        end;",
+    ];
+    expect(claims(swapAdditive, src)).toEqual(["10|Total + 1"]);
+  });
+  it("g: swap-call-arguments: a call in a feed is refused", () => {
+    const body = (lines: string[]) =>
+      [
+        "codeunit 50000 P",
+        "{",
+        "    procedure Go2()",
+        "    var",
+        "        Done: Boolean; Go: Boolean; X: Integer; Y: Integer; P: Integer; Q: Integer;",
+        "    begin",
+        ...lines,
+        "    end;",
+        "",
+        "    procedure Cmp(L: Integer; M: Integer): Boolean",
+        "    begin",
+        "    end;",
+        "}",
+      ].join("\n");
+    const src = body([
+      "        while Go do begin", // 7
+      "            Done := Cmp(X, Y);", // 8 refused: Done feeds the guard
+      "            Go := Cmp(P, Q);", // 9 refused: the condition
+      "            if Done then exit;",
+      "        end;",
+      "        Done := Cmp(P, Q);", // 12 control, outside any loop
+    ]);
+    expect(claimedSites(swapCallArguments, src).map((s) => s.split("|")[0])).toEqual(["12"]);
+  });
+
+  // j: no test for the memo. Tried an `armOf` call count over 10 vs 40 sites in one loop: it stays
+  // linear with the memo removed, so it cannot see the memo (the 88 s case was R572's walk).
+
+  // h: `#if` around a feed with a prefix and a tail.
+  it("h: a feed with an `#if` prefix and tail: active and undecided are followed, inactive adds nothing", () => {
+    const src = [
+      "        while Go do begin", // 7
+      "            Done := false", // 8
+      "#if LETHALX",
+      "                or (A >= 3)",
+      "#endif",
+      "            ;",
+      "            A := A + B;", // 13
+      "            Total := Total + 1;", // 14
+      "            if Done then exit;",
+      "        end;",
+    ];
+    // `A := A + B` is a feed only when the `#if` tail (which reads A) is seen.
+    const lines = (b: string[] | "undecided") =>
+      claims(removeAssignment, src, b).map((s) => s.split("|")[0]);
+    expect(lines(["LETHALX"])).toEqual(["14"]);
+    expect(lines("undecided")).toEqual(["14"]);
+    expect(lines([])).toEqual(["13", "14"]);
+  });
+  it("h: a feed with an `#if` PREFIX: same", () => {
+    const src = [
+      "        while Go do begin", // 7
+      "            Done :=",
+      "#if LETHALX",
+      "                (A >= 3) or",
+      "#endif",
+      "                false;", // 11
+      "            A := A + B;", // 12
+      "            Total := Total + 1;", // 13
+      "            if Done then exit;",
+      "        end;",
+    ];
+    const lines = (b: string[] | "undecided") =>
+      claims(removeAssignment, src, b).map((s) => s.split("|")[0]);
+    expect(lines(["LETHALX"])).toEqual(["14"]);
+    expect(lines("undecided")).toEqual(["14"]);
+    expect(lines([])).toEqual(["13", "14"]);
+  });
+  it("h: a guard in an INACTIVE arm adds nothing; active or undecided, it is followed", () => {
+    const src = [
+      "        while Go do begin", // 7
+      "            Line := Text.Substring(1, 1);", // 8
+      "#if LETHALX",
+      "            if Line = Mark then",
+      "                Done := true;",
+      "#endif",
+      "            Done := Done;",
+      "            Total := Total + 1;", // 14
+      "            if Done then exit;",
+      "        end;",
+    ];
+    const lines = (b: string[] | "undecided") =>
+      claims(removeAssignment, src, b).map((s) => s.split("|")[0]);
+    expect(lines(["LETHALX"])).toEqual(["14"]);
+    expect(lines("undecided")).toEqual(["14"]);
+    expect(lines([])).toContain("8");
   });
 });
 
