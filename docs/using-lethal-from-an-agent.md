@@ -138,7 +138,7 @@ has the complete set.
 |---|---|
 | `--project` | `run`, `init`, `clear-ceiling`, `force-reset-lease`, `doctor`, `explain`, `export`, `campaign` |
 | `--tests` | `run`, `doctor`, `verify` |
-| `--config` | `run`, `clear-ceiling`, `force-reset-lease`, `doctor`, `verify` |
+| `--config` | `run`, `clear-quarantine`, `clear-ceiling`, `force-reset-lease`, `doctor`, `verify` |
 | `--db` | `run`, `clear-ceiling`, `verify` |
 | `--out` | `run`, `init`, `export` |
 | `--progress-out` | `run` |

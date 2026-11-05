@@ -20,6 +20,7 @@ import { BcDevMcpBackend } from "../src/bcdev-backend";
 import type { BcDevConfigSection, LethalConfigFile, RunCliConfig } from "../src/cli";
 import { runFromCli } from "../src/cli";
 import { NOTHING_SCORED_EXIT_CODE, QUARANTINED_EXIT_CODE, exitCodeForReport } from "../src/cli";
+import { clearQuarantineFromCli } from "../src/cli";
 import { loadDryRunConfig, printDryRun, restoreNotice } from "../src/cli";
 import {
   DRY_RUN_REFUSED,
@@ -61,7 +62,7 @@ import {
 } from "../src/harness";
 import { InstalledBundleError, bundleOfParts, openInstalledBundle } from "../src/installed-bundle";
 import { LeaseClient, LeaseUnavailableError } from "../src/lease";
-import { generateMutationSet } from "../src/orchestrator";
+import { defaultQuarantineDir, generateMutationSet } from "../src/orchestrator";
 import { QuarantineStore } from "../src/quarantine-store";
 import { quarantineResourceKey } from "../src/resource-key";
 import { ResultsStore } from "../src/store";
@@ -932,16 +933,24 @@ describe("parseCliConfig — clear-quarantine subcommand (Task 13)", () => {
     });
   });
 
-  test("missing --server throws a clear error", () => {
+  test("half an identity throws, with or without --config", () => {
     expect(() => parseCliConfig(["clear-quarantine", "--instance", "BC"])).toThrow(
-      "missing required --server",
+      "must be given together",
     );
+    expect(() => parseCliConfig(["clear-quarantine", "--server", "http://Cronus281"])).toThrow(
+      "must be given together",
+    );
+    expect(() =>
+      parseCliConfig(["clear-quarantine", "--server", "http://x", "--config", "c.json"]),
+    ).toThrow("must be given together");
   });
 
-  test("missing --instance throws a clear error", () => {
-    expect(() => parseCliConfig(["clear-quarantine", "--server", "http://Cronus281"])).toThrow(
-      "missing required --instance",
-    );
+  test("issue #29: --config alone is accepted; neither --config nor a pair throws", () => {
+    expect(parseCliConfig(["clear-quarantine", "--config", "c.json"])).toEqual({
+      mode: "clear-quarantine",
+      configPath: "c.json",
+    });
+    expect(() => parseCliConfig(["clear-quarantine"])).toThrow("name the tier with --server");
   });
 });
 
@@ -1161,6 +1170,94 @@ describe("clearQuarantine (Task 13)", () => {
     const store = await freshStore();
     const key = quarantineResourceKey({ server: "http://Cronus281", serverInstance: "BC" });
     expect(await clearQuarantine(store, key)).toBe("not-quarantined");
+  });
+
+  // Issue #29: `--config` resolves the tier. The config is an env-tool one (the case the flag is
+  // for): the tool's `resolve` step supplies baseUrl, so the tier is "https://host|env-4711".
+  const ENVTOOL_CONFIG = {
+    bcdev: {
+      mcpCommand: ["bun", "mcp"],
+      company: "CRONUS",
+      controlSymbolPath: "c.app",
+      packageCachePath: ".alpackages",
+    },
+    envTool: {
+      toolPath: process.execPath,
+      envId: "env-4711",
+      resolve: [
+        {
+          command: ["-e", "console.log(JSON.stringify({url:'https://host/env-4711'}))"],
+          reads: { baseUrl: "url" },
+        },
+        {
+          command: ["-e", "console.log(JSON.stringify({u:'admin',p:'hunter2'}))"],
+          reads: { username: "u", password: "p" },
+        },
+      ],
+      publish: { command: ["publish", "{envId}", "{appFile}"] },
+    },
+  };
+
+  async function quarantineWith(key: string): Promise<QuarantineStore> {
+    const store = new QuarantineStore(defaultQuarantineDir());
+    await store.record({
+      resourceKey: key,
+      opKind: "test-run",
+      detail: "prior strand",
+      recordedAtIso: "2026-07-20T10:00:00.000Z",
+    });
+    return store;
+  }
+
+  test("issue #29: --config clears the tier the config resolves to, and no other", async () => {
+    const dir = scratch("lethal-cli-quarantine-config-");
+    const configPath = join(dir, "lethal.config.json");
+    await writeFile(configPath, JSON.stringify(ENVTOOL_CONFIG));
+    const resolvedKey = "https://host|env-4711";
+    const otherKey = quarantineResourceKey({ server: "http://other", serverInstance: "BC" });
+    const store = await quarantineWith(resolvedKey);
+    await store.record({
+      resourceKey: otherKey,
+      opKind: "test-run",
+      detail: "unrelated tier",
+      recordedAtIso: "2026-07-20T10:00:00.000Z",
+    });
+    const log = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await clearQuarantineFromCli({ mode: "clear-quarantine", configPath })).toBe(0);
+      expect(log).toHaveBeenCalledWith("cleared");
+      expect(await store.read(resolvedKey)).toBeNull();
+      expect(await store.read(otherKey)).not.toBeNull();
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  test("issue #29: an explicit --server/--instance pair wins over --config", async () => {
+    const dir = scratch("lethal-cli-quarantine-config-");
+    const configPath = join(dir, "lethal.config.json");
+    await writeFile(configPath, JSON.stringify(ENVTOOL_CONFIG));
+    const resolvedKey = "https://host|env-4711";
+    const store = await quarantineWith(resolvedKey);
+    const log = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await clearQuarantineFromCli({
+        mode: "clear-quarantine",
+        server: "http://elsewhere",
+        serverInstance: "BC",
+        configPath,
+      });
+      expect(log).toHaveBeenCalledWith("not-quarantined");
+      expect(await store.read(resolvedKey)).not.toBeNull();
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  test("issue #29: with neither a pair nor a config the command throws and clears nothing", async () => {
+    await expect(clearQuarantineFromCli({ mode: "clear-quarantine" })).rejects.toThrow(
+      "neither --server/--instance nor --config",
+    );
   });
 
   // The "stale" outcome (a clear computed against a generation the store no longer holds because
@@ -3011,6 +3108,7 @@ const INVOCATIONS: ReadonlyArray<{ readonly sub: string; readonly argv: readonly
   { sub: "run", argv: ["run", "--project", "P", "--dry-run"] },
   { sub: "init", argv: ["init", "--project", "P"] },
   { sub: "clear-quarantine", argv: ["clear-quarantine", "--server", "S", "--instance", "I"] },
+  { sub: "clear-quarantine", argv: ["clear-quarantine", "--config", "C"] },
   { sub: "clear-ceiling", argv: ["clear-ceiling", "--project", "P", "--config", "C"] },
   // `--server`/`--instance` are a pair on clear-ceiling (R112): one alone is refused-other, so the
   // pair needs its own invocation for "every owner reads" to see them read.
@@ -3123,7 +3221,12 @@ const PRECEDENCE_OVERRIDES: ReadonlyArray<{
   {
     argv: ["clear-ceiling", "--project", "P", "--server", "S", "--instance", "I"],
     flag: "config",
-    rule: "resolveCeilingIdentity: an explicit --server/--instance pair wins; the config is not opened",
+    rule: "resolveTierIdentity: an explicit --server/--instance pair wins; the config is not opened",
+  },
+  {
+    argv: ["clear-quarantine", "--server", "S", "--instance", "I"],
+    flag: "config",
+    rule: "resolveTierIdentity: an explicit --server/--instance pair wins; the config is not opened",
   },
 ];
 
@@ -3207,6 +3310,7 @@ describe("C02-07: flags are read or refused, never ignored", () => {
     }
     expect(PRECEDENCE_OVERRIDES.map((o) => `${o.argv[0]} --${o.flag}`)).toEqual([
       "clear-ceiling --config",
+      "clear-quarantine --config",
     ]);
   });
 

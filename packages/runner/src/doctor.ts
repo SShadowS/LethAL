@@ -141,6 +141,23 @@ export interface DoctorDeps {
     readonly installed: boolean;
     readonly versions: readonly string[];
   }>;
+  /**
+   * Issue #29: the target's app.json dependencies beside the packages in `packageCachePath`, each
+   * package read through its manifest (Ready-to-Run wrappers included), never by file name.
+   * `unread` names cache files that are not readable as packages. Present only when doctor is
+   * given `--project` and the config names a package cache.
+   */
+  readonly dependencies?: () => Promise<{
+    readonly cachePath: string;
+    readonly dependencies: readonly {
+      readonly id: string;
+      readonly name: string;
+      readonly publisher: string;
+      readonly version: string;
+    }[];
+    readonly packages: readonly { readonly id: string; readonly version: string }[];
+    readonly unread: readonly string[];
+  }>;
 }
 
 /**
@@ -438,6 +455,60 @@ export function checkTestApp(probe: {
 }
 
 /**
+ * Issue #29: every dependency in the target's app.json needs a package in the cache.
+ *
+ * The rule is alc's own, MEASURED with alc 18.1 on synthetic apps (a dependency declared at
+ * 1.2.0.0; caches holding only 0.9.0.0, 1.0.0.0, 1.2.0.0, 1.2.0.5, 1.5.0.0 or 2.0.0.0):
+ *  - a package matches by app Id; publisher and name are NOT compared (a wrong name still
+ *    compiled, a wrong id gave AL1022);
+ *  - it is compatible when its version is equal to or higher than the declared one, compared part
+ *    by part as numbers. The major part is not held fixed: 2.0.0.0 satisfied a 1.2.0.0 dependency.
+ * Not covered: the implicit `application`/`platform` dependencies of app.json.
+ */
+export function checkDependencies(probe: {
+  readonly cachePath: string;
+  readonly dependencies: readonly {
+    readonly id: string;
+    readonly name: string;
+    readonly publisher: string;
+    readonly version: string;
+  }[];
+  readonly packages: readonly { readonly id: string; readonly version: string }[];
+  readonly unread: readonly string[];
+}): DoctorCheck {
+  const name = "dependencies";
+  if (probe.dependencies.length === 0) {
+    return { name, ok: true, detail: "the target's app.json declares no dependencies" };
+  }
+  const missing: string[] = [];
+  for (const dep of probe.dependencies) {
+    const same = probe.packages.filter((p) => p.id.toLowerCase() === dep.id.toLowerCase());
+    if (same.some((p) => compareAppVersions(p.version, dep.version) >= 0)) continue;
+    const label = `${dep.publisher} ${dep.name} ${dep.version}`;
+    missing.push(
+      same.length === 0
+        ? `${label} (no package with id ${dep.id})`
+        : `${label} (only ${same.map((p) => p.version).join(", ")})`,
+    );
+  }
+  const rule = "alc's rule, measured: same app id, package version equal or higher";
+  if (missing.length === 0) {
+    return {
+      name,
+      ok: true,
+      detail: `all ${probe.dependencies.length} dependencies have a compatible package in ${probe.cachePath} (${rule})`,
+    };
+  }
+  const unread =
+    probe.unread.length === 0 ? "" : ` Not readable as packages: ${probe.unread.join(", ")}.`;
+  return {
+    name,
+    ok: false,
+    detail: `no compatible package in ${probe.cachePath} for: ${missing.join("; ")} (${rule}). The first local compile will fail with AL1022; add the .app files to the cache.${unread}`,
+  };
+}
+
+/**
  * Runs EVERY AVAILABLE check before reporting — never stops at the first failure. That is the
  * entire point over `lethal run`'s own pre-flight refusals, which each fire (correctly) but one at
  * a time, across however many slow round-trips it takes a user to fix one problem and discover the
@@ -463,6 +534,7 @@ export async function runDoctor(cfg: DoctorConfig, deps: DoctorDeps): Promise<Do
     companies,
     alcRuntime,
     testApp,
+    dependencies,
   } = deps;
   const checkPromises: Promise<DoctorCheck>[] = [];
   if (envStatus !== undefined) {
@@ -515,6 +587,11 @@ export async function runDoctor(cfg: DoctorConfig, deps: DoctorDeps): Promise<Do
   }
   if (testApp !== undefined) {
     checkPromises.push(runCheck("test-app-present", async () => checkTestApp(await testApp())));
+  }
+  if (dependencies !== undefined) {
+    checkPromises.push(
+      runCheck("dependencies", async () => checkDependencies(await dependencies())),
+    );
   }
   // R146. `checks.every(...)` on an empty array is `true`, so a deps object with nothing in it would
   // print "ok: every check passed" having checked nothing at all — empty-vs-empty agreement, this
