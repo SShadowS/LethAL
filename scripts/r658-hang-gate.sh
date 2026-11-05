@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# R-658: itest:hang with the BASELINE leg, on bc2 or bc3 only, under lane bugs' coord lease.
+# R-658: itest:hang with the BASELINE leg, on bc2 or bc3 only, under the caller's own coord lease.
+# Usage: r658-hang-gate.sh bc2|bc3 [--lane <lane>]. It runs the worktree it lives in (R823).
+# The lane is `--lane`, else KRAKEN_AGENT (`lane-<x>` is `<x>`), else it refuses (R598's rule, as
+# `resolveLane` in bc-linux-setup.ts), so a lease is never held in another lane's name.
 # Release the coord lease ONLY on gate exit 0 or 1 with the leg marker `passed` or absent, and the
 # [itest target] line naming the leased server. HOLD on everything else (5 = STOP, 3, 130, 137, ...),
 # whenever the leg marker reads `armed` or `stop`, and on any INT/TERM while the gate runs.
@@ -25,6 +28,23 @@ case "$SRV" in
   bc1) echo "refused: bc1 is never used for this gate"; exit 2 ;;
   *) echo "refused: server must be bc2 or bc3, got '$SRV'"; exit 2 ;;
 esac
+shift
+LANE=
+if [ "${1:-}" = --lane ] && [ $# -eq 2 ]; then
+  LANE=$2
+  case "$LANE" in
+    lane-*) echo "refused: --lane $LANE is an agent name, not a lane; pass --lane ${LANE#lane-}"; exit 2 ;;
+  esac
+elif [ $# -gt 0 ]; then
+  echo "refused: usage: r658-hang-gate.sh bc2|bc3 [--lane <lane>]"; exit 2
+else
+  case "${KRAKEN_AGENT:-}" in
+    orchestrator) LANE=orchestrator ;;
+    lane-?*) LANE=${KRAKEN_AGENT#lane-} ;;
+    *) echo "refused: no lane for the coord lease: pass --lane <lane>, or run as a kraken agent"; exit 2 ;;
+  esac
+fi
+[[ "$LANE" =~ ^[a-z0-9][a-z0-9-]*$ ]] || { echo "refused: '$LANE' is not a lane name"; exit 2; }
 # This wrapper's own folder, read before any cd: R783's host module is found from it.
 HERE=$(cd "$(dirname "$0")" && pwd)
 # The coord root, as outOfUseDir() resolves it: inside kraken a LETHAL_COORD_ROOT that differs from
@@ -44,7 +64,7 @@ for k in R658_HOLD_MAX_BEATS R658_WORKTREE; do
   fi
 done
 H=${R658_EVIDENCE_DIR:-$ROOT/handoff/R-658/hang-$SRV}
-WT=${R658_WORKTREE:-/work/lethal-wt/r658}
+WT=${R658_WORKTREE:-$(cd "$HERE/.." && pwd)}
 OOU=$ROOT/machine/out-of-use/$SRV.md
 BEAT=${R658_BEAT_SECS:-60}
 { [[ "$BEAT" =~ ^[0-9]+(\.[0-9]+)?$ ]] && awk -v b="$BEAT" 'BEGIN { exit !(b > 0 && b <= 60) }'; } \
@@ -74,7 +94,7 @@ case "$TL" in *"$WANT "*) ;; *) echo "refused: target line does not name $WANT";
 # (c) A fresh owner token per run: never printed, never in lease.txt, never exported.
 OWNER=$(openssl rand -hex 16 2>/dev/null)
 [[ "$OWNER" =~ ^[0-9a-f]{32}$ ]] || { echo "refused: openssl gave no 32-hex owner token"; exit 2; }
-out=$(kraken coord lease "$SRV" bugs 2>&1) || { echo "lease refused: $out"; exit 2; }
+out=$(kraken coord lease "$SRV" "$LANE" 2>&1) || { echo "lease refused: $out"; exit 2; }
 token=$(printf '%s' "$out" | grep -o '[0-9a-f]\{8\}-[0-9a-f-]\{27\}' | head -1)
 [ -n "$token" ] || { echo "no token in: $out"; exit 2; }
 echo "$SRV $token $(date -u +%FT%TZ) head $SHA" > "$H/lease.txt"
@@ -86,16 +106,16 @@ mark() {  # the durable out-of-use marker (orchestrator ruling D-D), modelled on
     echo
     [ -n "${2:-}" ] && echo "owner: $2"
     echo "- **Since:** $(date -u +%FT%TZ)"
-    echo "- **Set by:** lethal-bugs (R-658 itest:hang BASELINE leg, head $SHA)"
+    echo "- **Set by:** lane $LANE (R-658 itest:hang BASELINE leg, head $SHA)"
     echo "- **Reason:** $1"
     echo "- **Op:** $(grep -o 'opAttemptId[^ ,]*' "$H/hang.log" 2>/dev/null | tail -1 || true)"
-    echo "- **Coord lease:** $SRV, held by lane bugs' wrapper scripts/r658-hang-gate.sh; token in $H/lease.txt"
+    echo "- **Coord lease:** $SRV, held by lane $LANE's wrapper scripts/r658-hang-gate.sh; token in $H/lease.txt"
     echo "- **Evidence:** $H (hang.log, baseline-leg.state, copied stores and quarantine dirs)"
     echo
     echo "## How to clear it"
     echo "1. The owner restarts $SRV (a host action)."
     echo "2. Run \`bun scripts/bc-linux-setup.ts --server $SRV\` until it is clean."
-    echo "3. Lane bugs stops the wrapper, releases the coord lease, and deletes this file."
+    echo "3. Lane $LANE stops the wrapper, releases the coord lease, and deletes this file."
   } > "$OOU"
 }
 beat() { kraken coord heartbeat "$SRV" "$token" >/dev/null 2>&1 || echo "$(date -u +%T) heartbeat failed" >> "$H/lease.txt"; }
