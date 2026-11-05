@@ -21,6 +21,7 @@ import {
   BURN_GUARD_MS,
   BURN_HUGE,
   BURN_RELATIVE_FACTOR,
+  BURN_TRIES,
   MESSAGE_PREFIX_REASON,
   SERVE_TESTS_AL,
   type V3ContractResult,
@@ -805,7 +806,16 @@ describe("R693 r14b: timeout-is-cpu runs one huge burn alone, then beside busy l
    * Runs the probe; `a` and `b` answer the first (alone) and second (shared) call of codeunit 50656.
    * "hang" waits for the call's process timeout and returns as a killed process does.
    */
-  const run = async (a: Ans, b: Ans, burnerThrowsAt = 0, stat?: string[], status?: string) => {
+  const run = async (
+    a: Ans | readonly Ans[],
+    b: Ans,
+    burnerThrowsAt = 0,
+    stat?: string[],
+    status?: string,
+  ) => {
+    // R822: an array answers run A's tries in order; the call after them is B.
+    const tries: readonly Ans[] = Array.isArray(a) ? a : [a as Ans];
+    const answer = (nth: number): Ans => (nth <= tries.length ? tries[nth - 1] : b);
     const events: string[] = [];
     const cores: number[] = [];
     let statReads = 0;
@@ -815,7 +825,7 @@ describe("R693 r14b: timeout-is-cpu runs one huge burn alone, then beside busy l
     let n = 0;
     const base = fakeV3({
       "cu50656-shared-n2": () => {
-        const ans = n === 1 ? a : b;
+        const ans = answer(n);
         return ans === "hang" || ans === "hang-rows" ? undefined : ans;
       },
     });
@@ -843,8 +853,8 @@ describe("R693 r14b: timeout-is-cpu runs one huge burn alone, then beside busy l
           n += 1;
           argvs.push(argv);
           guards.push(o?.signal !== undefined ? 1 : undefined);
-          events.push(`call-${n === 1 ? "A" : "B"}`);
-          const ans = n === 1 ? a : b;
+          events.push(`call-${n <= tries.length ? "A" : "B"}`);
+          const ans = answer(n);
           if (ans === "hang" || ans === "hang-rows") {
             // A process that never ends: only the call's process timeout (abort signal) stops it.
             await new Promise<void>((resolve) => {
@@ -854,6 +864,8 @@ describe("R693 r14b: timeout-is-cpu runs one huge burn alone, then beside busy l
               exitCode: -1,
               stdout: ans === "hang-rows" ? doc([burnRow(16000)]) : "",
               stderr: "",
+              // R822: a share that would read contended, were a killed call ever judged by it.
+              ...(ans === "hang-rows" ? { cpuMs: 2000, wallMs: 16000 } : {}),
             };
           }
         }
@@ -886,11 +898,90 @@ describe("R693 r14b: timeout-is-cpu runs one huge burn alone, then beside busy l
   const BUSY0 = [snap(100, 100, 100), snap(1000, 110, 600)];
   const wallBuild = [snap(100, 100, 100), snap(1000, 110, 600)];
 
+  const ALL_TRIES = Array(BURN_TRIES).fill(0);
+  const contendedA = (ms = 16000, cpu = 2000) => ALL_TRIES.map(() => stopped(ms, cpu));
+
   test("R789 (a): a correct build under contention (A stopped at 16000 ms) is unmeasurable, never diverged; B not run", async () => {
-    const { f, events } = await run(stopped(16000, 2000), stopped(16100), 0, BUSY0);
+    const { f, events } = await run(
+      contendedA(),
+      stopped(16100),
+      0,
+      ALL_TRIES.flatMap(() => BUSY0),
+    );
     expect(f?.verdict).toBe("unmeasurable");
     expect(f?.measured).toContain("A late: core 1 contended, cpu 2000 of wall 16000 ms");
-    expect(events).toEqual(["call-A"]);
+    expect(events).toEqual(["call-A", "call-A", "call-A"]);
+  });
+
+  test("R822: a contended A retries on a core picked afresh, and a later on-time A reaches B", async () => {
+    const quiet = [snap(100, 100, 100), snap(110, 1000, 600)];
+    const { f, events, argvs, cores } = await run(
+      [stopped(16000, 2000), stopped(2000)],
+      stopped(16000),
+      0,
+      [...BUSY0, ...quiet],
+    );
+    expect(argvs[2]?.slice(0, 3)).toEqual(["/usr/bin/taskset", "-c", "0"]);
+    expect(cores).toEqual(Array(BURN_BUSY_LOOPS).fill(0));
+    expect(f?.verdict).toBe("matches");
+    expect(events.filter((e) => e === "call-A")).toHaveLength(2);
+    expect(events).toContain("call-B");
+    expect(argvs[0]?.slice(0, 3)).toEqual(["/usr/bin/taskset", "-c", "1"]);
+    expect(argvs[1]?.slice(0, 3)).toEqual(["/usr/bin/taskset", "-c", "0"]);
+    expect(f?.measured).toContain("core 0; A");
+    expect(f?.measured).toContain(
+      "earlier tries of A: core 1 contended, cpu 2000 of wall 16000 ms",
+    );
+  });
+
+  test("R822: B is judged against the last A, not the contended one", async () => {
+    // B is over twice the contended A but not over twice the last one.
+    const { f } = await run([stopped(5000, 1000), stopped(10000)], stopped(16000));
+    expect(f?.verdict).toBe("diverged");
+  });
+
+  test("R822: only a contended A retries: a wall-time build, a killed A and a late A with no CPU reading do not", async () => {
+    // Count every call: a retried A past the rig's list takes B's answer and is labelled call-B.
+    const wall = await run(stopped(2005), stopped(2010));
+    expect(wall.f?.verdict).toBe("diverged");
+    expect(wall.argvs).toHaveLength(2);
+    const fullShare = await run(stopped(3500, 3450), stopped(3600));
+    expect(fullShare.f?.verdict).toBe("diverged");
+    expect(fullShare.argvs).toHaveLength(2);
+    // On time with a low share of the CPU: a wall-time build on a loaded core.
+    const onTimeLoaded = await run(stopped(2005, 500), stopped(2010));
+    expect(onTimeLoaded.f?.verdict).toBe("diverged");
+    expect(onTimeLoaded.argvs).toHaveLength(2);
+    const atTheLine = await run(stopped(3000, 100), stopped(16000));
+    expect(atTheLine.argvs).toHaveLength(2);
+    const killed = await run("hang", stopped(16000));
+    expect(killed.f?.verdict).toBe("diverged");
+    expect(killed.events).toEqual(["call-A"]);
+    const killedLate = await run("hang-rows", stopped(16000));
+    expect(killedLate.f?.verdict).toBe("diverged");
+    expect(killedLate.events).toEqual(["call-A"]);
+    const notATimeout = await run(
+      {
+        exitCode: 0,
+        stdout: doc([row(50656, "CpuBurnLong", "pass", { durationMs: 16000 })]),
+        wallMs: 16000,
+        cpuMs: 2000,
+      },
+      stopped(16000),
+    );
+    expect(notATimeout.f?.verdict).toBe("diverged");
+    expect(notATimeout.events).toEqual(["call-A"]);
+    const noCpu = await run(stopped(16000, null), stopped(16000));
+    expect(noCpu.f?.verdict).toBe("unmeasurable");
+    expect(noCpu.events).toEqual(["call-A"]);
+  });
+
+  test("R822: a wall-time build never reads matches, however many tries were contended first", async () => {
+    const { f } = await run(
+      [stopped(16000, 2000), stopped(16000, 2000), stopped(2005)],
+      stopped(2010),
+    );
+    expect(f?.verdict).toBe("diverged");
   });
 
   test("addendum 1: a wall-slack build on a free core (A 3500 with cpu 3450, B 3600) reads diverged", async () => {
@@ -910,7 +1001,7 @@ describe("R693 r14b: timeout-is-cpu runs one huge burn alone, then beside busy l
     const edge = await run(stopped(16000, 12000), stopped(40000));
     expect(edge.events).toContain("call-B");
     expect(edge.f?.verdict).toBe("matches");
-    const under = await run(stopped(16000, 11999), stopped(16100));
+    const under = await run(contendedA(16000, 11999), stopped(16100));
     expect(under.events).not.toContain("call-B");
     expect(under.f?.verdict).toBe("unmeasurable");
   });
@@ -957,7 +1048,7 @@ describe("R693 r14b: timeout-is-cpu runs one huge burn alone, then beside busy l
 
   test("R789 (ii): the same fake over two probe runs: loaded then quiet reads unmeasurable then matches; a wall-time build diverged both times", async () => {
     const correct = [
-      await run(stopped(16000, 2000), stopped(16000)),
+      await run(contendedA(), stopped(16000)),
       await run(stopped(2000), stopped(16000)),
     ];
     expect(correct.map((x) => x.f?.verdict)).toEqual(["unmeasurable", "matches"]);
@@ -969,7 +1060,7 @@ describe("R693 r14b: timeout-is-cpu runs one huge burn alone, then beside busy l
     const edge = await run(stopped(3000), stopped(16000));
     expect(edge.events).toContain("call-B");
     expect(edge.f?.verdict).toBe("matches");
-    const over = await run(stopped(3001, 100), stopped(16000));
+    const over = await run(contendedA(3001, 100), stopped(16000));
     expect(over.f?.verdict).toBe("unmeasurable");
     expect(over.events).not.toContain("call-B");
   });

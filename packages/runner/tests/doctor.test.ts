@@ -7,6 +7,7 @@ import { runDoctor } from "../src/doctor";
 import {
   ApiBaseUnsetError,
   HarnessVerificationError,
+  HarnessVerifier,
   MIN_CONTROL_VERSION,
   UnfilteredExtensionsQueryError,
 } from "../src/harness";
@@ -25,6 +26,24 @@ function cfgFixture(): DoctorConfig {
 }
 
 describe("lethal doctor", () => {
+  // Issue #29: the control-version probe is the REAL verifier over a 503 answer, so what doctor
+  // prints is what a user would read.
+  test("a 503 from HarnessInfo shows the sync-pending hint in the control-version check", async () => {
+    const verifier = new HarnessVerifier(
+      { baseUrl: "http://bc:7048/BC", company: "CRONUS", username: "u", password: "p" },
+      (async () => new Response("Application_ServiceUnavailable", { status: 503 })) as never,
+    );
+    const r = await runDoctor(cfgFixture(), {
+      envStatus: async () => "Running",
+      quarantine: async () => "clear",
+      controlVersion: () => verifier.fetchControlVersion(),
+      toolPaths: async () => ({ alc: "ok", altool: "ok" }),
+    });
+    const check = r.checks.find((c) => c.name === "control-version");
+    expect(check?.ok).toBe(false);
+    expect(check?.detail).toContain("OperationalWithSyncPending");
+  });
+
   test("reports every check, not just the first failure", async () => {
     const r = await runDoctor(cfgFixture(), {
       envStatus: async () => "Stopped",

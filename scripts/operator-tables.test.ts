@@ -6,6 +6,8 @@ import { tier2Operators } from "../packages/builtin-tier2/src/index";
 import { renderInto, staleTargets } from "./operator-tables";
 
 const REPO_ROOT = join(import.meta.dir, "..");
+const expectedSummary = (): string =>
+  `${tier1Operators.length + tier2Operators.length} operators, in two tiers`;
 const read = (f: string): string => readFileSync(join(REPO_ROOT, f), "utf8");
 
 describe("operator tables", () => {
@@ -59,5 +61,31 @@ describe("operator tables", () => {
     const out = renderInto(src, "tier1", "NEW");
     expect(out).toBe("before\n<!-- operators: tier1 -->\nNEW\n<!-- /operators: tier1 -->\nafter");
     expect(out).not.toContain("OLD");
+  });
+
+  // Issue #44: the counts in README prose are generated, so a stale count is drift like a stale row.
+  it("the README's prose counts are the registry's counts", () => {
+    const total = tier1Operators.length + tier2Operators.length;
+    const readme = read("README.md");
+    expect(readme).toContain(
+      `<!-- operators: summary -->${total} operators, in two tiers<!-- /operators: summary -->`,
+    );
+    expect(readme).toContain(
+      `<!-- operators: limits -->${total} operators today, in two groups: ${tier1Operators.length} generic ones (Tier 1) and ${tier2Operators.length} AL-specific ones (Tier 2)<!-- /operators: limits -->`,
+    );
+  });
+
+  it("regenerating a hand-edited prose count restores the committed file", () => {
+    const readme = read("README.md");
+    const stale = readme.replace(/(<!-- operators: summary -->)\d+/, "$115");
+    expect(stale).not.toBe(readme);
+    // The generator's own output for the stale text is the committed README again.
+    expect(renderInto(stale, "summary", expectedSummary())).toBe(readme);
+  });
+
+  it("an inline marker adds no new lines", () => {
+    expect(
+      renderInto("a <!-- operators: summary -->x<!-- /operators: summary --> b", "summary", "N"),
+    ).toBe("a <!-- operators: summary -->N<!-- /operators: summary --> b");
   });
 });

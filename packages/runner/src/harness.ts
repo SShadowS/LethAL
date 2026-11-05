@@ -126,6 +126,10 @@ export class ApiBaseUnsetError extends Error {
   }
 }
 
+/** Issue #29: appended to a `HarnessInfo failed: HTTP 503`. A possible cause, not a diagnosis. */
+export const SERVICE_UNAVAILABLE_HINT =
+  "A known cause of this 503: the tenant was left in state OperationalWithSyncPending by an aborted publish of the target app. Container health does not show it and a container restart does not clear it. A force sync of the target app clears it (for example `Sync-BcContainerApp -Mode ForceSync` on a Windows container, then re-run). Check the tenant state (`Get-BcContainerTenants`) if you can.";
+
 export class HarnessVerificationError extends Error {
   constructor(message: string) {
     super(message);
@@ -989,7 +993,7 @@ This is an AUTHENTICATION failure, not a missing or stale control app: the reque
         );
       }
       throw new HarnessVerificationError(
-        `HarnessInfo failed: HTTP ${res.status}${bodyText ? `: ${bodyText}` : ""}`,
+        `HarnessInfo failed: HTTP ${res.status}${bodyText ? `: ${bodyText}` : ""}${res.status === 503 ? `\n${SERVICE_UNAVAILABLE_HINT}` : ""}`,
       );
     }
     const value = odataValue(

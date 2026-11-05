@@ -99,6 +99,9 @@ const SELECTOR_IDS = { selectorId: 79199, controlId: 79198, tableId: 79197 };
 const TEST_CODEUNIT = { codeunitId: 79100, codeunitName: "Sandbox Tests" } as const;
 const TEST_CODEUNIT_FILE = join("src", "SandboxTests.Codeunit.al");
 const MARKER = "ZzC0205Marker";
+/** R811: a real 1x1 PNG, for the logo step 6 names with a backslash. */
+const ONE_PIXEL_PNG =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
 /** Microsoft's Base Application: its installed version is the BC build this gate ran against. */
 const BASE_APPLICATION_ID = "437dbf0e-84ff-417a-965d-ed2bb9650972";
 /** The two frozen rows this gate drives, by identity key suffix in bcdev.baseline.json. */
@@ -465,7 +468,25 @@ async function main(): Promise<void> {
         join(scratch, "marker"),
         `    [Test]\n    procedure ${MARKER}()\n    begin\n    end;`,
       );
+      // R811: this build also names its logo with `\`, so real alc compiles the rewritten copy, and
+      // the publish below proves the rewritten app verifies by bytes and runs.
+      await mkdir(join(markerDir, "Images"), { recursive: true });
+      await writeFile(join(markerDir, "Images", "Logo.png"), Buffer.from(ONE_PIXEL_PNG, "base64"));
+      const markerAppJson = join(markerDir, "app.json");
+      const markerApp = JSON.parse(await readFile(markerAppJson, "utf8")) as object;
+      const asWritten = JSON.stringify({ ...markerApp, logo: "Images\\Logo.png" }, null, 2);
+      await writeFile(markerAppJson, asWritten, "utf8");
       const compiled = await backend.compileTestApp(markerDir, artifact);
+      assert.deepEqual(
+        compiled.pathChanges?.map((c) => c.field),
+        ["logo"],
+        "step 6: R811 rewrote the logo path",
+      );
+      assert.equal(
+        await readFile(markerAppJson, "utf8"),
+        asWritten,
+        "step 6: R811 left the project's own app.json as written",
+      );
       const { runId } = await publishLeg(
         "step 6",
         compiled,

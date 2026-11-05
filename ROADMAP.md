@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**22 of 802 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**20 of 807 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -485,8 +485,12 @@ that ordering is the priority.
 - **R745** · After the release: exclude single test METHODS from a run (today --tests-only narrows test FILES only); R740's refusal is its first user · [R745.md](docs/roadmap/R745.md) · done (f43a9308)
 - **R733** · Name the installed dependents before the first publish: LethAL Control 1.0.0.24 `InstalledDependents(AppId)` (after the Directions talk) · [R733.md](docs/roadmap/R733.md) · done (29874b65)
 - **R759** · `lethal verify` does not honour `--exclude-test` or `--tests-only`: it re-discovers every test · [R759.md](docs/roadmap/R759.md) · done (20a2dee5)
-- **R811** · A test project whose app.json names a path with `\` fails on Linux: R422 covers the target only, and the refusal blamed the batch · [R811.md](docs/roadmap/R811.md) · open, filed 2026-11-05 (coord task R-810); the message is fixed, the rewrite is not built
+- **R811** · A test project whose app.json names a path with `\` fails on Linux: R422 covers the target only, and the refusal blamed the batch · [R811.md](docs/roadmap/R811.md) · done (83b33574)
 - **R814** · A LethAL user cannot run the al-runner-v3 backend: every binary needs a `.gated` file that only our own update gate can write · [R814.md](docs/roadmap/R814.md) · done (57396130); a clean-machine run of the install is still to do
+- **R821** · The reports told users to raise --baseline-timeout-ms, which was no CLI flag (GitHub #46) · [R821.md](docs/roadmap/R821.md) · done (3ae274b3)
+- **R824** · doctor misses a missing non-Microsoft dependency package and a sync-pending tenant; clear-quarantine rejects --config (GitHub #29) · [R824.md](docs/roadmap/R824.md) · done (41df4238)
+- **R825** · README states the operator count in prose by hand, and it drifted (GitHub #44) · [R825.md](docs/roadmap/R825.md) · done (41df4238)
+- **R826** · A 907-guard codeunit crashed the BC service tier with a stack overflow: nothing limits or warns on guards per codeunit (GitHub #28) · [R826.md](docs/roadmap/R826.md) · open, filed 2026-11-05 (coord task R-820); not measured, nothing built
 
 ## Backends and tooling
 
@@ -751,7 +755,7 @@ that ordering is the priority.
 - **R660** · ci.yml has no workflow_dispatch trigger: when GitHub drops a push event, a submit head can get no CI run, and nothing can start one by hand · [R660.md](docs/roadmap/R660.md) · done (0ea6960c)
 - **R662** · talk-cut script: tag a given commit and make a DRAFT release with lethal-control.app attached, never publishing it · [R662.md](docs/roadmap/R662.md) · done (03448305)
 - **R663** · bc-demo: a fourth BC on Linux instance on server1 for the talk, outside every lease pool, with an idempotent setup that is also the offline demo reset · [R663.md](docs/roadmap/R663.md) · done (a9bb3ffe)
-- **R664** · gift-card re-freeze script on bc-demo: three agreeing runs, a new frozen baseline at the build's identity scheme (42 on master), and the talk runbook's numbers · [R664.md](docs/roadmap/R664.md) · open, filed 2026-10-22
+- **R664** · gift-card re-freeze script on bc-demo: three agreeing runs, a new frozen baseline at the build's identity scheme (42 on master), and the talk runbook's numbers · [R664.md](docs/roadmap/R664.md) · closed 2026-11-05 — re-frozen on bc-demo at identity scheme 43 (R-816); 60 deployed, 34/15/11, as the dry run
 - **R667** · al-runner v3: nothing live would catch a future build that prefixes failure messages, which would skew the R553 assertion screen · [R667.md](docs/roadmap/R667.md) · done (44a198d5; review fixes in merge 0ea0a076)
 - **R668** · The batch project copies every non-AL file of the target as a resource, so a lethal.config*.json holding a login is copied into every staged batch dir · [R668.md](docs/roadmap/R668.md) · done (3424c3f0)
 - **R669** · bc-linux-setup and the BC itests should refuse a server that has an out-of-use marker (`/coord/machine/out-of-use/<server>.md`): today nothing reads it, so a held-dirty server is kept off only by the coord lease and by messages · [R669.md](docs/roadmap/R669.md) · done (9210ba70)
@@ -830,7 +834,7 @@ that ordering is the priority.
 - **R788** · The v3 gate's big legs (D1, D1c, T) run serve-entries, so a gate run takes minutes, not half an hour · [R788.md](docs/roadmap/R788.md) · done (5841b90a)
 - **R789** · The v3 gate's `timeout-is-cpu` fact reads `diverged` on a correct build when other jobs load core 0 · [R789.md](docs/roadmap/R789.md) · done (494082ea, 3ea559ca)
 - **R791** · al-runner edge a157b2d34 is not slower in LethAL's runs; a warm `al-runner test` spends ~4 s more in compile (upstream #5872) · [R791.md](docs/roadmap/R791.md) · done 2026-10-25 (coord task R-791): measured; upstream #5872 filed, waiting on upstream
-- **R792** · v3 "deferred proof" (Design A2): overlap the alc proof with the baseline and the mutant loop, journaling writes until alc joins · [R792.md](docs/roadmap/R792.md) · planned, BUILD after the talk (Tue 27 Oct); A1 (R790) is in; gates met: taint 0/10 (R-794), alc 31-34% of a…
+- **R792** · v3 "deferred proof" (Design A2): overlap the alc proof with the baseline and the mutant loop, journaling writes until alc joins · [R792.md](docs/roadmap/R792.md) · parked 2026-11-05 (owner ruling): A2 is dropped for now; estimated 2.4-3.6 s on D1, not measured on server1…
 - **R796** · Upgrade tree-sitter-al from 4.4.1 to 4.5.0: fixes R720's and R327's swallowed members at the root; needs pins, 7 container classifications, 10 test re-pins and a pre-committed identity bump · [R796.md](docs/roadmap/R796.md) · done (66b585c1)
 - **R790** · v3: run the alc proof alongside the baseline and the mutant loop, and discard the results if alc rejects (the owner's Design A) · [R790.md](docs/roadmap/R790.md) · done (8c6a9fe8)
 - **R800** · v3: alc runs 1.5-2 s slower beside a concurrent al-runner call, even with free cores (memory bandwidth or cache contention, not CPU scheduling) · [R800.md](docs/roadmap/R800.md) · open, filed 2026-10-25 (coord task R-798)
@@ -845,7 +849,8 @@ that ordering is the priority.
 - **R813** · Plan: which al-runner to gate. Track edge, build from main, or keep numbered releases? (the owner's question) · [R813.md](docs/roadmap/R813.md) · closed 2026-11-05 — the owner ruled: `current` always follows edge; users install gated numbered releases…
 - **R815** · A mutant that makes a test codeunit's OnRun fail stops a one-shot session (exit 6 reads as "selected no test") · [R815.md](docs/roadmap/R815.md) · done (369451d1)
 - **R816** · `current` follows edge: pin edge d72d3197d (alpha.13+edge) on alpha.12's readings, and run the daily update from a lane's timer · [R816.md](docs/roadmap/R816.md) · done (c5264ee7)
-- **R822** · One contended moment in leg C costs a whole v3 gate: retry `timeout-is-cpu` before reading it as `infra-fail` · [R822.md](docs/roadmap/R822.md) · open, filed 2026-11-05 (coord task R-819); nothing built
+- **R820** · A BC 29 dev endpoint's Ready-to-Run wrappers were read as a missing System Application, and as unreadable dependencies (GitHub #47) · [R820.md](docs/roadmap/R820.md) · done (3ae274b3); not yet proven on a real BC 29 package
+- **R822** · One contended moment in leg C costs a whole v3 gate: retry `timeout-is-cpu` before reading it as `infra-fail` · [R822.md](docs/roadmap/R822.md) · done (c2150b2b)
 - **R823** · scripts/r658-hang-gate.sh hard-codes lane bugs and the r658 worktree, so another lane cannot use it · [R823.md](docs/roadmap/R823.md) · open, filed 2026-11-05 (found by R-813)
 
 ---

@@ -58,6 +58,7 @@ import {
   writeInstrumentedProject,
 } from "@lethal/schemata";
 import { AlRunnerV3ServeFallbackWarmupError } from "./al-runner-v3-backend";
+import { type AppJsonPathChange, normaliseAppJsonPaths } from "./app-json-paths";
 import {
   UpgradeNotRestoredError,
   confirmedDowngradeRefusal,
@@ -6603,6 +6604,16 @@ async function runSessionBody(
   // R47: the configured floor for a mutant run's time budget — see `SessionConfig.mutantTimeoutMs`.
   const minMutantBudgetMs = cfg.mutantTimeoutMs ?? MIN_MUTANT_BUDGET_MS;
   const baselineTimeoutMs = cfg.baselineTimeoutMs ?? BASELINE_TIMEOUT_DEFAULT;
+  // R821: a stop needs a request still open to send it on. A baseline test that runs past the ceiling
+  // can be cut by the hosting gateway first: no stop is sent, and the run quarantines.
+  const baselineCeilingMs = cfg.groupRuns?.requestCeilingMs ?? REQUEST_CEILING_MS;
+  if (isBcdev(caps.kind) && baselineTimeoutMs + STOP_GRACE_MS > baselineCeilingMs) {
+    emit({
+      type: "warning",
+      code: "baseline-timeout-over-ceiling",
+      message: `[lethal] --baseline-timeout-ms ${baselineTimeoutMs} plus the ${STOP_GRACE_MS} ms stop grace is over the ${baselineCeilingMs} ms request ceiling. On a hosted server the gateway can cut a hung baseline test's call before LethAL can stop it: the run then quarantines, and the operation stays on the server until an NST restart.`,
+    });
+  }
   // R517: before the first run; every worker gets the same pair below. al-runner --server starts
   // its daemon with the larger of the two as its one in-run stop.
   cfg.backend.useMutantBudgetFloor?.(minMutantBudgetMs, baselineTimeoutMs);
@@ -12087,50 +12098,6 @@ async function writeStampedAppJson(
   const manifest = { ...normalised, version };
   await writeFile(join(batchDir, "app.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
   return changes;
-}
-
-/** R-422: one `\` -> `/` replacement made in the batch app.json. `field` is `logo`, `screenshots[<i>]` or `resourceFolders[<i>]`. */
-export type AppJsonPathChange = {
-  readonly field: string;
-  readonly from: string;
-  readonly to: string;
-};
-
-/**
- * R-422: the app.json array fields that name files or folders, from the alc schema (`logo` is the
- * one string field). The Linux `alc` reads a `\` there as part of the name and stops with AL1001
- * (a file) or AL0863 (a folder) before compiling a line. Everything else (URLs, names, text, ids)
- * is left exactly as written.
- */
-const APP_JSON_PATH_ARRAY_FIELDS = ["screenshots", "resourceFolders"] as const;
-
-/**
- * R-422: returns a copy of the manifest with `/` in place of `\` in `logo`, each string element of
- * `screenshots` and each string element of `resourceFolders`, plus what changed. Never mutates the
- * input. A missing field, a non-string value and a non-string element are kept as they are.
- */
-export function normaliseAppJsonPaths(manifest: Readonly<Record<string, unknown>>): {
-  readonly manifest: Record<string, unknown>;
-  readonly changes: readonly AppJsonPathChange[];
-} {
-  const changes: AppJsonPathChange[] = [];
-  const out: Record<string, unknown> = { ...manifest };
-  const fix = (field: string, value: string): string => {
-    const to = value.replaceAll("\\", "/");
-    if (to !== value) changes.push({ field, from: value, to });
-    return to;
-  };
-  const { logo } = manifest;
-  if (typeof logo === "string") out.logo = fix("logo", logo);
-  for (const key of APP_JSON_PATH_ARRAY_FIELDS) {
-    const value = manifest[key];
-    if (Array.isArray(value)) {
-      out[key] = value.map((el: unknown, i: number) =>
-        typeof el === "string" ? fix(`${key}[${i}]`, el) : el,
-      );
-    }
-  }
-  return { manifest: out, changes };
 }
 
 /** R-422: the once-per-session warning text for the changes `normaliseAppJsonPaths` made. */

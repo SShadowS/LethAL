@@ -69,6 +69,7 @@ import {
   type PublishedTestApp,
   TestAppError,
   type TestAppRefusal,
+  testAppPathWarning,
 } from "./test-app-publish";
 import {
   DIGEST_SCHEME_WORDS,
@@ -1970,6 +1971,9 @@ export async function runVerify(
       const tc = now();
       const compiled: CompiledTestApp = await backend.compileTestApp(args.testDir, artifact);
       compileMs = now() - tc;
+      if (compiled.pathChanges !== undefined) {
+        log(`[lethal] ${testAppPathWarning(compiled.pathChanges)}`);
+      }
       verifyRunId = store.createRun({
         // R325: the rows this run records carry the SOURCE run's manifest keys.
         identityScheme: source.identityScheme,

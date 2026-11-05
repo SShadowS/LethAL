@@ -33,8 +33,11 @@ const BLURBS_FILE = join(REPO_ROOT, "scripts", "operator-blurbs.json");
 /** Files carrying a generated block, and which tiers each wants. */
 const TARGETS: readonly { readonly file: string; readonly markers: readonly string[] }[] = [
   { file: "design.md", markers: ["tier1", "tier2"] },
-  { file: "README.md", markers: ["tier1", "tier2"] },
+  { file: "README.md", markers: ["tier1", "tier2", "summary", "limits"] },
 ];
+
+/** Markers that sit inside a sentence: the text is put between the comments with no new lines. */
+const INLINE_MARKERS: ReadonlySet<string> = new Set(["summary", "limits"]);
 
 interface BlurbFile {
   readonly blurbs: Record<string, string>;
@@ -90,6 +93,13 @@ function tableFor(operators: readonly MutationOperator[], blurbs: Record<string,
 function blockFor(marker: string, blurbs: Record<string, string>): string {
   if (marker === "tier1") return tableFor(tier1Operators, blurbs);
   if (marker === "tier2") return tableFor(tier2Operators, blurbs);
+  // Issue #44: the counts in README prose come from the same registry as the tables.
+  const t1 = tier1Operators.length;
+  const t2 = tier2Operators.length;
+  if (marker === "summary") return `${t1 + t2} operators, in two tiers`;
+  if (marker === "limits") {
+    return `${t1 + t2} operators today, in two groups: ${t1} generic ones (Tier 1) and ${t2} AL-specific ones (Tier 2)`;
+  }
   throw new Error(`operator-tables: unknown marker "${marker}"`);
 }
 
@@ -105,7 +115,8 @@ export function renderInto(source: string, marker: string, block: string): strin
   if (closeAt < openAt) {
     throw new Error(`operator-tables: ${close} appears before ${open}`);
   }
-  return `${source.slice(0, openAt + open.length)}\n${block}\n${source.slice(closeAt)}`;
+  const gap = INLINE_MARKERS.has(marker) ? "" : "\n";
+  return `${source.slice(0, openAt + open.length)}${gap}${block}${gap}${source.slice(closeAt)}`;
 }
 
 export function expectedContent(file: string, markers: readonly string[]): string {

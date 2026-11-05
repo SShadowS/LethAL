@@ -367,22 +367,25 @@ describe("§3 the compile proof", () => {
     expect(err).toBeInstanceOf(TestAppError);
     expect(err).not.toBeInstanceOf(AlcCompileError);
     expect(String(err)).toMatch(/test app does not compile against this batch/);
-    expect(String(err)).not.toContain('Write "/" there');
   });
 
-  test("R811: a test app whose app.json names a path with a backslash is told so", async () => {
+  test("R811: a path alc really cannot find still stops the session, naming it", async () => {
     const l = await layout();
+    await writeFile(
+      join(l.testDir, "app.json"),
+      JSON.stringify({ id: "ff7935bb-9fe2-4f7a-adf3-aa7132a41fe7", logo: "Images\\L.png" }),
+    );
     const alc = fakeAlc(
-      (p) => p === l.testDir,
+      (p) => p.endsWith("alc-test-src"),
       undefined,
       undefined,
-      "app.json(12,3): error AL1001: Source file 'Images\\Logo.png' could not be found",
+      "app.json(1,1): error AL1001: Source file 'Images/L.png' could not be found",
     );
     const err = await backendOf(l, fakeV3(allPass).spawn, alc.io)
       .deploy(l.batch)
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(TestAppError);
-    expect(String(err).includes('Write "/" there')).toBe(process.platform !== "win32");
+    expect(String(err)).toContain("Images/L.png");
   });
 
   test("R780: an unreadable test dir keeps today's order: the test-app alc runs first, so its TestAppError wins over the read error", async () => {
@@ -2877,7 +2880,7 @@ describe("R780: the cross-session test-app compile cache", () => {
       failTest?: boolean;
       cfg?: Partial<AlRunnerV3Config>;
       /** Runs inside the TEST-app compile only. */
-      duringTest?: () => Promise<void>;
+      duringTest?: (project: string) => Promise<void>;
     } = {},
   ) {
     const alc = fakeAlc(
@@ -2887,7 +2890,7 @@ describe("R780: the cross-session test-app compile cache", () => {
           ? buildFakeAppWithEntries({ "SymbolReference.json": JSON.stringify(sym) })
           : undefined,
       async (p) => {
-        if (p === e.l.testDir) await opts.duringTest?.();
+        if (isTestProject(e, p)) await opts.duringTest?.(p);
       },
     );
     const b = backendOf(e.l, fakeV3(allPass, { coverage: plainCoverage }).spawn, alc.io, {
@@ -2903,11 +2906,119 @@ describe("R780: the cross-session test-app compile cache", () => {
       b,
       err,
       alc,
-      testCompiles: alc.calls.filter((c) => c.project === e.l.testDir).length,
+      testCompiles: alc.calls.filter((c) => isTestProject(e, c.project)).length,
     };
   }
   const base = () => symDoc({ version: "1.0.1.1", mutated: [79000] });
   const markers = (e: Env) => readdir(join(e.cacheDir, "testapp-proof")).catch(() => []);
+
+  /** R811: the test project alc was given: the test dir, or the copy with the rewritten app.json. */
+  const isTestProject = (e: Env, p: string) => p === e.l.testDir || p.endsWith("alc-test-src");
+  const writeBackslashApp = (e: Env) =>
+    writeFile(
+      join(e.l.testDir, "app.json"),
+      JSON.stringify({
+        id: "ff7935bb-9fe2-4f7a-adf3-aa7132a41fe7",
+        name: "Tests",
+        logo: "Images\\Logo.png",
+      }),
+    );
+
+  test("R811: a backslash path compiles a rewritten copy, the project stays as written, and the warm run is a hit", async () => {
+    const e = await env();
+    await writeBackslashApp(e);
+    const raw = await readFile(join(e.l.testDir, "app.json"), "utf8");
+    let logo: unknown;
+    const cold = await deployWith(e, base(), {
+      duringTest: async (p) => {
+        logo = JSON.parse(await readFile(join(p, "app.json"), "utf8")).logo;
+      },
+    });
+    expect(cold.err).toBeUndefined();
+    expect(logo).toBe("Images/Logo.png");
+    expect(cold.alc.calls.some((c) => c.project === e.l.testDir)).toBe(false);
+    expect(await readFile(join(e.l.testDir, "app.json"), "utf8")).toBe(raw);
+    expect(await readdir(e.l.scratch)).not.toContain("alc-test-src");
+    expect(await markers(e)).toHaveLength(1);
+    const warm = await deployWith(e, base());
+    expect(warm.err).toBeUndefined();
+    expect(warm.testCompiles).toBe(0);
+    expect(warm.b.testAppCacheStats()).toEqual({ hits: 1, misses: 0 });
+  });
+
+  test("R811: a clean project still compiles in place, and a backslash one takes another key", async () => {
+    const e = await env();
+    const cold = await deployWith(e, base());
+    expect(cold.alc.calls.filter((c) => c.project === e.l.testDir)).toHaveLength(1);
+    expect(cold.alc.calls.some((c) => c.project.endsWith("alc-test-src"))).toBe(false);
+    const clean = await markers(e);
+    await writeBackslashApp(e);
+    await deployWith(e, base());
+    expect((await markers(e)).length).toBe(clean.length + 1);
+  });
+
+  test("R811: a test dir that changes while its copy compiles stops the session, and nothing is cached", async () => {
+    const e = await env();
+    await writeBackslashApp(e);
+    const r = await deployWith(e, base(), {
+      duringTest: () => writeFile(join(e.l.testDir, "Late.Codeunit.al"), "codeunit 79101 l {}"),
+    });
+    expect(r.err).toBeInstanceOf(TestAppError);
+    expect(String(r.err)).toContain("changed while its copy was compiled");
+    expect(await markers(e)).toHaveLength(0);
+  });
+
+  test("R811: an in-place compile keeps R780's rule: alc may write into the test dir", async () => {
+    const e = await env();
+    const r = await deployWith(e, base(), {
+      duringTest: () => writeFile(join(e.l.testDir, "Late.xlf"), "written by alc"),
+    });
+    expect(r.err).toBeUndefined();
+    expect(await markers(e)).toHaveLength(0);
+  });
+
+  test("R811: the warning goes through the session's notify, once", async () => {
+    const e = await env();
+    await writeBackslashApp(e);
+    const seen: [string, string][] = [];
+    const alc = fakeAlc(
+      () => false,
+      (p) =>
+        p.endsWith("active")
+          ? buildFakeAppWithEntries({ "SymbolReference.json": JSON.stringify(base()) })
+          : undefined,
+    );
+    const b = backendOf(e.l, fakeV3(allPass, { coverage: plainCoverage }).spawn, alc.io);
+    b.setNotify((code, message) => seen.push([code, message]));
+    await b.deploy(e.l.batch);
+    await b.deploy(e.l.batch);
+    expect(seen.filter(([c]) => c === "app-json-backslash-path")).toHaveLength(1);
+    expect(seen.find(([c]) => c === "app-json-backslash-path")?.[1]).toContain(
+      'logo "Images\\Logo.png" -> "Images/Logo.png"',
+    );
+  });
+
+  test("R811: a session whose test-app compile is a cache hit still warns", async () => {
+    const e = await env();
+    await writeBackslashApp(e);
+    expect((await deployWith(e, base())).err).toBeUndefined();
+    const seen: string[] = [];
+    const alc = fakeAlc(
+      () => false,
+      (p) =>
+        p.endsWith("active")
+          ? buildFakeAppWithEntries({ "SymbolReference.json": JSON.stringify(base()) })
+          : undefined,
+    );
+    const b = backendOf(e.l, fakeV3(allPass, { coverage: plainCoverage }).spawn, alc.io, {
+      cacheDir: e.cacheDir,
+      alcPath: e.alcBin,
+    });
+    b.setNotify((code) => seen.push(code));
+    await b.deploy(e.l.batch);
+    expect(b.testAppCacheStats()).toEqual({ hits: 1, misses: 0 });
+    expect(seen).toContain("app-json-backslash-path");
+  });
 
   test("cold deploy compiles the test app and writes a marker; an identical second deploy (new instance) skips the test-app alc and passes", async () => {
     const e = await env();

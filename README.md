@@ -435,6 +435,8 @@ lethal force-reset-lease --server http://YourContainer --instance BC --config le
 
 # clears the LOCAL durable quarantine record
 lethal clear-quarantine --server http://YourContainer --instance BC
+# or take the server and instance from the config, as clear-ceiling does
+lethal clear-quarantine --config lethal.config.json
 ```
 
 If a publish failed once for a reason that had nothing to do with size (a container restarting,
@@ -510,6 +512,7 @@ Cost and recovery:
 |------|---------|-------------|
 | `--max-guards-per-batch <n>` | *(unbounded)* | Guards per published build. Publish cost scales with guard count, since BC recompiles server-side |
 | `--mutant-timeout-ms <n>` | `180000` | Floor for a mutant's time budget, applied as `max(2 × that test's baseline, floor)`. An explicit value **replaces** the floor rather than stacking with it. The default is deliberately generous: too low leaves the server stuck and blocks every mutant behind it, while too high only makes a genuine hang take longer to score `timeout-killed` |
+| `--baseline-timeout-ms <n>` | `120000` | How long one baseline test may run before LethAL stops it. Raise it for a test that is slow rather than hung. Past the request ceiling minus 30 s, a run warns (`baseline-timeout-over-ceiling`): a hosting gateway can then cut a hung test's call before LethAL can stop it, and the run quarantines |
 | `--resume` / `--resume-run <id>` | *(none)* | Continue an aborted run, reusing verdicts it already measured |
 | `--retry-stranded` | `false` | On resume, retry mutants that left the server stuck. Skipped by default: a mutant that never terminates blocks every mutant behind it |
 | `--allow-large-run` | `false` | Run more than 1,000 mutation sites |
@@ -565,7 +568,7 @@ Design detail for all of the above lives in [`design.md`](design.md).
 
 ## The changes it makes
 
-Fifteen operators, in two tiers. **Tier 1** is the conservative set the mutation-testing literature
+<!-- operators: summary -->26 operators, in two tiers<!-- /operators: summary -->. **Tier 1** is the conservative set the mutation-testing literature
 has evidence for; **Tier 2** exploits AL and Business Central semantics to plant bugs a generic tool
 cannot express. Where both claim the same site, Tier 2 wins.
 
@@ -754,9 +757,9 @@ a LethAL feature or a mode.
   project could make never-ending. A loop in ANOTHER installed app that depends on yours, and calls into it,
   is not seen. Measured on three ISV corpora (R-634): adding each dependent's source to the analysis
   refused 0 more mutants on all 25 pairs.
-- **The advanced operator set is not built.** Twelve operators today, in two groups: six generic
-  ones (Tier-1: comparisons, return values, empty blocks) and six AL-specific ones (Tier-2:
-  `TestField`, `SetRange`, `CalcFields`, `Commit` and friends). A third, more aggressive group is
+- **The advanced operator set is not built.** <!-- operators: limits -->26 operators today, in two groups: 16 generic ones (Tier 1) and 10 AL-specific ones (Tier 2)<!-- /operators: limits -->.
+  Tier 1 covers comparisons, return values and empty blocks, among others; Tier 2 covers
+  `TestField`, `SetRange`, `CalcFields`, `Commit` and friends. A third, more aggressive group is
   designed only.
   (Tier-2 operators *do* now claim sites inside `tableextension` and `pageextension` bodies; that
   limit was closed. A `pageextension`'s implicit `Rec` is still refused deliberately: it resolves to

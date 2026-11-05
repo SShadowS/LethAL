@@ -218,6 +218,9 @@ export function parseAllowedCores(status: string | undefined): number[] | undefi
 /** Addendum 1: a stopped A over the late line is contention only when its CPU is under this share of its wall. */
 export const BURN_CPU_SHARE = 0.75;
 
+/** R822: how many runs of A in all, so one busy moment does not cost a whole gate. */
+export const BURN_TRIES = 3;
+
 /**
  * R789: the least busy core from two `/proc/stat` snapshots (busy = total - idle - iowait, as a
  * delta). Ties go to the lowest core. Either snapshot unreadable or no `cpuN` line in both: core 0.
@@ -1280,6 +1283,7 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         ),
       );
     } else {
+      const taskset = env.tasksetPath;
       // R789: the least busy core, from two samples just before A.
       const readStat =
         env.readProcStat ??
@@ -1293,17 +1297,15 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         (readStat !== undefined && env.readProcStat === undefined
           ? async () => readFile("/proc/self/status", "utf8").catch(() => undefined)
           : undefined);
-      let core = 0;
-      if (readStat !== undefined) {
+      const pickCore = async (): Promise<number> => {
+        if (readStat === undefined) return 0;
         const statusText = readStatus !== undefined ? await readStatus() : undefined;
         const allowed = readStatus !== undefined ? parseAllowedCores(statusText) : undefined;
-        if (readStatus === undefined || allowed !== undefined) {
-          const s1 = await readStat();
-          if (env.readProcStat === undefined) await new Promise((r) => setTimeout(r, 200));
-          core = leastBusyCore(s1, await readStat(), allowed);
-        }
-      }
-      const pin = [env.tasksetPath, "-c", String(core)];
+        if (readStatus !== undefined && allowed === undefined) return 0;
+        const s1 = await readStat();
+        if (env.readProcStat === undefined) await new Promise((r) => setTimeout(r, 200));
+        return leastBusyCore(s1, await readStat(), allowed);
+      };
       const lateMs = BURN_LIMIT_SECS * 1000 * BURN_WALL_FACTOR;
       const expected = `at N=${BURN_LIMIT_SECS}: a huge burn on one core alone is a timeout row (A, on time: a wall-clock-late A means the core was contended); the same burn beside ${BURN_BUSY_LOOPS} busy loops on that core is ALSO a timeout row, with durationMs over ${lateMs} AND over ${BURN_RELATIVE_FACTOR}x A's (B: a CPU-time stop is late in wall time; a wall-time limit stops both at the same time)`;
       const guardMs = env.burnGuardMs ?? BURN_GUARD_MS;
@@ -1313,8 +1315,34 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
       const callText = (c: Call, r: V3Row | undefined) =>
         `${JSON.stringify(r ?? null)} (wall ${c.wallMs} ms${c.cpuMs !== undefined ? `, cpu ${Math.round(c.cpuMs)} ms` : ""}${c.timedOut ? `, killed by the ${guardMs} ms process timeout` : ""})`;
       // A: pinned, alone.
-      const alone = await call(burnArgs, { codeunit: 50656, wrap: pin, guardMs });
-      const a = rowOf(alone, "CpuBurnLong");
+      const runA = async () => {
+        const picked = await pickCore();
+        const call_ = await call(burnArgs, {
+          codeunit: 50656,
+          wrap: [taskset, "-c", String(picked)],
+          guardMs,
+        });
+        return { picked, call_, row: rowOf(call_, "CpuBurnLong") };
+      };
+      /** Addendum 1's contended A: stopped late, and its CPU time is under a full share of its wall. */
+      const contended = (x: Awaited<ReturnType<typeof runA>>): boolean =>
+        !x.call_.timedOut &&
+        stopped(x.row) &&
+        (x.row?.durationMs ?? 0) > lateMs &&
+        x.call_.cpuMs !== undefined &&
+        x.call_.cpuMs < BURN_CPU_SHARE * x.call_.wallMs;
+      // R822: only that reading retries, on a core picked afresh. No `diverged` path retries, and B is
+      // judged as ever, against the last A, so a retry cannot turn a wall-time build into `matches`.
+      let tried = await runA();
+      const earlier: string[] = [];
+      while (earlier.length < BURN_TRIES - 1 && contended(tried)) {
+        earlier.push(
+          `core ${tried.picked} contended, cpu ${Math.round(tried.call_.cpuMs ?? 0)} of wall ${tried.call_.wallMs} ms`,
+        );
+        tried = await runA();
+      }
+      const { picked: core, call_: alone, row: a } = tried;
+      const pin = [taskset, "-c", String(core)];
       let verdict: V3Fact["verdict"];
       let measured = `core ${core}; A ${callText(alone, a)}`;
       if (alone.timedOut) {
@@ -1365,6 +1393,7 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
               ? "diverged"
               : "matches";
       }
+      if (earlier.length > 0) measured += `; earlier tries of A: ${earlier.join("; ")}`;
       facts.push(fact("timeout-is-cpu", "contract", verdict, expected, measured));
     }
     // refusal-row-shape (#5608), a DEFECT fact since r9 (R639): HttpGet to localhost on 50653.
