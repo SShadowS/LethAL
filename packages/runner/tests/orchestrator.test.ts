@@ -16722,6 +16722,7 @@ describe("R198: grouped covering runs", () => {
   const session = async (
     backend: ExecutionBackend,
     groupRuns?: { maxMethodsPerCall?: number; requestCeilingMs?: number; enabled?: boolean },
+    baselineTimeoutMs?: number,
   ) => {
     const dirs = await makeProject(FIVE_TESTS_AL);
     const store = new ResultsStore(":memory:");
@@ -16733,6 +16734,7 @@ describe("R198: grouped covering runs", () => {
       selectorIds,
       emit: [createEmitter([(e) => events.push(e)])],
       ...(groupRuns !== undefined ? { groupRuns } : {}),
+      ...(baselineTimeoutMs !== undefined ? { baselineTimeoutMs } : {}),
     });
     return { report, store, events };
   };
@@ -16839,6 +16841,19 @@ describe("R198: grouped covering runs", () => {
     expect(events.some((e) => e.type === "warning" && e.code === "group-runs-inert")).toBe(true);
     seq.store.close();
     store.close();
+  });
+
+  test("R821: a baseline timeout past the request ceiling warns; the default, and one under it, do not", async () => {
+    const warned = async (ms: number | undefined, ceiling?: number) => {
+      const groups = ceiling !== undefined ? { requestCeilingMs: ceiling } : undefined;
+      const { events, store } = await session(withoutGroup(), groups, ms);
+      store.close();
+      return events.some((e) => e.type === "warning" && e.code === "baseline-timeout-over-ceiling");
+    };
+    expect(await warned(undefined)).toBe(false);
+    expect(await warned(270_000)).toBe(false);
+    expect(await warned(270_001)).toBe(true);
+    expect(await warned(270_001, 600_000)).toBe(false);
   });
 
   test("groupRuns.enabled false keeps the sequential loop on a backend that has the call", async () => {
