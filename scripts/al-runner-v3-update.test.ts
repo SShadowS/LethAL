@@ -486,6 +486,57 @@ linuxOnly("T19: the v3 update gate", () => {
     expect(existsSync(join(root, "regate", `${REGATE_COMMIT}.gate.log`))).toBe(true);
   });
 
+  test("R805: a pass keeps its receipt and gate.log beside .gated; a gate-fail keeps them only under failed/", async () => {
+    await setup();
+    await updateOnce(fake({ outcome: "pass", gateLog: "O1: commit kind" }).deps);
+    const dest = await current();
+    expect(dest).toBe(join(root, "3.0.0-alpha.3-c893e3633"));
+    expect(await readFile(join(dest, "gate.log"), "utf8")).toBe("O1: commit kind");
+    expect(JSON.parse(await readFile(join(dest, "receipt.json"), "utf8")).outcome).toBe("pass");
+
+    await setup();
+    await updateOnce(fake({ outcome: "gate-fail", gateLog: "g" }).deps);
+    expect(existsSync(join(failedAt("v3.0.0-alpha.3"), "gate.log"))).toBe(true);
+    expect(existsSync(join(root, "3.0.0-alpha.3-c893e3633"))).toBe(false);
+  });
+
+  test("R805: a deferred pass and an edge pass keep both files; a regate pass leaves the build folder alone", async () => {
+    await setup();
+    await updateOnce(fake({ outcome: "pass", gateLog: "d", inUse: true }).deps);
+    const deferred = join(root, "3.0.0-alpha.3-c893e3633");
+    expect(await current()).toBe(join(root, "3.0.0-alpha.2-91253f2d6"));
+    expect(existsSync(join(deferred, "gate.log"))).toBe(true);
+    expect(existsSync(join(deferred, "receipt.json"))).toBe(true);
+
+    await setup();
+    const e = fake({ outcome: "pass", gateLog: "e" });
+    await edgeOnce({ ...e.deps, edgeCommit: async () => "c893e3633" });
+    expect(existsSync(join(await current(), "gate.log"))).toBe(true);
+    expect(existsSync(join(await current(), "receipt.json"))).toBe(true);
+
+    await setup();
+    const r = fake({ outcome: "pass", receiptSha: sha("alpha2"), gateLog: "r" });
+    await updateOnce(r.deps, { regateAt: REGATE_COMMIT });
+    expect(existsSync(join(await current(), "gate.log"))).toBe(false);
+    expect(existsSync(join(await current(), "receipt.json"))).toBe(false);
+  });
+
+  test("R805: a re-pass of one build keeps only the latest log; a failed copy still moves current", async () => {
+    await setup();
+    const dest = join(root, "3.0.0-alpha.3-c893e3633");
+    await mkdir(dest);
+    await writeFile(join(dest, "gate.log"), "an older pass");
+    await updateOnce(fake({ outcome: "pass", gateLog: "the latest pass" }).deps);
+    expect(await readFile(join(dest, "gate.log"), "utf8")).toBe("the latest pass");
+
+    await setup();
+    await mkdir(join(root, "3.0.0-alpha.3-c893e3633", "gate.log"), { recursive: true });
+    const { deps, seen } = fake({ outcome: "pass", gateLog: "p" });
+    expect(await updateOnce(deps)).toEqual(["pass"]);
+    expect(await current()).toBe(join(root, "3.0.0-alpha.3-c893e3633"));
+    expect(seen.logs.join("\n")).toMatch(/gate\.log not kept/);
+  });
+
   test("R633 M2: a failed copy is logged and never blocks the verdict (a regate pass still writes .gated)", async () => {
     await setup();
     await writeFile(join(root, "regate"), "a file where the folder should be");
