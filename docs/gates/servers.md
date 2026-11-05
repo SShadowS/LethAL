@@ -269,7 +269,7 @@ out. `verify-scale` is measurement mode: its 0.20 line is recorded, not gated. T
 (R810) passed as they stand.
 
 `bc3`'s Microsoft apps read 28.4.53241.56646, the accepted build, and its Continia stack is published. `itest:hang`
-ran directly, under the lane's own lease (R822), and its leg marker read `passed` on both servers. It refuses `bc1`.
+ran directly, under the lane's own lease (R823), and its leg marker read `passed` on both servers. It refuses `bc1`.
 
 The tables below are per host and per fixture state, so they are history here: prove any new pair on this table first
 (one ordinary run of the gate, under the server's coord lease, after a full setup run).
