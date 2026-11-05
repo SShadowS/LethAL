@@ -485,7 +485,7 @@ that ordering is the priority.
 - **R745** · After the release: exclude single test METHODS from a run (today --tests-only narrows test FILES only); R740's refusal is its first user · [R745.md](docs/roadmap/R745.md) · done (f43a9308)
 - **R733** · Name the installed dependents before the first publish: LethAL Control 1.0.0.24 `InstalledDependents(AppId)` (after the Directions talk) · [R733.md](docs/roadmap/R733.md) · done (29874b65)
 - **R759** · `lethal verify` does not honour `--exclude-test` or `--tests-only`: it re-discovers every test · [R759.md](docs/roadmap/R759.md) · done (20a2dee5)
-- **R811** · A test project whose app.json names a path with `\` fails on Linux: R422 covers the target only, and the refusal blamed the batch · [R811.md](docs/roadmap/R811.md) · open, filed 2026-11-05 (coord task R-810); the message is fixed, the rewrite is not built
+- **R811** · A test project whose app.json names a path with `\` fails on Linux: R422 covers the target only, and the refusal blamed the batch · [R811.md](docs/roadmap/R811.md) · done (83b33574)
 - **R814** · A LethAL user cannot run the al-runner-v3 backend: every binary needs a `.gated` file that only our own update gate can write · [R814.md](docs/roadmap/R814.md) · done (57396130); a clean-machine run of the install is still to do
 - **R821** · The reports told users to raise --baseline-timeout-ms, which was no CLI flag (GitHub #46) · [R821.md](docs/roadmap/R821.md) · done (3ae274b3)
 
