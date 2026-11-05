@@ -69,7 +69,7 @@ import {
   resolveV3Binary,
   sha256OfFile,
 } from "../src/al-runner-v3-pin";
-import { type V3BuildPin, findV3Pin } from "../src/al-runner-v3-pins";
+import { type V3BuildPin, findV3Pin, v3ReadingsDigest } from "../src/al-runner-v3-pins";
 import { FRESH_PROBE_ENV } from "../src/al-runner-v3-probe-cache";
 import {
   AlRunnerV3SeedError,
@@ -2387,7 +2387,7 @@ async function main(): Promise<void> {
       legs,
       lines,
       ...(legCWarnFacts !== undefined ? { warnFacts: legCWarnFacts } : {}),
-      ...(PIN !== undefined ? { pinApplied: PIN.id } : {}),
+      ...(PIN !== undefined ? { pinApplied: PIN.id, pinDigest: v3ReadingsDigest(PIN) } : {}),
       oracleBcBuild: ORACLE_BC_BUILD,
       writtenAt: new Date().toISOString(),
     });

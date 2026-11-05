@@ -905,6 +905,8 @@ export interface V3GateReceipt {
   readonly lines: readonly string[];
   /** R814: the hand pin this run judged by; absent: no pin, the default tables. */
   readonly pinApplied?: string;
+  /** R814: that pin's readings digest at this run's commit (`v3ReadingsDigest`). */
+  readonly pinDigest?: string;
   /** R612 M-2: leg C's reading of each warn fact (`V3_WARN_FACTS`); the update script copies it
    *  into `.gated` on a pass. */
   readonly warnFacts?: Readonly<Record<string, string>>;

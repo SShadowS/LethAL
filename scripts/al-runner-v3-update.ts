@@ -73,6 +73,7 @@ import {
 } from "../packages/runner/src/al-runner-v3-pin";
 import {
   type GatedBuildEntry,
+  V3_BUILD_PINS,
   alphaOfEntry,
   findV3Pin,
   gatedBuilds,
@@ -138,6 +139,8 @@ export interface UpdateDeps {
   isAncestor(a: string, b: string): Promise<boolean>;
   /** R814: does LethAL `commit`'s gate read `LETHAL_V3_PIN_FROM`? An older one ignores it. */
   pinFromAt(commit: string): Promise<boolean>;
+  /** R814: does this script's pin file differ from LethAL `commit`'s? */
+  pinsMovedSince(commit: string): Promise<boolean>;
   /** R814: where upstream's `head` stands against `base`. Throws when it cannot tell. */
   commitOrder(base: string, head: string): Promise<CommitOrder>;
   /** R814: adds these rows to master's gated-builds file (`publishToMaster`). */
@@ -218,6 +221,7 @@ export async function readReceipt(
     outcome?: unknown;
     legs?: unknown;
     pinApplied?: unknown;
+    pinDigest?: unknown;
   };
   if (r.nonce !== nonce) return { outcome: "infra-fail", why: "a receipt of another run (nonce)" };
   if (r.binarySha256 !== sha)
@@ -254,15 +258,30 @@ export async function readReceipt(
       why: `a pass from a gate worktree that was not clean (dirty: ${JSON.stringify(r.dirty)})`,
     };
   const pinApplied = typeof r.pinApplied === "string" ? r.pinApplied : undefined;
-  if (r.outcome === "pass" && expect.candidate === true && legs.K !== "pass")
+  if (r.outcome === "pass" && expect.candidate === true && legs.K !== "pass") {
+    // A K that ran and failed is a verdict on the build, so it is kept like one and not re-gated daily.
+    const kept = legs.K === "gate-fail" || legs.K === "held" ? legs.K : "infra-fail";
     return {
-      outcome: "infra-fail",
+      outcome: kept,
       why: `a candidate's pass with K ${JSON.stringify(legs.K)}: K is the only normal session it gets`,
     };
+  }
   if (r.outcome === "pass" && expect.pinFrom !== undefined && pinApplied === undefined)
     return {
       outcome: "infra-fail",
       why: `a pass that applied no pin, asked to judge by ${expect.pinFrom}`,
+    };
+  // The gate ran at `.gated`'s commit: a hand pin edited since then is not what it judged by.
+  const hand = pinApplied !== undefined ? handV3Pin(pinApplied) : undefined;
+  if (
+    r.outcome === "pass" &&
+    expect.candidate === true &&
+    hand !== undefined &&
+    r.pinDigest !== v3ReadingsDigest(hand)
+  )
+    return {
+      outcome: "infra-fail",
+      why: `the gate judged by another ${pinApplied} than this checkout's: re-gate current first`,
     };
   // R632 A: name the legs that never ran (D1 and D1c need LETHAL_ITEST_V3_CDO).
   const missing = V3_GATE_LEGS.filter((l) => !(l in legs));
@@ -331,6 +350,8 @@ async function gatedWithAllLegs(
     ...V3_GATE_LEGS.filter((l) => !has.has(l)),
     // R814: a gate that ignores the pin would judge a candidate on the default tables: a false gate-fail.
     ...((await deps.pinFromAt(current.lethalCommit)) ? [] : [V3_PIN_FROM_ENV]),
+    // The gate runs there, so a hand pin edited since would judge a candidate by old readings.
+    ...((await deps.pinsMovedSince(current.lethalCommit)) ? [PINS_FILE] : []),
   ];
   if (missing.length === 0) return current;
   const self = await deps.selfCommit();
@@ -402,8 +423,18 @@ async function textLines(path: string): Promise<string[]> {
     : [];
 }
 
-async function readLedger(root: string): Promise<GatedBuildEntry[]> {
-  return (await textLines(ledgerPath(root))).map((l) => JSON.parse(l) as GatedBuildEntry);
+/** The ledger's rows, each id once. A line that does not parse (a torn write) is logged and skipped. */
+async function readLedger(deps: UpdateDeps): Promise<GatedBuildEntry[]> {
+  const rows = new Map<string, GatedBuildEntry>();
+  for (const l of await textLines(ledgerPath(deps.root))) {
+    try {
+      const e = JSON.parse(l) as GatedBuildEntry;
+      rows.set(e.id, e);
+    } catch {
+      await deps.log(`${deps.now()} gated-builds ledger: an unreadable line skipped`);
+    }
+  }
+  return [...rows.values()];
 }
 
 /**
@@ -412,10 +443,10 @@ async function readLedger(root: string): Promise<GatedBuildEntry[]> {
  * rest. A failure is logged and retried by the next run: `.gated` already carries the readings.
  */
 export async function publishPending(deps: UpdateDeps): Promise<void> {
-  const done = new Set(await textLines(publishedPath(deps.root)));
-  const pending = (await readLedger(deps.root)).filter((e) => !done.has(e.id));
-  if (pending.length === 0) return;
   try {
+    const done = new Set(await textLines(publishedPath(deps.root)));
+    const pending = (await readLedger(deps)).filter((e) => !done.has(e.id));
+    if (pending.length === 0) return;
     const r = await deps.publishEntries(pending);
     if (r.published.length > 0)
       await writeFile(publishedPath(deps.root), `${r.published.join("\n")}\n`, { flag: "a" });
@@ -652,9 +683,9 @@ export async function gateOne(
           ...(warnFacts !== undefined ? { warnFacts } : {}),
         };
         await writeFile(ledgerPath(root), `${JSON.stringify(row)}\n`, { flag: "a" });
-      } else if (pinApplied !== undefined) {
+      } else {
         await deps.log(
-          `${deps.now()} ${tag}: no gated-builds row: this script's checkout has no pin ${pinApplied}`,
+          `${deps.now()} ${tag}: no gated-builds row: ${pinApplied === undefined ? "no pin applied" : `this script's checkout has no pin ${pinApplied}`}`,
         );
       }
       if (!movesCurrent) {
@@ -707,7 +738,7 @@ export async function updateOnce(
 
 /** R814: the newest listed release: the committed file plus the ledger, so an unpublished pass counts. */
 async function newestListedAlpha(deps: UpdateDeps): Promise<number> {
-  const rows = [...deps.listedBuilds(), ...(await readLedger(deps.root))];
+  const rows = [...deps.listedBuilds(), ...(await readLedger(deps))];
   return rows.reduce((n, e) => (e.track === "release" ? Math.max(n, alphaOfEntry(e)) : n), -1);
 }
 
@@ -963,7 +994,9 @@ export async function edgeOnce(deps: UpdateDeps & EdgeDeps): Promise<EdgeResult>
   const lock = await takeGateLock(deps, "edge");
   if (lock === undefined) return "skipped";
   try {
-    return await edgeLocked(deps);
+    const outcome = await edgeLocked(deps);
+    await publishPending(deps);
+    return outcome;
   } finally {
     await lock.release();
   }
@@ -1000,12 +1033,21 @@ export async function dailyOnce(
   if (await skippedForTheDay(deps, "daily")) return { edge: "skipped", releases: [] };
   const lock = await takeGateLock(deps, "daily");
   if (lock === undefined) return { edge: "skipped", releases: [] };
+  // One track failing must not stop the other, or the rows of what already passed.
+  const guarded = async <T>(what: string, f: () => Promise<T>, failed: T): Promise<T> => {
+    try {
+      return await f();
+    } catch (err) {
+      await deps.log(`${deps.now()} daily: the ${what} track failed: ${String(err)}`);
+      return failed;
+    }
+  };
   try {
     await publishPending(deps);
-    const edge = await edgeLocked(deps);
+    const edge = await guarded<EdgeResult>("edge", () => edgeLocked(deps), "infra-fail");
     const releases = (await skippedForTheDay(deps, "alpha"))
       ? ["skipped"]
-      : await updateLocked(deps, {});
+      : await guarded<readonly string[]>("release", () => updateLocked(deps, {}), ["infra-fail"]);
     await publishPending(deps);
     return { edge, releases };
   } finally {
@@ -1195,6 +1237,11 @@ export function realDeps(root = ROOT): UpdateDeps {
       (
         await run(["git", "-C", dirname(import.meta.dir), "show", `${commit}:${PIN_FILE}`])
       ).includes(V3_PIN_FROM_ENV_NAME),
+    pinsMovedSince: async (commit) =>
+      (await Bun.spawn(
+        ["git", "-C", dirname(import.meta.dir), "diff", "--quiet", commit, "HEAD", "--", PINS_FILE],
+        { stdout: "ignore", stderr: "ignore" },
+      ).exited) !== 0,
     commitOrder: async (base, head) => {
       const s = (
         await run(["gh", "api", `repos/${REPO}/compare/${base}...${head}`, "--jq", ".status"])
@@ -1213,15 +1260,36 @@ export function realDeps(root = ROOT): UpdateDeps {
 const PIN_FILE = "packages/runner/src/al-runner-v3-pin.ts";
 const V3_PIN_FROM_ENV_NAME = `export const V3_PIN_FROM_ENV = "${V3_PIN_FROM_ENV}"`;
 
+/** Every hand pin's readings digest, for `masterPinDigests`. */
+export function pinDigests(): Record<string, string> {
+  return Object.fromEntries(V3_BUILD_PINS.map((p) => [p.id, v3ReadingsDigest(p)]));
+}
+
+/** The digests master's own code computes, in the pin worktree (its script, its pins). */
+async function masterPinDigests(worktree: string): Promise<Record<string, string>> {
+  await runToLog(["bun", "install", "--frozen-lockfile"], {}, worktree);
+  const out = await runToLog(
+    ["bun", "scripts/al-runner-v3-update.ts", "--pin-digests"],
+    {},
+    worktree,
+  );
+  return JSON.parse(out) as Record<string, string>;
+}
+
 /**
  * R814: adds `entries` to origin/master's gated-builds file, from its own worktree, and pushes. It
- * checks each row against MASTER's pins, not this checkout's, so a row whose hand pin is unmerged is
- * refused alone. The commit touches that one file or nothing. Never forced: a rejected push refetches
+ * checks each row against MASTER's pins, not this checkout's: a row whose hand pin is unmerged, or
+ * differs on master, is refused alone. The commit touches that one file or nothing. Never forced: a rejected push refetches
  * and tries again, twice.
  */
 export async function publishToMaster(
   entries: readonly GatedBuildEntry[],
-  o: { readonly repo: string; readonly worktree: string },
+  o: {
+    readonly repo: string;
+    readonly worktree: string;
+    /** Each hand pin's digest as master has it (tests fake it; master's own script computes it). */
+    readonly digestsOf?: (worktree: string) => Promise<Readonly<Record<string, string>>>;
+  },
 ): Promise<PublishResult> {
   const git = (...a: string[]) => runToLog(["git", "-C", o.worktree, ...a]);
   if (!existsSync(o.worktree))
@@ -1232,8 +1300,8 @@ export async function publishToMaster(
     await git("checkout", "--detach", "--force", "FETCH_HEAD");
     const file = join(o.worktree, GATED_BUILDS_FILE);
     const rows = JSON.parse(await readFile(file, "utf8")) as GatedBuildEntry[];
-    const pins = await readFile(join(o.worktree, PINS_FILE), "utf8");
-    const handIds = new Set([...pins.matchAll(/^\s+id: "([^"]+)",$/gm)].map((m) => m[1] ?? ""));
+    const digests = await (o.digestsOf ?? masterPinDigests)(o.worktree);
+    const handIds = new Set(Object.keys(digests));
     const published: string[] = [];
     const refused: { id: string; why: string }[] = [];
     const fresh: GatedBuildEntry[] = [];
@@ -1244,6 +1312,8 @@ export async function publishToMaster(
       }
       try {
         parseGatedBuilds([...rows, ...fresh, e], handIds);
+        if (digests[e.readingsFrom] !== e.readingsDigest)
+          throw new Error(`${e.readingsFrom} on master is not the pin ${e.id} was gated by`);
         fresh.push(e);
       } catch (err) {
         refused.push({ id: e.id, why: err instanceof Error ? err.message : String(err) });
@@ -1304,7 +1374,9 @@ export function realEdgeDeps(root = ROOT): UpdateDeps & EdgeDeps {
   };
 }
 
-if (import.meta.main && process.argv.includes("--edge")) {
+if (import.meta.main && process.argv.includes("--pin-digests")) {
+  console.log(JSON.stringify(pinDigests()));
+} else if (import.meta.main && process.argv.includes("--edge")) {
   console.log(`al-runner-v3-update --edge: ${await edgeOnce(realEdgeDeps())}`);
 } else if (import.meta.main && process.argv.includes("--edge-rejudge")) {
   const sha = process.argv[process.argv.indexOf("--edge-rejudge") + 1] ?? "";

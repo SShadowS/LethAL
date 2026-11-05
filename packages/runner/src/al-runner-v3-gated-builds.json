@@ -7,10 +7,10 @@
     "binarySha256": "c406b57f178066ebbca3a66d7f6436730b2a1956292a7ccb6120479a93ec12cf",
     "readingsFrom": "alpha.12-d4bc8d3a5",
     "readingsDigest": "18793d7f161dba8071a394cab44b98dd3f59fb15e47cb1b057a4fa227030ccef",
-    "lethalCommit": "3c928e6c28ece2450a7bfea2b7b0661c815f964b",
-    "gatedAt": "2026-11-05T18:39:01.054Z",
+    "lethalCommit": "a7ac7f500c1e5fcf9e9c049f2a3324105ad62ed8",
+    "gatedAt": "2026-11-05T20:02:21.056Z",
     "warnFacts": {
-      "serve-keep-reasons": "diverged"
+      "serve-keep-reasons": "matches"
     }
   }
 ]

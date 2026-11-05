@@ -37,6 +37,7 @@ import {
   expectedSha,
   gateOne,
   parseGateLegs,
+  pinDigests,
   publishPending,
   publishToMaster,
   readReceipt,
@@ -79,6 +80,12 @@ async function setup(commit = GATED_COMMIT): Promise<string> {
   return root;
 }
 
+/** The readings digest of a hand pin, as a gate's receipt reports it. */
+const digestOfPin = (id: string): string => {
+  const p = V3_BUILD_PINS.find((x) => x.id === id);
+  return p === undefined ? "" : v3ReadingsDigest(p);
+};
+
 /** Legs that give `o` by gateOutcome over the exact leg set (M3). */
 const legsFor = (o: Outcome): Record<string, string> => ({
   ...Object.fromEntries(V3_GATE_LEGS.map((l, i) => [l, i === 0 ? o : "pass"])),
@@ -91,6 +98,8 @@ function fake(o: {
   order?: CommitOrder;
   orderThrows?: boolean;
   noPinFromAt?: string[];
+  pinsMovedAt?: string[];
+  pinDigest?: string;
   listed?: readonly GatedBuildEntry[];
   publish?: (e: readonly GatedBuildEntry[]) => Promise<PublishResult>;
   outcome?: Outcome;
@@ -195,12 +204,15 @@ function fake(o: {
           legs: o.legs ?? legsFor(outcome),
           lines: o.lines ?? [],
           ...(o.warnFacts !== undefined ? { warnFacts: o.warnFacts } : {}),
-          ...(o.pinApplied !== undefined ? { pinApplied: o.pinApplied } : {}),
+          ...(o.pinApplied !== undefined
+            ? { pinApplied: o.pinApplied, pinDigest: o.pinDigest ?? digestOfPin(o.pinApplied) }
+            : {}),
         }),
       );
       if (o.throwText !== undefined) throw new Error(o.throwText);
     },
     pinFromAt: async (c) => !(o.noPinFromAt ?? []).includes(c),
+    pinsMovedSince: async (c) => (o.pinsMovedAt ?? []).includes(c),
     commitOrder: async () => {
       if (o.orderThrows === true) throw new Error("compare failed");
       return o.order ?? "ahead";
@@ -1384,6 +1396,64 @@ linuxOnly("R814: the two tracks", () => {
     expect(seen.logs.join("\n")).toContain("applied no pin");
   });
 
+  test("K that ran and failed is a verdict: gate-fail lands in failed/, held in held/, and edge is seen", async () => {
+    await setupPinned();
+    const legs = { ...legsFor("pass"), K: "gate-fail" } as Record<string, string>;
+    expect(await edgeOnce(edgeOf({ ...pinnedPass, legs }).deps)).toBe("gate-fail");
+    expect(await current()).toBe(join(root, ALPHA2_DIR));
+    expect(existsSync(failedAt("edge-c893e3633"))).toBe(true);
+    expect(existsSync(join(root, "edge.last-seen"))).toBe(true);
+    await setupPinned();
+    const held = { ...legsFor("pass"), K: "held" } as Record<string, string>;
+    expect(await edgeOnce(edgeOf({ ...pinnedPass, legs: held }).deps)).toBe("held");
+    expect(existsSync(join(root, "held", "edge-c893e3633"))).toBe(true);
+  });
+
+  test("a gate that judged by another version of the pin is infra-fail: no row, current stays", async () => {
+    await setupPinned();
+    const { deps, seen } = edgeOf({ ...pinnedPass, pinDigest: sha("an older pin") });
+    expect(await edgeOnce(deps)).toBe("infra-fail");
+    expect(await current()).toBe(join(root, ALPHA2_DIR));
+    expect(await ledger()).toEqual([]);
+    expect(seen.logs.join("\n")).toContain("re-gate current first");
+  });
+
+  test("a pin file that moved since .gated's commit re-gates current first", async () => {
+    await setupPinned();
+    const { deps, seen } = edgeOf({
+      ...pinnedPass,
+      pinsMovedAt: [GATED_COMMIT],
+      realSha: true,
+    });
+    expect(await edgeOnce(deps)).toBe("pass");
+    expect(seen.gates).toEqual([FIXED_COMMIT, FIXED_COMMIT]);
+    expect(seen.logs.join("\n")).toContain("al-runner-v3-pins.ts");
+  });
+
+  test("daily: edge throwing does not stop the release track or the rows of what passed", async () => {
+    await setupPinned();
+    const f = fake({ ...pinnedPass, tags: TAGS });
+    const deps = {
+      ...f.deps,
+      edgeCommit: async () => {
+        throw new Error("gh is down");
+      },
+    };
+    expect(await dailyOnce(deps)).toEqual({ edge: "infra-fail", releases: ["pass"] });
+    expect(f.seen.published).toEqual(["alpha.3-c893e3633"]);
+    expect(f.seen.logs.join("\n")).toContain("the edge track failed");
+  });
+
+  test("the ledger: a torn line is logged and skipped; a repeated id goes once", async () => {
+    await setupPinned();
+    const r = JSON.stringify({ id: "edge-x", track: "edge" });
+    await writeFile(join(root, "gated-builds.jsonl"), `${r}\n{"id":"to\n${r}\n`);
+    const { deps, seen } = edgeOf({ tags: ["edge"] });
+    await publishPending(deps);
+    expect(seen.published).toEqual(["edge-x"]);
+    expect(seen.logs.join("\n")).toContain("an unreadable line skipped");
+  });
+
   test("a candidate's pass with K not passed is infra-fail", async () => {
     for (const K of ["skipped (candidate build)", undefined]) {
       await setupPinned();
@@ -1486,6 +1556,8 @@ linuxOnly("R814: the two tracks", () => {
 });
 
 describe("R814: publishToMaster, on real git repositories", () => {
+  /** Master's hand pins, as `--pin-digests` reports them. */
+  const digestsOf = async () => ({ "root-pin": sha("d") });
   const row = (id: string, from = "root-pin") => ({
     id,
     track: "edge",
@@ -1537,7 +1609,7 @@ describe("R814: publishToMaster, on real git repositories", () => {
   test("adds the row in one [skip ci] commit touching only the file; a second run adds nothing", async () => {
     const { clone, worktree } = await repos();
     const e = row("b") as unknown as GatedBuildEntry;
-    const o = { repo: clone, worktree };
+    const o = { repo: clone, worktree, digestsOf };
     expect(await publishToMaster([e], o)).toEqual({ published: ["b"], refused: [] });
     expect(onMaster(clone)).toEqual(["b"]);
     expect(git(clone, "log", "-1", "--format=%s", "origin/master")).toContain("[skip ci]");
@@ -1552,11 +1624,33 @@ describe("R814: publishToMaster, on real git repositories", () => {
     const { clone, worktree } = await repos();
     const bad = row("a", "unmerged-pin") as unknown as GatedBuildEntry;
     const good = row("b") as unknown as GatedBuildEntry;
-    const r = await publishToMaster([bad, good], { repo: clone, worktree });
+    const r = await publishToMaster([bad, good], { repo: clone, worktree, digestsOf });
     expect(r.published).toEqual(["b"]);
     expect(r.refused.map((x) => x.id)).toEqual(["a"]);
     expect(r.refused[0]?.why).toContain("is no hand pin");
     expect(onMaster(clone)).toEqual(["b"]);
+  });
+
+  test("a row gated by a pin that differs on master is refused alone, so master's test stays green", async () => {
+    const { clone, worktree } = await repos();
+    const stale = {
+      ...row("a"),
+      readingsDigest: sha("an older pin"),
+    } as unknown as GatedBuildEntry;
+    const good = row("b") as unknown as GatedBuildEntry;
+    const r = await publishToMaster([stale, good], { repo: clone, worktree, digestsOf });
+    expect(r.published).toEqual(["b"]);
+    expect(r.refused[0]?.why).toContain("is not the pin a was gated by");
+    expect(onMaster(clone)).toEqual(["b"]);
+  });
+
+  test("--pin-digests prints every hand pin's digest, this checkout's", () => {
+    const p = Bun.spawnSync(["bun", "scripts/al-runner-v3-update.ts", "--pin-digests"], {
+      cwd: dirname(import.meta.dir),
+      stdout: "pipe",
+    });
+    expect(p.exitCode).toBe(0);
+    expect(JSON.parse(p.stdout.toString())).toEqual(pinDigests());
   });
 
   /** Origin refuses a push while its counter is under `rejects`; the file holds the tries seen. */
@@ -1578,6 +1672,7 @@ describe("R814: publishToMaster, on real git repositories", () => {
     const r = await publishToMaster([row("b") as unknown as GatedBuildEntry], {
       repo: clone,
       worktree,
+      digestsOf,
     });
     expect(r.published).toEqual(["b"]);
     expect(onMaster(clone)).toEqual(["b"]);
@@ -1588,7 +1683,11 @@ describe("R814: publishToMaster, on real git repositories", () => {
     const { origin, clone, worktree } = await repos();
     const count = await rejectPushes(origin, 99);
     await expect(
-      publishToMaster([row("b") as unknown as GatedBuildEntry], { repo: clone, worktree }),
+      publishToMaster([row("b") as unknown as GatedBuildEntry], {
+        repo: clone,
+        worktree,
+        digestsOf,
+      }),
     ).rejects.toThrow();
     expect((await readFile(count, "utf8")).trim()).toBe("3");
     expect(onMaster(clone)).toEqual([]);
@@ -1596,7 +1695,11 @@ describe("R814: publishToMaster, on real git repositories", () => {
 
   test("a lane's commit already on master is built on, never overwritten", async () => {
     const { clone, worktree } = await repos();
-    await publishToMaster([row("b") as unknown as GatedBuildEntry], { repo: clone, worktree });
+    await publishToMaster([row("b") as unknown as GatedBuildEntry], {
+      repo: clone,
+      worktree,
+      digestsOf,
+    });
     const other = join(top, "other");
     git(top, "clone", "-q", join(top, "origin.git"), other);
     git(other, "config", "user.email", "t@example.invalid");
@@ -1606,7 +1709,11 @@ describe("R814: publishToMaster, on real git repositories", () => {
     git(other, "commit", "-q", "-m", "lane");
     git(other, "push", "-q", "origin", "HEAD:master");
     const laneHead = git(other, "rev-parse", "HEAD");
-    await publishToMaster([row("c") as unknown as GatedBuildEntry], { repo: clone, worktree });
+    await publishToMaster([row("c") as unknown as GatedBuildEntry], {
+      repo: clone,
+      worktree,
+      digestsOf,
+    });
     git(clone, "fetch", "-q", "origin");
     expect(git(clone, "merge-base", "--is-ancestor", laneHead, "origin/master")).toBe("");
     expect(onMaster(clone)).toEqual(["b", "c"]);
