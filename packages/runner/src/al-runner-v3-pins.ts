@@ -5,9 +5,14 @@
  * one; nothing outside the table is covered; a build with no pin is judged as before.
  *
  * S5: a pin for a build that is or was `current` is never removed (a later `--regate` needs it).
- * Pure: no IO. The one value import is the hub text, bound by `r586c-pins.test.ts`.
+ * No IO. The value imports are the hub text, bound by `r586c-pins.test.ts`, and the gated-builds data.
+ * R814: a mechanical pin is an entry of `al-runner-v3-gated-builds.json` that names one hand pin here
+ * as its readings; it holds no reading of its own. The one piece of state is the adopted-pin map,
+ * set only by `checkGated` (`adoptV3Pin`).
  */
+import { createHash } from "node:crypto";
 import { type V3ContractResult, v3MuteKey } from "./al-runner-v3-contract";
+import RAW_GATED_BUILDS from "./al-runner-v3-gated-builds.json";
 import { BC_HTTP_HUB_TEXT } from "./al-runner-v3-texts";
 
 const REPO = "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues";
@@ -87,6 +92,17 @@ export interface V3BuildPin {
    */
   readonly serveRowFields?: {
     readonly issue: string;
+    readonly evidence: string;
+  };
+  /**
+   * R808: what `serve-keep-reasons` reads for the two entries that moved from edge 8078bcf49 on:
+   * `commit` is a plain pass (no `notRun`), and on these builds `onrun-failed` has no row for the
+   * test method `Codeunit50673.Never` (alpha.7 gives a `Codeunit<n>.OnRun` fail row, alpha.12 no
+   * row at all; since #5859 a raising OnRun gives no row, as BC's Test Runner app does). Absent (alpha.2, alpha.5, older edges): the fact judges as before.
+   */
+  readonly serveKeepMoved?: {
+    readonly commit: "plain pass";
+    readonly onrunFailed: "no row";
     readonly evidence: string;
   };
   /**
@@ -645,6 +661,12 @@ const READINGS_8078BCF49: Omit<V3BuildPin, "id" | "version" | "binarySha256"> = 
       "#5798 fixed upstream: the Dot.Step serve row carries codeunit 78850 and method Dot.Step (8078bcf49 receipt, leg N1E at 4aa6ca6d)",
   },
   o1: O1_8078BCF49,
+  serveKeepMoved: {
+    commit: "plain pass",
+    onrunFailed: "no row",
+    evidence:
+      "R808: the commit test is a plain pass (#5607 fixed) and there is no row for the test method of a codeunit whose OnRun raises (alpha.7 gives a Codeunit<n>.OnRun fail row, alpha.12 no row at all; #5859); /coord/handoff/R-808/probe.md",
+  },
 };
 
 export const V3_BUILD_PINS: readonly V3BuildPin[] = [
@@ -740,11 +762,178 @@ export const V3_BUILD_PINS: readonly V3BuildPin[] = [
     ...READINGS_8078BCF49,
     o1: { ...O1_8078BCF49, cdoApps: 18 },
   },
+  {
+    // Edge d72d3197d (R-815 pre-commitment, master 7071d5c2): alpha.12's readings, by a masked diff of the two unpinned
+    // gate logs. `current` follows edge (owner, 2026-11-05). The rejudge is the measurement of O1's CDO set and its seed
+    // sub-check, which the unpinned run never reached; any reading off this table is a BLOCK.
+    id: "edge-d72d3197d",
+    version: "al-runner 3.0.0-alpha.13+edge.20261105 (d72d3197d)",
+    binarySha256: "3e19dbec34826e2d057304d9e85859c04e87d69a5846bb738fe9567a00c22be4",
+    ...READINGS_8078BCF49,
+    o1: { ...O1_8078BCF49, cdoApps: 18 },
+  },
 ];
 
-/** The pin for this exact binary: the version line AND the sha256 must both be equal. */
+/**
+ * R814: one gated build. `readingsFrom` names a hand pin in `V3_BUILD_PINS`, never another entry, and
+ * the strict parse refuses any other key: an entry cannot carry a reading, so it cannot move a verdict.
+ * `readingsDigest` binds it to that pin's readings as they were gated: an edit of the hand pin fails
+ * `r814-gated-builds.test.ts` until a person re-gates (a mechanical entry never moves with no run).
+ * `track: "release"` is the manifest: what a user may install (`tag` names it). `track: "edge"` is
+ * the record of what `current` was; a user cannot fetch one once edge moves.
+ */
+export interface GatedBuildEntry {
+  readonly id: string;
+  readonly track: "edge" | "release";
+  readonly tag?: string;
+  readonly version: string;
+  readonly binarySha256: string;
+  readonly readingsFrom: string;
+  readonly readingsDigest: string;
+  readonly lethalCommit: string;
+  readonly gatedAt: string;
+  readonly warnFacts?: Readonly<Record<string, string>>;
+}
+
+const GATED_BUILD_KEYS = new Set([
+  "id",
+  "track",
+  "tag",
+  "version",
+  "binarySha256",
+  "readingsFrom",
+  "readingsDigest",
+  "lethalCommit",
+  "gatedAt",
+  "warnFacts",
+]);
+
+/** A digest of what a pin judges and changes, so an edit of a root pin cannot pass unseen. */
+export function v3ReadingsDigest(pin: V3BuildPin): string {
+  const { id: _id, version: _version, binarySha256: _sha, ...readings } = pin;
+  const text = JSON.stringify(readings, (_k, v: unknown) =>
+    v instanceof RegExp || typeof v === "function" ? String(v) : v,
+  );
+  return createHash("sha256").update(text).digest("hex");
+}
+
+/** The fault in one raw entry, or undefined. */
+function gatedBuildFault(e: Record<string, unknown>): string | undefined {
+  for (const k of Object.keys(e)) if (!GATED_BUILD_KEYS.has(k)) return `unknown key "${k}"`;
+  for (const k of ["id", "version", "readingsFrom", "gatedAt"])
+    if (typeof e[k] !== "string" || e[k] === "") return `no ${k}`;
+  if (e.track !== "edge" && e.track !== "release") return "track must be edge or release";
+  if (e.track === "release" && typeof e.tag !== "string") return "a release needs its tag";
+  if (typeof e.binarySha256 !== "string" || !/^[0-9a-f]{64}$/.test(e.binarySha256))
+    return "no binarySha256";
+  if (typeof e.readingsDigest !== "string" || !/^[0-9a-f]{64}$/.test(e.readingsDigest))
+    return "no readingsDigest";
+  if (typeof e.lethalCommit !== "string" || !/^[0-9a-f]{40}$/.test(e.lethalCommit))
+    return "no lethalCommit";
+  const wf = e.warnFacts;
+  if (
+    wf !== undefined &&
+    (typeof wf !== "object" || wf === null || Object.values(wf).some((v) => typeof v !== "string"))
+  )
+    return "warnFacts must map names to strings";
+  return undefined;
+}
+
+/**
+ * The strict parse of the gated-builds data; any fault throws by name. `handPinIds`: the hand pins
+ * this checkout knows, so `readingsFrom` can never name an entry or nothing.
+ */
+export function parseGatedBuilds(
+  raw: unknown,
+  handPinIds: ReadonlySet<string>,
+): readonly GatedBuildEntry[] {
+  if (!Array.isArray(raw)) throw new Error("al-runner-v3-gated-builds: not an array");
+  const ids = new Set<string>();
+  const builds = new Set<string>();
+  return raw.map((x: unknown) => {
+    const e = (typeof x === "object" && x !== null ? x : {}) as Record<string, unknown>;
+    const fault = gatedBuildFault(e);
+    if (fault !== undefined)
+      throw new Error(`al-runner-v3-gated-builds: ${String(e.id)}: ${fault}`);
+    const entry = e as unknown as GatedBuildEntry;
+    if (!handPinIds.has(entry.readingsFrom))
+      throw new Error(
+        `al-runner-v3-gated-builds: ${entry.id}: readingsFrom "${entry.readingsFrom}" is no hand pin`,
+      );
+    const build = `${entry.version}|${entry.binarySha256}`;
+    if (ids.has(entry.id) || builds.has(build))
+      throw new Error(`al-runner-v3-gated-builds: ${entry.id}: a duplicate`);
+    ids.add(entry.id);
+    builds.add(build);
+    return entry;
+  });
+}
+
+/** Parsed on first use, so a bad row refuses on the v3 path, never at every importer's load. */
+let gatedBuildsMemo: readonly GatedBuildEntry[] | undefined;
+export function gatedBuilds(): readonly GatedBuildEntry[] {
+  gatedBuildsMemo ??= parseGatedBuilds(RAW_GATED_BUILDS, new Set(V3_BUILD_PINS.map((p) => p.id)));
+  return gatedBuildsMemo;
+}
+
+/** The hand pin with this id, or undefined. */
+export function handV3Pin(id: string): V3BuildPin | undefined {
+  return V3_BUILD_PINS.find((p) => p.id === id);
+}
+
+/** R814: this build's entry in the committed gated builds (version line AND sha256). */
+export function findGatedBuild(version: string, binarySha256: string): GatedBuildEntry | undefined {
+  return gatedBuilds().find((e) => e.version === version && e.binarySha256 === binarySha256);
+}
+
+/** The alpha number of a release tag, or -1. */
+export function alphaOfEntry(e: { readonly tag?: string }): number {
+  return Number(/^v3\.0\.0-alpha\.(\d+)$/.exec(e.tag ?? "")?.[1] ?? -1);
+}
+
+/** The newest gated release: what a user is told to install. */
+export function newestGatedRelease(): GatedBuildEntry | undefined {
+  return gatedBuilds()
+    .filter((e) => e.track === "release")
+    .reduce<GatedBuildEntry | undefined>(
+      (best, e) => (best === undefined || alphaOfEntry(e) > alphaOfEntry(best) ? e : best),
+      undefined,
+    );
+}
+
+const adoptedPins = new Map<string, string>();
+
+/**
+ * R814: for this process, read this exact build by hand pin `from`. `checkGated` is the only caller:
+ * a `.gated` that names `readingsFrom`, or a candidate with `LETHAL_V3_PIN_FROM`. It is why a lane
+ * behind master still reads a build its checkout has no entry for. An unknown id throws by name.
+ */
+export function adoptV3Pin(version: string, binarySha256: string, from: string): void {
+  if (handV3Pin(from) === undefined)
+    throw new Error(
+      `al-runner-v3-unknown-readings: "${from}" is no pin in this checkout; merge master`,
+    );
+  adoptedPins.set(`${version}|${binarySha256}`, from);
+}
+
+/** Tests only: `adoptV3Pin` is process state. */
+export function resetAdoptedV3Pins(): void {
+  adoptedPins.clear();
+}
+
+/**
+ * The pin for this exact binary: the version line AND the sha256 must both be equal. A hand pin wins,
+ * then a committed gated build, then an adopted one (R814). Those two answer with the hand pin's
+ * readings, the same objects, under that hand pin's id.
+ */
 export function findV3Pin(version: string, binarySha256: string): V3BuildPin | undefined {
-  return V3_BUILD_PINS.find((p) => p.version === version && p.binarySha256 === binarySha256);
+  const hand = V3_BUILD_PINS.find((p) => p.version === version && p.binarySha256 === binarySha256);
+  if (hand !== undefined) return hand;
+  const from =
+    findGatedBuild(version, binarySha256)?.readingsFrom ??
+    adoptedPins.get(`${version}|${binarySha256}`);
+  const root = from === undefined ? undefined : handV3Pin(from);
+  return root === undefined ? undefined : { ...root, version, binarySha256 };
 }
 
 /**

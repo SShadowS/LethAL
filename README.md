@@ -72,6 +72,18 @@ Everywhere below, `lethal` means that executable. From a source checkout you can
 run `bun packages/runner/src/cli.ts` instead. See [`docs/releasing.md`](docs/releasing.md) for how a
 release is cut.
 
+**The offline `al-runner-v3` backend (linux x64) needs a gated al-runner.** LethAL runs only a build it
+has measured. Install the newest release LethAL lists, and point `alRunnerV3.path` at it (`lethal
+doctor` and the refusal print the exact command):
+
+```bash
+curl -fsSL https://github.com/aldevtools/BusinessCentral.AL.Runner/releases/download/edge/install.sh | sh -s -- <tag>
+```
+
+This is a **sibling build** of what LethAL itself tracks. LethAL's own tooling follows al-runner's
+`edge`, whose files are replaced in place, so an old edge build cannot be fetched. You run a numbered
+release instead: its own binary, with its own gate run, usually at a different commit.
+
 ## Quick start
 
 Four steps from a checkout to a first result. Do them against a **sandbox or dev container**, never
@@ -706,11 +718,8 @@ a LethAL feature or a mode.
   `al-runner-v2-retired`, a stored run of it lends nothing to any later session, and `explain` and
   `campaign` refuse a report of it. Its gate (`itest:alrunner`) is gone; its frozen figures are kept
   on [docs/gates/alrunner.md](docs/gates/alrunner.md).
-- **`al-runner-v3` (the Rust al-runner, R586) is not authoritative.** It is pinned
-  (`al-runner 3.0.0-alpha.5+edge.20261024 (dcdf9e821)` since 2026-10-25, before it alpha.5
-  `07342060e`; `/work/tools/al-runner-v3/current`, `.gated`, under a per-build pin of its known
-  readings, R586c, R756) and configured in an
-  `alRunnerV3` section (`packagesDir` and `bcVersion` required; `coverage`, `path`, `alcPath`,
+- **`al-runner-v3` (the Rust al-runner, R586) is not authoritative.** A gated build only (R586c, R814), and
+  configured in an `alRunnerV3` section (`packagesDir` and `bcVersion` required; `coverage`, `path`, `alcPath`,
   `cacheDir`). Measured on alpha.2 and re-read on alpha.5 and its edge build (the same readings), it
   differs from BC in ways that change
   verdicts:

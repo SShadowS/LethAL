@@ -13,6 +13,23 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **A test codeunit whose OnRun fails no longer reads as "selected no test" on one-shot v3** (R815). A mutant that makes
+  OnRun fail reads `error`, and the session goes on. On the unmutated build the run stops with
+  `al-runner-v3-codeunit-ran-no-test`, naming OnRun. A real selection miss reads as before.
+- **LethAL's own al-runner follows edge; users install a listed release** (R813, R814). The daily update gate has two
+  tracks: `edge` moves `current`, only forward, and a numbered release only joins a gate manifest that ships with LethAL.
+  A build whose readings equal `current`'s committed pin passes with no person, as a row that names that pin and holds no
+  reading; anything that moved still needs a pre-commitment first. The `al-runner-v3` backend now accepts a listed
+  release's exact binary with no local `.gated`, and any other binary is refused with the install command. That is a
+  **sibling build** of the commit LethAL tracks: edge's files are replaced in place, so an old edge build cannot be fetched.
+- **The v3 serve keep rule takes today's http refusal, and `serve-keep-reasons` reads `matches` again** (R808): the
+  `http` entry of `V3_SERVE_SAFE_REFUSALS` also keeps the serve daemon on alpha.7 and alpha.12's wording ("... that a test
+  handler does not answer ..."), exact at both ends; alpha.2's wording still keeps. A project whose test hits that refusal
+  no longer closes the daemon. The update gate's `serve-keep-reasons` fact now runs a public-host http test, and a build's
+  pin can record that `commit` is a plain pass and `onrun-failed` has no row for the test method (alpha.7 gives a
+  `Codeunit<n>.OnRun` fail row, alpha.12 no row at all), so the fact reads `matches` on alpha.6, alpha.7 and alpha.12
+  instead of a standing `diverged`. Speed and a warn fact only: no verdict moved.
+
 - **tree-sitter-al 4.4.1 to 4.5.0** (R796, R801). Members that 4.4.1 swallowed
   into a global `var` section (R720, R327) are direct members; seven new statement containers are classified (none adds a
   slot); `IDENTITY_SCHEME` 43. A loop condition's `#if` prefix is now read by the hang check (`loop-hazard.ts`), because 4.5.0

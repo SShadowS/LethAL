@@ -86,7 +86,13 @@ import {
   encodeGroups,
   serveRow,
 } from "./al-runner-v3-entries";
-import { AlRunnerV3UngatedBuildError, V3_NO_SERVE_ENTRIES, checkGated } from "./al-runner-v3-pin";
+import {
+  AlRunnerV3UngatedBuildError,
+  V3_NO_SERVE_ENTRIES,
+  checkGated,
+  resolveV3Binary,
+  v3InstallHint,
+} from "./al-runner-v3-pin";
 import {
   pinnedDefectCoverage,
   serveRowFieldsFor,
@@ -238,6 +244,34 @@ export class AlRunnerV3SelectionError extends Error {
       `al-runner-v3: --codeunit ${codeunitId} selected no test (exit 6, #5613). stderr: ${stderr.slice(-400)}`,
     );
     this.name = "AlRunnerV3SelectionError";
+  }
+}
+
+/**
+ * R815: exit 6 has two meanings, told apart only by v3's words (measured on alpha.12 and alpha.13+edge,
+ * `/coord/handoff/R-817/`). `error: the selection matches no test`: v3 stopped at the selection. A
+ * `Result: NOTHING SELECTED (exit 6)` line: v3 RAN, and the codeunit gave no test row, which since
+ * #5859 is what a raising OnRun does. Any other text is `unknown` and stops as a selection miss.
+ */
+export function exit6Kind(stderr: string): "selection-miss" | "ran-no-test" | "unknown" {
+  if (/^error: the selection matches no test\r?$/m.test(stderr)) return "selection-miss";
+  return /^Result: NOTHING SELECTED \(exit 6\)\r?$/m.test(stderr) ? "ran-no-test" : "unknown";
+}
+
+/** R815: why a codeunit ran and gave no test row, for the baseline's stop and a mutant's `error`. */
+const ranNoTestWhy = (id: number): string =>
+  `codeunit ${id} ran and gave no test row; its OnRun probably raised, and al-runner then runs none of its tests and reports nothing (upstream #5859)`;
+
+/**
+ * R815: on an unmutated build, a test codeunit ran and gave no test row. It is the user's suite, not a
+ * selection miss, so it stops the session under its own name. Under a mutant the same exit reads `error`.
+ */
+export class AlRunnerV3NoTestRanError extends Error {
+  constructor(codeunitId: number) {
+    super(
+      `al-runner-v3-codeunit-ran-no-test: ${ranNoTestWhy(codeunitId)}. This call scored no verdict. Run the codeunit on its own, and fix its OnRun or move that code out of it.`,
+    );
+    this.name = "AlRunnerV3NoTestRanError";
   }
 }
 
@@ -1325,8 +1359,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     for (const l of this.laneList) l.dropPair();
   }
 
+  private readonly cfg: AlRunnerV3Config;
+
   constructor(
-    private readonly cfg: AlRunnerV3Config,
+    cfg: AlRunnerV3Config,
     private readonly spawn: SpawnFn = defaultSpawn,
     alcIo: ArtifactIo = defaultArtifactIo,
     /** R635: the serve daemon's spawn (serve-entries only). */
@@ -1335,6 +1371,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     private readonly now: () => number = Date.now,
   ) {
     if (cfg.selectorMode === "resource") throw new AlRunnerV3ResourceSelectorRefusedError();
+    this.cfg = { ...cfg, alRunnerPath: resolveV3Binary(cfg.alRunnerPath) };
     this.speculateOn = cfg.speculateBaseline ?? readSpeculateBaseline();
     // R761: a default transport starts one-shot-safe; `decideTransport` turns serve on, before the
     // first deploy (the staged batch differs by transport) and the first v3 process.
@@ -1390,7 +1427,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     );
     const reported = (res.stdout || res.stderr).trim();
     if (res.exitCode !== 0) {
-      return { ok: false, details: `al-runner v3 not runnable: ${reported.slice(0, 300)}` };
+      return {
+        ok: false,
+        details: `al-runner v3 not runnable: ${reported.slice(0, 300)}. ${v3InstallHint()}`,
+      };
     }
     if (!AL_RUNNER_V3_VERSION.test(reported)) {
       return {
@@ -1419,7 +1459,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       gateRecord =
         this.cfg.candidate === true
           ? "this update gate's own leg C (a candidate build)"
-          : `the gated build's leg C (.gated lethalCommit ${gated.lethalCommit})`;
+          : gated.source === "manifest"
+            ? `the gated release's leg C (gate manifest, lethalCommit ${gated.lethalCommit})`
+            : `the gated build's leg C (.gated lethalCommit ${gated.lethalCommit})`;
     } catch (err) {
       if (err instanceof AlRunnerV3UngatedBuildError) return { ok: false, details: err.message };
       throw err;
@@ -3157,7 +3199,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         },
       };
     }
-    if (res.exitCode === 6) throw new AlRunnerV3SelectionError(id, res.stderr);
+    if (res.exitCode === 6) {
+      if (exit6Kind(res.stderr) !== "ran-no-test")
+        throw new AlRunnerV3SelectionError(id, res.stderr);
+      if (lane.lastActivated === null) throw new AlRunnerV3NoTestRanError(id);
+      return { verdict: this.rowMissing(lane, ref, ranNoTestWhy(id), wallMs) };
+    }
     if (![0, 1, 7, 8].includes(res.exitCode)) {
       return {
         verdict: transportFailure(

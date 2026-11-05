@@ -27,6 +27,7 @@ import {
   AlRunnerV3Backend,
   type AlRunnerV3Config,
   AlRunnerV3DependencySkippedError,
+  AlRunnerV3NoTestRanError,
   AlRunnerV3RowMissingError,
   AlRunnerV3ServeFallbackWarmupError,
   AlRunnerV3ServeStopUnsetError,
@@ -259,7 +260,11 @@ const sleepCoverage =
   };
 
 /** The one-shot v3 (`test --codeunit`): reads the active id from the resource file on disk. */
-function fakeOneShot(rows: RowsFn, coverage?: CoverageFn) {
+function fakeOneShot(
+  rows: RowsFn,
+  coverage?: CoverageFn,
+  answer?: { readonly exitCode: number; readonly stderr: string },
+) {
   const calls: string[][] = [];
   const spawn: SpawnFn = async (argv) => {
     calls.push([...argv]);
@@ -279,7 +284,7 @@ function fakeOneShot(rows: RowsFn, coverage?: CoverageFn) {
       ...(r.message !== undefined ? { message: r.message } : {}),
       ...(r.notRun === true ? { notRun: true } : {}),
     }));
-    return { exitCode: 0, stdout: JSON.stringify({ tests }), stderr: "" };
+    return { exitCode: 0, stdout: JSON.stringify({ tests }), stderr: "", ...answer };
   };
   return { spawn, calls };
 }
@@ -480,6 +485,7 @@ interface RigOpts {
   serve?: ServeScript;
   oneShotRows?: RowsFn;
   oneShotCoverage?: CoverageFn;
+  oneShotAnswer?: { readonly exitCode: number; readonly stderr: string };
   extra?: Partial<AlRunnerV3Config>;
   targetAl?: string;
   suite?: readonly TestMethodRef[];
@@ -496,7 +502,11 @@ async function rig(opts: RigOpts = {}): Promise<Rig> {
   const suite = opts.suite ?? SUITE1;
   const l = await layout(opts.targetAl ?? TARGET_AL, suite);
   const serve = fakeServe(opts.serve);
-  const one = fakeOneShot(opts.oneShotRows ?? opts.serve?.rows ?? allPass, opts.oneShotCoverage);
+  const one = fakeOneShot(
+    opts.oneShotRows ?? opts.serve?.rows ?? allPass,
+    opts.oneShotCoverage,
+    opts.oneShotAnswer,
+  );
   const b = new AlRunnerV3Backend(
     {
       alRunnerPath: "/fake/al-runner",
@@ -817,6 +827,24 @@ describe("5: the decoder never trusts the answer's grouping: every miss is error
     const v = await r.b.run(ref("A"), OPTS);
     expect(outcome(v)).toEqual(["error", "runner-test-error"]);
     expect(v.failureMessage).toContain("0 row(s)");
+  });
+
+  test("R808 (g): a NONE live call after the prefetch that returns no row at all (an OnRun that raised, #5859) stops the session", async () => {
+    const r = await rig({
+      serve: { rows: (m, cu, d, n) => (n === 0 ? allPass(m, cu, d, n) : []) },
+      oneShotRows: allPass,
+    });
+    await baseline(r.b, SUITE1);
+    await r.b.prefetchMutants(plans([]));
+    await r.b.activate(null);
+    await expect(r.b.run(ref("A"), OPTS)).rejects.toBeInstanceOf(AlRunnerV3RowMissingError);
+  });
+
+  test("R815: a serve session's baseline call is one-shot, so a failing OnRun stops by the same name", async () => {
+    const r = await rig({
+      oneShotAnswer: { exitCode: 6, stderr: "Result: NOTHING SELECTED (exit 6)\n" },
+    });
+    await expect(baseline(r.b, SUITE1)).rejects.toBeInstanceOf(AlRunnerV3NoTestRanError);
   });
 
   test("an entry without a suite test's row is rowMissing; outside a mutant it stops the session", async () => {

@@ -10,10 +10,9 @@ They are BC 28.4 on server1 (`192.168.2.157`). Localization is W1, so the compan
 Basic authentication.
 
 **The default host moved back to server1** on 2026-11-05, after the owner's restart pointed the new configs at `bc1`
-there (R806). The owner has named only `bc1` so far: leave `bc2` and `bc3` until the owner says. **Nothing is
-proven on server1 under today's fixtures** (see the proof tables below). The only reading since the move is a port
-check on 2026-11-05: TCP ports 7049, 7149 and 7249 accepted a connection. That does not show a working BC or its
-build. No server is allocated yet, so no lease, and so no other reading, is possible.
+there (R806). All three are allocated to lethal, and every gate is proven on them under today's fixtures (R-813, see
+the proof tables below). The allocation in `/coord/machine/allocation.json` was set by hand, on the owner's word: a
+tentacle restart can empty it, and then every lease refuses with "not allocated to any project".
 
 From 2026-10-26 at 03:00 UTC to then, the host was docker1 (`192.168.2.77`; owner ruling, R783), while server1 was
 off. docker1 ran the same compose, image digests, ports, logins and BC builds (bc1 28.4.53241.56590, bc2 and bc3
@@ -262,13 +261,24 @@ pair is one ordinary run of the gate there; add the pair to this table when it p
 
 ### server1 (192.168.2.157), the default host since 2026-11-05
 
-**No pair is proven here yet.** The tables below are per host and per fixture state: the docker1 table says nothing
-about server1, and server1's own table further down predates today's fixtures. Prove a pair here (one ordinary run
-of the gate, under the server's coord lease, after a full setup run) and add it to this table before using it. Only
-`bc1` is named by the owner so far (R806).
+Proven on 2026-11-05 by R-813, master 0602b3b8, LethAL Control 1.0.0.24, one coord lease per gate, each released. Every
+gate equalled its baseline or its own checks, and its first line named `192.168.2.157` and the server's port. Each
+server first had a read-only `--predict` (none of LethAL's apps were on it, and apps are read by id only, R433), then a
+full setup and doctor. The gates ran at load 12 to 890, because server1 is shared with other projects, and none timed
+out. `verify-scale` is measurement mode: its 0.20 line is recorded, not gated. The 12 baselines at identity scheme 42
+(R810) passed as they stand.
+
+`bc3`'s Microsoft apps read 28.4.53241.56646, the accepted build, and its Continia stack is published. `itest:hang`
+ran directly, under the lane's own lease (R823), and its leg marker read `passed` on both servers. It refuses `bc1`.
+
+The tables below are per host and per fixture state, so they are history here: prove any new pair on this table first
+(one ordinary run of the gate, under the server's coord lease, after a full setup run).
 
 | server | gate | LethAL Control | proof (log) |
 |---|---|---|---|
+| `bc1` | setup; `itest:bcdev`, `bcdev-names`, `bcdev-wrapped`, `tables`, `chunked`, `harden`, `lend`, `lease`, `verify`, `testapp`, `agreement`, `verify-scale`, `stale-publish` | 1.0.0.24 | `/coord/handoff/R-813/bc1/<gate>.log`, `/coord/handoff/R-813/setup-bc1.log` |
+| `bc2` | setup; the same 13, and `itest:hang` | 1.0.0.24 | `/coord/handoff/R-813/bc2/<gate>.log`, `/coord/handoff/R-813/setup-bc2.log` |
+| `bc3` | setup (`--with-continia --accept-build 28.4.53241.56646`); the same 13, and `itest:hang` | 1.0.0.24 | `/coord/handoff/R-813/bc3/<gate>.log`, `/coord/handoff/R-813/setup-bc3.log` |
 
 ### docker1 (192.168.2.77), history: the servers from 2026-10-26 to 2026-11-05
 
