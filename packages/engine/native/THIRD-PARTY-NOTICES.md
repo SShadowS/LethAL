@@ -58,7 +58,7 @@ The grammar (tree-sitter-al, MIT) and the tree-sitter runtime (MIT) are compiled
 | syn | 2.0.119 | MIT OR Apache-2.0 |
 | syn | 3.0.6 | MIT OR Apache-2.0 |
 | tree-sitter | 0.25.10 | MIT |
-| tree-sitter-al | 4.4.1 | MIT |
+| tree-sitter-al | 4.5.0 | MIT |
 | tree-sitter-language | 0.1.8 | MIT |
 | typenum | 1.20.1 | MIT OR Apache-2.0 |
 | unicode-ident | 1.0.26 | (MIT OR Apache-2.0) AND Unicode-3.0 |
@@ -2372,7 +2372,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ````
 
-### tree-sitter-al 4.4.1 (upstream https://github.com/sshadows/tree-sitter-al/blob/v4.4.1/LICENSE)
+### tree-sitter-al 4.5.0 (upstream https://github.com/sshadows/tree-sitter-al/blob/v4.5.0/LICENSE)
 
 ````text
 MIT License

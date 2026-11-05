@@ -105,16 +105,21 @@ describe("R720: a swallowed member (x1)", () => {
     await initParser();
   });
 
-  it("premise: the write sits under preproc_conditional_var and its names are 'unknown'", () => {
+  // R796: tree-sitter-al 4.5.0 parses `Spin` as a DIRECT member of the object body, no longer inside
+  // the var section's preproc_conditional_var, so its names are declared, not 'unknown' (4.4.1:
+  // swallowed, 'unknown'). The refusals below still hold, by the declared route.
+  it("premise: the write is NOT under preproc_conditional_var and its names are declared", () => {
     const { root, ctx } = load(SWALLOWED);
     const w = inSpin(root, "J += 1");
     let swallowed = false;
     for (let p: ALSyntaxNode | null = w; p !== null; p = p.parent)
       if (p.rawKind === "preproc_conditional_var") swallowed = true;
-    expect(swallowed).toBe(true);
+    expect(swallowed).toBe(false);
     const j = w.childForFieldName("left") ?? w.children[0];
     if (j === undefined) throw new Error("no target");
-    expect(declarationStateAt(j, ctx)).toBe("unknown");
+    const state = declarationStateAt(j, ctx);
+    expect(state).not.toBe("unknown");
+    expect(state).not.toBeNull();
   });
 
   it("refuses the local and the global write inside the swallowed member", () => {
@@ -316,13 +321,8 @@ codeunit 50364 "W" { Bogus
       unknown: boolean;
     },
   ][] = [
-    [
-      "swallowed member local",
-      () => {
-        const { root, ctx } = load(SWALLOWED_FOR);
-        return { root, ctx, a: inProc(root, "procedure Spin()", "P := 1"), unknown: true };
-      },
-    ],
+    // R796: the "swallowed member local" case left this table: 4.5.0 parses Spin as a direct member,
+    // so its local resolves; it is tested after the table ("a former swallowed member").
     [
       "var-section #if global",
       () => {
@@ -361,6 +361,15 @@ codeunit 50364 "W" { Bogus
       expect(shiftInteger.generate(one, ctx)).toEqual([]);
     });
   }
+
+  it("a former swallowed member (a direct member under 4.5.0): its local resolves and the for-control write is still refused, no spec", () => {
+    const { root, ctx } = load(SWALLOWED_FOR);
+    const a = inProc(root, "procedure Spin()", "P := 1");
+    expect(resolveVarRef(targetOf(a), ctx)).not.toBeNull();
+    expect(classifyHangCapable(a, ctx)).toBe("loop-condition-target");
+    expect(removeAssignment.targets(a, ctx)).toBe(false);
+    expect(removeAssignment.generate(a, ctx)).toEqual([]);
+  });
 
   it("control: the direct twin SpinDirect keeps its refusal", () => {
     const { root, ctx } = load(SWALLOWED_FOR);
