@@ -14,8 +14,8 @@ import {
   compileTestApp,
   decideTestAppOutcome,
   publishTestApp,
+  stageTestProject,
   symbolPackageId,
-  testAppBackslashHint,
 } from "../src/test-app-publish";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
 import { removeScratchDirs } from "./helpers/scratch";
@@ -178,45 +178,133 @@ test("compileTestApp: an alc rejection is TestAppError compile-failed, never Alc
   expect((err as TestAppError).message).toContain("AL0132");
 });
 
-// R811: alc 18.1's own texts on Linux, measured. Pinned to "linux": CI's check job runs on Windows.
-const AL1001 = `app.json(12,3): error AL1001: Source file 'Images\\Logo.png' could not be found`;
-const AL0863 = `app.json(35,3): error AL0863: The folder 'Res\\Sub' does not exist.`;
+const backslashTests = {
+  id: TESTS_ID,
+  name: "LethAL Sandbox Tests",
+  publisher: "LethAL",
+  version: "1.0.0.2",
+  logo: "Images\\Logo.png",
+  resourceFolders: ["Res\\Sub"],
+  url: "C:\\not\\a\\path\\field",
+};
 
-test("R811: the hint names a backslash path alc refused, and nothing else", () => {
-  expect(testAppBackslashHint(AL1001, "linux")).toContain('Write "/" there');
-  expect(testAppBackslashHint(AL0863, "linux")).toContain('Write "/" there');
-  // The same two errors with no `\`: a file that really is missing.
-  expect(
-    testAppBackslashHint("error AL1001: Source file 'Images/Logo.png' could not be found", "linux"),
-  ).toBe("");
-  expect(testAppBackslashHint("error AL0863: The folder 'Res/Sub' does not exist.", "linux")).toBe(
-    "",
-  );
-  // A `\` in another error, or on another line of the same output.
-  expect(testAppBackslashHint("error AL0132: 'a\\b' has no such member", "linux")).toBe("");
-  expect(
-    testAppBackslashHint("error AL1001: Source file 'a/b' could not be found\nC:\\x", "linux"),
-  ).toBe("");
-  // The Windows alc takes `\`, so a miss there is a missing file.
-  expect(testAppBackslashHint(AL1001, "win32")).toBe("");
+test("R811: stageTestProject leaves a project with no backslash path in place, and copies nothing", async () => {
+  const dir = await temp("r811-");
+  const copyTo = join(dir, "copy");
+  const text = JSON.stringify({ id: TESTS_ID, logo: "Images/Logo.png", url: "C:\\x" });
+  await writeFile(join(dir, "app.json"), text);
+  expect(await stageTestProject(dir, text, copyTo)).toEqual({ projectDir: dir, changes: [] });
+  expect(await readdir(dir)).toEqual(["app.json"]);
 });
 
-test("R811: compileTestApp adds the hint to alc's refusal, and only there", async () => {
-  const run = async (message: string) => {
-    const fx = await fixture({});
-    const err = await compileTestApp({
-      testDir: fx.dir,
-      target: fx.target,
-      controlSymbolPath: fx.controlPath,
-      compiler: watchingCompiler(fx.out, [], 1, message),
-    }).catch((e) => e);
-    expect((err as TestAppError).reason).toBe("compile-failed");
-    return (err as TestAppError).message;
-  };
-  const hinted = await run(AL1001);
-  expect(hinted).toContain("AL1001");
-  expect(hinted.includes('Write "/" there')).toBe(process.platform !== "win32");
-  expect(await run("error AL0132: nope")).not.toContain('Write "/" there');
+test("R811: stageTestProject rewrites a copy, never the project, and keeps .al in a dot-directory", async () => {
+  const dir = await temp("r811-");
+  const copyTo = join(await temp("r811-out-"), "project");
+  const text = JSON.stringify(backslashTests);
+  await writeFile(join(dir, "app.json"), text);
+  await writeFile(join(dir, "T.Codeunit.al"), "codeunit 1 t {}");
+  await mkdir(join(dir, ".dependencies"));
+  await writeFile(join(dir, ".dependencies", "Dep.Codeunit.al"), "codeunit 2 d {}");
+  await mkdir(join(dir, ".alpackages"));
+  await writeFile(join(dir, ".alpackages", "x.app"), "symbols");
+  await mkdir(join(dir, ".git"));
+  await writeFile(join(dir, ".git", "HEAD"), "ref");
+  const out = await stageTestProject(dir, text, copyTo);
+  expect(out.projectDir).toBe(copyTo);
+  expect(out.changes.map((c) => c.field)).toEqual(["logo", "resourceFolders[0]"]);
+  const copied = JSON.parse(await readFile(join(copyTo, "app.json"), "utf8"));
+  expect(copied.logo).toBe("Images/Logo.png");
+  expect(copied.resourceFolders).toEqual(["Res/Sub"]);
+  expect(copied.url).toBe(backslashTests.url); // not a path field: as written
+  expect(await readFile(join(dir, "app.json"), "utf8")).toBe(text); // the user's own, untouched
+  expect(await readFile(join(copyTo, ".dependencies", "Dep.Codeunit.al"), "utf8")).toContain("2");
+  expect((await readdir(copyTo)).sort()).toEqual([".dependencies", "T.Codeunit.al", "app.json"]);
+});
+
+test("R811: stageTestProject reads a BOM, and leaves an app.json it cannot parse for alc to name", async () => {
+  const dir = await temp("r811-");
+  const copyTo = join(await temp("r811-out-"), "project");
+  const bom = `\uFEFF${JSON.stringify({ logo: "a\\b" })}`;
+  expect((await stageTestProject(dir, bom, copyTo)).projectDir).toBe(copyTo);
+  for (const text of ["{ not json", "[]", "null"]) {
+    expect(await stageTestProject(dir, text, `${copyTo}-2`)).toEqual({
+      projectDir: dir,
+      changes: [],
+    });
+  }
+});
+
+/** R811: an alc that records which project it was given, and what that project's app.json said. */
+function projectSpy(fx: { out: string }, result: string) {
+  const seen: { project: string; logo: unknown }[] = [];
+  const compiler = new ArtifactCompiler(
+    { alcPath: "alc", packageCachePath: "UNUSED", outputDir: fx.out },
+    {
+      spawn: async (argv) => {
+        const project = (argv.find((x) => x.startsWith("/project:")) ?? "").slice(9);
+        const app = JSON.parse(await readFile(join(project, "app.json"), "utf8"));
+        seen.push({ project, logo: app.logo });
+        if (result !== "pass") return { exitCode: 1, stdout: result, stderr: "" };
+        await writeFile((argv.find((x) => x.startsWith("/out:")) ?? "").slice(5), "compiled");
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+      readArtifact: async (p) => new Uint8Array(await readFile(p)),
+      writeArtifact: async (from, to) => {
+        await writeFile(to, await readFile(from));
+      },
+    },
+  );
+  return { compiler, seen };
+}
+
+test("R811: compileTestApp compiles the rewritten copy, reports it, and removes it", async () => {
+  const fx = await fixture({}, backslashTests);
+  const text = await readFile(join(fx.dir, "app.json"), "utf8");
+  const { compiler, seen } = projectSpy(fx, "pass");
+  const out = await compileTestApp({
+    testDir: fx.dir,
+    target: fx.target,
+    controlSymbolPath: fx.controlPath,
+    compiler,
+  });
+  expect(seen).toHaveLength(1);
+  expect(seen[0]?.logo).toBe("Images/Logo.png");
+  expect(seen[0]?.project).not.toBe(fx.dir.replaceAll("\\", "/"));
+  expect(out.pathChanges?.map((c) => c.field)).toEqual(["logo", "resourceFolders[0]"]);
+  expect(await readFile(join(fx.dir, "app.json"), "utf8")).toBe(text);
+  const gone = await readdir(seen[0]?.project ?? "").then(
+    () => false,
+    () => true,
+  );
+  expect(gone).toBe(true);
+});
+
+test("R811: compileTestApp on a clean project compiles in place and reports nothing", async () => {
+  const fx = await fixture({});
+  const { compiler, seen } = projectSpy(fx, "pass");
+  const out = await compileTestApp({
+    testDir: fx.dir,
+    target: fx.target,
+    controlSymbolPath: fx.controlPath,
+    compiler,
+  });
+  expect(seen[0]?.project).toBe(fx.dir.replaceAll("\\", "/"));
+  expect("pathChanges" in out).toBe(false);
+});
+
+test("R811: a path that is really missing still refuses by name, after the rewrite", async () => {
+  const fx = await fixture({}, backslashTests);
+  const message = "app.json(6,3): error AL1001: Source file 'Images/Logo.png' could not be found";
+  const { compiler } = projectSpy(fx, message);
+  const err = await compileTestApp({
+    testDir: fx.dir,
+    target: fx.target,
+    controlSymbolPath: fx.controlPath,
+    compiler,
+  }).catch((e) => e);
+  expect(err).toBeInstanceOf(TestAppError);
+  expect((err as TestAppError).reason).toBe("compile-failed");
+  expect((err as TestAppError).message).toContain("Images/Logo.png");
 });
 
 test("compileTestApp refuses an .alpackages entry it cannot identify, naming the file", async () => {
