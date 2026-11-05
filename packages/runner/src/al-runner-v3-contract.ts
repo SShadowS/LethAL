@@ -33,6 +33,7 @@ import {
   v3DependencySkipLines,
 } from "./al-runner-v3-backend";
 import { baseAppJson, probeV3PredefinedSymbols } from "./al-runner-v3-probe";
+import { v3ChildEnv } from "./al-runner-v3-seed";
 import { BC_HTTP_HUB_TEXT } from "./al-runner-v3-texts";
 import { AlcCompileError, ArtifactCompiler, type ArtifactIo, defaultArtifactIo } from "./artifact";
 import { type SpawnFn, absToolPath, defaultSpawn } from "./publisher";
@@ -738,7 +739,7 @@ async function serveKeepReasons(env: V3ProbeEnv, app: string, root: string): Pro
   const spawn: ServerSpawnFn = (argv) =>
     (env.serveSpawn ?? defaultServerSpawn)(argv, {
       cwd: root,
-      ...(cache !== undefined ? { env: cache } : {}),
+      env: v3ChildEnv(cache),
     });
   const server = new AlRunnerServer(absToolPath(env.alRunnerPath), spawn, [], "serve");
   const expected = `one serve daemon (--test-timeout ${SERVE_TEST_TIMEOUT_S}, testIsolation test): four codeunits (five tests), each row notRun, error, and its V3_SERVE_SAFE_REFUSALS entry (${SERVE_CASES.map(([e]) => e).join(", ")}); http and cascade also accepted as a plain trusted fail (R705)`;
@@ -914,7 +915,9 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
   // R645: every v3 process the probe starts runs in `root` (v3 writes coverage.cobertura.xml into
   // its cwd). Paths handed to v3 are made absolute below.
   const spawnIn = env.spawn ?? defaultSpawn;
-  const spawn: SpawnFn = (argv, opts) => spawnIn(argv, { ...opts, cwd: root });
+  // R807: every process this probe starts (the binary only; the burner uses Bun.spawn) gets the pinned seed.
+  const spawn: SpawnFn = (argv, opts) =>
+    spawnIn(argv, { ...opts, env: { ...v3ChildEnv(), ...opts?.env }, cwd: root });
   const alRunnerPath = absToolPath(env.alRunnerPath);
   const packagesDir = resolve(env.packagesDir);
   const cacheDir = env.cacheDir !== undefined ? resolve(env.cacheDir) : undefined;

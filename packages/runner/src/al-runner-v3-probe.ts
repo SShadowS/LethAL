@@ -12,6 +12,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { decodeV3Rows } from "./al-runner-v3-backend";
+import { v3ChildEnv } from "./al-runner-v3-seed";
 import { type SpawnFn, absToolPath, defaultSpawn } from "./publisher";
 
 /** What the probe MEASURED v3 to predefine: sorted, only `V3_PREDEFINED_CANDIDATES` can appear.
@@ -196,7 +197,9 @@ export async function probeV3PredefinedSymbols(a: {
       ],
       {
         cwd: root,
-        ...(a.cacheDir !== undefined ? { env: { ALRUNNER_CACHE: resolve(a.cacheDir) } } : {}),
+        env: v3ChildEnv(
+          a.cacheDir !== undefined ? { ALRUNNER_CACHE: resolve(a.cacheDir) } : undefined,
+        ),
       },
     );
     if (res.exitCode !== 1) {
