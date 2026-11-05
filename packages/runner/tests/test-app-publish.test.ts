@@ -1,7 +1,17 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { readPackageEntry } from "../src/app-package";
 import { AlcCompileError, ArtifactCompiler, ArtifactPrepareError } from "../src/artifact";
 import type { BoundArtifact, PublishedPackageRead } from "../src/backend";
@@ -207,8 +217,10 @@ test("R811: stageTestProject rewrites a copy, never the project, and keeps .al i
   await writeFile(join(dir, ".dependencies", "Dep.Codeunit.al"), "codeunit 2 d {}");
   await mkdir(join(dir, ".alpackages"));
   await writeFile(join(dir, ".alpackages", "x.app"), "symbols");
+  await writeFile(join(dir, ".alpackages", "InPackages.Codeunit.al"), "codeunit 3 p {}");
   await mkdir(join(dir, ".git"));
   await writeFile(join(dir, ".git", "HEAD"), "ref");
+  await writeFile(join(dir, ".git", "InGit.Codeunit.AL"), "codeunit 4 g {}");
   const out = await stageTestProject(dir, text, copyTo);
   expect(out.projectDir).toBe(copyTo);
   expect(out.changes.map((c) => c.field)).toEqual(["logo", "resourceFolders[0]"]);
@@ -218,7 +230,52 @@ test("R811: stageTestProject rewrites a copy, never the project, and keeps .al i
   expect(copied.url).toBe(backslashTests.url); // not a path field: as written
   expect(await readFile(join(dir, "app.json"), "utf8")).toBe(text); // the user's own, untouched
   expect(await readFile(join(copyTo, ".dependencies", "Dep.Codeunit.al"), "utf8")).toContain("2");
-  expect((await readdir(copyTo)).sort()).toEqual([".dependencies", "T.Codeunit.al", "app.json"]);
+  // alc compiles `.al` wherever it lies, and the key hashes it: only the rest of these two goes.
+  expect(await readdir(join(copyTo, ".alpackages"))).toEqual(["InPackages.Codeunit.al"]);
+  expect(await readdir(join(copyTo, ".git"))).toEqual(["InGit.Codeunit.AL"]);
+});
+
+test("R811: a read-only project still compiles from a copy that can be removed", async () => {
+  const dir = await temp("r811-");
+  const copyTo = join(await temp("r811-out-"), "project");
+  const text = JSON.stringify(backslashTests);
+  await mkdir(join(dir, "src"));
+  await writeFile(join(dir, "src", "T.Codeunit.al"), "codeunit 1 t {}");
+  await writeFile(join(dir, "app.json"), text);
+  await chmod(join(dir, "app.json"), 0o444);
+  await chmod(join(dir, "src"), 0o555);
+  try {
+    expect((await stageTestProject(dir, text, copyTo)).projectDir).toBe(copyTo);
+    expect(JSON.parse(await readFile(join(copyTo, "app.json"), "utf8")).logo).toBe(
+      "Images/Logo.png",
+    );
+    await rm(copyTo, { recursive: true });
+    expect(await readdir(dirname(copyTo))).toEqual([]);
+  } finally {
+    await chmod(join(dir, "src"), 0o755); // so the scratch cleanup can remove it
+  }
+});
+
+test.skipIf(process.platform === "win32")("R811: a dangling link is copied as a link", async () => {
+  const dir = await temp("r811-");
+  const copyTo = join(await temp("r811-out-"), "project");
+  const text = JSON.stringify(backslashTests);
+  await writeFile(join(dir, "app.json"), text);
+  await symlink(join(dir, "gone"), join(dir, "link"));
+  expect((await stageTestProject(dir, text, copyTo)).projectDir).toBe(copyTo);
+  expect((await lstat(join(copyTo, "link"))).isSymbolicLink()).toBe(true);
+});
+
+test("R811: a copy that fails is a TestAppError by name, never a raw fs error", async () => {
+  const dir = await temp("r811-");
+  const blocker = join(await temp("r811-out-"), "a-file");
+  await writeFile(blocker, "not a directory");
+  const text = JSON.stringify(backslashTests);
+  await writeFile(join(dir, "app.json"), text);
+  const err = await stageTestProject(dir, text, join(blocker, "project")).catch((e) => e);
+  expect(err).toBeInstanceOf(TestAppError);
+  expect((err as TestAppError).reason).toBe("compile-failed");
+  expect((err as TestAppError).message).toContain("could not copy");
 });
 
 test("R811: stageTestProject reads a BOM, and leaves an app.json it cannot parse for alc to name", async () => {

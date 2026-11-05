@@ -59,8 +59,6 @@ import {
 } from "@lethal/schemata";
 import { AlRunnerV3ServeFallbackWarmupError } from "./al-runner-v3-backend";
 import { type AppJsonPathChange, normaliseAppJsonPaths } from "./app-json-paths";
-
-export { type AppJsonPathChange, normaliseAppJsonPaths };
 import {
   UpgradeNotRestoredError,
   confirmedDowngradeRefusal,

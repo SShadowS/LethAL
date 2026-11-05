@@ -1,4 +1,4 @@
-import { cp, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, cp, lstat, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { type AppJsonPathChange, normaliseAppJsonPaths } from "./app-json-paths";
@@ -104,8 +104,10 @@ export function testAppPathRewrite(appJsonText: string): ReturnType<typeof norma
  * R811: where alc should compile a test project. With no `\` in app.json's path fields, the test
  * dir itself (`changes` is empty): today's path, byte for byte. With one, a copy at `copyTo` whose
  * app.json is R422's rewrite of `appJsonText`, so the user's project is never written. An app.json
- * that does not parse stays in place, for alc to name. The copy drops only symbol packages and git:
- * a dot-directory can hold real `.al` source (see `isToolResourcePath`).
+ * that does not parse stays in place, for alc to name. The copy drops only what lies under
+ * `.alpackages` and `.git`, and never an `.al` file: alc compiles those wherever they are, and the
+ * key and proof hash them, so a dropped one would be a byte they name and alc never saw. `cp` keeps
+ * modes, so the copy is made writable: a read-only project must still compile, and go away after.
  */
 export async function stageTestProject(
   testDir: string,
@@ -115,14 +117,32 @@ export async function stageTestProject(
   const { manifest, changes } = testAppPathRewrite(appJsonText);
   if (changes.length === 0) return { projectDir: testDir, changes };
   const dropped = new Set([".alpackages", ".git"]);
-  await cp(testDir, copyTo, {
-    recursive: true,
-    filter: (src) =>
-      !relative(testDir, src)
-        .split(sep)
-        .some((s) => dropped.has(s)),
-  });
-  await writeFile(join(copyTo, "app.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  const modes: { readonly path: string; readonly mode: number }[] = [];
+  try {
+    await cp(testDir, copyTo, {
+      recursive: true,
+      filter: async (src, dest) => {
+        const st = await lstat(src);
+        const keep =
+          st.isDirectory() ||
+          src.toLowerCase().endsWith(".al") ||
+          !relative(testDir, src)
+            .split(sep)
+            .some((s) => dropped.has(s));
+        if (keep && !st.isSymbolicLink()) {
+          modes.push({ path: dest, mode: st.mode | (st.isDirectory() ? 0o700 : 0o600) });
+        }
+        return keep;
+      },
+    });
+    for (const { path, mode } of modes) await chmod(path, mode); // parents first, as cp walks
+    await writeFile(join(copyTo, "app.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  } catch (err) {
+    throw new TestAppError(
+      "compile-failed",
+      `could not copy ${testDir} to rewrite its app.json paths (R811): ${describeThrown(err)}`,
+    );
+  }
   return { projectDir: copyTo, changes };
 }
 
