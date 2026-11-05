@@ -1,6 +1,6 @@
 {
-  "grammarVersion": "4.4.1",
-  "nodeTypesSha256": "fa3d87833009afb1e06f2111748cf7bfabbcbe2a50960bc3a5fd85716b9b1955",
+  "grammarVersion": "4.5.0",
+  "nodeTypesSha256": "a13fd493d67c78c4d04593e89da2d8e0d6ab9622b21e8ccef5878a7a16133440",
   "candidates": [
     {
       "container": "action_group_body",
@@ -13,6 +13,10 @@
     {
       "container": "asserterror_statement",
       "field": "body"
+    },
+    {
+      "container": "case_body",
+      "field": "children"
     },
     {
       "container": "case_branch",
@@ -59,6 +63,10 @@
       "field": "children"
     },
     {
+      "container": "preproc_conditional_case",
+      "field": "children"
+    },
+    {
       "container": "preproc_conditional_controladdin",
       "field": "children"
     },
@@ -83,10 +91,6 @@
       "field": "children"
     },
     {
-      "container": "preproc_conditional_var",
-      "field": "children"
-    },
-    {
       "container": "preproc_conditional_xmlport",
       "field": "children"
     },
@@ -103,6 +107,14 @@
       "field": "then_branch"
     },
     {
+      "container": "preproc_split_block_close_after_endif",
+      "field": "children"
+    },
+    {
+      "container": "preproc_split_block_end_in_else",
+      "field": "children"
+    },
+    {
       "container": "preproc_split_case_branch",
       "field": "body"
     },
@@ -113,6 +125,10 @@
     {
       "container": "preproc_split_case_extended",
       "field": "body"
+    },
+    {
+      "container": "preproc_split_case_extended",
+      "field": "children"
     },
     {
       "container": "preproc_split_code_block_end",
@@ -156,6 +172,22 @@
     },
     {
       "container": "preproc_split_if_then_begin_else_shared",
+      "field": "children"
+    },
+    {
+      "container": "preproc_split_open_statement",
+      "field": "children"
+    },
+    {
+      "container": "preproc_split_open_statement",
+      "field": "continuation"
+    },
+    {
+      "container": "preproc_split_open_statement",
+      "field": "then_branch"
+    },
+    {
+      "container": "preproc_split_var_section_tail",
       "field": "children"
     },
     {

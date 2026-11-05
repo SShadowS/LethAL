@@ -23,6 +23,8 @@ const wrap = (body: string) => `codeunit 79600 "R402 Shape"
         B: Integer;
         C: Integer;
         Arr: array[20] of Integer;
+        I: Integer;
+        Done: Boolean;
     begin
 ${body}
     end;
@@ -82,6 +84,22 @@ const SHAPES = {
   // Already undecided under R214 (marker-mismatch): an operand prefix, a nested tail, and an
   // #if/#else choosing the whole loop header.
   s8: `        while\n#if LETHALX\n            (B < 5) and\n#endif\n            (A < 10)\n${LOOP_BODY}`,
+  // R796: a boolean literal in the PREFIX of a loop condition is never flipped (it reaches the exit).
+  t3: `        while\n#if LETHALX\n            false or\n#endif\n            (A < 10)\n${LOOP_BODY}`,
+  // R801 (addendum 0b929aed): readers other than the loop condition must follow a PREFIX like a tail.
+  a_prefix:
+    "        while I < 10 do\n            I :=\n#if LETHALX\n                (I + 1) +\n#endif\n                0;",
+  v_prefix:
+    "        while not Done do begin\n            I += 1;\n            Done :=\n#if LETHALX\n                true and\n#endif\n                (I >= 3);\n        end;",
+  g_prefix:
+    "        while true do begin\n            I += 1;\n            if\n#if LETHALX\n                (I >= 3) or\n#endif\n                false then\n                break;\n        end;",
+  exit_prefix:
+    "        while true do begin\n            I += 1;\n            if\n#if LETHALX\n                (I >= 3) or\n#endif\n                false then\n                exit;\n        end;",
+  f_prefix:
+    "        while true do begin\n            I += 1;\n            Done :=\n#if LETHALX\n                (I >= 3) or\n#endif\n                false;\n            if Done then\n                break;\n        end;",
+  or_operand:
+    "        while (A < 10) or\n#if LETHALX\n            false\n#else\n            Done\n#endif\n            do\n            A := A + 1;",
+  s8or: `        while\n#if LETHALX\n            (B < 5) or\n#endif\n            (A < 10)\n${LOOP_BODY}`,
   s12: `        while (A < 10)\n#if LETHALX\n            and (B < 5)\n#if LETHALY\n            and (C < 7)\n#endif\n#endif\n${LOOP_BODY}`,
   s13: `#if LETHALX\n        while (B < 5)\n#else\n        while (A < 10)\n#endif\n${LOOP_BODY}`,
   // Expression tails beside an assignment and an if condition: not statement-level containers.
@@ -111,6 +129,8 @@ type Result = {
   undecided: string[];
   /** Every generated spec, to check an admitted shape keeps all its sites. */
   specs: number;
+  /** R796: every generated spec's operator name. */
+  ops: string[];
 };
 const results = new Map<string, Result>();
 
@@ -142,6 +162,7 @@ async function run(shape: Shape, build: Build): Promise<Result> {
         .filter((e) => e.reason === "preproc-undecided")
         .map((e) => e.detail ?? ""),
       specs: specs.length,
+      ops: specs.map((x) => x.operatorName),
     };
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -227,6 +248,14 @@ describe("R402: the hang refusal reads operands in ACTIVE #if arms of a loop con
     expect(get("s14", "none").assigns.get("B")).toBeUndefined();
   });
 
+  test("R796: a boolean in a loop condition's `#if` PREFIX is never flipped, when active or not", () => {
+    for (const b of Object.keys(BUILDS) as Build[]) {
+      expect(get("t3", b).flips, `t3/${b}`).toEqual([]);
+      expect(get("t3", b).undecided, `t3/${b}`).toEqual([]);
+      expect(get("t3", b).texts, `t3/${b}`).toContain("A < 10");
+    }
+  });
+
   test("R239: a boolean `#if` tail of a loop condition is never flipped; outside a loop it is, when active", () => {
     // t1's tail literal sits beside a while condition: refused when active, absent when not.
     // The file is admitted and keeps its other sites, so the empty flips are the refusal, not a
@@ -245,16 +274,23 @@ describe("R402: the hang refusal reads operands in ACTIVE #if arms of a loop con
   });
 });
 
-describe("R402: a statement-level #if that continues an unterminated statement refuses its file", () => {
-  test("S4, S4b, S4c, S4d, c7b, c7e, c7f and c8 are refused in every build, by name", () => {
+// R796: tree-sitter-al 4.5.0 attaches a `repeat ... until (...)` `#if` tail to the repeat (a
+// preproc_conditional_expression_tail, like a while's), so these eight shapes are no longer a
+// separate statement that continues the previous one: they are ADMITTED (4.4.1 refused them with
+// directive-continues-statement). The hang refusal reads the tail's operands by arm, as for while.
+// The refusal rule itself (`continuationRefusal`) is unchanged and still pinned on its hand-built tree.
+describe("R402: a repeat's `#if` tail (once misparsed as a continuing statement) is admitted and read by arm", () => {
+  test("S4, S4b, S4c, S4d, c7b, c7e, c7f and c8 are admitted in every build, their loop operands refused by arm", () => {
     // c7b, c7e and c7f put a comment, a pragma and a region between the statement and the #if:
     // the trivia skip is what reaches the unterminated statement behind them.
     for (const s of ["s4", "s4b", "s4c", "s4d", "c7b", "c7e", "c7f", "c8"] as const) {
       for (const b of Object.keys(BUILDS) as Build[]) {
         const r = get(s, b);
-        expect(r.undecided, `${s}/${b}`).toHaveLength(1);
-        expect(r.undecided[0], `${s}/${b}`).toStartWith("directive-continues-statement at line");
-        expect(r.assigns.size, `${s}/${b}`).toBe(0);
+        expect(r.undecided, `${s}/${b}`).toEqual([]);
+        // The hang refusal reads the tail: A (the `until` operand) is never a site, and B (the
+        // `or (B > 5)` operand) is not a site exactly in the builds that compile the tail.
+        expect(r.assigns.has("A"), `${s}/${b}: A`).toBe(false);
+        expect(r.assigns.has("B"), `${s}/${b}: B`).toBe(b !== "X" && b !== "XY");
       }
     }
   });
@@ -337,9 +373,55 @@ describe("R402: a statement-level #if that continues an unterminated statement r
   });
 });
 
-describe("R402: the shapes R214 already refuses keep their marker-mismatch refusal", () => {
-  test("S8 (operand prefix), S12 (nested tail) and S13 (#if/#else whole header)", () => {
-    for (const s of ["s8", "s12", "s13"] as const) {
+// R801 (addendum 0b929aed): each reader that follows a `#if` tail also follows a PREFIX (4.5.0's
+// `preproc_operand_prefix`). In the builds that compile the prefix every shape below is admitted,
+// and its hang-capable site is refused or tagged: an untagged one hangs the run.
+describe("R801: a #if PREFIX is followed by every reader that follows a tail", () => {
+  const compiled = ["X", "XY"] as const;
+  const noOp = (s: Shape, b: Build, op: string) =>
+    expect(get(s, b).ops, `${s}/${b}: ${op}`).not.toContain(op);
+
+  test("a_prefix: hangCapableForMutatedNode's value side refuses swap-additive on `(I + 1)`", () => {
+    for (const b of compiled) noOp("a_prefix", b, "lethal.swap-additive");
+  });
+  test("v_prefix: the value side refuses flip-boolean-literal on `true and`", () => {
+    for (const b of compiled) expect(get("v_prefix", b).flips, `v_prefix/${b}`).toEqual([]);
+  });
+  test("g_prefix and exit_prefix: guardPartsOf follows the prefix, so the step is refused", () => {
+    for (const s of ["g_prefix", "exit_prefix"] as const)
+      for (const b of compiled) {
+        expect(get(s, b).assigns.has("I"), `${s}/${b}: I += 1`).toBe(false);
+        noOp(s, b, "lethal.shift-integer");
+      }
+  });
+  test("f_prefix: indirectFeeds/exprTails follow the prefix, so the step is refused", () => {
+    for (const b of compiled) {
+      expect(get("f_prefix", b).assigns.has("I"), `f_prefix/${b}: I += 1`).toBe(false);
+      noOp("f_prefix", b, "lethal.shift-integer");
+    }
+  });
+  test("or_operand: a #if-chosen operand of a loop condition is never flipped", () => {
+    for (const b of Object.keys(BUILDS) as Build[])
+      expect(get("or_operand", b).flips, `or_operand/${b}`).toEqual([]);
+  });
+});
+
+describe("R402: the shape R214 still refuses keeps its marker-mismatch refusal", () => {
+  // R796: 4.5.0 parses s8 (an operand PREFIX) and s12 (a nested tail) cleanly, so they are admitted
+  // (4.4.1: marker-mismatch). The hang refusal must read the prefix's operand as it reads a tail's:
+  // under [X], `while (B < 5) or (A < 10)` makes B's step a hang-capable site (red if the prefix is
+  // not read: B := B + 1 would then be a remove-assignment spec that hangs the run).
+  test("S8, S8or (operand prefix) and S12 (nested tail) are admitted; the prefix's operand is hang-refused by arm", () => {
+    for (const s of ["s8", "s8or", "s12"] as const)
+      for (const b of Object.keys(BUILDS) as Build[]) {
+        const r = get(s, b);
+        expect(r.undecided, `${s}/${b}`).toEqual([]);
+        expect(r.assigns.has("A"), `${s}/${b}: A`).toBe(false);
+        expect(r.assigns.has("B"), `${s}/${b}: B`).toBe(b !== "X" && b !== "XY");
+      }
+  });
+  test("S13 (#if/#else whole header)", () => {
+    for (const s of ["s13"] as const) {
       for (const b of Object.keys(BUILDS) as Build[]) {
         const r = get(s, b);
         expect(r.undecided, `${s}/${b}`).toHaveLength(1);

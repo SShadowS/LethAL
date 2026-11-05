@@ -1,5 +1,5 @@
 raw 7 deployed 7 skippedFiles 0
-src/Precedence.Codeunit.al:4	lethal.empty-block	proc=Run	hang=-	c2bee341e8f1a51fd51994c1a0aaec3b07ce683f511fbba4e54839219e625df1|P9 Precedence|Run|lethal.empty-block|1	67-271	grain=statement	plat=-
+src/Precedence.Codeunit.al:4	lethal.empty-block	proc=Run	hang=-	5510aaae7fede3370c8fc2ad20a7e02a7c7365c47e94ea2dbf067f92b3050b32|P9 Precedence|Run|lethal.empty-block|1	67-271	grain=statement	plat=-
 src/Precedence.Codeunit.al:8	lethal.swap-additive	proc=Run	hang=-	7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|P9 Precedence|Run|lethal.swap-additive|1	131-136	grain=statement	plat=-
 src/Precedence.Codeunit.al:8	lethal.void-method-call	proc=Run	hang=-	c1df5a953a5ac98f0c6db13e4197e04ce1c178b0483e4253cf03c724af9d57e5|P9 Precedence|Run|lethal.void-method-call|1	124-137	grain=statement	plat=-
 src/Precedence.Codeunit.al:11	lethal.swap-additive	proc=Run	hang=-	eef6d8e81fd4fed479dc4d361b5659773e7bc7701c4979e492d5698229e30863|P9 Precedence|Run|lethal.swap-additive|1	181-186	grain=statement	plat=-
