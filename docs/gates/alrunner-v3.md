@@ -55,8 +55,9 @@ The legs:
   Since R808 the probe runs five codeunits (six tests): a public-host http test (`Codeunit50674.HttpGetPublic`) must
   match the `http` refusal (no plain-fail fallback), and `http` also takes today's wording (alpha.7, alpha.12). A build
   whose pin has `serveKeepMoved` (edge 8078bcf49, alpha.6, alpha.7, alpha.12) must give `commit` as a plain pass and NO
-  row for `Codeunit50673.Never` (since #5859 a test codeunit whose OnRun raises gives no row, as BC's Test Runner app
-  does); any other reading of those two is `diverged`. A build with no such field is judged as before.
+  row for the test method `Codeunit50673.Never` (alpha.7 gives a `Codeunit<n>.OnRun` fail row, alpha.12 no row at all;
+  since #5859 a raising OnRun gives no row, as BC's Test Runner app does); any other reading of those two is `diverged`.
+  A build with no such field is judged as before. A candidate with no pin reads `diverged` on this fact, which is expected.
   It must read `matches` on alpha.2 and alpha.5 and, since R808, on the builds with that pin field, but any other reading (`diverged`, `unmeasurable`) only prints
   `al-runner-v3-serve-keep-reason-moved` in the log and the receipt `lines`: it is never a `gate-fail` or a `held`,
   because a moved reason only makes the daemon close (slower, never wrong). It is gate-only, as `timeout-is-cpu`

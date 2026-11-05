@@ -91,9 +91,9 @@ export interface V3BuildPin {
   };
   /**
    * R808: what `serve-keep-reasons` reads for the two entries that moved from edge 8078bcf49 on:
-   * `commit` is a plain pass (no `notRun`), and on these builds `onrun-failed` has NO row for
-   * `Codeunit50673.Never` (since #5859 a test codeunit whose OnRun raises gives no row, as BC's
-   * Test Runner app does). Absent (alpha.2, alpha.5, older edges): the fact judges as before.
+   * `commit` is a plain pass (no `notRun`), and on these builds `onrun-failed` has no row for the
+   * test method `Codeunit50673.Never` (alpha.7 gives a `Codeunit<n>.OnRun` fail row, alpha.12 no
+   * row at all; since #5859 a raising OnRun gives no row, as BC's Test Runner app does). Absent (alpha.2, alpha.5, older edges): the fact judges as before.
    */
   readonly serveKeepMoved?: {
     readonly commit: "plain pass";
@@ -660,7 +660,7 @@ const READINGS_8078BCF49: Omit<V3BuildPin, "id" | "version" | "binarySha256"> = 
     commit: "plain pass",
     onrunFailed: "no row",
     evidence:
-      "R808: the commit test is a plain pass (#5607 fixed) and a test codeunit whose OnRun raises gives no row (#5859); /coord/handoff/R-808/probe.md",
+      "R808: the commit test is a plain pass (#5607 fixed) and there is no row for the test method of a codeunit whose OnRun raises (alpha.7 gives a Codeunit<n>.OnRun fail row, alpha.12 no row at all; #5859); /coord/handoff/R-808/probe.md",
   },
 };
 

@@ -819,7 +819,7 @@ describe("5: the decoder never trusts the answer's grouping: every miss is error
     expect(v.failureMessage).toContain("0 row(s)");
   });
 
-  test("R808 (g): an entry with NO row at all (an OnRun that raised, #5859) stops the session at baseline", async () => {
+  test("R808 (g): a NONE live call after the prefetch that returns no row at all (an OnRun that raised, #5859) stops the session", async () => {
     const r = await rig({
       serve: { rows: (m, cu, d, n) => (n === 0 ? allPass(m, cu, d, n) : []) },
       oneShotRows: allPass,
