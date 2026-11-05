@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**23 of 796 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**23 of 797 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -320,7 +320,7 @@ that ordering is the priority.
 - **R710** · Transport durations were measured with the wall clock, so a clock step could record a stop row shorter than its budget (hang gate, bc3) · [R710.md](docs/roadmap/R710.md) · done (94f23a82; rename 2502f82b)
 - **R717** · A callee's inserted copy kept ahead of a walk by a deleted statement (DC's Clone shape) is not refused · [R717.md](docs/roadmap/R717.md) · done (e0d07d57, 88c2ad75)
 - **R718** · R696 refuses a walk's own Insert as a mover, but an own Insert ahead of the cursor was measured finite · [R718.md](docs/roadmap/R718.md) · closed 2026-10-24 — ruling: keep the over-refusal…
-- **R720** · Whole members in a `#if` right after the global `var` section parse INSIDE that section, so the symbol table never indexes them: 235 compiled-in members lose their typed sites, and lost R196's hang refusal (fixed) · [R720.md](docs/roadmap/R720.md) · open, deferred 2026-10-24 — the lost hang refusal is fixed…
+- **R720** · Whole members in a `#if` right after the global `var` section parse INSIDE that section, so the symbol table never indexes them: 235 compiled-in members lose their typed sites, and lost R196's hang refusal (fixed) · [R720.md](docs/roadmap/R720.md) · closed 2026-11-05 — tree-sitter-al 4.5.0 (R796, 7577cee6) ends the var section at the `#if`: 0 members inside…
 - **R721** · A global declared inside a var-section `#if` is not collected, so R196's hang refusal declined a loop write to it and deployed a mutant that can hang · [R721.md](docs/roadmap/R721.md) · done (bc0f9a8f)
 - **R725** · Hang readers that treat a null `resolveVarRef` as "absent": the r531/R696 write collectors read it as the implicit Rec, and R572 drops a var-out flag, inside swallowed members, `#if` globals and ambiguous names · [R725.md](docs/roadmap/R725.md) · done (e07c78ec)
 - **R737** · A callee receiver declared inside a var-section `#if` (or every-arm-ambiguous) is never followed: `declaredType`'s text fallback skips preprocessor nodes · [R737.md](docs/roadmap/R737.md) · done (2cd47ee7)
@@ -841,6 +841,7 @@ that ordering is the priority.
 - **R807** · One run seed (ALRUNNER_SEED=1) for every al-runner process, a read-back guard, O1's seed sub-check, and the alpha.12 pin · [R807.md](docs/roadmap/R807.md) · done (b94f31a8)
 - **R808** · v3 serve keep rule: the http entry misses alpha.7's text, and serve-keep-reasons reads diverged from edge 8078bcf49 on · [R808.md](docs/roadmap/R808.md) · open, filed 2026-11-05 (found by R-803)
 - **R810** · Re-record the 12 gate baselines still at identity scheme 42, after R796 raised it to 43 · [R810.md](docs/roadmap/R810.md) · open, filed 2026-11-05 (coord task R-796c)
+- **R813** · Plan: which al-runner to gate. Track edge, build from main, or keep numbered releases? (the owner's question) · [R813.md](docs/roadmap/R813.md) · open, plan filed 2026-11-05 (coord task R-811); waits for the owner's choice
 
 ---
 
