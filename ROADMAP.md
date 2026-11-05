@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**21 of 800 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**21 of 802 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -487,6 +487,7 @@ that ordering is the priority.
 - **R759** · `lethal verify` does not honour `--exclude-test` or `--tests-only`: it re-discovers every test · [R759.md](docs/roadmap/R759.md) · done (20a2dee5)
 - **R811** · A test project whose app.json names a path with `\` fails on Linux: R422 covers the target only, and the refusal blamed the batch · [R811.md](docs/roadmap/R811.md) · open, filed 2026-11-05 (coord task R-810); the message is fixed, the rewrite is not built
 - **R814** · A LethAL user cannot run the al-runner-v3 backend: every binary needs a `.gated` file that only our own update gate can write · [R814.md](docs/roadmap/R814.md) · done (57396130); a clean-machine run of the install is still to do
+- **R821** · The reports told users to raise --baseline-timeout-ms, which was no CLI flag (GitHub #46) · [R821.md](docs/roadmap/R821.md) · done (lethal/r819, coord task R-819)
 
 ## Backends and tooling
 
@@ -845,6 +846,7 @@ that ordering is the priority.
 - **R813** · Plan: which al-runner to gate. Track edge, build from main, or keep numbered releases? (the owner's question) · [R813.md](docs/roadmap/R813.md) · closed 2026-11-05 — the owner ruled: `current` always follows edge; users install gated numbered releases…
 - **R815** · A mutant that makes a test codeunit's OnRun fail stops a one-shot session (exit 6 reads as "selected no test") · [R815.md](docs/roadmap/R815.md) · done (369451d1)
 - **R816** · `current` follows edge: pin edge d72d3197d (alpha.13+edge) on alpha.12's readings, and run the daily update from a lane's timer · [R816.md](docs/roadmap/R816.md) · done (c5264ee7)
+- **R820** · A BC 29 dev endpoint's Ready-to-Run wrappers were read as a missing System Application, and as unreadable dependencies (GitHub #47) · [R820.md](docs/roadmap/R820.md) · done (lethal/r819, coord task R-819)
 
 ---
 

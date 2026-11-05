@@ -3086,6 +3086,7 @@ const VALUE: Readonly<Record<string, string>> = {
   workers: "2",
   "max-guards-per-batch": "5",
   "mutant-timeout-ms": "200000",
+  "baseline-timeout-ms": "200000",
   "max-methods-per-call": "4",
   "request-ceiling-ms": "250000",
   "resume-run": "2",
