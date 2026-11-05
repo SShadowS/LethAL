@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**21 of 809 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**25 of 813 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -493,6 +493,10 @@ that ordering is the priority.
 - **R826** · A 907-guard codeunit crashed the BC service tier with a stack overflow: nothing limits or warns on guards per codeunit (GitHub #28) · [R826.md](docs/roadmap/R826.md) · open, filed 2026-11-05 (coord task R-820); not measured, nothing built
 - **R827** · One empty-block mutant on a procedure body folds the whole procedure into one chain: 72 x the emitted code, growing with the square · [R827.md](docs/roadmap/R827.md) · open, filed 2026-11-05 (found by R-825's plan review); measured offline, nothing built
 - **R828** · A condition mutant makes its whole `if` a chain root: chains of up to 66 remain once empty-block's fold is gone · [R828.md](docs/roadmap/R828.md) · open, filed 2026-11-05 (found by R-825); measured offline, nothing built
+- **R829** · Hang refusal misses a write the loop's step reads, when the loop condition reads a name (GitHub #50) · [R829.md](docs/roadmap/R829.md) · open, filed 2026-11-05 (coord task R-818); build in review
+- **R830** · `void-method-call` has no hang check: deleting a call that steps a loop can hang the run · [R830.md](docs/roadmap/R830.md) · open, filed 2026-11-05 (found by R-818's planning); nothing measured, nothing built
+- **R831** · Hang refusal never sees an array-element target: `while Buf[1] < 10 do Buf[1] := Buf[1] + 1` is claimed · [R831.md](docs/roadmap/R831.md) · open, filed 2026-11-05 (found by R-818's plan review); nothing measured, nothing built
+- **R832** · No way to leave one operator out: `--operator` only narrows to a list (`--exclude-operator`, GitHub #50) · [R832.md](docs/roadmap/R832.md) · open, filed 2026-11-05 (asked in GitHub #50); nothing built
 
 ## Backends and tooling
 
