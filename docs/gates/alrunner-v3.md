@@ -97,8 +97,22 @@ The legs:
   - What it runs: ONE `al-runner serve` daemon takes five requests, each entry one codeunit of
     `fixtures/sandbox-order-tests` (Writer sets, Reader reports): `[R]`, `[W,R]`, `[R,W]`, `[W1,R1,W2,R2,R3]`, then a
     new `[R]`. Kinds (7): WorkDate, GlobalLanguage, uncommitted rows, a SingleInstance codeunit in the test app and
-    one in the dependency app (`fixtures/sandbox-order`), NumberSequence, IsolatedStorage. No test commits
-    (al-runner refuses `Commit` under `TestIsolation = Function`), so commit-based state stays unmeasured.
+    one in the dependency app (`fixtures/sandbox-order`), NumberSequence, IsolatedStorage. Writer does not commit.
+  - Commit kind (R804 part 2; pre-commitment `docs/superpowers/specs/2026-10-26-r804-o1-commit-kind-precommitment.md`,
+    master 3185d706): four more requests go to the SAME daemon, after the five: `[C,R]`, `[R,C]`, `[C1,R1,C2,R2]`, then
+    a new `[R]` (`C` = codeunit `Order Commit Writer`, 77054, separate from Writer because a refused Commit cascades
+    to the rest of its codeunit). Its 6 tests each write one kind (local row, dependency-app row, local and
+    dependency-app SingleInstance, NumberSequence, IsolatedStorage), call `Commit()`, and re-read their own value.
+    The verdict keys off the build's pin: `commit-under-test-isolation` pinned `gone` in the leg-C facts (`o1CommitRuns`).
+    - Flagged build: every CommitWriter test passes, and every Reader entry reads the defaults. A writer value is
+      CARRY-OVER (`gate-fail`); a CommitWriter test that does not pass is `gate-fail`.
+    - Any other build: every CommitWriter test is refused with text matching `V3_SERVE_SAFE_REFUSALS.commit`, and the
+      Readers read the defaults. A CommitWriter test that passes is `held` (re-pre-commit: upstream may have fixed it);
+      any other row is `gate-fail`.
+    - Measured 2026-10-26 on `edge-a157b2d34` (unflagged): O1 passes on both package sets; all six CommitWriter tests
+      are refused in each of the four requests; every Reader reads the defaults. The flagged reading
+      (`edge-8078bcf49`) is predicted from the probe (`/coord/handoff/R-804/commit-probe/result.md`) and not yet run
+      through the gate: its pin was not on master when this was built.
   - Package sets: the fixture's own (the Microsoft symbols of `sandbox-tests`), and, with `LETHAL_ITEST_V3_CDO`, the
     CDO `Test/.alpackages` as a read-only package cache (skipped without it, as D1 is). For the CDO set the leg
     copies the fixture into its scratch dir and adds to the tests app.json the dependencies the CDO Test
@@ -432,7 +446,16 @@ A build can have a PIN: the exact readings that differ from alpha.2's expectatio
 | leg T | seven rows (`Data Flag Ops` x3, `Data Key Probe` x4) `error` / `runner-refused`, counts 290 / 50 / 59 over 406 | NO: BC kills them; #5788 | 7 of 406 mutants read `error` where BC kills |
 | X (b) | exit 3, `passed` 0 and `notRun` 0 present, no rows, non-empty `compilationErrors` | yes | none |
 
-Leg T is judged against the committed alpha.2 baseline with the seven keys overridden (`applyTPin`, S4): if a pinned key is absent, repeated or not `survived`/`null`/`null` there, the leg reads `held`. On a pinned pass the alpha.2 baseline compare is skipped (the pinned compare has the same identity-scheme and R556 checks). Rows equal to the pin but with other counts are a `gate-fail`.
+Leg T is judged against the committed alpha.2 baseline with the pinned keys overridden (`applyTPin`, S4).
+- If a pinned key is absent, repeated, or its committed row is not the pin's `from`, the leg reads at least `held`.
+  The default `from` is `survived`/`null`/`null`. Since R804 a row may name another `from`: edge-8078bcf49's
+  Commit rows leave `no-coverage`. `coverageFiltered` follows the pinned verdict.
+- On a pinned pass the alpha.2 baseline compare is skipped; the pinned compare has the same identity-scheme and R556
+  checks.
+- Rows equal to the pin but with other figures are a `gate-fail`. The figures are the counts and, since R804, the
+  refused-test count: a pin may name `refusedTests`, default 3, and edge-8078bcf49's is 0.
+- A pin miss names `T: pin-mismatch: <reason>` as its failure, with the unpinned judgement in brackets. On a build
+  whose pin moves a figure, the unpinned judgement always fails on that figure.
 
 **The virtual-clock guard (B2).** alpha.5 counts a Sleep toward `--test-timeout-secs` on a virtual clock, so a "3 s" stop can return after tens of ms. In the backend, when a MUTANT is active and a timeout row's `durationMs` is below its stop, the verdict is `error` / `runner-refused` ("stopped on v3's virtual clock", never scored). Baselines are unchanged. Upstream text: `/coord/handoff/R-586c/upstream-virtual-clock.md`.
 

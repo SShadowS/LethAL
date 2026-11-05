@@ -249,8 +249,8 @@
       "mutants": 36
     },
     "fixtures/sandbox-order-tests/src/OrderProbe.al": {
-      "sha256": "2a22c8264cbd9ce6925e8835550c51585ba5eb68601f715be4325765703ba56b",
-      "mutants": 72
+      "sha256": "09b61cadc12252be8fa6fd1b910c2f95bb22183575b99720e7bf1ae74f8259e5",
+      "mutants": 118
     },
     "fixtures/sandbox-order/src/OrderDep.al": {
       "sha256": "f59b075e45c167096984511e336ceb8a87b9dc7668b20a793efde59d048f1e49",

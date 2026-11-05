@@ -166,16 +166,27 @@ re-freeze writes a new report; read the rank again on it.
   mutants (`report-diff`). But every survivor's `reach` is `not-decided`, so the ranking differs: the planted bug
   is **ninth of fifteen**, and the top survivor is M0009 (`Issue`, `lethal.conditional-boundary`). If you show a v3
   report, do not use the 1:20 `reach` line. Say `executionProven: true` (a test entered `GetBalance`) instead.
-- The timing claims elsewhere stay as they are (gift card 1.7 s and D1 20.8 s on v3, from
-  `/coord/handoff/final-timing/6aa7700c`). The 27.2 s above is one bcdev run, not a talk figure.
-- **What the demo shows (measured 2026-10-26 03:08Z, R-802; `/coord/handoff/R-802/talk/timing.md`).**
-  - Setup: master e02b4d75 (R790's speculation off, the default), `current` edge-a157b2d34, best-of-5 on a quiet
-    machine.
-  - **Gift card:** 1.7 s best, 1.7 s median, the same as the quoted figure.
-  - **D1:** 22.0 s best, 22.2 s median, about 1.2 s above the quoted 20.8 s. About 0.5 s of that is this build's
-    login WorkDate lookup (#5743, as BC does it; filed as #5884).
-  - Every verdict and killing test is identical to the quoted run.
-  - Say "about 21 to 22 seconds" for D1 if it runs live.
+- **The talk's timing figures (QUOTED; owner-authorised re-measure, 2026-10-26).** On al-runner-v3, best of 5:
+  - **Gift card: 1.5 s** (median 1.6 s).
+  - **D1: 17.2 s** (median 17.2 s).
+  - Measured 2026-10-26 22:12-22:15Z on the **v3.0.0-alpha.7 release**: `al-runner 3.0.0-alpha.7 (2c63a382e)`, current
+    since 22:08Z through the normal release path, with LethAL master 10f9f63a. Owner: "adopt if identical"; its gate
+    readings equal alpha.6's (R804 addendum 3).
+  - Machine: `scripts/v3-timing.ts --repeat 5 --subjects gc,d1`, quiet (load 1.8-2.5, 0 other heavy jobs, other lanes
+    holding). Evidence: `/coord/handoff/lethal-spare-edge/a7run/timing/timing.md`.
+  - **Every verdict and killing test is identical to the earlier quoted run** (6aa7700c), in all 5 runs of each subject
+    (60 and 63 mutants).
+  - D1's cached runs: deploy 7.1-7.5 s, alc 5.7-6.2 s, baseline 2.1-2.2 s, mutant loop 3.6-3.7 s, warm-up 1.7-1.8 s,
+    live 1.0-1.1 s. The four cached runs are within 0.2 s of each other.
+  - Say "about 17 seconds" for D1 if it runs live.
+  - The 27.2 s above is one bcdev run, not a talk figure.
+- **Previously quoted (dated):**
+  - 2026-10-26 11:54Z, the v3.0.0-alpha.6 release (`al-runner 3.0.0-alpha.6 (db0296678)`), master 68568a19: gift card
+    1.6 s and D1 17.1 s best (medians 1.6 and 18.3 s), from `/coord/handoff/lethal-spare-edge/a6/timing/timing.md`.
+  - 2026-10-25, 6aa7700c on edge-dcdf9e821: gift card 1.7 s and D1 20.8 s best (medians 1.8 and 21.5 s), from
+    `/coord/handoff/final-timing/6aa7700c`.
+  - Measured since, not quoted: edge-a157b2d34 D1 22.0 s best (R-802, 03:08Z); edge-8078bcf49 D1 19.9 s best (R804,
+    08:49Z).
 
 ### The agent loop (D5)
 
