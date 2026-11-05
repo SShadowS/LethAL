@@ -16,6 +16,8 @@
 
 export const V3_RUN_SEED = 1;
 export const V3_SEED_ENV = "ALRUNNER_SEED";
+/** Upstream's fallback name for the same variable; O1's unpinned daemon must not inherit it either. */
+export const V3_SEED_ENV_FALLBACK = "AL_RUNNER_SEED";
 
 /** The environment extras for an al-runner process: `extra` plus the pinned seed. The one helper every spawn site uses. */
 export function v3ChildEnv(extra?: Readonly<Record<string, string>>): Record<string, string> {
@@ -29,7 +31,7 @@ export function v3ChildEnv(extra?: Readonly<Record<string, string>>): Record<str
 export function v3UnpinnedEnv(
   extra?: Readonly<Record<string, string>>,
 ): Record<string, string | undefined> {
-  return { ...extra, [V3_SEED_ENV]: undefined };
+  return { ...extra, [V3_SEED_ENV]: undefined, [V3_SEED_ENV_FALLBACK]: undefined };
 }
 
 /** The child's full environment: the parent's, then `extra` on top; an `undefined` value removes the name. */

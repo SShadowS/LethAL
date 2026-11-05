@@ -104,7 +104,7 @@ import {
   uncacheableReason,
   writeProbeCache,
 } from "./al-runner-v3-probe-cache";
-import { checkRunSeed, v3ChildEnv } from "./al-runner-v3-seed";
+import { AlRunnerV3SeedError, checkRunSeed, v3ChildEnv } from "./al-runner-v3-seed";
 import {
   AlRunnerV3CoverageJoinError,
   type SleepIndex,
@@ -3736,6 +3736,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
       if (
         err instanceof AlRunnerV3DependencySkippedError ||
+        err instanceof AlRunnerV3SeedError ||
         err instanceof AlRunnerV3ServeFallbackWarmupError
       )
         throw err;

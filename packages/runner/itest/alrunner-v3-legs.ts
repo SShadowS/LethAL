@@ -334,10 +334,18 @@ export function judgeO1Seed(r: {
         bad.push(
           `seed: ${name} read seed ${JSON.stringify(q.seed)} source ${JSON.stringify(q.seedSource)}, pre-committed 1 and "env"`,
         );
-  } else if (s0.message !== s1.message)
-    bad.push(
-      `seed: a build that reports no seed read different values without the variable (${s0.message} | ${s1.message})`,
-    );
+  } else {
+    if (s0.message !== s1.message)
+      bad.push(
+        `seed: a build that reports no seed read different values without the variable (${s0.message} | ${s1.message})`,
+      );
+    // Pre-commitment 94b3337d: with and without the variable the values are identical there. A build
+    // that drops `seed`, ignores the variable and draws one seed per process differs here.
+    if (p0.message !== s0.message)
+      bad.push(
+        `seed: a build that reports no seed read different values with and without the variable (${p0.message} | ${s0.message})`,
+      );
+  }
   return bad.length > 0 ? { outcome: "gate-fail", lines: bad } : { outcome: "pass", lines: [] };
 }
 

@@ -23,6 +23,7 @@ import type { ArtifactIo } from "../src/artifact";
 import { type SpawnFn, defaultSpawn } from "../src/publisher";
 import { fakeAlRunnerServer } from "./helpers/fake-al-runner-server";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
+import { legacyBuildReport } from "./helpers/legacy-report";
 
 const AMBIENT = "7";
 const withAmbientSeed = async <T>(f: () => Promise<T>): Promise<T> => {
@@ -71,6 +72,20 @@ describe("(a) every spawn path sets the variable, and an ambient value does not 
       // O1's sensitivity daemon: the variable is REMOVED, even an ambient one
       expect(await read(v3UnpinnedEnv())).toBe("none");
     });
+  });
+
+  test("v3UnpinnedEnv removes upstream's fallback name too, even when it is ambient", async () => {
+    const saved = process.env.AL_RUNNER_SEED;
+    process.env.AL_RUNNER_SEED = AMBIENT;
+    try {
+      expect(mergeChildEnv(v3UnpinnedEnv()).AL_RUNNER_SEED).toBeUndefined();
+      expect("AL_RUNNER_SEED" in mergeChildEnv(v3UnpinnedEnv())).toBe(false);
+      // other direction: the plain merge keeps it, so the removal is what does the work
+      expect(mergeChildEnv({}).AL_RUNNER_SEED).toBe(AMBIENT);
+    } finally {
+      if (saved === undefined) Reflect.deleteProperty(process.env, "AL_RUNNER_SEED");
+      else process.env.AL_RUNNER_SEED = saved;
+    }
   });
 
   test("mergeChildEnv: undefined removes, a value overrides, the rest is kept", () => {
@@ -290,36 +305,100 @@ describe("(c) the read-back guard", () => {
     expect(checkRunSeed({}, "t")).toBeUndefined();
   });
 
-  const serve = async (summary: Record<string, unknown>, enforce = true) => {
-    const fake = fakeAlRunnerServer([{ name: "Codeunit1.A", status: "pass" }], { summary });
-    const s = new AlRunnerServer("x", fake.spawn, [], "serve");
-    s.enforceRunSeed = enforce;
-    await s.start(5000, []);
-    try {
-      return await s.runTests({ sourcePaths: [] }, 5000).then(() => s.lastRunSeed);
-    } finally {
-      await s.close();
-    }
-  };
-  test("serve: seed 1 / env passes and is remembered", async () => {
-    expect(await serve({ seed: 1, seedSource: "env" })).toEqual({ seed: 1, seedSource: "env" });
-  });
-  test("serve: seed 2 is refused", async () => {
-    await expect(serve({ seed: 2, seedSource: "env" })).rejects.toBeInstanceOf(AlRunnerV3SeedError);
-  });
-  test("serve: fresh is refused", async () => {
-    await expect(serve({ seed: 1, seedSource: "fresh" })).rejects.toBeInstanceOf(
-      AlRunnerV3SeedError,
-    );
-  });
-  test("serve: no seed is accepted", async () => {
-    expect(await serve({})).toBeUndefined();
-  });
-  test("serve: the sensitivity daemon (enforce off) reads a fresh seed without refusing", async () => {
-    expect(await serve({ seed: 91, seedSource: "fresh" }, false)).toEqual({
-      seed: 91,
-      seedSource: "fresh",
+  // Both request paths: `runTests` (the older reader) and `runEntries` (what production uses).
+  for (const via of ["runTests", "runEntries"] as const) {
+    const serve = async (summary: Record<string, unknown>, enforce = true) => {
+      const fake = fakeAlRunnerServer([{ name: "Codeunit1.A", status: "pass" }], { summary });
+      const s = new AlRunnerServer("x", fake.spawn, [], "serve");
+      s.enforceRunSeed = enforce;
+      await s.start(5000, []);
+      try {
+        if (via === "runTests") await s.runTests({ sourcePaths: [] }, 5000);
+        else await s.runEntries({ command: "runTests", test: "Codeunit1." }, 5000);
+        return s.lastRunSeed;
+      } finally {
+        await s.close();
+      }
+    };
+    test(`serve ${via}: seed 1 / env passes and is remembered`, async () => {
+      expect(await serve({ seed: 1, seedSource: "env" })).toEqual({ seed: 1, seedSource: "env" });
     });
+    test(`serve ${via}: seed 2 is refused`, async () => {
+      await expect(serve({ seed: 2, seedSource: "env" })).rejects.toBeInstanceOf(
+        AlRunnerV3SeedError,
+      );
+    });
+    test(`serve ${via}: fresh is refused`, async () => {
+      await expect(serve({ seed: 1, seedSource: "fresh" })).rejects.toBeInstanceOf(
+        AlRunnerV3SeedError,
+      );
+    });
+    test(`serve ${via}: no seed is accepted`, async () => {
+      expect(await serve({})).toBeUndefined();
+    });
+    test(`serve ${via}: the sensitivity daemon (enforce off) reads a fresh seed without refusing`, async () => {
+      expect(await serve({ seed: 91, seedSource: "fresh" }, false)).toEqual({
+        seed: 91,
+        seedSource: "fresh",
+      });
+    });
+  }
+});
+
+describe("(g) the run seed reaches the report", () => {
+  const BUILD = { version: "al-runner 3.0.0-alpha.12 (d4bc8d3a5)", binarySha256: "ab".repeat(32) };
+  const CAPS = {
+    coverage: "procedure",
+    deploy: "publish",
+    isolation: "session",
+    kind: "al-runner-v3",
+    authoritative: false,
+  } as const;
+  const mutant = {
+    mutantId: "M0001",
+    file: "src/A.Codeunit.al",
+    startIndex: 0,
+    endIndex: 1,
+    startLine: 1,
+    operatorName: "lethal.empty-block",
+    operatorVersion: "1.0.0",
+    astHash: "hash",
+    objectType: "codeunit",
+    codeunitId: 50100,
+    codeunitName: "A",
+    procedureName: "P",
+    originalText: "Original();",
+    mutatedText: "",
+  } as const;
+  const report = (
+    runnerBuild: { version: string; binarySha256: string; runSeed?: number },
+    carried = false,
+  ) =>
+    legacyBuildReport({
+      caps: CAPS,
+      baselineGreen: true,
+      batches: 1,
+      outcomes: [
+        { mutant, verdict: "killed", batchIndex: 0, ...(carried ? { carried: true } : {}) },
+      ],
+      unsupportedTests: [],
+      notInstrumented: { totalFiles: 1, files: [] },
+      timings: { totalMs: 0, generateMutationSetMs: 0, deployMs: 0, baselineMs: 0 },
+      untargetedTriggerCount: 0,
+      baselineTests: [{ codeunitName: "Tests" }],
+      runnerBuild,
+    });
+  test("a measured context carries runSeed when the build reported one", () => {
+    const c = report({ ...BUILD, runSeed: 1 }).validity.executionContexts;
+    expect(c).toHaveLength(1);
+    expect(c[0]?.runSeed).toBe(1);
+    expect(c[0]?.binarySha256).toBe(BUILD.binarySha256);
+  });
+  test("it is absent when none was reported, and absent on a carried context", () => {
+    const none = report(BUILD).validity.executionContexts;
+    expect(none[0] !== undefined && "runSeed" in none[0]).toBe(false);
+    const carried = report({ ...BUILD, runSeed: 1 }, true).validity.executionContexts;
+    expect(carried.every((x) => !("runSeed" in x))).toBe(true);
   });
 });
 
@@ -365,6 +444,14 @@ describe("(d) O1's seed judge", () => {
         .outcome,
     ).toBe("gate-fail");
   });
+  test("a build that reports no seed but reads other values pinned than unpinned is a gate-fail (one seed per process)", () => {
+    const r = judgeO1Seed({
+      pinned: [q(same), q(same)],
+      sensitive: [q("SEEDVALUES=9|x|y"), q("SEEDVALUES=9|x|y")],
+    });
+    expect(r.outcome).toBe("gate-fail");
+    expect(r.lines.join()).toContain("with and without the variable");
+  });
   test("read-back wrong (seed 2, or source fresh) is a gate-fail", () => {
     expect(judgeO1Seed({ ...good, pinned: [q(same, 2, "env"), q(same, 2, "env")] }).outcome).toBe(
       "gate-fail",
@@ -408,6 +495,10 @@ describe("(e) the alpha.12 pin and O1's app count", () => {
     expect(findV3Pin("al-runner 3.0.0-alpha.12 (d4bc8d3a5)", "0".repeat(64))).toBeUndefined();
   });
 });
+
+const startsBinary = (t: string): boolean =>
+  /alRunnerPath|AL_RUNNER_V3_DEFAULT_PATH/.test(t) &&
+  /(Bun\.spawn|defaultSpawn|defaultServerSpawn|spawnSync|execFile)\)?\(/.test(t);
 
 describe("(b) a spawn of the binary cannot bypass the helper", () => {
   const SRC = join(import.meta.dir, "..", "src");
@@ -459,11 +550,15 @@ describe("(b) a spawn of the binary cannot bypass the helper", () => {
     for (const f of files) {
       if (KNOWN.has(f)) continue;
       const t = await read(f);
-      const startsBinary =
-        /alRunnerPath|AL_RUNNER_V3_DEFAULT_PATH/.test(t) &&
-        /(Bun\.spawn|defaultSpawn|defaultServerSpawn|spawnSync|execFile)\(/.test(t);
-      if (startsBinary && !t.includes("al-runner-v3-seed")) offenders.push(f);
+      if (startsBinary(t) && !t.includes("al-runner-v3-seed")) offenders.push(f);
     }
     expect(offenders).toEqual([]);
+  });
+  test("the scan sees the house idiom (a.spawn ?? defaultSpawn)(...) as well as a plain call", () => {
+    expect(startsBinary("const p = alRunnerPath; await (a.spawn ?? defaultSpawn)([p]);")).toBe(
+      true,
+    );
+    expect(startsBinary("const p = alRunnerPath; await defaultSpawn([p]);")).toBe(true);
+    expect(startsBinary("const p = alRunnerPath; // no spawn here")).toBe(false);
   });
 });
