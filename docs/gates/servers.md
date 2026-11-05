@@ -11,8 +11,9 @@ Basic authentication.
 
 **The default host moved back to server1** on 2026-11-05, after the owner's restart pointed the new configs at `bc1`
 there (R806). The owner has named only `bc1` so far: leave `bc2` and `bc3` until the owner says. **Nothing is
-proven on server1 under today's fixtures** (see the proof tables below). Since the move, no lane has measured
-server1 at all, its builds and what it has installed included: no server is allocated yet, so no lease is possible.
+proven on server1 under today's fixtures** (see the proof tables below). The only reading since the move is a port
+check on 2026-11-05: TCP ports 7049, 7149 and 7249 accepted a connection. That does not show a working BC or its
+build. No server is allocated yet, so no lease, and so no other reading, is possible.
 
 From 2026-10-26 at 03:00 UTC to then, the host was docker1 (`192.168.2.77`; owner ruling, R783), while server1 was
 off. docker1 ran the same compose, image digests, ports, logins and BC builds (bc1 28.4.53241.56590, bc2 and bc3
@@ -475,8 +476,8 @@ testapp, lease), in `/coord/handoff/R-604/bc2-<gate>.log`. Every one of them pas
 
 **docker1 has no bc-demo (R783).** It copies bc1-bc3 only. `bc-demo-setup.ts` takes its host from the same setting
 as the gate servers, so since R806 it probes server1's port 7349 again; whether bc-demo still answers there is not
-measured. If it answers, the script goes on to set it up, with no lease. Moving bc-demo is the owner's to decide.
-`LETHAL_DEMO_HOST` works only with `--laptop`.
+measured. If it answers, the script goes on to set it up, with no lease, so **nobody runs it until the owner rules
+on bc-demo.** Moving bc-demo is the owner's to decide. `LETHAL_DEMO_HOST` works only with `--laptop`.
 
 `bc-demo` is a fourth BC on Linux instance on server1 that belongs to the Directions EMEA talk. It
 uses the next port block after bc3: OData 7348, dev 7349, API 7352. It is in no lease pool and no
