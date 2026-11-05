@@ -65,6 +65,7 @@
 
 import { isV3RefusalText } from "./al-runner-rows";
 import type { EntriesAnswer } from "./al-runner-v3-entries";
+import { checkRunSeed, mergeChildEnv } from "./al-runner-v3-seed";
 
 /** One `compilationErrors` entry, from the one-shot envelope or the `--server` summary. Moved
  *  here from `al-runner-transport.ts` by R654 S1, because the daemon (which v3 keeps) decodes it. */
@@ -127,7 +128,10 @@ export interface ServerProcessHandle {
  *  (added to the inherited one) by R612's `serve-keep-reasons` only, for `ALRUNNER_CACHE`. */
 export type ServerSpawnFn = (
   argv: readonly string[],
-  opts?: { readonly cwd?: string; readonly env?: Readonly<Record<string, string>> },
+  opts?: {
+    readonly cwd?: string;
+    readonly env?: Readonly<Record<string, string | undefined>>;
+  },
 ) => ServerProcessHandle;
 
 /** One test as the server streams it. */
@@ -287,6 +291,18 @@ export class AlRunnerServer {
    * the work is done and invisible.
    */
   private stderrIt: AsyncIterator<Uint8Array> | undefined;
+
+  /** R807: refuse a summary that reports a seed other than the pinned one. O1's sensitivity daemon
+   *  (variable absent) turns this off; nothing else does. */
+  enforceRunSeed = true;
+  /** R807: the seed and its source the last summary reported; absent when it reported none. */
+  lastRunSeed: { readonly seed: unknown; readonly seedSource: unknown } | undefined;
+
+  private readSeed(msg: Record<string, unknown>): void {
+    this.lastRunSeed =
+      msg.seed === undefined ? undefined : { seed: msg.seed, seedSource: msg.seedSource };
+    if (this.enforceRunSeed) checkRunSeed(msg, "serve summary");
+  }
 
   constructor(
     private readonly alRunnerPath: string,
@@ -463,6 +479,7 @@ export class AlRunnerServer {
         continue;
       }
       if (msg.type !== "summary") continue; // forward-compatible with new line types
+      this.readSeed(msg);
       const rawPtc = Array.isArray(msg.perTestCoverage) ? msg.perTestCoverage : [];
       return {
         tests,
@@ -515,7 +532,10 @@ export class AlRunnerServer {
       }
       if (msg.type === "test") tests.push(msg);
       else if (msg.type === "entrySummary") entrySummaries.push(msg);
-      else if (msg.type === "summary") return { tests, entrySummaries, summary: msg };
+      else if (msg.type === "summary") {
+        this.readSeed(msg);
+        return { tests, entrySummaries, summary: msg };
+      }
     }
   }
 
@@ -568,7 +588,7 @@ export const defaultServerSpawn: ServerSpawnFn = (argv, opts) => {
     stdout: "pipe",
     stderr: "pipe",
     ...(opts?.cwd !== undefined ? { cwd: opts.cwd } : {}),
-    ...(opts?.env !== undefined ? { env: { ...process.env, ...opts.env } } : {}),
+    ...(opts?.env !== undefined ? { env: mergeChildEnv(opts.env) } : {}),
   });
   const handle: ServerProcessHandle = {
     write: (line) => {

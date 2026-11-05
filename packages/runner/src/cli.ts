@@ -37,6 +37,7 @@ import {
   validateAlRunnerV3Config,
 } from "./al-runner-v3-config";
 import { checkGated } from "./al-runner-v3-pin";
+import { v3ChildEnv } from "./al-runner-v3-seed";
 import { readSystemRuntime } from "./app-package";
 import { compareAppVersions, nextAbove } from "./app-version";
 import { ArtifactCompiler, defaultArtifactIo } from "./artifact";
@@ -4548,11 +4549,13 @@ export async function buildDoctorDeps(
       cfg: {},
       deps: {
         alRunnerV3: async () => {
-          const v = await spawn([c.path, "--version"]).catch((e: unknown) => ({
-            exitCode: -1,
-            stdout: "",
-            stderr: String(e),
-          }));
+          const v = await spawn([c.path, "--version"], { env: v3ChildEnv() }).catch(
+            (e: unknown) => ({
+              exitCode: -1,
+              stdout: "",
+              stderr: String(e),
+            }),
+          );
           const version = (v.stdout || v.stderr).trim();
           if (v.exitCode !== 0) return { ok: false, details: `${c.path} not runnable: ${version}` };
           try {

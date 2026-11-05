@@ -116,7 +116,12 @@ export interface FoldStatics {
   readonly preprocessorSymbols?: readonly string[];
   /** R586: the al-runner-v3 build that ran (`--version` line, binary sha256). Given only on v3;
    *  lands on `executionContexts[]` of directly measured entries. */
-  readonly runnerBuild?: { readonly version: string; readonly binarySha256: string };
+  readonly runnerBuild?: {
+    readonly version: string;
+    readonly binarySha256: string;
+    /** R807: the run seed the build reported (absent when it reports none). */
+    readonly runSeed?: number;
+  };
 }
 
 /**

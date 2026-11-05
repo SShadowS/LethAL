@@ -159,6 +159,9 @@
               },
               "binarySha256": {
                 "type": "string"
+              },
+              "runSeed": {
+                "type": "number"
               }
             }
           }

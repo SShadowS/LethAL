@@ -57,6 +57,7 @@ import {
   varSectionUnparsed,
   writeInstrumentedProject,
 } from "@lethal/schemata";
+import { AlRunnerV3ServeFallbackWarmupError } from "./al-runner-v3-backend";
 import {
   UpgradeNotRestoredError,
   confirmedDowngradeRefusal,
@@ -86,7 +87,6 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "./backend";
-import { AlRunnerV3ServeFallbackWarmupError } from "./al-runner-v3-backend";
 import { isBcdev, isLocalRunner, isUnread, stopIsRetrySafe } from "./backend";
 import {
   decodeSource,
@@ -8417,7 +8417,8 @@ async function runSessionBody(
     // R214: the effective set, which equivalence marks are matched against.
     buildSymbols,
     // R586: the v3 build, onto the measured execution contexts.
-    ...(v3Build !== undefined ? { runnerBuild: v3Build } : {}),
+    // R807: plus the run seed the build reported back (read now, after the runs), when it reported one.
+    ...(v3Build !== undefined ? { runnerBuild: withRunSeed(v3Build, cfg.backend) } : {}),
   };
   const report = buildReport(statics, collectedEvents);
   // R89: a run ASKED to resume must SAY it resumed. This is the invariant the code already claims —
@@ -11984,6 +11985,15 @@ async function runMutantsParallel(
     },
   });
   if (paced) owner.noteLanes?.(lanesNotice(started, asked, cap, reason, warmupMs));
+}
+
+/** R807: the build plus the run seed the v3 backend saw reported (structural; absent when none). */
+function withRunSeed(
+  build: { readonly version: string; readonly binarySha256: string },
+  backend: ExecutionBackend,
+): { readonly version: string; readonly binarySha256: string; readonly runSeed?: number } {
+  const seed = (backend as { observedRunSeed?: () => number | undefined }).observedRunSeed?.();
+  return seed !== undefined ? { ...build, runSeed: seed } : build;
 }
 
 /**
