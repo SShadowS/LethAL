@@ -56,7 +56,13 @@ import {
 } from "./campaign-subcommands";
 import { DeploymentVerifier } from "./deployment-verifier";
 import { ENV_STATUS_REACHABLE_NO_VENDOR_STATUS, runDoctor } from "./doctor";
-import type { DoctorCheck, DoctorConfig, DoctorDeps, DoctorReport } from "./doctor";
+import type {
+  DependenciesProbe,
+  DoctorCheck,
+  DoctorConfig,
+  DoctorDeps,
+  DoctorReport,
+} from "./doctor";
 import { EnvToolClient, EnvToolError, READS_KEYS, validateEnvToolConfig } from "./env-tool";
 import type { EnvToolBlock, EnvToolConfigSection } from "./env-tool";
 import { EnvToolPublisher } from "./env-tool-publisher";
@@ -68,6 +74,7 @@ import {
 } from "./env-tool-session";
 import type { EnvToolSession } from "./env-tool-session";
 import { loadEquivalenceMarks } from "./equivalence-marks";
+import { symbolPackageIdentity } from "./published-test-app";
 import { watchProjectInputs } from "./source-drift";
 
 // Moved to equivalence-marks.ts so verify.ts can read marks without importing the CLI.
@@ -561,14 +568,17 @@ export interface RunCliConfig {
 }
 
 /**
- * `lethal clear-quarantine --server <url> --instance <name>` (spec §10): reads the current
- * quarantine record's generation and calls `store.clear(key, gen)` — an operator-proven clear
- * after the operator has independently recycled the tier, not a self-service unblock.
+ * `lethal clear-quarantine (--server <url> --instance <name> | --config <path>)` (spec §10): reads
+ * the current quarantine record's generation and calls `store.clear(key, gen)` — an operator-proven
+ * clear after the operator has independently recycled the tier, not a self-service unblock.
+ * Issue #29: `--config` resolves the tier the way `clear-ceiling` does (R112); explicit flags win.
  */
 export interface ClearQuarantineCliConfig {
   readonly mode: "clear-quarantine";
-  readonly server: string;
-  readonly serverInstance: string;
+  readonly server?: string;
+  readonly serverInstance?: string;
+  /** Required when `server`/`serverInstance` are omitted. Ignored when both flags are given. */
+  readonly configPath?: string;
 }
 
 /**
@@ -920,7 +930,7 @@ USAGE
   lethal run               --project <dir> --tests <dir> --backend <bcdev|al-runner-v3> [options]
   lethal run               --project <dir> --dry-run
   lethal init              --project <dir> [--out <path>] [--force]
-  lethal clear-quarantine  --server <url> --instance <name>
+  lethal clear-quarantine  (--server <url> --instance <name> | --config <path>)
   lethal clear-ceiling     --project <dir> (--server <url> --instance <name> | --config <path>) [--db <path>] [--file <name>]
   lethal force-reset-lease --server <url> --instance <name> --config <path> [--project <dir>]
   lethal doctor            --config <path> [--project <dir>] [--tests <dir>] [--json]
@@ -1386,8 +1396,9 @@ const RUN_ONLY_FLAGS = [
  * included, so every subcommand refuses every flag it does not read. `cli.test.ts`'s "flags are read
  * or refused, never ignored" enforces that against the parsed config, not against this table. Two
  * named exceptions live there: `run --dry-run`'s exact, shrink-only list of execution flags it
- * accepts and ignores, and one precedence override (`clear-ceiling --config` is stored but not
- * opened when an explicit `--server`/`--instance` pair is given; see `resolveCeilingIdentity`).
+ * accepts and ignores, and one precedence override (`clear-ceiling --config` and `clear-quarantine --config`
+ * are stored but not opened when an explicit `--server`/`--instance` pair is given; see
+ * `resolveTierIdentity`).
  * "Read" means the parse STORES the flag. A config can still leave a stored flag unused (for
  * example `doctor --project`/`--tests` on an al-runner-only config, `force-reset-lease --project`
  * on a config without an environment tool); those depend on the config, not on another flag.
@@ -1412,7 +1423,10 @@ export const FLAG_OWNERS: ReadonlyArray<{
     ],
   },
   { flag: "tests", owners: ["run", "doctor", "verify"] },
-  { flag: "config", owners: ["run", "clear-ceiling", "force-reset-lease", "doctor", "verify"] },
+  {
+    flag: "config",
+    owners: ["run", "clear-quarantine", "clear-ceiling", "force-reset-lease", "doctor", "verify"],
+  },
   { flag: "db", owners: ["run", "clear-ceiling", "verify"] },
   {
     flag: "out",
@@ -1692,15 +1706,34 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
   }
 
   if (subcommand === "clear-quarantine") {
+    // Issue #29: the same pair-or-config rule as `clear-ceiling` below (R112).
+    // Unlike `clear-ceiling`, an EMPTY value stays an error (as it was before --config): `--server
+    // "$S"` with an unset variable must not quietly fall back to the config's tier.
+    if (values.server === "" || values.instance === "") {
+      throw new Error(
+        "--server or --instance was given as an empty string; give a value, or omit both and pass --config",
+      );
+    }
     const server = values.server;
-    if (server === undefined || server === "") {
-      throw new Error("missing required --server <url>");
-    }
     const serverInstance = values.instance;
-    if (serverInstance === undefined || serverInstance === "") {
-      throw new Error("missing required --instance <name>");
+    if ((server === undefined) !== (serverInstance === undefined)) {
+      throw new Error(
+        "--server and --instance must be given together (or both omitted, with --config, to " +
+          "resolve the tier from the project's own configuration)",
+      );
     }
-    return { mode: "clear-quarantine", server, serverInstance };
+    const quarantineConfigPath = values.config === "" ? undefined : values.config;
+    if (server === undefined && quarantineConfigPath === undefined) {
+      throw new Error(
+        "name the tier with --server <url> --instance <name>, or pass --config <path> to resolve it from the project's configuration",
+      );
+    }
+    return {
+      mode: "clear-quarantine",
+      ...(server !== undefined ? { server } : {}),
+      ...(serverInstance !== undefined ? { serverInstance } : {}),
+      ...(quarantineConfigPath !== undefined ? { configPath: quarantineConfigPath } : {}),
+    };
   }
 
   if (subcommand === "clear-ceiling") {
@@ -4130,16 +4163,17 @@ export async function clearQuarantine(
 }
 
 /**
- * `lethal clear-quarantine --server ... --instance ...` (spec §10). Opens the SAME store
- * `runSession` durably writes to (`defaultQuarantineDir`) — there is no `--quarantine-dir`
- * override here because an operator clearing a real tier must hit the real store, not one a
- * stray flag silently redirected.
+ * `lethal clear-quarantine (--server ... --instance ... | --config ...)` (spec §10). Opens the
+ * SAME store `runSession` durably writes to (`defaultQuarantineDir`) — there is no
+ * `--quarantine-dir` override here because an operator clearing a real tier must hit the real
+ * store, not one a stray flag silently redirected. Exported for its test.
  */
-async function clearQuarantineFromCli(parsed: ClearQuarantineCliConfig): Promise<number> {
-  const key = quarantineResourceKey({
-    server: parsed.server,
-    serverInstance: parsed.serverInstance,
-  });
+export async function clearQuarantineFromCli(parsed: ClearQuarantineCliConfig): Promise<number> {
+  const key = quarantineResourceKey(await resolveTierIdentity(parsed, "clear-quarantine"));
+  if (parsed.server === undefined) {
+    // As `clear-ceiling` does: a tier the operator did not type is shown before it is cleared.
+    console.log(`resolved tier from ${parsed.configPath}: ${key}`);
+  }
   const store = new QuarantineStore(defaultQuarantineDir());
   const result = await clearQuarantine(store, key);
   console.log(result); // "cleared" | "stale" | "not-quarantined"
@@ -4183,8 +4217,14 @@ async function clearQuarantineFromCli(parsed: ClearQuarantineCliConfig): Promise
  * read-only path `doctor` and `force-reset-lease` use, so this cannot become a third derivation,
  * and so an env-tool project cannot provision or publish as a side effect of clearing a ceiling.
  */
-async function resolveCeilingIdentity(
-  parsed: ClearCeilingCliConfig,
+async function resolveTierIdentity(
+  parsed: {
+    readonly server?: string;
+    readonly serverInstance?: string;
+    readonly configPath?: string;
+    readonly projectDir?: string;
+  },
+  command: "clear-ceiling" | "clear-quarantine",
 ): Promise<{ server: string; serverInstance: string }> {
   const { server, serverInstance, configPath } = parsed;
   if (server !== undefined && serverInstance !== undefined) return { server, serverInstance };
@@ -4192,13 +4232,13 @@ async function resolveCeilingIdentity(
     // Unreachable via `parseCliConfig`, which refuses this combination — kept because this is
     // where a caller-contract violation would otherwise become a silently wrong tier.
     throw new Error(
-      "clear-ceiling: neither --server/--instance nor --config was supplied — refusing to guess a tier",
+      `${command}: neither --server/--instance nor --config was supplied — refusing to guess a tier`,
     );
   }
   const configFile = await loadLethalConfigFile(configPath);
   const resolved = await prepareBcdevReadOnly(configFile, {
-    runId: "clear-ceiling",
-    projectDir: parsed.projectDir,
+    runId: command,
+    ...(parsed.projectDir !== undefined ? { projectDir: parsed.projectDir } : {}),
   }).bcdev();
   return { server: resolved.server, serverInstance: resolved.serverInstance };
 }
@@ -4213,7 +4253,7 @@ export async function clearCeilingFromCli(parsed: ClearCeilingCliConfig): Promis
   // env-tool project has no `server`/`serverInstance` in its config file for an operator to read
   // off, so before this the one command that clears the ceiling demanded two values that existed
   // nowhere they could see — a gate you could trip but not clear.
-  const identity = await resolveCeilingIdentity(parsed);
+  const identity = await resolveTierIdentity(parsed, "clear-ceiling");
   const tier = quarantineResourceKey(identity);
   if (parsed.server === undefined) {
     // PRINTED, always. The tier is the whole scope of a destructive clear, and an operator who did
@@ -4762,6 +4802,77 @@ export async function buildDoctorDeps(
           };
         };
 
+  // Issue #29: the target's app.json dependencies beside the packages in the cache. Packages are
+  // identified by their manifest (`symbolPackageIdentity` reads Ready-to-Run wrappers), never by
+  // file name; a file that is not a readable package is listed, not fatal.
+  const projectDirForDeps = opts.projectDir;
+  // The probe is always present: with no `--project` or no cache path it answers `skip`, so the
+  // report says the check was not made instead of printing "every check passed" in silence.
+  const downloadsSymbols = configFile.envTool?.downloadSymbols !== undefined;
+  const dependencies = async (): Promise<DependenciesProbe> => {
+    if (projectDirForDeps === undefined) {
+      return {
+        skip: "pass --project <dir> to compare the target's app.json dependencies with the package cache",
+      };
+    }
+    if (cachePath === undefined || cachePath === "") {
+      return { skip: 'the config names no "bcdev.packageCachePath" to look for packages in' };
+    }
+    const appJsonPath = join(projectDirForDeps, "app.json");
+    let manifest: { dependencies?: unknown };
+    try {
+      manifest = JSON.parse((await readFile(appJsonPath, "utf8")).replace(/^﻿/, ""));
+    } catch (err) {
+      throw new Error(`${appJsonPath}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    const declared = manifest.dependencies ?? [];
+    if (!Array.isArray(declared)) {
+      throw new Error(`${appJsonPath}: "dependencies" is not an array`);
+    }
+    const deps = declared.map((d: Record<string, unknown>, i) => {
+      const id = d.id ?? d.appId; // `appId` is the older spelling of `id`
+      if (typeof id !== "string" || typeof d.version !== "string") {
+        throw new Error(`${appJsonPath}: dependencies[${i}] has no string id and version`);
+      }
+      const label = typeof d.name === "string" ? d.name : id;
+      if (!/^\d+(\.\d+){3}$/.test(d.version)) {
+        throw new Error(
+          `${appJsonPath}: dependency ${JSON.stringify(label)} has version ${JSON.stringify(d.version)}, which doctor cannot compare (it needs four parts, like 1.2.0.0)`,
+        );
+      }
+      return {
+        id,
+        name: label,
+        publisher: typeof d.publisher === "string" ? d.publisher : "",
+        version: d.version,
+      };
+    });
+    const packages: { id: string; version: string }[] = [];
+    const unread: string[] = [];
+    // Nothing to compare: read no package at all.
+    if (deps.length > 0) {
+      // Subfolders count: alc searches them, and `buildPackageCacheCopy` walks them the same way.
+      let walked: Awaited<ReturnType<typeof walkFiles>> | undefined;
+      try {
+        walked = await walkFiles(cachePath, { links: "yield-files" });
+      } catch (err) {
+        // Only an absent cache folder reads as "no packages"; any other failure surfaces.
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      }
+      for (const rel of walked?.files ?? []) {
+        if (!rel.toLowerCase().endsWith(".app")) continue;
+        try {
+          const bytes = await readFile(walked?.resolved.get(rel) ?? join(cachePath, rel));
+          const { id, version } = symbolPackageIdentity(bytes);
+          packages.push({ id, version });
+        } catch {
+          unread.push(rel);
+        }
+      }
+    }
+    return { cachePath, downloadsSymbols, dependencies: deps, packages, unread };
+  };
+
   // Issue #23: the test app's id from its own app.json, looked up read-only on the server.
   const testsDir = opts.testsDir;
   const testApp =
@@ -4799,6 +4910,7 @@ export async function buildDoctorDeps(
       ...(isCreateMode || testApp === undefined ? {} : { testApp }),
       toolPaths,
       ...(alcRuntime !== undefined ? { alcRuntime } : {}),
+      dependencies,
     },
     ...(isCreateMode ? { caveat: DOCTOR_CREATE_MODE_CAVEAT } : {}),
   };

@@ -141,7 +141,32 @@ export interface DoctorDeps {
     readonly installed: boolean;
     readonly versions: readonly string[];
   }>;
+  /**
+   * Issue #29: the target's app.json dependencies beside the packages in `packageCachePath`, each
+   * package read through its manifest (Ready-to-Run wrappers included), never by file name.
+   * `unread` names cache files (in any subfolder) that are not readable as packages. `skip` (a
+   * reason, reported as a skipped check) replaces the whole answer when doctor could not ask: no
+   * `--project`, or no `packageCachePath`. `downloadsSymbols` is true when the config declares
+   * `envTool.downloadSymbols`, which fills the cache during a run, so a gap is not yet a failure.
+   */
+  readonly dependencies?: () => Promise<DependenciesProbe>;
 }
+
+export type DependenciesProbe =
+  | { readonly skip: string }
+  | {
+      readonly skip?: undefined;
+      readonly cachePath: string;
+      readonly downloadsSymbols: boolean;
+      readonly dependencies: readonly {
+        readonly id: string;
+        readonly name: string;
+        readonly publisher: string;
+        readonly version: string;
+      }[];
+      readonly packages: readonly { readonly id: string; readonly version: string }[];
+      readonly unread: readonly string[];
+    };
 
 /**
  * Sentinel `DoctorDeps.envStatus()` returns meaning "reachability confirmed, but this backend has
@@ -438,6 +463,67 @@ export function checkTestApp(probe: {
 }
 
 /**
+ * Issue #29: every dependency in the target's app.json needs a package in the cache.
+ *
+ * The rule is alc's own, MEASURED with alc 18.1 on synthetic apps (a dependency declared at
+ * 1.2.0.0; caches holding only 0.9.0.0, 1.0.0.0, 1.2.0.0, 1.2.0.5, 1.5.0.0 or 2.0.0.0):
+ *  - a package matches by app Id; publisher and name are NOT compared (a wrong name still
+ *    compiled, a wrong id gave AL1022);
+ *  - it is compatible when its version is equal to or higher than the declared one, compared part
+ *    by part as numbers. The major part is not held fixed: 2.0.0.0 satisfied a 1.2.0.0 dependency.
+ * Not covered: the implicit `application`/`platform` dependencies of app.json, and the
+ * dependencies OF the cached packages: only the target's own direct dependencies are checked.
+ *
+ * With `envTool.downloadSymbols` declared, a run fills the cache before any compile, so a gap is
+ * reported as skipped (not failed), as `checkAlcRuntime` does for a cache without System yet.
+ */
+export function checkDependencies(probe: DependenciesProbe): DoctorCheck {
+  const name = "dependencies";
+  if (probe.skip !== undefined) {
+    return { name, ok: true, skipped: true, detail: `not checked: ${probe.skip}` };
+  }
+  if (probe.dependencies.length === 0) {
+    return { name, ok: true, detail: "the target's app.json declares no dependencies" };
+  }
+  const missing: string[] = [];
+  for (const dep of probe.dependencies) {
+    const same = probe.packages.filter((p) => p.id.toLowerCase() === dep.id.toLowerCase());
+    if (same.some((p) => compareAppVersions(p.version, dep.version) >= 0)) continue;
+    const label = `${dep.publisher} ${dep.name} ${dep.version}`;
+    missing.push(
+      same.length === 0
+        ? `${label} (no package with id ${dep.id})`
+        : `${label} (only ${same.map((p) => p.version).join(", ")})`,
+    );
+  }
+  const rule = "alc's rule, measured: same app id, package version equal or higher";
+  if (missing.length === 0) {
+    return {
+      name,
+      ok: true,
+      detail: `all ${probe.dependencies.length} direct dependencies have a compatible package in ${probe.cachePath} (${rule}); the dependencies of those packages were not checked`,
+    };
+  }
+  if (probe.downloadsSymbols) {
+    return {
+      name,
+      ok: true,
+      skipped: true,
+      detail: `not checked: no compatible package yet in ${probe.cachePath} for: ${missing.join("; ")}. envTool.downloadSymbols fills the cache during a run; run doctor again after.`,
+    };
+  }
+  const unreadNote =
+    probe.unread.length === 0 ? "" : ` Not readable as packages: ${probe.unread.join(", ")}.`;
+  // With an unreadable file in the cache, the missing package may be that file: "may", not "will".
+  const verb = probe.unread.length === 0 ? "will" : "may";
+  return {
+    name,
+    ok: false,
+    detail: `no compatible package in ${probe.cachePath} for: ${missing.join("; ")} (${rule}). The first local compile ${verb} fail with AL1022; add the .app files to the cache.${unreadNote}`,
+  };
+}
+
+/**
  * Runs EVERY AVAILABLE check before reporting — never stops at the first failure. That is the
  * entire point over `lethal run`'s own pre-flight refusals, which each fire (correctly) but one at
  * a time, across however many slow round-trips it takes a user to fix one problem and discover the
@@ -463,6 +549,7 @@ export async function runDoctor(cfg: DoctorConfig, deps: DoctorDeps): Promise<Do
     companies,
     alcRuntime,
     testApp,
+    dependencies,
   } = deps;
   const checkPromises: Promise<DoctorCheck>[] = [];
   if (envStatus !== undefined) {
@@ -515,6 +602,11 @@ export async function runDoctor(cfg: DoctorConfig, deps: DoctorDeps): Promise<Do
   }
   if (testApp !== undefined) {
     checkPromises.push(runCheck("test-app-present", async () => checkTestApp(await testApp())));
+  }
+  if (dependencies !== undefined) {
+    checkPromises.push(
+      runCheck("dependencies", async () => checkDependencies(await dependencies())),
+    );
   }
   // R146. `checks.every(...)` on an empty array is `true`, so a deps object with nothing in it would
   // print "ok: every check passed" having checked nothing at all — empty-vs-empty agreement, this

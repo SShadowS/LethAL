@@ -432,6 +432,35 @@ describe("HarnessAuthError (R20)", () => {
     await expect(verifier.verify()).rejects.not.toBeInstanceOf(HarnessVerificationError);
   });
 
+  // Issue #29: a 503 names the sync-pending tenant as a possible cause; other statuses do not.
+  test("a 503 from HarnessInfo carries the sync-pending hint and stays a HarnessVerificationError", async () => {
+    const verifier = new HarnessVerifier(
+      cfg,
+      respond(503, "Application_ServiceUnavailable") as never,
+    );
+    const err = await verifier.fetchControlVersion().then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(HarnessVerificationError);
+    const msg = (err as Error).message;
+    expect(msg).toContain("HTTP 503: Application_ServiceUnavailable");
+    expect(msg).toContain("OperationalWithSyncPending");
+    expect(msg).toContain("ForceSync");
+  });
+
+  test("other failing statuses do not carry the sync-pending hint", async () => {
+    for (const status of [404, 500, 502]) {
+      const verifier = new HarnessVerifier(cfg, respond(status, "nope") as never);
+      const err = await verifier.fetchControlVersion().then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      expect((err as Error).message, String(status)).toContain(`HTTP ${status}`);
+      expect((err as Error).message, String(status)).not.toContain("OperationalWithSyncPending");
+    }
+  });
+
   test("a 403 is treated the same way", async () => {
     const verifier = new HarnessVerifier(cfg, respond(403, "forbidden") as never);
     await expect(verifier.verify()).rejects.toBeInstanceOf(HarnessAuthError);
