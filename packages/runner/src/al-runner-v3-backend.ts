@@ -225,11 +225,11 @@ async function linkIsUnproven(hash: Promise<string>, where: string): Promise<str
   });
 }
 
-/** §5, #5613: exit 6, "the selection matched no test", with no document. Stops the session. */
+/** §5, #5613: exit 6, "the selection matched no test" (no document before the #5622 fix, 0 rows since). Stops the session. */
 export class AlRunnerV3SelectionError extends Error {
   constructor(codeunitId: number, stderr: string) {
     super(
-      `al-runner-v3: --codeunit ${codeunitId} selected no test (exit 6, no document, #5613). stderr: ${stderr.slice(-400)}`,
+      `al-runner-v3: --codeunit ${codeunitId} selected no test (exit 6, #5613). stderr: ${stderr.slice(-400)}`,
     );
     this.name = "AlRunnerV3SelectionError";
   }
@@ -1362,7 +1362,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       // Read by nothing today; `--isolation test` rolls the database back per test, while the
       // codeunit's variables are kept (plan §2).
       isolation: "session",
-      // Until #5602, #5603 and #5605 are measured gone (plan §7).
+      // Until the verdict-changing defects are measured gone (plan §7): #5611 is still present.
       authoritative: false,
     };
   }
