@@ -5,15 +5,20 @@ The BC gates run on the three BC on Linux servers, `bc1`, `bc2` and `bc3` (R589)
 
 ## The servers
 
-They are BC 28.4 on docker1 (`192.168.2.77`), reachable from the kraken container. Localization is
+They are BC 28.4 on server1 (`192.168.2.157`), reachable from the kraken container. Localization is
 W1, so the company is `CRONUS International Ltd.` (not the DK `CRONUS Danmark A/S` that Cronus28
 had). Tenant `default`, instance `BC`, Basic authentication.
 
-**The host moved from server1 to docker1** on 2026-10-26 at 03:00 UTC (owner ruling; R783). Server1
-(`192.168.2.157`) went off at 04:00 CET. docker1 runs the same compose, image digests, ports, logins and
-BC builds (bc1 28.4.53241.56590, bc2 and bc3 .56646). It has 4 vCPU against server1's 22 cores, so gates that
-run many mutants take about 1.5 to 2.2 times as long; gates bound by fixed waits (hang, lease, verify) take
-about the same. The host comes from one place, `packages/runner/src/bc-host.ts` (`DEFAULT_BC_HOST`, or
+**The host moved back to server1** on 2026-11-05, after the owner's restart pointed the new configs at `bc1`
+there (R806). The owner has named only `bc1` so far: leave `bc2` and `bc3` until the owner says. **Nothing is
+proven on server1 under today's fixtures** (see the proof tables below).
+
+From 2026-10-26 at 03:00 UTC to then, the host was docker1 (`192.168.2.77`; owner ruling, R783), while server1 was
+off. docker1 ran the same compose, image digests, ports, logins and BC builds (bc1 28.4.53241.56590, bc2 and bc3
+.56646). It had 4 vCPU against server1's 22 cores, so gates that run many mutants took about 1.5 to 2.2 times as
+long there; gates bound by fixed waits (hang, lease, verify) took about the same.
+
+The host comes from one place, `packages/runner/src/bc-host.ts` (`DEFAULT_BC_HOST`, or
 `LETHAL_BC_HOST=http://<host>` for every process). The setup script's configs, the out-of-use marker check and
 `scripts/r658-hang-gate.sh` all read it. A gate refuses a config that still names the other known host
 (`BcHostMismatchError`); rerun the setup script in that worktree. R783 holds the switch runbook.
@@ -170,7 +175,7 @@ cache (dir 0555, files 0444) with no error (`/coord/handoff/R-599/symcache/alc-r
 - What it holds: `System` plus every Microsoft dependency of a `PUBLISH_PLAN` target (today `System`
   alone). A dependent's own symbols are not put there.
 
-The databases are in memory. A container restart or a docker1 reboot resets each server to a fresh
+The databases are in memory. A container restart or a server1 reboot resets each server to a fresh
 CRONUS with no LethAL app on it. The script is idempotent, so re-running it is the fix.
 - **bc3's Continia stack is lost too.** Republish it with `--with-continia --accept-build 28.4.53241.56646` (R594's
   accepted build). The 22-23 Oct restart needed this; R679's stop message now names the flag.
@@ -253,7 +258,17 @@ difference is a BLOCK. A proof on `bc1` does not admit `bc2`: the servers can di
 and in what else is installed (`bc3` carries the Continia stack). Admitting a new (gate, server)
 pair is one ordinary run of the gate there; add the pair to this table when it passes.
 
-### docker1 (192.168.2.77), the servers in use since 2026-10-26
+### server1 (192.168.2.157), the servers in use since 2026-11-05
+
+**No pair is proven here yet.** The tables below are per host and per fixture state: the docker1 table says nothing
+about server1, and server1's own table further down predates today's fixtures and server1's restart. Prove a pair
+here (one ordinary run of the gate, under the server's coord lease) and add it to this table before using it. Only
+`bc1` is named by the owner so far (R806).
+
+| server | gate | LethAL Control | proof (log) |
+|---|---|---|---|
+
+### docker1 (192.168.2.77), history: the servers from 2026-10-26 to 2026-11-05
 
 Proven on 2026-10-25 by R-783, under LethAL Control 1.0.0.24, under each server's coord lease. Each log was
 compared with server1's pass of the same gate from that day (R-689b), with times, the host and random ids
@@ -330,7 +345,8 @@ first.
 
 ### server1 (192.168.2.157), history: the servers before 2026-10-26
 
-Server1 is off. The table below is the record of what was proven there, kept as history.
+The table below is the record of what was proven on server1 before it went off, kept as history. It is not proof
+for server1 today.
 
 This table is the record. It lists the pairs exactly as the autonomy runbook
 (`docs/superpowers/runbooks/autonomy/README.md`, "Proof is PER SERVER") does. Each pair below
@@ -456,10 +472,9 @@ testapp, lease), in `/coord/handoff/R-604/bc2-<gate>.log`. Every one of them pas
 
 ## bc-demo: not a gate server (R663)
 
-**docker1 has no bc-demo (R783).** It copies bc1-bc3 only, and server1, where bc-demo ran, is off.
-`bc-demo-setup.ts` takes its host from the same setting as the gate servers, so it now probes docker1's port
-7349, finds nothing and prints the owner steps. Moving bc-demo, or naming its own host with `LETHAL_DEMO_HOST`,
-is the owner's to decide.
+**docker1 has no bc-demo (R783).** It copies bc1-bc3 only. `bc-demo-setup.ts` takes its host from the same setting
+as the gate servers, so since R806 it probes server1's port 7349 again; whether bc-demo still answers there is not
+measured. Moving bc-demo, or naming its own host with `LETHAL_DEMO_HOST`, is the owner's to decide.
 
 `bc-demo` is a fourth BC on Linux instance on server1 that belongs to the Directions EMEA talk. It
 uses the next port block after bc3: OData 7348, dev 7349, API 7352. It is in no lease pool and no
