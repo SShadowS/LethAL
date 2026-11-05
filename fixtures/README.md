@@ -1737,8 +1737,8 @@ routed through the CLI.
 
 ### The BC on Linux servers: `lethal.config.bc1.json`, `bc2`, `bc3` (R589)
 
-Three BC 28.4 servers run on server1 (192.168.2.157; on docker1, 192.168.2.77, from 2026-10-26 to 2026-11-05,
-R783 and R806), on BC on Linux, so the BC gates can run in
+Three BC 28.4 servers, on server1 by default (192.168.2.157; on docker1, 192.168.2.77, from 2026-10-26 to
+2026-11-05, R783 and R806; `docs/gates/servers.md` says which are in use), on BC on Linux, so the BC gates can run in
 parallel instead of queueing for Cronus28. They are W1: the company is `CRONUS International Ltd.`
 (not Cronus28's DK `CRONUS Danmark A/S`), the tenant `default`, the instance `BC`, with Basic
 authentication.

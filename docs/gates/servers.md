@@ -5,13 +5,14 @@ The BC gates run on the three BC on Linux servers, `bc1`, `bc2` and `bc3` (R589)
 
 ## The servers
 
-They are BC 28.4 on server1 (`192.168.2.157`), reachable from the kraken container. Localization is
-W1, so the company is `CRONUS International Ltd.` (not the DK `CRONUS Danmark A/S` that Cronus28
-had). Tenant `default`, instance `BC`, Basic authentication.
+They are BC 28.4 on server1 (`192.168.2.157`). Localization is W1, so the company is
+`CRONUS International Ltd.` (not the DK `CRONUS Danmark A/S` that Cronus28 had). Tenant `default`, instance `BC`,
+Basic authentication.
 
-**The host moved back to server1** on 2026-11-05, after the owner's restart pointed the new configs at `bc1`
+**The default host moved back to server1** on 2026-11-05, after the owner's restart pointed the new configs at `bc1`
 there (R806). The owner has named only `bc1` so far: leave `bc2` and `bc3` until the owner says. **Nothing is
-proven on server1 under today's fixtures** (see the proof tables below).
+proven on server1 under today's fixtures** (see the proof tables below). Since the move, no lane has measured
+server1 at all, its builds and what it has installed included: no server is allocated yet, so no lease is possible.
 
 From 2026-10-26 at 03:00 UTC to then, the host was docker1 (`192.168.2.77`; owner ruling, R783), while server1 was
 off. docker1 ran the same compose, image digests, ports, logins and BC builds (bc1 28.4.53241.56590, bc2 and bc3
@@ -258,11 +259,11 @@ difference is a BLOCK. A proof on `bc1` does not admit `bc2`: the servers can di
 and in what else is installed (`bc3` carries the Continia stack). Admitting a new (gate, server)
 pair is one ordinary run of the gate there; add the pair to this table when it passes.
 
-### server1 (192.168.2.157), the servers in use since 2026-11-05
+### server1 (192.168.2.157), the default host since 2026-11-05
 
 **No pair is proven here yet.** The tables below are per host and per fixture state: the docker1 table says nothing
-about server1, and server1's own table further down predates today's fixtures and server1's restart. Prove a pair
-here (one ordinary run of the gate, under the server's coord lease) and add it to this table before using it. Only
+about server1, and server1's own table further down predates today's fixtures. Prove a pair here (one ordinary run
+of the gate, under the server's coord lease, after a full setup run) and add it to this table before using it. Only
 `bc1` is named by the owner so far (R806).
 
 | server | gate | LethAL Control | proof (log) |
@@ -474,7 +475,8 @@ testapp, lease), in `/coord/handoff/R-604/bc2-<gate>.log`. Every one of them pas
 
 **docker1 has no bc-demo (R783).** It copies bc1-bc3 only. `bc-demo-setup.ts` takes its host from the same setting
 as the gate servers, so since R806 it probes server1's port 7349 again; whether bc-demo still answers there is not
-measured. Moving bc-demo, or naming its own host with `LETHAL_DEMO_HOST`, is the owner's to decide.
+measured. If it answers, the script goes on to set it up, with no lease. Moving bc-demo is the owner's to decide.
+`LETHAL_DEMO_HOST` works only with `--laptop`.
 
 `bc-demo` is a fourth BC on Linux instance on server1 that belongs to the Directions EMEA talk. It
 uses the next port block after bc3: OData 7348, dev 7349, API 7352. It is in no lease pool and no
