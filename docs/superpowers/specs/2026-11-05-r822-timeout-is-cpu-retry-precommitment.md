@@ -44,3 +44,16 @@ every time sees three runs of A.
 
 Red tests each way, the full v3 gate on the head, CI, one opus build review. Any difference from this table is a BLOCK until
 explained in a dated addendum.
+
+## Addendum 1, 2026-11-05: what the build review found
+
+Written before any live gate of the R822 build. The rule does not change; two table lines were too simple.
+
+- **"Wall-time build ... is never late" holds only for a limit with no slack.** A wall-time build with some slack on a busy
+  core can be late with a low CPU share. That is the contended reading, so it retries. Once a try is free it stops on time
+  and reads `diverged`. If all three tries are contended it reads `unmeasurable`. It never reads `matches`.
+- **A correct build can reach a killed A on a later try.** A contended first A, then a later A that runs into the 60 s process
+  timeout, reads `diverged`, as a killed first A always did. It needs a CPU share of about 3%. Retries give it more chances,
+  and this rule accepts that: a killed A is the reading of a build with no limit, and it stays unretried.
+
+The gate page's "about 20 s" is the quiet case. With retries the fact takes about a minute.

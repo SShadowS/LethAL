@@ -83,6 +83,7 @@ import { changedLinesSince, parseLineArg } from "./line-filter";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
 import { toMutationElements } from "./mutation-elements";
 import {
+  BASELINE_TIMEOUT_DEFAULT,
   LARGE_RUN_MUTANT_THRESHOLD,
   MIN_MUTANT_BUDGET_MS,
   REQUEST_CEILING_MS,
@@ -509,6 +510,11 @@ export interface RunCliConfig {
    * mutant 13 of 138.
    */
   readonly mutantTimeoutMs?: number;
+  /**
+   * R821: `--baseline-timeout-ms <n>`, how long one baseline test may run before LethAL stops it.
+   * Absent means `BASELINE_TIMEOUT_DEFAULT` (120 s). The reports have told users to raise it since R658.
+   */
+  readonly baselineTimeoutMs?: number;
   /**
    * R198: `--max-methods-per-call <n>` caps one `RunMutantMany` call (default unbounded; the
    * tables gate forces 2 to exercise chunking live), `--request-ceiling-ms <n>` bounds one call
@@ -1001,6 +1007,8 @@ RUN — cost and recovery
                              count because BC recompiles server-side
   --mutant-timeout-ms <n>    floor for a mutant's time budget (default ${MIN_MUTANT_BUDGET_MS} ms). The budget is
                              max(2 x that test's baseline, this). Exceeding it quarantines the run
+  --baseline-timeout-ms <n>  how long one baseline test may run before LethAL stops it (default
+                             ${BASELINE_TIMEOUT_DEFAULT} ms). Raise it for a test that is slow, not hung
   --max-methods-per-call <n> cap the covering tests one RunMutantMany call runs (default: all that
                              fit --request-ceiling-ms). One call per mutant instead of one per test
   --request-ceiling-ms <n>   bound one RunMutantMany call (default ${REQUEST_CEILING_MS} ms; keep it under the
@@ -1280,6 +1288,8 @@ export const RUN_FLAGS = {
   "max-guards-per-batch": { type: "string" },
   // R47: see `RunCliConfig.mutantTimeoutMs` / `resume`.
   "mutant-timeout-ms": { type: "string" },
+  // R821: see `RunCliConfig.baselineTimeoutMs`.
+  "baseline-timeout-ms": { type: "string" },
   // R198: see `RunCliConfig.groupRuns`.
   "max-methods-per-call": { type: "string" },
   "request-ceiling-ms": { type: "string" },
@@ -1345,6 +1355,7 @@ const RUN_ONLY_FLAGS = [
   "changed-since",
   "max-guards-per-batch",
   "mutant-timeout-ms",
+  "baseline-timeout-ms",
   "max-methods-per-call",
   "request-ceiling-ms",
   "no-group-runs",
@@ -1983,6 +1994,16 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
   ) {
     throw new Error("--mutant-timeout-ms must be a positive integer (milliseconds)");
   }
+  // R821: the baseline test timeout the reports name.
+  const baselineTimeoutRaw = values["baseline-timeout-ms"];
+  const baselineTimeoutMs =
+    baselineTimeoutRaw === undefined ? undefined : Number(baselineTimeoutRaw);
+  if (
+    baselineTimeoutMs !== undefined &&
+    (!Number.isInteger(baselineTimeoutMs) || baselineTimeoutMs < 1)
+  ) {
+    throw new Error("--baseline-timeout-ms must be a positive integer (milliseconds)");
+  }
 
   // R198: the group-run knobs, rejected at parse time like every other numeric flag here.
   const maxMethodsRaw = values["max-methods-per-call"];
@@ -2038,6 +2059,11 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     if (mutantTimeoutMs !== undefined) {
       throw new Error(
         "--mutant-timeout-ms has no effect with --dry-run (a dry run executes no mutants)",
+      );
+    }
+    if (baselineTimeoutMs !== undefined) {
+      throw new Error(
+        "--baseline-timeout-ms has no effect with --dry-run (a dry run runs no baseline)",
       );
     }
     if (resumeLast || resumeRunRaw !== undefined) {
@@ -2173,6 +2199,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     ...excludeTests,
     ...(maxGuardsPerBatch !== undefined ? { maxGuardsPerBatch } : {}),
     ...(mutantTimeoutMs !== undefined ? { mutantTimeoutMs } : {}),
+    ...(baselineTimeoutMs !== undefined ? { baselineTimeoutMs } : {}),
     ...groupRuns,
     ...resume,
     ...(values["allow-large-run"] === true ? { allowLargeRun: true } : {}),
@@ -3935,6 +3962,9 @@ export async function runFromCli(
                 : {}),
               ...(parsed.mutantTimeoutMs !== undefined
                 ? { mutantTimeoutMs: parsed.mutantTimeoutMs }
+                : {}),
+              ...(parsed.baselineTimeoutMs !== undefined
+                ? { baselineTimeoutMs: parsed.baselineTimeoutMs }
                 : {}),
               ...(parsed.groupRuns !== undefined ? { groupRuns: parsed.groupRuns } : {}),
               ...(parsed.resume !== undefined ? { resume: parsed.resume } : {}),
