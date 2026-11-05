@@ -774,6 +774,8 @@ export function triggerLocalNames(trigger: ALSyntaxNode): ReadonlySet<string> {
       if (c.kind === ALNodeKind.variable_declaration || c.kind === ALNodeKind.parameter) {
         for (const name of declaredNames(c)) out.add(name.toLowerCase());
       }
+      if (c.kind === ALNodeKind.variable_declaration)
+        for (const name of conditionalVarNames(c)) out.add(name.toLowerCase()); // R796
       // R323: a trigger's named return value is a header name too.
       if (c.fieldName === "return_value") out.add(stripQuotes(c.text).toLowerCase());
       walk(c);
@@ -829,6 +831,14 @@ function conditionallyDeclared(member: ALSyntaxNode): string[] {
       ) {
         for (const name of declaredNames(c)) out.add(name.toLowerCase());
       }
+      // R796: `A, #if X B, #endif C: T` is ONE declaration (tree-sitter-al 4.5.0) whose B sits under
+      // a `preproc_conditional_var_names` child, so `declaredNames` misses it and whether it exists
+      // depends on symbols the engine never sees: B is conditionally declared, hence unknown.
+      // R796: `A, #if X B, #endif C: T` is ONE declaration (tree-sitter-al 4.5.0) whose B sits under
+      // a `preproc_conditional_var_names` child, so `declaredNames` misses it and whether it exists
+      // depends on symbols the engine never sees: B is conditionally declared, hence unknown.
+      if (c.kind === ALNodeKind.variable_declaration)
+        for (const name of conditionalVarNames(c)) out.add(name.toLowerCase());
       walk(c, under);
     }
   };
@@ -947,6 +957,17 @@ export function declaredNames(decl: ALSyntaxNode): string[] {
   return decl.children
     .filter((c) => c.fieldName === "name" && c.text !== "")
     .map((c) => stripQuotes(c.text));
+}
+
+/** R796: the names a declaration holds inside a `#if` (`preproc_conditional_var_names`, one level
+ *  down, so `declaredNames` does not see them). Their existence depends on symbols. */
+export function conditionalVarNames(decl: ALSyntaxNode): string[] {
+  const out: string[] = [];
+  for (const ch of decl.children)
+    if (ch.rawKind === "preproc_conditional_var_names")
+      for (const n of ch.children)
+        if (n.fieldName === "name" && n.text !== "") out.push(stripQuotes(n.text));
+  return out;
 }
 
 /** One symbol per name, each with the declaration's full type text and the SHARED declaration

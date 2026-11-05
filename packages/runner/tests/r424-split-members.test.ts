@@ -739,10 +739,11 @@ describe("R424: discovery, one candidate per arm", () => {
     }
   });
 
-  test("a split test beside R402's s13 loop: the tree loses the loop's test, refused with both causes", () => {
-    // An `#if` between `while (...)` and `do` is a construct tree-sitter-al 4.4.1 does not read as
-    // a procedure; the split member puts the file on the tree path, which then refuses it. The same
-    // file refused on 61ad4d84 too (the split member's token already forced the tree path).
+  test("a split test beside R402's s13 loop: tree-sitter-al 4.5.0 reads the loop, so the tree keeps the test", () => {
+    // R796: an `#if` between `while (...)` and `do` was a construct tree-sitter-al 4.4.1 did not read
+    // as a procedure (the tree lost the loop's test and the file was refused with both causes,
+    // TreeDiscoveryMismatchError). 4.5.0 reads it, so no mismatch: the test is found. The guard's
+    // message stays pinned below; no live 4.5.0 parse is known that trips it.
     const src = (V.V1 ?? "").replace(
       "    begin\n    end;\n}",
       `    begin
@@ -766,15 +767,9 @@ describe("R424: discovery, one candidate per arm", () => {
     end;
 }`,
     );
-    let err: unknown;
-    try {
-      testsInAlSource("V1.al", src);
-    } catch (e) {
-      err = e;
-    }
-    expect(err).toBeInstanceOf(TreeDiscoveryMismatchError);
-    expect((err as TreeDiscoveryMismatchError).missing).toEqual(["92461.Looping"]);
-    expect((err as Error).message).toContain("tree-sitter-al");
+    expect(testsInAlSource("V1.al", src).map((t) => `${t.codeunitId}.${t.method}`)).toContain(
+      "92461.Looping",
+    );
   });
 
   test("TreeDiscoveryMismatchError names both causes", () => {
