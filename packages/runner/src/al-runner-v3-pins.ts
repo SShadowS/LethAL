@@ -90,6 +90,17 @@ export interface V3BuildPin {
     readonly evidence: string;
   };
   /**
+   * R808: what `serve-keep-reasons` reads for the two entries that moved from edge 8078bcf49 on:
+   * `commit` is a plain pass (no `notRun`), and on these builds `onrun-failed` has no row for the
+   * test method `Codeunit50673.Never` (alpha.7 gives a `Codeunit<n>.OnRun` fail row, alpha.12 no
+   * row at all; since #5859 a raising OnRun gives no row, as BC's Test Runner app does). Absent (alpha.2, alpha.5, older edges): the fact judges as before.
+   */
+  readonly serveKeepMoved?: {
+    readonly commit: "plain pass";
+    readonly onrunFailed: "no row";
+    readonly evidence: string;
+  };
+  /**
    * R771 addendum 2: the WorkDate O1's CDO set reads on a build that runs Base Application's login
    * code (`LogInManagement.GetDefaultWorkDate`, the last G/L entry's date in the restored CRONUS demo
    * company of the CDO set's BC build). Every CDO Reader entry must read exactly it.
@@ -645,6 +656,12 @@ const READINGS_8078BCF49: Omit<V3BuildPin, "id" | "version" | "binarySha256"> = 
       "#5798 fixed upstream: the Dot.Step serve row carries codeunit 78850 and method Dot.Step (8078bcf49 receipt, leg N1E at 4aa6ca6d)",
   },
   o1: O1_8078BCF49,
+  serveKeepMoved: {
+    commit: "plain pass",
+    onrunFailed: "no row",
+    evidence:
+      "R808: the commit test is a plain pass (#5607 fixed) and there is no row for the test method of a codeunit whose OnRun raises (alpha.7 gives a Codeunit<n>.OnRun fail row, alpha.12 no row at all; #5859); /coord/handoff/R-808/probe.md",
+  },
 };
 
 export const V3_BUILD_PINS: readonly V3BuildPin[] = [

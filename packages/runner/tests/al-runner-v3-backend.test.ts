@@ -1302,6 +1302,35 @@ describe("§4 selection, the cache and T5 / T21 / T28 / T29", () => {
     expect(v.runnerRow).toBe("runner-test-error");
   });
 
+  // R808 (g), one-shot. alpha.12 gives NO row for a test codeunit whose OnRun raises (since #5859,
+  // as BC's Test Runner app does) and prints "NOTHING SELECTED" with exit 6; an empty answer with
+  // another exit reads no row either. Neither may score a survive.
+  test("R808 (g) one-shot: a call with zero rows is rowMissing: the baseline stops, a mutant is an error, never a survive", async () => {
+    const l = await layout();
+    const none = () => [] as { method: string; status: "pass" }[];
+    const b = backendOf(l, fakeV3(none, { coverage: plainCoverage }).spawn, fakeAlc().io);
+    b.useSessionTests([ref("A")]);
+    await b.deploy(l.batch);
+    await b.activate(null);
+    await expect(b.run(ref("A"), { coverage: "none", timeoutMs: 1000 })).rejects.toBeInstanceOf(
+      AlRunnerV3RowMissingError,
+    );
+    await b.activate("M0001");
+    const v = await b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
+    expect([v.outcome, v.runnerRow]).toEqual(["error", "runner-test-error"]);
+    expect(v.failureMessage).toContain("0 row(s)");
+  });
+
+  test("R808 (g) one-shot: exit 6 with no rows stops the session, also under a mutant (no row, no survive)", async () => {
+    const l = await layout();
+    const b = backendOf(l, fakeV3(allPass, { exit: 6, stdout: "" }).spawn, fakeAlc().io);
+    await b.deploy(l.batch);
+    await b.activate("M0001");
+    await expect(b.run(ref("A"), { coverage: "none", timeoutMs: 1000 })).rejects.toBeInstanceOf(
+      AlRunnerV3SelectionError,
+    );
+  });
+
   test("exit 6 stops the session; exit 2 is a transport failure; exit 7 reads its rows", async () => {
     const l = await layout();
     const six = backendOf(l, fakeV3(allPass, { exit: 6, stdout: "" }).spawn, fakeAlc().io);

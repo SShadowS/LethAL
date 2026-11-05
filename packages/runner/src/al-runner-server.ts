@@ -640,9 +640,13 @@ const SAFE_TAIL = `(?!.*(?:${V3_TAIL_UNSAFE_WORDS.map(anyCase).join("|")}))`;
  * rows), so the row cannot exist there and no gate pinned it. On alpha.2 such a row now closes the
  * daemon. In serve-entries, a warm-up whose every entry refuses with one identical no-callee text
  * now throws `al-runner-v3-entries-batch-refused`: the safe direction, opt-in and rare.
+ * R808: `http` also takes today's wording (alpha.7 and alpha.12: "... that a test handler does not
+ * answer ..."), one exact text with no variable part, measured by R-808's probe (`/coord/handoff/R-808/probe.md`):
+ * about 60 requests per daemon on both builds, every Reader answer equal to a cold daemon's, the pid
+ * unchanged. alpha.2's wording stays.
  */
 export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
-  http: /^NotRun: out-of-scope: an outbound HTTP request with no \[HttpClientHandler\] bound to the test: the runtime never opens a connection \(ADR-027\)$/,
+  http: /^NotRun: out-of-scope: (?:an outbound HTTP request with no \[HttpClientHandler\] bound to the test: the runtime never opens a connection \(ADR-027\)|an outbound HTTP request that a test handler does not answer: the runtime never opens a connection \(ADR-027\)\. To run the test, bind an \[HttpClientHandler\] that answers the request, or set TestHttpRequestPolicy = BlockOutboundRequests on the test codeunit to get BC's error for it)$/,
   commit:
     /^NotRun: out-of-scope: Commit inside a test under TestIsolation = Function(?:: what the runner keeps is not pinned| is not supported yet: no corpus test pins whether BC keeps the committed rows for the next test \(corpus issue 645\)\. Run this codeunit with TestIsolation = Codeunit \(al-runner: --isolation codeunit, the default\))$/,
   cascade: new RegExp(
