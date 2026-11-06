@@ -39,6 +39,8 @@ export interface MutantCase {
   readonly end: number;
   /** `spec.after`'s text. */
   readonly afterText: string;
+  /** PLAN gives this mutant a reach marker (its grain is `statement`). */
+  readonly marked: boolean;
 }
 
 export interface FileCase {
@@ -50,6 +52,7 @@ export interface FileCase {
 
 export type FindingKind =
   | "diff"
+  | "marker"
   | "leftover"
   | "emitted-parse-error"
   | "expected-parse-error"
@@ -293,6 +296,7 @@ export async function checkFile(fc: FileCase, withDetail = true): Promise<FileRe
     start: 0,
     end: 0,
     afterText: "",
+    marked: false,
   };
   if (parse(fc.source).hasError) {
     add(none, "original-parse-error", "the original source has a parse error");
@@ -317,6 +321,10 @@ export async function checkFile(fc: FileCase, withDetail = true): Promise<FileRe
     stats.guards += folded.stats.guards;
     stats.markers += folded.stats.markers;
     for (const l of folded.leftovers) add(m, "leftover", l);
+    // A marker lost or gained moves `reach`, and with it the mutant's reported state.
+    if (folded.stats.markers !== (m.marked ? 1 : 0)) {
+      add(m, "marker", `${folded.stats.markers} markers, marked ${m.marked}`);
+    }
     const want = plainCanon(exp);
     if (folded.canon !== want) add(m, "diff", firstDiff(folded.canon, want));
   }

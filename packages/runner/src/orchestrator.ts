@@ -161,6 +161,7 @@ import type { HangRefusedFile, PreprocExcludedFile } from "./excluded-sites";
 import { ActivationFailure } from "./failure-classes";
 import { UnfilteredExtensionsQueryError } from "./harness";
 import { homeDir } from "./home";
+import { largeFoldWarning } from "./large-fold";
 import {
   type BeginPublishRefusal,
   LeaseUnavailableError,
@@ -182,7 +183,6 @@ import {
   fileHoldsWrappedObject,
   wrappedRuleFor,
 } from "./line-map";
-import { largeFoldWarning } from "./large-fold";
 import { nestedProjectWarning } from "./nested-project";
 import { isRetrySafe, requiresUnsafeLatch } from "./operation-outcome";
 import {
