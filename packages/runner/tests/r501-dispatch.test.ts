@@ -455,7 +455,7 @@ describe("R501: refusals land in R447's row and obey --operator and --lines", ()
       );
       expect(err).toBeInstanceOf(Error);
       expect((err as Error).message).toContain(
-        `"lethal.negate-guard" had site(s) refused as hang-capable (each writes a variable an enclosing loop's condition reads, R196, or is code of an unbounded report data item or a bounded item's only bound, R487/R501): ${OPEN} (1)`,
+        `"lethal.negate-guard" had site(s) refused as hang-capable (each writes a variable an enclosing loop's condition reads, R196, is a call that loop's progress may rest on, R830, or is code of an unbounded report data item or a bounded item's only bound, R487/R501): ${OPEN} (1)`,
       );
     } finally {
       await rm(solo, { recursive: true, force: true });

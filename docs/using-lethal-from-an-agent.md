@@ -113,6 +113,17 @@ warning naming the file (multi-object and single-wrapper files keep coverage on,
 no-coverage. Do not quote a score from it. Its gate is `itest:alrunner-v3`
 ([docs/gates/alrunner-v3.md](gates/alrunner-v3.md)).
 
+An `al-runner-v3` config needs ONLY the `alRunnerV3` section (`packagesDir`, and `bcVersion` as four
+numbers); no `bcdev` section, no server, no credentials. `path` defaults to `~/.local/bin/al-runner`
+(where upstream's installer writes it). Microsoft's symbols
+come from `bun scripts/fetch-ms-symbols.ts <bc-major> <out-dir>` (it prints the `bcVersion`), and `alc`
+comes from the AL Language extension or, on a Linux box with .NET but no VS Code, from
+`bun scripts/fetch-alc.ts <dir>` (it prints the `alRunnerV3.alcPath` line). `doctor` on any config that has the
+section prints an `al-runner-v3` check (version, gated build, `bcVersion` against the symbols, and
+that a configured `alcPath` is executable); when the al-runner is missing it prints the install command.
+A run prints one line, `[lethal] al-runner: <path> (<version>)`, naming the binary it used. Full steps:
+[README](../README.md#running-without-a-bc-server-the-al-runner-v3-backend).
+
 **The .NET al-runner is retired (R654).** `--backend al-runner` is refused with
 `al-runner-v2-retired`, and so is a stored run of it: its verdicts are lent to no session (history,
 `--resume`, `--resume-run`, a baseline snapshot), and `explain` and `campaign` refuse a report of it.
@@ -259,7 +270,7 @@ code.
 Each surface below is versioned separately and has a published JSON Schema in [`../schemas/`](../schemas/):
 
 - the report: [../schemas/report-v3.schema.json](../schemas/report-v3.schema.json)
-- `lethal explain`: [../schemas/explain-v21.schema.json](../schemas/explain-v21.schema.json)
+- `lethal explain`: [../schemas/explain-v22.schema.json](../schemas/explain-v22.schema.json)
 - the event stream: [../schemas/stream-v1.schema.json](../schemas/stream-v1.schema.json)
 - `lethal doctor --json`: [../schemas/doctor-v1.schema.json](../schemas/doctor-v1.schema.json)
 
@@ -305,7 +316,7 @@ some mutants at all, and they read `no-coverage` rather than `survived`.
 
 ### `lethal explain report.json`: what it MEANS (checked)
 
-`explainSchemaVersion: 21`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
+`explainSchemaVersion: 22`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
 `survivorSelection` and `markIdentityScheme`. Each `survivors` row carries `executionProven`,
 `reach` and `markKey`. The top level can also carry `markKeysStale`. Each `survivors` row can
 also carry `mark`. Explain writes it for a report that records its numbering facts.
@@ -1040,3 +1051,46 @@ into a transcript and do not copy it into an issue.
 - A report from a real project carries that project's source code in every mutant's `originalText`
   and `mutatedText`. Do not publish one, and run `bun scripts/redact-campaign-report.ts <report>`
   before committing one anywhere public.
+
+### Recovering a stripped server (guidance)
+
+LethAL refuses a run before it publishes anything when it can see that the target and an installed
+app declare the same object, the same field id or name on one table, or the same value ordinal or
+name on one enum. It cannot see a clash with an installed app that does not depend on the target
+(two unrelated apps adding the same field to `Customer` is the likely case). When BC meets such a
+clash during the upgrade it can leave the target uninstalled and remove every app that depends on
+it. LethAL then stops with `UpgradeNotRestoredError`, or with `UpgradeClashRefusedError` when BC made
+no restore attempt. Both point here. This was measured on a BC server with no restart (see
+[R845](roadmap/R845.md) and [R709](roadmap/R709.md)):
+
+1. Read the error. After `UpgradeNotRestoredError` BC's text names the clash and lists the apps that
+   could not be reinstalled. After `UpgradeClashRefusedError` (a clash with an app that is not a
+   dependent) BC's text has NO such list; the error names the dependents LethAL listed before the
+   publish instead. The other app is untouched in both cases.
+2. Fix the clash in the target: change or remove the field, value or object. Give the target a
+   version above every version BC has seen. The failed build counts, so a plain republish of the
+   old number is refused.
+3. Publish the target over the dev endpoint, with nothing uninstalled first. BC replaces the
+   stranded rows, and the app's data stays.
+4. Publish each listed dependent in dependency order (an app before the apps that depend on it), each
+   at a version above its stranded row. The same build is refused with "A duplicate package ID is
+   detected": rebuild it with a higher version. Measured after a clash with an app that is not a
+   dependent: the fixed target at a version above the stranded one, then the dependent at a
+   higher version: two publishes, nothing uninstalled. For a chain A, B (depends on A), C (depends
+   on B), all stripped: publish A, then B, then C, each at a higher version. Out of order a
+   step fails ("Cannot upgrade the extension ... because one or more dependencies could not be
+   satisfied") and USES UP its version: C at the second version before B left C's row at that version, so
+   the same build was then a duplicate and C needed the third. Go in dependency order, or a failed step costs a
+   version. The clean three-publish order was not run as one sequence; it follows from the two measurements above it.
+5. Do not fall back to the old build of the target when dependents were involved: BC says "a newer
+   version ... was already installed". After a clash with an app that is not a dependent the old
+   target does publish, but that restores only the target, and the dependent's same build is then
+   refused as a duplicate package id. With no dependents at all the old build publishes and both
+   apps stay installed. Either way that is a rollback, not a fix: your change is still not on the
+   server.
+6. If you unpublished everything first, a dependent's same build publishes again, and the target
+   must still be the higher version.
+
+Your own build also needs the version step from [Restoring your app after a
+run](../README.md#restoring-your-app-after-a-run). On the LethAL gate servers `bc1`-`bc3` the setup
+script does this for you ([docs/gates/servers.md](gates/servers.md)).

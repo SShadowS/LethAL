@@ -23,7 +23,11 @@ import type { BcDevConfig } from "../src/bcdev-backend";
 import type { MicrosoftMode } from "../src/digest-inputs";
 import type { RunEvent } from "../src/events";
 import { EXPLAIN_SCHEMA_VERSION, explain } from "../src/explain";
-import { feedAttestation, runSession as runSessionRaw } from "../src/orchestrator";
+import {
+  feedAttestation,
+  resumeGuardMessage,
+  runSession as runSessionRaw,
+} from "../src/orchestrator";
 import type { AttestationLedger } from "../src/orchestrator";
 import { ERROR_CAUSE_INTERPRETATIONS, renderConsole } from "../src/report";
 import type { SessionReport } from "../src/report";
@@ -677,7 +681,8 @@ describe("sessionFingerprint (R47)", () => {
   // the iterated table or touches a `var` cursor is refused); it was c49d72bc...773a under scheme 41.
   // It moved again for R796 (scheme 43, tree-sitter-al 4.5.0); it was cbd5ae2c...5fba under scheme 42.
   // It moved again for R829 (scheme 44, a name-reading loop condition gets feeds); it was ca9b1eaa...1e96 under scheme 43.
-  const PINNED = "7afe4a79aab251389d09b22bad559d5c807f0105e1ff919940d34947f80a5f98";
+  // It moved again for R830 (scheme 45, a call a loop's progress rests on); it was 7afe4a79...5f98 under scheme 44.
+  const PINNED = "012c9ea40fcb8d153ef80419e68862d964a058c7ee021e68f65f951ab401629d";
   test("a run with no exclusions adds nothing to the digest", () => {
     expect(sessionFingerprint(base)).toBe(PINNED);
   });
@@ -2267,6 +2272,12 @@ describe("R89 — a run asked to resume must SAY it resumed", () => {
     });
     expect(report.resumedFrom).toBeUndefined();
   });
+
+  test("the guard's message carries the argv, which the field report never recovered", () => {
+    const m = resumeGuardMessage("last", ["run", "--resume", "last", "--project", "p q"]);
+    expect(m).toContain('argv=["run","--resume","last","--project","p q"]');
+    expect(m).toContain('("last")');
+  });
 });
 
 /**
@@ -2482,7 +2493,7 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
     // outside report's preset writers are read from the dependency packages). 41 is R572 (a guard
     // refused as a single site renumbers its procedure's same-tuple twins). 42 is R-604b (a
     // same-object callee that inserts into the iterated table or touches a `var` cursor is refused). 43 is R796 (tree-sitter-al 4.5.0 parses shapes 4.4.1 swallowed or broke). 44 is R829 (a name-reading loop condition gets feeds: sites leave the set).
-    expect(IDENTITY_SCHEME).toBe(44);
+    expect(IDENTITY_SCHEME).toBe(45);
     expect(report.identityScheme).toBe(IDENTITY_SCHEME);
   });
 
@@ -5300,7 +5311,7 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
     expect(stale).toHaveLength(1);
     expect(renderConsole(report)).toContain(", reused-budget-stale 1])");
     const out = explain(report);
-    expect(out.explainSchemaVersion).toBe(21);
+    expect(out.explainSchemaVersion).toBe(22);
     const rows = out.notMeasured.filter((n) => n.cause === "reused-budget-stale");
     expect(rows).toHaveLength(1);
     for (const r of rows) {

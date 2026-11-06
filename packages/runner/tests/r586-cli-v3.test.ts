@@ -5,7 +5,9 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  assertAlcRunnable,
   assertBcVersionMatchesPackages,
+  defaultAlcRunnable,
   refuseV3Platform,
   validateAlRunnerV3Config,
 } from "../src/al-runner-v3-config";
@@ -61,10 +63,43 @@ describe("T16: refused by name for v3, and not for v2", () => {
   });
   test("an unknown key is refused; the defaults are the pinned path and coverage al-runner", () => {
     expect(() => validateAlRunnerV3Config({ ...ok, servermode: true })).toThrow(/unknown key/);
-    expect(validateAlRunnerV3Config(ok)).toMatchObject({
+    expect(validateAlRunnerV3Config(ok, () => true)).toMatchObject({
       path: "/work/tools/al-runner-v3/current/al-runner",
       coverage: "al-runner",
     });
+  });
+  test("R834: a missing or non-executable alcPath is refused by name; a runnable one passes", () => {
+    expect(() => assertAlcRunnable("/no/such/alc", () => false)).toThrow(
+      /al-runner-v3-alc-not-found.*\/no\/such\/alc/,
+    );
+    expect(() => assertAlcRunnable("/ok/alc", () => true)).not.toThrow();
+    expect(() => assertAlcRunnable("/no/such/alc")).toThrow(/al-runner-v3-alc-not-found/);
+  });
+  test("R834: defaultAlcRunnable on the real file system, and a bare name found on PATH", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-alc-run-"));
+    try {
+      const exe = join(dir, "alc");
+      const plain = join(dir, "plain");
+      await writeFile(exe, "#!/bin/sh\n", { mode: 0o755 });
+      await writeFile(plain, "x", { mode: 0o644 });
+      const none = () => null;
+      expect(defaultAlcRunnable(exe, none)).toBe(true);
+      // Windows has no execute bit: any existing file passes the access check there.
+      if (process.platform !== "win32") expect(defaultAlcRunnable(plain, none)).toBe(false);
+      expect(defaultAlcRunnable(join(dir, "missing"), none)).toBe(false);
+      expect(defaultAlcRunnable("alc", () => "/usr/bin/alc")).toBe(true);
+      expect(defaultAlcRunnable("alc", none)).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+  test("R834: with no pinned build the default path is where install.sh writes, under the given home", () => {
+    expect(validateAlRunnerV3Config(ok, () => false, "/home/u").path).toBe(
+      join("/home/u", ".local", "bin", "al-runner"),
+    );
+    expect(
+      validateAlRunnerV3Config({ ...ok, path: "/x/al-runner" }, () => false, "/home/u").path,
+    ).toBe("/x/al-runner");
   });
 });
 

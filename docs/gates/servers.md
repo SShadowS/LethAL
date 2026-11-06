@@ -68,7 +68,8 @@ a break refuses the whole run (`resident-dependent-breaks`, R-707), also when th
 together with the target. A new tests app that publishes while its target is KEPT (a gate-deployed target) is
 checked against the resident target (`dependent-vs-kept-target`). The safe manual sequence: (1) uninstall and
 unpublish the dependent; (2) publish the target (after a gate run, with `--mint`, R605); (3) publish the new dependent build (R605: a same-version test-app republish is accepted after an
-unpublish). To recover a stripped server: the owner restarts it, then re-run setup (not measured; rests on R605).
+unpublish). To recover a stripped gate server: the owner restarts it, then re-run setup. A restart-free route was measured on scratch
+apps only (below, R845), not on fixture targets.
 
 For each server it:
 
@@ -216,8 +217,13 @@ is republished. `lethal run` refuses at that point with `UpgradeNotRestoredError
 1. On `bc1`-`bc3`: ask the owner to restart the server. Its databases are in memory, so the restart also clears the
    installed-version record ([R605](../roadmap/R605.md)). Then run `bun scripts/bc-linux-setup.ts --server bcN` under
    the server's lease. It publishes the targets and then the tests apps from the current source.
-2. Elsewhere: uninstall and unpublish the stranded target row, then publish the target and the dependents again.
-   BC's 422 text names the dependents it removed. This route is not measured.
+   A gate server always gets setup and its proof afterwards, whichever way it came back.
+2. Elsewhere: no restart is needed. Measured on `bc1` on 2026-11-06 with scratch apps only (R845, `/coord/handoff/R-845/recovery.log`);
+   fixture targets were not measured, and setup still refuses them as above. Publish the fixed target at a version above every version
+   BC has seen, the failed one included, with nothing uninstalled first. Then publish each dependent BC's 422 text names at a version
+   above its stranded row. Everything ends installed, and a table's data stayed (one row, read back over OData). Two things are refused:
+   the old target build, after a strip with dependents ("a newer version ... was already installed"), and the same dependent build
+   ("A duplicate package ID is detected") unless it was unpublished first.
 
 ## How a gate reads a server
 
@@ -279,6 +285,9 @@ The tables below are per host and per fixture state, so they are history here: p
 | `bc1` | setup; `itest:bcdev`, `bcdev-names`, `bcdev-wrapped`, `tables`, `chunked`, `harden`, `lend`, `lease`, `verify`, `testapp`, `agreement`, `verify-scale`, `stale-publish` | 1.0.0.24 | `/coord/handoff/R-813/bc1/<gate>.log`, `/coord/handoff/R-813/setup-bc1.log` |
 | `bc2` | setup; the same 13, and `itest:hang` | 1.0.0.24 | `/coord/handoff/R-813/bc2/<gate>.log`, `/coord/handoff/R-813/setup-bc2.log` |
 | `bc3` | setup (`--with-continia --accept-build 28.4.53241.56646`); the same 13, and `itest:hang` | 1.0.0.24 | `/coord/handoff/R-813/bc3/<gate>.log`, `/coord/handoff/R-813/setup-bc3.log` |
+
+**`itest:hang` after R830 changed `sandbox-hang`'s text (R-833, 2026-11-06):** proved again on `bc2` and `bc3` at the same head, leg marker
+`passed`. Logs: `/coord/handoff/R-658/hang-bc2-20261106T050926Z-3376496/`, `/coord/handoff/R-658/hang-bc3-20261106T052756Z-3500149/`.
 
 ### docker1 (192.168.2.77), history: the servers from 2026-10-26 to 2026-11-05
 

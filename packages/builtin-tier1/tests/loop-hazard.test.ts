@@ -174,11 +174,9 @@ describe("hangCapableForMutatedNode", () => {
 
   // The target side is not a value written to the target.
   //
-  // The fixture is chosen so this can actually fail. An obvious alternative, a subscripted target
-  // like `Slots[2] := 0`, would pass with the guard deleted: `assignmentTargetOf` already declines
-  // any target that is not a bare identifier, so the enclosing assignment classifies as null
-  // whatever the guard does. The target identifier itself is the one node inside `left` whose
-  // enclosing assignment IS claimable, so it is the only fixture that separates the two.
+  // The fixture is chosen so this can actually fail. The target identifier is a node inside `left`
+  // whose enclosing assignment IS claimable, so with the guard deleted it would be claimed. R831:
+  // an index on the left is the exception, and counts as a value (`r830-deleted-call.test.ts`).
   it("DECLINES the target identifier on the assignment's left", () => {
     const { root, ctx } = ctxFor(`codeunit 50000 P
 {

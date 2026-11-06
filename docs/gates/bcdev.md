@@ -53,6 +53,9 @@ What the figures mean:
 
 ## History
 
+2026-11-06 (R810, coord task R-827): `bcdev.baseline.json` moved from identity scheme 42 to 44, on `bc2`, by R332's procedure.
+One line changed, the scheme, and the confirm run passed. Logs: `/coord/handoff/R-827/bc2/`.
+
 - R161 (2026-08-19) re-ran this gate after adding guard-clause mutants elsewhere. It was
   unchanged, at the figures of that time (3 / 10 / 3). `sandbox-app` has no site for that
   operator; this was measured.
@@ -68,3 +71,6 @@ What the figures mean:
   [servers.md](servers.md) (proof is per server).
 - R582 (2026-10-22) switched R577's "a kill must reproduce" rule on for bcdev. No verdict and no
   counter moved here (`docs/superpowers/specs/2026-10-22-r582-bcdev-kill-reproduction-precommitment.md`).
+- R843 (2026-11-06) added a read-only check before the first publish: when an installed dependent (here the tests app)
+  declares an object with the target's type and id, the run is refused by name and nothing is published. No fixture pair
+  clashes, so no figure moves; this gate runs the check and expects it to find nothing.
