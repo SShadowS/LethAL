@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { MutantManifestEntry } from "@lethal/schemata";
-import type { CoverageMode } from "./backend";
+import type { CoverageMode, StopEvidence } from "./backend";
 import type { LineRange } from "./line-filter";
 import {
   type CoverageAttribution,
@@ -108,6 +108,9 @@ export interface CarriedVerdict {
   readonly killingTestFailure?: string;
   /** R206 — see `MutantRow.killPosition`. Carried for the same reason. */
   readonly killPosition?: number;
+  /** GitHub #49 — see `MutantRow.stopEvidence`. Carried for the same reason; a prior row without
+   *  it stays without it (never defaulted to the 408). */
+  readonly stopEvidence?: StopEvidence;
   /** R577 — see `MutantRow.killReproduced`. Carried for the same reason. */
   readonly killReproduced?: true;
   /** R577 — see `MutantRow.reproducedFailure`. Carried for the same reason. */
@@ -298,6 +301,7 @@ function carriedOf(row: MutantVerdictRow): CarriedVerdict {
     ...(row.failureNote !== undefined ? { failureNote: row.failureNote } : {}),
     ...(row.killingTestFailure !== undefined ? { killingTestFailure: row.killingTestFailure } : {}),
     ...(row.killPosition !== undefined ? { killPosition: row.killPosition } : {}),
+    ...(row.stopEvidence !== undefined ? { stopEvidence: row.stopEvidence } : {}),
     ...(row.killReproduced === true ? { killReproduced: true as const } : {}),
     ...(row.reproducedFailure !== undefined ? { reproducedFailure: row.reproducedFailure } : {}),
     ...(row.runner !== undefined ? { runner: row.runner } : {}),

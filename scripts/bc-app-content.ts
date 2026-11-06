@@ -47,6 +47,8 @@ export const SERVERS = {
   bc1: { odata: 7048, dev: 7049, api: 7052 },
   bc2: { odata: 7148, dev: 7149, api: 7152 },
   bc3: { odata: 7248, dev: 7249, api: 7252 },
+  /** BC 29 W1 (29.0.54011.57673), not 28.4 like bc1-bc3; `--server all` skips it (bc-linux-setup.ts). */
+  bc4: { odata: 7448, dev: 7449, api: 7452 },
 } as const;
 export type ServerName = keyof typeof SERVERS;
 

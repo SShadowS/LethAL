@@ -211,6 +211,7 @@ describe("markedServerFor: the dev port names the server, on the BC on Linux hos
     expect(markedServerFor(H, 7049)).toBe("bc1");
     expect(markedServerFor(H, 7149)).toBe("bc2");
     expect(markedServerFor(H, 7249)).toBe("bc3");
+    expect(markedServerFor(H, 7449)).toBe("bc4"); // R-826b: BC 29
   });
 
   test("an unknown port, or another host on a bc port, has no marker check", () => {
