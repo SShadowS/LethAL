@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**25 of 824 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**26 of 824 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -333,7 +333,7 @@ that ordering is the priority.
 - **R801** · tree-sitter-al 4.5.0 admits ten R402 shapes it used to refuse (loop-condition `#if` prefixes and tails) and reads an empty `var` followed by a `#if` procedure as ERROR: prove the admitted shapes with alc · [R801.md](docs/roadmap/R801.md) · done (66b585c1)
 - **R841** · Some `#if` shapes that split a statement pass the refusal, compile as source, and give an artifact alc refuses · [R841.md](docs/roadmap/R841.md) · open, filed 2026-11-06 (coord task R-835); measured 2026-11-06 (coord task R-841): the run drops only the…
 - **R844** · A run with some `error` mutants reads a higher score and says only `error N`: nothing states they are outside the score · [R844.md](docs/roadmap/R844.md) · done (1b213195): caveat some-errors, and a console line after score: giving the range the score could read…
-- **R843** · `lethal run` can strip a user's server: a target object with the same type and id as one in its test app is published, and BC removes the apps · [R843.md](docs/roadmap/R843.md) · done (2010ef3f): a target that declares an object an installed dependent declares is refused by name before…
+- **R843** · `lethal run` can strip a user's server: a target object with the same type and id as one in its test app is published, and BC removes the apps · [R843.md](docs/roadmap/R843.md) · open: built (c482126f), bcdev live leg pending
 - **R845** · Clashes a pre-publish object list cannot see can still strip a server: field ids, enum values, non-dependents, transitive dependents · [R845.md](docs/roadmap/R845.md) · open, filed 2026-11-06 (coord task R-841): not measured
 
 ## Product gaps a real project hits
