@@ -53,6 +53,9 @@ What the figures mean:
 
 ## History
 
+2026-11-06 (R836, coord task R-848): `bcdev.baseline.json` moved from identity scheme 44 to 45, on `bc2`, by R332's procedure. One line changed, the scheme,
+and the confirm run passed. Logs: `/coord/handoff/R-848/bc2/`.
+
 2026-11-06 (R810, coord task R-827): `bcdev.baseline.json` moved from identity scheme 42 to 44, on `bc2`, by R332's procedure.
 One line changed, the scheme, and the confirm run passed. Logs: `/coord/handoff/R-827/bc2/`.
 
