@@ -25,8 +25,9 @@ const scratch = scratchDirs();
  * proof that nothing was published is `deploys` (a call counter), never timing.
  */
 
+const TARGET_ID = "6d0f4a2e-1c3b-4a8d-9f10-2b7c5e4d3a91";
 const APP_JSON = JSON.stringify({
-  id: "6d0f4a2e-1c3b-4a8d-9f10-2b7c5e4d3a91",
+  id: TARGET_ID,
   name: "R843 Target",
   publisher: "LethAL",
   version: "1.0.0.0",
@@ -126,15 +127,25 @@ class ClashBackend implements ExecutionBackend {
     private readonly kind: BackendCapabilities["kind"],
     dependents: readonly InstalledDependent[] | "absent" | "throws",
     private readonly packages: ReadonlyMap<string, PackageRead>,
+    /** R845: when set, the apps that depend on each app id (lower case), asked for by id. */
+    byParent?: Readonly<Record<string, readonly InstalledDependent[] | Error>>,
   ) {
     if (dependents !== "absent") {
-      this.installedDependents = async () => {
+      this.installedDependents = async (appId: string) => {
         this.dependentReads++;
+        this.readIds.push(appId.toLowerCase());
         if (dependents === "throws") throw new Error("control app unreachable");
+        if (byParent !== undefined) {
+          const got = byParent[appId.toLowerCase()] ?? [];
+          if (got instanceof Error) throw got;
+          return got;
+        }
         return dependents;
       };
     }
   }
+  /** R845: every app id `installedDependents` was asked about, in order. */
+  readIds: string[] = [];
 
   capabilities(): BackendCapabilities {
     return {
@@ -188,6 +199,10 @@ interface Setup {
   readonly testsAl?: string;
   readonly selectorIds?: typeof ids;
   readonly preprocessorSymbols?: readonly string[];
+  /** R845: dependents of each app id (lower case); the key of the target is `TARGET_ID`. */
+  readonly byParent?: Readonly<Record<string, readonly InstalledDependent[] | Error>>;
+  /** R845: the target's app.json text, to give it `dependencies`. */
+  readonly appJson?: string;
 }
 
 async function drive(s: Setup) {
@@ -198,13 +213,14 @@ async function drive(s: Setup) {
   for (const [name, text] of Object.entries(s.targetFiles ?? {})) {
     await Bun.write(join(projectDir, name), text);
   }
-  await Bun.write(join(projectDir, "app.json"), APP_JSON);
+  await Bun.write(join(projectDir, "app.json"), s.appJson ?? APP_JSON);
   await Bun.write(join(testDir, "SandboxTests.Codeunit.al"), s.testsAl ?? TESTS_AL);
   await Bun.write(join(testDir, "app.json"), testAppJson());
   const backend = new ClashBackend(
     s.kind ?? "bcdev",
     s.dependents ?? [TESTS_DEP],
     s.packages ?? new Map([[TEST_APP.name, residentTestsApp()]]),
+    s.byParent,
   );
   const warnings: Array<{ code: string; message: string }> = [];
   const store = new ResultsStore(":memory:");
@@ -356,6 +372,145 @@ describe("R843: refused before the target is published", () => {
     expect(e.findings[0]?.read).toBe("source-fallback");
     expect(e.findings[0]?.symbols).toEqual(["FROMCONFIG"]);
     expect(e.message).toContain("SOURCE under symbols [FROMCONFIG]");
+  });
+});
+
+describe("R845: fields, enum values and transitive dependents, refused before any publish", () => {
+  const TARGET_BARE = TARGET_ID.replaceAll("-", "");
+  const TABLE_AL =
+    'table 79310 "Sandbox Table"\n{\n    fields\n    {\n        field(1; Code; Code[10]) { }\n        field(5; Qty; Integer) { }\n    }\n}\n';
+  const ENUM_AL =
+    'enum 79311 "Sandbox Enum"\n{\n    Extensible = true;\n    value(0; Zero) { }\n    value(7; Seven) { }\n}\n';
+  const testsExtending = (extra: Record<string, unknown[]>) =>
+    new Map([[TEST_APP.name, residentTestsApp(extra)]]);
+
+  test("U1: the tests app's extension holds a field id the target's table now has", async () => {
+    const r = await drive({
+      targetFiles: { "T.Table.al": TABLE_AL },
+      packages: testsExtending({
+        TableExtensions: [
+          {
+            Id: 79100,
+            Name: "Tests Ext",
+            TargetObject: `#${TARGET_BARE}#Sandbox Table`,
+            Fields: [{ Id: 5, Name: "TestsField" }],
+          },
+        ],
+      }),
+    });
+    const e = refused(r);
+    expect(r.backend.deploys).toBe(0);
+    expect(e.findings).toEqual([]);
+    expect(e.memberFindings).toHaveLength(1);
+    expect(e.memberFindings[0]).toMatchObject({
+      rule: "field-id",
+      ownerName: "Sandbox Table",
+      app: { name: "Sandbox Tests" },
+      read: "installed-package",
+    });
+  });
+
+  test("L4: the tests app's enum extension holds a value name the target's enum now has", async () => {
+    const r = await drive({
+      targetFiles: { "E.Enum.al": ENUM_AL },
+      packages: testsExtending({
+        EnumExtensionTypes: [
+          {
+            Id: 79101,
+            Name: "Tests Enum Ext",
+            TargetObject: `#${TARGET_BARE}#Sandbox Enum`,
+            Values: [{ Ordinal: 99, Name: "Seven" }],
+          },
+        ],
+      }),
+    });
+    const e = refused(r);
+    expect(r.backend.deploys).toBe(0);
+    expect(e.memberFindings.map((f) => [f.rule, f.container])).toEqual([
+      ["enum-value-name", "Enum"],
+    ]);
+  });
+
+  test("U4: an app that depends on the tests app clashes: refused, and the walk asked for the tests app's dependents", async () => {
+    const r = await drive({
+      dependents: [TESTS_DEP],
+      byParent: { [TARGET_ID]: [TESTS_DEP], [TEST_APP.id.toLowerCase()]: [OTHER_DEP] },
+      packages: new Map([
+        [TEST_APP.name, residentTestsApp()],
+        ["Other App", otherApp({ Codeunits: [{ Id: 79000, Name: "Theirs" }] })],
+      ]),
+    });
+    const e = refused(r);
+    expect(r.backend.deploys).toBe(0);
+    expect(e.findings.map((f) => f.app.name)).toEqual(["Other App"]);
+    expect(r.backend.readIds).toEqual([
+      TARGET_ID,
+      TEST_APP.id.toLowerCase(),
+      OTHER_DEP.id.toLowerCase(),
+    ]);
+    // R727's warning names the transitive dependent too.
+    const w = r.warnings.find((x) => x.code === "installed-dependents");
+    expect(w?.message).toContain("Other App");
+    expect(w?.message).toContain("[transitive]");
+  });
+
+  test("L3e: a third app's table counts only if the target's app.json depends on that app", async () => {
+    const third = "5e51037273b74af1841e42184d5d7479";
+    const thirdId = "5e510372-73b7-4af1-841e-42184d5d7479";
+    const targetFiles = {
+      "X.Table.al":
+        'tableextension 79320 "Sandbox TE" extends "Third Table"\n{\n    fields\n    {\n        field(5; Mine; Integer) { }\n    }\n}\n',
+    };
+    const packages = testsExtending({
+      TableExtensions: [
+        {
+          Id: 79102,
+          Name: "Tests Ext",
+          TargetObject: `#${third}#Third Table`,
+          Fields: [{ Id: 5, Name: "TestsField" }],
+        },
+      ],
+    });
+    const withDep = await drive({
+      targetFiles,
+      packages,
+      appJson: JSON.stringify({ ...JSON.parse(APP_JSON), dependencies: [{ id: thirdId }] }),
+    });
+    const e = refused(withDep);
+    expect(withDep.backend.deploys).toBe(0);
+    expect(e.memberFindings.map((f) => f.rule)).toEqual(["field-id"]);
+    // Not a dependency: it may be another app's table of that name. Warns, and the run publishes.
+    const without = await drive({ targetFiles, packages });
+    expect("report" in without).toBe(true);
+    expect(without.backend.deploys).toBeGreaterThan(0);
+    expect(without.warnings.some((x) => x.message.includes("may be another app's table"))).toBe(
+      true,
+    );
+  });
+
+  test("a failed read of one level warns by name (object-clash-unchecked) and the run goes on", async () => {
+    const r = await drive({
+      dependents: [TESTS_DEP],
+      byParent: { [TARGET_ID]: [TESTS_DEP], [TEST_APP.id.toLowerCase()]: new Error("HTTP 500") },
+    });
+    expect("report" in r).toBe(true);
+    expect(r.backend.deploys).toBeGreaterThan(0);
+    const w = r.warnings.filter((x) => x.code === "object-clash-unchecked");
+    expect(w).toHaveLength(1);
+    expect(w[0]?.message).toContain("could not read which installed apps depend on Sandbox Tests");
+    expect(w[0]?.message).toContain("HTTP 500");
+  });
+
+  test("no transitive dependents: the walk asks for each app once, then the run publishes", async () => {
+    const r = await drive({
+      dependents: [TESTS_DEP],
+      packages: new Map([[TEST_APP.name, residentTestsApp()]]),
+      byParent: { [TARGET_ID]: [TESTS_DEP] },
+    });
+    expect("report" in r).toBe(true);
+    expect(r.backend.deploys).toBeGreaterThan(0);
+    // Reads: the target, then the tests app (no dependents of its own).
+    expect(r.backend.readIds).toEqual([TARGET_ID, TEST_APP.id.toLowerCase()]);
   });
 });
 

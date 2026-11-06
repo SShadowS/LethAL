@@ -157,6 +157,72 @@ export function notReinstalledApps(
   return out.length > 0 ? out : null;
 }
 
+/** R845: where a user finds how to bring a stripped server back (measured on `bc1`, no restart). */
+export const RECOVERY_DOC =
+  'docs/using-lethal-from-an-agent.md, section "Recovering a stripped server"';
+
+/** R845: the three texts BC uses when two installed apps clash, and what each is about. */
+export type BcClashText = "object" | "field" | "enum-value";
+
+const BC_CLASH_TEXTS: ReadonlyArray<readonly [BcClashText, RegExp]> = [
+  ["object", /defined in multiple apps/i],
+  ["field", /can only appear once in the table/i],
+  ["enum-value", /Metadata delta application failed/i],
+];
+
+/**
+ * R845: which of BC's three clash texts a message holds, or undefined. One helper, so that
+ * `UpgradeNotRestoredError`, `classifyDeployFailure` and the U3 path read the same three texts.
+ * "defined in multiple apps" is an object (type and id) clash; "can only appear once in the table"
+ * a field id or name; "Metadata delta application failed" an enum value ordinal or name.
+ */
+export function bcClashText(message: string): BcClashText | undefined {
+  for (const [kind, re] of BC_CLASH_TEXTS) if (re.test(message)) return kind;
+  return undefined;
+}
+
+/**
+ * R845 (U3): BC refused a publish over a clash and made NO restore attempt: the text holds a clash
+ * and neither "could not be restored" nor "have been restored". Measured on `bc1`: the target's old
+ * row was gone, the new one not installed, the target's dependents not installed, the other app fine.
+ */
+export function clashRefusedWithoutRestore(message: string): boolean {
+  return (
+    bcClashText(message) !== undefined &&
+    !restoreFailed(message) &&
+    !/original extensions have been restored/i.test(message)
+  );
+}
+
+/** What BC's own words say the clash is, for the two errors that carry them. */
+function clashCause(kind: BcClashText | undefined): string {
+  if (kind === "object") {
+    return (
+      "BC says an application object of the target is defined in multiple apps: the target and " +
+      "another installed app declare the same object type and id (R843; LethAL checks " +
+      "this before publishing the target, so this is a clash that check could not see). "
+    );
+  }
+  if (kind === "field") {
+    return (
+      "BC says a field 'can only appear once in the table': the target and another installed app " +
+      "give one table the same field id or name (R845; LethAL checks this before publishing the " +
+      "target, so this is a clash that check could not see). "
+    );
+  }
+  if (kind === "enum-value") {
+    return (
+      "BC says it could not apply an enum value ('Metadata delta application failed'): the target " +
+      "and another installed app give one enum the same value ordinal or name (R845; LethAL " +
+      "checks this before publishing the target, so this is a clash that check could not see). "
+    );
+  }
+  return (
+    "An installed app that depends on the target no longer compiles against the new build " +
+    "(most often the tests app on the server is older than your tests source). "
+  );
+}
+
 /** The sentence naming what BC lists, or saying the list could not be read. */
 function notReinstalledSentence(bcText: string): string {
   const apps = notReinstalledApps(bcText);
@@ -171,14 +237,9 @@ function notReinstalledSentence(bcText: string): string {
  *  (`notReinstalledApps`), and says how to recover. Extends `Error` directly. */
 export class UpgradeNotRestoredError extends Error {
   constructor(bcText: string) {
-    // R843: BC's own words for two apps declaring one object. Said as such, not as "no longer
-    // compiles": the installed app compiled fine, against an older target.
-    const cause = /defined in multiple apps/i.test(bcText)
-      ? "BC says an application object of the target is defined in multiple apps: the target and " +
-        "another installed app declare the same object type and id (R843; LethAL checks " +
-        "this before publishing the target, so this is a clash that check could not see). "
-      : "An installed app that depends on the target no longer compiles against the new build " +
-        "(most often the tests app on the server is older than your tests source). ";
+    // R843, R845: BC's own words for a clash. Said as such, not as "no longer compiles": the
+    // installed app compiled fine, against an older target.
+    const cause = clashCause(bcClashText(bcText));
     super(
       [
         "BC refused to upgrade the target and could not restore the previous version (R709). ",
@@ -190,10 +251,36 @@ export class UpgradeNotRestoredError extends Error {
         "the setup script refuses this state: ask the owner to restart the server, then run ",
         "`bun scripts/bc-linux-setup.ts --server bcN` (docs/gates/servers.md, R709). If BC ",
         "refuses an old version as a downgrade, its installed-version record needs a restart ",
-        `(R605). ${notReinstalledSentence(bcText)}BC said: ${bcText}`,
+        `(R605). On your own server, with no restart: ${RECOVERY_DOC}. `,
+        `${notReinstalledSentence(bcText)}BC said: ${bcText}`,
       ].join(""),
     );
     this.name = "UpgradeNotRestoredError";
+  }
+}
+
+/**
+ * R845 (U3): BC refused to publish the target over a clash with an installed app that is NOT a
+ * dependent of it, and made no restore attempt, so its text has no "could not be restored" and
+ * `restoreFailed` does not match. Measured: the target's old version is gone, the new one is not
+ * installed, and the target's dependents are not installed; the other app is untouched. Before
+ * R845 this reached the caller as the raw publish error, with no word about the damage. Extends
+ * `Error` directly.
+ */
+export class UpgradeClashRefusedError extends Error {
+  constructor(bcText: string) {
+    super(
+      [
+        "BC refused the target's publish over a clash with another installed app, and made no ",
+        "attempt to restore the previous version (R845). ",
+        clashCause(bcClashText(bcText)),
+        "The other app is not a dependent of the target, so LethAL could not see it. In ",
+        "measurements BC then had NO version of the target installed, and none of the target's ",
+        "dependents (the tests app at least); the other app was untouched. LethAL did not retry. ",
+        `To recover, with no restart: ${RECOVERY_DOC}. BC said: ${bcText}`,
+      ].join(""),
+    );
+    this.name = "UpgradeClashRefusedError";
   }
 }
 
