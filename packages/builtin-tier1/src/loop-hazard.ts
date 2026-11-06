@@ -46,15 +46,20 @@ import {
  * `CurrReport.Quit`/`Break`, a `break` of that loop) count as its condition (`loopExitParts`), so a
  * write ANY such guard reads is refused. R446 did this for a condition that reads no name and calls
  * nothing (`while true`, `until false`); R480 extends it to every other condition that does not
- * name a cursor method (`namesCursorMethod`). For a name- and call-free condition only, a write that
- * FEEDS a guard's name is refused too, by name and to a fixpoint (`indirectFeeds`: `I += 1; Done :=
- * I >= 3; if Done then exit`). And a write to an enclosing `for`'s control variable is refused
+ * name a cursor method (`namesCursorMethod`). R829: for every such condition (not only a name- and
+ * call-free one), a write that FEEDS a condition or guard name is refused too, by name and to a
+ * fixpoint with no hop limit (`indirectFeeds`: `I += 1; Done := I >= 3; if Done then exit`; `Text :=
+ * Text.Substring(Pos + 2); Pos := Text.IndexOf('{{')` under `while Pos > 0`). The guards above a
+ * followed feed count as parts too (`if Line = Mark then Done := true` makes `Line` a part). A
+ * cursor-method condition gets no feeds. And a write to an enclosing `for`'s control variable is refused
  * (R480 shape 4n, in `classifyHangCapable`); a `for` gets no body guards. A scoped heuristic, not a
  * proof. Not extended; each a known exclusion, pinned as not refused in `loop-exit-refusal.test.ts`,
  * none shown safe: a condition naming a cursor method (`Next`, `Read`, `EOS`, `MoveNext`), which by
  * name also covers a user procedure or field named `Next` and a mixed condition (`(C.Next() <> 0)
  * or KeepGoing`); a write to a `for` loop's end bound; a `foreach` (its list); `asserterror` as the
- * only exit; `CurrReport.Skip`.
+ * only exit; `CurrReport.Skip`. R829 known, not seen: an array-element target (`A[I] := ...`), a feed
+ * through a by-`var` call argument, and a `for`/`foreach` loop's own feeds. A `with` body is seen: a
+ * bare name there matches by name, like any other.
  *
  * R484: a report data item over the virtual `Integer` table is a loop too (BC calls its
  * `OnAfterGetRecord` once per record), unless a narrow certificate bounds it (`dataItemOpen`).
@@ -6787,17 +6792,19 @@ function rangeCallOf(n: ALSyntaxNode, item: string): { readonly literal: boolean
 /**
  * R446/R480: the parts that decide whether `loop` ends. Its own condition parts, plus the guard of
  * every exit in its body (`bodyExitGuards`) UNLESS the condition names a cursor method
- * (`namesCursorMethod`). When the condition reads no name and calls nothing in this build
- * (`while true`, `until false`), also every value that feeds those parts (`indirectFeeds`). A scoped
- * heuristic, not a proof that no mutant hangs: see the known exclusions in the header.
+ * (`namesCursorMethod`), in which case it is the condition alone. R818: for every other condition,
+ * also every value that feeds those parts and the guards above each followed feed
+ * (`indirectFeeds` with `withGuards`), by name, to a fixpoint, no hop limit. A cursor-method
+ * condition gets no feeds. A scoped heuristic, not a proof that no mutant hangs: see the known
+ * exclusions in the header. Memoised per loop: the walk is repeated for every site in the loop.
  */
 function loopExitParts(loop: ALSyntaxNode, ctx: SemanticContext): ALSyntaxNode[] {
-  const own = loopConditionParts(loop);
-  if (conditionIsNameAndCallFree(own, ctx)) {
+  return cached(ctx, loop, "exitParts", () => {
+    const own = loopConditionParts(loop);
+    if (namesCursorMethod(own, ctx)) return own;
     const parts = [...own, ...bodyExitGuards(loop)];
-    return [...parts, ...indirectFeeds(loop, parts, ctx)];
-  }
-  return namesCursorMethod(own, ctx) ? own : [...own, ...bodyExitGuards(loop)];
+    return [...parts, ...indirectFeeds(loop, parts, ctx, true)];
+  });
 }
 
 /** R480: a method whose name says it steps a cursor or a stream. By NAME, any receiver. */
@@ -6831,13 +6838,19 @@ function namesCursorMethod(parts: ALSyntaxNode[], ctx: SemanticContext): boolean
  * included, whose target is a name `parts` read, to a fixpoint (`I += 1; Done := I >= 3; if Done
  * then exit` makes `I >= 3` a part, then `1`). By NAME, the safe direction for a refusal: every
  * identifier counts, member halves included, and a bare target `X` or a member target `R.X` matches
- * a read of `X`. An assignment in an inactive arm adds nothing, because no name or reader reads an
- * inactive node; an undecided one is followed.
+ * a read of `X`. An assignment in an inactive arm is skipped whole (so it cannot bring the guards
+ * above it in either); an undecided one is followed.
+ *
+ * R829 `withGuards` (only `loopExitParts` sets it): a followed assignment also feeds the guard parts
+ * (`guardPartsOf`) of every statement between it and the loop, so `if Line = Mark then Done := true`
+ * makes `Line` a part. Same by-name rule, no member/bare split, no hop limit. The other callers keep
+ * the plain walk, so their figures do not move.
  */
 function indirectFeeds(
   loop: ALSyntaxNode,
   parts: ALSyntaxNode[],
   ctx: SemanticContext,
+  withGuards = false,
 ): ALSyntaxNode[] {
   const body = loop.childForFieldName("body");
   if (body === null) return [];
@@ -6859,7 +6872,7 @@ function indirectFeeds(
   for (let changed = true; changed; ) {
     changed = false;
     for (const a of assignments) {
-      if (used.has(a)) continue;
+      if (used.has(a) || armOfNode(ctx, a) === "inactive") continue;
       const left = a.childForFieldName("left");
       const right = a.childForFieldName("right");
       if (left === null || right === null) continue;
@@ -6869,6 +6882,11 @@ function indirectFeeds(
       }
       used.add(a);
       const fed = [right, ...sideParts(a)];
+      if (withGuards) {
+        for (let g = a.parent; g !== null && !samePos(g, loop); g = g.parent) {
+          fed.push(...guardPartsOf(g));
+        }
+      }
       for (const f of fed) {
         out.push(f);
         collect(f);
@@ -6888,18 +6906,6 @@ const BREAK_SCOPES: ReadonlySet<string> = new Set([
 
 const samePos = (a: ALSyntaxNode, b: ALSyntaxNode): boolean =>
   a.startIndex === b.startIndex && a.endIndex === b.endIndex;
-
-/** Does the condition (active arms, tails included) read no name and call nothing? True for
- *  `while false` too, which does not loop at all: then the extra guards cost nothing. */
-function conditionIsNameAndCallFree(parts: ALSyntaxNode[], ctx: SemanticContext): boolean {
-  const walk = (n: ALSyntaxNode): boolean => {
-    if (DIRECTIVE_MARKERS.has(n.rawKind)) return true;
-    if (armOfNode(ctx, n) === "inactive") return true;
-    if (n.rawKind === "call_expression" || isIdentifierLike(n)) return false;
-    return n.namedChildren.every(walk);
-  };
-  return parts.length > 0 && parts.every(walk);
-}
 
 /** `CurrReport.Quit`/`Break` and their XMLport twins end the trigger, so the loop (R446). With or
  *  without `()`: both forms hold this `member_expression`. `Skip` is NOT here: its docs do not say
