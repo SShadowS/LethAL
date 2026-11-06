@@ -1104,21 +1104,26 @@ function deletedCallHangs(node: ALSyntaxNode, ctx: SemanticContext): boolean {
   );
 }
 
-/** The `if` whose condition holds `site`, or null. */
-function guardedIf(site: ALSyntaxNode): ALSyntaxNode | null {
-  let n = site;
-  for (let cur = site.parent; cur !== null && !isScope(cur); n = cur, cur = cur.parent) {
-    if (cur.kind === ALNodeKind.if_statement) return n.fieldName === "condition" ? cur : null;
-  }
-  return null;
-}
+/** The statement whose flow depends on the expression in this field: `if`, `case`, `for`. */
+const CONTROLLED_BY: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["if_statement", new Set(["condition"])],
+  ["case_statement", new Set(["expression"])],
+  ["for_statement", new Set(["start", "end"])],
+]);
 
 /**
  * R855, for an operator that deletes `operand` of the expression `site`. AL evaluates both operands,
  * so a call in the operand always ran: `Total := Total + Step()` to `Total := Total`, or
- * `if Flag or Step() then` to `if Flag then`, loses it for certain. And `site` may guard a progress
- * call: `repeat if A or B then Advance(); until Done` to `if A then Advance();`.
- * `negate-conditional` has the second exposure today ([[R856]]).
+ * `if Flag or Step() then` to `if Flag then`, loses it for certain. `site` can also decide whether
+ * progress happens at all, in three ways:
+ * - it controls a statement holding a progress call: `repeat if A or B then Advance(); until Done`,
+ *   also `N := Advance();`, `case I + J of 1: Advance();` and `for K := 1 to I + J do Advance();`;
+ * - it controls a `continue`, which skips whatever follows in the loop: `if A and B then continue;`;
+ * - it is an argument of a progress call, which sets the step: `AddTo(Pos, I + 1)`.
+ *
+ * A bare name counts as a call (`if A or StepB then`, `Advance;`): `callIsProgress` resolves it.
+ * Known, not seen: progress ended by an `Error` inside a callee, and every shape behind a callee
+ * ([[R837]]). `negate-conditional` and `swap-additive` have these exposures today.
  */
 export function deletedOperandHangs(
   operand: ALSyntaxNode,
@@ -1126,13 +1131,27 @@ export function deletedOperandHangs(
   ctx: SemanticContext,
 ): boolean {
   let hangs = false;
-  const ask = (n: ALSyntaxNode, statement: boolean): void => {
-    if (n.kind !== ALNodeKind.procedure_call || (statement && !isStatementSlot(n))) return;
-    hangs ||= callIsProgress(n, ctx);
+  const ask = (n: ALSyntaxNode): void => {
+    if (n.rawKind === "call_expression" || n.rawKind === "call_statement" || isIdentifierLike(n)) {
+      hangs ||= callIsProgress(n, ctx);
+    }
   };
-  visitAll(operand, (n) => ask(n, false));
-  const guard = guardedIf(site);
-  if (guard !== null) visitAll(guard, (n) => ask(n, true));
+  visitAll(operand, ask);
+  let n = site;
+  for (let cur = site.parent; cur !== null && !isScope(cur); n = cur, cur = cur.parent) {
+    if (cur.rawKind === "call_expression" || cur.rawKind === "call_statement") ask(cur);
+    if (CONTROLLED_BY.get(cur.rawKind)?.has(n.fieldName ?? "") === true) {
+      for (const part of cur.namedChildren) {
+        if (part.startIndex === n.startIndex && part.endIndex === n.endIndex) continue;
+        visitAll(part, (x) => {
+          ask(x);
+          if (x.rawKind === "continue_statement") hangs ||= hasEnclosingLoop(x);
+        });
+      }
+      break;
+    }
+    if (cur.rawKind.endsWith("_statement")) break;
+  }
   return hangs;
 }
 

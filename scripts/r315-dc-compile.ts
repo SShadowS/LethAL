@@ -431,7 +431,8 @@ async function main(args: Args): Promise<void> {
         emit: { errors: emit.length, byCode: summarize(emit) },
         environment: { errors: environment.length, byCode: summarize(environment) },
       },
-      closes: inst.exit0 || emit.length === 0,
+      // R855: a failed build with no positioned error bound no source (AL1022), so it proves nothing.
+      closes: inst.exit0 || (emit.length === 0 && iDiags.length > 0),
     };
     await writeFile(join(args.outDir, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`);
     console.log(JSON.stringify(summary, null, 2));

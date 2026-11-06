@@ -624,12 +624,12 @@ export const V3_WR_KILLERS: readonly V3Killer[] = [
  * Every other leg, MO included, pre-commits none.
  */
 export const V3_WR_STATE_NOTES: readonly string[] = [
-  "0/M0071",
-  "0/M0072",
-  "0/M0078",
-  "0/M0085",
-  "0/M0086",
-  "0/M0092",
+  "0/M0075",
+  "0/M0076",
+  "0/M0082",
+  "0/M0089",
+  "0/M0090",
+  "0/M0096",
 ];
 
 /** One line when the run's state notes are not exactly `want` (both as `batch/code`); else none. */

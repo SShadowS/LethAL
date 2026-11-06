@@ -5,27 +5,36 @@ import {
   type MutationSpec,
   type SemanticContext,
 } from "@lethal/operator-sdk";
-import { deletedOperandHangs, hangCapableForMutatedNode, inLoopExitParts } from "./loop-hazard";
-import { findOperatorToken, synthesizeAfter } from "./mutate-helpers";
+import {
+  deletedOperandHangs,
+  hangCapableForMutatedNode,
+  inLoopExitParts,
+  isIdentifierLike,
+} from "./loop-hazard";
+import { synthesizeAfter } from "./mutate-helpers";
 
 const VERSION = "1.0.0";
 type Side = "left" | "right";
 const NUMERIC: ReadonlySet<string> = new Set(["Integer", "Decimal", "BigInteger", "Byte"]);
 
-/** In the right operand of `/`, `div` or `mod`, at any depth: `T / (A + B)` to `T / B` raises at a zero `B`. */
+/** In a divisor, at any depth: `T / (A + B)` to `T / B` raises at a zero `B`. So does `D /= A + B`. */
 function inDivisor(node: ALSyntaxNode): boolean {
   for (let n = node; n.parent !== null; n = n.parent) {
     const p = n.parent;
-    if (
-      p.kind === ALNodeKind.multiplicative_expression &&
-      p.children[2]?.startIndex === n.startIndex
-    ) {
-      if (findOperatorToken(p)?.text !== "*") return true;
+    if (p.kind === ALNodeKind.multiplicative_expression && n.fieldName === "right") {
+      if (p.childForFieldName("operator")?.text !== "*") return true;
+    }
+    if (p.kind === ALNodeKind.assignment_statement) {
+      return n.fieldName === "right" && p.childForFieldName("operator")?.text === "/=";
     }
     if (p.rawKind.endsWith("_statement")) return false;
   }
   return false;
 }
+
+/** A name or a call in it: without one, `kept` is a constant (`3 * 100`, `-(300)`, `'a'`). */
+const holdsName = (n: ALSyntaxNode): boolean =>
+  isIdentifierLike(n) || n.namedChildren.some(holdsName);
 
 /**
  * The operand to delete and the one to keep, or null. Numeric and of one type, so the result's type
@@ -33,11 +42,11 @@ function inDivisor(node: ALSyntaxNode): boolean {
  */
 function operands(node: ALSyntaxNode, side: Side, ctx: SemanticContext) {
   if (node.kind !== ALNodeKind.additive_expression) return null;
-  const token = findOperatorToken(node)?.text;
+  const token = node.childForFieldName("operator")?.text;
   if (token !== "+" && token !== "-") return null;
-  const left = node.children[0];
-  const right = node.children[2];
-  if (left === undefined || right === undefined) return null;
+  const left = node.childForFieldName("left");
+  const right = node.childForFieldName("right");
+  if (left === null || right === null) return null;
   const type = ctx.types.typeOf(left);
   if (type === null || type !== ctx.types.typeOf(right) || !NUMERIC.has(type)) return null;
   if (inDivisor(node)) return null;
@@ -48,9 +57,9 @@ function operands(node: ALSyntaxNode, side: Side, ctx: SemanticContext) {
     if (token !== "+" || left.kind === ALNodeKind.additive_expression) return null;
     if (right.text === left.text) return null;
   }
-  // A bare literal left over: `I + 300` to `300` does not compile into a Byte (AL0369), and it says
+  // A constant left over: `I + 300` to `300` does not compile into a Byte (AL0369), and it says
   // little. An operand opening with a directive does not compile at all (AL0620).
-  if (/^\(*-?\d+(\.\d+)?\)*$/.test(pair.kept.text) || pair.kept.text.startsWith("#")) return null;
+  if (!holdsName(pair.kept) || pair.kept.text.startsWith("#")) return null;
   return pair;
 }
 

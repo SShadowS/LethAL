@@ -44,6 +44,7 @@ ${vars}
     procedure P(A: Boolean; B: Boolean; I: Integer; J: Integer): Integer
     var
         Total: Integer;
+        K: Integer;
     begin
 ${body}
     end;
@@ -71,6 +72,20 @@ ${body}
     end;
 
     local procedure Noop()
+    begin
+    end;
+
+    local procedure Advance2()
+    begin
+        Pos += 1;
+    end;
+
+    local procedure AddTo(var Into: Integer; By: Integer)
+    begin
+        Into += By;
+    end;
+
+    local procedure Quietly(By: Integer)
     begin
     end;
 }
@@ -177,14 +192,128 @@ describe("R855: a site in a loop's exit parts", () => {
   });
 });
 
-describe("R855: operands that may not be deleted", () => {
-  it("a bare literal left over, signed or in parentheses, is refused; an operand stays", () => {
+describe("R855: what a site controls, in a loop that needs it (build review)", () => {
+  const LOGIC = [deleteLogicalRight, deleteLogicalLeft];
+  const loop = (hang: string, quiet: string): string =>
+    unit(
+      "",
+      `        while Pos < Limit do begin\n            ${quiet}\n            ${hang}\n            Pos += 1;\n        end;`,
+    );
+
+  const shapes: ReadonlyArray<readonly [string, string, string]> = [
+    [
+      "a value read from the call",
+      "if A or B then Total := Step();",
+      "if A and B then Total := 1;",
+    ],
+    ["a parenless statement call", "if A or B then Advance2;", "if A and B then Noop;"],
+    ["a `continue` that skips what follows", "if A or B then continue;", "if A and B then Noop();"],
+  ];
+  for (const [name, hang, quiet] of shapes) {
+    for (const op of LOGIC) {
+      it(`${op.name}: ${name}`, () => {
+        const r = sites(op, loop(hang, quiet));
+        expect(r.hang).toEqual(["A or B"]);
+        expect(r.claimed).toEqual(["A and B"]);
+      });
+    }
+  }
+
+  it("a parenless call in the deleted operand; the left is the control", () => {
+    const src = loop("if A or StepB then Total := 1;", "");
+    expect(sites(deleteLogicalRight, src).hang).toEqual(["A or StepB"]);
+    expect(sites(deleteLogicalLeft, src).claimed).toEqual(["A or StepB"]);
+  });
+
+  it("a `case` selector and a `for` bound control their bodies", () => {
     const src = unit(
       "",
-      "        Total := I + 300;\n        Total := 300 + I;\n        Total := I + (-1);",
+      `        repeat
+            case I + J of
+                1:
+                    Advance();
+            end;
+            for K := 1 to I - J do
+                Advance();
+            case I + 1 of
+                1:
+                    Noop();
+            end;
+            for K := 1 to I - 2 do
+                Noop();
+        until Counter >= Limit;`,
+    );
+    const r = sites(deleteAdditiveRight, src);
+    expect(r.hang).toEqual(["I + J", "I - J"]);
+    expect(r.claimed).toEqual(["I + 1", "I - 2"]);
+  });
+
+  it("an argument of a progress call sets the step", () => {
+    const src = unit(
+      "",
+      "        while Pos < Limit do begin\n            AddTo(Pos, I + 1);\n            Quietly(I + 2);\n        end;",
+    );
+    const r = sites(deleteAdditiveRight, src);
+    expect(r.hang).toEqual(["I + 1"]);
+    expect(r.claimed).toEqual(["I + 2"]);
+  });
+
+  it("the `if`'s branch is asked, not its condition: a condition's own call stays with its operand", () => {
+    const src = loop("if StepB() or A then Total := 1;", "");
+    expect(sites(deleteLogicalRight, src).claimed).toEqual(["StepB() or A"]);
+    expect(sites(deleteLogicalLeft, src).hang).toEqual(["StepB() or A"]);
+  });
+
+  it("a site in a branch does not read as its `if`'s condition", () => {
+    const src = unit(
+      "",
+      "        repeat\n            if Counter < 0 then begin\n                Total := I + J;\n                Advance();\n            end;\n        until Counter >= Limit;",
+    );
+    expect(sites(deleteAdditiveRight, src).claimed).toEqual(["I + J"]);
+  });
+});
+
+describe("R855: operands that may not be deleted", () => {
+  it("a constant left over is refused, in any form; an operand stays", () => {
+    const src = unit(
+      "",
+      "        Total := I + 300;\n        Total := 300 + I;\n        Total := I + (-1);\n        Total := I + 3 * 100;\n        Total := I + (+300);\n        Total := I + -(300);\n        Total := I + (3 + 300);",
     );
     expect(sites(deleteAdditiveLeft, src).claimed).toEqual(["300 + I"]);
-    expect(sites(deleteAdditiveRight, src).claimed).toEqual(["I + 300", "I + (-1)"]);
+    expect(sites(deleteAdditiveRight, src).claimed).toEqual([
+      "I + 300",
+      "I + (-1)",
+      "I + 3 * 100",
+      "I + (+300)",
+      "I + -(300)",
+      "I + (3 + 300)",
+    ]);
+  });
+
+  it("a divisor is refused past a comment and in `/=`", () => {
+    const src = unit(
+      "",
+      "        Total := Total / /* why */ (I + J);\n        Total /= I + J;\n        Total *= I + J;",
+    );
+    expect(sites(deleteAdditiveRight, src).claimed).toEqual(["I + J"]);
+  });
+
+  it("a comment beside the operator does not move the operands", () => {
+    const src = unit("", "        Total := I /* why */ + J;");
+    expect(sites(deleteAdditiveLeft, src).claimed).toEqual(["I /* why */ + J"]);
+    const op = deleteAdditiveLeft;
+    const root = wrapRoot(parseAL(src));
+    const ctx = buildSemanticContext([{ path: "fixture.al", root }]);
+    const after: string[] = [];
+    visit(root, (n: ALSyntaxNode) => {
+      for (const s of op.generate(n, ctx)) after.push(s.after.text);
+    });
+    expect(after).toEqual(["J"]);
+  });
+
+  it("the chain rule reads the operator in any case", () => {
+    const src = unit("", "        if A OR B or A then Total := 1;");
+    expect(sites(deleteLogicalLeft, src).claimed).toEqual(["A OR B"]);
   });
 
   it("a divisor is refused at any depth; a dividend and a multiplier are not", () => {
