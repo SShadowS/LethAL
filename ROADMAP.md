@@ -331,7 +331,7 @@ that ordering is the priority.
 - **R741** · Unmeasured: a stale member the target adds through a tableextension or pageextension may be named by its BASE object's id, which R738 does not read as the target's · [R741.md](docs/roadmap/R741.md) · done (3c264a7c)
 - **R749** · Silent under-report: a stale member whose BC function id is NEGATIVE matched neither R738's nor R740's refusal, so its tests left the green set silently · [R749.md](docs/roadmap/R749.md) · done (3c264a7c)
 - **R801** · tree-sitter-al 4.5.0 admits ten R402 shapes it used to refuse (loop-condition `#if` prefixes and tails) and reads an empty `var` followed by a `#if` procedure as ERROR: prove the admitted shapes with alc · [R801.md](docs/roadmap/R801.md) · done (66b585c1)
-- **R841** · Some `#if` shapes that split a statement pass the refusal, compile as source, and give an artifact alc refuses · [R841.md](docs/roadmap/R841.md) · open, filed 2026-11-06 (coord task R-835): measured offline, nothing built
+- **R841** · Some `#if` shapes that split a statement pass the refusal, compile as source, and give an artifact alc refuses · [R841.md](docs/roadmap/R841.md) · open, filed 2026-11-06 (coord task R-835); measured 2026-11-06 (coord task R-841): the run drops only the…
 
 ## Product gaps a real project hits
 
