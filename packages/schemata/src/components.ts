@@ -18,6 +18,13 @@ export interface Component {
   readonly members: readonly ComponentMember[];
   /** R827: a free `empty-block`: its one member guards `root`, a block, with no chain and no copy. */
   readonly free?: true;
+  /**
+   * R828 O1: other components sit inside `root`. Then every member is the root's OWN (it resolves to
+   * the root), each own branch copies the root PLAIN, and the nested components live in the one
+   * ORIGINAL branch, as their own components. Absent: a flat chain, as before (a loop, a root that
+   * holds a directive, or a root with nothing nested).
+   */
+  readonly split?: true;
 }
 
 function contains(outer: ALSyntaxNode, inner: ALSyntaxNode): boolean {
@@ -99,22 +106,66 @@ export function buildComponents(ided: readonly IdedSpec[]): Component[] {
     spans.set(spanKey(m.statement), (spans.get(spanKey(m.statement)) ?? 0) + 1);
   }
 
-  const groups: Array<{ root: ALSyntaxNode; members: ComponentMember[]; free?: true }> = [];
+  interface Group {
+    root: ALSyntaxNode;
+    members: ComponentMember[];
+    free?: true;
+    /** A loop, or a root holding a directive: everything inside it joins its one flat chain. */
+    flat: boolean;
+    split?: true;
+  }
+  const groups: Group[] = [];
+  const innermostHost = (root: ALSyntaxNode): Group | undefined => {
+    let best: Group | undefined;
+    for (const g of groups) {
+      if (g.free === true || !contains(g.root, root)) continue;
+      const size = g.root.endIndex - g.root.startIndex;
+      if (best === undefined || size < best.root.endIndex - best.root.startIndex) best = g;
+    }
+    return best;
+  };
   for (const m of bySpan) {
     const outer = groups.find((g) => g.free === true && contains(g.root, m.statement));
-    const root = outer === undefined ? m.statement : rootInFreeBlock(m.statement, outer.root);
-    const host = groups.find((g) => g.free !== true && contains(g.root, root));
-    if (host !== undefined) host.members.push(m);
-    else if (isFreeShape(m) && spans.get(spanKey(m.statement)) === 1) {
-      groups.push({ root, members: [m], free: true });
-    } else groups.push({ root, members: [m] });
+    let root = outer === undefined ? m.statement : rootInFreeBlock(m.statement, outer.root);
+    for (;;) {
+      const host = innermostHost(root);
+      if (host === undefined || host.flat || sameSpan(host.root, root)) {
+        // No host, or a flat one that takes everything inside it, or the root's own member.
+        if (host !== undefined) host.members.push(m);
+        else if (isFreeShape(m) && spans.get(spanKey(m.statement)) === 1) {
+          groups.push({ root, members: [m], free: true, flat: false });
+        } else groups.push({ root, members: [m], flat: isFlat(root) });
+        break;
+      }
+      // R828 O1: inside a plain-copy root a mutant in a loop stays at the OUTERMOST loop within that
+      // root, flat, so no `Active` runs on a pass of a loop that had none (R246). The host is the
+      // block, as a free body is for the same rule.
+      const lifted = rootInFreeBlock(root, host.root);
+      if (!sameSpan(lifted, root)) {
+        root = lifted;
+        continue;
+      }
+      host.split = true;
+      groups.push({ root, members: [m], flat: isFlat(root) });
+      break;
+    }
   }
 
   return groups.map((g) => ({
     root: g.root,
     members: [...g.members].sort(orderOutermostFirst),
     ...(g.free === true ? { free: true as const } : {}),
+    ...(g.split === true ? { split: true as const } : {}),
   }));
+}
+
+function sameSpan(a: ALSyntaxNode, b: ALSyntaxNode): boolean {
+  return a.startIndex === b.startIndex && a.endIndex === b.endIndex;
+}
+
+/** A loop keeps all it holds in one chain (R246), and so does a node holding a directive (R827). */
+function isFlat(root: ALSyntaxNode): boolean {
+  return LOOPS.has(root.rawKind) || holdsDirective(root);
 }
 
 /** Outermost mutation first, then by position, then by operator — fully deterministic. */

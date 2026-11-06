@@ -72,6 +72,7 @@ export function assertGateWarnings(
   leg: string,
   observed: readonly string[],
   expected: readonly string[] | undefined,
+  examples: Readonly<Record<string, string>> = {},
 ): void {
   const key = `${gate}/${leg}`;
   if (expected === undefined) {
@@ -84,8 +85,10 @@ export function assertGateWarnings(
   const extra = [...obs].filter((c) => !exp.has(c)).sort();
   const missing = [...exp].filter((c) => !obs.has(c)).sort();
   if (extra.length === 0 && missing.length === 0) return;
+  // R852: the codes alone left a one-off failure unreadable; the message says what happened.
+  const said = extra.flatMap((c) => (examples[c] !== undefined ? [` ${c}: ${examples[c]}`] : []));
   throw new GateWarningsMismatchError(
-    `${key}: warning codes differ from the committed set. Extra: ${JSON.stringify(extra)}. Missing: ${JSON.stringify(missing)}. Observed: ${JSON.stringify([...obs].sort())}.`,
+    `${key}: warning codes differ from the committed set. Extra: ${JSON.stringify(extra)}. Missing: ${JSON.stringify(missing)}. Observed: ${JSON.stringify([...obs].sort())}.${said.join("")}`,
   );
 }
 
@@ -108,7 +111,7 @@ export function checkGateWarnings(
     printObserved(gate, leg, w);
     return;
   }
-  assertGateWarnings(gate, leg, w.codes(), GATE_WARNINGS[`${gate}/${leg}`]);
+  assertGateWarnings(gate, leg, w.codes(), GATE_WARNINGS[`${gate}/${leg}`], w.examples());
 }
 
 /**

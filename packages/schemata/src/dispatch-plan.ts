@@ -283,7 +283,7 @@ function skipTrivia(source: string, from: number, to: number): number {
  * `source.slice(from, to).trimEnd().endsWith(";")`, read backwards one character at a time, so a
  * member's decision costs its trailing whitespace, not a copy of its span (manifest-row-cost).
  */
-function endsInSemicolon(source: string, from: number, to: number): boolean {
+export function endsInSemicolon(source: string, from: number, to: number): boolean {
   let at = to - 1;
   while (at >= from && WHITESPACE.test(source.charAt(at))) at--;
   return at >= from && source.charAt(at) === ";";

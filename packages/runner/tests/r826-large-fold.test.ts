@@ -27,9 +27,10 @@ import { ResultsStore } from "../src/store";
 const tierOf = (n: string) => operatorTiers.get(n);
 
 /**
- * One procedure holding `if Y > Z then begin <flat statements> end;`. R827: a body's `empty-block`
- * is a guard now and folds nothing, so the condition's mutant (`conditional-boundary`) and the
- * branch block's `empty-block` root the whole `if`, and every statement inside joins its chain.
+ * One procedure holding `for Y := 1 to Z do begin <flat statements> end;`. R827: a body's
+ * `empty-block` is a guard now and folds nothing. R828 O1: an `if` copies only its own statement, so
+ * what still makes a long chain is a LOOP: in a free body every statement in it joins the loop's one
+ * flat chain (R246).
  */
 function writeProject(statements: number): string {
   const dir = mkdtempSync(join(tmpdir(), "r826-"));
@@ -46,12 +47,12 @@ function writeProject(statements: number): string {
       idRanges: [{ from: 50000, to: 50099 }],
     }),
   );
-  const body = Array.from({ length: statements }, (_, i) => `            Y := Y + ${i + 1};`).join(
+  const body = Array.from({ length: statements }, (_, i) => `            Z := Z + ${i + 1};`).join(
     "\n",
   );
   writeFileSync(
     join(dir, "src", "P.Codeunit.al"),
-    `codeunit 50000 "P"\n{\n    procedure Big()\n    var\n        Y: Integer;\n        Z: Integer;\n    begin\n        if Y > Z then begin\n${body}\n        end;\n    end;\n}\n`,
+    `codeunit 50000 "P"\n{\n    procedure Big()\n    var\n        Y: Integer;\n        Z: Integer;\n    begin\n        for Y := 1 to Z do begin\n${body}\n        end;\n    end;\n}\n`,
   );
   return dir;
 }
@@ -151,8 +152,14 @@ async function sessionCodes(statements: number, kind: "bcdev" | "al-runner-v3"):
   return codes;
 }
 
-/** The two operators that root the whole `if`: its condition's and its branch block's. */
-const ROOTS = ["lethal.empty-block", "lethal.conditional-boundary"];
+/** The operators that make the loop one chain: the free body's (which lifts to the loop) and the loop's own. */
+const ROOTS = [
+  "lethal.empty-block",
+  "lethal.conditional-boundary",
+  "lethal.negate-conditional",
+  "lethal.loop-skip",
+  "lethal.loop-truncate",
+];
 const allBut = (files: Awaited<ReturnType<typeof project>>) =>
   [...new Set(files.flatMap((f) => f.specs.map((s) => s.operatorName)))].filter(
     (o) => !ROOTS.includes(o),
@@ -163,7 +170,7 @@ describe("R826: the large-method warning", () => {
     await initParser();
   });
 
-  test("an `if` folded by its condition's mutant is one long chain; without it the same code is not", async () => {
+  test("a loop folded by its own mutants is one long chain; without them the same code is not", async () => {
     const files = await project(150);
     const [f] = files;
     if (f === undefined) throw new Error("no file");
@@ -184,9 +191,10 @@ describe("R826: the large-method warning", () => {
     expect(message).toMatch(/chain \d+, about \d+ KB/);
     expect(message).toContain("not proven");
     expect(message).toContain("not measured");
-    // R827: a body's `empty-block` is no longer the cause, so the text names what is.
-    expect(message).toContain("`if` conditions");
-    expect(message).toContain("`case` arms");
+    // R827, R828: a body's `empty-block`, an `if` condition and a `case` arm are no longer the cause,
+    // so the text names what is.
+    expect(message).toContain("Loops and statements holding a `#if`");
+    expect(message).not.toContain("`case` arms");
     expect(message).toContain("--exclude-operator");
     expect(message).toContain("--only");
   });
@@ -256,10 +264,10 @@ describe("R826: the large-method warning", () => {
       }),
     );
     const comment = "            // padding\n".repeat(4000);
-    const body = Array.from({ length: 12 }, (_, i) => `            Y := Y + ${i + 1};`).join("\n");
+    const body = Array.from({ length: 12 }, (_, i) => `            Z := Z + ${i + 1};`).join("\n");
     writeFileSync(
       join(dir, "src", "P.Codeunit.al"),
-      `codeunit 50000 "P"\n{\n    procedure Big()\n    var\n        Y: Integer;\n        Z: Integer;\n    begin\n        if Y > Z then begin\n${comment}${body}\n        end;\n    end;\n}\n`,
+      `codeunit 50000 "P"\n{\n    procedure Big()\n    var\n        Y: Integer;\n        Z: Integer;\n    begin\n        for Y := 1 to Z do begin\n${comment}${body}\n        end;\n    end;\n}\n`,
     );
     const set = await generateMutationSet(dir, { emit: () => {} } as never);
     const [f] = set.files;

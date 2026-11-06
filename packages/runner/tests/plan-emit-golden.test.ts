@@ -154,6 +154,10 @@ function handSpec(before: ALSyntaxNode, afterText: string, operatorName: string)
  * The three hand cases. Each `if` is made the component root by a mutant on its condition, so the
  * then-block is a NESTED member whose `before` is its own resolved statement: `before` starts at
  * `S.start`, and the leading-`begin` test reads only the replacement text and the filler.
+ * R828 O1: a nested block is its own component (placement `root`, which never asks that test),
+ * unless the `if` holds a directive and so keeps its flat chain. Each case holds a `#pragma` for
+ * that reason: without it Hand B's block moved from `unplaced` to `statement` and the test lost
+ * the case it exists for.
  * - `replaced`: the block replaced by `begin end`.
  * - `deleted-no-else`: the block deleted, no `else`, so the filler is `;`.
  * - `deleted-before-else`: the block deleted ahead of an `else`, so the filler is `begin end`.
@@ -161,17 +165,17 @@ function handSpec(before: ALSyntaxNode, afterText: string, operatorName: string)
 const HAND: ReadonlyArray<{ name: string; src: string; afterText: string }> = [
   {
     name: "replaced",
-    src: `codeunit 51990 "Hand A" { procedure P(C: Boolean) var X: Integer; begin if C then begin X := 1; end; end; }`,
+    src: `codeunit 51990 "Hand A" { procedure P(C: Boolean) var X: Integer; begin if C then begin\n#pragma warning disable AL0432\nX := 1; end; end; }`,
     afterText: "begin end",
   },
   {
     name: "deleted-no-else",
-    src: `codeunit 51991 "Hand B" { procedure P(C: Boolean) var X: Integer; begin if C then begin X := 1; end; end; }`,
+    src: `codeunit 51991 "Hand B" { procedure P(C: Boolean) var X: Integer; begin if C then begin\n#pragma warning disable AL0432\nX := 1; end; end; }`,
     afterText: "",
   },
   {
     name: "deleted-before-else",
-    src: `codeunit 51992 "Hand C" { procedure P(C: Boolean) var X: Integer; begin if C then begin X := 1; end else X := 2; end; }`,
+    src: `codeunit 51992 "Hand C" { procedure P(C: Boolean) var X: Integer; begin if C then begin\n#pragma warning disable AL0432\nX := 1; end else X := 2; end; }`,
     afterText: "",
   },
 ];

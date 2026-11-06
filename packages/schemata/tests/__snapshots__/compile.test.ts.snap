@@ -15,13 +15,13 @@ exports[`GH-24: reach grain and marker placement GH-24: the marker adds no line 
 "codeunit 51902 "R" {     var
         MutationSelector: Codeunit "Mutation Selector";
 
-procedure P(Amount: Integer): Integer begin if MutationSelector.Active('M0001') then begin
-  if Amount >= 0 then exit(0)
-end else if MutationSelector.Active('M0002') then begin
-  if Amount < 0 then exit(1)
+procedure P(Amount: Integer): Integer begin if MutationSelector.Active('M0001') then begin if Amount >= 0 then exit(0) end else begin if Amount < 0 then begin
+if MutationSelector.Active('M0002') then begin
+  exit(1)
 end else begin
-  if Amount < 0 then exit(0)
-end; if MutationSelector.Active('M0003') then begin
+  exit(0)
+end
+end end; if MutationSelector.Active('M0003') then begin
   if Amount < 1 then Error('')
 end else begin
   if Amount < 1 then Error('neg')
@@ -89,13 +89,9 @@ exports[`GH-24: reach grain and marker placement GH-24: the marker adds no line 
 "codeunit 51906 "R" {     var
         MutationSelector: Codeunit "Mutation Selector";
 
-procedure P(W: Integer) var X: Integer; begin if MutationSelector.Active('M0001') then begin
-  case W of 1: begin end; 2: Touch(); end
-end else if MutationSelector.Active('M0003') then begin
-  case W of 1: begin X := 1; end; 2: ; end
-end else if MutationSelector.Active('M0002') then begin
-  case W of 1: begin ; end; 2: Touch(); end
+procedure P(W: Integer) var X: Integer; begin if MutationSelector.Active('M0001') then begin case W of 1: begin end; 2: Touch(); end end else if MutationSelector.Active('M0003') then begin case W of 1: begin X := 1; end; 2: ; end end else begin case W of 1: begin if MutationSelector.Active('M0002') then begin
+  
 end else begin
-  case W of 1: begin X := 1; end; 2: Touch(); end
-end; end; local procedure Touch() begin end; }"
+  X := 1
+end; end; 2: Touch(); end end; end; local procedure Touch() begin end; }"
 `;
