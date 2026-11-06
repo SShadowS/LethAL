@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**15 of 831 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**16 of 831 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -336,7 +336,7 @@ that ordering is the priority.
 - **R843** · `lethal run` can strip a user's server: a target object with the same type and id as one in its test app is published, and BC removes the apps · [R843.md](docs/roadmap/R843.md) · done (c482126f)
 - **R845** · Clashes a pre-publish object list cannot see can still strip a server: field ids, enum values, non-dependents, transitive dependents · [R845.md](docs/roadmap/R845.md) · done (2a69245e); live leg passed on bc1, 2026-11-06
 - **R847** · A control-app action that reads AllObj and Field would let the pre-publish clash check see an installed app that is not a dependent · [R847.md](docs/roadmap/R847.md) · open on one line, built and merged by R-847: no live run has gone from a real clash to a refusal through the…
-- **R852** · itest:verify failed once on lease-renew-unanswered, and the gate's mismatch error does not print the warning's message · [R852.md](docs/roadmap/R852.md) · done (0b0cdc7a)
+- **R852** · itest:verify failed once on lease-renew-unanswered, and the gate's mismatch error does not print the warning's message · [R852.md](docs/roadmap/R852.md) · open: the message logging landed (0b0cdc7a); the cause of the one failure stays open until it recurs or is…
 
 ## Product gaps a real project hits
 
@@ -498,7 +498,7 @@ that ordering is the priority.
 - **R825** · README states the operator count in prose by hand, and it drifted (GitHub #44) · [R825.md](docs/roadmap/R825.md) · done (41df4238)
 - **R826** · A 907-guard codeunit crashed the BC service tier with a stack overflow: nothing limits or warns on guards per codeunit (GitHub #28) · [R826.md](docs/roadmap/R826.md) · open, filed 2026-11-05 (coord task R-820); a warning landed (R-825); the measurement waits for #28's reporter
 - **R827** · One empty-block mutant on a block folds everything inside it into one chain: 2 to 8 x the emitted code on real codeunits, growing with the square · [R827.md](docs/roadmap/R827.md) · done (49557132)
-- **R828** · Statements that keep their whole body as a chain root (`if`, loops, `case` arms) leave chains of up to 461 after R827, and a 44 MB file: R827 alone does not clear #28's suspect · [R828.md](docs/roadmap/R828.md) · open: O1 built (saves 34% over the 38 largest files, leaves the worst near 43 MB); O3 is not decided
+- **R828** · Statements that keep their whole body as a chain root (`if`, loops, `case` arms) leave chains of up to 461 after R827, and a 44 MB file: R827 alone does not clear #28's suspect · [R828.md](docs/roadmap/R828.md) · open: O1 built (saves 34% over the 38 largest files, leaves the worst near 43 MB); O3 not adopted, not proven…
 - **R829** · Hang refusal misses a write the loop's step reads, when the loop condition reads a name (GitHub #50) · [R829.md](docs/roadmap/R829.md) · done (08605e4d)
 - **R830** · `void-method-call` has no hang check: deleting a call that steps a loop can hang the run · [R830.md](docs/roadmap/R830.md) · done (6daf2727)
 - **R831** · Hang refusal never sees an array-element target: `while Buf[1] < 10 do Buf[1] := Buf[1] + 1` is claimed · [R831.md](docs/roadmap/R831.md) · done (6daf2727)
