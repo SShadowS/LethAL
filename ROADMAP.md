@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**16 of 830 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**17 of 831 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -336,6 +336,7 @@ that ordering is the priority.
 - **R843** · `lethal run` can strip a user's server: a target object with the same type and id as one in its test app is published, and BC removes the apps · [R843.md](docs/roadmap/R843.md) · done (c482126f)
 - **R845** · Clashes a pre-publish object list cannot see can still strip a server: field ids, enum values, non-dependents, transitive dependents · [R845.md](docs/roadmap/R845.md) · done (2a69245e); live leg passed on bc1, 2026-11-06
 - **R847** · A control-app action that reads AllObj and Field would let the pre-publish clash check see an installed app that is not a dependent · [R847.md](docs/roadmap/R847.md) · open on one line, built and merged by R-847: no live run has gone from a real clash to a refusal through the…
+- **R852** · itest:verify failed once on lease-renew-unanswered, and the gate's mismatch error does not print the warning's message · [R852.md](docs/roadmap/R852.md) · open, filed 2026-11-06 (coord task R-851)
 
 ## Product gaps a real project hits
 
