@@ -272,11 +272,19 @@ pair is one ordinary run of the gate there; add the pair to this table when it p
 
 ### server1 (192.168.2.157), the default host since 2026-11-05
 
-**`bc1` is proven for `itest:bcdev` ONLY since its reset on 2026-11-06.** It was reset to a fresh CRONUS at 07:49Z, so its R-813 rows below do not stand: run
-no other gate there until each is re-proven. Setup and `itest:bcdev` passed at master 6f581651, per mutant, equal to the baseline
-(`/coord/handoff/R-845/bc1-restart/`). Its build differs from the others: Base Application, System Application, Library Assert and Test Runner
-are 28.4.53241.56590 on `bc1`, against .56646 on `bc2` and `bc3`; System is 28.0.54946.56477. `bc1` has only ever been proven at that build
-under R-813's rows; a figure difference there is still a BLOCK, not explained by the build.
+**The current proof is R-847's, on 2026-11-06, under LethAL Control 1.0.0.25 (the table right below).** `bc1` was reset to a fresh CRONUS at 07:49Z that day, so R-813's
+`bc1` row further down does not stand. Its build differs from the others: Base Application, System Application, Library Assert and Test Runner are 28.4.53241.56590 on `bc1`, against
+.56646 on `bc2` and `bc3`; System is 28.0.54946.56477. All 13 gates reproduced at that build; a figure difference there is still a BLOCK, not explained by the build.
+
+Head 09370455, one coord lease per gate, each released; every gate's first line named its server, and each passed its own comparison with its baseline. `verify-scale` is measurement mode.
+
+| server | gate | LethAL Control | proof (log) |
+|---|---|---|---|
+| `bc1` | setup; `itest:bcdev`, `bcdev-names`, `bcdev-wrapped`, `tables`, `chunked`, `harden`, `lend`, `lease`, `verify`, `testapp`, `agreement`, `verify-scale`, `stale-publish` | 1.0.0.25 | `/coord/handoff/R-847/bc1/<gate>.log`, `/coord/handoff/R-847/bc1/setup.log` |
+| `bc2` | setup; the same 13, and `itest:hang` | 1.0.0.25 | `/coord/handoff/R-847/preproc-bc2/<gate>.log`, `setup-bc2.log` beside them, `/coord/handoff/R-658/hang-bc2-20261106T123727Z-1011245/` |
+| `bc3` | setup; the same 13, and `itest:hang` | 1.0.0.25 | `/coord/handoff/R-847/bc3/<gate>.log`, `setup.log` beside them, `/coord/handoff/R-658/hang-bc3-20261106T123815Z-1012222/` |
+
+R-813's proof, under 1.0.0.24, follows as history.
 
 Proven on 2026-11-05 by R-813, master 0602b3b8, LethAL Control 1.0.0.24, one coord lease per gate, each released. Every
 gate equalled its baseline or its own checks, and its first line named `192.168.2.157` and the server's port. Each

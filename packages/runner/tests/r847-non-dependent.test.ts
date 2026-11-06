@@ -28,7 +28,7 @@ import {
   checkObjectClashes,
   resolveTableIds,
 } from "../src/object-clash";
-import { buildFakeApp } from "./helpers/fake-app";
+import { buildFakeApp, buildFakeAppWithEntries } from "./helpers/fake-app";
 
 /**
  * R847 Part 1: the check for an installed app that is NOT a dependent, driven through the real
@@ -60,6 +60,23 @@ const X_DEP: InstalledDependent = {
 
 const pkg = (appId: string, version: string, extra: Record<string, unknown[]> = {}): Uint8Array =>
   new Uint8Array(buildFakeApp({ AppId: appId, Version: version, ...extra }));
+
+/** A package whose manifest names `depIds` as its dependencies (the closure is read from it). */
+const pkgWithDeps = (
+  appId: string,
+  depIds: readonly string[],
+  extra: Record<string, unknown[]> = {},
+): Uint8Array =>
+  new Uint8Array(
+    buildFakeAppWithEntries({
+      "SymbolReference.json": JSON.stringify({ AppId: appId, Version: "1.0.0.0", ...extra }),
+      "NavxManifest.xml": `<Package><App Id="${appId}" Name="Dep" Publisher="P" Version="1.0.0.0"/><Dependencies>${depIds
+        .map((id) => `<Dependency Id="${id}" Name="Sub" Publisher="P" MinVersion="1.0.0.0"/>`)
+        .join("")}</Dependencies></Package>`,
+    }),
+  );
+const D_ID = "d0d0d0d0-0000-4000-8000-00000000000d";
+const Y_ID = "e1e1e1e1-0000-4000-8000-00000000000e";
 
 /** The target as installed before this run: one codeunit and one table, no injected codeunits. */
 const baseWith = (extra: Record<string, unknown[]> = {}, version = "1.0.0.0"): Uint8Array =>
@@ -498,11 +515,13 @@ describe("R847 leads are never refusals", () => {
     ).toHaveLength(2);
   });
 
-  test("a lead whose package has no real clash passes", async () => {
+  test("a lead whose package has no real clash does not refuse, but warns that nothing was decided", async () => {
     const s = base();
     s.owners.set("Codeunit:79291", X_DEP);
     s.packages.set("Other App", pkg(X_ID, "2.0.0.0", { Codeunits: [{ Id: 1, Name: "Mine" }] }));
-    expect(await checkObjectClashes(s.args(CODEUNIT_SRC))).toEqual([]);
+    const w = await checkObjectClashes(s.args(CODEUNIT_SRC));
+    expect(w).toHaveLength(1);
+    expect(has(w, /named Other App 2.0.0.0 by Elsewhere as an owner .* NOT decided/)).toBe(true);
     expect(fetchedCount(s, "Other App")).toBe(1);
   });
 
@@ -532,7 +551,9 @@ describe("R847 leads are never refusals", () => {
       "Other App",
       pkg(X_ID, "2.0.0.0", { Tables: [{ Id: INJ.controlId, Name: "T" }] }),
     );
-    expect(await checkObjectClashes(s.args(CODEUNIT_SRC))).toEqual([]);
+    const w = await checkObjectClashes(s.args(CODEUNIT_SRC));
+    expect(w).toHaveLength(1);
+    expect(has(w, /NOT decided/)).toBe(true);
   });
 
   test("Moved on the other side warns and does not refuse", async () => {
@@ -885,6 +906,28 @@ describe("R847 fields on a table the target does not own", () => {
     expect(s.fieldCalls).toHaveLength(0);
   });
 
+  test("a table name another app of the dependency closure may also give does not become X's lead: no false refusal", async () => {
+    const s = withFields();
+    s.fields.set("18:50000", { app: X_DEP, fieldName: "Other", tableName: "Customer" });
+    // The target depends on D; D depends on Y, which is not in the cache and may have its own "Customer".
+    s.depApps.set(D_ID, [pkgWithDeps(D_ID, [Y_ID])]);
+    const w = await checkObjectClashes(
+      s.args(CUSTOMER_EXT_SRC, { targetDependencies: [{ id: D_ID }] }),
+    );
+    expect(has(w, /is not in the package cache/)).toBe(true);
+    expect(s.fieldCalls).toHaveLength(0);
+    expect(fetchedCount(s, "Other App")).toBe(0);
+  });
+
+  test("a lead named by the field read whose package gives no finding warns, never a clean result", async () => {
+    const s = withFields();
+    s.fields.set("18:50000", { app: X_DEP, fieldName: "Other", tableName: "Customer" });
+    // X's package has no member at all: the read and the package disagree.
+    s.packages.set("Other App", pkg(X_ID, "2.0.0.0", {}));
+    const w = await checkObjectClashes(s.args(CUSTOMER_EXT_SRC));
+    expect(has(w, /named Other App 2.0.0.0 by Elsewhere as an owner .* NOT decided/)).toBe(true);
+  });
+
   test("a table name found in no dependency warns and its fields are not read", async () => {
     const s = withFields();
     s.depApps.clear();
@@ -997,7 +1040,7 @@ describe("R847 the pure parts", () => {
     const baseId = "5a0c4f6e-3b1d-4e57-9a28-7d6c1e0b8f31";
     const got = await resolveTableIds(
       ["r845 base t", "no such table"],
-      [baseId, "00000000000000000000000000000001"],
+      [baseId, BASE_APP_DASHED], // a Microsoft app absent from the cache is not an error
       async (id) => (id === baseId ? [real] : { unread: "absent" }),
       (m) => warnings.push(m),
     );
@@ -1017,7 +1060,40 @@ describe("R847 the pure parts", () => {
     );
     expect(got.size).toBe(0);
     expect(has(warnings, /unreadable/)).toBe(true);
-    expect(has(warnings, /no table "customer"/)).toBe(true);
+    expect(has(warnings, /table names cannot be told apart/)).toBe(true);
+  });
+
+  test("resolveTableIds follows the manifests: a name Y also gives, reached only through a dependency, has two ids and warns", async () => {
+    const warnings: string[] = [];
+    const cache = new Map<string, Uint8Array[]>([
+      [BASE_APP_DASHED, [pkg(BASE_APP_DASHED, "28.0.0.0", { Tables: [{ Id: 18, Name: "Foo" }] })]],
+      [D_ID, [pkgWithDeps(D_ID, [Y_ID])]],
+      [Y_ID, [pkgWithDeps(Y_ID, [], { Tables: [{ Id: 70000, Name: "Foo" }] })]],
+    ]);
+    const got = await resolveTableIds(
+      ["foo"],
+      [D_ID, BASE_APP_DASHED],
+      async (id) => cache.get(id) ?? { unread: "absent" },
+      (m) => warnings.push(m),
+    );
+    expect(got.size).toBe(0);
+    expect(has(warnings, /table "foo" has 2 ids/)).toBe(true);
+  });
+
+  test("resolveTableIds: a dependency in the closure that cannot be read resolves NO name, and warns", async () => {
+    const warnings: string[] = [];
+    const cache = new Map<string, Uint8Array[]>([
+      [BASE_APP_DASHED, [pkg(BASE_APP_DASHED, "28.0.0.0", { Tables: [{ Id: 18, Name: "Foo" }] })]],
+      [D_ID, [pkgWithDeps(D_ID, [Y_ID])]],
+    ]);
+    const got = await resolveTableIds(
+      ["foo"],
+      [D_ID, BASE_APP_DASHED],
+      async (id) => cache.get(id) ?? { unread: "absent" },
+      (m) => warnings.push(m),
+    );
+    expect(got.size).toBe(0);
+    expect(has(warnings, /is not in the package cache \(absent\)/)).toBe(true);
   });
 
   test("newEnumValues counts the new values by enum; own enums and held values are left out", () => {

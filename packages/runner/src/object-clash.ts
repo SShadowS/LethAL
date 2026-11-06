@@ -27,6 +27,7 @@ import { readPackageEntry } from "./app-package";
 import { RECOVERY_DOC } from "./app-version";
 import { type PublishedPackageRead, isUnread } from "./backend";
 import { WALK_MAX_APPS, WALK_MAX_MS, testsFirst } from "./dependents-warning";
+import { appInputsOfPackage } from "./digest-inputs";
 import {
   type FieldItem,
   type FieldOwnerRow,
@@ -725,6 +726,7 @@ export async function checkObjectClashes(args: ObjectClashCheckArgs): Promise<st
     notDependent: boolean,
   ): Promise<boolean> => {
     const flag = notDependent ? ({ notDependent: true } as const) : {};
+    const [f0, m0, w0] = [findings.length, memberFindings.length, warnings.length];
     let objects: readonly DeclaredObject[] | undefined;
     let members: readonly PackageMember[] = [];
     let read: ObjectClashFinding["read"] = "installed-package";
@@ -832,6 +834,19 @@ export async function checkObjectClashes(args: ObjectClashCheckArgs): Promise<st
           : `[lethal] R845: ${kind} "${s.target.ownerName}" ${ruleText(s.rule)} is shared with ${d.name}${via} on a ${kind} of that name owned by an app the target does not depend on (${s.other.ownerApp}); it may be another app's ${kind}, so this is a warning, not a refusal.`,
       );
     }
+    // A lead exists because a positive read named this app as an owner. If its package then gives
+    // no finding and no warning, the read and the package disagree (a newer build on the server
+    // than the symbols, or a member the comparison skips): say so, never a silent clean result.
+    if (
+      notDependent &&
+      findings.length === f0 &&
+      memberFindings.length === m0 &&
+      warnings.length === w0
+    ) {
+      warnings.push(
+        `[lethal] R847: the server named ${d.name} ${d.version} by ${d.publisher} as an owner of something the target adds, but its package shows no clash with the target; whether they clash was NOT decided (its build on the server may differ from the package read).`,
+      );
+    }
     return true;
   };
   /** The bound on apps read and time, shared by the dependents and the leads. */
@@ -887,7 +902,9 @@ const dashedId = (id: string): string => {
  * apps. Only a name found as exactly ONE id is returned; zero matches or two ids warn (Base
  * Application and Business Foundation share 8 table names) and the name is left out, so its fields
  * are not read. A package that cannot be read warns once; an app that is not in the cache is not an
- * error (a target need not depend on all five). `names` are lower case.
+ * error (a target need not depend on all five). The ids are followed through each non-Microsoft
+ * package's manifest to the whole closure; if any app in it cannot be read, NO name resolves (it
+ * could live in the app not read) and one warning says so. `names` are lower case.
  */
 export async function resolveTableIds(
   names: readonly string[],
@@ -896,19 +913,55 @@ export async function resolveTableIds(
   warn: (m: string) => void,
 ): Promise<Map<string, number>> {
   const found = new Map<string, Set<number>>(names.map((n) => [n, new Set<number>()]));
-  for (const appId of new Set(appIds.map(dashedId))) {
+  // The whole dependency closure: the ids given, then the dependencies each non-Microsoft package
+  // names in its manifest. A name may live in an app only a dependency reaches, so one id found
+  // among the apps read is not "the only id" unless every app in the closure was read. A Microsoft
+  // app missing from the cache is fine (a target need not depend on all five).
+  const isMicrosoft = (id: string): boolean => MICROSOFT_APP_IDS.has(bareAppId(id));
+  const queue = [...new Set(appIds.map(dashedId))];
+  const seen = new Set(queue);
+  let incomplete: string | undefined;
+  for (let appId = queue.shift(); appId !== undefined; appId = queue.shift()) {
     const got = await read(appId);
-    if (!Array.isArray(got)) continue;
+    if (!Array.isArray(got)) {
+      if (!isMicrosoft(appId)) {
+        incomplete ??= `${appId}, in the target's dependency closure, is not in the package cache (${(got as { unread: string }).unread})`;
+      }
+      continue;
+    }
     for (const bytes of got as readonly Uint8Array[]) {
       const pkg = declaredObjectsOfPackage(bytes);
       if (!("objects" in pkg)) {
         warn(`the package of ${appId} in the package cache is unreadable (${pkg.unreadable}).`);
+        incomplete ??= `the package of ${appId} is unreadable`;
         continue;
       }
       for (const o of pkg.objects) {
         if (o.kind === "Table") found.get(o.name.toLowerCase())?.add(o.id);
       }
+      if (isMicrosoft(appId)) continue;
+      try {
+        const inner = unwrapSymbolPackage(
+          Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength),
+        );
+        for (const d of appInputsOfPackage(inner).dependencies) {
+          const next = dashedId(d.id);
+          if (!seen.has(next)) {
+            seen.add(next);
+            queue.push(next);
+          }
+        }
+      } catch (err) {
+        incomplete ??= `the dependencies of ${appId} could not be read (${String(err)})`;
+      }
     }
+  }
+  if (incomplete !== undefined) {
+    // A name could live in the app not read, so no name resolves; this only ever warns.
+    warn(
+      `${incomplete}, so table names cannot be told apart from tables of apps not read; the new fields were NOT checked against the server.`,
+    );
+    return new Map();
   }
   const out = new Map<string, number>();
   for (const [name, ids] of found) {
