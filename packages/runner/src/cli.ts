@@ -4207,7 +4207,8 @@ export async function clearQuarantine(
  * `lethal clear-quarantine (--server ... --instance ... | --config ...)` (spec §10). Opens the
  * SAME store `runSession` durably writes to (`defaultQuarantineDir`) — there is no
  * `--quarantine-dir` override here because an operator clearing a real tier must hit the real
- * store, not one a stray flag silently redirected. Exported for its test.
+ * store, not one a stray flag silently redirected. `quarantineDir` exists for tests (R835), and
+ * the CLI passes none. Exported for its test.
  */
 export async function clearQuarantineFromCli(
   parsed: ClearQuarantineCliConfig,

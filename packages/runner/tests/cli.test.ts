@@ -1217,8 +1217,8 @@ describe("clearQuarantine (Task 13)", () => {
     },
   };
 
-  // R835: a private folder. A record left in the default store outlives the file on a reused
-  // `--parallel` worker, and cli-envtool.test.ts's teardown tests read that tier.
+  // R835: a private folder. In a serial run one fake home serves every file, so a record left in
+  // the default store reaches a later file, and cli-envtool.test.ts's teardown tests read that tier.
   async function quarantineWith(key: string, dir: string): Promise<QuarantineStore> {
     const store = new QuarantineStore(join(dir, "quarantine"));
     await store.record({
