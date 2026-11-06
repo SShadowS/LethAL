@@ -1025,7 +1025,7 @@ export async function generateMutationSet(
   const excludingOperators = (options.excludeOperators?.length ?? 0) > 0;
   // R856: the operators this run WALKS. Opt-in ones only when `--operator` named them.
   const walkedOperators = allOperators.filter(
-    (op) => op.optIn !== true || (admittedOperators?.has(op.name) === true && !excludingOperators),
+    (op) => op.optIn !== true || admittedOperators?.has(op.name) === true,
   );
   // Issue #19: a range naming no project `.al` file is refused before any file is read, like a
   // typo'd `--only` pattern: it would otherwise silently select nothing in that file.

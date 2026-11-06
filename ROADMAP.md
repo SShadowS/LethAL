@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**16 of 833 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**18 of 835 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -43,6 +43,7 @@ that ordering is the priority.
 - **R15** · Custom environment tool support · [R015.md](docs/roadmap/R015.md) · done (gate PASSED 2026-07-26, baseline frozen)
 - **R16** · Run the `envtool` live gate and record its baseline · [R016.md](docs/roadmap/R016.md) · done (2026-07-26 — 3 killed / 10 survived / 3 no-coverage, matching the container gate)
 - **R133** · Vendored tree-sitter-al is 3.2.1; upstream 4.0.0 is a breaking release that moves named trees LethAL hashes · [R133.md](docs/roadmap/R133.md) · done (af3d9a3) — bumped 2026-08-12, same day as filed. One grammar-caused code fix…
+- **R856** · Operator batch #42 and #33: swap-call-arguments claims member arguments; opt-in swap-workdate-today · [R856.md](docs/roadmap/R856.md) · open, in build (coord task R-856)
 
 ## Correctness risks (measured, not closed)
 
@@ -338,6 +339,7 @@ that ordering is the priority.
 - **R847** · A control-app action that reads AllObj and Field would let the pre-publish clash check see an installed app that is not a dependent · [R847.md](docs/roadmap/R847.md) · done (f4e17705)
 - **R852** · itest:verify failed once on lease-renew-unanswered, and the gate's mismatch error does not print the warning's message · [R852.md](docs/roadmap/R852.md) · open: the message logging landed (0b0cdc7a); the cause of the one failure stays open until it recurs or is…
 - **R855** · tree-sitter-al: valid AL fails at the parser's limit of 6 parse versions when `#if`-split blocks share an `if` chain · [R855.md](docs/roadmap/R855.md) · open, filed 2026-11-06 from R853; upstream https://github.com/SShadowS/tree-sitter-al/issues/40
+- **R857** · On v3 a set WorkDate leaks across a test codeunit, while bcdev runs one method per call, so a verdict can differ · [R857.md](docs/roadmap/R857.md) · open, filed 2026-11-06 from R856
 
 ## Product gaps a real project hits
 

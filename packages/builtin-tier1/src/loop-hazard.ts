@@ -287,12 +287,18 @@ export function inLoopExitParts(node: ALSyntaxNode, ctx: SemanticContext): boole
  *  - the site is in a loop's exit parts;
  *  - the value feeds an assignment `hangCapableForMutatedNode` claims;
  *  - the site is an argument of a `WorkDate(...)` setter inside a loop
- *    (`repeat WorkDate(CalcDate('<1D>', WorkDate())); until WorkDate() > E`: the swap pins the date).
+ *    (`repeat WorkDate(CalcDate('<1D>', WorkDate())); until WorkDate() > E`: the swap pins the date);
+ *  - the site is anywhere in a `while`/`repeat` whose exit parts (`loopExitParts`) call `WorkDate`
+ *    or `Today` by name (`repeat D := CalcDate('<1D>', WorkDate()); WorkDate(D); until WorkDate() > E`).
+ *
+ * NAMED LIMIT: the setter may sit in a helper, `repeat AdvanceHelper(); until WorkDate() > E`. A
+ * clock site inside `AdvanceHelper` that this operator claims is outside the loop and is not seen.
  */
 export function clockSwapHangs(node: ALSyntaxNode, ctx: SemanticContext): boolean {
   if (inLoopExitParts(node, ctx)) return true;
   if (hangCapableForMutatedNode(node, ctx) !== null) return true;
   if (!hasEnclosingLoop(node)) return false;
+  if (enclosingExitParts(node, ctx).some((parts) => parts.some(readsClock))) return true;
   for (
     let cur: ALSyntaxNode | null = node.parent;
     cur !== null && !isScope(cur);
@@ -306,6 +312,15 @@ export function clockSwapHangs(node: ALSyntaxNode, ctx: SemanticContext): boolea
     }
   }
   return false;
+}
+
+/** Does the subtree call `WorkDate` or `Today` (by name, with or without arguments)? */
+function readsClock(n: ALSyntaxNode): boolean {
+  if (n.kind === ALNodeKind.procedure_call) {
+    const name = n.childForFieldName("function")?.text.trim().toLowerCase();
+    if (name === "workdate" || name === "today") return true;
+  }
+  return n.namedChildren.some(readsClock);
 }
 
 /** Per-context, per-file memo. The file root is a stable object (the arm map is keyed by it). */

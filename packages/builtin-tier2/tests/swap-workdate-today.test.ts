@@ -106,16 +106,25 @@ ${cu("procedure P(): Date begin exit(WorkDate()); end;")}`;
     ]);
   });
 
-  it("does not claim a site outside a body, such as a page-field property (the dispatch drops it)", () => {
+  it("DOES claim a site outside a body, such as a page-field property (the dispatch drops it as declarative)", () => {
     const src = `page 50197 "P" { layout { area(Content) { field(X; Rec.X) { Visible = Today() > 0D; } } } }`;
-    const root = parseClean(src);
-    const ctx = contextFor(root);
-    const calls = findAll(root, ALNodeKind.procedure_call);
-    // If the operator targets it, the orchestrator's `isMutableSite` drops it as declarative.
-    for (const n of calls) {
-      if (swapWorkDateToday.targets(n, ctx)) {
-        expect(n.text).toBe("Today()");
-      }
-    }
+    expect(swaps(src)).toEqual(["Today() -> WorkDate() (expression-position)"]);
+  });
+
+  // The target name check must see #if-split declarations and data items.
+  it("refuses WorkDate() -> Today() when an #if-split procedure is called Today", () => {
+    const src = cu(`#if CLEAN20
+    procedure Today(): Date
+#else
+    procedure Today(X: Integer): Date
+#endif
+    begin end;
+    procedure P(): Date begin exit(WorkDate()); end;`);
+    expect(swaps(src)).toEqual([]);
+  });
+
+  it("refuses WorkDate() -> Today() when a report data item is called Today", () => {
+    const src = `report 50198 "R" { dataset { dataitem(Today; Integer) { } } trigger OnPreReport() var D: Date; begin D := WorkDate(); end; }`;
+    expect(swaps(src)).toEqual([]);
   });
 });

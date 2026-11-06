@@ -46,6 +46,13 @@ import { countArguments, synthesizeAfter } from "./mutate-helpers";
  *     date literal can change its verdict with the day. The fixture sets its own date and asserts
  *     only values derived from it. R856's measurements: a `WorkDate(D)` set by one test leaks to
  *     later tests of the same codeunit on al-runner v3 and does not on BC (one method per call).
+ *   - BC and v3 differ on a set date. bcdev runs one test method per call, so a date a test set is
+ *     gone for the next one; v3 sends a whole codeunit, so the date leaks to the tests after it
+ *     within that codeunit. A verdict can differ for a test that reads a date after an earlier test
+ *     set it. The `sandbox-dates` fixture does not exercise that.
+ *   - A setter in a helper, `repeat AdvanceHelper(); until WorkDate() > E`: a clock site this
+ *     operator claims inside the helper is outside the loop and is not refused (see
+ *     `clockSwapHangs`).
  */
 export const swapWorkDateToday: MutationOperator = {
   name: "lethal.swap-workdate-today",
@@ -117,7 +124,14 @@ function replacementFor(node: ALSyntaxNode, ctx: SemanticContext): string | null
 }
 
 const NAMES = new WeakMap<object, ReadonlySet<string>>();
-const DECLARING = new Set(["variable_declaration", "parameter", "procedure", "field_declaration"]);
+const DECLARING = new Set([
+  "variable_declaration",
+  "parameter",
+  "procedure",
+  "preproc_split_procedure",
+  "field_declaration",
+  "report_dataitem",
+]);
 
 /**
  * Every name the project declares as a variable, parameter, procedure, field or named return,
