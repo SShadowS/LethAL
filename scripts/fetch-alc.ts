@@ -115,17 +115,22 @@ export async function fetchAlc(
   return alc;
 }
 
+/** The wrapper is an sh script, and al-runner-v3 is Linux only: on Windows there is nothing to fetch. */
+export function platformRefusal(platform: string): string | undefined {
+  return platform === "win32"
+    ? "fetch-alc is for Linux (and macOS). On Windows, alc comes with the AL Language VS Code extension."
+    : undefined;
+}
+
 async function main(): Promise<number> {
   const dir = process.argv[2];
   if (dir === undefined) {
     console.error("usage: bun scripts/fetch-alc.ts <dir>   (example: ./alc)");
     return 2;
   }
-  if (process.platform === "win32") {
-    // The wrapper is an sh script, and al-runner-v3 is Linux only: on Windows there is nothing to fetch.
-    console.error(
-      "fetch-alc is for Linux (and macOS). On Windows, alc comes with the AL Language VS Code extension.",
-    );
+  const refused = platformRefusal(process.platform);
+  if (refused !== undefined) {
+    console.error(refused);
     return 2;
   }
   const alc = await fetchAlc(dir, fetch);
