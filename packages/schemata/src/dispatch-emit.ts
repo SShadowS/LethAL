@@ -46,6 +46,30 @@ export function emitDispatch(
   return parts.join("");
 }
 
+/**
+ * R828 O1. The opening half of a chain whose root other components sit inside: the wrap, then one
+ * branch per OWN member (a plain copy of the root with that member's edit and nothing else), then
+ * `else begin`. The root's own text follows in the file with its nested components' edits, and a
+ * closer `end` (PLAN's text) ends it. No newline: it is glue, and the copies carry the root's own.
+ */
+export function emitDispatchOpen(
+  original: string,
+  component: PlannedComponent,
+  latch: string,
+  selector: string,
+  wrap: boolean,
+): string {
+  const parts: string[] = wrap ? ["begin "] : [];
+  for (const [i, m] of component.members.entries()) {
+    const lead = i === 0 ? "if" : "end else if";
+    parts.push(
+      `${lead} ${selector}.Active('${m.mutantId}') then begin ${branchText(original, m, latch, selector)} `,
+    );
+  }
+  parts.push("end else begin ");
+  return parts.join("");
+}
+
 /** R827: `begin <this> BODY end end`: the block empties under its own mutant and is copied nowhere. */
 export function guardOpen(m: PlannedMember, latch: string, selector: string): string {
   const marker = m.place.kind === "none" ? "" : ` ${REACH_MARKER(m.mutantId, latch, selector)}`;

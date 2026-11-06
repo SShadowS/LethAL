@@ -19,6 +19,7 @@ import { type Component, type ComponentMember, buildComponents } from "./compone
 import {
   type PlannedComponent,
   type PlannedMember,
+  endsInSemicolon,
   planMember,
   preambleArmHeaderEnds,
   splitVarHoistAnchor,
@@ -44,7 +45,13 @@ export type PlannedPayload =
       readonly selector: string;
     }
   | {
-      readonly kind: "chain";
+      /**
+       * `chain` is the root's text replaced by the whole chain. `chain-open` (R828 O1) is a zero-width
+       * insertion at the root's start: the wrap, the own branches (each a plain copy of the root) and
+       * `else begin`. The root's original text then stays in place, with its nested components' edits,
+       * and a `text` closer at the root's end ends the chain.
+       */
+      readonly kind: "chain" | "chain-open";
       readonly component: PlannedComponent;
       /** The latch name the chain's markers use: the owner's, else `REACH_LATCH` (no marker). */
       readonly latch: string;
@@ -80,10 +87,12 @@ export function planFile(
   // ids locally here.
   const resolvedIded = ided ?? assignMutantIds(new Map([["<file>", specs]])).get("<file>") ?? [];
 
-  // Emission is a FLAT dispatch chain per containment component, never nested
-  // chains: only one mutant is ever active, so mutants that overlap are siblings
-  // in one if/else-if chain. Nesting wraps is what produced 2^depth growth.
-  // R827: a free `empty-block` is the one nested guard: it copies no text.
+  // Emission is a FLAT dispatch chain per containment component: only one mutant is ever active, so
+  // mutants that overlap are siblings in one if/else-if chain. Wrapping guards inside copies is what
+  // produced 2^depth growth.
+  // R827: a free `empty-block` is a guard pair around a body: it copies no text.
+  // R828 O1: a root with its own mutants copies itself PLAIN per own mutant, and what sits inside it
+  // is its own component in the ORIGINAL branch, so nothing nests inside a copy.
   // lift.ts/duplicate.ts are intentionally no longer routed to — see the design
   // spec §4: hoisting into a temp breaks AL evaluation order, cannot be typed
   // reliably, and is unsafe around ternaries and `var` parameters.
@@ -103,7 +112,11 @@ export function planFile(
   // R246. Before the chains: a latch insertion can end exactly where a body-rooted chain starts,
   // and the printer keeps map order on a tie, so the zero-width insertion must come first.
   const latches = injectReachLatches(components, rewrites, filePath ?? "<file>", planOf);
+  const latchEntries = [...rewrites];
   const members: PlannedMember[] = [];
+  // R828 O1. Closers are zero-width, innermost first: the printer keeps map order on a tie, and
+  // `if C then Foo()` ends one root and its host at one index. Where they sit: see `ordered` below.
+  const closers: Array<[ALSyntaxNode, PlannedPayload]> = [];
   for (const component of components) {
     const planned = component.members.map((m) => planOf(component, m));
     members.push(...planned);
@@ -125,11 +138,11 @@ export function planFile(
       });
       // `Foo()end` is legal: a space, so this `end` does not join the chain's.
       const glued = !/\s/.test(source.charAt(end.startIndex - 1));
-      rewrites.set(insertionNodeAt(end, end.startIndex), text(`${glued ? " " : ""}end `));
+      closers.push([insertionNodeAt(end, end.startIndex), text(`${glued ? " " : ""}end `)]);
       continue;
     }
-    rewrites.set(component.root, {
-      kind: "chain",
+    const chain = {
+      kind: "chain" as const,
       component: {
         rootStart: component.root.startIndex,
         rootEnd: component.root.endIndex,
@@ -140,8 +153,37 @@ export function planFile(
       // here; `injectMutationSelectorVar` below refuses that file anyway.
       selector: selectorVarName(enclosingObjectDeclaration(component.root)) ?? SELECTOR_VAR,
       wrap: needsWrap(component.root),
+    };
+    if (component.split !== true) {
+      rewrites.set(component.root, chain);
+      continue;
+    }
+    // The own branches copy the root plain; what sits inside it is other components' edits, so the
+    // root is two zero-width insertions around its ORIGINAL text, and nothing nests in a rewrite.
+    // The `;` the root consumed is read from the source, as the whole-span form reads it.
+    const terminated = endsInSemicolon(source, component.root.startIndex, component.root.endIndex);
+    rewrites.set(insertionNodeAt(component.root, component.root.startIndex), {
+      ...chain,
+      kind: "chain-open",
     });
+    const semi = terminated ? ";" : "";
+    // No gap after the last `end` when the source goes straight on: `Foo(C + 1)end` would join the
+    // source's `end` as `endend` (AL0111). A space moves no line.
+    const next = source[component.root.endIndex];
+    const gap = semi === "" && next !== undefined && !/[\s;]/.test(next) ? " " : "";
+    closers.push([
+      insertionNodeAt(component.root, component.root.endIndex),
+      text(` end${semi}${chain.wrap ? ` end${semi}` : ""}${gap}`),
+    ]);
   }
+  // Closers go FIRST in the map. Ties at one index are printed in map order, and a root ending in
+  // `;` (`else;`, a parenless call) ends at the index where the next statement starts: its closer
+  // must come before that statement's opener or whole-span chain, or the statement lands inside
+  // the chain. No tie needs an opener first: an opener sits at its root's START, a closer at its
+  // END, and a root is never empty. Closers among themselves stay inner first. Latches stay ahead
+  // of the chains, as above.
+  const ordered = new Map<ALSyntaxNode, PlannedPayload>([...latchEntries, ...closers.reverse()]);
+  for (const [node, payload] of rewrites) if (!ordered.has(node)) ordered.set(node, payload);
 
   // Every dispatch chain above emits a bare
   // `MutationSelector.Active(...)` call — verified against a real AL
@@ -155,10 +197,10 @@ export function planFile(
   // Per-object (R6): a file may legally declare more than one AL object, so this groups `specs`
   // by their OWN enclosing object rather than injecting into whichever object the file happens
   // to declare first — see `injectMutationSelectorVar`'s doc comment.
-  if (specs.length > 0) injectMutationSelectorVar(specs, rewrites, filePath ?? "<file>");
+  if (specs.length > 0) injectMutationSelectorVar(specs, ordered, filePath ?? "<file>");
 
   // E4, the stable sort and the overlap refusal: `printWithRewrites`'s PLAN half.
-  const edits = planEdits(source, root, rewrites, filePath ?? "<file>");
+  const edits = planEdits(source, root, ordered, filePath ?? "<file>");
   return { source, edits, members };
 }
 

@@ -72,6 +72,13 @@ import { removeScratchDir } from "./helpers/scratch";
  * 21636922, DataValueSource 409a0625; sandbox-hang HangLogic 20cbe37f; sandbox-harden HardenEntry
  * fd355c9c, HardenLogic 151acc80; sandbox-coverage-probe CoverageCapabilityProbe 1ad0b031,
  * FrameAndResetProbe 1bcb1b8a, TwoObjects 7f36f6c3.
+ * R828 O1 (2026-11-06): 15 `.al` pins re-pinned because a statement with its own mutants copies
+ * itself plain and its nested mutants are their own components. No manifest moved. Old pins, first 8
+ * hex: sandbox-app SandboxLogic f60c3c53; sandbox-data DataBandExt 42be1415, DataBlankOps 688ee8d2,
+ * DataCaseOps 7df95074, DataFindOps 4caf98b9, DataKeyProbe 9da48241, DataMainListExt 325a3213,
+ * DataReachOps 9ce8dbe1, DataScopeProbe.Table f5d07daf, DataSetOps bcd9d83f, DataShiftOps 77bfaa33;
+ * sandbox-hang HangLogic 91301c66; sandbox-harden HardenLogic 94ff487e; sandbox-coverage-probe
+ * CoverageCapabilityProbe 06f39e04, FrameAndResetProbe c0d079d6.
  */
 const PINNED: Record<
   string,
@@ -90,7 +97,7 @@ const PINNED: Record<
       "MutationUpgrade.Codeunit.al":
         "185c89c06210c95fd6b0d5cd920f7b4fcf48f39e8877477ebb69a6ead72a9482",
       "SandboxLogic.Codeunit.al":
-        "f60c3c531c755e221f53b2fd675e1bd5bcf8492591217deed87f5e9fafec0625",
+        "7fa150a521a7524833a995900ed1a5dd0cc4211d2abb45c73ef3ebad2353fdc1",
       "SandboxPricing.Codeunit.al":
         "1594daff22976e160993e51f0cd2e9595006c0f474d3dc96793eb4bcb15cac0b",
       "mutant-manifest.json": "4fd76b888e08ca727d7a72fe8ac5ada5c6f4ef3f6828502b8e31cf6aef705081",
@@ -102,37 +109,37 @@ const PINNED: Record<
       "DataAssertOps.Codeunit.al":
         "270006411e9d91dbbaa231b5f29da6d249295f2b688e4535facfcf90666e0faa",
       "DataBandExt.ReportExt.al":
-        "42be14151c35e9e50005a40821f31e76458d7e93cbaf609d11646c23b50d088a",
+        "54619fdcff799b0d9abd488114e30292886af828f3ecf8d0796e21819dc14f4f",
       "DataBlankOps.Codeunit.al":
-        "688ee8d2ebb2bb83dd4d5ba4b779f165637584165566ed26d8864ceed3ec8f20",
+        "e8c918656822913162774223b55bd8c2ef1b0a4d09a47988b73399c7d31fb149",
       "DataBuilder.Codeunit.al": "278d59a40b6b962fdf7c835e64e288d50f3b9dcbcd3391dc7bd83be48c617c4f",
-      "DataCaseOps.Codeunit.al": "7df950745b608834fdaded961a45420c3d17b9c956cf97af9f39bde4c6b41172",
+      "DataCaseOps.Codeunit.al": "05d6b7c10ff40b00fc14f2962da7bc7954d33ef7558f73d740280c1ceb7da7ff",
       "DataCommitOps.Codeunit.al":
         "de2b88ee3be85e8e4f57f9749b34fe813602d7d0d151918dd6dfb835145b0061",
       "DataCommitTarget.Codeunit.al":
         "3442060ab3de457f1209fd7b4f0f88ead580e997232e8492676035e0a8a1d8c1",
       "DataFilterOps.Codeunit.al":
         "da346ea36c7e5845b1acf2322456160ba9fb034b9837f2c0dc3f3a87bcd7324b",
-      "DataFindOps.Codeunit.al": "4caf98b986504a70fec364a132268e626ea55f1cf22949086070f3b0a89dd4e2",
+      "DataFindOps.Codeunit.al": "0f3807944d41dc28595e7bd25eaac9ceb86f1d2553e38cb73c23178136223ce9",
       "DataFlagOps.Codeunit.al": "b55bc5088950d10d86a04a22a0b6612d647b416ea7adfd830823c84ce4f0607f",
-      "DataKeyProbe.Table.al": "9da482410b26f55b46acb397ea89bf028c37279fede9da23ac3a99773d227822",
+      "DataKeyProbe.Table.al": "7ce475bbb1024748b024d35b2e2c560e8db41f452f74e4ccc0f170446d4ec18e",
       "DataLoader.Codeunit.al": "d17b56c556c59239164f325aa1919a51f39d6e2ce3c50ed75ec984c9526e7a1b",
       "DataMain.Table.al": "56ad3a36d0331353ef81e8c1f43e6ad4d1a53d1d21e4d876ea8e68b1b17b8f86",
       "DataMainExt.TableExt.al": "0915223f80a9a479689f49298847c0d741957ed3b34fefcf926e12a4c6c5c35e",
       // R750: re-pinned (was c5e2fd4c...30acf, ruling orchestrator 2026-10-25): its header
       // comment, rewritten at the same length.
       "DataMainListExt.PageExt.al":
-        "325a3213fde150dcf74163a10892532f16bcdb1675a3e484ae1a2179eb99d5b1",
+        "ff8aba03dd960c16976d65aaa1b766c7a315e2dd74e3d2ade233bffd880f92b6",
       "DataNoTrigger.Table.al": "c7bc50e8f94ea85287843d177fb614300e69a016ef397a97100b27bcb9c0d53e",
       "DataOps.Codeunit.al": "e1eb3509a79f13462857029b4bad25e3091aa5eaca304a22dd6177fbad7ddc93",
       "DataReachOps.Codeunit.al":
-        "9ce8dbe187cef495ee712bf4be5116cdd35c186e2c75db19749c96eabeb04883",
+        "22d00fade712ad3d59a6437695bb0107495f99c3e8ea3c0ba6680993155c2bbe",
       "DataScopeProbe.Page.al": "8b9cfc8cfb83eb967de5515bc11f153c77bf963720491754596c9fc8a8f860ff",
-      "DataScopeProbe.Table.al": "f5d07dafe8c3ea777090d519986247219efe486855c7c0841a0ab4ba2a4954b2",
-      "DataSetOps.Codeunit.al": "bcd9d83f9ccf58b79cad1c9c6b68fbfd459c2479d09a5c883f6f9e0b39cd9084",
+      "DataScopeProbe.Table.al": "53576d25b9b51b6e4120995b29c749da9e39e5d026477e767cc4e66a69e326b9",
+      "DataSetOps.Codeunit.al": "ff29354346331624137fb63b0d604b814c6808df2c92748edd25e5f36a5ac2e4",
       "DataShadow.Table.al": "b88284780928b2171a5a11b3dd5b597aae40e59f28114837ffea9fd08defcd72",
       "DataShiftOps.Codeunit.al":
-        "77bfaa33f1d9668976cfd39c245eb9306d76efe7ae3a0f39cab3302d08016111",
+        "0c09991bcdb0775542aad711f5b14631447de4bccee187e3787fcab6e18abc22",
       "DataSwapOps.Codeunit.al": "8ad4f0f7ecd8a4e1d47389bd2b7caf2903d1098e9fd23960197afad628af617e",
       "DataTemporalOps.Codeunit.al":
         "8b03ab43e1f4cda29e5d34bc94d90e2aefbb66b7089be31c3a83e827fde8351e",
@@ -157,7 +164,7 @@ const PINNED: Record<
   "sandbox-hang": {
     selectorIds: { selectorId: 79449, controlId: 79448, tableId: 79447 },
     hashes: {
-      "HangLogic.Codeunit.al": "91301c66d76f8fa96fa441c47f3d46a2f64b22e2e132c3be70d0e4e792469bde",
+      "HangLogic.Codeunit.al": "88c3269458897e10c2102051e832b10b8e217db54c2fd3c5d0c78c6bc2e3a0d9",
       "MutationRegister.Codeunit.al":
         "5dc811a3a1661531502dd68b7da0849c7973a76bb2fb04486ccb595b0e7acbab",
       "MutationSelector.Codeunit.al":
@@ -171,7 +178,7 @@ const PINNED: Record<
     selectorIds: { selectorId: 79549, controlId: 79548, tableId: 79547 },
     hashes: {
       "HardenEntry.Table.al": "2a8e9896486108a6b7844fdd30efbfb66d54bdec2e3f27ac3dc5d2b7e6834b0c",
-      "HardenLogic.Codeunit.al": "94ff487e79dc5a554b8cdb82cea39af00ac89dc5a26cad293c0302e8458e32dc",
+      "HardenLogic.Codeunit.al": "bf5f852bfa8d231e99bcf3ba78460e5203b52268562c528cac2b005fe83044c7",
       "MutationRegister.Codeunit.al":
         "d5323d90636f04e1f396e0ee09abbda22c3f73f2b54c87d8486f84b1277d9a05",
       "MutationSelector.Codeunit.al":
@@ -185,9 +192,9 @@ const PINNED: Record<
     selectorIds: { selectorId: 79329, controlId: 79328, tableId: 79327 },
     hashes: {
       "CoverageCapabilityProbe.Codeunit.al":
-        "06f39e043557e71125a17f83f10350a5c515af39b655a1b2e22a009bd9ee2696",
+        "6d63f8221beeb383636e429db2f6e8ad8681e0b282d90c4b845b55386bad10e5",
       "FrameAndResetProbe.Codeunit.al":
-        "c0d079d69cf708ad5b8a22cdbae688a29777570b565205ca6525fb9f501a871f",
+        "ec2bbdecd89fa0c2a9f6761184c923e1f15e633074592cbc32cbe8268ae7b7ae",
       "MutationRegister.Codeunit.al":
         "1aa4b2864eb595876331cc2243269bff718b4416cc6857a3a50f279d4f73b4d6",
       "MutationSelector.Codeunit.al":

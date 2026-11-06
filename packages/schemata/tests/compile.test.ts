@@ -18,6 +18,7 @@ import {
   compileSchemataForFile,
   latchAnchorInVarSection,
 } from "../src/compile";
+import { planFile } from "../src/compile-plan";
 import { buildComponents } from "../src/components";
 import {
   REACH_LATCH,
@@ -499,9 +500,12 @@ describe("compileSchemataForFile — member splice reproduces a consumed termina
       spec(inner, "begin end", "lethal.empty-block"),
     ]);
 
+    // R828 O1: the inner block is its own component inside the outer `if`'s original branch. Its
+    // chain is wrapped, and the `;` after the block stays the source's: one, not two, not none.
     expect(out).toContain(
-      `if A <> 0 then begin ${REACH_MARKER("M0002")} end;\n            A := 2;`,
+      `if A <> 0 then begin\nif MutationSelector.Active('M0002') then begin\n  ${REACH_MARKER("M0002")} begin end\nend else begin\n  begin\n                A := A;\n            end\nend\nend;\n            A := 2;`,
     );
+    expect(out).not.toContain(";;");
     expect(out).not.toMatch(/Reached\('M0002'\); end\s*\n\s*A := 2;/);
     expect(countErrorNodes(src)).toBe(0);
     expect(countErrorNodes(out)).toBe(0);
@@ -548,8 +552,10 @@ describe("compileSchemataForFile — member splice reproduces a consumed termina
     // trailing `;` (the terminator re-parented outside every statement node),
     // so the branch text ends at `Y := 2` and the source's own `;` survives
     // after the spliced chain. A `;` before `end` is optional in AL.
+    // R828 O1: the block is its own component in the outer `if`'s original branch, and the source's
+    // `else` follows the wrap's `end` directly.
     expect(out).toContain(
-      `if X > 0 then begin ${REACH_MARKER("M0002")} end\n        else\n            Y := 2\n`,
+      `if X > 0 then begin\nif MutationSelector.Active('M0002') then begin\n  ${REACH_MARKER("M0002")} begin end\nend else begin\n  begin\n            Y := 1;\n        end\nend\nend\n        else\n            Y := 2`,
     );
     expect(out).not.toMatch(/Reached\('M0002'\); end;\s*else/);
     expect(out).not.toContain(";;");
@@ -1300,7 +1306,11 @@ describe("GH-24: reach grain and marker placement", () => {
     expect(g.get("M0002")).toBe("statement");
     const out = compile(s);
     // The marker sits AFTER `if Amount < 0 then`, so a skipped branch never reaches it.
-    expect(out).toContain(`if Amount < 0 then begin ${REACH_MARKER("M0002")} exit(1) end`);
+    // R828 O1: `exit(1)` is its own component (wrapped, as any statement in a slot), in the
+    // `if`'s original branch.
+    expect(out).toContain(
+      `if Amount < 0 then begin\nif MutationSelector.Active('M0002') then begin\n  ${REACH_MARKER("M0002")} exit(1)\nend else begin\n  exit(0)\nend\nend end`,
+    );
     expect(words(out, "begin")).toBe(words(out, "end"));
     // Measured: `Error('neg')` in the same slot parses as a CALL (`call_expression`), not an
     // `error_statement`, so a literal inside it resolves to the whole if and is enclosing grain.
@@ -1364,7 +1374,11 @@ describe("GH-24: reach grain and marker placement", () => {
     const out = compile(s);
     expect(out).not.toContain(REACH_MARKER("M0001"));
     expect(out).not.toContain(REACH_MARKER("M0003"));
-    expect(out).toContain(`1: begin ${REACH_MARKER("M0002")} ; end;`);
+    // R828 O1: the deleted assignment is its own component inside the arm's block, in the case's
+    // original branch; the arm and the call stay members of the case.
+    expect(out).toContain(
+      `1: begin if MutationSelector.Active('M0002') then begin\n  ${REACH_MARKER("M0002")} \nend else begin\n  X := 1\nend; end;`,
+    );
   });
 
   // R246: a marker inside a loop ran two calls per iteration and turned a 4.4 s overflow kill into
@@ -3532,5 +3546,144 @@ describe("R307 T4b: refusals no real AL reaches, driven through instrumentOneFil
     expect(formatRefusal(err)).toBe(
       "overlap in src/P.al: two rewrites of this file overlap; lines 6-8",
     );
+  });
+});
+
+describe("R828 O1: a root with components inside it", () => {
+  const SRC = `codeunit 51990 "T"
+{
+    procedure P(C: Integer) var X: Integer;
+    begin
+        if C > 0 then X := X + 1;
+        X := 2;
+    end;
+}
+`;
+  const specsOf = (root: ALSyntaxNode): MutationSpec[] => {
+    const cmp = findFirst(root, ALNodeKind.comparison_expression);
+    const sum = findFirst(root, ALNodeKind.additive_expression);
+    if (cmp === null || sum === null) throw new Error("fixture drift");
+    return [spec(cmp, "C >= 0", "lethal.conditional-boundary"), spec(sum, "X - 1", "lethal.swap")];
+  };
+
+  it("two zero-width insertions around the root's original text; no newline of its own, no overlap", async () => {
+    await initParser();
+    const root = wrapRoot(parseAL(SRC));
+    const out = compileSchemataForFile(SRC, root, specsOf(root));
+    // The host copies itself plain; the nested statement's chain sits in the original branch.
+    expect(out).toContain(
+      "if MutationSelector.Active('M0001') then begin if not LethALReachLatch then begin MutationSelector.Reached('M0001'); LethALReachLatch := true; end; if C >= 0 then X := X + 1 end else begin if C > 0 then begin\nif MutationSelector.Active('M0002') then begin",
+    );
+    expect(out).toContain("end else begin\n  X := X + 1\nend\nend end;\n        X := 2;");
+    expect(out).not.toContain(";;");
+    expect(countErrorNodes(out)).toBe(0);
+  });
+
+  it("a root whose own text ends in `;` (an empty else) gets the `;` back after the closer", async () => {
+    await initParser();
+    const src = SRC.replace("if C > 0 then X := X + 1;", "if C > 0 then X := X + 1 else;");
+    const root = wrapRoot(parseAL(src));
+    const out = compileSchemataForFile(src, root, specsOf(root));
+    // The parser takes `end X := 2` without an error, so only the text can say the `;` is back.
+    expect(out).toContain("end\nend else; end;\n        X := 2;");
+  });
+
+  it("a WRAPPED root whose own text ends in `;` gets the `;` back after both of its `end`s", async () => {
+    await initParser();
+    const src = SRC.replace(
+      "if C > 0 then X := X + 1;",
+      "if C > 1 then if C > 2 then X := X + 3 else;",
+    );
+    const tree = wrapRoot(parseAL(src));
+    const [outer, inner] = findAll(tree, ALNodeKind.comparison_expression);
+    const sum = findFirst(tree, ALNodeKind.additive_expression);
+    if (outer === undefined || inner === undefined || sum === null)
+      throw new Error("fixture drift");
+    const out = compileSchemataForFile(src, tree, [
+      spec(outer, "C >= 1", "lethal.conditional-boundary"),
+      spec(inner, "C >= 2", "lethal.conditional-boundary"),
+      spec(sum, "X - 3", "lethal.swap"),
+    ]);
+    // The parser takes `end X := 2`, so only the text can say the outer `;` is back.
+    expect(out).toContain(" end; end;\n        X := 2;");
+  });
+
+  it("a closer comes BEFORE the opener of a statement that starts where its root ends", async () => {
+    await initParser();
+    // `else;` ends the first `if`; the next `if` starts at that very index.
+    const src = SRC.replace(
+      "if C > 0 then X := X + 1;",
+      "if C > 0 then X := X + 1 else;if C > 1 then X := X + 3;",
+    );
+    const tree = wrapRoot(parseAL(src));
+    const [first, second] = findAll(tree, ALNodeKind.comparison_expression);
+    const [sum1, sum2] = findAll(tree, ALNodeKind.additive_expression);
+    if (first === undefined || second === undefined || sum1 === undefined || sum2 === undefined)
+      throw new Error("fixture drift");
+    const specs = [
+      spec(first, "C >= 0", "lethal.conditional-boundary"),
+      spec(sum1, "X - 1", "lethal.swap"),
+      spec(second, "C >= 1", "lethal.conditional-boundary"),
+      spec(sum2, "X - 3", "lethal.swap"),
+    ];
+    const ided = assignMutantIds(new Map([["<file>", specs]])).get("<file>") ?? [];
+    const plan = planFile(src, tree, specs, ided);
+    const tie = src.indexOf("else;") + "else;".length;
+    const at = plan.edits.filter((e) => e.start === tie).map((e) => e.payload.kind);
+    expect(at).toEqual(["text", "chain-open"]);
+    expect(countErrorNodes(compileSchemataForFile(src, tree, specs))).toBe(0);
+  });
+
+  it("a nested chain's `end` never touches the source's `end`", async () => {
+    await initParser();
+    const src = `codeunit 51990 "T"
+{
+    procedure P(C: Integer; D: Integer)
+    begin
+        if D > 0 then begin if C > 0 then Foo(C + 1)end;
+    end;
+    local procedure Foo(X: Integer)
+    begin
+    end;
+}
+`;
+    const tree = wrapRoot(parseAL(src));
+    const [d, c] = findAll(tree, ALNodeKind.comparison_expression);
+    const sum = findFirst(tree, ALNodeKind.additive_expression);
+    if (d === undefined || c === undefined || sum === null) throw new Error("fixture drift");
+    const out = compileSchemataForFile(src, tree, [
+      spec(d, "D >= 0", "lethal.conditional-boundary"),
+      spec(c, "C >= 0", "lethal.conditional-boundary"),
+      spec(sum, "C - 1", "lethal.swap"),
+    ]);
+    expect(out).not.toMatch(/endend/);
+    expect(out).toContain("end end");
+    expect(countErrorNodes(out)).toBe(0);
+  });
+
+  it("closers at one index go inner first", async () => {
+    await initParser();
+    const root = wrapRoot(parseAL(SRC));
+    // `if C > 0 then if D > 0 then X := X + 1;`: both `if`s end where the assignment does. The inner
+    // `if` sits in a slot, so its closer carries the wrap's `end` too: the two texts tell them apart.
+    const src = SRC.replace("if C > 0 then X := X + 1;", "if C > 0 then if C > 1 then X := X + 1;");
+    const tree = wrapRoot(parseAL(src));
+    const [outer, inner] = findAll(tree, ALNodeKind.comparison_expression);
+    const sum = findFirst(tree, ALNodeKind.additive_expression);
+    if (outer === undefined || inner === undefined || sum === null)
+      throw new Error("fixture drift");
+    const specs = [
+      spec(outer, "C >= 0", "lethal.conditional-boundary"),
+      spec(inner, "C >= 1", "lethal.conditional-boundary"),
+      spec(sum, "X - 1", "lethal.swap"),
+    ];
+    const ided = assignMutantIds(new Map([["<file>", specs]])).get("<file>") ?? [];
+    const plan = planFile(src, tree, specs, ided);
+    const tie = src.indexOf("X + 1") + "X + 1".length;
+    const at = plan.edits.filter((e) => e.start === tie && e.end === tie);
+    expect(at.map((e) => (e.payload.kind === "text" ? e.payload.text : e.payload.kind))).toEqual([
+      " end end",
+      " end",
+    ]);
   });
 });

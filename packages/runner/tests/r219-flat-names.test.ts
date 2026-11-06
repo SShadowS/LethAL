@@ -194,14 +194,17 @@ describe("R219: two same-basename files in different directories", () => {
      */
     const lineOf = async (file: string, needle: string): Promise<number> => {
       const lines = (await readFile(join(run.batch, file), "utf8")).split("\n");
-      const arms = lines.flatMap((l, i) => (l.trim() === "end else begin" ? [i] : []));
-      expect(arms).toHaveLength(1);
-      const start = arms[0] ?? 0;
-      const at = lines.findIndex((l, i) => i > start && l.includes(needle));
-      // R827: `if X > 1 then exit(1)` is one chain, and its `;` sits after the chain's closing
-      // `end`, not on the original arm's line. `exit(0);` has no mutant here, so it stays as written.
-      expect(lines[at]?.trim()).toBe(needle === "exit(0)" ? `${needle};` : needle);
-      return at + 1;
+      // R828 O1: the `if` has its own mutants and `exit(1)` is a component of its own, inside the
+      // `if`'s original arm. The `if` chain's glue has no newline, so its original arm opens
+      // MID-LINE, after the last plain copy: that line is the `if`'s. `exit(1)` is the original arm
+      // of its own chain, alone on its line, and `exit(0);` has no mutant here, so it stays as written.
+      const holds = (l: string): boolean =>
+        needle === "if X > 1 then"
+          ? l.trimEnd().endsWith(`end else begin ${needle}`)
+          : l.trim() === (needle === "exit(0)" ? `${needle};` : needle);
+      const hits = lines.flatMap((l, i) => (holds(l) ? [i] : []));
+      expect(hits).toHaveLength(1);
+      return (hits[0] ?? 0) + 1;
     };
     // Asymmetric, as the probe's two tests were: Sales takes the `exit(1)` arm, Purchase `exit(0)`.
     const covered = async (path: string) => {

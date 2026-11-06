@@ -53,6 +53,8 @@ export interface FileCase {
 export type FindingKind =
   | "diff"
   | "guard-in-loop"
+  | "plain-branch-guard"
+  | "guard-count"
   | "marker"
   | "leftover"
   | "emitted-parse-error"
@@ -78,7 +80,6 @@ export interface Stats {
 const newStats = (): Stats => ({ guards: 0, markers: 0, latchDecls: 0, selectorDecls: 0 });
 
 const GUARD = /^MutationSelector\d*\.Active\('(M\d+)'\)$/i;
-const FREE_THEN = /^begin( if not LethALReachLatch\d* then begin [^;]*; [^;]*; end;)? end;?$/i;
 const EXECUTION_LOOPS = new Set([
   "for_statement",
   "foreach_statement",
@@ -167,6 +168,14 @@ class Canon {
     }
     if (n.children.length === 0) return n.text;
     if (FLATTEN.has(k)) return `{${this.stmts(n).join(" ")}}`;
+    // A bare `var` with no declaration declares nothing. The instrumented side drops the section
+    // once the latch is stripped from it, so the plain side must drop it too.
+    if (
+      !this.instrumented &&
+      k === "var_section" &&
+      !n.children.some((c) => c.rawKind === "var_body")
+    )
+      return null;
     if (k === "variable_declaration" && this.instrumented) {
       const t = squash(n.text);
       const latch = LATCH_DECL.exec(t);
@@ -210,6 +219,12 @@ class Canon {
     const k = c.rawKind;
     if (k.includes("comment")) return null;
     if (k === ";" && FLATTEN_PARENT.has(parent.rawKind)) return null;
+    // A block alone in a `#if` arm that holds nothing is the arm empty: `begin end` and a deleted
+    // statement mean the same there.
+    if (parent.rawKind === "preproc_conditional_statement" && FLATTEN.has(k)) {
+      const inner = this.stmts(c);
+      return inner.length === 0 ? null : `{${inner.join(" ")}}`;
+    }
     if (parent.rawKind === "if_statement") {
       if (c.fieldName === "else_branch" || c.rawKind === "else_keyword") {
         if (elseEmpty) return null;
@@ -286,7 +301,7 @@ export interface FileResult {
   readonly checked: number;
   readonly findings: readonly Finding[];
   readonly stats: Stats;
-  /** Loops the `guard-in-loop` check saw under a free guard, so a blind check shows as 0. */
+  /** Loops the `guard-in-loop` check saw under a guard's `else`, so a blind check shows as 0. */
   readonly walked: number;
 }
 
@@ -321,41 +336,65 @@ export async function checkFile(fc: FileCase, withDetail = true): Promise<FileRe
     return { checked: 0, findings, stats, walked: 0 };
   }
   // R827: the fold compares meaning, so it cannot see WHEN a guard runs. This reads that from the
-  // emitted tree: a free body's guard holds the body in its `else`, and no guard may sit inside a
-  // loop there, where it would run on every pass (R246).
+  // emitted tree: a guard holds the code in its `else`, and no guard may sit inside a loop there,
+  // where it would run on every pass (R246).
   let walked = 0;
   const isGuard = (n: ALSyntaxNode): boolean => {
     const c = n.rawKind === "if_statement" ? n.childForFieldName("condition") : null;
     return c !== null && c !== undefined && GUARD.test(squash(c.text));
   };
-  const walkFree = (n: ALSyntaxNode, inLoop: boolean): void => {
-    if (inLoop && isGuard(n)) {
-      add(none, "guard-in-loop", n.text.slice(0, 60));
+  const guardIds = new Map<string, number>();
+  const idOf = (n: ALSyntaxNode): string | undefined => {
+    const c = n.rawKind === "if_statement" ? n.childForFieldName("condition") : null;
+    return c === null || c === undefined ? undefined : GUARD.exec(squash(c.text))?.[1];
+  };
+  // R828: a plain branch (a guard's `then`: the free marker block, or a plain copy of the root with
+  // one edit) holds no guard of any mutant.
+  const walkPlain = (n: ALSyntaxNode): void => {
+    if (isGuard(n)) {
+      add(none, "plain-branch-guard", n.text.slice(0, 60));
+      return;
+    }
+    for (const c of n.children) walkPlain(c);
+  };
+  // Every guard is walked. Inside a guard's `else` (a free body's, or an `if`'s original branch, or
+  // the next link of a chain) no guard may sit inside a loop: it would run on every pass (R246).
+  // A guard outside any `else` may sit in a loop: that is a root nothing hosts, as before. R-836:
+  // `walked` counts the outermost loops seen under an `else`, so a check that walked no loop shows as 0.
+  const walk = (n: ALSyntaxNode, underElse: boolean, inLoop: boolean): void => {
+    const id = idOf(n);
+    if (id !== undefined) {
+      if (underElse && inLoop) {
+        add(none, "guard-in-loop", n.text.slice(0, 60));
+        return;
+      }
+      const then = n.childForFieldName("then_branch");
+      const els = n.childForFieldName("else_branch");
+      if (then !== null) walkPlain(then);
+      if (els !== null) walk(els, true, false);
       return;
     }
     const loop = inLoop || EXECUTION_LOOPS.has(n.rawKind);
-    if (loop && !inLoop) walked++;
-    for (const c of n.children) walkFree(c, loop);
+    if (underElse && loop && !inLoop) walked++;
+    for (const c of n.children) walk(c, underElse, loop);
   };
-  const walkAll = (n: ALSyntaxNode): void => {
-    if (isGuard(n)) {
-      const els = n.childForFieldName("else_branch");
-      const then = n.childForFieldName("then_branch");
-      // A free guard's own branch holds its marker at most; a chain's holds the mutated root.
-      if (els !== null && then !== null && FREE_THEN.test(squash(then.text))) {
-        walkFree(els, false);
-        return;
-      }
-    }
-    for (const c of n.children) walkAll(c);
+  const count = (n: ALSyntaxNode): void => {
+    const id = idOf(n);
+    if (id !== undefined) guardIds.set(id, (guardIds.get(id) ?? 0) + 1);
+    for (const c of n.children) count(c);
   };
-  walkAll(parse(fc.compiled));
+  const emitted = parse(fc.compiled);
+  walk(emitted, false, false);
+  count(emitted);
   const originalCanon = plainCanon(fc.source);
   const base = foldCanon(fc.source, fc.compiled, null);
   for (const l of base.leftovers) add(none, "leftover", l);
   if (base.canon !== originalCanon)
     add(none, "no-mutant-diff", firstDiff(base.canon, originalCanon));
   for (const m of fc.mutants) {
+    // Each mutant has exactly one guard in the emitted file.
+    const guards = guardIds.get(m.mutantId) ?? 0;
+    if (guards !== 1) add(m, "guard-count", `${guards} guards`);
     const exp = expectedText(fc.source, m);
     if (parse(exp).hasError) {
       add(m, "expected-parse-error", "the hand-written mutant does not parse");

@@ -284,8 +284,10 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
     // (was 80c0b0be...d369 on master, the R750 pin).
     // R827: re-pinned (was 3cc7757f...9e48): an `empty-block` body is one guard, and statements are
     // their own chains, so the `.al` files moved. The manifest pin above did not.
+    // R828 O1: re-pinned (was 6271048e...6157): a statement with its own mutants copies itself plain,
+    // so the `.al` files moved (the same ten as in fixture-emission). The manifest pin did not.
     expect(all.digest("hex")).toBe(
-      "6271048e30dd6b5af961c0435689630bc9db543fc987a29fc8b6103c4d7a6157",
+      "e632c2498ca46082d6a1f08a398ed033408f88556318d4c92790cb5ce6074d5e",
     );
   }, 60_000);
 });
