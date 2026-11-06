@@ -7472,6 +7472,30 @@ async function runSessionBody(
             transitive: dependents.transitive,
             startedMs: dependents.startedMs,
             now: Date.now,
+            // R847: the keyed read of what is new, for an installed app that is not a dependent.
+            ...(cfg.backend.installedVersions !== undefined &&
+            cfg.backend.objectOwners !== undefined &&
+            cfg.backend.fieldOwners !== undefined
+              ? {
+                  nonDependent: {
+                    targetPublisher:
+                      typeof projectManifest.publisher === "string"
+                        ? projectManifest.publisher
+                        : "",
+                    targetName: name,
+                    installedVersions: cfg.backend.installedVersions.bind(cfg.backend),
+                    objectOwners: cfg.backend.objectOwners.bind(cfg.backend),
+                    fieldOwners: cfg.backend.fieldOwners.bind(cfg.backend),
+                    readDependencyApp: (() => {
+                      const read = packageFolderReader([
+                        ...(cfg.backend.dependencyPackageDirs?.() ?? []),
+                        ...(cfg.dependencyPackageDirs ?? []),
+                      ]);
+                      return (id: string) => read({ id, name: "", publisher: "", version: "" });
+                    })(),
+                  },
+                }
+              : {}),
           });
           for (const message of clashWarnings) {
             emit({ type: "warning", code: "object-clash-unchecked", message });

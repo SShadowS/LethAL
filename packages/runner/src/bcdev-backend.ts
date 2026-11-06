@@ -42,7 +42,15 @@ import type { DeploymentVerifier } from "./deployment-verifier";
 import { describeThrown } from "./describe-error";
 import { DependencyUnreadableError, type MicrosoftMode } from "./digest-inputs";
 import { UnfilteredExtensionsQueryError, injectControlDependency } from "./harness";
-import type { HarnessVerifier, InstalledDependent } from "./harness";
+import type {
+  FieldItem,
+  FieldOwnerRow,
+  HarnessVerifier,
+  InstalledDependent,
+  ObjectItem,
+  ObjectOwnerRow,
+  OwnersRead,
+} from "./harness";
 import type { Lease } from "./lease";
 import {
   type AlSource,
@@ -630,6 +638,37 @@ export class BcDevMcpBackend implements ExecutionBackend {
       throw new Error("this bcdev backend has no harness verifier (no BcDevDeployment)");
     }
     return verifier.fetchInstalledDependents(appId);
+  }
+
+  private verifierFor(): HarnessVerifier {
+    const verifier = this.deployment?.harnessVerifier;
+    if (verifier === undefined) {
+      throw new Error("this bcdev backend has no harness verifier (no BcDevDeployment)");
+    }
+    return verifier;
+  }
+
+  /** R847: `ExecutionBackend.installedVersions`, through the deployment's harness verifier. */
+  async installedVersions(appId: string): Promise<readonly string[]> {
+    return this.verifierFor().fetchInstalledVersions(appId);
+  }
+
+  /** R847: `ExecutionBackend.objectOwners`. */
+  async objectOwners(
+    items: readonly ObjectItem[],
+    maxMs: number,
+    timeoutMs: number,
+  ): Promise<OwnersRead<ObjectOwnerRow>> {
+    return this.verifierFor().fetchObjectOwners(items, maxMs, timeoutMs);
+  }
+
+  /** R847: `ExecutionBackend.fieldOwners`. */
+  async fieldOwners(
+    items: readonly FieldItem[],
+    maxMs: number,
+    timeoutMs: number,
+  ): Promise<OwnersRead<FieldOwnerRow>> {
+    return this.verifierFor().fetchFieldOwners(items, maxMs, timeoutMs);
   }
 
   private async connect(): Promise<Client> {

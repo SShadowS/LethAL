@@ -285,7 +285,7 @@ export async function laptopTools(
   if (!io.exists(LAPTOP_CONTROL))
     throw refuse(
       `LethAL Control is missing: no ${LAPTOP_CONTROL}`,
-      `Copy the pinned build (sha256 ${controlSha}) there from the coord folder handoff/R-689b/control-1.0.0.24/`,
+      `Copy the pinned build (sha256 ${controlSha}) there from the coord folder handoff/R-847/control/`,
     );
   const controlGot = sha256Of(io.readBytes(LAPTOP_CONTROL));
   if (controlGot !== controlSha)
