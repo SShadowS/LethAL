@@ -10,7 +10,13 @@
  */
 import { type SpanEdit, joinEdits } from "@lethal/engine";
 import type { CompilePlan, PlannedPayload } from "./compile-plan";
-import { emitDispatch, emitDispatchOpen, endsInTerminator, guardOpen } from "./dispatch-emit";
+import {
+  emitDispatch,
+  emitDispatchOpen,
+  endsInTerminator,
+  guardOpen,
+  wouldGlue,
+} from "./dispatch-emit";
 
 /** I4: the only failure EMIT can raise, and it is a crash of the run, never a refusal. */
 export const EMIT_CRASHES = ["RangeError: Invalid string length"] as const;
@@ -19,11 +25,15 @@ export const EMIT_CRASHES = ["RangeError: Invalid string length"] as const;
 export function emitFile(plan: CompilePlan): string {
   const edits: SpanEdit<string>[] = [];
   for (const edit of plan.edits) {
+    const payload = payloadText(plan.source, edit.start, edit.end, edit.payload);
+    // R853: a chain opening right after a word (`begin"My Q"`) must not read `beginif`.
+    const chain = edit.payload.kind !== "text" && edit.payload.kind !== "guard";
+    const glued = chain && wouldGlue(plan.source.charAt(edit.start - 1), payload);
     edits.push({
       start: edit.start,
       end: edit.end,
       kind: edit.kind,
-      payload: payloadText(plan.source, edit.start, edit.end, edit.payload),
+      payload: glued ? ` ${payload}` : payload,
     });
   }
   return joinEdits(plan.source, edits);

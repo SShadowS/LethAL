@@ -235,6 +235,8 @@ export function assertManifestObjectsDeclared(
   declared: ReadonlySet<string>,
   mapped: ReadonlySet<string> | undefined,
   exempt: ReadonlySet<string>,
+  /** R853: files whose emitted text the parser could not read; see `unreadFiles`. */
+  unread: readonly string[] = [],
 ): void {
   for (const key of manifestKeys) {
     if (declared.has(key)) {
@@ -243,15 +245,45 @@ export function assertManifestObjectsDeclared(
           "every declared object's source is written by LethAL and must be mappable. " +
           "This is a LethAL bug, not a problem with the project under test.";
         throw new ManifestDeclarationError(
-          `line-map: the compiled artifact declares ${key} but no line map was built for it — ${why}`,
+          `line-map: the compiled artifact declares ${key} but no line map was built for it — ${why}${unreadNote(unread)}`,
         );
       }
     } else if (!exempt.has(key)) {
       throw new ManifestDeclarationError(
-        `a mutant is attributed to ${key}, which the compiled app does not declare. It is not named in the run's coverage refusals, so its mutants would read no-coverage with no reason given.`,
+        `a mutant is attributed to ${key}, which the compiled app does not declare. It is not named in the run's coverage refusals, so its mutants would read no-coverage with no reason given.${unreadNote(unread)}`,
       );
     }
   }
+}
+
+/** R853: what a user can do about a file the parser gave up on. Empty when no file is named. */
+function unreadNote(unread: readonly string[], wayOut = UNREAD_WAY_OUT): string {
+  if (unread.length === 0) return "";
+  return ` The parser could not read the instrumented text of ${unread.join(", ")}, most likely at tree-sitter's limit of 6 parse paths: three or more copies of an \`if ... then begin\` whose \`end\` is outside its \`#if\` arm reach it, though the text is valid AL (R853). ${wayOut}`;
+}
+
+const UNREAD_WAY_OUT = "Leave the file out with `--exclude <glob>`.";
+
+/**
+ * R853: the parser lost a member of this file: the root is an ERROR, an ERROR swallowed a
+ * `procedure` or `trigger` keyword, or a member's `code_block` has no `end` of its own, so it ran on
+ * over the next member. Its lines would read as naming gaps or as the wrong member, and a mutant
+ * there as `no-coverage` though it ran, so the file gets no entries and a mutant in it stops the
+ * run by name. An ERROR that lost no member (a body's, or `extends Ns.Name`) is not this: the file
+ * is indexed. The whole file goes, so a sibling object in it stops the run too.
+ */
+export function isUnreadFile(root: ALSyntaxNode): boolean {
+  if (!root.hasError) return false;
+  if (root.rawKind === "ERROR") return true;
+  const swallowed = (n: ALSyntaxNode): boolean =>
+    n.rawKind === "ERROR" &&
+    n.children.some((c) => c.rawKind === "procedure_keyword" || c.rawKind === "trigger_keyword");
+  const unclosed = (n: ALSyntaxNode): boolean =>
+    n.rawKind === "code_block" &&
+    n.children.some((c) => c.isMissing && c.rawKind === "end_keyword");
+  const lost = (n: ALSyntaxNode): boolean =>
+    n.children.some((c) => c.hasError && (swallowed(c) || unclosed(c) || lost(c)));
+  return lost(root);
 }
 
 export class LineMap {
@@ -279,6 +311,8 @@ export class LineMap {
     entries: readonly LineMapEntry[],
     private readonly declared: ReadonlySet<string>,
     renamedNames: RenamedMemberNames = NO_RENAMED_NAMES,
+    /** R853: files `isUnreadFile` held back; `assertManifestObjectsDeclared` names them. */
+    readonly unreadFiles: readonly string[] = [],
   ) {
     for (const e of entries) {
       const key = keyOf(e.objectType, e.objectId);
@@ -1391,9 +1425,14 @@ export async function lineMapFromSources(
 ): Promise<LineMap> {
   await initParser();
   const entries: LineMapEntry[] = [];
+  const unread: string[] = [];
   for (const { path, text } of sources) {
     const root = wrapRoot(parseAL(text));
     const file = normalizeSlashes(path);
+    if (isUnreadFile(root)) {
+      unread.push(file);
+      continue;
+    }
     // R497: with the build's symbols, the BC shape rule and H1a; without them, refused as before.
     entries.push(
       ...(symbols === undefined
@@ -1401,7 +1440,7 @@ export async function lineMapFromSources(
         : bcFileEntries(root, objectIdentityOf, file, evaluateArms(root, text, symbols))),
     );
   }
-  return new LineMap(entries, declared, renamedNames);
+  return new LineMap(entries, declared, renamedNames, unread);
 }
 
 /**
@@ -1414,8 +1453,20 @@ export async function coverageRefusedFromSources(
   symbols?: readonly string[],
 ): Promise<ReadonlyMap<string, string>> {
   await initParser();
+  const files = sources.map((s) => ({
+    path: s.path,
+    text: s.text,
+    root: wrapRoot(parseAL(s.text)),
+  }));
+  // R853: the hub has no line map to leave a file out of. An object it cannot see, it cannot refuse.
+  const unread = files.filter((f) => isUnreadFile(f.root)).map((f) => normalizeSlashes(f.path));
+  if (unread.length > 0) {
+    throw new ManifestDeclarationError(
+      `coverage: an object in a file the parser cannot read cannot be refused by name.${unreadNote(unread, `${UNREAD_WAY_OUT} A file left out is still published, so if it holds no mutants, run with fenced coverage instead.`)}`,
+    );
+  }
   return coverageRefusedObjects(
-    sources.map((s) => ({ path: s.path, text: s.text, root: wrapRoot(parseAL(s.text)) })),
+    files,
     "bc-shape",
     symbols === undefined ? undefined : (f) => evaluateArms(f.root, f.text, symbols),
   );
