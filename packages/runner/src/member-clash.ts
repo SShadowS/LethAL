@@ -22,7 +22,7 @@ export type MemberRule = "field-id" | "field-name" | "enum-ordinal" | "enum-valu
 /** The Microsoft apps the AL toolchain names in `app.json` (Base Application, System Application,
  *  Business Foundation, Application, System), 32 hex, no dashes, lower case. Any app in the
  *  target's own `dependencies` counts too (`trusted`), whatever its publisher. */
-const MICROSOFT_APP_IDS: ReadonlySet<string> = new Set([
+export const MICROSOFT_APP_IDS: ReadonlySet<string> = new Set([
   "437dbf0e84ff417a965ded2bb9650972",
   "63ca2fa44f034f2ba480172fef340d3f",
   "f3552374a1f24356848e196002525837",
