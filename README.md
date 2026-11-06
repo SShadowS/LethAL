@@ -683,6 +683,10 @@ and cannot change a verdict.
 | `lethal.shift-integer` | 1.0.0 | `5` → `6` | an off-by-one nothing notices, at a constant the test never varies |
 | `lethal.loop-truncate` | 1.0.0 | `Cust.Next() = 0` → `true` | a loop no test drives over more than one row |
 | `lethal.loop-skip` | 1.0.0 | `N < Limit` → `false` | a loop body nothing depends on, asked in a way that cannot hang |
+| `lethal.delete-logical-right` | 1.0.0 | `A or B` → `A` | a clause of a condition no test needs |
+| `lethal.delete-logical-left` | 1.0.0 | `A or B` → `B` | a clause of a condition no test needs |
+| `lethal.delete-additive-right` | 1.0.0 | `A + B` → `A` | a term of a sum no test checks |
+| `lethal.delete-additive-left` | 1.0.0 | `A + B` → `B` | a term of a sum no test checks |
 <!-- /operators: tier1 -->
 
 ### Tier 2, AL-specific

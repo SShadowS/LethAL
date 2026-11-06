@@ -83,6 +83,8 @@ const DECISION_OPS = new Set([
   "lethal.negate-conditional",
   "lethal.conditional-boundary",
   "lethal.remove-not",
+  "lethal.delete-logical-right",
+  "lethal.delete-logical-left",
 ]);
 
 let conditions = 0;

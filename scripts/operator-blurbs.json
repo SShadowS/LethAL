@@ -35,6 +35,10 @@
     "lethal.shift-integer": "an off-by-one nothing notices, at a constant the test never varies",
     "lethal.loop-truncate": "a loop no test drives over more than one row",
     "lethal.loop-skip": "a loop body nothing depends on, asked in a way that cannot hang",
+    "lethal.delete-logical-right": "a clause of a condition no test needs",
+    "lethal.delete-logical-left": "a clause of a condition no test needs",
+    "lethal.delete-additive-right": "a term of a sum no test checks",
+    "lethal.delete-additive-left": "a term of a sum no test checks",
     "lethal.toggle-blank-temporal": "a date-is-set check nobody drives with the other setting"
   }
 }

@@ -84,7 +84,7 @@ X := f(_m044) + g(Y);
 
 The conditional-assign statement is placed in the narrowest enclosing statement block (inside any enclosing loop body, not at procedure top) so re-evaluations match the original. The lifted local is declared in the enclosing procedure's `var` block — AL has no inline var declarations. Side-effect order preserved: conditional assign runs before the surrounding expression.
 
-**3. Duplicate (short-circuit-sensitive operand mutation)** · when the mutation changes an operator whose evaluation semantics include short-circuit behavior (e.g., `and` ↔ `or`), lifting loses the short-circuit signal the mutation is meant to test.
+**3. Duplicate (short-circuit-sensitive operand mutation)** · when the mutation changes an operator whose evaluation semantics include short-circuit behavior (e.g., `and` ↔ `or`), lifting loses the signal the mutation is meant to test. The name is historical: AL does not short-circuit. Both operands of `and` and `or` always run, measured on BC 28.4 (R855).
 
 ```al
 // original
@@ -140,6 +140,10 @@ rather than misleading a reader.
 | `lethal.shift-integer` | 1.0.0 | `5` → `6` | an off-by-one nothing notices, at a constant the test never varies |
 | `lethal.loop-truncate` | 1.0.0 | `Cust.Next() = 0` → `true` | a loop no test drives over more than one row |
 | `lethal.loop-skip` | 1.0.0 | `N < Limit` → `false` | a loop body nothing depends on, asked in a way that cannot hang |
+| `lethal.delete-logical-right` | 1.0.0 | `A or B` → `A` | a clause of a condition no test needs |
+| `lethal.delete-logical-left` | 1.0.0 | `A or B` → `B` | a clause of a condition no test needs |
+| `lethal.delete-additive-right` | 1.0.0 | `A + B` → `A` | a term of a sum no test checks |
+| `lethal.delete-additive-left` | 1.0.0 | `A + B` → `B` | a term of a sum no test checks |
 <!-- /operators: tier1 -->
 
 ### Tier 2 · AL-specific, high value
