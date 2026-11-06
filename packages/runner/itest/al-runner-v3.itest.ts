@@ -162,6 +162,7 @@ import {
   type PinnedRecord,
   assertGateBaseline,
   assertRecordOnCurrent,
+  assertRecordPinned,
   gitShowHead,
   preflightGateBaseline,
   readGateBaseline,
@@ -228,13 +229,16 @@ const CANDIDATE = process.env.LETHAL_ALRUNNER_V3_CANDIDATE === "1";
 const K_ON_CANDIDATE = v3KOnCandidate(process.env);
 /** R586c: the per-build pin of the binary under test, set in `main` once its version and sha are known. */
 let activePin: V3BuildPin | undefined;
+/** R849: HEAD's sha, captured when `main` starts: a commit made during the run is never read. */
+let runHead = "HEAD";
 
 /** R810: a record on a pinned build proves its rows equal HEAD's; undefined (unchanged record) with no pin. */
 function pinnedRecord(undoT = false): PinnedRecord | undefined {
   const pin = activePin;
   if (pin === undefined) return undefined;
+  const rev = runHead;
   return {
-    readCommitted: gitShowHead,
+    readCommitted: (p) => gitShowHead(p, rev),
     ...(undoT ? { undo: (rows) => undoTPin(rows, pin.legT) } : {}),
   };
 }
@@ -2196,6 +2200,7 @@ async function legT(
 // ---------------------------------------------------------------------------------------------
 
 async function main(): Promise<void> {
+  runHead = execFileSync("git", ["-C", REPO, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   preflightObserve();
   const observeRefused = observeWithReceiptRefusal(
     observeRequested(),
@@ -2263,6 +2268,11 @@ async function main(): Promise<void> {
     recordPaths.map((p) => basename(p)),
     BIN,
     resolveV3Binary(AL_RUNNER_V3_DEFAULT_PATH),
+  );
+  // R849: a record on `current` with no hand pin writes unchecked and ignores any expected file.
+  assertRecordPinned(
+    recordPaths.map((p) => basename(p)),
+    activePin !== undefined,
   );
   const legs: Record<string, V3LegOutcome> = {};
   const lines: string[] = [];

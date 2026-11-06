@@ -582,6 +582,41 @@ export function assertRecordOnCurrent(
   );
 }
 
+/** R849: a record with no build pin has no committed rows to check against (and ignores any expected file). */
+export function assertRecordPinned(requested: readonly string[], pinned: boolean): void {
+  if (requested.length === 0 || pinned) return;
+  throw new NonCurrentRecordRefusedError(
+    `al-runner-v3-itest-record-unpinned: a record run needs a build pin, so its rows are checked against what was committed (${requested.join(", ")}); this build has none`,
+  );
+}
+
+/** R849: the top-level key of a refused run's dump. `parseGateBaseline` refuses it, so a dump is never an expected file. */
+export const DUMP_ONLY_KEY = "dumpOnlyNotAnExpectedFile";
+
+/**
+ * R849: problems with the files under `itest/expected/`: each must be named for a v3 baseline,
+ * and must differ from that baseline at HEAD (equal means stale: delete it). Pure, so a test can
+ * feed it a list; the real folder is empty between changes.
+ */
+export function expectedFileProblems(
+  files: readonly { name: string; expected: string; baseline: string | undefined }[],
+): string[] {
+  const out: string[] = [];
+  for (const f of files) {
+    if (!f.name.startsWith("al-runner-v3.") || GATE_BASELINES[f.name] === undefined) {
+      out.push(`${f.name}: not named for a v3 baseline`);
+      continue;
+    }
+    if (f.baseline === undefined) continue;
+    const parse = (raw: string) => parseGateBaseline(raw, f.name, "expected file check").entries;
+    if (pinnedRowsDifference(parse(f.expected), parse(f.baseline)) === undefined)
+      out.push(
+        `${f.name}: stale, the baseline at HEAD already equals it; delete the expected file`,
+      );
+  }
+  return out;
+}
+
 /** R849: where a pre-committed expected file for this baseline lives. A subfolder, so the hook's glob skips it. */
 export function expectedPathFor(baselinePath: string): string {
   return join(dirname(baselinePath), "expected", basename(baselinePath));
@@ -599,12 +634,13 @@ export class PinnedRecordRefusedError extends Error {
  * R810: `git show HEAD:<file>` for a committed baseline. Undefined when HEAD has no such file; any
  * other git failure (no repository, no HEAD) throws, so it is not mistaken for a missing file.
  */
-export function gitShowHead(baselinePath: string): string | undefined {
+export function gitShowHead(baselinePath: string, rev = "HEAD"): string | undefined {
   // R849: the folder of an expected file may not exist on disk (not committed yet): start from the
-  // nearest folder that does, and name the file relative to it.
+  // nearest folder that does, and name the file relative to it. `rev` is the sha captured when the
+  // run began, so a commit made during the run is not seen.
   let from = dirname(baselinePath);
   while (!existsSync(from) && dirname(from) !== from) from = dirname(from);
-  const spec = `HEAD:./${relative(from, baselinePath).split(sep).join("/")}`;
+  const spec = `${rev}:./${relative(from, baselinePath).split(sep).join("/")}`;
   try {
     return execFileSync("git", ["-C", from, "show", spec], {
       encoding: "utf8",
@@ -667,7 +703,8 @@ async function pinnedRecordRows(
       const file = join(dir, basename(baselinePath));
       writeFileSync(
         file,
-        `${JSON.stringify({ identityScheme: IDENTITY_SCHEME, entries: rows }, null, 2)}\n`,
+        // A top-level key `parseGateBaseline` refuses: the dump cannot be copied in as an expected file.
+        `${JSON.stringify({ [DUMP_ONLY_KEY]: "a run's rows, for reading keys; not an expected file", entries: rows }, null, 2)}\n`,
       );
       dumped = ` This run's rows are in ${file}.`;
     } catch {
