@@ -60,7 +60,10 @@ import {
 import { AlRunnerV3ServeFallbackWarmupError } from "./al-runner-v3-backend";
 import { type AppJsonPathChange, normaliseAppJsonPaths } from "./app-json-paths";
 import {
+  UpgradeClashRefusedError,
   UpgradeNotRestoredError,
+  bcClashText,
+  clashRefusedWithoutRestore,
   confirmedDowngradeRefusal,
   nextAbove,
   parseVersionConflict,
@@ -184,7 +187,7 @@ import {
   wrappedRuleFor,
 } from "./line-map";
 import { nestedProjectWarning } from "./nested-project";
-import { checkObjectClashes } from "./object-clash";
+import { checkObjectClashes, dependenciesOf } from "./object-clash";
 import { isRetrySafe, requiresUnsafeLatch } from "./operation-outcome";
 import {
   type LaneSink,
@@ -2011,10 +2014,19 @@ function targetObjectIdsOf(sources: Iterable<readonly [string, string]>): Readon
 /** R709: the named refusal when a failed publish says BC could not restore the previous target
  *  (`restoreFailed`); undefined otherwise, and always for a compile verdict (its text is alc's
  *  output, R461). */
-export function upgradeNotRestored(err: unknown): UpgradeNotRestoredError | undefined {
+export function upgradeNotRestored(
+  err: unknown,
+  /** The installed dependents listed before the publish ("name version" each); undefined: unread. */
+  dependents: readonly string[] | undefined,
+): UpgradeNotRestoredError | UpgradeClashRefusedError | undefined {
   if (err instanceof AlcCompileError) return undefined;
   const text = messageOf(err);
-  return restoreFailed(text) ? new UpgradeNotRestoredError(text) : undefined;
+  if (restoreFailed(text)) return new UpgradeNotRestoredError(text);
+  // R845 (U3): a clash with an app that is not a dependent: BC made no restore attempt, and said so
+  // by saying nothing. The target and its dependents are gone all the same.
+  return clashRefusedWithoutRestore(text)
+    ? new UpgradeClashRefusedError(text, dependents)
+    : undefined;
 }
 
 /**
@@ -4177,10 +4189,11 @@ function targetIdentity(
  */
 function classifyDeployFailure(err: unknown): PublishOutcome | undefined {
   if (parseVersionConflict(messageOf(err)) !== null) return undefined;
-  // R843: BC refusing an upgrade because the target and an installed app declare one object is a
-  // fact about two apps, not about the artifact's size. Recorded as `failed` it would become a
-  // publish ceiling at this guard count and refuse later runs of that size.
-  if (/defined in multiple apps/i.test(messageOf(err))) return undefined;
+  // R843, R845: BC refusing a publish because the target and an installed app declare one object,
+  // one field or one enum value is a fact about two apps, not about the artifact's size. Recorded
+  // as `failed` it would become a publish ceiling at this guard count and refuse later runs of
+  // that size. (`bcClashText` reads BC's three clash texts.)
+  if (bcClashText(messageOf(err)) !== undefined) return undefined;
   if (err instanceof PublishFailedError) return "failed";
   if (err instanceof DeploymentError) return err.outcome;
   return undefined;
@@ -7053,6 +7066,9 @@ async function runSessionBody(
     let appJsonPathsWarned = false;
     // R727: once per run, before the FIRST target publish; warn only.
     let dependentsChecked = false;
+    // R845: the dependents that read found ("name version", direct then transitive), for the U3
+    // error; undefined until read, and when the read failed or the backend cannot list them.
+    let dependentNames: string[] | undefined;
     for (const [batchIdx, batchFiles] of artifacts.entries()) {
       // Layer 5C-B1 (design §6): a lease lost during THIS batch invalidates exactly THIS batch's
       // verdicts (at the loss and again at session end, R508) — earlier batches stand, every RunMutant in them having been
@@ -7409,13 +7425,31 @@ async function runSessionBody(
         dependentsChecked = true;
         const name = typeof projectManifest.name === "string" ? projectManifest.name : "(unnamed)";
         const dependentsTarget = { name, id: targetAppIdOf(projectManifest) };
-        const dependents = await readDependents(cfg.backend, cfg.testDir, dependentsTarget);
+        const dependents = await readDependents(
+          cfg.backend,
+          cfg.testDir,
+          dependentsTarget,
+          Date.now,
+        );
+        if (dependents !== null && Array.isArray(dependents.read)) {
+          dependentNames = [...dependents.read, ...dependents.transitive].map(
+            (d) => `${d.name} ${d.version}`,
+          );
+        }
         const dependentsMessage =
           dependents === null
             ? null
-            : dependentsWarning(dependents.read, dependents.testsAppId, dependentsTarget);
+            : dependentsWarning(
+                dependents.read,
+                dependents.testsAppId,
+                dependentsTarget,
+                dependents.transitive,
+              );
         if (dependentsMessage !== null) {
           emit({ type: "warning", code: "installed-dependents", message: dependentsMessage });
+        }
+        for (const message of dependents?.walkWarnings ?? []) {
+          emit({ type: "warning", code: "object-clash-unchecked", message });
         }
         // R843: before anything is published, refuse a target that declares an object an installed
         // dependent declares (BC refuses the upgrade and, unable to restore, removes the dependent).
@@ -7433,6 +7467,11 @@ async function runSessionBody(
             fetchPackage: cfg.backend.fetchPublishedAppPackage?.bind(cfg.backend),
             readTestSources: () => readTestAppSources(cfg.testDir),
             testSymbols: testBuildSymbols,
+            targetAppId: dependentsTarget.id,
+            targetDependencies: dependenciesOf(projectManifest),
+            transitive: dependents.transitive,
+            startedMs: dependents.startedMs,
+            now: Date.now,
           });
           for (const message of clashWarnings) {
             emit({ type: "warning", code: "object-clash-unchecked", message });
@@ -7467,7 +7506,7 @@ async function runSessionBody(
         }
         if (!deployed) {
           // R709: BC could not restore after a refused upgrade; never re-stamp past it.
-          const notRestored = upgradeNotRestored(deployErr);
+          const notRestored = upgradeNotRestored(deployErr, dependentNames);
           if (notRestored !== undefined) throw notRestored;
           // 3a. version conflict: BC's downgrade rejection is machine-parseable and names the
           // installed version verbatim. Re-stamp strictly above it, recompile, and retry
@@ -7497,7 +7536,7 @@ async function runSessionBody(
               );
               deployed = true;
             } catch (retryErr) {
-              const retryNotRestored = upgradeNotRestored(retryErr);
+              const retryNotRestored = upgradeNotRestored(retryErr, dependentNames);
               if (retryNotRestored !== undefined) throw retryNotRestored;
               const stillInstalled =
                 retryErr instanceof AlcCompileError

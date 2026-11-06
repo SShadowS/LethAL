@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { dedupeSpecs } from "@lethal/schemata";
 import type { TierResolver } from "@lethal/schemata";
+import { UpgradeClashRefusedError } from "../src/app-version";
 import type { CompiledArtifact } from "../src/artifact";
 import { DeploymentError } from "../src/artifact";
 import type {
@@ -702,43 +703,73 @@ describe("publish ceiling — wired into the session (R90)", () => {
     }
   });
 
-  test("R843: a refusal that says 'defined in multiple apps' is two apps' fact, not a size: no row", async () => {
-    const dirs = await makeCeilingProject([
-      { name: "Small.Codeunit.al", source: await codeunitWithGuards(79000, "Small", 9) },
-    ]);
-    const store = new ResultsStore(":memory:");
-    const backend = new CeilingBackend({
-      onPublish: () => {
-        throw new Error(
-          "The application object of type 'CodeUnit' with the ID '79100' is defined in multiple apps",
-        );
-      },
-      reportedIdentity: "f".repeat(32),
-    });
-    try {
-      // Same shape as the test above (a demonstrated `failed` publish), so the only difference is
-      // BC's text. The error is still the publish failure; only the ceiling row differs.
-      await expect(
-        runSession({
-          backend,
-          store,
-          projectDir: dirs.projectDir,
-          testDir: dirs.testDir,
-          instrumentedDir: dirs.instrumentedDir,
-          selectorIds,
-          resourceServer: RESOURCE_SERVER,
-          resourceServerInstance: RESOURCE_INSTANCE,
-          quarantineDir: dirs.quarantineDir,
-        }),
-      ).rejects.toBeInstanceOf(PublishFailedError);
-      expect(backend.publishCalls).toBe(1);
-      expect(store.publishOutcomes(TIER)).toEqual([]);
-      expect(knownCeiling(store, TIER).smallestFailure).toBeUndefined();
-    } finally {
-      store.close();
-      await rm(dirs.root, { recursive: true, force: true });
+  // R843, R845: each of BC's three clash texts is two apps' fact, not a size: no ceiling row. A
+  // clash BC restored cleanly stays the plain publish failure; one it did not try to restore (U3)
+  // is the named UpgradeClashRefusedError. Same shape as the test above (a demonstrated `failed`
+  // publish), so the only difference is BC's text.
+  const CLASH_TEXTS: ReadonlyArray<readonly [string, string]> = [
+    [
+      "defined in multiple apps",
+      "The application object of type 'CodeUnit' with the ID '79100' is defined in multiple apps",
+    ],
+    [
+      "can only appear once in the table",
+      "The field ID '91595' can only appear once in the table 'R845 R3 Tbl'. The field is declared in multiple apps",
+    ],
+    [
+      "Metadata delta application failed",
+      "An error occurred while applying changes. Failing delta: Type: 'EnumValueAddDelta'; The error was: NavErrorException - Metadata delta application failed due to the following error(s):",
+    ],
+  ];
+  for (const [label, text] of CLASH_TEXTS) {
+    for (const restored of [true, false]) {
+      test(`R845: '${label}', ${restored ? "restored cleanly" : "no restore attempt (U3)"}: no ceiling row`, async () => {
+        const dirs = await makeCeilingProject([
+          { name: "Small.Codeunit.al", source: await codeunitWithGuards(79000, "Small", 9) },
+        ]);
+        const store = new ResultsStore(":memory:");
+        const backend = new CeilingBackend({
+          onPublish: () => {
+            throw new Error(
+              restored
+                ? `Publishing failed due to '${text}'. The original extensions have been restored.`
+                : text,
+            );
+          },
+          reportedIdentity: "f".repeat(32),
+        });
+        try {
+          const run = runSession({
+            backend,
+            store,
+            projectDir: dirs.projectDir,
+            testDir: dirs.testDir,
+            instrumentedDir: dirs.instrumentedDir,
+            selectorIds,
+            resourceServer: RESOURCE_SERVER,
+            resourceServerInstance: RESOURCE_INSTANCE,
+            quarantineDir: dirs.quarantineDir,
+          });
+          if (restored) await expect(run).rejects.toBeInstanceOf(PublishFailedError);
+          else {
+            const err = await run.then(
+              () => undefined,
+              (e: unknown) => e,
+            );
+            expect(err).toBeInstanceOf(UpgradeClashRefusedError);
+            expect((err as Error).message).toContain("Recovering a stripped server");
+            expect((err as Error).message).toContain(text);
+          }
+          expect(backend.publishCalls).toBe(1);
+          expect(store.publishOutcomes(TIER)).toEqual([]);
+          expect(knownCeiling(store, TIER).smallestFailure).toBeUndefined();
+        } finally {
+          store.close();
+          await rm(dirs.root, { recursive: true, force: true });
+        }
+      });
     }
-  });
+  }
 
   test("an accepted publish is recorded too — largestSuccess is what the refusal quotes back", async () => {
     const dirs = await makeCeilingProject([
