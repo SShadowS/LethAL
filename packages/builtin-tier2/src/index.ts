@@ -7,6 +7,7 @@ import { removeTestField } from "./remove-testfield";
 import { swapEnumMember } from "./swap-enum-member";
 import { swapFindDirection } from "./swap-find-direction";
 import { swapModifyFlag } from "./swap-modify-flag";
+import { swapWorkDateToday } from "./swap-workdate-today";
 import { swapRecXRec } from "./swap-rec-xrec";
 import { validateToAssign } from "./validate-to-assign";
 
@@ -17,6 +18,7 @@ export { swapModifyFlag } from "./swap-modify-flag";
 export { removeCommit } from "./remove-commit";
 export { swapRecXRec } from "./swap-rec-xrec";
 export { swapEnumMember } from "./swap-enum-member";
+export { swapWorkDateToday } from "./swap-workdate-today";
 export { swapFindDirection } from "./swap-find-direction";
 export { validateToAssign } from "./validate-to-assign";
 export { flipFilterLiteral } from "./flip-filter-literal";
@@ -88,4 +90,7 @@ export const tier2Operators: readonly MutationOperator[] = [
   // `do-rel2/Cloud`, the largest unclaimed BC-semantic surface measured. The duplicate-case-label
   // guard is a COMPILE constraint, not caution: `alc` rejects a repeated label with AL0402.
   swapEnumMember,
+  // R856 (#33): WorkDate() <-> Today(). OPT-IN: walked only when `--operator` names it. Its hang
+  // rule lives at the dispatch (`clockSwapHangs`). See `swap-workdate-today.ts`.
+  swapWorkDateToday,
 ];

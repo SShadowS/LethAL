@@ -654,7 +654,7 @@ Design detail for all of the above lives in [`design.md`](design.md).
 
 ## The changes it makes
 
-<!-- operators: summary -->26 operators, in two tiers<!-- /operators: summary -->. **Tier 1** is the conservative set the mutation-testing literature
+<!-- operators: summary -->26 operators, in two tiers, plus 1 opt-in (run only when --operator names it)<!-- /operators: summary -->. **Tier 1** is the conservative set the mutation-testing literature
 has evidence for; **Tier 2** exploits AL and Business Central semantics to plant bugs a generic tool
 cannot express. Where both claim the same site, Tier 2 wins.
 
@@ -700,6 +700,7 @@ and cannot change a verdict.
 | `lethal.validate-to-assign` | 1.2.0 | `Rec.Validate(Name, NewName)` → `Rec.Name := NewName` | the field value asserted, the `OnValidate` side effect not |
 | `lethal.flip-filter-literal` | 1.0.0 | `Cust.SetFilter("No.", '<>%1', No)` → `Cust.SetFilter("No.", '=%1', No)` | a filter string BC re-parses at run time, never asserted |
 | `lethal.swap-enum-member` | 1.0.0 | `"S"::Open` → `"S"::Released` | a state machine whose resulting state nothing asserts |
+| `lethal.swap-workdate-today` (opt-in) | 1.0.0 | `WorkDate()` → `Today()` | a test that never sets its own work date. A survivor means no test depends on which date is read; name it only on a project whose tests set `WorkDate(D)` |
 <!-- /operators: tier2 -->
 
 The tables are generated from the operator registry, and every example is taken from the operator's
@@ -853,7 +854,7 @@ a LethAL feature or a mode.
   error, not a score. On BC 29 on Linux the stop itself can fail, and that one mutant can end the whole run until
   [#49](https://github.com/SShadowS/LethAL/issues/49) is fixed. The other direction also exists: LethAL refuses some calls that could
   not hang, because a missed hang costs far more than a lost mutant.
-- **The advanced operator set is not built.** <!-- operators: limits -->26 operators today, in two groups: 16 generic ones (Tier 1) and 10 AL-specific ones (Tier 2)<!-- /operators: limits -->.
+- **The advanced operator set is not built.** <!-- operators: limits -->26 operators today, in two groups: 16 generic ones (Tier 1) and 10 AL-specific ones (Tier 2), plus 1 opt-in (run only when --operator names it)<!-- /operators: limits -->.
   Tier 1 covers comparisons, return values and empty blocks, among others; Tier 2 covers
   `TestField`, `SetRange`, `CalcFields`, `Commit` and friends. A third, more aggressive group is
   designed only.

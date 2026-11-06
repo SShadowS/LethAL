@@ -270,6 +270,44 @@ function enclosingExitParts(node: ALSyntaxNode, ctx: SemanticContext): ALSyntaxN
   return out;
 }
 
+/**
+ * R856: does `node` sit inside the exit parts (`loopExitParts`: the condition, the guards of the
+ * exits in the body, and the values that feed them) of a loop enclosing it? By POSITION.
+ */
+export function inLoopExitParts(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+  return enclosingExitParts(node, ctx).some((parts) =>
+    parts.some((p) => node.startIndex >= p.startIndex && node.endIndex <= p.endIndex),
+  );
+}
+
+/**
+ * R856: the hang refusal for `lethal.swap-workdate-today`, called by the dispatch (like
+ * `openItemHangRefuses`) because Tier 2 cannot reach this file. Swapping `Today()` for
+ * `WorkDate()` can freeze a clock a loop waits on; both directions are refused at one rule:
+ *  - the site is in a loop's exit parts;
+ *  - the value feeds an assignment `hangCapableForMutatedNode` claims;
+ *  - the site is an argument of a `WorkDate(...)` setter inside a loop
+ *    (`repeat WorkDate(CalcDate('<1D>', WorkDate())); until WorkDate() > E`: the swap pins the date).
+ */
+export function clockSwapHangs(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+  if (inLoopExitParts(node, ctx)) return true;
+  if (hangCapableForMutatedNode(node, ctx) !== null) return true;
+  if (!hasEnclosingLoop(node)) return false;
+  for (
+    let cur: ALSyntaxNode | null = node.parent;
+    cur !== null && !isScope(cur);
+    cur = cur.parent
+  ) {
+    if (cur.kind !== ALNodeKind.procedure_call) continue;
+    const callee = cur.childForFieldName("function");
+    const args = cur.namedChildren.find((c) => c.rawKind === "argument_list");
+    if (callee?.text.trim().toLowerCase() === "workdate" && (args?.namedChildren.length ?? 0) > 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Per-context, per-file memo. The file root is a stable object (the arm map is keyed by it). */
 const memo = new WeakMap<object, WeakMap<ALSyntaxNode, Map<string, unknown>>>();
 function cached<T>(ctx: SemanticContext, n: ALSyntaxNode, tag: string, f: () => T): T {

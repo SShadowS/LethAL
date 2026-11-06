@@ -156,6 +156,13 @@ export interface MutationOperator {
   readonly name: string;
   readonly version: string;
   readonly tier: 1 | 2 | 3 | "custom";
+  /**
+   * R856: an opt-in operator is registered (`operatorTiers` knows it, `--operator` accepts it) but
+   * is NOT walked in a default run, nor under `--exclude-operator`. Only `--operator` naming it
+   * walks it. For an operator whose survivors need a project-specific reading (a swap of two clock
+   * getters says something only where tests set their own date).
+   */
+  readonly optIn?: boolean;
   readonly targetNodeKinds: readonly ALNodeKind[];
   readonly producesNodeKinds: readonly ALNodeKind[];
   readonly requiresSemantic: readonly SemanticCapability[];

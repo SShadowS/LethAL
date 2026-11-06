@@ -159,6 +159,7 @@ Operators that exploit AL/BC semantics to surface weak tests.
 | `lethal.validate-to-assign` | 1.2.0 | `Rec.Validate(Name, NewName)` → `Rec.Name := NewName` | the field value asserted, the `OnValidate` side effect not |
 | `lethal.flip-filter-literal` | 1.0.0 | `Cust.SetFilter("No.", '<>%1', No)` → `Cust.SetFilter("No.", '=%1', No)` | a filter string BC re-parses at run time, never asserted |
 | `lethal.swap-enum-member` | 1.0.0 | `"S"::Open` → `"S"::Released` | a state machine whose resulting state nothing asserts |
+| `lethal.swap-workdate-today` (opt-in) | 1.0.0 | `WorkDate()` → `Today()` | a test that never sets its own work date. A survivor means no test depends on which date is read; name it only on a project whose tests set `WorkDate(D)` |
 <!-- /operators: tier2 -->
 
 Two operators named in earlier drafts of this table are **not built**, each for a recorded reason:
