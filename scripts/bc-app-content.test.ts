@@ -718,6 +718,12 @@ describe("R627: the two decoded entries refuse invalid UTF-8 and keep every vali
       "probes2.app": "fb1d6aa2a03d730ca2d971ae3764a745fc8df937a128c8f12dc558b3e8e3b8f7",
       // R843: one object of every compared kind, in a namespace (real alc 18.1 build).
       "r843-kinds.app": "6a3c7fe54defe369cadb4d73db2fc39761db2d25ce2ccc219ab2385221d3623d",
+      // R845: real alc 18.1 builds. base: a table, an enum and an own-app tableextension and
+      // enumextension (bare TargetObject, a quoted field name); ext: a second app extending the
+      // base's table and enum (TargetObject "#<app id>#Name"); moved: a table and a field marked Moved.
+      "r845-base.app": "64fbf7598603573f3464a8cf071c03a60ba0e9abcf0578eb4380dad9816d0f57",
+      "r845-ext.app": "831a6685e251a56d79df28125a3d099e41c1ce1f50cb853a04feaa83f2f03404",
+      "r845-moved.app": "27c202a865e0dff8581f167bbb21a4646151b3ef88c71a8c490ab597468a17d5",
       "wrapped1.app": "3a91c311c9b6495a5028f7694eb8b69595ca855aa8a797f49b96ef0b892ed34b",
       "wrapped2.app": "3a91c311c9b6495a5028f7694eb8b69595ca855aa8a797f49b96ef0b892ed34b",
     };

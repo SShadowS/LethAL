@@ -7,6 +7,7 @@ import { UpgradeNotRestoredError } from "../src/app-version";
 import { readTargetSource } from "../src/baseline-snapshot";
 import { UnfilteredExtensionsQueryError } from "../src/harness";
 import type { InstalledDependent } from "../src/harness";
+import { compareMembersBySource } from "../src/member-clash";
 import {
   type DeclaredObject,
   ObjectClashError,
@@ -75,6 +76,7 @@ describe("R843: no fixture target clashes with its tests app (source against sou
   test("every pair, under every symbol set its #if lines name: 0 clashes", async () => {
     await initParser();
     let compared = 0;
+    let membersSeen = 0;
     for (const { target, tests } of fixturePairs()) {
       const targetDir = join(FIXTURES, target);
       const testsDir = join(FIXTURES, tests);
@@ -107,10 +109,22 @@ describe("R843: no fixture target clashes with its tests app (source against sou
             ),
           ).toEqual([]);
         }
+        // R845: the fields and enum values too. Source against source, by the real fallback
+        // comparison (names only): any pair at all would be a candidate clash, and there are none.
+        expect(
+          compareMembersBySource(a.members, b.members).map(
+            (c) => `${target}/${tests} [${symbols}] ${c.rule} ${c.target.ownerName}`,
+          ),
+        ).toEqual([]);
+        expect(a.memberNotes).toEqual([]);
+        expect(b.memberNotes).toEqual([]);
+        membersSeen += a.members.length + b.members.length;
         compared++;
       }
     }
     expect(compared).toBeGreaterThanOrEqual(9);
+    // Not a vacuous pass: the fixtures really do declare fields and enum values.
+    expect(membersSeen).toBeGreaterThan(0);
   });
 });
 
@@ -327,6 +341,11 @@ function check(over: Partial<Parameters<typeof checkObjectClashes>[0]> = {}) {
     fetchPackage: async () => ({ unread: "not installed" }),
     readTestSources: async () => [{ path: "S.al", text: 'codeunit 200 "S"\n{\n}\n' }],
     testSymbols: ["TS"],
+    targetAppId: "99999999-0000-4000-8000-000000000001",
+    targetDependencies: [],
+    transitive: [],
+    startedMs: 0,
+    now: () => 0,
     ...over,
   });
 }
