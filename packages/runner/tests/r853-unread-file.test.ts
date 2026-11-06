@@ -122,7 +122,14 @@ describe("R853: a harmless ERROR still indexes the file", () => {
     try {
       const text = `codeunit 50000 "X"\n{\n    procedure P()\n    begin\n${armsOf(3)}end;\n    end;\n\n    procedure Q()\n    begin\n    end;\n}\n`;
       await writeFile(join(dir, "X.Codeunit.al"), text, "utf8");
-      const index = await buildAlRunnerCoverageIndex(dir, { symbols: [] });
+      const notes: string[] = [];
+      const index = await buildAlRunnerCoverageIndex(dir, {
+        symbols: [],
+        notify: (code, message) => notes.push(`${code} ${message}`),
+      });
+      expect(notes.filter((n) => n.includes("X.Codeunit.al") && n.includes("R853"))).toHaveLength(
+        1,
+      );
       expect(index.lineMap.unreadFiles).toEqual(["X.Codeunit.al"]);
       expect(index.skippedFiles).toContain("x.codeunit.al");
       expect(index.declared.has(KEY)).toBe(false);

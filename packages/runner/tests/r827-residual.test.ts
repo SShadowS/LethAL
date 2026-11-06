@@ -457,6 +457,8 @@ describe("R853: glued source emits separate words", () => {
     ["a replacement before `else`", "        if A then\n            Foo(C + 1)else Foo(C);"],
     ["a wrap before `end`", "        if A then begin\n            if C > 0 then Foo(C + 1)end;"],
     ["a wrap before `until`", "        repeat\n            if C > 0 then Foo(C + 1)until C > 0;"],
+    ["a list marker after `repeat`", `        repeat"My Q"(C + 1);until C > 0;`],
+    ["a replacement after `if`", `        if"A"then Foo(C);`],
     ["a marker after `begin`", `        if A then begin"My Q"(C + 1)end;`],
   ];
   for (const [name, statements] of cases) {

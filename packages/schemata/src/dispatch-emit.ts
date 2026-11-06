@@ -107,8 +107,8 @@ function branchText(original: string, m: PlannedMember, latch: string, selector:
   const before = original.slice(0, splice.relStart);
   const after = original.slice(splice.relEnd);
   // R853: glued source (`Foo(C + 1)else`) must not run into the replacement (`endelse`).
-  const gap = wouldGlue(before, splice.insert === "" ? after : splice.insert) ? " " : "";
-  const text = `${before}${gap}${splice.insert}${wouldGlue(splice.insert, after) ? " " : ""}${after}`;
+  const lead = wouldGlue(before, splice.insert) ? " " : "";
+  const text = `${before}${lead}${splice.insert}${wouldGlue(splice.insert, after) ? " " : ""}${after}`;
   if (place.kind === "none") return text;
   const marker = REACH_MARKER(m.mutantId, latch, selector);
   if (place.kind === "root") return `${marker} ${text}`;
@@ -116,17 +116,17 @@ function branchText(original: string, m: PlannedMember, latch: string, selector:
   const start = m.statementStart;
   const end = m.statementEnd + (text.length - original.length);
   if (place.kind === "block") {
-    const at = start + place.beginEnd + (splice.relStart === start ? gap.length : 0);
+    const at = start + place.beginEnd;
     return `${text.slice(0, at)} ${marker}${text.slice(at)}`;
   }
   const head = text.slice(0, start);
-  const lead = wouldGlue(head, "b") ? " " : ""; // R853: `begin"My Q"` must not give `beginif`.
-  if (place.kind === "list") return `${head}${lead}${marker} ${text.slice(start)}`;
+  if (place.kind === "list") {
+    // R853: `repeat"My Q"` must not give `repeatif`.
+    return `${head}${wouldGlue(head, marker) ? " " : ""}${marker} ${text.slice(start)}`;
+  }
   // R729. When `S`'s own text ends in a `;` (`if X then;`: the empty body's `;` is also the one
   // that ends `S` and the statement around it), the `begin ... end` wrap must reproduce it, or the
   // sibling after it loses its separator (AL0111). The same consumed-terminator rule as above.
   const s = text.slice(start, end);
-  const closed = `end${endsInTerminator(s) ? ";" : ""}`;
-  const tail = text.slice(end);
-  return `${head}${lead}begin ${marker} ${s} ${closed}${wouldGlue(closed, tail) ? " " : ""}${tail}`;
+  return `${head}begin ${marker} ${s} end${endsInTerminator(s) ? ";" : ""}${text.slice(end)}`;
 }
