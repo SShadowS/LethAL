@@ -204,7 +204,7 @@ The legs:
   - X (d), (e), (f), since R-762 B ([[R768]], pre-commitment `2026-10-25-r762-b-retire-sleep-rule-precommitment.md`):
     on a build whose pin and session probe both read `sleep-is-noop` gone (`alpha.5-07342060e`, `edge-dcdf9e821`) the
     Sleep rule is off. X (d) reads M0003 and M0004 `survived`, no note: 2 killed / 3 survived / 0 error, Sleep index
-    still 4 + 5, and no raw-hit check (no mutant call writes a coverage document). X (e) and (f1)-(f3) print "not
+    1 + 5 since R827 (one `Sleep` is emitted, it was 4), and no raw-hit check (no mutant call writes a coverage document). X (e) and (f1)-(f3) print "not
     applicable on a pinned-gone build" and do not run. On an unpinned build (alpha.2 and others) r5's table and the
     fail-closed (e)/(f) legs are unchanged. `GATE_WARNINGS` for the `xd-*` keys is unchanged.
 
@@ -218,7 +218,7 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
   - It checks `EXPECTED_LAYOUT` (`layout-fixture.ts`) per `<batch>/<code>`: verdict, killing test, covering tests and attribution.
   - Predicted 7 / 3 / 0 over 10. Baseline: `al-runner-v3.layout.baseline.json`, identical per mutant to `al-runner.layout.baseline.json` (the .NET gate's, deleted in R654 S3).
   - It is the v3 gate's only multi-batch leg.
-  - **It is R349's stale-layout check on v3** ([[R666]]). v3 labels a target file's coverage by the deployed flat path (`active/LayoutBeta.Codeunit.al`) in the EMITTED line numbers of that batch's text: in batch 1, TwiceOfThree hits lines 71, 73 and 79 of the 83-line instrumented file (measured on alpha.2, `/coord/handoff/R-666/measure.md`). So batch 1's lines must be read through batch 1's coverage index.
+  - **It is R349's stale-layout check on v3** ([[R666]]). v3 labels a target file's coverage by the deployed flat path (`active/LayoutBeta.Codeunit.al`) in the EMITTED line numbers of that batch's text: in batch 1, TwiceOfThree hits lines 74, 75 and 78 of the instrumented file since R827 (it was 71, 73 and 79 of 83 lines, measured on alpha.2, `/coord/handoff/R-666/measure.md`). So batch 1's lines must be read through batch 1's coverage index.
   - **The guard L1 proves is both coverage-index guards together:** `resetLayoutState()` sets `coverageIndex` to `undefined`, AND `deploy()` then assigns the new index unconditionally (`this.coverageIndex = index`). Either one alone keeps the index fresh.
   - **Its live red check is L-R3**, which removes both: delete `this.coverageIndex = undefined;` from `resetLayoutState` and change the assignment to `this.coverageIndex ??= index`. L1 then goes red as R353 predicts: 5 / 5 / 0, with 1/M0006 and 1/M0007 survived and `Layout Tests.GrowAboveTen` as their covering test (`/coord/handoff/R-666/live-LR3.log`; pre-committed in `docs/superpowers/specs/2026-10-23-r666-l1-stale-layout-precommitment.md`, 51d76b74).
   - **Two single-guard reverts stay green, by design** (2026-10-22, R-654 S2): L-R1 deleted `resetLayoutState()` (`/coord/handoff/R-654/s2-live-LR1.log`), and `deploy()`'s assignment still replaced the index. L-R2 changed the assignment to `??=` (`s2-live-LR2.log`), and the reset had just cleared the field, so `??=` still assigned.
@@ -562,6 +562,7 @@ Leg T is judged against the committed alpha.2 baseline with the pinned keys over
 
 ## History
 
+- 2026-11-06 (R827, coord task R-836): `al-runner-v3.wrapped` and `.layout` recorded by R849's route on `current`, edge a0189c004. Five `Grow|lethal.empty-block` rows re-keyed because `Grow` gained a `#pragma` line; no verdict, killing test or other row moved. X (d)'s Sleep index is 1 + 5. Logs: `/coord/handoff/R-836/`.
 - 2026-11-06 (R836, coord task R-848): the six `al-runner-v3.*` baselines moved from identity scheme 44 to 45, by R332's procedure on `current`
   (edge-d72d3197d), through the pinned record rule. Each file changed by one line, the scheme. The confirm run passed L1, Y-A, Y-B, MO, WR and T. Logs:
   `/coord/handoff/R-848/v3/`.
