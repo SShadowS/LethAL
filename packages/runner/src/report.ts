@@ -244,6 +244,7 @@ export type Caveat =
   | "kills-without-assertion"
   | "declarative-sites-dropped"
   | "all-errors"
+  | "some-errors"
   | "session-warm"
   | "preproc-files-refused"
   | "tests-compiled-out"
@@ -515,6 +516,22 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "there is no survivor to act on and no kill to credit; the only actionable item is the " +
       "failure note.",
     basis: "R190",
+  },
+  "some-errors": {
+    meaning:
+      "At least one mutant this run recorded is an `error`, and at least one is not. An `error` mutant " +
+      "is in neither part of `mutationScore` ((killed + timeoutKilled) / (killed + timeoutKilled + " +
+      "survived)), so the score can read HIGHER than it would had those mutants run: a survivor " +
+      "among them would have lowered it. `counts.errors` is how many; it includes the " +
+      "`deadline-exceeded` and `unstable` rows. The cause of each is in its `failureNote` " +
+      "(measured 2026-11-06, R841: an `#if` shape that splits a statement gives an artifact alc " +
+      "refuses for one mutant, which isolation drops by name and the rest are scored). The " +
+      "console states the range the score could read had they run.",
+    entailedNegative:
+      "Not a statement about the target's tests, and not a wrong verdict: the mutants that ran " +
+      "were measured. It does not say the errored mutants would have survived, only that the " +
+      "score does not cover them. It does not change `reliability` or the exit code.",
+    basis: "R844",
   },
   "session-warm": {
     meaning:
@@ -2801,6 +2818,9 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   // measured; without this the report read as a completed, merely narrowed run.
   const allErrors = input.outcomes.length > 0 && counts.errors === input.outcomes.length;
   if (allErrors) caveats.push("all-errors");
+  // R844 - see CAVEAT_INTERPRETATIONS["some-errors"]. Some rows errored and some did not: the
+  // errored ones are outside `mutationScore`. Never together with "all-errors".
+  if (counts.errors > 0 && !allErrors) caveats.push("some-errors");
   // R221: `--exclude` narrows the measured scope exactly as `--only` does, so it raises the same
   // caveat. Pushed once even when both flags are used -- the caveat says "this is not a project
   // score", and that is one fact however many flags produced it.
@@ -3372,6 +3392,22 @@ export function renderConsole(r: SessionReport): string {
       `timeout-killed ${r.counts.timeoutKilled}, known-survivor ${r.counts.knownSurvivors}, ` +
       `error ${r.counts.errors} [unstable ${r.counts.unstable}${errorBreakdown(r)}])`,
   );
+  // R844: the `error` rows are outside the score; say how far it could move had they run.
+  // N is `counts.errors`, which already holds the deadline-exceeded and unstable rows, exactly the
+  // rows `mutationScore` leaves out. With nothing scored (denominator 0) the range is 0% to 100%.
+  if (r.validity.caveats.includes("some-errors")) {
+    const kills = r.counts.killed + r.counts.timeoutKilled;
+    const denom = kills + r.counts.survived;
+    const n = r.counts.errors;
+    const pct = (x: number) => `${(x * 100).toFixed(1)}%`;
+    const inside =
+      r.counts.deadlineExceeded > 0 || r.counts.unstable > 0
+        ? ` (${r.counts.deadlineExceeded} deadline-exceeded and ${r.counts.unstable} unstable are among them)`
+        : "";
+    lines.push(
+      `${n} mutant(s) errored${inside} and are not in the score; had they run, it would read ${pct(kills / (denom + n))} to ${pct((kills + n) / (denom + n))}.`,
+    );
+  }
   // R206: warm kills are a fact about HOW the kills were measured, stated beside the score.
   if ((r.warmKills ?? 0) > 0) {
     lines.push(
