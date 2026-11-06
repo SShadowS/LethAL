@@ -102,7 +102,7 @@ interface DirResult {
   markers: number;
   /** R827: free bodies seen. */
   free: number;
-  /** R827: guards the `guard-in-loop` check walked. */
+  /** R827: loops the `guard-in-loop` check saw. */
   walked: number;
   findings: Finding[];
 }
@@ -356,7 +356,7 @@ describe("R827: a free body keeps its guards out of its loops", () => {
     const r = await checkSource(LOOPS_AL);
     expect(r.mutants).toBeGreaterThan(20);
     expect(r.free).toBe(4);
-    // A chain's deletion can look like a free guard too, so at least: a blind check walks none.
+    // Each of the four bodies holds a loop, so a check that went blind sees fewer.
     expect(r.walked).toBeGreaterThanOrEqual(r.free);
     expect(r.findings.map((f) => `${f.mutantId} ${f.kind}: ${f.detail}`)).toEqual([]);
   });

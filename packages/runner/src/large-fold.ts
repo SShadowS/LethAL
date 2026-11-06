@@ -74,9 +74,9 @@ export function largeFoldWarning(
   return [
     `[lethal] ${large.length} file(s) emit a very large method: ${named}. A method this size may stop a BC`,
     " service tier with a stack overflow (GitHub #28). That is not proven, and these thresholds are not",
-    " measured: it is a warning only. `if` conditions and `case` arms cause the largest folds, and",
-    " `lethal.empty-block` makes a loop in a body one chain. To shrink them, leave out `lethal.empty-block` and the",
-    " condition operators with --exclude-operator, or narrow the run with --only. --max-guards-per-batch will not",
-    " help: it splits by file.",
+    " measured: it is a warning only. `if` conditions, `case` arms and loops cause the largest folds. To shrink them,",
+    " leave out the operators that root them, one --exclude-operator each: empty-block, negate-conditional,",
+    " conditional-boundary, negate-guard, remove-not, loop-skip, loop-truncate. Or narrow the run with --only.",
+    " --max-guards-per-batch will not help: it splits by file.",
   ].join("");
 }

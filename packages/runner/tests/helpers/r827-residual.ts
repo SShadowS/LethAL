@@ -286,7 +286,7 @@ export interface FileResult {
   readonly checked: number;
   readonly findings: readonly Finding[];
   readonly stats: Stats;
-  /** Guards whose `else` the `guard-in-loop` check walked, so a blind check shows as 0. */
+  /** Loops the `guard-in-loop` check saw under a free guard, so a blind check shows as 0. */
   readonly walked: number;
 }
 
@@ -334,6 +334,7 @@ export async function checkFile(fc: FileCase, withDetail = true): Promise<FileRe
       return;
     }
     const loop = inLoop || EXECUTION_LOOPS.has(n.rawKind);
+    if (loop && !inLoop) walked++;
     for (const c of n.children) walkFree(c, loop);
   };
   const walkAll = (n: ALSyntaxNode): void => {
@@ -342,7 +343,6 @@ export async function checkFile(fc: FileCase, withDetail = true): Promise<FileRe
       const then = n.childForFieldName("then_branch");
       // A free guard's own branch holds its marker at most; a chain's holds the mutated root.
       if (els !== null && then !== null && FREE_THEN.test(squash(then.text))) {
-        walked++;
         walkFree(els, false);
         return;
       }

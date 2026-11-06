@@ -562,6 +562,7 @@ Leg T is judged against the committed alpha.2 baseline with the pinned keys over
 
 ## History
 
+- 2026-11-06 (R827, coord task R-836): `al-runner-v3.wrapped` and `.layout` recorded by R849's route on `current`, edge a0189c004. Five `Grow|lethal.empty-block` rows re-keyed because `Grow` gained a `#pragma` line; no verdict, killing test or other row moved. X (d)'s Sleep index is 1 + 5. Logs: `/coord/handoff/R-836/`.
 - 2026-11-06 (R836, coord task R-848): the six `al-runner-v3.*` baselines moved from identity scheme 44 to 45, by R332's procedure on `current`
   (edge-d72d3197d), through the pinned record rule. Each file changed by one line, the scheme. The confirm run passed L1, Y-A, Y-B, MO, WR and T. Logs:
   `/coord/handoff/R-848/v3/`.
