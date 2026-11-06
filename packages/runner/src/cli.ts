@@ -4209,13 +4209,16 @@ export async function clearQuarantine(
  * `--quarantine-dir` override here because an operator clearing a real tier must hit the real
  * store, not one a stray flag silently redirected. Exported for its test.
  */
-export async function clearQuarantineFromCli(parsed: ClearQuarantineCliConfig): Promise<number> {
+export async function clearQuarantineFromCli(
+  parsed: ClearQuarantineCliConfig,
+  quarantineDir: string = defaultQuarantineDir(),
+): Promise<number> {
   const key = quarantineResourceKey(await resolveTierIdentity(parsed, "clear-quarantine"));
   if (parsed.server === undefined) {
     // As `clear-ceiling` does: a tier the operator did not type is shown before it is cleared.
     console.log(`resolved tier from ${parsed.configPath}: ${key}`);
   }
-  const store = new QuarantineStore(defaultQuarantineDir());
+  const store = new QuarantineStore(quarantineDir);
   const result = await clearQuarantine(store, key);
   console.log(result); // "cleared" | "stale" | "not-quarantined"
   return result === "stale" ? 1 : 0;

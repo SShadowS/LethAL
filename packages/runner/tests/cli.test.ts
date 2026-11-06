@@ -1217,8 +1217,10 @@ describe("clearQuarantine (Task 13)", () => {
     },
   };
 
-  async function quarantineWith(key: string): Promise<QuarantineStore> {
-    const store = new QuarantineStore(defaultQuarantineDir());
+  // R835: a private folder. A record left in the default store outlives the file on a reused
+  // `--parallel` worker, and cli-envtool.test.ts's teardown tests read that tier.
+  async function quarantineWith(key: string, dir: string): Promise<QuarantineStore> {
+    const store = new QuarantineStore(join(dir, "quarantine"));
     await store.record({
       resourceKey: key,
       opKind: "test-run",
@@ -1234,7 +1236,7 @@ describe("clearQuarantine (Task 13)", () => {
     await writeFile(configPath, JSON.stringify(ENVTOOL_CONFIG));
     const resolvedKey = "https://host|env-4711";
     const otherKey = quarantineResourceKey({ server: "http://other", serverInstance: "BC" });
-    const store = await quarantineWith(resolvedKey);
+    const store = await quarantineWith(resolvedKey, dir);
     await store.record({
       resourceKey: otherKey,
       opKind: "test-run",
@@ -1243,7 +1245,12 @@ describe("clearQuarantine (Task 13)", () => {
     });
     const log = spyOn(console, "log").mockImplementation(() => {});
     try {
-      expect(await clearQuarantineFromCli({ mode: "clear-quarantine", configPath })).toBe(0);
+      expect(
+        await clearQuarantineFromCli(
+          { mode: "clear-quarantine", configPath },
+          join(dir, "quarantine"),
+        ),
+      ).toBe(0);
       expect(log).toHaveBeenCalledWith("cleared");
       // The tier the operator did not type is shown, as clear-ceiling does.
       expect(log).toHaveBeenCalledWith(`resolved tier from ${configPath}: ${resolvedKey}`);
@@ -1259,15 +1266,18 @@ describe("clearQuarantine (Task 13)", () => {
     const configPath = join(dir, "lethal.config.json");
     await writeFile(configPath, JSON.stringify(ENVTOOL_CONFIG));
     const resolvedKey = "https://host|env-4711";
-    const store = await quarantineWith(resolvedKey);
+    const store = await quarantineWith(resolvedKey, dir);
     const log = spyOn(console, "log").mockImplementation(() => {});
     try {
-      await clearQuarantineFromCli({
-        mode: "clear-quarantine",
-        server: "http://elsewhere",
-        serverInstance: "BC",
-        configPath,
-      });
+      await clearQuarantineFromCli(
+        {
+          mode: "clear-quarantine",
+          server: "http://elsewhere",
+          serverInstance: "BC",
+          configPath,
+        },
+        join(dir, "quarantine"),
+      );
       expect(log).toHaveBeenCalledWith("not-quarantined");
       expect(log).not.toHaveBeenCalledWith(`resolved tier from ${configPath}: ${resolvedKey}`);
       expect(log.mock.calls.flat().join("\n")).not.toContain("resolved tier");
@@ -1281,6 +1291,38 @@ describe("clearQuarantine (Task 13)", () => {
     await expect(clearQuarantineFromCli({ mode: "clear-quarantine" })).rejects.toThrow(
       "neither --server/--instance nor --config",
     );
+  });
+
+  test("R835: with no folder given it reads the default store, and these tests leave nothing there", async () => {
+    // The tier cli-envtool.test.ts's teardown tests read: a leftover turns them red on a reused worker.
+    expect(
+      await new QuarantineStore(defaultQuarantineDir()).read("https://host|env-4711"),
+    ).toBeNull();
+    const home = scratch("lethal-cli-quarantine-home-");
+    const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+    const log = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const key = quarantineResourceKey({ server: "http://default-dir", serverInstance: "BC" });
+      const store = new QuarantineStore(defaultQuarantineDir());
+      await store.record({
+        resourceKey: key,
+        opKind: "test-run",
+        detail: "prior strand",
+        recordedAtIso: "2026-07-20T10:00:00.000Z",
+      });
+      await clearQuarantineFromCli({
+        mode: "clear-quarantine",
+        server: "http://default-dir",
+        serverInstance: "BC",
+      });
+      expect(log).toHaveBeenCalledWith("cleared");
+    } finally {
+      log.mockRestore();
+      process.env.HOME = saved.HOME;
+      process.env.USERPROFILE = saved.USERPROFILE;
+    }
   });
 
   // The "stale" outcome (a clear computed against a generation the store no longer holds because
