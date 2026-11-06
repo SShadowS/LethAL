@@ -1396,7 +1396,7 @@ export async function generateMutationSet(
           if (perFile === undefined) return [];
           const where = [...perFile].map(([f, c]) => `${f} (${c})`).join(", ");
           return [
-            ` "${n}" had site(s) refused as hang-capable (each writes a variable an enclosing loop's condition reads, R196, or is code of an unbounded report data item or a bounded item's only bound, R487/R501): ${where}.`,
+            ` "${n}" had site(s) refused as hang-capable (each writes a variable an enclosing loop's condition reads, R196, is a call that loop's progress may rest on, R830, or is code of an unbounded report data item or a bounded item's only bound, R487/R501): ${where}.`,
           ];
         })
         .join("");

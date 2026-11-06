@@ -170,6 +170,7 @@
     "campaign/compile-only.test.ts",
     "census-fixture-mutants.ts",
     "census-operator-sites.ts",
+    "census-r830-r831.ts",
     "changelog-section.test.ts",
     "changelog-section.ts",
     "check-native-grammar.ts",

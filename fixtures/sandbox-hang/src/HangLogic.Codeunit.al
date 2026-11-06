@@ -1,10 +1,10 @@
 codeunit 79400 "Hang Logic"
 {
+    SingleInstance = true;
     var
         Counter: Integer;
         Rows: Integer;
         Walked: Integer;
-
     /// <summary>
     /// R53's shape, made deterministic.
     ///
@@ -15,7 +15,7 @@ codeunit 79400 "Hang Logic"
     /// happened to be in the table when the run started.
     ///
     /// This carries the same PROPERTY with none of the data dependency. The loop advances only
-    /// through `Advance()`, so the mutant that DELETES that call (`lethal.void-method-call`) leaves
+    /// through `OnAdvance()`, so the mutant that DELETES that call (`lethal.void-method-call`) leaves
     /// `Counter` at 0 and `Counter >= Limit` false forever. Unmutated it terminates in `Limit`
     /// iterations.
     ///
@@ -34,11 +34,11 @@ codeunit 79400 "Hang Logic"
     begin
         Counter := 0;
         repeat
-            Advance();
+            OnAdvance();
         until Counter >= Limit;
         exit(Counter);
     end;
-
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Hang Logic", 'OnAdvance', '', false, false)]
     local procedure Advance()
     begin
         Counter += 1;
@@ -142,8 +142,19 @@ codeunit 79400 "Hang Logic"
             exit(-1);
         Counter := 0;
         repeat
-            Advance();
+            OnAdvance();
         until Counter >= Target;
         exit(Counter);
+    end;
+
+    /// <summary>
+    /// R830: an event, so these two loops still hang. LethAL refuses a call whose same-object callee
+    /// writes what the loop reads, so a plain `Advance()` is never mutated. A publisher's body is
+    /// empty while its subscriber steps, which LethAL does not see: the two `void-method-call`
+    /// mutants here are the gate's hangs. `SingleInstance` makes the subscriber share `Counter`.
+    /// </summary>
+    [IntegrationEvent(false, false)]
+    local procedure OnAdvance()
+    begin
     end;
 }
