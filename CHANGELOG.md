@@ -13,6 +13,11 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **A target that clashes with an installed app that is not its dependent is refused before it is published** (R847). The
+  check asks the server by key about only what is new in the target (objects and fields on tables it does not own), then
+  reads the named app's own package and refuses from that. A server answer alone never refuses. A table name that more than
+  one app in the target's dependency closure could give, or a dependency that cannot be read, only warns. Needs the control
+  app 1.0.0.25: the minimum is now 1.0.0.25 (`MIN_CONTROL_VERSION`).
 - **`--baseline-timeout-ms` is a real flag now** (R821, GitHub #46). The reports have told users to raise it since R658, but
   `run` refused it. Default 120000; refused with `--dry-run`.
 - **BC 29 Ready-to-Run wrappers are read as the apps they hold** (R820, GitHub #47). System Application, Base Application

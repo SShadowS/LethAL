@@ -117,10 +117,9 @@ export {
 const REPO = join(import.meta.dir, "..");
 export const SECRET_PATH = "/coord/secrets/bc-linux.env";
 export const EXPECTED_KEYS = ["BC_DEV_USER", "BC_DEV_PASSWORD"] as const;
-// R-689b: the 1.0.0.24 build (R689 discovery error, R733 `InstalledDependents`), compiled clean with alc.
-export const CONTROL_APP =
-  "/coord/handoff/R-689b/control-1.0.0.24/LethAL_LethAL Control_1.0.0.24.app";
-export const CONTROL_SHA256 = "58fad5173d8de27e576b4a3e6f74ec38b8021cff7cc3b3c4323960a59eee0f1d";
+// R847: the 1.0.0.25 build (`ObjectOwners`, `FieldOwners`), compiled clean with alc 18.1.43.
+export const CONTROL_APP = "/coord/handoff/R-847/control/LethAL_LethAL Control_1.0.0.25.app";
+export const CONTROL_SHA256 = "844ceb79a886c3c759979ce4e84340376357b6520fdb8a790e6a5a85d79b27e1";
 const TOKEN_DIR = "/coord/handoff/R-589";
 const STATE_ROOT = join(REPO, ".kraken-local", "bc-linux");
 const BC_DEV_MCP = "/home/dev/src/bc-dev-mcp";

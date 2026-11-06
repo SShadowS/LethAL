@@ -110,6 +110,12 @@ class ClashBackend implements ExecutionBackend {
   fetched: string[] = [];
   private activations: Array<string | null> = [];
   installedDependents?: (appId: string) => Promise<readonly InstalledDependent[]>;
+  /** R847: set by a test through `Setup.configure`; absent on a backend that is not bcdev. */
+  installedVersions?: (appId: string) => Promise<readonly string[]>;
+  objectOwners?: NonNullable<ExecutionBackend["objectOwners"]>;
+  fieldOwners?: NonNullable<ExecutionBackend["fieldOwners"]>;
+  /** R847: the package folders the table ids are read from, offline. */
+  dependencyPackageDirs?: () => readonly string[];
   readonly fetchPublishedAppPackage = async (app: {
     publisher: string;
     name: string;
@@ -209,6 +215,8 @@ interface Setup {
   readonly appJson?: string;
   /** R845: the publish fails with this text (a U3 refusal). */
   readonly deployError?: string;
+  /** R847: gives the backend its keyed reads of the server. */
+  readonly configure?: (b: ClashBackend) => void;
 }
 
 async function drive(s: Setup) {
@@ -229,6 +237,7 @@ async function drive(s: Setup) {
     s.byParent,
   );
   backend.deployError = s.deployError;
+  s.configure?.(backend);
   const warnings: Array<{ code: string; message: string }> = [];
   const store = new ResultsStore(":memory:");
   const outcome = await runSession({
@@ -650,6 +659,270 @@ describe("R843: passes, and warns where it cannot know", () => {
     expect("report" in r).toBe(true);
     expect(r.backend.fetched).toEqual(expect.not.arrayContaining(["Other App"]));
     expect(r.warnings.some((x) => x.code === "installed-dependents")).toBe(true);
+  });
+});
+
+/**
+ * R847 Part 1: the installed target is on the server, an unrelated app X (NOT a dependent) declares
+ * the codeunit id the target injects, and the keyed read names X. The refusal must come from X's own
+ * package, before anything is published: `deploys` is the call counter.
+ */
+describe("R847: an installed app that is not a dependent, through runSession", () => {
+  const X: InstalledDependent = {
+    id: "9f3c2b1a-0000-4000-8000-0000000000aa",
+    name: "Unrelated App",
+    publisher: "Elsewhere",
+    version: "3.0.0.0",
+  };
+  const targetPackage = new Uint8Array(
+    buildFakeAppWithEntries({
+      "SymbolReference.json": JSON.stringify({
+        AppId: TARGET_ID,
+        Version: "1.0.0.0",
+        Codeunits: [{ Id: 79000, Name: "Sandbox Logic" }],
+      }),
+    }),
+  );
+  const unrelated = (extra: Record<string, unknown[]>): Uint8Array =>
+    new Uint8Array(
+      buildFakeAppWithEntries({
+        "SymbolReference.json": JSON.stringify({ AppId: X.id, Version: X.version, ...extra }),
+      }),
+    );
+  const serve = (calls: { objects: number; versions: number }) => (b: ClashBackend) => {
+    b.installedVersions = async () => {
+      calls.versions++;
+      return ["1.0.0.0"];
+    };
+    b.objectOwners = async (items) => {
+      calls.objects++;
+      const rows = items.map((item) => {
+        if (item.kind === "Codeunit" && item.id === 79000) {
+          return {
+            ...item,
+            outcome: "owner" as const,
+            app: { id: TARGET_ID, name: "R843 Target", publisher: "LethAL", version: "1.0.0.0" },
+          };
+        }
+        if (item.kind === "Codeunit" && item.id === ids.controlId) {
+          return { ...item, outcome: "owner" as const, app: X };
+        }
+        return { ...item, outcome: "none" as const };
+      });
+      return { read: rows.length, rows };
+    };
+    b.fieldOwners = async () => ({ read: 0, rows: [] });
+  };
+
+  test("a lead with a real clash refuses from the lead's package, with zero deploys", async () => {
+    const calls = { objects: 0, versions: 0 };
+    const r = await drive({
+      configure: serve(calls),
+      packages: new Map([
+        [TEST_APP.name, residentTestsApp()],
+        ["R843 Target", targetPackage],
+        ["Unrelated App", unrelated({ Codeunits: [{ Id: ids.controlId, Name: "Theirs" }] })],
+      ]),
+    });
+    const e = refused(r);
+    expect(r.backend.deploys).toBe(0);
+    expect(calls).toEqual({ objects: 1, versions: 1 });
+    expect(e.findings.map((f) => [f.app.name, f.id, f.notDependent])).toEqual([
+      ["Unrelated App", ids.controlId, true],
+    ]);
+    expect(r.backend.fetched).toContain("Unrelated App");
+  });
+
+  test("a lead with no real clash does not stop the run", async () => {
+    const calls = { objects: 0, versions: 0 };
+    const r = await drive({
+      configure: serve(calls),
+      packages: new Map([
+        [TEST_APP.name, residentTestsApp()],
+        ["R843 Target", targetPackage],
+        ["Unrelated App", unrelated({ Codeunits: [{ Id: 1, Name: "Mine" }] })],
+      ]),
+    });
+    expect("report" in r).toBe(true);
+    expect(r.backend.deploys).toBeGreaterThan(0);
+    expect(calls.objects).toBe(1);
+  });
+
+  test("a failed dependents read still reaches the lead (no early return)", async () => {
+    const calls = { objects: 0, versions: 0 };
+    const r = await drive({
+      dependents: "throws",
+      configure: serve(calls),
+      packages: new Map([
+        ["R843 Target", targetPackage],
+        ["Unrelated App", unrelated({ Codeunits: [{ Id: ids.controlId, Name: "Theirs" }] })],
+      ]),
+    });
+    refused(r);
+    expect(r.backend.deploys).toBe(0);
+  });
+
+  describe("a field lead, with table ids read from the package folders the backend names", () => {
+    const BASE_ID = "437dbf0e-84ff-417a-965d-ed2bb9650972";
+    const D_ID = "d0d0d0d0-0000-4000-8000-00000000000d";
+    const Y_ID = "e1e1e1e1-0000-4000-8000-00000000000e";
+    const CUSTOMER = `#${BASE_ID.replaceAll("-", "")}#Customer`;
+    const PKG_NS = 'xmlns="http://schemas.microsoft.com/navx/2015/manifest"';
+    const cachePkg = (
+      id: string,
+      name: string,
+      deps: readonly string[],
+      extra: Record<string, unknown[]>,
+    ): Uint8Array =>
+      new Uint8Array(
+        buildFakeAppWithEntries({
+          "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${PKG_NS}><App Id="${id}" Name="${name}" Publisher="P" Version="1.0.0.0" /><Dependencies>${deps
+            .map((d) => `<Dependency Id="${d}" Name="Sub" Publisher="P" MinVersion="1.0.0.0" />`)
+            .join("")}</Dependencies></Package>`,
+          "SymbolReference.json": JSON.stringify({ AppId: id, Version: "1.0.0.0", ...extra }),
+        }),
+      );
+    const EXT_AL = `tableextension 79010 "Cust Ext" extends Customer
+{
+    fields
+    {
+        field(50000; "New Field"; Integer) { }
+    }
+}
+`;
+    const installedTarget = new Uint8Array(
+      buildFakeAppWithEntries({
+        "SymbolReference.json": JSON.stringify({
+          AppId: TARGET_ID,
+          Version: "1.0.0.0",
+          Codeunits: [{ Id: 79000, Name: "Sandbox Logic" }],
+          TableExtensions: [
+            {
+              Id: 79010,
+              Name: "Cust Ext",
+              TargetObject: CUSTOMER,
+              Fields: [{ Id: 50001, Name: "Old Field" }],
+            },
+          ],
+        }),
+      }),
+    );
+    const xPackage = new Uint8Array(
+      buildFakeAppWithEntries({
+        "SymbolReference.json": JSON.stringify({
+          AppId: X.id,
+          Version: X.version,
+          TableExtensions: [
+            {
+              Id: 60000,
+              Name: "X Cust",
+              TargetObject: CUSTOMER,
+              Fields: [{ Id: 50000, Name: "Other" }],
+            },
+          ],
+        }),
+      }),
+    );
+    const TARGET_APP = {
+      id: TARGET_ID,
+      name: "R843 Target",
+      publisher: "LethAL",
+      version: "1.0.0.0",
+    };
+    /** The keyed reads: the target owns its objects and the control field, X owns field 50000. */
+    const serveFields =
+      (dir: string, fieldCalls: { n: number }) =>
+      (b: ClashBackend): void => {
+        b.dependencyPackageDirs = () => [dir];
+        b.installedVersions = async () => ["1.0.0.0"];
+        b.objectOwners = async (items) => {
+          const rows = items.map((item) =>
+            (item.kind === "Codeunit" && item.id === 79000) ||
+            (item.kind === "TableExtension" && item.id === 79010)
+              ? { ...item, outcome: "owner" as const, app: TARGET_APP }
+              : { ...item, outcome: "none" as const },
+          );
+          return { read: rows.length, rows };
+        };
+        b.fieldOwners = async (items) => {
+          fieldCalls.n++;
+          const rows = items.map((item) => {
+            const hit =
+              "id" in item && item.id === 50001
+                ? { app: TARGET_APP, fieldName: "Old Field" }
+                : "id" in item && item.id === 50000
+                  ? { app: X, fieldName: "Other" }
+                  : undefined;
+            return hit === undefined
+              ? { ...item, outcome: "none" as const }
+              : { ...item, outcome: "owner" as const, ...hit, tableName: "Customer" };
+          });
+          return { read: rows.length, rows };
+        };
+      };
+    const packages = new Map<string, PackageRead>([
+      [TEST_APP.name, residentTestsApp()],
+      ["R843 Target", installedTarget],
+      ["Unrelated App", xPackage],
+    ]);
+
+    test("refuses from the lead's package, with zero deploys", async () => {
+      const dir = scratch("lethal-r847-cache-");
+      await Bun.write(
+        join(dir, "base.app"),
+        cachePkg(BASE_ID, "Base Application", [], { Tables: [{ Id: 18, Name: "Customer" }] }),
+      );
+      const fieldCalls = { n: 0 };
+      const r = await drive({
+        configure: serveFields(dir, fieldCalls),
+        targetFiles: { "CustExt.TableExt.al": EXT_AL },
+        packages,
+      });
+      const e = refused(r);
+      expect(r.backend.deploys).toBe(0);
+      expect(fieldCalls.n).toBe(1);
+      expect(e.findings).toEqual([]);
+      expect(e.memberFindings.map((m) => [m.app.name, m.rule, m.notDependent])).toEqual([
+        ["Unrelated App", "field-id", true],
+      ]);
+    });
+
+    test("a dependency's own dependency that is not in the cache: the name is not trusted, nothing is refused", async () => {
+      const dir = scratch("lethal-r847-cache-");
+      await Bun.write(
+        join(dir, "base.app"),
+        cachePkg(BASE_ID, "Base Application", [], { Tables: [{ Id: 18, Name: "Customer" }] }),
+      );
+      await Bun.write(join(dir, "d.app"), cachePkg(D_ID, "D", [Y_ID], {}));
+      const fieldCalls = { n: 0 };
+      const r = await drive({
+        configure: serveFields(dir, fieldCalls),
+        targetFiles: { "CustExt.TableExt.al": EXT_AL },
+        appJson: JSON.stringify({ ...JSON.parse(APP_JSON), dependencies: [{ id: D_ID }] }),
+        packages,
+      });
+      expect("report" in r).toBe(true);
+      expect(r.backend.deploys).toBeGreaterThan(0);
+      expect(fieldCalls.n).toBe(0);
+      expect(r.backend.fetched).not.toContain("Unrelated App");
+      expect(
+        r.warnings.some(
+          (w) =>
+            w.code === "object-clash-unchecked" && /is not in the package cache/.test(w.message),
+        ),
+      ).toBe(true);
+    });
+  });
+
+  test("a backend without the keyed reads asks nothing and is not refused", async () => {
+    const r = await drive({
+      packages: new Map([
+        [TEST_APP.name, residentTestsApp()],
+        ["Unrelated App", unrelated({ Codeunits: [{ Id: ids.controlId, Name: "Theirs" }] })],
+      ]),
+    });
+    expect("report" in r).toBe(true);
+    expect(r.backend.fetched).not.toContain("Unrelated App");
   });
 });
 

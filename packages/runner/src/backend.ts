@@ -541,6 +541,29 @@ export interface ExecutionBackend {
   installedDependents?(appId: string): Promise<readonly import("./harness").InstalledDependent[]>;
 
   /**
+   * R847, OPTIONAL: the versions of `appId`'s INSTALLED rows, read by id (R433). Present on bcdev
+   * only. None means not installed (a first publish); two means there is no one installed base.
+   */
+  installedVersions?(appId: string): Promise<readonly string[]>;
+
+  /**
+   * R847, OPTIONAL (needs control app 1.0.0.25 or newer): who owns each object, read by key. Present on bcdev
+   * only. One row per item read; a read cut short by `maxMs` answers fewer.
+   */
+  objectOwners?(
+    items: readonly import("./harness").ObjectItem[],
+    maxMs: number,
+    timeoutMs: number,
+  ): Promise<import("./harness").OwnersRead<import("./harness").ObjectOwnerRow>>;
+
+  /** R847, OPTIONAL (needs control app 1.0.0.25 or newer): as `objectOwners`, for fields. */
+  fieldOwners?(
+    items: readonly import("./harness").FieldItem[],
+    maxMs: number,
+    timeoutMs: number,
+  ): Promise<import("./harness").OwnersRead<import("./harness").FieldOwnerRow>>;
+
+  /**
    * R488, OPTIONAL: every test the session discovered, every arm read, given before the baseline
    * and to every worker. A backend whose test selector is a substring match (al-runner one-shot)
    * excludes the look-alikes up front with it.
