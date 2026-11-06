@@ -270,6 +270,13 @@ function enclosingExitParts(node: ALSyntaxNode, ctx: SemanticContext): ALSyntaxN
   return out;
 }
 
+/** Does `node` sit in an enclosing loop's exit parts: its condition, a guard of an exit, or a feed? */
+export function inLoopExitParts(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+  const inside = (p: ALSyntaxNode): boolean =>
+    p.startIndex <= node.startIndex && node.endIndex <= p.endIndex;
+  return enclosingExitParts(node, ctx).some((parts) => parts.some(inside));
+}
+
 /** Per-context, per-file memo. The file root is a stable object (the arm map is keyed by it). */
 const memo = new WeakMap<object, WeakMap<ALSyntaxNode, Map<string, unknown>>>();
 function cached<T>(ctx: SemanticContext, n: ALSyntaxNode, tag: string, f: () => T): T {
@@ -1046,7 +1053,45 @@ function exitEffect(
  * bare call in a `with` body. A site INSIDE the callee is [[R837]].
  */
 function deletedCallHangs(node: ALSyntaxNode, ctx: SemanticContext): boolean {
-  if (node.kind !== ALNodeKind.procedure_call || !isStatementSlot(node)) return false;
+  return (
+    node.kind === ALNodeKind.procedure_call && isStatementSlot(node) && callIsProgress(node, ctx)
+  );
+}
+
+/** The `if` whose condition holds `site`, or null. */
+function guardedIf(site: ALSyntaxNode): ALSyntaxNode | null {
+  let n = site;
+  for (let cur = site.parent; cur !== null && !isScope(cur); n = cur, cur = cur.parent) {
+    if (cur.kind === ALNodeKind.if_statement) return n.fieldName === "condition" ? cur : null;
+  }
+  return null;
+}
+
+/**
+ * R855, for an operator that deletes `operand` of the expression `site`. AL evaluates both operands,
+ * so a call in the operand always ran: `Total := Total + Step()` to `Total := Total`, or
+ * `if Flag or Step() then` to `if Flag then`, loses it for certain. And `site` may guard a progress
+ * call: `repeat if A or B then Advance(); until Done` to `if A then Advance();`.
+ * `negate-conditional` has the second exposure today ([[R856]]).
+ */
+export function deletedOperandHangs(
+  operand: ALSyntaxNode,
+  site: ALSyntaxNode,
+  ctx: SemanticContext,
+): boolean {
+  let hangs = false;
+  const ask = (n: ALSyntaxNode, statement: boolean): void => {
+    if (n.kind !== ALNodeKind.procedure_call || (statement && !isStatementSlot(n))) return;
+    hangs ||= callIsProgress(n, ctx);
+  };
+  visitAll(operand, (n) => ask(n, false));
+  const guard = guardedIf(site);
+  if (guard !== null) visitAll(guard, (n) => ask(n, true));
+  return hangs;
+}
+
+/** Does this call move a name an enclosing `while` or `repeat`'s exit parts read? */
+function callIsProgress(node: ALSyntaxNode, ctx: SemanticContext): boolean {
   const loops: ALSyntaxNode[] = [];
   for (let cur = node.parent; cur !== null && !isScope(cur); cur = cur.parent) {
     if (LOOP_KINDS.has(cur.kind)) loops.push(cur);
