@@ -71,3 +71,6 @@ One line changed, the scheme, and the confirm run passed. Logs: `/coord/handoff/
   [servers.md](servers.md) (proof is per server).
 - R582 (2026-10-22) switched R577's "a kill must reproduce" rule on for bcdev. No verdict and no
   counter moved here (`docs/superpowers/specs/2026-10-22-r582-bcdev-kill-reproduction-precommitment.md`).
+- R843 (2026-11-06) added a read-only check before the first publish: when an installed dependent (here the tests app)
+  declares an object with the target's type and id, the run is refused by name and nothing is published. No fixture pair
+  clashes, so no figure moves; this gate runs the check and expects it to find nothing.

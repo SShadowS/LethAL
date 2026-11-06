@@ -126,7 +126,7 @@ import {
   dependencySourceDigest,
   dependencySourceWarning,
 } from "./dependency-report-source";
-import { checkDependents } from "./dependents-warning";
+import { dependentsWarning, readDependents } from "./dependents-warning";
 import type { PublishOutcome } from "./deployment-verifier";
 import {
   DependencyUnreadableError,
@@ -184,6 +184,7 @@ import {
   wrappedRuleFor,
 } from "./line-map";
 import { nestedProjectWarning } from "./nested-project";
+import { checkObjectClashes } from "./object-clash";
 import { isRetrySafe, requiresUnsafeLatch } from "./operation-outcome";
 import {
   type LaneSink,
@@ -4176,6 +4177,10 @@ function targetIdentity(
  */
 function classifyDeployFailure(err: unknown): PublishOutcome | undefined {
   if (parseVersionConflict(messageOf(err)) !== null) return undefined;
+  if (/defined in multiple apps/i.test(messageOf(err))) return undefined;
+  // R843: BC refusing an upgrade because the target and an installed app declare one object is a
+  // fact about two apps, not about the artifact's size. Recorded as `failed` it would become a
+  // publish ceiling at this guard count and refuse later runs of that size.
   if (err instanceof PublishFailedError) return "failed";
   if (err instanceof DeploymentError) return err.outcome;
   return undefined;
@@ -7403,12 +7408,35 @@ async function runSessionBody(
       if (!dependentsChecked) {
         dependentsChecked = true;
         const name = typeof projectManifest.name === "string" ? projectManifest.name : "(unnamed)";
-        const dependentsMessage = await checkDependents(cfg.backend, cfg.testDir, {
-          name,
-          id: targetAppIdOf(projectManifest),
-        });
+        const dependentsTarget = { name, id: targetAppIdOf(projectManifest) };
+        const dependents = await readDependents(cfg.backend, cfg.testDir, dependentsTarget);
+        const dependentsMessage =
+          dependents === null
+            ? null
+            : dependentsWarning(dependents.read, dependents.testsAppId, dependentsTarget);
         if (dependentsMessage !== null) {
           emit({ type: "warning", code: "installed-dependents", message: dependentsMessage });
+        }
+        // R843: before anything is published, refuse a target that declares an object an installed
+        // dependent declares (BC refuses the upgrade and, unable to restore, removes the dependent).
+        // bcdev only; this block precedes `deployStep`, the only route to `.deploy(`, so every path
+        // that publishes a target passes it. Reads only. Sharing the dependents read above.
+        if (dependents !== null && isBcdev(caps.kind)) {
+          const clashWarnings = await checkObjectClashes({
+            dependents: dependents.read,
+            testsAppId: dependents.testsAppId,
+            targetFiles: [...sourceSnapshot]
+              .filter(([p]) => p.toLowerCase().endsWith(".al"))
+              .map(([path, b]) => ({ path, text: b.toString("utf8") })),
+            targetSymbols: buildSymbols,
+            injected: cfg.selectorIds,
+            fetchPackage: cfg.backend.fetchPublishedAppPackage?.bind(cfg.backend),
+            readTestSources: () => readTestAppSources(cfg.testDir),
+            testSymbols: testBuildSymbols,
+          });
+          for (const message of clashWarnings) {
+            emit({ type: "warning", code: "object-clash-unchecked", message });
+          }
         }
       }
       let compiled: CompiledArtifact | null = null;

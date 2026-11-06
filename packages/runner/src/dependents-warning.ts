@@ -39,12 +39,18 @@ export function dependentsWarning(
   return `[lethal] R727: ${others.length} installed app(s) other than this run's tests app depend on the target ${target.name} (${target.id}): ${named}. If this build breaks one of them, BC refuses the upgrade and removes it (R709).`;
 }
 
-/** One read-only call, then the message. No `installedDependents` on the backend: no call, no message. */
-export async function checkDependents(
+/** What one read of the installed dependents gave, with the tests app's id (R843 shares it). */
+export interface DependentsRead {
+  readonly read: readonly InstalledDependent[] | { readonly error: unknown };
+  readonly testsAppId: string | undefined;
+}
+
+/** One read-only call. `null` when the backend has no `installedDependents`: no call was made. */
+export async function readDependents(
   backend: Pick<ExecutionBackend, "installedDependents">,
   testDir: string,
   target: DependentsTarget,
-): Promise<string | null> {
+): Promise<DependentsRead | null> {
   if (backend.installedDependents === undefined) return null;
   let read: readonly InstalledDependent[] | { readonly error: unknown };
   try {
@@ -60,5 +66,15 @@ export async function checkDependents(
   } catch {
     // An unreadable tests app.json excludes nothing: the warning may over-report, never hide.
   }
-  return dependentsWarning(read, testsAppId, target);
+  return { read, testsAppId };
+}
+
+/** One read-only call, then the message. No `installedDependents` on the backend: no call, no message. */
+export async function checkDependents(
+  backend: Pick<ExecutionBackend, "installedDependents">,
+  testDir: string,
+  target: DependentsTarget,
+): Promise<string | null> {
+  const got = await readDependents(backend, testDir, target);
+  return got === null ? null : dependentsWarning(got.read, got.testsAppId, target);
 }
