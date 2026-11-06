@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { dedupeSpecs } from "@lethal/schemata";
 import type { CompiledArtifact } from "../src/artifact";
 import type {
   BackendCapabilities,
@@ -11,9 +12,10 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
-import { parseCliConfig } from "../src/cli";
+import { parseCliConfig, runFromCli } from "../src/cli";
 import type { RunEvent, RunEventInput } from "../src/events";
 import {
+  admittedOperatorNames,
   generateMutationSet,
   operatorTiers,
   resolveOperatorNames,
@@ -22,6 +24,9 @@ import {
 import { buildReport, renderConsole } from "../src/report";
 import type { FoldStatics } from "../src/report-fold";
 import { ResultsStore } from "../src/store";
+import { removeRunScratchAfterAll } from "./helpers/scratch";
+
+removeRunScratchAfterAll();
 
 /**
  * R127. `--operator <name>` narrows which OPERATORS contribute mutants, so a question about one
@@ -241,6 +246,97 @@ describe("generateMutationSet — --operator narrows the mutant set", () => {
  * exactly one — mutants the project's real mutant set does not contain. That is a narrowing knob
  * changing what exists, which R127 says it must never do.
  */
+describe("R832: --exclude-operator", () => {
+  const REGISTERED = ["lethal.a", "lethal.b", "lethal.c"];
+
+  /** What an unfiltered run deploys: its files still hold the specs dedup deletes. */
+  async function fullDeployed(dir: string): Promise<string[]> {
+    const { files } = await generateMutationSet(dir);
+    return operatorNamesOf(
+      files.map((f) => ({ specs: dedupeSpecs(f.specs, (n) => operatorTiers.get(n)) })),
+    );
+  }
+
+  test("admits every other operator, with or without the prefix", () => {
+    expect([...(admittedOperatorNames({ excludeOperators: ["a"] }, REGISTERED) ?? [])]).toEqual([
+      "lethal.b",
+      "lethal.c",
+    ]);
+    expect([
+      ...(admittedOperatorNames({ excludeOperators: ["lethal.a", "c"] }, REGISTERED) ?? []),
+    ]).toEqual(["lethal.b"]);
+  });
+
+  test("no names at all means no narrowing", () => {
+    expect(admittedOperatorNames({}, REGISTERED)).toBeUndefined();
+  });
+
+  test("an unregistered name is refused, and the refusal names this flag", () => {
+    expect(() => admittedOperatorNames({ excludeOperators: ["typo"] }, REGISTERED)).toThrow(
+      '--exclude-operator named an operator this build does not register: "typo"',
+    );
+  });
+
+  test("both flags together are refused", async () => {
+    expect(() =>
+      admittedOperatorNames({ operators: ["a"], excludeOperators: ["b"] }, REGISTERED),
+    ).toThrow("cannot be combined");
+    await withProject(FIXTURE, async (dir) => {
+      await expect(
+        generateMutationSet(dir, {
+          operators: ["empty-block"],
+          excludeOperators: ["remove-assignment"],
+        }),
+      ).rejects.toThrow("cannot be combined");
+    });
+  });
+
+  test("keeps exactly the full run's mutants minus that operator, and counts them", async () => {
+    await withProject(FIXTURE, async (dir) => {
+      const full = await fullDeployed(dir);
+      const left = "lethal.empty-block";
+      const dropped = full.filter((n) => n === left).length;
+      expect(dropped).toBeGreaterThan(0);
+      const set = await generateMutationSet(dir, { excludeOperators: ["empty-block"] });
+      expect(operatorNamesOf(set.files)).toEqual(full.filter((n) => n !== left));
+      expect(set.excludedByOperator).toBeGreaterThan(0);
+    });
+  });
+
+  test("leaving out an operator with no site here changes nothing and is not refused", async () => {
+    await withProject(FIXTURE, async (dir) => {
+      const full = await fullDeployed(dir);
+      const absent = [...operatorTiers.keys()].find((n) => !full.includes(n));
+      expect(absent).toBeDefined();
+      const set = await generateMutationSet(dir, { excludeOperators: [absent ?? ""] });
+      expect(operatorNamesOf(set.files)).toEqual(full);
+    });
+  });
+
+  test("leaving out every operator that found a site is refused, not an empty run", async () => {
+    await withProject(FIXTURE, async (dir) => {
+      const full = [...new Set(operatorNamesOf((await generateMutationSet(dir)).files))];
+      await expect(generateMutationSet(dir, { excludeOperators: full })).rejects.toThrow(
+        "--exclude-operator left no deployable mutation site",
+      );
+    });
+  });
+
+  test("the warning names the flag and the operator left out", async () => {
+    await withProject(FIXTURE, async (dir) => {
+      const seen: string[] = [];
+      await generateMutationSet(dir, {
+        excludeOperators: ["empty-block"],
+        emit: (e) => {
+          if (e.type === "warning" && e.code === "operator-narrowed-run") seen.push(e.message);
+        },
+      });
+      expect(seen.length).toBe(1);
+      expect(seen[0]).toContain("--exclude-operator left out empty-block");
+    });
+  });
+});
+
 describe("generateMutationSet — --operator cannot resurrect a mutant dedup deletes", () => {
   test("void-method-call yields ONLY the site no Tier-2 operator claims", async () => {
     await withProject(FIXTURE, async (projectDir) => {
@@ -529,7 +625,10 @@ describe("runSession — --operator reaches both the mutant set AND the report",
     }
   }
 
-  async function runWith(operators: readonly string[] | undefined) {
+  async function runWith(
+    operators: readonly string[] | undefined,
+    excludeOperators?: readonly string[],
+  ) {
     const root = await mkdtemp(join(tmpdir(), "lethal-operator-run-"));
     const projectDir = join(root, "app");
     const testDir = join(root, "tests");
@@ -546,6 +645,7 @@ describe("runSession — --operator reaches both the mutant set AND the report",
         instrumentedDir: join(root, "instr"),
         selectorIds: { selectorId: 50000, controlId: 50001, tableId: 50002 },
         ...(operators !== undefined ? { operators } : {}),
+        ...(excludeOperators !== undefined ? { excludeOperators } : {}),
       });
     } finally {
       store.close();
@@ -571,11 +671,77 @@ describe("runSession — --operator reaches both the mutant set AND the report",
     expect(scoped.validity.reliability).toBe("narrowed");
   });
 
+  test("R832: --exclude-operator runs the rest, and the report says so", async () => {
+    const unfiltered = await runWith(undefined);
+    // Most registered operators have no site here: a run must not refuse them as barren.
+    const scoped = await runWith(undefined, ["empty-block"]);
+
+    const left = (m: { operatorName: string }) => m.operatorName === "lethal.empty-block";
+    expect(unfiltered.mutants.some(left)).toBe(true);
+    expect(scoped.mutants.some(left)).toBe(false);
+    // Not `mutantCode`: ids are numbered per run, so they shift when a mutant is left out.
+    const key = (m: { operatorName: string; line: number }) => `${m.operatorName}:${m.line}`;
+    expect(scoped.mutants.map(key).sort()).toEqual(
+      unfiltered.mutants
+        .filter((m) => !left(m))
+        .map(key)
+        .sort(),
+    );
+
+    expect(scoped.operators?.names).toEqual(
+      [...operatorTiers.keys()].filter((n) => n !== "lethal.empty-block").sort(),
+    );
+    expect(scoped.operators?.excludedSiteCount).toBe(
+      unfiltered.mutants.length - scoped.mutants.length,
+    );
+    expect(scoped.validity.caveats).toContain("operator-narrowed");
+    expect(scoped.validity.reliability).toBe("narrowed");
+  });
+
   test("counterweight: the same run without --operator carries none of that", async () => {
     const unfiltered = await runWith(undefined);
     expect(unfiltered.operators).toBeUndefined();
     expect(unfiltered.validity.caveats).not.toContain("operator-narrowed");
     expect(unfiltered.validity.reliability).toBe("full");
+  });
+});
+
+const CLI = join(import.meta.dir, "../src/cli.ts");
+const SANDBOX = join(import.meta.dir, "../../../fixtures/sandbox-app");
+
+test("R832: `lethal run` hands --exclude-operator to runSession", async () => {
+  await withProject(FIXTURE, async (projectDir) => {
+    const configPath = join(projectDir, "lethal.config.json");
+    await Bun.write(configPath, "{}");
+    const parsed = parseCliConfig([
+      "run",
+      "--project",
+      projectDir,
+      "--tests",
+      join(projectDir, "..", "tests"),
+      "--backend",
+      "al-runner-v3",
+      "--config",
+      configPath,
+      "--db",
+      ":memory:",
+      "--exclude-operator",
+      "empty-block",
+    ]);
+    if (parsed.mode !== "run") throw new Error("mode drift");
+    let captured: readonly string[] | undefined;
+    const stop = new Error("captured");
+    await expect(
+      runFromCli(parsed, {
+        validateSelectorIdsForProject: async () => {},
+        buildBackend: async () => ({}) as ExecutionBackend,
+        runSession: async (cfg) => {
+          captured = cfg.excludeOperators;
+          throw stop;
+        },
+      }),
+    ).rejects.toBe(stop);
+    expect(captured).toEqual(["empty-block"]);
   });
 });
 
@@ -609,6 +775,42 @@ describe("parseCliConfig — --operator", () => {
     const cfg = parseCliConfig(["run", "--project", "p", "--dry-run", "--operator", "empty-block"]);
     if (cfg.mode !== "dry-run") throw new Error("mode drift");
     expect(cfg.operators).toEqual(["empty-block"]);
+  });
+
+  test("R832: --exclude-operator is repeatable, also on a dry run, absent when not given", () => {
+    const cfg = parseCliConfig([...RUN_ARGS, "--exclude-operator", "a", "--exclude-operator", "b"]);
+    if (cfg.mode !== "run") throw new Error("mode drift");
+    expect(cfg.excludeOperators).toEqual(["a", "b"]);
+    expect("excludeOperators" in parseCliConfig([...RUN_ARGS])).toBe(false);
+    const dry = parseCliConfig(["run", "--project", "p", "--dry-run", "--exclude-operator", "a"]);
+    if (dry.mode !== "dry-run") throw new Error("mode drift");
+    expect(dry.excludeOperators).toEqual(["a"]);
+  });
+
+  test("R832: the real CLI's dry run honours the flag, and refuses it beside --operator", async () => {
+    const cli = async (...flags: string[]) => {
+      const p = Bun.spawn(
+        [process.execPath, CLI, "run", "--project", SANDBOX, "--dry-run", ...flags],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const [out, err] = await Promise.all([
+        new Response(p.stdout).text(),
+        new Response(p.stderr).text(),
+      ]);
+      return { code: await p.exited, text: out + err };
+    };
+    const left = await cli("--exclude-operator", "empty-block");
+    expect(left.text).toContain('narrowed by --exclude-operator "empty-block"');
+    expect(left.text).not.toContain("lethal.empty-block");
+    const both = await cli("--exclude-operator", "empty-block", "--operator", "return-value");
+    expect(both.code).not.toBe(0);
+    expect(both.text).toContain("cannot be combined");
+  }, 30_000);
+
+  test("R832: an empty --exclude-operator is refused at parse time", () => {
+    expect(() => parseCliConfig([...RUN_ARGS, "--exclude-operator", ""])).toThrow(
+      /--exclude-operator requires a non-empty/,
+    );
   });
 
   test("--only and --operator are independent", () => {
