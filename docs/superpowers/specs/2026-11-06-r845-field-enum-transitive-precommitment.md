@@ -26,6 +26,10 @@ scratch apps, `bc1` for upgrades, `bc2` for fresh publishes.
 | L3f | enum ordinal, both extending a third app's enum | stripped |
 | L3g | enum value name, both extending a third app's enum | stripped |
 | U3, L2, L3h | any clash with an app that is NOT a dependent | no restore attempt: A's old row gone, new row not installed, A's dependents not installed, the other app fine |
+| K01-K11 | object kind + id, each of Table, Page, Report, Query, XmlPort, TableExtension, PageExtension, ReportExtension, EnumExtension, PermissionSetExtension, in a dependent | stripped, all with "defined in multiple apps" |
+| R4 | U3 with a dependent B | A v2 fails with no restore sentence, B not installed, X fine |
+
+With Codeunit, PermissionSet and Enum (measured earlier), all 13 kinds the object rule compares are measured: its refusals stand.
 
 **Accepted by BC, so these must never refuse:**
 
@@ -35,6 +39,7 @@ scratch apps, `bc1` for upgrades, `bc2` for fresh publishes.
 | L6a, L6b | page control and action names |
 | L6d | same-kind object, same name, other id |
 | f3c, f3d | one id across kinds (enum, codeunit), fresh publish |
+| K2 | table against page, one id, upgrade |
 
 **A clashing pair cannot be installed.** BC recompiles a dependent at publish: L1, L3a-d were refused cleanly, the originals restored. So
 comparing all of the target's fields is as safe as comparing only new ones: no installed pair can trip it, and BC's text ("can only appear
@@ -100,8 +105,11 @@ Each new BC refusal needs a change in three places, so name the texts in one hel
   control-app action offers today. It loses the target and its dependents; the other app is untouched. Two unrelated apps adding one field to `Customer` is
   the likely real case. A control-app action reading `AllObj` and `Field` could close objects and fields, at a version bump: filed as its own item.
 - **An env tool's publish command** may use another schema mode, and **the hook's own test-app publish** runs before this check.
-- **`table` against `page`, and the tableextension kinds across apps:** not measured on BC: a table leaves a schema ghost.
 - **Report columns, trailing spaces in names:** not measured.
+- **A transitive member clash cannot exist:** alc refuses AL0247 when C extends A's table with only a transitive path, so C must depend
+  on A directly and is then a direct dependent. The rule is kept; in effect it reaches only direct owners.
+- A table reached through `propagateDependencies` is not in `dependencies`, so a clash there only warns. One name in two trusted apps can
+  refuse wrongly, because the source side cannot check the owner's app (Base Application and Business Foundation share 8 table names).
 - **Fixture targets:** recovery is measured on scratch apps.
 
 ## Recovery for a user's own server

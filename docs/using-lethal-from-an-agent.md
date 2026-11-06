@@ -1074,12 +1074,20 @@ no restore attempt. Both point here. This was measured on a BC server with no re
    stranded rows, and the app's data stays.
 4. Publish each listed dependent in dependency order (an app before the apps that depend on it), each
    at a version above its stranded row. The same build is refused with "A duplicate package ID is
-   detected": rebuild it with a higher version. Chains longer than one level, and the dependents
-   of an app stranded after `UpgradeClashRefusedError`: [pending measurement].
+   detected": rebuild it with a higher version. Measured after a clash with an app that is not a
+   dependent: the fixed target at a version above the stranded one, then the dependent at a
+   higher version: two publishes, nothing uninstalled. For a chain A, B (depends on A), C (depends
+   on B), all stripped: publish A, then B, then C, each at a higher version. Out of order a
+   step fails ("Cannot upgrade the extension ... because one or more dependencies could not be
+   satisfied") and USES UP its version: C at the second version before B left C's row at that version, so
+   the same build was then a duplicate and C needed the third. Go in dependency order, or a failed step costs a
+   version. The clean three-publish order was not run as one sequence; it follows from the two measurements above it.
 5. Do not fall back to the old build of the target when dependents were involved: BC says "a newer
-   version ... was already installed". With no dependents (measured: the target and the other app
-   only) the old build did publish after a refused clash and both apps stayed installed. That is a
-   rollback, not a fix: your change is still not on the server.
+   version ... was already installed". After a clash with an app that is not a dependent the old
+   target does publish, but that restores only the target, and the dependent's same build is then
+   refused as a duplicate package id. With no dependents at all the old build publishes and both
+   apps stay installed. Either way that is a rollback, not a fix: your change is still not on the
+   server.
 6. If you unpublished everything first, a dependent's same build publishes again, and the target
    must still be the higher version.
 
