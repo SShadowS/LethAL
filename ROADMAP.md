@@ -335,7 +335,7 @@ that ordering is the priority.
 - **R844** · A run with some `error` mutants reads a higher score and says only `error N`: nothing states they are outside the score · [R844.md](docs/roadmap/R844.md) · done (1b213195): caveat some-errors, and a console line after score: giving the range the score could read…
 - **R843** · `lethal run` can strip a user's server: a target object with the same type and id as one in its test app is published, and BC removes the apps · [R843.md](docs/roadmap/R843.md) · done (c482126f)
 - **R845** · Clashes a pre-publish object list cannot see can still strip a server: field ids, enum values, non-dependents, transitive dependents · [R845.md](docs/roadmap/R845.md) · done (2a69245e); live leg passed on bc1, 2026-11-06
-- **R847** · A control-app action that reads AllObj and Field would let the pre-publish clash check see an installed app that is not a dependent · [R847.md](docs/roadmap/R847.md) · open, filed 2026-11-06 (coord task R-845): not built
+- **R847** · A control-app action that reads AllObj and Field would let the pre-publish clash check see an installed app that is not a dependent · [R847.md](docs/roadmap/R847.md) · open on one line, built and merged by R-847: no live run has gone from a real clash to a refusal through the…
 
 ## Product gaps a real project hits
 

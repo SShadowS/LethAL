@@ -77,13 +77,15 @@ const MIN_PROTOCOL_VERSION = 2;
  * lag behind only for an action the client treats as optional, and none is now. Raise it (to
  * app.json's version) whenever a client path REQUIRES a new control action and has no fallback:
  * that is why the two were once pinned equal.
+ * 1.0.0.25 (R847) adds the read actions `ObjectOwners` and `FieldOwners`; the clash check's
+ * non-dependent step uses them, and there is no fallback for an older control app.
  * 1.0.0.24 (R689, R733) adds `InstalledDependents` and the found-0 `discoveryError` fields; R727's
  * dependents warning and R389's `DependentCount` read need 1.0.0.23 and 1.0.0.24, and there is no
  * fallback for an older control app (no back-compat before release).
  * 1.0.0.22 (R583) changes no behaviour: it is the runtime-17.0 build, raised so a container still on
  * the runtime-16 build is refused before any gate measures against it.
  */
-export const MIN_CONTROL_VERSION = "1.0.0.24";
+export const MIN_CONTROL_VERSION = "1.0.0.25";
 
 /**
  * R20: the harness could not be AUTHENTICATED — HTTP 401/403 — as distinct from "the control app is
@@ -143,6 +145,81 @@ export interface InstalledDependent {
   readonly name: string;
   readonly publisher: string;
   readonly version: string;
+}
+
+/** R847: most items one `ObjectOwners` / `FieldOwners` call takes (the control app refuses more). */
+export const OWNERS_MAX_ITEMS = 200;
+
+/** R847: one object to ask about. `kind` is a clash kind as `CLASH_KINDS` spells it. */
+export interface ObjectItem {
+  readonly kind: string;
+  readonly id: number;
+}
+
+/** R847: one field to ask about, by table number and field id, or by table number and name. */
+export type FieldItem =
+  | { readonly table: number; readonly id: number }
+  | { readonly table: number; readonly name: string };
+
+/** R847: `owner` names the installed app; `none` is a read that found no row; `unresolved` is a row
+ *  whose owner could not be told (it only ever warns). */
+export type OwnerOutcome = "owner" | "none" | "unresolved";
+
+export interface ObjectOwnerRow extends ObjectItem {
+  readonly outcome: OwnerOutcome;
+  readonly app?: InstalledDependent;
+}
+
+export type FieldOwnerRow = FieldItem & {
+  readonly outcome: OwnerOutcome;
+  readonly app?: InstalledDependent;
+  /** As BC holds them. The caller compares names exactly and checks `tableName`. */
+  readonly fieldName?: string;
+  readonly tableName?: string;
+};
+
+/** R847: `read` items were read (the first `read` of those asked); `rows` has one row for each. */
+export interface OwnersRead<R> {
+  readonly read: number;
+  readonly rows: readonly R[];
+}
+
+function ownersBad(action: string, parsed: unknown, why: string): HarnessVerificationError {
+  return new HarnessVerificationError(
+    `${action} answered ${JSON.stringify(parsed).slice(0, 300)}, which is not one row per item asked (${why})`,
+  );
+}
+
+/** The outcome of one owners row, with its app when it is an owner. Throws on anything else. */
+function ownerOutcome(
+  action: string,
+  parsed: unknown,
+  r: Record<string, unknown>,
+): { readonly outcome: OwnerOutcome; readonly app?: InstalledDependent } {
+  const { outcome } = r;
+  if (outcome === "none" || outcome === "unresolved") return { outcome };
+  if (outcome !== "owner") {
+    throw ownersBad(action, parsed, `outcome ${JSON.stringify(outcome)}`);
+  }
+  const { appId, appName, appPublisher, appVersion } = r;
+  if (
+    typeof appId !== "string" ||
+    !GUID_RE.test(appId) ||
+    typeof appName !== "string" ||
+    typeof appPublisher !== "string" ||
+    typeof appVersion !== "string"
+  ) {
+    throw ownersBad(action, parsed, "an owner row without a full app");
+  }
+  return {
+    outcome,
+    app: {
+      id: appId.toLowerCase(),
+      name: appName,
+      publisher: appPublisher,
+      version: appVersion,
+    },
+  };
 }
 
 /**
@@ -498,18 +575,134 @@ export class HarnessVerifier {
     });
   }
 
+  /**
+   * R847 (needs control app 1.0.0.25 or newer): who owns each object in `items`, read by key from AllObj.
+   * ONE ROW PER ITEM READ, in order. Throws on every answer it cannot read as that: a `read` that is
+   * not a whole number from 0 to `items.length`, a `rows` list of another length, a row that is not the
+   * item at its place, an outcome that is not owner/none/unresolved, an owner with no app. Fewer rows
+   * than items is a partial read (`read < items.length`), the caller's to warn about. `timeoutMs` is the
+   * time left in the caller's budget; `maxMs` the same, for the control app's loop.
+   */
+  async fetchObjectOwners(
+    items: readonly ObjectItem[],
+    maxMs: number,
+    timeoutMs: number,
+  ): Promise<OwnersRead<ObjectOwnerRow>> {
+    const parsed = await this.postOwnersAction("ObjectOwners", items, maxMs, timeoutMs);
+    const rows = this.ownerRows("ObjectOwners", parsed, items.length);
+    return {
+      read: rows.length,
+      rows: rows.map((r, i) => {
+        const item = items[i];
+        if (item === undefined || r.kind !== item.kind || r.id !== item.id) {
+          throw ownersBad("ObjectOwners", parsed, `row ${i} is not the item asked at place ${i}`);
+        }
+        const o = ownerOutcome("ObjectOwners", parsed, r);
+        return {
+          kind: item.kind,
+          id: item.id,
+          outcome: o.outcome,
+          ...(o.app !== undefined ? { app: o.app } : {}),
+        };
+      }),
+    };
+  }
+
+  /** R847: as `fetchObjectOwners`, for fields, read from the Field table (see `FieldItem`). */
+  async fetchFieldOwners(
+    items: readonly FieldItem[],
+    maxMs: number,
+    timeoutMs: number,
+  ): Promise<OwnersRead<FieldOwnerRow>> {
+    const parsed = await this.postOwnersAction("FieldOwners", items, maxMs, timeoutMs);
+    const rows = this.ownerRows("FieldOwners", parsed, items.length);
+    return {
+      read: rows.length,
+      rows: rows.map((r, i) => {
+        const item = items[i];
+        const same =
+          item !== undefined &&
+          r.table === item.table &&
+          ("id" in item ? r.id === item.id && r.name === undefined : r.name === item.name);
+        if (item === undefined || !same) {
+          throw ownersBad("FieldOwners", parsed, `row ${i} is not the item asked at place ${i}`);
+        }
+        const o = ownerOutcome("FieldOwners", parsed, r);
+        const out: FieldOwnerRow = {
+          ...item,
+          outcome: o.outcome,
+          ...(o.app !== undefined ? { app: o.app } : {}),
+        };
+        if (o.outcome !== "owner") return out;
+        if (typeof r.fieldName !== "string" || typeof r.tableName !== "string") {
+          throw ownersBad("FieldOwners", parsed, `owner row ${i} has no fieldName or tableName`);
+        }
+        return { ...out, fieldName: r.fieldName, tableName: r.tableName };
+      }),
+    };
+  }
+
+  /** The rows of an owners answer, after the checks both actions share. */
+  private ownerRows(
+    action: string,
+    parsed: Record<string, unknown>,
+    asked: number,
+  ): readonly Record<string, unknown>[] {
+    const { read, rows } = parsed;
+    if (
+      typeof read !== "number" ||
+      !Number.isInteger(read) ||
+      read < 0 ||
+      read > asked ||
+      !Array.isArray(rows) ||
+      rows.length !== read ||
+      !rows.every((r) => r !== null && typeof r === "object" && !Array.isArray(r))
+    ) {
+      throw ownersBad(action, parsed, `read ${JSON.stringify(read)} for ${asked} item(s)`);
+    }
+    return rows as readonly Record<string, unknown>[];
+  }
+
+  private postOwnersAction(
+    action: string,
+    items: readonly unknown[],
+    maxMs: number,
+    timeoutMs: number,
+  ): Promise<Record<string, unknown>> {
+    if (items.length === 0 || items.length > OWNERS_MAX_ITEMS) {
+      throw new Error(`${action}: ${items.length} item(s); a call takes 1 to ${OWNERS_MAX_ITEMS}`);
+    }
+    if (!Number.isInteger(maxMs) || maxMs <= 0 || !(timeoutMs > 0)) {
+      throw new Error(`${action}: maxMs ${maxMs} and timeoutMs ${timeoutMs} must be above 0`);
+    }
+    return this.postAction(
+      action,
+      // The camelCase of the AL parameter names (ItemsJson, MaxMs), as every other action is called.
+      { itemsJson: JSON.stringify(items), maxMs },
+      Math.ceil(timeoutMs),
+    );
+  }
+
   /** POSTs `{appId}` to `LethALControl_<action>` and returns the JSON object its `value` carries. */
   private async postAppIdAction(action: string, appId: string): Promise<Record<string, unknown>> {
     if (!GUID_RE.test(appId)) {
       throw new Error(`${action}: app id ${JSON.stringify(appId)} is not a bare GUID`);
     }
+    return this.postAction(action, { appId }, this.cfg.timeoutMs ?? 30_000);
+  }
+
+  /** POSTs `body` to `LethALControl_<action>`, with `ms` as the bound on headers AND body. */
+  private async postAction(
+    action: string,
+    body: Record<string, unknown>,
+    ms: number,
+  ): Promise<Record<string, unknown>> {
     const params = new URLSearchParams({ company: this.cfg.company });
     if (this.cfg.tenant !== undefined) params.set("tenant", this.cfg.tenant);
     const url = `${this.cfg.baseUrl}/ODataV4/LethALControl_${action}?${params.toString()}`;
     // Sol's review: the timeout covers the BODY too. A server that sends headers and then stalls
     // must time out (the guard then falls back), never hang the run. The race also covers a fetch
     // whose body ignores the abort signal.
-    const ms = this.cfg.timeoutMs ?? 30_000;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {
@@ -525,7 +718,7 @@ export class HarnessVerifier {
           authorization: `Basic ${btoa(`${this.cfg.username}:${this.cfg.password}`)}`,
           "content-type": "application/json",
         },
-        body: JSON.stringify({ appId }),
+        body: JSON.stringify(body),
         signal: controller.signal,
       });
       return { status: r.status, ok: r.ok, text: await r.text() };
