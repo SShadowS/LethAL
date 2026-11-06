@@ -15,6 +15,7 @@ import {
   type IdedSpec,
   type TierResolver,
   assignMutantIds,
+  buildComponents,
   dedupeSpecs,
   instrumentOneFile,
   planReachGrains,
@@ -139,7 +140,8 @@ async function checkDir(
     out.mutants += r.checked;
     out.guards += r.stats.guards;
     out.markers += r.stats.markers;
-    out.free += r.freeGuards;
+    // From the components, not the emitted text, where a nested free guard would fold unseen.
+    out.free += buildComponents(ided).filter((c) => c.free === true).length;
     out.findings.push(...r.findings);
   }
   return out;
@@ -384,6 +386,13 @@ describe("R827: only a body, and only its own empty-block", () => {
     expect(r.free).toBe(0);
     expect(r.findings.map((f) => `${f.mutantId} ${f.kind}: ${f.detail}`)).toEqual([]);
   });
+});
+
+test("R827: a statement touching the body's `end` does not join it", async () => {
+  const source = `codeunit 51997 "R827 Free"\n{\n    procedure P() var X: Integer;\n    begin\n        X := 1;\n        Foo(X + 1)end;\n}\n`;
+  const r = await checkSource(source);
+  expect(r.free).toBe(1);
+  expect(r.findings.map((f) => `${f.mutantId} ${f.kind}: ${f.detail}`)).toEqual([]);
 });
 
 describe("R827: which body is free", () => {

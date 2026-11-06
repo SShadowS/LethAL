@@ -32,7 +32,8 @@ import { REACH_LATCH } from "./reach-latch";
  * (compile-emit.ts) builds it from the plan alone and reads no node.
  */
 
-/** What replaces one planned span: literal text, or a dispatch chain EMIT writes from its plan. */
+/** What replaces one planned span: literal text, a free block's guard, or a dispatch chain EMIT
+ *  writes from its plan. */
 export type PlannedPayload =
   | { readonly kind: "text"; readonly text: string }
   | {
@@ -122,7 +123,9 @@ export function planFile(
         latch: latches.get(component) ?? REACH_LATCH,
         selector: selectorVarName(enclosingObjectDeclaration(component.root)) ?? SELECTOR_VAR,
       });
-      rewrites.set(insertionNodeAt(end, end.startIndex), text("end "));
+      // `Foo()end` is legal: a space, so this `end` does not join the chain's.
+      const glued = !/\s/.test(source.charAt(end.startIndex - 1));
+      rewrites.set(insertionNodeAt(end, end.startIndex), text(`${glued ? " " : ""}end `));
       continue;
     }
     rewrites.set(component.root, {

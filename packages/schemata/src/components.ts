@@ -12,7 +12,7 @@ export interface ComponentMember {
 }
 
 export interface Component {
-  /** Outermost resolved statement — the node the printer rewrites. */
+  /** Outermost resolved statement, or the loop `rootInFreeBlock` chose: the node the printer rewrites. */
   readonly root: ALSyntaxNode;
   /** Ordered: outermost mutation first, then by startIndex, then operatorName. */
   readonly members: readonly ComponentMember[];
@@ -86,7 +86,7 @@ export function buildComponents(ided: readonly IdedSpec[]): Component[] {
     return { mutantId: entry.mutantId, spec: entry.spec, statement, afterText };
   });
 
-  // Widest statement first, so the first member of a chain is always its root.
+  // Widest statement first, so a chain's root is seen before anything it holds.
   const bySpan = [...resolved].sort((a, b) => {
     const start = a.statement.startIndex - b.statement.startIndex;
     if (start !== 0) return start;

@@ -94,7 +94,8 @@ mutated, executes nothing, and reports both the raw site count and the deployed 
 
 On bcdev, `--dry-run` and the run's `large-method` warning name any file that emits one very large method. A 907-guard file
 stopped a BC service tier in GitHub #28, and such a method is the lead suspect, not a proven cause. The warning's thresholds are
-not measured and it refuses nothing. To shrink the method, leave out the operator with `--exclude-operator empty-block`.
+not measured and it refuses nothing. To shrink the method, leave out the operators it names with `--exclude-operator`, or narrow the
+run with `--only`.
 
 **Know which flags can move a verdict.** `--only`, `--exclude`, `--operator`, `--exclude-operator`, `--lines` and
 `--changed-since` select which

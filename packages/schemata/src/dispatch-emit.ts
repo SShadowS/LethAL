@@ -11,7 +11,8 @@ import { REACH_LATCH } from "./reach-latch";
  * Emit one flat guard chain for a containment component.
  *
  * Only ONE mutant is ever active, so mutants in a component are siblings in an
- * if/else-if chain rather than nested guards. That keeps growth linear (N+1
+ * if/else-if chain rather than nested chains (R827's `guardOpen` is the one nested guard, and copies
+ * no text). That keeps growth linear (N+1
  * branches for N mutants) and — crucially — keeps evaluation order inside every
  * branch identical to the original statement's, because nothing is hoisted.
  *
