@@ -171,18 +171,27 @@ function notReinstalledSentence(bcText: string): string {
  *  (`notReinstalledApps`), and says how to recover. Extends `Error` directly. */
 export class UpgradeNotRestoredError extends Error {
   constructor(bcText: string) {
+    // R843: BC's own words for two apps declaring one object. Said as such, not as "no longer
+    // compiles": the installed app compiled fine, against an older target.
+    const cause = /defined in multiple apps/i.test(bcText)
+      ? "BC says an application object of the target is defined in multiple apps: the target and " +
+        "another installed app declare the same object type and id (R843; LethAL checks " +
+        "this before publishing the target, so this is a clash that check could not see). "
+      : "An installed app that depends on the target no longer compiles against the new build " +
+        "(most often the tests app on the server is older than your tests source). ";
     super(
-      "BC refused to upgrade the target and could not restore the previous version (R709). " +
-        "An installed app that depends on the target no longer compiles against the new build " +
-        "(most often the tests app on the server is older than your tests source). BC has left " +
-        "the target UNINSTALLED and REMOVED every installed app that depends on it, the tests " +
-        "app at least; BC's text below names them. LethAL did not retry. To recover: uninstall " +
-        "and unpublish the stranded target, then publish the target, the tests app built from " +
-        "your CURRENT source, and every other app BC names. On a LethAL gate server (bc1-bc3) " +
-        "the setup script refuses this state: ask the owner to restart the server, then run " +
-        "`bun scripts/bc-linux-setup.ts --server bcN` (docs/gates/servers.md, R709). If BC " +
-        "refuses an old version as a downgrade, its installed-version record needs a restart " +
+      [
+        "BC refused to upgrade the target and could not restore the previous version (R709). ",
+        cause,
+        "BC has left the target UNINSTALLED and REMOVED every installed app that depends on it, the tests ",
+        "app at least; BC's text below names them. LethAL did not retry. To recover: uninstall ",
+        "and unpublish the stranded target, then publish the target, the tests app built from ",
+        "your CURRENT source, and every other app BC names. On a LethAL gate server (bc1-bc3) ",
+        "the setup script refuses this state: ask the owner to restart the server, then run ",
+        "`bun scripts/bc-linux-setup.ts --server bcN` (docs/gates/servers.md, R709). If BC ",
+        "refuses an old version as a downgrade, its installed-version record needs a restart ",
         `(R605). ${notReinstalledSentence(bcText)}BC said: ${bcText}`,
+      ].join(""),
     );
     this.name = "UpgradeNotRestoredError";
   }

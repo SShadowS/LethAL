@@ -255,8 +255,11 @@ import { refuseRetiredV2Report } from "./v2-retired";
  *
  * 21: R786 added the caveat value `al-runner-v3-serve-default-fallback-warmup` to
  * `$.caveats[].caveat`. A new value, so it bumps (R233); v20 is frozen.
+ *
+ * 22: R844 added the caveat value `some-errors` to `$.caveats[].caveat`. A new value, so it bumps
+ * (R233); v21 is frozen.
  */
-export const EXPLAIN_SCHEMA_VERSION = 21;
+export const EXPLAIN_SCHEMA_VERSION = 22;
 
 /**
  * Thrown when the input is not an explainable `SessionReport` — a caller-contract violation, not a
