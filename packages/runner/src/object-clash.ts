@@ -59,6 +59,7 @@ import {
 import {
   READ_BUDGET_MS,
   controlObjects,
+  newEnumValues,
   newObjects,
   newTableFields,
   readInBatches,
@@ -717,9 +718,6 @@ export async function checkObjectClashes(args: ObjectClashCheckArgs): Promise<st
   const direct = Array.isArray(args.dependents) ? args.dependents.length : 0;
   /** Compared for real, by app id: a dependent whose read failed or fell past the bound is NOT here. */
   const compared = new Set<string>();
-  // R847: read the target's new objects and fields against the server BEFORE the loop; the leads it
-  // names are read from their packages after it.
-  const leads = await findNonDependentLeads(args, targetRead, target, warnings);
   /** Compares the target with one installed app. False when its objects could not be read. */
   const compareApp = async (
     d: InstalledDependent,
@@ -752,8 +750,10 @@ export async function checkObjectClashes(args: ObjectClashCheckArgs): Promise<st
         why = String(err);
       }
     }
+    // A lead never refuses from SOURCE (the keyed read only says where to look): only the package decides.
     if (
       objects === undefined &&
+      !notDependent &&
       args.testsAppId !== undefined &&
       d.id.toLowerCase() === args.testsAppId
     ) {
@@ -851,8 +851,12 @@ export async function checkObjectClashes(args: ObjectClashCheckArgs): Promise<st
       compared.add(bareAppId(d.id));
     }
   }
-  // R847: a lead is an app a keyed read named that the loop did not compare. The read says only
-  // where to look: it refuses, if at all, from the app's own package, by the comparisons above.
+  // R847: read the target's new objects and fields against the server AFTER the dependents loop
+  // (so the 120 s clock the loop shares is not eaten first, and `compared` is known). A target with
+  // no dependents, or whose dependents read failed, still comes here. A lead is an app the keyed read
+  // named that the loop did not compare. The read says only where to look: it refuses, if at all,
+  // from the app's own package, by the comparisons above.
+  const leads = await findNonDependentLeads(args, targetRead, target, warnings);
   const toRead = leads.filter((l) => !compared.has(bareAppId(l.id)));
   for (const [i, l] of toRead.entries()) {
     if (bound()) {
@@ -943,7 +947,6 @@ async function findNonDependentLeads(
   };
   const why = (e: unknown): string => (e instanceof Error ? e.message : String(e));
   const unchecked = "an installed app that is not a dependent was NOT checked";
-  const clock = { now: args.now, deadlineMs: args.now() + (nd.budgetMs ?? READ_BUDGET_MS) };
   const targetApp = bareAppId(args.targetAppId);
 
   // 1. Skip. A throw is never read as a first publish.
@@ -987,9 +990,20 @@ async function findNonDependentLeads(
     }
   }
 
+  // The one deadline starts HERE, after the base read: that read has its own, longer timeout and
+  // must not starve the keyed reads.
+  const clock = { now: args.now, deadlineMs: args.now() + (nd.budgetMs ?? READ_BUDGET_MS) };
+
   // 3. Items: what is new.
   const objects = newObjects(target, base?.objects);
   const fields = newTableFields(targetRead.members, base?.members);
+  // The server has no table for enum values: say so, by the same new-only rule (R845 measured enum
+  // clashes as strips).
+  for (const e of newEnumValues(targetRead.members, base?.members)) {
+    warn(
+      `${e.count} new value(s) of enumextension(s) on enum "${e.enumName}" were NOT checked against the server (it has no table for enum values); ${unchecked} for them.`,
+    );
+  }
   if (objects.length === 0 && fields.length === 0) return [];
 
   const leads = new Map<string, InstalledDependent>();
@@ -1008,6 +1022,10 @@ async function findNonDependentLeads(
     } catch (err) {
       if (err instanceof UnfilteredExtensionsQueryError) throw err;
       warn(`the keyed read of ${items.length} object(s) failed (${why(err)}); ${unchecked}.`);
+    }
+    if (read?.error !== undefined) {
+      // The rows of the calls before the failed one are kept and used below.
+      warn(`a keyed read of objects failed (${why(read.error)}); ${unchecked} for the rest.`);
     }
     if (read !== undefined) {
       if (read.unread > 0) {
@@ -1033,17 +1051,17 @@ async function findNonDependentLeads(
           );
         }
       }
-      const blind = new Set<string>();
       for (const kind of new Set(objects.map((o) => o.kind))) {
         if (seen.has(kind)) continue;
-        blind.add(kind);
         warn(
-          `${kind}: the server's object table cannot be trusted for this kind (${blindWhy.get(kind) ?? (base === undefined ? "there is no installed target package to take a control object from" : "the installed target declares no object of this kind to use as a control")}), so ${objects.filter((o) => o.kind === kind).length} new ${kind} object(s) were NOT checked, and none is called clean.`,
+          `${kind}: the server's object table cannot be trusted for this kind (${blindWhy.get(kind) ?? (base === undefined ? "there is no installed target package to take a control object from" : "the installed target declares no object of this kind to use as a control")}), so a "none" for ${objects.filter((o) => o.kind === kind).length} new ${kind} object(s) is NOT clean. An owner answer is still followed to that app's own package, which decides.`,
         );
       }
+      // A blind kind's `none` is uncounted (the warning above says so); an owner answer is still a
+      // lead, since the package, not this row, decides.
       for (const [j, o] of objects.entries()) {
         const r = read.rows[controls.length + j];
-        if (r === undefined || blind.has(o.kind) || r.outcome === "none") continue;
+        if (r === undefined || r.outcome === "none") continue;
         if (r.outcome === "unresolved" || r.app === undefined) {
           warn(`could not tell which installed app owns ${o.kind} ${o.id}; it was not checked.`);
         } else lead(r.app);
@@ -1054,10 +1072,22 @@ async function findNonDependentLeads(
   // 4/5. Fields on tables the target does not own.
   if (fields.length > 0) {
     const deps = [...args.targetDependencies.map((d) => d.id), ...MICROSOFT_APP_IDS];
+    // A control for the field read: a field of an installed target tableextension on a table the
+    // target does not own. It must come back owned by the TARGET, or `none` proves nothing.
+    const controlMember = base?.members.find(
+      (m) => m.container === "Table" && bareAppId(m.ownerApp) !== targetApp,
+    );
     let ids: Map<string, number> | undefined;
     try {
       ids = await resolveTableIds(
-        [...new Set(fields.map((f) => f.tableName.toLowerCase()))],
+        [
+          ...new Set(
+            [
+              ...fields.map((f) => f.tableName),
+              ...(controlMember ? [controlMember.ownerName] : []),
+            ].map((n) => n.toLowerCase()),
+          ),
+        ],
         deps,
         nd.readDependencyApp,
         warn,
@@ -1066,14 +1096,34 @@ async function findNonDependentLeads(
       if (err instanceof UnfilteredExtensionsQueryError) throw err;
       warn(`could not look up table ids (${why(err)}); new fields were NOT checked.`);
     }
-    const asked: { item: FieldItem; field: (typeof fields)[number]; table: number }[] = [];
+    const asked: {
+      item: FieldItem;
+      field: (typeof fields)[number] | undefined;
+      table: number;
+      tableName: string;
+    }[] = [];
+    const controlTable =
+      controlMember === undefined ? undefined : ids?.get(controlMember.ownerName.toLowerCase());
+    const hasControl = controlMember !== undefined && controlTable !== undefined;
+    if (hasControl) {
+      // First, so the read order proves the control before the rest is trusted.
+      asked.push({
+        item: { table: controlTable, id: controlMember.id },
+        field: undefined,
+        table: controlTable,
+        tableName: controlMember.ownerName,
+      });
+    }
     for (const f of fields) {
       const table = ids?.get(f.tableName.toLowerCase());
       if (table === undefined) continue;
-      if (f.byId) asked.push({ item: { table, id: f.id }, field: f, table });
-      if (f.byName) asked.push({ item: { table, name: f.name }, field: f, table });
+      if (f.byId)
+        asked.push({ item: { table, id: f.id }, field: f, table, tableName: f.tableName });
+      if (f.byName) {
+        asked.push({ item: { table, name: f.name }, field: f, table, tableName: f.tableName });
+      }
     }
-    if (asked.length > 0) {
+    if (asked.length > (hasControl ? 1 : 0)) {
       let read: Awaited<ReturnType<typeof readInBatches<FieldItem, FieldOwnerRow>>> | undefined;
       try {
         read = await readInBatches(
@@ -1085,13 +1135,45 @@ async function findNonDependentLeads(
         if (err instanceof UnfilteredExtensionsQueryError) throw err;
         warn(`the keyed read of ${asked.length} field(s) failed (${why(err)}); ${unchecked}.`);
       }
+      if (read?.error !== undefined) {
+        warn(`a keyed read of fields failed (${why(read.error)}); ${unchecked} for the rest.`);
+      }
       if (read !== undefined) {
         if (read.unread > 0) {
           warn(
             `${read.unread} of ${asked.length} field(s) were NOT read (the budget is ${(nd.budgetMs ?? READ_BUDGET_MS) / 1000} s in all, or the server answered fewer); ${unchecked} for them.`,
           );
         }
+        // The control: the Field table must name the installed target as the owner of a field the
+        // target's own tableextension declares. Otherwise it may not hold extension fields, or name
+        // the table's owner, and a `none` or a Base owner proves nothing.
+        let fieldWhy: string | undefined;
+        if (controlMember === undefined) {
+          fieldWhy =
+            "the installed target holds no field of an extension on another app's table to use as a control";
+        } else if (controlTable === undefined) {
+          fieldWhy = `the table id of the control field's table "${controlMember.ownerName}" is unknown`;
+        } else {
+          const c = read.rows[0];
+          if (c === undefined) fieldWhy = "its control field was not read";
+          else if (
+            !(
+              c.outcome === "owner" &&
+              c.app !== undefined &&
+              bareAppId(c.app.id) === targetApp &&
+              c.tableName?.toLowerCase() === controlMember.ownerName.toLowerCase()
+            )
+          ) {
+            fieldWhy = `its control field ${controlMember.id} of "${controlMember.ownerName}", which the installed target declares, came back "${c.outcome}"${c.app !== undefined ? ` owned by ${c.app.name}` : ""}`;
+          }
+        }
+        if (fieldWhy !== undefined) {
+          warn(
+            `fields: the server's Field table cannot be trusted (${fieldWhy}), so a "none" for ${fields.length} new field(s) is NOT clean. An owner answer is still followed to that app's own package, which decides.`,
+          );
+        }
         for (const [j, a] of asked.entries()) {
+          if (a.field === undefined) continue;
           const r = read.rows[j];
           if (r === undefined || r.outcome === "none") continue;
           const label = `field ${a.field.id} "${a.field.name}" of table "${a.field.tableName}"`;

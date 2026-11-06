@@ -15,6 +15,7 @@ import type { PackageMember, SourceMember } from "../src/member-clash";
 import {
   READ_BUDGET_MS,
   controlObjects,
+  newEnumValues,
   newObjects,
   newTableFields,
   readInBatches,
@@ -300,6 +301,16 @@ describe("R847 skip and base set", () => {
     expect(has(w, /2 installed versions/)).toBe(true);
     expect(s.fetched).toEqual([]);
     expect(s.objectCalls[0]?.items.map((i) => i.id)).toContain(50100);
+    // An answer from the whole-set read is USED: every kind is uncontrolled here (no base), yet an
+    // owner answer is followed to that app's package and refuses.
+    s.owners.set("Codeunit:79291", X_DEP);
+    s.packages.set(
+      "Other App",
+      pkg(X_ID, "2.0.0.0", { Codeunits: [{ Id: INJ.controlId, Name: "Theirs" }] }),
+    );
+    const e = await rejection(checkObjectClashes(s.args(CODEUNIT_SRC)));
+    expect(e).toBeInstanceOf(ObjectClashError);
+    expect(s.fetched).toEqual(["Other App"]);
   });
 
   test("an unreadable installed package falls back to the whole set under the budget, and warns", async () => {
@@ -307,6 +318,65 @@ describe("R847 skip and base set", () => {
     const w = await checkObjectClashes(s.args(CODEUNIT_SRC)); // no package set: unread
     expect(has(w, /could not be read \(.*not installed.*\)/)).toBe(true);
     expect(s.objectCalls[0]?.items.map((i) => i.id)).toContain(50100);
+    // The whole-set answers are USED, not thrown away as blind.
+    s.owners.set("Codeunit:79291", X_DEP);
+    s.packages.set(
+      "Other App",
+      pkg(X_ID, "2.0.0.0", { Codeunits: [{ Id: INJ.controlId, Name: "Theirs" }] }),
+    );
+    const e = (await rejection(checkObjectClashes(s.args(CODEUNIT_SRC)))) as ObjectClashError;
+    expect(e).toBeInstanceOf(ObjectClashError);
+    expect(e.findings[0]?.app.id).toBe(X_ID);
+  });
+
+  test("the 10 s clock starts AFTER the base read, so a slow base read cannot starve the keyed reads", async () => {
+    const s = new Server();
+    s.packages.set("Target", baseWith());
+    const args = s.args(CODEUNIT_SRC);
+    const slowFetch = args.fetchPackage;
+    // The base read itself takes the whole budget on the fake clock.
+    await checkObjectClashes({
+      ...args,
+      fetchPackage: async (app) => {
+        s.clock.t += READ_BUDGET_MS * 3;
+        return slowFetch?.(app);
+      },
+    });
+    expect(s.objectCalls).toHaveLength(1);
+    expect(s.objectCalls[0]?.timeoutMs).toBe(READ_BUDGET_MS);
+  });
+
+  test("new enum values on an enum the target does not own are warned as NOT checked, by the new-only rule", async () => {
+    const s = new Server();
+    s.packages.set(
+      "Target",
+      baseWith({
+        Codeunits: [{ Id: 50100, Name: "Target Logic" }, ...MINTED],
+        EnumExtensionTypes: [
+          {
+            Id: 50120,
+            Name: "Old Enum Ext",
+            TargetObject: `#${BASE_APP_BARE}#Status`,
+            Values: [{ Ordinal: 1, Name: "Held" }],
+          },
+        ],
+      }),
+    );
+    s.owners.set("EnumExtension:50120", TARGET_DEP);
+    const src = `${CODEUNIT_SRC}\nenumextension 50120 "Old Enum Ext" extends Status\n{\n    value(1; Held) { }\n    value(2; Fresh) { }\n}\n`;
+    const w = await checkObjectClashes(s.args(src));
+    expect(has(w, /1 new value\(s\) of enumextension\(s\) on enum "Status" were NOT checked/)).toBe(
+      true,
+    );
+    // Held is in the installed package: only the one new value is counted.
+    expect(s.objectCalls).toHaveLength(0);
+    // Nothing new, nothing warned.
+    const none = await checkObjectClashes(
+      s.args(
+        `${CODEUNIT_SRC}\nenumextension 50120 "Old Enum Ext" extends Status\n{\n    value(1; Held) { }\n}\n`,
+      ),
+    );
+    expect(has(none, /enumextension/)).toBe(false);
   });
 });
 
@@ -501,12 +571,18 @@ describe("R847 blind kinds", () => {
     s.owners.delete("Table:50102");
     s.owners.set("Table:50101", X_DEP);
     s.packages.set("Other App", pkg(X_ID, "2.0.0.0", { Tables: [{ Id: 50101, Name: "Theirs" }] }));
+    // The kind is blind, but an OWNER answer is still a lead and the package decides: it refuses.
+    const e = (await rejection(checkObjectClashes(s.args(TWO_TABLES_SRC)))) as ObjectClashError;
+    expect(e).toBeInstanceOf(ObjectClashError);
+    expect(e.findings.map((f) => [f.kind, f.id, f.notDependent])).toEqual([["Table", 50101, true]]);
+    expect(fetchedCount(s, "Other App")).toBe(1);
+    // With no owner named, only the warning remains: a `none` is not clean.
+    s.owners.delete("Table:50101");
     const w = await checkObjectClashes(s.args(TWO_TABLES_SRC));
     expect(has(w, /Table: the server's object table cannot be trusted.*came back "none"/)).toBe(
       true,
     );
-    expect(has(w, /1 new Table object\(s\) were NOT checked/)).toBe(true);
-    expect(fetchedCount(s, "Other App")).toBe(0);
+    expect(has(w, /a "none" for 1 new Table object\(s\) is NOT clean/)).toBe(true);
   });
 
   test("a control that comes back owned by ANOTHER app makes the kind unseen too, and names that app", async () => {
@@ -521,11 +597,15 @@ describe("R847 blind kinds", () => {
       "Other App",
       pkg(X_ID, "2.0.0.0", { Codeunits: [{ Id: INJ.controlId, Name: "Theirs" }] }),
     );
+    const e = (await rejection(checkObjectClashes(s.args(CODEUNIT_SRC)))) as ObjectClashError;
+    expect(e).toBeInstanceOf(ObjectClashError);
+    expect(fetchedCount(s, "Other App")).toBe(1);
+    // The blind-kind warning names the app the control came back as; read it without the refusal.
+    s.packages.set("Other App", pkg(X_ID, "2.0.0.0", { Codeunits: [{ Id: 1, Name: "Mine" }] }));
     const w = await checkObjectClashes(s.args(CODEUNIT_SRC));
     expect(
       has(w, /Codeunit: the server's object table cannot be trusted.*owned by Other App/),
     ).toBe(true);
-    expect(fetchedCount(s, "Other App")).toBe(0);
   });
 
   test("a kind the installed target declares nothing of has no control: it warns", async () => {
@@ -557,7 +637,11 @@ describe("R847 the budget and the batches", () => {
     s.objectCost = 4000;
     await checkObjectClashes(s.args(manyCodeunits(250)));
     expect(s.objectCalls.map((c) => c.items.length)).toEqual([200, 54]);
-    expect(s.objectCalls.map((c) => c.maxMs)).toEqual([READ_BUDGET_MS, READ_BUDGET_MS - 4000]);
+    // MaxMs is a second short of the client's timeout, so the AL loop stops first and `read` arrives.
+    expect(s.objectCalls.map((c) => c.maxMs)).toEqual([
+      READ_BUDGET_MS - 1000,
+      READ_BUDGET_MS - 4000 - 1000,
+    ]);
     expect(s.objectCalls.map((c) => c.timeoutMs)).toEqual([READ_BUDGET_MS, READ_BUDGET_MS - 4000]);
   });
 
@@ -604,7 +688,7 @@ describe("R847 the budget and the batches", () => {
     s.packages.set("Target", baseWith());
     s.objectError = new Error("HTTP 404");
     const w = await checkObjectClashes(s.args(CODEUNIT_SRC));
-    expect(has(w, /the keyed read of 4 object\(s\) failed \(HTTP 404\)/)).toBe(true);
+    expect(has(w, /a keyed read of objects failed \(HTTP 404\)/)).toBe(true);
     s.objectError = new UnfilteredExtensionsQueryError("refused");
     expect(await rejection(checkObjectClashes(s.args(CODEUNIT_SRC)))).toBeInstanceOf(
       UnfilteredExtensionsQueryError,
@@ -622,11 +706,18 @@ describe("R847 fields on a table the target does not own", () => {
       baseWith({
         Codeunits: [{ Id: 50100, Name: "Target Logic" }, ...MINTED],
         TableExtensions: [
-          { Id: 50110, Name: "Cust Ext", TargetObject: `#${BASE_APP_BARE}#Customer`, Fields: [] },
+          {
+            Id: 50110,
+            Name: "Cust Ext",
+            TargetObject: `#${BASE_APP_BARE}#Customer`,
+            // The control: an installed field of the target on a table it does not own.
+            Fields: [{ Id: 50001, Name: "Old Field" }],
+          },
         ],
       }),
     );
     s.owners.set("TableExtension:50110", TARGET_DEP);
+    s.fields.set("18:50001", { app: TARGET_DEP, fieldName: "Old Field", tableName: "Customer" });
     s.depApps.set(BASE_APP_DASHED, [
       pkg(BASE_APP_DASHED, "28.0.0.0", { Tables: [{ Id: 18, Name: "Customer" }] }),
     ]);
@@ -660,6 +751,7 @@ describe("R847 fields on a table the target does not own", () => {
     expect(m?.ownerName).toBe("Customer");
     // The target's items were asked by id and by name, with the table id read offline.
     expect(s.fieldCalls[0]?.items).toEqual([
+      { table: 18, id: 50001 }, // the control, first
       { table: 18, id: 50000 },
       { table: 18, name: "New Field" },
     ]);
@@ -701,6 +793,78 @@ describe("R847 fields on a table the target does not own", () => {
     expect(e).toBeInstanceOf(ObjectClashError);
     expect(e.memberFindings.map((m) => m.rule)).toEqual(["field-name"]);
     expect(fetchedCount(s, "Other App")).toBe(1);
+  });
+
+  test("the control field is asked FIRST, by id, on the table it belongs to", async () => {
+    const s = withFields();
+    await checkObjectClashes(s.args(CUSTOMER_EXT_SRC));
+    expect(s.fieldCalls[0]?.items[0]).toEqual({ table: 18, id: 50001 });
+    expect(s.fieldCalls[0]?.items).toHaveLength(3);
+  });
+
+  test("a control that comes back none: warns 'none is not clean' but an owner answer is still followed", async () => {
+    const s = withFields();
+    s.fields.delete("18:50001");
+    const w = await checkObjectClashes(s.args(CUSTOMER_EXT_SRC));
+    expect(has(w, /fields: the server's Field table cannot be trusted.*came back "none"/)).toBe(
+      true,
+    );
+    expect(has(w, /a "none" for 1 new field\(s\) is NOT clean/)).toBe(true);
+    s.fields.set("18:50000", { app: X_DEP, fieldName: "Other", tableName: "Customer" });
+    const e = await rejection(checkObjectClashes(s.args(CUSTOMER_EXT_SRC)));
+    expect(e).toBeInstanceOf(ObjectClashError);
+  });
+
+  test("a control the server names as the TABLE's owner (Base), not the target, is not trusted", async () => {
+    const s = withFields();
+    const base: InstalledDependent = {
+      id: BASE_APP_DASHED,
+      name: "Base Application",
+      publisher: "Microsoft",
+      version: "28.0.0.0",
+    };
+    s.fields.set("18:50001", { app: base, fieldName: "Old Field", tableName: "Customer" });
+    const w = await checkObjectClashes(s.args(CUSTOMER_EXT_SRC));
+    expect(
+      has(w, /fields: the server's Field table cannot be trusted.*owned by Base Application/),
+    ).toBe(true);
+  });
+
+  test("a control for a different table than asked (wrong TableName) is not trusted", async () => {
+    const s = withFields();
+    s.fields.set("18:50001", { app: TARGET_DEP, fieldName: "Old Field", tableName: "Vendor" });
+    const w = await checkObjectClashes(s.args(CUSTOMER_EXT_SRC));
+    expect(has(w, /fields: the server's Field table cannot be trusted/)).toBe(true);
+  });
+
+  test("no base, or a base with no extension field of another app's table: no control, so it warns", async () => {
+    const noMember = withFields();
+    noMember.packages.set(
+      "Target",
+      baseWith({ Codeunits: [{ Id: 50100, Name: "Target Logic" }, ...MINTED] }),
+    );
+    const w1 = await checkObjectClashes(noMember.args(CUSTOMER_EXT_SRC));
+    expect(
+      has(w1, /holds no field of an extension on another app's table to use as a control/),
+    ).toBe(true);
+    const noBase = withFields();
+    noBase.installed = ["1.0.0.0", "1.0.0.5"];
+    const w2 = await checkObjectClashes(noBase.args(CUSTOMER_EXT_SRC));
+    expect(
+      has(w2, /holds no field of an extension on another app's table to use as a control/),
+    ).toBe(true);
+  });
+
+  test("a control that was not read warns", async () => {
+    const s = withFields();
+    const args = s.args(CUSTOMER_EXT_SRC);
+    const nd = args.nonDependent;
+    if (nd === undefined) throw new Error("test setup");
+    const w = await checkObjectClashes({
+      ...args,
+      nonDependent: { ...nd, fieldOwners: async () => ({ read: 0, rows: [] }) },
+    });
+    expect(has(w, /its control field was not read/)).toBe(true);
   });
 
   test("a row for another table (a wrong TableName) is not followed, and warns", async () => {
@@ -854,5 +1018,195 @@ describe("R847 the pure parts", () => {
     expect(got.size).toBe(0);
     expect(has(warnings, /unreadable/)).toBe(true);
     expect(has(warnings, /no table "customer"/)).toBe(true);
+  });
+
+  test("newEnumValues counts the new values by enum; own enums and held values are left out", () => {
+    const ev = (over: Partial<SourceMember>): SourceMember =>
+      sm({ container: "Enum", ownerName: "Status", ownerKey: "status", ...over });
+    const got = newEnumValues(
+      [
+        ev({ id: 1, name: "Held" }),
+        ev({ id: 2, name: "Fresh" }),
+        ev({ id: 3, name: "Other" }),
+        ev({ id: 4, name: "Mine", own: true }),
+        sm({ id: 9, name: "AField" }),
+      ],
+      [pm({ container: "Enum", ownerName: "Status", ownerKey: "status", id: 1, name: "Held" })],
+    );
+    expect(got).toEqual([{ enumName: "Status", count: 2 }]);
+  });
+});
+
+describe("R847 review fixes", () => {
+  test("a LEAD never refuses from SOURCE: the tests app, named by the keyed read, with an unreadable package, warns", async () => {
+    const s = new Server();
+    s.packages.set("Target", baseWith());
+    s.owners.set("Codeunit:79291", X_DEP);
+    s.packages.set("Other App", { unread: "HTTP 500" });
+    // The dependents read failed, so the tests app (X) is a lead only. Its SOURCE declares the id.
+    const e = await checkObjectClashes(
+      s.args(CODEUNIT_SRC, {
+        dependents: { error: new Error("no control") },
+        testsAppId: X_ID,
+        readTestSources: async () => [{ path: "T.al", text: 'codeunit 79291 "Tests"\n{\n}\n' }],
+      }),
+    ).then(
+      (w) => w,
+      (err: unknown) => err,
+    );
+    expect(e).not.toBeInstanceOf(ObjectClashError);
+    expect(has(e as string[], /could not read the installed package of Other App/)).toBe(true);
+  });
+
+  test("a dependent tests app with an unreadable package still compares from SOURCE (a lead does not)", async () => {
+    const s = new Server();
+    s.installed = [];
+    s.packages.set("Other App", { unread: "HTTP 500" });
+    const err = await rejection(
+      checkObjectClashes(
+        s.args(CODEUNIT_SRC, {
+          dependents: [X_DEP],
+          testsAppId: X_ID,
+          readTestSources: async () => [{ path: "T.al", text: 'codeunit 79291 "Tests"\n{\n}\n' }],
+        }),
+      ),
+    );
+    expect(err).toBeInstanceOf(ObjectClashError);
+    expect((err as ObjectClashError).findings[0]?.read).toBe("source-fallback");
+  });
+
+  test("a failed LATER batch keeps the leads of the earlier one", async () => {
+    const s = new Server();
+    s.packages.set("Target", baseWith());
+    // Codeunit 60005 is among the first 200 items: batch 1 names X, batch 2 fails.
+    s.owners.set("Codeunit:60005", X_DEP);
+    s.packages.set(
+      "Other App",
+      pkg(X_ID, "2.0.0.0", { Codeunits: [{ Id: 60005, Name: "Theirs" }] }),
+    );
+    const many = Array.from(
+      { length: 250 },
+      (_, i) => `codeunit ${60000 + i} "C ${i}"\n{\n}\n`,
+    ).join("\n");
+    const args = s.args(`${many}\n${CODEUNIT_SRC}`);
+    const nd = args.nonDependent;
+    if (nd === undefined) throw new Error("test setup");
+    let calls = 0;
+    const e = await rejection(
+      checkObjectClashes({
+        ...args,
+        nonDependent: {
+          ...nd,
+          objectOwners: async (items, maxMs, timeoutMs) => {
+            calls++;
+            if (calls === 2) throw new Error("HTTP 500");
+            return nd.objectOwners(items, maxMs, timeoutMs);
+          },
+        },
+      }),
+    );
+    // The injected controlId is among the first 200 items: batch 1's lead survives batch 2's failure.
+    expect(calls).toBe(2);
+    expect(e).toBeInstanceOf(ObjectClashError);
+  });
+
+  test("readInBatches keeps earlier rows when a later call throws, and rethrows only Unfiltered", async () => {
+    let n = 0;
+    const got = await readInBatches(
+      Array.from({ length: 250 }, (_, i) => i),
+      async (batch) => {
+        if (++n === 2) throw new Error("boom");
+        return { read: batch.length, rows: batch.map((b) => `r${b}`) };
+      },
+      { now: () => 0, deadlineMs: 10_000 },
+    );
+    expect(got.rows).toHaveLength(200);
+    expect(got.unread).toBe(50);
+    expect((got.error as Error).message).toBe("boom");
+    const err = await rejection(
+      readInBatches(
+        [1],
+        async () => {
+          throw new UnfilteredExtensionsQueryError("x");
+        },
+        { now: () => 0, deadlineMs: 10_000 },
+      ),
+    );
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+  });
+
+  test("with under a second left MaxMs is 1, never zero or negative; the timeout is the time left", async () => {
+    const seen: number[][] = [];
+    await readInBatches(
+      [1],
+      async (batch, maxMs, timeoutMs) => {
+        seen.push([maxMs, timeoutMs]);
+        return { read: batch.length, rows: ["r"] };
+      },
+      { now: () => 0, deadlineMs: 500 },
+    );
+    expect(seen).toEqual([[1, 500]]);
+  });
+
+  test("a call that reads NOTHING ends the read: a bounded loop cannot spin", async () => {
+    let n = 0;
+    const got = await readInBatches(
+      Array.from({ length: 450 }, (_, i) => i),
+      async () => {
+        n++;
+        return { read: 0, rows: [] };
+      },
+      { now: () => 0, deadlineMs: 10_000 },
+    );
+    expect(n).toBe(1);
+    expect(got.unread).toBe(450);
+  });
+
+  test("the keyed read runs AFTER the dependents loop (the 120 s clock), and still runs with no dependents", async () => {
+    const s = new Server();
+    s.packages.set("Target", baseWith());
+    s.packages.set("Other App", pkg(X_ID, "2.0.0.0", { Codeunits: [{ Id: 1, Name: "Mine" }] }));
+    const order: string[] = [];
+    const args = s.args(CODEUNIT_SRC, {
+      dependents: [X_DEP],
+      fetchPackage: async (app) => {
+        order.push(`fetch ${app.name}`);
+        return s.packages.get(app.name) ?? { unread: "x" };
+      },
+    });
+    const nd = args.nonDependent;
+    if (nd === undefined) throw new Error("test setup");
+    await checkObjectClashes({
+      ...args,
+      nonDependent: {
+        ...nd,
+        objectOwners: async (i, m, t) => {
+          order.push("objectOwners");
+          return nd.objectOwners(i, m, t);
+        },
+      },
+    });
+    // The base read (a step-internal fetch) comes after the dependent's own read.
+    expect(order[0]).toBe("fetch Other App");
+    expect(order).toContain("objectOwners");
+  });
+
+  test("bcdev with no dependents parses the target and reports undecided #if arms, on a path that was silent", async () => {
+    const s = new Server();
+    s.installed = [];
+    // A conditional the evaluator cannot decide.
+    const w = await checkObjectClashes(
+      s.args(`#if NOT_A_REAL_EXPR_((\ncodeunit 50101 "Hidden"\n{\n}\n#endif\n${CODEUNIT_SRC}`),
+    );
+    expect(has(w, /the #if arms of target file Target\.al could not be decided/)).toBe(true);
+    // Without the step (a backend that is not bcdev) the same call stays silent, as before.
+    const silent = await checkObjectClashes(
+      s.args(
+        `#if NOT_A_REAL_EXPR_((\ncodeunit 50101 "Hidden"\n{\n}\n#endif\n${CODEUNIT_SRC}`,
+        {},
+        null,
+      ),
+    );
+    expect(silent).toEqual([]);
   });
 });

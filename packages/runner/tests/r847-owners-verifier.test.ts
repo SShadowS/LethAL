@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { ActivationConfig } from "../src/activation";
 import { HarnessVerificationError, HarnessVerifier } from "../src/harness";
 
@@ -38,7 +40,7 @@ describe("R847 fetchObjectOwners", () => {
     const f = fakeFetch({
       read: 2,
       rows: [
-        { kind: "Codeunit", id: 79291, outcome: "owner", ...OWNER, objectName: "Theirs" },
+        { kind: "Codeunit", id: 79291, outcome: "owner", ...OWNER },
         { kind: "Table", id: 50101, outcome: "none" },
       ],
     });
@@ -55,9 +57,49 @@ describe("R847 fetchObjectOwners", () => {
       "http://bc:7048/BC/ODataV4/LethALControl_ObjectOwners?company=CRONUS&tenant=default",
     );
     expect(JSON.parse(f.calls[0]?.body ?? "")).toEqual({
-      ItemsJson: JSON.stringify(ITEMS),
-      MaxMs: 8000,
+      itemsJson: JSON.stringify(ITEMS),
+      maxMs: 8000,
     });
+  });
+
+  test("the body keys are the camelCase of the AL parameter names, read off the AL source", async () => {
+    const al = readFileSync(
+      join(
+        import.meta.dir,
+        "..",
+        "..",
+        "..",
+        "extensions",
+        "lethal-control",
+        "src",
+        "ControlApi.Codeunit.al",
+      ),
+      "utf8",
+    );
+    const keysOf = (proc: string): string[] => {
+      const m = new RegExp(`procedure ${proc}\\(([^)]*)\\)`).exec(al);
+      if (m?.[1] === undefined) throw new Error(`procedure not found: ${proc}`);
+      return m[1].split(";").map((p) => {
+        const name = (p.split(":")[0] ?? "").trim();
+        return name.charAt(0).toLowerCase() + name.slice(1);
+      });
+    };
+    const f = fakeFetch({ read: 0, rows: [] });
+    // A call with one item that reads nothing: only the body matters.
+    await verifier(f)
+      .fetchObjectOwners(ITEMS.slice(0, 1), 5, 5)
+      .catch(() => undefined);
+    await verifier(f)
+      .fetchFieldOwners([{ table: 18, id: 1 }], 5, 5)
+      .catch(() => undefined);
+    expect(f.calls).toHaveLength(2);
+    expect(Object.keys(JSON.parse(f.calls[0]?.body ?? "")).sort()).toEqual(
+      keysOf("ObjectOwners").sort(),
+    );
+    expect(Object.keys(JSON.parse(f.calls[1]?.body ?? "")).sort()).toEqual(
+      keysOf("FieldOwners").sort(),
+    );
+    expect(keysOf("ObjectOwners")).toEqual(["itemsJson", "maxMs"]);
   });
 
   test("a short answer is returned as short (read below asked), never padded", async () => {
@@ -184,7 +226,7 @@ describe("R847 fetchFieldOwners", () => {
       { ...byName, outcome: "none" },
     ]);
     expect(f.calls[0]?.url).toContain("LethALControl_FieldOwners");
-    expect(JSON.parse(JSON.parse(f.calls[0]?.body ?? "").ItemsJson)).toEqual([byId, byName]);
+    expect(JSON.parse(JSON.parse(f.calls[0]?.body ?? "").itemsJson)).toEqual([byId, byName]);
   });
 
   test("a row for another item, an owner without its names, or a bad count throws", async () => {

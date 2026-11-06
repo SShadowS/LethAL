@@ -675,7 +675,8 @@ export class HarnessVerifier {
     }
     return this.postAction(
       action,
-      { ItemsJson: JSON.stringify(items), MaxMs: maxMs },
+      // The camelCase of the AL parameter names (ItemsJson, MaxMs), as every other action is called.
+      { itemsJson: JSON.stringify(items), maxMs },
       Math.ceil(timeoutMs),
     );
   }

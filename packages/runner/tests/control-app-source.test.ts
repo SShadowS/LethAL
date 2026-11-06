@@ -409,7 +409,14 @@ describe("R847 (Part 1, not yet published): ObjectOwners and FieldOwners", () =>
 
   test("a field row carries FieldName and TableName as BC holds them, for the client to compare", () => {
     const body = procedureBody(api, "FieldOwners");
-    expect(body).toContain("Row.Add('fieldName', FieldRec.FieldName);");
-    expect(body).toContain("Row.Add('tableName', FieldRec.TableName);");
+    expect(body).toContain("FieldNameRead := FieldRec.FieldName;");
+    expect(body).toContain("TableNameRead := FieldRec.TableName;");
+    expect(body).toContain("Row.Add('fieldName', FieldNameRead);");
+    expect(body).toContain("Row.Add('tableName', TableNameRead);");
+    // No second read of the record, and no fields the client never uses.
+    expect(body).not.toContain("FindFirst()");
+    expect(body).not.toContain("fieldId");
+    expect(procedureBody(api, "ObjectOwners")).not.toContain("objectName");
+    expect(procedureBody(api, "ObjectOwners")).not.toContain("FindFirst()");
   });
 });

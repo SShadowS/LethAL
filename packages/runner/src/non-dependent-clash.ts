@@ -8,7 +8,7 @@
  * clashing pair at publish), so a clash must involve something NEW in the target. So this asks about
  * what is new, by key, and never lists (R433).
  */
-import { OWNERS_MAX_ITEMS, type OwnersRead } from "./harness";
+import { OWNERS_MAX_ITEMS, type OwnersRead, UnfilteredExtensionsQueryError } from "./harness";
 import type { PackageMember, SourceMember } from "./member-clash";
 import type { DeclaredObject } from "./object-clash";
 
@@ -66,7 +66,8 @@ export interface NewField {
  * package already holds. A target's OWN tables are skipped: a non-dependent cannot extend them (AL
  * needs a dependency), and Base has 29,441 own-table fields against 284 tableextension fields. A field
  * is new by id when no base field of that table has its id, and new by name likewise; one that is
- * neither is left out. Enum values are not read (the Field table does not hold them).
+ * neither is left out. Enum values are not read (the Field table does not hold them): see
+ * `newEnumValues`.
  */
 export function newTableFields(
   members: readonly SourceMember[],
@@ -93,24 +94,68 @@ export function newTableFields(
   return out;
 }
 
+/** The values of an enumextension on an enum the target does not own, new by ordinal or by name. */
+export interface NewEnumValues {
+  readonly enumName: string;
+  readonly count: number;
+}
+
+/**
+ * New values (not in the installed target's package) of enumextensions on enums the target does not
+ * own, counted by enum. The server has no table for them, so they cannot be asked: the caller WARNS
+ * that they were not checked (R845 measured enum clashes as strips).
+ */
+export function newEnumValues(
+  members: readonly SourceMember[],
+  base: readonly PackageMember[] | undefined,
+): NewEnumValues[] {
+  const ords = new Set<string>();
+  const names = new Set<string>();
+  for (const b of base ?? []) {
+    if (b.container !== "Enum") continue;
+    ords.add(`${b.ownerKey}:${b.id}`);
+    names.add(`${b.ownerKey}:${b.name}`);
+  }
+  const counts = new Map<string, NewEnumValues>();
+  const seen = new Set<string>();
+  for (const m of members) {
+    if (m.container !== "Enum" || m.own) continue;
+    if (ords.has(`${m.ownerKey}:${m.id}`) && names.has(`${m.ownerKey}:${m.name}`)) continue;
+    const k = `${m.ownerKey}:${m.id}:${m.name}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    const have = counts.get(m.ownerKey);
+    counts.set(m.ownerKey, { enumName: m.ownerName, count: (have?.count ?? 0) + 1 });
+  }
+  return [...counts.values()];
+}
+
 /**
  * Reads `items` in calls of at most 200, in order, until all are read, the deadline has passed or a
- * call answers fewer rows than it was given. Each call gets the time left as both the control app's
- * `MaxMs` and the client's own timeout. Returns the rows read (the first `rows.length` items) and how
- * many items are `unread`. A call that answers a row count other than its `read` throws: the
- * verifier has already refused that, so only a bad fake reaches here.
+ * call answers fewer rows than it was given. Each call gets the time left as the client's own
+ * timeout, and a second less as the control app's `MaxMs`, so the AL loop stops first and a partial
+ * `read` can arrive. Returns the rows read (the first `rows.length` items), how many items are
+ * `unread`, and `error` when a call failed: the rows of the earlier calls are kept. Only
+ * `UnfilteredExtensionsQueryError` is rethrown. A call that answers a row count other than its
+ * `read` throws: the verifier has already refused that, so only a bad fake reaches here.
  */
 export async function readInBatches<I, R>(
   items: readonly I[],
   call: (batch: readonly I[], maxMs: number, timeoutMs: number) => Promise<OwnersRead<R>>,
   clock: { readonly now: () => number; readonly deadlineMs: number },
-): Promise<{ readonly rows: R[]; readonly unread: number }> {
+): Promise<{ readonly rows: R[]; readonly unread: number; readonly error?: unknown }> {
   const rows: R[] = [];
-  while (rows.length < items.length) {
+  for (let at = 0; at < items.length; at += OWNERS_MAX_ITEMS) {
     const left = clock.deadlineMs - clock.now();
     if (left <= 0) break;
-    const batch = items.slice(rows.length, rows.length + OWNERS_MAX_ITEMS);
-    const got = await call(batch, Math.max(1, Math.floor(left)), left);
+    const batch = items.slice(at, at + OWNERS_MAX_ITEMS);
+    let got: OwnersRead<R>;
+    try {
+      got = await call(batch, Math.max(1, Math.floor(left) - 1000), left);
+    } catch (error) {
+      if (error instanceof UnfilteredExtensionsQueryError) throw error;
+      return { rows, unread: items.length - rows.length, error };
+    }
     if (got.rows.length !== got.read || got.read > batch.length) {
       throw new Error(
         `an owners read answered ${got.rows.length} row(s) and read=${got.read} for ${batch.length} item(s)`,

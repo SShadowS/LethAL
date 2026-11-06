@@ -312,11 +312,11 @@ codeunit 91003 "LC Control API"
     /// from the virtual table AllObj (Object Type, Object ID). ItemsJson is [{kind, id}], at most 200,
     /// kind one of the 13 clash kinds spelled as the client spells them; an unknown kind raises an error.
     /// ONE ROW PER ITEM READ, in order, the target's own rows included, so an empty answer can never look
-    /// clean: {kind, id, outcome, appId?, appName?, appPublisher?, appVersion?, objectName?}. outcome is
+    /// clean: {kind, id, outcome, appId?, appName?, appPublisher?, appVersion?}. outcome is
     /// owner (the app's four fields set, so the client can read its package), none (AllObj has no row) or
     /// unresolved (a null or unjoinable App Package ID, or more than one row: only ever a warning).
     /// MaxMs is a deadline in all: past it the loop stops and `read` says how many items were read (a client
-    /// abort does not stop running AL). JSON: {read, rows: [...]}. Never lists, never scans.</summary>
+    /// abort does not stop running AL; the client sends MaxMs a second short of its own timeout). JSON: {read, rows: [...]}. Never lists, never scans.</summary>
     procedure ObjectOwners(ItemsJson: Text; MaxMs: Integer) ResultJson: Text
     var
         AllObjRec: Record AllObj;
@@ -363,8 +363,6 @@ codeunit 91003 "LC Control API"
                 else begin
                     Row.Add('outcome', 'owner');
                     AddOwnerApp(Row, Owner);
-                    AllObjRec.FindFirst();
-                    Row.Add('objectName', AllObjRec."Object Name");
                 end;
             Rows.Add(Row);
             Read += 1;
@@ -377,8 +375,7 @@ codeunit 91003 "LC Control API"
     /// <summary>R847 (Part 1, not yet published): who owns each field the client names, read from the
     /// virtual table Field (TableNo, No.). ItemsJson is [{table, id}] or [{table, name}], at most 200.
     /// ONE ROW PER ITEM READ, in order: {table, id?, name?, outcome, appId?, appName?, appPublisher?,
-    /// appVersion?, fieldName?, tableName?,
-    /// fieldId?}. outcome is owner, none or unresolved as in ObjectOwners; a name item that matches more
+    /// appVersion?, fieldName?, tableName?}. outcome is owner, none or unresolved as in ObjectOwners; a name item that matches more
     /// than one field of the table is unresolved. FieldName and TableName are answered as BC holds them:
     /// the CLIENT compares names exactly (a filter on a name is not case sensitive) and checks tableName is
     /// the table it asked about. A name read scans one table's rows. MaxMs and `read` as in ObjectOwners.
@@ -398,6 +395,8 @@ codeunit 91003 "LC Control API"
         Id: Integer;
         Name: Text;
         ByName: Boolean;
+        FieldNameRead: Text;
+        TableNameRead: Text;
         Owner: Text;
         Count: Integer;
         Read: Integer;
@@ -427,8 +426,11 @@ codeunit 91003 "LC Control API"
             if FieldRec.FindSet() then
                 repeat
                     Count += 1;
-                    if Count = 1 then
+                    if Count = 1 then begin
                         Owner := OwnerOfPackage(FieldRec."App Package ID", Cache);
+                        FieldNameRead := FieldRec.FieldName;
+                        TableNameRead := FieldRec.TableName;
+                    end;
                 until FieldRec.Next() = 0;
             if Count = 0 then
                 Row.Add('outcome', 'none')
@@ -438,10 +440,8 @@ codeunit 91003 "LC Control API"
                 else begin
                     Row.Add('outcome', 'owner');
                     AddOwnerApp(Row, Owner);
-                    FieldRec.FindFirst();
-                    Row.Add('fieldName', FieldRec.FieldName);
-                    Row.Add('tableName', FieldRec.TableName);
-                    Row.Add('fieldId', FieldRec."No.");
+                    Row.Add('fieldName', FieldNameRead);
+                    Row.Add('tableName', TableNameRead);
                 end;
             Rows.Add(Row);
             Read += 1;
