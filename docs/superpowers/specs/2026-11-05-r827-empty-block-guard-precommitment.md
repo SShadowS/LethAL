@@ -86,3 +86,38 @@ a gate. No crash runs, and bc1 is out of use.
 
 **Order, ruling 2026-11-06.** Early gates may run now against the committed rows. Baselines record after R-842 and R-848, and the final
 per-mutant comparison waits for the orchestrator's word.
+
+## Addendum 3, before any live run (R-836, 2026-11-06)
+
+From the delta plan review of Addendum 2, and the build at `lethal/r836`. It replaces Addendum 2 where they differ.
+
+**"Free" is narrower: a procedure or trigger body only.** An `empty-block` member is free when its statement's parent is a procedure or a
+trigger, its block holds no `#if`-family node and no `#pragma`, and no other member resolves to the same span. A branch block is never free:
+measured, every free block in a default run is a body, because a condition mutant roots every `if`. So free blocks do not nest. A filtered run
+loses nothing: the branch stays a chain, as today.
+
+**Loops.** Inside a free body a member in a `for`, `foreach`, `while` or `repeat` is grouped at the outermost loop, and the free test comes after
+that, so an `empty-block` of a loop body is a chain member there. The fold cannot see this, because it compares meaning. So the residualising
+helper also reads the emitted tree: no guard inside a loop under a free guard's `else` (`guard-in-loop`), default and with the loop's own
+mutants left out.
+
+**The gates that would have gone blind (R827 point 4).** `Grow` gains a `#pragma` line in the two wrapped files, their twins and `LayoutBeta`,
+which keeps it a chain as long as today. Each comment loses a line, so no mutant's line moves, and that puts the directive rule on a live gate.
+Measured with this build: 9 fixture keys move by byte offset, all in `sandbox-layout` and `sandbox-wrapped`. No tuple, ordinal or tag moves
+on any fixture, and DO's keys are identical (0 added, 0 removed). So no baseline changes for this.
+
+**What else moves, adding to the list:**
+- `itest:alrunner-v3` leg X (d): the Sleep index is 1 + 5, it was 4 + 5, and SLEEP_LINES and R5's table lines read 18. No verdict moves.
+- `line-map.test.ts` GH-09: its rows are measured on BC in the old layout, so they are measured again on `bc2`, by
+  `LETHAL_FENCED_COVERAGE_DUMP`, during `itest:bcdev`.
+- `reach`: a statement that is neither in a list nor a slot (under `asserterror` or `with`) goes from `unplaced` to `statement`, because it is
+  now its own root. The grain golden on every fixture is byte-identical, so no gate moves, but on real code the tally can.
+- `large-fold.ts`: the warning named `lethal.empty-block`, which is no longer the largest cause. It now names `if` conditions and `case` arms.
+- Tests and goldens that pin emitted text: emission hashes re-pinned, manifests unchanged, grain golden unchanged.
+
+**Size, 21 of DO's codeunits, offline, with the loop rule:** with `empty-block` against without it, 1.0 to 1.6 x, down from 1.8 to 7.6 x. 96 KB to
+1,226 KB, longest chain 66. On 10 DO files in total: 10,863 KB on master, 3,303 KB now, 2,721 KB with no `empty-block`.
+
+**Predictions, as before:** every gate, per mutant, nothing moves. Early gates run against the committed rows. `itest:alrunner-v3` first, then
+`itest:bcdev`, `-wrapped`, `tables` and `harden` on `bc2`, and `itest:hang` on `bc3`. Time is measured and reported per gate. A verdict that moves
+is a BLOCK, for time or any other reason. No crash runs; bc1 is out of use.
