@@ -270,11 +270,57 @@ function enclosingExitParts(node: ALSyntaxNode, ctx: SemanticContext): ALSyntaxN
   return out;
 }
 
-/** Does `node` sit in an enclosing loop's exit parts: its condition, a guard of an exit, or a feed? */
+/**
+ * R856: does `node` sit inside the exit parts (`loopExitParts`: the condition, the guards of the
+ * exits in the body, and the values that feed them) of a loop enclosing it? By POSITION.
+ */
 export function inLoopExitParts(node: ALSyntaxNode, ctx: SemanticContext): boolean {
-  const inside = (p: ALSyntaxNode): boolean =>
-    p.startIndex <= node.startIndex && node.endIndex <= p.endIndex;
-  return enclosingExitParts(node, ctx).some((parts) => parts.some(inside));
+  return enclosingExitParts(node, ctx).some((parts) =>
+    parts.some((p) => node.startIndex >= p.startIndex && node.endIndex <= p.endIndex),
+  );
+}
+
+/**
+ * R856: the hang refusal for `lethal.swap-workdate-today`, called by the dispatch (like
+ * `openItemHangRefuses`) because Tier 2 cannot reach this file. Swapping `Today()` for
+ * `WorkDate()` can freeze a clock a loop waits on; both directions are refused at one rule:
+ *  - the site is in a loop's exit parts;
+ *  - the value feeds an assignment `hangCapableForMutatedNode` claims;
+ *  - the site is an argument of a `WorkDate(...)` setter inside a loop
+ *    (`repeat WorkDate(CalcDate('<1D>', WorkDate())); until WorkDate() > E`: the swap pins the date);
+ *  - the site is anywhere in a `while`/`repeat` whose exit parts (`loopExitParts`) call `WorkDate`
+ *    or `Today` by name (`repeat D := CalcDate('<1D>', WorkDate()); WorkDate(D); until WorkDate() > E`).
+ *
+ * NAMED LIMIT: the setter may sit in a helper, `repeat AdvanceHelper(); until WorkDate() > E`. A
+ * clock site inside `AdvanceHelper` that this operator claims is outside the loop and is not seen.
+ */
+export function clockSwapHangs(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+  if (inLoopExitParts(node, ctx)) return true;
+  if (hangCapableForMutatedNode(node, ctx) !== null) return true;
+  if (!hasEnclosingLoop(node)) return false;
+  if (enclosingExitParts(node, ctx).some((parts) => parts.some(readsClock))) return true;
+  for (
+    let cur: ALSyntaxNode | null = node.parent;
+    cur !== null && !isScope(cur);
+    cur = cur.parent
+  ) {
+    if (cur.kind !== ALNodeKind.procedure_call) continue;
+    const callee = cur.childForFieldName("function");
+    const args = cur.namedChildren.find((c) => c.rawKind === "argument_list");
+    if (callee?.text.trim().toLowerCase() === "workdate" && (args?.namedChildren.length ?? 0) > 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Does the subtree call `WorkDate` or `Today` (by name, with or without arguments)? */
+function readsClock(n: ALSyntaxNode): boolean {
+  if (n.kind === ALNodeKind.procedure_call) {
+    const name = n.childForFieldName("function")?.text.trim().toLowerCase();
+    if (name === "workdate" || name === "today") return true;
+  }
+  return n.namedChildren.some(readsClock);
 }
 
 /** Per-context, per-file memo. The file root is a stable object (the arm map is keyed by it). */

@@ -41,6 +41,8 @@ const EXPECTED_OPERATORS = [
   // may not exist. Its duplicate-case-label guard is a COMPILE constraint measured before the
   // operator was written: `alc` rejects a repeated label with AL0402.
   "lethal.swap-enum-member",
+  // R856: OPT-IN; walked only when `--operator` names it.
+  "lethal.swap-workdate-today",
 ] as const;
 
 describe("tier2Operators", () => {

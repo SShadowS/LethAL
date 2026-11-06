@@ -1,7 +1,7 @@
 import { access, copyFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import { openItemHangRefuses, tier1Operators } from "@lethal/builtin-tier1";
+import { clockSwapHangs, openItemHangRefuses, tier1Operators } from "@lethal/builtin-tier1";
 import { tier2Operators } from "@lethal/builtin-tier2";
 import {
   ALNodeKind,
@@ -410,6 +410,18 @@ export const LARGE_RUN_MUTANT_THRESHOLD = 1_000;
  * (`RemoveTestField`, `RemoveSetRange`, `RemoveCalcFields`, `SwapModifyFlag`).
  */
 const allOperators: readonly MutationOperator[] = [...tier1Operators, ...tier2Operators];
+
+/**
+ * R856: the opt-in operators (`MutationOperator.optIn`). `operatorTiers` and `--operator` know
+ * them; a walk includes one only when `--operator` names it, so a default run (and one under
+ * `--exclude-operator`) never generates their specs: nothing is generated and filtered out.
+ */
+const optInOperatorNames: ReadonlySet<string> = new Set(
+  allOperators.filter((op) => op.optIn === true).map((op) => op.name),
+);
+
+/** R856: the one operator whose hang rule is read at the dispatch (see `clockSwapHangs`). */
+const CLOCK_SWAP = "lethal.swap-workdate-today";
 
 /**
  * Tier of every currently registered operator, keyed by name — the mapping
@@ -824,7 +836,8 @@ export function admittedOperatorNames(
   }
   const left = resolveOperatorNames(excludeOperators, registered, "--exclude-operator");
   if (left === undefined) return resolveOperatorNames(operators, registered);
-  return new Set(registered.filter((n) => !left.has(n)));
+  // R856: an opt-in operator is not admitted by exclusion; only naming it admits it.
+  return new Set(registered.filter((n) => !left.has(n) && !optInOperatorNames.has(n)));
 }
 
 /**
@@ -1010,6 +1023,10 @@ export async function generateMutationSet(
   // immediately as a typo'd `--only` pattern does. `undefined` means "every operator".
   const admittedOperators = admittedOperatorNames(options, [...operatorTiers.keys()]);
   const excludingOperators = (options.excludeOperators?.length ?? 0) > 0;
+  // R856: the operators this run WALKS. Opt-in ones only when `--operator` named them.
+  const walkedOperators = allOperators.filter(
+    (op) => op.optIn !== true || admittedOperators?.has(op.name) === true,
+  );
   // Issue #19: a range naming no project `.al` file is refused before any file is read, like a
   // typo'd `--only` pattern: it would otherwise silently select nothing in that file.
   const lineRanges = options.lines;
@@ -1132,7 +1149,7 @@ export async function generateMutationSet(
     const hangRefusedHere = new Map<string, number>();
     const carrierFile = canCarryMutationSelectorVar(root);
     visit(root, (node) => {
-      for (const op of allOperators) {
+      for (const op of walkedOperators) {
         const targeted = op.targets(node, ctx);
         // R501: ONE dispatch-level hang refusal for every operator in `allOperators`, no exemption:
         // a site in open report-data-item code, or one that deletes or alters a bounded item's only
@@ -1141,7 +1158,11 @@ export async function generateMutationSet(
         // R500: not in a file whose kind cannot carry the selector var (an XMLport): its specs go to
         // the `skipped` row below, and a refusal here would drop them from both rows.
         const r501 =
-          carrierFile && targeted && isMutableSite(node) && openItemHangRefuses(node, ctx, op.name);
+          carrierFile &&
+          targeted &&
+          isMutableSite(node) &&
+          (openItemHangRefuses(node, ctx, op.name) ||
+            (op.name === CLOCK_SWAP && clockSwapHangs(node, ctx)));
         if (!targeted || r501) {
           // R447: a site a hang check refused (R196's loop-condition write, or R501 above), counted
           // only where this run would have mutated it: not compiled out, and admitted by

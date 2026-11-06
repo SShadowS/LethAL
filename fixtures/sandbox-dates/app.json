@@ -1,0 +1,28 @@
+{
+  "id": "6d0b2f61-3c4e-4a7b-8e12-5f9a0c3d8e01",
+  "name": "LethAL Sandbox Dates",
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "brief": "LethAL R856 fixture: mutation target of lethal.swap-workdate-today.",
+  "description": "Three procedures that read the work date or the system date. Pairs with fixtures/sandbox-dates-tests, whose tests set their own date. Only the opt-in operator lethal.swap-workdate-today finds sites here. Not for production use, see fixtures/README.md.",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "dependencies": [],
+  "screenshots": [],
+  "idRanges": [
+    {
+      "from": 77100,
+      "to": 77149
+    }
+  ],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "17.0",
+  "features": []
+}
