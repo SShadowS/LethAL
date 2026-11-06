@@ -3,7 +3,7 @@
  * and the refusals by name that keep v1 of the backend to what was measured:
  *
  *   "alRunnerV3": {
- *     "path": "/work/tools/al-runner-v3/current/al-runner",   // default
+ *     "path": "~/.local/bin/al-runner",                        // default (R834); the pinned build when /work/tools has one
  *     "packagesDir": "<the folder v3 gets as --package-cache and alc as its package cache>",
  *     "bcVersion": "28.0.46665.47126",                         // required, four numbers
  *     "coverage": "al-runner",                                 // or "none"; default "al-runner"
@@ -15,9 +15,11 @@
  *
  * `serverMode` and `selectorMode` are refused by name (the static selector only, and no v2-style serve).
  */
+import { existsSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { AL_RUNNER_V3_DEFAULT_PATH } from "./al-runner-v3-pin";
+import { homeDir } from "./home";
 import { symbolPackageIdentity } from "./published-test-app";
 
 export interface AlRunnerV3ConfigSection {
@@ -52,8 +54,26 @@ const KEYS = [
 /** Keys of the v2 section that mean a transport v1 of v3 does not have. */
 const REFUSED = ["serverMode", "selectorMode", "alRunnerPath"];
 
+/**
+ * R834: the default for `path`. The pinned build when this machine has one (LethAL's own boxes),
+ * else where upstream's install.sh puts the binary, so a clean box's error names a path the
+ * installer wrote.
+ */
+export function defaultV3Path(
+  exists: (p: string) => boolean = existsSync,
+  home: string = homeDir(),
+): string {
+  return exists(AL_RUNNER_V3_DEFAULT_PATH)
+    ? AL_RUNNER_V3_DEFAULT_PATH
+    : join(home, ".local", "bin", "al-runner");
+}
+
 /** T16 / T17: the section, validated; every refusal names its key. Extends nothing: plain Errors. */
-export function validateAlRunnerV3Config(raw: unknown): AlRunnerV3ConfigSection {
+export function validateAlRunnerV3Config(
+  raw: unknown,
+  exists: (p: string) => boolean = existsSync,
+  home: string = homeDir(),
+): AlRunnerV3ConfigSection {
   if (raw === undefined || raw === null || typeof raw !== "object") {
     throw new Error(
       'lethal.config.json is missing the "alRunnerV3" section (required for --backend al-runner-v3)',
@@ -106,7 +126,7 @@ export function validateAlRunnerV3Config(raw: unknown): AlRunnerV3ConfigSection 
     );
   }
   return {
-    path: (r.path as string | undefined) ?? AL_RUNNER_V3_DEFAULT_PATH,
+    path: (r.path as string | undefined) ?? defaultV3Path(exists, home),
     packagesDir: r.packagesDir,
     bcVersion: r.bcVersion,
     transport: r.transport ?? "serve-entries",

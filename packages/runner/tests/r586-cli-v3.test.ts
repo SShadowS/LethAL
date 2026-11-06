@@ -61,10 +61,18 @@ describe("T16: refused by name for v3, and not for v2", () => {
   });
   test("an unknown key is refused; the defaults are the pinned path and coverage al-runner", () => {
     expect(() => validateAlRunnerV3Config({ ...ok, servermode: true })).toThrow(/unknown key/);
-    expect(validateAlRunnerV3Config(ok)).toMatchObject({
+    expect(validateAlRunnerV3Config(ok, () => true)).toMatchObject({
       path: "/work/tools/al-runner-v3/current/al-runner",
       coverage: "al-runner",
     });
+  });
+  test("R834: with no pinned build the default path is where install.sh writes, under the given home", () => {
+    expect(validateAlRunnerV3Config(ok, () => false, "/home/u").path).toBe(
+      "/home/u/.local/bin/al-runner",
+    );
+    expect(
+      validateAlRunnerV3Config({ ...ok, path: "/x/al-runner" }, () => false, "/home/u").path,
+    ).toBe("/x/al-runner");
   });
 });
 

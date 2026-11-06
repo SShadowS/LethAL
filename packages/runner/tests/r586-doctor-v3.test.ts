@@ -4,7 +4,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { sha256OfFile } from "../src/al-runner-v3-pin";
+import { sha256OfFile, v3InstallHint } from "../src/al-runner-v3-pin";
 import { buildDoctorDeps } from "../src/cli";
 import { runDoctor } from "../src/doctor";
 import type { SpawnFn } from "../src/publisher";
@@ -69,6 +69,48 @@ describe("doctor: al-runner-v3", () => {
     const r = await runDoctor(d.cfg, d.deps);
     expect(r.ok).toBe(false);
     expect(r.checks[0]?.detail).toMatch(/al-runner-v3-system-application-not-found/);
+  });
+
+  // R834: a config with BOTH sections got no v3 check before.
+  const BCDEV = {
+    server: "https://host",
+    serverInstance: "env-4711",
+    username: "admin",
+    password: "pw",
+    mcpCommand: ["bun", "mcp"],
+    company: "CRONUS",
+    controlSymbolPath: "/lethal-control.app",
+    packageCachePath: "/no/such/pkg",
+  };
+
+  test("R834: an alRunnerV3 section beside a bcdev section still gets the al-runner-v3 check", async () => {
+    const { bin, deps } = await setup(true);
+    const cfg = { bcdev: BCDEV, alRunnerV3: { path: bin, packagesDir: deps, bcVersion: BC } };
+    const d = await buildDoctorDeps(cfg, { alRunnerSpawn: spawn });
+    const { alRunnerV3 } = d.deps;
+    if (alRunnerV3 === undefined) throw new Error("no al-runner-v3 dep");
+    const r = await runDoctor(d.cfg, { alRunnerV3 });
+    expect(r.checks.map((c) => [c.name, c.ok])).toEqual([["al-runner-v3", true]]);
+  });
+
+  test("R834: a bcdev-only config gets no al-runner-v3 check", async () => {
+    const d = await buildDoctorDeps({ bcdev: BCDEV });
+    expect(d.deps.alRunnerV3).toBeUndefined();
+  });
+
+  test("R834: a missing binary fails the check and prints the install command", async () => {
+    const { deps } = await setup(true);
+    const cfg = {
+      bcdev: BCDEV,
+      alRunnerV3: { path: join(dir, "absent"), packagesDir: deps, bcVersion: BC },
+    };
+    const failing: SpawnFn = async () => ({ exitCode: 127, stdout: "", stderr: "not found" });
+    const d = await buildDoctorDeps(cfg, { alRunnerSpawn: failing });
+    const { alRunnerV3 } = d.deps;
+    if (alRunnerV3 === undefined) throw new Error("no al-runner-v3 dep");
+    const r = await runDoctor(d.cfg, { alRunnerV3 });
+    expect(r.ok).toBe(false);
+    expect(r.checks[0]?.detail).toContain(v3InstallHint());
   });
 
   test("a config the run would refuse throws here too", async () => {

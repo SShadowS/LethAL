@@ -968,8 +968,8 @@ RUN — required
   --project <dir>            AL project to mutate (the app under test)
   --tests <dir>              AL test project (omit only with --dry-run)
   --backend <name>           bcdev (live BC, authoritative) or al-runner-v3 (the Rust al-runner,
-                             offline, NOT authoritative, pinned in /work/tools/al-runner-v3, config
-                             section "alRunnerV3"). al-runner, the retired .NET al-runner, is
+                             offline, NOT authoritative, config section "alRunnerV3", binary at
+                             ~/.local/bin/al-runner unless "path" says otherwise). al-runner, the retired .NET al-runner, is
                              refused by name (al-runner-v2-retired, R654)
 
 RUN — scope. These bound cost. --tests-only can change a verdict; the others cannot.
@@ -4649,43 +4649,41 @@ export async function buildDoctorDeps(
   // `bcVersion` against the package folder. The session's contract probe is not run here. Decided
   // BEFORE `prepareBcdevReadOnly`, because that helper resolves a bcdev identity this config does
   // not have. (An `alRunner` section is refused at load: R654 F2.)
-  if (
-    configFile.envTool === undefined &&
-    configFile.bcdev === undefined &&
-    configFile.alRunnerV3 !== undefined
-  ) {
-    const c = validateAlRunnerV3Config(configFile.alRunnerV3);
-    const spawn = opts.alRunnerSpawn ?? defaultSpawn;
-    return {
-      cfg: {},
-      deps: {
-        alRunnerV3: async () => {
-          const v = await spawn([c.path, "--version"], { env: v3ChildEnv() }).catch(
-            (e: unknown) => ({
-              exitCode: -1,
-              stdout: "",
-              stderr: String(e),
-            }),
-          );
-          const version = (v.stdout || v.stderr).trim();
-          if (v.exitCode !== 0)
-            return {
-              ok: false,
-              details: `${c.path} not runnable: ${version}. ${v3InstallHint()}`,
-            };
-          try {
-            const gated = await checkGated(c.path, version);
-            await assertBcVersionMatchesPackages(c.packagesDir, c.bcVersion);
-            return {
-              ok: true,
-              details: `${version}; ${gated.source === "manifest" ? "listed in the gate manifest, gated" : "gated"} at LethAL ${gated.lethalCommit}; bcVersion ${c.bcVersion}; transport ${c.transportSource === "explicit" ? c.transport : "default (serve-entries where proven, else one-shot; R761)"}`,
-            };
-          } catch (err) {
-            return { ok: false, details: err instanceof Error ? err.message : String(err) };
-          }
-        },
-      },
-    };
+  // R834: the same check for ANY config with the section, beside a bcdev or envTool one too.
+  const v3Check =
+    configFile.alRunnerV3 === undefined
+      ? undefined
+      : (() => {
+          const c = validateAlRunnerV3Config(configFile.alRunnerV3);
+          const spawn = opts.alRunnerSpawn ?? defaultSpawn;
+          return async () => {
+            const v = await spawn([c.path, "--version"], { env: v3ChildEnv() }).catch(
+              (e: unknown) => ({
+                exitCode: -1,
+                stdout: "",
+                stderr: String(e),
+              }),
+            );
+            const version = (v.stdout || v.stderr).trim();
+            if (v.exitCode !== 0)
+              return {
+                ok: false,
+                details: `${c.path} not runnable: ${version}. ${v3InstallHint()}`,
+              };
+            try {
+              const gated = await checkGated(c.path, version);
+              await assertBcVersionMatchesPackages(c.packagesDir, c.bcVersion);
+              return {
+                ok: true,
+                details: `${version}; ${gated.source === "manifest" ? "listed in the gate manifest, gated" : "gated"} at LethAL ${gated.lethalCommit}; bcVersion ${c.bcVersion}; transport ${c.transportSource === "explicit" ? c.transport : "default (serve-entries where proven, else one-shot; R761)"}`,
+              };
+            } catch (err) {
+              return { ok: false, details: err instanceof Error ? err.message : String(err) };
+            }
+          };
+        })();
+  if (configFile.envTool === undefined && configFile.bcdev === undefined && v3Check !== undefined) {
+    return { cfg: {}, deps: { alRunnerV3: v3Check } };
   }
   const readOnly = prepareBcdevReadOnly(configFile, {
     runId: "doctor",
@@ -4952,6 +4950,7 @@ export async function buildDoctorDeps(
       toolPaths,
       ...(alcRuntime !== undefined ? { alcRuntime } : {}),
       dependencies,
+      ...(v3Check !== undefined ? { alRunnerV3: v3Check } : {}),
     },
     ...(isCreateMode ? { caveat: DOCTOR_CREATE_MODE_CAVEAT } : {}),
   };
