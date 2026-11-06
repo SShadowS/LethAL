@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**17 of 829 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**16 of 829 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -496,7 +496,7 @@ that ordering is the priority.
 - **R824** · doctor misses a missing non-Microsoft dependency package and a sync-pending tenant; clear-quarantine rejects --config (GitHub #29) · [R824.md](docs/roadmap/R824.md) · done (41df4238)
 - **R825** · README states the operator count in prose by hand, and it drifted (GitHub #44) · [R825.md](docs/roadmap/R825.md) · done (41df4238)
 - **R826** · A 907-guard codeunit crashed the BC service tier with a stack overflow: nothing limits or warns on guards per codeunit (GitHub #28) · [R826.md](docs/roadmap/R826.md) · open, filed 2026-11-05 (coord task R-820); a warning landed (R-825); the measurement waits for #28's reporter
-- **R827** · One empty-block mutant on a block folds everything inside it into one chain: 2 to 8 x the emitted code on real codeunits, growing with the square · [R827.md](docs/roadmap/R827.md) · parked 2026-11-05: plan reviewed, waiting for #28's reporter or a measured crash
+- **R827** · One empty-block mutant on a block folds everything inside it into one chain: 2 to 8 x the emitted code on real codeunits, growing with the square · [R827.md](docs/roadmap/R827.md) · done (49557132)
 - **R828** · Statements that keep their whole body as a chain root (`if`, loops, `case` arms) leave chains of up to 461 after R827, and a 44 MB file: R827 alone does not clear #28's suspect · [R828.md](docs/roadmap/R828.md) · open: planned and split (O1 after R-836; a BC measurement with a pre-committed limit decides O3); nothing…
 - **R829** · Hang refusal misses a write the loop's step reads, when the loop condition reads a name (GitHub #50) · [R829.md](docs/roadmap/R829.md) · done (08605e4d)
 - **R830** · `void-method-call` has no hang check: deleting a call that steps a loop can hang the run · [R830.md](docs/roadmap/R830.md) · done (6daf2727)
