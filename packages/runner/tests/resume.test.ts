@@ -23,7 +23,11 @@ import type { BcDevConfig } from "../src/bcdev-backend";
 import type { MicrosoftMode } from "../src/digest-inputs";
 import type { RunEvent } from "../src/events";
 import { EXPLAIN_SCHEMA_VERSION, explain } from "../src/explain";
-import { feedAttestation, runSession as runSessionRaw } from "../src/orchestrator";
+import {
+  feedAttestation,
+  resumeGuardMessage,
+  runSession as runSessionRaw,
+} from "../src/orchestrator";
 import type { AttestationLedger } from "../src/orchestrator";
 import { ERROR_CAUSE_INTERPRETATIONS, renderConsole } from "../src/report";
 import type { SessionReport } from "../src/report";
@@ -2267,6 +2271,12 @@ describe("R89 — a run asked to resume must SAY it resumed", () => {
       selectorIds,
     });
     expect(report.resumedFrom).toBeUndefined();
+  });
+
+  test("the guard's message carries the argv, which the field report never recovered", () => {
+    const m = resumeGuardMessage("last", ["run", "--resume", "last", "--project", "p q"]);
+    expect(m).toContain('argv=["run","--resume","last","--project","p q"]');
+    expect(m).toContain('("last")');
   });
 });
 
