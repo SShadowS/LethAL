@@ -42,7 +42,7 @@ import { readSystemRuntime } from "./app-package";
 import { compareAppVersions, nextAbove } from "./app-version";
 import { ArtifactCompiler, defaultArtifactIo } from "./artifact";
 import type { BackendKind, BackendStatus, ExecutionBackend } from "./backend";
-import { isLocalRunner } from "./backend";
+import { isBcdev, isLocalRunner } from "./backend";
 import { readTargetSource } from "./baseline-snapshot";
 import { bcFetch } from "./bc-fetch";
 import { BcDevMcpBackend } from "./bcdev-backend";
@@ -85,6 +85,7 @@ import { type ExplainSuggestedOutput, suggest } from "./explain-suggest";
 import { formatFailure } from "./format-failure";
 import { HarnessVerifier, UnfilteredExtensionsQueryError } from "./harness";
 import type { LeaseSnapshot } from "./harness";
+import { largeFoldWarning } from "./large-fold";
 import { type ForceResetOutcome, LeaseClient, LeaseUnavailableError } from "./lease";
 import { changedLinesSince, parseLineArg } from "./line-filter";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
@@ -3484,6 +3485,11 @@ export async function printDryRun(
   console.log(
     `dry run: ${files.length} file(s), ${sites.length} mutant site(s), ${deployedTotal} deployed mutant(s), ${artifacts.length} batch(es)`,
   );
+  // R826: as `runSession` warns: a BC tier's risk, so not for al-runner-v3.
+  if (paths.backendKind === undefined || isBcdev(paths.backendKind)) {
+    const foldWarning = largeFoldWarning(files, dryRunTierOf);
+    if (foldWarning !== undefined) console.log(`NOTE: ${foldWarning.replace("[lethal] ", "")}`);
+  }
   // R48: a dry run exists to answer "how big is this going to be", so it is the right place to say
   // that the answer is "too big to run". Saying it here — rather than only when `lethal run`
   // refuses — means the narrowing conversation happens before anything is published.

@@ -161,6 +161,7 @@ import type { HangRefusedFile, PreprocExcludedFile } from "./excluded-sites";
 import { ActivationFailure } from "./failure-classes";
 import { UnfilteredExtensionsQueryError } from "./harness";
 import { homeDir } from "./home";
+import { largeFoldWarning } from "./large-fold";
 import {
   type BeginPublishRefusal,
   LeaseUnavailableError,
@@ -6423,6 +6424,13 @@ async function runSessionBody(
       ...(cfg.dependencyPackageDirs ?? []),
     ],
   });
+  // R826: a warning only, once per session, and only for a BC tier: it changes no deploy decision.
+  const foldWarning = isBcdev(caps.kind)
+    ? largeFoldWarning(allFiles, (name) => operatorTiers.get(name))
+    : undefined;
+  if (foldWarning !== undefined) {
+    emit({ type: "warning", code: "large-method", message: foldWarning });
+  }
   // R442: before any mutant row, so a run that dies earlier holds no verdict and stays NULL.
   cfg.store.setCarryHidden(runId, carryHidden);
   // R565: likewise, so a run that dies before it carries nothing by rule 1.

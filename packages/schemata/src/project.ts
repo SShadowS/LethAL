@@ -255,8 +255,9 @@ export function coarseIdentityTupleOf(
  * 41: R572, a loop whose exit is fed by another object's stateful procedure refuses that chain, its value-path writers and (`r572-guard-writer`) the guards that dominate a call into them in the loop body; a guard is refused as a SINGLE site, so it renumbers its procedure's same-tuple twins (measured on BaseApp at 950e69a3: 34 ordinals moved, 0 tuples moved, every move explained by a refused lower twin; /coord/handoff/R-572/reprice/investigation.md). Confirmed at the merge of master d5a8288a: master was 40 and no other branch had bumped it.
  * 42: R-604b (R604 shape M1, narrowed): a same-object callee of a loop whose own step forces the exit, that gets the forcing cursor and either inserts or renames rows of the iterated table (within 4 calls, any record) or gets the cursor by `var`, or names a forced global cursor, and touches it, is hang-refused with its touches (and `r572-guard-writer` refuses the guards that dominate its call as single sites), so a refused site renumbers its procedure's same-tuple twins (measured at master f31ae5ad against r2's prototype: BaseApp 16 procedures and 18 guard sites added, DC 6 and 2, DO, CDO and fixtures none; /coord/handoff/R-604b/measure.md). The ten gate baselines below 42 wait on R690.
  * 43: R796, tree-sitter-al 4.4.1 -> 4.5.0 parses shapes 4.4.1 swallowed or broke, so the big corpora gain and lose sites (predicted from master 601b2e98 against the 4.5.0 addon: BC.History 98 added and 14 removed, 2 ordinals moved, 0 tuples moved; DC 3 added; fixtures, CDO and DO identical); history, --resume and marks recorded under 42 are not carried. The committed baselines at 42 lag until the merge window re-records them.
+ * 44: R829 (coord task R-818), a loop whose condition reads a name now also refuses the writes that feed its condition and exit guards, so sites leave the set and their same-tuple twins' ordinals move (figures: R829); history, --resume and marks recorded under 43 are not carried.
  */
-export const IDENTITY_SCHEME = 43;
+export const IDENTITY_SCHEME = 44;
 
 /**
  * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,
