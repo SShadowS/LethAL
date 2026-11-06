@@ -450,6 +450,24 @@ describe("R827: only a body, and only its own empty-block", () => {
   });
 });
 
+describe("R853: glued source emits separate words", () => {
+  const body = (statements: string): string =>
+    `codeunit 51997 "R853 Glued"\n{\n    procedure P(A: Boolean; C: Integer)\n    begin\n${statements}\n    end;\n\n    procedure Foo(C: Integer)\n    begin\n    end;\n\n    procedure "My Q"(C: Integer)\n    begin\n    end;\n}\n`;
+  const cases: ReadonlyArray<readonly [string, string]> = [
+    ["a replacement before `else`", "        if A then\n            Foo(C + 1)else Foo(C);"],
+    ["a wrap before `end`", "        if A then begin\n            if C > 0 then Foo(C + 1)end;"],
+    ["a wrap before `until`", "        repeat\n            if C > 0 then Foo(C + 1)until C > 0;"],
+    ["a marker after `begin`", `        if A then begin"My Q"(C + 1)end;`],
+  ];
+  for (const [name, statements] of cases) {
+    test(name, async () => {
+      const r = await checkSource(body(statements));
+      expect(r.findings.map((f) => `${f.mutantId} ${f.kind}: ${f.detail}`)).toEqual([]);
+      expect(r.guards).toBeGreaterThan(0);
+    });
+  }
+});
+
 test("R827: a statement touching the body's `end` does not join it", async () => {
   const source = `codeunit 51997 "R827 Free"\n{\n    procedure P() var X: Integer;\n    begin\n        X := 1;\n        Foo(X + 1)end;\n}\n`;
   const r = await checkSource(source);
@@ -809,7 +827,8 @@ describe("R827: corpus (LETHAL_R827_CORPUS=<dir>, counts only, never source text
       console.log(`[r827 corpus] findings by kind: ${JSON.stringify([...byKind])}`);
       console.log(`[r827 corpus] findings by operator and kind: ${JSON.stringify([...byOp])}`);
       // A file name and a mutant id are fine to print; `detail` may hold source, so it is left out.
-      for (const f of r.findings.slice(0, 20)) console.log(`[r827 corpus] ${f.kind} ${f.mutantId} ${f.path}`);
+      for (const f of r.findings.slice(0, 20))
+        console.log(`[r827 corpus] ${f.kind} ${f.mutantId} ${f.path}`);
       expect(r.files).toBeGreaterThan(0);
       expect(r.mutants).toBeGreaterThan(0);
       expect(r.findings.length).toBe(0);
