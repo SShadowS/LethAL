@@ -52,11 +52,13 @@ const WITNESS_LINES: readonly {
   stale: string | undefined;
 }[] = [
   { line: 8, text: "MutationSelector.Active('M0001')", own: "Grow", stale: "Grow" },
-  { line: 36, text: "if X > 10 then", own: "Grow", stale: "Twice" },
-  { line: 37, text: "exit(X + 1);", own: "Grow", stale: "Twice" },
-  { line: 71, text: "MutationSelector.Active('M0006')", own: "Twice", stale: undefined },
-  { line: 73, text: "MutationSelector.Active('M0007')", own: "Twice", stale: undefined },
-  { line: 79, text: "exit(X * 2);", own: "Twice", stale: undefined },
+  // R827: Twice's empty-block is one guard on its `begin` line, and Grow (which holds a `#pragma`)
+  // stays a chain, now on lines 6 to 46. Twice runs from line 48 to 80.
+  { line: 33, text: "if X > 10 then", own: "Grow", stale: "Twice" },
+  { line: 27, text: "exit(X + 1);", own: "Grow", stale: "Twice" },
+  { line: 74, text: "MutationSelector.Active('M0006')", own: "Twice", stale: undefined },
+  { line: 75, text: "MutationSelector.Active('M0007')", own: "Twice", stale: undefined },
+  { line: 78, text: "exit(X * 2)", own: "Twice", stale: undefined },
 ];
 
 interface Built {

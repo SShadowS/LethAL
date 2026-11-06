@@ -1,5 +1,7 @@
 # R828 pre-commitment: what a compare per pass costs, and the limit that decides O3
 
+**WITHDRAWN, 2026-11-06: read Addendum 1 at the end. Do not run this measurement or raise a floor from it.**
+
 Written 2026-11-06 by lethal-code, before any live run. Coord: on the orchestrator's word. Plan: `/coord/handoff/R-828/plan.md`. A false `timeout-killed` is a BLOCK.
 
 ## The question
@@ -43,3 +45,24 @@ Assignments are the cheapest statement, so the ratio is an upper bound for real 
 The time of a real mutant in a real suite: only gates do that. Whether chain length caused #28's crash: [[R826]]. BC 29: `bc4` is not up. One server at one load: samples are compared to each other, on one call each, so load shifts both sides; the 20% rule catches a load spike.
 
 No gate figure moves here. Nothing lands from this measurement but its result.
+
+## Addendum 1, 2026-11-06: the limit and the budget rule are withdrawn
+
+One opus review, from reading the code; nothing was run. The rule does not stand as written. Its idea holds: a run that fit today fits `F x` its old budget. The mechanism does not deliver that.
+
+**Why it fails.**
+
+- **A false kill remains. "`2 x baseline` needs no change" is false.** The baseline pays compares only for its own passes, and the case at issue is a mutant that runs far more. At F = 2: a test with a 110 s baseline, mostly database time, keeps its 110 s. Old budget 220 s, new budget 360 s. A mutant that ended at 210 s needs 420 s, is stopped at 360 s, its confirm passes, `reproduceKill` times out at the same 360 s, and the row scores `timeout-killed`.
+- **F was mis-defined.** The design pays one compare per MUTANT, not per statement. A statement with m mutants pays m compares each pass, so the true bound is `1 + m x (F - 1)`: 2.9 at F = 1.63 and m = 3.
+- **Two costs sit outside F.** A hot callee pays for its locals on every call. An active mutant at chain position k pays k `Active` calls today, and all N with one read per mutant.
+- **The floors hit a fixed time this rule missed, `REQUEST_CEILING_MS`.** `fits` needs `budget + 30 s <= 300 s`. Headroom is 90 s at F = 1.0, 18 s at 1.4 and none at 1.5; from 1.6 no method fits and every default run reads `group-runs-inert`. `groupedCalls`, `warmKills` and `killPosition`, pinned in gates, would move above about 1.4. So this rule's limit of F = 2.0 was never safe, and R246's one sample of 1.63 is already in that zone.
+- **The floors can break a hosted stop:** the same code notes 330 s aborted and a 360 s proxy ceiling. At F = 1.7 the stop lands at 336 s, with no 408, and the tier quarantines.
+- **"Reported on `itest:hang`" was impossible:** that gate sets its own 20 s and 10 s budgets, so it never touches the floors.
+- **Wrong premise:** the false kill needs `--stop-hung-sessions`. Without it the abort gives `in-flight-unknown` and a quarantine: loud and safe, though it costs the session. A user-set budget is outside any floor rule, and must not be scaled silently.
+- **One sample cannot give a constant:** one server, one load, three samples, BC 28 only.
+
+**The answers asked for.** No `*.baseline.json` holds a budget, and neither `sessionFingerprint` nor the batch hash does. So a raised floor changes no stored row by itself, and `--resume` and campaign freezes stay valid. But a moved constant IS gate-moving: gate figures shift through `fits` above about 1.4, so it needs the full BC list and the v3 gate, its own commit before O3, and a `docs/gates` line. `al-runner-v3.itest.ts`, `docs/gates/alrunner-v3.md`, the README and `report.ts` quote the numbers.
+
+**The replacement, not yet pre-committed: change no constant.** In `reproduceKill`, for a timeout kill, send `min(M x testBudgetMs, cap)`, not the same budget, with M a named margin over the measured bound. A `pass` or `fail` at the larger budget is already `kill-not-reproduced`, an `error`: the safe direction. Only a second `timeout` scores `timeout-killed`. It covers the floor, `2 x baseline` and user-set budgets with one change, leaves `fits` and the gate figures alone, and a hang costs 540 s at M = 2. Limits: from position 2 on the replay still fits under the ceiling, so above about M = 1.5 at the default floor it ends `cap`, a lost kill and never a false one; a hosted server caps M at about 1.66; without the stop flag nothing changes; and some true kills become `error`.
+
+**Before any new measurement, a new pre-commitment must state:** F per mutant, with shapes at m of 2, 3 and the largest in-loop m, computed offline first; a hot-call shape; the formula for M and its margin; each moved figure by name, which for this rule is nothing outside `itest:hang`; `stopRowFailures`' new duration window; a planted test that runs past its budget and scores `kill-not-reproduced` at positions 1 and above, since no gate holds this race; and a live probe of any held request above 180 s: does BC's 408 still arrive? BC 29 stays open until `bc4` is up. v3's stop cannot be raised by `reproduceKill`: file that, or measure its own ratio.

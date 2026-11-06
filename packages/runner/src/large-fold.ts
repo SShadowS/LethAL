@@ -3,7 +3,9 @@ import { type TierResolver, assignMutantIds, buildComponents, dedupeSpecs } from
 
 /**
  * R826: when one mutant's statement holds others, they share one guard chain and each branch repeats
- * the statement's text, so one emitted method grows with the square (R827). GitHub #28's 907-guard
+ * the statement's text, so one emitted method grows with the square. R827 made a body's `empty-block` a
+ * guard unless the body holds a directive. An `if` condition, a `case` arm, a loop and a branch's
+ * `empty-block` are what is left, and a body's `empty-block` makes each loop in it one chain. GitHub #28's 907-guard
  * file stopped a BC service tier with a stack overflow, and a very large method is the lead suspect.
  * That is an inference: no crash has been measured here.
  *
@@ -25,12 +27,14 @@ export function largestFold(
   components: readonly {
     readonly members: readonly unknown[];
     readonly root: { readonly startIndex: number; readonly endIndex: number };
+    readonly free?: true;
   }[],
 ): FoldFigures {
   let chain = 0;
   let bytes = 0;
   for (const c of components) {
     chain = Math.max(chain, c.members.length);
+    if (c.free === true) continue; // R827: a guard copies no text.
     bytes = Math.max(bytes, c.members.length * (c.root.endIndex - c.root.startIndex));
   }
   return { chain, bytes };
@@ -70,8 +74,9 @@ export function largeFoldWarning(
   return [
     `[lethal] ${large.length} file(s) emit a very large method: ${named}. A method this size may stop a BC`,
     " service tier with a stack overflow (GitHub #28). That is not proven, and these thresholds are not",
-    " measured: it is a warning only. `lethal.empty-block` causes the largest folds. To shrink them, leave it out",
-    " with --exclude-operator empty-block, or narrow the run with --only. --max-guards-per-batch will not help: it",
-    " splits by file.",
+    " measured: it is a warning only. `if` conditions, `case` arms and loops cause the largest folds. To shrink them,",
+    " leave out the operators that root them, one --exclude-operator each: empty-block, negate-conditional,",
+    " conditional-boundary, negate-guard, remove-not, loop-skip, loop-truncate. Or narrow the run with --only.",
+    " --max-guards-per-batch will not help: it splits by file.",
   ].join("");
 }

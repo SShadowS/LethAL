@@ -14,6 +14,20 @@
     }
   },
   {
+    "id": "alpha.13-23e7631be",
+    "track": "release",
+    "tag": "v3.0.0-alpha.13",
+    "version": "al-runner 3.0.0-alpha.13 (23e7631be)",
+    "binarySha256": "d40d2778d16556b50a595759de9afbcf08425768a8fab03ce4d8667ef70e08bc",
+    "readingsFrom": "edge-d72d3197d",
+    "readingsDigest": "18793d7f161dba8071a394cab44b98dd3f59fb15e47cb1b057a4fa227030ccef",
+    "lethalCommit": "25a2f95fbe13a2a0674d011111a045009add5a2e",
+    "gatedAt": "2026-11-06T11:02:50.729Z",
+    "warnFacts": {
+      "serve-keep-reasons": "matches"
+    }
+  },
+  {
     "id": "edge-a0189c004",
     "track": "edge",
     "version": "al-runner 3.0.0-alpha.13+edge.20261106 (a0189c004)",
@@ -22,6 +36,19 @@
     "readingsDigest": "18793d7f161dba8071a394cab44b98dd3f59fb15e47cb1b057a4fa227030ccef",
     "lethalCommit": "25a2f95fbe13a2a0674d011111a045009add5a2e",
     "gatedAt": "2026-11-06T07:56:28.135Z",
+    "warnFacts": {
+      "serve-keep-reasons": "matches"
+    }
+  },
+  {
+    "id": "edge-a0825f1d9",
+    "track": "edge",
+    "version": "al-runner 3.0.0-alpha.13+edge.20261106 (a0825f1d9)",
+    "binarySha256": "ae3d22c20533870065b10e5b3fcb8d8b752b0aeb23becdba82c51051ca29b5df",
+    "readingsFrom": "edge-d72d3197d",
+    "readingsDigest": "18793d7f161dba8071a394cab44b98dd3f59fb15e47cb1b057a4fa227030ccef",
+    "lethalCommit": "25a2f95fbe13a2a0674d011111a045009add5a2e",
+    "gatedAt": "2026-11-06T10:58:02.145Z",
     "warnFacts": {
       "serve-keep-reasons": "matches"
     }

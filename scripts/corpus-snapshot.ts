@@ -718,7 +718,7 @@ export function slotHeld(lockDir: string, slot: number): boolean {
   return r.exitCode === SLOT_BUSY;
 }
 
-function lockDir(): string {
+export function lockDir(): string {
   return process.env.LETHAL_HEAVY_LOCK_DIR ?? "/coord/locks";
 }
 

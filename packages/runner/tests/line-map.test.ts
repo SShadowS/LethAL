@@ -487,11 +487,12 @@ describe("GH-09: measured coverage rows over the namespaced sandbox-app", () => 
     await initParser();
   });
 
-  // Measured, not derived: `LETHAL_FENCED_COVERAGE_DUMP` of the lane-head fenced run on Cronus28,
-  // 2026-09-26 (GH-09 run001, fenced-rows.jsonl), `Codeunit 79000`, positive hits, lineNo > 0.
+  // Measured, not derived: `LETHAL_FENCED_COVERAGE_DUMP` of `itest:bcdev` on bc2, 2026-11-06 (R-836,
+  // /coord/handoff/R-836/fenced-rows.jsonl), `Codeunit 79000`, positive hits, lineNo > 0. Taken again
+  // because R827 changed the layout; GH-09's first rows were on Cronus28, 2026-09-26.
   // BC emits a row only for a statement that executed, never for a `procedure` line.
-  const OVER_BUDGET_DETECTED = [10, 12, 16, 22];
-  const CLAMP_PERCENT_RUNS = [29, 31, 37, 43, 49, 57, 59, 66, 68, 74, 81, 83, 87, 93, 99, 107, 108];
+  const OVER_BUDGET_DETECTED = [9, 10, 12, 15];
+  const CLAMP_PERCENT_RUNS = [20, 21, 24, 27, 31, 34, 37, 42, 43, 46, 51, 52, 54, 58, 62, 67, 68];
 
   test("GH-09: the measured namespaced rows resolve under base 1 (OverBudgetDetected to IsOverBudget, ClampPercentRuns never to IsOverBudget)", async () => {
     const repo = resolve(import.meta.dir, "../../..");
@@ -513,8 +514,8 @@ describe("GH-09: measured coverage rows over the namespaced sandbox-app", () => 
       for (const row of OVER_BUDGET_DETECTED) {
         expect(map.lookup("Codeunit", 79000, row)).toBe("IsOverBudget");
       }
-      expect(map.lookup("Codeunit", 79000, 29)).toBe("ClampPercent");
-      expect(map.lookup("Codeunit", 79000, 31)).toBe("ClampPercent");
+      expect(map.lookup("Codeunit", 79000, 20)).toBe("ClampPercent");
+      expect(map.lookup("Codeunit", 79000, 21)).toBe("ClampPercent");
       for (const row of CLAMP_PERCENT_RUNS) {
         expect(map.lookup("Codeunit", 79000, row)).not.toBe("IsOverBudget");
       }
@@ -531,7 +532,9 @@ describe("GH-09: measured coverage rows over the namespaced sandbox-app", () => 
       if (entry === undefined) throw new Error("no line-map entry for Codeunit 79000");
       const cannotRun = [...OVER_BUDGET_DETECTED, ...CLAMP_PERCENT_RUNS].filter((row) => {
         const text = (lines[row + entry.baseLine - 2] ?? "").trim();
-        return text === "" || /^(begin|end;?)$/.test(text) || text.includes("Reached(");
+        // R827: a free body's guard shares its line with its marker, and that line does run.
+        const arm = text.includes("Reached(") && !text.includes(".Active(");
+        return text === "" || /^(begin|end;?)$/.test(text) || arm;
       });
       expect(cannotRun).toEqual([]);
     } finally {
