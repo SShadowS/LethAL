@@ -15,7 +15,7 @@
  *
  * `serverMode` and `selectorMode` are refused by name (the static selector only, and no v2-style serve).
  */
-import { existsSync } from "node:fs";
+import { constants, accessSync, existsSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { AL_RUNNER_V3_DEFAULT_PATH } from "./al-runner-v3-pin";
@@ -53,6 +53,28 @@ const KEYS = [
 ];
 /** Keys of the v2 section that mean a transport v1 of v3 does not have. */
 const REFUSED = ["serverMode", "selectorMode", "alRunnerPath"];
+
+/**
+ * R834: a configured `alcPath` that is missing or not executable is refused by name here, before
+ * the contract probe, whose own report would call it a divergence and say "re-measure".
+ */
+export function assertAlcRunnable(
+  alcPath: string,
+  canRun: (p: string) => boolean = (p) => {
+    try {
+      accessSync(p, constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  },
+): void {
+  if (!canRun(alcPath)) {
+    throw new Error(
+      `al-runner-v3-alc-not-found: "alRunnerV3.alcPath" is ${alcPath}, which does not exist or is not executable. Fix the path; scripts/fetch-alc.ts writes a working alc wrapper (README, "Running without a BC server").`,
+    );
+  }
+}
 
 /**
  * R834: the default for `path`. The pinned build when this machine has one (LethAL's own boxes),

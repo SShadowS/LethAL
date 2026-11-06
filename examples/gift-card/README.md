@@ -160,14 +160,16 @@ what happened to two of these fixtures (ROADMAP R169).
 
 Linux x64 only. The result is indicative, not authoritative: the planted bug and the survivors
 above are measured on `bcdev`. This path shows the mechanics on a clean machine. It needs no server,
-no container and no credentials. You need `git`, `curl`, `tar`, `xz`, Bun, Rust 1.96 or newer, clang/LLVM
-23.1.2, and `alc` (the AL compiler, from the AL Language VS Code extension: its `bin/linux/alc`).
+no container and no credentials. You need `git`, `curl`, `tar`, `xz`, Bun, Rust 1.96 or newer
+([rustup](https://rustup.rs)), clang/LLVM 23.1.2, and, if you have no AL Language VS Code extension,
+the .NET runtime (`dotnet` on PATH) for `alc`, the AL compiler (step 3).
 
 ```bash
 # 1. build LethAL (once)
 git clone https://github.com/SShadowS/LethAL && cd LethAL
 bun install
 bash scripts/install-llvm.sh linux-x64        # skip if clang/LLVM 23.1.2 is installed
+export LLVM_BIN=<the folder the script printed>   # its last line; skip with the line above
 bun scripts/build-native-parser.ts
 bun run build:binary
 
@@ -177,9 +179,10 @@ curl -fsSL https://github.com/aldevtools/BusinessCentral.AL.Runner/releases/down
 
 # 3. download Microsoft's symbols for BC 28; note the bcVersion it prints
 bun scripts/fetch-ms-symbols.ts 28 ./symbols
+bun scripts/fetch-alc.ts ./alc                 # skip with the AL Language VS Code extension
 
-# 4. write the config: copy the example, then set packagesDir (absolute path of ./symbols),
-#    bcVersion (as printed in step 3) and, without VS Code, "alcPath" (see the main README)
+# 4. write the config: copy the example, then set packagesDir and bcVersion as step 3 printed them
+#    and, if you ran fetch-alc, add the "alcPath" line it printed to the alRunnerV3 section
 cp examples/gift-card/lethal.config.v3.example.json examples/gift-card/lethal.config.local.json
 
 # 5. check, then run

@@ -2,13 +2,14 @@
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { buildFakeAppWithEntries } from "../packages/runner/tests/helpers/fake-app.ts";
 import {
   FEED_INDEX,
   type FetchFn,
   NoBuildForMajorError,
   PACKAGE_IDS,
+  configLine,
   fetchSymbols,
   pickNewest,
 } from "./fetch-ms-symbols";
@@ -42,6 +43,13 @@ function fakeFeed(versionsOf: (id: string) => string[]): { fetchFn: FetchFn; url
   };
   return { fetchFn, urls };
 }
+
+describe("configLine", () => {
+  test("prints an absolute packagesDir for a relative one, and keeps an absolute one", () => {
+    expect(configLine("./symbols", "28.5.1.2")).toContain(`"packagesDir": "${resolve("symbols")}"`);
+    expect(configLine("/abs/s", "28.5.1.2")).toContain('"packagesDir": "/abs/s"');
+  });
+});
 
 describe("pickNewest", () => {
   test("compares number by number, so 28.0.9 is older than 28.0.10, and takes three-number versions", () => {

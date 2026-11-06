@@ -510,6 +510,22 @@ describe("R639 r9 §2: status() passes candidate into the unlike-bc refusals and
     expect(s.ok).toBe(true);
     expect(warned).toMatch(/al-runner-v3-defect-unlike-bc: refusal-row-shape/);
   });
+  test("R834: status() says which binary and version this session runs", async () => {
+    const { warned } = await statusOf(true);
+    expect(warned).toMatch(/\[lethal\] al-runner: \S*al-runner \(al-runner 3\.0\.0-alpha\.4\+edge/);
+  });
+  test("R834: a refused binary is not announced", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const l = await layout();
+      await backendOf(l, versionOnly, fakeAlc().io).status();
+      expect(warn.mock.calls.map((c) => String(c[0])).join("\n")).not.toContain(
+        "[lethal] al-runner:",
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
   test("R719: status() passes the pin's muted set to the warnings and prints the pin line", async () => {
     const gone = (fact: string): V3ContractResult["facts"][number] => ({
       fact,

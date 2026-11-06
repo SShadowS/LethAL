@@ -114,12 +114,14 @@ no-coverage. Do not quote a score from it. Its gate is `itest:alrunner-v3`
 ([docs/gates/alrunner-v3.md](gates/alrunner-v3.md)).
 
 An `al-runner-v3` config needs ONLY the `alRunnerV3` section (`packagesDir`, and `bcVersion` as four
-numbers); no `bcdev` section, no server, no credentials. `path` defaults to the pinned build when
-`/work/tools` has one, else `~/.local/bin/al-runner` (where upstream's installer writes it). Microsoft's symbols
+numbers); no `bcdev` section, no server, no credentials. `path` defaults to `~/.local/bin/al-runner`
+(where upstream's installer writes it). Microsoft's symbols
 come from `bun scripts/fetch-ms-symbols.ts <bc-major> <out-dir>` (it prints the `bcVersion`), and `alc`
-comes from the AL Language extension or `alRunnerV3.alcPath`. `doctor` on any config that has the
-section prints an `al-runner-v3` check (version, gated build, `bcVersion` against the symbols); when
-that check fails it prints the install command. It does not check `alc`. Full steps:
+comes from the AL Language extension or, on a Linux box with .NET but no VS Code, from
+`bun scripts/fetch-alc.ts <dir>` (it prints the `alRunnerV3.alcPath` line). `doctor` on any config that has the
+section prints an `al-runner-v3` check (version, gated build, `bcVersion` against the symbols, and
+that a configured `alcPath` is executable); when the al-runner is missing it prints the install command.
+A run prints one line, `[lethal] al-runner: <path> (<version>)`, naming the binary it used. Full steps:
 [README](../README.md#running-without-a-bc-server-the-al-runner-v3-backend).
 
 **The .NET al-runner is retired (R654).** `--backend al-runner` is refused with

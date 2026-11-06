@@ -5,6 +5,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  assertAlcRunnable,
   assertBcVersionMatchesPackages,
   refuseV3Platform,
   validateAlRunnerV3Config,
@@ -65,6 +66,13 @@ describe("T16: refused by name for v3, and not for v2", () => {
       path: "/work/tools/al-runner-v3/current/al-runner",
       coverage: "al-runner",
     });
+  });
+  test("R834: a missing or non-executable alcPath is refused by name; a runnable one passes", () => {
+    expect(() => assertAlcRunnable("/no/such/alc", () => false)).toThrow(
+      /al-runner-v3-alc-not-found.*\/no\/such\/alc/,
+    );
+    expect(() => assertAlcRunnable("/ok/alc", () => true)).not.toThrow();
+    expect(() => assertAlcRunnable("/no/such/alc")).toThrow(/al-runner-v3-alc-not-found/);
   });
   test("R834: with no pinned build the default path is where install.sh writes, under the given home", () => {
     expect(validateAlRunnerV3Config(ok, () => false, "/home/u").path).toBe(

@@ -55,9 +55,10 @@ The offline `al-runner-v3` backend needs no BC server at all; see
 Building from source needs:
 
 - [Bun](https://bun.sh) 1.x
-- Rust 1.96 or newer
+- Rust 1.96 or newer (install it with [rustup](https://rustup.rs))
 - clang/LLVM 23.1.2. If you do not have it, `bash scripts/install-llvm.sh <platform-key>` installs it
-  (for example `linux-x64`; the script lists the keys it knows)
+  (for example `linux-x64`) under `${TMPDIR:-/tmp}/llvm-23.1.2`, which some reboots clear (set `TMPDIR`
+  to a folder you keep first). Its last line is the `export LLVM_BIN=...` to run next
 
 ## Installation
 
@@ -69,6 +70,8 @@ add-on that you build first; `bun run build:binary` refuses to run without it:
 git clone https://github.com/SShadowS/LethAL
 cd LethAL
 bun install
+bash scripts/install-llvm.sh linux-x64          # skip if clang/LLVM 23.1.2 is installed
+export LLVM_BIN=<the folder the script printed>   # skip with the line above
 bun scripts/build-native-parser.ts
 bun run build:binary
 ```
@@ -118,10 +121,18 @@ bun scripts/fetch-ms-symbols.ts 28 ./symbols
 `bcVersion` line for your config. Use that value as printed: it must be the System Application's
 four-number version. The script refuses a major the feed does not carry.
 
-**3. `alc`, the AL compiler.** LethAL compiles every batch with `alc` before al-runner runs it. It
-comes with the AL Language VS Code extension (it finds `bin/linux/alc` there). With no VS Code, install
-the extension on any machine, copy its `bin/linux/` folder over, and set `alRunnerV3.alcPath` to the
-`alc` in it. LethAL does not download `alc` for you.
+**3. `alc`, the AL compiler.** LethAL compiles every batch with `alc` before al-runner runs it. With
+the AL Language VS Code extension installed, LethAL finds `alc` there and you can skip this step.
+With no VS Code, Microsoft offers no Linux `alc` download, only the extension's universal package,
+which holds `alc.dll`, a .NET program. So you need the **.NET runtime** (`dotnet` on PATH; the script
+reads which major version it needs and tells you), then:
+
+```bash
+bun scripts/fetch-alc.ts ./alc
+```
+
+It unpacks the compiler into `./alc/bin/`, writes a small `./alc/alc` wrapper script, and prints the
+`"alcPath"` line for your config.
 
 **4. A config with only an `alRunnerV3` section.** Nothing else is needed: no `bcdev`, no server, no
 credentials.
@@ -131,7 +142,7 @@ credentials.
   "alRunnerV3": {
     "packagesDir": "/home/you/symbols",
     "bcVersion": "28.5.54151.54365",
-    "alcPath": "/home/you/al/bin/linux/alc"
+    "alcPath": "/home/you/alc/alc"
   },
   "selectorIds": { "selectorId": 90199, "controlId": 90198, "tableId": 90197 }
 }
@@ -139,16 +150,15 @@ credentials.
 
 - `bcVersion` is four numbers (`28.5.54151.54365`, not `28.5`). It must equal the System Application
   in `packagesDir`.
-- `path` is optional. It defaults to `/work/tools/al-runner-v3/current/al-runner` on a machine that
-  has LethAL's own pinned build there, and otherwise to `~/.local/bin/al-runner`, where the installer
-  puts it.
+- `path` is optional. It defaults to `~/.local/bin/al-runner`, where the installer puts it.
 - `alcPath` is optional when the AL Language extension is installed.
 - `selectorIds` are three object ids from your own app's id range; `lethal init` picks them. The
   values above fit the gift card demo.
 
 Check it, then run. `lethal doctor --config <file>` on a config like this prints one line,
 `al-runner-v3`: the al-runner version, whether it is a gated build, and that `bcVersion` matches the
-symbols. It does not check `alc`; a missing `alc` shows when you run. A full walk-through on the gift
+symbols, and, when you set `alcPath`, that it is an executable file. A run prints one line,
+`[lethal] al-runner: <path> (<version>)`, naming the al-runner it used. A full walk-through on the gift
 card demo is in [examples/gift-card/README.md](examples/gift-card/README.md#run-it-with-no-bc-server-the-al-runner-v3-backend).
 
 ## Quick start

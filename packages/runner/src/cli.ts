@@ -32,6 +32,7 @@ import type { ServerSpawnFn } from "./al-runner-server";
 import { AlRunnerV3Backend, AlRunnerV3ServeFallbackWarmupError } from "./al-runner-v3-backend";
 import {
   AL_RUNNER_V3_NOT_AUTHORITATIVE,
+  assertAlcRunnable,
   assertBcVersionMatchesPackages,
   refuseV3Platform,
   validateAlRunnerV3Config,
@@ -2987,6 +2988,8 @@ async function buildAlRunnerV3Backend(
   scratchDir: string,
   deps: {
     readonly alToolPaths: typeof defaultAlToolPaths;
+    /** R834: replaces the check that `alRunnerV3.alcPath` is executable. Injected by tests. */
+    readonly alcRunnable?: (p: string) => boolean;
     readonly spawn?: SpawnFn;
     /** R635: the serve-entries daemon's spawn. */
     readonly serverSpawn?: ServerSpawnFn;
@@ -3003,6 +3006,7 @@ async function buildAlRunnerV3Backend(
   await validateSelectorIdsForProject(parsed.projectDir, deps.selectorIds, deps.source);
   const c = validateAlRunnerV3Config(configFile.alRunnerV3);
   await assertBcVersionMatchesPackages(c.packagesDir, c.bcVersion);
+  if (c.alcPath !== undefined) assertAlcRunnable(c.alcPath, deps.alcRunnable);
   const alcPath = c.alcPath ?? (await deps.alToolPaths())?.alcPath;
   if (alcPath === undefined) {
     throw new Error(
@@ -3061,6 +3065,8 @@ export async function buildBackend(
     alToolPaths?: typeof defaultAlToolPaths;
     alRunnerSpawn?: SpawnFn;
     alRunnerServerSpawn?: ServerSpawnFn;
+    /** R834: see `buildAlRunnerV3Backend`'s `alcRunnable`. */
+    alcRunnable?: (p: string) => boolean;
     /** R586c: test seam for the update gate's leg K on a candidate build; never set by a user. */
     alRunnerCandidate?: true;
     /** R786: set by `runFromCli`'s one-shot re-run after a serve warm-up fallback; never by a user. */
@@ -3080,6 +3086,7 @@ export async function buildBackend(
   if (parsed.backendKind === "al-runner-v3") {
     return buildAlRunnerV3Backend(parsed, configFile, scratchDir, {
       alToolPaths: deps.alToolPaths ?? defaultAlToolPaths,
+      ...(deps.alcRunnable !== undefined ? { alcRunnable: deps.alcRunnable } : {}),
       ...(deps.alRunnerSpawn !== undefined ? { spawn: deps.alRunnerSpawn } : {}),
       ...(deps.alRunnerServerSpawn !== undefined ? { serverSpawn: deps.alRunnerServerSpawn } : {}),
       ...(deps.alRunnerCandidate === true ? { candidate: true as const } : {}),
@@ -4634,6 +4641,8 @@ export async function buildDoctorDeps(
     /** R586: the spawn the al-runner-v3 `--version` probe uses. Injected by tests so the check can
      *  be driven without a real al-runner install; absent means the real one. */
     readonly alRunnerSpawn?: SpawnFn;
+    /** R834: replaces the check that `alRunnerV3.alcPath` is executable. Injected by tests. */
+    readonly alcRunnable?: (p: string) => boolean;
   } = {},
 ): Promise<{
   readonly cfg: DoctorConfig;
@@ -4673,6 +4682,7 @@ export async function buildDoctorDeps(
             try {
               const gated = await checkGated(c.path, version);
               await assertBcVersionMatchesPackages(c.packagesDir, c.bcVersion);
+              if (c.alcPath !== undefined) assertAlcRunnable(c.alcPath, opts.alcRunnable);
               return {
                 ok: true,
                 details: `${version}; ${gated.source === "manifest" ? "listed in the gate manifest, gated" : "gated"} at LethAL ${gated.lethalCommit}; bcVersion ${c.bcVersion}; transport ${c.transportSource === "explicit" ? c.transport : "default (serve-entries where proven, else one-shot; R761)"}`,

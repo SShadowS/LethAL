@@ -81,3 +81,5 @@ case "$banner" in
 esac
 if [ -n "${GITHUB_ENV:-}" ]; then echo "LLVM_BIN=$bin" >>"$GITHUB_ENV"; fi
 echo "LLVM_BIN=$bin"
+echo "install-llvm: installed under $dest. Some reboots clear TMPDIR: set TMPDIR to a folder you keep before running this script to avoid that. Now run:"
+echo "export LLVM_BIN=$bin"

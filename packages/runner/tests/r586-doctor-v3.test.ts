@@ -113,6 +113,17 @@ describe("doctor: al-runner-v3", () => {
     expect(r.checks[0]?.detail).toContain(v3InstallHint());
   });
 
+  test("R834: doctor reports a missing alcPath by name; a runnable one passes", async () => {
+    const { bin, deps } = await setup(true);
+    const cfg = { alRunnerV3: { path: bin, packagesDir: deps, bcVersion: BC, alcPath: "/x/alc" } };
+    const bad = await buildDoctorDeps(cfg, { alRunnerSpawn: spawn, alcRunnable: () => false });
+    const r1 = await runDoctor(bad.cfg, bad.deps);
+    expect(r1.ok).toBe(false);
+    expect(r1.checks[0]?.detail).toMatch(/al-runner-v3-alc-not-found/);
+    const good = await buildDoctorDeps(cfg, { alRunnerSpawn: spawn, alcRunnable: () => true });
+    expect((await runDoctor(good.cfg, good.deps)).ok).toBe(true);
+  });
+
   test("a config the run would refuse throws here too", async () => {
     await expect(
       buildDoctorDeps({ alRunnerV3: { packagesDir: "/d", bcVersion: "28.0" } }),

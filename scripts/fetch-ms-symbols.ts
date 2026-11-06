@@ -11,7 +11,7 @@
  * name: the System Application's version.
  */
 import { mkdir, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { listPackageEntries, readPackageEntry } from "../packages/runner/src/app-package";
 
 export const FEED_INDEX =
@@ -122,6 +122,11 @@ export async function fetchSymbols(
   return { files, bcVersion: sys.version };
 }
 
+/** The config line to print: `packagesDir` is absolute, so it works from any folder. */
+export function configLine(outDir: string, bcVersion: string): string {
+  return `"alRunnerV3": { "packagesDir": "${resolve(outDir)}", "bcVersion": "${bcVersion}" }`;
+}
+
 async function main(): Promise<number> {
   const [majorArg, outDir] = process.argv.slice(2);
   const major = Number(majorArg);
@@ -133,9 +138,7 @@ async function main(): Promise<number> {
   }
   const { files, bcVersion } = await fetchSymbols(major, outDir, fetch);
   for (const f of files) console.log(`  wrote ${f}`);
-  console.log(
-    `\nSet in the config:  "alRunnerV3": { "packagesDir": "${outDir}", "bcVersion": "${bcVersion}" }`,
-  );
+  console.log(`\nSet in the config:  ${configLine(outDir, bcVersion)}`);
   return 0;
 }
 
