@@ -7,6 +7,7 @@
  * here may edit another repo, whose own biome config must decide its formatting; running
  * LethAL's config on it rewrote whole files). Exits 0 always.
  */
+import { readFileSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 let raw = "";
 try {
@@ -26,7 +27,19 @@ const rel = relative(resolve(project), resolve(file));
 const inProject = rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
 const isTs = /\.(ts|tsx)$/.test(file);
 const inDist = file.includes("/dist/") || file.includes("\\dist\\");
-if (isTs && !inDist && inProject) {
+// R423: during a merge a file holds conflict markers across several edits. It is not valid
+// TypeScript then, and biome's rewrite damaged the code around the markers. An unreadable file
+// goes on to biome, as before.
+const conflicted = (): boolean => {
+  try {
+    return /^(<<<<<<< |=======\r?$|>>>>>>> )/m.test(readFileSync(file, "utf8"));
+  } catch {
+    return false;
+  }
+};
+if (isTs && !inDist && inProject && conflicted()) {
+  console.error(`biome-touched: skipped ${rel}: it still holds merge-conflict markers`);
+} else if (isTs && !inDist && inProject) {
   // --write applies only SAFE fixes (format/organizeImports); never --unsafe.
   Bun.spawnSync(["bunx", "biome", "check", "--write", file], {
     cwd: project,

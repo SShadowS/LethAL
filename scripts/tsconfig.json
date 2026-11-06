@@ -62,6 +62,7 @@
     "build-binary.ts",
     "build-binary.test.ts",
     "build-native-parser-clang.test.ts",
+    "biome-touched-hook.test.ts",
     "fetch-alc.ts",
     "fetch-alc.test.ts",
     "fetch-ms-symbols.ts",
