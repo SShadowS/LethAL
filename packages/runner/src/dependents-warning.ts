@@ -25,36 +25,123 @@ export function dependentsWarning(
   read: readonly InstalledDependent[] | { readonly error: unknown },
   testsAppId: string | undefined,
   target: DependentsTarget,
+  /** R845: dependents of the dependents, breadth first. BC removes them too (U4). */
+  transitive: readonly InstalledDependent[] = [],
 ): string | null {
   if (!Array.isArray(read)) {
     const e = (read as { readonly error: unknown }).error;
     const reason = e instanceof Error ? e.message : String(e);
     return `[lethal] R727: could not check which installed apps depend on the target ${target.name} (${reason}); if an installed app depends on it and this build breaks it, BC removes that app (R709).`;
   }
-  const others = (read as readonly InstalledDependent[]).filter(
+  const others = [...(read as readonly InstalledDependent[]), ...transitive].filter(
     (d) => d.id.toLowerCase() !== testsAppId,
   );
   if (others.length === 0) return null;
-  const named = others.map((d) => `${d.name} ${d.version} by ${d.publisher} (${d.id})`).join("; ");
-  return `[lethal] R727: ${others.length} installed app(s) other than this run's tests app depend on the target ${target.name} (${target.id}): ${named}. If this build breaks one of them, BC refuses the upgrade and removes it (R709).`;
+  const named = others
+    .map(
+      (d) =>
+        `${d.name} ${d.version} by ${d.publisher} (${d.id})${transitive.includes(d) ? " [transitive]" : ""}`,
+    )
+    .join("; ");
+  return `[lethal] R727: ${others.length} installed app(s) other than this run's tests app depend on the target ${target.name} (${target.id}), directly or through another: ${named}. If this build breaks one of them, BC refuses the upgrade and removes it, and every app that depends on it (R709, R845).`;
 }
 
 /** What one read of the installed dependents gave, with the tests app's id (R843 shares it). */
 export interface DependentsRead {
   readonly read: readonly InstalledDependent[] | { readonly error: unknown };
   readonly testsAppId: string | undefined;
+  /** R845: the dependents of the dependents, breadth first, without repeats. Empty when `read` is an error. */
+  readonly transitive: readonly InstalledDependent[];
+  /** R845: warnings from the walk: a level that could not be read, or the bound. */
+  readonly walkWarnings: readonly string[];
+  /** R845: `now()` when the walk began, for the bound on the reads that follow. */
+  readonly startedMs: number;
 }
 
-/** One read-only call. `null` when the backend has no `installedDependents`: no call was made. */
+/** R845: the walk reads at most this many apps, in at most this long (ms), in all. */
+export const WALK_MAX_APPS = 40;
+export const WALK_MAX_MS = 120_000;
+
+/** The tests app (by lower-case id) first, the rest in the order given. The walk and the clash
+ *  check share it, so the bound of 40 apps can never cut the tests app. */
+export function testsFirst(
+  apps: readonly InstalledDependent[],
+  testsAppId: string | undefined,
+): InstalledDependent[] {
+  return [...apps].sort(
+    (a, b) => Number(b.id.toLowerCase() === testsAppId) - Number(a.id.toLowerCase() === testsAppId),
+  );
+}
+
+/**
+ * R845: the apps that depend on the direct dependents, and so on, breadth first, the tests app's
+ * branch first. `installedDependents` takes any app id. The visited set starts with the target's own
+ * id, lower-cased, or a stray row would put the target in its own list. A level that cannot be read
+ * warns by name and ends that branch. Past the bound the walk stops, warns, and never fails.
+ */
+export async function walkTransitiveDependents(
+  list: (appId: string) => Promise<readonly InstalledDependent[]>,
+  targetId: string,
+  direct: readonly InstalledDependent[],
+  testsAppId: string | undefined,
+  clock: { readonly now: () => number; readonly startedMs: number },
+): Promise<{ transitive: InstalledDependent[]; warnings: string[] }> {
+  const visited = new Set<string>([
+    targetId.toLowerCase(),
+    ...direct.map((d) => d.id.toLowerCase()),
+  ]);
+  const queue = testsFirst(direct, testsAppId);
+  const transitive: InstalledDependent[] = [];
+  const warnings: string[] = [];
+  for (let at = 0; at < queue.length; at++) {
+    const d = queue[at];
+    if (d === undefined) break;
+    if (
+      direct.length + transitive.length >= WALK_MAX_APPS ||
+      clock.now() - clock.startedMs >= WALK_MAX_MS
+    ) {
+      const rest = queue.slice(at);
+      warnings.push(
+        `[lethal] R845: stopped listing dependents after ${at} app(s) (the bound is ${WALK_MAX_APPS} apps and ${WALK_MAX_MS / 1000} s): the dependents of ${rest.length} app(s) were NOT read, first ${rest
+          .slice(0, 3)
+          .map((r) => `${r.name} ${r.version}`)
+          .join(", ")}. An app that depends on them is not listed.`,
+      );
+      break;
+    }
+    let next: readonly InstalledDependent[];
+    try {
+      next = await list(d.id);
+    } catch (err) {
+      warnings.push(
+        `[lethal] R845: could not read which installed apps depend on ${d.name} ${d.version} (${err instanceof Error ? err.message : String(err)}); apps that depend on it, and on those, are not listed.`,
+      );
+      continue;
+    }
+    for (const n of next) {
+      const key = n.id.toLowerCase();
+      if (visited.has(key)) continue;
+      visited.add(key);
+      transitive.push(n);
+      queue.push(n);
+    }
+  }
+  return { transitive, warnings };
+}
+
+/** One read-only call, then the walk (R845). `null` when the backend has no `installedDependents`: no call was made. */
 export async function readDependents(
   backend: Pick<ExecutionBackend, "installedDependents">,
   testDir: string,
   target: DependentsTarget,
+  now: () => number,
 ): Promise<DependentsRead | null> {
-  if (backend.installedDependents === undefined) return null;
+  const list = backend.installedDependents?.bind(backend);
+  if (list === undefined) return null;
+  const startedMs = now();
   let read: readonly InstalledDependent[] | { readonly error: unknown };
   try {
-    read = await backend.installedDependents(target.id);
+    read = await list(target.id);
   } catch (error) {
     read = { error };
   }
@@ -66,5 +153,14 @@ export async function readDependents(
   } catch {
     // An unreadable tests app.json excludes nothing: the warning may over-report, never hide.
   }
-  return { read, testsAppId };
+  const walked = Array.isArray(read)
+    ? await walkTransitiveDependents(list, target.id, read, testsAppId, { now, startedMs })
+    : { transitive: [], warnings: [] };
+  return {
+    read,
+    testsAppId,
+    transitive: walked.transitive,
+    walkWarnings: walked.warnings,
+    startedMs,
+  };
 }
