@@ -55,6 +55,8 @@ import { removeScratchDir } from "./helpers/scratch";
  * DataBandExt gains 4 mutants; ids +4 after DataBandExt, proven in id-shift-proof.txt
  * (/coord/handoff/R-463/): every later file and every later manifest entry is byte-equal after
  * shifting its ids by 4. Old pins: DataBandExt 2b82077f...b7, manifest e746b230...c0.
+ * R830: sandbox-hang re-pinned because `OnAdvance()` replaced `Advance()`, so the gate's two hangs
+ * stay unseen. Same 38 mutants, same lines. Old pins: HangLogic 2ccc5295...5746, manifest 40400e1a...5ba5.
  */
 const PINNED: Record<
   string,
@@ -140,14 +142,14 @@ const PINNED: Record<
   "sandbox-hang": {
     selectorIds: { selectorId: 79449, controlId: 79448, tableId: 79447 },
     hashes: {
-      "HangLogic.Codeunit.al": "2ccc529539ddd590aab5be08e801c316d3dcf67882ec1843953c340c5d9e5746",
+      "HangLogic.Codeunit.al": "20cbe37f3c535e3455b6a4bc178a1affa79239cae2f5ec8f1772a42d879d337f",
       "MutationRegister.Codeunit.al":
         "5dc811a3a1661531502dd68b7da0849c7973a76bb2fb04486ccb595b0e7acbab",
       "MutationSelector.Codeunit.al":
         "03da5adb8c426958a6549fc03d174e5bbadba7aa150538881de3adecc8f6105f",
       "MutationUpgrade.Codeunit.al":
         "ecc6b99d40ce7e6bf92be1e73c0c8609cffa268684613158cb32e8513e317f59",
-      "mutant-manifest.json": "40400e1aa18bd547daf5fe58136212f229e49afa329be1bf18bdaf5ea3825ba5",
+      "mutant-manifest.json": "e0d56ec6482ae91b33750d8aa2f9a49ad22a1a05d5396fbfb88ca8e3d08f2741",
     },
   },
   "sandbox-harden": {

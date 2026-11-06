@@ -303,7 +303,7 @@ Two things would break this claim, and the fixture avoids both on purpose:
 
 1. If `Bonus` were a codeunit global instead of a local, a second call on the same instance would
    start from whatever the previous call left in it, and the mutant would become killable. This is
-   the same reason `sandbox-hang`'s `Counter := 0` is equivalent only per fresh instance (the
+   the same reason `sandbox-hang`'s `Counter := 0` is equivalent only per fresh session (the
    `CountUpTo` rows in `hang.itest.ts`).
 2. If any statement read `Bonus` before `Bonus := 0` ran, the local's default value would be
    observable and the deletion would change behaviour.

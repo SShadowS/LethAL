@@ -1,6 +1,14 @@
 {
-  "identityScheme": 44,
+  "identityScheme": 45,
   "entries": [
+    {
+      "key": "06014bdb17fc45c669b114badfc7f1d175a9ff7f90b7fa45aaf36e91a7176b75|Hang Logic|CountUpTo|lethal.empty-block|1",
+      "verdict": "killed",
+      "killingTest": "CountUpToReachesTheLimit",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
     {
       "key": "1eb419c4cc1f5ca0ab95cd792c1f2c5f01eb2c70ed59518e4985c9415d365d69|Hang Logic|SpinUntil|lethal.conditional-boundary|1",
       "verdict": "killed",
@@ -10,17 +18,17 @@
       "mutatedTextSha256": "34d68d61aeb8553a618f644f67f0db085ea8c57542ca2ab381734f40e2be7770"
     },
     {
-      "key": "26f31406d5b9e4bd046a67b18ba0545e135a6374244fc1e3f2f3ec469623b984|Hang Logic|CountUpTo|lethal.empty-block|1",
+      "key": "2ed52fd8f9a1b861a30af2d2f4866bb0ffe2d2ec37492d01f6c734c560a7babc|Hang Logic|WalkOneRow|lethal.empty-block|1",
       "verdict": "killed",
-      "killingTest": "CountUpToReachesTheLimit",
+      "killingTest": "WalkOneRowVisitsExactlyOneRow",
       "coverageFiltered": false,
       "errorClass": null,
       "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
     },
     {
-      "key": "2ed52fd8f9a1b861a30af2d2f4866bb0ffe2d2ec37492d01f6c734c560a7babc|Hang Logic|WalkOneRow|lethal.empty-block|1",
+      "key": "36bad1707b454596f4441796d1fa49a7a99d7a86a6b03a7ecd7b0be5c260657d|Hang Logic|SpinUntil|lethal.empty-block|1",
       "verdict": "killed",
-      "killingTest": "WalkOneRowVisitsExactlyOneRow",
+      "killingTest": "SpinUntilAtZeroExitsEarly",
       "coverageFiltered": false,
       "errorClass": null,
       "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
@@ -146,14 +154,6 @@
       "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
-      "key": "98a8775656f994e08c0d12b113e167208b0b242ce86ca8fb54e89aaa2fd465f3|Hang Logic|SpinUntil|lethal.empty-block|1",
-      "verdict": "killed",
-      "killingTest": "SpinUntilAtZeroExitsEarly",
-      "coverageFiltered": false,
-      "errorClass": null,
-      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
-    },
-    {
       "key": "b33128a504176dc0c15bc9455809ffd0e6e8894eb35f3a120fc8417d1212d82c|Hang Logic|DrainQueue|lethal.remove-assignment|1",
       "verdict": "killed",
       "killingTest": "DrainQueueEmptiesTheQueue",
@@ -202,7 +202,7 @@
       "mutatedTextSha256": "d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35"
     },
     {
-      "key": "e9f91c35c1b932a144eef35ddf654188bbda19ad193a332ef3d464fd19e98317|Hang Logic|CountUpTo|lethal.void-method-call|1",
+      "key": "d6fa5d4bf059cb128c673399158225b71f2c7e519c4a6c9e6df78bb8a1f7f6c1|Hang Logic|CountUpTo|lethal.void-method-call|1",
       "verdict": "timeout-killed",
       "killingTest": "CountUpToReachesTheLimit",
       "coverageFiltered": false,
@@ -210,7 +210,7 @@
       "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
-      "key": "e9f91c35c1b932a144eef35ddf654188bbda19ad193a332ef3d464fd19e98317|Hang Logic|SpinUntil|lethal.void-method-call|1",
+      "key": "d6fa5d4bf059cb128c673399158225b71f2c7e519c4a6c9e6df78bb8a1f7f6c1|Hang Logic|SpinUntil|lethal.void-method-call|1",
       "verdict": "timeout-killed",
       "killingTest": "SpinUntilReachesTheTarget",
       "coverageFiltered": false,

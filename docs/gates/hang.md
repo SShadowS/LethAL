@@ -108,6 +108,13 @@ it exists. The method undercounts a path that runs through a third app. See R634
 
 ## History
 
+2026-11-06 (R830, coord task R-833): `fixtures/sandbox-hang`'s two loops now call an `IntegrationEvent`, `OnAdvance()`, because LethAL
+refuses a call whose same-object callee moves the loop. `Advance` is its subscriber in a `SingleInstance` codeunit, a shape the rule does
+not see (R839). The version stays 1.0.0.4. No row, line or figure moved, and four keys did. `hang.single.baseline.json` was recorded at
+scheme 45 on `bc2` under a plain lease, then confirmed through `r658-hang-gate.sh` on `bc2` and `bc3` at the same head. Since no verdict
+tells the old text from the new, the ON leg asserts that lines 37 and 145 mutate `OnAdvance()`. Logs: `/coord/handoff/R-833/record/`,
+`/coord/handoff/R-658/hang-bc2-20261106T050926Z-3376496/`, `/coord/handoff/R-658/hang-bc3-20261106T052756Z-3500149/`.
+
 2026-11-06 (R810, coord task R-827): `hang.single.baseline.json` moved from identity scheme 42 to 44, on `bc2`, by R332's
 procedure. A record stops after the SINGLE leg with exit 3, which the wrapper would hold on, so it ran under a plain lease. One
 line changed, the scheme, and the full confirm run passed through `r658-hang-gate.sh`. Logs: `/coord/handoff/R-827/bc2/`.

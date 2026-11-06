@@ -286,6 +286,9 @@ The tables below are per host and per fixture state, so they are history here: p
 | `bc2` | setup; the same 13, and `itest:hang` | 1.0.0.24 | `/coord/handoff/R-813/bc2/<gate>.log`, `/coord/handoff/R-813/setup-bc2.log` |
 | `bc3` | setup (`--with-continia --accept-build 28.4.53241.56646`); the same 13, and `itest:hang` | 1.0.0.24 | `/coord/handoff/R-813/bc3/<gate>.log`, `/coord/handoff/R-813/setup-bc3.log` |
 
+**`itest:hang` after R830 changed `sandbox-hang`'s text (R-833, 2026-11-06):** proved again on `bc2` and `bc3` at the same head, leg marker
+`passed`. Logs: `/coord/handoff/R-658/hang-bc2-20261106T050926Z-3376496/`, `/coord/handoff/R-658/hang-bc3-20261106T052756Z-3500149/`.
+
 ### docker1 (192.168.2.77), history: the servers from 2026-10-26 to 2026-11-05
 
 Proven on 2026-10-25 by R-783, under LethAL Control 1.0.0.24, under each server's coord lease. Each log was

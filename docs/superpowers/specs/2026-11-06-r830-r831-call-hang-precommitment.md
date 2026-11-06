@@ -76,3 +76,10 @@ prediction 4, and the confirm runs on bc2 and bc3 must pass against that record.
 `Rec.P()` and `CurrReport.P()` as same-object calls, a callee's `Rec.Qty` read, a `foreach` variable, a named return, and an option value
 named like a procedure. They add refusals, so the corpus figures above are replaced by Addendum 2. No `sandbox-hang` site is affected:
 the table of predictions above stands. Filed, not tuned: [[R846]], the safe mutants by-name refusal costs.
+
+## Addendum 2, final figures at 6daf2727 (2026-11-06)
+
+The final dumps give the same figures as the table above, in every set and for every operator: removed 23, 22, 205 and 1470; ordinals moved
+1, 1, 5 and 42; nothing added. So the six fixes of Addendum 1 refuse no further site on these corpora. A control shows the dump ran them:
+through `prod-identity-keys.ts` on this worktree, a synthetic `Rec.StepIt()` loop is refused, and the red check shows that site stays
+claimed without the fix. Hang confirm on `bc2` and `bc3`, `itest:lend` on `bc2` and `itest:alrunner-v3` all passed at this head.

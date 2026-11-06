@@ -197,7 +197,7 @@
       "mutants": 24
     },
     "fixtures/sandbox-hang/src/HangLogic.Codeunit.al": {
-      "sha256": "2ccc529539ddd590aab5be08e801c316d3dcf67882ec1843953c340c5d9e5746",
+      "sha256": "20cbe37f3c535e3455b6a4bc178a1affa79239cae2f5ec8f1772a42d879d337f",
       "mutants": 38
     },
     "fixtures/sandbox-harden-answers/src/HardenAnswerKey.Codeunit.al": {
