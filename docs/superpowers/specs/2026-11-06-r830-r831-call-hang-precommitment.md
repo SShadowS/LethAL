@@ -63,3 +63,16 @@ source on every run and refuses to go on unless the running build echoes that ar
 
 ## Not sampled
 The over-refusal was not sampled by hand. R829's rule accepts it.
+
+## Addendum 1, after the record run on bc2 (2026-11-06)
+
+**Prediction 4 was too narrow.** The ON leg passed every row, and SINGLE recorded 24 killed, 9 survived, 5 timeout-killed, so the event fires
+under the fenced session. As multisets of procedure, operator, verdict, killing test, filter and error class, the 38 rows did not move.
+Four keys moved, not two: the two `void-method-call` rows on lines 37 and 145, and the two `empty-block` rows of `CountUpTo` and `SpinUntil`,
+whose blocks hold that call. No mutated-text hash moved. The file shows a larger diff only because rows sort by key. This replaces
+prediction 4, and the confirm runs on bc2 and bc3 must pass against that record. The recorded file: `/coord/handoff/R-833/record/`.
+
+**The build moved after these figures.** The opus delta review of 37084799 found six narrow misses, which are fixed and red-checked:
+`Rec.P()` and `CurrReport.P()` as same-object calls, a callee's `Rec.Qty` read, a `foreach` variable, a named return, and an option value
+named like a procedure. They add refusals, so the corpus figures above are replaced by Addendum 2. No `sandbox-hang` site is affected:
+the table of predictions above stands. Filed, not tuned: [[R846]], the safe mutants by-name refusal costs.

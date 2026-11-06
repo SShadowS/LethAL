@@ -508,6 +508,7 @@ that ordering is the priority.
 - **R838** · `empty-block` of an `if` or `case` arm inside a loop deletes the loop's step, and no hang check sees it · [R838.md](docs/roadmap/R838.md) · open, filed 2026-11-06 (found building R-833); nothing measured, nothing built
 - **R839** · A loop's progress through another object or an event is not seen: `Other.Advance()` and `OnAdvance()` stay claimed · [R839.md](docs/roadmap/R839.md) · open, filed 2026-11-06 (found building R-833); nothing measured, nothing built
 - **R840** · A new user with no BC server can install LethAL and run the al-runner-v3 backend from the docs (GitHub #48) · [R840.md](docs/roadmap/R840.md) · done (726c880b)
+- **R846** · R830's by-name refusal costs some safe mutants: `TestField`, `FieldError` and by-value arguments · [R846.md](docs/roadmap/R846.md) · open, filed 2026-11-06 (found by R-833's delta review); not tuned
 
 ## Backends and tooling
 
