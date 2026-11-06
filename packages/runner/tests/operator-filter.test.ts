@@ -736,41 +736,45 @@ describe("runSession — --operator reaches both the mutant set AND the report",
 const CLI = join(import.meta.dir, "../src/cli.ts");
 const SANDBOX = join(import.meta.dir, "../../../fixtures/sandbox-app");
 
-test("R832: `lethal run` hands --exclude-operator to runSession", async () => {
-  await withProject(FIXTURE, async (projectDir) => {
-    const configPath = join(projectDir, "lethal.config.json");
-    await Bun.write(configPath, "{}");
-    const parsed = parseCliConfig([
-      "run",
-      "--project",
-      projectDir,
-      "--tests",
-      join(projectDir, "..", "tests"),
-      "--backend",
-      "al-runner-v3",
-      "--config",
-      configPath,
-      "--db",
-      ":memory:",
-      "--exclude-operator",
-      "empty-block",
-    ]);
-    if (parsed.mode !== "run") throw new Error("mode drift");
-    let captured: readonly string[] | undefined;
-    const stop = new Error("captured");
-    await expect(
-      runFromCli(parsed, {
-        validateSelectorIdsForProject: async () => {},
-        buildBackend: async () => ({}) as ExecutionBackend,
-        runSession: async (cfg) => {
-          captured = cfg.excludeOperators;
-          throw stop;
-        },
-      }),
-    ).rejects.toBe(stop);
-    expect(captured).toEqual(["empty-block"]);
-  });
-});
+// Not on Windows: the one backend an empty config suits refuses there (R586).
+test.skipIf(process.platform === "win32")(
+  "R832: `lethal run` hands --exclude-operator to runSession",
+  async () => {
+    await withProject(FIXTURE, async (projectDir) => {
+      const configPath = join(projectDir, "lethal.config.json");
+      await Bun.write(configPath, "{}");
+      const parsed = parseCliConfig([
+        "run",
+        "--project",
+        projectDir,
+        "--tests",
+        join(projectDir, "..", "tests"),
+        "--backend",
+        "al-runner-v3",
+        "--config",
+        configPath,
+        "--db",
+        ":memory:",
+        "--exclude-operator",
+        "empty-block",
+      ]);
+      if (parsed.mode !== "run") throw new Error("mode drift");
+      let captured: readonly string[] | undefined;
+      const stop = new Error("captured");
+      await expect(
+        runFromCli(parsed, {
+          validateSelectorIdsForProject: async () => {},
+          buildBackend: async () => ({}) as ExecutionBackend,
+          runSession: async (cfg) => {
+            captured = cfg.excludeOperators;
+            throw stop;
+          },
+        }),
+      ).rejects.toBe(stop);
+      expect(captured).toEqual(["empty-block"]);
+    });
+  },
+);
 
 describe("parseCliConfig — --operator", () => {
   const RUN_ARGS = ["run", "--project", "p", "--tests", "t", "--backend", "bcdev"] as const;
