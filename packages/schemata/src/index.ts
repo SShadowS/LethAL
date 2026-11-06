@@ -84,3 +84,4 @@ export type { AppIdRange, DeclaredObject } from "./id-ranges";
 // comment for why identity is per-file, not project-wide).
 export { dedupeSpecs } from "./dedup";
 export type { TierResolver } from "./dedup";
+export { buildComponents } from "./components";

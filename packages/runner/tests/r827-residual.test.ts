@@ -1,0 +1,298 @@
+import { describe, expect, test } from "bun:test";
+import { existsSync, readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import {
+  ALNodeKind,
+  type MutationSpec,
+  findAll,
+  initParser,
+  parseAL,
+  wrapRoot,
+} from "@lethal/engine";
+import {
+  type IdedSpec,
+  type TierResolver,
+  assignMutantIds,
+  dedupeSpecs,
+  instrumentOneFile,
+  planReachGrains,
+} from "@lethal/schemata";
+import { generateMutationSet, operatorTiers } from "../src/orchestrator";
+import { type FileCase, type Finding, checkFile, hasParseError } from "./helpers/r827-residual";
+
+/**
+ * R827 residualising test. LethAL puts every mutant behind `Selector.Active('Mxxxx')`. Hand-written
+ * AL cannot show that the REAL emitter's text means what each mutant should mean (an `else` can
+ * bind to the wrong `if` and still compile). So, for every mutant of every file, this folds the
+ * real emitted text as if only that mutant were on, and compares it BY STRUCTURE with the original
+ * source plus the mutant's own edit. The rules (what is folded, stripped, and ignored) are in
+ * `helpers/r827-residual.ts`.
+ *
+ * Preprocessor-wrapped files: the generator keeps only mutants in arms active under the build
+ * symbols, but the emitted text keeps every arm and its directives. The comparison does not
+ * evaluate `#if`: directives and all arms are compared as tree nodes, so the mutant's edit must
+ * land in the same arm on both sides. A project with `symbol-sets.json` runs once per set, plus
+ * once with no symbols.
+ */
+
+const REPO = resolve(import.meta.dir, "../../..");
+const tierOf: TierResolver = (name) => operatorTiers.get(name);
+
+const PROJECTS = [
+  "fixtures/sandbox-app",
+  "fixtures/sandbox-data",
+  "fixtures/sandbox-harden",
+  "fixtures/sandbox-hang",
+  "fixtures/sandbox-wrapped",
+  "fixtures/sandbox-names",
+  "fixtures/sandbox-multiobject",
+  "fixtures/sandbox-symbols",
+  "examples/gift-card",
+];
+
+/** Mutants checked per project, over its symbol sets. A change here is a change to read. */
+const MUTANTS: Readonly<Record<string, number>> = {
+  "fixtures/sandbox-app": 19,
+  "fixtures/sandbox-data": 406,
+  "fixtures/sandbox-harden": 21,
+  "fixtures/sandbox-hang": 38,
+  "fixtures/sandbox-wrapped": 148,
+  "fixtures/sandbox-names": 36,
+  "fixtures/sandbox-multiobject": 12,
+  "fixtures/sandbox-symbols": 36,
+  "examples/gift-card": 60,
+};
+
+function symbolSetsOf(rel: string): string[][] {
+  const p = join(REPO, rel, "symbol-sets.json");
+  const declared = existsSync(p) ? (JSON.parse(readFileSync(p, "utf8")) as string[][]) : [];
+  return [[], ...declared];
+}
+
+function caseOf(
+  path: string,
+  source: string,
+  compiled: string,
+  ided: readonly IdedSpec[],
+): FileCase {
+  const grains = planReachGrains(ided, source);
+  return {
+    path,
+    source,
+    compiled,
+    mutants: ided.map(({ mutantId, spec }) => ({
+      mutantId,
+      operator: spec.operatorName,
+      start: spec.before.startIndex,
+      end: spec.before.endIndex,
+      afterText: spec.after.text,
+      marked: grains.get(mutantId) === "statement",
+    })),
+  };
+}
+
+interface DirResult {
+  files: number;
+  refused: number;
+  mutants: number;
+  guards: number;
+  markers: number;
+  findings: Finding[];
+}
+
+/** The generator's files, instrumented the way the trial does, each checked. */
+async function checkDir(
+  dir: string,
+  symbols: readonly string[],
+  keep: (index: number) => boolean = () => true,
+  withDetail = true,
+): Promise<DirResult> {
+  const set = await generateMutationSet(dir, { preprocessorSymbols: symbols, emit: () => {} });
+  const out: DirResult = {
+    files: 0,
+    refused: set.refusedFiles.length,
+    mutants: 0,
+    guards: 0,
+    markers: 0,
+    findings: [],
+  };
+  let i = 0;
+  for (const f of set.files) {
+    if (!keep(i++)) continue;    const deduped = dedupeSpecs(f.specs, tierOf);
+    const ided = assignMutantIds(new Map([[f.path, deduped]])).get(f.path) ?? [];
+    if (ided.length === 0) continue;
+    // No catch: an emitter that throws must fail this test, not shrink what it checked.
+    const { compiled } = instrumentOneFile(f, deduped, ided);
+    const r = await checkFile(caseOf(f.path, f.source, compiled, ided), withDetail);
+    out.files++;
+    out.mutants += r.checked;
+    out.guards += r.stats.guards;
+    out.markers += r.stats.markers;
+    out.findings.push(...r.findings);
+  }
+  return out;
+}
+
+describe("R827: every mutant, folded, equals the mutant written by hand", () => {
+  for (const rel of PROJECTS) {
+    test(rel, async () => {
+      let mutants = 0;
+      let files = 0;
+      const findings: Finding[] = [];
+      for (const symbols of symbolSetsOf(rel)) {
+        const r = await checkDir(join(REPO, rel), symbols);
+        mutants += r.mutants;
+        files += r.files;
+        findings.push(...r.findings);
+        expect(r.refused).toBe(0);
+        // The fold must have really folded: a guard-free or marker-free pass proves nothing.
+        if (r.mutants > 0) {
+          expect(r.guards).toBeGreaterThan(0);
+          expect(r.markers).toBeGreaterThan(0);
+        }
+      }
+      console.log(`[r827] ${rel}: ${files} files, ${mutants} mutants, ${findings.length} findings`);
+      // Exact: a file that silently stopped being checked must fail here.
+      expect(mutants).toBe(MUTANTS[rel] ?? -1);
+      expect(
+        findings.map((f) => `${f.path} ${f.mutantId} ${f.operator} ${f.kind}: ${f.detail}`),
+      ).toEqual([]);
+    }, 60_000);
+  }
+});
+
+/** A source whose mutant sits in a nested `if` with no `else`, followed by an outer `else`. */
+const NESTED = `codeunit 51995 "R827 Red" { procedure P(C: Boolean; D: Boolean; var X: Integer) begin if C then begin if D then X := 1; end else X := 2; end; }`;
+
+async function nestedCase(): Promise<FileCase> {
+  await initParser();
+  const root = wrapRoot(parseAL(NESTED));
+  const inner = findAll(root, ALNodeKind.if_statement)[1];
+  const cond = inner?.childForFieldName("condition");
+  if (inner === undefined || cond === null || cond === undefined) throw new Error("nested: drift");
+  const spec: MutationSpec = {
+    operatorName: "lethal.negate-conditional",
+    operatorVersion: "1.0.0",
+    astNodeId: `${cond.startIndex}-${cond.endIndex}`,
+    before: cond,
+    after: { ...cond, text: "not D" } as never,
+    parentContext: "statement-position",
+  };
+  const path = "Red.Codeunit.al";
+  const ided = assignMutantIds(new Map([[path, [spec]]])).get(path) ?? [];
+  const { compiled } = instrumentOneFile({ path, source: NESTED, root }, [spec], ided);
+  return caseOf(path, NESTED, compiled, ided);
+}
+
+const MARKERS =
+  /if not LethALReachLatch\d* then begin \w+\.Reached\('M\d+'\); LethALReachLatch\d* := true; end; ?/g;
+
+describe("R827: the comparison can fail", () => {
+  test("control: the nested shape, real emitted text, is clean", async () => {
+    const fc = await nestedCase();
+    expect(fc.mutants.length).toBe(1);
+    expect((await checkFile(fc)).findings).toEqual([]);
+  });
+
+  test("a mutant that lost its marker is reported, and nothing else is", async () => {
+    const fc = await nestedCase();
+    expect(fc.mutants[0]?.marked).toBe(true);
+    const cut = fc.compiled.replace(MARKERS, "");
+    expect(cut).not.toBe(fc.compiled);
+    const r = await checkFile({ ...fc, compiled: cut });
+    expect(r.findings.map((x) => `${x.mutantId} ${x.kind}`)).toEqual(["M0001 marker"]);
+  });
+
+  test("an else that binds to the inner if is reported", async () => {
+    const fc = await nestedCase();
+    const bare = fc.compiled.replace(MARKERS, "");
+    // Remove the first guard's begin/end: `if G then begin A end else begin R end` becomes
+    // `if G then A else begin R end`, and with A an `if` with no `else` the `else` now belongs to A.
+    const planted = bare.replace(
+      /(\.Active\('M\d+'\) then )begin\s*([\s\S]*?)\s*end else /,
+      "$1$2 else ",
+    );
+    expect(planted).not.toBe(bare);
+    expect(hasParseError(planted)).toBe(false);
+    const r = await checkFile({ ...fc, compiled: planted });
+    // The guard now has no `else` of its own (the no-mutant fold and a leftover say so too), and
+    // the mutant's own fold differs from the hand-written one.
+    expect(r.findings.some((f) => f.kind === "diff" && f.mutantId === "M0001")).toBe(true);
+    expect(r.findings.some((f) => f.kind === "no-mutant-diff")).toBe(true);
+  });
+
+  test("a branch carrying another mutant's edit is reported", async () => {
+    const path = join(REPO, "fixtures/sandbox-app");
+    const set = await generateMutationSet(path, { emit: () => {} });
+    const f = set.files.find((x) => x.path.endsWith("SandboxLogic.Codeunit.al"));
+    if (f === undefined) throw new Error("SandboxLogic: drift");
+    const deduped = dedupeSpecs(f.specs, tierOf);
+    const ided = assignMutantIds(new Map([[f.path, deduped]])).get(f.path) ?? [];
+    const { compiled } = instrumentOneFile(f, deduped, ided);
+    const fc = caseOf(f.path, f.source, compiled, ided);
+    expect((await checkFile(fc)).findings).toEqual([]);
+    // M0002 and M0003 swap their ids in the guards and the markers: each branch now holds the
+    // other's edit.
+    const swapped = compiled
+      .replaceAll("'M0002'", "'MXXXX'")
+      .replaceAll("'M0003'", "'M0002'")
+      .replaceAll("'MXXXX'", "'M0003'");
+    expect(swapped).not.toBe(compiled);
+    const r = await checkFile({ ...fc, compiled: swapped });
+    expect(r.findings.map((x) => `${x.mutantId} ${x.kind}`).sort()).toEqual([
+      "M0002 diff",
+      "M0003 diff",
+    ]);
+  });
+
+  test("a branch that lost a statement is reported", async () => {
+    const path = join(REPO, "fixtures/sandbox-app");
+    const set = await generateMutationSet(path, { emit: () => {} });
+    const f = set.files.find((x) => x.path.endsWith("SandboxLogic.Codeunit.al"));
+    if (f === undefined) throw new Error("SandboxLogic: drift");
+    const deduped = dedupeSpecs(f.specs, tierOf);
+    const ided = assignMutantIds(new Map([[f.path, deduped]])).get(f.path) ?? [];
+    const { compiled } = instrumentOneFile(f, deduped, ided);
+    const fc = caseOf(f.path, f.source, compiled, ided);
+    // M0005's branch ends in `exit(Value);`. Drop it from that branch only.
+    const at = compiled.indexOf("Active('M0005')");
+    const drop = compiled.indexOf("exit(Value);", at);
+    expect(at).toBeGreaterThan(0);
+    expect(drop).toBeGreaterThan(at);
+    const lost = compiled.slice(0, drop) + compiled.slice(drop + "exit(Value);".length);
+    const r = await checkFile({ ...fc, compiled: lost });
+    expect(r.findings.map((x) => `${x.mutantId} ${x.kind}`)).toEqual(["M0005 diff"]);
+  });
+});
+
+const CORPUS = process.env.LETHAL_R827_CORPUS;
+
+describe("R827: corpus (LETHAL_R827_CORPUS=<dir>, counts only, never source text)", () => {
+  test.skipIf(CORPUS === undefined)(
+    "folds every mutant of one directory",
+    async () => {
+      if (CORPUS === undefined) return;
+      // LETHAL_R827_STEP=k checks every k-th file that has specs (a sample); default is all.
+      const step = Math.max(1, Number(process.env.LETHAL_R827_STEP ?? "1"));
+      expect(Number.isInteger(step)).toBe(true);
+      const symbols = (process.env.LETHAL_R827_SYMBOLS ?? "").split(",").filter(Boolean);
+      const t0 = Date.now();
+      const r = await checkDir(CORPUS, symbols, (i) => i % step === 0, false);
+      const byKind = new Map<string, number>();
+      const byOp = new Map<string, number>();
+      for (const f of r.findings) {
+        byKind.set(f.kind, (byKind.get(f.kind) ?? 0) + 1);
+        byOp.set(`${f.operator} ${f.kind}`, (byOp.get(`${f.operator} ${f.kind}`) ?? 0) + 1);
+      }
+      console.log(
+        `[r827 corpus] step ${step}, checked ${r.files} files, ${r.mutants} mutants, ${r.guards} guards folded, ${r.markers} markers stripped, ${r.refused} refused, ${r.findings.length} findings, ${Date.now() - t0} ms`,
+      );
+      console.log(`[r827 corpus] findings by kind: ${JSON.stringify([...byKind])}`);
+      console.log(`[r827 corpus] findings by operator and kind: ${JSON.stringify([...byOp])}`);
+      expect(r.files).toBeGreaterThan(0);
+      expect(r.mutants).toBeGreaterThan(0);
+      expect(r.findings.length).toBe(0);
+    },
+    3_600_000,
+  );
+});

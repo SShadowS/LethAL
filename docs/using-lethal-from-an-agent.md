@@ -92,6 +92,10 @@ The large-run refusal exists because an unscoped run costs days and usually cann
 and does not make the run cheaper. Find the size first with `--dry-run`, which lists what would be
 mutated, executes nothing, and reports both the raw site count and the deployed count.
 
+On bcdev, `--dry-run` and the run's `large-method` warning name any file that emits one very large method. A 907-guard file
+stopped a BC service tier in GitHub #28, and such a method is the lead suspect, not a proven cause. The warning's thresholds are
+not measured and it refuses nothing. To shrink the method, leave out `lethal.empty-block` by naming the other operators with `--operator`.
+
 **Know which flags can move a verdict.** `--only`, `--exclude`, `--operator`, `--lines` and
 `--changed-since` select which
 MUTANTS run and cannot change a verdict. `--tests-only` (whole test files) and `--exclude-test <Codeunit.Method>`

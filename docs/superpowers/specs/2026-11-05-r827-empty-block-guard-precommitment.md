@@ -1,5 +1,9 @@
 # R827 pre-commitment (2026-11-05): an empty-block mutant emitted as one guard, not a chain
 
+**Addendum 1, same day: PARKED, not to be built as written.** The plan review found it unsafe as specified. Its "time may move" line
+understates a verdict risk, and its "free" rule and its list of what moves are incomplete. R827's section "The fix: planned, reviewed,
+parked" holds the seven things a pick-up must do. Any pick-up writes a new addendum first.
+
 Committed before any code and before any live run. Coord task R-825. Plan and impact: docs/roadmap/R827.md, docs/roadmap/R826.md,
 /coord/handoff/R-825/r827-impact.md. Offline proof of the shape: /coord/handoff/R-825/prove/.
 
