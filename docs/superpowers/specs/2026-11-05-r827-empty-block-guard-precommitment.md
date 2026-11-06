@@ -121,3 +121,20 @@ on any fixture, and DO's keys are identical (0 added, 0 removed). So no baseline
 **Predictions, as before:** every gate, per mutant, nothing moves. Early gates run against the committed rows. `itest:alrunner-v3` first, then
 `itest:bcdev`, `-wrapped`, `tables` and `harden` on `bc2`, and `itest:hang` on `bc3`. Time is measured and reported per gate. A verdict that moves
 is a BLOCK, for time or any other reason. No crash runs; bc1 is out of use.
+
+## Addendum 4, a correction (R-836, 2026-11-06)
+
+**Addendum 3 is wrong where it says "So no baseline changes for this."** That read the dump's identity tuples, and the early gates at 7b0ecf7f
+showed the gate's key hashes the block's text as well. `Grow`'s `#pragma` is inside the block, so its `empty-block` row re-keys, from
+`556f5859...|<object>|Grow|lethal.empty-block|1` to `170d7adf...|<object>|Grow|lethal.empty-block|1`. All five rows, by baseline:
+
+| baseline | objects |
+|---|---|
+| `bcdev.wrapped.baseline.json` | `Wrapped Top`, `Wrapped Top Twin`, `Wrapped Pre`, `Wrapped Pre Twin` |
+| `al-runner-v3.wrapped.baseline.json` | the same four |
+| `al-runner-v3.layout.baseline.json` | `Layout Beta` |
+
+**Ruling (orchestrator, 2026-11-06): option A.** lethal-code records under R-848. Then these three baselines are re-recorded in R-836's branch at the
+final scheme, by R332. Only these rows may move, and each must read `killed` by its same test on its same line: `GrowTop`, `GrowTopTwin`, `GrowPre` and
+`GrowPreTwin` on lines 7, 7, 9 and 9, and `Layout Beta`'s row as committed. Confirmed per mutant, and a confirm run passes without record
+mode. Any other difference is a BLOCK.
