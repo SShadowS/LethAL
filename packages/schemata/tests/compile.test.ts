@@ -3588,6 +3588,79 @@ describe("R828 O1: a root with components inside it", () => {
     expect(out).toContain("end\nend else; end;\n        X := 2;");
   });
 
+  it("a WRAPPED root whose own text ends in `;` gets the `;` back after both of its `end`s", async () => {
+    await initParser();
+    const src = SRC.replace(
+      "if C > 0 then X := X + 1;",
+      "if C > 1 then if C > 2 then X := X + 3 else;",
+    );
+    const tree = wrapRoot(parseAL(src));
+    const [outer, inner] = findAll(tree, ALNodeKind.comparison_expression);
+    const sum = findFirst(tree, ALNodeKind.additive_expression);
+    if (outer === undefined || inner === undefined || sum === null)
+      throw new Error("fixture drift");
+    const out = compileSchemataForFile(src, tree, [
+      spec(outer, "C >= 1", "lethal.conditional-boundary"),
+      spec(inner, "C >= 2", "lethal.conditional-boundary"),
+      spec(sum, "X - 3", "lethal.swap"),
+    ]);
+    // The parser takes `end X := 2`, so only the text can say the outer `;` is back.
+    expect(out).toContain(" end; end;\n        X := 2;");
+  });
+
+  it("a closer comes BEFORE the opener of a statement that starts where its root ends", async () => {
+    await initParser();
+    // `else;` ends the first `if`; the next `if` starts at that very index.
+    const src = SRC.replace(
+      "if C > 0 then X := X + 1;",
+      "if C > 0 then X := X + 1 else;if C > 1 then X := X + 3;",
+    );
+    const tree = wrapRoot(parseAL(src));
+    const [first, second] = findAll(tree, ALNodeKind.comparison_expression);
+    const [sum1, sum2] = findAll(tree, ALNodeKind.additive_expression);
+    if (first === undefined || second === undefined || sum1 === undefined || sum2 === undefined)
+      throw new Error("fixture drift");
+    const specs = [
+      spec(first, "C >= 0", "lethal.conditional-boundary"),
+      spec(sum1, "X - 1", "lethal.swap"),
+      spec(second, "C >= 1", "lethal.conditional-boundary"),
+      spec(sum2, "X - 3", "lethal.swap"),
+    ];
+    const ided = assignMutantIds(new Map([["<file>", specs]])).get("<file>") ?? [];
+    const plan = planFile(src, tree, specs, ided);
+    const tie = src.indexOf("else;") + "else;".length;
+    const at = plan.edits.filter((e) => e.start === tie).map((e) => e.payload.kind);
+    expect(at).toEqual(["text", "chain-open"]);
+    expect(countErrorNodes(compileSchemataForFile(src, tree, specs))).toBe(0);
+  });
+
+  it("a nested chain's `end` never touches the source's `end`", async () => {
+    await initParser();
+    const src = `codeunit 51990 "T"
+{
+    procedure P(C: Integer; D: Integer)
+    begin
+        if D > 0 then begin if C > 0 then Foo(C + 1)end;
+    end;
+    local procedure Foo(X: Integer)
+    begin
+    end;
+}
+`;
+    const tree = wrapRoot(parseAL(src));
+    const [d, c] = findAll(tree, ALNodeKind.comparison_expression);
+    const sum = findFirst(tree, ALNodeKind.additive_expression);
+    if (d === undefined || c === undefined || sum === null) throw new Error("fixture drift");
+    const out = compileSchemataForFile(src, tree, [
+      spec(d, "D >= 0", "lethal.conditional-boundary"),
+      spec(c, "C >= 0", "lethal.conditional-boundary"),
+      spec(sum, "C - 1", "lethal.swap"),
+    ]);
+    expect(out).not.toMatch(/endend/);
+    expect(out).toContain("end end");
+    expect(countErrorNodes(out)).toBe(0);
+  });
+
   it("closers at one index go inner first", async () => {
     await initParser();
     const root = wrapRoot(parseAL(SRC));

@@ -112,9 +112,10 @@ export function planFile(
   // R246. Before the chains: a latch insertion can end exactly where a body-rooted chain starts,
   // and the printer keeps map order on a tie, so the zero-width insertion must come first.
   const latches = injectReachLatches(components, rewrites, filePath ?? "<file>", planOf);
+  const latchEntries = [...rewrites];
   const members: PlannedMember[] = [];
-  // R828 O1. Closers are zero-width and set AFTER every opener, innermost first: the printer keeps
-  // map order on a tie, and `if C then Foo()` ends one root and its host at one index.
+  // R828 O1. Closers are zero-width, innermost first: the printer keeps map order on a tie, and
+  // `if C then Foo()` ends one root and its host at one index. Where they sit: see `ordered` below.
   const closers: Array<[ALSyntaxNode, PlannedPayload]> = [];
   for (const component of components) {
     const planned = component.members.map((m) => planOf(component, m));
@@ -166,12 +167,23 @@ export function planFile(
       kind: "chain-open",
     });
     const semi = terminated ? ";" : "";
+    // No gap after the last `end` when the source goes straight on: `Foo(C + 1)end` would join the
+    // source's `end` as `endend` (AL0111). A space moves no line.
+    const next = source[component.root.endIndex];
+    const gap = semi === "" && next !== undefined && !/[\s;]/.test(next) ? " " : "";
     closers.push([
       insertionNodeAt(component.root, component.root.endIndex),
-      text(` end${semi}${chain.wrap ? ` end${semi}` : ""}`),
+      text(` end${semi}${chain.wrap ? ` end${semi}` : ""}${gap}`),
     ]);
   }
-  for (const [node, payload] of closers.reverse()) rewrites.set(node, payload);
+  // Closers go FIRST in the map. Ties at one index are printed in map order, and a root ending in
+  // `;` (`else;`, a parenless call) ends at the index where the next statement starts: its closer
+  // must come before that statement's opener or whole-span chain, or the statement lands inside
+  // the chain. No tie needs an opener first: an opener sits at its root's START, a closer at its
+  // END, and a root is never empty. Closers among themselves stay inner first. Latches stay ahead
+  // of the chains, as above.
+  const ordered = new Map<ALSyntaxNode, PlannedPayload>([...latchEntries, ...closers.reverse()]);
+  for (const [node, payload] of rewrites) if (!ordered.has(node)) ordered.set(node, payload);
 
   // Every dispatch chain above emits a bare
   // `MutationSelector.Active(...)` call — verified against a real AL
@@ -185,10 +197,10 @@ export function planFile(
   // Per-object (R6): a file may legally declare more than one AL object, so this groups `specs`
   // by their OWN enclosing object rather than injecting into whichever object the file happens
   // to declare first — see `injectMutationSelectorVar`'s doc comment.
-  if (specs.length > 0) injectMutationSelectorVar(specs, rewrites, filePath ?? "<file>");
+  if (specs.length > 0) injectMutationSelectorVar(specs, ordered, filePath ?? "<file>");
 
   // E4, the stable sort and the overlap refusal: `printWithRewrites`'s PLAN half.
-  const edits = planEdits(source, root, rewrites, filePath ?? "<file>");
+  const edits = planEdits(source, root, ordered, filePath ?? "<file>");
   return { source, edits, members };
 }
 

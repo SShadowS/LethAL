@@ -700,6 +700,90 @@ describe("R828 O1: the shapes, folded, equal the mutant written by hand", () => 
   });
 });
 
+/**
+ * R828 O1, the GLUED class: source with no space between a root and what follows it. A root that
+ * ends in `;` (`else;`, a parenless call) ends where the next statement starts, and a chain's `end`
+ * can touch the source's `end`. Each shape here failed once (a statement landing inside a chain,
+ * `rewrite.overlap`, `endend`), so a fold or chain bug of this kind fails offline BY CLASS NAME.
+ */
+const GLUED_AL = `codeunit 51997 "R828 Glued"
+{
+    procedure SemiThenIf(C: Integer; var T: Integer)
+    begin
+        if C > 0 then T := T + 1 else;if C > 1 then T := T + 3;
+        T := 9;
+    end;
+
+    procedure SemiThenAssign(C: Integer; var T: Integer)
+    begin
+        if C > 0 then T := T + 1 else;T := T + 2;
+    end;
+
+    procedure ParenlessThenIf(C: Integer; var T: Integer)
+    begin
+        if C > 0 then Touch;if C > 1 then T := T + 1;
+        if C > 2 then Touch;Touch;
+    end;
+
+    procedure WrappedSemiThenAssign(C: Integer; var T: Integer)
+    begin
+        if C > 1 then if C > 2 then T := 3 else;T := T + 4;
+        if C > 3 then if C > 4 then T := 5 else;if C > 5 then T := T + 6;
+    end;
+
+    local procedure Touch()
+    begin
+    end;
+}
+`;
+
+const GLUED_END_AL = `codeunit 51996 "R828 Glued End"
+{
+    procedure EndAfterParen(C: Integer; D: Integer)
+    begin
+        if D > 0 then begin if C > 0 then Foo(C + 1)end;
+    end;
+
+    procedure NestedEndAfterParen(C: Integer; D: Integer)
+    begin
+        if D > 0 then begin if C > 0 then if D > 1 then Foo(C + 1)end;
+    end;
+
+    local procedure Foo(X: Integer)
+    begin
+    end;
+}
+`;
+
+describe("R828 O1: GLUED class, folded equal to the mutant written by hand", () => {
+  const show = (r: DirResult) =>
+    r.findings.map((f) => `${f.mutantId} ${f.operator} ${f.kind}: ${f.detail}`);
+  test("a statement glued after a root ending in `;`, a parenless call, wrapped forms: all mutants", async () => {
+    const r = await checkSource(GLUED_AL);
+    expect(r.mutants).toBeGreaterThan(30);
+    expect(r.split).toBeGreaterThan(3);
+    expect(show(r)).toEqual([]);
+  });
+  test("the same, with empty-block left out", async () => {
+    const r = await checkSource(GLUED_AL, ["empty-block"]);
+    expect(r.mutants).toBeGreaterThan(20);
+    expect(r.split).toBeGreaterThan(3);
+    expect(show(r)).toEqual([]);
+  });
+  // `void-method-call` deletes the call, leaving `then end`: the hand-written mutant cannot parse.
+  test("`end` glued after `)`, nested: all mutants but the call's deletion", async () => {
+    const r = await checkSource(GLUED_END_AL, ["void-method-call"]);
+    expect(r.mutants).toBeGreaterThan(5);
+    expect(r.split).toBeGreaterThan(1);
+    expect(show(r)).toEqual([]);
+  });
+  test("the same, with empty-block left out too", async () => {
+    const r = await checkSource(GLUED_END_AL, ["void-method-call", "empty-block"]);
+    expect(r.mutants).toBeGreaterThan(3);
+    expect(show(r)).toEqual([]);
+  });
+});
+
 const CORPUS = process.env.LETHAL_R827_CORPUS;
 
 describe("R827: corpus (LETHAL_R827_CORPUS=<dir>, counts only, never source text)", () => {
