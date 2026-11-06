@@ -518,7 +518,18 @@ describe("R639 r9 §2: status() passes candidate into the unlike-bc refusals and
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
       const l = await layout();
-      await backendOf(l, versionOnly, fakeAlc().io).status();
+      const NS = 'xmlns="http://schemas.microsoft.com/navx/2015/manifest"';
+      await writeFile(
+        join(l.deps, "Microsoft_System Application.app"),
+        buildFakeAppWithEntries({
+          "NavxManifest.xml": `<?xml version="1.0"?><Package ${NS}><App Id="1" Name="System Application" Publisher="Microsoft" Version="28.0.46665.47126" /></Package>`,
+        }),
+      );
+      const bin = join(l.root, "al-runner");
+      await writeFile(bin, "binary");
+      const s = await backendOf(l, versionOnly, fakeAlc().io, { alRunnerPath: bin }).status();
+      // Reached the pin check (no .gated beside the binary), and said nothing about the binary.
+      expect(s.details).toMatch(/al-runner-v3-ungated-build/);
       expect(warn.mock.calls.map((c) => String(c[0])).join("\n")).not.toContain(
         "[lethal] al-runner:",
       );

@@ -4643,6 +4643,8 @@ export async function buildDoctorDeps(
     readonly alRunnerSpawn?: SpawnFn;
     /** R834: replaces the check that `alRunnerV3.alcPath` is executable. Injected by tests. */
     readonly alcRunnable?: (p: string) => boolean;
+    /** R834: the platform the v3 check judges; absent means this one. Injected by tests. */
+    readonly platform?: NodeJS.Platform;
   } = {},
 ): Promise<{
   readonly cfg: DoctorConfig;
@@ -4659,13 +4661,26 @@ export async function buildDoctorDeps(
   // BEFORE `prepareBcdevReadOnly`, because that helper resolves a bcdev identity this config does
   // not have. (An `alRunner` section is refused at load: R654 F2.)
   // R834: the same check for ANY config with the section, beside a bcdev or envTool one too.
+  const v3Only =
+    configFile.envTool === undefined &&
+    configFile.bcdev === undefined &&
+    configFile.alRunnerV3 !== undefined;
+  // v3-only: a bad section throws here, as `run` does. Beside a bcdev or envTool section it is a
+  // failed `al-runner-v3` check instead, so the bcdev checks still run (R834).
+  if (v3Only) validateAlRunnerV3Config(configFile.alRunnerV3);
   const v3Check =
     configFile.alRunnerV3 === undefined
       ? undefined
       : (() => {
-          const c = validateAlRunnerV3Config(configFile.alRunnerV3);
           const spawn = opts.alRunnerSpawn ?? defaultSpawn;
           return async () => {
+            let c: ReturnType<typeof validateAlRunnerV3Config>;
+            try {
+              if (!v3Only) refuseV3Platform(opts.platform);
+              c = validateAlRunnerV3Config(configFile.alRunnerV3);
+            } catch (err) {
+              return { ok: false, details: err instanceof Error ? err.message : String(err) };
+            }
             const v = await spawn([c.path, "--version"], { env: v3ChildEnv() }).catch(
               (e: unknown) => ({
                 exitCode: -1,
@@ -4692,7 +4707,7 @@ export async function buildDoctorDeps(
             }
           };
         })();
-  if (configFile.envTool === undefined && configFile.bcdev === undefined && v3Check !== undefined) {
+  if (v3Only && v3Check !== undefined) {
     return { cfg: {}, deps: { alRunnerV3: v3Check } };
   }
   const readOnly = prepareBcdevReadOnly(configFile, {

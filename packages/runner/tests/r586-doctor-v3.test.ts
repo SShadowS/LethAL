@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { sha256OfFile, v3InstallHint } from "../src/al-runner-v3-pin";
 import { buildDoctorDeps } from "../src/cli";
 import { runDoctor } from "../src/doctor";
+import { homeDir } from "../src/home";
 import type { SpawnFn } from "../src/publisher";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
 
@@ -86,11 +87,39 @@ describe("doctor: al-runner-v3", () => {
   test("R834: an alRunnerV3 section beside a bcdev section still gets the al-runner-v3 check", async () => {
     const { bin, deps } = await setup(true);
     const cfg = { bcdev: BCDEV, alRunnerV3: { path: bin, packagesDir: deps, bcVersion: BC } };
-    const d = await buildDoctorDeps(cfg, { alRunnerSpawn: spawn });
+    const d = await buildDoctorDeps(cfg, { alRunnerSpawn: spawn, platform: "linux" });
     const { alRunnerV3 } = d.deps;
     if (alRunnerV3 === undefined) throw new Error("no al-runner-v3 dep");
     const r = await runDoctor(d.cfg, { alRunnerV3 });
     expect(r.checks.map((c) => [c.name, c.ok])).toEqual([["al-runner-v3", true]]);
+  });
+
+  test("R834: a bad section beside a bcdev section is a failed check, not a throw", async () => {
+    const cfg = { bcdev: BCDEV, alRunnerV3: { packagesDir: "/d", bcVersion: "28.0" } };
+    const d = await buildDoctorDeps(cfg, { platform: "linux" });
+    const { alRunnerV3 } = d.deps;
+    if (alRunnerV3 === undefined) throw new Error("no al-runner-v3 dep");
+    const r = await runDoctor(d.cfg, { alRunnerV3 });
+    expect(r.ok).toBe(false);
+    expect(r.checks[0]?.detail).toMatch(/four-number/);
+  });
+
+  test("R834: beside a bcdev section, Windows is a failed check, not a pass and not a throw", async () => {
+    const { bin, deps } = await setup(true);
+    const cfg = { bcdev: BCDEV, alRunnerV3: { path: bin, packagesDir: deps, bcVersion: BC } };
+    const d = await buildDoctorDeps(cfg, { alRunnerSpawn: spawn, platform: "win32" });
+    const { alRunnerV3 } = d.deps;
+    if (alRunnerV3 === undefined) throw new Error("no al-runner-v3 dep");
+    const r = await runDoctor(d.cfg, { alRunnerV3 });
+    expect(r.ok).toBe(false);
+    expect(r.checks[0]?.detail).toMatch(/al-runner-v3-windows-unsupported/);
+  });
+
+  test("R834: the install hint names the absolute home path and says the default finds it", () => {
+    const hint = v3InstallHint();
+    expect(hint).toContain(join(homeDir(), ".local", "bin", "al-runner"));
+    expect(hint).not.toContain("to ~/.local");
+    expect(hint).toContain("with no alRunnerV3.path set");
   });
 
   test("R834: a bcdev-only config gets no al-runner-v3 check", async () => {
@@ -105,7 +134,7 @@ describe("doctor: al-runner-v3", () => {
       alRunnerV3: { path: join(dir, "absent"), packagesDir: deps, bcVersion: BC },
     };
     const failing: SpawnFn = async () => ({ exitCode: 127, stdout: "", stderr: "not found" });
-    const d = await buildDoctorDeps(cfg, { alRunnerSpawn: failing });
+    const d = await buildDoctorDeps(cfg, { alRunnerSpawn: failing, platform: "linux" });
     const { alRunnerV3 } = d.deps;
     if (alRunnerV3 === undefined) throw new Error("no al-runner-v3 dep");
     const r = await runDoctor(d.cfg, { alRunnerV3 });

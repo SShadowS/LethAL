@@ -58,16 +58,22 @@ const REFUSED = ["serverMode", "selectorMode", "alRunnerPath"];
  * R834: a configured `alcPath` that is missing or not executable is refused by name here, before
  * the contract probe, whose own report would call it a divergence and say "re-measure".
  */
+export function defaultAlcRunnable(
+  p: string,
+  which: (cmd: string) => string | null = (c) => Bun.which(c),
+): boolean {
+  try {
+    accessSync(p, constants.X_OK);
+    return true;
+  } catch {
+    // A bare name such as "alc" is found on PATH, as a shell would.
+    return which(p) !== null;
+  }
+}
+
 export function assertAlcRunnable(
   alcPath: string,
-  canRun: (p: string) => boolean = (p) => {
-    try {
-      accessSync(p, constants.X_OK);
-      return true;
-    } catch {
-      return false;
-    }
-  },
+  canRun: (p: string) => boolean = defaultAlcRunnable,
 ): void {
   if (!canRun(alcPath)) {
     throw new Error(

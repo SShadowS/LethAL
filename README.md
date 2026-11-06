@@ -55,7 +55,8 @@ The offline `al-runner-v3` backend needs no BC server at all; see
 Building from source needs:
 
 - [Bun](https://bun.sh) 1.x
-- Rust 1.96 or newer (install it with [rustup](https://rustup.rs))
+- Rust 1.96 or newer (install it with [rustup](https://rustup.rs)), and a C linker (`cc`; on Debian
+  and Ubuntu, `apt install build-essential`)
 - clang/LLVM 23.1.2. If you do not have it, `bash scripts/install-llvm.sh <platform-key>` installs it
   (for example `linux-x64`) under `${TMPDIR:-/tmp}/llvm-23.1.2`, which some reboots clear (set `TMPDIR`
   to a folder you keep first). Its last line is the `export LLVM_BIN=...` to run next
@@ -124,15 +125,21 @@ four-number version. The script refuses a major the feed does not carry.
 **3. `alc`, the AL compiler.** LethAL compiles every batch with `alc` before al-runner runs it. With
 the AL Language VS Code extension installed, LethAL finds `alc` there and you can skip this step.
 With no VS Code, Microsoft offers no Linux `alc` download, only the extension's universal package,
-which holds `alc.dll`, a .NET program. So you need the **.NET runtime** (`dotnet` on PATH; the script
-reads which major version it needs and tells you), then:
+which holds `alc.dll`, a .NET program. So you need the **.NET runtime** with `dotnet` on PATH. The
+script reads which major version alc needs (from `alc.runtimeconfig.json`) and tells you if `dotnet`
+is missing. Without root, Microsoft's installer puts it under your home folder (use the major the
+script names; 10 at the time of writing):
 
 ```bash
+curl -fsSL -o dotnet-install.sh https://dot.net/v1/dotnet-install.sh    # read it, then:
+bash dotnet-install.sh --channel 10.0 --runtime dotnet --install-dir "$HOME/.dotnet"
+export PATH="$HOME/.dotnet:$PATH"
 bun scripts/fetch-alc.ts ./alc
 ```
 
-It unpacks the compiler into `./alc/bin/`, writes a small `./alc/alc` wrapper script, and prints the
-`"alcPath"` line for your config.
+It pins AL Language 18.1.2842859 (a stable build, not the marketplace's pre-release), unpacks the
+compiler into `./alc/bin/`, writes a small `./alc/alc` wrapper script that calls the `dotnet` it found
+by its full path and sets `DOTNET_ROOT`, and prints the `"alcPath"` line for your config.
 
 **4. A config with only an `alRunnerV3` section.** Nothing else is needed: no `bcdev`, no server, no
 credentials.
@@ -150,7 +157,9 @@ credentials.
 
 - `bcVersion` is four numbers (`28.5.54151.54365`, not `28.5`). It must equal the System Application
   in `packagesDir`.
-- `path` is optional. It defaults to `~/.local/bin/al-runner`, where the installer puts it.
+- `path` is optional. With none set, LethAL looks for the binary at `~/.local/bin/al-runner` (your home
+  folder; the full path), where the installer puts it. If you do set `path`, write the full path:
+  a `~` in the value is not expanded.
 - `alcPath` is optional when the AL Language extension is installed.
 - `selectorIds` are three object ids from your own app's id range; `lethal init` picks them. The
   values above fit the gift card demo.

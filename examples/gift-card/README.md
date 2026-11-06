@@ -161,8 +161,8 @@ what happened to two of these fixtures (ROADMAP R169).
 Linux x64 only. The result is indicative, not authoritative: the planted bug and the survivors
 above are measured on `bcdev`. This path shows the mechanics on a clean machine. It needs no server,
 no container and no credentials. You need `git`, `curl`, `tar`, `xz`, Bun, Rust 1.96 or newer
-([rustup](https://rustup.rs)), clang/LLVM 23.1.2, and, if you have no AL Language VS Code extension,
-the .NET runtime (`dotnet` on PATH) for `alc`, the AL compiler (step 3).
+([rustup](https://rustup.rs)) with a C linker (`cc`), clang/LLVM 23.1.2, and, if you have no AL Language
+VS Code extension, the .NET runtime (`dotnet` on PATH) for `alc`, the AL compiler (step 3).
 
 ```bash
 # 1. build LethAL (once)
@@ -179,6 +179,8 @@ curl -fsSL https://github.com/aldevtools/BusinessCentral.AL.Runner/releases/down
 
 # 3. download Microsoft's symbols for BC 28; note the bcVersion it prints
 bun scripts/fetch-ms-symbols.ts 28 ./symbols
+# alc needs .NET (no root: bash dotnet-install.sh --channel 10.0 --runtime dotnet --install-dir "$HOME/.dotnet",
+# from https://dot.net/v1/dotnet-install.sh; then export PATH="$HOME/.dotnet:$PATH". See the main README.)
 bun scripts/fetch-alc.ts ./alc                 # skip with the AL Language VS Code extension
 
 # 4. write the config: copy the example, then set packagesDir and bcVersion as step 3 printed them
@@ -227,9 +229,10 @@ covered by `Gift Card Tests.RedeemReducesBalance`. That is the whole demo in one
 provably executed the line and did not notice.
 
 **Use `--top 10`, not `--top 5`.** `explain` ranks survivors by how much evidence each carries, ties
-broken by file and line, and the planted bug lands **eighth of eleven** (it was sixth of nine before
-two operators added survivors above it). Confirmed on the real report, not predicted: `--top 5` cuts
-the headline off the list, and `--top 10` still shows it with one row omitted below it.
+broken by file and line, and the planted bug lands **ninth of fifteen** (it was eighth of eleven, and sixth of nine before that,
+as operators added survivors above it). Read from a real report's survivor order (an al-runner-v3 run,
+34 / 15 / 11), not predicted: `--top 5` cuts the headline off the list, and `--top 10` still shows it
+with five rows omitted below it.
 
 That run is FROZEN under [`docs/campaign/2026-08-16-gift-card/`](../../docs/campaign/2026-08-16-gift-card/):
 the report, the per-mutant baseline, and the pre-commitment it was checked against. Before
