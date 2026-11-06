@@ -145,13 +145,15 @@ describe("R497 A5: H1a through the real path, on the INSTRUMENTED text alc compi
         throw new Error(`no } above ${anchor}`);
       };
       const M1 = "M1MultiObject.Codeunit.al";
-      const q = objectLine(M1, "X := 9301;", "#if PROBESYM"); // P's end
-      const r = objectLine(M1, "X := 9401;", "#else"); // Q's COMPILED arm's end
+      // R827: each statement is its own chain now, so the original sits in an `else` without its
+      // `;`. The markers drop the `;`; each still names the one original statement line.
+      const q = objectLine(M1, "X := 9301", "#if PROBESYM"); // P's end
+      const r = objectLine(M1, "X := 9401", "#else"); // Q's COMPILED arm's end
       // H1b: base one past the `#endif` line itself.
       const m1 = lines(M1);
       const rH1b =
-        m1.findIndex((l) => l.includes("X := 9401;")) - m1.findIndex((l) => l.trim() === "#endif");
-      const e1 = objectLine("E1TwoArm.Codeunit.al", "X := 9151;"); // first object: base 1
+        m1.findIndex((l) => l.includes("X := 9401")) - m1.findIndex((l) => l.trim() === "#endif");
+      const e1 = objectLine("E1TwoArm.Codeunit.al", "X := 9151"); // first object: base 1
       expect(map.lookup("Codeunit", 91904, q)).toBe("QIfHit");
       expect(map.lookup("Codeunit", 91905, r)).toBe("Hit");
       expect(map.lookup("Codeunit", 91902, e1)).toBe("AElseHit");

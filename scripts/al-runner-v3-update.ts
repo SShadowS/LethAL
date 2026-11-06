@@ -81,6 +81,7 @@ import {
   parseGatedBuilds,
   v3ReadingsDigest,
 } from "../packages/runner/src/al-runner-v3-pins";
+import { type Proc, SLOTS, SLOT_BUSY, lockDir, parsePs } from "./corpus-snapshot";
 
 export const ROOT = "/work/tools/al-runner-v3";
 export const REPO = "aldevtools/BusinessCentral.AL.Runner";
@@ -801,6 +802,20 @@ export const HEAVY_JOB =
   /(^|\/)bun packages\/runner\/itest\/[\w-]+\.itest\.ts|cli\.ts run|(^|\/)bun scripts\/verify\.ts|\/work\/src\/(BC\.History|DC|DO|do-lethal)/;
 
 /**
+ * R851: heavy JOBS, not processes. One job is a wrapper shell, `flock`, `bun run`, a bun child and
+ * workers: on 2026-11-06 one corpus job read as 6 and skipped a release for the day. A job is a
+ * process group, a `--worker` is part of its itest, and a held `heavy.<n>` lock is a job even if its
+ * process names nothing heavy. The higher of the two counts, because a job under a lock is in both.
+ */
+export function countHeavyJobs(procs: readonly Proc[], heldSlots: number): number {
+  const groups = new Set<number>();
+  for (const p of procs) {
+    if (HEAVY_JOB.test(p.args) && !p.args.includes("--worker")) groups.add(p.pgid);
+  }
+  return Math.max(groups.size, heldSlots);
+}
+
+/**
  * R633 I2: a `--regate` (R639: or an `--edge-rejudge`) that was skipped exits 2, so a `&&` chain
  * stops.
  */
@@ -1180,16 +1195,13 @@ export function realDeps(root = ROOT): UpdateDeps {
     },
     now: () => new Date().toISOString(),
     heavyJobs: async () => {
-      let n = 0;
-      for (const pid of await readdir("/proc")) {
-        if (!/^\d+$/.test(pid)) continue;
-        const cmd = (await readFile(`/proc/${pid}/cmdline`, "utf8").catch(() => "")).replaceAll(
-          "\0",
-          " ",
-        );
-        if (HEAVY_JOB.test(cmd)) n++;
-      }
-      return n;
+      const ps = Bun.spawnSync(["ps", "-eo", "pid,ppid,pgid,args"], { stdout: "pipe" });
+      const held = SLOTS.filter(
+        (n) =>
+          Bun.spawnSync(["flock", "-n", "-E", String(SLOT_BUSY), `${lockDir()}/heavy.${n}`, "true"])
+            .exitCode === SLOT_BUSY,
+      ).length;
+      return countHeavyJobs(parsePs(ps.stdout.toString()), held);
     },
     freeGb: async () => {
       const p = Bun.spawn(["free", "-g"], { stdout: "pipe" });

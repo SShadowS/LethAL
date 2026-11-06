@@ -18,7 +18,7 @@ manual smoke-testing, and the env-gated integration scripts in
 | `Symbol Logic` | 79600 | `sandbox-symbols` | R321 target: one procedure with an `#if LETHALA` / `#elif LETHALB` / `#else` split. `itest:alrunner-v3` runs it under `[LETHALA]` and `[LETHALB]` (legs Y-A and Y-B). |
 | `Symbol Tests` | 79650 | `sandbox-symbols-tests` | One test, `RateSmall`, asserting each build's own value (11, 101, or 2 with no symbol). Asserts via `Error()`. |
 | `Layout Alpha` | 79700 | `sandbox-layout` | R353 target, batch 0 at `maxGuardsPerBatch` 7: one procedure, `IsBig`. |
-| `Layout Beta` | 79701 | `sandbox-layout` | R353 target, batch 1: `Grow`, then `Twice` behind a load-bearing 26-line header comment. See "sandbox-layout (R353)" below. |
+| `Layout Beta` | 79701 | `sandbox-layout` | R353 target, batch 1: `Grow`, then `Twice` behind a load-bearing 25-line header comment. See "sandbox-layout (R353)" below. |
 | `Layout Tests` | 79750 | `sandbox-layout-tests` | One test per procedure: `AlphaIsBig`, `GrowAboveTen`, `TwiceOfThree`. Asserts via `Error()`. |
 | `Multi A` | 79800 | `sandbox-multiobject` | R383 target, the FIRST object of `MultiPair.Codeunit.al`: one procedure, `Never`, which no test calls. |
 | `Multi B` | 79801 | `sandbox-multiobject` | R383 target, the SECOND object of the same file: `Reached`, then `Unreached` on the line right after `Reached`'s last statement. See "sandbox-multiobject (R383)" below. |

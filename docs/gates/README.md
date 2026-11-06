@@ -77,6 +77,13 @@ compared across a scheme change. There a byte-identical twin's mutated text cann
 - **Today's list:** R830 raised the scheme to 45, and 11 baselines at 44 wait on R836 (no verdict moves).
   `envtool.baseline.json` waits on R683 (host only).
 
+## A v3 baseline row changing on a pinned build (R849)
+
+A pinned v3 record may write only what was committed before it ran. To add or re-key a row, commit the rows
+first as `itest/expected/<baseline>` (a subfolder, so the baseline hook leaves it alone), then record on `current`.
+A record on any other build is refused. The steps are in [alrunner-v3.md](alrunner-v3.md), "The route for a row to
+change on a pinned build".
+
 ## Warning sets: `GATE_WARNINGS` and observe mode (R736)
 
 Every itest that calls `runSession` collects the run's `warning` events and compares the SORTED, unique warning

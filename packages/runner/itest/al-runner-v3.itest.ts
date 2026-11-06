@@ -161,6 +161,8 @@ import {
   BaselineRecordedError,
   type PinnedRecord,
   assertGateBaseline,
+  assertRecordOnCurrent,
+  assertRecordPinned,
   gitShowHead,
   preflightGateBaseline,
   readGateBaseline,
@@ -227,13 +229,16 @@ const CANDIDATE = process.env.LETHAL_ALRUNNER_V3_CANDIDATE === "1";
 const K_ON_CANDIDATE = v3KOnCandidate(process.env);
 /** R586c: the per-build pin of the binary under test, set in `main` once its version and sha are known. */
 let activePin: V3BuildPin | undefined;
+/** R849: HEAD's sha, captured when `main` starts: a commit made during the run is never read. */
+let runHead = "HEAD";
 
 /** R810: a record on a pinned build proves its rows equal HEAD's; undefined (unchanged record) with no pin. */
 function pinnedRecord(undoT = false): PinnedRecord | undefined {
   const pin = activePin;
   if (pin === undefined) return undefined;
+  const rev = runHead;
   return {
-    readCommitted: gitShowHead,
+    readCommitted: (p) => gitShowHead(p, rev),
     ...(undoT ? { undo: (rows) => undoTPin(rows, pin.legT) } : {}),
   };
 }
@@ -1851,7 +1856,9 @@ async function legXSleep(scratch: string): Promise<void> {
     }
     hitsByMutant.set(id, m);
   };
-  const SLEEP_LINES = [25, 31, 37, 43];
+  // R827: the one `Sleep(5000)` sits in the original arm of M0002's own chain. Before, each of four
+  // body-chain arms repeated the body and so held a copy (lines 25, 31, 37, 43).
+  const SLEEP_LINES = [18];
   const { r, b, sleeper } = await run("d", recordHits);
   // R-762 B: a pinned build whose pin and session probe read sleep-is-noop gone runs without the
   // §6 rule: M0003 and M0004 survive, no mutant call writes a coverage document, (e)/(f) have
@@ -1871,7 +1878,7 @@ async function legXSleep(scratch: string): Promise<void> {
   const mustD = (cond: boolean, what: string): void => must(cond, xdFailure(what, sleeper));
   const idx = b.sleepIndexSize();
   console.log(`  X (d): Sleep index ${idx?.target} + ${idx?.test}`);
-  must(idx?.target === 4 && idx?.test === 5, `X (d): Sleep index ${JSON.stringify(idx)}, r5 4 + 5`);
+  must(idx?.target === 1 && idx?.test === 5, `X (d): Sleep index ${JSON.stringify(idx)}, R827 1 + 5`);
   // r6 (c), restated by r11 (b): on alpha.2 every ProbeSleep test passes; on edge the three 600 s
   // siblings are timeout rows. A timeout is not a refusal, so no ProbeSleep test is unsupported on either.
   must(
@@ -1885,9 +1892,9 @@ async function legXSleep(scratch: string): Promise<void> {
     "lethal.remove-assignment": {
       code: "M0003",
       verdict: retired ? "survived" : "error",
-      line: 25,
+      line: 18,
     },
-    "lethal.shift-integer": { code: "M0004", verdict: retired ? "survived" : "error", line: 37 },
+    "lethal.shift-integer": { code: "M0004", verdict: retired ? "survived" : "error", line: 18 },
     "lethal.return-value": { code: "M0005", verdict: "killed" },
   };
   mustD(r.mutants.length === 5, `X (d): ${r.mutants.length} mutants, r5 5`);
@@ -2195,6 +2202,7 @@ async function legT(
 // ---------------------------------------------------------------------------------------------
 
 async function main(): Promise<void> {
+  runHead = execFileSync("git", ["-C", REPO, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   preflightObserve();
   const observeRefused = observeWithReceiptRefusal(
     observeRequested(),
@@ -2251,14 +2259,23 @@ async function main(): Promise<void> {
     ["MO", MULTIOBJECT_BASELINE_PATH],
     ["WR", WRAPPED_BASELINE_PATH],
   ]);
-  const refusedRecord = recordRefusal(
-    CANDIDATE,
-    LEGS.flatMap((l) => {
-      const p = recordBaselines.get(l);
-      return p !== undefined && recordRequested(p) ? [p] : [];
-    }),
-  );
+  const recordPaths = LEGS.flatMap((l) => {
+    const p = recordBaselines.get(l);
+    return p !== undefined && recordRequested(p) ? [p] : [];
+  });
+  const refusedRecord = recordRefusal(CANDIDATE, recordPaths);
   if (refusedRecord !== undefined) throw new V3LegEnvironment(refusedRecord);
+  // R849: before any leg runs, a record on a build that is not `current` is refused (a candidate's own refusal is above).
+  assertRecordOnCurrent(
+    recordPaths.map((p) => basename(p)),
+    BIN,
+    resolveV3Binary(AL_RUNNER_V3_DEFAULT_PATH),
+  );
+  // R849: a record on `current` with no hand pin writes unchecked and ignores any expected file.
+  assertRecordPinned(
+    recordPaths.map((p) => basename(p)),
+    activePin !== undefined,
+  );
   const legs: Record<string, V3LegOutcome> = {};
   const lines: string[] = [];
   const root = await mkdtemp(join(tmpdir(), "lethal-itest-v3-"));

@@ -26,7 +26,11 @@ import { ResultsStore } from "../src/store";
 
 const tierOf = (n: string) => operatorTiers.get(n);
 
-/** One procedure of flat statements: `empty-block` folds them all into its body's one chain. */
+/**
+ * One procedure holding `if Y > Z then begin <flat statements> end;`. R827: a body's `empty-block`
+ * is a guard now and folds nothing, so the condition's mutant (`conditional-boundary`) and the
+ * branch block's `empty-block` root the whole `if`, and every statement inside joins its chain.
+ */
 function writeProject(statements: number): string {
   const dir = mkdtempSync(join(tmpdir(), "r826-"));
   mkdirSync(join(dir, "src"));
@@ -42,12 +46,12 @@ function writeProject(statements: number): string {
       idRanges: [{ from: 50000, to: 50099 }],
     }),
   );
-  const body = Array.from({ length: statements }, (_, i) => `        Y := Y + ${i + 1};`).join(
+  const body = Array.from({ length: statements }, (_, i) => `            Y := Y + ${i + 1};`).join(
     "\n",
   );
   writeFileSync(
     join(dir, "src", "P.Codeunit.al"),
-    `codeunit 50000 "P"\n{\n    procedure Big()\n    var\n        Y: Integer;\n    begin\n${body}\n    end;\n}\n`,
+    `codeunit 50000 "P"\n{\n    procedure Big()\n    var\n        Y: Integer;\n        Z: Integer;\n    begin\n        if Y > Z then begin\n${body}\n        end;\n    end;\n}\n`,
   );
   return dir;
 }
@@ -147,16 +151,19 @@ async function sessionCodes(statements: number, kind: "bcdev" | "al-runner-v3"):
   return codes;
 }
 
-const EMPTY = "lethal.empty-block";
+/** The two operators that root the whole `if`: its condition's and its branch block's. */
+const ROOTS = ["lethal.empty-block", "lethal.conditional-boundary"];
 const allBut = (files: Awaited<ReturnType<typeof project>>) =>
-  [...new Set(files.flatMap((f) => f.specs.map((s) => s.operatorName)))].filter((o) => o !== EMPTY);
+  [...new Set(files.flatMap((f) => f.specs.map((s) => s.operatorName)))].filter(
+    (o) => !ROOTS.includes(o),
+  );
 
 describe("R826: the large-method warning", () => {
   beforeAll(async () => {
     await initParser();
   });
 
-  test("a procedure folded by empty-block is one long chain; without it the same code is not", async () => {
+  test("an `if` folded by its condition's mutant is one long chain; without it the same code is not", async () => {
     const files = await project(150);
     const [f] = files;
     if (f === undefined) throw new Error("no file");
@@ -177,8 +184,10 @@ describe("R826: the large-method warning", () => {
     expect(message).toMatch(/chain \d+, about \d+ KB/);
     expect(message).toContain("not proven");
     expect(message).toContain("not measured");
-    expect(message).toContain("lethal.empty-block");
-    expect(message).toContain("--exclude-operator empty-block");
+    // R827: a body's `empty-block` is no longer the cause, so the text names what is.
+    expect(message).toContain("`if` conditions");
+    expect(message).toContain("`case` arms");
+    expect(message).toContain("--exclude-operator");
     expect(message).toContain("--only");
   });
 
@@ -207,6 +216,8 @@ describe("R826: the large-method warning", () => {
     expect(largestFold([small, bigText, longChain])).toEqual(want);
     expect(largestFold([bigText, small, longChain])).toEqual(want);
     expect(largestFold([])).toEqual({ chain: 0, bytes: 0 });
+    // R827: a free body's guard copies no text, however long the body is.
+    expect(largestFold([{ ...fold(1, 5000), free: true }, small])).toEqual({ chain: 1, bytes: 1 });
   });
 
   test("a real file fires on its chain alone, with its bytes under their figure", async () => {
@@ -244,11 +255,11 @@ describe("R826: the large-method warning", () => {
         idRanges: [{ from: 50000, to: 50099 }],
       }),
     );
-    const comment = "// padding\n".repeat(4000);
-    const body = Array.from({ length: 12 }, (_, i) => `        Y := Y + ${i + 1};`).join("\n");
+    const comment = "            // padding\n".repeat(4000);
+    const body = Array.from({ length: 12 }, (_, i) => `            Y := Y + ${i + 1};`).join("\n");
     writeFileSync(
       join(dir, "src", "P.Codeunit.al"),
-      `codeunit 50000 "P"\n{\n    procedure Big()\n    var\n        Y: Integer;\n    begin\n${comment}${body}\n    end;\n}\n`,
+      `codeunit 50000 "P"\n{\n    procedure Big()\n    var\n        Y: Integer;\n        Z: Integer;\n    begin\n        if Y > Z then begin\n${comment}${body}\n        end;\n    end;\n}\n`,
     );
     const set = await generateMutationSet(dir, { emit: () => {} } as never);
     const [f] = set.files;

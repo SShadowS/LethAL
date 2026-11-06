@@ -427,10 +427,13 @@ describe("compileSchemataForFile — member splice reproduces a consumed termina
     // is NOT body-final — a sibling statement follows it. The body-level
     // empty-block spec roots the component, making the inner block a MEMBER,
     // so its edit goes through `spliceIntoRoot`, not the root wrap.
+    // R827: a plain body's empty-block is one guard around the body, not a chain root. A `#pragma`
+    // line in the body keeps it a chain (a guard cannot hold a directive), so the point stands.
     const src = `codeunit 51903 "T3"
 {
     procedure P(A: Integer)
     begin
+#pragma warning disable AL0432
         if A <> 0 then begin
             A := A;
         end;
@@ -1075,6 +1078,8 @@ describe("compileSchemataForFile — selector var injection into extension objec
       if (cond === null) throw new Error("no inner if in fixture");
       // The procedure body is the component root, as in DC: the inner `if` sits in a slot of the
       // outer statement, which sits in the body's statement list with a sibling after it.
+      // R827: a plain body is now one guard, not a chain root. Each source holds a `#pragma` line,
+      // which keeps its body a chain.
       const body = findAll(root, ALNodeKind.block)[0];
       if (body === undefined) throw new Error("no body in fixture");
       return compileSchemataForFile(src, root, [
@@ -1085,21 +1090,21 @@ describe("compileSchemataForFile — selector var injection into extension objec
 
     it("keeps the `;` after the wrapping `end` when the outer is an if", () => {
       const out = negateInnerGuard(
-        `codeunit 51050 "C" { procedure P(F: Boolean) begin if not F then if Check() then; Bar(); end; }`,
+        `codeunit 51050 "C" { procedure P(F: Boolean) begin\n#pragma warning disable AL0432\nif not F then if Check() then; Bar(); end; }`,
       );
       expect(out).toMatch(/if not \(Check\(\)\) then;\s*end;/);
     });
 
     it("keeps the `;` after the wrapping `end` when the outer is a case branch", () => {
       const out = negateInnerGuard(
-        `codeunit 51051 "C" { procedure P(N: Integer) begin case N of 1: if Check() then; 2: Bar(); end; end; }`,
+        `codeunit 51051 "C" { procedure P(N: Integer) begin\n#pragma warning disable AL0432\ncase N of 1: if Check() then; 2: Bar(); end; end; }`,
       );
       expect(out).toMatch(/if not \(Check\(\)\) then;\s*end;/);
     });
 
     it("adds no `;` after `end` when the inner if has a real body", () => {
       const out = negateInnerGuard(
-        `codeunit 51052 "C" { procedure P(F: Boolean) begin if not F then if Check() then Bar(); Bar(); end; }`,
+        `codeunit 51052 "C" { procedure P(F: Boolean) begin\n#pragma warning disable AL0432\nif not F then if Check() then Bar(); Bar(); end; }`,
       );
       expect(out).not.toContain(";;");
       expect(out).not.toMatch(/end;\s*;/);
@@ -1206,7 +1211,7 @@ describe("GH-24: reach grain and marker placement", () => {
   };
 
   const listPrefix = (): Scenario => {
-    const src = `codeunit 51903 "R" { procedure P() var X: Integer; Y: Integer; begin X := 1; Y := 2; end; }`;
+    const src = `codeunit 51903 "R" { procedure P() var X: Integer; Y: Integer; begin\n#pragma warning disable AL0432\nX := 1; Y := 2; end; }`;
     const root = parse(src);
     const second = nth(root, ALNodeKind.assignment_statement, 0, "Y := 2");
     return {
@@ -1221,7 +1226,7 @@ describe("GH-24: reach grain and marker placement", () => {
   };
 
   const ifBody = (): Scenario => {
-    const src = `codeunit 51904 "R" { procedure P(Amount: Integer) var Seen: Integer; begin if Amount > 100 then begin Seen := Amount; end; Seen := 0; end; }`;
+    const src = `codeunit 51904 "R" { procedure P(Amount: Integer) var Seen: Integer; begin\n#pragma warning disable AL0432\nif Amount > 100 then begin Seen := Amount; end; Seen := 0; end; }`;
     const root = parse(src);
     const thenBlock = nth(root, ALNodeKind.if_statement, 0).childForFieldName("then_branch");
     if (thenBlock === null) throw new Error("no then_branch");
@@ -1237,7 +1242,7 @@ describe("GH-24: reach grain and marker placement", () => {
   };
 
   const repeatBody = (): Scenario => {
-    const src = `codeunit 51905 "R" { procedure P() var I: Integer; begin repeat begin I += 1; end until I >= 3; end; }`;
+    const src = `codeunit 51905 "R" { procedure P() var I: Integer; begin\n#pragma warning disable AL0432\nrepeat begin I += 1; end until I >= 3; end; }`;
     const root = parse(src);
     const inner = all(root, ALNodeKind.block).find((b) => b.text.startsWith("begin I += 1"));
     if (inner === undefined) throw new Error("no repeat body block");
@@ -1419,7 +1424,8 @@ describe("GH-24: reach grain and marker placement", () => {
 
   it("R246 fix 1: with no var section, the declaration lands before a body-rooted chain", () => {
     // The insertion and the chain start at the same index; the insertion must print first.
-    const src = `codeunit 51911 "R" { procedure P(X: Integer) begin X := 2; end; }`;
+    // R827: a plain body is now a guard pair, so a `#pragma` line keeps the body a chain.
+    const src = `codeunit 51911 "R" { procedure P(X: Integer) begin\n#pragma warning disable AL0432\nX := 2; end; }`;
     const root = parse(src);
     const out = compile({
       src,
@@ -1469,7 +1475,7 @@ describe("GH-24: reach grain and marker placement", () => {
     /if not (\S+) then begin MutationSelector\.Reached\(/.exec(out)?.[1];
 
   it("GH-24: an object global named like the latch keeps the original branch reading the global", () => {
-    const src = `codeunit 51920 "R" { var LethALReachLatch: Boolean; procedure P() var X: Integer; begin if LethALReachLatch then X := 2; end; }`;
+    const src = `codeunit 51920 "R" { var LethALReachLatch: Boolean; procedure P() var X: Integer; begin\n#pragma warning disable AL0432\nif LethALReachLatch then X := 2; end; }`;
     const root = parse(src);
     const body = bodyOf(root, "P");
     const out = compile({

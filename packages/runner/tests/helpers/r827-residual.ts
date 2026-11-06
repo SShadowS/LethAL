@@ -52,6 +52,7 @@ export interface FileCase {
 
 export type FindingKind =
   | "diff"
+  | "guard-in-loop"
   | "marker"
   | "leftover"
   | "emitted-parse-error"
@@ -77,6 +78,13 @@ export interface Stats {
 const newStats = (): Stats => ({ guards: 0, markers: 0, latchDecls: 0, selectorDecls: 0 });
 
 const GUARD = /^MutationSelector\d*\.Active\('(M\d+)'\)$/i;
+const FREE_THEN = /^begin( if not LethALReachLatch\d* then begin [^;]*; [^;]*; end;)? end;?$/i;
+const EXECUTION_LOOPS = new Set([
+  "for_statement",
+  "foreach_statement",
+  "while_statement",
+  "repeat_statement",
+]);
 const MARKER =
   /^if not (LethALReachLatch\d*) then begin (MutationSelector\d*)\.Reached\('(M\d+)'\); \1 := true; end$/i;
 const LATCH_DECL = /^(LethALReachLatch\d*): Boolean;$/i;
@@ -88,6 +96,7 @@ const LOOPS = new Set([
   "foreach_statement",
   "with_statement",
   "case_branch",
+  "asserterror_statement",
 ]);
 const FLATTEN = new Set(["code_block", "statement_block", "empty_statement"]);
 
@@ -175,7 +184,10 @@ class Canon {
     let elseEmpty = false;
     if (k === "if_statement") {
       const els = n.childForFieldName("else_branch");
-      elseEmpty = els === null || this.stmts(els).length === 0;
+      // A throwaway walk, so this test counts nothing: `child` walks a non-empty `else` once more.
+      const probe = new Canon(this.original, this.instrumented, this.active);
+      elseEmpty = els === null || probe.stmts(els).length === 0;
+      if (elseEmpty && els !== null) this.stmts(els);
     }
     const strippedBefore = this.stats.latchDecls + this.stats.selectorDecls;
     for (const c of n.children) {
@@ -274,6 +286,8 @@ export interface FileResult {
   readonly checked: number;
   readonly findings: readonly Finding[];
   readonly stats: Stats;
+  /** Loops the `guard-in-loop` check saw under a free guard, so a blind check shows as 0. */
+  readonly walked: number;
 }
 
 /** Every mutant of one file, plus the no-mutant fold. Reports every finding. */
@@ -300,12 +314,42 @@ export async function checkFile(fc: FileCase, withDetail = true): Promise<FileRe
   };
   if (parse(fc.source).hasError) {
     add(none, "original-parse-error", "the original source has a parse error");
-    return { checked: 0, findings, stats };
+    return { checked: 0, findings, stats, walked: 0 };
   }
   if (parse(fc.compiled).hasError) {
     add(none, "emitted-parse-error", "the emitted text has a parse error");
-    return { checked: 0, findings, stats };
+    return { checked: 0, findings, stats, walked: 0 };
   }
+  // R827: the fold compares meaning, so it cannot see WHEN a guard runs. This reads that from the
+  // emitted tree: a free body's guard holds the body in its `else`, and no guard may sit inside a
+  // loop there, where it would run on every pass (R246).
+  let walked = 0;
+  const isGuard = (n: ALSyntaxNode): boolean => {
+    const c = n.rawKind === "if_statement" ? n.childForFieldName("condition") : null;
+    return c !== null && c !== undefined && GUARD.test(squash(c.text));
+  };
+  const walkFree = (n: ALSyntaxNode, inLoop: boolean): void => {
+    if (inLoop && isGuard(n)) {
+      add(none, "guard-in-loop", n.text.slice(0, 60));
+      return;
+    }
+    const loop = inLoop || EXECUTION_LOOPS.has(n.rawKind);
+    if (loop && !inLoop) walked++;
+    for (const c of n.children) walkFree(c, loop);
+  };
+  const walkAll = (n: ALSyntaxNode): void => {
+    if (isGuard(n)) {
+      const els = n.childForFieldName("else_branch");
+      const then = n.childForFieldName("then_branch");
+      // A free guard's own branch holds its marker at most; a chain's holds the mutated root.
+      if (els !== null && then !== null && FREE_THEN.test(squash(then.text))) {
+        walkFree(els, false);
+        return;
+      }
+    }
+    for (const c of n.children) walkAll(c);
+  };
+  walkAll(parse(fc.compiled));
   const originalCanon = plainCanon(fc.source);
   const base = foldCanon(fc.source, fc.compiled, null);
   for (const l of base.leftovers) add(none, "leftover", l);
@@ -328,5 +372,5 @@ export async function checkFile(fc: FileCase, withDetail = true): Promise<FileRe
     const want = plainCanon(exp);
     if (folded.canon !== want) add(m, "diff", firstDiff(folded.canon, want));
   }
-  return { checked: fc.mutants.length, findings, stats };
+  return { checked: fc.mutants.length, findings, stats, walked };
 }

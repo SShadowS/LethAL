@@ -172,3 +172,11 @@ becomes `170d7adfd47d508bb5d73d5d8292f517f4b58d7e4f589c8d566efe0800a806bc`, with
 
 Rows stay sorted by key, so each row moves in its file. `bcdev.wrapped.baseline.json` was recorded by R332 on `bc2` on these same four keys. The v3 gate then confirms every row
 on the pinned build. Route gap filed: [[R849]].
+
+## Addendum 7, the route used (R-836, 2026-11-06)
+
+R849 landed the route for a row to change on a pinned build, so this replaces Addendum 6's hand edit. No baseline is edited by hand. `itest/expected/al-runner-v3.wrapped.baseline.json` and
+`al-runner-v3.layout.baseline.json` were committed in `lethal/r836` before the run. Each is the committed baseline with the 5 keys of Addendum 6 changed and the rows sorted, shown equal by a script; every
+verdict, killing test and hash is unchanged. So this document already covers them: no verdict moves, and each row equals the BC row in `bcdev.wrapped.baseline.json`, where R332 recorded the same four
+keys. `Layout Beta`'s row keeps its `killed` by `GrowAboveTen`. Counts do not move, so `assertCounts` does not change. The gate records on `current`, against those files, and they go in the commit that lands
+the baselines. Full v3 gate confirms afterwards.

@@ -819,41 +819,25 @@ const HEAD_EMIT: Record<string, string> = {
     procedure A()
     var
         L: Integer; LethALReachLatch: Boolean;
-    begin
-if MutationSelector.Active('M0001') then begin
-  if not LethALReachLatch then begin MutationSelector.Reached('M0001'); LethALReachLatch := true; end; begin end
-end else if MutationSelector.Active('M0005') then begin
-  begin
-        L := 1;
-        G := L;
-        if not LethALReachLatch then begin MutationSelector.Reached('M0005'); LethALReachLatch := true; end; ;
-    end
-end else if MutationSelector.Active('M0002') then begin
-  begin
-        if not LethALReachLatch then begin MutationSelector.Reached('M0002'); LethALReachLatch := true; end; ;
-        G := L;
-        Message('%1', L);
-    end
-end else if MutationSelector.Active('M0004') then begin
-  begin
-        L := 1;
-        if not LethALReachLatch then begin MutationSelector.Reached('M0004'); LethALReachLatch := true; end; ;
-        Message('%1', L);
-    end
+    begin if MutationSelector.Active('M0001') then begin if not LethALReachLatch then begin MutationSelector.Reached('M0001'); LethALReachLatch := true; end; end else begin\x20
+        if MutationSelector.Active('M0002') then begin
+  if not LethALReachLatch then begin MutationSelector.Reached('M0002'); LethALReachLatch := true; end;\x20
 end else if MutationSelector.Active('M0003') then begin
-  begin
-        if not LethALReachLatch then begin MutationSelector.Reached('M0003'); LethALReachLatch := true; end; L := 2;
-        G := L;
-        Message('%1', L);
-    end
+  if not LethALReachLatch then begin MutationSelector.Reached('M0003'); LethALReachLatch := true; end; L := 2
 end else begin
-  begin
-        L := 1;
-        G := L;
-        Message('%1', L);
-    end
-end
+  L := 1
 end;
+        if MutationSelector.Active('M0004') then begin
+  if not LethALReachLatch then begin MutationSelector.Reached('M0004'); LethALReachLatch := true; end;\x20
+end else begin
+  G := L
+end;
+        if MutationSelector.Active('M0005') then begin
+  if not LethALReachLatch then begin MutationSelector.Reached('M0005'); LethALReachLatch := true; end;\x20
+end else begin
+  Message('%1', L)
+end;
+    end end;
 }
 `,
   "a-ordinary-ifdecl": `codeunit 50100 "Repro A"
@@ -868,41 +852,25 @@ end;
     procedure A()
     var
         L: Integer; LethALReachLatch: Boolean;
-    begin
-if MutationSelector.Active('M0001') then begin
-  if not LethALReachLatch then begin MutationSelector.Reached('M0001'); LethALReachLatch := true; end; begin end
-end else if MutationSelector.Active('M0005') then begin
-  begin
-        L := 1;
-        G := L;
-        if not LethALReachLatch then begin MutationSelector.Reached('M0005'); LethALReachLatch := true; end; ;
-    end
-end else if MutationSelector.Active('M0002') then begin
-  begin
-        if not LethALReachLatch then begin MutationSelector.Reached('M0002'); LethALReachLatch := true; end; ;
-        G := L;
-        Message('%1', L);
-    end
-end else if MutationSelector.Active('M0004') then begin
-  begin
-        L := 1;
-        if not LethALReachLatch then begin MutationSelector.Reached('M0004'); LethALReachLatch := true; end; ;
-        Message('%1', L);
-    end
+    begin if MutationSelector.Active('M0001') then begin if not LethALReachLatch then begin MutationSelector.Reached('M0001'); LethALReachLatch := true; end; end else begin\x20
+        if MutationSelector.Active('M0002') then begin
+  if not LethALReachLatch then begin MutationSelector.Reached('M0002'); LethALReachLatch := true; end;\x20
 end else if MutationSelector.Active('M0003') then begin
-  begin
-        if not LethALReachLatch then begin MutationSelector.Reached('M0003'); LethALReachLatch := true; end; L := 2;
-        G := L;
-        Message('%1', L);
-    end
+  if not LethALReachLatch then begin MutationSelector.Reached('M0003'); LethALReachLatch := true; end; L := 2
 end else begin
-  begin
-        L := 1;
-        G := L;
-        Message('%1', L);
-    end
-end
+  L := 1
 end;
+        if MutationSelector.Active('M0004') then begin
+  if not LethALReachLatch then begin MutationSelector.Reached('M0004'); LethALReachLatch := true; end;\x20
+end else begin
+  G := L
+end;
+        if MutationSelector.Active('M0005') then begin
+  if not LethALReachLatch then begin MutationSelector.Reached('M0005'); LethALReachLatch := true; end;\x20
+end else begin
+  Message('%1', L)
+end;
+    end end;
 }
 `,
   "a-ordinary-varattr": `codeunit 50100 "Repro A"
@@ -916,41 +884,25 @@ end;
     procedure A()
     var
         L: Integer; LethALReachLatch: Boolean;
-    begin
-if MutationSelector.Active('M0001') then begin
-  if not LethALReachLatch then begin MutationSelector.Reached('M0001'); LethALReachLatch := true; end; begin end
-end else if MutationSelector.Active('M0005') then begin
-  begin
-        L := 1;
-        G := L;
-        if not LethALReachLatch then begin MutationSelector.Reached('M0005'); LethALReachLatch := true; end; ;
-    end
-end else if MutationSelector.Active('M0002') then begin
-  begin
-        if not LethALReachLatch then begin MutationSelector.Reached('M0002'); LethALReachLatch := true; end; ;
-        G := L;
-        Message('%1', L);
-    end
-end else if MutationSelector.Active('M0004') then begin
-  begin
-        L := 1;
-        if not LethALReachLatch then begin MutationSelector.Reached('M0004'); LethALReachLatch := true; end; ;
-        Message('%1', L);
-    end
+    begin if MutationSelector.Active('M0001') then begin if not LethALReachLatch then begin MutationSelector.Reached('M0001'); LethALReachLatch := true; end; end else begin\x20
+        if MutationSelector.Active('M0002') then begin
+  if not LethALReachLatch then begin MutationSelector.Reached('M0002'); LethALReachLatch := true; end;\x20
 end else if MutationSelector.Active('M0003') then begin
-  begin
-        if not LethALReachLatch then begin MutationSelector.Reached('M0003'); LethALReachLatch := true; end; L := 2;
-        G := L;
-        Message('%1', L);
-    end
+  if not LethALReachLatch then begin MutationSelector.Reached('M0003'); LethALReachLatch := true; end; L := 2
 end else begin
-  begin
-        L := 1;
-        G := L;
-        Message('%1', L);
-    end
-end
+  L := 1
 end;
+        if MutationSelector.Active('M0004') then begin
+  if not LethALReachLatch then begin MutationSelector.Reached('M0004'); LethALReachLatch := true; end;\x20
+end else begin
+  G := L
+end;
+        if MutationSelector.Active('M0005') then begin
+  if not LethALReachLatch then begin MutationSelector.Reached('M0005'); LethALReachLatch := true; end;\x20
+end else begin
+  Message('%1', L)
+end;
+    end end;
 }
 `,
   "a-ordinary-pragma": `codeunit 50100 "Repro A"
@@ -963,41 +915,25 @@ end;
     procedure A()
     var
         L: Integer; LethALReachLatch: Boolean;
-    begin
-if MutationSelector.Active('M0001') then begin
-  if not LethALReachLatch then begin MutationSelector.Reached('M0001'); LethALReachLatch := true; end; begin end
-end else if MutationSelector.Active('M0005') then begin
-  begin
-        L := 1;
-        G := L;
-        if not LethALReachLatch then begin MutationSelector.Reached('M0005'); LethALReachLatch := true; end; ;
-    end
-end else if MutationSelector.Active('M0002') then begin
-  begin
-        if not LethALReachLatch then begin MutationSelector.Reached('M0002'); LethALReachLatch := true; end; ;
-        G := L;
-        Message('%1', L);
-    end
-end else if MutationSelector.Active('M0004') then begin
-  begin
-        L := 1;
-        if not LethALReachLatch then begin MutationSelector.Reached('M0004'); LethALReachLatch := true; end; ;
-        Message('%1', L);
-    end
+    begin if MutationSelector.Active('M0001') then begin if not LethALReachLatch then begin MutationSelector.Reached('M0001'); LethALReachLatch := true; end; end else begin\x20
+        if MutationSelector.Active('M0002') then begin
+  if not LethALReachLatch then begin MutationSelector.Reached('M0002'); LethALReachLatch := true; end;\x20
 end else if MutationSelector.Active('M0003') then begin
-  begin
-        if not LethALReachLatch then begin MutationSelector.Reached('M0003'); LethALReachLatch := true; end; L := 2;
-        G := L;
-        Message('%1', L);
-    end
+  if not LethALReachLatch then begin MutationSelector.Reached('M0003'); LethALReachLatch := true; end; L := 2
 end else begin
-  begin
-        L := 1;
-        G := L;
-        Message('%1', L);
-    end
-end
+  L := 1
 end;
+        if MutationSelector.Active('M0004') then begin
+  if not LethALReachLatch then begin MutationSelector.Reached('M0004'); LethALReachLatch := true; end;\x20
+end else begin
+  G := L
+end;
+        if MutationSelector.Active('M0005') then begin
+  if not LethALReachLatch then begin MutationSelector.Reached('M0005'); LethALReachLatch := true; end;\x20
+end else begin
+  Message('%1', L)
+end;
+    end end;
 }
 `,
   "a-ordinary-pragma-mid": `codeunit 50100 "Repro A"
@@ -1011,53 +947,30 @@ end;
     procedure A()
     var
         L: Integer; LethALReachLatch: Boolean;
-    begin
-if MutationSelector.Active('M0001') then begin
-  if not LethALReachLatch then begin MutationSelector.Reached('M0001'); LethALReachLatch := true; end; begin end
-end else if MutationSelector.Active('M0006') then begin
-  begin
-        L := 1;
-        G := L;
-        H := G;
-        if not LethALReachLatch then begin MutationSelector.Reached('M0006'); LethALReachLatch := true; end; ;
-    end
-end else if MutationSelector.Active('M0002') then begin
-  begin
-        if not LethALReachLatch then begin MutationSelector.Reached('M0002'); LethALReachLatch := true; end; ;
-        G := L;
-        H := G;
-        Message('%1', H);
-    end
-end else if MutationSelector.Active('M0004') then begin
-  begin
-        L := 1;
-        if not LethALReachLatch then begin MutationSelector.Reached('M0004'); LethALReachLatch := true; end; ;
-        H := G;
-        Message('%1', H);
-    end
-end else if MutationSelector.Active('M0005') then begin
-  begin
-        L := 1;
-        G := L;
-        if not LethALReachLatch then begin MutationSelector.Reached('M0005'); LethALReachLatch := true; end; ;
-        Message('%1', H);
-    end
+    begin if MutationSelector.Active('M0001') then begin if not LethALReachLatch then begin MutationSelector.Reached('M0001'); LethALReachLatch := true; end; end else begin\x20
+        if MutationSelector.Active('M0002') then begin
+  if not LethALReachLatch then begin MutationSelector.Reached('M0002'); LethALReachLatch := true; end;\x20
 end else if MutationSelector.Active('M0003') then begin
-  begin
-        if not LethALReachLatch then begin MutationSelector.Reached('M0003'); LethALReachLatch := true; end; L := 2;
-        G := L;
-        H := G;
-        Message('%1', H);
-    end
+  if not LethALReachLatch then begin MutationSelector.Reached('M0003'); LethALReachLatch := true; end; L := 2
 end else begin
-  begin
-        L := 1;
-        G := L;
-        H := G;
-        Message('%1', H);
-    end
-end
+  L := 1
 end;
+        if MutationSelector.Active('M0004') then begin
+  if not LethALReachLatch then begin MutationSelector.Reached('M0004'); LethALReachLatch := true; end;\x20
+end else begin
+  G := L
+end;
+        if MutationSelector.Active('M0005') then begin
+  if not LethALReachLatch then begin MutationSelector.Reached('M0005'); LethALReachLatch := true; end;\x20
+end else begin
+  H := G
+end;
+        if MutationSelector.Active('M0006') then begin
+  if not LethALReachLatch then begin MutationSelector.Reached('M0006'); LethALReachLatch := true; end;\x20
+end else begin
+  Message('%1', H)
+end;
+    end end;
 }
 `,
   "a-ordinary-comment": `codeunit 50100 "Repro A"
@@ -1070,41 +983,25 @@ end;
     procedure A()
     var
         L: Integer; LethALReachLatch: Boolean;
-    begin
-if MutationSelector.Active('M0001') then begin
-  if not LethALReachLatch then begin MutationSelector.Reached('M0001'); LethALReachLatch := true; end; begin end
-end else if MutationSelector.Active('M0005') then begin
-  begin
-        L := 1;
-        G := L;
-        if not LethALReachLatch then begin MutationSelector.Reached('M0005'); LethALReachLatch := true; end; ;
-    end
-end else if MutationSelector.Active('M0002') then begin
-  begin
-        if not LethALReachLatch then begin MutationSelector.Reached('M0002'); LethALReachLatch := true; end; ;
-        G := L;
-        Message('%1', L);
-    end
-end else if MutationSelector.Active('M0004') then begin
-  begin
-        L := 1;
-        if not LethALReachLatch then begin MutationSelector.Reached('M0004'); LethALReachLatch := true; end; ;
-        Message('%1', L);
-    end
+    begin if MutationSelector.Active('M0001') then begin if not LethALReachLatch then begin MutationSelector.Reached('M0001'); LethALReachLatch := true; end; end else begin\x20
+        if MutationSelector.Active('M0002') then begin
+  if not LethALReachLatch then begin MutationSelector.Reached('M0002'); LethALReachLatch := true; end;\x20
 end else if MutationSelector.Active('M0003') then begin
-  begin
-        if not LethALReachLatch then begin MutationSelector.Reached('M0003'); LethALReachLatch := true; end; L := 2;
-        G := L;
-        Message('%1', L);
-    end
+  if not LethALReachLatch then begin MutationSelector.Reached('M0003'); LethALReachLatch := true; end; L := 2
 end else begin
-  begin
-        L := 1;
-        G := L;
-        Message('%1', L);
-    end
-end
+  L := 1
 end;
+        if MutationSelector.Active('M0004') then begin
+  if not LethALReachLatch then begin MutationSelector.Reached('M0004'); LethALReachLatch := true; end;\x20
+end else begin
+  G := L
+end;
+        if MutationSelector.Active('M0005') then begin
+  if not LethALReachLatch then begin MutationSelector.Reached('M0005'); LethALReachLatch := true; end;\x20
+end else begin
+  Message('%1', L)
+end;
+    end end;
 }
 `,
   "a-ordinary-comment-mid": `codeunit 50100 "Repro A"
@@ -1118,53 +1015,30 @@ end;
     procedure A()
     var
         L: Integer; LethALReachLatch: Boolean;
-    begin
-if MutationSelector.Active('M0001') then begin
-  if not LethALReachLatch then begin MutationSelector.Reached('M0001'); LethALReachLatch := true; end; begin end
-end else if MutationSelector.Active('M0006') then begin
-  begin
-        L := 1;
-        G := L;
-        H := G;
-        if not LethALReachLatch then begin MutationSelector.Reached('M0006'); LethALReachLatch := true; end; ;
-    end
-end else if MutationSelector.Active('M0002') then begin
-  begin
-        if not LethALReachLatch then begin MutationSelector.Reached('M0002'); LethALReachLatch := true; end; ;
-        G := L;
-        H := G;
-        Message('%1', H);
-    end
-end else if MutationSelector.Active('M0004') then begin
-  begin
-        L := 1;
-        if not LethALReachLatch then begin MutationSelector.Reached('M0004'); LethALReachLatch := true; end; ;
-        H := G;
-        Message('%1', H);
-    end
-end else if MutationSelector.Active('M0005') then begin
-  begin
-        L := 1;
-        G := L;
-        if not LethALReachLatch then begin MutationSelector.Reached('M0005'); LethALReachLatch := true; end; ;
-        Message('%1', H);
-    end
+    begin if MutationSelector.Active('M0001') then begin if not LethALReachLatch then begin MutationSelector.Reached('M0001'); LethALReachLatch := true; end; end else begin\x20
+        if MutationSelector.Active('M0002') then begin
+  if not LethALReachLatch then begin MutationSelector.Reached('M0002'); LethALReachLatch := true; end;\x20
 end else if MutationSelector.Active('M0003') then begin
-  begin
-        if not LethALReachLatch then begin MutationSelector.Reached('M0003'); LethALReachLatch := true; end; L := 2;
-        G := L;
-        H := G;
-        Message('%1', H);
-    end
+  if not LethALReachLatch then begin MutationSelector.Reached('M0003'); LethALReachLatch := true; end; L := 2
 end else begin
-  begin
-        L := 1;
-        G := L;
-        H := G;
-        Message('%1', H);
-    end
-end
+  L := 1
 end;
+        if MutationSelector.Active('M0004') then begin
+  if not LethALReachLatch then begin MutationSelector.Reached('M0004'); LethALReachLatch := true; end;\x20
+end else begin
+  G := L
+end;
+        if MutationSelector.Active('M0005') then begin
+  if not LethALReachLatch then begin MutationSelector.Reached('M0005'); LethALReachLatch := true; end;\x20
+end else begin
+  H := G
+end;
+        if MutationSelector.Active('M0006') then begin
+  if not LethALReachLatch then begin MutationSelector.Reached('M0006'); LethALReachLatch := true; end;\x20
+end else begin
+  Message('%1', H)
+end;
+    end end;
 }
 `,
 };
@@ -1260,41 +1134,25 @@ end;
     procedure A()
     var
         L: Integer; LethALReachLatch: Boolean;
-    begin
-if MutationSelector.Active('M0001') then begin
-  if not LethALReachLatch then begin MutationSelector.Reached('M0001'); LethALReachLatch := true; end; begin end
-end else if MutationSelector.Active('M0005') then begin
-  begin
-        L := 1;
-        G := L;
-        if not LethALReachLatch then begin MutationSelector.Reached('M0005'); LethALReachLatch := true; end; ;
-    end
-end else if MutationSelector.Active('M0002') then begin
-  begin
-        if not LethALReachLatch then begin MutationSelector.Reached('M0002'); LethALReachLatch := true; end; ;
-        G := L;
-        Message('%1', L);
-    end
-end else if MutationSelector.Active('M0004') then begin
-  begin
-        L := 1;
-        if not LethALReachLatch then begin MutationSelector.Reached('M0004'); LethALReachLatch := true; end; ;
-        Message('%1', L);
-    end
+    begin if MutationSelector.Active('M0001') then begin if not LethALReachLatch then begin MutationSelector.Reached('M0001'); LethALReachLatch := true; end; end else begin\x20
+        if MutationSelector.Active('M0002') then begin
+  if not LethALReachLatch then begin MutationSelector.Reached('M0002'); LethALReachLatch := true; end;\x20
 end else if MutationSelector.Active('M0003') then begin
-  begin
-        if not LethALReachLatch then begin MutationSelector.Reached('M0003'); LethALReachLatch := true; end; L := 2;
-        G := L;
-        Message('%1', L);
-    end
+  if not LethALReachLatch then begin MutationSelector.Reached('M0003'); LethALReachLatch := true; end; L := 2
 end else begin
-  begin
-        L := 1;
-        G := L;
-        Message('%1', L);
-    end
-end
+  L := 1
 end;
+        if MutationSelector.Active('M0004') then begin
+  if not LethALReachLatch then begin MutationSelector.Reached('M0004'); LethALReachLatch := true; end;\x20
+end else begin
+  G := L
+end;
+        if MutationSelector.Active('M0005') then begin
+  if not LethALReachLatch then begin MutationSelector.Reached('M0005'); LethALReachLatch := true; end;\x20
+end else begin
+  Message('%1', L)
+end;
+    end end;
 }
 `,
 };
@@ -4269,7 +4127,8 @@ ${head}    var
       const index = await buildAlRunnerCoverageIndex(dir);
       const lines = text.split("\n");
       const at = (needle: string): number => lines.findIndex((l) => l.includes(needle)) + 1;
-      const member = at("Glob := Glob + 2;");
+      // The statement is its own chain now, so its original text sits in the `else` without its `;`.
+      const member = at("Glob := Glob + 2");
       const wrapped = at("exit(StrLen(T) + 1)");
       const plain = at("exit(X + 3)");
       expect([member, wrapped, plain].every((n) => n > 0)).toBe(true);

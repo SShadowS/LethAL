@@ -36,9 +36,13 @@ procedure P() var X: Integer; Y: Integer; begin
 if MutationSelector.Active('M0001') then begin
   begin end
 end else if MutationSelector.Active('M0002') then begin
-  begin X := 1; ; end
+  begin
+#pragma warning disable AL0432
+X := 1; ; end
 end else begin
-  begin X := 1; Y := 2; end
+  begin
+#pragma warning disable AL0432
+X := 1; Y := 2; end
 end
 end; }"
 `;
@@ -51,9 +55,13 @@ procedure P(Amount: Integer) var Seen: Integer; begin
 if MutationSelector.Active('M0001') then begin
   begin end
 end else if MutationSelector.Active('M0002') then begin
-  begin if Amount > 100 then begin end; Seen := 0; end
+  begin
+#pragma warning disable AL0432
+if Amount > 100 then begin end; Seen := 0; end
 end else begin
-  begin if Amount > 100 then begin Seen := Amount; end; Seen := 0; end
+  begin
+#pragma warning disable AL0432
+if Amount > 100 then begin Seen := Amount; end; Seen := 0; end
 end
 end; }"
 `;
@@ -66,9 +74,13 @@ procedure P() var I: Integer; begin
 if MutationSelector.Active('M0001') then begin
   begin end
 end else if MutationSelector.Active('M0002') then begin
-  begin repeat begin end until I >= 3; end
+  begin
+#pragma warning disable AL0432
+repeat begin end until I >= 3; end
 end else begin
-  begin repeat begin I += 1; end until I >= 3; end
+  begin
+#pragma warning disable AL0432
+repeat begin I += 1; end until I >= 3; end
 end
 end; }"
 `;

@@ -10,7 +10,7 @@
  */
 import { type SpanEdit, joinEdits } from "@lethal/engine";
 import type { CompilePlan, PlannedPayload } from "./compile-plan";
-import { emitDispatch, endsInTerminator } from "./dispatch-emit";
+import { emitDispatch, endsInTerminator, guardOpen } from "./dispatch-emit";
 
 /** I4: the only failure EMIT can raise, and it is a crash of the run, never a refusal. */
 export const EMIT_CRASHES = ["RangeError: Invalid string length"] as const;
@@ -31,6 +31,7 @@ export function emitFile(plan: CompilePlan): string {
 
 function payloadText(source: string, start: number, end: number, p: PlannedPayload): string {
   if (p.kind === "text") return p.text;
+  if (p.kind === "guard") return guardOpen(p.member, p.latch, p.selector);
   // The chain replaces exactly the root's span, which is this edit's span.
   const original = source.slice(start, end);
   const chain = emitDispatch(original, p.component, p.latch, p.selector);

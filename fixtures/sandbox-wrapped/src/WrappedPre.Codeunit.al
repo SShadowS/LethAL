@@ -10,6 +10,7 @@ codeunit 78903 "Wrapped Pre"
         if X > 10 then
             exit(X + 1);
         exit(X);
+#pragma warning restore AL0432
     end;
 
     procedure Twice(X: Integer): Integer
@@ -21,8 +22,7 @@ codeunit 78903 "Wrapped Pre"
     // Do not shorten this comment, move Twice, or add a procedure to this
     // file without a new pre-commitment:
     // docs/superpowers/specs/2026-10-06-r300b-wrapped-leg-precommitment.md
-    //
-    // (padding)
+    // R827: Grow's #pragma keeps Grow a chain, long enough for that span.
     // (padding)
     // (padding)
     // (padding)

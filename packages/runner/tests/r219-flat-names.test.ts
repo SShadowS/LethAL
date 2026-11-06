@@ -198,7 +198,9 @@ describe("R219: two same-basename files in different directories", () => {
       expect(arms).toHaveLength(1);
       const start = arms[0] ?? 0;
       const at = lines.findIndex((l, i) => i > start && l.includes(needle));
-      expect(lines[at]?.trim()).toBe(needle === "if X > 1 then" ? needle : `${needle};`);
+      // R827: `if X > 1 then exit(1)` is one chain, and its `;` sits after the chain's closing
+      // `end`, not on the original arm's line. `exit(0);` has no mutant here, so it stays as written.
+      expect(lines[at]?.trim()).toBe(needle === "exit(0)" ? `${needle};` : needle);
       return at + 1;
     };
     // Asymmetric, as the probe's two tests were: Sales takes the `exit(1)` arm, Purchase `exit(0)`.
