@@ -12999,7 +12999,41 @@ describe("R504: a lease answer whose body never finishes, through a real LeaseCl
     expect(
       JSON.stringify(lost.report instanceof Error ? lost.report.message : lost.report),
     ).toMatch(/lease-lost/);
+    expect(held.report).not.toBeInstanceOf(Error);
     expect(JSON.stringify(held.report)).not.toMatch(/lease-lost/);
+  });
+
+  test("R852: a tick answered by its retry resets the count too", async () => {
+    const { events } = await renewTicks(3, (n) => (n === 4 ? ANSWERED : "stall"));
+    expect(warnings(events, "lease-renew-blip")).toHaveLength(2);
+    expect(warnings(events, "lease-renew-unanswered")).toHaveLength(0);
+  });
+
+  test("R852: a tick dropped behind a failing stalled renew counts, so it warns", async () => {
+    const { client } = wired({ RenewLease: () => "stall" });
+    const events: RunEvent[] = [];
+    const timers = new FakeTimers();
+    const { lease } = leaseCfg(client, { timers });
+    let fired = false;
+    const failed = () => events.some((e) => e.type === "warning" && /^lease-renew/.test(e.code));
+    const backend = leaseBackend({
+      run: async (ref, opts) => {
+        if (!fired) {
+          fired = true;
+          timers.fireDetached();
+          await timers.fire(); // dropped: the first is still open
+          while (!failed()) await Bun.sleep(5);
+        }
+        return pass(ref, opts);
+      },
+    });
+    await runSessionForTest(backend, {
+      quarantineDir: freshTmpDir(),
+      lease,
+      emit: [(e) => events.push(e)],
+    });
+    expect(warnings(events, "lease-renew-unanswered")).toHaveLength(1);
+    expect(warnings(events, "lease-renew-blip")).toHaveLength(0);
   });
 
   /**

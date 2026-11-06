@@ -69,9 +69,10 @@ export function collectWarnings(): WarningCollector {
 
 /**
  * R852: seen, printed, never a mismatch. One renew blip is a brief moment on the server, not a
- * property of the build, so a gate must not fail on it. Printing it keeps every blip in the gate's log.
+ * property of the build, so a gate must not fail on it. The gate's log shows one line per leg that
+ * had any, because the collector keeps the first message of each code.
  */
-const LOGGED_ONLY: ReadonlySet<string> = new Set(["lease-renew-blip"]);
+export const LOGGED_ONLY: ReadonlySet<string> = new Set(["lease-renew-blip"]);
 
 export function assertGateWarnings(
   gate: string,

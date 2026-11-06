@@ -3479,6 +3479,8 @@ class LeaseSession {
   #ticking = false;
   /** R852: the last tick got no answer, so one more makes it `lease-renew-unanswered`. */
   #lastTickUnanswered = false;
+  /** R852: a tick came and went while this renew was still open, so it counts as a tick. */
+  #tickDropped = false;
   #stopped = false;
   #lostBatchIndex: number | undefined;
   /**
@@ -3583,12 +3585,19 @@ class LeaseSession {
    * refused by the phase-1 fence, which IS a confirmed loss).
    *
    * R852: the retry comes at once, so one tick's two failures can be one brief blip. It is logged
-   * as `lease-renew-blip`, which gates do not count. Two ticks in a row, about 5 s apart, is
-   * `lease-renew-unanswered`. Neither touches the lease: only `renewed:false` is loss.
+   * as `lease-renew-blip`, which gates do not count. Two ticks in a row is
+   * `lease-renew-unanswered`, and a tick dropped while a failing renew stalled counts as one: a
+   * call times out at 30 s, so one stalled tick can outlast the 15 s ttl. Neither touches the
+   * lease: only `renewed:false` is loss.
    */
   async pulse(): Promise<void> {
-    if (this.#ticking || this.#stopped) return;
+    if (this.#stopped) return;
+    if (this.#ticking) {
+      this.#tickDropped = true;
+      return;
+    }
     this.#ticking = true;
+    this.#tickDropped = false;
     try {
       let outcome: Awaited<ReturnType<LeaseApi["renew"]>>;
       try {
@@ -3601,7 +3610,10 @@ class LeaseSession {
         } catch (second) {
           this.d.emit({
             type: "warning",
-            code: this.#lastTickUnanswered ? "lease-renew-unanswered" : "lease-renew-blip",
+            code:
+              this.#lastTickUnanswered || this.#tickDropped
+                ? "lease-renew-unanswered"
+                : "lease-renew-blip",
             message: `[lethal] lease renew could not be answered twice in a row (${messageOf(first)}; ${messageOf(second)}) — not treated as lease loss (design §6: only renewed:false is loss); the next tick retries`,
           });
           this.#lastTickUnanswered = true;
