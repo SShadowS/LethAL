@@ -102,6 +102,8 @@ interface DirResult {
   markers: number;
   /** R827: free bodies seen. */
   free: number;
+  /** R827: guards the `guard-in-loop` check walked. */
+  walked: number;
   findings: Finding[];
 }
 
@@ -125,6 +127,7 @@ async function checkDir(
     guards: 0,
     markers: 0,
     free: 0,
+    walked: 0,
     findings: [],
   };
   let i = 0;
@@ -142,6 +145,7 @@ async function checkDir(
     out.markers += r.stats.markers;
     // From the components, not the emitted text, where a nested free guard would fold unseen.
     out.free += buildComponents(ided).filter((c) => c.free === true).length;
+    out.walked += r.walked;
     out.findings.push(...r.findings);
   }
   return out;
@@ -352,6 +356,8 @@ describe("R827: a free body keeps its guards out of its loops", () => {
     const r = await checkSource(LOOPS_AL);
     expect(r.mutants).toBeGreaterThan(20);
     expect(r.free).toBe(4);
+    // A chain's deletion can look like a free guard too, so at least: a blind check walks none.
+    expect(r.walked).toBeGreaterThanOrEqual(r.free);
     expect(r.findings.map((f) => `${f.mutantId} ${f.kind}: ${f.detail}`)).toEqual([]);
   });
 
@@ -365,6 +371,7 @@ describe("R827: a free body keeps its guards out of its loops", () => {
     ]);
     expect(r.mutants).toBeGreaterThan(10);
     expect(r.free).toBe(4);
+    expect(r.walked).toBeGreaterThanOrEqual(r.free);
     expect(r.findings.map((f) => `${f.mutantId} ${f.kind}: ${f.detail}`)).toEqual([]);
   });
 });

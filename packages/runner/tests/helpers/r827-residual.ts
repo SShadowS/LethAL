@@ -286,6 +286,8 @@ export interface FileResult {
   readonly checked: number;
   readonly findings: readonly Finding[];
   readonly stats: Stats;
+  /** Guards whose `else` the `guard-in-loop` check walked, so a blind check shows as 0. */
+  readonly walked: number;
 }
 
 /** Every mutant of one file, plus the no-mutant fold. Reports every finding. */
@@ -312,15 +314,16 @@ export async function checkFile(fc: FileCase, withDetail = true): Promise<FileRe
   };
   if (parse(fc.source).hasError) {
     add(none, "original-parse-error", "the original source has a parse error");
-    return { checked: 0, findings, stats };
+    return { checked: 0, findings, stats, walked: 0 };
   }
   if (parse(fc.compiled).hasError) {
     add(none, "emitted-parse-error", "the emitted text has a parse error");
-    return { checked: 0, findings, stats };
+    return { checked: 0, findings, stats, walked: 0 };
   }
   // R827: the fold compares meaning, so it cannot see WHEN a guard runs. This reads that from the
   // emitted tree: a free body's guard holds the body in its `else`, and no guard may sit inside a
   // loop there, where it would run on every pass (R246).
+  let walked = 0;
   const isGuard = (n: ALSyntaxNode): boolean => {
     const c = n.rawKind === "if_statement" ? n.childForFieldName("condition") : null;
     return c !== null && c !== undefined && GUARD.test(squash(c.text));
@@ -339,6 +342,7 @@ export async function checkFile(fc: FileCase, withDetail = true): Promise<FileRe
       const then = n.childForFieldName("then_branch");
       // A free guard's own branch holds its marker at most; a chain's holds the mutated root.
       if (els !== null && then !== null && FREE_THEN.test(squash(then.text))) {
+        walked++;
         walkFree(els, false);
         return;
       }
@@ -368,5 +372,5 @@ export async function checkFile(fc: FileCase, withDetail = true): Promise<FileRe
     const want = plainCanon(exp);
     if (folded.canon !== want) add(m, "diff", firstDiff(folded.canon, want));
   }
-  return { checked: fc.mutants.length, findings, stats };
+  return { checked: fc.mutants.length, findings, stats, walked };
 }

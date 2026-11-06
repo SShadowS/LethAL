@@ -3,8 +3,9 @@ import { type TierResolver, assignMutantIds, buildComponents, dedupeSpecs } from
 
 /**
  * R826: when one mutant's statement holds others, they share one guard chain and each branch repeats
- * the statement's text, so one emitted method grows with the square. R827 took a body's `empty-block`
- * away; an `if` condition, a `case` arm, a loop and a branch's `empty-block` are what is left. GitHub #28's 907-guard
+ * the statement's text, so one emitted method grows with the square. R827 made a body's `empty-block` a
+ * guard unless the body holds a directive. An `if` condition, a `case` arm, a loop and a branch's
+ * `empty-block` are what is left, and a body's `empty-block` makes each loop in it one chain. GitHub #28's 907-guard
  * file stopped a BC service tier with a stack overflow, and a very large method is the lead suspect.
  * That is an inference: no crash has been measured here.
  *
@@ -73,8 +74,9 @@ export function largeFoldWarning(
   return [
     `[lethal] ${large.length} file(s) emit a very large method: ${named}. A method this size may stop a BC`,
     " service tier with a stack overflow (GitHub #28). That is not proven, and these thresholds are not",
-    " measured: it is a warning only. `if` conditions, `case` arms and loops cause the largest folds, and",
-    " `lethal.empty-block` still roots a branch or a loop body. To shrink them, leave out those operators with",
-    " --exclude-operator, or narrow the run with --only. --max-guards-per-batch will not help: it splits by file.",
+    " measured: it is a warning only. `if` conditions and `case` arms cause the largest folds, and",
+    " `lethal.empty-block` makes a loop in a body one chain. To shrink them, leave out `lethal.empty-block` and the",
+    " condition operators with --exclude-operator, or narrow the run with --only. --max-guards-per-batch will not",
+    " help: it splits by file.",
   ].join("");
 }
