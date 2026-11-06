@@ -1060,7 +1060,8 @@ describe("R810: a record on a pinned build writes only the rows already committe
     });
 
     test("expectedPathFor is a subfolder the hook's real glob does not match", async () => {
-      const p = expectedPathFor("/r/packages/runner/itest/a.baseline.json");
+      // The hook normalizes backslashes the same way, and Windows's `join` gives them.
+      const p = expectedPathFor("/r/packages/runner/itest/a.baseline.json").replaceAll("\\", "/");
       expect(p).toBe("/r/packages/runner/itest/expected/a.baseline.json");
       // The regex is read out of the hook itself, not retyped here.
       const hook = await readFile(
