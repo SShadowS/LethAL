@@ -301,7 +301,7 @@ export interface FileResult {
   readonly checked: number;
   readonly findings: readonly Finding[];
   readonly stats: Stats;
-  /** Guards whose `else` the `guard-in-loop` check walked, so a blind check shows as 0. */
+  /** Loops the `guard-in-loop` check saw under a guard's `else`, so a blind check shows as 0. */
   readonly walked: number;
 }
 
@@ -336,8 +336,8 @@ export async function checkFile(fc: FileCase, withDetail = true): Promise<FileRe
     return { checked: 0, findings, stats, walked: 0 };
   }
   // R827: the fold compares meaning, so it cannot see WHEN a guard runs. This reads that from the
-  // emitted tree: a free body's guard holds the body in its `else`, and no guard may sit inside a
-  // loop there, where it would run on every pass (R246).
+  // emitted tree: a guard holds the code in its `else`, and no guard may sit inside a loop there,
+  // where it would run on every pass (R246).
   let walked = 0;
   const isGuard = (n: ALSyntaxNode): boolean => {
     const c = n.rawKind === "if_statement" ? n.childForFieldName("condition") : null;
@@ -359,7 +359,8 @@ export async function checkFile(fc: FileCase, withDetail = true): Promise<FileRe
   };
   // Every guard is walked. Inside a guard's `else` (a free body's, or an `if`'s original branch, or
   // the next link of a chain) no guard may sit inside a loop: it would run on every pass (R246).
-  // A guard outside any `else` may sit in a loop: that is a root nothing hosts, as before.
+  // A guard outside any `else` may sit in a loop: that is a root nothing hosts, as before. R-836:
+  // `walked` counts the outermost loops seen under an `else`, so a check that walked no loop shows as 0.
   const walk = (n: ALSyntaxNode, underElse: boolean, inLoop: boolean): void => {
     const id = idOf(n);
     if (id !== undefined) {
@@ -367,7 +368,6 @@ export async function checkFile(fc: FileCase, withDetail = true): Promise<FileRe
         add(none, "guard-in-loop", n.text.slice(0, 60));
         return;
       }
-      walked++;
       const then = n.childForFieldName("then_branch");
       const els = n.childForFieldName("else_branch");
       if (then !== null) walkPlain(then);
@@ -375,6 +375,7 @@ export async function checkFile(fc: FileCase, withDetail = true): Promise<FileRe
       return;
     }
     const loop = inLoop || EXECUTION_LOOPS.has(n.rawKind);
+    if (underElse && loop && !inLoop) walked++;
     for (const c of n.children) walk(c, underElse, loop);
   };
   const count = (n: ALSyntaxNode): void => {

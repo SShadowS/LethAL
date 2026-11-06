@@ -104,7 +104,7 @@ interface DirResult {
   free: number;
   /** R828 O1: components with other components inside them. */
   split: number;
-  /** R827: guards the `guard-in-loop` check walked. */
+  /** R827: loops the `guard-in-loop` check saw under a guard's `else`. */
   walked: number;
   findings: Finding[];
 }
@@ -198,7 +198,6 @@ describe("R828: the same, with empty-block left out", () => {
         split += r.split;
         findings.push(...r.findings);
         expect(r.refused).toBe(0);
-        if (r.mutants > 0) expect(r.walked).toBeGreaterThan(0);
       }
       console.log(`[r828] ${rel}: ${mutants} mutants, ${split} split, ${findings.length} findings`);
       expect(mutants).toBeGreaterThan(0);
@@ -412,7 +411,7 @@ describe("R827: a free body keeps its guards out of its loops", () => {
     const r = await checkSource(LOOPS_AL);
     expect(r.mutants).toBeGreaterThan(20);
     expect(r.free).toBe(4);
-    // A chain's deletion can look like a free guard too, so at least: a blind check walks none.
+    // Each of the four bodies holds a loop, so a check that went blind sees fewer.
     expect(r.walked).toBeGreaterThanOrEqual(r.free);
     expect(r.findings.map((f) => `${f.mutantId} ${f.kind}: ${f.detail}`)).toEqual([]);
   });
@@ -655,7 +654,7 @@ describe("R828 O1: the shapes, folded, equal the mutant written by hand", () => 
     const r = await checkSource(SHAPES_AL);
     expect(r.mutants).toBeGreaterThan(60);
     expect(r.split).toBeGreaterThan(5);
-    expect(r.walked).toBeGreaterThan(r.free);
+    expect(r.walked).toBeGreaterThan(0);
     expect(r.findings.map((f) => `${f.mutantId} ${f.operator} ${f.kind}: ${f.detail}`)).toEqual([]);
   });
 
@@ -664,6 +663,8 @@ describe("R828 O1: the shapes, folded, equal the mutant written by hand", () => 
     expect(r.mutants).toBeGreaterThan(40);
     expect(r.free).toBe(0);
     expect(r.split).toBeGreaterThan(3);
+    // The loops under a host's `else` are walked: the `if` holding a loop is one of them.
+    expect(r.walked).toBeGreaterThan(0);
     expect(r.findings.map((f) => `${f.mutantId} ${f.operator} ${f.kind}: ${f.detail}`)).toEqual([]);
   });
 
@@ -694,7 +695,7 @@ describe("R828 O1: the shapes, folded, equal the mutant written by hand", () => 
     const source = `codeunit 51998 "R828 Shapes"\n{\n    procedure P(C: Integer; N: Integer) var I: Integer; T: Integer;\n    begin\n        if C > 0 then\n            for I := 1 to N do\n                T += 1;\n    end;\n}\n`;
     const r = await checkSource(source, ["empty-block", "loop-skip", "loop-truncate"]);
     expect(r.split).toBe(1);
-    expect(r.walked).toBeGreaterThan(2);
+    expect(r.walked).toBeGreaterThan(0);
     expect(r.findings.map((f) => `${f.mutantId} ${f.operator} ${f.kind}: ${f.detail}`)).toEqual([]);
   });
 });
