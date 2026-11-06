@@ -10,7 +10,7 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
-import { checkDependents, dependentsWarning, testsAppIdOf } from "../src/dependents-warning";
+import { dependentsWarning, readDependents, testsAppIdOf } from "../src/dependents-warning";
 import { createEmitter } from "../src/events";
 import type { RunEvent } from "../src/events";
 import type { InstalledDependent } from "../src/harness";
@@ -64,7 +64,7 @@ describe("R733 dependentsWarning (pure)", () => {
   });
 });
 
-describe("R733 checkDependents", () => {
+describe("R733 readDependents (the read the session shares with the R843 clash check)", () => {
   const dirs: string[] = [];
   afterEach(() => removeScratchDirs(dirs.splice(0)));
   async function testDir(): Promise<string> {
@@ -76,20 +76,28 @@ describe("R733 checkDependents", () => {
 
   test("names the other dependent and leaves the tests app (by its app.json id) out", async () => {
     const dir = await testDir();
-    const m = await checkDependents(
+    const both = await readDependents(
       { installedDependents: async () => [TESTS_DEP, OTHER_DEP] },
       dir,
       TARGET,
     );
+    expect(both?.read).toEqual([TESTS_DEP, OTHER_DEP]);
+    expect(both?.testsAppId).toBe(TESTS_ID.toLowerCase());
+    const m = both === null ? null : dependentsWarning(both.read, both.testsAppId, TARGET);
     expect(m).toContain("Customer Extension");
     expect(m).not.toContain("The Tests");
+    const only = await readDependents(
+      { installedDependents: async () => [TESTS_DEP] },
+      dir,
+      TARGET,
+    );
     expect(
-      await checkDependents({ installedDependents: async () => [TESTS_DEP] }, dir, TARGET),
+      only === null ? "none" : dependentsWarning(only.read, only.testsAppId, TARGET),
     ).toBeNull();
   });
 
-  test("a failed read warns and does not throw", async () => {
-    const m = await checkDependents(
+  test("a failed read is returned as the error, not thrown, and warns", async () => {
+    const got = await readDependents(
       {
         installedDependents: async () => {
           throw new Error("down");
@@ -98,12 +106,16 @@ describe("R733 checkDependents", () => {
       await testDir(),
       TARGET,
     );
+    expect(got).not.toBeNull();
+    if (got === null) return;
+    expect(Array.isArray(got.read)).toBe(false);
+    const m = dependentsWarning(got.read, got.testsAppId, TARGET);
     expect(m).toContain("could not check");
     expect(m).toContain("down");
   });
 
-  test("a backend without installedDependents: no message", async () => {
-    expect(await checkDependents({}, await testDir(), TARGET)).toBeNull();
+  test("a backend without installedDependents: no call, null", async () => {
+    expect(await readDependents({}, await testDir(), TARGET)).toBeNull();
   });
 });
 
