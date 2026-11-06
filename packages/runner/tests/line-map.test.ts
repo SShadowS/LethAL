@@ -487,12 +487,12 @@ describe("GH-09: measured coverage rows over the namespaced sandbox-app", () => 
     await initParser();
   });
 
-  // Measured, not derived: `LETHAL_FENCED_COVERAGE_DUMP` of `itest:bcdev` on bc2, 2026-11-06 (R-836,
-  // /coord/handoff/R-836/fenced-rows.jsonl), `Codeunit 79000`, positive hits, lineNo > 0. Taken again
-  // because R827 changed the layout; GH-09's first rows were on Cronus28, 2026-09-26.
+  // Measured, not derived: `LETHAL_FENCED_COVERAGE_DUMP` of `itest:bcdev` on bc2, 2026-11-06 (R-851,
+  // /coord/handoff/R-828/o1/bc2/fenced-rows.jsonl), `Codeunit 79000`, positive hits, lineNo > 0. Taken
+  // again because R828's O1 changed the layout; GH-09's first rows were on Cronus28, 2026-09-26.
   // BC emits a row only for a statement that executed, never for a `procedure` line.
   const OVER_BUDGET_DETECTED = [9, 10, 12, 15];
-  const CLAMP_PERCENT_RUNS = [20, 21, 24, 27, 31, 34, 37, 42, 43, 46, 51, 52, 54, 58, 62, 67, 68];
+  const CLAMP_PERCENT_RUNS = [20, 21, 24, 27, 31, 34, 37, 42, 43, 46, 51, 52, 54, 56, 57, 60];
 
   test("GH-09: the measured namespaced rows resolve under base 1 (OverBudgetDetected to IsOverBudget, ClampPercentRuns never to IsOverBudget)", async () => {
     const repo = resolve(import.meta.dir, "../../..");
