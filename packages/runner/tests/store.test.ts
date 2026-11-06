@@ -1395,6 +1395,61 @@ CREATE TABLE IF NOT EXISTS mutants (
       );
       store.close();
     });
+
+    const newRun = (store: ResultsStore) =>
+      store.createRun({
+        testScope: [],
+        coverageMode: "procedure",
+        testAppHash: "T",
+        testAppProven: true,
+        testAppDeps: "D",
+        identityScheme: IDENTITY_SCHEME,
+        buildSymbols: [],
+        projectPath: "/p",
+        backend: "bcdev",
+        appVersion: "1",
+      });
+
+    test("SE1. a corrupt stop_evidence value throws, naming the value and the mutant row", () => {
+      const store = new ResultsStore(":memory:");
+      const runId = newRun(store);
+      store.recordMutant(runId, mutantRow("timeout-killed", { killingTest: "T" }));
+      store.db.query("UPDATE mutants SET stop_evidence = ? WHERE run_id = ?").run("hub", runId);
+      expect(() => store.mutantVerdicts(runId)).toThrow(
+        /astHash=abc123.*codeunitName=Sample.*corrupt "stop_evidence" column value "hub"/,
+      );
+      store.close();
+    });
+
+    test("SE2. invalidateBatch sets stop_evidence to NULL in the column", () => {
+      const store = new ResultsStore(":memory:");
+      const runId = newRun(store);
+      store.recordMutant(
+        runId,
+        mutantRow("timeout-killed", { killingTest: "T", stopEvidence: "begin-transaction-world" }),
+      );
+      expect(store.invalidateBatch(runId, 0, "unattested")).toBe(1);
+      const col = store.db
+        .query("SELECT stop_evidence AS s FROM mutants WHERE run_id = ?")
+        .get(runId) as { s: string | null };
+      expect(col.s).toBeNull();
+      store.close();
+    });
+
+    test("SE3. a lost batch reads back with no stopEvidence", () => {
+      const store = new ResultsStore(":memory:");
+      const runId = newRun(store);
+      store.recordMutant(
+        runId,
+        mutantRow("timeout-killed", { killingTest: "T", stopEvidence: "bc-named-stop" }),
+      );
+      expect(store.mutantVerdicts(runId)[0]?.stopEvidence).toBe("bc-named-stop");
+      store.markBatchLost(runId, 0, "lease lost");
+      const row = store.mutantVerdicts(runId)[0];
+      expect(row?.verdict).toBe("error");
+      expect("stopEvidence" in (row ?? {})).toBe(false);
+      store.close();
+    });
   });
 });
 // C02-06: the five columns `lethal verify` reads, and the queries that read them.

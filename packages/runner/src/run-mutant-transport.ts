@@ -108,11 +108,20 @@ function stampManyStop(
  * (WSL2 time sync) cannot shorten or lengthen a measured duration. `Date.now()` stays only for
  * wall timestamps (trace `at:`, poll `sentAt`).
  */
-const monoNow = (): number => Math.floor(performance.now());
+export const transportClock = { now: (): number => Math.floor(performance.now()) };
+const monoNow = (): number => transportClock.now();
+
+/**
+ * GitHub #49 / R53 spec section 4.2: BC 29's 400 scores only if it arrives within this long of
+ * our stop firing. A later 400 quarantines like any other. The 408 keeps the whole grace.
+ */
+export const STOP_400_WINDOW_MS = 10_000;
 
 /** R-204b: the single path's stop, per call. `done` settles `state`; it never rejects. */
 interface StopTracker {
   fired: boolean;
+  /** `monoNow()` when the stop fired. */
+  firedAt?: number;
   state?: StopState;
   error?: unknown;
   refusal?: string;
@@ -1200,6 +1209,7 @@ export class RunMutantTransport {
     const controller = new AbortController();
     let settled = false;
     let stopFired = false;
+    let stopFiredAt: number | undefined;
     let stopConfirmed = false;
     let stopHookError: unknown;
     let stopDecision: { methodIndex: number; token: string; ref: TestMethodRef } | undefined;
@@ -1321,6 +1331,7 @@ export class RunMutantTransport {
         }
         if (stopFired) continue; // decided already; waiting for the held request
         stopFired = true;
+        stopFiredAt = monoNow();
         stopDecision = { methodIndex: row.methodIndex, token: row.token, ref: entry.ref };
         let answer: StopAtAnswer;
         stopSentAt = monoNow() - started;
@@ -1447,7 +1458,11 @@ export class RunMutantTransport {
     await watchdog;
     const durationMs = monoNow() - started;
 
-    const worldStop = isBeginTransactionWorldStop(res.status, rawBody);
+    // The 400 counts only within STOP_400_WINDOW_MS of our stop firing; later it quarantines.
+    const worldStop =
+      isBeginTransactionWorldStop(res.status, rawBody) &&
+      stopFiredAt !== undefined &&
+      monoNow() - stopFiredAt <= STOP_400_WINDOW_MS;
     if (stopFired && (worldStop || isAlStopResponse(res.status, rawBody))) {
       const decision = stopDecision;
       if (decision === undefined || !stopConfirmed) {
@@ -1963,6 +1978,7 @@ export class RunMutantTransport {
         ? setTimeout(() => controller.abort(), timeoutMs)
         : setTimeout(() => {
             stop.fired = true;
+            stop.firedAt = monoNow();
             stop.state = "issued";
             // Not awaited here: this runs off a timer while the request is still open, and the
             // answer we score arrives on the request. R-204b: `execute` awaits `done` (bounded by
@@ -2112,7 +2128,13 @@ export class RunMutantTransport {
       // only once OUR stop is known `confirmed`; `stop.done` never rejects and is awaited within
       // the call's remaining grace, exactly as `settleStop` does. Any other state keeps the
       // quarantine below.
-      if (stop.fired && text !== undefined && isBeginTransactionWorldStop(res.status, text)) {
+      if (
+        stop.fired &&
+        text !== undefined &&
+        stop.firedAt !== undefined &&
+        monoNow() - stop.firedAt <= STOP_400_WINDOW_MS &&
+        isBeginTransactionWorldStop(res.status, text)
+      ) {
         const left = stopDeadline - monoNow();
         if (stop.state === "issued" && stop.done !== undefined && left > 0) {
           await bounded(stop.done, left, "the stop").catch(() => {});

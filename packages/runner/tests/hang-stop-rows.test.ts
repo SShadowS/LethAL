@@ -6,6 +6,7 @@ import {
   stopRowFailures,
   stopWordsProblem,
 } from "../itest/hang-stop-rows";
+import { DEFAULT_BC_HOST } from "../src/bc-host";
 
 /** R582 (U6): itest:hang's two-stop check, one red test per direction. */
 const STOP = "BC stopped the session: the AL StopSession call ended it";
@@ -31,17 +32,32 @@ const check400 = (
   mm: { mutantCode: string; killingTest: string; stopEvidence?: string } = m400,
 ) => stopRowFailures("ON", mm, rows, 20_000, 30_000, form);
 
+const srv = (port: number) => ({ server: `http://${DEFAULT_BC_HOST}`, port });
+
 describe("GitHub #49: one stop form per server", () => {
   test("stopFormFor: bc1-bc3 are the 408 form, bc4 the 400 form", () => {
-    expect(stopFormFor("lethal.config.bc1.json")).toBe("408");
-    expect(stopFormFor("lethal.config.bc2.json")).toBe("408");
-    expect(stopFormFor("lethal.config.bc3.json")).toBe("408");
-    expect(stopFormFor("lethal.config.bc4.json")).toBe("400");
+    expect(stopFormFor("lethal.config.bc1.json", srv(7049), {})).toBe("408");
+    expect(stopFormFor("lethal.config.bc2.json", srv(7149), {})).toBe("408");
+    expect(stopFormFor("lethal.config.bc3.json", srv(7249), {})).toBe("408");
+    expect(stopFormFor("lethal.config.bc4.json", srv(7449), {})).toBe("400");
   });
 
   test("stopFormFor refuses a config it cannot place, the parked default included", () => {
-    expect(() => stopFormFor("lethal.config.local.json")).toThrow("cannot tell");
-    expect(() => stopFormFor("lethal.config.bc5.json")).toThrow("cannot tell");
+    expect(() => stopFormFor("lethal.config.local.json", srv(7049), {})).toThrow("cannot tell");
+    expect(() => stopFormFor("lethal.config.bc5.json", srv(7049), {})).toThrow("cannot tell");
+  });
+
+  test("PORT1. a file named bc4 with a BC 28 port throws, not a 400 form", () => {
+    expect(() => stopFormFor("lethal.config.bc4.json", srv(7049), {})).toThrow("not bc4");
+  });
+
+  test("PORT2. a file named bc1 with the BC 29 port throws, not a 408 form", () => {
+    expect(() => stopFormFor("lethal.config.bc1.json", srv(7449), {})).toThrow("not bc1");
+  });
+
+  test("PORT3. a bc4 file naming no server, or a port on no known server, throws", () => {
+    expect(() => stopFormFor("lethal.config.bc4.json", {}, {})).toThrow("not bc4");
+    expect(() => stopFormFor("lethal.config.bc4.json", srv(7349), {})).toThrow("not bc4");
   });
 
   test("a 400 body with the 400 form and evidence holds on BC 29", () => {

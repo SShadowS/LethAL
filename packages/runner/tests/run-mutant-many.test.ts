@@ -4,7 +4,12 @@ import { join } from "node:path";
 import type { ActivationConfig } from "../src/activation";
 import type { TestMethodRef } from "../src/backend";
 import { UnfilteredExtensionsQueryError } from "../src/harness";
-import { ControlDrainTimeoutError, RunMutantTransport } from "../src/run-mutant-transport";
+import {
+  ControlDrainTimeoutError,
+  RunMutantTransport,
+  STOP_400_WINDOW_MS,
+  transportClock,
+} from "../src/run-mutant-transport";
 import type { RunMutantManyRequest, RunMutantManyResult } from "../src/run-mutant-transport";
 import { GROUP_SUITE_UNRESOLVED_HEAD, groupedFoundNone } from "../src/stale-test-app";
 import { scratchDirs } from "./helpers/scratch";
@@ -1384,6 +1389,41 @@ describe("runMany, GitHub #49: the BC 29 stop answer is a 400", () => {
     );
     expect(r.verdict.outcome).toBe("error");
     expect(r.cause).toBe("stopped-after-completion");
+  });
+
+  /** A fake clock: `lateBy` ms pass between the stop firing and the 400 arriving. */
+  async function four00After(lateBy: number) {
+    const realNow = transportClock.now;
+    let clock = 1_000;
+    transportClock.now = () => clock;
+    try {
+      const f = fakes({
+        many: "hold",
+        status: () => statusOf(),
+        stopAt: () => {
+          clock += lateBy;
+          setTimeout(() => f.release(new Response(WORLD_400, { status: 400 })), 5);
+          return { stopped: true, sessionId: 9 };
+        },
+      });
+      const r = await transport(f.fetchFn).runMany(req({ stopHungSessions: true }));
+      if (r.kind !== "call") throw new Error("expected a call-level answer");
+      return r;
+    } finally {
+      transportClock.now = realNow;
+    }
+  }
+
+  test("T400a. the 400 exactly at the window's edge scores", async () => {
+    const r = await four00After(STOP_400_WINDOW_MS);
+    expect(r.verdict.outcome).toBe("timeout");
+    expect(r.verdict.stopEvidence).toBe("begin-transaction-world");
+  });
+
+  test("T400b. the 400 one ms past the window quarantines", async () => {
+    const r = await four00After(STOP_400_WINDOW_MS + 1);
+    expect(r.verdict.outcome).not.toBe("timeout");
+    expect(r.verdict.operation).toBe("in-flight-unknown");
   });
 
   test("the exact 400 with no stop of ours stays in-flight-unknown", async () => {

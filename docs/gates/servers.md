@@ -2,7 +2,7 @@
 
 The BC gates run on the three BC on Linux servers, `bc1`, `bc2` and `bc3` (R589). CLAUDE.md
 §"Integration tests" holds the rules for using them. This page holds the details. A fourth server, `bc4`, runs BC 29
-and is not a gate server yet: see [bc4](#bc4-bc-29-not-proven-for-any-gate) below.
+and has its own proof table: see [bc4](#bc4-bc-29) below.
 
 ## The servers
 
@@ -510,7 +510,7 @@ testapp, lease), in `/coord/handoff/R-604/bc2-<gate>.log`. Every one of them pas
 `p2-master-agreement-bc2.log`), and the orchestrator accepted the R-583-code PASS in its place
 (`/coord/handoff/R-583/gates.md`).
 
-## bc4: BC 29, not proven for any gate
+## bc4: BC 29
 
 `bc4` is BC 29 W1, build 29.0.54011.57673, on the same host as bc1-bc3 (OData 7448, dev 7449, API 7452, company
 `CRONUS International Ltd.`), allocated to lethal (R-826b, R833, GitHub #49 and #47). bc1-bc3 stay BC 28.4 and
@@ -524,11 +524,33 @@ nothing about them changes.
   server and per build, so a bc4 fill never replaces a 28.4 dir. A fixture's `.alpackages` is per worktree, not per
   server: `bc-republish.ts alpackages --server bc4` overwrites that worktree's 28.4 symbols, so use a worktree of
   its own for bc4 and do not run a 28.4 gate or compile there.
-- **No gate is proven on bc4.** The proof rule below applies in full: a gate runs on bc4 only after its frozen
-  figures reproduce per mutant ON bc4, under the current fixtures. BC 29 is a new platform, so a difference may be
-  BC moving rather than a LethAL bug; it is still a BLOCK. Do not re-record: whether bc4 gets its own baselines is
-  the owner's call. Until a row for bc4 is in a proof table, use bc4 only for read-only predicts and the work R833
-  names.
+- **The proof rule applies in full.** A gate runs on bc4 only after its frozen figures reproduce per mutant ON bc4,
+  under the current fixtures. BC 29 is a new platform, so a difference may be BC moving rather than a LethAL bug; it
+  is still a BLOCK. Do not re-record: whether bc4 gets its own baselines is the owner's call. A gate with no row in
+  the table below is not proven on bc4: use bc4 only for read-only predicts and the work R833 names.
+- **The 408 form is not measured on bc4.** Every hang on bc4 answered the 400 (GitHub #49). `itest:hang` accepts
+  the 400 form on bc4 and the 408 form on bc1-bc3 (`stopFormFor`, which also checks the config's port).
+
+### bc4 proof table (R-826b, 2026-11-06, LethAL Control 1.0.0.25)
+
+Each of the 13 non-hang gates passed once on bc4. Logs are `/coord/handoff/R-826b/bc4/<gate>.log`.
+
+| server | gate | LethAL Control | proof (log) |
+|---|---|---|---|
+| `bc4` | `itest:bcdev` | 1.0.0.25 | `/coord/handoff/R-826b/bc4/bcdev.log` |
+| `bc4` | `itest:bcdev-wrapped` | 1.0.0.25 | `/coord/handoff/R-826b/bc4/bcdev-wrapped.log` |
+| `bc4` | `itest:bcdev-names` | 1.0.0.25 | `/coord/handoff/R-826b/bc4/bcdev-names.log` |
+| `bc4` | `itest:tables` | 1.0.0.25 | `/coord/handoff/R-826b/bc4/tables.log` |
+| `bc4` | `itest:verify` | 1.0.0.25 | `/coord/handoff/R-826b/bc4/verify.log` |
+| `bc4` | `itest:verify-scale` | 1.0.0.25 | `/coord/handoff/R-826b/bc4/verify-scale.log` |
+| `bc4` | `itest:stale-publish` | 1.0.0.25 | `/coord/handoff/R-826b/bc4/stale-publish.log` |
+| `bc4` | `itest:testapp` | 1.0.0.25 | `/coord/handoff/R-826b/bc4/testapp.log` |
+| `bc4` | `itest:lease` | 1.0.0.25 | `/coord/handoff/R-826b/bc4/lease.log` |
+| `bc4` | `itest:chunked` | 1.0.0.25 | `/coord/handoff/R-826b/bc4/chunked.log` |
+| `bc4` | `itest:harden` | 1.0.0.25 | `/coord/handoff/R-826b/bc4/harden.log` |
+| `bc4` | `itest:agreement` | 1.0.0.25 | `/coord/handoff/R-826b/bc4/agreement.log` |
+| `bc4` | `itest:lend` | 1.0.0.25 | `/coord/handoff/R-826b/bc4/lend.log` |
+| `bc4` | `itest:hang` (400 form) | 1.0.0.25 | at 883963a6, before the R-826b review fixes: `/coord/handoff/R-658/hang-bc4-20261106T203052Z-2289735/` |
 
 ## bc-demo: not a gate server (R663)
 

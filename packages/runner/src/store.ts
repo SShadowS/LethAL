@@ -1382,6 +1382,19 @@ export class ResultsStore {
     };
   }
 
+  /** GitHub #49: a stored `stop_evidence` is one of the two names, or the row is corrupt: throw. */
+  private parseStopEvidence(
+    value: string,
+    row: { astHash: string; codeunitName: string; operatorName: string; operatorMajor: number },
+  ): StopEvidence {
+    if (value === "bc-named-stop" || value === "begin-transaction-world") return value;
+    throw new Error(
+      `store.ts: mutant row (astHash=${row.astHash}, codeunitName=${row.codeunitName}, ` +
+        `operatorName=${row.operatorName}, operatorMajor=${row.operatorMajor}) has a corrupt ` +
+        `"stop_evidence" column value ${JSON.stringify(value)} — expected "bc-named-stop", "begin-transaction-world", or NULL`,
+    );
+  }
+
   /**
    * Validates a `runner` column value read back from SQLite. NULL is the documented default (the
    * column is nullable — pre-Task-5 rows predate it, and `migrate()` widens existing tables without
@@ -1391,14 +1404,6 @@ export class ResultsStore {
    * (CLAUDE.md "fail loudly on caller-contract violations"), a corrupt DB value must throw naming
    * itself and the offending row, never get coerced into a guessed default.
    */
-  /** GitHub #49: a stored `stop_evidence` is one of the two names, or the row is corrupt: throw. */
-  private parseStopEvidence(value: string): StopEvidence {
-    if (value === "bc-named-stop" || value === "begin-transaction-world") return value;
-    throw new Error(
-      `store.ts: mutant row has a corrupt "stop_evidence" column value ${JSON.stringify(value)} — expected "bc-named-stop", "begin-transaction-world", or NULL`,
-    );
-  }
-
   private parseRunnerKind(
     value: string,
     row: { astHash: string; codeunitName: string; operatorName: string; operatorMajor: number },
@@ -1520,7 +1525,14 @@ export class ResultsStore {
         ...(r.killing_test_failure !== null ? { killingTestFailure: r.killing_test_failure } : {}),
         ...(r.kill_position !== null ? { killPosition: r.kill_position } : {}),
         ...(r.stop_evidence !== null
-          ? { stopEvidence: this.parseStopEvidence(r.stop_evidence) }
+          ? {
+              stopEvidence: this.parseStopEvidence(r.stop_evidence, {
+                astHash: r.ast_hash,
+                codeunitName: r.codeunit_name,
+                operatorName: r.operator_name,
+                operatorMajor: r.operator_major,
+              }),
+            }
           : {}),
         ...(r.kill_reproduced === 1 ? { killReproduced: true as const } : {}),
         ...(r.reproduced_failure !== null ? { reproducedFailure: r.reproduced_failure } : {}),

@@ -22504,9 +22504,17 @@ describe("R577: a kill must reproduce under the mutant", () => {
   });
 
   test("T9x: the same 400 after a REFUSED stop is not a kill: the re-run quarantines", async () => {
-    const { backend } = worldStopStub({ stopped: false, reason: "already-completed" });
+    const { backend, calls } = worldStopStub({ stopped: false, reason: "already-completed" });
     const { report, store } = await run(backend);
-    for (const m of report.mutants) expect(m.verdict).not.toBe("timeout-killed");
+    // The 400 was reached (the held RunMutant answered), and it quarantined: nothing scored.
+    expect(calls).toContain("RunMutant");
+    expect(report.mutants.length).toBeGreaterThan(0);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("error");
+      expect(m.failureNote).toContain("quarantined");
+      expect(m.failureNote).toContain("HTTP 400");
+      expect(m.stopEvidence).toBeUndefined();
+    }
     store.close();
   });
 
@@ -23128,7 +23136,7 @@ describe("runSession — R658: a stopped unmutated run", () => {
     expect(s.m2?.verdict).toBe("error");
     expect(s.m2?.cause).toBe("confirm-stopped");
     expect(s.m2?.failureNote).toContain(
-      "LethAL stopped it (BC's 408, or the op was already tombstoned by that stop), so the fail",
+      "LethAL stopped it (BC's 408, or on BC 29 its exact 400 after our confirmed stop, or the op was already tombstoned by that stop), so the fail",
     );
     expect(s.record).toBeNull();
     expect(s.report.mutants.find((m) => m.mutantCode === "M0003")).toBeDefined();

@@ -55,7 +55,7 @@ export function itestTargetLine(configName: string, bcdev: TargetFields): string
 }
 
 /** BC's dev-endpoint port when nothing states one (bc-dev-mcp's and altool's default). */
-const DEFAULT_DEV_PORT = 7049;
+export const DEFAULT_DEV_PORT = 7049;
 
 /** A URL with any `user:pass@` removed, so a login written into a URL cannot reach the line. */
 function withoutUserinfo(url: string): string {

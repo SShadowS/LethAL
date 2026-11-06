@@ -8,6 +8,9 @@
  * (`tests/hang-stop-rows.test.ts`).
  */
 
+import { DEFAULT_DEV_PORT } from "./config-path";
+import { markedServerFor } from "./out-of-use";
+
 /**
  * GitHub #49 / R833: which answer BC gives the held request after our confirmed stop. BC 28 answers
  * the 408 naming the AL `StopSession` call; BC 29 answers the exact 400 (measured on `bc4`
@@ -25,12 +28,26 @@ export const STOP_EVIDENCE_FOR_FORM: Record<StopForm, "bc-named-stop" | "begin-t
  * bc1-bc3 are BC 28.4, bc4 is BC 29. Any other name is refused, never guessed: the parked Cronus28
  * default has no measured form here.
  */
-export function stopFormFor(configName: string): StopForm {
+export function stopFormFor(
+  configName: string,
+  bcdev: { readonly server?: string; readonly port?: number },
+  env: NodeJS.ProcessEnv = process.env,
+): StopForm {
   const m = /^lethal\.config\.bc([1-4])\.json$/.exec(configName);
   const n = m?.[1];
   if (n === undefined) {
     throw new Error(
       `the hang gate cannot tell which stop answer to expect from config ${JSON.stringify(configName)}: use lethal.config.bc1.json to bc4.json (bc1-bc3 are BC 28, bc4 is BC 29)`,
+    );
+  }
+  // The file name is not proof: cross-check it against the server the config really names.
+  const u = bcdev.server === undefined ? undefined : new URL(bcdev.server);
+  const devPort =
+    bcdev.port ?? (u !== undefined && u.port !== "" ? Number(u.port) : DEFAULT_DEV_PORT);
+  const marked = u === undefined ? undefined : markedServerFor(u.hostname, devPort, env);
+  if (marked !== `bc${n}`) {
+    throw new Error(
+      `config ${configName} names server ${u?.hostname ?? "(none)"}:${devPort}, which is ${marked ?? "not a known bc1-bc4 server"}, not bc${n}: the hang gate will not guess the stop answer from a file name that disagrees with the server`,
     );
   }
   return n === "4" ? "400" : "408";

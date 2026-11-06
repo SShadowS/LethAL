@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { MutantManifestEntry } from "@lethal/schemata";
 import type { StopEvidence } from "../src/backend";
-import { CAVEAT_INTERPRETATIONS, renderConsole } from "../src/report";
+import { CAVEAT_INTERPRETATIONS, ERROR_CAUSE_INTERPRETATIONS, renderConsole } from "../src/report";
 import type { SessionOutcome } from "../src/report";
 import { legacyBuildReport } from "./helpers/legacy-report";
 
@@ -203,5 +203,18 @@ describe("validity caveat: stop-answer-400 (GitHub #49)", () => {
     expect(t).toContain("6 of 6");
     expect(t).toContain("4 runs with no stop");
     expect(t).toContain("session list was not read");
+    // The two builds: ours (.57673) and the issue's (.57293).
+    expect(t).toContain(".57673");
+    expect(t).toContain(".57293");
+  });
+
+  test("the 408-only wording is gone from the stop texts (they are true on bc4 too)", () => {
+    for (const t of [
+      CAVEAT_INTERPRETATIONS["baseline-test-stopped"].meaning,
+      ERROR_CAUSE_INTERPRETATIONS["confirm-stopped"].meaning,
+    ]) {
+      expect(t).not.toContain("BC confirmed with its 408");
+      expect(t).toContain("exact 400");
+    }
   });
 });

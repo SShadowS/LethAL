@@ -442,8 +442,8 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       'not called" (row field `stopEvidence`: `begin-transaction-world`), not in the 408 that ' +
       "names the stop. BC did not name the stop. The verdict rests on LethAL's own stop being " +
       "confirmed plus that exact 400 arriving on the held request. Evidence limit: measured on " +
-      "6 of 6 hangs on one BC 29 build, in 4 runs with no stop the text never appeared, and " +
-      "BC's own session list was not read.",
+      "6 of 6 hangs on one BC 29 build (29.0.54011.57673; the issue's server was .57293), in 4 " +
+      "runs with no stop the text never appeared, and BC's own session list was not read.",
     entailedNegative:
       "A BC build that uses this text for some other failure after a confirmed stop of ours " +
       "would score wrongly. Weaker than the 408 form, and permanent: `--resume` carries it. " +
@@ -624,8 +624,9 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
   "baseline-test-stopped": {
     meaning:
       "One or more baseline tests ran past `--baseline-timeout-ms` with no mutant active, and " +
-      "LethAL stopped each one on the server (BC confirmed with its 408, or the op was already " +
-      "tombstoned by that stop). They are `timeout`, " +
+      "LethAL stopped each one on the server (BC answered the held request with its 408, or on " +
+      "BC 29 with the exact 400 after our confirmed stop, or the op was already tombstoned by " +
+      "that stop). They are `timeout`, " +
       "not green, so they cover no mutant: a mutant covered only by them reads `no-coverage` " +
       "(see baseline-red). The server was left clean. LethAL stops such a test whether or not " +
       "`--stop-hung-sessions` is given, because an abandoned one keeps running and blocks the " +
@@ -978,7 +979,8 @@ export const ERROR_CAUSE_INTERPRETATIONS: Record<MutantErrorCause, Interpretatio
     meaning:
       "The test failed or timed out under the mutant. LethAL then ran it with no mutant active to " +
       "confirm the kill, and that run also ran past its budget, so LethAL stopped it on the server " +
-      "(BC confirmed with its 408, or the op was already tombstoned by that stop). A test that is " +
+      "(BC answered the held request with its 408, or on BC 29 with the exact 400 after our " +
+      "confirmed stop, or the op was already tombstoned by that stop). A test that is " +
       "slow or hangs with no mutant says nothing about the mutant. No verdict, and the server was " +
       "left clean. Raise `--baseline-timeout-ms` or `--mutant-timeout-ms` if the test is slow " +
       "rather than hung, and re-run with `--resume` (R658).",
@@ -3581,7 +3583,7 @@ export function renderConsole(r: SessionReport): string {
   if (r.baselineStopped !== undefined) {
     const n = r.baselineStopped.tests.length;
     lines.push(
-      `BASELINE TEST STOPPED: ${n} baseline test(s) ran past --baseline-timeout-ms (${r.baselineStopped.budgetMs} ms) and LethAL stopped them on the server (BC confirmed with its 408, or the op was already tombstoned by that stop). They are not green and cover no mutant; the server was left clean. Raise --baseline-timeout-ms if a test is slow rather than hung.`,
+      `BASELINE TEST STOPPED: ${n} baseline test(s) ran past --baseline-timeout-ms (${r.baselineStopped.budgetMs} ms) and LethAL stopped them on the server (BC answered the held request with its 408, or on BC 29 with the exact 400 after our confirmed stop, or the op was already tombstoned by that stop). They are not green and cover no mutant; the server was left clean. Raise --baseline-timeout-ms if a test is slow rather than hung.`,
     );
     for (const t of r.baselineStopped.tests.slice(0, 10)) lines.push(`  ${t}`);
     if (n > 10) lines.push(`  ... ${n - 10} more`);

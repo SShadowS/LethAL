@@ -134,7 +134,10 @@ printItestTarget(CONFIG_LOCAL_PATH);
  * BC 28 (bc1-bc3), the exact 400 on BC 29 (bc4). Only that one is accepted; a server that answers
  * the other form fails the gate. A config with no known form is refused here, before any leg runs.
  */
-const STOP_FORM: StopForm = stopFormFor(itestConfigName());
+const STOP_FORM: StopForm = stopFormFor(
+  itestConfigName(),
+  readFixtureConfig(CONFIG_LOCAL_PATH, itestConfigName()).bcdev ?? {},
+);
 console.log(`[hang] stop answer expected: the ${STOP_FORM} form`);
 
 /**

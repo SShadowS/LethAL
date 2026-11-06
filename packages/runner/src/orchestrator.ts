@@ -11918,7 +11918,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
           // `unstable` and not a kill; no quarantine.
           verdict = "error";
           cause = "confirm-stopped";
-          failureNote = `confirming ${ref.method}: unmutated, the test also ran past its ${confirmMs} ms budget and LethAL stopped it (BC's 408, or the op was already tombstoned by that stop), so the ${v.outcome} under the mutant is not attributed to it (R658)`;
+          failureNote = `confirming ${ref.method}: unmutated, the test also ran past its ${confirmMs} ms budget and LethAL stopped it (BC's 408, or on BC 29 its exact 400 after our confirmed stop, or the op was already tombstoned by that stop), so the ${v.outcome} under the mutant is not attributed to it (R658)`;
         } else {
           // Fails under the mutant AND at baseline: by construction this says nothing about the
           // mutant, so it stays `error cause=unstable` (the verdict is NOT reconsidered below).

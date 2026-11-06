@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, jest, test } from "bun:test";
 import type { ActivationConfig } from "../src/activation";
 import type { TestMethodRef, TestVerdict } from "../src/backend";
-import { RunMutantTransport } from "../src/run-mutant-transport";
+import {
+  RunMutantTransport,
+  STOP_400_WINDOW_MS,
+  transportClock,
+} from "../src/run-mutant-transport";
 import type { StopHookAnswer } from "../src/run-mutant-transport";
 
 /**
@@ -238,6 +242,40 @@ describe("GitHub #49: the single path scores BC 29's 400 only after a confirmed 
     await flush();
     return c;
   }
+
+  /** A fake clock: `lateBy` ms pass between the stop firing and the 400 arriving. */
+  async function lateGo(lateBy: number) {
+    const realNow = transportClock.now;
+    let clock = 5_000;
+    transportClock.now = () => clock;
+    try {
+      const c = start({
+        hook: async () => ({ stopped: true }),
+        status: () => row({ lastCompletedIndex: 0 }),
+      });
+      await flush();
+      jest.advanceTimersByTime(BUDGET);
+      await flush();
+      clock += lateBy;
+      c.run.resolve(WORLD());
+      await flush();
+      return c;
+    } finally {
+      transportClock.now = realNow;
+    }
+  }
+
+  test("W10. the 400 exactly at the window's edge scores", async () => {
+    const c = await lateGo(STOP_400_WINDOW_MS);
+    expect(c.out()?.outcome).toBe("timeout");
+    expect(c.out()?.stopEvidence).toBe("begin-transaction-world");
+  });
+
+  test("W11. the 400 one ms past the window quarantines", async () => {
+    const c = await lateGo(STOP_400_WINDOW_MS + 1);
+    expect(c.out()?.outcome).not.toBe("timeout");
+    expect(c.out()?.operation).toBe("in-flight-unknown");
+  });
 
   test("W1. the stop's reply first, then the 400: timeout, confirmed, no operation, no readback", async () => {
     const c = await go(async () => ({ stopped: true }));
