@@ -8,6 +8,7 @@ codeunit 78901 "Wrapped Top"
         if X > 10 then
             exit(X + 1);
         exit(X);
+#pragma warning restore AL0432
     end;
 
     procedure Twice(X: Integer): Integer
@@ -19,7 +20,6 @@ codeunit 78901 "Wrapped Top"
     // mutants would lose TwiceTop and read no-coverage, and Grow's would
     // gain TwiceTop. The unwrapped twin (WrappedTopTwin) has the same
     // text on the same lines, so the gate compares the two per mutant.
-    //
     // The statement-level #if below is part of the measured shape (I2).
     //
     // Do not shorten this comment, move Twice, or add a procedure to this

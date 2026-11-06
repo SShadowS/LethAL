@@ -88,6 +88,7 @@ const LOOPS = new Set([
   "foreach_statement",
   "with_statement",
   "case_branch",
+  "asserterror_statement",
 ]);
 const FLATTEN = new Set(["code_block", "statement_block", "empty_statement"]);
 
@@ -175,7 +176,10 @@ class Canon {
     let elseEmpty = false;
     if (k === "if_statement") {
       const els = n.childForFieldName("else_branch");
-      elseEmpty = els === null || this.stmts(els).length === 0;
+      // A throwaway walk, so this test counts nothing: `child` walks a non-empty `else` once more.
+      const probe = new Canon(this.original, this.instrumented, this.active);
+      elseEmpty = els === null || probe.stmts(els).length === 0;
+      if (elseEmpty && els !== null) this.stmts(els);
     }
     const strippedBefore = this.stats.latchDecls + this.stats.selectorDecls;
     for (const c of n.children) {

@@ -5,13 +5,13 @@ codeunit 79701 "Layout Beta"
         if X > 10 then
             exit(X + 1);
         exit(X);
+#pragma warning restore AL0432
     end;
 
     procedure Twice(X: Integer): Integer
     // R353. This header comment is load-bearing: it is what makes Twice's
     // span in the UNINSTRUMENTED text long enough to hold every line that
     // Grow occupies once Grow is instrumented.
-    //
     // At maxGuardsPerBatch 7 this file is batch 1 and Layout Alpha is
     // batch 0. Batch 0 copies this file verbatim, so the coverage index
     // built during batch 0 knows this layout: Grow on lines 3 to 8 and

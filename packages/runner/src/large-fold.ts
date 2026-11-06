@@ -3,7 +3,8 @@ import { type TierResolver, assignMutantIds, buildComponents, dedupeSpecs } from
 
 /**
  * R826: when one mutant's statement holds others, they share one guard chain and each branch repeats
- * the statement's text, so one emitted method grows with the square (R827). GitHub #28's 907-guard
+ * the statement's text, so one emitted method grows with the square. R827 took the largest cause away
+ * (a body's `empty-block`), and an `if` condition or a `case` arm is what is left. GitHub #28's 907-guard
  * file stopped a BC service tier with a stack overflow, and a very large method is the lead suspect.
  * That is an inference: no crash has been measured here.
  *
@@ -72,8 +73,8 @@ export function largeFoldWarning(
   return [
     `[lethal] ${large.length} file(s) emit a very large method: ${named}. A method this size may stop a BC`,
     " service tier with a stack overflow (GitHub #28). That is not proven, and these thresholds are not",
-    " measured: it is a warning only. `lethal.empty-block` causes the largest folds. To shrink them, leave it out",
-    " with --exclude-operator empty-block, or narrow the run with --only. --max-guards-per-batch will not help: it",
-    " splits by file.",
+    " measured: it is a warning only. `if` conditions and `case` arms cause the largest folds. To shrink them, leave",
+    " out their operators with --exclude-operator, or narrow the run with --only. --max-guards-per-batch will not",
+    " help: it splits by file.",
   ].join("");
 }

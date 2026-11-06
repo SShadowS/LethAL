@@ -1,4 +1,4 @@
-import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
+import { ALNodeKind, type ALSyntaxNode, type MutationSpec, isProcedureLike } from "@lethal/engine";
 import { resolveStatement } from "./enclosing";
 import { type IdedSpec, compareCodeUnits } from "./ids";
 
@@ -49,17 +49,24 @@ function rootInFreeBlock(s: ALSyntaxNode, block: ALSyntaxNode): ALSyntaxNode {
 /** A directive's arm can hold the block's closing `end`, where one insertion reaches one build. */
 function holdsDirective(n: ALSyntaxNode): boolean {
   return (
-    n.rawKind.startsWith("preproc_") || n.rawKind === "ERROR" || n.children.some(holdsDirective)
+    n.rawKind.startsWith("preproc_") ||
+    n.rawKind === "pragma" ||
+    n.rawKind === "ERROR" ||
+    n.children.some(holdsDirective)
   );
 }
 
-/** R827: does this member's own shape allow a guard? Chain roots and equal spans are the walk's. */
+/** R827: does this member's own shape allow a guard? Chain roots and equal spans are the walk's.
+ *  A body only: a condition mutant roots every `if`, so a branch is never free in a default run. */
 function isFreeShape(m: ComponentMember): boolean {
   const { before, operatorName } = m.spec;
+  const parent = m.statement.parent;
   return (
     operatorName === "lethal.empty-block" &&
     /^begin\s+end;?$/i.test(m.afterText.trim()) &&
     m.statement.rawKind === "code_block" &&
+    parent !== null &&
+    (isProcedureLike(parent) || parent.kind === ALNodeKind.trigger) &&
     before.startIndex === m.statement.startIndex &&
     before.endIndex === m.statement.endIndex &&
     !holdsDirective(m.statement)
@@ -74,8 +81,8 @@ function isFreeShape(m: ComponentMember): boolean {
  * The root is what the printer rewrites; every member's edit is spliced into the
  * root's text, so members nested at any depth are handled uniformly.
  *
- * R827: an `empty-block` no chain root contains, whose block holds no directive and no other member
- * resolves to, is FREE. It gets a guard pair around the block's body (`planFile`) and hosts nothing,
+ * R827: an `empty-block` of a procedure or trigger body, whose block holds no directive and no other
+ * member resolves to, is FREE. It gets a guard pair around the body (`planFile`) and hosts nothing,
  * so what sits inside it groups by this same walk. This is the one definition of free.
  */
 export function buildComponents(ided: readonly IdedSpec[]): Component[] {
