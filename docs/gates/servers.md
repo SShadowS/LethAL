@@ -550,7 +550,7 @@ Each of the 13 non-hang gates passed once on bc4. Logs are `/coord/handoff/R-826
 | `bc4` | `itest:harden` | 1.0.0.25 | `/coord/handoff/R-826b/bc4/harden.log` |
 | `bc4` | `itest:agreement` | 1.0.0.25 | `/coord/handoff/R-826b/bc4/agreement.log` |
 | `bc4` | `itest:lend` | 1.0.0.25 | `/coord/handoff/R-826b/bc4/lend.log` |
-| `bc4` | `itest:hang` (400 form) | 1.0.0.25 | at 883963a6, before the R-826b review fixes: `/coord/handoff/R-658/hang-bc4-20261106T203052Z-2289735/` |
+| `bc4` | `itest:hang` (400 form) | 1.0.0.25 | at eae3eaff: `/coord/handoff/R-658/hang-bc4-20261106T210015Z-2373536/`; at 883963a6, before the R-826b review fixes: `/coord/handoff/R-658/hang-bc4-20261106T203052Z-2289735/` |
 
 ## bc-demo: not a gate server (R663)
 
