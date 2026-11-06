@@ -845,6 +845,14 @@ a LethAL feature or a mode.
   project could make never-ending. A loop in ANOTHER installed app that depends on yours, and calls into it,
   is not seen. Measured on three ISV corpora (R-634): adding each dependent's source to the analysis
   refused 0 more mutants on all 25 pairs.
+- **Some loops can still hang, and LethAL does not refuse them.** LethAL refuses a mutant it can tell would stop a loop ending, by
+  reading names and shapes, not by proving it. Three known cases stay in the run: a change inside a helper that the loop calls for its
+  progress; emptying an `if` or `case` arm that holds the loop's only step, or flipping that arm's condition; and a loop that moves
+  only through an event subscriber or another object's state. They are rare: 15 such changes in 2.3 million on the BaseApp history,
+  and one event or cross-object site, with none on the three ISV corpora. What you see is a timeout: the mutant ends as an unmeasured
+  error, not a score. On BC 29 on Linux the stop itself can fail, and that one mutant can end the whole run until
+  [#49](https://github.com/SShadowS/LethAL/issues/49) is fixed. The other direction also exists: LethAL refuses some calls that could
+  not hang, because a missed hang costs far more than a lost mutant.
 - **The advanced operator set is not built.** <!-- operators: limits -->26 operators today, in two groups: 16 generic ones (Tier 1) and 10 AL-specific ones (Tier 2)<!-- /operators: limits -->.
   Tier 1 covers comparisons, return values and empty blocks, among others; Tier 2 covers
   `TestField`, `SetRange`, `CalcFields`, `Commit` and friends. A third, more aggressive group is
