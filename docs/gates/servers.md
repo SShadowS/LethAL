@@ -269,6 +269,12 @@ pair is one ordinary run of the gate there; add the pair to this table when it p
 
 ### server1 (192.168.2.157), the default host since 2026-11-05
 
+**`bc1` is proven for `itest:bcdev` ONLY since its reset on 2026-11-06.** It was reset to a fresh CRONUS at 07:49Z, so its R-813 rows below do not stand: run
+no other gate there until each is re-proven. Setup and `itest:bcdev` passed at master 6f581651, per mutant, equal to the baseline
+(`/coord/handoff/R-845/bc1-restart/`). Its build differs from the others: Base Application, System Application, Library Assert and Test Runner
+are 28.4.53241.56590 on `bc1`, against .56646 on `bc2` and `bc3`; System is 28.0.54946.56477. `bc1` has only ever been proven at that build
+under R-813's rows; a figure difference there is still a BLOCK, not explained by the build.
+
 Proven on 2026-11-05 by R-813, master 0602b3b8, LethAL Control 1.0.0.24, one coord lease per gate, each released. Every
 gate equalled its baseline or its own checks, and its first line named `192.168.2.157` and the server's port. Each
 server first had a read-only `--predict` (none of LethAL's apps were on it, and apps are read by id only, R433), then a
