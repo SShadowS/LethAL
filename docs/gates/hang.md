@@ -108,6 +108,10 @@ it exists. The method undercounts a path that runs through a third app. See R634
 
 ## History
 
+2026-11-06 (R810, coord task R-827): `hang.single.baseline.json` moved from identity scheme 42 to 44, on `bc2`, by R332's
+procedure. A record stops after the SINGLE leg with exit 3, which the wrapper would hold on, so it ran under a plain lease. One
+line changed, the scheme, and the full confirm run passed through `r658-hang-gate.sh`. Logs: `/coord/handoff/R-827/bc2/`.
+
 R-204b's single-path leg was recorded on 2026-10-06 on Cronus28 (record run exit 3, confirm run
 PASS), per `docs/superpowers/specs/2026-10-06-r204b-hang-single-path-precommitment.md`. R164 and
 R179 added the `NextRow` and `DrainQueue` arms, which measure the loop cessions. R196 refuses

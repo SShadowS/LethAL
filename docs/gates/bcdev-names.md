@@ -37,6 +37,9 @@ All 36 mutants are killed (3 operators on each of 12 procedures). Each must matc
 
 ## History
 
+2026-11-06 (R810, coord task R-827): `bcdev.names.baseline.json` moved from identity scheme 42 to 44, on `bc2`, by R332's
+procedure. One line changed, the scheme, and the confirm run passed. Logs: `/coord/handoff/R-827/bc2/`.
+
 R557 (from the owner-approved CLAUDE.md proposal in `/coord/handoff/R-557/`): recorded per
 pre-commitment r4 (2026-10-20), committed in b7aa3f1e, on Cronus28 (record run exit 3, confirm run PASS). The bcdev and
 al-runner names baselines are byte-identical. The al-runner side was red-checked: with the name

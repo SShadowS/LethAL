@@ -21,6 +21,9 @@ it on `bc1` to `bc3`. On 2026-10-21 the gate passed on `bc2` (R-583).
 
 ## Frozen figures
 
+2026-11-06 (R810, coord task R-827): `harden.baseline.json` moved from identity scheme 42 to 44, on `bc2`, by R332's procedure.
+One line changed, the scheme, and the confirm run passed. No figure below moved. Logs: `/coord/handoff/R-827/bc2/`.
+
 ```json gate-figures
 {
   "gate": "itest:harden",

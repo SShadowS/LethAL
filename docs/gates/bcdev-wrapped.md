@@ -30,6 +30,9 @@ The fenced leg scores 60 killed and 38 survived.
 
 ## History
 
+2026-11-06 (R810, coord task R-827): `bcdev.wrapped.baseline.json` moved from identity scheme 42 to 44, on `bc2`, by R332's
+procedure. One line changed, the scheme, and the confirm run passed. Logs: `/coord/handoff/R-827/bc2/`.
+
 R497: recorded on 2026-10-08 on Cronus28 (record run exit 3, confirm run PASS, fenced and hub legs
 equal mutant by mutant), per `docs/superpowers/specs/2026-10-08-r497-bcdev-wrapped-precommitment.md`.
 The .NET al-runner's side of the same fixture is on [alrunner.md](alrunner.md), "Wrapped leg"; that
