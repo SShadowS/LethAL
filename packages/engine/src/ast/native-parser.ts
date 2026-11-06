@@ -40,7 +40,7 @@ export class NativeParserMissingError extends Error {
     cause: unknown,
   ) {
     super(
-      `LethAL's native AL parser has no binary for ${platformKey}. Expected packages/engine/vendor/native/lethal-parser.${platformKey}.node; build it with \`bun scripts/build-native-parser.ts\` (needs Rust and LLVM clang), or use a release binary.`,
+      `LethAL's native AL parser has no binary for ${platformKey}. Expected packages/engine/vendor/native/lethal-parser.${platformKey}.node; in a source checkout, build it with \`bun scripts/build-native-parser.ts\` (needs Rust 1.96 or newer and clang/LLVM 23.1.2; see README Installation), then build the binary again.`,
       cause === undefined ? undefined : { cause },
     );
     this.name = "NativeParserMissingError";
@@ -56,7 +56,7 @@ export class NativeParserLoadError extends Error {
   ) {
     const why = cause instanceof Error ? cause.message : String(cause);
     super(
-      `LethAL's native AL parser for ${platformKey} (packages/engine/vendor/native/lethal-parser.${platformKey}.node) exists but could not be loaded: ${why}. Rebuild it with \`bun scripts/build-native-parser.ts\`, or use a release binary.`,
+      `LethAL's native AL parser for ${platformKey} (packages/engine/vendor/native/lethal-parser.${platformKey}.node) exists but could not be loaded: ${why}. In a source checkout, rebuild it with \`bun scripts/build-native-parser.ts\` (needs Rust 1.96 or newer and clang/LLVM 23.1.2; see README Installation), then build the binary again.`,
       { cause },
     );
     this.name = "NativeParserLoadError";

@@ -64,6 +64,17 @@ describe("native parser binding", () => {
     }
   });
 
+  it("R834: both messages say what to do from a source build and never point at a release that does not exist", () => {
+    for (const e of [
+      new NativeParserMissingError("linux-x64", undefined),
+      new NativeParserLoadError("linux-x64", new Error("x")),
+    ]) {
+      expect(e.message).toContain("bun scripts/build-native-parser.ts");
+      expect(e.message).toContain("clang/LLVM 23.1.2");
+      expect(e.message).not.toContain("release binary");
+    }
+  });
+
   // Spawns a real `bun` subprocess, which passes alone in well under a second but can push past
   // Bun's 5 s default test timeout when something else is loading the machine (a full `bun test`
   // run, or a live itest at the same time). See HOOK_TIMEOUT_MS in campaign-subcommands.test.ts
