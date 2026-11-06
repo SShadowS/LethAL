@@ -876,63 +876,136 @@ function baseNameOf(n: ALSyntaxNode | null): string | null {
   return null;
 }
 
-/** Same-object procedures named `name`. */
-function objectProcsNamed(name: string, at: ALSyntaxNode): ALSyntaxNode[] {
-  const obj = objectOf(at);
-  const out: ALSyntaxNode[] = [];
-  if (obj !== null) {
+/** Every procedure-like node of an object, by name. */
+function procsByName(obj: ALSyntaxNode, ctx: SemanticContext): Map<string, ALSyntaxNode[]> {
+  return cached(ctx, obj, "procsByName", () => {
+    const out = new Map<string, ALSyntaxNode[]>();
     visitAll(obj, (x) => {
-      if (isProcedureLike(x) && procNames(x).includes(name)) out.push(x);
+      if (!isProcedureLike(x)) return;
+      for (const name of procNames(x)) out.set(name, [...(out.get(name) ?? []), x]);
     });
-  }
-  return out;
+    return out;
+  });
 }
 
-/** What a same-object call chain does to its object's globals, by name, no hop limit (R830). */
-interface ChainEffect {
-  /** Globals assigned, called on, or passed to a call. */
+/** What code does to names outside it, by name (R830). Any name the code does not declare counts:
+ *  a global, one declared inside `#if`, a field of the implicit record. The safe direction. */
+interface CallEffect {
+  /** Names assigned, a `for` control variable, called on, or passed to a call. */
   readonly writes: Set<string>;
-  /** Globals named at all. */
-  readonly names: Set<string>;
+  /** Names read at all. */
+  readonly reads: Set<string>;
   /** Names a `STEP_METHODS` method is called on. */
   readonly steps: Set<string>;
+  /** Same-object procedures it calls. */
+  readonly calls: Set<string>;
 }
 
-function chainEffect(start: string, at: ALSyntaxNode, ctx: SemanticContext): ChainEffect {
-  const effect: ChainEffect = { writes: new Set(), names: new Set(), steps: new Set() };
-  const seen = new Set<string>();
-  const follow = (name: string): void => {
-    if (seen.has(name)) return;
-    seen.add(name);
-    for (const proc of objectProcsNamed(name, at)) {
-      const body = proc.namedChildren.find((c) => c.rawKind === "code_block") ?? null;
-      if (body === null) continue;
-      const globals = r572Globals(proc, ctx);
-      for (const g of globals) effect.names.add(g);
-      const wrote = (n: ALSyntaxNode | null): void => {
-        const k = baseNameOf(n);
-        if (k !== null && globals.has(k)) effect.writes.add(k);
-      };
-      r531Walk(body, ctx, (n) => {
-        if (n.kind === ALNodeKind.assignment_statement) {
-          wrote(n.childForFieldName("left") ?? n.namedChildren[0] ?? null);
-        } else if (n.kind === ALNodeKind.field_access) {
+const noEffect = (): CallEffect => ({
+  writes: new Set(),
+  reads: new Set(),
+  steps: new Set(),
+  calls: new Set(),
+});
+
+/** One procedure's own effect, its calls not followed. */
+function procEffect(proc: ALSyntaxNode, ctx: SemanticContext): CallEffect {
+  return cached(ctx, proc, "callEffect", () => {
+    const effect = noEffect();
+    const body = proc.namedChildren.find((c) => c.rawKind === "code_block") ?? null;
+    const obj = objectOf(proc);
+    if (body === null || obj === null) return effect;
+    const names = procedureNamesOf(obj, ctx);
+    const own = (k: string): boolean => !r531Declares(proc, k, true);
+    const wrote = (n: ALSyntaxNode | null): void => {
+      if (n === null) return;
+      const k = baseNameOf(n);
+      if (k !== null && own(k)) effect.writes.add(k);
+      // `Rec.Qty += 1` writes what a bare `Qty` reads.
+      const m = withoutSubscript(n).childForFieldName("member");
+      if (m !== null) effect.writes.add(normalizeAlName(m.text));
+    };
+    r531Walk(body, ctx, (n) => {
+      if (n.kind === ALNodeKind.assignment_statement) {
+        wrote(n.childForFieldName("left") ?? n.namedChildren[0] ?? null);
+      } else if (n.rawKind === "for_statement") {
+        wrote(n.childForFieldName("variable"));
+      } else if (n.kind === ALNodeKind.field_access) {
+        const k = baseNameOf(n.childForFieldName("object"));
+        const m = n.childForFieldName("member");
+        if (k !== null && m !== null && STEP_METHODS.has(normalizeAlName(m.text)) && own(k)) {
+          effect.steps.add(k);
+        }
+      } else if (isIdentifierLike(n) && n.fieldName !== "member") {
+        const k = normalizeAlName(n.text);
+        if (own(k)) effect.reads.add(k);
+      }
+      const callee = bareCallee(n) ?? hiddenCallee(n, names, ctx);
+      if (callee !== null) effect.calls.add(callee);
+      else if (n.rawKind === "call_expression" || n.rawKind === "call_statement") {
+        wrote(n.childForFieldName("function")?.childForFieldName("object") ?? null);
+      }
+      if (n.rawKind === "call_expression") for (const a of argumentList(n)) wrote(a);
+    });
+    return effect;
+  });
+}
+
+/** The effect of calling `start`, its same-object chain followed with no hop limit. Cached per object
+ *  and name, because a site asks it once per loop and per name its exit parts call. */
+function chainEffect(start: string, obj: ALSyntaxNode, ctx: SemanticContext): CallEffect {
+  return cached(ctx, obj, `chain|${start}`, () => {
+    const effect = noEffect();
+    const byName = procsByName(obj, ctx);
+    const seen = new Set<string>();
+    const todo = [start];
+    for (let name = todo.pop(); name !== undefined; name = todo.pop()) {
+      if (seen.has(name)) continue;
+      seen.add(name);
+      for (const proc of byName.get(name) ?? []) {
+        const one = procEffect(proc, ctx);
+        for (const k of one.writes) effect.writes.add(k);
+        for (const k of one.reads) effect.reads.add(k);
+        for (const k of one.steps) effect.steps.add(k);
+        todo.push(...one.calls);
+      }
+    }
+    return effect;
+  });
+}
+
+/** What `loop`'s exit parts read and step, through their own same-object calls (`until Done()`). */
+function exitEffect(
+  loop: ALSyntaxNode,
+  ctx: SemanticContext,
+): { readonly read: Set<string>; readonly steps: Set<string> } {
+  return cached(ctx, loop, "exitEffect", () => {
+    const read = new Set<string>();
+    const steps = new Set<string>();
+    const obj = objectOf(loop);
+    const names = obj === null ? new Set<string>() : procedureNamesOf(obj, ctx);
+    for (const p of loopExitParts(loop, ctx)) {
+      r531Walk(p, ctx, (n) => {
+        if (isIdentifierLike(n) && n.fieldName !== "member") read.add(normalizeAlName(n.text));
+        if (n.kind === ALNodeKind.field_access) {
           const k = baseNameOf(n.childForFieldName("object"));
           const m = n.childForFieldName("member");
-          if (k !== null && m !== null && STEP_METHODS.has(normalizeAlName(m.text))) {
-            effect.steps.add(k);
+          if (k !== null && m !== null) {
+            const name = normalizeAlName(m.text);
+            if (STEP_METHODS.has(name)) steps.add(k);
+            if (k === "rec") read.add(name); // `until Rec.Qty >= 3` reads what a bare `Qty` writes
           }
-        } else if (n.rawKind === "call_expression") {
-          const f = n.childForFieldName("function");
-          if (f !== null && isIdentifierLike(f)) follow(normalizeAlName(f.text));
-          else wrote(f?.childForFieldName("object") ?? null);
-          for (const a of argumentList(n)) wrote(a);
+        }
+        const callee = bareCallee(n) ?? hiddenCallee(n, names, ctx);
+        if (callee !== null && obj !== null) {
+          const called = chainEffect(callee, obj, ctx);
+          for (const k of called.reads) read.add(k);
+          for (const k of called.steps) steps.add(k);
         }
       });
     }
-  };
-  follow(start);
-  return effect;
+    return { read, steps };
+  });
 }
 
 /**
@@ -940,48 +1013,34 @@ function chainEffect(start: string, at: ALSyntaxNode, ctx: SemanticContext): Cha
  * direction (R829: a wrong refusal loses one mutant, a miss can end a run). It holds when, in ANY
  * enclosing `while` or `repeat`, `loopExitParts` read one of the names the call can move, and no
  * `STEP_METHODS` method in those parts moves that name instead. The names: its receiver
- * (`while not S.EOS do S.ReadText(T)`), a plain-name argument (`S.ReadText(Line)` under
- * `while Line <> ''`, `Chop(Pos)`), and the globals a same-object callee chain writes
- * (`repeat Advance(); until Counter >= Limit`, also through `until Done()`).
+ * (`while not S.EOS do S.ReadText(T)`), the base name of an argument (`S.ReadText(Line)` under
+ * `while Line <> ''`, `Chop(Pos)`, `Chop(R.Name)` reads as `R`), and what a same-object callee chain
+ * writes (`repeat Advance(); until Counter >= Limit`, also through `until Done()`).
  *
  * Asked at dispatch for every operator, so Tier 2's identical deletion (`remove-setrange`) is refused too.
- * Known, not seen: a call into another object (`Other.Advance()`, where `Other` is not read), and an event
- * publisher, whose body is empty while its subscribers step. `itest:hang`'s `OnAdvance()` is that last shape.
+ * Known, not seen ([[R839]]): a call into another object (`Other.Advance()`, where `Other` is not read), and
+ * an event publisher, whose body is empty while its subscribers step: `itest:hang`'s `OnAdvance()`. Nor a
+ * bare call in a `with` body. A site INSIDE the callee is [[R837]].
  */
 function deletedCallHangs(node: ALSyntaxNode, ctx: SemanticContext): boolean {
   if (node.kind !== ALNodeKind.procedure_call || !isStatementSlot(node)) return false;
-  const loops = enclosingExitParts(node, ctx);
+  const loops: ALSyntaxNode[] = [];
+  for (let cur = node.parent; cur !== null && !isScope(cur); cur = cur.parent) {
+    if (LOOP_KINDS.has(cur.kind)) loops.push(cur);
+  }
   if (loops.length === 0) return false;
-  const f = node.childForFieldName("function");
-  if (f === null) return false;
   const moved = new Set<string>();
   const add = (n: ALSyntaxNode | null): void => {
     const k = baseNameOf(n);
     if (k !== null) moved.add(k);
   };
-  if (isIdentifierLike(f)) {
-    for (const g of chainEffect(normalizeAlName(f.text), node, ctx).writes) moved.add(g);
-  } else add(f.childForFieldName("object"));
+  const callee = bareCallee(node);
+  const obj = objectOf(node);
+  if (callee === null) add(node.childForFieldName("function")?.childForFieldName("object") ?? null);
+  else if (obj !== null) for (const k of chainEffect(callee, obj, ctx).writes) moved.add(k);
   for (const a of argumentList(node)) add(a);
-  return loops.some((parts) => {
-    const read = new Set<string>();
-    const steps = new Set<string>();
-    for (const p of parts) {
-      r531Walk(p, ctx, (n) => {
-        if (isIdentifierLike(n) && n.fieldName !== "member") read.add(normalizeAlName(n.text));
-        if (n.kind === ALNodeKind.field_access) {
-          const m = n.childForFieldName("member");
-          const k = baseNameOf(n.childForFieldName("object"));
-          if (k !== null && m !== null && STEP_METHODS.has(normalizeAlName(m.text))) steps.add(k);
-        }
-      });
-    }
-    // A condition's own same-object call reads and steps what its chain does (`until Done()`).
-    for (const name of [...read]) {
-      const called = chainEffect(name, node, ctx);
-      for (const g of called.names) read.add(g);
-      for (const s of called.steps) steps.add(s);
-    }
+  return loops.some((loop) => {
+    const { read, steps } = exitEffect(loop, ctx);
     return [...moved].some((k) => read.has(k) && !steps.has(k));
   });
 }
@@ -7031,12 +7090,9 @@ function indirectFeeds(
       const left = a.childForFieldName("left");
       const right = a.childForFieldName("right");
       if (left === null || right === null) continue;
+      const target = withGuards ? withoutSubscript(left) : left;
       const name =
-        left.kind === ALNodeKind.field_access
-          ? left.childForFieldName("member")
-          : withGuards
-            ? withoutSubscript(left)
-            : left;
+        target.kind === ALNodeKind.field_access ? target.childForFieldName("member") : target;
       if (name === null || !isIdentifierLike(name) || !names.has(normalizeAlName(name.text))) {
         continue;
       }
@@ -7234,7 +7290,8 @@ function memberTargetOf(node: ALSyntaxNode): {
 } | null {
   for (let cur: ALSyntaxNode | null = node; cur !== null && !isScope(cur); cur = cur.parent) {
     if (cur.kind === ALNodeKind.assignment_statement) {
-      const left = cur.childForFieldName("left") ?? cur.namedChildren[0] ?? null;
+      const raw = cur.childForFieldName("left") ?? cur.namedChildren[0] ?? null;
+      const left = raw === null ? null : withoutSubscript(raw); // `R.Name[1] := 'x'` is `R.Name`
       if (left === null || left.kind !== ALNodeKind.field_access) return null;
       const object = left.childForFieldName("object");
       const member = left.childForFieldName("member");

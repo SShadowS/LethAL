@@ -142,14 +142,14 @@ const PINNED: Record<
   "sandbox-hang": {
     selectorIds: { selectorId: 79449, controlId: 79448, tableId: 79447 },
     hashes: {
-      "HangLogic.Codeunit.al": "0a19d4f13c85d4ba613ef7495e531577cc9ddf54ae2ccd4efd3e738ca0607c04",
+      "HangLogic.Codeunit.al": "20cbe37f3c535e3455b6a4bc178a1affa79239cae2f5ec8f1772a42d879d337f",
       "MutationRegister.Codeunit.al":
         "5dc811a3a1661531502dd68b7da0849c7973a76bb2fb04486ccb595b0e7acbab",
       "MutationSelector.Codeunit.al":
         "03da5adb8c426958a6549fc03d174e5bbadba7aa150538881de3adecc8f6105f",
       "MutationUpgrade.Codeunit.al":
         "ecc6b99d40ce7e6bf92be1e73c0c8609cffa268684613158cb32e8513e317f59",
-      "mutant-manifest.json": "3df59a9901231684c79ba3c1ec956e9896ada9d670be30e6cdbd0263acedb575",
+      "mutant-manifest.json": "e0d56ec6482ae91b33750d8aa2f9a49ad22a1a05d5396fbfb88ca8e3d08f2741",
     },
   },
   "sandbox-harden": {

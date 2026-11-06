@@ -259,8 +259,8 @@ const EXPECTED_ON: ReadonlyArray<{
   // The advancing procedure's body, emptied: same property, different operator.
   { line: 43, operator: "lethal.empty-block", verdict: "timeout-killed" },
   // R159's `remove-assignment` adds both of these, and they are a matched pair worth reading
-  // together. Deleting `Counter := 0` changes nothing, a codeunit `Integer` global is 0 on a fresh
-  // instance, so it is an equivalent mutant by inspection. Deleting `Counter += 1` removes the
+  // together. Deleting `Counter := 0` changes nothing, a codeunit `Integer` global is 0 in a fresh
+  // session, so it is an equivalent mutant by inspection. Deleting `Counter += 1` removes the
   // loop's only progress and is non-terminating, reached by a third operator.
   { line: 44, operator: "lethal.remove-assignment", verdict: "timeout-killed" },
   { line: 44, operator: "lethal.shift-integer", verdict: "killed" },

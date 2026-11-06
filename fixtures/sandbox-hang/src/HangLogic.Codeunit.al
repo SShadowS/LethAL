@@ -111,7 +111,7 @@ codeunit 79400 "Hang Logic"
     /// R206's arm: the only live exercise of a WARM timeout, and of the warm confirmation's
     /// replay. Two tests cover this procedure. `SpinUntilAtZeroExitsEarly` takes the early exit
     /// and asserts -1; `SpinUntilReachesTheTarget` drives the same unbounded counter loop as
-    /// `CountUpTo` and asserts 3. Under `void-method-call` on `Advance()` the first PASSES and the
+    /// `CountUpTo` and asserts 3. Under `void-method-call` on `OnAdvance()` the first PASSES and the
     /// second HANGS, so the hang lands at group position 2 of one `RunMutantMany` call and is
     /// scored `timeout-killed` only after methods 1..2 are replayed unmutated and method 2
     /// completes inside its budget (`killPosition` 2). The loop's other kills (`conditional-

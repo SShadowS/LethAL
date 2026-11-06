@@ -19,7 +19,7 @@ function load(src: string) {
 /** Is the statement call with this text refused at dispatch? */
 function refused(body: string, call: string): boolean {
   const { root, ctx } = load(`codeunit 50830 "R" {
-    var Counter: Integer; Log: Integer; Other: Codeunit "Other"; S: InStream; Items: List of [Integer];
+    var Counter: Integer; Log: Integer; Other: Codeunit "Other"; S: InStream; Items: List of [Integer]; Q: Record Customer;
     ${body} }`);
   const site = findAll(root, ALNodeKind.procedure_call).find((n) => n.text === call);
   if (site === undefined) throw new Error(`no call ${call}`);
@@ -44,8 +44,35 @@ describe("R830: a statement call a loop's progress may rest on", () => {
     it("refuses a call on a receiver the condition reads with a method that does not step", () => {
       expect(
         refused(
-          `procedure P() begin while Items.Count() > 0 do Items.RemoveAt(1); end;`,
-          "Items.RemoveAt(1)",
+          `procedure P() begin while Items.Contains(1) do Items.Remove(1); end;`,
+          "Items.Remove(1)",
+        ),
+      ).toBe(true);
+    });
+
+    it("keeps a call that is not a statement: deleting it is not what is asked", () => {
+      expect(
+        refused(
+          `procedure P() var I: Integer; begin while I > 0 do if Keep(I) then Log += 1; end;`,
+          "Keep(I)",
+        ),
+      ).toBe(false);
+    });
+
+    it("asks every enclosing loop, the outer one's condition", () => {
+      expect(
+        refused(
+          `procedure P() begin while Items.Contains(1) do repeat Items.Remove(1); until Q.Next() = 0; end;`,
+          "Items.Remove(1)",
+        ),
+      ).toBe(true);
+    });
+
+    it("asks every enclosing loop, the inner one's condition", () => {
+      expect(
+        refused(
+          `procedure P() begin repeat while Items.Contains(1) do Items.Remove(1); until Q.Next() = 0; end;`,
+          "Items.Remove(1)",
         ),
       ).toBe(true);
     });
@@ -74,15 +101,6 @@ describe("R830: a statement call a loop's progress may rest on", () => {
       expect(refused(`procedure P() var T: Text; begin S.ReadText(T); end;`, "S.ReadText(T)")).toBe(
         false,
       );
-    });
-
-    it("asks ANY enclosing loop: an inner stepped loop does not hide an outer one", () => {
-      expect(
-        refused(
-          `procedure P(var C: Record Customer) begin while C.Count() > 0 do repeat C.Delete(); until C.Next() = 0; end;`,
-          "C.Delete()",
-        ),
-      ).toBe(true);
     });
 
     it("reads the exit parts, so a value fed from the receiver is seen", () => {
@@ -221,6 +239,106 @@ describe("R830: a statement call a loop's progress may rest on", () => {
       ).toBe(false);
     });
 
+    it("a callee that calls a method on what the condition reads", () => {
+      const step = `local procedure Step() begin Items.Remove(1); end;`;
+      expect(
+        refused(`procedure P() begin while Items.Contains(1) do Step(); end; ${step}`, "Step()"),
+      ).toBe(true);
+    });
+
+    it("a callee that passes on what the condition reads", () => {
+      const step = `local procedure Step() begin Bump(Counter); end;`;
+      expect(
+        refused(`procedure P() begin while Counter < 3 do Step(); end; ${step}`, "Step()"),
+      ).toBe(true);
+    });
+
+    it("a callee's `for` control variable is a write", () => {
+      const step = `local procedure Step() begin for Counter := 1 to 5 do Log += 1; end;`;
+      expect(
+        refused(`procedure P() begin while Counter < 3 do Step(); end; ${step}`, "Step()"),
+      ).toBe(true);
+    });
+
+    it("`this.` is a same-object call, at the site and in the condition", () => {
+      const done = `local procedure Done(): Boolean begin exit(Counter > 3); end;`;
+      const src = `procedure P() begin repeat this.Advance(); until this.Done(); end; ${ADVANCE} ${done}`;
+      expect(refused(src, "this.Advance()")).toBe(true);
+    });
+
+    it("a paren-less call is followed in a chain and in a value", () => {
+      const a = `local procedure A() begin Advance; end;`;
+      const over = `local procedure Over(): Boolean begin exit(Counter > 3); end;`;
+      const done = `local procedure Done(): Boolean begin exit(Over); end;`;
+      const src = `procedure P() begin repeat A(); until Done(); end; ${ADVANCE} ${a} ${over} ${done}`;
+      expect(refused(src, "A()")).toBe(true);
+    });
+
+    it("a global declared inside `#if` is still the loop's name", () => {
+      const { root, ctx } = load(`codeunit 50834 "R" {
+        var
+#if not LETHALX
+          Hidden: Integer;
+#endif
+          Log: Integer;
+        procedure P() begin repeat Up(); until Hidden >= 3; end;
+        local procedure Up() begin Hidden += 1; end; }`);
+      const site = findAll(root, ALNodeKind.procedure_call).find((n) => n.text === "Up()");
+      if (site === undefined) throw new Error("no call");
+      expect(openItemHangRefuses(site, ctx, undefined)).toBe(true);
+    });
+
+    for (const [name, write] of [
+      ["a bare field", "Qty += 1"],
+      ["`Rec.`", "Rec.Qty += 1"],
+    ] as const) {
+      it(`a table's field written as ${name}`, () => {
+        const { root, ctx } = load(`table 50835 "T" { fields { field(1; Qty; Integer) { } }
+          procedure P() begin repeat StepIt(); until Qty >= 3; end;
+          local procedure StepIt() begin ${write}; end; }`);
+        const site = findAll(root, ALNodeKind.procedure_call).find((n) => n.text === "StepIt()");
+        if (site === undefined) throw new Error("no call");
+        expect(openItemHangRefuses(site, ctx, undefined)).toBe(true);
+      });
+    }
+
+    it("a field the condition reads through `Rec.`", () => {
+      const { root, ctx } = load(`table 50836 "T" { fields { field(1; Qty; Integer) { } }
+        procedure P() begin repeat StepIt(); until Rec.Qty >= 3; end;
+        local procedure StepIt() begin Qty += 1; end; }`);
+      const site = findAll(root, ALNodeKind.procedure_call).find((n) => n.text === "StepIt()");
+      if (site === undefined) throw new Error("no call");
+      expect(openItemHangRefuses(site, ctx, undefined)).toBe(true);
+    });
+
+    it("a local in the condition's callee does not step the caller's global", () => {
+      const done = `local procedure Done(): Boolean var Q: Record Customer; begin exit(Q.Next() = 0); end;`;
+      expect(
+        refused(
+          `procedure P() begin repeat Q.Modify(); until Q.IsEmpty() or Done(); end; ${done}`,
+          "Q.Modify()",
+        ),
+      ).toBe(true);
+    });
+
+    it("a local named like a procedure is not a call to it", () => {
+      const stepper = `local procedure Flag(): Boolean begin exit(Q.Next() = 0); end;`;
+      expect(
+        refused(
+          `procedure P() var Flag: Boolean; begin repeat Q.Modify(); until Q.IsEmpty() or Flag; end; ${stepper}`,
+          "Q.Modify()",
+        ),
+      ).toBe(true);
+      const total = `local procedure Total(): Integer begin exit(Counter); end;`;
+      const helper = `local procedure Helper() begin Counter += 1; end;`;
+      expect(
+        refused(
+          `procedure P() var Total: Integer; begin while Total < 3 do begin Helper(); Total += 1; end; end; ${total} ${helper}`,
+          "Helper()",
+        ),
+      ).toBe(false);
+    });
+
     it("KNOWN, not seen: an event publisher, whose subscribers step (`itest:hang` rests on this)", () => {
       const pub = `[IntegrationEvent(false, false)] local procedure OnAdvance() begin end;`;
       expect(
@@ -287,6 +405,33 @@ describe("R831: an element reads as its array", () => {
   it("an index on the left is a feed", () => {
     const src = `procedure P() var Buf: array[3] of Integer; I: Integer; begin while Buf[3] = 0 do begin Buf[I] := 1; I += 1; end; end;`;
     expect(classify(src, "I += 1")).toBe(HANG);
+  });
+
+  it("a member's own subscript", () => {
+    const src = `procedure P(var R: Record Customer) begin while R.Name[1] <> 'x' do R.Name[1] := 'x'; end;`;
+    expect(classify(src, "R.Name[1] :=")).toBe(HANG);
+  });
+
+  it("an index on a record array's field is a feed", () => {
+    const src = `procedure P() var Recs: array[3] of Record Customer; I: Integer; begin while Recs[3].Name = '' do begin Recs[I].Name := 'x'; I += 1; end; end;`;
+    expect(classify(src, "I += 1")).toBe(HANG);
+  });
+
+  it("each index of a two-index element is a feed", () => {
+    const src = `procedure P() var A: array[3, 3] of Integer; I: Integer; J: Integer; begin while A[3, 3] = 0 do begin A[I, J] := 1; I += 1; J += 1; end; end;`;
+    expect(classify(src, "I += 1")).toBe(HANG);
+    expect(classify(src, "J += 1")).toBe(HANG);
+  });
+
+  it("the by-name path, for a receiver nothing resolves", () => {
+    const { root, ctx } = load(`codeunit 50837 "R" {
+      var
+#if not LETHALX
+        U: array[2] of Record Customer;
+#endif
+        Log: Integer;
+      procedure P() begin while U[1].Name = '' do U[1].Name := 'x'; end; }`);
+    expect(classifyHangCapable(assignment(root, "U[1].Name :="), ctx)).toBe(HANG);
   });
 
   it("a mutant inside the left index", () => {
