@@ -163,6 +163,37 @@ export function isAlStopResponse(status: number, body: string): boolean {
   return status === 408 && AL_STOP_408.test(body) && AL_STOP_408_CAUSE.test(body);
 }
 
+const WORLD_STOP_MESSAGE =
+  /^begin transaction world not called\s+CorrelationId:\s+[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.?$/;
+
+/**
+ * GitHub #49: on BC 29 (Linux) the held request answers HTTP 400, not 408, after our confirmed
+ * stop: `{"error":{"code":"Internal_ServerError","message":"begin transaction world not called
+ * CorrelationId: <guid>."}}`. Exact match only: status 400, a JSON object, `error.code` exactly
+ * `Internal_ServerError`, and the trimmed `error.message` matching the whole pattern above. Case
+ * is exact (BC's own spelling); the GUID may be any case. Unlike the 408 this text does NOT prove
+ * the stop by itself, so callers must pair it with a stop of OUR OWN that was confirmed. It is an
+ * exact text, not gated by BC version.
+ */
+export function isBeginTransactionWorldStop(status: number, body: string): boolean {
+  if (status !== 400) return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return false;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return false;
+  const error = (parsed as { error?: unknown }).error;
+  if (typeof error !== "object" || error === null || Array.isArray(error)) return false;
+  const { code, message } = error as { code?: unknown; message?: unknown };
+  return (
+    code === "Internal_ServerError" &&
+    typeof message === "string" &&
+    WORLD_STOP_MESSAGE.test(message.trim())
+  );
+}
+
 /** R198: how often `runMany`'s watchdog reads the op's progress while its request is open. */
 export const WATCHDOG_POLL_MS = 5_000;
 
@@ -1413,16 +1444,17 @@ export class RunMutantTransport {
     await watchdog;
     const durationMs = monoNow() - started;
 
-    if (stopFired && isAlStopResponse(res.status, rawBody)) {
+    const worldStop = isBeginTransactionWorldStop(res.status, rawBody);
+    if (stopFired && (worldStop || isAlStopResponse(res.status, rawBody))) {
       const decision = stopDecision;
       if (decision === undefined || !stopConfirmed) {
-        // A 408 naming the AL stop with no confirmed decision of ours behind it: today's rule,
-        // not scored.
+        // A stop answer (BC's 408, or GitHub #49's 400) with no confirmed decision of ours behind
+        // it: today's rule, not scored.
         return call(
           this.inFlightUnknown(
             watchedRef,
             durationMs,
-            `RunMutantMany answered BC's stop 408 but this transport's own stop was ${decision === undefined ? "never decided" : "not confirmed"}.${stopDetail()}`,
+            `RunMutantMany answered ${worldStop ? 'BC\'s 400 "begin transaction world not called"' : "BC's stop 408"} but this transport's own stop was ${decision === undefined ? "never decided" : "not confirmed"}.${stopDetail()}`,
             fencedOp,
           ),
         );
