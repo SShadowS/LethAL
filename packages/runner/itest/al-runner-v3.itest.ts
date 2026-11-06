@@ -379,6 +379,7 @@ async function session(
       leg,
       gateWarnings.codes(),
       pinned === undefined ? undefined : [...pinned, "al-runner-v3-lanes-started"],
+      gateWarnings.examples(),
     );
   else checkGateWarnings("al-runner-v3", leg, gateWarnings);
   const serveLeg = v3ItestLegTransport(leg, process.env).transport !== undefined;
