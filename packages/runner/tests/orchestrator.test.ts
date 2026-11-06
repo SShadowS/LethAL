@@ -12996,9 +12996,9 @@ describe("R504: a lease answer whose body never finishes, through a real LeaseCl
     const lost = await renewTicks(2, (n) => (n === 3 ? { renewed: false } : "stall"));
     const held = await renewTicks(2, (n) => (n === 3 ? ANSWERED : "stall"));
     expect(warnings(lost.events, "lease-renew-blip")).toHaveLength(1);
-    expect(JSON.stringify(lost.report instanceof Error ? lost.report.message : lost.report)).toMatch(
-      /lease-lost/,
-    );
+    expect(
+      JSON.stringify(lost.report instanceof Error ? lost.report.message : lost.report),
+    ).toMatch(/lease-lost/);
     expect(JSON.stringify(held.report)).not.toMatch(/lease-lost/);
   });
 
