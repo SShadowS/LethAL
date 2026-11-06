@@ -27,10 +27,19 @@ import { readPackageEntry } from "./app-package";
 import { RECOVERY_DOC } from "./app-version";
 import { type PublishedPackageRead, isUnread } from "./backend";
 import { WALK_MAX_APPS, WALK_MAX_MS, testsFirst } from "./dependents-warning";
-import { type InstalledDependent, UnfilteredExtensionsQueryError } from "./harness";
+import {
+  type FieldItem,
+  type FieldOwnerRow,
+  type InstalledDependent,
+  type ObjectItem,
+  type ObjectOwnerRow,
+  type OwnersRead,
+  UnfilteredExtensionsQueryError,
+} from "./harness";
 import {
   type Container,
   type ExtensionEntry,
+  MICROSOFT_APP_IDS,
   type MemberPair,
   type MemberRule,
   type PackageMember,
@@ -47,6 +56,13 @@ import {
   splitQualified,
   unquoteName,
 } from "./member-clash";
+import {
+  READ_BUDGET_MS,
+  controlObjects,
+  newObjects,
+  newTableFields,
+  readInBatches,
+} from "./non-dependent-clash";
 import { unwrapSymbolPackage } from "./published-test-app";
 
 /** The 13 kinds BC and alc compare by (kind, id). Interfaces, profiles, controladdins and dotnet
@@ -443,6 +459,8 @@ export interface ObjectClashFinding {
   /** `installed-package`: what BC holds. `source-fallback`: the tests app's source under `symbols`. */
   readonly read: "installed-package" | "source-fallback";
   readonly symbols?: readonly string[];
+  /** R847: the app was named by a keyed read of what is new, not by the dependents list. Set only when true. */
+  readonly notDependent?: true;
 }
 
 /**
@@ -476,6 +494,8 @@ export interface MemberClashFinding {
   readonly other: { readonly id: number; readonly name: string };
   readonly app: InstalledDependent;
   readonly read: "installed-package" | "source-fallback";
+  /** R847: as on `ObjectClashFinding`. */
+  readonly notDependent?: true;
 }
 
 /** The pure comparison: every (kind, id) the target and one other app both declare. */
@@ -538,7 +558,7 @@ export class ObjectClashError extends Error {
         ? "(read from the package the server holds)"
         : `(read from its SOURCE under symbols [${(symbols ?? []).join(", ")}], because its installed package could not be read)`;
     const lines = findings.map((f) => {
-      return `${f.kind} ${f.id}: the target declares "${f.target.name}" (${f.target.where}); installed app ${f.app.name} ${f.app.version} by ${f.app.publisher} declares "${f.other.name}" ${how(f.read, f.symbols)}`;
+      return `${f.kind} ${f.id}: the target declares "${f.target.name}" (${f.target.where}); installed app ${f.app.name} ${f.app.version} by ${f.app.publisher}${f.notDependent === true ? " (not known to be a dependent)" : ""} declares "${f.other.name}" ${how(f.read, f.symbols)}`;
     });
     const memberLines = memberFindings.map((f) => {
       const what =
@@ -550,14 +570,24 @@ export class ObjectClashError extends Error {
               ? `enum value ordinal ${f.target.id}`
               : `enum value name "${f.target.name}"`;
       const kind = f.container === "Table" ? "table" : "enum";
-      return `${kind} "${f.ownerName}", ${what}: the target declares "${f.target.name}" (${f.target.id}, ${f.target.where}); installed app ${f.app.name} ${f.app.version} by ${f.app.publisher} declares "${f.other.name}" (${f.other.id}) on the same ${kind} ${how(f.read)}`;
+      return `${kind} "${f.ownerName}", ${what}: the target declares "${f.target.name}" (${f.target.id}, ${f.target.where}); installed app ${f.app.name} ${f.app.version} by ${f.app.publisher}${f.notDependent === true ? " (not known to be a dependent)" : ""} declares "${f.other.name}" (${f.other.id}) on the same ${kind} ${how(f.read)}`;
     });
     const injected = findings.some((f) => f.target.where.startsWith("injected"));
-    const fromSource = findings.some((f) => !f.target.where.startsWith("injected"));
+    const fromSource = findings.some(
+      (f) => !f.target.where.startsWith("injected") && f.notDependent !== true,
+    );
+    const unrelated = [...findings, ...memberFindings].some((f) => f.notDependent === true);
     // An injected id is LethAL's own: republishing the installed app does not change it.
     const advice = [
       ...(fromSource
         ? ["Republish the named app built against this target, or remove it from the server."]
+        : []),
+      // R847: the app was found by a keyed read, so it is not known to be a dependent (a truncated
+      // walk cannot say "not a dependent"): rebuilding it against this target may not apply.
+      ...(unrelated
+        ? [
+            "An app marked 'not known to be a dependent' was found by a keyed read of the server, not by the dependents list, so rebuilding it against this target may not apply: remove the clash in the target, or in that app.",
+          ]
         : []),
       ...(injected
         ? [
@@ -617,6 +647,32 @@ export interface ObjectClashCheckArgs {
   /** R845: when the walk of the dependents began, and the clock, for the 120 s bound. */
   readonly startedMs: number;
   readonly now: () => number;
+  /** R847: how to read the server about an installed app that is not a dependent. Absent: that step is
+   *  skipped (a backend that is not bcdev). */
+  readonly nonDependent?: NonDependentArgs;
+}
+
+/** R847: the keyed reads of the server. Each rejects with whatever the read threw. */
+export interface NonDependentArgs {
+  readonly targetPublisher: string;
+  readonly targetName: string;
+  readonly installedVersions: (appId: string) => Promise<readonly string[]>;
+  readonly objectOwners: (
+    items: readonly ObjectItem[],
+    maxMs: number,
+    timeoutMs: number,
+  ) => Promise<OwnersRead<ObjectOwnerRow>>;
+  readonly fieldOwners: (
+    items: readonly FieldItem[],
+    maxMs: number,
+    timeoutMs: number,
+  ) => Promise<OwnersRead<FieldOwnerRow>>;
+  /** The package bytes of an app in the package cache, by app id (lower case, dashed), or why not. */
+  readonly readDependencyApp: (
+    appId: string,
+  ) => Promise<readonly Uint8Array[] | { readonly unread: string }>;
+  /** The one deadline for all the reads. Default `READ_BUDGET_MS`. */
+  readonly budgetMs?: number;
 }
 
 const nameList = (ds: readonly InstalledDependent[]): string =>
@@ -633,12 +689,15 @@ const nameList = (ds: readonly InstalledDependent[]): string =>
  */
 export async function checkObjectClashes(args: ObjectClashCheckArgs): Promise<string[]> {
   const warnings: string[] = [];
-  if (!Array.isArray(args.dependents)) return warnings;
-  const dependents: readonly InstalledDependent[] = [
-    ...testsFirst(args.dependents as readonly InstalledDependent[], args.testsAppId),
-    ...args.transitive,
-  ];
-  if (dependents.length === 0) return warnings;
+  // R847: no early return before the keyed read of what is new in the target. A target with no
+  // dependents, or whose dependents read failed, can still clash with an app that is not a dependent.
+  const dependents: readonly InstalledDependent[] = Array.isArray(args.dependents)
+    ? [
+        ...testsFirst(args.dependents as readonly InstalledDependent[], args.testsAppId),
+        ...args.transitive,
+      ]
+    : [];
+  if (dependents.length === 0 && args.nonDependent === undefined) return warnings;
   const targetRead = declaredObjectsOfSource(args.targetFiles, args.targetSymbols);
   for (const u of targetRead.undecided) {
     warnings.push(
@@ -655,16 +714,19 @@ export async function checkObjectClashes(args: ObjectClashCheckArgs): Promise<st
   const trusted = new Set(args.targetDependencies.map((d) => bareAppId(d.id)));
   const findings: ObjectClashFinding[] = [];
   const memberFindings: MemberClashFinding[] = [];
-  const direct = (args.dependents as readonly InstalledDependent[]).length;
-  for (const [i, d] of dependents.entries()) {
-    if (i >= WALK_MAX_APPS || args.now() - args.startedMs >= WALK_MAX_MS) {
-      const rest = dependents.slice(i);
-      warnings.push(
-        `[lethal] R845: stopped after reading ${i} installed app(s) (the bound is ${WALK_MAX_APPS} apps and ${WALK_MAX_MS / 1000} s): ${rest.length} were NOT read, first ${nameList(rest)}. A clash with them was not checked.`,
-      );
-      break;
-    }
-    const via = i < direct ? "" : " (a transitive dependent)";
+  const direct = Array.isArray(args.dependents) ? args.dependents.length : 0;
+  /** Compared for real, by app id: a dependent whose read failed or fell past the bound is NOT here. */
+  const compared = new Set<string>();
+  // R847: read the target's new objects and fields against the server BEFORE the loop; the leads it
+  // names are read from their packages after it.
+  const leads = await findNonDependentLeads(args, targetRead, target, warnings);
+  /** Compares the target with one installed app. False when its objects could not be read. */
+  const compareApp = async (
+    d: InstalledDependent,
+    via: string,
+    notDependent: boolean,
+  ): Promise<boolean> => {
+    const flag = notDependent ? ({ notDependent: true } as const) : {};
     let objects: readonly DeclaredObject[] | undefined;
     let members: readonly PackageMember[] = [];
     let read: ObjectClashFinding["read"] = "installed-package";
@@ -724,7 +786,7 @@ export async function checkObjectClashes(args: ObjectClashCheckArgs): Promise<st
       warnings.push(
         `[lethal] R843: could not read the installed package of ${d.name} ${d.version} by ${d.publisher} (${why}); whether it declares an object the target declares was NOT checked.`,
       );
-      continue;
+      return false;
     }
     for (const c of findObjectClashes(target, objects)) {
       // R845: a table that either side marks Moved is not refused on the pair alone (not measured on BC).
@@ -741,6 +803,7 @@ export async function checkObjectClashes(args: ObjectClashCheckArgs): Promise<st
         other: c.other,
         app: d,
         read,
+        ...flag,
         ...(read === "source-fallback" ? { symbols: args.testSymbols } : {}),
       });
     }
@@ -758,6 +821,7 @@ export async function checkObjectClashes(args: ObjectClashCheckArgs): Promise<st
         other: { id: p.other.id, name: p.other.name },
         app: d,
         read,
+        ...flag,
       });
     }
     for (const s of cmp.soft) {
@@ -768,11 +832,285 @@ export async function checkObjectClashes(args: ObjectClashCheckArgs): Promise<st
           : `[lethal] R845: ${kind} "${s.target.ownerName}" ${ruleText(s.rule)} is shared with ${d.name}${via} on a ${kind} of that name owned by an app the target does not depend on (${s.other.ownerApp}); it may be another app's ${kind}, so this is a warning, not a refusal.`,
       );
     }
+    return true;
+  };
+  /** The bound on apps read and time, shared by the dependents and the leads. */
+  let readApps = 0;
+  const bound = (): boolean =>
+    readApps >= WALK_MAX_APPS || args.now() - args.startedMs >= WALK_MAX_MS;
+  for (const [i, d] of dependents.entries()) {
+    if (bound()) {
+      const rest = dependents.slice(i);
+      warnings.push(
+        `[lethal] R845: stopped after reading ${i} installed app(s) (the bound is ${WALK_MAX_APPS} apps and ${WALK_MAX_MS / 1000} s): ${rest.length} were NOT read, first ${nameList(rest)}. A clash with them was not checked.`,
+      );
+      break;
+    }
+    readApps++;
+    if (await compareApp(d, i < direct ? "" : " (a transitive dependent)", false)) {
+      compared.add(bareAppId(d.id));
+    }
+  }
+  // R847: a lead is an app a keyed read named that the loop did not compare. The read says only
+  // where to look: it refuses, if at all, from the app's own package, by the comparisons above.
+  const toRead = leads.filter((l) => !compared.has(bareAppId(l.id)));
+  for (const [i, l] of toRead.entries()) {
+    if (bound()) {
+      const rest = toRead.slice(i);
+      warnings.push(
+        `[lethal] R847: stopped before reading ${rest.length} installed app(s) the keyed read named (the bound is ${WALK_MAX_APPS} apps and ${WALK_MAX_MS / 1000} s), first ${nameList(rest)}. A clash with them was not checked.`,
+      );
+      break;
+    }
+    readApps++;
+    await compareApp(l, " (an installed app not known to be a dependent)", true);
   }
   if (findings.length > 0 || memberFindings.length > 0) {
     throw new ObjectClashError(findings, memberFindings);
   }
   return warnings;
+}
+
+/** An app id as the package cache indexes it: 8-4-4-4-12, lower case. */
+const dashedId = (id: string): string => {
+  const b = bareAppId(id);
+  return `${b.slice(0, 8)}-${b.slice(8, 12)}-${b.slice(12, 16)}-${b.slice(16, 20)}-${b.slice(20)}`;
+};
+
+/**
+ * R847: the table id for each table NAME, offline. The source says `extends Customer`; the server's
+ * `Field` table wants a number. The package cache holds the target's dependencies and the Microsoft
+ * apps. Only a name found as exactly ONE id is returned; zero matches or two ids warn (Base
+ * Application and Business Foundation share 8 table names) and the name is left out, so its fields
+ * are not read. A package that cannot be read warns once; an app that is not in the cache is not an
+ * error (a target need not depend on all five). `names` are lower case.
+ */
+export async function resolveTableIds(
+  names: readonly string[],
+  appIds: readonly string[],
+  read: NonDependentArgs["readDependencyApp"],
+  warn: (m: string) => void,
+): Promise<Map<string, number>> {
+  const found = new Map<string, Set<number>>(names.map((n) => [n, new Set<number>()]));
+  for (const appId of new Set(appIds.map(dashedId))) {
+    const got = await read(appId);
+    if (!Array.isArray(got)) continue;
+    for (const bytes of got as readonly Uint8Array[]) {
+      const pkg = declaredObjectsOfPackage(bytes);
+      if (!("objects" in pkg)) {
+        warn(`the package of ${appId} in the package cache is unreadable (${pkg.unreadable}).`);
+        continue;
+      }
+      for (const o of pkg.objects) {
+        if (o.kind === "Table") found.get(o.name.toLowerCase())?.add(o.id);
+      }
+    }
+  }
+  const out = new Map<string, number>();
+  for (const [name, ids] of found) {
+    const [only, ...more] = [...ids];
+    if (only !== undefined && more.length === 0) out.set(name, only);
+    else if (only === undefined) {
+      warn(
+        `no table "${name}" in the symbols of the target's dependencies or the Microsoft apps in the package cache; its new fields were NOT checked against the server.`,
+      );
+    } else {
+      warn(
+        `table "${name}" has ${ids.size} ids in those symbols (${[...ids].join(", ")}); its new fields were NOT checked against the server.`,
+      );
+    }
+  }
+  return out;
+}
+
+/**
+ * R847: asks the server by key about what is NEW in the target, and returns the installed apps that
+ * answered as owners of it and are not the target. A lead, never a refusal: the caller reads each
+ * lead's own package and compares as it does for a dependent. Pushes warnings; rethrows only
+ * `UnfilteredExtensionsQueryError`. No call at all when the target is not installed, or when nothing
+ * is new. Never reads the whole list (R433); one deadline for all the reads, no retry.
+ */
+async function findNonDependentLeads(
+  args: ObjectClashCheckArgs,
+  targetRead: ObjectsRead,
+  target: readonly DeclaredObject[],
+  warnings: string[],
+): Promise<InstalledDependent[]> {
+  const nd = args.nonDependent;
+  if (nd === undefined) return [];
+  const warn = (m: string): void => {
+    warnings.push(`[lethal] R847: ${m}`);
+  };
+  const why = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+  const unchecked = "an installed app that is not a dependent was NOT checked";
+  const clock = { now: args.now, deadlineMs: args.now() + (nd.budgetMs ?? READ_BUDGET_MS) };
+  const targetApp = bareAppId(args.targetAppId);
+
+  // 1. Skip. A throw is never read as a first publish.
+  let versions: readonly string[];
+  try {
+    versions = await nd.installedVersions(args.targetAppId);
+  } catch (err) {
+    if (err instanceof UnfilteredExtensionsQueryError) throw err;
+    warn(`could not tell whether the target is installed (${why(err)}); ${unchecked}.`);
+    return [];
+  }
+  if (versions.length === 0) return []; // a first publish cannot strip
+
+  // 2. Base set: the INSTALLED target's package, naming its installed version.
+  let base: { objects: readonly DeclaredObject[]; members: readonly PackageMember[] } | undefined;
+  const [installed, ...otherVersions] = versions;
+  if (installed === undefined || otherVersions.length > 0) {
+    warn(
+      `the target has ${versions.length} installed versions (${versions.join(", ")}), so there is no one installed base: every object and field of the target is read against the server, under the budget.`,
+    );
+  } else {
+    let reason = "its package could not be fetched";
+    try {
+      const got = await args.fetchPackage?.({
+        publisher: nd.targetPublisher,
+        name: nd.targetName,
+      });
+      if (got instanceof Uint8Array) {
+        const pkg = declaredObjectsOfPackage(got, { id: args.targetAppId, version: installed });
+        if ("objects" in pkg) base = { objects: pkg.objects, members: pkg.members };
+        else reason = pkg.unreadable;
+      } else if (isUnread(got)) reason = got.unread;
+    } catch (err) {
+      if (err instanceof UnfilteredExtensionsQueryError) throw err;
+      reason = why(err);
+    }
+    if (base === undefined) {
+      warn(
+        `the installed target ${installed} could not be read (${reason}), so every object and field of the target is read against the server, under the budget.`,
+      );
+    }
+  }
+
+  // 3. Items: what is new.
+  const objects = newObjects(target, base?.objects);
+  const fields = newTableFields(targetRead.members, base?.members);
+  if (objects.length === 0 && fields.length === 0) return [];
+
+  const leads = new Map<string, InstalledDependent>();
+  const lead = (app: InstalledDependent): void => {
+    const key = bareAppId(app.id);
+    if (key !== targetApp && !leads.has(key)) leads.set(key, app);
+  };
+
+  // 5/7. Objects, with one known-installed control for each kind asked.
+  if (objects.length > 0) {
+    const controls = base === undefined ? [] : controlObjects(objects, base.objects);
+    const items: ObjectItem[] = [...controls, ...objects].map((o) => ({ kind: o.kind, id: o.id }));
+    let read: Awaited<ReturnType<typeof readInBatches<ObjectItem, ObjectOwnerRow>>> | undefined;
+    try {
+      read = await readInBatches(items, nd.objectOwners, clock);
+    } catch (err) {
+      if (err instanceof UnfilteredExtensionsQueryError) throw err;
+      warn(`the keyed read of ${items.length} object(s) failed (${why(err)}); ${unchecked}.`);
+    }
+    if (read !== undefined) {
+      if (read.unread > 0) {
+        warn(
+          `${read.unread} of ${items.length} object(s) were NOT read (the budget is ${(nd.budgetMs ?? READ_BUDGET_MS) / 1000} s in all, or the server answered fewer); ${unchecked} for them.`,
+        );
+      }
+      const seen = new Set<string>();
+      const blindWhy = new Map<string, string>();
+      for (const [i, c] of controls.entries()) {
+        const r = read.rows[i];
+        if (r === undefined) blindWhy.set(c.kind, "its control object was not read");
+        else if (
+          r.outcome === "owner" &&
+          r.app !== undefined &&
+          bareAppId(r.app.id) === targetApp
+        ) {
+          seen.add(c.kind);
+        } else {
+          blindWhy.set(
+            c.kind,
+            `its control object ${c.kind} ${c.id}, which the installed target declares, came back "${r.outcome}"${r.app !== undefined ? ` owned by ${r.app.name}` : ""}`,
+          );
+        }
+      }
+      const blind = new Set<string>();
+      for (const kind of new Set(objects.map((o) => o.kind))) {
+        if (seen.has(kind)) continue;
+        blind.add(kind);
+        warn(
+          `${kind}: the server's object table cannot be trusted for this kind (${blindWhy.get(kind) ?? (base === undefined ? "there is no installed target package to take a control object from" : "the installed target declares no object of this kind to use as a control")}), so ${objects.filter((o) => o.kind === kind).length} new ${kind} object(s) were NOT checked, and none is called clean.`,
+        );
+      }
+      for (const [j, o] of objects.entries()) {
+        const r = read.rows[controls.length + j];
+        if (r === undefined || blind.has(o.kind) || r.outcome === "none") continue;
+        if (r.outcome === "unresolved" || r.app === undefined) {
+          warn(`could not tell which installed app owns ${o.kind} ${o.id}; it was not checked.`);
+        } else lead(r.app);
+      }
+    }
+  }
+
+  // 4/5. Fields on tables the target does not own.
+  if (fields.length > 0) {
+    const deps = [...args.targetDependencies.map((d) => d.id), ...MICROSOFT_APP_IDS];
+    let ids: Map<string, number> | undefined;
+    try {
+      ids = await resolveTableIds(
+        [...new Set(fields.map((f) => f.tableName.toLowerCase()))],
+        deps,
+        nd.readDependencyApp,
+        warn,
+      );
+    } catch (err) {
+      if (err instanceof UnfilteredExtensionsQueryError) throw err;
+      warn(`could not look up table ids (${why(err)}); new fields were NOT checked.`);
+    }
+    const asked: { item: FieldItem; field: (typeof fields)[number]; table: number }[] = [];
+    for (const f of fields) {
+      const table = ids?.get(f.tableName.toLowerCase());
+      if (table === undefined) continue;
+      if (f.byId) asked.push({ item: { table, id: f.id }, field: f, table });
+      if (f.byName) asked.push({ item: { table, name: f.name }, field: f, table });
+    }
+    if (asked.length > 0) {
+      let read: Awaited<ReturnType<typeof readInBatches<FieldItem, FieldOwnerRow>>> | undefined;
+      try {
+        read = await readInBatches(
+          asked.map((a) => a.item),
+          nd.fieldOwners,
+          clock,
+        );
+      } catch (err) {
+        if (err instanceof UnfilteredExtensionsQueryError) throw err;
+        warn(`the keyed read of ${asked.length} field(s) failed (${why(err)}); ${unchecked}.`);
+      }
+      if (read !== undefined) {
+        if (read.unread > 0) {
+          warn(
+            `${read.unread} of ${asked.length} field(s) were NOT read (the budget is ${(nd.budgetMs ?? READ_BUDGET_MS) / 1000} s in all, or the server answered fewer); ${unchecked} for them.`,
+          );
+        }
+        for (const [j, a] of asked.entries()) {
+          const r = read.rows[j];
+          if (r === undefined || r.outcome === "none") continue;
+          const label = `field ${a.field.id} "${a.field.name}" of table "${a.field.tableName}"`;
+          if (r.outcome === "unresolved" || r.app === undefined) {
+            warn(`could not tell which installed app owns ${label}; it was not checked.`);
+          } else if (r.tableName?.toLowerCase() !== a.field.tableName.toLowerCase()) {
+            // A wrong table id must never refuse: the row is for another table.
+            warn(
+              `table ${a.table} is called "${r.tableName ?? "(none)"}" on the server, not "${a.field.tableName}": ${label} was not checked.`,
+            );
+          } else if (!("name" in a.item) || r.fieldName === a.item.name) {
+            // BC accepts names that differ only in case (L5): only an exact name match is a lead.
+            lead(r.app);
+          }
+        }
+      }
+    }
+  }
+  return [...leads.values()];
 }
 
 function ruleText(rule: MemberRule): string {

@@ -17,8 +17,11 @@ codeunit 91003 "LC Control API"
     // R389: DependentCount reads the system table "Application Dependency". Declared so a gate
     // user without SUPER is not refused; the probe measured SUPER only.
     // R733: InstalledDependents also reads "NAV App Installed App".
+    // R847: ObjectOwners reads AllObj and FieldOwners reads Field, both by key.
     Permissions = tabledata "Application Dependency" = R,
-                  tabledata "NAV App Installed App" = R;
+                  tabledata "NAV App Installed App" = R,
+                  tabledata AllObj = R,
+                  tabledata Field = R;
 
     /// <summary>Identity + capabilities the client verifies before any execution. PROTOCOL V2 (design
     /// §7, R4 sol#8): ClientProtocol is a REQUIRED argument, not an optional one with a default — a v1
@@ -303,6 +306,265 @@ codeunit 91003 "LC Control API"
         Obj.Add('appId', AppId);
         Obj.Add('installedDependents', Rows);
         Obj.WriteTo(ResultJson);
+    end;
+
+    /// <summary>R847 (Part 1, not yet published): who owns each object the client names, read by primary key
+    /// from the virtual table AllObj (Object Type, Object ID). ItemsJson is [{kind, id}], at most 200,
+    /// kind one of the 13 clash kinds spelled as the client spells them; an unknown kind raises an error.
+    /// ONE ROW PER ITEM READ, in order, the target's own rows included, so an empty answer can never look
+    /// clean: {kind, id, outcome, appId?, appName?, appPublisher?, appVersion?, objectName?}. outcome is
+    /// owner (the app's four fields set, so the client can read its package), none (AllObj has no row) or
+    /// unresolved (a null or unjoinable App Package ID, or more than one row: only ever a warning).
+    /// MaxMs is a deadline in all: past it the loop stops and `read` says how many items were read (a client
+    /// abort does not stop running AL). JSON: {read, rows: [...]}. Never lists, never scans.</summary>
+    procedure ObjectOwners(ItemsJson: Text; MaxMs: Integer) ResultJson: Text
+    var
+        AllObjRec: Record AllObj;
+        Items: JsonArray;
+        Token: JsonToken;
+        Item: JsonObject;
+        Rows: JsonArray;
+        Row: JsonObject;
+        Obj: JsonObject;
+        Cache: Dictionary of [Guid, Text];
+        StartedAt: DateTime;
+        Kind: Text;
+        Id: Integer;
+        Owner: Text;
+        Count: Integer;
+        Read: Integer;
+    begin
+        StartedAt := CurrentDateTime();
+        Items := ParseItems('ObjectOwners', ItemsJson, MaxMs);
+        foreach Token in Items do begin
+            if DurationMs(CurrentDateTime() - StartedAt) >= MaxMs then
+                break;
+            Item := Token.AsObject();
+            Kind := ItemText(Item, 'kind');
+            Id := ItemInt(Item, 'id');
+            Clear(Row);
+            Row.Add('kind', Kind);
+            Row.Add('id', Id);
+            AllObjRec.Reset();
+            FilterObjectType(Kind, AllObjRec);
+            AllObjRec.SetRange("Object ID", Id);
+            Count := 0;
+            if AllObjRec.FindSet() then
+                repeat
+                    Count += 1;
+                    if Count = 1 then
+                        Owner := OwnerOfPackage(AllObjRec."App Package ID", Cache);
+                until AllObjRec.Next() = 0;
+            if Count = 0 then
+                Row.Add('outcome', 'none')
+            else
+                if (Count > 1) or (Owner = '') then
+                    Row.Add('outcome', 'unresolved')
+                else begin
+                    Row.Add('outcome', 'owner');
+                    AddOwnerApp(Row, Owner);
+                    AllObjRec.FindFirst();
+                    Row.Add('objectName', AllObjRec."Object Name");
+                end;
+            Rows.Add(Row);
+            Read += 1;
+        end;
+        Obj.Add('read', Read);
+        Obj.Add('rows', Rows);
+        Obj.WriteTo(ResultJson);
+    end;
+
+    /// <summary>R847 (Part 1, not yet published): who owns each field the client names, read from the
+    /// virtual table Field (TableNo, No.). ItemsJson is [{table, id}] or [{table, name}], at most 200.
+    /// ONE ROW PER ITEM READ, in order: {table, id?, name?, outcome, appId?, appName?, appPublisher?,
+    /// appVersion?, fieldName?, tableName?,
+    /// fieldId?}. outcome is owner, none or unresolved as in ObjectOwners; a name item that matches more
+    /// than one field of the table is unresolved. FieldName and TableName are answered as BC holds them:
+    /// the CLIENT compares names exactly (a filter on a name is not case sensitive) and checks tableName is
+    /// the table it asked about. A name read scans one table's rows. MaxMs and `read` as in ObjectOwners.
+    /// JSON: {read, rows: [...]}.</summary>
+    procedure FieldOwners(ItemsJson: Text; MaxMs: Integer) ResultJson: Text
+    var
+        FieldRec: Record Field;
+        Items: JsonArray;
+        Token: JsonToken;
+        Item: JsonObject;
+        Rows: JsonArray;
+        Row: JsonObject;
+        Obj: JsonObject;
+        Cache: Dictionary of [Guid, Text];
+        StartedAt: DateTime;
+        TableNo: Integer;
+        Id: Integer;
+        Name: Text;
+        ByName: Boolean;
+        Owner: Text;
+        Count: Integer;
+        Read: Integer;
+    begin
+        StartedAt := CurrentDateTime();
+        Items := ParseItems('FieldOwners', ItemsJson, MaxMs);
+        foreach Token in Items do begin
+            if DurationMs(CurrentDateTime() - StartedAt) >= MaxMs then
+                break;
+            Item := Token.AsObject();
+            TableNo := ItemInt(Item, 'table');
+            ByName := Item.Contains('name');
+            Clear(Row);
+            Row.Add('table', TableNo);
+            FieldRec.Reset();
+            FieldRec.SetRange(TableNo, TableNo);
+            if ByName then begin
+                Name := ItemText(Item, 'name');
+                Row.Add('name', Name);
+                FieldRec.SetRange(FieldName, Name);
+            end else begin
+                Id := ItemInt(Item, 'id');
+                Row.Add('id', Id);
+                FieldRec.SetRange("No.", Id);
+            end;
+            Count := 0;
+            if FieldRec.FindSet() then
+                repeat
+                    Count += 1;
+                    if Count = 1 then
+                        Owner := OwnerOfPackage(FieldRec."App Package ID", Cache);
+                until FieldRec.Next() = 0;
+            if Count = 0 then
+                Row.Add('outcome', 'none')
+            else
+                if (Count > 1) or (Owner = '') then
+                    Row.Add('outcome', 'unresolved')
+                else begin
+                    Row.Add('outcome', 'owner');
+                    AddOwnerApp(Row, Owner);
+                    FieldRec.FindFirst();
+                    Row.Add('fieldName', FieldRec.FieldName);
+                    Row.Add('tableName', FieldRec.TableName);
+                    Row.Add('fieldId', FieldRec."No.");
+                end;
+            Rows.Add(Row);
+            Read += 1;
+        end;
+        Obj.Add('read', Read);
+        Obj.Add('rows', Rows);
+        Obj.WriteTo(ResultJson);
+    end;
+
+    /// <summary>Shared by ObjectOwners and FieldOwners: the item list, refused loudly when it is not a JSON
+    /// array, is over 200 items, or MaxMs is not above 0.</summary>
+    local procedure ParseItems(Action: Text; ItemsJson: Text; MaxMs: Integer): JsonArray
+    var
+        Items: JsonArray;
+    begin
+        if MaxMs <= 0 then
+            Error('%1: MaxMs %2 must be above 0', Action, MaxMs);
+        if not Items.ReadFrom(ItemsJson) then
+            Error('%1: ItemsJson is not a JSON array', Action);
+        if Items.Count() > 200 then
+            Error('%1: %2 items, at most 200 a call', Action, Items.Count());
+        exit(Items);
+    end;
+
+    local procedure ItemText(Item: JsonObject; Member: Text): Text
+    var
+        Token: JsonToken;
+    begin
+        if not Item.Get(Member, Token) then
+            Error('item has no "%1"', Member);
+        exit(Token.AsValue().AsText());
+    end;
+
+    local procedure ItemInt(Item: JsonObject; Member: Text): Integer
+    var
+        Token: JsonToken;
+    begin
+        if not Item.Get(Member, Token) then
+            Error('item has no "%1"', Member);
+        exit(Token.AsValue().AsInteger());
+    end;
+
+    /// <summary>The AllObj option for a client kind. An explicit case: "Table" must never become TableData,
+    /// and an unknown kind raises an error rather than reading some other type.</summary>
+    local procedure FilterObjectType(Kind: Text; var AllObjRec: Record AllObj)
+    begin
+        case Kind of
+            'Table':
+                AllObjRec.SetRange("Object Type", AllObjRec."Object Type"::Table);
+            'Codeunit':
+                AllObjRec.SetRange("Object Type", AllObjRec."Object Type"::Codeunit);
+            'Page':
+                AllObjRec.SetRange("Object Type", AllObjRec."Object Type"::Page);
+            'Report':
+                AllObjRec.SetRange("Object Type", AllObjRec."Object Type"::Report);
+            'Query':
+                AllObjRec.SetRange("Object Type", AllObjRec."Object Type"::Query);
+            'XmlPort':
+                AllObjRec.SetRange("Object Type", AllObjRec."Object Type"::XMLport);
+            'Enum':
+                AllObjRec.SetRange("Object Type", AllObjRec."Object Type"::Enum);
+            'EnumExtension':
+                AllObjRec.SetRange("Object Type", AllObjRec."Object Type"::EnumExtension);
+            'PermissionSet':
+                AllObjRec.SetRange("Object Type", AllObjRec."Object Type"::PermissionSet);
+            'PermissionSetExtension':
+                AllObjRec.SetRange("Object Type", AllObjRec."Object Type"::PermissionSetExtension);
+            'TableExtension':
+                AllObjRec.SetRange("Object Type", AllObjRec."Object Type"::TableExtension);
+            'PageExtension':
+                AllObjRec.SetRange("Object Type", AllObjRec."Object Type"::PageExtension);
+            'ReportExtension':
+                AllObjRec.SetRange("Object Type", AllObjRec."Object Type"::ReportExtension);
+            else
+                Error('unknown object kind "%1"', Kind);
+        end;
+    end;
+
+    /// <summary>The owner app's id, name, publisher and version on a row, as InstalledDependents writes them.
+    /// AppIdText comes from OwnerOfPackage, so the installed row exists ("NAV App Installed App" is keyed
+    /// by App ID); a missing one raises an error rather than an owner with no name.</summary>
+    local procedure AddOwnerApp(var Row: JsonObject; AppIdText: Text)
+    var
+        Installed: Record "NAV App Installed App";
+        AppGuid: Guid;
+    begin
+        if not Evaluate(AppGuid, AppIdText) then
+            Error('owner app id %1 is not a GUID', AppIdText);
+        if not Installed.Get(AppGuid) then
+            Error('owner app %1 is not installed', AppIdText);
+        Row.Add('appId', AppIdText);
+        Row.Add('appName', Installed.Name);
+        Row.Add('appPublisher', Installed.Publisher);
+        Row.Add('appVersion', StrSubstNo('%1.%2.%3.%4', Format(Installed."Version Major", 0, 9), Format(Installed."Version Minor", 0, 9), Format(Installed."Version Build", 0, 9), Format(Installed."Version Revision", 0, 9)));
+    end;
+
+    /// <summary>The app id (lower case, as InstalledDependents writes it) of the installed app whose package
+    /// is PackageId, or '' when the package id is null, no installed app has it, or two different apps do.
+    /// Cached per call. The app is compared by App ID, never by package id: a mint changes the package id.</summary>
+    local procedure OwnerOfPackage(PackageId: Guid; var Cache: Dictionary of [Guid, Text]): Text
+    var
+        Installed: Record "NAV App Installed App";
+        Found: Text;
+        AppText: Text;
+    begin
+        if IsNullGuid(PackageId) then
+            exit('');
+        if Cache.ContainsKey(PackageId) then
+            exit(Cache.Get(PackageId));
+        Installed.SetRange("Package ID", PackageId);
+        if Installed.FindSet() then
+            repeat
+                AppText := LowerCase(DelChr(Format(Installed."App ID"), '=', '{}'));
+                if Found = '' then
+                    Found := AppText
+                else
+                    if Found <> AppText then begin
+                        Found := '';
+                        break;
+                    end;
+            until Installed.Next() = 0;
+        Cache.Add(PackageId, Found);
+        exit(Found);
     end;
 
     /// <summary>OData action: attempt to acquire the machine-global lease (design §4, R4-hardened).

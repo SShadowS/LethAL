@@ -333,3 +333,83 @@ describe("R689: the discovery error is read from a cleared last error (RunOneMet
     );
   });
 });
+
+/**
+ * R847 Part 1: the two read actions are in the source, NOT published and not yet proven on a server
+ * (Part 2). These pins are statement facts whose violation would not fail any gate and would read as
+ * a clean answer: a kind mapped to the wrong AllObj type, a loop that never stops, a short answer
+ * that looks whole.
+ */
+describe("R847 (Part 1, not yet published): ObjectOwners and FieldOwners", () => {
+  const api = codeOnly(read("ControlApi.Codeunit.al"));
+  const KINDS = [
+    ["Table", "Table"],
+    ["Codeunit", "Codeunit"],
+    ["Page", "Page"],
+    ["Report", "Report"],
+    ["Query", "Query"],
+    ["XmlPort", "XMLport"],
+    ["Enum", "Enum"],
+    ["EnumExtension", "EnumExtension"],
+    ["PermissionSet", "PermissionSet"],
+    ["PermissionSetExtension", "PermissionSetExtension"],
+    ["TableExtension", "TableExtension"],
+    ["PageExtension", "PageExtension"],
+    ["ReportExtension", "ReportExtension"],
+  ] as const;
+
+  test("AllObj and Field are declared, read only", () => {
+    expect(api).toContain("tabledata AllObj = R");
+    expect(api).toContain("tabledata Field = R");
+  });
+
+  test("each of the 13 kinds has its own case line, Table is never TableData, an unknown kind raises", () => {
+    const body = procedureBody(api, "FilterObjectType");
+    for (const [kind, option] of KINDS) {
+      expect(body).toContain(
+        `'${kind}':\n                AllObjRec.SetRange("Object Type", AllObjRec."Object Type"::${option});`,
+      );
+    }
+    expect(body).not.toContain("TableData");
+    expect(body).toContain("else\n                Error('unknown object kind \"%1\"', Kind);");
+  });
+
+  test("both loops stop at the deadline, count what they read, and answer one row per item read", () => {
+    for (const name of ["ObjectOwners", "FieldOwners"]) {
+      const body = procedureBody(api, name);
+      expect(body).toContain(
+        "if DurationMs(CurrentDateTime() - StartedAt) >= MaxMs then\n                break;",
+      );
+      expect(body).toContain("Rows.Add(Row);\n            Read += 1;");
+      expect(body).toContain("Obj.Add('read', Read);");
+      expect(body).toContain("Obj.Add('rows', Rows);");
+      // A second row is never hidden: FindSet, a count, and more than one is unresolved.
+      expect(body).toContain("FindSet()");
+      expect(body).toContain("Count += 1;");
+      expect(body).toContain("(Count > 1) or (Owner = '')");
+      expect(body).toContain("Row.Add('outcome', 'none')");
+    }
+  });
+
+  test("a call is refused loudly past 200 items, on a non-array, and with MaxMs not above 0", () => {
+    const body = procedureBody(api, "ParseItems");
+    expect(body).toContain("if MaxMs <= 0 then");
+    expect(body).toContain("if not Items.ReadFrom(ItemsJson) then");
+    expect(body).toContain("if Items.Count() > 200 then");
+  });
+
+  test("the owner is joined by App ID from the package, cached per call, and a null package is unresolved", () => {
+    const body = procedureBody(api, "OwnerOfPackage");
+    expect(body).toContain("if IsNullGuid(PackageId) then\n            exit('');");
+    expect(body).toContain("if Cache.ContainsKey(PackageId) then");
+    expect(body).toContain('Installed.SetRange("Package ID", PackageId);');
+    expect(body).toContain("Installed.FindSet()");
+    expect(body).toContain("Cache.Add(PackageId, Found);");
+  });
+
+  test("a field row carries FieldName and TableName as BC holds them, for the client to compare", () => {
+    const body = procedureBody(api, "FieldOwners");
+    expect(body).toContain("Row.Add('fieldName', FieldRec.FieldName);");
+    expect(body).toContain("Row.Add('tableName', FieldRec.TableName);");
+  });
+});
