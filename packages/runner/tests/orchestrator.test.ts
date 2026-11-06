@@ -12949,11 +12949,93 @@ describe("R504: a lease answer whose body never finishes, through a real LeaseCl
       emit: [(e) => events.push(e)],
     });
     const unanswered = warnings(events, "lease-renew-unanswered");
-    expect(unanswered).toHaveLength(2);
+    expect(warnings(events, "lease-renew-blip")).toHaveLength(1); // R852: the first tick alone
+    expect(unanswered).toHaveLength(1);
     expect(unanswered[0]).toMatch(TIMED_OUT);
     expect(calls.RenewLease).toBe(4); // two ticks, each one renew and one retry
     expect(report.quarantined).toBeUndefined();
     expect(events.some((e) => e.type === "batch-invalidated")).toBe(false);
+  });
+
+  /** R852: `ticks` heartbeats during the first mutant, the renews answered as `answers` says. */
+  async function renewTicks(ticks: number, answers: (n: number) => unknown) {
+    const { client } = wired({ RenewLease: answers } as Parameters<typeof wired>[0]);
+    const events: RunEvent[] = [];
+    const timers = new FakeTimers();
+    const { lease } = leaseCfg(client, { timers });
+    let fired = false;
+    const backend = leaseBackend({
+      run: async (ref, opts) => {
+        if (!fired) {
+          fired = true;
+          for (let i = 0; i < ticks; i++) await timers.fire();
+        }
+        return pass(ref, opts);
+      },
+    });
+    const report = await runSessionForTest(backend, {
+      quarantineDir: freshTmpDir(),
+      lease,
+      emit: [(e) => events.push(e)],
+    }).catch((e: unknown) => e);
+    return { events, report };
+  }
+  const ANSWERED = { renewed: true, expiresAt: "2026-07-24T12:05:00.000Z" };
+
+  test("R852: one failed tick is a blip, not lease-renew-unanswered", async () => {
+    const { events } = await renewTicks(1, () => "stall");
+    expect(warnings(events, "lease-renew-blip")).toHaveLength(1);
+    expect(warnings(events, "lease-renew-unanswered")).toHaveLength(0);
+  });
+
+  test("R852: an answered tick between two failed ones resets the count", async () => {
+    const { events } = await renewTicks(3, (n) => (n === 3 ? ANSWERED : "stall"));
+    expect(warnings(events, "lease-renew-blip")).toHaveLength(2);
+    expect(warnings(events, "lease-renew-unanswered")).toHaveLength(0);
+  });
+
+  test("R852: renewed:false after a blip is still a lost lease", async () => {
+    const lost = await renewTicks(2, (n) => (n === 3 ? { renewed: false } : "stall"));
+    const held = await renewTicks(2, (n) => (n === 3 ? ANSWERED : "stall"));
+    expect(warnings(lost.events, "lease-renew-blip")).toHaveLength(1);
+    expect(
+      JSON.stringify(lost.report instanceof Error ? lost.report.message : lost.report),
+    ).toMatch(/lease-lost/);
+    expect(held.report).not.toBeInstanceOf(Error);
+    expect(JSON.stringify(held.report)).not.toMatch(/lease-lost/);
+  });
+
+  test("R852: a tick answered by its retry resets the count too", async () => {
+    const { events } = await renewTicks(3, (n) => (n === 4 ? ANSWERED : "stall"));
+    expect(warnings(events, "lease-renew-blip")).toHaveLength(2);
+    expect(warnings(events, "lease-renew-unanswered")).toHaveLength(0);
+  });
+
+  test("R852: a tick dropped behind a failing stalled renew counts, so it warns", async () => {
+    const { client } = wired({ RenewLease: () => "stall" });
+    const events: RunEvent[] = [];
+    const timers = new FakeTimers();
+    const { lease } = leaseCfg(client, { timers });
+    let fired = false;
+    const failed = () => events.some((e) => e.type === "warning" && /^lease-renew/.test(e.code));
+    const backend = leaseBackend({
+      run: async (ref, opts) => {
+        if (!fired) {
+          fired = true;
+          timers.fireDetached();
+          await timers.fire(); // dropped: the first is still open
+          while (!failed()) await Bun.sleep(5);
+        }
+        return pass(ref, opts);
+      },
+    });
+    await runSessionForTest(backend, {
+      quarantineDir: freshTmpDir(),
+      lease,
+      emit: [(e) => events.push(e)],
+    });
+    expect(warnings(events, "lease-renew-unanswered")).toHaveLength(1);
+    expect(warnings(events, "lease-renew-blip")).toHaveLength(0);
   });
 
   /**
