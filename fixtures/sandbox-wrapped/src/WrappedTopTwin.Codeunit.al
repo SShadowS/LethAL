@@ -21,7 +21,7 @@ codeunit 78902 "Wrapped Top Twin"
     // gain TwiceTop. The unwrapped twin (WrappedTopTwin) has the same
     // text on the same lines, so the gate compares the two per mutant.
     // The statement-level #if below is part of the measured shape (I2).
-    //
+    // R827: Grow's #pragma keeps Grow a chain, long enough for that span.
     // Do not shorten this comment, move Twice, or add a procedure to this
     // file without a new pre-commitment: the line numbers are what
     // docs/superpowers/specs/2026-10-06-r300b-wrapped-leg-precommitment.md

@@ -1851,7 +1851,9 @@ async function legXSleep(scratch: string): Promise<void> {
     }
     hitsByMutant.set(id, m);
   };
-  const SLEEP_LINES = [25, 31, 37, 43];
+  // R827: the one `Sleep(5000)` sits in the original arm of M0002's own chain. Before, each of four
+  // body-chain arms repeated the body and so held a copy (lines 25, 31, 37, 43).
+  const SLEEP_LINES = [18];
   const { r, b, sleeper } = await run("d", recordHits);
   // R-762 B: a pinned build whose pin and session probe read sleep-is-noop gone runs without the
   // §6 rule: M0003 and M0004 survive, no mutant call writes a coverage document, (e)/(f) have
@@ -1871,7 +1873,7 @@ async function legXSleep(scratch: string): Promise<void> {
   const mustD = (cond: boolean, what: string): void => must(cond, xdFailure(what, sleeper));
   const idx = b.sleepIndexSize();
   console.log(`  X (d): Sleep index ${idx?.target} + ${idx?.test}`);
-  must(idx?.target === 4 && idx?.test === 5, `X (d): Sleep index ${JSON.stringify(idx)}, r5 4 + 5`);
+  must(idx?.target === 1 && idx?.test === 5, `X (d): Sleep index ${JSON.stringify(idx)}, R827 1 + 5`);
   // r6 (c), restated by r11 (b): on alpha.2 every ProbeSleep test passes; on edge the three 600 s
   // siblings are timeout rows. A timeout is not a refusal, so no ProbeSleep test is unsupported on either.
   must(
@@ -1885,9 +1887,9 @@ async function legXSleep(scratch: string): Promise<void> {
     "lethal.remove-assignment": {
       code: "M0003",
       verdict: retired ? "survived" : "error",
-      line: 25,
+      line: 18,
     },
-    "lethal.shift-integer": { code: "M0004", verdict: retired ? "survived" : "error", line: 37 },
+    "lethal.shift-integer": { code: "M0004", verdict: retired ? "survived" : "error", line: 18 },
     "lethal.return-value": { code: "M0005", verdict: "killed" },
   };
   mustD(r.mutants.length === 5, `X (d): ${r.mutants.length} mutants, r5 5`);

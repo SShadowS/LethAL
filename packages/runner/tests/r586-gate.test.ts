@@ -451,7 +451,7 @@ describe("R649 r11 (e): X (d)'s Sleeper sleeps 5 s and moves no line", () => {
     expect(ms).toBe(5000);
   });
 
-  test("X-r11c: legXSleep's scratch dirs instrument to arms 25/31/37/43 and an index of 4 + 5", async () => {
+  test("X-r11c: legXSleep's scratch dirs instrument to one Sleep on line 18 and an index of 1 + 5", async () => {
     const scratch = await mkdtemp(join(tmpdir(), "lethal-r649-xd-"));
     dirs.push(scratch);
     // The same scratch dirs `legXSleep` (al-runner-v3.itest.ts) builds.
@@ -496,17 +496,21 @@ describe("R649 r11 (e): X (d)'s Sleeper sleeps 5 s and moves no line", () => {
     expect(files).toHaveLength(1);
     const inst = (await readFile(join(out, files[0] ?? ""), "utf8")).split("\n");
     const sleeps = sleepCallLines(inst.join("\n"));
-    expect(sleeps).toEqual([25, 31, 37, 43]);
-    // Each arm opens two lines above its Sleep: `... Active('M000n') then begin`, `begin`, `Sleep`.
-    const armOf = (line: number) =>
-      /Active\('(M\d{4})'\)/.exec(inst[line - 3] ?? "")?.[1] ?? "else";
-    expect(sleeps.map(armOf)).toEqual(["M0003", "M0005", "M0004", "else"]);
+    // R827: the body's empty-block is one guard and each statement is its own chain, so the one
+    // Sleep sits in the original (`else`) arm of M0002's chain. It used to be copied into each of
+    // four body-chain arms (lines 25, 31, 37, 43; arms M0003, M0005, M0004, else).
+    expect(sleeps).toEqual([18]);
+    // The Sleep's chain opens three lines above it: `... Active('M0002') then begin`, the marker
+    // line, `end else begin`, `Sleep`.
+    // (`inst` is 0-based, a line number 1-based.)
+    expect(inst[(sleeps[0] ?? 0) - 4]).toContain("Active('M0002')");
+    expect(inst[(sleeps[0] ?? 0) - 2]?.trim()).toBe("end else begin");
     // The leg's check through `sleepIndexSize()`. Its target side, `active/`, also holds probe-app's
     // uninstrumented files; none has a Sleep, so `out` alone gives the same count.
     for (const f of await readdir(join(app, "src")))
       if (f !== "ProbeSleeper.Codeunit.al")
         expect(sleepCallLines(await readFile(join(app, "src", f), "utf8")), f).toEqual([]);
-    expect((await buildSleepIndex(out, tests)).sizes).toEqual({ target: 4, test: 5 });
+    expect((await buildSleepIndex(out, tests)).sizes).toEqual({ target: 1, test: 5 });
   }, 60_000);
 });
 

@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
   ALNodeKind,
@@ -97,6 +99,8 @@ interface DirResult {
   mutants: number;
   guards: number;
   markers: number;
+  /** R827: free bodies seen. */
+  free: number;
   findings: Finding[];
 }
 
@@ -114,11 +118,13 @@ async function checkDir(
     mutants: 0,
     guards: 0,
     markers: 0,
+    free: 0,
     findings: [],
   };
   let i = 0;
   for (const f of set.files) {
-    if (!keep(i++)) continue;    const deduped = dedupeSpecs(f.specs, tierOf);
+    if (!keep(i++)) continue;
+    const deduped = dedupeSpecs(f.specs, tierOf);
     const ided = assignMutantIds(new Map([[f.path, deduped]])).get(f.path) ?? [];
     if (ided.length === 0) continue;
     // No catch: an emitter that throws must fail this test, not shrink what it checked.
@@ -128,6 +134,7 @@ async function checkDir(
     out.mutants += r.checked;
     out.guards += r.stats.guards;
     out.markers += r.stats.markers;
+    out.free += r.freeGuards;
     out.findings.push(...r.findings);
   }
   return out;
@@ -254,15 +261,137 @@ describe("R827: the comparison can fail", () => {
     const ided = assignMutantIds(new Map([[f.path, deduped]])).get(f.path) ?? [];
     const { compiled } = instrumentOneFile(f, deduped, ided);
     const fc = caseOf(f.path, f.source, compiled, ided);
-    // M0005's branch ends in `exit(Value);`. Drop it from that branch only.
+    // M0005's branch holds `exit(0)`. Drop it from that branch only.
     const at = compiled.indexOf("Active('M0005')");
-    const drop = compiled.indexOf("exit(Value);", at);
+    const drop = compiled.indexOf("exit(0)", at);
     expect(at).toBeGreaterThan(0);
     expect(drop).toBeGreaterThan(at);
-    const lost = compiled.slice(0, drop) + compiled.slice(drop + "exit(Value);".length);
+    // `begin end`, because the `then` slot must still parse.
+    const lost = `${compiled.slice(0, drop)}begin end${compiled.slice(drop + "exit(0)".length)}`;
     const r = await checkFile({ ...fc, compiled: lost });
     expect(r.findings.map((x) => `${x.mutantId} ${x.kind}`)).toEqual(["M0005 diff"]);
   });
+});
+
+/** R827 point 1: every loop kind, in a body with a free `empty-block`, holding mutants. */
+const LOOPS_AL = `codeunit 51996 "R827 Loops"
+{
+    procedure ForLoop(N: Integer) var I: Integer; T: Integer;
+    begin
+        T := 1;
+        for I := 1 to N do begin
+            T := T + 1;
+            if T > 3 then
+                T := T - 1;
+        end;
+    end;
+
+    procedure WhileLoop(N: Integer) var T: Integer;
+    begin
+        T := N + 1;
+        while N > 0 do begin
+            T := T + 2;
+            N -= 1;
+        end;
+    end;
+
+    procedure RepeatLoop(N: Integer) var T: Integer;
+    begin
+        T := N + 1;
+        repeat
+            T := T + 2;
+            N -= 1;
+        until N <= 0;
+    end;
+
+    procedure ForeachLoop(L: List of [Integer]) var I: Integer; T: Integer;
+    begin
+        T := 1;
+        foreach I in L do begin
+            T := T + I;
+            if T > 3 then
+                T := T - 1;
+        end;
+    end;
+}
+`;
+
+/** `checkDir` over one source, in a throwaway project. */
+async function checkSource(source: string): Promise<DirResult> {
+  const root = await mkdtemp(join(tmpdir(), "lethal-r827-source-"));
+  try {
+    await writeFile(
+      join(root, "app.json"),
+      JSON.stringify({
+        id: "0f2b7c5e-4d3a-4917-8a1c-3b4a8d9f1027",
+        name: "R827 Source",
+        publisher: "LethAL",
+        version: "1.0.0.0",
+        idRanges: [{ from: 51000, to: 51999 }],
+      }),
+    );
+    await writeFile(join(root, "Source.Codeunit.al"), source);
+    return await checkDir(root, []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+describe("R827: a free body keeps its guards out of its loops", () => {
+  test("no guard sits inside a loop within a free guard's else, in any loop kind", async () => {
+    const r = await checkSource(LOOPS_AL);
+    expect(r.mutants).toBeGreaterThan(20);
+    expect(r.free).toBe(4);
+    expect(r.findings.map((f) => `${f.mutantId} ${f.kind}: ${f.detail}`)).toEqual([]);
+  });
+});
+
+describe("R827: which body is free", () => {
+  const inProc = (body: string, vars = "X: Integer;"): string =>
+    `codeunit 51997 "R827 Free"\n{\n    procedure P() var ${vars}\n    begin\n${body}\n    end;\n}\n`;
+  const STATEMENTS = "        X := X + 1;\n        X := X + 2;";
+  const cases: ReadonlyArray<readonly [string, string, number]> = [
+    ["a plain body", inProc(STATEMENTS), 1],
+    ["a body with a #pragma", inProc(`${STATEMENTS}\n#pragma warning restore AL0432`), 0],
+    ["a body with an #if", inProc(`#if WRAPDEF\n        X := 1;\n#endif\n${STATEMENTS}`), 0],
+    [
+      "a branch block: the body is, the branch stays in its `if`'s chain",
+      inProc("        if X > 0 then begin\n            X := 1;\n        end;"),
+      1,
+    ],
+    [
+      "a case arm: the body is, the arm stays in its `case`'s chain",
+      inProc("        case X of\n            1: begin X := 2; end;\n        end;"),
+      1,
+    ],
+    [
+      "a member that resolves to the block itself",
+      inProc(
+        "        foreach X in L do\n            Foo(X + 1);",
+        "X: Integer; L: List of [Integer];",
+      ),
+      0,
+    ],
+    [
+      "a trigger's body",
+      `codeunit 51997 "R827 Free"\n{\n    trigger OnRun() var X: Integer;\n    begin\n${STATEMENTS}\n    end;\n}\n`,
+      1,
+    ],
+    [
+      "`begin` touching the first statement",
+      'codeunit 51997 "R827 Free"\n{\n    procedure P() var "Y": Integer;\n    begin"Y" := "Y" + 1;\n    end;\n}\n',
+      1,
+    ],
+    ["comments at both ends", inProc(`// a\n${STATEMENTS}\n// b`), 1],
+  ];
+  for (const [name, source, free] of cases) {
+    test(name, async () => {
+      const r = await checkSource(source);
+      expect(r.mutants).toBeGreaterThan(0);
+      expect(r.free).toBe(free);
+      expect(r.findings.map((f) => `${f.mutantId} ${f.kind}: ${f.detail}`)).toEqual([]);
+    });
+  }
 });
 
 const CORPUS = process.env.LETHAL_R827_CORPUS;
