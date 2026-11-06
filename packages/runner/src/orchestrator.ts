@@ -1362,7 +1362,7 @@ export async function generateMutationSet(
   // nothing, so unlike `--exclude` that is not refused.
   if (excludingOperators && producedInstrumentable.size === 0) {
     throw new Error(
-      `--exclude-operator left no deployable mutation site in this project: ${options.excludeOperators?.join(", ")} held all of them.`,
+      `no deployable mutation site is left in this scope with --exclude-operator ${options.excludeOperators?.join(", ")}.`,
     );
   }
   if (admittedOperators !== undefined && !excludingOperators) {
@@ -6447,7 +6447,7 @@ async function runSessionBody(
   } = await generateMutationSet(cfg.projectDir, {
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
     ...(cfg.exclude !== undefined ? { exclude: cfg.exclude } : {}),
-    ...(cfg.excludeOperators !== undefined
+    ...(cfg.excludeOperators !== undefined && cfg.excludeOperators.length > 0
       ? { excludeOperators: cfg.excludeOperators }
       : resolvedOperators !== undefined
         ? { operators: resolvedOperators }

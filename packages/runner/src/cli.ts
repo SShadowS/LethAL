@@ -987,7 +987,7 @@ RUN — scope. These bound cost. --tests-only can change a verdict; the others c
   --exclude-operator <name>  every operator but these contributes mutants (repeatable). Same
                              prefix rule and same flag in the report. An unregistered name is
                              refused, and so is giving --operator as well
-  --lines <file>:<a>-<b>    only mutants whose span touches these lines contribute (repeatable;
+  --lines <file>:<a>-<b>     only mutants whose span touches these lines contribute (repeatable;
                              <file>:<n> for one line). Paths are project-relative. A mutant that
                              spans a given line and others is kept. Applied after dedup, so it
                              cannot change a verdict. The report flags it 'line-narrowed'
@@ -1988,6 +1988,10 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     throw new Error(
       '--exclude-operator requires a non-empty name (e.g. --exclude-operator "empty-block")',
     );
+  }
+  // Here too, not only in `admittedOperatorNames`: a real run gets there after it provisions.
+  if (operatorRaw !== undefined && excludeOperatorRaw !== undefined) {
+    throw new Error("--operator and --exclude-operator cannot be combined");
   }
   const operators = {
     ...(operatorRaw !== undefined && operatorRaw.length > 0 ? { operators: operatorRaw } : {}),

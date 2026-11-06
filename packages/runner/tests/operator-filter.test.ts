@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ownTimeout } from "@lethal/engine/own-timeout";
 import { dedupeSpecs } from "@lethal/schemata";
 import type { CompiledArtifact } from "../src/artifact";
 import type {
@@ -317,7 +318,7 @@ describe("R832: --exclude-operator", () => {
     await withProject(FIXTURE, async (dir) => {
       const full = [...new Set(operatorNamesOf((await generateMutationSet(dir)).files))];
       await expect(generateMutationSet(dir, { excludeOperators: full })).rejects.toThrow(
-        "--exclude-operator left no deployable mutation site",
+        "no deployable mutation site is left in this scope with --exclude-operator",
       );
     });
   });
@@ -628,14 +629,21 @@ describe("runSession — --operator reaches both the mutant set AND the report",
   async function runWith(
     operators: readonly string[] | undefined,
     excludeOperators?: readonly string[],
+    /** A fixed folder, and where to put the run's fingerprint: it digests the paths too. */
+    fingerprint?: { readonly root: string; readonly seen: (string | undefined)[] },
   ) {
-    const root = await mkdtemp(join(tmpdir(), "lethal-operator-run-"));
+    const root = fingerprint?.root ?? (await mkdtemp(join(tmpdir(), "lethal-operator-run-")));
     const projectDir = join(root, "app");
     const testDir = join(root, "tests");
     await Bun.write(join(projectDir, "SandboxLogic.Codeunit.al"), RUN_TARGET_AL);
     await Bun.write(join(projectDir, "app.json"), RUN_APP_JSON);
     await Bun.write(join(testDir, "SandboxTests.Codeunit.al"), RUN_TEST_AL);
     const store = new ResultsStore(":memory:");
+    const createRun = store.createRun.bind(store);
+    store.createRun = (info) => {
+      fingerprint?.seen.push(info.configFingerprint);
+      return createRun(info);
+    };
     try {
       return await runSession({
         backend: new StubBackend(),
@@ -696,6 +704,25 @@ describe("runSession — --operator reaches both the mutant set AND the report",
     );
     expect(scoped.validity.caveats).toContain("operator-narrowed");
     expect(scoped.validity.reliability).toBe("narrowed");
+  });
+
+  test("R832: an empty exclude list leaves --operator's scope alone", async () => {
+    const scoped = await runWith(["empty-block"], []);
+    expect([...new Set(scoped.mutants.map((m) => m.operatorName))]).toEqual(["lethal.empty-block"]);
+  });
+
+  test("R832: the resume fingerprint moves with what is left out", async () => {
+    const root = join(tmpdir(), "lethal-operator-fingerprint");
+    const seen: (string | undefined)[] = [];
+    await runWith(undefined, ["empty-block"], { root, seen });
+    await runWith(undefined, ["lethal.empty-block"], { root, seen });
+    await runWith(undefined, ["negate-conditional"], { root, seen });
+    await runWith(undefined, undefined, { root, seen });
+    const [a, same, other, none] = seen;
+    expect(a).toBeDefined();
+    expect(same).toBe(a);
+    expect(other).not.toBe(a);
+    expect(none).not.toBe(a);
   });
 
   test("counterweight: the same run without --operator carries none of that", async () => {
@@ -787,25 +814,35 @@ describe("parseCliConfig — --operator", () => {
     expect(dry.excludeOperators).toEqual(["a"]);
   });
 
-  test("R832: the real CLI's dry run honours the flag, and refuses it beside --operator", async () => {
-    const cli = async (...flags: string[]) => {
-      const p = Bun.spawn(
-        [process.execPath, CLI, "run", "--project", SANDBOX, "--dry-run", ...flags],
-        { stdout: "pipe", stderr: "pipe" },
-      );
-      const [out, err] = await Promise.all([
-        new Response(p.stdout).text(),
-        new Response(p.stderr).text(),
-      ]);
-      return { code: await p.exited, text: out + err };
-    };
-    const left = await cli("--exclude-operator", "empty-block");
-    expect(left.text).toContain('narrowed by --exclude-operator "empty-block"');
-    expect(left.text).not.toContain("lethal.empty-block");
-    const both = await cli("--exclude-operator", "empty-block", "--operator", "return-value");
-    expect(both.code).not.toBe(0);
-    expect(both.text).toContain("cannot be combined");
-  }, 30_000);
+  test(
+    "R832: the real CLI's dry run honours the flag, and refuses it beside --operator",
+    async () => {
+      const cli = async (...flags: string[]) => {
+        const p = Bun.spawn(
+          [process.execPath, CLI, "run", "--project", SANDBOX, "--dry-run", ...flags],
+          { stdout: "pipe", stderr: "pipe" },
+        );
+        const [out, err] = await Promise.all([
+          new Response(p.stdout).text(),
+          new Response(p.stderr).text(),
+        ]);
+        return { code: await p.exited, text: out + err };
+      };
+      const left = await cli("--exclude-operator", "empty-block");
+      expect(left.text).toContain('narrowed by --exclude-operator "empty-block"');
+      expect(left.text).not.toContain("lethal.empty-block");
+      const both = await cli("--exclude-operator", "empty-block", "--operator", "return-value");
+      expect(both.code).not.toBe(0);
+      expect(both.text).toContain("cannot be combined");
+    },
+    ownTimeout(30_000),
+  );
+
+  test("R832: both flags are refused at parse time, before a run provisions anything", () => {
+    expect(() =>
+      parseCliConfig([...RUN_ARGS, "--operator", "a", "--exclude-operator", "b"]),
+    ).toThrow("cannot be combined");
+  });
 
   test("R832: an empty --exclude-operator is refused at parse time", () => {
     expect(() => parseCliConfig([...RUN_ARGS, "--exclude-operator", ""])).toThrow(
