@@ -572,8 +572,9 @@ Design detail for all of the above lives in [`design.md`](design.md).
 has evidence for; **Tier 2** exploits AL and Business Central semantics to plant bugs a generic tool
 cannot express. Where both claim the same site, Tier 2 wins.
 
-Scope a run to a subset with `--operator <name>` (repeatable; the `lethal.` prefix is optional).
-That selects which mutants run and cannot change a verdict.
+Scope a run to a subset with `--operator <name>`, or leave some out with `--exclude-operator <name>`
+(both repeatable; the `lethal.` prefix is optional; not together). That selects which mutants run
+and cannot change a verdict.
 
 ### Tier 1, generic
 
