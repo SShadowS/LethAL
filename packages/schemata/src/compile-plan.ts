@@ -19,6 +19,7 @@ import { type Component, type ComponentMember, buildComponents } from "./compone
 import {
   type PlannedComponent,
   type PlannedMember,
+  endsInSemicolon,
   planMember,
   preambleArmHeaderEnds,
   splitVarHoistAnchor,
@@ -44,7 +45,13 @@ export type PlannedPayload =
       readonly selector: string;
     }
   | {
-      readonly kind: "chain";
+      /**
+       * `chain` is the root's text replaced by the whole chain. `chain-open` (R828 O1) is a zero-width
+       * insertion at the root's start: the wrap, the own branches (each a plain copy of the root) and
+       * `else begin`. The root's original text then stays in place, with its nested components' edits,
+       * and a `text` closer at the root's end ends the chain.
+       */
+      readonly kind: "chain" | "chain-open";
       readonly component: PlannedComponent;
       /** The latch name the chain's markers use: the owner's, else `REACH_LATCH` (no marker). */
       readonly latch: string;
@@ -80,10 +87,12 @@ export function planFile(
   // ids locally here.
   const resolvedIded = ided ?? assignMutantIds(new Map([["<file>", specs]])).get("<file>") ?? [];
 
-  // Emission is a FLAT dispatch chain per containment component, never nested
-  // chains: only one mutant is ever active, so mutants that overlap are siblings
-  // in one if/else-if chain. Nesting wraps is what produced 2^depth growth.
-  // R827: a free `empty-block` is the one nested guard: it copies no text.
+  // Emission is a FLAT dispatch chain per containment component: only one mutant is ever active, so
+  // mutants that overlap are siblings in one if/else-if chain. Wrapping guards inside copies is what
+  // produced 2^depth growth.
+  // R827: a free `empty-block` is a guard pair around a body: it copies no text.
+  // R828 O1: a root with its own mutants copies itself PLAIN per own mutant, and what sits inside it
+  // is its own component in the ORIGINAL branch, so nothing nests inside a copy.
   // lift.ts/duplicate.ts are intentionally no longer routed to — see the design
   // spec §4: hoisting into a temp breaks AL evaluation order, cannot be typed
   // reliably, and is unsafe around ternaries and `var` parameters.
@@ -104,6 +113,9 @@ export function planFile(
   // and the printer keeps map order on a tie, so the zero-width insertion must come first.
   const latches = injectReachLatches(components, rewrites, filePath ?? "<file>", planOf);
   const members: PlannedMember[] = [];
+  // R828 O1. Closers are zero-width and set AFTER every opener, innermost first: the printer keeps
+  // map order on a tie, and `if C then Foo()` ends one root and its host at one index.
+  const closers: Array<[ALSyntaxNode, PlannedPayload]> = [];
   for (const component of components) {
     const planned = component.members.map((m) => planOf(component, m));
     members.push(...planned);
@@ -125,11 +137,11 @@ export function planFile(
       });
       // `Foo()end` is legal: a space, so this `end` does not join the chain's.
       const glued = !/\s/.test(source.charAt(end.startIndex - 1));
-      rewrites.set(insertionNodeAt(end, end.startIndex), text(`${glued ? " " : ""}end `));
+      closers.push([insertionNodeAt(end, end.startIndex), text(`${glued ? " " : ""}end `)]);
       continue;
     }
-    rewrites.set(component.root, {
-      kind: "chain",
+    const chain = {
+      kind: "chain" as const,
       component: {
         rootStart: component.root.startIndex,
         rootEnd: component.root.endIndex,
@@ -140,8 +152,26 @@ export function planFile(
       // here; `injectMutationSelectorVar` below refuses that file anyway.
       selector: selectorVarName(enclosingObjectDeclaration(component.root)) ?? SELECTOR_VAR,
       wrap: needsWrap(component.root),
+    };
+    if (component.split !== true) {
+      rewrites.set(component.root, chain);
+      continue;
+    }
+    // The own branches copy the root plain; what sits inside it is other components' edits, so the
+    // root is two zero-width insertions around its ORIGINAL text, and nothing nests in a rewrite.
+    // The `;` the root consumed is read from the source, as the whole-span form reads it.
+    const terminated = endsInSemicolon(source, component.root.startIndex, component.root.endIndex);
+    rewrites.set(insertionNodeAt(component.root, component.root.startIndex), {
+      ...chain,
+      kind: "chain-open",
     });
+    const semi = terminated ? ";" : "";
+    closers.push([
+      insertionNodeAt(component.root, component.root.endIndex),
+      text(` end${semi}${chain.wrap ? ` end${semi}` : ""}`),
+    ]);
   }
+  for (const [node, payload] of closers.reverse()) rewrites.set(node, payload);
 
   // Every dispatch chain above emits a bare
   // `MutationSelector.Active(...)` call — verified against a real AL

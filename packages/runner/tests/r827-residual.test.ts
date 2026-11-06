@@ -102,6 +102,8 @@ interface DirResult {
   markers: number;
   /** R827: free bodies seen. */
   free: number;
+  /** R828 O1: components with other components inside them. */
+  split: number;
   /** R827: guards the `guard-in-loop` check walked. */
   walked: number;
   findings: Finding[];
@@ -127,6 +129,7 @@ async function checkDir(
     guards: 0,
     markers: 0,
     free: 0,
+    split: 0,
     walked: 0,
     findings: [],
   };
@@ -144,7 +147,9 @@ async function checkDir(
     out.guards += r.stats.guards;
     out.markers += r.stats.markers;
     // From the components, not the emitted text, where a nested free guard would fold unseen.
-    out.free += buildComponents(ided).filter((c) => c.free === true).length;
+    const comps = buildComponents(ided);
+    out.free += comps.filter((c) => c.free === true).length;
+    out.split += comps.filter((c) => c.split === true).length;
     out.walked += r.walked;
     out.findings.push(...r.findings);
   }
@@ -172,6 +177,31 @@ describe("R827: every mutant, folded, equals the mutant written by hand", () => 
       console.log(`[r827] ${rel}: ${files} files, ${mutants} mutants, ${findings.length} findings`);
       // Exact: a file that silently stopped being checked must fail here.
       expect(mutants).toBe(MUTANTS[rel] ?? -1);
+      expect(
+        findings.map((f) => `${f.path} ${f.mutantId} ${f.operator} ${f.kind}: ${f.detail}`),
+      ).toEqual([]);
+    }, 60_000);
+  }
+});
+
+// R828: with `empty-block` out there is no free body, so nothing but the host rule lifts a nested
+// loop mutant out of a loop, and every guard of the file is walked.
+describe("R828: the same, with empty-block left out", () => {
+  for (const rel of PROJECTS) {
+    test(rel, async () => {
+      let mutants = 0;
+      let split = 0;
+      const findings: Finding[] = [];
+      for (const symbols of symbolSetsOf(rel)) {
+        const r = await checkDir(join(REPO, rel), symbols, undefined, true, ["empty-block"]);
+        mutants += r.mutants;
+        split += r.split;
+        findings.push(...r.findings);
+        expect(r.refused).toBe(0);
+        if (r.mutants > 0) expect(r.walked).toBeGreaterThan(0);
+      }
+      console.log(`[r828] ${rel}: ${mutants} mutants, ${split} split, ${findings.length} findings`);
+      expect(mutants).toBeGreaterThan(0);
       expect(
         findings.map((f) => `${f.path} ${f.mutantId} ${f.operator} ${f.kind}: ${f.detail}`),
       ).toEqual([]);
@@ -237,6 +267,32 @@ describe("R827: the comparison can fail", () => {
     // the mutant's own fold differs from the hand-written one.
     expect(r.findings.some((f) => f.kind === "diff" && f.mutantId === "M0001")).toBe(true);
     expect(r.findings.some((f) => f.kind === "no-mutant-diff")).toBe(true);
+  });
+
+  // R828: a plain branch holds no guard, and a mutant has exactly one.
+  test("a guard planted in a plain branch is reported, with the doubled id", async () => {
+    const fc = await nestedCase();
+    expect((await checkFile(fc)).findings).toEqual([]);
+    const planted = fc.compiled.replace(
+      /(MutationSelector\.Active\('M0001'\) then begin\s+)/,
+      "$1if MutationSelector.Active('M0001') then begin end else begin end; ",
+    );
+    expect(planted).not.toBe(fc.compiled);
+    expect(hasParseError(planted)).toBe(false);
+    const kinds = (await checkFile({ ...fc, compiled: planted })).findings.map((x) => x.kind);
+    expect(kinds).toContain("plain-branch-guard");
+    expect(kinds).toContain("guard-count");
+  });
+
+  test("a mutant with no guard at all is reported", async () => {
+    const fc = await nestedCase();
+    const r = await checkFile({
+      ...fc,
+      mutants: [...fc.mutants, { ...(fc.mutants[0] as (typeof fc.mutants)[0]), mutantId: "M0099" }],
+    });
+    expect(r.findings.filter((x) => x.kind === "guard-count").map((x) => x.mutantId)).toEqual([
+      "M0099",
+    ]);
   });
 
   test("a branch carrying another mutant's edit is reported", async () => {
@@ -448,6 +504,199 @@ describe("R827: which body is free", () => {
       expect(r.findings.map((f) => `${f.mutantId} ${f.kind}: ${f.detail}`)).toEqual([]);
     });
   }
+});
+
+/**
+ * R828 O1. Every shape the plan names, in a scratch source (no `fixtures/` file changes): a loop
+ * with its own member, an inner loop's own member, a loop under `asserterror`, an `if` holding a
+ * loop, `if C then Foo()` (root and host close at one index), a `case` arm's empty-block, and a
+ * directive inside a root.
+ */
+const SHAPES_AL = `codeunit 51998 "R828 Shapes"
+{
+    procedure LoopOwn(N: Integer) var T: Integer;
+    begin
+        T := 1;
+        while N > 0 do begin
+            T := T + 1;
+            N -= 1;
+            if T > 3 then
+                T := T - 1;
+        end;
+    end;
+
+    procedure InnerLoopOwn(N: Integer) var I: Integer; T: Integer;
+    begin
+        for I := 1 to N do begin
+            T := T + I;
+            while T < 10 do
+                T := T + 2;
+        end;
+    end;
+
+    procedure LoopUnderAssertError(N: Integer) var T: Integer;
+    begin
+        asserterror begin
+            while N > 0 do begin
+                N -= 1;
+                T := T + 1;
+            end;
+        end;
+    end;
+
+    procedure IfHoldsLoop(C: Integer; N: Integer) var I: Integer; T: Integer;
+    begin
+        if C > 0 then
+            for I := 1 to N do
+                T += 1
+        else
+            repeat
+                N -= 1;
+            until N <= 0;
+        if C > 1 then begin
+            T := 5;
+            for I := 1 to N do begin
+                T += I;
+                if T > 7 then
+                    T -= 1;
+            end;
+        end;
+    end;
+
+    procedure IfCallOnly(C: Integer) var T: Integer;
+    begin
+        if C > 0 then Foo(C + 1);
+        if C > 1 then
+            Foo(C + 2)
+        else
+            Foo(C + 3);
+    end;
+
+    procedure CaseArms(C: Integer) var T: Integer;
+    begin
+        case C of
+            1: T := 2;
+            2:
+                begin
+                    T := 3;
+                end;
+            3:
+                if T > 0 then
+                    T := 9;
+            else
+                T := 4;
+        end;
+    end;
+
+    procedure Deep(C: Integer; D: Integer) var T: Integer;
+    begin
+        if C > 0 then begin
+            if D > 0 then begin
+                T := 1;
+                if T < D then
+                    T := 2;
+            end else
+                T := 3;
+        end else if D > 5 then
+            T := 4;
+    end;
+
+    procedure DirectiveInRoot(C: Integer) var T: Integer;
+    begin
+        if C > 0 then begin
+            T := 1;
+#pragma warning disable AL0432
+            T := T + 2;
+#pragma warning restore AL0432
+            if T > 1 then
+                T := 7;
+        end;
+    end;
+
+    procedure TieEnds(C: Integer; D: Integer) var T: Integer;
+    begin
+        if C > 0 then if D > 0 then T := T + 1;
+        if C > 1 then if D > 1 then if T > 0 then T := T + 2 else T := T + 3;
+    end;
+
+    // An empty else with its semicolon puts the semicolon INSIDE the if text: the closer must reproduce it.
+    procedure EmptyElse(C: Integer) var T: Integer;
+    begin
+        if C > 0 then T := 1 else;
+        T := 2;
+        if C > 1 then
+            if C > 2 then T := 3 else;
+        T := 4;
+    end;
+
+    procedure ParenlessCall(C: Integer) var T: Integer;
+    begin
+        if C > 0 then Touch;
+        T := 1;
+        if C > 1 then
+            Touch
+        else
+            Touch;
+        T := 2;
+    end;
+
+    local procedure Touch()
+    begin
+    end;
+
+    local procedure Foo(X: Integer)
+    begin
+    end;
+}
+`;
+
+describe("R828 O1: the shapes, folded, equal the mutant written by hand", () => {
+  test("default run: every mutant, every guard walked, nothing split is wrong", async () => {
+    const r = await checkSource(SHAPES_AL);
+    expect(r.mutants).toBeGreaterThan(60);
+    expect(r.split).toBeGreaterThan(5);
+    expect(r.walked).toBeGreaterThan(r.free);
+    expect(r.findings.map((f) => `${f.mutantId} ${f.operator} ${f.kind}: ${f.detail}`)).toEqual([]);
+  });
+
+  test("with empty-block left out: no guard runs on a pass of a loop its host has", async () => {
+    const r = await checkSource(SHAPES_AL, ["empty-block"]);
+    expect(r.mutants).toBeGreaterThan(40);
+    expect(r.free).toBe(0);
+    expect(r.split).toBeGreaterThan(3);
+    expect(r.findings.map((f) => `${f.mutantId} ${f.operator} ${f.kind}: ${f.detail}`)).toEqual([]);
+  });
+
+  test("with the loops' and conditions' own mutants left out too", async () => {
+    const r = await checkSource(SHAPES_AL, [
+      "empty-block",
+      "conditional-boundary",
+      "negate-conditional",
+      "loop-skip",
+      "loop-truncate",
+    ]);
+    expect(r.mutants).toBeGreaterThan(10);
+    expect(r.findings.map((f) => `${f.mutantId} ${f.operator} ${f.kind}: ${f.detail}`)).toEqual([]);
+  });
+
+  test("a directive keeps its root a flat chain, and everything below it", async () => {
+    const from = SHAPES_AL.indexOf("    procedure DirectiveInRoot");
+    const source = SHAPES_AL.slice(from, SHAPES_AL.indexOf("    procedure TieEnds"));
+    const head = 'codeunit 51998 "R828 Shapes"\n{\n';
+    const r = await checkSource(`${head}${source}}\n`, ["empty-block"]);
+    expect(r.mutants).toBeGreaterThan(3);
+    // The `if C > 0` holds the pragma, so it hosts its nested `if` as a member: nothing is split.
+    expect(r.split).toBe(0);
+    expect(r.findings.map((f) => `${f.mutantId} ${f.operator} ${f.kind}: ${f.detail}`)).toEqual([]);
+  });
+
+  test("a root with a loop inside and a condition mutant: one component per root, loop flat", async () => {
+    const source = `codeunit 51998 "R828 Shapes"\n{\n    procedure P(C: Integer; N: Integer) var I: Integer; T: Integer;\n    begin\n        if C > 0 then\n            for I := 1 to N do\n                T += 1;\n    end;\n}\n`;
+    const r = await checkSource(source, ["empty-block", "loop-skip", "loop-truncate"]);
+    expect(r.split).toBe(1);
+    expect(r.walked).toBeGreaterThan(2);
+    expect(r.findings.map((f) => `${f.mutantId} ${f.operator} ${f.kind}: ${f.detail}`)).toEqual([]);
+  });
 });
 
 const CORPUS = process.env.LETHAL_R827_CORPUS;

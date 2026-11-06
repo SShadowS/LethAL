@@ -9,7 +9,7 @@
       "mutants": 2
     },
     "examples/credit-limit/src/CreditLimitMgt.Codeunit.al": {
-      "sha256": "2a88775cd603a6c71785a11b8728e4dec079f523e0c18b383667dd095a0d488b",
+      "sha256": "97768a11e6769c2bf3c774ff789d4ec10143524a9a7acd8fea88b1f70745b864",
       "mutants": 40
     },
     "examples/gift-card-tests/src/GiftCardTests.Codeunit.al": {
@@ -21,11 +21,11 @@
       "mutants": 7
     },
     "examples/gift-card/src/GiftCardMgt.Codeunit.al": {
-      "sha256": "7ec75c68a5eb0ee3c955f2c940dfd064304a6dfec4c677cf43060af6c8984233",
+      "sha256": "f6f3cb7d2cf7948fb5b32c71f802c7eff8e4f65d9126e4be08a5a8935d09aa40",
       "mutants": 53
     },
     "fixtures/sandbox-app/src/SandboxLogic.Codeunit.al": {
-      "sha256": "f60c3c531c755e221f53b2fd675e1bd5bcf8492591217deed87f5e9fafec0625",
+      "sha256": "7fa150a521a7524833a995900ed1a5dd0cc4211d2abb45c73ef3ebad2353fdc1",
       "mutants": 15
     },
     "fixtures/sandbox-app/src/SandboxPricing.Codeunit.al": {
@@ -45,19 +45,19 @@
       "mutants": 9
     },
     "fixtures/sandbox-codefree/src/CFPlain.Codeunit.al": {
-      "sha256": "2ac9b71defe99d0fe4c7a2087c2d53b268ba234ca073632b95c276dfd9683f13",
+      "sha256": "befab8ad8468b4745309a491c60cb29395cfd5602f6266f0c46544e0c0a94d9e",
       "mutants": 10
     },
     "fixtures/sandbox-codefree/src/CFSplit.Codeunit.al": {
-      "sha256": "701e4e5056e42710f3fb0d656dd156ce54357cfe2c3f09c0e3e7440dc9b7782d",
+      "sha256": "665325b4a08c92448076645c8fc0a883a2f0f0cdc567afa4fada2f092728af98",
       "mutants": 15
     },
     "fixtures/sandbox-coverage-probe/src/CoverageCapabilityProbe.Codeunit.al": {
-      "sha256": "06f39e043557e71125a17f83f10350a5c515af39b655a1b2e22a009bd9ee2696",
+      "sha256": "6d63f8221beeb383636e429db2f6e8ad8681e0b282d90c4b845b55386bad10e5",
       "mutants": 29
     },
     "fixtures/sandbox-coverage-probe/src/FrameAndResetProbe.Codeunit.al": {
-      "sha256": "26eec4beda0a037f20ddb631905c0255624183322a87efc22aecee87e816363a",
+      "sha256": "63b23a2599a02c0451828069d4b65521241fd5ebf532df2a72088da74d870bc6",
       "mutants": 40
     },
     "fixtures/sandbox-coverage-probe/src/TwoObjects.Codeunit.al": {
@@ -73,11 +73,11 @@
       "mutants": 4
     },
     "fixtures/sandbox-data/src/DataBandExt.ReportExt.al": {
-      "sha256": "baa564807f8e5d714c0ab0aa13746d220c35a6ded79ac40c17ac1ceb10056612",
+      "sha256": "7e868d03fdf6db99c9171b48f84745ddcbaa73d9eea363f661319a4cce961db3",
       "mutants": 19
     },
     "fixtures/sandbox-data/src/DataBlankOps.Codeunit.al": {
-      "sha256": "2cbfd6dbdd4bdb97ad89cf9d273e6f7c9f4fa60098567efb411ef84b8c926b2f",
+      "sha256": "b3d90f0d19ba8044f142debf2ce476d6c2aee37f4510725c03a95ee8a8008bba",
       "mutants": 4
     },
     "fixtures/sandbox-data/src/DataBuilder.Codeunit.al": {
@@ -85,7 +85,7 @@
       "mutants": 4
     },
     "fixtures/sandbox-data/src/DataCaseOps.Codeunit.al": {
-      "sha256": "4a60127358377268f9f754c874fe1183a4192365ddc4b999ba3167c0d59b4684",
+      "sha256": "416862f4b90843c3e482fffe1d2f6c4dfcc61befe83dc5cbf5e3f4150172f40d",
       "mutants": 13
     },
     "fixtures/sandbox-data/src/DataCommitOps.Codeunit.al": {
@@ -101,7 +101,7 @@
       "mutants": 38
     },
     "fixtures/sandbox-data/src/DataFindOps.Codeunit.al": {
-      "sha256": "daa87a6724f7e574af62da35a09dc68fdb38aae69790512286d1e1b243348a52",
+      "sha256": "f196ba56f53b6044d77080cfc4447062072c83b8fa41972308a3bc507322ec95",
       "mutants": 15
     },
     "fixtures/sandbox-data/src/DataFlagOps.Codeunit.al": {
@@ -109,7 +109,7 @@
       "mutants": 22
     },
     "fixtures/sandbox-data/src/DataKeyProbe.Table.al": {
-      "sha256": "f98bcbc28fba651caca5a147c8cef97dc13eea1acc9ced4fc14fcb57b3bba569",
+      "sha256": "57dd8179d74e1e07559ab9de626666e142b3fd7da4262b80029bdd6b8545345e",
       "mutants": 4
     },
     "fixtures/sandbox-data/src/DataLoader.Codeunit.al": {
@@ -125,7 +125,7 @@
       "mutants": 5
     },
     "fixtures/sandbox-data/src/DataMainListExt.PageExt.al": {
-      "sha256": "23b0980ae38f246e5c0dff641d584872552d38e02ceff87f90f04d6ccb4300b3",
+      "sha256": "d502d6c5c1682784541e2da6f98661b611dc9eb03ae0fc9fe3469aee91840770",
       "mutants": 7
     },
     "fixtures/sandbox-data/src/DataNoTrigger.Table.al": {
@@ -137,7 +137,7 @@
       "mutants": 49
     },
     "fixtures/sandbox-data/src/DataReachOps.Codeunit.al": {
-      "sha256": "ade8f7eb6fd1bee5c3c18e4792d80edb1a01f920c97cb11d8b4628a0b1e2e740",
+      "sha256": "2d8cd5b6653568fcb2de92ab5125ff0664f9ea597c28f7e564919780d38ef368",
       "mutants": 10
     },
     "fixtures/sandbox-data/src/DataScopeProbe.Page.al": {
@@ -145,11 +145,11 @@
       "mutants": 2
     },
     "fixtures/sandbox-data/src/DataScopeProbe.Table.al": {
-      "sha256": "21bfec025a7cab91100e45d1f8ebf92827f18770336bfb6a81e49a270c248b71",
+      "sha256": "dd2038e104bd989e874e786d984886b1fdc7554799642780306d413f406d66fd",
       "mutants": 8
     },
     "fixtures/sandbox-data/src/DataSetOps.Codeunit.al": {
-      "sha256": "e4c9d9726871ac61cf2e051585c4379379c98d384f1df5990a52f91a88007002",
+      "sha256": "ea16cd42553ab5625eddcff34d40874801cf4508a148c54459b1ab5c06c314ab",
       "mutants": 9
     },
     "fixtures/sandbox-data/src/DataShadow.Table.al": {
@@ -157,7 +157,7 @@
       "mutants": 13
     },
     "fixtures/sandbox-data/src/DataShiftOps.Codeunit.al": {
-      "sha256": "d48e343aa7f637fb4223353f9e7c66bed37383c3abb42d4bf4aaf4fcc23e59e7",
+      "sha256": "649899d0c1550e4083e64f54055f3c70884919b72a91f32ec0dff539262d53e5",
       "mutants": 8
     },
     "fixtures/sandbox-data/src/DataSwapOps.Codeunit.al": {
@@ -197,7 +197,7 @@
       "mutants": 24
     },
     "fixtures/sandbox-hang/src/HangLogic.Codeunit.al": {
-      "sha256": "91301c66d76f8fa96fa441c47f3d46a2f64b22e2e132c3be70d0e4e792469bde",
+      "sha256": "88c3269458897e10c2102051e832b10b8e217db54c2fd3c5d0c78c6bc2e3a0d9",
       "mutants": 38
     },
     "fixtures/sandbox-harden-answers/src/HardenAnswerKey.Codeunit.al": {
@@ -213,7 +213,7 @@
       "mutants": 2
     },
     "fixtures/sandbox-harden/src/HardenLogic.Codeunit.al": {
-      "sha256": "c5c9dc839bb799f69b73a24e9a6b9728e3a4f6e916a2248442c4635518eacb64",
+      "sha256": "4c315435c2409f24e1d9fb2250bc073a6c85084a17fdb4309d4a9ae166ce509d",
       "mutants": 19
     },
     "fixtures/sandbox-layout-tests/src/LayoutTests.Codeunit.al": {
@@ -237,7 +237,7 @@
       "mutants": 2
     },
     "fixtures/sandbox-multiobject/src/MultiPair.Codeunit.al": {
-      "sha256": "8d9a1423206b6ff0d3dd7bfed70f30b5fddf24681ebbc2243fc4dd44b6f0bce5",
+      "sha256": "a23e64720ef26426419f1c4a89fc88c6618e5ad716017a5d4bad6fb0eddfc182",
       "mutants": 10
     },
     "fixtures/sandbox-names-tests/src/NamesTests.Codeunit.al": {
@@ -261,7 +261,7 @@
       "mutants": 5
     },
     "fixtures/sandbox-probes/src/CommitProbe.Codeunit.al": {
-      "sha256": "2fafd1a5ab228846b77288de642b359ed35eed06a4e0d0c36d3a711381215723",
+      "sha256": "3083053adf90a442ae2b79533f0a67ad28fc65e6e19303127a036c2b4e7eadc1",
       "mutants": 31
     },
     "fixtures/sandbox-probes/src/FailProbe.Codeunit.al": {
@@ -301,7 +301,7 @@
       "mutants": 4
     },
     "fixtures/sandbox-probes/src/TestPageProbe.Codeunit.al": {
-      "sha256": "14e15b18a3c263aa7e11522f6bb4995a3a72ec3695bfc535a6a5ac4ca070f835",
+      "sha256": "8dff0b91d9e1637d35480bddc34acb9550ef37c3908ef36b12b683365a351730",
       "mutants": 13
     },
     "fixtures/sandbox-probes/src/Tier2Phase2Probe.Codeunit.al": {
@@ -333,7 +333,7 @@
       "mutants": 9
     },
     "fixtures/sandbox-probes/src/WriteTxnProbe.Codeunit.al": {
-      "sha256": "3b181a88ec02e6ab30f570c25d12a55b565d7a5f8f50d12654a7c068ff5afa4d",
+      "sha256": "aca3c254d7fc9eca2ad42a0cd0f37d0a26438bb4b5ecff0b4f70c9c7377c2b80",
       "mutants": 21
     },
     "fixtures/sandbox-probes/src/WriteTxnTarget.Codeunit.al": {
@@ -373,11 +373,11 @@
       "mutants": 119
     },
     "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedArms.Codeunit.al": {
-      "sha256": "bc847309fb125c9a6603914916eb04e04c29126f7197e963fb45922cf169d1eb",
+      "sha256": "bed1569b430e80e61f97d1a6e909eb23dc4c7346fc4f9909198942e414ed7829",
       "mutants": 3
     },
     "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedPairA.Codeunit.al": {
-      "sha256": "20c9fd88942f63a709b32f600c44fcd72373c1e092e791d7563c4eba5cf6bf05",
+      "sha256": "c67d0f32441b27295844198273714bdb698a8d8180d3d7c2f21138aebd459b1a",
       "mutants": 3
     },
     "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedPre.Codeunit.al": {
@@ -397,11 +397,11 @@
       "mutants": 8
     },
     "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedTrigger.Table.al": {
-      "sha256": "3fe6f0e5c258101b79d7a3c7985253d5c3cf40a6ce974eb1a9efc007e8029451",
+      "sha256": "f8e2b0db673a4a4c2f2097dfd51bbf10f9e7cc1d67a0f7cf903e92d246b2b4aa",
       "mutants": 6
     },
     "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedTriggerTwin.Table.al": {
-      "sha256": "c14f5a24433c8eced9cd261271c8d150abb5b4da14cf2c4893bb50088b6ab72f",
+      "sha256": "c5f1407605d7186b6f567643d53dd7449ba303c62f7511ea93ebe9832fc076e0",
       "mutants": 6
     },
     "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedView.Page.al": {
@@ -413,19 +413,19 @@
       "mutants": 5
     },
     "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedXtra.PageExt.al": {
-      "sha256": "e91e1926ac51547ccc2fa1c812d9e01226157f96891eed07d0285d63c7b367e1",
+      "sha256": "2dbb3659b647f3dc60b77b6d64f371da5e4dea65b0ae2029cd05c2fa9d4ad2e0",
       "mutants": 6
     },
     "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedXtraTwin.PageExt.al": {
-      "sha256": "6bc52a37fa74915dfe56bcb42c4e508ee32651a570f5267184863ac8a4a36b12",
+      "sha256": "bf2f574d61978d7f5a8afe79f67d6a882bba96b88fb19c2fe7191369ef768fc8",
       "mutants": 6
     },
     "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedYBand.Report.al": {
-      "sha256": "42248ad44a275f1c1ababd39100784a01aa695857746500576e4f59484d915c7",
+      "sha256": "2f1716679ee462cb3b4ca54825b9f0f92c6308f7c24cf284887936fc91029d4c",
       "mutants": 14
     },
     "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedYBandTwin.Report.al": {
-      "sha256": "b4e8075243cf357209a2446ec2db8bae86b5cea0938aef312fed6c9e25b39c2e",
+      "sha256": "f85aeb7a2a1519fc3e3f777f155aa3c5c69692dd7d69a2bd9fee00786a10ca14",
       "mutants": 14
     }
   }
