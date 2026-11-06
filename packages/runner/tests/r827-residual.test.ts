@@ -808,6 +808,8 @@ describe("R827: corpus (LETHAL_R827_CORPUS=<dir>, counts only, never source text
       );
       console.log(`[r827 corpus] findings by kind: ${JSON.stringify([...byKind])}`);
       console.log(`[r827 corpus] findings by operator and kind: ${JSON.stringify([...byOp])}`);
+      // A file name and a mutant id are fine to print; `detail` may hold source, so it is left out.
+      for (const f of r.findings.slice(0, 20)) console.log(`[r827 corpus] ${f.kind} ${f.mutantId} ${f.path}`);
       expect(r.files).toBeGreaterThan(0);
       expect(r.mutants).toBeGreaterThan(0);
       expect(r.findings.length).toBe(0);
