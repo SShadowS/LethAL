@@ -11,6 +11,7 @@ import { cpSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:
 import { join } from "node:path";
 import type { SessionReport } from "../src/report";
 import { HANG_FIGURES } from "./gate-expected";
+import { LOGGED_ONLY } from "./gate-warnings";
 import { keyOf } from "./mutant-equality";
 
 /** The fixture codeunit (79451) and its three tests, in source order. `hang-baseline-leg.test.ts`
@@ -225,7 +226,10 @@ export function baselineLegFailures(i: BaselineLegInput): string[] {
   if (i.quarantineRecords > 0) fail(10, `${i.quarantineRecords} quarantine record(s)`);
 
   // 11. The warning allow-list, each once.
-  const codes = i.warnings.map((w) => w.code).sort();
+  const codes = i.warnings
+    .map((w) => w.code)
+    .filter((c) => !LOGGED_ONLY.has(c))
+    .sort();
   if (JSON.stringify(codes) !== JSON.stringify(HANG_BASELINE_WARNING_CODES)) {
     fail(11, `warning codes ${JSON.stringify(codes)}`);
   }

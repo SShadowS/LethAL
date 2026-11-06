@@ -159,6 +159,15 @@ describe("R-658 baselineLegFailures", () => {
     expect(baselineLegFailures(good())).toEqual([]);
   });
 
+  test("R852: a renew blip does not fail check 11, and lease-renew-unanswered does", () => {
+    const withCode = (code: string) => {
+      const i = good();
+      return { ...i, warnings: [...i.warnings, { code, message: "" }] };
+    };
+    expect(baselineLegFailures(withCode("lease-renew-blip"))).toEqual([]);
+    expect(baselineLegFailures(withCode("lease-renew-unanswered")).join()).toMatch(/\b11\b|A11/);
+  });
+
   const cases: ReadonlyArray<readonly [string, string, Edit]> = [
     // STOP trigger 1 is judged here: no 408 means no timeout row with BC's words in the window.
     ["A1", "the stopped test passed", (i) => mapRow(i, 0, { outcome: "pass" })],
