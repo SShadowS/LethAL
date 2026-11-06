@@ -1,0 +1,26 @@
+{
+  "id": "9f1de814-0b0b-4be0-a52c-bf3236255c89",
+  "name": "LethAL R826B BC4 Stop Probe Tests",
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "brief": "R826B throwaway probe tests: what BC 29 answers when LethAL's stop ends a hung test. One shape per codeunit.",
+  "platform": "28.0.0.0",
+  "runtime": "17.0",
+  "target": "OnPrem",
+  "idRanges": [{ "from": 91510, "to": 91519 }],
+  "dependencies": [
+    {
+      "id": "437dbf0e-84ff-417a-965d-ed2bb9650972",
+      "name": "Base Application",
+      "publisher": "Microsoft",
+      "version": "28.0.0.0"
+    },
+    {
+      "id": "12b7a3d5-ccbf-4000-b053-c955967ca57d",
+      "name": "LethAL R826B BC4 Stop Probe",
+      "publisher": "LethAL",
+      "version": "1.0.0.0"
+    }
+  ],
+  "features": ["NoImplicitWith"]
+}
