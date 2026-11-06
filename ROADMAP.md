@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**23 of 815 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**27 of 819 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -498,6 +498,10 @@ that ordering is the priority.
 - **R831** · Hang refusal never sees an array-element target: `while Buf[1] < 10 do Buf[1] := Buf[1] + 1` is claimed · [R831.md](docs/roadmap/R831.md) · open, filed 2026-11-05 (found by R-818's plan review); nothing measured, nothing built
 - **R832** · No way to leave one operator out: `--operator` only narrows to a list (`--exclude-operator`, GitHub #50) · [R832.md](docs/roadmap/R832.md) · done (22348be4)
 - **R834** · Operator candidates #30-#43, ranked by sites, overlap, equivalents, yield and cost; first batch #35, #41, #33, #42 · [R834.md](docs/roadmap/R834.md) · open, filed 2026-11-06 (coord task R-821); measured offline, the owner picks the batch, nothing built
+- **R836** · Eleven gate baselines lag at scheme 44 after R830's bump to 45 · [R836.md](docs/roadmap/R836.md) · open, filed 2026-11-06 (coord task R-833)
+- **R837** · A mutant inside a same-object callee can still remove a loop's progress: `Counter += 1` in `Advance()` stays claimed · [R837.md](docs/roadmap/R837.md) · open, filed 2026-11-06 (found building R-833); nothing measured, nothing built
+- **R838** · `empty-block` of an `if` or `case` arm inside a loop deletes the loop's step, and no hang check sees it · [R838.md](docs/roadmap/R838.md) · open, filed 2026-11-06 (found building R-833); nothing measured, nothing built
+- **R839** · A loop's progress through another object or an event is not seen: `Other.Advance()` and `OnAdvance()` stay claimed · [R839.md](docs/roadmap/R839.md) · open, filed 2026-11-06 (found building R-833); nothing measured, nothing built
 
 ## Backends and tooling
 
