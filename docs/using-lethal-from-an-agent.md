@@ -1052,7 +1052,7 @@ into a transcript and do not copy it into an issue.
   and `mutatedText`. Do not publish one, and run `bun scripts/redact-campaign-report.ts <report>`
   before committing one anywhere public.
 
-### Recovering a stripped server
+### Recovering a stripped server (guidance)
 
 LethAL refuses a run before it publishes anything when it can see that the target and an installed
 app declare the same object, the same field id or name on one table, or the same value ordinal or
