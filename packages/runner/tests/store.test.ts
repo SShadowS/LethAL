@@ -1226,6 +1226,59 @@ CREATE TABLE IF NOT EXISTS mutants (
       }
     });
 
+    test("GitHub #49: a pre-existing database gains stop_evidence; an old timeout-killed reads back with NO evidence (never the 408), a new one round-trips", () => {
+      const dbPath = testDbPath("lethal.sqlite");
+      try {
+        const old = new Database(dbPath, { create: true });
+        old.exec(PRE_43_SCHEMA);
+        old.exec(
+          "INSERT INTO runs (project_path, backend, app_version) VALUES ('/p', 'bcdev', '1');" +
+            "INSERT INTO mutants (run_id, mutant_code, ast_hash, codeunit_name, operator_name," +
+            " operator_major, file, line, verdict, killing_test, duration_ms) VALUES (1, 'M0001'," +
+            " 'old', 'Sample', 'conditional-boundary', 1, 'Sample.Codeunit.al', 12, 'timeout-killed', 'T', 40);",
+        );
+        old.close();
+        const store = new ResultsStore(dbPath);
+        const oldRows = store.mutantVerdicts(1);
+        const runId = store.createRun({
+          testScope: [],
+          coverageMode: "procedure",
+          testAppHash: "T",
+          testAppProven: true,
+          testAppDeps: "D",
+          identityScheme: IDENTITY_SCHEME,
+          buildSymbols: [],
+          projectPath: "/p",
+          backend: "bcdev",
+          appVersion: "1",
+        });
+        for (const [code, hash, evidence] of [
+          ["M0002", "n400", "begin-transaction-world"],
+          ["M0003", "n408", "bc-named-stop"],
+        ] as const) {
+          store.recordMutant(
+            runId,
+            mutantRow("timeout-killed", {
+              mutantCode: code,
+              astHash: hash,
+              killingTest: "T",
+              stopEvidence: evidence,
+            }),
+          );
+        }
+        const byHash = new Map(
+          [...oldRows, ...store.mutantVerdicts(runId)].map((r) => [r.astHash, r]),
+        );
+        store.close();
+        expect(byHash.get("old")?.verdict).toBe("timeout-killed");
+        expect("stopEvidence" in (byHash.get("old") ?? {})).toBe(false);
+        expect(byHash.get("n400")?.stopEvidence).toBe("begin-transaction-world");
+        expect(byHash.get("n408")?.stopEvidence).toBe("bc-named-stop");
+      } finally {
+        rmSync(dirname(dbPath), { recursive: true, force: true });
+      }
+    });
+
     test("recordMutant persists failure_note at the column level, NULL when absent", () => {
       // Direct column-level coverage (Task 6 Minor): read the value back out
       // of the column itself, not just through the absence of a throw.
@@ -1340,6 +1393,61 @@ CREATE TABLE IF NOT EXISTS mutants (
       expect(() => store.mutantVerdicts(runId)).toThrow(
         /astHash=abc123.*codeunitName=Sample.*corrupt "runner" column value "hub"/,
       );
+      store.close();
+    });
+
+    const newRun = (store: ResultsStore) =>
+      store.createRun({
+        testScope: [],
+        coverageMode: "procedure",
+        testAppHash: "T",
+        testAppProven: true,
+        testAppDeps: "D",
+        identityScheme: IDENTITY_SCHEME,
+        buildSymbols: [],
+        projectPath: "/p",
+        backend: "bcdev",
+        appVersion: "1",
+      });
+
+    test("SE1. a corrupt stop_evidence value throws, naming the value and the mutant row", () => {
+      const store = new ResultsStore(":memory:");
+      const runId = newRun(store);
+      store.recordMutant(runId, mutantRow("timeout-killed", { killingTest: "T" }));
+      store.db.query("UPDATE mutants SET stop_evidence = ? WHERE run_id = ?").run("hub", runId);
+      expect(() => store.mutantVerdicts(runId)).toThrow(
+        /astHash=abc123.*codeunitName=Sample.*corrupt "stop_evidence" column value "hub"/,
+      );
+      store.close();
+    });
+
+    test("SE2. invalidateBatch sets stop_evidence to NULL in the column", () => {
+      const store = new ResultsStore(":memory:");
+      const runId = newRun(store);
+      store.recordMutant(
+        runId,
+        mutantRow("timeout-killed", { killingTest: "T", stopEvidence: "begin-transaction-world" }),
+      );
+      expect(store.invalidateBatch(runId, 0, "unattested")).toBe(1);
+      const col = store.db
+        .query("SELECT stop_evidence AS s FROM mutants WHERE run_id = ?")
+        .get(runId) as { s: string | null };
+      expect(col.s).toBeNull();
+      store.close();
+    });
+
+    test("SE3. a lost batch reads back with no stopEvidence", () => {
+      const store = new ResultsStore(":memory:");
+      const runId = newRun(store);
+      store.recordMutant(
+        runId,
+        mutantRow("timeout-killed", { killingTest: "T", stopEvidence: "bc-named-stop" }),
+      );
+      expect(store.mutantVerdicts(runId)[0]?.stopEvidence).toBe("bc-named-stop");
+      store.markBatchLost(runId, 0, "lease lost");
+      const row = store.mutantVerdicts(runId)[0];
+      expect(row?.verdict).toBe("error");
+      expect("stopEvidence" in (row ?? {})).toBe(false);
       store.close();
     });
   });

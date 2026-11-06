@@ -1181,6 +1181,9 @@ describe("R658: a baseline test LethAL stopped", () => {
       "BASELINE TEST STOPPED: 1 baseline test(s) ran past --baseline-timeout-ms (10000 ms)",
     );
     expect(text).toContain("  Hang Tests.Sleeps");
+    // True on both servers: the 408 on BC 28, the exact 400 on BC 29.
+    expect(text).not.toContain("BC confirmed with its 408");
+    expect(text).toContain("exact 400");
   });
 
   test("R2. baseline-red with no stopped test: no field, no caveat, no banner", () => {

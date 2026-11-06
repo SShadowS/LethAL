@@ -99,6 +99,32 @@ describe("continiaDependencyProblems", () => {
       parseArgs(["--server", "bc3", "--with-continia", "--accept-build", "28.4"]),
     ).toThrow();
   });
+
+  // R-826b: bc4 is BC 29. It is named on its own; `all` stays the BC 28.4 servers.
+  test("bc4 is accepted by name, in every mode", () => {
+    expect(parseArgs(["--server", "bc4"]).servers).toEqual(["bc4"]);
+    expect(parseArgs(["--server", "bc4", "--predict"])).toMatchObject({ predict: true });
+    expect(parseArgs(["--server", "bc4", "--write-config-only"])).toMatchObject({
+      servers: ["bc4"],
+      writeConfigOnly: true,
+    });
+    expect(() => parseArgs(["--server", "bc5"])).toThrow(/usage/);
+  });
+
+  test("`all` is bc1, bc2 and bc3 only, in both modes, and the usage says so", () => {
+    expect(parseArgs(["--server", "all"]).servers).toEqual(["bc1", "bc2", "bc3"]);
+    expect(parseArgs(["--server", "all", "--write-config-only"]).servers).toEqual([
+      "bc1",
+      "bc2",
+      "bc3",
+    ]);
+    expect(() => parseArgs(["--server", "bc5"])).toThrow(/`all` is bc1, bc2 and bc3 \(BC 28\.4\)/);
+  });
+
+  test("--with-continia and --accept-build are bc3's: bc4 refuses them by name", () => {
+    expect(() => parseArgs(["--server", "bc4", "--with-continia"])).toThrow(/bc3 only/);
+    expect(parseArgs(["--server", "bc3", "--with-continia"]).withContinia).toBe(true);
+  });
 });
 
 // A made-up value: the tests check it never appears in an error.
@@ -174,6 +200,26 @@ describe("config writer", () => {
     packageCachePath: "/x/symbols",
   };
 
+  test("R-826b: bc4's config names bc4's three ports; bc1-bc3's ports are unchanged", () => {
+    expect(SERVERS).toEqual({
+      bc1: { odata: 7048, dev: 7049, api: 7052 },
+      bc2: { odata: 7148, dev: 7149, api: 7152 },
+      bc3: { odata: 7248, dev: 7249, api: 7252 },
+      bc4: { odata: 7448, dev: 7449, api: 7452 },
+    });
+    const cfg = buildConfig("bc4", login, paths, "sandbox-app") as {
+      bcdev: Record<string, unknown>;
+    };
+    expect(cfg.bcdev).toMatchObject({
+      server: `${HOST}:7449`,
+      port: 7449,
+      baseUrl: `${HOST}:7448/BC`,
+      apiBaseUrl: `${HOST}:7452/BC`,
+    });
+    expect(configFileName("bc4")).toBe("lethal.config.bc4.json");
+    expect(launchFileName("bc4")).toBe("launch.bc4.json");
+  });
+
   test("bc2's config names bc2's three ports and the W1 company", () => {
     expect(buildConfig("bc2", login, paths, "sandbox-app")).toEqual({
       bcdev: {
@@ -241,7 +287,9 @@ describe("config writer", () => {
   test("the launch file the script writes is ignored and is the one the itests pair with", () => {
     expect(gitIgnores("fixtures/sandbox-app/.vscode/launch.bc1.json")).toBe(true);
     expect(gitIgnores("fixtures/sandbox-data/.vscode/launch.bc3.json")).toBe(true);
-    for (const s of ["bc1", "bc2", "bc3"] as const) {
+    expect(gitIgnores("fixtures/sandbox-hang/lethal.config.bc4.json")).toBe(true);
+    expect(gitIgnores("fixtures/sandbox-hang/.vscode/launch.bc4.json")).toBe(true);
+    for (const s of ["bc1", "bc2", "bc3", "bc4"] as const) {
       expect(launchFileName(s)).toBe(itestLaunchName({ LETHAL_ITEST_CONFIG: configFileName(s) }));
     }
   });

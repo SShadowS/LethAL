@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# R-658: itest:hang with the BASELINE leg, on bc2 or bc3 only, under the caller's own coord lease.
-# Usage: r658-hang-gate.sh bc2|bc3 [--lane <lane>]. It runs the worktree it lives in (R823).
+# R-658: itest:hang with the BASELINE leg, on bc2, bc3 or bc4 only, under the caller's own coord lease.
+# Usage: r658-hang-gate.sh bc2|bc3|bc4 [--lane <lane>]. bc4 is BC 29 (R-826b, GitHub #49): a stop-capable
+# server like bc2 and bc3, but the gate's figures are not proven there until docs/gates/servers.md says so. It runs the worktree it lives in (R823).
 # The lane is `--lane`, else KRAKEN_AGENT (`lane-<x>` is `<x>`), else it refuses (R598's rule, as
 # `resolveLane` in bc-linux-setup.ts). Each run gets its own evidence folder: another run must not
 # overwrite the hang.log a proof table cites, or a held STOP's evidence.
@@ -26,8 +27,9 @@ SRV=${1:-}
 case "$SRV" in
   bc2) PORT=7149 ;;
   bc3) PORT=7249 ;;
+  bc4) PORT=7449 ;;
   bc1) echo "refused: bc1 is never used for this gate"; exit 2 ;;
-  *) echo "refused: server must be bc2 or bc3, got '$SRV'"; exit 2 ;;
+  *) echo "refused: server must be bc2, bc3 or bc4, got '$SRV'"; exit 2 ;;
 esac
 shift
 LANE=
@@ -37,7 +39,7 @@ if [ "${1:-}" = --lane ] && [ $# -eq 2 ]; then
     lane-*) echo "refused: --lane $LANE is an agent name, not a lane; pass --lane ${LANE#lane-}"; exit 2 ;;
   esac
 elif [ $# -gt 0 ]; then
-  echo "refused: usage: r658-hang-gate.sh bc2|bc3 [--lane <lane>]"; exit 2
+  echo "refused: usage: r658-hang-gate.sh bc2|bc3|bc4 [--lane <lane>]"; exit 2
 else
   case "${KRAKEN_AGENT:-}" in
     orchestrator) LANE=orchestrator ;;

@@ -12,6 +12,7 @@ import { join } from "node:path";
 import type { SessionReport } from "../src/report";
 import { HANG_FIGURES } from "./gate-expected";
 import { LOGGED_ONLY } from "./gate-warnings";
+import { type StopForm, stopWordsProblem } from "./hang-stop-rows";
 import { keyOf } from "./mutant-equality";
 
 /** The fixture codeunit (79451) and its three tests, in source order. `hang-baseline-leg.test.ts`
@@ -64,6 +65,8 @@ export interface BaselineVerdictEvent {
 }
 
 export interface BaselineLegInput {
+  /** Which stop answer this run's server gives (`stopFormFor`): the baseline stop is judged by it. */
+  readonly stopForm: StopForm;
   readonly report: SessionReport;
   readonly testRows: readonly HangTestRow[];
   readonly baselineVerdicts: readonly BaselineVerdictEvent[];
@@ -117,11 +120,9 @@ export function baselineLegFailures(i: BaselineLegInput): string[] {
   } else {
     const msg = s.failure_message ?? "";
     if (s.outcome !== "timeout") fail(1, `${SLEEPS}'s baseline row is ${s.outcome}, not timeout`);
-    if (!/stopped the session/i.test(msg) || !/StopSession/i.test(msg)) {
-      fail(
-        1,
-        `${SLEEPS}'s failure message lacks BC's stop words: ${JSON.stringify(msg.slice(0, 200))}`,
-      );
+    const wordsProblem = stopWordsProblem(i.stopForm, msg);
+    if (wordsProblem !== undefined) {
+      fail(1, `${SLEEPS}'s failure message ${wordsProblem}`);
     }
     if (!(s.duration_ms >= budget && s.duration_ms < budget + BASELINE_STOP_WINDOW_MS)) {
       fail(

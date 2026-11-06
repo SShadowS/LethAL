@@ -30,6 +30,7 @@ import {
   duplicateObjectRefusals,
   fileHoldsWrappedObject,
   fileLineMapEntries,
+  isUnreadFile,
   objectIdentityOf,
   readRenamedMemberNames,
   refusedAsMultiObject,
@@ -296,9 +297,19 @@ export async function buildAlRunnerCoverageIndex(
   /** Files that pass every per-file rule, before the duplicate-key pass. */
   const candidates: { file: string; keys: string[]; entries: LineMapEntry[] }[] = [];
 
+  const unread: string[] = [];
   for (const rel of rels) {
     const source = await readFile(join(instrumentedDir, rel), "utf8");
     const root = wrapRoot(parseAL(source));
+    if (isUnreadFile(root)) {
+      unread.push(shown(rel));
+      skippedFiles.push(...keysOf(rel));
+      notify(
+        "coverage-refused-object",
+        `[lethal] ${shown(rel)}: the parser lost a member of this file, so its coverage is not read (R853).`,
+      );
+      continue;
+    }
     const admitted = alRunnerAdmitsWrappedFile(root);
     if (fileHoldsWrappedObject(root) && !admitted) {
       const file = shown(rel);
@@ -383,7 +394,7 @@ export async function buildAlRunnerCoverageIndex(
 
   return {
     byFile,
-    lineMap: new LineMap(entries, declared, await readRenamedMemberNames(instrumentedDir)),
+    lineMap: new LineMap(entries, declared, await readRenamedMemberNames(instrumentedDir), unread),
     multiObjectFiles,
     refusedFiles,
     admittedWrappedFiles,

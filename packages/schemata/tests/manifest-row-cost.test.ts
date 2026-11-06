@@ -183,8 +183,9 @@ describe("manifest-row loop cost (RUST-03 S4.2a)", () => {
       expect(counted.reads()).toBeLessThanOrEqual(4 * SRC.length);
       // The same bound through method calls: per-mutant line work or block text taken through
       // slice, indexOf or split scans about N times the file. R474 adds one file length: each
-      // member's span is sliced once for its hash (members do not overlap), never per mutant.
-      expect(counted.scanned()).toBeLessThanOrEqual(5 * SRC.length);
+      // member's span is sliced once for its hash (members do not overlap), never per mutant. R853
+      // adds well under one more: one character before each chain, for the glued check.
+      expect(counted.scanned()).toBeLessThanOrEqual(6 * SRC.length);
       const m = JSON.parse(
         await readFile(join(dir, "mutant-manifest.json"), "utf8"),
       ) as MutantManifest;

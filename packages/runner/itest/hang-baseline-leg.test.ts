@@ -135,8 +135,21 @@ function good(): BaselineLegInput {
     sessionLiveness: { missing: 0, singleRows: 3, singleDistinct: 3 },
     probe: { granted: true, released: true },
     elapsedMs: 120_000,
+    stopForm: "408",
   };
 }
+
+describe("GitHub #49: the baseline stop is judged by the server's form", () => {
+  const BODY_400 = `was stopped server-side. BC's own words: ${JSON.stringify('{"error":{"code":"Internal_ServerError","message":"begin transaction world not called  CorrelationId:  0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0."}}')}`;
+  test("the 400 body passes on the 400 form and fails on the 408 form", () => {
+    const base = mapRow(good(), 0, { failure_message: BODY_400 });
+    expect(baselineLegFailures({ ...base, stopForm: "400" })).toEqual([]);
+    expect(baselineLegFailures({ ...base, stopForm: "408" }).join(";")).toContain("408 stop words");
+  });
+  test("the 408 words fail on the 400 form", () => {
+    expect(baselineLegFailures({ ...good(), stopForm: "400" }).join(";")).toContain("400 body");
+  });
+});
 
 type Edit = (i: BaselineLegInput) => BaselineLegInput;
 const withReport = (i: BaselineLegInput, over: Record<string, unknown>): BaselineLegInput => ({

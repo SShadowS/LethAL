@@ -994,6 +994,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
       methodIndex.declaredObjects(),
       lineMap.mappedKeys(),
       lineMap.sourceRefusedKeys(),
+      lineMap.unreadFiles,
     );
   }
 

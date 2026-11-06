@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**16 of 833 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**15 of 834 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -513,7 +513,7 @@ that ordering is the priority.
 - **R846** · R830's by-name refusal costs some safe mutants: `TestField`, `FieldError` and by-value arguments · [R846.md](docs/roadmap/R846.md) · closed 2026-11-06 — ruled: the over-refusal stays; about 101 mutants of 2.3M are not worth a hang
 - **R848** · `TestField` and `FieldError` are not body exits: a loop that ends only by their error is unseen by the hang refusal · [R848.md](docs/roadmap/R848.md) · closed 2026-11-06 — named limit: one loop in five corpora holds the shape, and the narrowed rule moved no spec
 - **R849** · A pinned v3 record cannot re-key a row, and the hand-edit variable cannot reach the Edit tool: a text-only change to a fixture has no route · [R849.md](docs/roadmap/R849.md) · done (38b0f950)
-- **R853** · Glued source that emits unparsable AL (`endelse`, `endend`, `enduntil`, `beginif`), and one DC file the residual check cannot fold · [R853.md](docs/roadmap/R853.md) · open, filed 2026-11-06 from R828's close
+- **R853** · Glued source that emits unparsable AL (`endelse`, `endend`, `enduntil`, `beginif`), and one DC file the residual check cannot fold · [R853.md](docs/roadmap/R853.md) · done (5357c827)
 
 ## Backends and tooling
 
@@ -875,6 +875,7 @@ that ordering is the priority.
 - **R820** · A BC 29 dev endpoint's Ready-to-Run wrappers were read as a missing System Application, and as unreadable dependencies (GitHub #47) · [R820.md](docs/roadmap/R820.md) · done (3ae274b3); not yet proven on a real BC 29 package
 - **R822** · One contended moment in leg C costs a whole v3 gate: retry `timeout-is-cpu` before reading it as `infra-fail` · [R822.md](docs/roadmap/R822.md) · done (c2150b2b)
 - **R823** · scripts/r658-hang-gate.sh hard-codes lane bugs and the r658 worktree, so another lane cannot use it · [R823.md](docs/roadmap/R823.md) · done (1cfe158f)
+- **R833** · Bring up bc4 = BC 29 (29.0.54011.57673) and prove the gates there · [R833.md](docs/roadmap/R833.md) · done (eae3eaff)
 - **R835** · A test left a quarantine record in the default store, and a later test file on the same worker read it (master CI red on b67cfbb5) · [R835.md](docs/roadmap/R835.md) · done (b7597f60)
 - **R850** · A v3 record on a gated build with no hand pin writes unchecked: alpha.2 steps round R810's rule · [R850.md](docs/roadmap/R850.md) · done (38b0f950)
 - **R851** · The al-runner update counted processes as heavy jobs, so one job could skip a release for the day · [R851.md](docs/roadmap/R851.md) · done (0f52bd85)

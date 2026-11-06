@@ -67,7 +67,7 @@ echo "\${FAKE_TARGET:-${TARGET}}"
 exit "\${FAKE_GATE:-0}"`,
     "",
   );
-  const run = (env: Record<string, string | undefined> = {}, args: string[] = []) => {
+  const run = (env: Record<string, string | undefined> = {}, args: string[] = [], srv = "bc2") => {
     const all: Record<string, string | undefined> = {
       PATH: bin + delimiter + (process.env.PATH ?? ""),
       HOME: root,
@@ -79,7 +79,7 @@ exit "\${FAKE_GATE:-0}"`,
       R658_HOLD_MAX_BEATS: "3",
       ...env,
     };
-    const r = Bun.spawnSync(["bash", script, "bc2", ...args], {
+    const r = Bun.spawnSync(["bash", script, srv, ...args], {
       cwd: root, // never the repo: a wrapper that ran its caller's folder must not pass by luck
       env: Object.fromEntries(
         Object.entries(all).filter((e): e is [string, string] => e[1] !== undefined),
@@ -165,6 +165,32 @@ test("R823: a pass leaves no marker, and releases", () => {
   expect(r.code).toBe(0);
   expect(existsSync(t.oou)).toBe(false);
   expect(t.log()).toContain(`kraken coord release bc2 ${LEASE}`);
+});
+
+test("R-826b: bc4 (BC 29) is accepted on its own port 7449, under its own lease", () => {
+  const t = setup();
+  const bc4 = `[itest target] config=lethal.config.bc4.json server=${DEFAULT_BC_HOST}:7449 odata=7448 api=7452`;
+  const r = t.run({ FAKE_LEG: "passed", FAKE_TARGET: bc4 }, [], "bc4");
+  expect(r.code).toBe(0);
+  expect(t.log()).toContain("kraken coord lease bc4 preproc ");
+  expect(t.log()).toContain(`kraken coord release bc4 ${LEASE}`);
+  // bc2's port on a bc4 run is a different server: refused by the target check, before any lease.
+  const u = setup();
+  const wrong = u.run({ FAKE_LEG: "passed" }, [], "bc4");
+  expect(wrong.code).toBe(2);
+  expect(wrong.out).toContain(`server=${DEFAULT_BC_HOST}:7449`);
+  expect(u.log()).not.toContain("coord lease");
+});
+
+test("R-826b: bc1 and an unknown server still refuse, naming bc2, bc3 and bc4", () => {
+  const t = setup();
+  const one = t.run({}, [], "bc1");
+  expect(one.code).toBe(2);
+  expect(one.out).toContain("bc1 is never used for this gate");
+  const five = t.run({}, [], "bc5");
+  expect(five.code).toBe(2);
+  expect(five.out).toContain("server must be bc2, bc3 or bc4");
+  expect(t.log()).not.toContain("kraken");
 });
 
 test("R823: a dirty worktree refuses by name, before any lease", () => {

@@ -215,6 +215,11 @@ export interface TestVerdict {
    */
   readonly stopState?: StopState;
   /**
+   * GitHub #49: on a `timeout` that OUR stop ended, which answer ended it. Set only where the
+   * transport decides those two cases (single and grouped), absent on every other outcome.
+   */
+  readonly stopEvidence?: StopEvidence;
+  /**
    * R-204b Part A: set on the single path's `error` when BC answered our stop with its 408 but the
    * op's progress row shows the method had already recorded its completion. Lifted into the step's
    * cause, exactly like the grouped call's `stopped-after-completion`.
@@ -237,6 +242,29 @@ export interface TestVerdict {
 
 /** R-204b: see `TestVerdict.stopState`. */
 export type StopState = "issued" | "pending" | "confirmed" | "refused" | "unknown";
+
+/**
+ * GitHub #49: what ended a held request after our confirmed stop. `bc-named-stop` is BC's 408 that
+ * names the AL `StopSession` call; `begin-transaction-world` is BC 29's exact 400, which does not
+ * name the stop and is the weaker of the two.
+ */
+export type StopEvidence = "bc-named-stop" | "begin-transaction-world";
+
+/**
+ * GitHub #49: the evidence of a kill that ran twice (the kill, then its reproduction). Mixed runs
+ * keep the WEAKER: any `begin-transaction-world` makes the row `begin-transaction-world`, because
+ * the verdict then leans on our own stop in at least one of its two runs. A run without evidence
+ * (not our stop) never upgrades the other to a claim it did not earn: the one that has it is kept.
+ */
+export function weakerStopEvidence(
+  a: StopEvidence | undefined,
+  b: StopEvidence | undefined,
+): StopEvidence | undefined {
+  if (a === "begin-transaction-world" || b === "begin-transaction-world") {
+    return "begin-transaction-world";
+  }
+  return a ?? b;
+}
 
 /** R-204b: a lost answer may be retried only when no stop was sent, or every stop was refused. */
 export function stopIsRetrySafe(s: StopState | undefined): boolean {

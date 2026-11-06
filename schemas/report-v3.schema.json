@@ -70,6 +70,7 @@
               "tests-testpage-refused",
               "runner-disagreement",
               "stop-hung-sessions",
+              "stop-answer-400",
               "resumed",
               "untargeted-triggers",
               "attribution-unplaceable",
@@ -380,6 +381,13 @@
           },
           "killPosition": {
             "type": "number"
+          },
+          "stopEvidence": {
+            "type": "string",
+            "enum": [
+              "bc-named-stop",
+              "begin-transaction-world"
+            ]
           },
           "killReproduced": {
             "const": true

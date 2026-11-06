@@ -46,10 +46,11 @@ export const MARKER_SERVERS: Readonly<Record<number, string>> = {
   7049: "bc1",
   7149: "bc2",
   7249: "bc3",
+  7449: "bc4",
 };
 
 /**
- * The server name a config's host and dev port name, or `undefined`. Only bc1-bc3 can have a
+ * The server name a config's host and dev port name, or `undefined`. Only bc1-bc4 can have a
  * marker: a config naming any other server (the parked Cronus28, an envtool environment, a
  * Windows container) is not checked, so it is never refused here. The host is the one in use
  * (`bcLinuxHost(env)`); a config on the OTHER known host is refused earlier (`bcHostMismatch`).

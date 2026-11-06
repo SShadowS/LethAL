@@ -4344,6 +4344,26 @@ describe("manifest objects against declarations, before any baseline (R-307 sect
     }
   });
 
+  test("R853: a mutant in a file the parser cannot read stops by name, before publish (fenced and hub)", async () => {
+    const arm = "B();\n#if not C\nif not A then begin\n#endif\nend;\nexit(true);\n";
+    const lost = `codeunit 50140 "No Source"\n{\n    procedure P()\n    begin\nif S then begin\n${arm}end else if T then begin\n${arm}end else begin\n${arm}end\n    end;\n}\n`;
+    for (const coverageMode of ["fenced", "procedure"] as const) {
+      const { err, published } = await deployed({
+        coverageMode,
+        files: { "Other.Codeunit.al": PLAIN, "Lost.Codeunit.al": lost },
+        codeunits: [
+          { Id: 50107, Name: "Other" },
+          { Id: 50140, Name: "No Source" },
+        ],
+        mutantIds: [50107, 50140],
+      });
+      const message = (err as Error | undefined)?.message ?? "";
+      expect(message).toContain("Lost.Codeunit.al");
+      expect(message).toContain("--exclude <glob>");
+      expect(published).toBe(false);
+    }
+  });
+
   test("coverage none reads no coverage and checks nothing", async () => {
     const { err, published } = await deployed({
       coverageMode: "none",

@@ -42,6 +42,7 @@ import type {
   RunManyOpts,
   RunManyResult,
   RunOpts,
+  StopEvidence,
   StopState,
   TestMethodRef,
   TestVerdict,
@@ -86,6 +87,7 @@ import type {
 import { assertManifestObjectsDeclared } from "../src/line-map";
 import { loadInstalledArtifact } from "../src/named-mutants";
 import { NamedMutantError } from "../src/named-mutants";
+import { RunMutantTransport } from "../src/run-mutant-transport";
 import { bundleFor, tinyBundle } from "./helpers/bundle";
 import { IDLE_STATUS, leaseRouter } from "./helpers/lease-wire";
 import type { WireAnswer } from "./helpers/lease-wire";
@@ -22388,6 +22390,134 @@ describe("R577: a kill must reproduce under the mutant", () => {
     store.close();
   });
 
+  /**
+   * GitHub #49, the whole chain past the transport: the kill at position 1 re-runs through
+   * `reproduceKill` -> `singleStep` -> `backend.run`, and here that last step is a REAL
+   * `RunMutantTransport` against a fake fetch whose held `RunMutant` answers BC 29's exact 400.
+   * The first mutated run is the stub's scripted timeout; the confirm is unmutated and passes.
+   */
+  const WORLD_400 = JSON.stringify({
+    error: {
+      code: "Internal_ServerError",
+      message:
+        "begin transaction world not called  CorrelationId:  6f1c2d3e-4a5b-4c6d-8e7f-0123456789ab.",
+    },
+  });
+  const BC_408 =
+    "The server stopped the session (ID: 2683) because of a stop session request. The session was stopped by an AL StopSession call.";
+  const worldStopStub = (
+    stopAnswer: { stopped: boolean; reason?: string },
+    reply: () => Response = () => new Response(WORLD_400, { status: 400 }),
+  ) => {
+    const calls: string[] = [];
+    const fetchFn = ((url: unknown) => {
+      const action = /LethALControl_(\w+)/.exec(String(url))?.[1] ?? String(url);
+      calls.push(action);
+      if (action === "RunMutant") {
+        return new Promise<Response>((res) => setTimeout(() => res(reply()), 60));
+      }
+      return Promise.reject(new Error(`no ${action} in this test`));
+    }) as typeof fetch;
+    const transport = new RunMutantTransport(
+      { baseUrl: "http://bc:7048/BC", company: "C", username: "u", password: "p" },
+      "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
+      "5c0a4c0a5c0a4c0a5c0a4c0a5c0a4c0a",
+      fetchFn,
+    );
+    class WorldStopStub extends ReproStub {
+      override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+        const active = this.activations.at(-1) ?? null;
+        const n = active === null ? 0 : (this.nth.get(active) ?? 0);
+        if (active === null || n < 1) return super.run(ref, opts);
+        this.nth.set(active, n + 1);
+        this.sent.push({ mutant: active, method: ref.method, timeoutMs: 20 });
+        const v = await transport.run({
+          ref,
+          mutantId: active,
+          attemptId: "a1",
+          timeoutMs: 20,
+          stopGraceMs: 500,
+          lease: { epoch: 3, token: "tok", serverGeneration: "gen-1", opSeq: 7 },
+          onBudgetExceeded: async () => stopAnswer,
+        });
+        this.trace.push(`run ${active} ${ref.method} ${v.outcome}`);
+        return v;
+      }
+    }
+    const backend = new WorldStopStub(
+      CAPS_NST,
+      (mutant) => (mutant === null ? "pass" : "timeout"),
+      ["IsOverBudget"],
+    );
+    return { backend, calls };
+  };
+
+  test("T9w: a k = 1 timeout kill whose re-run ends in BC 29's 400 after a confirmed stop is timeout-killed, reproduced", async () => {
+    const { backend, calls } = worldStopStub({ stopped: true });
+    const { report, store } = await run(backend);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("timeout-killed");
+      expect(m.killReproduced).toBe(true);
+    }
+    expect(calls).toContain("RunMutant");
+    expect(calls).not.toContain("GetOpAnswer");
+    // GitHub #49: the row says which answer ended it, and the report carries the 400 caveat.
+    for (const m of report.mutants) expect(m.stopEvidence).toBe("begin-transaction-world");
+    expect(report.validity.caveats).toContain("stop-answer-400");
+    store.close();
+  });
+
+  /** The first run carries `first` as its evidence; the re-run is the stub's real transport. */
+  const mixed = async (first: StopEvidence, reply: () => Response) => {
+    const { backend } = worldStopStub({ stopped: true }, reply);
+    backend.answer = (mutant, n, v) =>
+      mutant !== null && n === 1 ? { ...v, stopEvidence: first } : undefined;
+    return run(backend);
+  };
+  const world400 = () => new Response(WORLD_400, { status: 400 });
+  const bc408 = () => new Response(BC_408, { status: 408 });
+
+  test("T9m1: GitHub #49 mixed run: first run the 408, re-run the 400 -> the row shows the WEAKER, the 400", async () => {
+    const { report, store } = await mixed("bc-named-stop", world400);
+    expect(report.mutants.length).toBeGreaterThan(0);
+    for (const m of report.mutants) expect(m.stopEvidence).toBe("begin-transaction-world");
+    expect(report.validity.caveats).toContain("stop-answer-400");
+    store.close();
+  });
+
+  test("T9m2: GitHub #49 mixed run the other way: first run the 400, re-run the 408 -> still the 400", async () => {
+    const { report, store } = await mixed("begin-transaction-world", bc408);
+    expect(report.mutants.length).toBeGreaterThan(0);
+    for (const m of report.mutants) expect(m.stopEvidence).toBe("begin-transaction-world");
+    store.close();
+  });
+
+  test("T9m3: GitHub #49 both runs the 408 -> bc-named-stop, and NO 400 caveat", async () => {
+    const { report, store } = await mixed("bc-named-stop", bc408);
+    expect(report.mutants.length).toBeGreaterThan(0);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("timeout-killed");
+      expect(m.stopEvidence).toBe("bc-named-stop");
+    }
+    expect(report.validity.caveats).not.toContain("stop-answer-400");
+    store.close();
+  });
+
+  test("T9x: the same 400 after a REFUSED stop is not a kill: the re-run quarantines", async () => {
+    const { backend, calls } = worldStopStub({ stopped: false, reason: "already-completed" });
+    const { report, store } = await run(backend);
+    // The 400 was reached (the held RunMutant answered), and it quarantined: nothing scored.
+    expect(calls).toContain("RunMutant");
+    expect(report.mutants.length).toBeGreaterThan(0);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("error");
+      expect(m.failureNote).toContain("quarantined");
+      expect(m.failureNote).toContain("HTTP 400");
+      expect(m.stopEvidence).toBeUndefined();
+    }
+    store.close();
+  });
+
   test("T9b: timeout, a fast confirm, then a pass under the mutant is kill-not-reproduced, saying it passed", async () => {
     const backend: ReproStub = new ReproStub(
       CAPS_NST,
@@ -23006,7 +23136,7 @@ describe("runSession — R658: a stopped unmutated run", () => {
     expect(s.m2?.verdict).toBe("error");
     expect(s.m2?.cause).toBe("confirm-stopped");
     expect(s.m2?.failureNote).toContain(
-      "LethAL stopped it (BC's 408, or the op was already tombstoned by that stop), so the fail",
+      "LethAL stopped it (BC's 408, or on BC 29 its exact 400 after our confirmed stop, or the op was already tombstoned by that stop), so the fail",
     );
     expect(s.record).toBeNull();
     expect(s.report.mutants.find((m) => m.mutantCode === "M0003")).toBeDefined();

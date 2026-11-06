@@ -1516,6 +1516,18 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "survivors",
         "toolConditions",
       ],
+      "explain-v23.schema.json": [
+        "caveats",
+        "contract",
+        "derivedFromReportSchemaVersion",
+        "explainSchemaVersion",
+        "markIdentityScheme",
+        "notMeasured",
+        "score",
+        "survivorSelection",
+        "survivors",
+        "toolConditions",
+      ],
       "report-v2.schema.json": [
         "authoritative",
         "backend",
@@ -1691,6 +1703,7 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "tests-testpage-refused",
         "runner-disagreement",
         "stop-hung-sessions",
+        "stop-answer-400",
         "resumed",
         "untargeted-triggers",
         "attribution-unplaceable",
@@ -1834,6 +1847,8 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     expect(required("explain-v21.schema.json")).toEqual(required("explain-v20.schema.json"));
     // R844's v22 added a caveat value, not a required field.
     expect(required("explain-v22.schema.json")).toEqual(required("explain-v21.schema.json"));
+    // GitHub #49's v23 added a caveat value, not a required field.
+    expect(required("explain-v23.schema.json")).toEqual(required("explain-v22.schema.json"));
     expect(v6).toEqual([
       "attribution",
       "codeunitName",

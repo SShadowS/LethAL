@@ -9,6 +9,7 @@ import {
   KEPT_ANSWER_READ_MS,
   RunMutantTransport,
   isAlStopResponse,
+  isBeginTransactionWorldStop,
 } from "../src/run-mutant-transport";
 import {
   describeStaleTestApp,
@@ -1049,6 +1050,57 @@ describe("isAlStopResponse (R53)", () => {
 
   test("rejects a 408 that mentions StopSession but not a stopped session", () => {
     expect(isAlStopResponse(408, "StopSession is not permitted for this user.")).toBe(false);
+  });
+
+  test("GitHub #49: the world-stop 400 is not an isAlStopResponse answer, and a bare 408 still needs both phrases", () => {
+    expect(isAlStopResponse(400, WORLD_BODY)).toBe(false);
+    expect(isAlStopResponse(408, "The server stopped the session (ID: 9).")).toBe(false);
+    expect(isAlStopResponse(408, "an AL StopSession call")).toBe(false);
+  });
+});
+
+const GUID = "6f1c2d3e-4a5b-4c6d-8e7f-0123456789ab";
+const WORLD_MSG = `begin transaction world not called  CorrelationId:  ${GUID}.`;
+const worldBody = (over: Record<string, unknown> = {}) =>
+  JSON.stringify({ error: { code: "Internal_ServerError", message: WORLD_MSG, ...over } });
+const WORLD_BODY = worldBody();
+
+describe("isBeginTransactionWorldStop (GitHub #49)", () => {
+  test("accepts the exact BC 29 400", () => {
+    expect(isBeginTransactionWorldStop(400, WORLD_BODY)).toBe(true);
+    expect(isBeginTransactionWorldStop(400, worldBody({ message: `  ${WORLD_MSG}\n` }))).toBe(true);
+  });
+
+  test("rejects another status with the exact body", () => {
+    expect(isBeginTransactionWorldStop(500, WORLD_BODY)).toBe(false);
+    expect(isBeginTransactionWorldStop(200, WORLD_BODY)).toBe(false);
+    expect(isBeginTransactionWorldStop(408, WORLD_BODY)).toBe(false);
+  });
+
+  test("rejects every different 400", () => {
+    const no = (b: string) => expect(isBeginTransactionWorldStop(400, b)).toBe(false);
+    no(worldBody({ message: "begin transaction world was not called" }));
+    // Lowercase hex only: an uppercase GUID fails closed (the comment on the recogniser says so).
+    no(worldBody({ message: WORLD_MSG.replace(GUID, GUID.toUpperCase()) }));
+    no(worldBody({ message: `x ${WORLD_MSG}` }));
+    no(worldBody({ message: `${WORLD_MSG} more` }));
+    no(worldBody({ message: `Begin transaction world not called  CorrelationId:  ${GUID}.` }));
+    no(worldBody({ message: "begin transaction world not called  CorrelationId:  not-a-guid." }));
+    no(worldBody({ code: "Internal_Error" }));
+    no(worldBody({ code: undefined }));
+    no(WORLD_BODY.replace("}}", "}"));
+    no("");
+    no(
+      JSON.stringify({
+        error: { code: "Application_Error", message: "Customer 10000 is blocked." },
+      }),
+    );
+    no(JSON.stringify([JSON.parse(WORLD_BODY)]));
+    no("null");
+    no(JSON.stringify({ message: WORLD_MSG }));
+    no(JSON.stringify({ error: null }));
+    no(JSON.stringify({ error: [WORLD_MSG] }));
+    no(`prefix ${WORLD_BODY}`);
   });
 });
 

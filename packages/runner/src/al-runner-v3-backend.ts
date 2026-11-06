@@ -2012,6 +2012,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         index.declared,
         index.lineMap.mappedKeys(),
         index.exempt,
+        index.lineMap.unreadFiles,
       );
       this.coverageIndex = index;
     }

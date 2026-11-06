@@ -111,9 +111,9 @@ export interface Args {
 }
 
 const USAGE =
-  "usage: bun scripts/bc-republish.ts republish  --server bc1|bc2|bc3 --lane <lane> --token-dir <dir> [--predict] [--mint <fixture>]... <fixture>...\n" +
-  "       bun scripts/bc-republish.ts control    --server bc1|bc2|bc3 --lane <lane> --token-dir <dir>\n" +
-  "       bun scripts/bc-republish.ts alpackages --server bc1|bc2|bc3 --lane <lane> --token-dir <dir> <tests fixture>...";
+  "usage: bun scripts/bc-republish.ts republish  --server bc1|bc2|bc3|bc4--lane <lane> --token-dir <dir> [--predict] [--mint <fixture>]... <fixture>...\n" +
+  "       bun scripts/bc-republish.ts control    --server bc1|bc2|bc3|bc4--lane <lane> --token-dir <dir>\n" +
+  "       bun scripts/bc-republish.ts alpackages --server bc1|bc2|bc3|bc4 --lane <lane> --token-dir <dir> <tests fixture>...";
 
 export function parseArgs(argv: readonly string[]): Args {
   const [mode, ...rest] = argv;
@@ -146,7 +146,7 @@ export function parseArgs(argv: readonly string[]): Args {
       throw new Error(`unknown argument ${JSON.stringify(a)}\n${USAGE}`);
     else apps.push(a);
   }
-  if (server !== "bc1" && server !== "bc2" && server !== "bc3")
+  if (server !== "bc1" && server !== "bc2" && server !== "bc3" && server !== "bc4")
     throw new Error(`--server is required\n${USAGE}`);
   // R598: the lease holder must be the caller's lane, never a default.
   if (lane === undefined)

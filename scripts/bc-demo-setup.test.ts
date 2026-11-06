@@ -142,7 +142,7 @@ function fakeDeps(over: Partial<DemoDeps> = {}) {
 
 describe("R663: bc-demo is outside every lease pool and every gate", () => {
   test("SERVERS (the lease and gate server list) does not hold bc-demo", () => {
-    expect(Object.keys(SERVERS)).toEqual(["bc1", "bc2", "bc3"]);
+    expect(Object.keys(SERVERS)).toEqual(["bc1", "bc2", "bc3", "bc4"]);
     expect(Object.keys(SERVERS)).not.toContain(DEMO_SERVER);
   });
 
