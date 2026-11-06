@@ -310,7 +310,7 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
   },
   "operator-narrowed": {
     meaning:
-      "The run was scoped by `--operator`. `mutationScore` covers the named operators ONLY, and " +
+      "The run was scoped by `--operator` or `--exclude-operator`. `mutationScore` covers the named operators ONLY, and " +
       "an operator-scoped score describes how the suite handles that kind of change, not the " +
       "project.",
     entailedNegative:

@@ -628,6 +628,8 @@ export interface MutationSetOptions {
    * here.
    */
   readonly operators?: readonly string[];
+  /** R832: operators that contribute NO mutants (`--exclude-operator`). Refused beside `operators`. */
+  readonly excludeOperators?: readonly string[];
   /**
    * Issue #19: line ranges a mutant must touch (`--lines`, `--changed-since`). Absent means no line
    * filter. Applied after per-file dedup and after `operators`, for the same reason `operators` is:
@@ -768,6 +770,7 @@ function admittedByOnly(
 export function resolveOperatorNames(
   requested: readonly string[],
   registered: readonly string[],
+  flag = "--operator",
 ): ReadonlySet<string> | undefined {
   if (requested.length === 0) return undefined;
   const known = new Set(registered);
@@ -792,10 +795,32 @@ export function resolveOperatorNames(
       .map((n) => `"${n}"`)
       .join(", ");
     throw new Error(
-      `--operator named ${unknown.length === 1 ? "an operator" : "operators"} this build does not register: ${named}. Registered operators are ${registeredList} (the "lethal." prefix is optional). Refusing rather than running with the remaining names, which would report a narrower scope than the one asked for.`,
+      `${flag} named ${unknown.length === 1 ? "an operator" : "operators"} this build does not register: ${named}. Registered operators are ${registeredList} (the "lethal." prefix is optional). Refusing rather than running with the remaining names, which would report a different scope than the one asked for.`,
     );
   }
   return resolved;
+}
+
+/**
+ * R832: the operators a run admits, from `--operator` or `--exclude-operator`. `undefined` means
+ * every operator. Both flags together are refused: which one wins is a guess the user can avoid.
+ */
+export function admittedOperatorNames(
+  options: {
+    readonly operators?: readonly string[];
+    readonly excludeOperators?: readonly string[];
+  },
+  registered: readonly string[],
+): ReadonlySet<string> | undefined {
+  const { operators = [], excludeOperators = [] } = options;
+  if (operators.length > 0 && excludeOperators.length > 0) {
+    throw new Error(
+      "--operator and --exclude-operator cannot be combined. Name the operators to run, or the ones to leave out.",
+    );
+  }
+  const left = resolveOperatorNames(excludeOperators, registered, "--exclude-operator");
+  if (left === undefined) return resolveOperatorNames(operators, registered);
+  return new Set(registered.filter((n) => !left.has(n)));
 }
 
 /**
@@ -979,9 +1004,8 @@ export async function generateMutationSet(
   }
   // R127: resolved before any file is read too, so an unregistered operator name fails as
   // immediately as a typo'd `--only` pattern does. `undefined` means "every operator".
-  const admittedOperators = resolveOperatorNames(options.operators ?? [], [
-    ...operatorTiers.keys(),
-  ]);
+  const admittedOperators = admittedOperatorNames(options, [...operatorTiers.keys()]);
+  const excludingOperators = (options.excludeOperators?.length ?? 0) > 0;
   // Issue #19: a range naming no project `.al` file is refused before any file is read, like a
   // typo'd `--only` pattern: it would otherwise silently select nothing in that file.
   const lineRanges = options.lines;
@@ -1333,7 +1357,15 @@ export async function generateMutationSet(
   // `--only` pattern matching no file is. A run that quietly dropped it would publish, run a whole
   // baseline and report a null score with no failures — "nothing to fix" rather than "that
   // operator finds nothing here". Empty-vs-empty agreement is this project's signature bug.
-  if (admittedOperators !== undefined) {
+  // R832: `--exclude-operator` admits every other operator, so one with no site here is normal.
+  // Only a run left with nothing at all is refused. Leaving out an operator with no site loses
+  // nothing, so unlike `--exclude` that is not refused.
+  if (excludingOperators && producedInstrumentable.size === 0) {
+    throw new Error(
+      `no deployable mutation site is left in this scope with --exclude-operator ${options.excludeOperators?.join(", ")}.`,
+    );
+  }
+  if (admittedOperators !== undefined && !excludingOperators) {
     const barren = [...admittedOperators].filter((n) => !producedInstrumentable.has(n)).sort();
     if (barren.length > 0) {
       const named = barren.map((n) => `"${n}"`).join(", ");
@@ -1457,7 +1489,9 @@ export async function generateMutationSet(
   if (admittedOperators !== undefined) {
     warn(
       "operator-narrowed-run",
-      `[lethal] --operator narrowed this run to ${[...admittedOperators].sort().join(", ")}; ${excludedByOperator} mutation site(s) from other operators were excluded. The score below covers those operators ONLY — it is not a project score.`,
+      excludingOperators
+        ? `[lethal] --exclude-operator left out ${options.excludeOperators?.join(", ")}: ${excludedByOperator} mutation site(s) were excluded. The score below does not cover them — it is not a project score.`
+        : `[lethal] --operator narrowed this run to ${[...admittedOperators].sort().join(", ")}; ${excludedByOperator} mutation site(s) from other operators were excluded. The score below covers those operators ONLY — it is not a project score.`,
     );
   }
   // R565: read once every lookup this generation made is done.
@@ -1525,6 +1559,8 @@ export interface SessionConfig {
   readonly only?: readonly string[];
   /** R221 — glob patterns whose files contribute NO mutants. See `MutationSetOptions.exclude`. */
   readonly exclude?: readonly string[];
+  /** R832: `--exclude-operator`. See `MutationSetOptions.excludeOperators`. */
+  readonly excludeOperators?: readonly string[];
   /**
    * R127: operator names allowed to contribute mutants (`--operator`). Absent means every
    * registered operator. See `MutationSetOptions.operators`.
@@ -5888,10 +5924,10 @@ async function runSessionBody(
   // the session rather than after a deploy; the fingerprint treats `empty-block` and
   // `lethal.empty-block` as the same scope, because they are; and the REPORT records the resolved
   // name, so a reader months later is not left guessing what an abbreviation meant.
-  const resolvedOperators =
-    cfg.operators === undefined
-      ? undefined
-      : [...(resolveOperatorNames(cfg.operators, [...operatorTiers.keys()]) ?? [])].sort();
+  // R832: `--exclude-operator` resolves to the operators it leaves in, so the fingerprint and the
+  // report treat it as the same scope as naming them all.
+  const admittedForRun = admittedOperatorNames(cfg, [...operatorTiers.keys()]);
+  const resolvedOperators = admittedForRun === undefined ? undefined : [...admittedForRun].sort();
   emit({
     type: "run-configured",
     caps,
@@ -6411,7 +6447,11 @@ async function runSessionBody(
   } = await generateMutationSet(cfg.projectDir, {
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
     ...(cfg.exclude !== undefined ? { exclude: cfg.exclude } : {}),
-    ...(resolvedOperators !== undefined ? { operators: resolvedOperators } : {}),
+    ...(cfg.excludeOperators !== undefined && cfg.excludeOperators.length > 0
+      ? { excludeOperators: cfg.excludeOperators }
+      : resolvedOperators !== undefined
+        ? { operators: resolvedOperators }
+        : {}),
     ...(cfg.lines !== undefined ? { lines: cfg.lines } : {}),
     ...(sourceSnapshot !== undefined ? { source: sourceSnapshot } : {}),
     preprocessorSymbols: sourceSymbols,

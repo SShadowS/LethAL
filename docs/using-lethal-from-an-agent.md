@@ -94,14 +94,14 @@ mutated, executes nothing, and reports both the raw site count and the deployed 
 
 On bcdev, `--dry-run` and the run's `large-method` warning name any file that emits one very large method. A 907-guard file
 stopped a BC service tier in GitHub #28, and such a method is the lead suspect, not a proven cause. The warning's thresholds are
-not measured and it refuses nothing. To shrink the method, leave out `lethal.empty-block` by naming the other operators with `--operator`.
+not measured and it refuses nothing. To shrink the method, leave out the operator with `--exclude-operator empty-block`.
 
-**Know which flags can move a verdict.** `--only`, `--exclude`, `--operator`, `--lines` and
+**Know which flags can move a verdict.** `--only`, `--exclude`, `--operator`, `--exclude-operator`, `--lines` and
 `--changed-since` select which
 MUTANTS run and cannot change a verdict. `--tests-only` (whole test files) and `--exclude-test <Codeunit.Method>`
 (single test methods; repeatable; bcdev only; a name that matches no test is refused) select which TESTS run
 and CAN: leave out a killing test and its mutant is reported survived or no-coverage. `--only` and `--exclude` give the `narrowed`
-caveat, `--operator` gives `operator-narrowed`, `--lines` and `--changed-since` give `line-narrowed`,
+caveat, `--operator` and `--exclude-operator` give `operator-narrowed`, `--lines` and `--changed-since` give `line-narrowed`,
 and `--tests-only` and `--exclude-test` give `tests-narrowed`. `--exclude-test` also lists each test it left out in
 `excludedTests` (reason `exclude-test`) and prints a `TESTS EXCLUDED` banner line.
 
@@ -155,6 +155,7 @@ has the complete set.
 | `--tests-only` | `run` |
 | `--exclude-test` | `run` |
 | `--operator` | `run` |
+| `--exclude-operator` | `run` |
 | `--artifact` | `verify` |
 | `--survivors` | `verify` |
 | `--max-new-tests` | `verify` |
