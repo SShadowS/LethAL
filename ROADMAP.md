@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**26 of 823 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**27 of 824 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -334,6 +334,7 @@ that ordering is the priority.
 - **R841** · Some `#if` shapes that split a statement pass the refusal, compile as source, and give an artifact alc refuses · [R841.md](docs/roadmap/R841.md) · open, filed 2026-11-06 (coord task R-835); measured 2026-11-06 (coord task R-841): the run drops only the…
 - **R844** · A run with some `error` mutants reads a higher score and says only `error N`: nothing states they are outside the score · [R844.md](docs/roadmap/R844.md) · done (1b213195): caveat some-errors, and a console line after score: giving the range the score could read…
 - **R843** · `lethal run` can strip a user's server: a target object with the same type and id as one in its test app is published, and BC removes the apps · [R843.md](docs/roadmap/R843.md) · open, filed 2026-11-06 (coord task R-841): plan in review, nothing built
+- **R845** · Clashes a pre-publish object list cannot see can still strip a server: field ids, enum values, non-dependents, transitive dependents · [R845.md](docs/roadmap/R845.md) · open, filed 2026-11-06 (coord task R-841): not measured
 
 ## Product gaps a real project hits
 
