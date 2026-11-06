@@ -7548,12 +7548,13 @@ describe("runSession — R734: isolate the breaking mutants, score the rest", ()
   // search steps one line up. Without it the pointer is the neighbour and the culprit is found by
   // halving, late.
   test("O1: a pointer one line past the bad text still makes the culprit the first singleton", async () => {
-    // The bad text is the NEGATE mutant of P02, which has a successor in its chain: two lines past
-    // it is the next member's guard line.
+    // The bad text is the NEGATE mutant of P02, which has a successor in its chain: the line after
+    // it is the next member's guard line. (R827: a branch is one line now, not two, so the guard
+    // line is `line + 1`; `line + 2` is the successor's own text and would blame the successor.)
     const { shown } = await runIsolation(
       4,
       [2],
-      (line) => line + 2,
+      (line) => line + 1,
       (nn) => `not (A${nn} < B${nn})`,
     );
     const first = new Set((shown[0] ?? []).map((s) => s.id));

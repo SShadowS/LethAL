@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**22 of 826 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**16 of 830 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -334,7 +334,7 @@ that ordering is the priority.
 - **R841** · Some `#if` shapes that split a statement pass the refusal, compile as source, and give an artifact alc refuses · [R841.md](docs/roadmap/R841.md) · closed 2026-11-06 — no refusal, by the orchestrator's ruling: refusing the file costs more good mutants than…
 - **R844** · A run with some `error` mutants reads a higher score and says only `error N`: nothing states they are outside the score · [R844.md](docs/roadmap/R844.md) · done (1b213195): caveat some-errors, and a console line after score: giving the range the score could read…
 - **R843** · `lethal run` can strip a user's server: a target object with the same type and id as one in its test app is published, and BC removes the apps · [R843.md](docs/roadmap/R843.md) · done (c482126f)
-- **R845** · Clashes a pre-publish object list cannot see can still strip a server: field ids, enum values, non-dependents, transitive dependents · [R845.md](docs/roadmap/R845.md) · open on one line: the live lethal-run leg was not run. Built (4efdbed1), and proven on real BC, offline and…
+- **R845** · Clashes a pre-publish object list cannot see can still strip a server: field ids, enum values, non-dependents, transitive dependents · [R845.md](docs/roadmap/R845.md) · done (2a69245e); live leg passed on bc1, 2026-11-06
 - **R847** · A control-app action that reads AllObj and Field would let the pre-publish clash check see an installed app that is not a dependent · [R847.md](docs/roadmap/R847.md) · open, filed 2026-11-06 (coord task R-845): not built
 
 ## Product gaps a real project hits
@@ -496,19 +496,21 @@ that ordering is the priority.
 - **R824** · doctor misses a missing non-Microsoft dependency package and a sync-pending tenant; clear-quarantine rejects --config (GitHub #29) · [R824.md](docs/roadmap/R824.md) · done (41df4238)
 - **R825** · README states the operator count in prose by hand, and it drifted (GitHub #44) · [R825.md](docs/roadmap/R825.md) · done (41df4238)
 - **R826** · A 907-guard codeunit crashed the BC service tier with a stack overflow: nothing limits or warns on guards per codeunit (GitHub #28) · [R826.md](docs/roadmap/R826.md) · open, filed 2026-11-05 (coord task R-820); a warning landed (R-825); the measurement waits for #28's reporter
-- **R827** · One empty-block mutant on a block folds everything inside it into one chain: 2 to 8 x the emitted code on real codeunits, growing with the square · [R827.md](docs/roadmap/R827.md) · parked 2026-11-05: plan reviewed, waiting for #28's reporter or a measured crash
-- **R828** · A condition mutant makes its whole `if` a chain root: chains of up to 66 remain once empty-block's fold is gone · [R828.md](docs/roadmap/R828.md) · open: waits for R827 (coord task R-836); measured offline, nothing built
+- **R827** · One empty-block mutant on a block folds everything inside it into one chain: 2 to 8 x the emitted code on real codeunits, growing with the square · [R827.md](docs/roadmap/R827.md) · done (49557132)
+- **R828** · Statements that keep their whole body as a chain root (`if`, loops, `case` arms) leave chains of up to 461 after R827, and a 44 MB file: R827 alone does not clear #28's suspect · [R828.md](docs/roadmap/R828.md) · open: planned and split (O1 after R-836; a BC measurement with a pre-committed limit decides O3); nothing…
 - **R829** · Hang refusal misses a write the loop's step reads, when the loop condition reads a name (GitHub #50) · [R829.md](docs/roadmap/R829.md) · done (08605e4d)
 - **R830** · `void-method-call` has no hang check: deleting a call that steps a loop can hang the run · [R830.md](docs/roadmap/R830.md) · done (6daf2727)
 - **R831** · Hang refusal never sees an array-element target: `while Buf[1] < 10 do Buf[1] := Buf[1] + 1` is claimed · [R831.md](docs/roadmap/R831.md) · done (6daf2727)
 - **R832** · No way to leave one operator out: `--operator` only narrows to a list (`--exclude-operator`, GitHub #50) · [R832.md](docs/roadmap/R832.md) · done (22348be4)
 - **R834** · Operator candidates #30-#43, ranked by sites, overlap, equivalents, yield and cost; first batch #35, #41, #33, #42 · [R834.md](docs/roadmap/R834.md) · open, filed 2026-11-06 (coord task R-821); measured offline, the owner picks the batch, nothing built
-- **R836** · Eleven gate baselines lag at scheme 44 after R830's bump to 45 · [R836.md](docs/roadmap/R836.md) · open, filed 2026-11-06 (coord task R-833)
-- **R837** · A mutant inside a same-object callee can still remove a loop's progress: `Counter += 1` in `Advance()` stays claimed · [R837.md](docs/roadmap/R837.md) · open, filed 2026-11-06 (found building R-833); nothing measured, nothing built
-- **R838** · `empty-block` of an `if` or `case` arm inside a loop deletes the loop's step, and no hang check sees it · [R838.md](docs/roadmap/R838.md) · open, filed 2026-11-06 (found building R-833); nothing measured, nothing built
-- **R839** · A loop's progress through another object or an event is not seen: `Other.Advance()` and `OnAdvance()` stay claimed · [R839.md](docs/roadmap/R839.md) · open, filed 2026-11-06 (found building R-833); nothing measured, nothing built
+- **R836** · Eleven gate baselines lag at scheme 44 after R830's bump to 45 · [R836.md](docs/roadmap/R836.md) · done (59498cab)
+- **R837** · A mutant inside a same-object callee can still remove a loop's progress: `Counter += 1` in `Advance()` stays claimed · [R837.md](docs/roadmap/R837.md) · closed 2026-11-06 — named limit: 11 specs in one procedure of 2.3M; the rule that finds them is not worth its…
+- **R838** · `empty-block` of an `if` or `case` arm inside a loop deletes the loop's step, and no hang check sees it · [R838.md](docs/roadmap/R838.md) · closed 2026-11-06 — named limit: 4 specs in one procedure of 2.3M; same ruling as R837
+- **R839** · A loop's progress through another object or an event is not seen: `Other.Advance()` and `OnAdvance()` stay claimed · [R839.md](docs/roadmap/R839.md) · closed 2026-11-06 — named limit: about one real site outside the hang gate; refusing the event shape would…
 - **R840** · A new user with no BC server can install LethAL and run the al-runner-v3 backend from the docs (GitHub #48) · [R840.md](docs/roadmap/R840.md) · done (726c880b)
-- **R846** · R830's by-name refusal costs some safe mutants: `TestField`, `FieldError` and by-value arguments · [R846.md](docs/roadmap/R846.md) · open, filed 2026-11-06 (found by R-833's delta review); not tuned
+- **R846** · R830's by-name refusal costs some safe mutants: `TestField`, `FieldError` and by-value arguments · [R846.md](docs/roadmap/R846.md) · closed 2026-11-06 — ruled: the over-refusal stays; about 101 mutants of 2.3M are not worth a hang
+- **R848** · `TestField` and `FieldError` are not body exits: a loop that ends only by their error is unseen by the hang refusal · [R848.md](docs/roadmap/R848.md) · open, filed 2026-11-06 (found by R-842's plan review); counted offline, nothing built
+- **R849** · A pinned v3 record cannot re-key a row, and the hand-edit variable cannot reach the Edit tool: a text-only change to a fixture has no route · [R849.md](docs/roadmap/R849.md) · done (38b0f950)
 
 ## Backends and tooling
 
@@ -871,6 +873,8 @@ that ordering is the priority.
 - **R822** · One contended moment in leg C costs a whole v3 gate: retry `timeout-is-cpu` before reading it as `infra-fail` · [R822.md](docs/roadmap/R822.md) · done (c2150b2b)
 - **R823** · scripts/r658-hang-gate.sh hard-codes lane bugs and the r658 worktree, so another lane cannot use it · [R823.md](docs/roadmap/R823.md) · done (1cfe158f)
 - **R835** · A test left a quarantine record in the default store, and a later test file on the same worker read it (master CI red on b67cfbb5) · [R835.md](docs/roadmap/R835.md) · done (b7597f60)
+- **R850** · A v3 record on a gated build with no hand pin writes unchecked: alpha.2 steps round R810's rule · [R850.md](docs/roadmap/R850.md) · done (38b0f950)
+- **R851** · The al-runner update counted processes as heavy jobs, so one job could skip a release for the day · [R851.md](docs/roadmap/R851.md) · done (0f52bd85)
 
 ---
 

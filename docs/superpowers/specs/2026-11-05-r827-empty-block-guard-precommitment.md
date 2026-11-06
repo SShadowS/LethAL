@@ -53,3 +53,130 @@ Any difference in any of these is a BLOCK. It is not re-recorded here.
 
 R-818 lands first, then R-824's records, then R827's final gate: a record made after this change would see different emitted AL.
 R827's own gates can run earlier against the committed rows, and the final-head gates must follow those records.
+
+## Addendum 2, the pick-up (R-836, 2026-11-06)
+
+Unparked by the owner's goal. This replaces "The change" and answers the seven points in R827. Build before figures: the size and timing
+figures, and any fixture re-pad, come in Addendum 3 before any live run.
+
+**One rule for "free", in `buildComponents`.** Members are walked widest first, as today, equal spans included, and no second definition
+exists anywhere. An `empty-block` member is free when all of these hold, else it is a chain member as today:
+1. its `before` is its resolved statement, a block. A case-arm E resolves to `case_statement`, so it stays a chain, marker-less;
+2. no chain root contains the block;
+3. no other member resolves to a statement of the same span;
+4. the block holds no preprocessor directive, at any depth (point 3 of R827).
+
+A free block is not a root. What sits inside it is grouped again by the same walk, so a free E can hold another free E.
+
+**Loops (point 1).** Inside a free block, a member inside a loop is grouped at the OUTERMOST loop statement within the outermost free block
+that holds it. So its guard is tested on entry to that loop, once per pass of the block, where today's body chain tested it once per pass
+of the block. Guards do not move inside a loop, so R246's race does not arise. Where no free E exists nothing changes. A chain rooted at a
+loop that holds an E makes that E a chain member, by condition 2.
+
+**Emission.** Two zero-width insertions and no newline, so BODY appears once and no line of BODY moves:
+`begin if Sel.Active('E') then begin <marker> end else begin BODY end end`. The marker is E's, by the same plan as a root member.
+
+**What this document adds to the "moves" list (point 6):** callstack line numbers in `killingTestFailure`; `planFile`'s and `design.md`'s
+"never nested guards", which become "never nested chains"; `large-fold.ts`'s figures, since a free E adds no bytes. R318's rule, that a
+line two declarations share names neither, is read by the plan review, and any effect goes in Addendum 3.
+
+**Gates (points 4 and 5).** `Grow`'s and `LayoutBeta`'s instrumented spans shrink, so `itest:bcdev-wrapped` and the v3 layout leg may go
+blind while staying green. Addendum 3 says how each stays load-bearing, with its red check redone. A fixture arm for an `if`-branch E joins
+a gate. No crash runs, and bc1 is out of use.
+
+**Order, ruling 2026-11-06.** Early gates may run now against the committed rows. Baselines record after R-842 and R-848, and the final
+per-mutant comparison waits for the orchestrator's word.
+
+## Addendum 3, before any live run (R-836, 2026-11-06)
+
+From the delta plan review of Addendum 2, and the build at `lethal/r836`. It replaces Addendum 2 where they differ.
+
+**"Free" is narrower: a procedure or trigger body only.** An `empty-block` member is free when its statement's parent is a procedure or a
+trigger, its block holds no `#if`-family node and no `#pragma`, and no other member resolves to the same span. A branch block is never free:
+measured, every free block in a default run is a body, because a condition mutant roots every `if`. So free blocks do not nest. A filtered run
+loses nothing: the branch stays a chain, as today.
+
+**Loops.** Inside a free body a member in a `for`, `foreach`, `while` or `repeat` is grouped at the outermost loop, and the free test comes after
+that, so an `empty-block` of a loop body is a chain member there. The fold cannot see this, because it compares meaning. So the residualising
+helper also reads the emitted tree: no guard inside a loop under a free guard's `else` (`guard-in-loop`), default and with the loop's own
+mutants left out.
+
+**The gates that would have gone blind (R827 point 4).** `Grow` gains a `#pragma` line in the two wrapped files, their twins and `LayoutBeta`,
+which keeps it a chain as long as today. Each comment loses a line, so no mutant's line moves, and that puts the directive rule on a live gate.
+Measured with this build: 9 fixture keys move by byte offset, all in `sandbox-layout` and `sandbox-wrapped`. No tuple, ordinal or tag moves
+on any fixture, and DO's keys are identical (0 added, 0 removed). So no baseline changes for this.
+
+**What else moves, adding to the list:**
+- `itest:alrunner-v3` leg X (d): the Sleep index is 1 + 5, it was 4 + 5, and SLEEP_LINES and R5's table lines read 18. No verdict moves.
+- `line-map.test.ts` GH-09: its rows are measured on BC in the old layout, so they are measured again on `bc2`, by
+  `LETHAL_FENCED_COVERAGE_DUMP`, during `itest:bcdev`.
+- `reach`: a statement that is neither in a list nor a slot (under `asserterror` or `with`) goes from `unplaced` to `statement`, because it is
+  now its own root. The grain golden on every fixture is byte-identical, so no gate moves, but on real code the tally can.
+- `large-fold.ts`: the warning named `lethal.empty-block`, which is no longer the largest cause. It now names `if` conditions and `case` arms.
+- Tests and goldens that pin emitted text: emission hashes re-pinned, manifests unchanged, grain golden unchanged.
+
+**Size, 21 of DO's codeunits, offline, with the loop rule:** with `empty-block` against without it, 1.0 to 1.6 x, down from 1.8 to 7.6 x. 96 KB to
+1,226 KB, longest chain 66. On 10 DO files in total: 10,863 KB on master, 3,303 KB now, 2,721 KB with no `empty-block`.
+
+**Predictions, as before:** every gate, per mutant, nothing moves. Early gates run against the committed rows. `itest:alrunner-v3` first, then
+`itest:bcdev`, `-wrapped`, `tables` and `harden` on `bc2`, and `itest:hang` on `bc3`. Time is measured and reported per gate. A verdict that moves
+is a BLOCK, for time or any other reason. No crash runs; bc1 is out of use.
+
+## Addendum 4, a correction (R-836, 2026-11-06)
+
+**Addendum 3 is wrong where it says "So no baseline changes for this."** That read the dump's identity tuples, and the early gates at 7b0ecf7f
+showed the gate's key hashes the block's text as well. `Grow`'s `#pragma` is inside the block, so its `empty-block` row re-keys, from
+`556f5859...|<object>|Grow|lethal.empty-block|1` to `170d7adf...|<object>|Grow|lethal.empty-block|1`. All five rows, by baseline:
+
+| baseline | objects |
+|---|---|
+| `bcdev.wrapped.baseline.json` | `Wrapped Top`, `Wrapped Top Twin`, `Wrapped Pre`, `Wrapped Pre Twin` |
+| `al-runner-v3.wrapped.baseline.json` | the same four |
+| `al-runner-v3.layout.baseline.json` | `Layout Beta` |
+
+**Ruling (orchestrator, 2026-11-06): option A.** lethal-code records under R-848. Then these three baselines are re-recorded in R-836's branch at the
+final scheme, by R332. Only these rows may move, and each must read `killed` by its same test on its same line: `GrowTop`, `GrowTopTwin`, `GrowPre` and
+`GrowPreTwin` on lines 7, 7, 9 and 9, and `Layout Beta`'s row as committed. Confirmed per mutant, and a confirm run passes without record
+mode. Any other difference is a BLOCK.
+
+## Addendum 5, from the build review (R-836, 2026-11-06)
+
+**Addendum 3's "longest chain 66" holds only for its sample.** Across DC and DO the longest chain is 461, where master has 496, and 24 files have a chain of
+100 or more, where master has 65. The worst file, `CDOEMailTemplateImportExport`, goes from 46.1 MB to 44.3 MB: its largest chain is a `for` statement
+with 454 members, so the outermost-loop rule keeps it. The typical real file shrinks about as measured, and the worst ones hardly at all. So this
+change does not by itself remove the suspect in #28 for such a file. The rest is [[R828]], which covers loops and case arms as well as `if`.
+
+**The `large-method` warning** now names `if` conditions, `case` arms and loops, and says `lethal.empty-block` still roots a branch or a loop body.
+
+**R318:** a body on a line it shares with the next declaration stays on that shared line, which names nobody, as today for such a line. No such line
+exists in 1,622 corpus files, and no fixture has one. Accepted.
+
+**`design.md`** has no "never nested guards" text, so Addendum 2's reference to it was wrong and nothing changes there.
+
+Also fixed from that review: a statement that touches the body's `end` (`Foo()end`). Corpus check at 989f56c5: DC and DO, 1,622 files, 164,520 mutants,
+0 throws, 0 overlaps, 0 grain moves, 16,819 free bodies. Fold on DC/Cloud at step 6: 19,037 mutants, 0 findings. Figures: `/coord/handoff/R-836/review-figures.txt`.
+
+## Addendum 6, the five rows, exactly (R-836, 2026-11-06)
+
+R810's rule refuses any record on a pinned v3 build that differs from the committed rows, so R332 cannot write these. Ruling (orchestrator, 2026-11-06):
+a hand edit of exactly these keys, by the documented `LETHAL_RERECORD_BASELINE=1`, the guard left as it is. The prefix `556f58593db5335498212889dba9894dc670212013322a326eef302c07761f52`
+becomes `170d7adfd47d508bb5d73d5d8292f517f4b58d7e4f589c8d566efe0800a806bc`, with the rest of each key, and every other field, unchanged:
+
+| file | key after the prefix |
+|---|---|
+| `al-runner-v3.wrapped.baseline.json` | `Wrapped Pre Twin\|Grow\|lethal.empty-block\|1` |
+| `al-runner-v3.wrapped.baseline.json` | `Wrapped Pre\|Grow\|lethal.empty-block\|1` |
+| `al-runner-v3.wrapped.baseline.json` | `Wrapped Top Twin\|Grow\|lethal.empty-block\|1` |
+| `al-runner-v3.wrapped.baseline.json` | `Wrapped Top\|Grow\|lethal.empty-block\|1` |
+| `al-runner-v3.layout.baseline.json` | `Layout Beta\|Grow\|lethal.empty-block\|1` |
+
+Rows stay sorted by key, so each row moves in its file. `bcdev.wrapped.baseline.json` was recorded by R332 on `bc2` on these same four keys. The v3 gate then confirms every row
+on the pinned build. Route gap filed: [[R849]].
+
+## Addendum 7, the route used (R-836, 2026-11-06)
+
+R849 landed the route for a row to change on a pinned build, so this replaces Addendum 6's hand edit. No baseline is edited by hand. `itest/expected/al-runner-v3.wrapped.baseline.json` and
+`al-runner-v3.layout.baseline.json` were committed in `lethal/r836` before the run. Each is the committed baseline with the 5 keys of Addendum 6 changed and the rows sorted, shown equal by a script; every
+verdict, killing test and hash is unchanged. So this document already covers them: no verdict moves, and each row equals the BC row in `bcdev.wrapped.baseline.json`, where R332 recorded the same four
+keys. `Layout Beta`'s row keeps its `killed` by `GrowAboveTen`. Counts do not move, so `assertCounts` does not change. The gate records on `current`, against those files, and they go in the commit that lands
+the baselines. Full v3 gate confirms afterwards.

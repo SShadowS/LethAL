@@ -30,6 +30,12 @@ The fenced leg scores 60 killed and 38 survived.
 
 ## History
 
+2026-11-06 (R827, coord task R-836): `Grow` in the four wrapped files gained a `#pragma` line, which keeps it a chain as long as this gate needs, and a comment line went, so no mutant's line moved. Its
+`empty-block` row re-keyed in each of the four: recorded on `bc2` by R332, no verdict, killing test or other row moved, and the confirm run passed. Pre-commitment: the spec's Addenda 3, 4 and 7. Logs: `/coord/handoff/R-836/bc2/`.
+
+2026-11-06 (R836, coord task R-848): `bcdev.wrapped.baseline.json` moved from identity scheme 44 to 45, on `bc2`, by R332's procedure. One line changed, the
+scheme, and the confirm run passed. Logs: `/coord/handoff/R-848/bc2/`.
+
 2026-11-06 (R810, coord task R-827): `bcdev.wrapped.baseline.json` moved from identity scheme 42 to 44, on `bc2`, by R332's
 procedure. One line changed, the scheme, and the confirm run passed. Logs: `/coord/handoff/R-827/bc2/`.
 
