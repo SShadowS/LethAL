@@ -68,13 +68,3 @@ export async function readDependents(
   }
   return { read, testsAppId };
 }
-
-/** One read-only call, then the message. No `installedDependents` on the backend: no call, no message. */
-export async function checkDependents(
-  backend: Pick<ExecutionBackend, "installedDependents">,
-  testDir: string,
-  target: DependentsTarget,
-): Promise<string | null> {
-  const got = await readDependents(backend, testDir, target);
-  return got === null ? null : dependentsWarning(got.read, got.testsAppId, target);
-}

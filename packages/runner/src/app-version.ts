@@ -174,9 +174,9 @@ export class UpgradeNotRestoredError extends Error {
     // R843: BC's own words for two apps declaring one object. Said as such, not as "no longer
     // compiles": the installed app compiled fine, against an older target.
     const cause = /defined in multiple apps/i.test(bcText)
-      ? "BC says an application object of the target is defined in multiple apps: the target and an " +
-        "installed app that depends on it declare the same object type and id (R843; LethAL checks " +
-        "this before publishing, so this is a clash that check could not see). "
+      ? "BC says an application object of the target is defined in multiple apps: the target and " +
+        "another installed app declare the same object type and id (R843; LethAL checks " +
+        "this before publishing the target, so this is a clash that check could not see). "
       : "An installed app that depends on the target no longer compiles against the new build " +
         "(most often the tests app on the server is older than your tests source). ";
     super(

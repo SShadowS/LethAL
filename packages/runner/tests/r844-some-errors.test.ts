@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { MutantManifestEntry } from "@lethal/schemata";
-import { renderConsole } from "../src/report";
+import { CAVEAT_INTERPRETATIONS, renderConsole } from "../src/report";
 import type { SessionOutcome } from "../src/report";
 import { legacyBuildReport } from "./helpers/legacy-report";
 
@@ -134,5 +134,13 @@ describe("R844: some-errors", () => {
     expect(lineAfterScore(renderConsole(r))).toBe(
       "2 mutant(s) errored (1 deadline-exceeded and 0 unstable are among them) and are not in the score; had they run, it would read 25.0% to 75.0%.",
     );
+  });
+
+  test("the interpretation says the score can read higher OR lower, with the worked numbers", () => {
+    const m = CAVEAT_INTERPRETATIONS["some-errors"].meaning;
+    expect(m).toContain("higher OR lower");
+    expect(m).toContain("6/7 = 85.7%");
+    expect(m).toContain("6/8 = 75.0%");
+    expect(m).toContain("7/8 = 87.5%");
   });
 });

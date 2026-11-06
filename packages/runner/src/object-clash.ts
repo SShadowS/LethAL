@@ -1,6 +1,7 @@
 /**
  * R843: refuse a target that declares an object an installed dependent app already declares, before
- * anything is published. BC refuses such an upgrade ("The application object of type 'CodeUnit' with
+ * the target is published (the control app, and a test app an env-tool hook publishes, may have gone
+ * first). BC refuses such an upgrade ("The application object of type 'CodeUnit' with
  * the ID '79100' is defined in multiple apps"); when it cannot restore the old target it leaves the
  * target uninstalled and removes every installed dependent (R709). Pre-commitment:
  * docs/superpowers/specs/2026-11-06-r843-object-clash-precommitment.md.
@@ -24,7 +25,8 @@ import {
 } from "@lethal/engine";
 import { readPackageEntry } from "./app-package";
 import { type PublishedPackageRead, isUnread } from "./backend";
-import type { InstalledDependent } from "./harness";
+import { type InstalledDependent, UnfilteredExtensionsQueryError } from "./harness";
+import { unwrapSymbolPackage } from "./published-test-app";
 
 /** The 13 kinds BC and alc compare by (kind, id). Interfaces, profiles, controladdins and dotnet
  *  have no real id and are not compared. */
@@ -160,48 +162,107 @@ export function declaredObjectsOfSource(
   return { objects, undecided };
 }
 
-/** The objects of a parsed `SymbolReference.json`, through `Namespaces` to any depth. */
-export function declaredObjectsOfSymbolReference(json: unknown, where: string): DeclaredObject[] {
-  const out: DeclaredObject[] = [];
-  const walk = (node: unknown): void => {
-    if (node === null || typeof node !== "object") return;
-    const rec = node as Record<string, unknown>;
-    for (const [key, kind] of SYMBOL_KEYS) {
-      const arr = rec[key];
-      if (!Array.isArray(arr)) continue;
-      for (const o of arr as Array<Record<string, unknown>>) {
-        if (typeof o?.Id === "number") {
-          out.push({ kind, id: o.Id, name: typeof o.Name === "string" ? o.Name : "", where });
-        }
-      }
-    }
-    if (Array.isArray(rec.Namespaces)) for (const n of rec.Namespaces) walk(n);
-  };
-  walk(json);
-  return out;
+/** What a `SymbolReference.json` declares, with the app it says it belongs to. */
+export interface SymbolReferenceRead {
+  readonly objects: readonly DeclaredObject[];
+  readonly appId: string;
+  readonly version: string | undefined;
 }
 
-/** The objects of one `.app` package, or why it cannot be read. Never throws. */
+/**
+ * The objects of a parsed `SymbolReference.json`, through `Namespaces` to any depth. FAIL-CLOSED:
+ * a document that is not an object with a string `AppId`, a kind's value that is present and not an
+ * array, an entry that is not an object or whose `Id` is not a number, and a `Namespaces` that is not
+ * an array of objects are all `unreadable`. A garbled package must never read as "declares nothing".
+ */
+export function declaredObjectsOfSymbolReference(
+  json: unknown,
+  where: string,
+): SymbolReferenceRead | { readonly unreadable: string } {
+  const isRecord = (v: unknown): v is Record<string, unknown> =>
+    v !== null && typeof v === "object" && !Array.isArray(v);
+  if (!isRecord(json)) return { unreadable: "its SymbolReference.json is not a JSON object" };
+  if (typeof json.AppId !== "string" || json.AppId === "") {
+    return { unreadable: "its SymbolReference.json carries no string AppId" };
+  }
+  const out: DeclaredObject[] = [];
+  let bad: string | undefined;
+  const walk = (rec: Record<string, unknown>, scope: string): void => {
+    for (const [key, kind] of SYMBOL_KEYS) {
+      const arr = rec[key];
+      if (arr === undefined) continue;
+      if (!Array.isArray(arr)) {
+        bad ??= `${scope}${key} is present and not an array`;
+        continue;
+      }
+      for (const o of arr as unknown[]) {
+        if (!isRecord(o) || typeof o.Id !== "number" || !Number.isFinite(o.Id)) {
+          bad ??= `${scope}${key} holds an entry whose Id is not a number`;
+          continue;
+        }
+        out.push({ kind, id: o.Id, name: typeof o.Name === "string" ? o.Name : "", where });
+      }
+    }
+    const ns = rec.Namespaces;
+    if (ns === undefined) return;
+    if (!Array.isArray(ns)) {
+      bad ??= `${scope}Namespaces is present and not an array`;
+      return;
+    }
+    for (const n of ns as unknown[]) {
+      if (!isRecord(n)) bad ??= `${scope}Namespaces holds a non-object`;
+      else walk(n, `${scope}Namespaces/`);
+    }
+  };
+  walk(json, "");
+  if (bad !== undefined) return { unreadable: `its SymbolReference.json is malformed: ${bad}` };
+  return {
+    objects: out,
+    appId: json.AppId,
+    version: typeof json.Version === "string" ? json.Version : undefined,
+  };
+}
+
+/**
+ * The objects of one `.app` package, or why it cannot be read. Never throws. A Ready-to-Run wrapper
+ * is unwrapped first (`unwrapSymbolPackage`, R820). With `expect`, the package must also BE that
+ * app: its `AppId` equals `expect.id` (case-insensitive) and its `Version` equals `expect.version`,
+ * because the dev endpoint is asked for "whatever version the server has" and the answer is not
+ * otherwise proven to be the installed one.
+ */
 export function declaredObjectsOfPackage(
   pkg: Uint8Array,
+  expect?: { readonly id: string; readonly version: string },
 ): { readonly objects: readonly DeclaredObject[] } | { readonly unreadable: string } {
   let entry: Buffer | null;
   try {
-    entry = readPackageEntry(
-      Buffer.from(pkg.buffer, pkg.byteOffset, pkg.byteLength),
-      "SymbolReference.json",
-    );
+    const inner = unwrapSymbolPackage(Buffer.from(pkg.buffer, pkg.byteOffset, pkg.byteLength));
+    entry = readPackageEntry(inner, "SymbolReference.json");
   } catch (err) {
-    return { unreadable: `the package is not a readable zip (${String(err)})` };
+    return { unreadable: `the package is not a readable app (${String(err)})` };
   }
   if (entry === null) return { unreadable: "the package carries no SymbolReference.json" };
   let text = entry.toString("utf8");
   if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+  let json: unknown;
   try {
-    return { objects: declaredObjectsOfSymbolReference(JSON.parse(text), "SymbolReference.json") };
+    json = JSON.parse(text);
   } catch (err) {
     return { unreadable: `its SymbolReference.json is not valid JSON (${String(err)})` };
   }
+  const read = declaredObjectsOfSymbolReference(json, "SymbolReference.json");
+  if ("unreadable" in read) return read;
+  if (expect !== undefined) {
+    if (read.appId.toLowerCase() !== expect.id.toLowerCase()) {
+      return { unreadable: `the package is for app ${read.appId}, not the installed ${expect.id}` };
+    }
+    if (read.version !== expect.version) {
+      return {
+        unreadable: `the package is version ${read.version ?? "(none)"}, not the installed ${expect.version}`,
+      };
+    }
+  }
+  return { objects: read.objects };
 }
 
 export interface ObjectClashFinding {
@@ -258,7 +319,8 @@ export function injectedObjects(ids: {
   ];
 }
 
-/** The refusal. Extends `Error` directly. Nothing was published when it is thrown. */
+/** The refusal. Extends `Error` directly. The target was not published when it is thrown (the
+ *  control app, and a test app an env-tool hook publishes, may have gone first). */
 export class ObjectClashError extends Error {
   readonly code = "object-clash" as const;
   readonly findings: readonly ObjectClashFinding[];
@@ -271,8 +333,22 @@ export class ObjectClashError extends Error {
           : `(read from its SOURCE under symbols [${(f.symbols ?? []).join(", ")}], because its installed package could not be read)`;
       return `${f.kind} ${f.id}: the target declares "${f.target.name}" (${f.target.where}); installed app ${f.app.name} ${f.app.version} by ${f.app.publisher} declares "${f.other.name}" ${how}`;
     });
+    const injected = findings.some((f) => f.target.where.startsWith("injected"));
+    const fromSource = findings.some((f) => !f.target.where.startsWith("injected"));
+    // An injected id is LethAL's own: republishing the installed app does not change it.
+    const advice = [
+      ...(fromSource
+        ? ["Republish the named app built against this target, or remove it from the server."]
+        : []),
+      ...(injected
+        ? [
+            "For an injected codeunit (selectorId, controlId or tableId), set selectorIds in the config to ids no installed app declares; republishing does not change them.",
+          ]
+        : []),
+      "Then run again.",
+    ].join(" ");
     super(
-      `refusing before anything is published (R843): the target and an installed app declare the same object. BC refuses an upgrade with two apps defining one object ("defined in multiple apps") and, when it cannot restore the old target, removes every installed app that depends on it (R709). ${lines.join("; ")}. Republish the named app built against this target, or remove it from the server, then run again.`,
+      `refusing before the target is published (R843): the target and an installed app declare the same object. BC refuses an upgrade with two apps defining one object ("defined in multiple apps") and, when it cannot restore the old target, removes every installed app that depends on it (R709). ${lines.join("; ")}. ${advice}`,
     );
     this.name = "ObjectClashError";
     this.findings = findings;
@@ -327,11 +403,13 @@ export async function checkObjectClashes(args: ObjectClashCheckArgs): Promise<st
       try {
         const got = await args.fetchPackage({ publisher: d.publisher, name: d.name });
         if (got instanceof Uint8Array) {
-          const pkg = declaredObjectsOfPackage(got);
+          const pkg = declaredObjectsOfPackage(got, { id: d.id, version: d.version });
           if ("objects" in pkg) objects = pkg.objects;
           else why = pkg.unreadable;
         } else if (isUnread(got)) why = got.unread;
       } catch (err) {
+        // R-496: a read not filtered by one app id is a refused request, not an unreadable package.
+        if (err instanceof UnfilteredExtensionsQueryError) throw err;
         why = String(err);
       }
     }
@@ -348,6 +426,10 @@ export async function checkObjectClashes(args: ObjectClashCheckArgs): Promise<st
       }
       objects = src.objects;
       read = "source-fallback";
+      // Clean or not, the comparison was against SOURCE: a stale resident app is not excluded.
+      warnings.push(
+        `[lethal] R843: the installed package of ${d.name} ${d.version} by ${d.publisher} was not read (${why}); its source under symbols [${args.testSymbols.join(", ")}] was compared instead, so an older build of it on the server that declares an object the target declares could not be seen by this check.`,
+      );
     }
     if (objects === undefined) {
       warnings.push(

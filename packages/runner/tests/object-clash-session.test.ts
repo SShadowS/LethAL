@@ -57,14 +57,15 @@ const NS = 'xmlns="http://schemas.microsoft.com/navx/2015/manifest"';
 
 /** The tests app as the server holds it: a manifest, and a SymbolReference.json with the test
  *  codeunit (so the compiled membership equals the source suite) plus whatever else is declared. */
-function residentTestsApp(extra: Record<string, unknown[]> = {}): Uint8Array {
+function residentTestsApp(extra: Record<string, unknown[]> = {}, version = "1.0.0.0"): Uint8Array {
   const own = {
     Id: 79100,
     Name: "Sandbox Tests",
     Properties: [{ Name: "Subtype", Value: "Test" }],
     Methods: [{ Id: 1, Name: "OverBudgetDetected", Attributes: [{ Name: "Test" }] }],
   };
-  const symbols: Record<string, unknown[]> = { ...extra };
+  // The top level a real alc build carries: the app it belongs to, and its version.
+  const symbols: Record<string, unknown> = { AppId: TEST_APP.id, Version: version, ...extra };
   symbols.Codeunits = [own, ...(extra.Codeunits ?? [])];
   return new Uint8Array(
     buildFakeAppWithEntries({
@@ -75,7 +76,15 @@ function residentTestsApp(extra: Record<string, unknown[]> = {}): Uint8Array {
 }
 
 function otherApp(extra: Record<string, unknown[]>): Uint8Array {
-  return new Uint8Array(buildFakeAppWithEntries({ "SymbolReference.json": JSON.stringify(extra) }));
+  return new Uint8Array(
+    buildFakeAppWithEntries({
+      "SymbolReference.json": JSON.stringify({
+        AppId: "9f3c2b1a-0000-4000-8000-000000000001",
+        Version: "2.3.4.5",
+        ...extra,
+      }),
+    }),
+  );
 }
 
 const TESTS_DEP: InstalledDependent = {
@@ -227,7 +236,7 @@ function refused(r: Awaited<ReturnType<typeof drive>>): ObjectClashError {
   return e as ObjectClashError;
 }
 
-describe("R843: refused before anything is published", () => {
+describe("R843: refused before the target is published", () => {
   test("a resident tests app declares the target's codeunit id, its source is clean", async () => {
     // The installed tests app was built against an OLDER target that held no such codeunit; the
     // source in the tests dir declares only 79100. Source against source would miss this.
@@ -351,6 +360,36 @@ describe("R843: refused before anything is published", () => {
 });
 
 describe("R843: passes, and warns where it cannot know", () => {
+  test("a clean source fallback passes and says the installed package was not read", async () => {
+    const r = await drive({
+      packages: new Map<string, PackageRead>([[TEST_APP.name, { unread: "HTTP 404" }]]),
+    });
+    expect("report" in r).toBe(true);
+    expect(r.backend.deploys).toBeGreaterThan(0);
+    const w = r.warnings.filter((x) => x.code === "object-clash-unchecked");
+    expect(w).toHaveLength(1);
+    expect(w[0]?.message).toContain("Sandbox Tests 1.0.0.0");
+    expect(w[0]?.message).toContain("was not read (HTTP 404)");
+  });
+
+  test("a package of another version is not trusted: source stands in and the run says so", async () => {
+    const r = await drive({
+      packages: new Map([
+        [
+          TEST_APP.name,
+          // Trusted, its codeunit 79000 would clash with the target's and refuse the run.
+          residentTestsApp({ Codeunits: [{ Id: 79000, Name: "Old Helper" }] }, "0.0.0.1"),
+        ],
+      ]),
+    });
+    expect("report" in r).toBe(true);
+    expect(r.backend.deploys).toBeGreaterThan(0);
+    const w = r.warnings.filter((x) => x.code === "object-clash-unchecked");
+    expect(w.map((x) => x.message).join("\n")).toContain(
+      "version 0.0.0.1, not the installed 1.0.0.0",
+    );
+  });
+
   test("a clash in SOURCE with a clean installed app passes: nothing is harmed", async () => {
     const r = await drive({
       testsAl: `${TESTS_AL}\ncodeunit 79000 "Source Clash"\n{\n}\n`,

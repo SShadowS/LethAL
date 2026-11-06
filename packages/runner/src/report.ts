@@ -521,8 +521,10 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
     meaning:
       "At least one mutant this run recorded is an `error`, and at least one is not. An `error` mutant " +
       "is in neither part of `mutationScore` ((killed + timeoutKilled) / (killed + timeoutKilled + " +
-      "survived)), so the score can read HIGHER than it would had those mutants run: a survivor " +
-      "among them would have lowered it. `counts.errors` is how many; it includes the " +
+      "survived)), so the score can read higher OR lower than it would had those mutants run: a " +
+      "survivor among them would have lowered it (6 killed, 1 survived, 1 error is 6/7 = 85.7%, " +
+      "and 6/8 = 75.0% had the error survived), a kill would have raised it (7/8 = 87.5%). " +
+      "`counts.errors` is how many; it includes the " +
       "`deadline-exceeded` and `unstable` rows. The cause of each is in its `failureNote` " +
       "(measured 2026-11-06, R841: an `#if` shape that splits a statement gives an artifact alc " +
       "refuses for one mutant, which isolation drops by name and the rest are scored). The " +
