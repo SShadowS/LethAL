@@ -312,21 +312,41 @@ describe("R830: a statement call a loop's progress may rest on", () => {
     });
 
     it("a local in the condition's callee does not step the caller's global", () => {
-      const done = `local procedure Done(): Boolean var Q: Record Customer; begin exit(Q.Next() = 0); end;`;
+      const done = `local procedure Done(): Boolean var Items: Record Customer; begin exit(Items.Next() = 0); end;`;
       expect(
         refused(
-          `procedure P() begin repeat Q.Modify(); until Q.IsEmpty() or Done(); end; ${done}`,
-          "Q.Modify()",
+          `procedure P() begin repeat Items.Remove(1); until Items.Contains(1) or Done(); end; ${done}`,
+          "Items.Remove(1)",
+        ),
+      ).toBe(true);
+    });
+
+    it("a local read in the condition's callee is not the caller's global", () => {
+      const look = `local procedure Look(): Boolean var Counter: Integer; begin exit(Counter > 3); end;`;
+      expect(
+        refused(
+          `procedure P() begin repeat Advance(); until Look(); end; ${look} ${ADVANCE}`,
+          "Advance()",
+        ),
+      ).toBe(false);
+    });
+
+    it("a paren-less call in the condition is followed", () => {
+      const over = `local procedure Over(): Boolean begin exit(Counter > 3); end;`;
+      expect(
+        refused(
+          `procedure P() begin repeat Advance(); until Over; end; ${over} ${ADVANCE}`,
+          "Advance()",
         ),
       ).toBe(true);
     });
 
     it("a local named like a procedure is not a call to it", () => {
-      const stepper = `local procedure Flag(): Boolean begin exit(Q.Next() = 0); end;`;
+      const stepper = `local procedure Flag(): Boolean begin exit(Items.Next() = 0); end;`;
       expect(
         refused(
-          `procedure P() var Flag: Boolean; begin repeat Q.Modify(); until Q.IsEmpty() or Flag; end; ${stepper}`,
-          "Q.Modify()",
+          `procedure P() var Flag: Boolean; begin repeat Items.Remove(1); until Items.Contains(1) or Flag; end; ${stepper}`,
+          "Items.Remove(1)",
         ),
       ).toBe(true);
       const total = `local procedure Total(): Integer begin exit(Counter); end;`;
