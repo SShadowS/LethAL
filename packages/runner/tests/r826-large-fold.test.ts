@@ -17,7 +17,9 @@ import {
   LARGE_FOLD_BYTES,
   LARGE_FOLD_CHAIN,
   foldFiguresOf,
+  isLargeFold,
   largeFoldWarning,
+  largestFold,
 } from "../src/large-fold";
 import { generateMutationSet, operatorTiers, runSession } from "../src/orchestrator";
 import { ResultsStore } from "../src/store";
@@ -185,7 +187,29 @@ describe("R826: the large-method warning", () => {
     expect(largeFoldWarning(files, tierOf)).toBeUndefined();
   });
 
-  test("the chain figure fires on its own, at the figure and not one below", async () => {
+  test("each figure counts AT it, and one below it does not", () => {
+    expect(isLargeFold({ chain: LARGE_FOLD_CHAIN, bytes: 0 })).toBe(true);
+    expect(isLargeFold({ chain: LARGE_FOLD_CHAIN - 1, bytes: 0 })).toBe(false);
+    expect(isLargeFold({ chain: 0, bytes: LARGE_FOLD_BYTES })).toBe(true);
+    expect(isLargeFold({ chain: 0, bytes: LARGE_FOLD_BYTES - 1 })).toBe(false);
+  });
+
+  test("largestFold keeps the largest of each, in any order, and they may differ in source", () => {
+    const fold = (members: number, length: number) => ({
+      members: Array.from({ length: members }),
+      root: { startIndex: 10, endIndex: 10 + length },
+    });
+    const longChain = fold(50, 10); // 500 bytes
+    const bigText = fold(2, 1000); // 2000 bytes
+    const small = fold(1, 1);
+    const want = { chain: 50, bytes: 2000 };
+    expect(largestFold([longChain, bigText, small])).toEqual(want);
+    expect(largestFold([small, bigText, longChain])).toEqual(want);
+    expect(largestFold([bigText, small, longChain])).toEqual(want);
+    expect(largestFold([])).toEqual({ chain: 0, bytes: 0 });
+  });
+
+  test("a real file fires on its chain alone, with its bytes under their figure", async () => {
     // A fold's chain counts its members. Find the size at which `chain` crosses the figure, with
     // the bytes far under theirs, so only the chain can be why it fires.
     let below: Awaited<ReturnType<typeof project>> | undefined;

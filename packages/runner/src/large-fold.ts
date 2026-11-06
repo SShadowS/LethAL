@@ -20,6 +20,27 @@ export interface FoldFigures {
   readonly bytes: number;
 }
 
+/** The largest chain and the largest fold, each on its own: they need not be the same component. */
+export function largestFold(
+  components: readonly {
+    readonly members: readonly unknown[];
+    readonly root: { readonly startIndex: number; readonly endIndex: number };
+  }[],
+): FoldFigures {
+  let chain = 0;
+  let bytes = 0;
+  for (const c of components) {
+    chain = Math.max(chain, c.members.length);
+    bytes = Math.max(bytes, c.members.length * (c.root.endIndex - c.root.startIndex));
+  }
+  return { chain, bytes };
+}
+
+/** Over either figure. Each figure is itself over: see their comment for what they are. */
+export function isLargeFold(f: FoldFigures): boolean {
+  return f.chain >= LARGE_FOLD_CHAIN || f.bytes >= LARGE_FOLD_BYTES;
+}
+
 /** The largest fold in one file's mutants. */
 export function foldFiguresOf(
   path: string,
@@ -28,13 +49,7 @@ export function foldFiguresOf(
 ): FoldFigures {
   const deduped = dedupeSpecs(specs, tierOf);
   const ided = assignMutantIds(new Map([[path, deduped]])).get(path) ?? [];
-  let chain = 0;
-  let bytes = 0;
-  for (const c of buildComponents(ided)) {
-    chain = Math.max(chain, c.members.length);
-    bytes = Math.max(bytes, c.members.length * (c.root.endIndex - c.root.startIndex));
-  }
-  return { chain, bytes };
+  return largestFold(buildComponents(ided));
 }
 
 /** R826: the warning for these files, or `undefined` when none is over either figure. */
@@ -44,7 +59,7 @@ export function largeFoldWarning(
 ): string | undefined {
   const large = files
     .map((f) => ({ path: f.path, ...foldFiguresOf(f.path, f.specs, tierOf) }))
-    .filter((f) => f.chain >= LARGE_FOLD_CHAIN || f.bytes >= LARGE_FOLD_BYTES)
+    .filter(isLargeFold)
     .sort((a, b) => b.bytes - a.bytes || a.path.localeCompare(b.path));
   if (large.length === 0) return undefined;
   const named = large
