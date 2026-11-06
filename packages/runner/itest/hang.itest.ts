@@ -259,8 +259,8 @@ const EXPECTED_ON: ReadonlyArray<{
   // The advancing procedure's body, emptied: same property, different operator.
   { line: 43, operator: "lethal.empty-block", verdict: "timeout-killed" },
   // R159's `remove-assignment` adds both of these, and they are a matched pair worth reading
-  // together. Deleting `Counter := 0` changes nothing, a codeunit `Integer` global is 0 on a fresh
-  // instance, so it is an equivalent mutant by inspection. Deleting `Counter += 1` removes the
+  // together. Deleting `Counter := 0` changes nothing, a codeunit `Integer` global is 0 in a fresh
+  // session, so it is an equivalent mutant by inspection. Deleting `Counter += 1` removes the
   // loop's only progress and is non-terminating, reached by a third operator.
   { line: 44, operator: "lethal.remove-assignment", verdict: "timeout-killed" },
   { line: 44, operator: "lethal.shift-integer", verdict: "killed" },
@@ -728,6 +728,15 @@ function assertOnLeg(leg: LegResult): void {
   assert.equal(report.baselineGreen, true, "baseline must be green (the fixture test passes)");
   assert.equal(report.mutants.length, EXPECTED_ON.length, "every mutant must be scored");
   assert.equal(report.counts.errors, 0, "no mutant may error when the stop path is available");
+  // R830: the fixture's version did not move, and the old `Advance()` text hangs the same way, so
+  // no verdict tells the two apart. This names the text the run mutated; LethAL builds it from the
+  // local source and proves that build is the one running by its artifact id.
+  for (const line of [37, 145]) {
+    const call = report.mutants.find(
+      (m) => m.line === line && m.operatorName === "lethal.void-method-call",
+    );
+    assert.equal(call?.originalText, "OnAdvance()", `line ${line} must be the event call`);
+  }
 
   for (const want of EXPECTED_ON) {
     const got = report.mutants.find(
