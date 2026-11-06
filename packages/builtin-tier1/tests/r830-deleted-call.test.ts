@@ -302,6 +302,77 @@ describe("R830: a statement call a loop's progress may rest on", () => {
       });
     }
 
+    const tableCase = (body: string, call: string): boolean => {
+      const { root, ctx } = load(
+        `table 50838 "T" { fields { field(1; Qty; Integer) { } } ${body} }`,
+      );
+      const site = findAll(root, ALNodeKind.procedure_call).find((n) => n.text === call);
+      if (site === undefined) throw new Error(`no call ${call}`);
+      return openItemHangRefuses(site, ctx, undefined);
+    };
+    const STEP_IT = `local procedure StepIt() begin Qty += 1; end;`;
+
+    it("a field the condition's callee reads through `Rec.`", () => {
+      const done = `local procedure Done(): Boolean begin exit(Rec.Qty > 3); end;`;
+      expect(
+        tableCase(
+          `procedure P() begin repeat StepIt(); until Done(); end; ${STEP_IT} ${done}`,
+          "StepIt()",
+        ),
+      ).toBe(true);
+    });
+
+    it("`Rec.P()` is a same-object call, at the site and in a chain", () => {
+      expect(
+        tableCase(
+          `procedure P() begin repeat Rec.StepIt(); until Qty >= 3; end; ${STEP_IT}`,
+          "Rec.StepIt()",
+        ),
+      ).toBe(true);
+      const a = `local procedure A() begin Rec.StepIt(); end;`;
+      expect(
+        tableCase(`procedure P() begin repeat A(); until Qty >= 3; end; ${STEP_IT} ${a}`, "A()"),
+      ).toBe(true);
+    });
+
+    it("`CurrReport.P()` is a same-object call at the site", () => {
+      const { root, ctx } = load(`report 50839 "R" { var Counter: Integer;
+        procedure P() begin repeat CurrReport.Advance(); until Counter >= 3; end;
+        local procedure Advance() begin Counter += 1; end; }`);
+      const site = findAll(root, ALNodeKind.procedure_call).find(
+        (n) => n.text === "CurrReport.Advance()",
+      );
+      if (site === undefined) throw new Error("no call");
+      expect(openItemHangRefuses(site, ctx, undefined)).toBe(true);
+    });
+
+    it("a callee's `foreach` control variable is a write", () => {
+      const step = `local procedure Step() begin foreach Counter in Items do Log += 1; end;`;
+      expect(
+        refused(`procedure P() begin while Counter < 3 do Step(); end; ${step}`, "Step()"),
+      ).toBe(true);
+    });
+
+    it("a callee's named return is its own, not the caller's name", () => {
+      const done = `local procedure Done() Items: Record Customer begin Items.Next(); end;`;
+      expect(
+        refused(
+          `procedure P() begin repeat Items.Remove(1); until Items.Contains(1) or Done(); end; ${done}`,
+          "Items.Remove(1)",
+        ),
+      ).toBe(true);
+    });
+
+    it("an option value named like a procedure is not a call to it", () => {
+      const stepper = `local procedure Flag(): Boolean begin exit(Items.Next() = 0); end;`;
+      expect(
+        refused(
+          `procedure P() var S: Option Flag; begin repeat Items.Remove(1); until Items.Contains(1) or (S = S::Flag); end; ${stepper}`,
+          "Items.Remove(1)",
+        ),
+      ).toBe(true);
+    });
+
     it("a field the condition reads through `Rec.`", () => {
       const { root, ctx } = load(`table 50836 "T" { fields { field(1; Qty; Integer) { } }
         procedure P() begin repeat StepIt(); until Rec.Qty >= 3; end;

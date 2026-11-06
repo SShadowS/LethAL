@@ -888,6 +888,25 @@ function procsByName(obj: ALSyntaxNode, ctx: SemanticContext): Map<string, ALSyn
   });
 }
 
+/** R830: the same-object procedure `n` calls: `bareCallee`, `hiddenCallee`, or `Rec.P()`. An option
+ *  value (`S::Flag`) is not a call, even when a procedure has its name. */
+function calleeOf(
+  n: ALSyntaxNode,
+  names: ReadonlySet<string>,
+  ctx: SemanticContext,
+): string | null {
+  if (n.parent?.rawKind === "qualified_enum_value") return null;
+  const callee = bareCallee(n) ?? hiddenCallee(n, names, ctx);
+  if (callee !== null) return callee;
+  if (n.rawKind !== "call_expression" && n.rawKind !== "call_statement") return null;
+  const f = n.childForFieldName("function");
+  const m = f?.childForFieldName("member");
+  if (f === null || f === undefined || m === null || m === undefined) return null;
+  if (normalizeAlName(f.childForFieldName("object")?.text ?? "") !== "rec") return null;
+  const name = normalizeAlName(m.text);
+  return names.has(name) ? name : null;
+}
+
 /** What code does to names outside it, by name (R830). Any name the code does not declare counts:
  *  a global, one declared inside `#if`, a field of the implicit record. The safe direction. */
 interface CallEffect {
@@ -916,7 +935,9 @@ function procEffect(proc: ALSyntaxNode, ctx: SemanticContext): CallEffect {
     const obj = objectOf(proc);
     if (body === null || obj === null) return effect;
     const names = procedureNamesOf(obj, ctx);
-    const own = (k: string): boolean => !r531Declares(proc, k, true);
+    const returned = proc.childForFieldName("return_value");
+    const own = (k: string): boolean =>
+      !r531Declares(proc, k, true) && (returned === null || normalizeAlName(returned.text) !== k);
     const wrote = (n: ALSyntaxNode | null): void => {
       if (n === null) return;
       const k = baseNameOf(n);
@@ -928,7 +949,7 @@ function procEffect(proc: ALSyntaxNode, ctx: SemanticContext): CallEffect {
     r531Walk(body, ctx, (n) => {
       if (n.kind === ALNodeKind.assignment_statement) {
         wrote(n.childForFieldName("left") ?? n.namedChildren[0] ?? null);
-      } else if (n.rawKind === "for_statement") {
+      } else if (n.rawKind === "for_statement" || n.rawKind === "foreach_statement") {
         wrote(n.childForFieldName("variable"));
       } else if (n.kind === ALNodeKind.field_access) {
         const k = baseNameOf(n.childForFieldName("object"));
@@ -936,11 +957,13 @@ function procEffect(proc: ALSyntaxNode, ctx: SemanticContext): CallEffect {
         if (k !== null && m !== null && STEP_METHODS.has(normalizeAlName(m.text)) && own(k)) {
           effect.steps.add(k);
         }
+        // `Rec.Qty` reads what a bare `Qty` writes.
+        if (k === "rec" && m !== null) effect.reads.add(normalizeAlName(m.text));
       } else if (isIdentifierLike(n) && n.fieldName !== "member") {
         const k = normalizeAlName(n.text);
         if (own(k)) effect.reads.add(k);
       }
-      const callee = bareCallee(n) ?? hiddenCallee(n, names, ctx);
+      const callee = calleeOf(n, names, ctx);
       if (callee !== null) effect.calls.add(callee);
       else if (n.rawKind === "call_expression" || n.rawKind === "call_statement") {
         wrote(n.childForFieldName("function")?.childForFieldName("object") ?? null);
@@ -996,7 +1019,7 @@ function exitEffect(
             if (k === "rec") read.add(name); // `until Rec.Qty >= 3` reads what a bare `Qty` writes
           }
         }
-        const callee = bareCallee(n) ?? hiddenCallee(n, names, ctx);
+        const callee = calleeOf(n, names, ctx);
         if (callee !== null && obj !== null) {
           const called = chainEffect(callee, obj, ctx);
           for (const k of called.reads) read.add(k);
@@ -1034,8 +1057,8 @@ function deletedCallHangs(node: ALSyntaxNode, ctx: SemanticContext): boolean {
     const k = baseNameOf(n);
     if (k !== null) moved.add(k);
   };
-  const callee = bareCallee(node);
   const obj = objectOf(node);
+  const callee = obj === null ? bareCallee(node) : calleeOf(node, procedureNamesOf(obj, ctx), ctx);
   if (callee === null) add(node.childForFieldName("function")?.childForFieldName("object") ?? null);
   else if (obj !== null) for (const k of chainEffect(callee, obj, ctx).writes) moved.add(k);
   for (const a of argumentList(node)) add(a);

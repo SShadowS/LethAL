@@ -376,8 +376,6 @@ const LAGGING_SCHEME: Readonly<Record<string, string>> = {
   "bcdev.wrapped.baseline.json": "R836",
   "harden.baseline.json": "R836",
   "tables.baseline.json": "R836",
-  // Until R-833 re-records it: `sandbox-hang`'s text moved, so it cannot lag.
-  "hang.single.baseline.json": "R833",
 };
 
 /** R682: the baselines behind `current` that nothing lists, and listed ones that are not behind. */
