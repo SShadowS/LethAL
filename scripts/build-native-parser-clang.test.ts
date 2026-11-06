@@ -1,5 +1,6 @@
 // R834: no clang at all is a named refusal, not a stack trace; a real clang still passes.
 import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
 import { ClangNotFoundError, clangCc } from "./build-native-parser";
 
 const out = (s: string) => ({ exitCode: 0, stdout: Buffer.from(s), stderr: Buffer.from("") });
@@ -27,7 +28,7 @@ describe("clangCc", () => {
       seen.push(cmd);
       return out("clang version 23.1.2 (https://x)\n");
     }, "/opt/llvm/bin");
-    expect(cc.startsWith("/opt/llvm/bin")).toBe(true);
+    expect(cc.startsWith(join("/opt/llvm/bin"))).toBe(true);
     expect(seen).toHaveLength(1);
   });
 

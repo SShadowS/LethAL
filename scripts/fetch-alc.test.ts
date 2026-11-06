@@ -42,7 +42,8 @@ describe("fetchAlc", () => {
       const text = readFileSync(alc, "utf8");
       expect(text).toContain(`exec '/opt/dotnet/dotnet' '${join(dir, "bin", "alc.dll")}' "$@"`);
       expect(text).toContain(`# alc from AL Language VSIX ${ALC_VERSION}`);
-      expect(statSync(alc).mode & 0o111).not.toBe(0);
+      // Windows has no execute bit (mode & 0o111 is 0 there); the wrapper is an sh script for Linux.
+      if (process.platform !== "win32") expect(statSync(alc).mode & 0o111).not.toBe(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -117,7 +117,8 @@ describe("doctor: al-runner-v3", () => {
 
   test("R834: the install hint names the absolute home path and says the default finds it", () => {
     const hint = v3InstallHint();
-    expect(hint).toContain(join(homeDir(), ".local", "bin", "al-runner"));
+    // The hint is about a Linux install, so it always writes forward slashes.
+    expect(hint).toContain(`${homeDir()}/.local/bin/al-runner`);
     expect(hint).not.toContain("to ~/.local");
     expect(hint).toContain("with no alRunnerV3.path set");
   });

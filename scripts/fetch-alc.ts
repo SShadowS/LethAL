@@ -121,9 +121,16 @@ async function main(): Promise<number> {
     console.error("usage: bun scripts/fetch-alc.ts <dir>   (example: ./alc)");
     return 2;
   }
+  if (process.platform === "win32") {
+    // The wrapper is an sh script, and al-runner-v3 is Linux only: on Windows there is nothing to fetch.
+    console.error(
+      "fetch-alc is for Linux (and macOS). On Windows, alc comes with the AL Language VS Code extension.",
+    );
+    return 2;
+  }
   const alc = await fetchAlc(dir, fetch);
   console.log(
-    `wrote ${alc} (AL Language ${ALC_VERSION})\n\nSet in the config:  "alcPath": "${alc}"`,
+    `wrote ${alc} (AL Language ${ALC_VERSION})\n\nSet in the config:  "alcPath": ${JSON.stringify(alc)}`,
   );
   return 0;
 }

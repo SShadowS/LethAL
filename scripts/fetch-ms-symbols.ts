@@ -124,7 +124,8 @@ export async function fetchSymbols(
 
 /** The config line to print: `packagesDir` is absolute, so it works from any folder. */
 export function configLine(outDir: string, bcVersion: string): string {
-  return `"alRunnerV3": { "packagesDir": "${resolve(outDir)}", "bcVersion": "${bcVersion}" }`;
+  // JSON.stringify escapes a Windows path's backslashes, so the printed line is valid JSON.
+  return `"alRunnerV3": { "packagesDir": ${JSON.stringify(resolve(outDir))}, "bcVersion": ${JSON.stringify(bcVersion)} }`;
 }
 
 async function main(): Promise<number> {

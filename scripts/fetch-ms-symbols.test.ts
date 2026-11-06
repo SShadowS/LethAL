@@ -46,8 +46,11 @@ function fakeFeed(versionsOf: (id: string) => string[]): { fetchFn: FetchFn; url
 
 describe("configLine", () => {
   test("prints an absolute packagesDir for a relative one, and keeps an absolute one", () => {
-    expect(configLine("./symbols", "28.5.1.2")).toContain(`"packagesDir": "${resolve("symbols")}"`);
-    expect(configLine("/abs/s", "28.5.1.2")).toContain('"packagesDir": "/abs/s"');
+    // The line must be valid JSON (on Windows the path holds backslashes), so parse it back.
+    const dirOf = (line: string): string =>
+      JSON.parse(`{${line}}`).alRunnerV3.packagesDir as string;
+    expect(dirOf(configLine("./symbols", "28.5.1.2"))).toBe(resolve("symbols"));
+    expect(dirOf(configLine(resolve("abs", "s"), "28.5.1.2"))).toBe(resolve("abs", "s"));
   });
 });
 

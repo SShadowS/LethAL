@@ -84,7 +84,8 @@ describe("T16: refused by name for v3, and not for v2", () => {
       await writeFile(plain, "x", { mode: 0o644 });
       const none = () => null;
       expect(defaultAlcRunnable(exe, none)).toBe(true);
-      expect(defaultAlcRunnable(plain, none)).toBe(false);
+      // Windows has no execute bit: any existing file passes the access check there.
+      if (process.platform !== "win32") expect(defaultAlcRunnable(plain, none)).toBe(false);
       expect(defaultAlcRunnable(join(dir, "missing"), none)).toBe(false);
       expect(defaultAlcRunnable("alc", () => "/usr/bin/alc")).toBe(true);
       expect(defaultAlcRunnable("alc", none)).toBe(false);
@@ -94,7 +95,7 @@ describe("T16: refused by name for v3, and not for v2", () => {
   });
   test("R834: with no pinned build the default path is where install.sh writes, under the given home", () => {
     expect(validateAlRunnerV3Config(ok, () => false, "/home/u").path).toBe(
-      "/home/u/.local/bin/al-runner",
+      join("/home/u", ".local", "bin", "al-runner"),
     );
     expect(
       validateAlRunnerV3Config({ ...ok, path: "/x/al-runner" }, () => false, "/home/u").path,
