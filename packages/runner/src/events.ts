@@ -21,7 +21,13 @@
  * counts) is learned, not configured.
  */
 import type { MutantManifestEntry } from "@lethal/schemata";
-import type { BackendCapabilities, BackendKind, TestMethodRef, TestOutcome } from "./backend";
+import type {
+  BackendCapabilities,
+  BackendKind,
+  StopEvidence,
+  TestMethodRef,
+  TestOutcome,
+} from "./backend";
 import type { DependencyReportSourceRecord } from "./dependency-report-source";
 import type { HangRefusedFile, PreprocExcludedFile, RefusedExcludedFile } from "./excluded-sites";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
@@ -395,6 +401,8 @@ export type RunEventInput =
       readonly killingTestFailure?: string;
       /** R206 — see `MutantRow.killPosition` (store.ts). Set on `killed`/`timeout-killed` only. */
       readonly killPosition?: number;
+      /** GitHub #49 — see `MutantOutcome.stopEvidence` (report.ts). Set on a `timeout-killed` our stop ended only. */
+      readonly stopEvidence?: StopEvidence;
       /** R577 — see `MutantOutcome.killReproduced` (report.ts). Set on a reproduced kill only. */
       readonly killReproduced?: true;
       /** R577 — see `MutantOutcome.reproducedFailure` (report.ts). */
@@ -468,6 +476,8 @@ export type RunEventInput =
       readonly killingTestFailure?: string;
       /** R206 — see `MutantRow.killPosition`. Carried for the same reason. */
       readonly killPosition?: number;
+      /** GitHub #49 — see `MutantRow.stopEvidence`. Carried for the same reason. */
+      readonly stopEvidence?: StopEvidence;
       /** R577 — see `MutantRow.killReproduced`. Carried for the same reason. */
       readonly killReproduced?: true;
       /** R577 — see `MutantRow.reproducedFailure`. Carried for the same reason. */

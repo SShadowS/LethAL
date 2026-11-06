@@ -4,7 +4,12 @@ import { join } from "node:path";
 import type { ActivationConfig } from "../src/activation";
 import type { TestMethodRef } from "../src/backend";
 import { UnfilteredExtensionsQueryError } from "../src/harness";
-import { ControlDrainTimeoutError, RunMutantTransport } from "../src/run-mutant-transport";
+import {
+  ControlDrainTimeoutError,
+  RunMutantTransport,
+  STOP_400_WINDOW_MS,
+  transportClock,
+} from "../src/run-mutant-transport";
 import type { RunMutantManyRequest, RunMutantManyResult } from "../src/run-mutant-transport";
 import { GROUP_SUITE_UNRESOLVED_HEAD, groupedFoundNone } from "../src/stale-test-app";
 import { scratchDirs } from "./helpers/scratch";
@@ -580,6 +585,8 @@ describe("runMany — the watchdog (R198 §3.2)", () => {
     expect(r.verdict.outcome).toBe("timeout");
     expect(r.verdict.ref.method).toBe("Alpha");
     expect(r.cause).toBeUndefined();
+    // GitHub #49: the 408 form says so on the grouped path.
+    expect(r.verdict.stopEvidence).toBe("bc-named-stop");
   });
 
   test("R710: a wall-clock step back while the grouped call is held does not give the stop row a negative duration", async () => {
@@ -1319,6 +1326,218 @@ describe("runMany, a confirmed stop with no 408 (2026-09-27 hang investigation, 
     expect(f.calls).toEqual(["RunMutantMany", "StopHungRunAt", "GetOpAnswer"]);
   });
 });
+
+/**
+ * GitHub #49: BC 29 on Linux answers our confirmed stop with an HTTP 400 "begin transaction world
+ * not called", not the 408. Offline only: not yet seen from a live server.
+ */
+describe("runMany, GitHub #49: the BC 29 stop answer is a 400", () => {
+  const WORLD_400 = JSON.stringify({
+    error: {
+      code: "Internal_ServerError",
+      message:
+        "begin transaction world not called  CorrelationId:  6f1c2d3e-4a5b-4c6d-8e7f-0123456789ab.",
+    },
+  });
+  const wrap = (over: Record<string, unknown>) =>
+    JSON.stringify({ error: { ...JSON.parse(WORLD_400).error, ...over } });
+
+  /** A stop that answers `stopAns`, then the held request answers with `response`. */
+  async function afterStop(
+    response: Response,
+    stopAns: Record<string, unknown> = { stopped: true, sessionId: 9 },
+    status: () => Record<string, unknown> = () => statusOf(),
+  ) {
+    const f = fakes({
+      many: "hold",
+      status,
+      stopAt: () => {
+        setTimeout(() => f.release(response), 5);
+        return stopAns;
+      },
+    });
+    const r = await transport(f.fetchFn).runMany(req({ stopHungSessions: true }));
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    return r;
+  }
+
+  test("a confirmed stop and the exact 400 score the timeout, quoting BC's words", async () => {
+    const r = await afterStop(new Response(WORLD_400, { status: 400 }));
+    expect(r.verdict.outcome).toBe("timeout");
+    expect(r.verdict.operation).toBeUndefined();
+    expect(r.verdict.failureMessage).toContain("begin transaction world not called");
+    // GitHub #49: the 400 form says so on the grouped path.
+    expect(r.verdict.stopEvidence).toBe("begin-transaction-world");
+  });
+
+  test("the same, with the method's own completion recorded: stopped-after-completion", async () => {
+    let afterStopSent = false;
+    const done = {
+      opKind: "none",
+      lastCompletedOpSeq: 7,
+      completed: true,
+      opProgress: { ...(statusOf().opProgress as object), lastCompletedIndex: 1, state: "between" },
+    };
+    const r = await afterStop(
+      new Response(WORLD_400, { status: 400 }),
+      { stopped: true, sessionId: 9 },
+      () => {
+        const s = afterStopSent ? statusOf(done) : statusOf();
+        afterStopSent = true;
+        return s;
+      },
+    );
+    expect(r.verdict.outcome).toBe("error");
+    expect(r.cause).toBe("stopped-after-completion");
+  });
+
+  /** A fake clock: `lateBy` ms pass between the stop firing and the 400 arriving. */
+  async function four00After(lateBy: number) {
+    const realNow = transportClock.now;
+    let clock = 1_000;
+    transportClock.now = () => clock;
+    try {
+      const f = fakes({
+        many: "hold",
+        status: () => statusOf(),
+        stopAt: () => {
+          clock += lateBy;
+          setTimeout(() => f.release(new Response(WORLD_400, { status: 400 })), 5);
+          return { stopped: true, sessionId: 9 };
+        },
+      });
+      const r = await transport(f.fetchFn).runMany(req({ stopHungSessions: true }));
+      if (r.kind !== "call") throw new Error("expected a call-level answer");
+      return r;
+    } finally {
+      transportClock.now = realNow;
+    }
+  }
+
+  test("T400a. the 400 exactly at the window's edge scores", async () => {
+    const r = await four00After(STOP_400_WINDOW_MS);
+    expect(r.verdict.outcome).toBe("timeout");
+    expect(r.verdict.stopEvidence).toBe("begin-transaction-world");
+  });
+
+  test("T400b. the 400 one ms past the window quarantines", async () => {
+    const r = await four00After(STOP_400_WINDOW_MS + 1);
+    expect(r.verdict.outcome).not.toBe("timeout");
+    expect(r.verdict.operation).toBe("in-flight-unknown");
+  });
+
+  test("the exact 400 with no stop of ours stays in-flight-unknown", async () => {
+    const f = fakes({ many: new Response(WORLD_400, { status: 400 }), status: () => statusOf() });
+    const r = await transport(f.fetchFn).runMany(req({ stopHungSessions: true }));
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(f.stops.length).toBe(0);
+    expect(r.verdict.outcome).not.toBe("timeout");
+    expect(r.verdict.operation).toBe("in-flight-unknown");
+    expect(r.verdict.failureMessage).toContain("RunMutantMany failed: HTTP 400");
+  });
+
+  test("the exact 400 after a stop that was not confirmed stays in-flight-unknown", async () => {
+    const r = await afterStop(new Response(WORLD_400, { status: 400 }), {
+      stopped: false,
+      reason: "something-else",
+    });
+    expect(r.verdict.outcome).not.toBe("timeout");
+    expect(r.verdict.operation).toBe("in-flight-unknown");
+    expect(r.verdict.failureMessage).toContain("not confirmed");
+  });
+
+  const loud: [string, string, number][] = [
+    ["another message", wrap({ message: "something else failed" }), 400],
+    [
+      "the message as a substring of a longer one",
+      wrap({ message: `x ${JSON.parse(WORLD_400).error.message} y` }),
+      400,
+    ],
+    [
+      "the message with trailing text",
+      wrap({ message: `${JSON.parse(WORLD_400).error.message} and more` }),
+      400,
+    ],
+    ["another error.code", wrap({ code: "Application_Error" }), 400],
+    ["invalid JSON", "{not json", 400],
+    ["an empty body", "", 400],
+    [
+      "a real AL error with a Base-app message",
+      JSON.stringify({
+        error: { code: "Application_Error", message: "Customer 10000 is blocked." },
+      }),
+      400,
+    ],
+    ["an array body", `[${WORLD_400}]`, 400],
+    ["a null body", "null", 400],
+    ["a missing error", JSON.stringify({ message: "begin transaction world not called" }), 400],
+    ["status 500 with the exact body", WORLD_400, 500],
+    ["status 200 with the exact body", WORLD_400, 200],
+  ];
+  for (const [name, body, status] of loud) {
+    test(`stays loud after a confirmed stop: ${name}`, async () => {
+      const r = await afterStop(new Response(body, { status }));
+      expect(r.verdict.outcome).not.toBe("timeout");
+      expect(r.verdict.operation).toBe("in-flight-unknown");
+    });
+  }
+
+  test("a bare 408 still needs both phrases", async () => {
+    const r = await afterStop(new Response("Request timed out", { status: 408 }));
+    expect(r.verdict.outcome).not.toBe("timeout");
+    expect(r.verdict.operation).toBe("in-flight-unknown");
+  });
+
+  const atBeta = () =>
+    statusOf({
+      opProgress: {
+        ...(statusOf().opProgress as object),
+        methodIndex: 2,
+        method: "Beta",
+        token: "tok-m2",
+      },
+    });
+
+  test("the 400 released inside the stop call: scored, naming the watched method of a group, with no readback", async () => {
+    const f = fakes({
+      many: "hold",
+      status: atBeta,
+      stopAt: () => {
+        f.release(new Response(WORLD_400, { status: 400 }));
+        return { stopped: true, sessionId: 9 };
+      },
+    });
+    const r = await transport(f.fetchFn).runMany(req({ stopHungSessions: true }));
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r.verdict.outcome).toBe("timeout");
+    expect(r.verdict.ref.method).toBe("Beta");
+    expect(f.calls).not.toContain("GetOpAnswer");
+  });
+
+  test("a stop that threw, then the exact 400: in-flight-unknown", async () => {
+    const f = fakes({
+      many: "hold",
+      status: atBeta,
+      stopAt: () => {
+        setTimeout(() => f.release(new Response(WORLD_400, { status: 400 })), 5);
+        return new Error("StopHungRunAt unreachable");
+      },
+    });
+    const r = await transport(f.fetchFn).runMany(req({ stopHungSessions: true }));
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r.verdict.outcome).not.toBe("timeout");
+    expect(r.verdict.operation).toBe("in-flight-unknown");
+  });
+
+  test("an already-completed refusal, then the exact 400: in-flight-unknown", async () => {
+    const r = await afterStop(new Response(WORLD_400, { status: 400 }), {
+      stopped: false,
+      reason: "already-completed",
+    });
+    expect(r.verdict.outcome).not.toBe("timeout");
+    expect(r.verdict.operation).toBe("in-flight-unknown");
+  });
+});
 describe("runMany, a connection failure keeps the watchdog's story (R289)", () => {
   test("R289: the fetch rejects while the stop is still pending; the message names every watchdog step and the trace pins the order", async () => {
     const tracePath = join(traceDir(), "trace.ndjson");
@@ -1747,7 +1966,12 @@ describe("runMany — R503: the watchdog's GetOperationStatus poll is bounded", 
     // this pins is only that a poll SLOWER than the 5 ms interval but inside the bound is used.
     const r = await within(
       tx(f.fetchFn, 2_000).runMany(
-        req({ stopHungSessions: true, watchdogPollMs: 5, requestCeilingMs: 400, stopGraceMs: 2_000 }),
+        req({
+          stopHungSessions: true,
+          watchdogPollMs: 5,
+          requestCeilingMs: 400,
+          stopGraceMs: 2_000,
+        }),
       ),
       WAIT,
       "runMany",

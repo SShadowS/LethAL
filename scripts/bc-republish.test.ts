@@ -316,7 +316,11 @@ describe("parseArgs", () => {
   test("control takes no fixture; the others need one; a bad server or flag is refused", () => {
     expect(parseArgs(["control", "--server", "bc2", ...LT]).mode).toBe("control");
     expect(() => parseArgs(["control", "--server", "bc2", ...LT, "a"])).toThrow(/takes no fixture/);
-    expect(() => parseArgs(["republish", "--server", "bc4", ...LT, "a"])).toThrow(/--server/);
+    expect(() => parseArgs(["republish", "--server", "bc5", ...LT, "a"])).toThrow(/--server/);
+    // R-826b: bc4 (BC 29) is a known server in every mode.
+    for (const mode of ["republish", "alpackages"])
+      expect(parseArgs([mode, "--server", "bc4", ...LT, "a"]).server).toBe("bc4");
+    expect(parseArgs(["control", "--server", "bc4", ...LT]).server).toBe("bc4");
     expect(() => parseArgs(["republish", "--server", "bc1", ...LT])).toThrow(/at least one/);
     expect(() => parseArgs(["republish", "--server", "bc1", ...LT, "--force", "a"])).toThrow(
       /unknown argument/,

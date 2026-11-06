@@ -1153,6 +1153,13 @@
         "killPosition": {
           "type": "number"
         },
+        "stopEvidence": {
+          "type": "string",
+          "enum": [
+            "bc-named-stop",
+            "begin-transaction-world"
+          ]
+        },
         "killReproduced": {
           "const": true
         },
@@ -1369,6 +1376,13 @@
         },
         "killPosition": {
           "type": "number"
+        },
+        "stopEvidence": {
+          "type": "string",
+          "enum": [
+            "bc-named-stop",
+            "begin-transaction-world"
+          ]
         },
         "killReproduced": {
           "const": true

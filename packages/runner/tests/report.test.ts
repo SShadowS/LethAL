@@ -222,6 +222,7 @@ describe("Caveat union", () => {
       "tests-testpage-refused": true,
       "runner-disagreement": true,
       "stop-hung-sessions": true,
+      "stop-answer-400": true,
       resumed: true,
       "untargeted-triggers": true,
       "attribution-unplaceable": true,
@@ -238,7 +239,7 @@ describe("Caveat union", () => {
       "baseline-test-stopped": true,
       "al-runner-v3-serve-default-fallback-warmup": true,
     };
-    expect(Object.keys(all).length).toBe(28);
+    expect(Object.keys(all).length).toBe(29);
   });
 });
 
