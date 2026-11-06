@@ -57,6 +57,28 @@ describe("assertGateWarnings", () => {
     );
   });
 
+  test("R852: through the collector, a mismatch prints what the extra warning said", () => {
+    const w = collectWarnings();
+    const send = (code: string, message: string) =>
+      w.subscriber({ type: "warning", code, message } as Parameters<typeof w.subscriber>[0]);
+    send("lease-renew-unanswered", "renew could not be answered: 503; 503");
+    for (const code of GATE_WARNINGS["verify/run"] ?? []) send(code, "an expected code");
+    expect(() => checkGateWarnings("verify", "run", w, {})).toThrow(
+      /lease-renew-unanswered: renew could not be answered: 503; 503/,
+    );
+  });
+
+  test("R852: only an extra code's message is printed, not an expected one's", () => {
+    let text = "";
+    try {
+      assertGateWarnings("g", "l", ["a", "b"], ["a"], { a: "text of a", b: "text of b" });
+    } catch (e) {
+      text = (e as Error).message;
+    }
+    expect(text).toContain("b: text of b");
+    expect(text).not.toContain("text of a");
+  });
+
   test("an empty expectation is a real expectation, not an absent one", () => {
     assertGateWarnings("g", "l", [], []);
     expect(() => assertGateWarnings("g", "l", ["a"], [])).toThrow(GateWarningsMismatchError);
