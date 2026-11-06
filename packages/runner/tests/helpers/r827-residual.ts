@@ -281,7 +281,8 @@ export function plainCanon(text: string): string {
 
 /** The mutant written by hand: M's `before` span replaced by `after`'s text. */
 export function expectedText(source: string, m: MutantCase): string {
-  const at = (s: string): string => source.slice(0, m.start) + s + source.slice(m.end);
+  // Spaces either side, as a person would write it: R853's source can touch the replacement.
+  const at = (s: string): string => `${source.slice(0, m.start)} ${s} ${source.slice(m.end)}`;
   const plain = at(m.afterText);
   if (m.afterText.trim() !== "") return plain;
   // A deleted statement is an empty block: bare deletion before an `else` is not legal AL, and the
