@@ -31,6 +31,7 @@ import {
   type UpdateDeps,
   V3_CDO_DEFAULT,
   candidates,
+  countHeavyJobs,
   dailyOnce,
   edgeOnce,
   edgeRejudge,
@@ -635,6 +636,31 @@ describe("R633 I2 and M5", () => {
     expect(updateExitCode(true, ["skipped"])).toBe(2);
     expect(updateExitCode(false, ["skipped"])).toBe(0);
     expect(updateExitCode(true, ["pass"])).toBe(0);
+  });
+  test("R851: one job counts once, whatever its wrappers and workers", () => {
+    const job = 77;
+    const p = (pid: number, args: string, pgid = job) => ({ pid, ppid: 1, pgid, args });
+    const procs = [
+      p(1, "bash -c cd /x && bun packages/runner/itest/al-runner-v3.itest.ts"),
+      p(2, "flock -n -E 111 /coord/locks/heavy.1 bun packages/runner/itest/al-runner-v3.itest.ts"),
+      p(3, "bun packages/runner/itest/al-runner-v3.itest.ts"),
+      p(4, "/home/dev/.bun/bin/bun packages/runner/itest/al-runner-v3.itest.ts"),
+      p(5, "bun packages/runner/itest/al-runner-v3.itest.ts --worker 1", 88),
+    ];
+    expect(countHeavyJobs(procs, 1)).toBe(1);
+  });
+  test("R851: three real jobs still count as three, and stop the update", () => {
+    const p = (pid: number, pgid: number) => ({
+      pid,
+      ppid: 1,
+      pgid,
+      args: "bun scripts/verify.ts",
+    });
+    expect(countHeavyJobs([p(1, 10), p(2, 20), p(3, 30)], 0)).toBe(3);
+  });
+  test("R851: a held lock is a job even when no process names one", () => {
+    expect(countHeavyJobs([], 3)).toBe(3);
+    expect(countHeavyJobs([{ pid: 1, ppid: 1, pgid: 1, args: "sleep 100" }], 2)).toBe(2);
   });
   test("M5: a heavy job is counted with a bare or a full-path bun; the update script is not", () => {
     for (const cmd of [
