@@ -401,6 +401,8 @@ export interface DryRunCliConfig {
    *  `RunCliConfig.operators`. Honoured here for the same reason `only` is: a dry run exists to
    *  answer "how big is this going to be", and it must answer for the scope actually asked for. */
   readonly operators?: readonly string[];
+  /** R832: `--exclude-operator` names, honoured for the same reason. */
+  readonly excludeOperators?: readonly string[];
   /** Issue #19 (R227): `--lines <file>:<start>-<end>` (repeatable), parsed. */
   readonly lines?: readonly LineRange[];
   /** Issue #19 (R227): `--changed-since <git-ref>`. Resolved to line ranges by `resolveLineRanges`
@@ -475,6 +477,8 @@ export interface RunCliConfig {
    * `empty-block` and `void-method-call` site in them.
    */
   readonly operators?: readonly string[];
+  /** R832: `--exclude-operator <name>` (repeatable): every operator but these. Refused with `--operator`. */
+  readonly excludeOperators?: readonly string[];
   /** Issue #19 (R227): `--lines <file>:<start>-<end>` (repeatable), parsed. */
   readonly lines?: readonly LineRange[];
   /** Issue #19 (R227): `--changed-since <git-ref>`. Resolved to line ranges by `resolveLineRanges`
@@ -980,6 +984,9 @@ RUN — scope. These bound cost. --tests-only can change a verdict; the others c
                              prefix is optional; an unregistered name, or a registered one with no
                              deployable site here, is refused. The report flags it
                              'operator-narrowed'
+  --exclude-operator <name>  every operator but these contributes mutants (repeatable). Same
+                             prefix rule and same flag in the report. An unregistered name is
+                             refused, and so is giving --operator as well
   --lines <file>:<a>-<b>     only mutants whose span touches these lines contribute (repeatable;
                              <file>:<n> for one line). Paths are project-relative. A mutant that
                              spans a given line and others is kept. Applied after dedup, so it
@@ -1288,6 +1295,7 @@ export const RUN_FLAGS = {
   exclude: { type: "string", multiple: true },
   // R127: repeatable — several `--operator` names union. See `RunCliConfig.operators`.
   operator: { type: "string", multiple: true },
+  "exclude-operator": { type: "string", multiple: true },
   // Issue #19 (R227): line-scoped mutant filter. `--lines` is repeatable and unions.
   lines: { type: "string", multiple: true },
   "changed-since": { type: "string" },
@@ -1362,6 +1370,7 @@ const RUN_ONLY_FLAGS = [
   "only",
   "exclude",
   "operator",
+  "exclude-operator",
   "lines",
   "changed-since",
   "max-guards-per-batch",
@@ -1974,8 +1983,22 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
   if (operatorRaw?.some((n) => n === "") === true) {
     throw new Error('--operator requires a non-empty name (e.g. --operator "swap-call-arguments")');
   }
-  const operators =
-    operatorRaw !== undefined && operatorRaw.length > 0 ? { operators: operatorRaw } : {};
+  const excludeOperatorRaw = values["exclude-operator"];
+  if (excludeOperatorRaw?.some((n) => n === "") === true) {
+    throw new Error(
+      '--exclude-operator requires a non-empty name (e.g. --exclude-operator "empty-block")',
+    );
+  }
+  // Here too, not only in `admittedOperatorNames`: a real run gets there after it provisions.
+  if (operatorRaw !== undefined && excludeOperatorRaw !== undefined) {
+    throw new Error("--operator and --exclude-operator cannot be combined");
+  }
+  const operators = {
+    ...(operatorRaw !== undefined && operatorRaw.length > 0 ? { operators: operatorRaw } : {}),
+    ...(excludeOperatorRaw !== undefined && excludeOperatorRaw.length > 0
+      ? { excludeOperators: excludeOperatorRaw }
+      : {}),
+  };
 
   // Issue #19 (R227). `--changed-since` is kept as the ref here; `git` runs when the run starts.
   const linesRaw = values.lines;
@@ -3418,6 +3441,8 @@ export async function printDryRun(
     readonly configPath: string;
     /** R127: `--operator` names, honoured here for the same reason `only` is. */
     readonly operators?: readonly string[];
+    /** R832: `--exclude-operator` names, likewise. */
+    readonly excludeOperators?: readonly string[];
     /** Issue #19: the resolved line filter, honoured for the same reason. */
     readonly lines?: readonly LineRange[];
     /**
@@ -3443,6 +3468,7 @@ export async function printDryRun(
   // "how big is this going to be" would be worse than useless if it answered for a wider scope
   // than the one the real run will use.
   const operators = paths.operators;
+  const excludeOperators = paths.excludeOperators;
   const exclude = paths.exclude;
   let backend: BuildBackend | undefined;
   if (paths.backendKind === "bcdev") {
@@ -3460,6 +3486,7 @@ export async function printDryRun(
       ...(only !== undefined ? { only } : {}),
       ...(exclude !== undefined ? { exclude } : {}),
       ...(operators !== undefined ? { operators } : {}),
+      ...(excludeOperators !== undefined ? { excludeOperators } : {}),
       ...(paths.lines !== undefined ? { lines: paths.lines } : {}),
       ...(paths.source !== undefined ? { source: paths.source } : {}),
       ...(paths.preprocessorSymbols !== undefined
@@ -3506,6 +3533,11 @@ export async function printDryRun(
   if (operators !== undefined && operators.length > 0) {
     console.log(
       `narrowed by --operator ${operators.map((n) => `"${n}"`).join(", ")}: ${excludedByOperator} mutation site(s) from other operators excluded`,
+    );
+  }
+  if (excludeOperators !== undefined && excludeOperators.length > 0) {
+    console.log(
+      `narrowed by --exclude-operator ${excludeOperators.map((n) => `"${n}"`).join(", ")}: ${excludedByOperator} mutation site(s) excluded`,
     );
   }
   if (paths.lines !== undefined) {
@@ -3986,6 +4018,9 @@ export async function runFromCli(
               ...(parsed.only !== undefined ? { only: parsed.only } : {}),
               ...(mergedExclude.length > 0 ? { exclude: mergedExclude } : {}),
               ...(parsed.operators !== undefined ? { operators: parsed.operators } : {}),
+              ...(parsed.excludeOperators !== undefined
+                ? { excludeOperators: parsed.excludeOperators }
+                : {}),
               ...(lineRanges !== undefined
                 ? {
                     lines: lineRanges.ranges,
@@ -5659,6 +5694,7 @@ export async function dryRunFromCli(parsed: DryRunCliConfig): Promise<number> {
     source: dryRunSource,
     ...(parsed.outPath !== undefined ? { outPath: parsed.outPath } : {}),
     ...(parsed.operators !== undefined ? { operators: parsed.operators } : {}),
+    ...(parsed.excludeOperators !== undefined ? { excludeOperators: parsed.excludeOperators } : {}),
     ...(dryRunLines !== undefined ? { lines: dryRunLines.ranges } : {}),
     ...(dryRunExclude.length > 0 ? { exclude: dryRunExclude } : {}),
     ...(dryRunConfig?.preprocessorSymbols !== undefined

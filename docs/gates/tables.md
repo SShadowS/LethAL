@@ -69,6 +69,9 @@ What the figures mean:
 
 ## History
 
+2026-11-06 (R810, coord task R-827): `tables.baseline.json` moved from identity scheme 42 to 44, on `bc2`, by R332's procedure.
+One line changed, the scheme, and the confirm run passed. Logs: `/coord/handoff/R-827/bc2/`.
+
 The figures in this section are as of each step.
 
 - CLAUDE.md used to carry older figures: 301 / 68 / 18 over 387, 382 group calls, 13 warm kills

@@ -71,7 +71,7 @@ export function largeFoldWarning(
     `[lethal] ${large.length} file(s) emit a very large method: ${named}. A method this size may stop a BC`,
     " service tier with a stack overflow (GitHub #28). That is not proven, and these thresholds are not",
     " measured: it is a warning only. `lethal.empty-block` causes the largest folds. To shrink them, leave it out",
-    " by naming the other operators with --operator, or narrow the run with --only. --max-guards-per-batch will not help: it",
+    " with --exclude-operator empty-block, or narrow the run with --only. --max-guards-per-batch will not help: it",
     " splits by file.",
   ].join("");
 }

@@ -53,6 +53,9 @@ What the figures mean:
 
 ## History
 
+2026-11-06 (R810, coord task R-827): `bcdev.baseline.json` moved from identity scheme 42 to 44, on `bc2`, by R332's procedure.
+One line changed, the scheme, and the confirm run passed. Logs: `/coord/handoff/R-827/bc2/`.
+
 - R161 (2026-08-19) re-ran this gate after adding guard-clause mutants elsewhere. It was
   unchanged, at the figures of that time (3 / 10 / 3). `sandbox-app` has no site for that
   operator; this was measured.

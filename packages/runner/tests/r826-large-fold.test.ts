@@ -178,7 +178,7 @@ describe("R826: the large-method warning", () => {
     expect(message).toContain("not proven");
     expect(message).toContain("not measured");
     expect(message).toContain("lethal.empty-block");
-    expect(message).toContain("--operator");
+    expect(message).toContain("--exclude-operator empty-block");
     expect(message).toContain("--only");
   });
 
