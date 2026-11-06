@@ -229,6 +229,7 @@ describe("Caveat union", () => {
       "kills-without-assertion": true,
       "declarative-sites-dropped": true,
       "all-errors": true,
+      "some-errors": true,
       "session-warm": true,
       "preproc-files-refused": true,
       "tests-compiled-out": true,
@@ -237,7 +238,7 @@ describe("Caveat union", () => {
       "baseline-test-stopped": true,
       "al-runner-v3-serve-default-fallback-warmup": true,
     };
-    expect(Object.keys(all).length).toBe(27);
+    expect(Object.keys(all).length).toBe(28);
   });
 });
 

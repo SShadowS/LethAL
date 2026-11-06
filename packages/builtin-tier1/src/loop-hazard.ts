@@ -15,6 +15,7 @@ import {
   identifierTokens,
   isObjectContainer,
   isProcedureLike,
+  isStatementSlot,
   lastFieldChild,
   maskAlNonCode,
   normalizeAlName,
@@ -46,15 +47,20 @@ import {
  * `CurrReport.Quit`/`Break`, a `break` of that loop) count as its condition (`loopExitParts`), so a
  * write ANY such guard reads is refused. R446 did this for a condition that reads no name and calls
  * nothing (`while true`, `until false`); R480 extends it to every other condition that does not
- * name a cursor method (`namesCursorMethod`). For a name- and call-free condition only, a write that
- * FEEDS a guard's name is refused too, by name and to a fixpoint (`indirectFeeds`: `I += 1; Done :=
- * I >= 3; if Done then exit`). And a write to an enclosing `for`'s control variable is refused
+ * name a cursor method (`namesCursorMethod`). R829: for every such condition (not only a name- and
+ * call-free one), a write that FEEDS a condition or guard name is refused too, by name and to a
+ * fixpoint with no hop limit (`indirectFeeds`: `I += 1; Done := I >= 3; if Done then exit`; `Text :=
+ * Text.Substring(Pos + 2); Pos := Text.IndexOf('{{')` under `while Pos > 0`). The guards above a
+ * followed feed count as parts too (`if Line = Mark then Done := true` makes `Line` a part). A
+ * cursor-method condition gets no feeds. And a write to an enclosing `for`'s control variable is refused
  * (R480 shape 4n, in `classifyHangCapable`); a `for` gets no body guards. A scoped heuristic, not a
  * proof. Not extended; each a known exclusion, pinned as not refused in `loop-exit-refusal.test.ts`,
  * none shown safe: a condition naming a cursor method (`Next`, `Read`, `EOS`, `MoveNext`), which by
  * name also covers a user procedure or field named `Next` and a mixed condition (`(C.Next() <> 0)
  * or KeepGoing`); a write to a `for` loop's end bound; a `foreach` (its list); `asserterror` as the
- * only exit; `CurrReport.Skip`.
+ * only exit; `CurrReport.Skip`. R829 known, not seen: a feed through a by-`var` call argument, and a
+ * `for`/`foreach` loop's own feeds. R831: an array element reads as its array. A `with` body is seen: a
+ * bare name there matches by name, like any other.
  *
  * R484: a report data item over the virtual `Integer` table is a loop too (BC calls its
  * `OnAfterGetRecord` once per record), unless a narrow certificate bounds it (`dataItemOpen`).
@@ -93,7 +99,7 @@ import {
  *
  * WHAT IT DELIBERATELY DOES NOT SEE, all UNCLASSIFIED rather than proven safe (spec 3.2): a target
  * read in the loop BODY rather than its condition (beyond R446's body-exit guards); preheader
- * assignments; progress that happens through a CALL (which is both hangs in `fixtures/sandbox-hang`); a field target outside any `with`
+ * assignments; progress through a call beyond `deletedCallHangs` (R830); a field target outside any `with`
  * or implicit record (a resolved `R.Field` IS seen since R454; one written through an implicit
  * record or a `with` subject IS refused by name since R-458, see `byNameRefusal`); and
  * condition-side mutations, which are not assignments at all.
@@ -175,11 +181,40 @@ export function assignmentTargetOf(node: ALSyntaxNode): ALSyntaxNode | null {
     if (cur.kind === ALNodeKind.assignment_statement) {
       const target = cur.childForFieldName("left") ?? cur.namedChildren[0] ?? null;
       if (target === null) return null;
-      return isIdentifierLike(target) ? target : null;
+      const base = withoutSubscript(target);
+      return isIdentifierLike(base) ? base : null;
     }
     cur = cur.parent;
   }
   return null;
+}
+
+const SUBSCRIPT = "subscript_expression";
+
+/** R831: an element reads as its array, so `Buf[1]` and `Buf[2]` are one name: the safe direction
+ *  for a refusal. Anything else comes back unchanged. */
+function withoutSubscript(n: ALSyntaxNode): ALSyntaxNode {
+  let cur = n;
+  while (cur.rawKind === SUBSCRIPT) {
+    const obj = cur.childForFieldName("object");
+    if (obj === null) return cur;
+    cur = obj;
+  }
+  return cur;
+}
+
+/** R831: the index expressions of an assignment's left side: `I` of `Buf[I] := 1`, of `R[I].F := 1`. */
+function leftIndexes(left: ALSyntaxNode): ALSyntaxNode[] {
+  const out: ALSyntaxNode[] = [];
+  const walk = (n: ALSyntaxNode | null): void => {
+    if (n === null) return;
+    if (n.rawKind === SUBSCRIPT) {
+      out.push(...n.namedChildren.filter((c) => c.fieldName !== "object"));
+      walk(n.childForFieldName("object"));
+    } else if (n.kind === ALNodeKind.field_access) walk(n.childForFieldName("object"));
+  };
+  walk(left);
+  return out;
 }
 
 /** The condition expression of a `while`/`repeat`, or null when the grammar did not name one.
@@ -822,8 +857,215 @@ export function openItemHangRefuses(
     inMovedWalk(node, ctx) ||
     altersOpenItemFilter(node, ctx) ||
     writesPresetExitName(node, ctx) ||
-    consumingLoopRefuses(node, ctx, op)
+    consumingLoopRefuses(node, ctx, op) ||
+    deletedCallHangs(node, ctx)
   );
+}
+
+/** R830: the methods that step their receiver by themselves. `EOS` is not one: it only asks. */
+const STEP_METHODS: ReadonlySet<string> = new Set(["next", "read", "movenext"]);
+
+/** The name a receiver or an element is read through: `Buf` of `Buf[1]`, `A` of `A.B[1]`. */
+function baseNameOf(n: ALSyntaxNode | null): string | null {
+  let cur = n;
+  while (cur !== null) {
+    if (isIdentifierLike(cur)) return normalizeAlName(cur.text);
+    if (cur.kind !== ALNodeKind.field_access && cur.rawKind !== SUBSCRIPT) return null;
+    cur = cur.childForFieldName("object");
+  }
+  return null;
+}
+
+/** Every procedure-like node of an object, by name. */
+function procsByName(obj: ALSyntaxNode, ctx: SemanticContext): Map<string, ALSyntaxNode[]> {
+  return cached(ctx, obj, "procsByName", () => {
+    const out = new Map<string, ALSyntaxNode[]>();
+    visitAll(obj, (x) => {
+      if (!isProcedureLike(x)) return;
+      for (const name of procNames(x)) out.set(name, [...(out.get(name) ?? []), x]);
+    });
+    return out;
+  });
+}
+
+/** R830: the same-object procedure `n` calls: `bareCallee`, `hiddenCallee`, or `Rec.P()`. An option
+ *  value (`S::Flag`) is not a call, even when a procedure has its name. */
+function calleeOf(
+  n: ALSyntaxNode,
+  names: ReadonlySet<string>,
+  ctx: SemanticContext,
+): string | null {
+  if (n.parent?.rawKind === "qualified_enum_value") return null;
+  const callee = bareCallee(n) ?? hiddenCallee(n, names, ctx);
+  if (callee !== null) return callee;
+  if (n.rawKind !== "call_expression" && n.rawKind !== "call_statement") return null;
+  const f = n.childForFieldName("function");
+  const m = f?.childForFieldName("member");
+  if (f === null || f === undefined || m === null || m === undefined) return null;
+  if (normalizeAlName(f.childForFieldName("object")?.text ?? "") !== "rec") return null;
+  const name = normalizeAlName(m.text);
+  return names.has(name) ? name : null;
+}
+
+/** What code does to names outside it, by name (R830). Any name the code does not declare counts:
+ *  a global, one declared inside `#if`, a field of the implicit record. The safe direction. */
+interface CallEffect {
+  /** Names assigned, a `for` control variable, called on, or passed to a call. */
+  readonly writes: Set<string>;
+  /** Names read at all. */
+  readonly reads: Set<string>;
+  /** Names a `STEP_METHODS` method is called on. */
+  readonly steps: Set<string>;
+  /** Same-object procedures it calls. */
+  readonly calls: Set<string>;
+}
+
+const noEffect = (): CallEffect => ({
+  writes: new Set(),
+  reads: new Set(),
+  steps: new Set(),
+  calls: new Set(),
+});
+
+/** One procedure's own effect, its calls not followed. */
+function procEffect(proc: ALSyntaxNode, ctx: SemanticContext): CallEffect {
+  return cached(ctx, proc, "callEffect", () => {
+    const effect = noEffect();
+    const body = proc.namedChildren.find((c) => c.rawKind === "code_block") ?? null;
+    const obj = objectOf(proc);
+    if (body === null || obj === null) return effect;
+    const names = procedureNamesOf(obj, ctx);
+    const returned = proc.childForFieldName("return_value");
+    const own = (k: string): boolean =>
+      !r531Declares(proc, k, true) && (returned === null || normalizeAlName(returned.text) !== k);
+    const wrote = (n: ALSyntaxNode | null): void => {
+      if (n === null) return;
+      const k = baseNameOf(n);
+      if (k !== null && own(k)) effect.writes.add(k);
+      // `Rec.Qty += 1` writes what a bare `Qty` reads.
+      const m = withoutSubscript(n).childForFieldName("member");
+      if (m !== null) effect.writes.add(normalizeAlName(m.text));
+    };
+    r531Walk(body, ctx, (n) => {
+      if (n.kind === ALNodeKind.assignment_statement) {
+        wrote(n.childForFieldName("left") ?? n.namedChildren[0] ?? null);
+      } else if (n.rawKind === "for_statement" || n.rawKind === "foreach_statement") {
+        wrote(n.childForFieldName("variable"));
+      } else if (n.kind === ALNodeKind.field_access) {
+        const k = baseNameOf(n.childForFieldName("object"));
+        const m = n.childForFieldName("member");
+        if (k !== null && m !== null && STEP_METHODS.has(normalizeAlName(m.text)) && own(k)) {
+          effect.steps.add(k);
+        }
+        // `Rec.Qty` reads what a bare `Qty` writes.
+        if (k === "rec" && m !== null) effect.reads.add(normalizeAlName(m.text));
+      } else if (isIdentifierLike(n) && n.fieldName !== "member") {
+        const k = normalizeAlName(n.text);
+        if (own(k)) effect.reads.add(k);
+      }
+      const callee = calleeOf(n, names, ctx);
+      if (callee !== null) effect.calls.add(callee);
+      else if (n.rawKind === "call_expression" || n.rawKind === "call_statement") {
+        wrote(n.childForFieldName("function")?.childForFieldName("object") ?? null);
+      }
+      if (n.rawKind === "call_expression") for (const a of argumentList(n)) wrote(a);
+    });
+    return effect;
+  });
+}
+
+/** The effect of calling `start`, its same-object chain followed with no hop limit. Cached per object
+ *  and name, because a site asks it once per loop and per name its exit parts call. */
+function chainEffect(start: string, obj: ALSyntaxNode, ctx: SemanticContext): CallEffect {
+  return cached(ctx, obj, `chain|${start}`, () => {
+    const effect = noEffect();
+    const byName = procsByName(obj, ctx);
+    const seen = new Set<string>();
+    const todo = [start];
+    for (let name = todo.pop(); name !== undefined; name = todo.pop()) {
+      if (seen.has(name)) continue;
+      seen.add(name);
+      for (const proc of byName.get(name) ?? []) {
+        const one = procEffect(proc, ctx);
+        for (const k of one.writes) effect.writes.add(k);
+        for (const k of one.reads) effect.reads.add(k);
+        for (const k of one.steps) effect.steps.add(k);
+        todo.push(...one.calls);
+      }
+    }
+    return effect;
+  });
+}
+
+/** What `loop`'s exit parts read and step, through their own same-object calls (`until Done()`). */
+function exitEffect(
+  loop: ALSyntaxNode,
+  ctx: SemanticContext,
+): { readonly read: Set<string>; readonly steps: Set<string> } {
+  return cached(ctx, loop, "exitEffect", () => {
+    const read = new Set<string>();
+    const steps = new Set<string>();
+    const obj = objectOf(loop);
+    const names = obj === null ? new Set<string>() : procedureNamesOf(obj, ctx);
+    for (const p of loopExitParts(loop, ctx)) {
+      r531Walk(p, ctx, (n) => {
+        if (isIdentifierLike(n) && n.fieldName !== "member") read.add(normalizeAlName(n.text));
+        if (n.kind === ALNodeKind.field_access) {
+          const k = baseNameOf(n.childForFieldName("object"));
+          const m = n.childForFieldName("member");
+          if (k !== null && m !== null) {
+            const name = normalizeAlName(m.text);
+            if (STEP_METHODS.has(name)) steps.add(k);
+            if (k === "rec") read.add(name); // `until Rec.Qty >= 3` reads what a bare `Qty` writes
+          }
+        }
+        const callee = calleeOf(n, names, ctx);
+        if (callee !== null && obj !== null) {
+          const called = chainEffect(callee, obj, ctx);
+          for (const k of called.reads) read.add(k);
+          for (const k of called.steps) steps.add(k);
+        }
+      });
+    }
+    return { read, steps };
+  });
+}
+
+/**
+ * R830: does deleting or altering this statement call lose a loop's only progress? By NAME, the safe
+ * direction (R829: a wrong refusal loses one mutant, a miss can end a run). It holds when, in ANY
+ * enclosing `while` or `repeat`, `loopExitParts` read one of the names the call can move, and no
+ * `STEP_METHODS` method in those parts moves that name instead. The names: its receiver
+ * (`while not S.EOS do S.ReadText(T)`), the base name of an argument (`S.ReadText(Line)` under
+ * `while Line <> ''`, `Chop(Pos)`, `Chop(R.Name)` reads as `R`), and what a same-object callee chain
+ * writes (`repeat Advance(); until Counter >= Limit`, also through `until Done()`).
+ *
+ * Asked at dispatch for every operator, so Tier 2's identical deletion (`remove-setrange`) is refused too.
+ * Known, not seen ([[R839]]): a call into another object (`Other.Advance()`, where `Other` is not read), and
+ * an event publisher, whose body is empty while its subscribers step: `itest:hang`'s `OnAdvance()`. Nor a
+ * bare call in a `with` body. A site INSIDE the callee is [[R837]].
+ */
+function deletedCallHangs(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+  if (node.kind !== ALNodeKind.procedure_call || !isStatementSlot(node)) return false;
+  const loops: ALSyntaxNode[] = [];
+  for (let cur = node.parent; cur !== null && !isScope(cur); cur = cur.parent) {
+    if (LOOP_KINDS.has(cur.kind)) loops.push(cur);
+  }
+  if (loops.length === 0) return false;
+  const moved = new Set<string>();
+  const add = (n: ALSyntaxNode | null): void => {
+    const k = baseNameOf(n);
+    if (k !== null) moved.add(k);
+  };
+  const obj = objectOf(node);
+  const callee = obj === null ? bareCallee(node) : calleeOf(node, procedureNamesOf(obj, ctx), ctx);
+  if (callee === null) add(node.childForFieldName("function")?.childForFieldName("object") ?? null);
+  else if (obj !== null) for (const k of chainEffect(callee, obj, ctx).writes) moved.add(k);
+  for (const a of argumentList(node)) add(a);
+  return loops.some((loop) => {
+    const { read, steps } = exitEffect(loop, ctx);
+    return [...moved].some((k) => read.has(k) && !steps.has(k));
+  });
 }
 
 /*
@@ -6787,17 +7029,19 @@ function rangeCallOf(n: ALSyntaxNode, item: string): { readonly literal: boolean
 /**
  * R446/R480: the parts that decide whether `loop` ends. Its own condition parts, plus the guard of
  * every exit in its body (`bodyExitGuards`) UNLESS the condition names a cursor method
- * (`namesCursorMethod`). When the condition reads no name and calls nothing in this build
- * (`while true`, `until false`), also every value that feeds those parts (`indirectFeeds`). A scoped
- * heuristic, not a proof that no mutant hangs: see the known exclusions in the header.
+ * (`namesCursorMethod`), in which case it is the condition alone. R818: for every other condition,
+ * also every value that feeds those parts and the guards above each followed feed
+ * (`indirectFeeds` with `withGuards`), by name, to a fixpoint, no hop limit. A cursor-method
+ * condition gets no feeds. A scoped heuristic, not a proof that no mutant hangs: see the known
+ * exclusions in the header. Memoised per loop: the walk is repeated for every site in the loop.
  */
 function loopExitParts(loop: ALSyntaxNode, ctx: SemanticContext): ALSyntaxNode[] {
-  const own = loopConditionParts(loop);
-  if (conditionIsNameAndCallFree(own, ctx)) {
+  return cached(ctx, loop, "exitParts", () => {
+    const own = loopConditionParts(loop);
+    if (namesCursorMethod(own, ctx)) return own;
     const parts = [...own, ...bodyExitGuards(loop)];
-    return [...parts, ...indirectFeeds(loop, parts, ctx)];
-  }
-  return namesCursorMethod(own, ctx) ? own : [...own, ...bodyExitGuards(loop)];
+    return [...parts, ...indirectFeeds(loop, parts, ctx, true)];
+  });
 }
 
 /** R480: a method whose name says it steps a cursor or a stream. By NAME, any receiver. */
@@ -6831,13 +7075,19 @@ function namesCursorMethod(parts: ALSyntaxNode[], ctx: SemanticContext): boolean
  * included, whose target is a name `parts` read, to a fixpoint (`I += 1; Done := I >= 3; if Done
  * then exit` makes `I >= 3` a part, then `1`). By NAME, the safe direction for a refusal: every
  * identifier counts, member halves included, and a bare target `X` or a member target `R.X` matches
- * a read of `X`. An assignment in an inactive arm adds nothing, because no name or reader reads an
- * inactive node; an undecided one is followed.
+ * a read of `X`. An assignment in an inactive arm is skipped whole (so it cannot bring the guards
+ * above it in either); an undecided one is followed.
+ *
+ * R829 `withGuards` (only `loopExitParts` sets it): a followed assignment also feeds the guard parts
+ * (`guardPartsOf`) of every statement between it and the loop, so `if Line = Mark then Done := true`
+ * makes `Line` a part. Same by-name rule, no member/bare split, no hop limit. The other callers keep
+ * the plain walk, so their figures do not move.
  */
 function indirectFeeds(
   loop: ALSyntaxNode,
   parts: ALSyntaxNode[],
   ctx: SemanticContext,
+  withGuards = false,
 ): ALSyntaxNode[] {
   const body = loop.childForFieldName("body");
   if (body === null) return [];
@@ -6859,16 +7109,24 @@ function indirectFeeds(
   for (let changed = true; changed; ) {
     changed = false;
     for (const a of assignments) {
-      if (used.has(a)) continue;
+      if (used.has(a) || armOfNode(ctx, a) === "inactive") continue;
       const left = a.childForFieldName("left");
       const right = a.childForFieldName("right");
       if (left === null || right === null) continue;
-      const name = left.kind === ALNodeKind.field_access ? left.childForFieldName("member") : left;
+      const target = withGuards ? withoutSubscript(left) : left;
+      const name =
+        target.kind === ALNodeKind.field_access ? target.childForFieldName("member") : target;
       if (name === null || !isIdentifierLike(name) || !names.has(normalizeAlName(name.text))) {
         continue;
       }
       used.add(a);
       const fed = [right, ...sideParts(a)];
+      if (withGuards) {
+        fed.push(...leftIndexes(left));
+        for (let g = a.parent; g !== null && !samePos(g, loop); g = g.parent) {
+          fed.push(...guardPartsOf(g));
+        }
+      }
       for (const f of fed) {
         out.push(f);
         collect(f);
@@ -6888,18 +7146,6 @@ const BREAK_SCOPES: ReadonlySet<string> = new Set([
 
 const samePos = (a: ALSyntaxNode, b: ALSyntaxNode): boolean =>
   a.startIndex === b.startIndex && a.endIndex === b.endIndex;
-
-/** Does the condition (active arms, tails included) read no name and call nothing? True for
- *  `while false` too, which does not loop at all: then the extra guards cost nothing. */
-function conditionIsNameAndCallFree(parts: ALSyntaxNode[], ctx: SemanticContext): boolean {
-  const walk = (n: ALSyntaxNode): boolean => {
-    if (DIRECTIVE_MARKERS.has(n.rawKind)) return true;
-    if (armOfNode(ctx, n) === "inactive") return true;
-    if (n.rawKind === "call_expression" || isIdentifierLike(n)) return false;
-    return n.namedChildren.every(walk);
-  };
-  return parts.length > 0 && parts.every(walk);
-}
 
 /** `CurrReport.Quit`/`Break` and their XMLport twins end the trigger, so the loop (R446). With or
  *  without `()`: both forms hold this `member_expression`. `Skip` is NOT here: its docs do not say
@@ -7027,8 +7273,10 @@ function memberRefOf(n: ALSyntaxNode, ctx: SemanticContext): MemberRef | null {
   if (n.kind !== ALNodeKind.field_access) return null;
   const obj = n.childForFieldName("object");
   const mem = n.childForFieldName("member");
-  if (obj === null || mem === null || !isIdentifierLike(obj)) return null;
-  const receiver = resolveVarRef(obj, ctx);
+  if (obj === null || mem === null) return null;
+  const base = withoutSubscript(obj);
+  if (!isIdentifierLike(base)) return null;
+  const receiver = resolveVarRef(base, ctx);
   return receiver === null ? null : { receiver, member: normalizeAlName(mem.text) };
 }
 
@@ -7065,11 +7313,14 @@ function memberTargetOf(node: ALSyntaxNode): {
 } | null {
   for (let cur: ALSyntaxNode | null = node; cur !== null && !isScope(cur); cur = cur.parent) {
     if (cur.kind === ALNodeKind.assignment_statement) {
-      const left = cur.childForFieldName("left") ?? cur.namedChildren[0] ?? null;
+      const raw = cur.childForFieldName("left") ?? cur.namedChildren[0] ?? null;
+      const left = raw === null ? null : withoutSubscript(raw); // `R.Name[1] := 'x'` is `R.Name`
       if (left === null || left.kind !== ALNodeKind.field_access) return null;
-      const receiver = left.childForFieldName("object");
+      const object = left.childForFieldName("object");
       const member = left.childForFieldName("member");
-      if (receiver === null || member === null || !isIdentifierLike(receiver)) return null;
+      if (object === null || member === null) return null;
+      const receiver = withoutSubscript(object);
+      if (!isIdentifierLike(receiver)) return null;
       return { field: left, receiver, member };
     }
   }
@@ -7117,8 +7368,9 @@ export function loopConditionReadsByName(
     if (n.kind === ALNodeKind.field_access) {
       const obj = n.childForFieldName("object");
       const mem = n.childForFieldName("member");
-      if (obj !== null && mem !== null && isIdentifierLike(obj) && wanted !== null) {
-        if (normalizeAlName(obj.text) === wanted && normalizeAlName(mem.text) === member) {
+      const base = obj === null ? null : withoutSubscript(obj);
+      if (base !== null && mem !== null && isIdentifierLike(base) && wanted !== null) {
+        if (normalizeAlName(base.text) === wanted && normalizeAlName(mem.text) === member) {
           return true;
         }
       }
@@ -7496,7 +7748,9 @@ export function hangCapableForMutatedNode(
       if (right === null) return null;
       // A `#if` tail of the value (`Done := Go` `#if X and true #endif` `;`) sits BESIDE `right`,
       // the shape `conditionIdentifiers` reads for a loop condition, so it is value side too.
-      const valueParts = [right, ...sideParts(cur)];
+      // R831: so is an index on the left: `swap-additive` on `I + 1` in `Buf[I + 1] := 1`.
+      const left = cur.childForFieldName("left");
+      const valueParts = [right, ...sideParts(cur), ...(left === null ? [] : leftIndexes(left))];
       const insideValueSide = valueParts.some(
         (v) => node.startIndex >= v.startIndex && node.endIndex <= v.endIndex,
       );

@@ -71,7 +71,8 @@ a break refuses the whole run (`resident-dependent-breaks`, R-707), also when th
 together with the target. A new tests app that publishes while its target is KEPT (a gate-deployed target) is
 checked against the resident target (`dependent-vs-kept-target`). The safe manual sequence: (1) uninstall and
 unpublish the dependent; (2) publish the target (after a gate run, with `--mint`, R605); (3) publish the new dependent build (R605: a same-version test-app republish is accepted after an
-unpublish). To recover a stripped server: the owner restarts it, then re-run setup (not measured; rests on R605).
+unpublish). To recover a stripped gate server: the owner restarts it, then re-run setup. A restart-free route was measured on scratch
+apps only (below, R845), not on fixture targets.
 
 For each server it:
 
@@ -179,8 +180,10 @@ cache (dir 0555, files 0444) with no error (`/coord/handoff/R-599/symcache/alc-r
 - What it holds: `System` plus every Microsoft dependency of a `PUBLISH_PLAN` target (today `System`
   alone). A dependent's own symbols are not put there.
 
-The databases are in memory. A container restart or a server1 reboot resets each server to a fresh
-CRONUS with no LethAL app on it. The script is idempotent, so re-running it is the fix.
+The databases are in memory. Restarting sql and BC together, or a server1 reboot, resets a server to a fresh CRONUS with no LethAL app
+on it. An NST-only restart KEEPS the database (2026-11-06, `bc1`): apps, schema and records stay, and setup still refuses a stranded row. The
+script is idempotent, so after a full reset re-running it is the fix. A local quarantine record outlives either, so clear it after the recycle
+with `lethal clear-quarantine --config <path>`.
 - **bc3's Continia stack is lost too.** Republish it with `--with-continia --accept-build 28.4.53241.56646` (R594's
   accepted build). The 22-23 Oct restart needed this; R679's stop message now names the flag.
 - **A server with an out-of-use marker** needs `LETHAL_OUT_OF_USE_CLEARING=<server>` on that one setup command
@@ -216,11 +219,16 @@ is republished. `lethal run` refuses at that point with `UpgradeNotRestoredError
 **To recover.** The scripts cannot do it on their own. The stripped target is one row that is NOT installed, and
 `decideApp` (`scripts/bc-app-content.ts`) refuses that as `content-unknown`. So both `bc-linux-setup.ts` and
 `bc-republish.ts` stop with "NOTHING was published". They refuse by name and damage nothing.
-1. On `bc1`-`bc3`: ask the owner to restart the server. Its databases are in memory, so the restart also clears the
+1. On `bc1`-`bc3`: ask the owner to restart sql and BC together, not the NST alone, which keeps the database. That reset also clears the
    installed-version record ([R605](../roadmap/R605.md)). Then run `bun scripts/bc-linux-setup.ts --server bcN` under
    the server's lease. It publishes the targets and then the tests apps from the current source.
-2. Elsewhere: uninstall and unpublish the stranded target row, then publish the target and the dependents again.
-   BC's 422 text names the dependents it removed. This route is not measured.
+   A gate server always gets setup and its proof afterwards, whichever way it came back.
+2. Elsewhere: no restart is needed. Measured on `bc1` on 2026-11-06 with scratch apps only (R845, `/coord/handoff/R-845/recovery.log`);
+   fixture targets were not measured, and setup still refuses them as above. Publish the fixed target at a version above every version
+   BC has seen, the failed one included, with nothing uninstalled first. Then publish each dependent BC's 422 text names at a version
+   above its stranded row. Everything ends installed, and a table's data stayed (one row, read back over OData). Two things are refused:
+   the old target build, after a strip with dependents ("a newer version ... was already installed"), and the same dependent build
+   ("A duplicate package ID is detected") unless it was unpublished first.
 
 ## How a gate reads a server
 
@@ -264,6 +272,12 @@ pair is one ordinary run of the gate there; add the pair to this table when it p
 
 ### server1 (192.168.2.157), the default host since 2026-11-05
 
+**`bc1` is proven for `itest:bcdev` ONLY since its reset on 2026-11-06.** It was reset to a fresh CRONUS at 07:49Z, so its R-813 rows below do not stand: run
+no other gate there until each is re-proven. Setup and `itest:bcdev` passed at master 6f581651, per mutant, equal to the baseline
+(`/coord/handoff/R-845/bc1-restart/`). Its build differs from the others: Base Application, System Application, Library Assert and Test Runner
+are 28.4.53241.56590 on `bc1`, against .56646 on `bc2` and `bc3`; System is 28.0.54946.56477. `bc1` has only ever been proven at that build
+under R-813's rows; a figure difference there is still a BLOCK, not explained by the build.
+
 Proven on 2026-11-05 by R-813, master 0602b3b8, LethAL Control 1.0.0.24, one coord lease per gate, each released. Every
 gate equalled its baseline or its own checks, and its first line named `192.168.2.157` and the server's port. Each
 server first had a read-only `--predict` (none of LethAL's apps were on it, and apps are read by id only, R433), then a
@@ -282,6 +296,9 @@ The tables below are per host and per fixture state, so they are history here: p
 | `bc1` | setup; `itest:bcdev`, `bcdev-names`, `bcdev-wrapped`, `tables`, `chunked`, `harden`, `lend`, `lease`, `verify`, `testapp`, `agreement`, `verify-scale`, `stale-publish` | 1.0.0.24 | `/coord/handoff/R-813/bc1/<gate>.log`, `/coord/handoff/R-813/setup-bc1.log` |
 | `bc2` | setup; the same 13, and `itest:hang` | 1.0.0.24 | `/coord/handoff/R-813/bc2/<gate>.log`, `/coord/handoff/R-813/setup-bc2.log` |
 | `bc3` | setup (`--with-continia --accept-build 28.4.53241.56646`); the same 13, and `itest:hang` | 1.0.0.24 | `/coord/handoff/R-813/bc3/<gate>.log`, `/coord/handoff/R-813/setup-bc3.log` |
+
+**`itest:hang` after R830 changed `sandbox-hang`'s text (R-833, 2026-11-06):** proved again on `bc2` and `bc3` at the same head, leg marker
+`passed`. Logs: `/coord/handoff/R-658/hang-bc2-20261106T050926Z-3376496/`, `/coord/handoff/R-658/hang-bc3-20261106T052756Z-3500149/`.
 
 ### docker1 (192.168.2.77), history: the servers from 2026-10-26 to 2026-11-05
 

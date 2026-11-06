@@ -33,7 +33,9 @@ which is why LethAL is for a **sandbox or dev container, never a production tena
 
 ## Prerequisites
 
-Running the released binary needs **no Bun, Node or npm**. You do need:
+The `lethal` binary itself needs **no Bun, Node or npm** to run. (The sample `mcpCommand` below,
+`["bun", "x", "bc-dev-mcp"]`, does start Bun when the `bcdev` backend runs, so Bun must be on your
+PATH for that one. A different `mcpCommand` removes the need.) For the `bcdev` backend you need:
 
 - A Business Central container, dev server, or hosted sandbox, which must be **single-tenant** (see [Limits](#limits))
 - The AL Language VS Code extension, which supplies `alc` and `altool` (LethAL picks the `bin/`
@@ -47,42 +49,126 @@ Running the released binary needs **no Bun, Node or npm**. You do need:
 - The `LethAL Control` extension published on your server. It is a small AL app that lives in this
   repo; step 2 of [Quick start](#quick-start) builds and publishes it
 
-Building from source additionally needs [Bun](https://bun.sh) 1.x.
+The offline `al-runner-v3` backend needs no BC server at all; see
+[Running without a BC server](#running-without-a-bc-server-the-al-runner-v3-backend).
+
+Building from source needs:
+
+- [Bun](https://bun.sh) 1.x
+- Rust 1.96 or newer (install it with [rustup](https://rustup.rs)), and a C linker (`cc`; on Debian
+  and Ubuntu, `apt install build-essential`)
+- clang/LLVM 23.1.2. If you do not have it, `bash scripts/install-llvm.sh <platform-key>` installs it
+  (for example `linux-x64`) under `${TMPDIR:-/tmp}/llvm-23.1.2`, which some reboots clear (set `TMPDIR`
+  to a folder you keep first). Its last line is the `export LLVM_BIN=...` to run next
 
 ## Installation
 
 There is no published release yet, so build it yourself. This produces a standalone `lethal`
-executable in `build/` that needs no Bun, Node or npm to run:
+executable in `build/` that needs no Bun, Node or npm to run. The parser LethAL uses is a native
+add-on that you build first; `bun run build:binary` refuses to run without it:
 
 ```bash
-git clone <repo-url> LethAL
+git clone https://github.com/SShadowS/LethAL
 cd LethAL
 bun install
+bash scripts/install-llvm.sh linux-x64          # skip if clang/LLVM 23.1.2 is installed
+export LLVM_BIN=<the folder the script printed>   # skip with the line above
+bun scripts/build-native-parser.ts
 bun run build:binary
 ```
 
 Check what you built. `--version` reports the commit it came from and the mutation operators it
-can actually apply, so a stale binary cannot pass for a current one:
+can actually apply, so a stale binary cannot pass for a current one. The file name ends in your
+platform (`windows-x64.exe`, `linux-x64`, `linux-arm64`, `darwin-x64` or `darwin-arm64`):
 
 ```bash
-./build/lethal-0.1.0-alpha.3-windows-x64.exe --version
+ls build/
+./build/lethal-0.1.0-alpha.3-linux-x64 --version     # on Windows: build\lethal-0.1.0-alpha.3-windows-x64.exe
 ```
 
 Everywhere below, `lethal` means that executable. From a source checkout you can skip the build and
 run `bun packages/runner/src/cli.ts` instead. See [`docs/releasing.md`](docs/releasing.md) for how a
 release is cut.
 
-**The offline `al-runner-v3` backend (linux x64) needs a gated al-runner.** LethAL runs only a build it
-has measured. Install the newest release LethAL lists, and point `alRunnerV3.path` at it (`lethal
-doctor` and the refusal print the exact command):
+## Running without a BC server: the `al-runner-v3` backend
+
+The `al-runner-v3` backend runs your tests offline with the Rust al-runner. It needs no BC server,
+no container and no `bcdev` section. It is **Linux x64 only** and **not authoritative** (see
+[Limits](#limits)). It needs four things.
+
+**1. A gated al-runner.** LethAL runs only a build it has measured. Install the newest release LethAL
+lists. The installer needs `curl`, `tar` and `xz` (the `xz-utils` package on Debian and Ubuntu), and
+writes `~/.local/bin/al-runner`:
 
 ```bash
 curl -fsSL https://github.com/aldevtools/BusinessCentral.AL.Runner/releases/download/edge/install.sh | sh -s -- <tag>
 ```
 
+`<tag>` is the release tag LethAL lists. When `lethal doctor` finds no usable al-runner, its
+`al-runner-v3` line prints the exact command with the current tag.
+
 This is a **sibling build** of what LethAL itself tracks. LethAL's own tooling follows al-runner's
 `edge`, whose files are replaced in place, so an old edge build cannot be fetched. You run a numbered
 release instead: its own binary, with its own gate run, usually at a different commit.
+
+**2. Microsoft's symbol files for one BC version.** These are the System Application, Base Application
+and so on, as `.app` files. Download them from Microsoft's public package feed (no login):
+
+```bash
+bun scripts/fetch-ms-symbols.ts 28 ./symbols
+```
+
+`28` is the BC major version. The script takes the newest build of that major and prints the exact
+`bcVersion` line for your config. Use that value as printed: it must be the System Application's
+four-number version. The script refuses a major the feed does not carry.
+
+**3. `alc`, the AL compiler.** LethAL compiles every batch with `alc` before al-runner runs it. With
+the AL Language VS Code extension installed, LethAL finds `alc` there and you can skip this step.
+With no VS Code, Microsoft offers no Linux `alc` download, only the extension's universal package,
+which holds `alc.dll`, a .NET program. So you need the **.NET runtime** with `dotnet` on PATH. The
+script reads which major version alc needs (from `alc.runtimeconfig.json`) and tells you if `dotnet`
+is missing. Without root, Microsoft's installer puts it under your home folder (use the major the
+script names; 10 at the time of writing):
+
+```bash
+curl -fsSL -o dotnet-install.sh https://dot.net/v1/dotnet-install.sh    # read it, then:
+bash dotnet-install.sh --channel 10.0 --runtime dotnet --install-dir "$HOME/.dotnet"
+export PATH="$HOME/.dotnet:$PATH"
+bun scripts/fetch-alc.ts ./alc
+```
+
+It pins AL Language 18.1.2842859 (a stable build, not the marketplace's pre-release), unpacks the
+compiler into `./alc/bin/`, writes a small `./alc/alc` wrapper script that calls the `dotnet` it found
+by its full path and sets `DOTNET_ROOT`, and prints the `"alcPath"` line for your config.
+
+**4. A config with only an `alRunnerV3` section.** Nothing else is needed: no `bcdev`, no server, no
+credentials.
+
+```json
+{
+  "alRunnerV3": {
+    "packagesDir": "/home/you/symbols",
+    "bcVersion": "28.5.54151.54365",
+    "alcPath": "/home/you/alc/alc"
+  },
+  "selectorIds": { "selectorId": 90199, "controlId": 90198, "tableId": 90197 }
+}
+```
+
+- `bcVersion` is four numbers (`28.5.54151.54365`, not `28.5`). It must equal the System Application
+  in `packagesDir`.
+- `path` is optional. With none set, LethAL looks for the binary at `~/.local/bin/al-runner` (your home
+  folder; the full path), where the installer puts it. If you do set `path`, write the full path:
+  a `~` in the value is not expanded.
+- `alcPath` is optional when the AL Language extension is installed.
+- `selectorIds` are three object ids from your own app's id range; `lethal init` picks them. The
+  values above fit the gift card demo.
+
+Check it, then run. `lethal doctor --config <file>` on a config like this prints one line,
+`al-runner-v3`: the al-runner version, whether it is a gated build, and that `bcVersion` matches the
+symbols, and, when you set `alcPath`, that it is an executable file. A run prints one line,
+`[lethal] al-runner: <path> (<version>)`, naming the al-runner it used. A full walk-through on the gift
+card demo is in [examples/gift-card/README.md](examples/gift-card/README.md#run-it-with-no-bc-server-the-al-runner-v3-backend).
 
 ## Quick start
 
@@ -572,8 +658,9 @@ Design detail for all of the above lives in [`design.md`](design.md).
 has evidence for; **Tier 2** exploits AL and Business Central semantics to plant bugs a generic tool
 cannot express. Where both claim the same site, Tier 2 wins.
 
-Scope a run to a subset with `--operator <name>` (repeatable; the `lethal.` prefix is optional).
-That selects which mutants run and cannot change a verdict.
+Scope a run to a subset with `--operator <name>`, or leave some out with `--exclude-operator <name>`
+(both repeatable; the `lethal.` prefix is optional; not together). That selects which mutants run
+and cannot change a verdict.
 
 ### Tier 1, generic
 
@@ -722,8 +809,9 @@ a LethAL feature or a mode.
   `campaign` refuse a report of it. Its gate (`itest:alrunner`) is gone; its frozen figures are kept
   on [docs/gates/alrunner.md](docs/gates/alrunner.md).
 - **`al-runner-v3` (the Rust al-runner, R586) is not authoritative.** A gated build only (R586c, R814), and
-  configured in an `alRunnerV3` section (`packagesDir` and `bcVersion` required; `coverage`, `path`, `alcPath`,
-  `cacheDir`). Measured on alpha.2 and re-read on alpha.5 and its edge build (the same readings), it
+  configured in an `alRunnerV3` section (`packagesDir` and the four-number `bcVersion` required;
+  `coverage`, `path`, `alcPath`, `cacheDir` optional; the section alone is a complete config, see
+  [Running without a BC server](#running-without-a-bc-server-the-al-runner-v3-backend)). Measured on alpha.2 and re-read on alpha.5 and its edge build (the same readings), it
   differs from BC in ways that change
   verdicts:
   - It runs code that does not compile (#5602; alpha.5 refuses it). LethAL compiles every batch and

@@ -552,6 +552,10 @@ Leg T is judged against the committed alpha.2 baseline with the pinned keys over
 
 ## History
 
+- 2026-11-06 (R810, coord task R-827): the six `al-runner-v3.*` baselines moved from identity scheme 42 to 44, by R332's
+  procedure on `current` (edge-d72d3197d), through the rule that a record on a pinned build writes only the committed rows.
+  Each file changed by one line, the scheme: no key, verdict or text hash moved. The confirm run passed L1, Y-A, Y-B, MO, WR and
+  T. Logs: `/coord/handoff/R-827/v3/`.
 - 2026-10-21: the gate head is 8a71e87d (master merged in, after three Opus build reviews and a merge review).
   All eight legs pass there (`/coord/handoff/R-586/gate/final/`), and `.gated` names alpha.2 (91253f2d6) at
   lethalCommit 8a71e87d. Earlier full passes are kept as history: 5eb544ef, 0c0d9f5b, d5bb7d2d and a6c189b6.

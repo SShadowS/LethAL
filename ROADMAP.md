@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**22 of 810 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**23 of 827 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -331,6 +331,11 @@ that ordering is the priority.
 - **R741** · Unmeasured: a stale member the target adds through a tableextension or pageextension may be named by its BASE object's id, which R738 does not read as the target's · [R741.md](docs/roadmap/R741.md) · done (3c264a7c)
 - **R749** · Silent under-report: a stale member whose BC function id is NEGATIVE matched neither R738's nor R740's refusal, so its tests left the green set silently · [R749.md](docs/roadmap/R749.md) · done (3c264a7c)
 - **R801** · tree-sitter-al 4.5.0 admits ten R402 shapes it used to refuse (loop-condition `#if` prefixes and tails) and reads an empty `var` followed by a `#if` procedure as ERROR: prove the admitted shapes with alc · [R801.md](docs/roadmap/R801.md) · done (66b585c1)
+- **R841** · Some `#if` shapes that split a statement pass the refusal, compile as source, and give an artifact alc refuses · [R841.md](docs/roadmap/R841.md) · closed 2026-11-06 — no refusal, by the orchestrator's ruling: refusing the file costs more good mutants than…
+- **R844** · A run with some `error` mutants reads a higher score and says only `error N`: nothing states they are outside the score · [R844.md](docs/roadmap/R844.md) · done (1b213195): caveat some-errors, and a console line after score: giving the range the score could read…
+- **R843** · `lethal run` can strip a user's server: a target object with the same type and id as one in its test app is published, and BC removes the apps · [R843.md](docs/roadmap/R843.md) · done (c482126f)
+- **R845** · Clashes a pre-publish object list cannot see can still strip a server: field ids, enum values, non-dependents, transitive dependents · [R845.md](docs/roadmap/R845.md) · open on one line: the live lethal-run leg was not run. Built (4efdbed1), and proven on real BC, offline and…
+- **R847** · A control-app action that reads AllObj and Field would let the pre-publish clash check see an installed app that is not a dependent · [R847.md](docs/roadmap/R847.md) · open, filed 2026-11-06 (coord task R-845): not built
 
 ## Product gaps a real project hits
 
@@ -437,7 +442,7 @@ that ordering is the priority.
 - **R334** · Low priority: index `#if`-wrapped members under the every-arm rule, to recover the typed sites the R-302 fail-safe refuses · [R334.md](docs/roadmap/R334.md) · closed 2026-10-24 — fixed for the build's arm by R405 (a) (bd5ce769), not R340: 47 of the 49 pinned rows…
 - **R340** · Resolve trigger header names: a trigger's parameters, `var` locals and named return are unknown since R330 and R323, so no typed operator reaches them · [R340.md](docs/roadmap/R340.md) · done (e6c71f72)
 - **R376** · A `#if` in a single-statement slot is not lifted by R214, so its arm statements are still not sites (exclusion `slot`) · [R376.md](docs/roadmap/R376.md) · closed 2026-10-05 — 0 lost sites in every corpus; unit repro only (R-364 census)
-- **R380** · Upstream: tree-sitter-al scopes `not` over a following `and` or `or` in a `#if` condition · [R380.md](docs/roadmap/R380.md) · open, filed upstream (https://github.com/SShadowS/tree-sitter-al/issues/37); waits on a tree-sitter-al release
+- **R380** · Upstream: tree-sitter-al scopes `not` over a following `and` or `or` in a `#if` condition · [R380.md](docs/roadmap/R380.md) · done (66b585c1)
 - **R357** · campaign compare --json has no published JSON Schema · [R357.md](docs/roadmap/R357.md) · done (861f4cfd)
 - **R381** · `SessionReport` records the config symbols but not the effective build symbols; `excludedSites` carries them only when a site was compiled out · [R381.md](docs/roadmap/R381.md) · done (68a72cd3)
 - **R365** · `dup-arm-typing`: a semantic operator in a member declared in more than one `#if` arm emits nothing there · [R365.md](docs/roadmap/R365.md) · closed 2026-10-05 — its own shape is fixed by R-405a liveMembers; the residue is R369, R305 and R343 shapes…
@@ -454,7 +459,7 @@ that ordering is the priority.
 - **R388** · No way to run Microsoft's own tests against the code an app customizes (the base objects it extends and the events it subscribes to) · [R388.md](docs/roadmap/R388.md) · closed 2026-10-01: out of scope (owner ruling). Selecting and running Microsoft's tests belongs to al-runner…
 - **R394** · Turn al-runner coverage on by default in `lethal run` (R387 left it off): needs R383 re-measured on 2.12.0 and a pre-commitment · [R394.md](docs/roadmap/R394.md) · done (3659db57)
 - **R405** · The symbol table, receiver checks and structural readers read #if declarations without arms, so they refuse sites the build has · [R405.md](docs/roadmap/R405.md) · closed 2026-10-05 — part (a) done (bd5ce769, scheme bump e91b94b6); part (b) no change: the latch reader…
-- **R408** · tree-sitter-al misparses a #if tail on a repeat-until condition as a separate statement; LethAL refuses the file (directive-continues-statement) until the grammar owns the tail · [R408.md](docs/roadmap/R408.md) · open, filed upstream (https://github.com/SShadowS/tree-sitter-al/issues/38); waits on a tree-sitter-al release
+- **R408** · tree-sitter-al misparses a #if tail on a repeat-until condition as a separate statement; LethAL refuses the file (directive-continues-statement) until the grammar owns the tail · [R408.md](docs/roadmap/R408.md) · done (66b585c1): a tail that ends the condition; the rest is R841
 - **R420** · Test discovery silently drops a [Test] whose attributes are split by a #if line (e.g. around [HandlerFunctions]); the R79 net does not fire · [R420.md](docs/roadmap/R420.md) · done (aba9278b)
 - **R422** · A Windows-made project whose app.json names a path with `\` (e.g. `"logo": "Images\\Logo.png"`) fails the Linux `alc` with AL1001, so LethAL in a Linux container cannot compile it · [R422.md](docs/roadmap/R422.md) · done (d69655b3)
 - **R424** · A test whose procedure HEADER is split by #if/#else (one name per arm, one body) is not discovered; the TestPage-scan and digest models have no split member · [R424.md](docs/roadmap/R424.md) · done (82a730f3)
@@ -490,9 +495,20 @@ that ordering is the priority.
 - **R821** · The reports told users to raise --baseline-timeout-ms, which was no CLI flag (GitHub #46) · [R821.md](docs/roadmap/R821.md) · done (3ae274b3)
 - **R824** · doctor misses a missing non-Microsoft dependency package and a sync-pending tenant; clear-quarantine rejects --config (GitHub #29) · [R824.md](docs/roadmap/R824.md) · done (41df4238)
 - **R825** · README states the operator count in prose by hand, and it drifted (GitHub #44) · [R825.md](docs/roadmap/R825.md) · done (41df4238)
-- **R826** · A 907-guard codeunit crashed the BC service tier with a stack overflow: nothing limits or warns on guards per codeunit (GitHub #28) · [R826.md](docs/roadmap/R826.md) · open, filed 2026-11-05 (coord task R-820); not measured, nothing built
-- **R827** · One empty-block mutant on a procedure body folds the whole procedure into one chain: 72 x the emitted code, growing with the square · [R827.md](docs/roadmap/R827.md) · open, filed 2026-11-05 (found by R-825's plan review); measured offline, nothing built
-- **R828** · A condition mutant makes its whole `if` a chain root: chains of up to 66 remain once empty-block's fold is gone · [R828.md](docs/roadmap/R828.md) · open, filed 2026-11-05 (found by R-825); measured offline, nothing built
+- **R826** · A 907-guard codeunit crashed the BC service tier with a stack overflow: nothing limits or warns on guards per codeunit (GitHub #28) · [R826.md](docs/roadmap/R826.md) · open, filed 2026-11-05 (coord task R-820); a warning landed (R-825); the measurement waits for #28's reporter
+- **R827** · One empty-block mutant on a block folds everything inside it into one chain: 2 to 8 x the emitted code on real codeunits, growing with the square · [R827.md](docs/roadmap/R827.md) · parked 2026-11-05: plan reviewed, waiting for #28's reporter or a measured crash
+- **R828** · A condition mutant makes its whole `if` a chain root: chains of up to 66 remain once empty-block's fold is gone · [R828.md](docs/roadmap/R828.md) · open: waits for R827 (coord task R-836); measured offline, nothing built
+- **R829** · Hang refusal misses a write the loop's step reads, when the loop condition reads a name (GitHub #50) · [R829.md](docs/roadmap/R829.md) · done (08605e4d)
+- **R830** · `void-method-call` has no hang check: deleting a call that steps a loop can hang the run · [R830.md](docs/roadmap/R830.md) · done (6daf2727)
+- **R831** · Hang refusal never sees an array-element target: `while Buf[1] < 10 do Buf[1] := Buf[1] + 1` is claimed · [R831.md](docs/roadmap/R831.md) · done (6daf2727)
+- **R832** · No way to leave one operator out: `--operator` only narrows to a list (`--exclude-operator`, GitHub #50) · [R832.md](docs/roadmap/R832.md) · done (22348be4)
+- **R834** · Operator candidates #30-#43, ranked by sites, overlap, equivalents, yield and cost; first batch #35, #41, #33, #42 · [R834.md](docs/roadmap/R834.md) · open, filed 2026-11-06 (coord task R-821); measured offline, the owner picks the batch, nothing built
+- **R836** · Eleven gate baselines lag at scheme 44 after R830's bump to 45 · [R836.md](docs/roadmap/R836.md) · open, filed 2026-11-06 (coord task R-833)
+- **R837** · A mutant inside a same-object callee can still remove a loop's progress: `Counter += 1` in `Advance()` stays claimed · [R837.md](docs/roadmap/R837.md) · open, filed 2026-11-06 (found building R-833); nothing measured, nothing built
+- **R838** · `empty-block` of an `if` or `case` arm inside a loop deletes the loop's step, and no hang check sees it · [R838.md](docs/roadmap/R838.md) · open, filed 2026-11-06 (found building R-833); nothing measured, nothing built
+- **R839** · A loop's progress through another object or an event is not seen: `Other.Advance()` and `OnAdvance()` stay claimed · [R839.md](docs/roadmap/R839.md) · open, filed 2026-11-06 (found building R-833); nothing measured, nothing built
+- **R840** · A new user with no BC server can install LethAL and run the al-runner-v3 backend from the docs (GitHub #48) · [R840.md](docs/roadmap/R840.md) · done (726c880b)
+- **R846** · R830's by-name refusal costs some safe mutants: `TestField`, `FieldError` and by-value arguments · [R846.md](docs/roadmap/R846.md) · open, filed 2026-11-06 (found by R-833's delta review); not tuned
 
 ## Backends and tooling
 
@@ -566,7 +582,7 @@ that ordering is the priority.
 - **R85** · The RATE at which a real suite notices a real argument swap — unmeasured, and it is the only R82 question… · [R085.md](docs/roadmap/R085.md) · done (`pending`) — MEASURED 2026-08-08 on the WHOLE swap population…
 - **R87** · `resolveIdentifierType` answers from the WRONG OBJECT when two objects declare a same-named procedure, and… · [R087.md](docs/roadmap/R087.md) · done (`ac9ce94`) — scope is keyed from the identifier's OWN enclosing declaration…
 - **R88** · A released `lethal` binary carries no evidence of which commit built it, and the filename cannot tell a stale… · [R088.md](docs/roadmap/R088.md) · done (`pending`) — `--version` now prints the build commit…
-- **R89** · `--stop-hung-sessions` is only PARTIAL on a hosted environment, and a real DO codeunit still cannot complete… · [R089.md](docs/roadmap/R089.md) · open — NARROWED again 2026-08-08 and now GUARDED. The `--stop-hung-sessions` half is superseded by R91. The…
+- **R89** · `--stop-hung-sessions` is only PARTIAL on a hosted environment, and a real DO codeunit still cannot complete… · [R089.md](docs/roadmap/R089.md) · closed 2026-11-06 — standing watch, by the orchestrator's ruling: the guard prints the argv, and what remains…
 - **R90** · A single file whose instrumented form exceeds the publish budget cannot be measured at all, and… · [R090.md](docs/roadmap/R090.md) · done (`b95426b`) — the refusal exists and is MEASURED, not configured…
 - **R91** · The 30 s mutant budget floor is wrong by default for real AL, and the failure it produces is a tier… · [R091.md](docs/roadmap/R091.md) · done (`bdc5b6b`) — the default was raised, not left as an option: `MIN_MUTANT_BUDGET_MS` is now 180_000…
 - **R92** · Nothing lets a user predict the DEPLOYED mutant count, and the two available numbers differ by enough to… · [R092.md](docs/roadmap/R092.md) · done (`b95426b`) — `--dry-run` now reports both: the header carries `N mutant site(s), D deployed mutant(s)`…
@@ -672,7 +688,7 @@ that ordering is the priority.
 - **R416** · kraken-setup.sh's unit test cannot put its fakes first on PATH under a Windows bash started from PowerShell; the script only runs in the Linux image · [R416.md](docs/roadmap/R416.md) · done (27d17c7b)
 - **R436** · Biome is pinned at 1.9.4; 2.5.15 is out and out of the declared range (migration) · [R436.md](docs/roadmap/R436.md) · closed 2026-10-08 — not now: 2.x forces import-sort churn on about 330 files and buys nothing functional…
 - **R437** · TypeScript is at 5.9; 7.0 (the native compiler) is out and LethAL has not migrated · [R437.md](docs/roadmap/R437.md) · done (befafd2e)
-- **R423** · The biome auto-format hook runs on a .ts file that still holds merge-conflict markers and damages the code around them · [R423.md](docs/roadmap/R423.md) · open
+- **R423** · The biome auto-format hook runs on a .ts file that still holds merge-conflict markers and damages the code around them · [R423.md](docs/roadmap/R423.md) · done (ec3a95ec)
 - **R428** · r214-history.test.ts times out a hook at the 5 s default under machine load and then leaks its `lethal-r214-hist-*` temp folders, failing R358's leak check too · [R428.md](docs/roadmap/R428.md) · done (772632ef)
 - **R435** · On al-runner (now al-runner-v3) the dependency fingerprint still reads Microsoft apps by declared version; hash them from packagesDir before verify supports it · [R435.md](docs/roadmap/R435.md) · done (aa970869, 713e081b; delta review f65f3627)
 - **R439** · Two more unit tests time out at Bun's 5 s default under machine load and pass alone: manifest-stream's short-writes test and runSession's I7 transport-error abort · [R439.md](docs/roadmap/R439.md) · done (8ef7ce7e)
@@ -791,7 +807,7 @@ that ordering is the priority.
 - **R728** · BC's not-reinstalled list is measured only over a direct HTTP publish; through altool (a real run) it may never parse · [R728.md](docs/roadmap/R728.md) · closed 2026-10-24 — measured: no not-reinstalled list on altool's path (measure.md, pre-commitment 9f26ffac)
 - **R723** · The v3 update gate tried candidates oldest first, so two predicted fails ran before the newest release · [R723.md](docs/roadmap/R723.md) · done (6b795c03; review 3d805efe)
 - **R724** · `corpus-snapshot.ts` exits 2 for every refusal, so a retry loop cannot tell "heavy slot busy, try later" from "no master entry, never retry" · [R724.md](docs/roadmap/R724.md) · done (12a858dd, d386bf8d, 8d978cc9)
-- **R726** · A single-process I/O stall on the Windows CI job timed out 27 resume tests at 5 s, and verify's CI console named none of them · [R726.md](docs/roadmap/R726.md) · open, mitigated (a02c868d): verify gives the Windows CI job a 60 s per-test timeout and names every timed-out…
+- **R726** · A single-process I/O stall on the Windows CI job timed out 27 resume tests at 5 s, and verify's CI console named none of them · [R726.md](docs/roadmap/R726.md) · closed 2026-11-06 — mitigated; cause unexplained, diagnostics ruled out; 0 stalls in 106 runs since; reopen…
 - **R730** · Two readers do not refuse a retired `alRunner` config section: the live itests' fixture-config reader and kraken-secrets' pass-through · [R730.md](docs/roadmap/R730.md) · done (31557264)
 - **R736** · Most gates never see the warning events a run emits, so a new or lost warning passes unnoticed; only itest:hang pins its set · [R736.md](docs/roadmap/R736.md) · done (3281c66d)
 - **R744** · al-runner-v3 legs D1, D1c and T had no warning-code pins (R736's v3 proof did not run them) · [R744.md](docs/roadmap/R744.md) · done (e52b8f83)
@@ -840,14 +856,14 @@ that ordering is the priority.
 - **R796** · Upgrade tree-sitter-al from 4.4.1 to 4.5.0: fixes R720's and R327's swallowed members at the root; needs pins, 7 container classifications, 10 test re-pins and a pre-committed identity bump · [R796.md](docs/roadmap/R796.md) · done (66b585c1)
 - **R790** · v3: run the alc proof alongside the baseline and the mutant loop, and discard the results if alc rejects (the owner's Design A) · [R790.md](docs/roadmap/R790.md) · done (8c6a9fe8)
 - **R800** · v3: alc runs 1.5-2 s slower beside a concurrent al-runner call, even with free cores (memory bandwidth or cache contention, not CPU scheduling) · [R800.md](docs/roadmap/R800.md) · open, filed 2026-10-25 (coord task R-798)
-- **R804** · Pin al-runner edge 8078bcf49 (3.0.0-alpha.5+edge.20261026): every pinned defect gone, 48 known table differences at BC's verdict · [R804.md](docs/roadmap/R804.md) · 8078bcf49 current since 2026-10-26 08:43Z (regate, rejudge, K pass); edge-db0296678 (alpha.6) pinned on the…
+- **R804** · Pin al-runner edge 8078bcf49 (3.0.0-alpha.5+edge.20261026): every pinned defect gone, 48 known table differences at BC's verdict · [R804.md](docs/roadmap/R804.md) · closed 2026-11-06 — superseded: the update gate moved current past 8078bcf49 and db0296678 to edge-d72d3197d…
 - **R798** · v3: where R790's extra 2-3 s in D1's deploy goes; ruling: speculative baseline is opt-in, no nice or reorder · [R798.md](docs/roadmap/R798.md) · done (b04d6427)
 - **R805** · The update gate keeps a PASS's gate.log beside .gated, so a switch can be audited from its own run · [R805.md](docs/roadmap/R805.md) · done (d73f6974)
 - **R803** · After the talk: relax LethAL's own v3 refusals that only guarded upstream defects edge 8078bcf49 fixed (#5788 duplicate key, commit under isolation, and the rest leg C reads gone) · [R803.md](docs/roadmap/R803.md) · closed 2026-11-05 — inventory: no defect guard is provably dead, none retired, no figure moves; text…
 - **R806** · The BC on Linux host moves back to server1: the default, and proving the gates there · [R806.md](docs/roadmap/R806.md) · closed 2026-11-05 — the default moved to server1 (R-806), and every gate is proven there on bc1-bc3 (R-813)
 - **R807** · One run seed (ALRUNNER_SEED=1) for every al-runner process, a read-back guard, O1's seed sub-check, and the alpha.12 pin · [R807.md](docs/roadmap/R807.md) · done (b94f31a8)
 - **R808** · v3 serve keep rule: the http entry misses alpha.7's text, and serve-keep-reasons reads diverged from edge 8078bcf49 on · [R808.md](docs/roadmap/R808.md) · done (ac4c2be8)
-- **R810** · Re-record the 12 gate baselines still at identity scheme 42, after R796 raised it to 43 · [R810.md](docs/roadmap/R810.md) · open: the record rule is built (coord task R-824); the 12 records wait for R-818's scheme 44
+- **R810** · Re-record the 12 gate baselines still at identity scheme 42, after R796 and R829 raised it to 44 · [R810.md](docs/roadmap/R810.md) · done (9e210297)
 - **R813** · Plan: which al-runner to gate. Track edge, build from main, or keep numbered releases? (the owner's question) · [R813.md](docs/roadmap/R813.md) · closed 2026-11-05 — the owner ruled: `current` always follows edge; users install gated numbered releases…
 - **R815** · A mutant that makes a test codeunit's OnRun fail stops a one-shot session (exit 6 reads as "selected no test") · [R815.md](docs/roadmap/R815.md) · done (369451d1)
 - **R816** · `current` follows edge: pin edge d72d3197d (alpha.13+edge) on alpha.12's readings, and run the daily update from a lane's timer · [R816.md](docs/roadmap/R816.md) · done (c5264ee7)
@@ -855,6 +871,7 @@ that ordering is the priority.
 - **R822** · One contended moment in leg C costs a whole v3 gate: retry `timeout-is-cpu` before reading it as `infra-fail` · [R822.md](docs/roadmap/R822.md) · done (c2150b2b)
 - **R823** · scripts/r658-hang-gate.sh hard-codes lane bugs and the r658 worktree, so another lane cannot use it · [R823.md](docs/roadmap/R823.md) · done (1cfe158f)
 - **R833** · Bring up bc4 = BC 29 (29.0.54011.57673) and prove the gates there · [R833.md](docs/roadmap/R833.md) · open, filed 2026-11-05; step 1 (bc4 known to the scripts, servers.md) built under R-826b
+- **R835** · A test left a quarantine record in the default store, and a later test file on the same worker read it (master CI red on b67cfbb5) · [R835.md](docs/roadmap/R835.md) · done (b7597f60)
 
 ---
 

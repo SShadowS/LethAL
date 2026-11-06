@@ -13,6 +13,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { adoptV3Pin, findGatedBuild, newestGatedRelease } from "./al-runner-v3-pins";
+import { homeDir } from "./home";
 
 export const AL_RUNNER_V3_ROOT = "/work/tools/al-runner-v3";
 export const AL_RUNNER_V3_DEFAULT_PATH = `${AL_RUNNER_V3_ROOT}/current/al-runner`;
@@ -39,7 +40,7 @@ export function resolveV3Binary(path: string): string {
 export function v3InstallHint(): string {
   const r = newestGatedRelease();
   if (r === undefined) return "No gated al-runner release is listed in this LethAL build.";
-  return `To get a gated build on linux x64, install ${r.tag}: curl -fsSL https://github.com/aldevtools/BusinessCentral.AL.Runner/releases/download/edge/install.sh | sh -s -- ${r.tag} , then set alRunnerV3.path to ~/.local/bin/al-runner.`;
+  return `To get a gated build on linux x64, install ${r.tag}: curl -fsSL https://github.com/aldevtools/BusinessCentral.AL.Runner/releases/download/edge/install.sh | sh -s -- ${r.tag} . It writes ${homeDir()}/.local/bin/al-runner; with no alRunnerV3.path set, LethAL finds it there. If you set path, write that absolute path (a "~" is not expanded).`;
 }
 
 /**

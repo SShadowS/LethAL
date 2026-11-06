@@ -32,6 +32,7 @@ import type { ServerSpawnFn } from "./al-runner-server";
 import { AlRunnerV3Backend, AlRunnerV3ServeFallbackWarmupError } from "./al-runner-v3-backend";
 import {
   AL_RUNNER_V3_NOT_AUTHORITATIVE,
+  assertAlcRunnable,
   assertBcVersionMatchesPackages,
   refuseV3Platform,
   validateAlRunnerV3Config,
@@ -42,7 +43,7 @@ import { readSystemRuntime } from "./app-package";
 import { compareAppVersions, nextAbove } from "./app-version";
 import { ArtifactCompiler, defaultArtifactIo } from "./artifact";
 import type { BackendKind, BackendStatus, ExecutionBackend } from "./backend";
-import { isLocalRunner } from "./backend";
+import { isBcdev, isLocalRunner } from "./backend";
 import { readTargetSource } from "./baseline-snapshot";
 import { bcFetch } from "./bc-fetch";
 import { BcDevMcpBackend } from "./bcdev-backend";
@@ -85,6 +86,7 @@ import { type ExplainSuggestedOutput, suggest } from "./explain-suggest";
 import { formatFailure } from "./format-failure";
 import { HarnessVerifier, UnfilteredExtensionsQueryError } from "./harness";
 import type { LeaseSnapshot } from "./harness";
+import { largeFoldWarning } from "./large-fold";
 import { type ForceResetOutcome, LeaseClient, LeaseUnavailableError } from "./lease";
 import { changedLinesSince, parseLineArg } from "./line-filter";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
@@ -400,6 +402,8 @@ export interface DryRunCliConfig {
    *  `RunCliConfig.operators`. Honoured here for the same reason `only` is: a dry run exists to
    *  answer "how big is this going to be", and it must answer for the scope actually asked for. */
   readonly operators?: readonly string[];
+  /** R832: `--exclude-operator` names, honoured for the same reason. */
+  readonly excludeOperators?: readonly string[];
   /** Issue #19 (R227): `--lines <file>:<start>-<end>` (repeatable), parsed. */
   readonly lines?: readonly LineRange[];
   /** Issue #19 (R227): `--changed-since <git-ref>`. Resolved to line ranges by `resolveLineRanges`
@@ -474,6 +478,8 @@ export interface RunCliConfig {
    * `empty-block` and `void-method-call` site in them.
    */
   readonly operators?: readonly string[];
+  /** R832: `--exclude-operator <name>` (repeatable): every operator but these. Refused with `--operator`. */
+  readonly excludeOperators?: readonly string[];
   /** Issue #19 (R227): `--lines <file>:<start>-<end>` (repeatable), parsed. */
   readonly lines?: readonly LineRange[];
   /** Issue #19 (R227): `--changed-since <git-ref>`. Resolved to line ranges by `resolveLineRanges`
@@ -963,8 +969,8 @@ RUN — required
   --project <dir>            AL project to mutate (the app under test)
   --tests <dir>              AL test project (omit only with --dry-run)
   --backend <name>           bcdev (live BC, authoritative) or al-runner-v3 (the Rust al-runner,
-                             offline, NOT authoritative, pinned in /work/tools/al-runner-v3, config
-                             section "alRunnerV3"). al-runner, the retired .NET al-runner, is
+                             offline, NOT authoritative, config section "alRunnerV3", binary at
+                             ~/.local/bin/al-runner unless "path" says otherwise). al-runner, the retired .NET al-runner, is
                              refused by name (al-runner-v2-retired, R654)
 
 RUN — scope. These bound cost. --tests-only can change a verdict; the others cannot.
@@ -979,6 +985,9 @@ RUN — scope. These bound cost. --tests-only can change a verdict; the others c
                              prefix is optional; an unregistered name, or a registered one with no
                              deployable site here, is refused. The report flags it
                              'operator-narrowed'
+  --exclude-operator <name>  every operator but these contributes mutants (repeatable). Same
+                             prefix rule and same flag in the report. An unregistered name is
+                             refused, and so is giving --operator as well
   --lines <file>:<a>-<b>     only mutants whose span touches these lines contribute (repeatable;
                              <file>:<n> for one line). Paths are project-relative. A mutant that
                              spans a given line and others is kept. Applied after dedup, so it
@@ -1287,6 +1296,7 @@ export const RUN_FLAGS = {
   exclude: { type: "string", multiple: true },
   // R127: repeatable — several `--operator` names union. See `RunCliConfig.operators`.
   operator: { type: "string", multiple: true },
+  "exclude-operator": { type: "string", multiple: true },
   // Issue #19 (R227): line-scoped mutant filter. `--lines` is repeatable and unions.
   lines: { type: "string", multiple: true },
   "changed-since": { type: "string" },
@@ -1361,6 +1371,7 @@ const RUN_ONLY_FLAGS = [
   "only",
   "exclude",
   "operator",
+  "exclude-operator",
   "lines",
   "changed-since",
   "max-guards-per-batch",
@@ -1973,8 +1984,22 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
   if (operatorRaw?.some((n) => n === "") === true) {
     throw new Error('--operator requires a non-empty name (e.g. --operator "swap-call-arguments")');
   }
-  const operators =
-    operatorRaw !== undefined && operatorRaw.length > 0 ? { operators: operatorRaw } : {};
+  const excludeOperatorRaw = values["exclude-operator"];
+  if (excludeOperatorRaw?.some((n) => n === "") === true) {
+    throw new Error(
+      '--exclude-operator requires a non-empty name (e.g. --exclude-operator "empty-block")',
+    );
+  }
+  // Here too, not only in `admittedOperatorNames`: a real run gets there after it provisions.
+  if (operatorRaw !== undefined && excludeOperatorRaw !== undefined) {
+    throw new Error("--operator and --exclude-operator cannot be combined");
+  }
+  const operators = {
+    ...(operatorRaw !== undefined && operatorRaw.length > 0 ? { operators: operatorRaw } : {}),
+    ...(excludeOperatorRaw !== undefined && excludeOperatorRaw.length > 0
+      ? { excludeOperators: excludeOperatorRaw }
+      : {}),
+  };
 
   // Issue #19 (R227). `--changed-since` is kept as the ref here; `git` runs when the run starts.
   const linesRaw = values.lines;
@@ -2963,6 +2988,8 @@ async function buildAlRunnerV3Backend(
   scratchDir: string,
   deps: {
     readonly alToolPaths: typeof defaultAlToolPaths;
+    /** R834: replaces the check that `alRunnerV3.alcPath` is executable. Injected by tests. */
+    readonly alcRunnable?: (p: string) => boolean;
     readonly spawn?: SpawnFn;
     /** R635: the serve-entries daemon's spawn. */
     readonly serverSpawn?: ServerSpawnFn;
@@ -2979,6 +3006,7 @@ async function buildAlRunnerV3Backend(
   await validateSelectorIdsForProject(parsed.projectDir, deps.selectorIds, deps.source);
   const c = validateAlRunnerV3Config(configFile.alRunnerV3);
   await assertBcVersionMatchesPackages(c.packagesDir, c.bcVersion);
+  if (c.alcPath !== undefined) assertAlcRunnable(c.alcPath, deps.alcRunnable);
   const alcPath = c.alcPath ?? (await deps.alToolPaths())?.alcPath;
   if (alcPath === undefined) {
     throw new Error(
@@ -3037,6 +3065,8 @@ export async function buildBackend(
     alToolPaths?: typeof defaultAlToolPaths;
     alRunnerSpawn?: SpawnFn;
     alRunnerServerSpawn?: ServerSpawnFn;
+    /** R834: see `buildAlRunnerV3Backend`'s `alcRunnable`. */
+    alcRunnable?: (p: string) => boolean;
     /** R586c: test seam for the update gate's leg K on a candidate build; never set by a user. */
     alRunnerCandidate?: true;
     /** R786: set by `runFromCli`'s one-shot re-run after a serve warm-up fallback; never by a user. */
@@ -3056,6 +3086,7 @@ export async function buildBackend(
   if (parsed.backendKind === "al-runner-v3") {
     return buildAlRunnerV3Backend(parsed, configFile, scratchDir, {
       alToolPaths: deps.alToolPaths ?? defaultAlToolPaths,
+      ...(deps.alcRunnable !== undefined ? { alcRunnable: deps.alcRunnable } : {}),
       ...(deps.alRunnerSpawn !== undefined ? { spawn: deps.alRunnerSpawn } : {}),
       ...(deps.alRunnerServerSpawn !== undefined ? { serverSpawn: deps.alRunnerServerSpawn } : {}),
       ...(deps.alRunnerCandidate === true ? { candidate: true as const } : {}),
@@ -3417,6 +3448,8 @@ export async function printDryRun(
     readonly configPath: string;
     /** R127: `--operator` names, honoured here for the same reason `only` is. */
     readonly operators?: readonly string[];
+    /** R832: `--exclude-operator` names, likewise. */
+    readonly excludeOperators?: readonly string[];
     /** Issue #19: the resolved line filter, honoured for the same reason. */
     readonly lines?: readonly LineRange[];
     /**
@@ -3442,6 +3475,7 @@ export async function printDryRun(
   // "how big is this going to be" would be worse than useless if it answered for a wider scope
   // than the one the real run will use.
   const operators = paths.operators;
+  const excludeOperators = paths.excludeOperators;
   const exclude = paths.exclude;
   let backend: BuildBackend | undefined;
   if (paths.backendKind === "bcdev") {
@@ -3459,6 +3493,7 @@ export async function printDryRun(
       ...(only !== undefined ? { only } : {}),
       ...(exclude !== undefined ? { exclude } : {}),
       ...(operators !== undefined ? { operators } : {}),
+      ...(excludeOperators !== undefined ? { excludeOperators } : {}),
       ...(paths.lines !== undefined ? { lines: paths.lines } : {}),
       ...(paths.source !== undefined ? { source: paths.source } : {}),
       ...(paths.preprocessorSymbols !== undefined
@@ -3484,6 +3519,11 @@ export async function printDryRun(
   console.log(
     `dry run: ${files.length} file(s), ${sites.length} mutant site(s), ${deployedTotal} deployed mutant(s), ${artifacts.length} batch(es)`,
   );
+  // R826: as `runSession` warns: a BC tier's risk, so not for al-runner-v3.
+  if (paths.backendKind === undefined || isBcdev(paths.backendKind)) {
+    const foldWarning = largeFoldWarning(files, dryRunTierOf);
+    if (foldWarning !== undefined) console.log(`NOTE: ${foldWarning.replace("[lethal] ", "")}`);
+  }
   // R48: a dry run exists to answer "how big is this going to be", so it is the right place to say
   // that the answer is "too big to run". Saying it here — rather than only when `lethal run`
   // refuses — means the narrowing conversation happens before anything is published.
@@ -3500,6 +3540,11 @@ export async function printDryRun(
   if (operators !== undefined && operators.length > 0) {
     console.log(
       `narrowed by --operator ${operators.map((n) => `"${n}"`).join(", ")}: ${excludedByOperator} mutation site(s) from other operators excluded`,
+    );
+  }
+  if (excludeOperators !== undefined && excludeOperators.length > 0) {
+    console.log(
+      `narrowed by --exclude-operator ${excludeOperators.map((n) => `"${n}"`).join(", ")}: ${excludedByOperator} mutation site(s) excluded`,
     );
   }
   if (paths.lines !== undefined) {
@@ -3980,6 +4025,9 @@ export async function runFromCli(
               ...(parsed.only !== undefined ? { only: parsed.only } : {}),
               ...(mergedExclude.length > 0 ? { exclude: mergedExclude } : {}),
               ...(parsed.operators !== undefined ? { operators: parsed.operators } : {}),
+              ...(parsed.excludeOperators !== undefined
+                ? { excludeOperators: parsed.excludeOperators }
+                : {}),
               ...(lineRanges !== undefined
                 ? {
                     lines: lineRanges.ranges,
@@ -4166,15 +4214,19 @@ export async function clearQuarantine(
  * `lethal clear-quarantine (--server ... --instance ... | --config ...)` (spec §10). Opens the
  * SAME store `runSession` durably writes to (`defaultQuarantineDir`) — there is no
  * `--quarantine-dir` override here because an operator clearing a real tier must hit the real
- * store, not one a stray flag silently redirected. Exported for its test.
+ * store, not one a stray flag silently redirected. `quarantineDir` exists for tests (R835), and
+ * the CLI passes none. Exported for its test.
  */
-export async function clearQuarantineFromCli(parsed: ClearQuarantineCliConfig): Promise<number> {
+export async function clearQuarantineFromCli(
+  parsed: ClearQuarantineCliConfig,
+  quarantineDir: string = defaultQuarantineDir(),
+): Promise<number> {
   const key = quarantineResourceKey(await resolveTierIdentity(parsed, "clear-quarantine"));
   if (parsed.server === undefined) {
     // As `clear-ceiling` does: a tier the operator did not type is shown before it is cleared.
     console.log(`resolved tier from ${parsed.configPath}: ${key}`);
   }
-  const store = new QuarantineStore(defaultQuarantineDir());
+  const store = new QuarantineStore(quarantineDir);
   const result = await clearQuarantine(store, key);
   console.log(result); // "cleared" | "stale" | "not-quarantined"
   return result === "stale" ? 1 : 0;
@@ -4593,6 +4645,10 @@ export async function buildDoctorDeps(
     /** R586: the spawn the al-runner-v3 `--version` probe uses. Injected by tests so the check can
      *  be driven without a real al-runner install; absent means the real one. */
     readonly alRunnerSpawn?: SpawnFn;
+    /** R834: replaces the check that `alRunnerV3.alcPath` is executable. Injected by tests. */
+    readonly alcRunnable?: (p: string) => boolean;
+    /** R834: the platform the v3 check judges; absent means this one. Injected by tests. */
+    readonly platform?: NodeJS.Platform;
   } = {},
 ): Promise<{
   readonly cfg: DoctorConfig;
@@ -4608,43 +4664,55 @@ export async function buildDoctorDeps(
   // `bcVersion` against the package folder. The session's contract probe is not run here. Decided
   // BEFORE `prepareBcdevReadOnly`, because that helper resolves a bcdev identity this config does
   // not have. (An `alRunner` section is refused at load: R654 F2.)
-  if (
+  // R834: the same check for ANY config with the section, beside a bcdev or envTool one too.
+  const v3Only =
     configFile.envTool === undefined &&
     configFile.bcdev === undefined &&
-    configFile.alRunnerV3 !== undefined
-  ) {
-    const c = validateAlRunnerV3Config(configFile.alRunnerV3);
-    const spawn = opts.alRunnerSpawn ?? defaultSpawn;
-    return {
-      cfg: {},
-      deps: {
-        alRunnerV3: async () => {
-          const v = await spawn([c.path, "--version"], { env: v3ChildEnv() }).catch(
-            (e: unknown) => ({
-              exitCode: -1,
-              stdout: "",
-              stderr: String(e),
-            }),
-          );
-          const version = (v.stdout || v.stderr).trim();
-          if (v.exitCode !== 0)
-            return {
-              ok: false,
-              details: `${c.path} not runnable: ${version}. ${v3InstallHint()}`,
-            };
-          try {
-            const gated = await checkGated(c.path, version);
-            await assertBcVersionMatchesPackages(c.packagesDir, c.bcVersion);
-            return {
-              ok: true,
-              details: `${version}; ${gated.source === "manifest" ? "listed in the gate manifest, gated" : "gated"} at LethAL ${gated.lethalCommit}; bcVersion ${c.bcVersion}; transport ${c.transportSource === "explicit" ? c.transport : "default (serve-entries where proven, else one-shot; R761)"}`,
-            };
-          } catch (err) {
-            return { ok: false, details: err instanceof Error ? err.message : String(err) };
-          }
-        },
-      },
-    };
+    configFile.alRunnerV3 !== undefined;
+  // v3-only: a bad section throws here, as `run` does. Beside a bcdev or envTool section it is a
+  // failed `al-runner-v3` check instead, so the bcdev checks still run (R834).
+  if (v3Only) validateAlRunnerV3Config(configFile.alRunnerV3);
+  const v3Check =
+    configFile.alRunnerV3 === undefined
+      ? undefined
+      : (() => {
+          const spawn = opts.alRunnerSpawn ?? defaultSpawn;
+          return async () => {
+            let c: ReturnType<typeof validateAlRunnerV3Config>;
+            try {
+              if (!v3Only) refuseV3Platform(opts.platform);
+              c = validateAlRunnerV3Config(configFile.alRunnerV3);
+            } catch (err) {
+              return { ok: false, details: err instanceof Error ? err.message : String(err) };
+            }
+            const v = await spawn([c.path, "--version"], { env: v3ChildEnv() }).catch(
+              (e: unknown) => ({
+                exitCode: -1,
+                stdout: "",
+                stderr: String(e),
+              }),
+            );
+            const version = (v.stdout || v.stderr).trim();
+            if (v.exitCode !== 0)
+              return {
+                ok: false,
+                details: `${c.path} not runnable: ${version}. ${v3InstallHint()}`,
+              };
+            try {
+              const gated = await checkGated(c.path, version);
+              await assertBcVersionMatchesPackages(c.packagesDir, c.bcVersion);
+              if (c.alcPath !== undefined) assertAlcRunnable(c.alcPath, opts.alcRunnable);
+              return {
+                ok: true,
+                details: `${version}; ${gated.source === "manifest" ? "listed in the gate manifest, gated" : "gated"} at LethAL ${gated.lethalCommit}; bcVersion ${c.bcVersion}; transport ${c.transportSource === "explicit" ? c.transport : "default (serve-entries where proven, else one-shot; R761)"}`,
+              };
+            } catch (err) {
+              return { ok: false, details: err instanceof Error ? err.message : String(err) };
+            }
+          };
+        })();
+  if (v3Only && v3Check !== undefined) {
+    return { cfg: {}, deps: { alRunnerV3: v3Check } };
   }
   const readOnly = prepareBcdevReadOnly(configFile, {
     runId: "doctor",
@@ -4911,6 +4979,7 @@ export async function buildDoctorDeps(
       toolPaths,
       ...(alcRuntime !== undefined ? { alcRuntime } : {}),
       dependencies,
+      ...(v3Check !== undefined ? { alRunnerV3: v3Check } : {}),
     },
     ...(isCreateMode ? { caveat: DOCTOR_CREATE_MODE_CAVEAT } : {}),
   };
@@ -5653,6 +5722,7 @@ export async function dryRunFromCli(parsed: DryRunCliConfig): Promise<number> {
     source: dryRunSource,
     ...(parsed.outPath !== undefined ? { outPath: parsed.outPath } : {}),
     ...(parsed.operators !== undefined ? { operators: parsed.operators } : {}),
+    ...(parsed.excludeOperators !== undefined ? { excludeOperators: parsed.excludeOperators } : {}),
     ...(dryRunLines !== undefined ? { lines: dryRunLines.ranges } : {}),
     ...(dryRunExclude.length > 0 ? { exclude: dryRunExclude } : {}),
     ...(dryRunConfig?.preprocessorSymbols !== undefined

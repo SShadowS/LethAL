@@ -60,7 +60,10 @@ import {
 import { AlRunnerV3ServeFallbackWarmupError } from "./al-runner-v3-backend";
 import { type AppJsonPathChange, normaliseAppJsonPaths } from "./app-json-paths";
 import {
+  UpgradeClashRefusedError,
   UpgradeNotRestoredError,
+  bcClashText,
+  clashRefusedWithoutRestore,
   confirmedDowngradeRefusal,
   nextAbove,
   parseVersionConflict,
@@ -126,7 +129,7 @@ import {
   dependencySourceDigest,
   dependencySourceWarning,
 } from "./dependency-report-source";
-import { checkDependents } from "./dependents-warning";
+import { dependentsWarning, readDependents } from "./dependents-warning";
 import type { PublishOutcome } from "./deployment-verifier";
 import {
   DependencyUnreadableError,
@@ -161,6 +164,7 @@ import type { HangRefusedFile, PreprocExcludedFile } from "./excluded-sites";
 import { ActivationFailure } from "./failure-classes";
 import { UnfilteredExtensionsQueryError } from "./harness";
 import { homeDir } from "./home";
+import { largeFoldWarning } from "./large-fold";
 import {
   type BeginPublishRefusal,
   LeaseUnavailableError,
@@ -183,6 +187,7 @@ import {
   wrappedRuleFor,
 } from "./line-map";
 import { nestedProjectWarning } from "./nested-project";
+import { checkObjectClashes, dependenciesOf } from "./object-clash";
 import { isRetrySafe, requiresUnsafeLatch } from "./operation-outcome";
 import {
   type LaneSink,
@@ -627,6 +632,8 @@ export interface MutationSetOptions {
    * here.
    */
   readonly operators?: readonly string[];
+  /** R832: operators that contribute NO mutants (`--exclude-operator`). Refused beside `operators`. */
+  readonly excludeOperators?: readonly string[];
   /**
    * Issue #19: line ranges a mutant must touch (`--lines`, `--changed-since`). Absent means no line
    * filter. Applied after per-file dedup and after `operators`, for the same reason `operators` is:
@@ -767,6 +774,7 @@ function admittedByOnly(
 export function resolveOperatorNames(
   requested: readonly string[],
   registered: readonly string[],
+  flag = "--operator",
 ): ReadonlySet<string> | undefined {
   if (requested.length === 0) return undefined;
   const known = new Set(registered);
@@ -791,10 +799,32 @@ export function resolveOperatorNames(
       .map((n) => `"${n}"`)
       .join(", ");
     throw new Error(
-      `--operator named ${unknown.length === 1 ? "an operator" : "operators"} this build does not register: ${named}. Registered operators are ${registeredList} (the "lethal." prefix is optional). Refusing rather than running with the remaining names, which would report a narrower scope than the one asked for.`,
+      `${flag} named ${unknown.length === 1 ? "an operator" : "operators"} this build does not register: ${named}. Registered operators are ${registeredList} (the "lethal." prefix is optional). Refusing rather than running with the remaining names, which would report a different scope than the one asked for.`,
     );
   }
   return resolved;
+}
+
+/**
+ * R832: the operators a run admits, from `--operator` or `--exclude-operator`. `undefined` means
+ * every operator. Both flags together are refused: which one wins is a guess the user can avoid.
+ */
+export function admittedOperatorNames(
+  options: {
+    readonly operators?: readonly string[];
+    readonly excludeOperators?: readonly string[];
+  },
+  registered: readonly string[],
+): ReadonlySet<string> | undefined {
+  const { operators = [], excludeOperators = [] } = options;
+  if (operators.length > 0 && excludeOperators.length > 0) {
+    throw new Error(
+      "--operator and --exclude-operator cannot be combined. Name the operators to run, or the ones to leave out.",
+    );
+  }
+  const left = resolveOperatorNames(excludeOperators, registered, "--exclude-operator");
+  if (left === undefined) return resolveOperatorNames(operators, registered);
+  return new Set(registered.filter((n) => !left.has(n)));
 }
 
 /**
@@ -978,9 +1008,8 @@ export async function generateMutationSet(
   }
   // R127: resolved before any file is read too, so an unregistered operator name fails as
   // immediately as a typo'd `--only` pattern does. `undefined` means "every operator".
-  const admittedOperators = resolveOperatorNames(options.operators ?? [], [
-    ...operatorTiers.keys(),
-  ]);
+  const admittedOperators = admittedOperatorNames(options, [...operatorTiers.keys()]);
+  const excludingOperators = (options.excludeOperators?.length ?? 0) > 0;
   // Issue #19: a range naming no project `.al` file is refused before any file is read, like a
   // typo'd `--only` pattern: it would otherwise silently select nothing in that file.
   const lineRanges = options.lines;
@@ -1332,7 +1361,15 @@ export async function generateMutationSet(
   // `--only` pattern matching no file is. A run that quietly dropped it would publish, run a whole
   // baseline and report a null score with no failures — "nothing to fix" rather than "that
   // operator finds nothing here". Empty-vs-empty agreement is this project's signature bug.
-  if (admittedOperators !== undefined) {
+  // R832: `--exclude-operator` admits every other operator, so one with no site here is normal.
+  // Only a run left with nothing at all is refused. Leaving out an operator with no site loses
+  // nothing, so unlike `--exclude` that is not refused.
+  if (excludingOperators && producedInstrumentable.size === 0) {
+    throw new Error(
+      `no deployable mutation site is left in this scope with --exclude-operator ${options.excludeOperators?.join(", ")}.`,
+    );
+  }
+  if (admittedOperators !== undefined && !excludingOperators) {
     const barren = [...admittedOperators].filter((n) => !producedInstrumentable.has(n)).sort();
     if (barren.length > 0) {
       const named = barren.map((n) => `"${n}"`).join(", ");
@@ -1363,7 +1400,7 @@ export async function generateMutationSet(
           if (perFile === undefined) return [];
           const where = [...perFile].map(([f, c]) => `${f} (${c})`).join(", ");
           return [
-            ` "${n}" had site(s) refused as hang-capable (each writes a variable an enclosing loop's condition reads, R196, or is code of an unbounded report data item or a bounded item's only bound, R487/R501): ${where}.`,
+            ` "${n}" had site(s) refused as hang-capable (each writes a variable an enclosing loop's condition reads, R196, is a call that loop's progress may rest on, R830, or is code of an unbounded report data item or a bounded item's only bound, R487/R501): ${where}.`,
           ];
         })
         .join("");
@@ -1456,7 +1493,9 @@ export async function generateMutationSet(
   if (admittedOperators !== undefined) {
     warn(
       "operator-narrowed-run",
-      `[lethal] --operator narrowed this run to ${[...admittedOperators].sort().join(", ")}; ${excludedByOperator} mutation site(s) from other operators were excluded. The score below covers those operators ONLY — it is not a project score.`,
+      excludingOperators
+        ? `[lethal] --exclude-operator left out ${options.excludeOperators?.join(", ")}: ${excludedByOperator} mutation site(s) were excluded. The score below does not cover them — it is not a project score.`
+        : `[lethal] --operator narrowed this run to ${[...admittedOperators].sort().join(", ")}; ${excludedByOperator} mutation site(s) from other operators were excluded. The score below covers those operators ONLY — it is not a project score.`,
     );
   }
   // R565: read once every lookup this generation made is done.
@@ -1524,6 +1563,8 @@ export interface SessionConfig {
   readonly only?: readonly string[];
   /** R221 — glob patterns whose files contribute NO mutants. See `MutationSetOptions.exclude`. */
   readonly exclude?: readonly string[];
+  /** R832: `--exclude-operator`. See `MutationSetOptions.excludeOperators`. */
+  readonly excludeOperators?: readonly string[];
   /**
    * R127: operator names allowed to contribute mutants (`--operator`). Absent means every
    * registered operator. See `MutationSetOptions.operators`.
@@ -1973,10 +2014,19 @@ function targetObjectIdsOf(sources: Iterable<readonly [string, string]>): Readon
 /** R709: the named refusal when a failed publish says BC could not restore the previous target
  *  (`restoreFailed`); undefined otherwise, and always for a compile verdict (its text is alc's
  *  output, R461). */
-export function upgradeNotRestored(err: unknown): UpgradeNotRestoredError | undefined {
+export function upgradeNotRestored(
+  err: unknown,
+  /** The installed dependents listed before the publish ("name version" each); undefined: unread. */
+  dependents: readonly string[] | undefined,
+): UpgradeNotRestoredError | UpgradeClashRefusedError | undefined {
   if (err instanceof AlcCompileError) return undefined;
   const text = messageOf(err);
-  return restoreFailed(text) ? new UpgradeNotRestoredError(text) : undefined;
+  if (restoreFailed(text)) return new UpgradeNotRestoredError(text);
+  // R845 (U3): a clash with an app that is not a dependent: BC made no restore attempt, and said so
+  // by saying nothing. The target and its dependents are gone all the same.
+  return clashRefusedWithoutRestore(text)
+    ? new UpgradeClashRefusedError(text, dependents)
+    : undefined;
 }
 
 /**
@@ -4139,6 +4189,11 @@ function targetIdentity(
  */
 function classifyDeployFailure(err: unknown): PublishOutcome | undefined {
   if (parseVersionConflict(messageOf(err)) !== null) return undefined;
+  // R843, R845: BC refusing a publish because the target and an installed app declare one object,
+  // one field or one enum value is a fact about two apps, not about the artifact's size. Recorded
+  // as `failed` it would become a publish ceiling at this guard count and refuse later runs of
+  // that size. (`bcClashText` reads BC's three clash texts.)
+  if (bcClashText(messageOf(err)) !== undefined) return undefined;
   if (err instanceof PublishFailedError) return "failed";
   if (err instanceof DeploymentError) return err.outcome;
   return undefined;
@@ -5887,10 +5942,10 @@ async function runSessionBody(
   // the session rather than after a deploy; the fingerprint treats `empty-block` and
   // `lethal.empty-block` as the same scope, because they are; and the REPORT records the resolved
   // name, so a reader months later is not left guessing what an abbreviation meant.
-  const resolvedOperators =
-    cfg.operators === undefined
-      ? undefined
-      : [...(resolveOperatorNames(cfg.operators, [...operatorTiers.keys()]) ?? [])].sort();
+  // R832: `--exclude-operator` resolves to the operators it leaves in, so the fingerprint and the
+  // report treat it as the same scope as naming them all.
+  const admittedForRun = admittedOperatorNames(cfg, [...operatorTiers.keys()]);
+  const resolvedOperators = admittedForRun === undefined ? undefined : [...admittedForRun].sort();
   emit({
     type: "run-configured",
     caps,
@@ -6410,7 +6465,11 @@ async function runSessionBody(
   } = await generateMutationSet(cfg.projectDir, {
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
     ...(cfg.exclude !== undefined ? { exclude: cfg.exclude } : {}),
-    ...(resolvedOperators !== undefined ? { operators: resolvedOperators } : {}),
+    ...(cfg.excludeOperators !== undefined && cfg.excludeOperators.length > 0
+      ? { excludeOperators: cfg.excludeOperators }
+      : resolvedOperators !== undefined
+        ? { operators: resolvedOperators }
+        : {}),
     ...(cfg.lines !== undefined ? { lines: cfg.lines } : {}),
     ...(sourceSnapshot !== undefined ? { source: sourceSnapshot } : {}),
     preprocessorSymbols: sourceSymbols,
@@ -6423,6 +6482,13 @@ async function runSessionBody(
       ...(cfg.dependencyPackageDirs ?? []),
     ],
   });
+  // R826: a warning only, once per session, and only for a BC tier: it changes no deploy decision.
+  const foldWarning = isBcdev(caps.kind)
+    ? largeFoldWarning(allFiles, (name) => operatorTiers.get(name))
+    : undefined;
+  if (foldWarning !== undefined) {
+    emit({ type: "warning", code: "large-method", message: foldWarning });
+  }
   // R442: before any mutant row, so a run that dies earlier holds no verdict and stays NULL.
   cfg.store.setCarryHidden(runId, carryHidden);
   // R565: likewise, so a run that dies before it carries nothing by rule 1.
@@ -7000,6 +7066,9 @@ async function runSessionBody(
     let appJsonPathsWarned = false;
     // R727: once per run, before the FIRST target publish; warn only.
     let dependentsChecked = false;
+    // R845: the dependents that read found ("name version", direct then transitive), for the U3
+    // error; undefined until read, and when the read failed or the backend cannot list them.
+    let dependentNames: string[] | undefined;
     for (const [batchIdx, batchFiles] of artifacts.entries()) {
       // Layer 5C-B1 (design §6): a lease lost during THIS batch invalidates exactly THIS batch's
       // verdicts (at the loss and again at session end, R508) — earlier batches stand, every RunMutant in them having been
@@ -7355,12 +7424,58 @@ async function runSessionBody(
       if (!dependentsChecked) {
         dependentsChecked = true;
         const name = typeof projectManifest.name === "string" ? projectManifest.name : "(unnamed)";
-        const dependentsMessage = await checkDependents(cfg.backend, cfg.testDir, {
-          name,
-          id: targetAppIdOf(projectManifest),
-        });
+        const dependentsTarget = { name, id: targetAppIdOf(projectManifest) };
+        const dependents = await readDependents(
+          cfg.backend,
+          cfg.testDir,
+          dependentsTarget,
+          Date.now,
+        );
+        if (dependents !== null && Array.isArray(dependents.read)) {
+          dependentNames = [...dependents.read, ...dependents.transitive].map(
+            (d) => `${d.name} ${d.version}`,
+          );
+        }
+        const dependentsMessage =
+          dependents === null
+            ? null
+            : dependentsWarning(
+                dependents.read,
+                dependents.testsAppId,
+                dependentsTarget,
+                dependents.transitive,
+              );
         if (dependentsMessage !== null) {
           emit({ type: "warning", code: "installed-dependents", message: dependentsMessage });
+        }
+        for (const message of dependents?.walkWarnings ?? []) {
+          emit({ type: "warning", code: "object-clash-unchecked", message });
+        }
+        // R843: before anything is published, refuse a target that declares an object an installed
+        // dependent declares (BC refuses the upgrade and, unable to restore, removes the dependent).
+        // bcdev only; this block precedes `deployStep`, the only route to `.deploy(`, so every path
+        // that publishes a target passes it. Reads only. Sharing the dependents read above.
+        if (dependents !== null && isBcdev(caps.kind)) {
+          const clashWarnings = await checkObjectClashes({
+            dependents: dependents.read,
+            testsAppId: dependents.testsAppId,
+            targetFiles: [...sourceSnapshot]
+              .filter(([p]) => p.toLowerCase().endsWith(".al"))
+              .map(([path, b]) => ({ path, text: b.toString("utf8") })),
+            targetSymbols: buildSymbols,
+            injected: cfg.selectorIds,
+            fetchPackage: cfg.backend.fetchPublishedAppPackage?.bind(cfg.backend),
+            readTestSources: () => readTestAppSources(cfg.testDir),
+            testSymbols: testBuildSymbols,
+            targetAppId: dependentsTarget.id,
+            targetDependencies: dependenciesOf(projectManifest),
+            transitive: dependents.transitive,
+            startedMs: dependents.startedMs,
+            now: Date.now,
+          });
+          for (const message of clashWarnings) {
+            emit({ type: "warning", code: "object-clash-unchecked", message });
+          }
         }
       }
       let compiled: CompiledArtifact | null = null;
@@ -7391,7 +7506,7 @@ async function runSessionBody(
         }
         if (!deployed) {
           // R709: BC could not restore after a refused upgrade; never re-stamp past it.
-          const notRestored = upgradeNotRestored(deployErr);
+          const notRestored = upgradeNotRestored(deployErr, dependentNames);
           if (notRestored !== undefined) throw notRestored;
           // 3a. version conflict: BC's downgrade rejection is machine-parseable and names the
           // installed version verbatim. Re-stamp strictly above it, recompile, and retry
@@ -7421,7 +7536,7 @@ async function runSessionBody(
               );
               deployed = true;
             } catch (retryErr) {
-              const retryNotRestored = upgradeNotRestored(retryErr);
+              const retryNotRestored = upgradeNotRestored(retryErr, dependentNames);
               if (retryNotRestored !== undefined) throw retryNotRestored;
               const stillInstalled =
                 retryErr instanceof AlcCompileError
@@ -8453,10 +8568,15 @@ async function runSessionBody(
     const resolved = resumeState === undefined ? "undefined" : `runId ${resumeState.runId}`;
     const resolvedEvents = collectedEvents.filter((e) => e.type === "resume-resolved").length;
     throw new Error(
-      `runSession: --resume was requested (${JSON.stringify(cfg.resume)}) but the report records no resume. Every path that reaches here should have emitted \`resume-resolved\` or thrown in \`resolveResume\`. This is R89's unexplained field report reproducing. Do not re-run: capture this message. runId=${runId} backend=${backendName} configFingerprint=${configFingerprint} projectDir=${cfg.projectDir} resumeState=${resolved} events=${collectedEvents.length} resumeResolvedEvents=${resolvedEvents}`,
+      `${resumeGuardMessage(cfg.resume, process.argv.slice(2))} runId=${runId} backend=${backendName} configFingerprint=${configFingerprint} projectDir=${cfg.projectDir} resumeState=${resolved} events=${collectedEvents.length} resumeResolvedEvents=${resolvedEvents}`,
     );
   }
   return report;
+}
+
+/** R89: the guard's message names the argv, the one fact the field report never recovered. */
+export function resumeGuardMessage(resume: unknown, argv: readonly string[]): string {
+  return `runSession: --resume was requested (${JSON.stringify(resume)}) but the report records no resume. Every path that reaches here should have emitted \`resume-resolved\` or thrown in \`resolveResume\`. This is R89's unexplained field report reproducing. Do not re-run: capture this message. argv=${JSON.stringify(argv)}`;
 }
 
 /** C02-04b: handed to `inLease`. `publish` runs `run` inside the lease's publication fence. */

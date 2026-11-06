@@ -174,11 +174,9 @@ describe("hangCapableForMutatedNode", () => {
 
   // The target side is not a value written to the target.
   //
-  // The fixture is chosen so this can actually fail. An obvious alternative, a subscripted target
-  // like `Slots[2] := 0`, would pass with the guard deleted: `assignmentTargetOf` already declines
-  // any target that is not a bare identifier, so the enclosing assignment classifies as null
-  // whatever the guard does. The target identifier itself is the one node inside `left` whose
-  // enclosing assignment IS claimable, so it is the only fixture that separates the two.
+  // The fixture is chosen so this can actually fail. The target identifier is a node inside `left`
+  // whose enclosing assignment IS claimable, so with the guard deleted it would be claimed. R831:
+  // an index on the left is the exception, and counts as a value (`r830-deleted-call.test.ts`).
   it("DECLINES the target identifier on the assignment's left", () => {
     const { root, ctx } = ctxFor(`codeunit 50000 P
 {
@@ -372,12 +370,16 @@ describe("R294: a member receiver in the loop condition", () => {
     );
   });
 
-  it("control: DECLINES when the member name, not the receiver, matches the target", () => {
+  // R829 re-pin. The feed walk is by NAME, so a local `Amount` is followed when a part reads
+  // `R.Amount`, and the old body `Amount := Amount + 1` became refused (its right side is now a
+  // part). The control keeps its point, that the declaration-keyed rule does not match a member
+  // name to a local, with a body that reads nothing.
+  it("control: the declaration-keyed rule DECLINES when the member name, not the receiver, matches the target", () => {
     const { root, ctx } = load(`codeunit 50296 "R" {
       procedure P() var R: Record Customer; Amount: Decimal; begin
-        while R.Amount < 10 do Amount := Amount + 1;
+        while R.Amount < 10 do Amount := 1;
       end; }`);
-    expect(classifyHangCapable(assignment(root, "Amount := Amount + 1"), ctx)).toBeNull();
+    expect(classifyHangCapable(assignment(root, "Amount := 1"), ctx)).toBeNull();
   });
 });
 
