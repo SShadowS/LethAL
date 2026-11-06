@@ -80,3 +80,15 @@ Written before any record run. The rule does not change.
   readings digest does not move. It costs one gate run.
 - **The BC six stay on BC 28.4, on `bc1`-`bc3`.** Since 2026-11-05 a worktree's default configs name `bc4`, BC 29. Each BC record
   and confirm run names its `lethal.config.bcN.json`, and its first line is read before the run counts.
+
+## Addendum 2, 2026-11-05: the records wait for scheme 44
+
+Orchestrator's ruling: R-818 raises `IDENTITY_SCHEME` to 44, so the 12 files are recorded once, after R-818 lands, at 44. The
+record rule lands first. The prediction becomes: one line, `42` to `44`. R-818's plan (`/coord/handoff/R-818/plan.md`) moves
+ordinals only in the corpora, and no gate fixture, so the keys hold and a pinned record can still pass. If R-818's final figures
+move a fixture key, the v3 records refuse, and that needs a new design before any record.
+
+**A trial ran before the ruling arrived, and was undone.** On head 256189ec the six v3 files recorded, each a one-line diff at 43,
+and the confirm run passed all six legs (`/coord/handoff/R-824/v3/`). On `bc2`, `bcdev` recorded with a one-line diff and its
+confirm passed (`/coord/handoff/R-824/bc2/bcdev.*.log`). Those are live evidence that the rule works. None of it was kept: all
+seven files stay at 42 until the records run.
