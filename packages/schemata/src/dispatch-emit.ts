@@ -128,5 +128,8 @@ function branchText(original: string, m: PlannedMember, latch: string, selector:
   // that ends `S` and the statement around it), the `begin ... end` wrap must reproduce it, or the
   // sibling after it loses its separator (AL0111). The same consumed-terminator rule as above.
   const s = text.slice(start, end);
-  return `${head}begin ${marker} ${s} end${endsInTerminator(s) ? ";" : ""}${text.slice(end)}`;
+  const open = `${wouldGlue(head, "begin") ? " " : ""}begin`; // R853: `do"D"` must not give `dobegin`.
+  const close = `end${endsInTerminator(s) ? ";" : ""}`;
+  const tail = text.slice(end);
+  return `${head}${open} ${marker} ${s} ${close}${wouldGlue(close, tail) ? " " : ""}${tail}`;
 }

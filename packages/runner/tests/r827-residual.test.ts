@@ -452,7 +452,7 @@ describe("R827: only a body, and only its own empty-block", () => {
 
 describe("R853: glued source emits separate words", () => {
   const body = (statements: string): string =>
-    `codeunit 51997 "R853 Glued"\n{\n    procedure P(A: Boolean; C: Integer)\n    begin\n${statements}\n    end;\n\n    procedure Foo(C: Integer)\n    begin\n    end;\n\n    procedure "My Q"(C: Integer)\n    begin\n    end;\n}\n`;
+    `codeunit 51997 "R853 Glued"\n{\n    procedure P(A: Boolean; C: Integer; var D: Integer)\n    begin\n${statements}\n    end;\n\n    procedure Foo(C: Integer)\n    begin\n    end;\n\n    procedure "My Q"(C: Integer)\n    begin\n    end;\n}\n`;
   const cases: ReadonlyArray<readonly [string, string]> = [
     ["a replacement before `else`", "        if A then\n            Foo(C + 1)else Foo(C);"],
     ["a wrap before `end`", "        if A then begin\n            if C > 0 then Foo(C + 1)end;"],
@@ -460,6 +460,9 @@ describe("R853: glued source emits separate words", () => {
     ["a list marker after `repeat`", `        repeat"My Q"(C + 1);until C > 0;`],
     ["a replacement after `if`", `        if"A"then Foo(C);`],
     ["a marker after `begin`", `        if A then begin"My Q"(C + 1)end;`],
+    // The loop's own mutant makes the loop the root, so its statement sits in a slot.
+    ["a slot wrap after `do`", `        while A do"D" := C + 1;`],
+    ["a slot wrap before `until`", `        repeat if A then D := C + 1until"A";`],
   ];
   for (const [name, statements] of cases) {
     test(name, async () => {
