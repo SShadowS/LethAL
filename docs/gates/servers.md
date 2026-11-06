@@ -177,8 +177,10 @@ cache (dir 0555, files 0444) with no error (`/coord/handoff/R-599/symcache/alc-r
 - What it holds: `System` plus every Microsoft dependency of a `PUBLISH_PLAN` target (today `System`
   alone). A dependent's own symbols are not put there.
 
-The databases are in memory. A container restart or a server1 reboot resets each server to a fresh
-CRONUS with no LethAL app on it. The script is idempotent, so re-running it is the fix.
+The databases are in memory. Restarting sql and BC together, or a server1 reboot, resets a server to a fresh CRONUS with no LethAL app
+on it. An NST-only restart KEEPS the database (2026-11-06, `bc1`): apps, schema and records stay, and setup still refuses a stranded row. The
+script is idempotent, so after a full reset re-running it is the fix. A local quarantine record outlives either, so clear it after the recycle
+with `lethal clear-quarantine --config <path>`.
 - **bc3's Continia stack is lost too.** Republish it with `--with-continia --accept-build 28.4.53241.56646` (R594's
   accepted build). The 22-23 Oct restart needed this; R679's stop message now names the flag.
 - **A server with an out-of-use marker** needs `LETHAL_OUT_OF_USE_CLEARING=<server>` on that one setup command
@@ -214,7 +216,7 @@ is republished. `lethal run` refuses at that point with `UpgradeNotRestoredError
 **To recover.** The scripts cannot do it on their own. The stripped target is one row that is NOT installed, and
 `decideApp` (`scripts/bc-app-content.ts`) refuses that as `content-unknown`. So both `bc-linux-setup.ts` and
 `bc-republish.ts` stop with "NOTHING was published". They refuse by name and damage nothing.
-1. On `bc1`-`bc3`: ask the owner to restart the server. Its databases are in memory, so the restart also clears the
+1. On `bc1`-`bc3`: ask the owner to restart sql and BC together, not the NST alone, which keeps the database. That reset also clears the
    installed-version record ([R605](../roadmap/R605.md)). Then run `bun scripts/bc-linux-setup.ts --server bcN` under
    the server's lease. It publishes the targets and then the tests apps from the current source.
    A gate server always gets setup and its proof afterwards, whichever way it came back.
