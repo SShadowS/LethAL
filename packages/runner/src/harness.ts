@@ -576,7 +576,7 @@ export class HarnessVerifier {
   }
 
   /**
-   * R847 (control app, not yet published): who owns each object in `items`, read by key from AllObj.
+   * R847 (needs control app 1.0.0.25 or newer): who owns each object in `items`, read by key from AllObj.
    * ONE ROW PER ITEM READ, in order. Throws on every answer it cannot read as that: a `read` that is
    * not a whole number from 0 to `items.length`, a `rows` list of another length, a row that is not the
    * item at its place, an outcome that is not owner/none/unresolved, an owner with no app. Fewer rows

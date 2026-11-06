@@ -547,7 +547,7 @@ export interface ExecutionBackend {
   installedVersions?(appId: string): Promise<readonly string[]>;
 
   /**
-   * R847, OPTIONAL (needs the Part 2 control app): who owns each object, read by key. Present on bcdev
+   * R847, OPTIONAL (needs control app 1.0.0.25 or newer): who owns each object, read by key. Present on bcdev
    * only. One row per item read; a read cut short by `maxMs` answers fewer.
    */
   objectOwners?(
@@ -556,7 +556,7 @@ export interface ExecutionBackend {
     timeoutMs: number,
   ): Promise<import("./harness").OwnersRead<import("./harness").ObjectOwnerRow>>;
 
-  /** R847, OPTIONAL (needs the Part 2 control app): as `objectOwners`, for fields. */
+  /** R847, OPTIONAL (needs control app 1.0.0.25 or newer): as `objectOwners`, for fields. */
   fieldOwners?(
     items: readonly import("./harness").FieldItem[],
     maxMs: number,
