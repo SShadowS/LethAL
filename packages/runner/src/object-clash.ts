@@ -8,7 +8,7 @@
  *
  * Two sets are compared by (kind, id):
  *   A. the target: every object declaration in the source snapshot, plus the three injected codeunits.
- *   B. each INSTALLED dependent (direct dependents only: BC's list has no transitive ones), read from
+ *   B. each INSTALLED dependent, direct and (R845) transitive, read from
  *      the `SymbolReference.json` of the package the server holds. That is exactly what BC holds, so it
  *      has no `#if` question. When the tests app's package cannot be read, its source stands in, read
  *      under the tests build symbols; a refusal from that fallback says so.
@@ -26,7 +26,7 @@ import {
 import { readPackageEntry } from "./app-package";
 import { RECOVERY_DOC } from "./app-version";
 import { type PublishedPackageRead, isUnread } from "./backend";
-import { WALK_MAX_APPS, WALK_MAX_MS } from "./dependents-warning";
+import { WALK_MAX_APPS, WALK_MAX_MS, testsFirst } from "./dependents-warning";
 import { type InstalledDependent, UnfilteredExtensionsQueryError } from "./harness";
 import {
   type Container,
@@ -153,8 +153,13 @@ export function declaredObjectsOfSource(
     const live = (n: ALSyntaxNode): boolean =>
       arms.kind === "decided" && !startsInInactiveArm(arms.inactive, n.startIndex);
     const nsNode = root.children.find((k) => k.rawKind === "namespace_declaration");
-    const fileNamespace = (nsNode?.childForFieldName("name")?.text ?? "")
+    // The whole declaration's text: with a quoted segment the grammar keeps only the last segment
+    // in the `name` field (the rest sits in an ERROR node).
+    const fileNamespace = (nsNode?.text ?? "")
+      .replace(/^\s*namespace\b/i, "")
+      .replace(/;\s*$/, "")
       .replace(/\s+/g, "")
+      .replaceAll('"', "")
       .toLowerCase();
     const take = (
       kind: ClashKind,
@@ -174,7 +179,7 @@ export function declaredObjectsOfSource(
         ...(moved ? { moved: true } : {}),
       });
     };
-    const takeMembers = (c: ALSyntaxNode, stem: string, inside: boolean): void => {
+    const takeMembers = (c: ALSyntaxNode, stem: string): void => {
       if (!MEMBER_STEMS.has(stem)) return;
       const nameNode = c.childForFieldName("object_name");
       if (nameNode === null) return;
@@ -187,13 +192,23 @@ export function declaredObjectsOfSource(
           memberNotes.push(`${f.path}: ${stem} "${ownerName}" has no readable base object`);
           return;
         }
+        // The grammar puts only the FIRST segment of `extends A.B.C` in `base_object` (the rest sits
+        // in an ERROR node), so read the text from `extends` to the opening brace, comments dropped.
         const ek = c.children.find((k) => k.rawKind === "extends_keyword");
-        const pre = (ek === undefined ? "" : f.text.slice(ek.endIndex, base.startIndex))
-          .replace(/\s+/g, "")
-          .replace(/\.+$/, "");
-        const split = splitQualified(base.text);
+        const open = c.children.find((k) => k.rawKind === "{");
+        if (ek === undefined || open === undefined) {
+          memberNotes.push(`${f.path}: ${stem} "${ownerName}" has no readable extends clause`);
+          return;
+        }
+        const clause = f.text
+          .slice(ek.endIndex, open.startIndex)
+          .replace(/"(?:[^"]|"")*"|\/\/[^\n]*|\/\*[\s\S]*?\*\//g, (m) =>
+            m.startsWith('"') ? m : " ",
+          )
+          .trim();
+        const split = splitQualified(clause);
         ownerName = split.name;
-        qualifier = [pre.replaceAll('"', ""), split.qualifier].filter((s) => s !== "").join(".");
+        qualifier = split.qualifier;
       } else {
         const container = stem === "table" ? "Table" : "Enum";
         owners.set(`${container}:${ownerName.toLowerCase()}`, fileNamespace);
@@ -204,7 +219,6 @@ export function declaredObjectsOfSource(
         ownerName,
         f.path,
         live,
-        inside,
       );
       memberNotes.push(...got.bad);
       // A parse error can swallow a field whole (`field(x; ...)` makes no field node). A qualified
@@ -256,7 +270,7 @@ export function declaredObjectsOfSource(
           if (kind === undefined) continue;
           if (inside && !live(c)) continue;
           take(kind, c.childForFieldName("object_id"), c.childForFieldName("object_name"), c);
-          takeMembers(c, raw.slice(0, -12), inside);
+          takeMembers(c, raw.slice(0, -12));
         }
       }
     };
@@ -621,7 +635,7 @@ export async function checkObjectClashes(args: ObjectClashCheckArgs): Promise<st
   const warnings: string[] = [];
   if (!Array.isArray(args.dependents)) return warnings;
   const dependents: readonly InstalledDependent[] = [
-    ...(args.dependents as readonly InstalledDependent[]),
+    ...testsFirst(args.dependents as readonly InstalledDependent[], args.testsAppId),
     ...args.transitive,
   ];
   if (dependents.length === 0) return warnings;

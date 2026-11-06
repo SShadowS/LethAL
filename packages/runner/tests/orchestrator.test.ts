@@ -5629,8 +5629,10 @@ describe("runSession — Layer 5A deployment identity", () => {
 
   test("R709: a compile verdict carrying the restore words is not a restore refusal", () => {
     // red when upgradeNotRestored reads an AlcCompileError (its text is alc's output, R461)
-    expect(upgradeNotRestored(new AlcCompileError(R709_RESTORE))).toBeUndefined();
-    expect(upgradeNotRestored(new Error(R709_RESTORE))).toBeInstanceOf(UpgradeNotRestoredError);
+    expect(upgradeNotRestored(new AlcCompileError(R709_RESTORE), undefined)).toBeUndefined();
+    expect(upgradeNotRestored(new Error(R709_RESTORE), undefined)).toBeInstanceOf(
+      UpgradeNotRestoredError,
+    );
   });
 
   // R-422: a project app.json written on Windows names its logo and resource folders with `\`,

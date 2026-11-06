@@ -20,8 +20,8 @@ export type Container = "Table" | "Enum";
 export type MemberRule = "field-id" | "field-name" | "enum-ordinal" | "enum-value-name";
 
 /** The Microsoft apps the AL toolchain names in `app.json` (Base Application, System Application,
- *  Business Foundation, Application, System), 32 hex, no dashes, lower case. A target's own
- *  `dependencies` with publisher Microsoft count too. */
+ *  Business Foundation, Application, System), 32 hex, no dashes, lower case. Any app in the
+ *  target's own `dependencies` counts too (`trusted`), whatever its publisher. */
 const MICROSOFT_APP_IDS: ReadonlySet<string> = new Set([
   "437dbf0e84ff417a965ded2bb9650972",
   "63ca2fa44f034f2ba480172fef340d3f",
@@ -121,7 +121,6 @@ export function readSourceMembers(
   ownerName: string,
   file: string,
   live: (n: ALSyntaxNode) => boolean,
-  startsInPreproc: boolean,
 ): MemberRead {
   const container: Container = stem.startsWith("table") ? "Table" : "Enum";
   const memberKind = container === "Table" ? "field_declaration" : "enum_value_declaration";
@@ -156,7 +155,7 @@ export function readSourceMembers(
       }
     }
   };
-  walk(decl, startsInPreproc);
+  walk(decl, false);
   return { members, bad };
 }
 

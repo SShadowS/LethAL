@@ -62,6 +62,17 @@ export interface DependentsRead {
 export const WALK_MAX_APPS = 40;
 export const WALK_MAX_MS = 120_000;
 
+/** The tests app (by lower-case id) first, the rest in the order given. The walk and the clash
+ *  check share it, so the bound of 40 apps can never cut the tests app. */
+export function testsFirst(
+  apps: readonly InstalledDependent[],
+  testsAppId: string | undefined,
+): InstalledDependent[] {
+  return [...apps].sort(
+    (a, b) => Number(b.id.toLowerCase() === testsAppId) - Number(a.id.toLowerCase() === testsAppId),
+  );
+}
+
 /**
  * R845: the apps that depend on the direct dependents, and so on, breadth first, the tests app's
  * branch first. `installedDependents` takes any app id. The visited set starts with the target's own
@@ -79,9 +90,7 @@ export async function walkTransitiveDependents(
     targetId.toLowerCase(),
     ...direct.map((d) => d.id.toLowerCase()),
   ]);
-  const queue = [...direct].sort(
-    (a, b) => Number(b.id.toLowerCase() === testsAppId) - Number(a.id.toLowerCase() === testsAppId),
-  );
+  const queue = testsFirst(direct, testsAppId);
   const transitive: InstalledDependent[] = [];
   const warnings: string[] = [];
   for (let at = 0; at < queue.length; at++) {

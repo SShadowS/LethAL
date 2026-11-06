@@ -718,7 +718,7 @@ describe("publish ceiling — wired into the session (R90)", () => {
     ],
     [
       "Metadata delta application failed",
-      "An error occurred while applying changes. The error was: NavErrorException - Metadata delta application failed due to the following error(s):",
+      "An error occurred while applying changes. Failing delta: Type: 'EnumValueAddDelta'; The error was: NavErrorException - Metadata delta application failed due to the following error(s):",
     ],
   ];
   for (const [label, text] of CLASH_TEXTS) {

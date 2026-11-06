@@ -2016,13 +2016,17 @@ function targetObjectIdsOf(sources: Iterable<readonly [string, string]>): Readon
  *  output, R461). */
 export function upgradeNotRestored(
   err: unknown,
+  /** The installed dependents listed before the publish ("name version" each); undefined: unread. */
+  dependents: readonly string[] | undefined,
 ): UpgradeNotRestoredError | UpgradeClashRefusedError | undefined {
   if (err instanceof AlcCompileError) return undefined;
   const text = messageOf(err);
   if (restoreFailed(text)) return new UpgradeNotRestoredError(text);
   // R845 (U3): a clash with an app that is not a dependent: BC made no restore attempt, and said so
   // by saying nothing. The target and its dependents are gone all the same.
-  return clashRefusedWithoutRestore(text) ? new UpgradeClashRefusedError(text) : undefined;
+  return clashRefusedWithoutRestore(text)
+    ? new UpgradeClashRefusedError(text, dependents)
+    : undefined;
 }
 
 /**
@@ -7062,6 +7066,9 @@ async function runSessionBody(
     let appJsonPathsWarned = false;
     // R727: once per run, before the FIRST target publish; warn only.
     let dependentsChecked = false;
+    // R845: the dependents that read found ("name version", direct then transitive), for the U3
+    // error; undefined until read, and when the read failed or the backend cannot list them.
+    let dependentNames: string[] | undefined;
     for (const [batchIdx, batchFiles] of artifacts.entries()) {
       // Layer 5C-B1 (design §6): a lease lost during THIS batch invalidates exactly THIS batch's
       // verdicts (at the loss and again at session end, R508) — earlier batches stand, every RunMutant in them having been
@@ -7424,6 +7431,11 @@ async function runSessionBody(
           dependentsTarget,
           Date.now,
         );
+        if (dependents !== null && Array.isArray(dependents.read)) {
+          dependentNames = [...dependents.read, ...dependents.transitive].map(
+            (d) => `${d.name} ${d.version}`,
+          );
+        }
         const dependentsMessage =
           dependents === null
             ? null
@@ -7494,7 +7506,7 @@ async function runSessionBody(
         }
         if (!deployed) {
           // R709: BC could not restore after a refused upgrade; never re-stamp past it.
-          const notRestored = upgradeNotRestored(deployErr);
+          const notRestored = upgradeNotRestored(deployErr, dependentNames);
           if (notRestored !== undefined) throw notRestored;
           // 3a. version conflict: BC's downgrade rejection is machine-parseable and names the
           // installed version verbatim. Re-stamp strictly above it, recompile, and retry
@@ -7524,7 +7536,7 @@ async function runSessionBody(
               );
               deployed = true;
             } catch (retryErr) {
-              const retryNotRestored = upgradeNotRestored(retryErr);
+              const retryNotRestored = upgradeNotRestored(retryErr, dependentNames);
               if (retryNotRestored !== undefined) throw retryNotRestored;
               const stillInstalled =
                 retryErr instanceof AlcCompileError

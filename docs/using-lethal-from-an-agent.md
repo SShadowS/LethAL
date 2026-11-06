@@ -1063,18 +1063,23 @@ it. LethAL then stops with `UpgradeNotRestoredError`, or with `UpgradeClashRefus
 no restore attempt. Both point here. This was measured on a BC server with no restart (see
 [R845](roadmap/R845.md) and [R709](roadmap/R709.md)):
 
-1. Read BC's text in the error. It names the clash, and lists the apps that could not be
-   reinstalled. The app that is not a dependent is not on the list: it is untouched.
+1. Read the error. After `UpgradeNotRestoredError` BC's text names the clash and lists the apps that
+   could not be reinstalled. After `UpgradeClashRefusedError` (a clash with an app that is not a
+   dependent) BC's text has NO such list; the error names the dependents LethAL listed before the
+   publish instead. The other app is untouched in both cases.
 2. Fix the clash in the target: change or remove the field, value or object. Give the target a
    version above every version BC has seen. The failed build counts, so a plain republish of the
    old number is refused.
 3. Publish the target over the dev endpoint, with nothing uninstalled first. BC replaces the
    stranded rows, and the app's data stays.
-4. Publish each listed dependent, the tests app first, at a version above its stranded row. The same
-   build is refused with "A duplicate package ID is detected": rebuild it with a higher version.
-5. Do not fall back to the old build of the target. With dependents involved BC says "a newer
-   version ... was already installed". After a `UpgradeClashRefusedError` the old build does
-   publish, but the clash is still there, so it only helps if you remove the other app.
+4. Publish each listed dependent in dependency order (an app before the apps that depend on it), each
+   at a version above its stranded row. The same build is refused with "A duplicate package ID is
+   detected": rebuild it with a higher version. Chains longer than one level, and the dependents
+   of an app stranded after `UpgradeClashRefusedError`: [pending measurement].
+5. Do not fall back to the old build of the target when dependents were involved: BC says "a newer
+   version ... was already installed". With no dependents (measured: the target and the other app
+   only) the old build did publish after a refused clash and both apps stayed installed. That is a
+   rollback, not a fix: your change is still not on the server.
 6. If you unpublished everything first, a dependent's same build publishes again, and the target
    must still be the higher version.
 

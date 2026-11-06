@@ -847,6 +847,12 @@ describe("R845: BC's three texts, through one helper", () => {
       ),
     ).toBeUndefined();
     expect(bcClashText("")).toBeUndefined();
+    // A metadata delta failure of another kind must not be blamed on an enum value, and a bare
+    // EnumValueAddDelta without the failure phrase is no refusal text either.
+    expect(
+      bcClashText("Failing delta: Type: 'FieldAddDelta'; Metadata delta application failed"),
+    ).toBeUndefined();
+    expect(bcClashText("Failing delta: Type: 'EnumValueAddDelta'")).toBeUndefined();
   });
 
   test("UpgradeNotRestoredError says each in BC's words, and not 'no longer compiles'", () => {
@@ -860,6 +866,11 @@ describe("R845: BC's three texts, through one helper", () => {
       expect(e.message).toContain(said[kind] ?? "?");
       expect(e.message).not.toContain("no longer compiles");
       expect(e.message).toContain("Recovering a stripped server");
+      // The recovery measured: no uninstall, no restart.
+      expect(e.message).not.toContain("uninstall and unpublish");
+      expect(e.message).not.toContain("needs a restart");
+      expect(e.message).toContain("nothing uninstalled first");
+      expect(e.message).toContain("dependency order");
     }
     // A text with none of the three keeps the compile wording.
     expect(new UpgradeNotRestoredError(`x${RESTORE_FAILED}`).message).toContain(
@@ -870,20 +881,257 @@ describe("R845: BC's three texts, through one helper", () => {
   test("U3: a clash text with no restore sentence is the named UpgradeClashRefusedError", () => {
     for (const text of Object.values(TEXTS)) {
       expect(clashRefusedWithoutRestore(text)).toBe(true);
-      const e = upgradeNotRestored(new Error(text));
+      const e = upgradeNotRestored(new Error(text), ["Resident Tests 1.2.3.4", "Far Away 1.0.0.0"]);
       expect(e).toBeInstanceOf(UpgradeClashRefusedError);
+      // BC names no dependent on this path: the error does, from the list LethAL read.
+      expect(e?.message).toContain("which BC removed: Resident Tests 1.2.3.4; Far Away 1.0.0.0");
       expect(e).not.toBeInstanceOf(UpgradeNotRestoredError);
       expect(e?.message).toContain("Recovering a stripped server");
       expect(e?.message).toContain("made no attempt to restore");
       // A restore that failed is the other error; a clean restore is neither.
       expect(clashRefusedWithoutRestore(text + RESTORE_FAILED)).toBe(false);
-      expect(upgradeNotRestored(new Error(text + RESTORE_FAILED))).toBeInstanceOf(
+      expect(upgradeNotRestored(new Error(text + RESTORE_FAILED), undefined)).toBeInstanceOf(
         UpgradeNotRestoredError,
       );
       const clean = `Publishing failed due to '${text}'. The original extensions have been restored.`;
       expect(clashRefusedWithoutRestore(clean)).toBe(false);
-      expect(upgradeNotRestored(new Error(clean))).toBeUndefined();
+      expect(upgradeNotRestored(new Error(clean), undefined)).toBeUndefined();
     }
+    // An unread or empty dependents list is said as such, not as an empty "removed" list.
+    const text = Object.values(TEXTS)[0] ?? "";
+    expect(upgradeNotRestored(new Error(text), undefined)?.message).toContain(
+      "could not list the target's dependents",
+    );
+    expect(upgradeNotRestored(new Error(text), [])?.message).toContain(
+      "listed no installed dependent",
+    );
     expect(clashRefusedWithoutRestore("some other publish failure")).toBe(false);
+  });
+});
+
+describe("R845 review: qualified extends, read with a real parse", () => {
+  const THIRD = "5e51037273b74af1841e42184d5d7479";
+  const members = async (header: string, extra = "") => {
+    await initParser();
+    const got = declaredObjectsOfSource(
+      [
+        {
+          path: "q.al",
+          text: `${extra}${header}\n{\n    fields\n    {\n        field(5; Mine; Integer) { }\n    }\n}\n`,
+        },
+      ],
+      [],
+    );
+    return got.members.map((m) => [m.ownerName, m.own, m.id]);
+  };
+
+  test("the LAST segment is the owner, whether or not it is quoted", async () => {
+    expect(await members('tableextension 1 "E" extends Microsoft.Sales.Customer.Customer')).toEqual(
+      [["Customer", false, 5]],
+    );
+    expect(await members('tableextension 1 "E" extends "My Co".App.Tq')).toEqual([
+      ["Tq", false, 5],
+    ]);
+    expect(await members('tableextension 1 "E" extends Foo.Two."Other Name"')).toEqual([
+      ["Other Name", false, 5],
+    ]);
+    expect(await members('tableextension 1 "E" extends "pub table"')).toEqual([
+      ["pub table", false, 5],
+    ]);
+    expect(await members('tableextension 1 "E" extends Customer')).toEqual([
+      ["Customer", false, 5],
+    ]);
+    // Comments and line breaks inside the clause are dropped.
+    expect(
+      await members(
+        'tableextension 1 "E" extends Microsoft. /* c */ Sales // note\n    .Customer.Customer',
+      ),
+    ).toEqual([["Customer", false, 5]]);
+    // A comment after the name holds a dot: it must not be read as the last segment.
+    expect(
+      await members('tableextension 1 "E" extends Microsoft.Customer /* see a.b */ // end.of.line'),
+    ).toEqual([["Customer", false, 5]]);
+  });
+
+  test("an unquoted qualified base reaches the comparison: L3e on a Microsoft table refuses", async () => {
+    await initParser();
+    const dep = pkg({
+      TableExtensions: [
+        {
+          Id: 1,
+          Name: "DepTE",
+          TargetObject: `#${THIRD}#Customer`,
+          Fields: [{ Id: 5, Name: "DepField" }],
+        },
+      ],
+    });
+    const e = await refusal(
+      check({
+        targetFiles: [
+          {
+            path: "X.al",
+            text: 'tableextension 50300 "Mine" extends Microsoft.Sales.Customer.Customer\n{\n    fields\n    {\n        field(5; Mine; Integer) { }\n    }\n}\n',
+          },
+        ],
+        targetDependencies: [{ id: THIRD }],
+        fetchPackage: async () => dep,
+      }),
+    );
+    expect(e.memberFindings.map((f) => [f.rule, f.ownerName])).toEqual([["field-id", "Customer"]]);
+  });
+
+  test("a quoted namespace on both sides: a qualified own extends is own", async () => {
+    const own =
+      'namespace "My Co".App;\n\ntable 1 "T"\n{\n    fields { field(1; A; Integer) { } }\n}\n\n';
+    expect(await members('tableextension 2 "E" extends "My Co".App.T', own)).toEqual([
+      ["T", true, 1],
+      ["T", true, 5],
+    ]);
+    // Another namespace's T is not the target's.
+    expect(await members('tableextension 2 "E" extends "Other Co".App.T', own)).toEqual([
+      ["T", true, 1],
+      ["T", false, 5],
+    ]);
+  });
+});
+
+describe("R845 review: Moved, each property alone, both sides", () => {
+  const movedOf = async (props: string) => {
+    await initParser();
+    const got = declaredObjectsOfSource(
+      [
+        {
+          path: "m.al",
+          text: `table 1 "M"\n{\n    ${props}\n    fields\n    {\n        field(1; F; Integer)\n        {\n            ${props}\n        }\n    }\n}\n`,
+        },
+      ],
+      [],
+    );
+    return [got.objects[0]?.moved === true, got.members[0]?.moved === true];
+  };
+  const GUID = "'11111111-1111-4111-8111-111111111111'";
+
+  test("source: ObsoleteState = Moved, MovedTo and MovedFrom each make a member and a table Moved", async () => {
+    expect(await movedOf("ObsoleteState = Moved;")).toEqual([true, true]);
+    expect(await movedOf(`MovedTo = ${GUID};`)).toEqual([true, true]);
+    expect(await movedOf(`MovedFrom = ${GUID};`)).toEqual([true, true]);
+    // Not Moved: another obsolete state, or no property at all.
+    expect(await movedOf("ObsoleteState = Pending;")).toEqual([false, false]);
+    expect(await movedOf("")).toEqual([false, false]);
+  });
+
+  test("package: each property alone makes a member Moved; a Properties entry that is not Moved does not", () => {
+    const read = (props: unknown[]) => {
+      const e = readExtensionEntry(
+        {
+          TargetObject: `#${THIRD_APP}#T`,
+          Name: "X",
+          Fields: [{ Id: 5, Name: "F", Properties: props }],
+        },
+        "Table",
+      );
+      return "members" in e && e.members[0]?.moved;
+    };
+    expect(read([{ Name: "ObsoleteState", Value: "Moved" }])).toBe(true);
+    expect(read([{ Name: "MovedTo", Value: "x" }])).toBe(true);
+    expect(read([{ Name: "MovedFrom", Value: "x" }])).toBe(true);
+    expect(read([{ Name: "ObsoleteState", Value: "Pending" }])).toBe(false);
+    expect(read([])).toBe(false);
+  });
+
+  test("the dependent's own table marked Moved warns, naming the dependent, and does not refuse", async () => {
+    await initParser();
+    const warnings = await check({
+      targetFiles: [
+        {
+          path: "T.al",
+          text: 'table 50400 "My Tbl"\n{\n    fields { field(1; Code; Code[10]) { } }\n}\n',
+        },
+      ],
+      fetchPackage: async () =>
+        pkg({
+          Tables: [{ Id: 50400, Name: "Theirs", Properties: [{ Name: "MovedFrom", Value: "x" }] }],
+        }),
+    });
+    expect(warnings.join("\n")).toContain("Table 50400 is marked Moved on Resident Tests");
+  });
+});
+
+const THIRD_APP = "5e51037273b74af1841e42184d5d7479";
+
+describe("R845 review: compareMembers details", () => {
+  const t = (over: Partial<SourceMember> = {}): SourceMember => ({
+    container: "Table",
+    ownerName: "Customer",
+    ownerKey: "customer",
+    own: false,
+    id: 5,
+    name: "Mine",
+    moved: false,
+    where: "T.al",
+    ...over,
+  });
+  const o = (over: Partial<PackageMember> = {}): PackageMember => ({
+    container: "Table",
+    ownerApp: THIRD_APP,
+    ownerName: "Customer",
+    ownerKey: "customer",
+    id: 5,
+    name: "Theirs",
+    moved: false,
+    where: "SymbolReference.json",
+    ...over,
+  });
+  const ctx = { targetApp: TARGET_BARE, otherApp: bareAppId(DEP_ID), trusted: new Set<string>() };
+
+  test("each of the five Microsoft apps is trusted without a dependency entry", () => {
+    const ids = [
+      ["Base Application", "437dbf0e84ff417a965ded2bb9650972"],
+      ["System Application", "63ca2fa44f034f2ba480172fef340d3f"],
+      ["Business Foundation", "f3552374a1f24356848e196002525837"],
+      ["Application", "c133504230024257bf8a75c898ccb1b8"],
+      ["System", "8874ed3a064342479ced7a7002f7135d"],
+    ] as const;
+    for (const [name, id] of ids) {
+      const got = compareMembers([t()], [o({ ownerApp: id })], ctx);
+      expect([name, got.clashes.length]).toEqual([name, 1]);
+    }
+  });
+
+  test("the same pair listed twice is one clash", () => {
+    const got = compareMembers(
+      [t({ own: true })],
+      [o({ ownerApp: TARGET_BARE }), o({ ownerApp: TARGET_BARE })],
+      ctx,
+    );
+    expect(got.clashes).toHaveLength(1);
+  });
+});
+
+describe("R845 review: the tests app is read first, whatever BC's order and the bound", () => {
+  test("with more than 40 direct dependents and the tests app last, it is still read", async () => {
+    await initParser();
+    const many = Array.from(
+      { length: WALK_MAX_APPS + 5 },
+      (_, i): InstalledDependent => ({
+        id: `00000000-0000-4000-8000-${String(i + 1).padStart(12, "0")}`,
+        name: `App${i + 1}`,
+        publisher: "P",
+        version: "1.0.0.0",
+      }),
+    );
+    const tests = many[many.length - 1] as InstalledDependent;
+    const fetched: string[] = [];
+    await check({
+      dependents: many,
+      testsAppId: tests.id,
+      fetchPackage: async (app) => {
+        fetched.push(app.name);
+        const d = many.find((m) => m.name === app.name);
+        return pkg({}, d?.id, "1.0.0.0");
+      },
+    });
+    expect(fetched[0]).toBe(tests.name);
+    expect(fetched).toHaveLength(WALK_MAX_APPS);
   });
 });

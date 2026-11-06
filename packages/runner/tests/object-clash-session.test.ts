@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
+import { UpgradeClashRefusedError } from "../src/app-version";
 import type {
   BackendCapabilities,
   BackendStatus,
@@ -159,8 +160,11 @@ class ClashBackend implements ExecutionBackend {
   async status(): Promise<BackendStatus> {
     return { ok: true, details: "r843" };
   }
+  /** R845: when set, every deploy throws this message after counting itself. */
+  deployError: string | undefined;
   async deploy(): Promise<null> {
     this.deploys++;
+    if (this.deployError !== undefined) throw new Error(this.deployError);
     return null;
   }
   async compileCheck(): Promise<void> {}
@@ -203,6 +207,8 @@ interface Setup {
   readonly byParent?: Readonly<Record<string, readonly InstalledDependent[] | Error>>;
   /** R845: the target's app.json text, to give it `dependencies`. */
   readonly appJson?: string;
+  /** R845: the publish fails with this text (a U3 refusal). */
+  readonly deployError?: string;
 }
 
 async function drive(s: Setup) {
@@ -222,6 +228,7 @@ async function drive(s: Setup) {
     s.packages ?? new Map([[TEST_APP.name, residentTestsApp()]]),
     s.byParent,
   );
+  backend.deployError = s.deployError;
   const warnings: Array<{ code: string; message: string }> = [];
   const store = new ResultsStore(":memory:");
   const outcome = await runSession({
@@ -486,6 +493,26 @@ describe("R845: fields, enum values and transitive dependents, refused before an
     expect(without.warnings.some((x) => x.message.includes("may be another app's table"))).toBe(
       true,
     );
+  });
+
+  test("U3: a publish refused over an app the check could not see names the dependents LethAL listed", async () => {
+    const r = await drive({
+      dependents: [TESTS_DEP],
+      byParent: { [TARGET_ID]: [TESTS_DEP], [TEST_APP.id.toLowerCase()]: [OTHER_DEP] },
+      packages: new Map([
+        [TEST_APP.name, residentTestsApp()],
+        ["Other App", otherApp({})],
+      ]),
+      deployError:
+        "The field ID '5' can only appear once in the table 'Customer'. The field is declared in multiple apps",
+    });
+    expect("error" in r).toBe(true);
+    const e = "error" in r ? r.error : undefined;
+    expect(e).toBeInstanceOf(UpgradeClashRefusedError);
+    expect((e as Error).message).toContain(
+      "which BC removed: Sandbox Tests 1.0.0.0; Other App 2.3.4.5",
+    );
+    expect(r.backend.deploys).toBe(1);
   });
 
   test("a failed read of one level warns by name (object-clash-unchecked) and the run goes on", async () => {

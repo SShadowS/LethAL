@@ -167,7 +167,9 @@ export type BcClashText = "object" | "field" | "enum-value";
 const BC_CLASH_TEXTS: ReadonlyArray<readonly [BcClashText, RegExp]> = [
   ["object", /defined in multiple apps/i],
   ["field", /can only appear once in the table/i],
-  ["enum-value", /Metadata delta application failed/i],
+  // A delta failure of another kind probably carries the second phrase alone: both are required, or
+  // an unrelated metadata failure would be blamed on an enum value.
+  ["enum-value", /(?=[\s\S]*EnumValueAddDelta)(?=[\s\S]*Metadata delta application failed)/i],
 ];
 
 /**
@@ -245,13 +247,13 @@ export class UpgradeNotRestoredError extends Error {
         "BC refused to upgrade the target and could not restore the previous version (R709). ",
         cause,
         "BC has left the target UNINSTALLED and REMOVED every installed app that depends on it, the tests ",
-        "app at least; BC's text below names them. LethAL did not retry. To recover: uninstall ",
-        "and unpublish the stranded target, then publish the target, the tests app built from ",
-        "your CURRENT source, and every other app BC names. On a LethAL gate server (bc1-bc3) ",
-        "the setup script refuses this state: ask the owner to restart the server, then run ",
-        "`bun scripts/bc-linux-setup.ts --server bcN` (docs/gates/servers.md, R709). If BC ",
-        "refuses an old version as a downgrade, its installed-version record needs a restart ",
-        `(R605). On your own server, with no restart: ${RECOVERY_DOC}. `,
+        "app at least; BC's text below names them. LethAL did not retry. To recover, with no ",
+        "restart and nothing uninstalled first: fix the cause, publish the target at a version ",
+        "above every version BC has seen (the failed build counts), then publish each app BC ",
+        "lists, in dependency order, each at a version above its stranded row. Do not fall back ",
+        "to the old build of the target. The steps and what was measured: ",
+        `${RECOVERY_DOC}. On a LethAL gate server (bc1-bc3) the setup script refuses this state: `,
+        "`bun scripts/bc-linux-setup.ts --server bcN` (docs/gates/servers.md, R709). ",
         `${notReinstalledSentence(bcText)}BC said: ${bcText}`,
       ].join(""),
     );
@@ -268,7 +270,15 @@ export class UpgradeNotRestoredError extends Error {
  * `Error` directly.
  */
 export class UpgradeClashRefusedError extends Error {
-  constructor(bcText: string) {
+  /** `dependents`: the installed dependents LethAL listed before the publish (direct and
+   *  transitive), which BC does not name on this path; undefined when the list could not be read. */
+  constructor(bcText: string, dependents?: readonly string[]) {
+    const stripped =
+      dependents === undefined
+        ? "LethAL could not list the target's dependents before the publish, and BC names none here. "
+        : dependents.length === 0
+          ? "LethAL listed no installed dependent of the target before the publish. "
+          : `The dependents LethAL listed before the publish, which BC removed: ${dependents.join("; ")}. `;
     super(
       [
         "BC refused the target's publish over a clash with another installed app, and made no ",
@@ -276,7 +286,9 @@ export class UpgradeClashRefusedError extends Error {
         clashCause(bcClashText(bcText)),
         "The other app is not a dependent of the target, so LethAL could not see it. In ",
         "measurements BC then had NO version of the target installed, and none of the target's ",
-        "dependents (the tests app at least); the other app was untouched. LethAL did not retry. ",
+        "dependents; the other app was untouched. ",
+        stripped,
+        "LethAL did not retry. ",
         `To recover, with no restart: ${RECOVERY_DOC}. BC said: ${bcText}`,
       ].join(""),
     );

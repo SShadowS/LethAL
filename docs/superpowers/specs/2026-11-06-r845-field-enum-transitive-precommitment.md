@@ -34,7 +34,7 @@ scratch apps, `bc1` for upgrades, `bc2` for fresh publishes.
 | L5 | field names differing only in CASE (alc refuses these, AL0155) |
 | L6a, L6b | page control and action names |
 | L6d | same-kind object, same name, other id |
-| F3b | one id across kinds (enum, codeunit) |
+| f3c, f3d | one id across kinds (enum, codeunit), fresh publish |
 
 **A clashing pair cannot be installed.** BC recompiles a dependent at publish: L1, L3a-d were refused cleanly, the originals restored. So
 comparing all of the target's fields is as safe as comparing only new ones: no installed pair can trip it, and BC's text ("can only appear
