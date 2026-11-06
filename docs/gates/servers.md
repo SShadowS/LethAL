@@ -177,8 +177,10 @@ cache (dir 0555, files 0444) with no error (`/coord/handoff/R-599/symcache/alc-r
 - What it holds: `System` plus every Microsoft dependency of a `PUBLISH_PLAN` target (today `System`
   alone). A dependent's own symbols are not put there.
 
-The databases are in memory. A container restart or a server1 reboot resets each server to a fresh
-CRONUS with no LethAL app on it. The script is idempotent, so re-running it is the fix.
+The databases are in memory. Restarting sql and BC together, or a server1 reboot, resets a server to a fresh CRONUS with no LethAL app
+on it. An NST-only restart KEEPS the database (2026-11-06, `bc1`): apps, schema and records stay, and setup still refuses a stranded row. The
+script is idempotent, so after a full reset re-running it is the fix. A local quarantine record outlives either, so clear it after the recycle
+with `lethal clear-quarantine --config <path>`.
 - **bc3's Continia stack is lost too.** Republish it with `--with-continia --accept-build 28.4.53241.56646` (R594's
   accepted build). The 22-23 Oct restart needed this; R679's stop message now names the flag.
 - **A server with an out-of-use marker** needs `LETHAL_OUT_OF_USE_CLEARING=<server>` on that one setup command
@@ -214,7 +216,7 @@ is republished. `lethal run` refuses at that point with `UpgradeNotRestoredError
 **To recover.** The scripts cannot do it on their own. The stripped target is one row that is NOT installed, and
 `decideApp` (`scripts/bc-app-content.ts`) refuses that as `content-unknown`. So both `bc-linux-setup.ts` and
 `bc-republish.ts` stop with "NOTHING was published". They refuse by name and damage nothing.
-1. On `bc1`-`bc3`: ask the owner to restart the server. Its databases are in memory, so the restart also clears the
+1. On `bc1`-`bc3`: ask the owner to restart sql and BC together, not the NST alone, which keeps the database. That reset also clears the
    installed-version record ([R605](../roadmap/R605.md)). Then run `bun scripts/bc-linux-setup.ts --server bcN` under
    the server's lease. It publishes the targets and then the tests apps from the current source.
    A gate server always gets setup and its proof afterwards, whichever way it came back.
@@ -266,6 +268,12 @@ and in what else is installed (`bc3` carries the Continia stack). Admitting a ne
 pair is one ordinary run of the gate there; add the pair to this table when it passes.
 
 ### server1 (192.168.2.157), the default host since 2026-11-05
+
+**`bc1` is proven for `itest:bcdev` ONLY since its reset on 2026-11-06.** It was reset to a fresh CRONUS at 07:49Z, so its R-813 rows below do not stand: run
+no other gate there until each is re-proven. Setup and `itest:bcdev` passed at master 6f581651, per mutant, equal to the baseline
+(`/coord/handoff/R-845/bc1-restart/`). Its build differs from the others: Base Application, System Application, Library Assert and Test Runner
+are 28.4.53241.56590 on `bc1`, against .56646 on `bc2` and `bc3`; System is 28.0.54946.56477. `bc1` has only ever been proven at that build
+under R-813's rows; a figure difference there is still a BLOCK, not explained by the build.
 
 Proven on 2026-11-05 by R-813, master 0602b3b8, LethAL Control 1.0.0.24, one coord lease per gate, each released. Every
 gate equalled its baseline or its own checks, and its first line named `192.168.2.157` and the server's port. Each
