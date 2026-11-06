@@ -10,7 +10,7 @@
  */
 import { type SpanEdit, joinEdits } from "@lethal/engine";
 import type { CompilePlan, PlannedPayload } from "./compile-plan";
-import { emitDispatch, endsInTerminator, guardOpen } from "./dispatch-emit";
+import { emitDispatch, emitDispatchOpen, endsInTerminator, guardOpen } from "./dispatch-emit";
 
 /** I4: the only failure EMIT can raise, and it is a crash of the run, never a refusal. */
 export const EMIT_CRASHES = ["RangeError: Invalid string length"] as const;
@@ -32,11 +32,25 @@ export function emitFile(plan: CompilePlan): string {
 function payloadText(source: string, start: number, end: number, p: PlannedPayload): string {
   if (p.kind === "text") return p.text;
   if (p.kind === "guard") return guardOpen(p.member, p.latch, p.selector);
+  if (p.kind === "chain-open") {
+    const { rootStart, rootEnd } = p.component;
+    return emitDispatchOpen(
+      source.slice(rootStart, rootEnd),
+      p.component,
+      p.latch,
+      p.selector,
+      p.wrap,
+    );
+  }
   // The chain replaces exactly the root's span, which is this edit's span.
   const original = source.slice(start, end);
   const chain = emitDispatch(original, p.component, p.latch, p.selector);
-  if (!p.wrap) return chain;
+  // A chain ending in `end` (no `;`) must not touch the source after it: `Foo(C + 1)end` would read
+  // `endend` (AL0111). A space, never a newline: no line moves.
+  const next = source[end];
+  const gap = !endsInTerminator(original) && next !== undefined && !/[\s;]/.test(next) ? " " : "";
+  if (!p.wrap) return `${chain}${gap}`;
   // The `begin ... end` wrap (PLAN decided it; see `needsWrap`). Its closing `;` is reproduced if
   // and only if the consumed root text ended in one.
-  return `begin\n${chain}\nend${endsInTerminator(original) ? ";" : ""}`;
+  return `begin\n${chain}\nend${endsInTerminator(original) ? ";" : ""}${gap}`;
 }
