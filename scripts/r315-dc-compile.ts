@@ -44,6 +44,14 @@ import type { InstrumentedFile, MutantManifest } from "../packages/schemata/src/
 import { CONTROL_APP } from "./bc-linux-setup";
 import { stageCompileOnlyBatch } from "./campaign/compile-only";
 
+/**
+ * R855: only a build that succeeded proves the emit. A failed one may have bound no source at all:
+ * AL1022 has no file position, so it counts 0 errors, and AL0327 can stop before any body is read.
+ */
+export function closesOf(instrumentedExit0: boolean, emitErrors: number): boolean {
+  return instrumentedExit0 && emitErrors === 0;
+}
+
 export interface Args {
   readonly projectDir: string;
   readonly symbolsDir: string;
@@ -431,8 +439,7 @@ async function main(args: Args): Promise<void> {
         emit: { errors: emit.length, byCode: summarize(emit) },
         environment: { errors: environment.length, byCode: summarize(environment) },
       },
-      // R855: a failed build with no positioned error bound no source (AL1022), so it proves nothing.
-      closes: inst.exit0 || (emit.length === 0 && iDiags.length > 0),
+      closes: closesOf(inst.exit0, emit.length),
     };
     await writeFile(join(args.outDir, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`);
     console.log(JSON.stringify(summary, null, 2));
