@@ -92,13 +92,23 @@ export const REACH_MARKER = (
 ): string =>
   `if not ${latch} then begin ${selector}.Reached('${mutantId}'); ${latch} := true; end;`;
 
+/** R853: true when `b` straight after `a` would read as one word. */
+export function wouldGlue(a: string, b: string): boolean {
+  // One character from each: `a` can be a whole root, read once per member.
+  return /[\p{L}\p{N}_]/u.test(a.slice(-1)) && /[\p{L}\p{N}_]/u.test(b.charAt(0));
+}
+
 /**
  * The member's branch text, with the marker where PLAN placed it (GH-24 plan, Decisions 4 and 5).
  * The root's text with the member's splice applied, built from `SpliceParts` only.
  */
 function branchText(original: string, m: PlannedMember, latch: string, selector: string): string {
   const { splice, place } = m;
-  const text = original.slice(0, splice.relStart) + splice.insert + original.slice(splice.relEnd);
+  const before = original.slice(0, splice.relStart);
+  const after = original.slice(splice.relEnd);
+  // R853: glued source (`Foo(C + 1)else`) must not run into the replacement (`endelse`).
+  const lead = wouldGlue(before, splice.insert) ? " " : "";
+  const text = `${before}${lead}${splice.insert}${wouldGlue(splice.insert, after) ? " " : ""}${after}`;
   if (place.kind === "none") return text;
   const marker = REACH_MARKER(m.mutantId, latch, selector);
   if (place.kind === "root") return `${marker} ${text}`;
@@ -109,10 +119,17 @@ function branchText(original: string, m: PlannedMember, latch: string, selector:
     const at = start + place.beginEnd;
     return `${text.slice(0, at)} ${marker}${text.slice(at)}`;
   }
-  if (place.kind === "list") return `${text.slice(0, start)}${marker} ${text.slice(start)}`;
+  const head = text.slice(0, start);
+  if (place.kind === "list") {
+    // R853: `repeat"My Q"` must not give `repeatif`.
+    return `${head}${wouldGlue(head, marker) ? " " : ""}${marker} ${text.slice(start)}`;
+  }
   // R729. When `S`'s own text ends in a `;` (`if X then;`: the empty body's `;` is also the one
   // that ends `S` and the statement around it), the `begin ... end` wrap must reproduce it, or the
   // sibling after it loses its separator (AL0111). The same consumed-terminator rule as above.
   const s = text.slice(start, end);
-  return `${text.slice(0, start)}begin ${marker} ${s} end${endsInTerminator(s) ? ";" : ""}${text.slice(end)}`;
+  const open = `${wouldGlue(head, "begin") ? " " : ""}begin`; // R853: `do"D"` must not give `dobegin`.
+  const close = `end${endsInTerminator(s) ? ";" : ""}`;
+  const tail = text.slice(end);
+  return `${head}${open} ${marker} ${s} ${close}${wouldGlue(close, tail) ? " " : ""}${tail}`;
 }

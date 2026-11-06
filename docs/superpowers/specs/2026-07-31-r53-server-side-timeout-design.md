@@ -3,6 +3,7 @@
 **Status:** design **v2**, 2026-07-31. v1 was reviewed and found unsafe; see §9 for what changed
 and why. Measurement committed (`d2a3f13`, `scripts/r53-probe/`).
 **Decision taken:** ship behind an opt-in flag, default off (user, 2026-07-31).
+**Changed 2026-11-06, by the owner's ruling (GitHub #49, R833):** §4.2 now accepts one more answer after our own confirmed stop. See §4.2, §6 and §9's door 3. This is the pre-commitment for that change; no code had landed when it was written.
 
 ---
 
@@ -69,11 +70,38 @@ budget, so the 408 arrives on a socket it already destroyed. What v1 actually co
 `StopHungRun`'s own return value — a much weaker signal.
 
 **Invert it. At budget, do not abort.** Hold the original request open, fire `StopHungRun` on a
-second connection, and score `timeout-killed` **only if the original request then resolves as the
-408 whose body names the AL `StopSession` call.** Anything else quarantines.
+second connection, and score `timeout-killed` **only if the original request then resolves as one
+of two answers:**
 
-This is what makes the probe's central measurement load-bearing, and it is the only signal that
-proves end-to-end that the session stopped was the session serving **our** request. It also closes
+- **The 408 whose body names the AL `StopSession` call.** BC says, end to end, that it stopped the
+  session serving our request.
+- **Since 2026-11-06: HTTP 400, JSON object, `error.code` exactly `Internal_ServerError`, and a
+  trimmed `error.message` that is the whole of `begin transaction world not called CorrelationId:
+  <guid>.` (case exact, any run of white space between words, GUID lower-case hex), and only after
+  our own stop reads `confirmed`, and within 10 s of firing it.** `StopHungRun` said `stopped:true`,
+  for our op, and the 400 is the held request's own answer. Measured: 39 to 183 ms. The 10 s window is
+  what makes "this request ended because of our stop" a check and not an assumption; a slow server
+  loses a kill to a quarantine, never gains one. A 408 keeps the whole grace.
+
+Anything else quarantines, and so does that 400 with any other stop state or later than the window:
+no stop of ours, a stop refused or thrown, `already-completed`, or a stop never answered.
+
+**Why the rule changed.** BC 29 answers the 400 where BC 28 answers the 408. Measured on `bc4`
+(29.0.54011.57673), 2026-11-06: 6 of 6 hangs (busy loop, `Sleep`, database), 39 to 183 ms after the
+stop, never a 408; the progress row froze, the next test passed, lease release and acquire read true,
+with no restart. Quarantining them would turn every hang on BC 29 into a stranded server, which is
+the failure this design exists to end. R833 holds the table.
+
+**What the 400 is worth, and the limit of that evidence.** It is weaker than the 408: BC does not
+name the stop, so "the session we stopped is the session that served this request" rests on our own
+stop's answer plus this request ending at once. So it is carried as its own evidence on the row and
+its own caveat in the report, never folded into the 408's (§5). Limits, stated wherever this is cited:
+6 of 6 hangs; only 4 runs with no stop, in which the text never appeared; BC's own session list was
+not read; `bc4` is .57673 and the issue's server .57293. A BC build that uses this text for some other
+failure, after a confirmed stop of ours, would score wrongly.
+
+The 408 is what makes the probe's central measurement load-bearing, and it is the only signal that
+proves end-to-end that the session stopped was the session serving **our** request. Holding the request also closes
 the finish-at-budget+ε race for free: if the run completed just after the abort would have fired,
 the held request returns the real result and we score that instead of a manufactured timeout.
 
@@ -162,6 +190,8 @@ is that they require an opt-in flag, and that every one of them is written down.
 | situation | verdict |
 |---|---|
 | held request resolves as the 408 naming the AL stop | `timeout-killed`, budget recorded |
+| held request resolves as §4.2's exact 400, after our own stop read `confirmed` | `timeout-killed`, budget recorded, its own evidence and caveat (2026-11-06) |
+| that 400 with any other stop state, or any other 400 | quarantine |
 | held request resolves normally (run finished at budget+ε) | that result, scored honestly |
 | reconciliation says the op already completed | existing lost-ack retry — **not** a stop |
 | `StopHungRun` refused (tuple, tombstone, attempt/opSeq, `Session Id <= 0`) | quarantine |
@@ -204,6 +234,11 @@ matters more than the conclusion:
    scoring a test that may have passed. → §4.4.
 3. **The evidence was quietly swapped.** v1 called the 408 "the whole design" while aborting the
    socket it arrives on, then consumed `StopHungRun`'s return value instead. → §4.2.
+   **Reopened on purpose, 2026-11-06, by the owner's ruling.** The 400 path also leans on
+   `StopHungRun`'s answer, which is what this door warned of. What keeps it from being v1's fault:
+   the request is still held, so a run that finished still scores its real result; the 400's text
+   and our confirmed stop must BOTH hold; and the swap is not quiet, because the row carries its own
+   evidence and the report its own caveat.
 
 Plus: `MIN_CONTROL_VERSION` over a protocol bump (§4.6), explicit `Session Id <= 0` refusal (§4.5),
 `TryRecoverOp` semantics and stop-before-clear ordering (§4.4), and an unmeasured assumption

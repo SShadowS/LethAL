@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**16 of 832 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**15 of 833 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -335,8 +335,9 @@ that ordering is the priority.
 - **R844** · A run with some `error` mutants reads a higher score and says only `error N`: nothing states they are outside the score · [R844.md](docs/roadmap/R844.md) · done (1b213195): caveat some-errors, and a console line after score: giving the range the score could read…
 - **R843** · `lethal run` can strip a user's server: a target object with the same type and id as one in its test app is published, and BC removes the apps · [R843.md](docs/roadmap/R843.md) · done (c482126f)
 - **R845** · Clashes a pre-publish object list cannot see can still strip a server: field ids, enum values, non-dependents, transitive dependents · [R845.md](docs/roadmap/R845.md) · done (2a69245e); live leg passed on bc1, 2026-11-06
-- **R847** · A control-app action that reads AllObj and Field would let the pre-publish clash check see an installed app that is not a dependent · [R847.md](docs/roadmap/R847.md) · open on one line, built and merged by R-847: no live run has gone from a real clash to a refusal through the…
+- **R847** · A control-app action that reads AllObj and Field would let the pre-publish clash check see an installed app that is not a dependent · [R847.md](docs/roadmap/R847.md) · done (f4e17705)
 - **R852** · itest:verify failed once on lease-renew-unanswered, and the gate's mismatch error does not print the warning's message · [R852.md](docs/roadmap/R852.md) · open: the message logging landed (0b0cdc7a); the cause of the one failure stays open until it recurs or is…
+- **R855** · tree-sitter-al: valid AL fails at the parser's limit of 6 parse versions when `#if`-split blocks share an `if` chain · [R855.md](docs/roadmap/R855.md) · open, filed 2026-11-06 from R853; upstream https://github.com/SShadowS/tree-sitter-al/issues/40
 
 ## Product gaps a real project hits
 
@@ -512,7 +513,7 @@ that ordering is the priority.
 - **R846** · R830's by-name refusal costs some safe mutants: `TestField`, `FieldError` and by-value arguments · [R846.md](docs/roadmap/R846.md) · closed 2026-11-06 — ruled: the over-refusal stays; about 101 mutants of 2.3M are not worth a hang
 - **R848** · `TestField` and `FieldError` are not body exits: a loop that ends only by their error is unseen by the hang refusal · [R848.md](docs/roadmap/R848.md) · closed 2026-11-06 — named limit: one loop in five corpora holds the shape, and the narrowed rule moved no spec
 - **R849** · A pinned v3 record cannot re-key a row, and the hand-edit variable cannot reach the Edit tool: a text-only change to a fixture has no route · [R849.md](docs/roadmap/R849.md) · done (38b0f950)
-- **R853** · Glued source that emits unparsable AL (`endelse`, `endend`, `enduntil`, `beginif`), and one DC file the residual check cannot fold · [R853.md](docs/roadmap/R853.md) · open, filed 2026-11-06 from R828's close
+- **R853** · Glued source that emits unparsable AL (`endelse`, `endend`, `enduntil`, `beginif`), and one DC file the residual check cannot fold · [R853.md](docs/roadmap/R853.md) · done (5357c827)
 
 ## Backends and tooling
 
