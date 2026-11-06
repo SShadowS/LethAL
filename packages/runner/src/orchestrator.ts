@@ -4177,10 +4177,10 @@ function targetIdentity(
  */
 function classifyDeployFailure(err: unknown): PublishOutcome | undefined {
   if (parseVersionConflict(messageOf(err)) !== null) return undefined;
-  if (/defined in multiple apps/i.test(messageOf(err))) return undefined;
   // R843: BC refusing an upgrade because the target and an installed app declare one object is a
   // fact about two apps, not about the artifact's size. Recorded as `failed` it would become a
   // publish ceiling at this guard count and refuse later runs of that size.
+  if (/defined in multiple apps/i.test(messageOf(err))) return undefined;
   if (err instanceof PublishFailedError) return "failed";
   if (err instanceof DeploymentError) return err.outcome;
   return undefined;
