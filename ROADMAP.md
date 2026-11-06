@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**22 of 826 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**18 of 827 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -497,18 +497,19 @@ that ordering is the priority.
 - **R825** · README states the operator count in prose by hand, and it drifted (GitHub #44) · [R825.md](docs/roadmap/R825.md) · done (41df4238)
 - **R826** · A 907-guard codeunit crashed the BC service tier with a stack overflow: nothing limits or warns on guards per codeunit (GitHub #28) · [R826.md](docs/roadmap/R826.md) · open, filed 2026-11-05 (coord task R-820); a warning landed (R-825); the measurement waits for #28's reporter
 - **R827** · One empty-block mutant on a block folds everything inside it into one chain: 2 to 8 x the emitted code on real codeunits, growing with the square · [R827.md](docs/roadmap/R827.md) · parked 2026-11-05: plan reviewed, waiting for #28's reporter or a measured crash
-- **R828** · A condition mutant makes its whole `if` a chain root: chains of up to 66 remain once empty-block's fold is gone · [R828.md](docs/roadmap/R828.md) · open: waits for R827 (coord task R-836); measured offline, nothing built
+- **R828** · Statements that keep their whole body as a chain root (`if`, loops, `case` arms) leave chains of up to 461 after R827, and a 44 MB file: R827 alone does not clear #28's suspect · [R828.md](docs/roadmap/R828.md) · open: planned and split (O1 after R-836; a BC measurement with a pre-committed limit decides O3); nothing…
 - **R829** · Hang refusal misses a write the loop's step reads, when the loop condition reads a name (GitHub #50) · [R829.md](docs/roadmap/R829.md) · done (08605e4d)
 - **R830** · `void-method-call` has no hang check: deleting a call that steps a loop can hang the run · [R830.md](docs/roadmap/R830.md) · done (6daf2727)
 - **R831** · Hang refusal never sees an array-element target: `while Buf[1] < 10 do Buf[1] := Buf[1] + 1` is claimed · [R831.md](docs/roadmap/R831.md) · done (6daf2727)
 - **R832** · No way to leave one operator out: `--operator` only narrows to a list (`--exclude-operator`, GitHub #50) · [R832.md](docs/roadmap/R832.md) · done (22348be4)
 - **R834** · Operator candidates #30-#43, ranked by sites, overlap, equivalents, yield and cost; first batch #35, #41, #33, #42 · [R834.md](docs/roadmap/R834.md) · open, filed 2026-11-06 (coord task R-821); measured offline, the owner picks the batch, nothing built
-- **R836** · Eleven gate baselines lag at scheme 44 after R830's bump to 45 · [R836.md](docs/roadmap/R836.md) · open, filed 2026-11-06 (coord task R-833)
-- **R837** · A mutant inside a same-object callee can still remove a loop's progress: `Counter += 1` in `Advance()` stays claimed · [R837.md](docs/roadmap/R837.md) · open, filed 2026-11-06 (found building R-833); nothing measured, nothing built
-- **R838** · `empty-block` of an `if` or `case` arm inside a loop deletes the loop's step, and no hang check sees it · [R838.md](docs/roadmap/R838.md) · open, filed 2026-11-06 (found building R-833); nothing measured, nothing built
-- **R839** · A loop's progress through another object or an event is not seen: `Other.Advance()` and `OnAdvance()` stay claimed · [R839.md](docs/roadmap/R839.md) · open, filed 2026-11-06 (found building R-833); nothing measured, nothing built
+- **R836** · Eleven gate baselines lag at scheme 44 after R830's bump to 45 · [R836.md](docs/roadmap/R836.md) · done (59498cab)
+- **R837** · A mutant inside a same-object callee can still remove a loop's progress: `Counter += 1` in `Advance()` stays claimed · [R837.md](docs/roadmap/R837.md) · closed 2026-11-06 — named limit: 11 specs in one procedure of 2.3M; the rule that finds them is not worth its…
+- **R838** · `empty-block` of an `if` or `case` arm inside a loop deletes the loop's step, and no hang check sees it · [R838.md](docs/roadmap/R838.md) · closed 2026-11-06 — named limit: 4 specs in one procedure of 2.3M; same ruling as R837
+- **R839** · A loop's progress through another object or an event is not seen: `Other.Advance()` and `OnAdvance()` stay claimed · [R839.md](docs/roadmap/R839.md) · closed 2026-11-06 — named limit: about one real site outside the hang gate; refusing the event shape would…
 - **R840** · A new user with no BC server can install LethAL and run the al-runner-v3 backend from the docs (GitHub #48) · [R840.md](docs/roadmap/R840.md) · done (726c880b)
-- **R846** · R830's by-name refusal costs some safe mutants: `TestField`, `FieldError` and by-value arguments · [R846.md](docs/roadmap/R846.md) · open, filed 2026-11-06 (found by R-833's delta review); not tuned
+- **R846** · R830's by-name refusal costs some safe mutants: `TestField`, `FieldError` and by-value arguments · [R846.md](docs/roadmap/R846.md) · closed 2026-11-06 — ruled: the over-refusal stays; about 101 mutants of 2.3M are not worth a hang
+- **R848** · `TestField` and `FieldError` are not body exits: a loop that ends only by their error is unseen by the hang refusal · [R848.md](docs/roadmap/R848.md) · open, filed 2026-11-06 (found by R-842's plan review); nothing measured, nothing built
 
 ## Backends and tooling
 

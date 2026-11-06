@@ -121,3 +121,37 @@ on any fixture, and DO's keys are identical (0 added, 0 removed). So no baseline
 **Predictions, as before:** every gate, per mutant, nothing moves. Early gates run against the committed rows. `itest:alrunner-v3` first, then
 `itest:bcdev`, `-wrapped`, `tables` and `harden` on `bc2`, and `itest:hang` on `bc3`. Time is measured and reported per gate. A verdict that moves
 is a BLOCK, for time or any other reason. No crash runs; bc1 is out of use.
+
+## Addendum 4, a correction (R-836, 2026-11-06)
+
+**Addendum 3 is wrong where it says "So no baseline changes for this."** That read the dump's identity tuples, and the early gates at 7b0ecf7f
+showed the gate's key hashes the block's text as well. `Grow`'s `#pragma` is inside the block, so its `empty-block` row re-keys, from
+`556f5859...|<object>|Grow|lethal.empty-block|1` to `170d7adf...|<object>|Grow|lethal.empty-block|1`. All five rows, by baseline:
+
+| baseline | objects |
+|---|---|
+| `bcdev.wrapped.baseline.json` | `Wrapped Top`, `Wrapped Top Twin`, `Wrapped Pre`, `Wrapped Pre Twin` |
+| `al-runner-v3.wrapped.baseline.json` | the same four |
+| `al-runner-v3.layout.baseline.json` | `Layout Beta` |
+
+**Ruling (orchestrator, 2026-11-06): option A.** lethal-code records under R-848. Then these three baselines are re-recorded in R-836's branch at the
+final scheme, by R332. Only these rows may move, and each must read `killed` by its same test on its same line: `GrowTop`, `GrowTopTwin`, `GrowPre` and
+`GrowPreTwin` on lines 7, 7, 9 and 9, and `Layout Beta`'s row as committed. Confirmed per mutant, and a confirm run passes without record
+mode. Any other difference is a BLOCK.
+
+## Addendum 5, from the build review (R-836, 2026-11-06)
+
+**Addendum 3's "longest chain 66" holds only for its sample.** Across DC and DO the longest chain is 461, where master has 496, and 24 files have a chain of
+100 or more, where master has 65. The worst file, `CDOEMailTemplateImportExport`, goes from 46.1 MB to 44.3 MB: its largest chain is a `for` statement
+with 454 members, so the outermost-loop rule keeps it. The typical real file shrinks about as measured, and the worst ones hardly at all. So this
+change does not by itself remove the suspect in #28 for such a file. The rest is [[R828]], which covers loops and case arms as well as `if`.
+
+**The `large-method` warning** now names `if` conditions, `case` arms and loops, and says `lethal.empty-block` still roots a branch or a loop body.
+
+**R318:** a body on a line it shares with the next declaration stays on that shared line, which names nobody, as today for such a line. No such line
+exists in 1,622 corpus files, and no fixture has one. Accepted.
+
+**`design.md`** has no "never nested guards" text, so Addendum 2's reference to it was wrong and nothing changes there.
+
+Also fixed from that review: a statement that touches the body's `end` (`Foo()end`). Corpus check at 989f56c5: DC and DO, 1,622 files, 164,520 mutants,
+0 throws, 0 overlaps, 0 grain moves, 16,819 free bodies. Fold on DC/Cloud at step 6: 19,037 mutants, 0 findings. Figures: `/coord/handoff/R-836/review-figures.txt`.
