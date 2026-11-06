@@ -94,7 +94,8 @@ mutated, executes nothing, and reports both the raw site count and the deployed 
 
 On bcdev, `--dry-run` and the run's `large-method` warning name any file that emits one very large method. A 907-guard file
 stopped a BC service tier in GitHub #28, and such a method is the lead suspect, not a proven cause. The warning's thresholds are
-not measured and it refuses nothing. To shrink the method, leave out the operator with `--exclude-operator empty-block`.
+not measured and it refuses nothing. To shrink the method, leave out the operators it lists, with one `--exclude-operator` each, or narrow the
+run with `--only`.
 
 **Know which flags can move a verdict.** `--only`, `--exclude`, `--operator`, `--exclude-operator`, `--lines` and
 `--changed-since` select which
@@ -130,7 +131,7 @@ A run prints one line, `[lethal] al-runner: <path> (<version>)`, naming the bina
 
 **Cost.** On `bcdev` a mutant's covering tests run in ONE call to the server (one per mutant, not
 one per test), stopping at the first failure, so a survivor with forty covering tests costs one
-round trip instead of forty. This needs LethAL Control 1.0.0.24 or newer on the server; an older
+round trip instead of forty. This needs LethAL Control 1.0.0.25 or newer on the server; an older
 one is refused before any test runs. The report's `groupedCalls` says how many such calls were
 made. Three flags touch it and you should not need them: `--max-methods-per-call <n>` caps one
 call, `--request-ceiling-ms <n>` bounds one call (keep it under the hosting gateway's idle

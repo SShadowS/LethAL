@@ -77,6 +77,13 @@ compared across a scheme change. There a byte-identical twin's mutated text cann
 - **Today's list:** R830 raised the scheme to 45, and 11 baselines at 44 wait on R836 (no verdict moves).
   `envtool.baseline.json` waits on R683 (host only).
 
+## A v3 baseline row changing on a pinned build (R849)
+
+A pinned v3 record may write only what was committed before it ran. To add or re-key a row, commit the rows
+first as `itest/expected/<baseline>` (a subfolder, so the baseline hook leaves it alone), then record on `current`.
+A record on any other build is refused. The steps are in [alrunner-v3.md](alrunner-v3.md), "The route for a row to
+change on a pinned build".
+
 ## Warning sets: `GATE_WARNINGS` and observe mode (R736)
 
 Every itest that calls `runSession` collects the run's `warning` events and compares the SORTED, unique warning
@@ -123,5 +130,7 @@ one in `extensions/lethal-control/app.json`. R-583 (merged 2026-10-21) moved the
 fixture to runtime 17.0, and made its runtime-17 build the minimum. `DependentCount` (R389's
 closed-world guard) exists only from 1.0.0.23. `InstalledDependents` (R733: names the installed apps
 that depend on the target) and the found-0 `discoveryError` / `discoveryErrorFrame` fields (R689)
-exist only from 1.0.0.24, and 1.0.0.24 is the minimum: no client path falls back to an older
-control app any more, so a 404 from either action is a plain failure.
+exist only from 1.0.0.24. `ObjectOwners` and `FieldOwners` (R847: who owns an object or field,
+read by key, so the clash check can see an installed app that is not a dependent) exist only from
+1.0.0.25, and 1.0.0.25 is the minimum: no client path falls back to an older
+control app any more, so a 404 from any of these actions is a plain failure.

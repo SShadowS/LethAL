@@ -138,3 +138,45 @@ showed the gate's key hashes the block's text as well. `Grow`'s `#pragma` is ins
 final scheme, by R332. Only these rows may move, and each must read `killed` by its same test on its same line: `GrowTop`, `GrowTopTwin`, `GrowPre` and
 `GrowPreTwin` on lines 7, 7, 9 and 9, and `Layout Beta`'s row as committed. Confirmed per mutant, and a confirm run passes without record
 mode. Any other difference is a BLOCK.
+
+## Addendum 5, from the build review (R-836, 2026-11-06)
+
+**Addendum 3's "longest chain 66" holds only for its sample.** Across DC and DO the longest chain is 461, where master has 496, and 24 files have a chain of
+100 or more, where master has 65. The worst file, `CDOEMailTemplateImportExport`, goes from 46.1 MB to 44.3 MB: its largest chain is a `for` statement
+with 454 members, so the outermost-loop rule keeps it. The typical real file shrinks about as measured, and the worst ones hardly at all. So this
+change does not by itself remove the suspect in #28 for such a file. The rest is [[R828]], which covers loops and case arms as well as `if`.
+
+**The `large-method` warning** now names `if` conditions, `case` arms and loops, and says `lethal.empty-block` still roots a branch or a loop body.
+
+**R318:** a body on a line it shares with the next declaration stays on that shared line, which names nobody, as today for such a line. No such line
+exists in 1,622 corpus files, and no fixture has one. Accepted.
+
+**`design.md`** has no "never nested guards" text, so Addendum 2's reference to it was wrong and nothing changes there.
+
+Also fixed from that review: a statement that touches the body's `end` (`Foo()end`). Corpus check at 989f56c5: DC and DO, 1,622 files, 164,520 mutants,
+0 throws, 0 overlaps, 0 grain moves, 16,819 free bodies. Fold on DC/Cloud at step 6: 19,037 mutants, 0 findings. Figures: `/coord/handoff/R-836/review-figures.txt`.
+
+## Addendum 6, the five rows, exactly (R-836, 2026-11-06)
+
+R810's rule refuses any record on a pinned v3 build that differs from the committed rows, so R332 cannot write these. Ruling (orchestrator, 2026-11-06):
+a hand edit of exactly these keys, by the documented `LETHAL_RERECORD_BASELINE=1`, the guard left as it is. The prefix `556f58593db5335498212889dba9894dc670212013322a326eef302c07761f52`
+becomes `170d7adfd47d508bb5d73d5d8292f517f4b58d7e4f589c8d566efe0800a806bc`, with the rest of each key, and every other field, unchanged:
+
+| file | key after the prefix |
+|---|---|
+| `al-runner-v3.wrapped.baseline.json` | `Wrapped Pre Twin\|Grow\|lethal.empty-block\|1` |
+| `al-runner-v3.wrapped.baseline.json` | `Wrapped Pre\|Grow\|lethal.empty-block\|1` |
+| `al-runner-v3.wrapped.baseline.json` | `Wrapped Top Twin\|Grow\|lethal.empty-block\|1` |
+| `al-runner-v3.wrapped.baseline.json` | `Wrapped Top\|Grow\|lethal.empty-block\|1` |
+| `al-runner-v3.layout.baseline.json` | `Layout Beta\|Grow\|lethal.empty-block\|1` |
+
+Rows stay sorted by key, so each row moves in its file. `bcdev.wrapped.baseline.json` was recorded by R332 on `bc2` on these same four keys. The v3 gate then confirms every row
+on the pinned build. Route gap filed: [[R849]].
+
+## Addendum 7, the route used (R-836, 2026-11-06)
+
+R849 landed the route for a row to change on a pinned build, so this replaces Addendum 6's hand edit. No baseline is edited by hand. `itest/expected/al-runner-v3.wrapped.baseline.json` and
+`al-runner-v3.layout.baseline.json` were committed in `lethal/r836` before the run. Each is the committed baseline with the 5 keys of Addendum 6 changed and the rows sorted, shown equal by a script; every
+verdict, killing test and hash is unchanged. So this document already covers them: no verdict moves, and each row equals the BC row in `bcdev.wrapped.baseline.json`, where R332 recorded the same four
+keys. `Layout Beta`'s row keeps its `killed` by `GrowAboveTen`. Counts do not move, so `assertCounts` does not change. The gate records on `current`, against those files, and they go in the commit that lands
+the baselines. Full v3 gate confirms afterwards.

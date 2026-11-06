@@ -110,6 +110,10 @@ class ClashBackend implements ExecutionBackend {
   fetched: string[] = [];
   private activations: Array<string | null> = [];
   installedDependents?: (appId: string) => Promise<readonly InstalledDependent[]>;
+  /** R847: set by a test through `Setup.configure`; absent on a backend that is not bcdev. */
+  installedVersions?: (appId: string) => Promise<readonly string[]>;
+  objectOwners?: NonNullable<ExecutionBackend["objectOwners"]>;
+  fieldOwners?: NonNullable<ExecutionBackend["fieldOwners"]>;
   readonly fetchPublishedAppPackage = async (app: {
     publisher: string;
     name: string;
@@ -209,6 +213,8 @@ interface Setup {
   readonly appJson?: string;
   /** R845: the publish fails with this text (a U3 refusal). */
   readonly deployError?: string;
+  /** R847: gives the backend its keyed reads of the server. */
+  readonly configure?: (b: ClashBackend) => void;
 }
 
 async function drive(s: Setup) {
@@ -229,6 +235,7 @@ async function drive(s: Setup) {
     s.byParent,
   );
   backend.deployError = s.deployError;
+  s.configure?.(backend);
   const warnings: Array<{ code: string; message: string }> = [];
   const store = new ResultsStore(":memory:");
   const outcome = await runSession({
@@ -650,6 +657,118 @@ describe("R843: passes, and warns where it cannot know", () => {
     expect("report" in r).toBe(true);
     expect(r.backend.fetched).toEqual(expect.not.arrayContaining(["Other App"]));
     expect(r.warnings.some((x) => x.code === "installed-dependents")).toBe(true);
+  });
+});
+
+/**
+ * R847 Part 1: the installed target is on the server, an unrelated app X (NOT a dependent) declares
+ * the codeunit id the target injects, and the keyed read names X. The refusal must come from X's own
+ * package, before anything is published: `deploys` is the call counter.
+ */
+describe("R847: an installed app that is not a dependent, through runSession", () => {
+  const X: InstalledDependent = {
+    id: "9f3c2b1a-0000-4000-8000-0000000000aa",
+    name: "Unrelated App",
+    publisher: "Elsewhere",
+    version: "3.0.0.0",
+  };
+  const targetPackage = new Uint8Array(
+    buildFakeAppWithEntries({
+      "SymbolReference.json": JSON.stringify({
+        AppId: TARGET_ID,
+        Version: "1.0.0.0",
+        Codeunits: [{ Id: 79000, Name: "Sandbox Logic" }],
+      }),
+    }),
+  );
+  const unrelated = (extra: Record<string, unknown[]>): Uint8Array =>
+    new Uint8Array(
+      buildFakeAppWithEntries({
+        "SymbolReference.json": JSON.stringify({ AppId: X.id, Version: X.version, ...extra }),
+      }),
+    );
+  const serve = (calls: { objects: number; versions: number }) => (b: ClashBackend) => {
+    b.installedVersions = async () => {
+      calls.versions++;
+      return ["1.0.0.0"];
+    };
+    b.objectOwners = async (items) => {
+      calls.objects++;
+      const rows = items.map((item) => {
+        if (item.kind === "Codeunit" && item.id === 79000) {
+          return {
+            ...item,
+            outcome: "owner" as const,
+            app: { id: TARGET_ID, name: "R843 Target", publisher: "LethAL", version: "1.0.0.0" },
+          };
+        }
+        if (item.kind === "Codeunit" && item.id === ids.controlId) {
+          return { ...item, outcome: "owner" as const, app: X };
+        }
+        return { ...item, outcome: "none" as const };
+      });
+      return { read: rows.length, rows };
+    };
+    b.fieldOwners = async () => ({ read: 0, rows: [] });
+  };
+
+  test("a lead with a real clash refuses from the lead's package, with zero deploys", async () => {
+    const calls = { objects: 0, versions: 0 };
+    const r = await drive({
+      configure: serve(calls),
+      packages: new Map([
+        [TEST_APP.name, residentTestsApp()],
+        ["R843 Target", targetPackage],
+        ["Unrelated App", unrelated({ Codeunits: [{ Id: ids.controlId, Name: "Theirs" }] })],
+      ]),
+    });
+    const e = refused(r);
+    expect(r.backend.deploys).toBe(0);
+    expect(calls).toEqual({ objects: 1, versions: 1 });
+    expect(e.findings.map((f) => [f.app.name, f.id, f.notDependent])).toEqual([
+      ["Unrelated App", ids.controlId, true],
+    ]);
+    expect(r.backend.fetched).toContain("Unrelated App");
+  });
+
+  test("a lead with no real clash does not stop the run", async () => {
+    const calls = { objects: 0, versions: 0 };
+    const r = await drive({
+      configure: serve(calls),
+      packages: new Map([
+        [TEST_APP.name, residentTestsApp()],
+        ["R843 Target", targetPackage],
+        ["Unrelated App", unrelated({ Codeunits: [{ Id: 1, Name: "Mine" }] })],
+      ]),
+    });
+    expect("report" in r).toBe(true);
+    expect(r.backend.deploys).toBeGreaterThan(0);
+    expect(calls.objects).toBe(1);
+  });
+
+  test("a failed dependents read still reaches the lead (no early return)", async () => {
+    const calls = { objects: 0, versions: 0 };
+    const r = await drive({
+      dependents: "throws",
+      configure: serve(calls),
+      packages: new Map([
+        ["R843 Target", targetPackage],
+        ["Unrelated App", unrelated({ Codeunits: [{ Id: ids.controlId, Name: "Theirs" }] })],
+      ]),
+    });
+    refused(r);
+    expect(r.backend.deploys).toBe(0);
+  });
+
+  test("a backend without the keyed reads asks nothing and is not refused", async () => {
+    const r = await drive({
+      packages: new Map([
+        [TEST_APP.name, residentTestsApp()],
+        ["Unrelated App", unrelated({ Codeunits: [{ Id: ids.controlId, Name: "Theirs" }] })],
+      ]),
+    });
+    expect("report" in r).toBe(true);
+    expect(r.backend.fetched).not.toContain("Unrelated App");
   });
 });
 
