@@ -26,7 +26,7 @@ beforeAll(async () => {
 });
 
 describe("sandbox-names: the pre-committed table describes the fixture (R557)", () => {
-  test("36 mutants, M0001-M0036, one batch, each procedure's empty-block, return-value, swap-additive", async () => {
+  test("48 mutants, M0001-M0048, one batch, each procedure's empty-block, return-value, delete-additive-right, swap-additive", async () => {
     const { files } = await generateMutationSet(NAMES_PROJECT_DIR, {});
     expect(planArtifacts(files, {})).toHaveLength(1);
     const deduped = new Map(
@@ -68,7 +68,7 @@ describe("assertNamesRun: the names legs' checker (R557)", () => {
   /** A report shaped as table A predicts, or as master's section B (`bug`). */
   function report(coverage: "exact" | "all", bug = false): SessionReport {
     const rows = expectedNamesRows(coverage);
-    const renamedOnly = (code: string) => Number(code.slice(1)) <= 30;
+    const renamedOnly = (code: string) => Number(code.slice(1)) <= 40;
     const mutants = rows.map((r) => {
       const failing = bug && renamedOnly(r.code);
       const text = NAMES_TABLE.find((t) => t.procedure === r.procedureName)?.killText ?? "";
@@ -96,7 +96,7 @@ describe("assertNamesRun: the names legs' checker (R557)", () => {
     // live run caught the checker expecting "Names Tests.Space Step"; this pins table A's literal.
     const rows = expectedNamesRows("exact");
     expect(rows[0]?.killingTest).toBe("Space Step");
-    expect(rows[24]?.killingTest).toBe("Blåbær Step");
+    expect(rows[32]?.killingTest).toBe("Blåbær Step");
     expect(rows[0]?.coveringTests).toEqual(["Names Tests.Space Step"]);
   });
 

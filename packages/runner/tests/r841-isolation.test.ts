@@ -240,22 +240,22 @@ describe("R841 shape 1: the artifact fails alc, the source does not", () => {
     const { report, backend, warnings, siteCount } = await drive(hasLoopTruncate);
     // The site count is pinned as a number too, so a generator that stopped finding sites cannot
     // make "rows == sites" pass on 0 == 0.
-    expect(siteCount).toBe(11);
+    expect(siteCount).toBe(13); // R855: was 11; two new delete-* sites
     expect(report.mutants.length).toBe(siteCount);
     const errors = report.mutants.filter((m) => m.verdict === "error");
     expect(errors.length).toBe(1);
     const [bad] = errors;
-    expect(bad?.mutantCode).toBe("M0008");
+    expect(bad?.mutantCode).toBe("M0010"); // R855: was M0008; two new mutants sort before it
     expect(bad?.operatorName).toBe("lethal.loop-truncate");
     expect(bad?.line).toBe(14);
     expect(bad?.file).toBe("src/Shape.Codeunit.al");
     expect(bad?.failureNote).toContain(
-      `mutant M0008 (${bad?.file}:${bad?.line} lethal.loop-truncate) fails to compile on its own: AL0175`,
+      `mutant M0010 (${bad?.file}:${bad?.line} lethal.loop-truncate) fails to compile on its own: AL0175`,
     );
     // The other ten are scored: survived or no-coverage, none left as error or missing.
     const rest = report.mutants.filter((m) => m.verdict !== "error");
-    expect(rest.length).toBe(10);
-    expect(rest.filter((m) => m.verdict === "survived").length).toBe(7);
+    expect(rest.length).toBe(12); // R855: was 10
+    expect(rest.filter((m) => m.verdict === "survived").length).toBe(9); // R855: was 7
     expect(rest.filter((m) => m.verdict === "no-coverage").length).toBe(3);
     expect(report.counts.errors).toBe(1);
     // Bisection ran, the unmutated build was checked once, and the clean set was redeployed.
@@ -288,7 +288,7 @@ describe("R841 limit 2: the artifact fails with ZERO mutants applied", () => {
   test("the empty artifact fails (the 'environmental' plan): every mutant is an error row with alc's text", async () => {
     // Refuses every instrumented dir, the empty one included.
     const { report, siteCount, backend } = await drive(() => true);
-    expect(siteCount).toBe(11);
+    expect(siteCount).toBe(13); // R855: was 11
     assertLoud(report, siteCount, /AL0175/);
     // Nothing was redeployed: one deploy (the failing one) only.
     expect(backend.deploys).toBe(1);
@@ -297,7 +297,7 @@ describe("R841 limit 2: the artifact fails with ZERO mutants applied", () => {
   test("every mutant is isolated out (empty clean set): every mutant is an error row naming itself", async () => {
     // Fails whenever any mutant is present; the empty artifact compiles.
     const { report, siteCount, backend } = await drive((m) => m.mutants.length > 0);
-    expect(siteCount).toBe(11);
+    expect(siteCount).toBe(13); // R855: was 11
     assertLoud(report, siteCount, /fails to compile on its own: AL0175/);
     // No redeploy of an empty clean set.
     expect(backend.deploys).toBe(1);

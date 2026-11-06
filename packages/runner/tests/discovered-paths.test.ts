@@ -221,7 +221,8 @@ test("5. sandbox-data's manifest is byte-identical from a `\\`-keyed snapshot an
   // c83bdd08...23eb); 4 new arm entries, ids +4 after DataBandExt, proven in id-shift-proof.txt.
   // R731: toggle-blank-string's operatorVersion 1.1.0 is the only change (was dc2c1f19...da48).
   // R752: toggle-blank-string's operatorVersion 1.1.1 is the only change (was a7dba8bc...0835).
-  const pinned = "cf442b39ef79109a5787274d2ab243b538837e97bf3527129c06ce2d04c073d4";
+  // R855 re-pinned (was cf442b39...3d4): swap-call-arguments operatorVersion 1.1.0, plus new delete-* mutants.
+  const pinned = "bc2c6465b5c8421a6c237017dc90e994be00b668a220c3fc38ad705469d783bc";
   expect(await hashOf(await generateMutationSet(fixtureDir, { emit: () => {} }))).toBe(pinned);
   expect(
     await hashOf(

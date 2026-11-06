@@ -338,22 +338,23 @@ describe("R402: a repeat's `#if` tail (once misparsed as a continuing statement)
     // expectations of scripts/r402-shape-sweep.ts. A rule that refused or dropped any of these
     // sites changes a count.
     const retained: Partial<Record<Shape, readonly [number, number, number, number]>> = {
-      c1: [9, 10, 9, 10],
-      c2: [6, 6, 6, 6],
-      c2b: [6, 6, 6, 6],
-      c3: [6, 7, 6, 7],
+      c1: [11, 12, 11, 12], // R855: was [9, 10, 9, 10]; two new delete-* sites per build
+      // R855: c2, c2b, c3, c6, c7, c7c, c7d, s16 each gained the new delete-* sites (+1; c6 +2).
+      c2: [7, 7, 7, 7],
+      c2b: [7, 7, 7, 7],
+      c3: [7, 8, 7, 8],
       c4: [5, 5, 5, 5],
       c4b: [7, 7, 7, 7],
       c5: [4, 4, 4, 4],
       c5b: [5, 6, 5, 6],
-      c6: [9, 9, 9, 9],
-      c7: [6, 7, 6, 7],
-      c7c: [6, 7, 6, 7],
-      c7d: [6, 7, 6, 7],
+      c6: [11, 11, 11, 11],
+      c7: [7, 8, 7, 8],
+      c7c: [7, 8, 7, 8],
+      c7d: [7, 8, 7, 8],
       // s4e here has a three-assignment repeat body; the sweep fixture's two-assignment s4e is the
       // one whose master count is checked (scripts/fixtures/r402/expected.json).
       s15: [5, 5, 5, 5],
-      s16: [7, 8, 7, 8],
+      s16: [8, 9, 8, 9],
     };
     for (const [s, counts] of Object.entries(retained) as [Shape, readonly number[]][]) {
       const got = (Object.keys(BUILDS) as Build[]).map((b) => get(s, b).specs);
