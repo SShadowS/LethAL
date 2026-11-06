@@ -78,11 +78,13 @@ of two answers:**
 - **Since 2026-11-06: HTTP 400, JSON object, `error.code` exactly `Internal_ServerError`, and a
   trimmed `error.message` that is the whole of `begin transaction world not called CorrelationId:
   <guid>.` (case exact, any run of white space between words, GUID lower-case hex), and only after
-  our own stop reads `confirmed`.** `StopHungRun` said `stopped:true`, for our op, and the 400 is the
-  held request's own answer.
+  our own stop reads `confirmed`, and within 10 s of firing it.** `StopHungRun` said `stopped:true`,
+  for our op, and the 400 is the held request's own answer. Measured: 39 to 183 ms. The 10 s window is
+  what makes "this request ended because of our stop" a check and not an assumption; a slow server
+  loses a kill to a quarantine, never gains one. A 408 keeps the whole grace.
 
-Anything else quarantines, and so does that 400 with any other stop state: no stop of ours, a stop
-refused or thrown, `already-completed`, or a stop never answered.
+Anything else quarantines, and so does that 400 with any other stop state or later than the window:
+no stop of ours, a stop refused or thrown, `already-completed`, or a stop never answered.
 
 **Why the rule changed.** BC 29 answers the 400 where BC 28 answers the 408. Measured on `bc4`
 (29.0.54011.57673), 2026-11-06: 6 of 6 hangs (busy loop, `Sleep`, database), 39 to 183 ms after the
