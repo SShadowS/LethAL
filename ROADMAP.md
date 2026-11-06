@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**19 of 828 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**20 of 829 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -873,6 +873,7 @@ that ordering is the priority.
 - **R822** · One contended moment in leg C costs a whole v3 gate: retry `timeout-is-cpu` before reading it as `infra-fail` · [R822.md](docs/roadmap/R822.md) · done (c2150b2b)
 - **R823** · scripts/r658-hang-gate.sh hard-codes lane bugs and the r658 worktree, so another lane cannot use it · [R823.md](docs/roadmap/R823.md) · done (1cfe158f)
 - **R835** · A test left a quarantine record in the default store, and a later test file on the same worker read it (master CI red on b67cfbb5) · [R835.md](docs/roadmap/R835.md) · done (b7597f60)
+- **R850** · A v3 record on a gated build with no hand pin writes unchecked: alpha.2 steps round R810's rule · [R850.md](docs/roadmap/R850.md) · open, filed 2026-11-06 (found by R849's plan review); read in the code, not run; nothing built
 
 ---
 
