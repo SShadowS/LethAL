@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**18 of 827 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**17 of 829 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -334,7 +334,7 @@ that ordering is the priority.
 - **R841** · Some `#if` shapes that split a statement pass the refusal, compile as source, and give an artifact alc refuses · [R841.md](docs/roadmap/R841.md) · closed 2026-11-06 — no refusal, by the orchestrator's ruling: refusing the file costs more good mutants than…
 - **R844** · A run with some `error` mutants reads a higher score and says only `error N`: nothing states they are outside the score · [R844.md](docs/roadmap/R844.md) · done (1b213195): caveat some-errors, and a console line after score: giving the range the score could read…
 - **R843** · `lethal run` can strip a user's server: a target object with the same type and id as one in its test app is published, and BC removes the apps · [R843.md](docs/roadmap/R843.md) · done (c482126f)
-- **R845** · Clashes a pre-publish object list cannot see can still strip a server: field ids, enum values, non-dependents, transitive dependents · [R845.md](docs/roadmap/R845.md) · open on one line: the live lethal-run leg was not run. Built (4efdbed1), and proven on real BC, offline and…
+- **R845** · Clashes a pre-publish object list cannot see can still strip a server: field ids, enum values, non-dependents, transitive dependents · [R845.md](docs/roadmap/R845.md) · done (2a69245e); live leg passed on bc1, 2026-11-06
 - **R847** · A control-app action that reads AllObj and Field would let the pre-publish clash check see an installed app that is not a dependent · [R847.md](docs/roadmap/R847.md) · open, filed 2026-11-06 (coord task R-845): not built
 
 ## Product gaps a real project hits
@@ -509,7 +509,8 @@ that ordering is the priority.
 - **R839** · A loop's progress through another object or an event is not seen: `Other.Advance()` and `OnAdvance()` stay claimed · [R839.md](docs/roadmap/R839.md) · closed 2026-11-06 — named limit: about one real site outside the hang gate; refusing the event shape would…
 - **R840** · A new user with no BC server can install LethAL and run the al-runner-v3 backend from the docs (GitHub #48) · [R840.md](docs/roadmap/R840.md) · done (726c880b)
 - **R846** · R830's by-name refusal costs some safe mutants: `TestField`, `FieldError` and by-value arguments · [R846.md](docs/roadmap/R846.md) · closed 2026-11-06 — ruled: the over-refusal stays; about 101 mutants of 2.3M are not worth a hang
-- **R848** · `TestField` and `FieldError` are not body exits: a loop that ends only by their error is unseen by the hang refusal · [R848.md](docs/roadmap/R848.md) · open, filed 2026-11-06 (found by R-842's plan review); nothing measured, nothing built
+- **R848** · `TestField` and `FieldError` are not body exits: a loop that ends only by their error is unseen by the hang refusal · [R848.md](docs/roadmap/R848.md) · open, filed 2026-11-06 (found by R-842's plan review); counted offline, nothing built
+- **R849** · A pinned v3 record cannot re-key a row, and the hand-edit variable cannot reach the Edit tool: a text-only change to a fixture has no route · [R849.md](docs/roadmap/R849.md) · done (38b0f950)
 
 ## Backends and tooling
 
@@ -872,6 +873,7 @@ that ordering is the priority.
 - **R822** · One contended moment in leg C costs a whole v3 gate: retry `timeout-is-cpu` before reading it as `infra-fail` · [R822.md](docs/roadmap/R822.md) · done (c2150b2b)
 - **R823** · scripts/r658-hang-gate.sh hard-codes lane bugs and the r658 worktree, so another lane cannot use it · [R823.md](docs/roadmap/R823.md) · done (1cfe158f)
 - **R835** · A test left a quarantine record in the default store, and a later test file on the same worker read it (master CI red on b67cfbb5) · [R835.md](docs/roadmap/R835.md) · done (b7597f60)
+- **R850** · A v3 record on a gated build with no hand pin writes unchecked: alpha.2 steps round R810's rule · [R850.md](docs/roadmap/R850.md) · done (38b0f950)
 
 ---
 
