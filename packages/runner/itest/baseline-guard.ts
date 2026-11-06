@@ -19,9 +19,10 @@
  * `assertMatchesBaseline` still records an absent file, which is `campaign freeze`'s job alone.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
-import { basename, dirname } from "node:path";
+import { tmpdir } from "node:os";
+import { basename, dirname, join, relative, sep } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import type { CoverageMode } from "../src/backend";
 import type { SessionReport } from "../src/report";
@@ -548,6 +549,42 @@ async function compareWithCommitted(
 export interface PinnedRecord {
   readonly readCommitted: (baselinePath: string) => string | undefined;
   readonly undo?: (rows: NormalizedMutant[]) => NormalizedMutant[] | undefined;
+  /**
+   * R849: the file as it is on disk now (undefined when absent). Used only to prove a pre-committed
+   * expected file is the one at HEAD. Defaults to a real read.
+   */
+  readonly readWorking?: (path: string) => string | undefined;
+  /** R849: where a refused record dumps the run's rows. Defaults to the system temp directory. */
+  readonly dumpDir?: string;
+}
+
+/** R849: a record on a binary that is not `current` is refused before any leg runs. */
+export class NonCurrentRecordRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NonCurrentRecordRefusedError";
+  }
+}
+
+/**
+ * R849/R850: the baselines are the record of what `current` reads, so a record on any other binary
+ * (a gated release with no hand pin, such as alpha.2, has nothing to check it) is refused.
+ * Both paths must already be resolved (symlinks followed). `requested` is the baselines asked for.
+ */
+export function assertRecordOnCurrent(
+  requested: readonly string[],
+  bin: string,
+  current: string,
+): void {
+  if (requested.length === 0 || bin === current) return;
+  throw new NonCurrentRecordRefusedError(
+    `al-runner-v3-itest-record-not-current: a record run needs the build current names (${requested.join(", ")}); this run uses ${bin}, current is ${current}`,
+  );
+}
+
+/** R849: where a pre-committed expected file for this baseline lives. A subfolder, so the hook's glob skips it. */
+export function expectedPathFor(baselinePath: string): string {
+  return join(dirname(baselinePath), "expected", basename(baselinePath));
 }
 
 /** R810: a pinned record refused. Not a BaselineRecordedError: it is a failure, nothing was written. */
@@ -563,22 +600,21 @@ export class PinnedRecordRefusedError extends Error {
  * other git failure (no repository, no HEAD) throws, so it is not mistaken for a missing file.
  */
 export function gitShowHead(baselinePath: string): string | undefined {
+  // R849: the folder of an expected file may not exist on disk (not committed yet): start from the
+  // nearest folder that does, and name the file relative to it.
+  let from = dirname(baselinePath);
+  while (!existsSync(from) && dirname(from) !== from) from = dirname(from);
+  const spec = `HEAD:./${relative(from, baselinePath).split(sep).join("/")}`;
   try {
-    return execFileSync(
-      "git",
-      ["-C", dirname(baselinePath), "show", `HEAD:./${basename(baselinePath)}`],
-      {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-        maxBuffer: 256 * 1024 * 1024,
-      },
-    );
+    return execFileSync("git", ["-C", from, "show", spec], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      maxBuffer: 256 * 1024 * 1024,
+    });
   } catch (err) {
     const stderr = String((err as { stderr?: unknown }).stderr ?? "");
     if (/does not exist in|exists on disk, but not in/.test(stderr)) return undefined;
-    throw new Error(
-      `git show HEAD:./${basename(baselinePath)} failed: ${stderr.trim() || String(err)}`,
-    );
+    throw new Error(`git show ${spec} failed: ${stderr.trim() || String(err)}`);
   }
 }
 
@@ -617,25 +653,77 @@ async function pinnedRecordRows(
   label: string,
   pinned: PinnedRecord,
 ): Promise<NormalizedMutant[]> {
+  let dumped = "";
   const refuse = (why: string) =>
     withStack(
       new PinnedRecordRefusedError(
-        `${label}: a record on a pinned build may write only the rows already committed; ${why}. Nothing was written.`,
+        `${label}: a record on a pinned build may write only the rows already committed; ${why}. Nothing was written.${dumped}`,
       ),
     );
-  const raw = pinned.readCommitted(baselinePath);
+  // R849: `formatFailure` clips long text, so a refused run's rows go to a file that names the new keys.
+  const dump = (rows: NormalizedMutant[]) => {
+    try {
+      const dir = mkdtempSync(join(pinned.dumpDir ?? tmpdir(), "pinned-record-"));
+      const file = join(dir, basename(baselinePath));
+      writeFileSync(
+        file,
+        `${JSON.stringify({ identityScheme: IDENTITY_SCHEME, entries: rows }, null, 2)}\n`,
+      );
+      dumped = ` This run's rows are in ${file}.`;
+    } catch {
+      dumped = " (the rows could not be dumped)";
+    }
+  };
+  // R849: a pre-committed expected file at HEAD, when there is one, is what the run must equal.
+  // The working copy must be the same text, so an expected file written after the run cannot count.
+  const expectedPath = expectedPathFor(baselinePath);
+  const atHead = pinned.readCommitted(expectedPath);
+  const readWorking =
+    pinned.readWorking ?? ((p: string) => (existsSync(p) ? readFileSync(p, "utf8") : undefined));
+  const working = readWorking(expectedPath);
+  if (working !== atHead) {
+    const how =
+      atHead === undefined
+        ? "untracked, not committed"
+        : working === undefined
+          ? "deleted but not committed"
+          : "modified but not committed";
+    throw refuse(
+      `the expected file ${expectedPath} is not what HEAD holds (${how}); commit it before the run: a run cannot be checked against a file shaped after it`,
+    );
+  }
+  const raw = atHead ?? pinned.readCommitted(baselinePath);
   if (raw === undefined) throw refuse(`no committed file at HEAD for ${baselinePath}`);
   const committed = parseGateBaseline(
     raw,
     baselinePath,
     "A pinned record needs a valid file at HEAD.",
   );
+  if (atHead !== undefined) {
+    // A stale expected file: the baseline at HEAD already equals it, so it no longer says anything new.
+    const base = pinned.readCommitted(baselinePath);
+    if (
+      base !== undefined &&
+      pinnedRowsDifference(
+        committed.entries,
+        parseGateBaseline(base, baselinePath, "The baseline at HEAD must be valid.").entries,
+      ) === undefined
+    ) {
+      throw refuse(
+        `the expected file ${expectedPath} is stale: the baseline at HEAD already equals it; delete the expected file`,
+      );
+    }
+  }
   const rows = pinned.undo === undefined ? actual : pinned.undo(actual);
   if (rows === undefined) {
+    dump(actual);
     throw refuse("a pinned key is absent, repeated, or does not read the pin");
   }
   const why = pinnedRowsDifference(committed.entries, rows);
-  if (why !== undefined) throw refuse(why);
+  if (why !== undefined) {
+    dump(rows);
+    throw refuse(why);
+  }
   return rows;
 }
 

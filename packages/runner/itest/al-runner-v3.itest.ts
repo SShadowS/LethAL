@@ -161,6 +161,7 @@ import {
   BaselineRecordedError,
   type PinnedRecord,
   assertGateBaseline,
+  assertRecordOnCurrent,
   gitShowHead,
   preflightGateBaseline,
   readGateBaseline,
@@ -2251,14 +2252,18 @@ async function main(): Promise<void> {
     ["MO", MULTIOBJECT_BASELINE_PATH],
     ["WR", WRAPPED_BASELINE_PATH],
   ]);
-  const refusedRecord = recordRefusal(
-    CANDIDATE,
-    LEGS.flatMap((l) => {
-      const p = recordBaselines.get(l);
-      return p !== undefined && recordRequested(p) ? [p] : [];
-    }),
-  );
+  const recordPaths = LEGS.flatMap((l) => {
+    const p = recordBaselines.get(l);
+    return p !== undefined && recordRequested(p) ? [p] : [];
+  });
+  const refusedRecord = recordRefusal(CANDIDATE, recordPaths);
   if (refusedRecord !== undefined) throw new V3LegEnvironment(refusedRecord);
+  // R849: before any leg runs, a record on a build that is not `current` is refused (a candidate's own refusal is above).
+  assertRecordOnCurrent(
+    recordPaths.map((p) => basename(p)),
+    BIN,
+    resolveV3Binary(AL_RUNNER_V3_DEFAULT_PATH),
+  );
   const legs: Record<string, V3LegOutcome> = {};
   const lines: string[] = [];
   const root = await mkdtemp(join(tmpdir(), "lethal-itest-v3-"));
