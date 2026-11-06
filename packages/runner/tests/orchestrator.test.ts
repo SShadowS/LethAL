@@ -86,6 +86,7 @@ import type {
 import { assertManifestObjectsDeclared } from "../src/line-map";
 import { loadInstalledArtifact } from "../src/named-mutants";
 import { NamedMutantError } from "../src/named-mutants";
+import { RunMutantTransport } from "../src/run-mutant-transport";
 import { bundleFor, tinyBundle } from "./helpers/bundle";
 import { IDLE_STATUS, leaseRouter } from "./helpers/lease-wire";
 import type { WireAnswer } from "./helpers/lease-wire";
@@ -22302,6 +22303,84 @@ describe("R577: a kill must reproduce under the mutant", () => {
       expect(m.killReproduced).toBe(true);
     }
     expect(activationsOf(backend, "M0001", 3)).toEqual(["M0001", null, "M0001"]);
+    store.close();
+  });
+
+  /**
+   * GitHub #49, the whole chain past the transport: the kill at position 1 re-runs through
+   * `reproduceKill` -> `singleStep` -> `backend.run`, and here that last step is a REAL
+   * `RunMutantTransport` against a fake fetch whose held `RunMutant` answers BC 29's exact 400.
+   * The first mutated run is the stub's scripted timeout; the confirm is unmutated and passes.
+   */
+  const WORLD_400 = JSON.stringify({
+    error: {
+      code: "Internal_ServerError",
+      message:
+        "begin transaction world not called  CorrelationId:  6f1c2d3e-4a5b-4c6d-8e7f-0123456789ab.",
+    },
+  });
+  const worldStopStub = (stopAnswer: { stopped: boolean; reason?: string }) => {
+    const calls: string[] = [];
+    const fetchFn = ((url: unknown) => {
+      const action = /LethALControl_(\w+)/.exec(String(url))?.[1] ?? String(url);
+      calls.push(action);
+      if (action === "RunMutant") {
+        return new Promise<Response>((res) =>
+          setTimeout(() => res(new Response(WORLD_400, { status: 400 })), 60),
+        );
+      }
+      return Promise.reject(new Error(`no ${action} in this test`));
+    }) as typeof fetch;
+    const transport = new RunMutantTransport(
+      { baseUrl: "http://bc:7048/BC", company: "C", username: "u", password: "p" },
+      "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
+      "5c0a4c0a5c0a4c0a5c0a4c0a5c0a4c0a",
+      fetchFn,
+    );
+    class WorldStopStub extends ReproStub {
+      override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+        const active = this.activations.at(-1) ?? null;
+        const n = active === null ? 0 : (this.nth.get(active) ?? 0);
+        if (active === null || n < 1) return super.run(ref, opts);
+        this.nth.set(active, n + 1);
+        this.sent.push({ mutant: active, method: ref.method, timeoutMs: 20 });
+        const v = await transport.run({
+          ref,
+          mutantId: active,
+          attemptId: "a1",
+          timeoutMs: 20,
+          stopGraceMs: 500,
+          lease: { epoch: 3, token: "tok", serverGeneration: "gen-1", opSeq: 7 },
+          onBudgetExceeded: async () => stopAnswer,
+        });
+        this.trace.push(`run ${active} ${ref.method} ${v.outcome}`);
+        return v;
+      }
+    }
+    const backend = new WorldStopStub(
+      CAPS_NST,
+      (mutant) => (mutant === null ? "pass" : "timeout"),
+      ["IsOverBudget"],
+    );
+    return { backend, calls };
+  };
+
+  test("T9w: a k = 1 timeout kill whose re-run ends in BC 29's 400 after a confirmed stop is timeout-killed, reproduced", async () => {
+    const { backend, calls } = worldStopStub({ stopped: true });
+    const { report, store } = await run(backend);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("timeout-killed");
+      expect(m.killReproduced).toBe(true);
+    }
+    expect(calls).toContain("RunMutant");
+    expect(calls).not.toContain("GetOpAnswer");
+    store.close();
+  });
+
+  test("T9x: the same 400 after a REFUSED stop is not a kill: the re-run quarantines", async () => {
+    const { backend } = worldStopStub({ stopped: false, reason: "already-completed" });
+    const { report, store } = await run(backend);
+    for (const m of report.mutants) expect(m.verdict).not.toBe("timeout-killed");
     store.close();
   });
 

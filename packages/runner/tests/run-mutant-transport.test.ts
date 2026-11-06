@@ -1080,6 +1080,8 @@ describe("isBeginTransactionWorldStop (GitHub #49)", () => {
   test("rejects every different 400", () => {
     const no = (b: string) => expect(isBeginTransactionWorldStop(400, b)).toBe(false);
     no(worldBody({ message: "begin transaction world was not called" }));
+    // Lowercase hex only: an uppercase GUID fails closed (the comment on the recogniser says so).
+    no(worldBody({ message: WORLD_MSG.replace(GUID, GUID.toUpperCase()) }));
     no(worldBody({ message: `x ${WORLD_MSG}` }));
     no(worldBody({ message: `${WORLD_MSG} more` }));
     no(worldBody({ message: `Begin transaction world not called  CorrelationId:  ${GUID}.` }));

@@ -171,7 +171,8 @@ const WORLD_STOP_MESSAGE =
  * stop: `{"error":{"code":"Internal_ServerError","message":"begin transaction world not called
  * CorrelationId: <guid>."}}`. Exact match only: status 400, a JSON object, `error.code` exactly
  * `Internal_ServerError`, and the trimmed `error.message` matching the whole pattern above. Case
- * is exact (BC's own spelling); the GUID may be any case. Unlike the 408 this text does NOT prove
+ * is exact (BC's own spelling), the GUID included: lowercase hex only, so an uppercase GUID fails
+ * closed. Unlike the 408 this text does NOT prove
  * the stop by itself, so callers must pair it with a stop of OUR OWN that was confirmed. It is an
  * exact text, not gated by BC version.
  */
@@ -737,8 +738,9 @@ export class RunMutantTransport {
    * Called on a SECOND connection while the original RunMutant request is still open — never
    * instead of it. The answer here is deliberately NOT the evidence a verdict rests on: measured,
    * `StopSession` returns without throwing for an id that never existed, for 0 and for -1, so the
-   * server cannot tell us it failed. The verdict comes from the 408 BC delivers to the held
-   * request (see `isAlStopResponse`); this call exists to CAUSE that, and its return value is
+   * server cannot tell us it failed. The verdict comes from the answer BC delivers to the held
+   * request (its 408, see `isAlStopResponse`, or GitHub #49's exact 400, see
+   * `isBeginTransactionWorldStop`); this call exists to CAUSE that, and its return value is
    * diagnostic only.
    *
    * The "is this op still running?" check lives SERVER-side, in `TryStopHungRun`'s tombstone
@@ -909,8 +911,8 @@ export class RunMutantTransport {
    * R198: the per-METHOD stop. Refused server-side unless the op's progress row reads exactly
    * (`methodIndex`, `methodToken`) in state `running`, read locked under the lease lock, so a
    * decision taken from a poll up to one interval stale cannot land on the next method. Its answer
-   * is a DECISION, not a termination: the verdict still comes only from the 408 BC delivers to the
-   * held request. Throws on transport failure, like `stopHungRun`.
+   * is a DECISION, not a termination: the verdict still comes only from the answer BC delivers to
+   * the held request (its stop 408, or GitHub #49's exact 400 after our confirmed stop). Throws on transport failure, like `stopHungRun`.
    */
   async stopHungRunAt(req: {
     readonly attemptId: string;
@@ -1012,9 +1014,10 @@ export class RunMutantTransport {
    * the session); compute the running method's elapsed time from `serverNow - startedAt`
    * (server clocks only; an unparseable pair never fires); at the method's budget either fire
    * `StopHungRunAt(index, token)` once (with `--stop-hung-sessions`) or abort the request
-   * (without). Scoring afterwards is today's rule: only BC's 408 naming the AL StopSession call
-   * is a `timeout`, narrowed for R204 by one status read; every other non-2xx after a stop is
-   * `in-flight-unknown`; a 2xx is parsed and scored as if no stop had fired.
+   * (without). Scoring afterwards: BC's 408 naming the AL StopSession call, or (GitHub #49) the
+   * exact BC 29 400 "begin transaction world not called" after OUR confirmed stop, is a `timeout`,
+   * narrowed for R204 by one status read; every other non-2xx after a stop is `in-flight-unknown`;
+   * a 2xx is parsed and scored as if no stop had fired.
    */
   async runMany(req: RunMutantManyRequest): Promise<RunMutantManyResult> {
     const trace = { failures: 0 };
@@ -1804,7 +1807,7 @@ export class RunMutantTransport {
     const stopDeadline = monoNow() + req.timeoutMs + (req.stopGraceMs ?? 30_000);
     const stop: StopTracker = { fired: false };
     const first = await settleStop(
-      await this.dispatch(req, collectCoverage, sink, stop),
+      await this.dispatch(req, collectCoverage, sink, stop, stopDeadline),
       stop,
       stopDeadline,
     );
@@ -1887,6 +1890,7 @@ export class RunMutantTransport {
     collectCoverage: boolean,
     sink: { rows?: readonly FencedCoverageRow[]; stats?: FencedCoverageStats },
     stop: StopTracker,
+    stopDeadline: number,
   ): Promise<TestVerdict> {
     const { ref, mutantId, attemptId, timeoutMs, lease } = req;
     // Layer 5C-B1: the SAME bound every lease action is held to (`lease.ts`), applied here because
@@ -2046,47 +2050,49 @@ export class RunMutantTransport {
     // No new verdict is introduced; what is new is having EARNED it — BC states the session was
     // stopped, so the operation is over and the tier is not stranded. `operation` is deliberately
     // absent: this is terminal.
+    /** The stop's scoring, shared by BC's 408 and GitHub #49's confirmed 400 (`how` names which). */
+    const scoreStop = async (body: string, how: string): Promise<TestVerdict> => {
+      // R204 (R-204b Part A): the same narrowing the grouped call makes, through the same helper.
+      if (await this.completedBeforeStop(lease, attemptId, 1)) {
+        return {
+          ref,
+          outcome: "error",
+          durationMs: monoNow() - started,
+          failureMessage: `RunMutant: BC answered our stop for ${ref.method} with ${how}, but the method's own completion was recorded before the session died, so this run is not scored (R204)`,
+          stopRefusal: "stopped-after-completion",
+        };
+      }
+      // R658 (M5): an unmutated run's stop scores nothing; it only keeps the op off the server.
+      const why =
+        mutantId === ""
+          ? "so it would not strand the server"
+          : "so it could be scored rather than strand the tier";
+      return {
+        ref,
+        outcome: "timeout",
+        durationMs: monoNow() - started,
+        failureMessage:
+          `RunMutant exceeded its ${timeoutMs} ms budget and was stopped server-side ${why}. ` +
+          `BC's own words: ${JSON.stringify(body.slice(0, 400))}`,
+      };
+    };
     if (stop.fired && res.status === 408) {
       const body = await res.text().catch(() => "");
       settleTimers();
-      if (isAlStopResponse(res.status, body)) {
-        // R204 (R-204b Part A): the same narrowing the grouped call makes, through the same helper.
-        if (await this.completedBeforeStop(lease, attemptId, 1)) {
-          return {
-            ref,
-            outcome: "error",
-            durationMs: monoNow() - started,
-            failureMessage: `RunMutant: BC answered our stop for ${ref.method} with its 408, but the method's own completion was recorded before the session died, so this run is not scored (R204)`,
-            stopRefusal: "stopped-after-completion",
-          };
-        }
-        // R658 (M5): an unmutated run's stop scores nothing; it only keeps the op off the server.
-        const why =
-          mutantId === ""
-            ? "so it would not strand the server"
-            : "so it could be scored rather than strand the tier";
-        return {
-          ref,
-          outcome: "timeout",
-          durationMs: monoNow() - started,
-          failureMessage:
-            `RunMutant exceeded its ${timeoutMs} ms budget and was stopped server-side ${why}. ` +
-            `BC's own words: ${JSON.stringify(body.slice(0, 400))}`,
-        };
-      }
+      if (isAlStopResponse(res.status, body)) return scoreStop(body, "its 408");
       // A 408 that is NOT BC's AL-stop answer (a proxy timing the socket out looks like this).
       // Falls through to the non-2xx branch → in-flight-unknown → quarantine, unchanged.
     }
 
+    // The body of a non-2xx, read once (R692: kept as diagnostic text, 400 characters). The timers
+    // are settled, so the read is bounded by hand (R191): a body that never ends adds a note and
+    // changes nothing.
+    let bodyNote = "";
     if (!res.ok) {
       settleTimers();
-      // Dispatched, then a non-2xx: RunMutant may have activated a mutant and not confirmed its
-      // clear — the container could be left mutated. in-flight-unknown, never a verdict.
-      // R692: BC's error text is kept (diagnostic only, 400 characters). The timers are settled, so
-      // the read is bounded by hand (R191): a body that never ends adds a note and changes nothing.
-      let bodyNote = "";
+      let text: string | undefined;
       try {
-        const text = await bounded(
+        text = await bounded(
           res.text(),
           Math.min(KEPT_ANSWER_READ_MS, timeoutMs),
           "RunMutant error body",
@@ -2096,6 +2102,23 @@ export class RunMutantTransport {
         bodyNote = ` (body unread: ${describeThrown(err)})`;
         void res.body?.cancel().catch(() => {}); // free the socket of a stream that never ended
       }
+      // GitHub #49: BC 29's 400 after our stop. This text proves nothing by itself, so it is scored
+      // only once OUR stop is known `confirmed`; `stop.done` never rejects and is awaited within
+      // the call's remaining grace, exactly as `settleStop` does. Any other state keeps the
+      // quarantine below.
+      if (stop.fired && text !== undefined && isBeginTransactionWorldStop(res.status, text)) {
+        const left = stopDeadline - monoNow();
+        if (stop.state === "issued" && stop.done !== undefined && left > 0) {
+          await bounded(stop.done, left, "the stop").catch(() => {});
+        }
+        if (stop.state === "confirmed") {
+          return scoreStop(text, 'its 400 "begin transaction world not called"');
+        }
+      }
+    }
+    if (!res.ok) {
+      // Dispatched, then a non-2xx: RunMutant may have activated a mutant and not confirmed its
+      // clear — the container could be left mutated. in-flight-unknown, never a verdict.
       return {
         ref,
         outcome: "error",

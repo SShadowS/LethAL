@@ -207,6 +207,122 @@ describe("R658 (M5): the stop 408's text says what the stop was for", () => {
   });
 });
 
+/**
+ * GitHub #49, the single path: BC 29's exact 400 scores as the 408 does, but only once the stop is
+ * known `confirmed` (the 400 may arrive before the stop's own reply, so the call waits for it).
+ * The body is the issue's text copied in: it proves only the recogniser's sample.
+ */
+describe("GitHub #49: the single path scores BC 29's 400 only after a confirmed stop", () => {
+  const WORLD = () =>
+    new Response(
+      JSON.stringify({
+        error: {
+          code: "Internal_ServerError",
+          message:
+            "begin transaction world not called  CorrelationId:  6f1c2d3e-4a5b-4c6d-8e7f-0123456789ab.",
+        },
+      }),
+      { status: 400 },
+    );
+  async function go(
+    hook: () => Promise<StopHookAnswer>,
+    over: { status?: () => Record<string, unknown> | Error; mutantId?: string } = {},
+  ) {
+    const c = start({ hook, status: () => row({ lastCompletedIndex: 0 }), ...over });
+    await flush();
+    jest.advanceTimersByTime(BUDGET);
+    await flush();
+    c.run.resolve(WORLD());
+    await flush();
+    return c;
+  }
+
+  test("W1. the stop's reply first, then the 400: timeout, confirmed, no operation, no readback", async () => {
+    const c = await go(async () => ({ stopped: true }));
+    expect(c.out()?.outcome).toBe("timeout");
+    expect(c.out()?.operation).toBeUndefined();
+    expect(c.out()?.stopState).toBe("confirmed");
+    expect(c.out()?.failureMessage).toContain("begin transaction world not called");
+    expect(c.calls).not.toContain("GetOpAnswer");
+  });
+
+  test("W2. the 400 BEFORE the stop's reply: the call waits, then scores", async () => {
+    const hook = deferred<StopHookAnswer>();
+    const c = start({ hook: () => hook.promise, status: () => row({ lastCompletedIndex: 0 }) });
+    await flush();
+    jest.advanceTimersByTime(BUDGET);
+    await flush();
+    c.run.resolve(WORLD());
+    await flush();
+    expect(c.out()).toBeUndefined();
+    hook.resolve({ stopped: true });
+    await flush();
+    expect(c.out()?.outcome).toBe("timeout");
+    expect(c.out()?.stopState).toBe("confirmed");
+  });
+
+  test("W3. a confirmed stop and the method's completion recorded: stopped-after-completion", async () => {
+    const c = await go(async () => ({ stopped: true }), {
+      status: () => row({ lastCompletedIndex: 1, state: "between" }),
+    });
+    expect(c.out()?.outcome).toBe("error");
+    expect(c.out()?.stopRefusal).toBe("stopped-after-completion");
+  });
+
+  test("W4. an unmutated run's 400 is neutral, like the 408's", async () => {
+    const c = await go(async () => ({ stopped: true }), { mutantId: "" });
+    expect(c.out()?.outcome).toBe("timeout");
+    expect(c.out()?.failureMessage).toContain("so it would not strand the server");
+  });
+
+  test("W5. a stop that threw: the 400 keeps the quarantine", async () => {
+    const c = await go(() => Promise.reject(new Error("ECONNRESET")));
+    expect(c.out()?.operation).toBe("in-flight-unknown");
+    expect(c.out()?.stopState).toBe("unknown");
+  });
+
+  test("W6. an already-completed refusal: the 400 keeps the quarantine", async () => {
+    const c = await go(async () => ({ stopped: false, reason: "already-completed" }));
+    expect(c.out()?.operation).toBe("in-flight-unknown");
+    expect(c.out()?.stopState).toBe("refused");
+  });
+
+  test("W7. a stop that never answers: the quarantine, at the remaining grace", async () => {
+    const hook = deferred<StopHookAnswer>();
+    const c = start({ hook: () => hook.promise });
+    await flush();
+    jest.advanceTimersByTime(BUDGET);
+    await flush();
+    c.run.resolve(WORLD());
+    await flush();
+    jest.advanceTimersByTime(GRACE);
+    await flush();
+    expect(c.out()?.operation).toBe("in-flight-unknown");
+    expect(c.out()?.stopState).toBe("unknown");
+  });
+
+  test("W8. the same text with no stop of ours: the quarantine", async () => {
+    const c = start({ hook: async () => ({ stopped: true }) });
+    await flush();
+    c.run.resolve(WORLD());
+    await flush();
+    expect(c.fired()).toBe(0);
+    expect(c.out()?.operation).toBe("in-flight-unknown");
+    expect(c.out()?.failureMessage).toContain("RunMutant failed: HTTP 400");
+  });
+
+  test("W9. another 400 after a confirmed stop keeps the quarantine and its body note", async () => {
+    const c = start({ hook: async () => ({ stopped: true }) });
+    await flush();
+    jest.advanceTimersByTime(BUDGET);
+    await flush();
+    c.run.resolve(new Response("Cannot establish a connection", { status: 400 }));
+    await flush();
+    expect(c.out()?.operation).toBe("in-flight-unknown");
+    expect(c.out()?.failureMessage).toContain("Cannot establish a connection");
+  });
+});
+
 describe("R-204b Part R: the stop's outcome is settled before the call returns (single path)", () => {
   const BAD_REQUEST = () => new Response("Cannot establish a connection", { status: 400 });
 

@@ -1443,6 +1443,56 @@ describe("runMany, GitHub #49: the BC 29 stop answer is a 400", () => {
     expect(r.verdict.outcome).not.toBe("timeout");
     expect(r.verdict.operation).toBe("in-flight-unknown");
   });
+
+  const atBeta = () =>
+    statusOf({
+      opProgress: {
+        ...(statusOf().opProgress as object),
+        methodIndex: 2,
+        method: "Beta",
+        token: "tok-m2",
+      },
+    });
+
+  test("the 400 released inside the stop call: scored, naming the watched method of a group, with no readback", async () => {
+    const f = fakes({
+      many: "hold",
+      status: atBeta,
+      stopAt: () => {
+        f.release(new Response(WORLD_400, { status: 400 }));
+        return { stopped: true, sessionId: 9 };
+      },
+    });
+    const r = await transport(f.fetchFn).runMany(req({ stopHungSessions: true }));
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r.verdict.outcome).toBe("timeout");
+    expect(r.verdict.ref.method).toBe("Beta");
+    expect(f.calls).not.toContain("GetOpAnswer");
+  });
+
+  test("a stop that threw, then the exact 400: in-flight-unknown", async () => {
+    const f = fakes({
+      many: "hold",
+      status: atBeta,
+      stopAt: () => {
+        setTimeout(() => f.release(new Response(WORLD_400, { status: 400 })), 5);
+        return new Error("StopHungRunAt unreachable");
+      },
+    });
+    const r = await transport(f.fetchFn).runMany(req({ stopHungSessions: true }));
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r.verdict.outcome).not.toBe("timeout");
+    expect(r.verdict.operation).toBe("in-flight-unknown");
+  });
+
+  test("an already-completed refusal, then the exact 400: in-flight-unknown", async () => {
+    const r = await afterStop(new Response(WORLD_400, { status: 400 }), {
+      stopped: false,
+      reason: "already-completed",
+    });
+    expect(r.verdict.outcome).not.toBe("timeout");
+    expect(r.verdict.operation).toBe("in-flight-unknown");
+  });
 });
 describe("runMany, a connection failure keeps the watchdog's story (R289)", () => {
   test("R289: the fetch rejects while the stop is still pending; the message names every watchdog step and the trace pins the order", async () => {
