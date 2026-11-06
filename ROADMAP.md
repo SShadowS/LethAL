@@ -494,8 +494,8 @@ that ordering is the priority.
 - **R827** · One empty-block mutant on a block folds everything inside it into one chain: 2 to 8 x the emitted code on real codeunits, growing with the square · [R827.md](docs/roadmap/R827.md) · parked 2026-11-05: plan reviewed, waiting for #28's reporter or a measured crash
 - **R828** · A condition mutant makes its whole `if` a chain root: chains of up to 66 remain once empty-block's fold is gone · [R828.md](docs/roadmap/R828.md) · open, filed 2026-11-05 (found by R-825); measured offline, nothing built
 - **R829** · Hang refusal misses a write the loop's step reads, when the loop condition reads a name (GitHub #50) · [R829.md](docs/roadmap/R829.md) · done (08605e4d)
-- **R830** · `void-method-call` has no hang check: deleting a call that steps a loop can hang the run · [R830.md](docs/roadmap/R830.md) · open, filed 2026-11-05 (found by R-818's planning); nothing measured, nothing built
-- **R831** · Hang refusal never sees an array-element target: `while Buf[1] < 10 do Buf[1] := Buf[1] + 1` is claimed · [R831.md](docs/roadmap/R831.md) · open, filed 2026-11-05 (found by R-818's plan review); nothing measured, nothing built
+- **R830** · `void-method-call` has no hang check: deleting a call that steps a loop can hang the run · [R830.md](docs/roadmap/R830.md) · open, filed 2026-11-05 (found by R-818's planning); counted offline, plan drafted (R-833), nothing built
+- **R831** · Hang refusal never sees an array-element target: `while Buf[1] < 10 do Buf[1] := Buf[1] + 1` is claimed · [R831.md](docs/roadmap/R831.md) · open, filed 2026-11-05 (found by R-818's plan review); counted offline, plan drafted (R-833), nothing built
 - **R832** · No way to leave one operator out: `--operator` only narrows to a list (`--exclude-operator`, GitHub #50) · [R832.md](docs/roadmap/R832.md) · done (22348be4)
 
 ## Backends and tooling
