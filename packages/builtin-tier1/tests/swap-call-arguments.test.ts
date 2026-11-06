@@ -314,3 +314,67 @@ describe("swapCallArguments: field-designator arguments (R455)", () => {
     expect(swaps('"My A": Integer; "My B": Integer;', 'Take("My A", "My B");')).toEqual([]);
   });
 });
+
+describe("swapCallArguments: member arguments (R856, #42)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  const TABLE = `table 92856 "R856 T" { fields { field(1; Code; Code[20]) { } field(2; Amount; Decimal) { } field(3; "Unit Price"; Decimal) { } field(4; Kind; Option) { OptionMembers = A,B; } field(5; Flow; Decimal) { FieldClass = FlowField; CalcFormula = sum("R856 T".Amount); } field(6; Filt; Decimal) { FieldClass = FlowFilter; } field(7; Plain; Decimal) { FieldClass = Normal; } } keys { key(PK; Code) { Clustered = true; } } }`;
+  const swaps = (decls: string, body: string): string[] =>
+    specsFor(
+      `${TABLE}\ncodeunit 92856 "R856 C" { procedure P() var R: Record "R856 T"; T: Record "R856 T" temporary; ${decls} begin ${body} end; }`,
+    ).map((s) => s.after.text);
+
+  it("field / variable", () => {
+    expect(swaps("N: Decimal;", "Foo(R.Amount, N);")).toEqual(["Foo(N, R.Amount)"]);
+  });
+  it("variable / field, quoted field name", () => {
+    expect(swaps("N: Decimal;", 'Foo(N, R."Unit Price");')).toEqual(['Foo(R."Unit Price", N)']);
+  });
+  it("field / field", () => {
+    expect(swaps("", 'Foo(R.Amount, R."Unit Price");')).toEqual(['Foo(R."Unit Price", R.Amount)']);
+  });
+  it("a field of a temporary record, and an explicit FieldClass = Normal", () => {
+    expect(swaps("", "Foo(T.Amount, T.Plain);")).toEqual(["Foo(T.Plain, T.Amount)"]);
+  });
+  it("refuses fields of differing types", () => {
+    expect(swaps("", "Foo(R.Amount, R.Code);")).toEqual([]);
+    expect(swaps("N: Integer;", "Foo(R.Amount, N);")).toEqual([]);
+  });
+  it("refuses a call or a literal beside a field", () => {
+    expect(swaps("", "Foo(R.Amount, Bar());")).toEqual([]);
+    expect(swaps("", "Foo(R.Amount, 1.5);")).toEqual([]);
+    expect(swaps("", "Foo(R.Amount, R.Count());")).toEqual([]);
+  });
+  it("refuses an Option field", () => {
+    expect(swaps("O: Option A,B;", "Foo(R.Kind, O);")).toEqual([]);
+    expect(swaps("", "Foo(R.Kind, T.Kind);")).toEqual([]);
+  });
+  it("refuses a FlowField and a FlowFilter, in either order", () => {
+    expect(swaps("N: Decimal;", "Foo(R.Flow, N);")).toEqual([]);
+    expect(swaps("N: Decimal;", "Foo(N, R.Flow);")).toEqual([]);
+    expect(swaps("N: Decimal;", "Foo(R.Filt, N);")).toEqual([]);
+    expect(swaps("N: Decimal;", "Foo(N, R.Filt);")).toEqual([]);
+  });
+  it("refuses a field of an undeclared record", () => {
+    expect(swaps("N: Decimal;", "Foo(Z.Amount, N);")).toEqual([]);
+  });
+  it("a bare pair wins over an earlier member", () => {
+    expect(swaps("A: Decimal; B: Decimal;", "Foo(R.Amount, A, B);")).toEqual([
+      "Foo(R.Amount, B, A)",
+    ]);
+  });
+  it("a bare pair that the loop rule refuses does not fall through to a member pair", () => {
+    // Bare pair (B, C) is refused, since the loop reads C. The member pair (B, R.Amount) would be free.
+    expect(swaps("B: Decimal; C: Decimal;", "while C > 0 do Foo(B, R.Amount, C);")).toEqual([]);
+  });
+  it("a member read by a loop through its base name is refused", () => {
+    expect(swaps("N: Decimal;", "while R.Next() <> 0 do Foo(R.Amount, N);")).toEqual([]);
+  });
+  it("control: a loop that reads neither name still swaps a member pair", () => {
+    expect(swaps("N: Decimal; K: Integer;", "while K > 0 do Foo(R.Amount, N);")).toEqual([
+      "Foo(N, R.Amount)",
+    ]);
+  });
+});
