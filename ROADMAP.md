@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**24 of 826 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**22 of 826 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -499,8 +499,8 @@ that ordering is the priority.
 - **R827** · One empty-block mutant on a block folds everything inside it into one chain: 2 to 8 x the emitted code on real codeunits, growing with the square · [R827.md](docs/roadmap/R827.md) · parked 2026-11-05: plan reviewed, waiting for #28's reporter or a measured crash
 - **R828** · A condition mutant makes its whole `if` a chain root: chains of up to 66 remain once empty-block's fold is gone · [R828.md](docs/roadmap/R828.md) · open: waits for R827 (coord task R-836); measured offline, nothing built
 - **R829** · Hang refusal misses a write the loop's step reads, when the loop condition reads a name (GitHub #50) · [R829.md](docs/roadmap/R829.md) · done (08605e4d)
-- **R830** · `void-method-call` has no hang check: deleting a call that steps a loop can hang the run · [R830.md](docs/roadmap/R830.md) · open, filed 2026-11-05 (found by R-818's planning); nothing measured, nothing built
-- **R831** · Hang refusal never sees an array-element target: `while Buf[1] < 10 do Buf[1] := Buf[1] + 1` is claimed · [R831.md](docs/roadmap/R831.md) · open, filed 2026-11-05 (found by R-818's plan review); nothing measured, nothing built
+- **R830** · `void-method-call` has no hang check: deleting a call that steps a loop can hang the run · [R830.md](docs/roadmap/R830.md) · done (6daf2727)
+- **R831** · Hang refusal never sees an array-element target: `while Buf[1] < 10 do Buf[1] := Buf[1] + 1` is claimed · [R831.md](docs/roadmap/R831.md) · done (6daf2727)
 - **R832** · No way to leave one operator out: `--operator` only narrows to a list (`--exclude-operator`, GitHub #50) · [R832.md](docs/roadmap/R832.md) · done (22348be4)
 - **R834** · Operator candidates #30-#43, ranked by sites, overlap, equivalents, yield and cost; first batch #35, #41, #33, #42 · [R834.md](docs/roadmap/R834.md) · open, filed 2026-11-06 (coord task R-821); measured offline, the owner picks the batch, nothing built
 - **R836** · Eleven gate baselines lag at scheme 44 after R830's bump to 45 · [R836.md](docs/roadmap/R836.md) · open, filed 2026-11-06 (coord task R-833)

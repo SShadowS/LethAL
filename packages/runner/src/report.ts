@@ -3460,7 +3460,7 @@ export function renderConsole(r: SessionReport): string {
   const hangRefused = byReason("hang-refused").filter((f) => f.sites > 0);
   if (hangRefused.length > 0) {
     lines.push(
-      `HANG-REFUSED SITES: ${hangRefused.reduce((n, f) => n + f.sites, 0)} site(s) in ${hangRefused.length} file(s) could hang the run if mutated: each writes a variable an enclosing loop's condition reads (R196), or is code of an unbounded report data item or a bounded item's only bound (R487/R501). No mutant was made there. They are absent from every count above.`,
+      `HANG-REFUSED SITES: ${hangRefused.reduce((n, f) => n + f.sites, 0)} site(s) in ${hangRefused.length} file(s) could hang the run if mutated: each writes a variable an enclosing loop's condition reads (R196), is a call that loop's progress may rest on (R830), or is code of an unbounded report data item or a bounded item's only bound (R487/R501). No mutant was made there. They are absent from every count above.`,
     );
   }
   // R565: every dependency report (or package) the hang refusal could not read in full.

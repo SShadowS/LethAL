@@ -364,6 +364,18 @@ describe("itest/gate-expected.ts (R-592)", () => {
 const LAGGING_SCHEME: Readonly<Record<string, string>> = {
   // A bare array (no scheme at all): the env tool is host-only.
   "envtool.baseline.json": "R683",
+  // Scheme 45: lethal-code records these once after R-833 lands (ruling, 2026-11-06).
+  "al-runner-v3.layout.baseline.json": "R836",
+  "al-runner-v3.multiobject.baseline.json": "R836",
+  "al-runner-v3.symbols-lethala.baseline.json": "R836",
+  "al-runner-v3.symbols-lethalb.baseline.json": "R836",
+  "al-runner-v3.tables.baseline.json": "R836",
+  "al-runner-v3.wrapped.baseline.json": "R836",
+  "bcdev.baseline.json": "R836",
+  "bcdev.names.baseline.json": "R836",
+  "bcdev.wrapped.baseline.json": "R836",
+  "harden.baseline.json": "R836",
+  "tables.baseline.json": "R836",
 };
 
 /** R682: the baselines behind `current` that nothing lists, and listed ones that are not behind. */
