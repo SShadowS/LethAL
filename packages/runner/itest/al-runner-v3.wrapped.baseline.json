@@ -98,6 +98,38 @@
       "mutatedTextSha256": "513f58774a41965262e45053648c2e188744d13f4cc62a5ba918e95be6d410b8"
     },
     {
+      "key": "170d7adfd47d508bb5d73d5d8292f517f4b58d7e4f589c8d566efe0800a806bc|Wrapped Pre Twin|Grow|lethal.empty-block|1",
+      "verdict": "killed",
+      "killingTest": "GrowPreTwin",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "170d7adfd47d508bb5d73d5d8292f517f4b58d7e4f589c8d566efe0800a806bc|Wrapped Pre|Grow|lethal.empty-block|1",
+      "verdict": "killed",
+      "killingTest": "GrowPre",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "170d7adfd47d508bb5d73d5d8292f517f4b58d7e4f589c8d566efe0800a806bc|Wrapped Top Twin|Grow|lethal.empty-block|1",
+      "verdict": "killed",
+      "killingTest": "GrowTopTwin",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "170d7adfd47d508bb5d73d5d8292f517f4b58d7e4f589c8d566efe0800a806bc|Wrapped Top|Grow|lethal.empty-block|1",
+      "verdict": "killed",
+      "killingTest": "GrowTop",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
       "key": "1d97f1930103cbec3bb1424c376fad840826a97fdf078d696a5668d76fd5516e|Wrapped Y Band Twin|OnPreReport|lethal.empty-block|1",
       "verdict": "survived",
       "killingTest": null,
@@ -285,38 +317,6 @@
       "key": "473f8aabd89fb3776cd184869a26a1c95377d88cd9b8b6de8951a4d5feaddea4|Wrapped Trigger|Doubled|lethal.empty-block|1",
       "verdict": "killed",
       "killingTest": "DoubledTrigger",
-      "coverageFiltered": false,
-      "errorClass": null,
-      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
-    },
-    {
-      "key": "556f58593db5335498212889dba9894dc670212013322a326eef302c07761f52|Wrapped Pre Twin|Grow|lethal.empty-block|1",
-      "verdict": "killed",
-      "killingTest": "GrowPreTwin",
-      "coverageFiltered": false,
-      "errorClass": null,
-      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
-    },
-    {
-      "key": "556f58593db5335498212889dba9894dc670212013322a326eef302c07761f52|Wrapped Pre|Grow|lethal.empty-block|1",
-      "verdict": "killed",
-      "killingTest": "GrowPre",
-      "coverageFiltered": false,
-      "errorClass": null,
-      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
-    },
-    {
-      "key": "556f58593db5335498212889dba9894dc670212013322a326eef302c07761f52|Wrapped Top Twin|Grow|lethal.empty-block|1",
-      "verdict": "killed",
-      "killingTest": "GrowTopTwin",
-      "coverageFiltered": false,
-      "errorClass": null,
-      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
-    },
-    {
-      "key": "556f58593db5335498212889dba9894dc670212013322a326eef302c07761f52|Wrapped Top|Grow|lethal.empty-block|1",
-      "verdict": "killed",
-      "killingTest": "GrowTop",
       "coverageFiltered": false,
       "errorClass": null,
       "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
