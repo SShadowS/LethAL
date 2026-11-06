@@ -728,6 +728,15 @@ function assertOnLeg(leg: LegResult): void {
   assert.equal(report.baselineGreen, true, "baseline must be green (the fixture test passes)");
   assert.equal(report.mutants.length, EXPECTED_ON.length, "every mutant must be scored");
   assert.equal(report.counts.errors, 0, "no mutant may error when the stop path is available");
+  // R830: the fixture's version did not move, and the old `Advance()` text hangs the same way, so
+  // no verdict tells the two apart. This names the text the run mutated; LethAL builds it from the
+  // local source and proves that build is the one running by its artifact id.
+  for (const line of [37, 145]) {
+    const call = report.mutants.find(
+      (m) => m.line === line && m.operatorName === "lethal.void-method-call",
+    );
+    assert.equal(call?.originalText, "OnAdvance()", `line ${line} must be the event call`);
+  }
 
   for (const want of EXPECTED_ON) {
     const got = report.mutants.find(
