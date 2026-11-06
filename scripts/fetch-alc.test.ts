@@ -9,6 +9,7 @@ import {
   DotnetMissingError,
   dotnetMajor,
   fetchAlc,
+  platformRefusal,
   vsixUrl,
   wrapperText,
 } from "./fetch-alc";
@@ -24,6 +25,17 @@ const vsix = () =>
     "extension/package.json": "{}",
   });
 const feed = async () => new Response(vsix());
+
+describe("platformRefusal", () => {
+  test("refuses Windows by name", () => {
+    expect(platformRefusal("win32")).toContain("On Windows, alc comes with");
+  });
+
+  test("lets Linux and macOS through", () => {
+    expect(platformRefusal("linux")).toBeUndefined();
+    expect(platformRefusal("darwin")).toBeUndefined();
+  });
+});
 
 describe("dotnetMajor", () => {
   test("reads the major from the runtimeconfig", () => {
