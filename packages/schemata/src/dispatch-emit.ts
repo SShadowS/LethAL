@@ -45,6 +45,12 @@ export function emitDispatch(
   return parts.join("");
 }
 
+/** R827: `begin <this> BODY end end`: the block empties under its own mutant and is copied nowhere. */
+export function guardOpen(m: PlannedMember, latch: string, selector: string): string {
+  const marker = m.place.kind === "none" ? "" : ` ${REACH_MARKER(m.mutantId, latch, selector)}`;
+  return ` if ${selector}.Active('${m.mutantId}') then begin${marker} end else begin`;
+}
+
 /** True when `text`, trailing white space aside, ends in `;`: the consumed-terminator rule. */
 export function endsInTerminator(text: string): boolean {
   return text.trimEnd().endsWith(";");

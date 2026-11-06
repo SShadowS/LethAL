@@ -25,12 +25,14 @@ export function largestFold(
   components: readonly {
     readonly members: readonly unknown[];
     readonly root: { readonly startIndex: number; readonly endIndex: number };
+    readonly free?: true;
   }[],
 ): FoldFigures {
   let chain = 0;
   let bytes = 0;
   for (const c of components) {
     chain = Math.max(chain, c.members.length);
+    if (c.free === true) continue; // R827: a guard copies no text.
     bytes = Math.max(bytes, c.members.length * (c.root.endIndex - c.root.startIndex));
   }
   return { chain, bytes };

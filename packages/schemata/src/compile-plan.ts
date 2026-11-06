@@ -36,6 +36,13 @@ import { REACH_LATCH } from "./reach-latch";
 export type PlannedPayload =
   | { readonly kind: "text"; readonly text: string }
   | {
+      /** R827: the opening half of a free block's guard pair. */
+      readonly kind: "guard";
+      readonly member: PlannedMember;
+      readonly latch: string;
+      readonly selector: string;
+    }
+  | {
       readonly kind: "chain";
       readonly component: PlannedComponent;
       /** The latch name the chain's markers use: the owner's, else `REACH_LATCH` (no marker). */
@@ -73,8 +80,9 @@ export function planFile(
   const resolvedIded = ided ?? assignMutantIds(new Map([["<file>", specs]])).get("<file>") ?? [];
 
   // Emission is a FLAT dispatch chain per containment component, never nested
-  // guards: only one mutant is ever active, so mutants that overlap are siblings
+  // chains: only one mutant is ever active, so mutants that overlap are siblings
   // in one if/else-if chain. Nesting wraps is what produced 2^depth growth.
+  // R827: a free `empty-block` is the one nested guard: it copies no text.
   // lift.ts/duplicate.ts are intentionally no longer routed to — see the design
   // spec §4: hoisting into a temp breaks AL evaluation order, cannot be typed
   // reliably, and is unsafe around ternaries and `var` parameters.
@@ -98,6 +106,25 @@ export function planFile(
   for (const component of components) {
     const planned = component.members.map((m) => planOf(component, m));
     members.push(...planned);
+    if (component.free === true) {
+      const [member] = planned;
+      const begin = component.root.children.find((n) => n.rawKind === "begin_keyword");
+      const end = component.root.children.filter((n) => n.rawKind === "end_keyword").at(-1);
+      if (member === undefined || begin === undefined || end === undefined) {
+        throw new Error(
+          `planFile: free block at ${component.root.startIndex} is not begin ... end`,
+        );
+      }
+      // Two insertions and no newline: the body is not copied, and no line of it moves.
+      rewrites.set(insertionNodeAt(begin, begin.endIndex), {
+        kind: "guard",
+        member,
+        latch: latches.get(component) ?? REACH_LATCH,
+        selector: selectorVarName(enclosingObjectDeclaration(component.root)) ?? SELECTOR_VAR,
+      });
+      rewrites.set(insertionNodeAt(end, end.startIndex), text("end "));
+      continue;
+    }
     rewrites.set(component.root, {
       kind: "chain",
       component: {

@@ -16,10 +16,54 @@ export interface Component {
   readonly root: ALSyntaxNode;
   /** Ordered: outermost mutation first, then by startIndex, then operatorName. */
   readonly members: readonly ComponentMember[];
+  /** R827: a free `empty-block`: its one member guards `root`, a block, with no chain and no copy. */
+  readonly free?: true;
 }
 
 function contains(outer: ALSyntaxNode, inner: ALSyntaxNode): boolean {
   return outer.startIndex <= inner.startIndex && inner.endIndex <= outer.endIndex;
+}
+
+const LOOPS: ReadonlySet<string> = new Set([
+  "while_statement",
+  "repeat_statement",
+  "for_statement",
+  "foreach_statement",
+]);
+
+/** R827 point 1: the outermost loop within `block` that holds `s`, or `s`. Inside a free block a
+ *  mutant in a loop stays guarded at loop entry, as the body's chain guarded it at body entry, so
+ *  no guard runs on every pass where none did before (R246). */
+function rootInFreeBlock(s: ALSyntaxNode, block: ALSyntaxNode): ALSyntaxNode {
+  let root = s;
+  for (
+    let n: ALSyntaxNode | null = s;
+    n !== null && n.startIndex > block.startIndex;
+    n = n.parent
+  ) {
+    if (LOOPS.has(n.rawKind)) root = n;
+  }
+  return root;
+}
+
+/** A directive's arm can hold the block's closing `end`, where one insertion reaches one build. */
+function holdsDirective(n: ALSyntaxNode): boolean {
+  return (
+    n.rawKind.startsWith("preproc_") || n.rawKind === "ERROR" || n.children.some(holdsDirective)
+  );
+}
+
+/** R827: does this member's own shape allow a guard? Chain roots and equal spans are the walk's. */
+function isFreeShape(m: ComponentMember): boolean {
+  const { before, operatorName } = m.spec;
+  return (
+    operatorName === "lethal.empty-block" &&
+    /^begin\s+end;?$/i.test(m.afterText.trim()) &&
+    m.statement.rawKind === "code_block" &&
+    before.startIndex === m.statement.startIndex &&
+    before.endIndex === m.statement.endIndex &&
+    !holdsDirective(m.statement)
+  );
 }
 
 /**
@@ -29,6 +73,10 @@ function contains(outer: ALSyntaxNode, inner: ALSyntaxNode): boolean {
  *
  * The root is what the printer rewrites; every member's edit is spliced into the
  * root's text, so members nested at any depth are handled uniformly.
+ *
+ * R827: an `empty-block` no chain root contains, whose block holds no directive and no other member
+ * resolves to, is FREE. It gets a guard pair around the block's body (`planFile`) and hosts nothing,
+ * so what sits inside it groups by this same walk. This is the one definition of free.
  */
 export function buildComponents(ided: readonly IdedSpec[]): Component[] {
   const resolved: ComponentMember[] = ided.map((entry) => {
@@ -45,16 +93,27 @@ export function buildComponents(ided: readonly IdedSpec[]): Component[] {
     return b.statement.endIndex - a.statement.endIndex;
   });
 
-  const groups: Array<{ root: ALSyntaxNode; members: ComponentMember[] }> = [];
+  const spanKey = (n: ALSyntaxNode): string => `${n.startIndex}-${n.endIndex}`;
+  const spans = new Map<string, number>();
+  for (const m of resolved) {
+    spans.set(spanKey(m.statement), (spans.get(spanKey(m.statement)) ?? 0) + 1);
+  }
+
+  const groups: Array<{ root: ALSyntaxNode; members: ComponentMember[]; free?: true }> = [];
   for (const m of bySpan) {
-    const host = groups.find((g) => contains(g.root, m.statement));
-    if (host === undefined) groups.push({ root: m.statement, members: [m] });
-    else host.members.push(m);
+    const outer = groups.find((g) => g.free === true && contains(g.root, m.statement));
+    const root = outer === undefined ? m.statement : rootInFreeBlock(m.statement, outer.root);
+    const host = groups.find((g) => g.free !== true && contains(g.root, root));
+    if (host !== undefined) host.members.push(m);
+    else if (root === m.statement && isFreeShape(m) && spans.get(spanKey(m.statement)) === 1) {
+      groups.push({ root, members: [m], free: true });
+    } else groups.push({ root, members: [m] });
   }
 
   return groups.map((g) => ({
     root: g.root,
     members: [...g.members].sort(orderOutermostFirst),
+    ...(g.free === true ? { free: true as const } : {}),
   }));
 }
 
