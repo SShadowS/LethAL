@@ -68,6 +68,16 @@ describe("assertGateWarnings", () => {
     );
   });
 
+  test("R852: a blip never fails a gate, and the next code along still does", () => {
+    expect(() => assertGateWarnings("g", "l", ["lease-renew-blip"], [])).not.toThrow();
+    expect(() => assertGateWarnings("g", "l", ["lease-renew-blip", "x"], [])).toThrow(
+      GateWarningsMismatchError,
+    );
+    expect(() => assertGateWarnings("g", "l", ["lease-renew-unanswered"], [])).toThrow(
+      GateWarningsMismatchError,
+    );
+  });
+
   test("R852: only an extra code's message is printed, not an expected one's", () => {
     let text = "";
     try {

@@ -67,6 +67,12 @@ export function collectWarnings(): WarningCollector {
   };
 }
 
+/**
+ * R852: seen, printed, never a mismatch. One renew blip is a brief moment on the server, not a
+ * property of the build, so a gate must not fail on it. Printing it keeps every blip in the gate's log.
+ */
+const LOGGED_ONLY: ReadonlySet<string> = new Set(["lease-renew-blip"]);
+
 export function assertGateWarnings(
   gate: string,
   leg: string,
@@ -80,7 +86,10 @@ export function assertGateWarnings(
       `${key}: no committed warning set (GATE_WARNINGS["${key}"] in gate-expected.ts). Observed ${JSON.stringify(observed)}. Record it by hand: run the gate with ${OBSERVE_WARNINGS_ENV}=1, explain each code, pre-commit the set, then add it to GATE_WARNINGS. The gate never records it itself.`,
     );
   }
-  const obs = new Set(observed);
+  for (const code of observed.filter((c) => LOGGED_ONLY.has(c))) {
+    console.log(`[gate-warnings] ${key}: ${code}: ${examples[code] ?? "(no message)"}`);
+  }
+  const obs = new Set(observed.filter((c) => !LOGGED_ONLY.has(c)));
   const exp = new Set(expected);
   const extra = [...obs].filter((c) => !exp.has(c)).sort();
   const missing = [...exp].filter((c) => !obs.has(c)).sort();
