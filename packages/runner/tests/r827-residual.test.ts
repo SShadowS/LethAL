@@ -110,8 +110,13 @@ async function checkDir(
   symbols: readonly string[],
   keep: (index: number) => boolean = () => true,
   withDetail = true,
+  excludeOperators?: readonly string[],
 ): Promise<DirResult> {
-  const set = await generateMutationSet(dir, { preprocessorSymbols: symbols, emit: () => {} });
+  const set = await generateMutationSet(dir, {
+    preprocessorSymbols: symbols,
+    emit: () => {},
+    ...(excludeOperators !== undefined ? { excludeOperators } : {}),
+  });
   const out: DirResult = {
     files: 0,
     refused: set.refusedFiles.length,
@@ -317,7 +322,10 @@ const LOOPS_AL = `codeunit 51996 "R827 Loops"
 `;
 
 /** `checkDir` over one source, in a throwaway project. */
-async function checkSource(source: string): Promise<DirResult> {
+async function checkSource(
+  source: string,
+  excludeOperators?: readonly string[],
+): Promise<DirResult> {
   const root = await mkdtemp(join(tmpdir(), "lethal-r827-source-"));
   try {
     await writeFile(
@@ -331,7 +339,7 @@ async function checkSource(source: string): Promise<DirResult> {
       }),
     );
     await writeFile(join(root, "Source.Codeunit.al"), source);
-    return await checkDir(root, []);
+    return await checkDir(root, [], undefined, undefined, excludeOperators);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -342,6 +350,38 @@ describe("R827: a free body keeps its guards out of its loops", () => {
     const r = await checkSource(LOOPS_AL);
     expect(r.mutants).toBeGreaterThan(20);
     expect(r.free).toBe(4);
+    expect(r.findings.map((f) => `${f.mutantId} ${f.kind}: ${f.detail}`)).toEqual([]);
+  });
+
+  // `while` and `repeat` carry their own mutants by default, which root them whatever the rule does.
+  test("the same, with the loop's own mutants left out", async () => {
+    const r = await checkSource(LOOPS_AL, [
+      "conditional-boundary",
+      "negate-conditional",
+      "loop-skip",
+      "loop-truncate",
+    ]);
+    expect(r.mutants).toBeGreaterThan(10);
+    expect(r.free).toBe(4);
+    expect(r.findings.map((f) => `${f.mutantId} ${f.kind}: ${f.detail}`)).toEqual([]);
+  });
+});
+
+describe("R827: only a body, and only its own empty-block", () => {
+  const BRANCH = `codeunit 51997 "R827 Free"\n{\n    procedure P() var X: Integer;\n    begin\n        if X > 0 then begin\n            X := 1;\n        end;\n    end;\n}\n`;
+
+  test("with no condition mutant a branch's block has no chain root, and is still not free", async () => {
+    const r = await checkSource(BRANCH, ["conditional-boundary", "negate-conditional"]);
+    expect(r.free).toBe(1);
+    expect(r.findings.map((f) => `${f.mutantId} ${f.kind}: ${f.detail}`)).toEqual([]);
+  });
+
+  test("another operator's member that resolves to the body is not a guard", async () => {
+    const source = `codeunit 51997 "R827 Free"\n{\n    procedure P() var X: Integer; L: List of [Integer];\n    begin\n        foreach X in L do\n            Foo(X + 1);\n    end;\n}\n`;
+    // One member alone, so the equal-span rule does not decide it first.
+    const r = await checkSource(source, ["empty-block", "void-method-call"]);
+    expect(r.mutants).toBeGreaterThan(0);
+    expect(r.free).toBe(0);
     expect(r.findings.map((f) => `${f.mutantId} ${f.kind}: ${f.detail}`)).toEqual([]);
   });
 });

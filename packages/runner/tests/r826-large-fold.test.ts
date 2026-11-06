@@ -216,6 +216,8 @@ describe("R826: the large-method warning", () => {
     expect(largestFold([small, bigText, longChain])).toEqual(want);
     expect(largestFold([bigText, small, longChain])).toEqual(want);
     expect(largestFold([])).toEqual({ chain: 0, bytes: 0 });
+    // R827: a free body's guard copies no text, however long the body is.
+    expect(largestFold([{ ...fold(1, 5000), free: true }, small])).toEqual({ chain: 1, bytes: 1 });
   });
 
   test("a real file fires on its chain alone, with its bytes under their figure", async () => {

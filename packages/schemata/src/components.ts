@@ -49,26 +49,19 @@ function rootInFreeBlock(s: ALSyntaxNode, block: ALSyntaxNode): ALSyntaxNode {
 /** A directive's arm can hold the block's closing `end`, where one insertion reaches one build. */
 function holdsDirective(n: ALSyntaxNode): boolean {
   return (
-    n.rawKind.startsWith("preproc_") ||
-    n.rawKind === "pragma" ||
-    n.rawKind === "ERROR" ||
-    n.children.some(holdsDirective)
+    n.rawKind.startsWith("preproc_") || n.rawKind === "pragma" || n.children.some(holdsDirective)
   );
 }
 
-/** R827: does this member's own shape allow a guard? Chain roots and equal spans are the walk's.
- *  A body only: a condition mutant roots every `if`, so a branch is never free in a default run. */
+/** R827: does this member's own shape allow a guard? Equal spans are the walk's. A statement whose
+ *  parent is a procedure or trigger is its body. A body only: a condition mutant roots every `if`,
+ *  so a branch is never free in a default run. */
 function isFreeShape(m: ComponentMember): boolean {
-  const { before, operatorName } = m.spec;
   const parent = m.statement.parent;
   return (
-    operatorName === "lethal.empty-block" &&
-    /^begin\s+end;?$/i.test(m.afterText.trim()) &&
-    m.statement.rawKind === "code_block" &&
+    m.spec.operatorName === "lethal.empty-block" &&
     parent !== null &&
     (isProcedureLike(parent) || parent.kind === ALNodeKind.trigger) &&
-    before.startIndex === m.statement.startIndex &&
-    before.endIndex === m.statement.endIndex &&
     !holdsDirective(m.statement)
   );
 }
@@ -112,7 +105,7 @@ export function buildComponents(ided: readonly IdedSpec[]): Component[] {
     const root = outer === undefined ? m.statement : rootInFreeBlock(m.statement, outer.root);
     const host = groups.find((g) => g.free !== true && contains(g.root, root));
     if (host !== undefined) host.members.push(m);
-    else if (root === m.statement && isFreeShape(m) && spans.get(spanKey(m.statement)) === 1) {
+    else if (isFreeShape(m) && spans.get(spanKey(m.statement)) === 1) {
       groups.push({ root, members: [m], free: true });
     } else groups.push({ root, members: [m] });
   }
