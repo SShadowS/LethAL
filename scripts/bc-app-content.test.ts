@@ -716,6 +716,8 @@ describe("R627: the two decoded entries refuse invalid UTF-8 and keep every vali
       "probes-navedit.app": "e45e9d8e5e93b43342a40521e8299218cad49bed9a69edb345f2e5952eabd2e2",
       "probes1.app": "fb1d6aa2a03d730ca2d971ae3764a745fc8df937a128c8f12dc558b3e8e3b8f7",
       "probes2.app": "fb1d6aa2a03d730ca2d971ae3764a745fc8df937a128c8f12dc558b3e8e3b8f7",
+      // R843: one object of every compared kind, in a namespace (real alc 18.1 build).
+      "r843-kinds.app": "6a3c7fe54defe369cadb4d73db2fc39761db2d25ce2ccc219ab2385221d3623d",
       "wrapped1.app": "3a91c311c9b6495a5028f7694eb8b69595ca855aa8a797f49b96ef0b892ed34b",
       "wrapped2.app": "3a91c311c9b6495a5028f7694eb8b69595ca855aa8a797f49b96ef0b892ed34b",
     };

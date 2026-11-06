@@ -25,7 +25,16 @@ The application object of type 'Table' with the ID '91000' is defined in multipl
 The apps are: <probe>; LethAL Control by LethAL 1.0.0.x
 ```
 
-**Use 91500+.** Set it in `app.json` `idRanges` *and* on every object.
+**Use 91500-91599, the range reserved for scratch work.** Set it in `app.json` `idRanges` *and* on every object.
+
+**A scratch object in a COPY of a fixture app must be checked free first** (it has to sit in that app's own id range, so 915xx does
+not fit). A fixture target and its tests app can share a range: `sandbox-app`'s holds `Sandbox Tests`' codeunit 79100. A clash on a
+target upgrade does not just fail: BC leaves the target uninstalled and removes its dependents (R709), and on bc1-bc3 only an owner
+restart recovers that (R841). List every fixture's object ids and pick one that is not there, by hand, before any publish:
+
+```bash
+for d in fixtures/*/; do grep -rhoE '^[[:space:]]*[a-z]+ [0-9]+' "$d" --include=*.al; done | sort -k2 -n | uniq
+```
 
 ### 2. The schema ghost, and the order that clears it
 
@@ -93,7 +102,10 @@ Credentials are in the gitignored `fixtures/*/lethal.config.local.json` (`bcdev.
 what was measured. It answered whether a second session can end one hung in an AL loop. Copy its
 shape.
 
-## Two rules that are not optional
+## Three rules that are not optional
+
+**Release a server only after it is proven healthy.** A script's end is not proof. After a publish, run a health check (`itest:bcdev`
+or setup's doctor) under the same lease, and keep the lease on any failure, so a damaged server never reads free (R841).
 
 **Bound every loop.** A probe that hangs forever wedges a container that other gates need. R53's
 probe bounded its hang at 90 s precisely so a NEGATIVE result could not take the container down.

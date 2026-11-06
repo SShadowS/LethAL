@@ -702,6 +702,44 @@ describe("publish ceiling — wired into the session (R90)", () => {
     }
   });
 
+  test("R843: a refusal that says 'defined in multiple apps' is two apps' fact, not a size: no row", async () => {
+    const dirs = await makeCeilingProject([
+      { name: "Small.Codeunit.al", source: await codeunitWithGuards(79000, "Small", 9) },
+    ]);
+    const store = new ResultsStore(":memory:");
+    const backend = new CeilingBackend({
+      onPublish: () => {
+        throw new Error(
+          "The application object of type 'CodeUnit' with the ID '79100' is defined in multiple apps",
+        );
+      },
+      reportedIdentity: "f".repeat(32),
+    });
+    try {
+      // Same shape as the test above (a demonstrated `failed` publish), so the only difference is
+      // BC's text. The error is still the publish failure; only the ceiling row differs.
+      await expect(
+        runSession({
+          backend,
+          store,
+          projectDir: dirs.projectDir,
+          testDir: dirs.testDir,
+          instrumentedDir: dirs.instrumentedDir,
+          selectorIds,
+          resourceServer: RESOURCE_SERVER,
+          resourceServerInstance: RESOURCE_INSTANCE,
+          quarantineDir: dirs.quarantineDir,
+        }),
+      ).rejects.toBeInstanceOf(PublishFailedError);
+      expect(backend.publishCalls).toBe(1);
+      expect(store.publishOutcomes(TIER)).toEqual([]);
+      expect(knownCeiling(store, TIER).smallestFailure).toBeUndefined();
+    } finally {
+      store.close();
+      await rm(dirs.root, { recursive: true, force: true });
+    }
+  });
+
   test("an accepted publish is recorded too — largestSuccess is what the refusal quotes back", async () => {
     const dirs = await makeCeilingProject([
       { name: "Small.Codeunit.al", source: await codeunitWithGuards(79000, "Small", 9) },

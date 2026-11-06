@@ -625,6 +625,7 @@ exports[`buildReport output is stable across the event-stream refactor an event 
     },
     "caveats": [
       "baseline-red",
+      "some-errors",
       "narrowed",
       "tests-narrowed",
       "uninstrumentable-files",
