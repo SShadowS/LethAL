@@ -87,11 +87,12 @@ import type {
   RunManyCause,
   RunManyOpts,
   RunManyResult,
+  StopEvidence,
   StopState,
   TestMethodRef,
   TestVerdict,
 } from "./backend";
-import { isBcdev, isLocalRunner, isUnread, stopIsRetrySafe } from "./backend";
+import { isBcdev, isLocalRunner, isUnread, stopIsRetrySafe, weakerStopEvidence } from "./backend";
 import {
   decodeSource,
   hashAlTree,
@@ -8273,6 +8274,7 @@ async function runSessionBody(
               undefined, // reach
               undefined, // killingTestRef
               carriedReproduction(carried),
+              carried.stopEvidence,
             );
             // R644 (build review I2): a carried survivor was not run here, so its STORE row keeps
             // the tests it faced where it was scored, never the tests covering it now; a later
@@ -10634,6 +10636,8 @@ type ReproDecision =
       readonly kind: "reproduced";
       /** `record()`'s `reproduction` argument: the reproduction's own text, when it had one. */
       readonly reproduction: { readonly reproducedFailure?: string };
+      /** GitHub #49: the reproduction run's own stop evidence; the row keeps the weaker of it and the kill's. */
+      readonly stopEvidence?: StopEvidence;
     }
   | KillErrorDecision;
 
@@ -10693,6 +10697,7 @@ async function reproduceKill(p: Parameters<typeof confirmWarm>[0]): Promise<Repr
   const reproduced = (v: TestVerdict): ReproDecision => ({
     kind: "reproduced",
     reproduction: v.failureMessage !== undefined ? { reproducedFailure: v.failureMessage } : {},
+    ...(v.stopEvidence !== undefined ? { stopEvidence: v.stopEvidence } : {}),
   });
   const fromNonVerdict = (nv: NonVerdictDecision): ReproDecision => {
     const note = nv.failureNote ?? "the reproduction ended without a readable answer";
@@ -11312,6 +11317,9 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     let killingTestFailure: string | undefined;
     // R206 §2.4: the killer's position within its call; set beside `killingTest` at every kill site.
     let killPosition: number | undefined;
+    // GitHub #49: which answer ended a `timeout-killed`'s stopped run(s): the WEAKER of the kill's
+    // and its reproduction's (`weakerStopEvidence`). Set only at the two timeout kill sites.
+    let stopEvidence: StopEvidence | undefined;
     /**
      * Every `failureNote` this loop composes is copied VERBATIM into the report and out again
      * through `lethal explain` (`ExplainNotMeasured.failureNote`), so it reaches every consumer of
@@ -11593,6 +11601,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
               break;
             }
             reproduction = repro?.reproduction;
+            stopEvidence = weakerStopEvidence(v.stopEvidence, repro?.stopEvidence);
             verdict = "timeout-killed";
             killingTest = ref.method;
             killingTestRef = ref;
@@ -11866,6 +11875,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
             break;
           }
           reproduction = repro?.reproduction;
+          if (timedOut) stopEvidence = weakerStopEvidence(v.stopEvidence, repro?.stopEvidence);
           verdict = timedOut ? "timeout-killed" : "killed";
           killingTest = ref.method;
           killingTestRef = ref;
@@ -12012,6 +12022,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
         reach,
         killingTestRef,
         reproduction,
+        stopEvidence,
       );
       for (const t of testResultBuffer) {
         args.store.recordTestResult(
@@ -12893,6 +12904,9 @@ export function record(
   // the reproduction's own text when it had one. Passed by the covering loop's kill sites when the
   // backend has the rule on, and by the two resume replays, which carry a prior row's unchanged.
   reproduction?: { readonly reproducedFailure?: string },
+  // GitHub #49: a `timeout-killed`'s stop evidence (see `MutantOutcome.stopEvidence`). Passed by the
+  // covering loop's timeout kill sites and by the resume replay, which carries a prior row's.
+  stopEvidence?: StopEvidence,
 ): number {
   const key = identityKeyOf(m);
   const reproduced =
@@ -12921,6 +12935,7 @@ export function record(
     ...(failureNote !== undefined ? { failureNote } : {}),
     ...(killingTestFailure !== undefined ? { killingTestFailure } : {}),
     ...(killPosition !== undefined ? { killPosition } : {}),
+    ...(stopEvidence !== undefined ? { stopEvidence } : {}),
     ...reproduced,
     ...(runner !== undefined ? { runner } : {}),
     // R192: always written, `[]` included — an explicit empty list is "no test ran this", while
@@ -12952,6 +12967,7 @@ export function record(
     ...(failureNote !== undefined ? { failureNote } : {}),
     ...(killingTestFailure !== undefined ? { killingTestFailure } : {}),
     ...(killPosition !== undefined ? { killPosition } : {}),
+    ...(stopEvidence !== undefined ? { stopEvidence } : {}),
     ...reproduced,
     ...(cause !== undefined ? { cause } : {}),
     ...(runner !== undefined ? { runner } : {}),
@@ -12973,6 +12989,7 @@ export function record(
       ...(failureNote !== undefined ? { failureNote } : {}),
       ...(killingTestFailure !== undefined ? { killingTestFailure } : {}),
       ...(killPosition !== undefined ? { killPosition } : {}),
+      ...(stopEvidence !== undefined ? { stopEvidence } : {}),
       ...reproduced,
       coveringTests,
       ...(coverageAttribution !== undefined ? { coverageAttribution } : {}),
@@ -12996,6 +13013,7 @@ export function record(
       ...(failureNote !== undefined ? { failureNote } : {}),
       ...(killingTestFailure !== undefined ? { killingTestFailure } : {}),
       ...(killPosition !== undefined ? { killPosition } : {}),
+      ...(stopEvidence !== undefined ? { stopEvidence } : {}),
       ...reproduced,
       ...(cause !== undefined ? { cause } : {}),
       coveringTests,

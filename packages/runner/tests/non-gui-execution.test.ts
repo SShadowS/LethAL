@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { MutantManifestEntry } from "@lethal/schemata";
-import { renderConsole } from "../src/report";
+import type { StopEvidence } from "../src/backend";
+import { CAVEAT_INTERPRETATIONS, renderConsole } from "../src/report";
 import type { SessionOutcome } from "../src/report";
 import { legacyBuildReport } from "./helpers/legacy-report";
 
@@ -147,5 +148,60 @@ describe("validity caveat: stop-hung-sessions (R53)", () => {
 
   test("does NOT fire when a timeout-killed exists without the flag", () => {
     expect(withTimeoutKill().validity.caveats).not.toContain("stop-hung-sessions");
+  });
+
+  test("its text is true for both stop forms: it no longer says BC confirmed the stop", () => {
+    expect(CAVEAT_INTERPRETATIONS["stop-hung-sessions"].meaning).not.toContain(
+      "rests on BC confirming",
+    );
+    expect(CAVEAT_INTERPRETATIONS["stop-hung-sessions"].meaning).toContain("stop-answer-400");
+  });
+});
+
+/**
+ * GitHub #49: a `timeout-killed` that ended in BC 29's exact 400 carries `stopEvidence`
+ * `begin-transaction-world`, and the report then says BC did not name the stop. Fires on the
+ * evidence alone: never for the 408 form, and never for a row with no evidence (an older store).
+ */
+describe("validity caveat: stop-answer-400 (GitHub #49)", () => {
+  const kill = (stopEvidence?: StopEvidence): SessionOutcome => ({
+    mutant: entry(),
+    verdict: "timeout-killed",
+    batchIndex: 0,
+    ...(stopEvidence !== undefined ? { stopEvidence } : {}),
+  });
+  const caveats = (...outcomes: SessionOutcome[]) =>
+    build({ outcomes, stopHungSessions: true }).validity.caveats;
+
+  test("fires with one scored kill that carries begin-transaction-world", () => {
+    expect(caveats(kill("begin-transaction-world"))).toContain("stop-answer-400");
+  });
+
+  test("fires on a mixed report: one 408 row and one 400 row", () => {
+    expect(caveats(kill("bc-named-stop"), kill("begin-transaction-world"))).toContain(
+      "stop-answer-400",
+    );
+  });
+
+  test("does NOT fire with only the 408 form", () => {
+    expect(caveats(kill("bc-named-stop"))).not.toContain("stop-answer-400");
+  });
+
+  test("does NOT fire for a timeout-killed with no evidence (an older store)", () => {
+    const c = caveats(kill());
+    expect(c).not.toContain("stop-answer-400");
+    expect(c).toContain("stop-hung-sessions");
+  });
+
+  test("does NOT fire when no kill is scored", () => {
+    expect(caveats()).not.toContain("stop-answer-400");
+  });
+
+  test("its text states the evidence limit", () => {
+    const t = CAVEAT_INTERPRETATIONS["stop-answer-400"].meaning;
+    expect(t).toContain("BC did not name the stop");
+    expect(t).toContain("6 of 6");
+    expect(t).toContain("4 runs with no stop");
+    expect(t).toContain("session list was not read");
   });
 });

@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { statSync } from "node:fs";
 import { IDENTITY_SCHEME, coarseIdentityTupleOf } from "@lethal/schemata";
-import type { CoverageMode, TestMethodRef, TestOutcome } from "./backend";
+import type { CoverageMode, StopEvidence, TestMethodRef, TestOutcome } from "./backend";
 import type { BaselineObservation, BaselineSnapshot } from "./baseline-snapshot";
 import type { PublishOutcome } from "./deployment-verifier";
 import type { InstalledBundleRows, InstalledBundleWrite } from "./installed-bundle";
@@ -129,6 +129,9 @@ export interface MutantRow {
    * recorded before the field existed and on every non-kill verdict.
    */
   readonly killPosition?: number;
+  /** GitHub #49 — see `MutantOutcome.stopEvidence` (report.ts). NULL (absent) on every other
+   *  verdict and on a row recorded before the column existed: never read as `bc-named-stop`. */
+  readonly stopEvidence?: StopEvidence;
   /** R577 — see `MutantOutcome.killReproduced` (report.ts). Absent on every non-kill, on a kill
    *  scored with the rule off, and on a row recorded before the column existed. */
   readonly killReproduced?: true;
@@ -203,6 +206,8 @@ export interface MutantVerdictRow {
   readonly killingTestFailure?: string;
   /** R206 — see `MutantRow.killPosition`. Threaded through for the same reason. */
   readonly killPosition?: number;
+  /** GitHub #49 — see `MutantRow.stopEvidence`. Threaded through for the same reason. */
+  readonly stopEvidence?: StopEvidence;
   /** R577 — see `MutantRow.killReproduced`. Read by `--resume` (B1) as well as carried. */
   readonly killReproduced?: true;
   /** R577 — see `MutantRow.reproducedFailure`. Threaded through for the same reason. */
@@ -530,6 +535,7 @@ CREATE TABLE IF NOT EXISTS mutants (
   failure_note TEXT,
   killing_test_failure TEXT,
   kill_position INTEGER,
+  stop_evidence TEXT,
   kill_reproduced INTEGER,
   reproduced_failure TEXT,
   duration_ms INTEGER NOT NULL,
@@ -764,6 +770,12 @@ export class ResultsStore {
     }
     if (!cols.some((c) => c.name === "reproduced_failure")) {
       this.db.exec("ALTER TABLE mutants ADD COLUMN reproduced_failure TEXT");
+    }
+    // GitHub #49: `stop_evidence`. Same hazard (the INSERT names it). Pre-existing rows keep NULL,
+    // which `mutantVerdicts` DROPS: a timeout-killed from before the column is "unknown", never the
+    // 408.
+    if (!cols.some((c) => c.name === "stop_evidence")) {
+      this.db.exec("ALTER TABLE mutants ADD COLUMN stop_evidence TEXT");
     }
     if (!trCols.some((c) => c.name === "session_id")) {
       this.db.exec("ALTER TABLE test_results ADD COLUMN session_id INTEGER");
@@ -1379,6 +1391,14 @@ export class ResultsStore {
    * (CLAUDE.md "fail loudly on caller-contract violations"), a corrupt DB value must throw naming
    * itself and the offending row, never get coerced into a guessed default.
    */
+  /** GitHub #49: a stored `stop_evidence` is one of the two names, or the row is corrupt: throw. */
+  private parseStopEvidence(value: string): StopEvidence {
+    if (value === "bc-named-stop" || value === "begin-transaction-world") return value;
+    throw new Error(
+      `store.ts: mutant row has a corrupt "stop_evidence" column value ${JSON.stringify(value)} — expected "bc-named-stop", "begin-transaction-world", or NULL`,
+    );
+  }
+
   private parseRunnerKind(
     value: string,
     row: { astHash: string; codeunitName: string; operatorName: string; operatorMajor: number },
@@ -1434,7 +1454,7 @@ export class ResultsStore {
         `SELECT ast_hash, codeunit_name, procedure_name, operator_name, operator_major,
            ${EFFECTIVE_VERDICT_SQL} AS verdict, m.verdict AS stored_verdict,
            (SELECT l.note FROM lost_batches l WHERE l.run_id = m.run_id AND l.batch_index = m.batch_index) AS lost_note,
-           killing_test, failure_note, killing_test_failure, kill_position, kill_reproduced,
+           killing_test, failure_note, killing_test_failure, kill_position, stop_evidence, kill_reproduced,
            reproduced_failure, duration_ms, runner, covering_tests, coverage_attribution, unplaceable, identity_ordinal, file, member_hash
          FROM mutants m WHERE m.run_id = ?`,
       )
@@ -1453,6 +1473,7 @@ export class ResultsStore {
       failure_note: string | null;
       killing_test_failure: string | null;
       kill_position: number | null;
+      stop_evidence: string | null;
       kill_reproduced: number | null;
       reproduced_failure: string | null;
       duration_ms: number;
@@ -1472,6 +1493,7 @@ export class ResultsStore {
               killing_test: null,
               killing_test_failure: null,
               kill_position: null,
+              stop_evidence: null,
               kill_reproduced: null,
               reproduced_failure: null,
             };
@@ -1497,6 +1519,9 @@ export class ResultsStore {
         ...(r.failure_note !== null ? { failureNote: r.failure_note } : {}),
         ...(r.killing_test_failure !== null ? { killingTestFailure: r.killing_test_failure } : {}),
         ...(r.kill_position !== null ? { killPosition: r.kill_position } : {}),
+        ...(r.stop_evidence !== null
+          ? { stopEvidence: this.parseStopEvidence(r.stop_evidence) }
+          : {}),
         ...(r.kill_reproduced === 1 ? { killReproduced: true as const } : {}),
         ...(r.reproduced_failure !== null ? { reproducedFailure: r.reproduced_failure } : {}),
         ...(r.runner !== null
@@ -2078,10 +2103,10 @@ export class ResultsStore {
       .query(
         `INSERT INTO mutants (run_id, mutant_code, ast_hash, codeunit_name, procedure_name,
          operator_name, operator_major, file, line, verdict, killing_test, failure_note,
-         killing_test_failure, kill_position, kill_reproduced, reproduced_failure, duration_ms,
+         killing_test_failure, kill_position, stop_evidence, kill_reproduced, reproduced_failure, duration_ms,
          batch_index, runner, covering_tests, coverage_attribution, unplaceable, identity_ordinal,
          carried, member_hash)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
       )
       .get(
         runId,
@@ -2098,6 +2123,7 @@ export class ResultsStore {
         row.failureNote ?? null,
         row.killingTestFailure ?? null,
         row.killPosition ?? null,
+        row.stopEvidence ?? null,
         row.killReproduced === true ? 1 : null,
         row.reproducedFailure ?? null,
         row.durationMs,
@@ -2146,8 +2172,8 @@ export class ResultsStore {
         // this row is no longer a kill, so a leftover account of "why the test went red" would
         // describe a verdict that has just been withdrawn.
         `UPDATE mutants SET verdict = 'error', failure_note = ?, killing_test = NULL,
-           killing_test_failure = NULL, kill_position = NULL, kill_reproduced = NULL,
-           reproduced_failure = NULL
+           killing_test_failure = NULL, kill_position = NULL, stop_evidence = NULL,
+           kill_reproduced = NULL, reproduced_failure = NULL
          WHERE run_id = ? AND batch_index = ? AND verdict NOT IN ${INVALIDATION_KEEPS_SQL}`,
       )
       .run(note, runId, batchIndex);

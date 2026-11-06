@@ -156,6 +156,8 @@ describe("R-204b Part A: a stop 408 after the method recorded its completion is 
     const { v } = await stoppedWith(() => row({ lastCompletedIndex: 0 }));
     expect(v.outcome).toBe("timeout");
     expect(v.stopRefusal).toBeUndefined();
+    // GitHub #49: the 408 form says so on the single path.
+    expect(v.stopEvidence).toBe("bc-named-stop");
   });
 
   test("3. the status read throws: unavailable evidence stays timeout", async () => {
@@ -242,6 +244,8 @@ describe("GitHub #49: the single path scores BC 29's 400 only after a confirmed 
     expect(c.out()?.outcome).toBe("timeout");
     expect(c.out()?.operation).toBeUndefined();
     expect(c.out()?.stopState).toBe("confirmed");
+    // GitHub #49: the 400 form says so on the single path.
+    expect(c.out()?.stopEvidence).toBe("begin-transaction-world");
     expect(c.out()?.failureMessage).toContain("begin transaction world not called");
     expect(c.calls).not.toContain("GetOpAnswer");
   });

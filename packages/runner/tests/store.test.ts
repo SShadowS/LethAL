@@ -1226,6 +1226,59 @@ CREATE TABLE IF NOT EXISTS mutants (
       }
     });
 
+    test("GitHub #49: a pre-existing database gains stop_evidence; an old timeout-killed reads back with NO evidence (never the 408), a new one round-trips", () => {
+      const dbPath = testDbPath("lethal.sqlite");
+      try {
+        const old = new Database(dbPath, { create: true });
+        old.exec(PRE_43_SCHEMA);
+        old.exec(
+          "INSERT INTO runs (project_path, backend, app_version) VALUES ('/p', 'bcdev', '1');" +
+            "INSERT INTO mutants (run_id, mutant_code, ast_hash, codeunit_name, operator_name," +
+            " operator_major, file, line, verdict, killing_test, duration_ms) VALUES (1, 'M0001'," +
+            " 'old', 'Sample', 'conditional-boundary', 1, 'Sample.Codeunit.al', 12, 'timeout-killed', 'T', 40);",
+        );
+        old.close();
+        const store = new ResultsStore(dbPath);
+        const oldRows = store.mutantVerdicts(1);
+        const runId = store.createRun({
+          testScope: [],
+          coverageMode: "procedure",
+          testAppHash: "T",
+          testAppProven: true,
+          testAppDeps: "D",
+          identityScheme: IDENTITY_SCHEME,
+          buildSymbols: [],
+          projectPath: "/p",
+          backend: "bcdev",
+          appVersion: "1",
+        });
+        for (const [code, hash, evidence] of [
+          ["M0002", "n400", "begin-transaction-world"],
+          ["M0003", "n408", "bc-named-stop"],
+        ] as const) {
+          store.recordMutant(
+            runId,
+            mutantRow("timeout-killed", {
+              mutantCode: code,
+              astHash: hash,
+              killingTest: "T",
+              stopEvidence: evidence,
+            }),
+          );
+        }
+        const byHash = new Map(
+          [...oldRows, ...store.mutantVerdicts(runId)].map((r) => [r.astHash, r]),
+        );
+        store.close();
+        expect(byHash.get("old")?.verdict).toBe("timeout-killed");
+        expect("stopEvidence" in (byHash.get("old") ?? {})).toBe(false);
+        expect(byHash.get("n400")?.stopEvidence).toBe("begin-transaction-world");
+        expect(byHash.get("n408")?.stopEvidence).toBe("bc-named-stop");
+      } finally {
+        rmSync(dirname(dbPath), { recursive: true, force: true });
+      }
+    });
+
     test("recordMutant persists failure_note at the column level, NULL when absent", () => {
       // Direct column-level coverage (Task 6 Minor): read the value back out
       // of the column itself, not just through the absence of a throw.

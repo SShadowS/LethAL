@@ -580,6 +580,8 @@ describe("runMany — the watchdog (R198 §3.2)", () => {
     expect(r.verdict.outcome).toBe("timeout");
     expect(r.verdict.ref.method).toBe("Alpha");
     expect(r.cause).toBeUndefined();
+    // GitHub #49: the 408 form says so on the grouped path.
+    expect(r.verdict.stopEvidence).toBe("bc-named-stop");
   });
 
   test("R710: a wall-clock step back while the grouped call is held does not give the stop row a negative duration", async () => {
@@ -1359,6 +1361,8 @@ describe("runMany, GitHub #49: the BC 29 stop answer is a 400", () => {
     expect(r.verdict.outcome).toBe("timeout");
     expect(r.verdict.operation).toBeUndefined();
     expect(r.verdict.failureMessage).toContain("begin transaction world not called");
+    // GitHub #49: the 400 form says so on the grouped path.
+    expect(r.verdict.stopEvidence).toBe("begin-transaction-world");
   });
 
   test("the same, with the method's own completion recorded: stopped-after-completion", async () => {

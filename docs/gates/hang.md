@@ -29,6 +29,17 @@ It runs four legs, in this order on purpose:
   owner restarts it. The rule and its wrapper are in
   `docs/superpowers/specs/2026-10-22-r658-hang-baseline-leg-precommitment.md`; the judgements are
   in `packages/runner/itest/hang-baseline-leg.ts`. A quarantine in ON or SINGLE is a STOP too.
+- **One stop form per server (GitHub #49, R833).** BC 28 (`bc1`-`bc3`) answers the held request with
+  the 408 naming `StopSession`; BC 29 (`bc4`, 29.0.54011.57673) answered the exact 400 "begin
+  transaction world not called" on 6 of 6 hangs, never a 408. The gate reads the form from the
+  config the run names (`stopFormFor`, `hang-stop-rows.ts`) and accepts ONLY that form: a 400 on BC
+  28 fails, and so does a 408 on BC 29 until one is measured there. A config that is not
+  `lethal.config.bc1.json` to `bc4.json` is refused before any leg. Rows on the 400 form must carry
+  `stopEvidence: "begin-transaction-world"` (the 408 form `"bc-named-stop"`) and the report the
+  `stop-answer-400` caveat (the 408 form must not). The duration window is unchanged and
+  `hang.single.baseline.json` does not move. NOT yet run on `bc4`: the evidence limit is 6 of 6
+  hangs on one build, 4 runs with no stop (the text never appeared), BC's own session list not
+  read, and `bc4` is .57673 against the issue's .57293.
 - OFF: puts the tier in quarantine on purpose, and is torn down afterwards. Since R658 every
   baseline has the stop, even with the flag off: only the MUTANT runs depend on the flag. At the
   120 s default no baseline test of this leg runs near its budget, so nothing in it moves.

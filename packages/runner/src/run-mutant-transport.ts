@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { appendFileSync } from "node:fs";
 import type { ActivationConfig, FetchFn } from "./activation";
-import type { StopState, TestMethodRef, TestOutcome, TestVerdict } from "./backend";
+import type { StopEvidence, StopState, TestMethodRef, TestOutcome, TestVerdict } from "./backend";
 import { bcFetch, bounded } from "./bc-fetch";
 import { describeThrown } from "./describe-error";
 import { UnfilteredExtensionsQueryError } from "./harness";
@@ -1479,6 +1479,7 @@ export class RunMutantTransport {
       return call({
         ref: decision.ref,
         outcome: "timeout",
+        stopEvidence: worldStop ? "begin-transaction-world" : "bc-named-stop",
         durationMs,
         // R658 (M2): the warm confirmation's unmutated replay (mutantId "") scores nothing.
         failureMessage:
@@ -2051,7 +2052,11 @@ export class RunMutantTransport {
     // stopped, so the operation is over and the tier is not stranded. `operation` is deliberately
     // absent: this is terminal.
     /** The stop's scoring, shared by BC's 408 and GitHub #49's confirmed 400 (`how` names which). */
-    const scoreStop = async (body: string, how: string): Promise<TestVerdict> => {
+    const scoreStop = async (
+      body: string,
+      how: string,
+      stopEvidence: StopEvidence,
+    ): Promise<TestVerdict> => {
       // R204 (R-204b Part A): the same narrowing the grouped call makes, through the same helper.
       if (await this.completedBeforeStop(lease, attemptId, 1)) {
         return {
@@ -2070,6 +2075,7 @@ export class RunMutantTransport {
       return {
         ref,
         outcome: "timeout",
+        stopEvidence,
         durationMs: monoNow() - started,
         failureMessage:
           `RunMutant exceeded its ${timeoutMs} ms budget and was stopped server-side ${why}. ` +
@@ -2079,7 +2085,7 @@ export class RunMutantTransport {
     if (stop.fired && res.status === 408) {
       const body = await res.text().catch(() => "");
       settleTimers();
-      if (isAlStopResponse(res.status, body)) return scoreStop(body, "its 408");
+      if (isAlStopResponse(res.status, body)) return scoreStop(body, "its 408", "bc-named-stop");
       // A 408 that is NOT BC's AL-stop answer (a proxy timing the socket out looks like this).
       // Falls through to the non-2xx branch → in-flight-unknown → quarantine, unchanged.
     }
@@ -2112,7 +2118,11 @@ export class RunMutantTransport {
           await bounded(stop.done, left, "the stop").catch(() => {});
         }
         if (stop.state === "confirmed") {
-          return scoreStop(text, 'its 400 "begin transaction world not called"');
+          return scoreStop(
+            text,
+            'its 400 "begin transaction world not called"',
+            "begin-transaction-world",
+          );
         }
       }
     }

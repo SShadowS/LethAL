@@ -42,6 +42,7 @@ import type {
   RunManyOpts,
   RunManyResult,
   RunOpts,
+  StopEvidence,
   StopState,
   TestMethodRef,
   TestVerdict,
@@ -22320,15 +22321,18 @@ describe("R577: a kill must reproduce under the mutant", () => {
         "begin transaction world not called  CorrelationId:  6f1c2d3e-4a5b-4c6d-8e7f-0123456789ab.",
     },
   });
-  const worldStopStub = (stopAnswer: { stopped: boolean; reason?: string }) => {
+  const BC_408 =
+    "The server stopped the session (ID: 2683) because of a stop session request. The session was stopped by an AL StopSession call.";
+  const worldStopStub = (
+    stopAnswer: { stopped: boolean; reason?: string },
+    reply: () => Response = () => new Response(WORLD_400, { status: 400 }),
+  ) => {
     const calls: string[] = [];
     const fetchFn = ((url: unknown) => {
       const action = /LethALControl_(\w+)/.exec(String(url))?.[1] ?? String(url);
       calls.push(action);
       if (action === "RunMutant") {
-        return new Promise<Response>((res) =>
-          setTimeout(() => res(new Response(WORLD_400, { status: 400 })), 60),
-        );
+        return new Promise<Response>((res) => setTimeout(() => res(reply()), 60));
       }
       return Promise.reject(new Error(`no ${action} in this test`));
     }) as typeof fetch;
@@ -22375,6 +22379,45 @@ describe("R577: a kill must reproduce under the mutant", () => {
     }
     expect(calls).toContain("RunMutant");
     expect(calls).not.toContain("GetOpAnswer");
+    // GitHub #49: the row says which answer ended it, and the report carries the 400 caveat.
+    for (const m of report.mutants) expect(m.stopEvidence).toBe("begin-transaction-world");
+    expect(report.validity.caveats).toContain("stop-answer-400");
+    store.close();
+  });
+
+  /** The first run carries `first` as its evidence; the re-run is the stub's real transport. */
+  const mixed = async (first: StopEvidence, reply: () => Response) => {
+    const { backend } = worldStopStub({ stopped: true }, reply);
+    backend.answer = (mutant, n, v) =>
+      mutant !== null && n === 1 ? { ...v, stopEvidence: first } : undefined;
+    return run(backend);
+  };
+  const world400 = () => new Response(WORLD_400, { status: 400 });
+  const bc408 = () => new Response(BC_408, { status: 408 });
+
+  test("T9m1: GitHub #49 mixed run: first run the 408, re-run the 400 -> the row shows the WEAKER, the 400", async () => {
+    const { report, store } = await mixed("bc-named-stop", world400);
+    expect(report.mutants.length).toBeGreaterThan(0);
+    for (const m of report.mutants) expect(m.stopEvidence).toBe("begin-transaction-world");
+    expect(report.validity.caveats).toContain("stop-answer-400");
+    store.close();
+  });
+
+  test("T9m2: GitHub #49 mixed run the other way: first run the 400, re-run the 408 -> still the 400", async () => {
+    const { report, store } = await mixed("begin-transaction-world", bc408);
+    expect(report.mutants.length).toBeGreaterThan(0);
+    for (const m of report.mutants) expect(m.stopEvidence).toBe("begin-transaction-world");
+    store.close();
+  });
+
+  test("T9m3: GitHub #49 both runs the 408 -> bc-named-stop, and NO 400 caveat", async () => {
+    const { report, store } = await mixed("bc-named-stop", bc408);
+    expect(report.mutants.length).toBeGreaterThan(0);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("timeout-killed");
+      expect(m.stopEvidence).toBe("bc-named-stop");
+    }
+    expect(report.validity.caveats).not.toContain("stop-answer-400");
     store.close();
   });
 
