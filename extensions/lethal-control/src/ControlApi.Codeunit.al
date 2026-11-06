@@ -377,8 +377,9 @@ codeunit 91003 "LC Control API"
     /// ONE ROW PER ITEM READ, in order: {table, id?, name?, outcome, appId?, appName?, appPublisher?,
     /// appVersion?, fieldName?, tableName?}. outcome is owner, none or unresolved as in ObjectOwners; a name item that matches more
     /// than one field of the table is unresolved. FieldName and TableName are answered as BC holds them:
-    /// the CLIENT compares names exactly (a filter on a name is not case sensitive) and checks tableName is
-    /// the table it asked about. A name read scans one table's rows. MaxMs and `read` as in ObjectOwners.
+    /// the CLIENT compares names exactly and checks tableName is the table it asked about. Measured on
+    /// BC 28.4 (R847 probe): SetRange(FieldName) IS case sensitive, so a name that differs only in case is
+    /// `none` and case cannot give two matches; the unresolved path stays as a guard. A name read scans one table's rows. MaxMs and `read` as in ObjectOwners.
     /// JSON: {read, rows: [...]}.</summary>
     procedure FieldOwners(ItemsJson: Text; MaxMs: Integer) ResultJson: Text
     var
@@ -435,6 +436,8 @@ codeunit 91003 "LC Control API"
             if Count = 0 then
                 Row.Add('outcome', 'none')
             else
+                // Count > 1 cannot arise from case (measured); kept so an unexpected second row is a
+                // warning, never a guess at which row is the owner.
                 if (Count > 1) or (Owner = '') then
                     Row.Add('outcome', 'unresolved')
                 else begin

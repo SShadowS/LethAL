@@ -77,13 +77,15 @@ const MIN_PROTOCOL_VERSION = 2;
  * lag behind only for an action the client treats as optional, and none is now. Raise it (to
  * app.json's version) whenever a client path REQUIRES a new control action and has no fallback:
  * that is why the two were once pinned equal.
+ * 1.0.0.25 (R847) adds the read actions `ObjectOwners` and `FieldOwners`; the clash check's
+ * non-dependent step uses them, and there is no fallback for an older control app.
  * 1.0.0.24 (R689, R733) adds `InstalledDependents` and the found-0 `discoveryError` fields; R727's
  * dependents warning and R389's `DependentCount` read need 1.0.0.23 and 1.0.0.24, and there is no
  * fallback for an older control app (no back-compat before release).
  * 1.0.0.22 (R583) changes no behaviour: it is the runtime-17.0 build, raised so a container still on
  * the runtime-16 build is refused before any gate measures against it.
  */
-export const MIN_CONTROL_VERSION = "1.0.0.24";
+export const MIN_CONTROL_VERSION = "1.0.0.25";
 
 /**
  * R20: the harness could not be AUTHENTICATED — HTTP 401/403 — as distinct from "the control app is

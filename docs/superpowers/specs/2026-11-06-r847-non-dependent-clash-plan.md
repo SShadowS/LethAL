@@ -78,6 +78,8 @@ and that lands where it lands today, at `UpgradeClashRefusedError`. Every miss d
 
 ## Limits
 
+Measured 2026-11-06 on bc1 (BC 28.4): an app that is published but not installed is invisible to `AllObj` and `Field`, so the check does not see it until it is installed. `AllObjWithCaption` is not used
+(`AllObj` with the package join is enough). `AllObj` has rows for all 13 kinds. `Field` names a tableextension field's own app. `SetRange(FieldName)` is case sensitive.
 Enum values: `Enum Metadata` is not in System's symbols, on 28 or 29. Kinds found blind in Part 2. A non-dependent's page, action and report-column names were accepted or are unmeasured
 (R845). The env-tool items stay as R845 names them. `AllObjWithCaption` has `App ID` directly and may be better: Part 2 measures both.
 
