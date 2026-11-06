@@ -141,13 +141,27 @@ if (dbReportDir !== undefined && dbReportDir !== "") {
 
 const lethalEntries = (): string[] => readdirSync(tmp).filter((e) => e.startsWith("lethal-"));
 const leaks: string[] = [];
+const quarantineLeaks: string[] = [];
 let file = "";
 let made: string[] = [];
 let before = new Set<string>();
+/**
+ * R835: a record left in the default quarantine store reaches every later file of a serial run, one
+ * fake home serving them all, and turns a teardown test red far from the file that left it. Named
+ * here, against the file that left it, and cleared, so the next file is not blamed too.
+ */
+function judgeQuarantine(): void {
+  const store = join(fake, ".lethal", "quarantine");
+  if (!existsSync(store)) return;
+  const records = readdirSync(store);
+  if (records.length > 0) quarantineLeaks.push(`${file}: ${records.join(", ")}`);
+  rmSync(store, { recursive: true, force: true });
+}
 function judgeFile(): void {
   const left = made.filter((e) => existsSync(join(tmp, e)));
   if (left.length > 0) leaks.push(`${file}: ${left.join(", ")}`);
   made = [];
+  judgeQuarantine();
 }
 beforeEach(() => {
   heartbeat();
@@ -174,6 +188,11 @@ afterAll(() => {
           ...(stray.length > 0 ? [`still present at the end of the run: ${stray.join(", ")}`] : []),
         ]
       : [];
+  if (quarantineLeaks.length > 0)
+    lines.push(
+      "R835: test files left a record in the default quarantine store, where a later file reads it. Give the test its own folder.",
+      ...quarantineLeaks,
+    );
   for (const dir of dbChoice.tmpfsRoot !== undefined ? [dbDir, runDir] : [runDir]) {
     try {
       rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });

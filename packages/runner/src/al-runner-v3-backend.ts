@@ -1453,6 +1453,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         ...(this.cfg.candidate === true ? { candidate: true } : {}),
       });
       this.build = { version: reported, binarySha256: gated.binarySha256 };
+      // R834: say once which binary this session runs (not a report field).
+      if (!this.announced) {
+        this.announced = true;
+        console.warn(`[lethal] al-runner: ${this.cfg.alRunnerPath} (${reported})`);
+      }
       binarySha256 = gated.binarySha256;
       gatedWarnFacts = gated.warnFacts;
       // M1: a session trusts leg C's gate-only facts from this record instead of re-measuring them.
@@ -1606,6 +1611,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
 
   private build: { readonly version: string; readonly binarySha256: string } | undefined;
+  private announced = false;
 
   /** Provenance for the run row and the report: the `--version` line and the binary's sha256. */
   async runnerBuild(): Promise<{ readonly version: string; readonly binarySha256: string }> {

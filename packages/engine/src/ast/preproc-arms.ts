@@ -7,8 +7,8 @@ import type { ALSyntaxNode } from "./syntax-node";
  * site-enumeration.md, "alc's precedence, measured"): `not` binds to the next operand, then `and`,
  * then `or`; parentheses group; `true` and `false` are literals; keywords are case-insensitive and
  * symbols are not; an undefined symbol is false; `#define` / `#undef` count where they sit in an
- * active region. A condition is read from the marker's TEXT: tree-sitter-al 4.4.1 scopes `not` over a
- * following `and` / `or`, and trusting its expression nodes would pick the wrong arm with no error.
+ * active region. A condition is read from the marker's TEXT. That began as a workaround: 4.4.1 scoped
+ * `not` over a following `and` / `or` (R380, fixed in 4.5.0). It stays because a text it cannot read fails closed.
  *
  * The walk is over every directive marker in document order, never per container:
  * `preproc_split_if_then_begin_else_shared` holds an `#if` whose `#endif` is outside it, and

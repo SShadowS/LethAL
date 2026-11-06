@@ -107,6 +107,22 @@ test("R704: a child test run started from a test keeps the parent's REAL home, n
   expect(r.code, r.out).toBe(0);
 });
 
+test("R835: a record left in the default quarantine store fails the run and names the file; an empty store does not", () => {
+  const store = `const fs = require("node:fs"); const p = require("node:path");
+const d = p.join(process.env.LETHAL_TEST_FAKE_HOME, ".lethal", "quarantine");
+fs.mkdirSync(d, { recursive: true });`;
+  const left = innerPreloadRun(
+    { ...process.env },
+    `${store}\nfs.writeFileSync(p.join(d, "left.json"), "{}");`,
+  );
+  expect(left.code, left.out).not.toBe(0);
+  expect(left.out).toContain("R835: test files left a record");
+  expect(left.out).toMatch(/inner\.test\.ts: left\.json/);
+  const clean = innerPreloadRun({ ...process.env }, store);
+  expect(clean.out).toContain("1 pass");
+  expect(clean.code, clean.out).toBe(0);
+});
+
 test("R704: a stray LETHAL_TEST_REAL_HOME, with no matching fake home, is ignored", () => {
   const S = mkdtempSync(join(tmpdir(), "lethal-r704-home-"));
   try {

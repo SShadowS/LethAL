@@ -13,6 +13,7 @@
  * The version stamped into each filename comes from the root `package.json` — the single source of
  * truth for the release version (workspace packages stay at `0.0.0`, see `docs/releasing.md`).
  */
+import { existsSync } from "node:fs";
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,6 +22,31 @@ import { parseArgs } from "node:util";
 const REPO_ROOT = join(import.meta.dir, "..");
 const ENTRY = join(REPO_ROOT, "packages", "runner", "src", "cli.ts");
 const OUT_DIR = join(REPO_ROOT, "build");
+
+const NATIVE_DIR = join(REPO_ROOT, "packages", "engine", "vendor", "native");
+
+/** R834: a target's native parser addon is not on disk, so the binary would build and then parse nothing. */
+export class NativeAddonMissingError extends Error {
+  constructor(
+    readonly nativeKey: string,
+    readonly addonPath: string,
+  ) {
+    super(
+      `the native AL parser for ${nativeKey} is missing (${addonPath}), so a binary built now could not parse any AL. Install Rust 1.96 or newer and clang/LLVM 23.1.2 (bash scripts/install-llvm.sh <platform-key>), then run \`bun scripts/build-native-parser.ts\` and build again.`,
+    );
+    this.name = "NativeAddonMissingError";
+  }
+}
+
+/** Throws `NativeAddonMissingError` unless the addon the target embeds is there. The release workflow
+ *  copies every target's addon in before `build:binaries`, so it is unaffected. */
+export function requireNativeAddon(
+  t: { readonly nativeKey: string },
+  nativeDir: string = NATIVE_DIR,
+): void {
+  const addonPath = join(nativeDir, `lethal-parser.${t.nativeKey}.node`);
+  if (!existsSync(addonPath)) throw new NativeAddonMissingError(t.nativeKey, addonPath);
+}
 
 interface BuildTarget {
   /** The value passed to `bun build --target`. */
@@ -309,6 +335,7 @@ async function main(): Promise<number> {
   const failures: { readonly target: string; readonly reason: string }[] = [];
   for (const t of selected) {
     try {
+      requireNativeAddon(t);
       let built: { readonly outPath: string; readonly bytes: number };
       try {
         // Attempt the plain build FIRST, always. Where Bun can fetch the target runtime by itself

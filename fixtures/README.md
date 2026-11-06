@@ -1691,7 +1691,9 @@ CLI flags:
     "bcVersion": "28.0.46665.47126",
     // Optional, shown with their defaults. "serverMode", "selectorMode" and "alRunnerPath" are
     // refused by name.
-    "path": "/work/tools/al-runner-v3/current/al-runner",
+    // The default is the pinned build when /work/tools has one (LethAL's own boxes), else
+    // ~/.local/bin/al-runner (R834); "~" is not expanded in a value you write.
+    "path": "/home/you/.local/bin/al-runner",
     // "al-runner" reads v3's coverage; turned off, with the al-runner-v3-coverage-off warning,
     // for a project holding an #if wrapper shape the index has no rule for (two-arm, #elif, nested,
     // or a multi-object file holding a wrapper; R602). "none" turns it off.

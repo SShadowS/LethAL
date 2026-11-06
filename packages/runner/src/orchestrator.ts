@@ -8501,10 +8501,15 @@ async function runSessionBody(
     const resolved = resumeState === undefined ? "undefined" : `runId ${resumeState.runId}`;
     const resolvedEvents = collectedEvents.filter((e) => e.type === "resume-resolved").length;
     throw new Error(
-      `runSession: --resume was requested (${JSON.stringify(cfg.resume)}) but the report records no resume. Every path that reaches here should have emitted \`resume-resolved\` or thrown in \`resolveResume\`. This is R89's unexplained field report reproducing. Do not re-run: capture this message. runId=${runId} backend=${backendName} configFingerprint=${configFingerprint} projectDir=${cfg.projectDir} resumeState=${resolved} events=${collectedEvents.length} resumeResolvedEvents=${resolvedEvents}`,
+      `${resumeGuardMessage(cfg.resume, process.argv.slice(2))} runId=${runId} backend=${backendName} configFingerprint=${configFingerprint} projectDir=${cfg.projectDir} resumeState=${resolved} events=${collectedEvents.length} resumeResolvedEvents=${resolvedEvents}`,
     );
   }
   return report;
+}
+
+/** R89: the guard's message names the argv, the one fact the field report never recovered. */
+export function resumeGuardMessage(resume: unknown, argv: readonly string[]): string {
+  return `runSession: --resume was requested (${JSON.stringify(resume)}) but the report records no resume. Every path that reaches here should have emitted \`resume-resolved\` or thrown in \`resolveResume\`. This is R89's unexplained field report reproducing. Do not re-run: capture this message. argv=${JSON.stringify(argv)}`;
 }
 
 /** C02-04b: handed to `inLease`. `publish` runs `run` inside the lease's publication fence. */

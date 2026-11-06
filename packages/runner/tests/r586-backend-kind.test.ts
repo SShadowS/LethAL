@@ -78,6 +78,8 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     'if (r.coverage !== undefined && r.coverage !== "al-runner" && r.coverage !== "none") {':
       "coverage-mode",
     'coverage: (r.coverage as "al-runner" | "none" | undefined) ?? "al-runner",': "coverage-mode",
+    // R834: the binary's file name where install.sh puts it, not a backend-identity read.
+    ': join(home, ".local", "bin", "al-runner");': "path-name",
   },
   // R654 S1: the coverage index passes its own `WrappedRule` ("al-runner-index"), not a backend
   // name, so it is no longer a backend-identity read.

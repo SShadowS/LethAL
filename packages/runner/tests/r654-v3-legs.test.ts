@@ -313,7 +313,7 @@ describe("R586c: K on a candidate build (an opt-in test seam)", () => {
           { alRunnerV3: section(dir, deps) },
           dir,
           undefined,
-          candidate ? { alRunnerCandidate: true } : {},
+          { alcRunnable: () => true, ...(candidate ? { alRunnerCandidate: true as const } : {}) },
           { selectorId: 79199, controlId: 79198, tableId: 79197 },
         );
         return (b as unknown as { cfg: { candidate?: boolean } }).cfg.candidate;
@@ -408,7 +408,7 @@ describe("R654 S2 leg K: buildBackend from that section takes the CLI's defaults
           },
           dir,
           undefined,
-          {},
+          { alcRunnable: () => true },
           { selectorId: 79199, controlId: 79198, tableId: 79197 },
         );
         if (!LINUX) {

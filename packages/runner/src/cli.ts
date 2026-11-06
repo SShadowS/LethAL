@@ -32,6 +32,7 @@ import type { ServerSpawnFn } from "./al-runner-server";
 import { AlRunnerV3Backend, AlRunnerV3ServeFallbackWarmupError } from "./al-runner-v3-backend";
 import {
   AL_RUNNER_V3_NOT_AUTHORITATIVE,
+  assertAlcRunnable,
   assertBcVersionMatchesPackages,
   refuseV3Platform,
   validateAlRunnerV3Config,
@@ -968,8 +969,8 @@ RUN — required
   --project <dir>            AL project to mutate (the app under test)
   --tests <dir>              AL test project (omit only with --dry-run)
   --backend <name>           bcdev (live BC, authoritative) or al-runner-v3 (the Rust al-runner,
-                             offline, NOT authoritative, pinned in /work/tools/al-runner-v3, config
-                             section "alRunnerV3"). al-runner, the retired .NET al-runner, is
+                             offline, NOT authoritative, config section "alRunnerV3", binary at
+                             ~/.local/bin/al-runner unless "path" says otherwise). al-runner, the retired .NET al-runner, is
                              refused by name (al-runner-v2-retired, R654)
 
 RUN — scope. These bound cost. --tests-only can change a verdict; the others cannot.
@@ -2987,6 +2988,8 @@ async function buildAlRunnerV3Backend(
   scratchDir: string,
   deps: {
     readonly alToolPaths: typeof defaultAlToolPaths;
+    /** R834: replaces the check that `alRunnerV3.alcPath` is executable. Injected by tests. */
+    readonly alcRunnable?: (p: string) => boolean;
     readonly spawn?: SpawnFn;
     /** R635: the serve-entries daemon's spawn. */
     readonly serverSpawn?: ServerSpawnFn;
@@ -3003,6 +3006,7 @@ async function buildAlRunnerV3Backend(
   await validateSelectorIdsForProject(parsed.projectDir, deps.selectorIds, deps.source);
   const c = validateAlRunnerV3Config(configFile.alRunnerV3);
   await assertBcVersionMatchesPackages(c.packagesDir, c.bcVersion);
+  if (c.alcPath !== undefined) assertAlcRunnable(c.alcPath, deps.alcRunnable);
   const alcPath = c.alcPath ?? (await deps.alToolPaths())?.alcPath;
   if (alcPath === undefined) {
     throw new Error(
@@ -3061,6 +3065,8 @@ export async function buildBackend(
     alToolPaths?: typeof defaultAlToolPaths;
     alRunnerSpawn?: SpawnFn;
     alRunnerServerSpawn?: ServerSpawnFn;
+    /** R834: see `buildAlRunnerV3Backend`'s `alcRunnable`. */
+    alcRunnable?: (p: string) => boolean;
     /** R586c: test seam for the update gate's leg K on a candidate build; never set by a user. */
     alRunnerCandidate?: true;
     /** R786: set by `runFromCli`'s one-shot re-run after a serve warm-up fallback; never by a user. */
@@ -3080,6 +3086,7 @@ export async function buildBackend(
   if (parsed.backendKind === "al-runner-v3") {
     return buildAlRunnerV3Backend(parsed, configFile, scratchDir, {
       alToolPaths: deps.alToolPaths ?? defaultAlToolPaths,
+      ...(deps.alcRunnable !== undefined ? { alcRunnable: deps.alcRunnable } : {}),
       ...(deps.alRunnerSpawn !== undefined ? { spawn: deps.alRunnerSpawn } : {}),
       ...(deps.alRunnerServerSpawn !== undefined ? { serverSpawn: deps.alRunnerServerSpawn } : {}),
       ...(deps.alRunnerCandidate === true ? { candidate: true as const } : {}),
@@ -4207,15 +4214,19 @@ export async function clearQuarantine(
  * `lethal clear-quarantine (--server ... --instance ... | --config ...)` (spec §10). Opens the
  * SAME store `runSession` durably writes to (`defaultQuarantineDir`) — there is no
  * `--quarantine-dir` override here because an operator clearing a real tier must hit the real
- * store, not one a stray flag silently redirected. Exported for its test.
+ * store, not one a stray flag silently redirected. `quarantineDir` exists for tests (R835), and
+ * the CLI passes none. Exported for its test.
  */
-export async function clearQuarantineFromCli(parsed: ClearQuarantineCliConfig): Promise<number> {
+export async function clearQuarantineFromCli(
+  parsed: ClearQuarantineCliConfig,
+  quarantineDir: string = defaultQuarantineDir(),
+): Promise<number> {
   const key = quarantineResourceKey(await resolveTierIdentity(parsed, "clear-quarantine"));
   if (parsed.server === undefined) {
     // As `clear-ceiling` does: a tier the operator did not type is shown before it is cleared.
     console.log(`resolved tier from ${parsed.configPath}: ${key}`);
   }
-  const store = new QuarantineStore(defaultQuarantineDir());
+  const store = new QuarantineStore(quarantineDir);
   const result = await clearQuarantine(store, key);
   console.log(result); // "cleared" | "stale" | "not-quarantined"
   return result === "stale" ? 1 : 0;
@@ -4634,6 +4645,10 @@ export async function buildDoctorDeps(
     /** R586: the spawn the al-runner-v3 `--version` probe uses. Injected by tests so the check can
      *  be driven without a real al-runner install; absent means the real one. */
     readonly alRunnerSpawn?: SpawnFn;
+    /** R834: replaces the check that `alRunnerV3.alcPath` is executable. Injected by tests. */
+    readonly alcRunnable?: (p: string) => boolean;
+    /** R834: the platform the v3 check judges; absent means this one. Injected by tests. */
+    readonly platform?: NodeJS.Platform;
   } = {},
 ): Promise<{
   readonly cfg: DoctorConfig;
@@ -4649,43 +4664,55 @@ export async function buildDoctorDeps(
   // `bcVersion` against the package folder. The session's contract probe is not run here. Decided
   // BEFORE `prepareBcdevReadOnly`, because that helper resolves a bcdev identity this config does
   // not have. (An `alRunner` section is refused at load: R654 F2.)
-  if (
+  // R834: the same check for ANY config with the section, beside a bcdev or envTool one too.
+  const v3Only =
     configFile.envTool === undefined &&
     configFile.bcdev === undefined &&
-    configFile.alRunnerV3 !== undefined
-  ) {
-    const c = validateAlRunnerV3Config(configFile.alRunnerV3);
-    const spawn = opts.alRunnerSpawn ?? defaultSpawn;
-    return {
-      cfg: {},
-      deps: {
-        alRunnerV3: async () => {
-          const v = await spawn([c.path, "--version"], { env: v3ChildEnv() }).catch(
-            (e: unknown) => ({
-              exitCode: -1,
-              stdout: "",
-              stderr: String(e),
-            }),
-          );
-          const version = (v.stdout || v.stderr).trim();
-          if (v.exitCode !== 0)
-            return {
-              ok: false,
-              details: `${c.path} not runnable: ${version}. ${v3InstallHint()}`,
-            };
-          try {
-            const gated = await checkGated(c.path, version);
-            await assertBcVersionMatchesPackages(c.packagesDir, c.bcVersion);
-            return {
-              ok: true,
-              details: `${version}; ${gated.source === "manifest" ? "listed in the gate manifest, gated" : "gated"} at LethAL ${gated.lethalCommit}; bcVersion ${c.bcVersion}; transport ${c.transportSource === "explicit" ? c.transport : "default (serve-entries where proven, else one-shot; R761)"}`,
-            };
-          } catch (err) {
-            return { ok: false, details: err instanceof Error ? err.message : String(err) };
-          }
-        },
-      },
-    };
+    configFile.alRunnerV3 !== undefined;
+  // v3-only: a bad section throws here, as `run` does. Beside a bcdev or envTool section it is a
+  // failed `al-runner-v3` check instead, so the bcdev checks still run (R834).
+  if (v3Only) validateAlRunnerV3Config(configFile.alRunnerV3);
+  const v3Check =
+    configFile.alRunnerV3 === undefined
+      ? undefined
+      : (() => {
+          const spawn = opts.alRunnerSpawn ?? defaultSpawn;
+          return async () => {
+            let c: ReturnType<typeof validateAlRunnerV3Config>;
+            try {
+              if (!v3Only) refuseV3Platform(opts.platform);
+              c = validateAlRunnerV3Config(configFile.alRunnerV3);
+            } catch (err) {
+              return { ok: false, details: err instanceof Error ? err.message : String(err) };
+            }
+            const v = await spawn([c.path, "--version"], { env: v3ChildEnv() }).catch(
+              (e: unknown) => ({
+                exitCode: -1,
+                stdout: "",
+                stderr: String(e),
+              }),
+            );
+            const version = (v.stdout || v.stderr).trim();
+            if (v.exitCode !== 0)
+              return {
+                ok: false,
+                details: `${c.path} not runnable: ${version}. ${v3InstallHint()}`,
+              };
+            try {
+              const gated = await checkGated(c.path, version);
+              await assertBcVersionMatchesPackages(c.packagesDir, c.bcVersion);
+              if (c.alcPath !== undefined) assertAlcRunnable(c.alcPath, opts.alcRunnable);
+              return {
+                ok: true,
+                details: `${version}; ${gated.source === "manifest" ? "listed in the gate manifest, gated" : "gated"} at LethAL ${gated.lethalCommit}; bcVersion ${c.bcVersion}; transport ${c.transportSource === "explicit" ? c.transport : "default (serve-entries where proven, else one-shot; R761)"}`,
+              };
+            } catch (err) {
+              return { ok: false, details: err instanceof Error ? err.message : String(err) };
+            }
+          };
+        })();
+  if (v3Only && v3Check !== undefined) {
+    return { cfg: {}, deps: { alRunnerV3: v3Check } };
   }
   const readOnly = prepareBcdevReadOnly(configFile, {
     runId: "doctor",
@@ -4952,6 +4979,7 @@ export async function buildDoctorDeps(
       toolPaths,
       ...(alcRuntime !== undefined ? { alcRuntime } : {}),
       dependencies,
+      ...(v3Check !== undefined ? { alRunnerV3: v3Check } : {}),
     },
     ...(isCreateMode ? { caveat: DOCTOR_CREATE_MODE_CAVEAT } : {}),
   };

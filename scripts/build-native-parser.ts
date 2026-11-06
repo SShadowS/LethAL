@@ -77,10 +77,29 @@ export function cargoTargetDir(
 
 /** RUST-03: clang on every target. clang-cl on Windows (MSVC ABI), clang elsewhere. LLVM_BIN may
  *  point at a specific install; otherwise PATH. The build refuses anything but clang CLANG_VERSION. */
-function clangCc(): string {
+/** R834: no clang could be started at all (none on PATH, or a wrong LLVM_BIN). */
+export class ClangNotFoundError extends Error {
+  constructor(cc: string, detail: string) {
+    super(
+      `build-native-parser: cannot run ${cc} (${detail}). Install clang/LLVM ${CLANG_VERSION} with \`bash scripts/install-llvm.sh <platform-key>\` (for example linux-x64), then export LLVM_BIN as the last line of that script says (\`export LLVM_BIN=<dir>/bin\`), and run this again.`,
+    );
+    this.name = "ClangNotFoundError";
+  }
+}
+
+export function clangCc(
+  spawn: (cmd: string[]) => { exitCode: number; stdout: Buffer; stderr: Buffer } = (cmd) =>
+    Bun.spawnSync(cmd),
+  llvmBin: string | undefined = process.env.LLVM_BIN,
+): string {
   const exe = process.platform === "win32" ? "clang-cl.exe" : "clang";
-  const cc = process.env.LLVM_BIN !== undefined ? join(process.env.LLVM_BIN, exe) : exe;
-  const v = Bun.spawnSync([cc, "--version"]);
+  const cc = llvmBin !== undefined ? join(llvmBin, exe) : exe;
+  let v: { exitCode: number; stdout: Buffer; stderr: Buffer };
+  try {
+    v = spawn([cc, "--version"]);
+  } catch (err) {
+    throw new ClangNotFoundError(cc, err instanceof Error ? err.message : String(err));
+  }
   const banner = (v.stdout.toString().split("\n")[0] ?? "").trim();
   if (v.exitCode !== 0 || !isPinnedClang(banner)) {
     throw new Error(
@@ -234,4 +253,12 @@ async function main(): Promise<void> {
   await writeProvenance(plan.key);
 }
 
-if (import.meta.main) await main();
+if (import.meta.main) {
+  try {
+    await main();
+  } catch (err) {
+    if (!(err instanceof ClangNotFoundError)) throw err;
+    console.error(err.message);
+    process.exit(1);
+  }
+}

@@ -2101,7 +2101,7 @@ describe("the CLI threads the option through (wiring)", () => {
       },
       dir,
       undefined,
-      {},
+      { alcRunnable: () => true },
       { selectorId: SELECTOR_ID, controlId: ECHO, tableId: 79197 },
     );
   };

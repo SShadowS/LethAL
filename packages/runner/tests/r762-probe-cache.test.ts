@@ -549,7 +549,7 @@ describe("R762: --fresh-probe reaches the backend", () => {
         },
         e.root,
         undefined,
-        {},
+        { alcRunnable: () => true },
         { selectorId: 79199, controlId: 79198, tableId: 79197 },
       );
       return (b as unknown as { cfg: { freshProbe?: boolean } }).cfg.freshProbe;
