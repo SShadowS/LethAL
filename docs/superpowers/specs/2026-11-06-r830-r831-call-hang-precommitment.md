@@ -21,8 +21,8 @@ Not seen, filed: a site inside the callee (R837), `empty-block` of an arm inside
 | DC | 196180 > 195954 | 2605 > 2831 | 205 | 5 |
 | BC.History (519) | 1905449 > 1903854 | 63801 > 65396 | 1470 | 42 |
 
-Every corpus: 0 keys added, 0 tags moved, 0 tuples moved. On a project set the table's spec difference can exceed "removed", because the
-tool lists removed keys per project and the spec totals count a shared project in each of its builds. The fixture row shows 38 keys
+Every corpus: 0 keys added, 0 tags moved, 0 tuples moved. "specs" is counted before dedup and "removed" is deployed keys after it, so a
+call both a Tier 1 and a Tier 2 operator claim is two specs and one key. That is why a spec difference can exceed "removed". The fixture row shows 38 keys
 removed and 38 added on `sandbox-hang` alone, and that is byte offsets: its text moved, its 38 mutants did not. No other fixture key moves.
 
 By operator:
