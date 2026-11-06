@@ -58,9 +58,8 @@ function operands(node: ALSyntaxNode, side: Side, ctx: SemanticContext) {
     if (right.text === left.text) return null;
   }
   // A constant left over: `I + 300` to `300` does not compile into a Byte (AL0369), and it says
-  // little. An operand opening with a directive does not compile at all (AL0620).
-  if (!holdsName(pair.kept) || pair.kept.text.startsWith("#")) return null;
-  return pair;
+  // little. An operand opening with a directive never gets here: it has no type.
+  return holdsName(pair.kept) ? pair : null;
 }
 
 const hangs = (node: ALSyntaxNode, deleted: ALSyntaxNode, ctx: SemanticContext): boolean =>

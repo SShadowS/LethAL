@@ -225,6 +225,32 @@ describe("R855: what a site controls, in a loop that needs it (build review)", (
     expect(sites(deleteLogicalLeft, src).claimed).toEqual(["A or StepB"]);
   });
 
+  it("a kept operand that opens with a directive is refused (AL0620)", () => {
+    const src = unit(
+      "",
+      "        if A or\n#if X\n B\n#endif\n then Total := 1;\n        if\n#if X\n A\n#endif\n or B then Total := 2;",
+    );
+    expect(sites(deleteLogicalLeft, src).claimed).toEqual(["#if X\n A\n#endif\n or B"]);
+    expect(sites(deleteLogicalRight, src).claimed).toEqual(["A or\n#if X\n B\n#endif"]);
+  });
+
+  it("a site in an open report data item's trigger is refused, with no loop in sight (R487)", () => {
+    const src = `report 50464 Rp { dataset { dataitem(Header; Integer) { trigger OnAfterGetRecord() begin Q(); end; } } local procedure Q() var I: Integer; J: Integer; Total: Integer; begin Total := I + J; end; }`;
+    for (const op of [deleteAdditiveRight, deleteAdditiveLeft]) {
+      const r = sites(op, src);
+      expect(r.hang).toEqual(["I + J"]);
+      expect(r.claimed).toEqual([]);
+    }
+  });
+
+  it("a site in a branch controls nothing, with no statement around it", () => {
+    const src = unit(
+      "",
+      "        repeat\n            if Counter < 0 then\n                Quietly(I + J)\n            else\n                Advance();\n        until Counter >= Limit;",
+    );
+    expect(sites(deleteAdditiveRight, src).claimed).toEqual(["I + J"]);
+  });
+
   it("a `case` selector and a `for` bound control their bodies", () => {
     const src = unit(
       "",
