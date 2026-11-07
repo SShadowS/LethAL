@@ -165,3 +165,15 @@ survives, the `conditional-boundary` in `Redeem` survives, and `BlockExpiredCard
 any moves, the re-freeze is not committed. `Redeem` has TWO `conditional-boundary` mutants, at the
 remaining-amount guard and at the expiry boundary; both survive in the frozen report, and the script
 refuses unless both still do.
+
+## Amended 2026-11-07 by R856: the stage is re-frozen at 61 mutants
+
+The operator batch (`docs/superpowers/specs/2026-11-07-r855-operator-batch-precommitment.md`) adds one mutant here: `swap-call-arguments` 1.1.0 claims a member argument, in `Redeem`'s `PostEntry(CardNo, GiftCard."Customer No.", ...)`. #35 and #41 add none. Written before any run of it on BC.
+
+Pre-committed:
+
+- **61 deployed mutants** (`EXPECTED_DEPLOYED` in the script).
+- The new mutant is **killed by `RedeemReducesBalance`**: the -40 entry is filed under the customer, so `GetBalance` reads 100, not 60. Read from the code, not yet run.
+- Totals 60 -> 61, killed 34 -> 35; survived 15 and no-coverage 11 unchanged. Score 69.4% -> **70.0%** (35 of 50 covered).
+- The 60 existing rows do not change. Three runs on bc-demo agree per mutant, as R664 requires.
+- **The three rows that carry the demo do not move.** If any verdict differs from this, the re-freeze is not committed, and the difference is explained here first.
