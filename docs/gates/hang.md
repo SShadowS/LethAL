@@ -37,7 +37,7 @@ It runs four legs, in this order on purpose:
   `lethal.config.bc1.json` to `bc4.json` is refused before any leg. Rows on the 400 form must carry
   `stopEvidence: "begin-transaction-world"` (the 408 form `"bc-named-stop"`) and the report the
   `stop-answer-400` caveat (the 408 form must not). The duration window is unchanged and
-  `hang.single.baseline.json` does not move. NOT yet run on `bc4`: the evidence limit is 6 of 6
+  `hang.single.baseline.json` does not move. Passed on `bc4` at eae3eaff; the 408 form is not measured there. The evidence limit is 6 of 6
   hangs on one build, 4 runs with no stop (the text never appeared), BC's own session list not
   read, and `bc4` is .57673 against the issue's .57293.
 - OFF: puts the tier in quarantine on purpose, and is torn down afterwards. Since R658 every
