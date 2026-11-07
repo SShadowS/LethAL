@@ -261,8 +261,8 @@ sitting.
   a score of 70.0%.
 - [`examples/credit-limit`](examples/credit-limit/README.md): three gaps rather than one, and the
   only demo that can show `remove-calcfields`: it reads a FlowField through `CalcFields`, which the
-  gift-card app deliberately does not. 42 mutants, 23 killed, 8 survived, 11 no-coverage: a
-  score of 74.2%.
+  gift-card app deliberately does not. 45 mutants, 25 killed, 9 survived, 11 no-coverage: a
+  score of 73.5%.
 
 Both are frozen per mutant, so you can check a re-run against the committed baseline rather than
 against a total:

@@ -1006,16 +1006,16 @@ describe("C02-07: the hardening loop, run from the documents", () => {
       const k = `${m.file}|${m.procedureName}`;
       const lines = blocks.get(k) ?? [];
       // A carried row's reach was not measured in this run, so explain refuses one that carries
-      // reach fields. The re-frozen report (R231) measured reach on every row; drop it from M0038.
+      // reach fields. The re-frozen report (R231) measured reach on every row; drop it from M0039.
       const { guardReached: _g, reachedBy: _r, ...row } = m;
       return {
-        ...(m.mutantCode === "M0038" ? row : m),
+        ...(m.mutantCode === "M0039" ? row : m),
         batchIndex: LATE.has(m.procedureName) ? 1 : 0,
         gapId: `G${ids.indexOf(k).toString(16).padStart(12, "0")}`,
         blockStartLine: Math.min(...lines),
         blockEndLine: Math.max(...lines),
         // One carried survivor makes its whole gap `carried`.
-        ...(m.mutantCode === "M0038" ? { carried: true } : {}),
+        ...(m.mutantCode === "M0039" ? { carried: true } : {}),
       };
     });
     const ART_1 = "fedcba9876543210fedcba9876543210";

@@ -157,7 +157,7 @@ re-freeze writes a new report; read the rank again on it.
 **Measured 2026-10-25 (R257), master 8c6a9fe8.** Evidence: `/coord/handoff/R-257/`.
 - **bcdev on bc-demo (the demo's backend).** A fresh run took 27.2 s, and `campaign compare` matched all 60
   mutants against the frozen stage.
-  - Under `explain --top 10` the planted survivor M0038 (`GetBalance`, `lethal.remove-setrange`, line 53) ranks
+  - Under `explain --top 10` the planted survivor M0039 (`GetBalance`, `lethal.remove-setrange`, line 53) ranks
     **tenth of fifteen**.
   - Its `reach` is `reached-unnoticed` at statement grain, and `reachedBy` is `Gift Card Tests.RedeemReducesBalance`
     alone. That is the 1:20 line: a test ran the deleted `SetRange` statement itself and passed.
