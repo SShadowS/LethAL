@@ -2446,7 +2446,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           : undefined;
         await rm(covPath, { force: true }).catch(() => {});
         if ("spawnError" in made) continue;
-        if (!this.cleanBaselineAnswer(made, ref.codeunitId, f.floorMs)) continue;
+        if (!this.aloneAnswer(made, ref, f.floorMs)) continue;
         this.isolatedBaseline.set(key, {
           ...made,
           ...(covText !== undefined ? { covText } : {}),
@@ -2455,7 +2455,35 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         });
       }
     };
-    await Promise.all(Array.from({ length: ISOLATED_BASELINE_PROCESSES }, worker));
+    // Every worker ends before a failure goes on, so no process outlives this call.
+    const stopped = await Promise.allSettled(
+      Array.from({ length: ISOLATED_BASELINE_PROCESSES }, () =>
+        worker().catch((err: unknown) => {
+          queue.length = 0;
+          throw err;
+        }),
+      ),
+    );
+    for (const s of stopped) if (s.status === "rejected") throw s.reason;
+  }
+
+  /**
+   * R866: R790's rule, plus what running beside other al-runners can break: exactly one row, that
+   * test's, and one that ran. Exit 8 or a `notRun` row may be a .NET helper that lost a race, and
+   * served as a refusal it would drop the test from the batch, so such a test runs alone.
+   */
+  private aloneAnswer(made: SpawnedCall, ref: TestMethodRef, floorMs: number): boolean {
+    if (!this.cleanBaselineAnswer(made, ref.codeunitId, floorMs)) return false;
+    if (made.res.exitCode === 8) return false;
+    const decoded = decodeV3Rows(made.res.stdout, ref.codeunitId);
+    if ("why" in decoded) return false;
+    const [row] = decoded.rows;
+    return (
+      decoded.rows.length === 1 &&
+      row !== undefined &&
+      !row.notRun &&
+      row.method.toLowerCase() === ref.method.toLowerCase()
+    );
   }
 
   /** R866: the answer `fillIsolatedBaseline` holds for this baseline call, taken once, if it matches. */

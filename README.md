@@ -845,8 +845,10 @@ a LethAL feature or a mode.
   does not reach it. Use it when a survivor or a kill may depend on test order. It fixes the
   common `IsInitialized` setup: a whole-codeunit run on v3 skips `Initialize` in the second test
   and rolls the first test's rows back, so that test fails on v3 and passes on BC. It is slower: a
-  baseline is one process per test (75 s against 5 s for 21 tests on a loaded machine), and a
-  resume runs the baseline again. It does not make v3 equal to BC: LethAL's grouped calls on BC
+  baseline is one process per test, four at a time (25 to 39 s against 3 s for 21 tests on a very
+  loaded machine), and a resume runs the baseline again. Allow memory for four processes: about
+  6.4 GB on a project the size of Continia Document Output, and more on a larger one. It does not
+  make v3 equal to BC: LethAL's grouped calls on BC
   keep the language and SingleInstance state between tests, where the mode starts each test fresh.
 
   Selecting one test runs its whole codeunit (#5611), so without that flag LethAL makes one call per test codeunit
