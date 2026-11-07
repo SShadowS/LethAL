@@ -1006,6 +1006,27 @@ async function legISO(scratch: string, version: string): Promise<void> {
   }
   if (why !== undefined) throw new LegFailure(why);
   console.log("  ISO: the control leaks, and a test run alone does not");
+  // R866: the mode itself, end to end, four baseline processes at a time: S1's figures, per mutant.
+  const b = new AlRunnerV3Backend(
+    backendCfg({
+      instrumentedDir: join(scratch, "backend"),
+      testDir: fixture("sandbox-tests"),
+      packagesDir: join(fixture("sandbox-tests"), ".alpackages"),
+      bcVersion: SANDBOX_BC,
+      selectorObjectId: 79199,
+      transport: "serve-entries",
+      isolateTests: true,
+    }),
+  );
+  const r = await session(scratch, b, {
+    projectDir: fixture("sandbox-app"),
+    testDir: fixture("sandbox-tests"),
+    selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
+  });
+  assertCounts(r, "ISO", 3, 14, 5, 22);
+  await assertPerMutant(r, join(HERE, "bcdev.baseline.json"), "ISO");
+  must(r.validity.executionContexts[0]?.isolateTests === true, "ISO: the report hides the mode");
+  must(tagged(r, V3_STATE_NOTE_TAG).length === 0, "ISO: a state note under --isolate-tests");
 }
 
 /**

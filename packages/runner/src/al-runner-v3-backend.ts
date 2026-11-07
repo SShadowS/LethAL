@@ -553,6 +553,9 @@ export interface AlRunnerV3Config {
   readonly speculateBaseline?: boolean;
 }
 
+/** R866: how many one-test processes an `--isolate-tests` baseline runs at a time. */
+export const ISOLATED_BASELINE_PROCESSES = 4;
+
 /** R798: the env var that turns R790's speculative baseline on (it is off by default). */
 export const SPECULATE_BASELINE_ENV = "LETHAL_V3_SPECULATE_BASELINE";
 
@@ -1310,6 +1313,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** R857: `callId`'s table, both ways. Never reset: an id means one test for the whole session. */
   private readonly isolatedIds = new Map<string, number>();
   private readonly isolatedRefs = new Map<number, TestMethodRef>();
+  /** R866: `fillIsolatedBaseline`'s answers by call id, each served once; reset by a deploy. */
+  private isolatedBaseline = new Map<number, SpeculativeCall>();
+  private isolatedFilled = false;
   /** One-shot: the stop a call is sent is the largest budget of its refs (F5). R635: the
    *  serve-entries daemon has ONE stop for its life, S (R517), never the budget. */
   get inRunStopIsBudget(): boolean {
@@ -2017,6 +2023,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.union = new Set();
     this.echoId = undefined;
     this.speculative = undefined; // R790: never served across deploys
+    this.isolatedBaseline = new Map(); // R866: nor these
+    this.isolatedFilled = false;
   }
 
   /** A batch as v3 reads it: control files dropped, the static selector at the baseline. R635: in
@@ -2361,22 +2369,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         await rm(covPath, { force: true }).catch(() => {});
         // A spawn that failed is not kept: that codeunit's baseline call runs live.
         if ("spawnError" in made) continue;
-        // Review 2: a call that ran out of time ran beside alc's CPU, so it may not be what a live
-        // baseline call would answer: not kept, that codeunit's call runs live.
-        if (made.timedOut) continue;
-        // Review r2 #2: only a clean answer (an exit code `callCodeunit` reads as rows, rows that
-        // decode) is kept; a crash or garbage beside alc runs live.
-        if (![0, 1, 7, 8].includes(made.res.exitCode)) continue;
-        const decoded = decodeV3Rows(made.res.stdout, id);
-        if ("why" in decoded) continue;
-        this.observedSeed = decoded.seed ?? this.observedSeed;
-        if (decoded.rows.some((r) => r.message !== undefined && V3_TIMEOUT_MESSAGE.test(r.message)))
-          continue;
-        // Review r2 #1: the durations were measured beside alc's CPU. A budget is
-        // max(2 x duration, floor), so a call is kept only when the floor decides every budget it
-        // feeds: then a served duration cannot move a budget (the default floor is 180 s).
-        const tooSlow = (ms: number) => 2 * ms >= f.floorMs;
-        if (tooSlow(made.wallMs) || decoded.rows.some((r) => tooSlow(r.durationMs ?? 0))) continue;
+        if (!this.cleanBaselineAnswer(made, id, f.floorMs)) continue;
         calls.set(id, {
           ...made,
           ...(covText !== undefined ? { covText } : {}),
@@ -2390,6 +2383,121 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     } catch {
       return undefined;
     }
+  }
+
+  /** R790: whether a baseline answer made beside other work may stand in for a live call. */
+  private cleanBaselineAnswer(made: SpawnedCall, id: number, floorMs: number): boolean {
+    // Review 2: a call that ran out of time ran beside alc's CPU, so it may not be what a live
+    // baseline call would answer: not kept, that codeunit's call runs live.
+    if (made.timedOut) return false;
+    // Review r2 #2: only a clean answer (an exit code `callCodeunit` reads as rows, rows that
+    // decode) is kept; a crash or garbage beside alc runs live.
+    if (![0, 1, 7, 8].includes(made.res.exitCode)) return false;
+    const decoded = decodeV3Rows(made.res.stdout, id);
+    if ("why" in decoded) return false;
+    this.observedSeed = decoded.seed ?? this.observedSeed;
+    if (decoded.rows.some((r) => r.message !== undefined && V3_TIMEOUT_MESSAGE.test(r.message)))
+      return false;
+    // Review r2 #1: the durations were measured beside alc's CPU. A budget is
+    // max(2 x duration, floor), so a call is kept only when the floor decides every budget it
+    // feeds: then a served duration cannot move a budget (the default floor is 180 s).
+    const tooSlow = (ms: number) => 2 * ms >= floorMs;
+    return !tooSlow(made.wallMs) && !decoded.rows.some((r) => tooSlow(r.durationMs ?? 0));
+  }
+
+  /**
+   * R866: under `--isolate-tests`, at the first baseline call of a batch, every suite test's process
+   * at once, `ISOLATED_BASELINE_PROCESSES` at a time. Each process holds one test, so running them
+   * side by side changes nothing they isolate. An answer stands only under R790's rule, so a
+   * duration measured beside the others cannot move a budget; any other test runs alone as before.
+   * ponytail: a daemon request per test would be cheaper still, but needs a daemon before the
+   * baseline has rows to warm it up with; see R866.
+   */
+  private async fillIsolatedBaseline(
+    lane: Lane,
+    stopSeconds: number,
+    coverage: boolean,
+  ): Promise<void> {
+    const f = this.budgetFloor;
+    if (this.isolatedFilled || f === undefined) return;
+    this.isolatedFilled = true;
+    const queue = [...this.suitePerCodeunit.values()].flat();
+    const covDir = join(this.cfg.instrumentedDir, "cov");
+    await this.checkBound(lane); // R652: the bytes these read; each answer is checked again when served
+    const worker = async () => {
+      for (let ref = queue.shift(); ref !== undefined; ref = queue.shift()) {
+        const key = this.callId(ref);
+        const onlyTest = this.isolated(key)?.test;
+        if (onlyTest === undefined) continue;
+        this.callSeq += 1;
+        const covPath = join(covDir, `call-${this.callSeq}.json`);
+        await rm(covPath, { force: true });
+        const made = await this.spawnCodeunit({
+          id: ref.codeunitId,
+          stopSeconds,
+          coverageJson: coverage ? covPath : undefined,
+          cwd: lane.scratchCwd(),
+          activeDir: lane.realActive ?? resolve(lane.activeDir()),
+          testDir: this.realTestDir ?? resolve(this.cfg.testDir),
+          onlyTest,
+        });
+        const covText = coverage
+          ? await readFile(covPath, "utf8").catch(() => undefined)
+          : undefined;
+        await rm(covPath, { force: true }).catch(() => {});
+        if ("spawnError" in made) continue;
+        if (!this.aloneAnswer(made, ref, f.floorMs)) continue;
+        this.isolatedBaseline.set(key, {
+          ...made,
+          ...(covText !== undefined ? { covText } : {}),
+          stopSeconds,
+          coverage,
+        });
+      }
+    };
+    // Every worker ends before a failure goes on, so no process outlives this call.
+    const stopped = await Promise.allSettled(
+      Array.from({ length: ISOLATED_BASELINE_PROCESSES }, () =>
+        worker().catch((err: unknown) => {
+          queue.length = 0;
+          throw err;
+        }),
+      ),
+    );
+    for (const s of stopped) if (s.status === "rejected") throw s.reason;
+  }
+
+  /**
+   * R866: R790's rule, plus what running beside other al-runners can break: exactly one row, that
+   * test's, and one that ran. Exit 8 or a `notRun` row may be a .NET helper that lost a race, and
+   * served as a refusal it would drop the test from the batch, so such a test runs alone.
+   */
+  private aloneAnswer(made: SpawnedCall, ref: TestMethodRef, floorMs: number): boolean {
+    if (!this.cleanBaselineAnswer(made, ref.codeunitId, floorMs)) return false;
+    if (made.res.exitCode === 8) return false;
+    const decoded = decodeV3Rows(made.res.stdout, ref.codeunitId);
+    if ("why" in decoded) return false;
+    const [row] = decoded.rows;
+    return (
+      decoded.rows.length === 1 &&
+      row !== undefined &&
+      !row.notRun &&
+      row.method.toLowerCase() === ref.method.toLowerCase()
+    );
+  }
+
+  /** R866: the answer `fillIsolatedBaseline` holds for this baseline call, taken once, if it matches. */
+  private async takeIsolated(
+    lane: Lane,
+    key: number,
+    stopSeconds: number,
+    coverage: boolean,
+  ): Promise<SpawnedCall | undefined> {
+    if (!this.inBaseline || lane.lastActivated !== null) return undefined;
+    await this.fillIsolatedBaseline(lane, stopSeconds, coverage);
+    const c = this.isolatedBaseline.get(key);
+    this.isolatedBaseline.delete(key);
+    return c?.stopSeconds === stopSeconds && c.coverage === coverage ? c : undefined;
   }
 
   /** R790: a speculative baseline call for codeunit `id`, taken (once) when it matches this call. */
@@ -3307,8 +3415,6 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const id = ref.codeunitId;
     // R857: one test alone, one process. Only the baseline gets here under --isolate-tests: entries
     // carry no coverage, and a mutant call is an entry.
-    // ponytail: a process per test is the slow part of the mode; a daemon request per test with
-    // coverage would be faster, but needs a daemon before the baseline has rows to warm it up with.
     const key = this.callId(ref);
     const onlyTest = this.isolated(key)?.test;
     // R762 A: an UNMUTATED call that asked for no coverage (a kill confirm) needs none: no flag and
@@ -3333,7 +3439,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const coverageRequested = !noCoverage && !(this.sleepRuleRetired && !this.isBaselineCall(lane));
     // R790 (A1): a baseline call deploy() already ran, on the proved bytes, is served once instead of
     // a spawn; everything below reads its raw answer exactly as a live one's.
-    const spec = this.takeSpeculative(lane, id, stopSeconds, coverageRequested);
+    const spec =
+      onlyTest !== undefined
+        ? await this.takeIsolated(lane, key, stopSeconds, coverageRequested)
+        : this.takeSpeculative(lane, id, stopSeconds, coverageRequested);
     let raw: SpawnedCall;
     if (spec !== undefined) {
       // R652: still checked, as before a send: the bytes now are the proved bytes.

@@ -1044,8 +1044,9 @@ RUN — cost and recovery
                              (env LETHAL_V3_SPECULATE_BASELINE=1: run the baseline while alc proves the batch, R790; off by default)
   --isolate-tests            al-runner-v3 only, off by default: run every test alone, so nothing
                              an earlier test of its codeunit left reaches it. Slower: one process
-                             per test at the baseline. Needs the serve-entries transport. A run
-                             with it and a run without it never share verdicts (R857)
+                             per test at the baseline, four at a time, so allow memory for four.
+                             Needs the serve-entries transport. A run with it and a run without
+                             it never share verdicts (R857, R866)
   --resume                   continue the most recent unfinished run in --db, reusing its verdicts
   --resume-run <id>          resume a specific run id
   --retry-stranded           on resume, retry mutants that left the server stuck (skipped by default:
