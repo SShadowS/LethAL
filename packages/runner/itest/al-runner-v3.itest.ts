@@ -121,6 +121,7 @@ import {
 import { TABLES_KNOWN_DIFFERENCES } from "./al-runner-v3-tables-known";
 import {
   ISO_CODEUNIT,
+  ISO_PROBE_AL,
   type N1EReading,
   type O1Request,
   type O1SeedRequest,
@@ -946,6 +947,9 @@ async function o1SeedCheck(
 /** R857: leg ISO (`V3_ISO_LEG`): one daemon, a whole-codeunit entry, then each test alone. */
 async function legISO(scratch: string, version: string): Promise<void> {
   const cache = await microsoftDeps(scratch);
+  const tests = join(scratch, "sandbox-order-tests");
+  await cp(fixture("sandbox-order-tests"), tests, { recursive: true });
+  await writeFile(join(tests, "src", "IsolateProbe.al"), ISO_PROBE_AL);
   const server = new AlRunnerServer(
     BIN,
     (argv) =>
@@ -958,7 +962,7 @@ async function legISO(scratch: string, version: string): Promise<void> {
   );
   const body = {
     command: "runTests",
-    sourcePaths: [fixture("sandbox-order"), fixture("sandbox-order-tests")],
+    sourcePaths: [fixture("sandbox-order"), tests],
     testIsolation: SERVE_TEST_ISOLATION,
   };
   const cu = `Codeunit${ISO_CODEUNIT}.`;

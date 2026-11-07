@@ -109,7 +109,7 @@ The legs:
     `(`, `)`, `/`, `&`, `å`, `æ`, in the positions N1S ran them: a letter or digit first, spaces single and inner.
     The dot stays out (#5798, N1E).
   - It is in `V3_GATE_LEGS`. On a build with no serve path (alpha.2) it reads "not applicable".
-- ISO (R857): does `runSelectedOnly` really run a test alone? One daemon, `fixtures/sandbox-order-tests`' codeunit 77056, a writer and a reader in one codeunit.
+- ISO (R857): does `runSelectedOnly` really run a test alone? One daemon, and a codeunit with a writer and a reader, `ISO_PROBE_AL`, added to a scratch copy of `fixtures/sandbox-order-tests` (a fixture file would move R-307's golden list).
   - A whole-codeunit entry must show the writer's date reach the reader: that control proves the probe can see a leak. Then each test as its own entry, with `runSelectedOnly`: the reader must not see it.
   - A build that accepted the field and ignored it would still give one row per entry, so `--isolate-tests` would read clean: this leg is what catches that. Any other reading is `gate-fail`.
   - It is a default leg, outside `V3_GATE_LEGS`, so a build gated before it stays gated. On a build with no serve path it reads "not applicable".

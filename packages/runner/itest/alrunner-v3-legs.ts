@@ -42,13 +42,33 @@ export const V3_O1_LEG = "O1";
 /**
  * R857: does `runSelectedOnly` really run a test alone? A build that accepted the field and ignored
  * it would still give one row per entry, so `--isolate-tests` would read clean while state leaked.
- * Raw requests on one daemon, on `fixtures/sandbox-order-tests`' codeunit 77056: a whole-codeunit
- * entry, the control that shows the probe can see a leak, then each test as its own entry. Not in
+ * Raw requests on one daemon: a whole-codeunit entry, the control that shows the probe can see a
+ * leak, then each test as its own entry. The codeunit is `ISO_PROBE_AL`, added to a scratch copy of
+ * `fixtures/sandbox-order-tests`, as a fixture file would move R-307's golden list. Not in
  * `V3_GATE_LEGS`, so a build gated before this leg stays gated; every gate runs it from now on.
  */
 export const V3_ISO_LEG = "ISO";
 export const ISO_CODEUNIT = 77056;
 const ISO_SET_DATE = "2020-03-15";
+
+/** A writer and a reader in ONE codeunit, unlike the Writer and Reader of `OrderProbe.al`. */
+export const ISO_PROBE_AL = `codeunit ${ISO_CODEUNIT} "Order Isolate Probe"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure W1SetDate()
+    begin
+        WorkDate(20200315D);
+    end;
+
+    [Test]
+    procedure R2ReadDate()
+    begin
+        Error('ISODATE=%1', Format(WorkDate(), 0, 9));
+    end;
+}
+`;
 
 /** Why leg ISO's readings are not the measured ones, or `undefined`. */
 export function judgeIsolateProbe(
