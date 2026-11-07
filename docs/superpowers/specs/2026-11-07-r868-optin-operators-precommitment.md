@@ -42,11 +42,41 @@ A run of this fixture **without** `--operator` must hold no `condition-true` and
 
 Production dump of five sets (`scripts/corpus-snapshot.ts diff`, master `481bd0c4`, branch `lethal/r868`), each operator off and on. Logs: `/coord/handoff/R-868/diff-<off|cond|blank|both>-<set>.log`. The tables are in the build report of coord R-868 and are repeated below.
 
-DUMP_TABLES_PLACEHOLDER
+**OFF (the default operator set, code as committed): 0 added, 0 removed, 0 tuples moved, 0 ordinals moved on all five sets** (fixtures 27 projects, CDO 6, DO 7, DC 14, BC.History 519; every log ends `RESULT: identical`).
+
+ON, specs added (each operator alone, then both together). Removed, tuples moved and ordinals moved are 0 in every cell: add-only, no `IDENTITY_SCHEME` bump.
+
+| set | `condition-true` alone | `blank-argument` alone | both on | both = sum of the two? |
+|---|---|---|---|---|
+| fixtures | 273 | 10 | 283 | yes |
+| CDO | 3,776 | 1,108 | 4,884 | yes |
+| DO | 4,956 | 1,994 | 6,950 | yes |
+| DC | 16,015 | 7,895 | 23,910 | yes |
+| BC.History | 119,781 | 77,859 | 197,640 | yes |
+
+Hang-refused counts (before > after), and growth with both on:
+
+| set | `condition-true` | `blank-argument` | both | specs, both on |
+|---|---|---|---|---|
+| fixtures | 2 > 2 | 0 > 0 | 2 > 2 | +283 |
+| CDO | 589 > 771 | 589 > 953 | 589 > 1,135 | +8.39% |
+| DO | 701 > 925 | 701 > 1,261 | 701 > 1,485 | +8.47% |
+| DC | 3,220 > 4,111 | 3,220 > 7,143 | 3,220 > 8,034 | +11.71% |
+| BC.History | 72,164 > 82,311 | 72,136 > 104,379 | 72,165 > 114,555 | +8.38% |
+
+The new rules cost sites. R-862's prototype refused about 12% of `blank-argument` candidates; now DC refuses 3,923 of 11,818 (33%) and BC.History 32,243 of 110,102 (29%). Most of that is the global rule (a value stored in a global that any loop of the object reads, matched by name) and the follow-through rule. `condition-true` refuses 891 of 16,906 on DC (5%). These are safe-direction losses (R829); a narrowing is open.
+
+No dedupe clash with both on: the sum equals the two alone on every set. R-862's prototype threw in `dedupeSpecs` here (`blank-argument` against `flip-boolean-literal`); `blank-argument` now returns at once for anything that is not an identifier or a field access, and `packages/runner/tests/r868-optin-operators.test.ts` goes red with the guard removed.
 
 ## Compile, with every mutant in
 
-COMPILE_PLACEHOLDER
+Real `alc` exit codes, both operators on (scratch worktree with the `optIn` flag off), against the R-862 symbol set. Control (the unmutated source) and instrumented build both exit 0, 0 errors, emit errors 0 (`/coord/handoff/R-868/real-compile.out`):
+
+- DO/Cloud: 50,590 specs.
+- DC/Cloud: 139,594 specs, on a scratch copy with the 28 missing JS resource files stubbed (as R-862; without them `alc` stops at AL0327 in both builds).
+- Typed probe (`/coord/handoff/R-868/typed-probe`, R-862's, which holds every argument type and `#if` arm shapes): 215 specs.
+- R402 `#if` sweep (`scripts/r402-shape-sweep.ts --repo <both-on worktree>`), all 54 shapes in every build: source compiles, the instrumented artifact compiles (208 `artifact=ok`, 0 `FAIL`). The 62 `PROBLEM` lines are all spec-count differences (`N specs, expected M`), which is the added opt-in sites against a table measured on master. Log: `/coord/handoff/R-868/r402-sweep.log`.
+- `fixtures/sandbox-optin` and `-tests`: `bun run compile:fixtures` OK for both.
 
 ## Other expected changes
 
