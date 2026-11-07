@@ -11,6 +11,7 @@ import { V3_NO_SERVE_ENTRIES as ITEST_NO_SERVE } from "../itest/alrunner-v3-legs
 import {
   AlRunnerV3Backend,
   type AlRunnerV3Config,
+  AlRunnerV3IsolateTestsRefusedError,
   AlRunnerV3ServeDottedTestNameError,
   AlRunnerV3TransportFrozenError,
   V3_SERVE_PROVEN_NAME_SHAPES,
@@ -328,6 +329,47 @@ describe("R761: explicit keys", () => {
     await r.b.decideTransport({ resume: true });
     expect(r.b.inRunStopIsBudget).toBe(false);
     expect(r.warnings).toEqual([]);
+  });
+});
+
+describe("R857: --isolate-tests needs serve-entries", () => {
+  const ON = { ...DEFAULT, isolateTests: true } as const;
+  const ISOLATE_NOTE = "al-runner-v3-isolate-tests";
+
+  test("each way to one-shot is refused by name, with its reason", async () => {
+    const cases: readonly [Rig, string][] = [
+      [await rig(ON, { src: MULTI_AL }), "multi-object-or-wrapped"],
+      [await rig({ ...ON, serveFallbackWarmup: "Codeunit1.X: refused" }), "the warm-up:"],
+      [
+        await rig({ transportSource: "explicit", transport: "one-shot", isolateTests: true }),
+        "one-shot",
+      ],
+    ];
+    for (const [r, why] of cases) {
+      const err = await r.b.decideTransport({ resume: false }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(AlRunnerV3IsolateTestsRefusedError);
+      expect((err as Error).message).toContain(why);
+      expect(r.warnings.map((w) => w.code)).not.toContain(ISOLATE_NOTE);
+    }
+  });
+
+  test("a resume stays on serve-entries; the same resume without the flag falls back", async () => {
+    const on = await rig(ON);
+    await on.b.decideTransport({ resume: true });
+    expect(on.b.inRunStopIsBudget).toBe(false);
+    expect(on.warnings.map((w) => w.code)).toEqual([ISOLATE_NOTE]);
+    const off = await rig(DEFAULT);
+    await off.b.decideTransport({ resume: true });
+    expect(off.b.inRunStopIsBudget).toBe(true);
+  });
+
+  test("a run with the flag says so once; a run without it says nothing", async () => {
+    const on = await rig(ON);
+    await on.b.decideTransport({ resume: false });
+    expect(on.warnings.map((w) => w.code)).toEqual([ISOLATE_NOTE]);
+    const off = await rig(DEFAULT);
+    await off.b.decideTransport({ resume: false });
+    expect(off.warnings).toEqual([]);
   });
 });
 

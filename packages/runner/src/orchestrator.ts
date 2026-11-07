@@ -5642,6 +5642,8 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     reused === undefined &&
     testAppHash !== undefined &&
     baseline.length === tests.length &&
+    // R857: nothing can reuse it, and as the newest match it would hide a default run's own.
+    backend.isolatesTests !== true &&
     // R658 (D5): the key does not include --baseline-timeout-ms, so a snapshot holding a stopped
     // test would bring it back stopped on a `--resume` that raised the budget.
     !baseline.some((b) => stoppedByUs(b.verdict))
@@ -6335,7 +6337,12 @@ async function runSessionBody(
   const v3Build = await runnerBuildOf(cfg.backend, caps.kind);
   const lendingSession: LendingSession = {
     backend: backendName,
-    runnerBuild: v3Build !== undefined ? `${v3Build.version} ${v3Build.binarySha256}` : undefined,
+    // R857: part of what lends, so a run under --isolate-tests lends nothing to a default run, and
+    // the other way, by the one check every lend passes.
+    runnerBuild:
+      v3Build !== undefined
+        ? `${v3Build.version} ${v3Build.binarySha256}${cfg.backend.isolatesTests === true ? " isolate-tests" : ""}`
+        : undefined,
   };
   const buildSymbols = await effectiveBuildSymbols(
     cfg.projectDir,
@@ -6367,6 +6374,7 @@ async function runSessionBody(
     // R354: ALWAYS passed, so no run recorded before R354 (no mode in its digest) can match.
     coverageMode: caps.coverage,
     selectorIds: cfg.selectorIds,
+    ...(cfg.backend.isolatesTests === true ? { isolateTests: true } : {}),
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
     // R221: in the fingerprint for exactly the reason `only` is. Two runs with different
     // exclusions deployed different mutant sets, and a resume that carried verdicts across an
@@ -8365,8 +8373,10 @@ async function runSessionBody(
           // and before R318 a renamed split member's lines had no name. Its key (instrumented
           // bytes, test app) cannot tell, so a batch holding such a member never reuses one: the
           // baseline runs again. 0 known sites; the cost is that one baseline.
+          // R857: under --isolate-tests a resume runs its baseline again: the warm-up needs its rows.
           allowReuse:
             resumeState !== undefined &&
+            cfg.backend.isolatesTests !== true &&
             !manifest.mutants.some((m) => m.coverageArmNames !== undefined),
           closedWorld: sessionClosedWorld,
           ...(historyTestApp !== undefined ? { provenTestApp: historyTestApp } : {}),
@@ -8611,7 +8621,15 @@ async function runSessionBody(
     buildSymbols,
     // R586: the v3 build, onto the measured execution contexts.
     // R807: plus the run seed the build reported back (read now, after the runs), when it reported one.
-    ...(v3Build !== undefined ? { runnerBuild: withRunSeed(v3Build, cfg.backend) } : {}),
+    ...(v3Build !== undefined
+      ? {
+          runnerBuild: {
+            ...withRunSeed(v3Build, cfg.backend),
+            // R857: the report says so too, as a report is read without the store.
+            ...(cfg.backend.isolatesTests === true ? { isolateTests: true as const } : {}),
+          },
+        }
+      : {}),
   };
   const report = buildReport(statics, collectedEvents);
   // R89: a run ASKED to resume must SAY it resumed. This is the invariant the code already claims —
