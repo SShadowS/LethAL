@@ -6335,7 +6335,12 @@ async function runSessionBody(
   const v3Build = await runnerBuildOf(cfg.backend, caps.kind);
   const lendingSession: LendingSession = {
     backend: backendName,
-    runnerBuild: v3Build !== undefined ? `${v3Build.version} ${v3Build.binarySha256}` : undefined,
+    // R857: part of what lends, so a run under --isolate-tests lends nothing to a default run, and
+    // the other way, by the one check every lend passes.
+    runnerBuild:
+      v3Build !== undefined
+        ? `${v3Build.version} ${v3Build.binarySha256}${cfg.backend.isolatesTests === true ? " isolate-tests" : ""}`
+        : undefined,
   };
   const buildSymbols = await effectiveBuildSymbols(
     cfg.projectDir,
@@ -6367,6 +6372,7 @@ async function runSessionBody(
     // R354: ALWAYS passed, so no run recorded before R354 (no mode in its digest) can match.
     coverageMode: caps.coverage,
     selectorIds: cfg.selectorIds,
+    ...(cfg.backend.isolatesTests === true ? { isolateTests: true } : {}),
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
     // R221: in the fingerprint for exactly the reason `only` is. Two runs with different
     // exclusions deployed different mutant sets, and a resume that carried verdicts across an
@@ -8365,8 +8371,10 @@ async function runSessionBody(
           // and before R318 a renamed split member's lines had no name. Its key (instrumented
           // bytes, test app) cannot tell, so a batch holding such a member never reuses one: the
           // baseline runs again. 0 known sites; the cost is that one baseline.
+          // R857: under --isolate-tests a resume runs its baseline again: the warm-up needs its rows.
           allowReuse:
             resumeState !== undefined &&
+            cfg.backend.isolatesTests !== true &&
             !manifest.mutants.some((m) => m.coverageArmNames !== undefined),
           closedWorld: sessionClosedWorld,
           ...(historyTestApp !== undefined ? { provenTestApp: historyTestApp } : {}),

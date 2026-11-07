@@ -92,6 +92,7 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "cli.ts": {
     'if (raw !== "bcdev" && raw !== "al-runner-v3") {': "config",
     'if (backendArg === "al-runner-v3") {': "v3",
+    'if (values["isolate-tests"] === true && backendArg !== "al-runner-v3") {': "v3",
     'instrumentedDir: join(scratchDir, "al-runner-v3"),': "path-name",
     'if (parsed.backendKind === "al-runner-v3") {': "v3",
     '} else if (paths.backendKind === "al-runner-v3") {': "v3",
@@ -405,6 +406,20 @@ describe("R586 C1: runSession keys on kind, not on authoritative", () => {
       expect(store.getRun(1)?.runnerBuild).toBe(
         `alrunner 3.0.0-alpha.2 (91253f2d6) ${"b".repeat(64)}`,
       );
+    });
+  });
+
+  test("R857: --isolate-tests goes in the lending build and the fingerprint; off, neither moves", async () => {
+    await inProject(async (root) => {
+      const store = new ResultsStore(":memory:");
+      await v3Session(root, store, withProbe(new V3KindStub([]), []));
+      const off = store.getRun(1);
+      const on = Object.assign(withProbe(new V3KindStub([]), []), { isolatesTests: true });
+      await v3Session(root, store, on);
+      const run = store.getRun(2);
+      expect(off?.runnerBuild).toBe(`alrunner 3.0.0-alpha.2 (91253f2d6) ${"b".repeat(64)}`);
+      expect(run?.runnerBuild).toBe(`${off?.runnerBuild} isolate-tests`);
+      expect(run?.configFingerprint).not.toBe(off?.configFingerprint);
     });
   });
 

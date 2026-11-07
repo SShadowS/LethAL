@@ -434,10 +434,16 @@ async function snapshotCase(c: {
   /** Ruling (b): the store answers that the snapshot's run row is missing. */
   readonly missingRow?: boolean;
   readonly spy?: boolean;
+  /** R857: both sessions run under `--isolate-tests`. */
+  readonly isolate?: boolean;
 }) {
   const dirs = await project();
   const store = new ResultsStore(":memory:");
-  await runSession({ ...base(store, dirs), backend: new Stub(ABORT_AFTER) });
+  const mode = c.isolate === true ? { isolatesTests: true } : {};
+  await runSession({
+    ...base(store, dirs),
+    backend: Object.assign(new Stub(ABORT_AFTER), mode),
+  });
   const runId = lastRun(store);
   const row = store.getRun(runId);
   if (row === null || row.testAppHash === null || row.testAppDeps === null) {
@@ -463,7 +469,7 @@ async function snapshotCase(c: {
     const getRun = store.getRun.bind(store);
     store.getRun = (id: number) => (id === other ? null : getRun(id));
   }
-  const today = new Stub();
+  const today = Object.assign(new Stub(), mode);
   const { events, log, emit } = collect(store, c.spy);
   let error: Error | undefined;
   try {
@@ -519,6 +525,25 @@ describe("R619 baseline-snapshot reuse (scoreBatch through runSession): T14's ca
     const s = await snapshotCase({ snap: { backend: "al-runner-v3", runnerBuild: B1 } });
     expect(s.error).toBeUndefined();
     expect(reusedOf(s.events)).toHaveLength(1);
+  });
+  test("R857: a run under --isolate-tests lends no snapshot to a default session: step 1", async () => {
+    const build = `${B1} isolate-tests`;
+    const s = await snapshotCase({ snap: { backend: "al-runner-v3", runnerBuild: build } });
+    notReused(
+      s,
+      "snapshot-backend-build-changed",
+      backendBuild(s.other, otherBuild(s.other, build)),
+    );
+  });
+  test("R857: a default run lends no snapshot to a session under --isolate-tests: step 1 says so", async () => {
+    const s = await snapshotCase({
+      snap: { backend: "al-runner-v3", runnerBuild: `${B1} isolate-tests` },
+      isolate: true,
+    });
+    expect(s.error).toBeUndefined();
+    // Even its own mode's snapshot is not read: its warm-up needs a baseline's rows.
+    expect(reusedOf(s.events)).toEqual([]);
+    expect(s.today.baselineRuns).toBeGreaterThan(0);
   });
   test("order: a same-build snapshot under another coverage mode is not found (SQL), silently", async () => {
     const s = await snapshotCase({

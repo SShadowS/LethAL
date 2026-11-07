@@ -381,6 +381,7 @@ export const DRY_RUN_REFUSED = [
   "stop-hung-sessions",
   "allow-large-run",
   "fresh-probe",
+  "isolate-tests",
 ] as const;
 
 export interface DryRunCliConfig {
@@ -547,6 +548,8 @@ export interface RunCliConfig {
   readonly stopHungSessions?: boolean;
   /** R762: `--fresh-probe`, al-runner-v3 only: run the contract probe instead of replaying a cached pass. */
   readonly freshProbe?: boolean;
+  /** R857: `--isolate-tests`, al-runner-v3 only: every test runs alone. Off by default. */
+  readonly isolateTests?: boolean;
   /**
    * R47: `--resume` (most recent unfinished run) or `--resume-run <id>` (a named one). Absent means
    * a fresh run. See `SessionConfig.resume`.
@@ -1038,6 +1041,10 @@ RUN — cost and recovery
                              cached pass for the same build, packages and alc (R762). Same as
                              LETHAL_V3_FRESH_PROBE=1. A failed or forced probe is never cached
                              (env LETHAL_V3_SPECULATE_BASELINE=1: run the baseline while alc proves the batch, R790; off by default)
+  --isolate-tests            al-runner-v3 only, off by default: run every test alone, so nothing
+                             an earlier test of its codeunit left reaches it. Slower: one process
+                             per test at the baseline. Needs the serve-entries transport. A run
+                             with it and a run without it never share verdicts (R857)
   --resume                   continue the most recent unfinished run in --db, reusing its verdicts
   --resume-run <id>          resume a specific run id
   --retry-stranded           on resume, retry mutants that left the server stuck (skipped by default:
@@ -1325,6 +1332,8 @@ export const RUN_FLAGS = {
   "allow-large-run": { type: "boolean", default: false },
   // R762: see `RunCliConfig.freshProbe`.
   "fresh-probe": { type: "boolean", default: false },
+  // R857: see `RunCliConfig.isolateTests`.
+  "isolate-tests": { type: "boolean", default: false },
   // Task 6 (event-stream refactor): see `RunCliConfig.progressOutPath`.
   "progress-out": { type: "string" },
   // `lethal campaign` (subsystem D): the campaign manifest, the stage whose committed records this
@@ -1387,6 +1396,7 @@ const RUN_ONLY_FLAGS = [
   "stop-hung-sessions",
   "allow-large-run",
   "fresh-probe",
+  "isolate-tests",
   "progress-out",
 ] as const;
 
@@ -2225,6 +2235,12 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       `--allow-expiring-env applies to the bcdev backend's environment tool; ${backendArg} has no environment`,
     );
   }
+  // R857: BC's own paths differ from a lone test too, so the flag would promise what it cannot do.
+  if (values["isolate-tests"] === true && backendArg !== "al-runner-v3") {
+    throw new Error(
+      `--isolate-tests applies to al-runner-v3 only; ${backendArg} chooses its own calls, and BC's grouped path keeps some state between tests (R857)`,
+    );
+  }
   // R586 (T16): v3 is not measured on Windows.
   if (backendArg === "al-runner-v3") {
     refuseV3Platform();
@@ -2265,6 +2281,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     ...(values["retry-stranded"] === true ? { retryStranded: true } : {}),
     ...(values["stop-hung-sessions"] === true ? { stopHungSessions: true } : {}),
     ...(values["fresh-probe"] === true ? { freshProbe: true } : {}),
+    ...(values["isolate-tests"] === true ? { isolateTests: true } : {}),
     ...(values["progress-out"] !== undefined ? { progressOutPath: values["progress-out"] } : {}),
   };
 }
@@ -2954,7 +2971,7 @@ export type BackendInputs = Pick<
   RunCliConfig,
   "backendKind" | "projectDir" | "testDir" | "stopHungSessions"
 > &
-  Partial<Pick<RunCliConfig, "freshProbe">> &
+  Partial<Pick<RunCliConfig, "freshProbe" | "isolateTests">> &
   // R505: the run's own output files, which the source-drift watch must not count.
   Partial<Pick<RunCliConfig, "dbPath" | "outPath" | "progressOutPath">>;
 
@@ -3032,6 +3049,7 @@ async function buildAlRunnerV3Backend(
         ? { serveFallbackWarmup: deps.serveFallbackWarmup }
         : {}),
       ...(parsed.freshProbe === true ? { freshProbe: true } : {}),
+      ...(parsed.isolateTests === true ? { isolateTests: true } : {}),
       ...(c.cacheDir !== undefined ? { cacheDir: c.cacheDir } : {}),
       ...(deps.preprocessorSymbols.length > 0
         ? { preprocessorSymbols: deps.preprocessorSymbols }
