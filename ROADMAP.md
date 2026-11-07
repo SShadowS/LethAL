@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**17 of 839 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**18 of 840 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -884,6 +884,7 @@ that ordering is the priority.
 - **R851** · The al-runner update counted processes as heavy jobs, so one job could skip a release for the day · [R851.md](docs/roadmap/R851.md) · done (0f52bd85)
 - **R859** · The gate manifest has no scripted route when a hand pin's digest moves · [R859.md](docs/roadmap/R859.md) · done (1ab3d80c)
 - **R860** · al-runner stops on a missing dependency (upstream #7139); LethAL follows by name · [R860.md](docs/roadmap/R860.md) · done (35b54d36)
+- **R861** · `--edge-rejudge` moved `current` and left its manifest row unpublished until the next plain run · [R861.md](docs/roadmap/R861.md) · open, filed 2026-11-07 (coord task R-863)
 
 ---
 
