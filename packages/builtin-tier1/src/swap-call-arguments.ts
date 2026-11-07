@@ -50,6 +50,14 @@ import { synthesizeAfter } from "./mutate-helpers";
  *   4. Not a FIELD-DESIGNATOR position of a record builtin (R455, `FIELD_POSITIONS`): there the
  *      receiver's field wins over a same-named local, so the swap does not compile (AL0166).
  *
+ * R856 (#42, version 1.1.0): MEMBER ARGUMENTS. When a call has NO bare-identifier pair at all, pairs
+ * that include a `Rec.Field` / `Rec."Field"` argument are tried (record variable declared, typed by
+ * `ctx.types`). Bare pairs always win: a bare pair the loop rule refuses never falls through to a
+ * member pair, so every site that had a mutant keeps it. A member is claimed only if it is a plain
+ * stored field (not a FlowField or FlowFilter: those cannot go to a `var` parameter, and the callee
+ * is often unresolved) and not an Option (the type table ignores option member lists). A call or a
+ * literal stays refused. The loop rule also reads a member's base name.
+ *
  * WHAT THE PREDICATE PROVES, AND WHAT IT DOES NOT. It proves COMPILE safety. It does NOT prove the
  * swap is harmless at runtime: two `Code[20]` variables passed to a callee whose second parameter
  * is `Code[10]` compile both ways, and the swapped call dies on a length overflow — a kill no
@@ -74,7 +82,7 @@ import { synthesizeAfter } from "./mutate-helpers";
  */
 export const swapCallArguments: MutationOperator = {
   name: "lethal.swap-call-arguments",
-  version: "1.0.0",
+  version: "1.1.0",
   tier: 1,
   targetNodeKinds: [ALNodeKind.procedure_call],
   producesNodeKinds: [ALNodeKind.procedure_call],
@@ -99,7 +107,7 @@ export const swapCallArguments: MutationOperator = {
     return [
       {
         operatorName: "lethal.swap-call-arguments",
-        operatorVersion: "1.0.0",
+        operatorVersion: "1.1.0",
         astNodeId: `${node.startIndex}-${node.endIndex}`,
         before: node,
         after: synthesizeAfter(node, mutatedText),
@@ -153,8 +161,51 @@ export const swapCallArguments: MutationOperator = {
         },
       ],
     },
+    ...memberCases(),
   ],
 };
+
+/** R856 (#42): the conformance cases for member arguments. */
+function memberCases(): MutationOperator["conformanceTests"] {
+  const table = `table 50160 "T" { fields { field(1; Amount; Decimal) { } field(2; Price; Decimal) { } field(3; Code; Code[20]) { } field(4; Kind; Option) { OptionMembers = A,B; } field(5; Kind2; Option) { OptionMembers = C,D; } } }`;
+  const src = (id: number, decls: string, body: string): string =>
+    `${table.replace("50160", String(id))} codeunit ${id + 1} "C" { procedure P() var R: Record "T"; ${decls} begin ${body} end; }`;
+  const one = (before: string, after: string) => [
+    { parentContext: "statement-position" as const, beforeText: before, afterText: after },
+  ];
+  return [
+    {
+      name: "swaps a field and a variable",
+      sourceAL: src(50170, "N: Decimal;", "Foo(R.Amount, N);"),
+      expectedSpecs: one("Foo(R.Amount, N)", "Foo(N, R.Amount)"),
+    },
+    {
+      name: "swaps a variable and a field",
+      sourceAL: src(50172, "N: Decimal;", "Foo(N, R.Amount);"),
+      expectedSpecs: one("Foo(N, R.Amount)", "Foo(R.Amount, N)"),
+    },
+    {
+      name: "swaps two fields",
+      sourceAL: src(50174, "", "Foo(R.Amount, R.Price);"),
+      expectedSpecs: one("Foo(R.Amount, R.Price)", "Foo(R.Price, R.Amount)"),
+    },
+    {
+      name: "refuses fields of differing types",
+      sourceAL: src(50176, "", "Foo(R.Amount, R.Code);"),
+      expectedSpecs: [],
+    },
+    {
+      name: "refuses a field beside a call",
+      sourceAL: src(50178, "", "Foo(R.Amount, Bar());"),
+      expectedSpecs: [],
+    },
+    {
+      name: "refuses an Option field",
+      sourceAL: src(50180, "", "Foo(R.Kind, R.Kind2);"),
+      expectedSpecs: [],
+    },
+  ];
+}
 
 /**
  * The honest `parentContext`. Copied in spirit from `swap-modify-flag`: this operator genuinely
@@ -182,7 +233,13 @@ function swapFeedsLoop(
   pair: readonly [ALSyntaxNode, ALSyntaxNode],
   ctx: SemanticContext,
 ): boolean {
-  return pair.some((a) => loopReadsNameAt(node, a.text, ctx));
+  // R856: a member argument also counts through its base name (`Cust` of `Cust."No."`).
+  return pair.some(
+    (a) =>
+      loopReadsNameAt(node, a.text, ctx) ||
+      (a.kind === ALNodeKind.field_access &&
+        loopReadsNameAt(node, a.childForFieldName("object")?.text ?? a.text, ctx)),
+  );
 }
 
 function parentContextOf(node: ALSyntaxNode): ParentContextHint {
@@ -213,11 +270,31 @@ function swappablePair(
   // count over EVERY argument expression (a literal or a nested call is one), and a field-designator
   // position is never swapped.
   const fieldPositions = fieldDesignatorPositions(node);
-  const args = argList.namedChildren
+  const all = argList.namedChildren
     .filter((c) => !c.rawKind.endsWith("comment"))
-    .filter((c, i) => c.kind === ALNodeKind.identifier && !fieldPositions(i + 1));
-  if (args.length < 2) return null;
+    .filter((c, i) => !fieldPositions(i + 1));
+  // R856 (#42): bare pairs first, exactly as before. Member pairs are tried ONLY when no bare pair
+  // exists at all: a bare pair that the loop rule later refuses must not fall through to a member
+  // pair, and an existing site keeps its pair.
+  const bare = firstPair(
+    all.filter((c) => c.kind === ALNodeKind.identifier),
+    ctx,
+  );
+  if (bare !== null) return bare;
+  return firstPair(
+    all.filter(
+      (c) =>
+        c.kind === ALNodeKind.identifier ||
+        (c.kind === ALNodeKind.field_access && plainStoredField(c, ctx)),
+    ),
+    ctx,
+  );
+}
 
+function firstPair(
+  args: readonly ALSyntaxNode[],
+  ctx: SemanticContext,
+): readonly [ALSyntaxNode, ALSyntaxNode] | null {
   for (let i = 0; i < args.length; i += 1) {
     for (let j = i + 1; j < args.length; j += 1) {
       const left = args[i];
@@ -233,6 +310,33 @@ function swappablePair(
   }
   return null;
 }
+
+/**
+ * R856 (#42): may this `Rec.Field` argument be swapped? Only a plain stored field of a declared
+ * record variable, and never an Option. The field's declaration is read from the symbol table
+ * (`fieldsOf`); one that cannot be found is refused. `FieldClass` is read from the declaration text:
+ * a FlowField or FlowFilter cannot go to a `var` parameter, and the callee is often not resolved
+ * (43% on BC.History), so the field's class decides, not the callee. Option is refused because the
+ * type table answers a raw `Option` and ignores the member list.
+ */
+function plainStoredField(arg: ALSyntaxNode, ctx: SemanticContext): boolean {
+  const object = arg.childForFieldName("object");
+  const member = arg.childForFieldName("member");
+  if (object === null || member === null || object.kind !== ALNodeKind.identifier) return false;
+  const type = ctx.types.typeOf(arg);
+  if (type === null || /^\s*option\b/i.test(type)) return false;
+  const record = /^\s*Record\s+(.+?)\s*$/i.exec(ctx.types.typeOf(object) ?? "")?.[1];
+  if (record === undefined) return false;
+  const table = unquote(record.replace(/\s+temporary$/i, ""));
+  const name = unquote(member.text).toLowerCase();
+  const field = ctx.symbols.fieldsOf(table).find((f) => f.name.toLowerCase() === name);
+  if (field === undefined) return false;
+  for (const m of field.node.text.matchAll(/\bFieldClass\s*=\s*(\w+)/gi))
+    if (m[1]?.toLowerCase() !== "normal") return false;
+  return true;
+}
+
+const unquote = (s: string): string => (/^".*"$/.test(s) ? s.slice(1, -1) : s);
 
 /**
  * `node`'s text with the two argument spans exchanged.

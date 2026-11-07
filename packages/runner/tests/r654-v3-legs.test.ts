@@ -252,6 +252,7 @@ describe("R654 S2 leg K: the config it builds from, and what it judges", () => {
       "src/SandboxPricing.Codeunit.al",
       "src/SandboxPricing.Codeunit.al",
       "src/SandboxPricing.Codeunit.al",
+      "src/SandboxPricing.Codeunit.al",
     ],
   };
 

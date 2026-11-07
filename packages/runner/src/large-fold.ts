@@ -79,7 +79,8 @@ export function largeFoldWarning(
     " measured: it is a warning only. Loops and statements holding a `#if` cause the largest folds (everything",
     " inside one joins its chain). To shrink them, leave out the operators that root them, one",
     " --exclude-operator each: empty-block, negate-conditional, conditional-boundary, negate-guard,",
-    " remove-not, loop-skip, loop-truncate. Or narrow the run with --only.",
+    " remove-not, loop-skip, loop-truncate, delete-logical-right, delete-logical-left, delete-additive-right,",
+    " delete-additive-left. Or narrow the run with --only.",
     " --max-guards-per-batch will not help: it splits by file.",
   ].join("");
 }

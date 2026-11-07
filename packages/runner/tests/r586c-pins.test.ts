@@ -120,8 +120,8 @@ describe("R586c pins: the table", () => {
       expect(r.killingTest).toBeNull();
       expect(r.issue).toMatch(/issues\/5788$/);
     }
-    expect(need(pin).legT.counts).toEqual({ killed: 290, survived: 50, noCoverage: 59 });
-    expect(need(pin).legT.total).toBe(406);
+    expect(need(pin).legT.counts).toEqual({ killed: 298, survived: 53, noCoverage: 60 });
+    expect(need(pin).legT.total).toBe(418);
   });
   test("P-meta-3: patterns are anchored, flagless, escape every dot; only sleep has a cut and an extra", () => {
     for (const [k, p] of Object.entries(need(pin).legC)) {
@@ -379,14 +379,14 @@ describe("R586c leg T: the seven rows", () => {
     now: readonly NormalizedMutant[],
     o: { pinned?: boolean; counts?: [number, number, number]; extra?: object } = {},
   ) => {
-    const [killed, survived, noCoverage] = o.counts ?? [290, 50, 59];
+    const [killed, survived, noCoverage] = o.counts ?? [298, 53, 60];
     return judgeLegT({
       classification: classifyLegT(ownRows, now, bcRows),
       compare: compareMutants(ownRows, now, { sameScheme: true }),
       own: ownRows,
       now,
       counts: { killed, survived, noCoverage },
-      total: 406,
+      total: 418,
       unsupportedTests: 3,
       sleepIndex: { target: 0, test: 0 },
       knownRefusal: undefined,
@@ -397,7 +397,7 @@ describe("R586c leg T: the seven rows", () => {
       ...o.extra,
     });
   };
-  test("T-pin-1: baseline plus the seven overrides, 290/50/59: pass, pinned", () => {
+  test("T-pin-1: baseline plus the seven overrides, 298/53/60: pass, pinned", () => {
     const j = judge(movedNow);
     expect(j.outcome).toBe("pass");
     expect(j.pinned).toBe(true);
@@ -408,9 +408,9 @@ describe("R586c leg T: the seven rows", () => {
     expect(j.outcome).toBe("held");
     expect(j.pinned).toBeUndefined();
   });
-  test("T-pin-0 (B1): all seven still survived, 290/57/59, with the pin: exactly held (no pin: pass)", () => {
-    expect(judge(ownRows, { pinned: false, counts: [290, 57, 59] }).outcome).toBe("pass");
-    const j = judge(ownRows, { counts: [290, 57, 59] });
+  test("T-pin-0 (B1): all seven still survived, 298/60/60, with the pin: exactly held (no pin: pass)", () => {
+    expect(judge(ownRows, { pinned: false, counts: [298, 60, 60] }).outcome).toBe("pass");
+    const j = judge(ownRows, { counts: [298, 60, 60] });
     expect(j.outcome).toBe("held");
     expect(j.pinned).toBeUndefined();
     expect(j.lines.some((l) => l.startsWith("T: pin-mismatch: "))).toBe(true);
@@ -436,8 +436,8 @@ describe("R586c leg T: the seven rows", () => {
     const now = movedNow.map((r, i) => (i === 0 ? { ...r, killingTest: "SomeTest" } : r));
     expect(judge(now).outcome).not.toBe("pass");
   });
-  test("T-pin-3: counts 290/57/59 with the seven moved is gate-fail", () => {
-    expect(judge(movedNow, { counts: [290, 57, 59] }).outcome).toBe("gate-fail");
+  test("T-pin-3: counts 298/60/60 with the seven moved is gate-fail", () => {
+    expect(judge(movedNow, { counts: [298, 60, 60] }).outcome).toBe("gate-fail");
   });
   test("T-pin-3: Sleep index 1 + 0 and unsupportedTests 2 are gate-fail", () => {
     expect(judge(movedNow, { extra: { sleepIndex: { target: 1, test: 0 } } }).outcome).toBe(
@@ -459,8 +459,8 @@ describe("R586c leg T: the seven rows", () => {
       compare: compareMutants(own2, movedNow, { sameScheme: true }),
       own: own2,
       now: movedNow,
-      counts: { killed: 290, survived: 50, noCoverage: 59 },
-      total: 406,
+      counts: { killed: 298, survived: 53, noCoverage: 60 },
+      total: 418,
       unsupportedTests: 3,
       sleepIndex: { target: 0, test: 0 },
       knownRefusal: undefined,
@@ -661,7 +661,7 @@ describe("R756 edge pin: the edge readings are pinned and pass", () => {
     expect(classifyXb(xb)).toBe("held");
   });
 
-  test("E-T: the seven held rows, counts 290/50/59 over 406 (errors 7): pass, pinned, edge pin named", () => {
+  test("E-T: the seven held rows, counts 298/53/60 over 418 (errors 7): pass, pinned, edge pin named", () => {
     const e = need(edgePin);
     const hash = (k: string) => `h-${k.slice(0, 8)}-${k.length}`;
     const row = (key: string, verdict: string, killingTest: string | null): NormalizedMutant => ({
@@ -692,8 +692,8 @@ describe("R756 edge pin: the edge readings are pinned and pass", () => {
       compare: compareMutants(ownRows, now, { sameScheme: true }),
       own: ownRows,
       now,
-      counts: { killed: 290, survived: 50, noCoverage: 59 },
-      total: 406,
+      counts: { killed: 298, survived: 53, noCoverage: 60 },
+      total: 418,
       unsupportedTests: 3,
       sleepIndex: { target: 0, test: 0 },
       knownRefusal: undefined,
@@ -907,17 +907,17 @@ describe("edge-8078bcf49: every pinned defect gone, 48 known differences at BC's
       expect(r.issue).toMatch(r.key.includes("|Data Commit ") ? /\/5607$/ : /\/5603$/);
     }
   });
-  test("leg T: the counts are the committed baseline's 290/57/59 plus exactly these moves", () => {
+  test("leg T: the counts are the committed baseline's 298/60/60 plus exactly these moves", () => {
     const rows = need(bPin).legT.rows;
     const n = (v: string) =>
       rows.filter((r) => r.verdict === v).length - rows.filter((r) => r.from?.verdict === v).length;
     expect(need(bPin).legT.counts).toEqual({
-      killed: 290 + n("killed"),
-      survived: 57 + n("survived"),
-      noCoverage: 59 + n("no-coverage"),
+      killed: 298 + n("killed"),
+      survived: 60 + n("survived"),
+      noCoverage: 60 + n("no-coverage"),
     });
-    expect(need(bPin).legT.counts).toEqual({ killed: 318, survived: 70, noCoverage: 18 });
-    expect(need(bPin).legT.total).toBe(406);
+    expect(need(bPin).legT.counts).toEqual({ killed: 326, survived: 73, noCoverage: 19 });
+    expect(need(bPin).legT.total).toBe(418);
     expect(need(bPin).legT.refusedTests).toBe(0);
   });
   test("applyTPin: a row's `from` must equal the committed row exactly", () => {
@@ -1002,9 +1002,9 @@ describe("edge-8078bcf49: every pinned defect gone, 48 known differences at BC's
       error: rs.filter((r) => r.verdict === "error").length,
     });
     expect(tally(committed.entries)).toEqual({
-      killed: 290,
-      survived: 57,
-      noCoverage: 59,
+      killed: 298,
+      survived: 60,
+      noCoverage: 60,
       error: 0,
     });
     const b = applyTPin(committed.entries, need(bPin).legT);
@@ -1015,9 +1015,9 @@ describe("edge-8078bcf49: every pinned defect gone, 48 known differences at BC's
     for (const p of V3_BUILD_PINS.filter((x) => x.legT !== need(bPin).legT)) {
       const out = applyTPin(committed.entries, p.legT);
       expect(tally(need(out)), p.id).toEqual({
-        killed: 290,
-        survived: 50,
-        noCoverage: 59,
+        killed: 298,
+        survived: 53,
+        noCoverage: 60,
         error: 7,
       });
     }

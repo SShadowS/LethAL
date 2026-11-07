@@ -6,8 +6,8 @@
  * any al-runner session on the fixture. A difference is a finding and a stop: never edit a row to
  * match a run.
  *
- * Since R214 each build has 9 mutants, 5 killed / 4 survived: the seven outside the arms plus its
- * own arm's two. Two builds share seven rows and differ on 4 of their verdicts, and each has two
+ * Since R214 each build had 9 mutants, 5 killed / 4 survived: the seven outside the arms plus its
+ * own arm's two. Since R855 each has 11, 7 killed / 4 survived (its arm gained two deletions). Two builds share seven rows and differ on 4 of their verdicts, and each has two
  * rows the others lack, so a transport that compiled the wrong build fails on the rows AND on the
  * count. Pre-committed in docs/superpowers/specs/2026-09-29-r214-precommitment.md.
  *
@@ -46,6 +46,10 @@ const RA = "lethal.remove-assignment";
 const SI = "lethal.shift-integer";
 const RV = "lethal.return-value";
 const SA = "lethal.swap-additive";
+// R855: X + ForA / ForB / ForNone gains both deletions. Rate(1) is 11 / 101 / 2 expected, and each
+// deletion gives 1 or the constant (10 / 100 / 1), so every one is killed by RateSmall.
+const DL = "lethal.delete-additive-left";
+const DR = "lethal.delete-additive-right";
 
 /** Sorted by line, then operator name, the order `assertSymbolBuild` compares in. */
 export const EXPECTED_BY_SET: Readonly<Record<string, readonly SymbolRow[]>> = {
@@ -57,6 +61,8 @@ export const EXPECTED_BY_SET: Readonly<Record<string, readonly SymbolRow[]>> = {
     s(10, SI),
     s(11, RA),
     s(11, SI),
+    k(13, DL),
+    k(13, DR),
     k(13, RV),
     k(13, SA),
   ],
@@ -68,6 +74,8 @@ export const EXPECTED_BY_SET: Readonly<Record<string, readonly SymbolRow[]>> = {
     k(10, SI),
     s(11, RA),
     s(11, SI),
+    k(15, DL),
+    k(15, DR),
     k(15, RV),
     k(15, SA),
   ],
@@ -85,6 +93,8 @@ export const EXPECTED_NO_DEFINE: readonly SymbolRow[] = [
   s(10, SI),
   k(11, RA),
   k(11, SI),
+  k(17, DL),
+  k(17, DR),
   k(17, RV),
   k(17, SA),
 ];

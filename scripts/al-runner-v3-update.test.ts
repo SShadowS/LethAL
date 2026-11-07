@@ -43,6 +43,7 @@ import {
   publishToMaster,
   readReceipt,
   realDeps,
+  refreshRows,
   runToLog,
   updateExitCode,
   updateOnce,
@@ -1753,5 +1754,260 @@ describe("R814: pinFromAt", () => {
       "utf8",
     );
     expect(src).toContain('export const V3_PIN_FROM_ENV = "LETHAL_V3_PIN_FROM"');
+  });
+});
+
+// R859: `--refresh-rows`, with fakes. A row is replaced only on its own gate's pass.
+linuxOnly("R859: refreshRows", () => {
+  const PIN = "edge-d72d3197d";
+  const row = (c: string, over: Record<string, unknown> = {}) => ({
+    id: `edge-${c}`,
+    track: "edge",
+    version: `al-runner 3.0.0-alpha.13+edge.20261106 (${c})`,
+    binarySha256: sha(`bin-${c}`),
+    readingsFrom: PIN,
+    readingsDigest: "0".repeat(64),
+    lethalCommit: GATED_COMMIT,
+    gatedAt: "2026-11-06T07:56:28.135Z",
+    ...over,
+  });
+  /** A root with `current`, two kept binaries and a manifest of two rows (A and B). */
+  async function world(over: Record<string, unknown> = {}, keep = ["aaaaaaaaa", "bbbbbbbbb"]) {
+    await setup();
+    for (const c of keep) {
+      await mkdir(join(root, `edge-${c}-${c}`), { recursive: true });
+      await writeFile(join(root, `edge-${c}-${c}`, "al-runner"), `bin-${c}`);
+    }
+    const manifestPath = join(root, "manifest.json");
+    await writeFile(
+      manifestPath,
+      `${JSON.stringify([row("aaaaaaaaa", over), row("bbbbbbbbb")], null, 2)}\n`,
+    );
+    return manifestPath;
+  }
+  const mk = (manifestPath: string, o: Parameters<typeof fake>[0] = {}, dirty = false) => {
+    const f = fake({ outcome: "pass", realSha: true, pinApplied: PIN, ...o });
+    return { ...f, deps: { ...f.deps, manifestPath, isDirty: async () => dirty } };
+  };
+  const untouched = async (path: string, before: string) => {
+    expect(await readFile(path, "utf8")).toBe(before);
+    for (const d of ["failed", "held", "gated-builds.published", "gated-builds.jsonl"])
+      expect(existsSync(join(root, d))).toBe(false);
+    expect(await current()).toBe(join(root, ALPHA2_DIR));
+  };
+
+  test("a pass replaces that row's digest and commit, and nothing else; the receipt names it", async () => {
+    const p = await world({ warnFacts: { "serve-keep-reasons": "differs" } });
+    const before = await readFile(p, "utf8");
+    const { deps, seen } = mk(p, {
+      ancestor: () => false,
+      warnFacts: { "serve-keep-reasons": "matches" },
+    });
+    expect(await refreshRows(deps, ["edge-aaaaaaaaa"])).toEqual(["pass"]);
+    const [a, b] = JSON.parse(await readFile(p, "utf8"));
+    // The digest, commit, gatedAt and warnFacts come from THIS gate; nothing else moves.
+    expect(a).toEqual(
+      row("aaaaaaaaa", {
+        readingsDigest: digestOfPin(PIN),
+        lethalCommit: FIXED_COMMIT,
+        gatedAt: "2026-10-21T00:00:00Z",
+        warnFacts: { "serve-keep-reasons": "matches" },
+      }),
+    );
+    expect(b).toEqual(row("bbbbbbbbb"));
+    // The second row's text is byte-identical.
+    const tail = (t: string) => t.slice(t.indexOf('"id": "edge-bbbbbbbbb"'));
+    expect(tail(await readFile(p, "utf8"))).toBe(tail(before));
+    expect(seen.gates).toEqual([FIXED_COMMIT]);
+    expect(seen.envs[0]?.LETHAL_V3_PIN_FROM).toBe(PIN);
+    expect(seen.envs[0]?.LETHAL_ALRUNNER_V3_PATH).toBe(
+      join(root, "edge-aaaaaaaaa-aaaaaaaaa", "al-runner"),
+    );
+    for (const d of ["failed", "held", "gated-builds.published", "gated-builds.jsonl"])
+      expect(existsSync(join(root, d))).toBe(false);
+    expect(await current()).toBe(join(root, ALPHA2_DIR));
+    const rc = JSON.parse(
+      await readFile(
+        join(root, "refresh", `refresh-edge-aaaaaaaaa@${FIXED_COMMIT}`, "refresh.json"),
+        "utf8",
+      ),
+    );
+    expect(rc).toMatchObject({
+      binary: join(root, "edge-aaaaaaaaa-aaaaaaaaa", "al-runner"),
+      binarySha256: sha("bin-aaaaaaaaa"),
+      oldDigest: "0".repeat(64),
+      newDigest: digestOfPin(PIN),
+      lethalCommit: FIXED_COMMIT,
+      outcome: "pass",
+    });
+    expect(existsSync(join(root, ".gate.lock"))).toBe(false);
+  });
+
+  for (const outcome of ["gate-fail", "held", "infra-fail"] as const) {
+    test(`a ${outcome} writes nothing`, async () => {
+      const p = await world();
+      const before = await readFile(p, "utf8");
+      const { deps } = mk(p, { outcome });
+      expect(await refreshRows(deps, ["edge-aaaaaaaaa", "edge-bbbbbbbbb"])).toEqual([outcome]);
+      await untouched(p, before);
+    });
+  }
+
+  test("a pass that applied another pin is an infra-fail and writes nothing", async () => {
+    const p = await world();
+    const before = await readFile(p, "utf8");
+    const { deps } = mk(p, { pinApplied: "alpha.12-d4bc8d3a5" });
+    expect(await refreshRows(deps, ["edge-aaaaaaaaa"])).toEqual(["infra-fail"]);
+    await untouched(p, before);
+  });
+
+  test("a skipped run (heavy load, or the lock held by a live update) writes nothing and gates nothing", async () => {
+    const p = await world();
+    const before = await readFile(p, "utf8");
+    const busy = mk(p, { heavy: 3 });
+    expect(await refreshRows(busy.deps, ["edge-aaaaaaaaa"])).toEqual(["skipped"]);
+    await writeFile(
+      join(root, ".gate.lock"),
+      JSON.stringify({ pid: 4242, startedAt: "2026-10-20T00:00:00Z", argv: [] }),
+    );
+    const held = mk(p, { procs: { 4242: "bun scripts/al-runner-v3-update.ts --edge" } });
+    expect(await refreshRows(held.deps, ["edge-aaaaaaaaa"])).toEqual(["skipped"]);
+    expect(busy.seen.gates.length + held.seen.gates.length).toBe(0);
+    expect(await readFile(p, "utf8")).toBe(before);
+  });
+
+  test("refusals, each by name, before any gate: wrong sha, unknown id, missing binary, no hand pin, dirty, no ids", async () => {
+    const cases: [string, () => Promise<[string, boolean, string[]]>, RegExp][] = [
+      [
+        "sha",
+        async () => {
+          const p = await world();
+          await writeFile(join(root, "edge-aaaaaaaaa-aaaaaaaaa", "al-runner"), "changed");
+          return [p, false, ["edge-aaaaaaaaa"]];
+        },
+        /does not have the row's sha256/,
+      ],
+      ["unknown", async () => [await world(), false, ["edge-ccccccccc"]], /is not a row/],
+      [
+        "missing",
+        async () => [await world({}, ["bbbbbbbbb"]), false, ["edge-aaaaaaaaa"]],
+        /no kept binary/,
+      ],
+      [
+        "pin",
+        async () => [await world({ readingsFrom: "nope" }), false, ["edge-aaaaaaaaa"]],
+        /no hand pin/,
+      ],
+      ["dirty", async () => [await world(), true, ["edge-aaaaaaaaa"]], /uncommitted/],
+      ["none", async () => [await world(), false, []], /name each row/],
+      // The second id is bad: the first must not be gated either.
+      [
+        "second",
+        async () => [await world(), false, ["edge-aaaaaaaaa", "edge-ccccccccc"]],
+        /is not a row/,
+      ],
+    ];
+    for (const [, setupCase, why] of cases) {
+      const [p, dirty, ids] = await setupCase();
+      const before = await readFile(p, "utf8");
+      const { deps, seen } = mk(p, {}, dirty);
+      await expect(refreshRows(deps, ids)).rejects.toThrow(why);
+      expect(seen.gates).toEqual([]);
+      await untouched(p, before);
+    }
+  });
+
+  test("a short head, a duplicate id and a manifest not in the script's format are refused before any gate", async () => {
+    const p = await world();
+    const before = await readFile(p, "utf8");
+    const short = mk(p, { self: "abc1234" });
+    await expect(refreshRows(short.deps, ["edge-aaaaaaaaa"])).rejects.toThrow(/full sha/);
+    const dup = mk(p);
+    await expect(refreshRows(dup.deps, ["edge-aaaaaaaaa", "edge-aaaaaaaaa"])).rejects.toThrow(
+      /name each row once/,
+    );
+    await writeFile(p, JSON.stringify(JSON.parse(before)));
+    const compact = await readFile(p, "utf8");
+    const fmt = mk(p);
+    await expect(refreshRows(fmt.deps, ["edge-aaaaaaaaa"])).rejects.toThrow(/own format/);
+    expect(short.seen.gates.length + dup.seen.gates.length + fmt.seen.gates.length).toBe(0);
+    expect(await readFile(p, "utf8")).toBe(compact);
+  });
+
+  test("a pass then a fail across two ids keeps the first row and leaves the second", async () => {
+    const p = await world();
+    const { deps, seen } = mk(p, { seq: ["pass", "gate-fail"] });
+    expect(await refreshRows(deps, ["edge-aaaaaaaaa", "edge-bbbbbbbbb"])).toEqual([
+      "pass",
+      "gate-fail",
+    ]);
+    expect(seen.gates.length).toBe(2);
+    const written = [
+      row("aaaaaaaaa", {
+        readingsDigest: digestOfPin(PIN),
+        lethalCommit: FIXED_COMMIT,
+        gatedAt: "2026-10-21T00:00:00Z",
+      }),
+      row("bbbbbbbbb"),
+    ];
+    // The whole file, byte for byte: only the first row differs from the start.
+    expect(await readFile(p, "utf8")).toBe(`${JSON.stringify(written, null, 2)}\n`);
+    expect(existsSync(join(root, "failed"))).toBe(false);
+  });
+
+  test("a head that moved during the gate, or a row that vanished, refuses by name and writes nothing", async () => {
+    for (const how of ["head", "row"] as const) {
+      const p = await world();
+      let moved = false;
+      const { deps, seen } = mk(p, {
+        onGate: async () => {
+          moved = true;
+          if (how === "row") await writeFile(p, `${JSON.stringify([row("bbbbbbbbb")], null, 2)}\n`);
+        },
+      });
+      deps.selfCommit = async () => (how === "head" && moved ? GATED_COMMIT : FIXED_COMMIT);
+      const rowsBefore = how === "row" ? `${JSON.stringify([row("bbbbbbbbb")], null, 2)}\n` : "";
+      const before = await readFile(p, "utf8");
+      const err = await refreshRows(deps, ["edge-aaaaaaaaa"]).then(
+        () => "",
+        (e: Error) => e.message,
+      );
+      expect(err).toMatch(how === "head" ? /head moved during the gate/ : /no longer a row/);
+      expect(await readFile(p, "utf8")).toBe(how === "row" ? rowsBefore : before);
+      expect(seen.logs.join("\n")).toMatch(/REFUSED, nothing written/);
+      const rc = JSON.parse(
+        await readFile(
+          join(root, "refresh", `refresh-edge-aaaaaaaaa@${FIXED_COMMIT}`, "refresh.json"),
+          "utf8",
+        ),
+      );
+      expect(rc.outcome).toMatch(/^refused: /);
+    }
+  });
+
+  test("the receipt is written before the manifest: a receipt that cannot be written leaves the manifest alone", async () => {
+    const p = await world();
+    const before = await readFile(p, "utf8");
+    // A read-only receipt folder: the gate's own copy is only logged, the receipt write fails.
+    const dir = join(root, "refresh", `refresh-edge-aaaaaaaaa@${FIXED_COMMIT}`);
+    await mkdir(dir, { recursive: true });
+    await chmod(dir, 0o555);
+    const { deps } = mk(p);
+    try {
+      await expect(refreshRows(deps, ["edge-aaaaaaaaa"])).rejects.toThrow();
+      expect(await readFile(p, "utf8")).toBe(before);
+    } finally {
+      await chmod(dir, 0o755);
+    }
+  });
+
+  test("a stale pass receipt for the same id and head is removed when the run then fails", async () => {
+    const p = await world();
+    const dir = join(root, "refresh", `refresh-edge-aaaaaaaaa@${FIXED_COMMIT}`);
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "refresh.json"), '{"outcome":"pass"}');
+    const { deps } = mk(p, { outcome: "gate-fail" });
+    expect(await refreshRows(deps, ["edge-aaaaaaaaa"])).toEqual(["gate-fail"]);
+    expect(existsSync(join(dir, "refresh.json"))).toBe(false);
   });
 });

@@ -24,7 +24,7 @@ mutated rows for its killing test.
 {
   "gate": "itest:bcdev-names",
   "baselines": {
-    "bcdev.names.baseline.json": { "killed": 36 }
+    "bcdev.names.baseline.json": { "killed": 48 }
   },
   "constants": {
     "NAMES_TABLE.length": 12
@@ -32,8 +32,10 @@ mutated rows for its killing test.
 }
 ```
 
-All 36 mutants are killed (3 operators on each of 12 procedures). Each must match
-`docs/superpowers/specs/2026-10-09-r557-names-precommitment.md` in verdict and killing test.
+All 48 mutants are killed (4 operators on each of 12 procedures). Each must match
+`docs/superpowers/specs/2026-10-09-r557-names-precommitment.md` in verdict and killing test, and R855's
+`docs/superpowers/specs/2026-11-07-r855-predictions.md` for the fourth, `delete-additive-right`, recorded
+on bc3, 2026-11-07.
 
 ## History
 

@@ -1,5 +1,8 @@
 # The credit limit demo
 
+> **`demo.baseline.json` lags the code by 3 rows** until R-856's re-freeze lands: the batch that added `delete-additive-*`
+> adds 3 mutants here, and the frozen figures below predate them.
+
 A second demo in the gift-card mold: a small Business Central extension whose test suite is green,
 looks reasonable in review, and is blind to three real gaps. Built as the example for the
 sshadows.dk post on mutation testing; the gift-card demo stays reserved for presentations.

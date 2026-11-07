@@ -79,6 +79,9 @@ import { removeScratchDir } from "./helpers/scratch";
  * DataReachOps 9ce8dbe1, DataScopeProbe.Table f5d07daf, DataSetOps bcd9d83f, DataShiftOps 77bfaa33;
  * sandbox-hang HangLogic 91301c66; sandbox-harden HardenLogic 94ff487e; sandbox-coverage-probe
  * CoverageCapabilityProbe 06f39e04, FrameAndResetProbe c0d079d6.
+ * R855: new delete-additive/logical mutants and swap-call-arguments 1.1.0. sandbox-app, sandbox-data
+ * and sandbox-coverage-probe re-pinned (manifest included). In sandbox-data the project-wide M-codes
+ * of later mutants shift (DataBlankOps M0024 -> M0025), so files with no new mutant moved too.
  */
 const PINNED: Record<
   string,
@@ -97,10 +100,10 @@ const PINNED: Record<
       "MutationUpgrade.Codeunit.al":
         "185c89c06210c95fd6b0d5cd920f7b4fcf48f39e8877477ebb69a6ead72a9482",
       "SandboxLogic.Codeunit.al":
-        "7fa150a521a7524833a995900ed1a5dd0cc4211d2abb45c73ef3ebad2353fdc1",
+        "81b6685fc63799431742bc4b4958b9a0b733695816339e9ae7f700a5882bfeb7",
       "SandboxPricing.Codeunit.al":
-        "1594daff22976e160993e51f0cd2e9595006c0f474d3dc96793eb4bcb15cac0b",
-      "mutant-manifest.json": "4fd76b888e08ca727d7a72fe8ac5ada5c6f4ef3f6828502b8e31cf6aef705081",
+        "60b12340761b9a80841a842bfc2d1a3c5964be3997275895f469f2b7973671a5",
+      "mutant-manifest.json": "445fe1b92a7d757f5a19ebe6d6b00f2cd96533cc931b5378c52bda31cc012df8",
     },
   },
   "sandbox-data": {
@@ -109,56 +112,56 @@ const PINNED: Record<
       "DataAssertOps.Codeunit.al":
         "270006411e9d91dbbaa231b5f29da6d249295f2b688e4535facfcf90666e0faa",
       "DataBandExt.ReportExt.al":
-        "54619fdcff799b0d9abd488114e30292886af828f3ecf8d0796e21819dc14f4f",
+        "818930dfb722b7a0d8f792149431cb95b88d7a21710888e244324e9532be2c7f",
       "DataBlankOps.Codeunit.al":
-        "e8c918656822913162774223b55bd8c2ef1b0a4d09a47988b73399c7d31fb149",
-      "DataBuilder.Codeunit.al": "278d59a40b6b962fdf7c835e64e288d50f3b9dcbcd3391dc7bd83be48c617c4f",
-      "DataCaseOps.Codeunit.al": "05d6b7c10ff40b00fc14f2962da7bc7954d33ef7558f73d740280c1ceb7da7ff",
+        "ec70e12f106efd215861b380b28e3f29ae403253427473b5d1db0432ba9d38b6",
+      "DataBuilder.Codeunit.al": "da1f87d9bbf3b61f0235036f78f429a7b8360b1ba953441cd2e5d8f92eb245c2",
+      "DataCaseOps.Codeunit.al": "5a9e3a2f04fe235b4637b1aca28d6383a488d4e45bafb9893fa2449dcd1ace16",
       "DataCommitOps.Codeunit.al":
-        "de2b88ee3be85e8e4f57f9749b34fe813602d7d0d151918dd6dfb835145b0061",
+        "fd1492d9ef115c081fff7055ddc86ea75ce58cd2884c040f4f4798f3f07a87e2",
       "DataCommitTarget.Codeunit.al":
-        "3442060ab3de457f1209fd7b4f0f88ead580e997232e8492676035e0a8a1d8c1",
+        "0ad5e79eb2beaa4c4e69b9d2eff68702c34f1ccddf40a7b80a4a8f5c593a4b67",
       "DataFilterOps.Codeunit.al":
-        "da346ea36c7e5845b1acf2322456160ba9fb034b9837f2c0dc3f3a87bcd7324b",
-      "DataFindOps.Codeunit.al": "0f3807944d41dc28595e7bd25eaac9ceb86f1d2553e38cb73c23178136223ce9",
-      "DataFlagOps.Codeunit.al": "b55bc5088950d10d86a04a22a0b6612d647b416ea7adfd830823c84ce4f0607f",
-      "DataKeyProbe.Table.al": "7ce475bbb1024748b024d35b2e2c560e8db41f452f74e4ccc0f170446d4ec18e",
-      "DataLoader.Codeunit.al": "d17b56c556c59239164f325aa1919a51f39d6e2ce3c50ed75ec984c9526e7a1b",
-      "DataMain.Table.al": "56ad3a36d0331353ef81e8c1f43e6ad4d1a53d1d21e4d876ea8e68b1b17b8f86",
-      "DataMainExt.TableExt.al": "0915223f80a9a479689f49298847c0d741957ed3b34fefcf926e12a4c6c5c35e",
+        "599874b7079f68ae1ecc9033a5b9d1515ed531660014f2a9350dbccb09d4cf4a",
+      "DataFindOps.Codeunit.al": "b1c536704e638db1a24c8c2c69956168d44d317d13d7f570ec4fc176a3a01c4a",
+      "DataFlagOps.Codeunit.al": "e661e06c76fcc41922e53434324db0501d92262181c63a3cd7d2bf0e89b650c3",
+      "DataKeyProbe.Table.al": "0d1e8125a32af2d01e079ded965d265b7e619ed8831adb67ce8b1df33231ae5b",
+      "DataLoader.Codeunit.al": "016b83ed32e15c116425d060a682c8f02c6769487de009d8d43d2ea79d4de901",
+      "DataMain.Table.al": "f3cb8e593e56b65c8bf381e3602f7c7e15834e21aa539d5384541dab3c7c9708",
+      "DataMainExt.TableExt.al": "bf59c859e776d6ed745e58cdfafce0fa958207136dd3ddce9c66cb253295f891",
       // R750: re-pinned (was c5e2fd4c...30acf, ruling orchestrator 2026-10-25): its header
       // comment, rewritten at the same length.
       "DataMainListExt.PageExt.al":
-        "ff8aba03dd960c16976d65aaa1b766c7a315e2dd74e3d2ade233bffd880f92b6",
-      "DataNoTrigger.Table.al": "c7bc50e8f94ea85287843d177fb614300e69a016ef397a97100b27bcb9c0d53e",
-      "DataOps.Codeunit.al": "e1eb3509a79f13462857029b4bad25e3091aa5eaca304a22dd6177fbad7ddc93",
+        "be0e1b5ad0e5b2adeff3fceb98bc68be9bd52d2a97ef45406389b4bd36abd4f9",
+      "DataNoTrigger.Table.al": "3220d66ddfb3a811ca43674cc9ea6a87e7763b4319af792b3d1974c2db3808b4",
+      "DataOps.Codeunit.al": "6d334f4de8b902dd0329972b1eb128bd15f7d49c9c1a08f38071ee4c646a8afe",
       "DataReachOps.Codeunit.al":
-        "22d00fade712ad3d59a6437695bb0107495f99c3e8ea3c0ba6680993155c2bbe",
-      "DataScopeProbe.Page.al": "8b9cfc8cfb83eb967de5515bc11f153c77bf963720491754596c9fc8a8f860ff",
-      "DataScopeProbe.Table.al": "53576d25b9b51b6e4120995b29c749da9e39e5d026477e767cc4e66a69e326b9",
-      "DataSetOps.Codeunit.al": "ff29354346331624137fb63b0d604b814c6808df2c92748edd25e5f36a5ac2e4",
-      "DataShadow.Table.al": "b88284780928b2171a5a11b3dd5b597aae40e59f28114837ffea9fd08defcd72",
+        "d8fc1149a6bcec913aea8ab51f615245cfb7b758ff07a831882eab9bf6924031",
+      "DataScopeProbe.Page.al": "8ea6e5a4c036b46c79e3b448dd56afdc9e5a8145ecd6d0ddacf0eefed2d0e0cd",
+      "DataScopeProbe.Table.al": "aabc3b1d88bfc2b17af45cd8e2efe48e26917820f2d3ff0a623af8a376171bfd",
+      "DataSetOps.Codeunit.al": "3801138600ce3eac4e2da2c21cd428beff02dd2c60a8cb4cdbc1842a70194bfb",
+      "DataShadow.Table.al": "f40b7126896f82bce96d193c226aef38decd5f8f0c617ac99a37538f62b6fba8",
       "DataShiftOps.Codeunit.al":
-        "0c09991bcdb0775542aad711f5b14631447de4bccee187e3787fcab6e18abc22",
-      "DataSwapOps.Codeunit.al": "8ad4f0f7ecd8a4e1d47389bd2b7caf2903d1098e9fd23960197afad628af617e",
+        "37761b180d9ce890d680e69f6dd130bcd35d428c573a2e30eeb69664147245f4",
+      "DataSwapOps.Codeunit.al": "557893e879496f058906ee9edad3627e995c56f15412f22c7b71e419840566f9",
       "DataTemporalOps.Codeunit.al":
-        "8b03ab43e1f4cda29e5d34bc94d90e2aefbb66b7089be31c3a83e827fde8351e",
+        "f40de380202746543a9def3467d77f0e8ed0929277b473283ba80546bee6e742",
       "DataTriggerProbe.Table.al":
-        "bed481b7c87ced717ec52112335bdff2c1cd6797c224c05a18e43d074030f236",
+        "f722703a696d9c7341e35f4d89dd8d2b0d680f3fad61aaabb046b6917bb27cfc",
       "DataValidateOps.Codeunit.al":
-        "36e7651f45293db2b96c21813bea2b658f7c6d70cb8ee43f61c245be9db6710c",
+        "4838404b4c599b5fbaad31758410e2b0a461d329012f552dfde0b31df4565327",
       "DataValidator.Codeunit.al":
-        "f7f9428f9b4e4101a4197038ff9aa8052c41f875361b66f9ed908129971c3b6e",
-      "DataValueCard.Page.al": "0dd2ac7ba88f0f664208eddb744751bee8f07b3137e6b29ba465304b9f605d48",
+        "fca3aa7639857eb53c18060023f855910835e5d3cdb694304e925479245cde2a",
+      "DataValueCard.Page.al": "7d1b26be0d1be13acd6bcab8814e1c8e8f113c5d4f94f4dc44926ae39fa52842",
       "DataValueSource.Codeunit.al":
-        "b5d1dd11eda90d367b36f2d082a7c6748a3c5ec8249e597a4c87e450d3898a8e",
+        "84a943a3ea15e1b96fd474070fa7fac98b0494d76c6ace948633801d92295969",
       "MutationRegister.Codeunit.al":
         "bcaa8ed28992b8e244a4174e2235c57575f3677c37de65fd7318c3b41b891830",
       "MutationSelector.Codeunit.al":
         "10f84b6c16637b24e3ab5ce39dad281d9ceeaef74f9033d9ec5872a34e135842",
       "MutationUpgrade.Codeunit.al":
         "eb4fb1455bd9f0a1bbc15dda24fd1c61669959332c36c8861d66a56daf44ebe8",
-      "mutant-manifest.json": "ba517a9f9c971e8c762ab2d617d181c7abb5a00efd6c2019576a52ecad5536d4",
+      "mutant-manifest.json": "5621d39ce5d77aacbed78f8c0146c5f3c2b9d58c336f7b2edbad4d4089fc63ed",
     },
   },
   "sandbox-hang": {
@@ -192,17 +195,17 @@ const PINNED: Record<
     selectorIds: { selectorId: 79329, controlId: 79328, tableId: 79327 },
     hashes: {
       "CoverageCapabilityProbe.Codeunit.al":
-        "6d63f8221beeb383636e429db2f6e8ad8681e0b282d90c4b845b55386bad10e5",
+        "0b1167b0c34c11b16cb2f256834d32e3a4834c11d92c444cbc4dcd6044001634",
       "FrameAndResetProbe.Codeunit.al":
-        "ec2bbdecd89fa0c2a9f6761184c923e1f15e633074592cbc32cbe8268ae7b7ae",
+        "75d46e4bd14e28c5e726f7c2d201b41a139f55de6b14c84e5a842dae9f9f0d9b",
       "MutationRegister.Codeunit.al":
         "1aa4b2864eb595876331cc2243269bff718b4416cc6857a3a50f279d4f73b4d6",
       "MutationSelector.Codeunit.al":
         "92665291bf3ca3853f231cc5d821b0e70b422d8b6d3eb8a5637befdbde752879",
       "MutationUpgrade.Codeunit.al":
         "42b5f8d119d822359366db5b0c776be4c7c03690f9ab04ae8d5ebfa219370dd1",
-      "TwoObjects.Codeunit.al": "4b023bcc20014c33fadf340e6363696aa02687d7e87b67340bfc70cb26f26b43",
-      "mutant-manifest.json": "22fc823657a020d97521bed837e726f2c1c70f6bddb5fa8acdde31833742659a",
+      "TwoObjects.Codeunit.al": "23476d029bcd1039edc22e111202acbcad46bcd79257e5090faaf0189eedb8d0",
+      "mutant-manifest.json": "94d3a5fc705a5cdf1c72a2313508000564cc40af393c40fabb2e087eef472e27",
     },
   },
 };

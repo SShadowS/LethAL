@@ -1,5 +1,8 @@
 # The gift card demo
 
+> **The frozen sample lags the code by 1 row** until R-856's re-freeze lands: `swap-call-arguments` 1.1.0 adds 1 mutant
+> here, and the frozen figures below predate it.
+
 A small Business Central extension whose test suite is green, looks thorough, and does not notice
 that one line is wrong. It exists to be run with LethAL in front of people.
 

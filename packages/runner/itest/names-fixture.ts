@@ -28,7 +28,13 @@ export const NAMES_TESTS_CODEUNIT_ID = 78850;
 export const NAMES_SPEC = "docs/superpowers/specs/2026-10-09-r557-names-precommitment.md";
 const SUITE = "Names Tests";
 const FILE = "src/NamesCalc.Codeunit.al";
-const OPERATORS = ["lethal.empty-block", "lethal.return-value", "lethal.swap-additive"] as const;
+// R855: delete-additive-right is a fourth mutant on each `exit(x + 1)`, between return-value and swap-additive.
+const OPERATORS = [
+  "lethal.empty-block",
+  "lethal.return-value",
+  "lethal.delete-additive-right",
+  "lethal.swap-additive",
+] as const;
 
 /** Table A, one row per procedure, in source order. `row` is al-runner's name (the rule's). */
 export const NAMES_TABLE: ReadonlyArray<{
@@ -71,11 +77,11 @@ export interface NamesRow {
   readonly coveringTests: readonly string[];
 }
 
-/** The 36 expected rows. `coverage` decides the covering set: one test, or all twelve. */
+/** The 48 expected rows. `coverage` decides the covering set: one test, or all twelve. */
 export function expectedNamesRows(coverage: "exact" | "all"): NamesRow[] {
   return NAMES_TABLE.flatMap((r, k) =>
     OPERATORS.map((operatorName, j) => ({
-      code: `M${String(3 * k + j + 1).padStart(4, "0")}`,
+      code: `M${String(OPERATORS.length * k + j + 1).padStart(4, "0")}`,
       file: FILE,
       procedureName: r.procedure,
       operatorName,
@@ -132,8 +138,8 @@ function diffRows(expected: readonly NamesRow[], actual: readonly NamesRow[]): s
 export function namesKillTextDifferences(report: SessionReport): string[] {
   const out: string[] = [];
   NAMES_TABLE.forEach((r, k) => {
-    for (let j = 0; j < 3; j++) {
-      const code = `M${String(3 * k + j + 1).padStart(4, "0")}`;
+    for (let j = 0; j < OPERATORS.length; j++) {
+      const code = `M${String(OPERATORS.length * k + j + 1).padStart(4, "0")}`;
       const m = report.mutants.find((x) => x.mutantCode === code);
       if (m === undefined) out.push(`${code}: missing (its kill text is pinned)`);
       else if (!(m.killingTestFailure ?? "").includes(r.killText))

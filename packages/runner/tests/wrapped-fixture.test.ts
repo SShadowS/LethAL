@@ -184,9 +184,9 @@ describe("R-300b: the wrapped leg's checker", () => {
 
   it("refuses a wrapped row that differs from its twin, and a position-wins or dropped line", () => {
     const moved = EXPECTED_WRAPPED.map((r) =>
-      r.code === "M0024" ? { ...r, verdict: "no-coverage" as const, coveringTests: [] } : r,
+      r.code === "M0027" ? { ...r, verdict: "no-coverage" as const, coveringTests: [] } : r,
     ).map((r) => {
-      if (r.code !== "M0024") return r;
+      if (r.code !== "M0027") return r;
       const { killingTest: _k, ...rest } = r;
       return rest;
     });
@@ -201,16 +201,16 @@ describe("R-300b: the wrapped leg's checker", () => {
 
   // R343: strict parity, one red-going case per direction.
   it("refuses a twin row with no wrapped partner (the old twin-only swap-additive)", () => {
-    const noWrapped = EXPECTED_WRAPPED.filter((r) => r.code !== "M0010");
+    const noWrapped = EXPECTED_WRAPPED.filter((r) => r.code !== "M0011");
     expect(twinDifferences(reportOf(noWrapped))).toEqual([
-      "M0017 (src/WrappedPreTwin.Codeunit.al) has no wrapped partner",
+      "M0019 (src/WrappedPreTwin.Codeunit.al) has no wrapped partner",
     ]);
   });
 
   it("refuses a wrapped row with no twin", () => {
-    const noTwin = EXPECTED_WRAPPED.filter((r) => r.code !== "M0032");
+    const noTwin = EXPECTED_WRAPPED.filter((r) => r.code !== "M0036");
     expect(twinDifferences(reportOf(noTwin))).toEqual([
-      "M0024 (src/WrappedTop.Codeunit.al) has no twin mutant at Grow|9|lethal.swap-additive",
+      "M0027 (src/WrappedTop.Codeunit.al) has no twin mutant at Grow|9|lethal.swap-additive",
     ]);
   });
 
@@ -345,17 +345,17 @@ describe("R497: sandbox-wrapped on bcdev (the itest:bcdev-wrapped table, offline
     const duplicateKey = (r: WrappedReport): WrappedReport => ({
       ...r,
       mutants: r.mutants.map((m) =>
-        m.mutantCode === "M0071"
+        m.mutantCode === "M0075"
           ? { ...m, killingTestFailure: "The record in table Wrapped Band Row already exists." }
           : m,
       ),
     });
     const report = bcReportOf(EXPECTED_WRAPPED_BC);
     expect(() => assertBcWrappedRun(duplicateKey(report), "t", [])).toThrow(
-      "M0071: killingTestFailure",
+      "M0075: killingTestFailure",
     );
     expect(() => assertWrappedRun(duplicateKey(reportOf(EXPECTED_WRAPPED)), "t", [])).toThrow(
-      "M0071: killingTestFailure",
+      "M0075: killingTestFailure",
     );
     expect(() =>
       assertBcWrappedRun(report, "t", [

@@ -85,7 +85,9 @@ function tableFor(operators: readonly MutationOperator[], blurbs: Record<string,
           "Say what weak test it catches; a blank cell is not an acceptable default.",
       );
     }
-    lines.push(`| \`${op.name}\` | ${op.version} | ${exampleOf(op)} | ${blurb} |`);
+    // R856: an opt-in operator is listed, marked, and not counted in the default totals.
+    const label = op.optIn === true ? `\`${op.name}\` (opt-in)` : `\`${op.name}\``;
+    lines.push(`| ${label} | ${op.version} | ${exampleOf(op)} | ${blurb} |`);
   }
   return lines.join("\n");
 }
@@ -94,11 +96,14 @@ function blockFor(marker: string, blurbs: Record<string, string>): string {
   if (marker === "tier1") return tableFor(tier1Operators, blurbs);
   if (marker === "tier2") return tableFor(tier2Operators, blurbs);
   // Issue #44: the counts in README prose come from the same registry as the tables.
+  // R856: the totals are the DEFAULT set; opt-in operators (named with --operator) are added after.
+  const optIn = tier2Operators.filter((o) => o.optIn === true).length;
   const t1 = tier1Operators.length;
-  const t2 = tier2Operators.length;
-  if (marker === "summary") return `${t1 + t2} operators, in two tiers`;
+  const t2 = tier2Operators.length - optIn;
+  const plus = optIn === 0 ? "" : `, plus ${optIn} opt-in (run only when --operator names it)`;
+  if (marker === "summary") return `${t1 + t2} operators, in two tiers${plus}`;
   if (marker === "limits") {
-    return `${t1 + t2} operators today, in two groups: ${t1} generic ones (Tier 1) and ${t2} AL-specific ones (Tier 2)`;
+    return `${t1 + t2} operators today, in two groups: ${t1} generic ones (Tier 1) and ${t2} AL-specific ones (Tier 2)${plus}`;
   }
   throw new Error(`operator-tables: unknown marker "${marker}"`);
 }

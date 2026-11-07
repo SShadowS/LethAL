@@ -35,10 +35,12 @@ const EXPECTED_MUTANTS = [
   "1/M0001 src/LayoutBeta.Codeunit.al 4 lethal.empty-block Grow",
   "1/M0002 src/LayoutBeta.Codeunit.al 5 lethal.conditional-boundary Grow",
   "1/M0003 src/LayoutBeta.Codeunit.al 6 lethal.return-value Grow",
-  "1/M0004 src/LayoutBeta.Codeunit.al 6 lethal.swap-additive Grow",
-  "1/M0005 src/LayoutBeta.Codeunit.al 7 lethal.return-value Grow",
-  "1/M0006 src/LayoutBeta.Codeunit.al 37 lethal.empty-block Twice",
-  "1/M0007 src/LayoutBeta.Codeunit.al 38 lethal.return-value Twice",
+  // R855: lethal.delete-additive-right is a new row (Beta now has 8 guards), M0004; later codes +1.
+  "1/M0004 src/LayoutBeta.Codeunit.al 6 lethal.delete-additive-right Grow",
+  "1/M0005 src/LayoutBeta.Codeunit.al 6 lethal.swap-additive Grow",
+  "1/M0006 src/LayoutBeta.Codeunit.al 7 lethal.return-value Grow",
+  "1/M0007 src/LayoutBeta.Codeunit.al 37 lethal.empty-block Twice",
+  "1/M0008 src/LayoutBeta.Codeunit.al 38 lethal.return-value Twice",
 ];
 
 /**
@@ -56,9 +58,10 @@ const WITNESS_LINES: readonly {
   // stays a chain, now on lines 6 to 46. Twice runs from line 48 to 80.
   { line: 33, text: "if X > 10 then", own: "Grow", stale: "Twice" },
   { line: 27, text: "exit(X + 1);", own: "Grow", stale: "Twice" },
-  { line: 74, text: "MutationSelector.Active('M0006')", own: "Twice", stale: undefined },
-  { line: 75, text: "MutationSelector.Active('M0007')", own: "Twice", stale: undefined },
-  { line: 78, text: "exit(X * 2)", own: "Twice", stale: undefined },
+  // R855: Grow gained one branch (7 lines), so Twice's witness lines moved down by 7 (were 74, 75, 78).
+  { line: 81, text: "MutationSelector.Active('M0007')", own: "Twice", stale: undefined },
+  { line: 82, text: "MutationSelector.Active('M0008')", own: "Twice", stale: undefined },
+  { line: 85, text: "exit(X * 2)", own: "Twice", stale: undefined },
 ];
 
 interface Built {

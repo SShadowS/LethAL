@@ -27,10 +27,11 @@ const other: ArmMutant = {
 
 describe("R254 arm oracle", () => {
   // R-463 adds `CountBand`'s four rows, all killed (15 -> 19, 9 -> 13 killed).
-  test("has the 19 pre-committed rows: 13 killed, 2 survived, 4 no-coverage", () => {
+  // R855 adds `Unreached`'s delete-additive-right (19 -> 20, 4 -> 5 no-coverage).
+  test("has the 20 pre-committed rows: 13 killed, 2 survived, 5 no-coverage", () => {
     const n = (v: string) => R254_ARM_ORACLE.filter((r) => r.verdict === v).length;
     expect([R254_ARM_ORACLE.length, n("killed"), n("survived"), n("no-coverage")]).toEqual([
-      19, 13, 2, 4,
+      20, 13, 2, 5,
     ]);
   });
 
@@ -100,6 +101,6 @@ describe("R254 arm oracle", () => {
   });
 
   test("an empty report is a diff for every row, never a pass", () => {
-    expect(armOracleDiffs([])).toHaveLength(19);
+    expect(armOracleDiffs([])).toHaveLength(20);
   });
 });

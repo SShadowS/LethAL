@@ -2,6 +2,22 @@
   "identityScheme": 45,
   "entries": [
     {
+      "key": "241fff269e9c9b9a336099e4588ad85b0198a155d98dccc6e48adf1e551f6341|Sandbox Logic|ClampPercent|lethal.delete-logical-left|1",
+      "verdict": "survived",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "9aa38dda2e764d91c5b22a9e83557fa16ee084becfe2c600f70af05e70c84889"
+    },
+    {
+      "key": "241fff269e9c9b9a336099e4588ad85b0198a155d98dccc6e48adf1e551f6341|Sandbox Logic|ClampPercent|lethal.delete-logical-right|1",
+      "verdict": "survived",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "ee5efe52f208f0b700001a1c363e8b7e6041b6ca924131ab445958fdc33c844a"
+    },
+    {
       "key": "241fff269e9c9b9a336099e4588ad85b0198a155d98dccc6e48adf1e551f6341|Sandbox Logic|ClampPercent|lethal.negate-conditional|1",
       "verdict": "survived",
       "killingTest": null,
@@ -120,6 +136,14 @@
       "coverageFiltered": false,
       "errorClass": null,
       "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "d7143458adf859fcca3a104795916421514185dbe83b5e6366d0f68f86e9389d|Sandbox Pricing|DiscountedPrice|lethal.delete-additive-right|1",
+      "verdict": "no-coverage",
+      "killingTest": null,
+      "coverageFiltered": true,
+      "errorClass": null,
+      "mutatedTextSha256": "93c91c851e7acc17d881c9b89ea954be1183070254014be03a93d169cf52dbbd"
     },
     {
       "key": "d7143458adf859fcca3a104795916421514185dbe83b5e6366d0f68f86e9389d|Sandbox Pricing|DiscountedPrice|lethal.swap-additive|1",

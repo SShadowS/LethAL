@@ -55,15 +55,17 @@ const PROJECTS = [
 
 /** Mutants checked per project, over its symbol sets. A change here is a change to read. */
 const MUTANTS: Readonly<Record<string, number>> = {
-  "fixtures/sandbox-app": 19,
-  "fixtures/sandbox-data": 406,
+  // R855: delete-additive/logical mutants added (app 19, data 406, wrapped 148, names 36,
+  // multiobject 12, symbols 36, gift-card 60 before).
+  "fixtures/sandbox-app": 22,
+  "fixtures/sandbox-data": 418,
   "fixtures/sandbox-harden": 21,
   "fixtures/sandbox-hang": 38,
-  "fixtures/sandbox-wrapped": 148,
-  "fixtures/sandbox-names": 36,
-  "fixtures/sandbox-multiobject": 12,
-  "fixtures/sandbox-symbols": 36,
-  "examples/gift-card": 60,
+  "fixtures/sandbox-wrapped": 154,
+  "fixtures/sandbox-names": 48,
+  "fixtures/sandbox-multiobject": 14,
+  "fixtures/sandbox-symbols": 44,
+  "examples/gift-card": 61,
 };
 
 function symbolSetsOf(rel: string): string[][] {

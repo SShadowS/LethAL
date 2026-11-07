@@ -8,7 +8,7 @@
  *
  * At `maxGuardsPerBatch` 7 the fixture splits into two batches, and batch 1 instruments the file
  * batch 0 copied verbatim. With R349's per-deploy reset removed, the one-shot leg reads batch 1's
- * coverage through batch 0's layout and 1/M0006 and 1/M0007 go from killed to survived with
+ * coverage through batch 0's layout and 1/M0007 and 1/M0008 go from killed to survived with
  * `GrowAboveTen` as their covering test. The verdict alone would catch that, but the covering
  * tests and the attribution are pinned too, because the frozen baseline compares neither.
  *
@@ -22,7 +22,10 @@ export const LAYOUT_PROJECT_DIR = join(FIXTURES, "sandbox-layout");
 export const LAYOUT_TEST_DIR = join(FIXTURES, "sandbox-layout-tests");
 /** The top of the target's range, 79700-79749, per the `pickSelectorIds` convention. */
 export const LAYOUT_SELECTOR_IDS = { selectorId: 79749, controlId: 79748, tableId: 79747 };
-/** Alpha has 3 raw specs and Beta 7, so first fit at 7 gives exactly two batches. */
+/**
+ * Alpha has 3 raw specs and Beta 8 (R855 added delete-additive-right), so first fit at 7 gives
+ * exactly two batches, and Beta alone is over the budget (the oversized-batch warning, expected).
+ */
 export const LAYOUT_MAX_GUARDS = 7;
 
 const SPEC = "docs/superpowers/specs/2026-09-30-r353-stale-layout-precommitment.md";
@@ -114,7 +117,7 @@ export const EXPECTED_LAYOUT: readonly LayoutRow[] = [
     ref: "1/M0004",
     file: BETA,
     line: 6,
-    operatorName: "lethal.swap-additive",
+    operatorName: "lethal.delete-additive-right",
     procedureName: "Grow",
     verdict: "killed",
     killingTest: "GrowAboveTen",
@@ -124,6 +127,17 @@ export const EXPECTED_LAYOUT: readonly LayoutRow[] = [
   {
     ref: "1/M0005",
     file: BETA,
+    line: 6,
+    operatorName: "lethal.swap-additive",
+    procedureName: "Grow",
+    verdict: "killed",
+    killingTest: "GrowAboveTen",
+    coveringTests: ["Layout Tests.GrowAboveTen"],
+    coverageAttribution: "exact",
+  },
+  {
+    ref: "1/M0006",
+    file: BETA,
     line: 7,
     operatorName: "lethal.return-value",
     procedureName: "Grow",
@@ -132,7 +146,7 @@ export const EXPECTED_LAYOUT: readonly LayoutRow[] = [
     coverageAttribution: "exact",
   },
   {
-    ref: "1/M0006",
+    ref: "1/M0007",
     file: BETA,
     line: 37,
     operatorName: "lethal.empty-block",
@@ -143,7 +157,7 @@ export const EXPECTED_LAYOUT: readonly LayoutRow[] = [
     coverageAttribution: "exact",
   },
   {
-    ref: "1/M0007",
+    ref: "1/M0008",
     file: BETA,
     line: 38,
     operatorName: "lethal.return-value",

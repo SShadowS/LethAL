@@ -172,13 +172,14 @@ describe("R214: every drop is named and counted", () => {
     expect(w[0]?.message).toContain("marker-mismatch (2 directive lines, 0 markers)");
     expect(w[0]?.message).not.toContain("Helper(");
     // Task 1 deferred minor: the COUNT is pinned, in both builds, not only the rows' absence. The
-    // refused file holds three sites (empty-block, swap-additive, void-method-call) in either build.
+    // refused file holds four sites (empty-block, swap-additive, void-method-call, and since R855
+    // delete-additive-right) in either build.
     for (const symbols of await setsOf(join(R214, "p12-refused"))) {
       const { set: s } = await capture(join(R214, "p12-refused"), symbols);
       const rows = s.preprocExcluded.filter((f) => f.reason === "preproc-undecided");
       expect([symbols, rows.map((f) => [norm(f.file), f.sites, f.detail])]).toEqual([
         symbols,
-        [["src/Refused.Codeunit.al", 3, "marker-mismatch (2 directive lines, 0 markers)"]],
+        [["src/Refused.Codeunit.al", 4, "marker-mismatch (2 directive lines, 0 markers)"]],
       ]);
     }
     const refused = set.preprocExcluded.filter((f) => f.reason === "preproc-undecided");

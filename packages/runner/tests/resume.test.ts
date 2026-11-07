@@ -3137,7 +3137,7 @@ describe("R318: a resume across R318 re-scores a renamed member instead of keepi
     expect(firstReport.quarantined).toBeDefined();
     const inMember = (r: typeof firstReport) =>
       r.mutants.filter((m) => m.line >= 3 && m.line <= 16);
-    expect(inMember(firstReport).map((m) => m.verdict)).toEqual(Array(10).fill("no-coverage"));
+    expect(inMember(firstReport).map((m) => m.verdict)).toEqual(Array(14).fill("no-coverage")); // R855: was 10; four delete-additive sites
 
     const second = new R318Backend("post");
     const report = await runSession({
@@ -3152,7 +3152,7 @@ describe("R318: a resume across R318 re-scores a renamed member instead of keepi
     expect(second.baselineRuns).toBeGreaterThan(0);
     // Guard 1 and 2 together: every member mutant was scored now, exact, never carried.
     const member = inMember(report);
-    expect(member).toHaveLength(10);
+    expect(member).toHaveLength(14);
     for (const m of member) {
       expect([m.line, m.verdict]).toEqual([m.line, "killed"]);
       expect(m.coverageAttribution).toBe("exact");

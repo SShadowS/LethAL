@@ -1,5 +1,7 @@
 import type { MutationOperator } from "@lethal/operator-sdk";
 import { conditionalBoundary } from "./conditional-boundary";
+import { deleteAdditiveLeft, deleteAdditiveRight } from "./delete-additive-operand";
+import { deleteLogicalLeft, deleteLogicalRight } from "./delete-logical-operand";
 import { emptyBlock } from "./empty-block";
 import { flipBooleanLiteral } from "./flip-boolean-literal";
 import { loopSkip } from "./loop-skip";
@@ -17,6 +19,8 @@ import { toggleBlankTemporal } from "./toggle-blank-temporal";
 import { voidMethodCall } from "./void-method-call";
 
 export { conditionalBoundary } from "./conditional-boundary";
+export { deleteAdditiveLeft, deleteAdditiveRight } from "./delete-additive-operand";
+export { deleteLogicalLeft, deleteLogicalRight } from "./delete-logical-operand";
 export { emptyBlock } from "./empty-block";
 export { flipBooleanLiteral } from "./flip-boolean-literal";
 export { negateConditional } from "./negate-conditional";
@@ -33,7 +37,7 @@ export { toggleBlankString } from "./toggle-blank-string";
 export { toggleBlankTemporal } from "./toggle-blank-temporal";
 export { voidMethodCall } from "./void-method-call";
 export { synthesizeAfter } from "./mutate-helpers";
-export { openItemHangRefuses } from "./loop-hazard";
+export { openItemHangRefuses, clockSwapHangs, inLoopExitParts } from "./loop-hazard";
 
 /** Convenience bundle for registering all Tier 1 operators at once. */
 export const tier1Operators: readonly MutationOperator[] = [
@@ -72,4 +76,10 @@ export const tier1Operators: readonly MutationOperator[] = [
   // hazard it passes, because at 19 of those 28 the existing mutant cannot terminate. `empty-block`
   // cedes a `while` body to it.
   loopSkip,
+  // R855, GitHub #35 and #41: delete one operand. One operator per side: `numberIdentityOrdinals`
+  // throws on two mutants of one operator on one span.
+  deleteLogicalRight,
+  deleteLogicalLeft,
+  deleteAdditiveRight,
+  deleteAdditiveLeft,
 ];

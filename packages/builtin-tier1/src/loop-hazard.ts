@@ -270,6 +270,59 @@ function enclosingExitParts(node: ALSyntaxNode, ctx: SemanticContext): ALSyntaxN
   return out;
 }
 
+/**
+ * R856: does `node` sit inside the exit parts (`loopExitParts`: the condition, the guards of the
+ * exits in the body, and the values that feed them) of a loop enclosing it? By POSITION.
+ */
+export function inLoopExitParts(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+  return enclosingExitParts(node, ctx).some((parts) =>
+    parts.some((p) => node.startIndex >= p.startIndex && node.endIndex <= p.endIndex),
+  );
+}
+
+/**
+ * R856: the hang refusal for `lethal.swap-workdate-today`, called by the dispatch (like
+ * `openItemHangRefuses`) because Tier 2 cannot reach this file. Swapping `Today()` for
+ * `WorkDate()` can freeze a clock a loop waits on; both directions are refused at one rule:
+ *  - the site is in a loop's exit parts;
+ *  - the value feeds an assignment `hangCapableForMutatedNode` claims;
+ *  - the site is an argument of a `WorkDate(...)` setter inside a loop
+ *    (`repeat WorkDate(CalcDate('<1D>', WorkDate())); until WorkDate() > E`: the swap pins the date);
+ *  - the site is anywhere in a `while`/`repeat` whose exit parts (`loopExitParts`) call `WorkDate`
+ *    or `Today` by name (`repeat D := CalcDate('<1D>', WorkDate()); WorkDate(D); until WorkDate() > E`).
+ *
+ * NAMED LIMIT: the setter may sit in a helper, `repeat AdvanceHelper(); until WorkDate() > E`. A
+ * clock site inside `AdvanceHelper` that this operator claims is outside the loop and is not seen.
+ */
+export function clockSwapHangs(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+  if (inLoopExitParts(node, ctx)) return true;
+  if (hangCapableForMutatedNode(node, ctx) !== null) return true;
+  if (!hasEnclosingLoop(node)) return false;
+  if (enclosingExitParts(node, ctx).some((parts) => parts.some(readsClock))) return true;
+  for (
+    let cur: ALSyntaxNode | null = node.parent;
+    cur !== null && !isScope(cur);
+    cur = cur.parent
+  ) {
+    if (cur.kind !== ALNodeKind.procedure_call) continue;
+    const callee = cur.childForFieldName("function");
+    const args = cur.namedChildren.find((c) => c.rawKind === "argument_list");
+    if (callee?.text.trim().toLowerCase() === "workdate" && (args?.namedChildren.length ?? 0) > 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Does the subtree call `WorkDate` or `Today` (by name, with or without arguments)? */
+function readsClock(n: ALSyntaxNode): boolean {
+  if (n.kind === ALNodeKind.procedure_call) {
+    const name = n.childForFieldName("function")?.text.trim().toLowerCase();
+    if (name === "workdate" || name === "today") return true;
+  }
+  return n.namedChildren.some(readsClock);
+}
+
 /** Per-context, per-file memo. The file root is a stable object (the arm map is keyed by it). */
 const memo = new WeakMap<object, WeakMap<ALSyntaxNode, Map<string, unknown>>>();
 function cached<T>(ctx: SemanticContext, n: ALSyntaxNode, tag: string, f: () => T): T {
@@ -1046,7 +1099,64 @@ function exitEffect(
  * bare call in a `with` body. A site INSIDE the callee is [[R837]].
  */
 function deletedCallHangs(node: ALSyntaxNode, ctx: SemanticContext): boolean {
-  if (node.kind !== ALNodeKind.procedure_call || !isStatementSlot(node)) return false;
+  return (
+    node.kind === ALNodeKind.procedure_call && isStatementSlot(node) && callIsProgress(node, ctx)
+  );
+}
+
+/** The statement whose flow depends on the expression in this field: `if`, `case`, `for`. */
+const CONTROLLED_BY: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["if_statement", new Set(["condition"])],
+  ["case_statement", new Set(["expression"])],
+  ["for_statement", new Set(["start", "end"])],
+]);
+
+/**
+ * R855, for an operator that deletes `operand` of the expression `site`. AL evaluates both operands,
+ * so a call in the operand always ran: `Total := Total + Step()` to `Total := Total`, or
+ * `if Flag or Step() then` to `if Flag then`, loses it for certain. `site` can also decide whether
+ * progress happens at all, in three ways:
+ * - it controls a statement holding a progress call: `repeat if A or B then Advance(); until Done`,
+ *   also `N := Advance();`, `case I + J of 1: Advance();` and `for K := 1 to I + J do Advance();`;
+ * - it controls a `continue`, which skips whatever follows in the loop: `if A and B then continue;`;
+ * - it is an argument of a progress call, which sets the step: `AddTo(Pos, I + 1)`.
+ *
+ * A bare name counts as a call (`if A or StepB then`, `Advance;`): `callIsProgress` resolves it.
+ * Known, not seen: progress ended by an `Error` inside a callee, and every shape behind a callee
+ * ([[R837]]). `negate-conditional` and `swap-additive` have these exposures today.
+ */
+export function deletedOperandHangs(
+  operand: ALSyntaxNode,
+  site: ALSyntaxNode,
+  ctx: SemanticContext,
+): boolean {
+  let hangs = false;
+  const ask = (n: ALSyntaxNode): void => {
+    if (n.rawKind === "call_expression" || n.rawKind === "call_statement" || isIdentifierLike(n)) {
+      hangs ||= callIsProgress(n, ctx);
+    }
+  };
+  visitAll(operand, ask);
+  let n = site;
+  for (let cur = site.parent; cur !== null && !isScope(cur); n = cur, cur = cur.parent) {
+    if (cur.rawKind === "call_expression" || cur.rawKind === "call_statement") ask(cur);
+    if (CONTROLLED_BY.get(cur.rawKind)?.has(n.fieldName ?? "") === true) {
+      for (const part of cur.namedChildren) {
+        if (part.startIndex === n.startIndex && part.endIndex === n.endIndex) continue;
+        visitAll(part, (x) => {
+          ask(x);
+          if (x.rawKind === "continue_statement") hangs ||= hasEnclosingLoop(x);
+        });
+      }
+      break;
+    }
+    if (cur.rawKind.endsWith("_statement")) break;
+  }
+  return hangs;
+}
+
+/** Does this call move a name an enclosing `while` or `repeat`'s exit parts read? */
+function callIsProgress(node: ALSyntaxNode, ctx: SemanticContext): boolean {
   const loops: ALSyntaxNode[] = [];
   for (let cur = node.parent; cur !== null && !isScope(cur); cur = cur.parent) {
     if (LOOP_KINDS.has(cur.kind)) loops.push(cur);

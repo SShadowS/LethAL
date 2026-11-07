@@ -258,7 +258,8 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
       // c83bdd08...23eb); 4 new arm entries, ids +4 after DataBandExt, proven in id-shift-proof.txt.
       // R731: toggle-blank-string's operatorVersion 1.1.0 is the only change (was dc2c1f19...da48).
       // R752: toggle-blank-string's operatorVersion 1.1.1 is the only change (was a7dba8bc...0835).
-      "cf442b39ef79109a5787274d2ab243b538837e97bf3527129c06ce2d04c073d4",
+      // R855: swap-call-arguments 1.1.0 plus 12 new delete-* entries (was cf442b39...3d4).
+      "bc2c6465b5c8421a6c237017dc90e994be00b668a220c3fc38ad705469d783bc",
     );
     const all = createHash("sha256");
     for (const f of (await readdir(dir)).sort()) {
@@ -287,7 +288,8 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
     // R828 O1: re-pinned (was 6271048e...6157): a statement with its own mutants copies itself plain,
     // so the `.al` files moved (the same ten as in fixture-emission). The manifest pin did not.
     expect(all.digest("hex")).toBe(
-      "e632c2498ca46082d6a1f08a398ed033408f88556318d4c92790cb5ce6074d5e",
+      // R855: re-pinned (was e632c249...74d5e): manifest as above, plus 12 delete-* guards in the `.al` files.
+      "13203266744ae4dc79d3b0493e5b918ec3b9ea1f2957bced3ae8230b51fc2e15",
     );
   }, 60_000);
 });
