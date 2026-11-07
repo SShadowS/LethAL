@@ -528,7 +528,10 @@ export class AlRunnerServer {
         throw fail("protocol", `unparseable stdout line: ${next.line.slice(0, 200)}`);
       }
       if (msg.type === undefined && "error" in msg) {
-        throw fail("error", `the request was refused: ${JSON.stringify(msg.error).slice(0, 400)}`);
+        const said = JSON.stringify(msg.error);
+        // R860: a missing-dependency refusal names one app per line; 400 characters lose the second.
+        const keep = said.includes("dependency app(s) were not found") ? 4000 : 400;
+        throw fail("error", `the request was refused: ${said.slice(0, keep)}`);
       }
       if (msg.type === "test") tests.push(msg);
       else if (msg.type === "entrySummary") entrySummaries.push(msg);

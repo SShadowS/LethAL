@@ -1031,6 +1031,7 @@ export async function edgeRejudge(deps: UpdateDeps, arg: string): Promise<Outcom
       rejudgedFrom: from,
     });
     if (outcome === "not-ahead") return "skipped"; // Unreachable: a rejudge always measures.
+    await publishPending(deps); // R861: a rejudge can move `current`, so its row goes out now.
     const same = before.every((b) => b.startsWith(`${outcome}@`));
     await deps.log(
       `${deps.now()} edge-rejudge ${tag} (${sha}) at ${commit}: ${outcome}; before: ${before.join(", ")}; ${same ? "same" : "different"}`,
