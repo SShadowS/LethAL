@@ -1,5 +1,7 @@
 # R594 reports: the R546 CDO slice measured live on bc3
 
+**Re-measured 2026-11-07 for R855.** `bc3-A.report.json` and `bc3-B.report.json` now hold a run on bc3 at `lethal/r855` 3882eba6, identity scheme 45, BC 28.4, control app as the branch pins it: A 53 / 12 / 0 and B 53 / 8 / 4 over 65. Joined on procedure, line and operator, the old 63 rows are equal on verdict, killing test and covering tests in both legs. The 2 added rows are `delete-logical-left` and `-right` at line 60 of `MoveRecipientFromHeaderToTable`, both killed. Pre-commitment: the addendum in `docs/superpowers/specs/2026-11-07-r855-operator-batch-precommitment.md`. The two CDO apps were published for the run and removed after it. Everything below describes the first measurement, 2026-10-21.
+
 **Builds.**
 - **Server.** bc3: BC 28.4 on Linux, W1, company `CRONUS International Ltd.`.
 - **Microsoft apps.** All 11 of R546's packagesDir are at 28.4.53241.56646: Any, Application Test Library, Application, Base Application, Business Foundation, Library Assert, Permissions Mock, System Application Test Library, System Application, Test Runner and Tests-TestLibraries. `System` is 28.0.54946.56477.

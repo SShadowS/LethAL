@@ -66,7 +66,7 @@ export const TABLES_FIGURES = {
  * R582 (PREDICTED, pre-commitment 39eaf536): each warm kill's re-run under the mutant is one more
  * `RunMutantMany`, so control 33 -> 42 (24 scored + 9 replays + 9 re-runs) and chunked 57 -> 62
  * (52 covering chunk calls + 5 replays + 5 re-runs).
- * R855 (PREDICTED, docs/superpowers/specs/2026-11-07-r855-predictions.md): the slice gains two
+ * R855 (docs/superpowers/specs/2026-11-07-r855-predictions.md, recorded): the slice gains two
  * survivors (DataMain.Table.al lines 24 and 63, `delete-additive-right`), so control survived 7 -> 9
  * and groupedCalls 42 -> 44 (26 scored + 9 + 9). `chunked.groupedCalls` 62 -> 70 is MEASURED, on bc3,
  * 2026-11-07: both legs' verdicts and killing tests were equal, and each new survivor adds

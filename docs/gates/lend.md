@@ -55,8 +55,8 @@ It passed on bc1, bc2 and bc3 at 7084eece (see [servers.md](servers.md) and Hist
 }
 ```
 
-- R855 (PREDICTED, not yet run) added three `sandbox-app` mutants: two survivors and one no-coverage. The
-  figures below are the old ones plus those three. Codes moved with them: the nine KEPT rows are the same
+- R855 added three `sandbox-app` mutants: two survivors and one no-coverage, as pre-committed. The
+  figures below hold them. Codes moved with them: the nine KEPT rows are the same
   mutants as before under new codes, and `r3Rerun` is the same `swap-additive` mutant (was M0019).
 - L0, N1 and N5 score 3 / 14 / 5 over 22, per mutant equal to `bcdev.baseline.json`. Nothing is
   lent. `groupedCalls` is 17.

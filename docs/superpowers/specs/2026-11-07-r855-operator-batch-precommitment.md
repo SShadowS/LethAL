@@ -70,3 +70,28 @@ One branch, one change, one record, on BC 28 only.
 The gate's first line names the v3 build it ran: `current` may move at 07:47.
 
 A row that differs from its prediction is read and explained before anything lands. If the explanation is that the prediction was wrong, this file stays as it is, and the submit note says which rows.
+
+## Addendum, 2026-11-07: legs this file did not name
+
+This addendum was written after lethal-code's full v3 gate at 88f67370 stopped on these legs, so the v3 figures below were seen first. It is a statement of what happens next, not a prediction of v3. Nothing else in this file moves.
+
+- **Leg K.** 3 / 14 / 5 over 22, with 5 no-coverage, all in `SandboxPricing.Codeunit.al`. The fifth is the row already predicted above. Its count of 4 was a stale pin, and it compared 0 differences with `bcdev.baseline.json`.
+- **S1E and N1S `entriesSent`:** 44 to 48, and 200 to 266. Cost figures, read from that run, not derived.
+- **Legs D1 and D1c, the CDO slice.** This file left them out, which was a gap: DO's `CDORecipientMgt.Codeunit.al` gains 2 rows, both in `MoveRecipientFromHeaderToTable` at line 60, `delete-logical-right` and `delete-logical-left`. v3 reads D1 53 / 12 / 0 over 65, and D1c 53 / 8 / 4 over 65, so it read both as killed. Those legs compare per mutant with a BC report (`docs/measurements/r594/`), which has no such rows.
+
+**BC decides, not v3.** Before those figures move, both legs of `scripts/r594/run-leg.sh` run on bc3 at this branch, and their reports replace `bc3-A.report.json` and `bc3-B.report.json`, redacted. Pre-committed outcome: leg A 53 / 12 / 0 over 65, leg B 53 / 8 / 4 over 65, the 63 existing rows equal to the current reports on verdict and killing test, and both new rows `killed`. If BC reads a new row otherwise, that is a v3 difference and is filed upstream, and leg D's figures take BC's reading.
+
+## Addendum 2026-11-07: the manifest rows
+
+Leg T's counts moved, so the hand pins' digest moved from `18793d7f161dba8071a394cab44b98dd3f59fb15e47cb1b057a4fa227030ccef` to `f3d2aede5f3d8273b616237d80b7c0a72e18be71acf4f169999fb6882066872e` (`--pin-digests`), and `r814-gated-builds.test.ts` fails until a person deals with the rows. No scripted route does that before a merge: [[R859]]. Written before any row is edited. The `current` pin itself does not move.
+
+Each row changes only after its own full v3 gate passes at 57bacf8107236a850634cdbbb55ebc8234d59d92 (first written for 88f67370, whose gate stopped on the legs above; the digest is the same at both), with the row's binary. A row whose gate does not pass is not edited, and comes back to the orchestrator. Edited with the Edit tool, in `packages/runner/src/al-runner-v3-gated-builds.json`.
+
+| row | readingsDigest, old | readingsDigest, new | lethalCommit, old | lethalCommit, new | gate |
+|---|---|---|---|---|---|
+| `alpha.12-d4bc8d3a5` | 18793d7f | f3d2aede | a7ac7f500c | 57bacf81 | its kept binary, candidate mode with K, by its own hand pin |
+| `alpha.13-23e7631be` | 18793d7f | f3d2aede | 25a2f95fbe | 57bacf81 | its kept binary, candidate mode with K, `LETHAL_V3_PIN_FROM=edge-d72d3197d` |
+| `edge-a0825f1d9` (`current`) | 18793d7f | f3d2aede | 25a2f95fbe | 57bacf81 | the same gate, on `current` |
+| `edge-a0189c004` | 18793d7f | row removed | 25a2f95fbe | row removed | none: an old edge row can only be removed |
+
+`gatedAt` takes each pass's time, and `version`, `binarySha256`, `tag`, `track`, `readingsFrom` and `warnFacts` stay.

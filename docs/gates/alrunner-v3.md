@@ -378,6 +378,27 @@ N > 1 must equal N = 1: R766's proof found D1 and the gift card identical at N =
   processes, not jobs: one job can match more than once, which errs toward skipping; at most 3 heavy jobs, the
   gate included, since 2026-10-22) or `free -g` shows under 10 GB available. A
   skipped `--regate` or `--edge-rejudge` exits 2, so a `&&` chain after it stops.
+- **`--refresh-rows <id>[,<id>...]` ([[R859]]): when a batch moves a hand pin's digest.** Run it in the BRANCH's clean
+  checkout. For each named manifest row it finds the kept binary (`<root>/*-<commit>/al-runner`), runs that row's full
+  gate at the branch's head by the row's own pin (`LETHAL_V3_PIN_FROM`), and only on that row's pass rewrites the row's
+  `readingsDigest`, `lethalCommit`, `gatedAt` and `warnFacts` (all four from THIS gate's result) in the checkout's
+  manifest. Before each write it checks that the checkout's head is still the head the gate ran at and that the id is
+  still a row; if not it refuses by name and writes nothing, and the receipt says `refused: ...`. The receipt is
+  written before the manifest, and a stale one for the same id and head is removed at the start. It refuses by name,
+  before any gate, an id not in the
+  manifest, a missing binary, a sha256 that differs from the row's, a row with no hand pin, a dirty checkout (tracked
+  files) and a manifest not in the script's own format. A gate-fail, held, infra-fail or skip writes nothing. It holds
+  `.gate.lock`, so it cannot overlap the daily run; it does not commit or push, and does not touch
+  `gated-builds.published`, `current`, `.gated`, `failed/` or `held/`. It stops at the first row that does not pass.
+  **A branch that changes the fixture symbols tar** (`FIXTURE_SYMBOLS_TAR`) is refused by the gate as an `infra-fail`
+  (the worktree's `.alpackages` do not match the pinned tar): nothing is written. Land the tar change on master first,
+  merge master into the branch, then run `--refresh-rows`; or split the batch so the tar and the digest move apart.
+  Receipt per row: `<root>/refresh/refresh-<id>@<head>/refresh.json` (binary path and sha256, old and new digest, old
+  and new commit), with the gate's `receipt.json` and `gate.log` beside it. Unlike `--regate`, the head need not be on
+  master (`--regate` and the stale-gated path keep their origin/master refusal). Collision with the daily run: none
+  while it runs (the lock); later, `publishToMaster` adds an id only when master lacks it, so it cannot undo or
+  duplicate a refreshed row; the one remaining case is a text conflict if the daily run adds a row while the branch is
+  open: merge master in and re-run.
 - The evidence is kept. The gate's stdout and stderr go to `gate.log` beside the receipt, on every exit. Both are
   copied beside the outcome they gave: `failed/<tag>@<commit>/`, `held/<tag>/`, `infra/<tag>.receipt.json` and
   `infra/<tag>.gate.log`, `regate/<commit>.receipt.json` and `regate/<commit>.gate.log`, and on a candidate's pass

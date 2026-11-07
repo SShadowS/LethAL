@@ -8,9 +8,21 @@
  *   bun scripts/al-runner-v3-update.ts --edge        (the edge track only, `edgeOnce`)
  *   bun scripts/al-runner-v3-update.ts --edge-rejudge <edge sha>   (R639: a KEPT edge binary,
  *                                                     re-gated at `.gated`'s commit, `edgeRejudge`)
+ *   bun scripts/al-runner-v3-update.ts --refresh-rows <id>[,<id>...]   (R859: in a BRANCH's
+ *                                                     checkout, `refreshRows`; see its comment)
  *
  * Every gate path holds `<root>/.gate.lock` (R639 I3); a run skipped by it exits 2 on `--regate`
  * and `--edge-rejudge`.
+ *
+ * R859 `--refresh-rows`: when a batch moves a v3 fixture's counts, a hand pin's digest moves and its
+ * manifest rows go stale. This re-gates each named row's KEPT binary at the checkout's head by the
+ * row's own pin and, only on that row's pass, rewrites that row's `readingsDigest` and
+ * `lethalCommit` in the checkout's manifest, leaving a receipt under `<root>/refresh/`. It never
+ * commits or pushes, and never writes `gated-builds.published`, `current`, `.gated`, `failed/` or
+ * `held/`. It holds the gate lock, so it cannot overlap the daily run. A later daily run cannot
+ * undo a refresh: `publishToMaster` adds an id only when master lacks it, and a ledger row for an
+ * id already on master is never put back. The one collision left is a text conflict, if the daily
+ * run adds a row to master while the branch is open; merge master in and re-run.
  *
  * R813/R814 (owner): two tracks. EDGE moves `current`, only forward (`commitOrder`). A numbered
  * RELEASE never moves `current`: its pass adds it to the gate manifest, which is what users install.
@@ -401,6 +413,17 @@ export interface GateOneOpts {
   readonly rejudgedFrom?: string;
   /** R814: a numbered release: its pass joins the manifest and never moves `current`. */
   readonly release?: boolean;
+  /**
+   * R859 `--refresh-rows`: gate the kept `binary` as a candidate by `gated.readingsFrom`, at
+   * `gated.lethalCommit`, and on a pass return at once: no `failed/`, `held/`, build folder, ledger
+   * row, `.gated` or `current` is written. The caller writes the manifest row.
+   */
+  readonly refreshRow?: boolean;
+  /** R859: this gate's own warn facts and time, handed to `refreshRows` on a pass. */
+  readonly onRefreshPass?: (r: {
+    warnFacts?: Readonly<Record<string, string>>;
+    gatedAt: string;
+  }) => void;
 }
 
 /** The `(commit)` of a `--version` line. */
@@ -477,6 +500,7 @@ export async function gateOne(
     // `.gated` commit after a re-pre-commitment) may gate the same build again. R639 I5: checked
     // before every binary path, so a rejudge can never write into an existing failed/ folder.
     const failedDir = join(root, "failed", `${name}@${commit}`);
+    const refresh = opts.refreshRow === true;
     if (opts.regateAt === undefined && existsSync(failedDir)) {
       await deps.log(
         `${deps.now()} ${tag}: gate-fail: already gate-failed at ${commit} (${failedDir}); not gated again at this commit, \`--regate\` to re-judge`,
@@ -520,7 +544,7 @@ export async function gateOne(
     const candidate = opts.regateAt === undefined;
     // R814: only an edge candidate moves `current`, and only forward. The commit is the DOWNLOADED
     // binary's: edge can be replaced between reading the tag and the download.
-    let movesCurrent = candidate && opts.release !== true;
+    let movesCurrent = candidate && opts.release !== true && !refresh;
     if (movesCurrent) {
       let order: CommitOrder;
       try {
@@ -593,15 +617,16 @@ export async function gateOne(
     };
     if (opts.regateAt !== undefined) await keep(join(root, "regate"), `${commit}.`);
     // R639 §6 step 8: a rejudge's evidence, whatever the outcome; nothing old is moved or rewritten.
-    const rejudge = opts.binary !== undefined;
+    const rejudge = opts.binary !== undefined && !refresh;
     if (rejudge) await keep(join(root, "rejudge", `${name}@${commit}`));
+    if (refresh) await keep(join(root, "refresh", `${name}@${commit}`));
     if (outcome === "infra-fail") {
-      if (opts.regateAt === undefined) await keep(join(root, "infra"), `${name}.`);
+      if (opts.regateAt === undefined && !refresh) await keep(join(root, "infra"), `${name}.`);
       return infra(deps, name);
     }
     await infraCount(root, name, false);
     if (outcome === "gate-fail") {
-      if (opts.regateAt === undefined) {
+      if (opts.regateAt === undefined && !refresh) {
         await mkdir(failedDir, { recursive: true });
         await cp(binary, join(failedDir, "al-runner"));
         await keep(failedDir);
@@ -611,7 +636,7 @@ export async function gateOne(
     if (outcome === "held") {
       const heldDir = join(root, "held", name);
       // R639: a rejudge never rewrites an existing held/<tag>/ (its record stays in rejudge/).
-      if (opts.regateAt === undefined && !(rejudge && existsSync(heldDir))) {
+      if (opts.regateAt === undefined && !refresh && !(rejudge && existsSync(heldDir))) {
         await mkdir(heldDir, { recursive: true });
         await cp(binary, join(heldDir, "al-runner"));
         await keep(heldDir);
@@ -622,6 +647,18 @@ export async function gateOne(
       return "held";
     }
     // pass
+    if (refresh) {
+      // R859: the gate must have judged by the row's own pin, or the pass says nothing about the row.
+      if (pinApplied !== gated.readingsFrom) {
+        await deps.log(
+          `${deps.now()} ${tag}: infra-fail: a pass that applied pin ${pinApplied ?? "(none)"}, not ${gated.readingsFrom ?? "(none)"}`,
+        );
+        return infra(deps, name);
+      }
+      const w = await receiptWarnFacts(receipt);
+      opts.onRefreshPass?.({ ...(w !== undefined ? { warnFacts: w } : {}), gatedAt: deps.now() });
+      return "pass";
+    }
     const dirName =
       opts.regateAt !== undefined
         ? undefined
@@ -999,6 +1036,142 @@ export async function edgeRejudge(deps: UpdateDeps, arg: string): Promise<Outcom
       `${deps.now()} edge-rejudge ${tag} (${sha}) at ${commit}: ${outcome}; before: ${before.join(", ")}; ${same ? "same" : "different"}`,
     );
     return outcome;
+  } finally {
+    await lock.release();
+  }
+}
+
+/** R859: what `refreshRows` needs beyond `UpdateDeps`. */
+export interface RefreshDeps {
+  /** True when the checkout has an uncommitted change to a tracked file. */
+  isDirty(): Promise<boolean>;
+  /** The checkout's `al-runner-v3-gated-builds.json`. */
+  readonly manifestPath: string;
+}
+
+/**
+ * R859 `--refresh-rows <id>[,<id>...]`, run in a BRANCH's checkout: for each named manifest row,
+ * re-gate its kept binary at this checkout's head by the row's own hand pin, and only on that row's
+ * pass replace that row's `readingsDigest` and `lethalCommit` in the checkout's manifest. Nothing
+ * else is written there: no commit, no push, no `gated-builds.published`, no `current`, `.gated`,
+ * `failed/` or `held/`. Every refusal throws before any gate runs. Rows go in order and the run
+ * stops at the first row that does not pass; rows that passed before it stay written. Returns each
+ * row's outcome, or ["skipped"] when the load check or the gate lock skipped the run.
+ */
+export async function refreshRows(
+  deps: UpdateDeps & RefreshDeps,
+  ids: readonly string[],
+): Promise<(Outcome | "skipped")[]> {
+  const refuse = (why: string): never => {
+    throw new Error(`al-runner-v3-refresh-refused: ${why}`);
+  };
+  if (ids.length === 0 || new Set(ids).size !== ids.length)
+    refuse("name each row once: --refresh-rows <id>[,<id>...]");
+  const { root } = deps;
+  const text = await readFile(deps.manifestPath, "utf8");
+  const rows = JSON.parse(text) as GatedBuildEntry[];
+  if (`${JSON.stringify(rows, null, 2)}\n` !== text)
+    refuse(`${deps.manifestPath} is not in the script's own format; format it first`);
+  if (await deps.isDirty()) refuse("the checkout has uncommitted changes; commit them first");
+  const head = await deps.selfCommit();
+  if (!FULL_SHA.test(head)) refuse(`the checkout's head "${head}" is not a full sha`);
+  // Every refusal first, so a bad id never leaves the others half done.
+  const plan = new Map<string, { binary: string; row: GatedBuildEntry }>();
+  for (const id of ids) {
+    const row = rows.find((r) => r.id === id);
+    if (row === undefined) return refuse(`${id} is not a row of ${deps.manifestPath}`);
+    if (handV3Pin(row.readingsFrom) === undefined)
+      refuse(`${id}: its pin "${row.readingsFrom}" is no hand pin in this checkout`);
+    const suffix = `-${commitOfVersion(row.version)}`;
+    const dirs = (await readdir(root))
+      .filter((n) => n.endsWith(suffix) && existsSync(join(root, n, "al-runner")))
+      .map((n) => join(root, n, "al-runner"));
+    if (dirs.length === 0)
+      refuse(`${id}: no kept binary <root>/*${suffix}/al-runner under ${root}`);
+    let binary: string | undefined;
+    for (const d of dirs) if ((await sha256OfFile(d)) === row.binarySha256) binary = d;
+    if (binary === undefined)
+      return refuse(`${id}: ${dirs.join(", ")} does not have the row's sha256 ${row.binarySha256}`);
+    plan.set(id, { binary, row });
+  }
+  if (await skippedForTheDay(deps, "refresh-rows")) return ["skipped"];
+  const lock = await takeGateLock(deps, "refresh-rows");
+  if (lock === undefined) return ["skipped"];
+  try {
+    const out: Outcome[] = [];
+    for (const [id, { binary, row }] of plan) {
+      const dir = join(root, "refresh", `refresh-${id}@${head}`);
+      const receiptFile = join(dir, "refresh.json");
+      // A pass receipt of an earlier run for this id and head must not outlive a run that fails.
+      await rm(receiptFile, { force: true });
+      let thisGate: { warnFacts?: Readonly<Record<string, string>>; gatedAt: string } | undefined;
+      const o = await gateOne(
+        deps,
+        `refresh-${id}`,
+        {
+          version: row.version,
+          binarySha256: row.binarySha256,
+          lethalCommit: head,
+          readingsFrom: row.readingsFrom,
+        },
+        {
+          binary,
+          binarySha256: row.binarySha256,
+          refreshRow: true,
+          onRefreshPass: (r) => {
+            thisGate = r;
+          },
+        },
+      );
+      if (o === "not-ahead") return refuse(`${id}: unreachable: a refresh always measures`);
+      out.push(o);
+      if (o !== "pass") break;
+      const pin = handV3Pin(row.readingsFrom);
+      // TypeScript cannot see the callback's assignment, so it narrows `thisGate` to undefined.
+      const g = thisGate as
+        | { warnFacts?: Readonly<Record<string, string>>; gatedAt: string }
+        | undefined;
+      if (pin === undefined || g === undefined) return refuse(`${id}: no pin or gate result`);
+      const refusal = async (why: string): Promise<never> => {
+        await mkdir(dir, { recursive: true });
+        await writeFile(
+          receiptFile,
+          `${JSON.stringify({ id, outcome: `refused: ${why}` }, null, 2)}\n`,
+        );
+        await deps.log(`${deps.now()} refresh-${id}: REFUSED, nothing written: ${why}`);
+        return refuse(`${id}: ${why}`);
+      };
+      const nowHead = await deps.selfCommit();
+      if (nowHead !== head)
+        return await refusal(`the checkout's head moved during the gate (${head} -> ${nowHead})`);
+      const fresh = JSON.parse(await readFile(deps.manifestPath, "utf8")) as GatedBuildEntry[];
+      if (!fresh.some((r) => r.id === id))
+        return await refusal(`${id} is no longer a row of ${deps.manifestPath}`);
+      // This gate's result only: the digest, the commit, warnFacts and gatedAt; nothing else moves.
+      const next = fresh.map((r) => {
+        if (r.id !== id) return r;
+        const { warnFacts: _old, ...rest } = r;
+        return {
+          ...rest,
+          readingsDigest: v3ReadingsDigest(pin),
+          lethalCommit: head,
+          gatedAt: g.gatedAt,
+          ...(g.warnFacts !== undefined ? { warnFacts: g.warnFacts } : {}),
+        };
+      });
+      parseGatedBuilds(next, new Set(V3_BUILD_PINS.map((p) => p.id)));
+      // The receipt goes first, so a crash cannot leave a row with no receipt.
+      await mkdir(dir, { recursive: true });
+      await writeFile(
+        receiptFile,
+        `${JSON.stringify({ id, binary, binarySha256: row.binarySha256, readingsFrom: row.readingsFrom, oldDigest: row.readingsDigest, newDigest: v3ReadingsDigest(pin), oldCommit: row.lethalCommit, lethalCommit: head, gatedAt: g.gatedAt, warnFacts: g.warnFacts ?? null, outcome: "pass" }, null, 2)}\n`,
+      );
+      await writeFile(deps.manifestPath, `${JSON.stringify(next, null, 2)}\n`);
+      await deps.log(
+        `${deps.now()} refresh-${id}: pass at ${head}: digest ${row.readingsDigest} -> ${v3ReadingsDigest(pin)}; row written to ${deps.manifestPath}; receipt ${dir}`,
+      );
+    }
+    return out;
   } finally {
     await lock.release();
   }
@@ -1388,6 +1561,24 @@ export function realEdgeDeps(root = ROOT): UpdateDeps & EdgeDeps {
 
 if (import.meta.main && process.argv.includes("--pin-digests")) {
   console.log(JSON.stringify(pinDigests()));
+} else if (import.meta.main && process.argv.includes("--refresh-rows")) {
+  const repo = dirname(import.meta.dir);
+  const ids = (process.argv[process.argv.indexOf("--refresh-rows") + 1] ?? "")
+    .split(",")
+    .filter((s) => s !== "");
+  const out = await refreshRows(
+    {
+      ...realDeps(),
+      manifestPath: join(repo, GATED_BUILDS_FILE),
+      isDirty: async () =>
+        (
+          await runToLog(["git", "-C", repo, "status", "--porcelain", "--untracked-files=no"])
+        ).trim() !== "",
+    },
+    ids,
+  );
+  console.log(`al-runner-v3-update --refresh-rows: ${out.join(", ")}`);
+  process.exitCode = out.length === ids.length && out.every((o) => o === "pass") ? 0 : 2;
 } else if (import.meta.main && process.argv.includes("--edge")) {
   console.log(`al-runner-v3-update --edge: ${await edgeOnce(realEdgeDeps())}`);
 } else if (import.meta.main && process.argv.includes("--edge-rejudge")) {
