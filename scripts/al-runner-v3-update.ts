@@ -419,6 +419,11 @@ export interface GateOneOpts {
    * row, `.gated` or `current` is written. The caller writes the manifest row.
    */
   readonly refreshRow?: boolean;
+  /** R859: this gate's own warn facts and time, handed to `refreshRows` on a pass. */
+  readonly onRefreshPass?: (r: {
+    warnFacts?: Readonly<Record<string, string>>;
+    gatedAt: string;
+  }) => void;
 }
 
 /** The `(commit)` of a `--version` line. */
@@ -496,7 +501,7 @@ export async function gateOne(
     // before every binary path, so a rejudge can never write into an existing failed/ folder.
     const failedDir = join(root, "failed", `${name}@${commit}`);
     const refresh = opts.refreshRow === true;
-    if (opts.regateAt === undefined && !refresh && existsSync(failedDir)) {
+    if (opts.regateAt === undefined && existsSync(failedDir)) {
       await deps.log(
         `${deps.now()} ${tag}: gate-fail: already gate-failed at ${commit} (${failedDir}); not gated again at this commit, \`--regate\` to re-judge`,
       );
@@ -650,6 +655,8 @@ export async function gateOne(
         );
         return infra(deps, name);
       }
+      const w = await receiptWarnFacts(receipt);
+      opts.onRefreshPass?.({ ...(w !== undefined ? { warnFacts: w } : {}), gatedAt: deps.now() });
       return "pass";
     }
     const dirName =
@@ -1093,6 +1100,11 @@ export async function refreshRows(
   try {
     const out: Outcome[] = [];
     for (const [id, { binary, row }] of plan) {
+      const dir = join(root, "refresh", `refresh-${id}@${head}`);
+      const receiptFile = join(dir, "refresh.json");
+      // A pass receipt of an earlier run for this id and head must not outlive a run that fails.
+      await rm(receiptFile, { force: true });
+      let thisGate: { warnFacts?: Readonly<Record<string, string>>; gatedAt: string } | undefined;
       const o = await gateOne(
         deps,
         `refresh-${id}`,
@@ -1102,25 +1114,59 @@ export async function refreshRows(
           lethalCommit: head,
           readingsFrom: row.readingsFrom,
         },
-        { binary, binarySha256: row.binarySha256, refreshRow: true },
+        {
+          binary,
+          binarySha256: row.binarySha256,
+          refreshRow: true,
+          onRefreshPass: (r) => {
+            thisGate = r;
+          },
+        },
       );
       if (o === "not-ahead") return refuse(`${id}: unreachable: a refresh always measures`);
       out.push(o);
       if (o !== "pass") break;
       const pin = handV3Pin(row.readingsFrom);
-      if (pin === undefined) return refuse(`${id}: its pin vanished`);
+      // TypeScript cannot see the callback's assignment, so it narrows `thisGate` to undefined.
+      const g = thisGate as
+        | { warnFacts?: Readonly<Record<string, string>>; gatedAt: string }
+        | undefined;
+      if (pin === undefined || g === undefined) return refuse(`${id}: no pin or gate result`);
+      const refusal = async (why: string): Promise<never> => {
+        await mkdir(dir, { recursive: true });
+        await writeFile(
+          receiptFile,
+          `${JSON.stringify({ id, outcome: `refused: ${why}` }, null, 2)}\n`,
+        );
+        await deps.log(`${deps.now()} refresh-${id}: REFUSED, nothing written: ${why}`);
+        return refuse(`${id}: ${why}`);
+      };
+      const nowHead = await deps.selfCommit();
+      if (nowHead !== head)
+        return await refusal(`the checkout's head moved during the gate (${head} -> ${nowHead})`);
       const fresh = JSON.parse(await readFile(deps.manifestPath, "utf8")) as GatedBuildEntry[];
-      const next = fresh.map((r) =>
-        r.id === id ? { ...r, readingsDigest: v3ReadingsDigest(pin), lethalCommit: head } : r,
-      );
+      if (!fresh.some((r) => r.id === id))
+        return await refusal(`${id} is no longer a row of ${deps.manifestPath}`);
+      // This gate's result only: the digest, the commit, warnFacts and gatedAt; nothing else moves.
+      const next = fresh.map((r) => {
+        if (r.id !== id) return r;
+        const { warnFacts: _old, ...rest } = r;
+        return {
+          ...rest,
+          readingsDigest: v3ReadingsDigest(pin),
+          lethalCommit: head,
+          gatedAt: g.gatedAt,
+          ...(g.warnFacts !== undefined ? { warnFacts: g.warnFacts } : {}),
+        };
+      });
       parseGatedBuilds(next, new Set(V3_BUILD_PINS.map((p) => p.id)));
-      await writeFile(deps.manifestPath, `${JSON.stringify(next, null, 2)}\n`);
-      const dir = join(root, "refresh", `refresh-${id}@${head}`);
+      // The receipt goes first, so a crash cannot leave a row with no receipt.
       await mkdir(dir, { recursive: true });
       await writeFile(
-        join(dir, "refresh.json"),
-        `${JSON.stringify({ id, binary, binarySha256: row.binarySha256, readingsFrom: row.readingsFrom, oldDigest: row.readingsDigest, newDigest: v3ReadingsDigest(pin), oldCommit: row.lethalCommit, lethalCommit: head, outcome: "pass" }, null, 2)}\n`,
+        receiptFile,
+        `${JSON.stringify({ id, binary, binarySha256: row.binarySha256, readingsFrom: row.readingsFrom, oldDigest: row.readingsDigest, newDigest: v3ReadingsDigest(pin), oldCommit: row.lethalCommit, lethalCommit: head, gatedAt: g.gatedAt, warnFacts: g.warnFacts ?? null, outcome: "pass" }, null, 2)}\n`,
       );
+      await writeFile(deps.manifestPath, `${JSON.stringify(next, null, 2)}\n`);
       await deps.log(
         `${deps.now()} refresh-${id}: pass at ${head}: digest ${row.readingsDigest} -> ${v3ReadingsDigest(pin)}; row written to ${deps.manifestPath}; receipt ${dir}`,
       );
