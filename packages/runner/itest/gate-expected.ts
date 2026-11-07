@@ -68,8 +68,9 @@ export const TABLES_FIGURES = {
  * (52 covering chunk calls + 5 replays + 5 re-runs).
  * R855 (PREDICTED, docs/superpowers/specs/2026-11-07-r855-predictions.md): the slice gains two
  * survivors (DataMain.Table.al lines 24 and 63, `delete-additive-right`), so control survived 7 -> 9
- * and groupedCalls 42 -> 44 (26 scored + 9 + 9). `chunked.groupedCalls` (62) is NOT moved: each new
- * survivor adds ceil(covering tests / 2) chunk calls, which only a live run shows.
+ * and groupedCalls 42 -> 44 (26 scored + 9 + 9). `chunked.groupedCalls` 62 -> 70 is MEASURED, on bc3,
+ * 2026-11-07: both legs' verdicts and killing tests were equal, and each new survivor adds
+ * ceil(covering tests / 2) chunk calls.
  */
 export const CHUNKED_FIGURES = {
   control: {
@@ -83,7 +84,7 @@ export const CHUNKED_FIGURES = {
   },
   chunked: {
     warmKills: 5,
-    groupedCalls: 62,
+    groupedCalls: 70,
   },
 } as const;
 

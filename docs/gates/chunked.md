@@ -26,19 +26,18 @@ kills reach ordered position 5. The control leg has no limit. The chunked leg ru
     "CHUNKED_FIGURES.control.groupedCalls": 44,
     "CHUNKED_FIGURES.control.positions": { "1": 8, "2": 3, "3": 3, "4": 2, "5": 1 },
     "CHUNKED_FIGURES.chunked.warmKills": 5,
-    "CHUNKED_FIGURES.chunked.groupedCalls": 62
+    "CHUNKED_FIGURES.chunked.groupedCalls": 70
   }
 }
 ```
 
 - Both legs score 17 / 9 / 2, with every verdict and every `killingTest` identical. Chunking
-  changes cost only, never a result. R855 (PREDICTED, not yet run) added two survivors to the
-  slice (`DataMain.Table.al` lines 24 and 63): survived 7 to 9, control `groupedCalls` 42 to 44.
+  changes cost only, never a result. R855 added two survivors to the slice
+  (`DataMain.Table.al` lines 24 and 63): survived 7 to 9, as pre-committed.
 - The control leg has 9 warm kills and 44 group calls: 17 + 9 scored, 9 replays and 9 re-runs.
   Its 17 kills sit at positions 1 to 5 as the histogram shows.
-- The chunked leg has 5 warm kills and 62 group calls: 52 covering chunk calls, 5 replays and
-  5 re-runs. These two chunked figures are the pre-R855 ones: each new survivor adds
-  ceil(covering tests / 2) chunk calls, so the 62 will move, and only a live run shows by how much. Four named kills go from warm to cold. Five replay exactly the two methods of their
+- The chunked leg has 5 warm kills and 70 group calls: 60 covering chunk calls, 5 replays and
+  5 re-runs, measured on bc3, 2026-11-07. Four named kills go from warm to cold. Five replay exactly the two methods of their
   chunk.
 - Since R582 every kill is re-run once under the mutant after its confirm passed (R577's rule).
   A warm kill's re-run is one more group call over the same chunk prefix as its replay. The gate
