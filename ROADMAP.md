@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**15 of 834 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**17 of 836 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -338,6 +338,7 @@ that ordering is the priority.
 - **R847** · A control-app action that reads AllObj and Field would let the pre-publish clash check see an installed app that is not a dependent · [R847.md](docs/roadmap/R847.md) · done (f4e17705)
 - **R852** · itest:verify failed once on lease-renew-unanswered, and the gate's mismatch error does not print the warning's message · [R852.md](docs/roadmap/R852.md) · open: the message logging landed (0b0cdc7a); the cause of the one failure stays open until it recurs or is…
 - **R855** · tree-sitter-al: valid AL fails at the parser's limit of 6 parse versions when `#if`-split blocks share an `if` chain · [R855.md](docs/roadmap/R855.md) · open, filed 2026-11-06 from R853; upstream https://github.com/SShadowS/tree-sitter-al/issues/40
+- **R858** · `negate-conditional` and `swap-additive` can still lose a loop's progress in shapes the delete operators refuse · [R858.md](docs/roadmap/R858.md) · open, filed 2026-11-07 from coord R-855
 
 ## Product gaps a real project hits
 
@@ -879,6 +880,7 @@ that ordering is the priority.
 - **R835** · A test left a quarantine record in the default store, and a later test file on the same worker read it (master CI red on b67cfbb5) · [R835.md](docs/roadmap/R835.md) · done (b7597f60)
 - **R850** · A v3 record on a gated build with no hand pin writes unchecked: alpha.2 steps round R810's rule · [R850.md](docs/roadmap/R850.md) · done (38b0f950)
 - **R851** · The al-runner update counted processes as heavy jobs, so one job could skip a release for the day · [R851.md](docs/roadmap/R851.md) · done (0f52bd85)
+- **R859** · The gate manifest has no scripted route when a hand pin's digest moves · [R859.md](docs/roadmap/R859.md) · open, filed 2026-11-07 from coord R-855
 
 ---
 
