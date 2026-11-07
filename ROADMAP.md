@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**17 of 836 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**18 of 837 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -340,6 +340,7 @@ that ordering is the priority.
 - **R852** · itest:verify failed once on lease-renew-unanswered, and the gate's mismatch error does not print the warning's message · [R852.md](docs/roadmap/R852.md) · open: the message logging landed (0b0cdc7a); the cause of the one failure stays open until it recurs or is…
 - **R855** · tree-sitter-al: valid AL fails at the parser's limit of 6 parse versions when `#if`-split blocks share an `if` chain · [R855.md](docs/roadmap/R855.md) · open, filed 2026-11-06 from R853; upstream https://github.com/SShadowS/tree-sitter-al/issues/40
 - **R857** · On v3 a set WorkDate leaks across a test codeunit, while bcdev runs one method per call, so a verdict can differ · [R857.md](docs/roadmap/R857.md) · open, filed 2026-11-06 from R856
+- **R858** · `negate-conditional` and `swap-additive` can still lose a loop's progress in shapes the delete operators refuse · [R858.md](docs/roadmap/R858.md) · open, filed 2026-11-07 from coord R-855
 
 ## Product gaps a real project hits
 

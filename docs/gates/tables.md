@@ -43,7 +43,7 @@ What the figures mean:
 - 322 / 73 / 23 over 418 is killed / survived / no-coverage, over the deployed mutants. The fixture
   has 440 mutant sites before precedence removes some. R855 added 12 (the split is already in
   the figures), PREDICTED in `docs/superpowers/specs/2026-11-07-r855-predictions.md` and not yet run.
-  Until the baseline is re-recorded the `baselines` line above still shows the old 314 / 70 / 22.
+  The `baselines` line above holds 322 / 73 / 23 (R855 added rows on 2026-11-07, recorded on bc3).
 - `untargetedTriggerCount` is 0: no trigger mutant had to run every test.
 - `groupedCalls` is 425 (R198, R206, R582): 322 + 73 scored mutants, plus 15 warm-kill replays,
   plus 15 warm-kill re-runs. This is the check that the grouped covering loop is really used. The

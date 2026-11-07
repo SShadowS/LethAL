@@ -35,7 +35,7 @@ What the figures mean:
 - 3 / 14 / 5 over 22 is killed / survived / no-coverage. R855 added three mutants, PREDICTED
   (`docs/superpowers/specs/2026-11-07-r855-predictions.md`) and not yet run: two survivors at
   `SandboxLogic` line 12 and one no-coverage at `SandboxPricing` line 7. Until the baseline is
-  re-recorded the `baselines` line above still shows the old 3 / 12 / 4.
+  re-recorded the `baselines` line above holds 3 / 14 / 5 (R855 added rows on 2026-11-07, recorded on bc3).
 - `groupedCalls` is 17 (R198). That is one `RunMutantMany` call for each scored mutant (3 killed
   plus 14 survived). If the counter stopped being wired, it would read 0 and the gate would fail.
 - Since R582 every kill is re-run once under the mutant after its confirm passed (R577's rule),

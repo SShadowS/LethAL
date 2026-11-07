@@ -11,6 +11,22 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ## [Unreleased]
 
+### Added
+
+- **Four operators that delete one operand** (R855, GitHub #35 and #41). `delete-logical-right` and `-left` turn `A or B` or
+  `A and B` into one side, in an `if` condition or an `exit` value: a suite that kills `or` to `and` can still leave a whole
+  clause unchecked. `delete-additive-right` and `-left` turn `A + B` into one side, and `A - B` into `A`, when both operands
+  are numeric and of one type. A project gains sites, so `numberingDigest` changes, and a mark without `fileSingleton`
+  reads `renumbered` and stays a survivor. A deleted term in a call argument or an array index, such as
+  `CopyStr(S, A - B)`, `Power(2, A - B)` or `Arr[I - 1]`, can raise where the original did not: that is ordinary changed
+  behaviour, and a raised error is a real kill if a test sees it. A divisor is refused. `Days := EndDate - StartDate + 1`
+  gets no mutant: the type table reads `Date - Date` as `Date`.
+
+### Fixed
+
+- **AL does not short-circuit, and the design no longer says it does** (R855). `false and Bump()` runs `Bump()`, measured
+  on BC 28.4. `design.md` keeps the name `short-circuit-operand`, which is historical.
+
 ### Changed
 
 - **A target that clashes with an installed app that is not its dependent is refused before it is published** (R847). The
