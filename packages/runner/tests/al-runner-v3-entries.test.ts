@@ -4758,7 +4758,8 @@ describe("R857: --isolate-tests", () => {
 
   test("on: the baseline is one process per test, and every later entry one test", async () => {
     const r = await readyRig({ ...ISOLATE, serve: { rows: killsM1 } });
-    expect(r.one.calls.map((c) => c[c.indexOf("--test-exact") + 1])).toEqual([
+    // Sorted: since R866 the processes run side by side, so they may start in any order.
+    expect(r.one.calls.map((c) => c[c.indexOf("--test-exact") + 1]).sort()).toEqual([
       `Codeunit${CU}.A`,
       `Codeunit${CU}.B`,
     ]);
