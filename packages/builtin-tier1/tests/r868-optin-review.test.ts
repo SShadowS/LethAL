@@ -225,12 +225,13 @@ ${more}
     );
   });
 
-  it("CLAIMS a parameter read in a loop that steps a record cursor", () => {
+  it("REFUSES a parameter read in a loop that steps a record cursor (no cursor skip any more)", () => {
     const s = seen(
       blankArgument,
       unit("R.SetRange(Id, Step); R.FindSet(); repeat Total += 1; until R.Next() = 0;"),
     );
-    expect(s.claimed).toContain("Step");
+    expect(s.hang).toContain("Step");
+    expect(s.claimed).not.toContain("Step");
   });
 
   it("still REFUSES a while on the blanked value, also inside a for", () => {
@@ -308,16 +309,116 @@ ${callee}
     expect(refused("for I := 1 to 10 do I := I + Step - 1;")).toBe(true);
   });
 
-  it("CLAIMS a plain cursor loop (alone, and joined by or), a RecordRef one, and a while on Next() <> 0", () => {
-    expect(claimed("repeat Total += Step; until R.Next() = 0;")).toBe(true);
-    expect(claimed("repeat Total += Step; until (R.Next() = 0) or (Total > 5);")).toBe(true);
-    expect(claimed("repeat Total += Step; until RR.Next() = 0;")).toBe(true);
-    expect(claimed("while R.Next() <> 0 do Total += Step;")).toBe(true);
+  it("REFUSES every plain cursor loop that reads the value, whatever its exit", () => {
+    expect(refused("repeat Total += Step; until R.Next() = 0;")).toBe(true);
+    expect(refused("repeat Total += Step; until (R.Next() = 0) or (Total > 5);")).toBe(true);
+    expect(refused("repeat Total += Step; until RR.Next() = 0;")).toBe(true);
+    expect(refused("while R.Next() <> 0 do Total += Step;")).toBe(true);
+    expect(refused("repeat R.Qty := Step; R.Modify(); until R.Next() = 0;")).toBe(true);
   });
 
-  it("CLAIMS a for loop whose body does not assign the control variable, and a field step", () => {
+  it("REFUSES a for loop that passes the control variable to a call (it could be var), or compounds it", () => {
+    expect(refused("for I := 1 to 10 do if I > Step then Zero(I);")).toBe(true);
+    expect(refused("for I := 1 to 10 do if I > Step then I -= 1;")).toBe(true);
+    expect(refused("for I := 1 to 10 do if I > Step then I := 0;")).toBe(true);
+  });
+
+  it("CLAIMS a for loop whose body neither assigns nor passes the control variable, or reads it only in a bound", () => {
     expect(claimed("for I := 1 to 10 do Total += Step;")).toBe(true);
-    expect(claimed("repeat R.Qty := Step; R.Modify(); until R.Next() = 0;")).toBe(true);
+    expect(claimed("for I := 1 to Step do Total += 1;")).toBe(true);
+    expect(claimed("for I := 1 to 10 do Total += I * Step;")).toBe(true);
+  });
+});
+
+/**
+ * Every cursor-loop shape the reviews probed (c5, c6, c7). None may be claimed, so a future widening
+ * of the loop skip fails here. The blanked site is `Spin(K)` in `Caller`.
+ */
+describe("R868 review 4: the probed cursor-loop escapes stay refused", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  const cu = (s: string, g = "") => `codeunit 50100 "C"
+{
+${g}
+procedure Caller(N: Integer) var K: Integer; begin K := N; Spin(K); end;
+${s}
+}`;
+  const P =
+    "procedure Spin(S: Integer) var J: Integer; R: Record Customer; begin if R.FindSet() then repeat J += 1; ";
+  const SHAPES: Record<string, string> = {
+    c5_and_exit: cu(
+      "procedure Spin(S: Integer) var J: Integer; R: Record Customer; begin if R.FindSet() then repeat J += S; until (R.Next() = 0) and (J >= 100); end;",
+    ),
+    c5_next_step: cu(
+      "procedure Spin(S: Integer) var R: Record Customer; begin if R.FindSet() then repeat until R.Next(S) = 0; end;",
+    ),
+    c5_findfirst: cu(
+      "procedure Spin(S: Integer) var J: Integer; R: Record Customer; begin if R.FindSet() then repeat J += 1; if J < S then R.FindFirst(); until R.Next() = 0; end;",
+    ),
+    c5_filter: cu(
+      "procedure Spin(S: Integer) var R: Record Customer; begin if R.FindSet() then repeat R.SetFilter(\"No.\", '>%1', Format(S)); R.FindFirst(); until R.Next() = 0; end;",
+    ),
+    c5_for_while: cu(
+      "procedure Spin(S: Integer) var I: Integer; J: Integer; begin for I := 1 to 3 do while J < 100 do J += S; end;",
+    ),
+    c5_for_ctl: cu(
+      "procedure Spin(S: Integer) var I: Integer; begin for I := 1 to 10 do I := I + S - 1; end;",
+    ),
+    c5_user_next: cu(
+      "procedure Spin(S: Integer) var Q: Codeunit D; J: Integer; begin repeat J += S; until (Q.Next() = 0) and (J > 100); end;",
+    ),
+    c6_findfirst_rev: cu(
+      "procedure Spin(S: Integer) var J: Integer; R: Record Customer; begin if R.FindSet() then repeat J += 1; if J > S then R.FindFirst(); until R.Next() = 0; end;",
+    ),
+    c6_or_exit: cu(
+      "procedure Spin(S: Integer) var J: Integer; R: Record Customer; begin if R.FindSet() then repeat J += S; until (R.Next() = 0) or (J >= 100); end;",
+    ),
+    c7_helper_global: cu(
+      "procedure Spin(S: Integer) var J: Integer; begin if G.FindSet() then repeat J += 1; if J > S then Rewind(); until G.Next() = 0; end;\nprocedure Rewind() begin G.FindFirst(); end;",
+      "var G: Record Customer;",
+    ),
+    c7_ascending: cu(`${P}if J > S then R.Ascending(not R.Ascending()); until R.Next() = 0; end;`),
+    c7_key_field: cu(`${P}if J > S then R."No." := ''; until R.Next() = 0; end;`),
+    c7_validate_key: cu(`${P}if J > S then R.Validate("No.", ''); until R.Next() = 0; end;`),
+    c7_temp_insert_ahead: cu(
+      'procedure Spin(S: Integer) var J: Integer; R: Record "Integer" temporary; begin R.Number := 1; R.Insert(); if R.FindSet() then repeat J += 1; if J > S then begin R.Number += 1; R.Insert(); end; until R.Next() = 0; end;',
+    ),
+    c7_recref_alias: cu(
+      "procedure Spin(S: Integer) var J: Integer; RR: RecordRef; RR2: RecordRef; begin RR.Open(18); RR2 := RR; if RR.FindSet() then repeat J += 1; if J > S then RR2.FindFirst(); until RR.Next() = 0; end;",
+    ),
+    c7_recref_reopen: cu(
+      "procedure Spin(S: Integer) var J: Integer; RR: RecordRef; begin RR.Open(18); if RR.FindSet() then repeat J += 1; if J > S then begin RR.Close(); RR.Open(18); RR.FindSet(); end; until RR.Next() = 0; end;",
+    ),
+    c7_for_var_call: cu(
+      "procedure Spin(S: Integer) var I: Integer; begin for I := 1 to 10 do if I > S then Zero(I); end;\nprocedure Zero(var X: Integer) begin X := 0; end;",
+    ),
+    c7_for_compound: cu(
+      "procedure Spin(S: Integer) var I: Integer; begin for I := 1 to 10 do if I > S then I -= 1; end;",
+    ),
+    c7_or_operand_helper: cu(
+      "procedure Spin(S: Integer) var J: Integer; begin if G.FindSet() then repeat J += 1; until (G.Next() = 0) or Rew(J, S); end;\nprocedure Rew(J: Integer; S: Integer): Boolean begin if J > S then G.FindFirst(); exit(false); end;",
+      "var G: Record Customer;",
+    ),
+  };
+
+  for (const [name, src] of Object.entries(SHAPES)) {
+    it(`REFUSES ${name}`, () => {
+      const s = seen(blankArgument, src);
+      expect(s.hang).toContain("K");
+      expect(s.claimed).not.toContain("K");
+    });
+  }
+
+  it("CLAIMS the safe control: a for loop that only counts", () => {
+    const s = seen(
+      blankArgument,
+      cu(
+        "procedure Spin(S: Integer) var I: Integer; J: Integer; begin for I := 1 to S do J += 1; end;",
+      ),
+    );
+    expect(s.claimed).toContain("K");
   });
 });
 
