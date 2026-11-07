@@ -15,11 +15,11 @@ its paired `.vscode/launch.<x>.json` (see [servers.md](servers.md)).
     "bcdev.baseline.json": { "killed": 3, "survived": 12, "no-coverage": 4 }
   },
   "constants": {
-    "BCDEV_FIGURES.totalMutantSites": 19,
+    "BCDEV_FIGURES.totalMutantSites": 22,
     "BCDEV_FIGURES.killed": 3,
-    "BCDEV_FIGURES.survived": 12,
-    "BCDEV_FIGURES.noCoverage": 4,
-    "BCDEV_FIGURES.groupedCalls": 15,
+    "BCDEV_FIGURES.survived": 14,
+    "BCDEV_FIGURES.noCoverage": 5,
+    "BCDEV_FIGURES.groupedCalls": 17,
     "BCDEV_FIGURES.warmKills": 0,
     "BCDEV_FIGURES.assertionScreenDiscrimination": "vacuous"
   },
@@ -32,11 +32,14 @@ its paired `.vscode/launch.<x>.json` (see [servers.md](servers.md)).
 
 What the figures mean:
 
-- 3 / 12 / 4 over 19 is killed / survived / no-coverage.
-- `groupedCalls` is 15 (R198). That is one `RunMutantMany` call for each scored mutant (3 killed
-  plus 12 survived). If the counter stopped being wired, it would read 0 and the gate would fail.
+- 3 / 14 / 5 over 22 is killed / survived / no-coverage. R855 added three mutants, PREDICTED
+  (`docs/superpowers/specs/2026-11-07-r855-predictions.md`) and not yet run: two survivors at
+  `SandboxLogic` line 12 and one no-coverage at `SandboxPricing` line 7. Until the baseline is
+  re-recorded the `baselines` line above still shows the old 3 / 12 / 4.
+- `groupedCalls` is 17 (R198). That is one `RunMutantMany` call for each scored mutant (3 killed
+  plus 14 survived). If the counter stopped being wired, it would read 0 and the gate would fail.
 - Since R582 every kill is re-run once under the mutant after its confirm passed (R577's rule),
-  and must fail again to stay killed. `groupedCalls` stays 15 because all 3 kills are at position
+  and must fail again to stay killed. `groupedCalls` stays 17 because all 3 kills are at position
   1, so each re-run is one single `RunMutant` call, not a group call. Both runs check that every
   kill carries `killReproduced` and has exactly 2 mutated rows for its killing test in that run
   (the fixture's store is persistent, so the check reads only the run it made).

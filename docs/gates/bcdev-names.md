@@ -35,6 +35,10 @@ mutated rows for its killing test.
 All 36 mutants are killed (3 operators on each of 12 procedures). Each must match
 `docs/superpowers/specs/2026-10-09-r557-names-precommitment.md` in verdict and killing test.
 
+R855 (PREDICTED, not yet run) adds a fourth operator, `delete-additive-right`, on each procedure: 48 mutants,
+all killed. The `baselines` line above and the 36 in this text stay at the committed baseline until it is
+re-recorded.
+
 ## History
 
 2026-11-06 (R836, coord task R-848): `bcdev.names.baseline.json` moved from identity scheme 44 to 45, on `bc2`, by R332's procedure. One line changed, the

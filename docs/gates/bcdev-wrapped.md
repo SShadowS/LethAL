@@ -28,6 +28,10 @@ in `#if` blocks. It runs two legs, one session each: `coverageMode: "fenced"` an
 
 The fenced leg scores 60 killed and 38 survived.
 
+R855 (PREDICTED, not yet run): four `delete-additive-right` rows are added (M0010, M0018, M0026, M0035), all
+killed, so the pre-committed table holds four more kills than the baseline. The `baselines` line above and the counts
+in this text stay at the committed baseline's 60 / 38 until it is re-recorded.
+
 ## History
 
 2026-11-06 (R827, coord task R-836): `Grow` in the four wrapped files gained a `#pragma` line, which keeps it a chain as long as this gate needs, and a comment line went, so no mutant's line moved. Its

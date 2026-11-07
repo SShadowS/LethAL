@@ -15,17 +15,17 @@ mutant equal to its baseline, with the W1 company (R-583).
     "tables.baseline.json": { "killed": 314, "survived": 70, "no-coverage": 22 }
   },
   "constants": {
-    "TABLES_FIGURES.totalMutantSites": 428,
-    "TABLES_FIGURES.killed": 314,
-    "TABLES_FIGURES.survived": 70,
-    "TABLES_FIGURES.noCoverage": 22,
+    "TABLES_FIGURES.totalMutantSites": 440,
+    "TABLES_FIGURES.killed": 322,
+    "TABLES_FIGURES.survived": 73,
+    "TABLES_FIGURES.noCoverage": 23,
     "TABLES_FIGURES.untargetedTriggerCount": 0,
-    "TABLES_FIGURES.groupedCalls": 414,
+    "TABLES_FIGURES.groupedCalls": 425,
     "TABLES_FIGURES.warmKills": 15,
     "TABLES_FIGURES.killPositions": [
-      { "mutantCode": "M0179", "killingTest": "ProcessedRequiresCategory", "killPosition": 5 },
-      { "mutantCode": "M0183", "killingTest": "FlaggedFiresModifyTrigger", "killPosition": 4 },
-      { "mutantCode": "M0175", "killingTest": "CategoryGuardNeedsCalcFields", "killPosition": 2 },
+      { "mutantCode": "M0183", "killingTest": "ProcessedRequiresCategory", "killPosition": 5 },
+      { "mutantCode": "M0188", "killingTest": "FlaggedFiresModifyTrigger", "killPosition": 4 },
+      { "mutantCode": "M0179", "killingTest": "CategoryGuardNeedsCalcFields", "killPosition": 2 },
       { "mutantCode": "M0005", "killingTest": "BandReportSumsBands", "killPosition": 3 },
       { "mutantCode": "M0009", "killingTest": "BandReportSumsBands", "killPosition": 3 }
     ],
@@ -40,19 +40,22 @@ mutant equal to its baseline, with the W1 company (R-583).
 
 What the figures mean:
 
-- 314 / 70 / 22 over 406 is killed / survived / no-coverage, over the deployed mutants. The fixture
-  has 428 mutant sites before precedence removes some.
+- 322 / 73 / 23 over 418 is killed / survived / no-coverage, over the deployed mutants. The fixture
+  has 440 mutant sites before precedence removes some. R855 added 12 (the split is already in
+  the figures), PREDICTED in `docs/superpowers/specs/2026-11-07-r855-predictions.md` and not yet run.
+  Until the baseline is re-recorded the `baselines` line above still shows the old 314 / 70 / 22.
 - `untargetedTriggerCount` is 0: no trigger mutant had to run every test.
-- `groupedCalls` is 414 (R198, R206, R582): 314 + 70 scored mutants, plus 15 warm-kill replays,
-  plus 15 warm-kill re-runs. This is the check that the grouped covering loop is really used.
+- `groupedCalls` is 425 (R198, R206, R582): 322 + 73 scored mutants, plus 15 warm-kill replays,
+  plus 15 warm-kill re-runs. This is the check that the grouped covering loop is really used. The
+  two 15s are the pre-R855 figures: the 8 added kills may add warm kills, which only a live run shows.
 - Every kill is re-run once under the mutant after its confirm passed (R577's rule, on for bcdev
-  since R582), and must fail again to stay killed. The 299 kills at position 1 re-run as one
+  since R582), and must fail again to stay killed. The kills at position 1 (299 before R855) re-run as one
   single `RunMutant` call each, which is not a group call. The 15 warm kills re-run their call's
   prefix in one `RunMutantMany`. The gate checks that every kill carries `killReproduced` and has
   exactly 2 mutated rows for its killing test in that run.
 - `warmKills` is 15: kills at group positions 2 to 5. This fixture keeps no session state, so a
   warm kill here only says the killer was not first in the order. Five named mutants pin the
-  positions. Their ids moved with R254 and R-463, but they are the same mutants.
+  positions. Their ids moved with R254, R-463 and R855, but they are the same mutants.
 - Exactly one test is expected to fail in the baseline run: `Data Tests.PageActionComputesNonZero`.
   It opens a `TestPage`, which the fenced session refuses. The gate checks that exactly this test
   fails, by name, and that the report names the refusal. It must not be relaxed to "the baseline is

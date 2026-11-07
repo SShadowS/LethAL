@@ -19,7 +19,7 @@ const CODES = Object.keys(LEND_MUTANTS) as LendCode[];
 const keyOf = (c: LendCode): string => LEND_MUTANTS[c].key;
 const keys = (cs: readonly string[]): Set<string> => new Set(cs.map((c) => keyOf(c as LendCode)));
 
-/** A finished source run shaped like L0's: every identity field set, 19 rows, one snapshot. */
+/** A finished source run shaped like L0's: every identity field set, 22 rows, one snapshot. */
 function source(): { store: ResultsStore; a: number } {
   const store = new ResultsStore(":memory:");
   const a = store.createRun({
@@ -129,7 +129,7 @@ describe("R618 seedRunFrom: a clone with no override is the source run", () => {
   test("the run row, the verdicts, history and resume read it as the source", () => {
     const { store, a } = source();
     const before = survivorKeys(store);
-    expect(before.keys.size).toBe(12);
+    expect(before.keys.size).toBe(14);
     const c = seedRunFrom(store, a, { finished: true });
     expect(changed(store.getRun(a), store.getRun(c))).toEqual([]);
     const sorted = (id: number) =>
@@ -145,7 +145,7 @@ describe("R618 seedRunFrom: a clone with no override is the source run", () => {
     store.close();
   });
 
-  test("the source's 12 survivors are exactly LEND_MUTANTS' survived keys", () => {
+  test("the source's 14 survivors are exactly LEND_MUTANTS' survived keys", () => {
     const { store } = source();
     const survived = CODES.filter((c) => LEND_MUTANTS[c].verdict === "survived");
     expect(survivorKeys(store).keys).toEqual(keys(survived));
@@ -246,7 +246,7 @@ describe("R618 seedRunFrom: K is permuted by code, keyed intact, with a sentinel
 describe("R618: each seed gives the refusal its leg expects", () => {
   test("N0 lends, N1 names only the backend step, N5 names only the test app", () => {
     for (const [over, keysLent, fired] of [
-      [{}, 12, []],
+      [{}, 14, []],
       [{ backend: "al-runner-v3", runnerBuild: "r618-seed" }, 0, ["backendBuildRefused"]],
       [{ revoke: true }, 0, ["testAppChanged"]],
     ] as const) {
