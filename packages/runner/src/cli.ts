@@ -2535,7 +2535,7 @@ async function loadLethalConfigFile(path: string): Promise<LethalConfigFile> {
     );
   }
   refuseRetiredV2ConfigSection(parsed, path);
-  refuseRetiredBcHost(parsed.bcdev?.server);
+  refuseRetiredBcHost(parsed.bcdev);
   setPackageCacheDirs(configuredPackageCaches(parsed));
   return parsed;
 }
