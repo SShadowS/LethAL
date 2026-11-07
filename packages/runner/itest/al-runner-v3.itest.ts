@@ -569,7 +569,7 @@ const S1E_PINS = {
   liveRequests: 1,
   boundChecks: 3,
   warmups: 1,
-  entriesSent: 44,
+  entriesSent: 48,
   pairBatchRequests: 1,
   pairBatchStored: 3,
   pairBatchServed: 3,
@@ -1117,12 +1117,12 @@ async function legO1(scratch: string, version: string): Promise<void> {
  */
 const N1S_PINS = {
   // R855: the three pair counters follow the killed count (33 to 44, as R788's rule); boundChecks and
-  // entriesSent are observed values the new rows may move: unpinned until an observe run reads them.
+  // entriesSent is read from a run (R855's addendum), not derived.
   pairRequests: 44,
   liveRequests: 1,
   boundChecks: 3,
   warmups: 1,
-  entriesSent: 200,
+  entriesSent: 266,
   pairBatchRequests: 1,
   pairBatchStored: 44,
   pairBatchServed: 44,
@@ -2079,8 +2079,8 @@ async function legD(scratch: string, leg: "D1" | "D1c"): Promise<void> {
     dependencyPackageDirs: [join(CDO, "Test", ".alpackages")],
     ...(V3_WORKERS > 1 ? { workers: V3_WORKERS } : {}),
   });
-  if (leg === "D1") assertCounts(r, leg, 51, 12, 0, 63);
-  else assertCounts(r, leg, 51, 8, 4, 63);
+  if (leg === "D1") assertCounts(r, leg, 53, 12, 0, 65);
+  else assertCounts(r, leg, 53, 8, 4, 65);
   await assertPerMutant(
     r,
     join(
@@ -2094,7 +2094,7 @@ async function legD(scratch: string, leg: "D1" | "D1c"): Promise<void> {
   );
   const STATE = [
     ...Array.from({ length: 30 }, (_, i) => `0/M${String(i + 1).padStart(4, "0")}`),
-    ...[35, 36, 37, 39, 42, 43, 44, 45, 46, 47, 49, 50, 51, 52, 53, 54, 56, 58, 59, 60, 61].map(
+    ...[35, 38, 39, 41, 44, 45, 46, 47, 48, 49, 51, 52, 53, 54, 55, 56, 58, 60, 61, 62, 63].map(
       (n) => `0/M${String(n).padStart(4, "0")}`,
     ),
   ].sort();
