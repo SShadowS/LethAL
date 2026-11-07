@@ -4,9 +4,9 @@ Everything needed to run the LethAL demo live, in the order you need it. The pla
 before the conference is `docs/superpowers/plans/2026-08-16-directions-emea-2026-readiness.md`; this
 file is what you hold on the day.
 
-**The demo is `examples/gift-card`.** 60 mutants, and the last measured run took **83.3 seconds**.
-That figure is load, not LethAL: it was re-frozen on 2026-11-05 on server1, which other projects were using heavily
-(load average 100 to 400). On a quiet machine the same run took 20.6 to 22.7 s. Do not quote 83.3 s as the run's speed.
+**The demo is `examples/gift-card`.** 61 mutants, and the last measured run took **34.0 seconds**.
+That figure includes machine load, not only LethAL: it was re-frozen on 2026-11-07 on bc-demo (server1), which other
+projects share. On a quiet machine an earlier run took 20.6 to 22.7 s. Do not quote 34.0 s as the run's best speed.
 Its expected verdicts are frozen at `docs/campaign/2026-08-16-gift-card/`.
 
 ---
@@ -128,14 +128,14 @@ you prepared. Never present a prepared result as live.
 
 ## 4. The beat-by-beat
 
-Target: five minutes. Times are from the measured 83.3 s run, so the narration has to carry the
+Target: five minutes. Times are from the measured 34.0 s run, so the narration has to carry the
 middle, not the tool.
 
 | Time | What you do | What you say |
 |---|---|---|
 | 0:00 | One slide: three objects, eight tests, all green. **Start the run immediately.** | "You have all written this app. Eight tests, all passing. Would you ship it?" |
 | 0:20 | The run streams verdicts while you walk the test list | Name the tests: error paths, a trigger assertion, an audit-trail check. Let them believe the suite. |
-| 0:40 | Run finishes. Read the summary. | "34 killed, 15 survived, 11 no-coverage. Coverage on `GetBalance` was 100% the whole time." |
+| 0:40 | Run finishes. Read the summary. | "35 killed, 15 survived, 11 no-coverage. Coverage on `GetBalance` was 100% the whole time." |
 | 1:00 | `lethal explain report.json --top 10` | **Use `--top 10`, not `--top 5`**: on bcdev the planted bug ranks tenth of fifteen (measured 2026-10-25 on a fresh bc-demo run and on the frozen report), so `--top 10` only just includes it and any smaller cap cuts it (see the note below the table). |
 | 1:20 | The planted survivor: the deleted `SetRange` | "One line gone, every test green. This function now returns the whole store's outstanding balance instead of this card's. `reach: reached-unnoticed`: `RedeemReducesBalance` provably ran this exact statement, and still passed." (bcdev only: see the note.) |
 | 2:10 | The `no-coverage` cluster: `BlockExpiredCards` | "11 mutants, no test executed any of them. That is the nightly job. Expiry *is* tested — at redeem time, which is different code." |
