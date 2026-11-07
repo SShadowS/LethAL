@@ -2115,7 +2115,7 @@ async function legD(scratch: string, leg: "D1" | "D1c"): Promise<void> {
   must(r.baselineGreen && r.unsupportedTests.length === 0, `${leg}: baseline not green`);
   assertIndex(b, leg, 3, 0);
   assertReproduced(r, leg);
-  assertServeCounters(b, leg, 51);
+  assertServeCounters(b, leg, 53);
 }
 
 /**
