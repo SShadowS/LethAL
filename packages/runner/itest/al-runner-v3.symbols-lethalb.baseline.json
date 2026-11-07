@@ -26,6 +26,22 @@
       "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
+      "key": "78d263bdf45458172865b270cf8c37ce220abae7feec90e4dd915b0eabc69b89|Symbol Logic|Rate|lethal.delete-additive-left|1",
+      "verdict": "killed",
+      "killingTest": "RateSmall",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "5d1e04668ff7f657bf0f5661fe28b19945ab805a74e03e7fcbdccb7f1f39d164"
+    },
+    {
+      "key": "78d263bdf45458172865b270cf8c37ce220abae7feec90e4dd915b0eabc69b89|Symbol Logic|Rate|lethal.delete-additive-right|1",
+      "verdict": "killed",
+      "killingTest": "RateSmall",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "4b68ab3847feda7d6c62c1fbcbeebfa35eab7351ed5e78f4ddadea5df64b8015"
+    },
+    {
       "key": "78d263bdf45458172865b270cf8c37ce220abae7feec90e4dd915b0eabc69b89|Symbol Logic|Rate|lethal.swap-additive|1",
       "verdict": "killed",
       "killingTest": "RateSmall",

@@ -34,6 +34,14 @@
       "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
     },
     {
+      "key": "7614385dd80401244ba54b3318153ca3f2bb8db19e67ced84e921dc7c0e801d7|Multi A|Never|lethal.delete-additive-right|1",
+      "verdict": "no-coverage",
+      "killingTest": null,
+      "coverageFiltered": true,
+      "errorClass": null,
+      "mutatedTextSha256": "4b68ab3847feda7d6c62c1fbcbeebfa35eab7351ed5e78f4ddadea5df64b8015"
+    },
+    {
       "key": "7614385dd80401244ba54b3318153ca3f2bb8db19e67ced84e921dc7c0e801d7|Multi A|Never|lethal.swap-additive|1",
       "verdict": "no-coverage",
       "killingTest": null,
@@ -48,6 +56,14 @@
       "coverageFiltered": false,
       "errorClass": null,
       "mutatedTextSha256": "513f58774a41965262e45053648c2e188744d13f4cc62a5ba918e95be6d410b8"
+    },
+    {
+      "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Multi B|Reached|lethal.delete-additive-right|1",
+      "verdict": "killed",
+      "killingTest": "ReachedBothWays",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "4b68ab3847feda7d6c62c1fbcbeebfa35eab7351ed5e78f4ddadea5df64b8015"
     },
     {
       "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Multi B|Reached|lethal.swap-additive|1",
