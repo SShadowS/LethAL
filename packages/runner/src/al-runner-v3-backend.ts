@@ -308,6 +308,79 @@ function refuseDependencySkip(stderr: string): void {
   if (lines.length > 0) throw new AlRunnerV3DependencySkippedError(lines);
 }
 
+/**
+ * R860 (upstream #7139): from edge a461e6310, with `--no-download`, v3 STOPS when a dependency app is
+ * not found: one-shot exit 2 with `error: N dependency app(s) were not found and --no-download is
+ * set ...` on stderr; `serve` answers the request with an `{"error": "N dependency app(s) were not
+ * found ..."}` line. Older builds print `dependency skipped:` and run on (R590 above).
+ */
+const MISSING_DEPENDENCY_RE = /(\d+) dependency app\(s\) were not found and --no-download is set/;
+const MISSING_APP_RE =
+  /dependency `([^`]+)` by (.+?) \(([^)]+)\) version (\S+) or higher was not found/g;
+
+export interface V3MissingDependencies {
+  /** The apps named, as written in app.json. */
+  readonly apps: readonly string[];
+  /** How many apps v3's header says are missing; more than `apps.length` when some are not named. */
+  readonly declared: number;
+  /** v3 found a package for it with no AL source (its text: "found only packages without AL source"). */
+  readonly withoutSource: boolean;
+}
+
+/** Parses a new-form refusal; undefined: the text is not that refusal. */
+export function v3MissingDependencies(text: string): V3MissingDependencies | undefined {
+  const head = MISSING_DEPENDENCY_RE.exec(text);
+  if (head === null) return undefined;
+  return {
+    apps: [...text.matchAll(MISSING_APP_RE)].map(
+      (m) => `"${m[1]}" by ${m[2]} (id ${m[3]}, version ${m[4]} or higher)`,
+    ),
+    declared: Number(head[1]),
+    withoutSource: text.includes("found only packages without AL source"),
+  };
+}
+
+/**
+ * R860: the ONE test of the one-shot stop, used by the backend and by leg C's `dependency-skip-line`,
+ * so the fact and a real run cannot disagree: exit 2 and the refusal header.
+ */
+export function v3MissingDependencyStop(
+  exitCode: number,
+  stderr: string,
+): V3MissingDependencies | undefined {
+  return exitCode === 2 ? v3MissingDependencies(stderr) : undefined;
+}
+
+/**
+ * R860: v3 will not run because a dependency app is not in its package cache. Not a kill, not a
+ * survivor, not retried: the session stops. Fix: put the app's `.app` file in `packagesDir`.
+ */
+export class AlRunnerV3DependencyMissingError extends Error {
+  constructor(found: V3MissingDependencies, said: string) {
+    const { apps, declared, withoutSource } = found;
+    const unnamed = declared - apps.length;
+    super(
+      `al-runner-v3: v3 stopped because ${declared} dependency app(s) were not found (upstream #7139, R860): ${apps.length > 0 ? apps.join("; ") : "(none parsed)"}${unnamed > 0 ? `; ${unnamed} more app(s) are missing and not named here, so read v3's text below and expect to fix more than the ones named` : ""}. LethAL does not pass --allow-missing-dependencies: running without the app would score kills BC never gives. To fix it, put the app's .app file WITH AL SOURCE in packagesDir (the package folder LethAL gives v3), then run again. A symbols-only .app may stop the run again${withoutSource ? " (v3 found only packages without AL source for an app)" : ""}. v3 said: ${said.slice(0, 1200)}`,
+    );
+    this.name = "AlRunnerV3DependencyMissingError";
+  }
+}
+
+/** R860: one-shot form (exit 2 and the stderr text). */
+function refuseMissingDependency(exitCode: number, stderr: string): void {
+  const found = v3MissingDependencyStop(exitCode, stderr);
+  if (found !== undefined) throw new AlRunnerV3DependencyMissingError(found, stderr);
+}
+
+/** R860: serve form (a refused request); any other error passes through unchanged. */
+function missingDependencyOr(err: unknown): unknown {
+  if (err instanceof AlRunnerServerRequestError && err.kind === "error") {
+    const found = v3MissingDependencies(err.message);
+    if (found !== undefined) return new AlRunnerV3DependencyMissingError(found, err.message);
+  }
+  return err;
+}
+
 /** §4: a session-suite test has no row (or two) in its codeunit's call. At baseline it stops. */
 export class AlRunnerV3RowMissingError extends Error {
   constructor(readonly detail: string) {
@@ -3196,6 +3269,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const { res, wallMs, timedOut, deadlineMs } = raw;
     // R590: first, so a skipped dependency is named as the cause, not a later symptom.
     refuseDependencySkip(res.stderr);
+    refuseMissingDependency(res.exitCode, res.stderr); // R860
     if (timedOut) {
       return {
         verdict: {
@@ -3464,7 +3538,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       answer = await daemon.server.runEntries(body, v3CallDeadlineMs(s, tests));
     } catch (err) {
       await lane.closeDaemon();
-      throw err;
+      throw missingDependencyOr(err);
     }
     await this.refuseDaemonDependencySkip(lane, daemon);
     if (typeof answer.summary.seed === "number") this.observedSeed = answer.summary.seed; // R807: AlRunnerServer already checked it
@@ -3828,6 +3902,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
       if (
         err instanceof AlRunnerV3DependencySkippedError ||
+        err instanceof AlRunnerV3DependencyMissingError ||
         err instanceof AlRunnerV3SeedError ||
         err instanceof AlRunnerV3ServeFallbackWarmupError
       )
@@ -4033,7 +4108,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       );
     } catch (err) {
       await lane.closeDaemon();
-      throw err;
+      throw missingDependencyOr(err);
     }
     await this.refuseDaemonDependencySkip(lane, daemon);
     if (typeof answer.summary.seed === "number") this.observedSeed = answer.summary.seed; // R807: AlRunnerServer already checked it
