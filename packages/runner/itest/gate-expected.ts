@@ -347,6 +347,8 @@ export const GATE_WARNINGS: Readonly<Record<string, readonly string[]>> = {
   "al-runner-v3/L1": ["oversized-batch"],
   "al-runner-v3/MO": [],
   "al-runner-v3/K": [],
+  // R866: leg ISO's own session runs under --isolate-tests, which says so.
+  "al-runner-v3/ISO": ["al-runner-v3-isolate-tests"],
   "al-runner-v3/S1E": [],
   "al-runner-v3/N1S": [],
   // R782: N1E now completes on a #5798-fixed build; its set is empty (precommitment addendum 5587b588,
