@@ -7,6 +7,7 @@ import {
   isProcedureLike,
   normalizeAlName,
   procedureLikeArmNames,
+  resolveVarRef,
 } from "@lethal/engine";
 import {
   LOOP_KINDS,
@@ -45,6 +46,77 @@ import {
  */
 export const recursionRule = { on: true };
 
+/** The name of the object `obj` declares (`codeunit 1 "My C"`), normalized. */
+function objectNameOf(obj: ALSyntaxNode): string {
+  return normalizeAlName(obj.childForFieldName("object_name")?.text ?? "");
+}
+
+/**
+ * ONE resolver of "which same-object procedure does this call run", for both operators: a bare call,
+ * `this.P()` and `Rec.P()` (`calleeOf`), and a call through a codeunit variable of the object's OWN
+ * type (`var Me: Codeunit "C"; Me.Rec(L + 1)`). Null for anything else.
+ */
+function selfCallee(
+  n: ALSyntaxNode,
+  obj: ALSyntaxNode,
+  names: ReadonlySet<string>,
+  ctx: SemanticContext,
+): string | null {
+  const plain = calleeOf(n, names, ctx);
+  if (plain !== null) return plain;
+  if (n.rawKind !== "call_expression" && n.rawKind !== "call_statement") return null;
+  const f = n.childForFieldName("function");
+  const recv = f?.childForFieldName("object");
+  const member = f?.childForFieldName("member");
+  if (f === null || f === undefined || !recv || !member || !isIdentifierLike(recv)) return null;
+  const v = resolveVarRef(recv, ctx);
+  const m = v === null ? null : /^\s*Codeunit\s+(.+?)\s*$/i.exec(v.typeText);
+  if (m?.[1] === undefined || normalizeAlName(m[1]) !== objectNameOf(obj)) return null;
+  const name = normalizeAlName(member.text);
+  return names.has(name) ? name : null;
+}
+
+/** The same-object procedures `proc` calls, by `selfCallee`. */
+function callsOf(proc: ALSyntaxNode, obj: ALSyntaxNode, ctx: SemanticContext): Set<string> {
+  return cached(ctx, proc, "selfCalls", () => {
+    const names = procedureNamesOf(obj, ctx);
+    const out = new Set<string>();
+    visitAll(proc, (n) => {
+      const c = selfCallee(n, obj, names, ctx);
+      if (c !== null) out.add(c);
+    });
+    return out;
+  });
+}
+
+/**
+ * `Codeunit.Run(Codeunit::"Own")` or `Me.Run()` on a variable of the object's own type: runs the
+ * object's `OnRun` again. Refused wherever the arm holds one (there is no name to follow).
+ */
+function runsOwnCodeunit(root: ALSyntaxNode, obj: ALSyntaxNode, ctx: SemanticContext): boolean {
+  const own = objectNameOf(obj);
+  let found = false;
+  visitAll(root, (n) => {
+    if (found || (n.rawKind !== "call_expression" && n.rawKind !== "call_statement")) return;
+    const f = n.childForFieldName("function");
+    const member = f?.childForFieldName("member");
+    if (!f || !member || normalizeAlName(member.text) !== "run") return;
+    const recv = f.childForFieldName("object");
+    if (recv === null) return;
+    if (normalizeAlName(recv.text) === "codeunit") {
+      const first = argumentList(n)[0];
+      const t = first?.text.replace(/\s+/g, "") ?? "";
+      if (/^codeunit::/i.test(t) && normalizeAlName(t.slice(10)) === own) found = true;
+      return;
+    }
+    if (!isIdentifierLike(recv)) return;
+    const v = resolveVarRef(recv, ctx);
+    const m = v === null ? null : /^\s*Codeunit\s+(.+?)\s*$/i.exec(v.typeText);
+    if (m?.[1] !== undefined && normalizeAlName(m[1]) === own) found = true;
+  });
+  return found;
+}
+
 /** Does a call chain from any of `from` (same-object procedure names) reach a name in `targets`? */
 function reaches(
   from: Iterable<string>,
@@ -59,7 +131,7 @@ function reaches(
     if (targets.has(name)) return true;
     if (seen.has(name)) continue;
     seen.add(name);
-    for (const proc of byName.get(name) ?? []) todo.push(...procEffect(proc, ctx).calls);
+    for (const proc of byName.get(name) ?? []) todo.push(...callsOf(proc, obj, ctx));
   }
   return false;
 }
@@ -83,12 +155,14 @@ export function callsBackIntoEnclosing(root: ALSyntaxNode, ctx: SemanticContext)
   if (!recursionRule.on) return false;
   const own = enclosingProcedureNames(root);
   const obj = objectOf(root);
-  if (own === null || obj === null) return false;
+  if (obj === null) return false;
+  if (runsOwnCodeunit(root, obj, ctx)) return true;
+  if (own === null) return false;
   const names = procedureNamesOf(obj, ctx);
   let found = false;
   visitAll(root, (n) => {
     if (found) return;
-    const callee = calleeOf(n, names, ctx);
+    const callee = selfCallee(n, obj, names, ctx);
     if (callee !== null && reaches([callee], own, obj, ctx)) found = true;
   });
   return found;
@@ -252,11 +326,13 @@ function thenArmHangsUncached(ifNode: ALSyntaxNode, ctx: SemanticContext): boole
 // #34 blank-argument: the callee gets a blank for one parameter.
 // ---------------------------------------------------------------------------------------------
 
-const ANY_LOOP: ReadonlySet<string> = new Set([
-  "while_statement",
-  "repeat_statement",
-  "for_statement",
-]);
+/**
+ * Loops a blank can stop from ending: `while` and `repeat`. NOT a `for` (its bound is read once, so a
+ * blank cannot keep it going), and NOT a loop whose exit steps a record cursor or a stream
+ * (`repeat ... until R.Next() = 0`): it ends when the rows do, whatever the filter. A read inside one
+ * of those still counts when a `while` or a stepless `repeat` also encloses it.
+ */
+const ANY_LOOP: ReadonlySet<string> = new Set(["while_statement", "repeat_statement"]);
 
 /** The parameter names of a procedure, in order. */
 function parameterNames(proc: ALSyntaxNode): string[] {
@@ -267,12 +343,16 @@ function parameterNames(proc: ALSyntaxNode): string[] {
     .map((c) => normalizeAlName(declaredNames(c)[0] ?? ""));
 }
 
-/** Does `scope` read any of `names` inside a `while`, `repeat` or `for`? */
-function readsInLoop(scope: ALSyntaxNode, names: ReadonlySet<string>): boolean {
+/** Does `scope` read any of `names` inside a loop a blank can keep going (see `ANY_LOOP`)? */
+function readsInLoop(
+  scope: ALSyntaxNode,
+  names: ReadonlySet<string>,
+  ctx: SemanticContext,
+): boolean {
   let hit = false;
   const scan = (n: ALSyntaxNode, looping: boolean): void => {
     if (hit) return;
-    const now = looping || ANY_LOOP.has(n.rawKind);
+    const now = looping || (ANY_LOOP.has(n.rawKind) && exitEffect(n, ctx).steps.size === 0);
     if (now && isIdentifierLike(n) && names.has(normalizeAlName(n.text))) hit = true;
     for (const c of n.namedChildren) scan(c, now);
   };
@@ -353,15 +433,15 @@ function calleeLoopUncached(proc: ALSyntaxNode, param: string, ctx: SemanticCont
     if (seen.has(key) || depth > MAX_DEPTH) return false;
     seen.add(key);
     const obj = objectOf(p);
-    if (obj === null) return readsInLoop(p, new Set([name]));
+    if (obj === null) return readsInLoop(p, new Set([name]), ctx);
     const tainted = copiesOf(p, new Set([name]), obj, ctx);
     const returned = p.childForFieldName("return_value");
     const local = (k: string): boolean =>
       r531Declares(p, k, true) || (returned !== null && normalizeAlName(returned.text) === k);
     const inProc = new Set([...tainted].filter(local));
     const global = new Set([...tainted].filter((k) => !local(k)));
-    if (inProc.size > 0 && readsInLoop(p, inProc)) return true;
-    if (global.size > 0 && readsInLoop(obj, global)) return true;
+    if (inProc.size > 0 && readsInLoop(p, inProc, ctx)) return true;
+    if (global.size > 0 && readsInLoop(obj, global, ctx)) return true;
     // Followed into a same-object procedure that gets a copy as an argument.
     const names = procedureNamesOf(obj, ctx);
     const byName = procsByName(obj, ctx);
@@ -369,7 +449,7 @@ function calleeLoopUncached(proc: ALSyntaxNode, param: string, ctx: SemanticCont
     visitAll(p, (n) => {
       if (hit) return;
       if (n.rawKind !== "call_expression" && n.rawKind !== "call_statement") return;
-      const callee = calleeOf(n, names, ctx);
+      const callee = selfCallee(n, obj, names, ctx);
       if (callee === null) return;
       const args = argumentList(n);
       args.forEach((a, i) => {

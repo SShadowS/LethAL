@@ -43,6 +43,18 @@ function condition(node: ALSyntaxNode): ALSyntaxNode | null {
   // R402: a directive tail of the condition (`if A` `#if X and B` `#endif` `then`) sits BESIDE the
   // `condition` field, so `true` would replace only the head and leave `true and B`.
   if (node.namedChildren.some((c) => c.rawKind.startsWith("preproc"))) return null;
+  // `A and true` and `true or A`: delete-logical-left/right keep the bare `true` and write the same
+  // bytes on the same span, so dedupe throws and aborts the run. Refused HERE (delete-logical is a
+  // default operator and stays as shipped), for any `and`/`or` with a bare `true` operand.
+  if (
+    cond.kind === ALNodeKind.logical_expression &&
+    ["and", "or"].includes(cond.childForFieldName("operator")?.text.toLowerCase() ?? "") &&
+    ["left", "right"].some(
+      (side) => cond.childForFieldName(side)?.text.trim().toLowerCase() === "true",
+    )
+  ) {
+    return null;
+  }
   let inner = cond;
   while (inner.kind === ALNodeKind.parenthesized_expression) {
     const next = inner.namedChildren[0];

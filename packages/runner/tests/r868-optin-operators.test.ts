@@ -192,4 +192,46 @@ describe("R868: the two opt-in Tier 1 operators", () => {
     },
     ownTimeout(60_000),
   );
+
+  test(
+    "BOTH on with delete-logical: `A and true` and `true or A` abort nothing (dedupeSpecs), alone and with every default operator that has a site",
+    async () => {
+      await withProject(async (dir) => {
+        await Bun.write(
+          join(dir, "Al/Logic.Codeunit.al"),
+          `codeunit 79631 "Logic"
+{
+    procedure P(A: Boolean; B: Boolean)
+    var
+        N: Integer;
+    begin
+        if A and true then
+            N := 1;
+        if true or A then
+            N := 2;
+        if A and B then
+            N := 3;
+    end;
+}
+`,
+        );
+        const DL = ["lethal.delete-logical-left", "lethal.delete-logical-right"];
+        const alone = await generateMutationSet(dir, { operators: [...DL, COND, BLANK] });
+        // The two bare-true conditions are left to delete-logical; `A and B` is condition-true's.
+        const condTexts = specs(alone, COND).map((s) => s.split("|")[2]);
+        expect(condTexts).not.toContain("A and true->true");
+        expect(condTexts).not.toContain("true or A->true");
+        expect(condTexts).toContain("A and B->true");
+        // Every default operator with a site in this project, plus both opt-ins.
+        const defaults = await generateMutationSet(dir);
+        const names = [...new Set(specs(defaults).map((s) => s.split("|")[0] as string))];
+        const all = await generateMutationSet(dir, { operators: [...names, COND, BLANK] });
+        expect(specs(all, COND).length).toBe(specs(alone, COND).length);
+        expect(
+          specs(all).filter((s) => !s.startsWith(`${COND}|`) && !s.startsWith(`${BLANK}|`)),
+        ).toEqual(specs(defaults));
+      });
+    },
+    ownTimeout(60_000),
+  );
 });
