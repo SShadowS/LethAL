@@ -34,6 +34,7 @@ import {
   AlRunnerV3ServeStopUnsetError,
   AlRunnerV3TransportFrozenError,
   AlRunnerV3UnprovenBatchError,
+  ISOLATED_BASELINE_PROCESSES,
   SPECULATE_BASELINE_ENV,
   WINDOW_BOUND_CAVEAT,
   v3CallDeadlineMs,
@@ -267,8 +268,15 @@ function fakeOneShot(
   answer?: { readonly exitCode: number; readonly stderr: string },
 ) {
   const calls: string[][] = [];
+  // R866: how many processes ran at one time, by call counters, never by the clock.
+  let running = 0;
+  let peak = 0;
   const spawn: SpawnFn = async (argv) => {
     calls.push([...argv]);
+    running += 1;
+    peak = Math.max(peak, running);
+    await new Promise<void>((r) => setImmediate(r));
+    running -= 1;
     const active = argv.at(-2) ?? "";
     const testDir = argv.at(-1) ?? "";
     // R857: `--test-exact Codeunit<id>.<method>` runs that one test.
@@ -291,7 +299,7 @@ function fakeOneShot(
     }));
     return { exitCode: 0, stdout: JSON.stringify({ tests }), stderr: "", ...answer };
   };
-  return { spawn, calls };
+  return { spawn, calls, peak: () => peak };
 }
 
 /** A byte channel a test pushes lines into: the fake daemon's stdout. */
@@ -4908,6 +4916,77 @@ describe("R857: --isolate-tests", () => {
     expect(window?.ids).toEqual([`plain:Codeunit${CU}.A`]);
     expect(window?.body.excludeTests).toEqual([`Codeunit${CU}.AB`]);
     expect(window?.body.runSelectedOnly).toBe(true);
+  });
+
+  describe("R866: the baseline's processes, four at a time", () => {
+    const methods = ["A", "B", "C", "D", "E", "F"];
+    const suite = methods.map((m) => ref(m));
+    const rows: RowsFn = () => methods.map((method) => ({ method, status: "pass" as const }));
+    const opts = { ...ISOLATE, suite, oneShotRows: rows };
+    const exactOf = (r: Rig) => r.one.calls.map((c) => c[c.indexOf("--test-exact") + 1]);
+
+    test("every test once, at most four at a time, each verdict its own", async () => {
+      const r = await rig(opts);
+      const verdicts = await baseline(r.b, suite);
+      expect(r.one.peak()).toBe(ISOLATED_BASELINE_PROCESSES);
+      expect(ISOLATED_BASELINE_PROCESSES).toBe(4);
+      expect(exactOf(r).sort()).toEqual(methods.map((m) => `Codeunit${CU}.${m}`));
+      expect(verdicts.map((v) => [v.ref.method, v.outcome])).toEqual(
+        methods.map((m) => [m, "pass"]),
+      );
+    });
+
+    test("off, the baseline stays one process at a time", async () => {
+      const r = await rig({ suite, oneShotRows: rows });
+      await baseline(r.b, suite);
+      expect(r.one.peak()).toBe(1);
+    });
+
+    test("a test that stopped beside the others runs again alone, and that answer stands", async () => {
+      let first = true;
+      const stopOnce: RowsFn = (m, cu, d, n) =>
+        allPass(m, cu, d, n).map((x) => {
+          if (x.method !== "A" || !first) return x;
+          first = false;
+          return { ...x, status: "error" as const, notRun: true, message: TIMEOUT_1S };
+        });
+      const r = await rig({ ...ISOLATE, oneShotRows: stopOnce });
+      const verdicts = await baseline(r.b, SUITE1);
+      expect(exactOf(r).filter((t) => t === `Codeunit${CU}.A`)).toHaveLength(2);
+      expect(exactOf(r).filter((t) => t === `Codeunit${CU}.B`)).toHaveLength(1);
+      expect(verdicts.map((v) => v.outcome)).toEqual(["pass", "pass"]);
+    });
+
+    test("a duration that could move a budget is not kept: every test runs again alone", async () => {
+      const r = await rig({ ...ISOLATE, floor: [0, 1000] });
+      await baseline(r.b, SUITE1);
+      expect(r.one.calls).toHaveLength(4);
+    });
+
+    test("a new deploy fills again: no answer crosses a batch", async () => {
+      const r = await rig(ISOLATE);
+      await baseline(r.b, SUITE1);
+      await r.b.deploy(r.l.batch);
+      await baseline(r.b, SUITE1);
+      expect(r.one.calls).toHaveLength(4);
+    });
+
+    test("no process starts on bytes the proof does not cover", async () => {
+      const r = await rig(ISOLATE);
+      await appendFile(join(r.l.scratch, "active", "Logic.Codeunit.al"), "// drift\n");
+      await expect(baseline(r.b, SUITE1)).rejects.toThrow(AlRunnerV3UnprovenBatchError);
+      expect(r.one.calls).toHaveLength(0);
+    });
+
+    test("the bytes are checked again when an answer is served", async () => {
+      const r = await rig(ISOLATE);
+      r.b.baselinePhase(true);
+      await r.b.activate(null);
+      await r.b.run(ref("A"), OPTS); // fills, and serves A
+      await appendFile(join(r.l.scratch, "active", "Logic.Codeunit.al"), "// drift\n");
+      await expect(r.b.run(ref("B"), OPTS)).rejects.toThrow(AlRunnerV3UnprovenBatchError);
+      r.b.baselinePhase(false);
+    });
   });
 
   test("on: the speculative baseline stays off, as its calls run whole codeunits", async () => {
