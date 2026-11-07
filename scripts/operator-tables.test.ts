@@ -7,11 +7,14 @@ import { renderInto, staleTargets } from "./operator-tables";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 // R856: the counts are the DEFAULT set; an opt-in operator is added after, and said so.
-const optInCount = tier2Operators.filter((o) => o.optIn === true).length;
+// R868: opt-in operators are in both tiers; the counts per tier drop their own.
+const optIn1 = tier1Operators.filter((o) => o.optIn === true).length;
+const optIn2 = tier2Operators.filter((o) => o.optIn === true).length;
+const optInCount = optIn1 + optIn2;
 const plusOptIn = `, plus ${optInCount} opt-in (run only when --operator names it)`;
-const defaultT2 = tier2Operators.length - optInCount;
-const expectedSummary = (): string =>
-  `${tier1Operators.length + defaultT2} operators, in two tiers${plusOptIn}`;
+const defaultT1 = tier1Operators.length - optIn1;
+const defaultT2 = tier2Operators.length - optIn2;
+const expectedSummary = (): string => `${defaultT1 + defaultT2} operators, in two tiers${plusOptIn}`;
 const read = (f: string): string => readFileSync(join(REPO_ROOT, f), "utf8");
 
 describe("operator tables", () => {
@@ -69,14 +72,14 @@ describe("operator tables", () => {
 
   // Issue #44: the counts in README prose are generated, so a stale count is drift like a stale row.
   it("the README's prose counts are the registry's counts", () => {
-    const total = tier1Operators.length + defaultT2;
+    const total = defaultT1 + defaultT2;
     const readme = read("README.md");
-    expect(optInCount).toBe(1);
+    expect(optInCount).toBe(3);
     expect(readme).toContain(
       `<!-- operators: summary -->${total} operators, in two tiers${plusOptIn}<!-- /operators: summary -->`,
     );
     expect(readme).toContain(
-      `<!-- operators: limits -->${total} operators today, in two groups: ${tier1Operators.length} generic ones (Tier 1) and ${defaultT2} AL-specific ones (Tier 2)${plusOptIn}<!-- /operators: limits -->`,
+      `<!-- operators: limits -->${total} operators today, in two groups: ${defaultT1} generic ones (Tier 1) and ${defaultT2} AL-specific ones (Tier 2)${plusOptIn}<!-- /operators: limits -->`,
     );
   });
 

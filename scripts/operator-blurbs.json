@@ -39,6 +39,8 @@
     "lethal.delete-logical-left": "a clause of a condition no test needs",
     "lethal.delete-additive-right": "a term of a sum no test checks",
     "lethal.delete-additive-left": "a term of a sum no test checks",
+    "lethal.condition-true": "a guard no test drives to false. A survivor means the then-arm is never skipped in a test, or nothing checks that it ran when it should not; name it with `--operator condition-true`",
+    "lethal.blank-argument": "a value passed to a procedure that no test checks arrived. Name it with `--operator blank-argument`; the callee must be a project procedure that takes the argument by value",
     "lethal.toggle-blank-temporal": "a date-is-set check nobody drives with the other setting"
   }
 }
