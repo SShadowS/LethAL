@@ -531,7 +531,7 @@ nothing about them changes.
 - **The 408 form is not measured on bc4.** Every hang on bc4 answered the 400 (GitHub #49). `itest:hang` accepts
   the 400 form on bc4 and the 408 form on bc1-bc3 (`stopFormFor`, which also checks the config's port).
 
-### bc4 proof table (R-826b, LethAL Control 1.0.0.25)
+### bc4 proof table (R-826b, 2026-11-07, LethAL Control 1.0.0.25)
 
 The 13 non-hang gates passed at master 86d13b68, R-826b's final build, on 2026-11-07, one coord lease per gate, each released. Each log's first line names `bc4`. They also passed at d3ab3c20, before that build (`/coord/handoff/R-826b/bc4/<gate>.log`).
 
