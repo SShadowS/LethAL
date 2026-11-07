@@ -128,6 +128,28 @@ describe("R868 #36 condition-true: the then-arm hang rules", () => {
     expect(refusedIf(src, "Flag")).toBe(true);
   });
 
+  it("REFUSES a write to a global the exit reads only through a helper: until Finished()", () => {
+    const src = ifUnit(
+      "repeat if Flag then Counter := 0; Other(); until Finished();",
+      `
+    local procedure Finished(): Boolean
+    begin
+        exit(Counter >= 3);
+    end;`,
+    );
+    expect(refusedIf(src, "Flag")).toBe(true);
+    // Control: the same loop, a then-arm that writes a name the helper does not read.
+    const other = ifUnit(
+      "repeat if Flag then Total := 0; Other(); until Finished();",
+      `
+    local procedure Finished(): Boolean
+    begin
+        exit(Counter >= 3);
+    end;`,
+    );
+    expect(claimedIf(other, "Flag")).toBe(true);
+  });
+
   it("REFUSES a helper that resets a name the exit reads", () => {
     const src = ifUnit(
       "while Counter < N do begin if Flag then ResetCounter(); Other(); end;",
@@ -343,6 +365,24 @@ describe("R868 #34 blank-argument: the callee-loop and recursion rules", () => {
     expect(s.claimed).not.toContain("Step");
   });
 
+  it("CLAIMS a parameter when only ANOTHER procedure's own local of that name is read in a loop", () => {
+    const s = blank(
+      callUnit(
+        "Counter := Step;",
+        `
+    local procedure Elsewhere()
+    var
+        Step: Integer;
+        K: Integer;
+    begin
+        while K < 100 do
+            K += Step + 1;
+    end;`,
+      ),
+    );
+    expect(s.claimed).toContain("Step");
+  });
+
   it("CLAIMS a setter into a global no loop reads", () => {
     const s = blank(callUnit("Held := Step;"));
     expect(s.claimed).toContain("Step");
@@ -362,7 +402,10 @@ describe("R868 #34 blank-argument: the callee-loop and recursion rules", () => {
     end;`,
       ),
     );
-    expect(s.hang).toContain("Step");
+    // Two sites read `Step`: P's `Q(Step)` (refused only by FOLLOWING the hop) and Q's own
+    // `Inner(Step)` (refused because Inner loops on its parameter).
+    expect(s.hang.filter((t) => t === "Step").length).toBe(2);
+    expect(s.claimed).not.toContain("Step");
   });
 
   it("REFUSES a value stored in a collection that a loop reads", () => {

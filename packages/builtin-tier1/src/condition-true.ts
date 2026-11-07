@@ -108,6 +108,16 @@ export const conditionTrue: MutationOperator = {
       expectedSpecs: [],
     },
     {
+      name: "REFUSES a then-arm that holds a loop whose end rests on the guard",
+      sourceAL: `codeunit 51914 "C" { procedure P(Step: Integer; N: Integer) var I: Integer; begin if Step > 0 then while I < N do I += Step; end; }`,
+      expectedSpecs: [],
+    },
+    {
+      name: "REFUSES a guard on a self-call (recursion)",
+      sourceAL: `codeunit 51915 "C" { procedure Self(Level: Integer) begin if Level < 10 then Self(Level + 1); end; }`,
+      expectedSpecs: [],
+    },
+    {
       name: "REFUSES a guard holding continue in a loop",
       sourceAL: `codeunit 51912 "C" { procedure P(A: Boolean) var N: Integer; begin while N < 3 do begin if A then continue; N += 1; end; end; }`,
       expectedSpecs: [],

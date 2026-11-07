@@ -31,6 +31,17 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 - **`lethal.swap-workdate-today`, opt-in** (R856, GitHub #33). It swaps `WorkDate()` and `Today()`, and runs only when
   `--operator` names it: on a default session the two dates are equal, so nearly every site would survive. A survivor usually
   means no test depends on which date is read.
+- **`lethal.condition-true` and `lethal.blank-argument`, opt-in** (R868, GitHub #36 and #34). Both run only when `--operator`
+  names them, and a default run is unchanged: same mutants, same ordinals, same `numberingDigest`. `condition-true` turns
+  the condition of an `if` without `else` into `true`, so the then-arm always runs: a survivor means no test drives the guard
+  to false. `blank-argument` replaces a variable or field argument with its blank (`''`, `0`, `false`, `0D`) when the callee
+  is a project procedure that takes it by value. They add about 10% (DO) to 16% (DC) to a session that names both.
+  **On a run that names them, `numberingDigest` changes** (the run gains sites), and a mark without `fileSingleton` reads
+  `renumbered`. Both refuse a site a mutant could loop on or recurse through (a then-arm that restarts or steps back a
+  cursor, writes a name a loop's exit reads, or holds a loop; a parameter a callee reads in a loop, also through a copy,
+  a global or another procedure; a self-call or a call that leads back), and the refusal is counted. Name matching cannot
+  see another object or a record field: the limits are in `docs/using-lethal-from-an-agent.md`. Fixture `sandbox-optin`,
+  checked by hand on v3 and BC, not by a gate.
 
 ### Fixed
 
@@ -39,6 +50,8 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **The README's operator counts are per tier** (R868). Opt-in operators now sit in Tier 1 as well as Tier 2, so each tier's
+  default count leaves its own opt-ins out.
 - **Behaviour change: a missing dependency now stops an al-runner-v3 run by name** (R860, upstream #7139). From al-runner
   edge a461e6310, a dependency app that is not in the package folder no longer runs without it with a warning: al-runner
   stops, and LethAL stops the session at the first request with the app's name, id, publisher and version, and the fix:

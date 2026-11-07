@@ -150,6 +150,21 @@ export const blankArgument: MutationOperator = {
       expectedSpecs: [],
     },
     {
+      name: "REFUSES a copy of the parameter that a loop reads (L := Step; while ... do I += L)",
+      sourceAL: `codeunit 51933 "C" { procedure P(S: Integer) begin Q(S); end; local procedure Q(Step: Integer) var N: Integer; L: Integer; begin L := Step; while N < 9 do N += L; end; }`,
+      expectedSpecs: [],
+    },
+    {
+      name: "REFUSES the depth argument of a recursion",
+      sourceAL: `codeunit 51934 "C" { procedure Self(Level: Integer) var Next: Integer; begin Next := Level + 1; if Level < 3 then Self(Next); end; }`,
+      expectedSpecs: [],
+    },
+    {
+      name: "claims nothing at a boolean literal argument (flip-boolean-literal owns it)",
+      sourceAL: `codeunit 51935 "C" { procedure P() begin Q(true); end; local procedure Q(B: Boolean) begin end; }`,
+      expectedSpecs: [],
+    },
+    {
       name: "REFUSES a var parameter and an unknown callee",
       sourceAL: `codeunit 51931 "C" { procedure P(T: Text) begin Q(T); Unknown(T); end; local procedure Q(var X: Text) begin end; }`,
       expectedSpecs: [],
