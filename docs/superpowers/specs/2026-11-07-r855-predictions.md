@@ -95,6 +95,17 @@ Every row: X+1 -> X, test calls Step(5) and expects 6; result is 5, so killed.
 
 In a LETHALA or LETHALB build, line 17 is inactive text and these rows would not exist.
 
+**Added before any v3 run, 2026-11-07.** Legs Y-A and Y-B run those two builds, so their rows are the other arms:
+
+| build | file:line | operator | before -> after | verdict | killing test | reason |
+|---|---|---|---|---|---|---|
+| LETHALA | SymbolLogic:13 | delete-additive-right | X+ForA -> X | killed | Symbol Tests.RateSmall | Rate(1)=1, expected 11 |
+| LETHALA | SymbolLogic:13 | delete-additive-left | X+ForA -> ForA | killed | Symbol Tests.RateSmall | ForA=10, expected 11 |
+| LETHALB | SymbolLogic:15 | delete-additive-right | X+ForB -> X | killed | Symbol Tests.RateSmall | Rate(1)=1, expected 101 |
+| LETHALB | SymbolLogic:15 | delete-additive-left | X+ForB -> ForB | killed | Symbol Tests.RateSmall | ForB=100, expected 101 |
+
+So Y-A and Y-B each go 5 / 4 / 0 over 9 to 7 / 4 / 0 over 11.
+
 ## fixtures/sandbox-wrapped (tests: sandbox-wrapped-tests, "Wrapped Tests")
 
 | file:line | operator | before -> after | verdict | killing test | reason |
