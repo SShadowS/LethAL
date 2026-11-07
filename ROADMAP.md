@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**17 of 840 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**18 of 841 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -341,6 +341,7 @@ that ordering is the priority.
 - **R855** · tree-sitter-al: valid AL fails at the parser's limit of 6 parse versions when `#if`-split blocks share an `if` chain · [R855.md](docs/roadmap/R855.md) · open, filed 2026-11-06 from R853; upstream https://github.com/SShadowS/tree-sitter-al/issues/40
 - **R857** · On v3 a set WorkDate leaks across a test codeunit, while bcdev runs one method per call, so a verdict can differ · [R857.md](docs/roadmap/R857.md) · open, filed 2026-11-06 from R856
 - **R858** · `negate-conditional` and `swap-additive` can still lose a loop's progress in shapes the delete operators refuse · [R858.md](docs/roadmap/R858.md) · closed 2026-11-07 — named limit: the rule would refuse about 9 real mutants per likely hang, and no narrowing…
+- **R865** · No hang rule sees recursion: a mutant on a recursion's guard or depth can run without bound · [R865.md](docs/roadmap/R865.md) · open, filed 2026-11-07 from coord R-862
 
 ## Product gaps a real project hits
 
