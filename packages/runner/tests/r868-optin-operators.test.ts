@@ -97,12 +97,15 @@ describe("R868: the two opt-in Tier 1 operators", () => {
 
   test("admittedOperatorNames: exclusion never admits them, naming one does", () => {
     const registered = [...operatorTiers.keys()];
-    const excluded = admittedOperatorNames({ excludeOperators: ["lethal.empty-block"] }, registered);
+    const excluded = admittedOperatorNames(
+      { excludeOperators: ["lethal.empty-block"] },
+      registered,
+    );
     expect(excluded?.has(COND)).toBe(false);
     expect(excluded?.has(BLANK)).toBe(false);
-    expect([...(admittedOperatorNames({ operators: ["condition-true"] }, registered) ?? [])]).toEqual([
-      COND,
-    ]);
+    expect([
+      ...(admittedOperatorNames({ operators: ["condition-true"] }, registered) ?? []),
+    ]).toEqual([COND]);
   });
 
   test(
@@ -122,7 +125,9 @@ describe("R868: the two opt-in Tier 1 operators", () => {
         // Naming a default operator only still leaves the opt-in ones out.
         const flip = await generateMutationSet(dir, { operators: [FLIP] });
         expect(specs(flip)).toEqual(ofName(plain, FLIP));
-        expect(flip.hangRefused.some((f) => JSON.stringify(f).includes("condition-true"))).toBe(false);
+        expect(flip.hangRefused.some((f) => JSON.stringify(f).includes("condition-true"))).toBe(
+          false,
+        );
       });
     },
     ownTimeout(60_000),
@@ -155,11 +160,11 @@ describe("R868: the two opt-in Tier 1 operators", () => {
         const on = await generateMutationSet(dir, { operators: [FLIP, BLANK] });
         expect(without(on, BLANK)).toEqual(specs(flipOnly));
         // `Use(T, true)`: T blanked, the literal is flip-boolean-literal's. `Use(T, A)`: both.
-        expect(specs(on, BLANK).map((s) => s.split("|")[2]).sort()).toEqual([
-          "A->false",
-          "T->''",
-          "T->''",
-        ]);
+        expect(
+          specs(on, BLANK)
+            .map((s) => s.split("|")[2])
+            .sort(),
+        ).toEqual(["A->false", "T->''", "T->''"]);
       });
     },
     ownTimeout(60_000),
@@ -179,7 +184,9 @@ describe("R868: the two opt-in Tier 1 operators", () => {
         const condOnly = await generateMutationSet(dir, { operators: [FLIP, COND] });
         const blankOnly = await generateMutationSet(dir, { operators: [FLIP, BLANK] });
         expect(specs(on).length).toBe(
-          specs(condOnly).length + specs(blankOnly).length - specs(await generateMutationSet(dir, { operators: [FLIP] })).length,
+          specs(condOnly).length +
+            specs(blankOnly).length -
+            specs(await generateMutationSet(dir, { operators: [FLIP] })).length,
         );
       });
     },

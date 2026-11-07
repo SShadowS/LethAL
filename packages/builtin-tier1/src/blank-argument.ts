@@ -67,8 +67,12 @@ function blankFor(node: ALSyntaxNode, ctx: SemanticContext): BlankPlan | null {
   if (call.rawKind !== "call_expression" && call.rawKind !== "call_statement") return null;
   const blank = blankOf(ctx.types.typeOf(node));
   if (blank === null || node.text.trim().toLowerCase() === blank.toLowerCase()) return null;
-  const args = list.namedChildren.filter((n) => n.rawKind !== "comment" && n.rawKind !== "multiline_comment");
-  const index = args.findIndex((a) => a.startIndex === node.startIndex && a.endIndex === node.endIndex);
+  const args = list.namedChildren.filter(
+    (n) => n.rawKind !== "comment" && n.rawKind !== "multiline_comment",
+  );
+  const index = args.findIndex(
+    (a) => a.startIndex === node.startIndex && a.endIndex === node.endIndex,
+  );
   if (index < 0 || args.length !== list.namedChildren.length) return null;
   const fn = call.childForFieldName("function");
   if (fn === null) return null;

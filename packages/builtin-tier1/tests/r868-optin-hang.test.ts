@@ -94,9 +94,7 @@ describe("R868 #36 condition-true: the then-arm hang rules", () => {
 
   // ---- the three shapes the opus review proved were claimed ----
   it("REFUSES a restart of the exit's cursor: repeat if Restart then R.FindFirst(); until R.Next()=0", () => {
-    const src = ifUnit(
-      "R.FindSet(); repeat if Restart then R.FindFirst(); until R.Next() = 0;",
-    );
+    const src = ifUnit("R.FindSet(); repeat if Restart then R.FindFirst(); until R.Next() = 0;");
     expect(refusedIf(src, "Restart")).toBe(true);
     expect(claimedIf(src, "Restart")).toBe(false);
   });
@@ -151,9 +149,7 @@ describe("R868 #36 condition-true: the then-arm hang rules", () => {
   });
 
   it("REFUSES a helper that resets a name the exit reads", () => {
-    const src = ifUnit(
-      "while Counter < N do begin if Flag then ResetCounter(); Other(); end;",
-    );
+    const src = ifUnit("while Counter < N do begin if Flag then ResetCounter(); Other(); end;");
     expect(refusedIf(src, "Flag")).toBe(true);
   });
 
@@ -263,7 +259,9 @@ describe("R868 #36 condition-true: the then-arm hang rules", () => {
   });
 
   it("CLAIMS a then-arm with a cursor loop (Next) and a call that does not recurse", () => {
-    const src = ifUnit("if Flag then begin R2.FindSet(); repeat Total += 1; until R2.Next() = 0; end;");
+    const src = ifUnit(
+      "if Flag then begin R2.FindSet(); repeat Total += 1; until R2.Next() = 0; end;",
+    );
     expect(claimedIf(src, "Flag")).toBe(true);
     expect(claimedIf(ifUnit("if Flag then Other();"), "Flag")).toBe(true);
   });
@@ -409,9 +407,7 @@ describe("R868 #34 blank-argument: the callee-loop and recursion rules", () => {
   });
 
   it("REFUSES a value stored in a collection that a loop reads", () => {
-    const s = blank(
-      callUnit("Queue.Add(Step); while Queue.Count > 0 do Queue.RemoveAt(1);"),
-    );
+    const s = blank(callUnit("Queue.Add(Step); while Queue.Count > 0 do Queue.RemoveAt(1);"));
     expect(s.hang).toContain("Step");
   });
 

@@ -14,7 +14,8 @@ const optInCount = optIn1 + optIn2;
 const plusOptIn = `, plus ${optInCount} opt-in (run only when --operator names it)`;
 const defaultT1 = tier1Operators.length - optIn1;
 const defaultT2 = tier2Operators.length - optIn2;
-const expectedSummary = (): string => `${defaultT1 + defaultT2} operators, in two tiers${plusOptIn}`;
+const expectedSummary = (): string =>
+  `${defaultT1 + defaultT2} operators, in two tiers${plusOptIn}`;
 const read = (f: string): string => readFileSync(join(REPO_ROOT, f), "utf8");
 
 describe("operator tables", () => {

@@ -99,7 +99,11 @@ export function callsBackIntoEnclosing(root: ALSyntaxNode, ctx: SemanticContext)
  * that calls back to it? Then the blanked argument may be the depth that ends the recursion
  * (`Next := Level + 1; Self(Next)`).
  */
-export function calleeRecurses(call: ALSyntaxNode, calleeName: string, ctx: SemanticContext): boolean {
+export function calleeRecurses(
+  call: ALSyntaxNode,
+  calleeName: string,
+  ctx: SemanticContext,
+): boolean {
   if (!recursionRule.on) return false;
   const own = enclosingProcedureNames(call);
   const obj = objectOf(call);
@@ -219,7 +223,9 @@ const CURSOR_STEPS: ReadonlySet<string> = new Set(["next", "read", "movenext"]);
  */
 export function thenArmHangs(ifNode: ALSyntaxNode, ctx: SemanticContext): boolean {
   // Asked up to three times per site (targets, generate, refusesHangCapable).
-  return cached(ctx, ifNode, `thenArm|${recursionRule.on}`, () => thenArmHangsUncached(ifNode, ctx));
+  return cached(ctx, ifNode, `thenArm|${recursionRule.on}`, () =>
+    thenArmHangsUncached(ifNode, ctx),
+  );
 }
 
 function thenArmHangsUncached(ifNode: ALSyntaxNode, ctx: SemanticContext): boolean {
@@ -369,7 +375,11 @@ function calleeLoopUncached(proc: ALSyntaxNode, param: string, ctx: SemanticCont
       args.forEach((a, i) => {
         let uses = false;
         visitAll(a, (x) => {
-          if (isIdentifierLike(x) && x.fieldName !== "member" && tainted.has(normalizeAlName(x.text))) {
+          if (
+            isIdentifierLike(x) &&
+            x.fieldName !== "member" &&
+            tainted.has(normalizeAlName(x.text))
+          ) {
             uses = true;
           }
         });
@@ -377,7 +387,11 @@ function calleeLoopUncached(proc: ALSyntaxNode, param: string, ctx: SemanticCont
         for (const inner of byName.get(callee) ?? []) {
           const params = parameterNames(inner);
           const target = params[i];
-          if (params.length === args.length && target !== undefined && walk(inner, target, depth + 1)) {
+          if (
+            params.length === args.length &&
+            target !== undefined &&
+            walk(inner, target, depth + 1)
+          ) {
             hit = true;
           }
         }
