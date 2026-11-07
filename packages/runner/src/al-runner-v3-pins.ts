@@ -210,8 +210,8 @@ const ALPHA5_READINGS: Pick<V3BuildPin, "legC" | "legT" | "xb"> = {
       killingTest: null,
       issue: `${REPO}/5788`,
     })),
-    counts: { killed: 290, survived: 50, noCoverage: 59 },
-    total: 406,
+    counts: { killed: 298, survived: 53, noCoverage: 60 },
+    total: 418,
   },
   xb: { exitCode: 3, passed: 0, notRun: 0 },
 };
@@ -650,8 +650,8 @@ const READINGS_8078BCF49: Omit<V3BuildPin, "id" | "version" | "binarySha256"> = 
   },
   legT: {
     rows: T_ROWS_8078BCF49,
-    counts: { killed: 318, survived: 70, noCoverage: 18 },
-    total: 406,
+    counts: { killed: 326, survived: 73, noCoverage: 19 },
+    total: 418,
     refusedTests: 0,
   },
   xb: { exitCode: 3, passed: 0, notRun: 0 },

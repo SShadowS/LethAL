@@ -293,7 +293,7 @@ function differenceKey(d: string, keys: ReadonlySet<string>): string | undefined
  * difference that is not a row become `lines`, one receipt line each. Then, first failure wins:
  * 1. Sleep index 0 + 0; 2. `unsupportedTests` 3; 3. the pinned 52 (`knownRefusal`); 4. the
  * classification: `gate-fail`; `held` only past R556's bare-hash refusal (R650) and when the compare's differing keys EQUAL the held keys
- * (no count check, I2); `pass` only with 0 compare differences, then 290 / 57 / 59 over 406. The
+ * (no count check, I2); `pass` only with 0 compare differences, then 298 / 60 / 60 over 418. The
  * caller's `assertGateBaseline` compare follows a `pass`.
  */
 type LegTJudgement = {
@@ -323,7 +323,7 @@ const WORSENESS = { pass: 0, held: 1, "gate-fail": 2 } as const;
  * (all seven `survived`) is never a pass on a pinned build.
  */
 function judgeLegTPinned(i: LegTInput, pin: LegTPinInput): LegTJudgement {
-  const today = judgeLegTCore(i, { killed: 290, survived: 57, noCoverage: 59, total: 406 });
+  const today = judgeLegTCore(i, { killed: 298, survived: 60, noCoverage: 60, total: 418 });
   // The headline names the pin miss; today's (unpinned) failure is context only, because on a build whose
   // pin moves a figure (edge-8078bcf49's 0 refused tests) today's judgement always fails on that figure.
   const mismatch = (reason: string): LegTJudgement => ({
@@ -408,7 +408,7 @@ function judgeLegTCore(
     readonly total: number;
     /** The refused tests (`unsupportedTests`): 3 unless a build pin says otherwise (edge-8078bcf49). */
     readonly refusedTests?: number;
-  } = { killed: 290, survived: 57, noCoverage: 59, total: 406 },
+  } = { killed: 298, survived: 60, noCoverage: 60, total: 418 },
 ): LegTJudgement {
   const { rows } = i.classification;
   const lines = rows.map((r) => formatLegTRow(r, i.codes.get(r.key)));
