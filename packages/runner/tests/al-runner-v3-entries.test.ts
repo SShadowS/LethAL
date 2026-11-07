@@ -26,6 +26,7 @@ import {
   AL_RUNNER_V3_VERSION,
   AlRunnerV3Backend,
   type AlRunnerV3Config,
+  AlRunnerV3DependencyMissingError,
   AlRunnerV3DependencySkippedError,
   AlRunnerV3NoTestRanError,
   AlRunnerV3RowMissingError,
@@ -1123,6 +1124,57 @@ describe("R590: the daemon's stderr is read after every request", () => {
     skip = true;
     await expect(r.b.sendKillPair("M0001", ref("A"))).rejects.toBeInstanceOf(
       AlRunnerV3DependencySkippedError,
+    );
+  });
+
+  // R860 (upstream #7139): the refusal line serve wrote for a build that stops on a missing app.
+  const STOP =
+    "1 dependency app(s) were not found and --no-download is set, so the run would use a different install than a run with the apps:\n  dependency `D` by X (00000000-0000-0000-0000-000000000001) version 1.0.0.0 or higher was not found; searched: /p";
+
+  test("R860: serve's error line for a missing dependency stops the session by name, on a live request and at the warm-up", async () => {
+    let stop = false;
+    const r = await readyRig({
+      serve: {
+        rows: killsM1,
+        answer: () => (stop ? { lines: [{ error: STOP }] } : undefined),
+      },
+      mutants: ["M0002"],
+    });
+    stop = true;
+    await r.b.activate("M0001");
+    const err = await r.b.run(ref("A"), OPTS).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AlRunnerV3DependencyMissingError);
+    expect(String(err)).toContain('"D" by X');
+    expect(String(err)).toContain("packagesDir");
+    const w = await rig({ serve: { rows: killsM1, answer: () => ({ lines: [{ error: STOP }] }) } });
+    await baseline(w.b, SUITE1);
+    await expect(w.b.prefetchMutants(plans(["M0001"]))).rejects.toBeInstanceOf(
+      AlRunnerV3DependencyMissingError,
+    );
+    // Any other error line keeps its old handling.
+    const o = await rig({
+      serve: { rows: killsM1, answer: () => ({ lines: [{ error: "boom" }] }) },
+    });
+    await baseline(o.b, SUITE1);
+    await o.b.prefetchMutants(plans(["M0001"])).catch((e: unknown) => {
+      expect(e).not.toBeInstanceOf(AlRunnerV3DependencyMissingError);
+    });
+  });
+
+  test("R860: serve's missing-dependency line on a kill pair stops the session (never the pair-skipped warning)", async () => {
+    let stop = false;
+    const r = await readyRig({
+      serve: {
+        rows: killsM1,
+        answer: () => (stop ? { lines: [{ error: STOP }] } : undefined),
+      },
+      mutants: ["M0001"],
+    });
+    await r.b.activate("M0001");
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("fail");
+    stop = true;
+    await expect(r.b.sendKillPair("M0001", ref("A"))).rejects.toBeInstanceOf(
+      AlRunnerV3DependencyMissingError,
     );
   });
 

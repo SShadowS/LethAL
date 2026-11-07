@@ -1730,6 +1730,27 @@ describe("R590 dependency-skip-line: v3 says when it leaves a dependency out", (
     });
   }
 
+  // R860 (upstream #7139): the text edge a461e6310 wrote, measured with its binary.
+  const STOP_STDERR =
+    "error: 1 dependency app(s) were not found and --no-download is set, so the run would use a different install than a run with the apps:\n  dependency `LethAL R590 Absent` by LethAL (7a1c0e52-5b8e-4d3a-9f60-2c7b8e1d2590) version 1.0.0.0 or higher was not found; searched: /fake/pkgs\nAdd the app to a --dep folder or the cache, or pass --allow-missing-dependencies to skip it with a warning.\n";
+
+  test("R860: the new form (exit 2, stderr names the app) matches too, and leg C passes", async () => {
+    const r = await probe({ cu50662: runs(STOP_STDERR, 2) });
+    expect(r.facts.find((f) => f.fact === F)?.verdict).toBe("matches");
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("pass");
+  });
+
+  test("R860: exit 2 without the app's name, exit 0 with no line, and the name with exit 1 all diverge", async () => {
+    const r = await probe({
+      cu50662: runs("error: 1 dependency app(s) were not found and --no-download is set\n", 2),
+    });
+    expect(r.facts.find((f) => f.fact === F)?.verdict).toBe("diverged");
+    const quiet = await probe({ cu50662: runs("", 0) });
+    expect(quiet.facts.find((f) => f.fact === F)?.verdict).toBe("diverged");
+    const one = await probe({ cu50662: runs(STOP_STDERR, 1) });
+    expect(one.facts.find((f) => f.fact === F)?.verdict).toBe("diverged");
+  });
+
   test("a call that did not run: unmeasurable, never matches", async () => {
     const r = await probe({ cu50662: runs("spawn failed", -1) });
     expect(r.facts.find((f) => f.fact === F)?.verdict).toBe("unmeasurable");

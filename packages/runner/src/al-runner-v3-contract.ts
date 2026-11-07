@@ -1541,17 +1541,19 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
     const skipLines = v3DependencySkipLines(ds.stderr).filter((l) =>
       l.startsWith("dependency skipped:"),
     );
+    // R860 (upstream #7139): TWO forms are accepted, because the backend stops the session on both.
+    // Builds up to d72d3197d run on and print the `dependency skipped:` line (R590); from a461e6310 on
+    // v3 stops instead: exit 2, stderr names the app (`serve` answers with an error line; the backend
+    // reads that). Every pinned build reads the old form and must keep matching.
+    const stopsByName = ds.exitCode === 2 && ds.stderr.includes(ABSENT_DEP.name);
+    const skipsByName = skipLines.some((l) => l.includes(ABSENT_DEP.name));
     facts.push(
       fact(
         "dependency-skip-line",
         "contract",
-        ds.exitCode === -1
-          ? "unmeasurable"
-          : skipLines.some((l) => l.includes(ABSENT_DEP.name))
-            ? "matches"
-            : "diverged",
-        `stderr has a line starting "dependency skipped:" that names ${ABSENT_DEP.name}`,
-        `exit ${ds.exitCode}; ${skipLines.length > 0 ? JSON.stringify(skipLines[0]) : `no such line; stderr ${JSON.stringify(ds.stderr.slice(-300))}`}`,
+        ds.exitCode === -1 ? "unmeasurable" : skipsByName || stopsByName ? "matches" : "diverged",
+        `stderr has a line starting "dependency skipped:" that names ${ABSENT_DEP.name}, OR the run stops with exit 2 and stderr names ${ABSENT_DEP.name} (R860)`,
+        `exit ${ds.exitCode}; ${skipLines.length > 0 ? JSON.stringify(skipLines[0]) : stopsByName ? `stopped by name: ${JSON.stringify(ds.stderr.slice(0, 300))}` : `no such line; stderr ${JSON.stringify(ds.stderr.slice(-300))}`}`,
       ),
     );
     // serve-keep-reasons (R612): GATE-ONLY, like timeout-is-cpu. M-2: a gate passes whatever this

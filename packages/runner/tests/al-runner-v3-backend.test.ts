@@ -23,6 +23,7 @@ import {
   AL_RUNNER_V3_VERSION,
   AlRunnerV3Backend,
   type AlRunnerV3Config,
+  AlRunnerV3DependencyMissingError,
   AlRunnerV3DependencySkippedError,
   AlRunnerV3NoTestRanError,
   AlRunnerV3ResourceSelectorRefusedError,
@@ -1495,6 +1496,43 @@ describe("§4 selection, the cache and T5 / T21 / T28 / T29", () => {
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(AlRunnerV3DependencySkippedError);
     expect(String(err)).toContain("--verbose");
+  });
+
+  test("R860: v3 stopping on a missing dependency (exit 2) stops the session by name, once, with no allow flag", async () => {
+    const l = await layout();
+    const text =
+      "error: 1 dependency app(s) were not found and --no-download is set, so the run would use a different install than a run with the apps:\n  dependency `R860 Dep` by LethAL R860 (9b3e6c1a-2f47-4d8e-a5b0-860a00000001) version 2.0.0.0 or higher was not found; searched: pkgsM\nAdd the app to a --dep folder or the cache, or pass --allow-missing-dependencies to skip it with a warning.\n";
+    const v3 = fakeV3(allPass, { exit: 2, stdout: "", stderr: () => text });
+    const b = backendOf(l, v3.spawn, fakeAlc().io);
+    await b.deploy(l.batch);
+    const err = await b
+      .run(ref("A"), { coverage: "none", timeoutMs: 1000 })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AlRunnerV3DependencyMissingError);
+    expect(err).not.toBeInstanceOf(AlRunnerV3DependencySkippedError);
+    const msg = String(err);
+    for (const part of [
+      "R860 Dep",
+      "LethAL R860",
+      "9b3e6c1a-2f47-4d8e-a5b0-860a00000001",
+      "2.0.0.0",
+      "packagesDir",
+    ])
+      expect(msg).toContain(part);
+    // Not retried: one spawn, and never the allow flag.
+    expect(v3.calls).toHaveLength(1);
+    expect(v3.calls.flat().some((a) => a.includes("allow-missing-dependencies"))).toBe(false);
+    // Exit 2 with other text is not this refusal.
+    const other = backendOf(
+      l,
+      fakeV3(allPass, { exit: 2, stdout: "", stderr: () => "error: something else\n" }).spawn,
+      fakeAlc().io,
+    );
+    await other.deploy(l.batch);
+    const e2 = await other
+      .run(ref("A"), { coverage: "none", timeoutMs: 1000 })
+      .catch((e: unknown) => e);
+    expect(e2).not.toBeInstanceOf(AlRunnerV3DependencyMissingError);
   });
 
   test("R590 near misses: the words mid-line, and System's optional-root note, score the row as before", async () => {
