@@ -12,7 +12,7 @@ its paired `.vscode/launch.<x>.json` (see [servers.md](servers.md)).
 {
   "gate": "itest:bcdev",
   "baselines": {
-    "bcdev.baseline.json": { "killed": 3, "survived": 12, "no-coverage": 4 }
+    "bcdev.baseline.json": { "killed": 3, "survived": 14, "no-coverage": 5 }
   },
   "constants": {
     "BCDEV_FIGURES.totalMutantSites": 22,

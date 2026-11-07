@@ -24,7 +24,7 @@ mutated rows for its killing test.
 {
   "gate": "itest:bcdev-names",
   "baselines": {
-    "bcdev.names.baseline.json": { "killed": 36 }
+    "bcdev.names.baseline.json": { "killed": 48 }
   },
   "constants": {
     "NAMES_TABLE.length": 12

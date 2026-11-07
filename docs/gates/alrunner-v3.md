@@ -539,12 +539,12 @@ Leg T is judged against the committed alpha.2 baseline with the pinned keys over
 {
   "gate": "itest:alrunner-v3",
   "baselines": {
-    "al-runner-v3.tables.baseline.json": { "killed": 290, "survived": 57, "no-coverage": 59 },
-    "al-runner-v3.layout.baseline.json": { "killed": 7, "survived": 3 },
-    "al-runner-v3.symbols-lethala.baseline.json": { "killed": 5, "survived": 4 },
-    "al-runner-v3.symbols-lethalb.baseline.json": { "killed": 5, "survived": 4 },
-    "al-runner-v3.multiobject.baseline.json": { "killed": 6, "survived": 1, "no-coverage": 5 },
-    "al-runner-v3.wrapped.baseline.json": { "killed": 58, "survived": 37, "no-coverage": 3 }
+    "al-runner-v3.tables.baseline.json": { "killed": 298, "survived": 60, "no-coverage": 60 },
+    "al-runner-v3.layout.baseline.json": { "killed": 8, "survived": 3 },
+    "al-runner-v3.symbols-lethala.baseline.json": { "killed": 7, "survived": 4 },
+    "al-runner-v3.symbols-lethalb.baseline.json": { "killed": 7, "survived": 4 },
+    "al-runner-v3.multiobject.baseline.json": { "killed": 7, "survived": 1, "no-coverage": 6 },
+    "al-runner-v3.wrapped.baseline.json": { "killed": 62, "survived": 37, "no-coverage": 3 }
   }
 }
 ```

@@ -12,7 +12,7 @@ mutant equal to its baseline, with the W1 company (R-583).
 {
   "gate": "itest:tables",
   "baselines": {
-    "tables.baseline.json": { "killed": 314, "survived": 70, "no-coverage": 22 }
+    "tables.baseline.json": { "killed": 322, "survived": 73, "no-coverage": 23 }
   },
   "constants": {
     "TABLES_FIGURES.totalMutantSites": 440,

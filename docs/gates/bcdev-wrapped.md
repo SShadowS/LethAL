@@ -21,7 +21,7 @@ in `#if` blocks. It runs two legs, one session each: `coverageMode: "fenced"` an
 {
   "gate": "itest:bcdev-wrapped",
   "baselines": {
-    "bcdev.wrapped.baseline.json": { "killed": 60, "survived": 38 }
+    "bcdev.wrapped.baseline.json": { "killed": 64, "survived": 38 }
   }
 }
 ```
