@@ -1885,7 +1885,10 @@ async function legXSleep(scratch: string): Promise<void> {
   const mustD = (cond: boolean, what: string): void => must(cond, xdFailure(what, sleeper));
   const idx = b.sleepIndexSize();
   console.log(`  X (d): Sleep index ${idx?.target} + ${idx?.test}`);
-  must(idx?.target === 1 && idx?.test === 5, `X (d): Sleep index ${JSON.stringify(idx)}, R827 1 + 5`);
+  must(
+    idx?.target === 1 && idx?.test === 5,
+    `X (d): Sleep index ${JSON.stringify(idx)}, R827 1 + 5`,
+  );
   // r6 (c), restated by r11 (b): on alpha.2 every ProbeSleep test passes; on edge the three 600 s
   // siblings are timeout rows. A timeout is not a refusal, so no ProbeSleep test is unsupported on either.
   must(
@@ -2094,9 +2097,9 @@ async function legD(scratch: string, leg: "D1" | "D1c"): Promise<void> {
   );
   const STATE = [
     ...Array.from({ length: 30 }, (_, i) => `0/M${String(i + 1).padStart(4, "0")}`),
-    ...[35, 38, 39, 41, 44, 45, 46, 47, 48, 49, 51, 52, 53, 54, 55, 56, 58, 60, 61, 62, 63].map(
-      (n) => `0/M${String(n).padStart(4, "0")}`,
-    ),
+    ...[
+      35, 36, 37, 38, 39, 41, 44, 45, 46, 47, 48, 49, 51, 52, 53, 54, 55, 56, 58, 60, 61, 62, 63,
+    ].map((n) => `0/M${String(n).padStart(4, "0")}`),
   ].sort();
   const got = tagged(r, V3_STATE_NOTE_TAG);
   console.log(`  ${leg}: state notes ${got.length}`);
