@@ -21,6 +21,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   `CopyStr(S, A - B)`, `Power(2, A - B)` or `Arr[I - 1]`, can raise where the original did not: that is ordinary changed
   behaviour, and a raised error is a real kill if a test sees it. A divisor is refused. `Days := EndDate - StartDate + 1`
   gets no mutant: the type table reads `Date - Date` as `Date`.
+- **`swap-call-arguments` claims member arguments** (R856, GitHub #42). `Rec.Field` on a declared record variable now pairs
+  with a variable or another field of the same type. A call with a bare pair keeps that pair, so no existing mutant changes.
+  Option fields, FlowFields and FlowFilters are refused. The operator is 1.1.0, and the identity key holds only the major.
+- **`lethal.swap-workdate-today`, opt-in** (R856, GitHub #33). It swaps `WorkDate()` and `Today()`, and runs only when
+  `--operator` names it: on a default session the two dates are equal, so nearly every site would survive. A survivor usually
+  means no test depends on which date is read.
 
 ### Fixed
 
