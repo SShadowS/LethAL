@@ -55,6 +55,7 @@ describe("R654 S2: the leg sets", () => {
       "N1E", // R722: also in V3_GATE_LEGS (alpha.2 reads pass, not applicable)
       "N1S", // R763: also in V3_GATE_LEGS (alpha.2 reads pass, not applicable)
       "O1", // R784: also in V3_GATE_LEGS (alpha.2 reads pass, not applicable)
+      "ISO", // R857: not in V3_GATE_LEGS, so a build gated before it stays gated
       "X",
       "L1",
       "Y-A",
@@ -72,6 +73,7 @@ describe("R654 S2: the leg sets", () => {
       "N1E",
       "N1S",
       "O1",
+      "ISO",
       "X",
       "L1",
       "Y-A",
@@ -130,6 +132,7 @@ describe("R654 S2, condition (1): on a candidate K is skipped with its summary, 
   const SELECTED = v3DefaultLegs({ cdo: true, tables: true });
   const candidateLegs = (k: string | undefined) => ({
     ...Object.fromEntries(V3_GATE_LEGS.map((l) => [l, "pass"])),
+    ISO: "pass", // R857: a default leg outside V3_GATE_LEGS
     ...(k !== undefined ? { K: k } : {}),
   });
 

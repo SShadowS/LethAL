@@ -49,6 +49,8 @@ if (!redirected) {
 }
 const fake = join(runDir, "home");
 mkdirSync(fake);
+// R867: a lane's env must not reach a test. CI has none, so a test that read it would pass there only.
+Reflect.deleteProperty(process.env, "LETHAL_COORD_ROOT");
 process.env.LETHAL_TEST_FAKE_HOME = fake;
 process.env.USERPROFILE = fake;
 process.env.HOME = fake;

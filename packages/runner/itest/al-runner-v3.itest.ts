@@ -120,6 +120,8 @@ import {
 } from "./al-runner-v3-gate";
 import { TABLES_KNOWN_DIFFERENCES } from "./al-runner-v3-tables-known";
 import {
+  ISO_CODEUNIT,
+  ISO_PROBE_AL,
   type N1EReading,
   type O1Request,
   type O1SeedRequest,
@@ -128,6 +130,7 @@ import {
   O1_SEED_CODEUNIT,
   O1_SEED_TEST,
   type V3RowFacts,
+  V3_ISO_LEG,
   V3_K_CANDIDATE_SKIP,
   V3_K_LEG,
   V3_MO_KILLERS,
@@ -140,6 +143,7 @@ import {
   combineO1Sets,
   isNoServeRefusal,
   isSessionTestCall,
+  judgeIsolateProbe,
   judgeKillers,
   judgeLegK,
   judgeN1Serve,
@@ -938,6 +942,70 @@ async function o1SeedCheck(
       return { outcome: "gate-fail", lines: [`seed read-back refused: ${e.message}`] };
     throw e;
   }
+}
+
+/** R857: leg ISO (`V3_ISO_LEG`): one daemon, a whole-codeunit entry, then each test alone. */
+async function legISO(scratch: string, version: string): Promise<void> {
+  const cache = await microsoftDeps(scratch);
+  const tests = join(scratch, "sandbox-order-tests");
+  await cp(fixture("sandbox-order-tests"), tests, { recursive: true });
+  await writeFile(join(tests, "src", "IsolateProbe.al"), ISO_PROBE_AL);
+  const server = new AlRunnerServer(
+    BIN,
+    (argv) =>
+      defaultServerSpawn(argv, {
+        cwd: scratch,
+        env: v3ChildEnv({ ALRUNNER_CACHE: resolve(CACHE) }),
+      }),
+    [],
+    "serve",
+  );
+  const body = {
+    command: "runTests",
+    sourcePaths: [fixture("sandbox-order"), tests],
+    testIsolation: SERVE_TEST_ISOLATION,
+  };
+  const cu = `Codeunit${ISO_CODEUNIT}.`;
+  let why: string | undefined;
+  try {
+    try {
+      await server.start(300_000, [resolve(cache)], 60, [
+        "--bc-version",
+        SANDBOX_BC,
+        "--no-download",
+      ]);
+      const whole = await server.runEntries(
+        { ...body, entries: [{ id: "whole", test: cu }] },
+        600_000,
+      );
+      const alone = await server.runEntries(
+        {
+          ...body,
+          runSelectedOnly: true,
+          entries: [
+            { id: "w", test: `${cu}W1SetDate` },
+            { id: "r", test: `${cu}R2ReadDate` },
+          ],
+        },
+        600_000,
+      );
+      why = judgeIsolateProbe(
+        whole.tests as { name?: string; message?: string }[],
+        alone.tests as { name?: string; message?: string }[],
+      );
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (isNoServeRefusal(version, msg)) {
+        console.log("  ISO: not applicable: this build has no serve-entries path");
+        return;
+      }
+      throw new V3LegEnvironment(`ISO: the daemon could not run: ${msg.slice(0, 600)}`);
+    }
+  } finally {
+    await server.close();
+  }
+  if (why !== undefined) throw new LegFailure(why);
+  console.log("  ISO: the control leaks, and a test run alone does not");
 }
 
 /**
@@ -2315,6 +2383,7 @@ async function main(): Promise<void> {
         else if (leg === V3_N1E_LEG) await legN1E(scratch, version);
         else if (leg === V3_N1S_LEG) await legN1S(scratch, version);
         else if (leg === V3_O1_LEG) await legO1(scratch, version);
+        else if (leg === V3_ISO_LEG) await legISO(scratch, version);
         else if (leg === "X") await legX(scratch, (l) => lines.push(l));
         else if (leg === "D1" || leg === "D1c") await legD(scratch, leg);
         // R654 S2: each leg checks its pre-committed table FIRST (gate-fail on a difference, and

@@ -67,6 +67,44 @@ export interface SentEntry {
   readonly echo: boolean;
   readonly resources: Readonly<Record<string, string>>;
   readonly test: string;
+  /** R857: `--isolate-tests` only: the call id of the one test this entry runs (see `callOf`). */
+  readonly call?: number;
+  /** R857: `--isolate-tests` only: the longer test names that `test` would also select. */
+  readonly excludeTests?: readonly string[];
+}
+
+/** The key an entry's rows are kept under: its codeunit, or under `--isolate-tests` its one test. */
+export const callOf = (e: SentEntry): number => e.call ?? e.codeunit;
+
+/** R857: what one test's request selects. `test` matches by text, so it needs `excludeTests`. */
+export interface IsolatedSelection {
+  readonly codeunit: number;
+  readonly test: string;
+  readonly excludeTests?: readonly string[];
+}
+
+/**
+ * R857: selects exactly `method` of `codeunit`. Measured on edge 6bb821b98: `Codeunit1.Alpha` also
+ * selects `AlphaTwo`, in any case, so every other test whose name starts with it is excluded.
+ * `others` are the codeunit's discovered methods; a test discovery did not see gives a second row,
+ * which `suiteMissing` refuses.
+ */
+export function isolatedSelection(
+  codeunit: number,
+  method: string,
+  others: readonly string[],
+): IsolatedSelection {
+  const name = `Codeunit${codeunit}.${method}`;
+  const lower = method.toLowerCase();
+  const longer = others.filter((o) => {
+    const m = o.toLowerCase();
+    return m !== lower && m.startsWith(lower);
+  });
+  return {
+    codeunit,
+    test: name,
+    ...(longer.length > 0 ? { excludeTests: longer.map((o) => `Codeunit${codeunit}.${o}`) } : {}),
+  };
 }
 
 /** §3: a request that breaks the encoder's rules. A caller-contract violation: the session stops. */
@@ -92,8 +130,16 @@ export class AlRunnerV3EntriesRefusedError extends Error {
   }
 }
 
-/** §3: the entries of `groups`, in order, each group's echo first; checked before it is returned. */
-export function encodeGroups(groups: readonly EntryGroup[], echoCodeunit: number): SentEntry[] {
+/**
+ * §3: the entries of `groups`, in order, each group's echo first; checked before it is returned.
+ * R857: `isolated` turns a call id of a group into its one test; absent, or `undefined` for an id,
+ * the id is a codeunit.
+ */
+export function encodeGroups(
+  groups: readonly EntryGroup[],
+  echoCodeunit: number,
+  isolated?: (call: number) => IsolatedSelection | undefined,
+): SentEntry[] {
   const out: SentEntry[] = [];
   for (const g of groups) {
     const resources = { [SELECTOR_RESOURCE_NAME]: g.mutantId };
@@ -108,6 +154,21 @@ export function encodeGroups(groups: readonly EntryGroup[], echoCodeunit: number
       test: `Codeunit${echoCodeunit}.`,
     });
     for (const cu of g.codeunits) {
+      const one = isolated?.(cu);
+      if (one !== undefined) {
+        out.push({
+          id: `${key}|${one.codeunit}|${Math.abs(cu)}`,
+          mutantId: g.mutantId,
+          key,
+          codeunit: one.codeunit,
+          echo: false,
+          resources,
+          test: one.test,
+          call: cu,
+          ...(one.excludeTests !== undefined ? { excludeTests: one.excludeTests } : {}),
+        });
+        continue;
+      }
       out.push({
         id: `${key}|${cu}`,
         mutantId: g.mutantId,

@@ -603,6 +603,7 @@ Cost and recovery:
 | `--retry-stranded` | `false` | On resume, retry mutants that left the server stuck. Skipped by default: a mutant that never terminates blocks every mutant behind it |
 | `--allow-large-run` | `false` | Run more than 1,000 mutation sites |
 | `--workers <n>` | `1` | Must be 1; above 1 is refused for every backend |
+| `--isolate-tests` | `false` | `al-runner-v3` only: run every test alone. Refused on `bcdev` and where serve-entries is not available. Slower, and a run with it shares nothing with a run without it. See [Limits](#limits) |
 
 Environment and output:
 
@@ -839,7 +840,16 @@ a LethAL feature or a mode.
     `error`; one in a dependency is not caught.
   - `serve-entries` is the default transport where it is proven (R761). A config with no `"transport"` key falls back to one-shot, with the warning `al-runner-v3-serve-default-fallback`, for a `--resume` session, a multi-object or `#if`-wrapped file, a test name shape not yet proven under serve, or a build with no serve path. An explicit `"transport"` is always honoured, except that an explicit `serve-entries` with a dotted test method name is refused before any test runs (#5798, R722).
 
-  Selecting one test runs its whole codeunit (#5611), so LethAL makes one call per test codeunit
+  `--isolate-tests` (R857, off by default) runs every test alone, so a work date, a language, a
+  codeunit variable, a SingleInstance codeunit or a bound subscriber an earlier test left behind
+  does not reach it. Use it when a survivor or a kill may depend on test order. It fixes the
+  common `IsInitialized` setup: a whole-codeunit run on v3 skips `Initialize` in the second test
+  and rolls the first test's rows back, so that test fails on v3 and passes on BC. It is slower: a
+  baseline is one process per test (75 s against 5 s for 21 tests on a loaded machine), and a
+  resume runs the baseline again. It does not make v3 equal to BC: LethAL's grouped calls on BC
+  keep the language and SingleInstance state between tests, where the mode starts each test fresh.
+
+  Selecting one test runs its whole codeunit (#5611), so without that flag LethAL makes one call per test codeunit
   and notes a kill made after another covering test of that codeunit. Tests v3 does not run
   (`notRun`, for example `Commit()` under per-test isolation, #5607) are never killed and never
   survived. Coverage is on for a project holding a multi-object file or a single-wrapper `#if` object
