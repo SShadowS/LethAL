@@ -85,13 +85,13 @@ This addendum was written after lethal-code's full v3 gate at 88f67370 stopped o
 
 Leg T's counts moved, so the hand pins' digest moved from `18793d7f161dba8071a394cab44b98dd3f59fb15e47cb1b057a4fa227030ccef` to `f3d2aede5f3d8273b616237d80b7c0a72e18be71acf4f169999fb6882066872e` (`--pin-digests`), and `r814-gated-builds.test.ts` fails until a person deals with the rows. No scripted route does that before a merge: [[R859]]. Written before any row is edited. The `current` pin itself does not move.
 
-Each row changes only after its own full v3 gate passes at 88f673709002fbcf0769ad5d3108404ee59e1d57, with the row's binary. A row whose gate does not pass is not edited, and comes back to the orchestrator. Edited with the Edit tool, in `packages/runner/src/al-runner-v3-gated-builds.json`.
+Each row changes only after its own full v3 gate passes at 57bacf8107236a850634cdbbb55ebc8234d59d92 (first written for 88f67370, whose gate stopped on the legs above; the digest is the same at both), with the row's binary. A row whose gate does not pass is not edited, and comes back to the orchestrator. Edited with the Edit tool, in `packages/runner/src/al-runner-v3-gated-builds.json`.
 
 | row | readingsDigest, old | readingsDigest, new | lethalCommit, old | lethalCommit, new | gate |
 |---|---|---|---|---|---|
-| `alpha.12-d4bc8d3a5` | 18793d7f | f3d2aede | a7ac7f500c | 88f67370 | its kept binary, candidate mode with K, by its own hand pin |
-| `alpha.13-23e7631be` | 18793d7f | f3d2aede | 25a2f95fbe | 88f67370 | its kept binary, candidate mode with K, `LETHAL_V3_PIN_FROM=edge-d72d3197d` |
-| `edge-a0825f1d9` (`current`) | 18793d7f | f3d2aede | 25a2f95fbe | 88f67370 | the same gate, on `current` |
+| `alpha.12-d4bc8d3a5` | 18793d7f | f3d2aede | a7ac7f500c | 57bacf81 | its kept binary, candidate mode with K, by its own hand pin |
+| `alpha.13-23e7631be` | 18793d7f | f3d2aede | 25a2f95fbe | 57bacf81 | its kept binary, candidate mode with K, `LETHAL_V3_PIN_FROM=edge-d72d3197d` |
+| `edge-a0825f1d9` (`current`) | 18793d7f | f3d2aede | 25a2f95fbe | 57bacf81 | the same gate, on `current` |
 | `edge-a0189c004` | 18793d7f | row removed | 25a2f95fbe | row removed | none: an old edge row can only be removed |
 
 `gatedAt` takes each pass's time, and `version`, `binarySha256`, `tag`, `track`, `readingsFrom` and `warnFacts` stay.
