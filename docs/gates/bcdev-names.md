@@ -32,12 +32,10 @@ mutated rows for its killing test.
 }
 ```
 
-All 36 mutants are killed (3 operators on each of 12 procedures). Each must match
-`docs/superpowers/specs/2026-10-09-r557-names-precommitment.md` in verdict and killing test.
-
-R855 (PREDICTED, not yet run) adds a fourth operator, `delete-additive-right`, on each procedure: 48 mutants,
-all killed. The `baselines` line above and the 36 in this text stay at the committed baseline until it is
-re-recorded.
+All 48 mutants are killed (4 operators on each of 12 procedures). Each must match
+`docs/superpowers/specs/2026-10-09-r557-names-precommitment.md` in verdict and killing test, and R855's
+`docs/superpowers/specs/2026-11-07-r855-predictions.md` for the fourth, `delete-additive-right`, recorded
+on bc3, 2026-11-07.
 
 ## History
 
