@@ -342,7 +342,8 @@ export const GATE_WARNINGS: Readonly<Record<string, readonly string[]>> = {
   "al-runner-v3/S1": [],
   "al-runner-v3/N1": [],
   "al-runner-v3/x-s1": [],
-  "al-runner-v3/L1": [],
+  // R855: Layout Beta now has 8 guards against the leg's budget of 7 (pre-committed, 2026-11-07-r855-operator-batch-precommitment.md).
+  "al-runner-v3/L1": ["oversized-batch"],
   "al-runner-v3/MO": [],
   "al-runner-v3/K": [],
   "al-runner-v3/S1E": [],

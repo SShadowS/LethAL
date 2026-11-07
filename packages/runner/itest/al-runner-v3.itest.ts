@@ -604,7 +604,7 @@ async function legS1(scratch: string, leg: "S1" | "S1E" = "S1", version = ""): P
     }
     throw e;
   }
-  assertCounts(r, leg, 3, 12, 4, 19);
+  assertCounts(r, leg, 3, 14, 5, 22);
   await assertPerMutant(r, join(HERE, "bcdev.baseline.json"), leg);
   must(
     r.baselineGreen && r.unsupportedTests.length === 0,
@@ -691,7 +691,7 @@ async function legN1(scratch: string): Promise<void> {
     testDir: fixture("sandbox-names-tests"),
     selectorIds: { selectorId: 78849, controlId: 78848, tableId: 78847 },
   });
-  assertCounts(r, "N1", 36, 0, 0, 36);
+  assertCounts(r, "N1", 48, 0, 0, 48);
   await assertPerMutant(r, join(HERE, "bcdev.names.baseline.json"), "N1");
   must(
     r.baselineGreen && r.unsupportedTests.length === 0,
@@ -713,7 +713,7 @@ async function legN1(scratch: string): Promise<void> {
  * R722 (pre-commitment r19): N1's project under serve-entries, whatever the run's own transport is.
  * The reading is `judgeN1Serve`'s: on alpha.5 the session fails closed by name (#5798); anything
  * else is `held` (re-pre-commit) or `gate-fail`, never a silent pass. R782: on a build whose pin
- * records #5798 fixed the session must COMPLETE, 36/0/0 over 36, per mutant equal to N1's baseline.
+ * records #5798 fixed the session must COMPLETE, 48/0/0 over 48 (R855: was 36), per mutant equal to N1's baseline.
  */
 async function legN1E(scratch: string, version: string): Promise<void> {
   const deps = await microsoftDeps(scratch);
@@ -749,7 +749,7 @@ async function legN1E(scratch: string, version: string): Promise<void> {
   // R782: a flagged build completed the dotted test; it must read exactly as N1 (one-shot, bcdev).
   if (flagged && "completed" in reading && lastReport !== undefined) {
     must(b.isServeRowFields(), "N1E: a flagged pin, but the backend did not read the row fields");
-    assertCounts(lastReport, "N1E", 36, 0, 0, 36);
+    assertCounts(lastReport, "N1E", 48, 0, 0, 48);
     await assertPerMutant(lastReport, join(HERE, "bcdev.names.baseline.json"), "N1E");
     const s = b.entriesStats();
     console.log(`  N1E: serve counters ${JSON.stringify({ ...s })}`);
@@ -835,8 +835,8 @@ async function legN1S(scratch: string, version: string): Promise<void> {
   );
   const cmp = await assertPerMutant(serve.r, oneReport, "N1S serve vs one-shot");
   must(
-    cmp.textVerified === 36 && cmp.textUnverified === 0,
-    `N1S: text verified ${cmp.textVerified}, unverified ${cmp.textUnverified}; pre-committed 36 and 0 (R763)`,
+    cmp.textVerified === 48 && cmp.textUnverified === 0,
+    `N1S: text verified ${cmp.textVerified}, unverified ${cmp.textUnverified}; pre-committed 48 and 0 (R763, R855)`,
   );
   must(
     serve.r.baselineGreen && serve.r.unsupportedTests.length === 0,
@@ -844,7 +844,9 @@ async function legN1S(scratch: string, version: string): Promise<void> {
   );
   // R763 (pre-commitment docs/superpowers/specs/2026-10-25-r763-n1s-precommitment.md): both sessions
   // 33 / 0 / 3 over 36 (the 3 mutants only Dot.Step covered read no-coverage), and these counters.
-  assertCounts(serve.r, "N1S", 33, 0, 3, 36);
+  // R855: 44 / 0 / 4 over 48. Each of the 12 procedures gained a delete-additive-right, killed by its
+  // one test; DotStep's is covered only by the cut Dot.Step test, so it reads no-coverage like its 3.
+  assertCounts(serve.r, "N1S", 44, 0, 4, 48);
   const s = serve.b.entriesStats();
   console.log(`  N1S: serve counters ${JSON.stringify({ ...s })}`);
   for (const [k, v] of Object.entries(N1S_PINS)) {
@@ -1114,14 +1116,16 @@ async function legO1(scratch: string, version: string): Promise<void> {
  * (master ca4c5179).
  */
 const N1S_PINS = {
-  pairRequests: 33,
+  // R855: the three pair counters follow the killed count (33 to 44, as R788's rule); boundChecks and
+  // entriesSent are observed values the new rows may move: unpinned until an observe run reads them.
+  pairRequests: 44,
   liveRequests: 1,
   boundChecks: 3,
   warmups: 1,
   entriesSent: 200,
   pairBatchRequests: 1,
-  pairBatchStored: 33,
-  pairBatchServed: 33,
+  pairBatchStored: 44,
+  pairBatchServed: 44,
   pairBatchRefused: 0,
 } as const;
 
@@ -1164,7 +1168,7 @@ function assertCleanLeg(
  * two batches, EXPECTED_LAYOUT per ref. It is R349's stale-layout check on v3 (R666): v3 reports a
  * target file's coverage in the batch's EMITTED line numbers, so batch 1 must read it through its own
  * coverage index. It proves both index guards together, `resetLayoutState()` clearing the index AND
- * `deploy()` assigning the new one; removing both (L-R3) turns 1/M0006 and 1/M0007 survived, covered
+ * `deploy()` assigning the new one; removing both (L-R3) turns 1/M0007 and 1/M0008 survived, covered
  * by GrowAboveTen. Removing either alone stays green (R-654 S2 L-R1, L-R2). See
  * docs/gates/alrunner-v3.md.
  */
@@ -1185,7 +1189,7 @@ async function legL1(scratch: string): Promise<SessionReport> {
     maxGuardsPerBatch: LAYOUT_MAX_GUARDS,
   });
   printLayoutTable(r, "L1");
-  assertCounts(r, "L1", 7, 3, 0, 10);
+  assertCounts(r, "L1", 8, 3, 0, 11);
   asLegFailure("L1", () => assertLayoutRun(r, "L1"));
   assertCleanLeg(r, b, "L1");
   return r;
@@ -1212,7 +1216,7 @@ async function legY(scratch: string, leg: "Y-A" | "Y-B"): Promise<SessionReport>
     preprocessorSymbols: symbols,
   });
   printSymbolTable(r, symbols, leg);
-  assertCounts(r, leg, 5, 4, 0, 9);
+  assertCounts(r, leg, 7, 4, 0, 11);
   asLegFailure(leg, () => assertSymbolBuild(r, symbols, leg));
   assertCleanLeg(r, b, leg);
   return r;
@@ -1254,7 +1258,8 @@ function assertKillers(
 /**
  * MO (R602): `sandbox-multiobject` with coverage ON, run as the other legs run (`runSession`, the v3
  * backend, one-shot). Two codeunits in one file (`MultiPair`), so v3's per-object frame is what the
- * index places. Pre-committed 6 / 1 / 5 over 12: the 5 no-coverage are in procedures no test calls.
+ * index places. Pre-committed 7 / 1 / 6 over 14 (R855: was 6 / 1 / 5 over 12): the 6 no-coverage are in
+ * procedures no test calls.
  */
 async function legMO(scratch: string): Promise<SessionReport> {
   const refused = moWrTransportRefusal("MO", TRANSPORT.transport);
@@ -1274,16 +1279,17 @@ async function legMO(scratch: string): Promise<SessionReport> {
   );
   const r = await session(scratch, b, { projectDir, testDir, selectorIds: ids });
   assertKillers(r, b, "MO", V3_MO_KILLERS);
-  assertCounts(r, "MO", 6, 1, 5, 12);
+  assertCounts(r, "MO", 7, 1, 6, 14);
   assertCleanLeg(r, b, "MO");
   return r;
 }
 
 /**
- * WR (R602): `sandbox-wrapped` whole, config symbol WRAPDEF, coverage ON. 98 mutants: the 8
+ * WR (R602): `sandbox-wrapped` whole, config symbol WRAPDEF, coverage ON. 102 mutants (R855: was 98): the 8
  * single-wrapper files score as `none` does (killer constant), and the three `WrappedArms` mutants
  * (the two-arm control, which the index has no rule for) read no-coverage with the refusal sentence.
- * That refusal costs 2 kills `none` finds (M0001, M0003), named, not hidden. Pre-committed 58 / 37 / 3.
+ * That refusal costs 2 kills `none` finds (M0001, M0003), named, not hidden. Pre-committed 62 / 37 / 3
+ * (R855: was 58 / 37 / 3).
  */
 async function legWR(scratch: string): Promise<SessionReport> {
   const refused = moWrTransportRefusal("WR", TRANSPORT.transport);
@@ -1309,7 +1315,7 @@ async function legWR(scratch: string): Promise<SessionReport> {
   const arms = judgeWrArms(rowFacts(r), ARMS_REFUSAL);
   for (const l of arms) console.log(`    - ${l}`);
   must(arms.length === 0, `WR: the WrappedArms refusal differs: ${arms.join("; ")}`);
-  assertCounts(r, "WR", 58, 37, 3, 98);
+  assertCounts(r, "WR", 62, 37, 3, 102);
   assertCleanLeg(r, b, "WR", V3_WR_STATE_NOTES);
   return r;
 }
@@ -1386,7 +1392,7 @@ async function legK(scratch: string): Promise<void> {
     testDir: fixture("sandbox-tests"),
     selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
   });
-  assertCounts(r, "K", 3, 12, 4, 19);
+  assertCounts(r, "K", 3, 14, 5, 22);
   await assertPerMutant(r, join(HERE, "bcdev.baseline.json"), "K");
   const facts = {
     coverage: b.capabilities().coverage,
@@ -2150,7 +2156,7 @@ async function legT(
   if (recordRequested(TABLES_BASELINE_PATH)) {
     // R810: a pinned record needs no figures; `main` proves the rows (pin undone) equal the committed ones.
     if (activePin !== undefined) return { outcome: "pass", r };
-    assertCounts(r, "T", 290, 57, 59, 406);
+    assertCounts(r, "T", 298, 60, 60, 418);
     must(
       r.unsupportedTests.length === 3,
       `T: ${r.unsupportedTests.length} refused tests, pre-committed 3`,

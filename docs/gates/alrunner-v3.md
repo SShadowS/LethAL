@@ -85,14 +85,14 @@ The legs:
 - S1: `fixtures/sandbox-app`, one-shot, per mutant equal to `bcdev.baseline.json` (`itest:bcdev`'s table).
 - S1E (R761; pre-commitment `docs/superpowers/specs/2026-10-25-r761-serve-default-precommitment.md`, master a86927e1):
   - What it runs: S1's project and assertions under `transport: "serve-entries"`, per mutant equal to
-    `bcdev.baseline.json` (3 / 12 / 4 over 19).
+    `bcdev.baseline.json` (3 / 14 / 5 over 22 since R855; was 3 / 12 / 4 over 19).
   - Serve counters, equal to R-653 E1's: pairRequests 3, liveRequests 3, boundChecks 5, warmups 1, entriesSent 44,
     echo mismatches 0. Warning set `[]`.
   - It is in `V3_GATE_LEGS`, so `current` cannot move to a build whose serve path breaks the default.
   - On a build with no serve path (alpha.2) it reads "not applicable", as N1E does.
 - N1S (R763; pre-commitment `docs/superpowers/specs/2026-10-25-r763-n1s-precommitment.md`, master b965aa13):
   - What it runs: N1's names fixture with the `Dot.Step` test cut (a scratch copy; the leg fails closed unless exactly
-    one test is cut), first one-shot, then serve-entries. The two are compared per mutant: 33 / 0 / 3 over 36 each.
+    one test is cut), first one-shot, then serve-entries. The two are compared per mutant: 44 / 0 / 4 over 48 each (R855; was 33 / 0 / 3 over 36).
   - Serve counters: pairRequests 33, liveRequests 33, boundChecks 35, warmups 1, entriesSent 200, echo mismatches 0.
     Warning set `[]`.
   - It proves the method-name shape `V3_SERVE_PROVEN_NAME_SHAPES.method` allows: letters, digits, `_`, space, `-`,
@@ -216,7 +216,7 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
 
 - **L1** (R353's table): multi-batch layout, with figures equal to v2's. `fixtures/sandbox-layout` runs at `maxGuardsPerBatch` 7, which gives two batches.
   - It checks `EXPECTED_LAYOUT` (`layout-fixture.ts`) per `<batch>/<code>`: verdict, killing test, covering tests and attribution.
-  - Predicted 7 / 3 / 0 over 10. Baseline: `al-runner-v3.layout.baseline.json`, identical per mutant to `al-runner.layout.baseline.json` (the .NET gate's, deleted in R654 S3).
+  - Predicted 8 / 3 / 0 over 11 since R855 (was 7 / 3 / 0 over 10; `Layout Beta` now has 8 guards against the budget of 7, so the leg expects the `oversized-batch` warning). Baseline: `al-runner-v3.layout.baseline.json`, identical per mutant to `al-runner.layout.baseline.json` (the .NET gate's, deleted in R654 S3).
   - It is the v3 gate's only multi-batch leg.
   - **It is R349's stale-layout check on v3** ([[R666]]). v3 labels a target file's coverage by the deployed flat path (`active/LayoutBeta.Codeunit.al`) in the EMITTED line numbers of that batch's text: in batch 1, TwiceOfThree hits lines 74, 75 and 78 of the instrumented file since R827 (it was 71, 73 and 79 of 83 lines, measured on alpha.2, `/coord/handoff/R-666/measure.md`). So batch 1's lines must be read through batch 1's coverage index.
   - **The guard L1 proves is both coverage-index guards together:** `resetLayoutState()` sets `coverageIndex` to `undefined`, AND `deploy()` then assigns the new index unconditionally (`this.coverageIndex = index`). Either one alone keeps the index fresh.
@@ -225,7 +225,7 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
   - **Offline guards** of the same property and of the reset's other fields: "R666: batch 1's coverage is read through batch 1's layout (one-shot)" in `tests/al-runner-v3-backend.test.ts` (red only with both guards removed); "R654 S2: a batch's latched blind note does not cross into the next batch" (`batchBlind`) and "R666: serve-entries state does not cross a deploy" (`baselineRows`, `union`) in `tests/al-runner-v3-entries.test.ts`, red when the reset is deleted. L1 cannot see those three fields: it has no Sleep and runs one-shot.
 - **Y-A and Y-B** (R321): `fixtures/sandbox-symbols` under `[LETHALA]` and `[LETHALB]`. The symbols go to the backend, which passes them to v3 as `--define`, and to the session.
   - Each checks `EXPECTED_BY_SET` (`symbol-fixture.ts`).
-  - Predicted 5 / 4 / 0 over 9 each. Baselines: `al-runner-v3.symbols-lethala.baseline.json` and `-lethalb`.
+  - Predicted 7 / 4 / 0 over 11 each since R855 (was 5 / 4 / 0 over 9; the active `X + ForA` / `X + ForB` line gains two killed deletions). Baselines: `al-runner-v3.symbols-lethala.baseline.json` and `-lethalb`.
 - **K** (R387, R394): the backend that `cli.ts`'s `buildBackend` builds from an `alRunnerV3` section with no `coverage` and no `transport` key.
   - It asserts:
     - coverage on by default;
@@ -235,7 +235,7 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
     - the `AL_RUNNER_V3_NOT_AUTHORITATIVE` warning.
 
     Before R761 it asserted a one-shot transport (0 serve spawns).
-  - Its result is 3 / 12 / 4 over 19, equal per mutant to `bcdev.baseline.json`. It records no baseline of its own.
+  - Its result is 3 / 14 / 5 over 22 since R855 (was 3 / 12 / 4 over 19), equal per mutant to `bcdev.baseline.json`. It records no baseline of its own.
   - **K is outside `V3_GATE_LEGS`, by the orchestrator's ruling**, because the CLI's config cannot name a candidate build. Two conditions hold it, both pinned in `tests/r654-v3-legs.test.ts`:
     1. On a candidate (`LETHAL_ALRUNNER_V3_CANDIDATE=1`), K does not run. Its value in the itest's leg summary is `"K":"skipped (candidate build)"`, and its reason goes into the log and the receipt lines. It is never silent.
     2. On a gated build, a K that is anything but a pass FAILS the itest, a skip included (`v3ItestFailures`). So K can never become an always-skipped leg.
