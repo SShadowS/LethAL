@@ -1732,18 +1732,20 @@ function assertFilterLiteralEvidence(report: SessionReport): void {
   // here: mutated, the `SetRange` becomes `79200..79197`, an inverted range that matches nothing,
   // so the arm's own count assertion fires. The list is pinned by NAME rather than by length
   // precisely so a new operator arriving at a measured arm is a deliberate edit with a reason,
-  // never a silent widening.
+  // never a silent widening. R855 makes it SIX: `delete-additive-right` turns `LowBound + 3` into
+  // `LowBound`, a one-row band, so the same count assertion fires.
   const armI = report.mutants.filter((m) => m.procedureName === "CountTaggedInBand");
   assert.deepEqual(
     armI.map((m) => m.operatorName).sort(),
     [
+      "lethal.delete-additive-right",
       "lethal.empty-block",
       "lethal.remove-setrange",
       "lethal.return-value",
       "lethal.swap-additive",
       "lethal.void-method-call",
     ],
-    `arm I (CountTaggedInBand): expected exactly its five collateral mutants, got ${armI.map((m) => `${m.operatorName}=${m.verdict}`).join(", ")}`,
+    `arm I (CountTaggedInBand): expected exactly its six collateral mutants, got ${armI.map((m) => `${m.operatorName}=${m.verdict}`).join(", ")}`,
   );
   for (const m of armI) {
     assert.equal(m.verdict, "killed", `arm I (${m.operatorName}): verdict`);
