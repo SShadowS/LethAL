@@ -434,16 +434,13 @@ async function snapshotCase(c: {
   /** Ruling (b): the store answers that the snapshot's run row is missing. */
   readonly missingRow?: boolean;
   readonly spy?: boolean;
-  /** R857: both sessions run under `--isolate-tests`. */
+  /** R857: run 1 stays default; a stopped run under `--isolate-tests` is what today resumes. */
   readonly isolate?: boolean;
 }) {
   const dirs = await project();
   const store = new ResultsStore(":memory:");
   const mode = c.isolate === true ? { isolatesTests: true } : {};
-  await runSession({
-    ...base(store, dirs),
-    backend: Object.assign(new Stub(ABORT_AFTER), mode),
-  });
+  await runSession({ ...base(store, dirs), backend: new Stub(ABORT_AFTER) });
   const runId = lastRun(store);
   const row = store.getRun(runId);
   if (row === null || row.testAppHash === null || row.testAppDeps === null) {
@@ -469,6 +466,13 @@ async function snapshotCase(c: {
     const getRun = store.getRun.bind(store);
     store.getRun = (id: number) => (id === other ? null : getRun(id));
   }
+  if (c.isolate === true) {
+    await runSession({
+      ...base(store, dirs),
+      backend: Object.assign(new Stub(ABORT_AFTER), mode),
+    });
+  }
+  const isolateRun = lastRun(store);
   const today = Object.assign(new Stub(), mode);
   const { events, log, emit } = collect(store, c.spy);
   let error: Error | undefined;
@@ -482,10 +486,15 @@ async function snapshotCase(c: {
     });
   } catch (err) {
     error = err as Error;
-  } finally {
-    store.close();
   }
-  return { events, other, today, error, log };
+  const snapshotsOf = (id: number) =>
+    store.db.query("SELECT COUNT(*) AS n FROM baseline_snapshots WHERE run_id = ?").get(id) as {
+      n: number;
+    };
+  const isolateSnapshots = snapshotsOf(isolateRun).n;
+  const defaultSnapshots = snapshotsOf(other).n;
+  store.close();
+  return { events, other, today, error, log, isolateSnapshots, defaultSnapshots };
 }
 const reusedOf = (events: readonly RunEvent[]) => warned(events, "resume-baseline-reused");
 
@@ -535,15 +544,18 @@ describe("R619 baseline-snapshot reuse (scoreBatch through runSession): T14's ca
       backendBuild(s.other, otherBuild(s.other, build)),
     );
   });
-  test("R857: a default run lends no snapshot to a session under --isolate-tests: step 1 says so", async () => {
+  test("R857: under --isolate-tests a resume looks at no snapshot and records none", async () => {
     const s = await snapshotCase({
-      snap: { backend: "al-runner-v3", runnerBuild: `${B1} isolate-tests` },
+      snap: { backend: "al-runner-v3", runnerBuild: B1 },
       isolate: true,
     });
     expect(s.error).toBeUndefined();
-    // Even its own mode's snapshot is not read: its warm-up needs a baseline's rows.
+    expect(s.defaultSnapshots).toBeGreaterThan(0); // one was there to find
     expect(reusedOf(s.events)).toEqual([]);
+    // Not even looked at: its warm-up needs a baseline's rows, so step 1 has nothing to refuse.
+    expect(warned(s.events, "snapshot-backend-build-changed")).toEqual([]);
     expect(s.today.baselineRuns).toBeGreaterThan(0);
+    expect(s.isolateSnapshots).toBe(0);
   });
   test("order: a same-build snapshot under another coverage mode is not found (SQL), silently", async () => {
     const s = await snapshotCase({

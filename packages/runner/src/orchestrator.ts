@@ -5642,6 +5642,8 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     reused === undefined &&
     testAppHash !== undefined &&
     baseline.length === tests.length &&
+    // R857: nothing can reuse it, and as the newest match it would hide a default run's own.
+    backend.isolatesTests !== true &&
     // R658 (D5): the key does not include --baseline-timeout-ms, so a snapshot holding a stopped
     // test would bring it back stopped on a `--resume` that raised the budget.
     !baseline.some((b) => stoppedByUs(b.verdict))
@@ -8619,7 +8621,15 @@ async function runSessionBody(
     buildSymbols,
     // R586: the v3 build, onto the measured execution contexts.
     // R807: plus the run seed the build reported back (read now, after the runs), when it reported one.
-    ...(v3Build !== undefined ? { runnerBuild: withRunSeed(v3Build, cfg.backend) } : {}),
+    ...(v3Build !== undefined
+      ? {
+          runnerBuild: {
+            ...withRunSeed(v3Build, cfg.backend),
+            // R857: the report says so too, as a report is read without the store.
+            ...(cfg.backend.isolatesTests === true ? { isolateTests: true as const } : {}),
+          },
+        }
+      : {}),
   };
   const report = buildReport(statics, collectedEvents);
   // R89: a run ASKED to resume must SAY it resumed. This is the invariant the code already claims —

@@ -3500,12 +3500,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const s = this.serveStopSeconds();
     if (s === undefined) throw new AlRunnerV3ServeStopUnsetError();
     this.transportFrozen = true; // R761
-    const union = [...this.union].sort((a, b) => a - b);
+    const union = [...this.union].sort((a, b) => Math.abs(a) - Math.abs(b));
     const none = union.filter((cu) => !this.baselineRows.has(cu));
     if (none.length > 0) {
+      const named = none.map((id) => this.isolated(id)?.test ?? id);
       throw new AlRunnerV3EntriesRefusedError(
         "al-runner-v3-entries-no-baseline-rows",
-        `codeunit(s) ${none.join(", ")} of the warm-up union have no baseline rows recorded by this backend (a reused --resume snapshot runs no baseline), so the warm-up has nothing to be compared with; never empty against empty`,
+        `codeunit(s) ${named.join(", ")} of the warm-up union have no baseline rows recorded by this backend (a reused --resume snapshot runs no baseline), so the warm-up has nothing to be compared with; never empty against empty`,
       );
     }
     const server = new AlRunnerServer(
@@ -3779,7 +3780,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     for (const t of one !== undefined ? [one] : (this.suitePerCodeunit.get(cu) ?? [])) {
       const n = rows.filter((r) => r.method.toLowerCase() === t.method.toLowerCase()).length;
       if (n !== 1)
-        return `codeunit ${cu}'s entry has ${n} row(s) for ${t.codeunitName}.${t.method}`;
+        return `codeunit ${one?.codeunitId ?? cu}'s entry has ${n} row(s) for ${t.codeunitName}.${t.method}`;
     }
     return undefined;
   }

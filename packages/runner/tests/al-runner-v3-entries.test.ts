@@ -2338,6 +2338,7 @@ describe("the gate's transport flags (itest:alrunner-v3 harness)", () => {
       "N1E",
       "N1S",
       "O1",
+      "ISO",
       "X",
       "L1",
       "Y-A",
@@ -4742,6 +4743,12 @@ describe("R857: --isolate-tests", () => {
     expect(argvHas(r, "--run-selected-only")).toBe(2);
     expect(argvHas(r, "--codeunit")).toBe(0);
     for (const q of r.serve.requests) expect(q.body.runSelectedOnly).toBe(true);
+    // In source order, in the warm-up as in every group.
+    expect((r.serve.requests[0]?.body.entries as Sent[]).map((e) => e.test)).toEqual([
+      `Codeunit${ECHO}.`,
+      `Codeunit${CU}.A`,
+      `Codeunit${CU}.B`,
+    ]);
     const tests = new Set(entriesOf(r).map((e) => e.test));
     expect([...tests].sort()).toEqual([`Codeunit${CU}.A`, `Codeunit${CU}.B`, `Codeunit${ECHO}.`]);
     expect(r.b.isolatesTests).toBe(true);
@@ -4859,6 +4866,48 @@ describe("R857: --isolate-tests", () => {
     await r.b.activate("M0001");
     expect((await r.b.run(ref("B"), OPTS)).outcome).toBe("fail");
     expect(r.serve.requests.length).toBe(before);
+  });
+
+  test("on: a refusal names the real codeunit and test, never a call id", async () => {
+    const noRow: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).filter((x) => !(m === "M0001" && x.method === "B"));
+    const r = await readyRig({ ...ISOLATE, serve: { rows: noRow } });
+    await r.b.activate("M0001");
+    const v = await r.b.run(ref("B"), OPTS);
+    expect(v.failureMessage).toContain(`codeunit ${CU}'s entry has 0 row(s)`);
+    const cold = await rig(ISOLATE); // a prefetch with no baseline behind it
+    await expect(cold.b.prefetchMutants(plans(["M0001"]))).rejects.toThrow(
+      `codeunit(s) Codeunit${CU}.A, Codeunit${CU}.B of the warm-up union`,
+    );
+  });
+
+  test("on: a live request runs one test too", async () => {
+    const r = await rig({ ...ISOLATE, serve: { rows: killsM1 } });
+    await baseline(r.b, SUITE1);
+    await r.b.activate("M0001"); // no prefetch, so the run below goes live
+    expect((await r.b.run(ref("B"), OPTS)).outcome).toBe("pass");
+    const tests = entriesOf(r).map((e) => e.test);
+    expect(tests).toContain(`Codeunit${CU}.B`);
+    expect(tests).not.toContain(`Codeunit${CU}.`);
+  });
+
+  test("on: a coverage window asks for that one test, and the longer names stay out", async () => {
+    const suite = [ref("A"), ref("AB")];
+    const rows: RowsFn = () => suite.map((t) => ({ method: t.method, status: "pass" as const }));
+    const r = await readyRig({
+      ...ISOLATE,
+      suite,
+      targetAl: SLEEPER_AL,
+      mutants: ["M0001"],
+      serve: { rows, coverage: sleepCoverage() },
+    });
+    const n0 = r.serve.requests.length;
+    await r.b.activate("M0001");
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("pass");
+    const window = r.serve.requests.slice(n0).find((q) => q.body.coverage === true);
+    expect(window?.ids).toEqual([`plain:Codeunit${CU}.A`]);
+    expect(window?.body.excludeTests).toEqual([`Codeunit${CU}.AB`]);
+    expect(window?.body.runSelectedOnly).toBe(true);
   });
 
   test("on: the speculative baseline stays off, as its calls run whole codeunits", async () => {

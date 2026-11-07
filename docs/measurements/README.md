@@ -1027,7 +1027,10 @@ the figures are pre-committed in `docs/superpowers/specs/2026-10-21-r586-alrunne
 - **Selection.** A selected test's whole codeunit runs (#5611); only the selected tests are
   reported. A quoted test name cannot be selected by `--test` or `--test-exact` (exit 6, #5572),
   and `--test X --test-exact X` selects the union (#5612). `--codeunit` reports every test under
-  its AL name.
+  its AL name. On `edge-6bb821b98`: `--test-exact 'Codeunit<ID>.Space Step'` selects a quoted test,
+  `--run-selected-only` runs it alone, and in `serve` an entry's `test` selects by text, so
+  `Codeunit1.Alpha` also picks `AlphaTwo` unless `excludeTests` names it. `coverage` with `entries`
+  is refused by name (R857).
 - **Time limit.** `--test-timeout-secs N` stops a test after N seconds of CPU time. Machine load
   does not count; a test that waits without computing is stopped at 10 x N of wall time.
 - **`Sleep` returns at once on a VIRTUAL clock** (#5605): `Sleep(600000)` takes no wall time, with or

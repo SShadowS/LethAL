@@ -23,6 +23,17 @@ describe("T14: runMayLend", () => {
     expect(lender.runMayLend(run("al-runner-v3", B1), BCDEV, ctx)?.step).toBe("backend-build");
     expect(lender.runMayLend(run("bcdev", null), V3_B1, ctx)?.step).toBe("backend-build");
   });
+  test("R857: a run under --isolate-tests and a default run lend to neither other, both ways", () => {
+    const iso = `${B1} isolate-tests`;
+    const session = (runnerBuild: string) => ({ backend: "al-runner-v3", runnerBuild }) as const;
+    expect(lender.runMayLend(run("al-runner-v3", iso), session(B1), ctx)?.step).toBe(
+      "backend-build",
+    );
+    expect(lender.runMayLend(run("al-runner-v3", B1), session(iso), ctx)?.step).toBe(
+      "backend-build",
+    );
+    expect(lender.runMayLend(run("al-runner-v3", iso), session(iso), ctx)).toBeUndefined();
+  });
   test("v3 lends to the same build only; another build or an unrecorded one refuses", () => {
     expect(
       lender.runMayLend(run("al-runner-v3", B1), { backend: "al-runner-v3", runnerBuild: B1 }, ctx),

@@ -17,6 +17,7 @@ import type {
   TestVerdict,
 } from "../src/backend";
 import { type SessionConfig, runSession } from "../src/orchestrator";
+import { renderConsole } from "../src/report";
 import { ResultsStore } from "../src/store";
 
 const SRC = join(import.meta.dir, "..", "src");
@@ -412,11 +413,16 @@ describe("R586 C1: runSession keys on kind, not on authoritative", () => {
   test("R857: --isolate-tests goes in the lending build and the fingerprint; off, neither moves", async () => {
     await inProject(async (root) => {
       const store = new ResultsStore(":memory:");
-      await v3Session(root, store, withProbe(new V3KindStub([]), []));
+      const plain = await v3Session(root, store, withProbe(new V3KindStub([]), []));
       const off = store.getRun(1);
       const on = Object.assign(withProbe(new V3KindStub([]), []), { isolatesTests: true });
-      await v3Session(root, store, on);
+      const report = await v3Session(root, store, on);
       const run = store.getRun(2);
+      // A report is read without the store, so it says so itself; a default report has no such key.
+      expect(report.validity.executionContexts[0]?.isolateTests).toBe(true);
+      expect(renderConsole(report)).toContain("[--isolate-tests:");
+      expect(plain.validity.executionContexts[0]).not.toHaveProperty("isolateTests");
+      expect(renderConsole(plain)).not.toContain("--isolate-tests");
       expect(off?.runnerBuild).toBe(`alrunner 3.0.0-alpha.2 (91253f2d6) ${"b".repeat(64)}`);
       expect(run?.runnerBuild).toBe(`${off?.runnerBuild} isolate-tests`);
       expect(run?.configFingerprint).not.toBe(off?.configFingerprint);
