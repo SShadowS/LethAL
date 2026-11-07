@@ -295,6 +295,8 @@ const EXPECTED = {
   // R-463 moves this from 422 to 428: `Data Band Ext`'s `CountBand` adds 4 deployed mutants plus the
   // 2 Tier-1 `void-method-call` that dedup removes under its two `remove-setrange` sites.
   // Pre-committed in docs/superpowers/specs/2026-10-09-r463-reportext-precommitment.md.
+  // R855 moves this from 428 to 440 (PREDICTED, docs/superpowers/specs/2026-11-07-r855-predictions.md):
+  // 12 `delete-additive-*` mutants, 8 killed, 3 survived, 1 no-coverage (322 / 73 / 23).
   totalMutantSites: TABLES_FIGURES.totalMutantSites,
   // R36 moved this from 63/10 to 64/9, deliberately and in one direction only.
   //
@@ -592,7 +594,7 @@ const EXPECTED = {
    * R457 TOOK THIS FROM 3 TO 4: `run-trigger-forced` is now kept unless the table provably has no
    * trigger of that kind and no observer, and it is declared by EDIT (flip-boolean-literal's
    * false->true RunTrigger flip as well as swap-modify-flag's forward direction). The one KILLED
-   * mutant that gains it is M0242 (M0223 before R254's arm shifted codes by 15, M0238 before
+   * mutant that gains it is M0247 (M0242 before R855's 12 added mutants shifted codes by 5; M0223 before R254's arm shifted codes by 15, M0238 before
    * R-463's `CountBand` shifted them by 4 more;
    * `Data Ops.InsertWithoutTrigger`, Insert(false)->true), a named
    * OVER-TAG: its kill is earned by the test's own Error. Pre-committed in
@@ -665,6 +667,11 @@ const EXPECTED = {
    * R-463 leaves this at 15. `CountBand`'s 4 new mutants sort before `DataMain.Table.al`, so the three
    * pins move +4 again (M0175/M0179/M0171 -> M0179/M0183/M0175), same mutants. Ids only, proven in
    * /coord/handoff/R-463/id-shift-proof.txt.
+   * R855: 12 added mutants sort before `DataMain.Table.al`'s Processed and Flagged triggers (two in
+   * `DataMain.Table.al` itself, lines 24 and 63), so the three pins move again
+   * (M0179/M0183/M0175 -> M0183/M0188/M0179), same mutants. M0005 and M0009 do not move: the one
+   * new `DataBandExt` mutant (line 38) sorts after them. The killPosition values and the count 15
+   * are NOT re-derived here: the 8 added kills may add warm kills, which only a live run shows.
    * R-463 r2 (MEASURED, its live run 2026-10-09): M0005 and M0009 move from position 2 to 3. They take
    * the object-level fallback, and `BandCountsFromLow` (1 member, sorting between
    * `BandClassifiesDirectly` and `BandReportSumsBands`) now covers object 79341 too, so two passing
@@ -1194,7 +1201,7 @@ function assertVerdictTable(report: SessionReport): void {
     deleteGroup.explanation.includes("Delete(false)"),
     "the Delete mechanism must explain ITS own mechanism",
   );
-  // Mechanism 4, R457. Pinned BY MUTANT: the only KILLED forced mutant is M0242, an over-tag.
+  // Mechanism 4, R457. Pinned BY MUTANT: the only KILLED forced mutant is M0247 (was M0242 before R855), an over-tag.
   // Survived and no-coverage mutants also carry the tag but never enter the screen's kill list.
   const forcedGroup = groupOf("run-trigger-forced");
   const forcedScreened = forcedGroup.mutants.map(mutantOf);
@@ -1217,7 +1224,7 @@ function assertVerdictTable(report: SessionReport): void {
         96,
       ],
     ],
-    "the ONE screened forced kill is M0242 (Insert(false)->true, an over-tag: its test raises its own " +
+    "the ONE screened forced kill is M0247 (Insert(false)->true, an over-tag: its test raises its own " +
       "Error). It disappearing means the conservative rule dropped the tag on a table that has an " +
       "OnInsert, the under-tagging direction; a verdict change means a diagnosis moved a verdict",
   );
@@ -1725,18 +1732,20 @@ function assertFilterLiteralEvidence(report: SessionReport): void {
   // here: mutated, the `SetRange` becomes `79200..79197`, an inverted range that matches nothing,
   // so the arm's own count assertion fires. The list is pinned by NAME rather than by length
   // precisely so a new operator arriving at a measured arm is a deliberate edit with a reason,
-  // never a silent widening.
+  // never a silent widening. R855 makes it SIX: `delete-additive-right` turns `LowBound + 3` into
+  // `LowBound`, a one-row band, so the same count assertion fires.
   const armI = report.mutants.filter((m) => m.procedureName === "CountTaggedInBand");
   assert.deepEqual(
     armI.map((m) => m.operatorName).sort(),
     [
+      "lethal.delete-additive-right",
       "lethal.empty-block",
       "lethal.remove-setrange",
       "lethal.return-value",
       "lethal.swap-additive",
       "lethal.void-method-call",
     ],
-    `arm I (CountTaggedInBand): expected exactly its five collateral mutants, got ${armI.map((m) => `${m.operatorName}=${m.verdict}`).join(", ")}`,
+    `arm I (CountTaggedInBand): expected exactly its six collateral mutants, got ${armI.map((m) => `${m.operatorName}=${m.verdict}`).join(", ")}`,
   );
   for (const m of armI) {
     assert.equal(m.verdict, "killed", `arm I (${m.operatorName}): verdict`);

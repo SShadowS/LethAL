@@ -9,8 +9,8 @@
       "mutants": 2
     },
     "examples/credit-limit/src/CreditLimitMgt.Codeunit.al": {
-      "sha256": "97768a11e6769c2bf3c774ff789d4ec10143524a9a7acd8fea88b1f70745b864",
-      "mutants": 40
+      "sha256": "3478c49560e5c91d361a343f967a011c8fdf300a4dbe036500766965e3cc41b2",
+      "mutants": 43
     },
     "examples/gift-card-tests/src/GiftCardTests.Codeunit.al": {
       "sha256": "b59508c502ab032efaa0d0a36d6edaed854d6276e5eb165f3b68ac22486301c7",
@@ -21,48 +21,48 @@
       "mutants": 7
     },
     "examples/gift-card/src/GiftCardMgt.Codeunit.al": {
-      "sha256": "f6f3cb7d2cf7948fb5b32c71f802c7eff8e4f65d9126e4be08a5a8935d09aa40",
-      "mutants": 53
+      "sha256": "24f9e1ed67ab6559b6469048547e45758bf86b197b092f3ef861ae319626723a",
+      "mutants": 54
     },
     "fixtures/sandbox-app/src/SandboxLogic.Codeunit.al": {
-      "sha256": "7fa150a521a7524833a995900ed1a5dd0cc4211d2abb45c73ef3ebad2353fdc1",
-      "mutants": 15
+      "sha256": "81b6685fc63799431742bc4b4958b9a0b733695816339e9ae7f700a5882bfeb7",
+      "mutants": 17
     },
     "fixtures/sandbox-app/src/SandboxPricing.Codeunit.al": {
-      "sha256": "01825bf4803245ef1f960c8bdde24153b63acf43a32fa998aa949ee913dcc322",
-      "mutants": 4
+      "sha256": "90e47820028eb9381d5dae2237faf68f2314395f40d44c98e5a162f113853f08",
+      "mutants": 5
     },
     "fixtures/sandbox-codefree-tests/src/CFTests.Codeunit.al": {
       "sha256": "4e4ef5b0ad96b30e9a5c8b4f8034c31a5aae7f8ede6cf0e00836eafd0892ef66",
       "mutants": 79
     },
     "fixtures/sandbox-codefree/src/CFActive.Codeunit.al": {
-      "sha256": "04c3453b689ae0a4537aaf5a4501b539e1637ecf630234293f0cd9c35cfbab8d",
-      "mutants": 9
+      "sha256": "f7a2da6c4fd1f63d6bb1d5973a3f617eecc07ce22e05e7d7b56bf2ca8357f9db",
+      "mutants": 13
     },
     "fixtures/sandbox-codefree/src/CFInactive.Codeunit.al": {
-      "sha256": "771a4f9d7045d752e4028dd8d647487b6c58e38892f90e7ff636b8aaa4bcdf40",
-      "mutants": 9
+      "sha256": "df17e9a23ba04d1e9142829096fa44b163997a4c65c636c7dc38792f8ce10515",
+      "mutants": 12
     },
     "fixtures/sandbox-codefree/src/CFPlain.Codeunit.al": {
-      "sha256": "befab8ad8468b4745309a491c60cb29395cfd5602f6266f0c46544e0c0a94d9e",
-      "mutants": 10
+      "sha256": "5df30bbf461870ce6a874bbbbb29962389e47227caf3827374d8a0f6d5822ab4",
+      "mutants": 11
     },
     "fixtures/sandbox-codefree/src/CFSplit.Codeunit.al": {
       "sha256": "665325b4a08c92448076645c8fc0a883a2f0f0cdc567afa4fada2f092728af98",
       "mutants": 15
     },
     "fixtures/sandbox-coverage-probe/src/CoverageCapabilityProbe.Codeunit.al": {
-      "sha256": "6d63f8221beeb383636e429db2f6e8ad8681e0b282d90c4b845b55386bad10e5",
-      "mutants": 29
+      "sha256": "0b1167b0c34c11b16cb2f256834d32e3a4834c11d92c444cbc4dcd6044001634",
+      "mutants": 31
     },
     "fixtures/sandbox-coverage-probe/src/FrameAndResetProbe.Codeunit.al": {
       "sha256": "63b23a2599a02c0451828069d4b65521241fd5ebf532df2a72088da74d870bc6",
       "mutants": 40
     },
     "fixtures/sandbox-coverage-probe/src/TwoObjects.Codeunit.al": {
-      "sha256": "61615eecbe8dffdd935e2e9a52a101d1413af4e0eab7288836187db87d91dee9",
-      "mutants": 11
+      "sha256": "cf0bbf6fdcfed380d8c7856c0cccc68487b5da81399a49cc3800637b1a6df247",
+      "mutants": 12
     },
     "fixtures/sandbox-data-tests/src/DataTests.Codeunit.al": {
       "sha256": "96436a84ba04d3200459521959e7ae8c9cbe99ed099fe92a0291249d917fdad4",
@@ -73,8 +73,8 @@
       "mutants": 4
     },
     "fixtures/sandbox-data/src/DataBandExt.ReportExt.al": {
-      "sha256": "7e868d03fdf6db99c9171b48f84745ddcbaa73d9eea363f661319a4cce961db3",
-      "mutants": 19
+      "sha256": "3f71490010833668ea330ec2214300ca3303334ab05a1d7309269368c0eff9c4",
+      "mutants": 20
     },
     "fixtures/sandbox-data/src/DataBlankOps.Codeunit.al": {
       "sha256": "b3d90f0d19ba8044f142debf2ce476d6c2aee37f4510725c03a95ee8a8008bba",
@@ -97,8 +97,8 @@
       "mutants": 7
     },
     "fixtures/sandbox-data/src/DataFilterOps.Codeunit.al": {
-      "sha256": "973ebcad9226d2f86a7a1a9f00be2459e20ff8eaebfce3ed7e1441710da8851d",
-      "mutants": 38
+      "sha256": "422f78e0da73ee05c7c4e3114ad697fa179c7c7a1a5e76e53196a2a77b21e403",
+      "mutants": 40
     },
     "fixtures/sandbox-data/src/DataFindOps.Codeunit.al": {
       "sha256": "f196ba56f53b6044d77080cfc4447062072c83b8fa41972308a3bc507322ec95",
@@ -117,8 +117,8 @@
       "mutants": 4
     },
     "fixtures/sandbox-data/src/DataMain.Table.al": {
-      "sha256": "25669d56a0f596c3817d2288ce1830746215148ea1206f31a6c653c5c088a659",
-      "mutants": 26
+      "sha256": "0e2ba8ca161e0ec5209f3d54274a8aaf44c67ad0e14239817c0687aff5518fd2",
+      "mutants": 28
     },
     "fixtures/sandbox-data/src/DataMainExt.TableExt.al": {
       "sha256": "723f778d00ed4ff62cde5c0742092a5a4cd44e14088642473d7793200b8d740b",
@@ -133,8 +133,8 @@
       "mutants": 3
     },
     "fixtures/sandbox-data/src/DataOps.Codeunit.al": {
-      "sha256": "5375f8c5a29223ef873e125136c898dacc4180ce482b52de5dc03b6dce673e81",
-      "mutants": 49
+      "sha256": "1fd51990b75d52bae752fde1ef1b5181668e3548fc4a704411dc80ec91c9c94d",
+      "mutants": 52
     },
     "fixtures/sandbox-data/src/DataReachOps.Codeunit.al": {
       "sha256": "2d8cd5b6653568fcb2de92ab5125ff0664f9ea597c28f7e564919780d38ef368",
@@ -161,8 +161,8 @@
       "mutants": 8
     },
     "fixtures/sandbox-data/src/DataSwapOps.Codeunit.al": {
-      "sha256": "96d62a0d484a325a868efb129b2ba996e423d68163e810da67b454fe3430e600",
-      "mutants": 43
+      "sha256": "04d45fbd6bb10813c31945dd833061172108c3e459f6fa3b9aa9bf37d6361b79",
+      "mutants": 45
     },
     "fixtures/sandbox-data/src/DataTemporalOps.Codeunit.al": {
       "sha256": "85c9a22aebf837283e6e230e58282c1136808653e553d7901c69f0272c2cf23e",
@@ -177,8 +177,8 @@
       "mutants": 12
     },
     "fixtures/sandbox-data/src/DataValidator.Codeunit.al": {
-      "sha256": "5fb40267dd42223fecf764bf0e2ea2ee42f15d86700413e07511da12b0f647a0",
-      "mutants": 5
+      "sha256": "e5209f60501eb34dab5b7ca0dd15d968d179ad171d2a51a06e921184631e4684",
+      "mutants": 7
     },
     "fixtures/sandbox-data/src/DataValueCard.Page.al": {
       "sha256": "e55b8ca2c80b17f3647dcc990f8d8adbe0e72b536857339ee50a0e3a0576ccdd",
@@ -187,6 +187,22 @@
     "fixtures/sandbox-data/src/DataValueSource.Codeunit.al": {
       "sha256": "7a29b189c6045e9f28fbe21fe1bfc69b422f497478e60d5fd1b9dc42658ec3b8",
       "mutants": 2
+    },
+    "fixtures/sandbox-dates-tests/src/DatesKillToday.Codeunit.al": {
+      "sha256": "13b2835a2a1c610922b60411946af5cea18f739f4b725e3cb956ed49693d32fa",
+      "mutants": 6
+    },
+    "fixtures/sandbox-dates-tests/src/DatesKillWorkdate.Codeunit.al": {
+      "sha256": "c9ecf4a318614f257c3f7f6346b6975b4464583a3d30ada6b40f41b45a620980",
+      "mutants": 6
+    },
+    "fixtures/sandbox-dates-tests/src/DatesSurvivor.Codeunit.al": {
+      "sha256": "6866d8c6396f2d8b856770e37235f616e9385e4ef92bd4a5e78a897d2aa2ca13",
+      "mutants": 3
+    },
+    "fixtures/sandbox-dates/src/DatesLogic.Codeunit.al": {
+      "sha256": "197fb69fe98eb6b3100319bb5db7468837872dc3e3891795a97417e325f74d70",
+      "mutants": 6
     },
     "fixtures/sandbox-hang-tests/src/HangBaselineTests.Codeunit.al": {
       "sha256": "b3ee44bad889bdac3a208f42ba84e384c0116beeed476807b666b7905a136f40",
@@ -225,8 +241,8 @@
       "mutants": 3
     },
     "fixtures/sandbox-layout/src/LayoutBeta.Codeunit.al": {
-      "sha256": "1c3ac6bfe8d00b2d49c03f469d88941048f02c7912145e7c038c31943ab9d40e",
-      "mutants": 7
+      "sha256": "39fe17103fa5bc8f194bc5d3d96370d38d2bdda390d47c1302be988427dca4ae",
+      "mutants": 8
     },
     "fixtures/sandbox-multiobject-tests/src/MultiTests.Codeunit.al": {
       "sha256": "742e49efa901d731d7e399383e24a6730b36198734add959d44193c9f55efb9a",
@@ -237,16 +253,16 @@
       "mutants": 2
     },
     "fixtures/sandbox-multiobject/src/MultiPair.Codeunit.al": {
-      "sha256": "a23e64720ef26426419f1c4a89fc88c6618e5ad716017a5d4bad6fb0eddfc182",
-      "mutants": 10
+      "sha256": "f3e8996a8298d839e7e70a21b4820b8e174657b70ee38436484ce3490dafcc4b",
+      "mutants": 12
     },
     "fixtures/sandbox-names-tests/src/NamesTests.Codeunit.al": {
       "sha256": "d5c8bff9cd9efbbfe2de15c385318b2ad66f79115395cab034a6a4a98fb4d5d5",
       "mutants": 48
     },
     "fixtures/sandbox-names/src/NamesCalc.Codeunit.al": {
-      "sha256": "84556281529641efb9f0e3d0f6b901acaa956dd5a5ee366eb75755352cf840c7",
-      "mutants": 36
+      "sha256": "09a1221ce8250316a94d2027511d642b7916c28f12ca3d52fb748ae75f26ec68",
+      "mutants": 48
     },
     "fixtures/sandbox-order-tests/src/OrderProbe.al": {
       "sha256": "f352cbfe85e917a51d9886a8eddf1a86b0e1ef7cf41532286881b232b44b9a28",
@@ -353,16 +369,16 @@
       "mutants": 4
     },
     "fixtures/sandbox-symbols[LETHALA]/src/SymbolLogic.Codeunit.al": {
-      "sha256": "8d71bbb29524f99789613f3d12edf7619cab2a1817aa1de357522f52c6184d7d",
-      "mutants": 9
+      "sha256": "31d253d84c1d20535d9c6fcfe88ef2bc1b8fbf8a2a79721d185dd133ef4c1e72",
+      "mutants": 11
     },
     "fixtures/sandbox-symbols[LETHALB]/src/SymbolLogic.Codeunit.al": {
-      "sha256": "2e5daf97401efa227830480cd7ad29776d4746ae04ad200c099fb782921bcef4",
-      "mutants": 9
+      "sha256": "91df7dfe5ab63142ceec42d17fa7daec68754480f463027e2c87450db9c196df",
+      "mutants": 11
     },
     "fixtures/sandbox-symbols[]/src/SymbolLogic.Codeunit.al": {
-      "sha256": "ffe4c525e42993fd2f9405c95e613dbc276096b426948f4ad2f7f183033b36e6",
-      "mutants": 9
+      "sha256": "888cfb6d20752c3e6edf7f07d2f4713c17572c51ded1fb713822219161eb194e",
+      "mutants": 11
     },
     "fixtures/sandbox-tests/src/SandboxTests.Codeunit.al": {
       "sha256": "6801f6e4f6467cc0da77249fc486ed9f4775174ae587a2a0762a6ba63559aad2",
@@ -381,20 +397,20 @@
       "mutants": 3
     },
     "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedPre.Codeunit.al": {
-      "sha256": "880c9fa3e02dc883100438260a25f623307600d7823a7da92e362c5f8f64d83b",
-      "mutants": 7
+      "sha256": "c464076bd640cfaf15439c8fd53387efc2b255ed975d177d9b1dbfdc50bd4d4c",
+      "mutants": 8
     },
     "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedPreTwin.Codeunit.al": {
-      "sha256": "9d8347e8d5dd8d431f8a4a26a7f7b257b9a9f2ee02dd87e663db422083463999",
-      "mutants": 7
+      "sha256": "4a822f4b3cdf30a6eb66e4faa8a22381deafff5a2510730c5ec9d9373012fc14",
+      "mutants": 8
     },
     "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedTop.Codeunit.al": {
-      "sha256": "03d88d3573517b2e33af6a9c8e7af04bfcca3728b61e76fb047ac35348a9f82a",
-      "mutants": 8
+      "sha256": "26e0a8e65ef623a210d1a3b8cc04de04eb9e107daea522a88e4696ea657a1074",
+      "mutants": 9
     },
     "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedTopTwin.Codeunit.al": {
-      "sha256": "12932635446b196c16461267207ba4f09528f56c4b17d8588796be5f8283a881",
-      "mutants": 8
+      "sha256": "c87a572a8415c71aae7846ca869abb9d9f987229547f9cb6a30516b59876aedf",
+      "mutants": 9
     },
     "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedTrigger.Table.al": {
       "sha256": "f8e2b0db673a4a4c2f2097dfd51bbf10f9e7cc1d67a0f7cf903e92d246b2b4aa",

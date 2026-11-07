@@ -84,7 +84,7 @@ X := f(_m044) + g(Y);
 
 The conditional-assign statement is placed in the narrowest enclosing statement block (inside any enclosing loop body, not at procedure top) so re-evaluations match the original. The lifted local is declared in the enclosing procedure's `var` block — AL has no inline var declarations. Side-effect order preserved: conditional assign runs before the surrounding expression.
 
-**3. Duplicate (short-circuit-sensitive operand mutation)** · when the mutation changes an operator whose evaluation semantics include short-circuit behavior (e.g., `and` ↔ `or`), lifting loses the short-circuit signal the mutation is meant to test.
+**3. Duplicate (short-circuit-sensitive operand mutation)** · when the mutation changes an operator whose evaluation semantics include short-circuit behavior (e.g., `and` ↔ `or`), lifting loses the signal the mutation is meant to test. The name is historical: AL does not short-circuit. Both operands of `and` and `or` always run, measured on BC 28.4 (R855).
 
 ```al
 // original
@@ -133,13 +133,17 @@ rather than misleading a reader.
 | `lethal.void-method-call` | 1.1.0 | `DoThing()` → _(deleted)_ | a call whose effect nothing observes |
 | `lethal.return-value` | 1.0.0 | `exit(42)` → `exit(0)` | a return value the caller never asserts |
 | `lethal.empty-block` | 1.0.0 | `begin DoThing(); end` → `begin end` | a whole body nothing depends on |
-| `lethal.swap-call-arguments` | 1.0.0 | `Foo(A, B)` → `Foo(B, A)` | two same-typed arguments passed in the wrong order |
+| `lethal.swap-call-arguments` | 1.1.0 | `Foo(A, B)` → `Foo(B, A)` | two same-typed arguments passed in the wrong order |
 | `lethal.remove-assignment` | 1.0.0 | `Total := 5` → _(deleted)_ | a value written that nothing downstream depends on |
 | `lethal.remove-not` | 1.0.0 | `not Cust.IsEmpty()` → `Cust.IsEmpty()` | a negated guard whose two branches nobody tells apart |
 | `lethal.swap-additive` | 1.0.0 | `A + B` → `A - B` | a sum or difference whose value no test checks |
 | `lethal.shift-integer` | 1.0.0 | `5` → `6` | an off-by-one nothing notices, at a constant the test never varies |
 | `lethal.loop-truncate` | 1.0.0 | `Cust.Next() = 0` → `true` | a loop no test drives over more than one row |
 | `lethal.loop-skip` | 1.0.0 | `N < Limit` → `false` | a loop body nothing depends on, asked in a way that cannot hang |
+| `lethal.delete-logical-right` | 1.0.0 | `A or B` → `A` | a clause of a condition no test needs |
+| `lethal.delete-logical-left` | 1.0.0 | `A or B` → `B` | a clause of a condition no test needs |
+| `lethal.delete-additive-right` | 1.0.0 | `A + B` → `A` | a term of a sum no test checks |
+| `lethal.delete-additive-left` | 1.0.0 | `A + B` → `B` | a term of a sum no test checks |
 <!-- /operators: tier1 -->
 
 ### Tier 2 · AL-specific, high value
@@ -159,6 +163,7 @@ Operators that exploit AL/BC semantics to surface weak tests.
 | `lethal.validate-to-assign` | 1.2.0 | `Rec.Validate(Name, NewName)` → `Rec.Name := NewName` | the field value asserted, the `OnValidate` side effect not |
 | `lethal.flip-filter-literal` | 1.0.0 | `Cust.SetFilter("No.", '<>%1', No)` → `Cust.SetFilter("No.", '=%1', No)` | a filter string BC re-parses at run time, never asserted |
 | `lethal.swap-enum-member` | 1.0.0 | `"S"::Open` → `"S"::Released` | a state machine whose resulting state nothing asserts |
+| `lethal.swap-workdate-today` (opt-in) | 1.0.0 | `WorkDate()` → `Today()` | a test that never sets its own work date. A survivor means no test depends on which date is read; name it only on a project whose tests set `WorkDate(D)` |
 <!-- /operators: tier2 -->
 
 Two operators named in earlier drafts of this table are **not built**, each for a recorded reason:

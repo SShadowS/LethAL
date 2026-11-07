@@ -85,14 +85,14 @@ The legs:
 - S1: `fixtures/sandbox-app`, one-shot, per mutant equal to `bcdev.baseline.json` (`itest:bcdev`'s table).
 - S1E (R761; pre-commitment `docs/superpowers/specs/2026-10-25-r761-serve-default-precommitment.md`, master a86927e1):
   - What it runs: S1's project and assertions under `transport: "serve-entries"`, per mutant equal to
-    `bcdev.baseline.json` (3 / 12 / 4 over 19).
+    `bcdev.baseline.json` (3 / 14 / 5 over 22 since R855; was 3 / 12 / 4 over 19).
   - Serve counters, equal to R-653 E1's: pairRequests 3, liveRequests 3, boundChecks 5, warmups 1, entriesSent 44,
     echo mismatches 0. Warning set `[]`.
   - It is in `V3_GATE_LEGS`, so `current` cannot move to a build whose serve path breaks the default.
   - On a build with no serve path (alpha.2) it reads "not applicable", as N1E does.
 - N1S (R763; pre-commitment `docs/superpowers/specs/2026-10-25-r763-n1s-precommitment.md`, master b965aa13):
   - What it runs: N1's names fixture with the `Dot.Step` test cut (a scratch copy; the leg fails closed unless exactly
-    one test is cut), first one-shot, then serve-entries. The two are compared per mutant: 33 / 0 / 3 over 36 each.
+    one test is cut), first one-shot, then serve-entries. The two are compared per mutant: 44 / 0 / 4 over 48 each (R855; was 33 / 0 / 3 over 36).
   - Serve counters: pairRequests 33, liveRequests 33, boundChecks 35, warmups 1, entriesSent 200, echo mismatches 0.
     Warning set `[]`.
   - It proves the method-name shape `V3_SERVE_PROVEN_NAME_SHAPES.method` allows: letters, digits, `_`, space, `-`,
@@ -187,7 +187,7 @@ The legs:
     pinned 52, then the classification. `held` needs the compare's differing keys to equal the held keys, and has
     no count check. Since [[R650]], `held` also meets R556's bare-hash refusal (`bareHashRows`, the predicate
     `assertGateBaseline` uses): a run with a row missing its mutated-text hash, against an own baseline that has
-    hashes, is `gate-fail`. `pass` needs 0 compare differences, then 290 / 57 / 59 over 406, then the baseline compare.
+    hashes, is `gate-fail`. `pass` needs 0 compare differences, then 298 / 60 / 60 over 418, then the baseline compare.
     The record branch still checks the counts first. A build that changes the 3 refused tests (the Commit tests)
     is `gate-fail` by design.
   - X (d), since r10: right after its session, the leg prints `SleeperDoubles`'s `baseline-batch-finished`
@@ -216,7 +216,7 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
 
 - **L1** (R353's table): multi-batch layout, with figures equal to v2's. `fixtures/sandbox-layout` runs at `maxGuardsPerBatch` 7, which gives two batches.
   - It checks `EXPECTED_LAYOUT` (`layout-fixture.ts`) per `<batch>/<code>`: verdict, killing test, covering tests and attribution.
-  - Predicted 7 / 3 / 0 over 10. Baseline: `al-runner-v3.layout.baseline.json`, identical per mutant to `al-runner.layout.baseline.json` (the .NET gate's, deleted in R654 S3).
+  - Predicted 8 / 3 / 0 over 11 since R855 (`Layout Beta` now has 8 guards against the budget of 7, so the leg expects the `oversized-batch` warning). Baseline: `al-runner-v3.layout.baseline.json`, identical per mutant to `al-runner.layout.baseline.json` (the .NET gate's, deleted in R654 S3).
   - It is the v3 gate's only multi-batch leg.
   - **It is R349's stale-layout check on v3** ([[R666]]). v3 labels a target file's coverage by the deployed flat path (`active/LayoutBeta.Codeunit.al`) in the EMITTED line numbers of that batch's text: in batch 1, TwiceOfThree hits lines 74, 75 and 78 of the instrumented file since R827 (it was 71, 73 and 79 of 83 lines, measured on alpha.2, `/coord/handoff/R-666/measure.md`). So batch 1's lines must be read through batch 1's coverage index.
   - **The guard L1 proves is both coverage-index guards together:** `resetLayoutState()` sets `coverageIndex` to `undefined`, AND `deploy()` then assigns the new index unconditionally (`this.coverageIndex = index`). Either one alone keeps the index fresh.
@@ -225,7 +225,7 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
   - **Offline guards** of the same property and of the reset's other fields: "R666: batch 1's coverage is read through batch 1's layout (one-shot)" in `tests/al-runner-v3-backend.test.ts` (red only with both guards removed); "R654 S2: a batch's latched blind note does not cross into the next batch" (`batchBlind`) and "R666: serve-entries state does not cross a deploy" (`baselineRows`, `union`) in `tests/al-runner-v3-entries.test.ts`, red when the reset is deleted. L1 cannot see those three fields: it has no Sleep and runs one-shot.
 - **Y-A and Y-B** (R321): `fixtures/sandbox-symbols` under `[LETHALA]` and `[LETHALB]`. The symbols go to the backend, which passes them to v3 as `--define`, and to the session.
   - Each checks `EXPECTED_BY_SET` (`symbol-fixture.ts`).
-  - Predicted 5 / 4 / 0 over 9 each. Baselines: `al-runner-v3.symbols-lethala.baseline.json` and `-lethalb`.
+  - Predicted 7 / 4 / 0 over 11 each since R855 (the active `X + ForA` / `X + ForB` line gains two killed deletions). Baselines: `al-runner-v3.symbols-lethala.baseline.json` and `-lethalb`.
 - **K** (R387, R394): the backend that `cli.ts`'s `buildBackend` builds from an `alRunnerV3` section with no `coverage` and no `transport` key.
   - It asserts:
     - coverage on by default;
@@ -235,7 +235,7 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
     - the `AL_RUNNER_V3_NOT_AUTHORITATIVE` warning.
 
     Before R761 it asserted a one-shot transport (0 serve spawns).
-  - Its result is 3 / 12 / 4 over 19, equal per mutant to `bcdev.baseline.json`. It records no baseline of its own.
+  - Its result is 3 / 14 / 5 over 22 since R855 (was 3 / 12 / 4 over 19), equal per mutant to `bcdev.baseline.json`. It records no baseline of its own.
   - **K is outside `V3_GATE_LEGS`, by the orchestrator's ruling**, because the CLI's config cannot name a candidate build. Two conditions hold it, both pinned in `tests/r654-v3-legs.test.ts`:
     1. On a candidate (`LETHAL_ALRUNNER_V3_CANDIDATE=1`), K does not run. Its value in the itest's leg summary is `"K":"skipped (candidate build)"`, and its reason goes into the log and the receipt lines. It is never silent.
     2. On a gated build, a K that is anything but a pass FAILS the itest, a skip included (`v3ItestFailures`). So K can never become an always-skipped leg.
@@ -254,10 +254,10 @@ Since R786, the serve-entries DEFAULT also falls back when the serve warm-up mee
 Both run as the other legs do (`runSession`, the v3 backend, one-shot, coverage `"al-runner"`, a packages folder of the Microsoft apps), not through the CLI guard. Each makes a **durable killer check** before it compares with its baseline: every mutant that `--mode none` kills (a constant in `alrunner-v3-legs.ts`, `V3_MO_KILLERS` and `V3_WR_KILLERS`, built from the measured `none` runs) must be killed by the same test. The constants are code, so a re-record of a baseline cannot absorb a lost kill.
 
 - **MO** (R383's fixture): `fixtures/sandbox-multiobject`. `MultiPair.Codeunit.al` holds two codeunits, so the index places the second object's lines by position.
-  - 6 / 1 / 5 over 12, as pre-committed (`al-runner-v3.multiobject.baseline.json`): the 5 `no-coverage` are in procedures no test calls (`Never`, `Unreached`).
+  - 7 / 1 / 6 over 14, as pre-committed (`al-runner-v3.multiobject.baseline.json`): the 5 `no-coverage` are in procedures no test calls (`Never`, `Unreached`).
   - Killer constant: 6 kills.
 - **WR** (R-300b's fixture): `fixtures/sandbox-wrapped` whole, config symbol `WRAPDEF`, so the two-arm control `WrappedArms` is in it.
-  - 58 / 37 / 3 over 98, as pre-committed (`al-runner-v3.wrapped.baseline.json`). The 3 `no-coverage` are the `WrappedArms` rows, each with the refusal sentence (`ARMS_REFUSAL`); that by-name refusal costs two kills `none` finds (M0001, M0003), named, not hidden.
+  - 62 / 37 / 3 over 102, as pre-committed (`al-runner-v3.wrapped.baseline.json`). The 3 `no-coverage` are the `WrappedArms` rows, each with the refusal sentence (`ARMS_REFUSAL`); that by-name refusal costs two kills `none` finds (M0001, M0003), named, not hidden.
   - Killer constant: 58 kills (`none` kills 60, minus those two).
   - Six `[v3-codeunit-state-possible]` notes are pre-committed (`V3_WR_STATE_NOTES`: M0071, M0072, M0078, M0085, M0086, M0092; BandYRun and BandYRunTwin after BandYDirect and BandYDirectTwin in one codeunit call, #5611). They are kills that stay kills. The leg asserts that exact set; MO and every other leg assert none.
   - As a whole the project is OFF from the CLI (the two-arm file), with the warning naming `WrappedArms`' file; the leg measures the index, which the CLI guard does not reach.
@@ -560,24 +560,24 @@ Leg T is judged against the committed alpha.2 baseline with the pinned keys over
 {
   "gate": "itest:alrunner-v3",
   "baselines": {
-    "al-runner-v3.tables.baseline.json": { "killed": 290, "survived": 57, "no-coverage": 59 },
-    "al-runner-v3.layout.baseline.json": { "killed": 7, "survived": 3 },
-    "al-runner-v3.symbols-lethala.baseline.json": { "killed": 5, "survived": 4 },
-    "al-runner-v3.symbols-lethalb.baseline.json": { "killed": 5, "survived": 4 },
-    "al-runner-v3.multiobject.baseline.json": { "killed": 6, "survived": 1, "no-coverage": 5 },
-    "al-runner-v3.wrapped.baseline.json": { "killed": 58, "survived": 37, "no-coverage": 3 }
+    "al-runner-v3.tables.baseline.json": { "killed": 298, "survived": 60, "no-coverage": 60 },
+    "al-runner-v3.layout.baseline.json": { "killed": 8, "survived": 3 },
+    "al-runner-v3.symbols-lethala.baseline.json": { "killed": 7, "survived": 4 },
+    "al-runner-v3.symbols-lethalb.baseline.json": { "killed": 7, "survived": 4 },
+    "al-runner-v3.multiobject.baseline.json": { "killed": 7, "survived": 1, "no-coverage": 6 },
+    "al-runner-v3.wrapped.baseline.json": { "killed": 62, "survived": 37, "no-coverage": 3 }
   }
 }
 ```
 
-- Leg L1, `al-runner-v3.layout.baseline.json`: 7 / 3 / 0 over 10, as pre-committed (43115c78).
-- Leg Y-A, `al-runner-v3.symbols-lethala.baseline.json`: 5 / 4 / 0 over 9, as pre-committed.
-- Leg Y-B, `al-runner-v3.symbols-lethalb.baseline.json`: 5 / 4 / 0 over 9, as pre-committed. All three were recorded once under R332 on 2026-10-22, and each is identical per mutant to its .NET al-runner twin.
+- Leg L1, `al-runner-v3.layout.baseline.json`: 8 / 3 / 0 over 11, as pre-committed (43115c78) (R855 added rows on 2026-11-07, recorded on a0825f1d9).
+- Leg Y-A, `al-runner-v3.symbols-lethala.baseline.json`: 7 / 4 / 0 over 11, as pre-committed (R855 added rows on 2026-11-07, recorded on a0825f1d9).
+- Leg Y-B, `al-runner-v3.symbols-lethalb.baseline.json`: 7 / 4 / 0 over 11, as pre-committed (R855 added rows on 2026-11-07, recorded on a0825f1d9). All three were recorded once under R332 on 2026-10-22, and each is identical per mutant to its .NET al-runner twin.
 
-- Leg MO, `al-runner-v3.multiobject.baseline.json`: 6 / 1 / 5 over 12, as pre-committed (c2f67f0a), recorded once under R332 on 2026-10-24.
-- Leg WR, `al-runner-v3.wrapped.baseline.json`: 58 / 37 / 3 over 98, as pre-committed (c2f67f0a), recorded once under R332 on 2026-10-24.
+- Leg MO, `al-runner-v3.multiobject.baseline.json`: 7 / 1 / 6 over 14, as pre-committed (c2f67f0a), recorded once under R332 on 2026-10-24 (R855 added rows on 2026-11-07, recorded on a0825f1d9).
+- Leg WR, `al-runner-v3.wrapped.baseline.json`: 62 / 37 / 3 over 102, as pre-committed (c2f67f0a), recorded once under R332 on 2026-10-24 (R855 added rows on 2026-11-07, recorded on a0825f1d9).
 
-- Leg T, `al-runner-v3.tables.baseline.json`: 290 / 57 / 59 over 406, as pre-committed. Its rows differ from
+- Leg T, `al-runner-v3.tables.baseline.json`: 298 / 60 / 60 over 418, as pre-committed (R855 added rows on 2026-11-07, recorded on a0825f1d9). Its rows differ from
   `itest:tables`' baseline on exactly the 52 keys and transitions of the pre-commitment's list (41 Commit, 7
   duplicate key, 4 TestPage).
 

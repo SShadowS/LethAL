@@ -1,0 +1,35 @@
+{
+  "id": "6d0b2f61-3c4e-4a7b-8e12-5f9a0c3d8e02",
+  "name": "LethAL Sandbox Dates Tests",
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "brief": "LethAL R856 fixture: tests of fixtures/sandbox-dates.",
+  "description": "One test codeunit per verdict. The two that kill set their own work date to a fixed past day and assert only values derived from it, never Today() against a literal. The survivor sets nothing and asserts only <> 0D. Asserts via Error(), no Library Assert. Not for production use, see fixtures/README.md.",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "dependencies": [
+    {
+      "id": "6d0b2f61-3c4e-4a7b-8e12-5f9a0c3d8e01",
+      "name": "LethAL Sandbox Dates",
+      "publisher": "LethAL",
+      "version": "1.0.0.0"
+    }
+  ],
+  "screenshots": [],
+  "idRanges": [
+    {
+      "from": 77150,
+      "to": 77199
+    }
+  ],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "17.0",
+  "features": []
+}

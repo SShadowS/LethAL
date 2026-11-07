@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**16 of 836 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**18 of 838 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -43,6 +43,7 @@ that ordering is the priority.
 - **R15** · Custom environment tool support · [R015.md](docs/roadmap/R015.md) · done (gate PASSED 2026-07-26, baseline frozen)
 - **R16** · Run the `envtool` live gate and record its baseline · [R016.md](docs/roadmap/R016.md) · done (2026-07-26 — 3 killed / 10 survived / 3 no-coverage, matching the container gate)
 - **R133** · Vendored tree-sitter-al is 3.2.1; upstream 4.0.0 is a breaking release that moves named trees LethAL hashes · [R133.md](docs/roadmap/R133.md) · done (af3d9a3) — bumped 2026-08-12, same day as filed. One grammar-caused code fix…
+- **R856** · Operator batch #42 and #33: swap-call-arguments claims member arguments; opt-in swap-workdate-today · [R856.md](docs/roadmap/R856.md) · open, in build (coord task R-856)
 
 ## Correctness risks (measured, not closed)
 
@@ -338,6 +339,7 @@ that ordering is the priority.
 - **R847** · A control-app action that reads AllObj and Field would let the pre-publish clash check see an installed app that is not a dependent · [R847.md](docs/roadmap/R847.md) · done (f4e17705)
 - **R852** · itest:verify failed once on lease-renew-unanswered, and the gate's mismatch error does not print the warning's message · [R852.md](docs/roadmap/R852.md) · open: the message logging landed (0b0cdc7a); the cause of the one failure stays open until it recurs or is…
 - **R855** · tree-sitter-al: valid AL fails at the parser's limit of 6 parse versions when `#if`-split blocks share an `if` chain · [R855.md](docs/roadmap/R855.md) · open, filed 2026-11-06 from R853; upstream https://github.com/SShadowS/tree-sitter-al/issues/40
+- **R857** · On v3 a set WorkDate leaks across a test codeunit, while bcdev runs one method per call, so a verdict can differ · [R857.md](docs/roadmap/R857.md) · open, filed 2026-11-06 from R856
 - **R858** · `negate-conditional` and `swap-additive` can still lose a loop's progress in shapes the delete operators refuse · [R858.md](docs/roadmap/R858.md) · open, filed 2026-11-07 from coord R-855
 
 ## Product gaps a real project hits
@@ -505,7 +507,7 @@ that ordering is the priority.
 - **R830** · `void-method-call` has no hang check: deleting a call that steps a loop can hang the run · [R830.md](docs/roadmap/R830.md) · done (7ca93515)
 - **R831** · Hang refusal never sees an array-element target: `while Buf[1] < 10 do Buf[1] := Buf[1] + 1` is claimed · [R831.md](docs/roadmap/R831.md) · done (7ca93515)
 - **R832** · No way to leave one operator out: `--operator` only narrows to a list (`--exclude-operator`, GitHub #50) · [R832.md](docs/roadmap/R832.md) · done (22348be4)
-- **R834** · Operator candidates #30-#43, ranked by sites, overlap, equivalents, yield and cost; first batch #35, #41, #33, #42 · [R834.md](docs/roadmap/R834.md) · open, filed 2026-11-06 (coord task R-821); measured offline, the owner picks the batch, nothing built
+- **R834** · Operator candidates #30-#43, ranked by sites, overlap, equivalents, yield and cost; first batch #35, #41, #33, #42 · [R834.md](docs/roadmap/R834.md) · open, filed 2026-11-06 (coord task R-821); the first batch (#35, #41, #33, #42) is built, coord R-855 and…
 - **R836** · Eleven gate baselines lag at scheme 44 after R830's bump to 45 · [R836.md](docs/roadmap/R836.md) · done (59498cab)
 - **R837** · A mutant inside a same-object callee can still remove a loop's progress: `Counter += 1` in `Advance()` stays claimed · [R837.md](docs/roadmap/R837.md) · closed 2026-11-06 — named limit: 11 specs in one procedure of 2.3M; the rule that finds them is not worth its…
 - **R838** · `empty-block` of an `if` or `case` arm inside a loop deletes the loop's step, and no hang check sees it · [R838.md](docs/roadmap/R838.md) · closed 2026-11-06 — named limit: 4 specs in one procedure of 2.3M; same ruling as R837

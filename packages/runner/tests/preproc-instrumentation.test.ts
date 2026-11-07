@@ -1553,7 +1553,7 @@ describe("R303: a member whose var section is split by #if gets a latch, or is r
           "Twin.Codeunit.al",
           "preproc-undecided",
           "marker-mismatch (4 directive lines, 2 markers)",
-          4,
+          5, // R855: was 4; delete-additive-right adds one site
         ],
       ]);
     } finally {
@@ -1816,7 +1816,7 @@ describe("R316: a split-header procedure whose arms each have their own var sect
           "preproc-undecided",
           // R796: tree-sitter-al 4.5.0 marks one more directive (4.4.1: 5 markers, 3 sites).
           "marker-mismatch (7 directive lines, 6 markers)",
-          4,
+          5, // R855: was 4; delete-additive-right adds one site
         ],
       ]);
     } finally {
@@ -2401,6 +2401,7 @@ describe("R327: a split member swallowed by the global var section gets no site 
     expect(sites(manifest)).toEqual([
       "Repro.Codeunit.al L15 lethal.empty-block",
       "Repro.Codeunit.al L16 lethal.void-method-call",
+      "Repro.Codeunit.al L17 lethal.delete-additive-right",
       "Repro.Codeunit.al L17 lethal.remove-assignment",
       "Repro.Codeunit.al L17 lethal.swap-additive",
       "Repro.Codeunit.al L18 lethal.return-value",
@@ -2807,7 +2808,7 @@ describe("R302: split-member sites through the real pipeline", () => {
     const m = await one(T3_Q2);
     const twin = m.mutants.filter((x) => x.procedureName === "Twin");
     const pick = m.mutants.filter((x) => x.startLine >= 13 && x.startLine <= 25);
-    expect(pick.length).toBe(7);
+    expect(pick.length).toBe(9); // R855: was 7; two delete-additive sites
     for (const x of pick) expect(x.procedureName).toBe("Pick");
     const rel = (xs: typeof twin, base: number) =>
       xs.map((x) => `${x.startLine - base} ${x.operatorName}`).sort();
@@ -3691,7 +3692,7 @@ describe("R318: a renamed split member carries its coverage names, and no identi
   test("r1: the renamed member's mutants list both arm names; Plain's carry none", async () => {
     const { manifest } = await instrument({ "Repro.Codeunit.al": R318_R1 });
     const inMember = manifest.mutants.filter((m) => m.startLine >= 3 && m.startLine <= 16);
-    expect(inMember).toHaveLength(10);
+    expect(inMember).toHaveLength(14); // R855: was 10; four delete-additive sites
     for (const m of inMember) {
       expect(m.procedureName).toBe("");
       expect(m.coverageArmNames).toEqual(["Pick", "Choose"]);
@@ -3705,8 +3706,8 @@ describe("R318: a renamed split member carries its coverage names, and no identi
   test("r1: the arm names are computed once per member, not once per mutant", async () => {
     coverageArmNamesComputed.count = 0;
     const { manifest } = await instrument({ "Repro.Codeunit.al": R318_R1 });
-    expect(manifest.mutants.filter((m) => m.startLine <= 16).length).toBe(10);
-    // The renamed member and Plain: two members, ten plus three mutants.
+    expect(manifest.mutants.filter((m) => m.startLine <= 16).length).toBe(14); // R855: was 10
+    // The renamed member and Plain: two members.
     expect(coverageArmNamesComputed.count).toBe(2);
   });
 
@@ -3719,8 +3720,10 @@ describe("R318: a renamed split member carries its coverage names, and no identi
       "L10 Alpha",
       "L11 Alpha",
       "L11 Alpha",
+      "L11 Alpha",
       "L12 Alpha",
       "L22 Gamma",
+      "L23 Gamma",
       "L23 Gamma",
       "L23 Gamma",
       "L24 Gamma",
@@ -3743,22 +3746,30 @@ describe("R318: a renamed split member carries its coverage names, and no identi
       "bfde8a9e5399719cb19619ee057c24eedd9306fcf2d76c657c6b4a4378b24f00|Repro R||lethal.shift-integer|1",
       "42f3c401fde31149e055dfec5842326f020390b03c7018fe168a642644df6a58|Repro R||lethal.conditional-boundary|1",
       "833313f8bb3ff0f9a49296706144f2ae48dacc26d9ccab4a6105590536136497|Repro R||lethal.remove-assignment|1",
+      // R855: the delete-additive-* rows are new; every other key is HEAD's.
+      "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Repro R||lethal.delete-additive-right|1",
       "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Repro R||lethal.swap-additive|1",
       "2f655ef42c7141d41be438ef0a09db0588720672f6a87a7d107927722cfa2e29|Repro R||lethal.remove-assignment|1",
+      "eef6d8e81fd4fed479dc4d361b5659773e7bc7701c4979e492d5698229e30863|Repro R||lethal.delete-additive-right|1",
       "eef6d8e81fd4fed479dc4d361b5659773e7bc7701c4979e492d5698229e30863|Repro R||lethal.swap-additive|1",
       "c9159b460433d7e0187b40a3e9f1c6b24fa17f5d81145d1a4f5e81e464586890|Repro R||lethal.return-value|1",
+      "78d263bdf45458172865b270cf8c37ce220abae7feec90e4dd915b0eabc69b89|Repro R||lethal.delete-additive-left|1",
+      "78d263bdf45458172865b270cf8c37ce220abae7feec90e4dd915b0eabc69b89|Repro R||lethal.delete-additive-right|1",
       "78d263bdf45458172865b270cf8c37ce220abae7feec90e4dd915b0eabc69b89|Repro R||lethal.swap-additive|1",
       "d1f83cdca147307b5525047ab73ef3b96e89e7d274d898a8a0c3975ef32aa9ca|Repro R|Plain|lethal.empty-block|1",
       "cf8233fb4c95eb8f641cac7ecd90d8bfc2f40fd8ec1a247b4cc9bbbc601c6528|Repro R|Plain|lethal.return-value|1",
+      "1c7f31c8ee6e40da96b0888e7c02e8a3484f8cf46ecf000ca6650d3453cfa251|Repro R|Plain|lethal.delete-additive-right|1",
       "1c7f31c8ee6e40da96b0888e7c02e8a3484f8cf46ecf000ca6650d3453cfa251|Repro R|Plain|lethal.swap-additive|1",
     ]);
     expect(await keysOf(R318_R4)).toEqual([
       "13926bb4e72d79aead21ac9263d2735b6aacd45904fbe9b058371f9115262cb2|Repro R||lethal.empty-block|1",
       "833313f8bb3ff0f9a49296706144f2ae48dacc26d9ccab4a6105590536136497|Repro R||lethal.remove-assignment|1",
+      "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Repro R||lethal.delete-additive-right|1",
       "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Repro R||lethal.swap-additive|1",
       "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Repro R||lethal.return-value|1",
       "d25d06cde1e1a4a5557adb12f3773916f28b8e80b8c21b4a9f8a158463163c1e|Repro R||lethal.empty-block|1",
       "37276285a29d8c4a38baf6d602a495db9e97d227b9b18c9b00901b65b1d5e2ab|Repro R||lethal.remove-assignment|1",
+      "eef6d8e81fd4fed479dc4d361b5659773e7bc7701c4979e492d5698229e30863|Repro R||lethal.delete-additive-right|1",
       "eef6d8e81fd4fed479dc4d361b5659773e7bc7701c4979e492d5698229e30863|Repro R||lethal.swap-additive|1",
       "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Repro R||lethal.return-value|1|1",
     ]);
@@ -4234,6 +4245,7 @@ ${head}    var
         "L10 MemberOnly",
         "L11 MemberOnly",
         "L11 MemberOnly",
+        "L11 MemberOnly", // R855: one more delete-additive-right site
         "L12 MemberOnly",
       ];
       for (const scope of ["Choose", "Pick"]) {
@@ -4244,9 +4256,11 @@ ${head}    var
             "L12 OtherOnly",
             "L12 OtherOnly",
             "L12 OtherOnly",
+            "L12 OtherOnly", // R855
             "L15 AfterOnly",
             "L16 AfterOnly",
             "L16 AfterOnly",
+            "L16 AfterOnly", // R855
           ].sort(),
         ]);
       }
