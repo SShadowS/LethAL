@@ -25,7 +25,17 @@ The legs:
   contract fact is `dependency-skip-line`: a tests app that declares a dependency no package holds must make v3
   write a stderr line starting `dependency skipped:` that names it. The backend refuses a session on that line
   (`AlRunnerV3DependencySkippedError`), so a build that stops writing it, or writes it only with `--verbose`, reads
-  `diverged`: `gate-fail` in leg C, a refused update gate, and a refusal in a session. Since r12
+  `diverged`: `gate-fail` in leg C, a refused update gate, and a refusal in a session. Since R860 (upstream
+  #7139, `docs/superpowers/specs/2026-11-07-r860-missing-dependency-precommitment.md`) the fact reads `matches` on
+  EITHER form: the old line above (every pinned build), or, from edge a461e6310, exit 2 with stderr naming the app
+  (`error: 1 dependency app(s) were not found and --no-download is set ...`; `serve` answers with the same text in an
+  `error` line). On the new form the backend stops the session by name with `AlRunnerV3DependencyMissingError`, which
+  says to put the app's `.app` WITH AL SOURCE in `packagesDir` (a symbols-only `.app` may stop the run again); it
+  never sends `--allow-missing-dependencies`. The fact calls the backend's own `v3MissingDependencyStop` (exit 2 and
+  the header `N dependency app(s) were not found and --no-download is set`, with a line naming the app), so it
+  cannot match text a real run would not stop on. Exit 2 without that header or name, exit 1 with it, or exit 0 with
+  no line, is `diverged`. Leg C measures the one-shot form only: `serve`'s `error` line is read by the backend and
+  covered by unit tests, not by this fact. Since r12
   (`docs/superpowers/specs/2026-10-23-r586-alrunner-v3-precommitment-r12-message-prefix.md`, [[R667]]), the 17th
   contract fact is `message-has-no-type-prefix`: the `message` of a plain `Error()` (`Fails`, on the main call)
   and of an `Assert.AreEqual` failure (codeunit 50661, its own tests app, Microsoft's Library Assert passed as
