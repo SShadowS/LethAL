@@ -4951,6 +4951,16 @@ describe("R857: --isolate-tests", () => {
       );
     });
 
+    test("--workers sets how many at a time: one, or more than four", async () => {
+      for (const n of [1, 6]) {
+        const extra = { isolateTests: true, isolatedBaselineProcesses: n };
+        const r = await rig({ extra, suite, oneShotRows: rows });
+        await baseline(r.b, suite);
+        expect(r.one.peak()).toBe(n);
+        expect(r.one.calls).toHaveLength(methods.length);
+      }
+    });
+
     test("off, the baseline stays one process at a time", async () => {
       const r = await rig({ suite, oneShotRows: rows });
       await baseline(r.b, suite);

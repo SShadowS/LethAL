@@ -546,6 +546,8 @@ export interface AlRunnerV3Config {
    * the baseline one process per test. Off, every request is what it always was.
    */
   readonly isolateTests?: boolean;
+  /** R866: how many of those processes run at a time (`--workers`). Absent: `ISOLATED_BASELINE_PROCESSES`. */
+  readonly isolatedBaselineProcesses?: number;
   /**
    * R790/R798: run the baseline's one-shot calls while alc proves the batch. Internal, not a config
    * key. Unset: read at construction from `LETHAL_V3_SPECULATE_BASELINE` ("1" = on; unset or empty = off).
@@ -553,7 +555,7 @@ export interface AlRunnerV3Config {
   readonly speculateBaseline?: boolean;
 }
 
-/** R866: how many one-test processes an `--isolate-tests` baseline runs at a time. */
+/** R866: how many one-test processes an `--isolate-tests` baseline runs at a time, unless `--workers` says. */
 export const ISOLATED_BASELINE_PROCESSES = 4;
 
 /** R798: the env var that turns R790's speculative baseline on (it is off by default). */
@@ -2457,11 +2459,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     };
     // Every worker ends before a failure goes on, so no process outlives this call.
     const stopped = await Promise.allSettled(
-      Array.from({ length: ISOLATED_BASELINE_PROCESSES }, () =>
-        worker().catch((err: unknown) => {
-          queue.length = 0;
-          throw err;
-        }),
+      Array.from(
+        { length: this.cfg.isolatedBaselineProcesses ?? ISOLATED_BASELINE_PROCESSES },
+        () =>
+          worker().catch((err: unknown) => {
+            queue.length = 0;
+            throw err;
+          }),
       ),
     );
     for (const s of stopped) if (s.status === "rejected") throw s.reason;
