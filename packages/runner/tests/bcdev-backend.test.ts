@@ -4345,8 +4345,8 @@ describe("manifest objects against declarations, before any baseline (R-307 sect
   });
 
   test("R853: a mutant in a file the parser cannot read stops by name, before publish (fenced and hub)", async () => {
-    const arm = "B();\n#if not C\nif not A then begin\n#endif\nend;\nexit(true);\n";
-    const lost = `codeunit 50140 "No Source"\n{\n    procedure P()\n    begin\nif S then begin\n${arm}end else if T then begin\n${arm}end else begin\n${arm}end\n    end;\n}\n`;
+    // Valid AL the parser leaves unread: `end;` in both arms of a `#if/#else` (R855).
+    const lost = `codeunit 50140 "No Source"\n{\n    procedure P()\n    begin\n        B();\n#if A\n    end;\n#else\n        C();\n    end;\n#endif\n\n    procedure Q()\n    begin\n        W();\n    end;\n}\n`;
     for (const coverageMode of ["fenced", "procedure"] as const) {
       const { err, published } = await deployed({
         coverageMode,

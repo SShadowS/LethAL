@@ -1,5 +1,7 @@
 // R853: a file the parser gives up on holds no object, so a run stops at the manifest guard. Both
 // backends' stops must name the file and how to leave it out. The AL is invented.
+// The shapes below must stay unread under any parser that ships: a grammar bump that reads one
+// must replace it with a shape that is still unread, not weaken the stop.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -31,6 +33,24 @@ const armsOf = (n: number): string =>
 const unit = (n: number): string =>
   `codeunit 50000 "X"\n{\n    procedure P()\n    begin\n${armsOf(n)}end\n    end;\n}\n`;
 const KEY = "codeunit:50000";
+// Valid AL that stays unread: `end;` in both arms of a `#if/#else` (R855).
+const SHAPE_C = `codeunit 50000 "X"\n{\n    procedure P()\n    begin\n        B();\n#if A\n    end;\n#else\n        C();\n    end;\n#endif\n\n    procedure Q()\n    begin\n        W();\n    end;\n}\n`;
+const ROOT_ERROR = `codeunit 50000 "X"\n{\n    procedure P()\n    begin\n        B();\n`;
+const SWALLOW_PROCEDURE = `codeunit 50000 "X"\n{\n    procedure\n    begin\n    end;\n\n    procedure Q()\n    begin\n    end;\n}\n`;
+const SWALLOW_TRIGGER = `codeunit 50000 "X"\n{\n    trigger OnRun(\n    begin\n    end;\n\n    trigger OnRun()\n    begin\n    end;\n}\n`;
+const MISSING_END = `codeunit 50000 "X"\n{\n    procedure P()\n    begin\n        begin\n    end;\n\n    procedure Q()\n    begin\n    end;\n}\n`;
+
+type Node = ReturnType<typeof wrapRoot>;
+const find = (n: Node, pred: (n: Node) => boolean): Node | undefined => {
+  if (pred(n)) return n;
+  for (const c of n.children) {
+    const hit = find(c, pred);
+    if (hit !== undefined) return hit;
+  }
+  return undefined;
+};
+const errorWith = (root: Node, kind: string): Node | undefined =>
+  find(root, (n) => n.rawKind === "ERROR" && n.children.some((c) => c.rawKind === kind));
 
 function stopOf(run: () => void): ManifestDeclarationError {
   try {
@@ -45,33 +65,52 @@ function stopOf(run: () => void): ManifestDeclarationError {
 beforeAll(initParser);
 
 describe("R853: the parser's limit", () => {
-  test("two copies parse and three do not, so a new grammar that clears this fails here", () => {
+  // This test goes red on the stock grammar ON PURPOSE: the stock parser cannot read three copies
+  // of the shape. It pins the csb fix, and it is what the grammar bump flips.
+  test("the csb grammar reads three and sixteen copies that the stock grammar cannot (flipped by the bump)", () => {
     expect(isUnreadFile(wrapRoot(parseAL(unit(2))))).toBe(false);
-    expect(isUnreadFile(wrapRoot(parseAL(unit(3))))).toBe(true);
+    expect(isUnreadFile(wrapRoot(parseAL(unit(3))))).toBe(false);
+    expect(isUnreadFile(wrapRoot(parseAL(unit(16))))).toBe(false);
   });
 
-  // The object survives and an ERROR holds the procedures: the form with no root ERROR.
-  const inner = (head: string): string =>
-    `codeunit 50000 "X"\n{\n    ${head}\n    begin\n${armsOf(3)}end;\n    end;\n\n    procedure Q()\n    begin\n    end;\n}\n`;
+  test("a root ERROR", () => {
+    const root = wrapRoot(parseAL(ROOT_ERROR));
+    expect(root.rawKind).toBe("ERROR");
+    expect(isUnreadFile(root)).toBe(true);
+  });
 
+  // The object survives and an ERROR holds the members: the form with no root ERROR.
   test("an ERROR that swallowed a procedure", () => {
-    const root = wrapRoot(parseAL(inner("procedure P()")));
+    const root = wrapRoot(parseAL(SWALLOW_PROCEDURE));
     expect(root.rawKind).toBe("source_file");
     expect(root.hasError).toBe(true);
+    expect(errorWith(root, "procedure_keyword")).toBeDefined();
     expect(isUnreadFile(root)).toBe(true);
   });
 
   test("an ERROR that swallowed a trigger", () => {
-    const root = wrapRoot(parseAL(inner("trigger OnRun()")));
+    const root = wrapRoot(parseAL(SWALLOW_TRIGGER));
     expect(root.rawKind).toBe("source_file");
+    expect(errorWith(root, "trigger_keyword")).toBeDefined();
     expect(isUnreadFile(root)).toBe(true);
   });
 
   test("a body whose `end` the parser missed ran on over the next member", async () => {
-    const text = `codeunit 50000 "X"\n{\n    procedure P()\n    begin\n        B();\n#if A\n    end;\n#else\n        C();\n    end;\n#endif\n\n    procedure Q()\n    begin\n        W();\n    end;\n}\n`;
-    expect(isUnreadFile(wrapRoot(parseAL(text)))).toBe(true);
-    const map = await lineMapFromSources([{ path: "X.al", text }], new Set([KEY]));
+    const root = wrapRoot(parseAL(MISSING_END));
+    const block = find(
+      root,
+      (n) =>
+        n.rawKind === "code_block" &&
+        n.children.some((c) => c.isMissing && c.rawKind === "end_keyword"),
+    );
+    expect(block).toBeDefined();
+    expect(isUnreadFile(root)).toBe(true);
+    const map = await lineMapFromSources([{ path: "X.al", text: MISSING_END }], new Set([KEY]));
     expect([...map.mappedKeys()]).toEqual([]);
+  });
+
+  test("valid AL the parser leaves unread (shape C) is unread", () => {
+    expect(isUnreadFile(wrapRoot(parseAL(SHAPE_C)))).toBe(true);
   });
 
   test("an ERROR that lost no member is not a stop, in a body or in a header", () => {
@@ -87,9 +126,8 @@ describe("R853: the parser's limit", () => {
 
 describe("R853: the hub stops on an unread file", () => {
   test("by name, and passes a file the parser reads", async () => {
-    const text = `codeunit 50000 "X"\n{\n    procedure P()\n    begin\n${armsOf(3)}end;\n    end;\n\n    procedure Q()\n    begin\n    end;\n}\n`;
-    await expect(coverageRefusedFromSources([{ path: "X.al", text }])).rejects.toThrow(
-      "limit of 6 parse paths",
+    await expect(coverageRefusedFromSources([{ path: "X.al", text: SHAPE_C }])).rejects.toThrow(
+      "a gap in the parser",
     );
     await expect(
       coverageRefusedFromSources([{ path: "X.al", text: unit(2) }]),
@@ -106,9 +144,8 @@ describe("R853: a harmless ERROR still indexes the file", () => {
   });
 
   test("a procedure lost to an ERROR leaves the object unmapped, so its mutants stop the run", async () => {
-    const text = `codeunit 50000 "X"\n{\n    procedure P()\n    begin\n${armsOf(3)}end;\n    end;\n\n    procedure Q()\n    begin\n    end;\n}\n`;
     const declared = new Set([KEY]);
-    const map = await lineMapFromSources([{ path: "X.al", text }], declared);
+    const map = await lineMapFromSources([{ path: "X.al", text: SHAPE_C }], declared);
     expect(map.unreadFiles).toEqual(["X.al"]);
     expect([...map.mappedKeys()]).toEqual([]);
     const stop = stopOf(() =>
@@ -120,8 +157,7 @@ describe("R853: a harmless ERROR still indexes the file", () => {
   test("v3 stops on the same file", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lethal-r853-"));
     try {
-      const text = `codeunit 50000 "X"\n{\n    procedure P()\n    begin\n${armsOf(3)}end;\n    end;\n\n    procedure Q()\n    begin\n    end;\n}\n`;
-      await writeFile(join(dir, "X.Codeunit.al"), text, "utf8");
+      await writeFile(join(dir, "X.Codeunit.al"), SHAPE_C, "utf8");
       const notes: string[] = [];
       const index = await buildAlRunnerCoverageIndex(dir, {
         symbols: [],
@@ -147,21 +183,21 @@ describe("R853: the stop names the file and the way out", () => {
 
   test("bcdev's line map: declared, not mapped", async () => {
     const declared = new Set([KEY]);
-    const map = await lineMapFromSources([{ path: "src\\X.Codeunit.al", text: unit(3) }], declared);
+    const map = await lineMapFromSources([{ path: "src\\X.Codeunit.al", text: SHAPE_C }], declared);
     expect(map.unreadFiles).toEqual(["src/X.Codeunit.al"]);
     const stop = stopOf(() =>
       assertManifestObjectsDeclared([KEY], declared, map.mappedKeys(), new Set(), map.unreadFiles),
     );
     expect(stop.message).toContain("no line map was built");
     expect(stop.message).toContain("src/X.Codeunit.al");
-    expect(stop.message).toContain("limit of 6 parse paths");
+    expect(stop.message).toContain("a gap in the parser");
     expect(stop.message).toContain("--exclude <glob>");
   });
 
   test("v3's index: not declared", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lethal-r853-"));
     dirs.push(dir);
-    await writeFile(join(dir, "X.Codeunit.al"), unit(3), "utf8");
+    await writeFile(join(dir, "X.Codeunit.al"), SHAPE_C, "utf8");
     const index = await buildAlRunnerCoverageIndex(dir, { symbols: [] });
     expect(index.lineMap.unreadFiles).toEqual(["X.Codeunit.al"]);
     const stop = stopOf(() =>
@@ -175,7 +211,7 @@ describe("R853: the stop names the file and the way out", () => {
     );
     expect(stop.message).toContain("does not declare");
     expect(stop.message).toContain("X.Codeunit.al");
-    expect(stop.message).toContain("limit of 6 parse paths");
+    expect(stop.message).toContain("a gap in the parser");
     expect(stop.message).toContain("--exclude <glob>");
   });
 
@@ -186,6 +222,6 @@ describe("R853: the stop names the file and the way out", () => {
     const stop = stopOf(() =>
       assertManifestObjectsDeclared(["codeunit:50001"], declared, map.mappedKeys(), new Set(), []),
     );
-    expect(stop.message).not.toContain("limit of 6");
+    expect(stop.message).not.toContain("a gap in the parser");
   });
 });
