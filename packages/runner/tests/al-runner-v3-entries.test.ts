@@ -4799,7 +4799,9 @@ describe("R857: --isolate-tests", () => {
     await r.b.activate("M0001");
     const v = await r.b.run(ref("A"), OPTS);
     expect(v.outcome).toBe("error");
-    expect(v.failureMessage).toContain("did not run alone");
+    expect(v.failureMessage).toContain("has 2 rows, so that test did not run alone");
+    // The other way: an entry with its one row is read as usual.
+    expect((await r.b.run(ref("B"), OPTS)).outcome).toBe("pass");
   });
 
   test("on: a cut at one test re-sends only the tests after it, on a fresh daemon", async () => {
@@ -4825,7 +4827,10 @@ describe("R857: --isolate-tests", () => {
       allPass(m, cu, d, n).map((x) => (x.method === "B" ? { ...x, status: "fail" as const } : x));
     await expect(
       readyRig({ ...ISOLATE, serve: { rows: serveRows }, oneShotRows: allPass }),
-    ).rejects.toThrow(/al-runner-v3-entries-warmup-disagrees/);
+    ).rejects.toThrow(
+      // Exactly B's own rows on both sides, and A's entry agrees: a wrong key reads an empty side.
+      `al-runner-v3-entries-warmup-disagrees: the daemon's NONE rows are not this batch's one-shot baseline (codeunit ${CU}: serve [b=fail], one-shot [b=pass])`,
+    );
   });
 
   test("on: a refusal at baseline still names the real codeunit in a survivor's note", async () => {
