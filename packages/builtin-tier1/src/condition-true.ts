@@ -49,7 +49,9 @@ function condition(node: ALSyntaxNode): ALSyntaxNode | null {
   if (
     cond.kind === ALNodeKind.logical_expression &&
     ["and", "or"].includes(cond.childForFieldName("operator")?.text.toLowerCase() ?? "") &&
-    ["left", "right"].some((side) => cond.childForFieldName(side) !== null)
+    ["left", "right"].some(
+      (side) => cond.childForFieldName(side)?.text.trim().toLowerCase() === "true",
+    )
   ) {
     return null;
   }

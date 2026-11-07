@@ -1017,10 +1017,17 @@ What remains is small and named, so a stranded run is diagnosable rather than my
   whose then-arm holds a `while` or `repeat` that does not step a cursor, writes a name an enclosing loop's exit
   reads (`I -= 1`, `A := 0`, a requeue, a helper reset), restarts or steps back the exit's cursor
   (`R.FindFirst()`, `R.Next(-1)`), or calls back into its own procedure (recursion, also through a chain of
-  procedures in the same object); and a cursor step in the condition, inside a loop. A forced `break` or `exit` is
-  not narrowed. Not seen: a key field written on a cursor record, a loop inside a callee the then-arm calls.
-- The opt-in `blank-argument` (a variable argument to its blank) refuses a callee parameter that a loop reads
-  directly, through a copy (`L := Step; while I < N do I += L`), through a global it is stored in that any loop of
+  procedures in the same object, also through a codeunit variable of the object's own type, `Me.Rec(L + 1)`);
+  `Codeunit.Run(Codeunit::"Own")` or `Me.Run()` on the object itself; and a cursor step in the condition, inside a
+  loop. A condition that is an `and`/`or` with a bare `true` operand (`A and true`) gets no mutant, because
+  `delete-logical-*` writes the same bytes. A forced `break` or `exit` is not narrowed. Not seen: a key field
+  written on a cursor record, a loop inside a callee the then-arm calls, an event subscriber in the same object
+  that calls back, `Codeunit.Run` of its own codeunit from `OnRun` through another object, and a write that a
+  LATER loop reads (`Step := 1; if Backwards then Step := -1; while I < N do I += Step;`), the same exposure the
+  default operators have.
+- The opt-in `blank-argument` (a variable argument to its blank) refuses a callee parameter that a `while` or a
+  `repeat` reads (a `for` is skipped, its bound is read once; so is a loop whose exit steps a record cursor or a
+  stream, `until R.Next() = 0`, which ends when the rows do) directly, through a copy (`L := Step; while I < N do I += L`), through a global it is stored in that any loop of
   the object reads, through a receiver it is handed to, or through another procedure of the object it is passed
   to (four calls deep); caller progress (`Remaining := Consume(Remaining)`); and a call that leads back to the
   caller (recursion). Name matching cannot see another object, a record field, a setup table, a `var` parameter,
