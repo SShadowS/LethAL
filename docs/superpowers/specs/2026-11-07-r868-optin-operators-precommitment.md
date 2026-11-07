@@ -49,22 +49,24 @@ ON, specs added (each operator alone, then both together). Removed, tuples moved
 | set | `condition-true` alone | `blank-argument` alone | both on | both = sum of the two? |
 |---|---|---|---|---|
 | fixtures | 273 | 10 | 283 | yes |
-| CDO | 3,776 | 1,108 | 4,884 | yes |
-| DO | 4,956 | 1,994 | 6,950 | yes |
-| DC | 16,015 | 7,895 | 23,910 | yes |
-| BC.History | 119,781 | 77,859 | 197,640 | yes |
+| CDO | 3,776 | 1,394 | 5,170 | yes |
+| DO | 4,956 | 2,434 | 7,390 | yes |
+| DC | 16,011 | 11,167 | 27,178 | yes |
+| BC.History | 119,774 | 100,888 | 220,662 | yes |
+
+(Round 2, after the build review: `blank-argument` alone and both were re-dumped on `lethal/r868` at e1df3b39; the `condition-true` column is both minus `blank-argument`, equal to round 1 except DC -4 and BC.History -7, the bare-`true` and own-type-variable refusals. The OFF dump was redone too: 0 added, 0 removed, 0 moved on all five sets.)
 
 Hang-refused counts (before > after), and growth with both on:
 
 | set | `condition-true` | `blank-argument` | both | specs, both on |
 |---|---|---|---|---|
 | fixtures | 2 > 2 | 0 > 0 | 2 > 2 | +283 |
-| CDO | 589 > 771 | 589 > 953 | 589 > 1,135 | +8.39% |
-| DO | 701 > 925 | 701 > 1,261 | 701 > 1,485 | +8.47% |
-| DC | 3,220 > 4,111 | 3,220 > 7,143 | 3,220 > 8,034 | +11.71% |
-| BC.History | 72,164 > 82,311 | 72,136 > 104,379 | 72,165 > 114,555 | +8.38% |
+| CDO | (round 1) 589 > 771 | 589 > 667 | 589 > 849 | +8.89% |
+| DO | (round 1) 701 > 925 | 701 > 821 | 701 > 1,045 | +9.01% |
+| DC | (round 1) 3,220 > 4,111 | 3,220 > 3,871 | 3,220 > 4,766 | +13.31% |
+| BC.History | (round 1) 72,164 > 82,311 | 72,136 > 81,350 | 72,165 > 91,533 | +9.35% |
 
-The new rules cost sites. R-862's prototype refused about 12% of `blank-argument` candidates; now DC refuses 3,923 of 11,818 (33%) and BC.History 32,243 of 110,102 (29%). Most of that is the global rule (a value stored in a global that any loop of the object reads, matched by name) and the follow-through rule. `condition-true` refuses 891 of 16,906 on DC (5%). These are safe-direction losses (R829); a narrowing is open.
+Refusal share of `blank-argument` candidates (refused / (claimed + refused)), after the review's narrowing (a `for` loop and a loop whose exit steps a record cursor no longer count): CDO 78 of 1,472 (5.3%), DO 120 of 2,554 (4.7%), DC 651 of 11,818 (5.5%), BC.History 9,214 of 110,102 (8.4%). Before it: DC 33%, BC.History 29%. The prototype refused about 12%. `condition-true` refuses about 5% on DC (round 1). These are safe-direction losses (R829).
 
 No dedupe clash with both on: the sum equals the two alone on every set. R-862's prototype threw in `dedupeSpecs` here (`blank-argument` against `flip-boolean-literal`); `blank-argument` now returns at once for anything that is not an identifier or a field access, and `packages/runner/tests/r868-optin-operators.test.ts` goes red with the guard removed.
 
