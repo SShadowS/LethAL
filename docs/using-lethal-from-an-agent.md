@@ -1025,9 +1025,13 @@ What remains is small and named, so a stranded run is diagnosable rather than my
   that calls back, `Codeunit.Run` of its own codeunit from `OnRun` through another object, and a write that a
   LATER loop reads (`Step := 1; if Backwards then Step := -1; while I < N do I += Step;`), the same exposure the
   default operators have.
-- The opt-in `blank-argument` (a variable argument to its blank) refuses a callee parameter that a `while` or a
-  `repeat` reads (a `for` is skipped, its bound is read once; so is a loop whose exit steps a record cursor or a
-  stream, `until R.Next() = 0`, which ends when the rows do) directly, through a copy (`L := Step; while I < N do I += L`), through a global it is stored in that any loop of
+- The opt-in `blank-argument` (a variable argument to its blank) refuses a callee parameter that a `for`, a `while`
+  or a `repeat` reads, except in two shapes it skips. (1) A `for` whose body does not assign its control variable
+  (the bound is read once). (2) A `repeat` whose `until` holds exactly one plain cursor step, `R.Next() = 0` with
+  no argument and R a Record or RecordRef variable, alone or joined only by `or`; or a `while` whose condition is
+  exactly `R.Next() <> 0`; and whose body neither restarts nor moves R back (`Find`, `FindFirst`, `FindSet`,
+  `FindLast`, `Reset`, `Get`, `Next` with an argument, `R := ...`, R passed whole). Not skipped: `until (R.Next() =
+  0) and (J >= 100)`, a user codeunit's `Next`, `R.Next(S)`, a stream loop. A read directly, through a copy (`L := Step; while I < N do I += L`), through a global it is stored in that any loop of
   the object reads, through a receiver it is handed to, or through another procedure of the object it is passed
   to (four calls deep); caller progress (`Remaining := Consume(Remaining)`); and a call that leads back to the
   caller (recursion). Name matching cannot see another object, a record field, a setup table, a `var` parameter,

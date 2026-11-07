@@ -51,6 +51,24 @@ function objectNameOf(obj: ALSyntaxNode): string {
   return normalizeAlName(obj.childForFieldName("object_name")?.text ?? "");
 }
 
+const objectIdOf = (obj: ALSyntaxNode): string =>
+  obj.childForFieldName("object_id")?.text.trim() ?? "";
+
+/** The last name segment of `My.Ns."C"` or `"C"` or `C`, normalized. */
+function lastSegment(raw: string): string {
+  const m = /("[^"]*"|[^.\s]+)\s*$/.exec(raw.trim());
+  return normalizeAlName(m?.[1] ?? "");
+}
+
+/** Is a variable type text `Codeunit "C"`, `Codeunit C`, `Codeunit 50100` or `Codeunit My.Ns."C"` the object itself? */
+function isOwnType(typeText: string, obj: ALSyntaxNode): boolean {
+  const m = /^\s*Codeunit\s+(.+?)\s*$/i.exec(typeText);
+  const arg = m?.[1];
+  if (arg === undefined) return false;
+  if (/^\d+$/.test(arg)) return arg === objectIdOf(obj);
+  return lastSegment(arg) === objectNameOf(obj);
+}
+
 /**
  * ONE resolver of "which same-object procedure does this call run", for both operators: a bare call,
  * `this.P()` and `Rec.P()` (`calleeOf`), and a call through a codeunit variable of the object's OWN
@@ -70,8 +88,7 @@ function selfCallee(
   const member = f?.childForFieldName("member");
   if (f === null || f === undefined || !recv || !member || !isIdentifierLike(recv)) return null;
   const v = resolveVarRef(recv, ctx);
-  const m = v === null ? null : /^\s*Codeunit\s+(.+?)\s*$/i.exec(v.typeText);
-  if (m?.[1] === undefined || normalizeAlName(m[1]) !== objectNameOf(obj)) return null;
+  if (v === null || !isOwnType(v.typeText, obj)) return null;
   const name = normalizeAlName(member.text);
   return names.has(name) ? name : null;
 }
@@ -105,14 +122,16 @@ function runsOwnCodeunit(root: ALSyntaxNode, obj: ALSyntaxNode, ctx: SemanticCon
     if (recv === null) return;
     if (normalizeAlName(recv.text) === "codeunit") {
       const first = argumentList(n)[0];
-      const t = first?.text.replace(/\s+/g, "") ?? "";
-      if (/^codeunit::/i.test(t) && normalizeAlName(t.slice(10)) === own) found = true;
+      const t = first?.text.trim() ?? "";
+      if (/^codeunit\s*::/i.test(t) && lastSegment(t.replace(/^codeunit\s*::/i, "")) === own) {
+        found = true;
+      }
+      if (t === objectIdOf(obj) && t !== "") found = true;
       return;
     }
     if (!isIdentifierLike(recv)) return;
     const v = resolveVarRef(recv, ctx);
-    const m = v === null ? null : /^\s*Codeunit\s+(.+?)\s*$/i.exec(v.typeText);
-    if (m?.[1] !== undefined && normalizeAlName(m[1]) === own) found = true;
+    if (v !== null && isOwnType(v.typeText, obj)) found = true;
   });
   return found;
 }
@@ -327,12 +346,131 @@ function thenArmHangsUncached(ifNode: ALSyntaxNode, ctx: SemanticContext): boole
 // ---------------------------------------------------------------------------------------------
 
 /**
- * Loops a blank can stop from ending: `while` and `repeat`. NOT a `for` (its bound is read once, so a
- * blank cannot keep it going), and NOT a loop whose exit steps a record cursor or a stream
- * (`repeat ... until R.Next() = 0`): it ends when the rows do, whatever the filter. A read inside one
- * of those still counts when a `while` or a stepless `repeat` also encloses it.
+ * Loops a blank can stop from ending: `while`, `repeat` and `for`, except the two narrow shapes
+ * `skippedLoop` names. A read inside a skipped loop still counts when another loop encloses it.
  */
-const ANY_LOOP: ReadonlySet<string> = new Set(["while_statement", "repeat_statement"]);
+const ANY_LOOP: ReadonlySet<string> = new Set([
+  "while_statement",
+  "repeat_statement",
+  "for_statement",
+]);
+
+const unparen = (e: ALSyntaxNode): ALSyntaxNode => {
+  let cur = e;
+  while (cur.kind === ALNodeKind.parenthesized_expression) {
+    const next = cur.namedChildren[0];
+    if (next === undefined) break;
+    cur = next;
+  }
+  return cur;
+};
+
+/** The operands of a chain of `or`, through parentheses. */
+function orOperands(e: ALSyntaxNode): ALSyntaxNode[] {
+  const x = unparen(e);
+  if (
+    x.kind === ALNodeKind.logical_expression &&
+    x.childForFieldName("operator")?.text.toLowerCase() === "or"
+  ) {
+    const l = x.childForFieldName("left");
+    const r = x.childForFieldName("right");
+    return [...(l ? orOperands(l) : []), ...(r ? orOperands(r) : [])];
+  }
+  return [x];
+}
+
+/** `X.Next() <op> 0`, no argument, X a Record or RecordRef variable: the cursor name, else null. */
+function plainStep(e: ALSyntaxNode, op: "=" | "<>", ctx: SemanticContext): string | null {
+  const x = unparen(e);
+  if (x.kind !== ALNodeKind.comparison_expression) return null;
+  if (x.childForFieldName("operator")?.text.trim() !== op) return null;
+  const call = x.childForFieldName("left");
+  if (x.childForFieldName("right")?.text.trim() !== "0" || call === null) return null;
+  if (call.rawKind !== "call_expression" || argumentList(call).length !== 0) return null;
+  const f = call.childForFieldName("function");
+  const recv = f?.childForFieldName("object");
+  if (normalizeAlName(f?.childForFieldName("member")?.text ?? "") !== "next") return null;
+  if (!recv || !isIdentifierLike(recv)) return null;
+  const v = resolveVarRef(recv, ctx);
+  if (v === null || !/^\s*(Record|RecordRef)\b/i.test(v.typeText)) return null;
+  return normalizeAlName(recv.text);
+}
+
+/** Methods that restart a cursor or move it backwards, or reposition it. */
+const MOVES_CURSOR: ReadonlySet<string> = new Set(
+  "find findfirst findset findlast reset get getbysystemid setposition copy clear init rename".split(
+    " ",
+  ),
+);
+
+/** Does `body` restart, reposition or reassign cursor `k`, step it with an argument, or pass it whole? */
+function movesCursor(body: ALSyntaxNode, k: string): boolean {
+  let hit = false;
+  visitAll(body, (n) => {
+    if (n.kind === ALNodeKind.assignment_statement) {
+      const left = n.childForFieldName("left") ?? n.namedChildren[0] ?? null;
+      if (left !== null && isIdentifierLike(left) && normalizeAlName(left.text) === k) hit = true;
+    }
+    if (n.rawKind !== "call_expression" && n.rawKind !== "call_statement") return;
+    const f = n.childForFieldName("function");
+    const recv = f?.childForFieldName("object");
+    const m = normalizeAlName(f?.childForFieldName("member")?.text ?? "");
+    if (recv && isIdentifierLike(recv) && normalizeAlName(recv.text) === k) {
+      if (MOVES_CURSOR.has(m) || (m === "next" && argumentList(n).length > 0)) hit = true;
+    }
+    for (const a of argumentList(n)) {
+      if (isIdentifierLike(a) && normalizeAlName(a.text) === k) hit = true;
+    }
+  });
+  return hit;
+}
+
+/**
+ * A loop a blank cannot keep going, so a read of the blanked value in it is not a hang:
+ *  - a `for` whose body does not assign its control variable (the bound is read once);
+ *  - a `repeat` whose `until` holds exactly one plain cursor step, `R.Next() = 0`, no argument, R a
+ *    Record or RecordRef variable, alone or joined only by `or`; or a `while` whose condition is
+ *    exactly `R.Next() <> 0`; and whose body neither restarts nor moves R backwards (`FindFirst`,
+ *    `FindSet`, `FindLast`, `Find`, `Reset`, `Get`, `Next` with an argument, `R := ...`, R passed
+ *    whole). Anything else is not skipped: `until (R.Next() = 0) and (J >= 100)` never ends once
+ *    `Next()` gives 0, and a user codeunit's `Next` ends nothing.
+ */
+function skippedLoop(loop: ALSyntaxNode, ctx: SemanticContext): boolean {
+  const body = loop.childForFieldName("body");
+  if (body === null) return false;
+  if (loop.rawKind === "for_statement") {
+    const v = loop.childForFieldName("variable");
+    const name = v === null ? "" : normalizeAlName(v.text);
+    let assigned = false;
+    visitAll(body, (n) => {
+      if (n.kind !== ALNodeKind.assignment_statement) return;
+      const left = n.childForFieldName("left") ?? n.namedChildren[0] ?? null;
+      if (left !== null && baseNameOf(left) === name) assigned = true;
+    });
+    return name !== "" && !assigned;
+  }
+  const cond = loop.childForFieldName("condition");
+  if (cond === null) return false;
+  let cursor: string | null = null;
+  if (loop.rawKind === "while_statement") {
+    cursor = plainStep(cond, "<>", ctx);
+  } else {
+    const steps = orOperands(cond).map((o) => plainStep(o, "=", ctx));
+    const real = steps.filter((s): s is string => s !== null);
+    cursor = real.length === 1 ? (real[0] ?? null) : null;
+    if (cursor !== null) {
+      // The other operands of the `or` may not touch the cursor.
+      const k = cursor;
+      for (const o of orOperands(cond)) {
+        if (plainStep(o, "=", ctx) !== null) continue;
+        visitAll(o, (n) => {
+          if (isIdentifierLike(n) && normalizeAlName(n.text) === k) cursor = null;
+        });
+      }
+    }
+  }
+  return cursor !== null && !movesCursor(body, cursor);
+}
 
 /** The parameter names of a procedure, in order. */
 function parameterNames(proc: ALSyntaxNode): string[] {
@@ -352,7 +490,7 @@ function readsInLoop(
   let hit = false;
   const scan = (n: ALSyntaxNode, looping: boolean): void => {
     if (hit) return;
-    const now = looping || (ANY_LOOP.has(n.rawKind) && exitEffect(n, ctx).steps.size === 0);
+    const now = looping || (ANY_LOOP.has(n.rawKind) && !skippedLoop(n, ctx));
     if (now && isIdentifierLike(n) && names.has(normalizeAlName(n.text))) hit = true;
     for (const c of n.namedChildren) scan(c, now);
   };

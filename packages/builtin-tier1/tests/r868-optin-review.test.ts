@@ -244,3 +244,122 @@ ${more}
     expect(seen(blankArgument, unit("repeat I += Step; until I > 10;")).hang).toContain("Step");
   });
 });
+
+describe("R868 review 3: the cursor-loop and for skips are narrow", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  const unit = (callee: string) => `codeunit 50100 "C"
+{
+    var
+        R: Record Customer;
+
+    procedure P(Step: Integer)
+    begin
+        Q(Step);
+    end;
+
+    local procedure Q(Step: Integer)
+    var
+        I: Integer;
+        J: Integer;
+        Total: Integer;
+        RR: RecordRef;
+        Q: Codeunit "D";
+    begin
+${callee}
+    end;
+
+    local procedure Show(var Rec2: Record Customer)
+    begin
+    end;
+}`;
+  const refused = (callee: string) => {
+    const s = seen(blankArgument, unit(callee));
+    return s.hang.includes("Step") && !s.claimed.includes("Step");
+  };
+  const claimed = (callee: string) => seen(blankArgument, unit(callee)).claimed.includes("Step");
+
+  it("REFUSES a cursor step joined by and: until (R.Next() = 0) and (J >= 100)", () => {
+    expect(refused("repeat J += Step; until (R.Next() = 0) and (J >= 100);")).toBe(true);
+  });
+
+  it("REFUSES a body that restarts the cursor", () => {
+    expect(refused("repeat J += 1; if J > Step then R.FindFirst(); until R.Next() = 0;")).toBe(
+      true,
+    );
+  });
+
+  it("REFUSES a body that resets, rereads, steps with an argument, or passes the cursor whole", () => {
+    expect(refused("repeat Total += Step; R.Reset(); until R.Next() = 0;")).toBe(true);
+    expect(refused("repeat Total += Step; R.Get(1); until R.Next() = 0;")).toBe(true);
+    expect(refused("repeat Total += Step; R.Next(-1); until R.Next() = 0;")).toBe(true);
+    expect(refused("repeat Total += Step; Show(R); until R.Next() = 0;")).toBe(true);
+  });
+
+  it("REFUSES a user codeunit's Next and a Next with an argument", () => {
+    expect(refused("repeat J += Step; until (Q.Next() = 0) and (J > 100);")).toBe(true);
+    expect(refused("repeat J += Step; until Q.Next() = 0;")).toBe(true);
+    expect(refused("repeat Total += 1; until R.Next(Step) = 0;")).toBe(true);
+  });
+
+  it("REFUSES a for loop whose body assigns the control variable", () => {
+    expect(refused("for I := 1 to 10 do I := I + Step - 1;")).toBe(true);
+  });
+
+  it("CLAIMS a plain cursor loop (alone, and joined by or), a RecordRef one, and a while on Next() <> 0", () => {
+    expect(claimed("repeat Total += Step; until R.Next() = 0;")).toBe(true);
+    expect(claimed("repeat Total += Step; until (R.Next() = 0) or (Total > 5);")).toBe(true);
+    expect(claimed("repeat Total += Step; until RR.Next() = 0;")).toBe(true);
+    expect(claimed("while R.Next() <> 0 do Total += Step;")).toBe(true);
+  });
+
+  it("CLAIMS a for loop whose body does not assign the control variable, and a field step", () => {
+    expect(claimed("for I := 1 to 10 do Total += Step;")).toBe(true);
+    expect(claimed("repeat R.Qty := Step; R.Modify(); until R.Next() = 0;")).toBe(true);
+  });
+});
+
+describe("R868 review 3: own-type codeunit by id and by namespace", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  const unit = (body: string) => `codeunit 50100 "C"
+{
+    procedure Go(L: Integer)
+    var
+        X: Codeunit ${body};
+    begin
+        if L < 10 then
+            X.Go(L + 1);
+    end;
+}`;
+
+  it("REFUSES a variable declared by the object's own id, and by a namespace-qualified name", () => {
+    expect(cond(unit("50100"), "L < 10")).toEqual({ claimed: false, refused: true });
+    expect(cond(unit('My.Ns."C"'), "L < 10")).toEqual({ claimed: false, refused: true });
+    expect(cond(unit("C"), "L < 10")).toEqual({ claimed: false, refused: true });
+  });
+
+  it("CLAIMS a variable of another codeunit by id, or by a namespace-qualified other name", () => {
+    expect(cond(unit("50101"), "L < 10").claimed).toBe(true);
+    expect(cond(unit('My.Ns."D"'), "L < 10").claimed).toBe(true);
+  });
+
+  it("REFUSES Codeunit.Run(50100) in the codeunit's OnRun, CLAIMS Codeunit.Run(50101)", () => {
+    const run = (id: string) => `codeunit 50100 "C"
+{
+    trigger OnRun()
+    var
+        G: Integer;
+    begin
+        if G < 10 then
+            Codeunit.Run(${id});
+    end;
+}`;
+    expect(cond(run("50100"), "G < 10")).toEqual({ claimed: false, refused: true });
+    expect(cond(run("50101"), "G < 10").claimed).toBe(true);
+  });
+});
