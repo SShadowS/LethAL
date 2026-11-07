@@ -2201,7 +2201,7 @@ async function legT(
   }
   notes();
   if (j.outcome === "gate-fail") throw new LegFailure(j.failure ?? "T: gate-fail");
-  // R788: only on a pass, so a held T keeps its own outcome (on a pass killed is the pinned 290).
+  // R788: only on a pass, so a held T keeps its own outcome (on a pass killed is the pin's killed count).
   if (j.outcome === "pass") assertServeCounters(b, "T", r.counts.killed);
   return { outcome: j.outcome, r, ...(j.pinned === true ? { pinned: true as const } : {}) };
 }
