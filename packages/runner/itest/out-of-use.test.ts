@@ -329,6 +329,15 @@ describe("printItestTarget refuses a marked server BEFORE it prints its target l
     expect(targetLines(lines)).toHaveLength(1);
   });
 
+  test("R867: in our environment a gate on the parked Cronus28 refuses, with no target line", () => {
+    const parked = { server: "http://Cronus28:7048" };
+    const env = { ...ON_SERVER1, LETHAL_COORD_ROOT: "/no-such-coord-root" };
+    const { thrown, lines } = print(parked, dirWith({}), env);
+    expect(thrown).toBeInstanceOf(BcHostMismatchError);
+    expect(targetLines(lines)).toEqual([]);
+    expect(print(parked, dirWith({}), ON_SERVER1).thrown).toBeUndefined();
+  });
+
   test("a config with no port at all is the default 7049, so bc1's marker refuses it", () => {
     const { thrown, lines } = print({ server: `http://${H}` }, dirWith({ "bc1.md": MARKER }));
     expect(thrown).toBeInstanceOf(ServerOutOfUseError);

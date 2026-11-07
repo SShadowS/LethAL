@@ -46,6 +46,7 @@ import type { BackendKind, BackendStatus, ExecutionBackend } from "./backend";
 import { isBcdev, isLocalRunner } from "./backend";
 import { readTargetSource } from "./baseline-snapshot";
 import { bcFetch } from "./bc-fetch";
+import { refuseRetiredBcHost } from "./bc-host";
 import { BcDevMcpBackend } from "./bcdev-backend";
 import type { BcDevConfig } from "./bcdev-backend";
 import { renderVersion } from "./build-info";
@@ -2517,6 +2518,7 @@ async function loadLethalConfigFile(path: string): Promise<LethalConfigFile> {
     );
   }
   refuseRetiredV2ConfigSection(parsed, path);
+  refuseRetiredBcHost(parsed.bcdev?.server);
   setPackageCacheDirs(configuredPackageCaches(parsed));
   return parsed;
 }
