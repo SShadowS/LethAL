@@ -493,7 +493,7 @@ that ordering is the priority.
 - **R733** · Name the installed dependents before the first publish: LethAL Control 1.0.0.24 `InstalledDependents(AppId)` (after the Directions talk) · [R733.md](docs/roadmap/R733.md) · done (29874b65)
 - **R759** · `lethal verify` does not honour `--exclude-test` or `--tests-only`: it re-discovers every test · [R759.md](docs/roadmap/R759.md) · done (20a2dee5)
 - **R811** · A test project whose app.json names a path with `\` fails on Linux: R422 covers the target only, and the refusal blamed the batch · [R811.md](docs/roadmap/R811.md) · done (83b33574)
-- **R814** · A LethAL user cannot run the al-runner-v3 backend: every binary needs a `.gated` file that only our own update gate can write · [R814.md](docs/roadmap/R814.md) · done (57396130); a clean-machine run of the install is still to do
+- **R814** · A LethAL user cannot run the al-runner-v3 backend: every binary needs a `.gated` file that only our own update gate can write · [R814.md](docs/roadmap/R814.md) · done (57396130); the install's walk is R840's, in a container with an empty home, on which the owner ruled…
 - **R821** · The reports told users to raise --baseline-timeout-ms, which was no CLI flag (GitHub #46) · [R821.md](docs/roadmap/R821.md) · done (3ae274b3)
 - **R824** · doctor misses a missing non-Microsoft dependency package and a sync-pending tenant; clear-quarantine rejects --config (GitHub #29) · [R824.md](docs/roadmap/R824.md) · done (41df4238)
 - **R825** · README states the operator count in prose by hand, and it drifted (GitHub #44) · [R825.md](docs/roadmap/R825.md) · done (41df4238)
@@ -778,7 +778,7 @@ that ordering is the priority.
 - **R660** · ci.yml has no workflow_dispatch trigger: when GitHub drops a push event, a submit head can get no CI run, and nothing can start one by hand · [R660.md](docs/roadmap/R660.md) · done (0ea6960c)
 - **R662** · talk-cut script: tag a given commit and make a DRAFT release with lethal-control.app attached, never publishing it · [R662.md](docs/roadmap/R662.md) · done (03448305)
 - **R663** · bc-demo: a fourth BC on Linux instance on server1 for the talk, outside every lease pool, with an idempotent setup that is also the offline demo reset · [R663.md](docs/roadmap/R663.md) · done (a9bb3ffe)
-- **R664** · gift-card re-freeze script on bc-demo: three agreeing runs, a new frozen baseline at the build's identity scheme (42 on master), and the talk runbook's numbers · [R664.md](docs/roadmap/R664.md) · closed 2026-11-05 — re-frozen on bc-demo at identity scheme 43 (R-816); 60 deployed, 34/15/11, as the dry run
+- **R664** · gift-card re-freeze script on bc-demo: three agreeing runs, a new frozen baseline at the build's identity scheme (42 on master), and the talk runbook's numbers · [R664.md](docs/roadmap/R664.md) · closed 2026-11-05 — re-frozen on bc-demo at identity scheme 43 (R-816); 60 deployed, 34/15/11, as the dry…
 - **R667** · al-runner v3: nothing live would catch a future build that prefixes failure messages, which would skew the R553 assertion screen · [R667.md](docs/roadmap/R667.md) · done (44a198d5; review fixes in merge 0ea0a076)
 - **R668** · The batch project copies every non-AL file of the target as a resource, so a lethal.config*.json holding a login is copied into every staged batch dir · [R668.md](docs/roadmap/R668.md) · done (3424c3f0)
 - **R669** · bc-linux-setup and the BC itests should refuse a server that has an out-of-use marker (`/coord/machine/out-of-use/<server>.md`): today nothing reads it, so a held-dirty server is kept off only by the coord lease and by messages · [R669.md](docs/roadmap/R669.md) · done (9210ba70)
@@ -872,7 +872,7 @@ that ordering is the priority.
 - **R813** · Plan: which al-runner to gate. Track edge, build from main, or keep numbered releases? (the owner's question) · [R813.md](docs/roadmap/R813.md) · closed 2026-11-05 — the owner ruled: `current` always follows edge; users install gated numbered releases…
 - **R815** · A mutant that makes a test codeunit's OnRun fail stops a one-shot session (exit 6 reads as "selected no test") · [R815.md](docs/roadmap/R815.md) · done (369451d1)
 - **R816** · `current` follows edge: pin edge d72d3197d (alpha.13+edge) on alpha.12's readings, and run the daily update from a lane's timer · [R816.md](docs/roadmap/R816.md) · done (c5264ee7)
-- **R820** · A BC 29 dev endpoint's Ready-to-Run wrappers were read as a missing System Application, and as unreadable dependencies (GitHub #47) · [R820.md](docs/roadmap/R820.md) · done (3ae274b3); not yet proven on a real BC 29 package
+- **R820** · A BC 29 dev endpoint's Ready-to-Run wrappers were read as a missing System Application, and as unreadable dependencies (GitHub #47) · [R820.md](docs/roadmap/R820.md) · done (3ae274b3); proven on synthetic wrappers only: bc4 serves plain packages, so no real wrapper was read
 - **R822** · One contended moment in leg C costs a whole v3 gate: retry `timeout-is-cpu` before reading it as `infra-fail` · [R822.md](docs/roadmap/R822.md) · done (c2150b2b)
 - **R823** · scripts/r658-hang-gate.sh hard-codes lane bugs and the r658 worktree, so another lane cannot use it · [R823.md](docs/roadmap/R823.md) · done (1cfe158f)
 - **R833** · Bring up bc4 = BC 29 (29.0.54011.57673) and prove the gates there · [R833.md](docs/roadmap/R833.md) · done (86d13b68)
