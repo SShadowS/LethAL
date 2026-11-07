@@ -314,16 +314,41 @@ function refuseDependencySkip(stderr: string): void {
  * set ...` on stderr; `serve` answers the request with an `{"error": "N dependency app(s) were not
  * found ..."}` line. Older builds print `dependency skipped:` and run on (R590 above).
  */
-const MISSING_DEPENDENCY_RE = /dependency app\(s\) were not found and --no-download is set/;
+const MISSING_DEPENDENCY_RE = /(\d+) dependency app\(s\) were not found and --no-download is set/;
 const MISSING_APP_RE =
   /dependency `([^`]+)` by (.+?) \(([^)]+)\) version (\S+) or higher was not found/g;
 
-/** The apps a new-form refusal names, as the user wrote them in app.json; undefined: not that refusal. */
-export function v3MissingDependencies(text: string): string[] | undefined {
-  if (!MISSING_DEPENDENCY_RE.test(text)) return undefined;
-  return [...text.matchAll(MISSING_APP_RE)].map(
-    (m) => `"${m[1]}" by ${m[2]} (id ${m[3]}, version ${m[4]} or higher)`,
-  );
+export interface V3MissingDependencies {
+  /** The apps named, as written in app.json. */
+  readonly apps: readonly string[];
+  /** How many apps v3's header says are missing; more than `apps.length` when some are not named. */
+  readonly declared: number;
+  /** v3 found a package for it with no AL source (its text: "found only packages without AL source"). */
+  readonly withoutSource: boolean;
+}
+
+/** Parses a new-form refusal; undefined: the text is not that refusal. */
+export function v3MissingDependencies(text: string): V3MissingDependencies | undefined {
+  const head = MISSING_DEPENDENCY_RE.exec(text);
+  if (head === null) return undefined;
+  return {
+    apps: [...text.matchAll(MISSING_APP_RE)].map(
+      (m) => `"${m[1]}" by ${m[2]} (id ${m[3]}, version ${m[4]} or higher)`,
+    ),
+    declared: Number(head[1]),
+    withoutSource: text.includes("found only packages without AL source"),
+  };
+}
+
+/**
+ * R860: the ONE test of the one-shot stop, used by the backend and by leg C's `dependency-skip-line`,
+ * so the fact and a real run cannot disagree: exit 2 and the refusal header.
+ */
+export function v3MissingDependencyStop(
+  exitCode: number,
+  stderr: string,
+): V3MissingDependencies | undefined {
+  return exitCode === 2 ? v3MissingDependencies(stderr) : undefined;
 }
 
 /**
@@ -331,9 +356,11 @@ export function v3MissingDependencies(text: string): string[] | undefined {
  * survivor, not retried: the session stops. Fix: put the app's `.app` file in `packagesDir`.
  */
 export class AlRunnerV3DependencyMissingError extends Error {
-  constructor(apps: readonly string[], said: string) {
+  constructor(found: V3MissingDependencies, said: string) {
+    const { apps, declared, withoutSource } = found;
+    const unnamed = declared - apps.length;
     super(
-      `al-runner-v3: v3 stopped because a dependency app was not found (upstream #7139, R860): ${apps.length > 0 ? apps.join("; ") : "(app not parsed)"}. LethAL does not pass --allow-missing-dependencies: running without the app would score kills BC never gives. To fix it, put the app's .app file in packagesDir (the package folder LethAL gives v3), then run again. v3 said: ${said.slice(0, 600)}`,
+      `al-runner-v3: v3 stopped because ${declared} dependency app(s) were not found (upstream #7139, R860): ${apps.length > 0 ? apps.join("; ") : "(none parsed)"}${unnamed > 0 ? `; ${unnamed} more app(s) are missing and not named here, so read v3's text below and expect to fix more than the ones named` : ""}. LethAL does not pass --allow-missing-dependencies: running without the app would score kills BC never gives. To fix it, put the app's .app file WITH AL SOURCE in packagesDir (the package folder LethAL gives v3), then run again. A symbols-only .app may stop the run again${withoutSource ? " (v3 found only packages without AL source for an app)" : ""}. v3 said: ${said.slice(0, 1200)}`,
     );
     this.name = "AlRunnerV3DependencyMissingError";
   }
@@ -341,15 +368,15 @@ export class AlRunnerV3DependencyMissingError extends Error {
 
 /** R860: one-shot form (exit 2 and the stderr text). */
 function refuseMissingDependency(exitCode: number, stderr: string): void {
-  const apps = exitCode === 2 ? v3MissingDependencies(stderr) : undefined;
-  if (apps !== undefined) throw new AlRunnerV3DependencyMissingError(apps, stderr);
+  const found = v3MissingDependencyStop(exitCode, stderr);
+  if (found !== undefined) throw new AlRunnerV3DependencyMissingError(found, stderr);
 }
 
 /** R860: serve form (a refused request); any other error passes through unchanged. */
 function missingDependencyOr(err: unknown): unknown {
   if (err instanceof AlRunnerServerRequestError && err.kind === "error") {
-    const apps = v3MissingDependencies(err.message);
-    if (apps !== undefined) return new AlRunnerV3DependencyMissingError(apps, err.message);
+    const found = v3MissingDependencies(err.message);
+    if (found !== undefined) return new AlRunnerV3DependencyMissingError(found, err.message);
   }
   return err;
 }

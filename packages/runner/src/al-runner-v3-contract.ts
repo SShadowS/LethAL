@@ -31,6 +31,7 @@ import {
   V3_REFUSAL_PREFIX,
   decodeV3Rows,
   v3DependencySkipLines,
+  v3MissingDependencyStop,
 } from "./al-runner-v3-backend";
 import { baseAppJson, probeV3PredefinedSymbols } from "./al-runner-v3-probe";
 import { v3ChildEnv } from "./al-runner-v3-seed";
@@ -1544,15 +1545,21 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
     // R860 (upstream #7139): TWO forms are accepted, because the backend stops the session on both.
     // Builds up to d72d3197d run on and print the `dependency skipped:` line (R590); from a461e6310 on
     // v3 stops instead: exit 2, stderr names the app (`serve` answers with an error line; the backend
-    // reads that). Every pinned build reads the old form and must keep matching.
-    const stopsByName = ds.exitCode === 2 && ds.stderr.includes(ABSENT_DEP.name);
+    // reads that). Every pinned build reads the old form and must keep matching. The new form is read
+    // by the backend's own `v3MissingDependencyStop`, so this fact cannot match text a real run would
+    // not stop on (a reworded header, or `dependency cycle` naming the app). `serve`'s form is NOT
+    // measured here (R860); the backend reads it.
+    const stopsByName =
+      v3MissingDependencyStop(ds.exitCode, ds.stderr)?.apps.some((a) =>
+        a.includes(ABSENT_DEP.name),
+      ) === true;
     const skipsByName = skipLines.some((l) => l.includes(ABSENT_DEP.name));
     facts.push(
       fact(
         "dependency-skip-line",
         "contract",
         ds.exitCode === -1 ? "unmeasurable" : skipsByName || stopsByName ? "matches" : "diverged",
-        `stderr has a line starting "dependency skipped:" that names ${ABSENT_DEP.name}, OR the run stops with exit 2 and stderr names ${ABSENT_DEP.name} (R860)`,
+        `stderr has a line starting "dependency skipped:" that names ${ABSENT_DEP.name}, OR the run stops with exit 2 and the header "N dependency app(s) were not found and --no-download is set" with a line naming ${ABSENT_DEP.name} (R860)`,
         `exit ${ds.exitCode}; ${skipLines.length > 0 ? JSON.stringify(skipLines[0]) : stopsByName ? `stopped by name: ${JSON.stringify(ds.stderr.slice(0, 300))}` : `no such line; stderr ${JSON.stringify(ds.stderr.slice(-300))}`}`,
       ),
     );

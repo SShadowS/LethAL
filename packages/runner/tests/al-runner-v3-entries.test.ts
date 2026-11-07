@@ -1128,8 +1128,10 @@ describe("R590: the daemon's stderr is read after every request", () => {
   });
 
   // R860 (upstream #7139): the refusal line serve wrote for a build that stops on a missing app.
-  const STOP =
-    "1 dependency app(s) were not found and --no-download is set, so the run would use a different install than a run with the apps:\n  dependency `D` by X (00000000-0000-0000-0000-000000000001) version 1.0.0.0 or higher was not found; searched: /p";
+  // Two apps, each line over 300 characters like the real ones (a long `searched:` list), so the
+  // second sits past the 400th character that `runEntries` used to cut at.
+  const SEARCHED = `; searched: ${"/long/package/folder/".repeat(10)}, proj/app/.alpackages; put its .app with AL source (or its source archive) in the project's .alpackages or pass --dep DIR`;
+  const STOP = `2 dependency app(s) were not found and --no-download is set, so the run would use a different install than a run with the apps:\n  dependency \`D\` by X (00000000-0000-0000-0000-000000000001) version 1.0.0.0 or higher was not found${SEARCHED}\n  dependency \`Second\` by Y (00000000-0000-0000-0000-000000000002) version 2.0.0.0 or higher was not found${SEARCHED}`;
 
   test("R860: serve's error line for a missing dependency stops the session by name, on a live request and at the warm-up", async () => {
     let stop = false;
@@ -1145,7 +1147,13 @@ describe("R590: the daemon's stderr is read after every request", () => {
     const err = await r.b.run(ref("A"), OPTS).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(AlRunnerV3DependencyMissingError);
     expect(String(err)).toContain('"D" by X');
+    expect(String(err)).toContain('"Second" by Y');
     expect(String(err)).toContain("packagesDir");
+    // The daemon was started without the allow flag.
+    expect(r.serve.daemons.flat().some((a) => a.includes("allow-missing-dependencies"))).toBe(
+      false,
+    );
+    expect(r.serve.daemons.length).toBeGreaterThan(0);
     const w = await rig({ serve: { rows: killsM1, answer: () => ({ lines: [{ error: STOP }] }) } });
     await baseline(w.b, SUITE1);
     await expect(w.b.prefetchMutants(plans(["M0001"]))).rejects.toBeInstanceOf(

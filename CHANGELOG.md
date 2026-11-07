@@ -38,7 +38,8 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 - **Behaviour change: a missing dependency now stops an al-runner-v3 run by name** (R860, upstream #7139). From al-runner
   edge a461e6310, a dependency app that is not in the package folder no longer runs without it with a warning: al-runner
   stops, and LethAL stops the session at the first request with the app's name, id, publisher and version, and the fix:
-  put the app's `.app` file in `packagesDir`. It is never a kill or a survivor, and it is not retried. LethAL does not pass
+  put the app's `.app` file in `packagesDir`. The `.app` must carry AL source: a symbols-only `.app` may stop the run
+  again. If v3 names more apps than the message lists, fix those too. It is never a kill or a survivor, and it is not retried. LethAL does not pass
   `--allow-missing-dependencies`, because a run without the app would score kills Business Central never gives. Older
   builds already stopped on their `dependency skipped:` line (R590); only the words differ. Leg C's
   `dependency-skip-line` fact accepts both forms.

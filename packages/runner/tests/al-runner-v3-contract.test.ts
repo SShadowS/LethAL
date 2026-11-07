@@ -1732,7 +1732,17 @@ describe("R590 dependency-skip-line: v3 says when it leaves a dependency out", (
 
   // R860 (upstream #7139): the text edge a461e6310 wrote, measured with its binary.
   const STOP_STDERR =
-    "error: 1 dependency app(s) were not found and --no-download is set, so the run would use a different install than a run with the apps:\n  dependency `LethAL R590 Absent` by LethAL (7a1c0e52-5b8e-4d3a-9f60-2c7b8e1d2590) version 1.0.0.0 or higher was not found; searched: /fake/pkgs\nAdd the app to a --dep folder or the cache, or pass --allow-missing-dependencies to skip it with a warning.\n";
+    "note: the app's runtime is 13.0, older than 16.0, the oldest AL Runner knows the members of: a call the docs do not list for runtime 13.0 is not run\nerror: 1 dependency app(s) were not found and --no-download is set, so the run would use a different install than a run with the apps:\n  dependency `LethAL R590 Absent` by LethAL (7a1c0e52-5b8e-4d3a-9f60-2c7b8e1d2590) version 1.0.0.0 or higher was not found; searched: /fake/pkgs, proj/app/.alpackages, proj/tests/.alpackages; put its .app with AL source (or its source archive) in the project's .alpackages or pass --dep DIR\nAdd the app to a --dep folder or the cache, or pass --allow-missing-dependencies to skip it with a warning.\n";
+
+  test("R860: a reworded header, or other exit-2 text naming the app, is diverged (the fact reads what the backend stops on)", async () => {
+    for (const text of [
+      STOP_STDERR.replace("dependency app(s) were not found", "dependencies are absent"),
+      "error: dependency cycle: `LethAL R590 Absent` by LethAL\n",
+    ]) {
+      const r = await probe({ cu50662: runs(text, 2) });
+      expect(r.facts.find((f) => f.fact === F)?.verdict).toBe("diverged");
+    }
+  });
 
   test("R860: the new form (exit 2, stderr names the app) matches too, and leg C passes", async () => {
     const r = await probe({ cu50662: runs(STOP_STDERR, 2) });

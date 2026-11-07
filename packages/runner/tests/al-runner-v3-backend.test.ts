@@ -39,6 +39,7 @@ import {
   stopSecondsOf,
   v3CallArgv,
   v3CallDeadlineMs,
+  v3MissingDependencies,
   v3RowVerdict,
 } from "../src/al-runner-v3-backend";
 import { MESSAGE_PREFIX_REASON, type V3ContractResult } from "../src/al-runner-v3-contract";
@@ -48,7 +49,9 @@ import { AlRunnerV3CoverageJoinError } from "../src/al-runner-v3-sleep";
 import { TestAppProofStore, testAppCacheKey } from "../src/al-runner-v3-testapp-cache";
 import { AlcCompileError, type ArtifactIo, ArtifactPrepareError } from "../src/artifact";
 import type { TestMethodRef } from "../src/backend";
+import { runOnce } from "../src/orchestrator";
 import type { SpawnFn } from "../src/publisher";
+import { SessionSafety } from "../src/session-safety";
 import { TestAppError } from "../src/test-app-publish";
 import { ProjectSymlinkRefusedError } from "../src/walk";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
@@ -1501,7 +1504,8 @@ describe("§4 selection, the cache and T5 / T21 / T28 / T29", () => {
   test("R860: v3 stopping on a missing dependency (exit 2) stops the session by name, once, with no allow flag", async () => {
     const l = await layout();
     const text =
-      "error: 1 dependency app(s) were not found and --no-download is set, so the run would use a different install than a run with the apps:\n  dependency `R860 Dep` by LethAL R860 (9b3e6c1a-2f47-4d8e-a5b0-860a00000001) version 2.0.0.0 or higher was not found; searched: pkgsM\nAdd the app to a --dep folder or the cache, or pass --allow-missing-dependencies to skip it with a warning.\n";
+      // The text edge a461e6310 wrote, measured with its binary (R860), with a note line before it.
+      "note: the app's runtime is 13.0, older than 16.0, the oldest AL Runner knows the members of: a call the docs do not list for runtime 13.0 is not run\nerror: 1 dependency app(s) were not found and --no-download is set, so the run would use a different install than a run with the apps:\n  dependency `R860 Dep` by LethAL R860 (9b3e6c1a-2f47-4d8e-a5b0-860a00000001) version 2.0.0.0 or higher was not found; searched: /work/pkgs, proj/app/.alpackages, proj/tests/.alpackages; put its .app with AL source (or its source archive) in the project's .alpackages or pass --dep DIR\nAdd the app to a --dep folder or the cache, or pass --allow-missing-dependencies to skip it with a warning.\n";
     const v3 = fakeV3(allPass, { exit: 2, stdout: "", stderr: () => text });
     const b = backendOf(l, v3.spawn, fakeAlc().io);
     await b.deploy(l.batch);
@@ -1519,20 +1523,51 @@ describe("§4 selection, the cache and T5 / T21 / T28 / T29", () => {
       "packagesDir",
     ])
       expect(msg).toContain(part);
-    // Not retried: one spawn, and never the allow flag.
-    expect(v3.calls).toHaveLength(1);
+    // Says the .app needs AL source (R860 build review).
+    expect(msg).toContain("WITH AL SOURCE");
+    expect(msg).toContain("symbols-only");
+    // Never the allow flag, on any call the backend made.
     expect(v3.calls.flat().some((a) => a.includes("allow-missing-dependencies"))).toBe(false);
-    // Exit 2 with other text is not this refusal.
-    const other = backendOf(
-      l,
-      fakeV3(allPass, { exit: 2, stdout: "", stderr: () => "error: something else\n" }).spawn,
-      fakeAlc().io,
+    // Not retried: through the orchestrator's own runOnce (which retries a pre-dispatch-rejected
+    // verdict) the refusal escapes after ONE spawn instead of becoming a verdict it could retry.
+    const again = fakeV3(allPass, { exit: 2, stdout: "", stderr: () => text });
+    const b2 = backendOf(l, again.spawn, fakeAlc().io);
+    await b2.deploy(l.batch);
+    const before = again.calls.length;
+    await expect(
+      runOnce(b2, new SessionSafety(), ref("A"), { coverage: "none", timeoutMs: 1000 }),
+    ).rejects.toBeInstanceOf(AlRunnerV3DependencyMissingError);
+    expect(again.calls.length - before).toBe(1);
+    // Same text with another exit code, a reworded header, or other exit-2 text is NOT this refusal.
+    for (const [exit, stderr] of [
+      [1, text],
+      [2, text.replace("dependency app(s) were not found", "dependencies are absent")],
+      [2, "error: something else\n"],
+    ] as const) {
+      const other = backendOf(
+        l,
+        fakeV3(allPass, { exit, stdout: "", stderr: () => stderr }).spawn,
+        fakeAlc().io,
+      );
+      await other.deploy(l.batch);
+      const e2 = await other
+        .run(ref("A"), { coverage: "none", timeoutMs: 1000 })
+        .catch((e: unknown) => e);
+      expect(e2).not.toBeInstanceOf(AlRunnerV3DependencyMissingError);
+    }
+  });
+
+  test("R860: a header naming more apps than the text lists says more are missing; a source-less package is said", () => {
+    const f = v3MissingDependencies(
+      "error: 3 dependency app(s) were not found and --no-download is set, so x:\n  dependency `A` by P (id1) version 1.0.0.0 or higher was not found; found only packages without AL source, which cannot serve it: A.app; put its .app with AL source\n",
     );
-    await other.deploy(l.batch);
-    const e2 = await other
-      .run(ref("A"), { coverage: "none", timeoutMs: 1000 })
-      .catch((e: unknown) => e);
-    expect(e2).not.toBeInstanceOf(AlRunnerV3DependencyMissingError);
+    expect(f?.apps).toHaveLength(1);
+    expect(f?.declared).toBe(3);
+    expect(f?.withoutSource).toBe(true);
+    const msg = String(new AlRunnerV3DependencyMissingError(f as NonNullable<typeof f>, "x"));
+    expect(msg).toContain("2 more app(s) are missing");
+    expect(msg).toContain("without AL source");
+    expect(v3MissingDependencies("dependency cycle: `A` by P")).toBeUndefined();
   });
 
   test("R590 near misses: the words mid-line, and System's optional-root note, score the row as before", async () => {
