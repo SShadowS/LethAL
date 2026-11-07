@@ -121,6 +121,8 @@ export interface FoldStatics {
     readonly binarySha256: string;
     /** R807: the run seed the build reported (absent when it reports none). */
     readonly runSeed?: number;
+    /** R857: this run's tests ran alone (`--isolate-tests`). */
+    readonly isolateTests?: true;
   };
 }
 

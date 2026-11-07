@@ -39,6 +39,57 @@ export const V3_N1S_LEG = "N1S";
  */
 export const V3_O1_LEG = "O1";
 
+/**
+ * R857: does `runSelectedOnly` really run a test alone? A build that accepted the field and ignored
+ * it would still give one row per entry, so `--isolate-tests` would read clean while state leaked.
+ * Raw requests on one daemon: a whole-codeunit entry, the control that shows the probe can see a
+ * leak, then each test as its own entry. The codeunit is `ISO_PROBE_AL`, added to a scratch copy of
+ * `fixtures/sandbox-order-tests`, as a fixture file would move R-307's golden list. Not in
+ * `V3_GATE_LEGS`, so a build gated before this leg stays gated; every gate runs it from now on.
+ */
+export const V3_ISO_LEG = "ISO";
+export const ISO_CODEUNIT = 77056;
+const ISO_SET_DATE = "2020-03-15";
+
+/** A writer and a reader in ONE codeunit, unlike the Writer and Reader of `OrderProbe.al`. */
+export const ISO_PROBE_AL = `codeunit ${ISO_CODEUNIT} "Order Isolate Probe"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure W1SetDate()
+    begin
+        WorkDate(20200315D);
+    end;
+
+    [Test]
+    procedure R2ReadDate()
+    begin
+        Error('ISODATE=%1', Format(WorkDate(), 0, 9));
+    end;
+}
+`;
+
+/** Why leg ISO's readings are not the measured ones, or `undefined`. */
+export function judgeIsolateProbe(
+  whole: readonly { readonly name?: string; readonly message?: string }[],
+  alone: readonly { readonly name?: string; readonly message?: string }[],
+): string | undefined {
+  const read = (rows: typeof whole) =>
+    rows.filter((r) => r.name === `Codeunit${ISO_CODEUNIT}.R2ReadDate`).map((r) => r.message ?? "");
+  const [w, a] = [read(whole), read(alone)];
+  if (w.length !== 1 || a.length !== 1) {
+    return `ISO: reader rows whole ${w.length}, alone ${a.length}; one each was pre-committed`;
+  }
+  if (!w[0]?.includes(`ISODATE=${ISO_SET_DATE}`)) {
+    return `ISO: the whole-codeunit control no longer leaks (${w[0]}), so the probe proves nothing`;
+  }
+  if (!a[0]?.startsWith("ISODATE=") || a[0].includes(ISO_SET_DATE)) {
+    return `ISO: a test run alone read the writer's date or nothing (${a[0]}), so --isolate-tests does not isolate`;
+  }
+  return undefined;
+}
+
 /** O1's Reader codeunit (`fixtures/sandbox-order-tests`). */
 export const O1_READER_CODEUNIT = 77051;
 /** O1's Writer codeunit. */
@@ -441,6 +492,7 @@ export function v3DefaultLegs(o: { readonly cdo: boolean; readonly tables: boole
     V3_N1E_LEG,
     V3_N1S_LEG,
     V3_O1_LEG,
+    V3_ISO_LEG,
     "X",
     "L1",
     "Y-A",

@@ -3442,7 +3442,7 @@ describe("C02-07: flags are read or refused, never ignored", () => {
       ];
       expect(() => parseCliConfig(argv), flag).toThrow(`--${flag} has no effect with --dry-run`);
     }
-    expect(DRY_RUN_REFUSED.length).toBe(17);
+    expect(DRY_RUN_REFUSED.length).toBe(18);
   });
 
   test("R377: --dry-run reads an optional --backend, validated as run validates it", () => {
@@ -3469,6 +3469,9 @@ describe("C02-07: flags are read or refused, never ignored", () => {
         expect(parseCliConfig(["run", "--project", "P", "--dry-run"]).mode).toBe("dry-run");
         continue;
       }
+      // R857: only v3 reads it, and v3 parses only on Linux, so no invocation here can show it read;
+      // r762-probe-cache.test.ts measures both sides, this table's bcdev runs show the refusal.
+      if (flag === "isolate-tests") continue;
       for (const sub of owners) {
         const mine = INVOCATIONS.filter((i) => i.sub === sub);
         // A flag the invocation already supplies is measured too, by changing its value.

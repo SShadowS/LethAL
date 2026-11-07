@@ -18,7 +18,7 @@ export const DEFAULT_BC_HOST: string = BC_HOSTS.server1;
 
 export class BcHostError extends Error {}
 
-/** A config naming the other known BC on Linux host; thrown by `printItestTarget`. */
+/** A config naming a host it must not; thrown by `printItestTarget` and `refuseRetiredBcHost`. */
 export class BcHostMismatchError extends Error {}
 
 /** The host name, lower case and with no scheme; `LETHAL_BC_HOST` wins when set. */
@@ -49,6 +49,27 @@ export function bcHostMismatch(
   const inUse = bcLinuxHost(env);
   if (named === inUse || !(Object.values(BC_HOSTS) as string[]).includes(named)) return undefined;
   return `the config names the BC on Linux host ${named}, but the host in use is ${inUse} (LETHAL_BC_HOST, else ${DEFAULT_BC_HOST}). Rerun bun scripts/bc-linux-setup.ts for this server so its configs name ${inUse}, or set LETHAL_BC_HOST=http://${named} if that host is meant (R783).`;
+}
+
+/** Hosts no lane may reach, lower case. Cronus28 is parked; Cronus284 is CentralGauge's. */
+const OFF_LIMITS_HOSTS: ReadonlySet<string> = new Set(["cronus28", "cronus284"]);
+
+/**
+ * R867: a config left on a host a lane must not reach stops before any server call. It reads one
+ * URL and no password. It fires only in our own environment, where `LETHAL_COORD_ROOT` is set: for
+ * anyone else `192.168.2.77` or `Cronus28` can be their own server, so they pass untouched.
+ */
+export function refuseRetiredBcHost(
+  server: unknown,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): void {
+  if (typeof server !== "string" || (env.LETHAL_COORD_ROOT ?? "") === "") return;
+  const host = URL.parse(server)?.hostname; // lower case already; a bad URL is another check's to name
+  if (host === undefined) return;
+  const why = OFF_LIMITS_HOSTS.has(host)
+    ? `the config names ${host}, which no lane may reach (R867). Refresh it: bun scripts/bc-linux-setup.ts --server all --write-config-only`
+    : bcHostMismatch(host, env);
+  if (why !== undefined) throw new BcHostMismatchError(why);
 }
 
 if (import.meta.main) console.log(bcLinuxHost());

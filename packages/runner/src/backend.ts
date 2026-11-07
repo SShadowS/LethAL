@@ -453,6 +453,13 @@ export interface ExecutionBackend {
    */
   readonly killsMustReproduce?: boolean;
   /**
+   * R857: `--isolate-tests`, al-runner-v3 only: every test ran alone. Absent counts as false. The
+   * session puts it in its fingerprint and in `runner_build`, so nothing of such a run reaches a
+   * default run, or the other way (resume, history, baseline snapshot). Kept off
+   * `BackendCapabilities` so a default run's stream does not change.
+   */
+  readonly isolatesTests?: boolean;
+  /**
    * R517, OPTIONAL: the in-run stop LethAL configured for the whole session, timed on the test's
    * own body, enforced whatever budget a run is sent. al-runner `--server` answers it once
    * `useMutantBudgetFloor` was called; absent elsewhere (the stop is the budget). An upper bound

@@ -1120,6 +1120,11 @@ export interface ExecutionContext {
    * backend and on carried entries. Optional, so an older report stays valid.
    */
   readonly runSeed?: number;
+  /**
+   * R857: `true` when every test of this run ran alone (`--isolate-tests`), so its verdicts are not
+   * comparable with a default run's. Absent otherwise: a default report does not change.
+   */
+  readonly isolateTests?: true;
 }
 
 /** R272: one discovered test method — see `SessionReport.testMethods`. */
@@ -2436,6 +2441,7 @@ function buildExecutionContexts(
     readonly version: string;
     readonly binarySha256: string;
     readonly runSeed?: number;
+    readonly isolateTests?: true;
   },
 ): ExecutionContext[] {
   const groups = new Map<string, { runner: RunnerKind; carried: boolean; verdictCount: number }>();
@@ -2459,6 +2465,7 @@ function buildExecutionContexts(
           runnerBuild: runnerBuild.version,
           binarySha256: runnerBuild.binarySha256,
           ...(runnerBuild.runSeed !== undefined ? { runSeed: runnerBuild.runSeed } : {}),
+          ...(runnerBuild.isolateTests === true ? { isolateTests: true as const } : {}),
         }
       : {}),
   };
@@ -3394,6 +3401,9 @@ export function renderConsole(r: SessionReport): string {
   const lines: string[] = [];
   if (!r.authoritative) {
     lines.push(`[backend: ${r.backend} — mock runtime, indicative]`);
+  }
+  if (r.validity.executionContexts.some((c) => c.isolateTests === true)) {
+    lines.push("[--isolate-tests: every test ran alone; not comparable with a default run]");
   }
   lines.push(
     `${pad("mutant", 8)} ${pad("file:line", 34)} ${pad("operator", 28)} ${pad("verdict", 16)} killing test`,

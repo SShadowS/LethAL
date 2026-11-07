@@ -164,6 +164,9 @@
               },
               "runSeed": {
                 "type": "number"
+              },
+              "isolateTests": {
+                "const": true
               }
             }
           }

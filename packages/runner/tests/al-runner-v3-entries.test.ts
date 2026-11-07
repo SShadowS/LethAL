@@ -271,13 +271,17 @@ function fakeOneShot(
     calls.push([...argv]);
     const active = argv.at(-2) ?? "";
     const testDir = argv.at(-1) ?? "";
-    const cu = Number(argv[argv.indexOf("--codeunit") + 1]);
+    // R857: `--test-exact Codeunit<id>.<method>` runs that one test.
+    const exact = argv.indexOf("--test-exact");
+    const only = exact < 0 ? null : /^Codeunit(\d+)\.(.+)$/.exec(argv[exact + 1] ?? "");
+    const cu = Number(only?.[1] ?? argv[argv.indexOf("--codeunit") + 1]);
     const m = await readFile(resourceFile(active), "utf8").catch(() => "STATIC");
     const cov = coverage?.(m, cu, active, testDir);
     if (cov !== undefined) {
       await writeFile(argv[argv.indexOf("--coverage-json") + 1] ?? "", JSON.stringify(cov));
     }
-    const tests = rows(m, cu, -1, -1).map((r) => ({
+    const asked = rows(m, cu, -1, -1).filter((r) => only === null || r.method === only[2]);
+    const tests = asked.map((r) => ({
       codeunit: cu,
       method: r.method,
       name: `Codeunit${cu}.${r.method}`,
@@ -399,7 +403,18 @@ function fakeServe(script: ServeScript = {}) {
           requests.push(req);
           const errLine = script.stderr?.(req, n);
           if (errLine !== undefined) err.push(errLine);
-          const cuOf = (t: unknown) => Number(/^Codeunit(\d+)\.$/.exec(String(t))?.[1]);
+          const cuOf = (t: unknown) => Number(/^Codeunit(\d+)\./.exec(String(t))?.[1]);
+          // R857: as measured on edge 6bb821b98: `test` selects by text, so `Codeunit1.Alpha` also
+          // picks `AlphaTwo`; `excludeTests` takes names out. `Codeunit1.` picks every test.
+          const picked = (cu: number, test: unknown, ex: unknown, rs: FakeRow[]) =>
+            rs.filter((r) => {
+              const name = `Codeunit${cu}.${r.method}`.toLowerCase();
+              const out = ((ex as string[] | undefined) ?? []).map((x) => x.toLowerCase());
+              return (
+                cu === ECHO ||
+                (name.startsWith(String(test).toLowerCase()) && !out.some((x) => name.includes(x)))
+              );
+            });
           const seenBy = new Map<string, number>();
           const rowsOf = (m: string, cu: number): FakeRow[] => {
             if (cu !== ECHO) {
@@ -440,7 +455,7 @@ function fakeServe(script: ServeScript = {}) {
             for (const e of entries) {
               const m = String((e.resources as Record<string, string>)["active-mutant.txt"]);
               const cu = cuOf(e.test);
-              const rs = rowsOf(m, cu);
+              const rs = picked(cu, e.test, e.excludeTests, rowsOf(m, cu));
               for (const r of rs) lines.push(testLine(cu, r, String(e.id)));
               per.push({ type: "entrySummary", entry: e.id, ...count(rs) });
             }
@@ -448,7 +463,7 @@ function fakeServe(script: ServeScript = {}) {
           } else {
             const cu = cuOf(body.test);
             selected = new Set([cu]);
-            const rs = rowsOf(onDisk, cu);
+            const rs = picked(cu, body.test, body.excludeTests, rowsOf(onDisk, cu));
             for (const r of rs) lines.push(testLine(cu, r));
             count(rs);
             if (body.coverage === true) {
@@ -2323,6 +2338,7 @@ describe("the gate's transport flags (itest:alrunner-v3 harness)", () => {
       "N1E",
       "N1S",
       "O1",
+      "ISO",
       "X",
       "L1",
       "Y-A",
@@ -4683,5 +4699,221 @@ describe("R790: the speculative baseline", () => {
       expect(speculative(warm.b)).toBeUndefined();
       expect(existsSync(join(activeOf(warm.b), "Translations", "T.g.xlf"))).toBe(false);
     });
+  });
+});
+
+describe("R857: --isolate-tests", () => {
+  const ISOLATE = { extra: { isolateTests: true } };
+  type Sent = { id: string; test: string; excludeTests?: string[] };
+  const entriesOf = (r: Rig): Sent[] =>
+    r.serve.requests.flatMap((q) => (q.body.entries as Sent[] | undefined) ?? []);
+  const argvHas = (r: Rig, flag: string) => r.one.calls.filter((c) => c.includes(flag)).length;
+
+  test("off, a run is what it always was: no field, no flag, whole codeunits", async () => {
+    const r = await readyRig({ serve: { rows: killsM1 } });
+    await r.b.activate("M0001");
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("fail");
+    expect(r.serve.requests.length).toBeGreaterThan(0);
+    for (const q of r.serve.requests) {
+      expect(q.body).not.toHaveProperty("runSelectedOnly");
+      expect(Object.keys(q.body).sort()).toEqual([
+        "command",
+        "entries",
+        "sourcePaths",
+        "testIsolation",
+      ]);
+    }
+    for (const e of entriesOf(r)) {
+      expect(e.test).toMatch(/^Codeunit\d+\.$/);
+      expect(Object.keys(e).sort()).toEqual(["id", "resources", "test"]);
+    }
+    expect(entriesOf(r).map((e) => e.id)).toContain(`M0001|${CU}`);
+    expect(argvHas(r, "--run-selected-only")).toBe(0);
+    expect(argvHas(r, "--test-exact")).toBe(0);
+    expect(argvHas(r, "--codeunit")).toBe(r.one.calls.length);
+    expect(r.b.isolatesTests).toBe(false);
+  });
+
+  test("on: the baseline is one process per test, and every later entry one test", async () => {
+    const r = await readyRig({ ...ISOLATE, serve: { rows: killsM1 } });
+    expect(r.one.calls.map((c) => c[c.indexOf("--test-exact") + 1])).toEqual([
+      `Codeunit${CU}.A`,
+      `Codeunit${CU}.B`,
+    ]);
+    expect(argvHas(r, "--run-selected-only")).toBe(2);
+    expect(argvHas(r, "--codeunit")).toBe(0);
+    for (const q of r.serve.requests) expect(q.body.runSelectedOnly).toBe(true);
+    // In source order, in the warm-up as in every group.
+    expect((r.serve.requests[0]?.body.entries as Sent[]).map((e) => e.test)).toEqual([
+      `Codeunit${ECHO}.`,
+      `Codeunit${CU}.A`,
+      `Codeunit${CU}.B`,
+    ]);
+    const tests = new Set(entriesOf(r).map((e) => e.test));
+    expect([...tests].sort()).toEqual([`Codeunit${CU}.A`, `Codeunit${CU}.B`, `Codeunit${ECHO}.`]);
+    expect(r.b.isolatesTests).toBe(true);
+  });
+
+  test("on: each verdict is read from its own test's entry", async () => {
+    const r = await readyRig({ ...ISOLATE, serve: { rows: killsM1 } });
+    const before = r.serve.requests.length;
+    await r.b.activate("M0001");
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("fail");
+    expect((await r.b.run(ref("B"), OPTS)).outcome).toBe("pass");
+    await r.b.activate("M0002");
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("pass");
+    expect(r.serve.requests.length).toBe(before); // all of it came from the prefetch
+  });
+
+  test("on: a confirm and a reproduction are that test alone, as one kill pair", async () => {
+    const r = await readyRig({ ...ISOLATE, serve: { rows: killsM1 } });
+    await r.b.activate("M0001");
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("fail");
+    const before = r.serve.requests.length;
+    await r.b.sendKillPair("M0001", ref("A"));
+    const pair = (r.serve.requests[before]?.body.entries as Sent[]).map((e) => e.test);
+    expect(pair).toEqual([
+      `Codeunit${ECHO}.`,
+      `Codeunit${CU}.A`,
+      `Codeunit${ECHO}.`,
+      `Codeunit${CU}.A`,
+    ]);
+    await r.b.activate(null);
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("pass");
+    await r.b.activate("M0001");
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("fail");
+    expect(r.serve.requests.length).toBe(before + 1);
+  });
+
+  test("on: a test whose name starts another's excludes it, so each entry runs one test", async () => {
+    const suite = [ref("Alpha"), ref("AlphaTwo")];
+    const rows: RowsFn = () => suite.map((t) => ({ method: t.method, status: "pass" as const }));
+    const r = await readyRig({ ...ISOLATE, suite, serve: { rows } });
+    const of = (m: string) => entriesOf(r).find((e) => e.test === `Codeunit${CU}.${m}`);
+    expect(of("Alpha")?.excludeTests).toEqual([`Codeunit${CU}.AlphaTwo`]);
+    expect(of("AlphaTwo")).not.toHaveProperty("excludeTests");
+    await r.b.activate("M0001");
+    expect((await r.b.run(suite[0] ?? ref("?"), OPTS)).outcome).toBe("pass");
+    expect((await r.b.run(suite[1] ?? ref("?"), OPTS)).outcome).toBe("pass");
+  });
+
+  test("on: a second row in an entry is no verdict: the test did not run alone", async () => {
+    const rows: RowsFn = (m, cu, d, n) => [
+      ...allPass(m, cu, d, n),
+      ...(m === "M0001" ? [{ method: "AHidden", status: "pass" as const }] : []),
+    ];
+    const r = await readyRig({ ...ISOLATE, serve: { rows } });
+    await r.b.activate("M0001");
+    const v = await r.b.run(ref("A"), OPTS);
+    expect(v.outcome).toBe("error");
+    expect(v.failureMessage).toContain("has 2 rows, so that test did not run alone");
+    // The other way: an entry with its one row is read as usual.
+    expect((await r.b.run(ref("B"), OPTS)).outcome).toBe("pass");
+  });
+
+  test("on: a cut at one test re-sends only the tests after it, on a fresh daemon", async () => {
+    const stop = { method: "A", status: "error" as const, notRun: true, message: TIMEOUT_1S };
+    const rows: RowsFn = (m, cu, d, n) =>
+      m === "M0001" && d === 0
+        ? allPass(m, cu, d, n).map((x) => (x.method === "A" ? stop : x))
+        : allPass(m, cu, d, n);
+    const r = await readyRig({ ...ISOLATE, serve: { rows }, mutants: ["M0001"] });
+    expect(r.serve.daemons).toHaveLength(2);
+    const onSecond = r.serve.requests.filter((q) => q.daemon === 1).flatMap((q) => q.ids);
+    const after = onSecond.filter((id) => id.startsWith("M0001|") && !id.endsWith("|echo"));
+    expect(after).toHaveLength(1);
+    const sent = entriesOf(r).filter((e) => e.id === after[0]);
+    expect(sent.map((e) => e.test)).toContain(`Codeunit${CU}.B`);
+    await r.b.activate("M0001");
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("timeout");
+    expect((await r.b.run(ref("B"), OPTS)).outcome).toBe("pass");
+  });
+
+  test("on: the warm-up compares test by test with the lone baseline", async () => {
+    const serveRows: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) => (x.method === "B" ? { ...x, status: "fail" as const } : x));
+    await expect(
+      readyRig({ ...ISOLATE, serve: { rows: serveRows }, oneShotRows: allPass }),
+    ).rejects.toThrow(
+      // Exactly B's own rows on both sides, and A's entry agrees: a wrong key reads an empty side.
+      `al-runner-v3-entries-warmup-disagrees: the daemon's NONE rows are not this batch's one-shot baseline (codeunit ${CU}: serve [b=fail], one-shot [b=pass])`,
+    );
+  });
+
+  test("on: a refusal at baseline still names the real codeunit in a survivor's note", async () => {
+    const refused: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        x.method === "A" ? { ...x, status: "error" as const, notRun: true, message: COMMIT } : x,
+      );
+    const r = await rig({ ...ISOLATE, oneShotRows: refused });
+    await baseline(r.b, SUITE1);
+    expect(r.b.survivorNote([ref("B")])).toContain(`Tests${CU}.A`);
+  });
+
+  test("on: every failing test has a stored pair, so a kill by any of them sends nothing", async () => {
+    const fails: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        m === "M0001" ? { ...x, status: "fail" as const, message: "boom" } : x,
+      );
+    const r = await readyRig({ ...ISOLATE, pairBatch: true, serve: { rows: fails } });
+    const before = r.serve.requests.length;
+    await r.b.activate("M0001");
+    // The second failing test, as the kill ledger can put it first.
+    expect((await r.b.run(ref("B"), OPTS)).outcome).toBe("fail");
+    await r.b.sendKillPair("M0001", ref("B"));
+    await r.b.activate(null);
+    expect((await r.b.run(ref("B"), OPTS)).outcome).toBe("pass");
+    await r.b.activate("M0001");
+    expect((await r.b.run(ref("B"), OPTS)).outcome).toBe("fail");
+    expect(r.serve.requests.length).toBe(before);
+  });
+
+  test("on: a refusal names the real codeunit and test, never a call id", async () => {
+    const noRow: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).filter((x) => !(m === "M0001" && x.method === "B"));
+    const r = await readyRig({ ...ISOLATE, serve: { rows: noRow } });
+    await r.b.activate("M0001");
+    const v = await r.b.run(ref("B"), OPTS);
+    expect(v.failureMessage).toContain(`codeunit ${CU}'s entry has 0 row(s)`);
+    const cold = await rig(ISOLATE); // a prefetch with no baseline behind it
+    await expect(cold.b.prefetchMutants(plans(["M0001"]))).rejects.toThrow(
+      `codeunit(s) Codeunit${CU}.A, Codeunit${CU}.B of the warm-up union`,
+    );
+  });
+
+  test("on: a live request runs one test too", async () => {
+    const r = await rig({ ...ISOLATE, serve: { rows: killsM1 } });
+    await baseline(r.b, SUITE1);
+    await r.b.activate("M0001"); // no prefetch, so the run below goes live
+    expect((await r.b.run(ref("B"), OPTS)).outcome).toBe("pass");
+    const tests = entriesOf(r).map((e) => e.test);
+    expect(tests).toContain(`Codeunit${CU}.B`);
+    expect(tests).not.toContain(`Codeunit${CU}.`);
+  });
+
+  test("on: a coverage window asks for that one test, and the longer names stay out", async () => {
+    const suite = [ref("A"), ref("AB")];
+    const rows: RowsFn = () => suite.map((t) => ({ method: t.method, status: "pass" as const }));
+    const r = await readyRig({
+      ...ISOLATE,
+      suite,
+      targetAl: SLEEPER_AL,
+      mutants: ["M0001"],
+      serve: { rows, coverage: sleepCoverage() },
+    });
+    const n0 = r.serve.requests.length;
+    await r.b.activate("M0001");
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("pass");
+    const window = r.serve.requests.slice(n0).find((q) => q.body.coverage === true);
+    expect(window?.ids).toEqual([`plain:Codeunit${CU}.A`]);
+    expect(window?.body.excludeTests).toEqual([`Codeunit${CU}.AB`]);
+    expect(window?.body.runSelectedOnly).toBe(true);
+  });
+
+  test("on: the speculative baseline stays off, as its calls run whole codeunits", async () => {
+    const r = await rig({ extra: { isolateTests: true, speculateBaseline: true } });
+    await baseline(r.b, SUITE1);
+    expect(argvHas(r, "--codeunit")).toBe(0);
+    expect(r.one.calls).toHaveLength(2);
   });
 });

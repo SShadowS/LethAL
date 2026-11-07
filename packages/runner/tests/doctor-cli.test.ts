@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { BcHostMismatchError } from "../src/bc-host";
 import type { BcDevConfigSection, LethalConfigFile } from "../src/cli";
 import {
   DOCTOR_CREATE_MODE_CAVEAT,
@@ -769,6 +770,29 @@ describe("doctorFromCli (final review, Important 1)", () => {
       log.mockRestore();
     }
   }
+
+  test("R867: a retired host stops doctor before any server call, in our environment only", async () => {
+    const ok = okFetch(info());
+    let calls = 0;
+    const fetchFn = ((...a: Parameters<typeof ok>) => {
+      calls++;
+      return ok(...a);
+    }) as typeof ok;
+    const configFile = { bcdev: { ...RESOLVED_BCDEV, server: "http://192.168.2.77:7049" } };
+    const deps = { quarantineDir: scratch("lethal-doctor-r867-"), fetchFn };
+
+    await run(configFile, deps); // no coord root: a user's own server at that address is reached
+    expect(calls).toBeGreaterThan(0);
+
+    calls = 0;
+    process.env.LETHAL_COORD_ROOT = "/no-such-coord-root";
+    try {
+      await expect(run(configFile, deps)).rejects.toThrow(BcHostMismatchError);
+      expect(calls).toBe(0);
+    } finally {
+      Reflect.deleteProperty(process.env, "LETHAL_COORD_ROOT");
+    }
+  });
 
   test("returns 0 and prints ok when every check passes — the REAL buildDoctorDeps, only I/O swapped", async () => {
     const dir = scratch("lethal-doctor-fromcli-quarantine-");

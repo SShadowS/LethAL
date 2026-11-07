@@ -38,6 +38,8 @@ Below, `<session>`, `<worktree>`, `<branch>` and `<lane>` mean your row.
    `coord ask`.
 3. `coord doctor`, read `<coord root>/handoff/<session>.md` if it exists (`/coord/handoff/...` in
    the container, `H:\lethal-coord\handoff\...` on the host).
+   Then refresh your bc configs: `bun scripts/bc-linux-setup.ts --server all --write-config-only`.
+   It makes no server call and prints no secret. A config left on an old host is refused (R867).
 4. `coord status --lane <lane>`: a `doing` run of yours -> continue it with the token from your
    handoff. Otherwise wait for `next: <id>` from the orchestrator, or take `coord next <lane>`.
 5. Tell the orchestrator you are alive, always, also after a `/clear` or a resume: send
