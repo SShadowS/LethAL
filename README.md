@@ -821,6 +821,11 @@ a LethAL feature or a mode.
   verdicts:
   - It runs code that does not compile (#5602; alpha.5 refuses it). LethAL compiles every batch and
     the test app with alc first, and refuses to run bytes alc did not see.
+  - State can carry over between tests (R857). v3 runs every test of a test codeunit together; `bcdev`
+    runs one at a time. So on v3, a test that changes the work date, the language, a codeunit
+    variable, a SingleInstance codeunit or a bound subscriber can change what later tests in that
+    codeunit see, and a verdict can differ from BC. A common case is an `IsInitialized` flag: the second
+    test skips its setup, whose rows were rolled back, and fails. Confirm anything you act on with `bcdev`.
   - A statement-form duplicate-key `Insert` (#5603, #5788). From edge 8078bcf49 on it fails with
     BC's text. On alpha.2 it does not raise, and kills through that error read `survived` (7 on the
     tables fixture). On alpha.5 and the edge builds before 8078bcf49 v3 refuses it, so those 7 of 406
