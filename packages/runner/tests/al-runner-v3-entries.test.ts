@@ -5092,14 +5092,21 @@ describe("R857: --isolate-tests", () => {
     });
 
     test("a failure stops the queue, and no process outlives the call", async () => {
-      const r = await rig(opts);
+      // One worker fails and three stay well: only an emptied queue stops those three.
+      const names = Array.from({ length: 12 }, (_, i) => `T${i}`);
+      const many = names.map((m) => ref(m));
+      const rowsOfMany: RowsFn = () => names.map((method) => ({ method, status: "pass" as const }));
+      const r = await rig({ ...ISOLATE, suite: many, oneShotRows: rowsOfMany });
       const b = r.b as unknown as { aloneAnswer: () => boolean };
+      let failed = false;
       b.aloneAnswer = () => {
+        if (failed) return true;
+        failed = true;
         throw new Error("boom");
       };
-      await expect(baseline(r.b, suite)).rejects.toThrow("boom");
+      await expect(baseline(r.b, many)).rejects.toThrow("boom");
       expect(r.one.running()).toBe(0);
-      expect(r.one.calls.length).toBeLessThan(methods.length);
+      expect(r.one.calls.length).toBeLessThan(names.length);
     });
 
     test("no process starts on bytes the proof does not cover", async () => {
