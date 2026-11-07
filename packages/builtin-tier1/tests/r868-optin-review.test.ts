@@ -101,7 +101,7 @@ describe("R868 review: self-calls through a codeunit variable (#36)", () => {
     expect(cond(src, "L < 5").claimed).toBe(true);
   });
 
-  it("REFUSES Codeunit.Run(Codeunit::\"C\") and Me.Run() in the then-arm of the codeunit itself", () => {
+  it('REFUSES Codeunit.Run(Codeunit::"C") and Me.Run() in the then-arm of the codeunit itself', () => {
     const run = `codeunit 51703 "C"
 {
     trigger OnRun()
