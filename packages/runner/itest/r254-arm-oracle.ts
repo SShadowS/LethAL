@@ -45,6 +45,9 @@ export const R254_ARM_ORACLE: readonly ArmOracleRow[] = [
   { line: 36, operator: "empty-block", verdict: "no-coverage" },
   { line: 37, operator: "conditional-boundary", verdict: "no-coverage" },
   { line: 38, operator: "return-value", verdict: "no-coverage" },
+  // R855 (PREDICTED, docs/superpowers/specs/2026-11-07-r855-predictions.md): `Unreached`'s `N + 1`
+  // also gets `delete-additive-right`; no test calls it, so no-coverage like its two neighbours.
+  { line: 38, operator: "delete-additive-right", verdict: "no-coverage" },
   { line: 38, operator: "swap-additive", verdict: "no-coverage" },
   // R-463 (docs/superpowers/specs/2026-10-09-r463-reportext-precommitment.md): `CountBand`, a typed
   // record in the extension. The two `remove-setrange` rows are `void-method-call` under master's code,

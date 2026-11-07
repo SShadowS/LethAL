@@ -12,7 +12,7 @@ in `#if` blocks. It runs two legs, one session each: `coverageMode: "fenced"` an
 - Each wrapped object must match its unwrapped twin, and no fixture object may be refused.
 - The hub leg must equal the fenced leg mutant by mutant.
 - The fenced leg is frozen.
-- Since R582 each leg re-runs every one of its 60 kills once under the mutant (R577's rule), and
+- Since R582 each leg re-runs every one of its 64 kills once under the mutant (R577's rule), and
   checks that each carries `killReproduced` and has exactly 2 mutated rows for its killing test.
 
 ## Frozen figures
@@ -21,12 +21,14 @@ in `#if` blocks. It runs two legs, one session each: `coverageMode: "fenced"` an
 {
   "gate": "itest:bcdev-wrapped",
   "baselines": {
-    "bcdev.wrapped.baseline.json": { "killed": 60, "survived": 38 }
+    "bcdev.wrapped.baseline.json": { "killed": 64, "survived": 38 }
   }
 }
 ```
 
-The fenced leg scores 60 killed and 38 survived.
+The fenced leg scores 64 killed and 38 survived.
+
+R855 added four `delete-additive-right` rows (M0010, M0018, M0026, M0035), all killed as pre-committed, recorded on bc3 on 2026-11-07.
 
 ## History
 

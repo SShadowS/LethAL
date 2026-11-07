@@ -50,12 +50,12 @@ import { ARMS_REFUSAL } from "../itest/wrapped-fixture";
 describe("R602 build review B1: WR pins its six state notes exactly", () => {
   test("the constant is the measured set (pin and edge): six, all BandYRun/BandYRunTwin kills", () => {
     expect(V3_WR_STATE_NOTES).toEqual([
-      "0/M0071",
-      "0/M0072",
-      "0/M0078",
-      "0/M0085",
-      "0/M0086",
-      "0/M0092",
+      "0/M0075",
+      "0/M0076",
+      "0/M0082",
+      "0/M0089",
+      "0/M0090",
+      "0/M0096",
     ]);
   });
   test("the measured notes pass; none, an extra and a missing note are each named", () => {
@@ -94,9 +94,11 @@ const killedRows = (ks: typeof V3_MO_KILLERS): V3RowFacts[] =>
 
 describe("R602: the killer constants", () => {
   test("their sizes are the measured `none` figures, and no WrappedArms row is in them", () => {
-    expect(V3_MO_KILLERS).toHaveLength(6);
-    // 60 kills under `none`, minus the two WrappedArms kills (M0001, M0003) the by-name refusal costs.
-    expect(V3_WR_KILLERS).toHaveLength(58);
+    // 6 kills under `none`, plus R855's MultiPair line 14 delete-additive-right.
+    expect(V3_MO_KILLERS).toHaveLength(7);
+    // 60 kills under `none`, plus R855's four Grow delete-additive-right kills, minus the two
+    // WrappedArms kills (M0001, M0003) the by-name refusal costs.
+    expect(V3_WR_KILLERS).toHaveLength(62);
     expect(V3_WR_KILLERS.some((k) => k[1] === ARMS_FILE)).toBe(false);
     for (const ks of [V3_MO_KILLERS, V3_WR_KILLERS]) {
       expect(new Set(ks.map((k) => k[0])).size).toBe(ks.length);
@@ -141,7 +143,7 @@ describe("judgeKillers: each constant killer must be killed by the same test", (
   });
 
   test("a killer list that matches nothing is not an empty pass", () => {
-    expect(judgeKillers([], V3_MO_KILLERS)).toHaveLength(6);
+    expect(judgeKillers([], V3_MO_KILLERS)).toHaveLength(7);
   });
 });
 

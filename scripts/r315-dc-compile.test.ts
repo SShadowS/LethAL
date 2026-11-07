@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { classify, parseAlcErrors, parseArgs, summarize } from "./r315-dc-compile";
+import { classify, closesOf, parseAlcErrors, parseArgs, summarize } from "./r315-dc-compile";
 
 const SAMPLE = [
   "/tmp/x/src/Foo.Codeunit.al(12,5): error AL0185: Codeunit 'Whatever' is missing",
@@ -10,6 +10,13 @@ const SAMPLE = [
 ].join("\n");
 
 describe("r315-dc-compile", () => {
+  test("R855: a failed build never closes, even with no error counted against the emit", () => {
+    expect(closesOf(false, 0)).toBe(false);
+    expect(closesOf(false, 3)).toBe(false);
+    expect(closesOf(true, 0)).toBe(true);
+    expect(closesOf(true, 1)).toBe(false);
+  });
+
   test("parseAlcErrors keeps code, file name and line only, and skips warnings", () => {
     const d = parseAlcErrors(SAMPLE);
     expect(d).toEqual([

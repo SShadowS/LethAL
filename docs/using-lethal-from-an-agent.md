@@ -271,7 +271,7 @@ code.
 Each surface below is versioned separately and has a published JSON Schema in [`../schemas/`](../schemas/):
 
 - the report: [../schemas/report-v3.schema.json](../schemas/report-v3.schema.json)
-- `lethal explain`: [../schemas/explain-v22.schema.json](../schemas/explain-v22.schema.json)
+- `lethal explain`: [../schemas/explain-v23.schema.json](../schemas/explain-v23.schema.json)
 - the event stream: [../schemas/stream-v1.schema.json](../schemas/stream-v1.schema.json)
 - `lethal doctor --json`: [../schemas/doctor-v1.schema.json](../schemas/doctor-v1.schema.json)
 
@@ -317,7 +317,7 @@ some mutants at all, and they read `no-coverage` rather than `survived`.
 
 ### `lethal explain report.json`: what it MEANS (checked)
 
-`explainSchemaVersion: 22`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
+`explainSchemaVersion: 23`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
 `survivorSelection` and `markIdentityScheme`. Each `survivors` row carries `executionProven`,
 `reach` and `markKey`. The top level can also carry `markKeysStale`. Each `survivors` row can
 also carry `mark`. Explain writes it for a report that records its numbering facts.
@@ -1009,6 +1009,10 @@ What remains is small and named, so a stranded run is diagnosable rather than my
 - `flip-boolean-literal` at a literal NESTED in a loop condition, under a unary `not`, or in the loop
   body guarding its only exit. None of these three shapes is refused; zero sites measured for the
   condition shapes, and the body-guard shape is not yet counted (R239).
+- `delete-logical-*` and `delete-additive-*` refuse a site in a loop's exit parts, a site that guards
+  a call the loop's progress needs, and a deleted operand holding such a call (R855). They do not
+  follow a callee: a condition inside `Done()`, read by `until Done()`, is claimed. That is the shape
+  of R837, and `negate-conditional` has the same exposure.
 
 **What to do about it.** Nothing, on a first run: the shapes are rare and the report names a
 stranded tier rather than reporting a plausible score. If a run does strand, `--resume` continues it

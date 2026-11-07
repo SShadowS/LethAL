@@ -15,7 +15,7 @@
  *
  * R-585 (pre-commitment docs/superpowers/specs/2026-10-22-r585-lend-precommitment.md): since R621
  * a stored no-coverage is never carried, so R1's batch is no longer carried whole. It deploys once,
- * reuses B's baseline snapshot, re-derives its 4 no-coverage mutants and carries the other 15.
+ * reuses B's baseline snapshot, re-derives its 5 no-coverage mutants and carries the other 17.
  *
  * Every per-mutant comparison goes BY IDENTITY KEY through `compareMutants` against the committed
  * `bcdev.baseline.json` (read only; this gate records no baseline). Its own figures are
@@ -342,7 +342,7 @@ function assertCounts(
   );
 }
 
-/** A history leg that lends: the 12 survivors known, the rest scored and frozen. */
+/** A history leg that lends: the 14 survivors known, the rest scored and frozen. */
 function assertHistoryLent(leg: string, baseline: GateBaseline, r: SessionReport): void {
   printTable(leg, r);
   assertCounts(leg, r, LEND_FIGURES.history, LEND_FIGURES.history.knownSurvivors);
@@ -350,7 +350,7 @@ function assertHistoryLent(leg: string, baseline: GateBaseline, r: SessionReport
   assert.deepEqual(
     known,
     SURVIVED,
-    `${leg}: the known survivors must be the 12 frozen survivors, by key`,
+    `${leg}: the known survivors must be the 14 frozen survivors, by key`,
   );
   assertFrozen(leg, baseline, r, asSurvived);
 }
@@ -432,9 +432,9 @@ async function main(): Promise<void> {
     const B = l1.runId;
     sublegs.push("L1");
 
-    // ---- R1: --resume-run of an UNFINISHED full clone. R621: its batch holds 4 stored
+    // ---- R1: --resume-run of an UNFINISHED full clone. R621: its batch holds 5 stored
     // no-coverage rows, so it is not carried whole: it deploys, reuses B's snapshot, re-derives
-    // the 4 and carries the other 15 (pre-commitment 2026-10-22-r585-lend-precommitment.md).
+    // the 5 and carries the other 17 (pre-commitment 2026-10-22-r585-lend-precommitment.md).
     const full = seedRunFrom(store, A);
     const r1 = await session(store, root, "R1", { resume: full });
     printTable("R1", r1.report);
@@ -443,7 +443,7 @@ async function main(): Promise<void> {
       message(r1.events, "resume-reusing-run").includes(
         `reusing run ${full} — ${LEND_FIGURES.resumeWhole.carryable} mutant verdict(s) may be carried`,
       ),
-      "R1: resume-reusing-run must name the clone and 19 carryable",
+      "R1: resume-reusing-run must name the clone and 22 carryable",
     );
     assert.ok(
       message(r1.events, "resume-baseline-reused").includes(`same as run ${B}'s batch 0,`),
@@ -459,7 +459,7 @@ async function main(): Promise<void> {
     assert.deepEqual(
       carriedKeys(r1.report),
       carriedInPartBatch(ALL),
-      "R1: every mutant but the 4 no-coverage carried, by key (no-coverage re-derived, R621)",
+      "R1: every mutant but the 5 no-coverage carried, by key (no-coverage re-derived, R621)",
     );
     assertFrozen("R1", baseline, r1.report);
     assert.deepEqual(
@@ -558,7 +558,7 @@ async function main(): Promise<void> {
     assert.deepEqual(
       carriedKeys(r3.report),
       carriedInPartBatch(new Set([...ALL].filter((k) => !keySet(LEND_FIGURES.r3Rerun).has(k)))),
-      "R3: all but M0019 and the no-coverage rows carried, by key (partly carried batch)",
+      "R3: all but M0022 and the no-coverage rows carried, by key (partly carried batch)",
     );
     assertFrozen("R3", baseline, r3.report);
     assert.equal(

@@ -84,6 +84,10 @@ first as `itest/expected/<baseline>` (a subfolder, so the baseline hook leaves i
 A record on any other build is refused. The steps are in [alrunner-v3.md](alrunner-v3.md), "The route for a row to
 change on a pinned build".
 
+## Opt-in operators (R856)
+
+An operator with `optIn` runs only when `--operator` names it, so no gate baseline holds its rows. `lethal.swap-workdate-today` is the first. Its fixture, `sandbox-dates`, is checked by hand on v3 and BC, not by a gate. The fixture is not in the symbol tar, so `compile:fixtures` skips it in CI and in a fresh worktree: **CI does not catch a broken fixture here.** Its compile runs only where its symbols exist.
+
 ## Warning sets: `GATE_WARNINGS` and observe mode (R736)
 
 Every itest that calls `runSession` collects the run's `warning` events and compares the SORTED, unique warning

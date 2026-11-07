@@ -97,12 +97,12 @@ describe("R321 symbol fixture tables", () => {
     );
   });
 
-  test("non-vacuity: three builds, 9 mutants each, 5/4 each, seven shared rows differing pairwise on 4", () => {
+  test("non-vacuity: three builds, 11 mutants each, 7/4 each (R855), seven shared rows differing pairwise on 4", () => {
     const tables = [rowsOf("[LETHALA]"), rowsOf("[LETHALB]"), EXPECTED_NO_DEFINE];
     const key = (r: SymbolRow) => `${r.line}|${r.operatorName}`;
     for (const t of tables) {
-      expect(t).toHaveLength(9);
-      expect(t.filter((r) => r.verdict === "killed")).toHaveLength(5);
+      expect(t).toHaveLength(11);
+      expect(t.filter((r) => r.verdict === "killed")).toHaveLength(7);
     }
     const shared = (x: readonly SymbolRow[], y: readonly SymbolRow[]) =>
       x.filter((r) => y.some((o) => key(o) === key(r)));

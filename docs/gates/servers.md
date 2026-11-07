@@ -1,11 +1,12 @@
 # BC gate servers
 
 The BC gates run on the three BC on Linux servers, `bc1`, `bc2` and `bc3` (R589). CLAUDE.md
-§"Integration tests" holds the rules for using them. This page holds the details.
+§"Integration tests" holds the rules for using them. This page holds the details. A fourth server, `bc4`, runs BC 29
+and has its own proof table: see [bc4](#bc4-bc-29) below.
 
 ## The servers
 
-They are BC 28.4 on server1 (`192.168.2.157`). Localization is W1, so the company is
+`bc1`, `bc2` and `bc3` are BC 28.4 on server1 (`192.168.2.157`). Localization is W1, so the company is
 `CRONUS International Ltd.` (not the DK `CRONUS Danmark A/S` that Cronus28 had). Tenant `default`, instance `BC`,
 Basic authentication.
 
@@ -29,13 +30,15 @@ The host comes from one place, `packages/runner/src/bc-host.ts` (`DEFAULT_BC_HOS
 | `bc1` | 7048 | 7049 | 7052 |
 | `bc2` | 7148 | 7149 | 7152 |
 | `bc3` | 7248 | 7249 | 7252 |
+| `bc4` (BC 29) | 7448 | 7449 | 7452 |
 
 There is no BcContainerHelper and no Windows Docker context there: everything goes over the dev
 endpoint.
 
 ## Setting a server up
 
-`bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all` (add `--dry-run` to see the plan). It takes the lease in
+`bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|bc4|all` (add `--dry-run` to see the plan). `all` is bc1, bc2
+and bc3 only: bc4 (BC 29) is always named on its own, so a routine `all` never touches it. It takes the lease in
 your lane: `--lane <lane>` if given, else your kraken agent identity (`KRAKEN_AGENT`); with neither it refuses
 (R598).
 
@@ -506,6 +509,48 @@ testapp, lease), in `/coord/handoff/R-604/bc2-<gate>.log`. Every one of them pas
 `itest:agreement`, R-583's earlier run of master's code was NOT REPRODUCED (an ordering deviation,
 `p2-master-agreement-bc2.log`), and the orchestrator accepted the R-583-code PASS in its place
 (`/coord/handoff/R-583/gates.md`).
+
+## bc4: BC 29
+
+`bc4` is BC 29 W1, build 29.0.54011.57673, on the same host as bc1-bc3 (OData 7448, dev 7449, API 7452, company
+`CRONUS International Ltd.`), allocated to lethal (R-826b, R833, GitHub #49 and #47). bc1-bc3 stay BC 28.4 and
+nothing about them changes.
+
+- **Known to** `scripts/bc-linux-setup.ts` and `scripts/bc-republish.ts` (`--server bc4`), the out-of-use marker
+  check (dev port 7449) and `scripts/r658-hang-gate.sh bc4` (a stop-capable server like bc2 and bc3; #49 needs a
+  hang there). `--server all` does NOT include it. `--with-continia` and `--accept-build` are bc3's: bc4 refuses
+  them by name.
+- **Its symbols are its own.** The shared symbol cache is `/coord/cache/bc-symbols/bc4/<build>-<hash8>/`, per
+  server and per build, so a bc4 fill never replaces a 28.4 dir. A fixture's `.alpackages` is per worktree, not per
+  server: `bc-republish.ts alpackages --server bc4` overwrites that worktree's 28.4 symbols, so use a worktree of
+  its own for bc4 and do not run a 28.4 gate or compile there.
+- **The proof rule applies in full.** A gate runs on bc4 only after its frozen figures reproduce per mutant ON bc4,
+  under the current fixtures. BC 29 is a new platform, so a difference may be BC moving rather than a LethAL bug; it
+  is still a BLOCK. Do not re-record: whether bc4 gets its own baselines is the owner's call. A gate with no row in
+  the table below is not proven on bc4: use bc4 only for read-only predicts and the work R833 names.
+- **The 408 form is not measured on bc4.** Every hang on bc4 answered the 400 (GitHub #49). `itest:hang` accepts
+  the 400 form on bc4 and the 408 form on bc1-bc3 (`stopFormFor`, which also checks the config's port).
+
+### bc4 proof table (R-826b, 2026-11-07, LethAL Control 1.0.0.25)
+
+The 13 non-hang gates passed at master 86d13b68, R-826b's final build, on 2026-11-07, one coord lease per gate, each released. Each log's first line names `bc4`. They also passed at d3ab3c20, before that build (`/coord/handoff/R-826b/bc4/<gate>.log`).
+
+| server | gate | LethAL Control | proof (log) |
+|---|---|---|---|
+| `bc4` | `itest:bcdev` | 1.0.0.25 | `/coord/handoff/R-826b/final/bc4-13/bcdev.log` |
+| `bc4` | `itest:bcdev-wrapped` | 1.0.0.25 | `/coord/handoff/R-826b/final/bc4-13/bcdev-wrapped.log` |
+| `bc4` | `itest:bcdev-names` | 1.0.0.25 | `/coord/handoff/R-826b/final/bc4-13/bcdev-names.log` |
+| `bc4` | `itest:tables` | 1.0.0.25 | `/coord/handoff/R-826b/final/bc4-13/tables.log` |
+| `bc4` | `itest:verify` | 1.0.0.25 | `/coord/handoff/R-826b/final/bc4-13/verify.log` |
+| `bc4` | `itest:verify-scale` | 1.0.0.25 | `/coord/handoff/R-826b/final/bc4-13/verify-scale.log` |
+| `bc4` | `itest:stale-publish` | 1.0.0.25 | `/coord/handoff/R-826b/final/bc4-13/stale-publish.log` |
+| `bc4` | `itest:testapp` | 1.0.0.25 | `/coord/handoff/R-826b/final/bc4-13/testapp.log` |
+| `bc4` | `itest:lease` | 1.0.0.25 | `/coord/handoff/R-826b/final/bc4-13/lease.log` |
+| `bc4` | `itest:chunked` | 1.0.0.25 | `/coord/handoff/R-826b/final/bc4-13/chunked.log` |
+| `bc4` | `itest:harden` | 1.0.0.25 | `/coord/handoff/R-826b/final/bc4-13/harden.log` |
+| `bc4` | `itest:agreement` | 1.0.0.25 | `/coord/handoff/R-826b/final/bc4-13/agreement.log` |
+| `bc4` | `itest:lend` | 1.0.0.25 | `/coord/handoff/R-826b/final/bc4-13/lend.log` |
+| `bc4` | `itest:hang` (400 form) | 1.0.0.25 | at eae3eaff: `/coord/handoff/R-658/hang-bc4-20261106T210015Z-2373536/`; at 883963a6, before the R-826b review fixes: `/coord/handoff/R-658/hang-bc4-20261106T203052Z-2289735/` |
 
 ## bc-demo: not a gate server (R663)
 

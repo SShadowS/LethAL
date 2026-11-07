@@ -21,7 +21,8 @@
  *     the 408 arrives, and the aborted branch is never reached.
  *   - Recording a kill without BC's confirmation (the 408 branch keeping the verdict but dropping
  *     the body from the record) is caught by the ON LEG's evidence assertion: outcome exactly
- *     `timeout`, and a failure message carrying BOTH "stopped the session" and "StopSession".
+ *     `timeout`, and a failure message carrying BOTH "stopped the session" and "StopSession"
+ *     (BC 28; on BC 29 (`bc4`) the exact 400 body instead, GitHub #49, one form per server).
  *
  * The two legs therefore guard different doors and neither is redundant. One mutation was also
  * tried and did NOT fail this gate — routing `deadline-exceeded` to `timeout-killed` in the
@@ -103,7 +104,13 @@ import {
   type WarningDiagnostic,
   printHangLegFailureDiagnostics,
 } from "./hang-diagnostics";
-import { stopRowFailures } from "./hang-stop-rows";
+import {
+  STOP_EVIDENCE_FOR_FORM,
+  type StopForm,
+  stopFormFor,
+  stopRowFailures,
+  stopWordsProblem,
+} from "./hang-stop-rows";
 import { killReproductionFailures, latestRunId } from "./kill-reproduction";
 
 if (!process.env.LETHAL_ITEST_HANG) {
@@ -122,6 +129,16 @@ const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-hang");
 const TEST_DIR = join(REPO_ROOT, "fixtures", "sandbox-hang-tests");
 const CONFIG_LOCAL_PATH = itestConfigPath(PROJECT_DIR);
 printItestTarget(CONFIG_LOCAL_PATH);
+/**
+ * GitHub #49 / R833: the stop answer this run's server gives, from the config it names: the 408 on
+ * BC 28 (bc1-bc3), the exact 400 on BC 29 (bc4). Only that one is accepted; a server that answers
+ * the other form fails the gate. A config with no known form is refused here, before any leg runs.
+ */
+const STOP_FORM: StopForm = stopFormFor(
+  itestConfigName(),
+  readFixtureConfig(CONFIG_LOCAL_PATH, itestConfigName()).bcdev ?? {},
+);
+console.log(`[hang] stop answer expected: the ${STOP_FORM} form`);
 
 /**
  * R-658 §5: the STOP rule's in-process state. The wrapper passes the leg marker's path and the
@@ -798,15 +815,11 @@ function assertOnLeg(leg: LegResult): void {
       `${m.mutantCode} is timeout-killed but no test row has outcome "timeout" — a kill was minted from something else`,
     );
     const msg = stopped.failure_message ?? "";
-    assert.match(
-      msg,
-      /stopped the session/i,
-      `${m.mutantCode}: the run's own record does not carry BC's stop confirmation — got ${JSON.stringify(msg.slice(0, 200))}`,
-    );
-    assert.match(
-      msg,
-      /StopSession/i,
-      `${m.mutantCode}: BC's message does not attribute the stop to an AL StopSession call — a session that merely went away is not evidence`,
+    // A session that merely went away is not evidence: the message must carry this server's form.
+    assert.equal(
+      stopWordsProblem(STOP_FORM, msg),
+      undefined,
+      `${m.mutantCode}: the run's own record ${stopWordsProblem(STOP_FORM, msg)}`,
     );
     // Held open to the budget, then answered — not aborted at the hard cap.
     assert.ok(
@@ -960,8 +973,14 @@ function dumpBaselineLeg(leg: LegResult): void {
 function assertTwoStops(label: string, leg: LegResult): void {
   const failures = leg.report.mutants
     .filter((m) => m.verdict === "timeout-killed")
-    .flatMap((m) => stopRowFailures(label, m, leg.testRows, BUDGET_MS, STOP_GRACE_MS));
+    .flatMap((m) => stopRowFailures(label, m, leg.testRows, BUDGET_MS, STOP_GRACE_MS, STOP_FORM));
   assert.deepEqual(failures, [], failures.join("; "));
+  // The caveat for the 400 form fires exactly when the rows carry it: present on BC 29, absent on 28.
+  assert.equal(
+    leg.report.validity.caveats.includes("stop-answer-400"),
+    STOP_EVIDENCE_FOR_FORM[STOP_FORM] === "begin-transaction-world",
+    `[${label}] caveat stop-answer-400 must be ${STOP_FORM === "400" ? "present" : "absent"} on the ${STOP_FORM} form; got ${JSON.stringify(leg.report.validity.caveats)}`,
+  );
 }
 
 /**
@@ -1017,8 +1036,11 @@ function assertSingleLeg(leg: LegResult): void {
     const stopped = testRows.find((r) => r.mutant_code === m.mutantCode && r.outcome === "timeout");
     assert.ok(stopped !== undefined, `[SINGLE] ${m.mutantCode}: no test row with outcome timeout`);
     const msg = stopped.failure_message ?? "";
-    assert.match(msg, /stopped the session/i, `[SINGLE] ${m.mutantCode}: no BC stop confirmation`);
-    assert.match(msg, /StopSession/i, `[SINGLE] ${m.mutantCode}: BC names no AL StopSession call`);
+    assert.equal(
+      stopWordsProblem(STOP_FORM, msg),
+      undefined,
+      `[SINGLE] ${m.mutantCode}: the timeout row ${stopWordsProblem(STOP_FORM, msg)}`,
+    );
     assert.ok(
       stopped.duration_ms >= BUDGET_MS && stopped.duration_ms < BUDGET_MS + STOP_GRACE_MS,
       `[SINGLE] ${m.mutantCode}: duration ${stopped.duration_ms}ms is outside [${BUDGET_MS}, ${BUDGET_MS + STOP_GRACE_MS})`,
@@ -1158,6 +1180,7 @@ async function main(): Promise<void> {
     const probe = await probeAcquire(baseline.odataCfg);
     const elapsedMs = Date.now() - started;
     const failures = baselineLegFailures({
+      stopForm: STOP_FORM,
       report: baseline.report,
       testRows: baseline.testRows,
       baselineVerdicts: baseline.baselineVerdicts,

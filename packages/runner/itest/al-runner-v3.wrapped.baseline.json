@@ -466,12 +466,28 @@
       "mutatedTextSha256": "513f58774a41965262e45053648c2e188744d13f4cc62a5ba918e95be6d410b8"
     },
     {
+      "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Wrapped Pre Twin|Grow|lethal.delete-additive-right|1",
+      "verdict": "killed",
+      "killingTest": "GrowPreTwin",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "4b68ab3847feda7d6c62c1fbcbeebfa35eab7351ed5e78f4ddadea5df64b8015"
+    },
+    {
       "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Wrapped Pre Twin|Grow|lethal.swap-additive|1",
       "verdict": "killed",
       "killingTest": "GrowPreTwin",
       "coverageFiltered": false,
       "errorClass": null,
       "mutatedTextSha256": "35b49207abf6429f63f388a2ea7fbddf79a3cf595ca14afb9a29a7cbb81ee903"
+    },
+    {
+      "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Wrapped Pre|Grow|lethal.delete-additive-right|1",
+      "verdict": "killed",
+      "killingTest": "GrowPre",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "4b68ab3847feda7d6c62c1fbcbeebfa35eab7351ed5e78f4ddadea5df64b8015"
     },
     {
       "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Wrapped Pre|Grow|lethal.swap-additive|1",
@@ -482,12 +498,28 @@
       "mutatedTextSha256": "35b49207abf6429f63f388a2ea7fbddf79a3cf595ca14afb9a29a7cbb81ee903"
     },
     {
+      "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Wrapped Top Twin|Grow|lethal.delete-additive-right|1",
+      "verdict": "killed",
+      "killingTest": "GrowTopTwin",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "4b68ab3847feda7d6c62c1fbcbeebfa35eab7351ed5e78f4ddadea5df64b8015"
+    },
+    {
       "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Wrapped Top Twin|Grow|lethal.swap-additive|1",
       "verdict": "killed",
       "killingTest": "GrowTopTwin",
       "coverageFiltered": false,
       "errorClass": null,
       "mutatedTextSha256": "35b49207abf6429f63f388a2ea7fbddf79a3cf595ca14afb9a29a7cbb81ee903"
+    },
+    {
+      "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Wrapped Top|Grow|lethal.delete-additive-right|1",
+      "verdict": "killed",
+      "killingTest": "GrowTop",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "4b68ab3847feda7d6c62c1fbcbeebfa35eab7351ed5e78f4ddadea5df64b8015"
     },
     {
       "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Wrapped Top|Grow|lethal.swap-additive|1",

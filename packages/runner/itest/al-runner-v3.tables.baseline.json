@@ -242,6 +242,14 @@
       "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
     },
     {
+      "key": "1c7f31c8ee6e40da96b0888e7c02e8a3484f8cf46ecf000ca6650d3453cfa251|Data Filter Ops|CountTaggedInBand|lethal.delete-additive-right|1",
+      "verdict": "killed",
+      "killingTest": "NotBlankFilterCountsOnlyTaggedRows",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "028ecd42ee8b76350aa42c5247386444072917c8451cbe1885f191d5c63577db"
+    },
+    {
       "key": "1c7f31c8ee6e40da96b0888e7c02e8a3484f8cf46ecf000ca6650d3453cfa251|Data Filter Ops|CountTaggedInBand|lethal.swap-additive|1",
       "verdict": "killed",
       "killingTest": "NotBlankFilterCountsOnlyTaggedRows",
@@ -1594,12 +1602,44 @@
       "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
     },
     {
+      "key": "78d263bdf45458172865b270cf8c37ce220abae7feec90e4dd915b0eabc69b89|Data Swap Ops|Accumulate|lethal.delete-additive-left|1",
+      "verdict": "killed",
+      "killingTest": "SwapRedirectsTheAccumulatorWriteback",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "18833da39fb9b7f8c917fe0220daf9cf12e6524df8fb16e39f04dbe827e2d200"
+    },
+    {
+      "key": "78d263bdf45458172865b270cf8c37ce220abae7feec90e4dd915b0eabc69b89|Data Swap Ops|Accumulate|lethal.delete-additive-right|1",
+      "verdict": "killed",
+      "killingTest": "SwapRedirectsTheAccumulatorWriteback",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "c9b3c38247f744e17dd26fda097d6a9ba9332586b6bdaa038bf8f313a863f2b8"
+    },
+    {
       "key": "78d263bdf45458172865b270cf8c37ce220abae7feec90e4dd915b0eabc69b89|Data Swap Ops|Accumulate|lethal.swap-additive|1",
       "verdict": "killed",
       "killingTest": "SwapRedirectsTheAccumulatorWriteback",
       "coverageFiltered": false,
       "errorClass": null,
       "mutatedTextSha256": "e4988547697fe6a7815c101516d7386029868dec2bb16dff8633f0ea717a4445"
+    },
+    {
+      "key": "78d263bdf45458172865b270cf8c37ce220abae7feec90e4dd915b0eabc69b89|Data Validator|TestField|lethal.delete-additive-left|1",
+      "verdict": "survived",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "8e37953d23daca5ff01b8282c33f4e0a2152f1d1885f94c06418617e3ee1d24e"
+    },
+    {
+      "key": "78d263bdf45458172865b270cf8c37ce220abae7feec90e4dd915b0eabc69b89|Data Validator|TestField|lethal.delete-additive-right|1",
+      "verdict": "killed",
+      "killingTest": "UserDefinedBuiltinsRun",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "8894cf30aed05a787922b8da70ce6ec4e86879ac21f97fbf78a2da27bdae2b20"
     },
     {
       "key": "78d263bdf45458172865b270cf8c37ce220abae7feec90e4dd915b0eabc69b89|Data Validator|TestField|lethal.swap-additive|1",
@@ -1714,12 +1754,36 @@
       "mutatedTextSha256": "513f58774a41965262e45053648c2e188744d13f4cc62a5ba918e95be6d410b8"
     },
     {
+      "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Data Band Ext|Unreached|lethal.delete-additive-right|1",
+      "verdict": "no-coverage",
+      "killingTest": null,
+      "coverageFiltered": true,
+      "errorClass": null,
+      "mutatedTextSha256": "8ce86a6ae65d3692e7305e2c58ac62eebd97d3d943e093f577da25c36988246b"
+    },
+    {
       "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Data Band Ext|Unreached|lethal.swap-additive|1",
       "verdict": "no-coverage",
       "killingTest": null,
       "coverageFiltered": true,
       "errorClass": null,
       "mutatedTextSha256": "4883685ba05bd48fa065629b9fceb09a745e5e581111bc0eed0c1651d62159a4"
+    },
+    {
+      "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Data Main|OnValidate|lethal.delete-additive-right|1",
+      "verdict": "survived",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "7f672050a6cbefc3ff5759cffdf3fe659d64f0d0fea621772db52b6991d065bc"
+    },
+    {
+      "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Data Main|OnValidate|lethal.delete-additive-right|1|1",
+      "verdict": "survived",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "7f672050a6cbefc3ff5759cffdf3fe659d64f0d0fea621772db52b6991d065bc"
     },
     {
       "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Data Main|OnValidate|lethal.swap-additive|1",
@@ -1800,6 +1864,22 @@
       "coverageFiltered": false,
       "errorClass": null,
       "mutatedTextSha256": "9fb81652bfd08bb3a4cb712572c9e7310de6842626fda2216d192e0791755db5"
+    },
+    {
+      "key": "8020eee8facb4274055b63fee3382e7d127a6197ea718cc38db0bb9b6846b613|Data Ops|RunUserDefinedBuiltins|lethal.delete-additive-left|1",
+      "verdict": "killed",
+      "killingTest": "UserDefinedBuiltinsRun",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "8b5afd9fa25222a7eb488ea7ceebf157af15358728c8fad865300ac2975ae40e"
+    },
+    {
+      "key": "8020eee8facb4274055b63fee3382e7d127a6197ea718cc38db0bb9b6846b613|Data Ops|RunUserDefinedBuiltins|lethal.delete-additive-right|1",
+      "verdict": "killed",
+      "killingTest": "UserDefinedBuiltinsRun",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "efd2525e6c4b8b28b437a2685d478e10e3180e9a7023cd2bf5b0b81c96e184d5"
     },
     {
       "key": "8020eee8facb4274055b63fee3382e7d127a6197ea718cc38db0bb9b6846b613|Data Ops|RunUserDefinedBuiltins|lethal.swap-additive|1",
@@ -2682,6 +2762,14 @@
       "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
     },
     {
+      "key": "cf448de40a66093bf74c689272083867229a79f53e8be4f3b404e16a84d13dc4|Data Ops|RunUserDefinedBuiltins|lethal.delete-additive-right|1",
+      "verdict": "killed",
+      "killingTest": "UserDefinedBuiltinsRun",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "8b672ce7bf7f828554ad55e81b808a2b460e0072976dba05d910c83a084a91e5"
+    },
+    {
       "key": "cf448de40a66093bf74c689272083867229a79f53e8be4f3b404e16a84d13dc4|Data Ops|RunUserDefinedBuiltins|lethal.swap-additive|1",
       "verdict": "killed",
       "killingTest": "UserDefinedBuiltinsRun",
@@ -3160,6 +3248,14 @@
       "coverageFiltered": false,
       "errorClass": null,
       "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "eef6d8e81fd4fed479dc4d361b5659773e7bc7701c4979e492d5698229e30863|Data Filter Ops|CountInRange|lethal.delete-additive-right|1",
+      "verdict": "killed",
+      "killingTest": "ClosedRangeCountIsScopedByMainNo",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "028ecd42ee8b76350aa42c5247386444072917c8451cbe1885f191d5c63577db"
     },
     {
       "key": "eef6d8e81fd4fed479dc4d361b5659773e7bc7701c4979e492d5698229e30863|Data Filter Ops|CountInRange|lethal.swap-additive|1",

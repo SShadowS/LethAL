@@ -312,8 +312,10 @@ describe("R307 T6 (c): against --exclude Bad, only a twin of a reserved entry di
     // Bad holds ONE copy of each twinned statement, so the reserved count before each twin is 1.
     expect(twinRows).toEqual([
       `${CODEUNIT_FILE} @7 lethal.remove-assignment 0 -> 1`,
+      `${CODEUNIT_FILE} @7 lethal.delete-additive-right 0 -> 1`,
       `${CODEUNIT_FILE} @7 lethal.swap-additive 0 -> 1`,
       `${CODEUNIT_FILE} @8 lethal.remove-assignment 1 -> 2`,
+      `${CODEUNIT_FILE} @8 lethal.delete-additive-right 1 -> 2`,
       `${CODEUNIT_FILE} @8 lethal.swap-additive 1 -> 2`,
       `${CODEUNIT_FILE} @9 lethal.return-value 0 -> 1`,
     ]);

@@ -21,7 +21,7 @@
  *   - THE POSITIONS: `killPosition` is CALL-relative, so chunking must MOVE it — four of the
  *     control's nine warm kills become cold (their killer heads its chunk) and five stay warm.
  *   - THE REPLAY LISTS: for each warm kill the recorded replay rows must be EXACTLY its chunk's
- *     methods. `M0015`/`M0016` are the pair to watch: their killer sits at ordered position 4, so
+ *     methods. `M0017`/`M0018` are the pair to watch: their killer sits at ordered position 4, so
  *     `ordered`'s prefix is four methods starting at one test and the chunk's is two starting at
  *     another.
  *
@@ -37,7 +37,7 @@
  *     mutant, so the chunked leg is 62 group calls and that bug would read about 70.)
  *   - Taking only `chunkPrefix` from `ordered` (right length, wrong methods) never reaches these
  *     assertions: `confirmWarm`'s own caller-contract check rejects it first, by name — "mutant
- *     M0015's step names position 2 but its chunk prefix has 2 method(s) ending in
+ *     M0017's step names position 2 but its chunk prefix has 2 method(s) ending in
  *     CategoryGuardNeedsCalcFields, not FlaggedFiresModifyTrigger". So the replay-list assertion
  *     below is NOT what stops that variant, and this comment used to claim it was. What it does
  *     pin is the residue that contract check cannot see — a prefix of the right length that ends
@@ -132,21 +132,21 @@ const CHUNKED = {
   /** Every kill whose chunk position is 2, with the replay its chunk demands, in order. */
   warm: [
     {
-      code: "M0007",
+      code: "M0008",
       line: 31,
       operator: "lethal.empty-block",
       killer: "CategoryGuardNeedsCalcFields",
       replay: ["BlankNoValidateFails", "CategoryGuardNeedsCalcFields"],
     },
     {
-      code: "M0008",
+      code: "M0009",
       line: 47,
       operator: "lethal.remove-calcfields",
       killer: "CategoryGuardNeedsCalcFields",
       replay: ["BlankNoValidateFails", "CategoryGuardNeedsCalcFields"],
     },
     {
-      code: "M0010",
+      code: "M0011",
       line: 49,
       operator: "lethal.void-method-call",
       killer: "CategoryGuardNeedsCalcFields",
@@ -155,14 +155,14 @@ const CHUNKED = {
     // THE TWO ROWS THIS GATE EXISTS FOR: ordered position 4, chunk position 2, so the replay is
     // chunk 2's two methods and NOT `ordered`'s four. The lists even start at a different test.
     {
-      code: "M0015",
+      code: "M0017",
       line: 69,
       operator: "lethal.empty-block",
       killer: "FlaggedFiresModifyTrigger",
       replay: ["ProcessedRequiresCategory", "FlaggedFiresModifyTrigger"],
     },
     {
-      code: "M0016",
+      code: "M0018",
       line: 75,
       operator: "lethal.swap-modify-flag",
       killer: "FlaggedFiresModifyTrigger",
@@ -171,10 +171,10 @@ const CHUNKED = {
   ],
   /** Warm in the control, COLD once chunked: the killer heads its chunk. */
   nowCold: [
-    { code: "M0011", line: 55, operator: "lethal.empty-block" },
-    { code: "M0012", line: 62, operator: "lethal.remove-testfield" },
-    { code: "M0017", line: 75, operator: "lethal.void-method-call" },
-    { code: "M0020", line: 104, operator: "lethal.empty-block" },
+    { code: "M0012", line: 55, operator: "lethal.empty-block" },
+    { code: "M0013", line: 62, operator: "lethal.remove-testfield" },
+    { code: "M0019", line: 75, operator: "lethal.void-method-call" },
+    { code: "M0022", line: 104, operator: "lethal.empty-block" },
   ],
 };
 
@@ -497,7 +497,7 @@ async function main(): Promise<void> {
 
     // 6. THE REPLAY LISTS — the assertion this gate exists for. A replay must be its CHUNK's
     //    prefix; `ordered`'s prefix is a different list (four methods, starting at a different
-    //    test, for M0015/M0016) and would put the confirmation in a session the mutated call
+    //    test, for M0017/M0018) and would put the confirmation in a session the mutated call
     //    never had.
     for (const w of CHUNKED.warm) {
       const got = chunked.replays.get(w.code);
@@ -523,12 +523,12 @@ async function main(): Promise<void> {
 
     // 7. And the control's own replays are the longer, ordered-prefix ones — so the two legs
     //    disagree about replay length exactly where the design says they must.
-    const controlReplay = control.replays.get("M0015");
-    assert.ok(controlReplay !== undefined, "control: M0015 must be warm and replay");
+    const controlReplay = control.replays.get("M0017");
+    assert.ok(controlReplay !== undefined, "control: M0017 must be warm and replay");
     assert.equal(
       controlReplay.length,
       4,
-      `control: M0015's replay ran ${controlReplay.length} method(s), expected 4 (its killer is at ORDERED position 4 when nothing is chunked). If this is 2, the two legs are not actually running different chunkings and the gate proves nothing`,
+      `control: M0017's replay ran ${controlReplay.length} method(s), expected 4 (its killer is at ORDERED position 4 when nothing is chunked). If this is 2, the two legs are not actually running different chunkings and the gate proves nothing`,
     );
 
     console.log(gateEndLine("chunked"));

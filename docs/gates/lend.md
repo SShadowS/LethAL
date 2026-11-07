@@ -23,30 +23,30 @@ It passed on bc1, bc2 and bc3 at 7084eece (see [servers.md](servers.md) and Hist
   "baselines": {},
   "noBaseline": "Expectations are pre-committed constants (LEND_FIGURES, LEND_MUTANTS in gate-expected.ts); every leg reads bcdev.baseline.json read-only and compares with it by identity key.",
   "constants": {
-    "LEND_FIGURES.totalMutantSites": 19,
+    "LEND_FIGURES.totalMutantSites": 22,
     "LEND_FIGURES.fresh.killed": 3,
-    "LEND_FIGURES.fresh.survived": 12,
-    "LEND_FIGURES.fresh.noCoverage": 4,
-    "LEND_FIGURES.fresh.groupedCalls": 15,
+    "LEND_FIGURES.fresh.survived": 14,
+    "LEND_FIGURES.fresh.noCoverage": 5,
+    "LEND_FIGURES.fresh.groupedCalls": 17,
     "LEND_FIGURES.history.killed": 3,
     "LEND_FIGURES.history.survived": 0,
-    "LEND_FIGURES.history.noCoverage": 4,
-    "LEND_FIGURES.history.knownSurvivors": 12,
+    "LEND_FIGURES.history.noCoverage": 5,
+    "LEND_FIGURES.history.knownSurvivors": 14,
     "LEND_FIGURES.history.groupedCalls": 3,
-    "LEND_FIGURES.resumeWhole.carryable": 19,
-    "LEND_FIGURES.resumeWhole.carried": 15,
+    "LEND_FIGURES.resumeWhole.carryable": 22,
+    "LEND_FIGURES.resumeWhole.carried": 17,
     "LEND_FIGURES.resumeWhole.groupedCalls": 0,
     "LEND_FIGURES.resumeSnapshot.carryable": 9,
     "LEND_FIGURES.resumeSnapshot.carried": 7,
     "LEND_FIGURES.resumeSnapshot.nonCarryableRows": 1,
-    "LEND_FIGURES.resumeSnapshot.groupedCalls": 8,
-    "LEND_FIGURES.resumeRefusedSnapshot.carried": 15,
+    "LEND_FIGURES.resumeSnapshot.groupedCalls": 10,
+    "LEND_FIGURES.resumeRefusedSnapshot.carried": 17,
     "LEND_FIGURES.resumeRefusedSnapshot.groupedCalls": 0,
     "LEND_FIGURES.sentinel.code": "M0004",
     "LEND_FIGURES.sentinel.durationMs": 987654,
-    "LEND_FIGURES.kept": ["M0001", "M0002", "M0004", "M0005", "M0006", "M0007", "M0008", "M0016", "M0017"],
+    "LEND_FIGURES.kept": ["M0001", "M0002", "M0004", "M0007", "M0008", "M0009", "M0010", "M0018", "M0019"],
     "LEND_FIGURES.keptAsError": ["M0003"],
-    "LEND_FIGURES.r3Rerun": ["M0019"]
+    "LEND_FIGURES.r3Rerun": ["M0022"]
   },
   "notPinned": {
     "warningMessages": "the exact texts of history-backend-build-changed (N1), snapshot-backend-build-changed (R3) and the RN refusals are built in the itest from run ids",
@@ -55,18 +55,21 @@ It passed on bc1, bc2 and bc3 at 7084eece (see [servers.md](servers.md) and Hist
 }
 ```
 
-- L0, N1 and N5 score 3 / 12 / 4 over 19, per mutant equal to `bcdev.baseline.json`. Nothing is
-  lent. `groupedCalls` is 15.
-- L1 and N0 score 3 / 0 / 4, with the 12 survivors recorded as known survivors and not run.
-  `knownSurvivors` is 12. `groupedCalls` is 3.
-- R1's one batch holds 4 stored no-coverage rows, so since R621 it is not carried whole. It deploys once,
-  reuses L1's run B snapshot (no baseline test runs here), re-derives the 4 as fresh no-coverage and carries
-  the other 15 by key. `carryable` is 19, `carried` 15, `groupedCalls` 0.
+- R855 added three `sandbox-app` mutants: two survivors and one no-coverage, as pre-committed. The
+  figures below hold them. Codes moved with them: the nine KEPT rows are the same
+  mutants as before under new codes, and `r3Rerun` is the same `swap-additive` mutant (was M0019).
+- L0, N1 and N5 score 3 / 14 / 5 over 22, per mutant equal to `bcdev.baseline.json`. Nothing is
+  lent. `groupedCalls` is 17.
+- L1 and N0 score 3 / 0 / 5, with the 14 survivors recorded as known survivors and not run.
+  `knownSurvivors` is 14. `groupedCalls` is 3.
+- R1's one batch holds 5 stored no-coverage rows, so since R621 it is not carried whole. It deploys once,
+  reuses L1's run B snapshot (no baseline test runs here), re-derives the 5 as fresh no-coverage and carries
+  the other 17 by key. `carryable` is 22, `carried` 17, `groupedCalls` 0.
 - R2 has 9 KEPT rows. It carries 7 of them, every one this session covers; its two KEPT rows that this session
   leaves uncovered come back as fresh no-coverage (see "A stored no-coverage is always re-derived" below). It re-runs the other 10, one of them from an `error` row. `carried` is 7, `nonCarryableRows` 1,
-  `groupedCalls` 8.
-- R3's K2 has 18 rows (not asserted). It carries 15 of them, every one this session covers, re-derives the three uncovered
-  ones, and scores M0019 as no-coverage. `carried` is 15.
+  `groupedCalls` 10 (1 error row plus 9 survivors; was 8).
+- R3's K2 has 21 rows (not asserted). It carries 17 of them, every one this session covers, re-derives the four uncovered
+  ones, and scores M0022 as no-coverage. `carried` is 17.
 - The sentinel row (M0004 in K) has `durationMs` 987654.
 
 ### A stored no-coverage is always re-derived
@@ -96,8 +99,8 @@ A's run row and rows, with only the named field changed.
 | leg | seed | session | expected |
 |---|---|---|---|
 | L0 | none | no flag | frozen; H contains `\|closed-world:public` (refused by name otherwise); one unsuffixed snapshot |
-| L1 | none | `--skip-known-survivors` | the 12 survivors known, by key; no lend warning |
-| R1 | F: unfinished full clone | `--resume-run F` | `resume-reusing-run` (19), `resume-baseline-reused` naming B; one deploy; no baseline test ran here; all but the 4 no-coverage carried by key (R621) |
+| L1 | none | `--skip-known-survivors` | the 14 survivors known, by key; no lend warning |
+| R1 | F: unfinished full clone | `--resume-run F` | `resume-reusing-run` (22), `resume-baseline-reused` naming B; one deploy; no baseline test ran here; all but the 5 no-coverage carried by key (R621) |
 | R2 | SP1 to SP4 (snapshot owners), then K | `--resume` | resolves to K; `resume-baseline-reused` names L1's run B; KEPT minus its two uncovered rows carried by key; the sentinel's `priorDurationMs`; no baseline test ran here |
 | R3 | SV3 (a v3 snapshot owner), K2 | `--resume-run K2` | `snapshot-backend-build-changed`, exact; the baseline re-ran (as many tests as L0's) |
 | N0 | finished clone | `--skip-known-survivors` | as L1: the clone lends |

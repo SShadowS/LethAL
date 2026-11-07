@@ -15,6 +15,7 @@ import type {
   RunManyOpts,
   RunManyResult,
   RunOpts,
+  StopEvidence,
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
@@ -3136,7 +3137,7 @@ describe("R318: a resume across R318 re-scores a renamed member instead of keepi
     expect(firstReport.quarantined).toBeDefined();
     const inMember = (r: typeof firstReport) =>
       r.mutants.filter((m) => m.line >= 3 && m.line <= 16);
-    expect(inMember(firstReport).map((m) => m.verdict)).toEqual(Array(10).fill("no-coverage"));
+    expect(inMember(firstReport).map((m) => m.verdict)).toEqual(Array(14).fill("no-coverage")); // R855: was 10; four delete-additive sites
 
     const second = new R318Backend("post");
     const report = await runSession({
@@ -3151,7 +3152,7 @@ describe("R318: a resume across R318 re-scores a renamed member instead of keepi
     expect(second.baselineRuns).toBeGreaterThan(0);
     // Guard 1 and 2 together: every member mutant was scored now, exact, never carried.
     const member = inMember(report);
-    expect(member).toHaveLength(10);
+    expect(member).toHaveLength(14);
     for (const m of member) {
       expect([m.line, m.verdict]).toEqual([m.line, "killed"]);
       expect(m.coverageAttribution).toBe("exact");
@@ -5311,7 +5312,7 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
     expect(stale).toHaveLength(1);
     expect(renderConsole(report)).toContain(", reused-budget-stale 1])");
     const out = explain(report);
-    expect(out.explainSchemaVersion).toBe(22);
+    expect(out.explainSchemaVersion).toBe(23);
     const rows = out.notMeasured.filter((n) => n.cause === "reused-budget-stale");
     expect(rows).toHaveLength(1);
     for (const r of rows) {
@@ -6064,6 +6065,95 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
     expect(overridden.floorCalls).toEqual([
       { floorMs: FLOOR_MS, baselineTimeoutMs: 5_000, runsBefore: 0 },
     ]);
+  });
+});
+
+/**
+ * GitHub #49 through a REAL `--resume`: a `timeout-killed` carried from a prior run keeps the stop
+ * evidence that run recorded, so the resumed report still shows it and still carries the
+ * `stop-answer-400` caveat. A prior row written before the column has none, and stays without: it
+ * is never read as the 408.
+ */
+describe("GitHub #49: --resume keeps stopEvidence", () => {
+  /** A hang backend whose stopped runs carry `evidence` (as the transport stamps them). */
+  class StoppedHangs extends ClockBackend {
+    constructor(
+      private readonly evidence: StopEvidence | undefined,
+      o: ClockOptions = {},
+    ) {
+      super(800, { mutatedMs: Number.POSITIVE_INFINITY, ...o });
+    }
+    override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+      const v = await super.run(ref, opts);
+      return v.outcome === "timeout" && this.evidence !== undefined
+        ? { ...v, stopEvidence: this.evidence }
+        : v;
+    }
+  }
+  const project = async () => {
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.testDir, "SandboxTests.Codeunit.al"), TWO_TESTS_AL);
+    return dirs;
+  };
+  const cfg = (store: ResultsStore, dirs: Awaited<ReturnType<typeof project>>) => ({
+    store,
+    ...dirs,
+    selectorIds,
+    stopHungSessions: true,
+    mutantTimeoutMs: 2_000,
+  });
+  /** Run 1 kills some mutants by a stopped hang, then aborts; run 2 resumes it. */
+  async function twoRuns(
+    first: StopEvidence | undefined,
+    between: (store: ResultsStore, runId: number) => void = () => {},
+  ) {
+    const dirs = await project();
+    const store = new ResultsStore(":memory:");
+    const run1 = await runSession({
+      ...cfg(store, dirs),
+      backend: new StoppedHangs(first, { abort: { after: 2 } }),
+    });
+    const prior = run1.mutants.filter((m) => m.verdict === "timeout-killed");
+    expect(prior.length).toBeGreaterThan(0);
+    const runId = lastRun(store);
+    between(store, runId);
+    const resumed = await runSession({
+      ...cfg(store, dirs),
+      // Run 2 stamps NOTHING: whatever evidence a carried row shows can only have come from run 1.
+      backend: new StoppedHangs(undefined),
+      resume: "last",
+      retryStranded: true,
+    });
+    expect(resumed.resumedFrom?.runId).toBe(runId);
+    const carried = resumed.mutants.filter(
+      (m) => m.carried === true && m.verdict === "timeout-killed",
+    );
+    expect(carried.length).toBeGreaterThan(0);
+    return { prior, carried, resumed, run1 };
+  }
+
+  test("R1. a carried 400-form kill keeps begin-transaction-world, and the caveat holds on the resumed report", async () => {
+    const { prior, carried, resumed, run1 } = await twoRuns("begin-transaction-world");
+    for (const m of prior) expect(m.stopEvidence).toBe("begin-transaction-world");
+    for (const m of carried) expect(m.stopEvidence).toBe("begin-transaction-world");
+    expect(run1.validity.caveats).toContain("stop-answer-400");
+    expect(resumed.validity.caveats).toContain("stop-answer-400");
+    expect(resumed.validity.caveats).toContain("stop-hung-sessions");
+  });
+
+  test("R2. a carried 408-form kill keeps bc-named-stop, and there is no 400 caveat", async () => {
+    const { carried, resumed } = await twoRuns("bc-named-stop");
+    for (const m of carried) expect(m.stopEvidence).toBe("bc-named-stop");
+    expect(resumed.validity.caveats).not.toContain("stop-answer-400");
+  });
+
+  test("R3. a prior row from before the column (NULL) is carried with NO evidence, never the 408, and no 400 caveat", async () => {
+    const { carried, resumed } = await twoRuns("begin-transaction-world", (store, runId) => {
+      store.db.query("UPDATE mutants SET stop_evidence = NULL WHERE run_id = ?").run(runId);
+    });
+    for (const m of carried) expect("stopEvidence" in m).toBe(false);
+    expect(resumed.validity.caveats).not.toContain("stop-answer-400");
+    expect(resumed.validity.caveats).toContain("stop-hung-sessions");
   });
 });
 

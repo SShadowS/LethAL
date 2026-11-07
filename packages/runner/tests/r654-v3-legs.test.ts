@@ -29,6 +29,14 @@ import { buildFakeAppWithEntries } from "./helpers/fake-app";
 
 const BC = "28.0.46665.47126";
 
+describe("R857: the warning says state can carry over", () => {
+  test("it names the shared codeunit run and the kinds of state", () => {
+    expect(AL_RUNNER_V3_NOT_AUTHORITATIVE).toMatch(/every test of a test codeunit together/);
+    expect(AL_RUNNER_V3_NOT_AUTHORITATIVE).toMatch(/carry over to later tests/);
+    expect(AL_RUNNER_V3_NOT_AUTHORITATIVE).toMatch(/work date.*SingleInstance/);
+  });
+});
+
 describe("R654 S2: the leg sets", () => {
   test("L1, Y-A and Y-B are update-gate legs; K is not", () => {
     for (const l of ["L1", "Y-A", "Y-B"]) expect(V3_GATE_LEGS as readonly string[]).toContain(l);
@@ -240,6 +248,7 @@ describe("R654 S2 leg K: the config it builds from, and what it judges", () => {
     oneShotTestCalls: 1,
     warned: true,
     noCoverageFiles: [
+      "src/SandboxPricing.Codeunit.al",
       "src/SandboxPricing.Codeunit.al",
       "src/SandboxPricing.Codeunit.al",
       "src/SandboxPricing.Codeunit.al",
