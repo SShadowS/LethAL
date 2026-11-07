@@ -4,9 +4,9 @@ Everything needed to run the LethAL demo live, in the order you need it. The pla
 before the conference is `docs/superpowers/plans/2026-08-16-directions-emea-2026-readiness.md`; this
 file is what you hold on the day.
 
-**The demo is `examples/gift-card`.** 61 mutants, and the last measured run took **34.0 seconds**.
+**The demo is `examples/gift-card`.** 61 mutants, and the last measured run took **43.4 seconds**.
 That figure includes load: it was re-frozen on 2026-11-07 on bc-demo on server1, which other projects share. On a
-quiet machine the 60-mutant run took 20.6 to 22.7 s. Do not quote 34.0 s as the run's speed.
+quiet machine the 60-mutant run took 20.6 to 22.7 s. Do not quote 43.4 s as the run's speed.
 Its expected verdicts are frozen at `docs/campaign/2026-08-16-gift-card/`.
 
 ---
@@ -128,7 +128,7 @@ you prepared. Never present a prepared result as live.
 
 ## 4. The beat-by-beat
 
-Target: five minutes. Times are from the measured 34.0 s run, so the narration has to carry the
+Target: five minutes. Times are from the measured 43.4 s run, so the narration has to carry the
 middle, not the tool.
 
 | Time | What you do | What you say |
