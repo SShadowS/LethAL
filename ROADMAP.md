@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**18 of 840 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**20 of 843 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -341,6 +341,7 @@ that ordering is the priority.
 - **R855** · tree-sitter-al: valid AL fails at the parser's limit of 6 parse versions when `#if`-split blocks share an `if` chain · [R855.md](docs/roadmap/R855.md) · open, filed 2026-11-06 from R853; upstream https://github.com/SShadowS/tree-sitter-al/issues/40
 - **R857** · On v3 a set WorkDate leaks across a test codeunit, while bcdev runs one method per call, so a verdict can differ · [R857.md](docs/roadmap/R857.md) · open, filed 2026-11-06 from R856
 - **R858** · `negate-conditional` and `swap-additive` can still lose a loop's progress in shapes the delete operators refuse · [R858.md](docs/roadmap/R858.md) · closed 2026-11-07 — named limit: the rule would refuse about 9 real mutants per likely hang, and no narrowing…
+- **R865** · No hang rule sees recursion: a mutant on a recursion's guard or depth can run without bound · [R865.md](docs/roadmap/R865.md) · open, filed 2026-11-07 from coord R-862
 
 ## Product gaps a real project hits
 
@@ -517,6 +518,7 @@ that ordering is the priority.
 - **R848** · `TestField` and `FieldError` are not body exits: a loop that ends only by their error is unseen by the hang refusal · [R848.md](docs/roadmap/R848.md) · closed 2026-11-06 — named limit: one loop in five corpora holds the shape, and the narrowed rule moved no spec
 - **R849** · A pinned v3 record cannot re-key a row, and the hand-edit variable cannot reach the Edit tool: a text-only change to a fixture has no route · [R849.md](docs/roadmap/R849.md) · done (38b0f950)
 - **R853** · Glued source that emits unparsable AL (`endelse`, `endend`, `enduntil`, `beginif`), and one DC file the residual check cannot fold · [R853.md](docs/roadmap/R853.md) · done (5357c827); the one DC file its fold cannot measure is open as R855
+- **R867** · `lethal doctor` reaches a host a stale bc config names; lane start does not refresh bc configs · [R867.md](docs/roadmap/R867.md) · open, filed 2026-11-07; planned below, not built
 
 ## Backends and tooling
 
@@ -884,6 +886,7 @@ that ordering is the priority.
 - **R851** · The al-runner update counted processes as heavy jobs, so one job could skip a release for the day · [R851.md](docs/roadmap/R851.md) · done (0f52bd85)
 - **R859** · The gate manifest has no scripted route when a hand pin's digest moves · [R859.md](docs/roadmap/R859.md) · done (1ab3d80c)
 - **R860** · al-runner stops on a missing dependency (upstream #7139); LethAL follows by name · [R860.md](docs/roadmap/R860.md) · done (35b54d36)
+- **R861** · `--edge-rejudge` moved `current` and left its manifest row unpublished until the next plain run · [R861.md](docs/roadmap/R861.md) · done (25eaa10f)
 - **R866** · `--isolate-tests` runs its baseline as one process per test, which is most of the mode's cost · [R866.md](docs/roadmap/R866.md) · open, filed 2026-11-07 from R857
 
 ---

@@ -1002,6 +1002,23 @@ linuxOnly("R639 --edge-rejudge (R1-R9)", () => {
     }
   });
 
+  test("R861: a rejudge publishes pending rows at once, and a rejudge with none publishes nothing", async () => {
+    await setupKept();
+    await writeFile(
+      join(root, "gated-builds.jsonl"),
+      `${JSON.stringify({ id: "edge-pending" })}\n`,
+    );
+    const pending = rj({ outcome: "pass" });
+    expect(await edgeRejudge(pending.deps, EDGE)).toBe("pass");
+    expect(pending.seen.published).toEqual(["edge-pending"]);
+    await setupKept();
+    await rm(join(root, "gated-builds.jsonl"), { force: true });
+    await rm(join(root, "gated-builds.published"), { force: true });
+    const none = rj();
+    expect(await edgeRejudge(none.deps, EDGE)).toBe("gate-fail");
+    expect(none.seen.published).toEqual([]);
+  });
+
   test("R2 (I5): failed/<tag>@<current commit> with NO receipt refuses by name; the gate never runs", async () => {
     await setupKept();
     await mkdir(failedAt(TAG), { recursive: true });
