@@ -549,6 +549,11 @@ export interface RunCliConfig {
   readonly stopHungSessions?: boolean;
   /** R762: `--fresh-probe`, al-runner-v3 only: run the contract probe instead of replaying a cached pass. */
   readonly freshProbe?: boolean;
+  /**
+   * R866: `--workers <n>` given with `--isolate-tests`: how many baseline processes run at a time.
+   * Kept apart from `workers`, whose default of 1 cannot tell "not given" from `--workers 1`.
+   */
+  readonly baselineProcesses?: number;
   /** R857: `--isolate-tests`, al-runner-v3 only: every test runs alone. Off by default. */
   readonly isolateTests?: boolean;
   /**
@@ -1044,8 +1049,9 @@ RUN — cost and recovery
                              (env LETHAL_V3_SPECULATE_BASELINE=1: run the baseline while alc proves the batch, R790; off by default)
   --isolate-tests            al-runner-v3 only, off by default: run every test alone, so nothing
                              an earlier test of its codeunit left reaches it. Slower: one process
-                             per test at the baseline. Needs the serve-entries transport. A run
-                             with it and a run without it never share verdicts (R857)
+                             per test at the baseline, four at a time, or --workers <n> at a time,
+                             so allow memory for that many. Needs the serve-entries transport. A run with it and a run without
+                             it never share verdicts (R857, R866)
   --resume                   continue the most recent unfinished run in --db, reusing its verdicts
   --resume-run <id>          resume a specific run id
   --retry-stranded           on resume, retry mutants that left the server stuck (skipped by default:
@@ -2283,6 +2289,9 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     ...(values["stop-hung-sessions"] === true ? { stopHungSessions: true } : {}),
     ...(values["fresh-probe"] === true ? { freshProbe: true } : {}),
     ...(values["isolate-tests"] === true ? { isolateTests: true } : {}),
+    ...(values["isolate-tests"] === true && values.workers !== undefined
+      ? { baselineProcesses: workers }
+      : {}),
     ...(values["progress-out"] !== undefined ? { progressOutPath: values["progress-out"] } : {}),
   };
 }
@@ -2973,7 +2982,7 @@ export type BackendInputs = Pick<
   RunCliConfig,
   "backendKind" | "projectDir" | "testDir" | "stopHungSessions"
 > &
-  Partial<Pick<RunCliConfig, "freshProbe" | "isolateTests">> &
+  Partial<Pick<RunCliConfig, "freshProbe" | "isolateTests" | "baselineProcesses">> &
   // R505: the run's own output files, which the source-drift watch must not count.
   Partial<Pick<RunCliConfig, "dbPath" | "outPath" | "progressOutPath">>;
 
@@ -3052,6 +3061,9 @@ async function buildAlRunnerV3Backend(
         : {}),
       ...(parsed.freshProbe === true ? { freshProbe: true } : {}),
       ...(parsed.isolateTests === true ? { isolateTests: true } : {}),
+      ...(parsed.baselineProcesses !== undefined
+        ? { isolatedBaselineProcesses: parsed.baselineProcesses }
+        : {}),
       ...(c.cacheDir !== undefined ? { cacheDir: c.cacheDir } : {}),
       ...(deps.preprocessorSymbols.length > 0
         ? { preprocessorSymbols: deps.preprocessorSymbols }
