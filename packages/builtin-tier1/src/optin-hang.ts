@@ -356,7 +356,8 @@ const ANY_LOOP: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The ONE loop skipped: a `for` whose body neither assigns its control variable (`I := ...`,
+ * The ONE loop skipped: a `for` whose control variable is a local of its procedure (not a parameter,
+ * not a global) and whose body neither assigns that variable (`I := ...`,
  * `I -= 1`) nor mentions it inside a call (it could be a `var` parameter: `Zero(I)`). The bound is
  * read once, so a blank cannot keep it going. Every `while` and `repeat` that reads the value is
  * refused, whatever its exit: a cursor exit is NOT a bound (R868 review: nine escapes, a helper that
@@ -368,6 +369,11 @@ function skippedLoop(loop: ALSyntaxNode): boolean {
   const v = loop.childForFieldName("variable");
   const name = v === null ? "" : normalizeAlName(v.text);
   if (body === null || name === "") return false;
+  // The control variable must be a LOCAL `var` of the procedure holding the loop: not a parameter,
+  // not a global. A helper can write a global (`Rewind()` doing `G := 0`), and a parameter can be `var`.
+  let scope: ALSyntaxNode | null = loop.parent;
+  while (scope !== null && !isScope(scope)) scope = scope.parent;
+  if (scope === null || !r531Declares(scope, name, false)) return false;
   let touched = false;
   visitAll(body, (n) => {
     if (n.kind === ALNodeKind.assignment_statement) {

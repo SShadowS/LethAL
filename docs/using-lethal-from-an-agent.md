@@ -1026,8 +1026,9 @@ What remains is small and named, so a stranded run is diagnosable rather than my
   LATER loop reads (`Step := 1; if Backwards then Step := -1; while I < N do I += Step;`), the same exposure the
   default operators have.
 - The opt-in `blank-argument` (a variable argument to its blank) refuses a callee parameter that a `for`, a `while`
-  or a `repeat` reads. The one loop it skips is a `for` whose control variable is neither assigned (`I := ...`,
-  `I -= 1`) nor passed to a call (it could be a `var` parameter): its bound is read once. Every `while` and
+  or a `repeat` reads. The one loop it skips is a `for` with a local control variable (a `var` of the procedure
+  that holds the loop: not a parameter, not a global, since a helper can write a global) that is neither assigned
+  (`I := ...`, `I -= 1`) nor passed to a call (it could be a `var` parameter): its bound is read once. Every `while` and
   `repeat` that reads the value is refused, whatever its exit, a record cursor exit (`until R.Next() = 0`)
   included: such a loop is not a bound, because its body or a helper can restart, reverse or reposition the
   cursor. A read directly, through a copy (`L := Step; while I < N do I += L`), through a global it is stored in that any loop of

@@ -321,6 +321,8 @@ ${callee}
     expect(refused("for I := 1 to 10 do if I > Step then Zero(I);")).toBe(true);
     expect(refused("for I := 1 to 10 do if I > Step then I -= 1;")).toBe(true);
     expect(refused("for I := 1 to 10 do if I > Step then I := 0;")).toBe(true);
+    // A parameter as control variable (it could be var): not a local.
+    expect(refused("for Step := 1 to 10 do Total += Step;")).toBe(true);
   });
 
   it("CLAIMS a for loop whose body neither assigns nor passes the control variable, or reads it only in a bound", () => {
@@ -400,6 +402,22 @@ ${s}
     c7_or_operand_helper: cu(
       "procedure Spin(S: Integer) var J: Integer; begin if G.FindSet() then repeat J += 1; until (G.Next() = 0) or Rew(J, S); end;\nprocedure Rew(J: Integer; S: Integer): Boolean begin if J > S then G.FindFirst(); exit(false); end;",
       "var G: Record Customer;",
+    ),
+    c8_global_ctrl_helper: cu(
+      "procedure Spin(S: Integer) begin for G := 1 to 10 do if G > S then Rewind(); end;\nprocedure Rewind() begin G := 0; end;",
+      "var G: Integer;",
+    ),
+    c8_global_ctrl_helper_arg: cu(
+      "procedure Spin(S: Integer) begin for G := 1 to 10 do if G > S then Rewind(1); end;\nprocedure Rewind(X: Integer) begin G := X; end;",
+      "var G: Integer;",
+    ),
+    c8_global_ctrl_this: cu(
+      "procedure Spin(S: Integer) begin for G := 1 to 10 do if G > S then this.Rewind(); end;\nprocedure Rewind() begin G := 0; end;",
+      "var G: Integer;",
+    ),
+    c8_global_ctrl_untouched: cu(
+      "procedure Spin(S: Integer) var J: Integer; begin for G := 1 to 10 do J += S; end;",
+      "var G: Integer;",
     ),
   };
 
