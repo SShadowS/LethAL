@@ -87,7 +87,7 @@ describe("R868 review: self-calls through a codeunit variable (#36)", () => {
         Me: Codeunit "C";
     begin
         if L < 10 then
-            Other.Rec(L + 1);
+            Other.Go(L + 1);
         if L < 5 then
             Me.Leaf(L);
     end;
