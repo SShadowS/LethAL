@@ -598,7 +598,9 @@ agent learns to call it. Install it either way:
 - **As a Claude Code plugin**, which also updates: in Claude Code, run
   `/plugin marketplace add SShadowS/LethAL`, then `/plugin install lethal@lethal`. This copies the
   whole LethAL repository for one skill (81 MB in the plugin cache, measured from a local copy);
-  the file route above does not. Only the skill loads: no hooks, agents or MCP servers.
+  the file route above does not. Only the skill loads: no hooks, agents or MCP servers. Install
+  from GitHub as shown: a marketplace added from a local working copy copies its untracked files
+  too, so a local `.mcp.json` there would load with the plugin.
 
 The skill is user-invoked (`disable-model-invocation: true`): ask for it, for example "run LethAL
 on this project", or type `/lethal-mutation-testing`. It runs the `lethal` binary, which you install

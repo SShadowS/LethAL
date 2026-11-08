@@ -14,6 +14,8 @@ const ROOT = join(import.meta.dir, "..", "..", "..");
 const SKILL_DIR = join(ROOT, "skills", "lethal-mutation-testing");
 const SKILL = readFileSync(join(SKILL_DIR, "SKILL.md"), "utf8");
 const read = (...p: string[]) => readFileSync(join(ROOT, ...p), "utf8");
+/** What a Claude Code plugin loads from its root without being told to. */
+const DEFAULT_LOADED = ["hooks", "commands", "agents", "output-styles", ".mcp.json", ".lsp.json"];
 
 /** The skill's placeholders, as a user would fill them in. */
 const FILLED: ReadonlyArray<[string, string]> = [
@@ -153,15 +155,33 @@ describe("R869: the skill installs as one file, or as a plugin", () => {
     expect(market.plugins.map((p) => [p.name, p.source])).toEqual([["lethal", "./"]]);
   });
 
-  test("the repository root holds nothing a plugin loads by default but the skill", () => {
-    // The plugin's root is the repository's root, so a hooks file or an MCP config added here
-    // later would reach every user who installed the skill.
-    for (const p of ["hooks", "commands", "agents", "output-styles", ".mcp.json", ".lsp.json"]) {
-      expect(
-        existsSync(join(ROOT, p)),
-        `${p} at the repository root would ship in the plugin`,
-      ).toBe(false);
-    }
+  test("the repository root tracks nothing a plugin loads by default but the skill", () => {
+    // The plugin's root is the repository's root, so a hooks file or an MCP config committed here
+    // would reach every user who installed the skill. A GitHub install clones tracked files only,
+    // so only those are asked about: a developer's own gitignored `.mcp.json` is not shipped
+    // (measured: a local-path install DOES copy one, and `mcpServers: {}` in the manifest does
+    // not stop it loading; the README says so).
+    const git = Bun.spawnSync(["git", "-C", ROOT, "ls-files", "--", ...DEFAULT_LOADED]);
+    if (git.exitCode !== 0) throw new Error(`git ls-files failed: ${git.stderr.toString()}`);
+    expect(
+      git.stdout.toString().split("\n").filter(Boolean),
+      "tracked at the repository root",
+    ).toEqual([]);
+  });
+
+  test("the root check sees a tracked file: the probe finds one it is shown", () => {
+    // The other direction: `git ls-files` with these paths finds a tracked file, here README.md
+    // asked for by the same call, so an empty answer above is not a call that can never answer.
+    const git = Bun.spawnSync([
+      "git",
+      "-C",
+      ROOT,
+      "ls-files",
+      "--",
+      ...DEFAULT_LOADED,
+      "README.md",
+    ]);
+    expect(git.stdout.toString().split("\n").filter(Boolean)).toEqual(["README.md"]);
   });
 
   test("the README tells a user both ways to install it", () => {
