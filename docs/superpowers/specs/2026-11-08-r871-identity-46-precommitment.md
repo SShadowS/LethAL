@@ -27,3 +27,11 @@ No fixture site changes, so no gate row moves.
 - **Unit goldens:** the scheme-pin tests and the digests that hash the scheme move with the number. `instrumented-output-golden.json` and the `report-equality` snapshot change only where the scheme appears. `sandbox-harden`'s equivalence mark is re-keyed to 46.
 
 Any other difference is a BLOCK, and I report it rather than record it.
+
+## Addendum 1, before any live run: `sandbox-optin`
+
+The table above was measured against master 1aba1bf6. R868 landed after that measurement, adding the fixture `sandbox-optin`. Re-measured against master 9c91e69d, fixtures (29 projects): **`sandbox-optin` loses 2 specs** (one `swap-additive`, one `delete-additive-right`, both in `OptinLogic.Codeunit.al`), with 0 tuples and 0 ordinals moved. Every other fixture is identical.
+
+- No gate reads `sandbox-optin`, so the gate predictions above stand.
+- R868's pre-commitment pins only the opt-in operators' rows, not these two. So its hand check is unchanged.
+- `instrumented-output-golden.json` moves for this file: 127 to 125 mutants, with a new sha256.
