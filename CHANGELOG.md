@@ -39,6 +39,13 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **Breaking: `--json` prints the bc-toolbox CLI envelope** (R870, GitHub #27). `lethal doctor --json` and
+  `lethal campaign compare --json` now print `{ schemaVersion: "1", status: "ok", data, warnings }`, and their former
+  document is `data`: read `data.checks[].name`, not `checks[].name`. When a command cannot produce its result, stdout is
+  `{ schemaVersion: "1", status: "error", warnings, error: { code, category, message, retryable, details, nextSteps } }`,
+  with `INVALID_ARGUMENT`, `CONFIGURATION_ERROR`, `UNCOMMITTED_PRECOMMITMENT` or `INTERNAL_ERROR`. Logs stay on stderr,
+  and no exit code changes. Without `--json` nothing changes. The schema is `schemas/cli-envelope-v1.schema.json`,
+  vendored from `@sshadows/bc-toolbox-envelope` 0.1.0.
 - **Behaviour change: a missing dependency now stops an al-runner-v3 run by name** (R860, upstream #7139). From al-runner
   edge a461e6310, a dependency app that is not in the package folder no longer runs without it with a warning: al-runner
   stops, and LethAL stops the session at the first request with the app's name, id, publisher and version, and the fix:
