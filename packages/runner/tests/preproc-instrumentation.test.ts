@@ -1505,9 +1505,9 @@ describe("R303: a member whose var section is split by #if gets a latch, or is r
 #endif
 }
 `;
-  // R214: Twin's var section is two #if blocks in a row, which tree-sitter-al leaves as ERROR nodes
-  // that swallow two of its directive markers, so its file cannot be evaluated as alc does and is
-  // refused whole. It sits in its own file so the members above are still measured.
+  // Twin's var section is two #if blocks in a row. tree-sitter-al 4.5.0 left them as ERROR nodes and
+  // the file was refused whole (R214). 4.6.0 parses them (#31), so Twin gets the header latch, with
+  // BOTH blocks' `var` blanked (R-861 run 002), or a build with both arms on has two (alc AL0104).
   const TWIN = `codeunit 50101 "Repro D Twin"
 {
     procedure Twin(X: Integer): Integer
@@ -1545,17 +1545,8 @@ describe("R303: a member whose var section is split by #if gets a latch, or is r
       expect(prag?.message).toContain("R303");
       expect(prag?.message).toContain("is not the end of its header");
       expect(prag?.message).not.toContain("did not parse cleanly");
-      // R214 (ruling T6-a): the unparsed member's file is refused whole, before any latch is
-      // considered, so R313's sentence cannot name it here. R313's sentence stays covered end to end
-      // by R316's P16 test, whose file is decided.
-      expect(set.preprocExcluded.map((f) => [f.file, f.reason, f.detail, f.sites])).toEqual([
-        [
-          "Twin.Codeunit.al",
-          "preproc-undecided",
-          "marker-mismatch (4 directive lines, 2 markers)",
-          5, // R855: was 4; delete-additive-right adds one site
-        ],
-      ]);
+      // R214's marker-mismatch refusal stays covered by r214-compiled-out and preproc-arms.
+      expect(set.preprocExcluded).toEqual([]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -1563,9 +1554,14 @@ describe("R303: a member whose var section is split by #if gets a latch, or is r
       "Repro.Codeunit.al": SRC,
       "Twin.Codeunit.al": TWIN,
     });
-    // The refused file gets no mutant and is not written.
-    expect(manifest.mutants.filter((m) => m.file === "Twin.Codeunit.al")).toEqual([]);
-    expect(emitted.has("Twin.Codeunit.al")).toBe(false);
+    const twin = emitted.get("Twin.Codeunit.al") ?? "";
+    const twinHeader = "procedure Twin(X: Integer): Integer var LethALReachLatch: Boolean;";
+    expect(twin).toContain(twinHeader);
+    const afterHeader = twin.slice(twin.indexOf(twinHeader) + twinHeader.length);
+    expect(afterHeader.slice(0, afterHeader.indexOf("    begin")).match(/\bvar\b/gi)).toBeNull();
+    expect(
+      new Set(manifest.mutants.filter((m) => m.file === "Twin.Codeunit.al").map((m) => m.reachGrain)),
+    ).toEqual(new Set(["statement"]));
     const grains = new Map<string, Set<string>>();
     for (const m of manifest.mutants) {
       const who = m.triggerName ?? m.procedureName;
@@ -1587,11 +1583,11 @@ describe("R303: a member whose var section is split by #if gets a latch, or is r
     );
   });
 
-  test("S3's emission re-parses with ERROR nodes, yet both line maps give every line to its own member", async () => {
+  test("S3's emission re-parses clean, and both line maps give every line to its own member", async () => {
     // The hoist turns S3's nested #if into a nested #if inside an ordinary var section, which
-    // tree-sitter-al cannot parse (SShadowS/tree-sitter-al #30). The bcdev line map and the
-    // al-runner coverage index both re-parse the instrumented bundle, so pin that the ERRORs stay
-    // inside Pick and the member boundaries survive.
+    // tree-sitter-al 4.5.0 could not parse and 4.6.0 can (SShadowS/tree-sitter-al #30). The bcdev
+    // line map and the al-runner coverage index both re-parse the instrumented bundle, so pin that
+    // the member boundaries survive.
     const S3 = `codeunit 50100 "Repro S"
 {
     procedure Pick(X: Integer); // header note
@@ -1637,7 +1633,7 @@ describe("R303: a member whose var section is split by #if gets a latch, or is r
       visit(wrapRoot(parseAL(text)), (n) => {
         if (n.rawKind === "ERROR") errors++;
       });
-      expect(errors).toBeGreaterThan(0);
+      expect(errors).toBe(0);
       const lines = text.split("\n");
       const lineOf = (needle: string, from = 0): number => {
         const i = lines.findIndex((l, k) => k >= from && l.startsWith(needle));
