@@ -260,7 +260,8 @@ import { refuseRetiredV2Report } from "./v2-retired";
  * (R233); v21 is frozen.
  *
  * 23: GitHub #49 added the caveat value `stop-answer-400` to `$.caveats[].caveat`. A new value, so
- * it bumps (R233); v22 is frozen.
+ * it bumps (R233); v22 is frozen. R873 added the optional `survivors[].coveringTestLocations`,
+ * present only under `--project`: an optional additive field, so no bump.
  */
 export const EXPLAIN_SCHEMA_VERSION = 23;
 

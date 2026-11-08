@@ -1364,7 +1364,10 @@ export async function verifyDependencyFingerprint(
  *  `not-rerun` (a value domain grew, so it bumps; a v5 reader never sees it). v5 is frozen. 7 since
  *  R-260 added the refusal reason `test-project-nested` (a value domain grew). v6 is frozen. 8 since
  *  R259 added `results[].sameProcedure`: required on a row killed by a new test, so its absence
- *  there means "not measured" only from v8 on (the v5 rule). v7 is frozen. */
+ *  there means "not measured" only from v8 on (the v5 rule). v7 is frozen.
+ *  R873 did NOT bump: it added no field or value, so the v5/v8 absence rule does not apply. It
+ *  narrowed `killed`: a pre-R873 v8 `killed` row may be a kill by a flaky new test, which a reader
+ *  can tell from `newTests[].state` (not `stable`); from R873 on such a row reads `error`. */
 export const VERIFY_SCHEMA_VERSION = 8;
 export const VERIFY_VERDICTS = ["killed", "survived", "error", "skipped"] as const;
 export const KILLED_BY = ["assertion", "runtime-error", "other"] as const;

@@ -327,6 +327,8 @@ describe("R274: explain --project renders each gap's source", () => {
     expect(without.filter((s) => "coveringTestLocations" in s)).toEqual([]);
     const withProject = explain(report, { projectSource: fixture.source }).survivors;
     expect(withProject.length).toBe(without.length);
+    const all = withProject.flatMap((s) => s.coveringTestLocations ?? []);
+    expect(all.some((l) => l.line !== undefined && l.file !== undefined)).toBe(true);
     for (const s of withProject) {
       expect(s.coveringTests.length).toBeGreaterThan(0);
       expect((s.coveringTestLocations ?? []).map((l) => l.name)).toEqual([...s.coveringTests]);

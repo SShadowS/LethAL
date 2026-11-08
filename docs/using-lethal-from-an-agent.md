@@ -586,6 +586,8 @@ A row is `killed` by a NEW test only when that test's `newTests[].state` is `sta
 test killed the mutant but is `flaky` (or any state but `stable`), the row is `error`: its
 `failureNote` names the test and says the kill is not trusted, and `counts.error` counts it, not
 `counts.killed`. The exit code stays `5`. Fix the test until it is `stable`, then run verify again.
+The `--progress-out` events can still say `killed` for such a kill, because they are written before
+the demotion. The JSON verify prints is the verdict.
 
 `infra-error` means at least one of the new test's two unmutated runs failed for infrastructure
 reasons (its `runs[].outcome` is `error` or `deadline-exceeded`: the call failed, not the test).
@@ -624,7 +626,7 @@ exits `3`.
 | `0` | Every named survivor was killed and every new test is `stable` or `not-rerun`. Also returned when every survivor skipped, which measured nothing. Skipped rows are left out: some killed and the rest skipped is `0`. |
 | `1` | An error, including an argv verify refuses (a missing flag, the `--out` trap). The message is on stderr and there is no JSON. |
 | `3` | **Quarantined**, including the test-app outcomes `publish-indeterminate` and `publish-anomalous`. |
-| `4` | Every non-skipped survivor is `error`: verify measured nothing. |
+| `4` | Every non-skipped survivor is `error`: verify measured nothing. Exception: if the rows are all `error` only because a flaky new killer was demoted (R873), the exit is `5`. |
 | `5` | Not every named survivor was killed, or a new test is neither `stable` nor `not-rerun`. |
 | `6` | Refused before measuring; `refused.reason` says why. |
 
