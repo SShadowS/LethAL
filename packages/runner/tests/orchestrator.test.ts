@@ -19145,6 +19145,34 @@ describe("R536: runNamedMutants reads the installed artifact under the source ru
     expect(events.filter((e) => e.type === "warning" && e.code === "fake-notice").length).toBe(1);
   });
 
+  // R873 pin: verify's mutant runs go through runNamedMutants; on a backend with the rule on
+  // (bcdev), a kill that does not fail again under the mutant is not a kill.
+  test("R577 pin: through runNamedMutants a kill that fails once and passes on reproduction is kill-not-reproduced; failing twice is killed", async () => {
+    const outcomeOf = async (failsOnRun: (underMutantRun: number) => boolean) => {
+      let underMutant = 0;
+      const fx = await installedFixture({
+        answer: ({ mutant }) => {
+          if (mutant !== "M0001") return undefined;
+          underMutant += 1;
+          return { outcome: failsOnRun(underMutant) ? "fail" : "pass" };
+        },
+      });
+      const backend = Object.assign(fx.cfg.backend, { killsMustReproduce: true });
+      const r = await runNamedMutants({ ...fx.cfg, backend });
+      const o = r.outcomes.find((x) => x.mutant.mutantId === "M0001");
+      if (o === undefined) throw new Error("no outcome for M0001");
+      return { o, underMutant };
+    };
+    // NamedFake asks `answer` twice per group call (the call, then the method), so the kill's
+    // group call is answers 1 and 2; every later answer is the reproduction.
+    const once = await outcomeOf((n) => n <= 2);
+    expect(once.underMutant).toBeGreaterThanOrEqual(3);
+    expect(once.o.verdict).toBe("error");
+    expect(once.o.cause).toBe("kill-not-reproduced");
+    const twice = await outcomeOf(() => true);
+    expect(twice.o.verdict).toBe("killed");
+  });
+
   test("a source run that recorded no build symbols is refused before any backend call, never read as []", async () => {
     const fx = await installedFixture();
     setSourceSymbols(fx, null);
@@ -21103,6 +21131,39 @@ describe("C02-06 Task 5.4: runVerify", () => {
     expect(out.exitCode).toBe(5);
   });
 
+  test("R873: a flaky new killing test reads error, never killed, and counts follow; exit stays 5", async () => {
+    // The new test kills, then fails its own unmutated rerun (its last unmutated run).
+    const fx = await verifyFixture({
+      withNewTest: true,
+      killerRef: NEWT,
+      unmutated: ({ ref, nth }) =>
+        ref.codeunitId === NEWT.codeunitId && nth >= 3
+          ? { ref, outcome: "fail", durationMs: 5, failureMessage: "flaked" }
+          : ALL_GREEN({ ref }),
+    });
+    const out = await fx.verify(["0/M0001"]);
+    expect(out.newTests.map((t) => [t.test, t.state])).toEqual([
+      ["New Tests.OverBudgetDetected", "flaky"],
+    ]);
+    const [row] = out.results;
+    expect(row?.verdict).toBe("error");
+    expect(row?.failureNote).toContain("New Tests.OverBudgetDetected");
+    expect(row?.failureNote).toContain("not trusted");
+    expect(row?.failureNote).toContain("flaky");
+    expect(row?.killingTest).toBeUndefined();
+    expect(out.counts).toEqual({ killed: 0, survived: 0, error: 1, skipped: 0 });
+    expect(out.exitCode).toBe(5);
+  });
+
+  test("R873: a stable new killing test still reads killed", async () => {
+    const fx = await verifyFixture({ withNewTest: true, killerRef: NEWT });
+    const out = await fx.verify(["0/M0001"]);
+    expect(out.newTests.map((t) => t.state)).toEqual(["stable"]);
+    expect(out.results[0]?.verdict).toBe("killed");
+    expect(out.results[0]?.killedByNewTest).toBe(true);
+    expect(out.counts.killed).toBe(1);
+  });
+
   // R-278: Zulu Tests.OverBudgetDetected covers M0001 in the source run. Edited since, it is
   // selected as a NEW test too: its two unmutated runs are made and the flakiness gate reads them.
   test("R-278: an edited covering test gets the double unmutated run and the flakiness gate", async () => {
@@ -21627,13 +21688,11 @@ describe("C02-06 Task 5.4: runVerify", () => {
     test("a session that latches mid-probe leaves every sibling unknown", async () => {
       const out = await probing(() => ({ outcome: "fail" }), { strand: "M0003" });
       expect(out.quarantined).toBeDefined();
-      expect(out.results[0]?.sameProcedure).toEqual({
-        test: NEWT,
-        alsoKills: [],
-        notKilled: [],
-        unknown: ["0/M0002", "0/M0003"],
-        overCap: 0,
-      });
+      // R873: the latched session never reran the new test (`flaky-unknown`), so its kill is not
+      // trusted: the row is `error`, and an error row carries no `sameProcedure`.
+      expect(out.newTests.map((t) => t.state)).toEqual(["flaky-unknown"]);
+      expect(out.results[0]?.verdict).toBe("error");
+      expect(out.results[0]?.sameProcedure).toBeUndefined();
       expect(out.exitCode).toBe(3);
     });
   });

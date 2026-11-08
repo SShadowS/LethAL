@@ -21,6 +21,13 @@ import {
   parseCliConfig,
   resolveSelectorIds,
 } from "../src/cli";
+import {
+  CONFIGURATION_ERROR,
+  INVALID_ARGUMENT,
+  LETHAL_ERROR_CODES,
+  cliError,
+  cliOk,
+} from "../src/cli-envelope";
 import { checkAlcRuntime } from "../src/doctor";
 import {
   EQUIVALENCE_MARKS_FILENAME,
@@ -559,7 +566,11 @@ describe("C02-07: the documents' commands and tables are the code's", () => {
   test("the doctor sample and its sentences are doctorJson's", () => {
     const own = ownText(read(REFERENCE), "Before anything else: `doctor` (checked)");
     const sampleText = /```json\r?\n([\s\S]*?)```/.exec(own)?.[1] ?? "";
-    const sample = JSON.parse(sampleText) as Record<string, unknown>;
+    // R870: the sample is the envelope, and the doctor report is its `data`.
+    const envelope = JSON.parse(sampleText) as Record<string, unknown>;
+    expect(new Set(Object.keys(envelope))).toEqual(new Set(Object.keys(cliOk(null))));
+    expect(envelope).toMatchObject({ schemaVersion: "1", status: "ok", warnings: [] });
+    const sample = envelope.data as Record<string, unknown>;
     const report = {
       ok: false,
       checks: [checkAlcRuntime({ alcPath: "a", alcVersion: "x", cachePath: "c" })],
@@ -578,8 +589,10 @@ describe("C02-07: the documents' commands and tables are the code's", () => {
     expect(sample.notChecked).toEqual([...DOCTOR_NOT_CHECKED_TOKENS]);
     expect(real.notChecked).toEqual([...DOCTOR_NOT_CHECKED_TOKENS]);
     const text = flowed(own);
-    expect(text).toContain(`\`notChecked\` is always ${listed(DOCTOR_NOT_CHECKED_TOKENS, "and")}.`);
-    expect(text).toContain(`\`caveat.kind\` is ${listed(DOCTOR_CAVEAT_KINDS, "or")}.`);
+    expect(text).toContain(
+      `\`data.notChecked\` is always ${listed(DOCTOR_NOT_CHECKED_TOKENS, "and")}.`,
+    );
+    expect(text).toContain(`\`data.caveat.kind\` is ${listed(DOCTOR_CAVEAT_KINDS, "or")}.`);
     // "present only for a config shape that has one": absent without a caveat, and every caveat
     // constant maps to one of the listed kinds.
     expect(Object.keys(doctorJson(report))).not.toContain("caveat");
@@ -588,6 +601,26 @@ describe("C02-07: the documents' commands and tables are the code's", () => {
     ]);
     const owners = FLAG_OWNERS.find((r) => r.flag === "json")?.owners ?? [];
     expect(text).toContain(`\`--json\` is accepted by ${listed(owners, "and")} only.`);
+  });
+
+  test("the envelope's error sample and code table are the code's (R870)", () => {
+    const own = ownText(read(REFERENCE), "The `--json` envelope (checked)");
+    const sample = JSON.parse(/```json\r?\n([\s\S]*?)```/.exec(own)?.[1] ?? "") as {
+      error: Record<string, unknown>;
+    } & Record<string, unknown>;
+    const real = cliError(new Error("x")) as unknown as { error: Record<string, unknown> };
+    expect(new Set(Object.keys(sample))).toEqual(new Set(Object.keys(real)));
+    expect(new Set(Object.keys(sample.error))).toEqual(new Set(Object.keys(real.error)));
+    // Every code LethAL can print is in the table, and the table names no other.
+    const table = [...own.matchAll(/^\| `([A-Z_]+)` \|/gm)].map((m) => m[1]);
+    const emitted = [
+      INVALID_ARGUMENT.code,
+      CONFIGURATION_ERROR.code,
+      ...LETHAL_ERROR_CODES,
+      "INTERNAL_ERROR",
+    ];
+    expect(new Set(table)).toEqual(new Set(emitted));
+    expect(own).toContain("schemas/cli-envelope-v1.schema.json");
   });
 
   test("the running section's database and caveat names are the code's", () => {

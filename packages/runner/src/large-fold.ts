@@ -1,5 +1,11 @@
-import type { MutationSpec } from "@lethal/engine";
-import { type TierResolver, assignMutantIds, buildComponents, dedupeSpecs } from "@lethal/schemata";
+import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
+import {
+  type TierResolver,
+  assignMutantIds,
+  buildComponents,
+  compileSchemataForFile,
+  dedupeSpecs,
+} from "@lethal/schemata";
 
 /**
  * R826: when one mutant's statement holds others, they share one guard chain and each branch repeats
@@ -11,71 +17,108 @@ import { type TierResolver, assignMutantIds, buildComponents, dedupeSpecs } from
  * file stopped a BC service tier with a stack overflow, and a very large method is the lead suspect.
  * That is an inference: no crash has been measured here.
  *
- * So these two figures are NOT measured limits. They were chosen to fire on the outliers of real code:
- * 5 of 171 DO codeunits sampled (2026-11-05), where a chain of 50 fired on 32. It warns, and never refuses.
+ * R875: the warning reads the REAL emitted text, not an estimate. This figure is NOT a measured limit.
+ * It was chosen to fire on the outliers of real code: 24 of 986 DC and DO files have a method this
+ * large (2026-11-08, `/coord/handoff/R-826-check/`). It warns, and never refuses.
  */
-export const LARGE_FOLD_CHAIN = 100;
-export const LARGE_FOLD_BYTES = 512 * 1024;
+export const LARGE_METHOD_BYTES = 512 * 1024;
 
-export interface FoldFigures {
-  /** The most mutants in one chain. */
+/**
+ * R875: what one guard adds to the emitted file beyond the root text it copies: its `if` and the
+ * marker. Measured on the same 986 files: at most 199 bytes, file overhead included. With this, a file
+ * whose bound is under `LARGE_METHOD_BYTES` holds no method that large, and is not emitted here.
+ */
+export const BOUND_BYTES_PER_GUARD = 512;
+
+export interface LargeMethod {
+  readonly path: string;
+  /** The most mutants in one chain: for the reader, not the decision. */
   readonly chain: number;
-  /** The largest single chain's emitted text: members x the root's length. An estimate. */
-  readonly bytes: number;
+  /** The largest procedure or trigger in the emitted text, header to next header. */
+  readonly methodBytes: number;
 }
 
-/** The largest chain and the largest fold, each on its own: they need not be the same component. */
-export function largestFold(
-  components: readonly {
-    readonly members: readonly unknown[];
-    readonly root: { readonly startIndex: number; readonly endIndex: number };
-    readonly free?: true;
-  }[],
-): FoldFigures {
-  let chain = 0;
-  let bytes = 0;
-  for (const c of components) {
-    chain = Math.max(chain, c.members.length);
-    if (c.free === true) continue; // R827: a guard copies no text.
-    bytes = Math.max(bytes, c.members.length * (c.root.endIndex - c.root.startIndex));
+/** The largest procedure or trigger in emitted AL, from one header (with its attribute lines) to the next. */
+export function largestMethodBytes(text: string): number {
+  const starts = [
+    ...text.matchAll(
+      /^(?:[ \t]*\[[^\n]*\][ \t]*\r?\n)*[ \t]*(?:local |internal |protected )?(?:procedure|trigger) /gim,
+    ),
+  ].map((m) => m.index ?? 0);
+  starts.push(text.length);
+  let max = 0;
+  for (let i = 0; i + 1 < starts.length; i += 1) {
+    max = Math.max(max, (starts[i + 1] ?? 0) - (starts[i] ?? 0));
   }
-  return { chain, bytes };
+  return max;
 }
 
-/** Over either figure. Each figure is itself over: see their comment for what they are. */
-export function isLargeFold(f: FoldFigures): boolean {
-  return f.chain >= LARGE_FOLD_CHAIN || f.bytes >= LARGE_FOLD_BYTES;
+type FileIn = {
+  readonly path: string;
+  readonly source: string;
+  readonly root: ALSyntaxNode;
+  readonly specs: readonly MutationSpec[];
+};
+
+/** The file's mutants as the batch's compile sees them, its components, and their bound and chain. */
+function planOf(file: FileIn, tierOf: TierResolver) {
+  const deduped = dedupeSpecs(file.specs, tierOf);
+  const ided = assignMutantIds(new Map([[file.path, deduped]])).get(file.path) ?? [];
+  let chain = 0;
+  let bound = file.source.length;
+  for (const c of buildComponents(ided)) {
+    chain = Math.max(chain, c.members.length);
+    // R827: a free guard copies no text.
+    const copied = c.free === true ? 0 : c.root.endIndex - c.root.startIndex;
+    bound += c.members.length * (copied + BOUND_BYTES_PER_GUARD);
+  }
+  return { deduped, ided, chain, bound };
 }
 
-/** The largest fold in one file's mutants. */
-export function foldFiguresOf(
-  path: string,
-  specs: readonly MutationSpec[],
+/** An upper bound on the file's emitted text, without emitting it: no method is larger than this. */
+export function emittedBound(file: FileIn, tierOf: TierResolver): number {
+  return planOf(file, tierOf).bound;
+}
+
+/** One file's largest emitted method, or `undefined` when its bound says none can reach the figure. */
+export function largeMethodOf(file: FileIn, tierOf: TierResolver): LargeMethod | undefined {
+  if (file.specs.length === 0) return undefined;
+  const { deduped, ided, chain, bound } = planOf(file, tierOf);
+  if (bound < LARGE_METHOD_BYTES) return undefined;
+  let text: string;
+  try {
+    text = compileSchemataForFile(file.source, file.root, deduped, ided, file.path);
+  } catch {
+    return undefined; // the batch's own compile refuses this file by name; a warning adds nothing
+  }
+  const methodBytes = largestMethodBytes(text);
+  return methodBytes >= LARGE_METHOD_BYTES ? { path: file.path, chain, methodBytes } : undefined;
+}
+
+/** Every file of these whose emitted text holds a method of `LARGE_METHOD_BYTES` or more, largest first. */
+export function largeMethodsOf(
+  files: readonly Parameters<typeof largeMethodOf>[0][],
   tierOf: TierResolver,
-): FoldFigures {
-  const deduped = dedupeSpecs(specs, tierOf);
-  const ided = assignMutantIds(new Map([[path, deduped]])).get(path) ?? [];
-  return largestFold(buildComponents(ided));
+): LargeMethod[] {
+  return files
+    .map((f) => largeMethodOf(f, tierOf))
+    .filter((m): m is LargeMethod => m !== undefined)
+    .sort((a, b) => b.methodBytes - a.methodBytes || a.path.localeCompare(b.path));
 }
 
-/** R826: the warning for these files, or `undefined` when none is over either figure. */
-export function largeFoldWarning(
-  files: readonly { readonly path: string; readonly specs: readonly MutationSpec[] }[],
-  tierOf: TierResolver,
-): string | undefined {
-  const large = files
-    .map((f) => ({ path: f.path, ...foldFiguresOf(f.path, f.specs, tierOf) }))
-    .filter(isLargeFold)
-    .sort((a, b) => b.bytes - a.bytes || a.path.localeCompare(b.path));
-  if (large.length === 0) return undefined;
-  const named = large
+const named = (large: readonly LargeMethod[]) =>
+  large
     .map(
-      (f) => `${f.path} (chain ${f.chain}, about ${Math.round(f.bytes / 1024)} KB in one method)`,
+      (f) => `${f.path} (chain ${f.chain}, ${Math.round(f.methodBytes / 1024)} KB in one method)`,
     )
     .join("; ");
+
+/** R826: the warning for these large methods, or `undefined` when there are none. */
+export function largeMethodWarning(large: readonly LargeMethod[]): string | undefined {
+  if (large.length === 0) return undefined;
   return [
-    `[lethal] ${large.length} file(s) emit a very large method: ${named}. A method this size may stop a BC`,
-    " service tier with a stack overflow (GitHub #28). That is not proven, and these thresholds are not",
+    `[lethal] ${large.length} file(s) emit a very large method: ${named(large)}. A method this size may stop a BC`,
+    " service tier with a stack overflow (GitHub #28). That is not proven, and this size is not",
     " measured: it is a warning only. Loops and statements holding a `#if` cause the largest folds (everything",
     " inside one joins its chain). To shrink them, leave out the operators that root them, one",
     " --exclude-operator each: empty-block, negate-conditional, conditional-boundary, negate-guard,",
@@ -84,4 +127,25 @@ export function largeFoldWarning(
     " run with --only.",
     " --max-guards-per-batch will not help: it splits by file.",
   ].join("");
+}
+
+/** The warning for these files, or `undefined`. */
+export function largeFoldWarning(
+  files: readonly Parameters<typeof largeMethodOf>[0][],
+  tierOf: TierResolver,
+): string | undefined {
+  return largeMethodWarning(largeMethodsOf(files, tierOf));
+}
+
+/**
+ * R875: what a quarantine says when a batch that holds a large method stops its tier's runs: the
+ * suspect, named as one. `undefined` when the batch holds none of them.
+ */
+export function largeMethodSuspect(
+  large: readonly LargeMethod[],
+  batchPaths: readonly string[],
+): string | undefined {
+  const inBatch = large.filter((m) => batchPaths.includes(m.path));
+  if (inBatch.length === 0) return undefined;
+  return `if the BC service tier stopped, one suspect (not proven, GitHub #28) is this batch's very large method: ${named(inBatch)}`;
 }

@@ -13,6 +13,10 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **The agent skill installs as one file or as a Claude Code plugin** (R868, GitHub #26). `skills/lethal-mutation-testing/SKILL.md`
+  now runs LethAL in the safe order (doctor, dry run, scoped run, read, restore) and says what to do when a step fails. Copy
+  the one file into `~/.claude/skills/lethal-mutation-testing/`, or run `/plugin marketplace add SShadowS/LethAL` and
+  `/plugin install lethal@lethal`. A test parses every command the skill shows with LethAL's own argument parser.
 - **`--isolate-tests`, for `al-runner-v3`, off by default** (R857). Every test runs alone, so state an earlier test of its
   codeunit left behind does not reach it. A default run does not change. The mode is slower, mostly at the baseline: one
   process per test, four at a time or as `--workers` says (R866). A run with it and a run without it never share a verdict or a baseline. It is refused on `bcdev`, and
@@ -45,6 +49,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **The `large-method` warning reads the real emitted text, and a quarantine names the suspect** (R826, R875, GitHub
+  #28). The warning now measures the largest method in the text LethAL actually emits, instead of estimating it, so it
+  catches files the estimate missed (2 of 24 on DC and DO), and it no longer fires on a long chain whose method is small.
+  The 512 KB figure is still not a measured limit, and the warning refuses nothing. When a batch holding such a method is
+  quarantined because a run's fate on the server is unknown, as when the service tier stops, the quarantine reason names
+  that method as one suspect, not as the cause.
 - **AL does not short-circuit, and the design no longer says it does** (R855). `false and Bump()` runs `Bump()`, measured
   on BC 28.4. `design.md` keeps the name `short-circuit-operand`, which is historical.
 
@@ -52,6 +62,13 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 - **The README's operator counts are per tier** (R868). Opt-in operators now sit in Tier 1 as well as Tier 2, so each tier's
   default count leaves its own opt-ins out.
+- **Breaking: `--json` prints the bc-toolbox CLI envelope** (R870, GitHub #27). `lethal doctor --json` and
+  `lethal campaign compare --json` now print `{ schemaVersion: "1", status: "ok", data, warnings }`, and their former
+  document is `data`: read `data.checks[].name`, not `checks[].name`. When a command cannot produce its result, stdout is
+  `{ schemaVersion: "1", status: "error", warnings, error: { code, category, message, retryable, details, nextSteps } }`,
+  with `INVALID_ARGUMENT`, `CONFIGURATION_ERROR`, `UNCOMMITTED_PRECOMMITMENT` or `INTERNAL_ERROR`. Logs stay on stderr,
+  and no exit code changes. Without `--json` nothing changes. The schema is `schemas/cli-envelope-v1.schema.json`,
+  vendored from `@sshadows/bc-toolbox-envelope` 0.1.0.
 - **Behaviour change: a missing dependency now stops an al-runner-v3 run by name** (R860, upstream #7139). From al-runner
   edge a461e6310, a dependency app that is not in the package folder no longer runs without it with a warning: al-runner
   stops, and LethAL stops the session at the first request with the app's name, id, publisher and version, and the fix:
