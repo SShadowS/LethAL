@@ -571,11 +571,37 @@ Two documents collect that contract so nobody has to derive it from the source:
   exit codes, which output surface answers which question, and the six rules that stop a caller
   reaching a confident wrong conclusion.
 - [`skills/lethal-mutation-testing/SKILL.md`](skills/lethal-mutation-testing/SKILL.md), the same
-  contract as a copyable agent skill. Drop it into your own agent's skills directory.
+  contract as an agent skill, in the safe order: doctor, dry run, scoped run, read, restore, with
+  what to do when a step fails.
 
 Both are checked against the code by `packages/runner/tests/agent-contract.test.ts`: a flag either
 document names must exist, and the exit codes and schema versions they promise must be the ones
-this build returns.
+this build returns. `packages/runner/tests/r869-skill-install.test.ts` also parses every command
+the skill shows with LethAL's own argument parser, so a renamed subcommand or flag fails a test here
+rather than in your agent.
+
+### Installing the skill
+
+The skill is one file. LethAL is a command-line tool, not an MCP server, so the skill is how an
+agent learns to call it. Install it either way:
+
+- **One file.** Put `SKILL.md` in a folder named `lethal-mutation-testing` in your agent's skills
+  directory. For Claude Code, for every project:
+
+  ```bash
+  mkdir -p ~/.claude/skills/lethal-mutation-testing
+  curl -fsSL -o ~/.claude/skills/lethal-mutation-testing/SKILL.md \
+    https://raw.githubusercontent.com/SShadowS/LethAL/master/skills/lethal-mutation-testing/SKILL.md
+  ```
+
+  Use `.claude/skills/` in a project instead to give it to that project only.
+- **As a Claude Code plugin**, which also updates: in Claude Code, run
+  `/plugin marketplace add SShadowS/LethAL`, then `/plugin install lethal@lethal`. This downloads
+  the LethAL repository, about 130 MB of history, for one skill; the file route above does not.
+
+The skill is user-invoked (`disable-model-invocation: true`): ask for it, for example "run LethAL
+on this project", or type `/lethal-mutation-testing`. It runs the `lethal` binary, which you install
+as described above, and it publishes to a BC server, so use a sandbox.
 
 ## Configuration
 
