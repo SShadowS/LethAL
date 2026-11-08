@@ -25,22 +25,63 @@ proven test-suite gap.
 lethal doctor --config lethal.config.json --json
 ```
 
-The `--json` payload:
+With `--json`, stdout is one bc-toolbox CLI envelope (R870, GitHub #27), and the doctor report is
+its `data`:
 
 ```json
 {
-  "doctorSchemaVersion": 1,
-  "ok": false,
-  "checks": [{ "name": "control-version", "ok": false, "detail": "…" }],
-  "notChecked": ["publish-ceiling", "baseline-test-health"],
-  "caveat": { "kind": "create-mode", "note": "…" }
+  "schemaVersion": "1",
+  "status": "ok",
+  "warnings": [],
+  "data": {
+    "doctorSchemaVersion": 1,
+    "ok": false,
+    "checks": [{ "name": "control-version", "ok": false, "detail": "…" }],
+    "notChecked": ["publish-ceiling", "baseline-test-health"],
+    "caveat": { "kind": "create-mode", "note": "…" }
+  }
 }
 ```
 
-`notChecked` is always `publish-ceiling` and `baseline-test-health`. `caveat` is present only for
-a config shape that has one, and `caveat.kind` is `create-mode`.
+`data.notChecked` is always `publish-ceiling` and `baseline-test-health`. `data.caveat` is present
+only for a config shape that has one, and `data.caveat.kind` is `create-mode`. A check that fails is
+a result, so `status` stays `"ok"` and `data.ok` is `false`.
 
 `--json` is accepted by `doctor` and `campaign` only. On any other subcommand it is refused rather than ignored, and `campaign` reads it only on `compare`.
+
+### The `--json` envelope (checked)
+
+Every `--json` output is `schemas/cli-envelope-v1.schema.json`, the bc-toolbox envelope
+(`@sshadows/bc-toolbox-envelope` 0.1.0, vendored byte for byte). Logs stay on stderr, and `--json`
+never changes an exit code. When the command cannot produce its result, stdout is instead:
+
+```json
+{
+  "schemaVersion": "1",
+  "status": "error",
+  "warnings": [],
+  "error": {
+    "code": "CONFIGURATION_ERROR",
+    "category": "configuration",
+    "message": "cannot read config file at …",
+    "retryable": false,
+    "details": { "name": "Error" },
+    "nextSteps": ["Check the file --config names: …"]
+  }
+}
+```
+
+Branch on `error.code`, never on `message`. The codes LethAL uses:
+
+| code | when |
+|---|---|
+| `INVALID_ARGUMENT` | the arguments were refused (an unknown flag, a flag another subcommand owns) |
+| `CONFIGURATION_ERROR` | the config file cannot be read, is not JSON, or cannot be used |
+| `UNCOMMITTED_PRECOMMITMENT` | LethAL's own code: `campaign compare` found the stage's pre-commitment not committed |
+| `INTERNAL_ERROR` | anything else; `nextSteps` says how to get the stack trace |
+
+An argument refusal gets the envelope too, so `--json` on a subcommand that does not take it answers
+with `INVALID_ARGUMENT` on stdout.
 
 ### Doctor notes (guidance)
 
@@ -48,8 +89,8 @@ Read-only, takes seconds, checks every pre-flight refusal in one pass instead of
 discover them one at a time. Run it first. Exit `0` means every check passed, `1` means at least
 one failed.
 
-- `checks[].name` is what to branch on. `detail` is prose for a human.
-- `notChecked` is the part that matters when doctor PASSES: those two are not covered by a green
+- `data.checks[].name` is what to branch on. `detail` is prose for a human.
+- `data.notChecked` is the part that matters when doctor PASSES: those two are not covered by a green
   report, so a run can still refuse for either reason.
 - `caveat` says which checks were skipped and why.
 
@@ -187,9 +228,10 @@ A stored flag can also go unused when the config makes it moot. `campaign` also 
 its flags per verb: `--project` only on `anchors`, `--expect-mutants` only on `freeze`, `--json`
 only on `compare`.
 
-`lethal campaign compare --json` prints one object on stdout and its lines on stderr:
-`{campaignCompareSchemaVersion, stage, baselinePath, mutantCount, identical, differences[],
-coverage, identity}`. Read `coverage` and `identity` before `identical` (R355, R556).
+`lethal campaign compare --json` prints one envelope on stdout and its lines on stderr; its `data`
+is `{campaignCompareSchemaVersion, stage, baselinePath, mutantCount, identical, differences[],
+coverage, identity}`. A stage that differs is a result: `status` is `"ok"` and `data.identical` is
+`false`, with exit `1` as before. Read `coverage` and `identity` before `identical` (R355, R556).
 `identity.verified: true` means both sides record the same identity scheme and every paired mutant's
 mutated text was checked by hash, so `identical` covers the text too; `identity.verified: false`
 carries a `statement` (a stage frozen before R556 has no hashes, a scheme changed, or rows could not
@@ -273,7 +315,8 @@ Each surface below is versioned separately and has a published JSON Schema in [`
 - the report: [../schemas/report-v3.schema.json](../schemas/report-v3.schema.json)
 - `lethal explain`: [../schemas/explain-v23.schema.json](../schemas/explain-v23.schema.json)
 - the event stream: [../schemas/stream-v1.schema.json](../schemas/stream-v1.schema.json)
-- `lethal doctor --json`: [../schemas/doctor-v1.schema.json](../schemas/doctor-v1.schema.json)
+- `lethal doctor --json`: [../schemas/doctor-v1.schema.json](../schemas/doctor-v1.schema.json),
+  as the `data` of [../schemas/cli-envelope-v1.schema.json](../schemas/cli-envelope-v1.schema.json)
 
 **A real report is committed, so you can try this with no server at all:**
 

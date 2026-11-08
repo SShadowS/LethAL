@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**17 of 845 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**17 of 846 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -521,6 +521,7 @@ that ordering is the priority.
 - **R853** · Glued source that emits unparsable AL (`endelse`, `endend`, `enduntil`, `beginif`), and one DC file the residual check cannot fold · [R853.md](docs/roadmap/R853.md) · done (5357c827); the one DC file its fold cannot measure is open as R855
 - **R867** · `lethal doctor` reaches a host a stale bc config names; lane start does not refresh bc configs · [R867.md](docs/roadmap/R867.md) · done (d03ce785)
 - **R868** · The LethAL skill ships as an installable file, in the safe order, and cannot drift from the CLI (GitHub #26) · [R868.md](docs/roadmap/R868.md) · done (7eeebcfb)
+- **R874** · `--json` prints the shared bc-toolbox CLI envelope (GitHub #27) · [R874.md](docs/roadmap/R874.md) · done (d4c923a9)
 
 ## Backends and tooling
 

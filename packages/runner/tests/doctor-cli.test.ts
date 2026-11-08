@@ -865,7 +865,11 @@ describe("doctorFromCli (final review, Important 1)", () => {
         { ...NO_REAL_IO, ...deps },
       );
       const out = lines.join("\n");
-      return { code, parsed: JSON.parse(out), out };
+      // R870: the report is the bc-toolbox envelope's `data`; a failed check is still status "ok".
+      const envelope = JSON.parse(out) as { data: Record<string, unknown> };
+      expect(envelope).toMatchObject({ schemaVersion: "1", status: "ok", warnings: [] });
+      expect(Object.keys(envelope).sort()).toEqual(["data", "schemaVersion", "status", "warnings"]);
+      return { code, parsed: envelope.data, out };
     } finally {
       log.mockRestore();
     }
