@@ -31,7 +31,9 @@ if (dirs.length === 0) {
   console.error("usage: bun scripts/census-branch-conditions.ts <project-dir> [...]");
   process.exit(2);
 }
-const operators = [...tier1Operators, ...tier2Operators];
+// R868: the DEFAULT operators. An opt-in operator (condition-true mutates every `if` condition) would
+// count every condition as covered and hide the gap this census measures.
+const operators = [...tier1Operators, ...tier2Operators].filter((op) => op.optIn !== true);
 
 function walk(n: ALSyntaxNode, v: (x: ALSyntaxNode) => void): void {
   v(n);

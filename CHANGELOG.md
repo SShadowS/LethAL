@@ -35,14 +35,40 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 - **`lethal.swap-workdate-today`, opt-in** (R856, GitHub #33). It swaps `WorkDate()` and `Today()`, and runs only when
   `--operator` names it: on a default session the two dates are equal, so nearly every site would survive. A survivor usually
   means no test depends on which date is read.
+- **`lethal.condition-true` and `lethal.blank-argument`, opt-in** (R868, GitHub #36 and #34). Both run only when `--operator`
+  names them, and a default run is unchanged: same mutants, same ordinals, same `numberingDigest`. `condition-true` turns
+  the condition of an `if` without `else` into `true`, so the then-arm always runs: a survivor means no test drives the guard
+  to false. `blank-argument` replaces a variable or field argument with its blank (`''`, `0`, `false`, `0D`) when the callee
+  is a project procedure that takes it by value. They add about 10% (DO) to 16% (DC) to a session that names both.
+  **On a run that names them, `numberingDigest` changes** (the run gains sites), and a mark without `fileSingleton` reads
+  `renumbered`. Both refuse a site a mutant could loop on or recurse through (a then-arm that restarts or steps back a
+  cursor, writes a name a loop's exit reads, or holds a loop; a parameter a callee reads in a loop, also through a copy,
+  a global or another procedure; a self-call or a call that leads back), and the refusal is counted. Name matching cannot
+  see another object or a record field: the limits are in `docs/using-lethal-from-an-agent.md`. Fixture `sandbox-optin`,
+  checked by hand on v3 and BC, not by a gate.
 
 ### Fixed
 
+- **The `large-method` warning reads the real emitted text, and a quarantine names the suspect** (R826, R875, GitHub
+  #28). The warning now measures the largest method in the text LethAL actually emits, instead of estimating it, so it
+  catches files the estimate missed (2 of 24 on DC and DO), and it no longer fires on a long chain whose method is small.
+  The 512 KB figure is still not a measured limit, and the warning refuses nothing. When a batch holding such a method is
+  quarantined because a run's fate on the server is unknown, as when the service tier stops, the quarantine reason names
+  that method as one suspect, not as the cause.
 - **AL does not short-circuit, and the design no longer says it does** (R855). `false and Bump()` runs `Bump()`, measured
   on BC 28.4. `design.md` keeps the name `short-circuit-operand`, which is historical.
 
 ### Changed
 
+- **The README's operator counts are per tier** (R868). Opt-in operators now sit in Tier 1 as well as Tier 2, so each tier's
+  default count leaves its own opt-ins out.
+- **Breaking: `--json` prints the bc-toolbox CLI envelope** (R870, GitHub #27). `lethal doctor --json` and
+  `lethal campaign compare --json` now print `{ schemaVersion: "1", status: "ok", data, warnings }`, and their former
+  document is `data`: read `data.checks[].name`, not `checks[].name`. When a command cannot produce its result, stdout is
+  `{ schemaVersion: "1", status: "error", warnings, error: { code, category, message, retryable, details, nextSteps } }`,
+  with `INVALID_ARGUMENT`, `CONFIGURATION_ERROR`, `UNCOMMITTED_PRECOMMITMENT` or `INTERNAL_ERROR`. Logs stay on stderr,
+  and no exit code changes. Without `--json` nothing changes. The schema is `schemas/cli-envelope-v1.schema.json`,
+  vendored from `@sshadows/bc-toolbox-envelope` 0.1.0.
 - **Behaviour change: a missing dependency now stops an al-runner-v3 run by name** (R860, upstream #7139). From al-runner
   edge a461e6310, a dependency app that is not in the package folder no longer runs without it with a warning: al-runner
   stops, and LethAL stops the session at the first request with the app's name, id, publisher and version, and the fix:

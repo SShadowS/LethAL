@@ -264,6 +264,26 @@
       "sha256": "09a1221ce8250316a94d2027511d642b7916c28f12ca3d52fb748ae75f26ec68",
       "mutants": 48
     },
+    "fixtures/sandbox-optin-tests/src/OptinKillGreet.Codeunit.al": {
+      "sha256": "9fd1228759ca23272d4215f20abe1bfe916bcb890c8183f68a3036e41ca4ebe8",
+      "mutants": 4
+    },
+    "fixtures/sandbox-optin-tests/src/OptinKillGuard.Codeunit.al": {
+      "sha256": "f42d324faf98296f871ad931505bf12dbbf222c4a6d5b7c21853bc1d4caa09e1",
+      "mutants": 7
+    },
+    "fixtures/sandbox-optin-tests/src/OptinSurviveGuard.Codeunit.al": {
+      "sha256": "c7b5c5881a254bd82b8dbfd5ceeda4b3039f5e4ae91d53a1608e6d693d130d00",
+      "mutants": 4
+    },
+    "fixtures/sandbox-optin-tests/src/OptinSurviveNote.Codeunit.al": {
+      "sha256": "051eb8f62e985518cbe7522e7a4f778032543d13ef6e7b170723106bf37b4488",
+      "mutants": 5
+    },
+    "fixtures/sandbox-optin/src/OptinLogic.Codeunit.al": {
+      "sha256": "0279f772d8ec32dac711482983bdcc1a01210430d5c7b9c26730d79fee9cb652",
+      "mutants": 127
+    },
     "fixtures/sandbox-order-tests/src/OrderProbe.al": {
       "sha256": "f352cbfe85e917a51d9886a8eddf1a86b0e1ef7cf41532286881b232b44b9a28",
       "mutants": 118

@@ -699,7 +699,13 @@ describe("runSession — --operator reaches both the mutant set AND the report",
     expect(scoped.operators?.names).toEqual(
       // R856: an opt-in operator is not admitted by exclusion, so it is not in the list.
       [...operatorTiers.keys()]
-        .filter((n) => n !== "lethal.empty-block" && n !== "lethal.swap-workdate-today")
+        .filter(
+          (n) =>
+            n !== "lethal.empty-block" &&
+            n !== "lethal.swap-workdate-today" &&
+            n !== "lethal.condition-true" &&
+            n !== "lethal.blank-argument",
+        )
         .sort(),
     );
     expect(scoped.operators?.excludedSiteCount).toBe(

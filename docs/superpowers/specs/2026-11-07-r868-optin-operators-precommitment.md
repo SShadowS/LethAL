@@ -49,22 +49,30 @@ ON, specs added (each operator alone, then both together). Removed, tuples moved
 | set | `condition-true` alone | `blank-argument` alone | both on | both = sum of the two? |
 |---|---|---|---|---|
 | fixtures | 273 | 10 | 283 | yes |
-| CDO | 3,776 | 1,108 | 4,884 | yes |
-| DO | 4,956 | 1,994 | 6,950 | yes |
-| DC | 16,015 | 7,895 | 23,910 | yes |
-| BC.History | 119,781 | 77,859 | 197,640 | yes |
+| CDO | 3,776 | 1,394 | 5,170 | yes |
+| DO | 4,956 | 2,434 | 7,390 | yes |
+| DC | 16,011 | 11,167 | 27,178 | yes |
+| BC.History | 119,774 | 100,888 | 220,662 | yes |
+
+(Round 2, after the build review: `blank-argument` alone and both were re-dumped on `lethal/r868` at e1df3b39; the `condition-true` column is both minus `blank-argument`, equal to round 1 except DC -4 and BC.History -7, the bare-`true` and own-type-variable refusals. The OFF dump was redone too: 0 added, 0 removed, 0 moved on all five sets.)
 
 Hang-refused counts (before > after), and growth with both on:
 
 | set | `condition-true` | `blank-argument` | both | specs, both on |
 |---|---|---|---|---|
 | fixtures | 2 > 2 | 0 > 0 | 2 > 2 | +283 |
-| CDO | 589 > 771 | 589 > 953 | 589 > 1,135 | +8.39% |
-| DO | 701 > 925 | 701 > 1,261 | 701 > 1,485 | +8.47% |
-| DC | 3,220 > 4,111 | 3,220 > 7,143 | 3,220 > 8,034 | +11.71% |
-| BC.History | 72,164 > 82,311 | 72,136 > 104,379 | 72,165 > 114,555 | +8.38% |
+| CDO | (round 1) 589 > 771 | 589 > 667 | 589 > 849 | +8.89% |
+| DO | (round 1) 701 > 925 | 701 > 821 | 701 > 1,045 | +9.01% |
+| DC | (round 1) 3,220 > 4,111 | 3,220 > 3,871 | 3,220 > 4,766 | +13.31% |
+| BC.History | (round 1) 72,164 > 82,311 | 72,136 > 81,350 | 72,165 > 91,533 | +9.35% |
 
-The new rules cost sites. R-862's prototype refused about 12% of `blank-argument` candidates; now DC refuses 3,923 of 11,818 (33%) and BC.History 32,243 of 110,102 (29%). Most of that is the global rule (a value stored in a global that any loop of the object reads, matched by name) and the follow-through rule. `condition-true` refuses 891 of 16,906 on DC (5%). These are safe-direction losses (R829); a narrowing is open.
+Refusal share of `blank-argument` candidates (refused / (claimed + refused)), after the review's narrowing (a `for` loop and a loop whose exit steps a record cursor no longer count): CDO 78 of 1,472 (5.3%), DO 120 of 2,554 (4.7%), DC 651 of 11,818 (5.5%), BC.History 9,214 of 110,102 (8.4%). Before it: DC 33%, BC.History 29%. The prototype refused about 12%. `condition-true` refuses about 5% on DC (round 1). These are safe-direction losses (R829).
+
+**Round 3 (the skips made narrow, DC and BC.History only, at a43f50e9).** A `for` is skipped only if its body does not assign the control variable. A cursor loop is skipped only for exactly one plain `R.Next() = 0` (no argument, Record or RecordRef, alone or joined by `or`; a `while` only for `R.Next() <> 0`) with a body that does not restart or move the cursor. OFF: 0 added, 0 removed, 0 moved on both sets. `blank-argument` alone added 9,422 on DC and 94,749 on BC.History; both on added 25,433 and 214,521 (the sum of the two alone on both sets). Hang-refused: DC 3,220 > 5,616 (blank alone) and > 6,511 (both); BC.History 72,136 > 87,489 and 72,165 > 97,674. Refusal share of `blank-argument` candidates: DC 2,396 of 11,818 (20.3%), BC.History 15,353 of 110,102 (13.9%). The claimed set only went down against round 2 (DC 11,167 > 9,422, BC.History 100,888 > 94,749), so the round-2 compile checks still cover it.
+
+**Round 4 (the cursor-loop skip removed, at 610f6dd8; this replaces round 3's skip rule).** The only skipped loop is a `for` whose control variable is neither assigned nor passed to a call. Every `while` and `repeat` that reads the blanked value is refused, whatever its exit. A test per probed shape (c5, c6, c7: 19 shapes) keeps them refused. OFF: 0 added, 0 removed, 0 moved on DC and BC.History. `blank-argument` alone added 7,975 on DC and 81,163 on BC.History; both on added 23,986 and 200,935 (the sum of the two alone). Hang-refused: DC 3,220 > 7,063 (blank alone) and > 7,958 (both); BC.History 72,136 > 101,075 and 72,165 > 111,260. Refusal share of `blank-argument` candidates: DC 3,843 of 11,818 (32.5%), BC.History 28,939 of 110,102 (26.3%). The claimed set went down again against round 3 (DC 9,422 > 7,975, BC.History 94,749 > 81,163), so the round-2 compile checks still cover it.
+
+**Round 5 (a `for` is skipped only with a LOCAL control variable, at f6ec666c; this replaces round 4's `for` rule).** The skipped `for` needs a control variable that is a `var` of its own procedure (not a parameter, not a global, since a helper can write a global) and is neither assigned nor passed to a call. OFF: 0 added, 0 removed, 0 moved on DC and BC.History. `blank-argument` alone added 7,975 on DC (unchanged) and 81,149 on BC.History (-14); both on added 23,986 and 200,921 (the sum of the two alone). Hang-refused: DC 3,220 > 7,063 and > 7,958; BC.History 72,136 > 101,089 and 72,165 > 111,274. Refusal share of `blank-argument` candidates: DC 3,843 of 11,818 (32.5%), BC.History 28,953 of 110,102 (26.3%). The claimed set did not grow, so the compile checks still cover it.
 
 No dedupe clash with both on: the sum equals the two alone on every set. R-862's prototype threw in `dedupeSpecs` here (`blank-argument` against `flip-boolean-literal`); `blank-argument` now returns at once for anything that is not an identifier or a field access, and `packages/runner/tests/r868-optin-operators.test.ts` goes red with the guard removed.
 

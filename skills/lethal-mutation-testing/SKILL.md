@@ -52,8 +52,10 @@ lethal doctor --config lethal.config.json --json
 ```
 
 Read-only, seconds, reports every pre-flight problem at once. Exit `0` = all checks passed, `1` =
-at least one failed; branch on `checks[].name`. When it passes, read `notChecked`: the publish
-ceiling and baseline test health are NOT covered by a green report.
+at least one failed. Stdout is one JSON envelope: the report is its `data`, so branch on
+`data.checks[].name`. If `status` is `"error"`, doctor could not run at all: read `error.code` and
+`error.nextSteps`. When it passes, read `data.notChecked`: the publish ceiling and baseline test
+health are NOT covered by a green report.
 
 Fix what it names before running. It is much cheaper than discovering the same problem mid-run.
 

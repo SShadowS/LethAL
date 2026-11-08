@@ -15,6 +15,11 @@ export class SessionUnsafeError extends Error {
 export class SessionSafety {
   #unsafe = false;
   #reason: string | undefined;
+  /**
+   * R875: the current batch's suspect for a stopped tier (its very large method), set at each
+   * batch's start. A quarantine for a run whose fate is unknown appends it; nothing else reads it.
+   */
+  suspect: string | undefined;
 
   latchUnsafe(reason: string): void {
     if (this.#unsafe) return;

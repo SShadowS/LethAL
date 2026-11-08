@@ -165,7 +165,7 @@ import type { HangRefusedFile, PreprocExcludedFile } from "./excluded-sites";
 import { ActivationFailure } from "./failure-classes";
 import { UnfilteredExtensionsQueryError } from "./harness";
 import { homeDir } from "./home";
-import { largeFoldWarning } from "./large-fold";
+import { largeMethodSuspect, largeMethodWarning, largeMethodsOf } from "./large-fold";
 import {
   type BeginPublishRefusal,
   LeaseUnavailableError,
@@ -2541,12 +2541,15 @@ async function quarantineInFlight(args: {
   readonly nowIso: () => string;
   readonly detail: string;
 }): Promise<void> {
-  args.safety.latchUnsafe(args.detail);
+  // R875: a dying tier strands its run here; a batch with a very large method names it as a suspect.
+  const suspect = args.safety.suspect;
+  const detail = suspect !== undefined ? `${args.detail}; ${suspect}` : args.detail;
+  args.safety.latchUnsafe(detail);
   if (args.quarantineStore !== undefined && args.resourceKey !== undefined) {
     await args.quarantineStore.record({
       resourceKey: args.resourceKey,
       opKind: "test-run",
-      detail: args.detail,
+      detail,
       recordedAtIso: args.nowIso(),
     });
   }
@@ -6533,9 +6536,11 @@ async function runSessionBody(
     ],
   });
   // R826: a warning only, once per session, and only for a BC tier: it changes no deploy decision.
-  const foldWarning = isBcdev(caps.kind)
-    ? largeFoldWarning(allFiles, (name) => operatorTiers.get(name))
-    : undefined;
+  // R875: from the real emitted text; the list also names a batch's suspect in a quarantine.
+  const largeMethods = isBcdev(caps.kind)
+    ? largeMethodsOf(allFiles, (name) => operatorTiers.get(name))
+    : [];
+  const foldWarning = largeMethodWarning(largeMethods);
   if (foldWarning !== undefined) {
     emit({ type: "warning", code: "large-method", message: foldWarning });
   }
@@ -7125,6 +7130,11 @@ async function runSessionBody(
       // individually fence-validated. The heartbeat runs on a timer and can observe the loss at
       // any moment, so it needs the current batch index, not the one the mutant loop last saw.
       if (leaseSession !== undefined) leaseSession.currentBatchIndex = batchIdx;
+      // R875: this batch's suspect, should its tier stop; none when it holds no very large method.
+      safety.suspect = largeMethodSuspect(
+        largeMethods,
+        batchFiles.map((f) => f.path),
+      );
       // R495: a proven session checks its test app FIRST, before anything this batch records: a
       // stranded skip, history's known survivors, a compile failure's error rows or a baseline.
       // (`scoreBatch` reads again before its baseline.)

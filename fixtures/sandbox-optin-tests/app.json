@@ -1,0 +1,35 @@
+{
+  "id": "6d0b2f61-3c4e-4a7b-8e12-5f9a0c3d8e04",
+  "name": "LethAL Sandbox Optin Tests",
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "brief": "LethAL R868 fixture: tests of fixtures/sandbox-optin.",
+  "description": "Four tests. Two kill (a guard driven to false, a greeting that needs its argument), two let a mutant live (a guard only ever true, a note nobody reads back). The refused shapes are not called. Asserts via Error(), no Library Assert. Not for production use, see fixtures/README.md.",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "dependencies": [
+    {
+      "id": "6d0b2f61-3c4e-4a7b-8e12-5f9a0c3d8e03",
+      "name": "LethAL Sandbox Optin",
+      "publisher": "LethAL",
+      "version": "1.0.0.0"
+    }
+  ],
+  "screenshots": [],
+  "idRanges": [
+    {
+      "from": 77250,
+      "to": 77299
+    }
+  ],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "17.0",
+  "features": []
+}

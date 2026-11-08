@@ -1290,6 +1290,8 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "mutantCount",
         "stage",
       ],
+      // R870: the bc-toolbox envelope, vendored; its root is a oneOf, so nothing is required there.
+      "cli-envelope-v1.schema.json": [],
       "doctor-v1.schema.json": ["checks", "doctorSchemaVersion", "notChecked", "ok"],
       "explain-v4.schema.json": [
         "caveats",
