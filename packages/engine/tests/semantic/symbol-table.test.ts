@@ -71,6 +71,27 @@ describe("buildSymbolTable", () => {
       ]);
     });
 
+    // tree-sitter-al 4.6.0: a dotted `extends` is ONE `qualified_name`; `baseObject` is its last
+    // segment (revert: `parseExtensionHeader` back to `childForFieldName(...).text`). A number
+    // (`extends 18`) is an `integer` node and stays "18" for the id match in `projectObserves`.
+    it("baseObject: dotted -> last segment, plain -> the name, number -> the number", () => {
+      const base = (head: string) =>
+        build(`tableextension 50002 "E" extends ${head}\n{\n}`).tableExtensions.map(
+          (e) => e.baseObject,
+        );
+      expect(base("Microsoft.Sales.Customer")).toEqual(["Customer"]);
+      expect(base('"Microsoft"."Sales"."Customer Table"')).toEqual(["Customer Table"]);
+      expect(base("Customer")).toEqual(["Customer"]);
+      expect(base("18")).toEqual(["18"]);
+    });
+
+    it("an enumextension's values index under the last segment of a dotted base", () => {
+      const ee = (head: string) =>
+        build(`enumextension 50003 "EE" extends ${head}\n{\n    value(50000; Extra) { }\n}`);
+      expect(ee("Microsoft.Sales.Kind").enumValuesOf("kind").map((v) => v.name)).toEqual(["Extra"]);
+      expect(ee("Kind").enumValuesOf("kind").map((v) => v.name)).toEqual(["Extra"]);
+    });
+
     it("keeps it OUT of `objects` — an extension declares no object of its own", () => {
       expect(build(EXT).objects).toEqual([]);
     });

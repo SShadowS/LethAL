@@ -415,16 +415,29 @@ function itemOpen(item: ALSyntaxNode, ctx: SemanticContext): boolean {
 
 /**
  * The base report an extension names, by its LAST name segment, so `N.P`, `"N"."P"` and `P` all
- * match report `P`. Measured on the vendored grammar: a namespace qualifier parses as an ERROR
- * sibling and the `base_object` field already holds only the last segment, so no splitting is
- * needed; `loop-exit-refusal.test.ts` pins that on the AST, and goes red if a grammar change puts
- * the full qualified name there. Matching the last segment alone can over-match a same-named report
- * in another namespace: an extra refusal, the safe direction. No base name at all (a MISSING node):
- * null, read as "extends every report".
+ * match report `P`. tree-sitter-al 4.6.0 parses a dotted name as ONE `qualified_name` node whose
+ * `.text` is the whole dotted name, so the last segment is read through `lastFieldChild`.
+ * Matching the last segment alone can over-match a same-named report in another namespace: an extra
+ * refusal, the safe direction. No base name at all (a MISSING node): null, read as "extends every
+ * report".
  */
 function extendedBaseName(ext: ALSyntaxNode): string | null {
-  const name = normalizeAlName(ext.childForFieldName("base_object")?.text ?? "");
+  const name = normalizeAlName(lastFieldChild(ext, "base_object")?.text ?? "");
   return name === "" ? null : name;
+}
+
+/** The table a tableextension extends, normalized, by its LAST name segment. A numeric base
+ *  (`extends 18`, an `integer` node) is mapped to the project table with that id when there is one,
+ *  else kept as the number. */
+function tableExtBase(o: ALSyntaxNode, ctx: SemanticContext): string {
+  const text = lastFieldChild(o, "base_object")?.text.trim() ?? "";
+  if (/^\d+$/.test(text)) {
+    const t = projectObjects(ctx).find(
+      (x) => x.rawKind === "table_declaration" && x.childForFieldName("object_id")?.text === text,
+    );
+    if (t !== undefined) return objectNameOf(t);
+  }
+  return normalizeAlName(text);
 }
 
 const ANY_REPORT = "\u0000any";
@@ -3869,7 +3882,7 @@ function r696Inserts(
   const ownTable =
     (o.rawKind === "table_declaration" && objectNameOf(o) === table) ||
     (o.rawKind === "tableextension_declaration" &&
-      normalizeAlName(lastFieldChild(o, "base_object")?.text ?? "") === table);
+      tableExtBase(o, ctx) === table);
   let found = false;
   visitAll(p, (x) => {
     if (found || !r696IsCall(x)) return;
@@ -5429,7 +5442,7 @@ function r604CursorTables(
       if (t !== null && t.kind === "table") out.add(t.name);
       else if (c.recv === "" || c.recv === null) {
         const o = objectOf(loop);
-        out.add(o === null ? null : r604ObjectTable(o));
+        out.add(o === null ? null : r604ObjectTable(o, ctx));
       } else out.add(null);
     });
   for (const k of cursors) if (!found.has(k)) out.add(null);
@@ -5437,10 +5450,11 @@ function r604CursorTables(
 }
 
 /** The table a table or tableextension object is (normalized), else null. */
-function r604ObjectTable(o: ALSyntaxNode): string | null {
+function r604ObjectTable(o: ALSyntaxNode, ctx: SemanticContext): string | null {
   if (o.rawKind === "table_declaration") return objectNameOf(o);
   if (o.rawKind === "tableextension_declaration") {
-    const t = o.childForFieldName("base_object") ?? o.childForFieldName("target");
+    if (lastFieldChild(o, "base_object") !== null) return tableExtBase(o, ctx);
+    const t = o.childForFieldName("target");
     return t === null ? null : normalizeAlName(t.text);
   }
   return null;
@@ -5472,7 +5486,7 @@ function r604Inserters(
         if (!hit && R604_ROWS_IN.has(c.method)) {
           if (c.recv === "" || (c.recv === null && r531Implicit(n, ctx))) {
             const o = objectOf(p);
-            if (matches(o === null ? null : r604ObjectTable(o))) hit = true;
+            if (matches(o === null ? null : r604ObjectTable(o, ctx))) hit = true;
           } else if (c.recv !== null) {
             const recv = r572Receiver(n);
             const t = recv === null ? null : declaredType(recv, ctx);
@@ -6324,7 +6338,7 @@ function r570TableOf(
     const o = objectOf(p);
     if (key === "" && o?.rawKind === "table_declaration") name = objectNameOf(o);
     else if (key === "" && o?.rawKind === "tableextension_declaration")
-      name = normalizeAlName(lastFieldChild(o, "base_object")?.text ?? "");
+      name = tableExtBase(o, ctx);
     else {
       // a parameter of `p` (one named `Rec` is keyed `""`, `r531ParamKey`)
       const list = p.namedChildren.find((c) => c.rawKind === "parameter_list");
@@ -6361,7 +6375,7 @@ function r570ProjectRec(p: ALSyntaxNode, ctx: SemanticContext): boolean {
   const o = objectOf(p);
   if (o?.rawKind === "table_declaration") return true;
   if (o?.rawKind !== "tableextension_declaration") return false;
-  const base = normalizeAlName(lastFieldChild(o, "base_object")?.text ?? "");
+  const base = tableExtBase(o, ctx);
   return objectsOfType({ kind: "table", name: base, temporary: false }, ctx).some(
     (t) => t.rawKind === "table_declaration",
   );
@@ -6845,7 +6859,11 @@ export function objectsOfType(t: DeclaredType, ctx: SemanticContext): readonly A
           (c) =>
             c.rawKind === "implements_clause" &&
             c.namedChildren.some(
-              (i) => i.fieldName === "interface" && normalizeAlName(i.text) === t.name,
+              (i) =>
+                i.fieldName === "interface" &&
+                normalizeAlName(
+                  (i.rawKind === "qualified_name" ? i.namedChildren.at(-1) : i)?.text ?? "",
+                ) === t.name,
             ),
         ),
     );
@@ -6865,7 +6883,7 @@ function objectNameIndex(ctx: SemanticContext): Map<string, ALSyntaxNode[]> {
     if (o.rawKind === "codeunit_declaration") key = `codeunit:${objectNameOf(o)}`;
     else if (o.rawKind === "table_declaration") key = `table:${objectNameOf(o)}`;
     else if (o.rawKind === "tableextension_declaration")
-      key = `table:${normalizeAlName(lastFieldChild(o, "base_object")?.text ?? "")}`;
+      key = `table:${tableExtBase(o, ctx)}`;
     else continue;
     const list = index.get(key);
     if (list === undefined) index.set(key, [o]);

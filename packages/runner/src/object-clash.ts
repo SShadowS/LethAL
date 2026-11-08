@@ -210,8 +210,8 @@ export function declaredObjectsOfSource(
           memberNotes.push(`${f.path}: ${stem} "${ownerName}" has no readable base object`);
           return;
         }
-        // The grammar puts only the FIRST segment of `extends A.B.C` in `base_object` (the rest sits
-        // in an ERROR node), so read the text from `extends` to the opening brace, comments dropped.
+        // tree-sitter-al 4.6.0 gives `extends A.B.C` as one `qualified_name` in `base_object`; the
+        // clause is still read as text, from `extends` to the opening brace, comments dropped.
         const ek = c.children.find((k) => k.rawKind === "extends_keyword");
         const open = c.children.find((k) => k.rawKind === "{");
         if (ek === undefined || open === undefined) {

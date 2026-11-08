@@ -22,6 +22,7 @@
  *     in `ast/tree-walks.ts`, which skip these containers.
  */
 import { ALNodeKind } from "../ast/node-kinds";
+import { lastFieldChild } from "../ast/qualified-name";
 import type { ALSyntaxNode } from "../ast/syntax-node";
 import { findAll } from "../ast/syntax-node";
 import {
@@ -548,7 +549,7 @@ export function buildSymbolTable(
         continue;
       }
       if (objectNode.rawKind === "enumextension_declaration") {
-        const base = objectNode.childForFieldName("base_object");
+        const base = lastFieldChild(objectNode, "base_object");
         if (base !== null) indexEnumValues(objectNode, stripQuotes(base.text));
         continue;
       }
@@ -687,7 +688,7 @@ function parseExtensionHeader(
           : null;
   if (kind === null) return null;
   const nameNode = node.childForFieldName("object_name");
-  const baseNode = node.childForFieldName(BASE_OBJECT_FIELD);
+  const baseNode = lastFieldChild(node, BASE_OBJECT_FIELD);
   if (nameNode === null || baseNode === null) return null;
   const name = stripQuotes(nameNode.text);
   const baseObject = stripQuotes(baseNode.text);

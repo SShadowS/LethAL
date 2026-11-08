@@ -110,7 +110,7 @@ describe("R853: the parser's limit", () => {
 
   test("an ERROR that lost no member is not a stop, in a body or in a header", () => {
     const body = `codeunit 50000 "X"\n{\n    procedure P()\n    begin\n        X := ;\n    end;\n}\n`;
-    const header = `tableextension 50000 "X" extends My.Ns.Base\n{\n}\n`;
+    const header = `tableextension 50000 "X" extends Base.\n{\n}\n`;
     for (const text of [body, header]) {
       const root = wrapRoot(parseAL(text));
       expect(root.hasError).toBe(true);

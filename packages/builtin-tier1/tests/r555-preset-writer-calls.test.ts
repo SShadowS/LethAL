@@ -390,4 +390,37 @@ describe("R329: objectsOfType's name index", () => {
     objectsOfType({ ...tee, name: "nothing" }, x.ctx);
     expect(objectNameCalls).toBe(3);
   });
+
+  // tree-sitter-al 4.6.0: a dotted `extends`/`implements` name is ONE `qualified_name`. Revert:
+  // read `.text` (the whole dotted name) instead of the last segment in `tableExtBase` / the
+  // `implements_clause` compare.
+  it("B3: a tableextension is listed under the last segment of a dotted base, a plain base, and its table id", () => {
+    const tee = { kind: "table", name: "tee", temporary: false } as const;
+    const lookup = (head: string) =>
+      objectsOfType(
+        tee,
+        project({
+          "b.al": files["b.al"],
+          "x.al": `tableextension 50410 "Ext X" extends ${head}\n{\n}\n`,
+        }).ctx,
+      ).map(head_);
+    const head_ = (o: ALSyntaxNode) => o.text.split("\n")[0];
+    const ext = 'tableextension 50410 "Ext X" extends ';
+    expect(lookup("Ns.Sub.Tee")).toEqual(["table 50400 Tee", `${ext}Ns.Sub.Tee`]);
+    expect(lookup("Tee")).toEqual(["table 50400 Tee", `${ext}Tee`]);
+    expect(lookup("50400")).toEqual(["table 50400 Tee", `${ext}50400`]);
+    expect(lookup("Other")).toEqual(["table 50400 Tee"]);
+  });
+
+  it("B4: a codeunit implementing a dotted or plain interface name is listed for it", () => {
+    const iface = { kind: "interface", name: "ifoo", temporary: false } as const;
+    const lookup = (name: string) =>
+      objectsOfType(
+        iface as never,
+        project({ "c.al": `codeunit 50411 "Impl" implements ${name}\n{\n}\n` }).ctx,
+      ).length;
+    expect(lookup("Ns.Sub.IFoo")).toBe(1);
+    expect(lookup("IFoo")).toBe(1);
+    expect(lookup("IBar")).toBe(0);
+  });
 });

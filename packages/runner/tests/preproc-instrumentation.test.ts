@@ -1807,18 +1807,9 @@ describe("R316: a split-header procedure whose arms each have their own var sect
         },
       });
       expect(warnings.filter((w) => w.code === "reach-latch-refused")).toEqual([]);
-      // R214 (ruling T6-a): Twin's file is refused before any latch is considered, so R313's
-      // sentence cannot name it here. R313's sentence stays covered end to end by P16 below, whose
-      // file is decided.
-      expect(set.preprocExcluded.map((f) => [f.file, f.reason, f.detail, f.sites])).toEqual([
-        [
-          "Twin.Codeunit.al",
-          "preproc-undecided",
-          // R796: tree-sitter-al 4.5.0 marks one more directive (4.4.1: 5 markers, 3 sites).
-          "marker-mismatch (7 directive lines, 6 markers)",
-          5, // R855: was 4; delete-additive-right adds one site
-        ],
-      ]);
+      // tree-sitter-al 4.6.0 (#30) parses Twin's nested `#if` around a var section, so the file is
+      // no longer refused whole (4.5.0: preproc-undecided, marker-mismatch, 5 sites).
+      expect(set.preprocExcluded).toEqual([]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -1829,17 +1820,22 @@ describe("R316: a split-header procedure whose arms each have their own var sect
       "Repro.Codeunit.al": SRC,
       "Twin.Codeunit.al": TWIN,
     });
-    // The refused file gets no mutant and is not written (R214).
-    expect(manifest.mutants.filter((m) => m.file === "Twin.Codeunit.al")).toEqual([]);
-    expect(emitted.has("Twin.Codeunit.al")).toBe(false);
-    // Every mutant sits in exactly one member, each bounded through its closing `end;`.
-    for (const m of manifest.mutants) {
+    // tree-sitter-al 4.6.0 (#30): Twin's file parses, so it is admitted, written, and its sites
+    // carry the statement grain (4.5.0: refused whole, R214).
+    const twinMutants = manifest.mutants.filter((m) => m.file === "Twin.Codeunit.al");
+    expect(twinMutants.length).toBeGreaterThan(0);
+    expect([...new Set(twinMutants.map((m) => m.reachGrain))]).toEqual(["statement"]);
+    expect(emitted.has("Twin.Codeunit.al")).toBe(true);
+    // Every Repro mutant sits in exactly one member, each bounded through its closing `end;`.
+    for (const m of manifest.mutants.filter((m) => m.file === "Repro.Codeunit.al")) {
       const owners = members.filter((x) => m.startLine >= x.first && m.startLine <= x.last);
       expect(owners).toHaveLength(1);
     }
     for (const x of members) {
       const grains = manifest.mutants
-        .filter((m) => m.startLine >= x.first && m.startLine <= x.last)
+        .filter(
+          (m) => m.file === "Repro.Codeunit.al" && m.startLine >= x.first && m.startLine <= x.last,
+        )
         .map((m) => m.reachGrain);
       expect(grains.length).toBeGreaterThan(0);
       expect([x.name, ...new Set(grains)]).toEqual([x.name, x.grain]);
@@ -3995,6 +3991,10 @@ ${head}    var
         Glob: Integer;
 }
 `;
+    // tree-sitter-al 4.6.0 (#30) parses the nested `#if` above, so the emission no longer re-parses
+    // with an ERROR by itself. A harmless ERROR (`Glob := ;` in `Other`) is put into the EMITTED
+    // text below, after instrumenting: an ERROR in the source would make the file's split members
+    // unplaced (procedureName "").
     for (const [label, src, renamed] of [
       ["renamed", body(HEAD_R), true],
       ["plain", body(HEAD_P), false],
@@ -4006,7 +4006,10 @@ ${head}    var
       for (const m of inMember) {
         expect([label, m.coverageArmNames?.[0] ?? m.procedureName]).toEqual([label, "Pick"]);
       }
-      const text = emitted.get("Repro.Codeunit.al") ?? "";
+      const text = (emitted.get("Repro.Codeunit.al") ?? "").replace(
+        "  Glob := X + 1\nend;",
+        "  Glob := ;\nend;",
+      );
       expect([label, wrapRoot(parseAL(text)).hasError]).toEqual([label, true]);
       const dir = await mkdtemp(join(tmpdir(), "lethal-r318-i1-"));
       try {
