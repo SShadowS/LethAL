@@ -6,7 +6,12 @@ import { liveMembers } from "../ast/tree-walks";
 import { type NodeArm, type SemanticContext, armOfNode, rawArmOf } from "./context";
 import { claimsRecordMethod, claimsSystemCall, resolveReceiverTable } from "./receiver";
 import { resolveVarRef } from "./resolve-var-ref";
-import { type ObjectSymbol, type SymbolTable, triggerLocalNames } from "./symbol-table";
+import {
+  type ObjectSymbol,
+  type SymbolTable,
+  resolveNumericBase,
+  triggerLocalNames,
+} from "./symbol-table";
 
 /**
  * R281's SKIP-direction detector, MOVED here from `builtin-tier2/src/forced-trigger-raise.ts`
@@ -199,7 +204,15 @@ function procedureNamesOn(table: ObjectSymbol, symbols: SymbolTable): ReadonlySe
   const owners = [
     table.node,
     ...symbols.tableExtensions
-      .filter((e) => e.baseObject.toLowerCase() === table.name.toLowerCase())
+      .filter((e) => {
+        // R861: a numeric base resolves by id; an unresolved one may extend any table (kept: tags)
+        const base = resolveNumericBase(
+          symbols.objects.filter((o) => o.kind === "table").map((o) => o.node),
+          "table_declaration",
+          e.baseObject,
+        );
+        return "unresolved" in base || base.name.toLowerCase() === table.name.toLowerCase();
+      })
       .map((e) => e.node),
   ];
   for (const owner of owners) {

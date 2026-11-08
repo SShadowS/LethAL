@@ -402,3 +402,50 @@ describe("R861 reader 1: r532's census filter reads a numeric reportextension ba
     expect(tagsOf("59999")).toContain("A-report");
   });
 });
+
+// ---- a callee found ONLY through an unresolved-base tableextension is an unresolved callee ----
+const TOUCH_CU = `codeunit 50120 "R861 Touch Loop"
+{
+    procedure Go()
+    var
+        Cust: Record Customer;
+        Other: Record Customer;
+    begin
+        Cust.SetRange(Name, 'A');
+        Other.Touch(Cust);
+        while Cust.FindFirst() do begin
+            Cust.Name := 'B';
+            Cust.Modify();
+        end;
+    end;
+}`;
+const CUSTOMER = `table 50110 Customer
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+        field(2; Name; Text[50]) { }
+    }
+}`;
+const TOUCH_EXT = (base: string) => `tableextension 50100 "Item Ext" extends ${base}
+{
+    procedure Touch(var C: Record Customer)
+    begin
+    end;
+}`;
+describe("R861: an unresolved-base extension's procedure is not a resolved callee (r531 pass-rec)", () => {
+  const files = (base: string): Files => ({
+    "Cust.al": CUSTOMER,
+    "Ext.al": TOUCH_EXT(base),
+    "Cu.al": TOUCH_CU,
+  });
+  it("unresolved (`extends 27`): the call stays refused (red: the ANY_TABLE bucket resolves the callee)", () => {
+    expect(refused(files("27"), "Cu.al", "Other.Touch(Cust)")).toBe(true);
+  });
+  it("resolved (`extends 50110`): the empty Touch is followed, the call is claimed (red: unresolved refused too)", () => {
+    expect(refused(files("50110"), "Cu.al", "Other.Touch(Cust)")).toBe(false);
+  });
+  it("a plain name (control): followed as before", () => {
+    expect(refused(files("Customer"), "Cu.al", "Other.Touch(Cust)")).toBe(false);
+  });
+});

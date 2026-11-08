@@ -163,7 +163,11 @@ export function declaredObjectsOfSource(
   const memberNotes: string[] = [];
   /** Tables and enums this source declares: `<Container>:<lower name>` to the namespace (lower). */
   const owners = new Map<string, string>();
-  const pending: { read: Omit<SourceMember, "own">; qualifier: string | undefined }[] = [];
+  const pending: {
+    read: Omit<SourceMember, "own">;
+    qualifier: string | undefined;
+    numeric: boolean;
+  }[] = [];
   for (const f of files) {
     const root = wrapRoot(parseAL(f.text));
     const arms = evaluateArms(root, f.text, symbols);
@@ -251,7 +255,8 @@ export function declaredObjectsOfSource(
           );
         }
       }
-      for (const m of got.members) pending.push({ read: m, qualifier });
+      const numeric = !own && /^\d+$/.test(ownerName);
+      for (const m of got.members) pending.push({ read: m, qualifier, numeric });
     };
     // `inside`: under a preproc node. Undecided arms: those objects are not trusted either way.
     const visit = (parent: ALSyntaxNode, inside: boolean): void => {
@@ -294,7 +299,19 @@ export function declaredObjectsOfSource(
     };
     visit(root, false);
   }
-  const members: SourceMember[] = pending.map(({ read, qualifier }) => {
+  const members: SourceMember[] = pending.map(({ read: first, qualifier, numeric }) => {
+    // R861: `extends 18` names its base by id. A table or enum this source declares with that id
+    // gives the name the dependents' members are compared on. An id this source does not declare
+    // (a dependency's) stays the number, so it matches nothing: a LIMIT, not a safe path (a clash
+    // on that base is not seen; the other side holds names, not ids, and guessing "any table"
+    // would refuse on every shared field id).
+    const base = numeric
+      ? objects.find((o) => o.kind === first.container && o.id === Number(first.ownerName))
+      : undefined;
+    const read =
+      base === undefined
+        ? first
+        : { ...first, ownerName: base.name, ownerKey: base.name.toLowerCase() };
     const ns = owners.get(`${read.container}:${read.ownerKey}`);
     // Own: the target declares the table or enum itself, or the extension names it plainly or
     // through the target's own namespace. A qualifier pointing elsewhere is another table.

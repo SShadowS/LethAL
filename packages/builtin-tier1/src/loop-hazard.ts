@@ -1534,6 +1534,7 @@ function r531TableProcs(
   method: string,
   arity: number | null,
   ctx: SemanticContext,
+  anyExt = false,
 ): ALSyntaxNode[] {
   if (n.rawKind !== "call_expression") return [];
   const fn = n.childForFieldName("function");
@@ -1546,7 +1547,7 @@ function r531TableProcs(
   }
   return ts
     .filter((t) => t.kind === "table")
-    .flatMap((t) => objectsOfType(t, ctx))
+    .flatMap((t) => (anyExt ? objectsOfType(t, ctx) : calleeObjectsOfType(t, ctx)))
     .flatMap((o) => r531ProcsIn(o, method, arity, n, ctx));
 }
 
@@ -1762,7 +1763,7 @@ function r562FilterHop(
     } else {
       const ps =
         t !== null && (t.kind === "codeunit" || t.kind === "table")
-          ? objectsOfType(t, ctx).flatMap((o) => r531ProcsIn(o, c.method, arity, n, ctx))
+          ? calleeObjectsOfType(t, ctx).flatMap((o) => r531ProcsIn(o, c.method, arity, n, ctx))
           : [];
       unresolved = ps.length === 0;
       passInto(ps);
@@ -3910,7 +3911,7 @@ function r696CalleeInserts(scope: ALSyntaxNode, table: string, ctx: SemanticCont
   let found = false;
   visitAll(scope, (c) => {
     if (found || !r696IsCall(c)) return;
-    const tg = callTargets(c, ctx);
+    const tg = callTargets(c, ctx, true);
     if (tg === null || tg.member === "") return;
     const f = c.childForFieldName("function");
     const recv = f?.rawKind === "member_expression" ? f.childForFieldName("object") : null;
@@ -6594,12 +6595,13 @@ function r570Targets(
     const recv = n.childForFieldName("object");
     const ts = recv !== null && isIdentifierLike(recv) ? declaredTypes(recv, ctx) : [];
     procs = ts
-      .flatMap((t) => objectsOfType(t, ctx))
+      .flatMap((t) => (complete ? calleeObjectsOfType(t, ctx) : objectsOfType(t, ctx)))
       .flatMap((o) => r531ProcsIn(o, c.method, 0, n, ctx));
   } else {
-    const t = n.rawKind === "call_expression" ? callTargets(n, ctx) : null;
+    // R861: a "may touch" reader (not `complete`) also follows an unresolved-base extension
+    const t = n.rawKind === "call_expression" ? callTargets(n, ctx, !complete) : null;
     procs = t === null ? [] : t.objs.flatMap((o) => r531ProcsIn(o, t.member, arity, n, ctx));
-    if (c.recv === null) procs.push(...r531TableProcs(n, c.method, arity, ctx));
+    if (c.recv === null) procs.push(...r531TableProcs(n, c.method, arity, ctx, !complete));
   }
   return procs.filter((p) => p.namedChildren.some((x) => x.rawKind === "code_block"));
 }
@@ -6844,7 +6846,8 @@ function r737Partial(
   return (
     ts.length > 1 &&
     ts.some(
-      (t) => !objectsOfType(t, ctx).some((o) => r531ProcsIn(o, c.method, at, n, ctx).length > 0),
+      (t) =>
+        !calleeObjectsOfType(t, ctx).some((o) => r531ProcsIn(o, c.method, at, n, ctx).length > 0),
     )
   );
 }
@@ -6881,6 +6884,15 @@ export function objectsOfType(t: DeclaredType, ctx: SemanticContext): readonly A
     );
   }
   return [];
+}
+
+/** `objectsOfType` for a CALLEE lookup. A tableextension whose numeric base is unresolved may extend
+ *  any table, so it is a "may touch" candidate, but a procedure found only there is not THE callee:
+ *  the real one may live in a dependency. It is left out, so the call stays unresolved (refused). */
+function calleeObjectsOfType(t: DeclaredType, ctx: SemanticContext): readonly ALSyntaxNode[] {
+  return objectsOfType(t, ctx).filter(
+    (o) => o.rawKind !== "tableextension_declaration" || tableExtBase(o, ctx) !== null,
+  );
 }
 
 /** `codeunit:<name>` and `table:<name>` (a table and its tableextensions, in project order) to the
@@ -6927,6 +6939,9 @@ export function procedureNamesOf(o: ALSyntaxNode, ctx: SemanticContext): Set<str
 function callTargets(
   c: ALSyntaxNode,
   ctx: SemanticContext,
+  /** R861: also the tableextensions of an unresolved numeric base. Only a "may touch" reader
+   *  (adding callees is safe) sets it; a reader that RESOLVES a callee must not. */
+  anyExt = false,
 ): {
   readonly objs: readonly ALSyntaxNode[];
   readonly member: string;
@@ -6934,14 +6949,12 @@ function callTargets(
 } | null {
   const f = c.childForFieldName("function");
   if (f === null) return null;
+  const typeObjects = anyExt ? objectsOfType : calleeObjectsOfType;
   const onTable = (table: string | null, member: string) =>
     table === null
       ? null
       : {
-          objs: objectsOfType(
-            { kind: "table", name: normalizeAlName(table), temporary: false },
-            ctx,
-          ),
+          objs: typeObjects({ kind: "table", name: normalizeAlName(table), temporary: false }, ctx),
           member,
           kind: "record",
         };
@@ -6968,7 +6981,7 @@ function callTargets(
       const kinds = new Set(ts.map((t) => (t.kind === "table" ? "record" : t.kind)));
       const [k0] = kinds;
       return {
-        objs: ts.flatMap((t) => objectsOfType(t, ctx)),
+        objs: ts.flatMap((t) => typeObjects(t, ctx)),
         member,
         kind: kinds.size === 1 && k0 !== undefined ? k0 : "ambiguous",
       };
