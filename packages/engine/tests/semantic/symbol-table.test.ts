@@ -88,8 +88,16 @@ describe("buildSymbolTable", () => {
     it("an enumextension's values index under the last segment of a dotted base", () => {
       const ee = (head: string) =>
         build(`enumextension 50003 "EE" extends ${head}\n{\n    value(50000; Extra) { }\n}`);
-      expect(ee("Microsoft.Sales.Kind").enumValuesOf("kind").map((v) => v.name)).toEqual(["Extra"]);
-      expect(ee("Kind").enumValuesOf("kind").map((v) => v.name)).toEqual(["Extra"]);
+      expect(
+        ee("Microsoft.Sales.Kind")
+          .enumValuesOf("kind")
+          .map((v) => v.name),
+      ).toEqual(["Extra"]);
+      expect(
+        ee("Kind")
+          .enumValuesOf("kind")
+          .map((v) => v.name),
+      ).toEqual(["Extra"]);
     });
 
     it("keeps it OUT of `objects` — an extension declares no object of its own", () => {

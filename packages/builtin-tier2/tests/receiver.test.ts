@@ -1352,7 +1352,9 @@ ${other}#endif
     const tree = wrapRoot(parseAL(src));
     const [top] = tree.namedChildren;
     // A `#if` wrapper on top (its kind depends on the grammar), the unparsed extension as an ERROR below it.
-    expect(["preproc_split_declaration", "preproc_conditional_object"]).toContain(top?.rawKind ?? "");
+    expect(["preproc_split_declaration", "preproc_conditional_object"]).toContain(
+      top?.rawKind ?? "",
+    );
     const errorBelow = (n: typeof tree): boolean =>
       n.namedChildren.some((c) => c.rawKind === "ERROR" || errorBelow(c));
     expect(top !== undefined && errorBelow(top)).toBe(true);

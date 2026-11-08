@@ -63,7 +63,9 @@ describe("qualified names", () => {
   // tree-sitter-al 4.6.0 (#36): a dotted `extends` is ONE `qualified_name` child of `base_object`.
   it("a qualified_name in the field is read as its segments: dotted, plain and a number", () => {
     const ext = (base: string): ALSyntaxNode => {
-      const [obj] = wrapRoot(parseAL(`tableextension 50000 X extends ${base}\n{\n}\n`)).namedChildren;
+      const [obj] = wrapRoot(
+        parseAL(`tableextension 50000 X extends ${base}\n{\n}\n`),
+      ).namedChildren;
       if (obj === undefined) throw new Error("an object expected");
       return obj;
     };

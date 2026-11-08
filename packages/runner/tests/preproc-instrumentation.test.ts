@@ -1560,7 +1560,9 @@ describe("R303: a member whose var section is split by #if gets a latch, or is r
     const afterHeader = twin.slice(twin.indexOf(twinHeader) + twinHeader.length);
     expect(afterHeader.slice(0, afterHeader.indexOf("    begin")).match(/\bvar\b/gi)).toBeNull();
     expect(
-      new Set(manifest.mutants.filter((m) => m.file === "Twin.Codeunit.al").map((m) => m.reachGrain)),
+      new Set(
+        manifest.mutants.filter((m) => m.file === "Twin.Codeunit.al").map((m) => m.reachGrain),
+      ),
     ).toEqual(new Set(["statement"]));
     const grains = new Map<string, Set<string>>();
     for (const m of manifest.mutants) {

@@ -178,7 +178,10 @@ describe("R853: the stop names the file and the way out", () => {
 
   test("bcdev's line map: declared, not mapped", async () => {
     const declared = new Set([KEY]);
-    const map = await lineMapFromSources([{ path: "src\\X.Codeunit.al", text: MISSING_END }], declared);
+    const map = await lineMapFromSources(
+      [{ path: "src\\X.Codeunit.al", text: MISSING_END }],
+      declared,
+    );
     expect(map.unreadFiles).toEqual(["src/X.Codeunit.al"]);
     const stop = stopOf(() =>
       assertManifestObjectsDeclared([KEY], declared, map.mappedKeys(), new Set(), map.unreadFiles),
