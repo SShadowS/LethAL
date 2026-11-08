@@ -70,35 +70,50 @@ describe("R867: refuseRetiredBcHost", () => {
   const OURS = { LETHAL_COORD_ROOT: "/coord" };
   const RETIRED = [
     ["http://192.168.2.77:7049", "192.168.2.77"],
+    ["http://docker1:7049", "192.168.2.77"],
     ["http://Cronus28:7049/BC", "cronus28"],
+    ["http://Cronus28.:7049/BC", "cronus28"],
     ["http://cronus284", "cronus284"],
   ] as const;
 
   test("in our environment, docker1, Cronus28 and Cronus284 are each refused by name", () => {
     for (const [server, host] of RETIRED) {
-      expect(() => refuseRetiredBcHost(server, OURS)).toThrow(BcHostMismatchError);
-      expect(() => refuseRetiredBcHost(server, OURS)).toThrow(host);
+      expect(() => refuseRetiredBcHost({ server }, OURS)).toThrow(BcHostMismatchError);
+      expect(() => refuseRetiredBcHost({ server }, OURS)).toThrow(host);
     }
+  });
+  test("baseUrl and apiBaseUrl are refused too, each on its own", () => {
+    const server = "http://192.168.2.157:7149";
+    const old = "http://192.168.2.77:7148/BC";
+    for (const urls of [{ baseUrl: old }, { apiBaseUrl: old }])
+      expect(() => refuseRetiredBcHost({ server, ...urls }, OURS)).toThrow(BcHostMismatchError);
+    expect(() => refuseRetiredBcHost({ server, baseUrl: server }, OURS)).not.toThrow();
   });
   test("the same hosts with no coord root pass: for a user they can be their own servers", () => {
     for (const [server] of RETIRED) {
-      expect(() => refuseRetiredBcHost(server, {})).not.toThrow();
-      expect(() => refuseRetiredBcHost(server, { LETHAL_COORD_ROOT: "" })).not.toThrow();
+      expect(() => refuseRetiredBcHost({ server }, {})).not.toThrow();
+      expect(() => refuseRetiredBcHost({ server }, { LETHAL_COORD_ROOT: "" })).not.toThrow();
     }
   });
   test("in our environment, the host in use and a customer's host pass", () => {
-    expect(() => refuseRetiredBcHost("http://192.168.2.157:7149/BC", OURS)).not.toThrow();
-    expect(() => refuseRetiredBcHost("https://bc.example.com/BC", OURS)).not.toThrow();
+    for (const server of [
+      "http://192.168.2.157:7149/BC",
+      "http://server1:7149",
+      "https://bc.example.com/BC",
+    ])
+      expect(() => refuseRetiredBcHost({ server }, OURS)).not.toThrow();
   });
   test("LETHAL_BC_HOST flips which known host is refused", () => {
     const onDocker1 = { ...OURS, ...ON_DOCKER1 };
-    expect(() => refuseRetiredBcHost("http://192.168.2.77:7049", onDocker1)).not.toThrow();
-    expect(() => refuseRetiredBcHost("http://192.168.2.157:7049", onDocker1)).toThrow(
+    expect(() =>
+      refuseRetiredBcHost({ server: "http://192.168.2.77:7049" }, onDocker1),
+    ).not.toThrow();
+    expect(() => refuseRetiredBcHost({ server: "http://192.168.2.157:7049" }, onDocker1)).toThrow(
       BcHostMismatchError,
     );
   });
-  test("a missing server or one that is no URL is left to the config checks", () => {
+  test("no section, or a server that is no URL, is left to the config checks", () => {
     expect(() => refuseRetiredBcHost(undefined, OURS)).not.toThrow();
-    expect(() => refuseRetiredBcHost("not a url", OURS)).not.toThrow();
+    expect(() => refuseRetiredBcHost({ server: "not a url" }, OURS)).not.toThrow();
   });
 });

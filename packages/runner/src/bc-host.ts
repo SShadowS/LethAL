@@ -55,21 +55,25 @@ export function bcHostMismatch(
 const OFF_LIMITS_HOSTS: ReadonlySet<string> = new Set(["cronus28", "cronus284"]);
 
 /**
- * R867: a config left on a host a lane must not reach stops before any server call. It reads one
- * URL and no password. It fires only in our own environment, where `LETHAL_COORD_ROOT` is set: for
- * anyone else `192.168.2.77` or `Cronus28` can be their own server, so they pass untouched.
+ * R867: a config left on a host a lane must not reach stops before any server call. It reads the
+ * config's URLs and no password. It fires only in our own environment, where `LETHAL_COORD_ROOT` is
+ * set: for anyone else `192.168.2.77` or `Cronus28` can be their own server, so they pass untouched.
  */
 export function refuseRetiredBcHost(
-  server: unknown,
+  bcdev: { server?: unknown; baseUrl?: unknown; apiBaseUrl?: unknown } | undefined,
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): void {
-  if (typeof server !== "string" || (env.LETHAL_COORD_ROOT ?? "") === "") return;
-  const host = URL.parse(server)?.hostname; // lower case already; a bad URL is another check's to name
-  if (host === undefined) return;
-  const why = OFF_LIMITS_HOSTS.has(host)
-    ? `the config names ${host}, which no lane may reach (R867). Refresh it: bun scripts/bc-linux-setup.ts --server all --write-config-only`
-    : bcHostMismatch(host, env);
-  if (why !== undefined) throw new BcHostMismatchError(why);
+  if ((env.LETHAL_COORD_ROOT ?? "") === "") return;
+  for (const url of [bcdev?.server, bcdev?.baseUrl, bcdev?.apiBaseUrl]) {
+    if (typeof url !== "string") continue;
+    // Lower case already. A bad URL is another check's to name. A last dot still means the same host.
+    const host = URL.parse(url)?.hostname.replace(/\.$/, "");
+    if (host === undefined) continue;
+    const why = OFF_LIMITS_HOSTS.has(host)
+      ? `the config names ${host}, which no lane may reach (R867). Refresh it: bun scripts/bc-linux-setup.ts --server all --write-config-only`
+      : bcHostMismatch(BC_HOSTS[host as keyof typeof BC_HOSTS] ?? host, env); // `docker1` the name
+    if (why !== undefined) throw new BcHostMismatchError(why);
+  }
 }
 
 if (import.meta.main) console.log(bcLinuxHost());

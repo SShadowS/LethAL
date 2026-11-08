@@ -117,7 +117,7 @@ export function printItestTarget(
   // R783: a config left on the other known host would skip the marker check below; refuse it.
   const mismatch = bcHostMismatch(u.hostname, outOfUse.env);
   if (mismatch !== undefined) throw new BcHostMismatchError(mismatch);
-  refuseRetiredBcHost(server, outOfUse.env);
+  refuseRetiredBcHost(bcdev, outOfUse.env);
   const name = markedServerFor(u.hostname, devPort, outOfUse.env);
   // Not bc1-bc4: such a server has no marker (Cronus28, envtool), so it is not checked.
   if (name !== undefined) {

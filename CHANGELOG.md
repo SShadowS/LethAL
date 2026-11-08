@@ -15,7 +15,7 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 - **`--isolate-tests`, for `al-runner-v3`, off by default** (R857). Every test runs alone, so state an earlier test of its
   codeunit left behind does not reach it. A default run does not change. The mode is slower, mostly at the baseline: one
-  process per test. A run with it and a run without it never share a verdict or a baseline. It is refused on `bcdev`, and
+  process per test, four at a time or as `--workers` says (R866). A run with it and a run without it never share a verdict or a baseline. It is refused on `bcdev`, and
   it does not make v3 equal to BC, whose grouped calls keep some state between tests.
 - **Four operators that delete one operand** (R855, GitHub #35 and #41). `delete-logical-right` and `-left` turn `A or B` or
   `A and B` into one side, in an `if` condition or an `exit` value: a suite that kills `or` to `and` can still leave a whole

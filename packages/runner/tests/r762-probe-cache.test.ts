@@ -532,9 +532,24 @@ describe("R762: --fresh-probe reaches the backend", () => {
       );
     },
   );
+  // R866: `--workers 1` is the small machine's answer, so it must not read as "not given".
+  test.skipIf(process.platform !== "linux")(
+    "--workers sets the baseline's processes under --isolate-tests, and only when given",
+    () => {
+      const on = [...argv, "--isolate-tests"];
+      expect(parseCliConfig(on)).not.toHaveProperty("baselineProcesses");
+      for (const n of [1, 3]) {
+        expect(parseCliConfig([...on, "--workers", String(n)])).toMatchObject({
+          baselineProcesses: n,
+          workers: n,
+        });
+      }
+      expect(parseCliConfig([...argv, "--workers", "3"])).not.toHaveProperty("baselineProcesses");
+    },
+  );
   test("buildBackend threads --isolate-tests into the al-runner-v3 config, and only when set", async () => {
     if (process.platform !== "linux") return; // v3 is refused off Linux (M9)
-    const build = async (isolateTests: boolean) => {
+    const build = async (isolateTests: boolean, baselineProcesses?: number) => {
       const e = await env();
       await writeFile(
         join(e.root, "app.json"),
@@ -551,6 +566,7 @@ describe("R762: --fresh-probe reaches the backend", () => {
           testDir: e.root,
           backendKind: "al-runner-v3",
           ...(isolateTests ? { isolateTests: true } : {}),
+          ...(baselineProcesses !== undefined ? { baselineProcesses } : {}),
         } as Parameters<typeof buildBackend>[0],
         {
           alRunnerV3: {
@@ -565,10 +581,14 @@ describe("R762: --fresh-probe reaches the backend", () => {
         { alcRunnable: () => true },
         { selectorId: 79199, controlId: 79198, tableId: 79197 },
       );
-      return b.isolatesTests;
+      return b;
     };
-    expect(await build(true)).toBe(true);
-    expect(await build(false)).toBe(false);
+    expect((await build(true)).isolatesTests).toBe(true);
+    expect((await build(false)).isolatesTests).toBe(false);
+    const cfgOf = (b: unknown) =>
+      (b as { cfg: { isolatedBaselineProcesses?: number } }).cfg.isolatedBaselineProcesses;
+    expect(cfgOf(await build(true, 1))).toBe(1);
+    expect(cfgOf(await build(true))).toBeUndefined();
   });
   test("buildBackend threads it into the al-runner-v3 config, and only when set", async () => {
     if (process.platform !== "linux") return; // v3 is refused off Linux (M9)
