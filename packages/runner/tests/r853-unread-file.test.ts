@@ -1,7 +1,7 @@
 // R853: a file the parser gives up on holds no object, so a run stops at the manifest guard. Both
 // backends' stops must name the file and how to leave it out. The AL is invented.
-// The shapes below must stay unread under any parser that ships: a grammar bump that reads one
-// must replace it with a shape that is still unread, not weaken the stop.
+// The unread shapes below are plainly invalid AL, so they stay unread whatever the grammar fixes
+// next. Valid AL that a parser loses was used here once, and a grammar fix read it (R855 shape C).
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -33,8 +33,6 @@ const armsOf = (n: number): string =>
 const unit = (n: number): string =>
   `codeunit 50000 "X"\n{\n    procedure P()\n    begin\n${armsOf(n)}end\n    end;\n}\n`;
 const KEY = "codeunit:50000";
-// Valid AL that stays unread: `end;` in both arms of a `#if/#else` (R855).
-const SHAPE_C = `codeunit 50000 "X"\n{\n    procedure P()\n    begin\n        B();\n#if A\n    end;\n#else\n        C();\n    end;\n#endif\n\n    procedure Q()\n    begin\n        W();\n    end;\n}\n`;
 const ROOT_ERROR = `codeunit 50000 "X"\n{\n    procedure P()\n    begin\n        B();\n`;
 const SWALLOW_PROCEDURE = `codeunit 50000 "X"\n{\n    procedure\n    begin\n    end;\n\n    procedure Q()\n    begin\n    end;\n}\n`;
 const SWALLOW_TRIGGER = `codeunit 50000 "X"\n{\n    trigger OnRun(\n    begin\n    end;\n\n    trigger OnRun()\n    begin\n    end;\n}\n`;
@@ -109,10 +107,6 @@ describe("R853: the parser's limit", () => {
     expect([...map.mappedKeys()]).toEqual([]);
   });
 
-  test("valid AL the parser leaves unread (shape C) is unread", () => {
-    expect(isUnreadFile(wrapRoot(parseAL(SHAPE_C)))).toBe(true);
-  });
-
   test("an ERROR that lost no member is not a stop, in a body or in a header", () => {
     const body = `codeunit 50000 "X"\n{\n    procedure P()\n    begin\n        X := ;\n    end;\n}\n`;
     const header = `tableextension 50000 "X" extends My.Ns.Base\n{\n}\n`;
@@ -126,7 +120,7 @@ describe("R853: the parser's limit", () => {
 
 describe("R853: the hub stops on an unread file", () => {
   test("by name, and passes a file the parser reads", async () => {
-    await expect(coverageRefusedFromSources([{ path: "X.al", text: SHAPE_C }])).rejects.toThrow(
+    await expect(coverageRefusedFromSources([{ path: "X.al", text: MISSING_END }])).rejects.toThrow(
       "a gap in the parser",
     );
     await expect(
@@ -145,7 +139,7 @@ describe("R853: a harmless ERROR still indexes the file", () => {
 
   test("a procedure lost to an ERROR leaves the object unmapped, so its mutants stop the run", async () => {
     const declared = new Set([KEY]);
-    const map = await lineMapFromSources([{ path: "X.al", text: SHAPE_C }], declared);
+    const map = await lineMapFromSources([{ path: "X.al", text: MISSING_END }], declared);
     expect(map.unreadFiles).toEqual(["X.al"]);
     expect([...map.mappedKeys()]).toEqual([]);
     const stop = stopOf(() =>
@@ -157,7 +151,7 @@ describe("R853: a harmless ERROR still indexes the file", () => {
   test("v3 stops on the same file", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lethal-r853-"));
     try {
-      await writeFile(join(dir, "X.Codeunit.al"), SHAPE_C, "utf8");
+      await writeFile(join(dir, "X.Codeunit.al"), MISSING_END, "utf8");
       const notes: string[] = [];
       const index = await buildAlRunnerCoverageIndex(dir, {
         symbols: [],
@@ -183,7 +177,7 @@ describe("R853: the stop names the file and the way out", () => {
 
   test("bcdev's line map: declared, not mapped", async () => {
     const declared = new Set([KEY]);
-    const map = await lineMapFromSources([{ path: "src\\X.Codeunit.al", text: SHAPE_C }], declared);
+    const map = await lineMapFromSources([{ path: "src\\X.Codeunit.al", text: MISSING_END }], declared);
     expect(map.unreadFiles).toEqual(["src/X.Codeunit.al"]);
     const stop = stopOf(() =>
       assertManifestObjectsDeclared([KEY], declared, map.mappedKeys(), new Set(), map.unreadFiles),
@@ -197,7 +191,7 @@ describe("R853: the stop names the file and the way out", () => {
   test("v3's index: not declared", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lethal-r853-"));
     dirs.push(dir);
-    await writeFile(join(dir, "X.Codeunit.al"), SHAPE_C, "utf8");
+    await writeFile(join(dir, "X.Codeunit.al"), MISSING_END, "utf8");
     const index = await buildAlRunnerCoverageIndex(dir, { symbols: [] });
     expect(index.lineMap.unreadFiles).toEqual(["X.Codeunit.al"]);
     const stop = stopOf(() =>

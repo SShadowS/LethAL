@@ -1338,7 +1338,8 @@ describe("claimsRecordMethod: the unparsed fallback is conservative (R331)", () 
   // the custom `Validate` needs one, and the other arm's is then visible to the guard as well. So it
   // is pinned here, on the parse alone.
   it("REFUSES when the unparsed extension sits BELOW a #if split declaration", () => {
-    const e = EXT("procedure Validate");
+    // Plainly invalid AL (two bases after `extends`), so the extension stays unparsed whatever the grammar fixes.
+    const e = EXT("procedure Validate").replace("extends 50001", "extends 50001 50001");
     const other = `table 50004 "Plain"
 {
     fields { field(1; F; Integer) { } }
@@ -1350,7 +1351,11 @@ ${other}#endif
 `;
     const tree = wrapRoot(parseAL(src));
     const [top] = tree.namedChildren;
-    expect(top?.rawKind).toBe("preproc_split_declaration");
+    // A `#if` wrapper on top (its kind depends on the grammar), the unparsed extension as an ERROR below it.
+    expect(["preproc_split_declaration", "preproc_conditional_object"]).toContain(top?.rawKind ?? "");
+    const errorBelow = (n: typeof tree): boolean =>
+      n.namedChildren.some((c) => c.rawKind === "ERROR" || errorBelow(c));
+    expect(top !== undefined && errorBelow(top)).toBe(true);
     expect(claims(src)).toBe(false);
   });
   it("control: the name only inside a comment does not refuse", () => {
