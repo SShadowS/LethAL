@@ -57,20 +57,25 @@ const TABLE_BASES: [string, string, boolean][] = [
 
 describe("R-876: extendedTableOf, via resolveReceiverTable on a bare call", () => {
   // Red: read `childForFieldName("base_object")` (the whole dotted text) in extendedTableOf.
-  const tableOf = (base: string) => {
+  const tableOf = (base: string, tableNamespace?: string) => {
     const { files, ctx } = ctxOf([
+      `${tableNamespace === undefined ? "" : `namespace ${tableNamespace};\n\n`}table 50100 "Customer"\n{\n    fields { field(1; "No."; Code[20]) { } }\n}\n`,
       `tableextension 50101 "Cust Ext" extends ${base}\n{\n    trigger OnInsert()\n    begin\n        SetRange("No.", 'x');\n    end;\n}\n`,
     ]);
-    const root = files[0]?.root;
+    const root = files[1]?.root;
     if (root === undefined) throw new Error("no root");
     return resolveReceiverTable(
       firstNode(root, (n) => n.kind === ALNodeKind.procedure_call),
       ctx,
     );
   };
-  it("a dotted base resolves to its last segment", () => {
-    expect(tableOf("Microsoft.Sales.Customer")).toBe("Customer");
-    expect(tableOf('"My.Ns"."Customer"')).toBe("Customer");
+  // A dotted base resolves only when the project table sits in that namespace (R502); else it
+  // stays a quoted name that matches no table, as an unknown name does.
+  it("a dotted base resolves to its last segment only in the matching namespace", () => {
+    expect(tableOf("Microsoft.Sales.Customer", "Microsoft.Sales")).toBe("Customer");
+    expect(tableOf('"My.Ns"."Customer"', "My.Ns")).toBe("Customer");
+    expect(tableOf("Microsoft.Sales.Customer", "Other.Ns")).toBe('"Microsoft"."Sales"."Customer"');
+    expect(tableOf("Microsoft.Sales.Customer")).toBe('"Microsoft"."Sales"."Customer"');
   });
   it("a plain base resolves to its name", () => {
     expect(tableOf("Customer")).toBe("Customer");

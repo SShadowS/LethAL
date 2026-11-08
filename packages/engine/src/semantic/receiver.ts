@@ -765,7 +765,8 @@ export function recordScopesAt(node: ALSyntaxNode, symbols: SymbolTable): Record
         out.push({
           kind: "tableextension",
           receiver: "Rec",
-          table: extendedTableOf(p),
+          // A dotted base must name a project table in that namespace, or it stays unresolved (R502).
+          table: qualifiedObjectName(fieldSegments(p, "base_object"), "table", symbols),
           xRec: true,
         });
         return out;
@@ -1409,6 +1410,10 @@ function extensionDeclaresProcedure(
 /**
  * The table a `tableextension` extends, from its header's `base_object` field
  * (`tableextension 50100 "X" extends Customer`), or `null` when the grammar did not supply it.
+ *
+ * R-876: the LAST segment of a dotted base, or the id text of a numeric one, namespace unchecked.
+ * Only the readers that over-refuse use it (`mayHaveMember`, `extensionDeclaresProcedure`); the
+ * implicit-record resolver in `recordScopesAt` uses `qualifiedObjectName`, which checks the namespace.
  *
  * Never the extension's OWN name: rule 3 must be able to see a procedure declared on the EXTENDED
  * table, and a resolution returning the extension's name would look successful while silently
