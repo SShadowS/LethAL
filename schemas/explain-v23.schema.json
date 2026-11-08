@@ -199,6 +199,28 @@
             "description": "True ONLY for `exact`, a member-level coverage match: a test is measured to have executed the mutated procedure. False means some test touched the object and nothing proves the mutated code ran."
           },
           "coveringTests": { "type": "array", "items": { "type": "string" } },
+          "coveringTestLocations": {
+            "type": "array",
+            "description": "R873: where each covering test is, in the order of coveringTests, from the report's testMethods. Present only under --project, and only when the report has testMethods. File and line only, no source text. An optional additive field: no version bump.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name"],
+              "properties": {
+                "name": { "type": "string", "description": "Qualified Codeunit.method." },
+                "file": { "type": "string" },
+                "line": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "1-based line of the method's name."
+                },
+                "lineAmbiguous": {
+                  "const": true,
+                  "description": "The name was discovered at more than one place (#if arms); no location given."
+                }
+              }
+            }
+          },
           "guardEvidence": {
             "type": "string",
             "enum": ["observed", "not-observed", "not-measured"]
