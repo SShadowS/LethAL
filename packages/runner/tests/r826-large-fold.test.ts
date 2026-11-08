@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { initParser } from "@lethal/engine";
+import { assignMutantIds, compileSchemataForFile, dedupeSpecs } from "@lethal/schemata";
 import type { CompiledArtifact } from "../src/artifact";
 import type {
   BackendCapabilities,
@@ -14,12 +15,13 @@ import type {
 } from "../src/backend";
 import { printDryRun } from "../src/cli";
 import {
-  LARGE_FOLD_BYTES,
-  LARGE_FOLD_CHAIN,
-  foldFiguresOf,
-  isLargeFold,
+  BOUND_BYTES_PER_GUARD,
+  LARGE_METHOD_BYTES,
+  emittedBound,
   largeFoldWarning,
-  largestFold,
+  largeMethodOf,
+  largeMethodSuspect,
+  largestMethodBytes,
 } from "../src/large-fold";
 import { generateMutationSet, operatorTiers, runSession } from "../src/orchestrator";
 import { ResultsStore } from "../src/store";
@@ -83,8 +85,19 @@ async function dryRun(dir: string, backendKind?: "bcdev" | "al-runner-v3"): Prom
   return lines.join("\n");
 }
 
+/** The real emitted text of one generated file, as a batch's compile writes it. */
+function emitted(f: Awaited<ReturnType<typeof project>>[number]): string {
+  const deduped = dedupeSpecs(f.specs, tierOf);
+  const ided = assignMutantIds(new Map([[f.path, deduped]])).get(f.path) ?? [];
+  return compileSchemataForFile(f.source, f.root, deduped, ided, f.path);
+}
+
 class StubBackend implements ExecutionBackend {
-  constructor(private readonly kind: "bcdev" | "al-runner-v3") {}
+  constructor(
+    private readonly kind: "bcdev" | "al-runner-v3",
+    /** R875: every run's server-side fate is unknown, as when the tier stops. */
+    private readonly strand = false,
+  ) {}
   async runnerBuild(): Promise<{ version: string; binarySha256: string }> {
     return { version: "alrunner 3.0.0-alpha.2 (91253f2d6)", binarySha256: "b".repeat(64) };
   }
@@ -106,6 +119,15 @@ class StubBackend implements ExecutionBackend {
   async compileCheck(): Promise<void> {}
   async activate(): Promise<void> {}
   async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+    if (this.strand) {
+      return {
+        ref,
+        outcome: "error",
+        durationMs: 5,
+        operation: "in-flight-unknown",
+        failureMessage: "the service tier stopped answering",
+      };
+    }
     return {
       ref,
       outcome: "pass",
@@ -123,6 +145,15 @@ class StubBackend implements ExecutionBackend {
 
 /** The warning codes a session emits for a project, on a backend. */
 async function sessionCodes(statements: number, kind: "bcdev" | "al-runner-v3"): Promise<string[]> {
+  return (await session(statements, kind)).codes;
+}
+
+/** R875: a session's warnings and the reason it was quarantined, if it was. */
+async function session(
+  statements: number,
+  kind: "bcdev" | "al-runner-v3",
+  strand = false,
+): Promise<{ codes: string[]; quarantined: string[] }> {
   const projectDir = writeProject(statements);
   const testDir = mkdtempSync(join(tmpdir(), "r826-tests-"));
   writeFileSync(
@@ -130,10 +161,11 @@ async function sessionCodes(statements: number, kind: "bcdev" | "al-runner-v3"):
     'codeunit 50050 "T"\n{\n    Subtype = Test;\n\n    [Test]\n    procedure T1()\n    begin\n    end;\n}\n',
   );
   const codes: string[] = [];
+  const quarantined: string[] = [];
   const store = new ResultsStore(":memory:");
   try {
     await runSession({
-      backend: new StubBackend(kind),
+      backend: new StubBackend(kind, strand),
       store,
       projectDir,
       testDir,
@@ -143,13 +175,14 @@ async function sessionCodes(statements: number, kind: "bcdev" | "al-runner-v3"):
       emit: [
         (e) => {
           if (e.type === "warning") codes.push(e.code);
+          if (e.type === "quarantined") quarantined.push(e.reason);
         },
       ],
     });
   } finally {
     store.close();
   }
-  return codes;
+  return { codes, quarantined };
 }
 
 /** The operators that make the loop one chain: the free body's (which lifts to the loop) and the loop's own. */
@@ -170,25 +203,26 @@ describe("R826: the large-method warning", () => {
     await initParser();
   });
 
-  test("a loop folded by its own mutants is one long chain; without them the same code is not", async () => {
+  test("a loop folded by its own mutants emits a very large method; without them the same code does not", async () => {
     const files = await project(150);
     const [f] = files;
     if (f === undefined) throw new Error("no file");
-    const folded = foldFiguresOf(f.path, f.specs, tierOf);
-    expect(folded.chain).toBeGreaterThanOrEqual(LARGE_FOLD_CHAIN);
+    const big = largeMethodOf(f, tierOf);
+    expect(big?.methodBytes).toBeGreaterThanOrEqual(LARGE_METHOD_BYTES);
+    // R875: the figure is the real emitted text's, to the byte.
+    expect(big?.methodBytes).toBe(largestMethodBytes(emitted(f)));
     const flat = await project(150, allBut(files));
     const [g] = flat;
     if (g === undefined) throw new Error("no file");
-    const small = foldFiguresOf(g.path, g.specs, tierOf);
-    expect(small.chain).toBeLessThan(LARGE_FOLD_CHAIN);
-    expect(small.bytes).toBeLessThan(LARGE_FOLD_BYTES);
+    expect(largeMethodOf(g, tierOf)).toBeUndefined();
+    expect(largestMethodBytes(emitted(g))).toBeLessThan(LARGE_METHOD_BYTES);
   });
 
   test("it names the file and the figures, says it is unmeasured, and gives the way out", async () => {
     const files = await project(150);
     const message = largeFoldWarning(files, tierOf) ?? "";
     expect(message).toContain("P.Codeunit.al");
-    expect(message).toMatch(/chain \d+, about \d+ KB/);
+    expect(message).toMatch(/chain \d+, \d+ KB in one method/);
     expect(message).toContain("not proven");
     expect(message).toContain("not measured");
     // R827, R828: a body's `empty-block`, an `if` condition and a `case` arm are no longer the cause,
@@ -204,48 +238,85 @@ describe("R826: the large-method warning", () => {
     expect(largeFoldWarning(files, tierOf)).toBeUndefined();
   });
 
-  test("each figure counts AT it, and one below it does not", () => {
-    expect(isLargeFold({ chain: LARGE_FOLD_CHAIN, bytes: 0 })).toBe(true);
-    expect(isLargeFold({ chain: LARGE_FOLD_CHAIN - 1, bytes: 0 })).toBe(false);
-    expect(isLargeFold({ chain: 0, bytes: LARGE_FOLD_BYTES })).toBe(true);
-    expect(isLargeFold({ chain: 0, bytes: LARGE_FOLD_BYTES - 1 })).toBe(false);
-  });
-
-  test("largestFold keeps the largest of each, in any order, and they may differ in source", () => {
-    const fold = (members: number, length: number) => ({
-      members: Array.from({ length: members }),
-      root: { startIndex: 10, endIndex: 10 + length },
-    });
-    const longChain = fold(50, 10); // 500 bytes
-    const bigText = fold(2, 1000); // 2000 bytes
-    const small = fold(1, 1);
-    const want = { chain: 50, bytes: 2000 };
-    expect(largestFold([longChain, bigText, small])).toEqual(want);
-    expect(largestFold([small, bigText, longChain])).toEqual(want);
-    expect(largestFold([bigText, small, longChain])).toEqual(want);
-    expect(largestFold([])).toEqual({ chain: 0, bytes: 0 });
-    // R827: a free body's guard copies no text, however long the body is.
-    expect(largestFold([{ ...fold(1, 5000), free: true }, small])).toEqual({ chain: 1, bytes: 1 });
-  });
-
-  test("a real file fires on its chain alone, with its bytes under their figure", async () => {
-    // A fold's chain counts its members. Find the size at which `chain` crosses the figure, with
-    // the bytes far under theirs, so only the chain can be why it fires.
-    let below: Awaited<ReturnType<typeof project>> | undefined;
-    let at: Awaited<ReturnType<typeof project>> | undefined;
-    for (let n = 20; n < 120 && at === undefined; n += 1) {
-      const files = await project(n);
-      const [f] = files;
+  test("the figure counts AT the size the real text has, and one method below it does not warn", async () => {
+    // Grow the loop until its real largest method crosses the figure: the warning flips exactly there.
+    let below: Awaited<ReturnType<typeof project>>[number] | undefined;
+    let at: Awaited<ReturnType<typeof project>>[number] | undefined;
+    for (let n = 40; n < 200 && at === undefined; n += 4) {
+      const [f] = await project(n);
       if (f === undefined) throw new Error("no file");
-      const { chain, bytes } = foldFiguresOf(f.path, f.specs, tierOf);
-      expect(bytes).toBeLessThan(LARGE_FOLD_BYTES);
-      if (chain >= LARGE_FOLD_CHAIN) at = files;
-      else below = files;
+      if (largestMethodBytes(emitted(f)) >= LARGE_METHOD_BYTES) at = f;
+      else below = f;
     }
     if (at === undefined || below === undefined)
       throw new Error("the sizes did not cross the figure");
-    expect(largeFoldWarning(at, tierOf)).toBeDefined();
-    expect(largeFoldWarning(below, tierOf)).toBeUndefined();
+    expect(largeMethodOf(at, tierOf)).toBeDefined();
+    expect(largeMethodOf(below, tierOf)).toBeUndefined();
+  });
+
+  test("a long chain alone does not warn: only the method's size does (R875)", async () => {
+    // The old chain test fired at 100 members; on 986 DC and DO files it caught nothing the size did.
+    const [f] = await project(40);
+    if (f === undefined) throw new Error("no file");
+    const deduped = dedupeSpecs(f.specs, tierOf);
+    expect(deduped.length).toBeGreaterThanOrEqual(100);
+    expect(largestMethodBytes(emitted(f))).toBeLessThan(LARGE_METHOD_BYTES);
+    expect(largeMethodOf(f, tierOf)).toBeUndefined();
+  });
+
+  test("the bound is never under the real text, so a file it skips cannot hold the large method", async () => {
+    for (const n of [5, 40, 150]) {
+      const [f] = await project(n);
+      if (f === undefined) throw new Error("no file");
+      expect(emittedBound(f, tierOf)).toBeGreaterThanOrEqual(emitted(f).length);
+    }
+    // And it is what makes the skip: with no guard overhead it is under the real text.
+    const [f] = await project(150);
+    if (f === undefined) throw new Error("no file");
+    const deduped = dedupeSpecs(f.specs, tierOf);
+    expect(emittedBound(f, tierOf) - deduped.length * BOUND_BYTES_PER_GUARD).toBeLessThan(
+      emitted(f).length,
+    );
+  });
+
+  test("largestMethodBytes measures header to header, attribute lines with their method", () => {
+    const text = [
+      "codeunit 1 C",
+      "{",
+      "    [EventSubscriber(ObjectType::Codeunit, 1, 'X', '', false, false)]",
+      "    local procedure A()",
+      "    begin",
+      `        ${"x".repeat(300)}`,
+      "    end;",
+      "    trigger OnRun()",
+      "    begin",
+      "    end;",
+      "}",
+    ].join("\n");
+    const a = text.indexOf("    [EventSubscriber");
+    const t = text.indexOf("    trigger OnRun");
+    expect(largestMethodBytes(text)).toBe(t - a);
+    expect(largestMethodBytes("no methods here")).toBe(0);
+  });
+
+  test("a batch names its suspect only when it holds the large method", () => {
+    const large = [{ path: "src/Big.Codeunit.al", chain: 454, methodBytes: 24 * 1024 * 1024 }];
+    const said = largeMethodSuspect(large, ["src/Other.al", "src/Big.Codeunit.al"]) ?? "";
+    expect(said).toContain("src/Big.Codeunit.al (chain 454, 24576 KB in one method)");
+    expect(said).toContain("not proven, GitHub #28");
+    expect(largeMethodSuspect(large, ["src/Other.al"])).toBeUndefined();
+    expect(largeMethodSuspect([], ["src/Big.Codeunit.al"])).toBeUndefined();
+  });
+
+  test("a quarantine names the large method when the batch holds one, and not otherwise", async () => {
+    const big = await session(150, "bcdev", true);
+    expect(big.quarantined).toHaveLength(1);
+    expect(big.quarantined[0]).toContain("the service tier stopped answering");
+    expect(big.quarantined[0]).toContain("one suspect (not proven, GitHub #28)");
+    expect(big.quarantined[0]).toContain("P.Codeunit.al");
+    const small = await session(10, "bcdev", true);
+    expect(small.quarantined).toHaveLength(1);
+    expect(small.quarantined[0]).not.toContain("suspect");
   });
 
   test("the bytes figure fires on its own: one long statement in a short chain", async () => {
@@ -272,9 +343,9 @@ describe("R826: the large-method warning", () => {
     const set = await generateMutationSet(dir, { emit: () => {} } as never);
     const [f] = set.files;
     if (f === undefined) throw new Error("no file");
-    const { chain, bytes } = foldFiguresOf(f.path, f.specs, tierOf);
-    expect(chain).toBeLessThan(LARGE_FOLD_CHAIN);
-    expect(bytes).toBeGreaterThanOrEqual(LARGE_FOLD_BYTES);
+    const big = largeMethodOf(f, tierOf);
+    expect(big?.chain).toBeLessThan(100);
+    expect(big?.methodBytes).toBeGreaterThanOrEqual(LARGE_METHOD_BYTES);
     expect(largeFoldWarning(set.files, tierOf)).toBeDefined();
   });
 
