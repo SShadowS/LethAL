@@ -251,6 +251,10 @@ describe("R826: the large-method warning", () => {
     if (at === undefined || below === undefined)
       throw new Error("the sizes did not cross the figure");
     expect(largeMethodOf(at, tierOf)).toBeDefined();
+    // The file just below is over the bound, with a chain over 100, so the real size alone says no:
+    // neither the bound's shortcut nor a chain test could be why it stays quiet.
+    expect(emittedBound(below, tierOf)).toBeGreaterThanOrEqual(LARGE_METHOD_BYTES);
+    expect(dedupeSpecs(below.specs, tierOf).length).toBeGreaterThanOrEqual(100);
     expect(largeMethodOf(below, tierOf)).toBeUndefined();
   });
 
