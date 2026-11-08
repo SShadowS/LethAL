@@ -1071,6 +1071,31 @@ What remains is small and named, so a stranded run is diagnosable rather than my
   a call the loop's progress needs, and a deleted operand holding such a call (R855). They do not
   follow a callee: a condition inside `Done()`, read by `until Done()`, is claimed. That is the shape
   of R837, and `negate-conditional` has the same exposure.
+- The opt-in `condition-true` (`if C then T` to `if true then T`, an `if` without `else` only) refuses a site
+  whose then-arm holds a `while` or `repeat` that does not step a cursor, writes a name an enclosing loop's exit
+  reads (`I -= 1`, `A := 0`, a requeue, a helper reset), restarts or steps back the exit's cursor
+  (`R.FindFirst()`, `R.Next(-1)`), or calls back into its own procedure (recursion, also through a chain of
+  procedures in the same object, also through a codeunit variable of the object's own type, `Me.Rec(L + 1)`);
+  `Codeunit.Run(Codeunit::"Own")` or `Me.Run()` on the object itself; and a cursor step in the condition, inside a
+  loop. A condition that is an `and`/`or` with a bare `true` operand (`A and true`) gets no mutant, because
+  `delete-logical-*` writes the same bytes. A forced `break` or `exit` is not narrowed. Not seen: a key field
+  written on a cursor record, a loop inside a callee the then-arm calls, an event subscriber in the same object
+  that calls back, `Codeunit.Run` of its own codeunit from `OnRun` through another object, and a write that a
+  LATER loop reads (`Step := 1; if Backwards then Step := -1; while I < N do I += Step;`), the same exposure the
+  default operators have.
+- The opt-in `blank-argument` (a variable argument to its blank) refuses a callee parameter that a `for`, a `while`
+  or a `repeat` reads. The one loop it skips is a `for` with a local control variable (a `var` of the procedure
+  that holds the loop: not a parameter, not a global, since a helper can write a global) that is neither assigned
+  (`I := ...`, `I -= 1`) nor passed to a call (it could be a `var` parameter): its bound is read once. Every `while` and
+  `repeat` that reads the value is refused, whatever its exit, a record cursor exit (`until R.Next() = 0`)
+  included: such a loop is not a bound, because its body or a helper can restart, reverse or reposition the
+  cursor. A read directly, through a copy (`L := Step; while I < N do I += L`), through a global it is stored in that any loop of
+  the object reads, through a receiver it is handed to, or through another procedure of the object it is passed
+  to (four calls deep); caller progress (`Remaining := Consume(Remaining)`); and a call that leads back to the
+  caller (recursion). Name matching cannot see another object, a record field, a setup table, a `var` parameter,
+  a text or JSON round trip, a subscriber, or a recursion that leaves the object. What unbounded recursion does
+  on BC is not measured (R865): the recursion refusal is one switch, `recursionRule` in `optin-hang.ts`, for
+  these two operators only.
 
 **What to do about it.** Nothing, on a first run: the shapes are rare and the report names a
 stranded tier rather than reporting a plausible score. If a run does strand, `--resume` continues it

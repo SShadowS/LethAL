@@ -123,7 +123,8 @@ export function largeMethodWarning(large: readonly LargeMethod[]): string | unde
     " inside one joins its chain). To shrink them, leave out the operators that root them, one",
     " --exclude-operator each: empty-block, negate-conditional, conditional-boundary, negate-guard,",
     " remove-not, loop-skip, loop-truncate, delete-logical-right, delete-logical-left, delete-additive-right,",
-    " delete-additive-left. Or narrow the run with --only.",
+    " delete-additive-left, and the opt-in condition-true and blank-argument when you named them. Or narrow the",
+    " run with --only.",
     " --max-guards-per-batch will not help: it splits by file.",
   ].join("");
 }

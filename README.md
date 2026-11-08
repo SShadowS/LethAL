@@ -684,7 +684,7 @@ Design detail for all of the above lives in [`design.md`](design.md).
 
 ## The changes it makes
 
-<!-- operators: summary -->30 operators, in two tiers, plus 1 opt-in (run only when --operator names it)<!-- /operators: summary -->. **Tier 1** is the conservative set the mutation-testing literature
+<!-- operators: summary -->30 operators, in two tiers, plus 3 opt-in (run only when --operator names it)<!-- /operators: summary -->. **Tier 1** is the conservative set the mutation-testing literature
 has evidence for; **Tier 2** exploits AL and Business Central semantics to plant bugs a generic tool
 cannot express. Where both claim the same site, Tier 2 wins.
 
@@ -717,6 +717,8 @@ and cannot change a verdict.
 | `lethal.delete-logical-left` | 1.0.0 | `A or B` → `B` | a clause of a condition no test needs |
 | `lethal.delete-additive-right` | 1.0.0 | `A + B` → `A` | a term of a sum no test checks |
 | `lethal.delete-additive-left` | 1.0.0 | `A + B` → `B` | a term of a sum no test checks |
+| `lethal.condition-true` (opt-in) | 1.0.0 | `A` → `true` | a guard no test drives to false. A survivor means the then-arm is never skipped in a test, or nothing checks that it ran when it should not; name it with `--operator condition-true` |
+| `lethal.blank-argument` (opt-in) | 1.0.0 | `T` → `''` | a value passed to a procedure that no test checks arrived. Name it with `--operator blank-argument`; the callee must be a project procedure that takes the argument by value |
 <!-- /operators: tier1 -->
 
 ### Tier 2, AL-specific
@@ -905,7 +907,7 @@ a LethAL feature or a mode.
   shapes a reading can confirm are a handful in 2.3 million on the BaseApp history. What you see is a timeout, on BC 28 and BC 29
   alike: the mutant ends as a timeout, and the run goes on. The other direction also exists: LethAL refuses some calls that could
   not hang, because a missed hang costs far more than a lost mutant.
-- **The advanced operator set is not built.** <!-- operators: limits -->30 operators today, in two groups: 20 generic ones (Tier 1) and 10 AL-specific ones (Tier 2), plus 1 opt-in (run only when --operator names it)<!-- /operators: limits -->.
+- **The advanced operator set is not built.** <!-- operators: limits -->30 operators today, in two groups: 20 generic ones (Tier 1) and 10 AL-specific ones (Tier 2), plus 3 opt-in (run only when --operator names it)<!-- /operators: limits -->.
   Tier 1 covers comparisons, return values and empty blocks, among others; Tier 2 covers
   `TestField`, `SetRange`, `CalcFields`, `Commit` and friends. A third, more aggressive group is
   designed only.

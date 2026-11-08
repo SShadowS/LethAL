@@ -1001,8 +1001,8 @@ RUN — scope. These bound cost. --tests-only can change a verdict; the others c
   --operator <name>          only these operators contribute mutants (repeatable). The 'lethal.'
                              prefix is optional; an unregistered name, or a registered one with no
                              deployable site here, is refused. The report flags it
-                             'operator-narrowed'. An opt-in operator (swap-workdate-today) runs only
-                             when this flag names it
+                             'operator-narrowed'. An opt-in operator (swap-workdate-today,
+                             condition-true, blank-argument) runs only when this flag names it
   --exclude-operator <name>  every operator but these contributes mutants (repeatable). Same
                              prefix rule and same flag in the report. An unregistered name is
                              refused, and so is giving --operator as well
