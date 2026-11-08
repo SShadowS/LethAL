@@ -1,4 +1,6 @@
 import type { MutationOperator } from "@lethal/operator-sdk";
+import { blankArgument } from "./blank-argument";
+import { conditionTrue } from "./condition-true";
 import { conditionalBoundary } from "./conditional-boundary";
 import { deleteAdditiveLeft, deleteAdditiveRight } from "./delete-additive-operand";
 import { deleteLogicalLeft, deleteLogicalRight } from "./delete-logical-operand";
@@ -82,4 +84,7 @@ export const tier1Operators: readonly MutationOperator[] = [
   deleteLogicalLeft,
   deleteAdditiveRight,
   deleteAdditiveLeft,
+  // R868, GitHub #36 and #34. OPT-IN (`optIn: true`): a default run never walks them.
+  conditionTrue,
+  blankArgument,
 ];

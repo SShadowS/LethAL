@@ -144,6 +144,8 @@ rather than misleading a reader.
 | `lethal.delete-logical-left` | 1.0.0 | `A or B` → `B` | a clause of a condition no test needs |
 | `lethal.delete-additive-right` | 1.0.0 | `A + B` → `A` | a term of a sum no test checks |
 | `lethal.delete-additive-left` | 1.0.0 | `A + B` → `B` | a term of a sum no test checks |
+| `lethal.condition-true` (opt-in) | 1.0.0 | `A` → `true` | a guard no test drives to false. A survivor means the then-arm is never skipped in a test, or nothing checks that it ran when it should not; name it with `--operator condition-true` |
+| `lethal.blank-argument` (opt-in) | 1.0.0 | `T` → `''` | a value passed to a procedure that no test checks arrived. Name it with `--operator blank-argument`; the callee must be a project procedure that takes the argument by value |
 <!-- /operators: tier1 -->
 
 ### Tier 2 · AL-specific, high value

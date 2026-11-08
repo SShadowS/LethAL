@@ -26,6 +26,25 @@ Full reference: `docs/using-lethal-from-an-agent.md` in the LethAL repository.
   mutant is stopped and scored `timeout-killed`, and the run continues.
 - A report contains the project's source code. Do not paste one into anything public.
 
+## The order
+
+Always this order, and stop at the first step that fails: each step is cheaper than the next, and
+each one catches what would otherwise fail later, after a publish.
+
+1. **Doctor**: is the setup able to run at all? Read-only.
+2. **Dry run**: how big is the job? Executes nothing.
+3. **Scoped run**: one slice of the project. Publishes a changed build.
+4. **Read** the result.
+5. **Restore** the user's own app, after every run that published, failed runs included.
+
+Then, if the user wants it, harden a survivor (step 6).
+
+First time on a project, `lethal init --project <app-dir>` writes a `lethal.config.json` with
+three free object ids from the app's own range; the server, company and login are placeholders the
+user fills in. A config holds credentials: do not read it into the conversation. That config is for
+`bcdev`; an `al-runner-v3` run needs an `alRunnerV3` section instead (the README's "Running without a
+BC server" section has it).
+
 ## 1. Check the setup
 
 ```bash
@@ -33,10 +52,23 @@ lethal doctor --config lethal.config.json --json
 ```
 
 Read-only, seconds, reports every pre-flight problem at once. Exit `0` = all checks passed, `1` =
-at least one failed; branch on `checks[].name`. When it passes, read `notChecked`: the publish
-ceiling and baseline test health are NOT covered by a green report.
+at least one failed. Stdout is one JSON envelope: the report is its `data`, so branch on
+`data.checks[].name`. If `status` is `"error"`, doctor could not run at all: read `error.code` and
+`error.nextSteps`. When it passes, read `data.notChecked`: the publish ceiling and baseline test
+health are NOT covered by a green report.
 
 Fix what it names before running. It is much cheaper than discovering the same problem mid-run.
+
+If it fails, by check:
+
+- `control-version`: the server's LethAL Control app is older than this client needs. Republish it
+  from the LethAL release (the README says how); the client refuses an older one.
+- `quarantine`: an earlier run stopped trusting this server. Fix what that run reported, then
+  `lethal clear-quarantine --config lethal.config.json`.
+- `lease`: another run holds the server. Wait for it. Only when no LethAL run is alive anywhere
+  against that server, `lethal force-reset-lease` frees it; ask the user first.
+- `environment`, `company`, `tool-paths`, `alc-runtime`: the server, the company name, or the AL
+  compiler. Each check's text names what to change.
 
 ## 2. Size the job
 
@@ -46,7 +78,8 @@ lethal run --project <app-dir> --dry-run
 
 Executes nothing. Reports how many mutation sites exist and how many would deploy. An unscoped run
 on a real project is refused by default above 1,000 sites, because it costs days and usually cannot
-publish at all. Expect to scope.
+publish at all. Expect to scope: narrow with `--only "<glob>"` and dry-run again until the count
+is one the user accepts. `--allow-large-run` lifts the refusal; use it only on the user's word.
 
 ## 3. Run a slice
 
@@ -61,8 +94,9 @@ lethal run --project <app-dir> \
            --progress-out events.ndjson
 ```
 
-- `--backend bcdev` is authoritative. `al-runner` is offline and NOT authoritative: its coverage is
-  conditional, so an unreached mutant can come back survived; never quote a score from it.
+- `--backend bcdev` is authoritative. `--backend al-runner-v3` runs offline with no BC server and
+  is NOT authoritative: it is a mock runtime, so never quote a score from it. It publishes nothing,
+  so it needs no restore step.
 - `--only` and `--operator` choose which mutants run and cannot change a verdict. `--tests-only`
   chooses which tests run and CAN: excluding a killing test reports its mutant as survived.
 - Runs take minutes to hours. Do not poll `events.ndjson` in a tight loop; read it when the run
@@ -79,6 +113,18 @@ its own verdicts, not that the tests failed. Do not report verdicts from a quara
 test with a reachable call that may open a TestPage is reported as refused and never sent, whatever
 the saved run recorded for it, and any saved mutant verdict it took part in is scored again
 without it (warning `resume-testpage-rescored`).
+
+If the run fails:
+
+- Exit `3`: read the quarantine reason in the output, fix it, run `lethal clear-quarantine --config
+  lethal.config.json` if the server was quarantined, then run the same command again with
+  `--resume`.
+- Exit `4`: fix the cause the failure notes name, then run again. There is nothing to resume.
+- Exit `1`: the error names the cause. A refusal before the publish leaves the server as it was;
+  after a publish, go to step 5 anyway.
+- A publish refused for size: scope smaller with `--only`. If the server itself changed since,
+  `lethal clear-ceiling --project <app-dir> --config lethal.config.json` forgets the old
+  measurement.
 
 ## 4. Read the result
 
@@ -104,7 +150,18 @@ Prints JSON. Reads only that file: no server, no database, no config.
 For the full record rather than the interpretation, read `report.json` itself
 (`schemaVersion: 3`), and read its `validity` block before quoting anything.
 
-## 5. Harden a survivor
+## 5. Restore the user's app
+
+On `bcdev` the changed build stays published after the run, failed runs included, under a version
+above the app's own. BC then refuses the user's own build at its old version, and unpublishing the
+changed build first does not help. Tell the user, every time:
+
+1. Read the version LethAL printed at the end of the run: `[lethal] the instrumented build is still
+   published as version ...`. It prints it even when the run failed after publishing.
+2. Set the app's `app.json` version above it (the line names the smallest), build, and publish.
+3. Republish the test app, since it depends on the app just replaced.
+
+## 6. Harden a survivor
 
 Write a test that should kill a survivor, then ask `lethal verify` whether it does. LethAL never
 writes the test. Take `artifactId`, `batchIndex` and `mutantCode` from one `explain` survivor row,

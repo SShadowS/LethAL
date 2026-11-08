@@ -127,3 +127,17 @@ them (`campaign freeze` refuses a report with no `coverageMode`).
 3. Run 2, then `campaign compare` against the new baseline. It must match per mutant, with every row's text checked.
 4. Commit: the new baseline, `demo.report.json` and `demo.events.ndjson` from run 1, and the README's measured-result
    section updated to run 1's figures and server.
+
+## Amended 2026-11-07 by R856: the stage is re-frozen at 45 mutants
+
+The operator batch adds three mutants here, all at `CreditLimitMgt` line 37 (`Balance + Outstanding + New`). The
+prediction was committed BEFORE the runs, in `docs/superpowers/specs/2026-11-07-r855-predictions.md` (the credit-limit
+rows) and the batch pre-commitment `docs/superpowers/specs/2026-11-07-r855-operator-batch-precommitment.md`. This stage
+file was amended AFTER the runs, only to carry that prediction here, with no figure changed.
+
+- 42 -> **45** deployed.
+- `delete-additive-right`, `Bal+Out+New -> Bal+Out`: killed (`OrderOverLimitIsBlocked`, also `OpenOrdersCountTowardTheLimit`).
+- `delete-additive-right`, `Bal+Out -> Bal`: killed (`OpenOrdersCountTowardTheLimit`).
+- `delete-additive-left`, `Bal+Out -> Out`: survived (the balance is always 0 in every test).
+- Totals: killed 23 -> **25**, survived 8 -> **9**, no-coverage 11 unchanged. Score 74.2% -> **73.5%** (25 of 34 covered).
+- The 42 existing rows do not change. The first `killingTest` is the predictions file's "least sure" item 5.

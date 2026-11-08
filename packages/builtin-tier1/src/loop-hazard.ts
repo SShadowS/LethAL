@@ -113,7 +113,7 @@ import {
  */
 export type { HangCapableReason };
 
-const LOOP_KINDS: ReadonlySet<string> = new Set([
+export const LOOP_KINDS: ReadonlySet<string> = new Set([
   ALNodeKind.while_statement,
   ALNodeKind.repeat_statement,
 ]);
@@ -130,7 +130,7 @@ const SCOPE_KINDS: ReadonlySet<string> = new Set([ALNodeKind.procedure, ALNodeKi
 /** R302: a walk stops at a `SCOPE_KINDS` node or a split-header member (`isProcedureLike`). Nothing
  *  encloses a member, so no test can tell the split-member stop from its absence (red-checked:
  *  the hang tag inside a split member rests on `resolveVarRef`, i.e. `findEnclosingProcedure`). */
-function isScope(n: ALSyntaxNode): boolean {
+export function isScope(n: ALSyntaxNode): boolean {
   return SCOPE_KINDS.has(n.kind) || isProcedureLike(n);
 }
 
@@ -325,7 +325,7 @@ function readsClock(n: ALSyntaxNode): boolean {
 
 /** Per-context, per-file memo. The file root is a stable object (the arm map is keyed by it). */
 const memo = new WeakMap<object, WeakMap<ALSyntaxNode, Map<string, unknown>>>();
-function cached<T>(ctx: SemanticContext, n: ALSyntaxNode, tag: string, f: () => T): T {
+export function cached<T>(ctx: SemanticContext, n: ALSyntaxNode, tag: string, f: () => T): T {
   let byRoot = memo.get(ctx);
   if (byRoot === undefined) {
     byRoot = new WeakMap();
@@ -346,7 +346,7 @@ function cached<T>(ctx: SemanticContext, n: ALSyntaxNode, tag: string, f: () => 
 
 /** The object declaration holding `n`: the ancestor whose parent is an object container (the file
  *  root, or an R298 `preproc_conditional_object` wrapper). */
-function objectOf(n: ALSyntaxNode): ALSyntaxNode | null {
+export function objectOf(n: ALSyntaxNode): ALSyntaxNode | null {
   let cur: ALSyntaxNode = n;
   while (cur.parent !== null && !isObjectContainer(cur.parent)) cur = cur.parent;
   return cur.parent === null ? null : cur;
@@ -357,7 +357,7 @@ function objectOf(n: ALSyntaxNode): ALSyntaxNode | null {
 const procNames = (p: ALSyntaxNode): string[] => procedureLikeArmNames(p).map(normalizeAlName);
 
 /** The callee name of a same-object call shape (`P()`, `P;`, `this.P()`), or null. */
-function bareCallee(n: ALSyntaxNode): string | null {
+export function bareCallee(n: ALSyntaxNode): string | null {
   if (n.rawKind !== "call_expression" && n.rawKind !== "call_statement") return null;
   const f = n.childForFieldName("function");
   if (f === null) return null;
@@ -683,7 +683,7 @@ function unconditional(call: ALSyntaxNode, trigger: ALSyntaxNode): boolean {
   return !exitBefore;
 }
 
-function visitAll(n: ALSyntaxNode, f: (n: ALSyntaxNode) => void): void {
+export function visitAll(n: ALSyntaxNode, f: (n: ALSyntaxNode) => void): void {
   f(n);
   for (const c of n.namedChildren) visitAll(c, f);
 }
@@ -919,7 +919,7 @@ export function openItemHangRefuses(
 const STEP_METHODS: ReadonlySet<string> = new Set(["next", "read", "movenext"]);
 
 /** The name a receiver or an element is read through: `Buf` of `Buf[1]`, `A` of `A.B[1]`. */
-function baseNameOf(n: ALSyntaxNode | null): string | null {
+export function baseNameOf(n: ALSyntaxNode | null): string | null {
   let cur = n;
   while (cur !== null) {
     if (isIdentifierLike(cur)) return normalizeAlName(cur.text);
@@ -930,7 +930,7 @@ function baseNameOf(n: ALSyntaxNode | null): string | null {
 }
 
 /** Every procedure-like node of an object, by name. */
-function procsByName(obj: ALSyntaxNode, ctx: SemanticContext): Map<string, ALSyntaxNode[]> {
+export function procsByName(obj: ALSyntaxNode, ctx: SemanticContext): Map<string, ALSyntaxNode[]> {
   return cached(ctx, obj, "procsByName", () => {
     const out = new Map<string, ALSyntaxNode[]>();
     visitAll(obj, (x) => {
@@ -943,7 +943,7 @@ function procsByName(obj: ALSyntaxNode, ctx: SemanticContext): Map<string, ALSyn
 
 /** R830: the same-object procedure `n` calls: `bareCallee`, `hiddenCallee`, or `Rec.P()`. An option
  *  value (`S::Flag`) is not a call, even when a procedure has its name. */
-function calleeOf(
+export function calleeOf(
   n: ALSyntaxNode,
   names: ReadonlySet<string>,
   ctx: SemanticContext,
@@ -962,7 +962,7 @@ function calleeOf(
 
 /** What code does to names outside it, by name (R830). Any name the code does not declare counts:
  *  a global, one declared inside `#if`, a field of the implicit record. The safe direction. */
-interface CallEffect {
+export interface CallEffect {
   /** Names assigned, a `for` control variable, called on, or passed to a call. */
   readonly writes: Set<string>;
   /** Names read at all. */
@@ -981,7 +981,7 @@ const noEffect = (): CallEffect => ({
 });
 
 /** One procedure's own effect, its calls not followed. */
-function procEffect(proc: ALSyntaxNode, ctx: SemanticContext): CallEffect {
+export function procEffect(proc: ALSyntaxNode, ctx: SemanticContext): CallEffect {
   return cached(ctx, proc, "callEffect", () => {
     const effect = noEffect();
     const body = proc.namedChildren.find((c) => c.rawKind === "code_block") ?? null;
@@ -1029,7 +1029,7 @@ function procEffect(proc: ALSyntaxNode, ctx: SemanticContext): CallEffect {
 
 /** The effect of calling `start`, its same-object chain followed with no hop limit. Cached per object
  *  and name, because a site asks it once per loop and per name its exit parts call. */
-function chainEffect(start: string, obj: ALSyntaxNode, ctx: SemanticContext): CallEffect {
+export function chainEffect(start: string, obj: ALSyntaxNode, ctx: SemanticContext): CallEffect {
   return cached(ctx, obj, `chain|${start}`, () => {
     const effect = noEffect();
     const byName = procsByName(obj, ctx);
@@ -1051,7 +1051,7 @@ function chainEffect(start: string, obj: ALSyntaxNode, ctx: SemanticContext): Ca
 }
 
 /** What `loop`'s exit parts read and step, through their own same-object calls (`until Done()`). */
-function exitEffect(
+export function exitEffect(
   loop: ALSyntaxNode,
   ctx: SemanticContext,
 ): { readonly read: Set<string>; readonly steps: Set<string> } {
@@ -1412,7 +1412,7 @@ function r531ObjectProcs(n: ALSyntaxNode, ctx: SemanticContext): Set<string> {
 }
 
 /** Is `name` declared in `scope`'s header: a local variable, or (with `params`) a parameter? */
-function r531Declares(scope: ALSyntaxNode | null, name: string, params: boolean): boolean {
+export function r531Declares(scope: ALSyntaxNode | null, name: string, params: boolean): boolean {
   if (scope === null || name === "") return false;
   let hit = false;
   const walk = (n: ALSyntaxNode): void => {
@@ -6876,7 +6876,7 @@ function objectNameIndex(ctx: SemanticContext): Map<string, ALSyntaxNode[]> {
 }
 
 /** Every procedure name an object declares (all arm names). */
-function procedureNamesOf(o: ALSyntaxNode, ctx: SemanticContext): Set<string> {
+export function procedureNamesOf(o: ALSyntaxNode, ctx: SemanticContext): Set<string> {
   return cached(ctx, o, "procnames", () => {
     const names = new Set<string>();
     visitAll(o, (n) => {

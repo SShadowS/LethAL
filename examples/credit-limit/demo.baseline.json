@@ -1,6 +1,6 @@
 {
   "coverageMode": "fenced",
-  "identityScheme": 41,
+  "identityScheme": 45,
   "entries": [
     {
       "key": "04c16e4cdac9d33ab09faebdeab049964ff5d1b5fe7b3e9ca2100ca2437cd5ce|Credit Limit Mgt|WouldExceedLimit|lethal.negate-conditional|1",
@@ -9,6 +9,22 @@
       "coverageFiltered": false,
       "errorClass": null,
       "mutatedTextSha256": "d85b766cb4ff2ce2f00c0320880b630dfe915a97ed406795cb496799fd604fad"
+    },
+    {
+      "key": "06a0f2d956eb3ce3e1f11d20af8721098527f1893baa3fd35ae1bd88a9c17489|Credit Limit Mgt|WouldExceedLimit|lethal.delete-additive-left|1",
+      "verdict": "survived",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "4e19a6ca38f7779e362a2594864951d0d93713c0fe5cd9a0b7df9ac4d5b73ab9"
+    },
+    {
+      "key": "06a0f2d956eb3ce3e1f11d20af8721098527f1893baa3fd35ae1bd88a9c17489|Credit Limit Mgt|WouldExceedLimit|lethal.delete-additive-right|1",
+      "verdict": "killed",
+      "killingTest": "OpenOrdersCountTowardTheLimit",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "e39247874f4f378e8035cd03191bb4899a58a31999a37bd72559e5ff7ed2975b"
     },
     {
       "key": "06a0f2d956eb3ce3e1f11d20af8721098527f1893baa3fd35ae1bd88a9c17489|Credit Limit Mgt|WouldExceedLimit|lethal.swap-additive|1",
@@ -249,6 +265,14 @@
       "coverageFiltered": false,
       "errorClass": null,
       "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "bf630046c230c68c3f7a76b972b3ef329514fb18459732de0bd8096c5da4a85a|Credit Limit Mgt|WouldExceedLimit|lethal.delete-additive-right|1",
+      "verdict": "killed",
+      "killingTest": "OpenOrdersCountTowardTheLimit",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "8d586f7879f37f18350503e4c81cfcaf922853d93e716153ca9b2f562f259b6a"
     },
     {
       "key": "bf630046c230c68c3f7a76b972b3ef329514fb18459732de0bd8096c5da4a85a|Credit Limit Mgt|WouldExceedLimit|lethal.swap-additive|1",

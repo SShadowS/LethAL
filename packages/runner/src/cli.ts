@@ -56,6 +56,14 @@ import {
   runCampaignCompare,
   runCampaignFreeze,
 } from "./campaign-subcommands";
+import {
+  CONFIGURATION_ERROR,
+  INVALID_ARGUMENT,
+  classify,
+  cliError,
+  cliOk,
+  wantsEnvelope,
+} from "./cli-envelope";
 import { DeploymentVerifier } from "./deployment-verifier";
 import { ENV_STATUS_REACHABLE_NO_VENDOR_STATUS, runDoctor } from "./doctor";
 import type {
@@ -993,8 +1001,8 @@ RUN — scope. These bound cost. --tests-only can change a verdict; the others c
   --operator <name>          only these operators contribute mutants (repeatable). The 'lethal.'
                              prefix is optional; an unregistered name, or a registered one with no
                              deployable site here, is refused. The report flags it
-                             'operator-narrowed'. An opt-in operator (swap-workdate-today) runs only
-                             when this flag names it
+                             'operator-narrowed'. An opt-in operator (swap-workdate-today,
+                             condition-true, blank-argument) runs only when this flag names it
   --exclude-operator <name>  every operator but these contributes mutants (repeatable). Same
                              prefix rule and same flag in the report. An unregistered name is
                              refused, and so is giving --operator as well
@@ -5207,27 +5215,38 @@ export async function doctorFromCli(
     readonly alcSpawn?: SpawnFn;
   } = {},
 ): Promise<number> {
-  const configFile = await loadLethalConfigFile(parsed.configPath);
+  // R870: a config that cannot be read or used is the envelope's CONFIGURATION_ERROR. The mark is
+  // invisible: the error's name, text and exit code stay as they were.
   const {
     cfg,
     deps: doctorDeps,
     caveat,
-  } = await buildDoctorDeps(configFile, {
-    ...(parsed.projectDir !== undefined ? { projectDir: parsed.projectDir } : {}),
-    ...(parsed.testsDir !== undefined ? { testsDir: parsed.testsDir } : {}),
-    ...(deps.alcSpawn !== undefined ? { alcSpawn: deps.alcSpawn } : {}),
-    ...(deps.quarantineDir !== undefined ? { quarantineDir: deps.quarantineDir } : {}),
-    ...(deps.alToolPaths !== undefined ? { alToolPaths: deps.alToolPaths } : {}),
-    ...(deps.fetchFn !== undefined ? { fetchFn: deps.fetchFn } : {}),
-    ...(deps.makeEnvToolClient !== undefined ? { makeEnvToolClient: deps.makeEnvToolClient } : {}),
-    ...(deps.alRunnerSpawn !== undefined ? { alRunnerSpawn: deps.alRunnerSpawn } : {}),
-  });
+  } = await (async () => {
+    try {
+      const configFile = await loadLethalConfigFile(parsed.configPath);
+      return await buildDoctorDeps(configFile, {
+        ...(parsed.projectDir !== undefined ? { projectDir: parsed.projectDir } : {}),
+        ...(parsed.testsDir !== undefined ? { testsDir: parsed.testsDir } : {}),
+        ...(deps.alcSpawn !== undefined ? { alcSpawn: deps.alcSpawn } : {}),
+        ...(deps.quarantineDir !== undefined ? { quarantineDir: deps.quarantineDir } : {}),
+        ...(deps.alToolPaths !== undefined ? { alToolPaths: deps.alToolPaths } : {}),
+        ...(deps.fetchFn !== undefined ? { fetchFn: deps.fetchFn } : {}),
+        ...(deps.makeEnvToolClient !== undefined
+          ? { makeEnvToolClient: deps.makeEnvToolClient }
+          : {}),
+        ...(deps.alRunnerSpawn !== undefined ? { alRunnerSpawn: deps.alRunnerSpawn } : {}),
+      });
+    } catch (err) {
+      throw classify(err, CONFIGURATION_ERROR);
+    }
+  })();
   const report = await runDoctor(cfg, doctorDeps);
   // R151: the JSON is the same object, not a second account of it — `doctorJson` reads the report
-  // `renderDoctorReport` renders, so the two cannot disagree about whether a check passed.
+  // `renderDoctorReport` renders, so the two cannot disagree about whether a check passed. R870:
+  // under --json it is the envelope's `data`; a failed check is a result, so the status is "ok".
   console.log(
     parsed.json === true
-      ? JSON.stringify(doctorJson(report, caveat), null, 2)
+      ? JSON.stringify(cliOk(doctorJson(report, caveat)), null, 2)
       : renderDoctorReport(report, caveat),
   );
   return report.ok ? 0 : 1;
@@ -5517,7 +5536,8 @@ export async function campaignFromCli(parsed: CampaignCliConfig): Promise<number
   if (parsed.json === true) {
     // R355: the document goes to stdout alone, so the human lines move to stderr.
     const result = await compareCampaignStage({ ...base, log: (l) => console.error(l) });
-    console.log(JSON.stringify(result, null, 2));
+    // R870: the result is the envelope's `data`; a stage that differs is a result, so "ok".
+    console.log(JSON.stringify(cliOk(result), null, 2));
     return result.identical ? 0 : 1;
   }
   return await runCampaignCompare(base);
@@ -5795,7 +5815,13 @@ export function dryRunDependencyPackageDirs(
 }
 
 async function main(): Promise<number> {
-  const parsed = parseCliConfig(process.argv.slice(2));
+  const parsed = (() => {
+    try {
+      return parseCliConfig(process.argv.slice(2));
+    } catch (err) {
+      throw classify(err, INVALID_ARGUMENT); // R870
+    }
+  })();
   if (parsed.mode === "help") {
     console.log(helpText(LETHAL_VERSION));
     return 0;
@@ -5865,6 +5891,11 @@ if (import.meta.main) {
       // So: the message by default, the stack behind LETHAL_DEBUG=1, and a line saying so, because
       // an unexplained absence of detail is its own problem when someone is filing a bug. Nothing
       // is swallowed and the exit code does not move.
+      // R870: under --json the failure is also stdout's one envelope; stderr and the exit code are
+      // what they always were.
+      if (wantsEnvelope(process.argv.slice(2))) {
+        console.log(JSON.stringify(cliError(err), null, 2));
+      }
       if (!(err instanceof Error)) {
         console.error(String(err));
         process.exit(1);
