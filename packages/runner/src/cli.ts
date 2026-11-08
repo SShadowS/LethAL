@@ -56,6 +56,14 @@ import {
   runCampaignCompare,
   runCampaignFreeze,
 } from "./campaign-subcommands";
+import {
+  CONFIGURATION_ERROR,
+  INVALID_ARGUMENT,
+  classify,
+  cliError,
+  cliOk,
+  wantsEnvelope,
+} from "./cli-envelope";
 import { DeploymentVerifier } from "./deployment-verifier";
 import { ENV_STATUS_REACHABLE_NO_VENDOR_STATUS, runDoctor } from "./doctor";
 import type {
@@ -549,6 +557,11 @@ export interface RunCliConfig {
   readonly stopHungSessions?: boolean;
   /** R762: `--fresh-probe`, al-runner-v3 only: run the contract probe instead of replaying a cached pass. */
   readonly freshProbe?: boolean;
+  /**
+   * R866: `--workers <n>` given with `--isolate-tests`: how many baseline processes run at a time.
+   * Kept apart from `workers`, whose default of 1 cannot tell "not given" from `--workers 1`.
+   */
+  readonly baselineProcesses?: number;
   /** R857: `--isolate-tests`, al-runner-v3 only: every test runs alone. Off by default. */
   readonly isolateTests?: boolean;
   /**
@@ -988,8 +1001,8 @@ RUN — scope. These bound cost. --tests-only can change a verdict; the others c
   --operator <name>          only these operators contribute mutants (repeatable). The 'lethal.'
                              prefix is optional; an unregistered name, or a registered one with no
                              deployable site here, is refused. The report flags it
-                             'operator-narrowed'. An opt-in operator (swap-workdate-today) runs only
-                             when this flag names it
+                             'operator-narrowed'. An opt-in operator (swap-workdate-today,
+                             condition-true, blank-argument) runs only when this flag names it
   --exclude-operator <name>  every operator but these contributes mutants (repeatable). Same
                              prefix rule and same flag in the report. An unregistered name is
                              refused, and so is giving --operator as well
@@ -1044,8 +1057,9 @@ RUN — cost and recovery
                              (env LETHAL_V3_SPECULATE_BASELINE=1: run the baseline while alc proves the batch, R790; off by default)
   --isolate-tests            al-runner-v3 only, off by default: run every test alone, so nothing
                              an earlier test of its codeunit left reaches it. Slower: one process
-                             per test at the baseline. Needs the serve-entries transport. A run
-                             with it and a run without it never share verdicts (R857)
+                             per test at the baseline, four at a time, or --workers <n> at a time,
+                             so allow memory for that many. Needs the serve-entries transport. A run with it and a run without
+                             it never share verdicts (R857, R866)
   --resume                   continue the most recent unfinished run in --db, reusing its verdicts
   --resume-run <id>          resume a specific run id
   --retry-stranded           on resume, retry mutants that left the server stuck (skipped by default:
@@ -2283,6 +2297,9 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     ...(values["stop-hung-sessions"] === true ? { stopHungSessions: true } : {}),
     ...(values["fresh-probe"] === true ? { freshProbe: true } : {}),
     ...(values["isolate-tests"] === true ? { isolateTests: true } : {}),
+    ...(values["isolate-tests"] === true && values.workers !== undefined
+      ? { baselineProcesses: workers }
+      : {}),
     ...(values["progress-out"] !== undefined ? { progressOutPath: values["progress-out"] } : {}),
   };
 }
@@ -2973,7 +2990,7 @@ export type BackendInputs = Pick<
   RunCliConfig,
   "backendKind" | "projectDir" | "testDir" | "stopHungSessions"
 > &
-  Partial<Pick<RunCliConfig, "freshProbe" | "isolateTests">> &
+  Partial<Pick<RunCliConfig, "freshProbe" | "isolateTests" | "baselineProcesses">> &
   // R505: the run's own output files, which the source-drift watch must not count.
   Partial<Pick<RunCliConfig, "dbPath" | "outPath" | "progressOutPath">>;
 
@@ -3052,6 +3069,9 @@ async function buildAlRunnerV3Backend(
         : {}),
       ...(parsed.freshProbe === true ? { freshProbe: true } : {}),
       ...(parsed.isolateTests === true ? { isolateTests: true } : {}),
+      ...(parsed.baselineProcesses !== undefined
+        ? { isolatedBaselineProcesses: parsed.baselineProcesses }
+        : {}),
       ...(c.cacheDir !== undefined ? { cacheDir: c.cacheDir } : {}),
       ...(deps.preprocessorSymbols.length > 0
         ? { preprocessorSymbols: deps.preprocessorSymbols }
@@ -5195,27 +5215,38 @@ export async function doctorFromCli(
     readonly alcSpawn?: SpawnFn;
   } = {},
 ): Promise<number> {
-  const configFile = await loadLethalConfigFile(parsed.configPath);
+  // R870: a config that cannot be read or used is the envelope's CONFIGURATION_ERROR. The mark is
+  // invisible: the error's name, text and exit code stay as they were.
   const {
     cfg,
     deps: doctorDeps,
     caveat,
-  } = await buildDoctorDeps(configFile, {
-    ...(parsed.projectDir !== undefined ? { projectDir: parsed.projectDir } : {}),
-    ...(parsed.testsDir !== undefined ? { testsDir: parsed.testsDir } : {}),
-    ...(deps.alcSpawn !== undefined ? { alcSpawn: deps.alcSpawn } : {}),
-    ...(deps.quarantineDir !== undefined ? { quarantineDir: deps.quarantineDir } : {}),
-    ...(deps.alToolPaths !== undefined ? { alToolPaths: deps.alToolPaths } : {}),
-    ...(deps.fetchFn !== undefined ? { fetchFn: deps.fetchFn } : {}),
-    ...(deps.makeEnvToolClient !== undefined ? { makeEnvToolClient: deps.makeEnvToolClient } : {}),
-    ...(deps.alRunnerSpawn !== undefined ? { alRunnerSpawn: deps.alRunnerSpawn } : {}),
-  });
+  } = await (async () => {
+    try {
+      const configFile = await loadLethalConfigFile(parsed.configPath);
+      return await buildDoctorDeps(configFile, {
+        ...(parsed.projectDir !== undefined ? { projectDir: parsed.projectDir } : {}),
+        ...(parsed.testsDir !== undefined ? { testsDir: parsed.testsDir } : {}),
+        ...(deps.alcSpawn !== undefined ? { alcSpawn: deps.alcSpawn } : {}),
+        ...(deps.quarantineDir !== undefined ? { quarantineDir: deps.quarantineDir } : {}),
+        ...(deps.alToolPaths !== undefined ? { alToolPaths: deps.alToolPaths } : {}),
+        ...(deps.fetchFn !== undefined ? { fetchFn: deps.fetchFn } : {}),
+        ...(deps.makeEnvToolClient !== undefined
+          ? { makeEnvToolClient: deps.makeEnvToolClient }
+          : {}),
+        ...(deps.alRunnerSpawn !== undefined ? { alRunnerSpawn: deps.alRunnerSpawn } : {}),
+      });
+    } catch (err) {
+      throw classify(err, CONFIGURATION_ERROR);
+    }
+  })();
   const report = await runDoctor(cfg, doctorDeps);
   // R151: the JSON is the same object, not a second account of it — `doctorJson` reads the report
-  // `renderDoctorReport` renders, so the two cannot disagree about whether a check passed.
+  // `renderDoctorReport` renders, so the two cannot disagree about whether a check passed. R870:
+  // under --json it is the envelope's `data`; a failed check is a result, so the status is "ok".
   console.log(
     parsed.json === true
-      ? JSON.stringify(doctorJson(report, caveat), null, 2)
+      ? JSON.stringify(cliOk(doctorJson(report, caveat)), null, 2)
       : renderDoctorReport(report, caveat),
   );
   return report.ok ? 0 : 1;
@@ -5505,7 +5536,8 @@ export async function campaignFromCli(parsed: CampaignCliConfig): Promise<number
   if (parsed.json === true) {
     // R355: the document goes to stdout alone, so the human lines move to stderr.
     const result = await compareCampaignStage({ ...base, log: (l) => console.error(l) });
-    console.log(JSON.stringify(result, null, 2));
+    // R870: the result is the envelope's `data`; a stage that differs is a result, so "ok".
+    console.log(JSON.stringify(cliOk(result), null, 2));
     return result.identical ? 0 : 1;
   }
   return await runCampaignCompare(base);
@@ -5783,7 +5815,13 @@ export function dryRunDependencyPackageDirs(
 }
 
 async function main(): Promise<number> {
-  const parsed = parseCliConfig(process.argv.slice(2));
+  const parsed = (() => {
+    try {
+      return parseCliConfig(process.argv.slice(2));
+    } catch (err) {
+      throw classify(err, INVALID_ARGUMENT); // R870
+    }
+  })();
   if (parsed.mode === "help") {
     console.log(helpText(LETHAL_VERSION));
     return 0;
@@ -5853,6 +5891,11 @@ if (import.meta.main) {
       // So: the message by default, the stack behind LETHAL_DEBUG=1, and a line saying so, because
       // an unexplained absence of detail is its own problem when someone is filing a bug. Nothing
       // is swallowed and the exit code does not move.
+      // R870: under --json the failure is also stdout's one envelope; stderr and the exit code are
+      // what they always were.
+      if (wantsEnvelope(process.argv.slice(2))) {
+        console.log(JSON.stringify(cliError(err), null, 2));
+      }
       if (!(err instanceof Error)) {
         console.error(String(err));
         process.exit(1);

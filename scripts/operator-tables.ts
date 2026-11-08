@@ -97,9 +97,13 @@ function blockFor(marker: string, blurbs: Record<string, string>): string {
   if (marker === "tier2") return tableFor(tier2Operators, blurbs);
   // Issue #44: the counts in README prose come from the same registry as the tables.
   // R856: the totals are the DEFAULT set; opt-in operators (named with --operator) are added after.
-  const optIn = tier2Operators.filter((o) => o.optIn === true).length;
-  const t1 = tier1Operators.length;
-  const t2 = tier2Operators.length - optIn;
+  // R868: opt-in operators sit in either tier (condition-true and blank-argument are Tier 1), so
+  // each tier's default count drops its own opt-ins and the "plus" counts both.
+  const optIn1 = tier1Operators.filter((o) => o.optIn === true).length;
+  const optIn2 = tier2Operators.filter((o) => o.optIn === true).length;
+  const optIn = optIn1 + optIn2;
+  const t1 = tier1Operators.length - optIn1;
+  const t2 = tier2Operators.length - optIn2;
   const plus = optIn === 0 ? "" : `, plus ${optIn} opt-in (run only when --operator names it)`;
   if (marker === "summary") return `${t1 + t2} operators, in two tiers${plus}`;
   if (marker === "limits") {
