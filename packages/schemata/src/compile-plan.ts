@@ -236,7 +236,7 @@ function injectReachLatches(
     const begin = body?.children[0];
     if (owner === null || begin === undefined) {
       throw new FileRefusedError(
-        `compileSchemataForFile: cannot instrument ${filePath}: a reach marker sits outside any procedure or trigger body, so its latch \`${REACH_LATCH}\` has nowhere to be declared. No known shape reaches here: every procedure, both split-header procedure shapes and every trigger own their body (R301, R316).`,
+        `compileSchemataForFile: cannot instrument ${filePath}: a reach marker sits outside any procedure or trigger body, so its latch \`${REACH_LATCH}\` has nowhere to be declared. No known shape reaches here: every procedure, both split-header procedure shapes and every trigger own their body (R301, R316). A trigger whose header and var section are both #if-split parses as preproc_split_trigger_preamble since tree-sitter-al 4.6.0; \`reachLatchRefusedOwner\` refuses that member before this walk, so no marker reaches here (R877).`,
         { site: "compile.latch-owner", ...refusal(filePath, "latch-owner", c.root) },
       );
     }
