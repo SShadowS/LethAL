@@ -365,12 +365,6 @@ const LAGGING_SCHEME: Readonly<Record<string, string>> = {
   // A bare array (no scheme at all): the env tool is host-only.
   "envtool.baseline.json": "R683",
   // Scheme 46: re-recorded live under R871 (R865's bump).
-  "al-runner-v3.layout.baseline.json": "R871",
-  "al-runner-v3.multiobject.baseline.json": "R871",
-  "al-runner-v3.symbols-lethala.baseline.json": "R871",
-  "al-runner-v3.symbols-lethalb.baseline.json": "R871",
-  "al-runner-v3.tables.baseline.json": "R871",
-  "al-runner-v3.wrapped.baseline.json": "R871",
   "bcdev.baseline.json": "R871",
   "bcdev.names.baseline.json": "R871",
   "bcdev.wrapped.baseline.json": "R871",
