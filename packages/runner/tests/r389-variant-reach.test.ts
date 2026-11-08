@@ -815,8 +815,8 @@ describe("R-389 re-review (sol): namespaces and this", () => {
     (e) => ({
       ...base(e),
       "TIBase.al": `namespace Tests;\n\ninterface "IBase"\n{\n}\n`,
-      // tree-sitter-al does not parse a qualified name in `implements` (parse damage, so every
-      // digest falls back), so the dependency's IDerived is reached through `using`.
+      // The dependency's IDerived is reached through `using`. tree-sitter-al before 4.6.0 did not
+      // parse a qualified name in `implements` (#36); this scenario keeps the `using` form.
       "Dep.al": `namespace Tests;\n\nusing Dep;\n\ncodeunit 50170 "DepMock" implements "IDerived"\n{\n    procedure Go()\n    begin\n${at(e, "impl")}    end;\n}\n`,
       "T.al": `${testNs}${testUnit(
         proc(

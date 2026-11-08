@@ -26,12 +26,12 @@ export interface NativeBinding {
 }
 
 export const GRAMMAR_PIN = {
-  grammarVersion: "4.5.0",
+  grammarVersion: "4.6.0",
   treeSitterVersion: "0.25.10",
   languageAbi: 15,
-  kindTableSha256: "89f63dca1b8b264e98377cea43e2c5e6b1d07d025c620456579c75ee0e7f9606",
+  kindTableSha256: "428550fc4464f66b4e8d5deccd1187e14e04728476101a9d022acbf3af9e7da2",
   grammarInputs:
-    "parser.c:7f2becdd85c9e458ab32462747b7d65ef28ce9e3142cd7247e015062e942c3eb;scanner.c:dece4630b6fb2e39e1407f23c1ec80f39313f6d70a6b14caf93ef04a576ccd1b",
+    "parser.c:3e952db225bd486f2ede16d00005d62c29b39551a68b1fc5f73eb55b925c4953;scanner.c:c1df8c0eb5e417eeb0fb5bcb29ba6eba5f84c754d506dfea00411dd5381cac33",
 } as const;
 
 export class NativeParserMissingError extends Error {

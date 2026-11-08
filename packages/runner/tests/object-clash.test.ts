@@ -453,3 +453,29 @@ describe("R843: ObjectClashError", () => {
     expect(m).not.toContain("before anything is published");
   });
 });
+
+describe("R861: a tableextension that extends by id is compared on the table's name", () => {
+  const TABLE_AL = 'table 50110 "Tmpl"\n{\n    fields { field(1; "No."; Code[20]) { } }\n}\n';
+  const extAl = (base: string) =>
+    `tableextension 50111 E extends ${base}\n{\n    fields { field(5; Mine; Integer) { } }\n}\n`;
+  const ownerOf = async (base: string): Promise<string | undefined> => {
+    await initParser();
+    const read = declaredObjectsOfSource(
+      [
+        { path: "T.al", text: TABLE_AL },
+        { path: "E.al", text: extAl(base) },
+      ],
+      [],
+    );
+    return read.members.find((m) => m.id === 5)?.ownerName;
+  };
+  test("resolved (`extends 50110`): the owner is the table's name (red: the id is the owner)", async () => {
+    expect(await ownerOf("50110")).toBe("Tmpl");
+  });
+  test("unresolved (`extends 18`): stays the number, a named LIMIT (no name to compare on)", async () => {
+    expect(await ownerOf("18")).toBe("18");
+  });
+  test("a plain name (control)", async () => {
+    expect(await ownerOf("Tmpl")).toBe("Tmpl");
+  });
+});

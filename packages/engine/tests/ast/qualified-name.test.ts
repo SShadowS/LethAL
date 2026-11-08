@@ -59,4 +59,25 @@ describe("qualified names", () => {
     expect(fieldSegments(y, "no_such_field")).toEqual([]);
     expect(lastFieldChild(y, "no_such_field")).toBeNull();
   });
+
+  // tree-sitter-al 4.6.0 (#36): a dotted `extends` is ONE `qualified_name` child of `base_object`.
+  it("a qualified_name in the field is read as its segments: dotted, plain and a number", () => {
+    const ext = (base: string): ALSyntaxNode => {
+      const [obj] = wrapRoot(
+        parseAL(`tableextension 50000 X extends ${base}\n{\n}\n`),
+      ).namedChildren;
+      if (obj === undefined) throw new Error("an object expected");
+      return obj;
+    };
+    const dotted = ext('My.Ns."Sales Header"');
+    expect(dotted.childForFieldName("base_object")?.rawKind).toBe("qualified_name");
+    expect(fieldSegments(dotted, "base_object")).toEqual(["My", "Ns", "Sales Header"]);
+    expect(lastFieldChild(dotted, "base_object")?.text).toBe('"Sales Header"');
+    const plain = ext("Customer");
+    expect(fieldSegments(plain, "base_object")).toEqual(["Customer"]);
+    expect(lastFieldChild(plain, "base_object")?.text).toBe("Customer");
+    const id = ext("18");
+    expect(lastFieldChild(id, "base_object")?.rawKind).toBe("integer");
+    expect(fieldSegments(id, "base_object")).toEqual(["18"]);
+  });
 });

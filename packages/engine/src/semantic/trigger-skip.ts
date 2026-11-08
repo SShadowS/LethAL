@@ -1,11 +1,17 @@
 import { argumentList } from "../ast/arguments";
 import { ALNodeKind } from "../ast/node-kinds";
+import { lastFieldChild } from "../ast/qualified-name";
 import { type ALSyntaxNode, visit } from "../ast/syntax-node";
 import { liveMembers } from "../ast/tree-walks";
 import { type NodeArm, type SemanticContext, armOfNode, rawArmOf } from "./context";
 import { claimsRecordMethod, claimsSystemCall, resolveReceiverTable } from "./receiver";
 import { resolveVarRef } from "./resolve-var-ref";
-import { type ObjectSymbol, type SymbolTable, triggerLocalNames } from "./symbol-table";
+import {
+  type ObjectSymbol,
+  type SymbolTable,
+  resolveNumericBase,
+  triggerLocalNames,
+} from "./symbol-table";
 
 /**
  * R281's SKIP-direction detector, MOVED here from `builtin-tier2/src/forced-trigger-raise.ts`
@@ -198,7 +204,15 @@ function procedureNamesOn(table: ObjectSymbol, symbols: SymbolTable): ReadonlySe
   const owners = [
     table.node,
     ...symbols.tableExtensions
-      .filter((e) => e.baseObject.toLowerCase() === table.name.toLowerCase())
+      .filter((e) => {
+        // R861: a numeric base resolves by id; an unresolved one may extend any table (kept: tags)
+        const base = resolveNumericBase(
+          symbols.objects.filter((o) => o.kind === "table").map((o) => o.node),
+          "table_declaration",
+          e.baseObject,
+        );
+        return "unresolved" in base || base.name.toLowerCase() === table.name.toLowerCase();
+      })
       .map((e) => e.node),
   ];
   for (const owner of owners) {
@@ -223,14 +237,18 @@ function procedureNamesOn(table: ObjectSymbol, symbols: SymbolTable): ReadonlySe
 }
 
 /**
- * R502: an extension header with an ERROR right beside its `base_object`: a qualified `extends`.
- * Error recovery puts the ERROR on either side (measured: `base_object` was the first segment in
- * one file and the last in another), so both neighbours are read.
+ * R502: a qualified `extends`. tree-sitter-al 4.6.0 gives the dotted name as one `qualified_name`
+ * `base_object`; 4.5.0 gave one segment beside an ERROR, on either side, so that test is kept.
  */
 function hasQualifiedBase(extension: ALSyntaxNode): boolean {
   const kids = extension.children;
   const at = kids.findIndex((c) => c.fieldName === "base_object");
-  return at >= 0 && (kids[at - 1]?.rawKind === "ERROR" || kids[at + 1]?.rawKind === "ERROR");
+  return (
+    at >= 0 &&
+    (kids[at]?.rawKind === "qualified_name" ||
+      kids[at - 1]?.rawKind === "ERROR" ||
+      kids[at + 1]?.rawKind === "ERROR")
+  );
 }
 
 /** Does the project subscribe to this table's `kind` events, or extend its `kind` triggers?
@@ -250,7 +268,8 @@ function projectObserves(
     // under a name that may be the wrong table's, and it could be the one this table's tag depends
     // on. It keeps the tag, for every table.
     if (hasQualifiedBase(ext.node)) return true;
-    if (ext.baseObject.toLowerCase() !== tableName) continue;
+    const extBase = ext.baseObject.toLowerCase();
+    if (extBase !== tableName && extBase !== String(table.id)) continue;
     if (armOfNode(ctx, ext.node) === "undecided") return true;
     for (const t of extensionTriggers) {
       if (findTableTrigger(ext.node, t, armOf) !== null) return true;
@@ -279,7 +298,7 @@ function projectObserves(
     if (opaque) {
       if (textObserves(n, unindexedText, tableName, table.id)) return true;
     } else if (n.rawKind === TABLEEXTENSION_DECLARATION) {
-      const base = n.childForFieldName("base_object")?.text.replace(/"/g, "").toLowerCase();
+      const base = lastFieldChild(n, "base_object")?.text.replace(/"/g, "").toLowerCase();
       if (base === undefined || names.has(base)) return true;
     } else if (n.rawKind === CODEUNIT_DECLARATION) {
       // ANY event of this table, not only `On(Before|After)<Kind>Event` (sol, R-485 run 001): a

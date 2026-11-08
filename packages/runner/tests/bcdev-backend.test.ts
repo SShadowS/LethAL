@@ -4345,8 +4345,8 @@ describe("manifest objects against declarations, before any baseline (R-307 sect
   });
 
   test("R853: a mutant in a file the parser cannot read stops by name, before publish (fenced and hub)", async () => {
-    const arm = "B();\n#if not C\nif not A then begin\n#endif\nend;\nexit(true);\n";
-    const lost = `codeunit 50140 "No Source"\n{\n    procedure P()\n    begin\nif S then begin\n${arm}end else if T then begin\n${arm}end else begin\n${arm}end\n    end;\n}\n`;
+    // Plainly invalid AL, so no grammar fix reads it: P's body has one `end` too few and runs on over Q.
+    const lost = `codeunit 50140 "No Source"\n{\n    procedure P()\n    begin\n        begin\n    end;\n\n    procedure Q()\n    begin\n    end;\n}\n`;
     for (const coverageMode of ["fenced", "procedure"] as const) {
       const { err, published } = await deployed({
         coverageMode,

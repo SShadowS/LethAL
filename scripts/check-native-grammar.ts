@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * RUST-01: prove the native parser's grammar sources are the ones the vendored WASM was built from
- * (upstream's tree-sitter-al.wasm.inputs.sha256 at tag v4.5.0). `grammarInputs()` is what
+ * (upstream's tree-sitter-al.wasm.inputs.sha256 at tag v4.6.0). `grammarInputs()` is what
  * build-native-parser.ts passes to build.rs, which embeds it. Run directly, exit 1 on a difference.
  *
  *   bun scripts/check-native-grammar.ts
@@ -9,10 +9,10 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-const EXPECTED_VERSION = "4.5.0";
+const EXPECTED_VERSION = "4.6.0";
 const EXPECTED: Readonly<Record<string, string>> = {
-  "src/parser.c": "7f2becdd85c9e458ab32462747b7d65ef28ce9e3142cd7247e015062e942c3eb",
-  "src/scanner.c": "dece4630b6fb2e39e1407f23c1ec80f39313f6d70a6b14caf93ef04a576ccd1b",
+  "src/parser.c": "3e952db225bd486f2ede16d00005d62c29b39551a68b1fc5f73eb55b925c4953",
+  "src/scanner.c": "c1df8c0eb5e417eeb0fb5bcb29ba6eba5f84c754d506dfea00411dd5381cac33",
 };
 export const CRATE = join(import.meta.dir, "..", "packages", "engine", "native");
 

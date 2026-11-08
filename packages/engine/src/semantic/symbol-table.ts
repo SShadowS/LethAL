@@ -22,6 +22,7 @@
  *     in `ast/tree-walks.ts`, which skip these containers.
  */
 import { ALNodeKind } from "../ast/node-kinds";
+import { lastFieldChild } from "../ast/qualified-name";
 import type { ALSyntaxNode } from "../ast/syntax-node";
 import { findAll } from "../ast/syntax-node";
 import {
@@ -235,6 +236,31 @@ const BASE_OBJECT_FIELD = "base_object";
 /** The extension object kinds whose members are indexed for variable scope (`reportextension`
  *  since R254, when it became instrumentable). */
 export type ExtensionKind = "tableextension" | "pageextension" | "reportextension";
+
+/**
+ * R861: the object an extension's `extends` text names. tree-sitter-al 4.6.0 parses `extends 18` as
+ * an `integer` base, which name-matching readers silently missed (4.5.0 left such an extension
+ * unparsed, and two conservative fallbacks refused it). One rule for every reader: a NUMBER
+ * resolves to the object in `objects` of `objectRawKind` (e.g. `table_declaration`) with that id,
+ * by that object's name (quotes stripped); no such object (a dependency's) is `{ unresolved: true }`
+ * and the reader must take its conservative path ("could extend any object of that type"). Text
+ * that is not a number is a name, returned as written (quotes stripped).
+ */
+export function resolveNumericBase(
+  objects: Iterable<ALSyntaxNode>,
+  objectRawKind: string,
+  baseText: string,
+): { readonly name: string } | { readonly unresolved: true } {
+  const text = baseText.trim();
+  if (!/^\d+$/.test(text)) return { name: stripQuotes(text) };
+  for (const o of objects) {
+    if (o.rawKind !== objectRawKind || o.childForFieldName("object_id")?.text.trim() !== text)
+      continue;
+    const name = o.childForFieldName("object_name");
+    if (name !== null) return { name: stripQuotes(name.text) };
+  }
+  return { unresolved: true };
+}
 
 /**
  * The `procedures`/`globals` key under which an extension object's own members are indexed for
@@ -493,6 +519,7 @@ export function buildSymbolTable(
     procedureNames.set(ownerName, byName);
   };
 
+  const numericTableExts: ALSyntaxNode[] = [];
   const unindexedObjects: ALSyntaxNode[] = [];
   const unparsedObjects: ALSyntaxNode[] = [];
   const splitObjects: ALSyntaxNode[] = [];
@@ -548,7 +575,7 @@ export function buildSymbolTable(
         continue;
       }
       if (objectNode.rawKind === "enumextension_declaration") {
-        const base = objectNode.childForFieldName("base_object");
+        const base = lastFieldChild(objectNode, "base_object");
         if (base !== null) indexEnumValues(objectNode, stripQuotes(base.text));
         continue;
       }
@@ -585,7 +612,10 @@ export function buildSymbolTable(
         // R160: a `tableextension`'s fields belong to the table it EXTENDS, which is the name any
         // expression uses to reach them. Keyed on `baseObject` for that reason, never on the
         // extension's own name.
-        if (extension.kind === "tableextension") indexFields(objectNode, extension.baseObject);
+        if (extension.kind === "tableextension") {
+          if (/^\d+$/.test(extension.baseObject)) numericTableExts.push(objectNode);
+          else indexFields(objectNode, extension.baseObject);
+        }
         continue;
       }
       const header = parseObjectHeader(objectNode);
@@ -601,6 +631,15 @@ export function buildSymbolTable(
       // overwrite the table's variables wholesale.
       indexMembers(objectNode, objectScopeKey(header.kind, header.name));
     }
+  }
+  // R861: `extends 18`. A base table the project declares gets the fields under its NAME. An
+  // unresolved base (a dependency table) stays keyed by the number, so `fieldsOf` misses: safe, it
+  // only adds tags or untyped refusals.
+  const tableNodes = objects.filter((o) => o.kind === "table").map((o) => o.node);
+  for (const ext of numericTableExts) {
+    const text = lastFieldChild(ext, "base_object")?.text ?? "";
+    const base = resolveNumericBase(tableNodes, "table_declaration", text);
+    indexFields(ext, "name" in base ? base.name : stripQuotes(text));
   }
 
   const resolveProcedure = (ownerName: string, procName: string): ProcedureSymbol | null => {
@@ -687,7 +726,7 @@ function parseExtensionHeader(
           : null;
   if (kind === null) return null;
   const nameNode = node.childForFieldName("object_name");
-  const baseNode = node.childForFieldName(BASE_OBJECT_FIELD);
+  const baseNode = lastFieldChild(node, BASE_OBJECT_FIELD);
   if (nameNode === null || baseNode === null) return null;
   const name = stripQuotes(nameNode.text);
   const baseObject = stripQuotes(baseNode.text);

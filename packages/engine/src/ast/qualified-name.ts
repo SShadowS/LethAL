@@ -8,14 +8,25 @@ import type { ALSyntaxNode } from "./syntax-node";
  * project object is `qualifiedObjectName` (semantic), which also checks the namespace.
  */
 
-/** The last named child in `field`, or null: the name's last segment. */
+/**
+ * The segments of the name in `field`, as nodes, in order. tree-sitter-al 4.6.0 (#36) gives a dotted
+ * `extends`/`implements` name as ONE `qualified_name` child holding an identifier per segment,
+ * where 4.5.0 gave the last segment beside an ERROR: both shapes come out as segments here.
+ */
+function segmentNodes(node: ALSyntaxNode, field: string): ALSyntaxNode[] {
+  return node.namedChildren
+    .filter((c) => c.fieldName === field)
+    .flatMap((c) => (c.rawKind === "qualified_name" ? c.namedChildren : [c]));
+}
+
+/** The last segment of the name in `field`, or null. */
 export function lastFieldChild(node: ALSyntaxNode, field: string): ALSyntaxNode | null {
-  return node.namedChildren.filter((c) => c.fieldName === field).at(-1) ?? null;
+  return segmentNodes(node, field).at(-1) ?? null;
 }
 
 /** Every segment of the name in `field`, in order, each unquoted. Empty when there is none. */
 export function fieldSegments(node: ALSyntaxNode, field: string): string[] {
-  return node.namedChildren.filter((c) => c.fieldName === field).map((c) => unquote(c.text));
+  return segmentNodes(node, field).map((c) => unquote(c.text));
 }
 
 /**

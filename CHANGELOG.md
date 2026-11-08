@@ -60,6 +60,8 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **tree-sitter-al 4.5.0 to 4.6.0** (R855, coord R-861). Valid AL that 4.5.0 could not read now parses: long `if` chains with `#if` inside, `end;` in both arms of a `#if/#else`, `#if` regions in routine headers and var sections, qualified and numeric `extends`, and split procedure preambles. A dotted base name is read by its last segment (a numeric one by object id), so refusals such as R487's still fire. A member with two `#if` var blocks, or a nested one, gets one latch with every arm's `var` blanked, proved with `alc`. No mutant identity moves: the five-set diff is identical on 575 projects.
+
 - **The README's operator counts are per tier** (R868). Opt-in operators now sit in Tier 1 as well as Tier 2, so each tier's
   default count leaves its own opt-ins out.
 - **Breaking: `--json` prints the bc-toolbox CLI envelope** (R870, GitHub #27). `lethal doctor --json` and

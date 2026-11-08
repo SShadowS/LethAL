@@ -83,6 +83,7 @@ export {
   objectScopeKey,
   objectScopeKeyOfNode,
   qualifiedObjectName,
+  resolveNumericBase,
   triggerLocalNames,
 } from "./semantic/symbol-table";
 export type { CFG, BasicBlock } from "./semantic/cfg";

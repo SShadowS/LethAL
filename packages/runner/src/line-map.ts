@@ -259,7 +259,7 @@ export function assertManifestObjectsDeclared(
 /** R853: what a user can do about a file the parser gave up on. Empty when no file is named. */
 function unreadNote(unread: readonly string[], wayOut = UNREAD_WAY_OUT): string {
   if (unread.length === 0) return "";
-  return ` The parser could not read the instrumented text of ${unread.join(", ")}, most likely at tree-sitter's limit of 6 parse paths: three or more copies of an \`if ... then begin\` whose \`end\` is outside its \`#if\` arm reach it, though the text is valid AL (R853). ${wayOut}`;
+  return ` The parser could not read the instrumented text of ${unread.join(", ")}. If the source compiles, this is a gap in the parser: \`end;\` in both arms of a \`#if/#else\` is one known shape (R855). ${wayOut}`;
 }
 
 const UNREAD_WAY_OUT = "Leave the file out with `--exclude <glob>`.";

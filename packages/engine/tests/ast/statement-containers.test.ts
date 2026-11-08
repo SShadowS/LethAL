@@ -85,4 +85,25 @@ describe("R217 statement-container pin", () => {
     expect(SINGLE_STATEMENT_SLOTS.has("case_body.children")).toBe(false);
     expect(NOT_A_SLOT["case_body.children"]?.item).toBe("R796");
   });
+
+  // tree-sitter-al 4.6.0 (#39): empty `#if` groups put markers in these ten `.children`.
+  test("the 4.6.0 containers are candidates, each classified as not-executable", () => {
+    const NEW = [
+      "case_branch.children",
+      "for_statement.children",
+      "foreach_statement.children",
+      "if_statement.children",
+      "preproc_split_case_branch.children",
+      "preproc_split_case_end_branch.children",
+      "preproc_split_if_else_statement.children",
+      "preproc_split_if_statement.children",
+      "while_statement.children",
+      "with_statement.children",
+    ];
+    for (const k of NEW) {
+      expect(keys, k).toContain(k);
+      expect(classesOf(k), k).toEqual(["NOT_A_SLOT"]);
+      expect(NOT_A_SLOT[k]?.kind, k).toBe("not-executable");
+    }
+  });
 });

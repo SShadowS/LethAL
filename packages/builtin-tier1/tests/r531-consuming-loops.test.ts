@@ -635,4 +635,25 @@ describe("R531 HOP through the implicit Rec's table (`r531TableProcs`)", () => {
     const p = project({ "Line.Table.al": LINE, "LineExt.TableExt.al": LINE_EXT });
     expect(p.refused("Line.Table.al", "Delete()")).toBe(true);
   });
+
+  // R-861: 4.6.0 parses `extends <number>`. A dependency table's id resolves to no project table, so
+  // a bare call to the extension's own consumer must still count as consuming (a consumer site).
+  const ownExt = (base: string) => `tableextension 50110 "R531 Own Ext" extends ${base}
+{
+    procedure Eat()
+    begin
+        Delete();
+    end;
+
+    procedure ExtLoop()
+    begin
+        while FindFirst() do
+            Eat();
+    end;
+}`;
+  for (const base of ['"R531 Line"', "50100", "18"])
+    it(`a bare call to the extension's own consumer is a consumer site (extends ${base})`, () => {
+      const p = project({ "Line.Table.al": LINE, "Own.TableExt.al": ownExt(base) });
+      expect(p.refused("Own.TableExt.al", "Eat()")).toBe(true);
+    });
 });

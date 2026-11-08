@@ -834,6 +834,35 @@ describe("flipBooleanLiteral RunTrigger tags (R-452)", () => {
       });
       // Revert: read a `hasError` object structurally (drop the `!n.hasError &&` guards).
       it("a half-parsed unindexed tableextension naming the table keeps it by its whole text", () => {
+        // tree-sitter-al 4.6.0 parses `extends Microsoft.Sales.Par` cleanly, so the half-parse is
+        // an ERROR in the trigger body instead.
+        const x = wrap(
+          `tableextension 50306 "Q Ext" extends Par\n{\n    trigger OnBeforeModify()\n    var N: Integer;\n    begin\n    N := ;\n    end;\n}`,
+        );
+        const files = { "P.al": par(""), "X.al": x, "O.al": caller("Par.Modify(false);") };
+        expect(tagged(files)).toEqual([FORCED]);
+      });
+      // 4.6.0 `extends 50300` (the table's id, an `integer` base): matched by id, so its trigger
+      // keeps the tag; another id is another table's extension (revert: drop the id compare in
+      // `projectObserves`).
+      it("a tableextension extending by table id keeps the tag only for that table", () => {
+        const ext = (id: number, wrapped: boolean) => {
+          const t = `tableextension 50306 "Q Ext" extends ${id}\n{\n    trigger OnBeforeModify()\n    begin\n    end;\n}`;
+          return wrapped ? wrap(t) : t;
+        };
+        const run = (id: number, wrapped: boolean) => ({
+          "P.al": par(""),
+          "X.al": ext(id, wrapped),
+          "O.al": caller("Par.Modify(false);"),
+        });
+        for (const wrapped of [false, true]) {
+          expect(tagged(run(50300, wrapped))).toEqual([FORCED]);
+          expect(tagged(run(50999, wrapped))).toEqual([PLAIN]);
+        }
+      });
+      // R502, 4.6.0: a CLEAN dotted `extends` is one `qualified_name`; an unindexed one is matched
+      // by its last segment (revert: `.text` in `projectObserves`' unindexed branch).
+      it("a clean namespace-qualified tableextension keeps the tag, for any table", () => {
         const x = wrap(
           `tableextension 50306 "Q Ext" extends Microsoft.Sales.Par\n{\n    trigger OnBeforeModify()\n    begin\n    end;\n}`,
         );
