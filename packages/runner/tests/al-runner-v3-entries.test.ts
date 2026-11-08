@@ -26,6 +26,7 @@ import {
   AL_RUNNER_V3_VERSION,
   AlRunnerV3Backend,
   type AlRunnerV3Config,
+  AlRunnerV3DependencyMissingError,
   AlRunnerV3DependencySkippedError,
   AlRunnerV3NoTestRanError,
   AlRunnerV3RowMissingError,
@@ -33,6 +34,7 @@ import {
   AlRunnerV3ServeStopUnsetError,
   AlRunnerV3TransportFrozenError,
   AlRunnerV3UnprovenBatchError,
+  ISOLATED_BASELINE_PROCESSES,
   SPECULATE_BASELINE_ENV,
   WINDOW_BOUND_CAVEAT,
   v3CallDeadlineMs,
@@ -198,7 +200,14 @@ type RowsFn = (
   /** R778: how many codeunit entries (not echoes) of this override the request had before this one. */
   seen?: number,
 ) => FakeRow[];
-type CoverageFn = (mutant: string, cu: number, active: string, testDir: string) => unknown;
+type CoverageFn = (
+  mutant: string,
+  cu: number,
+  active: string,
+  testDir: string,
+  /** R857: the one test of a `--test-exact` process. */
+  method?: string,
+) => unknown;
 
 const SUITE_METHODS: Record<number, string[]> = { [CU]: ["A", "B"], [CU2]: ["C"] };
 const allPass: RowsFn = (_m, cu) =>
@@ -266,17 +275,37 @@ function fakeOneShot(
   answer?: { readonly exitCode: number; readonly stderr: string },
 ) {
   const calls: string[][] = [];
+  // R866: how many processes ran at one time, by call counters, never by the clock.
+  let running = 0;
+  let peak = 0;
+  let joined = 0;
   const spawn: SpawnFn = async (argv) => {
     calls.push([...argv]);
+    running += 1;
+    joined += 1;
+    peak = Math.max(peak, running);
+    await new Promise<void>((r) => setImmediate(r));
+    // R866: a one-test process stays until no neighbour has joined for 5 ms (at most 100 ms), so the
+    // peak is how many the backend lets run, whatever that number, and not a matter of luck.
+    for (let i = 0, quiet = 0; argv.includes("--test-exact") && quiet < 5 && i < 100; i += 1) {
+      const before = joined;
+      await new Promise<void>((r) => setTimeout(r, 1));
+      quiet = joined === before ? quiet + 1 : 0;
+    }
+    running -= 1;
     const active = argv.at(-2) ?? "";
     const testDir = argv.at(-1) ?? "";
-    const cu = Number(argv[argv.indexOf("--codeunit") + 1]);
+    // R857: `--test-exact Codeunit<id>.<method>` runs that one test.
+    const exact = argv.indexOf("--test-exact");
+    const only = exact < 0 ? null : /^Codeunit(\d+)\.(.+)$/.exec(argv[exact + 1] ?? "");
+    const cu = Number(only?.[1] ?? argv[argv.indexOf("--codeunit") + 1]);
     const m = await readFile(resourceFile(active), "utf8").catch(() => "STATIC");
-    const cov = coverage?.(m, cu, active, testDir);
+    const cov = coverage?.(m, cu, active, testDir, only?.[2]);
     if (cov !== undefined) {
       await writeFile(argv[argv.indexOf("--coverage-json") + 1] ?? "", JSON.stringify(cov));
     }
-    const tests = rows(m, cu, -1, -1).map((r) => ({
+    const asked = rows(m, cu, -1, -1).filter((r) => only === null || r.method === only[2]);
+    const tests = asked.map((r) => ({
       codeunit: cu,
       method: r.method,
       name: `Codeunit${cu}.${r.method}`,
@@ -286,7 +315,10 @@ function fakeOneShot(
     }));
     return { exitCode: 0, stdout: JSON.stringify({ tests }), stderr: "", ...answer };
   };
-  return { spawn, calls };
+  const clearPeak = () => {
+    peak = 0;
+  };
+  return { spawn, calls, peak: () => peak, running: () => running, clearPeak };
 }
 
 /** A byte channel a test pushes lines into: the fake daemon's stdout. */
@@ -398,7 +430,18 @@ function fakeServe(script: ServeScript = {}) {
           requests.push(req);
           const errLine = script.stderr?.(req, n);
           if (errLine !== undefined) err.push(errLine);
-          const cuOf = (t: unknown) => Number(/^Codeunit(\d+)\.$/.exec(String(t))?.[1]);
+          const cuOf = (t: unknown) => Number(/^Codeunit(\d+)\./.exec(String(t))?.[1]);
+          // R857: as measured on edge 6bb821b98: `test` selects by text, so `Codeunit1.Alpha` also
+          // picks `AlphaTwo`; `excludeTests` takes names out. `Codeunit1.` picks every test.
+          const picked = (cu: number, test: unknown, ex: unknown, rs: FakeRow[]) =>
+            rs.filter((r) => {
+              const name = `Codeunit${cu}.${r.method}`.toLowerCase();
+              const out = ((ex as string[] | undefined) ?? []).map((x) => x.toLowerCase());
+              return (
+                cu === ECHO ||
+                (name.startsWith(String(test).toLowerCase()) && !out.some((x) => name.includes(x)))
+              );
+            });
           const seenBy = new Map<string, number>();
           const rowsOf = (m: string, cu: number): FakeRow[] => {
             if (cu !== ECHO) {
@@ -439,7 +482,7 @@ function fakeServe(script: ServeScript = {}) {
             for (const e of entries) {
               const m = String((e.resources as Record<string, string>)["active-mutant.txt"]);
               const cu = cuOf(e.test);
-              const rs = rowsOf(m, cu);
+              const rs = picked(cu, e.test, e.excludeTests, rowsOf(m, cu));
               for (const r of rs) lines.push(testLine(cu, r, String(e.id)));
               per.push({ type: "entrySummary", entry: e.id, ...count(rs) });
             }
@@ -447,7 +490,7 @@ function fakeServe(script: ServeScript = {}) {
           } else {
             const cu = cuOf(body.test);
             selected = new Set([cu]);
-            const rs = rowsOf(onDisk, cu);
+            const rs = picked(cu, body.test, body.excludeTests, rowsOf(onDisk, cu));
             for (const r of rs) lines.push(testLine(cu, r));
             count(rs);
             if (body.coverage === true) {
@@ -1123,6 +1166,65 @@ describe("R590: the daemon's stderr is read after every request", () => {
     skip = true;
     await expect(r.b.sendKillPair("M0001", ref("A"))).rejects.toBeInstanceOf(
       AlRunnerV3DependencySkippedError,
+    );
+  });
+
+  // R860 (upstream #7139): the refusal line serve wrote for a build that stops on a missing app.
+  // Two apps, each line over 300 characters like the real ones (a long `searched:` list), so the
+  // second sits past the 400th character that `runEntries` used to cut at.
+  const SEARCHED = `; searched: ${"/long/package/folder/".repeat(10)}, proj/app/.alpackages; put its .app with AL source (or its source archive) in the project's .alpackages or pass --dep DIR`;
+  const STOP = `2 dependency app(s) were not found and --no-download is set, so the run would use a different install than a run with the apps:\n  dependency \`D\` by X (00000000-0000-0000-0000-000000000001) version 1.0.0.0 or higher was not found${SEARCHED}\n  dependency \`Second\` by Y (00000000-0000-0000-0000-000000000002) version 2.0.0.0 or higher was not found${SEARCHED}`;
+
+  test("R860: serve's error line for a missing dependency stops the session by name, on a live request and at the warm-up", async () => {
+    let stop = false;
+    const r = await readyRig({
+      serve: {
+        rows: killsM1,
+        answer: () => (stop ? { lines: [{ error: STOP }] } : undefined),
+      },
+      mutants: ["M0002"],
+    });
+    stop = true;
+    await r.b.activate("M0001");
+    const err = await r.b.run(ref("A"), OPTS).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AlRunnerV3DependencyMissingError);
+    expect(String(err)).toContain('"D" by X');
+    expect(String(err)).toContain('"Second" by Y');
+    expect(String(err)).toContain("packagesDir");
+    // The daemon was started without the allow flag.
+    expect(r.serve.daemons.flat().some((a) => a.includes("allow-missing-dependencies"))).toBe(
+      false,
+    );
+    expect(r.serve.daemons.length).toBeGreaterThan(0);
+    const w = await rig({ serve: { rows: killsM1, answer: () => ({ lines: [{ error: STOP }] }) } });
+    await baseline(w.b, SUITE1);
+    await expect(w.b.prefetchMutants(plans(["M0001"]))).rejects.toBeInstanceOf(
+      AlRunnerV3DependencyMissingError,
+    );
+    // Any other error line keeps its old handling.
+    const o = await rig({
+      serve: { rows: killsM1, answer: () => ({ lines: [{ error: "boom" }] }) },
+    });
+    await baseline(o.b, SUITE1);
+    await o.b.prefetchMutants(plans(["M0001"])).catch((e: unknown) => {
+      expect(e).not.toBeInstanceOf(AlRunnerV3DependencyMissingError);
+    });
+  });
+
+  test("R860: serve's missing-dependency line on a kill pair stops the session (never the pair-skipped warning)", async () => {
+    let stop = false;
+    const r = await readyRig({
+      serve: {
+        rows: killsM1,
+        answer: () => (stop ? { lines: [{ error: STOP }] } : undefined),
+      },
+      mutants: ["M0001"],
+    });
+    await r.b.activate("M0001");
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("fail");
+    stop = true;
+    await expect(r.b.sendKillPair("M0001", ref("A"))).rejects.toBeInstanceOf(
+      AlRunnerV3DependencyMissingError,
     );
   });
 
@@ -2263,6 +2365,7 @@ describe("the gate's transport flags (itest:alrunner-v3 harness)", () => {
       "N1E",
       "N1S",
       "O1",
+      "ISO",
       "X",
       "L1",
       "Y-A",
@@ -4623,5 +4726,427 @@ describe("R790: the speculative baseline", () => {
       expect(speculative(warm.b)).toBeUndefined();
       expect(existsSync(join(activeOf(warm.b), "Translations", "T.g.xlf"))).toBe(false);
     });
+  });
+});
+
+describe("R857: --isolate-tests", () => {
+  const ISOLATE = { extra: { isolateTests: true } };
+  type Sent = { id: string; test: string; excludeTests?: string[] };
+  const entriesOf = (r: Rig): Sent[] =>
+    r.serve.requests.flatMap((q) => (q.body.entries as Sent[] | undefined) ?? []);
+  const argvHas = (r: Rig, flag: string) => r.one.calls.filter((c) => c.includes(flag)).length;
+
+  test("off, a run is what it always was: no field, no flag, whole codeunits", async () => {
+    const r = await readyRig({ serve: { rows: killsM1 } });
+    await r.b.activate("M0001");
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("fail");
+    expect(r.serve.requests.length).toBeGreaterThan(0);
+    for (const q of r.serve.requests) {
+      expect(q.body).not.toHaveProperty("runSelectedOnly");
+      expect(Object.keys(q.body).sort()).toEqual([
+        "command",
+        "entries",
+        "sourcePaths",
+        "testIsolation",
+      ]);
+    }
+    for (const e of entriesOf(r)) {
+      expect(e.test).toMatch(/^Codeunit\d+\.$/);
+      expect(Object.keys(e).sort()).toEqual(["id", "resources", "test"]);
+    }
+    expect(entriesOf(r).map((e) => e.id)).toContain(`M0001|${CU}`);
+    expect(argvHas(r, "--run-selected-only")).toBe(0);
+    expect(argvHas(r, "--test-exact")).toBe(0);
+    expect(argvHas(r, "--codeunit")).toBe(r.one.calls.length);
+    expect(r.b.isolatesTests).toBe(false);
+  });
+
+  test("on: the baseline is one process per test, and every later entry one test", async () => {
+    const r = await readyRig({ ...ISOLATE, serve: { rows: killsM1 } });
+    // Sorted: since R866 the processes run side by side, so they may start in any order.
+    expect(r.one.calls.map((c) => c[c.indexOf("--test-exact") + 1]).sort()).toEqual([
+      `Codeunit${CU}.A`,
+      `Codeunit${CU}.B`,
+    ]);
+    expect(argvHas(r, "--run-selected-only")).toBe(2);
+    expect(argvHas(r, "--codeunit")).toBe(0);
+    for (const q of r.serve.requests) expect(q.body.runSelectedOnly).toBe(true);
+    // In source order, in the warm-up as in every group.
+    expect((r.serve.requests[0]?.body.entries as Sent[]).map((e) => e.test)).toEqual([
+      `Codeunit${ECHO}.`,
+      `Codeunit${CU}.A`,
+      `Codeunit${CU}.B`,
+    ]);
+    const tests = new Set(entriesOf(r).map((e) => e.test));
+    expect([...tests].sort()).toEqual([`Codeunit${CU}.A`, `Codeunit${CU}.B`, `Codeunit${ECHO}.`]);
+    expect(r.b.isolatesTests).toBe(true);
+  });
+
+  test("on: each verdict is read from its own test's entry", async () => {
+    const r = await readyRig({ ...ISOLATE, serve: { rows: killsM1 } });
+    const before = r.serve.requests.length;
+    await r.b.activate("M0001");
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("fail");
+    expect((await r.b.run(ref("B"), OPTS)).outcome).toBe("pass");
+    await r.b.activate("M0002");
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("pass");
+    expect(r.serve.requests.length).toBe(before); // all of it came from the prefetch
+  });
+
+  test("on: a confirm and a reproduction are that test alone, as one kill pair", async () => {
+    const r = await readyRig({ ...ISOLATE, serve: { rows: killsM1 } });
+    await r.b.activate("M0001");
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("fail");
+    const before = r.serve.requests.length;
+    await r.b.sendKillPair("M0001", ref("A"));
+    const pair = (r.serve.requests[before]?.body.entries as Sent[]).map((e) => e.test);
+    expect(pair).toEqual([
+      `Codeunit${ECHO}.`,
+      `Codeunit${CU}.A`,
+      `Codeunit${ECHO}.`,
+      `Codeunit${CU}.A`,
+    ]);
+    await r.b.activate(null);
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("pass");
+    await r.b.activate("M0001");
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("fail");
+    expect(r.serve.requests.length).toBe(before + 1);
+  });
+
+  test("on: a test whose name starts another's excludes it, so each entry runs one test", async () => {
+    const suite = [ref("Alpha"), ref("AlphaTwo")];
+    const rows: RowsFn = () => suite.map((t) => ({ method: t.method, status: "pass" as const }));
+    const r = await readyRig({ ...ISOLATE, suite, serve: { rows } });
+    const of = (m: string) => entriesOf(r).find((e) => e.test === `Codeunit${CU}.${m}`);
+    expect(of("Alpha")?.excludeTests).toEqual([`Codeunit${CU}.AlphaTwo`]);
+    expect(of("AlphaTwo")).not.toHaveProperty("excludeTests");
+    await r.b.activate("M0001");
+    expect((await r.b.run(suite[0] ?? ref("?"), OPTS)).outcome).toBe("pass");
+    expect((await r.b.run(suite[1] ?? ref("?"), OPTS)).outcome).toBe("pass");
+  });
+
+  test("on: a second row in an entry is no verdict: the test did not run alone", async () => {
+    const rows: RowsFn = (m, cu, d, n) => [
+      ...allPass(m, cu, d, n),
+      ...(m === "M0001" ? [{ method: "AHidden", status: "pass" as const }] : []),
+    ];
+    const r = await readyRig({ ...ISOLATE, serve: { rows } });
+    await r.b.activate("M0001");
+    const v = await r.b.run(ref("A"), OPTS);
+    expect(v.outcome).toBe("error");
+    expect(v.failureMessage).toContain("has 2 rows, so that test did not run alone");
+    // The other way: an entry with its one row is read as usual.
+    expect((await r.b.run(ref("B"), OPTS)).outcome).toBe("pass");
+  });
+
+  test("on: a cut at one test re-sends only the tests after it, on a fresh daemon", async () => {
+    const stop = { method: "A", status: "error" as const, notRun: true, message: TIMEOUT_1S };
+    const rows: RowsFn = (m, cu, d, n) =>
+      m === "M0001" && d === 0
+        ? allPass(m, cu, d, n).map((x) => (x.method === "A" ? stop : x))
+        : allPass(m, cu, d, n);
+    const r = await readyRig({ ...ISOLATE, serve: { rows }, mutants: ["M0001"] });
+    expect(r.serve.daemons).toHaveLength(2);
+    const onSecond = r.serve.requests.filter((q) => q.daemon === 1).flatMap((q) => q.ids);
+    const after = onSecond.filter((id) => id.startsWith("M0001|") && !id.endsWith("|echo"));
+    expect(after).toHaveLength(1);
+    const sent = entriesOf(r).filter((e) => e.id === after[0]);
+    expect(sent.map((e) => e.test)).toContain(`Codeunit${CU}.B`);
+    await r.b.activate("M0001");
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("timeout");
+    expect((await r.b.run(ref("B"), OPTS)).outcome).toBe("pass");
+  });
+
+  test("on: the warm-up compares test by test with the lone baseline", async () => {
+    const serveRows: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) => (x.method === "B" ? { ...x, status: "fail" as const } : x));
+    await expect(
+      readyRig({ ...ISOLATE, serve: { rows: serveRows }, oneShotRows: allPass }),
+    ).rejects.toThrow(
+      // Exactly B's own rows on both sides, and A's entry agrees: a wrong key reads an empty side.
+      `al-runner-v3-entries-warmup-disagrees: the daemon's NONE rows are not this batch's one-shot baseline (codeunit ${CU}: serve [b=fail], one-shot [b=pass])`,
+    );
+  });
+
+  test("on: a refusal at baseline still names the real codeunit in a survivor's note", async () => {
+    const refused: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        x.method === "A" ? { ...x, status: "error" as const, notRun: true, message: COMMIT } : x,
+      );
+    const r = await rig({ ...ISOLATE, oneShotRows: refused });
+    await baseline(r.b, SUITE1);
+    expect(r.b.survivorNote([ref("B")])).toContain(`Tests${CU}.A`);
+  });
+
+  test("on: every failing test has a stored pair, so a kill by any of them sends nothing", async () => {
+    const fails: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        m === "M0001" ? { ...x, status: "fail" as const, message: "boom" } : x,
+      );
+    const r = await readyRig({ ...ISOLATE, pairBatch: true, serve: { rows: fails } });
+    const before = r.serve.requests.length;
+    await r.b.activate("M0001");
+    // The second failing test, as the kill ledger can put it first.
+    expect((await r.b.run(ref("B"), OPTS)).outcome).toBe("fail");
+    await r.b.sendKillPair("M0001", ref("B"));
+    await r.b.activate(null);
+    expect((await r.b.run(ref("B"), OPTS)).outcome).toBe("pass");
+    await r.b.activate("M0001");
+    expect((await r.b.run(ref("B"), OPTS)).outcome).toBe("fail");
+    expect(r.serve.requests.length).toBe(before);
+  });
+
+  test("on: a refusal names the real codeunit and test, never a call id", async () => {
+    const noRow: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).filter((x) => !(m === "M0001" && x.method === "B"));
+    const r = await readyRig({ ...ISOLATE, serve: { rows: noRow } });
+    await r.b.activate("M0001");
+    const v = await r.b.run(ref("B"), OPTS);
+    expect(v.failureMessage).toContain(`codeunit ${CU}'s entry has 0 row(s)`);
+    const cold = await rig(ISOLATE); // a prefetch with no baseline behind it
+    await expect(cold.b.prefetchMutants(plans(["M0001"]))).rejects.toThrow(
+      `codeunit(s) Codeunit${CU}.A, Codeunit${CU}.B of the warm-up union`,
+    );
+  });
+
+  test("on: a live request runs one test too", async () => {
+    const r = await rig({ ...ISOLATE, serve: { rows: killsM1 } });
+    await baseline(r.b, SUITE1);
+    await r.b.activate("M0001"); // no prefetch, so the run below goes live
+    expect((await r.b.run(ref("B"), OPTS)).outcome).toBe("pass");
+    const tests = entriesOf(r).map((e) => e.test);
+    expect(tests).toContain(`Codeunit${CU}.B`);
+    expect(tests).not.toContain(`Codeunit${CU}.`);
+  });
+
+  test("on: a coverage window asks for that one test, and the longer names stay out", async () => {
+    const suite = [ref("A"), ref("AB")];
+    const rows: RowsFn = () => suite.map((t) => ({ method: t.method, status: "pass" as const }));
+    const r = await readyRig({
+      ...ISOLATE,
+      suite,
+      targetAl: SLEEPER_AL,
+      mutants: ["M0001"],
+      serve: { rows, coverage: sleepCoverage() },
+    });
+    const n0 = r.serve.requests.length;
+    await r.b.activate("M0001");
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("pass");
+    const window = r.serve.requests.slice(n0).find((q) => q.body.coverage === true);
+    expect(window?.ids).toEqual([`plain:Codeunit${CU}.A`]);
+    expect(window?.body.excludeTests).toEqual([`Codeunit${CU}.AB`]);
+    expect(window?.body.runSelectedOnly).toBe(true);
+  });
+
+  describe("R866: the baseline's processes, four at a time", () => {
+    const methods = ["A", "B", "C", "D", "E", "F"];
+    const suite = methods.map((m) => ref(m));
+    const rows: RowsFn = () => methods.map((method) => ({ method, status: "pass" as const }));
+    const opts = { ...ISOLATE, suite, oneShotRows: rows };
+    const exactOf = (r: Rig) => r.one.calls.map((c) => c[c.indexOf("--test-exact") + 1]);
+
+    test("every test once, at most four at a time, each verdict its own", async () => {
+      const r = await rig(opts);
+      const verdicts = await baseline(r.b, suite);
+      expect(r.one.peak()).toBe(ISOLATED_BASELINE_PROCESSES);
+      expect(ISOLATED_BASELINE_PROCESSES).toBe(4);
+      expect(exactOf(r).sort()).toEqual(methods.map((m) => `Codeunit${CU}.${m}`));
+      expect(verdicts.map((v) => [v.ref.method, v.outcome])).toEqual(
+        methods.map((m) => [m, "pass"]),
+      );
+    });
+
+    test("--workers sets how many at a time: one, or more than four", async () => {
+      for (const n of [1, 6]) {
+        const extra = { isolateTests: true, isolatedBaselineProcesses: n };
+        const r = await rig({ extra, suite, oneShotRows: rows });
+        await baseline(r.b, suite);
+        expect(r.one.peak()).toBe(n);
+        expect(r.one.calls).toHaveLength(methods.length);
+      }
+    });
+
+    test("off, the baseline stays one process at a time", async () => {
+      const r = await rig({ suite, oneShotRows: rows });
+      await baseline(r.b, suite);
+      expect(r.one.peak()).toBe(1);
+    });
+
+    test("a test that stopped beside the others runs again alone, and that answer stands", async () => {
+      // One test, as the fake builds every row for each process: `first` must be A's own.
+      let first = true;
+      const stopOnce: RowsFn = () => {
+        const stopped = first;
+        first = false;
+        return stopped
+          ? [{ method: "A", status: "error", notRun: true, message: TIMEOUT_1S }]
+          : [{ method: "A", status: "pass" }];
+      };
+      const r = await rig({ ...ISOLATE, suite: [ref("A")], oneShotRows: stopOnce });
+      const verdicts = await baseline(r.b, [ref("A")]);
+      expect(r.one.calls).toHaveLength(2);
+      expect(verdicts.map((v) => v.outcome)).toEqual(["pass"]);
+    });
+
+    test("a duration that could move a budget is not kept: every test runs again alone", async () => {
+      const r = await rig({ ...ISOLATE, floor: [0, 1000] });
+      await baseline(r.b, SUITE1);
+      expect(r.one.calls).toHaveLength(4);
+    });
+
+    test("a new deploy fills again, four at a time", async () => {
+      const r = await rig(opts);
+      await baseline(r.b, suite);
+      r.one.clearPeak();
+      await r.b.deploy(r.l.batch);
+      await baseline(r.b, suite);
+      expect(r.one.peak()).toBe(ISOLATED_BASELINE_PROCESSES);
+      expect(r.one.calls).toHaveLength(12);
+    });
+
+    test("an answer no call took does not cross a deploy", async () => {
+      let batch2 = false;
+      // In the second batch B's row is one the fill never keeps, so only a stale answer reads pass.
+      const byBatch: RowsFn = (m, cu, d, n) =>
+        allPass(m, cu, d, n).map((x) =>
+          x.method === "B" && batch2
+            ? { ...x, status: "error" as const, notRun: true, message: COMMIT }
+            : x,
+        );
+      const r = await rig({ ...ISOLATE, oneShotRows: byBatch });
+      await baseline(r.b, [ref("A")]); // the fill also holds B's answer, which nothing takes
+      batch2 = true;
+      await r.b.deploy(r.l.batch);
+      const [b] = await baseline(r.b, [ref("B")]);
+      expect(b?.outcome).not.toBe("pass");
+    });
+
+    test("an answer is served once: a second call for that test runs its own process", async () => {
+      const r = await rig(ISOLATE);
+      r.b.baselinePhase(true);
+      await r.b.activate(null);
+      await r.b.run(ref("A"), OPTS);
+      await r.b.activate(null); // drops the rows, so the next run asks for a call again
+      await r.b.run(ref("A"), OPTS);
+      r.b.baselinePhase(false);
+      expect(exactOf(r).filter((t) => t === `Codeunit${CU}.A`)).toHaveLength(2);
+    });
+
+    test("an answer made at another stop is not served", async () => {
+      const r = await rig(ISOLATE);
+      r.b.baselinePhase(true);
+      await r.b.activate(null);
+      await r.b.run(ref("A"), OPTS);
+      await r.b.run(ref("B"), { ...OPTS, timeoutMs: 5000 });
+      r.b.baselinePhase(false);
+      expect(exactOf(r).filter((t) => t === `Codeunit${CU}.B`)).toHaveLength(2);
+    });
+
+    test("each test keeps its own coverage", async () => {
+      const own: CoverageFn = (_m, cu, _a, _t, method) => ({
+        coverage: [],
+        perTestCoverage: [{ test: `Codeunit${cu}.${method}`, coverage: [] }],
+      });
+      const r = await rig({ ...opts, oneShotCoverage: own });
+      await baseline(r.b, suite);
+      const seen = [
+        ...(
+          r.b as unknown as { lane: { rowsByCodeunit: Map<number, unknown> } }
+        ).lane.rowsByCodeunit.values(),
+      ] as { rows: { name: string }[]; coverage: { perTestCoverage?: { test: string }[] } }[];
+      expect(seen).toHaveLength(methods.length);
+      for (const c of seen) {
+        expect(c.rows.map((x) => x.name)).toEqual(
+          (c.coverage.perTestCoverage ?? []).map((e) => e.test),
+        );
+      }
+    });
+
+    test("a row that did not run is not trusted beside the others: alone, the test runs", async () => {
+      let first = true;
+      const raced: RowsFn = () => {
+        const refused = first;
+        first = false;
+        return refused
+          ? [{ method: "A", status: "error", notRun: true, message: COMMIT }]
+          : [{ method: "A", status: "pass" }];
+      };
+      const r = await rig({ ...ISOLATE, suite: [ref("A")], oneShotRows: raced });
+      const verdicts = await baseline(r.b, [ref("A")]);
+      expect(r.one.calls).toHaveLength(2);
+      expect(verdicts.map((v) => v.outcome)).toEqual(["pass"]);
+      expect(r.b.survivorNote([ref("A")])).toBeUndefined();
+    });
+
+    test("exit 8 is not kept: each test runs alone", async () => {
+      const r = await rig({ ...ISOLATE, oneShotAnswer: { exitCode: 8, stderr: "" } });
+      await baseline(r.b, SUITE1);
+      expect(r.one.calls).toHaveLength(4);
+    });
+
+    test("an answer with no row, or another test's, is not kept", async () => {
+      const r = await rig(ISOLATE);
+      const stub = r.b as unknown as {
+        aloneAnswer: (m: unknown, r: TestMethodRef, f: number) => boolean;
+      };
+      const answer = (tests: unknown[]) => ({
+        res: { exitCode: 0, stdout: JSON.stringify({ tests }), stderr: "" },
+        wallMs: 1,
+        timedOut: false,
+        deadlineMs: 1,
+      });
+      const row = (method: string) => ({
+        codeunit: CU,
+        method,
+        name: `Codeunit${CU}.${method}`,
+        status: "pass",
+      });
+      expect(stub.aloneAnswer(answer([]), ref("A"), 1000)).toBe(false);
+      expect(stub.aloneAnswer(answer([row("B")]), ref("A"), 1000)).toBe(false);
+      expect(stub.aloneAnswer(answer([row("A"), row("B")]), ref("A"), 1000)).toBe(false);
+      expect(stub.aloneAnswer(answer([row("A")]), ref("A"), 1000)).toBe(true);
+    });
+
+    test("a failure stops the queue, and no process outlives the call", async () => {
+      // One worker fails and three stay well: only an emptied queue stops those three.
+      const names = Array.from({ length: 12 }, (_, i) => `T${i}`);
+      const many = names.map((m) => ref(m));
+      const rowsOfMany: RowsFn = () => names.map((method) => ({ method, status: "pass" as const }));
+      const r = await rig({ ...ISOLATE, suite: many, oneShotRows: rowsOfMany });
+      const b = r.b as unknown as { aloneAnswer: () => boolean };
+      let failed = false;
+      b.aloneAnswer = () => {
+        if (failed) return true;
+        failed = true;
+        throw new Error("boom");
+      };
+      await expect(baseline(r.b, many)).rejects.toThrow("boom");
+      expect(r.one.running()).toBe(0);
+      expect(r.one.calls.length).toBeLessThan(names.length);
+    });
+
+    test("no process starts on bytes the proof does not cover", async () => {
+      const r = await rig(ISOLATE);
+      await appendFile(join(r.l.scratch, "active", "Logic.Codeunit.al"), "// drift\n");
+      await expect(baseline(r.b, SUITE1)).rejects.toThrow(AlRunnerV3UnprovenBatchError);
+      expect(r.one.calls).toHaveLength(0);
+    });
+
+    test("the bytes are checked again when an answer is served", async () => {
+      const r = await rig(ISOLATE);
+      r.b.baselinePhase(true);
+      await r.b.activate(null);
+      await r.b.run(ref("A"), OPTS); // fills, and serves A
+      await appendFile(join(r.l.scratch, "active", "Logic.Codeunit.al"), "// drift\n");
+      await expect(r.b.run(ref("B"), OPTS)).rejects.toThrow(AlRunnerV3UnprovenBatchError);
+      r.b.baselinePhase(false);
+    });
+  });
+
+  test("on: the speculative baseline stays off, as its calls run whole codeunits", async () => {
+    const r = await rig({ extra: { isolateTests: true, speculateBaseline: true } });
+    await baseline(r.b, SUITE1);
+    expect(argvHas(r, "--codeunit")).toBe(0);
+    expect(r.one.calls).toHaveLength(2);
   });
 });

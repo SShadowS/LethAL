@@ -519,6 +519,77 @@ describe("R762: --fresh-probe reaches the backend", () => {
       expect(parseCliConfig(argv)).not.toHaveProperty("freshProbe");
     },
   );
+  // R857: `--isolate-tests` takes the same road.
+  test.skipIf(process.platform !== "linux")(
+    "--isolate-tests parses to isolateTests, is absent without it, and bcdev refuses it by name",
+    () => {
+      expect(parseCliConfig([...argv, "--isolate-tests"])).toMatchObject({ isolateTests: true });
+      expect(parseCliConfig(argv)).not.toHaveProperty("isolateTests");
+      const bcdev = ["run", "--project", "p", "--tests", "t", "--backend", "bcdev"];
+      expect(parseCliConfig(bcdev)).not.toHaveProperty("isolateTests");
+      expect(() => parseCliConfig([...bcdev, "--isolate-tests"])).toThrow(
+        "--isolate-tests applies to al-runner-v3 only",
+      );
+    },
+  );
+  // R866: `--workers 1` is the small machine's answer, so it must not read as "not given".
+  test.skipIf(process.platform !== "linux")(
+    "--workers sets the baseline's processes under --isolate-tests, and only when given",
+    () => {
+      const on = [...argv, "--isolate-tests"];
+      expect(parseCliConfig(on)).not.toHaveProperty("baselineProcesses");
+      for (const n of [1, 3]) {
+        expect(parseCliConfig([...on, "--workers", String(n)])).toMatchObject({
+          baselineProcesses: n,
+          workers: n,
+        });
+      }
+      expect(parseCliConfig([...argv, "--workers", "3"])).not.toHaveProperty("baselineProcesses");
+    },
+  );
+  test("buildBackend threads --isolate-tests into the al-runner-v3 config, and only when set", async () => {
+    if (process.platform !== "linux") return; // v3 is refused off Linux (M9)
+    const build = async (isolateTests: boolean, baselineProcesses?: number) => {
+      const e = await env();
+      await writeFile(
+        join(e.root, "app.json"),
+        JSON.stringify({
+          id: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
+          idRanges: [{ from: 79000, to: 79199 }],
+          runtime: "17.0",
+        }),
+      );
+      const b = await buildBackend(
+        {
+          mode: "run",
+          projectDir: e.root,
+          testDir: e.root,
+          backendKind: "al-runner-v3",
+          ...(isolateTests ? { isolateTests: true } : {}),
+          ...(baselineProcesses !== undefined ? { baselineProcesses } : {}),
+        } as Parameters<typeof buildBackend>[0],
+        {
+          alRunnerV3: {
+            packagesDir: e.deps,
+            bcVersion: "28.0.46665.47126",
+            alcPath: "/fake/alc",
+            coverage: "none",
+          },
+        },
+        e.root,
+        undefined,
+        { alcRunnable: () => true },
+        { selectorId: 79199, controlId: 79198, tableId: 79197 },
+      );
+      return b;
+    };
+    expect((await build(true)).isolatesTests).toBe(true);
+    expect((await build(false)).isolatesTests).toBe(false);
+    const cfgOf = (b: unknown) =>
+      (b as { cfg: { isolatedBaselineProcesses?: number } }).cfg.isolatedBaselineProcesses;
+    expect(cfgOf(await build(true, 1))).toBe(1);
+    expect(cfgOf(await build(true))).toBeUndefined();
+  });
   test("buildBackend threads it into the al-runner-v3 config, and only when set", async () => {
     if (process.platform !== "linux") return; // v3 is refused off Linux (M9)
     const build = async (freshProbe: boolean) => {

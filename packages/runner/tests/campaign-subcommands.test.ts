@@ -1637,7 +1637,10 @@ describe("lethal campaign (exit code + dispatch, spawned)", () => {
         "--json",
       ]);
       expect(code).toBe(0);
-      const doc = JSON.parse(stdout);
+      // R870: stdout is one bc-toolbox envelope; the compare document is its `data`.
+      const envelope = JSON.parse(stdout);
+      expect(envelope).toMatchObject({ schemaVersion: "1", status: "ok", warnings: [] });
+      const doc = envelope.data;
       expect(doc.campaignCompareSchemaVersion).toBe(2);
       expect(doc.identical).toBe(true);
       expect(doc.coverage.verified).toBe(false);

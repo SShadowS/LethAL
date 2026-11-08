@@ -28,6 +28,32 @@
     }
   },
   {
+    "id": "edge-6bb821b98",
+    "track": "edge",
+    "version": "al-runner 3.0.0-alpha.13+edge.20261107 (6bb821b98)",
+    "binarySha256": "afe41bb685d7effc7be2f6df600cc4a7c94424e03dddf613224e6a4c57a58a89",
+    "readingsFrom": "edge-d72d3197d",
+    "readingsDigest": "f3d2aede5f3d8273b616237d80b7c0a72e18be71acf4f169999fb6882066872e",
+    "lethalCommit": "14d67689a2fbe10dd9565086efbe9e73bbfee285",
+    "gatedAt": "2026-11-07T10:17:56.708Z",
+    "warnFacts": {
+      "serve-keep-reasons": "matches"
+    }
+  },
+  {
+    "id": "edge-897b441eb",
+    "track": "edge",
+    "version": "al-runner 3.0.0-alpha.13+edge.20261108 (897b441eb)",
+    "binarySha256": "3560671422d5bd3b6a7eb8a38d655c031181dfcc061fde793fada316fc28f4fd",
+    "readingsFrom": "edge-d72d3197d",
+    "readingsDigest": "f3d2aede5f3d8273b616237d80b7c0a72e18be71acf4f169999fb6882066872e",
+    "lethalCommit": "14d67689a2fbe10dd9565086efbe9e73bbfee285",
+    "gatedAt": "2026-11-08T07:52:03.532Z",
+    "warnFacts": {
+      "serve-keep-reasons": "matches"
+    }
+  },
+  {
     "id": "edge-a0825f1d9",
     "track": "edge",
     "version": "al-runner 3.0.0-alpha.13+edge.20261106 (a0825f1d9)",
