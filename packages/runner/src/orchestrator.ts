@@ -35,6 +35,7 @@ import {
   type IsolatedOut,
   type MutantManifest,
   type MutantManifestEntry,
+  SPLIT_TRIGGER_PREAMBLE,
   type SelectorConfig,
   type TierResolver,
   assignMutantIds,
@@ -915,11 +916,16 @@ export function reachLatchRefusals(specs: readonly MutationSpec[]): {
   member: string;
   start: number;
   sites: number;
-  cause: "preamble" | "unparsed" | "split-var";
+  cause: "preamble" | "trigger-preamble" | "unparsed" | "split-var";
 }[] {
   const byStart = new Map<
     number,
-    { member: string; start: number; sites: number; cause: "preamble" | "unparsed" | "split-var" }
+    {
+      member: string;
+      start: number;
+      sites: number;
+      cause: "preamble" | "trigger-preamble" | "unparsed" | "split-var";
+    }
   >();
   for (const spec of specs) {
     const owner = reachLatchRefusedOwner(spec.before);
@@ -933,16 +939,19 @@ export function reachLatchRefusals(specs: readonly MutationSpec[]): {
       owner.kind === ALNodeKind.trigger
         ? owner.childForFieldName("name")
         : procedureLikeNameNode(owner);
-    const member = `${owner.kind === ALNodeKind.trigger ? "trigger" : "procedure"} ${nameNode?.text ?? unnamedMemberLabel(owner)}`;
+    const splitTrigger = owner.rawKind === SPLIT_TRIGGER_PREAMBLE;
+    const member = `${owner.kind === ALNodeKind.trigger || splitTrigger ? "trigger" : "procedure"} ${nameNode?.text ?? unnamedMemberLabel(owner)}`;
     byStart.set(owner.startIndex, {
       member,
       start: owner.startIndex,
       sites: 1,
-      cause: varSectionUnparsed(owner)
-        ? "unparsed"
-        : owner.rawKind === "preproc_split_procedure_preamble"
-          ? "preamble"
-          : "split-var",
+      cause: splitTrigger
+        ? "trigger-preamble"
+        : varSectionUnparsed(owner)
+          ? "unparsed"
+          : owner.rawKind === "preproc_split_procedure_preamble"
+            ? "preamble"
+            : "split-var",
     });
   }
   return [...byStart.values()].sort((x, y) => x.start - y.start);
@@ -1358,11 +1367,13 @@ export async function generateMutationSet(
     for (const r of reachLatchRefusals(fileSpecs)) {
       warn(
         "reach-latch-refused",
-        r.cause === "preamble"
-          ? `[lethal] ${rel}: ${r.member}'s var section is split together with its header (preproc_split_procedure_preamble: each #if arm holds its own procedure header and its own var section, if any, and one body follows the #endif), and not every arm's header end (its parameter list's ")", the return type, or a ";" after either) was found, so no reach latch is declared there: its ${r.sites} site(s) carry no reach marker (reachGrain "unplaced", reach not-decided, never unreached). R316.`
-          : r.cause === "unparsed"
-            ? `[lethal] ${rel}: ${r.member}'s var section did not parse cleanly (tree-sitter-al left an ERROR or missing node between the header and begin), so no reach latch is declared there: its ${r.sites} site(s) carry no reach marker (reachGrain "unplaced", reach not-decided, never unreached). R313.`
-            : `[lethal] ${rel}: ${r.member}'s var section is split by #if (preproc_conditional_var_block), and the token before that #if is not the end of its header (the parameter list's ")", the return type, or a ";" after either), so no reach latch is declared there: its ${r.sites} site(s) carry no reach marker (reachGrain "unplaced", reach not-decided, never unreached). R303.`,
+        r.cause === "trigger-preamble"
+          ? `[lethal] ${rel}: ${r.member}'s header and var section are both split by #if (preproc_split_trigger_preamble), and no reach latch is placed in that shape, so its ${r.sites} site(s) carry no reach marker (reachGrain "unplaced", reach not-decided, never unreached). R877.`
+          : r.cause === "preamble"
+            ? `[lethal] ${rel}: ${r.member}'s var section is split together with its header (preproc_split_procedure_preamble: each #if arm holds its own procedure header and its own var section, if any, and one body follows the #endif), and not every arm's header end (its parameter list's ")", the return type, or a ";" after either) was found, so no reach latch is declared there: its ${r.sites} site(s) carry no reach marker (reachGrain "unplaced", reach not-decided, never unreached). R316.`
+            : r.cause === "unparsed"
+              ? `[lethal] ${rel}: ${r.member}'s var section did not parse cleanly (tree-sitter-al left an ERROR or missing node between the header and begin), so no reach latch is declared there: its ${r.sites} site(s) carry no reach marker (reachGrain "unplaced", reach not-decided, never unreached). R313.`
+              : `[lethal] ${rel}: ${r.member}'s var section is split by #if (preproc_conditional_var_block), and the token before that #if is not the end of its header (the parameter list's ")", the return type, or a ";" after either), so no reach latch is declared there: its ${r.sites} site(s) carry no reach marker (reachGrain "unplaced", reach not-decided, never unreached). R303.`,
       );
     }
   }
