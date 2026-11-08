@@ -464,6 +464,20 @@ export interface ExplainSurvivor {
    * is refused, so none is offered.
    */
   readonly mark?: ExplainMark;
+  /**
+   * R873: where each of `coveringTests` is, from the report's `testMethods`, in the same order.
+   * Present only under `--project` (an agent's survivor packet) and only when the report has
+   * `testMethods`. File and line only, no source text. An optional additive field: no version bump.
+   */
+  readonly coveringTestLocations?: readonly ExplainTestLocation[];
+}
+
+/** R873: one covering test's place, as `ExplainCoveringTest` gives it, without the gap counts. */
+export interface ExplainTestLocation {
+  readonly name: string;
+  readonly file?: string;
+  readonly line?: number;
+  readonly lineAmbiguous?: true;
 }
 
 /**
@@ -1515,6 +1529,26 @@ function coveringTestsOf(
   return { coveringTests: covering, reachMeasuredMembers: measured.length };
 }
 
+/** R873: a survivor's covering tests with their file and line; a name `testMethods` lacks refuses
+ *  (the gap path's rule), never a row without a place. */
+function testLocationsOf(
+  m: MutantOutcome,
+  byName: ReadonlyMap<string, TestMethodRecord>,
+): ExplainTestLocation[] {
+  return m.coveringTests.map((name) => {
+    const t = byName.get(name);
+    if (t === undefined) {
+      refuse(`${m.mutantCode}'s covering test is not in testMethods`, name);
+    }
+    return {
+      name,
+      ...(t.file !== undefined ? { file: t.file } : {}),
+      ...(t.line !== undefined ? { line: t.line } : {}),
+      ...(t.lineAmbiguous === true ? { lineAmbiguous: true as const } : {}),
+    };
+  });
+}
+
 /**
  * C02-09: the report's rows grouped by gap id through `tallyGaps`, the one grouping rule `explain`
  * and `verify` share. `undefined` when no row carries a gap id (a report written before C02-09),
@@ -1930,12 +1964,22 @@ export function explain(report: SessionReport, options: ExplainOptions = {}): Ex
       ? verifiedProjectText(validated, options.projectSource)
       : undefined;
   const markOf = markBuilderOf(validated);
+  const testsByName =
+    validated.testMethods !== undefined
+      ? new Map(validated.testMethods.map((t) => [t.name, t]))
+      : undefined;
   const allSurvivors = validated.mutants
     .filter((m) => m.verdict === "survived")
     .map((m) => {
       const survivor = survivorOf(m, validated.artifacts, validated.coverageMode);
       const mark = markOf?.(m);
-      return mark !== undefined ? { ...survivor, mark } : survivor;
+      return {
+        ...survivor,
+        ...(mark !== undefined ? { mark } : {}),
+        ...(projectText !== undefined && testsByName !== undefined
+          ? { coveringTestLocations: testLocationsOf(m, testsByName) }
+          : {}),
+      };
     });
   const survivors =
     topSurvivors === undefined ? allSurvivors : rankSurvivors(allSurvivors).slice(0, topSurvivors);

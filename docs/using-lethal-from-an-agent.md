@@ -385,6 +385,12 @@ most survivors reached first, then by name. Duration is shown, never used to ord
 testMethods (an older report) the field is absent, which never means "no covering tests". On a run
 whose coverage is object-level or not measured, a gap's list can be the whole suite.
 
+Each `survivors` row can also carry `coveringTestLocations` (R873), given --project and a report that
+records testMethods. It holds one entry per `coveringTests` name, in the same order, each with `name`,
+and where known `file` and `line`; a test found at two places (one per #if arm) has `lineAmbiguous`
+instead of a line. It is file and line only, no source text, and it is copied from the report's
+testMethods, so it adds nothing to the report. Without --project the field is absent.
+
 Each `gaps` row can also carry `source`. Given `--project`, it holds `startLine` (the gap's `blockStartLine`),
 `lines` (the block's lines, split on LF, with one trailing CR dropped per line) and `marks`, one per
 member in `members` order, each `{ mutantCode, startLine, startColumn, endLine, endColumn }`. Lines and
@@ -575,6 +581,11 @@ A kill by a runtime error is still a kill, and says only that no assertion caugh
 lists the requested tests that had no fresh green unmutated run. Verify then does not run the mutant at all:
 that survivor's row is `error`. Fix those tests (they must pass unmutated, in a fresh session) and
 run verify again. If the test's state is `infra-error`, read both runs before editing it (below).
+
+A row is `killed` by a NEW test only when that test's `newTests[].state` is `stable` (R873). If the
+test killed the mutant but is `flaky` (or any state but `stable`), the row is `error`: its
+`failureNote` names the test and says the kill is not trusted, and `counts.error` counts it, not
+`counts.killed`. The exit code stays `5`. Fix the test until it is `stable`, then run verify again.
 
 `infra-error` means at least one of the new test's two unmutated runs failed for infrastructure
 reasons (its `runs[].outcome` is `error` or `deadline-exceeded`: the call failed, not the test).

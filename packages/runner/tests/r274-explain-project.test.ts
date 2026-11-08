@@ -318,6 +318,29 @@ describe("R274: explain --project renders each gap's source", () => {
     );
   });
 
+  test("R873: --project adds each survivor's covering tests' file and line, from testMethods; no flag, no field", () => {
+    const report = fixture.report;
+    const methods = report.testMethods ?? [];
+    expect(methods.length).toBeGreaterThan(0);
+    const without = explain(report).survivors;
+    expect(without.length).toBeGreaterThan(0);
+    expect(without.filter((s) => "coveringTestLocations" in s)).toEqual([]);
+    const withProject = explain(report, { projectSource: fixture.source }).survivors;
+    expect(withProject.length).toBe(without.length);
+    for (const s of withProject) {
+      expect(s.coveringTests.length).toBeGreaterThan(0);
+      expect((s.coveringTestLocations ?? []).map((l) => l.name)).toEqual([...s.coveringTests]);
+      for (const l of s.coveringTestLocations ?? []) {
+        const m = methods.find((t) => t.name === l.name);
+        expect(l.file).toBe(m?.file);
+        expect(l.line).toBe(m?.line);
+        expect(
+          Object.keys(l).every((k) => ["name", "file", "line", "lineAmbiguous"].includes(k)),
+        ).toBe(true);
+      }
+    }
+  });
+
   test("without a project, no gap carries source", () => {
     const gaps = explain(fixture.report).gaps ?? [];
     expect(gaps.length).toBeGreaterThan(0);
