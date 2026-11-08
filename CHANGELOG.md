@@ -13,6 +13,10 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **The agent skill installs as one file or as a Claude Code plugin** (R868, GitHub #26). `skills/lethal-mutation-testing/SKILL.md`
+  now runs LethAL in the safe order (doctor, dry run, scoped run, read, restore) and says what to do when a step fails. Copy
+  the one file into `~/.claude/skills/lethal-mutation-testing/`, or run `/plugin marketplace add SShadowS/LethAL` and
+  `/plugin install lethal@lethal`. A test parses every command the skill shows with LethAL's own argument parser.
 - **`--isolate-tests`, for `al-runner-v3`, off by default** (R857). Every test runs alone, so state an earlier test of its
   codeunit left behind does not reach it. A default run does not change. The mode is slower, mostly at the baseline: one
   process per test, four at a time or as `--workers` says (R866). A run with it and a run without it never share a verdict or a baseline. It is refused on `bcdev`, and

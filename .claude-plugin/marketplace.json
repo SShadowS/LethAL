@@ -1,0 +1,12 @@
+{
+  "name": "lethal",
+  "owner": { "name": "SShadowS" },
+  "description": "LethAL's agent skill for Claude Code.",
+  "plugins": [
+    {
+      "name": "lethal",
+      "source": "./",
+      "description": "The lethal-mutation-testing skill: run the LethAL CLI against a Business Central AL project in its safe order (doctor, dry run, scoped run, read, restore)."
+    }
+  ]
+}
