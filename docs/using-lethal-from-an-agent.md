@@ -89,8 +89,8 @@ Read-only, takes seconds, checks every pre-flight refusal in one pass instead of
 discover them one at a time. Run it first. Exit `0` means every check passed, `1` means at least
 one failed.
 
-- `checks[].name` is what to branch on. `detail` is prose for a human.
-- `notChecked` is the part that matters when doctor PASSES: those two are not covered by a green
+- `data.checks[].name` is what to branch on. `detail` is prose for a human.
+- `data.notChecked` is the part that matters when doctor PASSES: those two are not covered by a green
   report, so a run can still refuse for either reason.
 - `caveat` says which checks were skipped and why.
 
