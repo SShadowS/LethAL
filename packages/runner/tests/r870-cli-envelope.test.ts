@@ -5,14 +5,15 @@
  * run through the real CLI as a child process, so stdout, stderr and the exit code are the ones a
  * caller gets.
  */
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { UncommittedPathError } from "../src/campaign-git";
 import { refusalLine } from "../src/cli";
 import {
+  CONFIGURATION_ERROR,
   INVALID_ARGUMENT,
   LETHAL_ERROR_CODES,
   TOOLBOX_CORE_ERROR_CODES,
@@ -93,6 +94,35 @@ describe("R870: the envelope LethAL builds", () => {
     expect(Object.keys(marked)).toEqual(Object.keys(plain));
     expect(refusalLine(marked)).toBe(refusalLine(plain));
     expect(cliError(marked)).toMatchObject({ error: { code: "INVALID_ARGUMENT" } });
+    // Not even a copy or a spread carries it.
+    expect(Object.getOwnPropertySymbols({ ...marked })).toEqual([]);
+  });
+
+  test("a second mark keeps the first and does not throw: the error that reaches the user is the real one", () => {
+    const err = new Error("first");
+    classify(err, INVALID_ARGUMENT);
+    // A try, not `.not.toThrow()`: bun's matcher reads the Error `classify` RETURNS as thrown.
+    let threw: unknown;
+    try {
+      classify(err, CONFIGURATION_ERROR);
+    } catch (e) {
+      threw = e;
+    }
+    expect(threw).toBeUndefined();
+    expect(cliError(err)).toMatchObject({ error: { code: "INVALID_ARGUMENT", message: "first" } });
+  });
+
+  test("no failure LethAL reports is retryable: each needs a change before it is tried again", () => {
+    for (const e of [
+      new Error("x"),
+      classify(new Error("x"), INVALID_ARGUMENT),
+      classify(new Error("x"), CONFIGURATION_ERROR),
+      new UncommittedPathError("p", ["f"]),
+    ]) {
+      expect((cliError(e) as unknown as { error: { retryable: boolean } }).error.retryable).toBe(
+        false,
+      );
+    }
   });
 });
 
@@ -105,20 +135,24 @@ function lethal(args: readonly string[], home: string) {
 }
 
 describe("R870: --json through the real CLI, on the issue's three failure classes", () => {
-  const dir = mkdtempSync(join(tmpdir(), "lethal-r870-"));
-  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+  // Named now, made in beforeAll: a filtered run that skips these tests leaves nothing behind.
+  const dir = join(tmpdir(), `lethal-r870-${process.pid}-${Date.now()}`);
   const config = join(dir, "v3.json");
-  writeFileSync(
-    config,
-    JSON.stringify({
-      alRunnerV3: {
-        packagesDir: dir,
-        bcVersion: "28.0.1.2",
-        path: join(dir, "no-al-runner"),
-        alcPath: join(dir, "no-alc"),
-      },
-    }),
-  );
+  beforeAll(() => {
+    mkdirSync(dir);
+    writeFileSync(
+      config,
+      JSON.stringify({
+        alRunnerV3: {
+          packagesDir: dir,
+          bcVersion: "28.0.1.2",
+          path: join(dir, "no-al-runner"),
+          alcPath: join(dir, "no-alc"),
+        },
+      }),
+    );
+  });
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
   const cases: ReadonlyArray<{
     name: string;
     args: string[];
