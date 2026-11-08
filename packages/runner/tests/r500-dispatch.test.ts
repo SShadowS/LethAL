@@ -239,8 +239,8 @@ describe("R500 step 7: an XMLport is not a carrier, so its own refusal is dorman
 });
 
 describe("R500: the identity scheme twin (a Date item refused, a MaxIteration twin renumbered)", () => {
-  test("the identity scheme is 45 (34 R343, 35 for R500, 36 R497, 37 R340, 38 R555, 39 R-531, 40 R565, 41 R572, 42 R-604b, 43 R796, 44 R829, 45 R830)", () => {
-    expect(IDENTITY_SCHEME).toBe(45);
+  test("the identity scheme is 46 (34 R343, 35 for R500, 36 R497, 37 R340, 38 R555, 39 R-531, 40 R565, 41 R572, 42 R-604b, 43 R796, 44 R829, 45 R830, 46 R865)", () => {
+    expect(IDENTITY_SCHEME).toBe(46);
   });
 
   test("the Date item's `Total := 0` emits nothing and is hang-refused", () => {

@@ -7,6 +7,7 @@ import {
 } from "@lethal/operator-sdk";
 import { hangCapableForMutatedNode } from "./loop-hazard";
 import { findOperatorToken, replaceOperatorToken, synthesizeAfter } from "./mutate-helpers";
+import { recursionDepthHangs } from "./recursion-hazard";
 
 const OPERATOR_NAME = "lethal.swap-additive";
 const OPERATOR_VERSION = "1.0.0";
@@ -90,7 +91,7 @@ export const swapAdditive: MutationOperator = {
   // token replacement would ALSO have failed is still counted. A possible small over-count, bounded
   // by such nodes (none known); not worth a second token replacement on the refusal path.
   refusesHangCapable(node: ALSyntaxNode, ctx: SemanticContext): boolean {
-    return flipBeforeHang(node, ctx) !== null && hangCapableForMutatedNode(node, ctx) !== null;
+    return flipBeforeHang(node, ctx) !== null && hangRefused(node, ctx);
   },
 
   generate(node: ALSyntaxNode, ctx: SemanticContext): readonly MutationSpec[] {
@@ -179,7 +180,12 @@ function flipFor(node: ALSyntaxNode, ctx: SemanticContext): AdditiveFlip | null 
   const flip = flipBeforeHang(node, ctx);
   // R196: a value written to a variable an enclosing loop's condition reads is refused, and
   // counted per file through `refusesHangCapable` (R447).
-  return flip !== null && hangCapableForMutatedNode(node, ctx) === null ? flip : null;
+  return flip !== null && !hangRefused(node, ctx) ? flip : null;
+}
+
+/** R196's loop check, then R865's: a depth argument of a direct recursion. */
+function hangRefused(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+  return hangCapableForMutatedNode(node, ctx) !== null || recursionDepthHangs(node, ctx);
 }
 
 /** `flipFor` without R196's hang check: every other guard, in the same order (R447). */

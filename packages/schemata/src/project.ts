@@ -257,8 +257,9 @@ export function coarseIdentityTupleOf(
  * 43: R796, tree-sitter-al 4.4.1 -> 4.5.0 parses shapes 4.4.1 swallowed or broke, so the big corpora gain and lose sites (predicted from master 601b2e98 against the 4.5.0 addon: BC.History 98 added and 14 removed, 2 ordinals moved, 0 tuples moved; DC 3 added; fixtures, CDO and DO identical); history, --resume and marks recorded under 42 are not carried. The committed baselines at 42 lag until the merge window re-records them.
  * 44: R829 (coord task R-818), a loop whose condition reads a name now also refuses the writes that feed its condition and exit guards, so sites leave the set and their same-tuple twins' ordinals move (figures: R829); history, --resume and marks recorded under 43 are not carried.
  * 45: R830 and R831 (coord task R-833), a statement call a loop's progress may rest on is refused for every operator, and an array element reads as its array, so sites leave the set and their same-tuple twins' ordinals move (figures: R830); history, --resume and marks recorded under 44 are not carried.
+ * 46: R865 (coord task R-871), `swap-additive` and `delete-additive-*` refuse a direct recursion's depth argument, so sites leave the set and their same-tuple twins' ordinals move (measured against master 1aba1bf6: BC.History 24 removed and 4 ordinals moved, DC 2 removed, 0 tuples moved; fixtures, CDO and DO identical); history, --resume and marks recorded under 45 are not carried.
  */
-export const IDENTITY_SCHEME = 45;
+export const IDENTITY_SCHEME = 46;
 
 /**
  * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,

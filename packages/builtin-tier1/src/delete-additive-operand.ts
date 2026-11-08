@@ -12,6 +12,7 @@ import {
   isIdentifierLike,
 } from "./loop-hazard";
 import { synthesizeAfter } from "./mutate-helpers";
+import { recursionDepthHangs } from "./recursion-hazard";
 
 const VERSION = "1.0.0";
 type Side = "left" | "right";
@@ -65,7 +66,8 @@ function operands(node: ALSyntaxNode, side: Side, ctx: SemanticContext) {
 const hangs = (node: ALSyntaxNode, deleted: ALSyntaxNode, ctx: SemanticContext): boolean =>
   hangCapableForMutatedNode(node, ctx) !== null ||
   inLoopExitParts(node, ctx) ||
-  deletedOperandHangs(deleted, node, ctx);
+  deletedOperandHangs(deleted, node, ctx) ||
+  recursionDepthHangs(node, ctx); // R865
 
 /**
  * `DeleteAdditiveOperand` (GitHub #41): `x + y` to `x` and to `y`, `x - y` to `x`. One operator per

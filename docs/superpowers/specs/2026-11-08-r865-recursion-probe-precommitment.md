@@ -1,6 +1,6 @@
 # R865 pre-commitment: what unbounded AL recursion does on BC
 
-**DROPPED, 2026-11-08, by the owner's ruling. This probe was never run, and nothing was published on `bc1`.** The text below is kept as the record of what it would have measured. With no measurement, R865's rule takes the safe default: refuse a recursion mutant.
+**DROPPED, 2026-11-08, by the owner's ruling. This probe was never run, and nothing was published on `bc1`.** The text below is kept as the record of what it would have measured. With no measurement, R865 is closed by R-871's narrow rule, the owner's choice: see `docs/roadmap/R865.md`.
 
 Written 2026-11-08 by lethal-code, before any run, on the owner's word in the lane's session. Item: [[R865]]. Server: `bc1` (BC 28.4), named by the owner as the server that may crash. The rule that rests on the answer is R-871's, preproc's; it is held until this runs.
 
