@@ -502,7 +502,7 @@ that ordering is the priority.
 - **R821** · The reports told users to raise --baseline-timeout-ms, which was no CLI flag (GitHub #46) · [R821.md](docs/roadmap/R821.md) · done (3ae274b3)
 - **R824** · doctor misses a missing non-Microsoft dependency package and a sync-pending tenant; clear-quarantine rejects --config (GitHub #29) · [R824.md](docs/roadmap/R824.md) · done (41df4238)
 - **R825** · README states the operator count in prose by hand, and it drifted (GitHub #44) · [R825.md](docs/roadmap/R825.md) · done (41df4238)
-- **R826** · A 907-guard codeunit crashed the BC service tier with a stack overflow: nothing limits or warns on guards per codeunit (GitHub #28) · [R826.md](docs/roadmap/R826.md) · open, filed 2026-11-05 (coord task R-820); a warning landed (R-825); the measurement waits for #28's reporter
+- **R826** · A 907-guard codeunit crashed the BC service tier with a stack overflow: nothing limits or warns on guards per codeunit (GitHub #28) · [R826.md](docs/roadmap/R826.md) · open, filed 2026-11-05 (coord task R-820); a warning landed (R-825); the measurement waits for #28's…
 - **R827** · One empty-block mutant on a block folds everything inside it into one chain: 2 to 8 x the emitted code on real codeunits, growing with the square · [R827.md](docs/roadmap/R827.md) · done (45259f76)
 - **R828** · Statements that keep their whole body as a chain root (`if`, loops, `case` arms) leave chains of up to 461 after R827, and a 44 MB file: R827 alone does not clear #28's suspect · [R828.md](docs/roadmap/R828.md) · closed 2026-11-06 — named limit: O1 landed, O3 not adopted
 - **R829** · Hang refusal misses a write the loop's step reads, when the loop condition reads a name (GitHub #50) · [R829.md](docs/roadmap/R829.md) · done (08605e4d)
