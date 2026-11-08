@@ -88,6 +88,13 @@ const usingContainer: NotASlot = {
   reason: "holds `using_statement` (a namespace import), which is not executable",
   item: null,
 };
+/** tree-sitter-al 4.6.0 (#39): an empty `#if` group inside this statement kind lands in
+ *  `.children`; no statement is held there. */
+const emptyGroupContainer: NotASlot = {
+  kind: "not-executable",
+  reason: "holds only the markers of an empty `#if` group (tree-sitter-al 4.6.0); no statement",
+  item: null,
+};
 const unsupported = (reason: string, item: string): NotASlot => ({
   kind: "unsupported",
   reason,
@@ -139,6 +146,16 @@ export const NOT_A_SLOT: Readonly<Record<string, NotASlot>> = {
     "not classified before R217",
     "R444",
   ),
+  "case_branch.children": emptyGroupContainer,
+  "for_statement.children": emptyGroupContainer,
+  "foreach_statement.children": emptyGroupContainer,
+  "if_statement.children": emptyGroupContainer,
+  "preproc_split_case_branch.children": emptyGroupContainer,
+  "preproc_split_case_end_branch.children": emptyGroupContainer,
+  "preproc_split_if_else_statement.children": emptyGroupContainer,
+  "preproc_split_if_statement.children": emptyGroupContainer,
+  "while_statement.children": emptyGroupContainer,
+  "with_statement.children": emptyGroupContainer,
   "action_group_body.children": declarationContainer,
   "assembly_body.children": declarationContainer,
   "controladdin_body.children": declarationContainer,

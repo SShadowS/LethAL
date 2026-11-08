@@ -1505,9 +1505,9 @@ describe("R303: a member whose var section is split by #if gets a latch, or is r
 #endif
 }
 `;
-  // R214: Twin's var section is two #if blocks in a row, which tree-sitter-al leaves as ERROR nodes
-  // that swallow two of its directive markers, so its file cannot be evaluated as alc does and is
-  // refused whole. It sits in its own file so the members above are still measured.
+  // Twin's var section is two #if blocks in a row. tree-sitter-al 4.5.0 left them as ERROR nodes and
+  // the file was refused whole (R214). 4.6.0 parses them (#31), so Twin gets the header latch, with
+  // BOTH blocks' `var` blanked (R-861 run 002), or a build with both arms on has two (alc AL0104).
   const TWIN = `codeunit 50101 "Repro D Twin"
 {
     procedure Twin(X: Integer): Integer
@@ -1545,17 +1545,8 @@ describe("R303: a member whose var section is split by #if gets a latch, or is r
       expect(prag?.message).toContain("R303");
       expect(prag?.message).toContain("is not the end of its header");
       expect(prag?.message).not.toContain("did not parse cleanly");
-      // R214 (ruling T6-a): the unparsed member's file is refused whole, before any latch is
-      // considered, so R313's sentence cannot name it here. R313's sentence stays covered end to end
-      // by R316's P16 test, whose file is decided.
-      expect(set.preprocExcluded.map((f) => [f.file, f.reason, f.detail, f.sites])).toEqual([
-        [
-          "Twin.Codeunit.al",
-          "preproc-undecided",
-          "marker-mismatch (4 directive lines, 2 markers)",
-          5, // R855: was 4; delete-additive-right adds one site
-        ],
-      ]);
+      // R214's marker-mismatch refusal stays covered by r214-compiled-out and preproc-arms.
+      expect(set.preprocExcluded).toEqual([]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -1563,9 +1554,16 @@ describe("R303: a member whose var section is split by #if gets a latch, or is r
       "Repro.Codeunit.al": SRC,
       "Twin.Codeunit.al": TWIN,
     });
-    // The refused file gets no mutant and is not written.
-    expect(manifest.mutants.filter((m) => m.file === "Twin.Codeunit.al")).toEqual([]);
-    expect(emitted.has("Twin.Codeunit.al")).toBe(false);
+    const twin = emitted.get("Twin.Codeunit.al") ?? "";
+    const twinHeader = "procedure Twin(X: Integer): Integer var LethALReachLatch: Boolean;";
+    expect(twin).toContain(twinHeader);
+    const afterHeader = twin.slice(twin.indexOf(twinHeader) + twinHeader.length);
+    expect(afterHeader.slice(0, afterHeader.indexOf("    begin")).match(/\bvar\b/gi)).toBeNull();
+    expect(
+      new Set(
+        manifest.mutants.filter((m) => m.file === "Twin.Codeunit.al").map((m) => m.reachGrain),
+      ),
+    ).toEqual(new Set(["statement"]));
     const grains = new Map<string, Set<string>>();
     for (const m of manifest.mutants) {
       const who = m.triggerName ?? m.procedureName;
@@ -1587,11 +1585,11 @@ describe("R303: a member whose var section is split by #if gets a latch, or is r
     );
   });
 
-  test("S3's emission re-parses with ERROR nodes, yet both line maps give every line to its own member", async () => {
+  test("S3's emission re-parses clean, and both line maps give every line to its own member", async () => {
     // The hoist turns S3's nested #if into a nested #if inside an ordinary var section, which
-    // tree-sitter-al cannot parse (SShadowS/tree-sitter-al #30). The bcdev line map and the
-    // al-runner coverage index both re-parse the instrumented bundle, so pin that the ERRORs stay
-    // inside Pick and the member boundaries survive.
+    // tree-sitter-al 4.5.0 could not parse and 4.6.0 can (SShadowS/tree-sitter-al #30). The bcdev
+    // line map and the al-runner coverage index both re-parse the instrumented bundle, so pin that
+    // the member boundaries survive.
     const S3 = `codeunit 50100 "Repro S"
 {
     procedure Pick(X: Integer); // header note
@@ -1637,7 +1635,7 @@ describe("R303: a member whose var section is split by #if gets a latch, or is r
       visit(wrapRoot(parseAL(text)), (n) => {
         if (n.rawKind === "ERROR") errors++;
       });
-      expect(errors).toBeGreaterThan(0);
+      expect(errors).toBe(0);
       const lines = text.split("\n");
       const lineOf = (needle: string, from = 0): number => {
         const i = lines.findIndex((l, k) => k >= from && l.startsWith(needle));
@@ -1807,18 +1805,9 @@ describe("R316: a split-header procedure whose arms each have their own var sect
         },
       });
       expect(warnings.filter((w) => w.code === "reach-latch-refused")).toEqual([]);
-      // R214 (ruling T6-a): Twin's file is refused before any latch is considered, so R313's
-      // sentence cannot name it here. R313's sentence stays covered end to end by P16 below, whose
-      // file is decided.
-      expect(set.preprocExcluded.map((f) => [f.file, f.reason, f.detail, f.sites])).toEqual([
-        [
-          "Twin.Codeunit.al",
-          "preproc-undecided",
-          // R796: tree-sitter-al 4.5.0 marks one more directive (4.4.1: 5 markers, 3 sites).
-          "marker-mismatch (7 directive lines, 6 markers)",
-          5, // R855: was 4; delete-additive-right adds one site
-        ],
-      ]);
+      // tree-sitter-al 4.6.0 (#30) parses Twin's nested `#if` around a var section, so the file is
+      // no longer refused whole (4.5.0: preproc-undecided, marker-mismatch, 5 sites).
+      expect(set.preprocExcluded).toEqual([]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -1829,17 +1818,22 @@ describe("R316: a split-header procedure whose arms each have their own var sect
       "Repro.Codeunit.al": SRC,
       "Twin.Codeunit.al": TWIN,
     });
-    // The refused file gets no mutant and is not written (R214).
-    expect(manifest.mutants.filter((m) => m.file === "Twin.Codeunit.al")).toEqual([]);
-    expect(emitted.has("Twin.Codeunit.al")).toBe(false);
-    // Every mutant sits in exactly one member, each bounded through its closing `end;`.
-    for (const m of manifest.mutants) {
+    // tree-sitter-al 4.6.0 (#30): Twin's file parses, so it is admitted, written, and its sites
+    // carry the statement grain (4.5.0: refused whole, R214).
+    const twinMutants = manifest.mutants.filter((m) => m.file === "Twin.Codeunit.al");
+    expect(twinMutants.length).toBeGreaterThan(0);
+    expect([...new Set(twinMutants.map((m) => m.reachGrain))]).toEqual(["statement"]);
+    expect(emitted.has("Twin.Codeunit.al")).toBe(true);
+    // Every Repro mutant sits in exactly one member, each bounded through its closing `end;`.
+    for (const m of manifest.mutants.filter((m) => m.file === "Repro.Codeunit.al")) {
       const owners = members.filter((x) => m.startLine >= x.first && m.startLine <= x.last);
       expect(owners).toHaveLength(1);
     }
     for (const x of members) {
       const grains = manifest.mutants
-        .filter((m) => m.startLine >= x.first && m.startLine <= x.last)
+        .filter(
+          (m) => m.file === "Repro.Codeunit.al" && m.startLine >= x.first && m.startLine <= x.last,
+        )
         .map((m) => m.reachGrain);
       expect(grains.length).toBeGreaterThan(0);
       expect([x.name, ...new Set(grains)]).toEqual([x.name, x.grain]);
@@ -3995,6 +3989,10 @@ ${head}    var
         Glob: Integer;
 }
 `;
+    // tree-sitter-al 4.6.0 (#30) parses the nested `#if` above, so the emission no longer re-parses
+    // with an ERROR by itself. A harmless ERROR (`Glob := ;` in `Other`) is put into the EMITTED
+    // text below, after instrumenting: an ERROR in the source would make the file's split members
+    // unplaced (procedureName "").
     for (const [label, src, renamed] of [
       ["renamed", body(HEAD_R), true],
       ["plain", body(HEAD_P), false],
@@ -4006,7 +4004,10 @@ ${head}    var
       for (const m of inMember) {
         expect([label, m.coverageArmNames?.[0] ?? m.procedureName]).toEqual([label, "Pick"]);
       }
-      const text = emitted.get("Repro.Codeunit.al") ?? "";
+      const text = (emitted.get("Repro.Codeunit.al") ?? "").replace(
+        "  Glob := X + 1\nend;",
+        "  Glob := ;\nend;",
+      );
       expect([label, wrapRoot(parseAL(text)).hasError]).toEqual([label, true]);
       const dir = await mkdtemp(join(tmpdir(), "lethal-r318-i1-"));
       try {
