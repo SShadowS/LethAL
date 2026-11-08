@@ -119,6 +119,9 @@ it exists. The method undercounts a path that runs through a third app. See R634
 
 ## History
 
+2026-11-08 (R865, coord task R-871): `hang.single.baseline.json` moved from identity scheme 45 to 46, on `bc2`, by R332's procedure.
+Only the scheme line changed, and the confirm passed. Logs: `/coord/handoff/R-871/bc2/`.
+
 2026-11-06 (R830, coord task R-833): `fixtures/sandbox-hang`'s two loops now call an `IntegrationEvent`, `OnAdvance()`, because LethAL
 refuses a call whose same-object callee moves the loop. `Advance` is its subscriber in a `SingleInstance` codeunit, a shape the rule does
 not see (R839). The version stays 1.0.0.4. No row, line or figure moved, and four keys did. `hang.single.baseline.json` was recorded at
