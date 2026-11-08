@@ -263,22 +263,16 @@ function injectReachLatches(
       }
       for (const end of ends)
         rewrites.set(insertionNodeAt(end, end.endIndex), text(` var ${latch}: Boolean;`));
-      const blank = (n: ALSyntaxNode): void => {
-        if (n.kind === ALNodeKind.block) return;
-        if (n.rawKind === "var_keyword" && n.parent?.kind === ALNodeKind.var_section) {
-          rewrites.set(n, text(" ".repeat(n.endIndex - n.startIndex)));
-          return;
-        }
-        for (const k of n.children) blank(k);
-      };
-      for (const k of owner.children) blank(k);
+      for (const k of owner.children) blankVarKeywords(k, rewrites);
       continue;
     }
     // R303: the var section sits inside `#if`. One unconditional `var` on the header line, and
-    // each arm's own `var` keyword blanked to spaces, so the arms' declarations join that one
+    // every arm's own `var` keyword blanked to spaces, so the arms' declarations join that one
     // section in every build. No newline, so no LINE moves (offsets and later columns do).
-    const split = owner.children.find((n) => n.rawKind === "preproc_conditional_var_block");
-    if (split !== undefined) {
+    // tree-sitter-al 4.6.0 (#30, #31) also parses two blocks in a row, and a block nested in an
+    // arm: every block, at any depth, or a second `var` survives and alc rejects it (AL0104).
+    const splits = owner.children.filter((n) => n.rawKind === "preproc_conditional_var_block");
+    if (splits.length > 0) {
       const anchor = splitVarHoistAnchor(owner);
       if (anchor === null) {
         // `placeReach` refuses these members, so no statement-grain marker can reach here.
@@ -288,11 +282,7 @@ function injectReachLatches(
         );
       }
       rewrites.set(insertionNodeAt(anchor, anchor.endIndex), text(` var ${latch}: Boolean;`));
-      for (const arm of split.children.filter((n) => n.kind === ALNodeKind.var_section)) {
-        const keyword = arm.children.find((n) => n.rawKind === "var_keyword");
-        if (keyword !== undefined)
-          rewrites.set(keyword, text(" ".repeat(keyword.endIndex - keyword.startIndex)));
-      }
+      for (const split of splits) blankVarKeywords(split, rewrites);
       continue;
     }
     // Fix round 1: a comment is a node of its own, so neither anchor may be "the node before
@@ -314,6 +304,19 @@ function injectReachLatches(
     }
   }
   return latches;
+}
+
+/**
+ * Every var-section `var` keyword under `n`, at any depth, blanked to spaces of its own length (R303,
+ * R316). Stops at the body: a `var` parameter's keyword sits under a parameter, never a var section.
+ */
+function blankVarKeywords(n: ALSyntaxNode, rewrites: Map<ALSyntaxNode, PlannedPayload>): void {
+  if (n.kind === ALNodeKind.block) return;
+  if (n.rawKind === "var_keyword" && n.parent?.kind === ALNodeKind.var_section) {
+    rewrites.set(n, text(" ".repeat(n.endIndex - n.startIndex)));
+    return;
+  }
+  for (const k of n.children) blankVarKeywords(k, rewrites);
 }
 
 /**

@@ -2142,9 +2142,9 @@ const R303_SRC = `codeunit 50100 "Repro D"
 }
 `;
 
-/** tree-sitter-al's ERROR count for one nested `#if` inside an ordinary var section's `#if`: a
- *  grammar gap, filed upstream as SShadowS/tree-sitter-al #30. */
-const NESTED_IF_IN_VAR_ERRORS = 2; // R796: 4.5.0 gives 2 ERROR nodes for this gap (4.4.1: 3); still a gap
+/** tree-sitter-al's ERROR count for one nested `#if` inside an ordinary var section's `#if`:
+ *  SShadowS/tree-sitter-al #30, fixed in 4.6.0 (4.5.0 gave 2, 4.4.1 gave 3). */
+const NESTED_IF_IN_VAR_ERRORS = 0;
 
 /** Re-parsed emitted text: declarations named `latch` directly in a var section, those nested
  *  deeper (inside an #if), and how many split var blocks are left. */
@@ -2397,6 +2397,51 @@ const HOIST_CASES: { name: string; src: string; header: string; parseErrors?: nu
 `,
   },
   {
+    // tree-sitter-al 4.6.0 (#31) parses two blocks in a row. Every block's `var` is blanked, or a
+    // build with both arms active has two (alc AL0104). A `var` parameter keeps its keyword.
+    name: "S13 two #if var blocks in a row, and a var parameter",
+    header: "    procedure E(var Z: Integer; X: Integer)",
+    src: `codeunit 50100 "Repro H"
+{
+    procedure E(var Z: Integer; X: Integer)
+#if A
+    var K: Integer;
+#endif
+#if B
+    var N: Integer;
+#endif
+    begin
+        Glob := X + 1;
+    end;
+
+    var
+        Glob: Integer;
+}
+`,
+  },
+  {
+    // tree-sitter-al 4.6.0 (#30) parses a nested #if around the whole section: the inner arm's
+    // `var` is blanked too, or it survives beside the latch's (alc AL0104 with A on, C off).
+    name: "S14 a nested #if wrapping the whole var section",
+    header: "    procedure E(X: Integer)",
+    src: `codeunit 50100 "Repro H"
+{
+    procedure E(X: Integer)
+#if not C
+#if A
+    var K: Integer;
+#endif
+#endif
+    begin
+        Glob := X + 1;
+    end;
+
+    var
+        Glob: Integer;
+}
+`,
+  },
+  {
     // alc and al-runner proved this as `s6-empty-var-arm` (scratch evidence, run 001).
     name: "S6 an #if arm holding a bare var with no declarations",
     header: "    procedure P(X: Integer)",
@@ -2475,7 +2520,8 @@ describe("R303: a member whose var section is split by #if gets one unconditiona
       // Every arm's own `var` is blanked: between the header and `begin` the only `var` left is the
       // latch's. The re-parse above cannot see this: tree-sitter-al accepts a repeated `var`
       // inside an #if arm of one section, while alc rejects it (AL0104).
-      const head = out.indexOf(c.header);
+      // Counted from the header's END, so a `var` parameter (S13) is not counted.
+      const head = out.indexOf(c.header) + c.header.length;
       const section = out.slice(head, out.indexOf("\n    begin", head));
       expect(section.match(/\bvar\b/gi)?.length).toBe(1);
       expect(out.split("MutationSelector.Reached(").length - 1).toBe(1);
@@ -2485,7 +2531,7 @@ describe("R303: a member whose var section is split by #if gets one unconditiona
     });
   }
 
-  it("grammar control: a nested #if inside an ordinary var section is a tree-sitter-al gap", () => {
+  it("grammar control: a nested #if inside an ordinary var section parses (tree-sitter-al #30, 4.6.0)", () => {
     const src = `codeunit 50100 "Repro G"
 {
     procedure Pick(X: Integer)
@@ -2621,33 +2667,17 @@ describe("R303: a member whose var section is split by #if gets one unconditiona
     expect(splitVarHoistAnchor(owner)).toBeNull();
   });
 
-  // tree-sitter-al puts both of these under ERROR nodes, so the owner has no
-  // `preproc_conditional_var_block` child for the hoist to see. Before the refusal, two-blocks
-  // got its latch in the second block's section (alc AL0118 under [A]) and nested-wrap got a new
-  // `var` before `begin` (alc AL0104 under [A,B]).
+  // tree-sitter-al puts this under an ERROR node, so the owner has no `preproc_conditional_var_block`
+  // child for the hoist to see. Two blocks in a row and a nested #if around the section were here
+  // until 4.6.0 parsed them (#30, #31): they are HOIST_CASES S13 and S14 now.
   const UNPARSED: { name: string; member: string }[] = [
     {
-      name: "two #if var blocks in a row",
+      name: "a #if var block followed by a plain var",
       member: `    procedure E(X: Integer)
 #if A
-    var K: Integer;
-#endif
-#if not A
     var N: Integer;
 #endif
-    begin
-        Glob := X + 1;
-    end;
-`,
-    },
-    {
-      name: "a nested #if wrapping the whole var section",
-      member: `    procedure E(X: Integer)
-#if A
-#if B
     var K: Integer;
-#endif
-#endif
     begin
         Glob := X + 1;
     end;
