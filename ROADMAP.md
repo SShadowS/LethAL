@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**14 of 847 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**13 of 847 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -869,7 +869,7 @@ that ordering is the priority.
 - **R792** · v3 "deferred proof" (Design A2): overlap the alc proof with the baseline and the mutant loop, journaling writes until alc joins · [R792.md](docs/roadmap/R792.md) · parked 2026-11-05 (owner ruling): A2 is dropped for now; estimated 2.4-3.6 s on D1, not measured on server1…
 - **R796** · Upgrade tree-sitter-al from 4.4.1 to 4.5.0: fixes R720's and R327's swallowed members at the root; needs pins, 7 container classifications, 10 test re-pins and a pre-committed identity bump · [R796.md](docs/roadmap/R796.md) · done (66b585c1)
 - **R790** · v3: run the alc proof alongside the baseline and the mutant loop, and discard the results if alc rejects (the owner's Design A) · [R790.md](docs/roadmap/R790.md) · done (8c6a9fe8)
-- **R800** · v3: alc runs 1.5-2 s slower beside a concurrent al-runner call, even with free cores (memory bandwidth or cache contention, not CPU scheduling) · [R800.md](docs/roadmap/R800.md) · open, filed 2026-10-25 (coord task R-798)
+- **R800** · v3: alc runs 1.5-2 s slower beside a concurrent al-runner call, even with free cores (memory bandwidth or cache contention, not CPU scheduling) · [R800.md](docs/roadmap/R800.md) · closed 2026-11-08 — not reproduced: on al-runner 3.0.0-alpha.13+edge.20261108 (897b441eb), 7 interleaved…
 - **R804** · Pin al-runner edge 8078bcf49 (3.0.0-alpha.5+edge.20261026): every pinned defect gone, 48 known table differences at BC's verdict · [R804.md](docs/roadmap/R804.md) · closed 2026-11-06 — superseded: the update gate moved current past 8078bcf49 and db0296678 to edge-d72d3197d…
 - **R798** · v3: where R790's extra 2-3 s in D1's deploy goes; ruling: speculative baseline is opt-in, no nice or reorder · [R798.md](docs/roadmap/R798.md) · done (b04d6427)
 - **R805** · The update gate keeps a PASS's gate.log beside .gated, so a switch can be audited from its own run · [R805.md](docs/roadmap/R805.md) · done (d73f6974)
