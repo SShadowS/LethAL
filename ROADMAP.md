@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**17 of 846 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**16 of 846 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -43,7 +43,7 @@ that ordering is the priority.
 - **R15** · Custom environment tool support · [R015.md](docs/roadmap/R015.md) · done (gate PASSED 2026-07-26, baseline frozen)
 - **R16** · Run the `envtool` live gate and record its baseline · [R016.md](docs/roadmap/R016.md) · done (2026-07-26 — 3 killed / 10 survived / 3 no-coverage, matching the container gate)
 - **R133** · Vendored tree-sitter-al is 3.2.1; upstream 4.0.0 is a breaking release that moves named trees LethAL hashes · [R133.md](docs/roadmap/R133.md) · done (af3d9a3) — bumped 2026-08-12, same day as filed. One grammar-caused code fix…
-- **R856** · Operator batch #42 and #33: swap-call-arguments claims member arguments; opt-in swap-workdate-today · [R856.md](docs/roadmap/R856.md) · open, in build (coord task R-856)
+- **R856** · Operator batch #42 and #33: swap-call-arguments claims member arguments; opt-in swap-workdate-today · [R856.md](docs/roadmap/R856.md) · done (1be2bed9)
 
 ## Correctness risks (measured, not closed)
 

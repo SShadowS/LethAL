@@ -56,11 +56,14 @@ real gap.
 First run against Cronus283 (BC 28) on 2026-08-24, and re-frozen there on 2026-08-26 when `lethal.shift-integer`
 shipped. Re-frozen again on 2026-10-23 (R560), on bc1 (BC 28.4 W1), at identity scheme 41 under
 `coverageMode: "fenced"`. Every mutant's verdict matched the 2026-08-26 freeze, and a second run matched the new
-baseline mutant by mutant, with every mutated text checked:
+baseline mutant by mutant, with every mutated text checked. Re-frozen once more on 2026-11-07 (R856) on bc1 for the
+operator batch, at identity scheme 45: three mutants were added at `CreditLimitMgt` line 37 (two killed, one survived,
+as pre-committed), the other 42 unchanged, and a second run matched mutant by mutant. The figures below are that
+run's counts (the TIMING line is the earlier record):
 
 ```
-dry run: 2 file(s), 46 mutant site(s), 42 deployed mutant(s), 1 batch(es)
-score: 74.2%  (killed 23, survived 8, no-coverage 11, deadline-exceeded 0, timeout-killed 0, known-survivor 0, error 0 [unstable 0])
+dry run: 2 file(s), 49 mutant site(s), 45 deployed mutant(s), 1 batch(es)
+score: 73.5%  (killed 25, survived 9, no-coverage 11, deadline-exceeded 0, timeout-killed 0, known-survivor 0, error 0 [unstable 0])
 TIMING: total 13.0s = generate 0.0s + deploy 2.6s + baseline 0.7s + mutants 1.3s + overhead 8.5s
 ```
 
@@ -77,7 +80,7 @@ lethal campaign compare --manifest examples/credit-limit/campaign.json \
 ```
 
 Run that before quoting these numbers anywhere. Each survivor named above is a claim about ONE
-mutant, and a total that still reads 23 / 8 / 11 can hide a verdict that moved.
+mutant, and a total that still reads 25 / 9 / 11 can hide a verdict that moved.
 
 Named by procedure and operator, never by mutant code. Codes are per-run labels that renumber
 the moment an operator lands earlier in the file — `flip-boolean-literal` shifted all three of

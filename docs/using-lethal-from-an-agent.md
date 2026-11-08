@@ -326,7 +326,7 @@ Each surface below is versioned separately and has a published JSON Schema in [`
 lethal explain docs/campaign/2026-08-16-gift-card/rehearsal.report.json --top 10
 ```
 
-It is the gift card demo's rehearsal run: 60 mutants, 34 killed, 15 survived, 11 no-coverage.
+It is the gift card demo's rehearsal run: 61 mutants, 35 killed, 15 survived, 11 no-coverage.
 
 ### Result notes (guidance)
 

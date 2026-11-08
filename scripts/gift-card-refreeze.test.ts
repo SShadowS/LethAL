@@ -142,8 +142,8 @@ describe("gift-card-refreeze (R664)", () => {
     const h = harness([r, r, r]);
     const { code, out } = await h.go();
     expect(code).toBe(1);
-    // 60 originalText; the empty mutatedText of a deletion reveals nothing and is not counted.
-    expect(out).toContain("60 unredacted source field(s)");
+    // 61 originalText; the empty mutatedText of a deletion reveals nothing and is not counted.
+    expect(out).toContain("61 unredacted source field(s)");
     expect(froze(h.calls)).toBe(false);
     expect(existsSync(h.deps.dest)).toBe(false);
   });
@@ -164,12 +164,12 @@ describe("gift-card-refreeze (R664)", () => {
     expect(h.calls).toContain("check");
   });
 
-  test("a mutant count other than the pre-committed 60 refuses before the delete", async () => {
-    const r = report({ count: 59 });
+  test("a mutant count other than the pre-committed 61 refuses before the delete", async () => {
+    const r = report({ count: 60 });
     const h = harness([r, r, r]);
     const { code, out } = await h.go();
     expect(code).toBe(1);
-    expect(out).toContain("run 1 deployed 59 mutants, not the pre-committed 60");
+    expect(out).toContain("run 1 deployed 60 mutants, not the pre-committed 61");
     expect(froze(h.calls)).toBe(false);
     // Nothing was deleted, so there is nothing to restore.
     expect(out).not.toContain(RESTORE);
@@ -257,10 +257,10 @@ describe("gift-card-refreeze (R664)", () => {
   test("the printed numbers are computed from the report", () => {
     const lines = figures(report() as never);
     expect(lines[0]).toBe(
-      "deployed 60, killed 56, survived 2, no-coverage 2, score 96.6%, wall time 20.6 s",
+      "deployed 61, killed 56, survived 2, no-coverage 2, score 96.6%, wall time 20.6 s",
     );
     expect(lines).toContain(
-      "intro:   60 mutants, and the last measured run took **20.6 seconds**.",
+      "intro:   61 mutants, and the last measured run took **20.6 seconds**.",
     );
     expect(lines).toContain("§4 lead: Times are from the measured 20.6 s run");
     expect(lines).toContain('§4 0:40: "56 killed, 2 survived, 2 no-coverage.');
