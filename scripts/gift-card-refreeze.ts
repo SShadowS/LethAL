@@ -66,7 +66,7 @@ const STAGE = "rehearsal";
 export const FROZEN_REPORT = join(RECORDS, `${STAGE}.report.json`);
 /** Pre-committed in `rehearsal.precommit.md`, "Amended 2026-10-22 by R664". Changing it is a new
  *  pre-commitment: amend that file and commit it before the run. */
-export const EXPECTED_DEPLOYED = 60;
+export const EXPECTED_DEPLOYED = 61;
 const RUNS = 3;
 
 export interface RefreezeDeps {

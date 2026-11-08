@@ -257,12 +257,12 @@ what a survivor, a `no-coverage` row and a killed mutant look like on code you c
 sitting.
 
 - [`examples/gift-card`](examples/gift-card/README.md): one planted bug in a balance calculation,
-  and the shortest path to seeing the point. 60 mutants, 34 killed, 15 survived, 11 no-coverage:
-  a score of 69.4%.
+  and the shortest path to seeing the point. 61 mutants, 35 killed, 15 survived, 11 no-coverage:
+  a score of 70.0%.
 - [`examples/credit-limit`](examples/credit-limit/README.md): three gaps rather than one, and the
   only demo that can show `remove-calcfields`: it reads a FlowField through `CalcFields`, which the
-  gift-card app deliberately does not. 42 mutants, 23 killed, 8 survived, 11 no-coverage: a
-  score of 74.2%.
+  gift-card app deliberately does not. 45 mutants, 25 killed, 9 survived, 11 no-coverage: a
+  score of 73.5%.
 
 Both are frozen per mutant, so you can check a re-run against the committed baseline rather than
 against a total:
@@ -571,11 +571,40 @@ Two documents collect that contract so nobody has to derive it from the source:
   exit codes, which output surface answers which question, and the six rules that stop a caller
   reaching a confident wrong conclusion.
 - [`skills/lethal-mutation-testing/SKILL.md`](skills/lethal-mutation-testing/SKILL.md), the same
-  contract as a copyable agent skill. Drop it into your own agent's skills directory.
+  contract as an agent skill, in the safe order: doctor, dry run, scoped run, read, restore, with
+  what to do when a step fails.
 
 Both are checked against the code by `packages/runner/tests/agent-contract.test.ts`: a flag either
 document names must exist, and the exit codes and schema versions they promise must be the ones
-this build returns.
+this build returns. `packages/runner/tests/r869-skill-install.test.ts` also parses every command
+the skill shows with LethAL's own argument parser, so a renamed subcommand or flag fails a test here
+rather than in your agent.
+
+### Installing the skill
+
+The skill is one file. LethAL is a command-line tool, not an MCP server, so the skill is how an
+agent learns to call it. Install it either way:
+
+- **One file.** Put `SKILL.md` in a folder named `lethal-mutation-testing` in your agent's skills
+  directory. For Claude Code, for every project:
+
+  ```bash
+  mkdir -p ~/.claude/skills/lethal-mutation-testing
+  curl -fsSL -o ~/.claude/skills/lethal-mutation-testing/SKILL.md \
+    https://raw.githubusercontent.com/SShadowS/LethAL/master/skills/lethal-mutation-testing/SKILL.md
+  ```
+
+  Use `.claude/skills/` in a project instead to give it to that project only.
+- **As a Claude Code plugin**, which also updates: in Claude Code, run
+  `/plugin marketplace add SShadowS/LethAL`, then `/plugin install lethal@lethal`. This copies the
+  whole LethAL repository for one skill (81 MB in the plugin cache, measured from a local copy);
+  the file route above does not. Only the skill loads: no hooks, agents or MCP servers. Install
+  from GitHub as shown: a marketplace added from a local working copy copies its untracked files
+  too, so a local `.mcp.json` there would load with the plugin.
+
+The skill is user-invoked (`disable-model-invocation: true`): ask for it, for example "run LethAL
+on this project", or type `/lethal-mutation-testing`. It runs the `lethal` binary, which you install
+as described above, and it publishes to a BC server, so use a sandbox.
 
 ## Configuration
 
@@ -603,6 +632,7 @@ Cost and recovery:
 | `--retry-stranded` | `false` | On resume, retry mutants that left the server stuck. Skipped by default: a mutant that never terminates blocks every mutant behind it |
 | `--allow-large-run` | `false` | Run more than 1,000 mutation sites |
 | `--workers <n>` | `1` | Must be 1; above 1 is refused for every backend |
+| `--isolate-tests` | `false` | `al-runner-v3` only: run every test alone. Refused on `bcdev` and where serve-entries is not available. Slower, and a run with it shares nothing with a run without it. See [Limits](#limits) |
 
 Environment and output:
 
@@ -654,7 +684,7 @@ Design detail for all of the above lives in [`design.md`](design.md).
 
 ## The changes it makes
 
-<!-- operators: summary -->30 operators, in two tiers, plus 1 opt-in (run only when --operator names it)<!-- /operators: summary -->. **Tier 1** is the conservative set the mutation-testing literature
+<!-- operators: summary -->30 operators, in two tiers, plus 3 opt-in (run only when --operator names it)<!-- /operators: summary -->. **Tier 1** is the conservative set the mutation-testing literature
 has evidence for; **Tier 2** exploits AL and Business Central semantics to plant bugs a generic tool
 cannot express. Where both claim the same site, Tier 2 wins.
 
@@ -687,6 +717,8 @@ and cannot change a verdict.
 | `lethal.delete-logical-left` | 1.0.0 | `A or B` → `B` | a clause of a condition no test needs |
 | `lethal.delete-additive-right` | 1.0.0 | `A + B` → `A` | a term of a sum no test checks |
 | `lethal.delete-additive-left` | 1.0.0 | `A + B` → `B` | a term of a sum no test checks |
+| `lethal.condition-true` (opt-in) | 1.0.0 | `A` → `true` | a guard no test drives to false. A survivor means the then-arm is never skipped in a test, or nothing checks that it ran when it should not; name it with `--operator condition-true` |
+| `lethal.blank-argument` (opt-in) | 1.0.0 | `T` → `''` | a value passed to a procedure that no test checks arrived. Name it with `--operator blank-argument`; the callee must be a project procedure that takes the argument by value |
 <!-- /operators: tier1 -->
 
 ### Tier 2, AL-specific
@@ -839,7 +871,19 @@ a LethAL feature or a mode.
     `error`; one in a dependency is not caught.
   - `serve-entries` is the default transport where it is proven (R761). A config with no `"transport"` key falls back to one-shot, with the warning `al-runner-v3-serve-default-fallback`, for a `--resume` session, a multi-object or `#if`-wrapped file, a test name shape not yet proven under serve, or a build with no serve path. An explicit `"transport"` is always honoured, except that an explicit `serve-entries` with a dotted test method name is refused before any test runs (#5798, R722).
 
-  Selecting one test runs its whole codeunit (#5611), so LethAL makes one call per test codeunit
+  `--isolate-tests` (R857, off by default) runs every test alone, so a work date, a language, a
+  codeunit variable, a SingleInstance codeunit or a bound subscriber an earlier test left behind
+  does not reach it. Use it when a survivor or a kill may depend on test order. It fixes the
+  common `IsInitialized` setup: a whole-codeunit run on v3 skips `Initialize` in the second test
+  and rolls the first test's rows back, so that test fails on v3 and passes on BC. It is slower: a
+  baseline is one process per test, four at a time (24 to 39 s against 3 s for 21 tests on a very
+  loaded machine), and a resume runs the baseline again. Allow memory for four processes: about
+  6.4 GB on a project the size of Continia Document Output, and more on a larger one. On a small
+  machine `--workers 1` runs them one at a time, or `--workers <n>` that many. It does not
+  make v3 equal to BC: LethAL's grouped calls on BC
+  keep the language and SingleInstance state between tests, where the mode starts each test fresh.
+
+  Selecting one test runs its whole codeunit (#5611), so without that flag LethAL makes one call per test codeunit
   and notes a kill made after another covering test of that codeunit. Tests v3 does not run
   (`notRun`, for example `Commit()` under per-test isolation, #5607) are never killed and never
   survived. Coverage is on for a project holding a multi-object file or a single-wrapper `#if` object
@@ -863,7 +907,7 @@ a LethAL feature or a mode.
   shapes a reading can confirm are a handful in 2.3 million on the BaseApp history. What you see is a timeout, on BC 28 and BC 29
   alike: the mutant ends as a timeout, and the run goes on. The other direction also exists: LethAL refuses some calls that could
   not hang, because a missed hang costs far more than a lost mutant.
-- **The advanced operator set is not built.** <!-- operators: limits -->30 operators today, in two groups: 20 generic ones (Tier 1) and 10 AL-specific ones (Tier 2), plus 1 opt-in (run only when --operator names it)<!-- /operators: limits -->.
+- **The advanced operator set is not built.** <!-- operators: limits -->30 operators today, in two groups: 20 generic ones (Tier 1) and 10 AL-specific ones (Tier 2), plus 3 opt-in (run only when --operator names it)<!-- /operators: limits -->.
   Tier 1 covers comparisons, return values and empty blocks, among others; Tier 2 covers
   `TestField`, `SetRange`, `CalcFields`, `Commit` and friends. A third, more aggressive group is
   designed only.

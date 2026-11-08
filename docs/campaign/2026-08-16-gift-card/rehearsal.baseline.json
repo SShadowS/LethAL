@@ -1,6 +1,6 @@
 {
   "coverageMode": "fenced",
-  "identityScheme": 43,
+  "identityScheme": 45,
   "entries": [
     {
       "key": "0cd56f4baccb05aa031327082dff149977f2af506479054d7f9ebf148eaae72e|Gift Card Mgt|PostEntry|lethal.remove-assignment|1",
@@ -305,6 +305,14 @@
       "coverageFiltered": false,
       "errorClass": null,
       "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "b30a803f6f39a7aec035c068e9c9fbd567353c298bb8062e57168a43afd03886|Gift Card Mgt|Redeem|lethal.swap-call-arguments|1",
+      "verdict": "killed",
+      "killingTest": "RedeemReducesBalance",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "3999641e3f2d5202359e071dbcebd96371db7808f884fd5f4de83d16be822ebd"
     },
     {
       "key": "b30a803f6f39a7aec035c068e9c9fbd567353c298bb8062e57168a43afd03886|Gift Card Mgt|Redeem|lethal.void-method-call|1",

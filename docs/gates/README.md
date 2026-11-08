@@ -74,8 +74,8 @@ compared across a scheme change. There a byte-identical twin's mutated text cann
   roadmap item that will re-record it.
 - **The check:** `gate-pages.test.ts`, "R682". Every committed `itest/*.baseline.json` must record the current
   scheme or appear in its `LAGGING_SCHEME` list with an item. A listed file that has caught up fails too.
-- **Today's list:** R830 raised the scheme to 45, and 11 baselines at 44 wait on R836 (no verdict moves).
-  `envtool.baseline.json` waits on R683 (host only).
+- **Today's list:** R865 raised the scheme to 46 (coord task R-871). All 12 baselines were recorded at 46 in that
+  change, each by one line, with no verdict moved. `envtool.baseline.json` waits on R683 (host only).
 
 ## A v3 baseline row changing on a pinned build (R849)
 
@@ -86,7 +86,7 @@ change on a pinned build".
 
 ## Opt-in operators (R856)
 
-An operator with `optIn` runs only when `--operator` names it, so no gate baseline holds its rows. `lethal.swap-workdate-today` is the first. Its fixture, `sandbox-dates`, is checked by hand on v3 and BC, not by a gate. The fixture is not in the symbol tar, so `compile:fixtures` skips it in CI and in a fresh worktree: **CI does not catch a broken fixture here.** Its compile runs only where its symbols exist.
+An operator with `optIn` runs only when `--operator` names it, so no gate baseline holds its rows. `lethal.swap-workdate-today` is the first. Its fixture, `sandbox-dates`, is checked by hand on v3 and BC, not by a gate. `lethal.condition-true` and `lethal.blank-argument` (R868) follow, both in Tier 1, with the fixture `sandbox-optin`, also checked by hand (four claimed rows and every refused shape; the predicted rows are in `docs/superpowers/specs/2026-11-07-r868-optin-operators-precommitment.md`). A default run holds none of their specs, and `packages/runner/tests/r868-optin-operators.test.ts` goes red if one leaks. The fixture is not in the symbol tar, so `compile:fixtures` skips it in CI and in a fresh worktree: **CI does not catch a broken fixture here.** Its compile runs only where its symbols exist.
 
 ## Warning sets: `GATE_WARNINGS` and observe mode (R736)
 

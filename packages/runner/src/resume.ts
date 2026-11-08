@@ -425,6 +425,8 @@ export interface SessionFingerprintInput {
    * session computes now can equal one recorded before R354.
    */
   readonly coverageMode?: CoverageMode;
+  /** R857: `--isolate-tests`: a test alone can give another verdict. In the digest only when on. */
+  readonly isolateTests?: true;
   readonly selectorIds: {
     readonly selectorId: number;
     readonly controlId: number;
@@ -502,6 +504,7 @@ export function sessionFingerprint(input: SessionFingerprintInput): string {
     identityScheme: input.identityScheme,
     // R354: conditional, see `SessionFingerprintInput.coverageMode`.
     ...(input.coverageMode !== undefined ? { coverageMode: input.coverageMode } : {}),
+    ...(input.isolateTests === true ? { isolateTests: true } : {}),
     selectorIds: [
       input.selectorIds.selectorId,
       input.selectorIds.controlId,

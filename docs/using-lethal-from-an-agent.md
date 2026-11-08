@@ -25,22 +25,63 @@ proven test-suite gap.
 lethal doctor --config lethal.config.json --json
 ```
 
-The `--json` payload:
+With `--json`, stdout is one bc-toolbox CLI envelope (R870, GitHub #27), and the doctor report is
+its `data`:
 
 ```json
 {
-  "doctorSchemaVersion": 1,
-  "ok": false,
-  "checks": [{ "name": "control-version", "ok": false, "detail": "…" }],
-  "notChecked": ["publish-ceiling", "baseline-test-health"],
-  "caveat": { "kind": "create-mode", "note": "…" }
+  "schemaVersion": "1",
+  "status": "ok",
+  "warnings": [],
+  "data": {
+    "doctorSchemaVersion": 1,
+    "ok": false,
+    "checks": [{ "name": "control-version", "ok": false, "detail": "…" }],
+    "notChecked": ["publish-ceiling", "baseline-test-health"],
+    "caveat": { "kind": "create-mode", "note": "…" }
+  }
 }
 ```
 
-`notChecked` is always `publish-ceiling` and `baseline-test-health`. `caveat` is present only for
-a config shape that has one, and `caveat.kind` is `create-mode`.
+`data.notChecked` is always `publish-ceiling` and `baseline-test-health`. `data.caveat` is present
+only for a config shape that has one, and `data.caveat.kind` is `create-mode`. A check that fails is
+a result, so `status` stays `"ok"` and `data.ok` is `false`.
 
 `--json` is accepted by `doctor` and `campaign` only. On any other subcommand it is refused rather than ignored, and `campaign` reads it only on `compare`.
+
+### The `--json` envelope (checked)
+
+Every `--json` output is `schemas/cli-envelope-v1.schema.json`, the bc-toolbox envelope
+(`@sshadows/bc-toolbox-envelope` 0.1.0, vendored byte for byte). Logs stay on stderr, and `--json`
+never changes an exit code. When the command cannot produce its result, stdout is instead:
+
+```json
+{
+  "schemaVersion": "1",
+  "status": "error",
+  "warnings": [],
+  "error": {
+    "code": "CONFIGURATION_ERROR",
+    "category": "configuration",
+    "message": "cannot read config file at …",
+    "retryable": false,
+    "details": { "name": "Error" },
+    "nextSteps": ["Check the file --config names: …"]
+  }
+}
+```
+
+Branch on `error.code`, never on `message`. The codes LethAL uses:
+
+| code | when |
+|---|---|
+| `INVALID_ARGUMENT` | the arguments were refused (an unknown flag, a flag another subcommand owns) |
+| `CONFIGURATION_ERROR` | the config file cannot be read, is not JSON, or cannot be used |
+| `UNCOMMITTED_PRECOMMITMENT` | LethAL's own code: `campaign compare` found the stage's pre-commitment not committed |
+| `INTERNAL_ERROR` | anything else; `nextSteps` says how to get the stack trace |
+
+An argument refusal gets the envelope too, so `--json` on a subcommand that does not take it answers
+with `INVALID_ARGUMENT` on stdout.
 
 ### Doctor notes (guidance)
 
@@ -48,8 +89,8 @@ Read-only, takes seconds, checks every pre-flight refusal in one pass instead of
 discover them one at a time. Run it first. Exit `0` means every check passed, `1` means at least
 one failed.
 
-- `checks[].name` is what to branch on. `detail` is prose for a human.
-- `notChecked` is the part that matters when doctor PASSES: those two are not covered by a green
+- `data.checks[].name` is what to branch on. `detail` is prose for a human.
+- `data.notChecked` is the part that matters when doctor PASSES: those two are not covered by a green
   report, so a run can still refuse for either reason.
 - `caveat` says which checks were skipped and why.
 
@@ -92,10 +133,12 @@ The large-run refusal exists because an unscoped run costs days and usually cann
 and does not make the run cheaper. Find the size first with `--dry-run`, which lists what would be
 mutated, executes nothing, and reports both the raw site count and the deployed count.
 
-On bcdev, `--dry-run` and the run's `large-method` warning name any file that emits one very large method. A 907-guard file
-stopped a BC service tier in GitHub #28, and such a method is the lead suspect, not a proven cause. The warning's thresholds are
-not measured and it refuses nothing. To shrink the method, leave out the operators it lists, with one `--exclude-operator` each, or narrow the
-run with `--only`.
+On bcdev, `--dry-run` and the run's `large-method` warning name any file whose emitted text holds a method of 512 KB or more,
+measured on the real emitted text (R875). A 907-guard file stopped a BC service tier in GitHub #28, and such a method is the lead
+suspect, not a proven cause. The 512 KB is not a measured limit: it is the size only the outliers reach (24 of 986 DC and DO files),
+and the warning refuses nothing. If a run is quarantined because a run's fate on the server is unknown, as when the tier stops, and
+its batch holds such a method, the quarantine reason names that method as one suspect. To shrink the method, leave out the
+operators the warning lists, with one `--exclude-operator` each, or narrow the run with `--only`.
 
 **Know which flags can move a verdict.** `--only`, `--exclude`, `--operator`, `--exclude-operator`, `--lines` and
 `--changed-since` select which
@@ -187,9 +230,10 @@ A stored flag can also go unused when the config makes it moot. `campaign` also 
 its flags per verb: `--project` only on `anchors`, `--expect-mutants` only on `freeze`, `--json`
 only on `compare`.
 
-`lethal campaign compare --json` prints one object on stdout and its lines on stderr:
-`{campaignCompareSchemaVersion, stage, baselinePath, mutantCount, identical, differences[],
-coverage, identity}`. Read `coverage` and `identity` before `identical` (R355, R556).
+`lethal campaign compare --json` prints one envelope on stdout and its lines on stderr; its `data`
+is `{campaignCompareSchemaVersion, stage, baselinePath, mutantCount, identical, differences[],
+coverage, identity}`. A stage that differs is a result: `status` is `"ok"` and `data.identical` is
+`false`, with exit `1` as before. Read `coverage` and `identity` before `identical` (R355, R556).
 `identity.verified: true` means both sides record the same identity scheme and every paired mutant's
 mutated text was checked by hash, so `identical` covers the text too; `identity.verified: false`
 carries a `statement` (a stage frozen before R556 has no hashes, a scheme changed, or rows could not
@@ -273,7 +317,8 @@ Each surface below is versioned separately and has a published JSON Schema in [`
 - the report: [../schemas/report-v3.schema.json](../schemas/report-v3.schema.json)
 - `lethal explain`: [../schemas/explain-v23.schema.json](../schemas/explain-v23.schema.json)
 - the event stream: [../schemas/stream-v1.schema.json](../schemas/stream-v1.schema.json)
-- `lethal doctor --json`: [../schemas/doctor-v1.schema.json](../schemas/doctor-v1.schema.json)
+- `lethal doctor --json`: [../schemas/doctor-v1.schema.json](../schemas/doctor-v1.schema.json),
+  as the `data` of [../schemas/cli-envelope-v1.schema.json](../schemas/cli-envelope-v1.schema.json)
 
 **A real report is committed, so you can try this with no server at all:**
 
@@ -281,7 +326,7 @@ Each surface below is versioned separately and has a published JSON Schema in [`
 lethal explain docs/campaign/2026-08-16-gift-card/rehearsal.report.json --top 10
 ```
 
-It is the gift card demo's rehearsal run: 60 mutants, 34 killed, 15 survived, 11 no-coverage.
+It is the gift card demo's rehearsal run: 61 mutants, 35 killed, 15 survived, 11 no-coverage.
 
 ### Result notes (guidance)
 
@@ -384,6 +429,12 @@ arms) has `lineAmbiguous` instead of a line. The order is a stated heuristic, no
 most survivors reached first, then by name. Duration is shown, never used to order (R489). Without
 testMethods (an older report) the field is absent, which never means "no covering tests". On a run
 whose coverage is object-level or not measured, a gap's list can be the whole suite.
+
+Each `survivors` row can also carry `coveringTestLocations` (R873), given --project and a report that
+records testMethods. It holds one entry per `coveringTests` name, in the same order, each with `name`,
+and where known `file` and `line`; a test found at two places (one per #if arm) has `lineAmbiguous`
+instead of a line. It is file and line only, no source text, and it is copied from the report's
+testMethods, so it adds nothing to the report. Without --project the field is absent.
 
 Each `gaps` row can also carry `source`. Given `--project`, it holds `startLine` (the gap's `blockStartLine`),
 `lines` (the block's lines, split on LF, with one trailing CR dropped per line) and `marks`, one per
@@ -576,6 +627,13 @@ lists the requested tests that had no fresh green unmutated run. Verify then doe
 that survivor's row is `error`. Fix those tests (they must pass unmutated, in a fresh session) and
 run verify again. If the test's state is `infra-error`, read both runs before editing it (below).
 
+A row is `killed` by a NEW test only when that test's `newTests[].state` is `stable` (R873). If the
+test killed the mutant but is `flaky` (or any state but `stable`), the row is `error`: its
+`failureNote` names the test and says the kill is not trusted, and `counts.error` counts it, not
+`counts.killed`. The exit code stays `5`. Fix the test until it is `stable`, then run verify again.
+The `--progress-out` events can still say `killed` for such a kill, because they are written before
+the demotion. The JSON verify prints is the verdict.
+
 `infra-error` means at least one of the new test's two unmutated runs failed for infrastructure
 reasons (its `runs[].outcome` is `error` or `deadline-exceeded`: the call failed, not the test).
 Read both runs' `outcome` and `fresh` before concluding anything about the test: the other run may
@@ -613,7 +671,7 @@ exits `3`.
 | `0` | Every named survivor was killed and every new test is `stable` or `not-rerun`. Also returned when every survivor skipped, which measured nothing. Skipped rows are left out: some killed and the rest skipped is `0`. |
 | `1` | An error, including an argv verify refuses (a missing flag, the `--out` trap). The message is on stderr and there is no JSON. |
 | `3` | **Quarantined**, including the test-app outcomes `publish-indeterminate` and `publish-anomalous`. |
-| `4` | Every non-skipped survivor is `error`: verify measured nothing. |
+| `4` | Every non-skipped survivor is `error`: verify measured nothing. Exception: if the rows are all `error` only because a flaky new killer was demoted (R873), the exit is `5`. |
 | `5` | Not every named survivor was killed, or a new test is neither `stable` nor `not-rerun`. |
 | `6` | Refused before measuring; `refused.reason` says why. |
 
@@ -1013,6 +1071,31 @@ What remains is small and named, so a stranded run is diagnosable rather than my
   a call the loop's progress needs, and a deleted operand holding such a call (R855). They do not
   follow a callee: a condition inside `Done()`, read by `until Done()`, is claimed. That is the shape
   of R837, and `negate-conditional` has the same exposure.
+- The opt-in `condition-true` (`if C then T` to `if true then T`, an `if` without `else` only) refuses a site
+  whose then-arm holds a `while` or `repeat` that does not step a cursor, writes a name an enclosing loop's exit
+  reads (`I -= 1`, `A := 0`, a requeue, a helper reset), restarts or steps back the exit's cursor
+  (`R.FindFirst()`, `R.Next(-1)`), or calls back into its own procedure (recursion, also through a chain of
+  procedures in the same object, also through a codeunit variable of the object's own type, `Me.Rec(L + 1)`);
+  `Codeunit.Run(Codeunit::"Own")` or `Me.Run()` on the object itself; and a cursor step in the condition, inside a
+  loop. A condition that is an `and`/`or` with a bare `true` operand (`A and true`) gets no mutant, because
+  `delete-logical-*` writes the same bytes. A forced `break` or `exit` is not narrowed. Not seen: a key field
+  written on a cursor record, a loop inside a callee the then-arm calls, an event subscriber in the same object
+  that calls back, `Codeunit.Run` of its own codeunit from `OnRun` through another object, and a write that a
+  LATER loop reads (`Step := 1; if Backwards then Step := -1; while I < N do I += Step;`), the same exposure the
+  default operators have.
+- The opt-in `blank-argument` (a variable argument to its blank) refuses a callee parameter that a `for`, a `while`
+  or a `repeat` reads. The one loop it skips is a `for` with a local control variable (a `var` of the procedure
+  that holds the loop: not a parameter, not a global, since a helper can write a global) that is neither assigned
+  (`I := ...`, `I -= 1`) nor passed to a call (it could be a `var` parameter): its bound is read once. Every `while` and
+  `repeat` that reads the value is refused, whatever its exit, a record cursor exit (`until R.Next() = 0`)
+  included: such a loop is not a bound, because its body or a helper can restart, reverse or reposition the
+  cursor. A read directly, through a copy (`L := Step; while I < N do I += L`), through a global it is stored in that any loop of
+  the object reads, through a receiver it is handed to, or through another procedure of the object it is passed
+  to (four calls deep); caller progress (`Remaining := Consume(Remaining)`); and a call that leads back to the
+  caller (recursion). Name matching cannot see another object, a record field, a setup table, a `var` parameter,
+  a text or JSON round trip, a subscriber, or a recursion that leaves the object. What unbounded recursion does
+  on BC is not measured (R865): the recursion refusal is one switch, `recursionRule` in `optin-hang.ts`, for
+  these two operators only.
 
 **What to do about it.** Nothing, on a first run: the shapes are rare and the report names a
 stranded tier rather than reporting a plausible score. If a run does strand, `--resume` continues it

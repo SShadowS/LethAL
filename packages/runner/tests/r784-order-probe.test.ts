@@ -6,12 +6,45 @@ import {
   type O1Request,
   O1_PLAN,
   combineO1Sets,
+  judgeIsolateProbe,
   judgeOrderProbe,
   o1CommitRuns,
   o1LoginWorkDate,
   v3DefaultLegs,
 } from "../itest/alrunner-v3-legs";
 import { V3_BUILD_PINS } from "../src/al-runner-v3-pins";
+
+describe("R857: leg ISO's judge", () => {
+  const reader = (date: string | undefined) => [
+    { name: "Codeunit77056.W1SetDate" },
+    ...(date === undefined
+      ? []
+      : [{ name: "Codeunit77056.R2ReadDate", message: `ISODATE=${date}` }]),
+  ];
+  const LEAK = "2020-03-15";
+  const FRESH = "2026-11-07";
+  test("the measured reading passes: the control leaks, a test alone does not", () => {
+    expect(judgeIsolateProbe(reader(LEAK), reader(FRESH))).toBeUndefined();
+  });
+  test("a build that ignores runSelectedOnly fails: the date reached a test run alone", () => {
+    expect(judgeIsolateProbe(reader(LEAK), reader(LEAK))).toContain("does not isolate");
+  });
+  test("a control that stops leaking fails: the probe would prove nothing", () => {
+    expect(judgeIsolateProbe(reader(FRESH), reader(FRESH))).toContain("no longer leaks");
+  });
+  test("no reader row fails, on either side: never empty against empty", () => {
+    expect(judgeIsolateProbe(reader(undefined), reader(FRESH))).toContain("reader rows");
+    expect(judgeIsolateProbe(reader(LEAK), reader(undefined))).toContain("reader rows");
+  });
+  test("a reader that says nothing readable fails", () => {
+    const empty = [{ name: "Codeunit77056.R2ReadDate", message: "" }];
+    expect(judgeIsolateProbe(reader(LEAK), empty)).toContain("does not isolate");
+  });
+  test("the leg runs in every default set, and stays out of V3_GATE_LEGS", () => {
+    expect(v3DefaultLegs({ cdo: false, tables: false })).toContain("ISO");
+    expect(V3_GATE_LEGS as readonly string[]).not.toContain("ISO");
+  });
+});
 
 const TODAY = ["2026-10-25"];
 const READS: Record<string, string> = {
