@@ -58,6 +58,16 @@ describe("R865: recursionDepthHangs", () => {
     for (const op of OPS) expect(claimed(op, body).texts).toEqual([]);
   });
 
+  it("refuses behind a guard whose arm holds only the self-call, no exit", () => {
+    const body = `
+    procedure Walk(Level: Integer)
+    begin
+        if Level < 10 then
+            Walk(Level + 1);
+    end;`;
+    for (const op of OPS) expect(claimed(op, body).texts).toEqual([]);
+  });
+
   it("an overload with another argument count is not recursion", () => {
     const body = `
     procedure Walk(Level: Integer)

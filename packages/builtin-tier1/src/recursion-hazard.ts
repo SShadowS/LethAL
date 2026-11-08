@@ -16,7 +16,8 @@ import {
  * has parameters, and when another procedure of that name and count exists, every argument's type
  * must match this procedure's and no other's. Named limits (R865): a value that stops shrinking
  * through an assignment, a guard that re-enters in the same state, mutual recursion, recursion
- * through globals or another object, and a procedure split by `#if`.
+ * through globals or another object, a procedure split by `#if`, and one written whole in both arms
+ * of a `#if/#else` (two same-count twins, no types inside the arms).
  */
 export function recursionDepthHangs(node: ALSyntaxNode, ctx: SemanticContext): boolean {
   // Cheap first: the calls around `node`, up to its procedure.
