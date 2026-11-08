@@ -364,13 +364,6 @@ describe("itest/gate-expected.ts (R-592)", () => {
 const LAGGING_SCHEME: Readonly<Record<string, string>> = {
   // A bare array (no scheme at all): the env tool is host-only.
   "envtool.baseline.json": "R683",
-  // Scheme 46: re-recorded live under R871 (R865's bump).
-  "bcdev.baseline.json": "R871",
-  "bcdev.names.baseline.json": "R871",
-  "bcdev.wrapped.baseline.json": "R871",
-  "hang.single.baseline.json": "R871",
-  "harden.baseline.json": "R871",
-  "tables.baseline.json": "R871",
 };
 
 /** R682: the baselines behind `current` that nothing lists, and listed ones that are not behind. */
