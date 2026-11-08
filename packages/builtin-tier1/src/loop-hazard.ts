@@ -3010,6 +3010,18 @@ function argWritten(c: ALSyntaxNode, i: number, ctx: SemanticContext, unknown: b
     const ambRecv = f.rawKind === "member_expression" ? f.childForFieldName("object") : null;
     if (ambRecv !== null && isIdentifierLike(ambRecv) && declaredTypes(ambRecv, ctx).length > 1)
       return unknown;
+    // R861: a member only an unresolved-base tableextension declares may be a dependency's `var`
+    // procedure, so it is unknown (written), not "no such procedure".
+    const any = callTargets(c, ctx, true);
+    if (
+      any?.objs.some(
+        (o) =>
+          o.rawKind === "tableextension_declaration" &&
+          tableExtBase(o, ctx) === null &&
+          procedureNamesOf(o, ctx).has(any.member),
+      )
+    )
+      return unknown;
     const t = callTargets(c, ctx);
     if (t === null) {
       // a record method on a record receiver writes no argument; anything else is unknown
@@ -4062,7 +4074,7 @@ function oneHopReach(ctx: SemanticContext): Map<string, Set<string>> {
     let name = bareCallee(c);
     if (name !== null) pubObjs = [o];
     else {
-      const t = callTargets(c, ctx);
+      const t = callTargets(c, ctx, true); // R861: adding to the reach set is the safe direction
       if (t === null) return [];
       pubObjs = t.objs;
       name = t.member;
@@ -4111,7 +4123,7 @@ function oneHopReach(ctx: SemanticContext): Map<string, Set<string>> {
       }),
     ];
     for (const c of seeds) {
-      const t = callTargets(c, ctx);
+      const t = callTargets(c, ctx, true); // R861: adding to the reach set is the safe direction
       if (t !== null) for (const obj of t.objs) add(obj, t.member);
     }
     for (const c of openCalls) for (const s of raised(c, o)) add(s.obj, s.proc);
@@ -4270,7 +4282,7 @@ function exitFedHop2(
       if (bare !== null && own.has(bare)) targets = [{ o: obj, member: bare }];
       else {
         if (c.rawKind !== "call_expression" && c.rawKind !== "call_statement") return;
-        const tg = callTargets(c, ctx);
+        const tg = callTargets(c, ctx, true); // R861: adding to the reach set is the safe direction
         if (tg === null) return;
         targets = tg.objs.map((o) => ({ o, member: tg.member }));
       }
