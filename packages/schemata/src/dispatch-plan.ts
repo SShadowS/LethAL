@@ -415,8 +415,11 @@ export function varSectionUnparsed(owner: ALSyntaxNode): boolean {
   return bad;
 }
 
+/** R877: tree-sitter-al 4.6.0's node for a trigger whose header and var section are both `#if`-split. */
+export const SPLIT_TRIGGER_PREAMBLE = "preproc_split_trigger_preamble";
+
 /**
- * The member holding `node` when the writer declares no reach latch there, else `null`. Three
+ * The member holding `node` when the writer declares no reach latch there, else `null`. Four
  * shapes, each refused by name in the `reach-latch-refused` warning, checked in this order:
  * - R313: a member whose var section did not parse cleanly (`varSectionUnparsed`), one arm's var
  *   section in a preamble included.
@@ -426,14 +429,23 @@ export function varSectionUnparsed(owner: ALSyntaxNode): boolean {
  *   anchor takes one latch per arm (`injectReachLatches`).
  * - R303: a procedure or trigger whose var section sits inside `#if` in a shape
  *   `splitVarHoistAnchor` does not cover.
+ * - R877: a `preproc_split_trigger_preamble` (tree-sitter-al 4.6.0: a trigger whose header AND var
+ *   section are split by `#if`). Always refused: the latch walk does not know the node.
  * Such a member gets no latch and no marker: its mutants are `unplaced`, their reach is
  * `not-decided`, never unreached. The member is still instrumented and scored.
  */
 export function reachLatchRefusedOwner(node: ALSyntaxNode): ALSyntaxNode | null {
   let owner: ALSyntaxNode | null = node;
-  while (owner !== null && !isProcedureLike(owner) && owner.kind !== ALNodeKind.trigger)
+  while (
+    owner !== null &&
+    !isProcedureLike(owner) &&
+    owner.kind !== ALNodeKind.trigger &&
+    owner.rawKind !== SPLIT_TRIGGER_PREAMBLE
+  )
     owner = owner.parent;
   if (owner === null) return null;
+  // R877: refused before anything reads its header or var section.
+  if (owner.rawKind === SPLIT_TRIGGER_PREAMBLE) return owner;
   if (varSectionUnparsed(owner)) return owner;
   if (owner.rawKind === "preproc_split_procedure_preamble")
     return preambleArmHeaderEnds(owner) === null ? owner : null;

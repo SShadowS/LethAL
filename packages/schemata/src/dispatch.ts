@@ -19,6 +19,7 @@ export {
   preambleArmHeaderEnds,
   reachGrainOf,
   reachLatchRefusedOwner,
+  SPLIT_TRIGGER_PREAMBLE,
   splitVarHoistAnchor,
   varSectionUnparsed,
 } from "./dispatch-plan";
