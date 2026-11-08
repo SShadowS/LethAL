@@ -46,9 +46,9 @@ export const UPSTREAM_LICENSES: Readonly<Record<string, { file: string; source: 
     file: "tree-sitter.LICENSE",
     source: "https://github.com/tree-sitter/tree-sitter/blob/v0.25.10/LICENSE",
   },
-  "tree-sitter-al@4.5.0": {
+  "tree-sitter-al@4.6.0": {
     file: "tree-sitter-al.LICENSE",
-    source: "https://github.com/sshadows/tree-sitter-al/blob/v4.5.0/LICENSE",
+    source: "https://github.com/sshadows/tree-sitter-al/blob/v4.6.0/LICENSE",
   },
 };
 

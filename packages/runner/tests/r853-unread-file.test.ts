@@ -63,8 +63,9 @@ function stopOf(run: () => void): ManifestDeclarationError {
 beforeAll(initParser);
 
 describe("R853: the parser's limit", () => {
-  // This test goes red on the stock grammar ON PURPOSE: the stock parser cannot read three copies
-  // of the shape. It pins the csb fix, and it is what the grammar bump flips.
+  // This test goes red on the stock grammar (4.5.0 and older) ON PURPOSE: the stock parser cannot
+  // read three copies of the shape. It pins the csb fix. The bump to tree-sitter-al 4.6.0 (R861)
+  // landed and flipped it to green.
   test("the csb grammar reads three and sixteen copies that the stock grammar cannot (flipped by the bump)", () => {
     expect(isUnreadFile(wrapRoot(parseAL(unit(2))))).toBe(false);
     expect(isUnreadFile(wrapRoot(parseAL(unit(3))))).toBe(false);
