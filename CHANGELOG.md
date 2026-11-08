@@ -38,6 +38,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **The `large-method` warning reads the real emitted text, and a quarantine names the suspect** (R826, R875, GitHub
+  #28). The warning now measures the largest method in the text LethAL actually emits, instead of estimating it, so it
+  catches files the estimate missed (2 of 24 on DC and DO), and it no longer fires on a long chain whose method is small.
+  The 512 KB figure is still not a measured limit, and the warning refuses nothing. When a batch holding such a method is
+  quarantined because a run's fate on the server is unknown, as when the service tier stops, the quarantine reason names
+  that method as one suspect, not as the cause.
 - **AL does not short-circuit, and the design no longer says it does** (R855). `false and Bump()` runs `Bump()`, measured
   on BC 28.4. `design.md` keeps the name `short-circuit-operand`, which is historical.
 

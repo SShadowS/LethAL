@@ -133,10 +133,12 @@ The large-run refusal exists because an unscoped run costs days and usually cann
 and does not make the run cheaper. Find the size first with `--dry-run`, which lists what would be
 mutated, executes nothing, and reports both the raw site count and the deployed count.
 
-On bcdev, `--dry-run` and the run's `large-method` warning name any file that emits one very large method. A 907-guard file
-stopped a BC service tier in GitHub #28, and such a method is the lead suspect, not a proven cause. The warning's thresholds are
-not measured and it refuses nothing. To shrink the method, leave out the operators it lists, with one `--exclude-operator` each, or narrow the
-run with `--only`.
+On bcdev, `--dry-run` and the run's `large-method` warning name any file whose emitted text holds a method of 512 KB or more,
+measured on the real emitted text (R875). A 907-guard file stopped a BC service tier in GitHub #28, and such a method is the lead
+suspect, not a proven cause. The 512 KB is not a measured limit: it is the size only the outliers reach (24 of 986 DC and DO files),
+and the warning refuses nothing. If a run is quarantined because a run's fate on the server is unknown, as when the tier stops, and
+its batch holds such a method, the quarantine reason names that method as one suspect. To shrink the method, leave out the
+operators the warning lists, with one `--exclude-operator` each, or narrow the run with `--only`.
 
 **Know which flags can move a verdict.** `--only`, `--exclude`, `--operator`, `--exclude-operator`, `--lines` and
 `--changed-since` select which
