@@ -648,6 +648,11 @@ const EXPLAIN_LEAF_PATHS: readonly string[] = [
   "$.survivors[].attribution", // [enum] CoverageAttribution
   "$.survivors[].executionProven", // [enum] derived: attribution === "exact"
   "$.survivors[].coveringTests[]", // [verbatim]
+  // R873, only under `--project`: the covering tests' places, from report.testMethods.
+  "$.survivors[].coveringTestLocations[].name", // [verbatim] testMethods[].name
+  "$.survivors[].coveringTestLocations[].file", // [verbatim] testMethods[].file
+  "$.survivors[].coveringTestLocations[].line", // [verbatim] testMethods[].line
+  "$.survivors[].coveringTestLocations[].lineAmbiguous", // [verbatim] testMethods[].lineAmbiguous
   "$.survivors[].guardEvidence", // [enum] GuardEvidence
   "$.survivors[].reach", // [enum] SurvivorReach, R116 and GH-24: see survivorReachOf
   "$.survivors[].interpretation.meaning", // [registry]
@@ -900,6 +905,11 @@ describe("explain — the admissibility rule, made executable", () => {
     const produced = new Set(leafPathsIn(explain(fullCoverageReport())));
     // R272: `lineAmbiguous` needs two `#if` arms of one test; r272-covering-tests.test.ts.
     expect(EXPLAIN_LEAF_PATHS.filter((p) => !produced.has(p))).toEqual([
+      // R873: `--project` only; r274-explain-project.test.ts reaches name, file and line.
+      "$.survivors[].coveringTestLocations[].name",
+      "$.survivors[].coveringTestLocations[].file",
+      "$.survivors[].coveringTestLocations[].line",
+      "$.survivors[].coveringTestLocations[].lineAmbiguous",
       "$.gaps[].unobservedBlock",
       "$.gaps[].coveringTests[].lineAmbiguous",
       "$.gaps[].source.startLine",

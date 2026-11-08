@@ -278,14 +278,19 @@ function fakeOneShot(
   // R866: how many processes ran at one time, by call counters, never by the clock.
   let running = 0;
   let peak = 0;
+  let joined = 0;
   const spawn: SpawnFn = async (argv) => {
     calls.push([...argv]);
     running += 1;
+    joined += 1;
     peak = Math.max(peak, running);
     await new Promise<void>((r) => setImmediate(r));
-    // R866: a one-test process waits a little for its neighbours, so the peak is not a matter of luck.
-    for (let i = 0; argv.includes("--test-exact") && running < 4 && i < 50; i += 1) {
+    // R866: a one-test process stays until no neighbour has joined for 5 ms (at most 100 ms), so the
+    // peak is how many the backend lets run, whatever that number, and not a matter of luck.
+    for (let i = 0, quiet = 0; argv.includes("--test-exact") && quiet < 5 && i < 100; i += 1) {
+      const before = joined;
       await new Promise<void>((r) => setTimeout(r, 1));
+      quiet = joined === before ? quiet + 1 : 0;
     }
     running -= 1;
     const active = argv.at(-2) ?? "";

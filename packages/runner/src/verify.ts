@@ -1364,7 +1364,10 @@ export async function verifyDependencyFingerprint(
  *  `not-rerun` (a value domain grew, so it bumps; a v5 reader never sees it). v5 is frozen. 7 since
  *  R-260 added the refusal reason `test-project-nested` (a value domain grew). v6 is frozen. 8 since
  *  R259 added `results[].sameProcedure`: required on a row killed by a new test, so its absence
- *  there means "not measured" only from v8 on (the v5 rule). v7 is frozen. */
+ *  there means "not measured" only from v8 on (the v5 rule). v7 is frozen.
+ *  R873 did NOT bump: it added no field or value, so the v5/v8 absence rule does not apply. It
+ *  narrowed `killed`: a pre-R873 v8 `killed` row may be a kill by a flaky new test, which a reader
+ *  can tell from `newTests[].state` (not `stable`); from R873 on such a row reads `error`. */
 export const VERIFY_SCHEMA_VERSION = 8;
 export const VERIFY_VERDICTS = ["killed", "survived", "error", "skipped"] as const;
 export const KILLED_BY = ["assertion", "runtime-error", "other"] as const;
@@ -2101,7 +2104,8 @@ export async function runVerify(
         ? undefined
         : (pairAnswerOf(outcomeBy.get(code), sentOf(code), t) ??
           probeAnswers.get(pairKeyOf(code, t)));
-    const results = source.targets.map((t): VerifyResult => {
+    const stateOfNew = new Map(newTests.map((n) => [n.test, n.state] as const));
+    const measuredRows = source.targets.map((t): VerifyResult => {
       const entry = plan.entries.get(t.mutantCode);
       if (entry === undefined) throw new Error(`verify.ts: ${t.mutantCode} has no entry`);
       const base = {
@@ -2180,10 +2184,29 @@ export async function runVerify(
       };
     });
 
+    // R873: a kill by a new test counts only when that test is `stable`. The exit code reads the
+    // rows BEFORE this, so a flaky killer still exits 5 (not "nothing measured").
+    const results = measuredRows.map((r): VerifyResult => {
+      if (r.verdict !== "killed" || r.killedByNewTest !== true || r.killingTest === undefined) {
+        return r;
+      }
+      const name = qualifiedTestName(r.killingTest);
+      const state = stateOfNew.get(name);
+      if (state === "stable") return r;
+      const { killingTest, killedByNewTest, killedBy, killingTestFailure, sameProcedure, ...rest } =
+        r;
+      const note = `the kill by new test ${name} is not trusted: that test is ${state ?? "unmeasured"} on the unmutated build, so it cannot prove the kill (R873)`;
+      return {
+        ...rest,
+        verdict: "error",
+        failureNote: rest.failureNote !== undefined ? `${note}; ${rest.failureNote}` : note,
+      };
+    });
+
     const quarantined = ran?.quarantined;
     const exitCode = verifyExitCode({
       ...(quarantined !== undefined ? { quarantined } : {}),
-      results,
+      results: measuredRows,
       newTests,
     });
     return {

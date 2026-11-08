@@ -1,0 +1,11 @@
+{
+  "name": "lethal",
+  "version": "0.1.0-alpha.3",
+  "description": "Mutation testing for Business Central AL: the lethal-mutation-testing skill, which runs the LethAL CLI in its safe order (doctor, dry run, scoped run, read, restore).",
+  "author": { "name": "SShadowS" },
+  "homepage": "https://github.com/SShadowS/LethAL",
+  "repository": "https://github.com/SShadowS/LethAL",
+  "license": "MIT",
+  "keywords": ["business-central", "al", "mutation-testing", "testing"],
+  "skills": ["./skills/lethal-mutation-testing"]
+}
