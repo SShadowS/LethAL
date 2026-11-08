@@ -374,9 +374,11 @@ const GOLDEN: Readonly<Record<string, string>> = {
   "flat ERROR": "19f44db7781b167669ef2e9a7452a17fbdcb93be31604d0f6cde2a54646e72c0",
   "generic mirror ERROR": "19f44db7781b167669ef2e9a7452a17fbdcb93be31604d0f6cde2a54646e72c0",
   "generic wasm ERROR": "19f44db7781b167669ef2e9a7452a17fbdcb93be31604d0f6cde2a54646e72c0",
-  "flat MISSING": "72dd10f1f80a7c728da5ff18c3146d8b16180244025c9e91124f8abd1c584158",
-  "generic mirror MISSING": "72dd10f1f80a7c728da5ff18c3146d8b16180244025c9e91124f8abd1c584158",
-  "generic wasm MISSING": "72dd10f1f80a7c728da5ff18c3146d8b16180244025c9e91124f8abd1c584158",
+  // R861: tree-sitter-al 4.6.0 recovers `if A then end;` differently (R855: only source alc rejects);
+  // native, mirror and the 4.6.0 WASM agree on the new hash (4.5.0: 72dd10f1...).
+  "flat MISSING": "7ed3b8c932bffab2e1445c6b078095da8512f8fd67749bba54e8e6b9e4eab5c9",
+  "generic mirror MISSING": "7ed3b8c932bffab2e1445c6b078095da8512f8fd67749bba54e8e6b9e4eab5c9",
+  "generic wasm MISSING": "7ed3b8c932bffab2e1445c6b078095da8512f8fd67749bba54e8e6b9e4eab5c9",
   "flat parsed long text literal with a surrogate pair":
     "0f6aacd3afe17bd6d1a0f728e1ae1c20c1190fa357882664de9efc7842218de6",
   "generic mirror parsed long text literal with a surrogate pair":

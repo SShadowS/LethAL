@@ -71,6 +71,53 @@ describe("buildSymbolTable", () => {
       ]);
     });
 
+    // tree-sitter-al 4.6.0: a dotted `extends` is ONE `qualified_name`; `baseObject` is its last
+    // segment (revert: `parseExtensionHeader` back to `childForFieldName(...).text`). A number
+    // (`extends 18`) is an `integer` node and stays "18" for the id match in `projectObserves`.
+    it("baseObject: dotted -> last segment, plain -> the name, number -> the number", () => {
+      const base = (head: string) =>
+        build(`tableextension 50002 "E" extends ${head}\n{\n}`).tableExtensions.map(
+          (e) => e.baseObject,
+        );
+      expect(base("Microsoft.Sales.Customer")).toEqual(["Customer"]);
+      expect(base('"Microsoft"."Sales"."Customer Table"')).toEqual(["Customer Table"]);
+      expect(base("Customer")).toEqual(["Customer"]);
+      expect(base("18")).toEqual(["18"]);
+    });
+
+    // R861: `extends 50001` files its fields under the project table's NAME (the table may come
+    // later in the file list); an id no project table has (a dependency's) stays keyed by the
+    // number, so `fieldsOf("Customer")` misses: safe, it only adds tags or untyped refusals.
+    // Revert to red: index every numeric base by its number.
+    it("fields of a numeric-base extension: resolved -> the table's name; unresolved -> miss", () => {
+      const TBL = `table 50001 "Base Tbl"\n{\n    fields { field(1; "No."; Code[20]) { } }\n}`;
+      const ext = (base: string) =>
+        `tableextension 50002 "E" extends ${base}\n{\n    fields { field(50000; Extra; Integer) { } }\n}`;
+      const fieldNames = (srcs: string[], table: string) =>
+        buildSymbolTable(srcs.map((s, i) => ({ path: `f${i}.al`, root: wrapRoot(parseAL(s)) })))
+          .fieldsOf(table)
+          .map((f) => f.name);
+      expect(fieldNames([ext("50001"), TBL], "Base Tbl")).toEqual(["No.", "Extra"]);
+      expect(fieldNames([TBL, ext('"Base Tbl"')], "Base Tbl")).toEqual(["No.", "Extra"]);
+      expect(fieldNames([TBL, ext("18")], "Base Tbl")).toEqual(["No."]);
+      expect(fieldNames([TBL, ext("18")], "Customer")).toEqual([]);
+    });
+
+    it("an enumextension's values index under the last segment of a dotted base", () => {
+      const ee = (head: string) =>
+        build(`enumextension 50003 "EE" extends ${head}\n{\n    value(50000; Extra) { }\n}`);
+      expect(
+        ee("Microsoft.Sales.Kind")
+          .enumValuesOf("kind")
+          .map((v) => v.name),
+      ).toEqual(["Extra"]);
+      expect(
+        ee("Kind")
+          .enumValuesOf("kind")
+          .map((v) => v.name),
+      ).toEqual(["Extra"]);
+    });
+
     it("keeps it OUT of `objects` — an extension declares no object of its own", () => {
       expect(build(EXT).objects).toEqual([]);
     });

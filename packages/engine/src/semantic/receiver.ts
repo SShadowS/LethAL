@@ -42,7 +42,7 @@
 import { soleArgument } from "../ast/arguments";
 import { maskAlNonCode } from "../ast/mask";
 import { ALNodeKind } from "../ast/node-kinds";
-import { fieldSegments, nameSegments } from "../ast/qualified-name";
+import { fieldSegments, lastFieldChild, nameSegments } from "../ast/qualified-name";
 import type { ALSyntaxNode } from "../ast/syntax-node";
 import {
   allProcedureLikes,
@@ -65,6 +65,7 @@ import {
   extensionScopeKey,
   objectScopeKeyOfNode,
   qualifiedObjectName,
+  resolveNumericBase,
   triggerLocalNames,
 } from "./symbol-table";
 
@@ -765,7 +766,8 @@ export function recordScopesAt(node: ALSyntaxNode, symbols: SymbolTable): Record
         out.push({
           kind: "tableextension",
           receiver: "Rec",
-          table: extendedTableOf(p),
+          // A dotted base must name a project table in that namespace, or it stays unresolved (R502).
+          table: qualifiedObjectName(fieldSegments(p, "base_object"), "table", symbols),
           xRec: true,
         });
         return out;
@@ -994,9 +996,9 @@ function mayHaveMember(symbols: SymbolTable, table: ObjectSymbol, member: string
     return b === name || (id !== "" && b === id);
   };
   for (const ext of symbols.tableExtensions)
-    if (extendsIt(ext.baseObject) && holds(ext.node.text)) return true;
+    if (extendsIt(extendedTableOf(ext.node) ?? "") && holds(ext.node.text)) return true;
   for (const o of symbols.unindexedObjects) {
-    const base = o.childForFieldName("base_object")?.text ?? "";
+    const base = lastFieldChild(o, "base_object")?.text ?? "";
     if (o.kind === ALNodeKind.tableextension && extendsIt(base) && holds(o.text)) return true;
   }
   // R494: a split-header tableextension is in no index above, so it is read like unparsed source.
@@ -1219,14 +1221,18 @@ function basePageDeclaresVisible(
   name: string,
   armOf: ArmReader,
 ): boolean {
-  const base = stripQuotes(ext.childForFieldName("base_object")?.text ?? "").toLowerCase();
+  const baseNode = lastFieldChild(ext, "base_object");
+  const base = stripQuotes(baseNode?.text ?? "").toLowerCase();
   if (base === "") return true;
+  const byId = baseNode?.rawKind === "integer";
   const pages = [
     ...symbols.objects.filter((o) => o.kind === "page").map((o) => o.node),
     ...symbols.unindexedObjects.filter((o) => o.kind === ALNodeKind.page),
   ];
   const named = (p: ALSyntaxNode): boolean =>
-    stripQuotes(p.childForFieldName("object_name")?.text ?? "").toLowerCase() === base;
+    byId
+      ? p.childForFieldName("object_id")?.text === base
+      : stripQuotes(p.childForFieldName("object_name")?.text ?? "").toLowerCase() === base;
   if (pages.some((p) => named(p) && declaresVisibleProcedure(p, name, armOf))) return true;
   return [...symbols.unparsedObjects, ...symbols.splitObjects].some((o) => {
     const tokens = identifierTokens(o.text);
@@ -1314,10 +1320,9 @@ function projectDeclaresProcedureOnTable(
   }
   if (tables.some((t) => declaresProcedure(t, procName, armOf))) return true;
   for (const o of symbols.unindexedObjects) {
-    const base = stripQuotes(o.childForFieldName("base_object")?.text ?? "").toLowerCase();
     if (
       o.kind === ALNodeKind.tableextension &&
-      aliases.has(base) &&
+      extendsTable(symbols, o, (n) => aliases.has(n.toLowerCase())) &&
       declaresProcedure(o, procName, armOf)
     )
       return true;
@@ -1384,10 +1389,30 @@ function extensionDeclaresProcedure(
   armOf: ArmReader,
 ): boolean {
   for (const ext of symbols.tableExtensions) {
-    if (!equalsIgnoreCase(ext.baseObject, tableName)) continue;
+    if (!extendsTable(symbols, ext.node, (n) => equalsIgnoreCase(n, tableName))) continue;
     if (declaresProcedure(ext.node, procName, armOf)) return true;
   }
   return false;
+}
+
+/** R861: does tableextension `ext` extend a table whose name passes `isIt`? A numeric base resolves
+ *  to the project table with that id (`resolveNumericBase`); an unresolved one (a dependency table)
+ *  may be any table, so it passes, as R331's fallback refused it on 4.5.0. */
+function extendsTable(
+  symbols: SymbolTable,
+  ext: ALSyntaxNode,
+  isIt: (name: string) => boolean,
+): boolean {
+  const tables = [
+    ...symbols.objects.filter((o) => o.kind === "table").map((o) => o.node),
+    ...symbols.unindexedObjects,
+  ];
+  const base = resolveNumericBase(
+    tables,
+    "table_declaration",
+    lastFieldChild(ext, "base_object")?.text ?? "",
+  );
+  return "unresolved" in base || isIt(base.name);
 }
 
 /**
@@ -1406,12 +1431,16 @@ function extensionDeclaresProcedure(
  * The table a `tableextension` extends, from its header's `base_object` field
  * (`tableextension 50100 "X" extends Customer`), or `null` when the grammar did not supply it.
  *
+ * R-876: the LAST segment of a dotted base, or the id text of a numeric one, namespace unchecked.
+ * Only the readers that over-refuse use it (`mayHaveMember`, `extensionDeclaresProcedure`); the
+ * implicit-record resolver in `recordScopesAt` uses `qualifiedObjectName`, which checks the namespace.
+ *
  * Never the extension's OWN name: rule 3 must be able to see a procedure declared on the EXTENDED
  * table, and a resolution returning the extension's name would look successful while silently
  * bypassing that guard. A test pins exactly that mistake.
  */
 function extendedTableOf(objectNode: ALSyntaxNode): string | null {
-  const base = objectNode.childForFieldName("base_object");
+  const base = lastFieldChild(objectNode, "base_object");
   if (base === null) return null;
   const name = stripQuotes(base.text);
   return name === "" ? null : name;

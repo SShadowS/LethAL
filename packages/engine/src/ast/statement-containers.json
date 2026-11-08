@@ -1,6 +1,6 @@
 {
-  "grammarVersion": "4.5.0",
-  "nodeTypesSha256": "a13fd493d67c78c4d04593e89da2d8e0d6ab9622b21e8ccef5878a7a16133440",
+  "grammarVersion": "4.6.0",
+  "nodeTypesSha256": "90effdfe87d10323ac1aa045a8bf43dbe6e10ea686fa0d6cf6dc02c92e546924",
   "candidates": [
     {
       "container": "action_group_body",
@@ -23,6 +23,10 @@
       "field": "body"
     },
     {
+      "container": "case_branch",
+      "field": "children"
+    },
+    {
       "container": "controladdin_body",
       "field": "children"
     },
@@ -39,8 +43,20 @@
       "field": "body"
     },
     {
+      "container": "for_statement",
+      "field": "children"
+    },
+    {
       "container": "foreach_statement",
       "field": "body"
+    },
+    {
+      "container": "foreach_statement",
+      "field": "children"
+    },
+    {
+      "container": "if_statement",
+      "field": "children"
     },
     {
       "container": "if_statement",
@@ -119,8 +135,16 @@
       "field": "body"
     },
     {
+      "container": "preproc_split_case_branch",
+      "field": "children"
+    },
+    {
       "container": "preproc_split_case_end_branch",
       "field": "body"
+    },
+    {
+      "container": "preproc_split_case_end_branch",
+      "field": "children"
     },
     {
       "container": "preproc_split_case_extended",
@@ -152,11 +176,19 @@
     },
     {
       "container": "preproc_split_if_else_statement",
+      "field": "children"
+    },
+    {
+      "container": "preproc_split_if_else_statement",
       "field": "else_branch"
     },
     {
       "container": "preproc_split_if_else_statement",
       "field": "then_branch"
+    },
+    {
+      "container": "preproc_split_if_statement",
+      "field": "children"
     },
     {
       "container": "preproc_split_if_statement",
@@ -211,8 +243,16 @@
       "field": "body"
     },
     {
+      "container": "while_statement",
+      "field": "children"
+    },
+    {
       "container": "with_statement",
       "field": "body"
+    },
+    {
+      "container": "with_statement",
+      "field": "children"
     },
     {
       "container": "xmlport_body",
