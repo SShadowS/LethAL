@@ -449,3 +449,108 @@ describe("R861: an unresolved-base extension's procedure is not a resolved calle
     expect(refused(files("Customer"), "Cu.al", "Other.Touch(Cust)")).toBe(false);
   });
 });
+
+// ---- the SAFE-direction readers keep an unresolved-base extension (anyExt) ----
+const PRESET_REP = `report 50130 "R861 Preset"
+{
+    dataset
+    {
+        dataitem(Loop; Integer)
+        {
+            trigger OnAfterGetRecord()
+            begin
+                if not Continue then
+                    CurrReport.Break();
+            end;
+        }
+    }
+    trigger OnPreReport()
+    var
+        Cust: Record Customer;
+    begin
+        Cust.Bump(Continue);
+    end;
+
+    var
+        Continue: Boolean;
+}`;
+const BUMP_EXT = (base: string, mod: string) => `tableextension 50131 "Bump Ext" extends ${base}
+{
+    procedure Bump(${mod}N: Boolean)
+    begin
+        N := true;
+    end;
+}`;
+const customerTable = (id: number, name: string) =>
+  `table ${id} ${name}\n{\n    fields { field(1; "No."; Code[20]) { } }\n}`;
+describe("R861: argWritten answers unknown for a member only an unresolved-base extension declares", () => {
+  const files = (base: string, mod: string, withTable = true): Files => ({
+    ...(withTable ? { "Cust.al": customerTable(18, "Customer") } : {}),
+    "Ext.al": BUMP_EXT(base, mod),
+    "Rep.al": PRESET_REP,
+  });
+  const call = "Cust.Bump(Continue)";
+  it("unresolved, var parameter (`extends 5`, no such table): the argument counts as written, refused (red: the bucket is dropped)", () => {
+    expect(atCall(files("5", "var "), "Rep.al", call)).toBe(true);
+  });
+  it("unresolved, by-value parameter: still unknown, so refused (red: the bucket is dropped)", () => {
+    expect(atCall(files("5", ""), "Rep.al", call)).toBe(true);
+  });
+  it("resolved (`extends 18`), var parameter: refused", () => {
+    expect(atCall(files("18", "var "), "Rep.al", call)).toBe(true);
+  });
+  it("resolved (`extends 18`), by-value parameter: the callee is known, not a write, claimed (red: unresolved handling leaks)", () => {
+    expect(atCall(files("18", ""), "Rep.al", call)).toBe(false);
+  });
+  it("a plain name (control), var parameter: refused; by-value: claimed", () => {
+    expect(atCall(files("Customer", "var "), "Rep.al", call)).toBe(true);
+    expect(atCall(files("Customer", ""), "Rep.al", call)).toBe(false);
+  });
+});
+
+const HELPER_REP = `report 50132 "R861 Reach"
+{
+    dataset
+    {
+        dataitem(Loop; Integer)
+        {
+            trigger OnAfterGetRecord()
+            var
+                Cust: Record Customer;
+            begin
+                Cust.Helper();
+            end;
+        }
+    }
+}`;
+const HELPER_EXT = (base: string) => `tableextension 50133 "Helper Ext" extends ${base}
+{
+    procedure Helper()
+    var
+        C: Integer;
+    begin
+        C := C + 1;
+    end;
+}`;
+describe("R861: oneHopReach keeps an unresolved-base extension's procedure as a callee of open-item code", () => {
+  const files = (base: string): Files => ({
+    "Cust.al": customerTable(18, "Customer"),
+    "Item.al": customerTable(27, "Item"),
+    "Ext.al": HELPER_EXT(base),
+    "Rep.al": HELPER_REP,
+  });
+  const site = "C := C + 1";
+  it("unresolved (`extends 5`): the procedure is refused as a one-hop callee (red: anyExt omitted)", () => {
+    expect(refused(files("5"), "Ext.al", site)).toBe(true);
+  });
+  it("resolved to the called table (`extends 18`): refused", () => {
+    expect(refused(files("18"), "Ext.al", site)).toBe(true);
+  });
+  it("resolved to ANOTHER table (`extends 27`): not reached, emits", () => {
+    expect(refused(files("27"), "Ext.al", site)).toBe(false);
+  });
+  it("a plain name (control): refused; another name: emits", () => {
+    expect(refused(files("Customer"), "Ext.al", site)).toBe(true);
+    expect(refused(files("Item"), "Ext.al", site)).toBe(false);
+  });
+});
