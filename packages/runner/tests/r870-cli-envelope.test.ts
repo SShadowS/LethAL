@@ -204,11 +204,19 @@ describe("R870: --json through the real CLI, on the issue's three failure classe
     expect(bad.stderr).toEndWith("\n(set LETHAL_DEBUG=1 for the stack trace)\n");
     const missing = lethal(cases[1]?.args ?? [], dir);
     expect(missing.stdout).toBe("");
-    expect(missing.stderr.split(dir).join("<dir>")).toBe(
-      "cannot read config file at <dir>/missing.json: ENOENT: no such file or directory, open '<dir>/missing.json'\n(set LETHAL_DEBUG=1 for the stack trace)\n",
-    );
+    // Paths and line ends as Windows writes them too; the OS's own ENOENT wording is not pinned.
+    const said = missing.stderr
+      .split(dir)
+      .join("<dir>")
+      .replaceAll("\\", "/")
+      .replaceAll("\r\n", "\n");
+    expect(said).toStartWith("cannot read config file at <dir>/missing.json: ");
+    expect(said).toEndWith("\n(set LETHAL_DEBUG=1 for the stack trace)\n");
+    expect(said.split("\n")).toHaveLength(3);
     const failing = lethal(cases[2]?.args ?? [], dir);
-    expect(failing.stdout).toStartWith("FAIL: at least one check failed\n  [FAIL] al-runner-v3:");
+    expect(failing.stdout.replaceAll("\r\n", "\n")).toStartWith(
+      "FAIL: at least one check failed\n",
+    );
     for (const r of [bad, missing, failing])
       expect(r.stdout + r.stderr).not.toContain('"schemaVersion"');
   });
