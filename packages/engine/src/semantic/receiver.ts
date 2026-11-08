@@ -65,6 +65,7 @@ import {
   extensionScopeKey,
   objectScopeKeyOfNode,
   qualifiedObjectName,
+  resolveNumericBase,
   triggerLocalNames,
 } from "./symbol-table";
 
@@ -1319,10 +1320,9 @@ function projectDeclaresProcedureOnTable(
   }
   if (tables.some((t) => declaresProcedure(t, procName, armOf))) return true;
   for (const o of symbols.unindexedObjects) {
-    const base = stripQuotes(lastFieldChild(o, "base_object")?.text ?? "").toLowerCase();
     if (
       o.kind === ALNodeKind.tableextension &&
-      aliases.has(base) &&
+      extendsTable(symbols, o, (n) => aliases.has(n.toLowerCase())) &&
       declaresProcedure(o, procName, armOf)
     )
       return true;
@@ -1389,10 +1389,30 @@ function extensionDeclaresProcedure(
   armOf: ArmReader,
 ): boolean {
   for (const ext of symbols.tableExtensions) {
-    if (!equalsIgnoreCase(extendedTableOf(ext.node) ?? "", tableName)) continue;
+    if (!extendsTable(symbols, ext.node, (n) => equalsIgnoreCase(n, tableName))) continue;
     if (declaresProcedure(ext.node, procName, armOf)) return true;
   }
   return false;
+}
+
+/** R861: does tableextension `ext` extend a table whose name passes `isIt`? A numeric base resolves
+ *  to the project table with that id (`resolveNumericBase`); an unresolved one (a dependency table)
+ *  may be any table, so it passes, as R331's fallback refused it on 4.5.0. */
+function extendsTable(
+  symbols: SymbolTable,
+  ext: ALSyntaxNode,
+  isIt: (name: string) => boolean,
+): boolean {
+  const tables = [
+    ...symbols.objects.filter((o) => o.kind === "table").map((o) => o.node),
+    ...symbols.unindexedObjects,
+  ];
+  const base = resolveNumericBase(
+    tables,
+    "table_declaration",
+    lastFieldChild(ext, "base_object")?.text ?? "",
+  );
+  return "unresolved" in base || isIt(base.name);
 }
 
 /**

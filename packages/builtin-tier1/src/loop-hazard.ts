@@ -24,6 +24,7 @@ import {
   qualifiedObjectName,
   rawArmOf,
   recordTableObjectOfName,
+  resolveNumericBase,
   resolveReceiverTable,
   resolveVarRef,
   tableObjectOfRef,
@@ -419,25 +420,31 @@ function itemOpen(item: ALSyntaxNode, ctx: SemanticContext): boolean {
  * `.text` is the whole dotted name, so the last segment is read through `lastFieldChild`.
  * Matching the last segment alone can over-match a same-named report in another namespace: an extra
  * refusal, the safe direction. No base name at all (a MISSING node): null, read as "extends every
- * report".
+ * report". R861: a numeric base (`extends 50100`) resolves to the project report with that id
+ * (`resolveNumericBase`); an id no project report has (a dependency's) is unresolved, and also null:
+ * the conservative path 4.5.0's unparsed extension took (R500 shape 7).
  */
-function extendedBaseName(ext: ALSyntaxNode): string | null {
-  const name = normalizeAlName(lastFieldChild(ext, "base_object")?.text ?? "");
+function extendedBaseName(ext: ALSyntaxNode, ctx: SemanticContext): string | null {
+  const base = resolveNumericBase(
+    projectObjects(ctx),
+    "report_declaration",
+    lastFieldChild(ext, "base_object")?.text ?? "",
+  );
+  if ("unresolved" in base) return null;
+  const name = normalizeAlName(base.name);
   return name === "" ? null : name;
 }
 
-/** The table a tableextension extends, normalized, by its LAST name segment. A numeric base
- *  (`extends 18`, an `integer` node) is mapped to the project table with that id when there is one,
- *  else kept as the number. */
-function tableExtBase(o: ALSyntaxNode, ctx: SemanticContext): string {
-  const text = lastFieldChild(o, "base_object")?.text.trim() ?? "";
-  if (/^\d+$/.test(text)) {
-    const t = projectObjects(ctx).find(
-      (x) => x.rawKind === "table_declaration" && x.childForFieldName("object_id")?.text === text,
-    );
-    if (t !== undefined) return objectNameOf(t);
-  }
-  return normalizeAlName(text);
+/** The table a tableextension extends, normalized, by its LAST name segment. R861: a numeric base
+ *  (`extends 18`) resolves to the project table with that id (`resolveNumericBase`); an unresolved
+ *  one (a dependency table) is null, and every reader reads null as "may extend ANY table". */
+function tableExtBase(o: ALSyntaxNode, ctx: SemanticContext): string | null {
+  const base = resolveNumericBase(
+    projectObjects(ctx),
+    "table_declaration",
+    lastFieldChild(o, "base_object")?.text ?? "",
+  );
+  return "unresolved" in base ? null : normalizeAlName(base.name);
 }
 
 const ANY_REPORT = "\u0000any";
@@ -456,7 +463,7 @@ function reportExtended(item: ALSyntaxNode, ctx: SemanticContext): boolean {
     for (const f of files) {
       for (const o of objectDeclarationsOf(f.root)) {
         if (o.rawKind !== "reportextension_declaration") continue;
-        names.add(extendedBaseName(o) ?? ANY_REPORT);
+        names.add(extendedBaseName(o, ctx) ?? ANY_REPORT);
       }
     }
     // R500 shape 7: a reportextension the grammar could not parse (inside an ERROR node, or with a
@@ -479,7 +486,7 @@ function reportExtended(item: ALSyntaxNode, ctx: SemanticContext): boolean {
  * direction).
  */
 function modifiedItemOpen(ext: ALSyntaxNode, mod: ALSyntaxNode, ctx: SemanticContext): boolean {
-  const base = extendedBaseName(ext);
+  const base = extendedBaseName(ext, ctx);
   if (base === null) return true;
   const target = normalizeAlName(mod.childForFieldName("target")?.text ?? "");
   const reports = ctx.symbols.objects.filter(
@@ -2862,7 +2869,7 @@ function crossWriters(ctx: SemanticContext): CrossWriters {
       if (id !== undefined) projectReports.add(id);
       add(objectNameOf(o), presetWriters(o, presetExitNames(o, ctx), ctx).procs);
     } else if (o.rawKind === "reportextension_declaration")
-      add(extendedBaseName(o), presetWriters(o, extensionPresetExitNames(o, ctx), ctx).procs);
+      add(extendedBaseName(o, ctx), presetWriters(o, extensionPresetExitNames(o, ctx), ctx).procs);
   }
   // R565: every `Report X` type in the project whose X (a name or an id) is not a project report:
   // X's source and its dependency reportextensions, read from the packages (`dependencyReport`),
@@ -3881,8 +3888,7 @@ function r696Inserts(
 ): boolean {
   const ownTable =
     (o.rawKind === "table_declaration" && objectNameOf(o) === table) ||
-    (o.rawKind === "tableextension_declaration" &&
-      tableExtBase(o, ctx) === table);
+    (o.rawKind === "tableextension_declaration" && [null, table].includes(tableExtBase(o, ctx)));
   let found = false;
   visitAll(p, (x) => {
     if (found || !r696IsCall(x)) return;
@@ -5453,6 +5459,7 @@ function r604CursorTables(
 function r604ObjectTable(o: ALSyntaxNode, ctx: SemanticContext): string | null {
   if (o.rawKind === "table_declaration") return objectNameOf(o);
   if (o.rawKind === "tableextension_declaration") {
+    // null (an unresolved numeric base) is this function's "unknown table" too
     if (lastFieldChild(o, "base_object") !== null) return tableExtBase(o, ctx);
     const t = o.childForFieldName("target");
     return t === null ? null : normalizeAlName(t.text);
@@ -6337,8 +6344,7 @@ function r570TableOf(
     let name: string | null = null;
     const o = objectOf(p);
     if (key === "" && o?.rawKind === "table_declaration") name = objectNameOf(o);
-    else if (key === "" && o?.rawKind === "tableextension_declaration")
-      name = tableExtBase(o, ctx);
+    else if (key === "" && o?.rawKind === "tableextension_declaration") name = tableExtBase(o, ctx);
     else {
       // a parameter of `p` (one named `Rec` is keyed `""`, `r531ParamKey`)
       const list = p.namedChildren.find((c) => c.rawKind === "parameter_list");
@@ -6376,6 +6382,7 @@ function r570ProjectRec(p: ALSyntaxNode, ctx: SemanticContext): boolean {
   if (o?.rawKind === "table_declaration") return true;
   if (o?.rawKind !== "tableextension_declaration") return false;
   const base = tableExtBase(o, ctx);
+  if (base === null) return false; // may extend any table: a bare name may be a base procedure
   return objectsOfType({ kind: "table", name: base, temporary: false }, ctx).some(
     (t) => t.rawKind === "table_declaration",
   );
@@ -6849,7 +6856,12 @@ function r737Partial(
  *  test that pins that (internal). */
 export function objectsOfType(t: DeclaredType, ctx: SemanticContext): readonly ALSyntaxNode[] {
   if (t.kind === "codeunit") return objectNameIndex(ctx).get(`codeunit:${t.name}`) ?? [];
-  if (t.kind === "table") return objectNameIndex(ctx).get(`table:${t.name}`) ?? [];
+  if (t.kind === "table")
+    // R861: a tableextension with an unresolved numeric base may extend this table too
+    return [
+      ...(objectNameIndex(ctx).get(`table:${t.name}`) ?? []),
+      ...(objectNameIndex(ctx).get(ANY_TABLE) ?? []),
+    ];
   const objects = projectObjects(ctx);
   if (t.kind === "interface") {
     return objects.filter(
@@ -6873,6 +6885,7 @@ export function objectsOfType(t: DeclaredType, ctx: SemanticContext): readonly A
 
 /** `codeunit:<name>` and `table:<name>` (a table and its tableextensions, in project order) to the
  *  objects, per context: one pass over `projectObjects`, where each lookup used to filter it. */
+const ANY_TABLE = "table:\u0000any";
 const objectNameIndexMemo = new WeakMap<object, Map<string, ALSyntaxNode[]>>();
 function objectNameIndex(ctx: SemanticContext): Map<string, ALSyntaxNode[]> {
   const hit = objectNameIndexMemo.get(ctx);
@@ -6883,7 +6896,7 @@ function objectNameIndex(ctx: SemanticContext): Map<string, ALSyntaxNode[]> {
     if (o.rawKind === "codeunit_declaration") key = `codeunit:${objectNameOf(o)}`;
     else if (o.rawKind === "table_declaration") key = `table:${objectNameOf(o)}`;
     else if (o.rawKind === "tableextension_declaration")
-      key = `table:${tableExtBase(o, ctx)}`;
+      key = tableExtBase(o, ctx) === null ? ANY_TABLE : `table:${tableExtBase(o, ctx)}`;
     else continue;
     const list = index.get(key);
     if (list === undefined) index.set(key, [o]);
@@ -7006,7 +7019,7 @@ function baseCandidatesOf(
   ctx: SemanticContext,
 ): { readonly objs: ALSyntaxNode[]; readonly unread: ALSyntaxNode[] } {
   return cached(ctx, ext, "bases", () => {
-    const base = extendedBaseName(ext);
+    const base = extendedBaseName(ext, ctx);
     const names = (o: ALSyntaxNode): boolean => {
       const t = identifierTokens(o.text);
       return t.has("report") && (base === null || t.has(base));
@@ -7967,7 +7980,8 @@ function r532CallClass(
         .filter(
           (o) =>
             (o.rawKind === "report_declaration" && objectNameOf(o) === dt.name) ||
-            (o.rawKind === "reportextension_declaration" && extendedBaseName(o) === dt.name),
+            (o.rawKind === "reportextension_declaration" &&
+              [null, dt.name].includes(extendedBaseName(o, ctx))),
         )
         .flatMap((o) => r532Procs(o, member, arity));
       return { cls: procs.length > 0 ? "A-report" : "A?-report", procs };

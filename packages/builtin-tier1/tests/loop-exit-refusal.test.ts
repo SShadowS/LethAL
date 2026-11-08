@@ -2181,19 +2181,24 @@ const extNamed = (head: string) =>
 
 describe("R487 r7 sol-r6 #1: a namespace-qualified extension in another file voids the BASE certificate", () => {
   it("tree-sitter-al 4.6.0: a dotted `base_object` is ONE `qualified_name` whose LAST child is the report name (sol-r7 #2: fails if a grammar change moves it)", () => {
-    const baseObjectOf = (head: string): [string, string | null] | null => {
-      let found: [string, string | null] | null = null;
+    // [kind, text of the last named child or null, the whole base text]
+    const baseObjectOf = (head: string): [string, string | null, string] | null => {
+      let found: [string, string | null, string] | null = null;
       visit(wrapRoot(parseAL(extNamed(head))), (n: ALSyntaxNode) => {
         if (n.rawKind === "reportextension_declaration") {
           const b = n.childForFieldName("base_object");
-          if (b !== null) found = [b.rawKind, b.namedChildren.at(-1)?.text ?? null];
+          if (b !== null) found = [b.rawKind, b.namedChildren.at(-1)?.text ?? null, b.text];
         }
       });
       return found;
     };
-    expect(baseObjectOf("My.Reports.P")).toEqual(["qualified_name", "P"]);
-    expect(baseObjectOf('"My"."Reports"."P"')).toEqual(["qualified_name", '"P"']);
-    expect(baseObjectOf('"P"')?.[0]).not.toBe("qualified_name");
+    expect(baseObjectOf("My.Reports.P")).toEqual(["qualified_name", "P", "My.Reports.P"]);
+    expect(baseObjectOf('"My"."Reports"."P"')).toEqual([
+      "qualified_name",
+      '"P"',
+      '"My"."Reports"."P"',
+    ]);
+    expect(baseObjectOf('"P"')).toEqual(["quoted_identifier", null, '"P"']);
   });
   it('`extends My.Reports.P` and `"My"."Reports"."P"`: the base file\'s assignment is refused; `My.Reports.Q`: claimed (revert to red: match the whole `extends` clause text, qualifier included)', () => {
     expect(baseSites(removeAssignment, [BASE7, extNamed("My.Reports.P")])).toEqual([]);

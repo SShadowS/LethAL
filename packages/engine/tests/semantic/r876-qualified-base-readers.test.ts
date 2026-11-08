@@ -110,7 +110,10 @@ describe("R-876: projectDeclaresProcedureOnTable, indexed and unindexed (#if) ta
       "SetRange",
     );
   };
-  for (const [label, base, named] of TABLE_BASES) {
+  for (const [label, base, isNamed] of TABLE_BASES) {
+    // R861: an id no project table has (`77`, a dependency's) is unresolved: it may be any table,
+    // so it refuses too, as R331 refused the unparsed `extends 77` on 4.5.0.
+    const named = isNamed || label === "number: another id";
     // Red (unindexed): read `childForFieldName("base_object")?.text` for the `#if`-wrapped one.
     it(`unindexed, ${label}: ${named ? "refuses" : "keeps the claim"}`, () => {
       expect(claims(wrapped(ext(base)))).toBe(!named);

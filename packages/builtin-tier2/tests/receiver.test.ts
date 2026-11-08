@@ -1309,6 +1309,48 @@ describe("claimsRecordMethod: unparsed objects (R331)", () => {
   });
 });
 
+// R861 (R331 / R336's shape): tree-sitter-al 4.6.0 parses `tableextension ... extends 50001` (by
+// number) cleanly, so it is no longer an ERROR node that R331's fallback refuses. A numeric base
+// resolves to the project table with that id; an id no project table has (a dependency's) may be
+// any table, so the claim is refused.
+describe("claimsRecordMethod: a tableextension extending a table by NUMBER (R861)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const cu = (table: string) =>
+    `codeunit 50000 "My Cu"\n{\n    procedure P()\n    var\n        R: Record ${table};\n        N: Integer;\n    begin\n        R.Validate(N, 5);\n    end;\n}`;
+  const TABLE = `table 50001 "Other Table"\n{\n    fields { field(1; "No."; Code[20]) { } }\n}\n`;
+  const THIRD = `table 50003 "Third"\n{\n    fields { field(1; "No."; Code[20]) { } }\n}\n`;
+  const ext = (base: string, name = "Validate") =>
+    `tableextension 50002 "Other Ext" extends ${base}\n{\n    procedure ${name}(F: Integer; V: Integer)\n    begin\n    end;\n}\n`;
+  const claims = (table: string, extra: string[]) => {
+    const root = parseClean(cu(table));
+    const ctx = projectContextFor([root, ...extra.map(parseClean)]);
+    return claimsRecordMethod(onlyCall(root), ctx, "Validate");
+  };
+  it("a plain name (control): the extension's Validate refuses the claim", () => {
+    expect(claims('"Other Table"', [TABLE, ext('"Other Table"')])).toBe(false);
+  });
+  it("resolved (`extends 50001`): refused (red: the number is compared as a name)", () => {
+    expect(claims('"Other Table"', [TABLE, ext("50001")])).toBe(false);
+  });
+  it("resolved to ANOTHER project table (`extends 50003`): claimed (red: unresolved read as any)", () => {
+    expect(claims('"Other Table"', [TABLE, THIRD, ext("50003")])).toBe(true);
+  });
+  it("unresolved (`extends 18`, a dependency table), on a dependency record: refused (red: the number is compared as a name)", () => {
+    expect(claims("Customer", [ext("18")])).toBe(false);
+  });
+  it("unresolved, but the extension declares another procedure: claimed", () => {
+    expect(claims("Customer", [ext("18", "Check")])).toBe(true);
+  });
+  it("unresolved, in an #if-wrapped extension (the unindexed list): refused (red: the number is compared as a name)", () => {
+    const root = parseClean(cu("Customer"));
+    const wrapped = wrapRoot(parseAL(`#if CLEAN27\n${ext("18")}#endif\n`));
+    const ctx = projectContextFor([root, wrapped]);
+    expect(claimsRecordMethod(onlyCall(root), ctx, "Validate")).toBe(false);
+  });
+});
+
 // R331 (run 005): the unparsed-object fallback is conservative. It reads any ERROR node, at any
 // depth, and matches the called name as an identifier token with comments stripped.
 describe("claimsRecordMethod: the unparsed fallback is conservative (R331)", () => {
