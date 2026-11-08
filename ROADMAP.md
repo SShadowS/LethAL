@@ -522,7 +522,7 @@ that ordering is the priority.
 - **R867** · `lethal doctor` reaches a host a stale bc config names; lane start does not refresh bc configs · [R867.md](docs/roadmap/R867.md) · done (d03ce785)
 - **R868** · The LethAL skill ships as an installable file, in the safe order, and cannot drift from the CLI (GitHub #26) · [R868.md](docs/roadmap/R868.md) · done (7eeebcfb)
 - **R874** · `--json` prints the shared bc-toolbox CLI envelope (GitHub #27) · [R874.md](docs/roadmap/R874.md) · done (d4c923a9)
-- **R877** · tree-sitter-al 4.6.0 parses a split trigger header, and a reach latch there refused the whole file · [R877.md](docs/roadmap/R877.md) · done (PENDING)
+- **R877** · tree-sitter-al 4.6.0 parses a split trigger header, and a reach latch there refused the whole file · [R877.md](docs/roadmap/R877.md) · done (66a4a27a)
 
 ## Backends and tooling
 
