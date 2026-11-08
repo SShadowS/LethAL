@@ -41,7 +41,9 @@ Then, if the user wants it, harden a survivor (step 6).
 
 First time on a project, `lethal init --project <app-dir>` writes a `lethal.config.json` with
 three free object ids from the app's own range; the server, company and login are placeholders the
-user fills in. A config holds credentials: do not read it into the conversation.
+user fills in. A config holds credentials: do not read it into the conversation. That config is for
+`bcdev`; an `al-runner-v3` run needs an `alRunnerV3` section instead (the README's "Running without a
+BC server" section has it).
 
 ## 1. Check the setup
 
