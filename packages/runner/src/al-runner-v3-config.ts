@@ -11,7 +11,7 @@
  *     "cacheDir": "<optional ALRUNNER_CACHE>",
  *     "transport": "serve-entries",                            // or "one-shot"; absent: serve-entries where proven, else one-shot (R761)
  *     "secondEcho": true,                                      // R635 §5, serve-entries only
- *     "downloadDemoData": true                                 // R885; false passes --no-download (offline, gates)
+ *     "downloadDemoData": true                                 // R885; false passes --no-download (offline, gates); true: the feed's copy replaces an older Microsoft app in .alpackages
  *   }
  *
  * `serverMode` and `selectorMode` are refused by name (the static selector only, and no v2-style serve).

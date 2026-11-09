@@ -2,6 +2,7 @@
 // docs/superpowers/plans/2026-10-21-r586-alrunner-v3-backend.md, §3-§6, tests T5, T12, T21, T22,
 // T24, T28-T32 and the decoder rows of §5. Every guard has a test per direction.
 import { afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { createHash } from "node:crypto";
 import {
   appendFile,
   mkdir,
@@ -1246,6 +1247,59 @@ describe("R885: demo data, on the one-shot path", () => {
     for (let i = 0; i < 4; i++) watch(`${OFF}\n${DL}`, `${OFF}\n${DL}`);
     expect(seen.filter(([c]) => c === "al-runner-v3-test-data-off")).toHaveLength(1);
     expect(seen.filter(([c]) => c === "al-runner-v3-demo-data-download")).toHaveLength(1);
+  });
+
+  const BUILD = "28.0.46665.47126"; // backendOf's bcVersion
+  const preRun = async (extra: Partial<AlRunnerV3Config>, bak: boolean) => {
+    const l = await layout();
+    const cacheDir = join(l.root, "demo-cache");
+    if (bak) {
+      const d = join(cacheDir, "artifacts", BUILD, "demo", "w1");
+      await mkdir(d, { recursive: true });
+      await writeFile(join(d, "BusinessCentral-W1.bak"), "demo");
+    }
+    const b = backendOf(l, fakeV3(allPass).spawn, fakeAlc().io, { cacheDir, ...extra });
+    const seen: Array<[string, string]> = [];
+    b.setNotify((c, m) => seen.push([c, m]));
+    await b.deploy(l.batch);
+    await b.deploy(l.batch);
+    return { seen, cacheDir };
+  };
+  const MAY = "al-runner-v3-demo-data-may-download";
+
+  test("pre-run line: once, when download is on and cacheDir holds no backup for bcVersion", async () => {
+    const { seen, cacheDir } = await preRun({ downloadDemoData: true }, false);
+    const m = seen.filter(([c]) => c === MAY);
+    expect(m).toHaveLength(1);
+    expect(m[0]?.[1]).toContain(
+      `al-runner may download BC ${BUILD} demo data (~549 MB, once) into ${cacheDir}; set alRunnerV3.downloadDemoData=false to stay offline`,
+    );
+  });
+
+  test("pre-run line: not when the backup exists, and not when opted out", async () => {
+    expect((await preRun({ downloadDemoData: true }, true)).seen.map(([c]) => c)).not.toContain(
+      MAY,
+    );
+    expect((await preRun({ downloadDemoData: false }, false)).seen.map(([c]) => c)).not.toContain(
+      MAY,
+    );
+  });
+
+  test("the download warning carries the file's size and sha256 (a re-published build shows)", async () => {
+    const l = await layout();
+    const cacheDir = join(l.root, "dl-cache");
+    const d = join(cacheDir, "artifacts", "28.4.1.2", "demo", "w1");
+    await mkdir(d, { recursive: true });
+    await writeFile(join(d, "BusinessCentral-W1.bak"), "demo");
+    const b = backendOf(l, fakeV3(allPass).spawn, fakeAlc().io, {
+      cacheDir,
+      downloadDemoData: true,
+    });
+    const seen: Array<[string, string]> = [];
+    b.setNotify((c, m) => seen.push([c, m]));
+    (b as unknown as { watchTestDataOff(...o: string[]): void }).watchTestDataOff(DL);
+    const want = `4 bytes, sha256 ${createHash("sha256").update("demo").digest("hex")}`;
+    expect(seen.find(([c]) => c === "al-runner-v3-demo-data-download")?.[1]).toContain(want);
   });
 
   test("the config key: default from the constant, boolean only, passed through", () => {

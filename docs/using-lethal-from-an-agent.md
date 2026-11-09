@@ -173,7 +173,10 @@ offline run set `"downloadDemoData": false` in `alRunnerV3`: LethAL then passes 
 al-runner fetching dependency apps), and you fill the cache yourself, once, with `al-runner warm` or one run with
 the key on. If the data is missing, al-runner refuses every test that reads CRONUS rows and prints `note: test data
 is off ...`; LethAL shows that as the warning `al-runner-v3-test-data-off` (once per run), and adds a line to the
-"no green baseline tests" note. The project's own gates set `downloadDemoData: false`.
+"no green baseline tests" note. With the setting on, the feed's copy replaces an older Microsoft app in
+`.alpackages`. Before the first call LethAL prints `al-runner may download BC <build> demo data ...` when
+`cacheDir` holds no backup for `bcVersion`, and the download warning records the file's size and sha256 (a
+re-published build shows as a changed hash). The project's own gates set `downloadDemoData: false`.
 A run prints one line, `[lethal] al-runner: <path> (<version>)`, naming the binary it used. Full steps:
 [README](../README.md#running-without-a-bc-server-the-al-runner-v3-backend).
 

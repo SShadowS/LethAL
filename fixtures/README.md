@@ -1699,6 +1699,7 @@ CLI flags:
     // R885: true (default) lets al-runner download the CRONUS demo data of bcVersion (~549 MB, once,
     // into cacheDir) when a Microsoft-style test app needs it. false passes --no-download: fill
     // cacheDir once with "al-runner warm". Missing data shows as the al-runner-v3-test-data-off warning.
+    // With true, the feed's copy also replaces an older Microsoft app in .alpackages.
     "downloadDemoData": true,
     // "al-runner" reads v3's coverage; turned off, with the al-runner-v3-coverage-off warning,
     // for a project holding an #if wrapper shape the index has no rule for (two-arm, #elif, nested,
