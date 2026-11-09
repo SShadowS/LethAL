@@ -389,6 +389,7 @@ export async function runV3LaneTrace(): Promise<V3LaneTrace> {
         alcPath: "/fake/alc",
         coverage: "none",
         transport: "serve-entries",
+        downloadDemoData: false, // R885: the committed trace is the offline argv
       },
       one.spawn,
       fakeAlc(),

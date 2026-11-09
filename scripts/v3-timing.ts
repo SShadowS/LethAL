@@ -394,6 +394,7 @@ function subjects(o: {
     packagesDir,
     bcVersion,
     coverage,
+    downloadDemoData: false, // R885: a timing run measures v3, not the network
     ...(o.cacheDir !== undefined ? { cacheDir: o.cacheDir } : {}),
   });
   const all: Subject[] = [

@@ -366,5 +366,7 @@ export const GATE_WARNINGS: Readonly<Record<string, readonly string[]>> = {
   "al-runner-v3/WR": ["compiled-out-sites", "coverage-refused-mutants", "coverage-refused-object"],
   "al-runner-v3/D1": CDO_D,
   "al-runner-v3/D1c": CDO_D,
-  "al-runner-v3/T": TABLES,
+  // R885 (pre-committed in docs/gates/alrunner-v3.md, 6bb4274d): the leg opts out of downloads, so al-runner
+  // says its test data is off; true and expected, since no test of sandbox-data needs demo data.
+  "al-runner-v3/T": ["al-runner-v3-test-data-off", ...TABLES],
 };

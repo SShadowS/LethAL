@@ -2,6 +2,7 @@
 // docs/superpowers/plans/2026-10-21-r586-alrunner-v3-backend.md, §3-§6, tests T5, T12, T21, T22,
 // T24, T28-T32 and the decoder rows of §5. Every guard has a test per direction.
 import { afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { createHash } from "node:crypto";
 import {
   appendFile,
   mkdir,
@@ -41,7 +42,12 @@ import {
   v3CallDeadlineMs,
   v3MissingDependencies,
   v3RowVerdict,
+  v3TestDataOffNote,
 } from "../src/al-runner-v3-backend";
+import {
+  V3_DOWNLOAD_DEMO_DATA_DEFAULT,
+  validateAlRunnerV3Config,
+} from "../src/al-runner-v3-config";
 import { MESSAGE_PREFIX_REASON, type V3ContractResult } from "../src/al-runner-v3-contract";
 import { sha256OfFile } from "../src/al-runner-v3-pin";
 import * as pinsNs from "../src/al-runner-v3-pins";
@@ -49,7 +55,7 @@ import { AlRunnerV3CoverageJoinError } from "../src/al-runner-v3-sleep";
 import { TestAppProofStore, testAppCacheKey } from "../src/al-runner-v3-testapp-cache";
 import { AlcCompileError, type ArtifactIo, ArtifactPrepareError } from "../src/artifact";
 import type { TestMethodRef } from "../src/backend";
-import { runOnce } from "../src/orchestrator";
+import { noGreenBaselineNote, runOnce } from "../src/orchestrator";
 import type { SpawnFn } from "../src/publisher";
 import { SessionSafety } from "../src/session-safety";
 import { TestAppError } from "../src/test-app-publish";
@@ -1171,6 +1177,157 @@ describe("R645: v3 runs in the session's scratch dir, so its coverage.cobertura.
   });
 });
 
+describe("R885: demo data, on the one-shot path", () => {
+  const OFF =
+    "note: test data is off: the demo data of build 28.4.1.2 is not cached and --no-download is set. Microsoft's tests expect a CRONUS company.";
+  const DL = "test data: downloading the w1 demo data of build 28.4.1.2 (about 0.5 GB, once) ...";
+
+  const callArgv = async (extra: Partial<AlRunnerV3Config>) => {
+    const l = await layout();
+    const v3 = fakeV3(allPass);
+    const b = backendOf(l, v3.spawn, fakeAlc().io, extra);
+    await b.deploy(l.batch);
+    await b.activate("M0002");
+    await b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
+    return v3.calls[0] ?? [];
+  };
+
+  test("--no-download follows downloadDemoData: false puts it back, true takes it away, absent follows the default", async () => {
+    expect(await callArgv({ downloadDemoData: false })).toContain("--no-download");
+    expect(await callArgv({ downloadDemoData: true })).not.toContain("--no-download");
+    expect((await callArgv({})).includes("--no-download")).toBe(!V3_DOWNLOAD_DEMO_DATA_DEFAULT);
+  });
+
+  const notices = async (stderr: string | undefined, extra: Partial<AlRunnerV3Config> = {}) => {
+    const l = await layout();
+    const b = backendOf(l, fakeV3(allPass, { stderr: () => stderr ?? "" }).spawn, fakeAlc().io, {
+      ...extra,
+    });
+    const seen: Array<[string, string]> = [];
+    b.setNotify((c, m) => seen.push([c, m]));
+    await b.deploy(l.batch);
+    await b.activate(null);
+    for (const m of ["A", "B", "A"]) await b.run(ref(m), { coverage: "none", timeoutMs: 1000 });
+    return { seen, b };
+  };
+
+  test("the note warns ONCE for many calls and notes, naming cacheDir, the build and the fix", async () => {
+    const { seen, b } = await notices(`${OFF}\n${OFF}`, { downloadDemoData: false });
+    const w = seen.filter(([c]) => c === "al-runner-v3-test-data-off");
+    expect(w).toHaveLength(1);
+    expect(w[0]?.[1]).toContain("28.4.1.2");
+    expect(w[0]?.[1]).toContain("alRunnerV3.cacheDir");
+    expect(w[0]?.[1]).toContain("al-runner warm");
+    expect(w[0]?.[1]).toContain("downloadDemoData");
+    expect(b.baselineNote()).toContain("28.4.1.2");
+  });
+
+  test("no note, no warning and no baseline line", async () => {
+    const { seen, b } = await notices(undefined);
+    expect(seen.filter(([c]) => c.startsWith("al-runner-v3-test-data"))).toEqual([]);
+    expect(b.baselineNote()).toBeUndefined();
+  });
+
+  test("a download line announces the download once, with the opt-out; no line, no announcement", async () => {
+    const { seen } = await notices(DL, { cacheDir: "/cc", downloadDemoData: true });
+    const d = seen.filter(([c]) => c === "al-runner-v3-demo-data-download");
+    expect(d).toHaveLength(1);
+    expect(d[0]?.[1]).toContain(
+      "downloading BC 28.4.1.2 demo data (~549 MB, once) into /cc; set alRunnerV3.downloadDemoData=false to stay offline",
+    );
+    const none = await notices(undefined, { downloadDemoData: true });
+    expect(none.seen.filter(([c]) => c === "al-runner-v3-demo-data-download")).toEqual([]);
+  });
+
+  test("many calls with the note (and many download lines) still give one warning each", async () => {
+    const { seen, b } = await notices(undefined, { downloadDemoData: true });
+    const watch = (
+      b as unknown as { watchTestDataOff(...o: string[]): void }
+    ).watchTestDataOff.bind(b);
+    for (let i = 0; i < 4; i++) watch(`${OFF}\n${DL}`, `${OFF}\n${DL}`);
+    expect(seen.filter(([c]) => c === "al-runner-v3-test-data-off")).toHaveLength(1);
+    expect(seen.filter(([c]) => c === "al-runner-v3-demo-data-download")).toHaveLength(1);
+  });
+
+  const BUILD = "28.0.46665.47126"; // backendOf's bcVersion
+  const preRun = async (extra: Partial<AlRunnerV3Config>, bak: boolean) => {
+    const l = await layout();
+    const cacheDir = join(l.root, "demo-cache");
+    if (bak) {
+      const d = join(cacheDir, "artifacts", BUILD, "demo", "w1");
+      await mkdir(d, { recursive: true });
+      await writeFile(join(d, "BusinessCentral-W1.bak"), "demo");
+    }
+    const b = backendOf(l, fakeV3(allPass).spawn, fakeAlc().io, { cacheDir, ...extra });
+    const seen: Array<[string, string]> = [];
+    b.setNotify((c, m) => seen.push([c, m]));
+    await b.deploy(l.batch);
+    await b.deploy(l.batch);
+    return { seen, cacheDir };
+  };
+  const MAY = "al-runner-v3-demo-data-may-download";
+
+  test("pre-run line: once, when download is on and cacheDir holds no backup for bcVersion", async () => {
+    const { seen, cacheDir } = await preRun({ downloadDemoData: true }, false);
+    const m = seen.filter(([c]) => c === MAY);
+    expect(m).toHaveLength(1);
+    expect(m[0]?.[1]).toContain(
+      `al-runner may download BC ${BUILD} demo data (~549 MB, once) into ${cacheDir}; set alRunnerV3.downloadDemoData=false to stay offline`,
+    );
+  });
+
+  test("pre-run line: not when the backup exists, and not when opted out", async () => {
+    expect((await preRun({ downloadDemoData: true }, true)).seen.map(([c]) => c)).not.toContain(
+      MAY,
+    );
+    expect((await preRun({ downloadDemoData: false }, false)).seen.map(([c]) => c)).not.toContain(
+      MAY,
+    );
+  });
+
+  test("the download warning carries the file's size and sha256 (a re-published build shows)", async () => {
+    const l = await layout();
+    const cacheDir = join(l.root, "dl-cache");
+    const d = join(cacheDir, "artifacts", "28.4.1.2", "demo", "w1");
+    await mkdir(d, { recursive: true });
+    await writeFile(join(d, "BusinessCentral-W1.bak"), "demo");
+    const b = backendOf(l, fakeV3(allPass).spawn, fakeAlc().io, {
+      cacheDir,
+      downloadDemoData: true,
+    });
+    const seen: Array<[string, string]> = [];
+    b.setNotify((c, m) => seen.push([c, m]));
+    (b as unknown as { watchTestDataOff(...o: string[]): void }).watchTestDataOff(DL);
+    const want = `4 bytes, sha256 ${createHash("sha256").update("demo").digest("hex")}`;
+    expect(seen.find(([c]) => c === "al-runner-v3-demo-data-download")?.[1]).toContain(want);
+  });
+
+  test("the config key: default from the constant, boolean only, passed through", () => {
+    const base = { packagesDir: "/p", bcVersion: "28.0.1.2", path: "/x" };
+    const v = (extra: object) => validateAlRunnerV3Config({ ...base, ...extra }, () => true);
+    expect(v({}).downloadDemoData).toBe(V3_DOWNLOAD_DEMO_DATA_DEFAULT);
+    expect(v({ downloadDemoData: false }).downloadDemoData).toBe(false);
+    expect(v({ downloadDemoData: true }).downloadDemoData).toBe(true);
+    expect(() => v({ downloadDemoData: "no" })).toThrow("downloadDemoData");
+  });
+
+  test("the not-green baseline note carries the line only when the backend gave one", () => {
+    const bl = [{ verdict: { failureMessage: "refused" } }];
+    expect(noGreenBaselineNote(bl, "al-runner v3 says test data is off")).toContain(
+      "al-runner v3 says test data is off",
+    );
+    expect(noGreenBaselineNote(bl)).not.toContain("test data is off");
+  });
+
+  test("the note's text, after the stable prefix, may change: the build is read, never matched", () => {
+    expect(v3TestDataOffNote("note: test data is off: could not download")).toEqual({ build: "" });
+    expect(v3TestDataOffNote("x note: test data is off: build 1.2.3.4")).toBeUndefined();
+    expect(v3TestDataOffNote("note: test data is off: the demo data of build 9.8.7.6 is")).toEqual({
+      build: "9.8.7.6",
+    });
+  });
+});
+
 describe("§4 selection, the cache and T5 / T21 / T28 / T29", () => {
   test("T5: one --codeunit per call, --coverage-json always, no name selection, --no-download with the pinned build", () => {
     const argv = v3CallArgv({
@@ -1179,6 +1336,7 @@ describe("§4 selection, the cache and T5 / T21 / T28 / T29", () => {
       stopSeconds: 3,
       packagesDir: "/d",
       bcVersion: "28.0.1.2",
+      noDownload: true,
       symbols: ["S1"],
       coverageJson: "/c.json",
       activeDir: "/a",

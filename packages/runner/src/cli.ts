@@ -3073,6 +3073,7 @@ async function buildAlRunnerV3Backend(
         ? { isolatedBaselineProcesses: parsed.baselineProcesses }
         : {}),
       ...(c.cacheDir !== undefined ? { cacheDir: c.cacheDir } : {}),
+      downloadDemoData: c.downloadDemoData,
       ...(deps.preprocessorSymbols.length > 0
         ? { preprocessorSymbols: deps.preprocessorSymbols }
         : {}),

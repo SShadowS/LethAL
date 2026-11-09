@@ -646,6 +646,12 @@ export interface ExecutionBackend {
   survivorNote?(covering: readonly TestMethodRef[]): string | undefined;
 
   /**
+   * R885, OPTIONAL: one line for the "no green baseline tests" note when the backend saw why
+   * (v3: its "test data is off" note), else `undefined`.
+   */
+  baselineNote?(): string | undefined;
+
+  /**
    * R678, OPTIONAL: a batch's baseline came from a reused `--resume` snapshot (R192), so no
    * baseline call ran. Called once, inside the baseline bracket, with the reused verdicts, so the
    * backend can record what a baseline call would have (v3: its refused tests, for `survivorNote`).

@@ -549,6 +549,8 @@ A build can have a PIN: the exact readings that differ from alpha.2's expectatio
 | leg T | seven rows (`Data Flag Ops` x3, `Data Key Probe` x4) `error` / `runner-refused`, counts 290 / 50 / 59 over 406 | NO: BC kills them; #5788 | 7 of 406 mutants read `error` where BC kills |
 | X (b) | exit 3, `passed` 0 and `notRun` 0 present, no rows, non-empty `compilationErrors` | yes | none |
 
+**Pre-commitment, R885 (2026-11-09): leg T's warning set gains `al-runner-v3-test-data-off`.** The gate opts out of downloads (`alRunnerV3.downloadDemoData: false`), and on `sandbox-data` al-runner then prints "test data is off: the demo data of build 28.0.46665.47126 is not cached and --no-download is set"; R885 surfaces that line as this warning, once per run. It is true and expected: the leg runs without demo data on purpose, and none of its tests needs it. Seen on the first gate run with R885, at 47f8b693 on edge-05d692e5e; every other leg's set is unchanged, and no verdict, count or killing test moved. Only `al-runner-v3/T` changes; the BC `tables/*` sets do not.
+
 Leg T is judged against the committed alpha.2 baseline with the pinned keys overridden (`applyTPin`, S4).
 - If a pinned key is absent, repeated, or its committed row is not the pin's `from`, the leg reads at least `held`.
   The default `from` is `survived`/`null`/`null`. Since R804 a row may name another `from`: edge-8078bcf49's

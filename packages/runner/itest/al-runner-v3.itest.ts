@@ -319,6 +319,9 @@ function backendCfg(
     alRunnerPath: BIN,
     alcPath: ALC,
     cacheDir: CACHE,
+    // R885: a frozen gate never fetches demo data (500 MB) or dependency apps from the network:
+    // the fixtures need none, and every call carries --no-download as it did before R885.
+    downloadDemoData: false,
     coverage: "al-runner",
     ...(CANDIDATE ? { candidate: true } : {}),
     ...TRANSPORT,
@@ -1451,13 +1454,17 @@ async function legK(scratch: string): Promise<void> {
         allowExpiringEnv: false,
       } as Parameters<typeof buildBackend>[0],
       {
-        alRunnerV3: legKSection({
-          path: BIN,
-          packagesDir: join(fixture("sandbox-tests"), ".alpackages"),
-          bcVersion: SANDBOX_BC,
-          alcPath: ALC,
-          cacheDir: CACHE,
-        }),
+        alRunnerV3: {
+          ...legKSection({
+            path: BIN,
+            packagesDir: join(fixture("sandbox-tests"), ".alpackages"),
+            bcVersion: SANDBOX_BC,
+            alcPath: ALC,
+            cacheDir: CACHE,
+          }),
+          // R885: the gate stays offline (see backendCfg above); K's defaults are otherwise unchanged.
+          downloadDemoData: false,
+        },
       },
       join(scratch, "cli-scratch"),
       undefined,

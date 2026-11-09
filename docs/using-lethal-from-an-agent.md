@@ -165,6 +165,18 @@ comes from the AL Language extension or, on a Linux box with .NET but no VS Code
 `bun scripts/fetch-alc.ts <dir>` (it prints the `alRunnerV3.alcPath` line). `doctor` on any config that has the
 section prints an `al-runner-v3` check (version, gated build, `bcVersion` against the symbols, and
 that a configured `alcPath` is executable); when the al-runner is missing it prints the install command.
+**Demo data (R885).** A Microsoft-style test app expects the CRONUS demo company. al-runner restores it from a
+backup of the build (`bcVersion`) that it keeps in `alRunnerV3.cacheDir` (else its own default cache). LethAL no
+longer passes al-runner's no-download switch by default: the first run downloads the backup once (about 549 MB) and prints
+`[lethal] downloading BC <build> demo data (~549 MB, once) into <cacheDir>; ...`. Later runs reuse it. For an
+offline run set `"downloadDemoData": false` in `alRunnerV3`: LethAL then passes that switch (which also stops
+al-runner fetching dependency apps), and you fill the cache yourself, once, with `al-runner warm` or one run with
+the key on. If the data is missing, al-runner refuses every test that reads CRONUS rows and prints `note: test data
+is off ...`; LethAL shows that as the warning `al-runner-v3-test-data-off` (once per run), and adds a line to the
+"no green baseline tests" note. With the setting on, the feed's copy replaces an older Microsoft app in
+`.alpackages`. Before the first call LethAL prints `al-runner may download BC <build> demo data ...` when
+`cacheDir` holds no backup for `bcVersion`, and the download warning records the file's size and sha256 (a
+re-published build shows as a changed hash). The project's own gates set `downloadDemoData: false`.
 A run prints one line, `[lethal] al-runner: <path> (<version>)`, naming the binary it used. Full steps:
 [README](../README.md#running-without-a-bc-server-the-al-runner-v3-backend).
 

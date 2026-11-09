@@ -7925,7 +7925,7 @@ async function runSessionBody(
         const greenTests = baseline.filter((b) => b.verdict.outcome === "pass");
         if (greenTests.length < baseline.length) baselineGreenOverall = false;
         if (greenTests.length === 0) {
-          const note = noGreenBaselineNote(baseline);
+          const note = noGreenBaselineNote(baseline, cfg.backend.baselineNote?.());
           for (const m of execute) {
             record(cfg.store, runId, m, "error", outcomes, batchIdx, emit, undefined, note);
           }
@@ -12871,6 +12871,15 @@ const BASELINE_NOTE_MESSAGE_LIMIT = 4000;
  * any backend and any cause, including ones nobody has met yet.
  */
 export function noGreenBaselineNote(
+  baseline: readonly { readonly verdict: { readonly failureMessage?: string } }[],
+  /** R885: one line from the backend that says why (v3: demo data off); appended when given. */
+  backendLine?: string,
+): string {
+  const base = noGreenBaselineNoteBase(baseline);
+  return backendLine === undefined ? base : `${base} | ${backendLine}`;
+}
+
+function noGreenBaselineNoteBase(
   baseline: readonly { readonly verdict: { readonly failureMessage?: string } }[],
 ): string {
   const messages = baseline
