@@ -466,6 +466,12 @@ export interface ExecutionBackend {
    */
   readonly methodIsolation?: boolean;
   /**
+   * R896: `alRunnerV3.isolation: "auto"`: the baseline chooses each test codeunit's mode
+   * (`chooseIsolation`). Absent counts as false. In `runner_build` (` isolation-auto`) and the
+   * fingerprint; such a run neither lends nor borrows history or a baseline snapshot.
+   */
+  readonly isolationAuto?: boolean;
+  /**
    * R517, OPTIONAL: the in-run stop LethAL configured for the whole session, timed on the test's
    * own body, enforced whatever budget a run is sent. al-runner `--server` answers it once
    * `useMutantBudgetFloor` was called; absent elsewhere (the stop is the budget). An upper bound
@@ -665,6 +671,15 @@ export interface ExecutionBackend {
   noteReusedBaseline?(
     baseline: readonly { readonly ref: TestMethodRef; readonly verdict: TestVerdict }[],
   ): void;
+
+  /**
+   * R896, OPTIONAL (al-runner v3, `isolation: "auto"` only): fixes test codeunit `codeunitId`'s
+   * mode for the session: `"method"` runs each of its tests alone under codeunit isolation, `"test"`
+   * runs it whole, as always. Clears the codeunit's baseline refusals (the orchestrator notes them
+   * again from the CHOSEN rows, `noteReusedBaseline`). Called by the orchestrator inside the
+   * baseline bracket of the first batch that runs a live baseline, and never again.
+   */
+  chooseIsolation?(codeunitId: number, mode: "test" | "method"): void;
 
   /**
    * R635 §4, OPTIONAL: `true` right before a batch's baseline step (`activateOnce(null)`), `false`

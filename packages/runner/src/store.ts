@@ -350,6 +350,9 @@ export interface TestNarrowing {
   readonly excludeTests: readonly string[];
 }
 
+/** R896: the `runner_build` suffix of an `isolation: "auto"` run (always last). */
+export const ISOLATION_AUTO_BUILD_TAG = " isolation-auto";
+
 /** R586: the session side of `runMayLend` step 1: its backend and, on v3, its build. */
 export interface LendingSession {
   readonly backend: string;
@@ -842,6 +845,8 @@ export class ResultsStore {
       ["runs", "build_symbols TEXT", runCols],
       // R886: NULL on an older row and on every non-v3 run; see `ResumeInputs`.
       ["runs", "resume_inputs TEXT", runCols],
+      // R896: NULL until an `isolation: "auto"` run chose; see `setRunIsolationChoice`.
+      ["runs", "isolation_choice TEXT", runCols],
       // R354: NULL on an older row, read as "coverage mode unknown", which never equals a mode.
       ["runs", "coverage_mode TEXT", runCols],
       // R247: NULL on an older row, read as "test app unknown", which never matches.
@@ -1165,6 +1170,35 @@ export class ResultsStore {
       )
       .run(testAppHash, flag ? 1 : null, flag ? deps : null, runId).changes;
     if (changed !== 1) throw new Error(`store.ts: setRunTestAppHash: no run ${runId}`);
+  }
+
+  /** R896: the per-codeunit modes an `isolation: "auto"` run chose (its candidates only). */
+  setRunIsolationChoice(runId: number, choice: Readonly<Record<string, "test" | "method">>): void {
+    const changed = this.db
+      .query("UPDATE runs SET isolation_choice = ? WHERE id = ?")
+      .run(JSON.stringify(choice), runId).changes;
+    if (changed !== 1) throw new Error(`store.ts: setRunIsolationChoice: no run ${runId}`);
+  }
+
+  /** R896: the stored choice, or `null` when the run never chose (no auto, or no live baseline). */
+  runIsolationChoice(runId: number): Record<string, "test" | "method"> | null {
+    const row = this.db.query("SELECT isolation_choice FROM runs WHERE id = ?").get(runId) as {
+      isolation_choice: string | null;
+    } | null;
+    if (row === null) throw new Error(`store.ts: runIsolationChoice: no run ${runId}`);
+    if (row.isolation_choice === null) return null;
+    const v = JSON.parse(row.isolation_choice) as unknown;
+    if (
+      typeof v !== "object" ||
+      v === null ||
+      Array.isArray(v) ||
+      !Object.values(v).every((m) => m === "test" || m === "method")
+    ) {
+      throw new Error(
+        `store.ts: run ${runId} has a corrupt "isolation_choice" value ${row.isolation_choice}`,
+      );
+    }
+    return v as Record<string, "test" | "method">;
   }
 
   /** R496: withdraws a run's test digests and their parts (F9: a dependency changed while the
@@ -2412,6 +2446,17 @@ export class ResultsStore {
   ): LendRefusal | undefined {
     const why = backendBuildRefusal(run, session);
     if (why !== undefined) return { step: "backend-build", why };
+    // R896 (review 3): an `isolation: "auto"` session neither borrows history or a snapshot, nor (as
+    // step 1 lends only to the same build, ` isolation-auto` included) lends them. Resume stays.
+    if (
+      (ctx.site === "history" || ctx.site === "snapshot") &&
+      session?.runnerBuild?.endsWith(ISOLATION_AUTO_BUILD_TAG) === true
+    ) {
+      return {
+        step: "backend-build",
+        why: `this session runs al-runner-v3 under "alRunnerV3.isolation": "auto", whose per-codeunit modes are chosen by its own baseline, so run ${run.id}'s verdicts are not lent to it (R896)`,
+      };
+    }
     if (ctx.siteChecks?.() === true) return { step: "site" };
     return undefined;
   }

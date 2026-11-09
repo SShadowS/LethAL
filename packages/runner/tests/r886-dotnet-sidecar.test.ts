@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AlRunnerV3Backend } from "../src/al-runner-v3-backend";
-import { validateAlRunnerV3Config } from "../src/al-runner-v3-config";
+import { V3_ISOLATION_DEFAULT, validateAlRunnerV3Config } from "../src/al-runner-v3-config";
 import { AlRunnerV3UngatedBuildError, parseGated, sha256OfFile } from "../src/al-runner-v3-pin";
 import { V3_BUILD_PINS, parseGatedBuilds } from "../src/al-runner-v3-pins";
 import type { ArtifactIo } from "../src/artifact";
@@ -33,12 +33,14 @@ describe("R886: alRunnerV3.dotnetSidecar", () => {
   });
 });
 
-describe("R890: alRunnerV3.isolation", () => {
-  test("test and method are accepted, absent stays absent, anything else is refused by name", () => {
+describe("R890, R896: alRunnerV3.isolation", () => {
+  test("auto, test and method are accepted, absent is auto (R896), anything else is refused by name", () => {
     expect(validateAlRunnerV3Config({ ...base, isolation: "method" }).isolation).toBe("method");
     expect(validateAlRunnerV3Config({ ...base, isolation: "test" }).isolation).toBe("test");
-    expect("isolation" in validateAlRunnerV3Config(base)).toBe(false);
-    for (const bad of ["codeunit", "", true])
+    expect(validateAlRunnerV3Config({ ...base, isolation: "auto" }).isolation).toBe("auto");
+    expect(validateAlRunnerV3Config(base).isolation).toBe("auto");
+    expect(V3_ISOLATION_DEFAULT).toBe("auto");
+    for (const bad of ["codeunit", "Auto", "", true])
       expect(() => validateAlRunnerV3Config({ ...base, isolation: bad })).toThrow(
         "al-runner-v3-config-refused",
       );
