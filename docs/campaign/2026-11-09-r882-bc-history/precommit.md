@@ -124,3 +124,14 @@ codeunit (`id-ranges.ts`), so all three injected ids are codeunits. No mutant ra
 
 **Changed for the S3 rerun, and nothing else:** ServiceDeclaration's `tableId` is 5047, a codeunit that has no owner on bc5 (read by
 key, `owners-sd.ts`) and that the app does not declare. `selectorId` 5048 and `controlId` 5049 are unchanged. S2 is not rerun.
+
+## Amendment 5 (2026-11-09, after the first S3 rerun, before the second)
+
+**What happened.** The first S3 attempt's clash (`UpgradeClashRefusedError`, R845) left Service Declaration's failed build
+28.6.55443.1 on bc5, and BC made no restore attempt. The rerun was started without the documented recovery (a slip by lethal-code).
+Its publish was refused as a downgrade, BC could not restore, and it left the target uninstalled with its tests app removed
+(`UpgradeNotRestoredError`). No mutant ran in either attempt.
+
+**Recovery, as `docs/using-lethal-from-an-agent.md` "Recovering a stripped server" says, nothing uninstalled:** the scratch
+`app.json` versions are raised (Service Declaration 28.6.55443.2, its tests 28.6.55443.1), and both are published plain, in that
+order. Then S3 runs again, unchanged from amendment 4. A version is not mutated: the mutant set and its count (1044) are unchanged.
