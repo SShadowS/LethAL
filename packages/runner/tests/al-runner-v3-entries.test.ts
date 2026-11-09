@@ -561,6 +561,7 @@ async function rig(opts: RigOpts = {}): Promise<Rig> {
       alcPath: "/fake/alc",
       coverage: "none",
       transport: "serve-entries",
+      downloadDemoData: false, // R885: the argv pins below are the offline path; tests override via extra
       ...opts.extra,
     },
     one.spawn,
@@ -1137,6 +1138,65 @@ describe("8 (other direction): a refusal inside the bracket IS a baseline refusa
     const r = await rig({ serve: { rows: refusesB } });
     await baseline(r.b, SUITE1);
     expect(r.b.survivorNote([ref("A")])).toContain("[v3-refused-test-nearby]");
+  });
+});
+
+describe("R885: demo data, on the serve path", () => {
+  const OFF =
+    "note: test data is off: the demo data of build 28.4.1.2 is not cached and --no-download is set. Microsoft's tests expect a CRONUS company.";
+  const DOWNLOAD =
+    "test data: downloading the w1 demo data of build 28.4.1.2 (about 0.5 GB, once) ...";
+  const run = async (extra: Partial<AlRunnerV3Config>, line: string | undefined, runs = 2) => {
+    const seen: Array<[string, string]> = [];
+    let armed = false;
+    const r = await readyRig({
+      serve: { rows: killsM1, stderr: () => (armed ? line : undefined) },
+      mutants: ["M0001", "M0002"],
+      extra,
+    });
+    r.b.setNotify((c, m) => seen.push([c, m]));
+    armed = true;
+    for (let i = 0; i < runs; i++) {
+      await r.b.activate("M0001");
+      await r.b.run(ref("A"), OPTS);
+    }
+    return { seen, r };
+  };
+
+  test("the daemon argv has --no-download only when downloadDemoData is false", async () => {
+    const off = await readyRig({ mutants: ["M0001"], extra: { downloadDemoData: false } });
+    expect(off.serve.daemons[0] ?? []).toContain("--no-download");
+    const on = await readyRig({ mutants: ["M0001"], extra: { downloadDemoData: true } });
+    expect(on.serve.daemons[0] ?? []).not.toContain("--no-download");
+  });
+
+  test("the test-data-off note on the daemon's stderr warns once, naming the cacheDir key", async () => {
+    const { seen, r } = await run({ cacheDir: "/c" }, `${OFF}\n${OFF}`);
+    const codes = seen.map(([c]) => c);
+    expect(codes.filter((c) => c === "al-runner-v3-test-data-off")).toHaveLength(1);
+    expect(seen.find(([c]) => c === "al-runner-v3-test-data-off")?.[1]).toContain(
+      "alRunnerV3.cacheDir",
+    );
+    expect(r.b.baselineNote?.()).toContain("28.4.1.2");
+  });
+
+  test("no note, no warning, no baseline line", async () => {
+    const { seen, r } = await run({}, undefined);
+    expect(seen.filter(([c]) => c.startsWith("al-runner-v3-test-data"))).toEqual([]);
+    expect(r.b.baselineNote?.()).toBeUndefined();
+  });
+
+  test("a download in progress is announced once, with the opt-out key", async () => {
+    const { seen } = await run({ cacheDir: "/c", downloadDemoData: true }, DOWNLOAD);
+    const d = seen.filter(([c]) => c === "al-runner-v3-demo-data-download");
+    expect(d).toHaveLength(1);
+    expect(d[0]?.[1]).toContain("downloading BC 28.4.1.2 demo data (~549 MB, once) into /c");
+    expect(d[0]?.[1]).toContain("alRunnerV3.downloadDemoData=false");
+  });
+
+  test("no download line, no download notice", async () => {
+    const { seen } = await run({ downloadDemoData: true }, undefined);
+    expect(seen.filter(([c]) => c === "al-runner-v3-demo-data-download")).toEqual([]);
   });
 });
 
