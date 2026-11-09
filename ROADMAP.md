@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**18 of 858 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**21 of 861 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -348,6 +348,7 @@ that ordering is the priority.
 - **R890** · v3 runs a test codeunit under per-test rollback with its globals kept, while bcdev runs each method alone: a suite that sets up once per codeunit loses its setup on v3 · [R890.md](docs/roadmap/R890.md) · open
 - **R893** · swap-find-direction on a FindLast that skips ahead inside a Next() walk of the same record is not hang-refused: the swapped FindFirst rewinds the walk, and on BC the run stranded and quarantined the tier · [R893.md](docs/roadmap/R893.md) · open
 - **R895** · v3 runs the app's GUI branch and bcdev the non-GUI one: a Confirm through ConfirmManagement.GetResponseOrDefault is asked on v3 and skipped on BC, so the two backends kill different mutants · [R895.md](docs/roadmap/R895.md) · open
+- **R896** · The hang check covers only Tier-1 operators: a Tier-2 mutation inside a loop is never hang-refused · [R896.md](docs/roadmap/R896.md) · open
 
 ## Product gaps a real project hits
 
@@ -534,6 +535,7 @@ that ordering is the priority.
 - **R888** · Selector ids are checked against the project's own codeunits only, so they can clash with a dependency's codeunit (alc AL0264) · [R888.md](docs/roadmap/R888.md) · done (f3b3d5b3)
 - **R892** · On a first publish, an injected selector id that an installed non-dependent app already uses is not checked: BC's publish refusal is the only signal, with no hint to change selectorIds · [R892.md](docs/roadmap/R892.md) · open
 - **R894** · Spread one bcdev run across several BC servers (load balancing), so a slow suite's mutants run in parallel without sessions sharing a database · [R894.md](docs/roadmap/R894.md) · open, filed 2026-11-09 — DEFERRED by the owner: worth doing, not now
+- **R898** · No time cap per survivor: a mutant whose covering tests are slow can only end as survived after all of them, so slow suites take days · [R898.md](docs/roadmap/R898.md) · open, filed 2026-11-09 — DEFERRED, owner's call
 
 ## Backends and tooling
 
@@ -903,6 +905,7 @@ that ordering is the priority.
 - **R860** · al-runner stops on a missing dependency (upstream #7139); LethAL follows by name · [R860.md](docs/roadmap/R860.md) · done (35b54d36)
 - **R861** · `--edge-rejudge` moved `current` and left its manifest row unpublished until the next plain run · [R861.md](docs/roadmap/R861.md) · done (25eaa10f)
 - **R866** · `--isolate-tests` runs its baseline as one process per test, which is most of the mode's cost · [R866.md](docs/roadmap/R866.md) · done (d8ef7fd3)
+- **R897** · On al-runner v3 one hanging mutant costs (covering tests in its codeunit) x the per-test limit: about 69 minutes for 23 tests, with no verdict until the end · [R897.md](docs/roadmap/R897.md) · open
 
 ---
 
