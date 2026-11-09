@@ -332,6 +332,17 @@ N > 1 must equal N = 1: R766's proof found D1 and the gift card identical at N =
   - **The limit:** "new text" means text a pin holds. A contract fact's unpinned text is not compared, and no person now
     diffs the logs of a build that passes. The receipt and `gate.log` stay beside `.gated` (R805).
   - A pass records `pinApplied` in its receipt. A candidate that asked for a pin and applied none reads `infra-fail`.
+- **The .NET sidecar (R886).** After a build PASSES, the script builds al-runner's `tools/dotnet-sidecar` for it. The
+  sidecar is source only (no release or edge file holds it), so the script fetches the build's commit with
+  `gh api repos/<repo>/tarball/<commit>`, unpacks only that folder into a new temp folder under the install root, and runs
+  `dotnet publish <csproj> --configuration Release --output <build folder>/dotnet-sidecar` (SDK at `$DOTNET` or
+  `/opt/dotnet/dotnet`; the working folder is a separate empty one, so the source's `global.json` pin to SDK 8 is not read).
+  It takes about 6 s and needs no NuGet download. `.gated` records `dotnetSidecar: {file, sha256}` (the file relative to the
+  build folder), the ledger row and the manifest row record `dotnetSidecarSha256`. **A sidecar that fails to build never
+  changes the outcome:** the build still gates, and `.gated` and the row carry `dotnetSidecarNote` with the reason. A
+  `--regate` keeps `current`'s sidecar, or tries again when it has none. The manifest parser reads both row fields and
+  nothing else acts on them; `.gated`'s are read by the backend (the `--dotnet-sidecar` default) and by `doctor`. The gate
+  itself runs WITHOUT a sidecar (its legs and K set `dotnetSidecar: false`), so no leg, count or warning set moves.
 - **Every candidate runs K**, and a candidate's pass needs `K: pass`. A release never becomes `current`, so K is the
   closest it gets to a normal session. K's `gate-fail` or `held` is kept like any verdict. K runs in candidate mode, which
   relaxes only `unlike-bc`; a pin cannot hold that verdict, so such a build fails leg C and cannot pass.

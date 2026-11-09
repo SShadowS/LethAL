@@ -1431,6 +1431,55 @@ linuxOnly("R814: the two tracks", () => {
     expect(await current()).toBe(join(root, ALPHA2_DIR));
   });
 
+  test("R886: a pass builds the sidecar beside the binary and records its file and sha in .gated and the row", async () => {
+    await setupPinned();
+    const f = edgeOf(pinnedPass);
+    const asked: string[] = [];
+    const deps = {
+      ...f.deps,
+      buildSidecar: async (commit: string, out: string) => {
+        asked.push(commit);
+        await writeFile(join(out, "AlDotNetSidecar.dll"), "dll");
+        return join(out, "AlDotNetSidecar.dll");
+      },
+    };
+    expect(await edgeOnce(deps)).toBe("pass");
+    expect(asked).toEqual(["c893e3633"]);
+    const want = { file: "dotnet-sidecar/AlDotNetSidecar.dll", sha256: sha("dll") };
+    expect((await gatedOf(EDGE_DIR)).dotnetSidecar).toEqual(want);
+    const [r] = await ledger();
+    expect(r.dotnetSidecarSha256).toBe(want.sha256);
+    expect(existsSync(join(root, EDGE_DIR, want.file))).toBe(true);
+  });
+
+  test("R886: a sidecar that fails to build still gates: current moves, the note is in .gated and the row", async () => {
+    await setupPinned();
+    const f = edgeOf(pinnedPass);
+    const deps = {
+      ...f.deps,
+      buildSidecar: async () => {
+        throw new Error("dotnet publish: exit 1");
+      },
+    };
+    expect(await edgeOnce(deps)).toBe("pass");
+    expect(await current()).toBe(join(root, EDGE_DIR));
+    const g = await gatedOf(EDGE_DIR);
+    expect(g.dotnetSidecar).toBeUndefined();
+    expect(g.dotnetSidecarNote).toContain("dotnet publish: exit 1");
+    const [r] = await ledger();
+    expect(r.dotnetSidecarNote).toContain("dotnet publish: exit 1");
+    expect(r.dotnetSidecarSha256).toBeUndefined();
+    expect(f.seen.logs.join("\n")).toContain("the build still gates");
+  });
+
+  test("R886: no buildSidecar dep, no sidecar fields at all", async () => {
+    await setupPinned();
+    expect(await edgeOnce(edgeOf(pinnedPass).deps)).toBe("pass");
+    const g = await gatedOf(EDGE_DIR);
+    expect(g.dotnetSidecar).toBeUndefined();
+    expect(g.dotnetSidecarNote).toBeUndefined();
+  });
+
   test("a pass that applied no pin, asked for one, is infra-fail: current stays, no row", async () => {
     await setupPinned();
     const { deps, seen } = edgeOf({ outcome: "pass" });

@@ -256,7 +256,34 @@ export interface TestAppIdentity {
 }
 
 /** A run row, as `--resume` reads it back to check the candidate is actually resumable. */
+/**
+ * R886: the al-runner-v3 settings that can change a test's verdict without changing the project:
+ * the resolved .NET sidecar (its dll's sha256, or "none") and R885's demo-data download. Kept
+ * readable in their own column, not folded into `config_fingerprint`, so a refusal can say which
+ * changed and from what to what, and so every older fingerprint stays what it was.
+ */
+export interface ResumeInputs {
+  readonly dotnetSidecar: string;
+  readonly downloadDemoData: boolean;
+}
+
+/** R886: a stored `resume_inputs`, checked. NULL is "not recorded" and stays `null`. */
+function parseResumeInputs(value: string | null, runId: number): ResumeInputs | null {
+  if (value === null) return null;
+  try {
+    const v = JSON.parse(value) as Record<string, unknown>;
+    if (typeof v.dotnetSidecar === "string" && typeof v.downloadDemoData === "boolean")
+      return { dotnetSidecar: v.dotnetSidecar, downloadDemoData: v.downloadDemoData };
+  } catch {
+    // falls through to the throw
+  }
+  throw new Error(`store.ts: run ${runId} has a corrupt "resume_inputs" value ${value}`);
+}
+
 export interface RunRow {
+  /** R886: see `ResumeInputs`. `null` on a row recorded before the column, and on every run of a
+   *  backend that has none (bcdev): "not recorded". */
+  readonly resumeInputs: ResumeInputs | null;
   readonly id: number;
   readonly projectPath: string;
   readonly backend: string;
@@ -813,6 +840,8 @@ export class ResultsStore {
       ["runs", "identity_scheme INTEGER", runCols],
       // R214: NULL on an older row, and read as "unknown", which matches no build.
       ["runs", "build_symbols TEXT", runCols],
+      // R886: NULL on an older row and on every non-v3 run; see `ResumeInputs`.
+      ["runs", "resume_inputs TEXT", runCols],
       // R354: NULL on an older row, read as "coverage mode unknown", which never equals a mode.
       ["runs", "coverage_mode TEXT", runCols],
       // R247: NULL on an older row, read as "test app unknown", which never matches.
@@ -929,6 +958,8 @@ export class ResultsStore {
     /** R759: the run's `--tests-only` globs and the keys of the tests `--exclude-test` left out.
      *  Absent writes NULL ("unknown"); `runSession` always passes it. */
     testNarrowing?: TestNarrowing;
+    /** R886: the v3 settings this run measured under. Absent writes NULL. */
+    resumeInputs?: ResumeInputs;
   }): number {
     // R325: every run records the identity scheme its keys are made under, so no later session
     // can read them as keys of another scheme.
@@ -939,8 +970,8 @@ export class ResultsStore {
       info.testAppDeps !== undefined;
     const r = this.db
       .query(
-        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, resource_key, server_generation, test_app_hash, test_app_proven, test_app_deps, test_digests, test_digest_parts, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, runner_build, test_scope, test_narrowing) " +
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, resource_key, server_generation, test_app_hash, test_app_proven, test_app_deps, test_digests, test_digest_parts, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, runner_build, test_scope, test_narrowing, resume_inputs) " +
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
       )
       .get(
         info.projectPath,
@@ -970,6 +1001,7 @@ export class ResultsStore {
               testsOnly: info.testNarrowing.testsOnly,
               excludeTests: [...new Set(info.testNarrowing.excludeTests)].sort(),
             }),
+        info.resumeInputs === undefined ? null : JSON.stringify(info.resumeInputs),
       ) as {
       id: number;
     };
@@ -1331,9 +1363,10 @@ export class ResultsStore {
   getRun(runId: number): RunRow | null {
     const row = this.db
       .query(
-        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, runner_build, resource_key, server_generation, test_scope, test_narrowing FROM runs WHERE id = ?",
+        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, runner_build, resource_key, server_generation, test_scope, test_narrowing, resume_inputs FROM runs WHERE id = ?",
       )
       .get(runId) as {
+      resume_inputs: string | null;
       test_scope: string | null;
       test_narrowing: string | null;
       resource_key: string | null;
@@ -1379,6 +1412,7 @@ export class ResultsStore {
       serverGeneration: row.server_generation,
       testScope: parseTestScope(row.test_scope, row.id),
       testNarrowing: parseTestNarrowing(row.test_narrowing, row.id),
+      resumeInputs: parseResumeInputs(row.resume_inputs, row.id),
     };
   }
 

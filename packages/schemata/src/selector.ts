@@ -152,6 +152,16 @@ export const SELECTOR_RESOURCE_NONE = "NONE";
  * clears SingleInstance state at its isolation resets, so the value is re-read after each reset and
  * cannot go stale WITHIN a request, while a request only ever scores one mutant anyway.
  *
+ * ## No mutant during install or upgrade (R887)
+ *
+ * On BC the target is published once, before any mutant is set, so its install and upgrade code
+ * always runs unmutated. al-runner runs that code inside each run, after the resource is in place,
+ * so without this guard the run's mutant was live there too: it could make the install fail (an
+ * `error` verdict) or change the rows the install writes (a kill BC would not see). So `Active()`
+ * answers false outside a normal session, BEFORE it reads the resource, which also keeps install
+ * code from reading a resource file at all. Measured on al-runner edge-05d692e5e: install triggers
+ * see `ExecutionContext::Install`, tests see `Normal` (`/coord/handoff/R-884/probe/`).
+ *
  * ## The parity rule
  *
  * `emitMutationSelector`, `emitStaticSelector` and this MUST expose an identical procedure set:
@@ -172,6 +182,8 @@ export function emitResourceSelector(cfg: {
 
     procedure Active(MutantId: Text): Boolean
     begin
+        if GetExecutionContext() <> ExecutionContext::Normal then
+            exit(false);
         if not Loaded then begin
             ActiveId := NavApp.GetResourceAsText('${SELECTOR_RESOURCE_NAME}', TextEncoding::UTF8);
             Loaded := true;
@@ -203,8 +215,15 @@ export function emitStaticSelector(cfg: {
   artifactId: string;
   targetAppId: string;
 }): string {
+  // R887: as `emitResourceSelector`: no mutant while the session runs install or upgrade code, which
+  // on BC always runs before any mutant is set. One-shot v3 bakes the id in here, so it needs the
+  // same guard.
   const body =
-    cfg.activeId === "" ? "        exit(false);" : `        exit(MutantId = '${cfg.activeId}');`;
+    cfg.activeId === ""
+      ? "        exit(false);"
+      : `        if GetExecutionContext() <> ExecutionContext::Normal then
+            exit(false);
+        exit(MutantId = '${cfg.activeId}');`;
   // ArtifactId and TargetAppId must be present here too: AlRunnerBackend.activate() replaces
   // the entire generated selector with this output on every activation, so an emitter missing a
   // procedure a caller relies on would break the NEXT compile. This is the parity rule —

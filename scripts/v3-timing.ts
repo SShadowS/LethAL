@@ -395,6 +395,7 @@ function subjects(o: {
     bcVersion,
     coverage,
     downloadDemoData: false, // R885: a timing run measures v3, not the network
+    dotnetSidecar: false, // R886: and not a sidecar's start-up
     ...(o.cacheDir !== undefined ? { cacheDir: o.cacheDir } : {}),
   });
   const all: Subject[] = [

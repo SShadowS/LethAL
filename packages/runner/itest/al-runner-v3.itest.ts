@@ -322,6 +322,9 @@ function backendCfg(
     // R885: a frozen gate never fetches demo data (500 MB) or dependency apps from the network:
     // the fixtures need none, and every call carries --no-download as it did before R885.
     downloadDemoData: false,
+    // R886: the frozen figures were measured with no .NET sidecar; a pinned build's own sidecar
+    // would be picked up by default and could turn a refusal into a run. Off, explicitly.
+    dotnetSidecar: false,
     coverage: "al-runner",
     ...(CANDIDATE ? { candidate: true } : {}),
     ...TRANSPORT,
@@ -1464,6 +1467,7 @@ async function legK(scratch: string): Promise<void> {
           }),
           // R885: the gate stays offline (see backendCfg above); K's defaults are otherwise unchanged.
           downloadDemoData: false,
+          dotnetSidecar: false, // R886: and with no sidecar, as backendCfg above
         },
       },
       join(scratch, "cli-scratch"),

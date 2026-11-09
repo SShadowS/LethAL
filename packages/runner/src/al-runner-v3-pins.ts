@@ -793,9 +793,18 @@ export interface GatedBuildEntry {
   readonly lethalCommit: string;
   readonly gatedAt: string;
   readonly warnFacts?: Readonly<Record<string, string>>;
+  /**
+   * R886: the sha256 of the .NET sidecar dll built from this build's commit, or why it was not
+   * built. A record only: nothing here moves a verdict, and the path is local, so it is not kept
+   * here (`.gated` has it). The strict parse reads both, and no code acts on them yet.
+   */
+  readonly dotnetSidecarSha256?: string;
+  readonly dotnetSidecarNote?: string;
 }
 
 const GATED_BUILD_KEYS = new Set([
+  "dotnetSidecarSha256",
+  "dotnetSidecarNote",
   "id",
   "track",
   "tag",
@@ -836,6 +845,16 @@ function gatedBuildFault(e: Record<string, unknown>): string | undefined {
     (typeof wf !== "object" || wf === null || Object.values(wf).some((v) => typeof v !== "string"))
   )
     return "warnFacts must map names to strings";
+  if (
+    e.dotnetSidecarSha256 !== undefined &&
+    (typeof e.dotnetSidecarSha256 !== "string" || !/^[0-9a-f]{64}$/.test(e.dotnetSidecarSha256))
+  )
+    return "bad dotnetSidecarSha256";
+  if (
+    e.dotnetSidecarNote !== undefined &&
+    (typeof e.dotnetSidecarNote !== "string" || e.dotnetSidecarNote === "")
+  )
+    return "bad dotnetSidecarNote";
   return undefined;
 }
 

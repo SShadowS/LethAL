@@ -285,7 +285,14 @@ import {
 } from "./stale-test-app";
 import { type LendingSession, sameHiddenFiles } from "./store";
 import type { ResultsStore } from "./store";
-import type { CarryHidden, MutantVerdict, RunRow, RunnerKind, TestAppIdentity } from "./store";
+import type {
+  CarryHidden,
+  MutantVerdict,
+  ResumeInputs,
+  RunRow,
+  RunnerKind,
+  TestAppIdentity,
+} from "./store";
 import { TestAppError } from "./test-app-publish";
 import { TestDigestError, type TestDigestParts, testDigestsOfModel } from "./test-digest";
 import {
@@ -4468,6 +4475,8 @@ function resolveResume(
   lendingSession?: LendingSession,
   /** R601: the pending-prior rule's server key and open-world reason. */
   pending: PendingResumeCheck = { resourceKey: undefined, openWorldWhy: undefined },
+  /** R886: the v3 settings of this session; a resumed run must have recorded the same. */
+  resumeInputs?: ResumeInputs,
 ):
   | { runId: number; index: ResumeIndex; carryHidden: CarryHidden; recorded: RecordedCarrySide }
   | undefined {
@@ -4575,6 +4584,7 @@ function resolveResume(
       // R214: the fingerprint carries the symbols, but a row recorded before the column (NULL)
       // must still never be read as a match.
       assertSameBuildSymbols(foundRow, `--resume: run ${found}`, buildSymbols);
+      assertSameResumeInputs(foundRow, `--resume: run ${found}`, resumeInputs); // R886
       if (foundRow.carryHidden === null) {
         throw new Error(
           `--resume found run ${found}, but it ${CARRY_UNTRUSTED_WHY}, so none of its verdicts is carried (R442). Drop --resume to run from scratch.`,
@@ -4632,6 +4642,7 @@ function resolveResume(
       // R214: before the fingerprint (which carries the symbols too and would refuse this run
       // anyway, as "scoped differently"). NULL is unknown and matches no build.
       assertSameBuildSymbols(row, `--resume-run ${id}`, buildSymbols);
+      assertSameResumeInputs(row, `--resume-run ${id}`, resumeInputs); // R886
       if (row.configFingerprint !== configFingerprint) {
         throw new Error(
           `--resume-run ${id} was scoped differently from this session (--only/--tests-only/--exclude-test/--skip-known-survivors/selector ids/preprocessor symbols). Carrying its verdicts would report one scope's measurements as another's${
@@ -6358,6 +6369,8 @@ async function runSessionBody(
         ? `${v3Build.version} ${v3Build.binarySha256}${cfg.backend.isolatesTests === true ? " isolate-tests" : ""}`
         : undefined,
   };
+  // R886: the v3 settings a resume must find unchanged; undefined on a backend with none.
+  const resumeInputs = await resumeInputsOf(cfg.backend);
   const buildSymbols = await effectiveBuildSymbols(
     cfg.projectDir,
     cfg.preprocessorSymbols ?? [],
@@ -6436,9 +6449,11 @@ async function runSessionBody(
     envPublishes !== undefined,
     lendingSession,
     { resourceKey, openWorldWhy, serverGeneration: sessionGeneration },
+    resumeInputs,
   );
 
   const runId = cfg.store.createRun({
+    ...(resumeInputs !== undefined ? { resumeInputs } : {}), // R886
     identityScheme: IDENTITY_SCHEME,
     buildSymbols,
     // R585: the tests this session's baseline is given; history lends only to a session whose
@@ -12240,6 +12255,44 @@ function withRunSeed(
 ): { readonly version: string; readonly binarySha256: string; readonly runSeed?: number } {
   const seed = (backend as { observedRunSeed?: () => number | undefined }).observedRunSeed?.();
   return seed !== undefined ? { ...build, runSeed: seed } : build;
+}
+
+/** R886: the backend's `resumeInputs()`; only the al-runner-v3 backend has one, so every other
+ *  backend (bcdev) gets undefined, records nothing and is never refused for it. */
+async function resumeInputsOf(backend: ExecutionBackend): Promise<ResumeInputs | undefined> {
+  const b = backend as { resumeInputs?: () => Promise<ResumeInputs> };
+  return typeof b.resumeInputs === "function" ? await b.resumeInputs() : undefined;
+}
+
+/** R886: why a run cannot be resumed under these inputs, or undefined. Only the names that differ. */
+export function resumeInputsChange(
+  row: { readonly resumeInputs: ResumeInputs | null },
+  now: ResumeInputs | undefined,
+): string | undefined {
+  if (now === undefined) return undefined;
+  const was = row.resumeInputs;
+  if (was === null)
+    return `it did not record its al-runner-v3 settings (dotnetSidecar, downloadDemoData); this session uses dotnetSidecar ${now.dotnetSidecar}, downloadDemoData ${now.downloadDemoData}`;
+  const changed: string[] = [];
+  if (was.dotnetSidecar !== now.dotnetSidecar)
+    changed.push(`dotnetSidecar changed from ${was.dotnetSidecar} to ${now.dotnetSidecar}`);
+  if (was.downloadDemoData !== now.downloadDemoData)
+    changed.push(
+      `downloadDemoData changed from ${was.downloadDemoData} to ${now.downloadDemoData}`,
+    );
+  return changed.length === 0 ? undefined : changed.join("; ");
+}
+
+function assertSameResumeInputs(
+  row: { readonly resumeInputs: ResumeInputs | null },
+  flag: string,
+  now: ResumeInputs | undefined,
+): void {
+  const why = resumeInputsChange(row, now);
+  if (why !== undefined)
+    throw new Error(
+      `${flag}: ${why}. A .NET sidecar or demo data can turn a refused test into a run, so the old verdicts would describe another setup (R886). Drop the resume flag to run from scratch.`,
+    );
 }
 
 /**

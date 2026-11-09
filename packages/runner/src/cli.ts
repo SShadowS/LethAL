@@ -29,7 +29,11 @@ import rootPackageJson from "../../../package.json" with { type: "json" };
 import type { ActivationConfig, FetchFn } from "./activation";
 import { alRunnerCoverageSupport } from "./al-runner-coverage";
 import type { ServerSpawnFn } from "./al-runner-server";
-import { AlRunnerV3Backend, AlRunnerV3ServeFallbackWarmupError } from "./al-runner-v3-backend";
+import {
+  AlRunnerV3Backend,
+  AlRunnerV3ServeFallbackWarmupError,
+  resolveDotnetSidecar,
+} from "./al-runner-v3-backend";
 import {
   AL_RUNNER_V3_NOT_AUTHORITATIVE,
   assertAlcRunnable,
@@ -3074,6 +3078,7 @@ async function buildAlRunnerV3Backend(
         : {}),
       ...(c.cacheDir !== undefined ? { cacheDir: c.cacheDir } : {}),
       downloadDemoData: c.downloadDemoData,
+      ...(c.dotnetSidecar !== undefined ? { dotnetSidecar: c.dotnetSidecar } : {}), // R886
       ...(deps.preprocessorSymbols.length > 0
         ? { preprocessorSymbols: deps.preprocessorSymbols }
         : {}),
@@ -4761,9 +4766,20 @@ export async function buildDoctorDeps(
               const gated = await checkGated(c.path, version);
               await assertBcVersionMatchesPackages(c.packagesDir, c.bcVersion);
               if (c.alcPath !== undefined) assertAlcRunnable(c.alcPath, opts.alcRunnable);
+              // R886: a named sidecar that is missing is a fault (resolve throws); a pinned one
+              // that is missing or changed, or none at all, is a warning in the details.
+              const sc = await resolveDotnetSidecar(c.dotnetSidecar, c.path, gated);
+              const scText =
+                sc.path !== undefined
+                  ? `; .NET sidecar ${sc.path}`
+                  : sc.warning !== undefined
+                    ? `; WARNING: ${sc.warning}`
+                    : c.dotnetSidecar === false
+                      ? "; .NET sidecar off"
+                      : "; WARNING: no .NET sidecar (tests that reach a .NET type are refused)";
               return {
                 ok: true,
-                details: `${version}; ${gated.source === "manifest" ? "listed in the gate manifest, gated" : "gated"} at LethAL ${gated.lethalCommit}; bcVersion ${c.bcVersion}; transport ${c.transportSource === "explicit" ? c.transport : "default (serve-entries where proven, else one-shot; R761)"}`,
+                details: `${version}; ${gated.source === "manifest" ? "listed in the gate manifest, gated" : "gated"} at LethAL ${gated.lethalCommit}; bcVersion ${c.bcVersion}; transport ${c.transportSource === "explicit" ? c.transport : "default (serve-entries where proven, else one-shot; R761)"}${scText}`,
               };
             } catch (err) {
               return { ok: false, details: err instanceof Error ? err.message : String(err) };

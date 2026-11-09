@@ -75,6 +75,19 @@ describe("emitStaticSelector", () => {
     expect(src).toContain('codeunit 50000 "Mutation Selector"');
     expect(src).toContain("exit(MutantId = 'M0007');");
   });
+  test("R887: an active id answers false outside a normal session, before the id test", () => {
+    const src = emitStaticSelector({
+      objectId: 50000,
+      activeId: "M0007",
+      artifactId: cfg.artifactId,
+      targetAppId: TARGET,
+    });
+    const guard = src.indexOf(
+      "if GetExecutionContext() <> ExecutionContext::Normal then\n            exit(false);",
+    );
+    expect(guard).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(src.indexOf("exit(MutantId = 'M0007');"));
+  });
   test("empty id means always inactive", () => {
     const src = emitStaticSelector({
       objectId: 50000,
@@ -190,6 +203,33 @@ describe("selector single-sourced identity", () => {
     // No baked id anywhere: that is the difference from the static emitter, and the reason the
     // compile is a cache hit.
     expect(res).not.toContain("M0001");
+  });
+
+  test("R887: Active() answers false outside a normal session, before it reads the resource", () => {
+    const res = emitResourceSelector({
+      objectId: IDS.selectorId,
+      artifactId: ART,
+      targetAppId: APP,
+    });
+    const active = res.slice(res.indexOf("procedure Active("), res.indexOf("procedure Reached("));
+    const guard = active.indexOf(
+      "if GetExecutionContext() <> ExecutionContext::Normal then\n            exit(false);",
+    );
+    const read = active.indexOf("NavApp.GetResourceAsText(");
+    expect(guard).toBeGreaterThan(-1);
+    expect(read).toBeGreaterThan(-1);
+    // Before the read: install code must not read the resource file at all (R887 point 2).
+    expect(guard).toBeLessThan(read);
+  });
+
+  test("R887: BC's selector is byte-identical to the one before the install guard", () => {
+    // sha256 of emitMutationSelector for this config on master 9336bb6a, before R-884. BC publishes
+    // the target before any mutant is set, so it needs no guard, and its emitted AL must not move.
+    const bc = emitMutationSelector({ ...IDS, artifactId: ART, targetAppId: APP });
+    expect(new Bun.CryptoHasher("sha256").update(bc).digest("hex")).toBe(
+      "a93133c7487fecec9f342124c4d6d177eb2222ded6d988a6f61be446050ab24c",
+    );
+    expect(bc).not.toContain("GetExecutionContext");
   });
 
   test("install registers identity read from the selector, not from args", () => {
