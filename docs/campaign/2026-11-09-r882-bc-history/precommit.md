@@ -71,3 +71,18 @@ built at its own newest. No mutant ran; no verdict exists from round 1.
 
 **Changed for round 2, and nothing else:** `"runtime": "17.0"` in all six scratch `app.json` files (the runtime of LethAL's own
 fixtures). `compile-only` passes for all three apps again. Stages, anchors and expectations unchanged.
+
+## Amendment 2 (2026-11-09, after round 2, before round 3)
+
+**What round 2 showed.** No mutant ran. BankDeposits and PaymentPractices: the targets published, then the runs refused because the
+test apps were not on the server ("the published test app does not contain ..."): publishing the test app is the user's step on
+bcdev. ServiceDeclaration: BC refused the publish, because codeunit 5257 (a selector id) belongs to Contoso Coffee Demo Dataset
+on bc5 (filed as R892).
+
+**Changed for round 3, and nothing else:**
+- each target, uninstrumented, then its test app, compiled with alc against the bc5 packages and published once to bc5 by hand
+  (`publish-plain.ts`), as a user would before a bcdev run;
+- ServiceDeclaration's selector ids are 5048, 5049 (codeunits) and 5258 (table): all inside its own ranges, none declared by it,
+  and none owned on bc5 (read by key, `owners-sd.ts`). The other two apps keep R-881's ids.
+
+Stages, anchors and expectations unchanged.
