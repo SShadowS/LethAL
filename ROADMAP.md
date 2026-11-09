@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**16 of 854 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**17 of 856 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -346,6 +346,7 @@ that ordering is the priority.
 - **R887** · On al-runner v3 the app's install code runs with the mutant active; on BC it runs before any mutant is set · [R887.md](docs/roadmap/R887.md) · done (d78f93b3)
 - **R889** · Four ways LethAL emitted AL that alc rejects, found by compiling BC.History instrumented · [R889.md](docs/roadmap/R889.md) · open, filed 2026-11-09 from coord R-883; fixed on its branch
 - **R890** · v3 runs a test codeunit under per-test rollback with its globals kept, while bcdev runs each method alone: a suite that sets up once per codeunit loses its setup on v3 · [R890.md](docs/roadmap/R890.md) · open
+- **R893** · swap-find-direction on a FindLast that skips ahead inside a Next() walk of the same record is not hang-refused: the swapped FindFirst rewinds the walk, and on BC the run stranded and quarantined the tier · [R893.md](docs/roadmap/R893.md) · open
 
 ## Product gaps a real project hits
 
@@ -529,7 +530,8 @@ that ordering is the priority.
 - **R884** · `--dry-run` did not say that its counts leave out the hang-refused sites a run refuses (R447) · [R884.md](docs/roadmap/R884.md) · done (5181b8d4)
 - **R885** · al-runner v3 runs a Microsoft-style test app without demo data, and LethAL never says so: most of its baseline is refused · [R885.md](docs/roadmap/R885.md) · done (0ab21ba2)
 - **R886** · LethAL cannot hand al-runner v3 its .NET sidecar, so every test that reaches a .NET type is refused · [R886.md](docs/roadmap/R886.md) · done (c3fcd742)
-- **R888** · Selector ids are checked against the project's own codeunits only, so they can clash with a dependency's codeunit (alc AL0264) · [R888.md](docs/roadmap/R888.md) · open, filed 2026-11-09 from coord R-883
+- **R888** · Selector ids are checked against the project's own codeunits only, so they can clash with a dependency's codeunit (alc AL0264) · [R888.md](docs/roadmap/R888.md) · done (f3b3d5b3)
+- **R892** · On a first publish, an injected selector id that an installed non-dependent app already uses is not checked: BC's publish refusal is the only signal, with no hint to change selectorIds · [R892.md](docs/roadmap/R892.md) · open
 
 ## Backends and tooling
 
