@@ -67,6 +67,27 @@ export interface GatedBuild {
   readonly readingsFrom?: string;
   /** R814: where this record came from; absent: a `.gated` file. Never read from `.gated`. */
   readonly source?: "manifest";
+  /**
+   * R886: the .NET sidecar the update script built from this build's commit. `file` is relative to
+   * the folder of `.gated`. Read by the backend (the `--dotnet-sidecar` default) and `doctor`.
+   * Never changes how a build gates.
+   */
+  readonly dotnetSidecar?: { readonly file: string; readonly sha256: string };
+  /** R886: why this build has no sidecar (its build failed). */
+  readonly dotnetSidecarNote?: string;
+}
+
+/** R886: the sidecar a `.gated` names, as an absolute path and its recorded sha256. */
+export function pinnedSidecar(
+  alRunnerPath: string,
+  gated: GatedBuild,
+): { readonly path: string; readonly sha256: string } | undefined {
+  return gated.dotnetSidecar === undefined
+    ? undefined
+    : {
+        path: join(dirname(alRunnerPath), gated.dotnetSidecar.file),
+        sha256: gated.dotnetSidecar.sha256,
+      };
 }
 
 /** R612 M-2: the warn-fact readings in `x` (a receipt's or `.gated`'s field); only verdicts are
@@ -108,7 +129,28 @@ export function parseGated(text: string, where: string): GatedBuild {
     throw new AlRunnerV3UngatedBuildError(`${where} has no lethalCommit`);
   }
   const warnFacts = warnFactReadings(g.warnFacts);
+  const sc = g.dotnetSidecar as Record<string, unknown> | undefined;
+  if (
+    g.dotnetSidecar !== undefined &&
+    (typeof sc !== "object" ||
+      sc === null ||
+      typeof sc.file !== "string" ||
+      sc.file === "" ||
+      sc.file.startsWith("/") ||
+      sc.file.includes("..") ||
+      typeof sc.sha256 !== "string" ||
+      !/^[0-9a-f]{64}$/.test(sc.sha256))
+  ) {
+    throw new AlRunnerV3UngatedBuildError(`${where} has a bad dotnetSidecar (R886)`);
+  }
+  if (g.dotnetSidecarNote !== undefined && typeof g.dotnetSidecarNote !== "string") {
+    throw new AlRunnerV3UngatedBuildError(`${where} has a bad dotnetSidecarNote (R886)`);
+  }
   return {
+    ...(sc !== undefined
+      ? { dotnetSidecar: { file: sc.file as string, sha256: sc.sha256 as string } }
+      : {}),
+    ...(typeof g.dotnetSidecarNote === "string" ? { dotnetSidecarNote: g.dotnetSidecarNote } : {}),
     version: g.version,
     binarySha256: g.binarySha256,
     lethalCommit: g.lethalCommit,

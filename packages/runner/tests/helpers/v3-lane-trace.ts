@@ -390,6 +390,7 @@ export async function runV3LaneTrace(): Promise<V3LaneTrace> {
         coverage: "none",
         transport: "serve-entries",
         downloadDemoData: false, // R885: the committed trace is the offline argv
+        dotnetSidecar: false, // R886: and carries no --dotnet-sidecar
       },
       one.spawn,
       fakeAlc(),
