@@ -21,6 +21,27 @@ export interface DeclaredObject {
 }
 
 /**
+ * R888: a codeunit a DEPENDENCY of the target declares, with the app that declares it. alc rejects
+ * an injected codeunit whose id one of these already uses (AL0264), and the target's own source scan
+ * cannot see it.
+ */
+export interface DependencyCodeunit extends DeclaredObject {
+  readonly app: {
+    readonly name: string;
+    readonly publisher: string;
+    readonly version: string;
+  };
+}
+
+/** R888: a selector id equals a codeunit id a dependency declares. Extends `Error` directly. */
+export class SelectorIdDependencyClashError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SelectorIdDependencyClashError";
+  }
+}
+
+/**
  * Parses app.json's `idRanges` array into typed `{from, to}` pairs. Throws loudly on a
  * missing/empty/malformed array — the real `alc.exe` requires every compiled object's id to fall
  * in a declared range (AL0297), so a target with none is already structurally uncompilable, and
@@ -91,6 +112,7 @@ export function validateSelectorIds(
   selectorIds: SelectorConfig,
   idRanges: readonly AppIdRange[],
   existingObjects: ReadonlyMap<number, DeclaredObject> = new Map(),
+  dependencyCodeunits: ReadonlyMap<number, DependencyCodeunit> = new Map(),
 ): void {
   for (const { key, label } of SELECTOR_FIELDS) {
     const id = selectorIds[key];
@@ -122,6 +144,13 @@ export function validateSelectorIds(
           `codeunit ${id} "${existing.name}" in the target project. Choose a different id.`,
       );
     }
+    // R888: alc would reject this with AL0264 after a compile; say so now, naming the dependency.
+    const dep = dependencyCodeunits.get(id);
+    if (dep !== undefined) {
+      throw new SelectorIdDependencyClashError(
+        `selector id collides with a dependency's codeunit: ${label} = ${id} is already declared as codeunit ${id} "${dep.name}" by the dependency "${dep.app.name}" (publisher ${dep.app.publisher}, version ${dep.app.version}); alc would reject it with AL0264. Choose a different id inside your idRanges (or run \`lethal init\`, which skips it).`,
+      );
+    }
   }
 }
 
@@ -150,12 +179,13 @@ export function validateSelectorIds(
 export function pickSelectorIds(
   idRanges: readonly AppIdRange[],
   existingObjects: ReadonlyMap<number, DeclaredObject> = new Map(),
+  dependencyCodeunits: ReadonlyMap<number, DependencyCodeunit> = new Map(),
 ): SelectorConfig | null {
   const chosen: number[] = [];
   // Highest range first, and within a range downward from its top.
   for (const range of [...idRanges].sort((a, b) => b.to - a.to)) {
     for (let id = range.to; id >= range.from && chosen.length < 3; id -= 1) {
-      if (existingObjects.has(id)) continue;
+      if (existingObjects.has(id) || dependencyCodeunits.has(id)) continue;
       if (chosen.includes(id)) continue;
       chosen.push(id);
     }

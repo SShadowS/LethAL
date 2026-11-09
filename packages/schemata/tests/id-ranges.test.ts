@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import type { AppIdRange, DeclaredObject } from "../src/id-ranges";
-import { parseIdRanges, pickSelectorIds, validateSelectorIds } from "../src/id-ranges";
+import type { DependencyCodeunit } from "../src/id-ranges";
+import {
+  SelectorIdDependencyClashError,
+  parseIdRanges,
+  pickSelectorIds,
+  validateSelectorIds,
+} from "../src/id-ranges";
 import type { SelectorConfig } from "../src/selector";
 
 const DEFAULT_IDS: SelectorConfig = { selectorId: 79199, controlId: 79198, tableId: 79197 };
@@ -171,5 +177,60 @@ describe("pickSelectorIds", () => {
     const used = new Map([codeunit(100, "A"), codeunit(101, "B")]);
     expect(pickSelectorIds([{ from: 100, to: 102 }], used)).toBeNull();
     expect(pickSelectorIds([])).toBeNull();
+  });
+});
+
+// R888: the app's top free ids are 50199, 50198, 50197; a dependency declares codeunit 50199.
+describe("R888: ids a dependency's codeunits already use", () => {
+  const ranges: AppIdRange[] = [{ from: 50000, to: 50199 }];
+  const dep = (id: number): [number, DependencyCodeunit] => [
+    id,
+    {
+      type: "codeunit",
+      id,
+      name: "Dep Codeunit",
+      app: { name: "Invented Base", publisher: "Contoso", version: "3.1.0.0" },
+    },
+  ];
+  const top: SelectorConfig = { selectorId: 50199, controlId: 50198, tableId: 50197 };
+
+  test("pickSelectorIds picks around a dependency's id", () => {
+    expect(pickSelectorIds(ranges, new Map(), new Map([dep(50199)]))).toEqual({
+      selectorId: 50198,
+      controlId: 50197,
+      tableId: 50196,
+    });
+  });
+
+  test("pickSelectorIds is unchanged when the dependency declares none of the top ids", () => {
+    expect(pickSelectorIds(ranges, new Map(), new Map([dep(50100)]))).toEqual(top);
+  });
+
+  test("validateSelectorIds refuses 50199 by name: id, which of the three, dependency", () => {
+    let caught: unknown;
+    try {
+      validateSelectorIds(top, ranges, new Map(), new Map([dep(50199)]));
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(SelectorIdDependencyClashError);
+    expect(Object.getPrototypeOf(SelectorIdDependencyClashError)).toBe(Error);
+    const text = (caught as Error).message;
+    expect(text).toContain("selectorId");
+    expect(text).toContain("50199");
+    expect(text).toContain("Invented Base");
+    expect(text).toContain("Contoso");
+    expect(text).toContain("3.1.0.0");
+    expect(text).toContain("AL0264");
+  });
+
+  test("names controlId when that is the clashing one", () => {
+    expect(() => validateSelectorIds(top, ranges, new Map(), new Map([dep(50198)]))).toThrow(
+      /controlId[\s\S]*50198/,
+    );
+  });
+
+  test("a dependency that does not declare the ids changes nothing", () => {
+    expect(() => validateSelectorIds(top, ranges, new Map(), new Map([dep(50100)]))).not.toThrow();
   });
 });

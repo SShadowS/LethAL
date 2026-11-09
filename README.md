@@ -161,8 +161,8 @@ credentials.
   folder; the full path), where the installer puts it. If you do set `path`, write the full path:
   a `~` in the value is not expanded.
 - `alcPath` is optional when the AL Language extension is installed.
-- `selectorIds` are three object ids from your own app's id range; `lethal init` picks them. The
-  values above fit the gift card demo.
+- `selectorIds` are three object ids from your own app's id range; `lethal init` picks them, and skips
+  ids that your own code or a dependency's codeunits already use. The values above fit the gift card demo.
 
 Check it, then run. `lethal doctor --config <file>` on a config like this prints one line,
 `al-runner-v3`: the al-runner version, whether it is a gated build, and that `bcVersion` matches the

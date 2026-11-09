@@ -152,7 +152,10 @@ highest range you declare, counting DOWN from its top. The reasoning is that the
 LethAL's rather than yours, and an app grows upward from the bottom of its range, so the top is where
 you are least likely to collide with your own future objects. `lethal run` refuses an id that falls
 outside every declared range, that duplicates another of the three, or that an object in your project
-already uses — before it compiles or publishes anything.
+already uses — before it compiles or publishes anything. It also refuses an id that a codeunit in one
+of your dependencies uses (alc would say AL0264), naming that app, and `lethal init` skips such ids.
+This check reads the dependencies' `.app` files in your package folder; if one is missing there, LethAL
+prints a warning naming it and carries on, and alc stays the final check.
 
 This app declares a dedicated `90197..90199` range so the rule lands there; every fixture under
 `fixtures/` follows the same rule against its own ranges. Two apps must not share the three ids: they
