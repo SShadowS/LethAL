@@ -6402,6 +6402,7 @@ async function runSessionBody(
     coverageMode: caps.coverage,
     selectorIds: cfg.selectorIds,
     ...(cfg.backend.isolatesTests === true ? { isolateTests: true } : {}),
+    ...(cfg.backend.methodIsolation === true ? { methodIsolation: true } : {}),
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
     // R221: in the fingerprint for exactly the reason `only` is. Two runs with different
     // exclusions deployed different mutant sets, and a resume that carried verdicts across an
