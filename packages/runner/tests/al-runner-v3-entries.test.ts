@@ -1021,6 +1021,8 @@ describe("7: selector parity: v2's staged resource selector bytes, and the echo"
 
     procedure Active(MutantId: Text): Boolean
     begin
+        if GetExecutionContext() <> ExecutionContext::Normal then
+            exit(false);
         if not Loaded then begin
             ActiveId := NavApp.GetResourceAsText('active-mutant.txt', TextEncoding::UTF8);
             Loaded := true;
