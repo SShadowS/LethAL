@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**17 of 856 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**16 of 856 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -344,7 +344,7 @@ that ordering is the priority.
 - **R865** · No hang rule sees recursion: a mutant on a recursion's guard or depth can run without bound · [R865.md](docs/roadmap/R865.md) · done (7470b8d5)
 - **R873** · `lethal verify` counts a flaky new killing test as `killed` · [R873.md](docs/roadmap/R873.md) · done (ff470e6f)
 - **R887** · On al-runner v3 the app's install code runs with the mutant active; on BC it runs before any mutant is set · [R887.md](docs/roadmap/R887.md) · done (d78f93b3)
-- **R889** · Four ways LethAL emitted AL that alc rejects, found by compiling BC.History instrumented · [R889.md](docs/roadmap/R889.md) · open, filed 2026-11-09 from coord R-883; fixed on its branch
+- **R889** · Four ways LethAL emitted AL that alc rejects, found by compiling BC.History instrumented · [R889.md](docs/roadmap/R889.md) · done (ab8e27f5)
 - **R890** · v3 runs a test codeunit under per-test rollback with its globals kept, while bcdev runs each method alone: a suite that sets up once per codeunit loses its setup on v3 · [R890.md](docs/roadmap/R890.md) · open
 - **R893** · swap-find-direction on a FindLast that skips ahead inside a Next() walk of the same record is not hang-refused: the swapped FindFirst rewinds the walk, and on BC the run stranded and quarantined the tier · [R893.md](docs/roadmap/R893.md) · open
 
