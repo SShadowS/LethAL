@@ -85,4 +85,36 @@ describe("swapRecXRec", () => {
     );
     expect(specs.map((s) => s.before.text)).toEqual([]);
   });
+
+  // R883: `Rec.Validate(xRec."X", V)` is AL0166 ("must be a member"). Revert: drop the
+  // `isFieldDesignatingArgument` line in `plan`.
+  const onAmount = (specs: ReturnType<typeof specsFor>) =>
+    specs.map((s) => s.before.text).filter((t) => t.endsWith(".Amount"));
+  const triggerWith = (body: string) =>
+    `table 50167 "T" { fields { field(1; Amount; Decimal) { trigger OnValidate() begin ${body} end; } } }`;
+
+  for (const [label, body] of [
+    ["Validate", `Rec.Validate(Rec.Amount, 1);`],
+    ["TestField", `Rec.TestField(Rec.Amount);`],
+    ["SetRange", `Rec.SetRange(Rec.Amount, 1);`],
+    ["bare Validate", `Validate(Rec.Amount, 1);`],
+    ["CalcFields, every argument", `Rec.CalcFields(Rec.Amount, Rec.Amount);`],
+    ["SetCurrentKey, every argument", `Rec.SetCurrentKey(Rec.Amount);`],
+  ] as const) {
+    it(`refuses the field argument of ${label}`, () => {
+      // `Rec.Validate` (the call's own receiver) may still be swapped; only the field is judged.
+      expect(onAmount(specsFor(triggerWith(body)))).toEqual([]);
+    });
+  }
+
+  it("keeps the VALUE argument of Validate and SetRange swappable", () => {
+    const specs = specsFor(
+      triggerWith(`Rec.Validate(Amount, xRec.Amount); Rec.SetRange(Amount, xRec.Amount);`),
+    );
+    expect(onAmount(specs)).toEqual(["xRec.Amount", "xRec.Amount"]);
+    expect(specs.filter((s) => s.after.text.endsWith(".Amount")).map((s) => s.after.text)).toEqual([
+      "Rec.Amount",
+      "Rec.Amount",
+    ]);
+  });
 });

@@ -12358,8 +12358,33 @@ function appJsonPathWarning(changes: readonly AppJsonPathChange[]): string {
  * compiles them, so filtering them out would silently shrink the app. The `.al` sweep therefore
  * stays exactly as broad as it has always been.
  */
-function isToolResourcePath(rel: string): boolean {
-  return rel.split(/[\\/]/).some((segment) => segment.startsWith("."));
+function isToolResourcePath(rel: string, resourceFolders: readonly string[] = []): boolean {
+  const norm = rel.replaceAll("\\", "/");
+  // A folder app.json's `resourceFolders` names is app content even when it is dot-named
+  // (`.resources`): only the segments BELOW it can still mark a tool directory.
+  const lower = norm.toLowerCase();
+  const named = resourceFolders.find((f) => f !== "" && lower.startsWith(`${f}/`));
+  const below = named === undefined ? norm : norm.slice(named.length + 1);
+  return below.split("/").some((segment) => segment.startsWith("."));
+}
+
+/**
+ * app.json's `resourceFolders` as project-relative, lowercase, "/"-separated folder names with no
+ * leading `./` and no trailing "/". The project root (`.` or `./`) is "". A leading dot that names
+ * a dot-folder (`.resources`) is kept.
+ */
+export function resourceFolderKeys(manifest: Readonly<Record<string, unknown>>): string[] {
+  const raw = manifest.resourceFolders;
+  return (Array.isArray(raw) ? raw : [])
+    .filter((f): f is string => typeof f === "string")
+    .map((f) => {
+      const key = f
+        .replaceAll("\\", "/")
+        .replace(/^(\.\/)+/, "")
+        .replace(/\/+$/, "")
+        .toLowerCase();
+      return key === "." ? "" : key;
+    });
 }
 
 /**
@@ -12368,12 +12393,12 @@ function isToolResourcePath(rel: string): boolean {
  * the caller's to exclude, by exact path. R505: the source-drift watch reads the same set, so the
  * guard and the batch agree on which files are build inputs.
  */
-export function isProjectResource(rel: string): boolean {
+export function isProjectResource(rel: string, resourceFolders: readonly string[] = []): boolean {
   const lower = rel.toLowerCase();
   if (lower.endsWith(".al") || lower.endsWith(".app")) return false;
   if (basename(lower) === "app.json") return false;
   if (isLethalConfigName(rel)) return false;
-  return !isToolResourcePath(rel);
+  return !isToolResourcePath(rel, resourceFolders);
 }
 
 /**
@@ -12433,16 +12458,7 @@ export async function configFilesInResourceFolders(
   projectManifest: Readonly<Record<string, unknown>>,
   configPath: string | undefined,
 ): Promise<readonly string[]> {
-  const raw = projectManifest.resourceFolders;
-  const folders = (Array.isArray(raw) ? raw : [])
-    .filter((f): f is string => typeof f === "string")
-    .map((f) =>
-      f
-        .replaceAll("\\", "/")
-        .replace(/^\.\/?/, "")
-        .replace(/\/+$/, "")
-        .toLowerCase(),
-    );
+  const folders = resourceFolderKeys(projectManifest);
   if (folders.length === 0) return [];
   const isConfig = await sameFileAs(configPath);
   const out: string[] = [];
@@ -12584,9 +12600,10 @@ export async function prepareBatchProject(
   // the same bundle, measured with a three-file probe. `alc` compiles that tree fine. When the
   // upstream limitation goes, the flattening and this second copy go with it.
   const rebased = new Map<string, { readonly tail: string; readonly owners: string[] }>();
+  const resourceFolders = resourceFolderKeys(projectManifest);
   for (const rel of entries) {
     const lower = rel.toLowerCase();
-    if (!isProjectResource(rel)) continue;
+    if (!isProjectResource(rel, resourceFolders)) continue;
     if (excluded.has(outputPathKey(join(projectDir, rel)))) continue;
     if (await isConfig(join(projectDir, rel))) continue;
     if (lower.replaceAll("\\", "/") === reserved) refuseReserved(rel);

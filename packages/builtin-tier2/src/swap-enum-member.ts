@@ -172,7 +172,7 @@ function chooseSibling(node: ALSyntaxNode, ctx: SemanticContext): string | null 
     const candidate = members[(index + step) % members.length];
     if (candidate === undefined) continue;
     if (taken.has(candidate.name.toLowerCase())) continue;
-    return candidate.text;
+    return memberText(candidate.name, candidate.text);
   }
   return null;
 }
@@ -208,6 +208,69 @@ function collectLabels(node: ALSyntaxNode, self: ALSyntaxNode, out: Set<string>)
 
 function parentContextOf(node: ALSyntaxNode): ParentContextHint {
   return isStatementPosition(node) ? "statement-position" : "expression-position";
+}
+
+/**
+ * AL keywords. A member named like one is legal in an `enum` declaration, but `Kind::or` after
+ * `::` is not: alc gives AL0107/AL0224/AL0104. Generous on purpose, since a quoted plain name is
+ * always valid AL and an extra entry only adds quotes.
+ */
+const AL_KEYWORDS: ReadonlySet<string> = new Set([
+  "and",
+  "array",
+  "begin",
+  "case",
+  "div",
+  "do",
+  "downto",
+  "else",
+  "end",
+  "exit",
+  "false",
+  "for",
+  "foreach",
+  "function",
+  "if",
+  "in",
+  "interface",
+  "mod",
+  "not",
+  "of",
+  "or",
+  "procedure",
+  "program",
+  "repeat",
+  "then",
+  "to",
+  "true",
+  "until",
+  "var",
+  "while",
+  "with",
+  "xor",
+  "trigger",
+  "enum",
+  "record",
+  "codeunit",
+  "table",
+  "page",
+  "report",
+  "query",
+  "xmlport",
+  "local",
+  "internal",
+  "protected",
+  "temporary",
+  "event",
+  "implements",
+  "extends",
+]);
+
+/** The member as written after `::`: quoted unless it is a plain identifier and not a keyword. */
+function memberText(name: string, written: string): string {
+  if (written.startsWith('"')) return written;
+  const plain = /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && !AL_KEYWORDS.has(name.toLowerCase());
+  return plain ? written : `"${name}"`;
 }
 
 function stripQuotes(text: string): string {
