@@ -66,6 +66,7 @@ export {
   planReachGrains,
   reachGrainOf,
   reachLatchRefusedOwner,
+  SPLIT_TRIGGER_PREAMBLE,
   varSectionUnparsed,
 } from "./dispatch";
 export type { ReachGrain } from "./dispatch";

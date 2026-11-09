@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**15 of 847 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**16 of 852 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -343,6 +343,7 @@ that ordering is the priority.
 - **R858** · `negate-conditional` and `swap-additive` can still lose a loop's progress in shapes the delete operators refuse · [R858.md](docs/roadmap/R858.md) · closed 2026-11-07 — named limit: the rule would refuse about 9 real mutants per likely hang, and no narrowing…
 - **R865** · No hang rule sees recursion: a mutant on a recursion's guard or depth can run without bound · [R865.md](docs/roadmap/R865.md) · done (7470b8d5)
 - **R873** · `lethal verify` counts a flaky new killing test as `killed` · [R873.md](docs/roadmap/R873.md) · done (ff470e6f)
+- **R887** · On al-runner v3 the app's install code runs with the mutant active; on BC it runs before any mutant is set · [R887.md](docs/roadmap/R887.md) · open
 
 ## Product gaps a real project hits
 
@@ -522,7 +523,11 @@ that ordering is the priority.
 - **R867** · `lethal doctor` reaches a host a stale bc config names; lane start does not refresh bc configs · [R867.md](docs/roadmap/R867.md) · done (d03ce785)
 - **R868** · The LethAL skill ships as an installable file, in the safe order, and cannot drift from the CLI (GitHub #26) · [R868.md](docs/roadmap/R868.md) · done (7eeebcfb)
 - **R874** · `--json` prints the shared bc-toolbox CLI envelope (GitHub #27) · [R874.md](docs/roadmap/R874.md) · done (d4c923a9)
-- **R877** · tree-sitter-al 4.6.0 parses a split trigger header, and a reach latch there refuses the whole file · [R877.md](docs/roadmap/R877.md) · open, filed 2026-11-08 from coord R-861 run 002 (plan review)
+- **R877** · tree-sitter-al 4.6.0 parses a split trigger header, and a reach latch there refused the whole file · [R877.md](docs/roadmap/R877.md) · done (66a4a27a)
+- **R884** · `--dry-run` did not say that its counts leave out the hang-refused sites a run refuses (R447) · [R884.md](docs/roadmap/R884.md) · done (5181b8d4)
+- **R885** · al-runner v3 runs a Microsoft-style test app without demo data, and LethAL never says so: most of its baseline is refused · [R885.md](docs/roadmap/R885.md) · done (0ab21ba2)
+- **R886** · LethAL cannot hand al-runner v3 its .NET sidecar, so every test that reaches a .NET type is refused · [R886.md](docs/roadmap/R886.md) · open
+- **R888** · Selector ids are checked against the project's own codeunits only, so they can clash with a dependency's codeunit (alc AL0264) · [R888.md](docs/roadmap/R888.md) · open, filed 2026-11-09 from coord R-883
 
 ## Backends and tooling
 
@@ -869,7 +874,7 @@ that ordering is the priority.
 - **R792** · v3 "deferred proof" (Design A2): overlap the alc proof with the baseline and the mutant loop, journaling writes until alc joins · [R792.md](docs/roadmap/R792.md) · parked 2026-11-05 (owner ruling): A2 is dropped for now; estimated 2.4-3.6 s on D1, not measured on server1…
 - **R796** · Upgrade tree-sitter-al from 4.4.1 to 4.5.0: fixes R720's and R327's swallowed members at the root; needs pins, 7 container classifications, 10 test re-pins and a pre-committed identity bump · [R796.md](docs/roadmap/R796.md) · done (66b585c1)
 - **R790** · v3: run the alc proof alongside the baseline and the mutant loop, and discard the results if alc rejects (the owner's Design A) · [R790.md](docs/roadmap/R790.md) · done (8c6a9fe8)
-- **R800** · v3: alc runs 1.5-2 s slower beside a concurrent al-runner call, even with free cores (memory bandwidth or cache contention, not CPU scheduling) · [R800.md](docs/roadmap/R800.md) · open, filed 2026-10-25 (coord task R-798)
+- **R800** · v3: alc runs 1.5-2 s slower beside a concurrent al-runner call, even with free cores (memory bandwidth or cache contention, not CPU scheduling) · [R800.md](docs/roadmap/R800.md) · closed 2026-11-08 — not reproduced: on al-runner 3.0.0-alpha.13+edge.20261108 (897b441eb), 7 interleaved…
 - **R804** · Pin al-runner edge 8078bcf49 (3.0.0-alpha.5+edge.20261026): every pinned defect gone, 48 known table differences at BC's verdict · [R804.md](docs/roadmap/R804.md) · closed 2026-11-06 — superseded: the update gate moved current past 8078bcf49 and db0296678 to edge-d72d3197d…
 - **R798** · v3: where R790's extra 2-3 s in D1's deploy goes; ruling: speculative baseline is opt-in, no nice or reorder · [R798.md](docs/roadmap/R798.md) · done (b04d6427)
 - **R805** · The update gate keeps a PASS's gate.log beside .gated, so a switch can be audited from its own run · [R805.md](docs/roadmap/R805.md) · done (d73f6974)
