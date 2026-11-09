@@ -65,6 +65,7 @@ export function splitBackend(owner: ExecutionBackend, lane0: ExecutionBackend): 
     useCoveringBudgets: (id, budgets) => lane0.useCoveringBudgets?.(id, budgets),
     sendKillPair: (id, ref) => lane0.sendKillPair?.(id, ref) ?? Promise.resolve(),
     survivorNote: (covering) => lane0.survivorNote?.(covering),
+    baselineNote: () => owner.baselineNote?.(),
   };
 }
 

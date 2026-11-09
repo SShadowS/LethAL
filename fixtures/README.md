@@ -1696,6 +1696,10 @@ CLI flags:
     // The default is the pinned build when /work/tools has one (LethAL's own boxes), else
     // ~/.local/bin/al-runner (R834); "~" is not expanded in a value you write.
     "path": "/home/you/.local/bin/al-runner",
+    // R885: true (default) lets al-runner download the CRONUS demo data of bcVersion (~549 MB, once,
+    // into cacheDir) when a Microsoft-style test app needs it. false passes --no-download: fill
+    // cacheDir once with "al-runner warm". Missing data shows as the al-runner-v3-test-data-off warning.
+    "downloadDemoData": true,
     // "al-runner" reads v3's coverage; turned off, with the al-runner-v3-coverage-off warning,
     // for a project holding an #if wrapper shape the index has no rule for (two-arm, #elif, nested,
     // or a multi-object file holding a wrapper; R602). "none" turns it off.

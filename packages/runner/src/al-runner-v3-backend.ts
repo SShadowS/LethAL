@@ -64,7 +64,10 @@ import {
   defaultServerSpawn,
   serveDaemonReusable,
 } from "./al-runner-server";
-import { assertBcVersionMatchesPackages } from "./al-runner-v3-config";
+import {
+  V3_DOWNLOAD_DEMO_DATA_DEFAULT,
+  assertBcVersionMatchesPackages,
+} from "./al-runner-v3-config";
 import {
   type V3ContractResult,
   runV3ContractProbe,
@@ -293,6 +296,32 @@ export function v3DependencySkipLines(stderr: string): string[] {
 }
 
 /**
+ * R885: v3's note when a test app needs the CRONUS demo data and the data is not there:
+ * `note: test data is off: the demo data of build <build> is not cached and --no-download is set. ...`
+ * Matched by the stable prefix at line start; the build is read from it, never matched.
+ * (The text after the prefix differs when the download itself fails; the prefix is the same.)
+ */
+export function v3TestDataOffNote(text: string): { readonly build: string } | undefined {
+  const m = /^note: test data is off:(.*)$/m.exec(text);
+  if (m === null) return undefined;
+  return { build: /\bbuild (\d+(?:\.\d+)+)/.exec(m[1] ?? "")?.[1] ?? "" };
+}
+
+/** R885: v3 starts a demo-data download: `test data: downloading the w1 demo data of build <b> ...`. */
+export function v3DemoDownloadStarts(text: string): boolean {
+  return /^test data: downloading the /m.test(text);
+}
+
+/** R885: the one line shown on the console, in the report and in the baseline note. */
+export function testDataOffLine(build: string, noDownload: boolean): string {
+  const which = build === "" ? "the demo data" : `the demo data of build ${build}`;
+  const fix = noDownload
+    ? `"alRunnerV3.downloadDemoData" is false (--no-download): fill the cache once with "al-runner warm", or run once with "downloadDemoData": true.`
+    : `Fill the cache once with "al-runner warm", check the network, or name a cache that holds it; set "alRunnerV3.downloadDemoData": false for an offline run.`;
+  return `al-runner v3 says test data is off: ${which} is not in "alRunnerV3.cacheDir" (or v3 could not fetch it). Tests of a Microsoft-style test app that read CRONUS rows are refused. ${fix}`;
+}
+
+/**
  * R590: v3 left a dependency out. A call into it by id (`Codeunit.Run(<id>)`) then fails with BC's
  * missing-object text and would score a kill BC never gives (upstream #5749). Stops the session.
  */
@@ -511,8 +540,13 @@ export interface AlRunnerV3Config {
   readonly testDir: string;
   /** `<deps>`: v3's `--package-cache`, and alc's package cache for both compiles. */
   readonly packagesDir: string;
-  /** v3 `--bc-version` (four numbers), sent with `--no-download`. */
+  /** v3 `--bc-version` (four numbers). */
   readonly bcVersion: string;
+  /**
+   * R885: may v3 download the CRONUS demo data (about 0.5 GB, into `cacheDir`)? `false` passes
+   * `--no-download`. Absent: `V3_DOWNLOAD_DEMO_DATA_DEFAULT`. Gates set `false`.
+   */
+  readonly downloadDemoData?: boolean;
   readonly selectorObjectId: number;
   readonly alcPath: string;
   readonly coverage?: "al-runner" | "none";
@@ -738,6 +772,8 @@ export function v3CallArgv(a: {
   readonly stopSeconds: number;
   readonly packagesDir: string;
   readonly bcVersion: string;
+  /** R885: pass `--no-download`. Absent: v3 may download the demo data (its default). */
+  readonly noDownload?: boolean;
   readonly symbols: readonly string[];
   readonly coverageJson?: string;
   readonly activeDir: string;
@@ -760,7 +796,7 @@ export function v3CallArgv(a: {
     a.packagesDir,
     "--bc-version",
     a.bcVersion,
-    "--no-download",
+    ...(a.noDownload === true ? ["--no-download"] : []),
     ...a.symbols.flatMap((s) => ["--define", s]),
     ...(a.coverageJson !== undefined ? ["--coverage-json", a.coverageJson] : []),
     a.activeDir,
@@ -1448,6 +1484,49 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private baselineRefused = new Map<number, Set<string>>();
   private dotnetHelperWarned = false;
   private testPathsWarned = false; // R811
+  /** R885: the build named by v3's "test data is off" note, once seen; `""` when it names none. */
+  private testDataOffBuild: string | undefined;
+  private testDataOffWarned = false;
+  private demoDownloadWarned = false;
+
+  /** R885: read v3's output (one-shot stdout and stderr, or the daemon's stderr) for the note. */
+  private watchTestDataOff(...outputs: string[]): void {
+    for (const text of outputs) {
+      // v3 prints this line itself when it really starts the download (not when the cache holds the
+      // data, not with --no-download), so the notice is never a guess. It reaches us when the call
+      // ends: a one-shot call is read after it exits, serve after each request (ponytail: not live).
+      if (!this.demoDownloadWarned && v3DemoDownloadStarts(text)) {
+        this.demoDownloadWarned = true;
+        const build = /\bbuild (\d+(?:\.\d+)+)/.exec(text)?.[1] ?? this.cfg.bcVersion;
+        this.notify(
+          "al-runner-v3-demo-data-download",
+          `[lethal] downloading BC ${build} demo data (~549 MB, once) into ${this.cfg.cacheDir ?? "al-runner's default cache"}; set alRunnerV3.downloadDemoData=false to stay offline`,
+        );
+      }
+      const found = v3TestDataOffNote(text);
+      if (found === undefined) continue;
+      this.testDataOffBuild = found.build;
+      if (this.testDataOffWarned) return;
+      this.testDataOffWarned = true;
+      this.notify(
+        "al-runner-v3-test-data-off",
+        `[lethal] al-runner-v3-test-data-off: ${testDataOffLine(found.build, this.noDownload())}`,
+      );
+      return;
+    }
+  }
+
+  /** R885: for the "no green baseline tests" note. `undefined` unless v3 said the data is off. */
+  baselineNote(): string | undefined {
+    return this.testDataOffBuild === undefined
+      ? undefined
+      : testDataOffLine(this.testDataOffBuild, this.noDownload());
+  }
+
+  /** R885: v3 gets `--no-download` unless the demo data may be downloaded (one default, one place). */
+  private noDownload(): boolean {
+    return !(this.cfg.downloadDemoData ?? V3_DOWNLOAD_DEMO_DATA_DEFAULT);
+  }
   /** R739: where this backend's notices go. Default: the console, until a session installs one. */
   private notify: (code: string, message: string) => void = (_code, message) =>
     console.warn(message);
@@ -1461,6 +1540,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (notify !== undefined) {
       this.dotnetHelperWarned = false;
       this.testPathsWarned = false;
+      this.testDataOffWarned = false;
+      this.demoDownloadWarned = false;
     }
   }
   private readonly compiler: ArtifactCompiler;
@@ -2539,6 +2620,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       stopSeconds: o.stopSeconds,
       packagesDir: resolve(this.cfg.packagesDir),
       bcVersion: this.cfg.bcVersion,
+      noDownload: this.noDownload(),
       symbols: this.cfg.preprocessorSymbols ?? [],
       ...(o.coverageJson !== undefined ? { coverageJson: resolve(o.coverageJson) } : {}),
       activeDir: o.activeDir,
@@ -2566,6 +2648,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         cwd: o.cwd,
         ...this.cacheEnv(),
       });
+      this.watchTestDataOff(res.stdout, res.stderr); // R885
       return { res, wallMs: Date.now() - started, timedOut, deadlineMs };
     } catch (err) {
       return {
@@ -3631,7 +3714,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     await server.start(SERVE_READY_MS, [resolve(this.cfg.packagesDir)], s, [
       "--bc-version",
       this.cfg.bcVersion,
-      "--no-download",
+      ...(this.noDownload() ? ["--no-download"] : []),
     ]);
     this.stats.daemons += 1;
     const daemon: Daemon = { server, dirty: false };
@@ -4309,6 +4392,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    */
   private async refuseDaemonDependencySkip(lane: Lane, daemon: Daemon): Promise<void> {
     await new Promise<void>((r) => setImmediate(r));
+    this.watchTestDataOff(daemon.server.stderrSoFar()); // R885
     const lines = v3DependencySkipLines(daemon.server.stderrSoFar());
     if (lines.length === 0) return;
     await lane.closeDaemon();

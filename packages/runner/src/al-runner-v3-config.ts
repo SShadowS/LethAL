@@ -10,7 +10,8 @@
  *     "alcPath": "<optional; else the AL extension's alc>",
  *     "cacheDir": "<optional ALRUNNER_CACHE>",
  *     "transport": "serve-entries",                            // or "one-shot"; absent: serve-entries where proven, else one-shot (R761)
- *     "secondEcho": true                                       // R635 §5, serve-entries only
+ *     "secondEcho": true,                                      // R635 §5, serve-entries only
+ *     "downloadDemoData": true                                 // R885; false passes --no-download (offline, gates)
  *   }
  *
  * `serverMode` and `selectorMode` are refused by name (the static selector only, and no v2-style serve).
@@ -39,9 +40,18 @@ export interface AlRunnerV3ConfigSection {
   readonly transportSource: "default" | "explicit";
   /** R635 §5: the echo before the coverage request (default on; serve-entries only). */
   readonly secondEcho: boolean;
+  /** R885: may v3 download the CRONUS demo data into `cacheDir`? `false` passes `--no-download`. */
+  readonly downloadDemoData: boolean;
 }
 
+/**
+ * R885: THE default for "may v3 download the CRONUS demo data (about 0.5 GB)". Owner ruling
+ * 2026-11-09: yes, as al-runner does. The only place this is decided; flip it here.
+ */
+export const V3_DOWNLOAD_DEMO_DATA_DEFAULT = true;
+
 const KEYS = [
+  "downloadDemoData",
   "path",
   "packagesDir",
   "bcVersion",
@@ -125,7 +135,7 @@ export function validateAlRunnerV3Config(
   }
   if (typeof r.bcVersion !== "string" || !/^\d+\.\d+\.\d+\.\d+$/.test(r.bcVersion)) {
     throw new Error(
-      `"alRunnerV3.bcVersion" is required as a four-number BC build (got ${JSON.stringify(r.bcVersion)}): v3 runs with --no-download, and without a build it picks the newest BC (R586).`,
+      `"alRunnerV3.bcVersion" is required as a four-number BC build (got ${JSON.stringify(r.bcVersion)}): without a build v3 picks the newest BC (R586).`,
     );
   }
   if (typeof r.packagesDir !== "string" || r.packagesDir === "") {
@@ -153,7 +163,13 @@ export function validateAlRunnerV3Config(
       `al-runner-v3-config-refused: "alRunnerV3.secondEcho" must be a boolean, got ${JSON.stringify(r.secondEcho)} (R635).`,
     );
   }
+  if (r.downloadDemoData !== undefined && typeof r.downloadDemoData !== "boolean") {
+    throw new Error(
+      `al-runner-v3-config-refused: "alRunnerV3.downloadDemoData" must be a boolean, got ${JSON.stringify(r.downloadDemoData)} (R885).`,
+    );
+  }
   return {
+    downloadDemoData: r.downloadDemoData ?? V3_DOWNLOAD_DEMO_DATA_DEFAULT,
     path: (r.path as string | undefined) ?? defaultV3Path(exists, home),
     packagesDir: r.packagesDir,
     bcVersion: r.bcVersion,

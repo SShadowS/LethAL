@@ -847,7 +847,7 @@ a LethAL feature or a mode.
   on [docs/gates/alrunner.md](docs/gates/alrunner.md).
 - **`al-runner-v3` (the Rust al-runner, R586) is not authoritative.** A gated build only (R586c, R814), and
   configured in an `alRunnerV3` section (`packagesDir` and the four-number `bcVersion` required;
-  `coverage`, `path`, `alcPath`, `cacheDir` optional; the section alone is a complete config, see
+  `coverage`, `path`, `alcPath`, `cacheDir`, `downloadDemoData` optional (R885: al-runner downloads the CRONUS demo data of `bcVersion` into `cacheDir` unless `downloadDemoData` is `false`); the section alone is a complete config, see
   [Running without a BC server](#running-without-a-bc-server-the-al-runner-v3-backend)). Measured on alpha.2 and re-read on alpha.5 and its edge build (the same readings), it
   differs from BC in ways that change
   verdicts:
