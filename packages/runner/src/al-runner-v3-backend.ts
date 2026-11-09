@@ -54,7 +54,7 @@ import {
   buildAlRunnerCoverageIndex,
   normalizeFileKey,
 } from "./al-runner-coverage";
-import { isV3RefusalText, verdictFromRunnerTest } from "./al-runner-rows";
+import { V3_TIMEOUT_MESSAGE, isV3RefusalText, verdictFromRunnerTest } from "./al-runner-rows";
 import {
   AlRunnerServer,
   AlRunnerServerRequestError,
@@ -82,6 +82,7 @@ import {
   type EntryGroup,
   type IsolatedSelection,
   SELECTOR_ECHO_FILENAME,
+  type SentCut,
   type SentEntry,
   batchRefusalReason,
   callOf,
@@ -187,8 +188,8 @@ export const AL_RUNNER_V3_VERSION =
 /** v3's refusal row prefix; R675 moved its one source to `al-runner-rows.ts`. */
 export { V3_REFUSAL_PREFIX } from "./al-runner-rows";
 
-/** v3's timeout row (`notRun: true`), anchored: `Test exceeded <N>s timeout.` */
-export const V3_TIMEOUT_MESSAGE = /^Test exceeded (\d+)s timeout\.$/;
+/** v3's timeout row (`notRun: true`), anchored: `Test exceeded <N>s timeout.` (R895: source in `al-runner-rows.ts`) */
+export { V3_TIMEOUT_MESSAGE };
 
 /**
  * The end of a v3 refusal's verdict text (a notRun `error` row that is not a timeout). R678: a
@@ -939,6 +940,11 @@ interface CallRows {
   readonly refusal?: string;
   /** R635: a suite test of this codeunit had no row (or two) in its entry: `rowMissing`. */
   readonly missing?: string;
+  /**
+   * R895: this call's request was cut at the timeout row of `test` (the daemon was killed): its rows
+   * are the tests up to and including that one, so a ref with no row here is run alone (`runOn`).
+   */
+  readonly cutAtTimeout?: { readonly test: string };
   /** R635 §5: the coverage window already ran for this (mutant, codeunit). */
   readonly windowed?: boolean;
   /** R762 A: sent without `--coverage-json`; a caller that wants coverage must not reuse it. */
@@ -953,6 +959,8 @@ interface CallRows {
 /** R635: what the serve-entries transport did, for `status()`, the close line and the gate. */
 export interface V3EntriesStats {
   daemons: number;
+  /** R895: requests stopped at a streamed timeout row (the daemon killed; the rest re-sent or run alone). */
+  timeoutCuts: number;
   cachedFalse: number;
   warmups: number;
   prefetchRequests: number;
@@ -1385,12 +1393,12 @@ class Lane {
   }
 
   /** R635 §3: `{ command, sourcePaths, testIsolation }`, the same two roots one-shot passes. */
-  requestBase(): Record<string, unknown> {
+  requestBase(selectedOnly = false): Record<string, unknown> {
     return {
       command: "runTests",
       sourcePaths: [this.realActive ?? resolve(this.activeDir()), this.where.testSource()],
       testIsolation: SERVE_TEST_ISOLATION,
-      ...(this.where.isolateTests ? { runSelectedOnly: true } : {}),
+      ...(this.where.isolateTests || selectedOnly ? { runSelectedOnly: true } : {}),
     };
   }
 
@@ -1522,6 +1530,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** The counters; the phase timers are per lane and summed in `entriesStats()`. */
   private readonly stats: Omit<V3EntriesStats, V3PhaseTimer> = {
     daemons: 0,
+    timeoutCuts: 0,
     cachedFalse: 0,
     warmups: 0,
     prefetchRequests: 0,
@@ -3392,6 +3401,23 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (call.noCoverage === true && opts.coverage !== "none") {
       throw new AlRunnerV3NoCoverageCallReusedError(ref);
     }
+    // R895: a call cut at a timeout row has rows only up to that test. A ref it has no row for is
+    // run ALONE under the same mutant; its answer stands for the ref (it is not stored as the
+    // codeunit's call). A ref it does have a row for reads that row, as ever.
+    let alone = false;
+    if (
+      call.cutAtTimeout !== undefined &&
+      call.refusal === undefined &&
+      call.missing === undefined &&
+      !call.rows.some(
+        (r) => r.codeunit === ref.codeunitId && r.method.toLowerCase() === ref.method.toLowerCase(),
+      )
+    ) {
+      const made = await this.aloneCall(lane, ref);
+      if ("verdict" in made) return made.verdict;
+      call = made.call;
+      alone = true;
+    }
     if (call.refusal !== undefined) return refusalVerdict(ref, call.refusal, call.wallMs);
     if (call.missing !== undefined) return this.rowMissing(lane, ref, call.missing, call.wallMs);
     const mine = call.rows.filter(
@@ -3497,6 +3523,18 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         // R635 §5: an entry carries no coverage. An empty index has nothing to find; otherwise
         // the window gives this (mutant, codeunit) a coverage read, once.
         if (index.sizes.target + index.sizes.test === 0) return verdict;
+        if (alone) {
+          // R895: the window runs the whole codeunit and compares its rows with the call's, and
+          // this call is one test fetched after a timeout cut: no window, so no verdict.
+          return {
+            ref,
+            outcome: "error",
+            durationMs: call.wallMs,
+            failureMessage: `al-runner-v3: ${ref.method} passed alone after its codeunit's request was cut at a timeout (R895), and the Sleep coverage window (R586 §6) cannot check a single test; never scored`,
+            operation: "completed-accepted",
+            runnerRow: "runner-refused",
+          };
+        }
         if (this.lanesBuilt) {
           // R766 (b): a window needs the §6 Sleep index, keyed to lane 0's tree; under --workers > 1
           // the session may run only on a build that retires the rule (R768), so this is a bug.
@@ -3949,22 +3987,28 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     lane: Lane,
     groups: readonly EntryGroup[],
     kind: "warmup" | "prefetch" | "live",
+    /** R895: one test alone: call id `call` selects exactly `selection`, and `runSelectedOnly` is sent. */
+    alone?: { readonly call: number; readonly selection: IsolatedSelection },
   ): Promise<{
     readonly sent: readonly SentEntry[];
     readonly rows: ReadonlyMap<string, readonly V3Row[]>;
+    /** R895: the answer was cut at a timeout row; only a prefetch or live request can be. */
+    readonly cut?: SentCut;
   }> {
     const daemon = lane.daemon;
     const s = this.serveStopSeconds();
     if (daemon === undefined || s === undefined)
       throw new Error("al-runner-v3: send() without a daemon");
-    const sent = encodeGroups(groups, this.requireEchoId(), (id) => this.isolated(id));
+    const sent = encodeGroups(groups, this.requireEchoId(), (id) =>
+      alone !== undefined && id === alone.call ? alone.selection : this.isolated(id),
+    );
     const tests = sent.reduce(
       (n, e) =>
         n + (e.echo || e.call !== undefined ? 1 : (this.testsPerCodeunit.get(e.codeunit) ?? 1)),
       0,
     );
     const body = {
-      ...lane.requestBase(),
+      ...lane.requestBase(alone !== undefined),
       entries: sent.map((e) => ({
         id: e.id,
         resources: e.resources,
@@ -3981,14 +4025,20 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     else if (kind === "live") this.stats.liveRequests += 1;
     let answer: Awaited<ReturnType<AlRunnerServer["runEntries"]>>;
     try {
-      answer = await daemon.server.runEntries(body, v3CallDeadlineMs(s, tests));
+      // R895: prefetch and live requests stop at a streamed timeout row; the warm-up never does.
+      answer = await daemon.server.runEntries(body, v3CallDeadlineMs(s, tests), kind !== "warmup");
     } catch (err) {
       await lane.closeDaemon();
       throw missingDependencyOr(err);
     }
     await this.refuseDaemonDependencySkip(lane, daemon);
-    if (typeof answer.summary.seed === "number") this.observedSeed = answer.summary.seed; // R807: AlRunnerServer already checked it
-    if (answer.summary.cached === false) this.stats.cachedFalse += 1;
+    if (answer.cut !== undefined) {
+      // A partial answer has no summary: no R807 seed to read, no `cached` to count.
+      this.stats.timeoutCuts += 1;
+    } else {
+      if (typeof answer.summary.seed === "number") this.observedSeed = answer.summary.seed; // R807: AlRunnerServer already checked it
+      if (answer.summary.cached === false) this.stats.cachedFalse += 1;
+    }
     const decoded = decodeEntriesAnswer(sent, answer, this.serveRowFields);
     if ("why" in decoded) {
       await lane.closeDaemon();
@@ -4015,7 +4065,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         `every entry of the request was refused with one reason outside V3_SERVE_SAFE_REFUSALS: ${refused}. Nothing is re-sent`,
       );
     }
-    return { sent, rows: decoded.rows };
+    return { sent, rows: decoded.rows, ...(decoded.cut !== undefined ? { cut: decoded.cut } : {}) };
   }
 
   /**
@@ -4028,6 +4078,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     lane: Lane,
     groups: readonly EntryGroup[],
     phase: "prefetchMs" | "liveMs",
+    /** R895: one test alone (see `send`); its entry's rows are checked by the caller, not `suiteMissing`. */
+    alone?: { readonly call: number; readonly selection: IsolatedSelection },
   ): Promise<{
     /** Per GROUP KEY (the mutant id unless the group set a key, R778 A1). */
     readonly results: ReadonlyMap<string, Map<number, CallRows>>;
@@ -4042,8 +4094,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const seq = ++this.requestSeq;
     const daemon = await this.ensureDaemon(lane);
     const started = Date.now();
-    const { sent, rows } = await lane.timed(phase, () =>
-      this.send(lane, groups, phase === "prefetchMs" ? "prefetch" : "live"),
+    const {
+      sent,
+      rows,
+      cut: partial,
+    } = await lane.timed(phase, () =>
+      this.send(lane, groups, phase === "prefetchMs" ? "prefetch" : "live", alone),
     );
     const wallMs = Date.now() - started;
     const s = this.serveStopSeconds() ?? 1;
@@ -4054,6 +4110,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         break;
       }
     }
+    // R895: a cut answer's daemon is already killed; `closeDaemon` clears the lane's reference to it.
     if (cut < sent.length || daemon.dirty) await lane.closeDaemon();
     // An unkept ECHO stands like any entry, but its group's codeunit entries come after it, so the
     // whole group is re-sent (§7).
@@ -4069,7 +4126,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         if (echoWhy !== undefined) this.stats.echoMismatches += 1;
         continue;
       }
-      const missing = this.suiteMissing(callOf(e), mine);
+      // R895: the entry the answer was cut in holds the rows it had; its other tests did not run.
+      const cutHere = partial !== undefined && partial.entry === e.id;
+      const missing =
+        cutHere || (alone !== undefined && callOf(e) === alone.call)
+          ? undefined
+          : this.suiteMissing(callOf(e), mine);
       const call: CallRows = {
         rows: mine,
         stopSeconds: s,
@@ -4081,6 +4143,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
             }
           : {}),
         ...(missing !== undefined ? { missing } : {}),
+        ...(cutHere && partial !== undefined ? { cutAtTimeout: { test: partial.test } } : {}),
       };
       const m = results.get(e.key) ?? new Map<number, CallRows>();
       m.set(callOf(e), call);
@@ -4421,6 +4484,48 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
       this.noteBaselineRows(lane, id, call.rows);
       lane.rowsByCodeunit.set(id, call);
+      return { call };
+    } catch (err) {
+      return { verdict: this.liveFailure(lane, ref, err, Date.now() - started) };
+    }
+  }
+
+  /**
+   * R895: `ref` alone, under the active mutant (or NONE): one live request that selects exactly
+   * this test (`isolatedSelection`, with `runSelectedOnly` for this request only). Its call is the
+   * ref's answer; the caller never stores it as the codeunit's.
+   */
+  private async aloneCall(
+    lane: Lane,
+    ref: TestMethodRef,
+  ): Promise<{ readonly call: CallRows } | { readonly verdict: TestVerdict }> {
+    const started = Date.now();
+    if (this.entriesRefused !== undefined) {
+      return { verdict: transportFailure(ref, this.entriesRefused, 0) };
+    }
+    const m = lane.lastActivated ?? SELECTOR_RESOURCE_NONE;
+    const id = this.callId(ref);
+    this.union.add(id);
+    const selection = isolatedSelection(
+      ref.codeunitId,
+      ref.method,
+      this.discovered.filter((t) => t.codeunitId === ref.codeunitId).map((t) => t.method),
+    );
+    try {
+      const out = await this.request(lane, [{ mutantId: m, codeunits: [id] }], "liveMs", {
+        call: id,
+        selection,
+      });
+      const call = out.results.get(m)?.get(id);
+      if (call === undefined) {
+        return {
+          verdict: refusalVerdict(
+            ref,
+            `entries-echo-mismatch: ${m}'s echo did not run, so nothing of its group is trusted (${out.cutWhy ?? "no reason"}); never scored (R635 §6)`,
+            Date.now() - started,
+          ),
+        };
+      }
       return { call };
     } catch (err) {
       return { verdict: this.liveFailure(lane, ref, err, Date.now() - started) };

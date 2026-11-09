@@ -46,6 +46,7 @@ import {
   SELECTOR_ECHO_FILENAME,
   batchRefusalReason,
   chunkGroups,
+  decodeEntriesAnswer,
   emitSelectorEcho,
   encodeGroups,
   assertEntriesWellFormed as wellFormed,
@@ -389,6 +390,8 @@ function fakeServe(script: ServeScript = {}) {
   const requests: Req[] = [];
   /** R672: each shutdown, with how many requests (over every daemon) came before it. */
   const closes: { daemon: number; afterRequests: number }[] = [];
+  /** R895: the daemon number of every `kill()` (a close's fallback kill too). */
+  const kills: number[] = [];
   /** R645: the working directory each daemon was started in. */
   const cwds: (string | undefined)[] = [];
   const spawn: ServerSpawnFn = (argv, opts) => {
@@ -402,7 +405,10 @@ function fakeServe(script: ServeScript = {}) {
     const handle: ServerProcessHandle = {
       stdout: out,
       stderr: err,
-      kill: () => out.end(),
+      kill: () => {
+        kills.push(daemon);
+        out.end();
+      },
       write: (line) => {
         void (async () => {
           const body = JSON.parse(line) as Record<string, unknown>;
@@ -514,7 +520,7 @@ function fakeServe(script: ServeScript = {}) {
   };
   /** The first request each daemon got. */
   const firsts = () => daemons.map((_, d) => requests.find((r) => r.daemon === d));
-  return { spawn, daemons, requests, firsts, closes, cwds };
+  return { spawn, daemons, requests, firsts, closes, cwds, kills };
 }
 
 interface Rig {
@@ -1719,6 +1725,10 @@ describe("M1 (build review r1): a warm-up row R612 does not keep refuses by name
     // R672: a timeout is still closed by R612's rule, and says so.
     expect(String(err)).toContain("is one R612 does not keep");
     expect(r.serve.requests.map((q) => q.ids[0])).toEqual(["NONE|echo"]);
+    // R895: the warm-up never opts in to the cut: its timeout row is read to the end, so the daemon
+    // is closed by a shutdown (a cut kills it without one), and no cut is counted.
+    expect(r.serve.closes.filter((c) => c.daemon === 0)).toHaveLength(1);
+    expect(r.b.entriesStats().timeoutCuts).toBe(0);
   });
 
   test("a clean warm-up whose only notRun rows are kept refusals proceeds on one daemon", async () => {
@@ -5222,5 +5232,267 @@ describe("R857: --isolate-tests", () => {
     await baseline(r.b, SUITE1);
     expect(argvHas(r, "--codeunit")).toBe(0);
     expect(r.one.calls).toHaveLength(2);
+  });
+});
+
+// R895: a request is cut at the first streamed timeout row; the daemon is killed.
+describe("R895: stop a request at its first timeout row", () => {
+  /** A scripted daemon: every request answers `lines`; counts kills and shutdowns. */
+  function scripted(lines: readonly unknown[]) {
+    const out = new Chan();
+    const err = new Chan();
+    const seen = { kills: 0, shutdowns: 0 };
+    out.push(JSON.stringify({ ready: true }));
+    const spawn: ServerSpawnFn = () => ({
+      stdout: out,
+      stderr: err,
+      kill: () => {
+        seen.kills += 1;
+        out.end();
+      },
+      write: (line) => {
+        if ((JSON.parse(line) as { command?: string }).command === "shutdown") {
+          seen.shutdowns += 1;
+          out.push("{}");
+          return;
+        }
+        for (const l of lines) out.push(JSON.stringify(l));
+      },
+    });
+    return { spawn, seen };
+  }
+  const test_ = (entry: string, method: string, extra: Record<string, unknown> = {}) => ({
+    type: "test",
+    entry,
+    name: `Codeunit${CU}.${method}`,
+    status: "pass",
+    ...extra,
+  });
+  const stop = { status: "error", notRun: true, message: TIMEOUT_1S };
+  const tail = [
+    { type: "entrySummary", entry: "e1" },
+    { type: "summary", exitCode: 0 },
+  ];
+  async function ask(lines: readonly unknown[], stopAtTimeout?: boolean) {
+    const s = scripted(lines);
+    const server = new AlRunnerServer("/fake", s.spawn, [], "serve");
+    server.enforceRunSeed = false;
+    await server.start(5000);
+    const answer = await server.runEntries({ entries: [] }, 5000, stopAtTimeout);
+    return { answer, seen: s.seen, server };
+  }
+
+  test("opt-in: a timeout row ends the read; partial answer with the marker; the daemon is killed once, never shut down", async () => {
+    const { answer, seen, server } = await ask(
+      [test_("e1", "A"), test_("e1", "B", stop), test_("e1", "C", stop), ...tail],
+      true,
+    );
+    expect(answer.tests.map((t) => t.name)).toEqual([`Codeunit${CU}.A`, `Codeunit${CU}.B`]);
+    expect(answer.entrySummaries).toEqual([]);
+    expect(answer.cut).toEqual({ entry: "e1", test: `Codeunit${CU}.B` });
+    expect(seen).toEqual({ kills: 1, shutdowns: 0 });
+    await server.close(); // already gone: nothing more is sent or killed
+    expect(seen).toEqual({ kills: 1, shutdowns: 0 });
+  });
+
+  test("opt-in: a plain fail row, a fail or error that quotes the timeout text without notRun, and a non-timeout notRun refusal are never cut", async () => {
+    const { answer, seen } = await ask(
+      [
+        test_("e1", "A", { status: "fail", message: "boom" }),
+        test_("e1", "B", { status: "fail", message: TIMEOUT_1S }),
+        test_("e1", "C", { status: "error", notRun: true, message: COMMIT }),
+        // The exact timeout text on an error row that v3 did NOT mark notRun: not a stop.
+        test_("e1", "D", { status: "error", message: TIMEOUT_1S }),
+        ...tail,
+      ],
+      true,
+    );
+    expect(answer.tests).toHaveLength(4);
+    expect(answer.cut).toBeUndefined();
+    expect(answer.entrySummaries).toHaveLength(1);
+    expect(seen.kills).toBe(0);
+  });
+
+  test("without the opt-in (the warm-up): a timeout row is read to the end, like any row", async () => {
+    const { answer, seen } = await ask([test_("e1", "A", stop), test_("e1", "B"), ...tail]);
+    expect(answer.tests).toHaveLength(2);
+    expect(answer.cut).toBeUndefined();
+    expect(answer.summary.type).toBe("summary");
+    expect(seen.kills).toBe(0);
+  });
+
+  describe("decode", () => {
+    const sent = () =>
+      encodeGroups(
+        [
+          { mutantId: "M0001", codeunits: [CU] },
+          { mutantId: "M0002", codeunits: [CU] },
+        ],
+        ECHO,
+      );
+    const echoRow = (m: string) => ({
+      type: "test",
+      entry: `${m}|echo`,
+      name: `Codeunit${ECHO}.Echo`,
+      status: "fail",
+      message: `LETHAL-ECHO:${m}:true`,
+    });
+    const cutAnswer = (tests: Record<string, unknown>[], entry = `M0001|${CU}`) => ({
+      tests,
+      entrySummaries: [],
+      summary: {},
+      cut: { entry, test: `Codeunit${CU}.A` },
+    });
+    const timeoutRow = { ...test_(`M0001|${CU}`, "A", stop) };
+
+    test("a partial answer with the marker decodes: the cut entry keeps its rows, later entries have none", () => {
+      const d = decodeEntriesAnswer(sent(), cutAnswer([echoRow("M0001"), timeoutRow]));
+      if ("why" in d) throw new Error(d.why);
+      expect(d.cut).toEqual({ entry: `M0001|${CU}`, test: `Codeunit${CU}.A` });
+      expect(d.rows.get(`M0001|${CU}`)?.map((r) => r.method)).toEqual(["A"]);
+      expect(d.rows.get(`M0002|${CU}`)).toEqual([]);
+    });
+
+    test("a row for an entry AFTER the cut entry is refused", () => {
+      const d = decodeEntriesAnswer(
+        sent(),
+        cutAnswer([echoRow("M0001"), test_(`M0002|${CU}`, "A"), timeoutRow]),
+      );
+      expect("why" in d && d.why).toContain("has a row after the cut");
+    });
+
+    test("no marker: a short answer without summaries is refused as today", () => {
+      const d = decodeEntriesAnswer(sent(), {
+        tests: [echoRow("M0001"), timeoutRow],
+        entrySummaries: [],
+        summary: {},
+      });
+      expect("why" in d && d.why).toContain("entrySummary ids");
+    });
+
+    test("a marker that is not the last test line, or names an unsent entry, is refused", () => {
+      const notLast = decodeEntriesAnswer(
+        sent(),
+        cutAnswer([echoRow("M0001"), timeoutRow, test_(`M0001|${CU}`, "B")]),
+      );
+      expect("why" in notLast && notLast.why).toContain("not the answer's last test line");
+      const unsent = decodeEntriesAnswer(sent(), cutAnswer([timeoutRow], "nope"));
+      expect("why" in unsent && unsent.why).toContain("was not sent");
+    });
+  });
+
+  describe("backend", () => {
+    /** M0001's codeunit CU: A hangs (the timeout row), B would be a cascade row. */
+    const hangsA: RowsFn = (m, cu, d, n) =>
+      m === "M0001" && cu === CU
+        ? [
+            { method: "A", status: "error", notRun: true, message: TIMEOUT_1S },
+            { method: "B", status: "pass" },
+          ]
+        : allPass(m, cu, d, n);
+    const A = ref("A");
+    const B = ref("B");
+    const C = ref("C", CU2);
+
+    test("a timeout row mid-stream: T's row is kept, the later entries are re-sent on a fresh daemon, the old daemon is killed once", async () => {
+      const r = await readyRig({
+        serve: { rows: hangsA },
+        suite: SUITE2,
+        mutants: ["M0001", "M0002"],
+      });
+      expect(r.b.entriesStats().timeoutCuts).toBe(1);
+      // Daemon 0 held the cut request; daemon 1 got the re-send (its warm-up, then the rest).
+      expect(r.serve.daemons).toHaveLength(2);
+      expect(r.serve.kills).toEqual([0]);
+      expect(r.serve.closes.filter((c) => c.daemon === 0)).toEqual([]);
+      const resent = r.serve.requests.filter((q) => q.daemon === 1).at(-1);
+      expect(resent?.ids).toEqual([
+        "M0001|echo",
+        `M0001|${CU2}`,
+        "M0002|echo",
+        `M0002|${CU}`,
+        `M0002|${CU2}`,
+      ]);
+      await r.b.activate("M0001");
+      const a = await r.b.run(A, OPTS);
+      expect(a.outcome).toBe("timeout");
+      expect((await r.b.run(C, OPTS)).outcome).toBe("pass");
+    });
+
+    test("a ref the cut call has no row for runs ALONE: exact selection, runSelectedOnly, the same mutant", async () => {
+      const r = await readyRig({ serve: { rows: hangsA }, suite: SUITE2, mutants: ["M0001"] });
+      await r.b.activate("M0001");
+      const n0 = r.serve.requests.length;
+      const v = await r.b.run(B, OPTS);
+      expect(v.outcome).toBe("pass");
+      const sent = r.serve.requests.slice(n0);
+      expect(sent).toHaveLength(1);
+      const body = sent[0]?.body ?? {};
+      expect(body.runSelectedOnly).toBe(true);
+      const entries = body.entries as { id: string; test: string; resources: object }[];
+      expect(entries.map((e) => e.test)).toEqual([`Codeunit${ECHO}.`, `Codeunit${CU}.B`]);
+      expect(
+        entries.map((e) => (e.resources as Record<string, string>)["active-mutant.txt"]),
+      ).toEqual(["M0001", "M0001"]);
+      // Only that request carries runSelectedOnly.
+      expect(r.serve.requests.filter((q) => q.body.runSelectedOnly === true)).toHaveLength(1);
+    });
+
+    test("a timeout in that alone fetch is a timeout verdict", async () => {
+      const rows: RowsFn = (m, cu, d, n) =>
+        m === "M0001" && cu === CU
+          ? [
+              { method: "A", status: "error", notRun: true, message: TIMEOUT_1S },
+              { method: "B", status: "error", notRun: true, message: TIMEOUT_1S },
+            ]
+          : allPass(m, cu, d, n);
+      const r = await readyRig({ serve: { rows }, suite: SUITE2, mutants: ["M0001"] });
+      await r.b.activate("M0001");
+      const v = await r.b.run(B, OPTS);
+      expect(v.outcome).toBe("timeout");
+      expect(r.b.entriesStats().timeoutCuts).toBe(2);
+    });
+
+    test("a cut with rows only after the cut entry in the answer is a protocol error: the prefetch is dropped", async () => {
+      const r = await rig({
+        suite: SUITE2,
+        serve: {
+          rows: hangsA,
+          // Move the timeout line to the end, so M0002's rows come before the cut.
+          answer: (_q, n, lines) =>
+            n === 1
+              ? {
+                  lines: [
+                    ...lines.filter((x) => x.type === "test" && x.notRun !== true),
+                    ...lines.filter((x) => x.type === "test" && x.notRun === true),
+                  ],
+                }
+              : undefined,
+        },
+      });
+      await baseline(r.b, SUITE2);
+      await r.b.prefetchMutants(plans(["M0001", "M0002"], SUITE2));
+      expect(r.b.entriesStats().prefetchDropped).toBe(1);
+    });
+
+    test("a kill pair whose M entry is cut keeps T's timeout, not an error", async () => {
+      const rows: RowsFn = (m, cu, d, n) =>
+        m === "M0001" && cu === CU && d === 0 && n === 2
+          ? [
+              { method: "A", status: "error", notRun: true, message: TIMEOUT_1S },
+              { method: "B", status: "pass" },
+            ]
+          : killsM1(m, cu, d, n);
+      const r = await readyRig({ serve: { rows }, oneShotRows: allPass, mutants: ["M0001"] });
+      await r.b.activate("M0001");
+      expect((await r.b.run(A, OPTS)).outcome).toBe("fail");
+      await r.b.sendKillPair("M0001", A);
+      await r.b.activate(null);
+      expect((await r.b.run(A, OPTS)).outcome).toBe("pass");
+      await r.b.activate("M0001");
+      expect((await r.b.run(A, OPTS)).outcome).toBe("timeout");
+      const s = r.b.entriesStats();
+      expect([s.timeoutCuts, s.pairFallbacks1]).toEqual([1, 0]);
+    });
   });
 });
