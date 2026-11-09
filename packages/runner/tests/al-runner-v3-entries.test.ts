@@ -5393,12 +5393,26 @@ describe("R895: stop a request at its first timeout row", () => {
     const A = ref("A");
     const B = ref("B");
     const C = ref("C", CU2);
+    /** A build that retires the §6 Sleep rule: the only kind a request is cut on. */
+    const retired = { sleepRuleRetired: true };
+
+    test("where the §6 Sleep rule applies, a timeout row is read to the end: nothing is cut", async () => {
+      const r = await readyRig({
+        serve: { rows: hangsA },
+        suite: SUITE2,
+        mutants: ["M0001", "M0002"],
+        seams: { sleepRuleRetired: false },
+      });
+      expect(r.b.entriesStats().timeoutCuts).toBe(0);
+      expect(r.serve.closes.filter((c) => c.daemon === 0)).toHaveLength(1);
+    });
 
     test("a timeout row mid-stream: T's row is kept, the later entries are re-sent on a fresh daemon, the old daemon is killed once", async () => {
       const r = await readyRig({
         serve: { rows: hangsA },
         suite: SUITE2,
         mutants: ["M0001", "M0002"],
+        seams: retired,
       });
       expect(r.b.entriesStats().timeoutCuts).toBe(1);
       // Daemon 0 held the cut request; daemon 1 got the re-send (its warm-up, then the rest).
@@ -5420,7 +5434,12 @@ describe("R895: stop a request at its first timeout row", () => {
     });
 
     test("a ref the cut call has no row for runs ALONE: exact selection, runSelectedOnly, the same mutant", async () => {
-      const r = await readyRig({ serve: { rows: hangsA }, suite: SUITE2, mutants: ["M0001"] });
+      const r = await readyRig({
+        serve: { rows: hangsA },
+        suite: SUITE2,
+        mutants: ["M0001"],
+        seams: retired,
+      });
       await r.b.activate("M0001");
       const n0 = r.serve.requests.length;
       const v = await r.b.run(B, OPTS);
@@ -5446,7 +5465,12 @@ describe("R895: stop a request at its first timeout row", () => {
               { method: "B", status: "error", notRun: true, message: TIMEOUT_1S },
             ]
           : allPass(m, cu, d, n);
-      const r = await readyRig({ serve: { rows }, suite: SUITE2, mutants: ["M0001"] });
+      const r = await readyRig({
+        serve: { rows },
+        suite: SUITE2,
+        mutants: ["M0001"],
+        seams: retired,
+      });
       await r.b.activate("M0001");
       const v = await r.b.run(B, OPTS);
       expect(v.outcome).toBe("timeout");
@@ -5456,6 +5480,7 @@ describe("R895: stop a request at its first timeout row", () => {
     test("a cut with rows only after the cut entry in the answer is a protocol error: the prefetch is dropped", async () => {
       const r = await rig({
         suite: SUITE2,
+        seams: retired,
         serve: {
           rows: hangsA,
           // Move the timeout line to the end, so M0002's rows come before the cut.
@@ -5483,7 +5508,12 @@ describe("R895: stop a request at its first timeout row", () => {
               { method: "B", status: "pass" },
             ]
           : killsM1(m, cu, d, n);
-      const r = await readyRig({ serve: { rows }, oneShotRows: allPass, mutants: ["M0001"] });
+      const r = await readyRig({
+        serve: { rows },
+        oneShotRows: allPass,
+        mutants: ["M0001"],
+        seams: retired,
+      });
       await r.b.activate("M0001");
       expect((await r.b.run(A, OPTS)).outcome).toBe("fail");
       await r.b.sendKillPair("M0001", A);

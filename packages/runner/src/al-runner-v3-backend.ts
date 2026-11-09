@@ -3538,17 +3538,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         // R635 §5: an entry carries no coverage. An empty index has nothing to find; otherwise
         // the window gives this (mutant, codeunit) a coverage read, once.
         if (index.sizes.target + index.sizes.test === 0) return verdict;
-        if (alone) {
-          // R895: the window runs the whole codeunit and compares its rows with the call's, and
-          // this call is one test fetched after a timeout cut: no window, so no verdict.
-          return {
-            ref,
-            outcome: "error",
-            durationMs: call.wallMs,
-            failureMessage: `al-runner-v3: ${ref.method} passed alone after its codeunit's request was cut at a timeout (R895), and the Sleep coverage window (R586 §6) cannot check a single test; never scored`,
-            operation: "completed-accepted",
-            runnerRow: "runner-refused",
-          };
+        if (alone || call.cutAtTimeout !== undefined) {
+          // R895: a request is cut only on a build that retires the §6 Sleep rule (`send`), and on
+          // such a build `run()` returned above. Reaching the window with a cut or alone call is a bug.
+          throw new Error(
+            `al-runner-v3: ${ref.method}'s call was cut at a timeout (R895) on a build where the §6 Sleep rule applies; a cut is never made there`,
+          );
         }
         if (this.lanesBuilt) {
           // R766 (b): a window needs the §6 Sleep index, keyed to lane 0's tree; under --workers > 1
@@ -4040,8 +4035,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     else if (kind === "live") this.stats.liveRequests += 1;
     let answer: Awaited<ReturnType<AlRunnerServer["runEntries"]>>;
     try {
-      // R895: prefetch and live requests stop at a streamed timeout row; the warm-up never does.
-      answer = await daemon.server.runEntries(body, v3CallDeadlineMs(s, tests), kind !== "warmup");
+      // R895: prefetch and live requests stop at a streamed timeout row; the warm-up never does. Only
+      // on a build that retires the §6 Sleep rule: the coverage window compares a whole-codeunit run
+      // with the call's rows, which a cut call does not have, so where §6 applies nothing is cut.
+      answer = await daemon.server.runEntries(
+        body,
+        v3CallDeadlineMs(s, tests),
+        kind !== "warmup" && this.sleepRuleRetiredForParallel(),
+      );
     } catch (err) {
       await lane.closeDaemon();
       throw missingDependencyOr(err);
