@@ -3114,6 +3114,7 @@ async function buildAlRunnerV3Backend(
         : {}),
       ...(c.cacheDir !== undefined ? { cacheDir: c.cacheDir } : {}),
       downloadDemoData: c.downloadDemoData,
+      ...(c.isolation !== undefined ? { isolation: c.isolation } : {}), // R890
       ...(c.dotnetSidecar !== undefined ? { dotnetSidecar: c.dotnetSidecar } : {}), // R886
       ...(deps.preprocessorSymbols.length > 0
         ? { preprocessorSymbols: deps.preprocessorSymbols }
