@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**17 of 851 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**16 of 851 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -524,7 +524,7 @@ that ordering is the priority.
 - **R868** · The LethAL skill ships as an installable file, in the safe order, and cannot drift from the CLI (GitHub #26) · [R868.md](docs/roadmap/R868.md) · done (7eeebcfb)
 - **R874** · `--json` prints the shared bc-toolbox CLI envelope (GitHub #27) · [R874.md](docs/roadmap/R874.md) · done (d4c923a9)
 - **R877** · tree-sitter-al 4.6.0 parses a split trigger header, and a reach latch there refused the whole file · [R877.md](docs/roadmap/R877.md) · done (66a4a27a)
-- **R884** · `--dry-run` did not say that its counts leave out the hang-refused sites a run refuses (R447) · [R884.md](docs/roadmap/R884.md) · open
+- **R884** · `--dry-run` did not say that its counts leave out the hang-refused sites a run refuses (R447) · [R884.md](docs/roadmap/R884.md) · done (5181b8d4)
 - **R885** · al-runner v3 runs a Microsoft-style test app without demo data, and LethAL never says so: most of its baseline is refused · [R885.md](docs/roadmap/R885.md) · open
 - **R886** · LethAL cannot hand al-runner v3 its .NET sidecar, so every test that reaches a .NET type is refused · [R886.md](docs/roadmap/R886.md) · open
 
