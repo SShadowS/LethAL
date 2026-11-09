@@ -115,3 +115,12 @@ BC. S1 and S4 are dropped.
 - The partial round-3 S2 report stays evidence. The round-4 S2 is the result.
 
 Anchors as before, with the new counts. Expectations unchanged.
+
+## Amendment 4 (2026-11-09, after round 4's S3 stopped, before its rerun)
+
+**What happened.** Round 4's S2 (PaymentPractices) finished. S3 (ServiceDeclaration) stopped at the target publish: codeunit 5258
+belongs to Contoso Coffee Demo Dataset on bc5. Amendment 2 checked 5258 as a TABLE only, but `tableId` is the "Mutation Upgrade"
+codeunit (`id-ranges.ts`), so all three injected ids are codeunits. No mutant ran.
+
+**Changed for the S3 rerun, and nothing else:** ServiceDeclaration's `tableId` is 5047, a codeunit that has no owner on bc5 (read by
+key, `owners-sd.ts`) and that the app does not declare. `selectorId` 5048 and `controlId` 5049 are unchanged. S2 is not rerun.
