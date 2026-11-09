@@ -225,6 +225,22 @@
  ],
  "closes": [
   {
+   "daemon": 0,
+   "afterRequests": 2
+  },
+  {
+   "daemon": 1,
+   "afterRequests": 9
+  },
+  {
+   "daemon": 2,
+   "afterRequests": 15
+  },
+  {
+   "daemon": 3,
+   "afterRequests": 26
+  },
+  {
    "daemon": 4,
    "afterRequests": 27
   }
@@ -249,7 +265,7 @@
  "spawnCount": 1,
  "stats": {
   "daemons": 5,
-  "timeoutCuts": 4,
+  "timeoutCuts": 0,
   "cachedFalse": 5,
   "warmups": 5,
   "prefetchRequests": 2,
