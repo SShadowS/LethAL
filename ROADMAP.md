@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**17 of 857 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**18 of 858 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -347,6 +347,7 @@ that ordering is the priority.
 - **R889** · Four ways LethAL emitted AL that alc rejects, found by compiling BC.History instrumented · [R889.md](docs/roadmap/R889.md) · done (ab8e27f5)
 - **R890** · v3 runs a test codeunit under per-test rollback with its globals kept, while bcdev runs each method alone: a suite that sets up once per codeunit loses its setup on v3 · [R890.md](docs/roadmap/R890.md) · open
 - **R893** · swap-find-direction on a FindLast that skips ahead inside a Next() walk of the same record is not hang-refused: the swapped FindFirst rewinds the walk, and on BC the run stranded and quarantined the tier · [R893.md](docs/roadmap/R893.md) · open
+- **R895** · v3 runs the app's GUI branch and bcdev the non-GUI one: a Confirm through ConfirmManagement.GetResponseOrDefault is asked on v3 and skipped on BC, so the two backends kill different mutants · [R895.md](docs/roadmap/R895.md) · open
 
 ## Product gaps a real project hits
 
