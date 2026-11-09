@@ -6366,7 +6366,7 @@ async function runSessionBody(
     // the other way, by the one check every lend passes.
     runnerBuild:
       v3Build !== undefined
-        ? `${v3Build.version} ${v3Build.binarySha256}${cfg.backend.isolatesTests === true ? " isolate-tests" : ""}`
+        ? `${v3Build.version} ${v3Build.binarySha256}${cfg.backend.isolatesTests === true ? " isolate-tests" : ""}${cfg.backend.methodIsolation === true ? " isolation-method" : ""}`
         : undefined,
   };
   // R886: the v3 settings a resume must find unchanged; undefined on a backend with none.
