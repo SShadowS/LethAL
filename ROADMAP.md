@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**15 of 853 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**14 of 853 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -528,7 +528,7 @@ that ordering is the priority.
 - **R884** · `--dry-run` did not say that its counts leave out the hang-refused sites a run refuses (R447) · [R884.md](docs/roadmap/R884.md) · done (5181b8d4)
 - **R885** · al-runner v3 runs a Microsoft-style test app without demo data, and LethAL never says so: most of its baseline is refused · [R885.md](docs/roadmap/R885.md) · done (0ab21ba2)
 - **R886** · LethAL cannot hand al-runner v3 its .NET sidecar, so every test that reaches a .NET type is refused · [R886.md](docs/roadmap/R886.md) · done (c3fcd742)
-- **R888** · Selector ids are checked against the project's own codeunits only, so they can clash with a dependency's codeunit (alc AL0264) · [R888.md](docs/roadmap/R888.md) · open, filed 2026-11-09 from coord R-883
+- **R888** · Selector ids are checked against the project's own codeunits only, so they can clash with a dependency's codeunit (alc AL0264) · [R888.md](docs/roadmap/R888.md) · done (f3b3d5b3)
 
 ## Backends and tooling
 
