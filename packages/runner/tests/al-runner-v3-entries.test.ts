@@ -5496,3 +5496,41 @@ describe("R895: stop a request at its first timeout row", () => {
     });
   });
 });
+
+describe("R890: alRunnerV3.isolation", () => {
+  const isolationOf = (c: readonly string[]) => c[c.indexOf("--isolation") + 1];
+
+  test("default: one-shot passes --isolation test and serve sends testIsolation test", async () => {
+    const r = await readyRig({ serve: { rows: killsM1 } });
+    expect(r.one.calls.length).toBeGreaterThan(0);
+    for (const c of r.one.calls) expect(isolationOf(c)).toBe("test");
+    expect(r.serve.requests.length).toBeGreaterThan(0);
+    for (const q of r.serve.requests) expect(q.body.testIsolation).toBe("test");
+    expect(r.b.isolatesTests).toBe(false);
+    expect(r.b.methodIsolation).toBe(false);
+  });
+
+  test("method: every test alone under codeunit isolation, one-shot and serve", async () => {
+    const r = await readyRig({ extra: { isolation: "method" }, serve: { rows: killsM1 } });
+    expect(r.one.calls.length).toBe(2);
+    for (const c of r.one.calls) {
+      expect(isolationOf(c)).toBe("codeunit");
+      expect(c).toContain("--run-selected-only");
+      expect(c).toContain("--test-exact");
+    }
+    expect(r.serve.requests.length).toBeGreaterThan(0);
+    for (const q of r.serve.requests) {
+      expect(q.body.testIsolation).toBe("codeunit");
+      expect(q.body.runSelectedOnly).toBe(true);
+    }
+    expect(r.b.isolatesTests).toBe(true);
+    expect(r.b.methodIsolation).toBe(true);
+  });
+
+  test("--isolate-tests alone keeps isolation test", async () => {
+    const r = await readyRig({ extra: { isolateTests: true }, serve: { rows: killsM1 } });
+    for (const c of r.one.calls) expect(isolationOf(c)).toBe("test");
+    for (const q of r.serve.requests) expect(q.body.testIsolation).toBe("test");
+    expect(r.b.methodIsolation).toBe(false);
+  });
+});

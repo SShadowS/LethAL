@@ -429,6 +429,23 @@ describe("R586 C1: runSession keys on kind, not on authoritative", () => {
     });
   });
 
+  test("R890: isolation method goes in the lending build and the fingerprint, apart from --isolate-tests", async () => {
+    await inProject(async (root) => {
+      const store = new ResultsStore(":memory:");
+      const iso = Object.assign(withProbe(new V3KindStub([]), []), { isolatesTests: true });
+      await v3Session(root, store, iso);
+      const method = Object.assign(withProbe(new V3KindStub([]), []), {
+        isolatesTests: true,
+        methodIsolation: true,
+      });
+      await v3Session(root, store, method);
+      const [a, b] = [store.getRun(1), store.getRun(2)];
+      expect(a?.runnerBuild).toBe(`alrunner 3.0.0-alpha.2 (91253f2d6) ${"b".repeat(64)} isolate-tests`);
+      expect(b?.runnerBuild).toBe(`${a?.runnerBuild} isolation-method`);
+      expect(b?.configFingerprint).not.toBe(a?.configFingerprint);
+    });
+  });
+
   test("a v3 backend that cannot name its build is refused (its run would lend under none)", async () => {
     await inProject(async (root) => {
       const store = new ResultsStore(":memory:");
