@@ -86,3 +86,32 @@ on bc5 (filed as R892).
   and none owned on bc5 (read by key, `owners-sd.ts`). The other two apps keep R-881's ids.
 
 Stages, anchors and expectations unchanged.
+
+## Amendment 3 (2026-11-09, after round 3, before round 4; owner's ruling)
+
+**What round 3 showed.**
+- S1: all 100 mutants `error`. LethAL refused all 75 BankDeposits tests before sending them: each reaches a call that may open a
+  `TestPage`. That is wider than expected above (the `TestPage` tests alone).
+- S2: PaymentPractices stopped after 403 of 880. Mutant M0281 (`swap-find-direction`, `PaymentPracticeBuilders.Codeunit.al:79`)
+  makes the walk loop forever (R893). The test was abandoned in flight, and the tier was quarantined.
+- S3 and S4: refused on the quarantine. The cardinality anchor failed for S1 and S2.
+
+**BankDeposits is recorded as a result, not run again:** while LethAL refuses `TestPage` tests, BankDeposits cannot be measured on
+BC. S1 and S4 are dropped.
+
+**Round 4** runs on bc5 after a reset, with the setup and the plain publishes of amendment 2 done again:
+
+| stage | what | mutants (deployed, exact) |
+|---|---|---|
+| S2 | PaymentPractices, full, `--exclude-operator lethal.swap-find-direction` | 877 |
+| S3 | ServiceDeclaration, full, no exclusion | 1044 |
+
+- **How the R893 sites are excluded:** `--exclude-operator lethal.swap-find-direction` on PaymentPractices only. Its three
+  `swap-find-direction` mutants are dropped: the two R893 sites (`PaymentPracticeBuilders.Codeunit.al` lines 41 and 79) and
+  `PaymentPeriod.Table.al:82`, which is not a hang. That is one mutant less than leaving out the two lines with `--lines`, which
+  would also drop the two safe `void-method-call` mutants there.
+- **ServiceDeclaration needs no exclusion.** All 11 of its `swap-find-direction` sites were read: each `FindFirst` is a lookup on a
+  record other than the one any loop around it walks. None has the R893 shape.
+- The partial round-3 S2 report stays evidence. The round-4 S2 is the result.
+
+Anchors as before, with the new counts. Expectations unchanged.
