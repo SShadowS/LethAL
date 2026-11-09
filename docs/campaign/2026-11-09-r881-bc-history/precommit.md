@@ -62,3 +62,31 @@ scratch cache, the same test passes, and passes again with `--no-download` again
 
 **Anchors unchanged:** cardinality 2080 / 880 / 1044, no crash, every mutant a verdict. No baseline or verdict figure is predicted
 for round 2 either. Round 1's reports are kept as evidence, not as results.
+
+## Amendment 2 (2026-11-09, before round 3; coord task R-887)
+
+**What changed since round 2, all on master:**
+- R885: al-runner downloads demo data by default;
+- R886: LethAL passes the pinned build's .NET sidecar (`current` re-gated with it by lethal-code before this round);
+- R887: no mutant during install or upgrade code (R-884).
+
+**Round 3 setup.**
+- All three apps on the serve-entries default transport; full mutant set; `--allow-large-run`.
+- `cacheDir` = R-881's scratch cache (w1 demo data, build 28.4.53241.56646). No `dotnetSidecar` key (the build's own). No `transport`
+  key.
+- Fresh scratch copies in `/coord/handoff/R-887/src/` (the same `app.json` edits as round 1), and the same 14 packages.
+- 3 hours per app.
+
+**Anchors unchanged:** cardinality 2080 / 880 / 1044, no crash, every mutant a verdict.
+
+**Expected:**
+1. No `dotnet-unavailable` refusal in any baseline.
+2. BankDeposits' baseline about as lethal-code measured on R-886's branch (32 green, 6 fail, 37 refused, same build and data). The R887 fix
+   may move it only if BankDeposits' install code reaches mutated code; no figure is predicted beyond that.
+3. The two findings lethal-code reported are confirmed or not, by name:
+   - the refusal "an earlier test of this codeunit changed an isolated storage key or a number sequence ...";
+   - fails that leave a setup record's number series empty.
+4. PaymentPractices on serve completes (R887's fix); its baseline is not predicted with demo data and the sidecar.
+5. ServiceDeclaration: not predicted, except point 1.
+
+Every new refusal cause, crash or odd verdict is a finding.

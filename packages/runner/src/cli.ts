@@ -11,6 +11,7 @@ import {
   CONTROL_SELECTOR_FILENAME,
   CONTROL_UPGRADE_FILENAME,
   type DeclaredObject,
+  type DependencyCodeunit,
   type InstrumentedFile,
   type SelectorConfig,
   type TierResolver,
@@ -68,6 +69,7 @@ import {
   cliOk,
   wantsEnvelope,
 } from "./cli-envelope";
+import { dependencyCheckWarning, dependencyCodeunitsOf } from "./dependency-codeunits";
 import { DeploymentVerifier } from "./deployment-verifier";
 import { ENV_STATUS_REACHABLE_NO_VENDOR_STATUS, runDoctor } from "./doctor";
 import type {
@@ -354,11 +356,41 @@ export async function validateSelectorIdsForProject(
   projectDir: string,
   selectorIds: SelectorConfig,
   snapshot?: ReadonlyMap<string, Buffer>,
+  dependencyCheck?: DependencyCheckOptions,
 ): Promise<void> {
   const manifest = await readTargetAppManifestForIdCheck(projectDir, snapshot);
   const idRanges: AppIdRange[] = parseIdRanges(manifest);
   const existingCodeunitIds = await scanProjectCodeunitIds(projectDir, snapshot);
-  validateSelectorIds(selectorIds, idRanges, existingCodeunitIds);
+  const dependencies = await readDependencyCodeunits(projectDir, manifest, dependencyCheck);
+  validateSelectorIds(selectorIds, idRanges, existingCodeunitIds, dependencies);
+}
+
+/** R888: where the dependency packages are, and where the "could not check" warning goes. */
+export interface DependencyCheckOptions {
+  /** Package folders alc reads; the project's own `.alpackages` when empty or absent. */
+  readonly packageDirs?: readonly string[];
+  readonly warn?: (line: string) => void;
+}
+
+/**
+ * R888: the codeunits the target's dependencies declare. Packages that cannot be read do NOT stop
+ * the run: the symbols may be downloaded later (a fresh `lethal init`, `downloadSymbols`), and alc
+ * still rejects a clash with AL0264, so refusing here would block runs that would have worked. The
+ * safe direction is to SAY the check did not run for those apps, by name.
+ */
+async function readDependencyCodeunits(
+  projectDir: string,
+  manifest: Record<string, unknown>,
+  options: DependencyCheckOptions | undefined,
+): Promise<Map<number, DependencyCodeunit>> {
+  const dirs =
+    options?.packageDirs !== undefined && options.packageDirs.length > 0
+      ? options.packageDirs
+      : [join(projectDir, ".alpackages")];
+  const { codeunits, unread } = await dependencyCodeunitsOf(manifest, dirs);
+  const warning = dependencyCheckWarning(unread);
+  if (warning !== undefined) (options?.warn ?? console.warn)(warning);
+  return codeunits;
 }
 
 /** `--backend`'s one validation, for `run` and `run --dry-run` alike. R654: the retired .NET
@@ -3044,7 +3076,11 @@ async function buildAlRunnerV3Backend(
   },
 ): Promise<ExecutionBackend> {
   refuseV3Platform();
-  await validateSelectorIdsForProject(parsed.projectDir, deps.selectorIds, deps.source);
+  // R888: the run's first check (runFromCli) already warned about unreadable packages; stay quiet.
+  await validateSelectorIdsForProject(parsed.projectDir, deps.selectorIds, deps.source, {
+    packageDirs: configuredPackageCaches(configFile),
+    warn: () => {},
+  });
   const c = validateAlRunnerV3Config(configFile.alRunnerV3);
   await assertBcVersionMatchesPackages(c.packagesDir, c.bcVersion);
   if (c.alcPath !== undefined) assertAlcRunnable(c.alcPath, deps.alcRunnable);
@@ -3208,7 +3244,10 @@ export async function buildBackend(
   // error-priority for an incomplete install) but before any compiler/deployer object touches the
   // target project, and well before an actual `alc` invocation would burn a live BC round trip on
   // an AL0297.
-  await validateSelectorIdsForProject(parsed.projectDir, selectorIds, source);
+  await validateSelectorIdsForProject(parsed.projectDir, selectorIds, source, {
+    packageDirs: configuredPackageCaches(configFile),
+    warn: () => {},
+  });
   const outputDir = join(scratchDir, "publish");
   await mkdir(outputDir, { recursive: true });
   const compiler = new ArtifactCompiler(
@@ -3918,7 +3957,9 @@ export async function runFromCli(
   // resolved `selectorIds` — are available now, with no I/O of `resolveSession`'s own in between,
   // so there is no reason to defer it past this point.
   const validateIds = deps.validateSelectorIdsForProject ?? validateSelectorIdsForProject;
-  await validateIds(parsed.projectDir, selectorIds, source);
+  await validateIds(parsed.projectDir, selectorIds, source, {
+    packageDirs: configuredPackageCaches(configFile),
+  });
   const scratchRoot = await mkdtemp(join(tmpdir(), "lethal-"));
   // R360 I2: this invocation owns `scratchRoot` from here on. On any throw it is kept and named,
   // since compile diagnostics name files in it; a killed process leaves it by design. After a
@@ -5108,7 +5149,8 @@ export async function initFromCli(parsed: InitCliConfig): Promise<number> {
   const appName = typeof manifest.name === "string" ? manifest.name : parsed.projectDir;
   const idRanges = parseIdRanges(manifest);
   const existingCodeunits = await scanProjectCodeunitIds(parsed.projectDir);
-  const picked = pickSelectorIds(idRanges, existingCodeunits);
+  const dependencies = await readDependencyCodeunits(parsed.projectDir, manifest, undefined);
+  const picked = pickSelectorIds(idRanges, existingCodeunits, dependencies);
   if (picked === null) {
     // Loud, and with the fix in it: the alternative is writing an out-of-range id that fails at
     // publish time, which is the exact round trip this command exists to remove.
@@ -5116,7 +5158,7 @@ export async function initFromCli(parsed: InitCliConfig): Promise<number> {
       `init: ${appName} declares no id range with three free ids for the objects LethAL injects (ranges: ${idRanges.map((r) => `${r.from}..${r.to}`).join(", ")}). Widen idRanges in the target app.json — three consecutive free ids at the top of a range is the convention this repository's own fixtures use.`,
     );
   }
-  validateSelectorIds(picked, idRanges, existingCodeunits);
+  validateSelectorIds(picked, idRanges, existingCodeunits, dependencies);
 
   const config = {
     bcdev: {
