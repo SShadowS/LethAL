@@ -1,8 +1,9 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser } from "@lethal/engine";
+import { printDryRun } from "../src/cli";
 import type { RunEvent, RunEventInput } from "../src/events";
 import { generateMutationSet } from "../src/orchestrator";
 import { buildReport, renderConsole } from "../src/report";
@@ -217,5 +218,39 @@ describe("R447: report", () => {
   test("with a red baseline: narrowed-degraded", () => {
     expect(reportFor([ROW(HANG, 2)], true).validity.reliability).toBe("narrowed-degraded");
     expect(reportFor(undefined, true).validity.reliability).toBe("degraded");
+  });
+});
+
+/** R-881: what `--dry-run` prints for a project. */
+async function dryRun(dir: string): Promise<string> {
+  const lines: string[] = [];
+  const log = spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+    lines.push(a.join(" "));
+  });
+  try {
+    await printDryRun(dir, undefined, {
+      dbPath: join(dir, "no-such.sqlite"),
+      configPath: join(dir, "no-such.json"),
+    });
+  } finally {
+    log.mockRestore();
+  }
+  return lines.join("\n");
+}
+
+describe("R-881: --dry-run names the hang-refused sites its counts leave out", () => {
+  test("a refused loop step -> the block, with the file and its site count", async () => {
+    const out = await dryRun(await project({ [HANG]: HANG_AL, [PLAIN]: PLAIN_AL }));
+    expect(out).toContain(
+      "hang-refused: 2 mutation site(s) in 1 file(s) could hang the run if mutated, so no mutant is made there; they are not in the counts above:",
+    );
+    expect(out).toContain(`  ${HANG} (codeunit_declaration, 2 site(s))`);
+    expect(out).not.toContain(`  ${PLAIN} (codeunit_declaration`);
+  });
+
+  test("no refused site -> no block", async () => {
+    const out = await dryRun(await project({ [PLAIN]: PLAIN_AL }));
+    expect(out).toContain("dry run: 1 file(s)");
+    expect(out).not.toContain("hang-refused");
   });
 });

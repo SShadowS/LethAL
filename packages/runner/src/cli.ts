@@ -3526,22 +3526,29 @@ export async function printDryRun(
     // v3 that predefines a symbol).
     backend = { kind: "al-runner-v3" };
   }
-  const { files, skipped, totalFiles, excludedByOnly, excludedByOperator, excludedByLines } =
-    await generateMutationSet(projectDir, {
-      ...(paths.dependencyPackageDirs !== undefined
-        ? { dependencyPackageDirs: paths.dependencyPackageDirs }
-        : {}),
-      ...(only !== undefined ? { only } : {}),
-      ...(exclude !== undefined ? { exclude } : {}),
-      ...(operators !== undefined ? { operators } : {}),
-      ...(excludeOperators !== undefined ? { excludeOperators } : {}),
-      ...(paths.lines !== undefined ? { lines: paths.lines } : {}),
-      ...(paths.source !== undefined ? { source: paths.source } : {}),
-      ...(paths.preprocessorSymbols !== undefined
-        ? { preprocessorSymbols: paths.preprocessorSymbols }
-        : {}),
-      ...(backend !== undefined ? { backend } : {}),
-    });
+  const {
+    files,
+    skipped,
+    totalFiles,
+    excludedByOnly,
+    excludedByOperator,
+    excludedByLines,
+    hangRefused,
+  } = await generateMutationSet(projectDir, {
+    ...(paths.dependencyPackageDirs !== undefined
+      ? { dependencyPackageDirs: paths.dependencyPackageDirs }
+      : {}),
+    ...(only !== undefined ? { only } : {}),
+    ...(exclude !== undefined ? { exclude } : {}),
+    ...(operators !== undefined ? { operators } : {}),
+    ...(excludeOperators !== undefined ? { excludeOperators } : {}),
+    ...(paths.lines !== undefined ? { lines: paths.lines } : {}),
+    ...(paths.source !== undefined ? { source: paths.source } : {}),
+    ...(paths.preprocessorSymbols !== undefined
+      ? { preprocessorSymbols: paths.preprocessorSymbols }
+      : {}),
+    ...(backend !== undefined ? { backend } : {}),
+  });
   const sites = sitesOf(files);
   const artifacts = planArtifacts(files);
   // R92: the two numbers are NAMED, never left to be told apart by position — the campaign's own
@@ -3687,6 +3694,16 @@ export async function printDryRun(
     for (const s of skipped) {
       console.log(`  ${s.file} (${s.kinds}, ${s.sites} site(s))`);
     }
+  }
+  // R-881: the counts above already leave hang-refused sites out (R447), so say so here, as the
+  // report's HANG-REFUSED SITES line does after a run.
+  const hang = hangRefused.filter((h) => h.sites > 0);
+  if (hang.length > 0) {
+    const hangSites = hang.reduce((n, h) => n + h.sites, 0);
+    console.log(
+      `\nhang-refused: ${hangSites} mutation site(s) in ${hang.length} file(s) could hang the run if mutated, so no mutant is made there; they are not in the counts above:`,
+    );
+    for (const h of hang) console.log(`  ${h.file} (${h.kinds}, ${h.sites} site(s))`);
   }
 }
 
