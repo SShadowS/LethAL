@@ -74,7 +74,7 @@ compared across a scheme change. There a byte-identical twin's mutated text cann
   roadmap item that will re-record it.
 - **The check:** `gate-pages.test.ts`, "R682". Every committed `itest/*.baseline.json` must record the current
   scheme or appear in its `LAGGING_SCHEME` list with an item. A listed file that has caught up fails too.
-- **Today's list:** R865 raised the scheme to 46 (coord task R-871). All 12 baselines were recorded at 46 in that
+- **Today's list:** R889 raised the scheme to 47 (coord task R-883). All 12 baselines were recorded at 47 in that
   change, each by one line, with no verdict moved. `envtool.baseline.json` waits on R683 (host only).
 
 ## A v3 baseline row changing on a pinned build (R849)

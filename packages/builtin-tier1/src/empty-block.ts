@@ -76,12 +76,16 @@ export const emptyBlock: MutationOperator = {
     // namedChildren that aren't `begin` / `end` keywords. The grammar exposes
     // these tokens as named nodes with rawKind `begin_keyword` / `end_keyword`
     // (v3.0.1); older/alternate grammars may use bare `begin` / `end`.
+    // R883: a comment is not a statement. A comment-only body is already empty, so the mutant is
+    // equivalent everywhere, and in an event publisher it is illegal (AL0286/AL0287: the dispatch
+    // puts code in the event).
     const hasContent = node.namedChildren.some(
       (c) =>
         c.rawKind !== "begin_keyword" &&
         c.rawKind !== "end_keyword" &&
         c.rawKind !== "begin" &&
-        c.rawKind !== "end",
+        c.rawKind !== "end" &&
+        !c.rawKind.includes("comment"),
     );
     return hasContent;
   },
