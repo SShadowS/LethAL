@@ -62,3 +62,12 @@ S4 runs only if S1 ran without a wedge (below). A stage that stops does not stop
 
 bc5 is not a gate server and is in no proof table: nothing here is a gate figure. BC's verdict is the authority for this comparison,
 but only for this setup (28.6 source on 28.4.57822).
+
+## Amendment 1 (2026-11-09, after round 1, before round 2)
+
+**What round 1 showed.** All four stages stopped at the target publish, before any baseline: BC refused the package because its
+runtime was 18.0 ("must be set to '17.1' or earlier ... on this server"). The corpus `app.json` files name no `runtime`, so alc 18
+built at its own newest. No mutant ran; no verdict exists from round 1.
+
+**Changed for round 2, and nothing else:** `"runtime": "17.0"` in all six scratch `app.json` files (the runtime of LethAL's own
+fixtures). `compile-only` passes for all three apps again. Stages, anchors and expectations unchanged.
