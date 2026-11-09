@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**21 of 861 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**20 of 861 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -905,7 +905,7 @@ that ordering is the priority.
 - **R860** · al-runner stops on a missing dependency (upstream #7139); LethAL follows by name · [R860.md](docs/roadmap/R860.md) · done (35b54d36)
 - **R861** · `--edge-rejudge` moved `current` and left its manifest row unpublished until the next plain run · [R861.md](docs/roadmap/R861.md) · done (25eaa10f)
 - **R866** · `--isolate-tests` runs its baseline as one process per test, which is most of the mode's cost · [R866.md](docs/roadmap/R866.md) · done (d8ef7fd3)
-- **R897** · On al-runner v3 one hanging mutant costs (covering tests in its codeunit) x the per-test limit: about 69 minutes for 23 tests, with no verdict until the end · [R897.md](docs/roadmap/R897.md) · open
+- **R897** · On al-runner v3 one hanging mutant costs (covering tests in its codeunit) x the per-test limit: about 69 minutes for 23 tests, with no verdict until the end · [R897.md](docs/roadmap/R897.md) · done (d66074f1)
 
 ---
 
