@@ -27,8 +27,21 @@
  */
 import { readFile, stat } from "node:fs/promises";
 import { basename, join, relative } from "node:path";
-import { isProjectResource, outputPathKey } from "./orchestrator";
+import { isProjectResource, outputPathKey, resourceFolderKeys } from "./orchestrator";
 import { ProjectSymlinkRefusedError, walkFiles } from "./walk";
+
+/** `resourceFolders` of the app.json bytes the run started from; none when absent or unparseable. */
+function resourceFoldersOf(appJson: Buffer | undefined): string[] {
+  if (appJson === undefined) return [];
+  try {
+    const parsed: unknown = JSON.parse(appJson.toString("utf8").replace(/^﻿/, ""));
+    return typeof parsed === "object" && parsed !== null
+      ? resourceFolderKeys(parsed as Record<string, unknown>)
+      : [];
+  } catch {
+    return [];
+  }
+}
 
 /** Thrown, never turned into a verdict: the session stops, and `--resume` continues it. */
 export class ProjectChangedDuringRunError extends Error {
@@ -87,6 +100,8 @@ export function watchProjectInputs(
   statFile: (path: string) => Promise<Seen | undefined> = statOf,
 ): ProjectInputWatch {
   const excluded = new Set(excludeOutputs.map(outputPathKey));
+  // The batch copies a named dot-folder, so the watch must see it too (same set as the batch).
+  const resourceFolders = resourceFoldersOf(snapshot.get("app.json"));
   /** The bytes each input must still have. Resources are filled at the first check. */
   const expected = new Map<string, Buffer>(snapshot);
   let resourcesKnown = false;
@@ -110,7 +125,7 @@ export function watchProjectInputs(
     for (const rel of walk.files) {
       const isAl = rel.toLowerCase().endsWith(".al");
       const isManifest = rel === "app.json";
-      if (!isAl && !isManifest && !isProjectResource(rel)) continue;
+      if (!isAl && !isManifest && !isProjectResource(rel, resourceFolders)) continue;
       if (!isAl && !isManifest && NEVER_AN_INPUT.test(basename(rel))) continue;
       if (excluded.has(outputPathKey(join(projectDir, rel)))) continue;
       out.push(rel);

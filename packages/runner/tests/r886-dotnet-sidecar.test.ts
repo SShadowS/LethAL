@@ -33,6 +33,18 @@ describe("R886: alRunnerV3.dotnetSidecar", () => {
   });
 });
 
+describe("R890: alRunnerV3.isolation", () => {
+  test("test and method are accepted, absent stays absent, anything else is refused by name", () => {
+    expect(validateAlRunnerV3Config({ ...base, isolation: "method" }).isolation).toBe("method");
+    expect(validateAlRunnerV3Config({ ...base, isolation: "test" }).isolation).toBe("test");
+    expect("isolation" in validateAlRunnerV3Config(base)).toBe(false);
+    for (const bad of ["codeunit", "", true])
+      expect(() => validateAlRunnerV3Config({ ...base, isolation: bad })).toThrow(
+        "al-runner-v3-config-refused",
+      );
+  });
+});
+
 describe("R886: .gated and the manifest row", () => {
   const g = (over: Record<string, unknown> = {}) =>
     JSON.stringify({

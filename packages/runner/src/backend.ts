@@ -460,6 +460,12 @@ export interface ExecutionBackend {
    */
   readonly isolatesTests?: boolean;
   /**
+   * R890: `alRunnerV3.isolation: "method"`: every test runs alone (as `isolatesTests`) under
+   * al-runner's codeunit isolation, so a fresh codeunit per test, as BC's one-method runner.
+   * Absent counts as false. In `runner_build` like `isolatesTests`.
+   */
+  readonly methodIsolation?: boolean;
+  /**
    * R517, OPTIONAL: the in-run stop LethAL configured for the whole session, timed on the test's
    * own body, enforced whatever budget a run is sent. al-runner `--server` answers it once
    * `useMutantBudgetFloor` was called; absent elsewhere (the stop is the budget). An upper bound

@@ -76,9 +76,34 @@ describe("emptyBlock", () => {
     };
     walk(root);
     const claimed = all.filter((n) => emptyBlock.targets(n, ctx));
-    expect(claimed.map((n) => n.parent?.kind)).toEqual([ALNodeKind.procedure, ALNodeKind.procedure]);
+    expect(claimed.map((n) => n.parent?.kind)).toEqual([
+      ALNodeKind.procedure,
+      ALNodeKind.procedure,
+    ]);
     // Positive control: the four repeats exist, and so do the begin...end blocks inside two of them.
     expect(findAll(root, ALNodeKind.repeat_statement)).toHaveLength(4);
     expect(findAll(root, ALNodeKind.block)).toHaveLength(4);
+  });
+
+  // R883: revert = drop the comment filter in `targets`; this goes red.
+  it("refuses a comment-only body, in an event publisher and in a plain procedure", () => {
+    const src = `codeunit 51703 "Ev" {
+      [IntegrationEvent(false, false)]
+      procedure OnA() begin // nothing here
+      end;
+      [BusinessEvent(false)]
+      procedure OnB() begin /* block comment */ end;
+      procedure Plain() begin // only a comment
+      end;
+      procedure Real() begin DoThing(); end;
+    }`;
+    const root = wrapRoot(parseAL(src));
+    const ctx = buildSemanticContext([{ path: "comment-only.al", root }]);
+    const blocks = findAll(root, ALNodeKind.block);
+    expect(blocks).toHaveLength(4);
+    const specs = blocks
+      .filter((n) => emptyBlock.targets(n, ctx))
+      .flatMap((n) => emptyBlock.generate(n, ctx));
+    expect(specs.map((s) => s.before.text)).toEqual(["begin DoThing(); end"]);
   });
 });

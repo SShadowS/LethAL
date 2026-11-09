@@ -325,6 +325,7 @@ function backendCfg(
     // R886: the frozen figures were measured with no .NET sidecar; a pinned build's own sidecar
     // would be picked up by default and could turn a refusal into a run. Off, explicitly.
     dotnetSidecar: false,
+    isolation: "test", // R890: the gate keeps `--isolation test`, explicitly
     coverage: "al-runner",
     ...(CANDIDATE ? { candidate: true } : {}),
     ...TRANSPORT,
@@ -1468,6 +1469,7 @@ async function legK(scratch: string): Promise<void> {
           // R885: the gate stays offline (see backendCfg above); K's defaults are otherwise unchanged.
           downloadDemoData: false,
           dotnetSidecar: false, // R886: and with no sidecar, as backendCfg above
+          isolation: "test", // R890
         },
       },
       join(scratch, "cli-scratch"),

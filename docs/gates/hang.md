@@ -119,6 +119,9 @@ it exists. The method undercounts a path that runs through a third app. See R634
 
 ## History
 
+2026-11-09 (R889, coord task R-883): `hang.single.baseline.json` moved from identity scheme 46 to 47, on `bc2`, by R332's procedure.
+Only the scheme line changed, and the confirm passed. Logs: `/coord/handoff/R-883/bc2/`.
+
 2026-11-08 (R865, coord task R-871): `hang.single.baseline.json` moved from identity scheme 45 to 46, on `bc2`, by R332's procedure.
 Only the scheme line changed, and the confirm passed. Logs: `/coord/handoff/R-871/bc2/`.
 

@@ -12,7 +12,8 @@
  *     "transport": "serve-entries",                            // or "one-shot"; absent: serve-entries where proven, else one-shot (R761)
  *     "secondEcho": true,                                      // R635 §5, serve-entries only
  *     "downloadDemoData": true,                                // R885; false passes --no-download (offline, gates); true: the feed's copy replaces an older Microsoft app in .alpackages
- *     "dotnetSidecar": "<optional AlDotNetSidecar.dll>"        // R886; passed as --dotnet-sidecar. Absent: the pinned build's own sidecar, when its .gated names one; false: none (gates)
+ *     "isolation": "test",                                     // R890; "test" (default) or "method": every test alone, codeunit isolation, a fresh codeunit each (as BC)
+ *     "dotnetSidecar": "<optional AlDotNetSidecar.dll>"      // R886; passed as --dotnet-sidecar. Absent: the pinned build's own sidecar, when its .gated names one; false: none (gates)
  *   }
  *
  * `serverMode` and `selectorMode` are refused by name (the static selector only, and no v2-style serve).
@@ -45,6 +46,11 @@ export interface AlRunnerV3ConfigSection {
   readonly downloadDemoData: boolean;
   /** R886: `--dotnet-sidecar <dll>` for every al-runner call. Absent: the pinned build's sidecar, if any. `false`: none. */
   readonly dotnetSidecar?: string | false;
+  /**
+   * R890: `"test"` (default, as always): one codeunit per call, rollback per test, globals kept.
+   * `"method"`: every test alone, codeunit isolation, a fresh codeunit per test (as BC's runner).
+   */
+  readonly isolation?: "test" | "method";
 }
 
 /**
@@ -54,6 +60,7 @@ export interface AlRunnerV3ConfigSection {
 export const V3_DOWNLOAD_DEMO_DATA_DEFAULT = true;
 
 const KEYS = [
+  "isolation",
   "downloadDemoData",
   "dotnetSidecar",
   "path",
@@ -161,6 +168,11 @@ export function validateAlRunnerV3Config(
       `al-runner-v3-config-refused: "alRunnerV3.dotnetSidecar" must be a non-empty path or false, got ${JSON.stringify(r.dotnetSidecar)} (R886).`,
     );
   }
+  if (r.isolation !== undefined && r.isolation !== "test" && r.isolation !== "method") {
+    throw new Error(
+      `al-runner-v3-config-refused: "alRunnerV3.isolation" must be "test" or "method", got ${JSON.stringify(r.isolation)} (R890).`,
+    );
+  }
   for (const k of ["path", "alcPath", "cacheDir"]) {
     if (r[k] !== undefined && (typeof r[k] !== "string" || r[k] === "")) {
       throw new Error(`"alRunnerV3.${k}" must be a non-empty string`);
@@ -193,6 +205,7 @@ export function validateAlRunnerV3Config(
     ...(typeof r.alcPath === "string" ? { alcPath: r.alcPath } : {}),
     ...(typeof r.cacheDir === "string" ? { cacheDir: r.cacheDir } : {}),
     ...(r.dotnetSidecar !== undefined ? { dotnetSidecar: r.dotnetSidecar as string | false } : {}),
+    ...(r.isolation !== undefined ? { isolation: r.isolation as "test" | "method" } : {}),
   };
 }
 

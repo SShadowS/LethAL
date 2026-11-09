@@ -427,6 +427,11 @@ export interface SessionFingerprintInput {
   readonly coverageMode?: CoverageMode;
   /** R857: `--isolate-tests`: a test alone can give another verdict. In the digest only when on. */
   readonly isolateTests?: true;
+  /**
+   * R890: `alRunnerV3.isolation: "method"`. It also sets `isolateTests`, so without this a method run
+   * and an `--isolate-tests` run would share a digest and a resume could mix their verdicts. Only when on.
+   */
+  readonly methodIsolation?: true;
   readonly selectorIds: {
     readonly selectorId: number;
     readonly controlId: number;
@@ -505,6 +510,7 @@ export function sessionFingerprint(input: SessionFingerprintInput): string {
     // R354: conditional, see `SessionFingerprintInput.coverageMode`.
     ...(input.coverageMode !== undefined ? { coverageMode: input.coverageMode } : {}),
     ...(input.isolateTests === true ? { isolateTests: true } : {}),
+    ...(input.methodIsolation === true ? { methodIsolation: true } : {}),
     selectorIds: [
       input.selectorIds.selectorId,
       input.selectorIds.controlId,
