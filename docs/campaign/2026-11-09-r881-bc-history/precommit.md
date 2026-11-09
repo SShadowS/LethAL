@@ -44,3 +44,21 @@ Committed before any run, 2026-11-09. Coord task R-881 (owner's request: try Let
 
 These runs measure al-runner v3, which is not authoritative (R586). A verdict here is not BC's verdict, and no figure from here
 is a gate figure or is quoted as one. No BC server is used for the runs.
+
+## Amendment 1 (2026-11-09, after round 1, before round 2)
+
+**What round 1 showed.** ServiceDeclaration: 60 of 61 baseline tests not run; BankDeposits: 73 of 75. Most reasons read "the rows a
+dependency app's install and Company-Initialize create could not be created". PaymentPractices stopped in the mutant phase: the
+serve-entries warm-up refused every entry ("the install code read a resource file ..."), while its one-shot baseline passed 31 of 36.
+Cardinality held for the two finished runs (1044, 2080).
+
+**The cause of the first, measured outside LethAL.** al-runner run directly on ServiceDeclaration's refused test printed "test data is
+off: the demo data of build 28.4.53241.56646 is not cached and --no-download is set". With the demo data downloaded once into a
+scratch cache, the same test passes, and passes again with `--no-download` against that cache. LethAL always passes `--no-download`.
+
+**Changed for round 2, and nothing else:**
+- every config names `cacheDir` = that scratch cache, which holds the w1 demo data of build 28.4.53241.56646;
+- PaymentPractices runs with `"transport": "one-shot"` (round 1's serve-entries default cannot run it).
+
+**Anchors unchanged:** cardinality 2080 / 880 / 1044, no crash, every mutant a verdict. No baseline or verdict figure is predicted
+for round 2 either. Round 1's reports are kept as evidence, not as results.
