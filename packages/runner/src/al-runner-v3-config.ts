@@ -11,7 +11,8 @@
  *     "cacheDir": "<optional ALRUNNER_CACHE>",
  *     "transport": "serve-entries",                            // or "one-shot"; absent: serve-entries where proven, else one-shot (R761)
  *     "secondEcho": true,                                      // R635 §5, serve-entries only
- *     "downloadDemoData": true                                 // R885; false passes --no-download (offline, gates); true: the feed's copy replaces an older Microsoft app in .alpackages
+ *     "downloadDemoData": true,                                // R885; false passes --no-download (offline, gates); true: the feed's copy replaces an older Microsoft app in .alpackages
+ *     "dotnetSidecar": "<optional AlDotNetSidecar.dll>"        // R886; passed as --dotnet-sidecar. Absent: the pinned build's own sidecar, when its .gated names one; false: none (gates)
  *   }
  *
  * `serverMode` and `selectorMode` are refused by name (the static selector only, and no v2-style serve).
@@ -42,6 +43,8 @@ export interface AlRunnerV3ConfigSection {
   readonly secondEcho: boolean;
   /** R885: may v3 download the CRONUS demo data into `cacheDir`? `false` passes `--no-download`. */
   readonly downloadDemoData: boolean;
+  /** R886: `--dotnet-sidecar <dll>` for every al-runner call. Absent: the pinned build's sidecar, if any. `false`: none. */
+  readonly dotnetSidecar?: string | false;
 }
 
 /**
@@ -52,6 +55,7 @@ export const V3_DOWNLOAD_DEMO_DATA_DEFAULT = true;
 
 const KEYS = [
   "downloadDemoData",
+  "dotnetSidecar",
   "path",
   "packagesDir",
   "bcVersion",
@@ -148,6 +152,15 @@ export function validateAlRunnerV3Config(
       `"alRunnerV3.coverage" must be "al-runner" or "none", got ${JSON.stringify(r.coverage)}`,
     );
   }
+  if (
+    r.dotnetSidecar !== undefined &&
+    r.dotnetSidecar !== false &&
+    (typeof r.dotnetSidecar !== "string" || r.dotnetSidecar === "")
+  ) {
+    throw new Error(
+      `al-runner-v3-config-refused: "alRunnerV3.dotnetSidecar" must be a non-empty path or false, got ${JSON.stringify(r.dotnetSidecar)} (R886).`,
+    );
+  }
   for (const k of ["path", "alcPath", "cacheDir"]) {
     if (r[k] !== undefined && (typeof r[k] !== "string" || r[k] === "")) {
       throw new Error(`"alRunnerV3.${k}" must be a non-empty string`);
@@ -179,6 +192,7 @@ export function validateAlRunnerV3Config(
     coverage: (r.coverage as "al-runner" | "none" | undefined) ?? "al-runner",
     ...(typeof r.alcPath === "string" ? { alcPath: r.alcPath } : {}),
     ...(typeof r.cacheDir === "string" ? { cacheDir: r.cacheDir } : {}),
+    ...(r.dotnetSidecar !== undefined ? { dotnetSidecar: r.dotnetSidecar as string | false } : {}),
   };
 }
 
