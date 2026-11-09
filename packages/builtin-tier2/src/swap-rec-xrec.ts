@@ -147,6 +147,8 @@ function plan(node: ALSyntaxNode): string | null {
 
   if (!inObservableTrigger(node)) return null;
   if (isAssignmentTarget(node)) return null;
+  if (isFieldDesignatingArgument(node)) return null;
+  if (isReceiverOfQualifiedFieldCall(node)) return null;
 
   // Splice ONLY the receiver's span, so the member name keeps its own spelling — `xRec."No."`
   // becomes `Rec."No."`, quotes and all.
@@ -174,6 +176,70 @@ function inObservableTrigger(node: ALSyntaxNode): boolean {
     current = current.parent;
   }
   return false;
+}
+
+/** Record methods whose FIRST argument names a field (R883): it must stay a member of the record. */
+const FIRST_ARG_IS_FIELD: ReadonlySet<string> = new Set([
+  "validate",
+  "testfield",
+  "fielderror",
+  "setrange",
+  "setfilter",
+  "getfilter",
+  "modifyall",
+  "fieldno",
+  "fieldcaption",
+  "fieldname",
+]);
+/** Record methods whose EVERY argument names a field. */
+const ALL_ARGS_ARE_FIELDS: ReadonlySet<string> = new Set([
+  "calcfields",
+  "calcsums",
+  "setcurrentkey",
+]);
+
+/**
+ * Is `node` a field-designating argument of a record method, as in `Rec.Validate(Rec."X", V)`?
+ * `xRec."X"` there is AL0166 ("Argument 1: must be a member"), so the swap is refused. A VALUE
+ * argument (`Validate(Amount, xRec.Amount)`) is not designating and stays swappable.
+ */
+function isFieldDesignatingArgument(node: ALSyntaxNode): boolean {
+  const args = node.parent;
+  if (args === null || args.rawKind !== "argument_list") return false;
+  const call = args.parent;
+  if (call === null || call.kind !== ALNodeKind.procedure_call) return false;
+  const fn = call.childForFieldName("function") ?? call.namedChildren[0];
+  if (fn === undefined) return false;
+  // `Rec.Validate` -> last named child (the member); a bare `Validate` is its own text.
+  const nameNode = fn.rawKind === "member_expression" ? fn.namedChildren.at(-1) : fn;
+  if (nameNode === undefined) return false;
+  const method = nameNode.text.replace(/^"|"$/g, "").toLowerCase();
+  if (ALL_ARGS_ARE_FIELDS.has(method)) return true;
+  if (!FIRST_ARG_IS_FIELD.has(method)) return false;
+  const first = args.namedChildren[0];
+  return (
+    first !== undefined && first.startIndex === node.startIndex && first.endIndex === node.endIndex
+  );
+}
+
+/**
+ * Is `node` the receiver of a record method whose field-designating argument is QUALIFIED, as
+ * `Rec.Validate(Rec."X", V)`? Swapping the receiver gives `xRec.Validate(Rec."X", V)`, whose field
+ * is no longer the receiver's member (AL0166), so the swap is refused. An unqualified field
+ * (`Rec.Validate("X", V)`) follows the receiver and stays swappable.
+ */
+function isReceiverOfQualifiedFieldCall(node: ALSyntaxNode): boolean {
+  const call = node.parent;
+  if (call === null || call.kind !== ALNodeKind.procedure_call) return false;
+  const fn = call.childForFieldName("function") ?? call.namedChildren[0];
+  if (fn === undefined || fn.startIndex !== node.startIndex || fn.endIndex !== node.endIndex)
+    return false;
+  const method = node.namedChildren.at(-1)?.text.replace(/^"|"$/g, "").toLowerCase() ?? "";
+  const args = call.namedChildren.find((c) => c.rawKind === "argument_list")?.namedChildren ?? [];
+  const qualified = (a: ALSyntaxNode | undefined): boolean =>
+    a !== undefined && (a.kind === ALNodeKind.field_access || a.rawKind === "member_expression");
+  if (ALL_ARGS_ARE_FIELDS.has(method)) return args.some(qualified);
+  return FIRST_ARG_IS_FIELD.has(method) && qualified(args[0]);
 }
 
 /**
