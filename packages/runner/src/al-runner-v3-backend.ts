@@ -630,6 +630,11 @@ export interface AlRunnerV3Config {
    * the baseline one process per test. Off, every request is what it always was.
    */
   readonly isolateTests?: boolean;
+  /**
+   * R890: `"method"` = every test alone (as `isolateTests`) under `--isolation codeunit`: a fresh
+   * codeunit per test, as BC's one-method runner. Absent or `"test"`: what it always was.
+   */
+  readonly isolation?: "test" | "method";
   /** R866: how many of those processes run at a time (`--workers`). Absent: `ISOLATED_BASELINE_PROCESSES`. */
   readonly isolatedBaselineProcesses?: number;
   /**
@@ -867,13 +872,15 @@ export function v3CallArgv(a: {
   readonly testDir: string;
   /** R857: the one test to run alone (`Codeunit<ID>.<Method>`), in place of the whole codeunit. */
   readonly onlyTest?: string;
+  /** R890: `--isolation` value. Absent: `"test"`. */
+  readonly isolation?: "test" | "codeunit";
 }): string[] {
   return [
     a.alRunnerPath,
     "test",
     "--output-json",
     "--isolation",
-    "test",
+    a.isolation ?? "test",
     "--test-timeout-secs",
     String(a.stopSeconds),
     ...(a.onlyTest !== undefined
@@ -1357,6 +1364,8 @@ class Lane {
       readonly now: () => number;
       /** R857: `--isolate-tests`; adds `runSelectedOnly` to every request. */
       readonly isolateTests: boolean;
+      /** R890: the `testIsolation` of every request. */
+      readonly testIsolation: "test" | "codeunit";
     },
   ) {
     this.cwd = where.scratchCwd;
@@ -1389,7 +1398,7 @@ class Lane {
     return {
       command: "runTests",
       sourcePaths: [this.realActive ?? resolve(this.activeDir()), this.where.testSource()],
-      testIsolation: SERVE_TEST_ISOLATION,
+      testIsolation: this.where.testIsolation,
       ...(this.where.isolateTests ? { runSelectedOnly: true } : {}),
     };
   }
@@ -1434,7 +1443,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   readonly killsMustReproduce = true;
   /** R857: `--isolate-tests`; see `ExecutionBackend.isolatesTests`. */
   get isolatesTests(): boolean {
-    return this.cfg.isolateTests === true;
+    return this.cfg.isolateTests === true || this.methodIsolation;
+  }
+  /** R890: see `ExecutionBackend.methodIsolation`. */
+  get methodIsolation(): boolean {
+    return this.cfg.isolation === "method";
   }
   /** R857: `callId`'s table, both ways. Never reset: an id means one test for the whole session. */
   private readonly isolatedIds = new Map<string, number>();
@@ -1705,6 +1718,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       testSource: () => this.realTestDir ?? resolve(this.cfg.testDir),
       now: this.now,
       isolateTests: this.isolatesTests,
+      testIsolation: this.methodIsolation ? "codeunit" : SERVE_TEST_ISOLATION,
     });
   }
 
@@ -2765,6 +2779,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       alRunnerPath: absToolPath(this.cfg.alRunnerPath),
       codeunitId: o.id,
       ...(o.onlyTest !== undefined ? { onlyTest: o.onlyTest } : {}),
+      ...(this.methodIsolation ? { isolation: "codeunit" as const } : {}),
       stopSeconds: o.stopSeconds,
       packagesDir: resolve(this.cfg.packagesDir),
       bcVersion: this.cfg.bcVersion,
