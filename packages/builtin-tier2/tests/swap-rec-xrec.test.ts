@@ -107,6 +107,18 @@ describe("swapRecXRec", () => {
     });
   }
 
+  // R883: `xRec.Validate(Rec."X", V)` is AL0166 too: the receiver of a call whose field argument is
+  // QUALIFIED is refused. Revert: drop the `isReceiverOfQualifiedFieldCall` line in `plan`.
+  const receivers = (specs: ReturnType<typeof specsFor>) =>
+    specs.map((s) => s.before.text).filter((t) => /^x?Rec\.(Validate|CalcFields)$/i.test(t));
+  it("refuses the receiver of a call whose field argument is qualified", () => {
+    expect(receivers(specsFor(triggerWith(`Rec.Validate(Rec.Amount, 1);`)))).toEqual([]);
+    expect(receivers(specsFor(triggerWith(`Rec.CalcFields(Amount, Rec.Amount);`)))).toEqual([]);
+  });
+  it("keeps the receiver swappable when the field argument is unqualified", () => {
+    expect(receivers(specsFor(triggerWith(`Rec.Validate(Amount, 1);`)))).toEqual(["Rec.Validate"]);
+  });
+
   it("keeps the VALUE argument of Validate and SetRange swappable", () => {
     const specs = specsFor(
       triggerWith(`Rec.Validate(Amount, xRec.Amount); Rec.SetRange(Amount, xRec.Amount);`),
