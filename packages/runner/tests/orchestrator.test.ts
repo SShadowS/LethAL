@@ -6549,6 +6549,37 @@ describe("runSession — Layer 5A deployment identity", () => {
     );
     store.close();
   });
+
+  // R886: the v3 sidecar and R885's demo-data switch are verdict inputs the project's files do not
+  // show. A resume across a change of either is refused by name; the same values resume.
+  test("R886: a resume under another sidecar or demo-data setting is refused by name; the same settings resume", async () => {
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.testDir, "app.json"), testAppJson());
+    const SIDECAR = "a".repeat(64);
+    const backend = (inputs: { dotnetSidecar: string; downloadDemoData: boolean }) =>
+      Object.assign(new PhaseBackend(), servesTestApp(), { resumeInputs: async () => inputs });
+    const was = { dotnetSidecar: SIDECAR, downloadDemoData: true };
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend: backend(was), store, ...dirs, selectorIds });
+    const run = store.db.query("SELECT id FROM runs LIMIT 1").get() as { id: number };
+    store.db.run("UPDATE runs SET finished_at = NULL WHERE id = ?", [run.id]);
+    const resume = (inputs: typeof was, how: "last" | number) =>
+      runSession({ backend: backend(inputs), store, ...dirs, selectorIds, resume: how });
+    expect((await resume(was, run.id)).validity.caveats).toContain("resumed");
+    store.db.run("UPDATE runs SET finished_at = NULL WHERE id = ?", [run.id]);
+    for (const how of [run.id, "last"] as const) {
+      await expect(resume({ ...was, dotnetSidecar: "none" }, how)).rejects.toThrow(
+        new RegExp(`dotnetSidecar changed from ${SIDECAR} to none.*R886`),
+      );
+      await expect(resume({ ...was, downloadDemoData: false }, how)).rejects.toThrow(
+        /downloadDemoData changed from true to false.*R886/,
+      );
+    }
+    // A run that recorded nothing (before this change) cannot prove its settings: refused, by name.
+    store.db.run("UPDATE runs SET resume_inputs = NULL WHERE id = ?", [run.id]);
+    await expect(resume(was, run.id)).rejects.toThrow(/did not record its al-runner-v3 settings/);
+    store.close();
+  });
 });
 
 // ————————————————————————————————————————————————————————————————————————

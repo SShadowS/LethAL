@@ -187,8 +187,9 @@ none is passed. A path you name that does not exist is refused (`al-runner-v3-do
 yourself: `dotnet publish` of `tools/dotnet-sidecar` (Release, with an output folder) in al-runner's source at the
 same commit as your binary (the sidecar is not in the release files), run from a folder without the source's
 `global.json` pin if your SDK is newer than 8. The sidecar needs a .NET 8 (or newer) runtime to run.
-`doctor` prints the sidecar in the `al-runner-v3` check; a missing one is a `WARNING`, not a failure. The key is not
-part of a run's resume fingerprint: do not `--resume` a run across a change of it. The project's own gates set `dotnetSidecar: false`.
+`doctor` prints the sidecar in the `al-runner-v3` check; a missing one is a `WARNING`, not a failure. A run records the
+sidecar it used (the dll's sha256, or `none`) and `downloadDemoData`; `--resume` and `--resume-run` refuse a run
+whose record differs, or is missing (a v3 run from before R886), and say which setting changed from what to what. The project's own gates set `dotnetSidecar: false`.
 A run prints one line, `[lethal] al-runner: <path> (<version>)`, naming the binary it used. Full steps:
 [README](../README.md#running-without-a-bc-server-the-al-runner-v3-backend).
 

@@ -166,6 +166,7 @@ import {
 import { assertManifestObjectsDeclared, readManifestObjectKeys } from "./line-map";
 import { type SpawnFn, absToolPath, defaultSpawn } from "./publisher";
 import { assertResourceSelectorRuntime, installResourceSelector } from "./resource-selector";
+import type { ResumeInputs } from "./store";
 import {
   TestAppError,
   stageTestProject,
@@ -1970,6 +1971,18 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * its `.gated`.
    */
   private sidecarPath: string | undefined;
+
+  /**
+   * R886: the settings a `--resume` must find unchanged: the sidecar this session passes (its
+   * dll's sha256, or "none") and R885's demo-data switch. Call after `status()`, which resolves
+   * the pinned default sidecar.
+   */
+  async resumeInputs(): Promise<ResumeInputs> {
+    return {
+      dotnetSidecar: this.sidecarPath === undefined ? "none" : await sha256OfFile(this.sidecarPath),
+      downloadDemoData: !this.noDownload(),
+    };
+  }
 
   /** Provenance for the run row and the report: the `--version` line and the binary's sha256. */
   async runnerBuild(): Promise<{ readonly version: string; readonly binarySha256: string }> {

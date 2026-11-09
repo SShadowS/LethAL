@@ -1218,6 +1218,24 @@ describe("R885: demo data, on the one-shot path", () => {
     expect(s.details).toContain("al-runner-v3-dotnet-sidecar-missing");
   });
 
+  test("R886: resumeInputs names the sidecar's sha256 (or none) and the demo-data switch", async () => {
+    const dll = join(await mkdtemp(join(tmpdir(), "r886-")), "AlDotNetSidecar.dll");
+    await writeFile(dll, "built");
+    const sha256 = createHash("sha256").update("built").digest("hex");
+    const l = await layout();
+    const mk = (extra: Partial<AlRunnerV3Config>) =>
+      backendOf(l, fakeV3(allPass).spawn, fakeAlc().io, extra);
+    expect(await mk({ dotnetSidecar: dll, downloadDemoData: false }).resumeInputs()).toEqual({
+      dotnetSidecar: sha256,
+      downloadDemoData: false,
+    });
+    expect(await mk({ downloadDemoData: true }).resumeInputs()).toEqual({
+      dotnetSidecar: "none",
+      downloadDemoData: true,
+    });
+    expect((await mk({ dotnetSidecar: false }).resumeInputs()).dotnetSidecar).toBe("none");
+  });
+
   test("R886: the default is the pinned build's own sidecar, used only while the file keeps its recorded sha256", async () => {
     const dir = await mkdtemp(join(tmpdir(), "r886-pin-"));
     const dll = join(dir, "dotnet-sidecar", "AlDotNetSidecar.dll");
