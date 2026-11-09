@@ -177,6 +177,18 @@ is off ...`; LethAL shows that as the warning `al-runner-v3-test-data-off` (once
 `.alpackages`. Before the first call LethAL prints `al-runner may download BC <build> demo data ...` when
 `cacheDir` holds no backup for `bcVersion`, and the download warning records the file's size and sha256 (a
 re-published build shows as a changed hash). The project's own gates set `downloadDemoData: false`.
+**The .NET sidecar (R886).** al-runner runs .NET types (`System.TimeZoneInfo`, `System.Uri`, `DateTimeOffset`, ...)
+in a helper process, the sidecar. Without it, a test that reaches such a type is refused (`dotnet-unavailable`). LethAL
+passes al-runner's sidecar switch with that dll to every al-runner process, one-shot and serve, when `alRunnerV3.dotnetSidecar` names a
+file; `false` passes nothing. With the key absent, LethAL uses the sidecar the update script built beside the pinned
+build (`<build folder>/dotnet-sidecar/AlDotNetSidecar.dll`, named in `.gated`), but only while the file still has the
+sha256 `.gated` recorded; if it is missing or changed you get the warning `al-runner-v3-dotnet-sidecar-unusable` and
+none is passed. A path you name that does not exist is refused (`al-runner-v3-dotnet-sidecar-missing`). To build one
+yourself: `dotnet publish` of `tools/dotnet-sidecar` (Release, with an output folder) in al-runner's source at the
+same commit as your binary (the sidecar is not in the release files), run from a folder without the source's
+`global.json` pin if your SDK is newer than 8. The sidecar needs a .NET 8 (or newer) runtime to run.
+`doctor` prints the sidecar in the `al-runner-v3` check; a missing one is a `WARNING`, not a failure. The key is not
+part of a run's resume fingerprint: do not `--resume` a run across a change of it. The project's own gates set `dotnetSidecar: false`.
 A run prints one line, `[lethal] al-runner: <path> (<version>)`, naming the binary it used. Full steps:
 [README](../README.md#running-without-a-bc-server-the-al-runner-v3-backend).
 

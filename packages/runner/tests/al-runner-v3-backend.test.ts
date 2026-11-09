@@ -37,6 +37,7 @@ import {
   WINDOW_BOUND_CAVEAT,
   decodeV3Rows,
   exit6Kind,
+  resolveDotnetSidecar,
   stopSecondsOf,
   v3CallArgv,
   v3CallDeadlineMs,
@@ -1196,6 +1197,51 @@ describe("R885: demo data, on the one-shot path", () => {
     expect(await callArgv({ downloadDemoData: false })).toContain("--no-download");
     expect(await callArgv({ downloadDemoData: true })).not.toContain("--no-download");
     expect((await callArgv({})).includes("--no-download")).toBe(!V3_DOWNLOAD_DEMO_DATA_DEFAULT);
+  });
+
+  test("R886: --dotnet-sidecar <dll> is on the call when dotnetSidecar names a file, and not when it is unset or false", async () => {
+    const dll = join(await mkdtemp(join(tmpdir(), "r886-")), "AlDotNetSidecar.dll");
+    await writeFile(dll, "x");
+    const on = await callArgv({ dotnetSidecar: dll });
+    expect(on[on.indexOf("--dotnet-sidecar") + 1]).toBe(dll);
+    expect(await callArgv({})).not.toContain("--dotnet-sidecar");
+    expect(await callArgv({ dotnetSidecar: false })).not.toContain("--dotnet-sidecar");
+  });
+
+  test("R886: a named sidecar that is missing refuses the session by name", async () => {
+    const l = await layout();
+    const b = backendOf(l, fakeV3(allPass).spawn, fakeAlc().io, {
+      dotnetSidecar: "/nope/AlDotNetSidecar.dll",
+    });
+    const s = await b.status();
+    expect(s.ok).toBe(false);
+    expect(s.details).toContain("al-runner-v3-dotnet-sidecar-missing");
+  });
+
+  test("R886: the default is the pinned build's own sidecar, used only while the file keeps its recorded sha256", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "r886-pin-"));
+    const dll = join(dir, "dotnet-sidecar", "AlDotNetSidecar.dll");
+    await mkdir(join(dir, "dotnet-sidecar"));
+    await writeFile(dll, "built");
+    const sha256 = createHash("sha256").update("built").digest("hex");
+    const gated = { version: "v", binarySha256: "b", lethalCommit: "c" };
+    const bin = join(dir, "al-runner");
+    const row = { ...gated, dotnetSidecar: { file: "dotnet-sidecar/AlDotNetSidecar.dll", sha256 } };
+    expect(await resolveDotnetSidecar(undefined, bin, row)).toEqual({ path: dll });
+    // The config wins over the row; false switches it off.
+    const other = join(dir, "other.dll");
+    await writeFile(other, "o");
+    expect(await resolveDotnetSidecar(other, bin, row)).toEqual({ path: other });
+    expect(await resolveDotnetSidecar(false, bin, row)).toEqual({});
+    // No sidecar in the row: nothing.
+    expect(await resolveDotnetSidecar(undefined, bin, gated)).toEqual({});
+    // A changed file is warned about, never passed.
+    await writeFile(dll, "tampered");
+    const changed = await resolveDotnetSidecar(undefined, bin, row);
+    expect(changed.path).toBeUndefined();
+    expect(changed.warning).toContain("not used");
+    await rm(dll);
+    expect((await resolveDotnetSidecar(undefined, bin, row)).warning).toContain("missing");
   });
 
   const notices = async (stderr: string | undefined, extra: Partial<AlRunnerV3Config> = {}) => {

@@ -1168,6 +1168,18 @@ describe("R885: demo data, on the serve path", () => {
     expect(on.serve.daemons[0] ?? []).not.toContain("--no-download");
   });
 
+  test("R886: the daemon argv carries --dotnet-sidecar <dll> only when dotnetSidecar names a file", async () => {
+    const dll = join(await mkdtemp(join(tmpdir(), "r886-")), "AlDotNetSidecar.dll");
+    await writeFile(dll, "x");
+    const on = (await readyRig({ mutants: ["M0001"], extra: { dotnetSidecar: dll } })).serve
+      .daemons[0];
+    expect(on?.[(on?.indexOf("--dotnet-sidecar") ?? -2) + 1]).toBe(dll);
+    for (const extra of [{}, { dotnetSidecar: false as const }]) {
+      const off = await readyRig({ mutants: ["M0001"], extra });
+      expect(off.serve.daemons[0] ?? []).not.toContain("--dotnet-sidecar");
+    }
+  });
+
   test("the test-data-off note on the daemon's stderr warns once, naming the cacheDir key", async () => {
     const { seen, r } = await run({ cacheDir: "/c" }, `${OFF}\n${OFF}`);
     const codes = seen.map(([c]) => c);

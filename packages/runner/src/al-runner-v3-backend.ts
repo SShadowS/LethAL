@@ -23,7 +23,7 @@
  * each mutant's group vouched for by an echo test (`al-runner-v3-entries.ts`).
  */
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, openSync, readSync, readdirSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readSync, readdirSync, statSync } from "node:fs";
 import {
   cp,
   mkdir,
@@ -95,9 +95,12 @@ import {
 } from "./al-runner-v3-entries";
 import {
   AlRunnerV3UngatedBuildError,
+  type GatedBuild,
   V3_NO_SERVE_ENTRIES,
   checkGated,
+  pinnedSidecar,
   resolveV3Binary,
+  sha256OfFile,
   v3InstallHint,
 } from "./al-runner-v3-pin";
 import {
@@ -587,6 +590,12 @@ export interface AlRunnerV3Config {
    * `--no-download`. Absent: `V3_DOWNLOAD_DEMO_DATA_DEFAULT`. Gates set `false`.
    */
   readonly downloadDemoData?: boolean;
+  /**
+   * R886: `--dotnet-sidecar <dll>` for every al-runner call, one-shot and serve. A path: that file
+   * (refused by name when missing). Absent: the pinned build's own sidecar when its `.gated` names
+   * one and the file still has that sha256 (else a warning and none). `false`: none; gates set this.
+   */
+  readonly dotnetSidecar?: string | false;
   readonly selectorObjectId: number;
   readonly alcPath: string;
   readonly coverage?: "al-runner" | "none";
@@ -804,6 +813,41 @@ export function v3RowVerdict(
   );
 }
 
+/** R886: the file `alRunnerV3.dotnetSidecar` names, absolute; refused by name when it is missing. */
+export function namedSidecar(configured: string): string {
+  const path = resolve(configured);
+  if (!existsSync(path))
+    throw new Error(
+      `al-runner-v3-dotnet-sidecar-missing: "alRunnerV3.dotnetSidecar" is ${path}, which does not exist (R886). Fix the path, or set it to false.`,
+    );
+  return path;
+}
+
+/**
+ * R886: the sidecar for this session. `configured`: `alRunnerV3.dotnetSidecar`. A named file that
+ * is missing throws (the caller named it). With none named, the pinned build's own sidecar is used
+ * when the file exists with the sha256 `.gated` recorded; otherwise `warning` says why and none is
+ * passed (a missing or changed file must not run silently).
+ */
+export async function resolveDotnetSidecar(
+  configured: string | false | undefined,
+  alRunnerPath: string,
+  gated: GatedBuild,
+): Promise<{ readonly path?: string; readonly warning?: string }> {
+  if (configured === false) return {};
+  if (configured !== undefined) return { path: namedSidecar(configured) };
+  const pinned = pinnedSidecar(alRunnerPath, gated);
+  if (pinned === undefined) return {};
+  if (!existsSync(pinned.path))
+    return { warning: `the pinned sidecar ${pinned.path} is missing; .NET types are refused` };
+  const sha = await sha256OfFile(pinned.path);
+  return sha === pinned.sha256
+    ? { path: pinned.path }
+    : {
+        warning: `the pinned sidecar ${pinned.path} has sha256 ${sha}, not the ${pinned.sha256} .gated recorded; not used`,
+      };
+}
+
 /** The argv of one call (T5): one `--codeunit`, `--coverage-json` unless `coverageJson` is absent
  *  (R762 A: an unmutated call that asked for no coverage), no name selection. */
 export function v3CallArgv(a: {
@@ -814,6 +858,8 @@ export function v3CallArgv(a: {
   readonly bcVersion: string;
   /** R885: pass `--no-download`. Absent: v3 may download the demo data (its default). */
   readonly noDownload?: boolean;
+  /** R886: `--dotnet-sidecar <dll>`. Absent: not passed. */
+  readonly dotnetSidecar?: string;
   readonly symbols: readonly string[];
   readonly coverageJson?: string;
   readonly activeDir: string;
@@ -837,6 +883,7 @@ export function v3CallArgv(a: {
     "--bc-version",
     a.bcVersion,
     ...(a.noDownload === true ? ["--no-download"] : []),
+    ...(a.dotnetSidecar !== undefined ? ["--dotnet-sidecar", a.dotnetSidecar] : []),
     ...a.symbols.flatMap((s) => ["--define", s]),
     ...(a.coverageJson !== undefined ? ["--coverage-json", a.coverageJson] : []),
     a.activeDir,
@@ -1629,6 +1676,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   ) {
     if (cfg.selectorMode === "resource") throw new AlRunnerV3ResourceSelectorRefusedError();
     this.cfg = { ...cfg, alRunnerPath: resolveV3Binary(cfg.alRunnerPath) };
+    if (typeof cfg.dotnetSidecar === "string") this.sidecarPath = resolve(cfg.dotnetSidecar); // R886
     this.speculateOn = cfg.speculateBaseline ?? readSpeculateBaseline();
     // R761: a default transport starts one-shot-safe; `decideTransport` turns serve on, before the
     // first deploy (the staged batch differs by transport) and the first v3 process.
@@ -1703,6 +1751,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** `--version` must be a v3 build and, when pinned, the binary must be the pinned bytes. */
   async status(): Promise<BackendStatus> {
     this.preRunDemoLine(); // R885
+    if (typeof this.cfg.dotnetSidecar === "string") {
+      try {
+        namedSidecar(this.cfg.dotnetSidecar); // R886: the caller named it, so a missing file refuses
+      } catch (e) {
+        return { ok: false, details: (e as Error).message };
+      }
+    }
     this.dropPair();
     this.pairStore.clear();
     const res = await this.spawn([this.cfg.alRunnerPath, "--version"], this.cacheEnv()).catch(
@@ -1747,6 +1802,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
       binarySha256 = gated.binarySha256;
       gatedWarnFacts = gated.warnFacts;
+      // R886: not a gate input; the contract probe below runs without it.
+      const sidecar = await resolveDotnetSidecar(
+        this.cfg.dotnetSidecar,
+        this.cfg.alRunnerPath,
+        gated,
+      ).catch((e: unknown) => e as Error);
+      if (sidecar instanceof Error) return { ok: false, details: sidecar.message };
+      this.sidecarPath = sidecar.path;
+      if (sidecar.warning !== undefined)
+        this.notify("al-runner-v3-dotnet-sidecar-unusable", `[lethal] ${sidecar.warning} (R886)`);
       // M1: a session trusts leg C's gate-only facts from this record instead of re-measuring them.
       gateRecord =
         this.cfg.candidate === true
@@ -1899,6 +1964,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
 
   private build: { readonly version: string; readonly binarySha256: string } | undefined;
   private announced = false;
+  /**
+   * R886: the `--dotnet-sidecar` file of this session. A named file is set at construction (a
+   * missing one refuses in `status()`); the pinned build's own is set by `status()`, which reads
+   * its `.gated`.
+   */
+  private sidecarPath: string | undefined;
 
   /** Provenance for the run row and the report: the `--version` line and the binary's sha256. */
   async runnerBuild(): Promise<{ readonly version: string; readonly binarySha256: string }> {
@@ -2685,6 +2756,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       packagesDir: resolve(this.cfg.packagesDir),
       bcVersion: this.cfg.bcVersion,
       noDownload: this.noDownload(),
+      ...(this.sidecarPath !== undefined ? { dotnetSidecar: this.sidecarPath } : {}),
       symbols: this.cfg.preprocessorSymbols ?? [],
       ...(o.coverageJson !== undefined ? { coverageJson: resolve(o.coverageJson) } : {}),
       activeDir: o.activeDir,
@@ -3779,6 +3851,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       "--bc-version",
       this.cfg.bcVersion,
       ...(this.noDownload() ? ["--no-download"] : []),
+      ...(this.sidecarPath !== undefined ? ["--dotnet-sidecar", this.sidecarPath] : []),
     ]);
     this.stats.daemons += 1;
     const daemon: Daemon = { server, dirty: false };

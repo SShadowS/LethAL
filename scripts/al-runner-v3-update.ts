@@ -69,7 +69,7 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import {
   type V3LegOutcome,
   V3_GATE_LEGS,
@@ -160,6 +160,41 @@ export interface UpdateDeps {
   publishEntries(entries: readonly GatedBuildEntry[]): Promise<PublishResult>;
   /** R814: the committed gated builds this checkout ships (`gatedBuilds`). */
   listedBuilds(): readonly GatedBuildEntry[];
+  /**
+   * R886: builds the .NET sidecar of al-runner commit `commit` into the new, empty `outDir`;
+   * returns the dll's path. Throws when it cannot. Optional: absent, no sidecar is tried (and no
+   * field is written). Run AFTER the gate passed; a throw never changes the outcome.
+   */
+  buildSidecar?(commit: string, outDir: string): Promise<string>;
+}
+
+/** R886: the folder of a build's sidecar, beside its binary. */
+export const SIDECAR_DIR = "dotnet-sidecar";
+
+/**
+ * R886: builds the sidecar into `<dest>/dotnet-sidecar` and returns the `.gated` fields: its file
+ * (relative to `dest`) and sha256, or a note saying why not. Never throws.
+ */
+export async function sidecarFields(
+  deps: UpdateDeps,
+  dest: string,
+  version: string,
+): Promise<Pick<GatedBuild, "dotnetSidecar" | "dotnetSidecarNote">> {
+  if (deps.buildSidecar === undefined) return {};
+  const out = join(dest, SIDECAR_DIR);
+  try {
+    // A new, empty folder every time: a failed earlier try must not leave half a build to pick up.
+    await rm(out, { recursive: true, force: true });
+    await mkdir(out, { recursive: true });
+    const dll = await deps.buildSidecar(commitOfVersion(version), out);
+    const sha256 = await sha256OfFile(dll);
+    await deps.log(`${deps.now()} ${version}: .NET sidecar built, sha256 ${sha256}`);
+    return { dotnetSidecar: { file: relative(dest, dll), sha256 } };
+  } catch (err) {
+    const note = `sidecar build failed: ${String(err)}`.slice(0, 400);
+    await deps.log(`${deps.now()} ${version}: ${note} (the build still gates)`);
+    return { dotnetSidecarNote: note };
+  }
 }
 
 /** R814: what `publishEntries` did: ids now on master, and rows refused, each by name. */
@@ -675,7 +710,14 @@ export async function gateOne(
     }
     // R612 M-2: this gate's warn-fact readings, so a session shows what the gate read.
     const warnFacts = await receiptWarnFacts(receipt);
+    // R886: after the pass, never before: a sidecar that fails to build cannot change the outcome.
+    // A new build gets one; a regate keeps `current`'s, or tries again when it has none.
+    const sidecar =
+      dirName === undefined && gated.dotnetSidecar !== undefined
+        ? { dotnetSidecar: gated.dotnetSidecar }
+        : await sidecarFields(deps, dest, version);
     const next: GatedBuild = {
+      ...sidecar,
       ...(warnFacts !== undefined ? { warnFacts } : {}),
       version,
       binarySha256: sha,
@@ -719,6 +761,12 @@ export async function gateOne(
           lethalCommit: commit,
           gatedAt: next.gatedAt ?? deps.now(),
           ...(warnFacts !== undefined ? { warnFacts } : {}),
+          ...(sidecar.dotnetSidecar !== undefined
+            ? { dotnetSidecarSha256: sidecar.dotnetSidecar.sha256 }
+            : {}),
+          ...(sidecar.dotnetSidecarNote !== undefined
+            ? { dotnetSidecarNote: sidecar.dotnetSidecarNote }
+            : {}),
         };
         await writeFile(ledgerPath(root), `${JSON.stringify(row)}\n`, { flag: "a" });
       } else {
@@ -1439,6 +1487,55 @@ export function realDeps(root = ROOT): UpdateDeps {
     publishEntries: (entries) =>
       publishToMaster(entries, { repo: dirname(import.meta.dir), worktree: PIN_WORKTREE }),
     listedBuilds: gatedBuilds,
+    // R886: al-runner ships the sidecar as source only (tools/dotnet-sidecar), not in any release
+    // or edge asset. Fetch that folder at the build's commit, publish it with the SDK, and run
+    // nothing from inside the download: every path is an argument, the cwd is a separate empty dir.
+    buildSidecar: async (commit, outDir) => {
+      const work = await mkdtemp(join(root, ".sidecar-"));
+      try {
+        const [src, cwd] = [join(work, "src"), join(work, "cwd")];
+        await mkdir(src);
+        await mkdir(cwd);
+        const tgz = join(work, "source.tar.gz");
+        const p = Bun.spawn(["gh", "api", `repos/${REPO}/tarball/${commit}`], {
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        const [bytes, err] = [
+          await new Response(p.stdout).arrayBuffer(),
+          await new Response(p.stderr).text(),
+        ];
+        if ((await p.exited) !== 0) throw new Error(`gh api tarball ${commit}: ${err.slice(-300)}`);
+        await writeFile(tgz, new Uint8Array(bytes));
+        await run(["tar", "-xzf", tgz, "-C", src, "--wildcards", "*/tools/dotnet-sidecar/*"]);
+        const top = (await readdir(src))[0];
+        const csproj = join(src, top ?? "", "tools", "dotnet-sidecar", "AlDotNetSidecar.csproj");
+        if (!existsSync(csproj)) throw new Error(`no tools/dotnet-sidecar at ${commit}`);
+        // The cwd has no global.json (the sidecar's pins SDK 8; the container has 10).
+        await run(
+          [
+            process.env.DOTNET ?? "/opt/dotnet/dotnet",
+            "publish",
+            csproj,
+            "--configuration",
+            "Release",
+            "--output",
+            outDir,
+          ],
+          {
+            DOTNET_CLI_HOME: join(work, "home"),
+            DOTNET_NOLOGO: "1",
+            DOTNET_CLI_TELEMETRY_OPTOUT: "1",
+          },
+          cwd,
+        );
+        const dll = join(outDir, "AlDotNetSidecar.dll");
+        if (!existsSync(dll)) throw new Error("dotnet publish wrote no AlDotNetSidecar.dll");
+        return dll;
+      } finally {
+        await rm(work, { recursive: true, force: true });
+      }
+    },
   };
 }
 
