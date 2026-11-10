@@ -506,6 +506,30 @@ export function v3DefaultLegs(o: { readonly cdo: boolean; readonly tables: boole
   ];
 }
 
+/**
+ * R913: the PASS line's note for every leg of the FULL set (corpus and tables configured) that did not
+ * run, with the reason. A PASS that measured less than the full gate says so on its own line, so a
+ * receipt cannot be read as the full gate. "" when every leg of the full set ran. A leg left out by
+ * an explicit `LETHAL_ITEST_V3_LEGS` selection is named as "not selected"; one left out because its
+ * variable is unset names the variable.
+ */
+export function v3PartialNote(
+  ran: Readonly<Record<string, string>>,
+  o: { readonly cdo: boolean; readonly tables: boolean; readonly explicitLegs: boolean },
+): string {
+  const full = v3DefaultLegs({ cdo: true, tables: true });
+  const missing = full.filter((l) => !(l in ran));
+  if (missing.length === 0) return "";
+  const why = (l: string): string => {
+    if ((l === "D1" || l === "D1c") && !o.cdo) return "LETHAL_ITEST_V3_CDO unset";
+    if (l === "T" && !o.tables) return "LETHAL_ITEST_V3_TABLES unset";
+    return o.explicitLegs ? "not selected by LETHAL_ITEST_V3_LEGS" : "not run";
+  };
+  const groups = new Map<string, string[]>();
+  for (const l of missing) groups.set(why(l), [...(groups.get(why(l)) ?? []), l]);
+  return ` (PARTIAL, not the full gate: ${[...groups].map(([w, ls]) => `${ls.join(", ")} ${w}`).join("; ")})`;
+}
+
 /** Agentflow's exact subleg list: the default set with no corpus leg and no tables leg. */
 export const V3_AGENTFLOW_LEGS: readonly string[] = v3DefaultLegs({ cdo: false, tables: false });
 
