@@ -242,13 +242,43 @@ beforeAll(async () => {
 });
 
 describe("R847 skip and base set", () => {
-  test("a first publish (not installed) asks the server nothing and reads no package", async () => {
+  test("a first publish (not installed) asks only about the three injected codeunits, and reads no package when none is owned", async () => {
     const s = new Server();
     s.installed = [];
     expect(await checkObjectClashes(s.args(CODEUNIT_SRC))).toEqual([]);
     expect(s.versionCalls).toBe(1);
-    expect(s.objectCalls).toHaveLength(0);
+    // R892: one keyed read, of LethAL's own injected ids only; nothing of the target's own objects.
+    expect(s.objectCalls).toHaveLength(1);
+    expect(s.objectCalls[0]?.items).toEqual([
+      { kind: "Codeunit", id: INJ.selectorId },
+      { kind: "Codeunit", id: INJ.controlId },
+      { kind: "Codeunit", id: INJ.tableId },
+    ]);
     expect(s.fieldCalls).toHaveLength(0);
+    expect(s.fetched).toEqual([]);
+  });
+
+  test("R892: a first publish whose injected id an installed non-dependent app declares refuses by name, with the selectorIds hint", async () => {
+    const s = new Server();
+    s.installed = [];
+    s.owners.set(`Codeunit:${INJ.selectorId}`, X_DEP);
+    s.packages.set(
+      "Other App",
+      pkg(X_ID, "2.0.0.0", { Codeunits: [{ Id: INJ.selectorId, Name: "Demo Data Setup" }] }),
+    );
+    const e = (await rejection(checkObjectClashes(s.args(CODEUNIT_SRC)))) as ObjectClashError;
+    expect(e).toBeInstanceOf(ObjectClashError);
+    expect(e.findings[0]?.app.id).toBe(X_ID);
+    expect(e.message).toContain("Other App");
+    expect(e.message).toContain("set selectorIds in the config to ids no installed app declares");
+    expect(s.fetched).toEqual(["Other App"]);
+  });
+
+  test("R892: on a first publish the target's own codeunit as an owner is not a lead", async () => {
+    const s = new Server();
+    s.installed = [];
+    s.owners.set(`Codeunit:${INJ.controlId}`, TARGET_DEP);
+    expect(await checkObjectClashes(s.args(CODEUNIT_SRC))).toEqual([]);
     expect(s.fetched).toEqual([]);
   });
 

@@ -1028,7 +1028,44 @@ async function findNonDependentLeads(
     warn(`could not tell whether the target is installed (${why(err)}); ${unchecked}.`);
     return [];
   }
-  if (versions.length === 0) return []; // a first publish cannot strip
+  if (versions.length === 0) {
+    // A first publish cannot strip (R847), but the three injected codeunits are LethAL's own ids: an
+    // installed app that is not a dependent may already declare one, and BC's publish refusal would
+    // be the only signal (R892). Ask about those three ids alone; an owner is followed to its own
+    // package, which decides, and an injected clash refuses with the selectorIds hint.
+    const items: ObjectItem[] = injectedObjects(args.injected).map((o) => ({
+      kind: o.kind,
+      id: o.id,
+    }));
+    const first = { now: args.now, deadlineMs: args.now() + (nd.budgetMs ?? READ_BUDGET_MS) };
+    let read: Awaited<ReturnType<typeof readInBatches<ObjectItem, ObjectOwnerRow>>>;
+    try {
+      read = await readInBatches(items, nd.objectOwners, first);
+    } catch (err) {
+      if (err instanceof UnfilteredExtensionsQueryError) throw err;
+      warn(
+        `the keyed read of the injected codeunits failed (${why(err)}); on this first publish an installed app that declares a selectorIds id was NOT checked.`,
+      );
+      return [];
+    }
+    if (read.error !== undefined || read.unread > 0) {
+      warn(
+        `the injected codeunits were not all read (${read.error !== undefined ? why(read.error) : `${read.unread} unread`}); on this first publish an installed app that declares a selectorIds id was NOT checked for them.`,
+      );
+    }
+    const owners = new Map<string, InstalledDependent>();
+    for (const r of read.rows) {
+      if (r.outcome === "owner" && r.app !== undefined) {
+        const key = bareAppId(r.app.id);
+        if (key !== targetApp && !owners.has(key)) owners.set(key, r.app);
+      } else if (r.outcome === "unresolved") {
+        warn(
+          `injected ${r.kind} ${r.id} is declared by an installed app the server could not name; it was NOT checked on this first publish.`,
+        );
+      }
+    }
+    return [...owners.values()];
+  }
 
   // 2. Base set: the INSTALLED target's package, naming its installed version.
   let base: { objects: readonly DeclaredObject[]; members: readonly PackageMember[] } | undefined;
