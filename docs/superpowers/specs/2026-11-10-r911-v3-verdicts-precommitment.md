@@ -6,9 +6,10 @@ Evidence goes to `/coord/handoff/R-911/`. No source text from BC.History is comm
 ## Setup
 
 - **LethAL:** branch `lethal/r911` at the commit the proof runs on, recorded in each run's first line. It is built on `lethal/r907`.
-- **Apps:** BC.History PaymentPractices and BankDeposits, each with its test app, from ONE scratch tree per app, used by both runs.
+- **Apps:** BC.History PaymentPractices and VAT Group Management, each with its test app, from ONE scratch tree per app, used by both runs.
+  - **Amendment 1, before any BC run:** VAT Group Management replaces BankDeposits. BankDeposits' v3 leg under `--no-client` passed no test at baseline: 70 not run and 5 failed. So the join would refuse it ("none of the tests BC refuses passed on v3"). That is a finding for the owner, not a proof input.
 - **v3 leg:** `lethal run --backend al-runner-v3` with `"alRunnerV3": { "noClient": true }`, no `--tests-only`, no narrowing, on the pinned al-runner build. Local, one heavy slot.
-- **BC leg:** `lethal run --backend bcdev --v3-verdicts <that v3 report>` on a throwaway BC 28 server without Microsoft's own copies of the two apps (kraken question `q-20261110T195756-eaeca11b`). Not a gate server.
+- **BC leg:** `lethal run --backend bcdev --v3-verdicts <that v3 report>` on a throwaway BC 28 server without Microsoft's own copies of the two apps: `bc5` (kraken questions `q-20261110T195756-eaeca11b` and `q-20261110T203601-afe9813f`). Not a gate server.
 - Each leg writes `--out`, `--progress-out` and a scratch store.
 
 ## Properties that must hold (any failure is reported as a finding, never as a pass)
