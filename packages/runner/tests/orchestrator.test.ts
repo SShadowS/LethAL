@@ -381,6 +381,8 @@ class StubBackend implements ExecutionBackend {
   reachedFor?: (mutant: string | null, ref: TestMethodRef) => boolean | undefined;
   /** R609: a baseline row's `runnerRow` (al-runner-v3's refusal), so a fake can model a refused test. */
   runnerRowFor?: (ref: TestMethodRef) => TestVerdict["runnerRow"];
+  /** R904: the backend's baseline note (v3: test data is off), when a test sets one. */
+  baselineNote?: () => string | undefined;
   constructor(
     private readonly caps: BackendCapabilities,
     private readonly script: (
@@ -8286,6 +8288,76 @@ describe("runSession — R100, the dead-baseline note reaches the report", () =>
       expect(m.failureNote).toContain(NO_GREEN_BASELINE);
       expect(m.failureNote).toContain("al-runner provision");
     }
+  });
+});
+
+describe("runSession — R904, test data off and a partly red baseline stops by name", () => {
+  const DATA_OFF =
+    "al-runner v3 says test data is off: the demo data of build 28.4.1.2 is not cached.";
+  // Two tests: OverBudgetDetected passes at baseline, ReadsDemoData passes or fails as asked.
+  const TWO_TESTS = `codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure OverBudgetDetected()
+    begin
+    end;
+
+    [Test]
+    procedure ReadsDemoData()
+    begin
+    end;
+}
+`;
+  const twoTestProject = () => makeProject(TWO_TESTS);
+  // Every mutant run fails, so a scored mutant is killed.
+  const backendWith = (secondGreen: boolean, note: string | undefined) => {
+    const backend = new StubBackend(
+      CAPS_NST,
+      (mutant, ref) =>
+        mutant !== null ? "fail" : ref.method === "ReadsDemoData" && !secondGreen ? "fail" : "pass",
+      ["IsOverBudget"],
+    );
+    backend.baselineNote = () => note;
+    return backend;
+  };
+
+  test("data off and one red baseline test: refused before any mutant, naming the data and R904", async () => {
+    const dirs = await twoTestProject();
+    const backend = backendWith(false, DATA_OFF);
+    const store = new ResultsStore(":memory:");
+    const run = runSession({ backend, store, ...dirs, selectorIds });
+    await expect(run).rejects.toThrow(
+      /1 of 2 baseline test\(s\) did not pass while al-runner v3 says test data is off/,
+    );
+    await expect(run).rejects.toThrow(/R904/);
+    // Before any mutant: only the baseline's deactivated runs happened.
+    expect(backend.activations.filter((a) => a !== null)).toEqual([]);
+  });
+
+  test("data off but an all-green baseline scores as before", async () => {
+    const dirs = await twoTestProject();
+    const report = await runSession({
+      backend: backendWith(true, DATA_OFF),
+      store: new ResultsStore(":memory:"),
+      ...dirs,
+      selectorIds,
+    });
+    expect(report.baselineGreen).toBe(true);
+    expect(report.mutants.some((m) => m.verdict === "killed")).toBe(true);
+  });
+
+  test("a partly red baseline with test data on scores as before", async () => {
+    const dirs = await twoTestProject();
+    const report = await runSession({
+      backend: backendWith(false, undefined),
+      store: new ResultsStore(":memory:"),
+      ...dirs,
+      selectorIds,
+    });
+    expect(report.baselineGreen).toBe(false);
+    expect(report.mutants.some((m) => m.verdict === "killed")).toBe(true);
   });
 });
 

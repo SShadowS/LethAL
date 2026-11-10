@@ -8060,6 +8060,15 @@ async function runSessionBody(
           }
           return undefined;
         }
+        // R904: test data off and a partly red baseline. The red tests may only need the rows the
+        // missing demo data creates, and they fail with ordinary text, so scoring the green rest
+        // would report the missing setup as survivors. Stopped by name before any mutant.
+        const dataOff = cfg.backend.baselineNote?.();
+        if (dataOff !== undefined && greenTests.length < baseline.length) {
+          throw new Error(
+            `${baseline.length - greenTests.length} of ${baseline.length} baseline test(s) did not pass while ${dataOff} Stopped before any mutant: the red tests may only need that data, and scoring against the green ones alone would count the missing setup as survivors (R904).`,
+          );
+        }
         // R58, recorded rather than discovered later: under `coverage: "fenced"` these durations
         // INCLUDE coverage-collection overhead (Start/StopApplicationCoverage plus serializing the
         // whole `Code Coverage` table) that no mutant run pays. Every mutant's budget is
