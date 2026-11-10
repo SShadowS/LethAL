@@ -629,6 +629,11 @@ export interface AlRunnerV3Config {
   readonly alcPath: string;
   readonly coverage?: "al-runner" | "none";
   readonly preprocessorSymbols?: readonly string[];
+  /**
+   * R900: alc's `/assemblyprobingpaths:` for both compiles (`ArtifactCompilerConfig`). Not passed to
+   * al-runner: its `--dotnet-assembly-dir` is a separate, runtime knob.
+   */
+  readonly assemblyProbingPaths?: readonly string[];
   /** `ALRUNNER_CACHE` for every v3 call. Absent: v3's own default. */
   readonly cacheDir?: string;
   /** Refused by name when `"resource"` (S3). */
@@ -1837,6 +1842,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         outputDir: join(cfg.instrumentedDir, "alc-out"),
         ...(cfg.preprocessorSymbols !== undefined
           ? { preprocessorSymbols: cfg.preprocessorSymbols }
+          : {}),
+        ...(cfg.assemblyProbingPaths !== undefined
+          ? { assemblyProbingPaths: cfg.assemblyProbingPaths }
           : {}),
       },
       alcIo,
@@ -3313,6 +3321,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       alcPath: this.cfg.alcPath,
       alcSha256: alcSha,
       preprocessorSymbols: this.cfg.preprocessorSymbols ?? [],
+      ...(this.cfg.assemblyProbingPaths !== undefined
+        ? { assemblyProbingPaths: this.cfg.assemblyProbingPaths }
+        : {}),
       transport: this.entries ? "serve-entries" : "one-shot",
     });
   }

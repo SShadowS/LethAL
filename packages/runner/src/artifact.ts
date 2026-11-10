@@ -2,6 +2,7 @@ import { copyFile, link, mkdir, mkdtemp, readFile, rename, rm } from "node:fs/pr
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { FLAT_NAMES_FILENAME, type MutantManifest } from "@lethal/schemata";
+import { al0451Note } from "./assembly-probing-paths";
 import type { DeploymentVerification, PublishOutcome } from "./deployment-verifier";
 import { describeThrown } from "./describe-error";
 import { defaultSpawn } from "./publisher";
@@ -284,6 +285,12 @@ export interface ArtifactCompilerConfig {
    * compile paths is worth more than supporting two here.
    */
   readonly preprocessorSymbols?: readonly string[];
+  /**
+   * R900: the folders alc searches for .NET assemblies (`resolveAssemblyProbingPaths`), passed as
+   * `/assemblyprobingpaths:A,B`. Empty or absent: the flag is omitted, as `/define` is, so a
+   * project with none keeps today's command line byte for byte.
+   */
+  readonly assemblyProbingPaths?: readonly string[];
 }
 
 export interface ArtifactIo {
@@ -365,6 +372,7 @@ export class ArtifactCompiler {
       join(this.cfg.outputDir, `${name}.${crypto.randomUUID()}.partial.app`),
     );
     let res: { exitCode: number; stdout: string; stderr: string };
+    const probing = this.cfg.assemblyProbingPaths ?? [];
     try {
       const symbols = this.cfg.preprocessorSymbols ?? [];
       res = await this.io.spawn([
@@ -374,6 +382,8 @@ export class ArtifactCompiler {
         // R101(c). Omitted entirely when nothing is configured, rather than sent empty: `/define:`
         // with no value is a different thing to say to a compiler than not saying it.
         ...(symbols.length > 0 ? [`/define:${symbols.join(",")}`] : []),
+        // R900: omitted when empty, for the same reason.
+        ...(probing.length > 0 ? [`/assemblyprobingpaths:${probing.join(",")}`] : []),
         `/out:${scratch}`,
       ]);
     } catch (err) {
@@ -390,7 +400,10 @@ export class ArtifactCompiler {
       // R219: alc names a file by its flat name in the batch; one the batch renamed is named back.
       if (err instanceof AlcCompileError) {
         const note = await flatNamesNote(projectDir);
-        if (note !== undefined) throw new AlcCompileError(`${err.message}\n${note}`);
+        // R900: an assembly alc could not find names the probing paths it was (not) given.
+        const probingNote = err.message.includes("AL0451") ? al0451Note(probing) : undefined;
+        const notes = [note, probingNote].filter((n) => n !== undefined);
+        if (notes.length > 0) throw new AlcCompileError([err.message, ...notes].join("\n"));
       }
       throw err;
     }
