@@ -50,14 +50,31 @@ describe("R905 slot class in the heavy-job guard", () => {
           `200 1 200 bun scripts/corpus-snapshot.ts snapshot --root ${root}`,
         ].join("\n"),
       );
-    const onBaseApp = heavyVerdict(ps("/work/src/BC.History/BaseApp"), 100, [], 1, false, [
+    const onBaseApp = heavyVerdict(ps("/work/src/BC.History/BaseApp"), 100, [], 2, false, [
+      "other",
       "other",
     ]);
     expect(onBaseApp.foreign.length).toBe(1);
     expect(onBaseApp.refuse).toBe(true);
-    const elsewhere = heavyVerdict(ps("/work/src/DO"), 100, [], 1, false, ["other"]);
+    const elsewhere = heavyVerdict(ps("/work/src/DO"), 100, [], 2, false, ["other", "other"]);
     expect(elsewhere.foreign.length).toBe(1);
     expect(elsewhere.refuse).toBe(false);
+  });
+  // R905 follow-up (lethal-bugs): a bare-flock holder writes no pid, so it is a held slot AND a foreign job. One job, not two.
+  describe("an untrusted (bare-flock) slot and its own process count once", () => {
+    const row = (pid: number, root: string) => `${pid} 1 ${pid} bun census.ts ${root}`;
+    const psOf = (...rows: string[]) =>
+      parsePs(["PID PPID PGID COMMAND", "1 0 1 init", "100 1 100 bun x.ts", ...rows].join("\n"));
+    test("one bare-flock job on a corpus copy leaves room for a second job", () => {
+      const v = heavyVerdict(psOf(row(200, "/work/src/DC/x")), 100, [], 1, false, [undefined]);
+      expect(v.foreign.length).toBe(1);
+      expect(v.refuse).toBe(false);
+    });
+    test("two bare-flock slots, or one plus two foreign jobs, still fill the two-job cap", () => {
+      const a = psOf(row(200, "/work/src/DC/x"), row(300, "/work/src/DC/y"));
+      expect(heavyVerdict(a, 100, [], 2, false, [undefined, undefined]).refuse).toBe(true);
+      expect(heavyVerdict(a, 100, [], 1, false, [undefined]).refuse).toBe(true);
+    });
   });
   test("three other-class slots held: a fourth is still refused (cap 3)", () => {
     expect(verdict(["other", "other", "other"]).refuse).toBe(true);

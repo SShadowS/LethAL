@@ -524,7 +524,14 @@ describe("B5 the heavy-job guard", () => {
     expect(v.foreign.map((p) => p.pid)).toEqual([800]);
   });
   test("R626: two separate itest roots are TWO jobs", () => {
-    const v = heavyVerdict(parsePs(ps([...base, ...itest(700, 1), ...itest(900, 2)])), SELF, [], 1);
+    const v = heavyVerdict(
+      parsePs(ps([...base, ...itest(700, 1), ...itest(900, 2)])),
+      SELF,
+      [],
+      1,
+      false,
+      [undefined],
+    );
     expect(v.foreign.map((p) => p.pid)).toEqual([700, 900]);
     expect(v.refuse).toBe(true);
   });
@@ -543,11 +550,20 @@ describe("B5 the heavy-job guard", () => {
       SELF,
       [],
       1,
+      false,
+      [undefined],
     );
     expect(withCorpus.foreign.length).toBe(2);
     expect(withCorpus.refuse).toBe(true);
     const lone = "800 1 800 /work/tools/al-runner/current/al-runner --server";
-    const withRunner = heavyVerdict(parsePs(ps([...base, ...itest(700, 1), lone])), SELF, [], 1);
+    const withRunner = heavyVerdict(
+      parsePs(ps([...base, ...itest(700, 1), lone])),
+      SELF,
+      [],
+      1,
+      false,
+      [undefined],
+    );
     expect(withRunner.foreign.length).toBe(2);
     expect(withRunner.refuse).toBe(true);
   });
@@ -571,7 +587,7 @@ describe("B5 the heavy-job guard", () => {
     // Lane A holds slot 2 by hand (no pid written); lane B runs an unslotted corpus job.
     const procs = parsePs(ps([...base, job(200, 200)]));
     for (const pid of [0, Number(""), Number.NaN]) {
-      const v = heavyVerdict(procs, SELF, [pid], 2);
+      const v = heavyVerdict(procs, SELF, [pid], 2, false, [undefined, undefined]);
       expect(
         v.foreign.map((p) => p.pid),
         `slot pid ${pid}`,
@@ -582,7 +598,7 @@ describe("B5 the heavy-job guard", () => {
   test("#1 a STALE slot pid (reused by another job) excludes nothing, so that job is not hidden", () => {
     // pid 200 is now an unrelated corpus job; the slot holder that wrote it is gone.
     const procs = parsePs(ps([...base, job(200, 200), job(201, 201)]));
-    const v = heavyVerdict(procs, SELF, [200], 1);
+    const v = heavyVerdict(procs, SELF, [200], 1, false, [undefined]);
     expect(v.foreign.map((p) => p.pid)).toEqual([200, 201]);
     expect(v.refuse).toBe(true);
     // A LIVE corpus-snapshot holder's children are still excluded, so they are not counted twice.
@@ -738,9 +754,12 @@ describe("B5 the heavy-job guard", () => {
       expect(v.message).not.toContain(BASEAPP_CAP);
     }
     // Held slots count toward the total: two held plus one unslotted job.
-    const v = heavyVerdict(parsePs(ps([...base, dc(200)])), SELF, [], 2, false);
+    const v = heavyVerdict(parsePs(ps([...base, dc(200)])), SELF, [], 2, false, [
+      undefined,
+      undefined,
+    ]);
     expect(v.refuse).toBe(true);
-    expect(v.message).toContain(TOTAL_CAP);
+    expect(v.message).toContain(CLASS_CAP);
   });
 
   // Real flock on temp lock files (util-linux; the tool runs in the Linux container only, so these
