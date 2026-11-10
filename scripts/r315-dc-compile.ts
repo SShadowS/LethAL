@@ -31,6 +31,7 @@ import {
   removePackageCacheCopy,
 } from "../packages/runner/src/artifact";
 import { type AlcDiag, parseAlcErrors } from "../packages/runner/src/bisect";
+import { resolveAssemblyProbingPaths } from "../packages/runner/src/assembly-probing-paths";
 import { validateSelectorIdsForProject } from "../packages/runner/src/cli";
 import { compileOnlyMutationSet } from "../packages/runner/src/compile-only-args";
 import { injectControlDependency } from "../packages/runner/src/harness";
@@ -372,7 +373,13 @@ async function main(args: Args): Promise<void> {
     controlId: args.selectorIds.controlId ?? (top ?? 0) - 1,
     tableId: args.selectorIds.tableId ?? top ?? 0,
   };
-  await validateSelectorIdsForProject(args.projectDir, selectorIds);
+  // R888: the package folder this script compiles against is where the dependencies are.
+  await validateSelectorIdsForProject(args.projectDir, selectorIds, undefined, {
+    packageDirs: [args.symbolsDir],
+  });
+  // R900: the probing paths a real run would use (the project's .vscode/settings.json, else
+  // ./.netpackages), for BOTH compiles; the batch is a scratch copy, so resolve on the project.
+  const probing = await resolveAssemblyProbingPaths(args.projectDir, undefined);
 
   await mkdir(args.outDir, { recursive: true });
   const instrDir = join(args.outDir, "instrumented");
@@ -420,7 +427,12 @@ async function main(args: Args): Promise<void> {
     const compile = (projectDir: string, cache: string, name: string) =>
       alcOutcome(() =>
         new ArtifactCompiler(
-          { alcPath, packageCachePath: cache, outputDir: scratchOut },
+          {
+            alcPath,
+            packageCachePath: cache,
+            outputDir: scratchOut,
+            assemblyProbingPaths: probing.paths,
+          },
           defaultArtifactIo,
         ).compileProject({ projectDir, packageCachePath: cache, name }),
       );

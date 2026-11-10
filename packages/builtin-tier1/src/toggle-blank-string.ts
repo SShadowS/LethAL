@@ -183,8 +183,22 @@ function oneCharacterMayBeChar(
   inner: string,
   ctx: SemanticContext,
 ): boolean {
-  if (parent.rawKind !== ALNodeKind.assignment_statement) return false;
   if (inner.replace(/''/g, "'").length !== 1) return false;
+  // R-898: a comparison with a Byte, or with an element of a Byte array (`H[1] = 'P'`), is AL0175
+  // once blanked (`Byte = ''`); with a Char it compiles, so only Byte refuses.
+  if (parent.rawKind === "comparison_expression") {
+    const other = parent.namedChildren.find(
+      (c) => c.startIndex !== literal.startIndex && c.rawKind !== "comparison_operator",
+    );
+    if (other === undefined) return false;
+    const type =
+      ctx.types.typeOf(other) ??
+      (other.rawKind === "subscript_expression"
+        ? ctx.types.typeOf(other.namedChildren[0] ?? other)
+        : null);
+    return type !== null && /(^|\bof\s+)byte$/i.test(type.trim());
+  }
+  if (parent.rawKind !== ALNodeKind.assignment_statement) return false;
   const target = parent.childForFieldName("left");
   if (target === null || target.startIndex === literal.startIndex) return false;
   if (target.rawKind === ALNodeKind.field_access) return false;
