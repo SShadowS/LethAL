@@ -2251,9 +2251,10 @@ describe("L1 (build review r1): a deadline is deadline-exceeded, never a kill; p
 describe("the CLI threads the option through (wiring)", () => {
   // M9: v3 is refused off Linux, so the Windows CI job asserts that refusal instead.
   const LINUX = process.platform === "linux";
-  const build = async (extra: Record<string, unknown>) => {
+  const build = async (extra: Record<string, unknown>, alFiles: Record<string, string> = {}) => {
     const dir = await mkdtemp(join(tmpdir(), "lethal-v3e-cli-"));
     roots.push(dir);
+    for (const [name, text] of Object.entries(alFiles)) await writeFile(join(dir, name), text);
     await writeFile(
       join(dir, "app.json"),
       JSON.stringify({ id: TARGET_ID, idRanges: [{ from: 79000, to: 79199 }], runtime: "17.0" }),
@@ -2302,6 +2303,28 @@ describe("the CLI threads the option through (wiring)", () => {
     expect((await build({})).inRunStopIsBudget).toBe(true);
     expect((await build({ transport: "serve-entries" })).inRunStopIsBudget).toBe(false);
   });
+
+  // R907: the capability the report reads. Off Linux the refusal above is already asserted.
+  test.skipIf(!LINUX)(
+    "coverage turned off for a wrapper shape names the file in the capabilities",
+    async () => {
+      const unit = `codeunit 50604 "R907 Arms"\n{\n    procedure Hit()\n    begin\n    end;\n}\n`;
+      const twoArm = `#if SYM\n${unit}#else\n${unit}#endif\n`;
+      const warn = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const off = await build({ coverage: "al-runner" }, { "Odd.Codeunit.al": twoArm });
+        expect(off.capabilities().coverage).toBe("none");
+        expect(off.capabilities().coverageOffFiles).toEqual(["Odd.Codeunit.al"]);
+        const on = await build({ coverage: "al-runner" }, { "Plain.Codeunit.al": unit });
+        expect(on.capabilities().coverage).toBe("al-runner");
+        expect("coverageOffFiles" in on.capabilities()).toBe(false);
+        const configured = await build({ coverage: "none" }, { "Odd.Codeunit.al": twoArm });
+        expect("coverageOffFiles" in configured.capabilities()).toBe(false);
+      } finally {
+        warn.mockRestore();
+      }
+    },
+  );
 });
 
 describe("timers above 2^31-1 ms (E3a's second daemon, /coord/handoff/R-635/live/run2)", () => {

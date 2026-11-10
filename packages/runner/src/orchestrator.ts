@@ -105,7 +105,6 @@ import {
   testAppHashFor,
 } from "./baseline-snapshot";
 import type { BaselineObservation, BaselineSnapshot } from "./baseline-snapshot";
-import { rewriteControlAddInPaths } from "./controladdin-paths";
 import { PublishFailedError } from "./bcdev-backend";
 import {
   MAX_ISOLATION_COMPILES,
@@ -126,6 +125,7 @@ import {
   resumableTestApp,
   sameClosedWorld,
 } from "./closed-world";
+import { rewriteControlAddInPaths } from "./controladdin-paths";
 import {
   type DependencyReportSourceRecord,
   dependencyReportReader,
@@ -331,7 +331,9 @@ import {
   scanTestPageModel,
 } from "./testpage-scan";
 import {
-  describeTestPageUnsupported,
+  type FrameSourceLookup,
+  describeTestPageRefusal,
+  frameSourceLookup,
   isTestPageNotRunMessage,
   testPageNotRunMessage,
 } from "./testpage-unsupported";
@@ -4902,6 +4904,9 @@ interface ScoreBatchInput {
   /** R738: the target's own declared object ids (`targetObjectIdsOf`), so a baseline failure on a
    *  stale target member refuses the session. Absent: no such check. */
   readonly targetObjectIds?: ReadonlySet<number>;
+  /** R909: resolves a Linux page-open frame in the test app's source and THIS batch's deployed
+   *  (instrumented) target source, whose line numbers are the ones BC counted. Absent: unnamed. */
+  readonly frameSource?: FrameSourceLookup;
   /** R192 snapshot reuse and recording, runSession only. Absent: always run, record nothing. */
   readonly snapshot?: {
     readonly batchDir: string;
@@ -5839,7 +5844,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       if (
         !bodyNeverRan &&
         didNotPassAtBaseline(b.verdict.outcome) &&
-        describeTestPageUnsupported(b.verdict.failureMessage) !== undefined
+        describeTestPageRefusal(b.verdict.failureMessage, input.frameSource) !== undefined
       ) {
         classification.push("tests-testpage-unsupported");
       }
@@ -6355,7 +6360,8 @@ async function runSessionBody(
   // the per-test digests `lethal verify` compares against, recorded on the run row below.
   // (The parser was initialised before discovery, R403.)
   // R-371: ONE parse of the test sources, shared by the scan and the digests.
-  const testModel = buildTestAppModel(await readTestAppSources(cfg.testDir));
+  const testFiles = await readTestAppSources(cfg.testDir);
+  const testModel = buildTestAppModel(testFiles);
   const testPageRefused: ReadonlyMap<string, string> = isBcdev(caps.kind)
     ? scanTestPageModel(testModel, tests)
     : new Map();
@@ -8050,6 +8056,14 @@ async function runSessionBody(
       // and before any mutant is scored. Selection read the original source, which can decide
       // where the instrumented text does not.
       const batchRefused = await withBackendRefusals(cfg.backend, coverageRefused);
+      // R909: BC counts lines in the INSTRUMENTED target (wrap and lift add lines), so a Linux
+      // page-open frame is resolved in this batch's deployed source plus the test app's.
+      const frameSource = frameSourceLookup([
+        ...testFiles.map((f) => f.text),
+        ...[...(await readTargetSource(batchDir))]
+          .filter(([p]) => p.toLowerCase().endsWith(".al"))
+          .map(([, b]) => b.toString("utf8")),
+      ]);
       const select = (baseline: readonly BaselineRow[]): CoveringPlan | undefined => {
         const greenTests = baseline.filter((b) => b.verdict.outcome === "pass");
         if (greenTests.length < baseline.length) baselineGreenOverall = false;
@@ -8127,7 +8141,7 @@ async function runSessionBody(
           if (refusal !== undefined) {
             refusedThisBatch.set(name, refusal);
           }
-          const testPage = describeTestPageUnsupported(b.verdict.failureMessage);
+          const testPage = describeTestPageRefusal(b.verdict.failureMessage, frameSource);
           if (testPage !== undefined) {
             testPageThisBatch.set(name, testPage);
           }
@@ -8532,6 +8546,7 @@ async function runSessionBody(
           testArmEvidence.kind === "compiled" &&
           testArmEvidence.from === "published-package",
         targetObjectIds: sessionTargetIds,
+        frameSource,
         snapshot: {
           batchDir,
           testDir: cfg.testDir,

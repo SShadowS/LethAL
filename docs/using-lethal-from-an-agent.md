@@ -154,7 +154,8 @@ and `--tests-only` and `--exclude-test` give `tests-narrowed`. `--exclude-test` 
 project holding an `#if`-wrapped object file of a shape the index has no rule for (two-arm,
 `#elif`, nested, or a multi-object file holding a wrapper) runs with coverage off, with a
 warning naming the file (multi-object and single-wrapper files keep coverage on, R602), and without coverage an unreached mutant comes back survived rather than
-no-coverage. Do not quote a score from it. Its gate is `itest:alrunner-v3`
+no-coverage. Such a report carries the caveat `al-runner-v3-coverage-off` and names the files in
+`coverageOffFiles` (R907). Do not quote a score from it. Its gate is `itest:alrunner-v3`
 ([docs/gates/alrunner-v3.md](gates/alrunner-v3.md)).
 
 An `al-runner-v3` config needs ONLY the `alRunnerV3` section (`packagesDir`, and `bcVersion` as four
@@ -342,7 +343,7 @@ code.
 Each surface below is versioned separately and has a published JSON Schema in [`../schemas/`](../schemas/):
 
 - the report: [../schemas/report-v3.schema.json](../schemas/report-v3.schema.json)
-- `lethal explain`: [../schemas/explain-v23.schema.json](../schemas/explain-v23.schema.json)
+- `lethal explain`: [../schemas/explain-v24.schema.json](../schemas/explain-v24.schema.json)
 - the event stream: [../schemas/stream-v1.schema.json](../schemas/stream-v1.schema.json)
 - `lethal doctor --json`: [../schemas/doctor-v1.schema.json](../schemas/doctor-v1.schema.json),
   as the `data` of [../schemas/cli-envelope-v1.schema.json](../schemas/cli-envelope-v1.schema.json)
@@ -370,7 +371,8 @@ enforced.
 
 `schemaVersion: 3`. The top level carries `counts`, `mutationScore`, `validity` and `mutants`.
 `validity` carries `reliability`, `scoreDescribes` and `caveats`. `coverageMode` names the coverage
-mode the run used; a report written before it existed has none.
+mode the run used; a report written before it existed has none. `coverageOffFiles` is present only
+when LethAL itself turned coverage off for the run.
 
 #### Report notes (guidance)
 
@@ -389,7 +391,7 @@ some mutants at all, and they read `no-coverage` rather than `survived`.
 
 ### `lethal explain report.json`: what it MEANS (checked)
 
-`explainSchemaVersion: 23`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
+`explainSchemaVersion: 24`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
 `survivorSelection` and `markIdentityScheme`. Each `survivors` row carries `executionProven`,
 `reach` and `markKey`. The top level can also carry `markKeysStale`. Each `survivors` row can
 also carry `mark`. Explain writes it for a report that records its numbering facts.

@@ -325,6 +325,11 @@ export interface BackendCapabilities {
    */
   readonly kind: BackendKind;
   readonly coverage: CoverageMode;
+  /**
+   * R907: the files that made LethAL turn coverage off for this whole run (v3 only). Non-empty when
+   * present; absent when coverage is on or was configured off.
+   */
+  readonly coverageOffFiles?: readonly string[];
   readonly deploy: "publish" | "none";
   readonly isolation: "session" | "full-reset";
   readonly authoritative: boolean;
