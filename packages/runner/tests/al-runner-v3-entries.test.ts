@@ -5390,11 +5390,80 @@ describe("R896: isolation auto, per codeunit", () => {
     methodPass = true;
     await baseline(r.b, SUITE1);
     expect(r.b.survivorNote([ref("A")])).toBeUndefined();
-    // Reverted to test: the orchestrator notes the test rows again.
+    // Reverted to test: the test set comes back (build review 1); re-noting the rows adds nothing.
     choose(r.b, CU, "test");
-    expect(r.b.survivorNote([ref("A")])).toBeUndefined();
+    const back = r.b.survivorNote([ref("A")]);
+    expect(back).toContain(`Tests${CU}.B`);
     r.b.noteReusedBaseline(SUITE1.map((t, i) => ({ ref: t, verdict: testRows[i] as TestVerdict })));
-    expect(r.b.survivorNote([ref("A")])).toContain(`Tests${CU}.B`);
+    expect(r.b.survivorNote([ref("A")])).toBe(back);
+  });
+
+  test("build review 4: a mixed prefetch of 2 groups, one per mode, with a uniform refusal is batch-refused, as an unsplit one", async () => {
+    // Every mutant entry and echo refused with one unlisted reason; the warm-ups (NONE) are clean.
+    const rows: RowsFn = (m, cu, d, n) =>
+      m.startsWith("M")
+        ? (SUITE_METHODS[cu] ?? []).map((method) => ({
+            method,
+            status: "error" as const,
+            notRun: true,
+            message: UNLISTED,
+          }))
+        : allPass(m, cu, d, n);
+    const echo: Echo = (m, d, n) =>
+      m.startsWith("M")
+        ? { method: "Echo", status: "error", notRun: true, message: UNLISTED }
+        : goodEcho(m, d, n);
+    const r = await rig({
+      extra: AUTO,
+      suite: SUITE2,
+      serve: { rows, echo },
+      oneShotRows: allPass,
+    });
+    await baseline(r.b, SUITE2);
+    choose(r.b, CU, "method");
+    await baseline(r.b, SUITE2);
+    const err = await r.b
+      .prefetchMutants([
+        { mutantId: "M0001", refs: SUITE1 }, // CU, on method
+        { mutantId: "M0002", refs: [ref("C", CU2)] }, // CU2, on test
+      ])
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AlRunnerV3EntriesRefusedError);
+    expect(String(err)).toContain("al-runner-v3-entries-batch-refused");
+    expect(String(err)).toContain(UNLISTED);
+  });
+
+  test("build review 1: a tie reverted to test keeps the refusals of tests outside the verdict rows", async () => {
+    let methodPass = false;
+    // A fails in both modes (a tie); B, outside the session's suite, is refused by the whole call.
+    const rows: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        x.method === "A"
+          ? { ...x, status: "fail" as const, message: "red" }
+          : x.method === "B" && !methodPass
+            ? { ...x, status: "error" as const, notRun: true, message: COMMIT }
+            : x,
+      );
+    const only = [ref("A")];
+    const make = async (isolation: "auto" | "test") => {
+      const r = await rig({ extra: { isolation }, serve: { rows }, suite: SUITE1 });
+      r.b.useSessionTests(only);
+      methodPass = false;
+      return r;
+    };
+    const forced = await make("test");
+    await baseline(forced.b, only);
+    const want = forced.b.survivorNote(only);
+    expect(want).toContain(`Tests${CU}.B`);
+    const r = await make("auto");
+    const testRows = await baseline(r.b, only);
+    choose(r.b, CU, "method");
+    methodPass = true;
+    const methodRows = await baseline(r.b, only);
+    expect(methodRows.map((v) => v.outcome)).toEqual(testRows.map((v) => v.outcome)); // a tie
+    choose(r.b, CU, "test");
+    r.b.noteReusedBaseline(only.map((t, i) => ({ ref: t, verdict: testRows[i] as TestVerdict })));
+    expect(r.b.survivorNote(only)).toBe(want);
   });
 
   test("the bracket: a method pass inside it carries coverage; the same calls outside carry none", async () => {

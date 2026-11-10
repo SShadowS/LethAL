@@ -5522,7 +5522,12 @@ async function chooseIsolationAuto(
   for (const b of baseline) {
     if (!candidates.includes(b.ref.codeunitId)) continue;
     const { verdict, stop } = await dispatchUnmutated(scope, b.ref);
-    if (stop) return; // the session stops (`safety`); nothing is chosen or reported
+    if (stop) {
+      // The session stops (`safety`); nothing is chosen, stored or reported. Build review 3: every
+      // candidate goes back to `test`, so the backend matches the `test` rows `baseline` holds.
+      for (const cu of candidates) choose(cu, "test");
+      return;
+    }
     methodVerdicts.set(testKeyOf(b.ref), verdict);
   }
   const rows: IsolationChoiceRow[] = [];

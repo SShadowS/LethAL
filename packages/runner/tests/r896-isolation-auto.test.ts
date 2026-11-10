@@ -134,6 +134,10 @@ class AutoStub implements ExecutionBackend {
       durationMs: 1,
       ...(outcome === "pass" ? { measuredDurationMs: 1 } : {}),
       ...(outcome === "fail" ? { failureMessage: `${ref.method} failed under ${mode}` } : {}),
+      // An `error` here is a run the server may still be executing: the baseline stops.
+      ...(outcome === "error"
+        ? { operation: "in-flight-unknown" as const, failureMessage: "stranded" }
+        : {}),
       ...(outcome === "pass" && this.inBaseline && this.active === null
         ? { coverage: { granularity: "procedure" as const, entries: covers } }
         : {}),
@@ -337,6 +341,34 @@ describe("R896: the session", () => {
         n: number;
       };
       expect(snaps.n).toBe(1);
+    });
+  });
+
+  test("build review 3: a stop mid-re-baseline puts every candidate back on test and stores nothing", async () => {
+    await inProject(async (root) => {
+      const store = new ResultsStore(":memory:");
+      // A and C are candidates; A1's method run strands, so the re-baseline stops there.
+      const b = autoStub((ref, mode) =>
+        ref.method === "A1" && mode === "method"
+          ? "error"
+          : (ref.method === "A2" || ref.method === "C1") && mode === "test"
+            ? "fail"
+            : "pass",
+      );
+      const out = await session(root, store, b).catch((e: unknown) => e);
+      expect(b.chooseCalls).toEqual([
+        [A, "method"],
+        [C, "method"],
+        [A, "test"],
+        [C, "test"],
+      ]);
+      expect([b.mode.get(A), b.mode.get(C)]).toEqual(["test", "test"]);
+      expect(store.runIsolationChoice(1)).toBeNull();
+      expect(
+        out instanceof Error
+          ? undefined
+          : (out as { report: { isolation?: unknown } }).report.isolation,
+      ).toBeUndefined();
     });
   });
 

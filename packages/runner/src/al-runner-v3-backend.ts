@@ -1560,10 +1560,25 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       throw new AlRunnerV3AutoMethodOneShotRefusedError(cu);
     }
     this.dropPair();
+    const was = this.isolationOf(cu);
     this.chosen.set(cu, mode);
-    // Review 4: the refusals are noted again from the chosen rows (`noteReusedBaseline`).
-    this.baselineRefused.delete(cu);
+    // Review 4: the refusals are noted again from the chosen rows (`noteReusedBaseline`). Build
+    // review 1: a whole-codeunit `test` call noted refusals from EVERY row it returned (tests
+    // outside the session's suite, TestPage-skipped ones too), which no verdict row can re-note.
+    // So the move to `method` keeps that set aside, and the move back to `test` restores it.
+    if (mode === "method") {
+      const held = this.baselineRefused.get(cu);
+      if (was === "test" && held !== undefined) this.refusedUnderTest.set(cu, held);
+      this.baselineRefused.delete(cu);
+      return;
+    }
+    const kept = this.refusedUnderTest.get(cu);
+    this.refusedUnderTest.delete(cu);
+    if (kept !== undefined) this.baselineRefused.set(cu, kept);
+    else this.baselineRefused.delete(cu);
   }
+  /** R896: a codeunit's `test` refusal set while it is tried on `method` (`chooseIsolation`). */
+  private readonly refusedUnderTest = new Map<number, Set<string>>();
   /** R857: `callId`'s table, both ways. Never reset: an id means one test for the whole session. */
   private readonly isolatedIds = new Map<string, number>();
   private readonly isolatedRefs = new Map<number, TestMethodRef>();
@@ -2186,7 +2201,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       throw new AlRunnerV3TransportFrozenError("it was already decided or a v3 process started");
     const reasons: string[] = [];
     // R857: a resume under --isolate-tests runs its baseline again (`reusesBaselineSnapshot`).
-    if (facts.resume && !this.isolatesTests) {
+    // R896 (build review 2): so does `isolation: "auto"`, which never reuses a snapshot.
+    if (facts.resume && !this.isolatesTests && !this.isolationAuto) {
       reasons.push(
         "resume: a --resume / --resume-run session (a reused baseline has no rows for the serve warm-up, and the transport is not in the run's fingerprint)",
       );
@@ -4091,6 +4107,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     groups: readonly EntryGroup[],
     kind: "warmup" | "prefetch" | "live",
     mode: RequestMode,
+    /** R896 (build review 4): the group count before `request()` split it by mode. */
+    groupCount: number = groups.length,
   ): Promise<{
     readonly sent: readonly SentEntry[];
     readonly rows: ReadonlyMap<string, readonly V3Row[]>;
@@ -4143,7 +4161,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // group's refused rows are that mutant's `error` (its echo did not run), never a batch stop.
     // R653: a live kill pair (NONE and M) speaks for one kill, like a lone live group.
     const refused =
-      kind === "warmup" || (kind === "prefetch" && groups.length >= 2)
+      kind === "warmup" || (kind === "prefetch" && groupCount >= 2)
         ? batchRefusalReason(
             decoded.rows,
             (m) => Object.values(V3_SERVE_SAFE_REFUSALS).some((re) => re.test(m)),
@@ -4187,7 +4205,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     const outs: RequestOut[] = [];
     for (const { mode, groups: mine } of byMode.values()) {
-      outs.push(await this.requestOne(lane, mine, phase, mode));
+      outs.push(await this.requestOne(lane, mine, phase, mode, groups.length));
     }
     const [first, ...rest] = outs;
     if (first === undefined) throw new Error("al-runner-v3: request() with no entries");
@@ -4214,12 +4232,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     groups: readonly EntryGroup[],
     phase: "prefetchMs" | "liveMs",
     mode: RequestMode,
+    /** Build review 4: how many groups the caller asked for, before the split by mode. */
+    groupCount: number,
   ): Promise<RequestOut> {
     const seq = ++this.requestSeq;
     const daemon = await this.ensureDaemon(lane, mode);
     const started = Date.now();
     const { sent, rows } = await lane.timed(phase, () =>
-      this.send(lane, groups, phase === "prefetchMs" ? "prefetch" : "live", mode),
+      this.send(lane, groups, phase === "prefetchMs" ? "prefetch" : "live", mode, groupCount),
     );
     const wallMs = Date.now() - started;
     const s = this.serveStopSeconds() ?? 1;
