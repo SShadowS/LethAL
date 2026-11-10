@@ -22,6 +22,7 @@ import {
 import type { RunEvent } from "./events";
 import { type ExcludedSites, declarativeSitesView, notInstrumentedView } from "./excluded-sites";
 import type { Interpretation } from "./interpretation";
+import type { IsolationChoiceRow } from "./isolation-auto";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
 import { type PermissionCanaryResult, permissionCanaryWarnings } from "./permission-canary";
 import {
@@ -1865,6 +1866,17 @@ export interface SessionReport {
    * visibly distinct from a measured clean result.
    */
   readonly permissionCanary?: PermissionCanaryResult;
+  /**
+   * R896: al-runner v3 under `alRunnerV3.isolation: "auto"` only (absent on every other run, and on
+   * reports from before R896). One row per CANDIDATE test codeunit (one with a test red at the
+   * `test` baseline for a reason `method` could change): switched to `method` (it passed strictly
+   * more tests so) or stayed on `test`, with both counts, and what `method` observed for each test it
+   * lost. A codeunit that was no candidate has no row.
+   */
+  readonly isolation?: {
+    readonly mode: "auto";
+    readonly codeunits: readonly IsolationChoiceRow[];
+  };
 }
 
 /**
@@ -3285,6 +3297,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     },
     ...(input.quarantined !== undefined ? { quarantined: input.quarantined } : {}),
     ...(input.permissionCanary !== undefined ? { permissionCanary: input.permissionCanary } : {}),
+    ...(input.isolation !== undefined ? { isolation: input.isolation } : {}),
   };
 }
 
@@ -3840,6 +3853,13 @@ export function renderConsole(r: SessionReport): string {
   if (r.untargetedTriggerCount > 0) {
     lines.push(
       `COVERAGE FALLBACK: ${r.untargetedTriggerCount} table trigger mutant(s) coverage could place nowhere — each was run against every green test rather than against an attributed set.`,
+    );
+  }
+  // R896: which test codeunits the auto isolation moved, next to the score it shapes.
+  if (r.isolation !== undefined) {
+    const switched = r.isolation.codeunits.filter((c) => c.chosen === "method").length;
+    lines.push(
+      `isolation: ${switched} codeunit(s) switched to method, ${r.isolation.codeunits.length - switched} stayed on test (see report)`,
     );
   }
   // R26: the permission canary is announced once, right after the lease is acquired and before

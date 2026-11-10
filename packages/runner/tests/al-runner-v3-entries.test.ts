@@ -24,10 +24,12 @@ import {
 } from "../src/al-runner-server";
 import {
   AL_RUNNER_V3_VERSION,
+  AlRunnerV3AutoMethodOneShotRefusedError,
   AlRunnerV3Backend,
   type AlRunnerV3Config,
   AlRunnerV3DependencyMissingError,
   AlRunnerV3DependencySkippedError,
+  AlRunnerV3IsolateTestsWithAutoRefusedError,
   AlRunnerV3NoTestRanError,
   AlRunnerV3RowMissingError,
   AlRunnerV3ServeFallbackWarmupError,
@@ -36,6 +38,7 @@ import {
   AlRunnerV3UnprovenBatchError,
   ISOLATED_BASELINE_PROCESSES,
   SPECULATE_BASELINE_ENV,
+  V3_AUTO_METHOD_ONE_SHOT,
   WINDOW_BOUND_CAVEAT,
   v3CallDeadlineMs,
 } from "../src/al-runner-v3-backend";
@@ -3937,8 +3940,11 @@ describe("R761: a real first spawn freezes the transport decision", () => {
     // R790: no speculative baseline, whose one-shot calls in deploy() would freeze it first.
     const r = await rig({ seams: { noSpeculativeBaseline: true } });
     // The one-shot baseline spawn would freeze it; a daemon start alone must too.
-    const priv = r.b as unknown as { startDaemon(lane: unknown): Promise<unknown>; lane: unknown };
-    await priv.startDaemon(priv.lane);
+    const priv = r.b as unknown as {
+      startDaemon(lane: unknown, mode: unknown): Promise<unknown>;
+      lane: unknown;
+    };
+    await priv.startDaemon(priv.lane, { testIsolation: "test", runSelectedOnly: false });
     expect(r.one.calls).toHaveLength(0);
     expect(r.serve.daemons.length).toBeGreaterThan(0);
     expect(await decided(r)).toBeInstanceOf(AlRunnerV3TransportFrozenError);
@@ -5260,5 +5266,232 @@ describe("R890: alRunnerV3.isolation", () => {
     for (const c of r.one.calls) expect(isolationOf(c)).toBe("test");
     for (const q of r.serve.requests) expect(q.body.testIsolation).toBe("test");
     expect(r.b.methodIsolation).toBe(false);
+  });
+});
+
+describe("R896: isolation auto, per codeunit", () => {
+  const isolationOf = (c: readonly string[]) => c[c.indexOf("--isolation") + 1];
+  const AUTO = { isolation: "auto" as const };
+  /** Inside the bracket, as the orchestrator does it. */
+  const choose = (b: AlRunnerV3Backend, cu: number, mode: "test" | "method") => {
+    b.baselinePhase(true);
+    try {
+      b.chooseIsolation(cu, mode);
+    } finally {
+      b.baselinePhase(false);
+    }
+  };
+
+  test("--isolate-tests with auto is refused by name; auto alone is not a forced mode", async () => {
+    await expect(rig({ extra: { ...AUTO, isolateTests: true } })).rejects.toThrow(
+      AlRunnerV3IsolateTestsWithAutoRefusedError,
+    );
+    const r = await rig({ extra: AUTO });
+    expect([r.b.isolationAuto, r.b.isolatesTests, r.b.methodIsolation]).toEqual([
+      true,
+      false,
+      false,
+    ]);
+    const forced = await rig({ extra: { isolation: "test" } });
+    expect(() => forced.b.chooseIsolation(CU, "method")).toThrow(/not "auto"/);
+  });
+
+  test("one-shot: after a switch the codeunit's calls (baseline and mutant) run per test under codeunit isolation; the other codeunit's are unchanged", async () => {
+    const r = await rig({ extra: { ...AUTO, transport: "one-shot" }, suite: SUITE2 });
+    await baseline(r.b, SUITE2);
+    for (const c of r.one.calls) {
+      expect(isolationOf(c)).toBe("test");
+      expect(c).not.toContain("--test-exact");
+    }
+    const before = r.one.calls.length;
+    choose(r.b, CU, "method");
+    expect(r.b.isolationOf(CU)).toBe("method");
+    expect(r.b.isolationOf(CU2)).toBe("test");
+    await baseline(r.b, SUITE2);
+    // The mutant phase: `callCodeunit`'s own spawn, per test.
+    await r.b.activate("M0001");
+    await r.b.run(ref("A"), OPTS);
+    await r.b.run(ref("C", CU2), OPTS);
+    const after = r.one.calls.slice(before);
+    const mine = after.filter((c) => c.includes("--test-exact"));
+    expect(mine.map((c) => c[c.indexOf("--test-exact") + 1]).sort()).toEqual([
+      `Codeunit${CU}.A`,
+      `Codeunit${CU}.A`,
+      `Codeunit${CU}.B`,
+    ]);
+    for (const c of mine) {
+      expect(isolationOf(c)).toBe("codeunit");
+      expect(c).toContain("--run-selected-only");
+    }
+    const other = after.filter((c) => !c.includes("--test-exact"));
+    expect(other.map((c) => c[c.indexOf("--codeunit") + 1])).toEqual([String(CU2), String(CU2)]);
+    for (const c of other) expect(isolationOf(c)).toBe("test");
+  });
+
+  test("serve: a mixed batch is one request per mode, each on its own daemon with its own warm-up", async () => {
+    const r = await rig({ extra: AUTO, suite: SUITE2 });
+    await baseline(r.b, SUITE2);
+    choose(r.b, CU, "method");
+    await baseline(r.b, SUITE2);
+    await r.b.prefetchMutants(plans(["M0002"], SUITE2));
+    expect(r.serve.daemons).toHaveLength(2);
+    const cuOf = (q: Req) =>
+      new Set(
+        ((q.body.entries as { test: string }[] | undefined) ?? [])
+          .map((e) => Number(/^Codeunit(\d+)\./.exec(e.test)?.[1]))
+          .filter((c) => c !== ECHO),
+      );
+    for (const q of r.serve.requests) {
+      const method = q.body.testIsolation === "codeunit";
+      expect(q.body.runSelectedOnly).toBe(method ? true : undefined);
+      expect([...cuOf(q)]).toEqual([method ? CU : CU2]);
+      expect(q.daemon).toBe(
+        r.serve.requests.find((x) => x.body.testIsolation === q.body.testIsolation)?.daemon ?? -1,
+      );
+    }
+    // Per daemon: its warm-up, then the prefetch of its mode.
+    expect(r.serve.requests.filter((q) => q.body.testIsolation === "codeunit")).toHaveLength(2);
+    expect(r.serve.requests.filter((q) => q.body.testIsolation === "test")).toHaveLength(2);
+    await r.b.activate("M0002");
+    const n = r.serve.requests.length;
+    for (const t of SUITE2) expect((await r.b.run(t, OPTS)).outcome).toBe("pass");
+    expect(r.serve.requests).toHaveLength(n); // served from the merged prefetch
+  });
+
+  test("speculation never runs a method codeunit whole, and its baseline never takes one", async () => {
+    const r = await rig({ extra: { ...AUTO, speculateBaseline: true }, suite: SUITE2 });
+    await baseline(r.b, SUITE2);
+    choose(r.b, CU, "method");
+    const before = r.one.calls.length;
+    await r.b.deploy(r.l.batch); // a later batch: deploy speculates again
+    const spec = r.one.calls.slice(before);
+    expect(spec.map((c) => c[c.indexOf("--codeunit") + 1])).toEqual([String(CU2)]);
+    for (const c of spec) expect(isolationOf(c)).toBe("test");
+    const mid = r.one.calls.length;
+    await baseline(r.b, SUITE2);
+    const live = r.one.calls.slice(mid);
+    expect(live.filter((c) => !c.includes("--test-exact"))).toEqual([]); // CU2 came from speculation
+    expect(live.filter((c) => c.includes("--test-exact"))).toHaveLength(2);
+  });
+
+  test("review 4: a choice clears the codeunit's refusal notes; the chosen rows note them again", async () => {
+    let methodPass = false;
+    const refusesB: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        x.method === "B" && !methodPass
+          ? { ...x, status: "error" as const, notRun: true, message: COMMIT }
+          : x,
+      );
+    const r = await rig({ extra: AUTO, serve: { rows: refusesB } });
+    const testRows = await baseline(r.b, SUITE1);
+    expect(r.b.survivorNote([ref("A")])).toContain(`Tests${CU}.B`);
+    choose(r.b, CU, "method");
+    expect(r.b.survivorNote([ref("A")])).toBeUndefined();
+    methodPass = true;
+    await baseline(r.b, SUITE1);
+    expect(r.b.survivorNote([ref("A")])).toBeUndefined();
+    // Reverted to test: the test set comes back (build review 1); re-noting the rows adds nothing.
+    choose(r.b, CU, "test");
+    const back = r.b.survivorNote([ref("A")]);
+    expect(back).toContain(`Tests${CU}.B`);
+    r.b.noteReusedBaseline(SUITE1.map((t, i) => ({ ref: t, verdict: testRows[i] as TestVerdict })));
+    expect(r.b.survivorNote([ref("A")])).toBe(back);
+  });
+
+  test("build review 4: a mixed prefetch of 2 groups, one per mode, with a uniform refusal is batch-refused, as an unsplit one", async () => {
+    // Every mutant entry and echo refused with one unlisted reason; the warm-ups (NONE) are clean.
+    const rows: RowsFn = (m, cu, d, n) =>
+      m.startsWith("M")
+        ? (SUITE_METHODS[cu] ?? []).map((method) => ({
+            method,
+            status: "error" as const,
+            notRun: true,
+            message: UNLISTED,
+          }))
+        : allPass(m, cu, d, n);
+    const echo: Echo = (m, d, n) =>
+      m.startsWith("M")
+        ? { method: "Echo", status: "error", notRun: true, message: UNLISTED }
+        : goodEcho(m, d, n);
+    const r = await rig({
+      extra: AUTO,
+      suite: SUITE2,
+      serve: { rows, echo },
+      oneShotRows: allPass,
+    });
+    await baseline(r.b, SUITE2);
+    choose(r.b, CU, "method");
+    await baseline(r.b, SUITE2);
+    const err = await r.b
+      .prefetchMutants([
+        { mutantId: "M0001", refs: SUITE1 }, // CU, on method
+        { mutantId: "M0002", refs: [ref("C", CU2)] }, // CU2, on test
+      ])
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AlRunnerV3EntriesRefusedError);
+    expect(String(err)).toContain("al-runner-v3-entries-batch-refused");
+    expect(String(err)).toContain(UNLISTED);
+  });
+
+  test("build review 1: a tie reverted to test keeps the refusals of tests outside the verdict rows", async () => {
+    let methodPass = false;
+    // A fails in both modes (a tie); B, outside the session's suite, is refused by the whole call.
+    const rows: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        x.method === "A"
+          ? { ...x, status: "fail" as const, message: "red" }
+          : x.method === "B" && !methodPass
+            ? { ...x, status: "error" as const, notRun: true, message: COMMIT }
+            : x,
+      );
+    const only = [ref("A")];
+    const make = async (isolation: "auto" | "test") => {
+      const r = await rig({ extra: { isolation }, serve: { rows }, suite: SUITE1 });
+      r.b.useSessionTests(only);
+      methodPass = false;
+      return r;
+    };
+    const forced = await make("test");
+    await baseline(forced.b, only);
+    const want = forced.b.survivorNote(only);
+    expect(want).toContain(`Tests${CU}.B`);
+    const r = await make("auto");
+    const testRows = await baseline(r.b, only);
+    choose(r.b, CU, "method");
+    methodPass = true;
+    const methodRows = await baseline(r.b, only);
+    expect(methodRows.map((v) => v.outcome)).toEqual(testRows.map((v) => v.outcome)); // a tie
+    choose(r.b, CU, "test");
+    r.b.noteReusedBaseline(only.map((t, i) => ({ ref: t, verdict: testRows[i] as TestVerdict })));
+    expect(r.b.survivorNote(only)).toBe(want);
+  });
+
+  test("the bracket: a method pass inside it carries coverage; the same calls outside carry none", async () => {
+    const r = await rig({
+      extra: { ...AUTO, coverage: "al-runner" },
+      oneShotCoverage: plainCoverage,
+      suite: SUITE1,
+    });
+    await baseline(r.b, SUITE1);
+    choose(r.b, CU, "method");
+    const inside = await baseline(r.b, SUITE1);
+    expect(inside.map((v) => v.coverage === undefined)).toEqual([false, false]);
+    await r.b.activate(null);
+    const outside = await r.b.run(ref("A"), { coverage: "al-runner", timeoutMs: 1000 });
+    expect(outside.coverage).toBeUndefined();
+  });
+
+  test("one-shot under auto: the switch allows method by default, and refuses by name when set to refuse", async () => {
+    const allow = await rig({ extra: { ...AUTO, transport: "one-shot" } });
+    expect(V3_AUTO_METHOD_ONE_SHOT).toBe("allow");
+    choose(allow.b, CU, "method");
+    const refuse = await rig({
+      extra: { ...AUTO, transport: "one-shot", autoMethodOneShot: "refuse" },
+    });
+    expect(() => choose(refuse.b, CU, "method")).toThrow(AlRunnerV3AutoMethodOneShotRefusedError);
+    choose(refuse.b, CU, "test");
+    const serve = await rig({ extra: { ...AUTO, autoMethodOneShot: "refuse" } });
+    choose(serve.b, CU, "method");
+    expect(serve.b.isolationOf(CU)).toBe("method");
   });
 });

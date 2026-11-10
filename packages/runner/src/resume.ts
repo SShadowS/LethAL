@@ -432,6 +432,11 @@ export interface SessionFingerprintInput {
    * and an `--isolate-tests` run would share a digest and a resume could mix their verdicts. Only when on.
    */
   readonly methodIsolation?: true;
+  /**
+   * R896: `alRunnerV3.isolation: "auto"`, the SETTING (the per-codeunit choice it makes is stored on
+   * the run and compared at the resumed baseline). Only when on, so no other digest moves.
+   */
+  readonly isolationAuto?: true;
   readonly selectorIds: {
     readonly selectorId: number;
     readonly controlId: number;
@@ -511,6 +516,7 @@ export function sessionFingerprint(input: SessionFingerprintInput): string {
     ...(input.coverageMode !== undefined ? { coverageMode: input.coverageMode } : {}),
     ...(input.isolateTests === true ? { isolateTests: true } : {}),
     ...(input.methodIsolation === true ? { methodIsolation: true } : {}),
+    ...(input.isolationAuto === true ? { isolation: "auto" } : {}),
     selectorIds: [
       input.selectorIds.selectorId,
       input.selectorIds.controlId,

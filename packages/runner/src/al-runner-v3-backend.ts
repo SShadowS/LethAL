@@ -509,6 +509,34 @@ export class AlRunnerV3IsolateTestsRefusedError extends Error {
   }
 }
 
+/**
+ * R896: THE switch for one-shot under `isolation: "auto"` once any codeunit runs on `"method"`
+ * (reached on every `--resume` and on an R786 fallback). `"allow"` runs it, per test, with
+ * `--isolation codeunit`; `"refuse"` stops the session by name at the switch. R857 once refused
+ * one-shot for per-test runs; the per-mutant proof against serve decides which value stays.
+ */
+export const V3_AUTO_METHOD_ONE_SHOT: "allow" | "refuse" = "allow";
+
+/** R896: `--isolate-tests` names one mode for every test; `isolation: "auto"` chooses per codeunit. */
+export class AlRunnerV3IsolateTestsWithAutoRefusedError extends Error {
+  constructor() {
+    super(
+      'al-runner-v3-isolate-tests-with-auto-refused: --isolate-tests runs every test alone, while "alRunnerV3.isolation" is "auto" (the default), which chooses a mode per test codeunit; the two cannot both hold. Set "alRunnerV3.isolation" to "test" to use --isolate-tests, or drop the flag (R896).',
+    );
+    this.name = "AlRunnerV3IsolateTestsWithAutoRefusedError";
+  }
+}
+
+/** R896: `V3_AUTO_METHOD_ONE_SHOT` is "refuse" and a codeunit was to move to "method" on one-shot. */
+export class AlRunnerV3AutoMethodOneShotRefusedError extends Error {
+  constructor(codeunitId: number) {
+    super(
+      `al-runner-v3-auto-method-one-shot-refused: under "alRunnerV3.isolation": "auto", codeunit ${codeunitId} would run on "method" (each test alone), and this session runs the one-shot transport, where that mode is not proven per mutant against serve-entries. Nothing more is run. Set "alRunnerV3.isolation" to "test" or "method" (R896).`,
+    );
+    this.name = "AlRunnerV3AutoMethodOneShotRefusedError";
+  }
+}
+
 /** R761: the transport was decided (or a v3 process had started) and a later decision was asked for. */
 export class AlRunnerV3TransportFrozenError extends Error {
   constructor(why: string) {
@@ -632,9 +660,16 @@ export interface AlRunnerV3Config {
   readonly isolateTests?: boolean;
   /**
    * R890: `"method"` = every test alone (as `isolateTests`) under `--isolation codeunit`: a fresh
-   * codeunit per test, as BC's one-method runner. Absent or `"test"`: what it always was.
+   * codeunit per test, as BC's one-method runner. Absent or `"test"`: what it always was (the
+   * config section's default is R896's `"auto"`; this internal default stays `"test"`).
+   * R896 `"auto"`: `"test"` until the orchestrator moves a codeunit to `"method"` (`chooseIsolation`).
    */
-  readonly isolation?: "test" | "method";
+  readonly isolation?: "auto" | "test" | "method";
+  /**
+   * R896: under `"auto"`, whether a codeunit may be moved to `"method"` on the one-shot transport.
+   * Internal, not a config key. Absent: `V3_AUTO_METHOD_ONE_SHOT`.
+   */
+  readonly autoMethodOneShot?: "allow" | "refuse";
   /** R866: how many of those processes run at a time (`--workers`). Absent: `ISOLATED_BASELINE_PROCESSES`. */
   readonly isolatedBaselineProcesses?: number;
   /**
@@ -1056,6 +1091,29 @@ interface Daemon {
   dirty: boolean;
 }
 
+/** R857, R890, R896: what one serve request (and its daemon) is sent under. */
+interface RequestMode {
+  readonly testIsolation: "test" | "codeunit";
+  readonly runSelectedOnly: boolean;
+}
+
+/** R635 §3, §7: what `request()` returns. */
+interface RequestOut {
+  /** Per GROUP KEY (the mutant id unless the group set a key, R778 A1). */
+  readonly results: ReadonlyMap<string, Map<number, CallRows>>;
+  readonly resend: readonly EntryGroup[];
+  /** The first row R612 did not keep, at the cut. */
+  readonly cutWhy?: string;
+  /** R778 (A2): this request's number in the backend-wide count. */
+  readonly seq: number;
+  /** R778: the keys with at least one standing entry, an echo too (the others lie after a cut). */
+  readonly reached: ReadonlySet<string>;
+}
+
+function modeKey(m: RequestMode): string {
+  return `${m.testIsolation}${m.runSelectedOnly ? "+selected" : ""}`;
+}
+
 /** v3 serve's readiness wait: a cold start may load dependencies (measure.md §8). */
 const SERVE_READY_MS = 300_000;
 
@@ -1315,7 +1373,8 @@ interface KillPair {
  * backend. The coverage window flag and the second-echo state stay there too, for now.
  */
 class Lane {
-  daemon: Daemon | undefined;
+  /** R896: by `modeKey`; one daemon per request mode (only one mode exists unless `"auto"` switched). */
+  private readonly daemons = new Map<string, Daemon>();
   /** F3: the id the last `activate()` wrote; `null` is the baseline selector. */
   lastActivated: string | null = null;
   rowsByCodeunit = new Map<number, CallRows>();
@@ -1362,10 +1421,6 @@ class Lane {
       /** The test dir as v3 reads it (`realpath`, else absolute). */
       readonly testSource: () => string;
       readonly now: () => number;
-      /** R857: `--isolate-tests`; adds `runSelectedOnly` to every request. */
-      readonly isolateTests: boolean;
-      /** R890: the `testIsolation` of every request. */
-      readonly testIsolation: "test" | "codeunit";
     },
   ) {
     this.cwd = where.scratchCwd;
@@ -1393,14 +1448,26 @@ class Lane {
     return join(this.activeDir(), SELECTOR_RESOURCE_FOLDER, SELECTOR_RESOURCE_NAME);
   }
 
-  /** R635 §3: `{ command, sourcePaths, testIsolation }`, the same two roots one-shot passes. */
-  requestBase(): Record<string, unknown> {
+  /**
+   * R635 §3: `{ command, sourcePaths, testIsolation }`, the same two roots one-shot passes. R857,
+   * R890, R896: `mode` is the request's (`modeOfCall`); a request holds the entries of one mode.
+   */
+  requestBase(mode: RequestMode): Record<string, unknown> {
     return {
       command: "runTests",
       sourcePaths: [this.realActive ?? resolve(this.activeDir()), this.where.testSource()],
-      testIsolation: this.where.testIsolation,
-      ...(this.where.isolateTests ? { runSelectedOnly: true } : {}),
+      testIsolation: mode.testIsolation,
+      ...(mode.runSelectedOnly ? { runSelectedOnly: true } : {}),
     };
+  }
+
+  /** R896 (review 6a): this lane's daemon for `mode`, one per mode, each with its own warm-up. */
+  daemonFor(mode: RequestMode): Daemon | undefined {
+    return this.daemons.get(modeKey(mode));
+  }
+
+  setDaemon(mode: RequestMode, d: Daemon): void {
+    this.daemons.set(modeKey(mode), d);
   }
 
   dropPair(): void {
@@ -1408,12 +1475,13 @@ class Lane {
     this.pairVerdict = undefined;
   }
 
+  /** Every daemon of the lane (each mode's): a failure on one costs the other its warm daemon only. */
   async closeDaemon(): Promise<void> {
     // R653 C5: at most a lost saving; a pair is stored only after its request() returned.
     this.dropPair();
-    const d = this.daemon;
-    this.daemon = undefined;
-    await d?.server.close();
+    const ds = [...this.daemons.values()];
+    this.daemons.clear();
+    for (const d of ds) await d.server.close();
   }
 
   /** C2 and R349: every field derived from the deployed layout or the active mutant. */
@@ -1449,6 +1517,68 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   get methodIsolation(): boolean {
     return this.cfg.isolation === "method";
   }
+  /** R896: see `ExecutionBackend.isolationAuto`. */
+  get isolationAuto(): boolean {
+    return this.cfg.isolation === "auto";
+  }
+  /** R896: the codeunits `chooseIsolation` fixed; every other codeunit is on `"test"` under auto. */
+  private readonly chosen = new Map<number, "test" | "method">();
+
+  /** R896: codeunit `cu`'s mode: forced (`"method"`, else `"test"`), or under auto as chosen. */
+  isolationOf(cu: number): "test" | "method" {
+    if (this.methodIsolation) return "method";
+    return this.chosen.get(cu) ?? "test";
+  }
+
+  /** R857, R890, R896: whether `cu`'s tests each run alone (own call id, `onlyTest`). */
+  private perTest(cu: number): boolean {
+    return this.cfg.isolateTests === true || this.isolationOf(cu) === "method";
+  }
+
+  /** R896: the request mode of a call id (one test's id, or a codeunit's). */
+  private modeOfCall(id: number): RequestMode {
+    const one = this.isolatedRefs.get(id);
+    const cu = one?.codeunitId ?? id;
+    return {
+      testIsolation: this.isolationOf(cu) === "method" ? "codeunit" : SERVE_TEST_ISOLATION,
+      runSelectedOnly: one !== undefined,
+    };
+  }
+
+  /** R896: see `ExecutionBackend.chooseIsolation`. */
+  chooseIsolation(cu: number, mode: "test" | "method"): void {
+    if (!this.isolationAuto) {
+      throw new Error(
+        `al-runner-v3: chooseIsolation(${cu}, ${mode}) on a backend whose isolation is not "auto" (R896)`,
+      );
+    }
+    if (
+      mode === "method" &&
+      !this.entries &&
+      (this.cfg.autoMethodOneShot ?? V3_AUTO_METHOD_ONE_SHOT) === "refuse"
+    ) {
+      throw new AlRunnerV3AutoMethodOneShotRefusedError(cu);
+    }
+    this.dropPair();
+    const was = this.isolationOf(cu);
+    this.chosen.set(cu, mode);
+    // Review 4: the refusals are noted again from the chosen rows (`noteReusedBaseline`). Build
+    // review 1: a whole-codeunit `test` call noted refusals from EVERY row it returned (tests
+    // outside the session's suite, TestPage-skipped ones too), which no verdict row can re-note.
+    // So the move to `method` keeps that set aside, and the move back to `test` restores it.
+    if (mode === "method") {
+      const held = this.baselineRefused.get(cu);
+      if (was === "test" && held !== undefined) this.refusedUnderTest.set(cu, held);
+      this.baselineRefused.delete(cu);
+      return;
+    }
+    const kept = this.refusedUnderTest.get(cu);
+    this.refusedUnderTest.delete(cu);
+    if (kept !== undefined) this.baselineRefused.set(cu, kept);
+    else this.baselineRefused.delete(cu);
+  }
+  /** R896: a codeunit's `test` refusal set while it is tried on `method` (`chooseIsolation`). */
+  private readonly refusedUnderTest = new Map<number, Set<string>>();
   /** R857: `callId`'s table, both ways. Never reset: an id means one test for the whole session. */
   private readonly isolatedIds = new Map<string, number>();
   private readonly isolatedRefs = new Map<number, TestMethodRef>();
@@ -1689,6 +1819,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     private readonly now: () => number = Date.now,
   ) {
     if (cfg.selectorMode === "resource") throw new AlRunnerV3ResourceSelectorRefusedError();
+    if (cfg.isolateTests === true && cfg.isolation === "auto") {
+      throw new AlRunnerV3IsolateTestsWithAutoRefusedError();
+    }
     this.cfg = { ...cfg, alRunnerPath: resolveV3Binary(cfg.alRunnerPath) };
     if (typeof cfg.dotnetSidecar === "string") this.sidecarPath = resolve(cfg.dotnetSidecar); // R886
     this.speculateOn = cfg.speculateBaseline ?? readSpeculateBaseline();
@@ -1717,8 +1850,6 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       scratchCwd: resolve(this.cfg.instrumentedDir),
       testSource: () => this.realTestDir ?? resolve(this.cfg.testDir),
       now: this.now,
-      isolateTests: this.isolatesTests,
-      testIsolation: this.methodIsolation ? "codeunit" : SERVE_TEST_ISOLATION,
     });
   }
 
@@ -1729,7 +1860,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * pairs) then works per test.
    */
   private callId(ref: TestMethodRef): number {
-    if (!this.isolatesTests) return ref.codeunitId;
+    if (!this.perTest(ref.codeunitId)) return ref.codeunitId; // R896: per codeunit
     const k = refKey(ref);
     let id = this.isolatedIds.get(k);
     if (id === undefined) {
@@ -2070,7 +2201,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       throw new AlRunnerV3TransportFrozenError("it was already decided or a v3 process started");
     const reasons: string[] = [];
     // R857: a resume under --isolate-tests runs its baseline again (`reusesBaselineSnapshot`).
-    if (facts.resume && !this.isolatesTests) {
+    // R896 (build review 2): so does `isolation: "auto"`, which never reuses a snapshot.
+    if (facts.resume && !this.isolatesTests && !this.isolationAuto) {
       reasons.push(
         "resume: a --resume / --resume-run session (a reused baseline has no rows for the serve warm-up, and the transport is not in the run's fingerprint)",
       );
@@ -2591,6 +2723,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       const calls = new Map<number, SpeculativeCall>();
       for (const id of [...this.suitePerCodeunit.keys()].sort((a, b) => a - b)) {
         if (signal.aborted) return undefined;
+        // R896: a codeunit on "method" runs per test (`fillIsolatedBaseline`), never whole.
+        if (this.perTest(id)) continue;
         this.callSeq += 1;
         // Named as a live call's file is, so the call's argv is the live call's argv.
         const covPath = join(covDir, `call-${this.callSeq}.json`);
@@ -2779,7 +2913,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       alRunnerPath: absToolPath(this.cfg.alRunnerPath),
       codeunitId: o.id,
       ...(o.onlyTest !== undefined ? { onlyTest: o.onlyTest } : {}),
-      ...(this.methodIsolation ? { isolation: "codeunit" as const } : {}),
+      // R890, R896: per codeunit, so every caller (`callCodeunit`, `speculateBaseline`,
+      // `fillIsolatedBaseline`) sends the mode its codeunit is on.
+      ...(this.isolationOf(o.id) === "method" ? { isolation: "codeunit" as const } : {}),
       stopSeconds: o.stopSeconds,
       packagesDir: resolve(this.cfg.packagesDir),
       bcVersion: this.cfg.bcVersion,
@@ -2922,6 +3058,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       useBuildSymbols: no("useBuildSymbols"),
       baselinePhase: no("baselinePhase"),
       noteReusedBaseline: no("noteReusedBaseline"),
+      chooseIsolation: no("chooseIsolation"),
       prefetchMutants: no("prefetchMutants"),
       status: no("status"),
       close: no("close"),
@@ -3847,20 +3984,24 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * `AlRunnerV3EntriesRefusedError` (N1 before anything is sent, then N3, then disagreement) or
    * `AlRunnerServerRequestError`; either way no daemon is left behind.
    */
-  private async ensureDaemon(lane: Lane): Promise<Daemon> {
-    if (lane.daemon !== undefined) return lane.daemon;
+  private async ensureDaemon(lane: Lane, mode: RequestMode): Promise<Daemon> {
+    const had = lane.daemonFor(mode);
+    if (had !== undefined) return had;
     const before = lane.timers.warmupMs;
-    const d = await lane.timed("warmupMs", () => this.startDaemon(lane));
+    const d = await lane.timed("warmupMs", () => this.startDaemon(lane, mode));
     lane.lastWarmupMs = lane.timers.warmupMs - before; // this start alone, not the session total
     lane.daemonStarts += 1;
     return d;
   }
 
-  private async startDaemon(lane: Lane): Promise<Daemon> {
+  private async startDaemon(lane: Lane, mode: RequestMode): Promise<Daemon> {
     const s = this.serveStopSeconds();
     if (s === undefined) throw new AlRunnerV3ServeStopUnsetError();
     this.transportFrozen = true; // R761
-    const union = [...this.union].sort((a, b) => Math.abs(a) - Math.abs(b));
+    // R896 (review 6a): a daemon is warmed up with, and checked against, its own mode's calls only.
+    const union = [...this.union]
+      .filter((id) => modeKey(this.modeOfCall(id)) === modeKey(mode))
+      .sort((a, b) => Math.abs(a) - Math.abs(b));
     const none = union.filter((cu) => !this.baselineRows.has(cu));
     if (none.length > 0) {
       const named = none.map((id) => this.isolated(id)?.test ?? id);
@@ -3883,13 +4024,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     ]);
     this.stats.daemons += 1;
     const daemon: Daemon = { server, dirty: false };
-    lane.daemon = daemon;
+    lane.setDaemon(mode, daemon);
     try {
       this.stats.warmups += 1;
       const { sent, rows } = await this.send(
         lane,
         [{ mutantId: SELECTOR_RESOURCE_NONE, codeunits: union }],
         "warmup",
+        mode,
       );
       const disagree: string[] = [];
       const echo = rows.get(sent[0]?.id ?? "") ?? [];
@@ -3964,11 +4106,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     lane: Lane,
     groups: readonly EntryGroup[],
     kind: "warmup" | "prefetch" | "live",
+    mode: RequestMode,
+    /** R896 (build review 4): the group count before `request()` split it by mode. */
+    groupCount: number = groups.length,
   ): Promise<{
     readonly sent: readonly SentEntry[];
     readonly rows: ReadonlyMap<string, readonly V3Row[]>;
   }> {
-    const daemon = lane.daemon;
+    const daemon = lane.daemonFor(mode);
     const s = this.serveStopSeconds();
     if (daemon === undefined || s === undefined)
       throw new Error("al-runner-v3: send() without a daemon");
@@ -3979,7 +4124,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       0,
     );
     const body = {
-      ...lane.requestBase(),
+      ...lane.requestBase(mode),
       entries: sent.map((e) => ({
         id: e.id,
         resources: e.resources,
@@ -4016,7 +4161,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // group's refused rows are that mutant's `error` (its echo did not run), never a batch stop.
     // R653: a live kill pair (NONE and M) speaks for one kill, like a lone live group.
     const refused =
-      kind === "warmup" || (kind === "prefetch" && groups.length >= 2)
+      kind === "warmup" || (kind === "prefetch" && groupCount >= 2)
         ? batchRefusalReason(
             decoded.rows,
             (m) => Object.values(V3_SERVE_SAFE_REFUSALS).some((re) => re.test(m)),
@@ -4043,22 +4188,58 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     lane: Lane,
     groups: readonly EntryGroup[],
     phase: "prefetchMs" | "liveMs",
-  ): Promise<{
-    /** Per GROUP KEY (the mutant id unless the group set a key, R778 A1). */
-    readonly results: ReadonlyMap<string, Map<number, CallRows>>;
-    readonly resend: readonly EntryGroup[];
-    /** The first row R612 did not keep, at the cut. */
-    readonly cutWhy?: string;
-    /** R778 (A2): this request's number in the backend-wide count. */
-    readonly seq: number;
-    /** R778: the keys with at least one standing entry, an echo too (the others lie after a cut). */
-    readonly reached: ReadonlySet<string>;
-  }> {
+  ): Promise<RequestOut> {
+    // R896: a request holds one mode's entries. A group whose calls span two modes is split into
+    // one group per mode (same mutant and key, each with its own echo), sent as one request per
+    // mode, in the order the modes first appear. With one mode this is exactly the old request.
+    const byMode = new Map<string, { mode: RequestMode; groups: EntryGroup[] }>();
+    for (const g of groups) {
+      const parts = new Map<string, number[]>();
+      for (const cu of g.codeunits) {
+        const mode = this.modeOfCall(cu);
+        const k = modeKey(mode);
+        if (!byMode.has(k)) byMode.set(k, { mode, groups: [] });
+        parts.set(k, [...(parts.get(k) ?? []), cu]);
+      }
+      for (const [k, codeunits] of parts) byMode.get(k)?.groups.push({ ...g, codeunits });
+    }
+    const outs: RequestOut[] = [];
+    for (const { mode, groups: mine } of byMode.values()) {
+      outs.push(await this.requestOne(lane, mine, phase, mode, groups.length));
+    }
+    const [first, ...rest] = outs;
+    if (first === undefined) throw new Error("al-runner-v3: request() with no entries");
+    if (rest.length === 0) return first;
+    const results = new Map<string, Map<number, CallRows>>();
+    const reached = new Set<string>();
+    for (const o of outs) {
+      for (const [k, m] of o.results) results.set(k, new Map([...(results.get(k) ?? []), ...m]));
+      for (const k of o.reached) reached.add(k);
+    }
+    const cutWhy = outs.find((o) => o.cutWhy !== undefined)?.cutWhy;
+    return {
+      results,
+      resend: outs.flatMap((o) => o.resend),
+      // The last request's number: every entry of the merged answer was sent at or before it.
+      seq: outs.reduce((n, o) => Math.max(n, o.seq), 0),
+      reached,
+      ...(cutWhy !== undefined ? { cutWhy } : {}),
+    };
+  }
+
+  private async requestOne(
+    lane: Lane,
+    groups: readonly EntryGroup[],
+    phase: "prefetchMs" | "liveMs",
+    mode: RequestMode,
+    /** Build review 4: how many groups the caller asked for, before the split by mode. */
+    groupCount: number,
+  ): Promise<RequestOut> {
     const seq = ++this.requestSeq;
-    const daemon = await this.ensureDaemon(lane);
+    const daemon = await this.ensureDaemon(lane, mode);
     const started = Date.now();
     const { sent, rows } = await lane.timed(phase, () =>
-      this.send(lane, groups, phase === "prefetchMs" ? "prefetch" : "live"),
+      this.send(lane, groups, phase === "prefetchMs" ? "prefetch" : "live", mode, groupCount),
     );
     const wallMs = Date.now() - started;
     const s = this.serveStopSeconds() ?? 1;
@@ -4233,8 +4414,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         if (mine.length === 1 && row?.status === "fail" && row.notRun !== true) {
           kills.push({ mutantId: p.mutantId, cu: this.callId(r) });
           // R857: a pair holds only its one test, and the kill ledger can make any failing test
-          // the killer, so under --isolate-tests each one gets a pair.
-          if (!this.isolatesTests) break;
+          // the killer, so under --isolate-tests each one gets a pair. R896: per codeunit.
+          if (!this.perTest(r.codeunitId)) break;
         }
       }
     }
@@ -4301,7 +4482,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
 
   /** R857: what names a stored pair: its mutant, and under --isolate-tests also its one test. */
   private pairTag(mutantId: string, id: number): string {
-    return this.isolatesTests ? `${mutantId}#${Math.abs(id)}` : mutantId;
+    // R896: per call id; one test's id is in `isolatedRefs`, a whole codeunit's never is.
+    return this.isolatedRefs.has(id) ? `${mutantId}#${Math.abs(id)}` : mutantId;
   }
 
   /**
@@ -4483,7 +4665,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     let next: CallRows;
     let checked = false;
     try {
-      const daemon = await this.ensureDaemon(lane);
+      // R896: the window's echo and coverage request go to the daemon of the call's own mode.
+      const mode = this.modeOfCall(this.callId(ref));
+      const daemon = await this.ensureDaemon(lane, mode);
       // R652 Rule A: ONE check for the window's 2-3 plain sends, BEFORE `inWindow` (review r1 #1),
       // so it still requires the resource file to read NONE. Counted with its coverage request.
       await this.checkBound(lane);
@@ -4496,7 +4680,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         const echoOk = async (): Promise<string | undefined> => {
           this.stats.echoRequests += 1;
           const why = echoMismatch(
-            (await lane.timed("echoMs", () => this.plain(lane, daemon, echoId, false))).rows,
+            (await lane.timed("echoMs", () => this.plain(lane, daemon, mode, echoId, false))).rows,
             m,
           );
           if (why !== undefined) this.stats.echoMismatches += 1;
@@ -4505,7 +4689,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         const before = this.cfg.secondEcho === false ? undefined : await echoOk();
         if (before !== undefined) this.stats.secondEchoMismatches += 1;
         const cov = await lane.timed("coverageMs", () =>
-          this.plain(lane, daemon, this.callId(ref), true),
+          this.plain(lane, daemon, mode, this.callId(ref), true),
         );
         const after = await echoOk();
         const echoWhy = before ?? after;
@@ -4571,6 +4755,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private async plain(
     lane: Lane,
     daemon: Daemon,
+    mode: RequestMode,
     call: number,
     coverage: boolean,
   ): Promise<{ readonly rows: readonly V3Row[]; readonly coverage: V3CoverageRead }> {
@@ -4578,7 +4763,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const one = this.isolated(call);
     const cu = one?.codeunit ?? call;
     const body = {
-      ...lane.requestBase(),
+      ...lane.requestBase(mode),
       test: one?.test ?? `Codeunit${cu}.`,
       ...(one?.excludeTests !== undefined ? { excludeTests: one.excludeTests } : {}),
       ...(coverage ? { coverage: true, perTestCoverage: true } : {}),
