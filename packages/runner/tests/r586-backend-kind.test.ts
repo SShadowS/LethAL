@@ -98,7 +98,7 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     'if (parsed.backendKind === "al-runner-v3") {': "v3",
     '} else if (paths.backendKind === "al-runner-v3") {': "v3",
     'if (backendKind === "al-runner-v3") {': "v3",
-    'if (configured !== "al-runner") return configured;': "coverage-mode",
+    'if (configured !== "al-runner") return { mode: configured, offFiles: [] };': "coverage-mode",
     'if (backendArg === "bcdev" && workers > 1) {': "bcdev",
     'if (parsed.backendKind !== "bcdev" || configFile.envTool === undefined) {': "bcdev",
     'if (parsed.backendKind !== "bcdev") return {};': "bcdev",
@@ -440,7 +440,9 @@ describe("R586 C1: runSession keys on kind, not on authoritative", () => {
       });
       await v3Session(root, store, method);
       const [a, b] = [store.getRun(1), store.getRun(2)];
-      expect(a?.runnerBuild).toBe(`alrunner 3.0.0-alpha.2 (91253f2d6) ${"b".repeat(64)} isolate-tests`);
+      expect(a?.runnerBuild).toBe(
+        `alrunner 3.0.0-alpha.2 (91253f2d6) ${"b".repeat(64)} isolate-tests`,
+      );
       expect(b?.runnerBuild).toBe(`${a?.runnerBuild} isolation-method`);
       expect(b?.configFingerprint).not.toBe(a?.configFingerprint);
     });

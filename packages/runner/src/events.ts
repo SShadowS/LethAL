@@ -55,6 +55,8 @@ export interface StreamCapabilities {
   /** Named directly (not `BackendCapabilities["kind"]`) so the schema generator emits its enum. */
   readonly kind?: BackendKind;
   readonly coverage: BackendCapabilities["coverage"];
+  /** R907: see `BackendCapabilities.coverageOffFiles`. */
+  readonly coverageOffFiles?: readonly string[];
   readonly deploy: BackendCapabilities["deploy"];
   readonly isolation: BackendCapabilities["isolation"];
   readonly authoritative: boolean;
