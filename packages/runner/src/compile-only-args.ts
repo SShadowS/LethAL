@@ -13,6 +13,7 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { resolveAssemblyProbingPaths } from "./assembly-probing-paths";
 import { validatePreprocessorSymbols } from "./cli";
 import { type MutationSetResult, generateMutationSet } from "./orchestrator";
 
@@ -47,6 +48,21 @@ export async function compileOnlyConfigSymbols(configPath: string): Promise<read
   if (!existsSync(configPath)) return [];
   const raw = JSON.parse(await readFile(configPath, "utf8")) as { preprocessorSymbols?: unknown };
   return validatePreprocessorSymbols(raw.preprocessorSymbols);
+}
+
+/**
+ * R900: the assembly probing paths a real run would give alc: the config's `assemblyProbingPaths`
+ * (a missing config file sets none), else the project's own (`resolveAssemblyProbingPaths`).
+ */
+export async function compileOnlyProbingPaths(
+  configPath: string,
+  projectDir: string,
+): Promise<readonly string[]> {
+  const raw = existsSync(configPath)
+    ? (JSON.parse(await readFile(configPath, "utf8")) as { assemblyProbingPaths?: unknown })
+    : {};
+  const r = await resolveAssemblyProbingPaths(projectDir, raw.assemblyProbingPaths, configPath);
+  return r.paths;
 }
 
 /**

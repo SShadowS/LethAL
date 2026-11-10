@@ -645,6 +645,23 @@ Environment and output:
 | `--selector-id` / `--control-id` / `--table-id` | `79197` to `79199` | Override the injected object ids, e.g. when your `idRanges` exclude the defaults |
 | `--keep-env` / `--allow-expiring-env` | `false` | Env-tool session controls |
 
+**.NET assemblies (`assemblyProbingPaths`).** A project that uses `DotNet` types needs alc to find
+their assemblies, or every compile fails with AL0451 ("an assembly named X could not be found in the
+assembly probing paths") and AL0185. LethAL gives alc the folders to search (`/assemblyprobingpaths:`)
+from the first of these that is present:
+
+1. the config's top-level `"assemblyProbingPaths": ["./.netpackages", "/srv/bc/Service"]`;
+2. the project's `.vscode/settings.json` `"al.assemblyProbingPaths"`, the AL extension's own setting
+   (comments allowed; your user settings and `.code-workspace` files are not read);
+3. `./.netpackages`, only when that folder exists;
+4. none: alc gets no probing paths, as before.
+
+Relative paths are relative to the project folder. A listed folder that does not exist is refused by
+name before anything compiles, and so is a path containing `,` or `;` (alc splits the list on both).
+`lethal doctor --project <dir>` shows the list and where it came from (`assembly-probing-paths`). The
+list is part of the resume fingerprint when it is not empty. It reaches alc only: al-runner-v3's own
+`--dotnet-assembly-dir` is a separate setting, not wired from this one.
+
 Exit codes: `0` ok, `1` error, `3` quarantined, meaning the run refused to vouch for its own verdicts,
 `4` nothing scored, meaning every mutant errored and the run measured nothing.
 
