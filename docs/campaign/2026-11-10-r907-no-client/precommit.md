@@ -48,3 +48,15 @@ difference is reported upstream if it is al-runner's.
 With the default left off, no gate figure may move: the full v3 gate must pass on the final head. If the owner rules the default on,
 the gate is first run with `noClient` on as a measurement, the moved figures are pre-committed per mutant in an amendment here, and
 only then are baselines re-recorded (R332).
+
+## Amendment 1 (2026-11-10, after §1 and §2's first run, before §2's second)
+
+**§1 held as predicted** (`/coord/handoff/R-907/pp-result.md`).
+
+**§2 on R-895's first fixture says nothing.** It now deploys 16 mutants, not 17: its one hang-capable site has been refused since R896
+landed. No mutant timed out, so `--skip-after-timeout` never acted. The three legs agreed on all 16 (serve, one-shot with the flag,
+one-shot without it: 26, 37 and 38 s). The anchor of 17 is not met, for that reason, and the run is kept as evidence only.
+
+**§2 again, on R-895's second fixture** (`/coord/handoff/R-895/fixture2/`, 10 mutants, 4 of them `timeout-killed` there). The same
+three legs. **Predicted:** 10 mutants (dry run on b11d2804; 1 more site hang-refused); the same verdict and killing test for each mutant on serve and on
+one-shot with the flag; one-shot with the flag no slower than without it. If a verdict differs, the flag is not adopted.
