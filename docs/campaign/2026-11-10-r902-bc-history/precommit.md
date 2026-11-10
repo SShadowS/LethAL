@@ -62,3 +62,18 @@ Test procedures are `[Test]` attributes counted by grep. The other counts are fr
 
 al-runner v3 is not authoritative (R586). A verdict here is not BC's verdict, and no figure here is a gate figure. No BC server is
 used.
+
+## Amendment 1 (2026-11-10, after round 1, before round 2)
+
+**What round 1 showed, and why.** EU 3-Party Trade Purchase and Simplified Bank Statement Import: every baseline test failed, every
+mutant `error`. Statistical Accounts: 2 of 18 baseline tests green. Each run warned `al-runner-v3-test-data-off`: the demo data is
+not in the cache. The cause is my setup, not LethAL or al-runner: I deleted R-881's cache (4.4 GB) after R-895, and the configs
+still named it with `downloadDemoData: false`. I stopped the loop after Statistical Accounts; VAT Group Management and Intrastat Core
+did not run. Cardinality held where a report was written (155, 888, 1444). Round 1's files are kept as `r1-*`, as evidence, not as
+results.
+
+**Changed for round 2, and nothing else:** each config names a new `cacheDir`, `/coord/handoff/R-902/cache`, with no
+`downloadDemoData` key, so al-runner downloads the w1 demo data of build 28.4.53241.56646 into it on the first run (the R885
+default). Before the loop, one app (EU 3-Party Trade Purchase) runs alone, to check that the warning is gone.
+
+**Anchors and expectations unchanged.**
