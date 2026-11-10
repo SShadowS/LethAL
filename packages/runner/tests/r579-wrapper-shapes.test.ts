@@ -188,6 +188,16 @@ describe("directions that must stay refused", () => {
     const text = `#if not OUTER\nnamespace R906.Ns;\n\n#if not INNER\nusing System.Upgrade;\n#endif\n\n${codeunit(57931, "R906 W")}#endif\n`;
     expect(alRunnerAdmitsWrappedFile(rootOf(text))).toBe(true);
     expect(await listed(text)).toEqual([]);
+    // Admitted is not enough: the index must not refuse the file either.
+    const { index } = await indexOf({ "src/W.al": text });
+    expect(index.refusedFiles).toEqual([]);
+  });
+
+  // R906. Guards: reading only the inner block's first arm (an object in its `#else` still counts).
+  test("R906: an inner #if with using lines in one arm and a codeunit in the other stays refused", async () => {
+    const text = `#if not OUTER\n#if INNER\nusing System.Upgrade;\n#else\n${codeunit(57933, "R906 A")}#endif\n#endif\n`;
+    expect(alRunnerAdmitsWrappedFile(rootOf(text))).toBe(false);
+    expect(await listed(text)).toEqual(["src/W.al"]);
   });
 
   // R906. Guards: dropping the nested check altogether once using-only blocks are admitted.
