@@ -1001,8 +1001,9 @@ export async function resolveTableIds(
  * R847: asks the server by key about what is NEW in the target, and returns the installed apps that
  * answered as owners of it and are not the target. A lead, never a refusal: the caller reads each
  * lead's own package and compares as it does for a dependent. Pushes warnings; rethrows only
- * `UnfilteredExtensionsQueryError`. No call at all when the target is not installed, or when nothing
- * is new. Never reads the whole list (R433); one deadline for all the reads, no retry.
+ * `UnfilteredExtensionsQueryError`. When the target is not installed (a first publish), one keyed read
+ * of the three injected codeunits only (R892); no call at all when nothing is new. Never reads the
+ * whole list (R433); one deadline for all the reads, no retry.
  */
 async function findNonDependentLeads(
   args: ObjectClashCheckArgs,

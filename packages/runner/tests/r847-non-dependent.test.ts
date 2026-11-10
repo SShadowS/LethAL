@@ -274,6 +274,16 @@ describe("R847 skip and base set", () => {
     expect(s.fetched).toEqual(["Other App"]);
   });
 
+  test("R892: on a first publish a failed keyed read warns that the injected ids were not checked, and refuses nothing", async () => {
+    const s = new Server();
+    s.installed = [];
+    s.objectError = new Error("boom");
+    const w = await checkObjectClashes(s.args(CODEUNIT_SRC));
+    // `readInBatches` returns a failed call as `error` (it rethrows only UnfilteredExtensionsQueryError).
+    expect(has(w, /the injected codeunits were not all read \(boom\)/)).toBe(true);
+    expect(s.fetched).toEqual([]);
+  });
+
   test("R892: on a first publish the target's own codeunit as an owner is not a lead", async () => {
     const s = new Server();
     s.installed = [];
