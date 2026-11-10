@@ -646,16 +646,21 @@ export function heavyVerdict(
   const skip = new Set<number>([...ancestors(procs, self), ...descendants(procs, self)]);
   // A slot file's pid is trusted only when it names a live corpus-snapshot slot holder. A manual
   // `flock heavy.<n> <cmd>` writes nothing (empty reads as 0, and pid 0's descendants are the whole
-  // container), and a stale pid names someone else. Untrusted -> exclude nothing; a manual holder is
-  // then counted as a held slot AND as a foreign job, which errs on the safe side (review r1 #1).
+  // container), and a stale pid names someone else. Untrusted -> exclude nothing, so a manual holder
+  // shows up as a held slot AND as a foreign job. They are one job: the total below takes the larger
+  // of the two counts, not their sum (R905 follow-up; summed, one bare-flock job filled the two-job
+  // cap by itself). KNOWN UNDER-COUNT: an untrusted slot whose process the scan cannot see, beside a
+  // separate unslotted job, reads as one job, not two. It is gone once a holder uses heavy-slot.sh.
   // An untrusted slot counts toward the total only; its process, if it names BC.History, is
   // counted as a BaseApp job by the scan below.
   let baseAppSlots = 0;
+  let trustedSlots = 0;
   for (const s of slotPids) {
     const p = procs.find((x) => x.pid === s);
     if (!(s > 1) || p === undefined) continue;
     const wrapper = WRAPPER_HOLDER_RE.exec(p.args);
     if (wrapper === null && !SLOT_HOLDER_RE.test(p.args)) continue;
+    trustedSlots++;
     // A wrapper's BaseApp status is its CLASS; holderIsBaseApp parses corpus-snapshot flags.
     if (wrapper !== null ? wrapper[2] === "baseapp" : holderIsBaseApp(p.args)) baseAppSlots++;
     for (const d of descendants(procs, s)) skip.add(d);
@@ -687,7 +692,8 @@ export function heavyVerdict(
   const classBaseApp =
     selfBaseApp || slotClasses.some((c) => c !== "other") || baseAppJobs.size > 0;
   const totalCap = classBaseApp ? BASEAPP_CAP : TOTAL_CAP;
-  const totalRefuse = foreign.length + otherSlotsHeld >= totalCap;
+  const untrustedSlots = otherSlotsHeld - trustedSlots;
+  const totalRefuse = trustedSlots + Math.max(untrustedSlots, foreign.length) >= totalCap;
   const baseAppRefuse = selfBaseApp && otherBaseApp >= BASEAPP_CAP;
   const refuse = totalRefuse || baseAppRefuse;
   const why = baseAppRefuse
