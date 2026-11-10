@@ -1790,7 +1790,7 @@
                   "type": "string"
                 }
               },
-              "killingTestNoClient": {
+              "killingTestFlagged": {
                 "const": true
               }
             }

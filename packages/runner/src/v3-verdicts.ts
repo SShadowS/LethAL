@@ -265,8 +265,9 @@ export function joinV3Verdicts(
         mutantCode: o.mutant.mutantId,
         killingTest: row.killingTest,
         coveringTests: covering,
-        // Ruling 2: a kill through a flagged (no-client-session) baseline pass is shown, labelled.
-        ...(input.flaggedTests.has(row.killingTest) ? { killingTestNoClient: true as const } : {}),
+        // Ruling 2: a kill through a flagged baseline pass is shown, labelled. al-runner's `flagged`
+        // names no reason (no client session is one of several), so the label claims only the flag.
+        ...(input.flaggedTests.has(row.killingTest) ? { killingTestFlagged: true as const } : {}),
       });
     } else if (row.verdict === "survived") notShown.survived++;
     else if (row.verdict === "timeout-killed") notShown.timeoutKilled++;

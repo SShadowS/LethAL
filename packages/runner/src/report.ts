@@ -266,7 +266,7 @@ export interface V3KillRow {
   readonly killingTest: string;
   readonly coveringTests: readonly string[];
   /** The killing test's v3 baseline pass was flagged (R-907 `baselineFlagged`, under --no-client). */
-  readonly killingTestNoClient?: true;
+  readonly killingTestFlagged?: true;
 }
 
 /** R-911: what `--v3-verdicts` joined. Rows it did not label are only counted. */
@@ -1704,7 +1704,7 @@ export interface SessionReport {
     readonly reportSha256: string;
     readonly runnerBuild?: string;
     readonly killed: number;
-    /** Of `killed`, the kills whose killing test's v3 baseline pass was flagged (no-client-session). */
+    /** Of `killed`, the kills whose killing test's v3 baseline pass was flagged (`killingTestFlagged`). */
     readonly killedByFlaggedTest: number;
     readonly notShown: V3VerdictsJoin["notShown"];
     readonly refusedTestsNotGreenOnV3: readonly string[];
@@ -2173,9 +2173,10 @@ export interface MutantOutcome {
     readonly verdict: "killed";
     readonly killingTest: string;
     readonly coveringTests: readonly string[];
-    /** The killing test's v3 baseline pass was flagged (no-client-session, R-907): its page calls
-     *  did not run. Shown all the same: the mutant run and the baseline skipped the same calls. */
-    readonly killingTestNoClient?: true;
+    /** The killing test's v3 baseline pass was flagged (R-907 `baselineFlagged`): it rests on an
+     *  assumption al-runner did not check, such as no client session; the reason is not recorded.
+     *  Shown all the same: the mutant run and the baseline ran under the same assumption. */
+    readonly killingTestFlagged?: true;
   };
   /** C02-01. The equivalence risk this row's OPERATOR declared (R172), on a `survived` row only:
    *  the same registry lookup `likelyEquivalentSurvivors` is built from, but per row, because
@@ -2833,9 +2834,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
               verdict: "killed" as const,
               killingTest: v3Kill.killingTest,
               coveringTests: v3Kill.coveringTests,
-              ...(v3Kill.killingTestNoClient === true
-                ? { killingTestNoClient: true as const }
-                : {}),
+              ...(v3Kill.killingTestFlagged === true ? { killingTestFlagged: true as const } : {}),
             },
           }
         : {}),
@@ -3394,9 +3393,8 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
               ? { runnerBuild: input.v3Verdicts.runnerBuild }
               : {}),
             killed: input.v3Verdicts.kills.length,
-            killedByFlaggedTest: input.v3Verdicts.kills.filter(
-              (k) => k.killingTestNoClient === true,
-            ).length,
+            killedByFlaggedTest: input.v3Verdicts.kills.filter((k) => k.killingTestFlagged === true)
+              .length,
             notShown: input.v3Verdicts.notShown,
             refusedTestsNotGreenOnV3: input.v3Verdicts.refusedTestsNotGreenOnV3,
           },
@@ -4011,7 +4009,7 @@ export function renderConsole(r: SessionReport): string {
     const n = v.notShown;
     const notGreen = v.refusedTestsNotGreenOnV3.length;
     lines.push(
-      `NOT BC VERDICTS: al-runner v3 killed ${v.killed} mutant(s) that BC reads as no-coverage, where BC refused every test v3 saw reaching them. They are not counted as killed and are not in the score above.${v.killedByFlaggedTest > 0 ? ` ${v.killedByFlaggedTest} of them through a test whose v3 pass ran without a client session (page calls not run).` : ""} Not shown: ${n.survived} v3 survived, ${n.timeoutKilled} v3 timeout, ${n.otherVerdict} other.${notGreen > 0 ? ` ${notGreen} test(s) BC refused did not pass on v3, so they show nothing.` : ""}`,
+      `NOT BC VERDICTS: al-runner v3 killed ${v.killed} mutant(s) that BC reads as no-coverage, where BC refused every test v3 saw reaching them. They are not counted as killed and are not in the score above.${v.killedByFlaggedTest > 0 ? ` ${v.killedByFlaggedTest} of them through a test whose v3 pass was flagged (it rests on an assumption al-runner did not check, such as no client session).` : ""} Not shown: ${n.survived} v3 survived, ${n.timeoutKilled} v3 timeout, ${n.otherVerdict} other.${notGreen > 0 ? ` ${notGreen} test(s) BC refused did not pass on v3, so they show nothing.` : ""}`,
     );
   }
   // R907: a qualifier on the score, for the same reason.

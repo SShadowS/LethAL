@@ -239,15 +239,15 @@ describe("joinV3Verdicts", () => {
   test("a kill through a flagged baseline pass is shown and labelled; an unflagged one is not", async () => {
     const flagged = await load({ testMethods: [{ name: REFUSED, baselineFlagged: true }] });
     const [kill] = joinV3Verdicts(flagged, [out("M1")], [REFUSED], new Set()).kills;
-    expect(kill?.killingTestNoClient).toBe(true);
+    expect(kill?.killingTestFlagged).toBe(true);
     const [plain] = (await join1({})).kills;
-    expect(plain !== undefined && "killingTestNoClient" in plain).toBe(false);
+    expect(plain !== undefined && "killingTestFlagged" in plain).toBe(false);
     // Another test flagged, the killing test not: the label is the killing test's own.
     const other = await load({
       testMethods: [{ name: REFUSED }, { name: "Page Tests.Other", baselineFlagged: true }],
     });
     const [unlabelled] = joinV3Verdicts(other, [out("M1")], [REFUSED], new Set()).kills;
-    expect(unlabelled !== undefined && "killingTestNoClient" in unlabelled).toBe(false);
+    expect(unlabelled !== undefined && "killingTestFlagged" in unlabelled).toBe(false);
   });
   test("a flagged pass counts as green for the refusal", async () => {
     const flagged = await load({ testMethods: [{ name: REFUSED, baselineFlagged: true }] });
