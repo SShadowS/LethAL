@@ -41,6 +41,20 @@
     }
   },
   {
+    "id": "edge-3096bf68f",
+    "track": "edge",
+    "version": "al-runner 3.0.0-alpha.13+edge.20261110 (3096bf68f)",
+    "binarySha256": "4907c4a2a649e93f62d8cc0362a7658090a183386aefd529d65974141bff0b71",
+    "readingsFrom": "edge-d72d3197d",
+    "readingsDigest": "f3d2aede5f3d8273b616237d80b7c0a72e18be71acf4f169999fb6882066872e",
+    "lethalCommit": "779791ae074036512e0db5d09e25cac05e4b72fc",
+    "gatedAt": "2026-11-10T08:00:05.049Z",
+    "warnFacts": {
+      "serve-keep-reasons": "matches"
+    },
+    "dotnetSidecarSha256": "7c55d5dc84e1dfe955ee9cb4dfcbb6faaa877f0444d5dcc766626ba80533e72c"
+  },
+  {
     "id": "edge-6bb821b98",
     "track": "edge",
     "version": "al-runner 3.0.0-alpha.13+edge.20261107 (6bb821b98)",

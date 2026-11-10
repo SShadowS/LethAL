@@ -70,3 +70,25 @@ scored all 57. Against `lethal/r895` on serve, 55 are identical in verdict and k
 first, which hung, so `ReportDataSetForCustomersByPeriod` came back as a cascade not-run row and was skipped (R639). After the change it
 runs alone, hangs too, and decides. The verdict class is unchanged; only the killing test moves to the earlier-ordered one. Sent to the
 orchestrator with this amendment, as observed.
+
+## Amendment 3: run 002, after the R-896 merge, observed AFTER the runs (2026-11-10, not pre-committed)
+
+**Why new proofs.** On the merged head, R-894's hang refusal (on master) refuses both `swap-find-direction` sites, so
+`PaymentPracticeBuilders` has no hang left and R-895 changes nothing there: master and the merged head gave **55 of 55 identical**
+(verdict, killing test, mutant code; `/coord/handoff/R-895/pp/master002*`, `after002*`). The cut was proved on a new invented fixture
+instead (`/coord/handoff/R-895/fixture2/`): a loop whose step is a call into another codeunit, which the hang check does not follow.
+
+**The fixture, master against the merged head, serve.**
+- Master hit its 90-minute cap after 8 of 10 mutants; the merged head scored all 10 in 2,969 s.
+- Of master's 8, 6 are identical.
+- The 2 differences are hung mutants, M0007 (`empty-block`) and M0008 (`return-value`) in `Stepper.Next`: `timeout-killed` by
+  `CountsToThree` on master, and `timeout-killed` by `CountsAgain` after.
+
+**Why.** LethAL's order for this procedure runs `CountsAgain` first (the store's per-test rows show it).
+- On master, al-runner ran `CountsToThree` first, which hung; `CountsAgain` and `CountsThird` came back as cascade rows and were
+  skipped, so the mutant was scored on `CountsToThree`, after 2,344 s plus a 542 s reproduction.
+- After, the request is cut at `CountsToThree`. `CountsAgain` has no row, so it runs alone, hangs, and decides (181 s, plus a 181 s
+  reproduction).
+
+The move is the same kind as amendments 1 and 2: the verdict class is unchanged and the killing test moves to the earlier-ordered one.
+No non-hung mutant moved.

@@ -54,6 +54,9 @@ export const RUNNER_REFUSAL =
  */
 export const V3_REFUSAL_PREFIX = "NotRun: out-of-scope:";
 
+/** v3's timeout row message (`notRun: true`), anchored: `Test exceeded <N>s timeout.` One source (R895). */
+export const V3_TIMEOUT_MESSAGE = /^Test exceeded (\d+)s timeout\.$/;
+
 /**
  * R675: a message that holds v3's refusal marker ANYWHERE (fail closed): whatever v3 writes before
  * it (a `<Type>: `, `Runtime error: `, `a::b: `, a chain) or whatever quotes it, the row is not

@@ -268,6 +268,17 @@ export interface EntriesAnswer {
   readonly tests: readonly Readonly<Record<string, unknown>>[];
   readonly entrySummaries: readonly Readonly<Record<string, unknown>>[];
   readonly summary: Readonly<Record<string, unknown>>;
+  /**
+   * R895: present only on a PARTIAL answer, cut at a streamed timeout row (`stopAtTimeout`): the
+   * entry id and test name of that row. Such an answer has no entry summaries and an empty summary.
+   */
+  readonly cut?: { readonly entry: string; readonly test: string };
+}
+
+/** R895: where a partial answer was cut: the entry id and the test of the timeout row. */
+export interface SentCut {
+  readonly entry: string;
+  readonly test: string;
 }
 
 const COUNT_KEYS = ["passed", "failed", "errors", "notRun", "total"] as const;
@@ -333,10 +344,29 @@ export function decodeEntriesAnswer(
   sent: readonly SentEntry[],
   answer: EntriesAnswer,
   fields = false,
-): { readonly rows: ReadonlyMap<string, readonly V3Row[]> } | { readonly why: string } {
-  const ids = answer.entrySummaries.map((s) => String(s.entry));
-  if (ids.join("\n") !== sent.map((e) => e.id).join("\n")) {
-    return { why: `entrySummary ids [${ids.join(", ")}] are not the sent ids in sent order` };
+):
+  | { readonly rows: ReadonlyMap<string, readonly V3Row[]>; readonly cut?: SentCut }
+  | { readonly why: string } {
+  const cut = answer.cut;
+  const cutIndex = cut === undefined ? -1 : sent.findIndex((e) => e.id === cut.entry);
+  if (cut !== undefined) {
+    // R895: a partial answer is accepted only with its marker, and the marker must name a sent
+    // entry; it carries no summaries at all (they come at the end of a request).
+    if (cutIndex < 0) return { why: `the cut marker names entry ${cut.entry}, which was not sent` };
+    if (answer.entrySummaries.length > 0) {
+      return { why: "a partial (cut) answer carries entrySummary lines" };
+    }
+    const last = answer.tests.at(-1);
+    if (last === undefined || String(last.entry) !== cut.entry || String(last.name) !== cut.test) {
+      return {
+        why: `the cut marker (${cut.entry}, ${cut.test}) is not the answer's last test line`,
+      };
+    }
+  } else {
+    const ids = answer.entrySummaries.map((s) => String(s.entry));
+    if (ids.join("\n") !== sent.map((e) => e.id).join("\n")) {
+      return { why: `entrySummary ids [${ids.join(", ")}] are not the sent ids in sent order` };
+    }
   }
   const byId = new Map(sent.map((e) => [e.id, e]));
   const rows = new Map<string, V3Row[]>(sent.map((e) => [e.id, []]));
@@ -349,11 +379,15 @@ export function decodeEntriesAnswer(
     if (r.codeunit !== e.codeunit) {
       return { why: `entry ${id} holds ${r.name}, not a row of codeunit ${e.codeunit}` };
     }
+    if (cutIndex >= 0 && sent.indexOf(e) > cutIndex) {
+      return { why: `entry ${id} has a row after the cut at entry ${cut?.entry ?? "?"}` };
+    }
     const mine = rows.get(id) ?? [];
     if (mine.some((x) => x.name === r.name)) return { why: `entry ${id} names ${r.name} twice` };
     mine.push(r);
     rows.set(id, mine);
   }
+  if (cut !== undefined) return { rows, cut: { entry: cut.entry, test: cut.test } };
   const sums: Counts = { passed: 0, failed: 0, errors: 0, notRun: 0, total: 0 };
   for (const e of sent) {
     // The echo's "exactly one row" is `echoMismatch`'s: a wrong echo errors its group.
