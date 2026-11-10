@@ -365,6 +365,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
         "seq": 9,
         "siteCount": 6,
         "sourceSha256": "b5663472c6745b2debcef8680592ede36d8859b8dbf05a2a79e20358103d9530",
+        "testSourceSha256": "a2d352d522162f7adf7785aa930d9d2d978afddd74eb71349da0b2ababd4642c",
         "totalFiles": 2,
         "twinSites": [],
         "type": "mutation-set-generated",

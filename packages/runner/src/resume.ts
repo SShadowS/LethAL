@@ -414,6 +414,8 @@ export interface SessionFingerprintInput {
    *  (a split helper alone does not set it); every combination is listed so none can be lost. */
   readonly testDiscovery?: TestDiscoveryMarker;
   readonly skipKnownSurvivors: boolean;
+  /** R-911: sha256 of the `--v3-verdicts` report. Conditional, so a run without the flag keeps its digest. */
+  readonly v3VerdictsSha256?: string;
   /**
    * R325: the identity scheme this session's keys are made under (`IDENTITY_SCHEME`). ALWAYS in
    * the digest, unlike R127's conditional keys: those were added so an old store kept resuming,
@@ -518,6 +520,7 @@ export function sessionFingerprint(input: SessionFingerprintInput): string {
       : {}),
     ...(input.testDiscovery !== undefined ? { testDiscovery: input.testDiscovery } : {}),
     skipKnownSurvivors: input.skipKnownSurvivors,
+    ...(input.v3VerdictsSha256 !== undefined ? { v3VerdictsSha256: input.v3VerdictsSha256 } : {}),
     identityScheme: input.identityScheme,
     // R354: conditional, see `SessionFingerprintInput.coverageMode`.
     ...(input.coverageMode !== undefined ? { coverageMode: input.coverageMode } : {}),

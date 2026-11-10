@@ -39,6 +39,7 @@ import type {
   ExcludedTestRecord,
   MutantErrorCause,
   NotInstrumentedFile,
+  V3VerdictsJoin,
 } from "./report";
 import type { CoverageAttribution } from "./selection";
 import type { CarryHidden, MutantVerdict, RunnerKind } from "./store";
@@ -213,6 +214,8 @@ export type RunEventInput =
       /** R274: `hashSourceSnapshot` over the snapshot generation parsed. Optional on the wire so
        *  an older stream still folds; the producer always writes it. */
       readonly sourceSha256?: string;
+      /** R-911: see `SessionReport.testSourceSha256`. Optional on the wire for an older stream. */
+      readonly testSourceSha256?: string;
       /** R443: `numberingDigestOf` over this run's numbered entries. Optional on the wire so a
        *  stream from before R443 still folds; the producer always writes it, with the next two. */
       readonly numberingDigest?: string;
@@ -530,6 +533,8 @@ export type RunEventInput =
     }
   | { readonly type: "warning"; readonly code: string; readonly message: string }
   | { readonly type: "quarantined"; readonly reason: string }
+  /** R-911: what `--v3-verdicts` joined. Emitted once, last, and only with the flag. */
+  | ({ readonly type: "v3-verdicts-joined" } & V3VerdictsJoin)
   | { readonly type: "session-finished"; readonly elapsedMs: number };
 
 export type RunEvent = RunEventInput & Base;

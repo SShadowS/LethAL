@@ -61,6 +61,10 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     'case "bcdev":': "exhaustive-switch",
     'case "al-runner-v3":': "exhaustive-switch",
   },
+  "v3-verdicts.ts": {
+    'if (r.backend !== "al-runner-v3") {': "v3",
+    'if (r.coverageMode !== "al-runner" || r.coverageOffFiles !== undefined) {': "coverage-mode",
+  },
   "orchestrator.ts": {
     'caps.kind === "al-runner-v3" ? { kind: "al-runner-v3" } : { kind: "bcdev" };': "v3",
     'if (caps.kind === "al-runner-v3" && workers > 1) {': "v3",

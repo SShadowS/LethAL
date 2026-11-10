@@ -239,8 +239,9 @@ describe("Caveat union", () => {
       "baseline-test-stopped": true,
       "al-runner-v3-serve-default-fallback-warmup": true,
       "al-runner-v3-coverage-off": true,
+      "v3-verdicts-joined": true,
     };
-    expect(Object.keys(all).length).toBe(30);
+    expect(Object.keys(all).length).toBe(31);
   });
 });
 
@@ -378,6 +379,89 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
       buildReport(STATICS, seq([warn("al-runner-v3-serve-default-fallback"), ...base])).validity
         .caveats,
     ).not.toContain(code);
+  });
+
+  describe("R-911: a joined v3 kill is shown and never counted", () => {
+    const generated: RunEventInput = {
+      type: "mutation-set-generated",
+      siteCount: 1,
+      deployedCount: 1,
+      hangCapableCount: 0,
+      totalFiles: 1,
+      instrumentableFiles: 1,
+      notInstrumentedFiles: [],
+      declarativeSiteFiles: [],
+      preprocExcludedFiles: [],
+      excludedByOnly: 0,
+      excludedByExclude: 0,
+      excludedByOperator: 0,
+    };
+    const noCoverage: RunEventInput = {
+      type: "mutant-scored",
+      mutant: mutant("M0001"),
+      verdict: "no-coverage",
+      batchIndex: 0,
+      durationMs: 0,
+      coveringTests: [],
+    };
+    const baseline: RunEventInput = {
+      type: "baseline-batch-finished",
+      batchIndex: 0,
+      verdicts: [],
+    };
+    const finished: RunEventInput = { type: "session-finished", elapsedMs: 1 };
+    const joined: RunEventInput = {
+      type: "v3-verdicts-joined",
+      reportSha256: "abc",
+      runnerBuild: "b1",
+      kills: [{ batchIndex: 0, mutantCode: "M0001", killingTest: "P.T", coveringTests: ["P.T"] }],
+      notShown: { survived: 3, timeoutKilled: 1, otherVerdict: 2 },
+      refusedTestsNotGreenOnV3: ["P.U"],
+    };
+    const withJoin = () =>
+      buildReport(STATICS, seq([generated, baseline, noCoverage, joined, finished]));
+    const without = () => buildReport(STATICS, seq([generated, baseline, noCoverage, finished]));
+
+    test("the row keeps its verdict and carries the kill; counts and score do not move", () => {
+      const r = withJoin();
+      const [row] = r.mutants;
+      expect(row?.verdict).toBe("no-coverage");
+      expect(row?.v3Verdict).toEqual({
+        verdict: "killed",
+        killingTest: "P.T",
+        coveringTests: ["P.T"],
+      });
+      expect(r.counts).toEqual(without().counts);
+      expect(r.mutationScore).toBe(without().mutationScore);
+    });
+    test("its own block, caveat and console line", () => {
+      const r = withJoin();
+      expect(r.v3Verdicts).toEqual({
+        reportSha256: "abc",
+        runnerBuild: "b1",
+        killed: 1,
+        notShown: { survived: 3, timeoutKilled: 1, otherVerdict: 2 },
+        refusedTestsNotGreenOnV3: ["P.U"],
+      });
+      expect(r.validity.caveats).toContain("v3-verdicts-joined");
+      const out = renderConsole(r);
+      expect(out).toContain("NOT BC VERDICTS: al-runner v3 killed 1 mutant(s)");
+      expect(out).toContain("Not shown: 3 v3 survived, 1 v3 timeout, 2 other.");
+      expect(out).toContain("1 refused test(s) did not pass on v3 either.");
+    });
+    test("no join: no block, no caveat, no line, no row field", () => {
+      const r = without();
+      expect("v3Verdicts" in r).toBe(false);
+      expect(r.validity.caveats).not.toContain("v3-verdicts-joined");
+      expect(renderConsole(r)).not.toContain("NOT BC VERDICTS");
+      expect(r.mutants[0] !== undefined && "v3Verdict" in r.mutants[0]).toBe(false);
+    });
+    test("a join with no kills still raises the caveat", () => {
+      const empty: RunEventInput = { ...joined, kills: [] } as RunEventInput;
+      const r = buildReport(STATICS, seq([generated, baseline, noCoverage, empty, finished]));
+      expect(r.validity.caveats).toContain("v3-verdicts-joined");
+      expect(r.mutants[0] !== undefined && "v3Verdict" in r.mutants[0]).toBe(false);
+    });
   });
 
   describe("R907: coverage LethAL turned off reaches the report and the console", () => {

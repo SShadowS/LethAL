@@ -19,6 +19,7 @@ import {
   type NotInstrumentedFile,
   type SessionOutcome,
   type TestMethodRecord,
+  type V3VerdictsJoin,
   mutantRef,
 } from "./report";
 import type { BatchArtifact, CarryHidden } from "./store";
@@ -202,6 +203,10 @@ export interface FoldedReport {
   readonly numbering?: FoldedNumbering;
   /** R274 — see `SessionReport.sourceSha256`. Absent for an older stream. */
   readonly sourceSha256?: string;
+  /** R-911: see `SessionReport.testSourceSha256`. Absent for an older stream. */
+  readonly testSourceSha256?: string;
+  /** R-911: the `v3-verdicts-joined` event. Absent without `--v3-verdicts`. */
+  readonly v3Verdicts?: V3VerdictsJoin;
   /** R565 — see `SessionReport.dependencyReportSources`. Absent for an older stream. */
   readonly dependencyReportSources?: readonly DependencyReportSourceRecord[];
   /** R565 — see `SessionReport.dependencySourceSha256`. Absent for an older stream. */
@@ -328,6 +333,8 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   let excludedByLines = 0;
   let numbering: FoldedNumbering | undefined;
   let sourceSha256: string | undefined;
+  let testSourceSha256: string | undefined;
+  let v3Verdicts: V3VerdictsJoin | undefined;
   let dependencyReportSources: readonly DependencyReportSourceRecord[] | undefined;
   let dependencySourceSha256: string | undefined;
 
@@ -427,6 +434,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         excludedByOperator = e.excludedByOperator;
         excludedByLines = e.excludedByLines ?? 0;
         sourceSha256 = e.sourceSha256;
+        testSourceSha256 = e.testSourceSha256;
         // R565: written together by the producer, so a stream with only one is corrupt.
         if ((e.dependencyReportSources === undefined) !== (e.dependencySourceSha256 === undefined))
           throw new Error(
@@ -490,6 +498,11 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         sawQuarantined = true;
         quarantinedReason = e.reason;
         break;
+      case "v3-verdicts-joined": {
+        const { type: _type, seq: _seq, ...join } = e;
+        v3Verdicts = join;
+        break;
+      }
       case "session-finished":
         sawSessionFinished = true;
         totalMs = e.elapsedMs;
@@ -838,6 +851,8 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
       : {}),
     ...(numbering !== undefined ? { numbering } : {}),
     ...(sourceSha256 !== undefined ? { sourceSha256 } : {}),
+    ...(testSourceSha256 !== undefined ? { testSourceSha256 } : {}),
+    ...(v3Verdicts !== undefined ? { v3Verdicts } : {}),
     ...(dependencyReportSources !== undefined ? { dependencyReportSources } : {}),
     ...(dependencySourceSha256 !== undefined ? { dependencySourceSha256 } : {}),
   };

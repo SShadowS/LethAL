@@ -265,8 +265,11 @@ import { refuseRetiredV2Report } from "./v2-retired";
  *
  * 24: R907 added the caveat value `al-runner-v3-coverage-off` to `$.caveats[].caveat`. A new value,
  * so it bumps (R233); v23 is frozen.
+ *
+ * 25: R-911 added the caveat value `v3-verdicts-joined` to `$.caveats[].caveat`. A new value, so it
+ * bumps (R233); v24 is frozen.
  */
-export const EXPLAIN_SCHEMA_VERSION = 24;
+export const EXPLAIN_SCHEMA_VERSION = 25;
 
 /**
  * Thrown when the input is not an explainable `SessionReport` — a caller-contract violation, not a

@@ -415,6 +415,7 @@ function parseBackendKind(raw: string | undefined): BackendKind {
  *  writes the dry-run listing. */
 export const DRY_RUN_REFUSED = [
   "tests",
+  "v3-verdicts",
   "progress-out",
   "workers",
   "keep-env",
@@ -579,6 +580,11 @@ export interface RunCliConfig {
    * Absent means `BASELINE_TIMEOUT_DEFAULT` (120 s). The reports have told users to raise it since R658.
    */
   readonly baselineTimeoutMs?: number;
+  /**
+   * R-911: `--v3-verdicts <v3 report.json>`, bcdev only. Shows v3's kill, labelled non-authoritative,
+   * on a `no-coverage` row whose only tests BC refused. Never changes a verdict or the score.
+   */
+  readonly v3VerdictsPath?: string;
   /**
    * R198: `--max-methods-per-call <n>` caps one `RunMutantMany` call (default unbounded; the
    * tables gate forces 2 to exercise chunking live), `--request-ceiling-ms <n>` bounds one call
@@ -1085,6 +1091,9 @@ RUN — cost and recovery
                              count because BC recompiles server-side
   --mutant-timeout-ms <n>    floor for a mutant's time budget (default ${MIN_MUTANT_BUDGET_MS} ms). The budget is
                              max(2 x that test's baseline, this). Exceeding it quarantines the run
+  --v3-verdicts <file>       (bcdev) a finished al-runner-v3 report of the same source and tests. A
+                             no-coverage mutant whose only tests BC refused shows v3's kill, marked
+                             NOT a BC verdict. Never changes a verdict or the score.
   --baseline-timeout-ms <n>  how long one baseline test may run before LethAL stops it (default
                              ${BASELINE_TIMEOUT_DEFAULT} ms). Raise it for a test that is slow, not hung
   --max-methods-per-call <n> cap the covering tests one RunMutantMany call runs (default: all that
@@ -1374,6 +1383,8 @@ export const RUN_FLAGS = {
   "mutant-timeout-ms": { type: "string" },
   // R821: see `RunCliConfig.baselineTimeoutMs`.
   "baseline-timeout-ms": { type: "string" },
+  // R-911: see `RunCliConfig.v3VerdictsPath`.
+  "v3-verdicts": { type: "string" },
   // R198: see `RunCliConfig.groupRuns`.
   "max-methods-per-call": { type: "string" },
   "request-ceiling-ms": { type: "string" },
@@ -1443,6 +1454,7 @@ const RUN_ONLY_FLAGS = [
   "max-guards-per-batch",
   "mutant-timeout-ms",
   "baseline-timeout-ms",
+  "v3-verdicts",
   "max-methods-per-call",
   "request-ceiling-ms",
   "no-group-runs",
@@ -2331,6 +2343,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     ...(maxGuardsPerBatch !== undefined ? { maxGuardsPerBatch } : {}),
     ...(mutantTimeoutMs !== undefined ? { mutantTimeoutMs } : {}),
     ...(baselineTimeoutMs !== undefined ? { baselineTimeoutMs } : {}),
+    ...(values["v3-verdicts"] !== undefined ? { v3VerdictsPath: values["v3-verdicts"] } : {}),
     ...groupRuns,
     ...resume,
     ...(values["allow-large-run"] === true ? { allowLargeRun: true } : {}),
@@ -4196,6 +4209,9 @@ export async function runFromCli(
                 : {}),
               ...(parsed.mutantTimeoutMs !== undefined
                 ? { mutantTimeoutMs: parsed.mutantTimeoutMs }
+                : {}),
+              ...(parsed.v3VerdictsPath !== undefined
+                ? { v3VerdictsPath: parsed.v3VerdictsPath }
                 : {}),
               ...(parsed.baselineTimeoutMs !== undefined
                 ? { baselineTimeoutMs: parsed.baselineTimeoutMs }

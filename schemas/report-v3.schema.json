@@ -86,7 +86,8 @@
               "project-symlink-skipped",
               "baseline-test-stopped",
               "al-runner-v3-serve-default-fallback-warmup",
-              "al-runner-v3-coverage-off"
+              "al-runner-v3-coverage-off",
+              "v3-verdicts-joined"
             ]
           }
         },
@@ -466,6 +467,29 @@
           },
           "blockEndLine": {
             "type": "number"
+          },
+          "v3Verdict": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "verdict",
+              "killingTest",
+              "coveringTests"
+            ],
+            "properties": {
+              "verdict": {
+                "const": "killed"
+              },
+              "killingTest": {
+                "type": "string"
+              },
+              "coveringTests": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "equivalenceRisk": {
             "type": "string"
@@ -1135,6 +1159,56 @@
     },
     "sourceSha256": {
       "type": "string"
+    },
+    "testSourceSha256": {
+      "type": "string"
+    },
+    "v3Verdicts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reportSha256",
+        "killed",
+        "notShown",
+        "refusedTestsNotGreenOnV3"
+      ],
+      "properties": {
+        "reportSha256": {
+          "type": "string"
+        },
+        "runnerBuild": {
+          "type": "string"
+        },
+        "killed": {
+          "type": "number"
+        },
+        "notShown": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "survived",
+            "timeoutKilled",
+            "otherVerdict"
+          ],
+          "properties": {
+            "survived": {
+              "type": "number"
+            },
+            "timeoutKilled": {
+              "type": "number"
+            },
+            "otherVerdict": {
+              "type": "number"
+            }
+          }
+        },
+        "refusedTestsNotGreenOnV3": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
     },
     "dependencyReportSources": {
       "type": "array",

@@ -256,7 +256,29 @@ export type Caveat =
   | "project-symlink-skipped"
   | "baseline-test-stopped"
   | "al-runner-v3-serve-default-fallback-warmup"
-  | "al-runner-v3-coverage-off";
+  | "al-runner-v3-coverage-off"
+  | "v3-verdicts-joined";
+
+/** R-911: one al-runner v3 kill shown on a `no-coverage` row (`--v3-verdicts`). */
+export interface V3KillRow {
+  readonly batchIndex: number;
+  readonly mutantCode: string;
+  readonly killingTest: string;
+  readonly coveringTests: readonly string[];
+}
+
+/** R-911: what `--v3-verdicts` joined. Rows it did not label are only counted. */
+export interface V3VerdictsJoin {
+  readonly reportSha256: string;
+  readonly runnerBuild?: string;
+  readonly kills: readonly V3KillRow[];
+  readonly notShown: {
+    readonly survived: number;
+    readonly timeoutKilled: number;
+    readonly otherVerdict: number;
+  };
+  readonly refusedTestsNotGreenOnV3: readonly string[];
+}
 
 /**
  * R403 phase C: one test the arm filter dealt with, as `SessionReport.excludedTests` lists it.
@@ -664,6 +686,18 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "Not a statement that any one survivor is unreached: this run cannot tell. Not a wrong kill: a " +
       "killed mutant was killed by a test that ran.",
     basis: "R907",
+  },
+  "v3-verdicts-joined": {
+    meaning:
+      "This bcdev run was joined with a finished al-runner v3 report (`--v3-verdicts`). A `no-coverage` " +
+      "row whose only covering tests BC refused, and which v3 killed, carries `v3Verdict`. Nothing has " +
+      "checked those kills against BC, and the two backends can differ (R895, R890). Everything the " +
+      "join did not label is only counted in the report's `v3Verdicts.notShown`.",
+    entailedNegative:
+      "Not a BC verdict. A v3 kill does not count as killed: the row's verdict stays `no-coverage`, and " +
+      "no count and no score includes it. A v3 survivor is not shown at all, because v3's coverage " +
+      "usually cannot say that a test reached the mutant.",
+    basis: "R908",
   },
 };
 
@@ -1644,6 +1678,23 @@ export interface SessionReport {
    */
   readonly sourceSha256?: string;
   /**
+   * R-911: sha256 of the test app (`hashTestDir`) and its build symbols. Written by every run, so a
+   * v3 report can later prove it measured the test app a bcdev run refuses from. Absent on an older
+   * report. `sourceSha256` covers the target only.
+   */
+  readonly testSourceSha256?: string;
+  /**
+   * R-911: present only when the run was given `--v3-verdicts`. `killed` is how many `no-coverage`
+   * rows carry `v3Verdict`. None of these numbers is in `counts` or `mutationScore`.
+   */
+  readonly v3Verdicts?: {
+    readonly reportSha256: string;
+    readonly runnerBuild?: string;
+    readonly killed: number;
+    readonly notShown: V3VerdictsJoin["notShown"];
+    readonly refusedTestsNotGreenOnV3: readonly string[];
+  };
+  /**
    * R565: every report the project calls through `Report X` but does not declare, as looked up in
    * the dependency packages for R555's preset-writer rule (`kind` "report"), each reportextension of
    * it read beside it ("extension"), and each package that could not be used ("package"). An
@@ -2098,6 +2149,16 @@ export interface MutantOutcome {
    */
   readonly blockStartLine?: number;
   readonly blockEndLine?: number;
+  /**
+   * R-911: al-runner v3 killed this mutant, in the report `--v3-verdicts` named, and BC refused every
+   * test that reaches it. NOT a BC verdict: `verdict` stays `no-coverage`, so no count and no score
+   * includes it. Present only on such a row.
+   */
+  readonly v3Verdict?: {
+    readonly verdict: "killed";
+    readonly killingTest: string;
+    readonly coveringTests: readonly string[];
+  };
   /** C02-01. The equivalence risk this row's OPERATOR declared (R172), on a `survived` row only:
    *  the same registry lookup `likelyEquivalentSurvivors` is built from, but per row, because
    *  mutant ids restart per batch and that list held bare `mutantCode`s until R231 (v3).
@@ -2630,6 +2691,9 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     deadlineExceeded: 0,
   };
   const mutants: MutantOutcome[] = [];
+  const v3Kills = new Map(
+    (input.v3Verdicts?.kills ?? []).map((k) => [mutantRef(k.batchIndex, k.mutantCode), k]),
+  );
 
   for (const o of input.outcomes) {
     switch (o.verdict) {
@@ -2726,7 +2790,21 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     // risk on `survived` only. The row's `readerMark` is added below, from the run-level result.
     const risk =
       row.verdict === "survived" ? EQUIVALENCE_RISK_BY_OPERATOR.get(row.operatorName) : undefined;
-    mutants.push({ ...row, ...(risk !== undefined ? { equivalenceRisk: risk } : {}) });
+    // R-911: on a `no-coverage` row only; `verdict` above is untouched.
+    const v3Kill = v3Kills.get(mutantRef(row.batchIndex, row.mutantCode));
+    mutants.push({
+      ...row,
+      ...(risk !== undefined ? { equivalenceRisk: risk } : {}),
+      ...(v3Kill !== undefined
+        ? {
+            v3Verdict: {
+              verdict: "killed" as const,
+              killingTest: v3Kill.killingTest,
+              coveringTests: v3Kill.coveringTests,
+            },
+          }
+        : {}),
+    });
   }
 
   // R172 proposal 3. Matched here rather than in the fold because it needs the finished per-mutant
@@ -2958,6 +3036,8 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     )
   )
     caveats.push("al-runner-v3-serve-default-fallback-warmup");
+  // R-911 - see CAVEAT_INTERPRETATIONS["v3-verdicts-joined"]. Raised by the flag, even at 0 kills.
+  if (input.v3Verdicts !== undefined) caveats.push("v3-verdicts-joined");
   // R907 - see CAVEAT_INTERPRETATIONS["al-runner-v3-coverage-off"].
   if ((input.caps.coverageOffFiles ?? []).length > 0) caveats.push("al-runner-v3-coverage-off");
   // See CAVEAT_INTERPRETATIONS["runner-disagreement"] for what this caveat means to a reader.
@@ -3270,6 +3350,20 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     buildSymbols: [...statics.buildSymbols],
     identityScheme: IDENTITY_SCHEME,
     ...(input.sourceSha256 !== undefined ? { sourceSha256: input.sourceSha256 } : {}),
+    ...(input.testSourceSha256 !== undefined ? { testSourceSha256: input.testSourceSha256 } : {}),
+    ...(input.v3Verdicts !== undefined
+      ? {
+          v3Verdicts: {
+            reportSha256: input.v3Verdicts.reportSha256,
+            ...(input.v3Verdicts.runnerBuild !== undefined
+              ? { runnerBuild: input.v3Verdicts.runnerBuild }
+              : {}),
+            killed: input.v3Verdicts.kills.length,
+            notShown: input.v3Verdicts.notShown,
+            refusedTestsNotGreenOnV3: input.v3Verdicts.refusedTestsNotGreenOnV3,
+          },
+        }
+      : {}),
     ...(input.dependencyReportSources !== undefined
       ? { dependencyReportSources: input.dependencyReportSources }
       : {}),
@@ -3873,6 +3967,15 @@ export function renderConsole(r: SessionReport): string {
     );
   }
   // Same reasoning as NOT INSTRUMENTED above: a qualifier on the score belongs next to the score.
+  // R-911: its own line, so a v3 kill is never read as part of the score above.
+  if (r.v3Verdicts !== undefined) {
+    const v = r.v3Verdicts;
+    const n = v.notShown;
+    const notGreen = v.refusedTestsNotGreenOnV3.length;
+    lines.push(
+      `NOT BC VERDICTS: al-runner v3 killed ${v.killed} mutant(s) that BC reads as no-coverage, because BC refused every test reaching them. They are not counted as killed and are not in the score above. Not shown: ${n.survived} v3 survived, ${n.timeoutKilled} v3 timeout, ${n.otherVerdict} other.${notGreen > 0 ? ` ${notGreen} refused test(s) did not pass on v3 either.` : ""}`,
+    );
+  }
   // R907: a qualifier on the score, for the same reason.
   if (r.coverageOffFiles !== undefined && r.coverageOffFiles.length > 0) {
     const shown = r.coverageOffFiles.slice(0, 5).join(", ");

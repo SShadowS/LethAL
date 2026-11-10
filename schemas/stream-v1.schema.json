@@ -539,6 +539,9 @@
         "sourceSha256": {
           "type": "string"
         },
+        "testSourceSha256": {
+          "type": "string"
+        },
         "numberingDigest": {
           "type": "string"
         },
@@ -1730,6 +1733,88 @@
         },
         "reason": {
           "type": "string"
+        },
+        "seq": {
+          "type": "number"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "reportSha256",
+        "kills",
+        "notShown",
+        "refusedTestsNotGreenOnV3",
+        "seq"
+      ],
+      "properties": {
+        "type": {
+          "const": "v3-verdicts-joined"
+        },
+        "reportSha256": {
+          "type": "string"
+        },
+        "runnerBuild": {
+          "type": "string"
+        },
+        "kills": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "batchIndex",
+              "mutantCode",
+              "killingTest",
+              "coveringTests"
+            ],
+            "properties": {
+              "batchIndex": {
+                "type": "number"
+              },
+              "mutantCode": {
+                "type": "string"
+              },
+              "killingTest": {
+                "type": "string"
+              },
+              "coveringTests": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "notShown": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "survived",
+            "timeoutKilled",
+            "otherVerdict"
+          ],
+          "properties": {
+            "survived": {
+              "type": "number"
+            },
+            "timeoutKilled": {
+              "type": "number"
+            },
+            "otherVerdict": {
+              "type": "number"
+            }
+          }
+        },
+        "refusedTestsNotGreenOnV3": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "seq": {
           "type": "number"

@@ -3736,6 +3736,131 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
   }
   const FENCED = { ...CAPS_NST, coverage: "fenced" as const };
 
+  describe("R-911: --v3-verdicts through runSession", () => {
+    const REFUSED = "Sandbox Tests.UnsupportedTest";
+    /** A real run's report, reshaped as the v3 report of the same project. */
+    async function v3ReportOf(
+      dirs: Awaited<ReturnType<typeof project>>,
+      over: Record<string, unknown> = {},
+    ): Promise<{ path: string; first: Awaited<ReturnType<typeof runSession>> }> {
+      const store = new ResultsStore(":memory:");
+      const first = await runSession({
+        backend: new RecordingBackend(FENCED),
+        store,
+        ...dirs,
+        selectorIds,
+      });
+      expect(first.mutants.some((m) => m.verdict === "no-coverage")).toBe(true);
+      const path = join(dirs.instrumentedDir, "..", "v3.report.json");
+      await Bun.write(
+        path,
+        JSON.stringify({
+          ...first,
+          backend: "al-runner-v3",
+          coverageMode: "al-runner",
+          unsupportedTests: [],
+          testMethods: [{ name: REFUSED }],
+          mutants: first.mutants.map((m) =>
+            m.verdict === "no-coverage"
+              ? { ...m, verdict: "killed", killingTest: REFUSED, coveringTests: [REFUSED] }
+              : m,
+          ),
+          ...over,
+        }),
+      );
+      return { path, first };
+    }
+
+    test("the kills are shown; every verdict, count and score equals the run without the flag", async () => {
+      const dirs = await project();
+      const { path, first } = await v3ReportOf(dirs);
+      const report = await runSession({
+        backend: new RecordingBackend(FENCED),
+        store: new ResultsStore(":memory:"),
+        ...dirs,
+        selectorIds,
+        v3VerdictsPath: path,
+      });
+      expect(report.mutants.map((m) => [m.mutantCode, m.verdict])).toEqual(
+        first.mutants.map((m) => [m.mutantCode, m.verdict]),
+      );
+      expect(report.counts).toEqual(first.counts);
+      expect(report.mutationScore).toBe(first.mutationScore);
+      const noCoverage = report.mutants.filter((m) => m.verdict === "no-coverage");
+      expect(noCoverage.every((m) => m.v3Verdict?.killingTest === REFUSED)).toBe(true);
+      expect(report.mutants.filter((m) => m.v3Verdict !== undefined)).toHaveLength(
+        noCoverage.length,
+      );
+      expect(report.v3Verdicts?.killed).toBe(noCoverage.length);
+      expect(report.validity.caveats).toContain("v3-verdicts-joined");
+      expect(first.validity.caveats).not.toContain("v3-verdicts-joined");
+      expect(typeof first.testSourceSha256).toBe("string");
+    });
+
+    test("a report of other sites is refused before anything is sent", async () => {
+      const dirs = await project();
+      const { path } = await v3ReportOf(dirs, { numberingDigest: "other" });
+      const backend = new RecordingBackend(FENCED);
+      await expect(
+        runSession({
+          backend,
+          store: new ResultsStore(":memory:"),
+          ...dirs,
+          selectorIds,
+          v3VerdictsPath: path,
+        }),
+      ).rejects.toThrow(/numberingDigest/);
+      expect(backend.sent).toEqual([]);
+    });
+
+    test("a row that differs is refused before anything is sent", async () => {
+      const dirs = await project();
+      const { path, first } = await v3ReportOf(dirs);
+      const body = JSON.parse(await readFile(path, "utf8"));
+      body.mutants[0].mutatedText = `${first.mutants[0]?.mutatedText}x`;
+      await Bun.write(path, JSON.stringify(body));
+      const backend = new RecordingBackend(FENCED);
+      await expect(
+        runSession({
+          backend,
+          store: new ResultsStore(":memory:"),
+          ...dirs,
+          selectorIds,
+          v3VerdictsPath: path,
+        }),
+      ).rejects.toThrow(/different site or text/);
+      expect(backend.sent).toEqual([]);
+    });
+
+    test("a different test app is refused: the test-side hash is real", async () => {
+      const dirs = await project();
+      const { path } = await v3ReportOf(dirs);
+      await Bun.write(join(dirs.testDir, "Extra.al"), "// changed after the v3 run\n");
+      await expect(
+        runSession({
+          backend: new RecordingBackend(FENCED),
+          store: new ResultsStore(":memory:"),
+          ...dirs,
+          selectorIds,
+          v3VerdictsPath: path,
+        }),
+      ).rejects.toThrow(/testSourceSha256/);
+    });
+
+    test("the flag on another backend is refused by name", async () => {
+      const dirs = await project();
+      await expect(
+        runSession({
+          backend: new RecordingBackend({ ...FENCED, kind: "al-runner-v3", authoritative: false }),
+          store: new ResultsStore(":memory:"),
+          ...dirs,
+          selectorIds,
+          v3VerdictsPath: join(dirs.instrumentedDir, "..", "absent.json"),
+        }),
+      ).rejects.toThrow(/bcdev run only/);
+    });
+  });
+
   test("fenced: never sent, named, recorded as skip with the reason", async () => {
     const dirs = await project();
     const backend = new RecordingBackend(FENCED);

@@ -304,6 +304,14 @@ import type {
 import { TestAppError } from "./test-app-publish";
 import { TestDigestError, type TestDigestParts, testDigestsOfModel } from "./test-digest";
 import {
+  V3VerdictsError,
+  checkV3Rows,
+  checkV3Verdicts,
+  joinV3Verdicts,
+  loadV3Verdicts,
+  testSourceSha256,
+} from "./v3-verdicts";
+import {
   PublishAppUnreadableError,
   ServerGenerationChangedError,
   TestAppDriftedError,
@@ -1602,6 +1610,8 @@ export interface SessionConfig {
   readonly configPath?: string;
   readonly selectorIds: SelectorConfig;
   readonly baselineTimeoutMs?: number; // default 120000
+  /** R-911: `--v3-verdicts <v3 report.json>`, bcdev only. See `v3-verdicts.ts`. */
+  readonly v3VerdictsPath?: string;
   readonly skipKnownSurvivors?: boolean;
   /**
    * R41: glob patterns naming which project files may contribute mutants (`--only`). Absent means
@@ -6493,6 +6503,15 @@ async function runSessionBody(
     emit({ type: "warning", code: "equivalence-marks-build-symbols", message: symbolsWarning });
   }
 
+  // R-911: before the run row. Every check that does not need this run's mutants.
+  if (cfg.v3VerdictsPath !== undefined && !isBcdev(caps.kind)) {
+    throw new V3VerdictsError(cfg.v3VerdictsPath, [
+      `it applies to a bcdev run only, and this run's backend is ${caps.kind}`,
+    ]);
+  }
+  const v3Verdicts =
+    cfg.v3VerdictsPath !== undefined ? await loadV3Verdicts(cfg.v3VerdictsPath) : undefined;
+
   // R47: computed for EVERY run, not just a resuming one — a run that does not record its own
   // fingerprint cannot be resumed later, and the run worth resuming is precisely the one nobody
   // knew would abort.
@@ -6501,6 +6520,7 @@ async function runSessionBody(
     testDir: cfg.testDir,
     backend: backendName,
     skipKnownSurvivors: cfg.skipKnownSurvivors ?? false,
+    ...(v3Verdicts !== undefined ? { v3VerdictsSha256: v3Verdicts.reportSha256 } : {}),
     // R325: always in the digest, so a run keyed under another scheme never matches.
     identityScheme: IDENTITY_SCHEME,
     // R354: ALWAYS passed, so no run recorded before R354 (no mode in its digest) can match.
@@ -6784,6 +6804,16 @@ async function runSessionBody(
     (n, specs) => n + specs.filter((s) => s.hangCapable !== undefined).length,
     0,
   );
+  const testSourceHash = await testSourceSha256(cfg.testDir, testBuildSymbols);
+  // R-911: after generation (the digest needs the numbering), before anything is deployed.
+  if (v3Verdicts !== undefined) {
+    checkV3Verdicts(v3Verdicts, {
+      sourceSha256: sourceHashAtGeneration,
+      numberingDigest,
+      testSourceSha256: testSourceHash,
+      refusedTests: testPageRefusedNames.map((t) => t.qualifiedName),
+    });
+  }
   emit({
     type: "mutation-set-generated",
     siteCount,
@@ -6818,6 +6848,7 @@ async function runSessionBody(
     // GENERATION hash, not `runs.generation_source_sha256`, which is withheld when the source
     // changed mid-run: the positions still refer to the bytes generation parsed.
     sourceSha256: sourceHashAtGeneration,
+    testSourceSha256: testSourceHash,
     // R443: the run's numbering facts, for equivalence marks and `lethal explain`.
     numberingDigest,
     twinSites: twinTuples,
@@ -7385,6 +7416,8 @@ async function runSessionBody(
       let manifest = JSON.parse(
         await readFile(join(batchDir, "mutant-manifest.json"), "utf8"),
       ) as MutantManifest;
+      // R-911: this batch's sites, before it is deployed.
+      if (v3Verdicts !== undefined) checkV3Rows(v3Verdicts, manifest.mutants);
 
       // 1b'. R53: a mutant a prior run STRANDED the tier on is not retried by default. Measured on
       // Document Output: M0013 negates `until DOCustSetup.Next() = 0;` into `<> 0`, which never
@@ -8720,6 +8753,25 @@ async function runSessionBody(
   // ordering still never depends on which worker finished first regardless of arrival order.
   // R654 removed three .NET al-runner readers here (R129's BC build, R148's missing
   // implementation, R583's dependency drops): no remaining backend reports any of them.
+  // R-911: after the last row, on a quarantined run too. Derived from the report file, not stored.
+  if (v3Verdicts !== undefined) {
+    const unplaceable = new Set(
+      collectedEvents.flatMap((e) =>
+        e.type === "coverage-split"
+          ? e.unplaceableMutants.map((id) => `${e.batchIndex}\0${id}`)
+          : [],
+      ),
+    );
+    emit({
+      type: "v3-verdicts-joined",
+      ...joinV3Verdicts(
+        v3Verdicts,
+        outcomes,
+        testPageRefusedNames.map((t) => t.qualifiedName),
+        unplaceable,
+      ),
+    });
+  }
   const totalMs = Date.now() - sessionStartedMs;
   emit({ type: "session-finished", elapsedMs: totalMs });
   // buildReport(statics, events) (spec 2026-08-05 §A): the closed statics set this run was GIVEN —
