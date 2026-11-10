@@ -4827,8 +4827,6 @@ interface BatchScope {
    * TestPage. `dispatchUnmutated` never sends one. Absent or empty: nothing refused.
    */
   readonly testPageRefused?: ReadonlyMap<string, string>;
-  /** R909: the test app's and the target's source, to resolve a Linux page-open frame. */
-  readonly frameSource?: FrameSourceLookup;
   /**
    * R896: set (once per session, by `runSession`) when the backend runs `isolation: "auto"`.
    * `decided` turns true in the first batch whose baseline ran live; `resumedRunId` is the run a
@@ -4906,6 +4904,9 @@ interface ScoreBatchInput {
   /** R738: the target's own declared object ids (`targetObjectIdsOf`), so a baseline failure on a
    *  stale target member refuses the session. Absent: no such check. */
   readonly targetObjectIds?: ReadonlySet<number>;
+  /** R909: resolves a Linux page-open frame in the test app's source and THIS batch's deployed
+   *  (instrumented) target source, whose line numbers are the ones BC counted. Absent: unnamed. */
+  readonly frameSource?: FrameSourceLookup;
   /** R192 snapshot reuse and recording, runSession only. Absent: always run, record nothing. */
   readonly snapshot?: {
     readonly batchDir: string;
@@ -5843,7 +5844,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       if (
         !bodyNeverRan &&
         didNotPassAtBaseline(b.verdict.outcome) &&
-        describeTestPageRefusal(b.verdict.failureMessage, scope.frameSource) !== undefined
+        describeTestPageRefusal(b.verdict.failureMessage, input.frameSource) !== undefined
       ) {
         classification.push("tests-testpage-unsupported");
       }
@@ -6394,13 +6395,6 @@ async function runSessionBody(
   // (`SourceSnapshotUnreadableError`): every batch copies its files and `app.json` from this one
   // snapshot, so each compiles exactly the hashed bytes.
   const sourceSnapshot = cfg.source ?? (await readTargetSource(cfg.projectDir));
-  // R909: the sources a Linux page-open frame is resolved in (test app and target only).
-  const frameSource = frameSourceLookup([
-    ...testFiles.map((f) => f.text),
-    ...[...sourceSnapshot]
-      .filter(([p]) => p.toLowerCase().endsWith(".al"))
-      .map(([, b]) => b.toString("utf8")),
-  ]);
   // R738: the target's declared object ids, for the stale-member refusal at each baseline.
   const sessionTargetIds = targetObjectIdsOf(
     [...sourceSnapshot].map(([p, b]) => [p, b.toString("utf8")] as const),
@@ -7264,7 +7258,6 @@ async function runSessionBody(
       minMutantBudgetMs,
       baselineTimeoutMs,
       testPageRefused,
-      frameSource,
       ...(cfg.backend.isolationAuto === true
         ? { isolationAuto: { decided: false, resumedRunId: resumeState?.runId } }
         : {}),
@@ -8063,6 +8056,14 @@ async function runSessionBody(
       // and before any mutant is scored. Selection read the original source, which can decide
       // where the instrumented text does not.
       const batchRefused = await withBackendRefusals(cfg.backend, coverageRefused);
+      // R909: BC counts lines in the INSTRUMENTED target (wrap and lift add lines), so a Linux
+      // page-open frame is resolved in this batch's deployed source plus the test app's.
+      const frameSource = frameSourceLookup([
+        ...testFiles.map((f) => f.text),
+        ...[...(await readTargetSource(batchDir))]
+          .filter(([p]) => p.toLowerCase().endsWith(".al"))
+          .map(([, b]) => b.toString("utf8")),
+      ]);
       const select = (baseline: readonly BaselineRow[]): CoveringPlan | undefined => {
         const greenTests = baseline.filter((b) => b.verdict.outcome === "pass");
         if (greenTests.length < baseline.length) baselineGreenOverall = false;
@@ -8529,6 +8530,7 @@ async function runSessionBody(
           testArmEvidence.kind === "compiled" &&
           testArmEvidence.from === "published-package",
         targetObjectIds: sessionTargetIds,
+        frameSource,
         snapshot: {
           batchDir,
           testDir: cfg.testDir,

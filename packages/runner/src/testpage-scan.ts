@@ -47,7 +47,7 @@ import { testKeyOf } from "./selection";
 import { walkFiles } from "./walk";
 
 /** Checked against Microsoft Learn's TestPage/TestRequestPage method lists (Task 1 Step 0). */
-export const OPENING_METHODS = new Set(["openview", "openedit", "opennew", "trap"]);
+const OPENING_METHODS = new Set(["openview", "openedit", "opennew", "trap"]);
 /** Anchored at the start, but `array[...] of TestPage X` is a TestPage-typed declaration too. */
 const PAGE_TYPE = /^\s*(?:array\s*\[[^\]]*\]\s*of\s+)?test(request)?page\b/i;
 const CODEUNIT_TYPE = /^\s*codeunit\s+(.+?)\s*$/i;

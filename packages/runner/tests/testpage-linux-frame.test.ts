@@ -1,7 +1,6 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { initParser } from "@lethal/engine";
 import {
-  TESTPAGE_DIAGNOSIS,
   describeLinuxPageRefusal,
   describeTestPageRefusal,
   frameSourceLookup,
@@ -52,7 +51,7 @@ describe("R909 — Linux page-open frame", () => {
       msg("Demo Tests(CodeUnit 70001).Probe line 2"),
       lookupFor(codeunit("Page.Run(50000);")),
     );
-    expect(d).toStartWith(TESTPAGE_DIAGNOSIS);
+    expect(d).toContain("Top frame: Demo Tests(CodeUnit 70001).Probe line 2");
     expect(d).toContain(CLR);
   });
 
@@ -63,25 +62,19 @@ describe("R909 — Linux page-open frame", () => {
     "Card.OpenEdit();",
     "Card.OpenView();",
     "Card.OpenNew();",
-    "Card.Trap();",
+    "Card.OpenEdit;", // written without parentheses
   ];
   for (const call of OPENERS) {
-    for (const [label, k] of [
-      ["on the line", 2],
-      ["one line after the frame", 1],
-      ["two lines before the frame", 4],
-    ] as const) {
-      test(`${call} ${label} (K=${k}) is named`, () => {
-        expect(
-          describeLinuxPageRefusal(
-            msg(`Demo Tests(CodeUnit 70001).Probe line ${k}`),
-            lookupFor(codeunit(call)),
-          ),
-        ).toBeDefined();
-      });
-    }
-    test(`${call} outside the window (K=0 and K=5) is NOT named`, () => {
-      for (const k of [0, 5]) {
+    test(`${call} at exactly K is named`, () => {
+      expect(
+        describeLinuxPageRefusal(
+          msg("Demo Tests(CodeUnit 70001).Probe line 2"),
+          lookupFor(codeunit(call)),
+        ),
+      ).toBeDefined();
+    });
+    test(`${call} one row off (K-1 and K+1) is NOT named`, () => {
+      for (const k of [1, 3]) {
         expect(
           describeLinuxPageRefusal(
             msg(`Demo Tests(CodeUnit 70001).Probe line ${k}`),
@@ -91,6 +84,85 @@ describe("R909 — Linux page-open frame", () => {
       }
     });
   }
+
+  test("Trap is never the failing call: NOT named", () => {
+    expect(
+      describeLinuxPageRefusal(
+        msg("Demo Tests(CodeUnit 70001).Probe line 2"),
+        lookupFor(codeunit("Card.Trap();")),
+      ),
+    ).toBeUndefined();
+  });
+
+  /** `procedure` is row 0, the declarations row 2, the statement row 4. */
+  const withVar = (decl: string, body: string) => `codeunit 70001 "Demo Tests"
+{
+    procedure Probe()
+    var
+        ${decl}
+    begin
+        ${body}
+    end;
+}
+`;
+  const at4 = (text: string) =>
+    describeLinuxPageRefusal(msg("Demo Tests(CodeUnit 70001).Probe line 4"), lookupFor(text));
+
+  test(".Run on a receiver declared as Page is named; declared as Codeunit is not", () => {
+    expect(at4(withVar("P: Page 50000;", "P.Run();"))).toBeDefined();
+    expect(at4(withVar("P: Codeunit 50000;", "P.Run();"))).toBeUndefined();
+  });
+
+  test("Report, Xmlport and Codeunit receivers (literal or declared) are NOT named", () => {
+    for (const [decl, body] of [
+      ["R: Report 50000;", "R.RunModal();"],
+      ["X: Xmlport 50000;", "X.Run();"],
+      ["H: Codeunit 50000;", "H.OpenView();"],
+      ["H: Codeunit 50000;", "H.RunModal();"],
+      ["", "Report.RunModal(50000);"],
+      ["", "Xmlport.RunModal(50000);"],
+      ["", "Codeunit.RunModal(50000);"],
+    ] as const) {
+      expect(at4(withVar(decl, body))).toBeUndefined();
+    }
+  });
+
+  test("a receiver declared as Page or TestPage with an open method is named", () => {
+    expect(at4(withVar("P: Page 50000;", "P.RunModal();"))).toBeDefined();
+    expect(at4(withVar("T: TestPage 50000;", "T.OpenEdit();"))).toBeDefined();
+  });
+
+  test("a leading BOM does not hide the object", () => {
+    expect(
+      describeLinuxPageRefusal(
+        msg("Demo Tests(CodeUnit 70001).Probe line 2"),
+        lookupFor(`﻿${codeunit("Page.Run(50000);")}`),
+      ),
+    ).toBeDefined();
+  });
+
+  test("the diagnosis prints the whole matched frame, even with ' - ' in the name", () => {
+    const text = `codeunit 70003 "Library - Demo"\n{\n    procedure Probe()\n    begin\n        Page.Run(1);\n    end;\n}\n`;
+    const d = describeLinuxPageRefusal(
+      msg("Library - Demo(CodeUnit 70003).Probe line 2"),
+      lookupFor(text),
+    );
+    expect(d).toContain("Top frame: Library - Demo(CodeUnit 70003).Probe line 2");
+  });
+
+  test("the Linux diagnosis says page, not TestPage", () => {
+    const d = describeLinuxPageRefusal(
+      msg("Demo Tests(CodeUnit 70001).Probe line 2"),
+      lookupFor(codeunit("Page.Run(50000);")),
+    );
+    expect(d).toStartWith("this test opens a page,");
+    expect(d).not.toContain("test service");
+  });
+
+  test("an answer is kept: the same lookup does not reparse", () => {
+    const lookup = lookupFor(codeunit("Page.Run(50000);"));
+    expect(lookup("CodeUnit", 70001, "Probe")).toBe(lookup("CodeUnit", 70001, "Probe"));
+  });
 
   test("a non-page statement at the frame is NOT named", () => {
     expect(
@@ -149,7 +221,7 @@ describe("R909 — Linux page-open frame", () => {
   test("a Table object frame resolves", () => {
     expect(
       describeLinuxPageRefusal(
-        msg("Demo Line(Table 70002).Show line 3"),
+        msg("Demo Line(Table 70002).Show line 2"),
         lookupFor(table("Page.RunModal(50000);")),
       ),
     ).toBeDefined();

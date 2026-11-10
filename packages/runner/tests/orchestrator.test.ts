@@ -4171,6 +4171,66 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
       expect(report.testPageUnsupported).toBeUndefined();
       expect(report.mutants.filter((m) => m.failureNote?.includes(LINUX_CLR))).toEqual([]);
     });
+    // Review fix 1: BC counts lines of the INSTRUMENTED target, which has more lines than the
+    // original above a page call that follows mutation sites. The frame must resolve there.
+    describe("a target frame is resolved in the instrumented source", () => {
+      const TARGET_PAGE_AL = `codeunit 79050 "Sandbox Page"
+{
+    procedure Show(Amount: Decimal; Budget: Decimal)
+    begin
+        if Amount > Budget then
+            exit;
+        Page.Run(50000);
+    end;
+}
+`;
+      const targetFrame = (k: number) =>
+        `${LINUX_CLR}\nSandbox Page(CodeUnit 79050).Show line ${k} - Demo by Pub version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26`;
+      const rowOf = (text: string) => {
+        const rows = text.split("\n");
+        return (
+          rows.findIndex((r) => r.includes("Page.Run(50000)")) -
+          rows.findIndex((r) => r.includes("procedure Show"))
+        );
+      };
+      const runTarget = async (dirs: Awaited<ReturnType<typeof project>>, k: number) => {
+        const events: RunEvent[] = [];
+        await runSession({
+          backend: new RecordingBackend(
+            { ...FENCED, kind: "al-runner-v3", authoritative: false },
+            targetFrame(k),
+          ),
+          store: new ResultsStore(":memory:"),
+          ...dirs,
+          selectorIds,
+          emit: [createEmitter([(e) => events.push(e)])],
+        });
+        const finished = events.find((e) => e.type === "baseline-batch-finished");
+        if (finished === undefined || finished.type !== "baseline-batch-finished")
+          throw new Error("no baseline-batch-finished event");
+        return finished.verdicts.find((v) => v.name === "Sandbox Tests.UnsupportedTest")
+          ?.classification;
+      };
+      test("named at the instrumented row, unnamed at the original row", async () => {
+        const dirs = await project(testAl("Message('x');"));
+        await Bun.write(join(dirs.projectDir, "SandboxPage.Codeunit.al"), TARGET_PAGE_AL);
+        const originalK = rowOf(TARGET_PAGE_AL);
+        await runTarget(dirs, originalK);
+        const batchDir = (await readdir(dirs.instrumentedDir)).find((e) =>
+          /^run-\d+-batch-0$/.test(e),
+        );
+        expect(batchDir).toBeDefined();
+        const files = await readdir(join(dirs.instrumentedDir, batchDir as string));
+        let instrumentedK = -1;
+        for (const f of files.filter((n) => n.toLowerCase().endsWith(".al"))) {
+          const text = await readFile(join(dirs.instrumentedDir, batchDir as string, f), "utf8");
+          if (text.includes("procedure Show")) instrumentedK = rowOf(text);
+        }
+        expect(instrumentedK).toBeGreaterThan(originalK); // the premise: lines were added
+        expect(await runTarget(dirs, instrumentedK)).toEqual(["tests-testpage-unsupported"]);
+        expect(await runTarget(dirs, originalK)).toEqual([]);
+      });
+    });
   });
 });
 describe("runSession — C3 batch app.json + full source copy", () => {
