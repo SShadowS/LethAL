@@ -63,7 +63,7 @@
  *   (measured on 2.11.0, R319); the symbols are start-time flags, see the constructor.
  */
 
-import { isV3RefusalText } from "./al-runner-rows";
+import { V3_TIMEOUT_MESSAGE, isV3RefusalText } from "./al-runner-rows";
 import type { EntriesAnswer } from "./al-runner-v3-entries";
 import { checkRunSeed, mergeChildEnv } from "./al-runner-v3-seed";
 
@@ -500,6 +500,13 @@ export class AlRunnerServer {
   async runEntries(
     body: Readonly<Record<string, unknown>>,
     deadlineMs: number,
+    /**
+     * R895: stop at the first streamed timeout row (notRun, error, `Test exceeded Ns timeout.`).
+     * The daemon is killed (never reused) and the answer is PARTIAL: the test lines seen, no entry
+     * summaries and no summary (they come only at the end), and `cut` naming where it was cut.
+     * Absent or false, a timeout row is read like any other.
+     */
+    stopAtTimeout = false,
   ): Promise<EntriesAnswer> {
     const proc = this.proc;
     const stdout = this.stdout;
@@ -533,8 +540,24 @@ export class AlRunnerServer {
         const keep = said.includes("dependency app(s) were not found") ? 4000 : 400;
         throw fail("error", `the request was refused: ${said.slice(0, keep)}`);
       }
-      if (msg.type === "test") tests.push(msg);
-      else if (msg.type === "entrySummary") entrySummaries.push(msg);
+      if (msg.type === "test") {
+        tests.push(msg);
+        if (
+          stopAtTimeout &&
+          msg.notRun === true &&
+          msg.status === "error" &&
+          typeof msg.message === "string" &&
+          V3_TIMEOUT_MESSAGE.test(msg.message)
+        ) {
+          await this.terminate();
+          return {
+            tests,
+            entrySummaries: [],
+            summary: {},
+            cut: { entry: String(msg.entry), test: String(msg.name) },
+          };
+        }
+      } else if (msg.type === "entrySummary") entrySummaries.push(msg);
       else if (msg.type === "summary") {
         this.readSeed(msg);
         return { tests, entrySummaries, summary: msg };
@@ -556,6 +579,13 @@ export class AlRunnerServer {
     } catch {
       // Already gone. Killing below is still correct.
     }
+    await this.terminate();
+  }
+
+  /** Kills the process (and with it al-runner's .NET sidecar) and reaps it; `close()`'s tail, and R895's cut. */
+  private async terminate(): Promise<void> {
+    const proc = this.proc;
+    if (proc === undefined) return;
     this.stdout?.cancel();
     try {
       proc.kill();
