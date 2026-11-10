@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**17 of 867 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**16 of 867 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -911,7 +911,7 @@ that ordering is the priority.
 - **R861** · `--edge-rejudge` moved `current` and left its manifest row unpublished until the next plain run · [R861.md](docs/roadmap/R861.md) · done (25eaa10f)
 - **R866** · `--isolate-tests` runs its baseline as one process per test, which is most of the mode's cost · [R866.md](docs/roadmap/R866.md) · done (d8ef7fd3)
 - **R897** · On al-runner v3 one hanging mutant costs (covering tests in its codeunit) x the per-test limit: about 69 minutes for 23 tests, with no verdict until the end · [R897.md](docs/roadmap/R897.md) · done (d66074f1)
-- **R905** · The heavy-job guard counts a held slot as BaseApp only if its process names /work/src/BC.History, so a BaseApp-class job over a corpus copy reads as not BaseApp, and a third BaseApp-class job can start · [R905.md](docs/roadmap/R905.md) · open
+- **R905** · The heavy-job guard counts a held slot as BaseApp only if its process names /work/src/BC.History, so a BaseApp-class job over a corpus copy reads as not BaseApp, and a third BaseApp-class job can start · [R905.md](docs/roadmap/R905.md) · done (1e1e9b9d)
 
 ---
 

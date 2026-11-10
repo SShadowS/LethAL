@@ -94,6 +94,7 @@ import {
   v3ReadingsDigest,
 } from "../packages/runner/src/al-runner-v3-pins";
 import { type Proc, SLOTS, SLOT_BUSY, lockDir, parsePs } from "./corpus-snapshot";
+import { type SlotClass, readSlotClass } from "./heavy-slot-class";
 
 export const ROOT = "/work/tools/al-runner-v3";
 export const REPO = "aldevtools/BusinessCentral.AL.Runner";
@@ -892,12 +893,20 @@ export const HEAVY_JOB =
  * process group, a `--worker` is part of its itest, and a held `heavy.<n>` lock is a job even if its
  * process names nothing heavy. The higher of the two counts, because a job under a lock is in both.
  */
-export function countHeavyJobs(procs: readonly Proc[], heldSlots: number): number {
+export function countHeavyJobs(
+  procs: readonly Proc[],
+  heldSlots: number,
+  // R905: the class of each held slot (undefined = none readable, which counts as BaseApp).
+  heldClasses: readonly (SlotClass | undefined)[] = [],
+): number {
   const groups = new Set<number>();
   for (const p of procs) {
     if (HEAVY_JOB.test(p.args) && !p.args.includes("--worker")) groups.add(p.pgid);
   }
-  return Math.max(groups.size, heldSlots);
+  const jobs = Math.max(groups.size, heldSlots);
+  // With two or more jobs running and any held slot BaseApp-class or unclassed, the container is
+  // full (two heavy jobs in all while a BaseApp job runs): the gate would be a third.
+  return jobs >= 2 && heldClasses.some((c) => c !== "other") ? Math.max(jobs, 3) : jobs;
 }
 
 /**
@@ -910,8 +919,9 @@ export function updateExitCode(mustRun: boolean, out: readonly string[]): number
 
 /**
  * True, with the reason logged, when 3 or more OTHER heavy jobs run or under 10 GB is available:
- * at most 3 heavy jobs container-wide (2026-10-22, 32 GB), counting the gate itself. The BaseApp
- * cap of two does not apply to the gate.
+ * at most 3 heavy jobs container-wide (2026-10-22, 32 GB), counting the gate itself. R905: but at
+ * most 2 while any held slot is BaseApp-class or has no class (`countHeavyJobs` returns 3 for two
+ * jobs then), because the gate is not itself a BaseApp job but would be the third.
  */
 async function skippedForTheDay(deps: UpdateDeps, what: string): Promise<boolean> {
   const heavy = await deps.heavyJobs();
@@ -1422,8 +1432,12 @@ export function realDeps(root = ROOT): UpdateDeps {
         (n) =>
           Bun.spawnSync(["flock", "-n", "-E", String(SLOT_BUSY), `${lockDir()}/heavy.${n}`, "true"])
             .exitCode === SLOT_BUSY,
-      ).length;
-      return countHeavyJobs(parsePs(ps.stdout.toString()), held);
+      );
+      return countHeavyJobs(
+        parsePs(ps.stdout.toString()),
+        held.length,
+        held.map((n) => readSlotClass(lockDir(), n)),
+      );
     },
     freeGb: async () => {
       const p = Bun.spawn(["free", "-g"], { stdout: "pipe" });
