@@ -183,6 +183,20 @@ describe("directions that must stay refused", () => {
     expect(await listed(text)).toEqual([]);
   });
 
+  // R906. Guards: reading any inner `#if` as a nested object wrapper (coverage off for the project).
+  test("R906: an inner #if holding only using lines is admitted", async () => {
+    const text = `#if not OUTER\nnamespace R906.Ns;\n\n#if not INNER\nusing System.Upgrade;\n#endif\n\n${codeunit(57931, "R906 W")}#endif\n`;
+    expect(alRunnerAdmitsWrappedFile(rootOf(text))).toBe(true);
+    expect(await listed(text)).toEqual([]);
+  });
+
+  // R906. Guards: dropping the nested check altogether once using-only blocks are admitted.
+  test("R906: an inner #if holding a codeunit stays refused", async () => {
+    const text = `#if not OUTER\n#if not INNER\n${codeunit(57932, "R906 N")}#endif\n#endif\n`;
+    expect(alRunnerAdmitsWrappedFile(rootOf(text))).toBe(false);
+    expect(await listed(text)).toEqual(["src/W.al"]);
+  });
+
   // C. Guards: admitting a wrapper because SOME object in it is code-free.
   test("C: a wrapper holding a code-free object AND a codeunit stays refused", async () => {
     const text = wrap((CODE_FREE.enum ?? "") + codeunit(57922, "R579 Mix"));
