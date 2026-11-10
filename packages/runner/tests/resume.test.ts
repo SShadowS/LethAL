@@ -6458,7 +6458,7 @@ describe("R912: windows and --time-budget", () => {
     expect(all.backend.remaining).toEqual([undefined]);
   });
 
-  test("the estimate rides the mutants phase's detail and equals the hand sum; over 2 h it also warns", async () => {
+  test("the estimate rides the mutants phase's detail and equals the hand sum; over 2 h the detail says so, and no run ever gets a warning code for it", async () => {
     const short = await runWith(250_000);
     const n = short.backend.prefetches.flat().length;
     const detail = (events: readonly RunEvent[]) =>
@@ -6466,17 +6466,16 @@ describe("R912: windows and --time-budget", () => {
     expect(detail(short.events)).toMatchObject({
       detail: `estimate: ${n} covered mutant(s), about ${formatEstimate(n * 250_000)} of covering-test time`,
     });
-    expect(
-      short.events.some((e) => e.type === "warning" && e.code === "mutant-phase-estimate-long"),
-    ).toBe(false);
 
     const long = await runWith(3_600_000); // 1 h per mutant
-    expect(detail(long.events)).toMatchObject({
-      detail: `estimate: ${n} covered mutant(s), about ${formatEstimate(n * 3_600_000)} of covering-test time`,
-    });
-    expect(
-      long.events.some((e) => e.type === "warning" && e.code === "mutant-phase-estimate-long"),
-    ).toBe(true);
+    const longDetail = detail(long.events);
+    expect(longDetail?.type === "phase-entered" ? longDetail.detail : "").toStartWith(
+      `estimate: ${n} covered mutant(s), about ${formatEstimate(n * 3_600_000)} of covering-test time. That is long`,
+    );
+    // R912 follow-up: a timing-dependent warning code would make gates' pinned warning sets flaky.
+    for (const run of [short, long]) {
+      expect(run.events.some((e) => e.type === "warning" && /estimate/.test(e.code))).toBe(false);
+    }
   });
 
   test("a budget that runs out after window 1 leaves the rest out, keeps the run resumable, and --resume carries window 1 and scores only the rest", async () => {
