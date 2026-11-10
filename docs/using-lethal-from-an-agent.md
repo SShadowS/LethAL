@@ -291,9 +291,12 @@ The `instead` column is guidance.
 | `1` | Error, including an argv the parse refuses. The message is on stderr. |
 | `3` | **Quarantined.** The run refused to vouch for its own verdicts. |
 | `4` | **Nothing scored.** Every mutant errored; the run measured nothing. |
+| `7` | **Time budget reached.** `--time-budget` ran out; the report is partial, so run with `--resume` to continue. |
 
 `4` is returned when `validity.caveats` carries `all-errors`. When a run is both quarantined and
-scored nothing, `3` wins.
+scored nothing, `3` wins. `7` is returned when `validity.caveats` carries `time-budget-reached`; the
+mutants not reached are left out of the report and are not survivors. Quarantine (`3`) and nothing
+scored (`4`) win over `7`.
 
 #### Exit code notes (guidance)
 

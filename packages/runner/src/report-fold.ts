@@ -219,7 +219,11 @@ export interface FoldedReport {
   readonly artifacts: readonly BatchArtifact[];
   readonly quarantined?: { readonly reason: string };
   /** R912 — see `SessionReport.timeBudget`. */
-  readonly timeBudget?: { readonly budgetSeconds: number; readonly unscheduledCount: number };
+  readonly timeBudget?: {
+    readonly budgetSeconds: number;
+    readonly unscheduledCount: number;
+    readonly batchesNotStarted: number;
+  };
   readonly permissionCanary?: PermissionCanaryResult;
   /** R896 — see `SessionReport.isolation`. */
   readonly isolation?: { readonly mode: "auto"; readonly codeunits: readonly IsolationChoiceRow[] };
@@ -405,7 +409,9 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   let sawGreenBaselineBatch = false;
 
   let quarantinedReason: string | undefined;
-  let timeBudget: { budgetSeconds: number; unscheduledCount: number } | undefined;
+  let timeBudget:
+    | { budgetSeconds: number; unscheduledCount: number; batchesNotStarted: number }
+    | undefined;
   let permissionCanary: PermissionCanaryResult | undefined;
   let isolationRows: IsolationChoiceRow[] | undefined;
   let resumeFromRunId: number | undefined;
@@ -494,7 +500,11 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         quarantinedReason = e.reason;
         break;
       case "time-budget-reached":
-        timeBudget = { budgetSeconds: e.budgetSeconds, unscheduledCount: e.unscheduledCount };
+        timeBudget = {
+          budgetSeconds: e.budgetSeconds,
+          unscheduledCount: e.unscheduledCount,
+          batchesNotStarted: e.batchesNotStarted,
+        };
         break;
       case "session-finished":
         sawSessionFinished = true;

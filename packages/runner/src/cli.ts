@@ -1311,6 +1311,7 @@ OTHER
 EXIT CODES
   0 ok   1 error   ${QUARANTINED_EXIT_CODE} quarantined (the run refused to vouch for its own verdicts)
   ${NOTHING_SCORED_EXIT_CODE} nothing scored (every mutant errored; the run measured nothing)
+  ${TIME_BUDGET_EXIT_CODE} time budget reached (--time-budget; the report is partial, run --resume to continue)
 
 A score is only as good as its caveats: read \`validity\` in the JSON report before quoting
 \`mutationScore\`. A survivor is a lead, not a proven test-suite gap.`;
@@ -4374,6 +4375,13 @@ export const VERIFY_REFUSED_EXIT_CODE = VERIFY_EXIT.refused;
 export const NOTHING_SCORED_EXIT_CODE = 4;
 
 /**
+ * R912. A run stopped by `--time-budget`: the report is partial (the mutants not reached are left
+ * out, not survived), so a CI script branching on 0 would read a partial score as a pass. Not 5 or 6,
+ * which `lethal verify` uses. Quarantine and nothing-scored both win over it.
+ */
+export const TIME_BUDGET_EXIT_CODE = 7;
+
+/**
  * Operator-proven clear (spec §10): reads the current quarantine record's generation and calls
  * `store.clear(key, gen)` — never an unconditional delete, so a clear computed against a
  * generation the store no longer holds (a NEWER strand was recorded on this tier since) comes
@@ -5900,6 +5908,7 @@ export function exitCodeForReport(
 ): number {
   if (report.quarantined !== undefined) return QUARANTINED_EXIT_CODE;
   if (report.validity.caveats.includes("all-errors")) return NOTHING_SCORED_EXIT_CODE;
+  if (report.validity.caveats.includes("time-budget-reached")) return TIME_BUDGET_EXIT_CODE;
   return 0;
 }
 

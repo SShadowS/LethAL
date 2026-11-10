@@ -122,7 +122,7 @@ export function formatEstimate(ms: number): string {
 /** The `--time-budget` clock of one session, shared by every batch. */
 export class TimeBudget {
   /** Set by the first `reach`; later calls change nothing. */
-  reached: { readonly unscheduledCount: number } | undefined;
+  reached: { readonly unscheduledCount: number; readonly firstUnstartedBatch: number } | undefined;
   constructor(
     readonly seconds: number,
     private readonly startMs: number,
@@ -134,7 +134,8 @@ export class TimeBudget {
   get exhausted(): boolean {
     return this.reached !== undefined || this.remainingMs() <= 0;
   }
-  reach(unscheduledCount: number): void {
-    this.reached ??= { unscheduledCount };
+  /** `firstUnstartedBatch`: the first batch index the session never started. */
+  reach(unscheduledCount: number, firstUnstartedBatch: number): void {
+    this.reached ??= { unscheduledCount, firstUnstartedBatch };
   }
 }

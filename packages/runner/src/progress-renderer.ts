@@ -155,7 +155,7 @@ export function createProgressRenderer(
         break;
       case "time-budget-reached":
         write(
-          `TIME BUDGET REACHED: --time-budget ${event.budgetSeconds} s used up; ${event.unscheduledCount} mutant(s) left out of this report. Run with --resume to continue.`,
+          `TIME BUDGET REACHED: --time-budget ${event.budgetSeconds} s used up; ${event.unscheduledCount} mutant(s) left out of this report, and ${event.batchesNotStarted} later batch(es) never started. Run with --resume to continue.`,
         );
         break;
       case "session-finished":

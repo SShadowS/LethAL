@@ -671,11 +671,14 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "The run was stopped by --time-budget before it had scored every mutant. The mutants it did not " +
       "reach are LEFT OUT of this report: they are not survivors, not no-coverage, not errors, and they " +
       "are not in the score. `timeBudget.unscheduledCount` counts those of the batch it stopped in; " +
-      "batches after it never started. The run is not finished, so `--resume` continues it, carrying " +
+      "`timeBudget.batchesNotStarted` counts the batches after it, which never started and whose " +
+      "mutants are not counted. The run is not finished, so `--resume` continues it, carrying " +
       "the verdicts already scored and running only the rest.",
     entailedNegative:
       "Not a statement about any mutant that was left out. Not a wrong verdict: every mutant that is " +
-      "in the report ran to completion, with its deadline unclamped.",
+      "in the report ran to completion. Its test run was never cut short by the budget; only a " +
+      "prefetch request's deadline is shortened to the time left, and a prefetch that cannot finish " +
+      "is dropped, so its mutants run as live requests with their usual deadline.",
     basis: "R912",
   },
 };
@@ -1888,6 +1891,8 @@ export interface SessionReport {
   readonly timeBudget?: {
     readonly budgetSeconds: number;
     readonly unscheduledCount: number;
+    /** Batches after the one it stopped in, which never started; their mutants are not counted. */
+    readonly batchesNotStarted: number;
   };
   /**
    * R26: set on every session that ran the permission canary — an authoritative (bcdev) session,
@@ -3910,7 +3915,7 @@ export function renderConsole(r: SessionReport): string {
   // R912: a qualifier on the score: the mutants not reached are not in it.
   if (r.timeBudget !== undefined) {
     lines.push(
-      `TIME BUDGET REACHED: --time-budget ${r.timeBudget.budgetSeconds} s ran out. ${r.timeBudget.unscheduledCount} mutant(s) of the batch it stopped in were left out of this report: they are not survivors and are not in the score. Run with --resume to continue.`,
+      `TIME BUDGET REACHED: --time-budget ${r.timeBudget.budgetSeconds} s ran out. ${r.timeBudget.unscheduledCount} mutant(s) of the batch it stopped in were left out of this report, and ${r.timeBudget.batchesNotStarted} later batch(es) never started (their mutants are not counted): none of them are survivors, and none are in the score. Run with --resume to continue.`,
     );
   }
   // These mutants were scored against EVERY green test rather than against tests coverage placed

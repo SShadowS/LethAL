@@ -1550,6 +1550,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     return this.entries && !this.perTest(cu);
   }
 
+  /** R912: the batch a windowed prefetch belongs to: its group count, and the chunk its requests fill. */
+  private prefetchBatch: { groups: number; size: number; ran: boolean } | undefined;
+
   /** R912: the time left of `--time-budget`, set only while `prefetchMutants` runs. */
   private prefetchRemainingMs: (() => number) | undefined;
 
@@ -4243,14 +4246,29 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // Build review r1 L2: only the warm-up or a PREFETCH of 2+ groups speaks for the batch; a lone
     // group's refused rows are that mutant's `error` (its echo did not run), never a batch stop.
     // R653: a live kill pair (NONE and M) speaks for one kill, like a lone live group.
-    const refused =
-      kind === "warmup" || (kind === "prefetch" && groupCount >= 2)
-        ? batchRefusalReason(
-            decoded.rows,
-            (m) => Object.values(V3_SERVE_SAFE_REFUSALS).some((re) => re.test(m)),
-            (m) => V3_TIMEOUT_MESSAGE.test(m),
-          )
-        : undefined;
+    // R912: a prefetch speaks for the BATCH, not for its window. The group count is the batch's, and
+    // the request is placed in the 256-entry chunk a whole-batch prefetch would have put it in: if
+    // an earlier window of that chunk had an entry that ran, this one cannot be a batch refusal, as the
+    // chunk holding both would not have been. Chunk boundaries fall where `chunkGroups` puts them.
+    const batch = kind === "prefetch" ? this.prefetchBatch : undefined;
+    if (batch !== undefined && batch.size + sent.length > ENTRIES_CHUNK_CAP) {
+      batch.size = 0;
+      batch.ran = false;
+    }
+    const speaksForBatch =
+      kind === "warmup" ||
+      (kind === "prefetch" && (batch?.groups ?? groupCount) >= 2 && batch?.ran !== true);
+    const refused = speaksForBatch
+      ? batchRefusalReason(
+          decoded.rows,
+          (m) => Object.values(V3_SERVE_SAFE_REFUSALS).some((re) => re.test(m)),
+          (m) => V3_TIMEOUT_MESSAGE.test(m),
+        )
+      : undefined;
+    if (batch !== undefined) {
+      batch.size += sent.length;
+      if (refused === undefined) batch.ran = true;
+    }
     if (refused !== undefined) {
       await lane.closeDaemon();
       throw new AlRunnerV3EntriesRefusedError(
@@ -4455,6 +4473,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.prefetched = new Map();
     for (const p of opts?.batchPlans ?? [])
       for (const cu of new Set(p.refs.map((r) => this.callId(r)))) this.union.add(cu);
+    if (opts?.batchPlans !== undefined) {
+      this.prefetchBatch = { groups: opts.batchPlans.length, size: 0, ran: false };
+    }
     this.prefetchRemainingMs = opts?.remainingMs;
     try {
       await this.prefetchWindow(plans);

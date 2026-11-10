@@ -143,8 +143,8 @@ describe("R912: TimeBudget", () => {
     expect(b.remainingMs()).toBe(100_000);
     now = 105_000;
     expect(b.exhausted).toBe(true);
-    b.reach(7);
-    b.reach(9);
-    expect(b.reached).toEqual({ unscheduledCount: 7 });
+    b.reach(7, 2);
+    b.reach(9, 3);
+    expect(b.reached).toEqual({ unscheduledCount: 7, firstUnstartedBatch: 2 });
   });
 });

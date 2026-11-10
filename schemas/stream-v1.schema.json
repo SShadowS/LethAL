@@ -1743,6 +1743,7 @@
         "type",
         "budgetSeconds",
         "unscheduledCount",
+        "batchesNotStarted",
         "seq"
       ],
       "properties": {
@@ -1753,6 +1754,9 @@
           "type": "number"
         },
         "unscheduledCount": {
+          "type": "number"
+        },
+        "batchesNotStarted": {
           "type": "number"
         },
         "seq": {

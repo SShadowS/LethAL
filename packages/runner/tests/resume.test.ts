@@ -6339,6 +6339,10 @@ describe("R912: windows and --time-budget", () => {
     /** Every mutant activated, in order. */
     readonly activated: string[] = [];
     store: ResultsStore | undefined;
+    /** Called at every prefetch: a test spends the budget here. */
+    onPrefetch: (() => void) | undefined;
+    /** Baseline coverage names only codeunit 79000, so the second carrier's mutants are uncovered. */
+    coverOnlyFirst = false;
     private active: string | null = null;
     constructor(private readonly baselineMs: number) {
       super("pass");
@@ -6350,7 +6354,21 @@ describe("R912: windows and --time-budget", () => {
     }
     override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
       const v = await super.run(ref, opts);
-      if (this.active === null) return { ...v, durationMs: this.baselineMs };
+      if (this.active === null) {
+        const cov = v.coverage;
+        return {
+          ...v,
+          durationMs: this.baselineMs,
+          ...(this.coverOnlyFirst && cov !== undefined && "entries" in cov
+            ? {
+                coverage: {
+                  ...cov,
+                  entries: cov.entries.filter((e) => e.objectId === 79000),
+                },
+              }
+            : {}),
+        };
+      }
       return killedId(this.active)
         ? { ...v, outcome: "fail", failureMessage: `Assert failed under ${this.active}` }
         : v;
@@ -6365,6 +6383,7 @@ describe("R912: windows and --time-budget", () => {
         .query("SELECT COUNT(*) AS n FROM mutants WHERE verdict IN ('killed', 'survived')")
         .get() as { n: number } | null | undefined;
       this.scoredAtPrefetch.push(n?.n ?? -1);
+      this.onPrefetch?.();
     }
   }
 
@@ -6379,11 +6398,18 @@ describe("R912: windows and --time-budget", () => {
   const runWith = async (
     baselineMs: number,
     extra: Partial<Parameters<typeof runSession>[0]> = {},
+    setup: (backend: WindowBackend) => void = () => {},
+    project: { secondFile?: boolean; extraFile?: boolean } = {},
   ) => {
-    const dirs = await makeProject();
+    const dirs = await makeProject(project);
+    if (project.extraFile === true) {
+      // Sorts after SandboxLogic: its mutants are the manifest's tail.
+      await Bun.write(join(dirs.projectDir, "ZExtra.Codeunit.al"), SECOND_AL);
+    }
     const store = new ResultsStore(":memory:");
     const backend = new WindowBackend(baselineMs);
     backend.store = store;
+    setup(backend);
     const events: RunEvent[] = [];
     const report = await runSession({
       backend,
@@ -6485,7 +6511,11 @@ describe("R912: windows and --time-budget", () => {
     expect(window1).toHaveLength(1);
     expect(first.activated.filter((id, i, a) => a.indexOf(id) === i)).toEqual(window1);
     expect(report.mutants.map((m) => m.mutantCode)).toEqual(window1);
-    expect(report.timeBudget).toEqual({ budgetSeconds: 100, unscheduledCount: n - 1 });
+    expect(report.timeBudget).toEqual({
+      budgetSeconds: 100,
+      unscheduledCount: n - 1,
+      batchesNotStarted: 0,
+    });
     expect(report.validity.caveats).toContain("time-budget-reached");
     expect(events.filter((e) => e.type === "time-budget-reached")).toEqual([
       expect.objectContaining({ budgetSeconds: 100, unscheduledCount: n - 1 }),
@@ -6527,6 +6557,116 @@ describe("R912: windows and --time-budget", () => {
     expect(finishedAt(spare.store)).not.toBeNull();
     // Each prefetch carried the time left, on the fake clock that never moved.
     expect(spare.backend.remaining.every((r) => r === 3_600_000)).toBe(true);
+  });
+
+  test("a prefetch that uses up the budget: no live mutant runs after it, and the planned stop is not a quarantine", async () => {
+    let now = 0;
+    const run = await runWith(5, { timeBudgetSeconds: 100, clockMs: () => now }, (b) => {
+      b.onPrefetch = () => {
+        now = 1_000_000;
+      };
+    });
+    const n = run.backend.prefetches.flat().length;
+    expect(n).toBeGreaterThanOrEqual(3);
+    // Items 3 and 2: nothing ran, so nothing is unattested; the batch is not invalidated.
+    expect(run.backend.activated).toEqual([]);
+    expect(run.report.quarantined).toBeUndefined();
+    expect(run.events.some((e) => e.type === "batch-invalidated")).toBe(false);
+    expect(run.report.timeBudget).toEqual({
+      budgetSeconds: 100,
+      unscheduledCount: n,
+      batchesNotStarted: 0,
+    });
+    expect(finishedAt(run.store)).toBeNull();
+  });
+
+  test("a budget stop after a mutant ran un-attested still trips the attestation gate (the stop does not excuse it)", async () => {
+    let now = 0;
+    const dirs = await makeProject();
+    const report = await runSession({
+      backend: new NeverAttestingBackend(),
+      store: new ResultsStore(":memory:"),
+      ...dirs,
+      selectorIds,
+      timeBudgetSeconds: 100,
+      clockMs: () => now,
+      emit: [
+        (e) => {
+          if (e.type === "mutant-scored") now = 1_000_000;
+        },
+      ],
+    });
+    expect(report.quarantined).toBeDefined();
+  });
+
+  test("a budget that runs out on the last covered mutant leaves nothing out: no stop is reported, the run is finished, even with an uncovered tail", async () => {
+    const control = await runWith(
+      5,
+      {},
+      (b) => {
+        b.coverOnlyFirst = true;
+      },
+      { extraFile: true },
+    );
+    const covered = control.report.mutants.filter((m) => m.verdict !== "no-coverage").length;
+    expect(covered).toBeGreaterThan(0);
+    expect(covered).toBeLessThan(control.report.mutants.length);
+    let now = 0;
+    let scored = 0;
+    const tail = await runWith(
+      5,
+      {
+        timeBudgetSeconds: 100,
+        clockMs: () => now,
+        emit: [
+          (e) => {
+            if (e.type === "mutant-scored" && e.verdict !== "no-coverage") {
+              scored += 1;
+              if (scored === covered) now = 1_000_000;
+            }
+          },
+        ],
+      },
+      (b) => {
+        b.coverOnlyFirst = true;
+      },
+      { extraFile: true },
+    );
+    // With the second carrier uncovered, its mutants are no-coverage rows recorded before the loop.
+    expect(tail.report.mutants.some((m) => m.verdict === "no-coverage")).toBe(true);
+    expect(tail.report.timeBudget).toBeUndefined();
+    expect(tail.report.validity.caveats).not.toContain("time-budget-reached");
+    expect(finishedAt(tail.store)).not.toBeNull();
+  });
+
+  test("a budget that runs out between batches names the batches that never started", async () => {
+    let now = 0;
+    const events: RunEvent[] = [];
+    const run = await runWith(
+      5,
+      {
+        timeBudgetSeconds: 100,
+        clockMs: () => now,
+        maxGuardsPerBatch: 1,
+        emit: [
+          (e) => {
+            events.push(e);
+            if (e.type === "phase-left" && e.phase === "mutants") now = 1_000_000;
+          },
+        ],
+      },
+      () => {},
+      { secondFile: true },
+    );
+    expect(run.report.batches).toBe(1);
+    expect(run.report.timeBudget).toEqual({
+      budgetSeconds: 100,
+      unscheduledCount: 0,
+      batchesNotStarted: 1,
+    });
+    expect(run.report.validity.caveats).toContain("time-budget-reached");
+    expect(renderConsole(run.report)).toContain("1 later batch(es) never started");
+    expect(finishedAt(run.store)).toBeNull();
   });
 
   test("a budget that is not a positive integer is refused by name", async () => {
