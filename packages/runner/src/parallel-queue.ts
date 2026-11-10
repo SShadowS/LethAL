@@ -60,6 +60,13 @@ export function splitBackend(owner: ExecutionBackend, lane0: ExecutionBackend): 
     run: (ref, opts) => lane0.run(ref, opts),
     baselinePhase: (on) => owner.baselinePhase?.(on),
     noteReusedBaseline: (baseline) => owner.noteReusedBaseline?.(baseline),
+    // R896: the choice is the owner's (every lane reads it); absent on an owner without auto.
+    ...(owner.chooseIsolation !== undefined
+      ? {
+          chooseIsolation: (cu: number, mode: "test" | "method") =>
+            owner.chooseIsolation?.(cu, mode),
+        }
+      : {}),
     dependencyPackageDirs: () => owner.dependencyPackageDirs?.() ?? [],
     dependencyArtifactAppsDir: () => owner.dependencyArtifactAppsDir?.(),
     useCoveringBudgets: (id, budgets) => lane0.useCoveringBudgets?.(id, budgets),

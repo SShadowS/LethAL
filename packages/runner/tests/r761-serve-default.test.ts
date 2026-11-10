@@ -121,6 +121,18 @@ describe("R761: the default transport", () => {
     expect(r.warnings[0]?.message).not.toContain("multi-object-or-wrapped");
   });
 
+  test("R896 (build review 2): an auto resume keeps serve-entries; a forced-test resume still falls back", async () => {
+    const auto = await rig({ ...DEFAULT, isolation: "auto" });
+    await auto.b.decideTransport({ resume: true });
+    expect(auto.b.inRunStopIsBudget).toBe(false);
+    expect(auto.warnings).toEqual([]);
+    const forced = await rig({ ...DEFAULT, isolation: "test" });
+    await forced.b.decideTransport({ resume: true });
+    expect(forced.b.inRunStopIsBudget).toBe(true);
+    expect(forced.warnings.map((w) => w.code)).toEqual([FALLBACK]);
+    expect(forced.warnings[0]?.message).toContain("resume:");
+  });
+
   test("reason multi-object-or-wrapped: a multi-object file and a wrapped file each fall back", async () => {
     for (const src of [MULTI_AL, WRAPPED_AL]) {
       const r = await rig(DEFAULT, { src });

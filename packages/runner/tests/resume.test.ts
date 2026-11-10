@@ -685,7 +685,8 @@ describe("sessionFingerprint (R47)", () => {
   // It moved again for R830 (scheme 45, a call a loop's progress rests on); it was 7afe4a79...5f98 under scheme 44.
   // It moved again for R865 (scheme 46, a direct recursion's depth argument is refused); it was 012c9ea4...629d under scheme 45.
   // It moved again for R889 (scheme 47, empty-block and swap-rec-xrec refuse more sites); it was c85c9364...ecd1 under scheme 46.
-  const PINNED = "48b264db1e674b35bdb147d3969dc65153b6c2be1c4433a7f12057b681c9ecf7";
+  // It moved again for R893 (scheme 48, swap-find-direction is hang-refused inside a Next() walk); it was 48b264db...ecf7 under scheme 47.
+  const PINNED = "727533a8a3744ab249903f618485a8a8f6e5ead525e74af46aa74e845862068f";
   test("a run with no exclusions adds nothing to the digest", () => {
     expect(sessionFingerprint(base)).toBe(PINNED);
   });
@@ -2495,8 +2496,8 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
     // ends only by consuming its record set: its consumers are hang-refused). 40 is R565 (an
     // outside report's preset writers are read from the dependency packages). 41 is R572 (a guard
     // refused as a single site renumbers its procedure's same-tuple twins). 42 is R-604b (a
-    // same-object callee that inserts into the iterated table or touches a `var` cursor is refused). 43 is R796 (tree-sitter-al 4.5.0 parses shapes 4.4.1 swallowed or broke). 44 is R829 (a name-reading loop condition gets feeds: sites leave the set). 45 is R830 (a call a loop's progress rests on is hang-refused). 46 is R865 (a direct recursion's depth argument is refused by swap-additive and delete-additive-*). 47 is R889 (empty-block refuses a block with no statements and swap-rec-xrec refuses a field-designating argument).
-    expect(IDENTITY_SCHEME).toBe(47);
+    // same-object callee that inserts into the iterated table or touches a `var` cursor is refused). 43 is R796 (tree-sitter-al 4.5.0 parses shapes 4.4.1 swallowed or broke). 44 is R829 (a name-reading loop condition gets feeds: sites leave the set). 45 is R830 (a call a loop's progress rests on is hang-refused). 46 is R865 (a direct recursion's depth argument is refused by swap-additive and delete-additive-*). 47 is R889 (empty-block refuses a block with no statements and swap-rec-xrec refuses a field-designating argument). 48 is R893 (swap-find-direction is hang-refused on a FindFirst, FindLast or Find of a walk's own record inside its Next() walk).
+    expect(IDENTITY_SCHEME).toBe(48);
     expect(report.identityScheme).toBe(IDENTITY_SCHEME);
   });
 

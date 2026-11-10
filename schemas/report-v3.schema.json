@@ -1495,6 +1495,85 @@
           "type": "string"
         }
       }
+    },
+    "isolation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "codeunits"
+      ],
+      "properties": {
+        "mode": {
+          "const": "auto"
+        },
+        "codeunits": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "codeunitId",
+              "name",
+              "chosen",
+              "tests",
+              "testPassed",
+              "methodPassed",
+              "reason",
+              "lostUnderMethod"
+            ],
+            "properties": {
+              "codeunitId": {
+                "type": "number"
+              },
+              "name": {
+                "type": "string"
+              },
+              "chosen": {
+                "type": "string",
+                "enum": [
+                  "test",
+                  "method"
+                ]
+              },
+              "tests": {
+                "type": "number"
+              },
+              "testPassed": {
+                "type": "number"
+              },
+              "methodPassed": {
+                "type": "number"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "lostUnderMethod": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "test",
+                    "outcome"
+                  ],
+                  "properties": {
+                    "test": {
+                      "type": "string"
+                    },
+                    "outcome": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
 }

@@ -931,8 +931,39 @@ export function openItemHangRefuses(
     altersOpenItemFilter(node, ctx) ||
     writesPresetExitName(node, ctx) ||
     consumingLoopRefuses(node, ctx, op) ||
+    r893WalkJump(node, ctx, op) ||
     deletedCallHangs(node, ctx)
   );
+}
+
+/** R893: test-only seam; tests switch `on` off to see the rule's effect. */
+export const r893Seam = { on: true };
+
+const R893_JUMPS: ReadonlySet<string> = new Set(["findfirst", "findlast", "find"]);
+
+/**
+ * R893: a cursor jump (`FindFirst`, `FindLast`, `Find`) on the WALKED record inside the body of its
+ * own `repeat .. until R.Next() ..` / `while R.Next() .. do` walk. The code uses the jump to skip
+ * ahead (`FindLast` past a group); `swap-find-direction` turns it into a rewind, and the walk never
+ * ends. Refused for `lethal.swap-find-direction` only, in both directions. An inner loop over
+ * another record is no exemption for a jump on R itself; a jump on another record is not seen.
+ */
+function r893WalkJump(node: ALSyntaxNode, ctx: SemanticContext, op: string | undefined): boolean {
+  if (!r893Seam.on || op !== SWAP_FIND_DIRECTION || !r696IsCall(node)) return false;
+  const c = r531Call(node);
+  if (c === null || !R893_JUMPS.has(c.method)) return false;
+  const recv = c.recv ?? (r531Implicit(node, ctx) ? "" : null);
+  if (recv === null) return false;
+  for (let cur = node.parent; cur !== null && !isScope(cur); cur = cur.parent) {
+    if (cur.rawKind !== "while_statement" && cur.rawKind !== "repeat_statement") continue;
+    const body = cur.childForFieldName("body");
+    if (body === null || node.startIndex < body.startIndex || node.endIndex > body.endIndex)
+      continue;
+    const nc = r696Next(cur);
+    const rc = nc === null ? null : r531Call(nc);
+    if (rc !== null && (rc.recv ?? "") === recv) return true;
+  }
+  return false;
 }
 
 /** R830: the methods that step their receiver by themselves. `EOS` is not one: it only asks. */

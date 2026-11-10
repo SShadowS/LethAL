@@ -249,6 +249,35 @@ function buildScenarioReport(): SessionReport {
         insertSucceeded: true,
       },
     },
+    {
+      // R896: one candidate switched (with a test it lost), one stayed.
+      type: "baseline-isolation-chosen",
+      batchIndex: 0,
+      codeunits: [
+        {
+          codeunitId: 50100,
+          name: "Sales Helper Tests",
+          chosen: "method",
+          tests: 4,
+          testPassed: 1,
+          methodPassed: 3,
+          reason: "method passed 3 of 4, test passed 1",
+          lostUnderMethod: [
+            { test: "Sales Helper Tests.SetupOnce", outcome: "fail", message: "Setup not found" },
+          ],
+        },
+        {
+          codeunitId: 50101,
+          name: "Sales Post Tests",
+          chosen: "test",
+          tests: 2,
+          testPassed: 1,
+          methodPassed: 1,
+          reason: "method passed 1 of 2, test passed 1: not strictly more, so it stays on test",
+          lostUnderMethod: [],
+        },
+      ],
+    },
     // Batch 0
     { type: "phase-entered", phase: "deploy" },
     {

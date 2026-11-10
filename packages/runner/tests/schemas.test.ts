@@ -1194,6 +1194,37 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     expect(conformsTo(reportSchema, withMarker(false))).not.toEqual([]);
   });
 
+  test("R896: isolation is additive under v3: optional, a report without it validates, and with it", () => {
+    const without = JSON.parse(
+      readFileSync(
+        join(REPO_ROOT, "packages/runner/tests/__fixtures__/gift-card-scheme3.report.json"),
+        "utf8",
+      ),
+    ) as Record<string, unknown>;
+    expect("isolation" in without).toBe(false);
+    expect((reportSchema as { required: string[] }).required).not.toContain("isolation");
+    expect(conformsTo(reportSchema, without)).toEqual([]);
+    const row = {
+      codeunitId: 50100,
+      name: "T",
+      chosen: "method",
+      tests: 2,
+      testPassed: 0,
+      methodPassed: 2,
+      reason: "method passed 2 of 2, test passed 0",
+      lostUnderMethod: [{ test: "T.A", outcome: "fail" }],
+    };
+    const isolation = { mode: "auto", codeunits: [row] };
+    expect(conformsTo(reportSchema, { ...without, isolation })).toEqual([]);
+    expect(
+      conformsTo(reportSchema, { ...without, isolation: { ...isolation, mode: "test" } }),
+    ).not.toEqual([]);
+    const { reason: _, ...noReason } = row;
+    expect(
+      conformsTo(reportSchema, { ...without, isolation: { mode: "auto", codeunits: [noReason] } }),
+    ).not.toEqual([]);
+  });
+
   test("R381: buildSymbols is additive under v3: optional, a report without it validates, and with it, [] included", () => {
     // R758: a frozen copy of the scheme-3 gift-card report, so a re-freeze of the live campaign
     // cannot take away this test's sample of an older report.

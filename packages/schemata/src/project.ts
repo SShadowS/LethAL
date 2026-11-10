@@ -259,8 +259,9 @@ export function coarseIdentityTupleOf(
  * 45: R830 and R831 (coord task R-833), a statement call a loop's progress may rest on is refused for every operator, and an array element reads as its array, so sites leave the set and their same-tuple twins' ordinals move (figures: R830); history, --resume and marks recorded under 44 are not carried.
  * 46: R865 (coord task R-871), `swap-additive` and `delete-additive-*` refuse a direct recursion's depth argument, so sites leave the set and their same-tuple twins' ordinals move (measured against master 1aba1bf6: BC.History 24 removed and 4 ordinals moved, DC 2 removed, 0 tuples moved; fixtures, CDO and DO identical); history, --resume and marks recorded under 45 are not carried.
  * 47: R889 (coord task R-883), `empty-block` refuses a block with no statements and `swap-rec-xrec` refuses a field-designating argument and the receiver of a field call whose field argument is qualified, so sites leave the set and their same-tuple twins' ordinals move (BC.History 1,192 removed and 19 ordinals moved, CDO 12, DO 13 and DC 34 removed, 0 tuples moved; fixtures identical); history, --resume and marks recorded under 46 are not carried.
+ * 48: R893 (coord task R-894), `swap-find-direction` is hang-refused on a FindFirst, FindLast or Find of a walk's own record inside its `Next()` walk (a swap can rewind the walk), so sites leave the set and their same-tuple twins' ordinals move (DC 12 removed and 4 ordinals moved, BC.History 43 and 2, CDO 2, DO 2, fixtures 1 in sandbox-optin, 0 tuples moved); history, --resume and marks recorded under 47 are not carried.
  */
-export const IDENTITY_SCHEME = 47;
+export const IDENTITY_SCHEME = 48;
 
 /**
  * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,

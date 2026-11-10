@@ -574,6 +574,7 @@ describe("R762: --fresh-probe reaches the backend", () => {
             bcVersion: "28.0.46665.47126",
             alcPath: "/fake/alc",
             coverage: "none",
+            isolation: "test", // R896: --isolate-tests with the "auto" default is refused
           },
         },
         e.root,

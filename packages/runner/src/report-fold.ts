@@ -10,6 +10,7 @@ import {
   type RefusedExcludedFile,
   buildExcludedSites,
 } from "./excluded-sites";
+import type { IsolationChoiceRow } from "./isolation-auto";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
 import type { PermissionCanaryResult } from "./permission-canary";
 import {
@@ -218,6 +219,8 @@ export interface FoldedReport {
   readonly artifacts: readonly BatchArtifact[];
   readonly quarantined?: { readonly reason: string };
   readonly permissionCanary?: PermissionCanaryResult;
+  /** R896 — see `SessionReport.isolation`. */
+  readonly isolation?: { readonly mode: "auto"; readonly codeunits: readonly IsolationChoiceRow[] };
 }
 
 interface BatchInvalidation {
@@ -401,6 +404,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
 
   let quarantinedReason: string | undefined;
   let permissionCanary: PermissionCanaryResult | undefined;
+  let isolationRows: IsolationChoiceRow[] | undefined;
   let resumeFromRunId: number | undefined;
 
   const outcomes: SessionOutcome[] = [];
@@ -559,6 +563,10 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         break;
       case "permission-canary":
         permissionCanary = e.result;
+        break;
+      case "baseline-isolation-chosen":
+        // Once per session; a second event (none is emitted) would add its rows, never drop any.
+        isolationRows = [...(isolationRows ?? []), ...e.codeunits];
         break;
       case "group-call":
         groupedCalls += 1;
@@ -825,6 +833,9 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
     artifacts: [...artifactsByBatch.values()].sort((a, b) => a.batchIndex - b.batchIndex),
     ...(quarantinedReason !== undefined ? { quarantined: { reason: quarantinedReason } } : {}),
     ...(permissionCanary !== undefined ? { permissionCanary } : {}),
+    ...(isolationRows !== undefined
+      ? { isolation: { mode: "auto" as const, codeunits: isolationRows } }
+      : {}),
     ...(numbering !== undefined ? { numbering } : {}),
     ...(sourceSha256 !== undefined ? { sourceSha256 } : {}),
     ...(dependencyReportSources !== undefined ? { dependencyReportSources } : {}),

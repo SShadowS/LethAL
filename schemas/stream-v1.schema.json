@@ -875,6 +875,93 @@
       "required": [
         "type",
         "batchIndex",
+        "codeunits",
+        "seq"
+      ],
+      "properties": {
+        "type": {
+          "const": "baseline-isolation-chosen"
+        },
+        "batchIndex": {
+          "type": "number"
+        },
+        "codeunits": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "codeunitId",
+              "name",
+              "chosen",
+              "tests",
+              "testPassed",
+              "methodPassed",
+              "reason",
+              "lostUnderMethod"
+            ],
+            "properties": {
+              "codeunitId": {
+                "type": "number"
+              },
+              "name": {
+                "type": "string"
+              },
+              "chosen": {
+                "type": "string",
+                "enum": [
+                  "test",
+                  "method"
+                ]
+              },
+              "tests": {
+                "type": "number"
+              },
+              "testPassed": {
+                "type": "number"
+              },
+              "methodPassed": {
+                "type": "number"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "lostUnderMethod": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "test",
+                    "outcome"
+                  ],
+                  "properties": {
+                    "test": {
+                      "type": "string"
+                    },
+                    "outcome": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "seq": {
+          "type": "number"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "batchIndex",
         "untargetedTriggerCount",
         "coveredCount",
         "noCoverageCount",
