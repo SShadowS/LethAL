@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**21 of 864 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**17 of 866 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -347,9 +347,11 @@ that ordering is the priority.
 - **R889** · Four ways LethAL emitted AL that alc rejects, found by compiling BC.History instrumented · [R889.md](docs/roadmap/R889.md) · done (ab8e27f5)
 - **R890** · v3 runs a test codeunit under per-test rollback with its globals kept, while bcdev runs each method alone: a suite that sets up once per codeunit loses its setup on v3 · [R890.md](docs/roadmap/R890.md) · done (de9b675a) — the default is `auto` (R-896): a codeunit runs under `method` where its baseline needs it…
 - **R893** · swap-find-direction on a FindLast that skips ahead inside a Next() walk of the same record is not hang-refused: the swapped FindFirst rewinds the walk, and on BC the run stranded and quarantined the tier · [R893.md](docs/roadmap/R893.md) · done (efa3d4bb)
-- **R895** · v3 runs the app's GUI branch and bcdev the non-GUI one: a Confirm through ConfirmManagement.GetResponseOrDefault is asked on v3 and skipped on BC, so the two backends kill different mutants · [R895.md](docs/roadmap/R895.md) · open
+- **R895** · v3 runs the app's GUI branch and bcdev the non-GUI one: a Confirm through ConfirmManagement.GetResponseOrDefault is asked on v3 and skipped on BC, so the two backends kill different mutants · [R895.md](docs/roadmap/R895.md) · done (f85a6c52): the branch is named in the report; making v3 non-GUI waits for upstream aldevtools #7564
 - **R896** · The hang check covers only Tier-1 operators: a Tier-2 mutation inside a loop is never hang-refused · [R896.md](docs/roadmap/R896.md) · open
-- **R899** · itest:tables failed once on lost-ack-unreadable (RunMutant HTTP 500, empty body), and the reconcile left an orphaned operation that took bc2 to container-needs-recycle · [R899.md](docs/roadmap/R899.md) · open: once, on bc2; the gate refused correctly; the cause of the 500 is not known
+- **R899** · itest:tables failed once on lost-ack-unreadable (RunMutant HTTP 500, BC's 'Failed to compare two elements in the array'), and the operation it had claimed stayed orphaned, which took bc2 to container-needs-recycle · [R899.md](docs/roadmap/R899.md) · open: once, on bc2; traced offline (R-900): the reconcile behaved as designed; ending such an orphan needs a…
+- **R902** · Two more ways LethAL emitted AL that alc rejects, found by the BC.History re-hunt with assembly probing paths · [R902.md](docs/roadmap/R902.md) · done (06fe903e)
+- **R903** · A carried verdict's execution context takes the CURRENT backend's GUI label: harmless while every resume is same-backend, wrong if a cross-backend resume is ever allowed · [R903.md](docs/roadmap/R903.md) · closed 2026-11-10 — not reachable: both resume paths refuse a run from another backend; reopen with any…
 
 ## Product gaps a real project hits
 
@@ -534,11 +536,11 @@ that ordering is the priority.
 - **R885** · al-runner v3 runs a Microsoft-style test app without demo data, and LethAL never says so: most of its baseline is refused · [R885.md](docs/roadmap/R885.md) · done (0ab21ba2)
 - **R886** · LethAL cannot hand al-runner v3 its .NET sidecar, so every test that reaches a .NET type is refused · [R886.md](docs/roadmap/R886.md) · done (c3fcd742)
 - **R888** · Selector ids are checked against the project's own codeunits only, so they can clash with a dependency's codeunit (alc AL0264) · [R888.md](docs/roadmap/R888.md) · done (f3b3d5b3)
-- **R892** · On a first publish, an injected selector id that an installed non-dependent app already uses is not checked: BC's publish refusal is the only signal, with no hint to change selectorIds · [R892.md](docs/roadmap/R892.md) · open
+- **R892** · On a first publish, an injected selector id that an installed non-dependent app already uses is not checked: BC's publish refusal is the only signal, with no hint to change selectorIds · [R892.md](docs/roadmap/R892.md) · done (f034eea9)
 - **R894** · Spread one bcdev run across several BC servers (load balancing), so a slow suite's mutants run in parallel without sessions sharing a database · [R894.md](docs/roadmap/R894.md) · open, filed 2026-11-09 — DEFERRED by the owner: worth doing, not now
 - **R898** · No time cap per survivor: a mutant whose covering tests are slow can only end as survived after all of them, so slow suites take days · [R898.md](docs/roadmap/R898.md) · open, filed 2026-11-09 — DEFERRED, owner's call
 - **R900** · LethAL never passes assembly probing paths to alc, so a project that uses DotNet types fails LethAL's own compile (AL0451, AL0185) · [R900.md](docs/roadmap/R900.md) · done (41b42a8c) — top-level assemblyProbingPaths, else .vscode/settings.json, else ./.netpackages; passed on…
-- **R901** · On Linux, alc reads a controladdin's `Resources\x\y.js` as one literal file name, so a batch fails with AL0327 for any controladdin written with backslashes · [R901.md](docs/roadmap/R901.md) · open, filed 2026-11-10 from coord R-893
+- **R901** · On Linux, alc reads a controladdin's `Resources\x\y.js` as one literal file name, so a batch fails with AL0327 for any controladdin written with backslashes · [R901.md](docs/roadmap/R901.md) · done (ceaecb4c)
 
 ## Backends and tooling
 
@@ -908,7 +910,7 @@ that ordering is the priority.
 - **R860** · al-runner stops on a missing dependency (upstream #7139); LethAL follows by name · [R860.md](docs/roadmap/R860.md) · done (35b54d36)
 - **R861** · `--edge-rejudge` moved `current` and left its manifest row unpublished until the next plain run · [R861.md](docs/roadmap/R861.md) · done (25eaa10f)
 - **R866** · `--isolate-tests` runs its baseline as one process per test, which is most of the mode's cost · [R866.md](docs/roadmap/R866.md) · done (d8ef7fd3)
-- **R897** · On al-runner v3 one hanging mutant costs (covering tests in its codeunit) x the per-test limit: about 69 minutes for 23 tests, with no verdict until the end · [R897.md](docs/roadmap/R897.md) · open
+- **R897** · On al-runner v3 one hanging mutant costs (covering tests in its codeunit) x the per-test limit: about 69 minutes for 23 tests, with no verdict until the end · [R897.md](docs/roadmap/R897.md) · done (d66074f1)
 
 ---
 
