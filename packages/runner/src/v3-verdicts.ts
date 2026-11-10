@@ -20,7 +20,7 @@ export class V3VerdictsError extends Error {
     readonly path: string,
     readonly reasons: readonly string[],
   ) {
-    super(`--v3-verdicts ${path} cannot be used, so nothing was sent: ${reasons.join("; ")}`);
+    super(`--v3-verdicts ${path} cannot be used: ${reasons.join("; ")}`);
     this.name = "V3VerdictsError";
   }
 }
@@ -120,6 +120,9 @@ export async function loadV3Verdicts(path: string): Promise<V3VerdictsInput> {
   if (r.coverageMode !== "al-runner" || r.coverageOffFiles !== undefined) {
     reasons.push("v3 coverage was off, so its report cannot say which tests reach a mutant");
   }
+  if (r.quarantined !== undefined) {
+    reasons.push("that v3 run was quarantined, so its rows may stop part-way");
+  }
   if (Array.isArray(r.testsOnly) && r.testsOnly.length > 0) {
     reasons.push("it was narrowed by --tests-only, so a covering test can be missing from it");
   }
@@ -167,6 +170,8 @@ export interface V3VerdictsRunFacts {
   readonly numberingDigest: string;
   readonly testSourceSha256: string;
   readonly refusedTests: readonly string[];
+  /** How many mutants this run will deploy: the report must hold at least that many rows. */
+  readonly deployedCount: number;
 }
 
 const NAMED = 5;
@@ -182,6 +187,9 @@ export function checkV3Verdicts(input: V3VerdictsInput, run: V3VerdictsRunFacts)
     reasons.push("it numbered different mutation sites (numberingDigest)");
   if (input.testSourceSha256 !== run.testSourceSha256)
     reasons.push("its test app differs from this run's (testSourceSha256)");
+  // Before the batch loop, so a short report cannot stop a run after BC has measured part of it.
+  if (input.rows.size < run.deployedCount)
+    reasons.push(`it has ${input.rows.size} rows for this run's ${run.deployedCount} mutants`);
   if (
     run.refusedTests.length > 0 &&
     notGreenOnV3(input, run.refusedTests).length === run.refusedTests.length
@@ -189,6 +197,9 @@ export function checkV3Verdicts(input: V3VerdictsInput, run: V3VerdictsRunFacts)
     reasons.push("none of the tests BC refuses passed on v3, so it can say nothing about them");
   if (reasons.length > 0) throw new V3VerdictsError(input.path, reasons);
 }
+
+/** v3 runs on Linux only, so a report's paths use `/` while a bcdev run on Windows has `\`. */
+const slashes = (p: string): string => p.replaceAll("\\", "/");
 
 /** One batch's manifest, before that batch is deployed: every row must be the same site. */
 export function checkV3Rows(
@@ -202,7 +213,7 @@ export function checkV3Rows(
     const row = input.rows.get(manifestKey(m));
     if (row === undefined) missing.push(m.mutantId);
     else if (
-      row.file !== m.file ||
+      slashes(row.file) !== slashes(m.file) ||
       row.startIndex !== m.startIndex ||
       row.endIndex !== m.endIndex ||
       row.mutatedText !== m.mutatedText

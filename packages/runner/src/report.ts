@@ -689,10 +689,11 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
   },
   "v3-verdicts-joined": {
     meaning:
-      "This bcdev run was joined with a finished al-runner v3 report (`--v3-verdicts`). A `no-coverage` " +
-      "row whose only covering tests BC refused, and which v3 killed, carries `v3Verdict`. Nothing has " +
-      "checked those kills against BC, and the two backends can differ (R895, R890). Everything the " +
-      "join did not label is only counted in the report's `v3Verdicts.notShown`.",
+      "This bcdev run was joined with a finished al-runner v3 report (`--v3-verdicts`). In the report, a " +
+      "`no-coverage` row whose covering tests on v3 were all ones BC refused, and which v3 killed, " +
+      "carries `v3Verdict`. Nothing has checked those kills against BC, and the two backends can differ " +
+      "(R895, R890). Such rows v3 did not kill are counted in the report's `v3Verdicts.notShown`. The " +
+      "join compares the source and the test app; it does not compare symbol packages.",
     entailedNegative:
       "Not a BC verdict. A v3 kill does not count as killed: the row's verdict stays `no-coverage`, and " +
       "no count and no score includes it. A v3 survivor is not shown at all, because v3's coverage " +
@@ -3973,7 +3974,7 @@ export function renderConsole(r: SessionReport): string {
     const n = v.notShown;
     const notGreen = v.refusedTestsNotGreenOnV3.length;
     lines.push(
-      `NOT BC VERDICTS: al-runner v3 killed ${v.killed} mutant(s) that BC reads as no-coverage, because BC refused every test reaching them. They are not counted as killed and are not in the score above. Not shown: ${n.survived} v3 survived, ${n.timeoutKilled} v3 timeout, ${n.otherVerdict} other.${notGreen > 0 ? ` ${notGreen} refused test(s) did not pass on v3 either.` : ""}`,
+      `NOT BC VERDICTS: al-runner v3 killed ${v.killed} mutant(s) that BC reads as no-coverage, where BC refused every test v3 saw reaching them. They are not counted as killed and are not in the score above. Not shown: ${n.survived} v3 survived, ${n.timeoutKilled} v3 timeout, ${n.otherVerdict} other.${notGreen > 0 ? ` ${notGreen} test(s) BC refused did not pass on v3, so they show nothing.` : ""}`,
     );
   }
   // R907: a qualifier on the score, for the same reason.

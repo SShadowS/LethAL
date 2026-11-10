@@ -4668,7 +4668,7 @@ function resolveResume(
       assertSameResumeInputs(row, `--resume-run ${id}`, resumeInputs); // R886
       if (row.configFingerprint !== configFingerprint) {
         throw new Error(
-          `--resume-run ${id} was scoped differently from this session (--only/--tests-only/--exclude-test/--skip-known-survivors/selector ids/preprocessor symbols). Carrying its verdicts would report one scope's measurements as another's${
+          `--resume-run ${id} was scoped differently from this session (--only/--tests-only/--exclude-test/--skip-known-survivors/--v3-verdicts/selector ids/preprocessor symbols). Carrying its verdicts would report one scope's measurements as another's${
             row.configFingerprint === null
               ? " — that run predates configuration fingerprinting and cannot prove its scope at all"
               : ""
@@ -6511,6 +6511,7 @@ async function runSessionBody(
   }
   const v3Verdicts =
     cfg.v3VerdictsPath !== undefined ? await loadV3Verdicts(cfg.v3VerdictsPath) : undefined;
+  const v3Unplaceable = new Set<string>();
 
   // R47: computed for EVERY run, not just a resuming one — a run that does not record its own
   // fingerprint cannot be resumed later, and the run worth resuming is precisely the one nobody
@@ -6812,6 +6813,7 @@ async function runSessionBody(
       numberingDigest,
       testSourceSha256: testSourceHash,
       refusedTests: testPageRefusedNames.map((t) => t.qualifiedName),
+      deployedCount,
     });
   }
   emit({
@@ -8268,6 +8270,8 @@ async function runSessionBody(
             uncovered = [...uncovered, ...forCandidates.uncovered];
             unplaceableIds = new Set([...unplaceableIds, ...forCandidates.unplaceable]);
           }
+          // R-911: this batch's whole set; `coverage-split` below lists only the first split.
+          for (const id of unplaceableIds) v3Unplaceable.add(`${batchIdx}\0${id}`);
           // coverage-split: accumulated per batch AT SPLIT TIME, and folded into
           // `SessionReport.untargetedTriggerCount` by report-fold.ts rather than a session-level
           // accumulator here — see events.ts's doc comment on why this is the strongest single
@@ -8755,20 +8759,13 @@ async function runSessionBody(
   // implementation, R583's dependency drops): no remaining backend reports any of them.
   // R-911: after the last row, on a quarantined run too. Derived from the report file, not stored.
   if (v3Verdicts !== undefined) {
-    const unplaceable = new Set(
-      collectedEvents.flatMap((e) =>
-        e.type === "coverage-split"
-          ? e.unplaceableMutants.map((id) => `${e.batchIndex}\0${id}`)
-          : [],
-      ),
-    );
     emit({
       type: "v3-verdicts-joined",
       ...joinV3Verdicts(
         v3Verdicts,
         outcomes,
         testPageRefusedNames.map((t) => t.qualifiedName),
-        unplaceable,
+        v3Unplaceable,
       ),
     });
   }

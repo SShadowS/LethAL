@@ -110,6 +110,7 @@ describe("loadV3Verdicts refuses by name", () => {
     ["coverage none", { coverageMode: "none" }, "coverage was off"],
     ["coverage turned off", { coverageOffFiles: ["a.al"] }, "coverage was off"],
     ["--tests-only", { testsOnly: ["a"] }, "--tests-only"],
+    ["a quarantined run", { quarantined: { reason: "x" } }, "quarantined"],
     ["no sourceSha256", { sourceSha256: undefined }, "no sourceSha256"],
     ["no numberingDigest", { numberingDigest: undefined }, "no numberingDigest"],
     ["no testSourceSha256", { testSourceSha256: undefined }, "no testSourceSha256"],
@@ -132,6 +133,7 @@ describe("checkV3Verdicts: this run's facts", () => {
     numberingDigest: "num",
     testSourceSha256: "tst",
     refusedTests: [REFUSED],
+    deployedCount: 1,
   };
   const reasons = (input: V3VerdictsInput, over: Partial<typeof facts>): string => {
     try {
@@ -144,6 +146,9 @@ describe("checkV3Verdicts: this run's facts", () => {
   };
   test("equal facts pass", async () => {
     expect(reasons(await load(), {})).toBe("");
+  });
+  test("fewer rows than this run deploys, before any batch", async () => {
+    expect(reasons(await load(), { deployedCount: 2 })).toContain("1 rows for this run's 2");
   });
   test("a different source", async () => {
     expect(reasons(await load(), { sourceSha256: "other" })).toContain("sourceSha256");
@@ -186,6 +191,9 @@ describe("checkV3Rows: every row of a batch is the same site", () => {
     ["mutatedText", { mutatedText: "z" }],
   ] as const)("a different %s refuses", (_n, over) => {
     expect(() => checkV3Rows(input0, [entry("M1", over)])).toThrow(/different site or text for M1/);
+  });
+  test("a Windows path in the run matches the report's forward slashes", () => {
+    expect(() => checkV3Rows(input0, [entry("M1", { file: "src\\A.al" })])).not.toThrow();
   });
   test("a mutant with no row refuses", () => {
     expect(() => checkV3Rows(input0, [entry("M9")])).toThrow(/no row for M9/);

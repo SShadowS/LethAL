@@ -447,7 +447,7 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
       const out = renderConsole(r);
       expect(out).toContain("NOT BC VERDICTS: al-runner v3 killed 1 mutant(s)");
       expect(out).toContain("Not shown: 3 v3 survived, 1 v3 timeout, 2 other.");
-      expect(out).toContain("1 refused test(s) did not pass on v3 either.");
+      expect(out).toContain("1 test(s) BC refused did not pass on v3, so they show nothing.");
     });
     test("no join: no block, no caveat, no line, no row field", () => {
       const r = without();
@@ -455,6 +455,21 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
       expect(r.validity.caveats).not.toContain("v3-verdicts-joined");
       expect(renderConsole(r)).not.toContain("NOT BC VERDICTS");
       expect(r.mutants[0] !== undefined && "v3Verdict" in r.mutants[0]).toBe(false);
+    });
+    test("the kill lands on its own batch when a code repeats across batches", () => {
+      const secondBatch: RunEventInput = { ...noCoverage, batchIndex: 1 } as RunEventInput;
+      const inBatch1 = {
+        ...joined,
+        kills: [{ batchIndex: 1, mutantCode: "M0001", killingTest: "P.T", coveringTests: ["P.T"] }],
+      } as RunEventInput;
+      const r = buildReport(
+        STATICS,
+        seq([generated, baseline, noCoverage, secondBatch, inBatch1, finished]),
+      );
+      expect(r.mutants.map((m) => [m.batchIndex, m.v3Verdict !== undefined])).toEqual([
+        [0, false],
+        [1, true],
+      ]);
     });
     test("a join with no kills still raises the caveat", () => {
       const empty: RunEventInput = { ...joined, kills: [] } as RunEventInput;
