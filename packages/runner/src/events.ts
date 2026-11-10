@@ -339,6 +339,9 @@ export type RunEventInput =
         /** R272: this test's own measured duration (`TestVerdict.measuredDurationMs`), on a `pass`
          *  run in THIS session only (never a resume-reused baseline). Optional on the wire. */
         readonly durationMs?: number;
+        /** R907: a `pass` al-runner flagged (it rests on an unprobed assumption); this session's own
+         *  baseline run only. Absent otherwise. */
+        readonly flagged?: true;
       }[];
     }
   | {

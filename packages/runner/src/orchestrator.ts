@@ -105,7 +105,6 @@ import {
   testAppHashFor,
 } from "./baseline-snapshot";
 import type { BaselineObservation, BaselineSnapshot } from "./baseline-snapshot";
-import { rewriteControlAddInPaths } from "./controladdin-paths";
 import { PublishFailedError } from "./bcdev-backend";
 import {
   MAX_ISOLATION_COMPILES,
@@ -126,6 +125,7 @@ import {
   resumableTestApp,
   sameClosedWorld,
 } from "./closed-world";
+import { rewriteControlAddInPaths } from "./controladdin-paths";
 import {
   type DependencyReportSourceRecord,
   dependencyReportReader,
@@ -339,7 +339,9 @@ import {
   scanTestPageModel,
 } from "./testpage-scan";
 import {
-  describeTestPageUnsupported,
+  type FrameSourceLookup,
+  describeTestPageRefusal,
+  frameSourceLookup,
   isTestPageNotRunMessage,
   testPageNotRunMessage,
 } from "./testpage-unsupported";
@@ -4912,6 +4914,9 @@ interface ScoreBatchInput {
   /** R738: the target's own declared object ids (`targetObjectIdsOf`), so a baseline failure on a
    *  stale target member refuses the session. Absent: no such check. */
   readonly targetObjectIds?: ReadonlySet<number>;
+  /** R909: resolves a Linux page-open frame in the test app's source and THIS batch's deployed
+   *  (instrumented) target source, whose line numbers are the ones BC counted. Absent: unnamed. */
+  readonly frameSource?: FrameSourceLookup;
   /** R192 snapshot reuse and recording, runSession only. Absent: always run, record nothing. */
   readonly snapshot?: {
     readonly batchDir: string;
@@ -5849,7 +5854,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       if (
         !bodyNeverRan &&
         didNotPassAtBaseline(b.verdict.outcome) &&
-        describeTestPageUnsupported(b.verdict.failureMessage) !== undefined
+        describeTestPageRefusal(b.verdict.failureMessage, input.frameSource) !== undefined
       ) {
         classification.push("tests-testpage-unsupported");
       }
@@ -5871,6 +5876,8 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
           : {}),
         // `measuredDurationMs` is set on a `pass` only (TestVerdict's doc), so no outcome check.
         ...(ranHere.has(b.ref) && measured !== undefined ? { durationMs: measured } : {}),
+        // R907: al-runner's flagged pass, this session's own baseline only (as `durationMs`).
+        ...(ranHere.has(b.ref) && b.verdict.flagged === true ? { flagged: true as const } : {}),
       };
     }),
   });
@@ -6365,7 +6372,8 @@ async function runSessionBody(
   // the per-test digests `lethal verify` compares against, recorded on the run row below.
   // (The parser was initialised before discovery, R403.)
   // R-371: ONE parse of the test sources, shared by the scan and the digests.
-  const testModel = buildTestAppModel(await readTestAppSources(cfg.testDir));
+  const testFiles = await readTestAppSources(cfg.testDir);
+  const testModel = buildTestAppModel(testFiles);
   const testPageRefused: ReadonlyMap<string, string> = isBcdev(caps.kind)
     ? scanTestPageModel(testModel, tests)
     : new Map();
@@ -6481,7 +6489,7 @@ async function runSessionBody(
     // the other way, by the one check every lend passes.
     runnerBuild:
       v3Build !== undefined
-        ? `${v3Build.version} ${v3Build.binarySha256}${cfg.backend.isolatesTests === true ? " isolate-tests" : ""}${cfg.backend.methodIsolation === true ? " isolation-method" : ""}${cfg.backend.isolationAuto === true ? ISOLATION_AUTO_BUILD_TAG : ""}`
+        ? `${v3Build.version} ${v3Build.binarySha256}${cfg.backend.isolatesTests === true ? " isolate-tests" : ""}${cfg.backend.noClient === true ? " no-client" : ""}${cfg.backend.methodIsolation === true ? " isolation-method" : ""}${cfg.backend.isolationAuto === true ? ISOLATION_AUTO_BUILD_TAG : ""}`
         : undefined,
   };
   // R886: the v3 settings a resume must find unchanged; undefined on a backend with none.
@@ -6528,6 +6536,7 @@ async function runSessionBody(
     coverageMode: caps.coverage,
     selectorIds: cfg.selectorIds,
     ...(cfg.backend.isolatesTests === true ? { isolateTests: true } : {}),
+    ...(cfg.backend.noClient === true ? { noClient: true } : {}), // R907
     ...(cfg.backend.methodIsolation === true ? { methodIsolation: true } : {}),
     ...(cfg.backend.isolationAuto === true ? { isolationAuto: true } : {}), // R896
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
@@ -8085,6 +8094,14 @@ async function runSessionBody(
       // and before any mutant is scored. Selection read the original source, which can decide
       // where the instrumented text does not.
       const batchRefused = await withBackendRefusals(cfg.backend, coverageRefused);
+      // R909: BC counts lines in the INSTRUMENTED target (wrap and lift add lines), so a Linux
+      // page-open frame is resolved in this batch's deployed source plus the test app's.
+      const frameSource = frameSourceLookup([
+        ...testFiles.map((f) => f.text),
+        ...[...(await readTargetSource(batchDir))]
+          .filter(([p]) => p.toLowerCase().endsWith(".al"))
+          .map(([, b]) => b.toString("utf8")),
+      ]);
       const select = (baseline: readonly BaselineRow[]): CoveringPlan | undefined => {
         const greenTests = baseline.filter((b) => b.verdict.outcome === "pass");
         if (greenTests.length < baseline.length) baselineGreenOverall = false;
@@ -8094,6 +8111,22 @@ async function runSessionBody(
             record(cfg.store, runId, m, "error", outcomes, batchIdx, emit, undefined, note);
           }
           return undefined;
+        }
+        // R904: test data off and a partly red baseline. The red tests may only need the rows the
+        // missing demo data creates, and they fail with ordinary text, so scoring the green rest
+        // would report the missing setup as survivors. Stopped by name before any mutant. Red is
+        // a test that ran and failed or was refused by v3 (`error`); a `skip` (refused before
+        // sending, or stopped by us) and a timeout are not data-caused.
+        const dataOff = cfg.backend.baselineNote?.();
+        const red = baseline.filter((b) => didNotPassAtBaseline(b.verdict.outcome));
+        if (dataOff !== undefined && red.length > 0) {
+          // `scoreBatch` saved this baseline before `select`. A `--resume` would reuse it with no
+          // v3 call, so no note, and score against the green tests after all (review).
+          cfg.store.dropBaselineSnapshot(runId, batchIdx);
+          const names = red.slice(0, 5).map((b) => `${b.ref.codeunitName}.${b.ref.method}`);
+          throw new Error(
+            `${red.length} of ${baseline.length} baseline test(s) did not pass (${names.join(", ")}${red.length > names.length ? ", ..." : ""}) while ${dataOff} Stopped before any mutant: the red tests may only need that data, and scoring against the green ones alone would count the missing setup as survivors (R904).`,
+          );
         }
         // R58, recorded rather than discovered later: under `coverage: "fenced"` these durations
         // INCLUDE coverage-collection overhead (Start/StopApplicationCoverage plus serializing the
@@ -8146,7 +8179,7 @@ async function runSessionBody(
           if (refusal !== undefined) {
             refusedThisBatch.set(name, refusal);
           }
-          const testPage = describeTestPageUnsupported(b.verdict.failureMessage);
+          const testPage = describeTestPageRefusal(b.verdict.failureMessage, frameSource);
           if (testPage !== undefined) {
             testPageThisBatch.set(name, testPage);
           }
@@ -8553,6 +8586,7 @@ async function runSessionBody(
           testArmEvidence.kind === "compiled" &&
           testArmEvidence.from === "published-package",
         targetObjectIds: sessionTargetIds,
+        frameSource,
         snapshot: {
           batchDir,
           testDir: cfg.testDir,
@@ -8827,6 +8861,7 @@ async function runSessionBody(
             ...withRunSeed(v3Build, cfg.backend),
             // R857: the report says so too, as a report is read without the store.
             ...(cfg.backend.isolatesTests === true ? { isolateTests: true as const } : {}),
+            ...(cfg.backend.noClient === true ? { noClient: true as const } : {}), // R907
           },
         }
       : {}),

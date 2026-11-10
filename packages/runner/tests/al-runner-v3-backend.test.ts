@@ -47,6 +47,7 @@ import {
 } from "../src/al-runner-v3-backend";
 import {
   V3_DOWNLOAD_DEMO_DATA_DEFAULT,
+  V3_NO_CLIENT_DEFAULT,
   validateAlRunnerV3Config,
 } from "../src/al-runner-v3-config";
 import { MESSAGE_PREFIX_REASON, type V3ContractResult } from "../src/al-runner-v3-contract";
@@ -1286,6 +1287,13 @@ describe("R885: demo data, on the one-shot path", () => {
     expect(b.baselineNote()).toContain("28.4.1.2");
   });
 
+  test("R904: a new session on the same backend starts with no data-off note", async () => {
+    const { b } = await notices(OFF, { downloadDemoData: false });
+    expect(b.baselineNote()).toContain("28.4.1.2");
+    b.setNotify(() => {});
+    expect(b.baselineNote()).toBeUndefined();
+  });
+
   test("no note, no warning and no baseline line", async () => {
     const { seen, b } = await notices(undefined);
     expect(seen.filter(([c]) => c.startsWith("al-runner-v3-test-data"))).toEqual([]);
@@ -1373,6 +1381,72 @@ describe("R885: demo data, on the one-shot path", () => {
     expect(v({ downloadDemoData: false }).downloadDemoData).toBe(false);
     expect(v({ downloadDemoData: true }).downloadDemoData).toBe(true);
     expect(() => v({ downloadDemoData: "no" })).toThrow("downloadDemoData");
+  });
+
+  test("R907 the config key noClient: default from the constant, boolean only, passed through", () => {
+    const base = { packagesDir: "/p", bcVersion: "28.0.1.2", path: "/x" };
+    const v = (extra: object) => validateAlRunnerV3Config({ ...base, ...extra }, () => true);
+    expect(v({}).noClient).toBe(V3_NO_CLIENT_DEFAULT);
+    expect(v({ noClient: true }).noClient).toBe(true);
+    expect(v({ noClient: false }).noClient).toBe(false);
+    expect(() => v({ noClient: "yes" })).toThrow("noClient");
+  });
+
+  test("R907 --no-client: v3CallArgv adds it after --bc-version when on, never when off", () => {
+    const a = {
+      alRunnerPath: "/b",
+      codeunitId: 7,
+      stopSeconds: 3,
+      packagesDir: "/d",
+      bcVersion: "28.0.1.2",
+      symbols: [],
+      activeDir: "/a",
+      testDir: "/t",
+    };
+    const on = v3CallArgv({ ...a, noClient: true });
+    expect(on[on.indexOf("--bc-version") + 2]).toBe("--no-client");
+    expect(v3CallArgv({ ...a, noClient: false })).not.toContain("--no-client");
+    expect(v3CallArgv(a)).not.toContain("--no-client");
+  });
+
+  test("R907 a one-shot call carries --no-client exactly when the backend's noClient is on", async () => {
+    const run = async (extra: Partial<AlRunnerV3Config>) => {
+      const l = await layout();
+      const v3 = fakeV3(allPass);
+      const b = backendOf(l, v3.spawn, fakeAlc().io, extra);
+      await b.deploy(l.batch);
+      await b.activate("M0002");
+      await b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
+      return { argv: v3.calls[0] ?? [], noClient: b.noClient };
+    };
+    const on = await run({ noClient: true });
+    expect(on.argv).toContain("--no-client");
+    expect(on.noClient).toBe(true);
+    const off = await run({});
+    expect(off.argv).not.toContain("--no-client");
+    expect(off.noClient).toBe(V3_NO_CLIENT_DEFAULT);
+  });
+
+  test("R907 a one-shot row's flagged: true reaches a pass verdict; absent or false does not", () => {
+    const row = {
+      codeunit: 7,
+      method: "A",
+      name: "Codeunit7.A",
+      status: "pass",
+      notRun: false,
+    } as const;
+    const r = (extra: object) => decodeV3Rows(JSON.stringify({ tests: [{ ...row, ...extra }] }), 7);
+    const verdictOf = (extra: object) => {
+      const d = r(extra);
+      if (!("rows" in d)) throw new Error(d.why);
+      const [first] = d.rows;
+      if (first === undefined) throw new Error("no row");
+      return v3RowVerdict(ref("A"), first, 3, 5, undefined);
+    };
+    expect(verdictOf({ flagged: true }).flagged).toBe(true);
+    expect(verdictOf({ flagged: false })).not.toHaveProperty("flagged");
+    expect(verdictOf({})).not.toHaveProperty("flagged");
+    expect("why" in r({ flagged: "yes" })).toBe(true);
   });
 
   test("the not-green baseline note carries the line only when the backend gave one", () => {

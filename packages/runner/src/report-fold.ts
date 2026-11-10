@@ -125,6 +125,8 @@ export interface FoldStatics {
     readonly runSeed?: number;
     /** R857: this run's tests ran alone (`--isolate-tests`). */
     readonly isolateTests?: true;
+    /** R907: this run's tests ran in a session without a client (`--no-client`). */
+    readonly noClient?: true;
   };
 }
 
@@ -273,6 +275,7 @@ export function applyBatchInvalidations(
 export function testMethodsOf(
   refs: readonly TestMethodRef[],
   durations: ReadonlyMap<string, readonly number[]>,
+  flagged: ReadonlySet<string> = new Set(),
 ): TestMethodRecord[] {
   const identityOf = (r: TestMethodRef) => `${r.codeunitId}::${r.method.toLowerCase()}`;
   const byName = new Map<string, TestMethodRef[]>();
@@ -300,6 +303,7 @@ export function testMethodsOf(
         ...(line !== undefined ? { line } : {}),
         ...(places.size > 1 ? { lineAmbiguous: true as const } : {}),
         ...(ms !== undefined ? { baselineDurationMs: ms } : {}),
+        ...(flagged.has(name) ? { baselineFlagged: true as const } : {}),
       };
     });
 }
@@ -357,6 +361,8 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   // R272: the discovered refs, and each test's measured baseline durations this session.
   let discoveredTests: readonly TestMethodRef[] | undefined;
   const baselineDurations = new Map<string, number[]>();
+  // R907: tests whose baseline pass al-runner flagged, in a completed batch of this session.
+  const baselineFlaggedTests = new Set<string>();
 
   // How many times this run entered the deploy phase — one per batch loop iteration, emitted
   // unconditionally before that batch's deploy attempt (including a failed one), so it counts
@@ -492,6 +498,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
           if (v.durationMs !== undefined) {
             baselineDurations.set(v.name, [...(baselineDurations.get(v.name) ?? []), v.durationMs]);
           }
+          if (v.outcome === "pass" && v.flagged === true) baselineFlaggedTests.add(v.name); // R907
         }
         break;
       case "quarantined":
@@ -834,7 +841,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
     timings: { totalMs, generateMutationSetMs, deployMs, baselineMs },
     baselineTests,
     ...(discoveredTests !== undefined
-      ? { testMethods: testMethodsOf(discoveredTests, baselineDurations) }
+      ? { testMethods: testMethodsOf(discoveredTests, baselineDurations, baselineFlaggedTests) }
       : {}),
     untargetedTriggerCount,
     groupedCalls,

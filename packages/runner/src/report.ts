@@ -1174,6 +1174,12 @@ export interface ExecutionContext {
    * comparable with a default run's. Absent otherwise: a default report does not change.
    */
   readonly isolateTests?: true;
+  /**
+   * R907: `true` when this run's tests ran in a session without a client (al-runner v3
+   * `--no-client`: `GuiAllowed()` false, as on BC's web-service path). Only on directly measured
+   * al-runner-v3 entries, never on carried ones. Absent otherwise: a default report does not change.
+   */
+  readonly noClient?: true;
 }
 
 /** R272: one discovered test method — see `SessionReport.testMethods`. */
@@ -1193,6 +1199,10 @@ export interface TestMethodRecord {
    *  nothing. Absent: not measured per test in a completed batch (a resume-reused baseline, a
    *  failing test, a backend that reports none). Displayed, never a ranking key (R272). */
   readonly baselineDurationMs?: number;
+  /** R907: `true` when a COMPLETED baseline batch of THIS session recorded a passing baseline for
+   *  this test that al-runner flagged (the pass rests on an unprobed assumption). Absent otherwise
+   *  (unflagged, failing, resume-reused, another backend). Only al-runner sets it. */
+  readonly baselineFlagged?: true;
 }
 
 /** Per-procedure survivor rollup — see `SessionReport.survivorsByProcedure`. */
@@ -2474,6 +2484,7 @@ function percentile(sortedAsc: readonly number[], q: number): number {
 function measuredExecutionContext(
   runner: RunnerKind,
   caps: BackendCapabilities,
+  noClient = false, // R907: al-runner v3 ran with --no-client
 ): { guiAllowed: boolean; clientType: string; basis: string } {
   if (runner === "client-services") {
     return {
@@ -2491,6 +2502,17 @@ function measuredExecutionContext(
   // `GuiAllowed()` Yes and a Confirm is raised, the CLIENT branch, the opposite of the fenced path; it
   // has no option to run without a client (upstream aldevtools #7564).
   if (caps.kind === "al-runner-v3") {
+    if (noClient) {
+      return {
+        guiAllowed: false,
+        clientType: "al-runner v3 CLI, no client",
+        basis:
+          "measured on al-runner v3 with --no-client (R907, R-907): GuiAllowed() answers false and " +
+          "Confirm, StrMenu and a page run raise CallbackNotAllowed as on BC's fenced path; al-runner " +
+          "measured these on BC for a page background task worker, so a test that passes through them " +
+          "is a flagged pass",
+      };
+    }
     return {
       guiAllowed: true,
       clientType: "al-runner v3 CLI",
@@ -2535,6 +2557,7 @@ function buildExecutionContexts(
     readonly binarySha256: string;
     readonly runSeed?: number;
     readonly isolateTests?: true;
+    readonly noClient?: true;
   },
 ): ExecutionContext[] {
   const groups = new Map<string, { runner: RunnerKind; carried: boolean; verdictCount: number }>();
@@ -2559,11 +2582,12 @@ function buildExecutionContexts(
           binarySha256: runnerBuild.binarySha256,
           ...(runnerBuild.runSeed !== undefined ? { runSeed: runnerBuild.runSeed } : {}),
           ...(runnerBuild.isolateTests === true ? { isolateTests: true as const } : {}),
+          ...(runnerBuild.noClient === true ? { noClient: true as const } : {}),
         }
       : {}),
   };
   return [...groups.values()].map((g) => {
-    const measured = measuredExecutionContext(g.runner, caps);
+    const measured = measuredExecutionContext(g.runner, caps, runnerBuild?.noClient === true);
     if (!g.carried) {
       return { runner: g.runner, ...measured, ...bcFields, verdictCount: g.verdictCount };
     }
