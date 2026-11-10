@@ -629,6 +629,7 @@ describe("B5 the heavy-job guard", () => {
   const bch = (pid: number): string => job(pid, pid);
   const TOTAL_CAP = "-> REFUSED (at most three heavy jobs container-wide)";
   const BASEAPP_CAP = "-> REFUSED (at most two BaseApp corpus jobs)";
+  const CLASS_CAP = "a BaseApp-class job runs";
   test("R642: a 3rd NON-BaseApp heavy job is admitted with 2 others running", () => {
     for (const others of [
       [dc(200), dc(300)],
@@ -659,9 +660,16 @@ describe("B5 the heavy-job guard", () => {
     );
     expect(bySlot.refuse).toBe(true);
     expect(bySlot.message).toContain(BASEAPP_CAP);
-    expect(
-      heavyVerdict(parsePs(ps([...base, ...holder("dc"), bch(300)])), SELF, [500], 1, true).refuse,
-    ).toBe(false);
+    // R905: still refused (this job is BaseApp-class, so two in all), but not by the BaseApp cap.
+    const dcHolder = heavyVerdict(
+      parsePs(ps([...base, ...holder("dc"), bch(300)])),
+      SELF,
+      [500],
+      1,
+      true,
+    );
+    expect(dcHolder.refuse).toBe(true);
+    expect(dcHolder.message).not.toContain(BASEAPP_CAP);
   });
   test("R642 review B1: two held bch slots refuse a 3rd bch job, flags before or after the set", () => {
     // The CLI accepts flags first, and the in-slot re-exec keeps the user's order. The holders'
@@ -684,7 +692,7 @@ describe("B5 the heavy-job guard", () => {
       expect(v.foreign, `flags first ${flagsFirst}`).toEqual([]);
       expect(v.refuse, `flags first ${flagsFirst}`).toBe(true);
       expect(v.message).toContain(BASEAPP_CAP);
-      // Two held dc slots leave room for a 3rd job that is BaseApp.
+      // Two held dc slots: not the BaseApp cap (R905: still two in all for a BaseApp job).
       expect(
         heavyVerdict(
           parsePs(ps([...base, ...holders(flagsFirst, "dc")])),
@@ -692,16 +700,16 @@ describe("B5 the heavy-job guard", () => {
           [500, 600],
           2,
           true,
-        ).refuse,
+        ).message,
         `dc, flags first ${flagsFirst}`,
-      ).toBe(false);
+      ).not.toContain(BASEAPP_CAP);
     }
   });
-  test("R642: a 3rd job that is BaseApp, with 1 BaseApp and 1 non-BaseApp running, is admitted", () => {
+  test("R905: a 3rd job that is BaseApp, with 1 BaseApp and 1 non-BaseApp running, is refused (two in all)", () => {
     const v = heavyVerdict(parsePs(ps([...base, bch(200), dc(300)])), SELF, [], 0, true);
     expect(v.foreign.length).toBe(2);
-    expect(v.refuse).toBe(false);
-    expect(v.message).not.toContain("REFUSED");
+    expect(v.refuse).toBe(true);
+    expect(v.message).toContain(CLASS_CAP);
   });
   test("R642: a 4th heavy job of any kind is refused with 3 others, naming the total cap", () => {
     for (const selfBaseApp of [false, true]) {
@@ -713,7 +721,7 @@ describe("B5 the heavy-job guard", () => {
         selfBaseApp,
       );
       expect(v.refuse, `self BaseApp ${selfBaseApp}`).toBe(true);
-      expect(v.message).toContain(TOTAL_CAP);
+      expect(v.message).toContain(selfBaseApp ? CLASS_CAP : TOTAL_CAP);
       expect(v.message).not.toContain(BASEAPP_CAP);
     }
     // Held slots count toward the total: two held plus one unslotted job.

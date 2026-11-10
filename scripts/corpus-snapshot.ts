@@ -38,6 +38,12 @@
  * toward the BaseApp cap only while one of its processes names /work/src/BC.History; a job over a
  * COPY of the corpus counts toward the total cap only.
  *
+ * R905: the slot CLASS closes that gap. Whoever takes `heavy.<n>` writes `heavy.<n>.class`
+ * (`baseapp <pid>` or `other <pid>`; helper scripts/heavy-slot-class.ts, shell entry point
+ * `scripts/heavy-slot.sh <baseapp|other> <cmd...>`) and removes it on exit; a dead pid reads as no
+ * class. The total cap is 2 when this job is BaseApp-class, or when any other held slot is
+ * `baseapp` or has NO readable class (unknown counts as BaseApp); otherwise 3.
+ *
  * Exit codes: 0 ok / identical, 1 different or a dump failure, 2 refused for good (no master entry,
  * unknown set, error projects, bad flag: retrying never helps), 75 the heavy-job guard refused (no
  * free slot: retry later; flock's own busy code is the private 111). A retry loop waits only on 75 (`until [ $rc != 75 ]`), never on 2 (R724).
@@ -56,6 +62,7 @@ import {
 } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { parseArgs as parseCli } from "node:util";
+import { type SlotClass, readSlotClass, writeSlotClass } from "./heavy-slot-class.ts";
 import { FORMAT } from "./prod-identity-keys.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..");
@@ -631,6 +638,8 @@ export function heavyVerdict(
   slotPids: readonly number[],
   otherSlotsHeld: number,
   selfBaseApp = false,
+  // R905: the class of each OTHER held slot (undefined = no readable class, counts as BaseApp).
+  slotClasses: readonly (SlotClass | undefined)[] = [],
 ): { refuse: boolean; foreign: Proc[]; message: string } {
   const skip = new Set<number>([...ancestors(procs, self), ...descendants(procs, self)]);
   // A slot file's pid is trusted only when it names a live corpus-snapshot slot holder. A manual
@@ -668,13 +677,19 @@ export function heavyVerdict(
   }
   const foreign = [...jobs.values()];
   const otherBaseApp = baseAppSlots + baseAppJobs.size;
-  const totalRefuse = foreign.length + otherSlotsHeld >= TOTAL_CAP;
+  // R905: two heavy jobs in all while any BaseApp-class job runs (this one, or a held slot whose
+  // class is baseapp or unknown); three only when none does.
+  const classBaseApp = selfBaseApp || slotClasses.some((c) => c !== "other");
+  const totalCap = classBaseApp ? BASEAPP_CAP : TOTAL_CAP;
+  const totalRefuse = foreign.length + otherSlotsHeld >= totalCap;
   const baseAppRefuse = selfBaseApp && otherBaseApp >= BASEAPP_CAP;
   const refuse = totalRefuse || baseAppRefuse;
-  const why = totalRefuse
-    ? " -> REFUSED (at most three heavy jobs container-wide)"
-    : baseAppRefuse
-      ? " -> REFUSED (at most two BaseApp corpus jobs)"
+  const why = baseAppRefuse
+    ? " -> REFUSED (at most two BaseApp corpus jobs)"
+    : totalRefuse
+      ? classBaseApp
+        ? " -> REFUSED (a BaseApp-class job runs, here or in a held slot whose class is baseapp or unknown: at most two heavy jobs container-wide)"
+        : " -> REFUSED (at most three heavy jobs container-wide)"
       : "";
   const message = [
     `heavy-job guard: ${otherSlotsHeld} other slot(s) held, ${foreign.length} other heavy job(s) (corpus or local runner) by itest root, else by process group; ${otherBaseApp} other BaseApp corpus job(s)${why}`,
@@ -733,11 +748,13 @@ export function guardInSlot(
 ): void {
   const dir = lockDir();
   writeFileSync(join(dir, `heavy.${mine}`), `${process.pid}\n`);
+  writeSlotClass(dir, mine, baseApp ? "baseapp" : "other");
   const held = SLOTS.filter((s) => s !== mine && slotHeld(dir, s));
   const pids = held
     .map((s) => Number(readFileSync(join(dir, `heavy.${s}`), "utf8").trim()))
     .filter((p) => !Number.isNaN(p));
-  const v = heavyVerdict(parsePs(readPs()), process.pid, pids, held.length, baseApp);
+  const classes = held.map((s) => readSlotClass(dir, s));
+  const v = heavyVerdict(parsePs(readPs()), process.pid, pids, held.length, baseApp, classes);
   print(v.message);
   if (v.refuse) throw new RefusedError(v.message, true);
 }
