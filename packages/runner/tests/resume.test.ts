@@ -24,6 +24,7 @@ import type { BcDevConfig } from "../src/bcdev-backend";
 import type { MicrosoftMode } from "../src/digest-inputs";
 import type { RunEvent } from "../src/events";
 import { EXPLAIN_SCHEMA_VERSION, explain } from "../src/explain";
+import { formatEstimate } from "../src/mutant-windows";
 import {
   feedAttestation,
   resumeGuardMessage,
@@ -5315,7 +5316,7 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
     expect(stale).toHaveLength(1);
     expect(renderConsole(report)).toContain(", reused-budget-stale 1])");
     const out = explain(report);
-    expect(out.explainSchemaVersion).toBe(24);
+    expect(out.explainSchemaVersion).toBe(25);
     const rows = out.notMeasured.filter((n) => n.cause === "reused-budget-stale");
     expect(rows).toHaveLength(1);
     for (const r of rows) {
@@ -6316,5 +6317,230 @@ describe("R658 D5: a baseline holding a stopped test records no snapshot", () =>
     expect(backend.baselineRuns).toBeGreaterThan(0);
     expect(report.baselineStopped?.tests.length).toBe(backend.baselineRuns);
     expect(snapshots(stopped)).toBe(0);
+  });
+});
+
+/**
+ * R912: the mutant loop prefetches and scores in windows, and `--time-budget` stops scheduling.
+ * Order is asserted with counters (rows in the store at each prefetch call), never a wall clock; the
+ * budget reads a fake clock the test moves.
+ */
+describe("R912: windows and --time-budget", () => {
+  /** Even mutants are killed, odd ones survive: a mix, so a verdict that moved would show. */
+  const killedId = (id: string) => Number(id.slice(1)) % 2 === 0;
+
+  class WindowBackend extends CountingBackend {
+    /** The mutant ids of each prefetch call, in call order. */
+    readonly prefetches: string[][] = [];
+    /** Killed or survived rows in the store when each prefetch call arrived. */
+    readonly scoredAtPrefetch: number[] = [];
+    /** The `remainingMs` each prefetch call was given, read at the call. */
+    readonly remaining: Array<number | undefined> = [];
+    /** Every mutant activated, in order. */
+    readonly activated: string[] = [];
+    store: ResultsStore | undefined;
+    private active: string | null = null;
+    constructor(private readonly baselineMs: number) {
+      super("pass");
+    }
+    override async activate(id: string | null): Promise<void> {
+      this.active = id;
+      if (id !== null) this.activated.push(id);
+      await super.activate(id);
+    }
+    override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+      const v = await super.run(ref, opts);
+      if (this.active === null) return { ...v, durationMs: this.baselineMs };
+      return killedId(this.active)
+        ? { ...v, outcome: "fail", failureMessage: `Assert failed under ${this.active}` }
+        : v;
+    }
+    async prefetchMutants(
+      plans: readonly { readonly mutantId: string; readonly refs: readonly TestMethodRef[] }[],
+      opts?: { readonly remainingMs?: () => number },
+    ): Promise<void> {
+      this.prefetches.push(plans.map((p) => p.mutantId));
+      this.remaining.push(opts?.remainingMs?.());
+      const n = this.store?.db
+        .query("SELECT COUNT(*) AS n FROM mutants WHERE verdict IN ('killed', 'survived')")
+        .get() as { n: number } | null | undefined;
+      this.scoredAtPrefetch.push(n?.n ?? -1);
+    }
+  }
+
+  const shape = (r: SessionReport) =>
+    r.mutants.map((m) => ({
+      mutantCode: m.mutantCode,
+      verdict: m.verdict,
+      killingTest: m.killingTest,
+      failureNote: m.failureNote,
+    }));
+
+  const runWith = async (
+    baselineMs: number,
+    extra: Partial<Parameters<typeof runSession>[0]> = {},
+  ) => {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    const backend = new WindowBackend(baselineMs);
+    backend.store = store;
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      emit: [(e) => events.push(e)],
+      ...extra,
+    });
+    return { backend, store, report, events, dirs };
+  };
+  const finishedAt = (store: ResultsStore) =>
+    (
+      store.db.query("SELECT finished_at AS f FROM runs ORDER BY id DESC LIMIT 1").get() as {
+        f: string | null;
+      }
+    ).f;
+
+  test("a window of all, of a few and of one give the same verdicts, killingTest and notes; each mutant is recorded before the next window's prefetch", async () => {
+    const all = await runWith(5);
+    const n = all.backend.prefetches.flat().length;
+    expect(n).toBeGreaterThanOrEqual(3);
+    expect(all.backend.prefetches).toHaveLength(1);
+
+    const few = await runWith(250_000); // 250 s each: two to a 600 s window
+    const one = await runWith(400_000); // 400 s each: one to a window
+    expect(few.backend.prefetches.flat()).toEqual(all.backend.prefetches.flat());
+    expect(few.backend.prefetches.every((w) => w.length <= 2)).toBe(true);
+    expect(few.backend.prefetches).toHaveLength(Math.ceil(n / 2));
+    expect(one.backend.prefetches.map((w) => w.length)).toEqual(Array(n).fill(1));
+
+    expect(shape(few.report)).toEqual(shape(all.report));
+    expect(shape(one.report)).toEqual(shape(all.report));
+    expect(shape(all.report).some((m) => m.verdict === "killed")).toBe(true);
+    expect(shape(all.report).some((m) => m.verdict === "survived")).toBe(true);
+
+    // Counters, not clocks: when window k's prefetch arrives, windows 0..k-1 are all in the store.
+    for (const run of [few, one]) {
+      let before = 0;
+      run.backend.prefetches.forEach((w, k) => {
+        expect(run.backend.scoredAtPrefetch[k]).toBe(before);
+        before += w.length;
+      });
+    }
+    // A default run (no budget) asks for no clamp.
+    expect(all.backend.remaining).toEqual([undefined]);
+  });
+
+  test("the estimate rides the mutants phase's detail and equals the hand sum; over 2 h it also warns", async () => {
+    const short = await runWith(250_000);
+    const n = short.backend.prefetches.flat().length;
+    const detail = (events: readonly RunEvent[]) =>
+      events.find((e) => e.type === "phase-entered" && e.phase === "mutants");
+    expect(detail(short.events)).toMatchObject({
+      detail: `estimate: ${n} covered mutant(s), about ${formatEstimate(n * 250_000)} of covering-test time`,
+    });
+    expect(
+      short.events.some((e) => e.type === "warning" && e.code === "mutant-phase-estimate-long"),
+    ).toBe(false);
+
+    const long = await runWith(3_600_000); // 1 h per mutant
+    expect(detail(long.events)).toMatchObject({
+      detail: `estimate: ${n} covered mutant(s), about ${formatEstimate(n * 3_600_000)} of covering-test time`,
+    });
+    expect(
+      long.events.some((e) => e.type === "warning" && e.code === "mutant-phase-estimate-long"),
+    ).toBe(true);
+  });
+
+  test("a budget that runs out after window 1 leaves the rest out, keeps the run resumable, and --resume carries window 1 and scores only the rest", async () => {
+    const control = await runWith(400_000);
+    const n = control.backend.prefetches.flat().length;
+    const controlShape = shape(control.report);
+
+    let now = 0;
+    const events: RunEvent[] = [];
+    const store = new ResultsStore(":memory:");
+    const first = new WindowBackend(400_000);
+    first.store = store;
+    const dirs = await makeProject();
+    const report = await runSession({
+      backend: first,
+      store,
+      ...dirs,
+      selectorIds,
+      timeBudgetSeconds: 100,
+      clockMs: () => now,
+      // The first scored mutant uses the whole budget: window 1 (one mutant, 400 s) is done.
+      emit: [
+        (e) => {
+          events.push(e);
+          if (e.type === "mutant-scored") now = 1_000_000;
+        },
+      ],
+    });
+    // Only window 1 was prefetched and scored; the rest is left OUT, not survived.
+    expect(first.prefetches).toHaveLength(1);
+    const window1 = first.prefetches[0] ?? [];
+    expect(window1).toHaveLength(1);
+    expect(first.activated.filter((id, i, a) => a.indexOf(id) === i)).toEqual(window1);
+    expect(report.mutants.map((m) => m.mutantCode)).toEqual(window1);
+    expect(report.timeBudget).toEqual({ budgetSeconds: 100, unscheduledCount: n - 1 });
+    expect(report.validity.caveats).toContain("time-budget-reached");
+    expect(events.filter((e) => e.type === "time-budget-reached")).toEqual([
+      expect.objectContaining({ budgetSeconds: 100, unscheduledCount: n - 1 }),
+    ]);
+    expect(renderConsole(report)).toContain("TIME BUDGET REACHED");
+    // The prefetch was given the time left: 100 s at the start.
+    expect(first.remaining).toEqual([100_000]);
+    // Not stamped finished, not quarantined: resumable.
+    expect(report.quarantined).toBeUndefined();
+    expect(finishedAt(store)).toBeNull();
+
+    const second = new WindowBackend(400_000);
+    second.store = store;
+    const again = await runSession({
+      backend: second,
+      store,
+      ...dirs,
+      selectorIds,
+      resume: "last",
+    });
+    expect(again.resumedFrom?.carriedMutants).toBe(1);
+    // Scored only the rest: nothing window 1 already scored is run again.
+    expect(second.activated.filter((id, i, a) => a.indexOf(id) === i)).toEqual(
+      controlShape.map((m) => m.mutantCode).slice(1),
+    );
+    expect(second.prefetches.flat()).toEqual(controlShape.map((m) => m.mutantCode).slice(1));
+    expect(again.timeBudget).toBeUndefined();
+    expect(again.validity.caveats).not.toContain("time-budget-reached");
+    expect(shape(again)).toEqual(controlShape);
+    expect(finishedAt(store)).not.toBeNull();
+  });
+
+  test("a budget with time to spare changes nothing: every mutant is scored and the run is finished", async () => {
+    const control = await runWith(400_000);
+    const spare = await runWith(400_000, { timeBudgetSeconds: 3600, clockMs: () => 0 });
+    expect(shape(spare.report)).toEqual(shape(control.report));
+    expect(spare.report.timeBudget).toBeUndefined();
+    expect(spare.events.some((e) => e.type === "time-budget-reached")).toBe(false);
+    expect(finishedAt(spare.store)).not.toBeNull();
+    // Each prefetch carried the time left, on the fake clock that never moved.
+    expect(spare.backend.remaining.every((r) => r === 3_600_000)).toBe(true);
+  });
+
+  test("a budget that is not a positive integer is refused by name", async () => {
+    const dirs = await makeProject();
+    for (const bad of [0, -1, 1.5, Number.NaN]) {
+      await expect(
+        runSession({
+          backend: new CountingBackend("pass"),
+          store: new ResultsStore(":memory:"),
+          ...dirs,
+          selectorIds,
+          timeBudgetSeconds: bad,
+        }),
+      ).rejects.toThrow(/time-budget-invalid/);
+    }
   });
 });

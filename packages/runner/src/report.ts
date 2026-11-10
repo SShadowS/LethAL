@@ -256,7 +256,8 @@ export type Caveat =
   | "project-symlink-skipped"
   | "baseline-test-stopped"
   | "al-runner-v3-serve-default-fallback-warmup"
-  | "al-runner-v3-coverage-off";
+  | "al-runner-v3-coverage-off"
+  | "time-budget-reached";
 
 /**
  * R403 phase C: one test the arm filter dealt with, as `SessionReport.excludedTests` lists it.
@@ -664,6 +665,18 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "Not a statement that any one survivor is unreached: this run cannot tell. Not a wrong kill: a " +
       "killed mutant was killed by a test that ran.",
     basis: "R907",
+  },
+  "time-budget-reached": {
+    meaning:
+      "The run was stopped by --time-budget before it had scored every mutant. The mutants it did not " +
+      "reach are LEFT OUT of this report: they are not survivors, not no-coverage, not errors, and they " +
+      "are not in the score. `timeBudget.unscheduledCount` counts those of the batch it stopped in; " +
+      "batches after it never started. The run is not finished, so `--resume` continues it, carrying " +
+      "the verdicts already scored and running only the rest.",
+    entailedNegative:
+      "Not a statement about any mutant that was left out. Not a wrong verdict: every mutant that is " +
+      "in the report ran to completion, with its deadline unclamped.",
+    basis: "R912",
   },
 };
 
@@ -1867,6 +1880,16 @@ export interface SessionReport {
     readonly reason: string;
   };
   /**
+   * R912: present only when `--time-budget` ran out. The mutants not reached are left out of
+   * `mutants` and the counts (as quarantine does); `unscheduledCount` is those of the batch it
+   * stopped in. Optional, so reports from before R912 stay valid. See
+   * `CAVEAT_INTERPRETATIONS["time-budget-reached"]`.
+   */
+  readonly timeBudget?: {
+    readonly budgetSeconds: number;
+    readonly unscheduledCount: number;
+  };
+  /**
    * R26: set on every session that ran the permission canary — an authoritative (bcdev) session,
    * where the fenced `RunMutant` path is the thing being characterised. Absent on al-runner and on
    * every in-memory-backend unit test, which have no fenced path and so nothing to measure.
@@ -2960,6 +2983,8 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     caveats.push("al-runner-v3-serve-default-fallback-warmup");
   // R907 - see CAVEAT_INTERPRETATIONS["al-runner-v3-coverage-off"].
   if ((input.caps.coverageOffFiles ?? []).length > 0) caveats.push("al-runner-v3-coverage-off");
+  // R912 - see CAVEAT_INTERPRETATIONS["time-budget-reached"].
+  if (input.timeBudget !== undefined) caveats.push("time-budget-reached");
   // See CAVEAT_INTERPRETATIONS["runner-disagreement"] for what this caveat means to a reader.
   const runnerDisagreementTests = input.runnerDisagreementTests ?? [];
   if (runnerDisagreementTests.length > 0) caveats.push("runner-disagreement");
@@ -3320,6 +3345,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
       },
     },
     ...(input.quarantined !== undefined ? { quarantined: input.quarantined } : {}),
+    ...(input.timeBudget !== undefined ? { timeBudget: input.timeBudget } : {}),
     ...(input.permissionCanary !== undefined ? { permissionCanary: input.permissionCanary } : {}),
     ...(input.isolation !== undefined ? { isolation: input.isolation } : {}),
   };
@@ -3879,6 +3905,12 @@ export function renderConsole(r: SessionReport): string {
     const more = r.coverageOffFiles.length > 5 ? ` and ${r.coverageOffFiles.length - 5} more` : "";
     lines.push(
       `COVERAGE OFF: LethAL turned coverage off for this whole run, because the coverage index has no rule for the #if wrapper shape in ${shown}${more}. Every survivor ran against every green test, so "survived" includes mutants no test reached and no-coverage reads 0 for that reason. The survivors are not reliable as gaps a test reached and missed.`,
+    );
+  }
+  // R912: a qualifier on the score: the mutants not reached are not in it.
+  if (r.timeBudget !== undefined) {
+    lines.push(
+      `TIME BUDGET REACHED: --time-budget ${r.timeBudget.budgetSeconds} s ran out. ${r.timeBudget.unscheduledCount} mutant(s) of the batch it stopped in were left out of this report: they are not survivors and are not in the score. Run with --resume to continue.`,
     );
   }
   // These mutants were scored against EVERY green test rather than against tests coverage placed

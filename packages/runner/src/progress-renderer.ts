@@ -153,6 +153,11 @@ export function createProgressRenderer(
       case "quarantined":
         write(`QUARANTINED: ${event.reason}`);
         break;
+      case "time-budget-reached":
+        write(
+          `TIME BUDGET REACHED: --time-budget ${event.budgetSeconds} s used up; ${event.unscheduledCount} mutant(s) left out of this report. Run with --resume to continue.`,
+        );
+        break;
       case "session-finished":
         write(`session finished in ${formatSeconds(event.elapsedMs)}`);
         break;

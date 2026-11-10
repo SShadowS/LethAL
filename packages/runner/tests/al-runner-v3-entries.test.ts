@@ -2009,6 +2009,19 @@ describe("17, 18, 21: the warm-up", () => {
     expect([s.daemons, s.cachedFalse]).toEqual([1, 1]);
   });
 
+  test("R912: a first window warms up the whole batch's codeunits when given batchPlans, and only its own without", async () => {
+    const window1 = [{ mutantId: "M0001", refs: [ref("A")] }];
+    const batch = [...window1, { mutantId: "M0002", refs: [ref("C", CU2)] }];
+    const whole = await rig({ suite: SUITE2 });
+    await baseline(whole.b, SUITE2);
+    await whole.b.prefetchMutants(window1, { batchPlans: batch });
+    expect(whole.serve.firsts()[0]?.ids).toEqual(["NONE|echo", `NONE|${CU}`, `NONE|${CU2}`]);
+    const alone = await rig({ suite: SUITE2 });
+    await baseline(alone.b, SUITE2);
+    await alone.b.prefetchMutants(window1);
+    expect(alone.serve.firsts()[0]?.ids).toEqual(["NONE|echo", `NONE|${CU}`]);
+  });
+
   test("17: warm-up rows that differ from the one-shot baseline refuse al-runner-v3-entries-warmup-disagrees", async () => {
     const r = await rig({
       suite: SUITE2,
@@ -2423,6 +2436,43 @@ describe("timers above 2^31-1 ms (E3a's second daemon, /coord/handoff/R-635/live
     } finally {
       spy.mockRestore();
     }
+  });
+
+  test("R912: only a prefetch request's deadline is clamped to the time left; the warm-up and a live request never are", async () => {
+    const real = AlRunnerServer.prototype.runEntries;
+    const deadlines: number[] = [];
+    const spy = spyOn(AlRunnerServer.prototype, "runEntries").mockImplementation(function (
+      this: AlRunnerServer,
+      ...a: Parameters<typeof real>
+    ) {
+      deadlines.push(a[1] as number);
+      return real.apply(this, a);
+    });
+    try {
+      const r = await rig();
+      await baseline(r.b, SUITE1);
+      await r.b.prefetchMutants(plans(["M0001"]), { remainingMs: () => 5000 });
+      await r.b.prefetchMutants(plans(["M0002"])); // no budget: today's deadline
+      await r.b.activate("M0003"); // never prefetched: its run is a live request
+      await r.b.run(ref("A"), OPTS);
+    } finally {
+      spy.mockRestore();
+    }
+    const [warmup, clamped, plain, live] = deadlines;
+    expect(deadlines).toHaveLength(4);
+    expect(clamped).toBe(5000);
+    expect(warmup).toBeGreaterThan(5000);
+    expect(plain).toBeGreaterThan(5000);
+    expect(live).toBeGreaterThan(5000);
+  });
+
+  test("R912: wholeCodeunit is true on entries for a codeunit that is not per-test, false per test and one-shot", async () => {
+    const entries = await rig();
+    expect(entries.b.wholeCodeunit(CU)).toBe(true);
+    const perTest = await rig({ extra: { isolateTests: true } });
+    expect(perTest.b.wholeCodeunit(CU)).toBe(false);
+    const oneShot = await rig({ extra: { transport: "one-shot" } });
+    expect(oneShot.b.wholeCodeunit(CU)).toBe(false);
   });
 });
 

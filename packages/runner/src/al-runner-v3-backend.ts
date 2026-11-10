@@ -1545,6 +1545,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     return this.chosen.get(cu) ?? "test";
   }
 
+  /** R912: see `ExecutionBackend.wholeCodeunit`: entries are used and `cu` is not per-test. */
+  wholeCodeunit(cu: number): boolean {
+    return this.entries && !this.perTest(cu);
+  }
+
+  /** R912: the time left of `--time-budget`, set only while `prefetchMutants` runs. */
+  private prefetchRemainingMs: (() => number) | undefined;
+
   /** R857, R890, R896: whether `cu`'s tests each run alone (own call id, `onlyTest`). */
   private perTest(cu: number): boolean {
     return this.cfg.isolateTests === true || this.isolationOf(cu) === "method";
@@ -4205,7 +4213,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       // with the call's rows, which a cut call does not have, so where §6 applies nothing is cut.
       answer = await daemon.server.runEntries(
         body,
-        v3CallDeadlineMs(s, tests),
+        // R912: only a prefetch request is clamped to the time left. A live request never is: its
+        // deadline would become `deadline-exceeded`, an error verdict.
+        kind === "prefetch" && this.prefetchRemainingMs !== undefined
+          ? Math.max(1000, Math.min(v3CallDeadlineMs(s, tests), this.prefetchRemainingMs()))
+          : v3CallDeadlineMs(s, tests),
         kind !== "warmup" && this.sleepRuleRetiredForParallel(),
       );
     } catch (err) {
@@ -4427,11 +4439,33 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    */
   async prefetchMutants(
     plans: readonly { readonly mutantId: string; readonly refs: readonly TestMethodRef[] }[],
+    opts?: {
+      readonly remainingMs?: () => number;
+      /** R912: every covered mutant of the call. Its codeunits join the warm-up union before any
+       *  window's daemon starts, as one whole-batch prefetch did; a window alone would warm less. */
+      readonly batchPlans?: readonly {
+        readonly mutantId: string;
+        readonly refs: readonly TestMethodRef[];
+      }[];
+    },
   ): Promise<void> {
     this.dropPair();
     this.pairStore.clear();
     if (!this.entries) return;
     this.prefetched = new Map();
+    for (const p of opts?.batchPlans ?? [])
+      for (const cu of new Set(p.refs.map((r) => this.callId(r)))) this.union.add(cu);
+    this.prefetchRemainingMs = opts?.remainingMs;
+    try {
+      await this.prefetchWindow(plans);
+    } finally {
+      this.prefetchRemainingMs = undefined;
+    }
+  }
+
+  private async prefetchWindow(
+    plans: readonly { readonly mutantId: string; readonly refs: readonly TestMethodRef[] }[],
+  ): Promise<void> {
     const groups: EntryGroup[] = plans.map((p) => ({
       mutantId: p.mutantId,
       // By size, as R857's test ids are negative and numbered in the order the tests first ran.

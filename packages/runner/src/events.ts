@@ -530,6 +530,16 @@ export type RunEventInput =
     }
   | { readonly type: "warning"; readonly code: string; readonly message: string }
   | { readonly type: "quarantined"; readonly reason: string }
+  | {
+      /**
+       * R912: `--time-budget` ran out. Scheduling stopped; `unscheduledCount` covered mutants of the
+       * batch it stopped in were left out of the report (later batches never started and are not
+       * counted). The run is not finished, so `--resume` continues it.
+       */
+      readonly type: "time-budget-reached";
+      readonly budgetSeconds: number;
+      readonly unscheduledCount: number;
+    }
   | { readonly type: "session-finished"; readonly elapsedMs: number };
 
 export type RunEvent = RunEventInput & Base;

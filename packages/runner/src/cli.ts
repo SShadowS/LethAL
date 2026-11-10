@@ -575,6 +575,11 @@ export interface RunCliConfig {
    */
   readonly mutantTimeoutMs?: number;
   /**
+   * R912: `--time-budget <seconds>`: see `SessionConfig.timeBudgetSeconds`. A positive integer;
+   * refused otherwise, and with `--dry-run`.
+   */
+  readonly timeBudgetSeconds?: number;
+  /**
    * R821: `--baseline-timeout-ms <n>`, how long one baseline test may run before LethAL stops it.
    * Absent means `BASELINE_TIMEOUT_DEFAULT` (120 s). The reports have told users to raise it since R658.
    */
@@ -1085,6 +1090,9 @@ RUN — cost and recovery
                              count because BC recompiles server-side
   --mutant-timeout-ms <n>    floor for a mutant's time budget (default ${MIN_MUTANT_BUDGET_MS} ms). The budget is
                              max(2 x that test's baseline, this). Exceeding it quarantines the run
+  --time-budget <seconds>    stop scheduling once the session has run this long: work in flight ends,
+                             the report leaves out the mutants not reached (not survivors), and
+                             --resume continues the run (R912)
   --baseline-timeout-ms <n>  how long one baseline test may run before LethAL stops it (default
                              ${BASELINE_TIMEOUT_DEFAULT} ms). Raise it for a test that is slow, not hung
   --max-methods-per-call <n> cap the covering tests one RunMutantMany call runs (default: all that
@@ -1372,6 +1380,8 @@ export const RUN_FLAGS = {
   "max-guards-per-batch": { type: "string" },
   // R47: see `RunCliConfig.mutantTimeoutMs` / `resume`.
   "mutant-timeout-ms": { type: "string" },
+  // R912: see `RunCliConfig.timeBudgetSeconds`.
+  "time-budget": { type: "string" },
   // R821: see `RunCliConfig.baselineTimeoutMs`.
   "baseline-timeout-ms": { type: "string" },
   // R198: see `RunCliConfig.groupRuns`.
@@ -1442,6 +1452,7 @@ const RUN_ONLY_FLAGS = [
   "changed-since",
   "max-guards-per-batch",
   "mutant-timeout-ms",
+  "time-budget",
   "baseline-timeout-ms",
   "max-methods-per-call",
   "request-ceiling-ms",
@@ -2119,6 +2130,15 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
   ) {
     throw new Error("--mutant-timeout-ms must be a positive integer (milliseconds)");
   }
+  // R912: the session's time budget, in seconds. Rejected at parse time by name.
+  const timeBudgetRaw = values["time-budget"];
+  const timeBudgetSeconds = timeBudgetRaw === undefined ? undefined : Number(timeBudgetRaw);
+  if (
+    timeBudgetSeconds !== undefined &&
+    (!Number.isInteger(timeBudgetSeconds) || timeBudgetSeconds < 1)
+  ) {
+    throw new Error("--time-budget must be a positive integer (seconds)");
+  }
   // R821: the baseline test timeout the reports name.
   const baselineTimeoutRaw = values["baseline-timeout-ms"];
   const baselineTimeoutMs =
@@ -2185,6 +2205,9 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       throw new Error(
         "--mutant-timeout-ms has no effect with --dry-run (a dry run executes no mutants)",
       );
+    }
+    if (timeBudgetSeconds !== undefined) {
+      throw new Error("--time-budget has no effect with --dry-run (a dry run executes no mutants)");
     }
     if (baselineTimeoutMs !== undefined) {
       throw new Error(
@@ -2330,6 +2353,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     ...excludeTests,
     ...(maxGuardsPerBatch !== undefined ? { maxGuardsPerBatch } : {}),
     ...(mutantTimeoutMs !== undefined ? { mutantTimeoutMs } : {}),
+    ...(timeBudgetSeconds !== undefined ? { timeBudgetSeconds } : {}),
     ...(baselineTimeoutMs !== undefined ? { baselineTimeoutMs } : {}),
     ...groupRuns,
     ...resume,
@@ -4196,6 +4220,9 @@ export async function runFromCli(
                 : {}),
               ...(parsed.mutantTimeoutMs !== undefined
                 ? { mutantTimeoutMs: parsed.mutantTimeoutMs }
+                : {}),
+              ...(parsed.timeBudgetSeconds !== undefined
+                ? { timeBudgetSeconds: parsed.timeBudgetSeconds }
                 : {}),
               ...(parsed.baselineTimeoutMs !== undefined
                 ? { baselineTimeoutMs: parsed.baselineTimeoutMs }
