@@ -137,6 +137,29 @@ const P5_HANG = (extra = "") => `        X.SetRange(Done, false);
 ${extra}
         end;`;
 
+// P5 inside a table: receiver-less calls in a loop on another variable of the same table.
+const SELF_TABLE = `${OBJECTS}
+table 50313 "R896 Self"
+{
+    fields
+    {
+        field(1; "Entry No."; Integer) { }
+        field(2; Done; Boolean) { }
+    }
+    keys { key(PK; "Entry No.") { Clustered = true; } }
+
+    procedure Drain()
+    var
+        X: Record "R896 Self";
+    begin
+        X.SetRange(Done, false);
+        while not X.IsEmpty() do begin
+            Message('hi');
+            Modify(true);
+        end;
+    end;
+}`;
+
 // P6: TestField is the only way out.
 const P6_HANG = (extra = "") => `        repeat
             R.FindFirst();
@@ -166,6 +189,16 @@ describe("R896 P1: flip-filter-literal before a walk jump", () => {
         end;`;
     expect(refused(proc(body), "R.SetFilter(Grp, '>=%1', R.Grp)", FFL)).toBe(true);
   });
+  it("a FindSet after the flip", () => {
+    const body = WALK(`                ${P1_FILTER};
+                if R.FindSet() then;`);
+    expect(refused(proc(body), P1_FILTER, FFL)).toBe(true);
+  });
+  it("admitted: a call after the flip that does not place R", () => {
+    const body = WALK(`                ${P1_FILTER};
+                R.TestField(Grp);`);
+    expect(refused(proc(body), P1_FILTER, FFL)).toBe(false);
+  });
   it("admitted: the flip on a different record", () => {
     const body = WALK(`                L.SetFilter(Amount, '<=%1', 0);
                 if R.FindLast() then;`);
@@ -193,6 +226,12 @@ describe("R896 P1b: swap-find-direction on a jump copied into the walk", () => {
   });
   it("refused: R.TransferFields(X)", () => {
     expect(refused(proc(P1B_HANG("R.TransferFields(X)")), "X.FindLast()", SFD)).toBe(true);
+  });
+  it('refused: R.Get(X."Entry No.")', () => {
+    expect(refused(proc(P1B_HANG('R.Get(X."Entry No.")')), "X.FindLast()", SFD)).toBe(true);
+  });
+  it("admitted: R.Get on a value that does not read X", () => {
+    expect(refused(proc(P1B_HANG('R.Get(R."Entry No.")')), "X.FindLast()", SFD)).toBe(false);
   });
   it("admitted: a jump on X with no R := X", () => {
     expect(refused(proc(P1B_HANG("Flag := true")), "X.FindLast()", SFD)).toBe(false);
@@ -245,6 +284,27 @@ describe("R896 P5: progress through another variable of the walked table", () =>
   it("refused: any operator on such a call", () => {
     expect(refused(proc(P5_HANG()), "R.FindFirst()", SFD)).toBe(true);
   });
+  it("refused: a bare X.Count in the condition", () => {
+    const body = `        while X.Count > 0 do
+            R.Modify(true);`;
+    expect(refused(proc(body), "R.Modify(true)", SMF)).toBe(true);
+  });
+  it("refused: X.Count() in the condition", () => {
+    const body = `        while X.Count() > 0 do
+            R.Modify(true);`;
+    expect(refused(proc(body), "R.Modify(true)", SMF)).toBe(true);
+  });
+  it("admitted: a bare field of X in the condition, not a cursor call", () => {
+    const body = `        while not X.Done do
+            R.Modify(true);`;
+    expect(refused(proc(body), "R.Modify(true)", SMF)).toBe(false);
+  });
+  it("refused: an implicit Modify(true) inside the table", () => {
+    expect(refused(SELF_TABLE, "Modify(true)", SMF)).toBe(true);
+  });
+  it("admitted: Message in the same loop inside the table", () => {
+    expect(refused(SELF_TABLE, "Message('hi')", "lethal.void-method-call")).toBe(false);
+  });
   it("admitted: a Next walk on the other variable", () => {
     // The condition also asks X's set: only its `Next` admits the site.
     const body = `        if X.FindSet() then
@@ -261,10 +321,8 @@ describe("R896 P5: progress through another variable of the walked table", () =>
     expect(refused(proc(P5_HANG(extra)), "R.Modify(true)", SMF)).toBe(false);
   });
   it("admitted: the loop asks a different table", () => {
-    const body = `        while not L.IsEmpty() do begin
-            R.Modify(true);
-            L.DeleteAll();
-        end;`;
+    const body = `        while not L.IsEmpty() do
+            R.Modify(true);`;
     expect(refused(proc(body), "R.Modify(true)", SMF)).toBe(false);
   });
   it("seam off: admitted", () => {
@@ -281,6 +339,16 @@ describe("R896 P6: a TestField that is the loop's only exit", () => {
     const extra = `            if Flag then
                 break;`;
     expect(refused(proc(P6_HANG(extra)), "R.TestField(Done, false)", RTF)).toBe(false);
+  });
+  it("admitted: two TestFields, each the other's exit", () => {
+    const extra = "            R.TestField(Grp);";
+    const src = proc(P6_HANG(extra));
+    expect(refused(src, "R.TestField(Grp)", RTF)).toBe(false);
+    expect(refused(src, "R.TestField(Done, false)", RTF)).toBe(false);
+  });
+  it("refused: the second TestField sits under asserterror", () => {
+    const extra = "            asserterror R.TestField(Grp);";
+    expect(refused(proc(P6_HANG(extra)), "R.TestField(Done, false)", RTF)).toBe(true);
   });
   it("admitted: the condition reads a name", () => {
     const body = `        repeat
