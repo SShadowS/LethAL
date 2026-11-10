@@ -1069,7 +1069,7 @@ Stated so a consumer does not read an absence as a finding.
   assumption (any assumption, not only this one). Fewer tests run: al-runner refuses calls it has not
   measured without a client (CurrentClientType, `Page.Run` with a record, a request page with a
   handler). On PaymentPractices' header table it then agreed with BC on every kill and every survivor.
-- One-shot calls pass `--skip-after-timeout` when the al-runner build supports it (R897): after a test
+- One-shot calls ask al-runner to skip after a timeout when the build supports it (R897): after a test
   is stopped at the limit, the rest of its codeunit is not run, so a hung mutant costs one limit.
 - A test that opens a `TestPage` cannot be scored, and on the default path one such test can hang
   and quarantine the whole run. The report names the refusal rather than guessing at a verdict.
