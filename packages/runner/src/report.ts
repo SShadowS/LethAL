@@ -2406,17 +2406,18 @@ function measuredExecutionContext(
         "here than it would on the fenced path",
     };
   }
-  // R60. Split by backend rather than asserted once, because only ONE of the two was measured:
-  // R57 measured the fenced `RunMutant` path directly (`GuiAllowed=No`, `ClientType=ODataV4`).
-  // al-runner is a headless CLI, which is not the same evidence, and saying "measured" of both
-  // would be the kind of static claim R7/R8 exist to stop.
+  // R60. Split by backend rather than asserted once: R57 measured the fenced `RunMutant` path
+  // (`GuiAllowed=No`, `ClientType=ODataV4`). R895/R-901 measured al-runner v3: a test there answers
+  // `GuiAllowed()` Yes and a Confirm is raised, the CLIENT branch, the opposite of the fenced path; it
+  // has no option to run without a client (upstream aldevtools #7564).
   if (caps.kind === "al-runner-v3") {
     return {
-      guiAllowed: false,
+      guiAllowed: true,
       clientType: "al-runner v3 CLI",
       basis:
-        "al-runner v3 (Rust) executes headlessly by construction, one process per test codeunit; " +
-        "not separately measured by LethAL the way the fenced path was under R57 (R586)",
+        "measured on al-runner v3 (R895, R-901): a test's GuiAllowed() answers Yes and a Confirm is " +
+        "raised to the test's handler, so code behind GuiAllowed runs its client branch, unlike " +
+        "BC's fenced path (GuiAllowed=No); al-runner has no option to run without a client",
     };
   }
   // R654: bcdev is the only other backend (the .NET al-runner's "al-runner CLI" arm is gone).
@@ -3322,10 +3323,14 @@ function pad(s: string, n: number): string {
 function summarizeRunnerContexts(
   contexts: readonly ExecutionContext[],
   runner: RunnerKind,
+  /** R895: only the contexts that ran with (true) or without (false) a client; absent: all. */
+  guiAllowed?: boolean,
 ):
   | { readonly verdictCount: number; readonly clientType: string; readonly basisText: string }
   | undefined {
-  const matches = contexts.filter((c) => c.runner === runner);
+  const matches = contexts.filter(
+    (c) => c.runner === runner && (guiAllowed === undefined || c.guiAllowed === guiAllowed),
+  );
   if (matches.length === 0) return undefined;
   const [first] = matches;
   if (first === undefined) return undefined; // unreachable: matches.length > 0 just checked
@@ -3740,10 +3745,19 @@ export function renderConsole(r: SessionReport): string {
   // exists, that claim would be false the moment ONE verdict came from it — see the companion
   // block below, which states the opposite fact for that runner.
   // Aggregated across EVERY "fenced" entry, not just the first — see `summarizeRunnerContexts`.
-  const fenced = summarizeRunnerContexts(r.validity.executionContexts, "fenced");
+  // R895: only the contexts that really ran without a client; al-runner v3's run with one (below).
+  const fenced = summarizeRunnerContexts(r.validity.executionContexts, "fenced", false);
   if (fenced !== undefined && fenced.verdictCount > 0) {
     lines.push(
       `NON-GUI EXECUTION: ${fenced.verdictCount} verdict(s) here describe the app's non-interactive branch (GuiAllowed=No, ClientType=${fenced.clientType}) — ${fenced.basisText}. Code reachable only when a user can be prompted never runs on this path, so its mutants cannot be killed here and land as survived or no-coverage — neither of which is a statement about your tests. Confirm() returns its DEFAULT rather than skipping the branch; Page.RunModal ERRORS. Measured on Continia Document Output: 0.3% of mutation sites (62 of 19,850).`,
+    );
+  }
+  // R895: al-runner v3 runs the CLIENT branch (measured), the opposite of BC's fenced path, and has no
+  // option to run without one (upstream aldevtools #7564). Say so, so a v3 verdict is not read as BC's.
+  const v3Gui = summarizeRunnerContexts(r.validity.executionContexts, "fenced", true);
+  if (v3Gui !== undefined && v3Gui.verdictCount > 0) {
+    lines.push(
+      `GUI EXECUTION (al-runner v3): ${v3Gui.verdictCount} verdict(s) here describe the app's interactive branch (GuiAllowed=Yes, ClientType=${v3Gui.clientType}) — ${v3Gui.basisText}. BC's fenced path runs the non-interactive branch (GuiAllowed=No), so a mutant behind GuiAllowed, or behind a confirm wrapper such as ConfirmManagement.GetResponseOrDefault, can reach a different verdict here than on BC (R895).`,
     );
   }
   // The companion fact, for the opposite path. Without this a reader who knows the fenced caveat

@@ -1048,10 +1048,14 @@ with a fresh `lethal run`, never with `--resume`, which would carry the old verd
 
 Stated so a consumer does not read an absence as a finding.
 
-- Every verdict describes the NON-GUI branch. Tests run with `GuiAllowed=No` and
+- On bcdev, every verdict describes the NON-GUI branch. Tests run with `GuiAllowed=No` and
   `ClientType=ODataV4`, so a handler-less `Confirm` returns its default silently and GUI-guarded
   code takes the non-interactive path. Measured on a real app: 62 of 19,850 mutation sites (0.3%)
   sit lexically inside such a branch.
+- On al-runner v3 it is the opposite (R895, measured): a test answers `GuiAllowed()` Yes and a
+  `Confirm` is raised to its handler, and al-runner has no option to run without a client. So a
+  mutant behind `GuiAllowed` or a confirm wrapper can reach a different verdict on v3 than on bcdev.
+  The console says so in its `GUI EXECUTION (al-runner v3)` line.
 - A test that opens a `TestPage` cannot be scored, and on the default path one such test can hang
   and quarantine the whole run. The report names the refusal rather than guessing at a verdict.
 - A mutant that never terminates is recorded as an unmeasured error, not scored. AL cannot preempt

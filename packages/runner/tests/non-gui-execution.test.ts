@@ -89,12 +89,29 @@ describe("validity.executionContexts (R60, widened by R69 Phase 2 Task 5)", () =
     expect(ctx?.basis).toContain("R57");
   });
 
-  test("does not claim al-runner was measured the same way", () => {
+  // R895 (R-901): measured on al-runner v3, a test answers GuiAllowed() Yes and a Confirm is raised:
+  // the CLIENT branch, the opposite of the fenced path. The old "headless by construction" was wrong.
+  test("al-runner v3 runs the client branch: guiAllowed true, on its own measured basis", () => {
     const r = build({ caps: CAPS_AL_RUNNER });
     const ctx = r.validity.executionContexts.find((c) => c.runner === "fenced");
-    expect(ctx?.guiAllowed).toBe(false);
+    expect(ctx?.guiAllowed).toBe(true);
     expect(ctx?.clientType).toBe("al-runner v3 CLI");
-    expect(ctx?.basis).toContain("not separately measured");
+    expect(ctx?.basis).toContain("GuiAllowed() answers Yes");
+    expect(ctx?.basis).toContain("R895");
+  });
+
+  test("R895: a v3 run's console names the client branch, and never prints the non-GUI line", () => {
+    const text = renderConsole(build({ caps: CAPS_AL_RUNNER }));
+    expect(text).toContain("GUI EXECUTION (al-runner v3)");
+    expect(text).toContain("GuiAllowed=Yes");
+    expect(text).toContain("ConfirmManagement.GetResponseOrDefault");
+    expect(text).not.toContain("NON-GUI EXECUTION");
+  });
+
+  test("R895: a bcdev run's console keeps the non-GUI line and prints no v3 GUI line", () => {
+    const text = renderConsole(build());
+    expect(text).toContain("NON-GUI EXECUTION");
+    expect(text).not.toContain("GUI EXECUTION (al-runner v3)");
   });
 
   test("the console states it on every run, including a clean one", () => {
