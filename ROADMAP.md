@@ -537,7 +537,7 @@ that ordering is the priority.
 - **R892** · On a first publish, an injected selector id that an installed non-dependent app already uses is not checked: BC's publish refusal is the only signal, with no hint to change selectorIds · [R892.md](docs/roadmap/R892.md) · open
 - **R894** · Spread one bcdev run across several BC servers (load balancing), so a slow suite's mutants run in parallel without sessions sharing a database · [R894.md](docs/roadmap/R894.md) · open, filed 2026-11-09 — DEFERRED by the owner: worth doing, not now
 - **R898** · No time cap per survivor: a mutant whose covering tests are slow can only end as survived after all of them, so slow suites take days · [R898.md](docs/roadmap/R898.md) · open, filed 2026-11-09 — DEFERRED, owner's call
-- **R900** · LethAL never passes assembly probing paths to alc, so a project that uses DotNet types fails LethAL's own compile (AL0451, AL0185) · [R900.md](docs/roadmap/R900.md) · done (420a7888) — top-level assemblyProbingPaths, else .vscode/settings.json, else ./.netpackages; passed on…
+- **R900** · LethAL never passes assembly probing paths to alc, so a project that uses DotNet types fails LethAL's own compile (AL0451, AL0185) · [R900.md](docs/roadmap/R900.md) · done (41b42a8c) — top-level assemblyProbingPaths, else .vscode/settings.json, else ./.netpackages; passed on…
 - **R901** · On Linux, alc reads a controladdin's `Resources\x\y.js` as one literal file name, so a batch fails with AL0327 for any controladdin written with backslashes · [R901.md](docs/roadmap/R901.md) · open, filed 2026-11-10 from coord R-893
 
 ## Backends and tooling
