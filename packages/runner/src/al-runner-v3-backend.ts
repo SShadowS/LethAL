@@ -67,6 +67,7 @@ import {
 } from "./al-runner-server";
 import {
   V3_DOWNLOAD_DEMO_DATA_DEFAULT,
+  V3_NO_CLIENT_DEFAULT,
   assertBcVersionMatchesPackages,
 } from "./al-runner-v3-config";
 import {
@@ -621,6 +622,11 @@ export interface AlRunnerV3Config {
    */
   readonly downloadDemoData?: boolean;
   /**
+   * R907: `--no-client` (serve: the `noClient` request field): tests run as a session without a
+   * client. Absent: `V3_NO_CLIENT_DEFAULT`.
+   */
+  readonly noClient?: boolean;
+  /**
    * R886: `--dotnet-sidecar <dll>` for every al-runner call, one-shot and serve. A path: that file
    * (refused by name when missing). Absent: the pinned build's own sidecar when its `.gated` names
    * one and the file still has that sha256 (else a warning and none). `false`: none; gates set this.
@@ -718,6 +724,8 @@ export interface V3Row {
   readonly durationMs?: number;
   readonly message?: string;
   readonly notRun: boolean;
+  /** R907: al-runner's `flagged: true` (a pass resting on an unprobed assumption). Absent otherwise. */
+  readonly flagged?: true;
 }
 
 /**
@@ -742,7 +750,7 @@ export function decodeV3Rows(
   const rows: V3Row[] = [];
   for (const [i, t] of tests.entries()) {
     const r = (t ?? {}) as Record<string, unknown>;
-    const { codeunit, method, name, status, durationMs, message, notRun } = r;
+    const { codeunit, method, name, status, durationMs, message, notRun, flagged } = r;
     if (
       typeof codeunit !== "number" ||
       typeof method !== "string" ||
@@ -750,7 +758,8 @@ export function decodeV3Rows(
       (status !== "pass" && status !== "fail" && status !== "error") ||
       (durationMs !== undefined && typeof durationMs !== "number") ||
       (message !== undefined && typeof message !== "string") ||
-      (notRun !== undefined && typeof notRun !== "boolean")
+      (notRun !== undefined && typeof notRun !== "boolean") ||
+      (flagged !== undefined && typeof flagged !== "boolean")
     ) {
       return {
         why: `row ${i + 1} does not have v3's row shape: ${JSON.stringify(t).slice(0, 200)}`,
@@ -774,6 +783,7 @@ export function decodeV3Rows(
       ...(durationMs !== undefined ? { durationMs } : {}),
       ...(message !== undefined ? { message } : {}),
       notRun: notRun === true,
+      ...(flagged === true ? { flagged: true as const } : {}),
     });
   }
   return { rows, ...(seed !== undefined ? { seed } : {}) };
@@ -856,6 +866,7 @@ export function v3RowVerdict(
       status: row.status,
       ...(row.message !== undefined ? { message: row.message } : {}),
       ...(row.durationMs !== undefined ? { durationMs: row.durationMs } : {}),
+      ...(row.flagged === true ? { flagged: true } : {}),
     },
     wallMs,
     coverage,
@@ -905,6 +916,8 @@ export function v3CallArgv(a: {
   readonly stopSeconds: number;
   readonly packagesDir: string;
   readonly bcVersion: string;
+  /** R907: pass `--no-client` (a session without a client). Absent: not passed. */
+  readonly noClient?: boolean;
   /** R885: pass `--no-download`. Absent: v3 may download the demo data (its default). */
   readonly noDownload?: boolean;
   /** R886: `--dotnet-sidecar <dll>`. Absent: not passed. */
@@ -933,6 +946,7 @@ export function v3CallArgv(a: {
     a.packagesDir,
     "--bc-version",
     a.bcVersion,
+    ...(a.noClient === true ? ["--no-client"] : []),
     ...(a.noDownload === true ? ["--no-download"] : []),
     ...(a.dotnetSidecar !== undefined ? ["--dotnet-sidecar", a.dotnetSidecar] : []),
     ...a.symbols.flatMap((s) => ["--define", s]),
@@ -1435,6 +1449,8 @@ class Lane {
       readonly scratchCwd: string;
       /** The test dir as v3 reads it (`realpath`, else absolute). */
       readonly testSource: () => string;
+      /** R907: the backend's `noClient`, sent as the request field when on. */
+      readonly noClient: () => boolean;
       readonly now: () => number;
     },
   ) {
@@ -1473,6 +1489,7 @@ class Lane {
       sourcePaths: [this.realActive ?? resolve(this.activeDir()), this.where.testSource()],
       testIsolation: mode.testIsolation,
       ...(mode.runSelectedOnly ? { runSelectedOnly: true } : {}),
+      ...(this.where.noClient() ? { noClient: true } : {}),
     };
   }
 
@@ -1527,6 +1544,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** R857: `--isolate-tests`; see `ExecutionBackend.isolatesTests`. */
   get isolatesTests(): boolean {
     return this.cfg.isolateTests === true || this.methodIsolation;
+  }
+  /** R907: see `ExecutionBackend.noClient`. */
+  get noClient(): boolean {
+    return this.cfg.noClient ?? V3_NO_CLIENT_DEFAULT;
   }
   /** R890: see `ExecutionBackend.methodIsolation`. */
   get methodIsolation(): boolean {
@@ -1871,6 +1892,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       activeDir: join(this.cfg.instrumentedDir, k === 0 ? "active" : `active.${k}`),
       scratchCwd: resolve(this.cfg.instrumentedDir),
       testSource: () => this.realTestDir ?? resolve(this.cfg.testDir),
+      noClient: () => this.noClient,
       now: this.now,
     });
   }
@@ -2944,6 +2966,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       stopSeconds: o.stopSeconds,
       packagesDir: resolve(this.cfg.packagesDir),
       bcVersion: this.cfg.bcVersion,
+      noClient: this.noClient,
       noDownload: this.noDownload(),
       ...(this.sidecarPath !== undefined ? { dotnetSidecar: this.sidecarPath } : {}),
       symbols: this.cfg.preprocessorSymbols ?? [],

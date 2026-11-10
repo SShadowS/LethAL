@@ -5866,6 +5866,8 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
           : {}),
         // `measuredDurationMs` is set on a `pass` only (TestVerdict's doc), so no outcome check.
         ...(ranHere.has(b.ref) && measured !== undefined ? { durationMs: measured } : {}),
+        // R907: al-runner's flagged pass, this session's own baseline only (as `durationMs`).
+        ...(ranHere.has(b.ref) && b.verdict.flagged === true ? { flagged: true as const } : {}),
       };
     }),
   });
@@ -6477,7 +6479,7 @@ async function runSessionBody(
     // the other way, by the one check every lend passes.
     runnerBuild:
       v3Build !== undefined
-        ? `${v3Build.version} ${v3Build.binarySha256}${cfg.backend.isolatesTests === true ? " isolate-tests" : ""}${cfg.backend.methodIsolation === true ? " isolation-method" : ""}${cfg.backend.isolationAuto === true ? ISOLATION_AUTO_BUILD_TAG : ""}`
+        ? `${v3Build.version} ${v3Build.binarySha256}${cfg.backend.isolatesTests === true ? " isolate-tests" : ""}${cfg.backend.noClient === true ? " no-client" : ""}${cfg.backend.methodIsolation === true ? " isolation-method" : ""}${cfg.backend.isolationAuto === true ? ISOLATION_AUTO_BUILD_TAG : ""}`
         : undefined,
   };
   // R886: the v3 settings a resume must find unchanged; undefined on a backend with none.
@@ -6513,6 +6515,7 @@ async function runSessionBody(
     coverageMode: caps.coverage,
     selectorIds: cfg.selectorIds,
     ...(cfg.backend.isolatesTests === true ? { isolateTests: true } : {}),
+    ...(cfg.backend.noClient === true ? { noClient: true } : {}), // R907
     ...(cfg.backend.methodIsolation === true ? { methodIsolation: true } : {}),
     ...(cfg.backend.isolationAuto === true ? { isolationAuto: true } : {}), // R896
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
@@ -8809,6 +8812,7 @@ async function runSessionBody(
             ...withRunSeed(v3Build, cfg.backend),
             // R857: the report says so too, as a report is read without the store.
             ...(cfg.backend.isolatesTests === true ? { isolateTests: true as const } : {}),
+            ...(cfg.backend.noClient === true ? { noClient: true as const } : {}), // R907
           },
         }
       : {}),

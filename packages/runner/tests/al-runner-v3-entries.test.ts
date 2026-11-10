@@ -189,6 +189,8 @@ interface FakeRow {
   status: "pass" | "fail" | "error";
   message?: string;
   notRun?: boolean;
+  /** R907: al-runner's `flagged` (a pass resting on an unprobed assumption). */
+  flagged?: boolean;
 }
 /** R586c (B2): a real CPU stop takes at least its stop; the fake's stop rows say so. */
 const stopMsOf = (message: string | undefined): number => {
@@ -481,6 +483,7 @@ function fakeServe(script: ServeScript = {}) {
             durationMs: stopMsOf(r.message),
             ...(r.message !== undefined ? { message: r.message } : {}),
             ...(r.notRun === true ? { notRun: true } : {}),
+            ...(r.flagged !== undefined ? { flagged: r.flagged } : {}),
             ...(entry !== undefined ? { entry } : {}),
           });
           let selected: Set<number>;
@@ -4839,6 +4842,56 @@ describe("R790: the speculative baseline", () => {
       expect(speculative(warm.b)).toBeUndefined();
       expect(existsSync(join(activeOf(warm.b), "Translations", "T.g.xlf"))).toBe(false);
     });
+  });
+});
+
+describe("R907: --no-client", () => {
+  test("on: every runTests request carries noClient: true", async () => {
+    const r = await readyRig({ serve: { rows: killsM1 }, extra: { noClient: true } });
+    await r.b.activate("M0001");
+    await r.b.run(ref("A"), OPTS);
+    expect(r.serve.requests.length).toBeGreaterThan(0);
+    for (const q of r.serve.requests) expect(q.body.noClient).toBe(true);
+    expect(r.b.noClient).toBe(true);
+  });
+
+  test("off: no request carries the key, so today's requests are unchanged", async () => {
+    const r = await readyRig({ serve: { rows: killsM1 } });
+    await r.b.activate("M0001");
+    await r.b.run(ref("A"), OPTS);
+    expect(r.serve.requests.length).toBeGreaterThan(0);
+    for (const q of r.serve.requests) expect(q.body).not.toHaveProperty("noClient");
+  });
+
+  test("a serve row's flagged: true reaches a pass verdict; an unflagged pass has no flagged key", async () => {
+    const flaggedA: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((row) => (row.method === "A" ? { ...row, flagged: true } : row));
+    const r = await readyRig({ serve: { rows: flaggedA }, extra: { noClient: true } });
+    await r.b.activate("M0002");
+    const a = await r.b.run(ref("A"), OPTS);
+    const b = await r.b.run(ref("B"), OPTS);
+    expect(a.outcome).toBe("pass");
+    expect(a.flagged).toBe(true);
+    expect(b.outcome).toBe("pass");
+    expect(b).not.toHaveProperty("flagged");
+  });
+
+  // R-911: under --no-client al-runner refuses a surface it cannot answer with a not-run row; that
+  // must stay a refusal and never score as a kill.
+  test("on: a refused not-run row is error runner-refused, never a fail", async () => {
+    const REFUSED =
+      "NotRun: out-of-scope: a page runs in a session without a client (--no-client): not pinned";
+    const refusedA: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((row) =>
+        m === "M0001" && row.method === "A"
+          ? { ...row, status: "error" as const, notRun: true, message: REFUSED }
+          : row,
+      );
+    const r = await readyRig({ serve: { rows: refusedA }, extra: { noClient: true } });
+    await r.b.activate("M0001");
+    const v = await r.b.run(ref("A"), OPTS);
+    expect(v.outcome).toBe("error");
+    expect(v.runnerRow).toBe("runner-refused");
   });
 });
 
