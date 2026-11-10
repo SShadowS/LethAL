@@ -159,6 +159,7 @@ import {
   v3DefaultLegs,
   v3ItestFailures,
   v3KOnCandidate,
+  v3PartialNote,
   v3RecordRunFailures,
 } from "./alrunner-v3-legs";
 import {
@@ -2589,7 +2590,17 @@ async function main(): Promise<void> {
   // skip there fails); only a candidate's K may read `V3_K_CANDIDATE_SKIP` (`v3ItestFailures`).
   const bad = v3ItestFailures(legs, CANDIDATE, LEGS, K_ON_CANDIDATE);
   if (bad.length > 0) throw new Error(`al-runner-v3 itest: FAIL: ${bad.join(", ")}`);
-  console.log(gateEndLine("al-runner-v3"));
+  // R913: a PASS that skipped legs of the full set names them on the PASS line itself.
+  console.log(
+    gateEndLine(
+      "al-runner-v3",
+      v3PartialNote(legs, {
+        cdo: CDO !== undefined,
+        tables: TABLES,
+        explicitLegs: process.env.LETHAL_ITEST_V3_LEGS !== undefined,
+      }),
+    ),
+  );
   // R654 S2: agentflow's receipt (only when challenged), naming every leg that ran and passed.
   await finishGate(() =>
     emitPassed("alrunner-v3", {
