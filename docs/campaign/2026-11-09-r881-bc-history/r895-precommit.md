@@ -55,3 +55,18 @@ against `lethal/r895` (57 of 57). 46 of master's 47 are identical in verdict and
 **How it fits.** It is the mechanism this pre-commitment allows, with one difference: the text allows "timeout-killed by T, to killed
 by a test ordered before T". Here the verdict class stays `timeout-killed`, and only the killing test moves to the earlier-ordered
 one. The orchestrator accepted this move on 2026-11-10, as observed. No non-hung mutant moved.
+
+## Amendment 2: the same move on M0048, observed AFTER the run (2026-11-10, not pre-committed)
+
+**The one-shot comparison.** The same file and demo data on the one-shot transport, which R-895 does not change (lane worktree, master),
+scored all 57. Against `lethal/r895` on serve, 55 are identical in verdict and killing test. The 2 differences are both hung
+`swap-find-direction` mutants, each of the kind in amendment 1:
+- **M0019:** the move above.
+- **M0048** (the customer-side twin, which master's serve run never reached): `timeout-killed` by `CustomerExclFromPaymentPractices`
+  on one-shot, and `timeout-killed` by `ReportDataSetForCustomersByPeriod` after.
+
+**Why.** In both runs, `BuildPaymentPracticeDataForCustomer`'s earlier mutants (M0041 to M0043, M0047) were killed by
+`ReportDataSetForCustomersByPeriod`, so R197 orders it first for M0048. On one-shot, al-runner ran `CustomerExclFromPaymentPractices`
+first, which hung, so `ReportDataSetForCustomersByPeriod` came back as a cascade not-run row and was skipped (R639). After the change it
+runs alone, hangs too, and decides. The verdict class is unchanged; only the killing test moves to the earlier-ordered one. Sent to the
+orchestrator with this amendment, as observed.
