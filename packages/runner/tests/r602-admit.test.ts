@@ -57,7 +57,10 @@ describe("R602 build review M1: the guard on the REAL fixtures", () => {
   test("sandbox-wrapped as a whole is OFF, and the warning names the WrappedArms file", async () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
-      expect(await v3CoverageMode("al-runner", join(FIXTURES, "sandbox-wrapped"))).toBe("none");
+      expect(await v3CoverageMode("al-runner", join(FIXTURES, "sandbox-wrapped"))).toEqual({
+        mode: "none",
+        offFiles: ["src/WrappedArms.Codeunit.al"],
+      });
       expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([
         '[lethal] al-runner-v3-coverage-off: coverage is turned OFF for this run (coverage "none"): the coverage index has no rule for the #if wrapper shape (two-arm, #elif, nested, or a multi-object file holding a wrapper) in src/WrappedArms.Codeunit.al (R602).',
       ]);
@@ -77,7 +80,10 @@ describe("R602 build review M1: the guard on the REAL fixtures", () => {
         "sandbox-symbols",
         "sandbox-names",
       ]) {
-        expect([f, await v3CoverageMode("al-runner", join(FIXTURES, f))]).toEqual([f, "al-runner"]);
+        expect([f, await v3CoverageMode("al-runner", join(FIXTURES, f))]).toEqual([
+          f,
+          { mode: "al-runner", offFiles: [] },
+        ]);
       }
       expect(warn.mock.calls).toEqual([]);
     } finally {
@@ -91,7 +97,7 @@ describe("R602 A3: the v3 CLI guard keeps coverage ON for a multi-object-only pr
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
       const dir = await bundle({ "src/M.Codeunit.al": MULTI, "src/W.Codeunit.al": WRAPPED_ONE });
-      expect(await v3CoverageMode("al-runner", dir)).toBe("al-runner");
+      expect(await v3CoverageMode("al-runner", dir)).toEqual({ mode: "al-runner", offFiles: [] });
       expect(warn.mock.calls).toEqual([]);
     } finally {
       warn.mockRestore();
@@ -125,7 +131,10 @@ describe("R602 B2: any other wrapper shape keeps coverage OFF, and the warning n
           "src/Odd.Codeunit.al": text,
           "src/M.Codeunit.al": MULTI,
         });
-        expect(await v3CoverageMode("al-runner", dir)).toBe("none");
+        expect(await v3CoverageMode("al-runner", dir)).toEqual({
+          mode: "none",
+          offFiles: ["src/Odd.Codeunit.al"],
+        });
         expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([
           `[lethal] al-runner-v3-coverage-off: ${SENTENCE} src/Odd.Codeunit.al (R602).`,
         ]);
@@ -138,7 +147,7 @@ describe("R602 B2: any other wrapper shape keeps coverage OFF, and the warning n
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
       const dir = await bundle({ "src/Odd.Codeunit.al": WRAPPED_TWO_ARM });
-      expect(await v3CoverageMode("none", dir)).toBe("none");
+      expect(await v3CoverageMode("none", dir)).toEqual({ mode: "none", offFiles: [] });
       expect(warn.mock.calls).toEqual([]);
     } finally {
       warn.mockRestore();

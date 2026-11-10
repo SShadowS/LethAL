@@ -238,8 +238,9 @@ describe("Caveat union", () => {
       "project-symlink-skipped": true,
       "baseline-test-stopped": true,
       "al-runner-v3-serve-default-fallback-warmup": true,
+      "al-runner-v3-coverage-off": true,
     };
-    expect(Object.keys(all).length).toBe(29);
+    expect(Object.keys(all).length).toBe(30);
   });
 });
 
@@ -377,6 +378,59 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
       buildReport(STATICS, seq([warn("al-runner-v3-serve-default-fallback"), ...base])).validity
         .caveats,
     ).not.toContain(code);
+  });
+
+  describe("R907: coverage LethAL turned off reaches the report and the console", () => {
+    const base = seq([
+      {
+        type: "mutation-set-generated",
+        siteCount: 0,
+        deployedCount: 0,
+        hangCapableCount: 0,
+        totalFiles: 0,
+        instrumentableFiles: 0,
+        notInstrumentedFiles: [],
+        declarativeSiteFiles: [],
+        preprocExcludedFiles: [],
+        excludedByOnly: 0,
+        excludedByExclude: 0,
+        excludedByOperator: 0,
+      },
+      { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
+      { type: "session-finished", elapsedMs: 1 },
+    ]);
+    const code = "al-runner-v3-coverage-off";
+    const withFiles = (files: readonly string[]): FoldStatics => ({
+      ...STATICS,
+      caps: { ...STATICS.caps, kind: "al-runner-v3", coverageOffFiles: files },
+    });
+
+    test("files named: the caveat, the field, and a console line naming them", () => {
+      const r = buildReport(withFiles(["src/A.Codeunit.al", "src/B.Codeunit.al"]), base);
+      expect(r.validity.caveats).toContain(code);
+      expect(r.coverageOffFiles).toEqual(["src/A.Codeunit.al", "src/B.Codeunit.al"]);
+      const out = renderConsole(r);
+      expect(out).toContain("COVERAGE OFF:");
+      expect(out).toContain("src/A.Codeunit.al, src/B.Codeunit.al");
+      expect(out).toContain('"survived" includes mutants no test reached');
+    });
+
+    test("a long list shows five files and counts the rest; the report keeps them all", () => {
+      const files = ["a", "b", "c", "d", "e", "f", "g"].map((f) => `src/${f}.al`);
+      const r = buildReport(withFiles(files), base);
+      expect(r.coverageOffFiles).toEqual(files);
+      const out = renderConsole(r);
+      expect(out).toContain("src/e.al and 2 more");
+      expect(out).not.toContain("src/f.al");
+    });
+
+    test("coverage none with no such files (configured off): no caveat, no field, no line", () => {
+      const r = buildReport(STATICS, base);
+      expect(r.coverageMode).toBe("none");
+      expect(r.validity.caveats).not.toContain(code);
+      expect("coverageOffFiles" in r).toBe(false);
+      expect(renderConsole(r)).not.toContain("COVERAGE OFF");
+    });
   });
 
   test("an outcome built from a manifest entry without hangCapable omits the key entirely", () => {

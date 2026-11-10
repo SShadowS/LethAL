@@ -629,6 +629,8 @@ export interface AlRunnerV3Config {
   readonly selectorObjectId: number;
   readonly alcPath: string;
   readonly coverage?: "al-runner" | "none";
+  /** R907: see `BackendCapabilities.coverageOffFiles`. Only with `coverage: "none"`. */
+  readonly coverageOffFiles?: readonly string[];
   readonly preprocessorSymbols?: readonly string[];
   /**
    * R900: alc's `/assemblyprobingpaths:` for both compiles (`ArtifactCompilerConfig`). Not passed to
@@ -1902,6 +1904,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     return {
       kind: "al-runner-v3",
       coverage: this.cfg.coverage ?? "none",
+      ...(this.cfg.coverageOffFiles !== undefined
+        ? { coverageOffFiles: this.cfg.coverageOffFiles }
+        : {}),
       deploy: "none",
       // Read by nothing today; `--isolation test` rolls the database back per test, while the
       // codeunit's variables are kept (plan §2).

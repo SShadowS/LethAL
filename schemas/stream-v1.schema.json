@@ -67,6 +67,12 @@
                 "al-runner"
               ]
             },
+            "coverageOffFiles": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
             "deploy": {
               "type": "string",
               "enum": [
