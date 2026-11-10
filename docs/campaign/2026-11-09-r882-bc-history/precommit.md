@@ -135,3 +135,10 @@ Its publish was refused as a downgrade, BC could not restore, and it left the ta
 **Recovery, as `docs/using-lethal-from-an-agent.md` "Recovering a stripped server" says, nothing uninstalled:** the scratch
 `app.json` versions are raised (Service Declaration 28.6.55443.2, its tests 28.6.55443.1), and both are published plain, in that
 order. Then S3 runs again, unchanged from amendment 4. A version is not mutated: the mutant set and its count (1044) are unchanged.
+
+## Erratum (2026-11-10, found by coord R-906)
+
+Amendment 3 says LethAL refused all 75 BankDeposits tests as may-open-TestPage. That is wrong: a summary's first line was generalised.
+Round 3's event stream shows 52 refused as TestPage and 23 run and failed on `bc5`: 19 "RDLC report rendering is not implemented on Linux
+BC", 3 a CLR `NotSupportedException`, 1 a UI handler not executed. No test was green, so dropping BankDeposits stands for `bc5`. The stated
+reason was incomplete: part of the block is the Linux server. See R908.
