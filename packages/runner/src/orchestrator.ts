@@ -8074,6 +8074,22 @@ async function runSessionBody(
           }
           return undefined;
         }
+        // R904: test data off and a partly red baseline. The red tests may only need the rows the
+        // missing demo data creates, and they fail with ordinary text, so scoring the green rest
+        // would report the missing setup as survivors. Stopped by name before any mutant. Red is
+        // a test that ran and failed or was refused by v3 (`error`); a `skip` (refused before
+        // sending, or stopped by us) and a timeout are not data-caused.
+        const dataOff = cfg.backend.baselineNote?.();
+        const red = baseline.filter((b) => didNotPassAtBaseline(b.verdict.outcome));
+        if (dataOff !== undefined && red.length > 0) {
+          // `scoreBatch` saved this baseline before `select`. A `--resume` would reuse it with no
+          // v3 call, so no note, and score against the green tests after all (review).
+          cfg.store.dropBaselineSnapshot(runId, batchIdx);
+          const names = red.slice(0, 5).map((b) => `${b.ref.codeunitName}.${b.ref.method}`);
+          throw new Error(
+            `${red.length} of ${baseline.length} baseline test(s) did not pass (${names.join(", ")}${red.length > names.length ? ", ..." : ""}) while ${dataOff} Stopped before any mutant: the red tests may only need that data, and scoring against the green ones alone would count the missing setup as survivors (R904).`,
+          );
+        }
         // R58, recorded rather than discovered later: under `coverage: "fenced"` these durations
         // INCLUDE coverage-collection overhead (Start/StopApplicationCoverage plus serializing the
         // whole `Code Coverage` table) that no mutant run pays. Every mutant's budget is

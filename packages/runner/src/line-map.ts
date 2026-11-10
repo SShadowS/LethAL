@@ -1037,7 +1037,8 @@ export function alRunnerAdmitsWrappedFile(root: ALSyntaxNode): boolean {
     (c) =>
       c.rawKind === "preproc_else" ||
       c.rawKind === "preproc_elif" ||
-      c.rawKind === "preproc_conditional_object",
+      // R906: an inner `#if` holding only `using` lines is not an object wrapper.
+      (c.rawKind === "preproc_conditional_object" && wrapperHoldsObject(c)),
   );
   if (nested) return false;
   const objects = containerNodesOf(wrapper).filter(isTopLevelObject);
