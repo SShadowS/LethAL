@@ -26,7 +26,7 @@ import {
   generationChanged,
   gitIn,
   guardInSlot,
-  heavyVerdict,
+  heavyVerdict as heavyVerdictRaw,
   isHeavy,
   parseKeyLine,
   parsePs,
@@ -40,6 +40,18 @@ import {
 } from "./corpus-snapshot.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..");
+// R905: `heavyVerdict` now REQUIRES the self-class and the held slots' classes. The older tests here
+// are about the ps scan and pass neither; this default says so once. The class rules are tested
+// in heavy-slot-class.test.ts, which calls the real signature.
+const heavyVerdict = (
+  procs: Parameters<typeof heavyVerdictRaw>[0],
+  self: number,
+  slotPids: readonly number[],
+  otherSlotsHeld: number,
+  selfBaseApp = false,
+  classes: Parameters<typeof heavyVerdictRaw>[5] = [],
+): ReturnType<typeof heavyVerdictRaw> =>
+  heavyVerdictRaw(procs, self, slotPids, otherSlotsHeld, selfBaseApp, classes);
 // Not `lethal-*`: the R358 preload check would read a leftover as this file's leak.
 const TMP = mkdtempSync(join(tmpdir(), "corpus-snapshot-test-"));
 afterAll(() => rmSync(TMP, { recursive: true, force: true }));
@@ -437,7 +449,8 @@ describe("B5 the heavy-job guard", () => {
     `${SELF} 90 90 bun scripts/corpus-snapshot.ts diff dc --in-slot 1`,
     `101 ${SELF} 90 bun scripts/prod-identity-keys.ts /w /tmp/0.jsonl /work/src/DC/app`,
   ];
-  const job = (pid: number, pgid: number, root = "/work/src/BC.History/x"): string =>
+  // R905: a non-BaseApp corpus by default, so the counting tests stay about counting (a BaseApp job caps the total at two).
+  const job = (pid: number, pgid: number, root = "/work/src/DC/x"): string =>
     `${pid} 1 ${pgid} bun census.ts ${root}`;
   test("0, 1, 2 or 3 foreign process groups -> go, go, go, refuse; self, ancestors and children not counted", () => {
     expect(heavyVerdict(parsePs(ps(base)), SELF, [], 0).refuse).toBe(false);
@@ -626,19 +639,20 @@ describe("B5 the heavy-job guard", () => {
 
   // R642: three heavy jobs container-wide, of which at most two BaseApp (BC.History) corpus jobs.
   const dc = (pid: number): string => job(pid, pid, "/work/src/DC/x");
-  const bch = (pid: number): string => job(pid, pid);
+  const bch = (pid: number): string => job(pid, pid, "/work/src/BC.History/x");
   const TOTAL_CAP = "-> REFUSED (at most three heavy jobs container-wide)";
   const BASEAPP_CAP = "-> REFUSED (at most two BaseApp corpus jobs)";
-  test("R642: a 3rd NON-BaseApp heavy job is admitted with 2 others running", () => {
-    for (const others of [
-      [dc(200), dc(300)],
-      [bch(200), bch(300)],
-    ]) {
-      const v = heavyVerdict(parsePs(ps([...base, ...others])), SELF, [], 0, false);
-      expect(v.foreign.length).toBe(2);
-      expect(v.refuse, others.join(" | ")).toBe(false);
-      expect(v.message).not.toContain("REFUSED");
-    }
+  const CLASS_CAP = "a BaseApp-class job runs";
+  test("R642: a 3rd NON-BaseApp heavy job is admitted with 2 non-BaseApp others running", () => {
+    const v = heavyVerdict(parsePs(ps([...base, dc(200), dc(300)])), SELF, [], 0, false);
+    expect(v.foreign.length).toBe(2);
+    expect(v.refuse).toBe(false);
+    expect(v.message).not.toContain("REFUSED");
+  });
+  test("R905: a 3rd job of any kind is refused while unslotted BaseApp jobs run (two in all)", () => {
+    const v = heavyVerdict(parsePs(ps([...base, bch(200), bch(300)])), SELF, [], 0, false);
+    expect(v.foreign.length).toBe(2);
+    expect(v.refuse).toBe(true);
   });
   test("R642: a 3rd BaseApp job is refused with 2 other BaseApp jobs running, naming the BaseApp cap", () => {
     const v = heavyVerdict(parsePs(ps([...base, bch(200), bch(300)])), SELF, [], 0, true);
@@ -659,9 +673,16 @@ describe("B5 the heavy-job guard", () => {
     );
     expect(bySlot.refuse).toBe(true);
     expect(bySlot.message).toContain(BASEAPP_CAP);
-    expect(
-      heavyVerdict(parsePs(ps([...base, ...holder("dc"), bch(300)])), SELF, [500], 1, true).refuse,
-    ).toBe(false);
+    // R905: still refused (this job is BaseApp-class, so two in all), but not by the BaseApp cap.
+    const dcHolder = heavyVerdict(
+      parsePs(ps([...base, ...holder("dc"), bch(300)])),
+      SELF,
+      [500],
+      1,
+      true,
+    );
+    expect(dcHolder.refuse).toBe(true);
+    expect(dcHolder.message).not.toContain(BASEAPP_CAP);
   });
   test("R642 review B1: two held bch slots refuse a 3rd bch job, flags before or after the set", () => {
     // The CLI accepts flags first, and the in-slot re-exec keeps the user's order. The holders'
@@ -684,7 +705,7 @@ describe("B5 the heavy-job guard", () => {
       expect(v.foreign, `flags first ${flagsFirst}`).toEqual([]);
       expect(v.refuse, `flags first ${flagsFirst}`).toBe(true);
       expect(v.message).toContain(BASEAPP_CAP);
-      // Two held dc slots leave room for a 3rd job that is BaseApp.
+      // Two held dc slots: not the BaseApp cap (R905: still two in all for a BaseApp job).
       expect(
         heavyVerdict(
           parsePs(ps([...base, ...holders(flagsFirst, "dc")])),
@@ -692,16 +713,16 @@ describe("B5 the heavy-job guard", () => {
           [500, 600],
           2,
           true,
-        ).refuse,
+        ).message,
         `dc, flags first ${flagsFirst}`,
-      ).toBe(false);
+      ).not.toContain(BASEAPP_CAP);
     }
   });
-  test("R642: a 3rd job that is BaseApp, with 1 BaseApp and 1 non-BaseApp running, is admitted", () => {
+  test("R905: a 3rd job that is BaseApp, with 1 BaseApp and 1 non-BaseApp running, is refused (two in all)", () => {
     const v = heavyVerdict(parsePs(ps([...base, bch(200), dc(300)])), SELF, [], 0, true);
     expect(v.foreign.length).toBe(2);
-    expect(v.refuse).toBe(false);
-    expect(v.message).not.toContain("REFUSED");
+    expect(v.refuse).toBe(true);
+    expect(v.message).toContain(CLASS_CAP);
   });
   test("R642: a 4th heavy job of any kind is refused with 3 others, naming the total cap", () => {
     for (const selfBaseApp of [false, true]) {
@@ -713,7 +734,7 @@ describe("B5 the heavy-job guard", () => {
         selfBaseApp,
       );
       expect(v.refuse, `self BaseApp ${selfBaseApp}`).toBe(true);
-      expect(v.message).toContain(TOTAL_CAP);
+      expect(v.message).toContain(selfBaseApp ? CLASS_CAP : TOTAL_CAP);
       expect(v.message).not.toContain(BASEAPP_CAP);
     }
     // Held slots count toward the total: two held plus one unslotted job.
