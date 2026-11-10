@@ -1710,6 +1710,11 @@ export interface SessionConfig {
    */
   readonly preprocessorSymbols?: readonly string[];
   /**
+   * R900: the assembly probing paths the backends' alc was given. Like `preprocessorSymbols`, the
+   * compile paths already have them; carried here for the resume fingerprint only (when non-empty).
+   */
+  readonly assemblyProbingPaths?: readonly string[];
+  /**
    * R19: work that must happen AFTER the lease is held and before anything is measured.
    *
    * Today that is exactly one thing — publishing the target's test apps (`envTool.publishApps`).
@@ -6522,6 +6527,10 @@ async function runSessionBody(
     // C02-06, R214: the EFFECTIVE symbols (config plus app.json), so an app.json change also
     // breaks a resume.
     ...(buildSymbols.length > 0 ? { preprocessorSymbols: buildSymbols } : {}),
+    // R900: only when non-empty (the function drops an empty list too), so older digests stand.
+    ...(cfg.assemblyProbingPaths !== undefined
+      ? { assemblyProbingPaths: cfg.assemblyProbingPaths }
+      : {}),
     // R403: the test app's derived set, which can change while the target's does not (plan §3(e)).
     // Only when some test file in scope holds a directive line: without one no symbol set can
     // change the suite, so the pre-R403 digest is kept.

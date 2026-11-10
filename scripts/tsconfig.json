@@ -248,6 +248,7 @@
     "verify-equivalence.ts",
     "census-hang-capable.ts",
     "r668-batch-app-check.ts",
-    "sample-declined-hang-capable.ts"
+    "sample-declined-hang-capable.ts",
+    "r900-probing-probe.ts"
   ]
 }
