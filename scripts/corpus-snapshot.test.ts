@@ -26,7 +26,7 @@ import {
   generationChanged,
   gitIn,
   guardInSlot,
-  heavyVerdict,
+  heavyVerdict as heavyVerdictRaw,
   isHeavy,
   parseKeyLine,
   parsePs,
@@ -40,6 +40,18 @@ import {
 } from "./corpus-snapshot.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..");
+// R905: `heavyVerdict` now REQUIRES the self-class and the held slots' classes. The older tests here
+// are about the ps scan and pass neither; this default says so once. The class rules are tested
+// in heavy-slot-class.test.ts, which calls the real signature.
+const heavyVerdict = (
+  procs: Parameters<typeof heavyVerdictRaw>[0],
+  self: number,
+  slotPids: readonly number[],
+  otherSlotsHeld: number,
+  selfBaseApp = false,
+  classes: Parameters<typeof heavyVerdictRaw>[5] = [],
+): ReturnType<typeof heavyVerdictRaw> =>
+  heavyVerdictRaw(procs, self, slotPids, otherSlotsHeld, selfBaseApp, classes);
 // Not `lethal-*`: the R358 preload check would read a leftover as this file's leak.
 const TMP = mkdtempSync(join(tmpdir(), "corpus-snapshot-test-"));
 afterAll(() => rmSync(TMP, { recursive: true, force: true }));

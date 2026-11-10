@@ -33,12 +33,12 @@
  * distinct process group): corpus jobs and
  * local runners (al-runner, itest:alrunner; `isHeavy`). Known limit:
  * two jobs started from ONE non-interactive shell (`a & b`) share a pgid and count as one, and a job
- * on a corpus COPY is invisible to the scan; both should take a slot themselves:
- * `flock -n /coord/locks/heavy.<n> <cmd>`. A slot taken by hand (`flock heavy.N <cmd>`) counts
- * toward the BaseApp cap only while one of its processes names /work/src/BC.History; a job over a
- * COPY of the corpus counts toward the total cap only.
+ * on a corpus COPY is invisible to the scan; both should take a slot themselves with
+ * `scripts/heavy-slot.sh <baseapp|other> <cmd...>` (never a bare `flock`: R905 below).
  *
- * R905: the slot CLASS closes that gap. Whoever takes `heavy.<n>` writes `heavy.<n>.class`
+ * R905: the slot CLASS closes that gap. A slot with no class (a bare `flock heavy.N <cmd>`) counts
+ * as BaseApp. Do not wrap corpus-snapshot.ts or v3-timing.ts in heavy-slot.sh: they take their own
+ * slot, so the job would hold two. Whoever takes `heavy.<n>` writes `heavy.<n>.class`
  * (`baseapp <pid>` or `other <pid>`; helper scripts/heavy-slot-class.ts, shell entry point
  * `scripts/heavy-slot.sh <baseapp|other> <cmd...>`) and removes it on exit; a dead pid reads as no
  * class. The total cap is 2 when this job is BaseApp-class, or when any other held slot is
@@ -631,15 +631,17 @@ function holderIsBaseApp(args: string): boolean {
  * slots whose live holder dumps `bch`, plus unslotted jobs with a process naming BC.History.
  */
 const SLOT_HOLDER_RE = /(^|\/)corpus-snapshot\.ts\b.*--in-slot [123]\b/;
+/** R905: a `scripts/heavy-slot.sh <class> <cmd>` holder writes its own pid in the lock; its class is in its argv. */
+const WRAPPER_HOLDER_RE = /(^|\/)heavy-slot\.sh\s+(baseapp|other)(\s|$)/;
 
 export function heavyVerdict(
   procs: readonly Proc[],
   self: number,
   slotPids: readonly number[],
   otherSlotsHeld: number,
-  selfBaseApp = false,
+  selfBaseApp: boolean,
   // R905: the class of each OTHER held slot (undefined = no readable class, counts as BaseApp).
-  slotClasses: readonly (SlotClass | undefined)[] = [],
+  slotClasses: readonly (SlotClass | undefined)[],
 ): { refuse: boolean; foreign: Proc[]; message: string } {
   const skip = new Set<number>([...ancestors(procs, self), ...descendants(procs, self)]);
   // A slot file's pid is trusted only when it names a live corpus-snapshot slot holder. A manual
@@ -651,8 +653,11 @@ export function heavyVerdict(
   let baseAppSlots = 0;
   for (const s of slotPids) {
     const p = procs.find((x) => x.pid === s);
-    if (!(s > 1) || p === undefined || !SLOT_HOLDER_RE.test(p.args)) continue;
-    if (holderIsBaseApp(p.args)) baseAppSlots++;
+    if (!(s > 1) || p === undefined) continue;
+    const wrapper = WRAPPER_HOLDER_RE.exec(p.args);
+    if (wrapper === null && !SLOT_HOLDER_RE.test(p.args)) continue;
+    // A wrapper's BaseApp status is its CLASS; holderIsBaseApp parses corpus-snapshot flags.
+    if (wrapper !== null ? wrapper[2] === "baseapp" : holderIsBaseApp(p.args)) baseAppSlots++;
     for (const d of descendants(procs, s)) skip.add(d);
   }
   // A job is keyed by its itest:alrunner root when it has one (its workers' al-runner children sit

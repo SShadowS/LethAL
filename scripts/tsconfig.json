@@ -192,6 +192,7 @@
     "gift-card-refreeze.test.ts",
     "heavy-slot-class.test.ts",
     "heavy-slot-class.ts",
+    "heavy-slot-guard.ts",
     "importable-scripts.test.ts",
     "itest-timeline.test.ts",
     "itest-timeline.ts",
