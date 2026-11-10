@@ -930,6 +930,8 @@ export function v3CallArgv(a: {
   readonly onlyTest?: string;
   /** R890: `--isolation` value. Absent: `"test"`. */
   readonly isolation?: "test" | "codeunit";
+  /** R907: `--skip-after-timeout`, right after the stop pair. Absent: not passed. */
+  readonly skipAfterTimeout?: boolean;
 }): string[] {
   return [
     a.alRunnerPath,
@@ -939,6 +941,7 @@ export function v3CallArgv(a: {
     a.isolation ?? "test",
     "--test-timeout-secs",
     String(a.stopSeconds),
+    ...(a.skipAfterTimeout === true ? ["--skip-after-timeout"] : []),
     ...(a.onlyTest !== undefined
       ? ["--test-exact", a.onlyTest, "--run-selected-only"]
       : ["--codeunit", String(a.codeunitId)]),
@@ -1973,6 +1976,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         details: `${this.cfg.alRunnerPath} reports "${reported.slice(0, 200)}", which is not an al-runner v3 build (R586)`,
       };
     }
+    await this.learnSkipAfterTimeout(); // R907
     // T17 and M8: `<deps>`'s System Application must exist and equal bcVersion, here as in the CLI.
     try {
       await assertBcVersionMatchesPackages(this.cfg.packagesDir, this.cfg.bcVersion);
@@ -2088,6 +2092,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     console.warn(sleepRuleLine(this.sleepRuleRetired, this.contract, reported, binarySha256));
     const covered = pinnedDefectCoverage(this.contract, reported, binarySha256);
     if (covered !== undefined) console.warn(covered.line);
+    console.warn(
+      `[lethal] al-runner-v3 one-shot calls ${this.skipAfterTimeout ? "carry" : "do not carry"} --skip-after-timeout${this.skipAfterTimeout ? "" : ` (${this.skipAfterTimeoutWhy})`} (R907)`,
+    );
     for (const line of v3DefectWarnings(this.contract, { ...kind, muted: covered?.muted }))
       console.warn(line);
     const refusals = v3ContractRefusals(this.contract, kind);
@@ -2157,6 +2164,32 @@ export class AlRunnerV3Backend implements ExecutionBackend {
 
   private build: { readonly version: string; readonly binarySha256: string } | undefined;
   private announced = false;
+  /**
+   * R897, R-907: whether the running build's `test --help` lists `--skip-after-timeout`, so every
+   * ONE-SHOT call passes it (after a stop, the rest of that codeunit is reported not run). Older
+   * builds reject unknown flags, hence the check. Serve is unaffected: it has its own cut (R897).
+   */
+  private skipAfterTimeout = false;
+  private skipAfterTimeoutWhy = "not checked";
+
+  /** R907: reads `test --help` once per session (status() calls it). A failure is false, not a throw. */
+  async learnSkipAfterTimeout(): Promise<void> {
+    if (this.skipAfterTimeoutWhy !== "not checked") return;
+    const res = await this.spawn([this.cfg.alRunnerPath, "test", "--help"], this.cacheEnv()).catch(
+      (e: unknown) => ({ exitCode: -1, stdout: "", stderr: String(e) }),
+    );
+    if (res.exitCode !== 0) {
+      this.skipAfterTimeout = false;
+      this.skipAfterTimeoutWhy = "the `test --help` call failed";
+      this.notify(
+        "al-runner-v3-skip-after-timeout-unknown",
+        `[lethal] al-runner v3 \`test --help\` failed (${(res.stderr || res.stdout).trim().slice(0, 200)}); one-shot calls go without --skip-after-timeout (R907)`,
+      );
+      return;
+    }
+    this.skipAfterTimeout = `${res.stdout}\n${res.stderr}`.includes("--skip-after-timeout");
+    this.skipAfterTimeoutWhy = this.skipAfterTimeout ? "" : "this build does not list it";
+  }
   /**
    * R886: the `--dotnet-sidecar` file of this session. A named file is set at construction (a
    * missing one refuses in `status()`); the pinned build's own is set by `status()`, which reads
@@ -2968,6 +3001,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       bcVersion: this.cfg.bcVersion,
       noClient: this.noClient,
       noDownload: this.noDownload(),
+      skipAfterTimeout: this.skipAfterTimeout,
       ...(this.sidecarPath !== undefined ? { dotnetSidecar: this.sidecarPath } : {}),
       symbols: this.cfg.preprocessorSymbols ?? [],
       ...(o.coverageJson !== undefined ? { coverageJson: resolve(o.coverageJson) } : {}),

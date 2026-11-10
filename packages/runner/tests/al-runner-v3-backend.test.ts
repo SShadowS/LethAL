@@ -227,12 +227,18 @@ function fakeV3(
     stdout?: string;
     /** R590: v3's stderr, per call (the mutant id the selector read). */
     stderr?: (activeId: string) => string;
+    /** R907: the text of `test --help`; `"fail"` makes that call exit 2. */
+    help?: string;
   } = {},
 ) {
   const calls: string[][] = [];
   const spawn: SpawnFn = async (argv) => {
     if (argv[1] === "--version")
       return { exitCode: 0, stdout: "alrunner 3.0.0-alpha.2 (91253f2d6)\n", stderr: "" };
+    if (argv[1] === "test" && argv[2] === "--help")
+      return opts.help === "fail"
+        ? { exitCode: 2, stdout: "", stderr: "boom" }
+        : { exitCode: 0, stdout: opts.help ?? "", stderr: "" };
     calls.push([...argv]);
     const active = argv.at(-2) ?? "";
     const testDir = argv.at(-1) ?? "";
@@ -1425,6 +1431,46 @@ describe("R885: demo data, on the one-shot path", () => {
     const off = await run({});
     expect(off.argv).not.toContain("--no-client");
     expect(off.noClient).toBe(V3_NO_CLIENT_DEFAULT);
+  });
+
+  test("R907 --skip-after-timeout: v3CallArgv adds it right after the stop pair when on, never when off", () => {
+    const a = {
+      alRunnerPath: "/b",
+      codeunitId: 7,
+      stopSeconds: 3,
+      packagesDir: "/d",
+      bcVersion: "28.0.1.2",
+      symbols: [],
+      activeDir: "/a",
+      testDir: "/t",
+    };
+    const on = v3CallArgv({ ...a, skipAfterTimeout: true });
+    expect(on[on.indexOf("--test-timeout-secs") + 2]).toBe("--skip-after-timeout");
+    expect(v3CallArgv({ ...a, skipAfterTimeout: false })).not.toContain("--skip-after-timeout");
+    expect(v3CallArgv(a)).not.toContain("--skip-after-timeout");
+  });
+
+  test("R907 a one-shot call carries --skip-after-timeout exactly when the build's help lists it; a failed help call says so once", async () => {
+    const run = async (help: string) => {
+      const l = await layout();
+      const v3 = fakeV3(allPass, { help });
+      const b = backendOf(l, v3.spawn, fakeAlc().io);
+      const notes: string[] = [];
+      b.setNotify((code) => notes.push(code));
+      await b.learnSkipAfterTimeout();
+      await b.learnSkipAfterTimeout();
+      await b.deploy(l.batch);
+      await b.activate("M0002");
+      await b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
+      return { argv: v3.calls[0] ?? [], notes };
+    };
+    expect((await run("  --skip-after-timeout  stop\n")).argv).toContain("--skip-after-timeout");
+    const no = await run("  --test-timeout-secs\n");
+    expect(no.argv).not.toContain("--skip-after-timeout");
+    expect(no.notes).toEqual([]);
+    const failed = await run("fail");
+    expect(failed.argv).not.toContain("--skip-after-timeout");
+    expect(failed.notes).toEqual(["al-runner-v3-skip-after-timeout-unknown"]);
   });
 
   test("R907 a one-shot row's flagged: true reaches a pass verdict; absent or false does not", () => {
