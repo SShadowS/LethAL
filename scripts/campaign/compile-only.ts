@@ -13,7 +13,8 @@
  *     --control-symbol <path/to/lethal-control.app> [--config <lethal.config.json>]
  *
  * `--config` (default `<project>/lethal.config.json`, as `lethal run`) supplies the
- * `preprocessorSymbols` a real run builds with, for both enumeration and alc (R379).
+ * `preprocessorSymbols` a real run builds with, for both enumeration and alc (R379), and the
+ * `assemblyProbingPaths` (else the project's `.vscode/settings.json`, else `./.netpackages`) (R900).
  *
  * `--control-symbol` goes, with every package of `--package-cache`, into a LethAL-owned copy that
  * alc gets as its ONE package-cache path, exactly as `BcDevMcpBackend` does for a real run — so
@@ -44,6 +45,7 @@ import { validateSelectorIdsForProject } from "../../packages/runner/src/cli";
 import {
   type CompileOnlyArgs,
   compileOnlyMutationSet,
+  compileOnlyProbingPaths,
   parseCompileOnlyArgs,
 } from "../../packages/runner/src/compile-only-args";
 import { injectControlDependency } from "../../packages/runner/src/harness";
@@ -110,6 +112,11 @@ export async function compileOnly(
   // 1. The check --dry-run never reaches. Throws naming the offending id and range.
   await validateSelectorIdsForProject(args.projectDir, args.selectorIds);
   console.log(`[compile-only] selector ids validated against ${args.projectDir}/app.json`);
+  // R900: before any work, so a missing probing folder is refused by name, as a real run does.
+  const probingPaths = await compileOnlyProbingPaths(args.configPath, args.projectDir);
+  if (probingPaths.length > 0) {
+    console.log(`[compile-only] alc assembly probing paths: ${probingPaths.join(", ")}`);
+  }
 
   // 2. Generate + instrument, exactly as a real run does: under the config's preprocessor symbols
   //    plus app.json's (R379).
@@ -191,6 +198,7 @@ export async function compileOnly(
         outputDir,
         // R379: alc builds under the config's symbols too, as a real run's compile does.
         ...(configSymbols.length > 0 ? { preprocessorSymbols: configSymbols } : {}),
+        ...(probingPaths.length > 0 ? { assemblyProbingPaths: probingPaths } : {}),
       },
       io,
     );

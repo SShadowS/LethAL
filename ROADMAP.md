@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**21 of 862 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**21 of 864 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -345,7 +345,7 @@ that ordering is the priority.
 - **R873** · `lethal verify` counts a flaky new killing test as `killed` · [R873.md](docs/roadmap/R873.md) · done (ff470e6f)
 - **R887** · On al-runner v3 the app's install code runs with the mutant active; on BC it runs before any mutant is set · [R887.md](docs/roadmap/R887.md) · done (d78f93b3)
 - **R889** · Four ways LethAL emitted AL that alc rejects, found by compiling BC.History instrumented · [R889.md](docs/roadmap/R889.md) · done (ab8e27f5)
-- **R890** · v3 runs a test codeunit under per-test rollback with its globals kept, while bcdev runs each method alone: a suite that sets up once per codeunit loses its setup on v3 · [R890.md](docs/roadmap/R890.md) · open
+- **R890** · v3 runs a test codeunit under per-test rollback with its globals kept, while bcdev runs each method alone: a suite that sets up once per codeunit loses its setup on v3 · [R890.md](docs/roadmap/R890.md) · done (de9b675a) — the default is `auto` (R-896): a codeunit runs under `method` where its baseline needs it…
 - **R893** · swap-find-direction on a FindLast that skips ahead inside a Next() walk of the same record is not hang-refused: the swapped FindFirst rewinds the walk, and on BC the run stranded and quarantined the tier · [R893.md](docs/roadmap/R893.md) · done (efa3d4bb)
 - **R895** · v3 runs the app's GUI branch and bcdev the non-GUI one: a Confirm through ConfirmManagement.GetResponseOrDefault is asked on v3 and skipped on BC, so the two backends kill different mutants · [R895.md](docs/roadmap/R895.md) · open
 - **R896** · The hang check covers only Tier-1 operators: a Tier-2 mutation inside a loop is never hang-refused · [R896.md](docs/roadmap/R896.md) · open
@@ -537,6 +537,8 @@ that ordering is the priority.
 - **R892** · On a first publish, an injected selector id that an installed non-dependent app already uses is not checked: BC's publish refusal is the only signal, with no hint to change selectorIds · [R892.md](docs/roadmap/R892.md) · open
 - **R894** · Spread one bcdev run across several BC servers (load balancing), so a slow suite's mutants run in parallel without sessions sharing a database · [R894.md](docs/roadmap/R894.md) · open, filed 2026-11-09 — DEFERRED by the owner: worth doing, not now
 - **R898** · No time cap per survivor: a mutant whose covering tests are slow can only end as survived after all of them, so slow suites take days · [R898.md](docs/roadmap/R898.md) · open, filed 2026-11-09 — DEFERRED, owner's call
+- **R900** · LethAL never passes assembly probing paths to alc, so a project that uses DotNet types fails LethAL's own compile (AL0451, AL0185) · [R900.md](docs/roadmap/R900.md) · done (41b42a8c) — top-level assemblyProbingPaths, else .vscode/settings.json, else ./.netpackages; passed on…
+- **R901** · On Linux, alc reads a controladdin's `Resources\x\y.js` as one literal file name, so a batch fails with AL0327 for any controladdin written with backslashes · [R901.md](docs/roadmap/R901.md) · open, filed 2026-11-10 from coord R-893
 
 ## Backends and tooling
 

@@ -12,7 +12,7 @@
  *     "transport": "serve-entries",                            // or "one-shot"; absent: serve-entries where proven, else one-shot (R761)
  *     "secondEcho": true,                                      // R635 §5, serve-entries only
  *     "downloadDemoData": true,                                // R885; false passes --no-download (offline, gates); true: the feed's copy replaces an older Microsoft app in .alpackages
- *     "isolation": "test",                                     // R890; "test" (default) or "method": every test alone, codeunit isolation, a fresh codeunit each (as BC)
+ *     "isolation": "auto",                                     // R896; "auto" (default): per codeunit, "method" where the baseline passes strictly more tests so; R890: "test" or "method" force one mode
  *     "dotnetSidecar": "<optional AlDotNetSidecar.dll>"      // R886; passed as --dotnet-sidecar. Absent: the pinned build's own sidecar, when its .gated names one; false: none (gates)
  *   }
  *
@@ -47,10 +47,12 @@ export interface AlRunnerV3ConfigSection {
   /** R886: `--dotnet-sidecar <dll>` for every al-runner call. Absent: the pinned build's sidecar, if any. `false`: none. */
   readonly dotnetSidecar?: string | false;
   /**
-   * R890: `"test"` (default, as always): one codeunit per call, rollback per test, globals kept.
-   * `"method"`: every test alone, codeunit isolation, a fresh codeunit per test (as BC's runner).
+   * R890: `"test"`: one codeunit per call, rollback per test, globals kept. `"method"`: every test
+   * alone, codeunit isolation, a fresh codeunit per test (as BC's runner). R896: `"auto"` (the
+   * default, `V3_ISOLATION_DEFAULT`): `"test"`, except a codeunit whose baseline passes strictly
+   * more tests under `"method"`, chosen once per session.
    */
-  readonly isolation?: "test" | "method";
+  readonly isolation: "auto" | "test" | "method";
 }
 
 /**
@@ -58,6 +60,9 @@ export interface AlRunnerV3ConfigSection {
  * 2026-11-09: yes, as al-runner does. The only place this is decided; flip it here.
  */
 export const V3_DOWNLOAD_DEMO_DATA_DEFAULT = true;
+
+/** R896: THE default of `alRunnerV3.isolation`. Every gate sets `"test"` explicitly. */
+export const V3_ISOLATION_DEFAULT = "auto";
 
 const KEYS = [
   "isolation",
@@ -168,9 +173,14 @@ export function validateAlRunnerV3Config(
       `al-runner-v3-config-refused: "alRunnerV3.dotnetSidecar" must be a non-empty path or false, got ${JSON.stringify(r.dotnetSidecar)} (R886).`,
     );
   }
-  if (r.isolation !== undefined && r.isolation !== "test" && r.isolation !== "method") {
+  if (
+    r.isolation !== undefined &&
+    r.isolation !== "auto" &&
+    r.isolation !== "test" &&
+    r.isolation !== "method"
+  ) {
     throw new Error(
-      `al-runner-v3-config-refused: "alRunnerV3.isolation" must be "test" or "method", got ${JSON.stringify(r.isolation)} (R890).`,
+      `al-runner-v3-config-refused: "alRunnerV3.isolation" must be "auto", "test" or "method", got ${JSON.stringify(r.isolation)} (R890, R896).`,
     );
   }
   for (const k of ["path", "alcPath", "cacheDir"]) {
@@ -205,7 +215,7 @@ export function validateAlRunnerV3Config(
     ...(typeof r.alcPath === "string" ? { alcPath: r.alcPath } : {}),
     ...(typeof r.cacheDir === "string" ? { cacheDir: r.cacheDir } : {}),
     ...(r.dotnetSidecar !== undefined ? { dotnetSidecar: r.dotnetSidecar as string | false } : {}),
-    ...(r.isolation !== undefined ? { isolation: r.isolation as "test" | "method" } : {}),
+    isolation: (r.isolation as "auto" | "test" | "method" | undefined) ?? V3_ISOLATION_DEFAULT,
   };
 }
 

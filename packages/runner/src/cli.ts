@@ -47,6 +47,11 @@ import { v3ChildEnv } from "./al-runner-v3-seed";
 import { readSystemRuntime } from "./app-package";
 import { compareAppVersions, nextAbove } from "./app-version";
 import { ArtifactCompiler, defaultArtifactIo } from "./artifact";
+import {
+  type ResolvedAssemblyProbingPaths,
+  describeAssemblyProbingPaths,
+  resolveAssemblyProbingPaths,
+} from "./assembly-probing-paths";
 import type { BackendKind, BackendStatus, ExecutionBackend } from "./backend";
 import { isBcdev, isLocalRunner } from "./backend";
 import { readTargetSource } from "./baseline-snapshot";
@@ -2451,6 +2456,13 @@ export interface LethalConfigFile {
    */
   readonly preprocessorSymbols?: readonly string[];
   /**
+   * R900 — the folders alc searches for .NET assemblies (`/assemblyprobingpaths:`), relative to the
+   * project. TOP-LEVEL for the reason `preprocessorSymbols` is: every backend compiles with alc.
+   * Absent: the project's `.vscode/settings.json` `al.assemblyProbingPaths`, else `./.netpackages`
+   * when it exists, else none (`resolveAssemblyProbingPaths`).
+   */
+  readonly assemblyProbingPaths?: readonly string[];
+  /**
    * R221 — glob patterns whose files must never contribute mutants, unioned with any `--exclude`
    * passed on the command line.
    *
@@ -2482,6 +2494,14 @@ export interface LethalConfigFile {
  */
 export function validatePreprocessorSymbols(raw: unknown): readonly string[] {
   return validateSymbolList(raw, "lethal.config.json");
+}
+
+/** R900 — the config's `assemblyProbingPaths`, else the project's own (`resolveAssemblyProbingPaths`). */
+export function assemblyProbingPathsFor(
+  projectDir: string,
+  configFile: Pick<LethalConfigFile, "assemblyProbingPaths">,
+): Promise<ResolvedAssemblyProbingPaths> {
+  return resolveAssemblyProbingPaths(projectDir, configFile.assemblyProbingPaths);
 }
 
 /**
@@ -3073,6 +3093,8 @@ async function buildAlRunnerV3Backend(
     readonly selectorIds: SelectorConfig;
     readonly source?: ReadonlyMap<string, Buffer>;
     readonly preprocessorSymbols: readonly string[];
+    /** R900: `resolveAssemblyProbingPaths`'s list, for alc. */
+    readonly assemblyProbingPaths: readonly string[];
   },
 ): Promise<ExecutionBackend> {
   refuseV3Platform();
@@ -3114,10 +3136,13 @@ async function buildAlRunnerV3Backend(
         : {}),
       ...(c.cacheDir !== undefined ? { cacheDir: c.cacheDir } : {}),
       downloadDemoData: c.downloadDemoData,
-      ...(c.isolation !== undefined ? { isolation: c.isolation } : {}), // R890
+      isolation: c.isolation, // R890, R896
       ...(c.dotnetSidecar !== undefined ? { dotnetSidecar: c.dotnetSidecar } : {}), // R886
       ...(deps.preprocessorSymbols.length > 0
         ? { preprocessorSymbols: deps.preprocessorSymbols }
+        : {}),
+      ...(deps.assemblyProbingPaths.length > 0
+        ? { assemblyProbingPaths: deps.assemblyProbingPaths }
         : {}),
       // R635, R761: serve-entries is the default where proven; the session decides it
       // (`decideTransport`) when the config names no transport. An explicit key is used as written.
@@ -3163,10 +3188,19 @@ export async function buildBackend(
   selectorIds: SelectorConfig = DEFAULT_SELECTOR_IDS,
   /** R205: the session's source snapshot, so the id check reads the source the build uses. */
   source?: ReadonlyMap<string, Buffer>,
+  /** R900: the list `runFromCli` resolved before provisioning; absent, resolved here. */
+  resolvedProbing?: ResolvedAssemblyProbingPaths,
 ): Promise<ExecutionBackend> {
   // R101(c): validated FIRST, for both backends, before anything is constructed — a typo'd symbol
   // list must fail immediately rather than after a compile that silently used the other branch.
   const preprocessorSymbols = validatePreprocessorSymbols(configFile.preprocessorSymbols);
+  // R900: checked before anything is built: a missing folder is refused by name instead of
+  // surfacing later as AL0451 in every batch.
+  const probing = resolvedProbing ?? (await assemblyProbingPathsFor(parsed.projectDir, configFile));
+  const assemblyProbingPaths = probing.paths;
+  if (assemblyProbingPaths.length > 0) {
+    console.warn(`[lethal] alc assembly probing paths: ${describeAssemblyProbingPaths(probing)}`);
+  }
   if (parsed.backendKind === "al-runner-v3") {
     return buildAlRunnerV3Backend(parsed, configFile, scratchDir, {
       alToolPaths: deps.alToolPaths ?? defaultAlToolPaths,
@@ -3180,6 +3214,7 @@ export async function buildBackend(
       selectorIds,
       ...(source !== undefined ? { source } : {}),
       preprocessorSymbols,
+      assemblyProbingPaths,
     });
   }
 
@@ -3259,6 +3294,7 @@ export async function buildBackend(
       // R101(c) — see `ArtifactCompilerConfig.preprocessorSymbols`. This is the half R101's own
       // framing missed: the gap is in LethAL's OWN compile first, not al-runner's.
       ...(preprocessorSymbols.length > 0 ? { preprocessorSymbols } : {}),
+      ...(assemblyProbingPaths.length > 0 ? { assemblyProbingPaths } : {}),
     },
     defaultArtifactIo,
   );
@@ -3961,6 +3997,10 @@ export async function runFromCli(
   await validateIds(parsed.projectDir, selectorIds, source, {
     packageDirs: configuredPackageCaches(configFile),
   });
+  // R900: resolved ONCE, here, for the same reason: a missing probing folder is a project problem,
+  // refused before `resolveEnvToolSession` can provision anything. `build` and the session's
+  // fingerprint both take this one result.
+  const probing = await assemblyProbingPathsFor(parsed.projectDir, configFile);
   const scratchRoot = await mkdtemp(join(tmpdir(), "lethal-"));
   // R360 I2: this invocation owns `scratchRoot` from here on. On any throw it is kept and named,
   // since compile diagnostics name files in it; a killed process leaves it by design. After a
@@ -4068,6 +4108,7 @@ export async function runFromCli(
                 : {},
               selectorIds,
               source,
+              probing,
             );
             store = new ResultsStore(parsed.dbPath);
             // Task 5 (event-stream refactor, spec 2026-08-05 §A): a run this long (a baseline alone
@@ -4170,6 +4211,8 @@ export async function runFromCli(
               // C02-06: the symbols the target compiler was built with (see `buildBackend`), so the
               // recorded source hash covers them. Also what `SessionReport.preprocessorSymbols` reports.
               preprocessorSymbols: validatePreprocessorSymbols(effectiveConfig.preprocessorSymbols),
+              // R900: the list `buildBackend` gave alc, for the resume fingerprint.
+              assemblyProbingPaths: probing.paths,
               ...afterLeaseAcquiredFor(envSession),
               ...(parsed.allowLargeRun === true ? { allowLargeRun: true } : {}),
               ...tier,
@@ -4828,8 +4871,14 @@ export async function buildDoctorDeps(
             }
           };
         })();
+  // R900: every backend compiles with alc, so the check is on every config, given `--project`.
+  const probingProject = opts.projectDir;
+  const probingCheck =
+    probingProject === undefined
+      ? {}
+      : { assemblyProbingPaths: () => assemblyProbingPathsFor(probingProject, configFile) };
   if (v3Only && v3Check !== undefined) {
-    return { cfg: {}, deps: { alRunnerV3: v3Check } };
+    return { cfg: {}, deps: { alRunnerV3: v3Check, ...probingCheck } };
   }
   const readOnly = prepareBcdevReadOnly(configFile, {
     runId: "doctor",
@@ -5097,6 +5146,7 @@ export async function buildDoctorDeps(
       ...(alcRuntime !== undefined ? { alcRuntime } : {}),
       dependencies,
       ...(v3Check !== undefined ? { alRunnerV3: v3Check } : {}),
+      ...probingCheck,
     },
     ...(isCreateMode ? { caveat: DOCTOR_CREATE_MODE_CAVEAT } : {}),
   };

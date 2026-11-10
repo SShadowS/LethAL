@@ -396,6 +396,9 @@ export interface SessionFingerprintInput {
    *  R192's baseline key hashes AL bytes only, so a resume across a symbol change would carry
    *  measurements made under the old ones. */
   readonly preprocessorSymbols?: readonly string[];
+  /** R900: alc's assembly probing paths, in order (alc takes the first match). In the digest only
+   *  when non-empty, so every run without them keeps its digest. */
+  readonly assemblyProbingPaths?: readonly string[];
   /** R403: the TEST app's DERIVED symbol set (`effectiveBuildSymbols(testDir, ...)`), which decides
    *  which tests arm-aware discovery keeps. In the digest only when non-empty, so a run with no
    *  test symbols keeps its old digest. Separate from `preprocessorSymbols` because the two sets
@@ -432,6 +435,11 @@ export interface SessionFingerprintInput {
    * and an `--isolate-tests` run would share a digest and a resume could mix their verdicts. Only when on.
    */
   readonly methodIsolation?: true;
+  /**
+   * R896: `alRunnerV3.isolation: "auto"`, the SETTING (the per-codeunit choice it makes is stored on
+   * the run and compared at the resumed baseline). Only when on, so no other digest moves.
+   */
+  readonly isolationAuto?: true;
   readonly selectorIds: {
     readonly selectorId: number;
     readonly controlId: number;
@@ -500,6 +508,10 @@ export function sessionFingerprint(input: SessionFingerprintInput): string {
     ...(input.preprocessorSymbols !== undefined && input.preprocessorSymbols.length > 0
       ? { preprocessorSymbols: [...input.preprocessorSymbols].sort() }
       : {}),
+    // R900: conditional and non-empty only. NOT sorted: the order decides which assembly alc finds.
+    ...(input.assemblyProbingPaths !== undefined && input.assemblyProbingPaths.length > 0
+      ? { assemblyProbingPaths: [...input.assemblyProbingPaths] }
+      : {}),
     // R403: conditional for the same reason, see `SessionFingerprintInput.testBuildSymbols`.
     ...(input.testBuildSymbols !== undefined && input.testBuildSymbols.length > 0
       ? { testBuildSymbols: [...input.testBuildSymbols].sort() }
@@ -511,6 +523,7 @@ export function sessionFingerprint(input: SessionFingerprintInput): string {
     ...(input.coverageMode !== undefined ? { coverageMode: input.coverageMode } : {}),
     ...(input.isolateTests === true ? { isolateTests: true } : {}),
     ...(input.methodIsolation === true ? { methodIsolation: true } : {}),
+    ...(input.isolationAuto === true ? { isolation: "auto" } : {}),
     selectorIds: [
       input.selectorIds.selectorId,
       input.selectorIds.controlId,
