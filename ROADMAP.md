@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**17 of 869 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**19 of 871 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -353,6 +353,7 @@ that ordering is the priority.
 - **R902** · Two more ways LethAL emitted AL that alc rejects, found by the BC.History re-hunt with assembly probing paths · [R902.md](docs/roadmap/R902.md) · done (06fe903e)
 - **R903** · A carried verdict's execution context takes the CURRENT backend's GUI label: harmless while every resume is same-backend, wrong if a cross-backend resume is ever allowed · [R903.md](docs/roadmap/R903.md) · closed 2026-11-10 — not reachable: both resume paths refuse a run from another backend; reopen with any…
 - **R907** · A v3 run with coverage turned off says so only on stderr: the report's caveats and console summary show `survived` and `no-coverage 0` with no sign that every mutant ran against every test · [R907.md](docs/roadmap/R907.md) · done (55ac5810)
+- **R910** · The TestPage reader misses page opens in dependency code, so such a test is sent to the fenced session (on Windows it could hang) · [R910.md](docs/roadmap/R910.md) · open
 
 ## Product gaps a real project hits
 
@@ -543,6 +544,7 @@ that ordering is the priority.
 - **R900** · LethAL never passes assembly probing paths to alc, so a project that uses DotNet types fails LethAL's own compile (AL0451, AL0185) · [R900.md](docs/roadmap/R900.md) · done (41b42a8c) — top-level assemblyProbingPaths, else .vscode/settings.json, else ./.netpackages; passed on…
 - **R901** · On Linux, alc reads a controladdin's `Resources\x\y.js` as one literal file name, so a batch fails with AL0327 for any controladdin written with backslashes · [R901.md](docs/roadmap/R901.md) · done (ceaecb4c)
 - **R908** · R69's "TestPage is unprofitable" does not hold in general: on page-heavy Microsoft apps 45-59% of mutants have only TestPage-refused tests, against R69's 5% bar. The owner's decision, with a census · [R908.md](docs/roadmap/R908.md) · open — helper-reach measured (coord R-908): the rule is right; next step is the owner's
+- **R909** · On Linux BC a page open fails as a plain CLR NotSupportedException, so LethAL reads a page-opening test as an ordinary failure instead of naming it · [R909.md](docs/roadmap/R909.md) · open
 
 ## Backends and tooling
 
