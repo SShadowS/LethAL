@@ -105,6 +105,7 @@ import {
   testAppHashFor,
 } from "./baseline-snapshot";
 import type { BaselineObservation, BaselineSnapshot } from "./baseline-snapshot";
+import { rewriteControlAddInPaths } from "./controladdin-paths";
 import { PublishFailedError } from "./bcdev-backend";
 import {
   MAX_ISOLATION_COMPILES,
@@ -12720,8 +12721,12 @@ export async function prepareBatchProject(
   for (const rel of alFiles) {
     const dest = join(batchDir, flatNames.flatOf(rel));
     if (await pathExists(dest)) continue;
-    if (source !== undefined) await writeFile(dest, snapshotBytes(source, rel));
-    else await copyFile(join(projectDir, rel), dest);
+    // R901: a controladdin's backslash resource names, rewritten in the batch copy only.
+    const bytes =
+      source !== undefined ? snapshotBytes(source, rel) : await readFile(join(projectDir, rel));
+    const text = bytes.toString("utf8");
+    const fixed = rewriteControlAddInPaths(text);
+    await writeFile(dest, fixed === text ? bytes : fixed);
   }
   // R219 (sol run 001): `FLAT_NAMES_FILENAME` at the batch root is LethAL's, so a project resource
   // that would land there, copied as it is or rebased, is refused rather than overwriting it or
