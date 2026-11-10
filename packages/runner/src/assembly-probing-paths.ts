@@ -85,6 +85,9 @@ async function absolutePaths(
   for (const entry of entries) {
     if (SEPARATOR_RE.test(entry)) throw new AssemblyProbingPathSeparatorError(entry, where);
     const abs = resolve(projectDir, entry).replaceAll("\\", "/");
+    // The resolved path too: a relative entry under a project folder holding a comma reaches alc
+    // with that comma.
+    if (SEPARATOR_RE.test(abs)) throw new AssemblyProbingPathSeparatorError(abs, where);
     if (!(await isDirectory(abs))) throw new AssemblyProbingPathMissingError(entry, abs, where);
     out.push(abs);
   }
@@ -99,6 +102,7 @@ export async function resolveAssemblyProbingPaths(
   projectDir: string,
   configValue: unknown,
   configLabel = "lethal.config.json",
+  warn: (line: string) => void = (line) => console.warn(line),
 ): Promise<ResolvedAssemblyProbingPaths> {
   if (configValue !== undefined) {
     const where = `${configLabel} "assemblyProbingPaths"`;
@@ -109,13 +113,23 @@ export async function resolveAssemblyProbingPaths(
   const settingsFile = Bun.file(settingsPath);
   if (await settingsFile.exists()) {
     let settings: unknown;
+    const text = await settingsFile.text();
     try {
       // VS Code settings are JSON with comments and trailing commas.
-      settings = Bun.JSONC.parse(await settingsFile.text());
+      settings = Bun.JSONC.parse(text);
     } catch (err) {
-      throw new Error(
-        `${settingsPath} is not readable JSON with comments, so LethAL cannot tell whether it sets "${VSCODE_SETTINGS_KEY}": ${err instanceof Error ? err.message : String(err)} (R900)`,
+      const why = err instanceof Error ? err.message : String(err);
+      // Refused only when the file may set the key: a broken settings file in a project that never
+      // used probing paths must not stop its runs.
+      if (text.includes("assemblyProbingPaths")) {
+        throw new Error(
+          `${settingsPath} mentions assemblyProbingPaths but is not readable JSON with comments, so LethAL cannot tell what "${VSCODE_SETTINGS_KEY}" holds: ${why} (R900)`,
+        );
+      }
+      warn(
+        `[lethal] ${settingsPath} is not readable JSON with comments (${why}); it does not mention assemblyProbingPaths, so LethAL looks for ./.netpackages next (R900)`,
       );
+      settings = undefined;
     }
     const raw =
       settings !== null && typeof settings === "object"

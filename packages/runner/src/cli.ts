@@ -3188,13 +3188,15 @@ export async function buildBackend(
   selectorIds: SelectorConfig = DEFAULT_SELECTOR_IDS,
   /** R205: the session's source snapshot, so the id check reads the source the build uses. */
   source?: ReadonlyMap<string, Buffer>,
+  /** R900: the list `runFromCli` resolved before provisioning; absent, resolved here. */
+  resolvedProbing?: ResolvedAssemblyProbingPaths,
 ): Promise<ExecutionBackend> {
   // R101(c): validated FIRST, for both backends, before anything is constructed — a typo'd symbol
   // list must fail immediately rather than after a compile that silently used the other branch.
   const preprocessorSymbols = validatePreprocessorSymbols(configFile.preprocessorSymbols);
-  // R900: resolved and checked here too, before anything is built: a missing folder is refused by
-  // name instead of surfacing later as AL0451 in every batch.
-  const probing = await assemblyProbingPathsFor(parsed.projectDir, configFile);
+  // R900: checked before anything is built: a missing folder is refused by name instead of
+  // surfacing later as AL0451 in every batch.
+  const probing = resolvedProbing ?? (await assemblyProbingPathsFor(parsed.projectDir, configFile));
   const assemblyProbingPaths = probing.paths;
   if (assemblyProbingPaths.length > 0) {
     console.warn(`[lethal] alc assembly probing paths: ${describeAssemblyProbingPaths(probing)}`);
@@ -3995,6 +3997,10 @@ export async function runFromCli(
   await validateIds(parsed.projectDir, selectorIds, source, {
     packageDirs: configuredPackageCaches(configFile),
   });
+  // R900: resolved ONCE, here, for the same reason: a missing probing folder is a project problem,
+  // refused before `resolveEnvToolSession` can provision anything. `build` and the session's
+  // fingerprint both take this one result.
+  const probing = await assemblyProbingPathsFor(parsed.projectDir, configFile);
   const scratchRoot = await mkdtemp(join(tmpdir(), "lethal-"));
   // R360 I2: this invocation owns `scratchRoot` from here on. On any throw it is kept and named,
   // since compile diagnostics name files in it; a killed process leaves it by design. After a
@@ -4102,6 +4108,7 @@ export async function runFromCli(
                 : {},
               selectorIds,
               source,
+              probing,
             );
             store = new ResultsStore(parsed.dbPath);
             // Task 5 (event-stream refactor, spec 2026-08-05 §A): a run this long (a baseline alone
@@ -4205,9 +4212,7 @@ export async function runFromCli(
               // recorded source hash covers them. Also what `SessionReport.preprocessorSymbols` reports.
               preprocessorSymbols: validatePreprocessorSymbols(effectiveConfig.preprocessorSymbols),
               // R900: the list `buildBackend` gave alc, for the resume fingerprint.
-              assemblyProbingPaths: (
-                await assemblyProbingPathsFor(parsed.projectDir, effectiveConfig)
-              ).paths,
+              assemblyProbingPaths: probing.paths,
               ...afterLeaseAcquiredFor(envSession),
               ...(parsed.allowLargeRun === true ? { allowLargeRun: true } : {}),
               ...tier,

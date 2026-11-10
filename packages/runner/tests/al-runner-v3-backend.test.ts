@@ -3443,6 +3443,11 @@ describe("R780: the cross-session test-app compile cache", () => {
       "a changed preprocessor symbol set",
       async () => ({ cfg: { preprocessorSymbols: ["CLEAN"] } }),
     ],
+    [
+      // R900: the backend hands its probing paths to the key.
+      "a changed assembly probing path list",
+      async () => ({ cfg: { assemblyProbingPaths: ["/asm"] } }),
+    ],
   ];
   for (const [name, change] of misses) {
     test(`${name}: miss`, async () => {

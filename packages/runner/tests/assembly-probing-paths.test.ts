@@ -13,7 +13,7 @@ import {
   AssemblyProbingPathSeparatorError,
   resolveAssemblyProbingPaths,
 } from "../src/assembly-probing-paths";
-import { buildBackend, buildDoctorDeps } from "../src/cli";
+import { buildBackend, buildDoctorDeps, runFromCli } from "../src/cli";
 import { runDoctor } from "../src/doctor";
 import { sessionFingerprint } from "../src/resume";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
@@ -112,6 +112,36 @@ describe("resolveAssemblyProbingPaths", () => {
         AssemblyProbingPathSeparatorError,
       );
     }
+  });
+
+  test("a relative entry under a project folder holding a comma is refused (alc would split the resolved path)", async () => {
+    const parent = await project({});
+    const dir = join(parent, "a,b", "proj");
+    await mkdir(join(dir, "libs"), { recursive: true });
+    await expect(resolveAssemblyProbingPaths(dir, ["./libs"])).rejects.toBeInstanceOf(
+      AssemblyProbingPathSeparatorError,
+    );
+  });
+
+  test("an unreadable settings file that never mentions the key warns once and falls through", async () => {
+    const dir = await project({ settings: '{ "editor.tabSize": 4 ', netpackages: true });
+    const warned: string[] = [];
+    const r = await resolveAssemblyProbingPaths(dir, undefined, "c", (l) => warned.push(l));
+    expect(r).toEqual({ paths: [fwd(join(dir, ".netpackages"))], source: "default" });
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain(join(dir, ".vscode", "settings.json"));
+  });
+
+  test("an unreadable settings file that mentions the key is refused by name", async () => {
+    const dir = await project({
+      settings: '{ "al.assemblyProbingPaths": ["./x" ',
+      netpackages: true,
+    });
+    const warned: string[] = [];
+    await expect(
+      resolveAssemblyProbingPaths(dir, undefined, "c", (l) => warned.push(l)),
+    ).rejects.toThrow(/settings\.json mentions assemblyProbingPaths/);
+    expect(warned).toEqual([]);
   });
 
   test("a config value that is not a non-empty list of strings is refused", async () => {
@@ -379,6 +409,45 @@ describe("buildBackend hands the resolved list to the bcdev compiler", () => {
     await expect(
       compilerPaths(await project({}), { assemblyProbingPaths: ["./missing"] }),
     ).rejects.toBeInstanceOf(AssemblyProbingPathMissingError);
+  });
+});
+
+describe("runFromCli resolves the paths before any env-tool provisioning", () => {
+  test("a missing probing folder is refused with zero env-tool calls", async () => {
+    const proj = await project({});
+    const cfgDir = await project({});
+    const configPath = join(cfgDir, "lethal.config.json");
+    await writeFile(configPath, JSON.stringify({ assemblyProbingPaths: ["./missing"] }));
+    let envToolCalls = 0;
+    let builds = 0;
+    await expect(
+      runFromCli(
+        {
+          mode: "run",
+          projectDir: proj,
+          testDir: join(cfgDir, "tests"),
+          backendKind: "bcdev",
+          dbPath: "db",
+          configPath,
+          skipKnownSurvivors: false,
+          workers: 1,
+          keepEnv: false,
+          allowExpiringEnv: false,
+        },
+        {
+          validateSelectorIdsForProject: async () => {},
+          resolveEnvToolSession: async () => {
+            envToolCalls += 1;
+            return { effectiveConfig: {} };
+          },
+          buildBackend: async () => {
+            builds += 1;
+            throw new Error("not reached");
+          },
+        },
+      ),
+    ).rejects.toBeInstanceOf(AssemblyProbingPathMissingError);
+    expect({ envToolCalls, builds }).toEqual({ envToolCalls: 0, builds: 0 });
   });
 });
 
