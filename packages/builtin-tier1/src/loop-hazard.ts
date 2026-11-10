@@ -296,8 +296,7 @@ export function inLoopExitParts(node: ALSyntaxNode, ctx: SemanticContext): boole
  * clock site inside `AdvanceHelper` that this operator claims is outside the loop and is not seen.
  */
 export function clockSwapHangs(node: ALSyntaxNode, ctx: SemanticContext): boolean {
-  if (inLoopExitParts(node, ctx)) return true;
-  if (hangCapableForMutatedNode(node, ctx) !== null) return true;
+  if (valueSwapHangs(node, ctx)) return true;
   if (!hasEnclosingLoop(node)) return false;
   if (enclosingExitParts(node, ctx).some((parts) => parts.some(readsClock))) return true;
   for (
@@ -313,6 +312,12 @@ export function clockSwapHangs(node: ALSyntaxNode, ctx: SemanticContext): boolea
     }
   }
   return false;
+}
+
+/** R856/R896: a value swap at `node` can freeze a loop: the site is in a loop's exit parts, or feeds
+ *  an assignment `hangCapableForMutatedNode` claims. Shared by `clockSwapHangs` and R896's P2. */
+function valueSwapHangs(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+  return inLoopExitParts(node, ctx) || hangCapableForMutatedNode(node, ctx) !== null;
 }
 
 /** Does the subtree call `WorkDate` or `Today` (by name, with or without arguments)? */
@@ -932,6 +937,11 @@ export function openItemHangRefuses(
     writesPresetExitName(node, ctx) ||
     consumingLoopRefuses(node, ctx, op) ||
     r893WalkJump(node, ctx, op) ||
+    r896FilterBeforeJump(node, ctx, op) ||
+    r896JumpViaCopy(node, op) ||
+    r896ValueSwap(node, ctx, op) ||
+    r896InvisibleProgress(node, ctx) ||
+    r896TestFieldOnlyExit(node, op) ||
     deletedCallHangs(node, ctx)
   );
 }
@@ -963,6 +973,207 @@ function r893WalkJump(node: ALSyntaxNode, ctx: SemanticContext, op: string | und
     const rc = nc === null ? null : r531Call(nc);
     if (rc !== null && (rc.recv ?? "") === recv) return true;
   }
+  return false;
+}
+
+/** R896: test-only seams, one per rule; tests switch `on` off to see each rule's effect. */
+export const r896P1Seam = { on: true };
+export const r896P1bSeam = { on: true };
+export const r896P2Seam = { on: true };
+export const r896P5Seam = { on: true };
+export const r896P6Seam = { on: true };
+
+/** The `while`/`repeat` loops whose BODY holds `node`, innermost first, up to the scope. */
+function r896BodyLoops(node: ALSyntaxNode): { loop: ALSyntaxNode; body: ALSyntaxNode }[] {
+  const out: { loop: ALSyntaxNode; body: ALSyntaxNode }[] = [];
+  for (let cur = node.parent; cur !== null && !isScope(cur); cur = cur.parent) {
+    if (cur.rawKind !== "while_statement" && cur.rawKind !== "repeat_statement") continue;
+    const body = cur.childForFieldName("body");
+    if (body !== null && node.startIndex >= body.startIndex && node.endIndex <= body.endIndex)
+      out.push({ loop: cur, body });
+  }
+  return out;
+}
+
+/** The receiver key of the `Next` in a loop's condition ("" for the implicit record), or null. */
+function r896NextRecv(loop: ALSyntaxNode): string | null {
+  const nc = r696Next(loop);
+  const rc = nc === null ? null : r531Call(nc);
+  return rc === null ? null : (rc.recv ?? "");
+}
+
+/** R896 P1: the calls that place R by its filters: R893's jumps, plus `FindSet`, `Get`, `SetPosition`. */
+const R896_P1_JUMPS: ReadonlySet<string> = new Set([
+  ...R893_JUMPS,
+  "findset",
+  "get",
+  "setposition",
+]);
+
+/**
+ * R896 P1: `flip-filter-literal` on a `SetFilter` on the walked record R inside the body of R's own
+ * `Next` walk, when a call that places R (`R896_P1_JUMPS`) follows it in that body. The jump lands by the
+ * filter (`SetFilter(F, '<=%1', R.F); R.FindLast()` skips a group); the flip (`<=` to `<`) lands it
+ * behind, and the walk never ends (repro FFL2). Both flip directions are refused.
+ */
+function r896FilterBeforeJump(
+  node: ALSyntaxNode,
+  ctx: SemanticContext,
+  op: string | undefined,
+): boolean {
+  if (!r896P1Seam.on || op !== "lethal.flip-filter-literal" || !r696IsCall(node)) return false;
+  const c = r531Call(node);
+  if (c === null || c.method !== "setfilter") return false;
+  const recv = c.recv ?? (r531Implicit(node, ctx) ? "" : null);
+  if (recv === null) return false;
+  return r896BodyLoops(node).some(({ loop, body }) => {
+    if (r896NextRecv(loop) !== recv) return false;
+    let jump = false;
+    visitAll(body, (x) => {
+      if (jump || x.startIndex < node.endIndex || !r696IsCall(x)) return;
+      const j = r531Call(x);
+      if (j !== null && R896_P1_JUMPS.has(j.method) && (j.recv ?? "") === recv) jump = true;
+    });
+    return jump;
+  });
+}
+
+/**
+ * R896 P1b: R893's walk jump made through a second variable: `swap-find-direction` on a jump on X
+ * inside R's `Next` walk, when the body later repositions R from X (`R := X`, `R.Copy(X)`,
+ * `R.TransferFields(X)`, or `R.Get(..)` with an argument that reads X). The rewound X rewinds R
+ * (repro SFD3).
+ */
+function r896JumpViaCopy(node: ALSyntaxNode, op: string | undefined): boolean {
+  if (!r896P1bSeam.on || op !== SWAP_FIND_DIRECTION || !r696IsCall(node)) return false;
+  const c = r531Call(node);
+  if (c === null || !R893_JUMPS.has(c.method) || c.recv === null) return false;
+  const x = c.recv;
+  return r896BodyLoops(node).some(({ loop, body }) => {
+    const r = r896NextRecv(loop);
+    if (r === null || r === x) return false;
+    let hit = false;
+    visitAll(body, (n) => {
+      if (hit || n.startIndex < node.endIndex) return;
+      if (n.rawKind === "assignment_statement") {
+        hit =
+          r531Key(n.childForFieldName("left")) === r && r531Key(n.childForFieldName("right")) === x;
+        return;
+      }
+      if (!r696IsCall(n)) return;
+      const k = r531Call(n);
+      if (k === null || (k.recv ?? "") !== r) return;
+      if (k.method === "get") {
+        for (const a of k.args)
+          visitAll(a, (y) => {
+            if (isIdentifierLike(y) && r531Key(y) === x) hit = true;
+          });
+        return;
+      }
+      if (k.method !== "copy" && k.method !== "transferfields") return;
+      hit = r531Key(k.args[0] ?? null) === x;
+    });
+    return hit;
+  });
+}
+
+/**
+ * R896 P2: `swap-enum-member` and `swap-rec-xrec` change a value; refused where that value can
+ * freeze a loop (`valueSwapHangs`, the first two clauses of `clockSwapHangs`): in a loop's exit
+ * parts, or feeding a write the exit reads (repros SEM1, SRX1).
+ */
+function r896ValueSwap(node: ALSyntaxNode, ctx: SemanticContext, op: string | undefined): boolean {
+  if (!r896P2Seam.on) return false;
+  if (op !== "lethal.swap-enum-member" && op !== "lethal.swap-rec-xrec") return false;
+  return valueSwapHangs(node, ctx);
+}
+
+/** R896 P5: the cursor calls that make a loop condition about W's set. */
+const R896_COND: ReadonlySet<string> = new Set([
+  "find",
+  "findfirst",
+  "findlast",
+  "findset",
+  "isempty",
+  "count",
+]);
+
+/** R896 P5: is `m` a record method (the R-531 lists)? Read at call time: the sets are declared below. */
+function r896RecordMethod(m: string): boolean {
+  return [R531_BUILTIN, R531_DEL, R531_MOD, R531_MARKS].some((s) => s.has(m));
+}
+
+/**
+ * R896 P5: any operator on a record call on X inside a cursor-condition loop on another variable W
+ * of the same table (`while not W.IsEmpty() do`, no `Next` in the condition), when R-531 finds no
+ * consumer in the loop. The loop's progress is then a side effect through X (a trigger, a
+ * `Validate`), which no rule sees, so any change to X's calls can stop it (repro SMF3).
+ */
+function r896InvisibleProgress(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+  if (!r896P5Seam.on || !r696IsCall(node)) return false;
+  const c = r531Call(node);
+  if (c === null) return false;
+  // A receiver-less call is on the implicit record only when it names a record method
+  // (`Message`, `Sleep` or a local helper is not one).
+  if (c.recv === null && !r896RecordMethod(c.method)) return false;
+  const loops = r896BodyLoops(node);
+  if (loops.length === 0) return false;
+  const t = resolveReceiverTable(node, ctx);
+  if (t === null) return false;
+  const recv = c.recv ?? "";
+  return loops.some(({ loop }) => {
+    let next = false;
+    let other = false;
+    for (const p of loopConditionParts(loop))
+      visitAll(p, (x) => {
+        // a bare `X.Count` (no parentheses) is a `member_expression` that `r531Call` reads
+        if (!r696IsCall(x) && x.rawKind !== "member_expression") return;
+        const k = r531Call(x);
+        if (k === null) return;
+        if (k.method === "next") next = true;
+        if (!R896_COND.has(k.method) || (k.recv ?? "") === recv) return;
+        const wt =
+          x.rawKind === "member_expression"
+            ? (r696Table(x, ctx)?.name ?? null)
+            : resolveReceiverTable(x, ctx);
+        if (wt !== null && normalizeAlName(wt) === normalizeAlName(t)) other = true;
+      });
+    if (next || !other) return false;
+    const a = r531Analyze(loop, ctx);
+    return a === null || a.consumers.length === 0;
+  });
+}
+
+/**
+ * R896 P6: `remove-testfield` where the TestField is its loop's only way out: the condition reads no
+ * name and calls nothing (`until false`), and the body holds no other exit (`exitsLoop`, or a second
+ * `TestField` outside any `asserterror`). Without the TestField's error the loop never ends (repro RTF1).
+ */
+function r896TestFieldOnlyExit(node: ALSyntaxNode, op: string | undefined): boolean {
+  if (!r896P6Seam.on || op !== "lethal.remove-testfield") return false;
+  return r896BodyLoops(node).some(({ loop, body }) => {
+    let names = false;
+    for (const p of loopConditionParts(loop))
+      visitAll(p, (x) => {
+        if (isIdentifierLike(x) || x.rawKind === "call_expression") names = true;
+      });
+    if (names) return false;
+    let exit = false;
+    visitAll(body, (x) => {
+      if (exit) return;
+      if (exitsLoop(x, loop)) exit = true;
+      else if (x.startIndex !== node.startIndex && r696IsCall(x)) {
+        exit = r531Call(x)?.method === "testfield" && !r896UnderAssertError(x, loop);
+      }
+    });
+    return !exit;
+  });
+}
+
+/** R896 P6: does an `asserterror` between `n` and `stop` catch `n`'s error? */
+function r896UnderAssertError(n: ALSyntaxNode, stop: ALSyntaxNode): boolean {
+  for (let a = n.parent; a !== null && !samePos(a, stop); a = a.parent)
+    if (a.rawKind === "asserterror_statement") return true;
   return false;
 }
 
