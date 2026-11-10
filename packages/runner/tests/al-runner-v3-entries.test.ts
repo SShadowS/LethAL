@@ -4986,6 +4986,12 @@ describe("R790: the speculative baseline", () => {
 });
 
 describe("R907: --no-client", () => {
+  test("R907: serve never passes --skip-after-timeout, even when the help listed it", async () => {
+    const r = await readyRig({ serve: { rows: killsM1 } });
+    (r.b as unknown as { skipAfterTimeoutLearned: boolean }).skipAfterTimeoutLearned = true;
+    expect(r.b.skipAfterTimeout).toBe(false);
+  });
+
   test("on: every runTests request carries noClient: true", async () => {
     const r = await readyRig({ serve: { rows: killsM1 }, extra: { noClient: true } });
     await r.b.activate("M0001");
@@ -5679,6 +5685,22 @@ describe("R895: stop a request at its first timeout row", () => {
       expect(r.serve.requests.filter((q) => q.body.runSelectedOnly === true)).toHaveLength(1);
     });
 
+    test("R907: noClient on: the alone (runSelectedOnly) request carries noClient: true too", async () => {
+      const r = await readyRig({
+        serve: { rows: hangsA },
+        suite: SUITE2,
+        mutants: ["M0001"],
+        seams: retired,
+        extra: { noClient: true },
+      });
+      await r.b.activate("M0001");
+      const n0 = r.serve.requests.length;
+      expect((await r.b.run(B, OPTS)).outcome).toBe("pass");
+      const alone = r.serve.requests.slice(n0).filter((q) => q.body.runSelectedOnly === true);
+      expect(alone).toHaveLength(1);
+      for (const q of r.serve.requests) expect(q.body.noClient).toBe(true);
+    });
+
     test("a timeout in that alone fetch is a timeout verdict", async () => {
       const rows: RowsFn = (m, cu, d, n) =>
         m === "M0001" && cu === CU
@@ -5763,6 +5785,21 @@ describe("R895: stop a request at its first timeout row", () => {
       expect((await r.b.run(C, OPTS)).outcome).toBe("pass");
       // B and C were re-sent after the cut and stood in the prefetch: no alone fetch, no new request.
       expect(r.serve.requests).toHaveLength(n);
+    });
+
+    test("R907: noClient on, isolation method: every request on the method daemon carries noClient: true", async () => {
+      const r = await readyRig({
+        extra: { isolation: "method", noClient: true },
+        serve: { rows: hangsA },
+        suite: SUITE2,
+        mutants: ["M0001"],
+        seams: retired,
+      });
+      await r.b.activate("M0001");
+      expect((await r.b.run(A, OPTS)).outcome).toBe("timeout");
+      expect((await r.b.run(B, OPTS)).outcome).toBe("pass");
+      expect(r.serve.requests.length).toBeGreaterThan(0);
+      for (const q of r.serve.requests) expect(q.body.noClient).toBe(true);
     });
 
     test("isolation auto, one codeunit switched to method: a cut in the other codeunit fetches alone on that codeunit's own daemon", async () => {

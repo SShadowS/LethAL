@@ -146,12 +146,24 @@ describe("validity.executionContexts (R60, widened by R69 Phase 2 Task 5)", () =
     expect(ctx).not.toHaveProperty("noClient");
   });
 
-  test("R907: a v3 no-client run's console prints the non-GUI line and not the v3 GUI line", () => {
+  test("R907: a v3 no-client run's console prints only the v3 no-client line, not BC's line or the v3 GUI line", () => {
     const text = renderConsole(
       build({ caps: CAPS_AL_RUNNER, runnerBuild: { ...NO_CLIENT_BUILD, noClient: true } }),
     );
-    expect(text).toContain("NON-GUI EXECUTION");
+    expect(text).toContain("NON-GUI EXECUTION (al-runner v3, no client): 1 verdict(s)");
+    expect(text).toContain("not a web-service session");
+    expect(text).not.toContain("NON-GUI EXECUTION:");
+    expect(text).not.toContain("Page.RunModal ERRORS");
     expect(text).not.toContain("GUI EXECUTION (al-runner v3)");
+  });
+
+  test("R907: a bcdev run prints BC's line only; a default v3 run prints the GUI line only", () => {
+    const bc = renderConsole(build());
+    expect(bc).toContain("NON-GUI EXECUTION:");
+    expect(bc).not.toContain("al-runner v3, no client");
+    const v3 = renderConsole(build({ caps: CAPS_AL_RUNNER, runnerBuild: NO_CLIENT_BUILD }));
+    expect(v3).toContain("GUI EXECUTION (al-runner v3)");
+    expect(v3).not.toContain("NON-GUI EXECUTION");
   });
 
   test("R895: a bcdev run's console keeps the non-GUI line and prints no v3 GUI line", () => {

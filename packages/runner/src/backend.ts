@@ -478,6 +478,11 @@ export interface ExecutionBackend {
    */
   readonly noClient?: boolean;
   /**
+   * R907: one-shot mutant calls pass `--skip-after-timeout` (the build lists it). In `runner_build`,
+   * so a session with it and one without it lend each other nothing. Absent counts as false.
+   */
+  readonly skipAfterTimeout?: boolean;
+  /**
    * R890: `alRunnerV3.isolation: "method"`: every test runs alone (as `isolatesTests`) under
    * al-runner's codeunit isolation, so a fresh codeunit per test, as BC's one-method runner.
    * Absent counts as false. In `runner_build` like `isolatesTests`.

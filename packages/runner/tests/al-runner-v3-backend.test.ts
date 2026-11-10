@@ -26,6 +26,7 @@ import {
   type AlRunnerV3Config,
   AlRunnerV3DependencyMissingError,
   AlRunnerV3DependencySkippedError,
+  AlRunnerV3NoClientUnsupportedError,
   AlRunnerV3NoTestRanError,
   AlRunnerV3ResourceSelectorRefusedError,
   AlRunnerV3ReusedBaselineUnclassifiedError,
@@ -1450,8 +1451,8 @@ describe("R885: demo data, on the one-shot path", () => {
     expect(v3CallArgv(a)).not.toContain("--skip-after-timeout");
   });
 
-  test("R907 a one-shot call carries --skip-after-timeout exactly when the build's help lists it; a failed help call says so once", async () => {
-    const run = async (help: string) => {
+  test("R907 a one-shot MUTANT call carries --skip-after-timeout exactly when the build's help lists it, never the baseline call; a failed help call says so once", async () => {
+    const run = async (help: string, mutant: string | null) => {
       const l = await layout();
       const v3 = fakeV3(allPass, { help });
       const b = backendOf(l, v3.spawn, fakeAlc().io);
@@ -1460,17 +1461,46 @@ describe("R885: demo data, on the one-shot path", () => {
       await b.learnSkipAfterTimeout();
       await b.learnSkipAfterTimeout();
       await b.deploy(l.batch);
-      await b.activate("M0002");
+      await b.activate(mutant);
       await b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
-      return { argv: v3.calls[0] ?? [], notes };
+      return { argv: v3.calls[0] ?? [], notes, tag: b.skipAfterTimeout };
     };
-    expect((await run("  --skip-after-timeout  stop\n")).argv).toContain("--skip-after-timeout");
-    const no = await run("  --test-timeout-secs\n");
+    const listed = "  --skip-after-timeout  stop\n";
+    const mutantCall = await run(listed, "M0002");
+    expect(mutantCall.argv).toContain("--skip-after-timeout");
+    expect(mutantCall.tag).toBe(true);
+    // The baseline call has no mutant active: a Sleep test stopped at the limit would leave the
+    // later tests of its codeunit not run, counted refused at baseline.
+    const baseline = await run(listed, null);
+    expect(baseline.argv).not.toContain("--skip-after-timeout");
+    expect(baseline.tag).toBe(true);
+    const no = await run("  --test-timeout-secs\n", "M0002");
     expect(no.argv).not.toContain("--skip-after-timeout");
+    expect(no.tag).toBe(false);
     expect(no.notes).toEqual([]);
-    const failed = await run("fail");
+    const failed = await run("fail", "M0002");
     expect(failed.argv).not.toContain("--skip-after-timeout");
+    expect(failed.tag).toBe(false);
     expect(failed.notes).toEqual(["al-runner-v3-skip-after-timeout-unknown"]);
+  });
+
+  test("R907 status(): noClient on needs the help to list --no-client; a help that does not, or a failed help call, throws a typed error", async () => {
+    const statusOf = async (extra: Partial<AlRunnerV3Config>, help: string) => {
+      const l = await layout();
+      const b = backendOf(l, fakeV3(allPass, { help }).spawn, fakeAlc().io, extra);
+      return await b.status().then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+    };
+    expect(await statusOf({ noClient: true }, "  --no-client  x\n")).toBeUndefined();
+    const unlisted = await statusOf({ noClient: true }, "  --test-timeout-secs\n");
+    expect(unlisted).toBeInstanceOf(AlRunnerV3NoClientUnsupportedError);
+    expect(String((unlisted as Error).message)).toContain("alRunnerV3.noClient");
+    expect(await statusOf({ noClient: true }, "fail")).toBeInstanceOf(
+      AlRunnerV3NoClientUnsupportedError,
+    );
+    expect(await statusOf({ noClient: false }, "  --test-timeout-secs\n")).toBeUndefined();
   });
 
   test("R907 a one-shot row's flagged: true reaches a pass verdict; absent or false does not", () => {

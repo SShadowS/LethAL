@@ -619,7 +619,9 @@ describe("sessionFingerprint (R47)", () => {
   // R907: in the digest only when on, so every digest recorded before it is unchanged.
   test("noClient on changes it; off (or absent) equals the digest without the key", () => {
     expect(sessionFingerprint({ ...base, noClient: true })).not.toBe(sessionFingerprint(base));
-    expect(sessionFingerprint({ ...base })).toBe(sessionFingerprint(base));
+    // Pinned: the digest of `base` before R907. An off case that put a key in the digest moves it.
+    const PINNED_BASE = "727533a8a3744ab249903f618485a8a8f6e5ead525e74af46aa74e845862068f";
+    expect(sessionFingerprint(base)).toBe(PINNED_BASE);
     expect(sessionFingerprint({ ...base, isolateTests: true })).not.toBe(
       sessionFingerprint({ ...base, noClient: true }),
     );
@@ -6174,9 +6176,11 @@ describe("GitHub #49: --resume keeps stopEvidence", () => {
 describe("R907: --resume and runner_build follow noClient", () => {
   class V3Stub extends CountingBackend {
     readonly noClient: boolean;
-    constructor(noClient: boolean, abortAfter?: number) {
+    readonly skipAfterTimeout: boolean;
+    constructor(noClient: boolean, abortAfter?: number, skipAfterTimeout = false) {
       super("pass", abortAfter);
       this.noClient = noClient;
+      this.skipAfterTimeout = skipAfterTimeout;
       (this as { fetchPublishedAppPackage?: unknown }).fetchPublishedAppPackage = undefined;
     }
     override capabilities(): BackendCapabilities {
@@ -6238,9 +6242,46 @@ describe("R907: --resume and runner_build follow noClient", () => {
     ).rejects.toThrow(/lent only to the same build/);
   });
 
+  test("noClient on, then --resume-run <id> with noClient off: refused (runner build differs)", async () => {
+    const { dirs, store } = await unfinished(true);
+    const id = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+    await expect(
+      runSession({ backend: new V3Stub(false), store, ...dirs, selectorIds, resume: id }),
+    ).rejects.toThrow(/lent only to the same build/);
+  });
+
+  test("noClient on, then --resume with noClient off: the unfinished run is not found", async () => {
+    const { dirs, store } = await unfinished(true);
+    await expect(
+      runSession({
+        backend: new V3Stub(false),
+        store,
+        ...dirs,
+        selectorIds,
+        resume: "last",
+      }),
+    ).rejects.toThrow(/found no unfinished run to resume/);
+  });
+
   test("the stored runner build ends in ' no-client' exactly when noClient is on", async () => {
     expect(buildOf((await unfinished(true)).store)).toContain(" no-client");
     expect(buildOf((await unfinished(false)).store)).not.toContain("no-client");
+  });
+
+  test("R907: the stored runner build carries ' skip-after-timeout' exactly when the backend says so", async () => {
+    const run = async (skip: boolean) => {
+      const dirs = await makeProject();
+      const store = new ResultsStore(":memory:");
+      await runSession({
+        backend: new V3Stub(false, 1, skip),
+        store,
+        ...dirs,
+        selectorIds,
+      });
+      return buildOf(store);
+    };
+    expect(await run(true)).toContain(" skip-after-timeout");
+    expect(await run(false)).not.toContain("skip-after-timeout");
   });
 });
 

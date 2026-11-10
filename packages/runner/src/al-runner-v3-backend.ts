@@ -488,6 +488,23 @@ export class AlRunnerV3ResourceSelectorRefusedError extends Error {
 }
 
 /**
+ * R907: `alRunnerV3.noClient` is on, but the running build's `test --help` does not list
+ * `--no-client` (or the help call failed). Serve would send the request field to a build that may
+ * ignore it, so the run would measure the wrong thing; refused before any run.
+ */
+export class AlRunnerV3NoClientUnsupportedError extends Error {
+  constructor(
+    readonly build: string,
+    readonly why: string,
+  ) {
+    super(
+      `al-runner-v3-no-client-unsupported: "alRunnerV3.noClient" is true, but ${build} cannot be shown to support --no-client (${why}). Use a build whose \`test --help\` lists --no-client, or set "alRunnerV3.noClient" to false (R907).`,
+    );
+    this.name = "AlRunnerV3NoClientUnsupportedError";
+  }
+}
+
+/**
  * R761: an explicit `"transport": "serve-entries"` with a test METHOD name holding "." (upstream
  * #5798: the entries answer for it has no `codeunit`/`method`, measured on N1E). Refused before any
  * test runs, by name, instead of failing mid-session.
@@ -1552,6 +1569,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   get noClient(): boolean {
     return this.cfg.noClient ?? V3_NO_CLIENT_DEFAULT;
   }
+  /** R907: see `ExecutionBackend.skipAfterTimeout`. Serve (entries) never passes it. */
+  get skipAfterTimeout(): boolean {
+    return this.skipAfterTimeoutLearned && !this.entries;
+  }
   /** R890: see `ExecutionBackend.methodIsolation`. */
   get methodIsolation(): boolean {
     return this.cfg.isolation === "method";
@@ -1988,6 +2009,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       };
     }
     await this.learnSkipAfterTimeout(); // R907
+    if (this.noClient && !this.noClientListed) {
+      throw new AlRunnerV3NoClientUnsupportedError(
+        `${this.cfg.alRunnerPath} (${reported})`,
+        this.helpFailed
+          ? "the `test --help` call failed"
+          : "its `test --help` does not list --no-client",
+      );
+    }
     // T17 and M8: `<deps>`'s System Application must exist and equal bcVersion, here as in the CLI.
     try {
       await assertBcVersionMatchesPackages(this.cfg.packagesDir, this.cfg.bcVersion);
@@ -2104,7 +2133,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const covered = pinnedDefectCoverage(this.contract, reported, binarySha256);
     if (covered !== undefined) console.warn(covered.line);
     console.warn(
-      `[lethal] al-runner-v3 one-shot calls ${this.skipAfterTimeout ? "carry" : "do not carry"} --skip-after-timeout${this.skipAfterTimeout ? "" : ` (${this.skipAfterTimeoutWhy})`} (R907)`,
+      `[lethal] al-runner-v3 one-shot calls ${this.skipAfterTimeoutLearned ? "carry" : "do not carry"} --skip-after-timeout${this.skipAfterTimeoutLearned ? "" : ` (${this.skipAfterTimeoutWhy})`} (R907)`,
     );
     for (const line of v3DefectWarnings(this.contract, { ...kind, muted: covered?.muted }))
       console.warn(line);
@@ -2180,7 +2209,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * ONE-SHOT call passes it (after a stop, the rest of that codeunit is reported not run). Older
    * builds reject unknown flags, hence the check. Serve is unaffected: it has its own cut (R897).
    */
-  private skipAfterTimeout = false;
+  private skipAfterTimeoutLearned = false;
   private skipAfterTimeoutWhy = "not checked";
 
   /** R907: reads `test --help` once per session (status() calls it). A failure is false, not a throw. */
@@ -2190,7 +2219,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       (e: unknown) => ({ exitCode: -1, stdout: "", stderr: String(e) }),
     );
     if (res.exitCode !== 0) {
-      this.skipAfterTimeout = false;
+      this.skipAfterTimeoutLearned = false;
+      this.helpFailed = true;
       this.skipAfterTimeoutWhy = "the `test --help` call failed";
       this.notify(
         "al-runner-v3-skip-after-timeout-unknown",
@@ -2198,9 +2228,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       );
       return;
     }
-    this.skipAfterTimeout = `${res.stdout}\n${res.stderr}`.includes("--skip-after-timeout");
-    this.skipAfterTimeoutWhy = this.skipAfterTimeout ? "" : "this build does not list it";
+    const help = `${res.stdout}\n${res.stderr}`;
+    this.skipAfterTimeoutLearned = help.includes("--skip-after-timeout");
+    this.skipAfterTimeoutWhy = this.skipAfterTimeoutLearned ? "" : "this build does not list it";
+    this.noClientListed = help.includes("--no-client");
   }
+  /** R907: whether the same `test --help` lists `--no-client`; false until learned or if the call failed. */
+  private noClientListed = false;
+  private helpFailed = false;
   /**
    * R886: the `--dotnet-sidecar` file of this session. A named file is set at construction (a
    * missing one refuses in `status()`); the pinned build's own is set by `status()`, which reads
@@ -2999,6 +3034,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     readonly beforeSpawn?: () => Promise<void>;
     readonly signal?: AbortSignal;
     readonly onlyTest?: string;
+    /** R907: a mutant is active for this call (`--skip-after-timeout` only then). Absent: none. */
+    readonly mutantActive?: boolean;
   }): Promise<SpawnedCall | { readonly spawnError: string; readonly wallMs: number }> {
     const argv = v3CallArgv({
       alRunnerPath: absToolPath(this.cfg.alRunnerPath),
@@ -3012,7 +3049,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       bcVersion: this.cfg.bcVersion,
       noClient: this.noClient,
       noDownload: this.noDownload(),
-      skipAfterTimeout: this.skipAfterTimeout,
+      // R907: only a call with a mutant active; a baseline Sleep test stopped at the limit would
+      // otherwise leave its codeunit's later tests not run, counted refused at baseline.
+      skipAfterTimeout: this.skipAfterTimeout && o.mutantActive === true,
       ...(this.sidecarPath !== undefined ? { dotnetSidecar: this.sidecarPath } : {}),
       symbols: this.cfg.preprocessorSymbols ?? [],
       ...(o.coverageJson !== undefined ? { coverageJson: resolve(o.coverageJson) } : {}),
@@ -3968,6 +4007,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         // R652: the last await before the spawn; nothing below reads the disk before v3 does.
         beforeSpawn: () => this.checkBound(lane),
         ...(onlyTest !== undefined ? { onlyTest } : {}),
+        mutantActive: !this.isBaselineCall(lane),
       });
       if ("spawnError" in made) {
         return {

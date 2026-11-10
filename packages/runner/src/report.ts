@@ -2465,8 +2465,8 @@ function measuredExecutionContext(
   }
   // R60. Split by backend rather than asserted once: R57 measured the fenced `RunMutant` path
   // (`GuiAllowed=No`, `ClientType=ODataV4`). R895/R-901 measured al-runner v3: a test there answers
-  // `GuiAllowed()` Yes and a Confirm is raised, the CLIENT branch, the opposite of the fenced path; it
-  // has no option to run without a client (upstream aldevtools #7564).
+  // `GuiAllowed()` Yes and a Confirm is raised, the CLIENT branch, the opposite of the fenced path;
+  // running without a client is the opt-in `alRunnerV3.noClient` (R-907, upstream aldevtools #7564).
   if (caps.kind === "al-runner-v3") {
     if (noClient) {
       return {
@@ -2474,9 +2474,8 @@ function measuredExecutionContext(
         clientType: "al-runner v3 CLI, no client",
         basis:
           "measured on al-runner v3 with --no-client (R907, R-907): GuiAllowed() answers false and " +
-          "Confirm, StrMenu and a page run raise CallbackNotAllowed as on BC's fenced path; al-runner " +
-          "measured these on BC for a page background task worker, so a test that passes through them " +
-          "is a flagged pass",
+          "Confirm, StrMenu and a page run raise CallbackNotAllowed as on BC's fenced path; a test " +
+          "that passes through them is a flagged pass",
       };
     }
     return {
@@ -2485,7 +2484,7 @@ function measuredExecutionContext(
       basis:
         "measured on al-runner v3 (R895, R-901): a test's GuiAllowed() answers Yes and a Confirm is " +
         "raised to the test's handler, so code behind GuiAllowed runs its client branch, unlike " +
-        "BC's fenced path (GuiAllowed=No); al-runner has no option to run without a client",
+        "BC's fenced path (GuiAllowed=No); to run without a client set alRunnerV3.noClient (R-907)",
     };
   }
   // R654: bcdev is the only other backend (the .NET al-runner's "al-runner CLI" arm is gone).
@@ -3403,11 +3402,16 @@ function summarizeRunnerContexts(
   runner: RunnerKind,
   /** R895: only the contexts that ran with (true) or without (false) a client; absent: all. */
   guiAllowed?: boolean,
+  /** R907: true keeps only al-runner v3 entries (their client type starts "al-runner v3"), false drops them; absent: all. */
+  v3?: boolean,
 ):
   | { readonly verdictCount: number; readonly clientType: string; readonly basisText: string }
   | undefined {
   const matches = contexts.filter(
-    (c) => c.runner === runner && (guiAllowed === undefined || c.guiAllowed === guiAllowed),
+    (c) =>
+      c.runner === runner &&
+      (guiAllowed === undefined || c.guiAllowed === guiAllowed) &&
+      (v3 === undefined || c.clientType.startsWith("al-runner v3") === v3),
   );
   if (matches.length === 0) return undefined;
   const [first] = matches;
@@ -3824,14 +3828,21 @@ export function renderConsole(r: SessionReport): string {
   // block below, which states the opposite fact for that runner.
   // Aggregated across EVERY "fenced" entry, not just the first — see `summarizeRunnerContexts`.
   // R895: only the contexts that really ran without a client; al-runner v3's run with one (below).
-  const fenced = summarizeRunnerContexts(r.validity.executionContexts, "fenced", false);
+  // R907: BC's own measured behaviour only; a v3 no-client entry has its own line below.
+  const fenced = summarizeRunnerContexts(r.validity.executionContexts, "fenced", false, false);
   if (fenced !== undefined && fenced.verdictCount > 0) {
     lines.push(
       `NON-GUI EXECUTION: ${fenced.verdictCount} verdict(s) here describe the app's non-interactive branch (GuiAllowed=No, ClientType=${fenced.clientType}) — ${fenced.basisText}. Code reachable only when a user can be prompted never runs on this path, so its mutants cannot be killed here and land as survived or no-coverage — neither of which is a statement about your tests. Confirm() returns its DEFAULT rather than skipping the branch; Page.RunModal ERRORS. Measured on Continia Document Output: 0.3% of mutation sites (62 of 19,850).`,
     );
   }
-  // R895: al-runner v3 runs the CLIENT branch (measured), the opposite of BC's fenced path, and has no
-  // option to run without one (upstream aldevtools #7564). Say so, so a v3 verdict is not read as BC's.
+  const v3NoClient = summarizeRunnerContexts(r.validity.executionContexts, "fenced", false, true);
+  if (v3NoClient !== undefined && v3NoClient.verdictCount > 0) {
+    lines.push(
+      `NON-GUI EXECUTION (al-runner v3, no client): ${v3NoClient.verdictCount} verdict(s) here ran without a client (GuiAllowed=No, ClientType=${v3NoClient.clientType}) — ${v3NoClient.basisText}. al-runner measured these answers on BC for a page background task worker, not a web-service session, and refuses calls it has not measured, so some tests do not run.`,
+    );
+  }
+  // R895: al-runner v3 runs the CLIENT branch (measured), the opposite of BC's fenced path, unless
+  // `alRunnerV3.noClient` is on (R-907). Say so, so a v3 verdict is not read as BC's.
   const v3Gui = summarizeRunnerContexts(r.validity.executionContexts, "fenced", true);
   if (v3Gui !== undefined && v3Gui.verdictCount > 0) {
     lines.push(
