@@ -32,6 +32,8 @@
  * localization where R35's English regex does not (R66) — but that is REASONED, not measured, and
  * must not be claimed as a property until a localized server has been probed.
  */
+import { normalizeAlName, parseAL, visit, wrapRoot } from "@lethal/engine";
+import { OPENING_METHODS } from "./testpage-scan";
 
 /**
  * BC's TestPage refusal as it appears in a failing test line's `message`.
@@ -61,6 +63,102 @@ export function describeTestPageUnsupported(failureText: string | undefined): st
   const quoted = match[0]?.trim();
   if (quoted === undefined || quoted === "") return undefined;
   return `${TESTPAGE_DIAGNOSIS} BC's own words: "${quoted}"`;
+}
+
+/**
+ * R909: Linux BC reports the same refusal as a plain CLR exception with NO .NET frame:
+ *
+ *     Unexpected CLR exception thrown.: System.NotSupportedException: Specified method is not supported.
+ *     <Object>(CodeUnit <id>).<Proc> line <K> - <App> by <Publisher> version <v>;Test Runner - Mgt(...)...
+ *
+ * That message alone is NOT a page refusal (any CLR code can throw it), so it is named only when the
+ * TOP AL frame resolves, in source LethAL has, to a page-opening call. A frame in code LethAL has no
+ * source for (a dependency) stays unnamed. Like the Windows case this is a note, never a verdict.
+ */
+const LINUX_CLR_MESSAGE =
+  "Unexpected CLR exception thrown.: System.NotSupportedException: Specified method is not supported.";
+/** `Name(Kind id).Proc line K`; `Proc` may be `OnRun(Trigger)`. Only the first frame is read. */
+const TOP_FRAME = /^(.*?)\(([A-Za-z]+) (\d+)\)\.(.+?) line (\d+)\b/;
+/** BC's line is relative to the procedure's first line and runs one or two off (measured, R-908). */
+const WINDOW_BEFORE = 2;
+const WINDOW_AFTER = 1;
+/** Opening calls on any receiver (the reader's own list, plus `RunModal`); `Run` only on `Page`. */
+const LINUX_OPENERS = new Set([...OPENING_METHODS, "runmodal"]);
+
+/** The source texts of the files that declare object `kind` `id`: the test app's and the target's. */
+export type FrameSourceLookup = (kind: string, id: number) => readonly string[];
+
+/** A lookup over `texts`. A cheap text filter picks the files to parse; only those are parsed. */
+export function frameSourceLookup(texts: readonly string[]): FrameSourceLookup {
+  return (kind, id) =>
+    texts.filter((t) => new RegExp(`^[ \\t]*${kind}[ \\t]+${id}\\b`, "im").test(t));
+}
+
+/** Each opening call's row inside the procedure or trigger `proc`, minus the row of its name. */
+function openingCallOffsets(source: string, kind: string, id: number, proc: string): number[] {
+  const wantTrigger = proc.endsWith("(Trigger)");
+  const want = normalizeAlName(wantTrigger ? proc.slice(0, -"(Trigger)".length) : proc);
+  const out: number[] = [];
+  const root = wrapRoot(parseAL(source));
+  visit(root, (obj) => {
+    if (obj.rawKind !== `${kind.toLowerCase()}_declaration`) return;
+    if (Number(obj.namedChildren.find((c) => c.rawKind === "integer")?.text) !== id) return;
+    visit(obj, (m) => {
+      if (m.rawKind !== (wantTrigger ? "trigger_declaration" : "procedure")) return;
+      const name = m.namedChildren.find(
+        (c) => c.rawKind === "identifier" || c.rawKind === "quoted_identifier",
+      );
+      if (name === undefined || normalizeAlName(name.text.replace(/^"|"$/g, "")) !== want) return;
+      visit(m, (c) => {
+        if (c.rawKind !== "call_expression") return;
+        const fn = c.childForFieldName("function");
+        if (fn === null || fn.rawKind !== "member_expression") return;
+        const [recv, member] = fn.namedChildren;
+        const method = normalizeAlName(member?.text ?? "");
+        const opens =
+          LINUX_OPENERS.has(method) ||
+          (method === "run" && normalizeAlName(recv?.text ?? "") === "page");
+        if (opens) out.push(c.startPosition.row - name.startPosition.row);
+      });
+    });
+  });
+  return out;
+}
+
+/**
+ * R909: names Linux BC's page-open failure, or returns `undefined`. Needs the exact CLR message on
+ * line one AND a top AL frame whose procedure (or trigger) has a page-opening call within
+ * K-2..K+1 lines of its first line, read from the parse. No source for the frame: `undefined`.
+ */
+export function describeLinuxPageRefusal(
+  failureText: string | undefined,
+  lookup: FrameSourceLookup | undefined,
+): string | undefined {
+  if (failureText === undefined || lookup === undefined) return undefined;
+  const [first, second] = failureText.split("\n");
+  if (first?.trim() !== LINUX_CLR_MESSAGE || second === undefined) return undefined;
+  const frame = (second.split(";")[0] ?? "").trim();
+  const [, , kind, idText, proc, lineText] = TOP_FRAME.exec(frame) ?? [];
+  if (kind === undefined || idText === undefined || proc === undefined || lineText === undefined)
+    return undefined;
+  const id = Number(idText);
+  const k = Number(lineText);
+  for (const text of lookup(kind, id)) {
+    const hit = openingCallOffsets(text, kind, id, proc).some(
+      (o) => o >= k - WINDOW_BEFORE && o <= k + WINDOW_AFTER,
+    );
+    if (hit)
+      return `${TESTPAGE_DIAGNOSIS} BC's own words: "${LINUX_CLR_MESSAGE}" Top frame: ${frame.split(" - ")[0]}`;
+  }
+  return undefined;
+}
+
+/** Windows text first (it needs no source), then the Linux shape; the one both call sites use. */
+export function describeTestPageRefusal(
+  failureText: string | undefined,
+  lookup: FrameSourceLookup | undefined,
+): string | undefined {
+  return describeTestPageUnsupported(failureText) ?? describeLinuxPageRefusal(failureText, lookup);
 }
 
 /**

@@ -4111,6 +4111,67 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
       await classify(testPageNotRunMessage("Sandbox Tests.UnsupportedTest calls Card.OpenView")),
     ).toEqual(["tests-testpage-refused"]);
   });
+  // R909: Linux BC's page-open failure is a bare CLR exception with an AL top frame. It is named
+  // only when that frame is a page call in the test app's source; the same text at any other
+  // statement is an ordinary failure.
+  describe("R909 — Linux page-open frame", () => {
+    const LINUX_CLR =
+      "Unexpected CLR exception thrown.: System.NotSupportedException: Specified method is not supported.";
+    const frameText = (line: number) =>
+      `${LINUX_CLR}\nSandbox Tests(CodeUnit 79100).UnsupportedTest line ${line} - Demo by Pub version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26`;
+    const testAl = (stmt: string) => `codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure GreenTest()
+    begin
+    end;
+
+    [Test]
+    procedure UnsupportedTest()
+    begin
+        ${stmt}
+    end;
+}
+`;
+    const run = async (stmt: string) => {
+      const dirs = await project(testAl(stmt));
+      const backend = new RecordingBackend(
+        { ...FENCED, kind: "al-runner-v3", authoritative: false },
+        frameText(2),
+      );
+      const events: RunEvent[] = [];
+      const report = await runSession({
+        backend,
+        store: new ResultsStore(":memory:"),
+        ...dirs,
+        selectorIds,
+        emit: [createEmitter([(e) => events.push(e)])],
+      });
+      const finished = events.find((e) => e.type === "baseline-batch-finished");
+      if (finished === undefined || finished.type !== "baseline-batch-finished")
+        throw new Error("no baseline-batch-finished event");
+      return {
+        report,
+        classification: finished.verdicts.find((v) => v.name === "Sandbox Tests.UnsupportedTest")
+          ?.classification,
+      };
+    };
+    test("a top frame at a page call is classified and diagnosed", async () => {
+      const { report, classification } = await run("Page.Run(50000);");
+      expect(classification).toEqual(["tests-testpage-unsupported"]);
+      expect(report.testPageUnsupported?.tests).toEqual(["Sandbox Tests.UnsupportedTest"]);
+      const noted = report.mutants.filter((m) => m.failureNote?.includes(LINUX_CLR));
+      expect(noted.length).toBeGreaterThan(0);
+    });
+    test("the same message at a non-page statement gets neither", async () => {
+      const { report, classification } = await run("Message('x');");
+      expect(classification).toEqual([]);
+      expect(report.testPageUnsupported).toBeUndefined();
+      expect(report.mutants.filter((m) => m.failureNote?.includes(LINUX_CLR))).toEqual([]);
+    });
+  });
 });
 describe("runSession — C3 batch app.json + full source copy", () => {
   test("batch dir gets app.json with bumped version + no-mutant files copied verbatim", async () => {

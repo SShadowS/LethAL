@@ -105,7 +105,6 @@ import {
   testAppHashFor,
 } from "./baseline-snapshot";
 import type { BaselineObservation, BaselineSnapshot } from "./baseline-snapshot";
-import { rewriteControlAddInPaths } from "./controladdin-paths";
 import { PublishFailedError } from "./bcdev-backend";
 import {
   MAX_ISOLATION_COMPILES,
@@ -126,6 +125,7 @@ import {
   resumableTestApp,
   sameClosedWorld,
 } from "./closed-world";
+import { rewriteControlAddInPaths } from "./controladdin-paths";
 import {
   type DependencyReportSourceRecord,
   dependencyReportReader,
@@ -331,7 +331,9 @@ import {
   scanTestPageModel,
 } from "./testpage-scan";
 import {
-  describeTestPageUnsupported,
+  type FrameSourceLookup,
+  describeTestPageRefusal,
+  frameSourceLookup,
   isTestPageNotRunMessage,
   testPageNotRunMessage,
 } from "./testpage-unsupported";
@@ -4825,6 +4827,8 @@ interface BatchScope {
    * TestPage. `dispatchUnmutated` never sends one. Absent or empty: nothing refused.
    */
   readonly testPageRefused?: ReadonlyMap<string, string>;
+  /** R909: the test app's and the target's source, to resolve a Linux page-open frame. */
+  readonly frameSource?: FrameSourceLookup;
   /**
    * R896: set (once per session, by `runSession`) when the backend runs `isolation: "auto"`.
    * `decided` turns true in the first batch whose baseline ran live; `resumedRunId` is the run a
@@ -5839,7 +5843,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       if (
         !bodyNeverRan &&
         didNotPassAtBaseline(b.verdict.outcome) &&
-        describeTestPageUnsupported(b.verdict.failureMessage) !== undefined
+        describeTestPageRefusal(b.verdict.failureMessage, scope.frameSource) !== undefined
       ) {
         classification.push("tests-testpage-unsupported");
       }
@@ -6355,7 +6359,8 @@ async function runSessionBody(
   // the per-test digests `lethal verify` compares against, recorded on the run row below.
   // (The parser was initialised before discovery, R403.)
   // R-371: ONE parse of the test sources, shared by the scan and the digests.
-  const testModel = buildTestAppModel(await readTestAppSources(cfg.testDir));
+  const testFiles = await readTestAppSources(cfg.testDir);
+  const testModel = buildTestAppModel(testFiles);
   const testPageRefused: ReadonlyMap<string, string> = isBcdev(caps.kind)
     ? scanTestPageModel(testModel, tests)
     : new Map();
@@ -6389,6 +6394,13 @@ async function runSessionBody(
   // (`SourceSnapshotUnreadableError`): every batch copies its files and `app.json` from this one
   // snapshot, so each compiles exactly the hashed bytes.
   const sourceSnapshot = cfg.source ?? (await readTargetSource(cfg.projectDir));
+  // R909: the sources a Linux page-open frame is resolved in (test app and target only).
+  const frameSource = frameSourceLookup([
+    ...testFiles.map((f) => f.text),
+    ...[...sourceSnapshot]
+      .filter(([p]) => p.toLowerCase().endsWith(".al"))
+      .map(([, b]) => b.toString("utf8")),
+  ]);
   // R738: the target's declared object ids, for the stale-member refusal at each baseline.
   const sessionTargetIds = targetObjectIdsOf(
     [...sourceSnapshot].map(([p, b]) => [p, b.toString("utf8")] as const),
@@ -7252,6 +7264,7 @@ async function runSessionBody(
       minMutantBudgetMs,
       baselineTimeoutMs,
       testPageRefused,
+      frameSource,
       ...(cfg.backend.isolationAuto === true
         ? { isolationAuto: { decided: false, resumedRunId: resumeState?.runId } }
         : {}),
@@ -8111,7 +8124,7 @@ async function runSessionBody(
           if (refusal !== undefined) {
             refusedThisBatch.set(name, refusal);
           }
-          const testPage = describeTestPageUnsupported(b.verdict.failureMessage);
+          const testPage = describeTestPageRefusal(b.verdict.failureMessage, frameSource);
           if (testPage !== undefined) {
             testPageThisBatch.set(name, testPage);
           }
