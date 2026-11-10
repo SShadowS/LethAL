@@ -40,6 +40,25 @@ describe("R905 slot class in the heavy-job guard", () => {
     expect(verdict(["other", "other"], true).refuse).toBe(true);
     expect(verdict(["other"], true).refuse).toBe(false);
   });
+  test("an unslotted job naming the BaseApp root holds the cap at two; an unslotted job elsewhere does not", () => {
+    const ps = (root: string) =>
+      parsePs(
+        [
+          "PID PPID PGID COMMAND",
+          "1 0 1 init",
+          "100 1 100 bun x.ts",
+          `200 1 200 bun scripts/corpus-snapshot.ts snapshot --root ${root}`,
+        ].join("\n"),
+      );
+    const onBaseApp = heavyVerdict(ps("/work/src/BC.History/BaseApp"), 100, [], 1, false, [
+      "other",
+    ]);
+    expect(onBaseApp.foreign.length).toBe(1);
+    expect(onBaseApp.refuse).toBe(true);
+    const elsewhere = heavyVerdict(ps("/work/src/DO"), 100, [], 1, false, ["other"]);
+    expect(elsewhere.foreign.length).toBe(1);
+    expect(elsewhere.refuse).toBe(false);
+  });
   test("three other-class slots held: a fourth is still refused (cap 3)", () => {
     expect(verdict(["other", "other", "other"]).refuse).toBe(true);
   });

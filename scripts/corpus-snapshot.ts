@@ -678,8 +678,9 @@ export function heavyVerdict(
   const foreign = [...jobs.values()];
   const otherBaseApp = baseAppSlots + baseAppJobs.size;
   // R905: two heavy jobs in all while any BaseApp-class job runs (this one, or a held slot whose
-  // class is baseapp or unknown); three only when none does.
-  const classBaseApp = selfBaseApp || slotClasses.some((c) => c !== "other");
+  // class is baseapp or unknown, or an unslotted job naming the BaseApp root); three only when none does.
+  const classBaseApp =
+    selfBaseApp || slotClasses.some((c) => c !== "other") || baseAppJobs.size > 0;
   const totalCap = classBaseApp ? BASEAPP_CAP : TOTAL_CAP;
   const totalRefuse = foreign.length + otherSlotsHeld >= totalCap;
   const baseAppRefuse = selfBaseApp && otherBaseApp >= BASEAPP_CAP;
