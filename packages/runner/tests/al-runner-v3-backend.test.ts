@@ -245,7 +245,11 @@ function fakeV3(
     const testDir = argv.at(-1) ?? "";
     const sel = await readFile(join(active, "MutationSelector.Codeunit.al"), "utf8");
     const activeId = /MutantId = '([^']+)'/.exec(sel)?.[1] ?? "";
-    const cu = Number(argv[argv.indexOf("--codeunit") + 1]);
+    const exactAt = argv.indexOf("--test-exact");
+    const cu =
+      exactAt >= 0
+        ? Number(/^Codeunit(\d+)\./.exec(argv[exactAt + 1] ?? "")?.[1])
+        : Number(argv[argv.indexOf("--codeunit") + 1]);
     const covAt = argv.indexOf("--coverage-json");
     const cov = opts.coverage?.(activeId, active, testDir);
     // R762 A: a call without the flag has nowhere to write it.
@@ -3841,5 +3845,92 @@ describe("R780: the cross-session test-app compile cache", () => {
     expect((await readdir(dir)).sort()).toEqual([2, 3, 4].map(key));
     expect(await store.has(key(1))).toBe(false);
     expect(await store.has(key(2))).toBe(true);
+  });
+});
+
+describe("R907: a ref left not run by a stopped earlier test runs alone", () => {
+  const stopped: FakeRow = {
+    method: "A",
+    status: "error",
+    notRun: true,
+    message: "Test exceeded 1s timeout.",
+  };
+  const cascade: FakeRow = {
+    method: "B",
+    status: "error",
+    notRun: true,
+    message:
+      "NotRun: out-of-scope: an earlier test of this codeunit (A) was stopped at the time limit, and --skip-after-timeout does not run the rest of the codeunit",
+  };
+  const FLAG = "  --skip-after-timeout  stop\n";
+  /** `aloneStatus` is B's row when it runs alone (`--test-exact`). */
+  async function setup(opts: {
+    help: string;
+    mutant: string | null;
+    aloneStatus?: "pass" | "fail";
+  }) {
+    const l = await layout();
+    const v3 = fakeV3(
+      (_id, argv) =>
+        argv.includes("--test-exact")
+          ? [{ method: "B", status: opts.aloneStatus ?? "pass" }]
+          : [stopped, cascade],
+      { help: opts.help, coverage: plainCoverage },
+    );
+    const b = backendOf(l, v3.spawn, fakeAlc().io);
+    await b.learnSkipAfterTimeout();
+    await b.deploy(l.batch);
+    await b.activate(opts.mutant);
+    if (opts.mutant !== null)
+      b.useCoveringBudgets(opts.mutant, [
+        { ref: ref("A"), budgetMs: 1000 },
+        { ref: ref("B"), budgetMs: 1000 },
+      ]);
+    const ask = (m: string) => b.run(ref(m), { coverage: "none", timeoutMs: 1000 });
+    return { v3, ask };
+  }
+  const alone = (calls: string[][]) => calls.filter((c) => c.includes("--test-exact"));
+
+  test("1: mutant, flag on: B runs alone (exact, no flag) and its verdict stands", async () => {
+    for (const status of ["pass", "fail"] as const) {
+      const { v3, ask } = await setup({ help: FLAG, mutant: "M0001", aloneStatus: status });
+      const v = await ask("B");
+      expect(v.outcome).toBe(status);
+      expect(v.refusedAfterStop).toBeUndefined();
+      const one = alone(v3.calls);
+      expect(one.length).toBe(1);
+      const argv = one[0] ?? [];
+      expect(argv[argv.indexOf("--test-exact") + 1]).toBe(`Codeunit${ref("B").codeunitId}.B`);
+      expect(argv).toContain("--run-selected-only");
+      expect(argv).not.toContain("--skip-after-timeout");
+      expect(v3.calls[0]).toContain("--skip-after-timeout");
+    }
+  });
+
+  test("2: flag off: no alone call, R639's refusedAfterStop as before", async () => {
+    const { v3, ask } = await setup({ help: "  --test-timeout-secs\n", mutant: "M0001" });
+    const v = await ask("B");
+    expect(alone(v3.calls)).toEqual([]);
+    expect([v.runnerRow, v.refusedAfterStop]).toEqual(["runner-refused", "A"]);
+  });
+
+  test("3: baseline: no alone call", async () => {
+    const { v3, ask } = await setup({ help: FLAG, mutant: null });
+    await ask("B");
+    expect(alone(v3.calls)).toEqual([]);
+  });
+
+  test("4: the stopped ref itself stays a timeout, no alone call", async () => {
+    const { v3, ask } = await setup({ help: FLAG, mutant: "M0001" });
+    const v = await ask("A");
+    expect(v.outcome).toBe("timeout");
+    expect(alone(v3.calls)).toEqual([]);
+  });
+
+  test("5: once per (mutant, ref)", async () => {
+    const { v3, ask } = await setup({ help: FLAG, mutant: "M0001" });
+    await ask("B");
+    await ask("B");
+    expect(alone(v3.calls).length).toBe(1);
   });
 });

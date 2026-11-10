@@ -1427,6 +1427,8 @@ class Lane {
   /** F3: the id the last `activate()` wrote; `null` is the baseline selector. */
   lastActivated: string | null = null;
   rowsByCodeunit = new Map<number, CallRows>();
+  /** R907: by `refKey`; a ref run alone after a stop cut its codeunit's call. Per mutant. */
+  aloneAfterStop = new Map<string, CallRows>();
   /**
    * R653: a fail kill's answers from `sendKillPair`, for the next `activate(null)` (the confirm:
    * its rows `none`, or the verdict a server error maps to) and then `activate(mutantId)` (the
@@ -3484,6 +3486,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private async activateOn(lane: Lane, mutantId: string | null): Promise<void> {
     // C2: the rows describe the selector as it was; dropped BEFORE the write.
     lane.rowsByCodeunit = new Map();
+    lane.aloneAfterStop = new Map();
     // R653: the pair is taken out here; only the expected next activation puts anything back.
     const pair = lane.pair;
     lane.dropPair();
@@ -3695,6 +3698,48 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       if ("verdict" in made) return made.verdict;
       call = made.call;
       alone = true;
+    }
+    /**
+     * R897, R-907: as serve's cut runs a cut codeunit's remaining covering tests alone. A one-shot
+     * mutant call carried `--skip-after-timeout`, and an earlier test stopped at the limit left
+     * this ref not run. Run it ALONE under the same mutant and limit, without the flag, once per
+     * (mutant, ref); that answer stands for the ref.
+     */
+    if (
+      !alone &&
+      this.skipAfterTimeout &&
+      !this.isBaselineCall(lane) &&
+      call.refusal === undefined &&
+      call.missing === undefined
+    ) {
+      const idx = call.rows.findIndex(
+        (r) => r.codeunit === ref.codeunitId && r.method.toLowerCase() === ref.method.toLowerCase(),
+      );
+      const mine = call.rows[idx];
+      const first = call.rows.findIndex((r) => r.notRun);
+      const stop = call.rows[first];
+      if (
+        mine?.notRun &&
+        stop !== undefined &&
+        first < idx &&
+        V3_TIMEOUT_MESSAGE.test(stop.message ?? "")
+      ) {
+        let cached = lane.aloneAfterStop.get(refKey(ref));
+        if (cached === undefined) {
+          const made = await this.callCodeunit(
+            lane,
+            ref,
+            opts.timeoutMs,
+            opts.coverage !== "none",
+            `Codeunit${ref.codeunitId}.${ref.method}`,
+          );
+          if ("verdict" in made) return made.verdict;
+          cached = made.call;
+          lane.aloneAfterStop.set(refKey(ref), cached);
+        }
+        call = cached;
+        alone = true;
+      }
     }
     if (call.refusal !== undefined) return refusalVerdict(ref, call.refusal, call.wallMs);
     if (call.missing !== undefined) return this.rowMissing(lane, ref, call.missing, call.wallMs);
@@ -3958,12 +4003,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     ref: TestMethodRef,
     timeoutMs: number,
     wantCoverage: boolean,
+    /** R907: run exactly this test, alone, without `--skip-after-timeout`; rows are not stored. */
+    aloneTest?: string,
   ): Promise<{ readonly call: CallRows } | { readonly verdict: TestVerdict }> {
     const id = ref.codeunitId;
     // R857: one test alone, one process. Only the baseline gets here under --isolate-tests: entries
     // carry no coverage, and a mutant call is an entry.
     const key = this.callId(ref);
-    const onlyTest = this.isolated(key)?.test;
+    const onlyTest = aloneTest ?? this.isolated(key)?.test;
     // R762 A: an UNMUTATED call that asked for no coverage (a kill confirm) needs none: no flag and
     // no join. A mutant call keeps it whatever it asked: the Sleep rule (§6) reads it.
     // In serve-entries the baseline bracket (`inBaseline`) alone says what the baseline is (R635 §4).
@@ -3987,9 +4034,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // R790 (A1): a baseline call deploy() already ran, on the proved bytes, is served once instead of
     // a spawn; everything below reads its raw answer exactly as a live one's.
     const spec =
-      onlyTest !== undefined
-        ? await this.takeIsolated(lane, key, stopSeconds, coverageRequested)
-        : this.takeSpeculative(lane, id, stopSeconds, coverageRequested);
+      aloneTest !== undefined
+        ? undefined
+        : onlyTest !== undefined
+          ? await this.takeIsolated(lane, key, stopSeconds, coverageRequested)
+          : this.takeSpeculative(lane, id, stopSeconds, coverageRequested);
     let raw: SpawnedCall;
     if (spec !== undefined) {
       // R652: still checked, as before a send: the bytes now are the proved bytes.
@@ -4007,7 +4056,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         // R652: the last await before the spawn; nothing below reads the disk before v3 does.
         beforeSpawn: () => this.checkBound(lane),
         ...(onlyTest !== undefined ? { onlyTest } : {}),
-        mutantActive: !this.isBaselineCall(lane),
+        mutantActive: aloneTest === undefined && !this.isBaselineCall(lane),
       });
       if ("spawnError" in made) {
         return {
@@ -4095,6 +4144,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       coverage: decodeV3Coverage(covText),
       ...(noCoverage ? { noCoverage: true } : {}),
     };
+    if (aloneTest !== undefined) return { call };
     this.noteBaselineRows(lane, key, decoded.rows);
     lane.rowsByCodeunit.set(key, call);
     return { call };
