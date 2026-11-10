@@ -821,7 +821,7 @@ a LethAL feature or a mode.
   That mode is not dead, though, and the `TestPage` entry below is why: it is currently the only way
   to keep a run alive when the suite contains a test that opens a real page. Choosing it means
   accepting the dual-runner disagreement described above. The report names any test that disagrees.
-- **Every verdict describes your app's NON-GUI branch** (R60). LethAL executes every mutant in a
+- **On BC (bcdev), every verdict describes your app's NON-GUI branch** (R60). LethAL executes every mutant in a
   `GuiAllowed=No`, `ClientType=ODataV4` session, while a developer running the same suite from VS
   Code runs GUI-allowed. A handler-less `Confirm` returns its default silently instead of raising
   `Unhandled UI`, and code guarded by `GuiAllowed` or branching on `Confirm`/`Message`/
