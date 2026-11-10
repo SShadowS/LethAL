@@ -6017,18 +6017,18 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     perMutantTests,
     costModelOf(scope.parallel?.owner ?? backend, baselineDuration, fallbackTimeoutMs),
   );
+  // R912 follow-up: the "long" note rides the same `detail`, never a warning code. The estimate comes
+  // from measured baseline times, so a warning would appear or not with machine speed, and a gate's
+  // pinned warning set (v3 leg D1 sat at 2.1 h against the 2 h line) must not depend on that.
+  const longNote =
+    estimate.ms > ESTIMATE_WARN_MS
+      ? ". That is long: narrow the run (--only, --lines), or set --time-budget <seconds> and continue with --resume (R912)"
+      : "";
   emit({
     type: "phase-entered",
     phase: "mutants",
-    detail: `estimate: ${estimate.covered} covered mutant(s), about ${formatEstimate(estimate.ms)} of covering-test time`,
+    detail: `estimate: ${estimate.covered} covered mutant(s), about ${formatEstimate(estimate.ms)} of covering-test time${longNote}`,
   });
-  if (estimate.ms > ESTIMATE_WARN_MS) {
-    emit({
-      type: "warning",
-      code: "mutant-phase-estimate-long",
-      message: `[lethal] the mutant phase is estimated at about ${formatEstimate(estimate.ms)} of covering-test time (${estimate.covered} covered mutant(s)). Narrow the run (--only, --lines), or set --time-budget <seconds> and continue with --resume (R912).`,
-    });
-  }
   const mutantsStartedMs = Date.now();
   const baselineReused: ReusedBaseline | undefined =
     reused !== undefined ? { runId: reused.runId, batchIndex: reused.batchIndex } : undefined;
