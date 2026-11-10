@@ -2,7 +2,7 @@
  * R766 (follow-up) probe. Does user AL state (a SingleInstance codeunit's global) carry between
  * entries of one `serve` request, and between requests on one daemon? Measurement only.
  *
- *   flock -n /coord/locks/heavy.<n> bun scripts/r766-probe/drive.ts
+ *   scripts/heavy-slot.sh other bun scripts/r766-probe/drive.ts
  *
  * Self-contained: al-runner reads AL source (sourcePaths), so no alc build. Every wait is bounded;
  * the daemon is always killed. Texts go whole to OUT. No BC server, no login. See README.md.

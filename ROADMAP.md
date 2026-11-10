@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**17 of 867 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**17 of 869 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -352,6 +352,7 @@ that ordering is the priority.
 - **R899** · itest:tables failed once on lost-ack-unreadable (RunMutant HTTP 500, BC's 'Failed to compare two elements in the array'), and the operation it had claimed stayed orphaned, which took bc2 to container-needs-recycle · [R899.md](docs/roadmap/R899.md) · open: once, on bc2; traced offline (R-900): the reconcile behaved as designed; ending such an orphan needs a…
 - **R902** · Two more ways LethAL emitted AL that alc rejects, found by the BC.History re-hunt with assembly probing paths · [R902.md](docs/roadmap/R902.md) · done (06fe903e)
 - **R903** · A carried verdict's execution context takes the CURRENT backend's GUI label: harmless while every resume is same-backend, wrong if a cross-backend resume is ever allowed · [R903.md](docs/roadmap/R903.md) · closed 2026-11-10 — not reachable: both resume paths refuse a run from another backend; reopen with any…
+- **R907** · A v3 run with coverage turned off says so only on stderr: the report's caveats and console summary show `survived` and `no-coverage 0` with no sign that every mutant ran against every test · [R907.md](docs/roadmap/R907.md) · done (55ac5810)
 
 ## Product gaps a real project hits
 
@@ -541,6 +542,7 @@ that ordering is the priority.
 - **R898** · No time cap per survivor: a mutant whose covering tests are slow can only end as survived after all of them, so slow suites take days · [R898.md](docs/roadmap/R898.md) · open, filed 2026-11-09 — DEFERRED, owner's call
 - **R900** · LethAL never passes assembly probing paths to alc, so a project that uses DotNet types fails LethAL's own compile (AL0451, AL0185) · [R900.md](docs/roadmap/R900.md) · done (41b42a8c) — top-level assemblyProbingPaths, else .vscode/settings.json, else ./.netpackages; passed on…
 - **R901** · On Linux, alc reads a controladdin's `Resources\x\y.js` as one literal file name, so a batch fails with AL0327 for any controladdin written with backslashes · [R901.md](docs/roadmap/R901.md) · done (ceaecb4c)
+- **R908** · R69's "TestPage is unprofitable" does not hold in general: on page-heavy Microsoft apps 45-59% of mutants have only TestPage-refused tests, against R69's 5% bar. The owner's decision, with a census · [R908.md](docs/roadmap/R908.md) · open — census done (coord R-906), for the owner to rule
 
 ## Backends and tooling
 
@@ -911,7 +913,7 @@ that ordering is the priority.
 - **R861** · `--edge-rejudge` moved `current` and left its manifest row unpublished until the next plain run · [R861.md](docs/roadmap/R861.md) · done (25eaa10f)
 - **R866** · `--isolate-tests` runs its baseline as one process per test, which is most of the mode's cost · [R866.md](docs/roadmap/R866.md) · done (d8ef7fd3)
 - **R897** · On al-runner v3 one hanging mutant costs (covering tests in its codeunit) x the per-test limit: about 69 minutes for 23 tests, with no verdict until the end · [R897.md](docs/roadmap/R897.md) · done (d66074f1)
-- **R905** · The heavy-job guard counts a held slot as BaseApp only if its process names /work/src/BC.History, so a BaseApp-class job over a corpus copy reads as not BaseApp, and a third BaseApp-class job can start · [R905.md](docs/roadmap/R905.md) · open
+- **R905** · The heavy-job guard counts a held slot as BaseApp only if its process names /work/src/BC.History, so a BaseApp-class job over a corpus copy reads as not BaseApp, and a third BaseApp-class job can start · [R905.md](docs/roadmap/R905.md) · done (1e1e9b9d)
 
 ---
 

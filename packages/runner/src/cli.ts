@@ -3054,20 +3054,21 @@ export type BackendInputs = Pick<
  * The coverage mode a v3 run gets: the configured one, or "none" (with a warning naming the files)
  * when the project holds an `#if`-wrapped object file of a shape the coverage index has no rule
  * for (R602: a multi-object file and a single-wrapper file are indexed, so they keep coverage on).
+ * R907: `offFiles` names those files, and the report carries them. Empty for a configured "none".
  */
 export async function v3CoverageMode(
   configured: "al-runner" | "none",
   projectDir: string,
   source?: ReadonlyMap<string, Buffer>,
-): Promise<"al-runner" | "none"> {
-  if (configured !== "al-runner") return configured;
+): Promise<{ readonly mode: "al-runner" | "none"; readonly offFiles: readonly string[] }> {
+  if (configured !== "al-runner") return { mode: configured, offFiles: [] };
   const support = await alRunnerCoverageSupport(projectDir, source);
   const named = support.wrappedObjectFiles;
-  if (named.length === 0) return configured;
+  if (named.length === 0) return { mode: configured, offFiles: [] };
   console.warn(
     `[lethal] al-runner-v3-coverage-off: coverage is turned OFF for this run (coverage "none"): the coverage index has no rule for the #if wrapper shape (two-arm, #elif, nested, or a multi-object file holding a wrapper) in ${named.join(", ")} (R602).`,
   );
-  return "none";
+  return { mode: "none", offFiles: named };
 }
 
 /**
@@ -3112,7 +3113,11 @@ async function buildAlRunnerV3Backend(
       'could not locate alc under the AL Language VS Code extension install; --backend al-runner-v3 compiles every batch with alc before v3 runs it (R586). Install the extension, or set "alRunnerV3.alcPath".',
     );
   }
-  const coverage = await v3CoverageMode(c.coverage, parsed.projectDir, deps.source);
+  const { mode: coverage, offFiles: coverageOffFiles } = await v3CoverageMode(
+    c.coverage,
+    parsed.projectDir,
+    deps.source,
+  );
   console.warn(AL_RUNNER_V3_NOT_AUTHORITATIVE);
   return new AlRunnerV3Backend(
     {
@@ -3124,6 +3129,7 @@ async function buildAlRunnerV3Backend(
       selectorObjectId: deps.selectorIds.selectorId,
       alcPath,
       coverage,
+      ...(coverageOffFiles.length > 0 ? { coverageOffFiles } : {}),
       sourceProjectDir: parsed.projectDir,
       ...(deps.candidate === true ? { candidate: true } : {}),
       ...(deps.serveFallbackWarmup !== undefined

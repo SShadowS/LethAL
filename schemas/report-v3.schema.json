@@ -85,7 +85,8 @@
               "test-symbols-unverified",
               "project-symlink-skipped",
               "baseline-test-stopped",
-              "al-runner-v3-serve-default-fallback-warmup"
+              "al-runner-v3-serve-default-fallback-warmup",
+              "al-runner-v3-coverage-off"
             ]
           }
         },
@@ -269,6 +270,12 @@
         "fenced",
         "al-runner"
       ]
+    },
+    "coverageOffFiles": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     },
     "baselineGreen": {
       "type": "boolean"
