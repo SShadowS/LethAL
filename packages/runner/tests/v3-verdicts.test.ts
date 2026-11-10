@@ -215,8 +215,8 @@ describe("joinV3Verdicts", () => {
     expect(j.notShown).toEqual(EMPTY);
     expect(j.runnerBuild).toBe("build-1");
   });
-  test("a v3 survivor is counted, not shown", async () => {
-    const j = await join1({ verdict: "survived", killingTest: undefined });
+  test("a v3 survivor is counted, not shown, even with a killingTest on the row", async () => {
+    const j = await join1({ verdict: "survived" });
     expect(j.kills).toEqual([]);
     expect(j.notShown).toEqual({ ...EMPTY, survived: 1 });
   });
@@ -265,11 +265,13 @@ describe("the resume fingerprint", () => {
     testDir: "t",
     backend: "bcdev",
     skipKnownSurvivors: false,
-    identityScheme: IDENTITY_SCHEME,
+    identityScheme: 48,
     selectorIds: { selectorId: 1, controlId: 2, tableId: 3 },
   } as Parameters<typeof sessionFingerprint>[0];
   test("a run without the flag keeps its digest; a different report changes it", () => {
     const none = sessionFingerprint(base);
+    // Pinned: stored runs must keep resuming, so the key must be absent, not empty, without the flag.
+    expect(none).toBe("2f4a9594d8e5e0782d77d985eb695e3ed5ed73a8cf255309f3b11adc7698a952");
     const a = sessionFingerprint({ ...base, v3VerdictsSha256: "a" });
     const b = sessionFingerprint({ ...base, v3VerdictsSha256: "b" });
     expect(a).not.toBe(none);
