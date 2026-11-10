@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**20 of 875 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**19 of 875 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -548,7 +548,7 @@ that ordering is the priority.
 - **R901** · On Linux, alc reads a controladdin's `Resources\x\y.js` as one literal file name, so a batch fails with AL0327 for any controladdin written with backslashes · [R901.md](docs/roadmap/R901.md) · done (ceaecb4c)
 - **R908** · R69's "TestPage is unprofitable" does not hold in general: on page-heavy Microsoft apps 45-59% of mutants have only TestPage-refused tests, against R69's 5% bar. The owner's decision, with a census · [R908.md](docs/roadmap/R908.md) · open — helper-reach measured (coord R-908): the rule is right; next step is the owner's
 - **R909** · On Linux BC a page open fails as a plain CLR NotSupportedException, so LethAL reads a page-opening test as an ordinary failure instead of naming it · [R909.md](docs/roadmap/R909.md) · done (c8081f97)
-- **R912** · A v3 serve run on an app whose tests sit in one large codeunit runs that whole codeunit per mutant, with no estimate, no progress inside a prefetch request and an outer bound of days, so a time cap loses every result: Intrastat Core gave no report after 6.3 h · [R912.md](docs/roadmap/R912.md) · open
+- **R912** · A v3 serve run on an app whose tests sit in one large codeunit runs that whole codeunit per mutant, with no estimate, no progress inside a prefetch request and an outer bound of days, so a time cap loses every result: Intrastat Core gave no report after 6.3 h · [R912.md](docs/roadmap/R912.md) · done (6d73834fafd5e5d18c2f06a9de6b04d6abcb8777)
 
 ## Backends and tooling
 

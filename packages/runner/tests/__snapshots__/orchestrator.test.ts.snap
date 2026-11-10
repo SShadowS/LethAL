@@ -298,6 +298,7 @@ exports[`C02-04 characterization 1: one batch, sequential 1`] = `
     },
     {
       "event": {
+        "detail": "estimate: 3 covered mutant(s), about 0 s of covering-test time",
         "phase": "mutants",
         "seq": 15,
         "type": "phase-entered",
@@ -1024,6 +1025,7 @@ exports[`C02-04 characterization 2: two batches 1`] = `
     },
     {
       "event": {
+        "detail": "estimate: 0 covered mutant(s), about 0 s of covering-test time",
         "phase": "mutants",
         "seq": 16,
         "type": "phase-entered",
@@ -1241,6 +1243,7 @@ exports[`C02-04 characterization 2: two batches 1`] = `
     },
     {
       "event": {
+        "detail": "estimate: 3 covered mutant(s), about 0 s of covering-test time",
         "phase": "mutants",
         "seq": 28,
         "type": "phase-entered",
@@ -2162,6 +2165,7 @@ exports[`C02-04 characterization 3: grouped, chunked 1`] = `
     },
     {
       "event": {
+        "detail": "estimate: 3 covered mutant(s), about 0 s of covering-test time",
         "phase": "mutants",
         "seq": 15,
         "type": "phase-entered",
@@ -3097,6 +3101,7 @@ exports[`C02-04 characterization 4: warm kills 1`] = `
     },
     {
       "event": {
+        "detail": "estimate: 3 covered mutant(s), about 0 s of covering-test time",
         "phase": "mutants",
         "seq": 15,
         "type": "phase-entered",
@@ -3860,6 +3865,7 @@ exports[`C02-04 characterization 5: strand mid-batch 1`] = `
     },
     {
       "event": {
+        "detail": "estimate: 9 covered mutant(s), about 0 s of covering-test time",
         "phase": "mutants",
         "seq": 13,
         "type": "phase-entered",
@@ -4750,6 +4756,7 @@ exports[`C02-04 characterization 6: section G unattested 1`] = `
     },
     {
       "event": {
+        "detail": "estimate: 9 covered mutant(s), about 0 s of covering-test time",
         "phase": "mutants",
         "seq": 14,
         "type": "phase-entered",
@@ -5917,6 +5924,7 @@ exports[`C02-04 characterization 6b: section G unattested, two batches whose dep
     },
     {
       "event": {
+        "detail": "estimate: 0 covered mutant(s), about 0 s of covering-test time",
         "phase": "mutants",
         "seq": 18,
         "type": "phase-entered",
@@ -6014,6 +6022,7 @@ exports[`C02-04 characterization 6b: section G unattested, two batches whose dep
     },
     {
       "event": {
+        "detail": "estimate: 9 covered mutant(s), about 0 s of covering-test time",
         "phase": "mutants",
         "seq": 27,
         "type": "phase-entered",
@@ -6871,6 +6880,7 @@ exports[`C02-04 characterization 7: lease lost mid-batch 1`] = `
     },
     {
       "event": {
+        "detail": "estimate: 9 covered mutant(s), about 0 s of covering-test time",
         "phase": "mutants",
         "seq": 13,
         "type": "phase-entered",
@@ -7463,6 +7473,7 @@ exports[`C02-04 characterization 8: R194 rule 2b 1`] = `
     },
     {
       "event": {
+        "detail": "estimate: 9 covered mutant(s), about 0 s of covering-test time",
         "phase": "mutants",
         "seq": 13,
         "type": "phase-entered",
@@ -9331,6 +9342,7 @@ exports[`C02-04 characterization 13: baseline pre-dispatch retry 1`] = `
     },
     {
       "event": {
+        "detail": "estimate: 9 covered mutant(s), about 0 s of covering-test time",
         "phase": "mutants",
         "seq": 13,
         "type": "phase-entered",

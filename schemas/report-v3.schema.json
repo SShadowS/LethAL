@@ -86,7 +86,8 @@
               "project-symlink-skipped",
               "baseline-test-stopped",
               "al-runner-v3-serve-default-fallback-warmup",
-              "al-runner-v3-coverage-off"
+              "al-runner-v3-coverage-off",
+              "time-budget-reached"
             ]
           }
         },
@@ -1462,6 +1463,26 @@
       "properties": {
         "reason": {
           "type": "string"
+        }
+      }
+    },
+    "timeBudget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "budgetSeconds",
+        "unscheduledCount",
+        "batchesNotStarted"
+      ],
+      "properties": {
+        "budgetSeconds": {
+          "type": "number"
+        },
+        "unscheduledCount": {
+          "type": "number"
+        },
+        "batchesNotStarted": {
+          "type": "number"
         }
       }
     },

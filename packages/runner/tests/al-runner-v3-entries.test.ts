@@ -1802,6 +1802,71 @@ describe("11, 20: a refusal of the whole request names its reason and re-sends n
     expect(r.serve.requests).toHaveLength(2);
   });
 
+  describe("R912: windows decide a batch refusal as one whole-batch prefetch does", () => {
+    const four = plans(["M0001", "M0002", "M0003", "M0004"]);
+    /** Every entry of these mutants is refused with one unlisted reason; the warm-up is not. */
+    const refuseOnly = (ids: readonly string[]) => ({
+      rows: ((m, cu, d, n) =>
+        ids.includes(m)
+          ? allPass(m, cu, d, n).map((x) => ({
+              ...x,
+              status: "error" as const,
+              notRun: true,
+              message: UNLISTED,
+            }))
+          : allPass(m, cu, d, n)) as RowsFn,
+      echo: ((m, d, n) =>
+        ids.includes(m)
+          ? { method: "Echo", status: "error", notRun: true, message: UNLISTED }
+          : goodEcho(m, d, n)) as Echo,
+    });
+    const run = async (windows: readonly (typeof four)[], refused: readonly string[]) => {
+      const r = await rig({ serve: refuseOnly(refused), oneShotRows: allPass });
+      await baseline(r.b, SUITE1);
+      let err: unknown;
+      for (const [i, w] of windows.entries()) {
+        err = await r.b.prefetchMutants(w, i === 0 ? { batchPlans: four } : undefined).then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+        if (err !== undefined) break;
+      }
+      return err;
+    };
+
+    test("a refused batch stops the session with one group per window and with many, as with one window", async () => {
+      const all = four.map((p) => p.mutantId);
+      const whole = await run([four], all);
+      const many = await run([four.slice(0, 2), four.slice(2)], all);
+      const lone = await run(
+        four.map((p) => [p]),
+        all,
+      );
+      for (const err of [whole, many, lone]) {
+        expect(err).toBeInstanceOf(AlRunnerV3EntriesRefusedError);
+        expect(String(err)).toContain("al-runner-v3-entries-batch-refused");
+      }
+    });
+
+    test("a lone group outside any batch is still that mutant's error, never a batch stop", async () => {
+      const r = await rig({ serve: refuseOnly(["M0001"]), oneShotRows: allPass });
+      await baseline(r.b, SUITE1);
+      await r.b.prefetchMutants(plans(["M0001"]));
+    });
+
+    test("a later window refused after an earlier window ran is no batch stop, as in one chunk", async () => {
+      const later = ["M0003", "M0004"];
+      expect(await run([four], later)).toBeUndefined();
+      expect(await run([four.slice(0, 2), four.slice(2)], later)).toBeUndefined();
+      expect(
+        await run(
+          four.map((p) => [p]),
+          later,
+        ),
+      ).toBeUndefined();
+    });
+  });
+
   test("20 (N3): the same refusal on the warm-up is batch-refused, not warmup-disagrees", async () => {
     const r = await rig({
       serve: { rows: refuseFrom(0), echo: refusedEcho(0) },
@@ -2007,6 +2072,19 @@ describe("17, 18, 21: the warm-up", () => {
     ).toEqual(Array(3).fill({ "active-mutant.txt": "NONE" }));
     const s = r.b.entriesStats();
     expect([s.daemons, s.cachedFalse]).toEqual([1, 1]);
+  });
+
+  test("R912: a first window warms up the whole batch's codeunits when given batchPlans, and only its own without", async () => {
+    const window1 = [{ mutantId: "M0001", refs: [ref("A")] }];
+    const batch = [...window1, { mutantId: "M0002", refs: [ref("C", CU2)] }];
+    const whole = await rig({ suite: SUITE2 });
+    await baseline(whole.b, SUITE2);
+    await whole.b.prefetchMutants(window1, { batchPlans: batch });
+    expect(whole.serve.firsts()[0]?.ids).toEqual(["NONE|echo", `NONE|${CU}`, `NONE|${CU2}`]);
+    const alone = await rig({ suite: SUITE2 });
+    await baseline(alone.b, SUITE2);
+    await alone.b.prefetchMutants(window1);
+    expect(alone.serve.firsts()[0]?.ids).toEqual(["NONE|echo", `NONE|${CU}`]);
   });
 
   test("17: warm-up rows that differ from the one-shot baseline refuse al-runner-v3-entries-warmup-disagrees", async () => {
@@ -2423,6 +2501,43 @@ describe("timers above 2^31-1 ms (E3a's second daemon, /coord/handoff/R-635/live
     } finally {
       spy.mockRestore();
     }
+  });
+
+  test("R912: only a prefetch request's deadline is clamped to the time left; the warm-up and a live request never are", async () => {
+    const real = AlRunnerServer.prototype.runEntries;
+    const deadlines: number[] = [];
+    const spy = spyOn(AlRunnerServer.prototype, "runEntries").mockImplementation(function (
+      this: AlRunnerServer,
+      ...a: Parameters<typeof real>
+    ) {
+      deadlines.push(a[1] as number);
+      return real.apply(this, a);
+    });
+    try {
+      const r = await rig();
+      await baseline(r.b, SUITE1);
+      await r.b.prefetchMutants(plans(["M0001"]), { remainingMs: () => 5000 });
+      await r.b.prefetchMutants(plans(["M0002"])); // no budget: today's deadline
+      await r.b.activate("M0003"); // never prefetched: its run is a live request
+      await r.b.run(ref("A"), OPTS);
+    } finally {
+      spy.mockRestore();
+    }
+    const [warmup, clamped, plain, live] = deadlines;
+    expect(deadlines).toHaveLength(4);
+    expect(clamped).toBe(5000);
+    expect(warmup).toBeGreaterThan(5000);
+    expect(plain).toBeGreaterThan(5000);
+    expect(live).toBeGreaterThan(5000);
+  });
+
+  test("R912: wholeCodeunit is true on entries for a codeunit that is not per-test, false per test and one-shot", async () => {
+    const entries = await rig();
+    expect(entries.b.wholeCodeunit(CU)).toBe(true);
+    const perTest = await rig({ extra: { isolateTests: true } });
+    expect(perTest.b.wholeCodeunit(CU)).toBe(false);
+    const oneShot = await rig({ extra: { transport: "one-shot" } });
+    expect(oneShot.b.wholeCodeunit(CU)).toBe(false);
   });
 });
 
@@ -4042,6 +4157,31 @@ describe("R778: kill pairs batched after the prefetch", () => {
       refused: s.pairBatchRefused,
     };
   };
+
+  test("R912: a kill pair formed in window 2 gives the one-window result, with no extra request", async () => {
+    const scenario = async (windowed: boolean) => {
+      const r = await rig({ serve: { rows: killsAll }, oneShotRows: allPass, pairBatch: true });
+      await baseline(r.b, SUITE1);
+      const all = plans(["M0001", "M0002"]);
+      if (windowed) {
+        await r.b.prefetchMutants(all.slice(0, 1), { batchPlans: all });
+        await r.b.prefetchMutants(all.slice(1));
+      } else {
+        await r.b.prefetchMutants(all, { batchPlans: all });
+      }
+      await kill(r, "M0002");
+      const n0 = r.serve.requests.length;
+      const got = await confirmAndRepro(r, "M0002");
+      return { got, extraRequests: r.serve.requests.length - n0, stats: batchStats(r) };
+    };
+    const one = await scenario(false);
+    const two = await scenario(true);
+    expect(one.extraRequests).toBe(0);
+    expect(one.got).toMatchObject({ confirm: "pass", repro: "fail" });
+    expect(two.got).toEqual(one.got);
+    expect(two.extraRequests).toBe(one.extraRequests);
+    expect(two.stats.served).toBe(1);
+  });
 
   describe("1: two NONE groups for one codeunit keep their own answers", () => {
     for (const flaky of [0, 1]) {

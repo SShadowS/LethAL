@@ -1741,6 +1741,34 @@
       "additionalProperties": false,
       "required": [
         "type",
+        "budgetSeconds",
+        "unscheduledCount",
+        "batchesNotStarted",
+        "seq"
+      ],
+      "properties": {
+        "type": {
+          "const": "time-budget-reached"
+        },
+        "budgetSeconds": {
+          "type": "number"
+        },
+        "unscheduledCount": {
+          "type": "number"
+        },
+        "batchesNotStarted": {
+          "type": "number"
+        },
+        "seq": {
+          "type": "number"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
         "elapsedMs",
         "seq"
       ],

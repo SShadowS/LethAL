@@ -101,6 +101,11 @@ class ParStub implements ExecutionBackend {
   /** Mutant codes in the order each lane first activated them. */
   readonly activations: { lane: number; mutant: string }[] = [];
   prefetchPlans: string[][] = [];
+  /** R912: killed or survived rows in the store when each prefetch call arrived. */
+  readonly scoredAtPrefetch: number[] = [];
+  store: ResultsStore | undefined;
+  /** R912: the baseline duration of every test, which sizes the windows. */
+  baselineMs = 5;
   private inBaseline = false;
   private latch: { mutantId: string; why: string } | undefined;
   private views: ParView[] = [];
@@ -139,6 +144,10 @@ class ParStub implements ExecutionBackend {
   }
   async prefetchMutants(plans: readonly { mutantId: string }[]): Promise<void> {
     this.prefetchPlans.push(plans.map((p) => p.mutantId));
+    const row = this.store?.db
+      .query("SELECT COUNT(*) AS n FROM mutants WHERE verdict IN ('killed', 'survived')")
+      .get() as { n: number } | null | undefined;
+    this.scoredAtPrefetch.push(row?.n ?? -1);
   }
   parallelRefusal(): string | undefined {
     return this.parallelRefusalText;
@@ -192,7 +201,7 @@ class ParStub implements ExecutionBackend {
     return {
       ref,
       outcome: "pass",
-      durationMs: 5,
+      durationMs: this.baselineMs,
       coverage: {
         granularity: "procedure" as const,
         entries: ["P1", "P2", "P3"].map((procedure) => ({
@@ -393,6 +402,29 @@ describe("R766 (b): the pull queue over procedure scopes", () => {
     // The events came in manifest order, as at N = 1.
     const scored = events.flatMap((e) => (e.type === "mutant-scored" ? [e.mutant.mutantId] : []));
     expect(scored).toEqual(one.mutants.map((m) => m.mutantCode));
+  });
+
+  test("R912: several windows under --workers 2 give the one-window table, and window 1 is in the store before window 2's prefetch", async () => {
+    const root = await project();
+    const { procOf, report: one } = await learn(root);
+    const store = new ResultsStore(":memory:");
+    const stub = new ParStub({ procOf });
+    stub.store = store;
+    stub.baselineMs = 150_000; // two tests: 300 s a mutant, so two mutants to a 600 s window
+    const par = await session(root, stub, { workers: 2, store });
+    expect(table(par)).toEqual(table(one));
+    const windows = stub.prefetchPlans;
+    expect(windows.length).toBeGreaterThanOrEqual(3);
+    expect(windows.every((w) => w.length <= 2)).toBe(true);
+    expect(windows.flat()).toEqual(one.mutants.map((m) => m.mutantCode));
+    // Counters, not clocks: when window k's prefetch arrives, windows 0..k-1 are all recorded.
+    let before = 0;
+    windows.forEach((w, k) => {
+      expect(stub.scoredAtPrefetch[k]).toBe(before);
+      before += w.length;
+    });
+    // Both lanes still worked.
+    expect(new Set(stub.activations.map((a) => a.lane)).size).toBe(2);
   });
 
   test("each mutant is handed out exactly once: one first activation per mutant, across all lanes", async () => {

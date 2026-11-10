@@ -595,6 +595,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
     },
     {
       "event": {
+        "detail": "estimate: 0 covered mutant(s), about 0 s of covering-test time",
         "phase": "mutants",
         "seq": 23,
         "type": "phase-entered",
@@ -736,6 +737,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
     },
     {
       "event": {
+        "detail": "estimate: 2 covered mutant(s), about 0 s of covering-test time",
         "phase": "mutants",
         "seq": 34,
         "type": "phase-entered",
