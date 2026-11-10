@@ -18,6 +18,7 @@ import {
   v3DefaultLegs,
   v3ItestFailures,
   v3KOnCandidate,
+  v3PartialNote,
   v3RecordRunFailures,
 } from "../itest/alrunner-v3-legs";
 import {
@@ -34,6 +35,37 @@ describe("R857: the warning says state can carry over", () => {
     expect(AL_RUNNER_V3_NOT_AUTHORITATIVE).toMatch(/every test of a test codeunit together/);
     expect(AL_RUNNER_V3_NOT_AUTHORITATIVE).toMatch(/carry over to later tests/);
     expect(AL_RUNNER_V3_NOT_AUTHORITATIVE).toMatch(/work date.*SingleInstance/);
+  });
+});
+
+describe("R913: a PASS that skipped legs says so", () => {
+  const passed = (legs: readonly string[]) => Object.fromEntries(legs.map((l) => [l, "pass"]));
+  const full = v3DefaultLegs({ cdo: true, tables: true });
+
+  test("every leg of the full set ran: no note", () => {
+    expect(v3PartialNote(passed(full), { cdo: true, tables: true, explicitLegs: false })).toBe("");
+  });
+
+  test("D and T skipped for unset variables: named, with each variable", () => {
+    const ran = passed(v3DefaultLegs({ cdo: false, tables: false }));
+    const note = v3PartialNote(ran, { cdo: false, tables: false, explicitLegs: false });
+    expect(note).toBe(
+      " (PARTIAL, not the full gate: D1, D1c LETHAL_ITEST_V3_CDO unset; T LETHAL_ITEST_V3_TABLES unset)",
+    );
+  });
+
+  test("only T skipped: only T named", () => {
+    const ran = passed(v3DefaultLegs({ cdo: true, tables: false }));
+    expect(v3PartialNote(ran, { cdo: true, tables: false, explicitLegs: false })).toBe(
+      " (PARTIAL, not the full gate: T LETHAL_ITEST_V3_TABLES unset)",
+    );
+  });
+
+  test("an explicit LETHAL_ITEST_V3_LEGS selection names the legs it left out", () => {
+    const note = v3PartialNote(passed(["T"]), { cdo: true, tables: true, explicitLegs: true });
+    expect(note).toStartWith(" (PARTIAL, not the full gate: C, S1,");
+    expect(note).toContain("not selected by LETHAL_ITEST_V3_LEGS");
+    expect(note).not.toContain(" T ");
   });
 });
 

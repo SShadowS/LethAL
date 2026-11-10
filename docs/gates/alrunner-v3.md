@@ -10,6 +10,10 @@ X (d)'s scratch setup is amended by `docs/superpowers/specs/2026-10-21-r586-alru
 (338af789). The leg compiles that setup with alc before any session starts
 (`al-runner-v3-itest-setup-does-not-compile`). A differing verdict, killing test, note set, refusal set or Sleep
 index size in any leg is a BLOCK.
+
+**The full gate** also sets `LETHAL_ITEST_V3_TABLES=1` (leg T) and `LETHAL_ITEST_V3_CDO=<the CDO checkout at 5f2a71d with its pinned
+`Test/.alpackages`>` (legs D1, D1c). Without them those legs do not run, and since R913 the PASS line says so: `PASS (PARTIAL, not the full
+gate: D1, D1c LETHAL_ITEST_V3_CDO unset; T LETHAL_ITEST_V3_TABLES unset)`. A receipt with that note is not the full gate.
 The leg-by-leg tables live in those pre-commitments and are asserted by the itest, not restated here.
 
 The legs:
