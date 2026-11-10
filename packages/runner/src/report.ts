@@ -255,7 +255,8 @@ export type Caveat =
   | "test-symbols-unverified"
   | "project-symlink-skipped"
   | "baseline-test-stopped"
-  | "al-runner-v3-serve-default-fallback-warmup";
+  | "al-runner-v3-serve-default-fallback-warmup"
+  | "al-runner-v3-coverage-off";
 
 /**
  * R403 phase C: one test the arm filter dealt with, as `SessionReport.excludedTests` lists it.
@@ -651,6 +652,18 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "Not a statement about any mutant. Not a wrong verdict: one-shot is the transport the " +
       "serve-entries default is proven against.",
     basis: "R786",
+  },
+  "al-runner-v3-coverage-off": {
+    meaning:
+      "LethAL turned coverage off for this whole al-runner-v3 run, because the coverage index has no " +
+      "rule for the #if wrapper shape in the files `coverageOffFiles` names. Every mutant ran against " +
+      "every green test. So `survived` includes mutants no test reached, `no-coverage` reads 0 for " +
+      "that reason, and the survivor list is not reliable as a list of gaps a test reached and missed. " +
+      "Before acting on a survivor, check that a test reaches its line.",
+    entailedNegative:
+      "Not a statement that any one survivor is unreached: this run cannot tell. Not a wrong kill: a " +
+      "killed mutant was killed by a test that ran.",
+    basis: "R907",
   },
 };
 
@@ -1209,6 +1222,11 @@ export interface SessionReport {
    * mode.
    */
   readonly coverageMode?: CoverageMode;
+  /**
+   * R907: the files that made LethAL turn coverage off for this whole run. Present only then, with
+   * the `al-runner-v3-coverage-off` caveat; absent when coverage is on or was configured off.
+   */
+  readonly coverageOffFiles?: readonly string[];
   readonly baselineGreen: boolean;
   readonly batches: number;
   readonly counts: {
@@ -2940,6 +2958,8 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     )
   )
     caveats.push("al-runner-v3-serve-default-fallback-warmup");
+  // R907 - see CAVEAT_INTERPRETATIONS["al-runner-v3-coverage-off"].
+  if ((input.caps.coverageOffFiles ?? []).length > 0) caveats.push("al-runner-v3-coverage-off");
   // See CAVEAT_INTERPRETATIONS["runner-disagreement"] for what this caveat means to a reader.
   const runnerDisagreementTests = input.runnerDisagreementTests ?? [];
   if (runnerDisagreementTests.length > 0) caveats.push("runner-disagreement");
@@ -3232,6 +3252,9 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     backend: input.caps.kind,
     authoritative: input.caps.authoritative,
     coverageMode: input.caps.coverage,
+    ...(input.caps.coverageOffFiles !== undefined
+      ? { coverageOffFiles: input.caps.coverageOffFiles }
+      : {}),
     baselineGreen: input.baselineGreen,
     batches: input.batches,
     counts,
@@ -3850,6 +3873,14 @@ export function renderConsole(r: SessionReport): string {
     );
   }
   // Same reasoning as NOT INSTRUMENTED above: a qualifier on the score belongs next to the score.
+  // R907: a qualifier on the score, for the same reason.
+  if (r.coverageOffFiles !== undefined && r.coverageOffFiles.length > 0) {
+    const shown = r.coverageOffFiles.slice(0, 5).join(", ");
+    const more = r.coverageOffFiles.length > 5 ? ` and ${r.coverageOffFiles.length - 5} more` : "";
+    lines.push(
+      `COVERAGE OFF: LethAL turned coverage off for this whole run, because the coverage index has no rule for the #if wrapper shape in ${shown}${more}. Every mutant ran against every green test, so "survived" includes mutants no test reached and no-coverage reads 0 for that reason. The survivors are not reliable as gaps a test reached and missed.`,
+    );
+  }
   // These mutants were scored against EVERY green test rather than against tests coverage placed
   // in their table — honest (better than dropping them as no-coverage) but slower and coarser, and
   // a rise here is the visible symptom of coverage attribution regressing.
